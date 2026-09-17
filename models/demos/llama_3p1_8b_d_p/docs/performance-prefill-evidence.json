@@ -1,0 +1,1523 @@
+{
+  "schema_version": 1,
+  "scope": "saved2k_and_verified4k_eager_performance_no_golden_accuracy_claim",
+  "measurements": [
+    {
+      "context_length": 2048,
+      "attempt": "/data/divanovic/llama31-8b-disagg/evidence/task-8-full-prefill/performance-preparation-002/attempts/attempt-002-bfp8-baseline",
+      "report": {
+        "path": "/data/divanovic/llama31-8b-disagg/evidence/task-8-full-prefill/performance-preparation-002/attempts/attempt-002-bfp8-baseline/captures/report.json",
+        "sha256": "27642d239ea1d5b0fecde5d5046eee863dbfb0358ef40d3d8ec6300b941a2f94"
+      },
+      "report_status": "performance_complete_provisional_accuracy_unaccepted",
+      "report_accuracy_status": "Full-model accuracy currently failed/unaccepted; BFP8_B baseline accuracy is not established",
+      "verification": {
+        "path": "/data/divanovic/llama31-8b-disagg/evidence/task-8-full-prefill/performance-preparation-002/attempts/attempt-002-bfp8-baseline/verification.json",
+        "sha256": "c34bc49f2ee77c6751a884e8ca242ed755c72a3f27f37131eb31d4c1930f6fdb"
+      },
+      "verification_fields": {
+        "verified_exit": 0,
+        "actual_exit": 0,
+        "dispatch_exit": 0,
+        "reasons": [],
+        "full_model_accepted": false,
+        "scope": "provisional accuracy-unaccepted performance completion only",
+        "ended_utc": "2026-09-16T22:19:40.858206+00:00"
+      },
+      "source_head": "734a6c29463be5e33a681354a2b039855f094bda",
+      "source_repository": "/data/divanovic/llama31-8b-disagg/repos/tt-metal-perf-b09u02",
+      "source_pin_count": 4670,
+      "source_map": {
+        "path": "/data/divanovic/llama31-8b-disagg/evidence/task-8-full-prefill/performance-preparation-002/attempts/attempt-002-bfp8-baseline/source-hashes.json",
+        "sha256": "afdca62367f7ac1f3f8142cb47427eba745d6f2d5aa6d721633278e2118e1c1b"
+      },
+      "source_manifest_sha256": "afdca62367f7ac1f3f8142cb47427eba745d6f2d5aa6d721633278e2118e1c1b",
+      "before_node_after_equal": true,
+      "source_heads_equal": true,
+      "selected_source_sha256": {
+        "/data/divanovic/llama31-8b-disagg/repos/tt-metal-perf-b09u02/models/demos/llama_3p1_8b_d_p/tt/__init__.py": "5dce07d5450b8b62d8e38ca9845d7abdabd7107e59cf000967393ac0cb074f76",
+        "/data/divanovic/llama31-8b-disagg/repos/tt-metal-perf-b09u02/models/demos/llama_3p1_8b_d_p/tt/attention.py": "ab1808733e9d5ed4a515cdd94c35c5b5cd848a157878de3020ac991fc7fc10e2",
+        "/data/divanovic/llama31-8b-disagg/repos/tt-metal-perf-b09u02/models/demos/llama_3p1_8b_d_p/tt/config.py": "3c6a067625d38d9bf043028fc7d33b2591a9b980f50c980f3b2f7b50da7be979",
+        "/data/divanovic/llama31-8b-disagg/repos/tt-metal-perf-b09u02/models/demos/llama_3p1_8b_d_p/tt/decoder.py": "8e0710c18dce9dcb7afb5f21629aace3a8b4b2b794b648adbf3f28355e283a94",
+        "/data/divanovic/llama31-8b-disagg/repos/tt-metal-perf-b09u02/models/demos/llama_3p1_8b_d_p/tt/input.py": "c167b3d570ad0729b7e0c4e29cbb670337b7191dec98b12909378ec3145344fd",
+        "/data/divanovic/llama31-8b-disagg/repos/tt-metal-perf-b09u02/models/demos/llama_3p1_8b_d_p/tt/kv_cache.py": "8db495f8ac8bc3c46db74d12dc50d7eb5a28a98169153871ec81791298600227",
+        "/data/divanovic/llama31-8b-disagg/repos/tt-metal-perf-b09u02/models/demos/llama_3p1_8b_d_p/tt/mlp.py": "acc1eaecafdcf1f23393a628d4af1ed5da0c2a39447f4a1123cfafef39ba236e",
+        "/data/divanovic/llama31-8b-disagg/repos/tt-metal-perf-b09u02/models/demos/llama_3p1_8b_d_p/tt/model.py": "296495869a2a67f5b31d2e32eb89f937cc5f90854f99610651304db78bf4e3e0",
+        "/data/divanovic/llama31-8b-disagg/repos/tt-metal-perf-b09u02/models/demos/llama_3p1_8b_d_p/tt/model_config.py": "8ff96daea641929f86e27ce8a32f7fb7b62e1ef90f9c15ce2b456c64257b15cb",
+        "/data/divanovic/llama31-8b-disagg/repos/tt-metal-perf-b09u02/models/demos/llama_3p1_8b_d_p/tt/qkv.py": "cce1242a47f086faae7db51369c231b9ea80c97742a1e9c1b5e90adf40d99d82",
+        "/data/divanovic/llama31-8b-disagg/repos/tt-metal-perf-b09u02/models/demos/llama_3p1_8b_d_p/tt/rms_norm.py": "23f70af620f4c684e393ee55470c606711e161f0e33b6b0a531111eda77df2d9",
+        "/data/divanovic/llama31-8b-disagg/repos/tt-metal-perf-b09u02/models/demos/llama_3p1_8b_d_p/tt/rope.py": "7e8402b816e28187b3cbdfea81223309f3bad79b30ec4ebdb3e922bf73022a37",
+        "/data/divanovic/llama31-8b-disagg/repos/tt-metal-perf-b09u02/models/demos/llama_3p1_8b_d_p/tt/runners/__init__.py": "5dce07d5450b8b62d8e38ca9845d7abdabd7107e59cf000967393ac0cb074f76",
+        "/data/divanovic/llama31-8b-disagg/repos/tt-metal-perf-b09u02/models/demos/llama_3p1_8b_d_p/tt/runners/adapters/__init__.py": "5dce07d5450b8b62d8e38ca9845d7abdabd7107e59cf000967393ac0cb074f76",
+        "/data/divanovic/llama31-8b-disagg/repos/tt-metal-perf-b09u02/models/demos/llama_3p1_8b_d_p/tt/runners/adapters/llama_3p1_8b.py": "26405d8170f947baa8daf32d7026183454b570e9f69209adef19bdd4550f3fc2",
+        "/data/divanovic/llama31-8b-disagg/repos/tt-metal-perf-b09u02/models/demos/llama_3p1_8b_d_p/tt/weights.py": "a9da184c865a2979fe41d9f0f0b5aecfcd1d491fe509ea489777be950cd32697",
+        "/data/divanovic/llama31-8b-disagg/repos/tt-metal-perf-b09u02/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp": "c67e91ad533a1a0ebca805a7e4df4fdd6d3d8f1760291d70c17276f3c6b2e0ec",
+        "/data/divanovic/llama31-8b-disagg/evidence/task-8-full-prefill/performance-preparation-002/launch.py": "969182dd1c0b728dd4384920d19f1b139b33cf87208bc863163f8ad5f0a5df6e",
+        "/data/divanovic/llama31-8b-disagg/evidence/task-8-full-prefill/performance-preparation-002/performance_helpers.py": "a76296df8444ce0362cd7d4932172bb398c5f3f86e4d82f041edb830659daa73",
+        "/data/divanovic/llama31-8b-disagg/evidence/task-8-full-prefill/performance-preparation-002/test_performance.py": "0d1e12431b3e9ddef0a11ce54c5900f167e86ac8bccd690f89c620b82b60ead5"
+      },
+      "controller_sha256": "969182dd1c0b728dd4384920d19f1b139b33cf87208bc863163f8ad5f0a5df6e",
+      "invocation": {
+        "path": "/data/divanovic/llama31-8b-disagg/evidence/task-8-full-prefill/performance-preparation-002/attempts/attempt-002-bfp8-baseline/invocation.json",
+        "sha256": "964cfbf6208a5bdd6fc7bd79116473c536caf3387089c34a3e4105d8e76e9bb7"
+      },
+      "pytest_command": [
+        "timeout",
+        "--signal=TERM",
+        "--kill-after=60",
+        "2400",
+        "/data/divanovic/llama31-8b-disagg/runtime/python_env/bin/python",
+        "-B",
+        "-m",
+        "pytest",
+        "/data/divanovic/llama31-8b-disagg/evidence/task-8-full-prefill/performance-preparation-002/test_performance.py::test_full_prefill_2k_performance[blackhole-mesh_device0-device_params0]",
+        "--rootdir=.",
+        "-c",
+        "/dev/null",
+        "-p",
+        "conftest",
+        "-p",
+        "performance_pytest_plugin",
+        "-vv",
+        "-s",
+        "--junitxml=/data/divanovic/llama31-8b-disagg/evidence/task-8-full-prefill/performance-preparation-002/attempts/attempt-002-bfp8-baseline/pytest.xml"
+      ],
+      "junit": {
+        "path": "/data/divanovic/llama31-8b-disagg/evidence/task-8-full-prefill/performance-preparation-002/attempts/attempt-002-bfp8-baseline/pytest.xml",
+        "sha256": "0f9cffc6748a51d8386e33acb36a33d509e22f7055f685d0169811287e9ee4a5"
+      },
+      "junit_case": "test_full_prefill_2k_performance[blackhole-mesh_device0-device_params0]",
+      "node": "bh-glx-120-b09u02",
+      "job_id": "107973",
+      "measured_requests": 6,
+      "measured_chunks": 12,
+      "complete_requests": 8,
+      "complete_output_checks": 512,
+      "summary": [
+        {
+          "slot": 0,
+          "measured_requests": 3,
+          "prompt_wall_seconds": {
+            "count": 3,
+            "minimum": 0.42717061200528406,
+            "median": 0.4325621770112775,
+            "maximum": 0.434197108988883,
+            "samples": [
+              0.42717061200528406,
+              0.4325621770112775,
+              0.434197108988883
+            ]
+          },
+          "forward_wall_seconds": {
+            "count": 3,
+            "minimum": 0.42520251200767234,
+            "median": 0.4306077270011883,
+            "maximum": 0.43214887802605517,
+            "samples": [
+              0.42520251200767234,
+              0.4306077270011883,
+              0.43214887802605517
+            ]
+          },
+          "tokens_per_second_per_user": {
+            "count": 3,
+            "minimum": 4716.751810644681,
+            "median": 4734.579463582193,
+            "maximum": 4794.337303275597,
+            "samples": [
+              4794.337303275597,
+              4734.579463582193,
+              4716.751810644681
+            ]
+          },
+          "chunks": [
+            {
+              "start": 0,
+              "end": 1024,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.21861417702166364,
+                "median": 0.22341761901043355,
+                "maximum": 0.22497282101539895,
+                "samples": [
+                  0.21861417702166364,
+                  0.22341761901043355,
+                  0.22497282101539895
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.21767578000435606,
+                "median": 0.22245835099602118,
+                "maximum": 0.22392862601554953,
+                "samples": [
+                  0.21767578000435606,
+                  0.22245835099602118,
+                  0.22392862601554953
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.0009383970173075795,
+                "median": 0.0009592680144123733,
+                "maximum": 0.0010441949998494238,
+                "samples": [
+                  0.0009383970173075795,
+                  0.0009592680144123733,
+                  0.0010441949998494238
+                ]
+              }
+            },
+            {
+              "start": 1024,
+              "end": 2048,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.20854994602268562,
+                "median": 0.2091365060186945,
+                "maximum": 0.20921749700210057,
+                "samples": [
+                  0.20854994602268562,
+                  0.2091365060186945,
+                  0.20921749700210057
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.20752673200331628,
+                "median": 0.20814937600516714,
+                "maximum": 0.20822025201050565,
+                "samples": [
+                  0.20752673200331628,
+                  0.20814937600516714,
+                  0.20822025201050565
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.0009871300135273486,
+                "median": 0.0009972449915949255,
+                "maximum": 0.001023214019369334,
+                "samples": [
+                  0.001023214019369334,
+                  0.0009871300135273486,
+                  0.0009972449915949255
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "slot": 1,
+          "measured_requests": 3,
+          "prompt_wall_seconds": {
+            "count": 3,
+            "minimum": 0.42961277498397976,
+            "median": 0.4317129030241631,
+            "maximum": 0.43499787998734973,
+            "samples": [
+              0.43499787998734973,
+              0.4317129030241631,
+              0.42961277498397976
+            ]
+          },
+          "forward_wall_seconds": {
+            "count": 3,
+            "minimum": 0.4275954389886465,
+            "median": 0.42966113801230676,
+            "maximum": 0.4308644520060625,
+            "samples": [
+              0.4308644520060625,
+              0.42966113801230676,
+              0.4275954389886465
+            ]
+          },
+          "tokens_per_second_per_user": {
+            "count": 3,
+            "minimum": 4708.068922219939,
+            "median": 4743.89342003376,
+            "maximum": 4767.083567466935,
+            "samples": [
+              4708.068922219939,
+              4743.89342003376,
+              4767.083567466935
+            ]
+          },
+          "chunks": [
+            {
+              "start": 0,
+              "end": 1024,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.22127037000609562,
+                "median": 0.2224554969870951,
+                "maximum": 0.2244120610121172,
+                "samples": [
+                  0.2244120610121172,
+                  0.2224554969870951,
+                  0.22127037000609562
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.2202942160074599,
+                "median": 0.2214252830017358,
+                "maximum": 0.22337344399420545,
+                "samples": [
+                  0.22337344399420545,
+                  0.2214252830017358,
+                  0.2202942160074599
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.0009761539986357093,
+                "median": 0.0010302139853592962,
+                "maximum": 0.001038617017911747,
+                "samples": [
+                  0.001038617017911747,
+                  0.0010302139853592962,
+                  0.0009761539986357093
+                ]
+              }
+            },
+            {
+              "start": 1024,
+              "end": 2048,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.20833553400007077,
+                "median": 0.20924996500252746,
+                "maximum": 0.2105788280023262,
+                "samples": [
+                  0.2105788280023262,
+                  0.20924996500252746,
+                  0.20833553400007077
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.20730122298118658,
+                "median": 0.20749100801185705,
+                "maximum": 0.20823585501057096,
+                "samples": [
+                  0.20749100801185705,
+                  0.20823585501057096,
+                  0.20730122298118658
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.0010141099919565022,
+                "median": 0.001034311018884182,
+                "maximum": 0.003087819990469143,
+                "samples": [
+                  0.003087819990469143,
+                  0.0010141099919565022,
+                  0.001034311018884182
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "setup": {
+        "tokenization_wall_seconds": 1.7326836079882924,
+        "model_and_cache_load_wall_seconds": 337.4051637770026
+      },
+      "warmups": [
+        {
+          "slot": 0,
+          "phase": "warmup",
+          "prompt_wall_seconds": 177.83202608700958,
+          "forward_wall_seconds": 177.82038696599193,
+          "programs_before": 10,
+          "programs_after": 116
+        },
+        {
+          "slot": 1,
+          "phase": "warmup",
+          "prompt_wall_seconds": 0.4258817990194075,
+          "forward_wall_seconds": 0.4239085909794085,
+          "programs_before": 116,
+          "programs_after": 116
+        }
+      ],
+      "readback_hash_wall_seconds": [
+        {
+          "slot": 0,
+          "phase": "warmup",
+          "repetition": 0,
+          "seconds": 1.206359165982576
+        },
+        {
+          "slot": 1,
+          "phase": "warmup",
+          "repetition": 0,
+          "seconds": 1.1499796269927174
+        },
+        {
+          "slot": 0,
+          "phase": "measured",
+          "repetition": 0,
+          "seconds": 1.1831957140238956
+        },
+        {
+          "slot": 1,
+          "phase": "measured",
+          "repetition": 0,
+          "seconds": 1.1854154530155938
+        },
+        {
+          "slot": 0,
+          "phase": "measured",
+          "repetition": 1,
+          "seconds": 1.173488399013877
+        },
+        {
+          "slot": 1,
+          "phase": "measured",
+          "repetition": 1,
+          "seconds": 1.189522341999691
+        },
+        {
+          "slot": 0,
+          "phase": "measured",
+          "repetition": 2,
+          "seconds": 1.177234607981518
+        },
+        {
+          "slot": 1,
+          "phase": "measured",
+          "repetition": 2,
+          "seconds": 1.1722769339976367
+        }
+      ]
+    },
+    {
+      "context_length": 4096,
+      "attempt": "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-launch-003/attempts/attempt-002-bfp8-4k",
+      "report": {
+        "path": "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-launch-003/attempts/attempt-002-bfp8-4k/captures-4096/report.json",
+        "sha256": "3be58eaae6011aaa96c2eafb2006cba20c123db3ab0ca5700378f9fdced6f1cf"
+      },
+      "report_status": "performance_complete_no_accuracy_claim",
+      "report_accuracy_status": "No golden accuracy claim; book continuation predictions are observations only",
+      "verification": {
+        "path": "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-launch-003/attempts/attempt-002-bfp8-4k/verification.json",
+        "sha256": "49e23908df17f8283814ed6405e0e56fb57ec21de4eb13fa60c9f07bd2a44f6f"
+      },
+      "verification_fields": {
+        "verified_exit": 0,
+        "actual_exit": 0,
+        "dispatch_exit": 0,
+        "reasons": [],
+        "full_model_accepted": false,
+        "execution_verified": true,
+        "scope": "error-free full32 prefill and performance; book next-token observations only; no golden accuracy acceptance",
+        "ended_utc": "2026-09-17T07:15:19.518508+00:00"
+      },
+      "source_head": "cee680d3fd208f287c6e1427dfce87076f6f5746",
+      "source_repository": "/data/divanovic/llama31-8b-disagg/repos/tt-metal",
+      "source_pin_count": 14448,
+      "source_map": {
+        "path": "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-launch-003/attempts/attempt-002-bfp8-4k/source-hashes.json",
+        "sha256": "529b3ec00436750a9565db2a1fb81f83b14560918d8ed4680a091f76ab8849ad"
+      },
+      "source_manifest_sha256": "529b3ec00436750a9565db2a1fb81f83b14560918d8ed4680a091f76ab8849ad",
+      "before_node_after_equal": true,
+      "source_heads_equal": true,
+      "selected_source_sha256": {
+        "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-launch-003/launch.py": "3abcbca0052590cf37e5eb7f083ebbf3309f47247da2b67278aaa7261eac0bab",
+        "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-preparation-003/long_context_performance_helpers.py": "d6a96c40f5d4ea53675ed80584d0695597b77fc5e444ccbc4972caf146b9154a",
+        "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-preparation-003/test_long_context_performance.py": "9512cb59644134d74a07659938f02b44e5deb619d0e767b213ff755a17249bb8",
+        "/data/divanovic/llama31-8b-disagg/repos/tt-metal/models/demos/llama_3p1_8b_d_p/tt/__init__.py": "5dce07d5450b8b62d8e38ca9845d7abdabd7107e59cf000967393ac0cb074f76",
+        "/data/divanovic/llama31-8b-disagg/repos/tt-metal/models/demos/llama_3p1_8b_d_p/tt/attention.py": "776a46d34b1c10ea3b9dc772ea9f7b8b3b606af7d2d907e5e249f7e8edccd45f",
+        "/data/divanovic/llama31-8b-disagg/repos/tt-metal/models/demos/llama_3p1_8b_d_p/tt/config.py": "3c6a067625d38d9bf043028fc7d33b2591a9b980f50c980f3b2f7b50da7be979",
+        "/data/divanovic/llama31-8b-disagg/repos/tt-metal/models/demos/llama_3p1_8b_d_p/tt/decoder.py": "df0b04fb7d0d47929d7a0ffdd7d55a7cd72229e49342ea3d99bf0f4b7421186f",
+        "/data/divanovic/llama31-8b-disagg/repos/tt-metal/models/demos/llama_3p1_8b_d_p/tt/input.py": "f3cf1c295097e09978c13bebde970b33d67a5127d800f5f28b3505f15f9eedf6",
+        "/data/divanovic/llama31-8b-disagg/repos/tt-metal/models/demos/llama_3p1_8b_d_p/tt/kv_cache.py": "5ebd451510be99ad333fc1f17835334c8fb2129df7a181274996a6aa2b790757",
+        "/data/divanovic/llama31-8b-disagg/repos/tt-metal/models/demos/llama_3p1_8b_d_p/tt/mlp.py": "acc1eaecafdcf1f23393a628d4af1ed5da0c2a39447f4a1123cfafef39ba236e",
+        "/data/divanovic/llama31-8b-disagg/repos/tt-metal/models/demos/llama_3p1_8b_d_p/tt/model.py": "84853c75742290abde0a284175ef883aaa189622a29929571def2c32bb8aa830",
+        "/data/divanovic/llama31-8b-disagg/repos/tt-metal/models/demos/llama_3p1_8b_d_p/tt/model_config.py": "8ff96daea641929f86e27ce8a32f7fb7b62e1ef90f9c15ce2b456c64257b15cb",
+        "/data/divanovic/llama31-8b-disagg/repos/tt-metal/models/demos/llama_3p1_8b_d_p/tt/prefill_geometry.py": "984c4f6aa53895c0601ab9a58b2123bbc8fd20cce100200dfaa10be82734bf71",
+        "/data/divanovic/llama31-8b-disagg/repos/tt-metal/models/demos/llama_3p1_8b_d_p/tt/qkv.py": "cce1242a47f086faae7db51369c231b9ea80c97742a1e9c1b5e90adf40d99d82",
+        "/data/divanovic/llama31-8b-disagg/repos/tt-metal/models/demos/llama_3p1_8b_d_p/tt/rms_norm.py": "23f70af620f4c684e393ee55470c606711e161f0e33b6b0a531111eda77df2d9",
+        "/data/divanovic/llama31-8b-disagg/repos/tt-metal/models/demos/llama_3p1_8b_d_p/tt/rope.py": "7e8402b816e28187b3cbdfea81223309f3bad79b30ec4ebdb3e922bf73022a37",
+        "/data/divanovic/llama31-8b-disagg/repos/tt-metal/models/demos/llama_3p1_8b_d_p/tt/runners/__init__.py": "5dce07d5450b8b62d8e38ca9845d7abdabd7107e59cf000967393ac0cb074f76",
+        "/data/divanovic/llama31-8b-disagg/repos/tt-metal/models/demos/llama_3p1_8b_d_p/tt/runners/adapters/__init__.py": "5dce07d5450b8b62d8e38ca9845d7abdabd7107e59cf000967393ac0cb074f76",
+        "/data/divanovic/llama31-8b-disagg/repos/tt-metal/models/demos/llama_3p1_8b_d_p/tt/runners/adapters/llama_3p1_8b.py": "26405d8170f947baa8daf32d7026183454b570e9f69209adef19bdd4550f3fc2",
+        "/data/divanovic/llama31-8b-disagg/repos/tt-metal/models/demos/llama_3p1_8b_d_p/tt/weights.py": "027b05e465e10fb5491a1ead4608e6fb1c5e6cd84da214da8ff79e5918db88df",
+        "/data/divanovic/llama31-8b-disagg/repos/tt-metal/ttnn/cpp/ttnn/operations/experimental/quasar/transformer/sdpa/device/kernels/compute/compute_common.hpp": "a08c8861617c6275272a8e39443c586fb91d4ba1fb444054970da9f25e52d3c9",
+        "/data/divanovic/llama31-8b-disagg/repos/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp": "c67e91ad533a1a0ebca805a7e4df4fdd6d3d8f1760291d70c17276f3c6b2e0ec"
+      },
+      "controller_sha256": "3abcbca0052590cf37e5eb7f083ebbf3309f47247da2b67278aaa7261eac0bab",
+      "invocation": {
+        "path": "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-launch-003/attempts/attempt-002-bfp8-4k/invocation.json",
+        "sha256": "e2d1b866ca5c17855bd789eaf1640e05aa00973f6135580495d8b26823076b67"
+      },
+      "pytest_command": [
+        "timeout",
+        "--signal=TERM",
+        "--kill-after=60",
+        "2400",
+        "/data/divanovic/llama31-8b-disagg/runtime/python_env/bin/python",
+        "-B",
+        "-m",
+        "pytest",
+        "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-preparation-003/test_long_context_performance.py::test_full_prefill_long_context_performance[blackhole-mesh_device0-device_params0]",
+        "--rootdir=.",
+        "-c",
+        "/dev/null",
+        "-p",
+        "conftest",
+        "-p",
+        "performance_pytest_plugin",
+        "-vv",
+        "-s",
+        "--junitxml=/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-launch-003/attempts/attempt-002-bfp8-4k/pytest.xml"
+      ],
+      "junit": {
+        "path": "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-launch-003/attempts/attempt-002-bfp8-4k/pytest.xml",
+        "sha256": "0d01019bdda813cb075de1b6bff54c0c248b2be3d13ab500780ac49cd3700409"
+      },
+      "junit_case": "test_full_prefill_long_context_performance[blackhole-mesh_device0-device_params0]",
+      "node": "bh-glx-120-b09u02",
+      "job_id": "107973",
+      "measured_requests": 6,
+      "measured_chunks": 24,
+      "complete_requests": 8,
+      "complete_output_checks": 1024,
+      "summary": [
+        {
+          "slot": 0,
+          "measured_requests": 3,
+          "prompt_wall_seconds": {
+            "count": 3,
+            "minimum": 1.0565212560177315,
+            "median": 1.0586492390139028,
+            "maximum": 1.0593949950125534,
+            "samples": [
+              1.0586492390139028,
+              1.0565212560177315,
+              1.0593949950125534
+            ]
+          },
+          "forward_wall_seconds": {
+            "count": 3,
+            "minimum": 1.0526273060240783,
+            "median": 1.0543254149961285,
+            "maximum": 1.0551588509988505,
+            "samples": [
+              1.0543254149961285,
+              1.0526273060240783,
+              1.0551588509988505
+            ]
+          },
+          "tokens_per_second_per_user": {
+            "count": 3,
+            "minimum": 3866.3577034847744,
+            "median": 3869.081324627683,
+            "maximum": 3876.8742007508245,
+            "samples": [
+              3869.081324627683,
+              3876.8742007508245,
+              3866.3577034847744
+            ]
+          },
+          "chunks": [
+            {
+              "start": 0,
+              "end": 1024,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.267901104001794,
+                "median": 0.26802574199973606,
+                "maximum": 0.26907942100660875,
+                "samples": [
+                  0.26802574199973606,
+                  0.267901104001794,
+                  0.26907942100660875
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.2669436479918659,
+                "median": 0.26701342398882844,
+                "maximum": 0.267760302987881,
+                "samples": [
+                  0.26701342398882844,
+                  0.2669436479918659,
+                  0.267760302987881
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.0009574560099281371,
+                "median": 0.0010123180109076202,
+                "maximum": 0.0013191180187277496,
+                "samples": [
+                  0.0010123180109076202,
+                  0.0009574560099281371,
+                  0.0013191180187277496
+                ]
+              }
+            },
+            {
+              "start": 1024,
+              "end": 2048,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.26593111001420766,
+                "median": 0.26718899700790644,
+                "maximum": 0.2679526729916688,
+                "samples": [
+                  0.2679526729916688,
+                  0.26593111001420766,
+                  0.26718899700790644
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.2649540150014218,
+                "median": 0.26620323801762424,
+                "maximum": 0.2665988219960127,
+                "samples": [
+                  0.2665988219960127,
+                  0.2649540150014218,
+                  0.26620323801762424
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.0009770950127858669,
+                "median": 0.0009857589902821928,
+                "maximum": 0.001353850995656103,
+                "samples": [
+                  0.001353850995656103,
+                  0.0009770950127858669,
+                  0.0009857589902821928
+                ]
+              }
+            },
+            {
+              "start": 2048,
+              "end": 3072,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.26671709000947885,
+                "median": 0.2669245289871469,
+                "maximum": 0.26704285701271147,
+                "samples": [
+                  0.26671709000947885,
+                  0.26704285701271147,
+                  0.2669245289871469
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.26573258300777525,
+                "median": 0.2659660219796933,
+                "maximum": 0.2660902680072468,
+                "samples": [
+                  0.26573258300777525,
+                  0.2660902680072468,
+                  0.2659660219796933
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.0009525890054646879,
+                "median": 0.0009585070074535906,
+                "maximum": 0.000984507001703605,
+                "samples": [
+                  0.000984507001703605,
+                  0.0009525890054646879,
+                  0.0009585070074535906
+                ]
+              }
+            },
+            {
+              "start": 3072,
+              "end": 4096,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.25563438702374697,
+                "median": 0.2559421579935588,
+                "maximum": 0.25618906700401567,
+                "samples": [
+                  0.2559421579935588,
+                  0.25563438702374697,
+                  0.25618906700401567
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.25463937502354383,
+                "median": 0.25498058600351214,
+                "maximum": 0.25522928801365197,
+                "samples": [
+                  0.25498058600351214,
+                  0.25463937502354383,
+                  0.25522928801365197
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.0009597789903637022,
+                "median": 0.0009615719900466502,
+                "maximum": 0.0009950120002031326,
+                "samples": [
+                  0.0009615719900466502,
+                  0.0009950120002031326,
+                  0.0009597789903637022
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "slot": 1,
+          "measured_requests": 3,
+          "prompt_wall_seconds": {
+            "count": 3,
+            "minimum": 1.057305071997689,
+            "median": 1.0620323389885016,
+            "maximum": 1.066372201021295,
+            "samples": [
+              1.057305071997689,
+              1.066372201021295,
+              1.0620323389885016
+            ]
+          },
+          "forward_wall_seconds": {
+            "count": 3,
+            "minimum": 1.053244824957801,
+            "median": 1.0578493039938621,
+            "maximum": 1.0618785900005605,
+            "samples": [
+              1.053244824957801,
+              1.0618785900005605,
+              1.0578493039938621
+            ]
+          },
+          "tokens_per_second_per_user": {
+            "count": 3,
+            "minimum": 3841.0603690504536,
+            "median": 3856.7563807907236,
+            "maximum": 3874.0001428924884,
+            "samples": [
+              3874.0001428924884,
+              3841.0603690504536,
+              3856.7563807907236
+            ]
+          },
+          "chunks": [
+            {
+              "start": 0,
+              "end": 1024,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.26843952198396437,
+                "median": 0.26854817499406636,
+                "maximum": 0.2702860309800599,
+                "samples": [
+                  0.26843952198396437,
+                  0.26854817499406636,
+                  0.2702860309800599
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.26736892698681913,
+                "median": 0.2674526519840583,
+                "maximum": 0.26918623098754324,
+                "samples": [
+                  0.26736892698681913,
+                  0.2674526519840583,
+                  0.26918623098754324
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.0010705949971452355,
+                "median": 0.001095523010008037,
+                "maximum": 0.0010997999925166368,
+                "samples": [
+                  0.0010705949971452355,
+                  0.001095523010008037,
+                  0.0010997999925166368
+                ]
+              }
+            },
+            {
+              "start": 1024,
+              "end": 2048,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.2661907600122504,
+                "median": 0.2678553349978756,
+                "maximum": 0.2706558569916524,
+                "samples": [
+                  0.2661907600122504,
+                  0.2706558569916524,
+                  0.2678553349978756
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.26518178699188866,
+                "median": 0.26683099899673834,
+                "maximum": 0.26952050399268046,
+                "samples": [
+                  0.26518178699188866,
+                  0.26952050399268046,
+                  0.26683099899673834
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.0010089730203617364,
+                "median": 0.0010243360011372715,
+                "maximum": 0.001135352998971939,
+                "samples": [
+                  0.0010089730203617364,
+                  0.001135352998971939,
+                  0.0010243360011372715
+                ]
+              }
+            },
+            {
+              "start": 2048,
+              "end": 3072,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.2666338649869431,
+                "median": 0.26736536002135836,
+                "maximum": 0.2682715100236237,
+                "samples": [
+                  0.2666338649869431,
+                  0.2682715100236237,
+                  0.26736536002135836
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.265676598995924,
+                "median": 0.26633049800875597,
+                "maximum": 0.267243848007638,
+                "samples": [
+                  0.265676598995924,
+                  0.267243848007638,
+                  0.26633049800875597
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.000957265991019085,
+                "median": 0.0010276620159856975,
+                "maximum": 0.0010348620126023889,
+                "samples": [
+                  0.000957265991019085,
+                  0.0010276620159856975,
+                  0.0010348620126023889
+                ]
+              }
+            },
+            {
+              "start": 3072,
+              "end": 4096,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.25602865798282437,
+                "median": 0.25651170100900345,
+                "maximum": 0.2588845410209615,
+                "samples": [
+                  0.25602865798282437,
+                  0.2588845410209615,
+                  0.25651170100900345
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.25501751198316924,
+                "median": 0.25550157600082457,
+                "maximum": 0.2576615860161837,
+                "samples": [
+                  0.25501751198316924,
+                  0.2576615860161837,
+                  0.25550157600082457
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.0010101250081788749,
+                "median": 0.0010111459996551275,
+                "maximum": 0.0012229550047777593,
+                "samples": [
+                  0.0010111459996551275,
+                  0.0012229550047777593,
+                  0.0010101250081788749
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "setup": {
+        "fixture_and_tokenizer_load_wall_seconds": 1.3461878020025324,
+        "model_and_cache_load_wall_seconds": 68.19146893100697
+      },
+      "warmups": [
+        {
+          "slot": 0,
+          "phase": "warmup",
+          "prompt_wall_seconds": 123.17774486800772,
+          "forward_wall_seconds": 123.17274839404854,
+          "programs_before": 10,
+          "programs_after": 134
+        },
+        {
+          "slot": 1,
+          "phase": "warmup",
+          "prompt_wall_seconds": 1.056435648992192,
+          "forward_wall_seconds": 1.0524099320173264,
+          "programs_before": 134,
+          "programs_after": 134
+        }
+      ],
+      "readback_hash_wall_seconds": [
+        {
+          "slot": 0,
+          "phase": "warmup",
+          "repetition": 0,
+          "seconds": 2.427266159997089
+        },
+        {
+          "slot": 1,
+          "phase": "warmup",
+          "repetition": 0,
+          "seconds": 2.4080055310041644
+        },
+        {
+          "slot": 0,
+          "phase": "measured",
+          "repetition": 0,
+          "seconds": 2.4180907949921675
+        },
+        {
+          "slot": 1,
+          "phase": "measured",
+          "repetition": 0,
+          "seconds": 2.480908591009211
+        },
+        {
+          "slot": 0,
+          "phase": "measured",
+          "repetition": 1,
+          "seconds": 2.422544360975735
+        },
+        {
+          "slot": 1,
+          "phase": "measured",
+          "repetition": 1,
+          "seconds": 2.4354070920089725
+        },
+        {
+          "slot": 0,
+          "phase": "measured",
+          "repetition": 2,
+          "seconds": 2.4427085510105826
+        },
+        {
+          "slot": 1,
+          "phase": "measured",
+          "repetition": 2,
+          "seconds": 2.452316470997175
+        }
+      ],
+      "root_verification": {
+        "path": "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-launch-003/attempts/attempt-002-bfp8-4k/root-verification.json",
+        "sha256": "cb52ab68a8559fcdc9f05e519363e8ec3c2d0b4ca191e8775bb33dd79f757045"
+      },
+      "root_verification_fields": {
+        "utc": "2026-09-17T07:19:34.090204+00:00",
+        "root_verified": true,
+        "actual_exit": 0,
+        "dispatch_exit": 0,
+        "verified_exit": 0,
+        "full_model_accuracy_accepted": false,
+        "execution_verified": true,
+        "scope": "full32_4k_book_execution_and_eager_performance",
+        "source_pin_count": 14448,
+        "source_pins_sha256": "529b3ec00436750a9565db2a1fb81f83b14560918d8ed4680a091f76ab8849ad",
+        "report_sha256": "3be58eaae6011aaa96c2eafb2006cba20c123db3ab0ca5700378f9fdced6f1cf",
+        "controller_result_sha256": "49e23908df17f8283814ed6405e0e56fb57ec21de4eb13fa60c9f07bd2a44f6f",
+        "samples": 8,
+        "output_checks": 1024,
+        "observations": 8,
+        "all32_clean_close": "2026-09-17 07:14:33.316 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1314)",
+        "qualitative_review": "Both argmax pieces are grammatically plausible continuations. Actual book next tokens rank2 in both slots. Single-word sanity is not a generation or numerical accuracy proof."
+      },
+      "book_fixture": {
+        "manifest_path": "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/book-fixture-tokenizer-001/manifest.json",
+        "manifest_sha256": "69cd38111c60d5e0f1691d7eb2ffc99d2cefc7097b39b8ffbac61ef028491c43"
+      },
+      "book_observations": [
+        {
+          "argmax_token_id": 323,
+          "top5": [
+            {
+              "token_id": 323,
+              "piece": " and",
+              "logit": 19.25,
+              "probability": 0.41238539203830066
+            },
+            {
+              "token_id": 902,
+              "piece": " which",
+              "logit": 18.25,
+              "probability": 0.15170810757031622
+            },
+            {
+              "token_id": 994,
+              "piece": " when",
+              "logit": 18.25,
+              "probability": 0.15170810757031622
+            },
+            {
+              "token_id": 12222,
+              "piece": " till",
+              "logit": 16.875,
+              "probability": 0.03835781659838175
+            },
+            {
+              "token_id": 505,
+              "piece": " from",
+              "logit": 16.75,
+              "probability": 0.033850654337979874
+            }
+          ],
+          "expected_next_token_rank": 2,
+          "expected_next_token_probability": 0.15170810757031622,
+          "final_logits_float32_sha256": "4e7da20fe16807761ec1b8fb6da364c0bff890184b3d727a1d81aa9f9ef28d72",
+          "slot": 0,
+          "phase": "warmup",
+          "repetition": 0,
+          "final_prompt_position": 4095,
+          "chunk_start": 3072,
+          "sp": 3,
+          "local_row": 255,
+          "tp_order": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7
+          ],
+          "vocab_size": 128256,
+          "scope": "book_continuation_observation_no_semantic_threshold",
+          "book_id": "1342",
+          "title": "Pride and Prejudice",
+          "expected_next_token_id": 902,
+          "expected_next_token": " which",
+          "expected_next_word": "which",
+          "trailing_prompt_excerpt": "and Catherine and Lydia had been fortunate enough to be never without partners,",
+          "actual_following_excerpt": " which was all that they had yet learnt to care for at a ball. They returned, t"
+        },
+        {
+          "argmax_token_id": 311,
+          "top5": [
+            {
+              "token_id": 311,
+              "piece": " to",
+              "logit": 16.5,
+              "probability": 0.348623358778562
+            },
+            {
+              "token_id": 304,
+              "piece": " in",
+              "logit": 16.25,
+              "probability": 0.2715081448137274
+            },
+            {
+              "token_id": 810,
+              "piece": " more",
+              "logit": 15.5625,
+              "probability": 0.1365228688886493
+            },
+            {
+              "token_id": 264,
+              "piece": " a",
+              "logit": 14.5625,
+              "probability": 0.050223956713878394
+            },
+            {
+              "token_id": 775,
+              "piece": " else",
+              "logit": 14.125,
+              "probability": 0.03242702364369382
+            }
+          ],
+          "expected_next_token_rank": 2,
+          "expected_next_token_probability": 0.2715081448137274,
+          "final_logits_float32_sha256": "06e1b373ca1de811d07fe24c935bbb69154bc0f21d2b0c8bb355e58ec97ff1a2",
+          "slot": 1,
+          "phase": "warmup",
+          "repetition": 0,
+          "final_prompt_position": 4095,
+          "chunk_start": 3072,
+          "sp": 3,
+          "local_row": 255,
+          "tp_order": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7
+          ],
+          "vocab_size": 128256,
+          "scope": "book_continuation_observation_no_semantic_threshold",
+          "book_id": "1400",
+          "title": "Great Expectations",
+          "expected_next_token_id": 304,
+          "expected_next_token": " in",
+          "expected_next_word": "in",
+          "trailing_prompt_excerpt": "hough I was hungry, I dared not eat my slice. I felt that I must have something",
+          "actual_following_excerpt": " in reserve for my dreadful acquaintance, and his ally the still more dreadful "
+        },
+        {
+          "argmax_token_id": 323,
+          "top5": [
+            {
+              "token_id": 323,
+              "piece": " and",
+              "logit": 19.25,
+              "probability": 0.41238539203830066
+            },
+            {
+              "token_id": 902,
+              "piece": " which",
+              "logit": 18.25,
+              "probability": 0.15170810757031622
+            },
+            {
+              "token_id": 994,
+              "piece": " when",
+              "logit": 18.25,
+              "probability": 0.15170810757031622
+            },
+            {
+              "token_id": 12222,
+              "piece": " till",
+              "logit": 16.875,
+              "probability": 0.03835781659838175
+            },
+            {
+              "token_id": 505,
+              "piece": " from",
+              "logit": 16.75,
+              "probability": 0.033850654337979874
+            }
+          ],
+          "expected_next_token_rank": 2,
+          "expected_next_token_probability": 0.15170810757031622,
+          "final_logits_float32_sha256": "4e7da20fe16807761ec1b8fb6da364c0bff890184b3d727a1d81aa9f9ef28d72",
+          "slot": 0,
+          "phase": "measured",
+          "repetition": 0,
+          "final_prompt_position": 4095,
+          "chunk_start": 3072,
+          "sp": 3,
+          "local_row": 255,
+          "tp_order": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7
+          ],
+          "vocab_size": 128256,
+          "scope": "book_continuation_observation_no_semantic_threshold",
+          "book_id": "1342",
+          "title": "Pride and Prejudice",
+          "expected_next_token_id": 902,
+          "expected_next_token": " which",
+          "expected_next_word": "which",
+          "trailing_prompt_excerpt": "and Catherine and Lydia had been fortunate enough to be never without partners,",
+          "actual_following_excerpt": " which was all that they had yet learnt to care for at a ball. They returned, t"
+        },
+        {
+          "argmax_token_id": 311,
+          "top5": [
+            {
+              "token_id": 311,
+              "piece": " to",
+              "logit": 16.5,
+              "probability": 0.348623358778562
+            },
+            {
+              "token_id": 304,
+              "piece": " in",
+              "logit": 16.25,
+              "probability": 0.2715081448137274
+            },
+            {
+              "token_id": 810,
+              "piece": " more",
+              "logit": 15.5625,
+              "probability": 0.1365228688886493
+            },
+            {
+              "token_id": 264,
+              "piece": " a",
+              "logit": 14.5625,
+              "probability": 0.050223956713878394
+            },
+            {
+              "token_id": 775,
+              "piece": " else",
+              "logit": 14.125,
+              "probability": 0.03242702364369382
+            }
+          ],
+          "expected_next_token_rank": 2,
+          "expected_next_token_probability": 0.2715081448137274,
+          "final_logits_float32_sha256": "06e1b373ca1de811d07fe24c935bbb69154bc0f21d2b0c8bb355e58ec97ff1a2",
+          "slot": 1,
+          "phase": "measured",
+          "repetition": 0,
+          "final_prompt_position": 4095,
+          "chunk_start": 3072,
+          "sp": 3,
+          "local_row": 255,
+          "tp_order": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7
+          ],
+          "vocab_size": 128256,
+          "scope": "book_continuation_observation_no_semantic_threshold",
+          "book_id": "1400",
+          "title": "Great Expectations",
+          "expected_next_token_id": 304,
+          "expected_next_token": " in",
+          "expected_next_word": "in",
+          "trailing_prompt_excerpt": "hough I was hungry, I dared not eat my slice. I felt that I must have something",
+          "actual_following_excerpt": " in reserve for my dreadful acquaintance, and his ally the still more dreadful "
+        },
+        {
+          "argmax_token_id": 323,
+          "top5": [
+            {
+              "token_id": 323,
+              "piece": " and",
+              "logit": 19.25,
+              "probability": 0.41238539203830066
+            },
+            {
+              "token_id": 902,
+              "piece": " which",
+              "logit": 18.25,
+              "probability": 0.15170810757031622
+            },
+            {
+              "token_id": 994,
+              "piece": " when",
+              "logit": 18.25,
+              "probability": 0.15170810757031622
+            },
+            {
+              "token_id": 12222,
+              "piece": " till",
+              "logit": 16.875,
+              "probability": 0.03835781659838175
+            },
+            {
+              "token_id": 505,
+              "piece": " from",
+              "logit": 16.75,
+              "probability": 0.033850654337979874
+            }
+          ],
+          "expected_next_token_rank": 2,
+          "expected_next_token_probability": 0.15170810757031622,
+          "final_logits_float32_sha256": "4e7da20fe16807761ec1b8fb6da364c0bff890184b3d727a1d81aa9f9ef28d72",
+          "slot": 0,
+          "phase": "measured",
+          "repetition": 1,
+          "final_prompt_position": 4095,
+          "chunk_start": 3072,
+          "sp": 3,
+          "local_row": 255,
+          "tp_order": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7
+          ],
+          "vocab_size": 128256,
+          "scope": "book_continuation_observation_no_semantic_threshold",
+          "book_id": "1342",
+          "title": "Pride and Prejudice",
+          "expected_next_token_id": 902,
+          "expected_next_token": " which",
+          "expected_next_word": "which",
+          "trailing_prompt_excerpt": "and Catherine and Lydia had been fortunate enough to be never without partners,",
+          "actual_following_excerpt": " which was all that they had yet learnt to care for at a ball. They returned, t"
+        },
+        {
+          "argmax_token_id": 311,
+          "top5": [
+            {
+              "token_id": 311,
+              "piece": " to",
+              "logit": 16.5,
+              "probability": 0.348623358778562
+            },
+            {
+              "token_id": 304,
+              "piece": " in",
+              "logit": 16.25,
+              "probability": 0.2715081448137274
+            },
+            {
+              "token_id": 810,
+              "piece": " more",
+              "logit": 15.5625,
+              "probability": 0.1365228688886493
+            },
+            {
+              "token_id": 264,
+              "piece": " a",
+              "logit": 14.5625,
+              "probability": 0.050223956713878394
+            },
+            {
+              "token_id": 775,
+              "piece": " else",
+              "logit": 14.125,
+              "probability": 0.03242702364369382
+            }
+          ],
+          "expected_next_token_rank": 2,
+          "expected_next_token_probability": 0.2715081448137274,
+          "final_logits_float32_sha256": "06e1b373ca1de811d07fe24c935bbb69154bc0f21d2b0c8bb355e58ec97ff1a2",
+          "slot": 1,
+          "phase": "measured",
+          "repetition": 1,
+          "final_prompt_position": 4095,
+          "chunk_start": 3072,
+          "sp": 3,
+          "local_row": 255,
+          "tp_order": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7
+          ],
+          "vocab_size": 128256,
+          "scope": "book_continuation_observation_no_semantic_threshold",
+          "book_id": "1400",
+          "title": "Great Expectations",
+          "expected_next_token_id": 304,
+          "expected_next_token": " in",
+          "expected_next_word": "in",
+          "trailing_prompt_excerpt": "hough I was hungry, I dared not eat my slice. I felt that I must have something",
+          "actual_following_excerpt": " in reserve for my dreadful acquaintance, and his ally the still more dreadful "
+        },
+        {
+          "argmax_token_id": 323,
+          "top5": [
+            {
+              "token_id": 323,
+              "piece": " and",
+              "logit": 19.25,
+              "probability": 0.41238539203830066
+            },
+            {
+              "token_id": 902,
+              "piece": " which",
+              "logit": 18.25,
+              "probability": 0.15170810757031622
+            },
+            {
+              "token_id": 994,
+              "piece": " when",
+              "logit": 18.25,
+              "probability": 0.15170810757031622
+            },
+            {
+              "token_id": 12222,
+              "piece": " till",
+              "logit": 16.875,
+              "probability": 0.03835781659838175
+            },
+            {
+              "token_id": 505,
+              "piece": " from",
+              "logit": 16.75,
+              "probability": 0.033850654337979874
+            }
+          ],
+          "expected_next_token_rank": 2,
+          "expected_next_token_probability": 0.15170810757031622,
+          "final_logits_float32_sha256": "4e7da20fe16807761ec1b8fb6da364c0bff890184b3d727a1d81aa9f9ef28d72",
+          "slot": 0,
+          "phase": "measured",
+          "repetition": 2,
+          "final_prompt_position": 4095,
+          "chunk_start": 3072,
+          "sp": 3,
+          "local_row": 255,
+          "tp_order": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7
+          ],
+          "vocab_size": 128256,
+          "scope": "book_continuation_observation_no_semantic_threshold",
+          "book_id": "1342",
+          "title": "Pride and Prejudice",
+          "expected_next_token_id": 902,
+          "expected_next_token": " which",
+          "expected_next_word": "which",
+          "trailing_prompt_excerpt": "and Catherine and Lydia had been fortunate enough to be never without partners,",
+          "actual_following_excerpt": " which was all that they had yet learnt to care for at a ball. They returned, t"
+        },
+        {
+          "argmax_token_id": 311,
+          "top5": [
+            {
+              "token_id": 311,
+              "piece": " to",
+              "logit": 16.5,
+              "probability": 0.348623358778562
+            },
+            {
+              "token_id": 304,
+              "piece": " in",
+              "logit": 16.25,
+              "probability": 0.2715081448137274
+            },
+            {
+              "token_id": 810,
+              "piece": " more",
+              "logit": 15.5625,
+              "probability": 0.1365228688886493
+            },
+            {
+              "token_id": 264,
+              "piece": " a",
+              "logit": 14.5625,
+              "probability": 0.050223956713878394
+            },
+            {
+              "token_id": 775,
+              "piece": " else",
+              "logit": 14.125,
+              "probability": 0.03242702364369382
+            }
+          ],
+          "expected_next_token_rank": 2,
+          "expected_next_token_probability": 0.2715081448137274,
+          "final_logits_float32_sha256": "06e1b373ca1de811d07fe24c935bbb69154bc0f21d2b0c8bb355e58ec97ff1a2",
+          "slot": 1,
+          "phase": "measured",
+          "repetition": 2,
+          "final_prompt_position": 4095,
+          "chunk_start": 3072,
+          "sp": 3,
+          "local_row": 255,
+          "tp_order": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7
+          ],
+          "vocab_size": 128256,
+          "scope": "book_continuation_observation_no_semantic_threshold",
+          "book_id": "1400",
+          "title": "Great Expectations",
+          "expected_next_token_id": 304,
+          "expected_next_token": " in",
+          "expected_next_word": "in",
+          "trailing_prompt_excerpt": "hough I was hungry, I dared not eat my slice. I felt that I must have something",
+          "actual_following_excerpt": " in reserve for my dreadful acquaintance, and his ally the still more dreadful "
+        }
+      ],
+      "prompt_identity": [
+        {
+          "slot": 0,
+          "tokens": 4096,
+          "token_ids_sha256": "2e9bc9ae27cea8b7885c57bdc831fe4cc17e33c4469bb81e86bf51a690fa9bf1",
+          "book_id": "1342",
+          "title": "Pride and Prejudice"
+        },
+        {
+          "slot": 1,
+          "tokens": 4096,
+          "token_ids_sha256": "25d7add1350a3595b537694203f0693fa669440894eb2dc352b4e4b92e833fa3",
+          "book_id": "1400",
+          "title": "Great Expectations"
+        }
+      ]
+    }
+  ],
+  "pending_contexts": [
+    8192,
+    16384,
+    32768,
+    65536,
+    131072
+  ],
+  "no_remeasurement": true,
+  "input_sha256": {
+    "/data/divanovic/llama31-8b-disagg/evidence/task-8-full-prefill/performance-preparation-002/attempts/attempt-002-bfp8-baseline/captures/report.json": "27642d239ea1d5b0fecde5d5046eee863dbfb0358ef40d3d8ec6300b941a2f94",
+    "/data/divanovic/llama31-8b-disagg/evidence/task-8-full-prefill/performance-preparation-002/attempts/attempt-002-bfp8-baseline/verification.json": "c34bc49f2ee77c6751a884e8ca242ed755c72a3f27f37131eb31d4c1930f6fdb",
+    "/data/divanovic/llama31-8b-disagg/evidence/task-8-full-prefill/performance-preparation-002/attempts/attempt-002-bfp8-baseline/invocation.json": "964cfbf6208a5bdd6fc7bd79116473c536caf3387089c34a3e4105d8e76e9bb7",
+    "/data/divanovic/llama31-8b-disagg/evidence/task-8-full-prefill/performance-preparation-002/attempts/attempt-002-bfp8-baseline/source-hashes.json": "afdca62367f7ac1f3f8142cb47427eba745d6f2d5aa6d721633278e2118e1c1b",
+    "/data/divanovic/llama31-8b-disagg/evidence/task-8-full-prefill/performance-preparation-002/attempts/attempt-002-bfp8-baseline/node-source-hashes.json": "afdca62367f7ac1f3f8142cb47427eba745d6f2d5aa6d721633278e2118e1c1b",
+    "/data/divanovic/llama31-8b-disagg/evidence/task-8-full-prefill/performance-preparation-002/attempts/attempt-002-bfp8-baseline/post-source-hashes.json": "afdca62367f7ac1f3f8142cb47427eba745d6f2d5aa6d721633278e2118e1c1b",
+    "/data/divanovic/llama31-8b-disagg/evidence/task-8-full-prefill/performance-preparation-002/attempts/attempt-002-bfp8-baseline/pytest-command.json": "73fede59f6095ad5031c6dd3170f2a9e5bbd4bf2aa7660b0f7458e629ab0a545",
+    "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-launch-003/attempts/attempt-002-bfp8-4k/captures-4096/report.json": "3be58eaae6011aaa96c2eafb2006cba20c123db3ab0ca5700378f9fdced6f1cf",
+    "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-launch-003/attempts/attempt-002-bfp8-4k/verification.json": "49e23908df17f8283814ed6405e0e56fb57ec21de4eb13fa60c9f07bd2a44f6f",
+    "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-launch-003/attempts/attempt-002-bfp8-4k/invocation.json": "e2d1b866ca5c17855bd789eaf1640e05aa00973f6135580495d8b26823076b67",
+    "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-launch-003/attempts/attempt-002-bfp8-4k/source-hashes.json": "529b3ec00436750a9565db2a1fb81f83b14560918d8ed4680a091f76ab8849ad",
+    "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-launch-003/attempts/attempt-002-bfp8-4k/node-source-hashes.json": "529b3ec00436750a9565db2a1fb81f83b14560918d8ed4680a091f76ab8849ad",
+    "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-launch-003/attempts/attempt-002-bfp8-4k/post-source-hashes.json": "529b3ec00436750a9565db2a1fb81f83b14560918d8ed4680a091f76ab8849ad",
+    "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-launch-003/attempts/attempt-002-bfp8-4k/pytest-command.json": "a284b3c83355e03ad98bf2a73f320ee0943af412380c1d6a83c9da2ddb2968de",
+    "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-launch-003/attempts/attempt-002-bfp8-4k/root-verification.json": "cb52ab68a8559fcdc9f05e519363e8ec3c2d0b4ca191e8775bb33dd79f757045"
+  }
+}
