@@ -511,6 +511,7 @@ class MiniMaxH3Vae:
             "units": 0,
             # Per-wave readback durations, not just their sum: a mean hides a slow first wave, and
             # comparing a mean against someone else's min-of-N is how a 2x phantom appears.
+            "yuv_extract": 0.0,
             "readback_each": [],
             "device_each": [],
         }

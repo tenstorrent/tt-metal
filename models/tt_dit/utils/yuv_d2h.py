@@ -51,6 +51,19 @@ def _get_planar_out_buf(T: int, row_stride: int) -> np.ndarray:
     return _PLANAR_OUT_BUF
 
 
+def _all_contiguous(*shard_groups) -> bool:
+    """True when every shard is C-contiguous, for torch tensors and numpy arrays alike."""
+    for group in shard_groups:
+        for shard in group:
+            flags = getattr(shard, "flags", None)
+            if flags is not None:
+                if not flags.c_contiguous:
+                    return False
+            elif not shard.is_contiguous():
+                return False
+    return True
+
+
 def _bt601_yuv_coefficients():
     """BT.601 coefficients for input in [-1, 1] -> limited-range uint8 (Y 16-235, CbCr 16-240)."""
     return ttnn.experimental.yuv_bt601_coefficients()
@@ -69,6 +82,7 @@ def _yuv_planar_d2h(
     out_W: int | None = None,
     view=None,
     pool: ThreadPoolExecutor | None = None,
+    reuse_out_buffer: bool = False,
 ) -> np.ndarray:
     """Batched D2H of three YUV ttnn tensors into ffmpeg yuv420p planar uint8.
 
@@ -85,10 +99,12 @@ def _yuv_planar_d2h(
     take one of two paths:
 
       * **C++/AVX2 fast path** (when ``HAS_CPP_PLANAR_CONCAT`` is True and
-        the local mesh is rectangular): one ``planar_concat_cpp`` call into
-        a module-level persistent output buffer.  ~2× faster than the
-        Python path on warm calls, but the returned buffer is **reused
-        across calls** — copy out (or feed ffmpeg) before the next call.
+        the local mesh is rectangular): one ``planar_concat_cpp`` call,
+        ~1.7× the Python path at the H3 chunk shape (43 MB: 10.4 -> 6.3 ms).
+        Allocates per call, so the result is the caller's, exactly as the
+        fallback's is.  ``reuse_out_buffer=True`` instead writes into a
+        module-level buffer (3.6 ms), which every later call overwrites:
+        only for a caller that consumes the frame before the next one.
       * **Python fallback**: per-shard ``_write`` tasks on the shared
         reassembly ThreadPoolExecutor (torch's strided-copy backend).
         Each scatter is a strided->strided copy; allocates a fresh output
@@ -173,16 +189,30 @@ def _yuv_planar_d2h(
         Cb_shards = _extract(host_Cb)  # each (1, h_per_uv, w_per_uv, T)
         Cr_shards = _extract(host_Cr)
 
+        mark = time.perf_counter()
+
     # --- C++/AVX2 fast path --------------------------------------------- Drop-in replacement for the torch_threaded
-    if HAS_CPP_PLANAR_CONCAT and len(mesh_coords) == TP_eff * SP_eff:
+    # `planar_concat_cpp` requires C-contiguous shards and makes them so itself, one at a time
+    # on this thread: hand it trimmed views of padded tensors and the 43 MB chunk takes 25.9 ms
+    # against the torch scatter's 6.7. Row-major uint8 carries no padding at these shapes, so
+    # the guard should never fire; it is here so that if that changes the readback loses
+    # nothing rather than running 4x slower.
+    use_cpp = (
+        HAS_CPP_PLANAR_CONCAT
+        and len(mesh_coords) == TP_eff * SP_eff
+        and _all_contiguous(Y_shards, Cb_shards, Cr_shards)
+    )
+    if use_cpp:
         triples = sorted(
             zip(mesh_coords, Y_shards, Cb_shards, Cr_shards),
             key=lambda t: (int(t[0][0]), int(t[0][1])),
         )
         out_Hu, out_Wu = out_H // 2, out_W // 2
         out_row = out_H * out_W + 2 * out_Hu * out_Wu
-        out = _get_planar_out_buf(T, out_row)
-        return _planar_concat_cpp_impl(
+        # Reusing one buffer aliases every result to the newest frame, and the H3 decode keeps
+        # all 21 chunks of a clip, so opt in only when the frame is consumed before the next.
+        out = _get_planar_out_buf(T, out_row) if reuse_out_buffer else None
+        assembled = _planar_concat_cpp_impl(
             [t[1] for t in triples],
             [t[2] for t in triples],
             [t[3] for t in triples],
@@ -245,6 +275,7 @@ def fast_device_to_host_yuv(
     logical_h: int | None = None,
     logical_w: int | None = None,
     use_persistent_buffer: bool = True,
+    reuse_out_buffer: bool = False,
 ) -> np.ndarray | None:
     """On-device YUV 4:2:0 conversion + batched D2H + planar uint8 concat.
 
@@ -301,6 +332,10 @@ def fast_device_to_host_yuv(
         logical_w: Optional logical (un-padded) width of the output, trimming
             the right columns of each plane exactly as ``logical_h`` trims the
             bottom rows.  Must be even and ``<= W``.  Defaults to ``None``.
+        reuse_out_buffer: Write the AVX2 path's result into a module-level
+            buffer instead of a fresh one.  Saves ~2.7 ms per 43 MB frame and
+            invalidates every previously returned array, so it is only for a
+            caller that consumes each frame before asking for the next.
 
     Returns:
         ``np.ndarray`` of shape ``(T, H'*W' + 2*(H'/2 * W'/2))``, dtype uint8,
@@ -424,6 +459,19 @@ def fast_device_to_host_yuv(
     # 3+4
     new_H = logical_h if logical_h is not None else H
     new_W = logical_w if logical_w is not None else W
-    out = _yuv_planar_d2h(tt_Y, tt_Cb, tt_Cr, mesh_device, H, W, T, out_H=new_H, out_W=new_W, view=d2h_view, pool=pool)
+    out = _yuv_planar_d2h(
+        tt_Y,
+        tt_Cb,
+        tt_Cr,
+        mesh_device,
+        H,
+        W,
+        T,
+        out_H=new_H,
+        out_W=new_W,
+        view=d2h_view,
+        pool=pool,
+        reuse_out_buffer=reuse_out_buffer,
+    )
 
     return out
