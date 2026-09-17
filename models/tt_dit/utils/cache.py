@@ -128,7 +128,7 @@ def load_model(
         tt_model.save(cache_dir)
         # Only a cache that reads back exactly is marked complete. Without this a handful of flipped
         # bytes on the way to disk is reused on every later run, and nothing downstream can tell a
-        # damaged weight from a real one (see MiniMaxH3_wormhole_perf.md, Open issues).
+        # damaged weight from a real one.
         if _verify_env_enabled() and not verify_saved_model(tt_model, cache_dir):
             logger.error(f"cache at '{cache_dir}' did not verify; leaving it unmarked so it is rebuilt next time.")
             return

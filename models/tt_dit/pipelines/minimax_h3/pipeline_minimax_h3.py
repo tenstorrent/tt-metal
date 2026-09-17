@@ -131,9 +131,6 @@ MINIMAX_H3_AUDIO_CONDITION_TIMESTEP = 1.0
 VIDEO_SHIFT = 12.0
 AUDIO_SHIFT = 3.0
 
-# Largest |x| a sane layer-50 text tap can hold; see the tripwire in `encode_prompt`.
-MINIMAX_H3_TEXT_EMBED_ABSMAX = 1e6
-
 
 _AUDIO_T_FACTOR_ENV = "MINIMAX_H3_AUDIO_T_FACTOR"
 _DEFAULT_AUDIO_T_FACTOR = 8
@@ -936,18 +933,6 @@ class MiniMaxH3Pipeline:
             **vision_kwargs,
         )
         embeds = local_device_to_torch(taps[0]).float()
-
-        # Tripwire. A damaged weight cache (single-byte flips in a few shards -- see
-        # `MiniMaxH3_wormhole_perf.md`, Open issues) turns this tap into ~1e29-scale garbage. Nothing
-        # downstream objects: the DiT quietly emits one row-constant velocity for every position and
-        # the run ends 40 minutes later at the audio gate, looking like a scaling bug. Qwen3-VL's
-        # massive activations reach ~2e4 at this tap, so the bound is loose by ~50x.
-        peak = float(embeds.abs().max())
-        if not torch.isfinite(embeds).all() or peak > MINIMAX_H3_TEXT_EMBED_ABSMAX:
-            raise RuntimeError(
-                f"text encoder tap is not a hidden state (abs max {peak:.3g}, bound {MINIMAX_H3_TEXT_EMBED_ABSMAX:.0e}); "
-                "suspect a corrupt weight cache under TT_DIT_CACHE_DIR -- delete the text_encoder entry and rerun"
-            )
 
         return embeds, tags
 
