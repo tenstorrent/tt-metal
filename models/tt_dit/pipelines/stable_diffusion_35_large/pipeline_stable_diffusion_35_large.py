@@ -176,8 +176,13 @@ class StableDiffusion3Pipeline(PipelineAPIMixin):
             vae_submesh_idx = 0
             assert encoder_shape[0] * encoder_shape[1] == 4, f"Cannot reshape {encoder_shape} to a 1x4 mesh"
             self.encoder_mesh_shape = ttnn.MeshShape(1, 4)
-        else:
+        elif len(self.submesh_devices) > 1:
+            # A second cfg submesh exists natively at 1x4 (or wider); offload VAE onto it.
             vae_submesh_idx = 1
+            self.encoder_mesh_shape = ttnn.MeshShape(*encoder_shape)
+        else:
+            # Single (cfg=1) submesh that is already native 1x4 (or wider) - no reshape, no second submesh.
+            vae_submesh_idx = 0
             self.encoder_mesh_shape = ttnn.MeshShape(*encoder_shape)
         vae_device = self.submesh_devices[vae_submesh_idx]
 
