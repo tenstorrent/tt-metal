@@ -391,7 +391,16 @@ def generate_ring_joint_perf_model_configs(
     for _name, _seq_len, _q_chunks, _k_chunks in (
         ("minimax_h3_5s_768p", 4768, [256, 320, 384, 544, 576], [256, 384, 512]),
         ("minimax_h3_10s_768p", 9216, [256, 352, 512], [256, 512]),
-        ("minimax_h3_15s_768p", 13632, [256, 384, 512], [256, 512]),
+        # 15 s carries the widened list. The first pass here swept q in {256, 384, 512} x k in
+        # {256, 512} and found the shipped (256, 512) already best, with every larger-q candidate
+        # L1-infeasible. That search was bounded on the wrong axis: the CB footprint is dominated by
+        # Sq_chunk_t * Sk_chunk_t, but Sq carries the heavier linear term (q, out_im, out0 and the
+        # statistics FIFO all scale with it, against K/V's two buffers on Sk), which is why
+        # (512, 256) fails while (256, 512) fits at the same product. The unexplored direction is
+        # therefore SMALLER q with LARGER k -- which also halves the ring's K-loop iterations, the
+        # thing that made k=512 win in the first place. q is restricted to the values that tile 63
+        # cores well at seq 13632: 256 (0.0% slot waste), 192 (1.4%) and 128 (0.9%).
+        ("minimax_h3_15s_768p", 13632, [128, 192, 256], [512, 640, 768, 1024]),
     ):
         perf_configs[_name] = ModelConfig(
             name=_name,

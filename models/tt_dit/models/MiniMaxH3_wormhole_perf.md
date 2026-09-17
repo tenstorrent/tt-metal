@@ -195,49 +195,164 @@ Caveat: `CORE COUNT` for `RingJointSDPADeviceOperation` reads 71, not 63, becaus
 counts the fused CCL workers — `ccl_core_grid_offset=(7, 0)` with `use_column_major_ccl=True`
 (`attention_minimax_h3.py:572-573`) places them in the reserved last column.
 
+## Optimization target — 15 s / 768P / 16:9
+
+Tuning work is scoped to this one configuration. Baseline is `c825d089e31` (the per-op breakdown
+above), measured at `fsdp1`.
+
+| | warm total | denoise | ms/fwd | realtime | CLIP | block device-only |
+|---|---|---|---|---|---|---|
+| baseline | 633.1 s | 609.3 s | 12435 | 42.0x | 36.31 | 246.31 ms |
+| best found | **TODO** | **TODO** | **TODO** | **TODO** | **TODO** | **TODO** |
+
+`TODO` rows need a re-profile and a pipeline re-run with the landed configs; see the experiment
+table at the end. Note what the ceiling looks like before spending on it: the matmul blockings
+landed so far are worth ~1327 us per layer against a 246.31 ms block, i.e. **~0.5%**. Only SDPA,
+at 70% of the block, can move this number materially.
+
+### Per-op: baseline vs best
+
+| op | baseline ms | best ms | delta |
+|---|---|---|---|
+| RingJointSDPADeviceOperation | 172.52 | TODO | TODO |
+| AllGatherMinimalMatmulAsyncOp (3) | 33.11 | TODO | TODO |
+| MinimalMatmulDeviceOperation (2) | 8.84 | TODO | TODO |
+| *(all others)* | 31.84 | TODO | TODO |
+| **device only** | **246.31** | **TODO** | **TODO** |
+
+## Sweeps run
+
+All matmul numbers come from `models/tt_dit/utils/sweep_mm_block_sizes.py` against device config
+`wh_4x8_ring` (4 links, 4 KB router payload, Ring). 4749 measured rows, all durations.
+
+```bash
+# One shape. MM_SWEEP_PROFILER_DUMP_EVERY is mandatory on a WH Galaxy -- see Open issues 2.
+MM_SWEEP_PROFILER_DUMP_EVERY=100000 python -m pytest \
+  models/tt_dit/utils/sweep_mm_block_sizes.py::test_mm_sweep \
+  -k "13632_5376_7168_8x8_agmm_ff1_swiglu and wh_4x8_ring" -s
+```
+
+Wormhole's compute grid is **8x9 = 72 cores** against Blackhole's 12x10, so the AGMM worker grid is
+8x8 (`agmm_worker_grid` reserves the in0-mux row) rather than 12x9, and ff2's plain matmul runs on
+the full 8x9. Neither grid is one Blackhole produces, so every H3 blocking the model carried for
+these shapes had been swept on a grid that does not exist on the part.
+
+### Matmul blockings — time saved against what the model ran before
+
+| shape | op / grid | 5 s (M=4768) | 10 s (M=9216) | **15 s (M=13632)** |
+|---|---|---|---|---|
+| ff1 | AGMM 8x8 | 16.0% | 9.6% | **6.3%** |
+| ff2 | matmul 8x9 | 15.2% | 6.8% | **4.0%** |
+| qkv | AGMM 8x8 | 8.4% | 3.5% | **0.0%** |
+| to_out | AGMM 8x8 | 7.5% | 2.6% | **0.4%** |
+| total matmul | | 12.8% | 6.7% | **3.5%** |
+| per denoise step | | 100 ms | 89 ms | **67 ms** |
+| share of one forward | | 3.5% | 1.4% | **0.5%** |
+
+Winning blockings, and the reason they are keyed per-M:
+
+| shape | 5 s | 10 s | 15 s |
+|---|---|---|---|
+| ff1 | (10, 7, 10) | (12, 7, 8) | (8, 7, 10) |
+| ff2 | (6, 8, 12) | (10, 8, 4) | (8, 7, 10) |
+| qkv | (10, 7, 8) | (10, 7, 8) | (8, 7, 12) *(= shipped)* |
+| to_out | (10, 8, 8) | (12, 8, 6) | (14, 8, 6) |
+
+Every winner differs by duration. `AGMM_BLOCK_SIZES` is keyed on `(K, N)` alone, on the argument
+that block shape does not track M — established on Blackhole's 120-core grid and **false here**:
+ff2's 5 s winner `(6, 8, 12)` ranks 71st of 314 at M=9216 and is 14.6% off that length's best,
+*worse than the untuned default*. Landing one duration's winner through a `(K, N)`-keyed table
+would speed up 5 s and regress 10 s. `M_per_core` goes 19 -> 36 -> 54 across the three, and the
+winners' `M_block` tracks it. Both entries landed are therefore keyed on `(M, K, N)`.
+
+Only ff1 and ff2 were landed for 15 s. qkv's shipped `(8, 7, 12)` measured rank 1 of 407 -- already
+optimal -- and to_out's best beat its shipped blocking by 15 us on 4327, i.e. 0.4%, inside the
+~0.3% run-to-run spread measured from repeat rows.
+
+### Fused MM/RS on Wormhole — stays disabled
+
+ff2 as `minimal_matmul_strided_reduce_scatter_async`, one entry per candidate matmul grid (the
+reduce-scatter takes the rows the matmul leaves; at `num_links=4` that is 1 worker/link at 8x7, 2
+at 8x6, 3 at 8x5):
+
+| matmul grid | RS workers/link | best |
+|---|---|---|
+| 8x7 | 1 | 3134.7 us |
+| 8x6 | 2 | 3610.2 us |
+| 8x5 | 3 | 3996.7 us |
+
+Monotonically worse as the RS zone grows: every core handed to the reduce-scatter costs the matmul
+more than it returns. All are far off the 2373.0 us unfused matmul, so `eab3dfbd599` keeping
+Wormhole off the fused path is right on tuned configs too, not just against the broken fallback.
+Not a like-for-like total — the unfused figure excludes the separate reduce-scatter and addcmul,
+leaving them a 762 us budget — but combined with the measured 2.0-4.0% end-to-end gain from
+disabling it, the conclusion holds.
+
+### SDPA chunk sizes
+
+First pass at 15 s (q in {256, 384, 512} x k in {256, 512}) found the shipped `(256, 512)` already
+best; see the section above. That search was bounded on the wrong axis. From the CB allocation in
+`ring_joint_sdpa_program_factory.cpp:1296-1308`:
+
+```
+q = 8*Sq    k = 8*Sk    v = 8*Sk    mask = Sq*Sk    qk = Sq*Sk
+out_im = 4*Sq    out0 = 4*Sq    stats = Sq
+```
+
+`Sq*Sk` dominates, but Sq carries the heavier linear term — q, out_im, out0 and the statistics FIFO
+all scale with it, against K/V's two buffers on Sk. That is why `(512, 256)` is L1-infeasible while
+`(256, 512)` fits at the same product. The untried direction is therefore **smaller q with larger
+k**, which also halves the ring K-loop iterations — the property that made k=512 beat k=256.
+
+A widened sweep is running over q in {128, 192, 256} x k in {512, 640, 768, 1024}. q is restricted
+to values that tile 63 cores well at seq 13632: 256 (0.0% slot waste), 192 (1.4%), 128 (0.9%);
+160/224/320 are worse and excluded.
+
+**TODO** — result of the widened sweep. Caveat to carry into it: the arithmetic above does *not*
+predict `(512, 256)`'s failure, so a circular buffer is missing from the model. Treat it as a
+candidate generator and let the device report feasibility; the harness prints exact byte counts.
+
+## Perf experiments
+
+| # | experiment | status | result |
+|---|---|---|---|
+| 1 | Matmul blockings, all 4 shapes x 3 durations, 8x8/8x9 grids | **done** | 3.5% of matmul time at 15 s; ff1 and ff2 landed, 0.5% of a forward |
+| 2 | Fused MM/RS at 8x5/8x6/8x7 matmul grids | **done** | All worse than unfused; stays disabled |
+| 3 | SDPA chunk sizes, q in {256,384,512} x k in {256,512} | **done** | Shipped `(256, 512)` already optimal; larger q L1-infeasible |
+| 4 | SDPA chunk sizes, small-q / large-k (q<=256, k>=512) | **running** | **TODO** |
+| 5 | Re-profile the block with landed configs | not started | **TODO** |
+| 6 | Pipeline re-run: warm total, denoise, ms/fwd, CLIP | not started | **TODO** |
+| 7 | `use_exp_ring_sdpa` on Wormhole | not started | **TODO** — gated on `is_blackhole() and sp_factor == 32`, but `exp_ring_joint_sdpa_program_factory.cpp` has no arch gate and the sp check is described in-tree as "a proxy for the 4x32 shape". On WH the other conditions already hold (`tp_factor == 4`, `exp_ring_num_passes = ceil(14/9) = 2 <= 3`). A different kernel on the op that is 70% of the block, so the largest single lever available — but it needs PCC and CLIP validation, not a timing check |
+| 8 | FSDP layout conversions | not started | **TODO** — tilize/untilize go 0.13 -> 3.13 ms under FSDP, a 23x blowup and a quarter of the whole FSDP cost spent on format round-trips rather than communication. Cheapest apparent win in the breakdown |
+| 9 | Ring SDPA kernel utilization | not started | **TODO** — 48.8% FPU / 35.6% math at the shipped chunk size, shown to be inherent to the kernel at this shape rather than a chunk-size miss. Work is in the kernel |
+| 10 | `dit_fsdp: True` in `_PRESETS_WH` | not started | **TODO** — decision, not a measurement; costs 5.7% of the block, buys the headroom a 12 GB part needs |
+
 ## Open issues
 
-1. **Intermittent mid-denoise device hang** — *root-caused and fixed; 18/18 now pass.*
-   Counting the per-layer `No fused MM/RS` warnings in the two hang logs (50 fire per
-   denoise step, so they act as a free per-layer profiler) located both stalls exactly:
-   hang 1 in step i=23, hang 2 in step i=22, both blocked in the readback at
-   `pipeline_minimax_h3.py:2002` — the same line as the earlier `Fatal Python error:
-   Bus error` crashes. The ~13 s offset the earlier writeup leaned on turned out to be
-   an arithmetic coincidence of the 2:1 per-step rates. Cause was issue 2 below.
-   Evidence: 18/18 in this sweep, plus 9 standalone runs (~833 denoise steps) beforehand,
-   all clean. Caveat: the pre-fix rate rests on only 2 hang events, so this is strong
-   evidence rather than proof. Forensics and the evidence-preserving run recipe:
-   see **`MiniMaxH3_wormhole_hang.md`**.
+Fixed items have been removed; their forensics live in the commits and in
+**`MiniMaxH3_wormhole_hang.md`**. The mid-denoise hang (root-caused, 18/18 pass), the accidental
+Wormhole fused MM/RS path (`eab3dfbd599`) and the VBench setup gaps (now in `MiniMaxH3.md`) were
+all closed.
 
-2. **Wormhole took the fused MM/RS path by accident** — *fixed*. `has_mmrs_config`
-   gated the fused ff2 matmul+reduce-scatter on `(k, n, m % 32)` alone, but both ways
-   of resolving a real blocking are Blackhole-only (`_SWEPT_BLOCKINGS` is keyed to a
-   12x10 grid, the v2.3 rule engine is `is_blackhole()`-gated). So every Wormhole ff2
-   landed on `default_fused_mmrs_config` — 56 of 72 cores at subblock 1x1, and a
-   derived reduce-scatter worker count of **1 per link**, with the credit-based L1
-   handoff active — which is the case the gate's own comment exists to prevent. The
-   gate now takes the device core grid and asks `resolves_fused_mmrs_config` whether a
-   measured or rule-derived blocking exists; Wormhole falls back to the ordinary matmul
-   + `reduce_scatter_minimal_async`. Worth **2.0-4.0% (mean 3.0%)** across the sweep,
-   and the tables above are measured with it. Note the unfused path is *not*
-   bit-identical: the different reduction order moves CLIP by up to 0.6 in both
-   directions, inside run-to-run noise and far above the 33.0 bar.
+1. **Cache key omits device params** — `cache.load_model` keys on parallel config, mesh
+   shape, dtype and FSDP, but not `l1_small_size`/device params. A cache written under a
+   broken device config is silently reused forever. This cost a long debugging detour: a
+   cache built during a run with `l1_small_size=0` produced text embeddings with
+   `absmax=2.5e30` and a coherent video of the wrong subject (CLIP 13.12 instead of 37.36).
+   Consider a validity marker.
 
-3. **Cache key omits device params** — `cache.load_model` keys on parallel config,
-   mesh shape, dtype and FSDP, but not `l1_small_size`/device params. A cache
-   written under a broken device config is silently reused forever. This cost a
-   long debugging detour: a cache built during a run with `l1_small_size=0`
-   produced text embeddings with `absmax=2.5e30` and a coherent video of the wrong
-   subject (CLIP 13.12 instead of 37.36). Consider a validity marker.
-
-4. **VBench setup gaps** (both fixed here, worth folding into MiniMaxH3.md:287-291):
-   - no `unzip` on the box; VBench shells out to it for the RAFT checkpoints.
-     Workaround: `python -c "import zipfile; zipfile.ZipFile('$HOME/.cache/vbench/raft_model/models.zip').extractall('$HOME/.cache/vbench/raft_model')"`
-     — only possible *after* the first download attempt fails.
-   - installing `vbench` and `opencv-python-headless` in one resolution pulls in
-     the libGL-linked `opencv-python` as a vbench dep; it wins the shared `cv2`
-     dir and `import cv2` dies on `libGL.so.1`. Fix: uninstall both, reinstall
-     headless only.
+2. **`sweep_mm_block_sizes.py` cannot complete on a Wormhole Galaxy at its default flush
+   cadence.** With `PROFILER_DUMP_EVERY = 10` the sweep stops making progress at the first
+   mid-run `ttnn.synchronize_device` + `ttnn.ReadDeviceProfiler` flush (combo 10) and the host
+   spins there indefinitely; the board then needs `tt-smi -r all`. Reproduced on four shapes
+   across two ops, including the pre-existing Wan2.2 `3072_5120_3840_8x8_agmm_plain` entry, so
+   it is not H3-specific and not blocking-specific — combo 10 is simply the first point at
+   which the loop blocks, since warmup dispatches with `sync=False`. Setting
+   `MM_SWEEP_PROFILER_DUMP_EVERY` high removes the in-loop flush and the same shape then
+   completes 404/404 with valid, distinct timings; that is how every number here was collected.
+   Unexplained: the *ungated* flush immediately after the warmup loop succeeds in the same run,
+   so "this call hangs on a 32-device WH mesh" is not the whole story. The default is left at 10
+   pending a root cause, which makes the override mandatory on Wormhole.
 
 ## VBench (16:9/5s, verified passing)
 
@@ -252,17 +367,30 @@ counts the fused CCL workers — `ccl_core_grid_offset=(7, 0)` with `use_column_
 CLIP 37.36 vs 33.0 bar (docs record 37.37 for Blackhole; imaging_quality 0.6896).
 Only 16:9/5s has been VBench-verified; the sweep ran with `RUN_VBENCH=0`.
 
-## Code changes backing these numbers (uncommitted)
+## Code changes backing these numbers
 
-| file | change |
+All committed on `jameslee/bringup_h3_wh_galaxy`; nothing here needs local patches.
+
+| commit | change |
 |---|---|
-| `pipelines/minimax_h3/weights_minimax_h3.py` | new — resolves the snapshot from `MINIMAX_H3_MODEL_PATH` / HF cache / download (`TT_DIT_ALLOW_HF_DOWNLOAD=1`) |
-| `pipelines/minimax_h3/pipeline_minimax_h3.py` | `_PRESETS_WH` + arch-aware `resolve_mesh_preset`; `coresident` passthrough on `create_pipeline`; `_release_audio()` evicts the audio codec with the VAE stage; `is_fsdp=self.dit_fsdp` on the DiT build **and** its `cache.load_model` |
-| `tests/.../minimax_h3/common.py` | `_L1_SMALL_WH = 32768`, `_ring_4k` wrapping (the WH mesh param was passing raw params with no `l1_small_size`) |
-| `tests/.../minimax_h3/common_av.py` | weights gate via the resolver; `log_timing_table` reads the arch via `is_blackhole()` instead of hardcoding "Blackhole" |
-| `models/MiniMaxH3.md` | HF download docs |
+| `88563f81db5` | Wormhole bringup: `weights_minimax_h3.py` (snapshot resolver), `_PRESETS_WH` + arch-aware `resolve_mesh_preset`, `coresident` passthrough, `_release_audio()`, `is_fsdp` on the DiT build **and** its `cache.load_model`, `_L1_SMALL_WH = 32768` / `_ring_4k`, arch-aware `log_timing_table`, HF download docs |
+| `eab3dfbd599` | `has_mmrs_config` takes the device core grid and asks `resolves_fused_mmrs_config`; Wormhole falls back to matmul + `reduce_scatter_minimal_async`. Also a guard in `FusedMMRSConfig.get_params` that raises instead of deadlocking when the RS zone yields <1 worker/link |
+| `2076022d032` | Wormhole rows in `GALAXY_RING` (both FSDP settings) so the block perf test can run here at all, `_BH_ONLY`/`_WH_ONLY` arch marks (both 4x8 rows ask for 32 devices, so only the arch can separate them), and `sp_simulate > 1` skips off Blackhole |
+| `3a2f7fea259` | `MeshConfig.detect()` is arch-aware — it hardcoded Blackhole's 12x10 for any 32-device host, so a WH Galaxy reported 110 SDPA cores instead of 63. Plus the `minimax_h3_{5s,10s,15s}_768p` perf configs, which `measured_sdpa_chunk_sizes` cited but which were absent from the tree |
+| `8cd05961cbe` | Perf sweep restated at 18/18 after the MM/RS gate fix |
+| `c825d089e31` | Per-op device breakdown of one block at 15 s / 16:9, and `tools/project_block_perf.py` |
+| `50908410b42` | Wormhole H3 shapes in `sweep_mm_block_sizes.py` (4 shapes x 3 durations, plus fused MM/RS at three matmul grids), `MM_SWEEP_PROFILER_DUMP_EVERY` override, `L1_BUDGET_KB` note |
+| *(this commit)* | `grid_88_configs` ff1 and `grid_89_configs` ff2 entries for M=13632; widened 15 s SDPA chunk lists |
 
-`dit_fsdp` defaults **off**, overridable with `MINIMAX_H3_DIT_FSDP`. Given these
-results, `dit_fsdp: True` belongs in `_PRESETS_WH` (12 GB/chip needs the headroom
-far more than it needs 5-11% of denoise); Blackhole at 32 GB can stay unsharded.
-That decision is deliberately left open.
+`dit_fsdp` defaults **off**, overridable with `MINIMAX_H3_DIT_FSDP`. Given these results,
+`dit_fsdp: True` belongs in `_PRESETS_WH` (12 GB/chip needs the headroom far more than it needs
+5.7% of the block); Blackhole at 32 GB can stay unsharded. That decision is deliberately left
+open — experiment 10 above.
+
+### A note on the L1 budget in the sweep harness
+
+`L1_BUDGET_KB` stays at 1400 for both architectures. Scaling it to 1328 for Wormhole's smaller L1
+(1,499,136 B against Blackhole's 1,572,864 B) looked prudent and was wrong: combos estimated up to
+~1424 KB build and run there, and the tighter bound excluded ff1's actual optimum `(10, 7, 10)` at
+1380 KB along with qkv's shipped `(8, 7, 12)` at 1352 KB — so the sweep could not measure the
+baseline it was meant to beat. Both were recovered with an explicit-combo pass.

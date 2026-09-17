@@ -108,12 +108,34 @@ grid_88_configs = {
     (512, 8192, 5120): (4, 16, 4),
     (512, 16384, 5120): (2, 16, 8),
     (512, 32768, 5120): (4, 16, 8),
+    # MiniMax-H3 on a Wormhole Galaxy, 15 s @ 768P (M = 13632 rows/device at SP=8). This is the AGMM
+    # worker grid there: `agmm_worker_grid` reserves the in0-mux row off the 8x9 compute grid, giving
+    # 8x8 -- a grid Blackhole never produces (it uses 12x9), so these entries are WH-only in effect.
+    #
+    # `AGMM_BLOCK_SIZES` supplies (8, 3, 14) here as a `default_block_size`, swept on Blackhole's
+    # 12x9. `get_matmul_config` prefers a table hit over `default_block_size`, so this overrides it
+    # without touching `agmm_config.py` or its call sites. Swept with `sweep_mm_block_sizes.py`
+    # (use case `ff1_swiglu`, 304 combos): 16713.9 -> 15665.5 us, 6.3% off ff1.
+    #
+    # Only ff1 is listed. At this M the sweep measured qkv's shipped (8, 7, 12) as already optimal
+    # (rank 1 of 407), and to_out's best beat its shipped (8, 8, 6) by 15 us on 4327 -- 0.4%, inside
+    # the ~0.3% run-to-run spread, so it is not worth an entry. Both differ at 5 s and 10 s: the
+    # winners move with M on this grid, which is why these are keyed per-M rather than added to the
+    # (K, N)-keyed model table.
+    (13632, 5376, 7168): (8, 7, 10, (2, 2)),  # ff1, 15665.5 us
 }
 
 
 # Known best blockings for 8x9 core grid for specific (M, K, N) shapes
 # Each value is a tuple: (M_block_size, K_block_size, N_block_size)
 grid_89_configs = {
+    # MiniMax-H3 ff2 on a Wormhole Galaxy, 15 s @ 768P. `has_mmrs_config` declines to fuse on
+    # Wormhole, so ff2 runs `RowParallelLinear.forward` -> a plain `minimal_matmul` on the full 8x9
+    # compute grid, where it previously missed every table and took the hardcoded (8, 8, 8) at
+    # subblock (2, 2). Swept with `sweep_mm_block_sizes.py` (use case `ff2`, 314 combos):
+    # 7040.1 -> 6761.3 us, 4.0%. Keyed per-M deliberately -- 5 s picks (6, 8, 12) and 10 s
+    # (10, 8, 4), and using one duration's winner at another is a regression.
+    (13632, 3584, 5376): (8, 7, 10, (2, 2)),  # ff2, 6761.3 us
     (32, 2432, 3648): (2, 4, 8),
     (1024, 2432, 1920): (4, 4, 8),
     (352, 2432, 1920): (2, 4, 4),
