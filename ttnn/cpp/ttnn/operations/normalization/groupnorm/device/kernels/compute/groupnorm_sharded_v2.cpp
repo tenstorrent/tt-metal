@@ -242,22 +242,22 @@ void kernel_main() {
 // Tilize in0 -> in (row-major to tiled)
 #ifdef READER_REPACK
     constexpr uint32_t dfb_in_rm_id = dfb_repack_id;
-    ckl::tilize<
+    compute_kernel_lib::tilize<
         per_core_N,
         dfb_in_rm_id,
         dfb_in_id,
-        ckl::tilize_config::InitUninitMode::InitAndUninit,
-        ckl::tilize_config::WaitMode::WaitBlock,
-        ckl::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_M);
+        compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
+        compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
+        compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_M);
 #else
     constexpr uint32_t dfb_in_rm_id = dfb_in0_id;
-    ckl::tilize<
+    compute_kernel_lib::tilize<
         per_core_N,
         dfb_in_rm_id,
         dfb_in_id,
-        ckl::tilize_config::InitUninitMode::InitAndUninit,
-        ckl::tilize_config::WaitMode::NoWait,
-        ckl::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_M);
+        compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
+        compute_kernel_lib::tilize_config::WaitMode::NoWait,
+        compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_M);
 #endif
     dfb_in.wait_front(per_core_MN);
 #else
@@ -358,8 +358,8 @@ void kernel_main() {
                     }
                     tile_regs_commit();
                     tile_regs_wait();
-                    for (uint32_t dst_i = 0; dst_i < subblock_w; ++dst_i) {
-                        pack_tile(dst_i, dfb_x_id);
+                    for (uint32_t i = 0; i < subblock_w; ++i) {
+                        pack_tile(i, dfb_x_id);
                     }
                     tile_regs_release();
                     index_subblock_w_offset += subblock_w;
@@ -402,23 +402,28 @@ void kernel_main() {
             // (e.g. use `zero_whole_cb` from groupnorm_zero_fill.hpp, mirroring the
             // mcast reader). Same applies to the second REDUCE_SCALAR pack into
             // dfb_ex_partial later in this kernel (variance).
-            ckl::reduce<PoolType::SUM, ReduceDim::REDUCE_SCALAR, dfb_ex2pe_id, dfb_scaler_id, dfb_ex_partial_id>(
-                ckl::ReduceInputBlockShape::single());
+            compute_kernel_lib::
+                reduce<PoolType::SUM, ReduceDim::REDUCE_SCALAR, dfb_ex2pe_id, dfb_scaler_id, dfb_ex_partial_id>(
+                    compute_kernel_lib::ReduceInputBlockShape::single());
 
             if constexpr (is_mcast_sender and num_cores_per_mcast_group > 1) {
-                ckl::reduce<
+                compute_kernel_lib::reduce<
                     PoolType::SUM,
                     ReduceDim::REDUCE_SCALAR,
                     dfb_ex_external_id,
                     dfb_scaler_global_id,
                     dfb_ex_global_id,
-                    ckl::ReduceInputPolicy::WaitAndPopPerTile,
-                    ckl::ReduceDataFormatReconfigMode::NONE>(ckl::ReduceInputBlockShape::single());
+                    compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
+                    compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
+                    compute_kernel_lib::ReduceInputBlockShape::single());
                 dfb_ex.reserve_back(1);
                 dfb_ex.push_back(1);
             }
 
             // fp32: reset both srcs so fp32 x/mean aren't read through the partial-E[x] bf16 dfb_ones format.
+            // The reconfig has to precede the init: the init's LLK assert checks that the unpack config
+            // registers already describe these operands. (The MOP is built from the init's static
+            // arguments; the registers themselves are consumed later, by UNPACR.)
             if constexpr (enable_fp32_reconfig) {
                 reconfig_data_format_srca(dfb_x_id);
                 reconfig_data_format_srcb(dfb_ex_global_id);
@@ -526,19 +531,21 @@ void kernel_main() {
             // The sharded reader's "single-tile-overwrite trick" depends on
             // this pack also clearing every non-result datum of dfb_ex_partial
             // to exact zero (documented packer behavior for REDUCE_SCALAR).
-            ckl::reduce<PoolType::SUM, ReduceDim::REDUCE_SCALAR, dfb_ex2pe_id, dfb_scaler_id, dfb_ex_partial_id>(
-                ckl::ReduceInputBlockShape::single());
+            compute_kernel_lib::
+                reduce<PoolType::SUM, ReduceDim::REDUCE_SCALAR, dfb_ex2pe_id, dfb_scaler_id, dfb_ex_partial_id>(
+                    compute_kernel_lib::ReduceInputBlockShape::single());
 
             dfb_ex_partial.wait_front(1);
             if constexpr (is_mcast_sender and num_cores_per_mcast_group > 1) {
-                ckl::reduce<
+                compute_kernel_lib::reduce<
                     PoolType::SUM,
                     ReduceDim::REDUCE_SCALAR,
                     dfb_ex_external_id,
                     dfb_scaler_global_id,
                     dfb_ex_global_id,
-                    ckl::ReduceInputPolicy::WaitAndPopPerTile,
-                    ckl::ReduceDataFormatReconfigMode::NONE>(ckl::ReduceInputBlockShape::single());
+                    compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
+                    compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
+                    compute_kernel_lib::ReduceInputBlockShape::single());
                 dfb_ex.reserve_back(1);
                 dfb_ex.push_back(1);
             }
@@ -551,8 +558,9 @@ void kernel_main() {
                 reconfig_data_format_srca(dfb_ex_global_id);
                 reconfig_data_format_srcb(dfb_eps_id);
             }
-            // The row mask keeps padding out of both sums, so the reduced value is the variance
-            // over real rows. Compute 1/sqrt(variance + epsilon).
+            // The row mask keeps the padding out of both sums, so this is already the variance over
+            // the real rows; no back-correction needed.
+            // (Var + eps)
             ckl::eltwise_chain(
                 ckl::IterationShape::one_tile(),
                 ckl::BinaryFpu<
@@ -636,7 +644,7 @@ void kernel_main() {
                     }
                 }
             } else {
-                // zero out values in dfb_tilized_in_id input by multiplying with negative mask for the current group
+                // zero out values in cb_tilized_in input by multiplying with negative mask for the current group
                 dfb_in_negative_mask.wait_front(block_w);
                 const ckl::StridedTileRange output_range{index_b_offset + index_g_offset, per_core_N};
                 reconfig_data_format_srcb(dfb_x_id, dfb_in_negative_mask_id);
@@ -822,12 +830,12 @@ void kernel_main() {
 
 #ifdef UNTILIZE_OUT
     // untilize - DEST capacity auto-detected
-    ckl::untilize<
+    compute_kernel_lib::untilize<
         per_core_N,
         dfb_untilize_in_id,
         dfb_untilize_out_id,
-        ckl::untilize_config::InitUninitMode::InitAndUninit,
-        ckl::untilize_config::WaitMode::WaitUpfront,
-        ckl::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_M);
+        compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
+        compute_kernel_lib::untilize_config::WaitMode::WaitUpfront,
+        compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_M);
 #endif
 }

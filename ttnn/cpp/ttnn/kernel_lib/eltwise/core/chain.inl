@@ -3215,7 +3215,7 @@ ALWI void eltwise_chain_impl([[maybe_unused]] std::index_sequence<Is...> indices
                          detail::ChainTraits<Es...>::prev.pack[Is],
                          detail::ChainTraits<Es...>::last_pack_cb,
                          detail::ChainTraits<Es...>::pack_hetero>>(elts),
-                 ht,
+                 row_base,
                  ht,
                  0,
                  1,

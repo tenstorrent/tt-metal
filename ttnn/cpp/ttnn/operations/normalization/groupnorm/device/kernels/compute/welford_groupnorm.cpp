@@ -11,6 +11,7 @@
 #include "api/compute/bcast.h"
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/eltwise_binary.h"
+#include "api/compute/eltwise_unary/sfpu_split_includes.h"
 #include "api/compute/layernorm.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/tilize.h"
@@ -43,10 +44,15 @@ struct FusedActivation : ckl::UnaryOp<FusedActivation, ckl::Dst::D0> {
     }
 };
 
-#ifdef SFPU_OP_INIT_ACTIVATION
-#ifdef UNTILIZE_OUT
-#error "Fused activation is not supported with UNTILIZE_OUT"
+// The optional fused activation is applied to the final output tile in DEST, right before it is
+// packed into dfb_out (see "Write out the final output" below). The UNTILIZE_OUT branch routes the
+// output through a different CB chain (dfb_untilize_in_id), so that insertion point would not be
+// the last touch of the data — fail the build rather than fuse into the wrong place.
+#if defined(UNTILIZE_OUT) && defined(SFPU_OP_INIT_ACTIVATION)
+#error "fused activation + UNTILIZE_OUT not wired: untilize consumes dfb_untilize_in, not dfb_out"
 #endif
+
+#ifdef SFPU_OP_INIT_ACTIVATION
 constexpr bool fused_activation_enabled = true;
 #else
 constexpr bool fused_activation_enabled = false;
@@ -61,7 +67,7 @@ void kernel_main() {
      *                tensors(block_h) are larger than L1 space, so we have to process chunks of
      *                this data at a time. This chunk is called an out_block.
      *
-     * num_out_blocks: This is the number of chunks specified by the use, such that a DFBs
+     * num_out_blocks: This is the number of chunks specified by the use, such that a CBs
      *                (length defined by out_block) fit in L1.
      *                Users should minimize the number of num_out_blocks for better perf.
      *
@@ -159,11 +165,11 @@ void kernel_main() {
 #else
     constexpr uint32_t dfb_welford_in_id = dfb_in0_welford_id;
 #endif
-    // Boolean indicating whether the welford kernel uses the alias DFB.
+    // Boolean indicating whether the welford kernel uses the alias CB.
     constexpr bool welford_fp32_alias = get_named_compile_time_arg_val("welford_fp32_alias") != 0;
-    // True when the welford intake DFB is configured with UnpackToDestFp32, i.e. the FP32
-    // path. Covers both the TILIZE_IN branch (intake DFB is c_29) and the non-TILIZE_IN
-    // alias branch (intake DFB is dfb_in0_welford, see welford_fp32_alias). On this path,
+    // True when the welford intake CB is configured with UnpackToDestFp32, i.e. the FP32
+    // path. Covers both the TILIZE_IN branch (intake CB is c_29) and the non-TILIZE_IN
+    // alias branch (intake CB is dfb_in0_welford, see welford_fp32_alias). On this path,
     // transpose_tile routes through llk_math_transpose_dest, whose math-side init
     // records slots [16, 32) of the math-thread replay buffer, clobbering welford's
     // LREG2 / LREG3 portions, so the welford SFPU state must be re-initialized after each
@@ -191,7 +197,7 @@ void kernel_main() {
     // interm cbs reuse
     constexpr uint32_t dfb_reread_write_out_id = tt::CBIndex::c_22;
 
-    // output dfb_id
+    // output cb
     constexpr uint32_t dfb_out0_id = tt::CBIndex::c_16;
 #ifdef UNTILIZE_OUT
     constexpr uint32_t dfb_out_id = tt::CBIndex::c_30;
@@ -290,22 +296,22 @@ void kernel_main() {
 // Tilize in0 -> in (row-major to tiled)
 #ifdef READER_REPACK
     constexpr uint32_t dfb_in_rm_id = dfb_repack_id;
-    ckl::tilize<
+    compute_kernel_lib::tilize<
         per_core_N,
         dfb_in_rm_id,
         dfb_in_id,
-        ckl::tilize_config::InitUninitMode::InitAndUninit,
-        ckl::tilize_config::WaitMode::WaitBlock,
-        ckl::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_M);
+        compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
+        compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
+        compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_M);
 #else
     constexpr uint32_t dfb_in_rm_id = dfb_in0_id;
-    ckl::tilize<
+    compute_kernel_lib::tilize<
         per_core_N,
         dfb_in_rm_id,
         dfb_in_id,
-        ckl::tilize_config::InitUninitMode::InitAndUninit,
-        ckl::tilize_config::WaitMode::NoWait,
-        ckl::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_M);
+        compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
+        compute_kernel_lib::tilize_config::WaitMode::NoWait,
+        compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_M);
 #endif
     dfb_in.wait_front(per_core_MN);
 #else
@@ -313,9 +319,14 @@ void kernel_main() {
 #endif
 
     constexpr uint32_t out_block_h_normal = block_h / num_out_blocks;
-    constexpr bool extra_out_block = block_h % num_out_blocks != 0;
-    constexpr uint32_t num_out_blocks_padded = num_out_blocks + (extra_out_block ? 1 : 0);
-    constexpr uint32_t out_block_h_last = extra_out_block ? block_h % num_out_blocks : out_block_h_normal;
+    uint32_t num_out_blocks_padded = num_out_blocks;
+    bool extra_out_block = false;
+    uint32_t out_block_h_last = out_block_h_normal;
+    if constexpr (block_h % num_out_blocks != 0) {
+        extra_out_block = true;
+        num_out_blocks_padded++;
+        out_block_h_last = (block_h % num_out_blocks);
+    }
 
     // Get pointer to the reciprocal LUT
     using recip_lut_t = std::array<uint32_t, reciprocal_size>;
@@ -333,6 +344,9 @@ void kernel_main() {
     }
 
     for (uint32_t b = 0; b < num_batches; ++b) {
+        // Aim the unpacker at the welford intake CB; the tail stage leaves SrcA on dfb_x, so this
+        // repeats every batch. Only the fp32 path needs the reconfig, and it must precede the init:
+        // transpose_init's LLK assert checks the unpack config registers against the operand it is given.
         if constexpr (welford_unpack_fp32_active) {
             reconfig_data_format_srca(dfb_welford_in_id);
             transpose_init(dfb_welford_in_id);
@@ -349,10 +363,8 @@ void kernel_main() {
 
         for (uint32_t out_block_index = 0; out_block_index < num_out_blocks_padded; out_block_index++) {
             uint32_t out_block_h_actual = out_block_h_normal;
-            if constexpr (extra_out_block) {
-                if (out_block_index == (num_out_blocks_padded - 1)) {
-                    out_block_h_actual = out_block_h_last;
-                }
+            if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
+                out_block_h_actual = out_block_h_last;
             }
 
             for (uint32_t mt = 0; mt < out_block_h_actual; ++mt) {
@@ -485,10 +497,8 @@ void kernel_main() {
         // Start Final Normalization
         for (uint32_t out_block_index = 0; out_block_index < num_out_blocks_padded; out_block_index++) {
             uint32_t out_block_h_actual = out_block_h_normal;
-            if constexpr (extra_out_block) {
-                if (out_block_index == (num_out_blocks_padded - 1)) {
-                    out_block_h_actual = out_block_h_last;
-                }
+            if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
+                out_block_h_actual = out_block_h_last;
             }
 
             for (uint32_t mt = 0; mt < out_block_h_actual; ++mt) {
@@ -674,13 +684,13 @@ void kernel_main() {
 
 #ifdef UNTILIZE_OUT
             // untilize - DEST capacity auto-detected
-            ckl::untilize<
+            compute_kernel_lib::untilize<
                 per_core_N,
                 dfb_untilize_in_id,
                 dfb_untilize_out_id,
-                ckl::untilize_config::InitUninitMode::InitAndUninit,
-                ckl::untilize_config::WaitMode::WaitUpfront,
-                ckl::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_M);
+                compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
+                compute_kernel_lib::untilize_config::WaitMode::WaitUpfront,
+                compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_M);
 #endif
         }
         // End Final Normalization

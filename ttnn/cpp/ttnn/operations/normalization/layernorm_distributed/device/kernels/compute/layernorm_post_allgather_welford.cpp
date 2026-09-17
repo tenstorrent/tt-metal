@@ -41,15 +41,15 @@ constexpr auto normed_output_dfb = dfb::out;
 
 // gamma's product feeds the beta stage when both are applied; otherwise it is already the output.
 #if defined(FUSE_GAMMA) && defined(FUSE_BETA)
-constexpr auto times_gamma_output_dfb = dfb::times_gamma_out;
+constexpr auto dfb_times_gamma_out = dfb::times_gamma_out;
 #else
-constexpr auto times_gamma_output_dfb = dfb::out;
+constexpr auto dfb_times_gamma_out = dfb::out;
 #endif
 
 #ifdef FUSE_GAMMA
-constexpr auto beta_input_dfb = times_gamma_output_dfb;
+constexpr auto dfb_in_beta = dfb_times_gamma_out;
 #else
-constexpr auto beta_input_dfb = normed_output_dfb;
+constexpr auto dfb_in_beta = normed_output_dfb;
 #endif
 
 ALWI void normalize_chunk(const uint32_t num_tiles) {
@@ -82,12 +82,12 @@ ALWI void normalize_chunk(const uint32_t num_tiles) {
         ckl::input(
             dfb::x_normed, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::InputTileMapping::Block),
         ckl::input(dfb::gamma, ckl::BroadcastDim::Row, gamma_beta_wait, gamma_beta_pop, ckl::InputTileMapping::Block),
-        ckl::output(times_gamma_output_dfb, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>(shape);
+        ckl::output(dfb_times_gamma_out, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>(shape);
 #endif
 #ifdef FUSE_BETA
     ckl::add<
         ckl::input(
-            beta_input_dfb, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::InputTileMapping::Block),
+            dfb_in_beta, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::InputTileMapping::Block),
         ckl::input(dfb::beta, ckl::BroadcastDim::Row, gamma_beta_wait, gamma_beta_pop, ckl::InputTileMapping::Block),
         ckl::output(dfb::out, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>(shape);
 #endif

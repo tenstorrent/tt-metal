@@ -77,8 +77,8 @@ void kernel_main() {
          * RMSNorm reduces sum(x**2) directly into cb_var_idx for rsqrt computation.
          * Uses auto-batched STREAMING mode - library handles CB lifecycle.
          */
-        ckl::reduce<PoolType::AVG, ReduceDim::REDUCE_ROW, cb_stats, cb_reduce_idx, cb_var_idx>(
-            ckl::ReduceInputBlockShape::row(stats_tiles_cols));
+        compute_kernel_lib::reduce<PoolType::AVG, ReduceDim::REDUCE_ROW, cb_stats, cb_reduce_idx, cb_var_idx>(
+            compute_kernel_lib::ReduceInputBlockShape::row(stats_tiles_cols));
 
         // 1/sqrt(var + eps)
         ckl::eltwise_chain(

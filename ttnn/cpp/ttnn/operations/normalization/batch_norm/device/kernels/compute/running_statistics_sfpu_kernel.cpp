@@ -52,18 +52,18 @@ ALWI void maybe_typecast_stat() {
 // are keyed independently, and either may typecast without the other.
 #ifdef NEEDS_MEAN_TYPECAST
 constexpr bool needs_mean_typecast = true;
-constexpr auto dfb_writer_updated_mean_binding = dfb::writer_updated_mean;
+constexpr auto dfb_writer_updated_mean = dfb::writer_updated_mean;
 #else
 constexpr bool needs_mean_typecast = false;
-constexpr auto dfb_writer_updated_mean_binding = dfb::updated_mean;
+constexpr auto dfb_writer_updated_mean = dfb::updated_mean;
 #endif
 
 #ifdef NEEDS_VAR_TYPECAST
 constexpr bool needs_var_typecast = true;
-constexpr auto dfb_writer_updated_var_binding = dfb::writer_updated_var;
+constexpr auto dfb_writer_updated_var = dfb::writer_updated_var;
 #else
 constexpr bool needs_var_typecast = false;
-constexpr auto dfb_writer_updated_var_binding = dfb::updated_var;
+constexpr auto dfb_writer_updated_var = dfb::updated_var;
 #endif
 
 void kernel_main() {
@@ -81,7 +81,7 @@ void kernel_main() {
     DataflowBuffer dfb_batch_var_obj(dfb::batch_var);
     DataflowBuffer dfb_momentum_obj(dfb::momentum);
     DataflowBuffer dfb_one_obj(dfb::one);  // holds 1, for the (1 - momentum) term
-    DataflowBuffer dfb_out_obj(dfb::out);
+    DataflowBuffer dfb_out0_obj(dfb::out);
 
     compute_kernel_hw_startup(dfb::batch_mean, dfb::out);
     constexpr uint32_t onetile = 1;
@@ -89,13 +89,14 @@ void kernel_main() {
     dfb_momentum_obj.wait_front(1);
     dfb_one_obj.wait_front(1);
 
+    // updated_running_stat = (1 − momentum) × running_stat + momentum × batch_stat
     for (uint32_t tile_id = 0; tile_id < num_tiles; ++tile_id) {
-        // The reader and writer produce the batch-mean and batch-var streams for every tile, even
-        // when only one running statistic is requested. Consume both streams unconditionally to avoid
-        // filling either two-entry buffer and stalling its producer.
+        // HAZARD: reader/writer push batch_mean and batch_var every tile regardless of
+        // which stats are present. Both must be waited and popped unconditionally here;
+        // omitting a pop will stall the producer after the DFB fills (DFB depth is 2).
         dfb_batch_mean_obj.wait_front(onetile);
         dfb_batch_var_obj.wait_front(onetile);
-        dfb_out_obj.reserve_back(onetile);
+        dfb_out0_obj.reserve_back(onetile);
 
         if constexpr (old_running_mean_has_value) {
             update_running_stat<
@@ -108,7 +109,7 @@ void kernel_main() {
                 tc_in_fmt,
                 tc_out_fmt,
                 dfb::updated_mean,
-                dfb_writer_updated_mean_binding>();
+                dfb_writer_updated_mean>();
         }
 
         if constexpr (old_running_var_has_value) {
@@ -117,15 +118,10 @@ void kernel_main() {
                 dfb::old_running_var,
                 dfb::updated_var,
                 /*AlsoOut0=*/true>();
-            maybe_typecast_stat<
-                needs_var_typecast,
-                tc_in_fmt,
-                tc_out_fmt,
-                dfb::updated_var,
-                dfb_writer_updated_var_binding>();
+            maybe_typecast_stat<needs_var_typecast, tc_in_fmt, tc_out_fmt, dfb::updated_var, dfb_writer_updated_var>();
         }
 
-        dfb_out_obj.push_back(onetile);
+        dfb_out0_obj.push_back(onetile);
         dfb_batch_mean_obj.pop_front(onetile);
         dfb_batch_var_obj.pop_front(onetile);
     }

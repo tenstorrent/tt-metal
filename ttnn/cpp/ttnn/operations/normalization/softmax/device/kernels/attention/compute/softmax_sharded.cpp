@@ -20,25 +20,25 @@
 namespace ckl = compute_kernel_lib;
 
 template <
-    uint32_t block_w,
-    uint32_t num_subblocks_w,
-    uint32_t subblock_w,
-    uint32_t dfb_in_id,
-    uint32_t dfb_max_scaler_id,
-    uint32_t dfb_max_id,
-    uint32_t dfb_out_id>
+    std::uint32_t block_w,
+    std::uint32_t num_subblocks_w,
+    std::uint32_t subblock_w,
+    std::uint32_t dfb_in_id,
+    std::uint32_t dfb_max_scaler_id,
+    std::uint32_t dfb_max_id,
+    std::uint32_t dfb_out_id>
 ALWI void calc_numeric_stable() {
     DataflowBuffer dfb_out(dfb_out_id);
 
     // Use reduce_helpers for MAX reduce (REDUCE_ROW, PRELOADED mode)
     // Note: The library handles waiting for scaler tile internally
-    ckl::reduce<
+    compute_kernel_lib::reduce<
         PoolType::MAX,
         ReduceDim::REDUCE_ROW,
         dfb_in_id,
         dfb_max_scaler_id,
         dfb_max_id,
-        ckl::ReduceInputPolicy::NoWaitNoPop>(ckl::ReduceInputBlockShape::row(block_w));
+        compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop>(compute_kernel_lib::ReduceInputBlockShape::row(block_w));
 
     // calculate x-max(x)
     ckl::eltwise_chain(
@@ -60,7 +60,11 @@ void kernel_main() {
     constexpr std::uint32_t num_subblocks_w = get_arg(args::num_subblocks_w);
     constexpr bool causal_mask = get_arg(args::causal_mask);
     constexpr bool sharded_causal_mask = get_arg(args::sharded_causal_mask);
-    constexpr bool numeric_stable = get_arg(args::numeric_stable);
+#ifdef NUMERIC_STABLE
+    constexpr bool numeric_stable = true;
+#else
+    constexpr bool numeric_stable = false;
+#endif
 
 #ifdef NUMERIC_STABLE
     constexpr auto dfb_x_id = dfb::x;
@@ -128,17 +132,17 @@ void kernel_main() {
         // PRELOADED is correct for sharded - all tiles loaded at once
         // Auto-detects FP32 mode from ENABLE_FP32_DEST_ACC define
         dfb_exps.wait_front(block_w);
-        ckl::reduce<
+        compute_kernel_lib::reduce<
             PoolType::SUM,
             ReduceDim::REDUCE_ROW,
             dfb::exps,
             dfb::sum_scaler,
             dfb::recip_sum_exps,
-            ckl::ReduceInputPolicy::NoWaitNoPop>(
-            ckl::ReduceInputBlockShape::row(block_w),
-            ckl::ReduceInputMemoryLayout::contiguous(),
-            ckl::NoAccumulation{},
-            [](uint32_t) {
+            compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop>(
+            compute_kernel_lib::ReduceInputBlockShape::row(block_w),
+            compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
+            compute_kernel_lib::NoAccumulation{},
+            [](std::uint32_t) {
                 recip_tile_init();
                 recip_tile(0);
             });
