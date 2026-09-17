@@ -590,9 +590,15 @@ def _golden_function_sort(input_tensor, dim=-1, descending=False, stable=False, 
     if not stable and values.shape[dim] > 1:
         adjacent_values = values.narrow(dim, 1, values.shape[dim] - 1)
         previous_values = values.narrow(dim, 0, values.shape[dim] - 1)
-        if bool(torch.any(adjacent_values == previous_values)):
+        adjacent_ties = adjacent_values == previous_values
+        if bool(torch.any(adjacent_ties)):
             # Unstable sort may legally permute equal values differently; only its tied indices are non-unique.
-            ttnn.decorators.set_golden_comparison_config(indices, method="skip", scope="all")
+            tie_mask = torch.zeros_like(indices, dtype=torch.bool)
+            tie_mask.narrow(dim, 0, values.shape[dim] - 1).logical_or_(adjacent_ties)
+            tie_mask.narrow(dim, 1, values.shape[dim] - 1).logical_or_(adjacent_ties)
+            ttnn.decorators.set_golden_comparison_config(
+                indices, method="allclose", scope="all", rtol=0.0, atol=0.0, mask=~tie_mask
+            )
     return values, indices
 
 

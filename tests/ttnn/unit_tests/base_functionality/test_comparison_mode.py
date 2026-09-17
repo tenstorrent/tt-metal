@@ -168,9 +168,13 @@ def test_data_movement_goldens_cover_unsigned_inplace_fold_and_tied_sort():
     )
     assert torch.equal(fold_output, torch.tensor([[[[0.0, 1.0, 2.0, 3.0]]]]))
 
-    _, indices = ttnn.get_golden_function(ttnn.sort)(torch.ones(4), stable=False)
-    assert indices._ttnn_comparison_config.method == "skip"
-    assert indices._ttnn_comparison_config.scope == "all"
+    _, indices = ttnn.get_golden_function(ttnn.sort)(torch.tensor([3.0, 1.0, 1.0, 2.0]), stable=False)
+    comparison_config = indices._ttnn_comparison_config
+    assert comparison_config.method == "allclose"
+    assert comparison_config.scope == "all"
+    assert comparison_config.rtol == 0.0
+    assert comparison_config.atol == 0.0
+    assert torch.equal(comparison_config.mask, torch.tensor([False, False, True, True]))
 
 
 def test_addmm_golden_ignores_invalid_addend_shape_when_beta_is_zero():
