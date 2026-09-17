@@ -37,14 +37,6 @@ _ACTIVE_COUNTS = [0, 251, 1024, 3001]
 # The split is inclusive on both sides -- the fused half owns [0, threshold], the unified half
 # [threshold+1, inf) -- so the only counts that can make BOTH halves claim an expert, or neither,
 # sit exactly on the seam. _SEAM_THRESHOLD is chosen so these three land on it.
-# Both halves' kernels live in one binary per RISC-V, and all five plus the runtime args have to
-# fit ONE core's kernel-config region. At the stock worker_l1_size that region is 70656 B and the
-# union program needs 85712. The region is `l1_unreserved_base - KERNEL_CONFIG`, and the base is
-# `1572864 - worker_l1_size`, so lowering worker_l1_size grows it -- at the cost of the L1 buffer
-# pool the shared arena comes from. 1444864 puts the base at 128000: region 87040 (needs 85712),
-# arena 1395712 (needs 1389120). Both fit, neither by much.
-_UNION_WORKER_L1_SIZE = 1_444_864
-
 _SEAM_THRESHOLD = 1024
 _SEAM_COUNTS = [_SEAM_THRESHOLD - 1, _SEAM_THRESHOLD, _SEAM_THRESHOLD + 1, 3001]
 
@@ -418,7 +410,6 @@ def run_merged_vs_unified(
 
 
 @pytest.mark.skipif(not is_blackhole(), reason="the routed expert is Blackhole-only")
-@pytest.mark.parametrize("device_params", [{"worker_l1_size": _UNION_WORKER_L1_SIZE}], indirect=True)
 @pytest.mark.parametrize("x_row_major", [True, False], ids=["x_rm", "x_tile"])
 # threshold 100 is below every non-zero count, so the fused half is configured and placed but
 # claims no expert. It separates "the fused half wrote something wrong" from "the unified half
@@ -447,7 +438,6 @@ def test_merged_op_both_passes(device, x_row_major: bool, threshold: int):
 
 
 @pytest.mark.skipif(not is_blackhole(), reason="the routed expert is Blackhole-only")
-@pytest.mark.parametrize("device_params", [{"worker_l1_size": _UNION_WORKER_L1_SIZE}], indirect=True)
 @pytest.mark.parametrize("x_row_major", [True, False], ids=["x_rm", "x_tile"])
 def test_merged_op_both_passes_with_bias(device, x_row_major: bool):
     """Both halves live WITH biases -- the path the bias compile-time args actually reach.
@@ -469,7 +459,6 @@ def test_merged_op_both_passes_with_bias(device, x_row_major: bool):
 
 
 @pytest.mark.skipif(not is_blackhole(), reason="the routed expert is Blackhole-only")
-@pytest.mark.parametrize("device_params", [{"worker_l1_size": _UNION_WORKER_L1_SIZE}], indirect=True)
 @pytest.mark.parametrize("x_row_major", [True, False], ids=["x_rm", "x_tile"])
 def test_merged_op_band_seam(device, x_row_major: bool):
     """Counts sitting exactly on the band boundary.
@@ -499,7 +488,6 @@ _SOAK_DISPATCHES = int(os.environ.get("TT_HYBRID_RE_SOAK", "0"))
 
 @pytest.mark.skipif(not is_blackhole(), reason="the routed expert is Blackhole-only")
 @pytest.mark.skipif(_SOAK_DISPATCHES <= 0, reason="set TT_HYBRID_RE_SOAK=<n> to soak the pass barrier")
-@pytest.mark.parametrize("device_params", [{"worker_l1_size": _UNION_WORKER_L1_SIZE}], indirect=True)
 def test_merged_op_barrier_soak(device):
     """Repeat the split configuration to expose a low-probability barrier race.
 
