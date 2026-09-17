@@ -37,6 +37,7 @@ from ...models.vae.vae_ltx import LTXVideoVAEAdapter, upsample_latent
 from ...parallel.config import DiTParallelConfig, EncoderParallelConfig, ParallelFactor, VaeHWParallelConfig
 from ...parallel.manager import CCLManager
 from ...utils.fuse_loras import LoraSpec
+from ...utils.host_affinity import pin_one_thread_per_core
 from ...utils.ltx import SPATIAL_COMPRESSION, TEMPORAL_COMPRESSION, ceil_to, latent_grid
 from ...utils.mochi import get_rot_transformation_mat
 from ...utils.patchifiers import AudioLatentShape, VideoPixelShape
@@ -239,6 +240,10 @@ class LTXPipeline:
         lora_cache_capacity: int = 2,
         image_conditioning: bool | None = None,
     ):
+        # The stage hand-offs, the VAE frame readback and the audio chain are host-latency work even when
+        # every stage replays a trace; on SMT hosts two of those threads sharing a core cost ~0.5 s of a
+        # 6 s traced generation. One hardware thread per core (LTX_PIN_CORES=0 disables).
+        pin_one_thread_per_core("LTX pipeline")
         self.mesh_device = mesh_device
         self.parallel_config = parallel_config
         self.ccl_manager = ccl_manager
