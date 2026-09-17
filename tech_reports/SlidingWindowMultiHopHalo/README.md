@@ -139,3 +139,26 @@ effort owns that.
   incrementers, which is why all hops funnel their ready-increment through one rendezvous core.
 * Cross-chunk-size hidden-state PCC has **no resolution** at 60 layers — two known-good chunk sizes
   differ by PCC 0.992 / worst row 0.456. Always run that control before believing a diff.
+
+## Perf regression baseline
+
+The multi-hop halo changed the sliding path that the already-working chunk sizes also use, so
+it carries a standing per-op regression check against the pre-halo branch
+(`svuckovic/gemma4-prefill-model @ d3064a5fd6b`). **Last run 2026-09-17 at chunk 8192 — the
+single-hop path, i.e. the one that predates this change — and it is clean:** every op within
+2%, sliding layer ~4% faster.
+
+Method, tables, and the command to re-run are in
+[`../Gemma4PrefillChunkSize/PER_OP_TABLES.md`](../Gemma4PrefillChunkSize/PER_OP_TABLES.md#regression-check-the-multi-hop-halo-vs-the-pre-halo-branch).
+Two things to know before repeating it:
+
+- **Re-render both branches from the raw captures with the same tool.** Lifting a number from
+  a summary table invalidates the comparison: the per-device spread for this op is ~17%, which
+  is larger than the regressions worth catching, and doing exactly that once produced a false
+  +21% regression report.
+- The pre-halo baseline captures live at
+  `/data/kmabee/gemma4_runs/attn_op_captures/` on `bh-glx-120-b03u02` and are the only
+  baseline available — they should not be deleted.
+
+Re-run this whenever the halo, `ring_joint_sdpa`, or the sliding program config changes.
+Chunk 4096 (2 hops) has no pre-halo capture and is the open gap.
