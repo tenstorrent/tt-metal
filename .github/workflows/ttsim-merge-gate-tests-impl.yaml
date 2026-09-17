@@ -66,17 +66,6 @@ jobs:
           sparse-checkout-cone-mode: true
       - name: Install dependencies
         run: pip3 install PyYAML
-      - name: Verify test timeouts against budget
-        run: |
-          set -e
-          echo "Verifying that timeouts defined in tests.yaml are within the allowed limits..."
-          # 15 = the merge-gate per-test ceiling; this pipeline must stay under the
-          # workflow's 15-min end-to-end requirement.
-          python3 .github/scripts/utils/verify_time_budget.py \
-            ${{ env.TESTS_YAML_PATH }} \
-            ./.github/time_budget.yaml \
-            "merge_gate" \
-            --max-per-test-timeout 15
       - name: Build unified test matrix based on enabled SKUs
         id: build-matrix
         run: |

@@ -40,7 +40,7 @@ def run_activation_unary_test(device, h, w, ttnn_function, ulp=2, pcc_check=Fals
     if pcc_check:
         assert_with_pcc(torch_output_tensor, output_tensor, pcc)
     else:
-        assert_with_ulp(torch_output_tensor, output_tensor, ulp)
+        assert_with_ulp(expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=ulp)
 
 
 @pytest.mark.parametrize("h", [64])
@@ -153,7 +153,7 @@ def test_gelu_bfloat16_accuracy(device):
     result = ttnn.to_torch(ttnn.gelu(tt_in)).flatten()
 
     check_mask = test_mask & torch.isfinite(golden) & torch.isfinite(result)
-    assert_with_ulp(golden[check_mask], result[check_mask], ulp_threshold=10)
+    assert_with_ulp(expected_result=golden[check_mask], actual_result=result[check_mask], ulp_threshold=10)
 
 
 @pytest.mark.parametrize("h", [64])
@@ -310,7 +310,7 @@ def test_tanhshrink_ulp(device):
     input_tensor = ttnn.from_torch(xs, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     output_tensor = ttnn.to_torch(ttnn.tanhshrink(input_tensor))
 
-    assert_with_ulp(golden, output_tensor, ulp_threshold=2)
+    assert_with_ulp(expected_result=golden, actual_result=output_tensor, ulp_threshold=2)
 
 
 def torch_prelu(x, *args, weight, **kwargs):
@@ -331,7 +331,7 @@ def run_activation_test_elu(device, h, w, scalar, ttnn_function, ulp=2):
     output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
-    assert_with_ulp(torch_output_tensor, output_tensor, ulp)
+    assert_with_ulp(expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=ulp)
 
 
 def run_activation_test_leaky_relu(device, h, w, scalar, ttnn_function, ulp=2):
@@ -347,7 +347,7 @@ def run_activation_test_leaky_relu(device, h, w, scalar, ttnn_function, ulp=2):
     output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
-    assert_with_ulp(torch_output_tensor, output_tensor, ulp)
+    assert_with_ulp(expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=ulp)
 
 
 def run_activation_test_scalarB(device, h, w, scalar, ttnn_function, ulp=2):
@@ -363,7 +363,7 @@ def run_activation_test_scalarB(device, h, w, scalar, ttnn_function, ulp=2):
     output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
-    assert_with_ulp(torch_output_tensor, output_tensor, ulp)
+    assert_with_ulp(expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=ulp)
 
 
 def run_activation_test_scalarB_key(device, h, w, value, ttnn_function, ulp=2):
@@ -379,7 +379,7 @@ def run_activation_test_scalarB_key(device, h, w, value, ttnn_function, ulp=2):
     output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
-    assert_with_ulp(torch_output_tensor, output_tensor, ulp)
+    assert_with_ulp(expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=ulp)
 
 
 @pytest.mark.parametrize("scalar", [-0.5, 0, 0.5])
@@ -417,7 +417,7 @@ def test_scalarB_celu(device, h, w, alpha, torch_dtype, ttnn_dtype):
     if ttnn_dtype == ttnn.bfloat4_b:
         assert_with_pcc(torch_output_tensor, output_tensor, 0.99)
     else:
-        assert_with_ulp(torch_output_tensor, output_tensor, ulp_threshold=2)
+        assert_with_ulp(expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=2)
 
 
 @pytest.mark.parametrize("scalar", [0.5, 1.0])
@@ -435,7 +435,7 @@ def test_scalarB_hardshrink(device, h, w, scalar):
 
     output_tensor = ttnn.hardshrink(input_tensor_a, lambd=scalar)
     output_tensor = ttnn.to_torch(output_tensor)
-    assert_with_ulp(torch_output_tensor, output_tensor, 2)
+    assert_with_ulp(expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=2)
 
 
 @pytest.mark.parametrize("value", [0.88])
@@ -467,7 +467,7 @@ def test_scalarB_prelu(device, h, w, weight):
     output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
-    assert_with_ulp(torch_output_tensor, output_tensor, 2)
+    assert_with_ulp(expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=2)
 
 
 @pytest.mark.parametrize("scalar", [0.5])
@@ -485,7 +485,7 @@ def test_scalarB_softshrink(device, h, w, scalar):
 
     output_tensor = ttnn.softshrink(input_tensor_a, lambd=scalar)
     output_tensor = ttnn.to_torch(output_tensor)
-    assert_with_ulp(torch_output_tensor, output_tensor, 2)
+    assert_with_ulp(expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=2)
 
 
 def run_activation_test_scalarBC_key(device, h, w, scalar1, scalar2, ttnn_function, ulp=2):
@@ -502,7 +502,7 @@ def run_activation_test_scalarBC_key(device, h, w, scalar1, scalar2, ttnn_functi
     output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
-    assert_with_ulp(torch_output_tensor, output_tensor, ulp)
+    assert_with_ulp(expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=ulp)
 
 
 @pytest.mark.parametrize("min", [-0.5, -0.1, -5.5])
@@ -528,7 +528,7 @@ def run_activation_test_threshold(device, h, w, value, threshold, ttnn_function,
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
     # threshold is a piecewise-exact op; use ULP=1 to absorb bf16 rounding of non-representable scalars.
-    assert_with_ulp(torch_output_tensor, output_tensor, ulp)
+    assert_with_ulp(expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=ulp)
 
 
 @pytest.mark.parametrize("value", [-0.5, -0.1, -5.5])
@@ -583,7 +583,7 @@ def test_xielu(alpha_p, alpha_n, dtype, device):
     if dtype == "float32":
         assert_allclose(torch_output, ttnn_output, rtol=6e-05, atol=1e-06)
     else:
-        assert_with_ulp(torch_output, ttnn_output, 1)
+        assert_with_ulp(expected_result=torch_output, actual_result=ttnn_output, ulp_threshold=1)
 
 
 @pytest.mark.parametrize(
@@ -617,7 +617,7 @@ def test_xielu_large_negative(alpha_p, alpha_n, dtype, device):
     if dtype == "float32":
         assert_allclose(torch_output, ttnn_output, rtol=6e-05, atol=1e-06)
     else:
-        assert_with_ulp(torch_output, ttnn_output, 1)
+        assert_with_ulp(expected_result=torch_output, actual_result=ttnn_output, ulp_threshold=1)
 
 
 @pytest.mark.parametrize(

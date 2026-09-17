@@ -37,4 +37,5 @@
     sim_bh_p150:
       timeout: 30
   team: ttsim
+  budget_type: sanity
   owner_id: U08PR765YJ1 # Matt Craighead

@@ -234,7 +234,8 @@ jobs:
       - name: 🧪 Run host-only plugin tests
         run: |
           pushd "$PLUGIN_DIR"
-          pytest tests --ignore=tests/tt -v
+          # Root pytest at the plugin so `tests` resolves to the plugin package, not tt-metal's tests/.
+          PYTHONPATH="$PLUGIN_DIR:$PYTHONPATH" pytest --rootdir="$PLUGIN_DIR" --confcutdir="$PLUGIN_DIR" tests --ignore=tests/tt -v
           popd
   vllm-tests:
     needs: [check-harbor, build-artifact, resolve-skus]

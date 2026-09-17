@@ -16,6 +16,7 @@ on:
           - llama3.1-8b
           - qwen3-32b-galaxy
           - qwen3.6-27b
+          - qwen3.6-35b-a3b
           - gpt-oss-120b
           - minimax-m3
           - deepseek-v3
@@ -30,6 +31,7 @@ on:
           - llama3.3-70b-galaxy
           - flux.1-schnell
           - flux.1-dev
+          - flux.2-dev
           - ltx-2.3
           - z-image-turbo
           - resnet50

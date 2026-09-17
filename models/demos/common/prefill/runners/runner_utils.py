@@ -34,7 +34,8 @@ def open_mesh_device(
     elif fabric_mode:
         raise ValueError(f"PREFILL_FABRIC_MODE must be one of {sorted(fabric_mode_map)}, got {fabric_mode!r}")
     else:
-        fabric_config = ttnn.FabricConfig.FABRIC_1D if sp <= 8 else ttnn.FabricConfig.FABRIC_2D
+        # The torus modes need a descriptor declaring RING on both axes; a LINE one hangs at bring-up.
+        fabric_config = ttnn.FabricConfig.FABRIC_2D_TORUS_XY
     logger.info(f"Fabric config: {fabric_config} (sp={sp}, PREFILL_FABRIC_MODE={fabric_mode or 'unset'})")
 
     fabric_router_config = _create_fabric_router_config(

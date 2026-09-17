@@ -12,6 +12,7 @@
 - name: llk_bit_exact_wormhole
   split_group: 1
   team: llk
+  budget_type: bit_exact
   coverage: false
   cmd: |
     set -euo pipefail
@@ -29,6 +30,7 @@
 - name: llk_bit_exact_blackhole group 1/2
   split_group: 1
   team: llk
+  budget_type: bit_exact
   coverage: false
   cmd: |
     set -euo pipefail
@@ -47,6 +49,7 @@
 - name: llk_bit_exact_blackhole group 2/2
   split_group: 2
   team: llk
+  budget_type: bit_exact
   coverage: false
   cmd: |
     set -euo pipefail

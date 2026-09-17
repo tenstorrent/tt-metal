@@ -10,10 +10,12 @@
 #include "tt-metalium/circular_buffer.hpp"
 #include "tt-metalium/circular_buffer_constants.h"
 #include "tt-metalium/circular_buffer_config.hpp"
+#include <tt_stl/assert.hpp>
 #include "tt-metalium/core_coord.hpp"
 #include "tt-metalium/hal_types.hpp"       // HalProgrammableCoreType
 #include "tt-metalium/kernel_types.hpp"    // KernelHandle
 #include "tt-metalium/program.hpp"         // KernelGroup
+#include "tt-metalium/mesh_workload.hpp"
 #include "hostdev/remote_dfb_constants.h"  // REMOTE_DFB_OFFSET_NONE
 #include "program_device_map.hpp"          // ProgramTransferInfo
 #include "impl/buffers/semaphore.hpp"
@@ -62,7 +64,7 @@ class MeshWorkloadImpl;
 namespace experimental {
 class GlobalCircularBuffer;
 class CrossNodeDFB;
-class PrefetcherPipe;
+class PrefetcherPipeImpl;
 }  // namespace experimental
 
 namespace program_dispatch {
@@ -267,6 +269,26 @@ public:
         return ProgramBinaryStatus::NotSent;
     }
     void set_cached(uint64_t device_hash) { this->cached_device_hash_ = device_hash; }
+    void set_reload_table(uint32_t addr, const CoreRangeSet& cores) {
+        this->reload_table_addr_ = addr;
+        this->reload_core_ranges_ = cores;
+    }
+    // What a kernel group's launch message carries: the table address if the group reloads, else 0.
+    // Every core of a group shares that launch message, so the nominated cores must cover the whole
+    // group or none of it: a partially covered group would hand its other cores a table they were
+    // not built for, and they would run another core's binary.
+    uint32_t get_reload_table_addr(const CoreRangeSet& group_cores) const {
+        if (!this->reload_table_addr_.has_value() || !this->reload_core_ranges_.intersects(group_cores)) {
+            return 0;
+        }
+        TT_FATAL(
+            this->reload_core_ranges_.contains(group_cores),
+            "reload_core_ranges {} covers only part of a kernel group {}: a kernel group shares one launch "
+            "message, so every core of the group must reload or none of it",
+            this->reload_core_ranges_,
+            group_cores);
+        return *this->reload_table_addr_;
+    }
     const std::optional<uint64_t>& get_cached() const { return this->cached_device_hash_; }
     void set_program_binary_status(ChipId device_id, ProgramBinaryStatus status);
     std::shared_ptr<Kernel> get_kernel(KernelHandle kernel_id) const;
@@ -286,6 +308,10 @@ public:
     HWCommandQueue* get_last_used_command_queue() const;
 
     void set_kernels_bin_buffer(const std::shared_ptr<Buffer>& buffer);
+
+    // Runtime binary reload: see internal::ReloadTable (ProgramDescriptor::reload_table).
+    std::optional<uint32_t> reload_table_addr_;
+    CoreRangeSet reload_core_ranges_;
 
     void populate_dispatch_data(IDevice* device);
 
@@ -367,10 +393,19 @@ public:
     uint8_t num_prefetcher_pipe_slots() const { return next_prefetcher_pipe_slot_; }
 
     uint8_t add_prefetcher_pipe_attachment(
-        experimental::PrefetcherPipe& prefetcher_pipe, const CoreRangeSet& cores, uint32_t entry_size);
+        experimental::PrefetcherPipeImpl& prefetcher_pipe,
+        const CoreRangeSet& cores,
+        uint32_t entry_size,
+        uint32_t num_pipe_consumer_threads = 1);
 
-    const experimental::PrefetcherPipe& get_prefetcher_pipe_attachment(uint8_t prefetcher_pipe_id) const;
+    experimental::PrefetcherPipeImpl& get_prefetcher_pipe_attachment(uint8_t prefetcher_pipe_id);
+    const experimental::PrefetcherPipeImpl& get_prefetcher_pipe_attachment(uint8_t prefetcher_pipe_id) const;
     std::optional<uint8_t> get_prefetcher_pipe_id_for_relay(uint32_t relay_dfb_host_id) const;
+
+    // Finalize-time check for `kernel_group`: on every receiver core of an attached
+    // PrefetcherPipe, some Quasar DM kernel must run exactly P = pipe active credit lanes
+    // threads (hart tid binds to lane tid on device, where the guard is a debug-only ASSERT).
+    void validate_prefetcher_pipe_consumer_threads(const KernelGroup& kernel_group) const;
 
     // Mark a normal local DFB as the typed relay for a PrefetcherPipe this core participates in.
     // The local DFB borrows the PrefetcherPipe data buffer; its device_slot is emitted
@@ -407,9 +442,11 @@ public:
     void deallocate_circular_buffers();
 
     // CB tracking for SHM memory reporting
-    std::map<CoreCoord, std::vector<std::pair<uint64_t, uint64_t>>> get_cb_l1_regions_per_core(
-        int device_id, size_t num_devices) const;
-    size_t get_num_cb_devices() const { return cb_devices_.size(); }
+    // Merge exact core-range unions before expanding to individual cores.
+    void merge_cb_l1_regions_by_core_range(
+        std::map<CoreRange, std::vector<std::pair<uint64_t, uint64_t>>>& regions_per_range) const;
+    static std::map<CoreCoord, std::vector<std::pair<uint64_t, uint64_t>>> expand_cb_l1_regions_per_core(
+        const std::map<CoreRange, std::vector<std::pair<uint64_t, uint64_t>>>& regions_per_range);
 
     KernelHandle add_kernel(const std::shared_ptr<Kernel>& kernel, const HalProgrammableCoreType& core_type);
 
@@ -587,7 +624,7 @@ private:
     uint8_t next_cross_node_dfb_slot_ = 0;
 
     std::unordered_map<CoreCoord, std::vector<PrefetcherPipeParticipant>> per_core_prefetcher_pipes_;
-    std::unordered_map<uint8_t, experimental::PrefetcherPipe*> prefetcher_pipe_attachments_;
+    std::unordered_map<uint8_t, experimental::PrefetcherPipeImpl*> prefetcher_pipe_attachments_;
     // Optional typed relay: prefetcher_pipe_id → local DFB host id (from CreatePrefetcherPipeRelayDataflowBuffer).
     std::unordered_map<uint8_t, uint32_t> prefetcher_pipe_relay_host_ids_;
     uint8_t next_prefetcher_pipe_slot_ = 0;
@@ -705,8 +742,20 @@ private:
 
 }  // namespace detail
 
-// Launch `program` on every device in `mesh_device` via EnqueueMeshWorkload.
-// Takes ownership of `program`. When `wait_until_cores_done` is true, enqueue is blocking.
-void LaunchProgram(distributed::MeshDevice& mesh_device, Program&& program, bool wait_until_cores_done);
+// Launch `program` on every device in `mesh_device` via EnqueueMeshWorkload, blocking until completion.
+//
+// Exception: a service workload (a program targeting claimed service cores) is routed by
+// EnqueueMeshWorkload to slow dispatch, which rings GO and returns without waiting - `blocking` is not
+// consulted on that path. Callers that launch onto claimed service cores must synchronize themselves.
+//
+// @return MeshWorkload that takes ownership of the program.
+distributed::MeshWorkload LaunchProgram(distributed::MeshDevice& mesh_device, Program&& program);
+
+// Launch `program` on every device in `mesh_device` via EnqueueMeshWorkload, without blocking.
+//
+// @return MeshWorkload that takes ownership of the program, and must be kept alive until Finish (or a blocking enqueue)
+// on the same command queue. The reason is that MeshWorkload owns kernel-binary DRAM that fast dispatch may
+// still prefetch after this function returns.
+[[nodiscard]] distributed::MeshWorkload LaunchProgramAsync(distributed::MeshDevice& mesh_device, Program&& program);
 
 }  // namespace tt::tt_metal

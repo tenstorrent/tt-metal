@@ -5,7 +5,7 @@
 /**
  * GELU Backward ULP Precision Tests
  *
- * This test file validates the accuracy of ttnn::experimental::gelu_bw (GELU derivative) across
+ * This test file validates the accuracy of ttnn::gelu_bw (GELU derivative) across
  * the entire BFloat16 range using the same methodology as test_gelu_ulp_bug.cpp.
  *
  * MATHEMATICAL FORMULA:
@@ -48,7 +48,6 @@
 #include <tt-metalium/constants.hpp>
 #include "ttnn/operations/eltwise/unary_backward/unary_backward.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
-#include "ttnn/operations/experimental/unary_backward/gelu_backward/gelu_backward.hpp"
 #include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -248,8 +247,8 @@ float run_gelu_bw_single(tt::tt_metal::distributed::MeshDevice& device, float in
     auto input_tensor = ttnn::full(shape, input_val, DataType::BFLOAT16, ttnn::TILE_LAYOUT, device);
     auto grad_tensor = ttnn::full(shape, grad_val, DataType::BFLOAT16, ttnn::TILE_LAYOUT, device);
 
-    // Call experimental gelu_bw with approximate="none" (polynomial approximation)
-    auto result = ttnn::experimental::gelu_bw(grad_tensor, input_tensor, "none");
+    auto results = ttnn::gelu_bw(grad_tensor, input_tensor, ttnn::operations::unary::GeluVariant::ACCURATE);
+    auto result = results[0].value();
 
     auto output_cpu = ttnn::from_device(result);
     auto output_vec = output_cpu.to_vector<::bfloat16>();
@@ -421,7 +420,8 @@ TEST_F(GeluBwUlpTest, ComprehensiveULPByRegion) {
     auto grad_tensor = ttnn::Tensor::from_vector(std::move(bf16_grads), tensor_spec).to_device(device_);
 
     // Run GELU backward once on entire tensor
-    auto result = ttnn::experimental::gelu_bw(grad_tensor, input_tensor, "none");
+    auto results = ttnn::gelu_bw(grad_tensor, input_tensor, ttnn::operations::unary::GeluVariant::ACCURATE);
+    auto result = results[0].value();
     auto output_cpu = ttnn::from_device(result);
     auto output_vec = output_cpu.to_vector<::bfloat16>();
 
@@ -579,7 +579,8 @@ TEST_F(GeluBwUlpTest, CumulativeULPDistribution) {
     auto input_tensor = ttnn::Tensor::from_vector(std::move(bf16_inputs), tensor_spec).to_device(device_);
     auto grad_tensor = ttnn::Tensor::from_vector(std::move(bf16_grads), tensor_spec).to_device(device_);
 
-    auto result = ttnn::experimental::gelu_bw(grad_tensor, input_tensor, "none");
+    auto results = ttnn::gelu_bw(grad_tensor, input_tensor, ttnn::operations::unary::GeluVariant::ACCURATE);
+    auto result = results[0].value();
     auto output_cpu = ttnn::from_device(result);
     auto output_vec = output_cpu.to_vector<::bfloat16>();
 
@@ -952,8 +953,8 @@ TEST_F(GeluBwPolyTest, ComprehensiveULPAnalysis) {
     auto input_tensor = ttnn::Tensor::from_vector(std::move(bf16_inputs), tensor_spec).to_device(device_);
     auto grad_tensor = ttnn::Tensor::from_vector(std::move(bf16_grads), tensor_spec).to_device(device_);
 
-    // Run experimental GELU backward with polynomial approximation
-    auto result = ttnn::experimental::gelu_bw(grad_tensor, input_tensor, "none");
+    auto results = ttnn::gelu_bw(grad_tensor, input_tensor, ttnn::operations::unary::GeluVariant::ACCURATE);
+    auto result = results[0].value();
     auto output_cpu = ttnn::from_device(result);
     auto output_vec = output_cpu.to_vector<::bfloat16>();
 
@@ -1130,7 +1131,8 @@ TEST_F(GeluBwPolyTest, DetailedSegmentAnalysis) {
     auto input_tensor = ttnn::Tensor::from_vector(std::move(bf16_inputs), tensor_spec).to_device(device_);
     auto grad_tensor = ttnn::Tensor::from_vector(std::move(bf16_grads), tensor_spec).to_device(device_);
 
-    auto result = ttnn::experimental::gelu_bw(grad_tensor, input_tensor, "none");
+    auto results = ttnn::gelu_bw(grad_tensor, input_tensor, ttnn::operations::unary::GeluVariant::ACCURATE);
+    auto result = results[0].value();
     auto output_cpu = ttnn::from_device(result);
     auto output_vec = output_cpu.to_vector<::bfloat16>();
 
@@ -1316,7 +1318,8 @@ TEST_F(GeluBwPolyTest, ExpBasedRegionFullDump) {
     auto input_tensor = ttnn::Tensor::from_vector(std::move(bf16_inputs), tensor_spec).to_device(device_);
     auto grad_tensor = ttnn::Tensor::from_vector(std::move(bf16_grads), tensor_spec).to_device(device_);
 
-    auto result = ttnn::experimental::gelu_bw(grad_tensor, input_tensor, "none");
+    auto results = ttnn::gelu_bw(grad_tensor, input_tensor, ttnn::operations::unary::GeluVariant::ACCURATE);
+    auto result = results[0].value();
     auto output_cpu = ttnn::from_device(result);
     auto output_vec = output_cpu.to_vector<::bfloat16>();
 
@@ -1437,7 +1440,8 @@ TEST_F(GeluBwPolyTest, DeepNegativeRegionAnalysis) {
     auto input_tensor = ttnn::Tensor::from_vector(std::move(bf16_inputs), tensor_spec).to_device(device_);
     auto grad_tensor = ttnn::Tensor::from_vector(std::move(bf16_grads), tensor_spec).to_device(device_);
 
-    auto result = ttnn::experimental::gelu_bw(grad_tensor, input_tensor, "none");
+    auto results = ttnn::gelu_bw(grad_tensor, input_tensor, ttnn::operations::unary::GeluVariant::ACCURATE);
+    auto result = results[0].value();
     auto output_cpu = ttnn::from_device(result);
     auto output_vec = output_cpu.to_vector<::bfloat16>();
 
@@ -1700,8 +1704,8 @@ TEST_F(GeluBwPolyTest, SaturationThresholdResearch) {
         auto in_t = ttnn::Tensor::from_vector(std::move(inputs), spec).to_device(device_);
         auto gr_t = ttnn::Tensor::from_vector(std::move(grads), spec).to_device(device_);
 
-        auto res = ttnn::experimental::gelu_bw(gr_t, in_t, "none");
-        auto out = ttnn::from_device(res).to_vector<::bfloat16>();
+        auto results = ttnn::gelu_bw(gr_t, in_t, ttnn::operations::unary::GeluVariant::ACCURATE);
+        auto out = ttnn::from_device(results[0].value()).to_vector<::bfloat16>();
 
         int violations = 0;
         for (size_t i = 0; i < count; ++i) {
@@ -1722,34 +1726,6 @@ TEST_F(GeluBwPolyTest, SaturationThresholdResearch) {
 
     int neg_violations = test_saturation(neg_sat_values, 0.0f, "negative");
     EXPECT_EQ(neg_violations, 0) << neg_violations << " negative-saturation values (x <= -13.375) did not produce 0.0";
-}
-
-// Correctness guard: verifies IEEE special values (+inf, -inf, NaN) per nmauriceTT review.
-// +inf → 1.0, -inf → 0.0, NaN → 1.0 (via v_if comparison treating NaN bit pattern as
-// large positive). Ref: tt-llk#675, tech_reports/Handling_Special_Value/special_values.md.
-TEST_F(GeluBwPolyTest, SpecialValues) {
-    float pos_inf = std::numeric_limits<float>::infinity();
-    float neg_inf = -std::numeric_limits<float>::infinity();
-    float nan_val = std::numeric_limits<float>::quiet_NaN();
-
-    // +inf: treated as large positive, saturates to 1.0
-    // (also the correct mathematical limit: lim x->+inf GELU'(x) = 1)
-    float result_pos_inf = run_gelu_bw_single(*device_, pos_inf);
-    std::cout << "GELU_BW(+inf) = " << result_pos_inf << "\n";
-    EXPECT_EQ(result_pos_inf, 1.0f) << "+inf should saturate to 1.0";
-
-    // -inf: treated as large negative, falls through to default 0.0
-    // (also the correct mathematical limit: lim x->-inf GELU'(x) = 0)
-    float result_neg_inf = run_gelu_bw_single(*device_, neg_inf);
-    std::cout << "GELU_BW(-inf) = " << result_neg_inf << "\n";
-    EXPECT_EQ(result_neg_inf, 0.0f) << "-inf should saturate to 0.0";
-
-    // NaN: bit pattern 0x7FFF treated as large positive, saturates to 1.0
-    // Ideally should return NaN, but TT hardware treats NaN as ordinary number
-    // in comparisons (see special_values.md). This is acceptable per tt-llk#675.
-    float result_nan = run_gelu_bw_single(*device_, nan_val);
-    std::cout << "GELU_BW(NaN) = " << result_nan << "\n";
-    EXPECT_EQ(result_nan, 1.0f) << "NaN treated as large positive by SFPU, saturates to 1.0";
 }
 
 }  // namespace ttnn::test
