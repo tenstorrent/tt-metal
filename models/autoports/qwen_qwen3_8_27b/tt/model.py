@@ -3,6 +3,7 @@
 """Full text autoregressive path over the validated Blackhole TP4 decoder."""
 
 import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -22,6 +23,14 @@ REVISION = "1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0"
 
 
 def checkpoint_path():
+    mounted_weights = os.getenv("MODEL_WEIGHTS_DIR")
+    if mounted_weights:
+        path = Path(mounted_weights).expanduser().resolve()
+        for required in ("config.json", "model.safetensors.index.json"):
+            if not (path / required).is_file():
+                raise FileNotFoundError(f"MODEL_WEIGHTS_DIR is missing {required}: {path}")
+        return path
+
     from huggingface_hub import snapshot_download
 
     return Path(snapshot_download(MODEL_ID, revision=REVISION, local_files_only=True))
