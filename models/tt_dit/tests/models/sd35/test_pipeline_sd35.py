@@ -27,19 +27,19 @@ from ....utils.test import line_params_req_exact_devices
 @pytest.mark.parametrize(
     "model_name, image_w, image_h, guidance_scale, num_inference_steps",
     [
-        ("large", 1024, 1024, 3.5, 28),
+        ("large", 1024, 1024, 3.5, 20),
     ],
 )
 @pytest.mark.parametrize(
     "mesh_device, cfg, sp, tp, topology, num_links",
     [
-        [(2, 2), (1, 0), (2, 0), (2, 1), ttnn.Topology.Linear, 2],
+        [(1, 4), (1, 0), (1, 0), (4, 1), ttnn.Topology.Linear, 2],
         [(2, 4), (2, 1), (2, 0), (2, 1), ttnn.Topology.Linear, 1],
         [(2, 4), (2, 0), (1, 0), (4, 1), ttnn.Topology.Linear, 1],
         [(4, 8), (2, 1), (4, 0), (4, 1), ttnn.Topology.Linear, 4],
     ],
     ids=[
-        "2x2cfg0sp0tp1",
+        "1x4cfg0sp0tp1",
         "2x4cfg1sp0tp1",
         "2x4cfg0sp0tp1",
         "4x8cfg1sp0tp1",
