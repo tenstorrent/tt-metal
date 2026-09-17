@@ -241,22 +241,22 @@ safe-outputs:
     run-failure: 🔷 [{workflow_name}]({run_url}) {status} during the Tenstorrent skills review.
 # Use canonical paths: bare names also match the packaged plugin copies.
 skills:
-- tenstorrent/skills/skills/common/tt-review-core@17dd7791b59a386f345d95f86d570b56dfc2569a
-- tenstorrent/skills/skills/common/tt-review-router@17dd7791b59a386f345d95f86d570b56dfc2569a
-- tenstorrent/skills/skills/ttnn/ttnn-op-kernel-review@17dd7791b59a386f345d95f86d570b56dfc2569a
-- tenstorrent/skills/skills/metal/tt-l1-memory-review@17dd7791b59a386f345d95f86d570b56dfc2569a
-- tenstorrent/skills/skills/models/tt-model-bringup-review@17dd7791b59a386f345d95f86d570b56dfc2569a
-- tenstorrent/skills/skills/models/tt-multichip-ccl-review@17dd7791b59a386f345d95f86d570b56dfc2569a
-- tenstorrent/skills/skills/models/tt-trace-review@17dd7791b59a386f345d95f86d570b56dfc2569a
-- tenstorrent/skills/skills/models/tt-precision-review@17dd7791b59a386f345d95f86d570b56dfc2569a
-- tenstorrent/skills/skills/common/tt-test-coverage-review@17dd7791b59a386f345d95f86d570b56dfc2569a
-- tenstorrent/skills/skills/llk/llk-race-audit-review@17dd7791b59a386f345d95f86d570b56dfc2569a
-- tenstorrent/skills/skills/llk/llk-perf-audit-review@17dd7791b59a386f345d95f86d570b56dfc2569a
-- tenstorrent/skills/skills/inference/tt-vllm-serving-review@17dd7791b59a386f345d95f86d570b56dfc2569a
-- tenstorrent/skills/skills/common/tt-perf-claim-review@17dd7791b59a386f345d95f86d570b56dfc2569a
-- tenstorrent/skills/skills/common/tt-comment-hygiene-review@17dd7791b59a386f345d95f86d570b56dfc2569a
-- tenstorrent/skills/skills/common/tt-split-pr-by-codeowners@17dd7791b59a386f345d95f86d570b56dfc2569a
-timeout-minutes: 15
+- blozano-tt/skills/tt-review-core@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207
+- blozano-tt/skills/tt-review-router@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207
+- blozano-tt/skills/ttnn-op-kernel-review@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207
+- blozano-tt/skills/tt-l1-memory-review@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207
+- blozano-tt/skills/tt-model-bringup-review@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207
+- blozano-tt/skills/tt-multichip-ccl-review@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207
+- blozano-tt/skills/tt-trace-review@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207
+- blozano-tt/skills/tt-precision-review@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207
+- blozano-tt/skills/tt-test-coverage-review@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207
+- blozano-tt/skills/llk-race-audit-review@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207
+- blozano-tt/skills/llk-perf-audit-review@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207
+- blozano-tt/skills/tt-vllm-serving-review@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207
+- blozano-tt/skills/tt-perf-claim-review@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207
+- blozano-tt/skills/tt-comment-hygiene-review@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207
+- blozano-tt/skills/tt-split-pr-by-codeowners@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207
+timeout-minutes: 30
 ---
 
 # Tenstorrent Skills Reviewer
