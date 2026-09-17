@@ -38,7 +38,10 @@ add_library(kissat STATIC ${KISSAT_SRCS})
 target_include_directories(
     kissat
     INTERFACE
-        ${CMAKE_CURRENT_SOURCE_DIR}/src  # consumers (fabric) find kissat.h; NOT on kissat's own -I path
+        # Consumers see ONLY include/ (a clean extern-C wrapper around the public kissat.h), NOT src/.
+        # kissat ships its own internal src/limits.h; exposing src/ would shadow the system <limits.h> in
+        # consumer TUs (see include/kissat.h for the full explanation).
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
     PRIVATE
         ${CMAKE_CURRENT_BINARY_DIR}      # generated build.h (see above)
 )
