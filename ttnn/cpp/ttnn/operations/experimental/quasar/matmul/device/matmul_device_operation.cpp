@@ -2178,9 +2178,9 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
                 } else if constexpr (std::is_same_v<
                                          ProgramConfigType,
                                          operations::experimental::quasar::matmul::MatmulUnifiedProgramConfig>) {
-                    // One C subblock per core; the shard grid is the active cores in assignment order, so
-                    // the accessor's shard -> core mapping is the factory's C subblock -> core mapping and
-                    // every core writes its own shard.
+                    // One block of C per core; the shard grid is the active cores in assignment order, so
+                    // the accessor's shard -> core mapping is the factory's block -> core mapping and every
+                    // core writes its own shard.
                     const UnifiedMatmulPlan plan =
                         plan_unified_matmul(input_tensor_a, input_tensor_b, program_config, attributes);
                     const CoreRangeSet grid(ttsl::Span<const CoreCoord>(plan.cores));
