@@ -1582,7 +1582,7 @@
       # a 36-layer weight load, and tt_transformer_creation alone swings 1-17 min on page-cache
       # warmth. The 60 it replaces was a placeholder sized before any run existed.
       timeout: 30
-  owner_id: U08GEEEEC75 # ssalice
+  owner_id: U0AQ3FGS9MG # Alina Khan
   team: models
   budget_type: demo
   sp_config: sc1
