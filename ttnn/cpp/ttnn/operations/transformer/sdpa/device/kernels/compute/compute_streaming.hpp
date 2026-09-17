@@ -998,7 +998,8 @@ static void apply_lightweight_mask_streaming(
     uint32_t straddle_jump = 0,
     uint32_t straddle_period = 0,
     const KVPadRotationContext& kv_pad_rotation = {},
-    const uint32_t* packed_k_global_tiles = nullptr) {
+    const PackedKVMaskRun* packed_k_runs = nullptr,
+    const uint32_t packed_k_run_count = 0) {
     // This constrains the inner lightweight-mask path, not the kernel-level causal flag.
     // Chunked prefill re-enables this path when calling sdpa_inner_loop_step.
     static_assert(!kv_pad_rotation_enabled || is_causal_sdpa, "KV-pad rotation mask is causal-only");
@@ -1060,15 +1061,13 @@ static void apply_lightweight_mask_streaming(
                         l1_acc_causal_col_mask(
                             mask_cb, out_cb, row_offset, col, q_pos, k_pos, neginf_idx, primary_diag_idx);
                     }
-                } else if (packed_k_global_tiles != nullptr) {
-                    // Each run is contiguous in sequence space, even across packed source boundaries.
+                } else if (packed_k_runs != nullptr) {
+                    // The packed plan already splits columns into contiguous sequence intervals.
                     if (apply_causal) {
-                        for (uint32_t rs = 0; rs < mask_cols;) {
-                            uint32_t re = rs + 1;
-                            while (re < mask_cols && packed_k_global_tiles[re] == packed_k_global_tiles[re - 1] + 1) {
-                                ++re;
-                            }
-                            const int32_t diag_col = q_pos - static_cast<int32_t>(packed_k_global_tiles[rs]);
+                        uint32_t rs = 0;
+                        for (uint32_t run = 0; run < packed_k_run_count; ++run) {
+                            const uint32_t re = packed_k_runs[run].column_end;
+                            const int32_t diag_col = q_pos - static_cast<int32_t>(packed_k_runs[run].global_start_tile);
                             if (diag_col < 0) {
                                 stamper.neginf_range(rs, re);
                             } else if (static_cast<uint32_t>(diag_col) < re - rs) {
@@ -1316,7 +1315,8 @@ static void sdpa_inner_loop_step(
     // Tile offset of this call's Q chunk from the front of cb_q_in. Non-zero only for head-serial
     // ring passes, where cb_q_in holds one resident Q chunk per pass and is popped once at the end.
     const uint32_t q_base_tiles = 0,
-    const uint32_t* packed_k_global_tiles = nullptr) {
+    const PackedKVMaskRun* packed_k_runs = nullptr,
+    const uint32_t packed_k_run_count = 0) {
     // Callers guarantee active_Sk is evenly divisible by actual_sbw (via largest_factor_le).
     const uint32_t kt_num_full_subblocks = active_Sk / actual_sbw;
     constexpr uint32_t dst_size = compute_kernel_lib::DEST_AUTO_LIMIT;
@@ -1499,7 +1499,8 @@ static void sdpa_inner_loop_step(
                     mask_straddle_jump,
                     mask_straddle_period,
                     kv_pad_rotation,
-                    packed_k_global_tiles);
+                    packed_k_runs,
+                    packed_k_run_count);
                 end_mask_l1_accumulate();
             }
         }
@@ -2826,15 +2827,11 @@ void sdpa_ring_v2(
             step_kv_pad_rotation.ring_id = source_ring_id;
             step_kv_pad_rotation.logical_tile_count = logical_nt;
 
-            uint32_t packed_k_global_tiles[Sk_chunk_t];
-            if (pack_source_tails) {
-                for (uint32_t col = 0; col < active_Sk_param; ++col) {
-                    const uint32_t stream_tile = k_chunk * Sk_chunk_t + col;
-                    const uint32_t source = streamed_source_ids[stream_tile / local_padded_Nt];
-                    packed_k_global_tiles[col] =
-                        packed_kv.global_tile(stream_tile, source, kv_rank_stride_Nt, chunk_size_t);
-                }
-            }
+            PackedKVMaskRun packed_k_runs[Sk_chunk_t];
+            const uint32_t packed_k_run_count =
+                pack_source_tails
+                    ? packed_kv.mask_runs(k_chunk, streamed_source_ids, kv_rank_stride_Nt, chunk_size_t, packed_k_runs)
+                    : 0;
 
             sdpa_inner_loop_step<
                 false,  // profiling_enabled
@@ -2898,7 +2895,8 @@ void sdpa_ring_v2(
                 step_straddle_period,
                 step_kv_pad_rotation,
                 q_base_tiles,
-                pack_source_tails ? packed_k_global_tiles : nullptr);
+                pack_source_tails ? packed_k_runs : nullptr,
+                packed_k_run_count);
 
             // Post-iteration cleanup: pop previous values and swap aliases
             // prev.out and cb_exp_max_diff are already popped row-by-row inside salad_correct_row.

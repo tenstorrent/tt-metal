@@ -12,6 +12,13 @@
 
 #include <cstdint>
 
+// One contiguous sequence interval in a packed K chunk. Column starts are implicit:
+// zero for the first run, then the preceding run's exclusive column_end.
+struct PackedKVMaskRun {
+    uint32_t global_start_tile;
+    uint32_t column_end;
+};
+
 // A packed attention pass concatenates equally sized physical KV sources. All sizes
 // are in tiles; the final chunk may be partial, but retains the full CB stride.
 struct PackedKVGroupPlan {
@@ -38,6 +45,32 @@ struct PackedKVGroupPlan {
         const uint32_t remaining = valid_tiles(chunk) - destination_offset;
         const uint32_t source_remaining = source_tiles - source_offset(chunk * chunk_tiles + destination_offset);
         return remaining < source_remaining ? remaining : source_remaining;
+    }
+    // Emit at most chunk_tiles runs, splitting at both source and block-cyclic slab
+    // boundaries. The caller supplies chunk_tiles entries, including for partial chunks.
+    constexpr uint32_t mask_runs(
+        uint32_t chunk,
+        const uint32_t* source_ids,
+        uint32_t region_tiles,
+        uint32_t global_chunk_tiles,
+        PackedKVMaskRun* runs) const {
+        const uint32_t valid = valid_tiles(chunk);
+        uint32_t count = 0;
+        for (uint32_t column = 0; column < valid;) {
+            const uint32_t stream_tile = chunk * chunk_tiles + column;
+            const uint32_t local = source_offset(stream_tile);
+            const uint32_t region_offset = local % region_tiles;
+            const uint32_t source_remaining = source_tiles - local;
+            const uint32_t region_remaining = region_tiles - region_offset;
+            uint32_t length = valid - column;
+            length = length < source_remaining ? length : source_remaining;
+            length = length < region_remaining ? length : region_remaining;
+            const uint32_t global = (local / region_tiles) * global_chunk_tiles +
+                                    source_ids[source_index(stream_tile)] * region_tiles + region_offset;
+            column += length;
+            runs[count++] = {global, column};
+        }
+        return count;
     }
     constexpr uint32_t global_tile(
         uint32_t stream_tile, uint32_t source_id, uint32_t region_tiles, uint32_t global_chunk_tiles) const {

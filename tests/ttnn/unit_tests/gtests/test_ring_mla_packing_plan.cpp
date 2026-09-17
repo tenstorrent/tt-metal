@@ -11,7 +11,7 @@
 TEST(RingMLAPackingPlan, PreservesEveryTileAcrossSourcesAndPartialChunks) {
     for (uint32_t ring : {8u, 32u}) {
         for (uint32_t group_size : {2u, 4u, 8u}) {
-            for (uint32_t region : {2u, 5u}) {
+            for (uint32_t region : {1u, 2u, 5u}) {
                 for (uint32_t depth : {1u, 5u, 6u, 11u, 205u}) {
                     for (uint32_t k : {1u, 4u, 11u, 20u, 32u, 128u}) {
                         const uint32_t source_tiles = region * depth;
@@ -28,6 +28,26 @@ TEST(RingMLAPackingPlan, PreservesEveryTileAcrossSourcesAndPartialChunks) {
                                 ASSERT_GT(valid, 0u);
                                 ASSERT_LE(valid, k);
                                 ASSERT_LT(plan.last_source(chunk), group_size);
+                                std::vector<PackedKVMaskRun> runs(k);
+                                const uint32_t count =
+                                    plan.mask_runs(chunk, sources.data() + group, region, ring * region, runs.data());
+                                ASSERT_GT(count, 0u);
+                                ASSERT_LE(count, valid);
+                                uint32_t column = 0;
+                                for (uint32_t run = 0; run < count; ++run) {
+                                    const uint32_t begin = column;
+                                    ASSERT_GT(runs[run].column_end, begin);
+                                    ASSERT_LE(runs[run].column_end, valid);
+                                    for (; column < runs[run].column_end; ++column) {
+                                        const uint32_t flat = chunk * k + column;
+                                        const uint32_t source = sources[group + flat / source_tiles];
+                                        const uint32_t local = flat % source_tiles;
+                                        const uint32_t expected =
+                                            (local / region) * (ring * region) + source * region + local % region;
+                                        ASSERT_EQ(runs[run].global_start_tile + column - begin, expected);
+                                    }
+                                }
+                                ASSERT_EQ(column, valid);
                                 for (uint32_t dst = 0; dst < valid;) {
                                     const uint32_t segment = plan.segment_tiles(chunk, dst);
                                     ASSERT_GT(segment, 0u);
