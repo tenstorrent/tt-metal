@@ -176,7 +176,6 @@ public:
     virtual ~Producer() = default;
     virtual std::span<const ProducerStream> streams() const = 0;
     virtual const CaptureContext& capture_context() const = 0;
-    virtual const DeviceClock& clock(uint32_t dev) const = 0;
     // The device's write position in a stream, in bytes; callable from any consumer thread.
     virtual uint64_t live_head(uint32_t stream) const = 0;
     // A consumer's totals for one of streams(): the frame bytes it never read and its decoder's counters, delivered

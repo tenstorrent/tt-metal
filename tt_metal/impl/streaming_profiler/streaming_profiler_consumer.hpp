@@ -36,13 +36,9 @@ inline constexpr std::array<const char*, 5> kRiscNames = {"BRISC", "NCRISC", "TR
 
 // Immutable once the receiver starts. Zone names are not here: they arrive per ELF as binaries JIT-load, so
 // the process-wide site table publishes them as ELFs load (init_site_registry).
-// The host<->device clock relation of one chip as the device layer measured it.
 struct DeviceClock {
     uint32_t chip_id = 0;
-    double frequency_ghz = 0.0;  // device ticks per nanosecond
-    uint64_t anchor_ticks = 0;
-    int64_t anchor_host_ns = 0;  // std::chrono::steady_clock at `anchor_ticks`, in nanoseconds since its epoch
-    double anchor_sigma_ns = 0.0;  // the anchor's standard error from its read pairs' scatter
+    double frequency_ghz = 0.0;  // the worker wall clock's ticks per nanosecond, a few parts in 1e5
 };
 
 struct CaptureContext {

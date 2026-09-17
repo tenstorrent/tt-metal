@@ -10,6 +10,7 @@
 #include <vector>
 
 #include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include "impl/context/context_types.hpp"
 #include "impl/streaming_profiler/streaming_profiler_consumer.hpp"
 #include "impl/streaming_profiler/streaming_profiler_host_probe.hpp"
@@ -29,6 +30,11 @@ inline uint32_t packed_xy(const CoreCoord& c) {
     return (static_cast<uint32_t>(c.y) << 16) | static_cast<uint32_t>(c.x);
 }
 
+// One core as a kernel placement, the host's NoC writes and the NoC 0 grid each name it.
+struct CoreCoords {
+    CoreCoord logical, virt, phys;
+};
+
 // The idle-eth pusher's L1, carved from the top of IDLE_ETH UNRESERVED: socket config, ctrl words (done/heartbeat,
 // go, stop), one frame slot, the linked-core scratch, the tile table, the sample ring. The tile measurement runs the
 // pusher's kernel in measure-only mode, so it shares the carve.
@@ -41,23 +47,21 @@ constexpr uint32_t kEthTableBytes = 4096;
 constexpr uint32_t kEthTableMaxTiles =
     (kEthTableBytes / sizeof(uint32_t) - kernel_profiler::ETH_TILE_XY_0) / (1 + kernel_profiler::ETH_TILE_OUT_WORDS);
 
+// The idle-eth kernel over its L1 carve: the resident pusher, or the same kernel reading the tile table once and
+// exiting.
+KernelHandle create_pusher_kernel(Program& program, const EthL1& l1, const CoreCoords& core, bool measure_only);
+
 // The device-to-device sync's use of the devices. At boot it measures each chip's tile clock offsets before any
 // relay or pusher is on the NoC and plans the eth links; once the receiver drains the sockets it launches the link
 // ends (resident kernels, or the fabric routers' roles) and the host probe; at quiesce it stops them and re-reads
 // the tiles. The stamps and clock samples travel the D2H path like every record and are consumed by D2dSyncConsumer.
 class SyncDevices {
 public:
-    struct EthCore {
-        CoreCoord logical, virt, phys;
-    };
-    struct Tile {
-        CoreCoord virt, phys;
-    };
     struct Device {
         uint32_t chip_id = 0;
         IDevice* device = nullptr;
-        std::vector<Tile> tensix;  // the compute grid in core index order
-        std::vector<EthCore>
+        std::vector<CoreCoords> tensix;  // the compute grid in core index order
+        std::vector<CoreCoords>
             eth;  // the idle eth cores, the pusher first: the origin the tile offsets are solved against
         double frequency_ghz = 0.0;
     };

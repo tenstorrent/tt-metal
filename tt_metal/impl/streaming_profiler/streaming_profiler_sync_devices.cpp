@@ -88,6 +88,27 @@ std::vector<double> solve_normal(std::vector<std::vector<double>> N, std::vector
 
 }  // namespace
 
+KernelHandle create_pusher_kernel(Program& program, const EthL1& l1, const CoreCoords& core, bool measure_only) {
+    return CreateKernel(
+        program,
+        "tt_metal/tools/profiler/sync/eth_clock_pusher.cpp",
+        core.logical,
+        EthernetConfig{
+            .eth_mode = Eth::IDLE,
+            .noc = NOC::RISCV_0_default,
+            .processor = DataMovementProcessor::RISCV_0,
+            .compile_args = {
+                kEthPointUs * 50u,
+                l1.cfg,
+                l1.stage,
+                l1.ctrl,
+                packed_xy(core.virt),
+                l1.scratch,
+                l1.table,
+                measure_only ? 1u : 0u,
+                l1.ring}});
+}
+
 SyncDevices::SyncDevices(
     ContextId context_id, const EthL1& eth_l1, uint32_t aeth_unreserved, uint32_t aeth_unres_size) :
     context_id_(context_id), eth_l1_(eth_l1), aeth_unreserved_(aeth_unreserved), aeth_unres_size_(aeth_unres_size) {}
@@ -170,7 +191,7 @@ std::vector<double> SyncDevices::solve_tiles(uint32_t di, const char* when) {
     // Sources: the pusher, then the helpers; a source's tile list is the Tensix tiles, then the other sources in
     // source order. Unknowns: the Tensix tiles, then the helpers; the pusher is the origin.
     std::vector<CoreCoord> src_logical, src_virt, src_phys;
-    for (const EthCore& h : d.eth) {
+    for (const CoreCoords& h : d.eth) {
         src_logical.push_back(h.logical);
         src_virt.push_back(h.virt);
         src_phys.push_back(h.phys);
@@ -179,7 +200,7 @@ std::vector<double> SyncDevices::solve_tiles(uint32_t di, const char* when) {
     std::vector<TileReading> loops(ns);
     for (uint32_t s = 0; s < ns; s++) {
         std::vector<uint32_t> table(kernel_profiler::ETH_TILE_XY_0, 0);
-        for (const Tile& c : d.tensix) {
+        for (const CoreCoords& c : d.tensix) {
             table.push_back(packed_xy(c.virt));
         }
         for (uint32_t o = 0; o < ns; o++) {
@@ -194,25 +215,7 @@ std::vector<double> SyncDevices::solve_tiles(uint32_t di, const char* when) {
             tt_cxy_pair(d.chip_id, src_virt[s]),
             eth_l1_.table);
         Program p = CreateProgram();
-        const std::vector<uint32_t> ca = {
-            kEthPointUs * 50u,
-            eth_l1_.cfg,
-            eth_l1_.stage,
-            eth_l1_.ctrl,
-            packed_xy(src_virt[s]),
-            eth_l1_.scratch,
-            eth_l1_.table,
-            1u,
-            eth_l1_.ring};
-        auto kid = CreateKernel(
-            p,
-            "tt_metal/tools/profiler/sync/eth_clock_pusher.cpp",
-            src_logical[s],
-            EthernetConfig{
-                .eth_mode = Eth::IDLE,
-                .noc = NOC::RISCV_0_default,
-                .processor = DataMovementProcessor::RISCV_0,
-                .compile_args = ca});
+        const KernelHandle kid = create_pusher_kernel(p, eth_l1_, d.eth[s], /*measure_only=*/true);
         SetRuntimeArgs(p, kid, src_logical[s], std::vector<uint32_t>{0});
         detail::CompileProgram(d.device, p, /*force_slow_dispatch=*/true);
         detail::WriteRuntimeArgsToDevice(d.device, p, /*force_slow_dispatch=*/true);
