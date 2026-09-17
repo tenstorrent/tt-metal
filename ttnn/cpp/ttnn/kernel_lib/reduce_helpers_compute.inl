@@ -317,7 +317,8 @@ ALWI void reduce(
 #ifndef ARCH_QUASAR  // Quasar's ckernel::PoolType has no MIN, so this check is vacuous there
     static_assert(
         reduce_type != PoolType::MIN || is_sfpu_reduce_path<reduce_type, reduce_dim, reduce_format, fp32_mode>(),
-        "MIN is only valid on an SFPU path (Int32 or Accurate fp32); FPU MIN arrives as PoolType::MAX via -MAX(-x)");
+        "MIN requires an SFPU path: Int32, bf16, or Accurate fp32, on REDUCE_ROW/COL. The FPU has no min "
+        "pool at all, so every other MIN is lowered to -MAX(-x) and arrives as PoolType::MAX");
 #endif
     static_assert(
         is_accumulation_type_v<AccumulateT>,

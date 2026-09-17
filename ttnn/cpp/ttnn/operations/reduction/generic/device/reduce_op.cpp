@@ -211,13 +211,20 @@ Tensor reduce(
     const bool use_sfpu_fp32_max = fp32_sfpu_eligible && reduce_math == tt::tt_metal::ReduceOpMath::MAX && !negate;
     const bool use_sfpu_fp32_min = fp32_sfpu_eligible && reduce_math == tt::tt_metal::ReduceOpMath::MIN && !negate;
 
-    const bool use_sfpu_fp32_reduce = use_sfpu_fp32_sum || use_sfpu_fp32_mean || use_sfpu_fp32_max || use_sfpu_fp32_min;
+    // Unlike the fp32 path above, no accuracy opt-in and no fp32_dest_acc_en: MIN selects rather than
+    // accumulates, and bf16 reaches SrcA untruncated. Quasar is excluded — its PoolType has no MIN.
+    const bool use_sfpu_bf16_min = input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16 &&
+                                   reduce_math == tt::tt_metal::ReduceOpMath::MIN && arch != tt::ARCH::QUASAR &&
+                                   !negate;
 
-    // The FPU has no float/bf16 MIN primitive, so fast-mode MIN lowers to -MAX(-x) via the fused
-    // negate kernels. Accurate fp32 MIN drives the LLK MIN reduce directly (like Int32 MIN) and must
-    // skip that lowering.
+    const bool use_sfpu_reduce =
+        use_sfpu_fp32_sum || use_sfpu_fp32_mean || use_sfpu_fp32_max || use_sfpu_fp32_min || use_sfpu_bf16_min;
+
+    // The FPU has no float/bf16 MIN primitive, so remaining MIN lowers to -MAX(-x) via the fused
+    // negate kernels: bfloat8_b, fast-mode fp32, and bf16 on Quasar. Accurate fp32 MIN and bf16 MIN
+    // drive the LLK MIN reduce directly (like Int32 MIN) and must skip that lowering.
     if (reduce_math == tt::tt_metal::ReduceOpMath::MIN && input_tensor.dtype() != tt::tt_metal::DataType::INT32 &&
-        !use_sfpu_fp32_min) {
+        !use_sfpu_fp32_min && !use_sfpu_bf16_min) {
         return reduce_min(input_tensor, reduce_dim, scaler, output_mem_config, compute_kernel_config, sub_core_grids);
     }
 
@@ -250,13 +257,13 @@ Tensor reduce(
         ((prepared_input.dtype() == tt::tt_metal::DataType::INT32 &&
           (reduce_math == tt::tt_metal::ReduceOpMath::MAX || reduce_math == tt::tt_metal::ReduceOpMath::SUM ||
            reduce_math == tt::tt_metal::ReduceOpMath::MIN)) ||
-         use_sfpu_fp32_reduce);
+         use_sfpu_reduce);
     const bool decomposes_hw = is_multicore_hw || use_two_step_hw_sfpu_reduce;
 
     // A decomposed HW reduce applies the scalar on its H half, so derive the mode for H.
     const auto scalar_reduce_dim = decomposes_hw ? tt::tt_metal::ReduceOpDim::H : reduce_dim;
     const auto scaler_mode =
-        ttnn::prim::derive_scaler_mode(reduce_math, prepared_input.dtype(), scalar_reduce_dim, use_sfpu_fp32_reduce);
+        ttnn::prim::derive_scaler_mode(reduce_math, prepared_input.dtype(), scalar_reduce_dim, use_sfpu_reduce);
     const bool use_post_mul = scaler_mode == ttnn::prim::ScalerMode::PostMul;
     const float reduce_scaler = use_post_mul ? 1.0f : scaler;
     const float post_mul = use_post_mul ? scaler : 1.0f;
@@ -291,9 +298,10 @@ Tensor reduce(
         // precision. Applies to SUM only:
         // - FP32 input after an earlier NC-stage reduction with a BF16 final pack (chain path), or
         // - BF16 input on a pure H+W reduction (e.g. dim=[-2,-1] on 8D tensors).
-        // MAX/MIN must not use this path: float/bf16 MIN uses -MAX(-x), and the fused-negate
-        // W step produces wrong results with an FP32 intermediate (issue #40854). They also gain
-        // no precision from FP32 since they select, not accumulate.
+        // MAX/MIN must not use this path: the MIN still lowered to -MAX(-x) (bfloat8_b, fast-mode
+        // fp32, Quasar bf16) produces wrong results with an FP32 intermediate on the fused-negate W
+        // step (issue #40854). They also gain no precision from FP32 since they select, not
+        // accumulate.
         const auto out_final_dtype = output_dtype.value_or(input_tensor.dtype());
         const bool keep_w_fp32 =
             reduce_math == tt::tt_metal::ReduceOpMath::SUM &&
@@ -316,7 +324,7 @@ Tensor reduce(
             /*scaler_mode=*/ttnn::prim::ScalerMode::None,
             /*row_major_w_dense_path=*/false,
             /*row_major_h_dense_path=*/false,
-            /*use_sfpu_reduce=*/use_sfpu_fp32_reduce);
+            /*use_sfpu_reduce=*/use_sfpu_reduce);
 
         if (negate && !ttnn::prim::h_reduce_negate_fits_in_l1(output_tensor, output_mem_config, sub_core_grids)) {
             return h_reduce_with_external_negate(output_tensor, reduce_scaler, post_mul, out_final_dtype);
@@ -336,7 +344,7 @@ Tensor reduce(
             scaler_mode,
             /*row_major_w_dense_path=*/false,
             /*row_major_h_dense_path=*/false,
-            /*use_sfpu_reduce=*/use_sfpu_fp32_reduce);
+            /*use_sfpu_reduce=*/use_sfpu_reduce);
     }
 
     if (negate && reduce_dim == tt::tt_metal::ReduceOpDim::H &&
@@ -379,7 +387,7 @@ Tensor reduce(
                 /*scaler_mode=*/ttnn::prim::ScalerMode::None,
                 /*row_major_w_dense_path=*/false,
                 /*row_major_h_dense_path=*/true,
-                /*use_sfpu_reduce=*/use_sfpu_fp32_reduce,
+                /*use_sfpu_reduce=*/use_sfpu_reduce,
                 /*num_h_slices=*/num_h_slices,
                 /*output_layout=*/tt::tt_metal::Layout::ROW_MAJOR);
 
@@ -397,7 +405,7 @@ Tensor reduce(
                 scaler_mode,
                 /*row_major_w_dense_path=*/false,
                 /*row_major_h_dense_path=*/true,
-                /*use_sfpu_reduce=*/use_sfpu_fp32_reduce,
+                /*use_sfpu_reduce=*/use_sfpu_reduce,
                 /*num_h_slices=*/1,
                 /*output_layout=*/rm_dense_out_layout);
         }
@@ -444,7 +452,7 @@ Tensor reduce(
                 /*scaler_mode=*/ttnn::prim::ScalerMode::None,
                 /*row_major_w_dense_path=*/false,
                 /*row_major_h_dense_path=*/false,
-                /*use_sfpu_reduce=*/use_sfpu_fp32_reduce,
+                /*use_sfpu_reduce=*/use_sfpu_reduce,
                 /*num_h_slices=*/num_h_slices,
                 /*output_layout=*/tt::tt_metal::Layout::ROW_MAJOR);
 
@@ -494,7 +502,7 @@ Tensor reduce(
         scaler_mode,
         /*row_major_w_dense_path=*/use_rm_dense_w,
         /*row_major_h_dense_path=*/use_rm_dense_h,
-        /*use_sfpu_reduce=*/use_sfpu_fp32_reduce,
+        /*use_sfpu_reduce=*/use_sfpu_reduce,
         /*num_h_slices=*/1,
         /*output_layout=*/use_rm_dense ? rm_dense_out_layout : tt::tt_metal::Layout::TILE);
 }
