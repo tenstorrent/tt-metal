@@ -21,10 +21,10 @@ namespace ttnn::prim::qsr {
 // config is checked in that function with TT_FATAL, so calling it is the config check.
 //
 // Vocabulary (classic GEMM, all sizes in 32x32 tiles): C[M x N] = A[M x K] x B[K x N].
-//   C block   the per_core_M x per_core_N region of C a core produces in one go
-//   work item one C block of one batch; the unit distributed over cores
-//   K step    K_step_tiles of the inner dimension; one A panel + one B panel per step
-//   subblock  the subblock_M_tiles x subblock_N_tiles piece of a C block that fits DST
+//   C subblock   the per_core_M x per_core_N region of C a core produces in one go
+//   work item    one C subblock of one batch; the unit distributed over cores
+//   K iteration  K_iteration_tiles of the inner dimension; one A slice + one B slice per iteration
+//   DST group    the dst_M_tiles x dst_N_tiles C tiles accumulated in DST at once
 struct UnifiedMatmulPlan {
     uint32_t M_tiles = 0;
     uint32_t K_tiles = 0;
@@ -35,19 +35,19 @@ struct UnifiedMatmulPlan {
     // Blocking, after the config's auto fields are resolved.
     uint32_t per_core_M = 0;
     uint32_t per_core_N = 0;
-    uint32_t K_step_tiles = 0;
-    uint32_t num_K_steps = 0;  // K_tiles / K_step_tiles
-    uint32_t subblock_M_tiles = 0;
-    uint32_t subblock_N_tiles = 0;
+    uint32_t K_iteration_tiles = 0;
+    uint32_t num_K_iterations = 0;  // K_tiles / K_iteration_tiles
+    uint32_t dst_M_tiles = 0;
+    uint32_t dst_N_tiles = 0;
 
-    // C block grid of one batch: C block i is at (i / num_C_block_columns, i % num_C_block_columns).
-    uint32_t num_C_block_rows = 0;
-    uint32_t num_C_block_columns = 0;
-    uint32_t num_C_blocks = 0;
+    // C subblock grid of one batch: C subblock i is at (i / C_subblock_grid_columns, i % C_subblock_grid_columns).
+    uint32_t C_subblock_grid_rows = 0;
+    uint32_t C_subblock_grid_columns = 0;
+    uint32_t C_subblocks_per_batch = 0;
 
-    // Work items are numbered batch-major: item w is C block w % num_C_blocks of batch w / num_C_blocks.
-    // Active cores in assignment order; core i owns items
-    // [first_work_item[i], first_work_item[i] + work_items_per_core[i]).
+    // Work items are numbered batch-major: item w is C subblock w % C_subblocks_per_batch of batch w /
+    // C_subblocks_per_batch. Active cores in assignment order; core i owns items [first_work_item[i],
+    // first_work_item[i] + work_items_per_core[i]).
     uint32_t num_work_items = 0;
     bool row_major_cores = true;
     std::vector<tt::tt_metal::CoreCoord> cores;
@@ -65,15 +65,15 @@ struct UnifiedMatmulPlan {
     uint32_t B_slot_bytes = 0;
     uint32_t C_slot_bytes = 0;
     uint32_t C_partials_slot_bytes = 0;
-    uint32_t A_panel_ring_slots = 0;
-    uint32_t B_panel_ring_slots = 0;
-    uint32_t C_block_ring_slots = 0;
+    uint32_t A_slice_ring_slots = 0;
+    uint32_t B_slice_ring_slots = 0;
+    uint32_t C_subblock_ring_slots = 0;
     uint32_t C_partials_ring_slots = 0;
-    // C_partials shares C_block's L1; only safe when partials are never live while C_block holds unread data.
-    bool alias_C_partials_onto_C_block = false;
+    // C_partials shares C_subblock's L1; only safe when partials are never live while C_subblock holds unread data.
+    bool alias_C_partials_onto_C_subblock = false;
     uint64_t l1_bytes = 0;  // total ring footprint per core
 
-    // Only valid for a sharded output: the shard layout implied by the C block grid.
+    // Only valid for a sharded output: the shard layout implied by the C subblock grid.
     tt::tt_metal::TensorMemoryLayout sharded_output_layout() const;
 };
 

@@ -19,7 +19,7 @@ Run on the Quasar simulator (one config per process; a sim-side hang ignores pyt
 
     craq-sim (libttsim.so of 2026-08-26) hangs on every case with more than one K block (partials through
     cb_intermed0), for this factory and for the legacy Metal 2.0 reuse factory alike, so on the simulator
-    pick single-K-block cases (Kt <= 8 with K_step_tiles auto, or K_step_tiles = Kt). K-spill is verified on
+    pick single-K-block cases (Kt <= 8 with K_iteration_tiles auto, or K_iteration_tiles = Kt). K-spill is verified on
     silicon; the emulator is the place to confirm it on Quasar.
 """
 
@@ -140,28 +140,28 @@ def test_placements(device, name, cores, per_core_M, per_core_N, row_major):
 
 
 def test_repr_and_fields():
-    cfg = qsr.MatmulUnifiedProgramConfig(cores=_rect(0, 0, 1, 1), per_core_M=2, per_core_N=3, K_step_tiles=4)
-    assert cfg.per_core_M == 2 and cfg.per_core_N == 3 and cfg.K_step_tiles == 4
-    assert cfg.subblock_M_tiles == 0 and cfg.subblock_N_tiles == 0 and cfg.row_major_cores is True
+    cfg = qsr.MatmulUnifiedProgramConfig(cores=_rect(0, 0, 1, 1), per_core_M=2, per_core_N=3, K_iteration_tiles=4)
+    assert cfg.per_core_M == 2 and cfg.per_core_N == 3 and cfg.K_iteration_tiles == 4
+    assert cfg.dst_M_tiles == 0 and cfg.dst_N_tiles == 0 and cfg.row_major_cores is True
     assert "MatmulUnifiedProgramConfig(" in repr(cfg)
 
 
 # ----------------------------------------------------------------------------------------------------
-# Edges: M, N not multiples of the C block, K not a multiple of the tile, explicit blocking knobs
+# Edges: M, N not multiples of the C subblock, K not a multiple of the tile, explicit blocking knobs
 # ----------------------------------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
-    "M,K,N,per_core_M,per_core_N,K_step_tiles,subblock",
+    "M,K,N,per_core_M,per_core_N,K_iteration_tiles,dst_tiles",
     [
         (7 * TILE, 3 * TILE, 11 * TILE, 3, 4, 0, (0, 0)),  # 3x3 blocks, ragged right and bottom edge
         (5 * TILE, 8 * TILE, 5 * TILE, 4, 4, 2, (2, 2)),  # 2x2 blocks with a 1-tile edge strip each way
         (2 * TILE, 100, 3 * TILE, 2, 3, 0, (1, 3)),  # K=100: last K tile is 4 columns wide, must be zeroed
-        (4 * TILE, 6 * TILE, 6 * TILE, 4, 6, 1, (4, 1)),  # K_step_tiles=1: six K steps, spill/reload every step
+        (4 * TILE, 6 * TILE, 6 * TILE, 4, 6, 1, (4, 1)),  # K_iteration_tiles=1: six K steps, spill/reload every step
         (3 * TILE, 4 * TILE, 3 * TILE, 3, 3, 4, (3, 1)),  # single K step: no partials at all
     ],
 )
-def test_edges_and_blocking(device, M, K, N, per_core_M, per_core_N, K_step_tiles, subblock):
+def test_edges_and_blocking(device, M, K, N, per_core_M, per_core_N, K_iteration_tiles, dst_tiles):
     gx, gy = _grid(device)
     torch.manual_seed(1)
     a, b = _randn(1, 1, M, K), _randn(1, 1, K, N)
@@ -169,9 +169,9 @@ def test_edges_and_blocking(device, M, K, N, per_core_M, per_core_N, K_step_tile
         cores=_rect(0, 0, min(gx, 4) - 1, min(gy, 2) - 1),
         per_core_M=per_core_M,
         per_core_N=per_core_N,
-        K_step_tiles=K_step_tiles,
-        subblock_M_tiles=subblock[0],
-        subblock_N_tiles=subblock[1],
+        K_iteration_tiles=K_iteration_tiles,
+        dst_M_tiles=dst_tiles[0],
+        dst_N_tiles=dst_tiles[1],
     )
     out = _run(device, a, b, config)
     _check(out, _golden(a, b))
@@ -198,7 +198,7 @@ def test_ones_give_constant_k(device):
     a = torch.ones(1, 1, M, K, dtype=torch.bfloat16)
     b = torch.ones(1, 1, K, N, dtype=torch.bfloat16)
     config = qsr.MatmulUnifiedProgramConfig(
-        cores=_rect(0, 0, min(gx, 2) - 1, 0), per_core_M=4, per_core_N=2, K_step_tiles=3
+        cores=_rect(0, 0, min(gx, 2) - 1, 0), per_core_M=4, per_core_N=2, K_iteration_tiles=3
     )
     out = _run(device, a, b, config)
     assert torch.equal(out.to(torch.float32), torch.full((1, 1, M, N), float(K)))
@@ -339,23 +339,23 @@ def test_bfp8_inputs(device):
 
 
 def test_fp32_dest_acc_and_fp32_out(device):
-    """fp32 accumulation caps the subblock at 4 tiles (auto picks one); fp32 output means partials and C differ in format."""
+    """fp32 accumulation caps DST at 4 tiles (auto picks a group that fits); fp32 output means partials and C differ in format."""
     gx, gy = _grid(device)
     M, K, N = 4 * TILE, 8 * TILE, 4 * TILE
     torch.manual_seed(10)
     a, b = _randn(1, 1, M, K), _randn(1, 1, K, N)
-    config = qsr.MatmulUnifiedProgramConfig(cores=_rect(0, 0, 1, 0), per_core_M=4, per_core_N=2, K_step_tiles=2)
+    config = qsr.MatmulUnifiedProgramConfig(cores=_rect(0, 0, 1, 0), per_core_M=4, per_core_N=2, K_iteration_tiles=2)
     out = _run(device, a, b, config, out_dtype=ttnn.float32, fp32_dest_acc_en=True)
     _check(out, _golden(a, b), rtol=0.005)
 
 
 def test_packer_l1_acc(device):
-    """packer_l1_acc engages when there are more than 2 K steps (K_step_tiles=1 on K_tiles=6 gives 6)."""
+    """packer_l1_acc engages when there are more than 2 K steps (K_iteration_tiles=1 on K_tiles=6 gives 6)."""
     gx, gy = _grid(device)
     M, K, N = 4 * TILE, 6 * TILE, 4 * TILE
     torch.manual_seed(11)
     a, b = _randn(1, 1, M, K), _randn(1, 1, K, N)
-    config = qsr.MatmulUnifiedProgramConfig(cores=_rect(0, 0, 1, 1), per_core_M=2, per_core_N=2, K_step_tiles=1)
+    config = qsr.MatmulUnifiedProgramConfig(cores=_rect(0, 0, 1, 1), per_core_M=2, per_core_N=2, K_iteration_tiles=1)
     out = _run(device, a, b, config, packer_l1_acc=True)
     _check(out, _golden(a, b))
 
@@ -389,20 +389,22 @@ def test_bias_is_applied_as_separate_add(device):
             "exceed the device compute grid",
         ),
         (
-            lambda: qsr.MatmulUnifiedProgramConfig(cores=_rect(0, 0, 0, 0), per_core_M=2, per_core_N=2, K_step_tiles=3),
+            lambda: qsr.MatmulUnifiedProgramConfig(
+                cores=_rect(0, 0, 0, 0), per_core_M=2, per_core_N=2, K_iteration_tiles=3
+            ),
             None,
             "must divide K_tiles",
         ),
         (
             lambda: qsr.MatmulUnifiedProgramConfig(
-                cores=_rect(0, 0, 0, 0), per_core_M=2, per_core_N=2, subblock_M_tiles=2, subblock_N_tiles=0
+                cores=_rect(0, 0, 0, 0), per_core_M=2, per_core_N=2, dst_M_tiles=2, dst_N_tiles=0
             ),
             None,
             "both be set",
         ),
         (
             lambda: qsr.MatmulUnifiedProgramConfig(
-                cores=_rect(0, 0, 0, 0), per_core_M=4, per_core_N=4, subblock_M_tiles=4, subblock_N_tiles=4
+                cores=_rect(0, 0, 0, 0), per_core_M=4, per_core_N=4, dst_M_tiles=4, dst_N_tiles=4
             ),
             None,
             "DST fits",
@@ -419,14 +421,14 @@ def test_bias_is_applied_as_separate_add(device):
                 ttnn.BufferType.L1,
                 _shard(_rect(0, 0, 0, 0), [2 * TILE, 4 * TILE]),
             ),
-            "exactly one C block per core",
+            "exactly one C subblock per core",
         ),
     ],
     ids=[
         "cores_off_grid",
         "K_step_not_divisor",
-        "half_auto_subblock",
-        "subblock_too_big",
+        "half_auto_dst_tiles",
+        "dst_tiles_too_big",
         "zero_block",
         "sharded_multi_block",
     ],

@@ -4,8 +4,8 @@
 
 // Unified (placement-first) matmul factory: stage A of the Quasar-native matmul (GH#41910).
 //
-// One Metal 2.0 program for every placement. The config names the cores and the C block per core; this
-// file turns that into a work-item assignment, four DFB rings (A panel, B panel, C block, C partials),
+// One Metal 2.0 program for every placement. The config names the cores and the C subblock per core; this
+// file turns that into a work-item assignment, four DFB rings (A slice, B slice, C subblock, C partials),
 // one reader, one compute kernel and one writer. Nothing here depends on how the operands are laid out in
 // memory: the kernels address tiles by tile index through the tensor accessor.
 
@@ -36,10 +36,10 @@ namespace ttnn::prim::qsr {
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 
-// Names the kernels see: dfb::A_panel / B_panel / C_block / C_partials and tensor::A / B / C.
-const DFBSpecName A_PANEL_DFB{"A_panel"};
-const DFBSpecName B_PANEL_DFB{"B_panel"};
-const DFBSpecName C_BLOCK_DFB{"C_block"};
+// Names the kernels see: dfb::A_slice / B_slice / C_subblock / C_partials and tensor::A / B / C.
+const DFBSpecName A_SLICE_DFB{"A_slice"};
+const DFBSpecName B_SLICE_DFB{"B_slice"};
+const DFBSpecName C_SUBBLOCK_DFB{"C_subblock"};
 const DFBSpecName C_PARTIALS_DFB{"C_partials"};
 
 const TensorParamName A_TENSOR{"A"};
@@ -56,7 +56,7 @@ constexpr const char* KERNEL_DIR = "ttnn/cpp/ttnn/operations/experimental/quasar
 // validate_ring_extent in dataflow_buffer.cpp). Enforced on every arch so a config that is legal on
 // Wormhole never becomes a program-creation FATAL on Quasar.
 constexpr uint64_t MAX_DFB_RING_BYTES = 65535ull * 16ull;
-constexpr uint32_t MAX_AUTO_K_STEP_TILES = 8;
+constexpr uint32_t MAX_AUTO_K_ITERATION_TILES = 8;
 
 uint64_t l1_budget_bytes(tt::tt_metal::IDevice* device) {
     const uint32_t l1_base = device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
@@ -67,14 +67,14 @@ uint64_t l1_budget_bytes(tt::tt_metal::IDevice* device) {
     return l1_ceiling - l1_base;
 }
 
-// Fills the ring sizing of `plan` for a given K step. Returns the total footprint in bytes.
-uint64_t size_rings(UnifiedMatmulPlan& plan, uint32_t K_step_tiles, bool fp32_dest_acc_en, bool packer_l1_acc) {
-    plan.K_step_tiles = K_step_tiles;
-    plan.num_K_steps = plan.K_tiles / K_step_tiles;
+// Fills the ring sizing of `plan` for a given K iteration. Returns the total footprint in bytes.
+uint64_t size_rings(UnifiedMatmulPlan& plan, uint32_t K_iteration_tiles, bool fp32_dest_acc_en, bool packer_l1_acc) {
+    plan.K_iteration_tiles = K_iteration_tiles;
+    plan.num_K_iterations = plan.K_tiles / K_iteration_tiles;
 
-    // The packer accumulates partials in L1 only when there are enough K steps for the reconfig overhead
+    // The packer accumulates partials in L1 only when there are enough K iterations for the reconfig overhead
     // to pay off (the last step spills and reloads either way, so more than two).
-    plan.packer_l1_acc_en = packer_l1_acc && plan.num_K_steps > 2;
+    plan.packer_l1_acc_en = packer_l1_acc && plan.num_K_iterations > 2;
     plan.C_partials_format = plan.packer_l1_acc_en
                                  ? (fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b)
                                  : (fp32_dest_acc_en ? tt::DataFormat::Float32 : plan.C_format);
@@ -87,38 +87,38 @@ uint64_t size_rings(UnifiedMatmulPlan& plan, uint32_t K_step_tiles, bool fp32_de
     plan.C_slot_bytes = tt::tile_size(plan.C_format);
     plan.C_partials_slot_bytes = tt::tile_size(plan.C_partials_format);
 
-    const uint32_t A_panel_tiles = plan.per_core_M * K_step_tiles;
-    const uint32_t B_panel_tiles = K_step_tiles * plan.per_core_N;
-    const uint32_t C_block_tiles = plan.per_core_M * plan.per_core_N;
-    // Double-buffer the panels whenever more than one panel passes through the ring.
-    const bool more_than_one_panel = (uint64_t)plan.max_work_items_per_core * plan.num_K_steps > 1;
-    const uint32_t panel_ring_depth = more_than_one_panel ? 2 : 1;
-    plan.A_panel_ring_slots = A_panel_tiles * panel_ring_depth;
-    plan.B_panel_ring_slots = B_panel_tiles * panel_ring_depth;
-    plan.C_block_ring_slots = C_block_tiles;
-    plan.C_partials_ring_slots = C_block_tiles;
+    const uint32_t A_slice_tiles = plan.per_core_M * K_iteration_tiles;
+    const uint32_t B_slice_tiles = K_iteration_tiles * plan.per_core_N;
+    const uint32_t C_subblock_tiles = plan.per_core_M * plan.per_core_N;
+    // Double-buffer the slices whenever more than one slice passes through the ring.
+    const bool more_than_one_slice = (uint64_t)plan.max_work_items_per_core * plan.num_K_iterations > 1;
+    const uint32_t slice_ring_depth = more_than_one_slice ? 2 : 1;
+    plan.A_slice_ring_slots = A_slice_tiles * slice_ring_depth;
+    plan.B_slice_ring_slots = B_slice_tiles * slice_ring_depth;
+    plan.C_subblock_ring_slots = C_subblock_tiles;
+    plan.C_partials_ring_slots = C_subblock_tiles;
 
-    // Aliasing C_partials onto C_block with more than one work item per core is a race: the writer may
-    // still be draining item i from C_block while the compute packs item i+1's first partials into the
-    // same bytes. Alias only when the partials can never be live while C_block holds unread data: a
-    // single work item per core, or no partials at all (one K step).
-    const bool partials_ever_written = plan.num_K_steps > 1;
+    // Aliasing C_partials onto C_subblock with more than one work item per core is a race: the writer may
+    // still be draining item i from C_subblock while the compute packs item i+1's first partials into the
+    // same bytes. Alias only when the partials can never be live while C_subblock holds unread data: a
+    // single work item per core, or no partials at all (one K iteration).
+    const bool partials_ever_written = plan.num_K_iterations > 1;
     const bool one_work_item_per_core = plan.max_work_items_per_core == 1;
-    plan.alias_C_partials_onto_C_block =
+    plan.alias_C_partials_onto_C_subblock =
         (plan.C_partials_format == plan.C_format) && (!partials_ever_written || one_work_item_per_core);
 
     plan.l1_bytes =
-        (uint64_t)plan.A_panel_ring_slots * plan.A_slot_bytes + (uint64_t)plan.B_panel_ring_slots * plan.B_slot_bytes +
-        (uint64_t)plan.C_block_ring_slots * plan.C_slot_bytes +
-        (plan.alias_C_partials_onto_C_block ? 0 : (uint64_t)plan.C_partials_ring_slots * plan.C_partials_slot_bytes);
+        (uint64_t)plan.A_slice_ring_slots * plan.A_slot_bytes + (uint64_t)plan.B_slice_ring_slots * plan.B_slot_bytes +
+        (uint64_t)plan.C_subblock_ring_slots * plan.C_slot_bytes +
+        (plan.alias_C_partials_onto_C_subblock ? 0 : (uint64_t)plan.C_partials_ring_slots * plan.C_partials_slot_bytes);
     return plan.l1_bytes;
 }
 
 bool rings_fit(const UnifiedMatmulPlan& plan, uint64_t l1_budget) {
     const uint64_t rings[] = {
-        (uint64_t)plan.A_panel_ring_slots * plan.A_slot_bytes,
-        (uint64_t)plan.B_panel_ring_slots * plan.B_slot_bytes,
-        (uint64_t)plan.C_block_ring_slots * plan.C_slot_bytes,
+        (uint64_t)plan.A_slice_ring_slots * plan.A_slot_bytes,
+        (uint64_t)plan.B_slice_ring_slots * plan.B_slot_bytes,
+        (uint64_t)plan.C_subblock_ring_slots * plan.C_slot_bytes,
         (uint64_t)plan.C_partials_ring_slots * plan.C_partials_slot_bytes};
     for (uint64_t ring_bytes : rings) {
         if (ring_bytes > MAX_DFB_RING_BYTES) {
@@ -132,10 +132,10 @@ bool rings_fit(const UnifiedMatmulPlan& plan, uint64_t l1_budget) {
 }  // namespace
 
 tt::tt_metal::TensorMemoryLayout UnifiedMatmulPlan::sharded_output_layout() const {
-    if (num_C_block_columns == 1) {
+    if (C_subblock_grid_columns == 1) {
         return tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED;
     }
-    if (num_C_block_rows == 1) {
+    if (C_subblock_grid_rows == 1) {
         return tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED;
     }
     return tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED;
@@ -188,14 +188,14 @@ UnifiedMatmulPlan plan_unified_matmul(
         get_batch_size(B_shape),
         plan.batch_size);
 
-    // ---- C block grid and work-item assignment ----
+    // ---- C subblock grid and work-item assignment ----
     TT_FATAL(config.per_core_M > 0 && config.per_core_N > 0, "per_core_M and per_core_N must be > 0");
     plan.per_core_M = config.per_core_M;
     plan.per_core_N = config.per_core_N;
-    plan.num_C_block_rows = tt::div_up(plan.M_tiles, plan.per_core_M);
-    plan.num_C_block_columns = tt::div_up(plan.N_tiles, plan.per_core_N);
-    plan.num_C_blocks = plan.num_C_block_rows * plan.num_C_block_columns;
-    plan.num_work_items = plan.batch_size * plan.num_C_blocks;
+    plan.C_subblock_grid_rows = tt::div_up(plan.M_tiles, plan.per_core_M);
+    plan.C_subblock_grid_columns = tt::div_up(plan.N_tiles, plan.per_core_N);
+    plan.C_subblocks_per_batch = plan.C_subblock_grid_rows * plan.C_subblock_grid_columns;
+    plan.num_work_items = plan.batch_size * plan.C_subblocks_per_batch;
 
     TT_FATAL(config.cores.num_cores() > 0, "MatmulUnifiedProgramConfig.cores is empty");
     const CoreCoord grid = A.device()->compute_with_storage_grid_size();
@@ -221,63 +221,64 @@ UnifiedMatmulPlan plan_unified_matmul(
     }
     plan.max_work_items_per_core = plan.work_items_per_core.front();
 
-    // ---- DST subblock ----
+    // ---- C tiles accumulated in DST at once ----
     const bool fp32_dest_acc_en = get_fp32_dest_acc_en(attributes.compute_kernel_config);
     const bool packer_l1_acc =
         std::get<3>(get_compute_kernel_config_args(A.device()->arch(), attributes.compute_kernel_config.value()));
-    if (config.subblock_M_tiles == 0 && config.subblock_N_tiles == 0) {
-        // The chooser's (h, w) is (M tiles, N tiles) of the subblock.
-        const std::tuple<uint32_t, uint32_t> subblock =
+    if (config.dst_M_tiles == 0 && config.dst_N_tiles == 0) {
+        // The chooser's (h, w) is (M tiles, N tiles) of the DST group.
+        const std::tuple<uint32_t, uint32_t> dst_tiles =
             operations::experimental::quasar::matmul::bmm_op_utils_qsr::get_matmul_subblock_params(
                 plan.per_core_M, plan.per_core_N, false, false, fp32_dest_acc_en);
-        plan.subblock_M_tiles = std::get<0>(subblock);
-        plan.subblock_N_tiles = std::get<1>(subblock);
+        plan.dst_M_tiles = std::get<0>(dst_tiles);
+        plan.dst_N_tiles = std::get<1>(dst_tiles);
     } else {
         TT_FATAL(
-            config.subblock_M_tiles > 0 && config.subblock_N_tiles > 0,
-            "subblock_M_tiles and subblock_N_tiles must both be set or both be 0 (auto)");
-        plan.subblock_M_tiles = config.subblock_M_tiles;
-        plan.subblock_N_tiles = config.subblock_N_tiles;
+            config.dst_M_tiles > 0 && config.dst_N_tiles > 0,
+            "dst_M_tiles and dst_N_tiles must both be set or both be 0 (auto)");
+        plan.dst_M_tiles = config.dst_M_tiles;
+        plan.dst_N_tiles = config.dst_N_tiles;
     }
     TT_FATAL(
-        plan.per_core_M % plan.subblock_M_tiles == 0 && plan.per_core_N % plan.subblock_N_tiles == 0,
-        "subblock {}x{} must divide the per-core C block {}x{}",
-        plan.subblock_M_tiles,
-        plan.subblock_N_tiles,
+        plan.per_core_M % plan.dst_M_tiles == 0 && plan.per_core_N % plan.dst_N_tiles == 0,
+        "DST group {}x{} tiles must divide the per-core C subblock {}x{}",
+        plan.dst_M_tiles,
+        plan.dst_N_tiles,
         plan.per_core_M,
         plan.per_core_N);
     const uint32_t dst_capacity_tiles = fp32_dest_acc_en ? 4 : 8;
     TT_FATAL(
-        plan.subblock_M_tiles * plan.subblock_N_tiles <= dst_capacity_tiles,
-        "subblock {}x{} holds {} tiles; DST fits {} (fp32 accumulation: {})",
-        plan.subblock_M_tiles,
-        plan.subblock_N_tiles,
-        plan.subblock_M_tiles * plan.subblock_N_tiles,
+        plan.dst_M_tiles * plan.dst_N_tiles <= dst_capacity_tiles,
+        "DST group {}x{} holds {} tiles; DST fits {} (fp32 accumulation: {})",
+        plan.dst_M_tiles,
+        plan.dst_N_tiles,
+        plan.dst_M_tiles * plan.dst_N_tiles,
         dst_capacity_tiles,
         fp32_dest_acc_en);
 
-    // ---- Formats, K step and ring sizing ----
+    // ---- Formats, K iteration and ring sizing ----
     plan.A_format = tt::tt_metal::datatype_to_dataformat_converter(A.dtype());
     plan.B_format = tt::tt_metal::datatype_to_dataformat_converter(B.dtype());
     plan.C_format = tt::tt_metal::datatype_to_dataformat_converter(attributes.output_dtype.value());
     const uint64_t l1_budget = l1_budget_bytes(A.device());
-    if (config.K_step_tiles == 0) {
+    if (config.K_iteration_tiles == 0) {
         // Largest divisor of K_tiles (capped) whose rings fit; 1 is the floor and must fit.
         uint32_t chosen = 0;
-        for (uint32_t K_step_tiles = std::min<uint32_t>(plan.K_tiles, MAX_AUTO_K_STEP_TILES); K_step_tiles >= 1;
-             --K_step_tiles) {
-            if (plan.K_tiles % K_step_tiles != 0) {
+        for (uint32_t K_iteration_tiles = std::min<uint32_t>(plan.K_tiles, MAX_AUTO_K_ITERATION_TILES);
+             K_iteration_tiles >= 1;
+             --K_iteration_tiles) {
+            if (plan.K_tiles % K_iteration_tiles != 0) {
                 continue;
             }
-            size_rings(plan, K_step_tiles, fp32_dest_acc_en, packer_l1_acc);
+            size_rings(plan, K_iteration_tiles, fp32_dest_acc_en, packer_l1_acc);
             if (rings_fit(plan, l1_budget)) {
-                chosen = K_step_tiles;
+                chosen = K_iteration_tiles;
                 break;
             }
         }
         TT_FATAL(
             chosen > 0,
-            "MatmulUnifiedProgramConfig: a {}x{}-tile C block does not fit L1 even with K_step_tiles=1 "
+            "MatmulUnifiedProgramConfig: a {}x{}-tile C subblock does not fit L1 even with K_iteration_tiles=1 "
             "(needs {} B, budget {} B, max ring {} B); shrink per_core_M / per_core_N",
             plan.per_core_M,
             plan.per_core_N,
@@ -286,33 +287,33 @@ UnifiedMatmulPlan plan_unified_matmul(
             MAX_DFB_RING_BYTES);
     } else {
         TT_FATAL(
-            plan.K_tiles % config.K_step_tiles == 0,
-            "K_step_tiles ({}) must divide K_tiles ({})",
-            config.K_step_tiles,
+            plan.K_tiles % config.K_iteration_tiles == 0,
+            "K_iteration_tiles ({}) must divide K_tiles ({})",
+            config.K_iteration_tiles,
             plan.K_tiles);
-        size_rings(plan, config.K_step_tiles, fp32_dest_acc_en, packer_l1_acc);
+        size_rings(plan, config.K_iteration_tiles, fp32_dest_acc_en, packer_l1_acc);
         TT_FATAL(
             rings_fit(plan, l1_budget),
-            "MatmulUnifiedProgramConfig: rings for a {}x{}-tile C block with K_step_tiles={} do not fit "
-            "(needs {} B, budget {} B, max ring {} B: A panel {} B, B panel {} B, C block {} B, C partials {} B)",
+            "MatmulUnifiedProgramConfig: rings for a {}x{}-tile C subblock with K_iteration_tiles={} do not fit "
+            "(needs {} B, budget {} B, max ring {} B: A slice {} B, B slice {} B, C subblock {} B, C partials {} B)",
             plan.per_core_M,
             plan.per_core_N,
-            plan.K_step_tiles,
+            plan.K_iteration_tiles,
             plan.l1_bytes,
             l1_budget,
             MAX_DFB_RING_BYTES,
-            (uint64_t)plan.A_panel_ring_slots * plan.A_slot_bytes,
-            (uint64_t)plan.B_panel_ring_slots * plan.B_slot_bytes,
-            (uint64_t)plan.C_block_ring_slots * plan.C_slot_bytes,
+            (uint64_t)plan.A_slice_ring_slots * plan.A_slot_bytes,
+            (uint64_t)plan.B_slice_ring_slots * plan.B_slot_bytes,
+            (uint64_t)plan.C_subblock_ring_slots * plan.C_slot_bytes,
             (uint64_t)plan.C_partials_ring_slots * plan.C_partials_slot_bytes);
     }
 
-    // ---- Sharded output: one C block per core, batch 1, and a grid the accessor maps the same way ----
+    // ---- Sharded output: one C subblock per core, batch 1, and a grid the accessor maps the same way ----
     if (attributes.output_mem_config.is_sharded()) {
-        TT_FATAL(plan.batch_size == 1, "Sharded output needs batch 1 (a core's C blocks would not form one shard)");
+        TT_FATAL(plan.batch_size == 1, "Sharded output needs batch 1 (a core's C subblocks would not form one shard)");
         TT_FATAL(
             plan.num_work_items == plan.cores.size(),
-            "Sharded output needs exactly one C block per core ({} C blocks, {} active cores)",
+            "Sharded output needs exactly one C subblock per core ({} C subblocks, {} active cores)",
             plan.num_work_items,
             plan.cores.size());
         if (plan.sharded_output_layout() == tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED) {
@@ -321,11 +322,11 @@ UnifiedMatmulPlan plan_unified_matmul(
             const uint32_t rectangle_columns = one_rectangle ? ranges[0].grid_size().x : 0;
             const uint32_t rectangle_rows = one_rectangle ? ranges[0].grid_size().y : 0;
             TT_FATAL(
-                one_rectangle && rectangle_columns == plan.num_C_block_columns &&
-                    rectangle_rows == plan.num_C_block_rows,
-                "Block-sharded output needs cores to be one {}x{} rectangle (the C block grid), got {}",
-                plan.num_C_block_columns,
-                plan.num_C_block_rows,
+                one_rectangle && rectangle_columns == plan.C_subblock_grid_columns &&
+                    rectangle_rows == plan.C_subblock_grid_rows,
+                "Block-sharded output needs cores to be one {}x{} rectangle (the C subblock grid), got {}",
+                plan.C_subblock_grid_columns,
+                plan.C_subblock_grid_rows,
                 config.cores.str());
         }
     }
@@ -370,25 +371,25 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
     const tt::tt_metal::Tile C_tile = C.tensor_spec().tile();
     Group<DataflowBufferSpec> dataflow_buffers = {
         DataflowBufferSpec{
-            .unique_id = A_PANEL_DFB,
+            .unique_id = A_SLICE_DFB,
             .entry_size = plan.A_slot_bytes,
-            .num_entries = plan.A_panel_ring_slots,
+            .num_entries = plan.A_slice_ring_slots,
             .data_format_metadata = plan.A_format,
             .tile_format_metadata = A.tensor_spec().tile(),
         },
         DataflowBufferSpec{
-            .unique_id = B_PANEL_DFB,
+            .unique_id = B_SLICE_DFB,
             .entry_size = plan.B_slot_bytes,
-            .num_entries = plan.B_panel_ring_slots,
+            .num_entries = plan.B_slice_ring_slots,
             .data_format_metadata = plan.B_format,
             .tile_format_metadata = B.tensor_spec().tile(),
         },
     };
     {
-        DataflowBufferSpec C_block_dfb{
-            .unique_id = C_BLOCK_DFB,
+        DataflowBufferSpec C_subblock_dfb{
+            .unique_id = C_SUBBLOCK_DFB,
             .entry_size = plan.C_slot_bytes,
-            .num_entries = plan.C_block_ring_slots,
+            .num_entries = plan.C_subblock_ring_slots,
             .data_format_metadata = plan.C_format,
             .tile_format_metadata = C_tile,
         };
@@ -399,11 +400,11 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
             .data_format_metadata = plan.C_partials_format,
             .tile_format_metadata = C_tile,
         };
-        if (plan.alias_C_partials_onto_C_block) {
-            C_block_dfb.advanced_options.alias_with = {C_PARTIALS_DFB};
-            C_partials_dfb.advanced_options.alias_with = {C_BLOCK_DFB};
+        if (plan.alias_C_partials_onto_C_subblock) {
+            C_subblock_dfb.advanced_options.alias_with = {C_PARTIALS_DFB};
+            C_partials_dfb.advanced_options.alias_with = {C_SUBBLOCK_DFB};
         }
-        dataflow_buffers.push_back(std::move(C_block_dfb));
+        dataflow_buffers.push_back(std::move(C_subblock_dfb));
         dataflow_buffers.push_back(std::move(C_partials_dfb));
     }
 
@@ -413,7 +414,7 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
         .unique_id = READER_KERNEL,
         .source = std::filesystem::path(std::string(KERNEL_DIR) + "dataflow/unified_matmul_reader.cpp"),
         .compiler_options = {},
-        .dfb_bindings = {ProducerOf(A_PANEL_DFB, "A_panel"), ProducerOf(B_PANEL_DFB, "B_panel")},
+        .dfb_bindings = {ProducerOf(A_SLICE_DFB, "A_slice"), ProducerOf(B_SLICE_DFB, "B_slice")},
         .tensor_bindings =
             {
                 TensorBinding{.tensor_parameter_name = A_TENSOR, .accessor_name = "A"},
@@ -424,13 +425,13 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
                 {"M_tiles", plan.M_tiles},
                 {"K_tiles", plan.K_tiles},
                 {"N_tiles", plan.N_tiles},
-                {"num_C_blocks", plan.num_C_blocks},
-                {"num_C_block_columns", plan.num_C_block_columns},
+                {"C_subblocks_per_batch", plan.C_subblocks_per_batch},
+                {"C_subblock_grid_columns", plan.C_subblock_grid_columns},
                 {"broadcast_B_over_batch", plan.broadcast_B_over_batch ? 1u : 0u},
                 {"per_core_M", plan.per_core_M},
                 {"per_core_N", plan.per_core_N},
-                {"K_step_tiles", plan.K_step_tiles},
-                {"num_K_steps", plan.num_K_steps},
+                {"K_iteration_tiles", plan.K_iteration_tiles},
+                {"num_K_iterations", plan.num_K_iterations},
                 {"A_last_K_tile_valid_columns", A_last_K_tile_valid_columns},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"first_work_item", "num_work_items"}},
@@ -443,18 +444,18 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
         .unique_id = WRITER_KERNEL,
         .source = std::filesystem::path(std::string(KERNEL_DIR) + "dataflow/unified_matmul_writer.cpp"),
         .compiler_options = {},
-        .dfb_bindings = {ConsumerOf(C_BLOCK_DFB, "C_block")},
+        .dfb_bindings = {ConsumerOf(C_SUBBLOCK_DFB, "C_subblock")},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = C_TENSOR, .accessor_name = "C"}},
         .compile_time_args =
             {
                 {"M_tiles", plan.M_tiles},
                 {"N_tiles", plan.N_tiles},
-                {"num_C_blocks", plan.num_C_blocks},
-                {"num_C_block_columns", plan.num_C_block_columns},
+                {"C_subblocks_per_batch", plan.C_subblocks_per_batch},
+                {"C_subblock_grid_columns", plan.C_subblock_grid_columns},
                 {"per_core_M", plan.per_core_M},
                 {"per_core_N", plan.per_core_N},
-                {"subblock_M_tiles", plan.subblock_M_tiles},
-                {"subblock_N_tiles", plan.subblock_N_tiles},
+                {"dst_M_tiles", plan.dst_M_tiles},
+                {"dst_N_tiles", plan.dst_N_tiles},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"first_work_item", "num_work_items"}},
         .hw_config =
@@ -493,10 +494,10 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
             modes.emplace(C_PARTIALS_DFB, tt::tt_metal::UnpackMode::UnpackToDest);
         }
         if (is_32bit(plan.A_format)) {
-            modes.emplace(A_PANEL_DFB, tt::tt_metal::UnpackMode::UnpackToSrc);
+            modes.emplace(A_SLICE_DFB, tt::tt_metal::UnpackMode::UnpackToSrc);
         }
         if (is_32bit(plan.B_format)) {
-            modes.emplace(B_PANEL_DFB, tt::tt_metal::UnpackMode::UnpackToSrc);
+            modes.emplace(B_SLICE_DFB, tt::tt_metal::UnpackMode::UnpackToSrc);
         }
     }
 
@@ -506,20 +507,20 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
         .compiler_options = {.defines = compute_defines},
         .dfb_bindings =
             {
-                ConsumerOf(A_PANEL_DFB, "A_panel"),
-                ConsumerOf(B_PANEL_DFB, "B_panel"),
-                ProducerOf(C_BLOCK_DFB, "C_block"),
+                ConsumerOf(A_SLICE_DFB, "A_slice"),
+                ConsumerOf(B_SLICE_DFB, "B_slice"),
+                ProducerOf(C_SUBBLOCK_DFB, "C_subblock"),
                 ProducerOf(C_PARTIALS_DFB, "C_partials"),
                 ConsumerOf(C_PARTIALS_DFB, "C_partials"),
             },
         .compile_time_args =
             {
-                {"K_step_tiles", plan.K_step_tiles},
-                {"num_K_steps", plan.num_K_steps},
+                {"K_iteration_tiles", plan.K_iteration_tiles},
+                {"num_K_iterations", plan.num_K_iterations},
                 {"per_core_M", plan.per_core_M},
                 {"per_core_N", plan.per_core_N},
-                {"subblock_M_tiles", plan.subblock_M_tiles},
-                {"subblock_N_tiles", plan.subblock_N_tiles},
+                {"dst_M_tiles", plan.dst_M_tiles},
+                {"dst_N_tiles", plan.dst_N_tiles},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"num_work_items"}},
         .hw_config = compute_hw_config,
