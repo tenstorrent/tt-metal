@@ -41,6 +41,12 @@ void bind_qkv_causal_conv1d_silu(nb::module_& mod) {
             v_width (int): Output V width.
 
         Keyword Args:
+            actual_start (ttnn.Tensor, optional): Replicated UINT32 row-major scalar
+                containing the absolute position of the chunk's first token. Its
+                value must be nonnegative and 32-aligned. Keep its address stable
+                and update its contents before replay of a captured trace.
+            sequence_parallel_axis (int, optional): Mesh axis partitioning the
+                sequence. Native mesh coordinates supply each device's rank.
             program_config (QkvCausalConv1dSiluProgramConfig): Required program tuning;
                 ``channel_chunk_size`` is expressed in logical channels.
             wrap_row (int, optional): Tile-aligned row strictly inside T, or
@@ -79,7 +85,8 @@ void bind_qkv_causal_conv1d_silu(nb::module_& mod) {
         nb::arg("wrap_indicator") = nb::none(),
         nb::arg("memory_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
-        nb::arg("chronology") = nb::none(),
+        nb::arg("actual_start") = nb::none(),
+        nb::arg("sequence_parallel_axis") = 0,
         nb::arg("predecessor_carry") = nb::none());
 }
 }  // namespace ttnn::operations::experimental::kda::qkv_causal_conv1d_silu::detail

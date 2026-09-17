@@ -15,7 +15,7 @@ from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric_1d_device_
 from models.demos.deepseek_v3_d_p.tests.kda.chronology_oracle import _chronological_topology
 from models.demos.deepseek_v3_d_p.tests.kda.utils import make_actual_start
 from models.demos.deepseek_v3_d_p.tt.kda.convolution import exchange_convolution_carry
-from models.demos.deepseek_v3_d_p.tt.kda.device_chronology import DeviceChronology, rank_tensor
+from models.demos.deepseek_v3_d_p.tt.kda.device_chronology import DeviceChronology
 
 pytestmark = [run_for_blackhole()]
 
@@ -110,9 +110,8 @@ def test_exchange_convolution_carry_preserves_causal_carries(
                 expected_final = qkv[:, end_row - 3 : end_row]
 
                 metadata = make_actual_start(mesh_device, boundary * local_rows + tail_rows)
-                ranks = rank_tensor(mesh_device, axis)
-                controls = ttnn.experimental.kda.chronological_topology(metadata, ranks, sp, local_rows, 1, 32, 32)
-                chronology = DeviceChronology(controls, sp)
+                controls = ttnn.experimental.kda.chronological_topology(metadata, axis, local_rows, 1, 32, 32)
+                chronology = DeviceChronology(controls)
 
                 def run() -> tuple[ttnn.Tensor, ttnn.Tensor]:
                     return exchange_convolution_carry(qkv_tt, sequence_parallel_axis=axis, chronology=chronology)
@@ -167,7 +166,7 @@ def test_exchange_convolution_carry_preserves_causal_carries(
                         ttnn.deallocate(qkv_tt)
                         ttnn.deallocate(initial_tt)
                         qkv_tt, initial_tt = old_qkv, old_initial
-                for tensor in (metadata, ranks, controls):
+                for tensor in (metadata, controls):
                     ttnn.deallocate(tensor)
         assert torch.equal(_sp_carries(qkv_tt, mesh_device, axis, tp_axis), qkv.reshape(sp, 1, local_rows, width))
         assert all(torch.equal(item, initial) for item in _sp_carries(initial_tt, mesh_device, axis, tp_axis))

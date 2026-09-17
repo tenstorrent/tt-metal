@@ -1,61 +1,90 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Device-derived chronology and fixed-shape selection records.
-
-All arithmetic lives in the native chronological_topology operation. Python only
-selects fixed record locations; it never reads the changing offset.
-"""
+"""Semantic selections using device-derived chronology; no host offset readback."""
 
 from dataclasses import dataclass
 
-import torch
-
 import ttnn
 
-
-def rank_tensor(device: ttnn.MeshDevice, axis: int) -> ttnn.Tensor:
-    dims = [None, None]
-    dims[axis] = 0
-    return ttnn.from_torch(
-        torch.arange(tuple(device.shape)[axis], dtype=torch.int32).reshape(-1, 1),
-        device=device,
-        dtype=ttnn.uint32,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        mesh_mapper=ttnn.ShardTensor2dMesh(device, dims=tuple(dims), mesh_shape=tuple(device.shape)),
-    )
+_layout = ttnn._ttnn.operations.experimental.kda._chronology_layout
 
 
 @dataclass(frozen=True)
 class DeviceChronology:
-    controls: ttnn.Tensor
-    sp_size: int
+    """Select convolution history, affine transforms, and recurrent states.
 
-    def indices(self, row: int, width: int) -> ttnn.Tensor:
+    The private UINT32 row-major device table has shape (7 + 2 * SP size, 8)
+    per device and contains selection instructions, not activations or states.
+    Each aligned record has eight words: history
+    records use three row indices, and recurrence selections use consecutive
+    start/end records with four coordinates each (exclusive end).
+
+    Records describe outgoing/predecessor/final history, local entry/final
+    recurrent state, then one affine-transform bounds pair per SP step.
+    Native ``chronological_topology`` produces the table; its shared layout
+    definitions are exposed privately through ``_chronology_layout``.
+    """
+
+    _selection_records: ttnn.Tensor
+
+    def select_outgoing_history(self, projected_qkv: ttnn.Tensor) -> ttnn.Tensor:
+        """Three local tokens preceding the next physical rank's segment."""
+        return self._select_rows(projected_qkv, _layout.OUTGOING_HISTORY)
+
+    def select_predecessor_history(self, gathered_history: ttnn.Tensor) -> ttnn.Tensor:
+        """The preceding physical rank's history from the gathered candidates."""
+        return self._select_rows(gathered_history, _layout.PREDECESSOR_HISTORY)
+
+    def select_final_history(self, candidates: ttnn.Tensor) -> ttnn.Tensor:
+        """History at the logical sequence end, replicated for the next call."""
+        return self._select_rows(candidates, _layout.FINAL_HISTORY)
+
+    def select_affine_transform(
+        self, gathered: ttnn.Tensor, step: int, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG
+    ) -> ttnn.Tensor:
+        """Physical device transform at the requested chronological step."""
+        return self._select_block(gathered, _layout.affine_transform(step), memory_config=memory_config)
+
+    def select_local_entry_state(
+        self, chronological_entries: ttnn.Tensor, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG
+    ) -> ttnn.Tensor:
+        """This device's initial recurrent state from chronological entry states."""
+        return self._select_block(chronological_entries, _layout.LOCAL_ENTRY_STATE, memory_config=memory_config)
+
+    def select_final_state(self, candidates: ttnn.Tensor) -> ttnn.Tensor:
+        """Replacement recurrent state from device finals followed by the prefix state."""
+        return self._select_block(candidates, _layout.FINAL_STATE)
+
+    def _indices(self, record_index: int, count: int) -> ttnn.Tensor:
         return ttnn.reshape(
-            ttnn.slice(self.controls, (row, 0), (row + 1, width), memory_config=ttnn.L1_MEMORY_CONFIG), (width,)
+            ttnn.slice(
+                self._selection_records,
+                (record_index, 0),
+                (record_index + 1, count),
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            ),
+            (count,),
         )
 
-    def select_block(
-        self,
-        tensor: ttnn.Tensor,
-        row: int,
-        parts: int,
-        *,
-        memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
+    def _select_block(
+        self, tensor: ttnn.Tensor, record_index: int, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG
     ) -> ttnn.Tensor:
         return ttnn.slice(
             tensor,
-            self.indices(row, 4),
-            self.indices(row + 1, 4),
+            self._indices(record_index, _layout.SLICE_RANK),
+            self._indices(record_index + 1, _layout.SLICE_RANK),
             slice_dim=0,
-            num_devices=parts,
+            num_devices=tensor.shape[0],
             memory_config=memory_config,
         )
 
-    def select_rows(self, tensor: ttnn.Tensor, row: int) -> ttnn.Tensor:
+    def _select_rows(self, tensor: ttnn.Tensor, record_index: int) -> ttnn.Tensor:
         width = tensor.shape[-1]
         table = ttnn.reshape(tensor, (-1, width))
         selected = ttnn.embedding(
-            self.indices(row, 3), table, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            self._indices(record_index, _layout.HISTORY_ROWS),
+            table,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        return ttnn.reshape(selected, (1, 3, width))
+        return ttnn.reshape(selected, (1, _layout.HISTORY_ROWS, width))

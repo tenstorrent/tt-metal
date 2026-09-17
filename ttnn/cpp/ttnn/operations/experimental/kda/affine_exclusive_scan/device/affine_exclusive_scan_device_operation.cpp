@@ -22,8 +22,12 @@ AffineExclusiveScanOperation::program_factory_t AffineExclusiveScanOperation::se
 void AffineExclusiveScanOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attrs, const tensor_args_t& in) {
     constexpr std::string_view operation_name = "affine_exclusive_scan";
-    if (in.chronology) {
-        kda_factory_detail::check_chronology(in.a, *in.chronology, operation_name);
+    if (in.actual_start) {
+        TT_FATAL(
+            attrs.local_rows > 0 && attrs.local_rows % 32 == 0 && (attrs.local_rows / 32) % attrs.groups_per_head == 0,
+            "{}: local_rows must contain a positive whole number of 32-token chunks per group",
+            operation_name);
+        kda_factory_detail::check_actual_start(in.a, *in.actual_start, operation_name);
     }
     constexpr std::array accepted_summary_dtypes = {tt::tt_metal::DataType::FLOAT32, tt::tt_metal::DataType::BFLOAT16};
     kda_factory_detail::check_allocated_device_tensor(in.a, operation_name, "a");
@@ -84,7 +88,7 @@ void AffineExclusiveScanOperation::validate_on_program_cache_miss(
         "affine_exclusive_scan: initial_state shape must be [batch_heads, K, V]");
     TT_FATAL(
         attrs.segmented == (in.tail_a.has_value() && in.tail_b.has_value() && in.tail_state.has_value() &&
-                            (in.wrap_indicator.has_value() || in.chronology.has_value())),
+                            (in.wrap_indicator.has_value() || in.actual_start.has_value())),
         "affine_exclusive_scan: segmented inputs must be provided together");
     if (attrs.segmented) {
         for (const auto& [tensor, name] :
@@ -113,7 +117,7 @@ void AffineExclusiveScanOperation::validate_on_program_cache_miss(
             "affine_exclusive_scan: wrap_indicator must contain at least one scalar");
         TT_FATAL(attrs.wrap_group < attrs.groups_per_head, "affine_exclusive_scan: wrap_group is out of range");
         TT_FATAL(
-            in.chronology.has_value() || attrs.wrap_group + static_cast<uint32_t>(attrs.split_in_group) > 0,
+            in.actual_start.has_value() || attrs.wrap_group + static_cast<uint32_t>(attrs.split_in_group) > 0,
             "affine_exclusive_scan: first tail group must follow at least one head group");
     }
 
@@ -176,7 +180,9 @@ Tensor affine_exclusive_scan(
     bool split_in_group,
     const tt::tt_metal::MemoryConfig& mem,
     const DeviceComputeKernelConfig& cfg,
-    const std::optional<Tensor>& chronology) {
+    const std::optional<Tensor>& actual_start,
+    uint32_t sequence_parallel_axis,
+    uint32_t local_rows) {
     // Cache-miss validation cannot protect attribute construction on cache hits. Keep these guards here because the
     // launcher divides by groups and indexes all three input shapes before dispatching validation.
     TT_FATAL(groups > 0, "affine_exclusive_scan: groups_per_head must be positive");
@@ -192,11 +198,11 @@ Tensor affine_exclusive_scan(
         tail_a.has_value() || tail_b.has_value() || tail_state.has_value() || wrap_indicator.has_value();
     TT_FATAL(
         !segmented || (tail_a.has_value() && tail_b.has_value() && tail_state.has_value() &&
-                       (wrap_indicator.has_value() || chronology.has_value())),
+                       (wrap_indicator.has_value() || actual_start.has_value())),
         "affine_exclusive_scan: tail_a, tail_b, tail_state, and wrap_indicator must be provided together");
     TT_FATAL(!segmented || wrap_group < groups, "affine_exclusive_scan: wrap_group must be less than groups_per_head");
     TT_FATAL(
-        !segmented || chronology.has_value() || wrap_group + static_cast<uint32_t>(split_in_group) > 0,
+        !segmented || actual_start.has_value() || wrap_group + static_cast<uint32_t>(split_in_group) > 0,
         "affine_exclusive_scan: the first tail group must follow at least one head group");
     auto outputs = ::ttnn::device_operation::launch<AffineExclusiveScanOperation>(
         AffineExclusiveScanParams{
@@ -207,6 +213,8 @@ Tensor affine_exclusive_scan(
             .wrap_group = wrap_group,
             .split_in_group = split_in_group,
             .segmented = segmented,
+            .sequence_parallel_axis = sequence_parallel_axis,
+            .local_rows = local_rows,
             .output_mem_config = mem,
             .compute_kernel_config = cfg},
         AffineExclusiveScanInputs{
@@ -217,7 +225,7 @@ Tensor affine_exclusive_scan(
             .tail_b = tail_b,
             .tail_state = tail_state,
             .wrap_indicator = wrap_indicator,
-            .chronology = chronology});
+            .actual_start = actual_start});
     return outputs[0];
 }
 }  // namespace ttnn::experimental::prim

@@ -21,10 +21,11 @@
 
 namespace ttnn::experimental::prim {
 
-ttnn::device_operation::ProgramArtifacts ReduceAffineTransformsProgramFactory::create_program_artifacts(
+ttnn::device_operation::MeshWorkloadArtifacts ReduceAffineTransformsProgramFactory::create_mesh_workload_artifacts(
     const ReduceAffineTransformsParams& attrs,
     const ReduceAffineTransformsInputs& in,
-    std::vector<ttnn::Tensor>& outputs) {
+    std::vector<ttnn::Tensor>& outputs,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords) {
     const auto& a = in.a.mesh_tensor();
     const auto& b = in.b.mesh_tensor();
     const auto& output_a = outputs[0].mesh_tensor();
@@ -246,11 +247,16 @@ ttnn::device_operation::ProgramArtifacts ReduceAffineTransformsProgramFactory::c
         {output_b_tensor_name, output_b},
     };
 
-    kda_factory_detail::bind_chronology(spec, run_args, in.chronology, in.a, false);
-    return ttnn::device_operation::ProgramArtifacts{
-        .spec = std::move(spec),
-        .run_params = std::move(run_args),
-    };
+    kda_factory_detail::bind_chronology(spec, run_args, in.actual_start, in.a, false);
+    return kda_factory_detail::chronology_workload(
+        ttnn::device_operation::ProgramArtifacts{
+            .spec = std::move(spec),
+            .run_params = std::move(run_args),
+        },
+        tensor_coords,
+        device,
+        attrs.sequence_parallel_axis,
+        attrs.local_rows);
 }
 
 }  // namespace ttnn::experimental::prim

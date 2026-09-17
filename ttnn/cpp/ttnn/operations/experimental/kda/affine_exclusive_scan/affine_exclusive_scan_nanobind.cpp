@@ -41,6 +41,15 @@ void bind_affine_exclusive_scan(nb::module_& mod) {
                 each batch-head. Must be positive and divide the leading dimension.
 
         Keyword Args:
+            actual_start (ttnn.Tensor, optional): Replicated UINT32 row-major scalar
+                containing the absolute position of the chunk's first token. Its
+                value must be nonnegative and 32-aligned. Keep its address stable
+                and update its contents before replay of a captured trace.
+            sequence_parallel_axis (int, optional): Mesh axis partitioning the
+                sequence. Native mesh coordinates supply each device's rank.
+            local_rows (int, optional): Token rows per SP device; required and
+                positive/32-aligned when actual_start is supplied. Summary tensor
+                shapes do not encode this sequence length.
             tail_a, tail_b (ttnn.Tensor, optional): Tail-segment affine summaries.
                 When supplied with ``tail_state`` and ``wrap_indicator``, the scan
                 switches to the tail chain at the local wrap without a second scan.
@@ -78,7 +87,9 @@ void bind_affine_exclusive_scan(nb::module_& mod) {
         nb::arg("split_in_group") = false,
         nb::arg("memory_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
-        nb::arg("chronology") = nb::none());
+        nb::arg("actual_start") = nb::none(),
+        nb::arg("sequence_parallel_axis") = 0,
+        nb::arg("local_rows") = 0);
 }
 
 }  // namespace ttnn::operations::experimental::kda::affine_exclusive_scan::detail

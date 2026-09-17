@@ -12,14 +12,14 @@ def exchange_convolution_carry(
     sequence_parallel_axis: int,
     chronology: DeviceChronology,
 ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-    outgoing = chronology.select_rows(projected_qkv, 1)
+    outgoing = chronology.select_outgoing_history(projected_qkv)
     gathered = ttnn.all_gather(
         outgoing, dim=1, cluster_axis=sequence_parallel_axis, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
-    predecessor = chronology.select_rows(gathered, 2)
+    predecessor = chronology.select_predecessor_history(gathered)
     batch, rows, width = projected_qkv.shape
-    physical_end = ttnn.slice(projected_qkv, (0, rows - 3, 0), (batch, rows, width))
+    physical_end = ttnn.slice(projected_qkv, (0, rows - outgoing.shape[1], 0), (batch, rows, width))
     finals = ttnn.all_broadcast(physical_end, cluster_axis=sequence_parallel_axis)
     candidates = ttnn.concat(finals, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    final_carry = chronology.select_rows(candidates, 3)
+    final_carry = chronology.select_final_history(candidates)
     return predecessor, final_carry

@@ -265,10 +265,24 @@ def test_layer_rejects_invalid_forward(case: str, device: ttnn.Device, expect_er
         )
 
 
-@pytest.mark.parametrize("actual_start", [-32, 16, 1000])
+@pytest.mark.parametrize("actual_start", [-32, 0, 16, 32, 1000])
 def test_layer_rejects_non_tensor_actual_start(device: ttnn.Device, actual_start: int, expect_error) -> None:
     config = make_small_kda_test_config()
     layer = ttKDA(device, config, random_weights(config))
     hidden = _hidden_to_device(torch.zeros(1, 32, config.hidden_size, dtype=torch.bfloat16), device)
     with expect_error(TypeError, "actual_start must be a device UINT32 scalar"):
         layer.forward(hidden, layer.allocate_state(), actual_start=actual_start)
+
+
+@pytest.mark.parametrize("shape,dtype", [((2,), ttnn.uint32), ((1,), ttnn.bfloat16)])
+def test_layer_rejects_invalid_actual_start_tensor(
+    device: ttnn.Device, shape: tuple[int, ...], dtype, expect_error
+) -> None:
+    config = make_small_kda_test_config()
+    layer = ttKDA(device, config, random_weights(config))
+    hidden = _hidden_to_device(torch.zeros(1, 32, config.hidden_size, dtype=torch.bfloat16), device)
+    actual_start = ttnn.from_torch(
+        torch.zeros(shape, dtype=torch.int64), device=device, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT
+    )
+    with expect_error(ValueError, "device actual_start must be a UINT32 row-major scalar"):
+        layer.forward(hidden, layer.allocate_state(), actual_start)

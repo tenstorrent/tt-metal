@@ -24,18 +24,16 @@ void QkvCausalConv1dSiluOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attrs, const tensor_args_t& in) {
     using namespace kda_factory_detail;
     constexpr std::string_view operation_name = "qkv_causal_conv1d_silu";
-    if (in.chronology) {
-        kda_factory_detail::check_chronology(in.input, *in.chronology, operation_name);
+    if (in.actual_start) {
+        kda_factory_detail::check_actual_start(in.input, *in.actual_start, operation_name);
     }
-    if (in.chronology.has_value()) {
-        kda_factory_detail::check_allocated_device_tensor(*in.chronology, operation_name, "chronology");
-        kda_factory_detail::check_dtype(*in.chronology, DataType::UINT32, operation_name, "chronology");
-        TT_FATAL(in.predecessor_carry.has_value(), "qkv convolution: chronology requires predecessor_carry");
+    if (in.actual_start.has_value()) {
+        TT_FATAL(in.predecessor_carry.has_value(), "qkv convolution: actual_start requires predecessor_carry");
         kda_factory_detail::check_allocated_device_tensor(*in.predecessor_carry, operation_name, "predecessor_carry");
         kda_factory_detail::check_same_device(in.input, *in.predecessor_carry, operation_name, "predecessor_carry");
         TT_FATAL(
             in.predecessor_carry->tensor_spec() == in.history.tensor_spec(), "qkv convolution: carries must match");
-        TT_FATAL(attrs.wrap_row == 0 && !in.wrap_indicator.has_value(), "qkv convolution: use chronology alone");
+        TT_FATAL(attrs.wrap_row == 0 && !in.wrap_indicator.has_value(), "qkv convolution: use actual_start alone");
     }
 
     check_allocated_device_tensor(in.input, operation_name, "input");
@@ -105,7 +103,7 @@ void QkvCausalConv1dSiluOperation::validate_on_program_cache_miss(
         "qkv_causal_conv1d_silu: input must be [1,T,Q+K+V]");
     // A wrap needs a second history plane: the tail fragment's tap window reaches
     // back to its own predecessor, not to the rows physically above it.
-    const uint32_t history_planes = in.chronology.has_value() || attrs.wrap_row == 0 ? 1 : 2;
+    const uint32_t history_planes = in.actual_start.has_value() || attrs.wrap_row == 0 ? 1 : 2;
     const uint32_t history_rows = history_planes * 3;
     TT_FATAL(
         history_shape.rank() == 3 && history_shape[0] == 1 && history_shape[1] == history_rows &&
@@ -194,7 +192,8 @@ std::vector<Tensor> qkv_causal_conv1d_silu(
     const std::optional<Tensor>& wrap_indicator,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const DeviceComputeKernelConfig& compute_kernel_config,
-    const std::optional<Tensor>& chronology,
+    const std::optional<Tensor>& actual_start,
+    uint32_t sequence_parallel_axis,
     const std::optional<Tensor>& predecessor_carry) {
     const auto& input_shape = input.logical_shape();
     TT_FATAL(input_shape.rank() == 3, "qkv_causal_conv1d_silu: input must be [1,T,Q+K+V]");
@@ -206,6 +205,7 @@ std::vector<Tensor> qkv_causal_conv1d_silu(
             .v_width = v_width,
             .channel_chunk_size = channel_chunk_size,
             .wrap_row = wrap_row,
+            .sequence_parallel_axis = sequence_parallel_axis,
             .output_mem_config = output_mem_config,
             .compute_kernel_config = compute_kernel_config},
         QkvCausalConv1dSiluInputs{
@@ -216,7 +216,7 @@ std::vector<Tensor> qkv_causal_conv1d_silu(
             .tap2 = tap2,
             .tap3 = tap3,
             .wrap_indicator = wrap_indicator,
-            .chronology = chronology,
+            .actual_start = actual_start,
             .predecessor_carry = predecessor_carry});
 }
 

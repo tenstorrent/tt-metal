@@ -37,6 +37,8 @@ Tensor affine_exclusive_scan(
     bool,
     const tt::tt_metal::MemoryConfig&,
     const DeviceComputeKernelConfig&,
-    const std::optional<Tensor>&);
+    const std::optional<Tensor>&,
+    uint32_t sequence_parallel_axis,
+    uint32_t local_rows);
 
 }  // namespace ttnn::experimental::prim

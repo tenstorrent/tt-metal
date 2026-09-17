@@ -113,7 +113,10 @@ template <
     uint32_t has_wrap_indicator,
     uint32_t emit_tail_summaries,
     uint32_t groups_per_head,
-    uint32_t dynamic_chronology>
+    uint32_t dynamic_chronology,
+    uint32_t sp_rank,
+    uint32_t sp_size,
+    uint32_t local_rows>
 TT_KERNEL void reader(uint32_t head, uint32_t value_block, uint32_t num_chunks, uint32_t reset_chunk) {
     const auto v_beta_accessor = TensorAccessor(tensor::v_beta);
     const auto kd_accessor = TensorAccessor(tensor::kd);
@@ -141,10 +144,12 @@ TT_KERNEL void reader(uint32_t head, uint32_t value_block, uint32_t num_chunks, 
     if constexpr (dynamic_chronology) {
         DataflowBuffer control(dfb::chronology_compute);
         control.reserve_back(1);
-        const auto metadata = TensorAccessor(tensor::chronology);
-        noc.async_read(metadata, control, 32, {.page_id = 0}, {});
+        const auto metadata = TensorAccessor(tensor::actual_start);
+        noc.async_read(metadata, control, sizeof(uint32_t), {.page_id = 0}, {});
         noc.async_read_barrier();
-        topology = kda_chronology::load(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(control.get_write_ptr()));
+        auto* words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(control.get_write_ptr());
+        topology = kda_chronology::derive(words[0], sp_rank, sp_size, local_rows);
+        kda_chronology::store(words, topology);
         control.push_back(1);
     }
     if constexpr (dynamic_chronology) {
@@ -152,18 +157,11 @@ TT_KERNEL void reader(uint32_t head, uint32_t value_block, uint32_t num_chunks, 
         DataflowBuffer writer_control(dfb::chronology_writer);
         writer_control.reserve_back(1);
         auto* words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(writer_control.get_write_ptr());
-        words[0] = topology.boundary;
-        words[1] = topology.head_rows;
-        words[2] = topology.local_split;
-        words[3] = topology.rank;
-        words[4] = topology.final_owner;
-        words[5] = topology.split;
-        words[6] = topology.local_rows;
-        words[7] = 0;
+        kda_chronology::store(words, topology);
         writer_control.push_back(1);
     }
-    // One mesh program serves every device. Resolve the candidate wrap against
-    // this device's scalar indicator. Compute follows the same chunk schedule on
+    // The explicit segmented path resolves its candidate wrap against this
+    // device's scalar indicator. Compute follows the same chunk schedule on
     // every device; only the source of the carry at reset_chunk differs.
     bool device_wrap = reset_chunk != 0;
     if constexpr (has_wrap_indicator && !dynamic_chronology) {

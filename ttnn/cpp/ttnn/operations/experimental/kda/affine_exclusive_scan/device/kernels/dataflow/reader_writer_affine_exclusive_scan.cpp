@@ -161,7 +161,10 @@ template <
     uint32_t G,
     uint32_t segmented,
     uint32_t reset_group,
-    uint32_t dynamic_chronology>
+    uint32_t dynamic_chronology,
+    uint32_t sp_rank,
+    uint32_t sp_size,
+    uint32_t local_rows>
 TT_KERNEL void dataflow(uint32_t worker_index, uint32_t group) {
     constexpr uint32_t affine_a_tiles = Kt * Kt;
     constexpr uint32_t affine_b_tiles = Kt * Vt;
@@ -197,10 +200,12 @@ TT_KERNEL void dataflow(uint32_t worker_index, uint32_t group) {
     if constexpr (dynamic_chronology) {
         DataflowBuffer control(dfb::chronology_compute);
         control.reserve_back(1);
-        const auto metadata = TensorAccessor(tensor::chronology);
-        noc.async_read(metadata, control, 32, {.page_id = 0}, {});
+        const auto metadata = TensorAccessor(tensor::actual_start);
+        noc.async_read(metadata, control, sizeof(uint32_t), {.page_id = 0}, {});
         noc.async_read_barrier();
-        topology = kda_chronology::load(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(control.get_write_ptr()));
+        auto* words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(control.get_write_ptr());
+        topology = kda_chronology::derive(words[0], sp_rank, sp_size, local_rows);
+        kda_chronology::store(words, topology);
         control.push_back(1);
     }
     const uint32_t effective_reset_group = dynamic_chronology ? topology.reset_group(G) : reset_group;

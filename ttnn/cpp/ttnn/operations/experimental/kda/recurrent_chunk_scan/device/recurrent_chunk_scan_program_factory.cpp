@@ -57,8 +57,11 @@ ScanWorkDistribution distribute_scan(
 
 }  // namespace
 
-ttnn::device_operation::ProgramArtifacts RecurrentChunkScanProgramFactory::create_program_artifacts(
-    const RecurrentChunkScanParams& attrs, const RecurrentChunkScanInputs& in, std::vector<Tensor>& outputs) {
+ttnn::device_operation::MeshWorkloadArtifacts RecurrentChunkScanProgramFactory::create_mesh_workload_artifacts(
+    const RecurrentChunkScanParams& attrs,
+    const RecurrentChunkScanInputs& in,
+    std::vector<Tensor>& outputs,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords) {
     const auto& v_beta_tensor = in.v_beta.mesh_tensor();
     const auto& kd_tensor = in.kd.mesh_tensor();
     const auto& q_decay_tensor = in.q_decay.mesh_tensor();
@@ -131,7 +134,7 @@ ttnn::device_operation::ProgramArtifacts RecurrentChunkScanProgramFactory::creat
     const tt::tt_metal::experimental::TensorParamName tail_final_state_tensor_name{"tail_final_state"};
 
     const auto fp32 = tt::DataFormat::Float32;
-    const bool compact_summary = summary && in.chronology.has_value();
+    const bool compact_summary = summary && in.actual_start.has_value();
     const auto output_format = summary && !compact_summary ? fp32 : tt::DataFormat::Float16_b;
     const tt::tt_metal::experimental::DFBSpecName transport_state_dfb_name{"transport_state"};
     const auto input_format = [](const Tensor& tensor) {
@@ -147,10 +150,10 @@ ttnn::device_operation::ProgramArtifacts RecurrentChunkScanProgramFactory::creat
         };
     const bool controlled_wrap = in.wrap_indicator.has_value();
     const bool segmented_summary = summary && attrs.emit_tail_summaries;
-    const uint32_t summary_wrap_kv = summary && (controlled_wrap || in.chronology.has_value()) ? Vt : 1;
+    const uint32_t summary_wrap_kv = summary && (controlled_wrap || in.actual_start.has_value()) ? Vt : 1;
     // Recurrent wrap consumes a full tail state even without a device indicator.
     const uint32_t tail_state_tiles =
-        (segmented_summary || (!summary && (attrs.wrap_chunk != 0 || in.chronology.has_value()))) ? kv : 1;
+        (segmented_summary || (!summary && (attrs.wrap_chunk != 0 || in.actual_start.has_value()))) ? kv : 1;
     constexpr uint32_t controlled_wrap_k = 1;
     tt::tt_metal::experimental::Group<tt::tt_metal::experimental::DataflowBufferSpec> dfbs = {
         make_dfb(state_dfb_name, kv, fp32),
@@ -482,8 +485,13 @@ ttnn::device_operation::ProgramArtifacts RecurrentChunkScanProgramFactory::creat
         run_args.tensor_args.emplace(tail_output_tensor_name, outputs[2].mesh_tensor());
         run_args.tensor_args.emplace(tail_final_state_tensor_name, outputs[3].mesh_tensor());
     }
-    kda_factory_detail::bind_chronology(spec, run_args, in.chronology, in.v_beta, true);
-    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
+    kda_factory_detail::bind_chronology(spec, run_args, in.actual_start, in.v_beta, true);
+    return kda_factory_detail::chronology_workload(
+        ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)},
+        tensor_coords,
+        device,
+        attrs.sequence_parallel_axis,
+        attrs.num_chunks * attrs.groups_per_head * 32);
 }
 
 }  // namespace ttnn::experimental::prim

@@ -21,7 +21,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> qkv_causal_conv1d_silu(
     const std::optional<ttnn::Tensor>& wrap_indicator,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
-    const std::optional<ttnn::Tensor>& chronology,
+    const std::optional<ttnn::Tensor>& actual_start,
+    uint32_t sequence_parallel_axis,
     const std::optional<ttnn::Tensor>& predecessor_carry) {
     TT_FATAL(
         input.storage_type() == StorageType::DEVICE && input.buffer() != nullptr,
@@ -49,7 +50,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> qkv_causal_conv1d_silu(
         wrap_indicator,
         output_memory_config,
         kernel_config,
-        chronology,
+        actual_start,
+        sequence_parallel_axis,
         predecessor_carry);
     return {outputs[0], outputs[1], outputs[2]};
 }

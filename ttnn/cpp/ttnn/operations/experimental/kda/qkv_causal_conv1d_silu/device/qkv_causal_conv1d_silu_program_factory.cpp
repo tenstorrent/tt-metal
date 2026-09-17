@@ -3,6 +3,7 @@
 
 #include "ttnn/operations/experimental/kda/qkv_causal_conv1d_silu/device/qkv_causal_conv1d_silu_program_factory.hpp"
 
+#include "ttnn/operations/experimental/kda/factory/chronology_binding.hpp"
 #include <limits>
 #include <vector>
 
@@ -26,8 +27,11 @@ constexpr uint32_t tap_count = 4;
 
 }  // namespace
 
-ttnn::device_operation::ProgramArtifacts QkvCausalConv1dSiluProgramFactory::create_program_artifacts(
-    const QkvCausalConv1dSiluParams& attrs, const QkvCausalConv1dSiluInputs& in, std::vector<Tensor>& outputs) {
+ttnn::device_operation::MeshWorkloadArtifacts QkvCausalConv1dSiluProgramFactory::create_mesh_workload_artifacts(
+    const QkvCausalConv1dSiluParams& attrs,
+    const QkvCausalConv1dSiluInputs& in,
+    std::vector<Tensor>& outputs,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords) {
     const auto& input = in.input.mesh_tensor();
     const auto& history = in.history.mesh_tensor();
     const auto& tap0 = in.tap0.mesh_tensor();
@@ -117,7 +121,7 @@ ttnn::device_operation::ProgramArtifacts QkvCausalConv1dSiluProgramFactory::crea
             {{"block_ct", block_ct},
              {"num_blocks", num_blocks},
              {"has_wrap_indicator", static_cast<uint32_t>(in.wrap_indicator.has_value())},
-             {"dynamic_chronology", static_cast<uint32_t>(in.chronology.has_value())}},
+             {"dynamic_chronology", static_cast<uint32_t>(in.actual_start.has_value())}},
         .runtime_arg_schema = {.runtime_arg_names = {"wi_start", "wi_count", "wrap_row"}},
         .hw_config = ttnn::create_reader_datamovement_config(arch),
     };
@@ -131,9 +135,9 @@ ttnn::device_operation::ProgramArtifacts QkvCausalConv1dSiluProgramFactory::crea
             tt::tt_metal::experimental::TensorBinding{input_tensor_name, "wrap_indicator"});
     }
 
-    const tt::tt_metal::experimental::TensorParamName chronology_name{"chronology"};
+    const tt::tt_metal::experimental::TensorParamName chronology_name{"actual_start"};
     const tt::tt_metal::experimental::TensorParamName predecessor_name{"predecessor_carry"};
-    reader.tensor_bindings.push_back({in.chronology ? chronology_name : input_tensor_name, "chronology"});
+    reader.tensor_bindings.push_back({in.actual_start ? chronology_name : input_tensor_name, "actual_start"});
     reader.tensor_bindings.push_back(
         {in.predecessor_carry ? predecessor_name : history_tensor_name, "predecessor_carry"});
 
@@ -214,8 +218,9 @@ ttnn::device_operation::ProgramArtifacts QkvCausalConv1dSiluProgramFactory::crea
             .unique_id = wrap_indicator_tensor_name, .spec = in.wrap_indicator->mesh_tensor().tensor_spec()});
     }
 
-    if (in.chronology) {
-        tensor_parameters.push_back({.unique_id = chronology_name, .spec = in.chronology->mesh_tensor().tensor_spec()});
+    if (in.actual_start) {
+        tensor_parameters.push_back(
+            {.unique_id = chronology_name, .spec = in.actual_start->mesh_tensor().tensor_spec()});
     }
     if (in.predecessor_carry) {
         tensor_parameters.push_back(
@@ -257,17 +262,22 @@ ttnn::device_operation::ProgramArtifacts QkvCausalConv1dSiluProgramFactory::crea
         run_args.tensor_args.emplace(wrap_indicator_tensor_name, in.wrap_indicator->mesh_tensor());
     }
 
-    if (in.chronology) {
-        run_args.tensor_args.emplace(chronology_name, in.chronology->mesh_tensor());
+    if (in.actual_start) {
+        run_args.tensor_args.emplace(chronology_name, in.actual_start->mesh_tensor());
     }
     if (in.predecessor_carry) {
         run_args.tensor_args.emplace(predecessor_name, in.predecessor_carry->mesh_tensor());
     }
 
-    return ttnn::device_operation::ProgramArtifacts{
-        .spec = std::move(spec),
-        .run_params = std::move(run_args),
-    };
+    return kda_factory_detail::chronology_workload(
+        ttnn::device_operation::ProgramArtifacts{
+            .spec = std::move(spec),
+            .run_params = std::move(run_args),
+        },
+        tensor_coords,
+        device,
+        attrs.sequence_parallel_axis,
+        attrs.sequence);
 }
 
 }  // namespace ttnn::experimental::prim
