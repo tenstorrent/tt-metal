@@ -712,7 +712,7 @@ static void dispatch_to_device(
     const auto emule_desc = tt_emule::build_emule_descriptor(program, device);
     populate_bank_mapping(sw_emu, device, device_id, emule_soc, dram_core, num_dram_channels, num_l1_banks);
 
-    auto* core_map_ptr = build_core_map(sw_emu, device, device_id);
+    auto* core_map_ptr = build_core_map(sw_emu, device, device_id, emule_soc);
     std::vector<CoreSetup> core_setups;
     setup_core_state(
         impl, device, sw_emu, resolved.core_kernels, resolved.emule_sem_base, emule_soc, emule_desc, core_setups);
