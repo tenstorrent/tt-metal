@@ -97,7 +97,9 @@ def report_timings(timings, elapsed, duration, reference=None):
     codec_frames = timings.get("codec_frames", timings["frames"])
     trailer = ", the reference rides along and is cut" if reference is not None else ""
     print(f"  codec decoder    {timings['codec_s']:8.2f} s   ({codec_frames} frames{trailer})")
-    print(f"  total            {elapsed:8.2f} s   ({elapsed / duration:.2f}x real time)")
+    # Audio over wall clock, so above 1 is faster than real time. Printed this way round
+    # because the other one reads like a speedup when it is the opposite.
+    print(f"  total            {elapsed:8.2f} s   ({duration / elapsed:.2f}x faster than real time)")
 
     # Warm, decode costs about 44 ms a frame and the codec about 23. Well above either and
     # the stage was compiling, which is worth saying rather than leaving the reader to

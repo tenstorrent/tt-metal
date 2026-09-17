@@ -193,7 +193,8 @@ def main():
                 soundfile.write(path, spoken.numpy(), 24000)
                 timings = pipeline.last_timings
                 print(
-                    f"  END-TO-END: {elapsed:.2f} s  |  {duration:.2f} s audio ({elapsed / duration:.2f}x RT)  |  "
+                    f"  END-TO-END: {elapsed:.2f} s  |  {duration:.2f} s audio "
+                    f"({duration / elapsed:.2f}x faster than real time)  |  "
                     f"{os.path.abspath(path)}"
                 )
                 print(

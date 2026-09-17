@@ -269,6 +269,39 @@ def test_generate_produces_audio_of_the_right_length(device):
 
 
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
+def test_the_prompt_bucket_changes_nothing_it_keeps(device):
+    """Padding the prompt up to a bucket must give the same frames as not padding.
+
+    The bucket is there because every distinct prompt length compiles its own prefill
+    programs: four lengths cost 3.72 s of prefill unbucketed against 1.11 s bucketed, and
+    the second utterance at a length costs 0.015 s either way. This test is the other half
+    of that argument. Attention is causal, so the filler positions cannot reach a real one,
+    and their cache slots are the ones decode overwrites before reading. If either claim
+    were wrong the codes would differ here.
+    """
+    from models.demos.audio.qwen3_tts.tt import ttnn_qwen3_pipeline as module
+
+    pipeline = Qwen3TTSPipeline(device, max_frames=12, seed=5)
+    original = module.PROMPT_BUCKET
+    try:
+        module.PROMPT_BUCKET = 1
+        pipeline.reseed(5)
+        exact = pipeline.codes(TEXT, speaker=SPEAKER, language=LANGUAGE)
+        exact_prompt = pipeline.last_timings["padded_prompt"]
+
+        module.PROMPT_BUCKET = original
+        pipeline.reseed(5)
+        bucketed = pipeline.codes(TEXT, speaker=SPEAKER, language=LANGUAGE)
+        padded_prompt = pipeline.last_timings["padded_prompt"]
+    finally:
+        module.PROMPT_BUCKET = original
+
+    assert padded_prompt > exact_prompt, "the test needs a prompt the bucket actually pads"
+    assert torch.equal(exact, bucketed), "padding the prompt changed the frames"
+    print(f"{exact_prompt} positions padded to {padded_prompt}: {exact.shape[0]} frames, identical")
+
+
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
 def test_a_seeded_run_repeats_itself(device):
     """Sampling costs reproducibility unless the seed is held, so hold it and check.
 

@@ -99,6 +99,19 @@ REFERENCE_TAIL_IDS = 2
 # this is 32 s of speech.
 DEFAULT_MAX_FRAMES = 400
 
+# Prompt lengths the prefill rounds up to. Every distinct length compiles its own programs,
+# and that is the whole of the cold prefill: 1.41 s the first time a length is seen against
+# 0.02 s once it is compiled. A server sees a new length per sentence, so without this it
+# pays that second and a half on nearly every first utterance of a text.
+#
+# Padding a prompt is safe because attention is causal. The filler positions sit after the
+# last real one, so no real position attends to them, and the hidden state the decode starts
+# from is sliced at the true last position. Their keys and values do land in the cache, at
+# the slots decode is about to write: slot `prompt` is overwritten by the first frame before
+# anything reads it, and each later slot the same way. The filler is `tts_pad`, the
+# embedding the model already sees at every codec-track position, rather than zeros.
+PROMPT_BUCKET = 32
+
 
 class Stopwatch:
     """Wall clock split across the blocks of one utterance.
@@ -535,6 +548,8 @@ class Qwen3TTSPipeline:
         waveform = self.codec.decode(codes)
         self.last_timings["codec_s"] = time.time() - started
         self.last_timings["codec_frames"] = frames
+        # What the decoder ran, padding included, which is what its time is proportional to.
+        self.last_timings["codec_padded_frames"] = self.codec.padded_frames(frames)
         return waveform
 
     def _decode_frames(self, embeddings, limit, on_frame=None):
@@ -545,11 +560,15 @@ class Qwen3TTSPipeline:
         That costs about two seconds and buys back the frame loop.
         """
         prompt = embeddings.shape[1]
-        if prompt + limit + 1 > self.talker.max_seq:
+        padded = -(-prompt // PROMPT_BUCKET) * PROMPT_BUCKET
+        if padded + limit + 1 > self.talker.max_seq:
             raise ValueError(
                 f"prompt of {prompt} plus {limit} frames exceeds the cache's {self.talker.max_seq}; "
                 "build the pipeline with a larger max_frames"
             )
+        if padded > prompt:
+            filler = self.tables.tts_pad.expand(1, padded - prompt, -1)
+            embeddings = torch.cat([embeddings, filler], dim=1)
 
         self.release()
         self.talker.reset()
@@ -557,7 +576,7 @@ class Qwen3TTSPipeline:
         hidden = self.talker.prefill(embeddings)
         last = ttnn.slice(hidden, [0, prompt - 1, 0], [1, prompt, hidden.shape[2]])
         ttnn.deallocate(hidden)
-        timings = {"prompt": prompt, "prefill_s": time.time() - started}
+        timings = {"prompt": prompt, "padded_prompt": padded, "prefill_s": time.time() - started}
 
         started = time.time()
         self._capture()

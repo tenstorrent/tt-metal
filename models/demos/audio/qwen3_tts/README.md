@@ -50,15 +50,15 @@ python -m models.demos.audio.qwen3_tts.demo.demo_server \
 
 ```
 text [1]> One.  This is the first line the server speaks today.
-  END-TO-END: 27.91 s  |  3.76 s audio (7.42x RT)  |  outputs/out_1.wav
-    prefill 1.6 s, capture 1.5 s, decode 2.2 s (47 frames at 46 ms), codec 22.3 s
+  END-TO-END: 14.20 s  |  5.60 s audio (0.39x faster than real time)  |  outputs/out_1.wav
+    prefill 1.6 s, capture 3.3 s, decode 2.4 s (70 frames at 34 ms), codec 6.7 s
 text [2]> Two.  And here is a second one, in the same voice.
-  END-TO-END: 3.11 s  |  4.80 s audio (0.65x RT)  |  outputs/out_2.wav
-    prefill 0.2 s, capture 0.1 s, decode 2.6 s (60 frames at 43 ms), codec 0.3 s
+  END-TO-END: 2.55 s  |  5.60 s audio (2.19x faster than real time)  |  outputs/out_2.wav
+    prefill 0.02 s, capture 0.04 s, decode 2.2 s (70 frames at 32 ms), codec 0.27 s
 ```
 
 The first utterance compiles its kernels. Every one after it runs from the captured traces
-and a warm length bucket, at **0.6 to 0.7x real time**. `\ref PATH | TRANSCRIPT` switches
+and warm buckets, at **2.2x faster than real time**. `\ref PATH | TRANSCRIPT` switches
 voice, `\similarity` reports how close each utterance is to the reference clip, `\seed N`
 changes the sampler, `\quit` leaves.
 
@@ -107,22 +107,23 @@ off. Two details govern how it behaves:
     generated frames read the reference as context; decode them alone and the onset comes
     out different and worse. Each frame is 1920 samples, so the cut lands exactly.
 
-Measured on one P300 chip, cloning a 6.72 s reference clip that CustomVoice had just
-spoken, then saying 9.28 s of new text:
+Measured on one P300 chip, cloning a 7.28 s reference clip that CustomVoice had just
+spoken, then saying 5.60 s of new text. Second utterance in that voice, so the only cold
+cost left is the pair of encoders:
 
 | stage | time |
 |---|---|
-| both encoders, once per clip | 9.0 s |
-| prompt, 150 positions, and 116 frames | 12.2 s |
-| codec decoder, 200 frames (the reference rides along) | 4.6 s |
-| **total** | **16.8 s, 1.81x real time** |
+| both encoders, once per clip | 7.9 s |
+| prompt, 137 positions, and 70 frames | 2.3 s |
+| codec decoder, 161 frames (the reference rides along) | 0.27 s |
+| **total** | **2.55 s, 2.19x faster than real time** |
 
 A long reference lengthens the codec stage, since the decoder sees its frames too. Both
 encoders run once: keep the `CloneReference` and you skip them on the next utterance in that
-voice.
+voice. The first utterance in a process pays its compiles instead, 14.2 s for this one.
 
 The speaker encoder answers whether the voice carried over. Cosine between the reference
-clip's vector and the clone's: **0.9948**, against 0.8230 for an unrelated voice.
+clip's vector and the clone's: **0.9832**, against about 0.82 for an unrelated voice.
 
 Streaming text input is the one regime still missing. With `non_streaming_mode=False`
 upstream sums the two tracks position by position and feeds whatever text is left over
@@ -159,30 +160,96 @@ pair, so the description carries most of the way.
 
 ## Speed
 
-A CustomVoice utterance, 86 text tokens, on one P300 chip:
+**2.35x faster than real time, warm, on one P300 chip**, against 1.19x when this directory
+first produced a waveform. A CustomVoice utterance of 12.6 s of speech,
+157 frames, second run at that length:
 
 | stage | time | per second of audio |
 |---|---|---|
-| prefill, 97 positions | 1.5 s | once per utterance |
-| talker + code predictor, 341 frames | 15.1 s | 0.55 s |
-| codec decoder | 7.9 s | 0.29 s |
-| **total for 27.3 s of speech** | **23.0 s** | **0.84x real time** |
+| prefill, 33 positions | 0.03 s | once per utterance |
+| both trace captures | 0.05 s | once per utterance |
+| talker + code predictor, 157 frames | 5.0 s | 0.40 s |
+| codec decoder | 0.27 s | 0.02 s |
+| **total** | **5.35 s** | **0.43 s, or 2.35x faster than real time** |
 
-44 ms per frame, of which the talker's 28-layer step is 13 and the predictor's 15 steps are
-30. Both run from captured traces over a KV cache; the uncached talker step cost 2471 ms.
+31.9 ms per frame, of which the talker's 28-layer step is 9.8 and the predictor's 15 steps
+are 19.8. Both run from captured traces over a KV cache; the uncached talker step cost
+2471 ms.
 
-Those numbers cover one cold utterance. Keep the process alive and later utterances reach
-**0.6 to 0.7x real time**, because length bucketing stops the codec recompiling: 22.3 s on
-the first utterance, 0.3 s on each of the next four.
+Every figure here is audio over wall clock, so above 1 is faster than real time. An earlier
+version of this file quoted the reciprocal, 0.84 s of compute per second of audio, which is
+the same thing said the other way round and easy to mistake for a speedup.
 
-**Length bucketing also keeps the card from running out of L1_SMALL.** Every distinct frame
-count compiles its own convolution programs, and tt-metal holds each program's L1_SMALL
-scratch until the device closes, about 24 KB a length. Three utterances of different lengths filled the 64 KB region,
-and the next block that wanted scratch could not allocate: the interactive demo died on its
-third line. Rounding the decode up to a multiple of 32 frames holds the program count flat.
-The decoder throws the padding frames away, and
+A one-second utterance comes out at 1.7x rather than 2.35x. The prefill, the two captures
+and the codec are per utterance rather than per frame, and on 13 frames they are a third of
+the wall clock.
+
+`tests/perf/test_perf.py` prints this table and charges the frame loop block by block, so a
+regression says which block. It syncs the device at every split, which costs a few percent
+of the frame and is why `decode_s` rather than the columns is the honest total. Where the
+time went, against the first version that generated a waveform:
+
+| block | before | after |
+|---|---|---|
+| talker step | 13.32 | 9.63 ms |
+| code predictor, 15 steps | 25.65 | 19.81 |
+| host sampling, all 16 codebooks | 1.82 | 1.93 |
+| everything else in the frame | 0.4 | 0.4 |
+| **per frame** | **41.1** | **31.9 ms** |
+| prefill, warm | 1.5 s | 0.03 s |
+| codec decoder, warm | 5-8 s | 0.27 s |
+
+Four changes did it, and the order matters because the first two are what the third and
+fourth were chosen by.
+
+**The rotation in one kernel.** `ttnn.experimental.rotary_embedding_hf` replaces a slice per
+half, a negate, a concatenation and three elementwise ops: 7.8 us against 26.7 for eight
+heads, and the same error to seven digits under HiFi4 with fp32 dest accumulation. Both
+decoders and the uncached graphs use it, which is what keeps them comparable.
+
+**Matmul program configs, swept rather than reasoned about.** Every rectangle of Blackhole's
+11 x 10 grid against all eight decode shapes, in a trace. Every winner spends 11 to 22
+cores, not the 64 the old search picked by insisting the output tiles divide evenly across
+them: at one position each core does almost no arithmetic, so the multicast dominates and a
+wider spread costs more than it buys. `down_proj` went 112.8 to 69.6 us, `o_proj` 39.7 to
+26.3, the predictor's `down_proj` 47.0 to 22.0. `decode_matmul_config` carries the table.
+
+**The MLP's weights in `bfloat8_b`.** A single-position matmul is bandwidth bound on
+weights, and the MLP is 60% of the step's weight bytes. Norm weights stay bf16: their values
+cluster around 1 and a shared-exponent block of 16 quantises that to almost nothing, PCC
+0.9751 against 0.9954. Attention's two matmuls stay bf16 as well, for a reason PCC does not
+give; `MLP_WEIGHT_DTYPE` has all of it.
+
+**The predictor's codebook lookups on the device.** Its 15 steps each fed the next position
+a 2048-value row, and `ttnn.from_torch` of one costs 76 us against 4.5 for a copy of a
+tensor already there. Now the step writes one index and the device reads its own table, and
+the talker's hidden state reaches the predictor as the device tensor the talker produced
+rather than a round trip through the host. 1.1 ms a frame, with identical values.
+
+### Two things that are compiled per shape, and what that costs
+
+**Prompt lengths.** Each one compiles its own prefill: 1.41 s the first time, 0.015 s after.
+A server sees a new length per sentence, so prompts round up to 32 positions and four
+lengths cost 1.11 s of prefill instead of 3.72 s. Padding is invisible because attention is
+causal: the filler sits after the last real position, the hidden state decode starts from is
+sliced at the true last one, and the filler's cache slots are the ones decode overwrites
+before reading. `test_the_prompt_bucket_changes_nothing_it_keeps` holds it to identical
+frames.
+
+**Codec frame counts.** Same story with a harder edge: each length also holds 8 to 19 KB of
+L1_SMALL convolution scratch until the device's program cache is dropped. Four lengths fill
+the 64 KB region, measured at 16, 32, 50 and 58 KB, and the fifth fails to allocate, which
+is what killed the interactive demo on its third line. Buckets of 32 frames keep repeats
+free, and a length that has not been compiled since the last drop gets the cache dropped
+first: that reclaims the whole region and costs 0.12 s, because the kernels stay built on
+the host. The decoder throws the padding frames away and
 `test_bucketing_does_not_change_the_samples_it_keeps` measures what that costs: PCC 0.9999
 against an exact decode, inside what bf16 costs already.
+
+Chunked decoding would have removed the per-length programs altogether and it does not work
+here. The decoder's transformer attends over the whole prefix, so a 32-frame chunk carrying
+16 frames of context scores 0.51 against a one-shot decode. Real streaming needs the
+convolution state and a KV cache carried between chunks, not a recomputed window.
 
 ## Sampling
 
@@ -272,15 +339,30 @@ own embedding and projection path, and reports three things:
 | measurement | value |
 |---|---|
 | per layer, each fed the reference's fp32 input | 0.9998 to 0.99999 |
-| end to end, 28 layers of bf16 | **0.9949** |
-| codec top-1 token agreement | 24/26 |
+| end to end, 28 layers of bf16 | **0.9954** |
+| sampling distribution distance, mean | 0.098 |
+| codec top-1 token agreement | 22/26, diagnostic only |
 
 The per-layer number measures the implementation, since feeding each layer the reference's
 own input removes accumulated drift: a wiring error shows as one bad layer, rounding shows
-as nothing. The end-to-end number carries 28 layers of bf16 rounding on top. The token check
-is the one that says whether any of it matters, and it allows a disagreement only where the
-reference is nearly indifferent; both misses here are near-ties where the device took the
-reference's second choice, with logit gaps of 0.11 and 0.07.
+as nothing. The end-to-end number carries 28 layers of bf16 rounding on top.
+
+**The distance is the verdict and the agreement is not**, which took a wrong turn to learn.
+Agreement was the verdict until a fused rotation and a matmul config each flipped a pick
+while leaving PCC where it was or better. Perturbing the prompt by a quarter of one bf16
+rounding step settles it: agreement scatters over 22 to 24 of 26 and the device lands as
+far down as the reference's 8th choice, because the reference's own top-1 probability is
+under 0.1 at several positions here. Pick equality on this prompt is not a property any
+implementation has. Total variation distance between the two sampling distributions, at the
+temperature the checkpoint ships, moves with the whole vector instead: 0.076 to 0.098 over
+those perturbations and across both spellings of the rotation, against roughly 1.0 for a
+wiring error. `test_decode_pcc.py` judges the cached graph against the uncached one the same
+way, for the same reason.
+
+Neither of them sees an utterance that never stops, which is the failure this model actually
+has. `pcc/test_generation_stops.py` is that test, and it takes eight seeds because at one
+seed the measurement is noise: the same four-word sentence ran 3.5 and 38.0 frames per word
+at two different seeds of one build.
 
 The input choice is load-bearing. Random embeddings sit far outside the activation
 distribution the weights were trained on, and the same graph scores 0.936 with 71% token
@@ -378,13 +460,33 @@ equality.
 
 ## Performance work still open
 
-The KV cache and the traces are in (see Speed above). What is left, roughly in order of what
-it would buy:
+The frame loop is 62% code predictor: 19.8 ms of a 31.9 ms frame, of which 16.2 is its
+five layers run fifteen times. That is the number to move, and the two obvious ways of
+moving it were measured and are not worth it:
 
-- Warming the prefill at the shapes a server will see, so the first utterance is not the slow one.
-- `bfp8_b` weights, judged on token agreement rather than PCC: bf16 already sits at 0.995, so
-  PCC alone will not say whether the codes move.
-- No device-perf test exists yet, so nothing in CI catches a speed regression.
+- **Sampling on the device**, to keep the host out of the inner loop. `ttnn.sampling` costs
+  0.298 ms a call, traced or eager, against the 0.19 ms of host work per step it would
+  replace. Fifteen of them a frame turns a 2.9 ms saving into a 4.5 ms bill. It does work
+  and it seeds reproducibly (`ttnn.manual_seed` with a seed tensor), so this is a cost
+  verdict, not a capability one.
+- **One trace over all 15 steps.** Dies with the above: each step's codebook id has to
+  reach the host for the next step's lookup, so the graph cannot close over the chain.
+
+What is left, in order of what it would buy:
+
+- **Fewer ops per predictor step.** At 5.4 us of launch cost per op in a trace, its 21 ops
+  a layer are half its time and its matmuls the other half. Keeping the residual stream
+  sharded across a layer would remove the four conversions a layer spends around its two
+  sharded norms. Attention's own layout dance is another four.
+- **Attention's matmuls in `bfloat8_b`.** 9.2 ms against 9.6 for the talker's step, but the
+  sampling distribution moved to 0.1455 against a 0.098 noise band, so it needs a reason
+  better than PCC to take. A listening test would settle it.
+- **Streaming the codec**, for the latency rather than the throughput: audio could start
+  after the first frames instead of after the last. Needs carried state, as above.
+- **Batch above 1**, and the second P300 chip, which sits idle at batch 1.
+
+`tests/perf/test_perf.py` is a table, not a CI gate. A device-perf leg wants its own budget
+file and a threshold per SKU; nothing in CI catches a speed regression yet.
 
 ## CI
 

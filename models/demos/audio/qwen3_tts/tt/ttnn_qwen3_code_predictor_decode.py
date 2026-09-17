@@ -30,6 +30,7 @@ from models.demos.audio.qwen3_tts.tt.ttnn_qwen3_code_predictor import CODE_PREDI
 from models.demos.audio.qwen3_tts.tt.ttnn_qwen3_talker import _compute_config, causal_mask
 from models.demos.audio.qwen3_tts.tt.ttnn_qwen3_talker_decode import (
     CACHE_TILE_MULTIPLE,
+    MLP_WEIGHT_DTYPE,
     NORM_SHARD_HEIGHT,
     ROPE_ROWS,
     decode_matmul_config,
@@ -37,23 +38,40 @@ from models.demos.audio.qwen3_tts.tt.ttnn_qwen3_talker_decode import (
 )
 
 
-def preprocess_cached_predictor_parameters(device, config=None, dtype=ttnn.bfloat16):
-    """Predictor weights with Q, K and V fused, mirroring the talker's repacking."""
+def preprocess_cached_predictor_parameters(device, config=None, dtype=ttnn.bfloat16, mlp_dtype=MLP_WEIGHT_DTYPE):
+    """Predictor weights with Q, K and V fused, mirroring the talker's repacking.
+
+    `mlp_dtype` mirrors the talker's split precision; the constant carries the trade.
+    """
     talker_cfg = dict(config or checkpoint.talker_config())
     cfg = dict(talker_cfg["code_predictor_config"])
     state = checkpoint.load_prefixed(CODE_PREDICTOR_PREFIX)
 
-    def to_device(tensor):
+    def to_device(tensor, as_dtype=None):
         return ttnn.from_torch(
             tensor.contiguous(),
-            dtype=dtype,
+            dtype=as_dtype or dtype,
             layout=ttnn.TILE_LAYOUT,
             device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-    def linear(name):
-        return to_device(state[f"{name}.weight"].t())
+    def lookup_table(tensor):
+        """A codebook for `ttnn.embedding`: row major, bf16, which the op requires.
+
+        Tiled costs more than it saves. Measured for one row: 38 us row major against 81
+        tiled, and 81 is what the host round trip it replaces costs.
+        """
+        return ttnn.from_torch(
+            tensor.contiguous(),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    def linear(name, as_dtype=None):
+        return to_device(state[f"{name}.weight"].t(), as_dtype=as_dtype)
 
     def norm(name):
         return to_device(state[f"{name}.weight"].reshape(1, 1, 1, -1))
@@ -73,13 +91,18 @@ def preprocess_cached_predictor_parameters(device, config=None, dtype=ttnn.bfloa
                 "o_proj": linear(f"{prefix}.o_proj"),
                 "q_norm": norm(f"{prefix}.q_norm"),
                 "k_norm": norm(f"{prefix}.k_norm"),
-                "gate_proj": linear(f"model.layers.{index}.mlp.gate_proj"),
-                "up_proj": linear(f"model.layers.{index}.mlp.up_proj"),
-                "down_proj": linear(f"model.layers.{index}.mlp.down_proj"),
+                "gate_proj": linear(f"model.layers.{index}.mlp.gate_proj", mlp_dtype),
+                "up_proj": linear(f"model.layers.{index}.mlp.up_proj", mlp_dtype),
+                "down_proj": linear(f"model.layers.{index}.mlp.down_proj", mlp_dtype),
             }
         )
 
     heads = cfg["num_code_groups"] - 1
+    talker_table = checkpoint.load_prefixed(TALKER_CODEC_EMBEDDING)["weight"]
+    predictor_tables = [
+        checkpoint.load_prefixed(CODE_PREDICTOR_PREFIX + "model.codec_embedding.")[f"{index}.weight"]
+        for index in range(heads)
+    ]
     return {
         "config": cfg,
         "layers": layers,
@@ -89,11 +112,15 @@ def preprocess_cached_predictor_parameters(device, config=None, dtype=ttnn.bfloa
             state["small_to_mtp_projection.bias"].reshape(1, 1, -1), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device
         ),
         "lm_head": [linear(f"lm_head.{index}") for index in range(heads)],
-        "talker_codec_embedding": checkpoint.load_prefixed(TALKER_CODEC_EMBEDDING)["weight"],
-        "codec_embedding": [
-            checkpoint.load_prefixed(CODE_PREDICTOR_PREFIX + "model.codec_embedding.")[f"{index}.weight"]
-            for index in range(heads)
-        ],
+        "talker_codec_embedding": talker_table,
+        "codec_embedding": predictor_tables,
+        # The same tables on device, for the lookup the step does between positions. A row
+        # is 2048 values, and `ttnn.from_torch` of one costs 76 us against 4.5 for a copy
+        # of a tensor already on the device, so 15 lookups a frame are worth 1.1 ms. The
+        # embedding op reads a row for 10 us instead. bf16 because `ttnn.embedding`
+        # requires it.
+        "talker_codec_embedding_device": lookup_table(talker_table),
+        "codec_embedding_device": [lookup_table(table) for table in predictor_tables],
     }
 
 
@@ -157,6 +184,15 @@ class TtCodePredictorCachedDecoder:
                 layer["input_layernorm_wide"] = expand(f"model.layers.{index}.input_layernorm.weight")
                 layer["post_attention_layernorm_wide"] = expand(f"model.layers.{index}.post_attention_layernorm.weight")
             self._final_norm_wide = expand("model.norm.weight")
+
+        # One index for every codebook lookup the step does, and the host tensors each
+        # position's rotary tables need. Positions here are always 0 to 15, so the tables
+        # are built once and copied after that: `ttnn.from_torch` of a rotary row costs
+        # 10 us and the copy 4.5, and the step does three per position.
+        self._index = ttnn.from_torch(
+            torch.zeros(1, 1, dtype=torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+        )
+        self._position_inputs = {}
 
         self.trace_id = None
         self._out = None
@@ -224,12 +260,27 @@ class TtCodePredictorCachedDecoder:
         embedded = torch.cat((frequencies, frequencies), dim=-1)
         return embedded.cos().unsqueeze(1), embedded.sin().unsqueeze(1)
 
+    def _host_position_inputs(self, position):
+        """The three host tensors a position needs, built once and kept."""
+        if position not in self._position_inputs:
+            cos, sin = self._rotary(1, offset=int(position))
+            rows = lambda table: ttnn.from_torch(
+                table.reshape(1, 1, 1, -1).expand(1, 1, ROPE_ROWS, self.head_dim).contiguous(),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+            )
+            self._position_inputs[position] = (
+                ttnn.from_torch(torch.full((1,), int(position), dtype=torch.int32)),
+                rows(cos),
+                rows(sin),
+            )
+        return self._position_inputs[position]
+
     def set_position(self, position):
-        ttnn.copy_host_to_device_tensor(ttnn.from_torch(torch.full((1,), int(position), dtype=torch.int32)), self._pos)
-        cos, sin = self._rotary(1, offset=int(position))
-        for source, target in ((cos, self._cos), (sin, self._sin)):
-            rows = source.reshape(1, 1, 1, -1).expand(1, 1, ROPE_ROWS, self.head_dim).contiguous()
-            ttnn.copy_host_to_device_tensor(ttnn.from_torch(rows, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT), target)
+        pos, cos, sin = self._host_position_inputs(position)
+        ttnn.copy_host_to_device_tensor(pos, self._pos)
+        ttnn.copy_host_to_device_tensor(cos, self._cos)
+        ttnn.copy_host_to_device_tensor(sin, self._sin)
 
     def prefill(self, embeddings):
         """Seed the cache from the two-position prompt and return its last hidden state."""
@@ -379,19 +430,40 @@ class TtCodePredictorCachedDecoder:
         """Codebook logits for this step, from its own output head."""
         return ttnn.linear(hidden, self.p["lm_head"][step], compute_kernel_config=self.compute_config)
 
-    def _run(self, host_embedding, position):
-        """One traced position. Copies a host tensor in, so nothing is allocated here."""
-        ttnn.copy_host_to_device_tensor(
-            ttnn.from_torch(host_embedding.contiguous(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT), self._in
-        )
+    def _run(self, position):
+        """One traced position, over whatever `_in` now holds."""
         self.set_position(position)
         if self.trace_id is not None:
             ttnn.execute_trace(self.device, self.trace_id, cq_id=0, blocking=False)
             return self._out
         return self._step_ops(self._in)
 
+    def _fill_from_host(self, embedding):
+        """`_in` <- a host row. The slow way in, kept for callers holding torch tensors."""
+        ttnn.copy_host_to_device_tensor(
+            ttnn.from_torch(embedding.contiguous(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT), self._in
+        )
+
+    def _fill_from_table(self, table, code):
+        """`_in` <- row `code` of a device codebook, without the row touching the host.
+
+        The old way was `from_torch` on a 2048-value row, 81 us, fifteen times a frame.
+        Writing one index and letting the device read its own table is 38, so this is 0.6
+        ms a frame. The values are identical: the table is the same bf16 the copy produced.
+        """
+        ttnn.copy_host_to_device_tensor(
+            ttnn.from_torch(torch.tensor([[int(code)]], dtype=torch.int32), dtype=ttnn.uint32), self._index
+        )
+        row = ttnn.embedding(self._index, table, layout=ttnn.TILE_LAYOUT)
+        ttnn.copy(ttnn.reshape(row, (1, 1, self.p["projection"].shape[0])), self._in)
+        ttnn.deallocate(row)
+
     def generate(self, talker_hidden, first_code, pick=None, watch=None):
         """Codebooks 1 to 15, from the talker's hidden state and codebook 0.
+
+        `talker_hidden` may be the device tensor the talker's step returned, which is what
+        the pipeline passes: it saves a round trip of 2048 values through the host for
+        every frame. A torch tensor still works, which is what the PCC tests hand it.
 
         `pick` maps one row of logits to an id, and defaults to argmax. Upstream samples
         here (temperature 0.9, top_k 50), so pass `sampling.sample` to match it; greedy
@@ -405,8 +477,13 @@ class TtCodePredictorCachedDecoder:
         """
         charge = watch.split if watch is not None else (lambda name: None)
         self.reset()
-        self._run(talker_hidden.reshape(1, 1, -1), 0)
-        hidden = self._run(self.p["talker_codec_embedding"][int(first_code)].reshape(1, 1, -1), 1)
+        if isinstance(talker_hidden, ttnn.Tensor):
+            ttnn.copy(ttnn.reshape(talker_hidden, (1, 1, -1)), self._in)
+        else:
+            self._fill_from_host(talker_hidden.reshape(1, 1, -1))
+        self._run(0)
+        self._fill_from_table(self.p["talker_codec_embedding_device"], first_code)
+        hidden = self._run(1)
 
         pick = pick or (lambda row: int(row.argmax()))
         codes = []
@@ -420,5 +497,6 @@ class TtCodePredictorCachedDecoder:
             codes.append(code)
             if step == self.groups - 2:
                 break
-            hidden = self._run(self.p["codec_embedding"][step][code].reshape(1, 1, -1), 2 + step)
+            self._fill_from_table(self.p["codec_embedding_device"][step], code)
+            hidden = self._run(2 + step)
         return codes

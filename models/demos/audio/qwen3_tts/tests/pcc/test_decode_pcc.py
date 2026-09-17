@@ -270,8 +270,10 @@ def test_cached_predictor_tracks_the_uncached_graph(device):
         codes.append(reference_codes[-1])
 
     cached.reset()
-    cached._run(talker_hidden.reshape(1, 1, -1), 0)
-    hidden = cached._run(cached.p["talker_codec_embedding"][int(first_code)].reshape(1, 1, -1), 1)
+    cached._fill_from_host(talker_hidden.reshape(1, 1, -1))
+    cached._run(0)
+    cached._fill_from_table(cached.p["talker_codec_embedding_device"], first_code)
+    hidden = cached._run(1)
 
     worst, exact, wide = 1.0, 0, []
     for step in range(groups - 1):
@@ -286,7 +288,10 @@ def test_cached_predictor_tracks_the_uncached_graph(device):
         elif gap > MAX_PREFERENCE_GAP:
             wide.append(f"codebook {step + 1} gap {gap:.4f}")
         if step < groups - 2:
-            hidden = cached._run(cached.p["codec_embedding"][step][reference].reshape(1, 1, -1), 2 + step)
+            # Forced along the uncached path's codes, and through the device-side lookup
+            # the frame loop uses rather than a host copy of the same row.
+            cached._fill_from_table(cached.p["codec_embedding_device"][step], reference)
+            hidden = cached._run(2 + step)
 
     print(f"codebooks matching exactly {exact}/{groups - 1} | worst logits pcc {worst:.6f}")
     assert not wide, "codebooks the uncached graph feels strongly about: " + "; ".join(wide)

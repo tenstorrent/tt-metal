@@ -19,6 +19,9 @@ The frame loop is charged per block, and the blocks are the ones a change can mo
 | `embed`          | summing 16 codebook embeddings on host into the next prompt position  |
 | `talker`         | the talker's 28-layer traced step                                   |
 
+The last column is audio over wall clock, so above 1 is faster than real time. The demos
+print it the same way round.
+
 `profile=True` syncs the device at every split, so each block is charged for its own device
 work rather than for whatever the next read waited on. The syncs cost a few percent of the
 frame, which is the price of knowing where the time goes; `decode_s` is the honest total.
@@ -59,7 +62,11 @@ SEED = 0
 
 MAX_MS_PER_FRAME = 60.0
 MAX_PREFILL_S = 4.0
-MAX_CODEC_S_PER_SECOND = 0.10
+# Per frame the decoder actually ran, padding included, rather than per second of audio
+# kept: a 13-frame utterance decodes a 32-frame bucket and throws the rest away, so the
+# per-second figure is three times the per-frame one. Measured 4.7 ms a frame at 32 frames
+# and 1.7 at 160, the difference being how well a longer decode parallelises.
+MAX_CODEC_MS_PER_FRAME = 8.0
 
 
 def _clear_caches():
@@ -100,7 +107,7 @@ def _row(name, timings, seconds):
         f"  {name:8s} {seconds:6.1f}s {frames:6d} {timings['prefill_s']:7.2f}s {timings['capture_s']:7.2f}s "
         + " ".join(f"{value:7.2f}" for value in per_frame)
         + f" {timings['ms_per_frame']:8.2f} {timings['codec_s']:7.2f}s {timings['total_s']:7.2f}s "
-        f"{seconds / timings['total_s']:6.2f}x"
+        f"{seconds / timings['total_s']:8.2f}x"
     )
 
 
@@ -131,13 +138,14 @@ def test_perf(device):
             failed.append(f"{name}: {timings['ms_per_frame']:.1f} ms/frame")
         if timings["prefill_s"] > MAX_PREFILL_S:
             failed.append(f"{name}: prefill {timings['prefill_s']:.2f} s")
-        if timings["codec_s"] / seconds > MAX_CODEC_S_PER_SECOND:
-            failed.append(f"{name}: codec {timings['codec_s'] / seconds:.3f} s per second of audio")
+        codec_ms = 1000 * timings["codec_s"] / max(timings["codec_padded_frames"], 1)
+        if codec_ms > MAX_CODEC_MS_PER_FRAME:
+            failed.append(f"{name}: codec {codec_ms:.1f} ms per decoded frame")
 
     header = " ".join(f"{key:>7s}" for key in BLOCKS)
     print(
         f"\n  {'':8s} {'audio':>7s} {'frames':>6s} {'prefill':>8s} {'capture':>8s} {header} {'ms/frame':>8s} "
-        f"{'codec':>8s} {'total':>8s} {'RTF':>7s}"
+        f"{'codec':>8s} {'total':>8s} {'faster':>9s}"
     )
     print("  " + "-" * 118)
     print("\n".join(rows))
