@@ -450,9 +450,12 @@ std::pair<float, float> sfpu_tolerance(const std::string& op_name, bool fp32_des
 
 bool is_close_packed_sfpu_output(
     const std::vector<uint32_t>& vec_a, const std::vector<uint32_t>& vec_b, const std::string& op_name) {
-    if (is_int8_binary_sfpu_op(op_name) || op_name == "binary_max" || op_name == "binary_min" || op_name == "ceil" ||
-        op_name == "floor" || op_name == "trunc" || op_name == "frac" || op_name == "round") {
+    if (is_int8_binary_sfpu_op(op_name) || op_name == "binary_max" || op_name == "binary_min") {
         return vec_a == vec_b;
+    }
+    if (op_name == "ceil" || op_name == "floor" || op_name == "trunc" || op_name == "frac" || op_name == "round") {
+        return is_close_packed_vectors<bfloat16, uint32_t>(
+            vec_a, vec_b, [](const bfloat16& a, const bfloat16& b) { return a == b; });
     }
     if (op_name == "where") {
         // Matches the LLK pytest's torch.isclose(rtol=0.05, atol=0.05) for
