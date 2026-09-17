@@ -1039,11 +1039,35 @@ void D2dSyncConsumer::publish_error_plots() const {
     }
 }
 
+void D2dSyncConsumer::publish_clock_plots() const {
+    for (const auto& [dev, fit] : local_) {
+        const auto ps = published_.find(dev);
+        if (ps == published_.end() || ps->second.nodes.empty() || dev >= ctx_.devices.size()) {
+            continue;
+        }
+        std::vector<SyncPlotPoint> pts;
+        for (const LocalClockModel::Run& run : fit.runs) {
+            if (run.n == 0 || run.slope() <= 0.0) {
+                continue;
+            }
+            const double ghz = run.slope() * LocalClockModel::kRefclkHz * 1e-9;
+            for (const double r : {run.r_first, run.r_last}) {
+                const double root = ps->second.root_at(std::llround(run.wall_of_refclk(r)));
+                pts.push_back(SyncPlotPoint{std::llround(tsc_at(root)), ghz});
+            }
+        }
+        if (!pts.empty()) {
+            SyncPlots::publish(fmt::format("AICLK chip{} (GHz)", ctx_.devices[dev].chip_id), std::move(pts));
+        }
+    }
+}
+
 void D2dSyncConsumer::on_capture_end(const CaptureContext& ctx) {
     (void)ctx;
     try_solve_links(/*final=*/true);
     publish_all();
     publish_error_plots();
+    publish_clock_plots();
     SyncPlots::complete();
     log_summary();
     // The published corrections stay for the sinks that write at process end; the next attach starts fresh.

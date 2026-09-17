@@ -103,9 +103,9 @@ public:
     static int64_t mono_ns(int64_t tsc) noexcept;
 };
 
-// A named (host TSC tick, value) series a consumer computes once a capture is complete -- the d2d sync's running
-// cross-chip rate estimates -- for a plotting sink to place on the device timeline. Not a hot path: published once at
-// capture end, drained once by the sink.
+// A named (host TSC tick, value) series a consumer computes once a capture is complete -- the d2d sync's error per
+// link and each chip's AICLK -- for a plotting sink to place on the device timeline. Not a hot path: published once
+// at capture end, drained once by the sink.
 struct SyncPlotPoint {
     int64_t tsc = 0;
     double value = 0.0;

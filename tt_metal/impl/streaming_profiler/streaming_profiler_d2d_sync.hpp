@@ -225,6 +225,8 @@ private:
     void publish_all();
     void log_summary() const;
     void publish_error_plots() const;
+    // Each chip's AICLK in GHz, a point at either end of every segment of its clock model.
+    void publish_clock_plots() const;
     // The receiver's stamp and the sender's round midpoint placed on the root's refclk as the sink places records
     // from each chip's eth core, and their difference in ns; tsc_a is the sender's host placement, the plots'
     // abscissa. False when a chip has no fitted run or no node to place a stamp with.

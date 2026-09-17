@@ -71,14 +71,7 @@ private:
     void push_zone(const Core& core, std::string_view name, int64_t start_tsc, int64_t end_tsc, uint32_t color);
     void push_marker(
         const Core& core, std::string_view name, int64_t tsc, uint32_t runtime_id, std::span<const uint64_t> values);
-    struct FreqPoint {
-        int64_t tsc;
-        double ghz;
-    };
-    std::vector<FreqPoint> compute_frequency(size_t begin, size_t end) const;
     const char* intern_name(const std::string& name);
-    // Plots are emitted at capture end, not during decode: at decode time the placement is not yet solved (a lookup
-    // returns 0) and the points would land at the origin.
     void emit_plots();
     void plot_point(const char* name, double value, int64_t tsc);
 
@@ -99,16 +92,6 @@ private:
     std::vector<SrclocEntry> srcloc_table_;     // open addressing, power-of-two size, at most half full
     [[maybe_unused]] size_t srcloc_count_ = 0;  // ditto: only the Tracy-enabled srcloc path touches it
     std::unordered_map<std::string, const void*> srclocs_;
-    std::vector<uint32_t> chips_;  // per device index, the chip id the placement is keyed by
-    uint32_t root_dev_ = 0;
-    struct PlotSample {
-        uint32_t dev;
-        uint32_t kind;
-        uint32_t core;  // eth core index on the device: one refclk counter per stream
-        uint64_t ts;    // the eth tile's wall tick
-        uint64_t value;  // the refclk reading
-    };
-    std::vector<PlotSample> plot_samples_;
     std::unordered_set<std::string> plot_names_;
 };
 
