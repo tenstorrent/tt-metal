@@ -36,17 +36,12 @@ inline constexpr std::array<const char*, 5> kRiscNames = {"BRISC", "NCRISC", "TR
 
 // Immutable once the receiver starts. Zone names are not here: they arrive per ELF as binaries JIT-load, so
 // the process-wide site table publishes them as ELFs load (init_site_registry).
-struct DeviceClock {
-    uint32_t chip_id = 0;
-    double frequency_ghz = 0.0;  // the worker wall clock's ticks per nanosecond, a few parts in 1e5
-};
-
 struct CaptureContext {
     struct Device {
         std::vector<experimental::streaming_profiler::Core> lanes;  // index by the record's lane
         std::vector<uint32_t> core_xy;  // core index -> packed NoC (y << 16) | x, the identity a frame carries
         uint32_t chip_id = 0;
-        DeviceClock clock;         // the worker wall clock's rate, for record durations
+        double frequency_ghz = 0.0;    // the worker wall clock's ticks per nanosecond, a few parts in 1e5
         bool has_eth_tracker = false;  // an idle-eth pusher tracks this chip's refclk: its records can be placed
         uint32_t n_eth_cores = 0;      // trailing cores in `lanes` that are eth (idle + active)
         // Per core, in `core_xy` order: eth wall tick minus that core's wall tick, measured by the pusher at arm.

@@ -63,8 +63,6 @@ public:
 
     // The root refclk tick of a chip's eth wall tick; 0 before the chip's first node.
     double lookup_root(uint32_t chip_id, int64_t wall) const noexcept;
-    // The host TSC tick of a chip's eth wall tick; 0 before the chip's first node or the host's.
-    int64_t lookup_tsc(uint32_t chip_id, int64_t wall) const noexcept;
     // Wall tick `wall` of chip `chip_id` on host_clock (tenths of a ns of the TSC): the chip series and the host
     // series composed into one line per segment pair, one multiply-add per record while a batch stays inside it. 0
     // when nothing places the tick yet.

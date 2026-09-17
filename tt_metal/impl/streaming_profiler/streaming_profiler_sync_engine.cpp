@@ -549,7 +549,7 @@ void SyncEngine::log_summary() const {
         }
         const double mean = static_cast<double>(ssum / wsum);
         const double to_ghz = LocalClockModel::kRefclkHz * 1e-9;
-        const double anchor_ghz = dev < ctx_.devices.size() ? ctx_.devices[dev].clock.frequency_ghz : 0.0;
+        const double anchor_ghz = dev < ctx_.devices.size() ? ctx_.devices[dev].frequency_ghz : 0.0;
         log_info(
             tt::LogMetal,
             "[streaming profiler] d2d sync chip {}: local clock {} points in {} segments ({} steps), {} raw transition "
@@ -908,7 +908,7 @@ void SyncEngine::publish_error_plots() {
                 continue;
             }
             const std::vector<SeriesPublisher::Node>& nodes = ps->nodes;
-            const double ghz = std::max(ctx_.devices[dev].clock.frequency_ghz, 0.1);
+            const double ghz = std::max(ctx_.devices[dev].frequency_ghz, 0.1);
             for (size_t i = 0; i < pts.size(); i++) {
                 const double wall = dev == L.dev_a ? terms[i].wall_a : terms[i].wall_b;
                 const auto up =

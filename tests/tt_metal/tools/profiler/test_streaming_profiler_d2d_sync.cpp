@@ -9,7 +9,7 @@
 // this test exercises beyond the single-link case. The chips' refclks run at exactly 50 MHz with known offsets; their
 // AICLKs are known functions of true time (chip 0 drops one DVFS step mid-session; chips 1 and 2 steady); the host
 // series ties the root's refclk to a TSC of known rate. The placement every record converts through
-// (sync.map().lookup_tsc on the record's eth wall tick) must recover TRUE host time in every case:
+// (sync.map().place_host on the record's eth wall tick) must recover TRUE host time in every case:
 //   (a) chip 0 before its switch;
 //   (b) chip 0 after its switch: the run boundary must be placed where the two lines meet;
 //   (c) chip 1 (one hop): only the 0-1 link places it;
@@ -97,8 +97,7 @@ int main() {
             d.core_xy.push_back(0);
         }
         d.n_eth_cores = static_cast<uint32_t>(eth[c].size());
-        d.clock.chip_id = static_cast<uint32_t>(c);
-        d.clock.frequency_ghz = kF0 * 1e-9;
+        d.frequency_ghz = kF0 * 1e-9;
         d.has_eth_tracker = true;
         ctx.devices.push_back(d);
     }
@@ -204,14 +203,17 @@ int main() {
     burst(/*snd*/ 1, 1 * kN, /*rcv*/ 2, 0 * kN);  // link (1 e1 -> 2 e0): chip 1's e1 is core index 1
     sync.on_capture_end(ctx);
 
-    // A record's placement: its eth wall tick through the chip's series, as the service places a record at release.
+    // A record's placement: its eth wall tick through the chip's series, as the service places a record at release,
+    // read back as the TSC tick it is on host_clock.
+    const auto placed_tsc = [&](int c, double tau) {
+        const int64_t units = sync.map().place_host(static_cast<uint32_t>(c), std::llround(wall(c, tau)));
+        return api::host_clock::tsc(api::host_clock::time_point(api::host_clock::duration(units)));
+    };
     const auto placed_ns = [&](int c, double tau) {
-        const int64_t t = sync.map().lookup_tsc(static_cast<uint32_t>(c), std::llround(wall(c, tau)));
-        return (static_cast<double>(t) - tsc(tau)) / kTicksPerNs;  // ns from the truth
+        return (static_cast<double>(placed_tsc(c, tau)) - tsc(tau)) / kTicksPerNs;  // ns from the truth
     };
     const auto steady_ns = [&](int c, double tau) {
-        return static_cast<double>(
-            SteadyView::mono_ns(sync.map().lookup_tsc(static_cast<uint32_t>(c), std::llround(wall(c, tau)))));
+        return static_cast<double>(SteadyView::mono_ns(placed_tsc(c, tau)));
     };
     char what[112];
     for (double tau : {0.050, 0.150, 0.280}) {
@@ -240,31 +242,6 @@ int main() {
             check_near(what, steady_ns(c, tau), host_ns(tau), 6.0);
         }
     }
-    // The composed placement the service stamps records with must be the two-level lookup, everywhere: across chip
-    // 0's step, across the host nodes, on the open tangents, on every chip.
-    {
-        double worst = 0.0;
-        size_t n = 0;
-        for (int c = 0; c < 3; c++) {
-            for (double tau = 0.001; tau < 0.999; tau += 0.00037) {
-                const int64_t w = std::llround(wall(c, tau));
-                const int64_t two = sync.map().lookup_tsc(static_cast<uint32_t>(c), w);
-                const int64_t one = sync.map().place_host(static_cast<uint32_t>(c), w);
-                if (two == 0 || one == 0) {
-                    continue;
-                }
-                const int64_t two_units = api::host_clock::from_tsc(two).time_since_epoch().count();
-                worst = std::max(worst, std::fabs(static_cast<double>(one - two_units)) / 10.0);
-                n++;
-            }
-        }
-        // The reference is rounded to a whole TSC tick and the composed value to a host_clock unit.
-        const double tick_ns = static_cast<double>(api::host_clock::from_tsc(1).time_since_epoch().count() -
-                                                   api::host_clock::from_tsc(0).time_since_epoch().count()) /
-                               10.0;
-        std::snprintf(what, sizeof what, "composed placement vs two-level lookup over %zu instants (ns)", n);
-        check_near(what, worst, 0.0, tick_ns + 0.1);
-    }
     // A series past its capacity keeps its newest nodes: placement on them is unchanged, and a key before the oldest
     // kept node still places, on that node's tangent.
     {
@@ -287,7 +264,7 @@ int main() {
             g_fail++;
         }
     }
-    if (sync.map().lookup_tsc(2, std::llround(wall(2, 0.5))) == 0) {
+    if (sync.map().place_host(2, std::llround(wall(2, 0.5))) == 0) {
         std::printf("FAIL (d) chip2 is not placed: the leaf never reached the root\n");
         g_fail++;
     }

@@ -262,18 +262,6 @@ double PlacementMap::host_tsc(double root) const noexcept {
     return tsc;
 }
 
-int64_t PlacementMap::lookup_tsc(uint32_t chip_id, int64_t wall) const noexcept {
-    if (chip_id >= kMaxChips) {
-        return 0;
-    }
-    ThreadView& v = view_of(impl_.get());
-    double root = 0.0, tsc = 0.0;
-    if (!place(impl_->chips[chip_id], v.chip[chip_id], wall, root) || !place(impl_->host, v.host, root, tsc)) {
-        return 0;
-    }
-    return std::llrint(tsc);
-}
-
 int64_t PlacementMap::place_host(uint32_t chip_id, int64_t wall) const noexcept {
     if (chip_id >= kMaxChips) {
         return 0;

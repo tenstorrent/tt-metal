@@ -314,16 +314,10 @@ bool Devices::boot_device(
         return false;
     }
     auto& cluster = MetalContext::instance(context_id_).get_cluster();
-    ctx.out.ctx.clock = DeviceClock{
-        .chip_id = ctx.chip_id,
-        .frequency_ghz = measure_frequency_ghz(cluster, ctx.chip_id, ctx.producers.front().virt)};
-    TT_FATAL(
-        ctx.out.ctx.clock.frequency_ghz > 0.0, "streaming profiler: device {} wall clock did not advance", ctx.chip_id);
+    ctx.out.ctx.frequency_ghz = measure_frequency_ghz(cluster, ctx.chip_id, ctx.producers.front().virt);
+    TT_FATAL(ctx.out.ctx.frequency_ghz > 0.0, "streaming profiler: device {} wall clock did not advance", ctx.chip_id);
     SyncDevices::Device sd{
-        .chip_id = ctx.chip_id,
-        .device = ctx.device,
-        .eth = ctx.idle_eth,
-        .frequency_ghz = ctx.out.ctx.clock.frequency_ghz};
+        .chip_id = ctx.chip_id, .device = ctx.device, .eth = ctx.idle_eth, .frequency_ghz = ctx.out.ctx.frequency_ghz};
     sd.tensix.assign(ctx.producers.begin(), ctx.producers.begin() + ctx.n_workers);
     if (ctx.pusher) {
         sd.linked.assign(ctx.producers.begin() + ctx.n_workers + 1, ctx.producers.end());
