@@ -48,8 +48,9 @@
 #include "llk_sfpu/ckernel_sfpu_add.h"            // calculate_add_int (int add)
 #include "llk_sfpu/ckernel_sfpu_atan2.h"          // calculate_sfpu_atan2 / calculate_sfpu_atan2_init (float atan2)
 #include "llk_sfpu/ckernel_sfpu_binary.h"         // calculate_sfpu_binary / sfpu_binary_init (float mul/div)
-#include "llk_sfpu/ckernel_sfpu_binary_max_min.h" // calculate_binary_max_min / _init_binary_max_min_
-#include "llk_sfpu/ckernel_sfpu_quant.h"          // quant_family / quant_family_init (quant/requant/dequant)
+#include "llk_sfpu/ckernel_sfpu_binary_max_min.h"   // calculate_binary_max_min / _init_binary_max_min_
+#include "llk_sfpu/ckernel_sfpu_copy_dest_values.h" // copy_dest_value / copy_dest_value_init (Dest-to-Dest copy)
+#include "llk_sfpu/ckernel_sfpu_quant.h"            // quant_family / quant_family_init (quant/requant/dequant)
 #include "llk_sfpu/llk_math_eltwise_binary_sfpu_macros.h"
 #include "sfpu/ckernel_sfpu_binary_comp.h" // calculate_binary_comp_int32 (int gt/lt/le/ge)
 #include "sfpu/ckernel_sfpu_mul_int32.h"   // _mul_int32_ (int mul)
@@ -463,7 +464,7 @@ void init_binary_sfpu_operation_quasar([[maybe_unused]] std::uint32_t zero_point
         // reciprocal variant.
         calculate_sfpu_atan2_init<APPROXIMATION_MODE, is_fp32_dest_acc_en>();
     }
-    // ADD / SUB / GT / LT / LE / GE are stateless — no init.
+    // ADD / SUB / GT / LT / LE / GE / COPY_DEST are stateless — no init.
 }
 
 /**
@@ -597,6 +598,22 @@ void call_binary_sfpu_operation_quasar(std::uint32_t src0_tile, std::uint32_t sr
             src1_tile,
             dst_tile,
             VectorMode::RC);
+    }
+    else if constexpr (OP == BinaryOp::COPY_DEST)
+    {
+        // Dest-to-Dest copy of src0 onto dst. Kernel ABI is (in, out, unused), matching
+        // the shared compute API — not the usual binary (in0, in1, out). Int32 needs an
+        // explicit sfpmem mode (TEN-4674); every other math format uses DEFAULT.
+        if (math_format == DataFormat::Int32)
+        {
+            SFPU_BINARY_CALL(
+                DST_SYNC, is_fp32_dest_acc_en, copy_dest_value, (DataFormat::Int32, false, ITERATIONS), src0_tile, dst_tile, 0 /* unused */, VectorMode::RC);
+        }
+        else
+        {
+            SFPU_BINARY_CALL(
+                DST_SYNC, is_fp32_dest_acc_en, copy_dest_value, (DataFormat::Float32, false, ITERATIONS), src0_tile, dst_tile, 0 /* unused */, VectorMode::RC);
+        }
     }
     else if constexpr (quasar_binary_op_is_quant(OP))
     {
