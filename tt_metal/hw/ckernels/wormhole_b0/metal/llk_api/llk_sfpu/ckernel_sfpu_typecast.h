@@ -1069,10 +1069,17 @@ inline void calculate_typecast_int8_to_fp32() {
         TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::FP32, ADDR_MOD_2, 0);
     }
 #else
-    // This uses SFPLOADMACRO to achieve a throughput of 3 cycles per input row. The XOR -> CAST
-    // order is forced (SFPCAST reads sign-magnitude), so only the scheduling changes: the three
-    // macros below hold the same XOR, CAST and subtract, spread across the Simple, MAD and Store
-    // sub-units so consecutive rows overlap.
+    // This uses SFPLOADMACRO to achieve a throughput of 3 issue slots per input row. The XOR -> CAST
+    // order is forced (SFPCAST reads sign-magnitude), so only the scheduling changes: the macros
+    // below hold the same XOR, CAST and subtract, spread across the Simple, MAD and Store sub-units
+    // so consecutive rows overlap.
+    //
+    // Three macros is not a requirement: macro 2 carries only the Store, and its load is dead,
+    // unlike in init_typecast_uint32_to_fp32 where the MAD reads the loaded value back through an
+    // indirect VA. Folding the Store onto macro 1 would cut this to 2 slots per row, at the cost of
+    // leaning on the minimum MAD-to-Store delay. Left alone because the gain would not show up:
+    // even moving from the plain loop to macros only helped at 32x32, with larger shapes
+    // bandwidth-bound.
     //
     // Notation: [x] means scheduled by SFPLOADMACRO with VD=x.
     //

@@ -45,7 +45,8 @@ _CLAMP_LOW_MAGNITUDE = 1000
 
 
 def _output_allows_negative(tt_output_dtype):
-    return tt_output_dtype in (ttnn.int32, ttnn.int8)
+    # int8 is signed too, but the _NARROW_8BIT_OUTPUT_DTYPES branch above handles it first.
+    return tt_output_dtype == ttnn.int32
 
 
 def typecast_test_input_bounds(tt_input_dtype, tt_output_dtype):

@@ -9,8 +9,6 @@
 
 namespace ttnn::operations::copy::detail {
 
-constexpr bool is_8_bit_int(DataType dtype) { return dtype == DataType::UINT8 or dtype == DataType::INT8; }
-
 inline Tensor typecast_impl(
     const Tensor& input_tensor,
     const DataType& output_dtype,
