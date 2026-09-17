@@ -54,9 +54,11 @@ void bind_tensor_prefetcher(nb::module_& mod) {
                 idle_free_sender_mpfe_weight (Optional[int]): Coordinator weight while no request is active.
                 idle_noc1_sender_mpfe_weight (Optional[int]): NOC1-sender weight while no request is active.
                 idle_ordinary_mpfe_weight (Optional[int]): Ordinary-traffic weight while no request is active.
+                synchronize_senders (bool): Rendezvous active sender pairs after each request.
 
             MPFE weight overrides must be in [0, 7]. Active values default to 0/1/5.
             An omitted idle value inherits its active value, selecting static behavior.
+            Dynamic ordinary-operation weights require sender synchronization.
 
             Two sender kernels are provisioned per DRAM bank. Each queued GCB selects one
             or both senders per bank; unused senders remain parked on their sockets.
@@ -69,7 +71,8 @@ void bind_tensor_prefetcher(nb::module_& mod) {
         nb::arg("ordinary_mpfe_weight") = nb::none(),
         nb::arg("idle_free_sender_mpfe_weight") = nb::none(),
         nb::arg("idle_noc1_sender_mpfe_weight") = nb::none(),
-        nb::arg("idle_ordinary_mpfe_weight") = nb::none());
+        nb::arg("idle_ordinary_mpfe_weight") = nb::none(),
+        nb::arg("synchronize_senders") = true);
 
     ttnn::bind_function<"queue_tensor_prefetcher_request", "ttnn.experimental.">(
         mod,

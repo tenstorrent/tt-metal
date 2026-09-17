@@ -19,11 +19,12 @@ class MpfeBenchmarkWeights:
     name: str
     weights: tuple[Optional[int], Optional[int], Optional[int]]
     idle_weights: tuple[Optional[int], Optional[int], Optional[int]]
+    synchronize_senders: bool
 
-    def start_kwargs(self) -> dict[str, int]:
+    def start_kwargs(self) -> dict[str, int | bool]:
         free_sender, noc1_sender, ordinary = self.weights
         idle_free_sender, idle_noc1_sender, idle_ordinary = self.idle_weights
-        return {
+        kwargs: dict[str, int | bool] = {
             name: weight
             for name, weight in (
                 ("free_sender_mpfe_weight", free_sender),
@@ -35,6 +36,8 @@ class MpfeBenchmarkWeights:
             )
             if weight is not None
         }
+        kwargs["synchronize_senders"] = self.synchronize_senders
+        return kwargs
 
 
 def _weight(name: str) -> Optional[int]:
@@ -43,6 +46,14 @@ def _weight(name: str) -> Optional[int]:
         return None
     assert len(value) == 1 and "0" <= value <= "7", f"{name} must be one digit in [0, 7], got {value!r}"
     return int(value)
+
+
+def _synchronize_senders() -> bool:
+    value = os.environ.get(f"{_PREFIX}SYNCHRONIZE_SENDERS")
+    if value is None:
+        return True
+    assert value in ("0", "1"), f"SYNCHRONIZE_SENDERS must be 0 or 1, got {value!r}"
+    return value == "1"
 
 
 def resolve_mpfe_benchmark_weights() -> MpfeBenchmarkWeights:
@@ -64,7 +75,12 @@ def resolve_mpfe_benchmark_weights() -> MpfeBenchmarkWeights:
         active_label = "".join("-" if weight is None else str(weight) for weight in weights)
         idle_label = "".join("-" if weight is None else str(weight) for weight in idle_weights)
         name = f"dynamic-{idle_label}-to-{active_label}"
-    return MpfeBenchmarkWeights(name=name, weights=weights, idle_weights=idle_weights)
+    return MpfeBenchmarkWeights(
+        name=name,
+        weights=weights,
+        idle_weights=idle_weights,
+        synchronize_senders=_synchronize_senders(),
+    )
 
 
 def append_benchmark_jsonl(result: dict[str, Any]) -> None:

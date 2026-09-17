@@ -57,6 +57,16 @@ def test_tensor_prefetcher_rejects_invalid_mpfe_weight(device, expect_error, wei
         ttnn.experimental.start_tensor_prefetcher(device, **{weight_name: 8})
 
 
+def test_tensor_prefetcher_rejects_unsynchronized_dynamic_ordinary_weight(device, expect_error):
+    with expect_error(RuntimeError, "Dynamic ordinary-operation MPFE weights require"):
+        ttnn.experimental.start_tensor_prefetcher(
+            device,
+            ordinary_mpfe_weight=5,
+            idle_ordinary_mpfe_weight=0,
+            synchronize_senders=False,
+        )
+
+
 def _bank_receivers_row_major(bank_idx: int, recv_per_bank: int, ring_cols: int, row_offset: int = 0):
     """CoreRangeSet for bank `bank_idx`'s receivers, laid out row-major on a
     ring_cols-wide grid. Matches the bench's gather_in0 receiver layout."""

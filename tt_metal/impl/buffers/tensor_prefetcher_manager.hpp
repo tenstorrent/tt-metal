@@ -200,6 +200,7 @@ private:
     std::vector<CoreCoord> sender_logical_cores_;
     uint32_t num_senders_ = 0;
     uint32_t num_banks_ = 0;
+    bool synchronize_senders_ = true;
 
     // One program per IDevice in the mesh; programs_[d].
     std::vector<std::unique_ptr<Program>> programs_;

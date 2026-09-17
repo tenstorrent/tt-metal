@@ -612,6 +612,12 @@ void TensorPrefetcherManager::start(const experimental::TensorPrefetcherConfig& 
         mpfe_policy.active.free_sender,
         mpfe_policy.active.noc1_sender,
         mpfe_policy.active.ordinary);
+    TT_FATAL(
+        config.synchronize_senders || mpfe_policy.idle.ordinary == mpfe_policy.active.ordinary,
+        "Dynamic ordinary-operation MPFE weights require synchronize_senders=true (idle {}, active {})",
+        mpfe_policy.idle.ordinary,
+        mpfe_policy.active.ordinary);
+    synchronize_senders_ = config.synchronize_senders;
 
     const auto& hal = MetalContext::instance(mesh_device_->impl().get_context_id()).hal();
     TT_FATAL(
@@ -732,7 +738,7 @@ std::vector<std::vector<std::vector<uint8_t>>> TensorPrefetcherManager::serializ
         std::vector<bool> result(mapping.size(), false);
         // Sender indices are adjacent [free, NOC1] pairs for each bank.
         for (uint32_t s = 0; s < target_sender_indices.size(); ++s) {
-            result[s] = selected_sender[target_sender_indices[s] ^ 1u];
+            result[s] = synchronize_senders_ && selected_sender[target_sender_indices[s] ^ 1u];
         }
         return result;
     }();
@@ -1363,6 +1369,7 @@ void TensorPrefetcherManager::stop() {
     trace_requests_.clear();
     num_senders_ = 0;
     num_banks_ = 0;
+    synchronize_senders_ = true;
     active_ = false;
 }
 

@@ -21,7 +21,8 @@ void start_tensor_prefetcher(
     std::optional<uint32_t> ordinary_mpfe_weight,
     std::optional<uint32_t> idle_free_sender_mpfe_weight,
     std::optional<uint32_t> idle_noc1_sender_mpfe_weight,
-    std::optional<uint32_t> idle_ordinary_mpfe_weight) {
+    std::optional<uint32_t> idle_ordinary_mpfe_weight,
+    bool synchronize_senders) {
     tt::tt_metal::experimental::StartTensorPrefetcher(
         *mesh_device,
         {
@@ -31,6 +32,7 @@ void start_tensor_prefetcher(
             .idle_free_sender_mpfe_weight = idle_free_sender_mpfe_weight,
             .idle_noc1_sender_mpfe_weight = idle_noc1_sender_mpfe_weight,
             .idle_ordinary_mpfe_weight = idle_ordinary_mpfe_weight,
+            .synchronize_senders = synchronize_senders,
         });
 }
 

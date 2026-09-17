@@ -66,7 +66,8 @@ void start_tensor_prefetcher(
     std::optional<uint32_t> ordinary_mpfe_weight = std::nullopt,
     std::optional<uint32_t> idle_free_sender_mpfe_weight = std::nullopt,
     std::optional<uint32_t> idle_noc1_sender_mpfe_weight = std::nullopt,
-    std::optional<uint32_t> idle_ordinary_mpfe_weight = std::nullopt);
+    std::optional<uint32_t> idle_ordinary_mpfe_weight = std::nullopt,
+    bool synchronize_senders = true);
 
 // `capture_into_trace` selects whether this request may be captured into a trace: when true
 // and the calling thread's current command queue is mid trace-capture, the request is captured

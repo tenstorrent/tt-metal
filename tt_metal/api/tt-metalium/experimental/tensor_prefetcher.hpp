@@ -45,6 +45,7 @@ struct TensorPrefetcherConfig {
     std::optional<uint32_t> idle_free_sender_mpfe_weight = std::nullopt;
     std::optional<uint32_t> idle_noc1_sender_mpfe_weight = std::nullopt;
     std::optional<uint32_t> idle_ordinary_mpfe_weight = std::nullopt;
+    bool synchronize_senders = true;
 };
 
 // Returns true if the Tensor prefetcher is supported on `mesh_device`, i.e.
@@ -114,6 +115,8 @@ struct TensorPrefetcherInput {
 //   - DRAM programmable cores are available on this mesh (Blackhole with firmware
 //     >= 19.12.0.0).
 //   - Every provided active or idle MPFE weight override is in [0, 7].
+//   - Dynamic ordinary-operation weights require synchronize_senders=true so one
+//     sender cannot restore the shared slot while its peer remains active.
 void StartTensorPrefetcher(distributed::MeshDevice& mesh_device, const TensorPrefetcherConfig& config);
 
 // Queue one prefetch request. Non-blocking.
