@@ -399,7 +399,7 @@ class RunTimeOptions {
     // Force JIT compile even if dependencies are up to date
     bool force_jit_compile = false;
 
-    // Compile-only mode: run host-side op setup + JIT-compile all kernels, but skip device
+    // Run host-side op setup + JIT-compile all kernels, but skip device
     // dispatch. Used to pre-compile a whole model's kernels without executing anything.
     // Any op that reads device tensor data asserts.
     bool compile_only = false;

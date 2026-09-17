@@ -3045,8 +3045,6 @@ void detail::ProgramImpl::compile_and_allocate(IDevice* device, bool force_slow_
     // program. The validation steps still have to run: they read live device state - L1 allocations
     // made since the last enqueue, and service-core claims - so a buffer that has come to overlap
     // this program's regions is only caught by re-checking them here.
-    // Unreachable under compile-only: that path returns below without clearing
-    // compile_and_allocate_needed_, so the program is never marked laid out for this device.
     if (not this->compile_and_allocate_needed_ and this->compile_and_allocate_device_ == device) {
         this->validate_circular_buffer_core_ranges(device);
         this->validate_circular_buffer_region(device);

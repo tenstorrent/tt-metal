@@ -251,9 +251,7 @@ TEST_F(MeshEndToEnd2x4Tests, UntracedEltwiseAddTest) {
     }
 }
 
-// Compile-only mode contract: EnqueueMeshWorkload compiles a workload's kernels but does not
-// dispatch it, and a subsequent normal run still works. (Full-cache coverage is in the WAN
-// test_compilation.sh.)
+// Compile-only mode: EnqueueMeshWorkload compiles a workload's kernels but does not dispatch it.
 TEST_F(MeshEndToEnd2x4Tests, CompileOnlyCompilesWithoutDispatch) {
     constexpr uint8_t kAddOpId = 0;
 
@@ -299,7 +297,7 @@ TEST_F(MeshEndToEnd2x4Tests, CompileOnlyCompilesWithoutDispatch) {
         ~CompileOnlyGuard() { opts.set_compile_only(false); }
     } guard{rtoptions};
 
-    // Outlives the compile-only pass: the normal pass below re-enqueues THIS workload.
+    // Outlives the compile-only pass: the normal pass below re-enqueues this workload.
     auto compile_only_program =
         EltwiseBinaryProgramGenerator(a_buffer, b_buffer, out_buffer, num_tiles, tile_size_bytes, kAddOpId);
     auto compile_only_workload = MeshWorkload();
@@ -323,7 +321,7 @@ TEST_F(MeshEndToEnd2x4Tests, CompileOnlyCompilesWithoutDispatch) {
             << "compile-only mode dispatched the workload (output changed from the sentinel)";
     }
 
-    // --- Normal pass re-enqueuing the SAME workload: the pre-compiled programs must dispatch. ---
+    // --- Normal pass re-enqueuing the same workload: the pre-compiled programs must dispatch. ---
     // Regression: compile-only marked them compiled without loading binaries -> "binary not found".
     EnqueueMeshWorkload(cq, compile_only_workload, false /* blocking */);
 
