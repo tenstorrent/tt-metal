@@ -28,6 +28,7 @@ from ...utils import walltime
 from ...utils.ltx import load_conditioning_image
 from ...utils.patchifiers import AudioLatentShape, VideoPixelShape
 from ...utils.tensor import bf16_tensor
+from ...utils.tracing import StateTensor, traced_function
 from ...utils.video import export_video_audio, export_video_audio_yuv
 from .pipeline_ltx import SPATIAL_COMPRESSION, TEMPORAL_COMPRESSION, LTXPipeline, LTXTransformerState, latent_grid
 
@@ -362,6 +363,8 @@ class LTXDistilledPipeline(LTXPipeline):
                 _alloc("s2", kf_per_token, height=height, width=width)
                 if i2v_families:
                     _alloc("s2", True, height=height, width=width)
+            if "s1" in stages and "s2" in stages and self._device_resident(None):
+                self._transition_io(num_frames, height, width)
             if "s1_ref" in stages:
                 _alloc("s1_ref", image_capable, height=height // 2, width=width // 2, ref_num_frames=ref_num_frames)
             if "s2_ref" in stages:
@@ -534,6 +537,23 @@ class LTXDistilledPipeline(LTXPipeline):
                         ref_latent=dummy_ref_full,
                         traced=capture_traced,
                         trace_key="s2_ref",
+                    )
+
+            # The device-resident stage transition: captured here, after the upsampler was loaded by its
+            # warmup and the stage-2 family exists, so its activations sit above every held input.
+            if "s1" in stages and "s2" in stages and self._device_resident(None) and not skip_dit_warmup:
+                self._prepare_upsampler()
+                logger.info("warmup stage transition (traced, device-resident)")
+                with walltime.timed("warmup", "stage transition build"):
+                    self._run_stage_transition(
+                        self._trace_state[self._trace_variant_key("s1", kf_per_token)].tt_video_lat,
+                        num_frames=num_frames,
+                        s1_height=height // 2,
+                        s1_width=width // 2,
+                        height=height,
+                        width=width,
+                        seed=0,
+                        traced=capture_traced,
                     )
 
             # Compile VAE decode at full-res (only s2 feeds decode in generate).
@@ -1017,9 +1037,7 @@ class LTXDistilledPipeline(LTXPipeline):
         video_lat_dev = None
         if initial_video_latent_device is not None:
             assert not image_cond, "device-resident stage input is T2V only"
-            video_lat_dev = self._noise_video_latent_device(
-                initial_video_latent_device, video_N_real, video_N, float(sigmas[0]), seed, sp_axis
-            )
+            video_lat_dev = initial_video_latent_device  # the traced transition already noised and sharded it
             video_lat = None
         else:
             video_lat_real = self._noise_video_latent(base_v, i2v.denoise_mask, sigmas[0], seed)
@@ -1215,36 +1233,67 @@ class LTXDistilledPipeline(LTXPipeline):
     # ----- device-resident stage transition (T2V) -----------------------------------------------------------
     def _device_resident(self, images) -> bool:
         """Keep the video latent on device from stage 1 through the upsampler into stage 2 (T2V only).
-        Opt-in (``LTX_DEVICE_RESIDENT=1``): in this pipeline the first traced stage-2 replay fed from the
-        device-resident input hangs on both the 2x4 Linear and the 4x8 Ring mesh (the capture gen runs),
-        so the served path keeps the host round-trip until that replay is understood."""
-        return bool(not images and os.environ.get("LTX_DEVICE_RESIDENT", "0") == "1")
+        The transition is a trace of its own: eager collectives issued after a replay deadlock on this
+        line (the encode met the same class), traced ones do not. Default on for a Linear mesh; the Ring
+        mesh keeps the host round-trip unless ``LTX_DEVICE_RESIDENT=1`` forces the device path, and
+        ``LTX_DEVICE_RESIDENT=0`` restores the host round-trip everywhere."""
+        if images:
+            return False
+        flag = os.environ.get("LTX_DEVICE_RESIDENT")
+        if flag is not None:
+            return flag == "1"
+        return self.ccl_manager.topology != ttnn.Topology.Ring
 
-    def _replicated_channel_vec(self, v: torch.Tensor) -> ttnn.Tensor:
-        return ttnn.from_torch(
-            v.reshape(1, 1, 1, -1).float(),
-            device=self.mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat16,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+    def _transition_io(self, num_frames: int, height: int, width: int) -> dict:
+        """Persistent inputs of the traced stage transition, allocated before any capture like the stage
+        I/O: the seeded stage-2 noise (uploaded per gen into the baked buffer) and the VAE per-channel
+        stats. ``weights`` records the upsampler's weight addresses at capture; the trace bakes them."""
+        io = getattr(self, "_t12_io", None)
+        if io is not None:
+            return io
+        latent_frames, lh, lw = latent_grid(num_frames, height, width)
+        video_N = self._sp_pad_len(latent_frames * lh * lw)
+        sp_axis = self.parallel_config.sequence_parallel.mesh_axis
+        mean, std = self._vae_per_channel_stats()
+        io = {"noise": StateTensor(), "mean": StateTensor(), "std": StateTensor(), "weights": None}
+        io["noise"].update(
+            torch.zeros(1, 1, video_N, self.in_channels), False, mesh_axes=[None, None, sp_axis, None], device=self.mesh_device
         )
+        for key, v in (("mean", mean), ("std", std)):
+            io[key].update(v.reshape(1, 1, 1, -1).float(), False, device=self.mesh_device)
+        self._t12_io = io
+        return io
 
-    def _upsample_latent_on_device(
-        self, tt_tokens: ttnn.Tensor, latent_frames: int, s1_h: int, s1_w: int, sp_axis: int
+    def _upsampler_weight_addresses(self) -> tuple:
+        return tuple(p.data.buffer_address() for _, p in self.upsampler.named_parameters() if p.data is not None)
+
+    @traced_function(device=lambda self: self.mesh_device, clone_prep_inputs=False, prep_run=False)
+    def _stage_transition(
+        self,
+        *,
+        tokens: ttnn.Tensor,
+        noise: ttnn.Tensor,
+        mean_t: ttnn.Tensor,
+        std_t: ttnn.Tensor,
+        latent_frames: int,
+        s1_h: int,
+        s1_w: int,
+        video_N_real: int,
+        video_N: int,
+        sigma: float,
+        sp_axis: int,
     ) -> ttnn.Tensor:
-        """Stage-1 tokens (``(1, 1, video_N, C)``, sequence-sharded on ``sp_axis``, normalized) -> the 2x
-        upsampled, re-normalized tokens ``(1, 1, video_N2_real, C)`` replicated on every device. Mirrors
-        ``upsample_latent`` (un-normalize -> replicate-pad H/W to the upsampler's mesh factors -> upsampler ->
-        crop -> re-normalize) with on-device gathers/partitions instead of the host gather + scatter."""
+        """Stage-1 tokens (``(1, 1, video_N1, C)``, sequence-sharded on ``sp_axis``, normalized) -> the noised
+        stage-2 input ``(1, 1, video_N, C)`` sharded like the stage-2 state buffer. Mirrors ``upsample_latent``
+        (un-normalize -> replicate-pad H/W to the upsampler's mesh factors -> upsampler -> crop -> re-normalize)
+        and ``_noise_video_latent`` (fp32 mix with the seeded draw) with on-device gathers/partitions."""
         ccl = self.ccl_manager
         ups = self.upsampler
         upc = ups.parallel_config
         C = self.in_channels
         n_real = latent_frames * s1_h * s1_w
-        mean, std = self._vae_per_channel_stats()
-        mean_t, std_t = self._replicated_channel_vec(mean), self._replicated_channel_vec(std)
 
-        x = ccl.all_gather(tt_tokens, dim=2, mesh_axis=sp_axis, use_hyperparams=False)  # replicated tokens
+        x = ccl.all_gather(tokens, dim=2, mesh_axis=sp_axis, use_hyperparams=False)  # replicated tokens
         x = ttnn.add(ttnn.multiply(x, std_t), mean_t)  # un-normalize (padded rows are garbage, sliced next)
         x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
         x = ttnn.slice(x, [0, 0, 0, 0], [1, 1, n_real, C])
@@ -1271,29 +1320,54 @@ class LTXDistilledPipeline(LTXPipeline):
         x = ttnn.slice(x, [0, 0, 0, 0], [latent_frames, 2 * s1_h, 2 * s1_w, C])
         x = ttnn.reshape(x, (1, 1, latent_frames * 2 * s1_h * 2 * s1_w, C))
         x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
-        return ttnn.multiply(ttnn.subtract(x, mean_t), ttnn.reciprocal(std_t))  # re-normalize
+        base = ttnn.multiply(ttnn.subtract(x, mean_t), ttnn.reciprocal(std_t))  # re-normalize
+        if video_N > video_N_real:
+            base = ttnn.pad(base, [(0, 0), (0, 0), (0, video_N - video_N_real), (0, 0)], 0.0)
+        base = ttnn.mesh_partition(base, dim=2, cluster_axis=sp_axis)
+        base32 = ttnn.typecast(base, ttnn.float32)
+        noise32 = ttnn.typecast(noise, ttnn.float32)
+        lat = ttnn.add(ttnn.multiply(noise32, sigma), ttnn.multiply(base32, 1.0 - sigma))
+        return ttnn.typecast(lat, ttnn.bfloat16)
 
-    def _noise_video_latent_device(
-        self, tokens_replicated: ttnn.Tensor, video_N_real: int, video_N: int, sigma: float, seed: int, sp_axis: int
-    ) -> ttnn.Tensor:
-        """Device twin of ``_noise_video_latent`` for the T2V stage-2 input: the same seeded host noise draw
-        (uploaded), the mix done in fp32 on device, the result sharded like the trace state buffer."""
+    def _run_stage_transition(
+        self, tokens: ttnn.Tensor, *, num_frames: int, s1_height: int, s1_width: int, height: int, width: int, seed: int, traced: bool
+    ) -> ttnn.Tensor | None:
+        """Upload this gen's seeded stage-2 noise and run the (traced) transition. Returns None when the
+        upsampler's weights no longer sit at the addresses the trace baked (a reload landed elsewhere),
+        so the caller takes the host round-trip for this gen instead of replaying over stale weights."""
+        io = self._transition_io(num_frames, height, width)
+        if traced and io["weights"] is not None and io["weights"] != self._upsampler_weight_addresses():
+            logger.warning("stage transition: upsampler weights moved since capture; host round-trip for this gen")
+            return None
+        latent_frames, s1_h, s1_w = latent_grid(num_frames, s1_height, s1_width)
+        _, lh, lw = latent_grid(num_frames, height, width)
+        video_N_real = latent_frames * lh * lw
+        video_N = self._sp_pad_len(video_N_real)
+        sp_axis = self.parallel_config.sequence_parallel.mesh_axis
         B, C = 1, self.in_channels
         torch.manual_seed(seed)
         noise = torch.randn((B, video_N_real, C), dtype=torch.bfloat16)  # identical draws to the host path
         noise_p = torch.zeros(1, B, video_N, C, dtype=torch.float32)
         noise_p[0, :, :video_N_real, :] = noise.float()
-        noise_dev = _tensor_utils.from_torch(
-            noise_p, device=self.mesh_device, mesh_axes=[None, None, sp_axis, None], dtype=ttnn.bfloat16
+        io["noise"].update(noise_p, True, mesh_axes=[None, None, sp_axis, None], device=self.mesh_device)
+        out = self._stage_transition(
+            tokens=tokens,
+            noise=io["noise"].value,
+            mean_t=io["mean"].value,
+            std_t=io["std"].value,
+            latent_frames=latent_frames,
+            s1_h=s1_h,
+            s1_w=s1_w,
+            video_N_real=video_N_real,
+            video_N=video_N,
+            sigma=float(STAGE_2_DISTILLED_SIGMA_VALUES[0]),
+            sp_axis=sp_axis,
+            traced=traced,
+            tracer_trace_key="t12",
         )
-        base = tokens_replicated
-        if video_N > video_N_real:
-            base = ttnn.pad(base, [(0, 0), (0, 0), (0, video_N - video_N_real), (0, 0)], 0.0)
-        base = ttnn.mesh_partition(base, dim=2, cluster_axis=sp_axis)
-        base32 = ttnn.typecast(base, ttnn.float32)
-        noise32 = ttnn.typecast(noise_dev, ttnn.float32)
-        lat = ttnn.add(ttnn.multiply(noise32, sigma), ttnn.multiply(base32, 1.0 - sigma))
-        return ttnn.typecast(lat, ttnn.bfloat16)
+        if traced and io["weights"] is None:
+            io["weights"] = self._upsampler_weight_addresses()
+        return out
 
     def generate(
         self,
@@ -1575,10 +1649,26 @@ class LTXDistilledPipeline(LTXPipeline):
         self._ensure_upsampler_frames(num_frames)  # tail-pad upsamples one extra latent frame
         self._prepare_upsampler()
         if device_resident:
-            upsampled_dev = self._upsample_latent_on_device(
-                s1_video, latent_frames, s1_h, s1_w, self.parallel_config.sequence_parallel.mesh_axis
+            upsampled_dev = self._run_stage_transition(
+                s1_video,
+                num_frames=num_frames,
+                s1_height=s1_height,
+                s1_width=s1_width,
+                height=height,
+                width=width,
+                seed=seed,
+                traced=self._traced and "s2" not in eager_stages,
             )
-        else:
+            if upsampled_dev is None:  # host round-trip for this gen
+                device_resident = False
+                s1_video = LTXTransformerModel.device_to_host(
+                    s1_video,
+                    ccl_manager=self.ccl_manager,
+                    parallel_config=self.parallel_config,
+                    sp_already_gathered=False,
+                    tp_already_gathered=True,
+                ).squeeze(0)[:, : latent_frames * s1_h * s1_w, :]
+        if not device_resident:
             s1_spatial = s1_video.reshape(1, latent_frames, s1_h, s1_w, 128).permute(0, 4, 1, 2, 3)
             upsampled = upsample_latent(self.upsampler, s1_spatial, *self._vae_per_channel_stats())
             _stats("upsampled", upsampled)

@@ -177,16 +177,16 @@ class LTXAttention(Module):
         uses_fused_agmm = tp_factor > 1 and ccl_manager is not None and ccl_manager.topology == ttnn.Topology.Ring
         # A fused linear carries a single weight dtype, but the quant profile holds the gate at bf16
         # while quantizing qkv/q, so the two cannot share one matmul: fusion is bf16-only.
-        # The gate fold is opt-in (LTX_FUSE_GATE=1): on the 4x8 Ring it saves ~0.15 s of a ~5 s denoise
-        # but lowers VBench subject consistency by 1-4 points against the standalone gate (two prompts,
-        # both directions of the conditioning path), so serving keeps the gate as its own projection.
-        # LTX_ATTN_FABRIC_AGMM=0 is the matching A/B switch for the strided-AGMM to_out route, which
-        # measured quality- and speed-neutral and stays on.
+        # The gate fold follows main (on wherever the fused AGMM route runs): on the 4x8 Ring it takes
+        # stage 1/2 from 2.30/2.60 to 2.18/2.47 s. Measured against the standalone gate it lowers VBench
+        # subject consistency by 1-4 points on two prompts, so LTX_FUSE_GATE=0 keeps the separate
+        # projection for a quality-first deployment. LTX_ATTN_FABRIC_AGMM=0 is the matching A/B switch
+        # for the strided-AGMM to_out route, which measured quality- and speed-neutral.
         self.fuse_gate = (
             apply_gated_attention
             and uses_fused_agmm
             and quant_config is None
-            and os.environ.get("LTX_FUSE_GATE", "0") == "1"
+            and os.environ.get("LTX_FUSE_GATE", "1") != "0"
         )
 
         # Gate is num_heads/TP columns per device (sub-tile); pad to a whole tile so it's a legal chunk.
