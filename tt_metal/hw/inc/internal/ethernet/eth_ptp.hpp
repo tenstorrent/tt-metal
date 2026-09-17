@@ -115,7 +115,9 @@ constexpr uint32_t kRxThStatusFlush = 1u << 30;
 constexpr uint32_t kRxThStatusPop = 1u << 31;
 constexpr uint32_t kRxThLabelMask = 0x1F;
 constexpr uint32_t kRxThLabelValid = 1u << 31;
-constexpr uint32_t kRxFdOverrideDecision = 0xFFB9D000;  // [1:0]: 0 accept all (ignore flow table), 2 use flow table
+// [1:0]: 0 accept all, 2 use the flow table. At 0 the classifier still applies the table's keep-timestamp action and
+// only ignores its drop decisions, so the stamp rule needs no change here.
+constexpr uint32_t kRxFdOverrideDecision = 0xFFB9D000;
 constexpr uint32_t kRxFlNoMatchActions = 0xFFB9CD04;    // [1:0] queue [2] drop [3] rm_hdr [4] keep_timestamp
 constexpr uint32_t kRxFlKeepTimestamp = 1u << 4;
 
@@ -143,7 +145,6 @@ constexpr uint64_t kStampFrameDa = 0x02A5'A5A5'A5A5ull;
 
 constexpr uint32_t kTimerLeadTicks = 5000;    // the scheduled rate update lands this far ahead of the CFR: 100 us
 constexpr uint32_t kTimerAckSpins = 200'000;  // polls of the update status before ptp_timer_start gives up
-constexpr uint32_t kTxStampSpins = 4096;      // drains of the MAC FIFO for a burst's last egress stamp before it is given up
 
 // Register-level operations. Each one changes tile state that outlives the kernel; StampSession is the pairing of
 // changes and their restores, and the API below it is what a kernel is meant to call.
@@ -171,28 +172,12 @@ inline __attribute__((always_inline)) uint32_t txq_pkt_start_cnt(uint32_t q) {
 }
 inline __attribute__((always_inline)) uint32_t txq_word_cnt(uint32_t q) { return rd(txq_reg(q, ETH_TXQ_WORD_CNT)); }
 
-struct MacTxStamp {
-    uint64_t tag;  // the TX_RX_TS value the queue drove when the frame entered the MAC
-    uint64_t tx_ts;
-};
 inline __attribute__((always_inline)) bool mac_tx_fifo_not_empty() {
     return (rd(kMacTxIntRaw) & kMacTxIntTsFifoNotEmpty) != 0;
 }
-// Pops one entry; word 0 must be read first, it is what advances the FIFO.
-inline __attribute__((always_inline)) bool mac_tx_fifo_pop(MacTxStamp& out) {
-    const uint32_t w0 = rd(kMacTsFifo0);
-    if (w0 == 0xFFFFFFFFu) {
-        return false;
-    }
-    const uint32_t w1 = rd(kMacTsFifo1);
-    const uint32_t w2 = rd(kMacTsFifo2);
-    const uint32_t w3 = rd(kMacTsFifo3);
-    out.tag = (static_cast<uint64_t>(w1) << 32) | w0;
-    out.tx_ts = (static_cast<uint64_t>(w3) << 32) | w2;
-    return true;
-}
-// Pops one entry reading its tag's low word and the stamp only; the tag's high word is the caller's own.
-inline __attribute__((always_inline)) bool mac_tx_fifo_pop_ts(uint32_t& tag_lo, uint64_t& tx_ts) {
+// Pops one entry: its tag's low word and the stamp (the tag's high word is the caller's own). Word 0 must be read
+// first, it is what advances the FIFO.
+inline __attribute__((always_inline)) bool mac_tx_fifo_pop(uint32_t& tag_lo, uint64_t& tx_ts) {
     const uint32_t w0 = rd(kMacTsFifo0);
     if (w0 == 0xFFFFFFFFu) {
         return false;
@@ -204,8 +189,9 @@ inline __attribute__((always_inline)) bool mac_tx_fifo_pop_ts(uint32_t& tag_lo, 
     return true;
 }
 inline void mac_tx_fifo_drain() {
-    MacTxStamp junk;
-    while (mac_tx_fifo_pop(junk)) {
+    uint32_t tag_lo = 0;
+    uint64_t ts = 0;
+    while (mac_tx_fifo_pop(tag_lo, ts)) {
     }
 }
 
@@ -214,7 +200,6 @@ struct RxStamp {
     uint32_t label;
     bool valid;
 };
-inline __attribute__((always_inline)) uint32_t rx_th_entries() { return rd(kRxThStatus) & kRxThStatusEntriesMask; }
 // Reads the head entry, then pops it.
 inline __attribute__((always_inline)) bool rx_th_pop(RxStamp& out) {
     if (rd(kRxThStatus) & kRxThStatusEmpty) {
@@ -231,41 +216,6 @@ inline __attribute__((always_inline)) bool rx_th_pop(RxStamp& out) {
     return true;
 }
 inline void rx_th_flush() { wr(kRxThStatus, kRxThStatusFlush); }
-
-// Holds the TX queues' idle sequence-number keepalives off. Returns the previous timeouts for restore.
-inline void txq_keepalives_off(uint32_t prev[kNumTxq]) {
-    for (uint32_t q = 0; q < kNumTxq; q++) {
-        prev[q] = rd(txq_reg(q, kTxqLocalSeqUpdateTimeoutOff));
-        wr(txq_reg(q, kTxqLocalSeqUpdateTimeoutOff), 0xFFFFFFFFu);
-    }
-}
-inline void txq_keepalives_restore(const uint32_t prev[kNumTxq]) {
-    for (uint32_t q = 0; q < kNumTxq; q++) {
-        wr(txq_reg(q, kTxqLocalSeqUpdateTimeoutOff), prev[q]);
-    }
-}
-
-// Every received frame records its RX timestamp via the no-match flow row's keep-timestamp action. The flow
-// decision override is left alone unless asked: at its default of 0 the classifier still applies the table's
-// keep-timestamp action and only ignores its drop decisions, so no other traffic is affected.
-struct RxThPrev {
-    uint32_t no_match_actions;
-    uint32_t override_decision;
-};
-inline RxThPrev rx_timestamps_enable_all(bool set_override = false) {
-    RxThPrev prev{rd(kRxFlNoMatchActions), rd(kRxFdOverrideDecision)};
-    rx_th_flush();
-    wr(kRxFlNoMatchActions, prev.no_match_actions | kRxFlKeepTimestamp);
-    if (set_override) {
-        wr(kRxFdOverrideDecision, 2);
-    }
-    return prev;
-}
-inline void rx_timestamps_restore(const RxThPrev& prev) {
-    wr(kRxFdOverrideDecision, prev.override_decision);
-    wr(kRxFlNoMatchActions, prev.no_match_actions);
-    rx_th_flush();
-}
 
 struct TxHeaderPrev {
     uint32_t sel_sw;
@@ -481,7 +431,7 @@ inline __attribute__((always_inline)) uint32_t tx_stamps_drain(uint32_t tag_lo, 
     uint32_t got_tag = 0;
     uint64_t ts = 0;
     uint32_t n = 0;
-    while (raw::mac_tx_fifo_pop_ts(got_tag, ts)) {
+    while (raw::mac_tx_fifo_pop(got_tag, ts)) {
         if (got_tag == tag_lo) {
             sink(ts);
             n++;
