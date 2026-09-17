@@ -5,6 +5,7 @@
 #include "dispatch_fabric2d_program_factory.hpp"
 
 #include <algorithm>
+#include <array>
 #include <memory>
 #include <string_view>
 
@@ -17,6 +18,7 @@
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/workload_descriptor.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt_stl/assert.hpp>
 
 #include "dispatch_fabric2d_assignments.hpp"
@@ -315,6 +317,8 @@ tt::tt_metal::WorkloadDescriptor DispatchFabric2dProgramFactory::create_workload
     // where the wait compiles out and there is no pool.
     const uint32_t untilize_stripes = untilize.has_value() ? untilize->num_stripes : 0u;
 
+    // Where each chip's untilizer pool landed, reported once for the build rather than once per chip.
+    std::array<uint32_t, 3> pool_fallbacks{};
     for (const auto& coord : ttnn::MeshCoordinateRange(mesh->shape())) {
         const uint32_t row = static_cast<uint32_t>(coord[static_cast<int32_t>(args.axis)]);
         const auto chip_ids = ring_chip_ids(mesh, coord, args.axis);
@@ -458,9 +462,26 @@ tt::tt_metal::WorkloadDescriptor DispatchFabric2dProgramFactory::create_workload
             desc.kernels[snd_id].emplace_runtime_args(self.worker_logical, snd_rt_list);
         }
         if (untilize.has_value()) {
-            add_untilizer_pool(desc, placement.at(coord), args.worker_core_range_set, *untilize);
+            pool_fallbacks[static_cast<std::size_t>(
+                add_untilizer_pool(desc, placement.at(coord), args.worker_core_range_set, *untilize))]++;
         }
         workload.programs.push_back({ttnn::MeshCoordinateRange(coord, coord), std::move(desc)});
+    }
+    {
+        const uint32_t no_row = pool_fallbacks[static_cast<std::size_t>(UntilizerPoolFallback::kNoRowBelow)];
+        const uint32_t narrow = pool_fallbacks[static_cast<std::size_t>(UntilizerPoolFallback::kRowTooNarrow)];
+        if (no_row + narrow > 0) {
+            log_warning(
+                tt::LogOp,
+                "dispatch_fabric2d: the untilizer pool is not in the row under the streams on {} of {} chips ({} "
+                "with no such row in the carve, {} with too few spare cores in it). Those pools share the streams' "
+                "NoC row; dspf2d_wait_untilize is the zone that shows what it costs. A TILE input wants a carve of "
+                "two rows.",
+                no_row + narrow,
+                mesh->shape().mesh_size(),
+                no_row,
+                narrow);
+        }
     }
     return workload;
 }
