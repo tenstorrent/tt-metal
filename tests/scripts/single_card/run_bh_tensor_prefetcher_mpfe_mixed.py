@@ -77,6 +77,30 @@ def percent_change(value: float, baseline: float) -> float:
     return 100.0 * (value / baseline - 1.0)
 
 
+def student_t_critical_95(sample_count: int) -> float:
+    """Conservative two-sided 95% Student-t critical value without scipy."""
+    if sample_count <= 1:
+        return 0.0
+    by_degrees_of_freedom = {
+        1: 12.706,
+        2: 4.303,
+        3: 3.182,
+        4: 2.776,
+        5: 2.571,
+        6: 2.447,
+        7: 2.365,
+        8: 2.306,
+        9: 2.262,
+        10: 2.228,
+        15: 2.131,
+        20: 2.086,
+        30: 2.042,
+    }
+    degrees_of_freedom = sample_count - 1
+    available = [df for df in by_degrees_of_freedom if df <= degrees_of_freedom]
+    return by_degrees_of_freedom[max(available)] if available else 1.96
+
+
 class MixedRunner:
     def __init__(self, pytest_args: list[str]) -> None:
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -114,6 +138,8 @@ class MixedRunner:
                 for policy in POLICIES
             ],
         }
+        if self.results_path.exists() and not self.manifest_path.exists():
+            raise RuntimeError(f"{self.results_path} exists without a manifest; choose a new OUTPUT_DIR")
         self._validate_manifest()
         self.existing: dict[tuple[int, int, str], dict] = {}
         self.hardware_signature: tuple[int, int] | None = None
@@ -123,6 +149,7 @@ class MixedRunner:
                     if not line.strip():
                         continue
                     record = json.loads(line)
+                    self._validate_loaded_record(record)
                     self.existing[self.key(record)] = record
                     signature = (record["num_dram_banks"], record["ring_size"])
                     if self.hardware_signature not in (None, signature):
@@ -132,6 +159,20 @@ class MixedRunner:
     @staticmethod
     def key(record: dict) -> tuple[int, int, str]:
         return (record["sdpa_context"], record["suite_iteration"], record["run_label"])
+
+    def _validate_loaded_record(self, record: dict) -> None:
+        if record.get("benchmark") != "mpfe_mixed_llama8b_ff1_sdpa":
+            raise RuntimeError(f"{self.results_path} contains a record for a different benchmark")
+        if record.get("trace_repeats") != self.trace_repeats or record.get("sdpa_context") not in self.contexts:
+            raise RuntimeError(f"{self.results_path} contains a record incompatible with its manifest")
+        policy = next((policy for policy in POLICIES if policy.label == record.get("run_label")), None)
+        expected_idle = policy.idle if policy is not None and policy.idle is not None else policy.active if policy else None
+        if (
+            policy is None
+            or record.get("active_weights") != list(policy.active)
+            or record.get("idle_weights") != list(expected_idle)
+        ):
+            raise RuntimeError(f"{self.results_path} contains mismatched policy metadata")
 
     def _validate_manifest(self) -> None:
         if self.manifest_path.exists():
@@ -292,7 +333,7 @@ def write_reports(output_dir: Path, records: list[dict], contexts: tuple[int, ..
                 "comparison",
                 "candidate",
                 "baseline",
-                "mean_delta_pct",
+                "mean_speedup_pct",
                 "ci95_low",
                 "ci95_high",
                 "n",
@@ -314,7 +355,9 @@ def write_reports(output_dir: Path, records: list[dict], contexts: tuple[int, ..
                 ]
                 delta_mean = mean(deltas)
                 margin = (
-                    1.96 * statistics.stdev(deltas) / math.sqrt(len(deltas)) if len(deltas) > 1 else 0.0
+                    student_t_critical_95(len(deltas)) * statistics.stdev(deltas) / math.sqrt(len(deltas))
+                    if len(deltas) > 1
+                    else 0.0
                 )
                 writer.writerow(
                     [

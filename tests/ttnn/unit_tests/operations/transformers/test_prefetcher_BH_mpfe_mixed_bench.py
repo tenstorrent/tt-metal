@@ -177,12 +177,22 @@ def test_mpfe_mixed_llama8b_ff1_sdpa(device):
     ]
     ff1_program_config = _ff1_program_config(ring_cols, ring_rows, n_padded, ring_size)
     block_size_bytes = int(k_padded * (n_padded // ring_size) * _BF8_BYTES_PER_ELEMENT)
+    in1_page_bytes = (
+        (k_padded // ring_size // ttnn.TILE_SIZE)
+        * (n_padded // ring_size // ttnn.TILE_SIZE)
+        * 1088
+    )
+    max_gcb_bytes = 65000 * 16
+    gcb_size = block_size_bytes
+    if gcb_size // 16 >= 65535:
+        gcb_size = (max_gcb_bytes // in1_page_bytes) * in1_page_bytes
+    assert gcb_size >= in1_page_bytes
     gcb = ttnn.experimental.create_global_circular_buffer_for_matmul_1d(
         device,
         [ff1_program_config],
         [tt_weight],
         bank_to_receivers,
-        block_size_bytes,
+        gcb_size,
         support_multi_receiver_shards=False,
     )
     output_mem_config = ttnn.create_sharded_memory_config(
@@ -307,15 +317,20 @@ def test_mpfe_mixed_llama8b_ff1_sdpa(device):
         assert ff1_pass, f"FF1 PCC failed: {ff1_message}"
 
         trace_id = ttnn.begin_trace_capture(device, cq_id=0)
-        ttnn.experimental.queue_tensor_prefetcher_request(
-            device,
-            [(tt_weight, block_count)],
-            global_cb=gcb,
-            capture_into_trace=True,
-        )
-        traced_sdpa_output = run_sdpa()
-        traced_ff1_output = run_ff1()
-        ttnn.end_trace_capture(device, trace_id, cq_id=0)
+        capture_open = True
+        try:
+            ttnn.experimental.queue_tensor_prefetcher_request(
+                device,
+                [(tt_weight, block_count)],
+                global_cb=gcb,
+                capture_into_trace=True,
+            )
+            traced_sdpa_output = run_sdpa()
+            traced_ff1_output = run_ff1()
+        finally:
+            if capture_open:
+                ttnn.end_trace_capture(device, trace_id, cq_id=0)
+                capture_open = False
 
         start = time.perf_counter()
         for _ in range(trace_repeats):
