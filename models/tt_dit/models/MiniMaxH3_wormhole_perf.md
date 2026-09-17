@@ -106,6 +106,95 @@ the **timed** pass. All six 15 s OOMed in warmup.
 - The 4:3/10s audio-decode outlier of 192.6 s in the non-FSDP run dropped to 3.1 s
   with FSDP — it was memory pressure, not the conv1d MAC fallback.
 
+## Per-op device breakdown — one transformer block, 15 s / 16:9 (Tracy)
+
+Measured 2026-09-17 on `3a2f7fea259`, after the ff2 fix, with the Wormhole `GALAXY_RING` rows
+added in `2076022d032`. One block, warm iteration between `start`/`stop` signposts.
+
+```bash
+scripts/run_safe_pytest.sh --profile \
+  "'models/tt_dit/tests/models/minimax_h3/test_performance_minimax_h3.py::test_minimax_h3_transformer_block_perf[wormhole_b0-sp_sim1-15s_768p-4x8sp1tp0nl4_ring_is_fsdp1]'" \
+  -s --timeout 3600
+python models/tt_dit/tests/models/minimax_h3/tools/project_block_perf.py fsdp1=<csv> fsdp0=<csv>
+```
+
+Two quoting/config traps, both load-bearing:
+- `tools/tracy/__main__.py:368` joins argv with spaces and re-execs under `shell=True`, so a
+  `-k "a and b"` is word-split and never reaches pytest. Pass a node id (space-free), and wrap it
+  in embedded single quotes so the re-shell cannot glob the `[...]`.
+- `pytest.ini` sets `timeout = 300`, too short for the 15 s shape. Override with `--timeout 3600`.
+
+Shape (test-reported, matching the pipeline's packing helpers): 1344x768, 362 frames -> 107 latent
+frames x 24x42 patches = 107856 video + 603 audio + 512 text = seq_len 108971, padded 109056,
+**13632 rows/device** at SP=8.
+
+| op | fsdp1 ms | fsdp0 ms | delta |
+|---|---|---|---|
+| **RingJointSDPADeviceOperation** | **172.52** | **172.50** | +0.02 |
+| AllGatherMinimalMatmulAsyncOp (3) | 33.11 | 32.57 | +0.54 |
+| EmbeddingsDeviceOperation (6) | 10.37 | 10.32 | +0.04 |
+| MinimalMatmulDeviceOperation (2) | 8.84 | 8.87 | -0.03 |
+| AllGatherAsyncDeviceOperation (4) | 4.10 | — | +4.10 |
+| AllBroadcastDeviceOperation | 3.96 | — | +3.96 |
+| DitFusedDistributedRmsnorm (4) | 2.94 | 2.91 | +0.03 |
+| ReduceScatterMinimalAsync | 2.75 | 2.78 | -0.02 |
+| UntilizeWithUnpadding | 1.76 | 0.07 | +1.69 |
+| ConcatDeviceOperation | 1.55 | — | +1.55 |
+| TilizeWithValPadding | 1.37 | 0.06 | +1.31 |
+| *(remaining 8 ops)* | 3.04 | 3.02 | +0.02 |
+| **device only** | **246.31** | **233.10** | **+13.21 (5.7%)** |
+| **device + op gap** | **259.40** | **241.67** | +17.73 |
+| SDPA share of block | 70.0% | 74.0% | |
+
+Projected over 50 layers: **12.32 s/step** device-only, 12.97 s with op gaps (616 / 648 s per
+50-step video). The 16:9/15 s row above measures the same configuration end-to-end at
+**12435 ms/forward**, which lands inside that bracket exactly as `project_block_perf.py` intends:
+`device only` is the underestimate (no dispatch gaps), `device + op gap` the overestimate. So the
+50-layer block stack is **99.1%** of the forward on the device-only figure, leaving ~0.1 s for the
+refiner, input projections, `norm_out` and the output heads. Corroborating that the comparison is
+apples-to-apples: 21:9 and 16:9 both give 1008 tokens/latent frame (1536x672 -> 21x48;
+1344x768 -> 24x42), and their measured forwards agree to 0.1% (12447 vs 12435).
+
+### Findings
+
+1. **Ring SDPA is 70% of the block** at 48.8% FPU utilization (`PM FPU UTIL (%)`, consistent
+   across all 32 devices). Nothing else is close.
+2. **FSDP costs 5.7%** — inside the 5-11% the pipeline sweep saw, and it decomposes exactly:
+   AllGatherAsync 4.10 + AllBroadcast 3.96 + Concat 1.55 + Untilize 1.69 + Tilize 1.31 = 12.61 of
+   the 13.21 ms delta.
+3. **Layout conversions blow up 23x under FSDP** — tilize/untilize go 0.13 -> 3.13 ms, a quarter of
+   the whole FSDP cost spent on format round-trips rather than communication. Cheapest apparent win.
+4. **The ff2 fix is confirmed live**: `ReduceScatterMinimalAsyncDeviceOperation` is present and
+   there is no fused `Matmul_RS` row, which is what `eab3dfbd599` intended.
+
+### SDPA chunk sizes: already optimal at 15 s
+
+`test_ring_joint_attention_create_perf_table[minimax_h3_15s_768p]` (run plain — it self-shells
+`run_device_profiler`, so wrapping it in `--profile` would nest profilers):
+
+| rank | q_chunk | k_chunk | duration | FPU util | math util | slot waste |
+|---|---|---|---|---|---|---|
+| 1 | **256** | **512** | **171.693 ms** | 48.1-49.3% | 35.6% | 0.0% |
+| 2 | 384 | 256 | 192.593 ms | 42.9% | 31.8% | 0.0% |
+| 3 | 256 | 256 | 195.029 ms | 42.3% | 31.4% | 0.0% |
+| — | 384/512, 512/256, 512/512 | | L1 infeasible | | | |
+
+`(256, 512)` is what `measured_sdpa_chunk_sizes[13632]` already ships. The three larger-q candidates
+fail with `Statically allocated circular buffers on core range [0-0 - 6-8] grow to 1844544 B which
+is beyond max L1 size of 1499136 B` — Wormhole's 1.5 MB/core, and that core range is the 7x9 = 63
+compute grid. The harness independently reports "63 compute + 9 CCL = 72 total cores" and 0.0% slot
+waste (756 work items / 63 = 12 passes exactly), and measures SDPA at 171.693 ms against 172.52 ms
+in-block, 0.5% apart.
+
+So the ~50% FPU / 35.6% math utilization is **inherent to the ring joint SDPA kernel at this
+shape, not a chunk-size miss**. At 70% of the block it is the only thing worth attacking, but the
+work is in the kernel. Note the contrast with 5 s, where `q=320` at seq 4768 wastes 16.7% of the
+63 slots and chunk tuning *does* have headroom.
+
+Caveat: `CORE COUNT` for `RingJointSDPADeviceOperation` reads 71, not 63, because the profiler
+counts the fused CCL workers — `ccl_core_grid_offset=(7, 0)` with `use_column_major_ccl=True`
+(`attention_minimax_h3.py:572-573`) places them in the reserved last column.
+
 ## Open issues
 
 1. **Intermittent mid-denoise device hang** — *root-caused and fixed; 18/18 now pass.*
