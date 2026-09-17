@@ -23,16 +23,17 @@ void bind_experimental_dispatch_fabric2d_operation(nb::module_& mod) {
         MoE prefill dispatch over an explicitly-forwarded FABRIC_2D: each token goes to the chips
         hosting the experts it was routed to.
 
-        Called like `ttnn.experimental.deepseek_prefill.dispatch`, with two differences: `expert_offsets`
-        is the all-rows table rather than this device's row, and there is no weights, padding_config or
-        scales input.
+        Called like `ttnn.experimental.deepseek_prefill.dispatch`, with one difference that matters:
+        `expert_offsets` is the all-rows table rather than this device's row. There is no weights input
+        (`dispatch` accepts one and never reads it) and no scales input (see fp8_scaled_input below).
 
             input_tensor          the tokens, BFLOAT16, either ROW_MAJOR (one token per page) or TILE.
                                   A TILE input is untilized on device into an op-private row-major
                                   staging buffer by a pool of cores beside the stream cores, which
                                   runs while the stream cores build their routing index; the transport
-                                  itself is unchanged. TILE needs emb_dim and seq_len_per_chip both
-                                  multiples of 32.
+                                  itself is unchanged. TILE needs emb_dim to be a multiple of 32; a
+                                  ragged sequence gets a final stripe of tile padding that staging has
+                                  room for and nothing reads.
             indices_tensor        top-k expert ids per token, UINT16 ROW_MAJOR.
             expert_offsets        where each SOURCE chip's run starts inside each expert's region, for
                                   every source chip: offset_cumsum's all_global_dispatch_offsets. Must
@@ -80,13 +81,26 @@ void bind_experimental_dispatch_fabric2d_operation(nb::module_& mod) {
             subdevice_id          must contain the worker nearest each stream's eth core, and hold at
                                   least 2 * num_links cores -- one more again for a TILE input, which
                                   needs somewhere to put an untilizer.
-            input_tensor layout   ROW_MAJOR, or TILE with emb_dim and seq_len_per_chip both multiples
-                                  of 32. A ragged final stripe is refused rather than clipped.
+            input_tensor layout   ROW_MAJOR, or TILE with emb_dim a multiple of 32.
             all six inputs        interleaved DRAM, and every one but input_tensor ROW_MAJOR; the
                                   output memory config must be interleaved too.
-            dtypes                BFLOAT16 input, and metadata_len must be 3: the fp8-scaled layout
-                                  appends per-block scales that do not fit the routing tail this op
-                                  carries.
+            dtypes                BFLOAT16 input, and metadata_len must be 3.
+
+        Where this op cannot follow `dispatch`, and why:
+
+            fp8_scaled_input      unsupported. It extends metadata to 3 + emb_dim/128 words, and those
+                                  scales would have to ride the 64-byte routing tail on EVERY hop of a
+                                  store-and-forward journey, where 56 bytes are already spoken for.
+            topology=Linear       unsupported. On a line the neighbour one way round is the far end,
+                                  and its route leaves by the same ethernet core as the other
+                                  direction, so both streams would open on one channel and deadlock.
+            fp8_output            not implemented. The untilizer already packs in the payload's format,
+                                  so the mechanism is there; the wire and page sizes are not.
+
+        padding_config: [real_token_count, pad_side], as `dispatch` takes it. Right padding (pad_side 0)
+        bounds the routing pass at real_token_count; any other side is ignored, exactly as there. Passing
+        it asserts that padded tokens are sentinel-marked and resolve to no expert, which is the same
+        contract `dispatch` relies on -- it changes how far the pass walks, never what a chunk holds.
 
         fanout: one copy per (token, DIRECTION) crosses a cable rather than one per (token, expert).
         The copy travels the ring and every chip en route keeps the pages addressed to it, so a token
@@ -98,9 +112,10 @@ void bind_experimental_dispatch_fabric2d_operation(nb::module_& mod) {
         each other in one build.
 
         subdevice_id: the sub-device whose Tensix cores the op may use, for both its stream cores and
-        a TILE input's untilizer pool. Omitted, the op takes the FIRST ROW of the compute grid -- which
-        is where the eth-nearest stream placement lands and what the model carves for dispatch, and
-        which is asserted rather than assumed.
+        a TILE input's untilizer pool. Omitted, it is the device's first sub-device, which with no
+        sub-device manager loaded is the whole compute grid. The model passes the row it carves for
+        dispatch, and a stream whose eth-nearest worker falls outside the carve is refused rather than
+        relocated onto a core something else is using.
 
         `cluster_axis` other than 0 is reachable but untested: it is only bounds-checked, and a
         different axis gives a structurally different schedule.
@@ -113,14 +128,15 @@ void bind_experimental_dispatch_fabric2d_operation(nb::module_& mod) {
         nb::arg("expert_token_counts"),
         nb::arg("expert_region_offsets"),
         nb::arg("fanout_reach") = std::nullopt,
+        nb::arg("padding_config") = std::nullopt,
         nb::arg("experts_per_chip"),
         nb::arg("num_routed_experts"),
         nb::arg("num_experts_per_tok"),
         nb::arg("metadata_len"),
         nb::arg("max_dispatch_buffer_token_size"),
         nb::arg("seq_len_per_chip"),
-        nb::arg("cluster_axis"),
-        nb::arg("num_links"),
+        nb::arg("cluster_axis") = 0,
+        nb::arg("num_links") = 1,
         nb::arg("fanout") = false,
         nb::arg("topology"),
         nb::arg("memory_config"),

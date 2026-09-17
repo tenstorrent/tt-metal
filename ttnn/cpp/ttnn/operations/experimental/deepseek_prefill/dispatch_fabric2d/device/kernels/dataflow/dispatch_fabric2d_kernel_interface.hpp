@@ -220,6 +220,10 @@ static_assert(offsetof(FanoutMetadata, local_count) >= sizeof(FwdMetadata));
 // Bytes the last hop writes to the metadata page: the three words rounded up to a NoC-friendly size.
 constexpr uint32_t METADATA_WIRE_BYTES = 16;
 
+// [real_token_count, pad_side], read straight out of DRAM, so a whole 64-byte L1 block rather than
+// the two words it holds.
+constexpr uint32_t PADDING_CONFIG_BYTES = 64;
+
 // One delivery the sender issues out of a slot: where the token and its metadata go, and where the
 // reader staged the metadata words. Every destination has its own record and its own metadata buffer
 // because several are in flight from one slot at once. The addresses are page addresses in
@@ -335,6 +339,7 @@ enum ControlBlock : uint32_t {
     kCbMcEntries,
     kCbMcCount,
     kCbReach,
+    kCbPadding,
     kCbInStart,
     kCbOutStart,
     kCbCount
@@ -400,6 +405,9 @@ constexpr uint32_t control_block_raw_bytes(const ControlGeometry& g, uint32_t bl
         case kCbMcEntries: return g.fanout ? 4u * 2u * g.seq_len * fo_entry_words(g.topk) : 0u;
         case kCbMcCount: return 4u * 2u;
         case kCbReach: return g.extent * 2u * mc_reach_row_bytes(g.extent);
+        // Always carved, whether or not a config was supplied: the block list is the one thing host and
+        // kernel must agree on term for term, and making a block conditional is how that drifts.
+        case kCbPadding: return PADDING_CONFIG_BYTES;
         case kCbInStart: return 4u * control_chunk_start_slots(g);
         case kCbOutStart: return 4u * control_chunk_start_slots(g);
         default: return 0u;

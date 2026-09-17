@@ -254,8 +254,12 @@ tt::tt_metal::WorkloadDescriptor DispatchFabric2dProgramFactory::create_workload
     // Only under TILE: where a tiled input's tokens end up, one row-major page each, so the stream
     // cores address a token by page index exactly as they do a row-major input. The row-major path
     // allocates nothing and runs the program it always has.
-    const OwnedScratch staging =
-        tiled ? allocate_scratch(mesh, args.seq_len_per_chip, token_bytes, "staging") : OwnedScratch{};
+    //
+    // Rounded up to whole stripes because the untilizer packs a tile's 32 rows whether or not the
+    // sequence fills them; the slack holds a ragged tail's padding rows and is never read back.
+    const uint32_t staging_pages =
+        tt::round_up(args.seq_len_per_chip, static_cast<uint32_t>(tt::constants::TILE_HEIGHT));
+    const OwnedScratch staging = tiled ? allocate_scratch(mesh, staging_pages, token_bytes, "staging") : OwnedScratch{};
     const auto untilize = plan_untilize(
         tensor_args.input_tensor,
         tensor_return_value[0],
@@ -284,6 +288,9 @@ tt::tt_metal::WorkloadDescriptor DispatchFabric2dProgramFactory::create_workload
     dram[dspf2d::ReaderRtArg::kFanoutReachAddr] = tensor_args.fanout_reach.has_value()
                                                       ? tensor_args.fanout_reach->buffer()
                                                       : tensor_args.expert_offsets_tensor.buffer();
+    dram[dspf2d::ReaderRtArg::kPaddingConfigAddr] = tensor_args.padding_config.has_value()
+                                                        ? tensor_args.padding_config->buffer()
+                                                        : tensor_args.expert_offsets_tensor.buffer();
     for (uint32_t i = 0; i < dspf2d::ReaderRtArg::kCount; i++) {
         TT_FATAL(dram[i] != nullptr, "dispatch_fabric2d: buffer for runtime arg {} is not allocated", i);
     }
