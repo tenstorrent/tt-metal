@@ -6,6 +6,8 @@
 // These tests require a real device (slow dispatch).
 
 #include "impl/buffers/buffer_impl.hpp"
+#include <algorithm>
+#include <cstddef>
 #include <cstdlib>
 #include <cstring>
 #include <functional>
@@ -123,8 +125,8 @@ TEST_F(PerCoreAllocationTest, PerCoreSkipsPersistentL1OnSameCore) {
     auto* mesh_device = this->devices_[0].get();
     const CoreCoord sender(0, 0);
     const CoreCoord receiver(1, 0);
-    auto pipe = experimental::CreatePrefetcherPipe(
-        mesh_device, sender, CoreRangeSet(CoreRange(receiver)), /*ring_size=*/1024);
+    auto pipe =
+        experimental::CreatePrefetcherPipe(mesh_device, sender, CoreRangeSet(CoreRange(receiver)), /*ring_size=*/1024);
 
     const CoreRangeSet pipe_cores = CoreRangeSet(CoreRange(sender, receiver));
     ShardSpecBuffer shard_spec(pipe_cores, {32, 32}, ShardOrientation::ROW_MAJOR, {32, 32}, {2, 1});
@@ -180,6 +182,166 @@ TEST_F(PerCoreAllocationTest, DeallocationFreesPerCoreSpace) {
     auto buf2 = BufferImpl::create(device, total_size, PAGE_SIZE, BufferType::L1, shard_args);
     EXPECT_TRUE(per_core::is_per_core_allocation(*buf2));
     EXPECT_TRUE(buf2->is_allocated());
+}
+
+// Verifies that a retained view derives and preserves each core's independent address.
+TEST_F(PerCoreAllocationTest, MeshBufferViewRetainsPerCoreAddresses) {
+    constexpr DeviceAddr owner_pages_per_core = 4;
+    constexpr DeviceAddr view_pages_per_core = 2;
+    auto* mesh_device = this->devices_[0].get();
+    auto* device = mesh_device->get_devices()[0];
+    const uint32_t num_cores = std::min<uint32_t>(2, device->compute_with_storage_grid_size().x);
+    ASSERT_EQ(num_cores, 2u);
+
+    const CoreRangeSet shard_grid(CoreRange(CoreCoord(0, 0), CoreCoord(num_cores - 1, 0)));
+    auto owner_sharding = BufferShardingArgs(
+        ShardSpecBuffer(
+            shard_grid,
+            {1, owner_pages_per_core},
+            ShardOrientation::ROW_MAJOR,
+            {1, 1},
+            {num_cores, owner_pages_per_core}),
+        TensorMemoryLayout::HEIGHT_SHARDED);
+    per_core::set_per_core_allocation(owner_sharding, true);
+    const distributed::DeviceLocalBufferConfig owner_local_config{
+        .page_size = PAGE_SIZE, .buffer_type = BufferType::L1, .sharding_args = owner_sharding, .bottom_up = false};
+    auto owner = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = num_cores * owner_pages_per_core * PAGE_SIZE},
+        owner_local_config,
+        mesh_device);
+
+    auto view_sharding = BufferShardingArgs(
+        ShardSpecBuffer(
+            shard_grid,
+            {1, view_pages_per_core},
+            ShardOrientation::ROW_MAJOR,
+            {1, 1},
+            {num_cores, view_pages_per_core}),
+        TensorMemoryLayout::HEIGHT_SHARDED);
+    per_core::set_per_core_allocation(view_sharding, true);
+    const distributed::DeviceLocalBufferConfig view_local_config{
+        .page_size = PAGE_SIZE, .buffer_type = BufferType::L1, .sharding_args = view_sharding, .bottom_up = false};
+
+    std::weak_ptr<distributed::MeshBuffer> owner_reference = owner;
+    auto view = distributed::MeshBuffer::create_sharded_view(
+        owner,
+        distributed::ReplicatedBufferConfig{.size = num_cores * view_pages_per_core * PAGE_SIZE},
+        view_local_config,
+        PAGE_SIZE);
+
+    const distributed::MeshCoordinate device_coordinate(0, 0);
+    for (const CoreCoord& core : corerange_to_cores(shard_grid)) {
+        EXPECT_EQ(
+            per_core::get_per_core_address(*view, device_coordinate, core),
+            per_core::get_per_core_address(*owner, device_coordinate, core) + PAGE_SIZE);
+    }
+
+    std::vector<uint32_t> owner_data(owner->size() / sizeof(uint32_t));
+    std::iota(owner_data.begin(), owner_data.end(), 0);
+    distributed::EnqueueWriteMeshBuffer(mesh_device->mesh_command_queue(), owner, owner_data, true);
+    std::vector<uint32_t> view_data;
+    distributed::EnqueueReadMeshBuffer(mesh_device->mesh_command_queue(), view_data, view);
+    const size_t words_per_page = PAGE_SIZE / sizeof(uint32_t);
+    std::vector<uint32_t> expected_view_data;
+    expected_view_data.reserve(view_data.size());
+    for (uint32_t core_index = 0; core_index < num_cores; ++core_index) {
+        const size_t shard_begin = (core_index * owner_pages_per_core + 1) * words_per_page;
+        expected_view_data.insert(
+            expected_view_data.end(),
+            owner_data.begin() + static_cast<ptrdiff_t>(shard_begin),
+            owner_data.begin() + static_cast<ptrdiff_t>(shard_begin + view_pages_per_core * words_per_page));
+    }
+    EXPECT_EQ(view_data, expected_view_data);
+
+    std::iota(view_data.begin(), view_data.end(), 0x10000);
+    distributed::EnqueueWriteMeshBuffer(mesh_device->mesh_command_queue(), view, view_data, true);
+    std::vector<uint32_t> updated_owner_data;
+    distributed::EnqueueReadMeshBuffer(mesh_device->mesh_command_queue(), updated_owner_data, owner);
+    for (uint32_t core_index = 0; core_index < num_cores; ++core_index) {
+        const size_t owner_begin = (core_index * owner_pages_per_core + 1) * words_per_page;
+        const size_t view_begin = core_index * view_pages_per_core * words_per_page;
+        std::copy_n(
+            view_data.begin() + static_cast<ptrdiff_t>(view_begin),
+            view_pages_per_core * words_per_page,
+            owner_data.begin() + static_cast<ptrdiff_t>(owner_begin));
+    }
+    EXPECT_EQ(updated_owner_data, owner_data);
+
+    const CoreCoord subset_core(num_cores - 1, 0);
+    auto subset_sharding = BufferShardingArgs(
+        ShardSpecBuffer(
+            CoreRangeSet(subset_core),
+            {1, view_pages_per_core},
+            ShardOrientation::ROW_MAJOR,
+            {1, 1},
+            {1, view_pages_per_core}),
+        TensorMemoryLayout::HEIGHT_SHARDED);
+    per_core::set_per_core_allocation(subset_sharding, true);
+    const distributed::DeviceLocalBufferConfig subset_local_config{
+        .page_size = PAGE_SIZE, .buffer_type = BufferType::L1, .sharding_args = subset_sharding, .bottom_up = false};
+    auto subset_view = distributed::MeshBuffer::create_sharded_view(
+        owner,
+        distributed::ReplicatedBufferConfig{.size = view_pages_per_core * PAGE_SIZE},
+        subset_local_config,
+        PAGE_SIZE);
+    EXPECT_EQ(
+        per_core::get_per_core_address(*subset_view, device_coordinate, subset_core),
+        per_core::get_per_core_address(*owner, device_coordinate, subset_core) + PAGE_SIZE);
+    EXPECT_EQ(per_core::get_per_core_addresses(*subset_view->get_device_buffer(device_coordinate)).size(), 1u);
+
+    auto lockstep_view_config = view_local_config;
+    auto lockstep_sharding = view_sharding;
+    per_core::set_per_core_allocation(lockstep_sharding, false);
+    lockstep_view_config.sharding_args = lockstep_sharding;
+    EXPECT_ANY_THROW(distributed::MeshBuffer::create_sharded_view(
+        owner,
+        distributed::ReplicatedBufferConfig{.size = num_cores * view_pages_per_core * PAGE_SIZE},
+        lockstep_view_config,
+        PAGE_SIZE));
+
+    owner.reset();
+    EXPECT_FALSE(owner_reference.expired());
+    EXPECT_TRUE(view->is_allocated());
+    view.reset();
+    EXPECT_FALSE(owner_reference.expired());
+    subset_view.reset();
+    EXPECT_TRUE(owner_reference.expired());
+}
+
+// Verifies that explicit MeshBuffer deallocation releases independent per-core allocations.
+TEST_F(PerCoreAllocationTest, MeshBufferDeallocationFreesPerCoreSpace) {
+    constexpr DeviceAddr pages_per_core = 2;
+    auto* mesh_device = this->devices_[0].get();
+    auto* device = mesh_device->get_devices()[0];
+    const uint32_t num_cores = std::min<uint32_t>(2, device->compute_with_storage_grid_size().x);
+    ASSERT_EQ(num_cores, 2u);
+
+    const CoreRangeSet shard_grid(CoreRange(CoreCoord(0, 0), CoreCoord(num_cores - 1, 0)));
+    auto sharding = BufferShardingArgs(
+        ShardSpecBuffer(
+            shard_grid, {1, pages_per_core}, ShardOrientation::ROW_MAJOR, {1, 1}, {num_cores, pages_per_core}),
+        TensorMemoryLayout::HEIGHT_SHARDED);
+    per_core::set_per_core_allocation(sharding, true);
+    const distributed::DeviceLocalBufferConfig local_config{
+        .page_size = PAGE_SIZE, .buffer_type = BufferType::L1, .sharding_args = sharding, .bottom_up = false};
+    const distributed::ReplicatedBufferConfig mesh_config{.size = num_cores * pages_per_core * PAGE_SIZE};
+
+    auto owner = distributed::MeshBuffer::create(mesh_config, local_config, mesh_device);
+    const distributed::MeshCoordinate device_coordinate(0, 0);
+    std::vector<std::pair<CoreCoord, DeviceAddr>> original_addresses;
+    for (const CoreCoord& core : corerange_to_cores(shard_grid)) {
+        original_addresses.emplace_back(core, per_core::get_per_core_address(*owner, device_coordinate, core));
+    }
+
+    auto view = distributed::MeshBuffer::create_sharded_view(owner, mesh_config, local_config, 0);
+    owner->deallocate();
+    EXPECT_FALSE(owner->is_allocated());
+    EXPECT_FALSE(view->is_allocated());
+
+    auto replacement = distributed::MeshBuffer::create(mesh_config, local_config, mesh_device);
+    for (const auto& [core, address] : original_addresses) {
+        EXPECT_EQ(per_core::get_per_core_address(*replacement, device_coordinate, core), address);
+    }
 }
 
 // ================== Per-core socket data-buffer allocation (Phase B) ==================

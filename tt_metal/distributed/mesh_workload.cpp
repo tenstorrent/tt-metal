@@ -476,6 +476,16 @@ const std::unordered_map<MeshCoordinateRange, Program>& MeshWorkload::get_progra
     return pimpl_->get_programs();
 }
 
+MeshWorkloadProgramCapacity MeshWorkload::prepare(MeshDevice* mesh_device) {
+    pimpl_->compile(mesh_device);
+    MeshWorkloadProgramCapacity result;
+    for (uint32_t config_size : pimpl_->get_program_config_sizes()) {
+        result.max_program_config_size_bytes = std::max(result.max_program_config_size_bytes, config_size);
+    }
+    result.max_kernel_binary_size_bytes = pimpl_->get_max_program_kernels_sizeB();
+    return result;
+}
+
 // For testing purposes only
 void MeshWorkload::set_last_used_command_queue_for_testing(MeshCommandQueue* mesh_cq) {
     pimpl_->set_last_used_command_queue_for_testing(mesh_cq);

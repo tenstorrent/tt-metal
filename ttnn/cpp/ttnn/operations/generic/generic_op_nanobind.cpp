@@ -21,6 +21,9 @@ namespace ttnn::operations::generic {
 ttsl::hash::hash_t compute_program_descriptor_hash(const tt::tt_metal::ProgramDescriptor& program_descriptor);
 
 void bind_generic_operation(nb::module_& mod) {
+    nb::class_<GenericOpPreparationResult>(mod, "GenericOpPreparationResult")
+        .def_ro("max_program_config_size_bytes", &GenericOpPreparationResult::max_program_config_size_bytes)
+        .def_ro("max_kernel_binary_size_bytes", &GenericOpPreparationResult::max_kernel_binary_size_bytes);
     std::string doc =
         R"doc(
         Executes a custom operation with user-defined kernels on the device.
@@ -45,19 +48,34 @@ void bind_generic_operation(nb::module_& mod) {
 
     // Overload for MeshProgramDescriptor (explicit mesh control)
     auto mesh_program_overload = ttnn::overload_t(
-        static_cast<Tensor (*)(
-            const std::vector<Tensor>&, const tt::tt_metal::experimental::MeshProgramDescriptor&)>(&ttnn::generic_op),
+        static_cast<Tensor (*)(const std::vector<Tensor>&, const tt::tt_metal::experimental::MeshProgramDescriptor&)>(
+            &ttnn::generic_op),
         nb::arg("io_tensors"),
         nb::arg("mesh_program_descriptor"));
 
     // Overload for ProgramDescriptor (SPMD mode - broadcasts to all devices)
     auto program_overload = ttnn::overload_t(
-        static_cast<Tensor (*)(const std::vector<Tensor>&, const tt::tt_metal::ProgramDescriptor&)>(
-            &ttnn::generic_op),
+        static_cast<Tensor (*)(const std::vector<Tensor>&, const tt::tt_metal::ProgramDescriptor&)>(&ttnn::generic_op),
         nb::arg("io_tensors"),
         nb::arg("program_descriptor"));
 
     ttnn::bind_function<"generic_op">(mod, doc.c_str(), mesh_program_overload, program_overload);
+
+    mod.def(
+        "prepare_generic_op",
+        static_cast<GenericOpPreparationResult (*)(
+            const std::vector<Tensor>&, const tt::tt_metal::experimental::MeshProgramDescriptor&)>(
+            &ttnn::prepare_generic_op),
+        nb::arg("io_tensors"),
+        nb::arg("mesh_program_descriptor"),
+        "Compile and finalize a generic operation without dispatching it.");
+    mod.def(
+        "prepare_generic_op",
+        static_cast<GenericOpPreparationResult (*)(const std::vector<Tensor>&, const tt::tt_metal::ProgramDescriptor&)>(
+            &ttnn::prepare_generic_op),
+        nb::arg("io_tensors"),
+        nb::arg("program_descriptor"),
+        "Compile and finalize a generic operation without dispatching it.");
 
     mod.def(
         "compute_program_descriptor_hash",

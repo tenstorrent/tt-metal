@@ -96,10 +96,20 @@ public:
         const DeviceLocalBufferConfig& device_local_config,
         MeshDevice* mesh_device,
         std::optional<DeviceAddr> address = std::nullopt);
+
+    /// Creates a non-owning SRAM buffer whose local addresses are `shard_offset` bytes into each owner shard.
+    /// Both buffers must be sharded, use the same allocation mode and sub-device, and the view shard grid must be a
+    /// subset of the owner's grid. Every aligned view interval must fit within its owner shard. The returned buffer
+    /// retains `owner`; explicitly deallocating `owner` invalidates the view.
+    static std::shared_ptr<MeshBuffer> create_sharded_view(
+        std::shared_ptr<MeshBuffer> owner,
+        const MeshBufferConfig& mesh_buffer_config,
+        const DeviceLocalBufferConfig& device_local_config,
+        DeviceAddr shard_offset);
+
     ~MeshBuffer();
 
-    // MeshBuffer manages device memory and owns the backing allocation. Copying would create
-    // multiple owners of the same device memory, leading to double-free on destruction.
+    // Owning MeshBuffers manage device memory. Copying would create multiple allocation owners.
     MeshBuffer(const MeshBuffer&) = delete;
     MeshBuffer& operator=(const MeshBuffer&) = delete;
     MeshBuffer(MeshBuffer&& other) noexcept;
@@ -175,6 +185,22 @@ private:
         buffers_(MeshShape(mesh_device->shape())),
         state_(ExternallyOwnedState{}) {}
 
+    MeshBuffer(
+        const MeshBufferConfig& config,
+        const DeviceLocalBufferConfig& device_local_config,
+        DeviceAddr address,
+        DeviceAddr device_local_size,
+        MeshDevice* mesh_device,
+        std::shared_ptr<MeshBuffer> owner,
+        DeviceAddr shard_offset) :
+        config_(config),
+        device_local_config_(device_local_config),
+        mesh_device_(mesh_device->shared_from_this()),
+        address_(address),
+        device_local_size_(device_local_size),
+        buffers_(MeshShape(mesh_device->shape())),
+        state_(RetainedViewState{std::move(owner), shard_offset}) {}
+
     void initialize_device_buffers();
     MeshBufferConfig config_;
     DeviceLocalBufferConfig device_local_config_;
@@ -184,16 +210,19 @@ private:
 
     DistributedMeshContainer<std::shared_ptr<Buffer>> buffers_;
 
-    // `MeshBufferState` specifies the state of the MeshBuffer. It can either be:
-    // 1. Owned - a single device buffer is responsible for providing the address for the entire mesh buffer.
-    // 2. Externally owned - the MeshBuffer was created as a view over an existing address.
-    // 3. Deallocated - the MeshBuffer is in the deallocated state.
+    // Retained views keep their source allocation live but never deallocate it directly.
     struct OwnedBufferState {
         std::shared_ptr<Buffer> backing_buffer;
     };
+    struct RetainedViewState {
+        std::shared_ptr<MeshBuffer> owner;
+        DeviceAddr shard_offset;
+    };
+    struct PerCoreOwnedState {};
     struct ExternallyOwnedState {};
     struct DeallocatedState {};
-    using MeshBufferState = std::variant<OwnedBufferState, ExternallyOwnedState, DeallocatedState>;
+    using MeshBufferState =
+        std::variant<OwnedBufferState, PerCoreOwnedState, RetainedViewState, ExternallyOwnedState, DeallocatedState>;
     MeshBufferState state_;
 
     friend std::shared_ptr<MeshBuffer> tt::tt_metal::experimental::per_core_allocation::create_on_single_device(

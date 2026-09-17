@@ -220,8 +220,7 @@ RowMajorHostBuffer convert_block_float_to_logical_row_major(const HostBuffer& bu
             tensor_spec.logical_shape(),
             tensor_spec.padded_shape()));
     auto logical_data =
-        HostTensor::from_buffer(unpack_block_float_tiles_to_float(buffer, tensor_spec), decode_spec)
-            .to_vector<float>();
+        HostTensor::from_buffer(unpack_block_float_tiles_to_float(buffer, tensor_spec), decode_spec).to_vector<float>();
     return RowMajorHostBuffer::create_logical(HostBuffer(std::move(logical_data)), tensor_spec);
 }
 
@@ -260,8 +259,7 @@ RowMajorHostBuffer convert_to_row_major_host_buffer(const Tensor& tt_tensor, con
         // Previous impl only copied if data needed transformation. Instead *always* copy
         // because the HostBuffer will be returned directly to the other python frameworks
         // wrapped in an ndarray
-        auto logical_data =
-            HostTensor::from_buffer(std::move(host_buffer), tensor_spec).to_vector<T>();
+        auto logical_data = HostTensor::from_buffer(std::move(host_buffer), tensor_spec).to_vector<T>();
         return RowMajorHostBuffer::create_logical(HostBuffer(std::move(logical_data)), tensor_spec);
     };
 
@@ -1739,6 +1737,16 @@ void pytensor_module(nb::module_& mod) {
             "tensor_id",
             [](const Tensor& self) { return self.tensor_id; },
             [](Tensor& self, std::size_t tensor_id) { self.tensor_id = tensor_id; });
+
+    mod.def(
+        "experimental_create_sharded_tensor_view",
+        &ttnn::create_sharded_tensor_view,
+        nb::arg("owner"),
+        nb::arg("tensor_spec"),
+        nb::arg("shard_offset"),
+        R"doc(
+        Create a sharded L1 tensor view retained by an owner tensor.
+    )doc");
 
     mod.def(
         "experimental_to_single_device",

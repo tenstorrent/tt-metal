@@ -137,6 +137,14 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpArgmaxSingleCore) {
         .cbs = {input_cb_descriptor, output_cb_descriptor},
     };
 
+    auto preparation =
+        ttnn::prepare_generic_op(std::vector<Tensor>{device_input_tensor, device_output_tensor}, program_descriptor);
+    EXPECT_GT(preparation.max_program_config_size_bytes, 0);
+    EXPECT_GT(preparation.max_kernel_binary_size_bytes, 0);
+    EXPECT_EQ(
+        ttnn::prepare_generic_op(std::vector<Tensor>{device_input_tensor, device_output_tensor}, program_descriptor),
+        preparation);
+
     ttnn::generic_op(std::vector<Tensor>{device_input_tensor, device_output_tensor}, program_descriptor);
     Tensor output_tensor = device_output_tensor.cpu();
     auto allclose = ttnn::allclose<uint32_t>(golden, output_tensor);
@@ -1016,14 +1024,10 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpProgramCacheCommonRuntimeArgs) {
     Tensor device_output_tensor_2 = ttnn::create_device_tensor(device_input_tensor_2.tensor_spec(), this->device_);
 
     // Update both per-core and common runtime args with new addresses
-    program_descriptor.kernels[0].runtime_args[0].second = {
-        device_input_tensor_2.buffer()->address(), num_tiles, 0};
-    program_descriptor.kernels[0].common_runtime_args = {
-        device_input_tensor_2.buffer()->address(), num_tiles, 0};
-    program_descriptor.kernels[1].runtime_args[0].second = {
-        device_output_tensor_2.buffer()->address(), num_tiles, 0};
-    program_descriptor.kernels[1].common_runtime_args = {
-        device_output_tensor_2.buffer()->address(), num_tiles, 0};
+    program_descriptor.kernels[0].runtime_args[0].second = {device_input_tensor_2.buffer()->address(), num_tiles, 0};
+    program_descriptor.kernels[0].common_runtime_args = {device_input_tensor_2.buffer()->address(), num_tiles, 0};
+    program_descriptor.kernels[1].runtime_args[0].second = {device_output_tensor_2.buffer()->address(), num_tiles, 0};
+    program_descriptor.kernels[1].common_runtime_args = {device_output_tensor_2.buffer()->address(), num_tiles, 0};
 
     ttnn::generic_op(std::vector{device_input_tensor_2, device_output_tensor_2}, program_descriptor);
     Tensor golden_2 = ttnn::exp(device_input_tensor_2);
