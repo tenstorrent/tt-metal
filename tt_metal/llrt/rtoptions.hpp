@@ -304,8 +304,6 @@ class RunTimeOptions {
     // Quasar interim path: dispatch cores from core descriptor YAML (Tensix grid) instead of soc dispatch-engine tiles.
     bool use_quasar_tensix_dispatch_cores = false;
 
-    bool quasar_disable_fds = false;
-
     std::filesystem::path simulator_path = "";
 
     bool fast_dispatch = true;
@@ -680,7 +678,7 @@ public:
     }
     std::string get_compile_hash_string() const {
         std::string compile_hash_str = fmt::format(
-            "{}_{}_{}_{}_{}_{}_{}_{}_{}",
+            "{}_{}_{}_{}_{}_{}_{}_{}",
             get_watcher_hash(),
             get_sanitizer_hash(),
             get_kernels_early_return(),
@@ -688,8 +686,7 @@ public:
             get_erisc_iram_enabled(),
             get_enable_2_erisc_mode(),
             get_disable_fabric_2_erisc_mode(),
-            get_eth_ptp_trace(),
-            get_disable_fds());
+            get_eth_ptp_trace());
         for (int i = 0; i < RunTimeDebugFeatureCount; i++) {
             compile_hash_str += "_";
             compile_hash_str += get_feature_hash_string((llrt::RunTimeDebugFeatures)i);
@@ -824,8 +821,6 @@ public:
 
     // If this fallback is removed, should also remove dispatch_cores entry from core descriptor YAML files.
     bool get_use_quasar_tensix_dispatch_cores() const { return use_quasar_tensix_dispatch_cores; }
-
-    bool get_disable_fds() const { return quasar_disable_fds; }
 
     bool get_skip_eth_cores_with_retrain() const { return skip_eth_cores_with_retrain; }
 
