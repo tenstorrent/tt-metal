@@ -19,6 +19,7 @@ std::array<ttnn::Tensor, 2> dispatch_fabric2d(
     const ttnn::Tensor& expert_token_counts,
     const ttnn::Tensor& expert_region_offsets,
     const std::optional<ttnn::Tensor>& fanout_reach,
+    const std::optional<ttnn::Tensor>& padding_config,
     uint32_t experts_per_chip,
     uint32_t num_routed_experts,
     uint32_t num_experts_per_tok,
@@ -45,18 +46,14 @@ std::array<ttnn::Tensor, 2> dispatch_fabric2d(
 
     // Every core this op may occupy. The model runs dispatch on a sub-device that is one row of the
     // compute grid while the shared expert holds the rest, so a TILE input's untilizer pool has to be
-    // drawn from the same row rather than from wherever there is space. With no sub-device the
-    // universe is that first row anyway, which is what the eth-nearest stream placement already picks
-    // -- decide_placement asserts it rather than assuming it.
+    // drawn from the same row rather than from wherever there is space -- and the caller says so by
+    // passing that sub-device, exactly as it does to the sibling `dispatch`. Defaulting to the first
+    // sub-device means no sub-device manager loaded gives the whole grid, which is what a standalone
+    // caller wants and what a test gets.
     auto* mesh_device = input_tensor.device();
-    tt::tt_metal::CoreRangeSet universe;
-    if (subdevice_id.has_value()) {
-        universe = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, *subdevice_id);
-    } else {
-        const auto grid = mesh_device->compute_with_storage_grid_size();
-        universe = tt::tt_metal::CoreRangeSet(
-            tt::tt_metal::CoreRange(tt::tt_metal::CoreCoord{0, 0}, tt::tt_metal::CoreCoord{grid.x - 1, 0}));
-    }
+    const auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
+    const tt::tt_metal::CoreRangeSet universe =
+        mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
 
     return ttnn::prim::dispatch_fabric2d(
         input_tensor.device(),
@@ -67,6 +64,7 @@ std::array<ttnn::Tensor, 2> dispatch_fabric2d(
         expert_token_counts,
         expert_region_offsets,
         fanout_reach,
+        padding_config,
         experts_per_chip,
         num_routed_experts,
         num_experts_per_tok,

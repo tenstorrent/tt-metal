@@ -152,6 +152,20 @@ void DispatchFabric2dDeviceOperation::validate_on_program_cache_miss(
     validate_control_tensor(tensor_args.expert_token_counts, args.num_routed_experts, "expert_token_counts");
     validate_control_tensor(tensor_args.expert_region_offsets, args.num_routed_experts, "expert_region_offsets");
 
+    if (tensor_args.padding_config.has_value()) {
+        const auto& pc = *tensor_args.padding_config;
+        validate_dram_row_major(pc, "padding_config");
+        TT_FATAL(
+            pc.dtype() == tt::tt_metal::DataType::INT32 || pc.dtype() == tt::tt_metal::DataType::UINT32,
+            "dispatch_fabric2d: padding_config must be INT32 or UINT32, got {}",
+            pc.dtype());
+        TT_FATAL(
+            pc.logical_volume() >= 2,
+            "dispatch_fabric2d: padding_config holds [real_token_count, pad_side] and so needs at least 2 "
+            "elements, got {}",
+            pc.logical_volume());
+    }
+
     // A padded token's unguarded lookup lands on a trailing sentinel column that maps to -1.
     validate_dram_row_major(tensor_args.expert_dispatch_table_tensor, "expert_dispatch_table");
     TT_FATAL(
@@ -187,14 +201,6 @@ void DispatchFabric2dDeviceOperation::validate_on_program_cache_miss(
             "would drop values and misalign every stripe after the first",
             hidden,
             tt::constants::TILE_WIDTH);
-        // Production `dispatch` tolerates a ragged final batch by untilizing 32 rows regardless and
-        // never referencing the padded ones. This op stages into a buffer of exactly seq_len_per_chip
-        // pages, so a ragged stripe would write past the end; rejected rather than silently clipped.
-        TT_FATAL(
-            args.seq_len_per_chip % tt::constants::TILE_HEIGHT == 0,
-            "dispatch_fabric2d: a TILE input needs seq_len_per_chip ({}) to be a multiple of {}",
-            args.seq_len_per_chip,
-            tt::constants::TILE_HEIGHT);
     }
 
     // Both the stream cores and, under TILE, the untilizer pool come out of this set.
@@ -294,6 +300,7 @@ std::array<ttnn::Tensor, 2> dispatch_fabric2d(
     const ttnn::Tensor& expert_token_counts,
     const ttnn::Tensor& expert_region_offsets,
     const std::optional<ttnn::Tensor>& fanout_reach,
+    const std::optional<ttnn::Tensor>& padding_config,
     uint32_t experts_per_chip,
     uint32_t num_routed_experts,
     uint32_t num_experts_per_tok,
@@ -320,6 +327,7 @@ std::array<ttnn::Tensor, 2> dispatch_fabric2d(
             .axis = axis,
             .num_links = num_links,
             .fanout = fanout,
+            .has_padding_config = padding_config.has_value(),
             .topology = topology,
             .output_mem_config = memory_config,
             .worker_core_range_set = worker_core_range_set},
@@ -330,7 +338,8 @@ std::array<ttnn::Tensor, 2> dispatch_fabric2d(
             .expert_dispatch_table_tensor = expert_dispatch_table_tensor,
             .expert_token_counts = expert_token_counts,
             .expert_region_offsets = expert_region_offsets,
-            .fanout_reach = fanout_reach});
+            .fanout_reach = fanout_reach,
+            .padding_config = padding_config});
 }
 
 }  // namespace ttnn::prim

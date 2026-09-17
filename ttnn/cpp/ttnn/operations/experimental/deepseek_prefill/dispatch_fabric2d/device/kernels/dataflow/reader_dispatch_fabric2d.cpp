@@ -46,6 +46,7 @@ struct Control {
     // fanout: one reach row per (origin, direction), each padded to 64 bytes. An address rather than a
     // pointer because the pad makes the stride wider than the row.
     uint32_t reach;
+    volatile tt_l1_ptr uint32_t* padding;    // [real_token_count, pad_side], when one was supplied
     volatile tt_l1_ptr uint32_t* in_start;   // page offset of each chunk this stream reads
     volatile tt_l1_ptr uint32_t* out_start;  // page offset of each chunk it writes downstream
     uint32_t end;
@@ -92,6 +93,7 @@ Control carve_control() {
     c.mc_entries = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(take(dspf2d::kCbMcEntries));
     c.mc_count = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(take(dspf2d::kCbMcCount));
     c.reach = take(dspf2d::kCbReach);
+    c.padding = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(take(dspf2d::kCbPadding));
     c.in_start = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(take(dspf2d::kCbInStart));
     c.out_start = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(take(dspf2d::kCbOutStart));
     c.end = a;
@@ -134,6 +136,11 @@ void read_control_tables(const Control& c) {
                 noc_async_read(reach_acc.get_noc_addr(o * 2u + d), c.reach + (o * 2u + d) * stride, hops * 4u);
             }
         }
+    }
+    if constexpr (ct.has_padding_config) {
+        const auto padding_acc = TensorAccessor(
+            dspf2d::ReaderCtArgs::padding_args, get_arg_val<uint32_t>(dspf2d::ReaderRtArg::kPaddingConfigAddr));
+        noc_async_read(padding_acc.get_noc_addr(0), (uint32_t)c.padding, dspf2d::PADDING_CONFIG_BYTES);
     }
     noc_async_read_barrier();
 }
@@ -285,12 +292,31 @@ void size_buckets(const Control& c) {
 // Under fan-out that is one entry per (token, direction) carrying the packed destinations and their
 // farthest hop, plus a bucket entry for each destination on THIS chip. The two layouts have separate
 // blocks, so one pass fills both.
+// Tokens the routing pass walks. A padding_config shortens it to the real ones, exactly as the
+// production op shortens its batch loop, and for the same reason: with right padding the real tokens
+// hold the low indices, so the allocator reaches all of them before the first padded one.
+//
+// This cannot desynchronise the ring. Every chunk length comes from the offsets table, never from how
+// far this loop ran, and supplying the config asserts that padded tokens are sentinel-marked -- their
+// picks resolve to ES_NOT_HERE and contribute no page. Skipping them is skipping no-ops.
+uint32_t routed_token_count(const Control& c) {
+    if constexpr (ct.has_padding_config) {
+        const uint32_t real = c.padding[0];
+        const uint32_t pad_side = c.padding[1];
+        if (pad_side == 0u && real < ct.seq_len) {
+            return real;
+        }
+    }
+    return ct.seq_len;
+}
+
 void build_routing_index(const Control& c) {
     const uint32_t cap = ct.max_dispatch_buf_tokens;
     const uint32_t mc_stride = dspf2d::fo_entry_words(ct.topk);
     [[maybe_unused]] uint32_t mc_n[2] = {0, 0};
+    const uint32_t tokens = routed_token_count(c);
     uint32_t idx_addr = (uint32_t)c.indices;
-    for (uint32_t t = 0; t < ct.seq_len; t++, idx_addr += ct.indices_pad_stride) {
+    for (uint32_t t = 0; t < tokens; t++, idx_addr += ct.indices_pad_stride) {
         volatile tt_l1_ptr uint16_t* idx = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(idx_addr);
         [[maybe_unused]] uint32_t n_dir[2] = {0, 0};
         [[maybe_unused]] uint32_t far_dir[2] = {0, 0};
@@ -1079,11 +1105,6 @@ void kernel_main() {
 
     Ring ring;
     if (ct.fanout) {
-        wait_for_untilize();  // the local phase is the first thing that reads a token here
-        {
-            DeviceZoneScopedN("dspf2d_mc_local");
-            local_phase(c, ring, in_acc, out_acc, meta_acc);
-        }
         // Clockwise is direction 0 on both sides -- mc_dir_of resolves a tie at exactly half the ring
         // the same way the reach table was built. Differ in one place and the lengths silently
         // disagree.
@@ -1095,6 +1116,7 @@ void kernel_main() {
             mc_chunk_starts(c, dir_idx, link, travel, /*outgoing=*/false, c.in_start);
             mc_chunk_starts(c, dir_idx, link, travel, /*outgoing=*/true, c.out_start);
         }
+        wait_for_untilize();  // the own phase is the first thing that reads a token here
         {
             DeviceZoneScopedN("dspf2d_mc_own");
             mc_own_phase(c, ring, in_acc, out_acc, meta_acc, fwd_acc, my_region, dir_idx, link);
@@ -1104,6 +1126,13 @@ void kernel_main() {
             DeviceZoneScopedN("dspf2d_mc_relay");
             mc_relay_phase(c, ring, out_acc, meta_acc, fwd_acc, my_region, dir_idx, link, travel);
             ring.flush_publish();
+        }
+        // Last, as on the unicast path: these pages never leave the chip, so anything ahead of them in
+        // this order is a chip downstream waiting. The multicast entries have their own control block,
+        // so the bucket index this reads is still the one the prologue built.
+        {
+            DeviceZoneScopedN("dspf2d_mc_local");
+            local_phase(c, ring, in_acc, out_acc, meta_acc);
         }
     } else {
         {

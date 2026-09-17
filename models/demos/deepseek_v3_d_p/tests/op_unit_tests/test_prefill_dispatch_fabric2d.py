@@ -340,6 +340,7 @@ class _Fixture:
     # exactly one, and a block's L1 column offset -- the thing block_ct_dim exists to make legal --
     # would never be anything but zero.
     def __init__(self, mesh_device, H, G, seq_len_per_chip=128, emb_dim=512, num_routed_experts=256, topk=8, seed=11):
+        self.mesh_device = mesh_device
         self.seq_len_per_chip, self.emb_dim, self.H, self.G = seq_len_per_chip, emb_dim, H, G
         self.num_routed_experts, self.topk = num_routed_experts, topk
         self.experts_per_chip = num_routed_experts // G // H
@@ -353,51 +354,81 @@ class _Fixture:
                 for t in range(seq_len_per_chip):
                     self.indices[g, h, t] = g * experts_per_group + torch.randperm(experts_per_group)[:topk]
 
-        offs = torch.zeros(G, H, num_routed_experts, dtype=torch.int32)
-        counts = torch.zeros(G, H, num_routed_experts, dtype=torch.int32)
-        region = torch.zeros(G, H, num_routed_experts, dtype=torch.int32)
+        self.x = torch.randn(H, G, seq_len_per_chip, emb_dim, dtype=torch.bfloat16)
+        self.tt_x = {
+            ttnn.ROW_MAJOR_LAYOUT: self._shard(self.x, (0, 1), ttnn.bfloat16),
+            ttnn.TILE_LAYOUT: self._shard(self.x, (0, 1), ttnn.bfloat16, layout=ttnn.TILE_LAYOUT),
+        }
+        self.tt_table = self._shard(self.table.unsqueeze(1), (None, 0), ttnn.int32)
+        self.rebuild()
+
+    def _shard(self, t, dims, dtype, layout=ttnn.ROW_MAJOR_LAYOUT):
+        return ttnn.from_torch(
+            t,
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=dims),
+            layout=layout,
+            device=self.mesh_device,
+            dtype=dtype,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    def rebuild(self):
+        """Re-derive everything routing decides, so a test may edit `indices` and stay self-consistent.
+
+        The offsets table and the reach table come from the same draw the op is handed, which is the
+        whole reason the op can size a chunk it neither wrote nor receives; building one from a stale
+        draw would not fail a shape check, it would deadlock an axis.
+        """
+        G, H = self.G, self.H
+        offs = torch.zeros(G, H, self.num_routed_experts, dtype=torch.int32)
+        counts = torch.zeros(G, H, self.num_routed_experts, dtype=torch.int32)
+        region = torch.zeros(G, H, self.num_routed_experts, dtype=torch.int32)
         for g in range(G):
             o, c, r, _ = get_gate_outputs(
                 self.indices[g],
                 H,
-                num_routed_experts,
+                self.num_routed_experts,
                 self.experts_per_chip,
-                seq_len_per_chip,
-                topk,
+                self.seq_len_per_chip,
+                self.topk,
                 expert_dispatch_table=self.table[g : g + 1],
             )
             offs[g], counts[g], region[g] = o[0].to(torch.int32), c[0].to(torch.int32), r[0].to(torch.int32)
         self.offs = offs
-
-        def shard(t, dims, dtype, layout=ttnn.ROW_MAJOR_LAYOUT):
-            return ttnn.from_torch(
-                t,
-                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=dims),
-                layout=layout,
-                device=mesh_device,
-                dtype=dtype,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-
-        self.x = torch.randn(H, G, seq_len_per_chip, emb_dim, dtype=torch.bfloat16)
-        self.tt_x = {
-            ttnn.ROW_MAJOR_LAYOUT: shard(self.x, (0, 1), ttnn.bfloat16),
-            ttnn.TILE_LAYOUT: shard(self.x, (0, 1), ttnn.bfloat16, layout=ttnn.TILE_LAYOUT),
-        }
-        self.tt_idx = shard(self.indices.permute(1, 0, 2, 3).to(torch.int32).to(torch.int16), (0, 1), ttnn.uint16)
-        self.tt_offs = shard(offs, (None, 0), ttnn.int32)
-        self.tt_counts = shard(counts[:, 0:1, :], (None, 0), ttnn.int32)
-        self.tt_region = shard(region[:, 0:1, :], (None, 0), ttnn.int32)
-        self.tt_table = shard(self.table.unsqueeze(1), (None, 0), ttnn.int32)
-        self.tt_reach = shard(
-            _mc_reach(
-                self.indices, self.table, offs, self.capacity, G, H, seq_len_per_chip, topk
-            ).to(torch.int32),
+        self.tt_idx = self._shard(self.indices.permute(1, 0, 2, 3).to(torch.int32).to(torch.int16), (0, 1), ttnn.uint16)
+        self.tt_offs = self._shard(offs, (None, 0), ttnn.int32)
+        self.tt_counts = self._shard(counts[:, 0:1, :], (None, 0), ttnn.int32)
+        self.tt_region = self._shard(region[:, 0:1, :], (None, 0), ttnn.int32)
+        self.tt_reach = self._shard(
+            _mc_reach(self.indices, self.table, offs, self.capacity, G, H, self.seq_len_per_chip, self.topk).to(
+                torch.int32
+            ),
             (None, 0),
             ttnn.int32,
         )
 
-    def run(self, cluster_axis, num_links, layout=ttnn.ROW_MAJOR_LAYOUT, fanout=False, subdevice_id=None):
+    def padding_config(self, real_tokens, pad_side=0):
+        """The [real_token_count, pad_side] tensor `dispatch` takes, replicated to every device."""
+        return ttnn.from_torch(
+            torch.tensor([[real_tokens, pad_side]], dtype=torch.int32),
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=(None, None)
+            ),
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.mesh_device,
+            dtype=ttnn.int32,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    def run(
+        self,
+        cluster_axis,
+        num_links,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        fanout=False,
+        subdevice_id=None,
+        padding_config=None,
+    ):
         return ttnn.experimental.deepseek_prefill.dispatch_fabric2d(
             self.tt_x[layout],
             self.tt_idx,
@@ -406,6 +437,7 @@ class _Fixture:
             self.tt_counts,
             self.tt_region,
             fanout_reach=self.tt_reach if fanout else None,
+            padding_config=padding_config,
             fanout=fanout,
             experts_per_chip=self.experts_per_chip,
             num_routed_experts=self.num_routed_experts,
@@ -482,12 +514,12 @@ def _moe_grid_split(mesh_device):
 
 
 def _leading_row_cores(width):
-    """The first `width` cores of row 0 -- a STRICT subset of what the op picks with no sub-device.
+    """The first `width` cores of row 0 -- a strict subset of the row the streams need.
 
     The op does not support this: a stream lands on the worker nearest its eth core and those are
     spread along the whole row, so any partial carve leaves one of them outside. What it is good for
-    is showing that the sub-device reached the placement at all, which a carve identical to the
-    default cannot.
+    is showing that the sub-device reached the placement at all, which a carve wide enough to hold
+    every stream cannot.
     """
     return ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(width - 1, 0))})
 
@@ -634,15 +666,22 @@ def test_dispatch_fabric2d_tile_refusals(mesh_device, device_params, num_links):
     cfg = extract_mesh_config(mesh_device)
     streams = 2 * num_links
 
-    # 100 tokens is three whole stripes and a ragged fourth; 500 columns is fifteen whole tile
-    # columns and a ragged sixteenth. Both are accepted as ROW_MAJOR, which is what makes the TILE
-    # refusal a property of the untilizer rather than of the op's shapes.
-    for label, kwargs in [("ragged sequence", {"seq_len_per_chip": 100}), ("ragged emb", {"emb_dim": 500})]:
-        ragged = _Fixture(mesh_device, cfg.dispatch_group_size, cfg.num_dispatch_groups, **kwargs)
-        with pytest.raises(RuntimeError, match="multiple of 32"):
-            ragged.run(cfg.sp_axis, num_links, layout=ttnn.TILE_LAYOUT)
-        payload, metadata = ragged.run(cfg.sp_axis, num_links)
-        ragged.check(payload, metadata, f"row-major with a {label}")
+    # 500 columns is fifteen whole tile columns and a ragged sixteenth, which the untilizer cannot
+    # read: it takes whole tile columns and packs rows at a stride the writer does not use. Accepted
+    # as ROW_MAJOR, which is what makes the refusal a property of the untilizer rather than the shape.
+    ragged_emb = _Fixture(mesh_device, cfg.dispatch_group_size, cfg.num_dispatch_groups, emb_dim=500)
+    with pytest.raises(RuntimeError, match="multiple of 32"):
+        ragged_emb.run(cfg.sp_axis, num_links, layout=ttnn.TILE_LAYOUT)
+    payload, metadata = ragged_emb.run(cfg.sp_axis, num_links)
+    ragged_emb.check(payload, metadata, "row-major with a ragged emb")
+
+    # A ragged SEQUENCE is carried, not refused: 100 tokens is three whole stripes and a fourth the
+    # packer fills with the tile's padding rows, which staging has room for and the routing pass never
+    # reaches. This is the one place the two input layouts could disagree about how many tokens exist.
+    ragged_seq = _Fixture(mesh_device, cfg.dispatch_group_size, cfg.num_dispatch_groups, seq_len_per_chip=100)
+    for layout, label in ((ttnn.ROW_MAJOR_LAYOUT, "row-major"), (ttnn.TILE_LAYOUT, "tile")):
+        payload, metadata = ragged_seq.run(cfg.sp_axis, num_links, layout=layout)
+        ragged_seq.check(payload, metadata, f"{label} with a ragged sequence")
 
     fx = _Fixture(mesh_device, cfg.dispatch_group_size, cfg.num_dispatch_groups)
     with _sub_device_manager(mesh_device, [_leading_row_cores(streams)]) as (exact_sd,):
@@ -650,6 +689,52 @@ def test_dispatch_fabric2d_tile_refusals(mesh_device, device_params, num_links):
         # Refused in validation, before the placement gets a chance to object to the carve itself.
         with pytest.raises(RuntimeError, match="plus at least one untilizer"):
             fx.run(cfg.sp_axis, num_links, layout=ttnn.TILE_LAYOUT, subdevice_id=exact_sd)
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links",
+    [
+        pytest.param(
+            (8, 4),
+            torus_xy_device_params(),
+            2,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="torus-xy-8x4-2link",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.timeout(600)
+def test_dispatch_fabric2d_padding_config(mesh_device, device_params, num_links):
+    """A padding_config shortens the routing pass without changing a single page.
+
+    The contract it carries is the one `dispatch` relies on: with right padding the padded tokens sit
+    at the high indices and are sentinel-marked, so they resolve to no expert and contribute nothing.
+    Here the tail is routed entirely OUT of this dispatch group, which is what a sentinel-marked token
+    looks like from inside it -- so bounding the pass at the real count and not bounding it must land
+    identical bytes, and the reference (which always walks every token) is the third opinion.
+
+    The left-padding case is the same call with pad_side 1, which both ops ignore, so it has to come
+    back identical too -- a config that silently took effect on the wrong side would corrupt the tail.
+    """
+    cfg = extract_mesh_config(mesh_device)
+    fx = _Fixture(mesh_device, cfg.dispatch_group_size, cfg.num_dispatch_groups)
+    real = fx.seq_len_per_chip // 2
+
+    # Tokens past `real` are given experts of another dispatch group, the -1 column this group sees.
+    experts_per_group = fx.num_routed_experts // fx.G
+    for g in range(fx.G):
+        other = ((g + 1) % fx.G) * experts_per_group
+        fx.indices[g, :, real:, :] = torch.arange(other, other + fx.topk)
+    fx.rebuild()
+
+    baseline_payload, baseline_meta = fx.run(cfg.sp_axis, num_links)
+    fx.check(baseline_payload, baseline_meta, "no padding_config")
+
+    for pad_side, label in ((0, "right padding, the pass is bounded"), (1, "left padding, the config is ignored")):
+        payload, metadata = fx.run(cfg.sp_axis, num_links, padding_config=fx.padding_config(real, pad_side))
+        fx.check(payload, metadata, label)
+    logger.info(f"padding_config: {real} real of {fx.seq_len_per_chip} tokens, byte-exact either side")
 
 
 # --------------------------------------------------------------------------------------------------

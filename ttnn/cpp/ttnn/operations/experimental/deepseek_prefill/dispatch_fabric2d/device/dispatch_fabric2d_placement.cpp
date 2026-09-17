@@ -128,15 +128,15 @@ StreamPlacements decide_device_placement(
     for (const StreamId stream : order) {
         const auto& candidate = candidates.at(stream);
         const auto at = std::find(universe.begin(), universe.end(), candidate.worker);
-        // Asserted rather than assumed: with no sub-device the universe is the first row of the
-        // compute grid because that is where get_closest_worker_to_eth_core has always landed, and
-        // the whole point of bounding the universe is that the cores it does NOT hand this op belong
-        // to whatever else shares the chip.
+        // Refused rather than quietly relocated: the whole point of bounding the universe is that the
+        // cores it does NOT hand this op belong to whatever else shares the chip, so a stream that
+        // wants one of those is the caller's carve being wrong, not something to work around. The
+        // model's carve is a row of the compute grid, which is where get_closest_worker_to_eth_core
+        // lands anyway.
         TT_FATAL(
             at != universe.end(),
             "dispatch_fabric2d {}: the worker nearest stream {}'s eth core is {}, which is outside the "
-            "{} cores this op was given. Pass a subdevice_id whose cores include it, or run on a chip "
-            "whose eth-nearest workers are in the first row of the compute grid.",
+            "{} cores this op was given. Widen the subdevice_id's carve to include it.",
             self_node,
             stream,
             candidate.worker,
