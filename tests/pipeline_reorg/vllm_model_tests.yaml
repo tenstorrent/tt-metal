@@ -202,32 +202,6 @@
   team: models
   budget_type: vllm
 
-# 31B dFlash CONTRACT rail: the runner supplies the candidate block and owns
-# the accept walk (output_tokens_per_step 1, no internal block loop).
-#
-# No --async-scheduling, deliberately: upstream vLLM refuses async scheduling
-# for any speculative_config whose method is not EAGLE/MTP/draft_model/dspark,
-# and the contract requires method=custom_class. The block-rail leg above
-# keeps async precisely because it declares no speculative_config at all.
-- name: "Gemma4-31B dFlash contract tp=8"
-  model: google/gemma-4-31B-it
-  coherence-test: true
-  server-timeout: 25
-  benchmark-timeout: 5
-  mesh-device: P150x8
-  arch: arch-blackhole
-  tt-config: '{"sample_on_device_mode": "decode_only", "fabric_config": "FABRIC_1D", "trace_region_size": 512000000}'
-  additional-server-args: "--max_model_len 262144 --max_num_seqs 32 --enable_chunked_prefill --max_num_batched_tokens 2048 --long_prefill_token_threshold 2048 --speculative-config '{\"method\":\"custom_class\",\"model\":\"vllm_tt_plugin.model_owned_drafter\",\"num_speculative_tokens\":5}'"
-  extra-env: "TT_MODEL_CLASS_OVERRIDES=Gemma4ForCausalLM=models.demos.gemma4.tt.generator_vllm:Gemma4DFlashContractForCausalLM,Gemma4ForConditionalGeneration=models.demos.gemma4.tt.generator_vllm:Gemma4DFlashContractForCausalLM,Gemma4UnifiedForConditionalGeneration=models.demos.gemma4.tt.generator_vllm:Gemma4DFlashContractForCausalLM,TTGemma4ForCausalLM=models.demos.gemma4.tt.generator_vllm:Gemma4DFlashContractForCausalLM,TTGemma4ForConditionalGeneration=models.demos.gemma4.tt.generator_vllm:Gemma4DFlashContractForCausalLM GEMMA4_DFLASH_VERIFY=5 GEMMA4_DFLASH_SHARD_ARGMAX=1 GEMMA4_PAGE_BLOCK_SIZE=64 GEMMA4_DFLASH_MAX_SPEC_ISL=131072 GEMMA4_CONTRACT_ASYNC=0"
-  multimodal: false
-  skus:
-    bh_loudbox:
-      timeout: 45
-      tier: 2
-  owner_id: U088413NP0Q # Ashai Reddy
-  team: models
-  budget_type: vllm
-
 # 12B MTP: the it-assistant drafter cross-attends the target's own KV, so it
 # needs no prefill taps and no drafter cache of its own. Serving knobs mirror
 # the "Gemma4-12B tp=8" leg above, including the batched-prefill/bounded
