@@ -3,7 +3,7 @@
 
 # Llama-3.1-8B-Instruct: prefill performance
 
-**16K execution and performance passed on 17 September 2026.** The two slots reached about **1,873 and 1,868 tokens/s/user**. These are warmed eager host-wall measurements on one Blackhole Galaxy. Saved 2K, 4K and 8K results are retained without new runs.
+**32K execution and performance passed on 17 September 2026.** The two slots reached about **1,076 and 1,072 tokens/s/user**. These are warmed eager host-wall measurements. Saved 2K, 4K, 8K and 16K results are retained without new runs.
 
 Each chunk runs embedding, all 32 decoder layers, final RMSNorm and the full vocabulary head. Configuration: SP4/TP8, two independent slots, BF16 weights/activations, BFP8_B cache, 1,024-token chunks, no tracing. Capacity equals the tested prompt length.
 
@@ -21,8 +21,10 @@ One warmup ran per slot. Then three measured requests ran per slot, alternating 
 | 8K books | 1 | 2,882.602 (2,882.293–2,883.411) | 2,874.283 (2,874.074–2,875.482) | 2,841.88 (2,841.08–2,842.18) |
 | 16K books | 0 | 8,747.287 (8,734.832–8,778.168) | 8,727.026 (8,718.289–8,761.432) | 1,873.04 (1,866.45–1,875.71) |
 | 16K books | 1 | 8,772.629 (8,770.791–8,796.333) | 8,755.833 (8,754.786–8,771.069) | 1,867.63 (1,862.59–1,868.02) |
+| 32K books | 0 | 30,440.846 (30,173.171–30,580.015) | 30,408.173 (30,138.385–30,542.304) | 1,076.45 (1,071.55–1,086.00) |
+| 32K books | 1 | 30,563.509 (30,309.807–30,729.001) | 30,524.658 (30,269.160–30,690.541) | 1,072.13 (1,066.35–1,081.10) |
 
-2K used the earlier chat fixtures and source snapshot; 4K, 8K and 16K use book passages and the capacity-enabled model. Their fixed book endpoints differ. The 4K/8K runs used b09u02; the 16K run used c04u14. This table records different contexts, fixtures and machines. It is not a controlled speedup or regression comparison.
+2K used the earlier chat fixtures and source snapshot; 4K, 8K, 16K and 32K use book passages and the capacity-enabled model. Their fixed book endpoints differ. The 4K/8K runs used b09u02; the 16K/32K runs used c04u14. This table records different contexts, fixtures and machines. It is not a controlled speedup or regression comparison.
 
 ## Per-chunk medians
 
@@ -88,8 +90,72 @@ One warmup ran per slot. Then three measured requests ran per slot, alternating 
 | 16K books | 1 | [13312,14336) | 549.943 | 550.926 |
 | 16K books | 1 | [14336,15360) | 546.202 | 547.109 |
 | 16K books | 1 | [15360,16384) | 533.452 | 534.463 |
+| 32K books | 0 | [0,1024) | 961.248 | 962.320 |
+| 32K books | 0 | [1024,2048) | 949.263 | 950.300 |
+| 32K books | 0 | [2048,3072) | 950.926 | 951.923 |
+| 32K books | 0 | [3072,4096) | 947.279 | 948.335 |
+| 32K books | 0 | [4096,5120) | 947.058 | 948.064 |
+| 32K books | 0 | [5120,6144) | 946.935 | 948.031 |
+| 32K books | 0 | [6144,7168) | 944.260 | 945.248 |
+| 32K books | 0 | [7168,8192) | 946.918 | 947.939 |
+| 32K books | 0 | [8192,9216) | 944.780 | 945.836 |
+| 32K books | 0 | [9216,10240) | 948.998 | 950.065 |
+| 32K books | 0 | [10240,11264) | 951.981 | 953.002 |
+| 32K books | 0 | [11264,12288) | 950.320 | 951.296 |
+| 32K books | 0 | [12288,13312) | 950.196 | 951.218 |
+| 32K books | 0 | [13312,14336) | 945.855 | 946.885 |
+| 32K books | 0 | [14336,15360) | 947.706 | 948.711 |
+| 32K books | 0 | [15360,16384) | 948.990 | 949.998 |
+| 32K books | 0 | [16384,17408) | 949.647 | 950.792 |
+| 32K books | 0 | [17408,18432) | 946.726 | 947.735 |
+| 32K books | 0 | [18432,19456) | 947.174 | 948.146 |
+| 32K books | 0 | [19456,20480) | 948.491 | 949.468 |
+| 32K books | 0 | [20480,21504) | 951.020 | 952.051 |
+| 32K books | 0 | [21504,22528) | 954.587 | 955.545 |
+| 32K books | 0 | [22528,23552) | 950.760 | 951.713 |
+| 32K books | 0 | [23552,24576) | 947.647 | 948.668 |
+| 32K books | 0 | [24576,25600) | 948.317 | 949.358 |
+| 32K books | 0 | [25600,26624) | 951.787 | 952.849 |
+| 32K books | 0 | [26624,27648) | 945.428 | 946.435 |
+| 32K books | 0 | [27648,28672) | 945.644 | 946.621 |
+| 32K books | 0 | [28672,29696) | 952.962 | 954.029 |
+| 32K books | 0 | [29696,30720) | 947.589 | 948.708 |
+| 32K books | 0 | [30720,31744) | 951.874 | 952.952 |
+| 32K books | 0 | [31744,32768) | 943.157 | 944.189 |
+| 32K books | 1 | [0,1024) | 962.719 | 963.866 |
+| 32K books | 1 | [1024,2048) | 950.355 | 951.398 |
+| 32K books | 1 | [2048,3072) | 949.584 | 950.572 |
+| 32K books | 1 | [3072,4096) | 951.118 | 952.141 |
+| 32K books | 1 | [4096,5120) | 957.732 | 958.749 |
+| 32K books | 1 | [5120,6144) | 962.207 | 963.174 |
+| 32K books | 1 | [6144,7168) | 957.844 | 961.988 |
+| 32K books | 1 | [7168,8192) | 956.345 | 957.398 |
+| 32K books | 1 | [8192,9216) | 958.464 | 959.722 |
+| 32K books | 1 | [9216,10240) | 957.354 | 958.394 |
+| 32K books | 1 | [10240,11264) | 960.617 | 962.569 |
+| 32K books | 1 | [11264,12288) | 957.682 | 959.165 |
+| 32K books | 1 | [12288,13312) | 956.027 | 957.031 |
+| 32K books | 1 | [13312,14336) | 952.633 | 954.969 |
+| 32K books | 1 | [14336,15360) | 955.693 | 956.681 |
+| 32K books | 1 | [15360,16384) | 956.222 | 957.239 |
+| 32K books | 1 | [16384,17408) | 961.947 | 963.458 |
+| 32K books | 1 | [17408,18432) | 953.185 | 954.172 |
+| 32K books | 1 | [18432,19456) | 955.311 | 956.306 |
+| 32K books | 1 | [19456,20480) | 949.760 | 950.797 |
+| 32K books | 1 | [20480,21504) | 947.845 | 948.876 |
+| 32K books | 1 | [21504,22528) | 952.942 | 953.958 |
+| 32K books | 1 | [22528,23552) | 959.450 | 963.669 |
+| 32K books | 1 | [23552,24576) | 953.514 | 954.641 |
+| 32K books | 1 | [24576,25600) | 953.290 | 954.283 |
+| 32K books | 1 | [25600,26624) | 947.627 | 948.696 |
+| 32K books | 1 | [26624,27648) | 949.268 | 950.297 |
+| 32K books | 1 | [27648,28672) | 948.023 | 949.082 |
+| 32K books | 1 | [28672,29696) | 946.956 | 948.015 |
+| 32K books | 1 | [29696,30720) | 946.670 | 947.737 |
+| 32K books | 1 | [30720,31744) | 949.222 | 950.268 |
+| 32K books | 1 | [31744,32768) | 938.838 | 939.884 |
 
-The [six measured requests](performance-prefill-4k-requests.csv) and [all 24 measured chunks](performance-prefill-4k-chunks.csv) retain the unrounded seconds. The [six 8K measured requests](performance-prefill-8k-requests.csv) and [all 48 8K measured chunks](performance-prefill-8k-chunks.csv) use the same units. The [six 16K measured requests](performance-prefill-16k-requests.csv) and [all 96 16K measured chunks](performance-prefill-16k-chunks.csv) retain the same unrounded seconds. Independently calculated medians need not add exactly.
+The [six measured requests](performance-prefill-4k-requests.csv) and [all 24 measured chunks](performance-prefill-4k-chunks.csv) retain the unrounded seconds. The [six 8K measured requests](performance-prefill-8k-requests.csv) and [all 48 8K measured chunks](performance-prefill-8k-chunks.csv) use the same units. The [six 16K measured requests](performance-prefill-16k-requests.csv) and [all 96 16K measured chunks](performance-prefill-16k-chunks.csv) retain the same unrounded seconds. The [six 32K measured requests](performance-prefill-32k-requests.csv) and [all 192 32K measured chunks](performance-prefill-32k-chunks.csv) retain the same unrounded seconds. Independently calculated medians need not add exactly.
 
 ## What the timer includes
 
@@ -162,6 +228,27 @@ Each fixed 16,384-token raw-book prefix includes one BOS and uses the same Instr
 
 **She** is a plausible start of a new sentence, but it does not match the book's **In**, which ranks 11th. **and** matches the next token in Great Expectations and ranks first. All repeats gave the same observations. These two endpoints are a next-token sanity check, not a golden accuracy result or a free-running generation test.
 
+## 32K startup and book observations
+
+| 32K startup or check | Wall time |
+|---|---:|
+| Fixture/tokenizer load | 1.587 s |
+| Model/cache load and synchronization | 80.524 s |
+| Slot 0 warmup | 346.565 s |
+| Slot 1 warmup | 30.046 s |
+| Post-timer readback/check/ranking per request | 18.773–19.369 s |
+
+The first 32K warmup grew the program cache from 10 to 388 entries. All six measured requests stayed at 388. All 8,192 chip/chunk checks across eight requests were finite and exactly matched their slot/chunk warmup. The complete pytest case took 850.057 seconds; that includes setup and cold work and is not warmed prefill latency.
+
+Each fixed 32,768-token raw-book prefix includes one BOS and uses the same Instruct checkpoint. No chat template or decode loop ran.
+
+| Book | Prompt ending | Predicted token | Actual book token | Actual token rank | Top five tokens |
+|---|---|---|---|---:|---|
+| Pride and Prejudice | …go. We are not on friendly terms, and it | is | always | 71 | `is`, `would`, `will`, `does`, `has` |
+| Great Expectations | …high overhead, as if she were going out into | the | the | 1 | `the`, `another`, `a`, `heaven`, `some` |
+
+After “and it”, the model predicts **is**. The actual book token is **always**, ranked **71st**, so this endpoint does not match the book. **the** matches the next token in Great Expectations and ranks first. All repeats gave the same observations. These two endpoints are a next-token sanity check, not a golden accuracy result or a free-running generation test.
+
 ## Coverage and limits
 
 | Length | Status |
@@ -170,9 +257,10 @@ Each fixed 16,384-token raw-book prefix includes one BOS and uses the same Instr
 | 4K | Full 32-layer book execution, finite/repeated outputs and eager timing passed |
 | 8K | Full 32-layer book execution, finite/repeated outputs and eager timing passed |
 | 16K | Full 32-layer book execution, finite/repeated outputs and eager timing passed |
-| 32K / 64K / 128K | Pending live results; fixed book inputs prepared |
+| 32K | Full 32-layer book execution, finite/repeated outputs and eager timing checks completed |
+| 64K / 128K | Pending live results; fixed book inputs prepared |
 
-No golden KV comparison was run in the 4K, 8K or 16K benchmarks. The earlier incomplete larger-context golden matrix remains historical and is not called a complete pass. Future lengths use one combined execution/performance/book run after resource review. Native migration has separate tests. Decoder and SC4 work are outside the current scope.
+No golden KV comparison was run in the 4K, 8K, 16K or 32K benchmarks. The earlier incomplete larger-context golden matrix remains historical and is not called a complete pass. Future lengths use one combined execution/performance/book run after resource review. Native migration has separate tests. Decoder and SC4 work are outside the current scope.
 
 Attention currently gathers and reorders the entire configured cache for every layer/chunk before selecting the logical prefix. A short prompt with a larger allocation may have different latency. Do not infer 128K performance from these results. These numbers do not measure concurrent serving, decode, device kernel time, network TTFT or general numerical accuracy.
 
@@ -234,5 +322,26 @@ The site-specific files below are on shared Exabox storage. They bind the exact 
 | Controller | 182916fd5ea41e9a6567bccdb01c957e8aae6ea964c963012a0f3cf3c82cbeab |
 | Test | cf518f6617e09a7317a7d4ab0745591bcabb049d81741a7389573647604b31c0 |
 | Full source/native pin manifest | 561f4d11597a66adca9bb4437133391526dedaf6acbbb691187ae51215b4521d |
+
+### 32K source and reproduction
+
+32K ran on **bh-glx-120-c04u14**, job **108887**, source HEAD **16ad28fe3ac9ef1f3a413e73dcb0fdc9d2952833**. Actual/dispatch/verified exits are 0. One exact JUnit case passed without errors/skips; all **14,628** pinned files stayed unchanged. The 32-device mesh closed at **2026-09-17 10:09:51.420 UTC**. Root verification independently recomputed the timing and checked coverage, source identity and both book observations. This accepts the execution/performance scope only.
+
+- [32K root verification](/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-runs-007/32k-c04-001/root-verification.json)
+- [32K independent agent verification](/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-runs-007/32k-c04-001/agent-result-summary.json)
+- [32K controller verification](/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-runs-007/32k-c04-001/attempts/attempt-002-bfp8-32k/verification.json)
+- [Exact 32K pytest command](/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-runs-007/32k-c04-001/attempts/attempt-002-bfp8-32k/pytest-command.json)
+- [Frozen reusable test](/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-preparation-007/test_long_context_performance.py)
+- [Reusable launcher and guarded commands](/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-launch-007/README.md)
+- [32K source manifest](/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-runs-007/32k-c04-001/attempts/attempt-002-bfp8-32k/source-hashes.json)
+
+| 32K artifact | SHA256 |
+|---|---|
+| Report | d7673210ffd46ea5d702545b1104bc5cec8fa2f642d4a8565a66680eaefb3566 |
+| Root verification | 269d655aba7e714d1ab40bc26eaa24f1d96330ac56e038bfe98996f77a2d1d82 |
+| Agent verification | 65f7daaa78c62df85ebd68f03a308a2a817397f51e081379ec37d2d7336eb011 |
+| Controller | 182916fd5ea41e9a6567bccdb01c957e8aae6ea964c963012a0f3cf3c82cbeab |
+| Test | cf518f6617e09a7317a7d4ab0745591bcabb049d81741a7389573647604b31c0 |
+| Full source/native pin manifest | ae958102a1d21e69d5f08329ee61ab170a2090b4b3feb3cf79fb198769de7ca7 |
 
 Do not repeat saved measurements for documentation, tests or other small changes that leave execution unchanged. Reconsider measurement after material changes to precision, communication, chunking, model work or kernels.

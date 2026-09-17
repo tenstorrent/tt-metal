@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "scope": "saved2k_verified4k_8k_16k_eager_performance_no_golden_accuracy_claim",
+  "scope": "saved2k_verified4k_8k_16k_32k_eager_performance_no_golden_accuracy_claim",
   "measurements": [
     {
       "context_length": 2048,
@@ -4937,10 +4937,3241 @@
           "title": "Great Expectations"
         }
       ]
+    },
+    {
+      "context_length": 32768,
+      "attempt": "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-runs-007/32k-c04-001/attempts/attempt-002-bfp8-32k",
+      "report": {
+        "path": "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-runs-007/32k-c04-001/attempts/attempt-002-bfp8-32k/captures-32768/report.json",
+        "sha256": "d7673210ffd46ea5d702545b1104bc5cec8fa2f642d4a8565a66680eaefb3566"
+      },
+      "report_status": "performance_complete_no_accuracy_claim",
+      "report_accuracy_status": "No golden accuracy claim; book continuation predictions are observations only",
+      "verification": {
+        "path": "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-runs-007/32k-c04-001/attempts/attempt-002-bfp8-32k/verification.json",
+        "sha256": "360fde133623018caf20d6be1009c64f209196fe587bb7c23eadcc3598267f8a"
+      },
+      "verification_fields": {
+        "verified_exit": 0,
+        "actual_exit": 0,
+        "dispatch_exit": 0,
+        "reasons": [],
+        "full_model_accepted": false,
+        "execution_verified": true,
+        "scope": "error-free full32 prefill and performance; book next-token observations only; no golden accuracy acceptance",
+        "ended_utc": "2026-09-17T10:10:56.819967+00:00"
+      },
+      "source_head": "16ad28fe3ac9ef1f3a413e73dcb0fdc9d2952833",
+      "source_repository": "/data/divanovic/llama31-8b-disagg/repos/tt-metal",
+      "source_pin_count": 14628,
+      "source_map": {
+        "path": "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-runs-007/32k-c04-001/attempts/attempt-002-bfp8-32k/source-hashes.json",
+        "sha256": "ae958102a1d21e69d5f08329ee61ab170a2090b4b3feb3cf79fb198769de7ca7"
+      },
+      "source_manifest_sha256": "ae958102a1d21e69d5f08329ee61ab170a2090b4b3feb3cf79fb198769de7ca7",
+      "before_node_after_equal": true,
+      "source_heads_equal": true,
+      "selected_source_sha256": {
+        "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-launch-006/launch.py": "146a638cd143b2d524e05b4c6920d0da41c4e78400244ff0049a28a1f420b09e",
+        "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-launch-007/launch.py": "182916fd5ea41e9a6567bccdb01c957e8aae6ea964c963012a0f3cf3c82cbeab",
+        "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-preparation-006/long_context_performance_helpers.py": "d6a96c40f5d4ea53675ed80584d0695597b77fc5e444ccbc4972caf146b9154a",
+        "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-preparation-007/long_context_performance_helpers.py": "d6a96c40f5d4ea53675ed80584d0695597b77fc5e444ccbc4972caf146b9154a",
+        "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-preparation-007/test_long_context_performance.py": "cf518f6617e09a7317a7d4ab0745591bcabb049d81741a7389573647604b31c0",
+        "/data/divanovic/llama31-8b-disagg/repos/tt-metal/models/demos/llama_3p1_8b_d_p/tt/__init__.py": "5dce07d5450b8b62d8e38ca9845d7abdabd7107e59cf000967393ac0cb074f76",
+        "/data/divanovic/llama31-8b-disagg/repos/tt-metal/models/demos/llama_3p1_8b_d_p/tt/attention.py": "776a46d34b1c10ea3b9dc772ea9f7b8b3b606af7d2d907e5e249f7e8edccd45f",
+        "/data/divanovic/llama31-8b-disagg/repos/tt-metal/models/demos/llama_3p1_8b_d_p/tt/config.py": "3c6a067625d38d9bf043028fc7d33b2591a9b980f50c980f3b2f7b50da7be979",
+        "/data/divanovic/llama31-8b-disagg/repos/tt-metal/models/demos/llama_3p1_8b_d_p/tt/decoder.py": "df0b04fb7d0d47929d7a0ffdd7d55a7cd72229e49342ea3d99bf0f4b7421186f",
+        "/data/divanovic/llama31-8b-disagg/repos/tt-metal/models/demos/llama_3p1_8b_d_p/tt/input.py": "f3cf1c295097e09978c13bebde970b33d67a5127d800f5f28b3505f15f9eedf6",
+        "/data/divanovic/llama31-8b-disagg/repos/tt-metal/models/demos/llama_3p1_8b_d_p/tt/kv_cache.py": "5ebd451510be99ad333fc1f17835334c8fb2129df7a181274996a6aa2b790757",
+        "/data/divanovic/llama31-8b-disagg/repos/tt-metal/models/demos/llama_3p1_8b_d_p/tt/mlp.py": "acc1eaecafdcf1f23393a628d4af1ed5da0c2a39447f4a1123cfafef39ba236e",
+        "/data/divanovic/llama31-8b-disagg/repos/tt-metal/models/demos/llama_3p1_8b_d_p/tt/model.py": "84853c75742290abde0a284175ef883aaa189622a29929571def2c32bb8aa830",
+        "/data/divanovic/llama31-8b-disagg/repos/tt-metal/models/demos/llama_3p1_8b_d_p/tt/model_config.py": "8ff96daea641929f86e27ce8a32f7fb7b62e1ef90f9c15ce2b456c64257b15cb",
+        "/data/divanovic/llama31-8b-disagg/repos/tt-metal/models/demos/llama_3p1_8b_d_p/tt/prefill_geometry.py": "984c4f6aa53895c0601ab9a58b2123bbc8fd20cce100200dfaa10be82734bf71",
+        "/data/divanovic/llama31-8b-disagg/repos/tt-metal/models/demos/llama_3p1_8b_d_p/tt/qkv.py": "cce1242a47f086faae7db51369c231b9ea80c97742a1e9c1b5e90adf40d99d82",
+        "/data/divanovic/llama31-8b-disagg/repos/tt-metal/models/demos/llama_3p1_8b_d_p/tt/rms_norm.py": "23f70af620f4c684e393ee55470c606711e161f0e33b6b0a531111eda77df2d9",
+        "/data/divanovic/llama31-8b-disagg/repos/tt-metal/models/demos/llama_3p1_8b_d_p/tt/rope.py": "7e8402b816e28187b3cbdfea81223309f3bad79b30ec4ebdb3e922bf73022a37",
+        "/data/divanovic/llama31-8b-disagg/repos/tt-metal/models/demos/llama_3p1_8b_d_p/tt/runners/__init__.py": "5dce07d5450b8b62d8e38ca9845d7abdabd7107e59cf000967393ac0cb074f76",
+        "/data/divanovic/llama31-8b-disagg/repos/tt-metal/models/demos/llama_3p1_8b_d_p/tt/runners/adapters/__init__.py": "5dce07d5450b8b62d8e38ca9845d7abdabd7107e59cf000967393ac0cb074f76",
+        "/data/divanovic/llama31-8b-disagg/repos/tt-metal/models/demos/llama_3p1_8b_d_p/tt/runners/adapters/llama_3p1_8b.py": "de8d310f079977ae9f81655aaeb8e00ae0ffdf02c0d2adb60b955cb9c54da5a4",
+        "/data/divanovic/llama31-8b-disagg/repos/tt-metal/models/demos/llama_3p1_8b_d_p/tt/runners/kv_chunk_table.py": "36484a06d08103d57dc98d30b7866af89f202c00d23e9c946f229e662de6a3ab",
+        "/data/divanovic/llama31-8b-disagg/repos/tt-metal/models/demos/llama_3p1_8b_d_p/tt/runners/kv_layout.py": "531e87c02a9e30b8a635fb793c78333181959e49ba3b9b088602dea795e302cf",
+        "/data/divanovic/llama31-8b-disagg/repos/tt-metal/models/demos/llama_3p1_8b_d_p/tt/tt_prefill_runtime.py": "7d0dece1f073bb85b46c97878b025ef10fb3172c8b72f5526ea4f3028e26ae6e",
+        "/data/divanovic/llama31-8b-disagg/repos/tt-metal/models/demos/llama_3p1_8b_d_p/tt/weights.py": "027b05e465e10fb5491a1ead4608e6fb1c5e6cd84da214da8ff79e5918db88df",
+        "/data/divanovic/llama31-8b-disagg/repos/tt-metal/ttnn/cpp/ttnn/operations/experimental/quasar/transformer/sdpa/device/kernels/compute/compute_common.hpp": "a08c8861617c6275272a8e39443c586fb91d4ba1fb444054970da9f25e52d3c9",
+        "/data/divanovic/llama31-8b-disagg/repos/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp": "c67e91ad533a1a0ebca805a7e4df4fdd6d3d8f1760291d70c17276f3c6b2e0ec"
+      },
+      "controller_sha256": "182916fd5ea41e9a6567bccdb01c957e8aae6ea964c963012a0f3cf3c82cbeab",
+      "invocation": {
+        "path": "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-runs-007/32k-c04-001/attempts/attempt-002-bfp8-32k/invocation.json",
+        "sha256": "0c147e6b08d71b75bfba6167e44f4e5951c1e981733acc6cee486ab025c1e9e5"
+      },
+      "pytest_command": [
+        "timeout",
+        "--signal=TERM",
+        "--kill-after=60",
+        "2400",
+        "/data/divanovic/llama31-8b-disagg/runtime/python_env/bin/python",
+        "-B",
+        "-m",
+        "pytest",
+        "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-preparation-007/test_long_context_performance.py::test_full_prefill_long_context_performance[blackhole-mesh_device0-device_params0]",
+        "--rootdir=.",
+        "-c",
+        "/dev/null",
+        "-p",
+        "conftest",
+        "-p",
+        "performance_pytest_plugin",
+        "-vv",
+        "-s",
+        "--junitxml=/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-runs-007/32k-c04-001/attempts/attempt-002-bfp8-32k/pytest.xml"
+      ],
+      "junit": {
+        "path": "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-runs-007/32k-c04-001/attempts/attempt-002-bfp8-32k/pytest.xml",
+        "sha256": "223c587e26ef78a13035e4e57c9adf39600684ae7228cb7a6da29193173020bf"
+      },
+      "junit_case": "test_full_prefill_long_context_performance[blackhole-mesh_device0-device_params0]",
+      "node": "bh-glx-120-c04u14",
+      "job_id": "108887",
+      "measured_requests": 6,
+      "measured_chunks": 192,
+      "complete_requests": 8,
+      "complete_output_checks": 8192,
+      "summary": [
+        {
+          "slot": 0,
+          "measured_requests": 3,
+          "prompt_wall_seconds": {
+            "count": 3,
+            "minimum": 30.17317059499328,
+            "median": 30.440846167010022,
+            "maximum": 30.580014838997158,
+            "samples": [
+              30.17317059499328,
+              30.580014838997158,
+              30.440846167010022
+            ]
+          },
+          "forward_wall_seconds": {
+            "count": 3,
+            "minimum": 30.138384928999585,
+            "median": 30.408173272982822,
+            "maximum": 30.542304221977247,
+            "samples": [
+              30.138384928999585,
+              30.542304221977247,
+              30.408173272982822
+            ]
+          },
+          "tokens_per_second_per_user": {
+            "count": 3,
+            "minimum": 1071.5495127298832,
+            "median": 1076.4483950354838,
+            "maximum": 1085.9979032311999,
+            "samples": [
+              1085.9979032311999,
+              1071.5495127298832,
+              1076.4483950354838
+            ]
+          },
+          "chunks": [
+            {
+              "start": 0,
+              "end": 1024,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9477796399878571,
+                "median": 0.9623195949970977,
+                "maximum": 0.9657695519999834,
+                "samples": [
+                  0.9477796399878571,
+                  0.9657695519999834,
+                  0.9623195949970977
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9466527109907474,
+                "median": 0.9612477490009042,
+                "maximum": 0.9646094929921674,
+                "samples": [
+                  0.9466527109907474,
+                  0.9646094929921674,
+                  0.9612477490009042
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.0010718459961935878,
+                "median": 0.0011269289971096441,
+                "maximum": 0.0011600590078160167,
+                "samples": [
+                  0.0011269289971096441,
+                  0.0011600590078160167,
+                  0.0010718459961935878
+                ]
+              }
+            },
+            {
+              "start": 1024,
+              "end": 2048,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9455887860094663,
+                "median": 0.9502998649986694,
+                "maximum": 0.9567396479978925,
+                "samples": [
+                  0.9455887860094663,
+                  0.9567396479978925,
+                  0.9502998649986694
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9445809870085213,
+                "median": 0.949262980997446,
+                "maximum": 0.9556961749913171,
+                "samples": [
+                  0.9445809870085213,
+                  0.9556961749913171,
+                  0.949262980997446
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.0010077990009449422,
+                "median": 0.0010368840012233704,
+                "maximum": 0.0010434730065753683,
+                "samples": [
+                  0.0010077990009449422,
+                  0.0010434730065753683,
+                  0.0010368840012233704
+                ]
+              }
+            },
+            {
+              "start": 2048,
+              "end": 3072,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9470660730003146,
+                "median": 0.9519232809980167,
+                "maximum": 0.983489656005986,
+                "samples": [
+                  0.9470660730003146,
+                  0.983489656005986,
+                  0.9519232809980167
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9460266560054151,
+                "median": 0.9509259780024877,
+                "maximum": 0.9824112299975241,
+                "samples": [
+                  0.9460266560054151,
+                  0.9824112299975241,
+                  0.9509259780024877
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.0009973029955290258,
+                "median": 0.0010394169948995113,
+                "maximum": 0.0010784260084619746,
+                "samples": [
+                  0.0010394169948995113,
+                  0.0010784260084619746,
+                  0.0009973029955290258
+                ]
+              }
+            },
+            {
+              "start": 3072,
+              "end": 4096,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9467702969996026,
+                "median": 0.9483354569965741,
+                "maximum": 0.9494606490043225,
+                "samples": [
+                  0.9467702969996026,
+                  0.9483354569965741,
+                  0.9494606490043225
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.945738391004852,
+                "median": 0.947278763007489,
+                "maximum": 0.9484206210036064,
+                "samples": [
+                  0.945738391004852,
+                  0.947278763007489,
+                  0.9484206210036064
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.0010319059947505593,
+                "median": 0.00104002800071612,
+                "maximum": 0.0010566939890850335,
+                "samples": [
+                  0.0010319059947505593,
+                  0.0010566939890850335,
+                  0.00104002800071612
+                ]
+              }
+            },
+            {
+              "start": 4096,
+              "end": 5120,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9463299619965255,
+                "median": 0.9480640929978108,
+                "maximum": 0.9491905059985584,
+                "samples": [
+                  0.9463299619965255,
+                  0.9491905059985584,
+                  0.9480640929978108
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9450165919988649,
+                "median": 0.9470577059983043,
+                "maximum": 0.948160582993296,
+                "samples": [
+                  0.9450165919988649,
+                  0.948160582993296,
+                  0.9470577059983043
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.0010063869995065033,
+                "median": 0.0010299230052623898,
+                "maximum": 0.0013133699976606295,
+                "samples": [
+                  0.0013133699976606295,
+                  0.0010299230052623898,
+                  0.0010063869995065033
+                ]
+              }
+            },
+            {
+              "start": 5120,
+              "end": 6144,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9479528550000396,
+                "median": 0.9480311469960725,
+                "maximum": 0.952320584008703,
+                "samples": [
+                  0.9480311469960725,
+                  0.952320584008703,
+                  0.9479528550000396
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9469308940024348,
+                "median": 0.9469353849999607,
+                "maximum": 0.9513261149986647,
+                "samples": [
+                  0.9469353849999607,
+                  0.9513261149986647,
+                  0.9469308940024348
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.0009944690100383013,
+                "median": 0.001021960997604765,
+                "maximum": 0.0010957619961118326,
+                "samples": [
+                  0.0010957619961118326,
+                  0.0009944690100383013,
+                  0.001021960997604765
+                ]
+              }
+            },
+            {
+              "start": 6144,
+              "end": 7168,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9419831589912064,
+                "median": 0.9452484609937528,
+                "maximum": 0.951635036006337,
+                "samples": [
+                  0.9452484609937528,
+                  0.9419831589912064,
+                  0.951635036006337
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.940917863001232,
+                "median": 0.9442604219948407,
+                "maximum": 0.9506618290033657,
+                "samples": [
+                  0.9442604219948407,
+                  0.940917863001232,
+                  0.9506618290033657
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.0009732070029713213,
+                "median": 0.0009880389989120886,
+                "maximum": 0.0010652959899744019,
+                "samples": [
+                  0.0009880389989120886,
+                  0.0010652959899744019,
+                  0.0009732070029713213
+                ]
+              }
+            },
+            {
+              "start": 7168,
+              "end": 8192,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9473433259990998,
+                "median": 0.947939478995977,
+                "maximum": 0.9523766180063831,
+                "samples": [
+                  0.9523766180063831,
+                  0.947939478995977,
+                  0.9473433259990998
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.946331300001475,
+                "median": 0.9469177489954745,
+                "maximum": 0.9513872370007448,
+                "samples": [
+                  0.9513872370007448,
+                  0.9469177489954745,
+                  0.946331300001475
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.000989381005638279,
+                "median": 0.0010120259976247326,
+                "maximum": 0.00102173000050243,
+                "samples": [
+                  0.000989381005638279,
+                  0.00102173000050243,
+                  0.0010120259976247326
+                ]
+              }
+            },
+            {
+              "start": 8192,
+              "end": 9216,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.943752836989006,
+                "median": 0.9458361230063019,
+                "maximum": 0.9520637660025386,
+                "samples": [
+                  0.9520637660025386,
+                  0.943752836989006,
+                  0.9458361230063019
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.942706168993027,
+                "median": 0.9447795000014594,
+                "maximum": 0.9510395020042779,
+                "samples": [
+                  0.9510395020042779,
+                  0.942706168993027,
+                  0.9447795000014594
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.0010242639982607216,
+                "median": 0.0010466679959790781,
+                "maximum": 0.0010566230048425496,
+                "samples": [
+                  0.0010242639982607216,
+                  0.0010466679959790781,
+                  0.0010566230048425496
+                ]
+              }
+            },
+            {
+              "start": 9216,
+              "end": 10240,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.942100414991728,
+                "median": 0.9500652830029139,
+                "maximum": 0.9505950579914497,
+                "samples": [
+                  0.942100414991728,
+                  0.9500652830029139,
+                  0.9505950579914497
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9411398369993549,
+                "median": 0.9489983750099782,
+                "maximum": 0.9495723259897204,
+                "samples": [
+                  0.9411398369993549,
+                  0.9489983750099782,
+                  0.9495723259897204
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.0009605779923731461,
+                "median": 0.0010227320017293096,
+                "maximum": 0.0010669079929357395,
+                "samples": [
+                  0.0009605779923731461,
+                  0.0010669079929357395,
+                  0.0010227320017293096
+                ]
+              }
+            },
+            {
+              "start": 10240,
+              "end": 11264,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9402849969919771,
+                "median": 0.9530022359977011,
+                "maximum": 0.9725009279936785,
+                "samples": [
+                  0.9402849969919771,
+                  0.9725009279936785,
+                  0.9530022359977011
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9392793009901652,
+                "median": 0.9519807359902188,
+                "maximum": 0.9711952889920212,
+                "samples": [
+                  0.9392793009901652,
+                  0.9711952889920212,
+                  0.9519807359902188
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.0010056960018118843,
+                "median": 0.0010215000074822456,
+                "maximum": 0.001305639001657255,
+                "samples": [
+                  0.0010056960018118843,
+                  0.001305639001657255,
+                  0.0010215000074822456
+                ]
+              }
+            },
+            {
+              "start": 11264,
+              "end": 12288,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9406702670094091,
+                "median": 0.9512957139959326,
+                "maximum": 0.9733354049967602,
+                "samples": [
+                  0.9406702670094091,
+                  0.9733354049967602,
+                  0.9512957139959326
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9396858230029466,
+                "median": 0.9503197419981007,
+                "maximum": 0.9723111509956652,
+                "samples": [
+                  0.9396858230029466,
+                  0.9723111509956652,
+                  0.9503197419981007
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.0009759719978319481,
+                "median": 0.0009844440064625815,
+                "maximum": 0.0010242540010949597,
+                "samples": [
+                  0.0009844440064625815,
+                  0.0010242540010949597,
+                  0.0009759719978319481
+                ]
+              }
+            },
+            {
+              "start": 12288,
+              "end": 13312,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9433165770024061,
+                "median": 0.9512175650015706,
+                "maximum": 0.9589158160088118,
+                "samples": [
+                  0.9433165770024061,
+                  0.9589158160088118,
+                  0.9512175650015706
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9423187829961535,
+                "median": 0.9501963460061233,
+                "maximum": 0.9578267540055094,
+                "samples": [
+                  0.9423187829961535,
+                  0.9578267540055094,
+                  0.9501963460061233
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.0009977940062526613,
+                "median": 0.0010212189954472706,
+                "maximum": 0.001089062003302388,
+                "samples": [
+                  0.0009977940062526613,
+                  0.001089062003302388,
+                  0.0010212189954472706
+                ]
+              }
+            },
+            {
+              "start": 13312,
+              "end": 14336,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.940520641990588,
+                "median": 0.9468853139987914,
+                "maximum": 0.9627245669980766,
+                "samples": [
+                  0.940520641990588,
+                  0.9627245669980766,
+                  0.9468853139987914
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9394879849860445,
+                "median": 0.9458552510041045,
+                "maximum": 0.9615981590031879,
+                "samples": [
+                  0.9394879849860445,
+                  0.9615981590031879,
+                  0.9458552510041045
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.0010300629946868867,
+                "median": 0.0010326570045435801,
+                "maximum": 0.001126407994888723,
+                "samples": [
+                  0.0010326570045435801,
+                  0.001126407994888723,
+                  0.0010300629946868867
+                ]
+              }
+            },
+            {
+              "start": 14336,
+              "end": 15360,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9415681499958737,
+                "median": 0.9487111159978667,
+                "maximum": 0.9671223269979237,
+                "samples": [
+                  0.9415681499958737,
+                  0.9671223269979237,
+                  0.9487111159978667
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9405342120007845,
+                "median": 0.9477062310033944,
+                "maximum": 0.9660673169855727,
+                "samples": [
+                  0.9405342120007845,
+                  0.9660673169855727,
+                  0.9477062310033944
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.001004884994472377,
+                "median": 0.001033937995089218,
+                "maximum": 0.0010550100123509765,
+                "samples": [
+                  0.001033937995089218,
+                  0.0010550100123509765,
+                  0.001004884994472377
+                ]
+              }
+            },
+            {
+              "start": 15360,
+              "end": 16384,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9454562920000171,
+                "median": 0.9499981300032232,
+                "maximum": 0.9517579700041097,
+                "samples": [
+                  0.9454562920000171,
+                  0.9499981300032232,
+                  0.9517579700041097
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9444738710008096,
+                "median": 0.948990381002659,
+                "maximum": 0.950770191004267,
+                "samples": [
+                  0.9444738710008096,
+                  0.948990381002659,
+                  0.950770191004267
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.000982420999207534,
+                "median": 0.0009877789998427033,
+                "maximum": 0.0010077490005642176,
+                "samples": [
+                  0.000982420999207534,
+                  0.0010077490005642176,
+                  0.0009877789998427033
+                ]
+              }
+            },
+            {
+              "start": 16384,
+              "end": 17408,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.941026384010911,
+                "median": 0.9507923030032543,
+                "maximum": 0.9659676260052947,
+                "samples": [
+                  0.941026384010911,
+                  0.9659676260052947,
+                  0.9507923030032543
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9400122350052698,
+                "median": 0.9496469559962861,
+                "maximum": 0.9649777239974355,
+                "samples": [
+                  0.9400122350052698,
+                  0.9649777239974355,
+                  0.9496469559962861
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.0009899020078592002,
+                "median": 0.0010141490056412295,
+                "maximum": 0.0011453470069682226,
+                "samples": [
+                  0.0010141490056412295,
+                  0.0009899020078592002,
+                  0.0011453470069682226
+                ]
+              }
+            },
+            {
+              "start": 17408,
+              "end": 18432,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9426558900013333,
+                "median": 0.9477351280074799,
+                "maximum": 0.95307761800359,
+                "samples": [
+                  0.9426558900013333,
+                  0.9477351280074799,
+                  0.95307761800359
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9399610069958726,
+                "median": 0.946726096997736,
+                "maximum": 0.9520576510112733,
+                "samples": [
+                  0.9399610069958726,
+                  0.946726096997736,
+                  0.9520576510112733
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.0010090310097439215,
+                "median": 0.0010199669923167676,
+                "maximum": 0.0026948830054607242,
+                "samples": [
+                  0.0026948830054607242,
+                  0.0010090310097439215,
+                  0.0010199669923167676
+                ]
+              }
+            },
+            {
+              "start": 18432,
+              "end": 19456,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9441272669937462,
+                "median": 0.9481461270042928,
+                "maximum": 0.949831294012256,
+                "samples": [
+                  0.9441272669937462,
+                  0.9481461270042928,
+                  0.949831294012256
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9430901640007505,
+                "median": 0.9471742320019985,
+                "maximum": 0.9488910470099654,
+                "samples": [
+                  0.9430901640007505,
+                  0.9471742320019985,
+                  0.9488910470099654
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.0009402470022905618,
+                "median": 0.0009718950022943318,
+                "maximum": 0.0010371029929956421,
+                "samples": [
+                  0.0010371029929956421,
+                  0.0009718950022943318,
+                  0.0009402470022905618
+                ]
+              }
+            },
+            {
+              "start": 19456,
+              "end": 20480,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9428771929960931,
+                "median": 0.9494676460017217,
+                "maximum": 0.9559946200024569,
+                "samples": [
+                  0.9428771929960931,
+                  0.9559946200024569,
+                  0.9494676460017217
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9419117779907538,
+                "median": 0.9484909930033609,
+                "maximum": 0.954981732997112,
+                "samples": [
+                  0.9419117779907538,
+                  0.954981732997112,
+                  0.9484909930033609
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.0009654150053393096,
+                "median": 0.0009766529983608052,
+                "maximum": 0.0010128870053449646,
+                "samples": [
+                  0.0009654150053393096,
+                  0.0010128870053449646,
+                  0.0009766529983608052
+                ]
+              }
+            },
+            {
+              "start": 20480,
+              "end": 21504,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9417730080022011,
+                "median": 0.9520505090040388,
+                "maximum": 0.9640027530113002,
+                "samples": [
+                  0.9417730080022011,
+                  0.9640027530113002,
+                  0.9520505090040388
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9407928799919318,
+                "median": 0.9510198259958997,
+                "maximum": 0.9629765660065459,
+                "samples": [
+                  0.9407928799919318,
+                  0.9629765660065459,
+                  0.9510198259958997
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.0009801280102692544,
+                "median": 0.0010261870047543198,
+                "maximum": 0.0010306830081390217,
+                "samples": [
+                  0.0009801280102692544,
+                  0.0010261870047543198,
+                  0.0010306830081390217
+                ]
+              }
+            },
+            {
+              "start": 21504,
+              "end": 22528,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9385959770006593,
+                "median": 0.9555447970051318,
+                "maximum": 0.9592595809954219,
+                "samples": [
+                  0.9385959770006593,
+                  0.9592595809954219,
+                  0.9555447970051318
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9374711510026827,
+                "median": 0.9545865029940614,
+                "maximum": 0.9583189230033895,
+                "samples": [
+                  0.9374711510026827,
+                  0.9583189230033895,
+                  0.9545865029940614
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.0009406579920323566,
+                "median": 0.000958294011070393,
+                "maximum": 0.0011248259979765862,
+                "samples": [
+                  0.0011248259979765862,
+                  0.0009406579920323566,
+                  0.000958294011070393
+                ]
+              }
+            },
+            {
+              "start": 22528,
+              "end": 23552,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9418571639980655,
+                "median": 0.9517125800048234,
+                "maximum": 0.9568500890018186,
+                "samples": [
+                  0.9418571639980655,
+                  0.9568500890018186,
+                  0.9517125800048234
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9408840870019048,
+                "median": 0.9507595430040965,
+                "maximum": 0.9558358500071336,
+                "samples": [
+                  0.9408840870019048,
+                  0.9558358500071336,
+                  0.9507595430040965
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.0009530370007269084,
+                "median": 0.0009730769961606711,
+                "maximum": 0.0010142389946850017,
+                "samples": [
+                  0.0009730769961606711,
+                  0.0010142389946850017,
+                  0.0009530370007269084
+                ]
+              }
+            },
+            {
+              "start": 23552,
+              "end": 24576,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9404407590045594,
+                "median": 0.9486677220120328,
+                "maximum": 0.9577856249961769,
+                "samples": [
+                  0.9404407590045594,
+                  0.9486677220120328,
+                  0.9577856249961769
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9394332200026838,
+                "median": 0.9476474840048468,
+                "maximum": 0.956802381988382,
+                "samples": [
+                  0.9394332200026838,
+                  0.9476474840048468,
+                  0.956802381988382
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.0009832430077949539,
+                "median": 0.001007539001875557,
+                "maximum": 0.0010202380071859807,
+                "samples": [
+                  0.001007539001875557,
+                  0.0010202380071859807,
+                  0.0009832430077949539
+                ]
+              }
+            },
+            {
+              "start": 24576,
+              "end": 25600,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9452960880007595,
+                "median": 0.9493582840077579,
+                "maximum": 0.9521299479965819,
+                "samples": [
+                  0.9452960880007595,
+                  0.9493582840077579,
+                  0.9521299479965819
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9442536970018409,
+                "median": 0.9483165929996176,
+                "maximum": 0.9510695200006012,
+                "samples": [
+                  0.9442536970018409,
+                  0.9483165929996176,
+                  0.9510695200006012
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.001041691008140333,
+                "median": 0.0010423909989185631,
+                "maximum": 0.0010604279959807172,
+                "samples": [
+                  0.0010423909989185631,
+                  0.001041691008140333,
+                  0.0010604279959807172
+                ]
+              }
+            },
+            {
+              "start": 25600,
+              "end": 26624,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9415155589958886,
+                "median": 0.9528492919926066,
+                "maximum": 0.9564565249893349,
+                "samples": [
+                  0.9415155589958886,
+                  0.9564565249893349,
+                  0.9528492919926066
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9405126060009934,
+                "median": 0.9517872209980851,
+                "maximum": 0.9553485849901335,
+                "samples": [
+                  0.9405126060009934,
+                  0.9553485849901335,
+                  0.9517872209980851
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.0010029529948951676,
+                "median": 0.0010620709945214912,
+                "maximum": 0.001107939999201335,
+                "samples": [
+                  0.0010029529948951676,
+                  0.001107939999201335,
+                  0.0010620709945214912
+                ]
+              }
+            },
+            {
+              "start": 26624,
+              "end": 27648,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9385231070045847,
+                "median": 0.9464351060014451,
+                "maximum": 0.9518018230010057,
+                "samples": [
+                  0.9385231070045847,
+                  0.9464351060014451,
+                  0.9518018230010057
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.937532102005207,
+                "median": 0.9454277970071416,
+                "maximum": 0.9507662510004593,
+                "samples": [
+                  0.937532102005207,
+                  0.9454277970071416,
+                  0.9507662510004593
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.0009910049993777648,
+                "median": 0.0010073089943034574,
+                "maximum": 0.0010355720005463809,
+                "samples": [
+                  0.0009910049993777648,
+                  0.0010073089943034574,
+                  0.0010355720005463809
+                ]
+              }
+            },
+            {
+              "start": 27648,
+              "end": 28672,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9403958290058654,
+                "median": 0.9466212560073473,
+                "maximum": 0.9522754070057999,
+                "samples": [
+                  0.9403958290058654,
+                  0.9466212560073473,
+                  0.9522754070057999
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9393728069990175,
+                "median": 0.9456443130038679,
+                "maximum": 0.9512718850019155,
+                "samples": [
+                  0.9393728069990175,
+                  0.9456443130038679,
+                  0.9512718850019155
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.0009769430034793913,
+                "median": 0.0010035220038844272,
+                "maximum": 0.0010230220068478957,
+                "samples": [
+                  0.0010230220068478957,
+                  0.0009769430034793913,
+                  0.0010035220038844272
+                ]
+              }
+            },
+            {
+              "start": 28672,
+              "end": 29696,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9402709510031855,
+                "median": 0.9540289099968504,
+                "maximum": 0.955535946006421,
+                "samples": [
+                  0.9402709510031855,
+                  0.955535946006421,
+                  0.9540289099968504
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9392329960101051,
+                "median": 0.9529620519897435,
+                "maximum": 0.954514917000779,
+                "samples": [
+                  0.9392329960101051,
+                  0.954514917000779,
+                  0.9529620519897435
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.001021029005642049,
+                "median": 0.0010379549930803478,
+                "maximum": 0.00106685800710693,
+                "samples": [
+                  0.0010379549930803478,
+                  0.001021029005642049,
+                  0.00106685800710693
+                ]
+              }
+            },
+            {
+              "start": 29696,
+              "end": 30720,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.941538061000756,
+                "median": 0.9487076609948417,
+                "maximum": 0.9519579069892643,
+                "samples": [
+                  0.941538061000756,
+                  0.9487076609948417,
+                  0.9519579069892643
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9405007369932719,
+                "median": 0.9475891149922973,
+                "maximum": 0.9510109799884958,
+                "samples": [
+                  0.9405007369932719,
+                  0.9475891149922973,
+                  0.9510109799884958
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.0009469270007684827,
+                "median": 0.0010373240074841306,
+                "maximum": 0.0011185460025444627,
+                "samples": [
+                  0.0010373240074841306,
+                  0.0011185460025444627,
+                  0.0009469270007684827
+                ]
+              }
+            },
+            {
+              "start": 30720,
+              "end": 31744,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9393653350125533,
+                "median": 0.9529520670039346,
+                "maximum": 0.9586168009991525,
+                "samples": [
+                  0.9393653350125533,
+                  0.9586168009991525,
+                  0.9529520670039346
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9382557330100099,
+                "median": 0.9518739420018392,
+                "maximum": 0.955673784003011,
+                "samples": [
+                  0.9382557330100099,
+                  0.955673784003011,
+                  0.9518739420018392
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.0010781250020954758,
+                "median": 0.0011096020025433972,
+                "maximum": 0.002943016996141523,
+                "samples": [
+                  0.0011096020025433972,
+                  0.002943016996141523,
+                  0.0010781250020954758
+                ]
+              }
+            },
+            {
+              "start": 31744,
+              "end": 32768,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9276407980069052,
+                "median": 0.9441890049929498,
+                "maximum": 0.9473741199908545,
+                "samples": [
+                  0.9276407980069052,
+                  0.9473741199908545,
+                  0.9441890049929498
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9266100340028061,
+                "median": 0.9431571399909444,
+                "maximum": 0.944138942999416,
+                "samples": [
+                  0.9266100340028061,
+                  0.944138942999416,
+                  0.9431571399909444
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.0010307640040991828,
+                "median": 0.001031865002005361,
+                "maximum": 0.003235176991438493,
+                "samples": [
+                  0.0010307640040991828,
+                  0.003235176991438493,
+                  0.001031865002005361
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "slot": 1,
+          "measured_requests": 3,
+          "prompt_wall_seconds": {
+            "count": 3,
+            "minimum": 30.30980706498667,
+            "median": 30.563508513005218,
+            "maximum": 30.729000637991703,
+            "samples": [
+              30.30980706498667,
+              30.563508513005218,
+              30.729000637991703
+            ]
+          },
+          "forward_wall_seconds": {
+            "count": 3,
+            "minimum": 30.269160107010975,
+            "median": 30.52465760798077,
+            "maximum": 30.690541271033,
+            "samples": [
+              30.269160107010975,
+              30.52465760798077,
+              30.690541271033
+            ]
+          },
+          "tokens_per_second_per_user": {
+            "count": 3,
+            "minimum": 1066.3542360530719,
+            "median": 1072.1282206869914,
+            "maximum": 1081.1022297087793,
+            "samples": [
+              1081.1022297087793,
+              1072.1282206869914,
+              1066.3542360530719
+            ]
+          },
+          "chunks": [
+            {
+              "start": 0,
+              "end": 1024,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.959472923001158,
+                "median": 0.9638663399964571,
+                "maximum": 0.9692657060077181,
+                "samples": [
+                  0.959472923001158,
+                  0.9638663399964571,
+                  0.9692657060077181
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9575546709966147,
+                "median": 0.9627186589932535,
+                "maximum": 0.9679365230113035,
+                "samples": [
+                  0.9575546709966147,
+                  0.9627186589932535,
+                  0.9679365230113035
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.0011476810032036155,
+                "median": 0.0013291829964146018,
+                "maximum": 0.0019182520045433193,
+                "samples": [
+                  0.0019182520045433193,
+                  0.0011476810032036155,
+                  0.0013291829964146018
+                ]
+              }
+            },
+            {
+              "start": 1024,
+              "end": 2048,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9490184820024297,
+                "median": 0.9513977010064991,
+                "maximum": 0.9737230960017769,
+                "samples": [
+                  0.9490184820024297,
+                  0.9513977010064991,
+                  0.9737230960017769
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.948003401994356,
+                "median": 0.9503546979976818,
+                "maximum": 0.9727305400010664,
+                "samples": [
+                  0.948003401994356,
+                  0.9503546979976818,
+                  0.9727305400010664
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.000992556000710465,
+                "median": 0.00101508000807371,
+                "maximum": 0.0010430030088173226,
+                "samples": [
+                  0.00101508000807371,
+                  0.0010430030088173226,
+                  0.000992556000710465
+                ]
+              }
+            },
+            {
+              "start": 2048,
+              "end": 3072,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9496262900065631,
+                "median": 0.9505718930013245,
+                "maximum": 0.9597814979933901,
+                "samples": [
+                  0.9505718930013245,
+                  0.9496262900065631,
+                  0.9597814979933901
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9485908490023576,
+                "median": 0.949584144007531,
+                "maximum": 0.9587778849963797,
+                "samples": [
+                  0.949584144007531,
+                  0.9485908490023576,
+                  0.9587778849963797
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.0009877489937935024,
+                "median": 0.0010036129970103502,
+                "maximum": 0.0010354410042054951,
+                "samples": [
+                  0.0009877489937935024,
+                  0.0010354410042054951,
+                  0.0010036129970103502
+                ]
+              }
+            },
+            {
+              "start": 3072,
+              "end": 4096,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9516063120099716,
+                "median": 0.9521405809937278,
+                "maximum": 0.9619671319960617,
+                "samples": [
+                  0.9516063120099716,
+                  0.9521405809937278,
+                  0.9619671319960617
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9505842310027219,
+                "median": 0.9511175590014318,
+                "maximum": 0.9609674350067507,
+                "samples": [
+                  0.9505842310027219,
+                  0.9511175590014318,
+                  0.9609674350067507
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.0009996969893109053,
+                "median": 0.0010220810072496533,
+                "maximum": 0.0010230219922959805,
+                "samples": [
+                  0.0010220810072496533,
+                  0.0010230219922959805,
+                  0.0009996969893109053
+                ]
+              }
+            },
+            {
+              "start": 4096,
+              "end": 5120,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.952873553003883,
+                "median": 0.95874863199424,
+                "maximum": 0.9607046890014317,
+                "samples": [
+                  0.952873553003883,
+                  0.95874863199424,
+                  0.9607046890014317
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9518561590084573,
+                "median": 0.9577320499956841,
+                "maximum": 0.9597261540038744,
+                "samples": [
+                  0.9518561590084573,
+                  0.9577320499956841,
+                  0.9597261540038744
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.00097853499755729,
+                "median": 0.001016581998555921,
+                "maximum": 0.0010173939954256639,
+                "samples": [
+                  0.0010173939954256639,
+                  0.001016581998555921,
+                  0.00097853499755729
+                ]
+              }
+            },
+            {
+              "start": 5120,
+              "end": 6144,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9507014169939794,
+                "median": 0.9631736909941537,
+                "maximum": 0.971353615008411,
+                "samples": [
+                  0.9507014169939794,
+                  0.971353615008411,
+                  0.9631736909941537
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9497226120001869,
+                "median": 0.9622065529983956,
+                "maximum": 0.9703874789993279,
+                "samples": [
+                  0.9497226120001869,
+                  0.9703874789993279,
+                  0.9622065529983956
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.0009661360090831295,
+                "median": 0.0009671379957580939,
+                "maximum": 0.000978804993792437,
+                "samples": [
+                  0.000978804993792437,
+                  0.0009661360090831295,
+                  0.0009671379957580939
+                ]
+              }
+            },
+            {
+              "start": 6144,
+              "end": 7168,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9535782869934337,
+                "median": 0.9619880639947951,
+                "maximum": 0.9646235769905616,
+                "samples": [
+                  0.9646235769905616,
+                  0.9535782869934337,
+                  0.9619880639947951
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9525363269931404,
+                "median": 0.9578438259923132,
+                "maximum": 0.963617389992578,
+                "samples": [
+                  0.963617389992578,
+                  0.9525363269931404,
+                  0.9578438259923132
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.0010061869979836047,
+                "median": 0.0010419600002933294,
+                "maximum": 0.00414423800248187,
+                "samples": [
+                  0.0010061869979836047,
+                  0.0010419600002933294,
+                  0.00414423800248187
+                ]
+              }
+            },
+            {
+              "start": 7168,
+              "end": 8192,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.951737862007576,
+                "median": 0.957397813006537,
+                "maximum": 0.9607768270070665,
+                "samples": [
+                  0.9607768270070665,
+                  0.951737862007576,
+                  0.957397813006537
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9506894410005771,
+                "median": 0.9563448060071096,
+                "maximum": 0.9591700849996414,
+                "samples": [
+                  0.9591700849996414,
+                  0.9506894410005771,
+                  0.9563448060071096
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.0010484210069989786,
+                "median": 0.0010530069994274527,
+                "maximum": 0.001606742007425055,
+                "samples": [
+                  0.001606742007425055,
+                  0.0010484210069989786,
+                  0.0010530069994274527
+                ]
+              }
+            },
+            {
+              "start": 8192,
+              "end": 9216,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9546644850051962,
+                "median": 0.9597220559953712,
+                "maximum": 0.9623934440023731,
+                "samples": [
+                  0.9623934440023731,
+                  0.9546644850051962,
+                  0.9597220559953712
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9536402399971848,
+                "median": 0.958464390001609,
+                "maximum": 0.9601214690046618,
+                "samples": [
+                  0.9601214690046618,
+                  0.9536402399971848,
+                  0.958464390001609
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.0010242450080113485,
+                "median": 0.0012576659937622026,
+                "maximum": 0.002271974997711368,
+                "samples": [
+                  0.002271974997711368,
+                  0.0010242450080113485,
+                  0.0012576659937622026
+                ]
+              }
+            },
+            {
+              "start": 9216,
+              "end": 10240,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9580348029994639,
+                "median": 0.9583944580081152,
+                "maximum": 0.9830329910037108,
+                "samples": [
+                  0.9830329910037108,
+                  0.9583944580081152,
+                  0.9580348029994639
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9570433379994938,
+                "median": 0.9573537690012017,
+                "maximum": 0.9815353730082279,
+                "samples": [
+                  0.9815353730082279,
+                  0.9573537690012017,
+                  0.9570433379994938
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.0009914649999700487,
+                "median": 0.0010406890069134533,
+                "maximum": 0.0014976179954828694,
+                "samples": [
+                  0.0014976179954828694,
+                  0.0010406890069134533,
+                  0.0009914649999700487
+                ]
+              }
+            },
+            {
+              "start": 10240,
+              "end": 11264,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9579049879976083,
+                "median": 0.9625691279943567,
+                "maximum": 0.9639406989881536,
+                "samples": [
+                  0.9625691279943567,
+                  0.9639406989881536,
+                  0.9579049879976083
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9568918799923267,
+                "median": 0.9606174459913746,
+                "maximum": 0.962914361996809,
+                "samples": [
+                  0.9606174459913746,
+                  0.962914361996809,
+                  0.9568918799923267
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.0010131080052815378,
+                "median": 0.0010263369913445786,
+                "maximum": 0.0019516820029821247,
+                "samples": [
+                  0.0019516820029821247,
+                  0.0010263369913445786,
+                  0.0010131080052815378
+                ]
+              }
+            },
+            {
+              "start": 11264,
+              "end": 12288,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9520033190055983,
+                "median": 0.9591650490037864,
+                "maximum": 0.960388059989782,
+                "samples": [
+                  0.9520033190055983,
+                  0.9591650490037864,
+                  0.960388059989782
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9509936160029611,
+                "median": 0.957682220992865,
+                "maximum": 0.958109888000763,
+                "samples": [
+                  0.9509936160029611,
+                  0.958109888000763,
+                  0.957682220992865
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.0010097030026372522,
+                "median": 0.001055161003023386,
+                "maximum": 0.0027058389969170094,
+                "samples": [
+                  0.0010097030026372522,
+                  0.001055161003023386,
+                  0.0027058389969170094
+                ]
+              }
+            },
+            {
+              "start": 12288,
+              "end": 13312,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9532619360106764,
+                "median": 0.9570310090057319,
+                "maximum": 0.9619770880090073,
+                "samples": [
+                  0.9532619360106764,
+                  0.9619770880090073,
+                  0.9570310090057319
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9522774620127166,
+                "median": 0.9560270850051893,
+                "maximum": 0.9609098990040366,
+                "samples": [
+                  0.9522774620127166,
+                  0.9609098990040366,
+                  0.9560270850051893
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.0009844739979598671,
+                "median": 0.0010039240005426109,
+                "maximum": 0.0010671890049707144,
+                "samples": [
+                  0.0009844739979598671,
+                  0.0010671890049707144,
+                  0.0010039240005426109
+                ]
+              }
+            },
+            {
+              "start": 13312,
+              "end": 14336,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9490291849942878,
+                "median": 0.9549693430017214,
+                "maximum": 0.9568247179995524,
+                "samples": [
+                  0.9490291849942878,
+                  0.9549693430017214,
+                  0.9568247179995524
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.947985601000255,
+                "median": 0.9526330210064771,
+                "maximum": 0.9558029179897858,
+                "samples": [
+                  0.947985601000255,
+                  0.9526330210064771,
+                  0.9558029179897858
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.0010218000097665936,
+                "median": 0.001043583994032815,
+                "maximum": 0.0023363219952443615,
+                "samples": [
+                  0.001043583994032815,
+                  0.0023363219952443615,
+                  0.0010218000097665936
+                ]
+              }
+            },
+            {
+              "start": 14336,
+              "end": 15360,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9453725909988862,
+                "median": 0.9566808910021791,
+                "maximum": 0.959331028003362,
+                "samples": [
+                  0.9453725909988862,
+                  0.959331028003362,
+                  0.9566808910021791
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.944197038988932,
+                "median": 0.9556934730062494,
+                "maximum": 0.9582698680023896,
+                "samples": [
+                  0.944197038988932,
+                  0.9582698680023896,
+                  0.9556934730062494
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.000987417995929718,
+                "median": 0.0010611600009724498,
+                "maximum": 0.0011755520099541172,
+                "samples": [
+                  0.0011755520099541172,
+                  0.0010611600009724498,
+                  0.000987417995929718
+                ]
+              }
+            },
+            {
+              "start": 15360,
+              "end": 16384,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9406881079921732,
+                "median": 0.9572387219959637,
+                "maximum": 0.9599606179981492,
+                "samples": [
+                  0.9406881079921732,
+                  0.9599606179981492,
+                  0.9572387219959637
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9396427019964904,
+                "median": 0.9562220490042819,
+                "maximum": 0.9589679810014786,
+                "samples": [
+                  0.9396427019964904,
+                  0.9589679810014786,
+                  0.9562220490042819
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.000992636996670626,
+                "median": 0.001016672991681844,
+                "maximum": 0.0010454059956828132,
+                "samples": [
+                  0.0010454059956828132,
+                  0.000992636996670626,
+                  0.001016672991681844
+                ]
+              }
+            },
+            {
+              "start": 16384,
+              "end": 17408,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9401237669953844,
+                "median": 0.9634578289987985,
+                "maximum": 0.9744034280010965,
+                "samples": [
+                  0.9401237669953844,
+                  0.9634578289987985,
+                  0.9744034280010965
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9390965689963195,
+                "median": 0.9619467309967149,
+                "maximum": 0.9733632800052874,
+                "samples": [
+                  0.9390965689963195,
+                  0.9619467309967149,
+                  0.9733632800052874
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.0010271979990648106,
+                "median": 0.0010401479958090931,
+                "maximum": 0.0015110980020835996,
+                "samples": [
+                  0.0010271979990648106,
+                  0.0015110980020835996,
+                  0.0010401479958090931
+                ]
+              }
+            },
+            {
+              "start": 17408,
+              "end": 18432,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9423666889924789,
+                "median": 0.9541718990076333,
+                "maximum": 0.9704524720000336,
+                "samples": [
+                  0.9423666889924789,
+                  0.9541718990076333,
+                  0.9704524720000336
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9413196999958018,
+                "median": 0.9531846610043431,
+                "maximum": 0.9694551779975882,
+                "samples": [
+                  0.9413196999958018,
+                  0.9531846610043431,
+                  0.9694551779975882
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.0009872380032902583,
+                "median": 0.0009972940024454147,
+                "maximum": 0.0010469889966771007,
+                "samples": [
+                  0.0010469889966771007,
+                  0.0009872380032902583,
+                  0.0009972940024454147
+                ]
+              }
+            },
+            {
+              "start": 18432,
+              "end": 19456,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9401817939942703,
+                "median": 0.9563061250082683,
+                "maximum": 0.9567264210054418,
+                "samples": [
+                  0.9401817939942703,
+                  0.9567264210054418,
+                  0.9563061250082683
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9391184209962375,
+                "median": 0.9553110150009161,
+                "maximum": 0.9557071440067375,
+                "samples": [
+                  0.9391184209962375,
+                  0.9557071440067375,
+                  0.9553110150009161
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.0009951100073521957,
+                "median": 0.0010192769987042993,
+                "maximum": 0.001063372998032719,
+                "samples": [
+                  0.001063372998032719,
+                  0.0010192769987042993,
+                  0.0009951100073521957
+                ]
+              }
+            },
+            {
+              "start": 19456,
+              "end": 20480,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.943540727996151,
+                "median": 0.9507973319996381,
+                "maximum": 0.9585736939916387,
+                "samples": [
+                  0.943540727996151,
+                  0.9507973319996381,
+                  0.9585736939916387
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9424653369933367,
+                "median": 0.9497601580078481,
+                "maximum": 0.9571947949880268,
+                "samples": [
+                  0.9424653369933367,
+                  0.9497601580078481,
+                  0.9571947949880268
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.0010371739917900413,
+                "median": 0.0010753910028142855,
+                "maximum": 0.0013788990036118776,
+                "samples": [
+                  0.0010753910028142855,
+                  0.0010371739917900413,
+                  0.0013788990036118776
+                ]
+              }
+            },
+            {
+              "start": 20480,
+              "end": 21504,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9385605599964038,
+                "median": 0.9488759039959405,
+                "maximum": 0.9653295080061071,
+                "samples": [
+                  0.9385605599964038,
+                  0.9488759039959405,
+                  0.9653295080061071
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9375849189964356,
+                "median": 0.9478450999886263,
+                "maximum": 0.9643945880088722,
+                "samples": [
+                  0.9375849189964356,
+                  0.9478450999886263,
+                  0.9643945880088722
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.0009349199972348288,
+                "median": 0.0009756409999681637,
+                "maximum": 0.0010308040073141456,
+                "samples": [
+                  0.0009756409999681637,
+                  0.0010308040073141456,
+                  0.0009349199972348288
+                ]
+              }
+            },
+            {
+              "start": 21504,
+              "end": 22528,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9393708510033321,
+                "median": 0.9539582769939443,
+                "maximum": 0.9622649569937494,
+                "samples": [
+                  0.9393708510033321,
+                  0.9539582769939443,
+                  0.9622649569937494
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9383599669963587,
+                "median": 0.9529422549967421,
+                "maximum": 0.9607189469970763,
+                "samples": [
+                  0.9383599669963587,
+                  0.9529422549967421,
+                  0.9607189469970763
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.001010884006973356,
+                "median": 0.0010160219972021878,
+                "maximum": 0.0015460099966730922,
+                "samples": [
+                  0.001010884006973356,
+                  0.0010160219972021878,
+                  0.0015460099966730922
+                ]
+              }
+            },
+            {
+              "start": 22528,
+              "end": 23552,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9368414880009368,
+                "median": 0.9636689240142005,
+                "maximum": 0.9641121339955134,
+                "samples": [
+                  0.9368414880009368,
+                  0.9641121339955134,
+                  0.9636689240142005
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9357695820071967,
+                "median": 0.95944961499481,
+                "maximum": 0.9627569200092694,
+                "samples": [
+                  0.9357695820071967,
+                  0.95944961499481,
+                  0.9627569200092694
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.0009120040049310774,
+                "median": 0.0010719059937400743,
+                "maximum": 0.004662519000703469,
+                "samples": [
+                  0.0010719059937400743,
+                  0.004662519000703469,
+                  0.0009120040049310774
+                ]
+              }
+            },
+            {
+              "start": 23552,
+              "end": 24576,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9376657599932514,
+                "median": 0.9546407949965214,
+                "maximum": 0.9579315339942696,
+                "samples": [
+                  0.9376657599932514,
+                  0.9546407949965214,
+                  0.9579315339942696
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9366134739975678,
+                "median": 0.9535144869878422,
+                "maximum": 0.9570374459872255,
+                "samples": [
+                  0.9366134739975678,
+                  0.9535144869878422,
+                  0.9570374459872255
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.0008940880070440471,
+                "median": 0.0010522859956836328,
+                "maximum": 0.0011263080086791888,
+                "samples": [
+                  0.0010522859956836328,
+                  0.0011263080086791888,
+                  0.0008940880070440471
+                ]
+              }
+            },
+            {
+              "start": 24576,
+              "end": 25600,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9404515490023186,
+                "median": 0.95428313400771,
+                "maximum": 0.9578355809935601,
+                "samples": [
+                  0.9404515490023186,
+                  0.9578355809935601,
+                  0.95428313400771
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9394186520075891,
+                "median": 0.9532897970057093,
+                "maximum": 0.9567779069911921,
+                "samples": [
+                  0.9394186520075891,
+                  0.9567779069911921,
+                  0.9532897970057093
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.0009933370020007715,
+                "median": 0.0010328969947295263,
+                "maximum": 0.0010576740023680031,
+                "samples": [
+                  0.0010328969947295263,
+                  0.0010576740023680031,
+                  0.0009933370020007715
+                ]
+              }
+            },
+            {
+              "start": 25600,
+              "end": 26624,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9440082509972854,
+                "median": 0.9486955419997685,
+                "maximum": 0.9564292690047296,
+                "samples": [
+                  0.9440082509972854,
+                  0.9486955419997685,
+                  0.9564292690047296
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9429501849954249,
+                "median": 0.9476271510065999,
+                "maximum": 0.9553869179944741,
+                "samples": [
+                  0.9429501849954249,
+                  0.9476271510065999,
+                  0.9553869179944741
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.0010423510102555156,
+                "median": 0.0010580660018604249,
+                "maximum": 0.0010683909931685776,
+                "samples": [
+                  0.0010580660018604249,
+                  0.0010683909931685776,
+                  0.0010423510102555156
+                ]
+              }
+            },
+            {
+              "start": 26624,
+              "end": 27648,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9372715650097234,
+                "median": 0.9502967050066218,
+                "maximum": 0.9569355120038381,
+                "samples": [
+                  0.9372715650097234,
+                  0.9502967050066218,
+                  0.9569355120038381
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9357348080084193,
+                "median": 0.9492682340060128,
+                "maximum": 0.9559013930120273,
+                "samples": [
+                  0.9357348080084193,
+                  0.9492682340060128,
+                  0.9559013930120273
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.001028471000608988,
+                "median": 0.0010341189918108284,
+                "maximum": 0.0015367570013040677,
+                "samples": [
+                  0.0015367570013040677,
+                  0.001028471000608988,
+                  0.0010341189918108284
+                ]
+              }
+            },
+            {
+              "start": 27648,
+              "end": 28672,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9374487919994863,
+                "median": 0.9490819339989685,
+                "maximum": 0.9538016980077373,
+                "samples": [
+                  0.9374487919994863,
+                  0.9490819339989685,
+                  0.9538016980077373
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9364055690093664,
+                "median": 0.9480226769956062,
+                "maximum": 0.9527895320061361,
+                "samples": [
+                  0.9364055690093664,
+                  0.9480226769956062,
+                  0.9527895320061361
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.0010121660016011447,
+                "median": 0.0010432229901198298,
+                "maximum": 0.0010592570033622906,
+                "samples": [
+                  0.0010432229901198298,
+                  0.0010592570033622906,
+                  0.0010121660016011447
+                ]
+              }
+            },
+            {
+              "start": 28672,
+              "end": 29696,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9415404199971817,
+                "median": 0.9480154560005758,
+                "maximum": 0.9536416869959794,
+                "samples": [
+                  0.9415404199971817,
+                  0.9480154560005758,
+                  0.9536416869959794
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9379154250054853,
+                "median": 0.9469564000028186,
+                "maximum": 0.9526056850008899,
+                "samples": [
+                  0.9379154250054853,
+                  0.9469564000028186,
+                  0.9526056850008899
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.0010360019950894639,
+                "median": 0.0010590559977572411,
+                "maximum": 0.0036249949916964397,
+                "samples": [
+                  0.0036249949916964397,
+                  0.0010590559977572411,
+                  0.0010360019950894639
+                ]
+              }
+            },
+            {
+              "start": 29696,
+              "end": 30720,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9365370160085149,
+                "median": 0.9477373059926322,
+                "maximum": 0.9536806749965763,
+                "samples": [
+                  0.9365370160085149,
+                  0.9477373059926322,
+                  0.9536806749965763
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9352303860068787,
+                "median": 0.9466697969910456,
+                "maximum": 0.9526610280008754,
+                "samples": [
+                  0.9352303860068787,
+                  0.9466697969910456,
+                  0.9526610280008754
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.0010196469957008958,
+                "median": 0.0010675090015865862,
+                "maximum": 0.001306630001636222,
+                "samples": [
+                  0.001306630001636222,
+                  0.0010675090015865862,
+                  0.0010196469957008958
+                ]
+              }
+            },
+            {
+              "start": 30720,
+              "end": 31744,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9388853669952368,
+                "median": 0.9502676499978406,
+                "maximum": 0.957856951004942,
+                "samples": [
+                  0.9388853669952368,
+                  0.9502676499978406,
+                  0.957856951004942
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9378314679925097,
+                "median": 0.9492216530052247,
+                "maximum": 0.9568359410041012,
+                "samples": [
+                  0.9378314679925097,
+                  0.9492216530052247,
+                  0.9568359410041012
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.0010210100008407608,
+                "median": 0.0010459969926159829,
+                "maximum": 0.0010538990027271211,
+                "samples": [
+                  0.0010538990027271211,
+                  0.0010459969926159829,
+                  0.0010210100008407608
+                ]
+              }
+            },
+            {
+              "start": 31744,
+              "end": 32768,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9269146490114508,
+                "median": 0.9398841360089136,
+                "maximum": 0.9615075949986931,
+                "samples": [
+                  0.9269146490114508,
+                  0.9398841360089136,
+                  0.9615075949986931
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.9258822429983411,
+                "median": 0.9388375480048126,
+                "maximum": 0.9604777320055291,
+                "samples": [
+                  0.9258822429983411,
+                  0.9388375480048126,
+                  0.9604777320055291
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.001029862993163988,
+                "median": 0.0010324060131097212,
+                "maximum": 0.0010465880041010678,
+                "samples": [
+                  0.0010324060131097212,
+                  0.0010465880041010678,
+                  0.001029862993163988
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "setup": {
+        "fixture_and_tokenizer_load_wall_seconds": 1.5873128520033788,
+        "model_and_cache_load_wall_seconds": 80.52358439700038
+      },
+      "warmups": [
+        {
+          "slot": 0,
+          "phase": "warmup",
+          "prompt_wall_seconds": 346.56462408200605,
+          "forward_wall_seconds": 346.52862537198234,
+          "programs_before": 10,
+          "programs_after": 388
+        },
+        {
+          "slot": 1,
+          "phase": "warmup",
+          "prompt_wall_seconds": 30.045921263998025,
+          "forward_wall_seconds": 30.008129612964694,
+          "programs_before": 388,
+          "programs_after": 388
+        }
+      ],
+      "readback_hash_wall_seconds": [
+        {
+          "slot": 0,
+          "phase": "warmup",
+          "repetition": 0,
+          "seconds": 19.126207670997246
+        },
+        {
+          "slot": 1,
+          "phase": "warmup",
+          "repetition": 0,
+          "seconds": 19.3690248089988
+        },
+        {
+          "slot": 0,
+          "phase": "measured",
+          "repetition": 0,
+          "seconds": 19.072720769996522
+        },
+        {
+          "slot": 1,
+          "phase": "measured",
+          "repetition": 0,
+          "seconds": 18.975473366008373
+        },
+        {
+          "slot": 0,
+          "phase": "measured",
+          "repetition": 1,
+          "seconds": 19.18142752700078
+        },
+        {
+          "slot": 1,
+          "phase": "measured",
+          "repetition": 1,
+          "seconds": 19.15012189600384
+        },
+        {
+          "slot": 0,
+          "phase": "measured",
+          "repetition": 2,
+          "seconds": 18.772723585992935
+        },
+        {
+          "slot": 1,
+          "phase": "measured",
+          "repetition": 2,
+          "seconds": 19.046597082997323
+        }
+      ],
+      "agent_verification": {
+        "path": "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-runs-007/32k-c04-001/agent-result-summary.json",
+        "sha256": "65f7daaa78c62df85ebd68f03a308a2a817397f51e081379ec37d2d7336eb011"
+      },
+      "agent_verification_fields": {
+        "status": "execution_verified_pending_root_review",
+        "root_acceptance_pending": true,
+        "actual_exit": 0,
+        "dispatch_exit": 0,
+        "verified_exit": 0,
+        "execution_verified": true,
+        "full_model_accepted": false,
+        "source_pin_count": 14628,
+        "source_maps_equal": true,
+        "clean_close": "2026-09-17 10:09:51.420 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1314)",
+        "request_count": 8,
+        "native_chunk_calls": 256,
+        "output_checks": 8192,
+        "junit_case_count": 1
+      },
+      "pytest_case_wall_seconds": 850.057,
+      "root_verification": {
+        "path": "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-runs-007/32k-c04-001/root-verification.json",
+        "sha256": "269d655aba7e714d1ab40bc26eaa24f1d96330ac56e038bfe98996f77a2d1d82"
+      },
+      "root_verification_fields": {
+        "utc": "2026-09-17T10:20:57.601768+00:00",
+        "status": "passed",
+        "scope": "error-free full32 prefill and performance; book next-token observations only; no golden accuracy acceptance",
+        "execution_verified": true,
+        "golden_accuracy_claim": false,
+        "decode_tested": false,
+        "actual_exit": 0,
+        "dispatch_exit": 0,
+        "verified_exit": 0,
+        "source_pin_count": 14628,
+        "source_maps_equal": true,
+        "request_count": 8,
+        "measured_requests": 6,
+        "chunk_calls": 256,
+        "output_checks": 8192,
+        "junit_passed": 1,
+        "clean_close": "2026-09-17 10:09:51.420 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1314)",
+        "timing_independently_recomputed": true,
+        "per_slot": [
+          {
+            "slot": 0,
+            "prompt_wall_seconds": 30.440846167010022,
+            "tokens_per_second_per_user": 1076.4483950354838,
+            "chunk_forward_median_min": 0.9431571399909444,
+            "chunk_forward_median_max": 0.9612477490009042
+          },
+          {
+            "slot": 1,
+            "prompt_wall_seconds": 30.563508513005218,
+            "tokens_per_second_per_user": 1072.1282206869914,
+            "chunk_forward_median_min": 0.9388375480048126,
+            "chunk_forward_median_max": 0.9627186589932535
+          }
+        ],
+        "report_sha256": "d7673210ffd46ea5d702545b1104bc5cec8fa2f642d4a8565a66680eaefb3566",
+        "controller_verification_sha256": "360fde133623018caf20d6be1009c64f209196fe587bb7c23eadcc3598267f8a",
+        "book_observations": [
+          {
+            "slot": 0,
+            "predicted": " is",
+            "book_next_token": " always",
+            "book_next_token_rank": 71
+          },
+          {
+            "slot": 1,
+            "predicted": " the",
+            "book_next_token": " the",
+            "book_next_token_rank": 1
+          }
+        ]
+      },
+      "root_review_status": "passed",
+      "book_fixture": {
+        "manifest_path": "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/book-fixture-tokenizer-001/manifest.json",
+        "manifest_sha256": "69cd38111c60d5e0f1691d7eb2ffc99d2cefc7097b39b8ffbac61ef028491c43"
+      },
+      "book_observations": [
+        {
+          "argmax_token_id": 374,
+          "top5": [
+            {
+              "token_id": 374,
+              "piece": " is",
+              "logit": 21.0,
+              "probability": 0.520265488686388
+            },
+            {
+              "token_id": 1053,
+              "piece": " would",
+              "logit": 20.5,
+              "probability": 0.31555697007867056
+            },
+            {
+              "token_id": 690,
+              "piece": " will",
+              "logit": 19.125,
+              "probability": 0.07978529676806155
+            },
+            {
+              "token_id": 1587,
+              "piece": " does",
+              "logit": 17.75,
+              "probability": 0.020172882185998425
+            },
+            {
+              "token_id": 706,
+              "piece": " has",
+              "logit": 17.25,
+              "probability": 0.012235471540578855
+            }
+          ],
+          "expected_next_token_rank": 71,
+          "expected_next_token_probability": 2.8491178568069374e-05,
+          "final_logits_float32_sha256": "20df9e309224032d7cc6d1fb4679f67bfc193a454b74c5d09cd633037e9d2a15",
+          "slot": 0,
+          "phase": "warmup",
+          "repetition": 0,
+          "final_prompt_position": 32767,
+          "chunk_start": 31744,
+          "sp": 3,
+          "local_row": 255,
+          "tp_order": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7
+          ],
+          "vocab_size": 128256,
+          "scope": "book_continuation_observation_no_semantic_threshold",
+          "book_id": "1342",
+          "title": "Pride and Prejudice",
+          "expected_next_token_id": 2744,
+          "expected_next_token": " always",
+          "expected_next_word": "always",
+          "trailing_prompt_excerpt": "_me_ he must go. We are not on friendly terms, and it",
+          "actual_following_excerpt": "always gives me pain to meet him, but I have no reason"
+        },
+        {
+          "argmax_token_id": 279,
+          "top5": [
+            {
+              "token_id": 279,
+              "piece": " the",
+              "logit": 22.625,
+              "probability": 0.9526418340327898
+            },
+            {
+              "token_id": 2500,
+              "piece": " another",
+              "logit": 19.125,
+              "probability": 0.02876729072642886
+            },
+            {
+              "token_id": 264,
+              "piece": " a",
+              "logit": 17.875,
+              "probability": 0.00824196678579353
+            },
+            {
+              "token_id": 23070,
+              "piece": " heaven",
+              "logit": 17.25,
+              "probability": 0.004411606915569915
+            },
+            {
+              "token_id": 1063,
+              "piece": " some",
+              "logit": 17.125,
+              "probability": 0.0038932294384112307
+            }
+          ],
+          "expected_next_token_rank": 1,
+          "expected_next_token_probability": 0.9526418340327898,
+          "final_logits_float32_sha256": "f08d6d8d04463d04b4323dbaf3355b12cb207cd673f7193e5658c203264b6814",
+          "slot": 1,
+          "phase": "warmup",
+          "repetition": 0,
+          "final_prompt_position": 32767,
+          "chunk_start": 31744,
+          "sp": 3,
+          "local_row": 255,
+          "tp_order": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7
+          ],
+          "vocab_size": 128256,
+          "scope": "book_continuation_observation_no_semantic_threshold",
+          "book_id": "1400",
+          "title": "Great Expectations",
+          "expected_next_token_id": 279,
+          "expected_next_token": " the",
+          "expected_next_word": "the",
+          "trailing_prompt_excerpt": "by a gallery high overhead, as if she were going out into",
+          "actual_following_excerpt": "the sky. It was in this place, and at this moment, that"
+        },
+        {
+          "argmax_token_id": 374,
+          "top5": [
+            {
+              "token_id": 374,
+              "piece": " is",
+              "logit": 21.0,
+              "probability": 0.520265488686388
+            },
+            {
+              "token_id": 1053,
+              "piece": " would",
+              "logit": 20.5,
+              "probability": 0.31555697007867056
+            },
+            {
+              "token_id": 690,
+              "piece": " will",
+              "logit": 19.125,
+              "probability": 0.07978529676806155
+            },
+            {
+              "token_id": 1587,
+              "piece": " does",
+              "logit": 17.75,
+              "probability": 0.020172882185998425
+            },
+            {
+              "token_id": 706,
+              "piece": " has",
+              "logit": 17.25,
+              "probability": 0.012235471540578855
+            }
+          ],
+          "expected_next_token_rank": 71,
+          "expected_next_token_probability": 2.8491178568069374e-05,
+          "final_logits_float32_sha256": "20df9e309224032d7cc6d1fb4679f67bfc193a454b74c5d09cd633037e9d2a15",
+          "slot": 0,
+          "phase": "measured",
+          "repetition": 0,
+          "final_prompt_position": 32767,
+          "chunk_start": 31744,
+          "sp": 3,
+          "local_row": 255,
+          "tp_order": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7
+          ],
+          "vocab_size": 128256,
+          "scope": "book_continuation_observation_no_semantic_threshold",
+          "book_id": "1342",
+          "title": "Pride and Prejudice",
+          "expected_next_token_id": 2744,
+          "expected_next_token": " always",
+          "expected_next_word": "always",
+          "trailing_prompt_excerpt": "_me_ he must go. We are not on friendly terms, and it",
+          "actual_following_excerpt": "always gives me pain to meet him, but I have no reason"
+        },
+        {
+          "argmax_token_id": 279,
+          "top5": [
+            {
+              "token_id": 279,
+              "piece": " the",
+              "logit": 22.625,
+              "probability": 0.9526418340327898
+            },
+            {
+              "token_id": 2500,
+              "piece": " another",
+              "logit": 19.125,
+              "probability": 0.02876729072642886
+            },
+            {
+              "token_id": 264,
+              "piece": " a",
+              "logit": 17.875,
+              "probability": 0.00824196678579353
+            },
+            {
+              "token_id": 23070,
+              "piece": " heaven",
+              "logit": 17.25,
+              "probability": 0.004411606915569915
+            },
+            {
+              "token_id": 1063,
+              "piece": " some",
+              "logit": 17.125,
+              "probability": 0.0038932294384112307
+            }
+          ],
+          "expected_next_token_rank": 1,
+          "expected_next_token_probability": 0.9526418340327898,
+          "final_logits_float32_sha256": "f08d6d8d04463d04b4323dbaf3355b12cb207cd673f7193e5658c203264b6814",
+          "slot": 1,
+          "phase": "measured",
+          "repetition": 0,
+          "final_prompt_position": 32767,
+          "chunk_start": 31744,
+          "sp": 3,
+          "local_row": 255,
+          "tp_order": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7
+          ],
+          "vocab_size": 128256,
+          "scope": "book_continuation_observation_no_semantic_threshold",
+          "book_id": "1400",
+          "title": "Great Expectations",
+          "expected_next_token_id": 279,
+          "expected_next_token": " the",
+          "expected_next_word": "the",
+          "trailing_prompt_excerpt": "by a gallery high overhead, as if she were going out into",
+          "actual_following_excerpt": "the sky. It was in this place, and at this moment, that"
+        },
+        {
+          "argmax_token_id": 374,
+          "top5": [
+            {
+              "token_id": 374,
+              "piece": " is",
+              "logit": 21.0,
+              "probability": 0.520265488686388
+            },
+            {
+              "token_id": 1053,
+              "piece": " would",
+              "logit": 20.5,
+              "probability": 0.31555697007867056
+            },
+            {
+              "token_id": 690,
+              "piece": " will",
+              "logit": 19.125,
+              "probability": 0.07978529676806155
+            },
+            {
+              "token_id": 1587,
+              "piece": " does",
+              "logit": 17.75,
+              "probability": 0.020172882185998425
+            },
+            {
+              "token_id": 706,
+              "piece": " has",
+              "logit": 17.25,
+              "probability": 0.012235471540578855
+            }
+          ],
+          "expected_next_token_rank": 71,
+          "expected_next_token_probability": 2.8491178568069374e-05,
+          "final_logits_float32_sha256": "20df9e309224032d7cc6d1fb4679f67bfc193a454b74c5d09cd633037e9d2a15",
+          "slot": 0,
+          "phase": "measured",
+          "repetition": 1,
+          "final_prompt_position": 32767,
+          "chunk_start": 31744,
+          "sp": 3,
+          "local_row": 255,
+          "tp_order": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7
+          ],
+          "vocab_size": 128256,
+          "scope": "book_continuation_observation_no_semantic_threshold",
+          "book_id": "1342",
+          "title": "Pride and Prejudice",
+          "expected_next_token_id": 2744,
+          "expected_next_token": " always",
+          "expected_next_word": "always",
+          "trailing_prompt_excerpt": "_me_ he must go. We are not on friendly terms, and it",
+          "actual_following_excerpt": "always gives me pain to meet him, but I have no reason"
+        },
+        {
+          "argmax_token_id": 279,
+          "top5": [
+            {
+              "token_id": 279,
+              "piece": " the",
+              "logit": 22.625,
+              "probability": 0.9526418340327898
+            },
+            {
+              "token_id": 2500,
+              "piece": " another",
+              "logit": 19.125,
+              "probability": 0.02876729072642886
+            },
+            {
+              "token_id": 264,
+              "piece": " a",
+              "logit": 17.875,
+              "probability": 0.00824196678579353
+            },
+            {
+              "token_id": 23070,
+              "piece": " heaven",
+              "logit": 17.25,
+              "probability": 0.004411606915569915
+            },
+            {
+              "token_id": 1063,
+              "piece": " some",
+              "logit": 17.125,
+              "probability": 0.0038932294384112307
+            }
+          ],
+          "expected_next_token_rank": 1,
+          "expected_next_token_probability": 0.9526418340327898,
+          "final_logits_float32_sha256": "f08d6d8d04463d04b4323dbaf3355b12cb207cd673f7193e5658c203264b6814",
+          "slot": 1,
+          "phase": "measured",
+          "repetition": 1,
+          "final_prompt_position": 32767,
+          "chunk_start": 31744,
+          "sp": 3,
+          "local_row": 255,
+          "tp_order": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7
+          ],
+          "vocab_size": 128256,
+          "scope": "book_continuation_observation_no_semantic_threshold",
+          "book_id": "1400",
+          "title": "Great Expectations",
+          "expected_next_token_id": 279,
+          "expected_next_token": " the",
+          "expected_next_word": "the",
+          "trailing_prompt_excerpt": "by a gallery high overhead, as if she were going out into",
+          "actual_following_excerpt": "the sky. It was in this place, and at this moment, that"
+        },
+        {
+          "argmax_token_id": 374,
+          "top5": [
+            {
+              "token_id": 374,
+              "piece": " is",
+              "logit": 21.0,
+              "probability": 0.520265488686388
+            },
+            {
+              "token_id": 1053,
+              "piece": " would",
+              "logit": 20.5,
+              "probability": 0.31555697007867056
+            },
+            {
+              "token_id": 690,
+              "piece": " will",
+              "logit": 19.125,
+              "probability": 0.07978529676806155
+            },
+            {
+              "token_id": 1587,
+              "piece": " does",
+              "logit": 17.75,
+              "probability": 0.020172882185998425
+            },
+            {
+              "token_id": 706,
+              "piece": " has",
+              "logit": 17.25,
+              "probability": 0.012235471540578855
+            }
+          ],
+          "expected_next_token_rank": 71,
+          "expected_next_token_probability": 2.8491178568069374e-05,
+          "final_logits_float32_sha256": "20df9e309224032d7cc6d1fb4679f67bfc193a454b74c5d09cd633037e9d2a15",
+          "slot": 0,
+          "phase": "measured",
+          "repetition": 2,
+          "final_prompt_position": 32767,
+          "chunk_start": 31744,
+          "sp": 3,
+          "local_row": 255,
+          "tp_order": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7
+          ],
+          "vocab_size": 128256,
+          "scope": "book_continuation_observation_no_semantic_threshold",
+          "book_id": "1342",
+          "title": "Pride and Prejudice",
+          "expected_next_token_id": 2744,
+          "expected_next_token": " always",
+          "expected_next_word": "always",
+          "trailing_prompt_excerpt": "_me_ he must go. We are not on friendly terms, and it",
+          "actual_following_excerpt": "always gives me pain to meet him, but I have no reason"
+        },
+        {
+          "argmax_token_id": 279,
+          "top5": [
+            {
+              "token_id": 279,
+              "piece": " the",
+              "logit": 22.625,
+              "probability": 0.9526418340327898
+            },
+            {
+              "token_id": 2500,
+              "piece": " another",
+              "logit": 19.125,
+              "probability": 0.02876729072642886
+            },
+            {
+              "token_id": 264,
+              "piece": " a",
+              "logit": 17.875,
+              "probability": 0.00824196678579353
+            },
+            {
+              "token_id": 23070,
+              "piece": " heaven",
+              "logit": 17.25,
+              "probability": 0.004411606915569915
+            },
+            {
+              "token_id": 1063,
+              "piece": " some",
+              "logit": 17.125,
+              "probability": 0.0038932294384112307
+            }
+          ],
+          "expected_next_token_rank": 1,
+          "expected_next_token_probability": 0.9526418340327898,
+          "final_logits_float32_sha256": "f08d6d8d04463d04b4323dbaf3355b12cb207cd673f7193e5658c203264b6814",
+          "slot": 1,
+          "phase": "measured",
+          "repetition": 2,
+          "final_prompt_position": 32767,
+          "chunk_start": 31744,
+          "sp": 3,
+          "local_row": 255,
+          "tp_order": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7
+          ],
+          "vocab_size": 128256,
+          "scope": "book_continuation_observation_no_semantic_threshold",
+          "book_id": "1400",
+          "title": "Great Expectations",
+          "expected_next_token_id": 279,
+          "expected_next_token": " the",
+          "expected_next_word": "the",
+          "trailing_prompt_excerpt": "by a gallery high overhead, as if she were going out into",
+          "actual_following_excerpt": "the sky. It was in this place, and at this moment, that"
+        }
+      ],
+      "prompt_identity": [
+        {
+          "slot": 0,
+          "tokens": 32768,
+          "token_ids_sha256": "b3a9398833b4658595cb4c2ac471c26f58b2f17127a900430c08fdeb9d3c3958",
+          "book_id": "1342",
+          "title": "Pride and Prejudice"
+        },
+        {
+          "slot": 1,
+          "tokens": 32768,
+          "token_ids_sha256": "b383f1837e7ff6ce0abb8dad9b7644915ae9fc58a871b8a8ad581dd713c224f3",
+          "book_id": "1400",
+          "title": "Great Expectations"
+        }
+      ]
     }
   ],
   "pending_contexts": [
-    32768,
     65536,
     131072
   ],
@@ -4970,7 +8201,7 @@
     "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-runs-006/8k-b09-001/attempts/attempt-002-bfp8-8k/pytest-command.json": "d154719375b4972a40796ba8f5e46f1c3ce3b302a7f3e8b54b6ea03e18623beb",
     "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-publication-preparation-002/independent-verification.json": "2b39a112dbf9f5c150e829d268a2b1fad862d36260eae1388781dd9c8c2408b4",
     "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-runs-006/8k-b09-001/attempts/attempt-002-bfp8-8k/root-verification.json": "998a26c4e8ef7f3ecac8f90a700f115bad26c6686330c7b11ab26881fea580f9",
-    "/data/divanovic/llama31-8b-disagg/repos/tt-metal/models/demos/llama_3p1_8b_d_p/docs/performance-prefill-evidence.json": "f672f42d859dbf4d7081b6ca07ef10e454d3aee8549ef3baf7a04c54d627df36",
+    "/data/divanovic/llama31-8b-disagg/repos/tt-metal/models/demos/llama_3p1_8b_d_p/docs/performance-prefill-evidence.json": "3ebc1e6c0251736d26eea6cdfde45185b81361eef0f005367ce070f8dc172b67",
     "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-runs-007/16k-c04-001/attempts/attempt-002-bfp8-16k/captures-16384/report.json": "686c346519cdb56075d2c7fa01fb6c834097017af1ce1e76579815856dfdc37e",
     "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-runs-007/16k-c04-001/attempts/attempt-002-bfp8-16k/verification.json": "72e16bfb1b7ec86288c8f6de6f847636fd2ff7cdf1089bbd857353b9be88b9c2",
     "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-runs-007/16k-c04-001/attempts/attempt-002-bfp8-16k/invocation.json": "01b32aba1775e436f04c102f19bde3cdfc659e9ef5938bb7414ba5e03b56f59f",
@@ -4979,6 +8210,15 @@
     "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-runs-007/16k-c04-001/attempts/attempt-002-bfp8-16k/post-source-hashes.json": "561f4d11597a66adca9bb4437133391526dedaf6acbbb691187ae51215b4521d",
     "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-runs-007/16k-c04-001/attempts/attempt-002-bfp8-16k/pytest-command.json": "e9896db233705c9cdf334f45f3350619c4baaae1de1fea7988fb77aa0099e437",
     "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-runs-007/16k-c04-001/attempts/attempt-002-bfp8-16k/root-verification.json": "dd750f2cd1c5f6b96006615397d6bbc392314a4a44113df61e6919971b9148bc",
-    "/data/divanovic/llama31-8b-disagg/repos/tt-metal/models/demos/llama_3p1_8b_d_p/docs/performance-prefill.md": "7e60785fc3ec62250638a52b43096375b18f94b75bd2b90e9f733a9594875d36"
+    "/data/divanovic/llama31-8b-disagg/repos/tt-metal/models/demos/llama_3p1_8b_d_p/docs/performance-prefill.md": "72f39c1462b3c7c4343be08abb556e01a08b0e74d317c26cf1bf87b7dc193bcc",
+    "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-runs-007/32k-c04-001/attempts/attempt-002-bfp8-32k/captures-32768/report.json": "d7673210ffd46ea5d702545b1104bc5cec8fa2f642d4a8565a66680eaefb3566",
+    "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-runs-007/32k-c04-001/attempts/attempt-002-bfp8-32k/verification.json": "360fde133623018caf20d6be1009c64f209196fe587bb7c23eadcc3598267f8a",
+    "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-runs-007/32k-c04-001/attempts/attempt-002-bfp8-32k/invocation.json": "0c147e6b08d71b75bfba6167e44f4e5951c1e981733acc6cee486ab025c1e9e5",
+    "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-runs-007/32k-c04-001/attempts/attempt-002-bfp8-32k/source-hashes.json": "ae958102a1d21e69d5f08329ee61ab170a2090b4b3feb3cf79fb198769de7ca7",
+    "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-runs-007/32k-c04-001/attempts/attempt-002-bfp8-32k/node-source-hashes.json": "ae958102a1d21e69d5f08329ee61ab170a2090b4b3feb3cf79fb198769de7ca7",
+    "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-runs-007/32k-c04-001/attempts/attempt-002-bfp8-32k/post-source-hashes.json": "ae958102a1d21e69d5f08329ee61ab170a2090b4b3feb3cf79fb198769de7ca7",
+    "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-runs-007/32k-c04-001/attempts/attempt-002-bfp8-32k/pytest-command.json": "42c63c4c98aa392efcc66e566b39eca6d7e17289fd65d4d5a26d4e3c2d40f61a",
+    "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-runs-007/32k-c04-001/agent-result-summary.json": "65f7daaa78c62df85ebd68f03a308a2a817397f51e081379ec37d2d7336eb011",
+    "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-runs-007/32k-c04-001/root-verification.json": "269d655aba7e714d1ab40bc26eaa24f1d96330ac56e038bfe98996f77a2d1d82"
   }
 }
