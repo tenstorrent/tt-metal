@@ -14,8 +14,10 @@ control tensors and the routing agree by construction -- which is what the reade
 relies on.
 """
 
+import math
 import re
 from contextlib import contextmanager
+from pathlib import Path
 
 import pytest
 import torch
@@ -586,7 +588,7 @@ def _leading_row_cores(width):
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.timeout(600)
-def test_dispatch_fabric2d_subdevice(mesh_device, device_params, num_links):
+def test_dispatch_fabric2d_subdevice(mesh_device, device_params, num_links, capfd, expect_error):
     """A TILE input on the model's two-sub-device split: every core the op takes must be in row 0.
 
     Byte-exactness is the same gate the matrix applies. What is new is confinement -- the four stream
@@ -595,23 +597,27 @@ def test_dispatch_fabric2d_subdevice(mesh_device, device_params, num_links):
 
     The negative case is what actually proves it. Handed the SHARED sub-device instead, the op must
     refuse and name a core in row 0: that message is the placement telling us where it wanted to put a
-    stream, and it can only say y=0 if row 0 is where the streams go. Confinement of the pool then
-    follows by construction, since it is drawn from the cores of the same set no stream took.
+    stream, and it can only say y=0 if row 0 is where the streams go. Confinement of the pool follows,
+    since it is drawn from the spare cores of the same carve -- and on a one-row carve that is the
+    documented fallback, so this test is also the coverage for it: the op has to report the fallback
+    once, and the report is expected here rather than a failure.
     """
     cfg = extract_mesh_config(mesh_device)
     fx = _Fixture(mesh_device, cfg.dispatch_group_size, cfg.num_dispatch_groups)
     streams = 2 * num_links
     dispatch_cores, shared_cores = _moe_grid_split(mesh_device)
     n_cores = sum((r.end.x - r.start.x + 1) * (r.end.y - r.start.y + 1) for r in dispatch_cores.ranges())
-    pool = n_cores - streams
-    logger.info(f"dispatch sub-device: {n_cores} cores in row 0, {streams} streams, {pool} untilizers")
-    assert pool > 0, "no core left for an untilizer; the TILE path cannot run"
+    spare = n_cores - streams
+    assert spare > 0, "no core left for an untilizer; the TILE path cannot run"
 
     # More stripes than there are cores to take them, so a core takes several and the round-robin
-    # stride stops being indistinguishable from one. The default seq gives one stripe per core.
+    # stride stops being indistinguishable from one. With no row under the streams the op takes every
+    # spare core up to one per stripe, so the pool is `spare` here.
+    pool = spare
     deep = _Fixture(
         mesh_device, cfg.dispatch_group_size, cfg.num_dispatch_groups, seq_len_per_chip=32 * (2 * pool + 1), seed=31
     )
+    logger.info(f"dispatch sub-device: {n_cores} cores in row 0, {streams} streams, {pool} untilizers")
 
     with _sub_device_manager(mesh_device, [dispatch_cores, shared_cores]) as (dispatch_sd, shared_sd):
         for case, layout, fanout in [("unicast", ttnn.TILE_LAYOUT, False), ("multicast", ttnn.TILE_LAYOUT, True)]:
@@ -620,11 +626,14 @@ def test_dispatch_fabric2d_subdevice(mesh_device, device_params, num_links):
 
         payload, metadata = deep.run(cfg.sp_axis, num_links, layout=ttnn.TILE_LAYOUT, subdevice_id=dispatch_sd)
         deep.check(payload, metadata, f"{deep.seq_len_per_chip // 32} stripes over {pool} untilizers")
+        out = capfd.readouterr().out
+        assert (
+            "untilizer pool is not in the row under the streams" in out
+        ), "a one-row carve has to report its pool fallback once per build; nothing was reported"
 
-        with pytest.raises(RuntimeError) as refusal:
+        with expect_error(RuntimeError, "is outside the") as refusal:
             fx.run(cfg.sp_axis, num_links, layout=ttnn.TILE_LAYOUT, subdevice_id=shared_sd)
         message = str(refusal.value)
-        assert "is outside the" in message, message
         # The core it names is the one the eth-nearest placement wanted. CoreCoord formats as x-y, so
         # a trailing -0 is row 0 -- which is the whole claim this test exists to make.
         assert re.search(r"eth core is \d+-0,", message), message
@@ -634,10 +643,9 @@ def test_dispatch_fabric2d_subdevice(mesh_device, device_params, num_links):
     # not have -- which it could only do having read the sub-device. It also records the real
     # constraint: the eth-nearest workers are spread along the row, so dispatch needs ALL of it.
     with _sub_device_manager(mesh_device, [_leading_row_cores(streams + 2)]) as (narrow_sd,):
-        with pytest.raises(RuntimeError) as refusal:
+        with expect_error(RuntimeError, f"outside the {streams + 2} cores") as refusal:
             fx.run(cfg.sp_axis, num_links, layout=ttnn.TILE_LAYOUT, subdevice_id=narrow_sd)
         message = str(refusal.value)
-        assert f"outside the {streams + 2} cores" in message, message
         assert re.search(r"eth core is \d+-0,", message), message
 
 
@@ -719,8 +727,9 @@ def test_dispatch_fabric2d_multicast_reach_from_op(mesh_device, device_params, n
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("fanout", [False, True], ids=lambda f: "multicast" if f else "unicast")
-# 16 and 64 tiles wide: two untilize column blocks per stripe, and eight.
-@pytest.mark.parametrize("emb_dim", [512, 2048], ids=lambda e: f"emb{e}")
+# 16 and 64 tiles wide: two untilize column blocks per stripe, and eight. 7168 is the production token,
+# 14336 B: the size every packet-size bound in the sender is measured at, and the only byte-exact run of it.
+@pytest.mark.parametrize("emb_dim", [512, 2048, 7168], ids=lambda e: f"emb{e}")
 @pytest.mark.timeout(900)
 def test_dispatch_fabric2d_relaunch(mesh_device, device_params, num_links, fanout, emb_dim):
     """Both layouts and repeat launches against ONE device, which the matrix cannot reach.
@@ -766,7 +775,7 @@ def test_dispatch_fabric2d_relaunch(mesh_device, device_params, num_links, fanou
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.timeout(600)
-def test_dispatch_fabric2d_tile_refusals(mesh_device, device_params, num_links):
+def test_dispatch_fabric2d_tile_refusals(mesh_device, device_params, num_links, expect_error):
     """The TILE path's edge conditions are refused, rather than silently doing something else.
 
     Each of these is a write that would land somewhere it should not. A stripe is a whole tile row, so
@@ -782,7 +791,7 @@ def test_dispatch_fabric2d_tile_refusals(mesh_device, device_params, num_links):
     # read: it takes whole tile columns and packs rows at a stride the writer does not use. Accepted
     # as ROW_MAJOR, which is what makes the refusal a property of the untilizer rather than the shape.
     ragged_emb = _Fixture(mesh_device, cfg.dispatch_group_size, cfg.num_dispatch_groups, emb_dim=500)
-    with pytest.raises(RuntimeError, match="multiple of 32"):
+    with expect_error(RuntimeError, "multiple of 32"):
         ragged_emb.run(cfg.sp_axis, num_links, layout=ttnn.TILE_LAYOUT)
     payload, metadata = ragged_emb.run(cfg.sp_axis, num_links)
     ragged_emb.check(payload, metadata, "row-major with a ragged emb")
@@ -799,8 +808,51 @@ def test_dispatch_fabric2d_tile_refusals(mesh_device, device_params, num_links):
     with _sub_device_manager(mesh_device, [_leading_row_cores(streams)]) as (exact_sd,):
         # Exactly enough cores for the streams, so the pool would have to come from somewhere else.
         # Refused in validation, before the placement gets a chance to object to the carve itself.
-        with pytest.raises(RuntimeError, match="plus at least one untilizer"):
+        with expect_error(RuntimeError, "plus at least one untilizer"):
             fx.run(cfg.sp_axis, num_links, layout=ttnn.TILE_LAYOUT, subdevice_id=exact_sd)
+
+    # One token wider than the fabric payload admits with its 64-byte tail: 7168 columns is exactly the
+    # cap the tests configure, so 7200 is the first refusal. Without it the forward's payload would run
+    # past its channel slot onto the next packet, which no kernel check can see.
+    too_wide = _Fixture(mesh_device, cfg.dispatch_group_size, cfg.num_dispatch_groups, emb_dim=7200)
+    with expect_error(RuntimeError, "exceeds the fabric max payload"):
+        too_wide.run(cfg.sp_axis, num_links)
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links",
+    [
+        pytest.param(
+            (8, 4),
+            torus_xy_device_params(),
+            2,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="torus-xy-8x4-2link",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.timeout(600)
+def test_dispatch_fabric2d_untilizers_under_the_streams(mesh_device, device_params, num_links, capfd):
+    """The whole grid, with more stripes than the pool: the pool sits in the row under the streams.
+
+    The placement a TILE input is designed for is only reachable with a second row in the carve, and
+    every other test either runs on the model's one-row carve or gives the pool fewer stripes than it
+    has cores. 640 tokens is 20 stripes over 5 * num_links untilizers, byte-exact in both transports,
+    and the op must NOT report a fallback -- that report is the one-row carve's, and it must stay off
+    here or the sub-device test's assertion on it means nothing.
+    """
+    cfg = extract_mesh_config(mesh_device)
+    fx = _Fixture(mesh_device, cfg.dispatch_group_size, cfg.num_dispatch_groups, seq_len_per_chip=640, seed=37)
+    for fanout in (False, True):
+        payload, metadata = fx.run(cfg.sp_axis, num_links, layout=ttnn.TILE_LAYOUT, fanout=fanout)
+        fx.check(
+            payload, metadata, f"20 stripes over {5 * num_links} untilizers, {'multicast' if fanout else 'unicast'}"
+        )
+    out = capfd.readouterr().out
+    assert (
+        "untilizer pool is not in the row under the streams" not in out
+    ), "the whole grid has a row under the streams; the pool fell back anyway"
 
 
 def _draw_into(fx, profile):
@@ -895,8 +947,7 @@ def test_dispatch_fabric2d_region_reuse_under_skew(mesh_device, device_params, n
 
     prepare = _skew_the_ring if draw == "degenerate" else (lambda fx: _draw_into(fx, draw))
     draws = [
-        prepare(_Fixture(mesh_device, cfg.dispatch_group_size, cfg.num_dispatch_groups, seed=40 + i))
-        for i in range(4)
+        prepare(_Fixture(mesh_device, cfg.dispatch_group_size, cfg.num_dispatch_groups, seed=40 + i)) for i in range(4)
     ]
     order = [draws[i % len(draws)] for i in range(launches)]
 
@@ -913,8 +964,7 @@ def test_dispatch_fabric2d_region_reuse_under_skew(mesh_device, device_params, n
     for i, (fx, (payload, metadata)) in enumerate(zip(order, results)):
         fx.check(payload, metadata, f"launch {i} of {launches}, {draw} draw, {arm}")
     logger.info(
-        f"region reuse [{draw}/{arm}]: {launches} launches byte-exact "
-        f"({'multicast' if fanout else 'unicast'})"
+        f"region reuse [{draw}/{arm}]: {launches} launches byte-exact " f"({'multicast' if fanout else 'unicast'})"
     )
 
 
@@ -973,8 +1023,12 @@ def test_dispatch_fabric2d_back_to_back(mesh_device, device_params, num_links, f
     ],
     indirect=["mesh_device", "device_params"],
 )
+@pytest.mark.parametrize("fanout", [False, True], ids=lambda f: "multicast" if f else "unicast")
+# Half the tokens is the shape production pads to. 33 leaves the four prologue lanes unequal slices
+# and 3 leaves one lane with no tokens at all: the two shapes the slice arithmetic has to survive.
+@pytest.mark.parametrize("real", [64, 33, 3], ids=lambda r: f"real{r}")
 @pytest.mark.timeout(600)
-def test_dispatch_fabric2d_padding_config(mesh_device, device_params, num_links):
+def test_dispatch_fabric2d_padding_config(mesh_device, device_params, num_links, fanout, real):
     """A padding_config shortens the routing pass without changing a single page.
 
     The contract it carries is the one `dispatch` relies on: with right padding the padded tokens sit
@@ -988,7 +1042,7 @@ def test_dispatch_fabric2d_padding_config(mesh_device, device_params, num_links)
     """
     cfg = extract_mesh_config(mesh_device)
     fx = _Fixture(mesh_device, cfg.dispatch_group_size, cfg.num_dispatch_groups)
-    real = fx.seq_len_per_chip // 2
+    assert real < fx.seq_len_per_chip
 
     # Tokens past `real` are given experts of another dispatch group, the -1 column this group sees.
     experts_per_group = fx.num_routed_experts // fx.G
@@ -997,13 +1051,18 @@ def test_dispatch_fabric2d_padding_config(mesh_device, device_params, num_links)
         fx.indices[g, :, real:, :] = torch.arange(other, other + fx.topk)
     fx.rebuild()
 
-    baseline_payload, baseline_meta = fx.run(cfg.sp_axis, num_links)
+    baseline_payload, baseline_meta = fx.run(cfg.sp_axis, num_links, fanout=fanout)
     fx.check(baseline_payload, baseline_meta, "no padding_config")
 
     for pad_side, label in ((0, "right padding, the pass is bounded"), (1, "left padding, the config is ignored")):
-        payload, metadata = fx.run(cfg.sp_axis, num_links, padding_config=fx.padding_config(real, pad_side))
+        payload, metadata = fx.run(
+            cfg.sp_axis, num_links, fanout=fanout, padding_config=fx.padding_config(real, pad_side)
+        )
         fx.check(payload, metadata, label)
-    logger.info(f"padding_config: {real} real of {fx.seq_len_per_chip} tokens, byte-exact either side")
+    logger.info(
+        f"padding_config: {real} real of {fx.seq_len_per_chip} tokens, byte-exact either side "
+        f"({'multicast' if fanout else 'unicast'})"
+    )
 
 
 # --------------------------------------------------------------------------------------------------
@@ -1018,6 +1077,200 @@ def test_dispatch_fabric2d_padding_config(mesh_device, device_params, num_links)
 
 def _slice_begin(n, idx, count):
     return (n * idx) // count
+
+
+def _replay_local_phase(n, batch):
+    """The reader's local phase over n tokens, as bookkeeping: what it claims, flushes and writes.
+
+    Mirrors the kernel's control flow -- a scratch slot is claimed only when every held one is pending,
+    a batch is written when `batch` are pending or at the end -- and models the ring as the two counters
+    the kernel's release relies on. Returns (slots held, batches written, tokens written in order).
+    """
+    ring_claimed = ring_ready = 0
+    held = pending = batches = 0
+    written = []
+    first = 0
+    for t in range(n):
+        if pending == held:
+            ring_claimed += 1
+            held += 1
+        assert held <= batch, "a scratch slot past the stack arrays"
+        pending += 1
+        if pending == batch:
+            written += list(range(first, t + 1))
+            first, pending, batches = t + 1, 0, batches + 1
+    if pending:
+        written += list(range(first, n))
+        batches += 1
+    # release_unready: the scratch is exactly the ring's unready claims, and nothing else is held.
+    assert ring_claimed - ring_ready == held
+    return held, batches, written
+
+
+@pytest.mark.parametrize("batch", [1, 2, 8], ids=lambda b: f"batch{b}")
+def test_dispatch_fabric2d_local_phase_batches(batch):
+    """Every local token count from none to three batches and one: each token written once, in order.
+
+    The device matrix reaches these counts by the luck of its draws, and the two draws that pin a count
+    exist for other reasons. The bookkeeping is pure arithmetic, so it is held here: the slots claimed
+    never exceed the batch, a stream with nothing local claims nothing, and the batch count is the
+    ceiling the flushes imply.
+    """
+    for n in range(0, 3 * batch + 2):
+        held, batches, written = _replay_local_phase(n, batch)
+        assert written == list(range(n)), f"n={n}: wrote {written}"
+        assert held == min(n, batch), f"n={n}: held {held} slots"
+        assert batches == math.ceil(n / batch), f"n={n}: {batches} batches"
+
+
+def _prologue_model(picks, first_page, capacity, bucketed, lanes, max_dests=8):
+    """The routing index the stream core's prologue builds, walked in `lanes` token slices.
+
+    `picks[t][k]` is None for a pick outside the group, else (slot, local, direction). Mirrors the
+    kernel step for step -- count pass, placement from the earlier lanes' counts, fill pass with the
+    production drop rule, merge -- so that the property under test is the kernel's: whatever the
+    lane count, the result is the one sequential walk.
+
+    Returns (entries per bucket, fan-out entries per direction), each in the order the phases read.
+    """
+    n_slots = len(first_page)
+    survivors = lambda b, routed: min(routed, max(0, capacity - first_page[b]))
+    tokens = len(picks)
+
+    # size_buckets: the length the offsets table gives, from every pick routed to the slot.
+    routed = [0] * n_slots
+    for t in range(tokens):
+        for p in picks[t]:
+            if p is not None:
+                routed[p[0]] += 1
+    bucket_start = [0]
+    for b in range(n_slots):
+        bucket_start.append(bucket_start[-1] + (survivors(b, routed[b]) if bucketed[b] else 0))
+
+    slices = [(_slice_begin(tokens, w, lanes), _slice_begin(tokens, w + 1, lanes)) for w in range(lanes)]
+    cnt = []
+    for t0, t1 in slices:
+        c = [0] * n_slots
+        for t in range(t0, t1):
+            for p in picks[t]:
+                if p is not None:
+                    c[p[0]] += 1
+        cnt.append(c)
+
+    entries = [None] * bucket_start[-1]
+    mc = [[] for _ in range(lanes)]
+    for w, (t0, t1) in enumerate(slices):
+        before = [sum(cnt[v][b] for v in range(w)) for b in range(n_slots)]
+        next_page = [first_page[b] + before[b] for b in range(n_slots)]
+        next_entry = [bucket_start[b] + survivors(b, before[b]) for b in range(n_slots)]
+        for t in range(t0, t1):
+            packed = {0: [], 1: []}
+            for k, p in enumerate(picks[t]):
+                if p is None:
+                    continue
+                slot, local, direction = p
+                page = next_page[slot]
+                next_page[slot] += 1
+                if page >= capacity:
+                    continue
+                if not local:
+                    if len(packed[direction]) < max_dests:
+                        packed[direction].append((page, k))
+                    continue
+                at = next_entry[slot]
+                if at >= bucket_start[slot + 1]:
+                    continue
+                next_entry[slot] = at + 1
+                entries[at] = (t, page, k)
+            for direction in (0, 1):
+                if packed[direction]:
+                    mc[w].append((direction, t, tuple(packed[direction])))
+
+    # merge_routing_index: every bucket holds exactly the length the table sized it at.
+    for b in range(n_slots):
+        total = sum(cnt[w][b] for w in range(lanes))
+        length = bucket_start[b + 1] - bucket_start[b]
+        fill = bucket_start[b] + min(survivors(b, total), length)
+        assert fill == bucket_start[b + 1], f"bucket {b}: filled {fill - bucket_start[b]} of {length}"
+    per_bucket = [entries[bucket_start[b] : bucket_start[b + 1]] for b in range(n_slots)]
+    per_dir = {d: [(t, pages) for w in range(lanes) for (dd, t, pages) in mc[w] if dd == d] for d in (0, 1)}
+    return per_bucket, per_dir
+
+
+def _prologue_picks(indices, table, chip_experts, my_row, extent, fanout):
+    """One chip's picks in the kernel's terms: bucket slot, whether the expert is local, and which way.
+
+    An index of -1 stands for a pick the group's table resolves to no chip, as a cross-group pick does.
+    """
+    slot_of = {e: (row, j) for row in range(extent) for j, e in enumerate(chip_experts[row])}
+    picks = []
+    for t in range(indices.shape[0]):
+        row_picks = []
+        for k in range(indices.shape[1]):
+            e = int(indices[t, k])
+            if e < 0 or int(table[e]) == -1:
+                row_picks.append(None)
+                continue
+            r, j = slot_of[e]
+            local = (r == my_row) if fanout else True
+            travel, _ = _mc_direction(my_row, r, extent)
+            row_picks.append((r * len(chip_experts[0]) + j, local, 0 if travel == 1 else 1))
+        picks.append(row_picks)
+    return picks
+
+
+@pytest.mark.parametrize("fanout", [False, True], ids=lambda f: "multicast" if f else "unicast")
+@pytest.mark.parametrize("tokens", [0, 1, 3, 13, 16, 64], ids=lambda n: f"tokens{n}")
+def test_dispatch_fabric2d_prologue_slices_compose(fanout, tokens):
+    """Four lanes walking their slices of the tokens build the index one sequential walk would.
+
+    The replay of the production allocator is inherently sequential -- every page depends on every
+    earlier drop -- and the prologue splits it anyway, on the argument that a lane knows its pick
+    positions up to the earlier lanes' per-bucket counts. That argument is checked here, on host,
+    where a slice boundary can be put exactly where it matters: on either side of a bucket's capacity
+    cutoff, on the cutoff, in a lane with no tokens, and over token counts the four lanes do not
+    divide. On device the same disagreement would show as a wrong page or a hang.
+    """
+    extent, topk, G = 4, 4, 1
+    num_routed_experts = extent * topk * G
+    experts_per_chip = num_routed_experts // G // extent
+    table = _expert_dispatch_table(num_routed_experts, extent, G)[0]
+    chip_experts = [[e for e in range(num_routed_experts) if table[e] == row] for row in range(extent)]
+    my_row = 1
+    n_slots = extent * experts_per_chip
+    bucketed = [(b // experts_per_chip == my_row) if fanout else True for b in range(n_slots)]
+
+    def compose(indices, first_page, capacity, label):
+        picks = _prologue_picks(indices, table, chip_experts, my_row, extent, fanout)
+        single = _prologue_model(picks, first_page, capacity, bucketed, lanes=1)
+        sliced = _prologue_model(picks, first_page, capacity, bucketed, lanes=4)
+        assert sliced == single, f"{label}: the four-lane build differs from the sequential walk"
+
+    # Every token picks the same expert on my own chip, first: with topk 1 the cutoff of that bucket
+    # falls at token index `room`, so the room places it inside lane 1, on the lane 1/2 boundary,
+    # inside lane 2, inside lane 3, past the end, and before the start.
+    hot = chip_experts[my_row][0]
+    same = torch.full((tokens, 1), hot, dtype=torch.int64)
+    for room in sorted({0, 1, tokens * 3 // 8, tokens // 2, tokens * 5 // 8, tokens * 13 // 16, tokens, tokens + 4}):
+        first_page = [7] * n_slots
+        compose(same, first_page, capacity=7 + room, label=f"one expert, room {room}")
+
+    # Random in-group draws, roomy and tight enough that most buckets are cut somewhere.
+    gen = torch.Generator().manual_seed(tokens * 2 + int(fanout))
+    indices = torch.zeros(tokens, topk, dtype=torch.int64)
+    for t in range(tokens):
+        indices[t] = torch.randperm(num_routed_experts, generator=gen)[:topk]
+    for capacity_div in (1, 3, 16):
+        capacity = max(1, extent * max(tokens, 1) * topk // capacity_div)
+        first_page = [int(torch.randint(0, capacity, (1,), generator=gen)) for _ in range(n_slots)]
+        compose(indices, first_page, capacity, label=f"random, capacity {capacity}")
+
+    # About a quarter out of group, as production routes: the picks that resolve to no slot at all.
+    if tokens:
+        cross = indices.clone()
+        cross[torch.rand(tokens, topk, generator=gen) < 0.25] = -1
+        for capacity in (3 + tokens // 3, 3 + tokens * topk):
+            compose(cross, [3] * n_slots, capacity, label=f"cross-group, capacity {capacity}")
 
 
 def _fwd_ref_frame(m):
@@ -1080,7 +1333,7 @@ def _replay_arrival_counter(per_launch, overlaps, give_back):
 
 @pytest.mark.parametrize("extent", [4, 6, 8, 12], ids=lambda e: f"extent{e}")
 @pytest.mark.parametrize("num_links", [1, 2], ids=lambda n: f"{n}link")
-def test_dispatch_fabric2d_arrival_counter_survives_an_overlap(extent, num_links):
+def test_dispatch_fabric2d_arrival_counter_survives_an_overlap(extent, num_links, expect_error):
     """The end-of-stream reset holds when the upstream chip is already a launch ahead.
 
     Nothing keeps ring neighbours in lockstep, so a chip that finishes early starts announcing the next
@@ -1118,7 +1371,7 @@ def test_dispatch_fabric2d_arrival_counter_survives_an_overlap(extent, num_links
 
         # The rule this replaced. One page announced early is enough to strand the launch after it.
         if per_launch > 0:
-            with pytest.raises(AssertionError, match="stranded"):
+            with expect_error(AssertionError, "stranded"):
                 _replay_arrival_counter(per_launch, [1, 0], zero)
 
 
@@ -1688,12 +1941,34 @@ def test_dispatch_fabric2d_multicast_chunk_agreement(extent, num_links, capacity
                 )
 
 
-# Destinations one multicast page can carry, mirroring FO_MAX_DESTS in the kernel interface, and the
-# packet headers a slot is given to send them with, mirroring headers_per_slot(fanout=true). The
-# staging walk below holds the kernel to both, because overrunning either writes packet headers over
-# the very delivery records those sends read their addresses from.
-_FO_MAX_DESTS = 8
-_HEADERS_PER_SLOT = 2 + 2 * _FO_MAX_DESTS
+# Destinations one multicast page can carry and the packet headers a slot is given to send them with,
+# mirroring FO_MAX_DESTS and headers_per_slot(fanout=true) in
+# dispatch_fabric2d/device/kernels/dataflow/dispatch_fabric2d_kernel_interface.hpp: one header for the
+# forward and one per remote delivery, each delivery a single scatter packet. The pool is sized from
+# the same FO_MAX_DESTS the staging walk below bounds the records by, so the header check there is a
+# mirror of the kernel's index arithmetic rather than an independent bound; the bound that matters is
+# FO_MAX_DESTS, and overrunning it writes packet headers over the very delivery records those sends
+# read their addresses from.
+_KERNEL_INTERFACE = (
+    Path(__file__).resolve().parents[5]
+    / "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/dispatch_fabric2d/device/kernels/dataflow"
+    / "dispatch_fabric2d_kernel_interface.hpp"
+)
+
+
+def _kernel_constant(name):
+    """An integer constexpr out of the kernel interface, so the mirror below cannot drift from it."""
+    match = re.search(rf"constexpr uint32_t {name} = (\d+)u?;", _KERNEL_INTERFACE.read_text())
+    assert match, f"{name} is not a plain integer constant in {_KERNEL_INTERFACE.name}"
+    return int(match.group(1))
+
+
+_FO_MAX_DESTS = _kernel_constant("FO_MAX_DESTS")
+_FO_FIRST_DELIVERY_HDR = _kernel_constant("FO_FIRST_DELIVERY_HDR")
+# headers_per_slot(true) in the same header; a pool of this size holds every index deliver_remotely
+# forms, FO_FIRST_DELIVERY_HDR + i for i < FO_MAX_DESTS, which is the one thing the walk below can check.
+_HEADERS_PER_SLOT = _FO_FIRST_DELIVERY_HDR + _FO_MAX_DESTS
+assert _FO_FIRST_DELIVERY_HDR + _FO_MAX_DESTS - 1 < _HEADERS_PER_SLOT
 
 
 @pytest.mark.parametrize("extent", [4, 6, 8, 12], ids=lambda e: f"extent{e}")
@@ -1723,8 +1998,7 @@ def test_dispatch_fabric2d_multicast_terminal_delivery(extent, num_links, capaci
     m = extent // 2
     reach, dest_hops, G, dropped, seq = _mc_fixture(extent, capacity_div, seed=19, cross_group=cross_group, topk=8)
 
-    copies = crossings_terminal = crossings_forwarding = extra_payloads = extra_packets = 0
-    packets_terminal = packets_forwarding = 0
+    copies = crossings_terminal = crossings_forwarding = extra_payloads = 0
     for g in range(G):
         for origin in range(extent):
             for di in range(2):
@@ -1757,17 +2031,14 @@ def test_dispatch_fabric2d_multicast_terminal_delivery(extent, num_links, capaci
                         sorted(delivered) == hops
                     ), f"g={g} origin={origin} dir={di} token hops {hops}: delivered {sorted(delivered)}"
 
-                    # What crosses a cable. A forward is ONE packet carrying the token and its tail
-                    # together; a delivery is two, the token and a 16-byte metadata packet. So the
-                    # terminal rule is free in payloads only when the farthest chip takes one page,
-                    # and never free in packets.
+                    # What crosses a cable. A forward and a delivery are each ONE packet -- the token
+                    # with its tail, or the token with its metadata as a second scatter chunk -- so
+                    # payloads and packets are the same count, and the terminal rule is free exactly
+                    # when the farthest chip takes one page.
                     crossings_terminal += n_one + (far - 1 + n_far if far >= 2 else 0)
                     crossings_forwarding += n_one + (far if far >= 2 else 0)
-                    packets_terminal += 2 * n_one + (far - 1 + 2 * n_far if far >= 2 else 0)
-                    packets_forwarding += 2 * n_one + (far if far >= 2 else 0)
                     if far >= 2:
                         extra_payloads += n_far - 1
-                        extra_packets += 2 * n_far - 1
 
                 for link in range(num_links):
                     for j in range(1, m + 1):
@@ -1786,13 +2057,12 @@ def test_dispatch_fabric2d_multicast_terminal_delivery(extent, num_links, capaci
                             f"{_mc_chunk(reach_row, _mc_region_hop(j + 1), link, num_links, m)}"
                         )
                         # The staging contract the sender relies on: local records first, remote after,
-                        # both out of one FO_MAX_DESTS list, and the header pool sized for the pair of
-                        # packets each remote record sends.
+                        # both out of one FO_MAX_DESTS list. The header pool is sized from the same
+                        # constant (asserted at module level), so this is the only bound to hold here.
                         for hops in arrivals[link][j]:
                             local_count = hops.count(j)
                             remote_count = hops.count(j + 1) if hops[-1] == j + 1 else 0
                             assert local_count + remote_count <= _FO_MAX_DESTS
-                            assert 2 + 2 * remote_count <= _HEADERS_PER_SLOT
                     # Nothing travels past half the ring, so no page reaches the last chunk.
                     assert not arrivals[link][m], f"g={g} origin={origin} dir={di} link={link}: chunk m is not empty"
                     # And the kernel reads fwd_len one index past that at j = m, which must stay off
@@ -1800,16 +2070,12 @@ def test_dispatch_fabric2d_multicast_terminal_delivery(extent, num_links, capaci
                     assert _mc_chunk(reach_row, _mc_region_hop(m + 1), link, num_links, m) == 0
 
     # The terminal rule's whole cost, stated as an identity rather than a measurement: one extra
-    # payload for every page beyond the first on a token's farthest chip, and one extra packet for
-    # every terminal delivery because the metadata no longer rides inside the forward.
+    # payload -- and, a delivery being one packet, one extra packet -- for every page beyond the first
+    # on a token's farthest chip.
     assert crossings_terminal == crossings_forwarding + extra_payloads, (
         f"terminal delivery moved {crossings_terminal} payloads across cables against "
         f"{crossings_forwarding} when forwarding to the farthest chip, not the "
         f"{crossings_forwarding + extra_payloads} the accounting predicts"
-    )
-    assert packets_terminal == packets_forwarding + extra_packets, (
-        f"terminal delivery sent {packets_terminal} packets against {packets_forwarding}, not the "
-        f"{packets_forwarding + extra_packets} the accounting predicts"
     )
     # Without these the checks above pass on a draw that never reached the cases they are about, and
     # nothing would say so. Each is claimed only where the draw can actually produce it: the clamp is
@@ -1822,6 +2088,5 @@ def test_dispatch_fabric2d_multicast_terminal_delivery(extent, num_links, capaci
         assert dropped > 0, "the tight config dropped nothing, so the post-drop rule is still untested"
     logger.info(
         f"extent={extent} links={num_links}: {copies} travelling copies, link payloads "
-        f"{crossings_forwarding} -> {crossings_terminal} ({crossings_terminal / crossings_forwarding:.3f}x), "
-        f"packets {packets_forwarding} -> {packets_terminal} ({packets_terminal / packets_forwarding:.3f}x)"
+        f"{crossings_forwarding} -> {crossings_terminal} ({crossings_terminal / crossings_forwarding:.3f}x)"
     )
