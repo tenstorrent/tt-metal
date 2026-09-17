@@ -45,6 +45,10 @@ namespace tt::tt_metal {
 
 namespace {
 
+tt::umd::RiscType dram_core_reset_riscs(ARCH arch) {
+    return arch == ARCH::QUASAR ? tt::umd::RiscType::ALL : tt::umd::RiscType::BRISC;
+}
+
 // Mock devices reuse the on-disk firmware sources of a real arch's package.
 // We only ship sources for Wormhole and Blackhole today; Quasar mock has
 // no `tt-2xx/trisc.cc` etc. installed at the expected path, so calling
@@ -426,7 +430,8 @@ void RiscFirmwareInitializer::assert_dram_cores(tt::ChipId device_id) {
     if (has_dram_fw) {
         const auto& soc_d = cluster_.get_soc_desc(device_id);
         for (const auto& virtual_core : soc_d.get_metal_dram_cores(CoordSystem::TRANSLATED)) {
-            cluster_.assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_core), tt::umd::RiscType::BRISC);
+            cluster_.assert_risc_reset_at_core(
+                tt_cxy_pair(device_id, virtual_core), dram_core_reset_riscs(cluster_.arch()));
         }
     }
 }
@@ -1304,7 +1309,8 @@ void RiscFirmwareInitializer::initialize_firmware(
             break;
         }
         case HalProgrammableCoreType::DRAM: {
-            cluster_.assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_core), tt::umd::RiscType::BRISC);
+            cluster_.assert_risc_reset_at_core(
+                tt_cxy_pair(device_id, virtual_core), dram_core_reset_riscs(cluster_.arch()));
             if (not rtoptions_.get_skip_loading_fw()) {
                 for (uint32_t processor_class = 0; processor_class < processor_class_count; processor_class++) {
                     auto num_build_states = hal_.get_processor_types_count(core_type_idx, processor_class);
@@ -1332,6 +1338,14 @@ void RiscFirmwareInitializer::initialize_firmware(
                 hal_.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::LAUNCH_MSG_BUFFER_RD_PTR);
             uint64_t go_message_index_addr =
                 hal_.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::GO_MSG_INDEX);
+            const auto factory = hal_.get_dev_msgs_factory(HalProgrammableCoreType::DRAM);
+            const uint64_t mailbox_addr =
+                hal_.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::MAILBOX);
+            const uint64_t subordinate_sync_addr =
+                mailbox_addr + factory.offset_of<dev_msgs::mailboxes_t>(dev_msgs::mailboxes_t::Field::subordinate_sync);
+            const uint64_t fw_shared_globals_ready_addr =
+                mailbox_addr +
+                factory.offset_of<dev_msgs::mailboxes_t>(dev_msgs::mailboxes_t::Field::fw_shared_globals_ready);
             cluster_.write_core(
                 init_launch_msg_data.data(),
                 init_launch_msg_data.size(),
@@ -1341,8 +1355,20 @@ void RiscFirmwareInitializer::initialize_firmware(
             uint32_t zero = 0;
             cluster_.write_core(&zero, sizeof(uint32_t), tt_cxy_pair(device_id, virtual_core), launch_msg_rd_ptr_addr);
             cluster_.write_core(&zero, sizeof(uint32_t), tt_cxy_pair(device_id, virtual_core), go_message_index_addr);
+            const uint64_t subordinate_init = dev_msgs::RUN_SYNC_MSG_ALL_SUBORDINATES_DMS_INIT;
+            cluster_.write_core(
+                &subordinate_init,
+                sizeof(subordinate_init),
+                tt_cxy_pair(device_id, virtual_core),
+                subordinate_sync_addr);
+            const uint8_t shared_globals_wait = dev_msgs::SHARED_GLOBALS_READY_WAIT;
+            cluster_.write_core(
+                &shared_globals_wait,
+                sizeof(shared_globals_wait),
+                tt_cxy_pair(device_id, virtual_core),
+                fw_shared_globals_ready_addr);
 
-            // Write reset PC (register address, no L1 NOC offset needed)
+            // Write reset PC (register address, no L1 NOC offset needed).
             cluster_.write_reg(
                 &jit_build_config.fw_launch_addr_value,
                 tt_cxy_pair(device_id, virtual_core),
@@ -1360,11 +1386,7 @@ void RiscFirmwareInitializer::initialize_firmware(
                         const ll_api::memory& binary_mem = llrt::get_risc_binary(fw_path);
                         uint32_t fw_size = binary_mem.get_text_size();
                         hal_.set_iram_text_size(
-                            launch_msg,
-                            core_type,
-                            static_cast<HalProcessorClassType>(processor_class),
-                            dm_id,
-                            fw_size);
+                            launch_msg, core_type, static_cast<HalProcessorClassType>(processor_class), dm_id, fw_size);
                         llrt::test_load_write_read_risc_binary(
                             descriptor_->env_impl(),
                             binary_mem,
@@ -1404,28 +1426,33 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
     auto go_msg = dev_msgs_factory.create<dev_msgs::go_msg_t>();
     go_msg.view().signal() = dev_msgs::RUN_MSG_INIT;
 
-    for (uint32_t y = 0; y < logical_grid_size.y; y++) {
-        for (uint32_t x = 0; x < logical_grid_size.x; x++) {
-            CoreCoord logical_core(x, y);
-            CoreCoord worker_core =
-                cluster_.get_virtual_coordinate_from_logical_coordinates(device_id, logical_core, CoreType::WORKER);
-            core_info.view().absolute_logical_x() = logical_core.x;
-            core_info.view().absolute_logical_y() = logical_core.y;
-            cluster_.write_core_immediate(
-                core_info.data(),
-                core_info.size(),
-                {static_cast<size_t>(device_id), worker_core},
-                hal_.get_dev_addr(
-                    llrt::get_core_type(descriptor_->env_impl(), device_id, worker_core), HalL1MemAddrType::CORE_INFO));
-            not_done_cores.insert(worker_core);
+    // A package with no Tensix cores (e.g. a standalone Mimir) has no worker grid: there is no
+    // logical (0, 0) to resolve to a virtual core, and no worker firmware to place.
+    if (logical_grid_size.x > 0 && logical_grid_size.y > 0) {
+        for (uint32_t y = 0; y < logical_grid_size.y; y++) {
+            for (uint32_t x = 0; x < logical_grid_size.x; x++) {
+                CoreCoord logical_core(x, y);
+                CoreCoord worker_core =
+                    cluster_.get_virtual_coordinate_from_logical_coordinates(device_id, logical_core, CoreType::WORKER);
+                core_info.view().absolute_logical_x() = logical_core.x;
+                core_info.view().absolute_logical_y() = logical_core.y;
+                cluster_.write_core_immediate(
+                    core_info.data(),
+                    core_info.size(),
+                    {static_cast<size_t>(device_id), worker_core},
+                    hal_.get_dev_addr(
+                        llrt::get_core_type(descriptor_->env_impl(), device_id, worker_core),
+                        HalL1MemAddrType::CORE_INFO));
+                not_done_cores.insert(worker_core);
+            }
         }
+        CoreCoord start_core =
+            cluster_.get_virtual_coordinate_from_logical_coordinates(device_id, CoreCoord(0, 0), CoreType::WORKER);
+        CoreCoord end_core = cluster_.get_virtual_coordinate_from_logical_coordinates(
+            device_id, CoreCoord(logical_grid_size.x - 1, logical_grid_size.y - 1), CoreType::WORKER);
+        initialize_firmware(
+            device_id, HalProgrammableCoreType::TENSIX, start_core, launch_msg.view(), go_msg.view(), end_core);
     }
-    CoreCoord start_core =
-        cluster_.get_virtual_coordinate_from_logical_coordinates(device_id, CoreCoord(0, 0), CoreType::WORKER);
-    CoreCoord end_core = cluster_.get_virtual_coordinate_from_logical_coordinates(
-        device_id, CoreCoord(logical_grid_size.x - 1, logical_grid_size.y - 1), CoreType::WORKER);
-    initialize_firmware(
-        device_id, HalProgrammableCoreType::TENSIX, start_core, launch_msg.view(), go_msg.view(), end_core);
 
     std::unordered_set<CoreCoord> dispatch_not_done_cores;
     if (hal_.has_programmable_core_type(HalProgrammableCoreType::DISPATCH) &&
@@ -1572,7 +1599,7 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
         cluster_.deassert_risc_reset_at_core(tt_cxy_pair(device_id, worker_core), reset_val);
     }
     for (const auto& dram_core : dram_not_done_cores) {
-        cluster_.deassert_risc_reset_at_core(tt_cxy_pair(device_id, dram_core), tt::umd::RiscType::BRISC);
+        cluster_.deassert_risc_reset_at_core(tt_cxy_pair(device_id, dram_core), dram_core_reset_riscs(cluster_.arch()));
     }
     for (const auto& dispatch_core : dispatch_not_done_cores) {
         cluster_.deassert_risc_reset_at_core(tt_cxy_pair(device_id, dispatch_core), tt::umd::RiscType::ALL);
@@ -1600,7 +1627,8 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
     }
 
     if (!dispatch_not_done_cores.empty()) {
-        log_info(LogDevice, "Waiting for dispatch-engine firmware init complete ({} cores)", dispatch_not_done_cores.size());
+        log_info(
+            LogDevice, "Waiting for dispatch-engine firmware init complete ({} cores)", dispatch_not_done_cores.size());
         try {
             llrt::internal_::wait_until_cores_done(
                 descriptor_->metal_context(), device_id, dev_msgs::RUN_MSG_INIT, dispatch_not_done_cores, timeout_ms);

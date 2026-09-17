@@ -91,6 +91,11 @@ namespace tt::tt_metal {
 class HalJitBuildQueryQuasar : public hal_2xx::HalJitBuildQueryBase {
 public:
     using HalJitBuildQueryBase::HalJitBuildQueryBase;
+    bool supports_kernel_build(
+        HalProgrammableCoreType core_type, HalProcessorClassType /*processor_class*/) const override {
+        return core_type != HalProgrammableCoreType::DRAM;
+    }
+
     std::string linker_flags(const Params& params) const override {
         std::string flags;
         // Quasar XIP (QuasarDataMovementKernel::read_binaries -> ElfFile::Impl::XIPify) pairs each

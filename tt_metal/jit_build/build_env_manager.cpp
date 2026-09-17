@@ -118,7 +118,12 @@ BuildEnvManager::BuildEnvManager(const Hal& hal) {
         kernel_build_state_indices_[programmable_core].resize(processor_class_count);
         firmware_build_state_indices_[programmable_core].resize(processor_class_count);
         for (uint32_t processor_class = 0; processor_class < processor_class_count; processor_class++) {
-            const uint32_t processor_types_count = hal.get_processor_types_count(programmable_core, processor_class);
+            const auto core_type = hal.get_programmable_core_type(programmable_core);
+            const auto class_type = static_cast<HalProcessorClassType>(processor_class);
+            const uint32_t processor_types_count =
+                hal.get_jit_build_query().supports_kernel_build(core_type, class_type)
+                    ? hal.get_processor_types_count(programmable_core, processor_class)
+                    : 0;
             kernel_build_state_indices_[programmable_core][processor_class] = {kernel_index, processor_types_count};
             kernel_index += processor_types_count;
 
@@ -136,21 +141,26 @@ namespace {
 std::map<std::string, std::string> initialize_device_kernel_defines(const JitDeviceConfig& config) {
     std::map<std::string, std::string> device_kernel_defines;
 
-    bool is_dram_pow2 = ceil(log2(config.num_dram_banks)) == log2(config.num_dram_banks);
-    bool is_l1_pow2 = ceil(log2(config.num_l1_banks)) == log2(config.num_l1_banks);
+    // A package with no Tensix cores has no L1 banks. log2(0) is -inf, and casting that to size_t is
+    // undefined: it yielded a 2^63 shift count that no firmware would compile against. Report zero
+    // banks as a zero shift instead. Interleaved address generation is the only consumer, and no
+    // interleaved buffer can be placed without banks.
+    auto log2_num_banks = [](size_t num_banks) { return num_banks == 0 ? 0 : static_cast<size_t>(log2(num_banks)); };
+    bool is_dram_pow2 = config.num_dram_banks == 0 || ceil(log2(config.num_dram_banks)) == log2(config.num_dram_banks);
+    bool is_l1_pow2 = config.num_l1_banks == 0 || ceil(log2(config.num_l1_banks)) == log2(config.num_l1_banks);
 
     device_kernel_defines.emplace("NUM_DRAM_BANKS", std::to_string(config.num_dram_banks));
     device_kernel_defines.emplace("NUM_L1_BANKS", std::to_string(config.num_l1_banks));
 
     if (is_dram_pow2) {
         device_kernel_defines.emplace(
-            "LOG_BASE_2_OF_NUM_DRAM_BANKS", std::to_string(static_cast<size_t>(log2(config.num_dram_banks))));
+            "LOG_BASE_2_OF_NUM_DRAM_BANKS", std::to_string(log2_num_banks(config.num_dram_banks)));
     } else {
         device_kernel_defines.emplace("IS_NOT_POW2_NUM_DRAM_BANKS", "1");
     }
     if (is_l1_pow2) {
         device_kernel_defines.emplace(
-            "LOG_BASE_2_OF_NUM_L1_BANKS", std::to_string(static_cast<size_t>(log2(config.num_l1_banks))));
+            "LOG_BASE_2_OF_NUM_L1_BANKS", std::to_string(log2_num_banks(config.num_l1_banks)));
     } else {
         device_kernel_defines.emplace("IS_NOT_POW2_NUM_L1_BANKS", "1");
     }
@@ -197,7 +207,17 @@ std::vector<JitBuildState> create_build_state(JitBuildEnv& build_env, const JitD
             }
         }
     } else {
-        total_num_build_states = hal.get_total_num_risc_processors();
+        for (uint32_t programmable_core = 0; programmable_core < hal.get_programmable_core_type_count();
+             programmable_core++) {
+            const auto core_type = hal.get_programmable_core_type(programmable_core);
+            const uint32_t processor_class_count = hal.get_processor_classes_count(core_type);
+            for (uint32_t processor_class = 0; processor_class < processor_class_count; processor_class++) {
+                const auto class_type = static_cast<HalProcessorClassType>(processor_class);
+                if (hal.get_jit_build_query().supports_kernel_build(core_type, class_type)) {
+                    total_num_build_states += hal.get_processor_types_count(programmable_core, processor_class);
+                }
+            }
+        }
     }
     std::vector<JitBuildState> build_states;
     build_states.reserve(total_num_build_states);
@@ -207,6 +227,11 @@ std::vector<JitBuildState> create_build_state(JitBuildEnv& build_env, const JitD
         uint32_t processor_class_count =
             hal.get_processor_classes_count(hal.get_programmable_core_type(programmable_core));
         for (uint32_t processor_class = 0; processor_class < processor_class_count; processor_class++) {
+            if (!is_fw && !hal.get_jit_build_query().supports_kernel_build(
+                              hal.get_programmable_core_type(programmable_core),
+                              static_cast<HalProcessorClassType>(processor_class))) {
+                continue;
+            }
             JitBuiltStateConfig config{
                 .core_type = static_cast<HalProgrammableCoreType>(programmable_core),
                 .processor_class = static_cast<HalProcessorClassType>(processor_class),
@@ -290,8 +315,14 @@ const JitBuildState& BuildEnvManager::get_firmware_build_state(
 
 const JitBuildState& BuildEnvManager::get_kernel_build_state(
     ChipId device_id, uint32_t programmable_core, uint32_t processor_class, int processor_id) {
-    const uint32_t state_idx =
-        get_kernel_build_index_and_state_count(programmable_core, processor_class).first + processor_id;
+    const auto [base, count] = get_kernel_build_index_and_state_count(programmable_core, processor_class);
+    TT_FATAL(
+        processor_id >= 0 && static_cast<uint32_t>(processor_id) < count,
+        "Kernel JIT is not available for programmable_core={}, processor_class={}, processor_id={}",
+        programmable_core,
+        processor_class,
+        processor_id);
+    const uint32_t state_idx = base + static_cast<uint32_t>(processor_id);
     return get_device_build_env(device_id).kernel_build_states[state_idx];
 }
 

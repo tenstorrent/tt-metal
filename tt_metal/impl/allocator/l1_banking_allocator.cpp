@@ -35,6 +35,31 @@ namespace tt::tt_metal {
 void AllocatorImpl::init_compute_and_storage_l1_bank_manager() {
     TT_FATAL(config_->worker_grid.contains(config_->compute_grid), "Compute grid must be a subset of worker grid");
 
+    // A package with no Tensix cores (e.g. a standalone Mimir) has no worker L1 to partition. The
+    // managers still have to exist because every L1 query goes through them, so build them with no
+    // banks. Interleaved placement is disabled because zero banks has no modulo implementation.
+    if (config_->worker_grid.empty()) {
+        l1_manager_ = std::make_unique<BankManager>(
+            BufferType::L1,
+            std::unordered_map<uint32_t, int64_t>{},
+            /*size_bytes=*/0,
+            /*interleaved_address_limit=*/0,
+            config_->l1_alignment,
+            config_->dram_alignment,
+            /*alloc_offset=*/0,
+            /*disable_interleaved=*/true);
+        l1_small_manager_ = std::make_unique<BankManager>(
+            BufferType::L1_SMALL,
+            std::unordered_map<uint32_t, int64_t>{},
+            /*size_bytes=*/0,
+            /*interleaved_address_limit=*/0,
+            config_->l1_alignment,
+            config_->dram_alignment,
+            /*alloc_offset=*/0,
+            /*disable_interleaved=*/true);
+        return;
+    }
+
     uint32_t num_l1_banks = 0;
     for (const auto& core_allocation_type : config_->core_type_from_noc_coord_table) {
         if (core_allocation_type.second == AllocCoreType::ComputeAndStore) {
@@ -219,29 +244,48 @@ AllocatorConfig L1BankingAllocator::generate_config(
     // PCIe/DRAM -> Tensix/Eth src and dst addrs must be DRAM_ALIGNMENT aligned
     // Tensix/Eth <-> Tensix/Eth src and dst addrs must be L1_ALIGNMENT aligned
     const auto& logical_size = soc_desc.get_grid_size(CoreType::TENSIX);
-    const auto& compute_size = tt::get_compute_grid_size(env, device_id, num_hw_cqs, dispatch_core_config);
+    // A package with no Tensix cores (e.g. a standalone Mimir) has no worker L1: leave the worker and
+    // compute grids empty and the L1 partition zero-sized so only the DRAM banks get set up. The
+    // compute grid comes from the arch-wide core descriptor YAML, which describes Tensix cores this
+    // package does not have, so it must not be consulted either.
+    const bool has_worker_cores = logical_size.x > 0 && logical_size.y > 0;
+    CoreRangeSet worker_grid;
+    CoreRangeSet compute_grid;
+    uint32_t l1_unreserved_base = 0;
+    size_t worker_l1_size = 0;
+    size_t aligned_l1_small_size = 0;
+    if (has_worker_cores) {
+        const auto& compute_size = tt::get_compute_grid_size(env, device_id, num_hw_cqs, dispatch_core_config);
+        worker_grid = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(logical_size.x - 1, logical_size.y - 1)));
+        compute_grid = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(compute_size.x - 1, compute_size.y - 1)));
+        l1_unreserved_base =
+            static_cast<uint32_t>(align(worker_l1_unreserved_start, hal.get_alignment(HalMemType::DRAM)));
+        worker_l1_size = static_cast<size_t>(soc_desc.worker_l1_size);
+        aligned_l1_small_size = align(l1_small_size, hal.get_alignment(HalMemType::DRAM));
+    }
     AllocatorConfig config(
         {.num_dram_channels = static_cast<size_t>(soc_desc.get_num_dram_views()),
          .dram_bank_size = soc_desc.dram_view_size,
          .dram_bank_offsets = {},
          .dram_unreserved_base = static_cast<uint32_t>(hal.get_dev_addr(HalDramMemAddrType::UNRESERVED)),
          .dram_alignment = hal.get_alignment(HalMemType::DRAM),
-         .l1_unreserved_base =
-             static_cast<uint32_t>(align(worker_l1_unreserved_start, hal.get_alignment(HalMemType::DRAM))),
-         .worker_grid = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(logical_size.x - 1, logical_size.y - 1))),
-         .worker_l1_size = static_cast<size_t>(soc_desc.worker_l1_size),
-         .l1_small_size = align(l1_small_size, hal.get_alignment(HalMemType::DRAM)),
+         .l1_unreserved_base = l1_unreserved_base,
+         .worker_grid = worker_grid,
+         .worker_l1_size = worker_l1_size,
+         .l1_small_size = aligned_l1_small_size,
          .trace_region_size = align(trace_region_size, hal.get_alignment(HalMemType::DRAM)),
          .core_type_from_noc_coord_table = {},  // Populated later
          .worker_log_to_virtual_routing_x = cluster.get_worker_logical_to_virtual_x(device_id),
          .worker_log_to_virtual_routing_y = cluster.get_worker_logical_to_virtual_y(device_id),
          .l1_bank_remap = std::move(l1_bank_remap),
-         .compute_grid = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(compute_size.x - 1, compute_size.y - 1))),
+         .compute_grid = compute_grid,
          .l1_alignment = hal.get_alignment(HalMemType::L1),
          .disable_interleaved = false});
-    TT_FATAL(
-        config.l1_small_size < config.worker_l1_size - config.l1_unreserved_base,
-        "Reserved size must be less than bank size");
+    if (has_worker_cores) {
+        TT_FATAL(
+            config.l1_small_size < config.worker_l1_size - config.l1_unreserved_base,
+            "Reserved size must be less than bank size");
+    }
     TT_FATAL(
         config.l1_small_size % config.l1_alignment == 0,
         "Reserved size must be aligned to L1 allocator alignment {}",
@@ -262,10 +306,12 @@ AllocatorConfig L1BankingAllocator::generate_config(
              AllocCoreType::Invalid});
     }
 
-    for (const CoreCoord& core : tt::get_logical_compute_cores(env, device_id, num_hw_cqs, dispatch_core_config)) {
-        const auto noc_coord =
-            cluster.get_virtual_coordinate_from_logical_coordinates(device_id, core, CoreType::WORKER);
-        config.core_type_from_noc_coord_table[noc_coord] = AllocCoreType::ComputeAndStore;
+    if (has_worker_cores) {
+        for (const CoreCoord& core : tt::get_logical_compute_cores(env, device_id, num_hw_cqs, dispatch_core_config)) {
+            const auto noc_coord =
+                cluster.get_virtual_coordinate_from_logical_coordinates(device_id, core, CoreType::WORKER);
+            config.core_type_from_noc_coord_table[noc_coord] = AllocCoreType::ComputeAndStore;
+        }
     }
     for (const CoreCoord& core : tt::get_logical_dispatch_cores(env, device_id, num_hw_cqs, dispatch_core_config)) {
         const auto noc_coord =

@@ -328,6 +328,12 @@ public:
     // empty string when the processor has no vector unit / the arch does not support it.
     // Applied per kernel at recipe-export time, never to firmware or default kernel builds.
     virtual std::string rvv_compile_flags(const Params& /*params*/) const { return {}; }
+    // Returns whether kernel JIT is implemented for this processor class. Firmware build-state
+    // construction is independent of this capability.
+    virtual bool supports_kernel_build(
+        HalProgrammableCoreType /*core_type*/, HalProcessorClassType /*processor_class*/) const {
+        return true;
+    }
     // Returns the path to the linker script, relative to the tt-metal root.
     virtual std::string linker_script(const Params& params) const = 0;
     // Returns a string of linker flags to be added to linker command line.

@@ -64,6 +64,23 @@ std::vector<tt::tt_metal::CoreCoord> metal_SocDescriptor::get_metal_dram_cores(t
         if (exclude_noc0_endpoints && is_noc0_dram_endpoint({translated.x, translated.y})) {
             continue;
         }
+        // A Quasar package may contain both ordinary GDDR endpoints and CCE-backed programmable
+        // views. Once any CCE view is declared, only those views are Metal DRAM programmable cores.
+        if (this->arch == tt::ARCH::QUASAR && has_programmable_dram_views()) {
+            bool is_programmable_core = false;
+            for (size_t view = 0; view < dram_bank_endpoint_coords.size(); ++view) {
+                if (dram_view_programmable[view] &&
+                    std::ranges::find(
+                        dram_bank_endpoint_coords[view], tt::tt_metal::CoreCoord{translated.x, translated.y}) !=
+                        dram_bank_endpoint_coords[view].end()) {
+                    is_programmable_core = true;
+                    break;
+                }
+            }
+            if (!is_programmable_core) {
+                continue;
+            }
+        }
         // UMD's LOGICAL DRAM coord is {channel, raw subchannel}, but Metal's logical DRAM space is
         // {dram_view, index into dram_bank_endpoint_coords}, which orders the NOC0 worker endpoint
         // first rather than by subchannel id. Handing back the UMD coord would make a caller that
@@ -183,25 +200,29 @@ int metal_SocDescriptor::get_dram_channel_from_logical_core(const tt::tt_metal::
     return logical_coord.x;
 }
 
-tt::tt_metal::CoreCoord metal_SocDescriptor::get_physical_ethernet_core_from_logical(const tt::tt_metal::CoreCoord& logical_coord) const {
+tt::tt_metal::CoreCoord metal_SocDescriptor::get_physical_ethernet_core_from_logical(
+    const tt::tt_metal::CoreCoord& logical_coord) const {
     tt::umd::CoreCoord physical_coord =
         translate_coord_to({logical_coord, tt::CoreType::ETH, tt::CoordSystem::LOGICAL}, tt::CoordSystem::NOC0);
     return {physical_coord.x, physical_coord.y};
 }
 
-tt::tt_metal::CoreCoord metal_SocDescriptor::get_logical_ethernet_core_from_physical(const tt::tt_metal::CoreCoord& physical_coord) const {
+tt::tt_metal::CoreCoord metal_SocDescriptor::get_logical_ethernet_core_from_physical(
+    const tt::tt_metal::CoreCoord& physical_coord) const {
     tt::umd::CoreCoord logical_coord =
         translate_coord_to({physical_coord, tt::CoreType::ETH, tt::CoordSystem::NOC0}, tt::CoordSystem::LOGICAL);
     return {logical_coord.x, logical_coord.y};
 }
 
-tt::tt_metal::CoreCoord metal_SocDescriptor::get_physical_tensix_core_from_logical(const tt::tt_metal::CoreCoord& logical_coord) const {
+tt::tt_metal::CoreCoord metal_SocDescriptor::get_physical_tensix_core_from_logical(
+    const tt::tt_metal::CoreCoord& logical_coord) const {
     tt::umd::CoreCoord physical_coord =
         translate_coord_to({logical_coord, tt::CoreType::TENSIX, tt::CoordSystem::LOGICAL}, tt::CoordSystem::NOC0);
     return {physical_coord.x, physical_coord.y};
 }
 
-tt::tt_metal::CoreCoord metal_SocDescriptor::get_physical_dram_core_from_logical(const tt::tt_metal::CoreCoord& logical_coord) const {
+tt::tt_metal::CoreCoord metal_SocDescriptor::get_physical_dram_core_from_logical(
+    const tt::tt_metal::CoreCoord& logical_coord) const {
     TT_FATAL(
         logical_coord.x < dram_bank_endpoint_coords.size() &&
             logical_coord.y < dram_bank_endpoint_coords[logical_coord.x].size(),
@@ -235,12 +256,10 @@ tt::tt_metal::CoreCoord metal_SocDescriptor::get_logical_dram_core_for_subchanne
         phys.y);
 }
 
-tt::tt_metal::CoreCoord metal_SocDescriptor::get_physical_dispatch_engine_core_from_logical(const tt::tt_metal::CoreCoord& logical_coord) const {
+tt::tt_metal::CoreCoord metal_SocDescriptor::get_physical_dispatch_engine_core_from_logical(
+    const tt::tt_metal::CoreCoord& logical_coord) const {
     const auto dispatch_noc0_cores = get_cores(tt::CoreType::DISPATCH, tt::CoordSystem::NOC0);
-    TT_FATAL(
-        logical_coord.y == 0,
-        "Dispatch-engine logical y coordinate must be 0 (got {})",
-        logical_coord.str());
+    TT_FATAL(logical_coord.y == 0, "Dispatch-engine logical y coordinate must be 0 (got {})", logical_coord.str());
     TT_FATAL(
         logical_coord.x < dispatch_noc0_cores.size(),
         "Dispatch-engine logical index {} out of range ({} dispatch cores in soc descriptor)",
@@ -265,7 +284,9 @@ tt::tt_metal::CoreCoord metal_SocDescriptor::get_physical_core_from_logical_core
     }
 }
 
-tt::tt_metal::CoreCoord metal_SocDescriptor::get_dram_grid_size() const { return tt::tt_metal::CoreCoord(this->get_num_dram_views(), 1); }
+tt::tt_metal::CoreCoord metal_SocDescriptor::get_dram_grid_size() const {
+    return tt::tt_metal::CoreCoord(this->get_num_dram_views(), 1);
+}
 
 tt::tt_metal::CoreCoord metal_SocDescriptor::get_dram_compute_grid_size() const {
     return tt::tt_metal::CoreCoord(this->get_num_dram_views(), get_grid_size(tt::CoreType::DRAM).y);
