@@ -321,7 +321,10 @@ class ModelOptimizations:
         else:
             settings = {
                 "TensorPrecision": {TensorGroup.FF1_FF3: PrecisionSetting.BFP4},
-                "OpFidelity": {OpGroup.LI_FF1_FF3: MathFidelitySetting.LOFI},
+                "OpFidelity": {
+                    OpGroup.LI_FF1_FF3: MathFidelitySetting.LOFI,
+                    OpGroup.LI_FF2: MathFidelitySetting.LOFI,
+                },
             }
             if model_name.startswith("Phi-3-mini"):  # TODO: Only do this for N150
                 logger.info(
@@ -403,7 +406,7 @@ class ModelOptimizations:
                 OpGroup.LI_FF1_FF3: MathFidelitySetting.HIFI2_FP16,
                 OpGroup.LI_FF2: MathFidelitySetting.HIFI2_FP16,
                 # Attention operators -- linear and scaled_dot_product_attention, in decode and prefill modes
-                OpGroup.LI_QKV_DECODE: MathFidelitySetting.HIFI2,
+                OpGroup.LI_QKV_DECODE: MathFidelitySetting.LOFI,
                 OpGroup.SDPA_DECODE: MathFidelitySetting.HIFI2,
                 OpGroup.LI_O_DECODE: MathFidelitySetting.LOFI,
                 OpGroup.LI_QKV_PREFILL: MathFidelitySetting.HIFI2,
