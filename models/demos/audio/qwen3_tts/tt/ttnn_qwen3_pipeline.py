@@ -41,6 +41,11 @@ appears in the text stream. In non-streaming mode `trailing_text_hidden` is a co
 `tts_pad_embed`, so after the prefill the model gets no further text signal; that is
 upstream's design and the regime where its sampler is known to wander.
 
+**Both regimes are here.** `streaming=True` on any of the three entry points switches to
+upstream's `non_streaming_mode=False`: the prompt carries one text token, ten positions
+whatever the text, and every frame brings the next token in. `StreamingText` has the
+schedule and the README the measurements.
+
 A clone prompt is the same head followed by a different body: the reference transcript goes
 into the text track ahead of the text to speak, and the clip itself follows on the codec
 track, one summed 16-codebook embedding per frame. `build_voice_clone_prefill` has the
@@ -306,6 +311,143 @@ def _prompt_body(tables, text_ids, codec_bos):
     return torch.cat([body, tables.tts_pad + codec_bos], dim=1)
 
 
+class StreamingText:
+    """The text track during streaming-input decode: one embedding per frame, on demand.
+
+    In this regime the prompt carries only the **first** text token and every generated
+    frame adds the next one, against the codes the model just emitted. Upstream calls it
+    `non_streaming_mode=False` and its own docstring is careful about what the flag does:
+    it "only simulates streaming text input", since it knows the whole string up front and
+    changes nothing but when each token reaches the model.
+
+    The schedule is the whole of the regime, so this also takes text that arrives in
+    pieces: any chunk that lands before the frame that needs it is indistinguishable from
+    having had the string all along. That is the part upstream leaves to the caller.
+
+    **The caveat with pieces is tokenisation.** Each chunk is tokenised on its own, so a
+    merge that would have spanned a boundary does not happen and the ids differ from the
+    same text given whole. Feed whole words, and prefer whole clauses.
+
+    After the last text token comes `tts_eos`, once, and then `tts_pad` for as long as the
+    model keeps going. That ordering is upstream's and it is what tells the model the text
+    has ended, so a caller that never closes the iterator never sends it.
+    """
+
+    def __init__(self, tables, text):
+        self.tables = tables
+        self.chunks = iter([text] if isinstance(text, str) else text)
+        self.ids = []
+        self.embeddings = []
+        self.closed = False
+        self.sent_eos = False
+        if not self._ids():
+            raise ValueError("streaming input needs at least one token of text to open the prompt")
+
+    def _ids(self):
+        """Pull chunks until an id is in hand, or the text is over."""
+        while not self.ids and not self.closed:
+            chunk = next(self.chunks, None)
+            if chunk is None:
+                self.closed = True
+                break
+            self.ids.extend(int(one) for one in frontend.encode(str(chunk)))
+        return bool(self.ids)
+
+    def _project(self):
+        """Project whatever ids are waiting, in one call, and keep them by position.
+
+        One call rather than one per token because that is what upstream does, and the
+        projection is a matmul whose accumulation order shows: projecting token by token
+        left a difference of 1.2e-7 against upstream's tensor, and projecting the group
+        leaves none. A chunk boundary is therefore a boundary in the arithmetic too, which
+        is the second reason to prefer whole clauses.
+        """
+        projected = self.tables.text(self.ids)
+        self.embeddings = [projected[:, index : index + 1] for index in range(projected.shape[1])]
+        self.ids = []
+
+    def first(self):
+        """The one text token the prompt carries, projected on its own as upstream does."""
+        return self.tables.text([self.ids.pop(0)])
+
+    def next(self):
+        """The text embedding for the next frame: a token, then `tts_eos`, then pads."""
+        if not self.embeddings and self._ids():
+            self._project()
+        if self.embeddings:
+            return self.embeddings.pop(0)
+        if not self.sent_eos:
+            self.sent_eos = True
+            return self.tables.tts_eos
+        return self.tables.tts_pad
+
+    def take_ids(self, limit):
+        """Up to `limit` text ids, unprojected, for a caller that will project them itself.
+
+        The clone prompt sums the two tracks, so its text track has to be projected
+        alongside the reference transcript in one call to match upstream bit for bit. That
+        means handing the ids over rather than the embeddings. Pulls chunks until it has
+        `limit` of them or the text ends, which is what the prompt needs before it can
+        close: the clip's frame count fixes how much text the prompt swallows.
+        """
+        taken = []
+        while len(taken) < limit and self._ids():
+            taken.append(self.ids.pop(0))
+        return taken
+
+    def take_eos(self):
+        """The `tts_eos` that closes the text track, and the note that it has gone.
+
+        A prompt that swallows the whole text closes the track itself, and the feed must
+        then not synthesise a second `tts_eos` during decode. Getting that wrong left the
+        clone prompt's first decode position 0.068 away from upstream's, which is the size
+        of an embedding rather than the size of rounding.
+        """
+        self.sent_eos = True
+        return self.tables.tts_eos
+
+    def push_front(self, embeddings):
+        """Put positions back, for a prompt that took more of the text than it needed.
+
+        The clone prompt sums the two tracks and cuts to the shorter, which it cannot do
+        until it has seen how long the text is. Handing the surplus back beats projecting
+        those tokens twice, and keeps `next` the only place positions come from.
+        """
+        self.embeddings[:0] = [embeddings[:, index : index + 1] for index in range(embeddings.shape[1])]
+
+    @property
+    def spent(self):
+        """True once the text and its `tts_eos` have both gone in."""
+        return self.closed and not self.ids and not self.embeddings and self.sent_eos
+
+
+def build_streaming_prefill(text, speaker, language, tables=None):
+    """The dual-track prompt for streaming text input: ten positions, whatever the text.
+
+    Returns (embeddings [1, 10, 2048], `StreamingText`). The head is the same nine
+    positions every prompt opens with, and the tenth is the first text token against
+    `codec_bos`. Everything after that arrives during decode, one token per frame, which
+    is why the length does not depend on the text: a sentence and a paragraph both prefill
+    ten positions. Non-streaming spends `n_text + 11`.
+
+    `text` is a string, or an iterable of pieces. See `StreamingText`.
+    """
+    tables = tables or HostEmbeddings()
+    talker_config = checkpoint.talker_config()
+    speakers = talker_config["spk_id"]
+    if not speakers:
+        raise ValueError("this checkpoint defines no speakers; CustomVoice needs the CustomVoice weights")
+    key = str(speaker).strip().lower()
+    if key not in speakers:
+        raise ValueError(f"unknown speaker {speaker!r}; this checkpoint offers {', '.join(sorted(speakers))}")
+
+    feed = StreamingText(tables, text)
+    head, codec_bos = _prompt_head(
+        tables, frontend.role_ids(), resolve_language(language, key), tables.codec([speakers[key]])
+    )
+    return torch.cat([head, feed.first() + codec_bos], dim=1), feed
+
+
 def build_custom_voice_prefill(text, speaker, language, tables=None):
     """The dual-track prompt for CustomVoice, non-streaming.
 
@@ -377,6 +519,82 @@ def build_voice_design_prefill(text, instruction, language="Auto", tables=None):
     return torch.cat(parts, dim=1), prompt_ids
 
 
+def build_streaming_design_prefill(text, instruction, language="Auto", tables=None):
+    """The VoiceDesign prompt with streaming text input.
+
+    The instruction still goes in whole, ahead of everything: it describes the voice rather
+    than being spoken, so there is nothing to stream about it. Only the text to speak moves
+    to the per-frame schedule, which is why this is the CustomVoice change with the
+    instruction block in front and no speaker position.
+
+    Returns (embeddings [1, n_instruction + 9, 2048], `StreamingText`).
+    """
+    if not is_voice_design_checkpoint():
+        raise ValueError(
+            "an instruction needs the VoiceDesign checkpoint (this one is "
+            f"{checkpoint.model_config().get('tts_model_type')!r}); point $QWEN3_TTS_CKPT "
+            "or $HF_MODEL at Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign"
+        )
+
+    tables = tables or HostEmbeddings()
+    feed = StreamingText(tables, text)
+    head, codec_bos = _prompt_head(tables, frontend.role_ids(), resolve_language(language), None)
+
+    parts = [head, feed.first() + codec_bos]
+    if str(instruction or "").strip():
+        parts.insert(0, tables.text(frontend.instruction_ids(instruction)))
+    return torch.cat(parts, dim=1), feed
+
+
+def build_streaming_clone_prefill(text, reference, language="Auto", tables=None):
+    """The voice-clone prompt with streaming text input, which is a different shape again.
+
+    Upstream's `generate_icl_prompt` with `non_streaming_mode=False` does not put the two
+    tracks one after the other. It **sums them position by position** and cuts to the
+    shorter:
+
+        text track   the reference transcript, the text to speak, then `tts_eos`
+        codec track  `codec_bos`, then one summed embedding per reference frame
+
+    Whichever runs out first decides. A clip longer than the text (the usual case, since a
+    second of audio is 12.5 frames and a second of speech is a few words) pads the text
+    track with `tts_pad` and leaves nothing to stream, so the text track is spent inside
+    the prompt and decode adds pads: the same arithmetic as non-streaming, over a shorter
+    prompt. A text longer than the clip is the interesting case, and there the leftover
+    text becomes the per-frame track.
+
+    Returns (embeddings [1, 9 + max(T_text, T_codec), 2048], `StreamingText`), where the
+    feed is already positioned at whatever the prompt did not consume.
+    """
+    tables = tables or HostEmbeddings()
+    feed = StreamingText(tables, text)
+    reference_ids = frontend.reference_text_ids(reference.text)[ROLE_IDS:-REFERENCE_TAIL_IDS]
+    head, codec_bos = _prompt_head(tables, frontend.role_ids(), resolve_language(language), reference.speaker_embedding)
+
+    codec_track = torch.cat([codec_bos, tables.frames(reference.codes)], dim=1)
+    codec_lens = codec_track.shape[1]
+
+    # Reference transcript and text to speak projected in one call, as upstream does, then
+    # `tts_eos`. One call rather than two because the projection's accumulation order shows
+    # at 1e-7 and the point of this comparison is that nothing shows at all.
+    ids = list(reference_ids) + feed.take_ids(codec_lens)
+    text_track = torch.cat([tables.text(ids), feed.take_eos()], dim=1)
+
+    if text_track.shape[1] > codec_lens:
+        # A text longer than the clip. The prompt takes what the codec track covers and the
+        # rest is fed per frame, so the surplus goes back to the feed rather than being
+        # projected a second time.
+        feed.push_front(text_track[:, codec_lens:])
+        text_track = text_track[:, :codec_lens]
+    elif text_track.shape[1] < codec_lens:
+        # A clip longer than the text, which is the usual way round: the text track pads
+        # out to the clip and there is nothing left to stream. Decode then adds `tts_pad`
+        # at every frame, exactly as non-streaming does, over a shorter prompt.
+        text_track = torch.cat([text_track, tables.tts_pad.expand(-1, codec_lens - text_track.shape[1], -1)], dim=1)
+
+    return torch.cat([head, text_track + codec_track], dim=1), feed
+
+
 def build_voice_clone_prefill(text, reference, language="Auto", tables=None):
     """The dual-track prompt for voice cloning, non-streaming.
 
@@ -394,9 +612,8 @@ def build_voice_clone_prefill(text, reference, language="Auto", tables=None):
         reference frame, each against `tts_pad`. That block is what actually carries the
         voice.
 
-    In streaming mode the two tracks are summed position by position instead, and whatever
-    text is left over becomes the `trailing_text_hidden` fed in during decode. This
-    directory implements the non-streaming regime only; see the module docstring.
+    `build_streaming_clone_prefill` is the other regime, which sums the two tracks instead
+    of placing one after the other.
     """
     tables = tables or HostEmbeddings()
     talker_config = checkpoint.talker_config()
@@ -502,9 +719,16 @@ class Qwen3TTSPipeline:
             generator=self.generator,
         )
 
-    def _frame_embedding(self, frame):
-        """The 16 codebooks of one frame, summed against `tts_pad`: the next prompt position."""
-        return self.tables.frames(frame) + self.tables.tts_pad
+    def _frame_embedding(self, frame, feed=None):
+        """The 16 codebooks of one frame, summed against the text track's next position.
+
+        With no `feed` the text track is a constant `tts_pad`, which is what non-streaming
+        mode sends after its prompt. With one, it is the next text embedding: streaming
+        input differs from non-streaming in exactly this line and in how much of the text
+        the prompt carried.
+        """
+        text = self.tables.tts_pad if feed is None else feed.next()
+        return self.tables.frames(frame) + text
 
     def reseed(self, seed=None):
         """Restart the sampler from `seed`, or make it unseeded again.
@@ -552,7 +776,7 @@ class Qwen3TTSPipeline:
         self.last_timings["codec_padded_frames"] = self.codec.padded_frames(frames)
         return waveform
 
-    def _decode_frames(self, embeddings, limit, on_frame=None):
+    def _decode_frames(self, embeddings, limit, on_frame=None, feed=None):
         """Prefill the prompt, then sample frames until end of speech. Returns codes [T, 16].
 
         A prefill is eager work, and eager work beside a live trace is what hangs the
@@ -606,7 +830,7 @@ class Qwen3TTSPipeline:
             if on_frame is not None:
                 on_frame(step, frame)
             watch.restart()
-            embedding = self._frame_embedding(frame)
+            embedding = self._frame_embedding(frame, feed)
             watch.split("embed")
             last = self.talker.step(embedding, prompt + step)
             watch.split("talker")
@@ -621,7 +845,7 @@ class Qwen3TTSPipeline:
             raise RuntimeError("the talker emitted end-of-speech before any frame")
         return torch.tensor(frames, dtype=torch.long)
 
-    def codes(self, text, speaker="ryan", language="English", max_frames=None, on_frame=None):
+    def codes(self, text, speaker="ryan", language="English", max_frames=None, on_frame=None, streaming=False):
         """The frames for `text` without decoding them, [frames, 16].
 
         `generate` is this plus the codec. Separate because the codec is the one block that
@@ -630,22 +854,27 @@ class Qwen3TTSPipeline:
         the codes to something other than this codec can use it too.
         """
         limit = min(max_frames or self.max_frames, self.max_frames)
-        embeddings, _ = build_custom_voice_prefill(text, speaker, language, self.tables)
-        return self._decode_frames(embeddings, limit, on_frame)
+        if streaming:
+            embeddings, feed = build_streaming_prefill(text, speaker, language, self.tables)
+        else:
+            embeddings, feed = build_custom_voice_prefill(text, speaker, language, self.tables)[0], None
+        return self._decode_frames(embeddings, limit, on_frame, feed=feed)
 
-    def generate(self, text, speaker="ryan", language="English", max_frames=None, on_frame=None):
+    def generate(self, text, speaker="ryan", language="English", max_frames=None, on_frame=None, streaming=False):
         """text -> (waveform [1, N] at 24 kHz, codes [frames, 16]).
 
         Sampled with the checkpoint's own settings. Pass `seed` to the constructor for a
         reproducible run; the same seed and text give the same waveform.
+
+        `streaming=True` switches to the other regime this model was trained in: the prompt
+        carries one text token and the rest arrives a token per frame, so `text` may be an
+        iterable of pieces rather than a string. `StreamingText` has the schedule.
         """
-        limit = min(max_frames or self.max_frames, self.max_frames)
-        embeddings, _ = build_custom_voice_prefill(text, speaker, language, self.tables)
-        codes = self._decode_frames(embeddings, limit, on_frame)
+        codes = self.codes(text, speaker, language, max_frames, on_frame, streaming)
         waveform = self._decode_waveform(codes.t().unsqueeze(0)).reshape(1, -1)
         return waveform, codes
 
-    def generate_design(self, text, instruction, language="Auto", max_frames=None, on_frame=None):
+    def generate_design(self, text, instruction, language="Auto", max_frames=None, on_frame=None, streaming=False):
         """text spoken in a voice described in words -> (waveform [1, N], codes [frames, 16]).
 
         Needs the **VoiceDesign** checkpoint, the third release: `tts_model_type` reads
@@ -655,14 +884,20 @@ class Qwen3TTSPipeline:
         `instruction` is a sentence of English describing the voice, such as "A calm older
         man speaking slowly, with a slight rasp." An empty one is allowed, and leaves the
         model to invent a voice. `build_voice_design_prefill` refuses the other releases.
+
+        `streaming=True` moves the text to the per-frame schedule. The instruction still
+        goes in whole: it describes the voice rather than being spoken.
         """
         limit = min(max_frames or self.max_frames, self.max_frames)
-        embeddings, _ = build_voice_design_prefill(text, instruction, language, self.tables)
-        codes = self._decode_frames(embeddings, limit, on_frame)
+        if streaming:
+            embeddings, feed = build_streaming_design_prefill(text, instruction, language, self.tables)
+        else:
+            embeddings, feed = build_voice_design_prefill(text, instruction, language, self.tables)[0], None
+        codes = self._decode_frames(embeddings, limit, on_frame, feed=feed)
         waveform = self._decode_waveform(codes.t().unsqueeze(0)).reshape(1, -1)
         return waveform, codes
 
-    def generate_clone(self, text, reference, language="Auto", max_frames=None, on_frame=None):
+    def generate_clone(self, text, reference, language="Auto", max_frames=None, on_frame=None, streaming=False):
         """text spoken in a reference clip's voice -> (waveform [1, N], codes [frames, 16]).
 
         `reference` comes from `build_clone_reference`, which needs the **Base** checkpoint:
@@ -673,10 +908,18 @@ class Qwen3TTSPipeline:
         the codec decoder is causal, so the first generated frames read the reference's
         codes as context, and decoding them alone gives a different and worse onset. Each
         frame is exactly 1920 samples, so the cut is exact.
+
+        `streaming=True` sums the two tracks instead of placing one after the other, which
+        `build_streaming_clone_prefill` explains. It shortens the prompt and it does not
+        make the clip optional: the prompt still swallows as much text as the clip has
+        frames before it can close.
         """
         limit = min(max_frames or self.max_frames, self.max_frames)
-        embeddings, _ = build_voice_clone_prefill(text, reference, language, self.tables)
-        codes = self._decode_frames(embeddings, limit, on_frame)
+        if streaming:
+            embeddings, feed = build_streaming_clone_prefill(text, reference, language, self.tables)
+        else:
+            embeddings, feed = build_voice_clone_prefill(text, reference, language, self.tables)[0], None
+        codes = self._decode_frames(embeddings, limit, on_frame, feed=feed)
 
         together = torch.cat([reference.codes.t(), codes], dim=0)
         waveform = self._decode_waveform(together.t().unsqueeze(0)).reshape(1, -1)

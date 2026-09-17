@@ -129,6 +129,7 @@ def run(
     max_frames=400,
     ckpt=None,
     similarity=True,
+    streaming=False,
 ):
     """Speak `text` in the `ref` clip's voice, as a named `speaker`, or as `instruct` describes.
 
@@ -185,11 +186,11 @@ def run(
         print("  the first utterance compiles its kernels; later ones in the same process do not")
         started = time.time()
         if ref:
-            waveform, codes = pipeline.generate_clone(text, reference, language=tag)
+            waveform, codes = pipeline.generate_clone(text, reference, language=tag, streaming=streaming)
         elif instruct:
-            waveform, codes = pipeline.generate_design(text, instruct, language=tag)
+            waveform, codes = pipeline.generate_design(text, instruct, language=tag, streaming=streaming)
         else:
-            waveform, codes = pipeline.generate(text, speaker=speaker, language=tag)
+            waveform, codes = pipeline.generate(text, speaker=speaker, language=tag, streaming=streaming)
         elapsed = time.time() - started
 
         spoken = waveform.reshape(-1)
@@ -244,6 +245,11 @@ def main():
     parser.add_argument("--ref-text", help="What the reference clip says, word for word. Required with --ref")
     parser.add_argument("--speaker", help="A built-in CustomVoice speaker instead of a clone (e.g. ryan)")
     parser.add_argument("--instruct", help="Describe the voice in words instead (VoiceDesign checkpoint)")
+    parser.add_argument(
+        "--streaming",
+        action="store_true",
+        help="Stream the text in a token per frame instead of putting it all in the prompt",
+    )
     parser.add_argument("--out", default="out.wav", help="Output wav path (default: out.wav)")
     parser.add_argument("--seed", type=int, default=None, help="Sampling seed (default: unseeded)")
     parser.add_argument("--language", default=None, help="Language name (default: Auto to clone, English otherwise)")
@@ -260,6 +266,7 @@ def main():
         ref_text=args.ref_text,
         speaker=args.speaker,
         instruct=args.instruct,
+        streaming=args.streaming,
         out=args.out,
         seed=args.seed,
         language=args.language,

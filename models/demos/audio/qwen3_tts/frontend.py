@@ -92,9 +92,21 @@ def language_id(language):
 # ── prompt wrappers ─────────────────────────────────────────────────────────
 
 
+ROLE_PREFIX = "<|im_start|>assistant\n"
+
+
 def assistant_prompt(text):
     """The text to speak, followed by an open assistant turn for the model to continue."""
-    return f"<|im_start|>assistant\n{text}<|im_end|>\n<|im_start|>assistant\n"
+    return f"{ROLE_PREFIX}{text}<|im_end|>\n<|im_start|>assistant\n"
+
+
+def role_ids():
+    """The three ids every prompt opens with, without tokenising any text.
+
+    Streaming input needs them before it has the text, since its prompt carries one token
+    and the rest arrives per frame.
+    """
+    return encode(ROLE_PREFIX)
 
 
 def reference_prompt(text):

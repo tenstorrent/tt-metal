@@ -25,6 +25,7 @@ Bring-up in progress. This directory holds what is finished, and nothing that is
 | 9 | Codec encoder, waveform → codes | device | **done**, latents PCC 0.9999 |
 | 10 | Voice clone: reference clip → prompt → speech | host + device | **done**, prompt bit-exact |
 | 11 | VoiceDesign: a voice described in a sentence | host + device | **done**, prompt bit-exact |
+| 12 | Streaming text input, all three voice modes | host + device | **done**, prompt bit-exact |
 
 The speaker encoder reads a reference clip and emits one 2048-wide vector, which occupies a
 single position of the talker's prompt. Its width matches the talker's hidden size, so
@@ -125,9 +126,8 @@ voice. The first utterance in a process pays its compiles instead, 14.2 s for th
 The speaker encoder answers whether the voice carried over. Cosine between the reference
 clip's vector and the clone's: **0.9832**, against about 0.82 for an unrelated voice.
 
-Streaming text input is the one regime still missing. With `non_streaming_mode=False`
-upstream sums the two tracks position by position and feeds whatever text is left over
-during decode, as a real `trailing_text_hidden` rather than a constant pad.
+A clone can also run in the streaming regime, where the two tracks are summed instead of
+placed one after the other. See **Streaming text input**.
 
 ## Voice design
 
@@ -157,6 +157,68 @@ Whether the instruction reaches the voice is measurable two ways. At a fixed see
 it moves 382 of 384 codes. And the Base checkpoint's speaker encoder puts two designs of the
 same sentence at cosine **0.8923**, against 0.99 for one speaker and 0.82 for an unrelated
 pair, so the description carries most of the way.
+
+## Streaming text input
+
+The second regime this model was trained in, and upstream's default: `non_streaming_mode=False`.
+The only difference is **when** each text token reaches the model.
+
+| | non-streaming | streaming |
+|---|---|---|
+| prompt, CustomVoice | `n_text + 11` positions | **10**, whatever the text |
+| text during decode | a constant `tts_pad` | the next text token, one per frame |
+| text needed to start | all of it | the first token |
+
+```python
+waveform, codes = pipeline.generate("The kettle is on.", speaker="ryan", streaming=True)
+
+# or hand the text over as it arrives
+waveform, codes = pipeline.generate(sentences_from_somewhere(), speaker="ryan", streaming=True)
+```
+
+`generate`, `generate_design` and `generate_clone` all take `streaming=True`, and the demos
+take `--streaming`.
+
+**What it buys.** The prompt stops growing with the text, so the prefill is a fixed ten
+positions instead of one per token: a paragraph prefills what a sentence does. And the text
+does not have to exist when generation starts, which is the part upstream leaves out. Its
+own docstring is careful about that: the flag "only simulates streaming text input", since
+it knows the whole string up front and changes nothing but the schedule. Here `text` may be
+an iterable, and any piece that lands before the frame that needs it is indistinguishable
+from having had the whole string. `StreamingText` carries the schedule.
+
+The caveat with pieces is tokenisation: each piece is tokenised on its own, so a merge that
+would have spanned a boundary does not happen. `"kettle"` is `[74, 47626]` whole and
+`[25475, 11239]` split after three letters. Feed whole words, and prefer whole clauses.
+
+**The clone prompt is a different shape again.** Upstream's ICL streaming does not put the
+tracks one after the other; it sums them position by position and cuts to the shorter. The
+reference transcript and the text to speak share the positions the clip's codes occupy, and
+a text longer than the clip leaves the surplus to stream. A clip longer than the text, which
+is the usual way round, pads the text track out and leaves nothing to stream, so decode adds
+pads exactly as non-streaming does over a shorter prompt. Streaming a clone therefore still
+waits for as much text as the clip has frames before the prompt can close.
+
+**Verified against upstream, position by position.** Prompts and text tracks captured at the
+talker's own door under transformers 4.57.3 and diffed: **max absolute difference 0.0**
+across twelve comparisons, four CustomVoice cases (short, longer, `Auto`, a dialect speaker)
+and two clone cases (a text shorter than the clip and one longer), each in both regimes. Two
+things that comparison caught, both of which PCC would have shrugged at and a listener might
+not: a second `tts_eos` after a prompt that had already closed the text track, 0.068 away
+from upstream; and projecting the reference transcript separately from the text, 7.5e-08
+away. `tests/pcc/test_streaming_pcc.py` pins both.
+
+**Does it speak better?** Upstream's claim is that non-streaming is where the sampler
+wanders, and the frame counts agree. Six seeds, frames per word:
+
+| text | non-streaming | streaming |
+|---|---|---|
+| 4 words | 3.2, 9.8, 3.2, 5.8, 4.0, 3.8 | 6.2, 7.5, 4.2, 5.2, 5.8, 3.8 |
+| 14 words | 9.1, 5.1, 3.3, 5.8, 4.6, 3.5 | 6.0, 5.1, 3.9, 4.3, 3.8, 3.9 |
+
+Streaming's worst case is tighter on both (7.5 against 9.8, and 6.0 against 9.1) and its
+spread is narrower, which is what less wandering looks like. Neither regime is uniformly
+faster per word, and whether the speech is *better* is not something frame counts settle.
 
 ## Speed
 

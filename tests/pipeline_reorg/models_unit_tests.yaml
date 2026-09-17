@@ -881,7 +881,7 @@
     export TT_METAL_WATCHER=30
     export HF_HUB_OFFLINE=0 HF_HOME=/mnt/MLPerf/huggingface HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub
     export HF_MODEL=Qwen/Qwen3-TTS-12Hz-1.7B-Base TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-TTS-12Hz-1.7B-Base
-    # 270 s wall on a warm cache: checkpoint layout and text front-end on host, then the
+    # 300 s wall on a warm cache: checkpoint layout and text front-end on host, then the
     # speaker encoder, talker, code predictor, codec decoder, the end-to-end pipeline and
     # sixteen full generations on device. The timeout covers a first run, which pays both a
     # 3.6 GB checkpoint download into the shared cache and a cold kernel build. Revisit it
@@ -913,6 +913,9 @@
     # test here that catches a change which leaves every per-position number intact and
     # still makes the model run past the end of its text.
     pytest --timeout 900 models/demos/audio/qwen3_tts/tests/pcc/test_generation_stops.py
+    # Streaming text input, the second regime: one token per frame instead of all of it in
+    # the prompt. Mostly host assembly, which is where that regime can go wrong.
+    pytest --timeout 900 models/demos/audio/qwen3_tts/tests/pcc/test_streaming_pcc.py
   model: qwen3-tts-1.7b-base
   model_family: Qwen3-TTS
   skus:

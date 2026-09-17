@@ -69,6 +69,11 @@ def main():
     parser.add_argument("--ref-text", help="What the reference clip says, word for word. Required with --ref")
     parser.add_argument("--speaker", help="A built-in CustomVoice speaker instead of a clone (e.g. ryan)")
     parser.add_argument("--instruct", help="Describe the voice in words instead (VoiceDesign checkpoint)")
+    parser.add_argument(
+        "--streaming",
+        action="store_true",
+        help="Stream the text in a token per frame instead of putting it all in the prompt",
+    )
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED, help=f"Base sampling seed (default: {DEFAULT_SEED})")
     parser.add_argument("--language", default=None, help="Language name (default: Auto to clone, English otherwise)")
     parser.add_argument("--max-frames", type=int, default=400, help="Frame budget, 12.5 a second (default: 400)")
@@ -181,11 +186,17 @@ def main():
                 pipeline.reseed(seed + index)
                 started = time.time()
                 if reference is not None:
-                    waveform, codes = pipeline.generate_clone(line, reference, language=language or "Auto")
+                    waveform, codes = pipeline.generate_clone(
+                        line, reference, language=language or "Auto", streaming=args.streaming
+                    )
                 elif instruct:
-                    waveform, codes = pipeline.generate_design(line, instruct, language=language or "Auto")
+                    waveform, codes = pipeline.generate_design(
+                        line, instruct, language=language or "Auto", streaming=args.streaming
+                    )
                 else:
-                    waveform, codes = pipeline.generate(line, speaker=speaker, language=language or "English")
+                    waveform, codes = pipeline.generate(
+                        line, speaker=speaker, language=language or "English", streaming=args.streaming
+                    )
                 elapsed = time.time() - started
 
                 spoken = waveform.reshape(-1)
