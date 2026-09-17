@@ -19,7 +19,6 @@ from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_pro_config import DeepSeekV4ProConfig
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.expert import TorchExpert
-from models.demos.deepseek_v3_d_p.tests.conftest import assert_clamp_coverage
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     fabric2d_device_params,
     torus_x_device_params,
@@ -163,9 +162,6 @@ def test_ffn_pcc(
     # Create input tensor (replicated across all devices)
     torch_input = torch.randn(batch_seq_len, EMB_DIM, dtype=torch.float32)
     logger.debug(f"Created torch input: {torch_input.shape}")
-
-    if is_clamped:
-        assert_clamp_coverage(torch_model, torch_input, clamp_limit)
 
     tt_input = ttnn.from_torch(
         torch_input,

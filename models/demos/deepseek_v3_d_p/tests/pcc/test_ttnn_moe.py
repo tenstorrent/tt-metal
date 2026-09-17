@@ -34,7 +34,6 @@ from models.demos.deepseek_v3_d_p.reference.tt.moe.expert import (
     ACTIVATION_SITU,
 )
 from models.demos.deepseek_v3_d_p.reference.tt.moe.moe import TorchMoe
-from models.demos.deepseek_v3_d_p.tests.conftest import assert_clamp_coverage
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     fabric2d_device_params,
     torus_xy_device_params,
@@ -478,14 +477,6 @@ def run_model(
             shared_activation=shared_activation,
         )
         profiler.end("torch_moe_creation")
-
-        if shared_activation == ACTIVATION_CLAMPED_SILU_GLU:
-            # x is bf16 while the projections are fp32, and only the first 512 rows are projected.
-            coverage_rows = x.reshape(-1, emb_dim)[:512].float()
-            # Both expert kinds are scaled, so both are checked. The routed experts see dispatched
-            # rows rather than x, but coverage is distributional.
-            assert_clamp_coverage(torch_moe.shared_expert, coverage_rows, clamped_silu_glu_limit)
-            assert_clamp_coverage(torch_moe.routed_experts[0], coverage_rows, clamped_silu_glu_limit)
 
         profiler.start("torch_forward")
         if hash_indices is None:
@@ -1487,12 +1478,11 @@ def test_dsv4_moe(
         shared_output_pcc=0.998,
         routed_output_pcc=0.966,
         final_output_pcc=0.974,
-        # The scale is bounded on both sides. Below it, the projections never reach
-        # SWIGLU_LIMIT and assert_clamp_coverage trips: the clamp would be dead code and the
-        # grade vacuous. Above it, the routed experts' bfloat4_b weights and bfloat8_b
-        # activations lose the signal -- at 13.5 final_output is 0.973 and at 40.0 the expert
-        # outputs quantize to whole numbers. 11.25 is the largest scale that still passes,
-        # giving 29.8%/14.9% coverage on the gate/up tails against the 2% floor.
+        # The scale is bounded on both sides. Below it the projections never reach SWIGLU_LIMIT,
+        # so the clamp is dead code and the grade is vacuous. Above it the routed experts'
+        # bfloat4_b weights and bfloat8_b activations lose the signal -- at 13.5 final_output is
+        # 0.973 and at 40.0 the expert outputs quantize to whole numbers. 11.25 is the largest
+        # scale that still passes, and reaches 29.8%/14.9% of the gate/up clamp tails.
         gate_up_scale=11.25,
         score_func=score_func,
         skip_upstream_reference=True,

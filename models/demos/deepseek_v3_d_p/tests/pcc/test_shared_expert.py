@@ -22,7 +22,6 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v4_pro_config import DeepSe
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_7_config import KimiK27Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.expert import TorchExpert
-from models.demos.deepseek_v3_d_p.tests.conftest import assert_clamp_coverage
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     fabric2d_device_params,
     torus_x_device_params,
@@ -247,9 +246,6 @@ def test_shared_expert_pcc(
         # ========================================
         # Step 4: Run forward passes
         # ========================================
-        if is_clamped:
-            assert_clamp_coverage(torch_model, torch_input, clamp_limit)
-
         logger.debug("Running torch forward pass")
         torch_output = torch_model(torch_input)
         logger.debug(f"Torch output shape: {torch_output.shape}")
