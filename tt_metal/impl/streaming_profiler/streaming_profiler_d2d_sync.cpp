@@ -95,7 +95,7 @@ void D2dSyncConsumer::on_clock(const ClockSample& s) {
     LinkRounds& lr = links_[li];
     Round& r = lr.pending[s.round];
     r.id = s.round;
-    r.*slot = Stamp{.value = s.value, .have = true};
+    r.*slot = Stamp{.units = s.value, .have = true};
     if (r.complete()) {
         lr.rounds.push_back(r);
         lr.pending.erase(s.round);
@@ -132,11 +132,11 @@ void D2dSyncConsumer::try_solve_links(bool final) {
         if (n == 0) {
             continue;
         }
-        const auto pos = [](const Round& r) { return mid_a(r); };
+        const auto pos = [](const Round& r) { return mid_a_refclk(r); };
         const double newest = pos(rounds[n - 1]);
         // Live: the first solution once kFirstSolveTicks of rounds are in, so held records are released, then one
         // every half window. Final: whatever the window holds, if it is enough for a fit at all.
-        if (!final && (out.ok ? newest < out.solved_at + kLinkWindowTicks / 2
+        if (!final && (out.ok ? newest < out.solved_at_refclk + kLinkWindowTicks / 2
                               : newest - pos(rounds[0]) < kFirstSolveTicks)) {
             continue;
         }
@@ -148,7 +148,7 @@ void D2dSyncConsumer::try_solve_links(bool final) {
         if (w < kMinSolveRounds) {
             continue;
         }
-        out.solved_at = newest;
+        out.solved_at_refclk = newest;
         std::vector<RoundPoint> pts;
         pts.reserve(w);
         const double path_med = path_median(rounds, begin, n);
@@ -159,8 +159,8 @@ void D2dSyncConsumer::try_solve_links(bool final) {
                 out.path_dropped++;
                 continue;
             }
-            const double mid = mid_a(r);
-            pts.push_back(RoundPoint{mid, mid_b(r) - mid});
+            const double mid = mid_a_refclk(r);
+            pts.push_back(RoundPoint{mid, mid_b_refclk(r) - mid});
         }
         if (solve_link(L, std::move(pts), out)) {
             out.rounds = w;
@@ -174,20 +174,20 @@ void D2dSyncConsumer::try_solve_links(bool final) {
                 n,
                 w,
                 out.kept,
-                out.offset_ns,
-                out.rate_ppm,
+                out.offset_refclk * kNsPerRefclk,
+                out.rate * 1e6,
                 out.residual_rms_ns,
                 out.path_dropped != 0 ? fmt::format(", {} rounds off the stamp path band", out.path_dropped) : "");
         }
     }
 }
 
-double D2dSyncConsumer::mid_a(const Round& r) {
-    return 0.5 * (static_cast<double>(r.t0.value) + static_cast<double>(r.t2.value)) * kHwUnitTicks;
+double D2dSyncConsumer::mid_a_refclk(const Round& r) {
+    return 0.5 * (static_cast<double>(r.t0.units) + static_cast<double>(r.t2.units)) * kRefclkPerStampUnit;
 }
 
-double D2dSyncConsumer::mid_b(const Round& r) {
-    return 0.5 * (static_cast<double>(r.t1.value) + static_cast<double>(r.t1b.value)) * kHwUnitTicks;
+double D2dSyncConsumer::mid_b_refclk(const Round& r) {
+    return 0.5 * (static_cast<double>(r.t1.units) + static_cast<double>(r.t1b.units)) * kRefclkPerStampUnit;
 }
 
 double D2dSyncConsumer::path_median(const std::vector<Round>& rounds, size_t begin, size_t n) {
@@ -238,28 +238,26 @@ std::vector<D2dSyncConsumer::LinkSolution> D2dSyncConsumer::pair_solutions(
             double wsum = 0, mid = 0;
             for (size_t li : g) {
                 wsum += weight(li);
-                mid += weight(li) * solved_[li].mid;
+                mid += weight(li) * solved_[li].mid_refclk;
             }
             mid /= wsum;
             double rate = 0, offset = 0, rr = 0;
             c.rounds = c.kept = c.path_dropped = 0;
-            c.solved_at = 0.0;
+            c.solved_at_refclk = 0.0;
             for (size_t li : g) {
                 const LinkSolution& s = solved_[li];
                 const double w = weight(li) / wsum;
                 rate += w * s.rate;
-                offset += w * (s.offset_ticks + s.rate * (mid - s.mid));
+                offset += w * (s.offset_refclk + s.rate * (mid - s.mid_refclk));
                 rr += w * s.residual_rms_ns * s.residual_rms_ns;
                 c.rounds += s.rounds;
                 c.kept += s.kept;
                 c.path_dropped += s.path_dropped;
-                c.solved_at = std::max(c.solved_at, s.solved_at);
+                c.solved_at_refclk = std::max(c.solved_at_refclk, s.solved_at_refclk);
             }
-            c.mid = mid;
+            c.mid_refclk = mid;
             c.rate = rate;
-            c.offset_ticks = offset;
-            c.offset_ns = offset * 20.0;
-            c.rate_ppm = rate * 1e6;
+            c.offset_refclk = offset;
             c.residual_rms_ns = std::sqrt(rr);
             c.precision_ns = 1.0 / std::sqrt(wsum);
         }
@@ -297,7 +295,7 @@ std::map<uint32_t, D2dSyncConsumer::RootXf> D2dSyncConsumer::root_transforms(
                 continue;
             }
             const double m = 1.0 + s.rate;  // receiver = m * sender + o
-            const double o = s.offset_ticks - s.rate * s.mid;
+            const double o = s.offset_refclk - s.rate * s.mid_refclk;
             const auto rs = to_root.find(s.dev_rcv);
             const auto ss = to_root.find(s.dev_snd);
             const bool r_ok = rs != to_root.end() && rs->second.ok;
@@ -591,8 +589,8 @@ void D2dSyncConsumer::log_summary() const {
             L.eth_b.y,
             s.rounds,
             s.kept,
-            s.offset_ns,
-            s.rate_ppm,
+            s.offset_refclk * kNsPerRefclk,
+            s.rate * 1e6,
             s.residual_rms_ns,
             s.precision_ns);
     }
@@ -613,8 +611,9 @@ void D2dSyncConsumer::log_summary() const {
             if (S == to_root.end() || R == to_root.end() || !S->second.ok || !R->second.ok) {
                 continue;
             }
-            const double direct = (1.0 + s.rate) * s.mid + (s.offset_ticks - s.rate * s.mid);
-            const double via_tree = (S->second.scale * s.mid + S->second.shift - R->second.shift) / R->second.scale;
+            const double direct = (1.0 + s.rate) * s.mid_refclk + (s.offset_refclk - s.rate * s.mid_refclk);
+            const double via_tree =
+                (S->second.scale * s.mid_refclk + S->second.shift - R->second.shift) / R->second.scale;
             if (pair_size(li) > 1) {
                 log_info(
                     tt::LogMetal,
@@ -624,7 +623,7 @@ void D2dSyncConsumer::log_summary() const {
                     ctx_.links[li].eth_a.x,
                     ctx_.links[li].eth_a.y,
                     ctx_.links[li].chip_b,
-                    (via_tree - direct) * 20.0);
+                    (via_tree - direct) * kNsPerRefclk);
             } else {
                 log_info(
                     tt::LogMetal,
@@ -632,7 +631,7 @@ void D2dSyncConsumer::log_summary() const {
                     "asymmetry around the loop, solutions good to ~{:.1f} ns each)",
                     ctx_.links[li].chip_a,
                     ctx_.links[li].chip_b,
-                    (via_tree - direct) * 20.0,
+                    (via_tree - direct) * kNsPerRefclk,
                     s.precision_ns);
             }
         }
@@ -653,11 +652,11 @@ bool D2dSyncConsumer::solve_link(const CaptureContext::Link& L, std::vector<Roun
     if (pts.size() < 4) {
         return false;
     }
-    double mid0 = pts.front().mid;
+    double mid0 = pts.front().mid_refclk;
     long double mid_acc = 0;
     for (const RoundPoint& p : pts) {
-        mid0 = std::min(mid0, p.mid);
-        mid_acc += p.mid;
+        mid0 = std::min(mid0, p.mid_refclk);
+        mid_acc += p.mid_refclk;
     }
     std::vector<char> keep(pts.size(), 1);
     double inter = 0.0, slope = 0.0, rms = 0.0;
@@ -669,7 +668,7 @@ bool D2dSyncConsumer::solve_link(const CaptureContext::Link& L, std::vector<Roun
             if (!keep[i]) {
                 continue;
             }
-            const double x = pts[i].mid - mid0, y = pts[i].off;
+            const double x = pts[i].mid_refclk - mid0, y = pts[i].off_refclk;
             sx += x;
             sy += y;
             sxx += x * x;
@@ -686,7 +685,7 @@ bool D2dSyncConsumer::solve_link(const CaptureContext::Link& L, std::vector<Roun
         double ss = 0;
         for (size_t i = 0; i < pts.size(); i++) {
             if (keep[i]) {
-                const double res = pts[i].off - (inter + slope * (pts[i].mid - mid0));
+                const double res = pts[i].off_refclk - (inter + slope * (pts[i].mid_refclk - mid0));
                 ss += res * res;
             }
         }
@@ -696,35 +695,35 @@ bool D2dSyncConsumer::solve_link(const CaptureContext::Link& L, std::vector<Roun
         }
         const double cut = 3.0 * std::max(rms, 0.5);
         for (size_t i = 0; i < pts.size(); i++) {
-            if (keep[i] && std::abs(pts[i].off - (inter + slope * (pts[i].mid - mid0))) > cut) {
+            if (keep[i] && std::abs(pts[i].off_refclk - (inter + slope * (pts[i].mid_refclk - mid0))) > cut) {
                 keep[i] = 0;
             }
         }
     }
-    if (!std::isfinite(inter) || !std::isfinite(slope) || std::abs(slope) > 1e-4 || rms * 20.0 > 1e6) {
+    if (!std::isfinite(inter) || !std::isfinite(slope) || std::abs(slope) > 1e-4 || rms * kNsPerRefclk > 1e6) {
         log_warning(
             tt::LogMetal,
-            "[streaming profiler] d2d sync link chip {} -> chip {}: link solution refused (offset {:.1f} ns, rate {:.3f} ppm, "
+            "[streaming profiler] d2d sync link chip {} -> chip {}: link solution refused (offset {:.1f} ns, rate "
+            "{:.3f} ppm, "
             "residual {:.1f} ns); keeping the previous one",
             L.chip_a,
             L.chip_b,
-            inter * 20.0,
+            inter * kNsPerRefclk,
             slope * 1e6,
-            rms * 20.0);
+            rms * kNsPerRefclk);
         return false;
     }
     out.ok = true;
     out.dev_snd = L.dev_a;
     out.dev_rcv = L.dev_b;
     out.rate = slope;
-    out.mid = static_cast<double>(mid_acc / static_cast<long double>(pts.size()));
+    out.mid_refclk = static_cast<double>(mid_acc / static_cast<long double>(pts.size()));
     // The fit's intercept sits at mid0, the window's first round; the solution is read as offset + rate * (mid -
-    // out.mid), so move it to the mean or every consumer carries rate * half a window (0.45 ppm * 0.5 s = 225 ns).
-    out.offset_ticks = inter + slope * (out.mid - mid0);
-    out.offset_ns = out.offset_ticks * 20.0;
-    out.rate_ppm = slope * 1e6;
-    out.residual_rms_ns = rms * 20.0;
-    out.precision_ns = rms * 20.0 / std::sqrt(static_cast<double>(nk));
+    // out.mid_refclk), so move it to the mean or every consumer carries rate * half a window (0.45 ppm * 0.5 s = 225
+    // ns).
+    out.offset_refclk = inter + slope * (out.mid_refclk - mid0);
+    out.residual_rms_ns = rms * kNsPerRefclk;
+    out.precision_ns = rms * kNsPerRefclk / std::sqrt(static_cast<double>(nk));
     out.rounds = pts.size();
     out.kept = nk;
     return true;
@@ -744,8 +743,8 @@ bool D2dSyncConsumer::round_error(
     if (pa == published_.end() || pb == published_.end() || pa->second.nodes.empty() || pb->second.nodes.empty()) {
         return false;
     }
-    const double wa = la->second.wall_at(mid_a(r));
-    const double wb = lb->second.wall_at(mid_b(r));
+    const double wa = la->second.wall_at(mid_a_refclk(r));
+    const double wb = lb->second.wall_at(mid_b_refclk(r));
     if (wa <= 0.0 || wb <= 0.0) {
         return false;
     }
@@ -755,7 +754,7 @@ bool D2dSyncConsumer::round_error(
     t.root_a = map_.lookup_root(ctx_.devices[L.dev_a].chip_id, std::llround(wa));
     t.root_b = map_.lookup_root(ctx_.devices[L.dev_b].chip_id, std::llround(wb));
     tsc_a = std::llround(map_.host_tsc(t.root_a));
-    err = (t.root_b - t.root_a) * (1e9 / LocalClockModel::kRefclkHz);
+    err = (t.root_b - t.root_a) * kNsPerRefclk;
     if (terms != nullptr) {
         *terms = t;
     }
@@ -802,8 +801,8 @@ void D2dSyncConsumer::publish_error_plots() const {
             terms.push_back(t);
             se += e;
             ss += static_cast<long double>(e) * e;
-            raw_x.push_back(mid_a(r));
-            raw_y.push_back(mid_b(r) - raw_x.back());
+            raw_x.push_back(mid_a_refclk(r));
+            raw_y.push_back(mid_b_refclk(r) - raw_x.back());
             rtt.push_back(rtt_ns(r));
             path.push_back(path_ns(r));
             turn.push_back(rtt.back() - 2.0 * path.back());
@@ -829,7 +828,7 @@ void D2dSyncConsumer::publish_error_plots() const {
                 const long double den = static_cast<long double>(m) * sxx - sx * sx;
                 const long double b = den > 0 ? (static_cast<long double>(m) * sxy - sx * sy) / den : 0;
                 const long double a = (sy - b * sx) / static_cast<long double>(m);
-                resid[i] = static_cast<double>((raw_y[i] - a) * 20.0);
+                resid[i] = static_cast<double>((raw_y[i] - a) * kNsPerRefclk);
                 srr += static_cast<long double>(resid[i]) * resid[i];
             }
         }

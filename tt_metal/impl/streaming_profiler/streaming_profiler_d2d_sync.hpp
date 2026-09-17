@@ -157,9 +157,9 @@ public:
 
 private:
     PlacementMap map_;
-    // One end's stamp of a round: the reading, in quarter-ns of the refclk domain.
+    // One end's stamp of a round: the reading, in the link's stamp units of the refclk domain.
     struct Stamp {
-        uint64_t value = 0;
+        uint64_t units = 0;
         bool have = false;
     };
     // A round under the number the sender gave it, with both ends' stamps: the sender's frame egress and echo
@@ -176,26 +176,27 @@ private:
         std::vector<Round> rounds;
         std::map<uint32_t, Round> pending;
     };
-    // A solved link: receiver refclk = sender refclk + offset + rate * (sender refclk - mid).
+    // A solved link: receiver refclk = sender refclk + offset_refclk + rate * (sender refclk - mid_refclk).
     struct LinkSolution {
         bool ok = false;
-        double solved_at = 0.0;     // the sender chip's refclk at the newest round of the last solve
-        double precision_ns = 0.0;  // residual_rms_ns / sqrt(kept): the offset estimate's own precision
+        double solved_at_refclk = 0.0;  // the sender chip's refclk at the newest round of the last solve
+        double precision_ns = 0.0;      // residual_rms_ns / sqrt(kept): the offset estimate's own precision
         uint32_t dev_snd = 0, dev_rcv = 0;
-        double offset_ticks = 0.0, rate = 0.0, mid = 0.0;
-        double offset_ns = 0.0, rate_ppm = 0.0, residual_rms_ns = 0.0;
+        double offset_refclk = 0.0, rate = 0.0, mid_refclk = 0.0;
+        double residual_rms_ns = 0.0;
         size_t rounds = 0, kept = 0, path_dropped = 0;
     };
 
     // A round in the refclk domain: each end's midpoint; the sender's round trip, the receiver's turnaround and the
     // one-way delay inside the stamps, in ns.
-    static double mid_a(const Round& r);
-    static double mid_b(const Round& r);
+    static double mid_a_refclk(const Round& r);
+    static double mid_b_refclk(const Round& r);
     static double rtt_ns(const Round& r) {
-        return (static_cast<double>(r.t2.value) - static_cast<double>(r.t0.value)) * kHwUnitTicks * 20.0;
+        return (static_cast<double>(r.t2.units) - static_cast<double>(r.t0.units)) * kRefclkPerStampUnit * kNsPerRefclk;
     }
     static double turn_ns(const Round& r) {
-        return (static_cast<double>(r.t1b.value) - static_cast<double>(r.t1.value)) * kHwUnitTicks * 20.0;
+        return (static_cast<double>(r.t1b.units) - static_cast<double>(r.t1.units)) * kRefclkPerStampUnit *
+               kNsPerRefclk;
     }
     static double path_ns(const Round& r) { return 0.5 * (rtt_ns(r) - turn_ns(r)); }
     static double path_median(const std::vector<Round>& rounds, size_t begin, size_t n);
@@ -204,7 +205,7 @@ private:
     void try_solve_links(bool final);
     // One round in the refclk domain: the sender's midpoint and the receiver's minus it.
     struct RoundPoint {
-        double mid, off;
+        double mid_refclk, off_refclk;
     };
     // Whether the solution was accepted into `out`.
     bool solve_link(const CaptureContext::Link& L, std::vector<RoundPoint> pts, LinkSolution& out) const;
@@ -283,9 +284,9 @@ private:
     std::map<std::pair<uint32_t, uint32_t>, std::pair<size_t, bool>> side_of_;
     std::vector<LinkSolution> solved_;                         // per ctx_.links index
     uint64_t dropped_kind_ = 0;
+    static constexpr double kNsPerRefclk = 1e9 / kernel_profiler::kEthRefclkHz;
     // Refclk ticks per stamp unit: the kernels report a round's stamp averages in kLinkSyncStampUnitsPerNs per ns.
-    static constexpr double kHwUnitTicks =
-        1.0 / (kernel_profiler::kLinkSyncStampUnitsPerNs * (1e9 / kernel_profiler::kEthRefclkHz));
+    static constexpr double kRefclkPerStampUnit = 1.0 / (kernel_profiler::kLinkSyncStampUnitsPerNs * kNsPerRefclk);
     // A hardware round whose one-way delay inside the stamps sits this far from the window's median had a frame
     // delayed on one leg, and its offset is off by that same amount; the delay itself holds to 0.5 ns.
     static constexpr double kPathDevNs = 2.0;

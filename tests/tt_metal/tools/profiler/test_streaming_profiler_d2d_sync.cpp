@@ -65,7 +65,7 @@ double wall(int chip, double tau) {
     }
     return kW0[chip] + kF0 * kTauSwitch + kSlow * kF0 * (tau - kTauSwitch);
 }
-// A 1588 stamp of the event at tau, in the refclk domain's quarter-ns (kHwUnitTicks).
+// A 1588 stamp of the event at tau, in the link's stamp units (quarter-ns) of the refclk domain.
 double hw_stamp(int chip, double tau) { return refclk(chip, tau) * 80.0; }
 double tsc(double tau) { return kTsc0 + tau * 1e9 * kTicksPerNs; }
 double host_ns(double tau) { return kHostBase + tau * 1e9; }
