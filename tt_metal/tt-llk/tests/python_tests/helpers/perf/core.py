@@ -928,7 +928,8 @@ class PerfConfig(TestConfig):
                 f"zone handshakes."
             )
 
-    def run(self, perf_report: PerfReport, run_count=1):
+    def run(self, perf_report: PerfReport, run_count=None):
+        run_count = run_count or int(os.environ.get("PERF_RUN_COUNT", "1"))
         results = []
         counter_results_list = []
         code_sizes = {}
