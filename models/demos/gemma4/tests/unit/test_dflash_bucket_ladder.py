@@ -16,6 +16,11 @@ formula, not against the ladder's own arithmetic.
 
 import pytest
 
+# The gemma4 vLLM generator imports vllm at module scope (through
+# tt_transformers.generator_vllm), so COLLECTING this file fails outright on a
+# runner without vLLM installed -- which is the tt-metal unit-test job. Skip
+# before the import rather than inside the tests: the failure is at import.
+pytest.importorskip("vllm")
 from models.demos.gemma4.tt.generator_vllm import dflash_bucket_for, dflash_pv_bucket_ladder
 
 _H, _V = 2048, 5

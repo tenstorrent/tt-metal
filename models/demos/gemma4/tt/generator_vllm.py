@@ -2112,12 +2112,47 @@ def _dflash_mesh_tp():
     return int(m.group(1)) if m else 1
 
 
-def _dflash_default_snapshot():
-    """Locate the z-lab drafter snapshot in the HF cache (harness parity)."""
+def _hf_hub_cache_dirs():
+    """Every hub root worth searching, most specific first.
+
+    ``~/.cache/huggingface/hub`` is only the DEFAULT. A runner that points the
+    cache elsewhere sets HF_HUB_CACHE (the tt-metal vllm-model-tests runner
+    uses /mnt/MLPerf/huggingface/hub) or HF_HOME, and a drafter resolved by
+    globbing the default alone is simply not found there -- which is rejected
+    at config time, so the server fails to start rather than degrading.
+    """
+    roots = []
+    for env in ("HF_HUB_CACHE", "HUGGINGFACE_HUB_CACHE"):
+        v = os.environ.get(env)
+        if v:
+            roots.append(v)
+    home = os.environ.get("HF_HOME")
+    if home:
+        roots.append(os.path.join(home, "hub"))
+    roots.append(os.path.expanduser("~/.cache/huggingface/hub"))
+    seen, out = set(), []
+    for r in roots:
+        r = os.path.expanduser(r)
+        if r not in seen:
+            seen.add(r)
+            out.append(r)
+    return out
+
+
+def _hf_snapshot_glob(repo_dir):
+    """First snapshot of ``repo_dir`` across the hub roots, or None."""
     import glob as _glob
 
-    hits = _glob.glob(os.path.expanduser("~/.cache/huggingface/hub/models--z-lab--gemma-4-31B-it-DFlash/snapshots/*/"))
-    return hits[0] if hits else None
+    for root in _hf_hub_cache_dirs():
+        hits = _glob.glob(os.path.join(root, repo_dir, "snapshots", "*", ""))
+        if hits:
+            return hits[0]
+    return None
+
+
+def _dflash_default_snapshot():
+    """Locate the z-lab drafter snapshot in the HF cache (harness parity)."""
+    return _hf_snapshot_glob("models--z-lab--gemma-4-31B-it-DFlash")
 
 
 def _assistant_default_snapshot(hf_model):
@@ -2129,16 +2164,12 @@ def _assistant_default_snapshot(hf_model):
     (1) if ``{hf_model}-assistant`` is an existing dir, use it; else (2) infer
     the size (12B/31B) from the model string and glob the HF cache snapshot.
     """
-    import glob as _glob
-
     cand = f"{hf_model}-assistant"
     if os.path.isdir(cand):
         return cand
     size = "12B" if "12B" in str(hf_model) else "31B"
-    hits = _glob.glob(
-        os.path.expanduser(f"~/.cache/huggingface/hub/models--google--gemma-4-{size}-it-assistant/snapshots/*/")
-    )
-    return hits[0] if hits else cand
+    hit = _hf_snapshot_glob(f"models--google--gemma-4-{size}-it-assistant")
+    return hit if hit else cand
 
 
 class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):

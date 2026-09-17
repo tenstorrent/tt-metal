@@ -159,6 +159,99 @@
   team: models
   budget_type: vllm
 
+# ── Gemma4 speculative legs on the BH LoudBox ──────────────────────
+#
+# Two rails, three legs. All select their serving class through extra-env:
+# this pipeline launches server_example_tt.py directly and never reads a
+# tt-inference-server model spec, so TT_MODEL_CLASS_OVERRIDES is the only way
+# to say which class serves. tt-config carries override_tt_config and
+# additional-server-args carries vLLM flags; the class override is neither.
+#
+# PREREQUISITE: the drafter checkpoints must be in the runner's HF cache. The
+# model resolves them by repo id rather than a configured path
+# (_dflash_default_snapshot globs
+# ~/.cache/huggingface/hub/models--z-lab--gemma-4-31B-it-DFlash/snapshots/*,
+# and the MTP assistant resolves the same way). A missing checkpoint is
+# rejected at CONFIG time, so the leg fails at server start, not lazily.
+#
+# coherence-test is on for all three deliberately: the benchmark gate checks
+# request COMPLETION only, and a speculative rail that commits wrong tokens
+# returns well-formed garbage with completed == num_prompts.
+
+# 31B dFlash BLOCK rail: the model owns the speculation loop and emits a
+# block per step, falling back to plain batched decode above concurrency 1.
+# GEMMA4_DFLASH_MAX_SPEC_ISL=131072 is the spec-capture frontier -- a longer
+# prompt serves as plain baseline for its whole lifetime, because above it the
+# fused tap hook took the engine down (TT_FATAL shape mismatch at 196608).
+- name: "Gemma4-31B dFlash tp=8"
+  model: google/gemma-4-31B-it
+  coherence-test: true
+  server-timeout: 25
+  benchmark-timeout: 5
+  mesh-device: P150x8
+  arch: arch-blackhole
+  tt-config: '{"sample_on_device_mode": "decode_only", "fabric_config": "FABRIC_1D", "trace_region_size": 512000000}'
+  additional-server-args: "--max_model_len 262144 --max_num_seqs 32 --enable_chunked_prefill --max_num_batched_tokens 2048 --long_prefill_token_threshold 2048 --async-scheduling"
+  extra-env: "TT_MODEL_CLASS_OVERRIDES=Gemma4ForCausalLM=models.demos.gemma4.tt.generator_vllm:Gemma4DFlashForCausalLM,Gemma4ForConditionalGeneration=models.demos.gemma4.tt.generator_vllm:Gemma4DFlashForCausalLM,Gemma4UnifiedForConditionalGeneration=models.demos.gemma4.tt.generator_vllm:Gemma4DFlashForCausalLM,TTGemma4ForCausalLM=models.demos.gemma4.tt.generator_vllm:Gemma4DFlashForCausalLM,TTGemma4ForConditionalGeneration=models.demos.gemma4.tt.generator_vllm:Gemma4DFlashForCausalLM GEMMA4_DFLASH_VERIFY=5 GEMMA4_DFLASH_SHARD_ARGMAX=1 GEMMA4_PAGE_BLOCK_SIZE=64 GEMMA4_DFLASH_MAX_SPEC_ISL=131072"
+  multimodal: false
+  skus:
+    bh_loudbox:
+      timeout: 45
+      tier: 2
+  owner_id: U088413NP0Q # Ashai Reddy
+  team: models
+  budget_type: vllm
+
+# 31B dFlash CONTRACT rail: the runner supplies the candidate block and owns
+# the accept walk (output_tokens_per_step 1, no internal block loop).
+#
+# No --async-scheduling, deliberately: upstream vLLM refuses async scheduling
+# for any speculative_config whose method is not EAGLE/MTP/draft_model/dspark,
+# and the contract requires method=custom_class. The block-rail leg above
+# keeps async precisely because it declares no speculative_config at all.
+- name: "Gemma4-31B dFlash contract tp=8"
+  model: google/gemma-4-31B-it
+  coherence-test: true
+  server-timeout: 25
+  benchmark-timeout: 5
+  mesh-device: P150x8
+  arch: arch-blackhole
+  tt-config: '{"sample_on_device_mode": "decode_only", "fabric_config": "FABRIC_1D", "trace_region_size": 512000000}'
+  additional-server-args: "--max_model_len 262144 --max_num_seqs 32 --enable_chunked_prefill --max_num_batched_tokens 2048 --long_prefill_token_threshold 2048 --speculative-config '{\"method\":\"custom_class\",\"model\":\"vllm_tt_plugin.model_owned_drafter\",\"num_speculative_tokens\":5}'"
+  extra-env: "TT_MODEL_CLASS_OVERRIDES=Gemma4ForCausalLM=models.demos.gemma4.tt.generator_vllm:Gemma4DFlashContractForCausalLM,Gemma4ForConditionalGeneration=models.demos.gemma4.tt.generator_vllm:Gemma4DFlashContractForCausalLM,Gemma4UnifiedForConditionalGeneration=models.demos.gemma4.tt.generator_vllm:Gemma4DFlashContractForCausalLM,TTGemma4ForCausalLM=models.demos.gemma4.tt.generator_vllm:Gemma4DFlashContractForCausalLM,TTGemma4ForConditionalGeneration=models.demos.gemma4.tt.generator_vllm:Gemma4DFlashContractForCausalLM GEMMA4_DFLASH_VERIFY=5 GEMMA4_DFLASH_SHARD_ARGMAX=1 GEMMA4_PAGE_BLOCK_SIZE=64 GEMMA4_DFLASH_MAX_SPEC_ISL=131072 GEMMA4_CONTRACT_ASYNC=0"
+  multimodal: false
+  skus:
+    bh_loudbox:
+      timeout: 45
+      tier: 2
+  owner_id: U088413NP0Q # Ashai Reddy
+  team: models
+  budget_type: vllm
+
+# 12B MTP: the it-assistant drafter cross-attends the target's own KV, so it
+# needs no prefill taps and no drafter cache of its own. Serving knobs mirror
+# the "Gemma4-12B tp=8" leg above, including the batched-prefill/bounded
+# sliding config that avoids the 1x8 concurrent prefill+decode wedge.
+- name: "Gemma4-12B MTP tp=8"
+  model: google/gemma-4-12B-it
+  coherence-test: true
+  server-timeout: 25
+  benchmark-timeout: 5
+  mesh-device: P150x8
+  arch: arch-blackhole
+  tt-config: '{"sample_on_device_mode": "decode_only", "fabric_config": "FABRIC_1D", "trace_region_size": 512000000}'
+  additional-server-args: "--max_model_len 262144 --max_num_seqs 32 --enable_chunked_prefill --max_num_batched_tokens 4096 --long_prefill_token_threshold 4096 --async-scheduling"
+  extra-env: "TT_MODEL_CLASS_OVERRIDES=Gemma4ForCausalLM=models.demos.gemma4.tt.generator_vllm:Gemma4MTPForCausalLM,Gemma4ForConditionalGeneration=models.demos.gemma4.tt.generator_vllm:Gemma4MTPForCausalLM,Gemma4UnifiedForConditionalGeneration=models.demos.gemma4.tt.generator_vllm:Gemma4MTPForCausalLM,TTGemma4ForCausalLM=models.demos.gemma4.tt.generator_vllm:Gemma4MTPForCausalLM,TTGemma4ForConditionalGeneration=models.demos.gemma4.tt.generator_vllm:Gemma4MTPForCausalLM GEMMA4_SPEC_DRAFT_LEN=5 GEMMA4_PAGE_BLOCK_SIZE=64"
+  multimodal: false
+  skus:
+    bh_loudbox:
+      timeout: 45
+      tier: 2
+  owner_id: U088413NP0Q # Ashai Reddy
+  team: models
+  budget_type: vllm
+
+
 - name: "Gemma4-26B-A4B"
   model: google/gemma-4-26B-A4B-it
   coherence-test: true

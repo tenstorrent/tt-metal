@@ -18,6 +18,12 @@ import json
 import os
 
 import pytest
+
+# The gemma4 vLLM generator imports vllm at module scope (through
+# tt_transformers.generator_vllm), so COLLECTING this file fails outright on a
+# runner without vLLM installed -- which is the tt-metal unit-test job. Skip
+# before the import rather than inside the tests: the failure is at import.
+pytest.importorskip("vllm")
 from vllm_tt_plugin.spec_decode import SpecPlan, SpecReject
 
 from models.demos.gemma4.tt.generator_vllm import Gemma4DFlashForCausalLM

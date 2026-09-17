@@ -381,6 +381,28 @@ jobs:
               ;;
           esac
 
+          # Per-entry environment, space-separated KEY=VALUE pairs.
+          #
+          # Exported AFTER the per-model case block above so an entry can
+          # override what that block set. This pipeline launches
+          # server_example_tt.py directly and never reads a tt-inference-server
+          # model spec, so a leg whose serving class or drafter is selected by
+          # environment (the speculative legs: dFlash, the dFlash contract
+          # rail, MTP) has no other way to say so -- tt-config carries
+          # override_tt_config and additional-server-args carries vLLM flags,
+          # and the class override is neither.
+          #
+          # Values must not contain spaces; TT_MODEL_CLASS_OVERRIDES is
+          # comma-separated and therefore fine.
+          if [ -n "${{ matrix.test-group.extra-env }}" ]; then
+            for _kv in ${{ matrix.test-group.extra-env }}; do
+              case "$_kv" in
+                *=*) export "$_kv"; echo "extra-env: ${_kv%%=*}" ;;
+                *) echo "extra-env: ignoring malformed entry '$_kv'" ;;
+              esac
+            done
+          fi
+
           # Build the VLLM server arguments array
           declare -a VLLM_SERVER_ARGS
           VLLM_SERVER_ARGS+=(--model "$HF_MODEL")

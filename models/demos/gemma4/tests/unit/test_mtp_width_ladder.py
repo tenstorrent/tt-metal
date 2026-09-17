@@ -16,6 +16,11 @@ the captured set, so the decoder is built with ``__new__`` and no device.
 
 import pytest
 
+# The gemma4 vLLM generator imports vllm at module scope (through
+# tt_transformers.generator_vllm), so COLLECTING this file fails outright on a
+# runner without vLLM installed -- which is the tt-metal unit-test job. Skip
+# before the import rather than inside the tests: the failure is at import.
+pytest.importorskip("vllm")
 from models.demos.gemma4.tt.generator_vllm import mtp_pv_width_ladder
 from models.demos.gemma4.tt.spec_decode import SpeculativeDecoder
 
