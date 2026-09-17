@@ -996,6 +996,20 @@ bool test_increment_runtime_args_sanity(
     if (mesh_device->arch() == ARCH::QUASAR) {
         using namespace tt::tt_metal::experimental;
 
+        // Mirror the Gen1 selection below: the requested processor class decides both the kernel and
+        // the hardware config, so a DM caller exercises a DM engine rather than a compute one.
+        const bool is_compute = processor.processor_class == HalProcessorClassType::COMPUTE;
+        const std::filesystem::path kernel_source =
+            is_compute
+                ? std::filesystem::path{"tests/tt_metal/tt_metal/test_kernels/compute/increment_runtime_arg_2_0.cpp"}
+                : std::filesystem::path{"tests/tt_metal/tt_metal/test_kernels/misc/increment_runtime_arg_2_0.cpp"};
+        std::variant<DataMovementHardwareConfig, ComputeHardwareConfig> hw_config;
+        if (is_compute) {
+            hw_config = ComputeHardwareConfig{ComputeGen2Config{}};
+        } else {
+            hw_config = DataMovementHardwareConfig{DataMovementGen2Config{}};
+        }
+
         // One kernel per config, each targeting that config's cores, so a work unit is needed per
         // kernel rather than one shared across them.
         std::vector<KernelSpec> kernel_specs;
@@ -1004,15 +1018,14 @@ bool test_increment_runtime_args_sanity(
             const KernelSpecName name{"increment_rta_" + std::to_string(i)};
             kernel_specs.push_back(KernelSpec{
                 .unique_id = name,
-                .source =
-                    std::filesystem::path{"tests/tt_metal/tt_metal/test_kernels/compute/increment_runtime_arg_2_0.cpp"},
+                .source = kernel_source,
                 .num_threads = 1,
                 .compile_time_args =
                     {{"num_unique_rt_args", num_unique_rt_args},
                      {"num_common_rt_args", num_common_rt_args},
                      {"rt_args_base", unique_args_addr},
                      {"common_rt_args_base", common_args_addr}},
-                .hw_config = ComputeHardwareConfig{ComputeGen2Config{}},
+                .hw_config = hw_config,
                 .advanced_options =
                     KernelAdvancedOptions{
                         .num_runtime_varargs = num_unique_rt_args,
@@ -1430,30 +1443,26 @@ TEST_F(UnitMeshCQFixture, TensixTestSingleSemaphoreConfigCorrectlySentSingleCore
 
 TEST_F(UnitMeshCQFixture, TensixTestAutoInsertedBlankBriscKernelInDeviceDispatchMode) {
     for (const auto& device : devices_) {
+        if (device->arch() == ARCH::QUASAR) {
+            GTEST_SKIP() << "Skipping on Quasar: Gen2 has no BRISC/NCRISC split, so there is no "
+                            "auto-inserted BRISC blank kernel for this test to observe";
+        }
+
         distributed::MeshWorkload workload;
         CoreRange cr({0, 0}, {0, 0});
         CoreRangeSet cr_set({cr});
         const std::string kernel_path = "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp";
 
-        if (device->arch() == ARCH::QUASAR) {
-            // Gen2 has no BRISC/NCRISC split, so there is no auto-inserted BRISC blank to observe
-            // here; this only covers a blank DM program dispatching.
-            workload.add_program(
-                device_range_,
-                local_test_functions::make_gen2_program(
-                    *device, "blank", kernel_path, cr_set, HalProcessorClassType::DM));
-        } else {
-            Program program;
-            workload.add_program(device_range_, std::move(program));
-            auto& program_ = workload.get_programs().at(device_range_);
-            // Add an NCRISC blank manually, but in compile program, the BRISC blank will be
-            // added separately
-            CreateKernel(
-                program_,
-                kernel_path,
-                cr_set,
-                DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
-        }
+        Program program;
+        workload.add_program(device_range_, std::move(program));
+        auto& program_ = workload.get_programs().at(device_range_);
+        // Add an NCRISC blank manually, but in compile program, the BRISC blank will be
+        // added separately
+        CreateKernel(
+            program_,
+            kernel_path,
+            cr_set,
+            DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
 
         distributed::EnqueueMeshWorkload(device->mesh_command_queue(), workload, false);
         Finish(device->mesh_command_queue());
@@ -2062,11 +2071,10 @@ TEST_F(UnitMeshCQFixture, TensixLargeUniqueRuntimeArgsPatchedAcrossRuns) {
 
 // Sanity test for setting and verifying common and unique runtime args to multiple cores via BRISC.
 TEST_F(UnitMeshCQFixture, TensixIncrementRuntimeArgsSanityMultiCoreDataMovementBrisc) {
-    CoreRange cr0({1, 1}, {2, 2});
-    CoreRange cr1({3, 3}, {4, 4});
-    CoreRangeSet cr_set(std::vector{cr0, cr1});
-    DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
     for (const auto& device : devices_) {
+        const auto [cr0, cr1] = local_test_functions::two_disjoint_core_ranges(*device);
+        CoreRangeSet cr_set(std::vector{cr0, cr1});
+        DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
         EXPECT_TRUE(local_test_functions::test_increment_runtime_args_sanity(
             device, dummy_program_config, 16, 16, {HalProgrammableCoreType::TENSIX, HalProcessorClassType::DM, 0}));
     }
@@ -2074,11 +2082,10 @@ TEST_F(UnitMeshCQFixture, TensixIncrementRuntimeArgsSanityMultiCoreDataMovementB
 
 // Sanity test for setting and verifying common and unique runtime args to multiple cores via NCRISC.
 TEST_F(UnitMeshCQFixture, TensixIncrementRuntimeArgsSanityMultiCoreDataMovementNcrisc) {
-    CoreRange cr0({1, 1}, {2, 2});
-    CoreRange cr1({3, 3}, {4, 4});
-    CoreRangeSet cr_set(std::vector{cr0, cr1});
-    DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
     for (const auto& device : devices_) {
+        const auto [cr0, cr1] = local_test_functions::two_disjoint_core_ranges(*device);
+        CoreRangeSet cr_set(std::vector{cr0, cr1});
+        DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
         EXPECT_TRUE(local_test_functions::test_increment_runtime_args_sanity(
             device, dummy_program_config, 16, 16, {HalProgrammableCoreType::TENSIX, HalProcessorClassType::DM, 1}));
     }
@@ -2141,11 +2148,6 @@ TEST_F(UnitMeshMultiCQSingleDeviceProgramFixture, TestLogicalCoordinatesCompute)
 }  // namespace basic_tests
 
 namespace stress_tests {
-
-// A DM-produced, Tensix-consumed dataflow buffer takes one of the 16 DM-visible tile counters on its
-// tensix, so that is the ceiling on Quasar rather than the 32 device slots Gen2 allows. It also
-// matches the length of the accessor ladder in random_program_2_0.cpp.
-constexpr uint32_t k_gen2_max_num_dfbs = 16;
 
 // Gen2 equivalent of the randomized program bodies below, which build their programs with
 // CreateKernel and so cannot run on Quasar. The random choice of which riscs get a kernel carries
@@ -2281,14 +2283,18 @@ Program make_gen2_random_program(
             hw_config = DataMovementHardwareConfig{DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true}};
         }
 
+        Group<KernelSpec::DFBBinding> dfb_bindings;
+        if (plan.binds_dfbs) {
+            dfb_bindings = plan.is_compute ? consumer_bindings : producer_bindings;
+        }
+
         kernels.push_back(KernelSpec{
             .unique_id = plan.name,
             .source = std::filesystem::path{"tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/"
                                             "random_program_2_0.cpp"},
             .num_threads = 1,
             .compiler_options = {.defines = std::move(defines)},
-            .dfb_bindings = plan.binds_dfbs ? (plan.is_compute ? consumer_bindings : producer_bindings)
-                                            : Group<KernelSpec::DFBBinding>{},
+            .dfb_bindings = dfb_bindings,
             .semaphore_bindings = plan.checks_sems ? semaphore_bindings : Group<KernelSpec::SemaphoreBinding>{},
             .compile_time_args =
                 {{"outer_loop", outer_loop},
