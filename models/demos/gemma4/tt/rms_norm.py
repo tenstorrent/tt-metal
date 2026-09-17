@@ -1,9 +1,38 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 from torch import nn
 
 import ttnn
+
+# Diagnostic: with GEMMA_RMS_TRACE=1, log a fingerprint of every rms_norm output so
+# two runs (native vs generated) can be diffed call-for-call. Off by default; the
+# readback it does would otherwise cost a device sync per call.
+_RMS_TRACE = os.environ.get("GEMMA_RMS_TRACE") == "1"
+_rms_call_idx = [0]
+
+
+def _rms_trace(tag, out):
+    if not _RMS_TRACE:
+        return out
+    i = _rms_call_idx[0]
+    _rms_call_idx[0] += 1
+    try:
+        parts = ttnn.get_device_tensors(out)
+        t = ttnn.to_torch(parts[0] if len(parts) > 1 else out).float()
+        print(
+            f"RMSTRACE {i:04d} {tag} shape={tuple(t.shape)} "
+            f"mean={t.mean().item():+.6e} std={t.std().item():.6e} "
+            f"absmax={t.abs().max().item():.6e} l2={t.norm().item():.6e}",
+            flush=True,
+        )
+    except Exception as e:  # never let the diagnostic break the model
+        print(f"RMSTRACE {i:04d} {tag} ERR {type(e).__name__}: {e}", flush=True)
+    return out
+
+
 from models.demos.gemma4.config import MeshConfig, ModeConfig
 from models.demos.gemma4.utils.general_utils import get_cache_file_name
 
@@ -98,7 +127,7 @@ class RMSNorm(nn.Module):
         x_sh.deallocate(True)
         out_interleaved = ttnn.sharded_to_interleaved(out, ttnn.DRAM_MEMORY_CONFIG)
         out.deallocate(True)
-        return out_interleaved
+        return _rms_trace("sharded", out_interleaved)
 
     def forward(self, x):
         if self.is_distributed:
@@ -139,7 +168,7 @@ class RMSNorm(nn.Module):
                 stats=tt_gathered_stats,
             )
             ttnn.deallocate(tt_gathered_stats)
-            return tt_output
+            return _rms_trace("distributed", tt_output)
         else:
             # Decode fast path: single-tile-height (32 rows) activation with a
             # learned weight and an interleaved layout → width-sharded rms_norm.
@@ -171,4 +200,4 @@ class RMSNorm(nn.Module):
                     x,
                     epsilon=self.eps,
                 )
-            return tt_output
+            return _rms_trace("plain_gamma" if self.with_scale else "plain_nogamma", tt_output)
