@@ -115,16 +115,17 @@ void set_runtime_args(
 ComputeBodyMode compute_body_mode(uint32_t k, uint32_t input_last_dim) {
     const uint32_t llk_k = to_uint32(snap_to_llk_target_k(k));
 
-    // For an internal K >= 1024, segmented fusion handles every width with
-    // one binary; rows of at most 32 chunks naturally execute as one segment.
-    // Gate on the snapped LLK K so public k values in [528, 1008] get the same
-    // fused body as k=1024 instead of silently falling back to classic.
+    // Segmented fusion handles every width with one binary; rows of at most 32
+    // chunks naturally execute as one segment. Gate on the snapped LLK K so
+    // public k values in [528, 1008] get the same fused body as k=1024.
     if (llk_k >= to_uint32(LlkTargetK::K1024)) {
         return ComputeBodyMode::FusedSegmented;
     }
 
+    // The classic body re-inits, splits and merges per chunk, so a wide row at K 512 used to
+    // cost more per element than the same row at K 1024. Segmented fusion is cheaper past 32 chunks too.
     const uint32_t physical_chunks = tt::div_up(input_last_dim, llk_k);
-    return physical_chunks <= 32 ? ComputeBodyMode::FusedEndToEnd : ComputeBodyMode::Classic;
+    return physical_chunks <= 32 ? ComputeBodyMode::FusedEndToEnd : ComputeBodyMode::FusedSegmented;
 }
 
 std::vector<CoreRowAssignment> derive_core_row_assignments(const CoreRangeSet& core_grid, uint32_t num_rows) {
