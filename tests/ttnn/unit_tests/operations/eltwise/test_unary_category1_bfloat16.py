@@ -2,20 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
-import pytest
-import ttnn
-from tests.ttnn.utils_for_testing import assert_equal, assert_with_ulp, assert_with_pcc, flush_subnormal_values_to_zero
-from tests.ttnn.unit_tests.operations.eltwise.eltwise_test_utils import (
-    generate_bfloat16_bits,
-    generate_bfloat16_bits_in_range,
-    flush_to_zero,
-    to_tt_tensor,
-    SMALLEST_NORMAL_BF16,
-)
-
-pytestmark = pytest.mark.use_module_device
-
 """
 Category 1: basic_unary_math (no extra parameters)
 Trigonometric, hyperbolic, comparison, rounding, special math, logical, and utility ops
@@ -68,6 +54,26 @@ Trigonometric, hyperbolic, comparison, rounding, special math, logical, and util
 46. ttnn.logical_not      - Logical NOT
 47. ttnn.identity         - Identity (copy)
 """
+
+import pytest
+import torch
+import ttnn
+
+from tests.ttnn.unit_tests.operations.eltwise.eltwise_test_utils import (
+    SMALLEST_NORMAL_BF16,
+    flush_to_zero,
+    generate_bfloat16_bits,
+    generate_bfloat16_bits_in_range,
+    to_tt_tensor,
+)
+from tests.ttnn.utils_for_testing import (
+    assert_equal,
+    assert_with_pcc,
+    assert_with_ulp,
+    generate_all_bfloat16_bitpatterns,
+)
+
+pytestmark = pytest.mark.use_module_device
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -350,6 +356,32 @@ def test_error_functions(device, ttnn_op, low, high):
     assert_with_pcc(golden, result, 0.999)
 
 
+def test_erfinv_bf16_specials(device):
+    """BF16 dest must keep main's copysgn Inf contract: |x|>=1 and non-finite
+    inputs return signed Inf; zeros / DAZ'd subnormals are exact 0.
+
+    test_error_functions only covers the open interval (-0.999, 0.999).
+    """
+    x = generate_all_bfloat16_bitpatterns(torch.bfloat16)
+    tt_in = to_tt_tensor(x, device)
+    out = ttnn.to_torch(ttnn.erfinv(tt_in)).to(torch.float32).reshape(-1)
+    xf = x.to(torch.float32).reshape(-1)
+    signed_inf = torch.copysign(torch.full_like(xf, float("inf")), xf)
+
+    ood = xf.abs() > 1
+    poles = xf.abs() == 1
+    nonfinite = ~torch.isfinite(xf)
+    daz_zero = torch.isfinite(xf) & (xf.abs() < SMALLEST_NORMAL_BF16)
+    exact_zero = xf == 0
+
+    assert torch.equal(out[ood], signed_inf[ood])
+    assert torch.equal(out[poles], signed_inf[poles])
+    assert torch.equal(out[nonfinite], signed_inf[nonfinite])
+    assert int((out[ood] < 0).sum()) > 0
+    assert int((out[nonfinite] < 0).sum()) > 0
+    assert torch.all(out[daz_zero | exact_zero] == 0)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # reciprocal: 1/x, undefined at 0; use positive range (1, 3e36)
 # Large inputs produce outputs near zero — flush both sides at 2*smallest normal
@@ -401,15 +433,15 @@ def test_square(device):
 # ─────────────────────────────────────────────────────────────────────────────
 # cbrt: cube root, valid for all finite inputs.
 # ─────────────────────────────────────────────────────────────────────────────
-"""
-Golden must be evaluated in float64 because bfloat16's non-representable 1/3
-exponent rounds the reference incorrectly; the non-representable 1/3 was rounding
-the reference up to 2 ULP short of the true cube root while the kernel was correct.
-Subnormal bf16 inputs are flushed to zero on device
-"""
 
 
 def test_cbrt(device):
+    """Golden is float64 because bf16 cannot represent 1/3 exactly.
+
+    Evaluating 1/3 in bfloat16 rounded the reference up to 2 ULP short of the
+    true cube root while the kernel was correct. Subnormal bf16 inputs are
+    flushed to zero on device.
+    """
     input_tensor = generate_bfloat16_bits_in_range(-1e38, 1e38)
 
     tt_in = to_tt_tensor(input_tensor, device)

@@ -27,10 +27,14 @@ Example Usage:
     (-0.999, 0.999)
 """
 
+import ast
 import importlib
-import numpy as np
 import json
+import operator
 from pathlib import Path
+
+import numpy as np
+
 from .spec_context import current_spec_root, spec_cache_key
 
 # Import PyTorch (required)
@@ -971,14 +975,64 @@ def identity(x):
 ACTIVATION_FUNCTIONS = {}
 
 
+_RESTRICTED_BINOPS = {
+    ast.Add: operator.add,
+    ast.Sub: operator.sub,
+    ast.Mult: operator.mul,
+    ast.Div: operator.truediv,
+    ast.Pow: operator.pow,
+}
+_RESTRICTED_UNARYOPS = {
+    ast.UAdd: operator.pos,
+    ast.USub: operator.neg,
+}
+
+
+def eval_restricted_expr(expr, namespace):
+    """Evaluate a closed-form golden using only names in *namespace*.
+
+    Accepts Sollya ``^`` as power. Rejects attribute access, subscripts,
+    comprehensions, and any call whose callee is not a whitelist name.
+    """
+    tree = ast.parse(str(expr).replace("^", "**"), mode="eval")
+    return _eval_restricted_node(tree.body, namespace)
+
+
+def _eval_restricted_node(node, namespace):
+    if isinstance(node, ast.Constant):
+        if isinstance(node.value, (int, float)):
+            return node.value
+        raise ValueError(f"unsupported literal {node.value!r}")
+    if isinstance(node, ast.Name):
+        if node.id not in namespace:
+            raise ValueError(f"unknown name {node.id!r}")
+        return namespace[node.id]
+    if isinstance(node, ast.BinOp):
+        op = _RESTRICTED_BINOPS.get(type(node.op))
+        if op is None:
+            raise ValueError(f"unsupported operator {type(node.op).__name__}")
+        return op(_eval_restricted_node(node.left, namespace), _eval_restricted_node(node.right, namespace))
+    if isinstance(node, ast.UnaryOp):
+        op = _RESTRICTED_UNARYOPS.get(type(node.op))
+        if op is None:
+            raise ValueError(f"unsupported unary {type(node.op).__name__}")
+        return op(_eval_restricted_node(node.operand, namespace))
+    if isinstance(node, ast.Call):
+        if not isinstance(node.func, ast.Name) or node.keywords:
+            raise ValueError("only positional calls of whitelist names are allowed")
+        fn = namespace.get(node.func.id)
+        if not callable(fn):
+            raise ValueError(f"unknown function {node.func.id!r}")
+        args = [_eval_restricted_node(arg, namespace) for arg in node.args]
+        return fn(*args)
+    raise ValueError(f"unsupported expression node {type(node).__name__}")
+
+
 def _eval_sollya_expr(x, expr):
     """Evaluate a Sollya expression string using numpy.
 
     Expressions come from local activations/*.json files (user-controlled).
     """
-    # Convert Sollya exponentiation syntax (^) to Python (**)
-    # This handles cases like x^2, x^(1/2), etc.
-    expr = expr.replace("^", "**")
 
     safe_ns = {
         "x": x,
@@ -1080,7 +1134,7 @@ def _eval_sollya_expr(x, expr):
             )
     except ImportError:
         pass
-    return eval(expr, {"__builtins__": {}}, safe_ns)
+    return eval_restricted_expr(expr, safe_ns)
 
 
 def _tanhshrink_series_golden(x):

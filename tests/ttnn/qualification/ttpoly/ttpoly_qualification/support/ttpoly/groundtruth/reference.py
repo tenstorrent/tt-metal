@@ -67,7 +67,6 @@ except ImportError:  # pragma: no cover - mpmath is expected to be installed
 from . import activations as ground_truth
 from .spec_context import activation_spec_root, spec_cache_key
 
-
 # ---------------------------------------------------------------------------
 # Precision configuration
 # ---------------------------------------------------------------------------
@@ -273,7 +272,6 @@ def _make_mpmath_func(activation: str) -> Optional[Callable[[float], float]]:
         return None
 
     py_expr = _to_mp_expr(expr)
-    code = compile(py_expr, f"<mpmath:{activation}>", "eval")
     base_ns = _build_mpmath_namespace()
 
     def _eval_scalar(x: float) -> float:
@@ -281,7 +279,7 @@ def _make_mpmath_func(activation: str) -> Optional[Callable[[float], float]]:
         # before invoking, via mp.workprec). ``x`` is bound as a 300-bit mpf.
         ns = dict(base_ns)
         ns["x"] = mp.mpf(x)
-        result = eval(code, {"__builtins__": {}}, ns)  # noqa: S307 - local-controlled expr
+        result = ground_truth.eval_restricted_expr(py_expr, ns)
         # Imaginary parts can appear from e.g. loggamma; the real part is the
         # intended golden for these (matching ground_truth's torch lgamma).
         return float(mp.re(result))
