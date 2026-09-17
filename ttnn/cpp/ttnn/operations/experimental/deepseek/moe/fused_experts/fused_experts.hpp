@@ -41,20 +41,23 @@ namespace ttnn::experimental::deepseek::moe {
 // op, and it double-buffers the activation block so consecutive blocks pipeline.
 //
 // ROUTING INPUT. The routing decision stays in the sparse form the router produces it: each token's
-// selected expert ids plus the unbiased score row they index, both passed through in their native
-// TILE layout. The op gathers each token's k scores, normalizes them (sum to 1, then
+// selected expert ids plus the unbiased score row they index. Ids are TILE; scores are TILE or
+// (decode, B == 1) ROW_MAJOR. The op gathers each token's k scores, normalizes them (sum to 1, then
 // `routed_scaling_factor`) and derives the hit ids and per-token weights itself. That is what the
 // op's internals already use, so widening the k values into an E-wide weight row would be a
 // temporary built by a scatter + normalize + relayout chain purely for the first kernel to scan it
 // straight back down to k -- and it turns an O(E x B) hit scan into an O(B x k) one.
 //
 // Args:
-//   input_tensor:     activations, [1, 1, B, H] with B <= 32 token rows.
+//   input_tensor:     activations, [1, 1, B, H] with B <= 32 token rows. TILE, or ROW_MAJOR
+//                     when B == 1 (decode; loaded as 1x32 compute tiles, no tilize).
 //   routing_indices:  selected expert ids, [1, 1, B, top_k] TILE, either UINT16 (a `ttnn.topk`
 //                     index output) or BFLOAT16 (a `ttnn.embedding` gather from an id table; exact
 //                     for E <= 256, and the only dtype that op gathers).
-//   routing_scores:   unbiased per-expert scores, [1, 1, B, E] TILE bfloat16 -- the tensor the ids
-//                     index into (the selection may have ranked a bias-corrected copy of it).
+//   routing_scores:   unbiased per-expert scores, [1, 1, B, E] bfloat16 -- TILE, or ROW_MAJOR
+//                     when B == 1 (decode; LinearDecode stick, indexed linearly, no tilize).
+//                     The tensor the ids index into (the selection may have ranked a
+//                     bias-corrected copy of it).
 //   top_k:            ids per token (<= 16); 0 takes it from routing_indices.
 //   routed_scaling_factor / routing_eps: the normalize tail applied per token,
 //                     w = scale * s / (sum(s) + eps).
@@ -76,7 +79,7 @@ namespace ttnn::experimental::deepseek::moe {
 //                     block, the largest usable block is about half the largest usable single block.
 //   memory_config:    optional output memory config (defaults to the input's).
 //
-// Returns a [1, B, H] BFLOAT16 TILE tensor (the B token rows padded to a 32-row tile):
+// Returns a [1, B, H] BFLOAT16 tensor in the input's layout (TILE, or ROW_MAJOR when B == 1):
 //   act       = silu(clamp(gate, max=limit)) * clamp(up, -limit, limit),
 //               where [gate, up] = x @ gate_up_w[hit_ids[i]];
 //   output[b] = sum_i w[b, hit_ids[i]] * (act[b] @ down_w[hit_ids[i]]),
@@ -88,7 +91,8 @@ namespace ttnn::experimental::deepseek::moe {
 // each core covers its I-shards of that expert plus 4 of the 64 H-shards, gathers SwiGLU
 // activations within the group, and the 6 groups' matching H-slices are reduced onto group 0.
 // Smaller grids (or any other selected count) keep the original 8x8 grid, every core iterating
-// every expert. All three input tensors are TILE layout.
+// every expert. routing_indices are TILE; routing_scores and input_tensor may be TILE or (B==1)
+// ROW_MAJOR.
 Tensor fused_experts(
     const Tensor& input_tensor,
     const Tensor& routing_indices,
@@ -102,6 +106,7 @@ Tensor fused_experts(
     float routed_scaling_factor = 1.0F,
     float routing_eps = 0.0F,
     uint32_t experts_block_size = 0,
+    bool two_hub_gather = true,
     const std::optional<MemoryConfig>& memory_config = std::nullopt);
 
 }  // namespace ttnn::experimental::deepseek::moe
