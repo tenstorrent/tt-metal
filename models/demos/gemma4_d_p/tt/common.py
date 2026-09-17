@@ -10,7 +10,7 @@ from loguru import logger
 import ttnn
 from models.common.weight_cache import build_cached_state_dict, mark_weight_cache_complete, weight_cache_is_complete
 from models.demos.gemma4_d_p.tt.ccl import CCLManager
-from models.demos.gemma4_d_p.tt.model import Gemma4Model, prefill_chunk_geometry_error
+from models.demos.gemma4_d_p.tt.model import Gemma4Model, normalize_prefill_chunk_sizes, prefill_chunk_geometry_error
 from models.demos.gemma4_d_p.tt.model_config import Gemma4ModelArgs
 from models.demos.gemma4_d_p.tt.precision import Gemma4Precision
 
@@ -27,7 +27,7 @@ def _gemma4_is_host_weight(key):
 
 def create_tt_model(
     mesh_config,
-    prefill_chunk_size,
+    prefill_chunk_size,  # one width, or a sequence of widths to serve from one model
     max_batch_size=1,
     max_seq_len=8192,
     dtype=ttnn.bfloat16,
@@ -44,9 +44,11 @@ def create_tt_model(
         (model_args, model, tt_kv_cache, state_dict)
     """
     mesh_device = mesh_config.device
-    geometry_error = prefill_chunk_geometry_error(prefill_chunk_size, mesh_config.cp_degree, max_seq_len)
-    if geometry_error:
-        raise ValueError(geometry_error)
+    # Fail on a bad geometry before the 62 GB weight load, for every configured width.
+    for chunk_size in normalize_prefill_chunk_sizes(prefill_chunk_size):
+        geometry_error = prefill_chunk_geometry_error(chunk_size, mesh_config.cp_degree, max_seq_len)
+        if geometry_error:
+            raise ValueError(geometry_error)
 
     model_path = model_path or os.getenv("HF_MODEL")
 

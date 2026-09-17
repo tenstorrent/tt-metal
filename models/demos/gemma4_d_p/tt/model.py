@@ -49,30 +49,36 @@ def _cp_chunk_major_row_order(max_seq_len, cp, chunk_size):
     return order
 
 
-def create_rope_caches(mesh_config, hf_config, max_seq_len, prefill_chunk_size=None):
-    """Create chunk-major CP-sharded RoPE tables and replicated tables for traced position lookup."""
+def create_rope_caches(mesh_config, hf_config, max_seq_len, prefill_chunk_sizes=()):
+    """Create chunk-major CP-sharded RoPE tables and replicated tables for traced position lookup.
+
+    The chunk-major permutation is keyed by the chunk width (see ``_cp_chunk_major_row_order``),
+    so the 4D prefill tables are returned per width: ``{chunk_size: {layer_type: (cos, sin)}}``.
+    The replicated 2D tables are gathered by absolute position and are width-independent, so
+    there is one set of those however many widths are configured.
+    """
     mesh_device = mesh_config.device
     from transformers.models.gemma4.modeling_gemma4 import Gemma4TextRotaryEmbedding
 
     is_mesh = hasattr(mesh_device, "shape")
     replicate = ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh else None
     cp = mesh_config.cp_degree if (is_mesh and mesh_config is not None) else 1
-    row_order = None
     if cp > 1:
         assert max_seq_len % cp == 0, f"max_seq_len {max_seq_len} must be divisible by CP degree {cp}"
         shard_dims = (-2, None) if mesh_config.cp_axis == 0 else (None, -2)
         prefill_mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_device.shape, dims=shard_dims)
         # Multi-chunk needs the rows reordered so one scalar slice serves every rank;
         # single-chunk (max_seq_len == chunk) is already correct without it.
-        row_order = _cp_chunk_major_row_order(max_seq_len, cp, prefill_chunk_size)
+        row_orders = {c: _cp_chunk_major_row_order(max_seq_len, cp, c) for c in prefill_chunk_sizes}
     else:
         prefill_mapper = replicate
+        row_orders = {c: None for c in prefill_chunk_sizes}
 
     rope = Gemma4TextRotaryEmbedding(hf_config)
     x_dummy = torch.randn(1, max_seq_len, hf_config.hidden_size)
     pos_ids = torch.arange(max_seq_len).unsqueeze(0)
 
-    caches_4d = {}
+    caches_4d = {c: {} for c in prefill_chunk_sizes}
     caches_2d = {}
     for layer_type in set(hf_config.layer_types):
         cos, sin = rope(x_dummy, pos_ids, layer_type=layer_type)
@@ -83,27 +89,28 @@ def create_rope_caches(mesh_config, hf_config, max_seq_len, prefill_chunk_size=N
         cos = cos.to(torch.bfloat16)
         sin = sin.to(torch.bfloat16)
 
-        # 4D for prefill: [1, 1, max_seq_len, head_dim].
+        # 4D for prefill: [1, 1, max_seq_len, head_dim], one table per chunk width.
         # Sharded along positions under CP (see docstring), replicated otherwise.
-        cos_prefill, sin_prefill = cos, sin
-        if row_order is not None:
-            cos_prefill = cos[:, row_order, :]
-            sin_prefill = sin[:, row_order, :]
-        cos_4d = ttnn.from_torch(
-            cos_prefill.unsqueeze(0),
-            device=mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat16,
-            mesh_mapper=prefill_mapper,
-        )
-        sin_4d = ttnn.from_torch(
-            sin_prefill.unsqueeze(0),
-            device=mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat16,
-            mesh_mapper=prefill_mapper,
-        )
-        caches_4d[layer_type] = (cos_4d, sin_4d)
+        for chunk_size, row_order in row_orders.items():
+            cos_prefill, sin_prefill = cos, sin
+            if row_order is not None:
+                cos_prefill = cos[:, row_order, :]
+                sin_prefill = sin[:, row_order, :]
+            cos_4d = ttnn.from_torch(
+                cos_prefill.unsqueeze(0),
+                device=mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.bfloat16,
+                mesh_mapper=prefill_mapper,
+            )
+            sin_4d = ttnn.from_torch(
+                sin_prefill.unsqueeze(0),
+                device=mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.bfloat16,
+                mesh_mapper=prefill_mapper,
+            )
+            caches_4d[chunk_size][layer_type] = (cos_4d, sin_4d)
 
         # Replicated 2D tables support per-rank position lookup inside traces.
         # Row-major weights let embedding gather only the requested positions.
@@ -162,6 +169,16 @@ def prefill_chunk_geometry_error(prefill_chunk_size, cp_degree, max_seq_len):
     return None
 
 
+def normalize_prefill_chunk_sizes(prefill_chunk_size):
+    """Accept one width or several; return them sorted, deduplicated and as ints."""
+    if not isinstance(prefill_chunk_size, (list, tuple, set, frozenset)):
+        prefill_chunk_size = (prefill_chunk_size,)
+    widths = tuple(sorted({int(c) for c in prefill_chunk_size}))
+    if not widths:
+        raise ValueError("at least one prefill chunk width is required")
+    return widths
+
+
 class Gemma4Model:
     """Galaxy prefill model with ring-cache outputs for disaggregation."""
 
@@ -185,14 +202,22 @@ class Gemma4Model:
         ), "Expected a multimodal Gemma4 state_dict with model.language_model.* keys"
         mesh_device = mesh_config.device
 
-        geometry_error = prefill_chunk_geometry_error(prefill_chunk_size, mesh_config.cp_degree, max_seq_len)
-        if geometry_error:
-            raise ValueError(geometry_error)
+        # One int, or several: a model built with several widths carries one RoPE table per
+        # width and a KV cache sized for the widest, so a caller can pick the width per
+        # request (models/demos/gemma4_d_p/tt/chunk_buckets.py). Width is fixed for a
+        # request's lifetime -- the ring KV layout is block-cyclic with period C.
+        self.prefill_chunk_sizes = normalize_prefill_chunk_sizes(prefill_chunk_size)
+        for chunk_size in self.prefill_chunk_sizes:
+            geometry_error = prefill_chunk_geometry_error(chunk_size, mesh_config.cp_degree, max_seq_len)
+            if geometry_error:
+                raise ValueError(geometry_error)
 
         self.mesh_device = mesh_device
         self.hf_config = hf_config
-        self.prefill_chunk_size = prefill_chunk_size
-        self.ring_cache_max_seq_len = ring_cache_capacity(max_seq_len, prefill_chunk_size)
+        # The default width, and the only one when a scalar was passed. The widest is the
+        # throughput-optimal choice for a prompt long enough to fill it.
+        self.prefill_chunk_size = self.prefill_chunk_sizes[-1]
+        self.ring_cache_max_seq_len = max(ring_cache_capacity(max_seq_len, c) for c in self.prefill_chunk_sizes)
         self.mesh_config = mesh_config
         self.hidden_size = hf_config.hidden_size
         self.vocab_size = hf_config.vocab_size
@@ -228,7 +253,7 @@ class Gemma4Model:
         hf_text_config = getattr(hf_config, "_hf_text_config", None)
         if hf_text_config is not None:
             self.rope_caches, self.rope_caches_2d = create_rope_caches(
-                self.mesh_config, hf_text_config, max_seq_len, prefill_chunk_size=prefill_chunk_size
+                self.mesh_config, hf_text_config, max_seq_len, prefill_chunk_sizes=self.prefill_chunk_sizes
             )
         else:
             # Fallback: no automatic RoPE — caller must pass rope_mats explicitly
@@ -291,9 +316,16 @@ class Gemma4Model:
 
         # Skip final norm
 
-    def _get_rope_mats(self, layer_idx, seq_len=None, start_pos=0):
-        """Slice chunk-major RoPE caches using a CP-local row offset."""
-        cos, sin = self.rope_caches[self.hf_config.layer_types[layer_idx]]
+    def _get_rope_mats(self, layer_idx, seq_len=None, start_pos=0, chunk_size=None):
+        """Slice this width's chunk-major RoPE cache using a CP-local row offset."""
+        chunk_size = self.prefill_chunk_size if chunk_size is None else chunk_size
+        if chunk_size not in self.rope_caches:
+            raise ValueError(
+                f"prefill chunk {chunk_size} has no RoPE table; this model was built for "
+                f"{sorted(self.rope_caches)}. The chunk-major row order is keyed by the width, "
+                f"so an unbuilt width cannot be served."
+            )
+        cos, sin = self.rope_caches[chunk_size][self.hf_config.layer_types[layer_idx]]
         if seq_len is not None:
             cos = cos[:, :, start_pos : start_pos + seq_len, :]
             sin = sin[:, :, start_pos : start_pos + seq_len, :]
@@ -322,6 +354,10 @@ class Gemma4Model:
         layer's KV writes.
         """
         seq_len = hidden_states.shape[2]
+        # The global chunk width this call is running at, recovered from the CP-local slab.
+        # Every width-keyed lookup below derives from this rather than from a stored default,
+        # so one model instance can serve several widths.
+        chunk_size = seq_len * self.mesh_config.cp_degree
         if hidden_states.shape[0] != 1 or hidden_states.shape[1] != 1:
             raise ValueError("Ring prefill processes one user per call")
         if d2h_service is not None and metadata_msg is None:
@@ -345,7 +381,10 @@ class Gemma4Model:
                 layer_rope = gathered_rope[layer_type]
             else:
                 layer_rope = self._get_rope_mats(
-                    i, seq_len=seq_len, start_pos=chunk_start_idx // self.mesh_config.cp_degree
+                    i,
+                    seq_len=seq_len,
+                    start_pos=chunk_start_idx // self.mesh_config.cp_degree,
+                    chunk_size=chunk_size,
                 )
             if layer_type not in packed_rope_by_type and self._packed_global_rope_trans_mat is not None:
                 pack_rope = pack_global_rope_device if layer_type == "full_attention" else pack_sliding_rope_device
