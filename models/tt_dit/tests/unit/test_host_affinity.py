@@ -100,3 +100,80 @@ def test_pin_is_noop_when_mask_already_one_per_core(monkeypatch, tmp_path):
     monkeypatch.setattr(ha.os, "sched_setaffinity", lambda tid, cpus: calls.append((tid, sorted(cpus))))
     assert ha.pin_one_thread_per_core("test") is None
     assert calls == []
+
+
+# --- reexec_pinned_before_torch: pure no-op-condition tests (os.execv always mocked) ---
+
+
+def _arm_reexec(monkeypatch, current, chosen, execv_calls, setaff_calls=None):
+    """Wire host_affinity so reexec_pinned_before_torch computes ``chosen`` from ``current``.
+
+    os.execv is always mocked so the test process never actually re-execs.
+    """
+    monkeypatch.setattr(ha.os, "sched_getaffinity", lambda pid: set(current))
+    monkeypatch.setattr(ha, "_chosen_cores", lambda: (set(chosen) if chosen is not None else None))
+    if setaff_calls is not None:
+        monkeypatch.setattr(ha.os, "sched_setaffinity", lambda pid, cpus: setaff_calls.append((pid, sorted(cpus))))
+    else:
+        monkeypatch.setattr(ha.os, "sched_setaffinity", lambda pid, cpus: None)
+    monkeypatch.setattr(ha.sys, "executable", "/usr/bin/python3")
+    monkeypatch.setattr(ha.sys, "argv", ["prog", "arg"])
+    monkeypatch.setattr(ha.os, "execv", lambda exe, argv: execv_calls.append((exe, list(argv))))
+
+
+def test_reexec_noop_when_pin_cores_disabled(monkeypatch):
+    monkeypatch.setenv("LTX_PIN_CORES", "0")
+    monkeypatch.delenv("_LTX_REEXECED", raising=False)
+    calls = []
+    _arm_reexec(monkeypatch, current={0, 1, 2, 3, 4, 5, 6, 7}, chosen={0, 1, 2, 3}, execv_calls=calls)
+    ha.reexec_pinned_before_torch("test")
+    assert calls == []
+
+
+def test_reexec_noop_when_already_reexeced(monkeypatch):
+    monkeypatch.delenv("LTX_PIN_CORES", raising=False)
+    monkeypatch.setenv("_LTX_REEXECED", "1")
+    calls = []
+    _arm_reexec(monkeypatch, current={0, 1, 2, 3, 4, 5, 6, 7}, chosen={0, 1, 2, 3}, execv_calls=calls)
+    ha.reexec_pinned_before_torch("test")
+    assert calls == []
+
+
+def test_reexec_noop_when_mask_already_chosen(monkeypatch):
+    monkeypatch.delenv("LTX_PIN_CORES", raising=False)
+    monkeypatch.delenv("_LTX_REEXECED", raising=False)
+    calls = []
+    # _chosen_cores returns None when the mask already equals the chosen set.
+    _arm_reexec(monkeypatch, current={0, 1, 2, 3}, chosen=None, execv_calls=calls)
+    ha.reexec_pinned_before_torch("test")
+    assert calls == []
+
+
+def test_reexec_noop_when_no_topology(monkeypatch):
+    monkeypatch.delenv("LTX_PIN_CORES", raising=False)
+    monkeypatch.delenv("_LTX_REEXECED", raising=False)
+    calls = []
+    _arm_reexec(monkeypatch, current={0, 1, 2, 3, 4, 5, 6, 7}, chosen=None, execv_calls=calls)
+    ha.reexec_pinned_before_torch("test")
+    assert calls == []
+
+
+def test_reexec_pins_and_execs_when_armed(monkeypatch):
+    if not hasattr(os, "sched_getaffinity"):
+        return
+    monkeypatch.delenv("LTX_PIN_CORES", raising=False)
+    monkeypatch.delenv("_LTX_REEXECED", raising=False)
+    execv_calls = []
+    setaff_calls = []
+    _arm_reexec(
+        monkeypatch,
+        current={0, 1, 2, 3, 4, 5, 6, 7},
+        chosen={0, 1, 2, 3},
+        execv_calls=execv_calls,
+        setaff_calls=setaff_calls,
+    )
+    ha.reexec_pinned_before_torch("test")
+    # It set the mask to the chosen cores, marked the sentinel, and re-execed the same argv.
+    assert setaff_calls == [(0, [0, 1, 2, 3])]
+    assert os.environ.get("_LTX_REEXECED") == "1"
+    assert execv_calls == [("/usr/bin/python3", ["/usr/bin/python3", "prog", "arg"])]
