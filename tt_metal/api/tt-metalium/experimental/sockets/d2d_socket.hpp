@@ -124,6 +124,14 @@ struct D2DMeasurementConfig {
     // message. Multiplied by `cores` to get the message count the gate actually counts.
     uint32_t warmup = 0;
 
+    // Sample the credit round trip: h2h:credit-raw (post -> credit visible), h2h:net (that
+    // minus the peer's own reported turnaround) and h2h:payload-at-peer. The credit is this
+    // socket's analogue of tt-fabric's ping-pong reply, so it is the only shape yielding a
+    // latency comparable to theirs -- and only at send_window 1, where one message is alone in
+    // flight. Costs a credit_total() read per in-flight message per lap on the sender thread,
+    // so a run carrying it does not also produce a quotable bandwidth.
+    bool measure_credit = false;
+
     // Time each payload write from post to local completion, reported as diag:h2h-retire.
     // Costs work on the sender thread, which is this path's measured bottleneck, so a
     // bandwidth run must not pay for a number it does not print.

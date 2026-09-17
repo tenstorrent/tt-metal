@@ -70,6 +70,7 @@ struct Options {
     bool use_transport = false;
     bool same_host = false;
     bool measure_retire = false;
+    bool measure_credit = false;
     // Every core sends and receives. Needs delivery to own its L1 buffer, halving the largest
     // payload that fits. Off: rank 0 sends, the rest receive, one shared buffer per core.
     bool bidir = false;
@@ -118,6 +119,9 @@ HOST-TO-HOST
   There is no bootstrap to configure: connect_mesh() builds one endpoint per peer rank and
   takes identity from DistributedContext.
   --same-host              both processes on one box: skip clock sync
+  --measure-credit         sample the credit round trip: h2h:credit-raw, h2h:net,
+                           h2h:payload-at-peer. Only a LATENCY at --send-window 1. Costs
+                           sender-thread work, so the run's bandwidth is not quotable.
   --measure-retire         time each payload write from POST to COMPLETION, reported as
                            diag:h2h-retire. Nothing waits. Needs more than one rank.
                            The row pools payload retires with 40-byte notice retires, so its
@@ -244,6 +248,7 @@ bool parse(int argc, char** argv, Options& o) {
         else if (a == "--chip") { o.chip = std::stoul(next(i)); }
         else if (a == "--same-host") { o.same_host = true; }
         else if (a == "--measure-retire") { o.measure_retire = true; }
+        else if (a == "--measure-credit") { o.measure_credit = true; }
         else if (a == "--csv") { o.csv = next(i); }
         else if (a == "--csv-append") { o.csv_append = true; }
         else if (a == "--tag") { o.tag = next(i); }
@@ -825,6 +830,7 @@ int run_device(Options& o) {
     D2DMeasurementConfig mc;
     mc.warmup = o.warmup;
     mc.measure_retire = o.measure_retire;
+    mc.measure_credit = o.measure_credit;
     mc.ns_per_cycle_override = o.ns_per_cycle;
     mc.same_host = o.same_host;
     if (const std::string me = sock->measure(mc); !me.empty()) {

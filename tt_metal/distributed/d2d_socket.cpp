@@ -205,8 +205,6 @@ std::unique_ptr<D2DSocket> D2DSocket::create(
     sc.pin = cfg.pin;
     sc.send_window = cfg.send_window;
     sc.send_blocking = cfg.send_blocking;
-    // ns_per_cycle, record_from_start and warmup_msgs are measurement parameters and are set
-    // by measure() through D2H2H2DSocket::configure_measurement(), before open().
 
     s->inner_ = std::make_unique<D2H2H2DSocket>(
         region, s->deliverer_.get(), HostTopology{cfg.host_ident, cfg.host_num, cfg.chips_per_host}, sc, *s->primary_);
@@ -268,7 +266,8 @@ std::string D2DSocket::measure(const D2DMeasurementConfig& m) {
 
     // Refuses if open() has already run -- checked inside the socket rather than trusted here.
     if (const std::string e = inner_->configure_measurement(
-            static_cast<uint64_t>(m.warmup) * static_cast<uint64_t>(cfg_.cores), ns_per_cycle_);
+            static_cast<uint64_t>(m.warmup) * static_cast<uint64_t>(cfg_.cores), ns_per_cycle_,
+            m.measure_credit);
         !e.empty()) {
         return e;
     }

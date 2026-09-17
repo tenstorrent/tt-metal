@@ -71,6 +71,7 @@ if(USE_MPI)
         DISTRIBUTED_SRC
         ${CMAKE_CURRENT_SOURCE_DIR}/d2d_socket.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/d2h2h2d_socket.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/d2h2h2d_socket_diag.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/host_clock.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/host_deliver.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/host_region.cpp

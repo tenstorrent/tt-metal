@@ -181,23 +181,73 @@ public:
         uint32_t signal_addr = 0;
         uint32_t completion_addr = 0;
         uint32_t stop_addr = 0;
-        // THE OBJECT THE OFFSET ACTUALLY INDEXES. A store's offset is an L1 address, but on
-        // the H2DSocket path the pull kernel reads pcie_data_addr + off -- so the aliased
-        // RING, not L1, is what has to contain it. lo/hi bound the L1 side; this bounds the
-        // host side, and without it a legal L1 address indexes past the end of the ring.
-        // 0 disables the check, for a deliverer that has no ring: the direct-write path
-        // addresses L1 itself and needs lo/hi alone.
+        // A store's offset is an L1 address, but on the H2DSocket path the pull kernel
+	// reads pcie_data_addr + off -- so the aliased RING, not L1, is what has to
+	// contain it. lo/hi bound the L1 side; this bounds the host side, and without
+	// it a legal L1 address indexes past the end of the ring. 0 disables the check,
+	// for a deliverer that has no ring: the direct-write path addresses L1 itself
+	// and needs lo/hi alone.
         uint32_t ring_bytes = 0;
-        // THE RECEIVE SCR (Kimi #9). The pull kernel reads this word to learn where to write
-        // and how much, so a store that lands on it forges a pull order with a wire-supplied
-        // offset and length -- a second arbitrary-L1-write primitive, behind the guard that
-        // exists to stop the first. It was absent from the overlap clause entirely.
+        // The pull kernel reads this word to learn where to write and how much, so a store
+	// that lands on it forges a pull order with a wire-supplied offset and length -- a
+	// second arbitrary-L1-write primitive, behind the guard that exists to stop the first.
         //
         // Appended last rather than beside the other doorbell words because StoreGuard is
         // aggregate-initialised positionally (test_oneway_volume.cpp, L1Map::store_guard());
         // inserting it mid-struct would silently shift ring_bytes.
         uint32_t dest_word_addr = 0;
     };
+
+    // store's offset arrives from another machine, so this is the check that stands between
+    // the wire and a pointer. Returns false and fills `why` on a refusal.
+    //
+    static bool store_offset_ok(
+        const StoreGuard& g, uint32_t off, uint64_t length, std::string& why) {
+        // Every clause below is of the form `off < X + 4 && off + length > X`. With X == 0 that
+        // is true only for off < 4, so an UNSET field silently checks almost nothing -- the
+        // guard appears to be enforcing and is not. Refuse rather than half-check.
+        if (g.hi == 0 || g.signal_addr == 0 || g.completion_addr == 0 || g.stop_addr == 0 ||
+            g.dest_word_addr == 0) {
+            why = "the store guard is incomplete (lo=" + std::to_string(g.lo) + " hi=" + std::to_string(g.hi) +
+                  " signal=" + std::to_string(g.signal_addr) + " completion=" + std::to_string(g.completion_addr) +
+                  " stop=" + std::to_string(g.stop_addr) + " dest_word=" + std::to_string(g.dest_word_addr) +
+                  "); a zero field checks nothing, so stores are refused rather than half-checked";
+            return false;
+        }
+        if (off < g.lo) {
+            why = "below the allocator base -- that L1 belongs to tt-metal";
+            return false;
+        }
+        if (off > g.hi || static_cast<uint64_t>(off) + length > g.hi) {
+            why = "runs past the end of this core's L1";
+            return false;
+        }
+        // The RX SCR is 8 bytes wide, not four: the encoding packs the offset AND the length
+        // into one uint64_t and the pull kernel reads it as a uint64_t, so a store clipping
+        // either half forges a pull order the kernel then executes. sizeof(uint64_t) rather
+        // than L1Map::kDestWordBytes because L1Map lives in d2d_socket.hpp, which depends on
+        // this header rather than the other way round.
+        if ((off < g.signal_addr + 4 && off + length > g.signal_addr) ||
+            (off < g.completion_addr + 4 && off + length > g.completion_addr) ||
+            (off < g.stop_addr + 4 && off + length > g.stop_addr) ||
+            (off < g.dest_word_addr + sizeof(uint64_t) && off + length > g.dest_word_addr)) {
+            // A forged doorbell releases a kernel for bytes that never arrived, which is why
+            // this is a fault and not a clamp.
+            why = "overlaps a doorbell word (rdma_signal / rdma_completion / stop / receive SCR)";
+            return false;
+        }
+        if (g.ring_bytes != 0 && static_cast<uint64_t>(off) + length > g.ring_bytes) {
+            // Past the end of the ring, which lo/hi cannot see: they bound L1, and this offset
+            // is about to reach a kernel that reads pcie_data_addr + off out of the aliased
+            // host ring. Under today's sizing -- one payload per ring -- every store lands
+            // here, which is correct: a store needs the ring sized to the whole L1 mirror.
+            why = "runs past the end of the aliased H2D ring -- a store needs the ring sized to "
+                  "the L1 mirror, which this build does not do";
+            return false;
+        }
+        return true;
+    }
+
     void set_store_guard(const StoreGuard& g) { store_guard_ = g; }
     uint64_t store_faults() const { return store_faults_.load(std::memory_order_relaxed); }
 
@@ -221,13 +271,14 @@ public:
 
     // measurement parameters, settable only before open(). After open() the scan pool and the
     // sender thread read cfg_ without synchronisation, so this refuses rather than racing.
-    std::string configure_measurement(uint64_t warmup_msgs, double ns_per_cycle) {
+    std::string configure_measurement(uint64_t warmup_msgs, double ns_per_cycle, bool measure_credit) {
         if (scanner_) {
             return "configure_measurement: the socket is already open; the scan pool is reading "
                    "these fields";
         }
         cfg_.warmup_msgs = warmup_msgs;
         cfg_.ns_per_cycle = ns_per_cycle;
+        cfg_.measure_credit = measure_credit;
         // The gate starts shut when a warmup is pending, open otherwise -- the same rule
         // record_from_start expressed at construction.
         set_recording(warmup_msgs == 0);

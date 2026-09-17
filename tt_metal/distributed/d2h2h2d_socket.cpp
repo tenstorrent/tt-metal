@@ -320,63 +320,17 @@ uint64_t D2H2H2DSocket::deliver_to_l1(const Job& job, WorkerStats& ws, uint32_t 
     }
 
     // effective address; Zero for kOpSendUva, which takes the layout's fixed destination.
+    // The checking itself is D2H2H2DSocket::store_offset_ok() -- see the header for why that
+    // lives apart from this function.
     uint32_t dst_l1 = 0;
     if (ctrl_op_is_store(ctrl_opcode(job.ctrl))) {
         if (job.operand_count < 4) {
             fail("store notice without its destination UVA -- the sender is older than this build");
             return 0;
         }
-        const uint64_t dest_uva = job.operand[3];
-        const uint32_t off = uva_offset(dest_uva);
-        const char* why = nullptr;
-        // guard must be complete bfore trusted for use
-        //
-        // Every clause below is of the form `off < X + 4 && off + length > X`. With X == 0 that
-        // is true only for off < 4, so an UNSET field silently checks almost nothing -- the
-        // guard appears to be enforcing and is not. A store's offset comes from another
-        // machine, so a half-initialised guard is an arbitrary-write primitive with a
-        // reassuring name. Refuse rather than half-check.
-        if (store_guard_.hi == 0 || store_guard_.signal_addr == 0 || store_guard_.completion_addr == 0 ||
-            store_guard_.stop_addr == 0 || store_guard_.dest_word_addr == 0) {
-            store_faults_.fetch_add(1, std::memory_order_relaxed);
-            std::ostringstream m;
-            m << "store fault: core " << job.core
-              << " -- the store guard is incomplete (lo=" << store_guard_.lo << " hi=" << store_guard_.hi
-              << " signal=" << store_guard_.signal_addr << " completion=" << store_guard_.completion_addr
-              << " stop=" << store_guard_.stop_addr << " dest_word=" << store_guard_.dest_word_addr
-              << "); a zero field checks nothing, so stores are refused rather than half-checked";
-            fail(m.str());
-            return 0;
-        }
-        if (off < store_guard_.lo) {
-            why = "below the allocator base -- that L1 belongs to tt-metal";
-        } else if (off > store_guard_.hi || static_cast<uint64_t>(off) + length > store_guard_.hi) {
-            why = "runs past the end of this core's L1";
-        } else if ((off < store_guard_.signal_addr + 4 && off + length > store_guard_.signal_addr) ||
-                   (off < store_guard_.completion_addr + 4 && off + length > store_guard_.completion_addr) ||
-                   (off < store_guard_.stop_addr + 4 && off + length > store_guard_.stop_addr) ||
-                   // RX SCR, is 8 bytes wide, not four: the encoding packs the offset AND the
-		   // length into one uint64_t, and the pull kernel reads it as a uint64_t, so a
-		   // store clipping either half forges a pull order the kernel then executes.
-		   // sizeof(uint64_t) rather than L1Map::kDestWordBytes because L1Map lives in
-		   // d2d_socket.hpp, which depends on this header rather than the other way round.
-                   (off < store_guard_.dest_word_addr + sizeof(uint64_t) &&
-                    off + length > store_guard_.dest_word_addr)) {
-            // a 'forged' doorbell releases a kernel for bytes that never arrived, which is why
-            // this is a fault and not a clamp.
-            why = "overlaps a doorbell word (rdma_signal / rdma_completion / stop / receive SCR)";
-        } else if (store_guard_.ring_bytes != 0 &&
-                   static_cast<uint64_t>(off) + length > store_guard_.ring_bytes) {
-            // past end of ring, which lo/hi cannot see: they bound L1, and this offset
-            // is about to be handed to a kernel that reads pcie_data_addr + off out of the
-            // aliased host ring. Under the sizing the socket path uses today -- one payload per
-            // ring -- every store lands here, which is correct: a store needs the ring sized to
-            // the whole L1 mirror (arena minus a page) and that is not implemented. Faulting
-            // here is the refusal, and it also stops a peer-supplied offset from reaching MPI.
-            why = "runs past the end of the aliased H2D ring -- a store needs the ring sized to "
-                  "the L1 mirror, which this build does not do";
-        }
-        if (why != nullptr) {
+        const uint32_t off = uva_offset(job.operand[3]);
+        std::string why;
+        if (!store_offset_ok(store_guard_, off, length, why)) {
             store_faults_.fetch_add(1, std::memory_order_relaxed);
             std::ostringstream m;
             m << "store fault: core " << job.core << " offset 0x" << std::hex << off << std::dec
@@ -1382,101 +1336,6 @@ void D2H2H2DSocket::sender_loop() {
 // ===========================================================================
 // Reporting
 // ===========================================================================
-
-void D2H2H2DSocket::append_transport_stats(RunStats& s) const {
-    // The sender thread's samples ARE the host-to-host stages; without this they are simply
-    // absent from the table.
-    s.per_worker.push_back(sender_stats_);
-
-    s.window = send_window_;
-    s.sender_shape = send_blocking_ ? "blocking" : "windowed";
-
-    // Two counters add, so folding peers needs no weighted mean and no special first case.
-    // d.sum is now a MEASURED total rather than mean*n back-computed from it, so latency_us
-    // for this hop is checkable against the count the same way every other hop's is.
-    RetireStats rs{};
-    for (Transport* t : peers_.all()) {
-        const RetireStats one = t->retire_stats();
-        rs.n += one.n;
-        rs.sum_ns += one.sum_ns;
-    }
-    if (rs.n > 0) {
-        WorkerStats w{};
-        Dist& d = w.hop[kHopH2HRetire];
-        d.n = rs.n;
-        d.sum = rs.sum_ns;
-        s.per_worker.push_back(w);
-    }
-}
-
-void D2H2H2DSocket::dump_transport(std::string& into) const {
-    std::ostringstream m;
-    for (Transport* tp_i : peers_.all()) {
-        const TransportDiag d = tp_i->diag();
-        m << "    transport[host " << tp_i->peer().host_id << "]: posted=" << d.posted
-          << " retired=" << d.retired << " injected=" << d.injected
-          << " outstanding=" << d.outstanding
-          << " unmatched=" << d.unmatched << " abandoned=" << d.abandoned;
-        if (d.outstanding != 0) {
-            m << " oldest_tag=" << d.oldest_tag;
-        }
-        m << "\n";
-        if (!d.last_error.empty()) {
-            m << "    transport[host " << tp_i->peer().host_id << "] last CQ error: " << d.last_error << "\n";
-        }
-    }
-    into = m.str();
-}
-
-RunStats D2H2H2DSocket::collect() const {
-    RunStats s = scanner_ ? scanner_->collect() : RunStats{};
-    const uint64_t t0 = timed_start_ns_.load(std::memory_order_relaxed);
-    const uint64_t t1 = timed_end_ns_.load(std::memory_order_relaxed);
-    s.timed_ns = (t0 > 0 && t1 > t0) ? (t1 - t0) : 0;
-    append_transport_stats(s);
-    return s;
-}
-
-std::string D2H2H2DSocket::stall_dump(const char* where) const {
-    std::ostringstream m;
-    m << "\n  [STALL @ " << where << "]\n";
-    m << "    tx_done=" << counters_.tx_done.load() << " delivered=" << counters_.delivered.load()
-      << " routed_remote=" << counters_.routed_remote.load()
-      << " errors=" << counters_.errors.load() << "\n";
-    m << "    sender: " << sender_state_.load() << "  (0=idle 1=credit-wait 2=payload 3=notice)\n";
-    m << "    credit_flushes=" << credit_flushes_.load(std::memory_order_relaxed) << "\n";
-    m << "    rx_gate: deliveries=" << rx_deliveries_.load(std::memory_order_relaxed)
-      << " with_remote_notice=" << rx_remote_notice_.load(std::memory_order_relaxed)
-      << " credits_entered=" << rx_credits_posted_.load(std::memory_order_relaxed)
-      << " credits_returned=" << rx_credits_done_.load(std::memory_order_relaxed)
-      << " origin_host=" << static_cast<int64_t>(rx_origin_host_.load(std::memory_order_relaxed))
-      << std::hex << " origin_sel=0x" << rx_origin_sel_.load(std::memory_order_relaxed)
-      << " first_ctrl=0x" << rx_first_ctrl_.load(std::memory_order_relaxed) << std::dec << "\n";
-    std::string t;
-    dump_transport(t);
-    m << t;
-    m << "    scan_rx=yes  rejects:";
-    for (uint32_t i = 0; i < 8; ++i) {
-        const uint64_t n = counters_.rejects[i].load();
-        if (n) {
-            m << " " << ctrl_verdict_name(i) << "=" << n;
-        }
-    }
-    m << "\n";
-    const uint32_t show = cfg_.cores < 8 ? cfg_.cores : 8;
-    for (uint32_t c = 0; c < show; ++c) {
-        m << "    core " << c << ": notice_sent=" << notice_sent_[c].load()
-          << " credit_in=" << credit_total(region_, c) << " tx_retired=" << tx_retired_[c].load()
-          << " delivered=" << delivered_per_core_[c].load() << " ctrl_tx=0x" << std::hex
-          << load_acquire(region_.ctrl_tx(c)) << " ctrl_rx=0x" << load_acquire(region_.ctrl_rx(c))
-          << std::dec << "\n";
-    }
-    const std::string fe = first_error();
-    if (!fe.empty()) {
-        m << "    first error: " << fe << "\n";
-    }
-    return m.str();
-}
 
 #endif  // TT_METAL_HOST_BRIDGE
 
