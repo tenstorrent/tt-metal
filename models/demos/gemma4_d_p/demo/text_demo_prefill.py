@@ -12,12 +12,9 @@ import time
 import pytest
 import torch
 from loguru import logger
-from safetensors.torch import load_file
 
 import ttnn
 from models.demos.gemma4_d_p.config import MeshConfig
-from models.demos.gemma4_d_p.demo.kv_pcc_data import KvPccDataset
-from models.demos.gemma4_d_p.demo.kv_pcc_report import KvPccRun, digest
 from models.demos.gemma4_d_p.tests.test_factory import find_layer_idx, parametrize_mesh_with_fabric
 from models.demos.gemma4_d_p.tt.common import create_tt_model
 from models.demos.gemma4_d_p.tt.model_config import Gemma4ModelArgs
@@ -48,7 +45,7 @@ def _load_full_weights():
     return os.environ.get("GEMMA4_PREFILL_LOAD_FULL_WEIGHTS", "0").lower() in ("1", "true", "yes")
 
 
-# ── Weight loading from the tensor cache ──────────────────────────────────────
+# ── Mesh configuration ───────────────────────────────────────────────────────
 
 
 def _mesh_config(mesh_device):
@@ -122,10 +119,8 @@ def _cp_gather_torch(tensor, mesh_config):
     per CP row and concatenate along the sequence. Device tensors come back in the
     mesh's row-major order; the CP axis determines the stride between ranks.
 
-    Falls back to device 0 alone when CP is off, matching ``_first_device_torch``.
+    Falls back to device 0 alone when CP is off.
     """
-    mesh_device = mesh_config.device
-
     shards = ttnn.get_device_tensors(tensor)
     cp = mesh_config.cp_degree if mesh_config is not None else 1
     if cp <= 1:
@@ -134,126 +129,6 @@ def _cp_gather_torch(tensor, mesh_config):
     cp_stride = mesh_config.tp_degree if mesh_config.cp_axis == 0 else 1
     rows = [ttnn.to_torch(shards[r * cp_stride]).float() for r in range(cp)]
     return torch.cat(rows, dim=-2)
-
-
-def _ring_cache_rows(full, start, end, chunk, cp, num_heads):
-    """Convert a composed [1, TP-heads, CP*capacity, D] cache to [tokens, num_heads, D]."""
-    _, heads, rows, dim = full.shape
-    assert rows % cp == 0 and heads % num_heads == 0
-    # TP > KV heads replicates each head on consecutive columns (GQA assignment).
-    full = full[:, :: heads // num_heads].reshape(num_heads, cp, rows // cp, dim)
-    positions = torch.arange(start, end)
-    slab = chunk // cp
-    ranks = positions.remainder(chunk) // slab
-    local_rows = (positions // chunk) * slab + positions.remainder(slab)
-    return full[:, ranks, local_rows, :].permute(1, 0, 2)
-
-
-def _kv_accuracy(a: torch.Tensor, b: torch.Tensor) -> tuple[float, float]:
-    """Compute PCC and relative L2 from shared float64 inputs."""
-    a = a.to(torch.float64).flatten()
-    b = b.to(torch.float64).flatten()
-    centered_a = a - a.mean()
-    centered_b = b - b.mean()
-    d = centered_a.norm() * centered_b.norm()
-    correlation = float("nan") if d == 0 else float(torch.clamp((centered_a @ centered_b) / d, -1.0, 1.0))
-    del centered_a, centered_b
-    n = b.norm()
-    relative_error = float("nan") if n == 0 else float((a - b).norm() / n)
-    return correlation, relative_error
-
-
-def _measure_kv_pcc(model, mesh_device, ref_dir, kv_streams, metadata, tokens, chunk, cp):
-    """With --kv-pcc, compare populated caches against the matching reference after all replays complete.
-
-    Score each reference block separately.
-    """
-    from models.demos.gemma4_d_p.tt.attention.global_kv_cache import (
-        GLOBAL_HEAD_DIM,
-        GLOBAL_ROTARY_DIM,
-        pack_global_kv_reference,
-        sliding_kv_indices,
-    )
-    from models.demos.gemma4_d_p.tt.attention.ring_prefill import GlobalRingKVCache
-
-    reference_tokens = torch.tensor(metadata["token_ids"][: tokens.shape[-1]], dtype=torch.int64).unsqueeze(0)
-    assert torch.equal(
-        tokens.to(torch.int64), reference_tokens
-    ), "GPU traces and the device model implementation must use the same input"
-    assert len(kv_streams) == len(model.layers), "KV reference layer count differs from model"
-    for layer_idx, blocks in enumerate(kv_streams):
-        next_row = 0
-        for block in blocks:
-            assert (
-                block["row_start"] == next_row and block["row_end"] > next_row
-            ), f"layer {layer_idx}: KV reference ranges must be contiguous and start at zero"
-            next_row = min(block["row_end"], tokens.shape[-1])
-        assert (
-            next_row == tokens.shape[-1]
-        ), f"layer {layer_idx}: KV reference rows must match the complete input sequence"
-
-    records = []
-    composer = ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=(2, 1))
-    for layer_idx, layer in enumerate(model.layers):
-        attn = layer.self_attn
-        assert attn.ring_kv_cache is not None, f"layer {layer_idx}: missing ring cache"
-        heads, dim = attn.config.num_key_value_heads, attn.config.head_dim
-        packed = isinstance(attn.ring_kv_cache, GlobalRingKVCache)
-        cache_parts = (
-            (("K_effective", attn.ring_kv_cache.kv), ("V", attn.ring_kv_cache.kv))
-            if packed
-            else (("K", attn.ring_kv_cache.k), ("V", attn.ring_kv_cache.v))
-        )
-        # Keep reference mappings for this layer only, releasing each after V.
-        # Both passes use the same file, which contains canonical K and V.
-        reference_blocks = {}
-        full = None
-        for part, tensor in cache_parts:
-            # Sliding K/V have separate caches; global K/V share one packed cache.
-            if full is None:
-                full = ttnn.to_torch(tensor, mesh_composer=composer).float()
-            for block_idx, block in enumerate(kv_streams[layer_idx]):
-                start, end = block["row_start"], min(block["row_end"], tokens.shape[-1])
-                path = ref_dir / block["path"]
-                if part == "V":
-                    golden = reference_blocks.pop(block_idx)
-                else:
-                    golden = load_file(str(path))[f"kv_post_transform_layer_{layer_idx}"]
-                    reference_blocks[block_idx] = golden
-                assert golden.shape == (block["row_end"] - start, 2 * heads * dim), f"{path}: invalid KV shape"
-                golden = golden[: end - start]
-                golden_k = golden[:, : heads * dim].reshape(end - start, heads, dim)
-                golden_v = golden[:, heads * dim :].reshape(end - start, heads, dim)
-                actual = _ring_cache_rows(full, start, end, chunk, cp, heads)
-                if packed:
-                    # Global cache is [Krot128 | Vnonrot384 | Vrot128]. Non-rotary
-                    # K gamma lives on Q, so compare the effective cached K view.
-                    golden_packed = pack_global_kv_reference(golden_k, golden_v)
-                    channels = slice(0, GLOBAL_HEAD_DIM) if part == "K_effective" else slice(GLOBAL_ROTARY_DIM, None)
-                    golden = golden_packed[..., channels]
-                    actual = actual[..., channels]
-                elif part == "K":
-                    golden = golden_k.index_select(-1, sliding_kv_indices(dim))
-                else:
-                    golden = golden_v
-                value, error = _kv_accuracy(actual, golden)
-                records.append(
-                    {
-                        "layer": layer_idx,
-                        "part": "K" if part == "K_effective" else part,
-                        "chunk": block_idx,
-                        "row_start": start,
-                        "row_end": end,
-                        "pcc": value,
-                        "rel_l2": error,
-                    }
-                )
-                logger.info(f"[kv_pcc] layer={layer_idx} {part} rows=[{start},{end}) pcc={value:.6f} relL2={error:.6f}")
-            if not packed:
-                full = None
-        # Release the global packed readback before loading the next layer.
-        full = None
-    return records
 
 
 # ── Eager / traced execution ──────────────────────────────────────────────────
@@ -302,29 +177,11 @@ def _build_prefill_model(mesh_config, model_path, chunk_size, context_len=None):
 # ── Traced long-context chunked prefill (production shape) ────────────────────
 
 
-@torch.no_grad()
-@parametrize_mesh_with_fabric([(8, 4), (4, 8)], device_params_extra={"trace_region_size": TRACE_REGION_SIZE})
-@pytest.mark.parametrize("token_source", ["text"], ids=lambda t: t)
-@pytest.mark.parametrize("chunk_size", PREFILL_CHUNK_SIZES, ids=lambda c: f"chunk{c}")
-@pytest.mark.parametrize("context_len", [32768, 65536, 131072, 262144], ids=lambda c: f"ctx_{c // 1024}k")
-@pytest.mark.parametrize("readback_all", [True, False], ids=["readback_all", "readback_final"])
-def test_prefill_long_context_traced(
-    mesh_device, context_len, chunk_size, readback_all, token_source, reset_seeds, request
-):
-    """Measure all prefill chunks using one replayed ring-attention trace.
-
-    Pass --kv-pcc to report K/V PCC and relative L2 for each layer and reference
-    chunk instead of performance, using input.txt, GPU traces, and baseline.json
-    from one dataset.
-    Input token IDs must exactly match the GPU reference token IDs. If the reference
-    is longer than the requested context, compare against its first context_len tokens.
-    Save JSON measurements and fail when a block regresses beyond the approved baseline tolerances.
-    """
-
-    mesh_config = _mesh_config(mesh_device)
+def _validate_prefill_shape(mesh_config, context_len, chunk_size):
+    """Skip unsupported context/chunk combinations before loading the model."""
     cp = mesh_config.cp_degree
     if cp <= 1:
-        pytest.skip(f"targets CP>1; mesh {tuple(mesh_device.shape)} gives CP={cp}")
+        pytest.skip(f"targets CP>1; mesh {tuple(mesh_config.device.shape)} gives CP={cp}")
     if chunk_size < GEMMA4_SLIDING_WINDOW_TOKENS * cp:
         pytest.skip(
             f"chunk={chunk_size} gives a {chunk_size // cp}-token Q slab at CP={cp}, under the "
@@ -334,50 +191,12 @@ def test_prefill_long_context_traced(
     if context_len % chunk_size != 0:
         pytest.skip(f"context_len={context_len} is not a whole number of {chunk_size}-token chunks")
 
-    model_path = _model_path()
+
+def _run_traced_prefill(model, mesh_config, tokens_all, chunk_size, readback_all, *, report_performance=True):
+    """Populate model caches by replaying one trace over the supplied input chunks."""
+    mesh_device = mesh_config.device
+    context_len = tokens_all.shape[-1]
     n_chunks = context_len // chunk_size
-    model_args, model, kv_cache = _build_prefill_model(
-        mesh_config=mesh_config,
-        model_path=model_path,
-        chunk_size=chunk_size,
-        context_len=context_len,
-    )
-
-    dataset = KvPccDataset(request.config.getoption("--kv-pcc-data")) if request.config.getoption("--kv-pcc") else None
-    kv_ref_dir = dataset.directory if dataset is not None else None
-    kv_metadata = None
-    kv_run = None
-    tokens_all = None
-    if dataset is not None:
-        if token_source != "text":
-            raise ValueError("--kv-pcc uses the selected dataset's input.txt; token_source must be text")
-        kv_metadata = dataset.metadata
-        index = dataset.index
-        kv_streams = dataset.reference_blocks(context_len)
-        configuration = {
-            "model": model_path,
-            "mesh_shape": list(mesh_device.shape),
-            "chunk_size": chunk_size,
-            "context_len": context_len,
-            "token_source": token_source,
-            "input_text_sha256": dataset.input_text_sha256,
-            "token_ids_sha256": digest(kv_metadata["token_ids"][:context_len]),
-            "reference_metadata_sha256": digest(kv_metadata),
-            "reference_index_sha256": digest(index),
-            "layer_types": kv_metadata["layer_types"],
-            "cache_comparison": "global_effective_k_and_packed_v_sliding_reordered_k_v1",
-        }
-        kv_run = KvPccRun(configuration, request.node.nodeid, baseline_path=dataset.baseline_path)
-        tokens_all = torch.tensor(
-            dataset.token_ids(model_path, context_len, model_n_layers=len(model.layers)),
-            dtype=torch.int32,
-        ).unsqueeze(0)
-        assert int(tokens_all.min()) >= 0 and int(tokens_all.max()) < model_args.vocab_size, "Input token outside vocab"
-        logger.info("[kv_pcc] Performance reporting disabled")
-
-    if tokens_all is None:
-        tokens_all = _get_prefill_tokens(model_path, context_len, model_args.vocab_size, token_source)
-
     host_input_tokens = ttnn.from_torch(
         tokens_all[:, :chunk_size].contiguous(),
         device=None,
@@ -481,7 +300,7 @@ def test_prefill_long_context_traced(
                 assert torch.isfinite(hidden).all(), f"chunk {chunk_idx} produced non-finite output"
                 readback_s += time.time() - t_rb
             # Report per-chunk latency and cumulative device and wall time.
-            if kv_ref_dir is None:
+            if report_performance:
                 logger.info(
                     f"[traced_perf] chunk {chunk_idx + 1}/{n_chunks} [{chunk_start}, {chunk_start + chunk_size}) "
                     f"device={per_chunk[-1] * 1000:.1f}ms ({chunk_size / per_chunk[-1]:.0f} tok/s) | "
@@ -491,11 +310,7 @@ def test_prefill_long_context_traced(
     finally:
         ttnn.release_trace(mesh_device, tid_ring)
 
-    if kv_ref_dir is not None:
-        records = _measure_kv_pcc(model, mesh_device, kv_ref_dir, kv_streams, kv_metadata, tokens_all, chunk_size, cp)
-        report_path = kv_run.finish(records)
-        logger.info("[kv_pcc] PASS: all K/V measurements are within baseline tolerances.")
-        logger.info(f"[kv_pcc] JSON report: {report_path}")
+    if not report_performance:
         return
 
     device_s = sum(per_chunk)
@@ -524,6 +339,27 @@ def test_prefill_long_context_traced(
         f"[traced_perf] ring-depth cost: first={per_chunk[0] * 1000:.1f}ms -> last={per_chunk[-1] * 1000:.1f}ms "
         f"= {per_chunk[-1] / per_chunk[0]:.2f}x over {len(per_chunk) - 1} extra chunks of history"
     )
+
+
+@torch.no_grad()
+@parametrize_mesh_with_fabric([(8, 4), (4, 8)], device_params_extra={"trace_region_size": TRACE_REGION_SIZE})
+@pytest.mark.parametrize("token_source", ["text"], ids=lambda t: t)
+@pytest.mark.parametrize("chunk_size", PREFILL_CHUNK_SIZES, ids=lambda c: f"chunk{c}")
+@pytest.mark.parametrize("context_len", [32768, 65536, 131072, 262144], ids=lambda c: f"ctx_{c // 1024}k")
+@pytest.mark.parametrize("readback_all", [True, False], ids=["readback_all", "readback_final"])
+def test_prefill_long_context_traced(mesh_device, context_len, chunk_size, readback_all, token_source, reset_seeds):
+    """Measure prefill performance over all chunks using one replayed ring-attention trace."""
+    mesh_config = _mesh_config(mesh_device)
+    _validate_prefill_shape(mesh_config, context_len, chunk_size)
+    model_path = _model_path()
+    model_args, model, _kv_cache = _build_prefill_model(
+        mesh_config=mesh_config,
+        model_path=model_path,
+        chunk_size=chunk_size,
+        context_len=context_len,
+    )
+    tokens_all = _get_prefill_tokens(model_path, context_len, model_args.vocab_size, token_source)
+    _run_traced_prefill(model, mesh_config, tokens_all, chunk_size, readback_all)
 
 
 # ── Per-layer prefill timing ────────────────────────────────────────────────
