@@ -438,3 +438,79 @@ def test_an_unknown_target_is_refused(monkeypatch, expect_error):
 
     with expect_error(ValueError, "TT_SPEC_TARGET"):
         DummySpecDecodeModel(mesh_device=None, max_batch_size=8, vocab_size=VOCAB)
+
+
+def test_a_verify_answer_does_not_depend_on_the_step_before_it(monkeypatch):
+    """The checkable half of `model_capabilities['supports_async_spec_decode']`.
+
+    That declaration says this model can be driven by the plugin's deferred
+    speculative path, where the readback and the commit of a step run after the
+    step's submission has returned. Its buffer-lifetime half is vacuous for
+    this model, which answers with host tensors and a host hidden object. Its
+    remaining content is that the model keeps nothing between steps: every
+    answer is a function of the step's own `tokens`, `start_pos` and
+    `accepted_counts`, so running a different step first cannot change it. A
+    model that selected a candidate state slot from whatever it ran last would
+    answer differently here.
+    """
+    tokens = _block(2)
+    positions = torch.tensor([[4, 5, 6, 7], [9, 10, 11, 12]], dtype=torch.int32)
+    num_valid = torch.tensor([3, 2], dtype=torch.int32)
+    counts = torch.tensor([2, 1], dtype=torch.int32)
+
+    def verify(model, **overrides):
+        call = {
+            "tokens": tokens,
+            "start_pos": positions,
+            "num_valid_drafts": num_valid,
+            "accepted_counts": counts,
+            "spec_mode": "argmax_ids",
+        }
+        call.update(overrides)
+        return model.decode_forward(**call).argmax_ids
+
+    alone = verify(_model(monkeypatch))
+
+    # A different step first: other tokens, other positions, other counts.
+    model = _model(monkeypatch)
+    verify(
+        model,
+        tokens=_block(2) + 7,
+        start_pos=positions + 32,
+        accepted_counts=torch.tensor([1, 3], dtype=torch.int32),
+    )
+    after_another_step = verify(model)
+
+    assert after_another_step.tolist() == alone.tolist()
+
+
+def test_the_fixed_target_s_drafter_does_not_depend_on_the_step_before_it(monkeypatch):
+    """The same property for the proposal half, on the losslessness target.
+
+    On the deferred path the proposal runs at the next step's drain, after the
+    readback of the verify whose hidden handle it is given, so it must continue
+    from the committed block it is handed rather than from anything it kept.
+    """
+    committed = torch.tensor([[100, 0, 0, 0]], dtype=torch.int32)
+    positions = torch.tensor([[5, 6, 7, 8]], dtype=torch.int32)
+    counts = torch.tensor([1], dtype=torch.int32)
+
+    def propose(model):
+        return model.propose_draft_tokens(3, committed, positions, counts, hidden=model._verify_hidden).draft_token_ids
+
+    alone = _fixed_model(monkeypatch)
+    alone._verify_hidden = object()
+    expected = propose(alone)
+
+    model = _fixed_model(monkeypatch)
+    model._verify_hidden = object()
+    model.propose_draft_tokens(
+        3,
+        committed + 5,
+        positions + 16,
+        counts,
+        hidden=model._verify_hidden,
+    )
+    after_another_step = propose(model)
+
+    assert after_another_step.tolist() == expected.tolist()

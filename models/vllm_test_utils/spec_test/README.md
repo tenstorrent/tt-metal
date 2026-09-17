@@ -52,9 +52,25 @@ vllm serve models/vllm_test_utils/spec_test \
     --no-async-scheduling
 ```
 
-`--no-async-scheduling` is not optional. The plugin's accept walk runs in the
-synchronous decode tail, and it refuses a launch that combines speculation with
-asynchronous scheduling rather than taking a path that would skip acceptance.
+`--no-async-scheduling` is not optional for this model, for a reason that is
+not about speculation. The plugin disables asynchronous scheduling for any
+model that does not declare `model_capabilities['supports_async_decode']`, and
+this model does not: it has no split submission and readback and recomputes
+from the host tokens of every step. Passing the flag makes the launch say what
+it is going to do.
+
+The speculative half of the asynchronous path is declared: this model sets
+`model_capabilities['supports_async_spec_decode']`, which the plugin requires
+before it admits speculation together with asynchronous scheduling. That
+declaration is about two things the deferred path does to a model: it hands
+`read_decode_output` a `[B, 1+K]` verify whose committed length the host
+decides after the forward, and it holds the verify's hidden handle across the
+readback until the next step's propose call. This model satisfies both
+trivially, because it returns host tensors and a host hidden object. The
+property worth asserting here is the one the host tests cover: it keeps no
+state between steps. The declaration does not make this model run
+asynchronously on a server, because the ordinary async-decode declaration
+above is the one the plugin reads first.
 
 Requests must be greedy. The `ngram` method with `argmax_ids` acceptance
 compares token ids and never sees logits, so the plugin refuses a request

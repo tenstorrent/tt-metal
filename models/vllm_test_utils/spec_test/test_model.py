@@ -94,6 +94,26 @@ class DummySpecDecodeModel(DummyNoOpModel):
         # verify produced, can be asserted. A model that keeps real hidden
         # state in device memory declares ``on_device``.
         "spec_hidden_handoff": ["roundtrip"],
+        # The deferred speculative path asks two things of a model: that its
+        # readback serve a ``[B, 1+K]`` verify whose committed length the host
+        # decides after the forward, and that the verify's hidden handle stay
+        # valid across that readback until the next step's propose call. This
+        # model satisfies both trivially, and the word is exact: it returns
+        # host tensors, so the plugin reads no device buffer for it, and its
+        # handle is a host Python object with no lifetime to lose. What is not
+        # trivial, and is what the two order-independence tests beside this
+        # model assert, is that it keeps no state between steps: every answer
+        # is computed from the ``tokens``, ``start_pos`` and
+        # ``accepted_counts`` of the step being served.
+        #
+        # Note what this does not declare: ``supports_async_decode``, which the
+        # plugin reads first and whose absence makes it disable asynchronous
+        # scheduling for this model. That one requires a split submission and
+        # readback (``read_decode_output``) and resident forward inputs, which
+        # this model does not implement. So a server launch of this model still
+        # decodes synchronously, and this declaration is what the plugin's own
+        # asynchronous speculative tests assert against.
+        "supports_async_spec_decode": True,
         # Left at 1 by omission. Any value above 1 selects the block-output
         # rail, which owns the committed width per step and cannot be combined
         # with speculation.
