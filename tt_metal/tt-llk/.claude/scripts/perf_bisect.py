@@ -167,7 +167,41 @@ def apply_commit_files(sha, apply_ref, env):
     return f"{len(files)} file(s) from {short(apply_ref)}"
 
 
-def force_non_sol(sha, maxschedchunk=None, apply_ref=None):
+def patch_runner(body, *, workers=None, test_filter=None, split_into=None):
+    """Reshape one perf runner script for a controlled experiment.
+
+    `workers` sets -n on both passes; 1 means a single xdist worker, so a single
+    Tensix with no neighbours running concurrently. `test_filter` adds -k, and
+    `split_into` replaces the shard split so group 1 is a small slice of what the
+    filter selected — the other groups exit immediately, leaving exactly one card
+    doing exactly one sequence.
+    """
+    import re
+
+    if workers is not None:
+        body = re.sub(r"-n \d+", f"-n {workers}", body)
+    if test_filter is not None:
+        body = body.replace(
+            '-m "perf and not accuracy"',
+            f'-m "perf and not accuracy" -k "{test_filter}"',
+        )
+    if split_into is not None:
+        body = body.replace(
+            '--splits "$N_GROUPS" --group "$GROUP"',
+            f"--splits {split_into} --group 1",
+        )
+        marker = "mkdir -p perf_data"
+        guard = (
+            'if [ "${GROUP}" != "1" ]; then\n'
+            '  echo "experiment: only group 1 measures; this group exits."\n'
+            "  exit 0\n"
+            "fi\n" + marker
+        )
+        body = body.replace(marker, guard, 1)
+    return body
+
+
+def force_non_sol(sha, maxschedchunk=None, apply_ref=None, runner_opts=None):
     """A commit on top of `sha` whose perf runners measure with SoL off.
 
     Speed of light cannot be turned off from a dispatch on older commits: before
@@ -215,12 +249,20 @@ def force_non_sol(sha, maxschedchunk=None, apply_ref=None):
             body = git("show", f"{sha}:{path}")
         except RuntimeError:
             continue  # the script postdates this commit
+        if runner_opts:
+            body = patch_runner(body, **runner_opts)
+            how[path + ":runner"] = ", ".join(
+                f"{k}={v}" for k, v in runner_opts.items() if v is not None
+            )
         if "SPEED_OF_LIGHT:-true" in body:
             patched = body.replace("SPEED_OF_LIGHT:-true", "SPEED_OF_LIGHT:-false")
             how[path] = "env-default"
         elif "--speed-of-light" in body:
             patched = body.replace(" --speed-of-light", "")
             how[path] = "flag-removed"
+        elif runner_opts:
+            patched = body
+            how[path] = "sol-already-off"
         else:
             how[path] = "already-off"
             continue
@@ -269,6 +311,15 @@ def force_non_sol(sha, maxschedchunk=None, apply_ref=None):
     return commit, how
 
 
+def runner_opts_of(args):
+    opts = {
+        "workers": getattr(args, "workers", None),
+        "test_filter": getattr(args, "test_filter", None),
+        "split_into": getattr(args, "split_into", None),
+    }
+    return opts if any(v is not None for v in opts.values()) else None
+
+
 def variant_key(sha, args):
     """Cache key. A variant must not overwrite the plain measurement of a commit."""
     key = short(sha)
@@ -276,10 +327,15 @@ def variant_key(sha, args):
         key += f"+{short(git('rev-parse', args.apply))}"
     if getattr(args, "maxschedchunk", None) is not None:
         key += f"+chunk{args.maxschedchunk}"
+    for name, tag in (("workers", "n"), ("split_into", "s"), ("test_filter", "k")):
+        v = getattr(args, name, None)
+        if v is not None:
+            v = str(v).replace("/", "_").replace(" ", "")[:20]
+            key += f"+{tag}{v}"
     return key
 
 
-def push_branch(sha, index, maxschedchunk=None, apply_ref=None):
+def push_branch(sha, index, maxschedchunk=None, apply_ref=None, runner_opts=None):
     """One branch per run, because the workflow cancels its own concurrency group.
 
     llk-perf.yaml sets `group: <workflow>-<arch>-<github.ref>` with
@@ -291,7 +347,7 @@ def push_branch(sha, index, maxschedchunk=None, apply_ref=None):
     if apply_ref:
         suffix = f"-{short(git('rev-parse', apply_ref))[:7]}{suffix}"
     branch = f"{BRANCH_PREFIX}{short(sha)}{suffix}-r{index}"
-    head, _ = force_non_sol(sha, maxschedchunk, apply_ref)
+    head, _ = force_non_sol(sha, maxschedchunk, apply_ref, runner_opts)
     git("push", "--force", f"git@github.com:{REPO}.git", f"{head}:refs/heads/{branch}")
     return branch
 
@@ -675,6 +731,20 @@ def main(argv=None):
         help="which run types drive the search: 'core' (L1_TO_L1 plus the three "
         "isolate modes, all clean at the good endpoint), 'total' (adds "
         "L1_CONGESTION, which fires everywhere), or a comma-separated list",
+    )
+    ap.add_argument(
+        "--workers",
+        type=int,
+        help="set -n on both perf passes. 1 gives a single xdist worker, so one "
+        "Tensix with nothing running concurrently beside it — which separates "
+        "cross-core interference from state carried between tests on one core",
+    )
+    ap.add_argument("--test-filter", help="pytest -k expression for both passes")
+    ap.add_argument(
+        "--split-into",
+        type=int,
+        help="replace the shard split; group 1 runs that slice and every other "
+        "group exits, so one card runs one sequence",
     )
     ap.add_argument(
         "--apply",
