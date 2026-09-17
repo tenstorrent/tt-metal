@@ -2,6 +2,8 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+# Temporary smoke-test marker for the reviewer CODEOWNERS split check.
+
 """Regression tests for issue 43196.
 
 The next-gen binary broadcast factory previously enabled fp32 dest accumulation

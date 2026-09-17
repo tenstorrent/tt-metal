@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+# Temporary smoke-test marker for the reviewer CODEOWNERS split check.
+
 import functools
 
 import torch

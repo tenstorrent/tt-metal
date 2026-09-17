@@ -2,6 +2,8 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+# Temporary smoke-test marker for the reviewer CODEOWNERS split check.
+
 """FP32 SFPU tensor–tensor binary comparisons (eq/ne/lt/gt/le/ge) on Blackhole and Wormhole."""
 
 import pytest

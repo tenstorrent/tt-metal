@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+# Temporary smoke-test marker for the reviewer CODEOWNERS split check.
+
 import torch
 import pytest
 import random

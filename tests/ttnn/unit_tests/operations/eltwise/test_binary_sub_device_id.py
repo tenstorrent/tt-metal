@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+# Temporary smoke-test marker for the reviewer CODEOWNERS split check.
+
 """Tests for sub_device_id parameter on binary ops (issue #43977)."""
 
 import pytest
