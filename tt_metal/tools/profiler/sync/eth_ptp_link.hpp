@@ -334,6 +334,9 @@ struct SenderLink {
     // rounds badly has a DVFS step inside it and the previous value stands. 1.25 GHz until measured.
     uint32_t c16 = 400;
     uint64_t slot_cfr = 0, bursts = 0;
+    // The next slot and its ratio sample as wall cycles, set from the burst's own reading: an idle step then costs
+    // one wall-clock read where the refclk costs two, and nothing a stamp depends on is timed by it.
+    uint32_t slot_wall = 0, pre_wall = 0;
     uint32_t next_round = 0, diag_addr = 0;
     Instant start_at{}, pre{};
     Pacer pacer;
@@ -357,20 +360,31 @@ struct SenderLink {
         pacer.calibrate();
         start_at = read_instant();
         slot_cfr = start_at.refclk + kFrameTicks;
+        schedule(start_at);
+    }
+    __attribute__((always_inline)) void schedule(const Instant& now) {
+        const int64_t ticks = static_cast<int64_t>(slot_cfr - now.refclk);
+        slot_wall = now.wall_lo + ((static_cast<uint32_t>(ticks < 0 ? 0 : ticks) * c16) >> 4);
+        pre_wall = slot_wall - ((kRatioTicks * c16) >> 4);
     }
     __attribute__((always_inline)) void step() {
+        const uint32_t w = rd(kWallClockLo);
+        if (static_cast<int32_t>(w - slot_wall) < 0) {
+            if (pre.refclk == 0 && static_cast<int32_t>(w - pre_wall) >= 0) {
+                pre = read_instant();
+            }
+            return;
+        }
         if constexpr (DataCache) {
             invalidate_l1_cache();
         }
         if (rd(diag_addr) != kCtlRun) {
-            slot_cfr = read_cfr() + kFrameTicks;  // rounds resume on a fresh slot, not a backlog of missed ones
-            return;
-        }
-        const uint64_t cfr = read_cfr();
-        if (cfr < slot_cfr) {
-            if (pre.refclk == 0 && cfr + kRatioTicks >= slot_cfr) {
-                pre = read_instant();
-            }
+            // Rounds resume on a fresh slot, not a backlog of missed ones; one ratio window ahead, so the first
+            // burst has its sample.
+            const Instant now = read_instant();
+            slot_cfr = now.refclk + kRatioTicks;
+            schedule(now);
+            pre = Instant{};
             return;
         }
         burst();
@@ -450,6 +464,7 @@ private:
         diag.note_hold(rd(kWallClockLo) - hold0);
         bursts++;
         slot_cfr += burst_ticks;
+        schedule(now);
     }
 };
 
