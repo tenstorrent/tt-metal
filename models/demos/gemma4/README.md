@@ -416,56 +416,42 @@ production acceptance-rate forecast.
 
 ##### Full ISL sweep: baseline vs DFlash (T3K, 31B)
 
-Same `-k` bucket format as [Per-ISL performance on Wormhole T3K](#per-isl-performance-on-wormhole-t3k)
-above, run after the traced-prefill change, for direct comparison. Baseline uses
-`tests/e2e/test_isl_sweep.py`'s standard prompt files; DFlash uses a Gutenberg-derived
-quote-extraction prompt scaled to hit each ISL target (not the same files, since DFlash has no
-batch-8/batch-32 concurrent mode and no bucket past its own ISL ceiling) — `ms/tok` /
-`tok/s/user` are the post-prefill decode-loop rate in both, so they're comparable; `TTFT` is
-each run's own prefill wall time.
+One table, ordered by ISL, covering every bucket either path has data for. Baseline (no DFlash)
+uses `tests/e2e/test_isl_sweep.py`'s standard prompt files and its `-k` bucket names; DFlash uses
+a Gutenberg-derived quote-extraction prompt scaled to hit each ISL target instead (not the same
+files — DFlash has no batch-8/batch-32 concurrent mode and no bucket past its own ISL ceiling, so
+its measured points don't line up with baseline's round-number buckets). `ms/tok`/`tok/s/user`
+are each path's own post-prefill steady-state decode rate, directly comparable; `TTFT` is each
+run's own prefill wall time — noisy run-to-run (kernel/program-cache state), by up to ~2x even on
+a warm cache, so trust `ms/tok`/`tok/s/user` more than a single TTFT reading (see the 4k note
+below). Re-measured after syncing this branch's L1-budget/prefill-fidelity infra with
+`ign/gemma4_dflash_wh_changes` (baseline long-context TTFT dropped substantially, e.g. 128k:
+131.1s → 59.4s; `ms/tok`/`tok/s/user` unchanged) and after `DFlashDrafter`'s new context-aware
+`block_size` default (+7 to +16% tok/s at ISL 7,548+; see the note below).
 
-Re-measured after syncing this branch's L1-budget/prefill-fidelity infra (`ccl.py`,
-`compute_config.py`, `generator.py`, `rms_norm.py`, `shared_mlp.py`, `attention/{operations,prefill}.py`,
-and the shared `tt_transformers/tt/generator.py` base class) with `ign/gemma4_dflash_wh_changes` —
-baseline long-context TTFT dropped substantially as a result (e.g. 128k: 131.1s → 59.4s), while
-`ms/tok`/`tok/s/user` are unchanged (only prefill got faster, not decode). DFlash's long-context
-rows (7.5k+) also pick up a real speedup from `DFlashDrafter`'s new context-length-aware
-`block_size` default (see the note below the tables).
+| ISL bucket | ISL | Batch | Baseline TTFT (ms) | Baseline ms/tok | Baseline tok/s/user | DFlash `block_size` | DFlash TTFT (ms) | DFlash ms/tok | DFlash tok/s/user |
+|---|---:|:-:|---:|---:|---:|:-:|---:|---:|---:|
+| `batch-1` | 128 / 44 | 1 | 93.7 | 43.41 | 23.03 | 16 | 2,161 | 16.42 | 60.9 |
+| `batch-8` | 128 | 8 | 692.8 | 48.93 | 20.44 | — | not supported — DFlash has no concurrent-batch mode | | |
+| `batch-32` | 128 | 32 | 2,770.7 | 63.53 | 15.74 | — | not supported — DFlash has no concurrent-batch mode | | |
+| `long-context-4k` | 4k / 3,808 | 1 | 1,577.9 | 45.63 | 21.91 | 16 | 2,404 | 11.06 | 90.4 |
+| ~8k (DFlash-only) | 7,548 | 1 | — not measured at this ISL — | | | 8 | 3,954 | 24.69 | 40.5 |
+| ~16k (DFlash-only) | 14,780 | 1 | — not measured at this ISL — | | | 8 | 14,447 | 29.68 | 33.7 |
+| ~24k (DFlash-only) | 22,145 | 1 | — not measured at this ISL — | | | 8 | 20,285 | 33.11 | 30.2 |
+| `long-context-32k` | 32k | 1 | 13,431.6 | 49.40 | 20.24 | — | not supported — exceeds DFlash's ~24.7k ISL ceiling | | |
+| `long-context-64k` | 64k | 1 | 30,623.9 | 53.64 | 18.64 | — | not supported — exceeds DFlash's ~24.7k ISL ceiling | | |
+| `long-context-128k` | 128k | 1 | 59,359.4 | 59.16 | 16.90 | — | not supported — exceeds DFlash's ~24.7k ISL ceiling | | |
+| `long-context-256k` | 256k | 1 | **OOM** — see [Supported ISL range](#supported-isl-range-and-why-its-not-the-full-262144-hf-declares) | — | — | — | not supported — exceeds DFlash's ~24.7k ISL ceiling | | |
 
-**Baseline (no DFlash):**
+`batch-1`/`long-context-4k` show two ISL values (baseline / DFlash) since the two paths' prompt
+sets don't land on exactly the same token count for these "equivalent" rows.
 
-| ISL bucket (`-k`) | ISL | Batch | 31B TTFT (ms) | 31B ms/tok | 31B tok/s/user |
-|---|---:|:-:|---:|---:|---:|
-| `batch-1` | 128 | 1 | 93.7 | 43.41 | 23.03 |
-| `batch-8` | 128 | 8 | 692.8 | 48.93 | 20.44 |
-| `batch-32` | 128 | 32 | 2,770.7 | 63.53 | 15.74 |
-| `long-context-4k` | 4k | 1 | 1,577.9 | 45.63 | 21.91 |
-| `long-context-32k` | 32k | 1 | 13,431.6 | 49.40 | 20.24 |
-| `long-context-64k` | 64k | 1 | 30,623.9 | 53.64 | 18.64 |
-| `long-context-128k` | 128k | 1 | 59,359.4 | 59.16 | 16.90 |
-| `long-context-256k` | 256k | 1 | **OOM** — see [Supported ISL range](#supported-isl-range-and-why-its-not-the-full-262144-hf-declares) | — | — |
-
-**DFlash (traced):**
-
-| ISL bucket | ISL | Batch | `block_size` | 31B TTFT (ms) | 31B ms/tok | 31B tok/s/user |
-|---|---:|:-:|:-:|---:|---:|---:|
-| `batch-1`-equiv | 44 | 1 | 16 | 2,161 | 16.42 | 60.9 |
-| `long-context-4k`-equiv | 3,808 | 1 | 16 | 2,404 | 11.06 | 90.4 |
-| ~8k (extra) | 7,548 | 1 | 8 | 3,954 | 24.69 | 40.5 |
-| ~16k (extra) | 14,780 | 1 | 8 | 14,447 | 29.68 | 33.7 |
-| ~24k (extra) | 22,145 | 1 | 8 | 20,285 | 33.11 | 30.2 |
-| `batch-8` / `batch-32` | — | 8 / 32 | — | not supported — DFlash has no concurrent-batch mode | | |
-| `long-context-32k` / `64k` / `128k` / `256k` | — | 1 | — | not supported — exceeds DFlash's verified ~24.7k ISL ceiling on T3K | | |
-
-The 4k row was originally measured at TTFT=80.2s — a clear outlier, *longer* than the 8k row's
-TTFT despite half the tokens. Confirmed as a one-time kernel/cache-build tax, not a real cost:
-an isolated 2-pass re-run hit it AGAIN on the first (cold) pass — 81.8s — then dropped to a warm
-pass matching this table's monotonic trend across buckets. Acceptance rate and generated tokens
-were identical both passes (correctness unaffected); only wall-clock prefill time was inflated.
-The table above reports the warm number. Moral: always run a fresh shape combination at least
-twice before trusting its TTFT — TTFT specifically is noisy run-to-run (kernel/program-cache
-state, not block_size or any code path here), by up to ~2x even on a warm cache; `ms/tok`/
-`tok/s/user` are the steady-state numbers worth trusting from a single run.
+The DFlash 4k row was originally measured at TTFT=80.2s — a clear outlier, *longer* than the 8k
+row's TTFT despite half the tokens. Confirmed as a one-time kernel/cache-build tax, not a real
+cost: an isolated 2-pass re-run hit it AGAIN on the first (cold) pass — 81.8s — then dropped to a
+warm pass matching this table's monotonic trend across buckets. Acceptance rate and generated
+tokens were identical both passes (correctness unaffected); only wall-clock prefill time was
+inflated. The table above reports the warm number.
 
 **`block_size` (K) auto-tuning:** `DFlashDrafter` now shrinks its default speculative block from
 the checkpoint's own 16 to 8 once the caller's upfront `ctx_len_hint` exceeds
