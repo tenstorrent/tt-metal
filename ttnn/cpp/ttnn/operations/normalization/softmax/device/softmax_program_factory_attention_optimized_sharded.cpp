@@ -382,8 +382,7 @@ SoftmaxDeviceOperation::SoftmaxShardedProgramFactoryAttentionOptimized::create_p
              {"subblock_w", program_config.subblock_w},
              {"num_subblocks_w", num_subblocks_w},
              {"causal_mask", static_cast<std::uint32_t>(attributes.is_causal_mask)},
-             {"sharded_causal_mask", static_cast<std::uint32_t>(mask_sharded_resident)},
-             {"numeric_stable", static_cast<std::uint32_t>(attributes.numeric_stable)}},
+             {"sharded_causal_mask", static_cast<std::uint32_t>(mask_sharded_resident)}},
         .hw_config = compute_hw,
     };
 

@@ -34,9 +34,9 @@ namespace ckl = compute_kernel_lib;
 // residual was supplied. Only the buffer selected here is bound on this build, so the alias is gated
 // at the preprocessor: naming an unbound handle would not compile even on a discarded branch.
 #ifdef FUSE_PRE_ADD
-constexpr auto dfb_inp_id = dfb::fused;
+constexpr auto dfb_inp_id = dfb::fused;  // fused a + b
 #else
-constexpr auto dfb_inp_id = dfb::in0;
+constexpr auto dfb_inp_id = dfb::in0;  // just a
 #endif
 
 void kernel_main() {

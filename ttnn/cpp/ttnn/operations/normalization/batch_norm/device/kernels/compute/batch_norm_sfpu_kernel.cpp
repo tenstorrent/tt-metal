@@ -19,7 +19,11 @@ void kernel_main() {
     uint32_t tile_start = get_arg(args::tile_start);
     constexpr bool weight_has_value = get_arg(args::weight_has_value) == 1;
     constexpr bool bias_has_value = get_arg(args::bias_has_value) == 1;
-    constexpr bool needs_output_typecast = get_arg(args::needs_output_typecast) == 1;
+#ifdef NEEDS_OUTPUT_TYPECAST
+    constexpr bool needs_output_typecast = true;
+#else
+    constexpr bool needs_output_typecast = false;
+#endif
 
     if (num_tiles == 0) {
         return;
@@ -55,9 +59,10 @@ void kernel_main() {
 
         const uint32_t inner_count = freq - tile_start;
 
-        // The output binding must be selected by the preprocessor: dfb::writer_out is not generated for
-        // non-typecast builds, so even an unselected if-constexpr or ternary branch would fail to compile.
-        // Keep this condition in sync with needs_output_typecast above; the writer drains out otherwise.
+// The writer-facing output DFB is only bound when the accumulation format is wider than the output
+// dtype; on the other path the writer drains the compute output directly, so the same kernel-side
+// handle has to name a different DFB. The alias is gated at the preprocessor stage because
+// dfb::writer_out simply does not exist on the untypecast build.
 #ifdef NEEDS_OUTPUT_TYPECAST
         constexpr auto output_final = output(dfb::writer_out);
 #else

@@ -24,12 +24,8 @@ ALWI void update_running_stat() {
             BinaryFpuOp::Sub,
             ckl::input(dfb::one, ckl::WaitPolicy::None, ckl::PopPolicy::None),
             ckl::input(dfb::momentum, ckl::WaitPolicy::None, ckl::PopPolicy::None)>{},  // D0 = 1 - momentum
-        ckl::
-            DestReuseBinary<BinaryFpuOp::Mul, ckl::input(dfb_old_id), ckl::DestReuseType::DEST_TO_SRCA>{},  // D0 = (1
-                                                                                                            // -
-                                                                                                            // momentum)
-                                                                                                            // *
-                                                                                                            // old_stat
+        // D0 = (1 - momentum) * old_stat
+        ckl::DestReuseBinary<BinaryFpuOp::Mul, ckl::input(dfb_old_id), ckl::DestReuseType::DEST_TO_SRCA>{},
         ckl::BinaryFpu<
             BinaryFpuOp::Mul,
             ckl::input(dfb::momentum, ckl::WaitPolicy::None, ckl::PopPolicy::None),
@@ -63,9 +59,9 @@ void kernel_main() {
     dfb_momentum_obj.wait_front(1);
 
     for (uint32_t tile_id = 0; tile_id < num_tiles; ++tile_id) {
-        // The reader and writer produce the batch-mean and batch-var streams for every tile, even
-        // when only one running statistic is requested. Consume both streams unconditionally to avoid
-        // filling either two-entry buffer and stalling its producer.
+        // HAZARD: reader/writer push batch_mean and batch_var every tile regardless of
+        // which stats are present. Both must be waited and popped unconditionally here;
+        // omitting a pop will stall the producer after the DFB fills (DFB depth is 2).
         dfb_batch_mean_obj.wait_front(onetile);
         dfb_batch_var_obj.wait_front(onetile);
         dfb_out_obj.reserve_back(onetile);

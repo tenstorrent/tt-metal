@@ -28,9 +28,9 @@ namespace ckl = compute_kernel_lib;
 // residual was supplied. Only the buffer selected here is bound on this build, so naming the other
 // handle would not compile even in a discarded C++ branch.
 #ifdef FUSE_PRE_ADD
-constexpr auto dfb_inp_id = dfb::fused;
+constexpr auto dfb_inp_id = dfb::fused;  // fused a + b
 #else
-constexpr auto dfb_inp_id = dfb::in0;
+constexpr auto dfb_inp_id = dfb::in0;  // just a
 #endif
 
 void kernel_main() {
@@ -116,8 +116,8 @@ void kernel_main() {
     dfb_zero.wait_front(1);
 
     // Initialize accumulation
-    // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the
-    // pre-cleanup full-init behaviour) should become a targeted DST re-arm.
+    // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup
+    // full-init behaviour) should become a targeted DST re-arm.
     compute_kernel_hw_startup(dfb::x2_merge, dfb::zero, dfb::out_final);
 
     if constexpr (unpack_fp32_active) {
@@ -128,7 +128,7 @@ void kernel_main() {
         pack_reconfig_data_format(dfb::out_final);
         // Add all the column's partials together. The accurate path sums them in Dest on the SFPU;
         // add_tiles would pull each through SrcA/SrcB and round it to TF32.
-        copy_tile_to_dst_init_short(dfb::x2_merge);
+        copy_init(dfb::x2_merge);
         add_binary_tile_init();
 
         tile_regs_acquire();
