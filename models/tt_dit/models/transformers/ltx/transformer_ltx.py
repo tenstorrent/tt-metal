@@ -26,6 +26,7 @@ from ....utils.substate import pop_substate, rename_substate
 from ....utils.tensor import bf16_tensor
 from ....utils.tracing import traced_function
 from .attention_ltx import LTXAttention
+from .quant_config import LtxQuantProfile
 
 # gen#0 self-warms the DiT via a prep_run=True capture instead of the warmup denoise. Off by default:
 # it is only safe when the inner_step @traced_function captures with prep_run under this flag, which it
@@ -141,6 +142,8 @@ class LTXTransformerBlock(Module):
         has_audio: bool = False,
         apply_gated_attention: bool = False,
         cross_attention_adaln: bool = True,
+        quant_config: LtxQuantProfile | None = None,
+        lora_enabled: bool = False,
     ) -> None:
         super().__init__()
 
@@ -168,7 +171,15 @@ class LTXTransformerBlock(Module):
             "parallel_config": parallel_config,
             "is_fsdp": is_fsdp,
             "apply_gated_attention": apply_gated_attention,
+            "quant_config": quant_config,
+            "lora_enabled": lora_enabled,
         }
+
+        # FFN precision: the profile supplies the ff dtypes + casts; no quant_config leaves the
+        # ParallelFeedForward ctor defaults, reproducing bf16. lora_enabled always threads through.
+        ffn_kwargs = {"lora_enabled": lora_enabled}
+        if quant_config is not None:
+            ffn_kwargs.update(quant_config.ffn_kwargs())
 
         # FSDP fractures FFN weights across the SP axis (on top of the TP fracture);
         # without it the FFN is only TP-sharded and replicated across every SP device.
@@ -194,6 +205,7 @@ class LTXTransformerBlock(Module):
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             ccl_manager=ccl_manager,
             fsdp_mesh_axis=fsdp_mesh_axis,
+            **ffn_kwargs,
         )
         self.adaln_coeff = 9 if cross_attention_adaln else 6
         # Outer-param layout (coeff, 1, 1, D): keeps each modulation parameter on the
@@ -234,6 +246,7 @@ class LTXTransformerBlock(Module):
                 mesh_axis=parallel_config.tensor_parallel.mesh_axis,
                 ccl_manager=ccl_manager,
                 fsdp_mesh_axis=fsdp_mesh_axis,
+                **ffn_kwargs,
             )
             self.audio_scale_shift_table = Parameter(
                 total_shape=[self.adaln_coeff, 1, 1, audio_dim],
@@ -278,13 +291,16 @@ class LTXTransformerBlock(Module):
                 dtype=ttnn.bfloat16,
             )
 
-        self.ff_compute_kernel_config = ttnn.init_device_compute_kernel_config(
-            mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=True,
-        )
+        if quant_config is not None:
+            self.ff_compute_kernel_config = quant_config.mm_compute_config(mesh_device.arch())
+        else:
+            self.ff_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+                mesh_device.arch(),
+                math_fidelity=ttnn.MathFidelity.HiFi2,
+                math_approx_mode=False,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=True,
+            )
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         rename_substate(state, "ff.net.0.proj", "ffn.ff1")
@@ -583,6 +599,8 @@ class LTXTransformerModel(Module):
         apply_gated_attention: bool = False,
         cross_attention_adaln: bool = True,
         image_conditioning: bool = False,
+        lora_enabled: bool = False,
+        quant_config: LtxQuantProfile | None = None,
     ) -> None:
         super().__init__()
 
@@ -595,6 +613,7 @@ class LTXTransformerModel(Module):
         # I2V: video AdaLN modulation is per-token (denoise_mask * sigma) instead of batch-scalar.
         # Audio / prompt / A<->V cross AdaLN stay batch-scalar regardless.
         self.image_conditioning = image_conditioning
+        self.lora_enabled = lora_enabled
         self.mesh_device = mesh_device
         self.ccl_manager = ccl_manager
         self.parallel_config = parallel_config
@@ -728,6 +747,8 @@ class LTXTransformerModel(Module):
                     has_audio=has_audio,
                     apply_gated_attention=apply_gated_attention,
                     cross_attention_adaln=cross_attention_adaln,
+                    quant_config=quant_config,
+                    lora_enabled=lora_enabled,
                 )
             )
 
@@ -904,6 +925,9 @@ class LTXTransformerModel(Module):
         # I2V compact path: per-token timestep has 2 values (pinned frame-0 vs. sigma), passed as a
         # (1,1,2,1) pair + {0,1} pin mask. Blend per token to avoid the dense (1,1,N,coeff*D) modulation.
         compact_i2v = self.image_conditioning and video_ts_pair is not None and video_pin_mask is not None
+        # An image-capable model still runs the scalar path when a step carries no per-token timestep at all
+        # (a plain t2v gen); only the inputs decide, so the same weights serve both trace families.
+        per_token = self.image_conditioning and (compact_i2v or video_timestep is not None)
         if compact_i2v:
             N = video_pin_mask.shape[2]
             mod_pair, emb_pair = self.adaln_single(video_ts_pair)  # (1,1,2,coeff*D), (1,1,2,D)
@@ -936,7 +960,7 @@ class LTXTransformerModel(Module):
             B = 1
         else:
             # I2V (dense): feed the per-token timestep so each token gets its own AdaLN modulation.
-            video_ts = video_timestep if self.image_conditioning else timestep
+            video_ts = video_timestep if per_token else timestep
             video_modulation, video_emb_ts = self.adaln_single(video_ts)
             # dim 2 is B (scalar) or B*N (per-token, B=1 -> N_local on the SP shard).
             X = video_modulation.shape[2]
@@ -947,11 +971,11 @@ class LTXTransformerModel(Module):
                 )
             # Move the coeff axis to dim 0 once per step so each block's chunk(dim=0) is free.
             # Scalar: (1,B,coeff,D) -> (coeff,B,1,D). Per-token: (1,N,coeff,D) -> (coeff,1,N,D).
-            if self.image_conditioning:
+            if per_token:
                 video_mod_CB1D = ttnn.permute(video_mod_CB1D, (2, 0, 1, 3))
             else:
                 video_mod_CB1D = ttnn.permute(video_mod_CB1D, (2, 1, 0, 3))
-            B = 1 if self.image_conditioning else X
+            B = 1 if per_token else X
 
         # Video prompt modulation (2 params, only for 9-output mode)
         video_prompt_2B1D = None
@@ -1061,7 +1085,7 @@ class LTXTransformerModel(Module):
                 ttnn.ReadDeviceProfiler(self.mesh_device)
 
         v_inner_local = video_emb_ts.shape[-1]
-        if self.image_conditioning:
+        if per_token:
             # Per-token (video_emb_ts is (1,1,N,D)): split the (shift, scale) table, broadcast-add per token.
             v_emb_1B1D = video_emb_ts
             if self.parallel_config.tensor_parallel.factor > 1:
@@ -1079,7 +1103,7 @@ class LTXTransformerModel(Module):
                 )
             shifted_v = self.scale_shift_table.data + v_emb_1B1D
             v_shift_out, v_scale_out_p1 = ttnn.chunk(shifted_v, 2, dim=2)
-        if self.image_conditioning:
+        if per_token:
             # Per-token: fused norm_out gamma/beta can't carry per-token scale/shift, so plain
             # layernorm then manual shift + normed * scale_p1, in fp32 to match the T2V branch.
             video_1BND = self.norm_out(video_1BND, dtype=ttnn.float32)
@@ -1193,14 +1217,17 @@ class LTXTransformerCheckpoint:
             sd = fuse_loras_into(sd, lora_specs)
         return sd
 
-    def cache_name(self, lora_specs: list[LoraSpec]) -> str:
-        """Cache key for ``cache_module.load_model``. LoRA-tagged so fused and
-        base weights don't alias in ``TT_DIT_CACHE_DIR``."""
+    def cache_name(self, lora_specs: list[LoraSpec], quant_tag: str | None = None) -> str:
+        """Cache key for ``cache_module.load_model``. LoRA-tagged so fused and base weights don't
+        alias in ``TT_DIT_CACHE_DIR``; quant-tagged because cached tensorbins carry their dtype, so
+        a bf8 preset run and the bf16 baseline must live in separate dirs."""
         base = os.path.basename(self._checkpoint_path).removesuffix(".safetensors")
-        if not lora_specs:
-            return base
-        tag = "+".join(f"{os.path.basename(s.path).removesuffix('.safetensors')}@{s.strength}" for s in lora_specs)
-        return f"{base}.lora-{tag}"
+        if lora_specs:
+            tag = "+".join(f"{os.path.basename(s.path).removesuffix('.safetensors')}@{s.strength}" for s in lora_specs)
+            base = f"{base}.lora-{tag}"
+        if quant_tag:
+            base = f"{base}.q-{quant_tag}"
+        return base
 
     def build(
         self,
@@ -1217,10 +1244,14 @@ class LTXTransformerCheckpoint:
         is_fsdp: bool,
         has_audio: bool,
         image_conditioning: bool,
+        quant_config: LtxQuantProfile | None = None,
+        lora_enabled: bool = False,
     ) -> LTXTransformerModel:
         """Construct an ``LTXTransformerModel`` for this checkpoint (weights NOT loaded).
 
         Loading is deferred so the caller can manage the lifecycle (deallocate / reload).
+        ``quant_config`` bakes the preset dtypes into construction, so a cache miss loads
+        weights direct-to-quant and the cache write holds the quantized tensorbins.
         """
         return LTXTransformerModel(
             num_attention_heads=num_attention_heads,
@@ -1237,6 +1268,8 @@ class LTXTransformerCheckpoint:
             apply_gated_attention=self.has_gate,
             cross_attention_adaln=self.cross_attention_adaln,
             image_conditioning=image_conditioning,
+            quant_config=quant_config,
+            lora_enabled=lora_enabled,
         )
 
     def load(
@@ -1247,11 +1280,12 @@ class LTXTransformerCheckpoint:
         mesh_shape: tuple[int, ...],
         is_fsdp: bool,
         lora_specs: list[LoraSpec],
+        quant_tag: str | None = None,
     ) -> None:
         """Load (or reload) weights for a previously-built transformer."""
         cache_module.load_model(
             model,
-            model_name=self.cache_name(lora_specs),
+            model_name=self.cache_name(lora_specs, quant_tag),
             subfolder=model.weight_cache_subfolder(),
             parallel_config=parallel_config,
             mesh_shape=mesh_shape,

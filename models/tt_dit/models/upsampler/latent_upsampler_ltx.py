@@ -369,6 +369,13 @@ class LTXLatentUpsampler(Module):
 
     def forward(self, latent_BCFHW: torch.Tensor) -> torch.Tensor:
         x, logical_h, logical_w = self._encode_input(latent_BCFHW)
+        x, logical_h, logical_w = self.forward_device(x, logical_h, logical_w)
+        return self._decode_output(x, logical_h, logical_w)
+
+    def forward_device(self, x: ttnn.Tensor, logical_h: int, logical_w: int) -> tuple[ttnn.Tensor, int, int]:
+        """The device core between ``_encode_input`` and ``_decode_output``: mesh-sharded BTHWC in (H/W padded
+        to the mesh factors, ``logical_h``/``logical_w`` the pre-pad sizes) -> the 2x-upsampled BTHWC shard and
+        the doubled logical sizes. Lets the pipeline feed the stage-1 latent in without a host round-trip."""
         pc, ccl = self.parallel_config, self.ccl_manager
 
         x = self.initial_conv(x, causal=False, logical_h=logical_h, logical_w=logical_w)
@@ -387,4 +394,4 @@ class LTXLatentUpsampler(Module):
 
         x = self.final_conv(x, causal=False, logical_h=logical_h, logical_w=logical_w)
 
-        return self._decode_output(x, logical_h, logical_w)
+        return x, logical_h, logical_w
