@@ -30,7 +30,13 @@ Gemma4-31B: 60 layers = 50 sliding (`local`) + 10 full attention (`global`).
    padded handshake iterations rather than being dropped from the grid. Occupancy has to be
    computed from the op's own work-unit math (table below), not read off the report.
 
-5. **`Total %` and `Op-to-Op Gap` are unusable on these captures.** Each replay's first op
+5. **No regression from the multi-hop halo at chunk 8192** (the 1-hop path that predates it):
+   every op within 2% of the pre-halo branch, sliding layer ~4% faster. Checked by
+   re-rendering both branches' captures with one tool -- see
+   [Regression check](#regression-check-the-multi-hop-halo-vs-the-pre-halo-branch). Chunk
+   4096 (2 hops) has no pre-halo baseline and is the remaining gap.
+
+6. **`Total %` and `Op-to-Op Gap` are unusable on these captures.** Each replay's first op
    carries a host-side gap measured from before the signpost (1 121 464 us in one case),
    which swamps the percentage column -- the 8.27 ms SDPA is shown as `0.7 %`. Every other
    gap is ~1 us. Use `Device Time`.
@@ -238,3 +244,91 @@ On `bh-glx-120-b03u02`, under `/data/kmabee/gemma4_runs/`:
 - The README attributes the prefix term to the global layers from curve fits. It is now
   confirmed per-op: 99.8-100.0% of a global layer's context growth is `RingJointSDPA`, and
   the sliding layer is flat to within 0.8%.
+
+---
+
+## Regression check: the multi-hop halo vs the pre-halo branch
+
+The multi-hop sliding halo on `kmabee/gemma4-swa-multihop-halo` changed the sliding path in
+order to make small chunks runnable. That path is also used by the chunk sizes that already
+worked, so it needs a standing check that it did not cost them anything. **Checked
+2026-09-17 at chunk 8192: no regression.**
+
+The 2026-09-10 captures on `svuckovic/gemma4-prefill-model @ d3064a5fd6b` are still on
+`bh-glx-120-b03u02` at `/data/kmabee/gemma4_runs/attn_op_captures/{isl0k,isl48k,...}/`, so
+both branches can be re-rendered with one tool. Identical tooling, `tt-perf-report` 1.2.9,
+sum of `Device Time`, cross-device merge:
+
+| layer | idx | pre-halo layer | multi-hop layer | pre-halo SDPA | multi-hop SDPA | SDPA delta |
+|---|---:|---:|---:|---:|---:|---:|
+| local | 0 | 4.549 ms | **4.362 ms** | 0.447 ms | 0.455 ms | +1.9% |
+| local | 6 | 4.555 ms | **4.358 ms** | 0.459 ms | 0.461 ms | +0.3% |
+| global | 0 | 5.944 ms | 5.858 ms | 1.313 ms | 1.316 ms | +0.2% |
+| global | 6 | 12.916 ms | 12.822 ms | 8.273 ms | 8.266 ms | -0.1% |
+
+Every op is within 2%, and the sliding **layer** is ~4% *faster* on the multi-hop branch.
+
+### Why this is the right configuration to check
+
+`sliding_halo_hop_count` (`models/demos/gemma4_d_p/tt/model.py:152`) is
+`ceil(window / (chunk/CP))`, window 1024, CP 8:
+
+| chunk | tokens/rank | halo hops | status |
+|---:|---:|---:|---|
+| 2048 | 256 | 4 | new capability — nothing to regress |
+| 4096 | 512 | 2 | **not verified** |
+| 8192 | 1024 | **1** | **verified, idx 0 and 6** |
+| 16384 | 2048 | 1 | same 1-hop path as 8192 |
+| 32768 | 4096 | 1 | same 1-hop path as 8192 |
+
+Chunk 8192 takes the **single-hop** path, which is the code the pre-halo branch also ran, so
+this is the configuration where a regression could actually appear. 16384 and 32768 take the
+same 1-hop path. The multi-hop chunk sizes are new capability. **Chunk 4096 (2 hops) is the
+gap**: if it ran before the change, it is unverified — there is no pre-halo capture of it.
+
+### A retracted observation, and the trap behind it
+
+An earlier reading of this comparison reported the sliding SDPA moving **0.38 -> 0.46 ms
+(+21%)** at chunk 8192 idx 0 and guessed the multi-hop halo had cost the sliding path. That
+was wrong: it compared the gist's published table value against a `tt-perf-report` number.
+Re-deriving the *same capture* with `tt-perf-report` gives **0.447 ms**, not 0.38 — a +1.9%
+delta, not +21%.
+
+The per-device spread is what makes this easy to get wrong. For the sliding SDPA in
+`isl0k`, across the 32 devices:
+
+```
+min 382.9 us | median 434.5 us | device 0 394.0 us | max 446.8 us      spread 17%
+```
+
+`tt-perf-report` merges devices and reports the **slowest**. The gist's 0.38 is close to the
+minimum. Its deeper values cannot be reproduced from its own CSV by any per-device
+aggregation of `DEVICE KERNEL DURATION` at all -- its `isl48k` figure of 480 us exceeds the
+**max** across all 32 devices (459.4 us) -- so that column's aggregation differs from this
+one in a way that was not pinned down.
+
+**The rule: a cross-branch per-op comparison is only valid if both sides are re-rendered by
+the same tool from the raw captures.** The ~17% device spread here is the same size as the
+effects being chased, so a figure lifted from someone's summary table can manufacture or
+hide a regression on its own. This is the same trap as the earlier `rms_norm` retraction
+(§4 of [`CHUNK_SIZE_ANATOMY.md`](CHUNK_SIZE_ANATOMY.md)), which compared per-op timings
+across two builds -- except that here, re-rendering showed the hardware had not changed at
+all.
+
+### To re-run this check
+
+```bash
+# Render both branches' captures with the same tool, then diff.
+for pair in isl0k:0 isl48k:6; do d=${pair%%:*}; i=${pair##*:}
+  for lt in global local; do
+    tt-perf-report --no-color --no-summary --csv OLD_${d}_${lt}.csv \
+      --start-signpost gemma4-layer-${lt}-chunk${i}-start \
+      --end-signpost   gemma4-layer-${lt}-chunk${i}-stop \
+      /data/kmabee/gemma4_runs/attn_op_captures/$d/ops_perf_results_*.csv
+  done
+done
+# Compare against the current branch's floor_c8192 / deep_c8192_i6 captures the same way.
+```
+
+Worth redoing whenever the sliding halo, `ring_joint_sdpa`, or the sliding program config
+changes. The pre-halo captures are the only baseline for it, so they should not be deleted.
