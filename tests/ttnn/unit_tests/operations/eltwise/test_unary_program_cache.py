@@ -12,11 +12,15 @@ The unary operation uses 3 ProgramFactory variants:
   - UnaryShardedProgramFactory (sharded input)
 
 compute_program_hash() hashes:
-  TILE layout:  args, sub_core_grids, factory_index, input_dtype, input_memory_config, volume, layout
-  ROW_MAJOR:    args, sub_core_grids, factory_index, input_dtype, input_memory_config, padded_shape, layout
+  TILE layout:  args, input tensor_layout, src/dst shard volumes
+  ROW_MAJOR:    args, input tensor_layout, padded_shape, src/dst shard volumes
 
-Where args = entire UnaryParams (op_chain, output_dtype, output_memory_config,
-fp32_dest_acc_en, preserve_fp32_precision, bfp8_pack_precise, sub_core_grids).
+Where args = entire operation_attributes_t via to_hash() (op_chain, output_dtype,
+memory_config, fp32_dest_acc_en, preserve_fp32_precision, bfp8_pack_precise,
+sub_core_grids, worker_grid), and tensor_layout is (dtype, page_config -- and so the
+Tile -- memory_config, alignment). The whole tensor_layout is hashed rather than its
+parts because a Metal 2.0 TensorParameter relaxation requires it to be exactly equal
+and cannot relax any component of it.
 
 On a program-cache HIT the descriptor is NOT rebuilt; override_runtime_arguments()
 re-derives ALL per-dispatch state for the current tensors from the same shared
@@ -157,6 +161,32 @@ def test_unary_cache_miss_different_memory_configs(device):
     )
     assert_equal(torch_ref2, tt_out2)
 
+    assert device.cache_entries_counter.total == 2
+
+
+def test_unary_cache_miss_different_tiles(device):
+    """Two TILE tensors identical in dtype, logical shape, padded shape and memory config, differing
+    only in their Tile dims -> separate cache entries."""
+    device.cache_entries_counter.reset()
+    shape = [1, 1, 64, 64]
+    padded_shapes = []
+
+    for i, tile in enumerate([[32, 32], [16, 32]]):
+        torch.manual_seed(i)
+        torch_a = torch.rand(shape, dtype=torch.bfloat16) + 0.1
+        tt_a = ttnn.from_torch(
+            torch_a,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            tile=ttnn.Tile(tile),
+        )
+        padded_shapes.append(tt_a.padded_shape)
+        with device.cache_entries_counter.measure():
+            ttnn.relu(tt_a)
+
+    assert padded_shapes[0] == padded_shapes[1]
     assert device.cache_entries_counter.total == 2
 
 
