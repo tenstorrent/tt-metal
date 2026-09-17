@@ -376,7 +376,9 @@ def test_eltwise_unary_sfpu(
         pytest.skip(
             reason="Approximate tanh is a 3-segment LUT whose error exceeds the default "
             "5% rtol on Float16/Float16_b/Float32 outputs; it needs an approx-mode "
-            "tolerance, which CUSTOM_TOLERANCES cannot express (it is keyed on the op)."
+            "tolerance. That is now expressible -- helpers/sfpu_accuracy_budget.py keys "
+            "on approx_mode as well as output format -- but the number has to be "
+            "measured before it can be enrolled, so the skip stands."
         )
 
     # Each profile has its own Blackhole dest_acc=No guard, measured against its own

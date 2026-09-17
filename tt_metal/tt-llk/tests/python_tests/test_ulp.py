@@ -1537,6 +1537,8 @@ def test_the_absolute_near_zero_cut_is_compared_in_float32_not_the_tensor_dtype(
     )
     # The lane is outside the band on both sides of the comparison, so the step fails.
     assert not wide
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Integers are not ULP territory
 #

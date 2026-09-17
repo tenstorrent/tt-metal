@@ -149,9 +149,16 @@ NEAR_ZERO_FRACTION = 1e-2
 #: Every integer ``DataFormat``, derived from the enum's own predicate.
 #:
 #: Not derived from ``format_dict``: that mapping omits ``Bfp8``, ``MxFp4_2x_A`` and
-#: ``MxFp4_2x_B`` entirely and gives ``MxInt8``/``MxInt4``/``MxInt2`` a bfloat16 proxy, so
-#: an integer format added without an entry, or given a float proxy, would be silently
+#: ``MxFp4_2x_B`` entirely, so an integer format added without an entry would be silently
 #: uncovered by anything testing through it. ``DataFormat.is_integer()`` is the authority.
+#:
+#: Note what the predicate does *not* cover: ``is_integer()`` is ``False`` for
+#: ``MxInt8``/``MxInt4``/``MxInt2``, which are classified by the separate
+#: ``is_mx_int_format()`` -- so this tuple does not reach the three formats ``format_dict``
+#: gives a bfloat16 proxy. They are safe because they are in neither :data:`ULP_FORMATS`
+#: nor ``_ULP_PROXY_DTYPES``, so :func:`has_ulp_gate` already refuses them; the audit in
+#: ``test_sfpu_accuracy_budget`` covers them through its block-without-ULP arm, which is
+#: derived from ``has_ulp_gate`` rather than from this tuple for exactly that reason.
 INTEGER_FORMATS: Tuple[DataFormat, ...] = tuple(
     fmt for fmt in DataFormat if fmt.is_integer()
 )
