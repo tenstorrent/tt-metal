@@ -63,8 +63,55 @@ token ids at a different KV offset and only 21.2% (L18) / 20.0% (L23) of the per
 match, while per-expert counts still correlate 0.848 / 0.905. Aggregate popularity survives an almost
 total change of individual selections, which points at the gate weights rather than the token stream.
 
-A static placement is therefore worth attempting. Caveat: all chunks come from ONE document, so this
-shows stability across different text within a prompt, not across unrelated prompts.
+That stability does NOT survive a change of corpus -- see below. It is a property of the text, not of
+the layer, and the figures above describe one homogeneous document.
+
+## Expert popularity does NOT transfer between corpora
+
+A second 56,320-token trace was built from tt-metal repo Markdown (11 chunks, no tiling) and captured
+through the identical path. The two corpora share 292 distinct token ids in their first chunk, against
+6,111 and 7,130 distinct ids respectively.
+
+| layer | within Hugo | within techdocs | ACROSS corpora | top-10 overlap across |
+|-------|-------------|-----------------|----------------|-----------------------|
+| L18 | 0.982 | 0.537 | 0.009 | 0.9/10 |
+| L19 | 0.976 | 0.504 | 0.116 | 1.3/10 |
+| L20 | 0.986 | 0.489 | 0.010 | 1.4/10 |
+| L21 | 0.980 | 0.450 | 0.051 | 1.1/10 |
+| L22 | 0.966 | 0.505 | 0.012 | 1.0/10 |
+| L23 | 0.970 | 0.539 | 0.041 | 1.7/10 |
+| L24 | 0.990 | 0.486 | -0.006 | 1.2/10 |
+| L25 | 0.932 | 0.451 | 0.123 | 1.7/10 |
+| L26 | 0.926 | 0.699 | -0.019 | 1.2/10 |
+
+Across corpora the correlation is zero: roughly one of the ten busiest experts is shared. Within
+techdocs it is only 0.45-0.70, well below Hugo's 0.93-0.99, because that trace concatenates unrelated
+Markdown files while Hugo is one continuous novel. Homogeneous text gives stable routing; heterogeneous
+text does not; different corpora share nothing.
+
+This retrospectively supports the 2026-09-11 descriptive cross-check (`b1_routing_evidence.json`),
+whose per-expert counts correlate ~0 with these. That was read as broken by its confounders (unknown
+prompt, TP-vs-PP config, unresolved 35-vs-36 layer alignment, a flagged source-ordering assumption).
+The simpler explanation is that it was right.
+
+## Consequence for placement
+
+The imbalance -> Combine relationship is unaffected: it is within-run, and imbalance does drive Combine
+cost. What does not survive is a STATIC placement. A mapping fitted to one corpus concentrates load
+elsewhere on another and may be worse than the current `expert_id // 16`. The 2026-09-11 replay's
+-38.36% balanced against that capture's own routing -- a best case for one input, not a transferable
+speedup.
+
+What may still work, none of it tested here: a placement fitted to representative production traffic
+(only if that traffic is homogeneous, and a general serving workload resembles techdocs more than
+Hugo); adaptive placement recomputed per workload, against the cost of moving 128 experts' weights;
+or attacking the cost directly rather than the distribution, since Combine is bounded by the busiest
+chip whichever experts are hot.
+
+Caveats: one alternative corpus, deliberately heterogeneous. Its within-corpus figure is confounded by
+that construction, though the across-corpus result is not. No timings for the techdocs run -- the
+device profiler buffer overflows past a few chunks (`Device data missing: Op N not present in
+cpp_device_perf_report.csv`), so multi-chunk runs yield routing but no `ops_perf_results`.
 
 ## Reproducibility
 
@@ -85,7 +132,8 @@ checkout, rebuilt board, worker recovered from an archived `worker.py.gz`.
 
 ## Files
 
-- `routing_counts_L18_L26_20chunk.json` — per-layer, per-chunk expert counts and destination load.
+- `routing_counts_L18_L26_20chunk.json`, `routing_counts_L18_L26_techdocs.json` — per-layer, per-chunk
+  expert counts and destination load for each corpus.
   Raw indices (16 MB) are not committed; `TT_MOE_ROUTING_CAPTURE=18,...,26` regenerates them.
 - `compare_layer_timings.py` — per-layer Dispatch/Combine/FFN from an `ops_perf_results` CSV pair.
 - `run_b1_replay.sh`, `compare_replay_timings.py` — controlled replay driver and its analyzer.
