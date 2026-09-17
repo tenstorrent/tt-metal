@@ -34,6 +34,9 @@ _K_FILTER = "torus-xy-8x4-2link"
 _EXPECTED_NS: dict[str, int] = {
     "DispatchDeviceOperation": 0,
     "DispatchFabric2dDeviceOperation": 0,
+    # The reach table multicast needs, produced on device. Additive: nothing else in the pipeline emits
+    # it, so this is subtracted from whatever multicast saves over store-and-forward.
+    "MoeFanoutReachDeviceOperation": 0,
 }
 
 

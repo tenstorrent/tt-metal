@@ -10,6 +10,11 @@ board state and one routing draw. Running them as separate invocations would fol
 and boot-to-boot variance into a number whose whole purpose is to be a ratio -- and on these
 galaxies the realized fabric topology is not even stable across resets.
 
+`moe_fanout_reach` is captured beside them for the same reason. It is what multicast costs before it
+saves anything -- nothing else in the pipeline produces the reach table, so its whole device time is
+additive -- and the number that decides whether multicast is worth taking is its size against the
+margin between the two transports in this same capture, not against a figure from another run.
+
 No PCC here: `test_prefill_dispatch_fabric2d.py` owns correctness, and a host-side comparison would
 sit between the two ops in the capture.
 
@@ -165,7 +170,11 @@ def test_dispatch_fabric2d_perf_worker(mesh_device, device_params, num_links, se
     tt_offs_own = shard(offs.permute(1, 0, 2).reshape(H, G, NUM_ROUTED_EXPERTS), (0, 1), ttnn.int32)
     tt_counts = shard(counts[:, 0:1, :], (None, 0), ttnn.int32)
     tt_region = shard(region[:, 0:1, :], (None, 0), ttnn.int32)
-    # Supplied by the test until masked_bincount emits it; see the note on routing setup.
+    # The torch table, kept as the transport's input so the two transports are measured against each
+    # other on exactly the bytes previous captures used. `moe_fanout_reach` produces the same table --
+    # test_prefill_dispatch_fabric2d gates that word for word -- and is timed here as its own op rather
+    # than folded into the multicast launch, because in production it is a separate dispatch whose cost
+    # is paid whether or not the transport that follows turns out to be faster.
     tt_reach = shard(
         _mc_reach(indices, table, offs, max_dispatch_buffer_token_size, G, H, seq_len_per_chip, NUM_EXPERTS_PER_TOK).to(
             torch.int32
@@ -228,6 +237,20 @@ def test_dispatch_fabric2d_perf_worker(mesh_device, device_params, num_links, se
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
+    # The op takes THIS device's offsets row, the same tensor production `dispatch` takes, because
+    # reach is a property of the tokens this chip owns.
+    def reach():
+        return ttnn.experimental.deepseek_prefill.moe_fanout_reach(
+            tt_idx_u16,
+            tt_table,
+            tt_offs_own,
+            num_routed_experts=NUM_ROUTED_EXPERTS,
+            num_experts_per_tok=NUM_EXPERTS_PER_TOK,
+            dispatch_group_size=H,
+            max_dispatch_buffer_token_size=max_dispatch_buffer_token_size,
+            cluster_axis=sp_axis,
+        )
+
     # One untimed launch of each so the capture is not dominated by program build.
     #
     # The sync between the two ops is load-bearing, not hygiene. Program completion says nothing about
@@ -239,6 +262,7 @@ def test_dispatch_fabric2d_perf_worker(mesh_device, device_params, num_links, se
     ttnn.synchronize_device(mesh_device)
     fabric2d(False)
     fabric2d(True)
+    reach()
     ttnn.synchronize_device(mesh_device)
 
     signpost("dispatch_baseline")
@@ -263,5 +287,12 @@ def test_dispatch_fabric2d_perf_worker(mesh_device, device_params, num_links, se
     signpost("dispatch_fabric2d_multicast")
     for _ in range(ITERATIONS):
         fabric2d(True)
+    ttnn.synchronize_device(mesh_device)
+
+    # What multicast costs before it saves anything: the table the phase above was handed, produced on
+    # device instead of on host. It touches no fabric, so it needs no sync against what came before.
+    signpost("moe_fanout_reach")
+    for _ in range(ITERATIONS):
+        reach()
     ttnn.synchronize_device(mesh_device)
     signpost("done")
