@@ -202,13 +202,42 @@ above), measured at `fsdp1`.
 
 | | warm total | denoise | ms/fwd | realtime | CLIP | block device-only |
 |---|---|---|---|---|---|---|
-| baseline | 633.1 s | 609.3 s | 12435 | 42.0x | 36.31 | 246.31 ms |
-| best found | **TODO** | **TODO** | **TODO** | **TODO** | **TODO** | **TODO** |
+| baseline, other host (`c825d089e31` tables) | 633.1 s | 609.3 s | 12435 | 42.0x | 36.31 | 246.31 ms |
+| baseline, **this host**, tuned entries disabled | 612.9 s | 590.9 s | 12058.3 | 40.6x | — (audio gate) | **TODO** |
+| **best found**, this host, `a07012d7d8a` | **612.2 s** | **587.4 s** | **11988.4** | 40.6x | — (audio gate) | **TODO** |
 
-`TODO` rows need a re-profile and a pipeline re-run with the landed configs; see the experiment
-table at the end. Note what the ceiling looks like before spending on it: the matmul blockings
-landed so far are worth ~1327 us per layer against a 246.31 ms block, i.e. **~0.5%**. Only SDPA,
-at 70% of the block, can move this number materially.
+Same host, same weights, same everything, one run each, 2026-09-17: the landed ff1 + ff2 blockings
+are worth **-69.9 ms/fwd, -0.58%** (steady 12057 -> 11990 ms/step; denoise 590.9 -> 587.4 s). The
+isolated sweep predicted 1327 us/layer x 50 = 66 ms/step; measured 67-70. The prediction holds.
+
+Read the three rows carefully: the other-host baseline is ~3% slower on this shape than this host's
+own baseline (12435 vs 12058 ms/fwd) with identical code paths, so comparing the after-run against
+the doc's tables would have claimed 3.6% -- host, not the fix. Only the same-host pair is a
+measurement of the change. Total compute moved just 0.7 s because VAE decode varied +2.8 s between
+the two runs, which the DiT blockings cannot touch; ms/fwd is the metric that isolates them.
+
+**CLIP is blank because both runs failed `check_audio_sanity`** -- see Open issues 4. The generation
+completes and the timing table prints before that assertion, so the perf rows are valid; the gate
+fires before CLIP is computed. `open_clip` is installed here, so CLIP follows a passing audio gate.
+**Block device-only is TODO** because the per-op re-profile needs `test_performance_minimax_h3.py`
+under Tracy, which imports the pinned `diffusers` fork this host does not have.
+
+Cold (first-generation) figures are deliberately not tabulated: `TT_DIT_CACHE_DIR` did not exist on
+this host, so the warmup built the sharded-tensor cache from 62 GB of safetensors on top of every
+compile (1053.9 s, 234 s of it cold audio decode) -- the log labels it "not a perf target".
+
+**Both blockings are numerically validated.** The block-size sweep measures timing only (no PCC
+anywhere in `sweep_mm_block_sizes.py`), so a fast-but-wrong blocking would have looked like a winner;
+this was checked after the fact, at M=13664 exactly, on this hardware:
+
+| op | check | landed (8, 7, 10) | replaced | bar |
+|---|---|---|---|---|
+| ff2 | plain `minimal_matmul`, 1 device, vs torch fp32 | pcc 1.0000000; vs (8,8,8): max diff 0.0156 (one bf16 ulp at 3.4), mean diff 0.0 | (8, 8, 8) pcc 1.0000000 | — |
+| ff1 | Wan2.2 AGMM harness, 4-device ring, fused SwiGLU, bias=False | pcc 0.9999843, rel-RMSE 0.00837 | (8, 3, 14) pcc 0.9999844, rel-RMSE 0.00837 | pcc > 0.9995, rmse < 0.02 |
+
+ff2's per-tile-column difference is ~1e-8 and flat across N -- the partial trailing block of 9 tiles is
+handled correctly. ff1 matches the Blackhole default to six decimals. Scripts: `ff2_pcc.py`,
+`ff1_pcc.py` (session scratch; ~60 lines each, worth folding into the sweep as a post-check).
 
 ### Per-op: baseline vs best
 
@@ -366,8 +395,10 @@ it is not on the path to a faster 15 s, since q=128 was slower than q=192 in eve
 | 3 | SDPA chunk sizes, q in {256,384,512} x k in {256,512} | **done** | Shipped `(256, 512)` already optimal; larger q L1-infeasible |
 | 3b | `q_chunk=128` | **done** | Reproducibly hangs the op (2x, clean board). Not a perf path — q=128 was slower than q=192 at every feasible k — but worth reporting |
 | 4 | SDPA chunk sizes, small-q / large-k (q<=256, k>=512) | **done** | Hypothesis disproved. `(192, 640)` is feasible — the first k>512 point on this shape — but 13% slower than the shipped `(256, 512)`; larger q is more per-core efficient and shrinking q raises iters/core. Chunk tuning at 15 s is exhausted. L1 envelope calibrated as a by-product |
-| 5 | Re-profile the block with landed configs | not started | **TODO** |
-| 6 | Pipeline re-run: warm total, denoise, ms/fwd, CLIP | not started | **TODO** |
+| 5 | Re-profile the block with landed configs | blocked | **TODO** — needs the pinned `diffusers` fork; not installed here |
+| 6 | Pipeline re-run: warm total, denoise, ms/fwd, CLIP | **done** (perf) | Same-host A/B: **-69.9 ms/fwd, -0.58%**, exactly the isolated-sweep prediction. CLIP **TODO**: both runs fail the audio gate before CLIP is computed (issue 4) |
+| 11 | Numerics of the landed blockings (the sweep never checked) | **done** | ff2 (8,7,10) pcc 1.0000000 vs torch, identical to (8,8,8) to one bf16 ulp; ff1 (8,7,10) pcc 0.9999843 on the real SwiGLU ring, = (8,3,14) to 6 dp. Both PASS |
+| 12 | Audio gate: 3.3% of samples at full scale at 15 s / 16:9 on this host | not started | **TODO** — identical 3.3% with tuned entries on and off, so not tuning. Deterministic. Leads: `audio_vae` denormalization (`latents_mean/std` in its config), and the weights resolver pins no HF revision (this host pulled `42ed227e`; the other host's is unrecorded) |
 | 7 | `use_exp_ring_sdpa` on Wormhole | not started | **TODO** — gated on `is_blackhole() and sp_factor == 32`, but `exp_ring_joint_sdpa_program_factory.cpp` has no arch gate and the sp check is described in-tree as "a proxy for the 4x32 shape". On WH the other conditions already hold (`tp_factor == 4`, `exp_ring_num_passes = ceil(14/9) = 2 <= 3`). A different kernel on the op that is 70% of the block, so the largest single lever available — but it needs PCC and CLIP validation, not a timing check |
 | 8 | FSDP layout conversions | not started | **TODO** — tilize/untilize go 0.13 -> 3.13 ms under FSDP, a 23x blowup and a quarter of the whole FSDP cost spent on format round-trips rather than communication. Cheapest apparent win in the breakdown |
 | 9 | Ring SDPA kernel utilization | not started | **TODO** — 48.8% FPU / 35.6% math at the shipped chunk size, shown to be inherent to the kernel at this shape rather than a chunk-size miss. Work is in the kernel |
@@ -407,19 +438,28 @@ all closed.
    pipeline packs two rows per latent (`packing.py:261`) and assumes a 512-token prompt where
    the gate runs 39. The lookups are exact-key, so nothing hit.
 
-   *Partially fixed.* The two `matmul.py` ff1/ff2 entries are re-keyed 13632 -> **13664**, the
-   value the pipeline actually runs, so the pipeline now selects them (verified through the real
-   resolvers: at 13664 both hit; the "No known best blocking" warnings are gone). 13664 is a
-   robust key rather than a second brittle literal — the packed length pads to `sp_factor * TILE`
-   = 256 rows, and the 15 s / 16:9 media rows (109062) are prompt-independent, so **every prompt
-   from 1 to 250 tokens** lands on 13664. `M_per_core` is 54 at both 13632 and 13664, so the
-   blocking measured at the harness shape is valid at the pipeline shape without a re-sweep.
-
-   *Still open:* `_packed_sizes` itself is unfixed, so the sweep harness and block perf test still
-   run 13632 and now take the fallbacks. Aligning them needs the text-budget decision (512 vs the
-   gate's 39), and `measured_sdpa_chunk_sizes` is still keyed on values nothing produces — harmless
-   at 10 s/15 s where the measured value equals the fallback, a real loss at 5 s. See
+   *Fixed in `a07012d7d8a`.* `_packed_sizes` counts audio in rows and uses the gate's 39-token
+   prompt; both the length and the padding go through new `packing.py` helpers
+   (`packed_sequence_length`, `padded_sequence_length`) that the pipeline itself now uses, so the
+   two cannot diverge again. `get_matmul_config`/`get_agmm_config` fall back to a same-(K, N) entry
+   with the same `M_per_core` after an exact miss, which makes every table robust to a 32-row
+   discrepancy and to prompt length within a padding bucket. All M literals re-keyed to
+   4736 / 9184 / 13664. Confirmed on a live generation: `13664 rows/device`, and neither ff1 nor
+   ff2 appears among the fallback warnings (qkv and to_out do, by design -- their shipped
+   blockings measured optimal / within noise). Root cause and history:
    **`MiniMaxH3_rows_per_device_mismatch.md`**.
+
+4. **`check_audio_sanity` fails at 15 s / 16:9 on this host: 3.3% of samples at |x| >= 0.999**
+   (gate < 1%). Reproduced twice, and **identical to the decimal with the tuned blockings enabled
+   and disabled**, so it is not caused by the tuning and not sensitive to matmul rounding order --
+   which points at a systematic scaling issue rather than noise. The gate's comment says exactly
+   that: widespread clipping "means the denormalization is wrong, not that the mix is loud". The
+   other host passed this gate 18/18. Not yet investigated. The `.wav` is not saved on failure
+   (the test asserts before `write_artifacts`), so the first step is capturing it. Leads:
+   `audio_vae` denormalization (`latents_mean`/`latents_std`, 32 channels, in its `config.json`),
+   the WH audio-decode path, and the fact that `weights_minimax_h3.py` pins no HF revision -- this
+   host resolved `42ed227ee7df`, the other host's snapshot is unrecorded, so the two may differ.
+   Blocks the CLIP column above.
 
 ## VBench (16:9/5s, verified passing)
 
@@ -447,7 +487,11 @@ All committed on `jameslee/bringup_h3_wh_galaxy`; nothing here needs local patch
 | `8cd05961cbe` | Perf sweep restated at 18/18 after the MM/RS gate fix |
 | `c825d089e31` | Per-op device breakdown of one block at 15 s / 16:9, and `tools/project_block_perf.py` |
 | `50908410b42` | Wormhole H3 shapes in `sweep_mm_block_sizes.py` (4 shapes x 3 durations, plus fused MM/RS at three matmul grids), `MM_SWEEP_PROFILER_DUMP_EVERY` override, `L1_BUDGET_KB` note |
-| *(this commit)* | `grid_88_configs` ff1 and `grid_89_configs` ff2 entries for M=13632; widened 15 s SDPA chunk lists |
+| `9e97f1541bc` | `grid_88_configs` ff1 and `grid_89_configs` ff2 entries (keyed 13632 -- dead, see below); widened 15 s SDPA chunk lists; the sweep write-up |
+| `e5c39cbdd47` | 15 s SDPA chunk search closed out: shipped `(256, 512)` optimal; calibrated L1 envelope; `q=128` hang recorded |
+| `c0af23ba607` | Documents the rows/device mismatch: tables keyed on 13632, pipeline runs 13664 |
+| `664578b377e` | Point fix: ff1/ff2 re-keyed 13632 -> 13664 |
+| `a07012d7d8a` | Structural fix: `_packed_sizes` audio/text bug, `packing.py` helpers routed through the pipeline, `M_per_core` matching in `get_matmul_config`/`get_agmm_config`, every M literal re-keyed. Live-confirmed; blockings PCC-validated |
 
 `dit_fsdp` defaults **off**, overridable with `MINIMAX_H3_DIT_FSDP`. Given these results,
 `dit_fsdp: True` belongs in `_PRESETS_WH` (12 GB/chip needs the headroom far more than it needs

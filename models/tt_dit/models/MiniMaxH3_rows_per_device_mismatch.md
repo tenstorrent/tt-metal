@@ -1,16 +1,15 @@
 # MiniMax-H3: the per-device packed length the tuned tables key on is not the one the pipeline runs
 
-**Status: PARTIALLY FIXED.** The two `matmul.py` ff1/ff2 entries are re-keyed to 13664 so the
-pipeline selects them; `_packed_sizes`, the harness constants and `measured_sdpa_chunk_sizes` are
-still mismatched and still need the text-budget decision below. Confirmed independently before
-fixing: the pipeline's own `packing.py` helpers give 109101 rows at 39 tokens (matching
-`MiniMaxH3.md:311`'s recorded 109101) -> 109312 padded -> 13664 rows/device, and the real resolvers
-miss at 13664 / hit at 13632. Not confirmed end-to-end on a live pipeline: this host has no
-MiniMax-H3 snapshot (`MINIMAX_H3_MODEL_PATH` unset, nothing in the HF caches, no `~/tt_dit_cache`
-or `~/h3_wormhole_results`), so the runs behind the perf doc were made elsewhere.
-Found 2026-09-17 while reviewing the Wormhole ff1/ff2 blockings landed in `9e97f1541bc`. Everything
-below was executed on the run host, not inferred, unless marked otherwise. Nothing in the repo has been
-changed for this issue; the proposed fix at the end is a proposal.
+**Status: FIXED in `a07012d7d8a`** (structural; `664578b377e` was the point fix). `_packed_sizes` counts
+audio in rows with the gate's 39-token prompt; `packing.py` gained `packed_sequence_length` /
+`padded_sequence_length` and the pipeline's own `build_packed_sequence` and `_denoise` padding route
+through them; `get_matmul_config` / `get_agmm_config` fall back on equal `M_per_core` after an exact
+miss; all M literals re-keyed to 4736 / 9184 / 13664. Confirmed on a live 15 s / 16:9 generation:
+`13664 rows/device`, ff1 and ff2 absent from the fallback warnings. Same-host A/B: -69.9 ms/fwd
+(-0.58%), matching the isolated-sweep prediction. Both blockings PCC-validated after the fact (ff2 pcc
+1.0000000, ff1 0.9999843), since the sweep never checked numerics. Remaining: the "Decision needed"
+below is resolved as 39 tokens (matches `CALIBRATED_FOX_PROMPT`; any 1-250 tokens gives the same
+15 s bucket). The original analysis follows unchanged.
 
 ## TL;DR
 
