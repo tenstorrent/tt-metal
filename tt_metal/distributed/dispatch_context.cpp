@@ -5,8 +5,10 @@
 #include <tt_stl/fmt.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/experimental/dispatch_context.hpp>
+#include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_device_view.hpp>
 #include <tt-metalium/distributed_context.hpp>
@@ -40,13 +42,17 @@ struct DispatchContext::StashedQueues {
     std::vector<std::unique_ptr<distributed::MeshCommandQueueBase>> queues;
 };
 
+// One resident L1 allocation whose data sits on a dispatch core inside the fast-dispatch firmware footprint.
 struct DispatchContext::FdL1Conflict {
     ChipId chip;
     CoreCoord core;
-    const char* role;
-    const char* ledger;
-    DeviceAddr lowest;
+    const char* role;    // "prefetch" / "dispatch": which firmware role runs on this core
+    const char* ledger;  // "chip" / "mesh" / "chip arena" / "mesh arena": which bookkeeping recorded it
+    const char* kind;    // "per-core" / "lockstep-sharded" / "lockstep-nd-sharded" / "interleaved" / "arena"
+    DeviceAddr lowest;   // the allocation's address on this core
     DeviceAddr window_end;
+    DeviceAddr bytes_per_core;
+    uint32_t num_cores;  // how many cores the allocation spans (0 when unknown)
 };
 
 namespace {
@@ -59,30 +65,101 @@ std::optional<DeviceAddr> lowest_arena_address(const AllocatorImpl& allocator, c
     return lowest;
 }
 
-struct LedgerReading {
-    std::optional<DeviceAddr> lowest;
-    const char* source = "";
-};
+// Does this buffer hold data in L1 on `core`? Addresses are irrelevant here. A lockstep buffer
+// reserves its address range on every bank, but its bytes live only on its shard grid, so the
+// shared free list cannot answer this question and the buffer object has to.
+bool l1_buffer_touches_core(const Buffer& buffer, const CoreCoord& core) {
+    if (buffer.buffer_type() != BufferType::L1) {
+        return false;  // DRAM / TRACE are not L1; L1_SMALL is its own region at the top of the bank.
+    }
+    if (buffer.has_shard_spec()) {
+        return buffer.shard_spec().grid().contains(core);
+    }
+    if (const auto& distribution = buffer.buffer_distribution_spec(); distribution.has_value()) {
+        const auto& cores = distribution->cores();
+        return std::find(cores.begin(), cores.end(), core) != cores.end();
+    }
+    return true;  // Interleaved: one page on every bank, including this core.
+}
 
-LedgerReading read_ledger(
-    const AllocatorImpl& allocator, const CoreCoord& core, const char* free_list_source, const char* arena_source) {
-    LedgerReading reading;
+const char* l1_buffer_kind(const Buffer& buffer) {
+    if (per_core_allocation::is_per_core_allocation(buffer)) {
+        return "per-core";
+    }
+    if (buffer.has_shard_spec()) {
+        return "lockstep-sharded";
+    }
+    if (buffer.buffer_distribution_spec().has_value()) {
+        return "lockstep-nd-sharded";
+    }
+    return "interleaved";
+}
+
+// Append one conflict per L1 buffer, and per persistent-arena region, that `allocator` has placed on
+// `core` below `window_end`. Buffers are attributed to cores by their shard grid, not by the free list,
+// so a lockstep tensor sharded elsewhere does not count even though it reserves the same address on
+// this bank (the "lockstep false positive").
+void collect_conflicts(
+    const AllocatorImpl& allocator,
+    const char* ledger,
+    const char* arena_ledger,
+    ChipId chip,
+    const CoreCoord& core,
+    const char* role,
+    DeviceAddr window_end,
+    std::vector<DispatchContext::FdL1Conflict>& conflicts) {
     if (!allocator.has_bank(BufferType::L1, core)) {
-        return reading;
+        return;
     }
 
+    // Fast path. Every allocated buffer's address is recorded in a free list (lockstep, or this bank's
+    // per-core list under HYBRID), and every arena region in the arena. If neither reaches below
+    // window_end, no buffer can, and the walk below is skipped. This is the common case.
     const uint32_t bank = allocator.get_bank_ids_from_logical_core(BufferType::L1, core).at(0);
-    if (auto free_list_lowest = allocator.get_lowest_occupied_l1_address(bank); free_list_lowest.has_value()) {
-        reading.lowest = free_list_lowest;
-        reading.source = free_list_source;
+    const auto free_list_lowest = allocator.get_lowest_occupied_l1_address(bank);
+    const auto arena_lowest = lowest_arena_address(allocator, core);
+    const bool free_list_low = free_list_lowest.has_value() && *free_list_lowest < window_end;
+    const bool arena_low = arena_lowest.has_value() && *arena_lowest < window_end;
+    if (!free_list_low && !arena_low) {
+        return;
     }
 
-    if (auto arena_lowest = lowest_arena_address(allocator, core);
-        arena_lowest.has_value() && (!reading.lowest.has_value() || *arena_lowest < *reading.lowest)) {
-        reading.lowest = arena_lowest;
-        reading.source = arena_source;
+    if (free_list_low) {
+        // get_allocated_buffers() copies the set under the allocator mutex; the Buffer pointers are
+        // dereferenced without it. A manual fast-dispatch session is entered from one host thread with
+        // no concurrent allocation, which is the contract this preflight relies on.
+        for (Buffer* buffer : allocator.get_allocated_buffers()) {
+            if (buffer == nullptr || !l1_buffer_touches_core(*buffer, core)) {
+                continue;
+            }
+            // get_per_core_address TT_FATALs for a core the buffer does not span; the grid test above
+            // guarantees it does.
+            const DeviceAddr address = per_core_allocation::is_per_core_allocation(*buffer)
+                                           ? per_core_allocation::get_per_core_address(*buffer, core)
+                                           : static_cast<DeviceAddr>(buffer->address());
+            if (address < window_end) {
+                conflicts.push_back(
+                    {chip,
+                     core,
+                     role,
+                     ledger,
+                     l1_buffer_kind(*buffer),
+                     address,
+                     window_end,
+                     buffer->aligned_size_per_bank(),
+                     buffer->num_cores().value_or(0)});
+            }
+        }
     }
-    return reading;
+
+    if (arena_low) {
+        for (const auto& range : allocator.persistent_l1().occupied_ranges(core)) {
+            if (range.first < window_end) {
+                conflicts.push_back(
+                    {chip, core, role, arena_ledger, "arena", range.first, window_end, range.second - range.first, 1});
+            }
+        }
+    }
 }
 
 }  // namespace
@@ -135,9 +212,6 @@ std::vector<DispatchContext::FdL1Conflict> DispatchContext::find_fd_l1_conflicts
         if (mesh->is_initialized() && !mesh->get_view().get_devices().empty()) {
             mesh_views.push_back(mesh);
         }
-        if (!mesh->get_view().get_devices().empty()) {
-            mesh_views.push_back(mesh);
-        }
         for (const auto& submesh : mesh->get_submeshes()) {
             collect_views(submesh.get());
         }
@@ -177,16 +251,14 @@ std::vector<DispatchContext::FdL1Conflict> DispatchContext::find_fd_l1_conflicts
             }
 
             const CoreCoord core(core_with_chip.x, core_with_chip.y);
-            LedgerReading best = read_ledger(*device->allocator_impl(), core, "chip", "chip arena");
+            // Per-core buffers are recorded in the chip's allocator; lockstep buffers in the allocator
+            // of the mesh view that created them (the HYBRID mirror marks ranges but registers no
+            // Buffer). Each ledger is walked for buffers whose data is on this core.
+            collect_conflicts(
+                *device->allocator_impl(), "chip", "chip arena", device->id(), core, role, window_end, conflicts);
             for (distributed::MeshDevice* view : views_over_device) {
-                LedgerReading reading = read_ledger(*view->allocator_impl(), core, "mesh", "mesh arena");
-                if (reading.lowest.has_value() && (!best.lowest.has_value() || *reading.lowest < *best.lowest)) {
-                    best = reading;
-                }
-            }
-
-            if (best.lowest.has_value() && *best.lowest < window_end) {
-                conflicts.push_back({device->id(), core, role, best.source, *best.lowest, window_end});
+                collect_conflicts(
+                    *view->allocator_impl(), "mesh", "mesh arena", device->id(), core, role, window_end, conflicts);
             }
         };
 
@@ -210,30 +282,23 @@ std::vector<DispatchContext::FdL1Conflict> DispatchContext::find_fd_l1_conflicts
         }
     }
     return conflicts;
-
-    // Walk the actual allocated tensor objects:
-    // for (Buffer* buf : alloc.get_allocated_buffers()) {
-    //     if (buf->buffer_type() != BufferType::L1) continue;
-
-    //     // Check the tensor's actual physical shard grid:
-    //     if (buf->shard_spec().grid().contains(core)) {
-    //         throw std::runtime_error("Physical conflict on dispatch core!");
-    //     }
-    // }
 }
 
 std::string DispatchContext::format_fd_l1_conflicts(const std::vector<FdL1Conflict>& conflicts) const {
     std::string report;
     for (const auto& conflict : conflicts) {
         report += fmt::format(
-            "  chip {} core ({},{}) [{}]: {} ledger has L1 handed out down to 0x{:X}, "
+            "  chip {} core ({},{}) [{}]: {} ledger: {} allocation at 0x{:X}, {} B/core, spans {} core(s); "
             "fast-dispatch firmware writes up to 0x{:X}\n",
             conflict.chip,
             conflict.core.x,
             conflict.core.y,
             conflict.role,
             conflict.ledger,
+            conflict.kind,
             conflict.lowest,
+            conflict.bytes_per_core,
+            conflict.num_cores,
             conflict.window_end);
     }
     return report;

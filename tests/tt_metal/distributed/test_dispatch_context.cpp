@@ -895,6 +895,78 @@ TEST_F(DispatchContextFixture, NdShardedResidentWithDataOnDispatchCoresRefused) 
                                 "above would be conservative rather than protective";
 }
 
+// WHAT: an INTERLEAVED L1 buffer (no shard spec, no distribution spec) allocated bottom-up, so its
+//       pages sit at the allocator base on every bank, including both dispatch cores.
+// WHY:  the buffer walk attributes an interleaved buffer to every core (one page per bank). It must be
+//       refused on both dispatch cores and reported as kind "interleaved". This is the one placement
+//       the grid test cannot narrow, and the message says so.
+// EXPECT: refused, with a [prefetch] and a [dispatch] line naming an "interleaved allocation".
+TEST_F(DispatchContextFixture, InterleavedL1ResidentAtBaseRefused) {
+    if (auto reason = fd_preflight_skip_reason(); reason.has_value()) {
+        GTEST_SKIP() << *reason;
+    }
+
+    const MeshShape system_shape = MetalContext::instance().get_system_mesh().shape();
+    auto mesh = MeshDevice::create(MeshDeviceConfig(system_shape));
+    if (!has_expected_dispatch_column(*mesh)) {
+        GTEST_SKIP() << "This test expects Blackhole dispatch cores (12,0) and (12,1).";
+    }
+
+    constexpr uint32_t page_size = 4096;
+    const uint32_t num_banks = mesh->allocator_impl()->get_num_banks(BufferType::L1);
+    DeviceLocalBufferConfig low_l1{.page_size = page_size, .buffer_type = BufferType::L1, .bottom_up = true};
+    ReplicatedBufferConfig low_l1_global{.size = num_banks * page_size};  // one page on every bank
+    auto resident = MeshBuffer::create(low_l1_global, low_l1, mesh.get());
+    ASSERT_NE(resident, nullptr);
+
+    const std::string error = capture_default_fd_refusal(mesh.get());
+    ASSERT_FALSE(error.empty()) << "an interleaved L1 resident at the allocator base was not refused";
+    EXPECT_NE(error.find("[prefetch]"), std::string::npos);
+    EXPECT_NE(error.find("[dispatch]"), std::string::npos);
+    EXPECT_NE(error.find("interleaved allocation"), std::string::npos) << error;
+}
+
+// WHAT: the same interleaved L1 buffer allocated top-down (the default), so its pages sit at the top of
+//       every bank, far above the firmware footprint.
+// WHY:  the buffer walk keeps the address window: data on the dispatch core is only a conflict when it
+//       is inside the footprint. A pure core-ownership check would refuse this; the hybrid must not.
+// EXPECT: not refused, and the buffer is intact after a forced session with traffic.
+TEST_F(DispatchContextFixture, InterleavedL1ResidentAtTopIsAllowed) {
+    if (auto reason = fd_preflight_skip_reason(); reason.has_value()) {
+        GTEST_SKIP() << *reason;
+    }
+
+    const MeshShape system_shape = MetalContext::instance().get_system_mesh().shape();
+    auto mesh = MeshDevice::create(MeshDeviceConfig(system_shape));
+    if (!has_expected_dispatch_column(*mesh)) {
+        GTEST_SKIP() << "This test expects Blackhole dispatch cores (12,0) and (12,1).";
+    }
+
+    constexpr uint32_t page_size = 4096;
+    const uint32_t num_banks = mesh->allocator_impl()->get_num_banks(BufferType::L1);
+    DeviceLocalBufferConfig top_l1{.page_size = page_size, .buffer_type = BufferType::L1, .bottom_up = false};
+    ReplicatedBufferConfig top_l1_global{.size = num_banks * page_size};
+    auto resident = MeshBuffer::create(top_l1_global, top_l1, mesh.get());
+    ASSERT_NE(resident, nullptr);
+
+    std::vector<uint32_t> src(num_banks * page_size / sizeof(uint32_t));
+    std::iota(src.begin(), src.end(), 0x20190800);
+    EnqueueWriteMeshBuffer(mesh->mesh_command_queue(), resident, src);
+    Finish(mesh->mesh_command_queue());
+
+    const std::string error = capture_default_fd_refusal(mesh.get());
+    EXPECT_TRUE(error.empty()) << "false positive: an interleaved L1 resident above the firmware footprint was "
+                                  "refused:\n"
+                               << error;
+
+    run_forced_session_with_traffic(mesh.get(), /*write_only=*/false);
+    for (const auto& coord : MeshCoordinateRange(mesh->shape())) {
+        std::vector<uint32_t> dst;
+        ReadShard(mesh->mesh_command_queue(), dst, resident, coord);
+        ASSERT_EQ(dst, src) << "interleaved resident above the footprint was corrupted at " << coord;
+    }
+}
+
 // WHAT: open the mesh with TWO command queues instead of one. The second queue gets its own prefetcher
 //       and dispatcher, expected on (12,2)/(12,3). Reserve arena regions there.
 // WHY:  the guard must ask the dispatch core manager which cores are in use for EVERY queue instead of

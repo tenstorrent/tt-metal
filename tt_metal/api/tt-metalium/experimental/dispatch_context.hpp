@@ -57,6 +57,10 @@ public:
 
     void reset();
 
+    // One resident L1 allocation inside the fast-dispatch firmware footprint. Defined in the .cpp;
+    // declared here (public) only so the file-local helpers that build the list can name the type.
+    struct FdL1Conflict;
+
 private:
     DispatchContext() = default;
     ~DispatchContext();
@@ -67,7 +71,6 @@ private:
     };
     friend struct Deleter;
 
-    struct FdL1Conflict;
     std::vector<FdL1Conflict> find_fd_l1_conflicts(
         MetalContext& context,
         distributed::MeshDevice* mesh_device,
