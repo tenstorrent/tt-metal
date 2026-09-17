@@ -36,17 +36,14 @@ from .weights import AttentionWeights
 # probe is skipped entirely.
 _Q_SHARDED_MEM_CACHE: dict = {}
 
+# Max decode users for the L1 activation path: one user per core on a single
+# 8-wide grid row. See the clash note in ``decode_forward``.
+_L1_DECODE_ACT_MAX_USERS = 8
 
-def _height_shard_memcfg(num_users, shard_shape, grid_x=8):
-    """HEIGHT_SHARDED L1 config with one user per core, row-major on an 8-wide grid."""
-    n = int(num_users)
-    if n <= grid_x:
-        core_range = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(n - 1, 0))
-    else:
-        rows = n // grid_x
-        if n % grid_x:
-            raise ValueError(f"num_users={n} must divide {grid_x} for a rectangular shard grid")
-        core_range = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_x - 1, rows - 1))
+
+def _single_core_height_shard_memcfg(shard_shape):
+    """HEIGHT_SHARDED L1 config on one core: the per-user layout SDPA expects."""
+    core_range = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))
     return ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ttnn.BufferType.L1,
@@ -111,7 +108,18 @@ def decode_forward(
         is_kv_shared: if True, skip K/V projection and cache update (use source layer's KV cache)
     """
     tp = mesh_config.tp if mesh_config else 1
-    l1_act = wh_t3k_dense_decode_enabled(mesh_device, is_moe=bool(config.enable_moe_block))
+    # The L1 activation path below shards Q/K/V one user per core. At 32 users
+    # that spans [0-0 - 7-3] and the sharded L1 buffers collide with
+    # paged_update_cache's statically allocated dataflow buffers ("clash with L1
+    # buffers ... static dataflow buffer region ends at 1355104"), killing the
+    # program. Measured on a real T3K, 12B: batch-32 fails with this on and
+    # passes with it off, while batch-8 (one 8-wide grid row) passes with it on.
+    # Between 9 and 31 users is untested -- widen only with a batch-32 run.
+    decode_users = int(hidden_states.shape[-2])
+    l1_act = (
+        wh_t3k_dense_decode_enabled(mesh_device, is_moe=bool(config.enable_moe_block))
+        and decode_users <= _L1_DECODE_ACT_MAX_USERS
+    )
     qkv_interleaved = ttnn.L1_MEMORY_CONFIG if l1_act else ttnn.DRAM_MEMORY_CONFIG
 
     # 1. Fused QKV projection
@@ -246,7 +254,7 @@ def decode_forward(
                     # so a 1-core config with that same shard shape is exactly the
                     # per-user layout the op expects.
                     _shard_shape = list(q_sharded_mem.shard_spec.shape)
-                    single_user_mem = _height_shard_memcfg(1, _shard_shape)
+                    single_user_mem = _single_core_height_shard_memcfg(_shard_shape)
                     k_seq = ttnn.to_memory_config(tt_k, ttnn.DRAM_MEMORY_CONFIG)
                     v_seq = ttnn.to_memory_config(tt_v, ttnn.DRAM_MEMORY_CONFIG)
                     nkv, hd = k_seq.shape[2], k_seq.shape[3]
