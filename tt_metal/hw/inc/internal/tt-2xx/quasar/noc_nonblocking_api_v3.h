@@ -943,6 +943,10 @@ inline uint64_t noc_v3_cq_src_local[NOC_V3_STATE_CMD_BUFS] = {};
 // destination halves form a multicast rectangle that is resolved through the
 // map when the transfer is issued.
 inline bool noc_v3_cq_dest_mcast[NOC_V3_STATE_CMD_BUFS] = {};
+// The value the last CQ_NOC_INLINE_FLAG_VAL call set per command buffer. Inline
+// data travels with the inline-issue instruction, not through a register, so a
+// send without that flag issues this value again.
+inline uint32_t noc_v3_cq_inline_write_state_val[NOC_V3_STATE_CMD_BUFS] = {};
 
 // These arrays are kernel globals in L1, and the DM kernel runtime zeroes only
 // its local-memory bss, so they start with whatever the previous kernel left
@@ -954,6 +958,7 @@ inline __attribute__((always_inline)) void noc_v3_cq_state_reset() {
         noc_v3_cq_src_base[i] = 0;
         noc_v3_cq_src_local[i] = 0;
         noc_v3_cq_dest_mcast[i] = false;
+        noc_v3_cq_inline_write_state_val[i] = 0;
     }
 }
 
@@ -1274,12 +1279,7 @@ inline __attribute__((always_inline)) void noc_inline_dw_write_with_state(
     (void)noc;
 
     if constexpr (flags & CQ_NOC_INLINE_FLAG_VAL) {
-        if constexpr (cmd_buf == 2) {
-            __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_INLINE_DATA_REG_OFFSET / 8, val);
-        } else {
-            __builtin_riscv_ttrocc_cmdbuf_wr_reg(
-                cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_INLINE_DATA_REG_OFFSET / 8, val);
-        }
+        noc_v3_cq_inline_write_state_val[cmd_buf] = val;
     }
     if constexpr (flags & CQ_NOC_FLAG_NOC) {
         noc_v3_cq_dest_base[cmd_buf] = noc_v3_state_base_of(dst_addr);
@@ -1301,14 +1301,11 @@ inline __attribute__((always_inline)) void noc_inline_dw_write_with_state(
         ASSERT(be == 0xF);
     }
     if constexpr (send) {
+        const uint32_t data = (flags & CQ_NOC_INLINE_FLAG_VAL) ? val : noc_v3_cq_inline_write_state_val[cmd_buf];
         if constexpr (cmd_buf == 2) {
-            if constexpr (flags & CQ_NOC_INLINE_FLAG_VAL) {
-                __builtin_riscv_ttrocc_scmdbuf_issue_inline_trans(val);
-            } else {
-                __builtin_riscv_ttrocc_scmdbuf_issue_trans();
-            }
+            __builtin_riscv_ttrocc_scmdbuf_issue_inline_trans(data);
         } else {
-            __builtin_riscv_ttrocc_cmdbuf_issue_trans(cmd_buf);
+            __builtin_riscv_ttrocc_cmdbuf_issue_inline_trans(cmd_buf, data);
         }
     }
 }
