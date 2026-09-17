@@ -14,6 +14,11 @@ from pathlib import Path
 import pytest
 
 from models.demos.llama_3p1_8b_d_p.tests.performance.performance_config import load_config
+from models.demos.llama_3p1_8b_d_p.tests.performance.request_progress import (
+    emit_progress,
+    parse_warmup_stack_seconds,
+    run_observed_request,
+)
 from models.demos.llama_3p1_8b_d_p.tests.performance.source_inventory import hash_files
 
 # A missing opt-in skips this module; explicitly supplied invalid requests still fail below.
@@ -21,6 +26,7 @@ if "LLAMA_LONG_CONTEXT_PERF_CONFIG" not in os.environ:
     pytest.skip("Set LLAMA_LONG_CONTEXT_PERF_CONFIG to run this optional benchmark", allow_module_level=True)
 
 CONFIG = load_config(os.environ.get("LLAMA_LONG_CONTEXT_PERF_CONFIG"))
+WARMUP_STACK_SECONDS = parse_warmup_stack_seconds(os.environ.get("LLAMA_PREFILL_WARMUP_STACK_SECONDS"))
 
 import torch
 from transformers import AutoTokenizer
@@ -193,6 +199,11 @@ def test_full_prefill_long_context_performance(mesh_device):
         },
     )
     model = cache = None
+    report["observability"] = dict(
+        progress_file="progress.jsonl",
+        warmup_stack_seconds=WARMUP_STACK_SECONDS,
+        scope="Untimed phase events; optional warmup-only nonfatal stack dump may perturb cold timing",
+    )
     retained = []
     baseline = {}
     try:
@@ -206,6 +217,7 @@ def test_full_prefill_long_context_performance(mesh_device):
         prompts = [torch.tensor(record["token_ids"], dtype=torch.int64) for record in report["prompts"]]
         tokenizer = AutoTokenizer.from_pretrained(CHECKPOINT, local_files_only=True)
         report["fixture_and_tokenizer_load_wall_seconds"] = time.perf_counter() - begin
+        emit_progress(directory / "progress.jsonl", "model_setup_begin", tokens=TOKENS)
         begin = time.perf_counter()
         model = PrefillModel(
             mesh_device, CHECKPOINT, num_layers=32, cache_dtype=ttnn.bfloat8_b, enable_lm_head=True, max_seq_len=TOKENS
@@ -217,6 +229,7 @@ def test_full_prefill_long_context_performance(mesh_device):
         cache = allocate_kv_cache(mesh_device, model.mesh_config, cache_dtype=ttnn.bfloat8_b, max_seq_len=TOKENS)
         ttnn.synchronize_device(mesh_device)
         report["model_and_cache_load_wall_seconds"] = time.perf_counter() - begin
+        emit_progress(directory / "progress.jsonl", "model_setup_complete", tokens=TOKENS)
         for slot, phase, repetition in request_schedule():
             ids = prompts[slot]
 
@@ -249,7 +262,10 @@ def test_full_prefill_long_context_performance(mesh_device):
                     observations=report["next_token_observations"],
                 )
 
-            sample, checks, readback_seconds = run_request(
+            sample, checks, readback_seconds = run_observed_request(
+                run_request,
+                emit=lambda event, **fields: emit_progress(directory / "progress.jsonl", event, **fields),
+                warmup_stack_seconds=WARMUP_STACK_SECONDS,
                 tokens=TOKENS,
                 slot=slot,
                 phase=phase,

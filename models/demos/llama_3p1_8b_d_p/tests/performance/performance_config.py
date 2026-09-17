@@ -21,6 +21,7 @@ def required_sources(repository):
     names = (
         "performance_config",
         "source_inventory",
+        "request_progress",
         "book_fixture_loader",
         "book_selection",
         "book_observation",

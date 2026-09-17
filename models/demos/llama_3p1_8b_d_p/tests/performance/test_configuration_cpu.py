@@ -122,3 +122,46 @@ class ConfigurationTests(unittest.TestCase):
                 receipt.write_text("changed")
                 with self.assertRaisesRegex(RuntimeError, "resource_review"):
                     config.load_config(path)
+
+    # The new executing helper must be required even when an otherwise valid map is rehashed after omission.
+    def test_progress_helper_must_be_pinned(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path, value, repo, sources = self.fixture(Path(tmp))
+            helper = repo / "models/demos/llama_3p1_8b_d_p/tests/performance/request_progress.py"
+            helper.parent.mkdir(parents=True, exist_ok=True)
+            helper.write_text("independent helper fixture\n")
+            sources[str(helper)] = sha(helper)
+            pins = Path(value["source_pins"]["path"])
+            write(pins, sources)
+            value["source_pins"]["sha256"] = sha(pins)
+            write(path, value)
+            with mock.patch.object(config, "REPOSITORY", repo), mock.patch.object(config, "load_book_fixture") as book:
+                config.load_config(path)
+                book.reset_mock()
+                del sources[str(helper)]
+                write(pins, sources)
+                value["source_pins"]["sha256"] = sha(pins)
+                write(path, value)
+                with self.assertRaisesRegex(ValueError, "omits"):
+                    config.load_config(path)
+                book.assert_not_called()
+
+    # Changing the helper after binding must fail before fixture loading, with no tensor imports involved.
+    def test_changed_progress_helper_bytes_refuse(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path, value, repo, sources = self.fixture(Path(tmp))
+            helper = repo / "models/demos/llama_3p1_8b_d_p/tests/performance/request_progress.py"
+            helper.parent.mkdir(parents=True, exist_ok=True)
+            helper.write_text("independent helper fixture\n")
+            sources[str(helper)] = sha(helper)
+            pins = Path(value["source_pins"]["path"])
+            write(pins, sources)
+            value["source_pins"]["sha256"] = sha(pins)
+            write(path, value)
+            with mock.patch.object(config, "REPOSITORY", repo), mock.patch.object(config, "load_book_fixture") as book:
+                config.load_config(path)
+                book.reset_mock()
+                helper.write_text("mutated helper\n")
+                with self.assertRaisesRegex(RuntimeError, "Pinned source bytes changed"):
+                    config.load_config(path)
+                book.assert_not_called()

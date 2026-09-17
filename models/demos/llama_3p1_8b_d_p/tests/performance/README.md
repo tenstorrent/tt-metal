@@ -41,7 +41,7 @@ The test creates a fresh captures-C child. Reusing that child refuses. Use a cal
 
 These host tests import no tensor or device libraries. The collection checks invoke pytest in isolated subprocesses:
 
-    python -m unittest -v models.demos.llama_3p1_8b_d_p.tests.performance.test_configuration_cpu models.demos.llama_3p1_8b_d_p.tests.performance.test_timing_cpu models.demos.llama_3p1_8b_d_p.tests.performance.test_book_cpu models.demos.llama_3p1_8b_d_p.tests.performance.test_report_cpu models.demos.llama_3p1_8b_d_p.tests.performance.test_source_inventory_cpu models.demos.llama_3p1_8b_d_p.tests.performance.test_optional_collection_cpu
+    python -m unittest -v models.demos.llama_3p1_8b_d_p.tests.performance.test_configuration_cpu models.demos.llama_3p1_8b_d_p.tests.performance.test_timing_cpu models.demos.llama_3p1_8b_d_p.tests.performance.test_book_cpu models.demos.llama_3p1_8b_d_p.tests.performance.test_report_cpu models.demos.llama_3p1_8b_d_p.tests.performance.test_source_inventory_cpu models.demos.llama_3p1_8b_d_p.tests.performance.test_optional_collection_cpu models.demos.llama_3p1_8b_d_p.tests.performance.test_request_progress_cpu
 
 They exercise actual timing boundaries with deferred fake work, exact-once retained-output cleanup, continued cache/model/synchronization cleanup after individual faults, primary-error preservation and final-report persistence, complete ordered chunk/request coverage, shorter-report denominator rejection, full-chip output inventory, final SP/TP mapping, finite/repeat checks, fixture/config/source binding and deterministic bounded source hashing. The saved 2K timing fixture contains only existing clocks and summaries; it checks arithmetic without rerunning 2K.
 
@@ -52,3 +52,17 @@ Configured cache capacity equals prompt context in the reported measurements. At
 ## Optional collection
 
 Without LLAMA_LONG_CONTEXT_PERF_CONFIG, pytest skips only this benchmark module before importing tensor libraries. An explicitly supplied empty, malformed or closed configuration remains an error before tensor imports. Ordinary unrelated tests still collect and run. The import gate does not change the benchmark function, timing intervals or workload.
+
+## Progress and optional warmup stack dumps
+
+Runs write `progress.jsonl` beside `report.json`. Setup markers separate model construction from requests. For each request, `request_begin`, `forward_complete`, and `readback_release_complete` distinguish the full forward from output readback and cleanup. Marker writes are outside prompt/readback timing intervals. Ignore an incomplete final JSONL line while a write is in progress. These markers do not establish acceptance; the complete report, finite/repeatability and integrity checks, JUnit result, source identity, and clean mesh close remain required.
+
+`LLAMA_PREFILL_WARMUP_STACK_SECONDS` defaults to `0` (disabled). To request one nonfatal Python stack dump if an excluded warmup remains active after 900 seconds, set it before the existing benchmark command:
+
+```bash
+export LLAMA_PREFILL_WARMUP_STACK_SECONDS=900
+```
+
+The timer is armed only for warmup requests, is cancelled in `finally`, and is never armed for measured requests. Dumps appear on stderr in the test log. They can perturb cold/warmup latency; disclose the setting and any dump when reporting those timings, and leave it disabled for direct cold-start comparisons. A Python stack does not necessarily expose a native/device stack.
+
+Enable this option only when no competing faulthandler timer exists—for example, pytest's `faulthandler_timeout` must remain `0`. The API cannot preserve and restore an unknown existing timer. Do not combine the two timer mechanisms. This option cannot activate diagnostics in an already-running benchmark.
