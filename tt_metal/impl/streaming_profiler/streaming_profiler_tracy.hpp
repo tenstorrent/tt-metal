@@ -28,7 +28,7 @@ class Service;
 // runs on the callback's thread.
 //
 // Record host times are host_clock, the TSC scaled: a record's timeline position is its TSC count through Tracy's
-// calibrated multiplier, with no second clock and no map between them.
+// calibrated multiplier.
 class TracySink {
 public:
     explicit TracySink(Service& service);
@@ -71,11 +71,6 @@ private:
     void push_zone(const Core& core, std::string_view name, int64_t start_tsc, int64_t end_tsc, uint32_t color);
     void push_marker(
         const Core& core, std::string_view name, int64_t tsc, uint32_t runtime_id, std::span<const uint64_t> values);
-    // Device<->device sync plots, all RATES. Per chip: the chip's applied AICLK over the ROOT chip's at the same
-    // instant -- the factor that
-    // scales its wall-clock rate onto the root's; the root reads exactly 1. Each stream's AICLK comes from a sliding
-    // dwall/drefclk over its PP_CLOCK samples. Plus the cross-chip refclk scale regression the d2d consumer publishes
-    // through SyncPlots.
     struct FreqPoint {
         int64_t tsc;
         double ghz;
@@ -113,8 +108,8 @@ private:
         uint64_t ts;    // the eth tile's wall tick
         uint64_t value;  // the refclk reading
     };
-    std::vector<PlotSample> plot_samples_;        // accumulated during the capture, drained in emit_plots()
-    std::unordered_set<std::string> plot_names_;  // interned: PlotDataAt keys a plot by its name pointer
+    std::vector<PlotSample> plot_samples_;
+    std::unordered_set<std::string> plot_names_;
 };
 
 }  // namespace tt::tt_metal::streaming_profiler

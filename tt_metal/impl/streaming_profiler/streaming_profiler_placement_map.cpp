@@ -44,15 +44,13 @@ constexpr Key key_max() {
     }
 }
 
-// One series: its nodes, the newest PlacementMap::kSeriesNodes of them, the cover, and the generation that
-// invalidates cursors built on an earlier capture.
 constexpr uint32_t kHostSeries = std::numeric_limits<uint32_t>::max();
 
 template <typename Key>
 struct Log {
     using Node = PlacementNode<Key>;
     ChunkedLog<Node> nodes{PlacementMap::kSeriesNodes};
-    Key last_at = key_min<Key>();  // the newest node's key, the writer's own copy
+    Key last_at = key_min<Key>();  // the writer's own copy
     alignas(64) std::atomic<Key> cover{key_min<Key>()};
     alignas(64) std::atomic<uint32_t> gen{0};
     bool full_warned = false;
@@ -107,9 +105,8 @@ inline double on_line(const Cursor<Key>& c, Key t) noexcept {
     return c.value + c.slope * static_cast<double>(t - c.origin);
 }
 
-// Puts the cursor on the segment holding t and places t; false when the series has no node. The segment's nodes
-// come from a binary search over the retained range; a read that fails (the writer retired that chunk meanwhile)
-// starts over from the new oldest node.
+// Puts the cursor on the segment holding t and places t; false when the series has no node. A read that fails (the
+// writer retired that chunk meanwhile) starts over from the new oldest node.
 template <typename Key>
 bool refill(const Log<Key>& log, Cursor<Key>& c, Key t, double& value) noexcept {
     using Node = PlacementNode<Key>;
@@ -138,7 +135,6 @@ bool refill(const Log<Key>& log, Cursor<Key>& c, Key t, double& value) noexcept 
             continue;
         }
         if (lo == f) {
-            // Before the oldest node: back along its tangent, measured from the node itself.
             c = Cursor<Key>{gen, key_min<Key>(), a.at, a.at, a.value, a.tangent, a.sigma_ns};
         } else if (lo < n) {
             if (!log.nodes.read(lo, b)) {
@@ -167,7 +163,6 @@ bool refill(const Log<Key>& log, Cursor<Key>& c, Key t, double& value) noexcept 
     }
 }
 
-// Places t on the series through the cursor (refilled when it is not there); false when the series has no node.
 template <typename Key>
 inline bool place(const Log<Key>& log, Cursor<Key>& c, Key t, double& value) noexcept {
     if (c.gen == log.gen.load(std::memory_order_relaxed) && t >= c.a && t <= c.b) {
@@ -187,7 +182,6 @@ struct Composed {
     double value = 0.0, slope = 0.0;
 };
 
-// A thread's cursors on one map: rebuilt when the thread turns to another map.
 struct ThreadView {
     const void* owner = nullptr;
     std::array<Cursor<int64_t>, PlacementMap::kMaxChips> chip{};
@@ -203,7 +197,6 @@ ThreadView& view_of(const void* owner) noexcept {
     return t_view;
 }
 
-// host_clock units per TSC tick.
 double units_per_tsc() {
     static const double u = 10.0 / tsc_ticks_per_ns();
     return u;
@@ -391,7 +384,7 @@ int64_t SteadyView::mono_ns(int64_t tsc) noexcept {
         gen = g;
     }
     if (!seg.ok) {
-        // No probe has published a segment: the pair is taken here, once per thread and generation.
+        // The stand-in pair is taken once per thread and generation.
         timespec ts{};
         clock_gettime(CLOCK_MONOTONIC, &ts);
         const int64_t mono = static_cast<int64_t>(ts.tv_sec) * 1'000'000'000 + ts.tv_nsec;

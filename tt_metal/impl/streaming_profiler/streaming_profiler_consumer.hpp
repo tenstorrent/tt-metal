@@ -93,7 +93,7 @@ void init_site_registry();
 
 struct StreamStats {
     uint64_t records = 0, zones = 0, order_regressions = 0, epoch_fixes = 0;
-    uint64_t clock_samples = 0;  // PP_CLOCK samples decoded (idle-eth clock trackers); the drain's proof of life
+    uint64_t clock_samples = 0;  // PP_CLOCK samples decoded (idle-eth clock trackers)
 };
 
 }  // namespace tt::tt_metal::streaming_profiler

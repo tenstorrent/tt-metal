@@ -42,7 +42,6 @@ public:
         uint32_t n = 0;                      // samples behind the line
         bool closed = false;
         double slope() const { return k8 / 8.0; }
-        double ratio() const { return slope(); }
         bool settled() const { return n >= kSettledCount; }
         double wall_of_refclk(double r) const { return ay + slope() * (r - ax); }
         double refclk_of_wall(double w) const { return ax + (w - ay) / slope(); }
@@ -167,8 +166,8 @@ private:
         std::vector<std::pair<uint64_t, uint64_t>>
             samples;  // the raw transition samples (refclk, wall), for the CSV dump
     };
-    // One end's stamp of a round: the reading (refclk ticks for software stamps, ns for hardware ones) and the eth
-    // core's wall clock when it was recorded.
+    // One end's stamp of a round: the reading, in quarter-ns of the refclk domain, and the eth core's wall clock when
+    // it was recorded.
     struct Stamp {
         uint64_t value = 0, wall = 0;
         bool have = false;
@@ -321,8 +320,6 @@ private:
     static constexpr double kFreezeNs = 0.25;
     // The refclk span the tangent is measured over along a run's exact line; any span gives the same slope.
     static constexpr double kTangentTicks = 50000.0;
-    // A knot (where two runs' exact lines meet) must land within this much refclk (50 us) of the samples that
-    // bracket the transition; a split is detected up to ~10 us after the transition it follows.
     // The link solve's window in the sender chip's refclk, re-solved every half window. Two chips' crystals hold a
     // line to ~0.4 ns over 250 ms and their rate moves a few ppb from one such window to the next (measured on the
     // 8-chip runs), so a fit extrapolated half a window past its end stays within ~0.4 ns rms and doubles that at

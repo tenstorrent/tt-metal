@@ -42,8 +42,8 @@ void D2dSyncConsumer::on_attach(const CaptureContext& ctx) {
     published_.clear();
     to_root_gen_ = ~0ull;
     solve_gen_ = 0;
-    // A new capture: its placements start from nothing. A chip the capture cannot place -- no eth tracker, or no
-    // link path to the root -- is finished at once, so no consumer waits for it.
+    // A chip the capture cannot place -- no eth tracker, or no link path to the root -- is finished at once, so no
+    // consumer waits for it.
     std::vector<bool> reach(ctx.devices.size(), false);
     const uint32_t root = ctx.root_dev;
     if (root < ctx.devices.size() && ctx.devices[root].has_eth_tracker) {
@@ -147,10 +147,6 @@ int64_t D2dSyncConsumer::core_index(uint32_t dev, const CoreCoord& eth) const {
     return -1;
 }
 
-// Both stamp kinds solve in the refclk domain over the latest window of rounds with one regression. Hardware
-// stamps are refclk ticks already. Software wall stamps are put there through the chip's local clock model (one line
-// per constant-rate segment, so a DVFS excursion inside the window no longer bends them as one ratio per window did) and
-// keep their fastest quartile by round trip, since an ERISC stalled inside a round shows in its trip time.
 void D2dSyncConsumer::try_solve_links(bool final) {
     for (size_t li = 0; li < ctx_.links.size(); li++) {
         LinkSolution& out = solved_[li];
@@ -474,9 +470,9 @@ void D2dSyncConsumer::push_node(Series& s, uint32_t chip, const Node& n) {
 
 // Frozen nodes never move (consumers have placed records against them), so a publish can only add beyond them, at
 // the newest estimate's values; a join carries whatever the estimate moved by since the tangent was frozen (kFreezeNs
-// at most on a frontier, a few ns at a knot). Shifting fresh nodes to meet the frozen tail, and fading that shift
-// over a quarter second, was tried first: it turned every discrepancy at a join into a level the map carried for
-// 250 ms, 30-60 ns during DVFS dithering at 1 ms.
+// at most on a frontier, a few ns at a knot). Shifting fresh nodes to meet the frozen tail and fading that shift over
+// a quarter second is worse: every discrepancy at a join becomes a level the map carries for 250 ms, 30-60 ns during
+// DVFS dithering at 1 ms.
 void D2dSyncConsumer::freeze_append(Series& s, uint32_t chip, const Node& n) {
     const double frontier_H = std::max(s.nodes.empty() ? -1.0 : s.nodes.back().H, s.cover_H);
     if (n.H >= frontier_H && n.H < frontier_H + 1.0) {
@@ -556,8 +552,6 @@ bool D2dSyncConsumer::publish_dev(uint32_t dev) {
     return advance(pub.linked, ctx_.devices[dev].chip_id, fresh_nodes(pub.linked, st->second.model, xf->second));
 }
 
-// Capture end: every chip's series from the final fits and solutions, then closed, so the consumers' remaining
-// records convert on the newest tangents and nothing waits.
 void D2dSyncConsumer::publish_all() {
     for (const auto& kv : local_) {
         publish_dev(kv.first);
@@ -777,13 +771,6 @@ bool D2dSyncConsumer::solve_link(const CaptureContext::Link& L, std::vector<Roun
     return true;
 }
 
-// Nodes -> segments: a constant hold before the first node (so the correction applies from the capture's first
-// record instead of stepping in at the first node), linear interpolation between nodes, and the lookup's own hold
-// past the last one. Every segment starts where the previous ended, so the series is continuous and its slope,
-// the difference of neighbouring corrections over a millisecond, is far below 1: it cannot reorder records.
-// The hedge next to the Tracy plots: a CSV of the local and linked corrections per chip over time and the
-// local-vs-linked error, so the accuracy numbers exist even if the Tracy capture is fiddly. One row per run start and per ms
-// bucket per chip. Gated on TT_METAL_STREAMING_PROFILER_D2D_CSV=<path>.
 void D2dSyncConsumer::dump_csv() const {
     const std::string& path = ctx_.d2d_csv_path;
     if (path.empty()) {
@@ -844,9 +831,8 @@ void D2dSyncConsumer::dump_csv() const {
         }
         std::fclose(hf);
     }
-    // The runs themselves, one row each: where the local map bends and by how much.
     if (std::FILE* rf = std::fopen((path + ".runs.csv").c_str(), "w"); rf != nullptr) {
-        std::fprintf(rf, "chip,wall_first,wall_last,n,slope,ratio\n");
+        std::fprintf(rf, "chip,wall_first,wall_last,n,slope\n");
         for (const auto& kv : local_) {
             const uint32_t dev = kv.first;
             const uint32_t chip = dev < ctx_.devices.size() ? ctx_.devices[dev].chip_id : dev;
@@ -856,13 +842,12 @@ void D2dSyncConsumer::dump_csv() const {
                 }
                 std::fprintf(
                     rf,
-                    "%u,%.0f,%.0f,%llu,%.9f,%.4f\n",
+                    "%u,%.0f,%.0f,%llu,%.9f\n",
                     chip,
                     b.wall_of_refclk(b.r_first),
                     b.wall_of_refclk(b.r_last),
                     static_cast<unsigned long long>(b.n),
-                    b.slope(),
-                    b.ratio());
+                    b.slope());
             }
         }
         std::fclose(rf);

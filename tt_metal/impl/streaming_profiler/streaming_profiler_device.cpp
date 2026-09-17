@@ -910,7 +910,6 @@ std::vector<double> Devices::solve_tiles(const DeviceCtx& ctx, const char* when)
     };
     if (const std::string& csv = MetalContext::instance(context_id_).rtoptions().get_streaming_profiler_d2d_csv_path();
         !csv.empty()) {
-        // Every reading behind the solve, for reading back a table gone wrong: one row per (source, tile).
         const std::string path = fmt::format("{}.tiles.{}.chip{}.csv", csv, when, ctx.chip_id);
         if (std::FILE* f = std::fopen(path.c_str(), "w"); f != nullptr) {
             std::fprintf(f, "src,src_x,src_y,tile,tile_x,tile_y,value,solved,residual,rtt0,rtt1,ddiff\n");
@@ -936,9 +935,7 @@ std::vector<double> Devices::solve_tiles(const DeviceCtx& ctx, const char* when)
     }
     const double ns_per_tick = 1.0 / ctx.out.clock.frequency_ghz;
 
-    // (1) How far apart the tiles' clocks are.
     const auto [xlo, xhi] = std::minmax_element(x.begin(), x.begin() + nt);
-    // (2) How well the sources agree: the readings' residuals against the solution.
     double ss = 0.0, worst = 0.0;
     for (const Obs& o : obs) {
         const double res = static_cast<double>(o.r.value) - fit_of(o);
@@ -946,7 +943,7 @@ std::vector<double> Devices::solve_tiles(const DeviceCtx& ctx, const char* when)
         worst = std::max(worst, std::fabs(res));
     }
     const double rms = obs.empty() ? 0.0 : std::sqrt(ss / static_cast<double>(obs.size()));
-    // (3) The bound. A read's round trip is its rings (x ring, y ring, both, or neither for the loopback read),
+    // A read's round trip is its rings (x ring, y ring, both, or neither for the loopback read),
     // each a fixed transit, plus the two ends' handling. The ring transits come from the round trips by class;
     // what remains of a read is its ends, and the sample lies inside the far end's part, so a placement is off by
     // at most half of (this read's ends + the source's loopback ends), whatever the split.
@@ -978,7 +975,7 @@ std::vector<double> Devices::solve_tiles(const DeviceCtx& ctx, const char* when)
         const bool same_col = o.from.x == o.to.x, same_row = o.from.y == o.to.y;
         const double transit =
             (same_col ? 0.0 : x_ring) + (same_row ? 0.0 : y_ring) + (same_col || same_row ? 0.0 : turns);
-        const double ends = static_cast<double>(o.r.rtt0) - transit;  // this read's two ends
+        const double ends = static_cast<double>(o.r.rtt0) - transit;
         const double resid = ends - static_cast<double>(loops[o.src].rtt0);
         transit_rms += resid * resid;
         bound = std::max(bound, 0.5 * (ends + static_cast<double>(loops[o.src].rtt0)));
@@ -1154,7 +1151,6 @@ void Devices::enumerate_eth_cores(const std::shared_ptr<distributed::MeshDevice>
             .phys = cluster.get_physical_coordinate_from_logical_coordinates(
                 chip, idle_sorted[i], CoreType::ETH, /*no_warn=*/true)});
     }
-    // Zero its control vector and boot it unarmed, exactly as the worker grid is.
     const std::vector<uint8_t> zero_ctrl(kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE, 0);
     cluster.write_core(
         zero_ctrl.data(), static_cast<uint32_t>(zero_ctrl.size()), tt_cxy_pair(chip, e.virt), eth_prof_l1_);
@@ -1217,7 +1213,7 @@ void Devices::enumerate_eth_cores(const std::shared_ptr<distributed::MeshDevice>
             e.linked.push_back(std::move(ln));
         }
     }
-    cap.n_eth_cores = 1u + static_cast<uint32_t>(e.linked.size());  // the idle pusher core + its active cores
+    cap.n_eth_cores = 1u + static_cast<uint32_t>(e.linked.size());
     ctx.eth.push_back(std::move(e));
 }
 
@@ -1360,11 +1356,8 @@ void Devices::release_eth_pushers() {
     }
 }
 
-// Launch each planned link sync. Called AFTER the receiver's ingest threads are up: the sync kernels emit their
-// PP_CLOCK(LINK) stamps into the active cores' rings, the idle pushers drain those rings over their sockets, and the
-// receiver empties the FIFOs -- so the pushers never block and the burst completes. Running this during boot()
-// deadlocked instead: the FIFO filled with no reader, the pusher parked in socket_reserve_pages, and the armed sync
-// kernels wedged an eth core (a board reset). A binary that failed to compile is never launched.
+// Launching this during boot() instead deadlocked: the FIFO filled with no reader, the pusher parked in
+// socket_reserve_pages, and the armed sync kernels wedged an eth core (a board reset).
 void Devices::run_link_sync() {
     auto& cluster = MetalContext::instance(context_id_).get_cluster();
     // The stop/done words sit at the top of the active eth core's UNRESERVED region, clear of the sync kernel's eth
@@ -1406,7 +1399,6 @@ void Devices::run_link_sync() {
         const uint32_t zero[2] = {0, 0};  // stop + done, clear before launch
         cluster.write_core(zero, sizeof(zero), tt_cxy_pair(L.chip_a, virt_a), stop_addr);
         cluster.write_core(zero, sizeof(zero), tt_cxy_pair(L.chip_b, virt_b), stop_addr);
-        // resident = 1, plus the stop address and the pace; the receiver ignores the pace arg.
         const std::vector<uint32_t> ct = {kLinkSyncChannels, kLinkSyncSamples, kLinkSyncSampleSize};
         auto ps = std::make_unique<Program>(CreateProgram());
         auto pr = std::make_unique<Program>(CreateProgram());
@@ -1438,7 +1430,6 @@ void Devices::run_link_sync() {
         }
         detail::WriteRuntimeArgsToDevice(dev_a, *ps, /*force_slow_dispatch=*/true);
         detail::WriteRuntimeArgsToDevice(dev_b, *pr, /*force_slow_dispatch=*/true);
-        // Resident: launch and do NOT wait; they run for the session and stop at quiesce.
         detail::LaunchProgram(dev_a, *ps, /*wait_until_cores_done=*/false, /*force_slow_dispatch=*/true);
         detail::LaunchProgram(dev_b, *pr, /*wait_until_cores_done=*/false, /*force_slow_dispatch=*/true);
         link_syncs_.push_back(ResidentSync{
@@ -1558,7 +1549,7 @@ void Devices::stop_link_syncs(tt::Cluster& cluster) {
                 log_warning(
                     tt::LogMetal,
                     "[streaming profiler] link sync chip {}: the 1588 timer never acknowledged its rate; this end sent "
-                    "no hardware stamps and the link falls back to software stamps",
+                    "no stamps and the link is not solved",
                     chip);
             }
         }
@@ -1622,7 +1613,7 @@ void Devices::quiesce(const RelayStateFn& on_state) {
                     tt_cxy_pair(ctx.chip_id, ln.virt),
                     ln.prof_l1);
                 if (lcv[kernel_profiler::SPSC_RING_TAIL_0] == 0 && lcv[kernel_profiler::SPSC_RING_TAIL_0 + 1] == 0) {
-                    continue;  // never published: nothing to report
+                    continue;
                 }
                 log_info(
                     tt::LogMetal,

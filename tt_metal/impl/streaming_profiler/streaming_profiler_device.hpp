@@ -76,9 +76,7 @@ public:
     // Stop every resident link sync at quiesce: the sender first (its final round still echoes off the live
     // receiver), then the receiver, each confirmed by its done word.
     void stop_link_syncs(tt::Cluster& cluster);
-    // The eth link syncs launch_link_sync() ran at boot, for the consumers' CaptureContext.
     const std::vector<CaptureContext::Link>& links() const { return links_; }
-    // The root chip's refclk on the host TSC (null when no chip has an eth tracker), and that chip's index.
     uint32_t root_dev() const { return root_dev_; }
     ContextId context_id() const { return context_id_; }
 
@@ -156,7 +154,7 @@ private:
         DeviceCtx& ctx,
         const distributed::MeshCoordinate& coord,
         uint32_t d);
-    // Idle-eth cores as padded standard cores in the decode roster (never the relay roster); false = none.
+    // Idle-eth cores as padded standard cores in the decode roster (never the relay roster).
     void enumerate_eth_cores(const std::shared_ptr<distributed::MeshDevice>& mesh_device, DeviceCtx& ctx);
     // Builds the eth core socket, launches the pusher and confirms its heartbeat. False: this pusher is dropped;
     // the capture continues without it.

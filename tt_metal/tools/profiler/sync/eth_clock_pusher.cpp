@@ -70,7 +70,6 @@ namespace eth_ptp = tt::tt_metal::eth_ptp;
 
 #if defined(PROFILE_KERNEL)
 
-// ---- local clock model -------------------------------------------------------------------------------------
 // AICLK is a PLL multiple of the crystal the refclk counts: k8/8 wall ticks per refclk tick, k8 an integer, exact
 // between DVFS steps (every run longer than 50 ms measured sits on its multiple to <0.005 ppm). So over one rate the
 // wall clock is a line whose slope is known once k8 is, and whose only free parameter is the phase of the refclk's
@@ -301,7 +300,6 @@ inline __attribute__((always_inline)) void feed(Model& m, uint64_t r, uint64_t w
 }
 }  // namespace model
 
-// ---- tile offsets ------------------------------------------------------------------------------------------
 // Each Tensix tile keeps its own wall clock. They tick on the one AICLK, but the reset that starts them reaches the
 // die in rings, 5 ticks per ring with the centre 20 ticks behind the edge (measured identical on eight p150s), so a
 // worker record needs its own tile's integer to land in the eth wall domain. One raw 4 B NoC read of the tile's
@@ -436,7 +434,6 @@ __attribute__((noinline, cold)) void measure_tiles() {
     tab[kp::ETH_TILE_READY] = kp::kEthTileReadyWord | n;
 }
 
-// ---- egress ------------------------------------------------------------------------------------------------
 
 inline void write_to_host(const SocketSenderInterface& s, uint32_t src_l1, uint64_t dst_pcie, uint32_t size) {
     noc_wwrite_with_state<noc_mode, write_cmd_buf, CQ_NOC_SNDL, CQ_NOC_SEND, CQ_NOC_WAIT, true, false>(
@@ -473,7 +470,6 @@ inline void ship(SocketSenderInterface& s, uint32_t bytes) {
     socket_notify_receiver(s);
 }
 
-// ---- packing ----------------------------------------------------------------------------------------------
 
 // Places one lane's run [start, start+take) from `ring` (its L1 image, already local) into the frame at `off`,
 // in the shape the decoder expects for (start, take). Returns the new offset.
@@ -567,7 +563,6 @@ inline uint32_t pack_linked_frame(uint32_t xy, uint32_t prof_l1) {
     if (!live) {
         return 0;
     }
-    // Whole-ring images of the live lanes.
     for (uint32_t r = 0; r < kNumEthRisc; r++) {
         if (takes[r] != 0) {
             const uint32_t ring_l1 = prof_l1 + kp::PROFILER_L1_CONTROL_BUFFER_SIZE + r * kRingBytes;
@@ -670,7 +665,6 @@ void kernel_main() {
             continue;
         }
         (*hb)++;
-        // Sweep on fill or on time.
         invalidate_l1_cache();
         const uint32_t fill = kp::profiler_control_buffer[kp::TAIL_INDEX] - kp::profiler_control_buffer[kp::HEAD_INDEX];
         if (fill >= kShipWords || r - r_sweep >= kSweepTicks) {

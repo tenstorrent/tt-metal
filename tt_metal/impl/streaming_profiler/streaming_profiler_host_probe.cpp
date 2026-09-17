@@ -282,9 +282,6 @@ void HostProbe::run() {
     // The first bursts come quickly so a line exists before records need it; then one every 100 ms, a cadence the
     // refclk period's ramp on the TSC (~0.05 ppm/s) keeps the line's prediction within tens of ns of.
     static constexpr int64_t kSchedule[] = {0, 100, 200, 300};
-    // One row per burst for the D2D CSV dump, so a host placement gone wrong can be read back afterwards: the
-    // round trips (they differ by the core the thread ran on), the line, and the burst against the line predicted
-    // for it.
     struct Trail {
         double t_s, refclk, tsc;
         uint32_t kept;

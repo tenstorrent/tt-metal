@@ -46,9 +46,9 @@ struct Service::AttachedStream {
     uint64_t dropped = 0;  // bytes of frames this consumer never saw
     uint64_t stalls_reported = 0;
     uint32_t chip = 0;
-    uint32_t index = 0;                                        // the producer's stream index
-    std::deque<Parked*> pending;                               // this stream's undelivered batches, in decode order
-    int64_t cover_seen = std::numeric_limits<int64_t>::min();  // the chip's cover as last read for this stream
+    uint32_t stream = 0;
+    std::deque<Parked*> pending;  // this stream's undelivered batches, in decode order
+    int64_t cover_seen = std::numeric_limits<int64_t>::min();
 };
 struct Service::Attached {
     Producer* producer = nullptr;
@@ -310,9 +310,7 @@ void Service::register_builtin_consumers(const tt::llrt::RunTimeOptions& rtoptio
             tracy_ = std::make_unique<TracySink>(*this);
         }
         {
-            // Device<->device sync: reads the eth pushers' streams only, consumes the PP_CLOCK samples they carry
-            // (idle-eth trackers and link stamps) and publishes the corrections the other consumers wait on. Its
-            // batch callback is a no-op; the decode pass is what routes the samples to it.
+            // The empty batch callback is deliberate: the decode pass routes this consumer's clock samples.
             auto c = sync_;
             add_consumer(
                 "d2d-sync",
@@ -370,7 +368,7 @@ void Service::consumer_thread(Consumer& c) {
                 continue;
             }
             auto s = std::make_unique<AttachedStream>();
-            s->index = si;
+            s->stream = si;
             s->cursor = ps.walked->load(std::memory_order_acquire);
             const CaptureContext::Device& dev = ctx.devices[ps.dev];
             s->chip = dev.chip_id;
@@ -384,7 +382,7 @@ void Service::consumer_thread(Consumer& c) {
             }
             s->dec.st = &s->state;
             s->dec.lanes = s->lanes.data();
-            s->dec.dev = ps.dev;  // stamped on ClockSamples the decoder routes to the clock sink
+            s->dec.dev = ps.dev;
             if (c.hooks.clock_sink) {
                 s->dec.clock_ctx = &c;
                 s->dec.clock_fn = [](void* ctx, const ClockSample& cs) {
@@ -460,7 +458,7 @@ void Service::consumer_thread(Consumer& c) {
     };
     // Delivers each stream's batches in decode order while the sync covers them, then frees behind the delivered
     // ones. A chip's cover is re-read only once some cover has moved since the last drain, so a blocked stream costs
-    // one compare per pass. A batch parked longer than kMaxParkNs goes out regardless and is counted.
+    // one compare per pass.
     auto drain = [&] {
         bool any = false;
         const uint64_t gen = map.cover_generation();
@@ -542,7 +540,7 @@ void Service::consumer_thread(Consumer& c) {
     // One batch of up to kBatchFrames frames from the stream, read in place up to the ingest's walk position and
     // decoded into the arenas. False when the stream had nothing new.
     auto read = [&](Attached& a, AttachedStream& s, uint32_t attached_index) {
-        const ProducerStream& ps = a.producer->streams()[s.index];
+        const ProducerStream& ps = a.producer->streams()[s.stream];
         const Walked w = walk_frames(
             ps.fifo,
             s.cursor,
@@ -550,7 +548,7 @@ void Service::consumer_thread(Consumer& c) {
             ps.marks,
             std::span<std::byte>(frames_buf.get(), kFramesBytes),
             frame_words,
-            [&] { return a.producer->live_head(s.index); });
+            [&] { return a.producer->live_head(s.stream); });
         if (w.cursor == s.cursor) {
             return false;
         }
@@ -648,7 +646,7 @@ void Service::consumer_thread(Consumer& c) {
         }
         for (size_t i = 0; i < a.streams.size(); i++) {
             c.dropped.fetch_add(a.streams[i]->dropped, std::memory_order_relaxed);
-            p->finish_stream(a.streams[i]->index, a.streams[i]->dropped, a.streams[i]->dec.stats);
+            p->finish_stream(a.streams[i]->stream, a.streams[i]->dropped, a.streams[i]->dec.stats);
         }
         attached.erase(it);
     };

@@ -113,8 +113,7 @@ std::unique_ptr<Receiver> Receiver::create(const std::shared_ptr<distributed::Me
             receiver->ingest_threads_.emplace_back(&Receiver::ingest_thread, receiver.get(), std::move(owned));
         }
     }
-    // The ingest threads are draining the sockets now: start the idle pushers sampling, then launch the boot-time
-    // eth link syncs (their armed producers need that live drain). Skipped when nothing was planned.
+    // Ordered after the ingest threads: the link syncs' armed producers stall without a live drain.
     receiver->relays_->release_eth_pushers();
     receiver->relays_->run_link_sync();
     return receiver;

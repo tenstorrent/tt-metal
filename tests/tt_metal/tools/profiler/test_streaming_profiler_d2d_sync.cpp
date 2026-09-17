@@ -44,7 +44,6 @@ static void check_near(const char* what, double got, double want, double tol) {
         std::printf("ok   %s: err %.3f ns (tol %.1f)\n", what, got - want, tol);
     }
 }
-// The published uncertainty must cover the model error.
 static void check_bound(const char* what, double err, int64_t bound) {
     if (bound == INT64_MAX || std::fabs(err) > static_cast<double>(bound)) {
         std::printf(
@@ -55,7 +54,6 @@ static void check_bound(const char* what, double err, int64_t bound) {
     }
 }
 
-// ---- truth model ---------------------------------------------------------------------------------------------
 constexpr double kRefHz = 50e6;
 constexpr double kF0 = 1.35e9;           // AICLK at boot on every chip
 constexpr double kSlow = 26.875 / 27.0;  // chip 0's AICLK after its DVFS switch: one 1/8 step of the PLL multiple
@@ -113,7 +111,6 @@ int main() {
         d.has_eth_tracker = true;
         ctx.devices.push_back(d);
     }
-    // Links: (0 e0 -> 1 e0) and (1 e1 -> 2 e0). Chip 1 receives on e0, sends on e1.
     ctx.links.push_back(
         CaptureContext::Link{.dev_a = 0, .dev_b = 1, .chip_a = 0, .chip_b = 1, .eth_a = e0, .eth_b = e0});
     ctx.links.push_back(
@@ -244,7 +241,6 @@ int main() {
         std::snprintf(what, sizeof what, "(c) chip1 one hop  tau=%.3f", tau);
         check_near(what, placed_ns(1, tau), 0.0, 5.0);
     }
-    // (d) chip 2, TWO hops (no direct link to root): a single-hop-only implementation would never place it.
     for (double tau : {0.050, 0.500, 0.950}) {
         std::snprintf(what, sizeof what, "(d) chip2 two hops tau=%.3f", tau);
         check_near(what, placed_ns(2, tau), 0.0, 5.0);

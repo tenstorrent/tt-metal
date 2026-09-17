@@ -106,7 +106,6 @@ int main(int argc, char** argv) {
         DEFAULT_TRACE_REGION_SIZE,
         /*num_command_queues=*/1);
 
-    // Chips by mesh coordinate, their fabric node ids, and every ethernet-linked pair.
     std::map<uint32_t, distributed::MeshCoordinate> coord_of;
     std::map<uint32_t, tt::tt_fabric::FabricNodeId> node_of;
     for (const auto& c : distributed::MeshCoordinateRange(mesh_device->shape())) {
@@ -223,7 +222,6 @@ int main(int argc, char** argv) {
         }
     }
 
-    // One program per chip: each core's kernel carries its peer and a fabric connection toward the peer's chip.
     std::map<uint32_t, Program> programs;
     for (const auto& [chip, _] : node_of) {
         programs.emplace(chip, CreateProgram());

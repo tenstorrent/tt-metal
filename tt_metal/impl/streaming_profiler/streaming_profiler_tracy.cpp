@@ -349,8 +349,7 @@ void TracySink::plot_point([[maybe_unused]] const char* name, [[maybe_unused]] d
 }
 
 void TracySink::emit_plots() {
-    // Samples arrive in decode order; group them into streams (device, kind, eth core) in time order. Each stream is
-    // one refclk counter, unwrapped and differenced on its own.
+    // Each stream (device, kind, eth core) is one refclk counter, differenced on its own.
     std::sort(plot_samples_.begin(), plot_samples_.end(), [](const PlotSample& a, const PlotSample& b) {
         if (a.dev != b.dev) {
             return a.dev < b.dev;
@@ -363,7 +362,6 @@ void TracySink::emit_plots() {
         }
         return a.ts < b.ts;
     });
-    // Every stream's frequency series first: (host TSC tick, applied AICLK GHz) at each sample.
     struct Series {
         uint32_t dev, kind;
         std::vector<FreqPoint> pts;
@@ -473,7 +471,7 @@ std::vector<TracySink::FreqPoint> TracySink::compute_frequency(size_t begin, siz
         return out;
     }
     constexpr double kRefclkHz = 50.0e6;
-    const uint64_t window = 50'000;  // refclk ticks: 1 ms, for the 1 ms link stamps and the tracker's 1 ms keepalives
+    const uint64_t window = 50'000;  // refclk ticks: 1 ms
     std::vector<uint64_t> refclk(end - begin);
     for (size_t i = begin; i < end; i++) {
         refclk[i - begin] = plot_samples_[i].value;
