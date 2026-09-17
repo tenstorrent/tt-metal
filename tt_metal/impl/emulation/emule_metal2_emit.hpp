@@ -80,10 +80,7 @@ struct Metal2BindingsSnapshot {
     }
 };
 
-Metal2BindingsSnapshot build_metal2_snapshot(const tt::tt_metal::Kernel& kernel);
-
-// Stage 2b consumer path: build the same snapshot from the marshalled POD bindings,
-// reading no private tt-metal Kernel. Equivalent to build_metal2_snapshot.
+// Build the Metal-2.0 binding snapshot from the marshalled POD bindings (no private Kernel read).
 Metal2BindingsSnapshot snapshot_from_bindings(const tt_emule::Bindings& b);
 
 // Emits args::/dfb::/sem::/tensor:: namespaces into the JIT wrapper, replacing
