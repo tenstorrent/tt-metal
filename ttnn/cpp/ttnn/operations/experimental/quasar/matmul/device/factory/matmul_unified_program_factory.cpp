@@ -61,7 +61,7 @@ constexpr uint32_t MAX_AUTO_IN0_BLOCK_W = 8;
 
 uint64_t l1_budget_bytes(tt::tt_metal::IDevice* device) {
     const uint32_t l1_base = device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
-    const auto lowest_occupied = device->lowest_occupied_compute_l1_address();
+    const std::optional<tt::tt_metal::DeviceAddr> lowest_occupied = device->lowest_occupied_compute_l1_address();
     const uint32_t l1_ceiling =
         lowest_occupied.has_value() ? static_cast<uint32_t>(lowest_occupied.value()) : device->l1_size_per_core();
     TT_FATAL(l1_ceiling > l1_base, "L1 ceiling ({}) must exceed base ({})", l1_ceiling, l1_base);
@@ -156,10 +156,10 @@ UnifiedMatmulPlan plan_unified_matmul(
     TT_FATAL(attributes.compute_kernel_config.has_value(), "compute_kernel_config should have been populated");
     TT_FATAL(attributes.output_dtype.has_value(), "output_dtype should have been populated");
 
-    const auto& ashape = a.padded_shape();
-    const auto& bshape = b.padded_shape();
-    const auto in0_tile = a.tensor_spec().tile();
-    const auto in1_tile = b.tensor_spec().tile();
+    const tt::tt_metal::Shape& ashape = a.padded_shape();
+    const tt::tt_metal::Shape& bshape = b.padded_shape();
+    const tt::tt_metal::Tile in0_tile = a.tensor_spec().tile();
+    const tt::tt_metal::Tile in1_tile = b.tensor_spec().tile();
     TT_FATAL(
         in0_tile.get_height() == TILE_HEIGHT && in0_tile.get_width() == TILE_WIDTH &&
             in1_tile.get_height() == TILE_HEIGHT && in1_tile.get_width() == TILE_WIDTH,
@@ -195,8 +195,8 @@ UnifiedMatmulPlan plan_unified_matmul(
     p.num_blocks = p.num_block_rows * p.num_block_cols;
 
     TT_FATAL(config.cores.num_cores() > 0, "MatmulUnifiedProgramConfig.cores is empty");
-    const auto grid = a.device()->compute_with_storage_grid_size();
-    const auto bbox = config.cores.bounding_box();
+    const CoreCoord grid = a.device()->compute_with_storage_grid_size();
+    const CoreRange bbox = config.cores.bounding_box();
     TT_FATAL(
         bbox.end_coord.x < grid.x && bbox.end_coord.y < grid.y,
         "MatmulUnifiedProgramConfig.cores {} exceed the device compute grid {}x{}",
@@ -204,7 +204,7 @@ UnifiedMatmulPlan plan_unified_matmul(
         grid.x,
         grid.y);
     p.row_major_cores = config.row_major_cores;
-    const auto all_cores = corerange_to_cores(config.cores, std::nullopt, config.row_major_cores);
+    const std::vector<CoreCoord> all_cores = corerange_to_cores(config.cores, std::nullopt, config.row_major_cores);
     const uint32_t num_active = std::min<uint32_t>(all_cores.size(), p.num_blocks);
     p.cores.assign(all_cores.begin(), all_cores.begin() + num_active);
     const uint32_t q = p.num_blocks / num_active;
@@ -222,10 +222,11 @@ UnifiedMatmulPlan plan_unified_matmul(
     const bool packer_l1_acc =
         std::get<3>(get_compute_kernel_config_args(a.device()->arch(), attributes.compute_kernel_config.value()));
     if (config.out_subblock_h == 0 && config.out_subblock_w == 0) {
-        auto [h, w] = operations::experimental::quasar::matmul::bmm_op_utils_qsr::get_matmul_subblock_params(
-            p.per_core_M, p.per_core_N, false, false, fp32_dest_acc_en);
-        p.out_subblock_h = h;
-        p.out_subblock_w = w;
+        const std::tuple<uint32_t, uint32_t> subblock_hw =
+            operations::experimental::quasar::matmul::bmm_op_utils_qsr::get_matmul_subblock_params(
+                p.per_core_M, p.per_core_N, false, false, fp32_dest_acc_en);
+        p.out_subblock_h = std::get<0>(subblock_hw);
+        p.out_subblock_w = std::get<1>(subblock_hw);
     } else {
         TT_FATAL(
             config.out_subblock_h > 0 && config.out_subblock_w > 0,
@@ -305,7 +306,7 @@ UnifiedMatmulPlan plan_unified_matmul(
             p.num_blocks,
             p.cores.size());
         if (p.sharded_output_layout() == tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED) {
-            const auto& ranges = config.cores.ranges();
+            const std::vector<CoreRange>& ranges = config.cores.ranges();
             const bool one_rect = ranges.size() == 1;
             const uint32_t rect_w = one_rect ? ranges[0].grid_size().x : 0;
             const uint32_t rect_h = one_rect ? ranges[0].grid_size().y : 0;
@@ -337,14 +338,15 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
             std::holds_alternative<operations::experimental::quasar::matmul::MatmulUnifiedProgramConfig>(
                 operation_attributes.program_config.value()),
         "MatmulUnifiedProgramFactory needs a MatmulUnifiedProgramConfig");
-    const auto& config = std::get<operations::experimental::quasar::matmul::MatmulUnifiedProgramConfig>(
-        operation_attributes.program_config.value());
+    const operations::experimental::quasar::matmul::MatmulUnifiedProgramConfig& config =
+        std::get<operations::experimental::quasar::matmul::MatmulUnifiedProgramConfig>(
+            operation_attributes.program_config.value());
 
-    const auto& a_tensor = tensor_args.input_tensors.at(0);
-    const auto& b_tensor = tensor_args.input_tensors.at(1);
-    const auto& a = a_tensor.mesh_tensor();
-    const auto& b = b_tensor.mesh_tensor();
-    const auto& output = tensor_return_value.at(0).mesh_tensor();
+    const ttnn::Tensor& a_tensor = tensor_args.input_tensors.at(0);
+    const ttnn::Tensor& b_tensor = tensor_args.input_tensors.at(1);
+    const tt::tt_metal::MeshTensor& a = a_tensor.mesh_tensor();
+    const tt::tt_metal::MeshTensor& b = b_tensor.mesh_tensor();
+    const tt::tt_metal::MeshTensor& output = tensor_return_value.at(0).mesh_tensor();
     tt::tt_metal::IDevice* device = &a.mutable_device();
 
     const UnifiedMatmulPlan p = plan_unified_matmul(a_tensor, b_tensor, config, operation_attributes);
@@ -357,7 +359,7 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
     };
 
     // ---- Dataflow buffers ----
-    const auto out_tile = output.tensor_spec().tile();
+    const tt::tt_metal::Tile out_tile = output.tensor_spec().tile();
     Group<DataflowBufferSpec> dataflow_buffers = {
         DataflowBufferSpec{
             .unique_id = IN0_DFB,
@@ -460,7 +462,8 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
     if (fp32_dest_acc_en) {
         mm_kernel_defines["FP32_DEST_ACC_EN"] = "1";
     }
-    const auto throttle_level = ttnn::get_throttle_level(operation_attributes.compute_kernel_config);
+    const ttnn::operations::compute_throttle_utils::ThrottleLevel throttle_level =
+        ttnn::get_throttle_level(operation_attributes.compute_kernel_config);
     ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
         device->arch(), p.cores.size(), mm_kernel_defines);
     ttnn::operations::compute_throttle_utils::throttle_mm_perf(
@@ -475,7 +478,7 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
         auto is_32bit = [](tt::DataFormat f) {
             return f == tt::DataFormat::Float32 || f == tt::DataFormat::Int32 || f == tt::DataFormat::UInt32;
         };
-        auto& modes = unpack_modes(compute_hw_config);
+        ComputeUnpackModes& modes = unpack_modes(compute_hw_config);
         if (is_32bit(p.interm_format)) {
             modes.emplace(INTERM0_DFB, tt::tt_metal::UnpackMode::UnpackToDest);
         }
@@ -536,14 +539,11 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
     while (num_g1 < num_active && p.blocks_per_core[num_g1] == p.max_blocks_per_core) {
         ++num_g1;
     }
-    auto cores_to_set = [](auto first, auto last) {
-        std::vector<CoreRange> ranges;
-        for (auto it = first; it != last; ++it) {
-            ranges.emplace_back(*it, *it);
-        }
-        return CoreRangeSet(ranges).merge_ranges();
+    // CoreRangeSet's span-of-cores constructor merges the cores into as few rectangles as possible.
+    auto cores_to_set = [&](uint32_t first, uint32_t count) {
+        return CoreRangeSet(ttsl::Span<const CoreCoord>(p.cores.data() + first, count));
     };
-    const CoreRangeSet group_1 = cores_to_set(p.cores.begin(), p.cores.begin() + num_g1);
+    const CoreRangeSet group_1 = cores_to_set(0, num_g1);
     const bool group_2_present = num_g1 < num_active;
 
     Group<KernelSpec> kernels = {reader, writer, make_compute(COMPUTE_KERNEL_G1, p.max_blocks_per_core)};
@@ -557,7 +557,7 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
         work_units.push_back(WorkUnitSpec{
             .name = "wu_g2",
             .kernels = {READER_KERNEL, WRITER_KERNEL, COMPUTE_KERNEL_G2},
-            .target_nodes = cores_to_set(p.cores.begin() + num_g1, p.cores.end()),
+            .target_nodes = cores_to_set(num_g1, num_active - num_g1),
         });
     }
 
