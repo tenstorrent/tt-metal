@@ -13,11 +13,8 @@
 #include "emule_device_map.hpp"     // NUM_NOCS
 #include "emule_sanitizers.hpp"     // EMULE_NUM_CBS
 #include "emule_tile_geometry.hpp"  // resolve_tile_geometry, ResolvedTileGeometry
-#include "impl/buffers/circular_buffer.hpp"
 #include "impl/context/metal_context.hpp"
-#include "impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include "impl/kernels/kernel.hpp"
-#include "impl/program/program_impl.hpp"
 #include <tt-metalium/experimental/fabric/fabric.hpp>  // is_2d_fabric_config
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/hal_types.hpp>
