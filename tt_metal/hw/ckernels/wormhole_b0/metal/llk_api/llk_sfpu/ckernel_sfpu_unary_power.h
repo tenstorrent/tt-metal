@@ -235,6 +235,8 @@ sfpi_inline sfpi::vFloat _sfpu_pow2_f32_accurate_hilo_(sfpi::vFloat z_hi, sfpi::
 
 template <bool IS_POSITIVE_EXPONENT>
 sfpi_inline sfpi::vFloat _sfpu_unary_power_61f_updated_(const sfpi::vFloat& base, const sfpi::vFloat& pow) {
+    sfpi::lreg_pressure _;  // Declare high register pressure
+
     // The algorithm works in two steps:
     // 1) Compute log2(base)
     // 2) Compute base**pow = 2**(pow * log2(base))

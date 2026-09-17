@@ -433,10 +433,11 @@ struct p_sfpu
 
     struct cc
     {
-        constexpr static std::uint32_t SET_CC    = 0x2;
-        constexpr static std::uint32_t CLR_CC    = 0x1;
-        constexpr static std::uint32_t SET_CC_EN = 0x1;
-        constexpr static std::uint32_t CLR_CC_EN = 0x0;
+        constexpr static std::uint32_t SET_CC       = 0x2;
+        constexpr static std::uint32_t CLR_CC       = 0x1;
+        constexpr static std::uint32_t SET_CC_EN    = 0x1;
+        constexpr static std::uint32_t CLR_CC_EN    = 0x0;
+        constexpr static std::uint32_t FP32_SM32_EN = 0x800; // if src_c should be interpreted as a FP32/SMAG32 value
     };
 
     struct sfp_sfpcast_mod
@@ -586,6 +587,14 @@ struct p_sfpnonlinear
     constexpr static std::uint32_t SQRT_MODE  = 0x3;
     constexpr static std::uint32_t EXP_MODE   = 0x4;
     constexpr static std::uint32_t TANH_MODE  = 0x5;
+};
+
+struct p_sfpgt
+{
+    constexpr static std::uint32_t IMM12_INT32 = 0x0;
+    constexpr static std::uint32_t IMM12_FP32  = 0x1;
+
+    constexpr static std::uint32_t MOD1_SET_CC = 0x1;
 };
 
 // SFPSWAP instruction modes (mode-to-int mapping matches the Blackhole reference).
