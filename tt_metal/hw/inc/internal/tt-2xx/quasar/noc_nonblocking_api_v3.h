@@ -850,11 +850,9 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline_with_state(
 //
 // The dispatch kernels program a transfer in pieces and reuse what they set
 // before: the CQ_NOC_* flags on each call say which fields (source,
-// coordinate, destination offset, length) that call updates. On the V2 API the
-// coordinate and the destination offset live in two hardware registers, so
-// each piece could be written on its own. Under the ATT the destination is a
-// single 64-bit address and the second register carries multicast extents
-// instead, so the pieces are kept in software: for every command buffer this
+// coordinate, destination offset, length) that call updates. Under ATT the
+// destination is a single 64-bit address and another register carries multicast
+// extents, so the pieces are kept in software: for every command buffer this
 // file remembers the coordinate half and the offset half, and writes the
 // combined address to the hardware whenever either half changes.
 //
@@ -948,8 +946,7 @@ inline bool noc_v3_cq_dest_mcast[NOC_V3_STATE_CMD_BUFS] = {};
 
 // These arrays are kernel globals in L1, and the DM kernel runtime zeroes only
 // its local-memory bss, so they start with whatever the previous kernel left
-// behind. A stale multicast flag would send a unicast through the multicast
-// path. Every CQ kernel calls this once at entry.
+// behind. Every CQ kernel calls this once at entry.
 inline __attribute__((always_inline)) void noc_v3_cq_state_reset() {
     for (uint32_t i = 0; i < NOC_V3_STATE_CMD_BUFS; ++i) {
         noc_v3_cq_dest_base[i] = 0;
@@ -965,10 +962,7 @@ inline __attribute__((always_inline)) void noc_v3_cq_state_reset() {
 // address. This mask separates them.
 inline constexpr uint64_t NOC_V3_CQ_MCAST_LOCAL_MASK = noc_att::DESCRIPTOR_LOCAL_LIMIT - 1;
 
-// Extract the offset half of an address. A full ATT address belongs to some
-// window, and the offset is that window's local field. Anything else is a bare
-// offset the caller passed as such (completion-queue pointers, packed-write
-// offsets) and is returned unchanged.
+// Extract the offset half of an address.
 inline __attribute__((always_inline)) uint64_t noc_v3_cq_local_of(uint64_t noc_addr) {
     const noc_att::WindowClass window_class = noc_att::matching_window_class(ACTIVE_ATT_MAP, noc_addr);
     if (window_class == noc_att::WindowClass::Invalid) {
@@ -979,8 +973,7 @@ inline __attribute__((always_inline)) uint64_t noc_v3_cq_local_of(uint64_t noc_a
 
 // Turn a host-packed coordinate word ((y << NOC_ADDR_NODE_ID_BITS) | x) into
 // the coordinate half of an address: the tile's window and selector with a
-// zero offset. A coordinate the map does not know traps, because ASSERT does
-// nothing outside checked builds and a wrong address would fail silently.
+// zero offset.
 inline __attribute__((always_inline)) uint64_t noc_v3_cq_packed_base(uint32_t packed_xy) {
     constexpr uint32_t node_mask = (1u << NOC_ADDR_NODE_ID_BITS) - 1;
     const noc_att::ResolvedTile tile = noc_att::resolve_current(
@@ -1004,15 +997,8 @@ inline __attribute__((always_inline)) uint64_t noc_v3_cq_packed_mcast_base(uint3
 }
 
 // Write the remembered destination to the hardware. Unicast: one register,
-// base | local, the same register count per transfer as V2. Multicast: resolve
-// the descriptor through the map; the first tile's address goes to DEST_ADDR
-// and the rectangle extents to DEST_COORD.
-//
-// size is the real transfer size only when the length is programmed in the
-// same call; otherwise 1 is used for the range check. check_count is set when
-// the caller issues the transfer in this call, the only time ndests is the real
-// destination count: a call that only pre-programs leaves ndests at its default
-// while the remembered rectangle may still be the previous command's.
+// base | local. Multicast: resolve the descriptor through the map; the first
+// tile's address goes to DEST_ADDR and the rectangle extents to DEST_COORD.
 template <uint32_t cmd_buf, bool check_count = true>
 inline __attribute__((always_inline)) void noc_v3_cq_program_dest(uint32_t size, uint32_t ndests) {
     if (noc_v3_cq_dest_mcast[cmd_buf]) {
@@ -1249,12 +1235,6 @@ inline __attribute__((always_inline)) void noc_wwrite_with_state(
 
 // --------------------------------------------------------------------------
 // Inline-write family: a single 32-bit value carried in the command itself.
-// Control, virtual-channel and routing setup are the same as V2 (command
-// buffer 2 uses the simple-buffer builtins, 0 and 1 the complex ones); only
-// the addressing changes. The destination halves are shared with the bulk
-// write family because the hardware DEST_ADDR register is shared too. Inline
-// multicast is not implemented under the ATT (the stateless V3 call traps as
-// well).
 // --------------------------------------------------------------------------
 
 template <uint32_t cmd_buf, enum CQNocCmdFlags cmd_flags = CQ_NOC_mkp>
@@ -1318,7 +1298,7 @@ inline __attribute__((always_inline)) void noc_inline_dw_write_with_state(
         }
     }
     if constexpr (flags & CQ_NOC_INLINE_FLAG_BE) {
-        ASSERT(be == 0xF);  // Quasar inline writes have no byte-enable field; only whole words
+        ASSERT(be == 0xF);
     }
     if constexpr (send) {
         if constexpr (cmd_buf == 2) {
