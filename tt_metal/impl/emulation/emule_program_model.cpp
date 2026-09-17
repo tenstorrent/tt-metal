@@ -262,26 +262,50 @@ void collect_kernels(
             //
             // PROCESSOR_INDEX backs get_hw_thread_idx(), so the debug headers that reach it
             // (waypoint, pause, assert, device_print) will not compile without it.
-            uint32_t processor_type_idx = 0;  // emule fuses TRISC0-2 into one compute fiber
+            // COMPILE_FOR_* + PROCESSOR_INDEX from the descriptor (the marshaller precomputes the
+            // processor index — it needs the HAL and a DataMovementKernel cast).
             if (is_tensix) {
                 defines["COMPILE_FOR_TRISC"] = "1";
-            } else if (auto* dm_kernel = dynamic_cast<DataMovementKernel*>(kernel.get()); dm_kernel != nullptr) {
-                auto cfg_variant = dm_kernel->config();
-                const auto& cfg = std::get<DataMovementConfig>(cfg_variant);
-                switch (cfg.processor) {
-                    case DataMovementProcessor::RISCV_0:
-                        defines["COMPILE_FOR_BRISC"] = "1";
-                        processor_type_idx = 0;
-                        break;
-                    case DataMovementProcessor::RISCV_1:
-                        defines["COMPILE_FOR_NCRISC"] = "1";
-                        processor_type_idx = 1;
-                        break;
-                    default: break;
+            } else if (kd.is_data_movement) {
+                if (kd.dm_processor == static_cast<uint32_t>(DataMovementProcessor::RISCV_0)) {
+                    defines["COMPILE_FOR_BRISC"] = "1";
+                } else if (kd.dm_processor == static_cast<uint32_t>(DataMovementProcessor::RISCV_1)) {
+                    defines["COMPILE_FOR_NCRISC"] = "1";
                 }
             }
-            defines["PROCESSOR_INDEX"] = std::to_string(hal.get_processor_index(
-                hal.get_programmable_core_type(pct), kernel->get_kernel_processor_class(), processor_type_idx));
+            defines["PROCESSOR_INDEX"] = std::to_string(kd.compile_processor_index);
+            {  // STAGE 2b diff-guard: COMPILE_FOR_* + PROCESSOR_INDEX vs the private computation
+                uint32_t _pti = 0;
+                std::string _cf;
+                if (is_tensix) {
+                    _cf = "COMPILE_FOR_TRISC";
+                } else if (auto* dmk = dynamic_cast<DataMovementKernel*>(kernel.get()); dmk != nullptr) {
+                    switch (std::get<DataMovementConfig>(dmk->config()).processor) {
+                        case DataMovementProcessor::RISCV_0: _cf = "COMPILE_FOR_BRISC"; break;
+                        case DataMovementProcessor::RISCV_1:
+                            _cf = "COMPILE_FOR_NCRISC";
+                            _pti = 1;
+                            break;
+                        default: break;
+                    }
+                }
+                std::string _pod_cf;
+                if (is_tensix) {
+                    _pod_cf = "COMPILE_FOR_TRISC";
+                } else if (kd.is_data_movement) {
+                    if (kd.dm_processor == static_cast<uint32_t>(DataMovementProcessor::RISCV_0)) {
+                        _pod_cf = "COMPILE_FOR_BRISC";
+                    } else if (kd.dm_processor == static_cast<uint32_t>(DataMovementProcessor::RISCV_1)) {
+                        _pod_cf = "COMPILE_FOR_NCRISC";
+                    }
+                }
+                const uint32_t _pidx = hal.get_processor_index(
+                    hal.get_programmable_core_type(pct), kernel->get_kernel_processor_class(), _pti);
+                TT_FATAL(
+                    _pod_cf == _cf && kd.compile_processor_index == _pidx,
+                    "emule descriptor diff-guard: COMPILE_FOR / PROCESSOR_INDEX mismatch (kernel {})",
+                    static_cast<uint32_t>(kernel_id));
+            }
 
             // Helper: compute cache key from a defines map (preserves upstream's sorted
             // iteration of named_compile_args and defines for key stability).

@@ -176,6 +176,18 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
                 }
             }
             {
+                // COMPILE_FOR_* selection index + the PROCESSOR_INDEX define value (collect_kernels).
+                auto* dm_kernel = dynamic_cast<DataMovementKernel*>(&k);
+                kd.is_data_movement = (dm_kernel != nullptr);
+                uint32_t proc_type_idx = 0;
+                if (!kd.is_compute && dm_kernel != nullptr &&
+                    std::get<DataMovementConfig>(dm_kernel->config()).processor == DataMovementProcessor::RISCV_1) {
+                    proc_type_idx = 1;
+                }
+                kd.compile_processor_index = hw.get_processor_index(
+                    k.get_kernel_programmable_core_type(), k.get_kernel_processor_class(), proc_type_idx);
+            }
+            {
                 auto* qdm = dynamic_cast<experimental::quasar::QuasarDataMovementKernel*>(&k);
                 auto* qck = dynamic_cast<experimental::quasar::QuasarComputeKernel*>(&k);
                 tt::tt_metal::emule::ProcIdList procs =
