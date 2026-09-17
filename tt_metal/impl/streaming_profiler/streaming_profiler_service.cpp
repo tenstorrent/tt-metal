@@ -164,7 +164,9 @@ struct Service::Consumer {
     uint64_t batches = 0, records = 0, cb_cycles = 0, decode_cycles = 0;
 };
 
-Service::Service() { init_site_registry(); }
+Service::Service() : sync_(std::make_shared<D2dSyncConsumer>()) { init_site_registry(); }
+
+D2dSyncConsumer& Service::sync() { return *sync_; }
 
 Service& service() {
     static ttsl::Indestructible<Service> instance;
@@ -311,7 +313,7 @@ void Service::register_builtin_consumers(const tt::llrt::RunTimeOptions& rtoptio
             // Device<->device sync: reads the eth pushers' streams only, consumes the PP_CLOCK samples they carry
             // (idle-eth trackers and link stamps) and publishes the corrections the other consumers wait on. Its
             // batch callback is a no-op; the decode pass is what routes the samples to it.
-            auto c = std::make_shared<D2dSyncConsumer>();
+            auto c = sync_;
             add_consumer(
                 "d2d-sync",
                 [](const api::Batch<api::RecordType::All>&, uint64_t) {},
@@ -342,6 +344,7 @@ void Service::register_builtin_consumers(const tt::llrt::RunTimeOptions& rtoptio
 }
 
 void Service::consumer_thread(Consumer& c) {
+    const SyncCorrections& map = sync_->map();
     c.started_ns = now_ns();
     const std::string name = "sp-con:" + c.name;
     tracy::SetThreadName(name.c_str());
@@ -403,17 +406,17 @@ void Service::consumer_thread(Consumer& c) {
         for (uint32_t i = 0; i < pk.n.zones; i++) {
             api::Record& r = reinterpret_cast<api::Zone*>(pk.zones)[i];
             const int64_t wall = static_cast<int64_t>(r.timestamp_) + r.host_time_;
-            r.host_time_ = SyncCorrections::place_host(chip, wall);
-            r.host_end_ = SyncCorrections::place_host(chip, wall + static_cast<int64_t>(r.duration_));
+            r.host_time_ = map.place_host(chip, wall);
+            r.host_end_ = map.place_host(chip, wall + static_cast<int64_t>(r.duration_));
         }
         for (uint32_t i = 0; i < pk.n.events; i++) {
             api::Record& r = reinterpret_cast<api::Event*>(pk.events)[i];
-            r.host_time_ = SyncCorrections::place_host(chip, static_cast<int64_t>(r.timestamp_) + r.host_time_);
+            r.host_time_ = map.place_host(chip, static_cast<int64_t>(r.timestamp_) + r.host_time_);
         }
         for (uint8_t* p = pk.data; p < pk.data + pk.n.data_bytes;) {
             api::TimestampedData& d = *reinterpret_cast<api::TimestampedData*>(p);
             api::Record& r = d;
-            r.host_time_ = SyncCorrections::place_host(chip, static_cast<int64_t>(r.timestamp_) + r.host_time_);
+            r.host_time_ = map.place_host(chip, static_cast<int64_t>(r.timestamp_) + r.host_time_);
             p += d.size_bytes();
         }
     };
@@ -460,7 +463,7 @@ void Service::consumer_thread(Consumer& c) {
     // one compare per pass. A batch parked longer than kMaxParkNs goes out regardless and is counted.
     auto drain = [&] {
         bool any = false;
-        const uint64_t gen = SyncCorrections::cover_generation();
+        const uint64_t gen = map.cover_generation();
         const bool moved = gen != covers_seen;
         covers_seen = gen;
         int64_t now = 0;
@@ -472,7 +475,7 @@ void Service::consumer_thread(Consumer& c) {
                     Parked& pk = *s.pending.front();
                     if (c.hooks.waits_for_sync && pk.n.newest_ticks > s.cover_seen) {
                         if (!reread) {
-                            s.cover_seen = SyncCorrections::cover_ticks(s.chip);
+                            s.cover_seen = map.cover_ticks(s.chip);
                             reread = true;
                         }
                         if (pk.n.newest_ticks > s.cover_seen) {
@@ -522,7 +525,7 @@ void Service::consumer_thread(Consumer& c) {
             for (Parked& pk : parked) {
                 if (!pk.delivered) {
                     AttachedStream& s = *pk.a->streams[pk.stream];
-                    if (c.hooks.waits_for_sync && pk.n.newest_ticks > SyncCorrections::cover_ticks(s.chip)) {
+                    if (c.hooks.waits_for_sync && pk.n.newest_ticks > map.cover_ticks(s.chip)) {
                         c.unplaced.fetch_add(1, std::memory_order_relaxed);
                         c.unplaced_full.fetch_add(1, std::memory_order_relaxed);
                         const int64_t at = now_ns();

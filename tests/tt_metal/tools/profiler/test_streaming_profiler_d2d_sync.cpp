@@ -9,7 +9,7 @@
 // this test exercises beyond the single-link case. The chips' refclks run at exactly 50 MHz with known offsets; their
 // AICLKs are known functions of true time (chip 0 drops one DVFS step mid-session; chips 1 and 2 steady); the host
 // series ties the root's refclk to a TSC of known rate. The placement every record converts through
-// (SyncCorrections::lookup_tsc on the record's eth wall tick) must recover TRUE host time in every case:
+// (sync.map().lookup_tsc on the record's eth wall tick) must recover TRUE host time in every case:
 //   (a) chip 0 before its switch;
 //   (b) chip 0 after its switch: the run boundary must be placed where the two lines meet;
 //   (c) chip 1 (one hop): only the 0-1 link places it;
@@ -117,10 +117,11 @@ int main() {
     ctx.links.push_back(
         CaptureContext::Link{.dev_a = 1, .dev_b = 2, .chip_a = 1, .chip_b = 2, .eth_a = e1, .eth_b = e0});
     ctx.root_dev = 0;
+    D2dSyncConsumer sync;
     // The host series as the probe would write it: exact nodes at two bursts, so the checks cross a node and run
     // out along a tangent.
     for (double tau : {0.0, 0.6}) {
-        SyncCorrections::append_host(
+        sync.map().append_host(
             HostNode{.at = refclk(0, tau), .value = tsc(tau), .tangent = kTicksPerNs * 1e9 / kRefHz, .sigma_ns = 5.0f});
     }
     SteadySegment seg;
@@ -128,9 +129,8 @@ int main() {
     seg.mono0 = static_cast<int64_t>(kHostBase);
     seg.ns_per_tick = 1.0 / kTicksPerNs;
     seg.ok = true;
-    SyncCorrections::set_steady(seg);
+    SteadyView::set(seg);
 
-    D2dSyncConsumer sync;
     sync.on_attach(ctx);
     // Trackers: the pushers' model points, one per ms on all three chips over one second, each behind 4095 samples,
     // except that chip 1 goes silent from 0.40 to 0.75 s: longer than the refclk's 24-bit period, so a stream
@@ -215,18 +215,18 @@ int main() {
     sync.on_capture_end(ctx);
     std::printf(
         "nodes published: chip0 %zu chip1 %zu chip2 %zu\n",
-        SyncCorrections::published(0),
-        SyncCorrections::published(1),
-        SyncCorrections::published(2));
+        sync.map().published(0),
+        sync.map().published(1),
+        sync.map().published(2));
 
     // A record's placement: its eth wall tick through the chip's series, as the service places a record at release.
     const auto placed_ns = [&](int c, double tau) {
-        const int64_t t = SyncCorrections::lookup_tsc(static_cast<uint32_t>(c), std::llround(wall(c, tau)));
+        const int64_t t = sync.map().lookup_tsc(static_cast<uint32_t>(c), std::llround(wall(c, tau)));
         return (static_cast<double>(t) - tsc(tau)) / kTicksPerNs;  // ns from the truth
     };
     const auto steady_ns = [&](int c, double tau) {
-        return static_cast<double>(SyncCorrections::tsc_to_mono_ns(
-            SyncCorrections::lookup_tsc(static_cast<uint32_t>(c), std::llround(wall(c, tau)))));
+        return static_cast<double>(
+            SteadyView::mono_ns(sync.map().lookup_tsc(static_cast<uint32_t>(c), std::llround(wall(c, tau)))));
     };
     char what[112];
     for (double tau : {0.050, 0.150, 0.280}) {
@@ -248,10 +248,7 @@ int main() {
         check_near(what, placed_ns(2, tau), 0.0, 5.0);
         std::snprintf(what, sizeof what, "(d) chip2 on the root refclk tau=%.3f", tau);
         check_near(
-            what,
-            (SyncCorrections::lookup_root(2, std::llround(wall(2, tau))) - refclk(0, tau)) * (1e9 / kRefHz),
-            0.0,
-            5.0);
+            what, (sync.map().lookup_root(2, std::llround(wall(2, tau))) - refclk(0, tau)) * (1e9 / kRefHz), 0.0, 5.0);
     }
     for (int c : {0, 1, 2}) {
         for (double tau : {0.050, 0.500, 0.950}) {
@@ -261,7 +258,7 @@ int main() {
             check_bound(
                 what,
                 placed_ns(c, tau),
-                SyncCorrections::lookup_error_ns(static_cast<uint32_t>(c), std::llround(wall(c, tau))));
+                sync.map().lookup_error_ns(static_cast<uint32_t>(c), std::llround(wall(c, tau))));
         }
     }
     // The composed placement the service stamps records with must be the two-level lookup, everywhere: across chip
@@ -272,8 +269,8 @@ int main() {
         for (int c = 0; c < 3; c++) {
             for (double tau = 0.001; tau < 0.999; tau += 0.00037) {
                 const int64_t w = std::llround(wall(c, tau));
-                const int64_t two = SyncCorrections::lookup_tsc(static_cast<uint32_t>(c), w);
-                const int64_t one = SyncCorrections::place_host(static_cast<uint32_t>(c), w);
+                const int64_t two = sync.map().lookup_tsc(static_cast<uint32_t>(c), w);
+                const int64_t one = sync.map().place_host(static_cast<uint32_t>(c), w);
                 if (two == 0 || one == 0) {
                     continue;
                 }
@@ -298,20 +295,20 @@ int main() {
         const uint32_t n = SyncCorrections::kSeriesNodes + 1;
         for (uint32_t i = 0; i < n; i++) {
             const int64_t at = static_cast<int64_t>(i) * step;
-            SyncCorrections::append(chip, SyncNode{.at = at, .value = a + b * static_cast<double>(at), .tangent = b});
+            sync.map().append(chip, SyncNode{.at = at, .value = a + b * static_cast<double>(at), .tangent = b});
         }
         const auto on_line = [&](int64_t at) {
-            return SyncCorrections::lookup_root(chip, at) - (a + b * static_cast<double>(at));
+            return sync.map().lookup_root(chip, at) - (a + b * static_cast<double>(at));
         };
         check_near("retained: newest node", on_line(static_cast<int64_t>(n - 1) * step), 0.0, 1e-3);
         check_near("retained: a node mid-series", on_line(static_cast<int64_t>(n / 2) * step + step / 2), 0.0, 1e-3);
         check_near("retained: the retired first node (on the oldest kept tangent)", on_line(0), 0.0, 1e-3);
-        if (SyncCorrections::lookup_root(chip, 0) == 0.0) {
+        if (sync.map().lookup_root(chip, 0) == 0.0) {
             std::printf("FAIL retained: a key before the oldest kept node no longer places\n");
             g_fail++;
         }
     }
-    if (SyncCorrections::published(2) == 0) {
+    if (sync.map().published(2) == 0) {
         std::printf("FAIL (d) chip2 published 0 nodes: the leaf never reached the root\n");
         g_fail++;
     }

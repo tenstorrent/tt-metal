@@ -88,24 +88,6 @@ struct Log {
     }
 };
 
-std::array<Log<int64_t>, SyncCorrections::kMaxChips>& logs() {
-    static std::array<Log<int64_t>, SyncCorrections::kMaxChips> l;
-    return l;
-}
-Log<double>& host_log() {
-    static Log<double> l;
-    return l;
-}
-alignas(64) std::atomic<uint64_t> g_cover_generation{0};
-std::atomic<double> g_asymmetry_ns{0.0};
-// The steady view: double-buffered under a generation, so a reader that sees the new generation sees the whole
-// segment.
-struct SteadySlots {
-    SteadySegment seg[2];
-    std::atomic<uint32_t> gen{0};
-};
-SteadySlots g_steady;
-
 // A reader's place in one series: the segment [a, b] it last converted in and that segment's line through
 // (origin, value). For the open segment b is the cover the reader last saw, so a record past that cover re-reads it.
 template <typename Key>
@@ -120,9 +102,6 @@ struct Cursor {
 };
 // The margin a frontier may sit from the frozen tangent before a node is frozen (D2dSyncConsumer::kFreezeNs).
 constexpr float kOpenMarginNs = 0.25f;
-constinit thread_local Cursor<int64_t> t_cursors[SyncCorrections::kMaxChips];
-constinit thread_local Cursor<double> t_host_cursor;
-
 template <typename Key>
 inline double on_line(const Cursor<Key>& c, Key t) noexcept {
     return c.value + c.slope * static_cast<double>(t - c.origin);
@@ -190,7 +169,7 @@ bool refill(const Log<Key>& log, Cursor<Key>& c, Key t, double& value) noexcept 
 
 // Places t on the series through the cursor (refilled when it is not there); false when the series has no node.
 template <typename Key>
-inline bool place(Log<Key>& log, Cursor<Key>& c, Key t, double& value) noexcept {
+inline bool place(const Log<Key>& log, Cursor<Key>& c, Key t, double& value) noexcept {
     if (c.gen == log.gen.load(std::memory_order_relaxed) && t >= c.a && t <= c.b) {
         value = on_line(c, t);
         return true;
@@ -198,11 +177,57 @@ inline bool place(Log<Key>& log, Cursor<Key>& c, Key t, double& value) noexcept 
     return refill(log, c, t, value);
 }
 
-inline bool place_root(uint32_t chip_id, int64_t wall, double& root) noexcept {
-    return place(logs()[chip_id], t_cursors[chip_id], wall, root);
+// One chip's composed placement line: wall -> host_clock units, the chip segment (wall -> root refclk) multiplied by
+// the host segment (root refclk -> TSC), valid over [a, b] in wall ticks where both hold. Anchored at the record that
+// built it so a 1e15 value stays exact in the double.
+struct Composed {
+    uint32_t gen_c = 0, gen_h = 0;
+    int64_t a = std::numeric_limits<int64_t>::max(), b = std::numeric_limits<int64_t>::min();
+    int64_t origin = 0;
+    double value = 0.0, slope = 0.0;
+};
+
+// A thread's cursors on one map: rebuilt when the thread turns to another map.
+struct ThreadView {
+    const void* owner = nullptr;
+    std::array<Cursor<int64_t>, SyncCorrections::kMaxChips> chip{};
+    Cursor<double> host{};
+    std::array<Composed, SyncCorrections::kMaxChips> composed{};
+};
+constinit thread_local ThreadView t_view;
+ThreadView& view_of(const void* owner) noexcept {
+    if (t_view.owner != owner) {
+        t_view = ThreadView{};
+        t_view.owner = owner;
+    }
+    return t_view;
 }
 
+// host_clock units per TSC tick.
+double units_per_tsc() {
+    static const double u = 10.0 / tsc_ticks_per_ns();
+    return u;
+}
+
+// The steady view: double-buffered under a generation, so a reader that sees the new generation sees the whole
+// segment.
+struct SteadySlots {
+    SteadySegment seg[2];
+    std::atomic<uint32_t> gen{0};
+};
+SteadySlots g_steady;
+
 }  // namespace
+
+struct SyncCorrections::Impl {
+    std::array<Log<int64_t>, kMaxChips> chips;
+    Log<double> host;
+    alignas(64) std::atomic<uint64_t> cover_generation{0};
+    std::atomic<double> asymmetry_ns{0.0};
+};
+
+SyncCorrections::SyncCorrections() : impl_(std::make_unique<Impl>()) {}
+SyncCorrections::~SyncCorrections() = default;
 
 void SyncCorrections::append(uint32_t chip_id, SyncNode node) {
     if (chip_id >= kMaxChips) {
@@ -215,27 +240,22 @@ void SyncCorrections::append(uint32_t chip_id, SyncNode node) {
         node.at,
         node.value,
         node.tangent);
-    logs()[chip_id].append(chip_id, node);
-    g_cover_generation.fetch_add(1, std::memory_order_release);
+    impl_->chips[chip_id].append(chip_id, node);
+    impl_->cover_generation.fetch_add(1, std::memory_order_release);
 }
 
 void SyncCorrections::extend(uint32_t chip_id, int64_t cover_ticks) {
     if (chip_id < kMaxChips) {
-        logs()[chip_id].extend(cover_ticks);
-        g_cover_generation.fetch_add(1, std::memory_order_release);
+        impl_->chips[chip_id].extend(cover_ticks);
+        impl_->cover_generation.fetch_add(1, std::memory_order_release);
     }
 }
 
-void SyncCorrections::finish(uint32_t chip_id) {
-    if (chip_id < kMaxChips) {
-        logs()[chip_id].extend(std::numeric_limits<int64_t>::max());
-        g_cover_generation.fetch_add(1, std::memory_order_release);
-    }
-}
+void SyncCorrections::finish(uint32_t chip_id) { extend(chip_id, std::numeric_limits<int64_t>::max()); }
 
 void SyncCorrections::clear(uint32_t chip_id) {
     if (chip_id < kMaxChips) {
-        logs()[chip_id].clear();
+        impl_->chips[chip_id].clear();
     }
 }
 
@@ -247,35 +267,38 @@ void SyncCorrections::append_host(HostNode node) {
         node.at,
         node.value,
         node.tangent);
-    host_log().append(kHostSeries, node);
+    impl_->host.append(kHostSeries, node);
 }
 
-void SyncCorrections::extend_host(double cover_root) { host_log().extend(cover_root); }
+void SyncCorrections::extend_host(double cover_root) { impl_->host.extend(cover_root); }
 
-int64_t SyncCorrections::cover_ticks(uint32_t chip_id) noexcept {
+void SyncCorrections::set_asymmetry_ns(double ns) noexcept { impl_->asymmetry_ns.store(ns, std::memory_order_relaxed); }
+
+int64_t SyncCorrections::cover_ticks(uint32_t chip_id) const noexcept {
     if (chip_id >= kMaxChips) {
         return std::numeric_limits<int64_t>::max();
     }
-    return logs()[chip_id].cover.load(std::memory_order_acquire);
+    return impl_->chips[chip_id].cover.load(std::memory_order_acquire);
 }
 
-uint64_t SyncCorrections::cover_generation() noexcept { return g_cover_generation.load(std::memory_order_acquire); }
+uint64_t SyncCorrections::cover_generation() const noexcept {
+    return impl_->cover_generation.load(std::memory_order_acquire);
+}
 
-size_t SyncCorrections::published(uint32_t chip_id) noexcept {
+size_t SyncCorrections::published(uint32_t chip_id) const noexcept {
     if (chip_id >= kMaxChips) {
         return 0;
     }
-    const Log<int64_t>& log = logs()[chip_id];
+    const Log<int64_t>& log = impl_->chips[chip_id];
     return log.nodes.count() - log.nodes.first();
 }
 
-size_t SyncCorrections::host_published() noexcept {
-    const Log<double>& log = host_log();
-    return log.nodes.count() - log.nodes.first();
+size_t SyncCorrections::host_published() const noexcept {
+    return impl_->host.nodes.count() - impl_->host.nodes.first();
 }
 
-std::vector<HostNode> SyncCorrections::host_nodes() {
-    const Log<double>& log = host_log();
+std::vector<HostNode> SyncCorrections::host_nodes() const {
+    const Log<double>& log = impl_->host;
     std::vector<HostNode> out;
     for (uint64_t i = log.nodes.first(), n = log.nodes.count(); i < n; i++) {
         HostNode node{};
@@ -286,55 +309,44 @@ std::vector<HostNode> SyncCorrections::host_nodes() {
     return out;
 }
 
-double SyncCorrections::lookup_root(uint32_t chip_id, int64_t wall) noexcept {
+double SyncCorrections::lookup_root(uint32_t chip_id, int64_t wall) const noexcept {
     double root = 0.0;
-    if (chip_id >= kMaxChips || !place_root(chip_id, wall, root)) {
+    if (chip_id >= kMaxChips || !place(impl_->chips[chip_id], view_of(impl_.get()).chip[chip_id], wall, root)) {
         return 0.0;
     }
     return root;
 }
 
-int64_t SyncCorrections::lookup_tsc(uint32_t chip_id, int64_t wall) noexcept {
+int64_t SyncCorrections::lookup_tsc(uint32_t chip_id, int64_t wall) const noexcept {
+    if (chip_id >= kMaxChips) {
+        return 0;
+    }
+    ThreadView& v = view_of(impl_.get());
     double root = 0.0, tsc = 0.0;
-    if (chip_id >= kMaxChips || !place_root(chip_id, wall, root) || !place(host_log(), t_host_cursor, root, tsc)) {
+    if (!place(impl_->chips[chip_id], v.chip[chip_id], wall, root) || !place(impl_->host, v.host, root, tsc)) {
         return 0;
     }
     return std::llrint(tsc);
 }
 
-namespace {
-// host_clock units per TSC tick.
-double units_per_tsc() {
-    static const double u = 10.0 / tsc_ticks_per_ns();
-    return u;
-}
-// One chip's composed placement line: wall -> host_clock units, the chip segment (wall -> root refclk) multiplied by
-// the host segment (root refclk -> TSC), valid over [a, b] in wall ticks where both hold. Anchored at the record that
-// built it so a 1e15 value stays exact in the double.
-struct Composed {
-    uint32_t gen_c = 0, gen_h = 0;
-    int64_t a = std::numeric_limits<int64_t>::max(), b = std::numeric_limits<int64_t>::min();
-    int64_t origin = 0;
-    double value = 0.0, slope = 0.0;
-};
-constinit thread_local Composed t_composed[SyncCorrections::kMaxChips];
-}  // namespace
-
-int64_t SyncCorrections::place_host(uint32_t chip_id, int64_t wall) noexcept {
+int64_t SyncCorrections::place_host(uint32_t chip_id, int64_t wall) const noexcept {
     if (chip_id >= kMaxChips) {
         return 0;
     }
-    Composed& k = t_composed[chip_id];
-    if (wall >= k.a && wall <= k.b && k.gen_c == logs()[chip_id].gen.load(std::memory_order_relaxed) &&
-        k.gen_h == host_log().gen.load(std::memory_order_relaxed)) {
+    ThreadView& v = view_of(impl_.get());
+    const Log<int64_t>& cl = impl_->chips[chip_id];
+    const Log<double>& hl = impl_->host;
+    Composed& k = v.composed[chip_id];
+    if (wall >= k.a && wall <= k.b && k.gen_c == cl.gen.load(std::memory_order_relaxed) &&
+        k.gen_h == hl.gen.load(std::memory_order_relaxed)) {
         return std::llround(k.value + k.slope * static_cast<double>(wall - k.origin));
     }
     double root = 0.0, tsc = 0.0;
-    if (!place_root(chip_id, wall, root) || !place(host_log(), t_host_cursor, root, tsc)) {
+    Cursor<int64_t>& cc = v.chip[chip_id];
+    Cursor<double>& hc = v.host;
+    if (!place(cl, cc, wall, root) || !place(hl, hc, root, tsc)) {
         return 0;
     }
-    const Cursor<int64_t>& cc = t_cursors[chip_id];
-    const Cursor<double>& hc = t_host_cursor;
     const double u = units_per_tsc();
     k.gen_c = cc.gen;
     k.gen_h = hc.gen;
@@ -353,25 +365,26 @@ int64_t SyncCorrections::place_host(uint32_t chip_id, int64_t wall) noexcept {
     return std::llround(k.value);
 }
 
-int64_t SyncCorrections::lookup_error_ns(uint32_t chip_id, int64_t wall) noexcept {
+int64_t SyncCorrections::lookup_error_ns(uint32_t chip_id, int64_t wall) const noexcept {
     double root = 0.0;
-    if (chip_id >= kMaxChips || !place_root(chip_id, wall, root)) {
+    if (chip_id >= kMaxChips) {
         return std::numeric_limits<int64_t>::max();
     }
-    const Cursor<int64_t>& c = t_cursors[chip_id];
-    const double e = kSigmas * static_cast<double>(c.sigma) + g_asymmetry_ns.load(std::memory_order_relaxed);
+    Cursor<int64_t>& c = view_of(impl_.get()).chip[chip_id];
+    if (!place(impl_->chips[chip_id], c, wall, root)) {
+        return std::numeric_limits<int64_t>::max();
+    }
+    const double e = kSigmas * static_cast<double>(c.sigma) + impl_->asymmetry_ns.load(std::memory_order_relaxed);
     return static_cast<int64_t>(std::ceil(e));
 }
 
-void SyncCorrections::set_asymmetry_ns(double ns) noexcept { g_asymmetry_ns.store(ns, std::memory_order_relaxed); }
-
-void SyncCorrections::set_steady(const SteadySegment& segment) noexcept {
+void SteadyView::set(const SteadySegment& segment) noexcept {
     const uint32_t g = g_steady.gen.load(std::memory_order_relaxed);
     g_steady.seg[(g + 1) & 1] = segment;
     g_steady.gen.store(g + 1, std::memory_order_release);
 }
 
-int64_t SyncCorrections::tsc_to_mono_ns(int64_t tsc) noexcept {
+int64_t SteadyView::mono_ns(int64_t tsc) noexcept {
     thread_local uint32_t gen = ~0u;
     thread_local SteadySegment seg;
     const uint32_t g = g_steady.gen.load(std::memory_order_acquire);
@@ -468,7 +481,7 @@ host_clock::time_point host_clock::from_tsc(int64_t ticks) noexcept {
 
 namespace tt::tt_metal::experimental::streaming_profiler::detail {
 int64_t host_to_steady_ns(int64_t host) noexcept {
-    return tt::tt_metal::streaming_profiler::SyncCorrections::tsc_to_mono_ns(
+    return tt::tt_metal::streaming_profiler::SteadyView::mono_ns(
         host_clock::tsc(host_clock::time_point(host_clock::duration(host))));
 }
 }  // namespace tt::tt_metal::experimental::streaming_profiler::detail

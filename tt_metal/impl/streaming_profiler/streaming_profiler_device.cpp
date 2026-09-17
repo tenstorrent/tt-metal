@@ -40,6 +40,8 @@
 #include "impl/kernels/kernel.hpp"  // DramConfig (a DRISC kernel is not in the public headers yet)
 #include "llrt/tt_cluster.hpp"
 #include "impl/streaming_profiler/streaming_profiler_link_sync.hpp"
+#include "impl/streaming_profiler/streaming_profiler_d2d_sync.hpp"
+#include "impl/streaming_profiler/streaming_profiler_service.hpp"
 #include "hostdev/streaming_profiler_common.h"
 
 namespace tt::tt_metal::streaming_profiler {
@@ -340,7 +342,7 @@ std::vector<CapturedDevice> Devices::boot(const std::shared_ptr<distributed::Mes
     }
     for (uint32_t di = 0; di < devices_.size(); di++) {
         if (!devices_[di].eth.empty()) {
-            host_probe_ = std::make_shared<HostProbe>(cluster, devices_[di].chip_id);
+            host_probe_ = std::make_shared<HostProbe>(cluster, devices_[di].chip_id, service().sync().map());
             root_dev_ = di;
             break;
         }

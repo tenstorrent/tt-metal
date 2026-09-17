@@ -19,6 +19,7 @@
 #endif
 
 #include "impl/streaming_profiler/spsc_packet.h"
+#include "impl/streaming_profiler/streaming_profiler_d2d_sync.hpp"
 #include "impl/streaming_profiler/streaming_profiler_service.hpp"
 #include "impl/streaming_profiler/streaming_profiler_decode.hpp"
 #include "impl/streaming_profiler/streaming_profiler_sync_correction.hpp"
@@ -494,7 +495,7 @@ std::vector<TracySink::FreqPoint> TracySink::compute_frequency(size_t begin, siz
         const double dw =
             static_cast<double>(plot_samples_[begin + i].ts) - static_cast<double>(plot_samples_[begin + j].ts);
         const int64_t tsc =
-            SyncCorrections::lookup_tsc(chips_[s0.dev], static_cast<int64_t>(plot_samples_[begin + i].ts));
+            service_.sync().map().lookup_tsc(chips_[s0.dev], static_cast<int64_t>(plot_samples_[begin + i].ts));
         if (tsc == 0) {
             continue;
         }

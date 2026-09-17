@@ -66,7 +66,8 @@ double tsc_ticks_per_ns() {
     return rate;
 }
 
-HostProbe::HostProbe(tt::Cluster& cluster, uint32_t chip_id) : cluster_(cluster), chip_id_(chip_id) {
+HostProbe::HostProbe(tt::Cluster& cluster, uint32_t chip_id, SyncCorrections& map) :
+    cluster_(cluster), chip_id_(chip_id), map_(map) {
     ticks_per_ns_ = tsc_ticks_per_ns();
     const auto pcie =
         cluster_.get_driver()->get_soc_descriptor(chip_id).get_cores(CoreType::PCIE, CoordSystem::TRANSLATED);
@@ -268,7 +269,7 @@ void HostProbe::steady_pair() {
         std::lock_guard<std::mutex> g(mu_);
         steady_ = s;
     }
-    SyncCorrections::set_steady(s);
+    SteadyView::set(s);
 }
 
 void HostProbe::run() {
@@ -321,7 +322,7 @@ void HostProbe::run() {
         // A node per burst: the line as it stands, at the burst's own instant. Records placed between two
         // bursts run on the newer node's tangent; those placed later interpolate between the nodes.
         if (l.ok && l.bursts >= 3) {
-            SyncCorrections::append_host(HostNode{
+            map_.append_host(HostNode{
                 .at = p.refclk,
                 .value = l.tsc_of(p.refclk),
                 .tangent = l.b,

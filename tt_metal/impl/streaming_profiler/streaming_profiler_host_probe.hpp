@@ -39,11 +39,12 @@ struct HostLine {
 // (the same distributed ordinary clock the eth tiles count, one NoC hop from the PCIe entry, nobody else's latch),
 // each read bracketed by fenced TSC reads through a static TLB window (720 ns round trip), the tightest kept, a line
 // fitted across bursts. Every other chip reaches this one through the eth link sync, so this is the fleet's only
-// host relation; each burst's line becomes a node of SyncCorrections' host series. The same thread pairs TSC with
+// host relation; each burst's line becomes a node of the sync engine's host series. The same thread pairs TSC with
 // CLOCK_MONOTONIC for the steady_clock view.
 class HostProbe {
 public:
-    HostProbe(tt::Cluster& cluster, uint32_t chip_id);
+    // Writes the host series of `map` while it runs.
+    HostProbe(tt::Cluster& cluster, uint32_t chip_id, SyncCorrections& map);
     ~HostProbe();
     HostProbe(const HostProbe&) = delete;
     HostProbe& operator=(const HostProbe&) = delete;
@@ -68,6 +69,7 @@ private:
 
     tt::Cluster& cluster_;
     const uint32_t chip_id_;
+    SyncCorrections& map_;
     uint32_t pcie_x_ = 0, pcie_y_ = 0;  // translated
     tt::umd::TlbWindow* window_ = nullptr;
     uint32_t cfr_hi_ = 0, cfr_lo_last_ = 0;

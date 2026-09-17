@@ -155,8 +155,13 @@ public:
     void on_attach(const CaptureContext& ctx);
     void on_clock(const ClockSample& s);
     void on_capture_end(const CaptureContext& ctx);
+    // The placement map the service places records with: this engine writes its chip series, the host probe its
+    // host series.
+    SyncCorrections& map() { return map_; }
+    const SyncCorrections& map() const { return map_; }
 
 private:
+    SyncCorrections map_;
     struct LocalState {
         LocalClockModel model;
         std::vector<std::pair<uint64_t, uint64_t>>

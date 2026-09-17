@@ -60,9 +60,9 @@ void D2dSyncConsumer::on_attach(const CaptureContext& ctx) {
     }
     for (size_t dev = 0; dev < ctx.devices.size(); dev++) {
         const CaptureContext::Device& d = ctx.devices[dev];
-        SyncCorrections::clear(d.chip_id);
+        map_.clear(d.chip_id);
         if (!reach[dev] || !d.has_eth_tracker) {
-            SyncCorrections::finish(d.chip_id);
+            map_.finish(d.chip_id);
         }
     }
     SyncPlots::expect();
@@ -125,8 +125,8 @@ void D2dSyncConsumer::on_clock(const ClockSample& s) {
         if (!round_error(L, rounds[live_done_[li]], phw, H, e, &t)) {
             continue;
         }
-        if (t.wall_a > static_cast<double>(SyncCorrections::cover_ticks(L.chip_a)) ||
-            t.wall_b > static_cast<double>(SyncCorrections::cover_ticks(L.chip_b))) {
+        if (t.wall_a > static_cast<double>(map_.cover_ticks(L.chip_a)) ||
+            t.wall_b > static_cast<double>(map_.cover_ticks(L.chip_b))) {
             break;
         }
         live_err_[li].push_back(SyncPlotPoint{H, e});
@@ -243,7 +243,7 @@ void D2dSyncConsumer::try_solve_links(bool final) {
         if (solve_link(L, std::move(pts), hw, out)) {
             out.rounds = w;
             solve_gen_++;
-            SyncCorrections::set_asymmetry_ns(max_closure_ns());
+            map_.set_asymmetry_ns(max_closure_ns());
             log_info(
                 tt::LogMetal,
                 "[streaming profiler] d2d sync link chip {} -> chip {}: solved at round {} over {} ({} kept): offset "
@@ -384,8 +384,8 @@ double D2dSyncConsumer::Series::sigma_at(double H) const {
 }
 
 double D2dSyncConsumer::tsc_at(double root) const {
-    if (SyncCorrections::host_published() != host_seen_) {
-        host_nodes_ = SyncCorrections::host_nodes();
+    if (map_.host_published() != host_seen_) {
+        host_nodes_ = map_.host_nodes();
         host_seen_ = host_nodes_.size();
     }
     if (host_nodes_.empty()) {
@@ -497,7 +497,7 @@ void D2dSyncConsumer::push_node(Series& s, uint32_t chip, const Node& n) {
     s.cover_H = n.H;
     s.cover_r = n.r;
     s.last_r = std::max(s.last_r, n.r);
-    SyncCorrections::append(
+    map_.append(
         chip, SyncNode{.at = wall, .value = n.root, .tangent = n.tangent, .sigma_ns = static_cast<float>(n.sigma)});
 }
 
@@ -554,7 +554,7 @@ bool D2dSyncConsumer::advance(Series& s, uint32_t chip, Fresh fresh) {
             s.cover_r = f.r;
             s.last_r = std::max(s.last_r, f.r);
             s.extended++;
-            SyncCorrections::extend(chip, static_cast<int64_t>(std::llround(f.H)));
+            map_.extend(chip, static_cast<int64_t>(std::llround(f.H)));
         } else {
             freeze_append(s, chip, f);
         }
@@ -568,7 +568,7 @@ bool D2dSyncConsumer::publish_dev(uint32_t dev) {
         return false;
     }
     // Nothing is placed before the host series exists: a record converted then would land nowhere.
-    if (SyncCorrections::host_published() == 0) {
+    if (map_.host_published() == 0) {
         return false;
     }
     if (to_root_gen_ != solve_gen_) {
@@ -592,7 +592,7 @@ void D2dSyncConsumer::publish_all() {
         publish_dev(kv.first);
     }
     for (const CaptureContext::Device& d : ctx_.devices) {
-        SyncCorrections::finish(d.chip_id);
+        map_.finish(d.chip_id);
     }
 }
 
@@ -848,7 +848,7 @@ void D2dSyncConsumer::dump_csv() const {
                         static_cast<long long>(T),
                         root,
                         static_cast<long long>(tsc),
-                        static_cast<long long>(SyncCorrections::tsc_to_mono_ns(tsc)),
+                        static_cast<long long>(SteadyView::mono_ns(tsc)),
                         static_cast<long long>(
                             std::ceil(3.0 * series.sigma_at(static_cast<double>(T)) + max_closure_ns())));
                 }
@@ -871,7 +871,7 @@ void D2dSyncConsumer::dump_csv() const {
     }
     if (std::FILE* hf = std::fopen((std::string(path) + ".host.csv").c_str(), "w"); hf != nullptr) {
         std::fprintf(hf, "root_refclk,tsc,tangent,sigma_ns\n");
-        for (const HostNode& nd : SyncCorrections::host_nodes()) {
+        for (const HostNode& nd : map_.host_nodes()) {
             std::fprintf(hf, "%.3f,%.0f,%.9f,%.2f\n", nd.at, nd.value, nd.tangent, nd.sigma_ns);
         }
         std::fclose(hf);
@@ -1257,9 +1257,7 @@ void D2dSyncConsumer::publish_error_plots() const {
                       "{:+.0f} "
                       "ns, {} {:+.1f} ns vs median);",
                       p.value,
-                      static_cast<double>(
-                          SyncCorrections::tsc_to_mono_ns(p.tsc) - SyncCorrections::tsc_to_mono_ns(pts.front().tsc)) /
-                          1e9,
+                      static_cast<double>(SteadyView::mono_ns(p.tsc) - SteadyView::mono_ns(pts.front().tsc)) / 1e9,
                       L.chip_a,
                       node_a_us[i],
                       L.chip_b,
@@ -1289,7 +1287,7 @@ void D2dSyncConsumer::publish_error_plots() const {
                       std::fprintf(
                           ef,
                           "%lld,%.2f,%.2f,%.1f,%.0f,%.0f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.1f,%.1f,%.1f\n",
-                          static_cast<long long>(SyncCorrections::tsc_to_mono_ns(pts[i].tsc)),
+                          static_cast<long long>(SteadyView::mono_ns(pts[i].tsc)),
                           pts[i].value,
                           resid[i],
                           rtt[i] - rtt_median,

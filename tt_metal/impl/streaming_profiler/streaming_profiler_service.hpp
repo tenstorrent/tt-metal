@@ -209,6 +209,8 @@ struct ConsumerHooks {
     bool eth_streams_only = false;
 };
 
+class D2dSyncConsumer;
+
 class Service {
 public:
     Service();
@@ -231,6 +233,8 @@ public:
 
     // The Tracy sink and the CSV writers rtoptions select; subsequent calls do nothing.
     void register_builtin_consumers(const tt::llrt::RunTimeOptions& rtoptions);
+    // The device<->device sync engine, owner of the placement map.
+    D2dSyncConsumer& sync();
 
     // A producer calls this once after a pass that published. A reader takes wake_token() before checking the queues
     // and, finding nothing, wait_wake()s on it, so a bump between the two returns at once: wait() returns without
@@ -269,6 +273,7 @@ private:
     std::vector<std::unique_ptr<Consumer>> consumers_;
     std::vector<Producer*> producers_;
     std::vector<std::function<void()>> file_sinks_;
+    std::shared_ptr<D2dSyncConsumer> sync_;
     std::unique_ptr<TracySink> tracy_;
     ConsumerHandle next_handle_ = 1;
     std::once_flag builtins_once_;

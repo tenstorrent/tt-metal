@@ -40,59 +40,77 @@ struct SteadySegment {
     int64_t mono_of(int64_t tsc) const { return mono0 + std::llrint(static_cast<double>(tsc - tsc0) * ns_per_tick); }
 };
 
-// Append-only series of frozen nodes, strictly increasing in their key: one per chip, written by the d2d sync
-// consumer, and the host series, written by the probe; read by every consumer thread converting a record's time.
-// Nodes never move within a capture and a series keeps its newest kSeriesNodes, so a reader keeps a thread-local
-// cursor on the segment it last used and converts without touching shared state until the record leaves the segment.
-// Before a chip's first node, or the host's, its records have no place on the host timeline; before the oldest kept
-// node they convert on its tangent.
+// The sync engine's placement map: one series per chip (its eth wall tick -> the root chip's refclk tick) and the
+// host series (the root's refclk tick -> host TSC tick). The sync engine writes the chip series and the host probe
+// the host series; the service's consumer threads read them to place records. Each series is append-only within a
+// capture, strictly increasing in its key, and keeps its newest kSeriesNodes: a record before the oldest kept node
+// converts on that node's tangent. Before a chip's first node, or the host's, its records have no place on the host
+// timeline.
 //
-// A series' cover is the key up to which the newest node's tangent has been confirmed: a record at or before it
-// converts against frozen data on both sides. Writer order is nodes, count, cover (release); readers load the cover
-// before the count (acquire), so a cover a reader sees implies the nodes behind it.
+// Reads never lock and never block the writer (ChunkedLog). A reader keeps a thread-local cursor on the segment it
+// last converted in and converts without touching shared state until a record leaves the segment. A series' cover
+// is the key up to which the newest node's tangent has been confirmed: a record at or before it converts against
+// frozen data on both sides.
 class SyncCorrections {
 public:
     static constexpr uint32_t kMaxChips = 256;
-    // Nodes a series keeps (32 MB); the oldest go as newer ones arrive. Nodes come per local clock step and per host
-    // burst, so this spans hours of a capture and any consumer's lag behind the sync.
+    // Nodes a series keeps (32 MB at most); the oldest go as newer ones arrive. Nodes come per local clock step and
+    // per host burst, so this spans hours of a capture and any consumer's lag behind the sync.
     static constexpr uint32_t kSeriesNodes = 1u << 20;
+    static constexpr double kSigmas = 3.0;
+
+    SyncCorrections();
+    ~SyncCorrections();
+    SyncCorrections(const SyncCorrections&) = delete;
+    SyncCorrections& operator=(const SyncCorrections&) = delete;
+
     // Appends a node past every earlier one (a node at the last node's key is dropped) and moves the cover to it.
-    static void append(uint32_t chip_id, SyncNode node);
+    void append(uint32_t chip_id, SyncNode node);
     // The newest node's tangent holds up to cover_ticks; the cover never moves back.
-    static void extend(uint32_t chip_id, int64_t cover_ticks);
+    void extend(uint32_t chip_id, int64_t cover_ticks);
     // The series is complete for the capture: every later instant converts on the newest tangent.
-    static void finish(uint32_t chip_id);
+    void finish(uint32_t chip_id);
     // Empties a chip's series for a new capture.
-    static void clear(uint32_t chip_id);
-    static void append_host(HostNode node);
-    static void extend_host(double cover_root);
+    void clear(uint32_t chip_id);
+    void append_host(HostNode node);
+    void extend_host(double cover_root);
+    // The largest loop closure the link solutions have shown, the part of a placement's error the loops can see
+    // but no link's stamps can.
+    void set_asymmetry_ns(double ns) noexcept;
+
     // The root refclk tick of a chip's eth wall tick; 0 before the chip's first node.
-    static double lookup_root(uint32_t chip_id, int64_t wall) noexcept;
+    double lookup_root(uint32_t chip_id, int64_t wall) const noexcept;
     // The host TSC tick of a chip's eth wall tick; 0 before the chip's first node or the host's.
-    static int64_t lookup_tsc(uint32_t chip_id, int64_t wall) noexcept;
+    int64_t lookup_tsc(uint32_t chip_id, int64_t wall) const noexcept;
     // The uncertainty of that placement against other chips' records: kSigmas standard deviations of its segment's
     // nodes plus the fleet's path asymmetry; INT64_MAX before the chip's first node.
-    static int64_t lookup_error_ns(uint32_t chip_id, int64_t wall) noexcept;
+    int64_t lookup_error_ns(uint32_t chip_id, int64_t wall) const noexcept;
     // Wall tick `wall` of chip `chip_id` on host_clock (tenths of a ns of the TSC): the chip series and the host
     // series composed into one line per segment pair, one multiply-add per record while a batch stays inside it. 0
     // when nothing places the tick yet.
-    static int64_t place_host(uint32_t chip_id, int64_t wall) noexcept;
-    static constexpr double kSigmas = 3.0;
-    // The largest loop closure the link solutions have shown, the part of a placement's error the loops can see
-    // but no link's stamps can.
-    static void set_asymmetry_ns(double ns) noexcept;
+    int64_t place_host(uint32_t chip_id, int64_t wall) const noexcept;
     // How many nodes a chip has (0 = none).
-    static size_t published(uint32_t chip_id) noexcept;
-    static size_t host_published() noexcept;
+    size_t published(uint32_t chip_id) const noexcept;
+    size_t host_published() const noexcept;
     // A copy of the host series, for the capture-end dumps.
-    static std::vector<HostNode> host_nodes();
+    std::vector<HostNode> host_nodes() const;
     // The wall tick the chip's series covers: INT64_MIN before its first node, INT64_MAX once finished.
-    static int64_t cover_ticks(uint32_t chip_id) noexcept;
+    int64_t cover_ticks(uint32_t chip_id) const noexcept;
     // Moves whenever any chip's cover does, so a consumer holding batches re-reads covers only then.
-    static uint64_t cover_generation() noexcept;
-    // The steady_clock view of the host TSC, kept by the host probe; readers cache it per thread.
-    static void set_steady(const SteadySegment& segment) noexcept;
-    static int64_t tsc_to_mono_ns(int64_t tsc) noexcept;
+    uint64_t cover_generation() const noexcept;
+
+private:
+    struct Impl;
+    std::unique_ptr<Impl> impl_;
+};
+
+// The host TSC on steady_clock as the host probe measures it: one segment for the process, readable from any thread
+// and cached per thread. No capture is involved, so the API's steady_time() reads it with no device open.
+class SteadyView {
+public:
+    static void set(const SteadySegment& segment) noexcept;
+    // A TSC/CLOCK_MONOTONIC pair taken here stands in until a probe publishes a segment.
+    static int64_t mono_ns(int64_t tsc) noexcept;
 };
 
 // A named (host TSC tick, value) series a consumer computes once a capture is complete -- the d2d sync's running
