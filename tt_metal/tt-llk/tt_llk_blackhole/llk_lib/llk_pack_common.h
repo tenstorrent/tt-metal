@@ -189,14 +189,14 @@ inline void _llk_pack_reconfig_l1_acc_(const std::uint32_t enable)
  * @tparam reduce_type: Pool type; MAX selects negative-infinity mode, except BFP outputs retain zero fill.
  * @tparam dim: Reduction dimension, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>
  * @tparam pack_mode: Packing layout, values = <Default/Untilize>
- * @tparam geometry: Output face grid, independent of the height of each face.
  * @param face_r_dim: Rows per face.
+ * @param geometry: Output face grid, independent of the height of each face.
  * @note Untilize retains its existing row-mask configuration; face selection below is for Default only.
  * @note Pairs with @ref _llk_math_reduce_ on the math thread, whose reduced output these masks gate.
  * @note Call @ref _llk_pack_reduce_mask_clear_ to restore the default pass-through masks.
  */
-template <PoolType reduce_type, ReduceDim dim, PackMode pack_mode = PackMode::Default, TileGeometry geometry = TileGeometry::Faces2x2>
-inline void _llk_pack_reduce_mask_config_(const std::uint32_t face_r_dim = FACE_R_DIM)
+template <PoolType reduce_type, ReduceDim dim, PackMode pack_mode = PackMode::Default>
+inline void _llk_pack_reduce_mask_config_(const std::uint32_t face_r_dim = FACE_R_DIM, const TileGeometry geometry = TileGeometry::Faces2x2)
 {
     ckernel::packer::pck_edge_offset_u pack_edge_offset = {.val = 0};
 
@@ -275,24 +275,24 @@ inline void _llk_pack_reduce_mask_config_(const std::uint32_t face_r_dim = FACE_
         // The constants repeat 2-bit row-table selectors across all 16 face-table entries:
         // 0x55555555 = [1], 0x11111111 = [1,0], 0x05050505 = [1,1,0,0], 0x01010101 = [1,0,0,0].
         // Row-table 1 applies the reduction mask; row-table 0 masks the entire face.
-        constexpr std::uint32_t face_set_mapping = []
+        const std::uint32_t face_set_mapping = [geometry]
         {
             static_assert(dim == ReduceDim::REDUCE_ROW || dim == ReduceDim::REDUCE_COL || dim == ReduceDim::REDUCE_SCALAR, "Invalid reduction dimension");
-            if constexpr (geometry == TileGeometry::Faces1x1)
+            if (geometry == TileGeometry::Faces1x1)
             {
                 return 0x55555555;
             }
-            else if constexpr (geometry == TileGeometry::Faces1x2)
+            else if (geometry == TileGeometry::Faces1x2)
             {
                 return dim == ReduceDim::REDUCE_COL ? 0x55555555 : 0x11111111;
             }
-            else if constexpr (geometry == TileGeometry::Faces2x1)
+            else if (geometry == TileGeometry::Faces2x1)
             {
                 return dim == ReduceDim::REDUCE_ROW ? 0x55555555 : 0x11111111;
             }
             else
             {
-                static_assert(geometry == TileGeometry::Faces2x2, "Invalid tile geometry");
+                LLK_ASSERT(geometry == TileGeometry::Faces2x2, "Invalid tile geometry");
                 if constexpr (dim == ReduceDim::REDUCE_ROW)
                 {
                     return 0x11111111;

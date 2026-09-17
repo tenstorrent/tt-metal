@@ -234,12 +234,13 @@ inline void _llk_pack_reconfig_l1_acc_(const std::uint32_t enable)
  * @tparam reduce_type: Pool type; MAX selects negative-infinity mode, except BFP outputs retain zero fill.
  * @tparam dim: Reduction dimension, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>
  * @tparam pack_mode: Packing layout, values = <Default/Untilize>
- * @tparam geometry: Output face grid, independent of the height of each face.
+ * @param face_r_dim: Rows per face.
+ * @param geometry: Output face grid, independent of the height of each face.
  * @note Pairs with @ref _llk_math_reduce_ on the math thread, whose reduced output these masks gate.
  * @note Call @ref _llk_pack_reduce_mask_clear_ to restore the default pass-through masks.
  */
-template <PoolType reduce_type, ReduceDim dim, PackMode pack_mode = PackMode::Default, TileGeometry geometry = TileGeometry::Faces2x2>
-inline void _llk_pack_reduce_mask_config_(const std::uint32_t face_r_dim = FACE_R_DIM)
+template <PoolType reduce_type, ReduceDim dim, PackMode pack_mode = PackMode::Default>
+inline void _llk_pack_reduce_mask_config_(const std::uint32_t face_r_dim = FACE_R_DIM, const TileGeometry geometry = TileGeometry::Faces2x2)
 {
     static_assert(
         pack_mode == PackMode::Default || pack_mode == PackMode::Untilize,
@@ -308,8 +309,9 @@ inline void _llk_pack_reduce_mask_config_(const std::uint32_t face_r_dim = FACE_
     }
 
     // Initialize TMP registers with values we need to write in CFG registers
-    TTI_SETDMAREG(0, LOWER_HALFWORD(pack_edge_offset.val), 0, LO_16(p_gpr_pack::TMP0));
-    TTI_SETDMAREG(0, UPPER_HALFWORD(pack_edge_offset.val), 0, HI_16(p_gpr_pack::TMP0));
+    // The lower-half mask is always zero; upper-half row-table selectors depend on the runtime tile geometry.
+    TTI_SETDMAREG(0, 0, 0, LO_16(p_gpr_pack::TMP0));
+    TT_SETDMAREG(0, UPPER_HALFWORD(pack_edge_offset.val), 0, HI_16(p_gpr_pack::TMP0));
     TTI_SETDMAREG(0, LOWER_HALFWORD(edge_offset_sec1_mask), 0, LO_16(p_gpr_pack::TMP_LO));
     TTI_SETDMAREG(0, LOWER_HALFWORD(row_set_mapping_1), 0, LO_16(p_gpr_pack::TMP1));
     TTI_SETDMAREG(0, UPPER_HALFWORD(row_set_mapping_1), 0, HI_16(p_gpr_pack::TMP1));
