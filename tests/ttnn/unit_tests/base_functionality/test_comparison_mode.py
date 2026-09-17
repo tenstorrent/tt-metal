@@ -801,6 +801,28 @@ def test_unary_chain_golden_applies_param_ops_in_order():
     torch.testing.assert_close(output, ((input_tensor + 2.0) * 3.0) ** 2.0)
 
 
+def test_unary_chain_golden_shares_unsigned_and_hardswish_handling():
+    # The chain map and the standalone unary goldens share the canonical dtype-aware helpers.
+    unsigned_input = torch.tensor([0, 2**32 - 1], dtype=torch.int64).to(torch.uint32)
+    chain_output = ttnn.get_golden_function(ttnn.unary_chain)(
+        unsigned_input, [ttnn.UnaryWithParam(ttnn.UnaryOpType.GTZ)]
+    )
+    standalone_output = ttnn.get_golden_function(ttnn.gtz)(unsigned_input)
+    assert torch.equal(chain_output, torch.tensor([False, True]))
+    assert torch.equal(chain_output, standalone_output)
+
+    hardswish_input = torch.tensor([0.0, 1.0])
+    chain_hardswish = ttnn.get_golden_function(ttnn.unary_chain)(
+        hardswish_input, [ttnn.UnaryWithParam(ttnn.UnaryOpType.HARDSWISH)]
+    )
+    torch.testing.assert_close(chain_hardswish, torch.nn.functional.hardswish(hardswish_input))
+
+    # Name-bridged ops resolve to the same callable as the standalone golden.
+    input_tensor = torch.tensor([0.5, -1.0])
+    chain_exp = ttnn.get_golden_function(ttnn.unary_chain)(input_tensor, [ttnn.UnaryWithParam(ttnn.UnaryOpType.EXP)])
+    torch.testing.assert_close(chain_exp, ttnn.get_golden_function(ttnn.exp)(input_tensor))
+
+
 def test_snake_beta_golden_matches_activation_formula():
     input_tensor = torch.tensor([0.5, -1.0, 2.0])
 
