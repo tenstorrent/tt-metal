@@ -5,7 +5,6 @@
 #include "hybrid_routed_expert_ffn.hpp"
 
 #include "device/hybrid_routed_expert_ffn_device_operation.hpp"
-#include "device/unified_routed_expert_ffn_types.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/creation/creation.hpp"
 
