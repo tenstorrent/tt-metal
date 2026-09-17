@@ -128,8 +128,9 @@ private:
 namespace link_sync {
 
 enum class Role : uint32_t { None = 0, Sender = 1, Receiver = 2 };
-// TT_METAL_STREAMING_PROFILER_LINK_SYNC=0 leaves the link sync out of a profiler session: no links planned, every
-// router's role None. The rest of the profiler runs as usual; it is how the sync's own cost is measured.
+// The profiler is on and TT_METAL_STREAMING_PROFILER_LINK_SYNC is not 0. Off leaves the link sync out of a profiler
+// session: no links planned, every router's role None. The rest of the profiler runs as usual; it is how the sync's
+// own cost is measured.
 bool enabled();
 
 struct Link {

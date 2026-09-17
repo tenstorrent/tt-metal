@@ -55,7 +55,8 @@ FORCE_INLINE void open() {
 }
 FORCE_INLINE void start() {
     if constexpr (kActive) {
-        g_end.start(link_sync_addr, link_sync_addr + tt::tt_metal::eth_ptp::kCtlOffset, link_sync_pace);
+        g_end.start(
+            link_sync_addr, link_sync_addr + tt::tt_metal::eth_ptp::kCtlOffset, tt::tt_metal::eth_ptp::kPaceTicks);
     }
 }
 FORCE_INLINE void step() {

@@ -59,6 +59,8 @@ constexpr uint32_t kBurstFollowSpins = 256;  // polls for each of a burst's late
 // the clock coverage that places it.
 constexpr uint32_t kCtlRun = kernel_profiler::kLinkSyncCtlRun, kCtlStop = kernel_profiler::kLinkSyncCtlStop;
 constexpr uint32_t kHwUnitsPerNs = kernel_profiler::kLinkSyncStampUnitsPerNs;
+constexpr uint32_t kPaceTicks =
+    kernel_profiler::kLinkSyncPaceTicks;  // the product's round period; tests pick their own
 static_assert(kTripsPerRound % kBurstFrames == 0 && kBurstFrames >= 2 && (kFramePhaseStep & 1) == 1);
 static_assert(kFrameBytes >= 80 && kFrameBytes % 16 == 0 && kFrameBytes >= sizeof(eth_channel_sync_t));
 static_assert(kSlotsOffset + kSlotsBytes <= kCtlOffset);

@@ -383,7 +383,10 @@ void HostProbe::run() {
 
 namespace link_sync {
 
-bool enabled() { return MetalContext::instance().rtoptions().get_streaming_profiler_link_sync_enabled(); }
+bool enabled() {
+    const auto& rtoptions = MetalContext::instance().rtoptions();
+    return rtoptions.get_streaming_profiler_enabled() && rtoptions.get_streaming_profiler_link_sync_enabled();
+}
 
 namespace {
 // Whether an eth core can carry the sync: any connected core without fabric; with fabric, only a core the topology
