@@ -413,6 +413,11 @@ def wh_t3k_decode_enabled(mesh_device) -> bool:
     return (grid.x, grid.y) == (8, 8)
 
 
+def wh_t3k_dense_decode_enabled(mesh_device, is_moe: bool = False) -> bool:
+    """True on full Wormhole T3K for dense models only (not 26B-A4B)."""
+    return (not is_moe) and wh_t3k_decode_enabled(mesh_device)
+
+
 def wh_t3k_decode_progcfg(mesh_device, k, n):
     """Swept 1D-mcast decode program config for ``(k, n)``, or ``None``."""
     if not wh_t3k_decode_enabled(mesh_device):

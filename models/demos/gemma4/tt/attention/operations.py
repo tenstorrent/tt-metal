@@ -632,8 +632,8 @@ def concat_heads(
     one core per user), so the SDPA output (DRAM, [1, batch, heads, head_dim]) is
     resharded first across ``batch`` cores. The old path ran the concat on a
     single core (~30 us/layer) and needed a separate transpose; the decode op
-    drops the transpose and spreads work across cores. Output is converted back
-    to DRAM interleaved so the downstream o_proj matmul is unchanged.
+    drops the transpose and spreads work across cores. Output is interleaved
+    DRAM unless the caller passes ``memory_config``.
 
     Prefill: ``memory_config`` defaults to DRAM; pass L1 for short-lived concat
     temps (caller must DRAM-ify before o_proj / allreduce).
@@ -669,7 +669,7 @@ def concat_heads(
         out = ttnn.experimental.nlp_concat_heads_decode(tensor_sh, num_heads=num_heads)
         tensor_sh.deallocate(True)
         out_sh = out
-        out = ttnn.sharded_to_interleaved(out_sh, ttnn.DRAM_MEMORY_CONFIG)
+        out = ttnn.sharded_to_interleaved(out_sh, memory_config or ttnn.DRAM_MEMORY_CONFIG)
         out_sh.deallocate(True)
         # Drop the batch padding (B is padded to 32 by the op) so downstream sees
         # [1, 1, batch, hidden_local] just like the old transpose+concat path.
@@ -709,7 +709,7 @@ def apply_output_projection(tensor, weights: AttentionWeights, memory_config=Non
         if rows <= TILE_SIZE
         else None
     )
-    activation, owned_activation = hoist_prefill_matmul_in0_if_needed(tensor, None)
+    activation, owned_activation = hoist_prefill_matmul_in0_if_needed(tensor, program_config)
     out = linear_l1_safe(
         activation,
         weights.o_proj,

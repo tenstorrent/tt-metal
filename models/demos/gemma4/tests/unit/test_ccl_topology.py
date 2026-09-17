@@ -287,25 +287,35 @@ def test_weight_cache_path_ro_mount_falls_back_writable(tmp_path, monkeypatch):
 
 
 def test_wh_t3k_decode_gate_only_full_unharvested_t3k(monkeypatch):
-    """12B swept decode configs must not fire on BH, N150, or harvested WH."""
-    from models.demos.gemma4.tt.dram_sharded import wh_t3k_decode_enabled, wh_t3k_decode_progcfg
+    """12B/31B T3K decode knobs must not fire on BH, N150, harvested WH, or 26B."""
+    from models.demos.gemma4.tt.dram_sharded import (
+        wh_t3k_decode_enabled,
+        wh_t3k_decode_progcfg,
+        wh_t3k_dense_decode_enabled,
+    )
 
     monkeypatch.setattr("models.demos.gemma4.tt.dram_sharded.is_blackhole", lambda: False)
-    assert wh_t3k_decode_enabled(_FakeMesh(8, (8, 8))) is True
-    assert wh_t3k_decode_progcfg(_FakeMesh(8), 3840, 1024) is not None
-    assert wh_t3k_decode_progcfg(_FakeMesh(8), 3840, 3840) is not None
+    t3k = _FakeMesh(8, (8, 8))
+    assert wh_t3k_decode_enabled(t3k) is True
+    assert wh_t3k_dense_decode_enabled(t3k, is_moe=False) is True
+    assert wh_t3k_dense_decode_enabled(t3k, is_moe=True) is False  # 26B-A4B
+    assert wh_t3k_decode_progcfg(t3k, 3840, 1024) is not None
+    assert wh_t3k_decode_progcfg(t3k, 3840, 3840) is not None
     # 31B sliding qkv is deliberately not in the table; see the table comment.
-    assert wh_t3k_decode_progcfg(_FakeMesh(8), 5376, 2048) is None
+    assert wh_t3k_decode_progcfg(t3k, 5376, 2048) is None
 
     monkeypatch.setattr("models.demos.gemma4.tt.dram_sharded.is_blackhole", lambda: True)
-    assert wh_t3k_decode_enabled(_FakeMesh(8, (8, 8))) is False
-    assert wh_t3k_decode_progcfg(_FakeMesh(8), 3840, 1024) is None
+    assert wh_t3k_decode_enabled(t3k) is False
+    assert wh_t3k_dense_decode_enabled(t3k, is_moe=False) is False
+    assert wh_t3k_decode_progcfg(t3k, 3840, 1024) is None
 
     monkeypatch.setattr("models.demos.gemma4.tt.dram_sharded.is_blackhole", lambda: False)
     assert wh_t3k_decode_enabled(_FakeMesh(1, (8, 8))) is False  # N150
+    assert wh_t3k_dense_decode_enabled(_FakeMesh(1, (8, 8)), is_moe=False) is False
     assert wh_t3k_decode_enabled(_FakeMesh(2, (8, 8))) is False  # N300
     assert wh_t3k_decode_enabled(_FakeMesh(4, (8, 8))) is False
     assert wh_t3k_decode_enabled(_FakeMesh(8, (8, 7))) is False  # x2-harvested
+    assert wh_t3k_dense_decode_enabled(_FakeMesh(8, (8, 7)), is_moe=False) is False
 
 
 def _dense_decode_kn(

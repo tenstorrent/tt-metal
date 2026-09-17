@@ -11,6 +11,7 @@ import os
 
 import ttnn
 from models.demos.gemma4.tt.compute_config import decode_sdpa_compute_kernel_config
+from models.demos.gemma4.tt.dram_sharded import wh_t3k_dense_decode_enabled
 
 from .operations import (
     apply_allreduce,
@@ -110,18 +111,25 @@ def decode_forward(
         is_kv_shared: if True, skip K/V projection and cache update (use source layer's KV cache)
     """
     tp = mesh_config.tp if mesh_config else 1
+    l1_act = wh_t3k_dense_decode_enabled(mesh_device, is_moe=bool(config.enable_moe_block))
+    qkv_interleaved = ttnn.L1_MEMORY_CONFIG if l1_act else ttnn.DRAM_MEMORY_CONFIG
 
     # 1. Fused QKV projection
-    xqkv = apply_qkv_projection(hidden_states, weights, decode=True)
+    xqkv = apply_qkv_projection(
+        hidden_states,
+        weights,
+        decode=True,
+        memory_config=ttnn.L1_MEMORY_CONFIG if l1_act else None,
+    )
 
     # 2. Split into Q, K, V heads
     tt_q, tt_k, tt_v = split_qkv_heads_decode(
         xqkv, config, weights.is_global, tp=tp, kv_replicated=weights.kv_replicated
     )
 
-    # 3. Per-head norms (move to DRAM for rms_norm, restore sharded for RoPE)
+    # 3. Per-head norms (unshard for rms_norm, restore sharded for RoPE)
     q_sharded_mem = tt_q.memory_config()
-    tt_q = ttnn.to_memory_config(tt_q, ttnn.DRAM_MEMORY_CONFIG)
+    tt_q = ttnn.to_memory_config(tt_q, qkv_interleaved)
     tt_q = apply_per_head_norm(tt_q, weights.q_norm_weight, config.rms_norm_eps, with_scale=True)
 
     if is_kv_shared:
@@ -129,8 +137,8 @@ def decode_forward(
         tt_k.deallocate(True)
         tt_v.deallocate(True)
     else:
-        tt_k = ttnn.to_memory_config(tt_k, ttnn.DRAM_MEMORY_CONFIG)
-        tt_v = ttnn.to_memory_config(tt_v, ttnn.DRAM_MEMORY_CONFIG)
+        tt_k = ttnn.to_memory_config(tt_k, qkv_interleaved)
+        tt_v = ttnn.to_memory_config(tt_v, qkv_interleaved)
         # Do not K→V clone (resync): that produced unicode garbage on LB 12B.
         tt_k = apply_per_head_norm(tt_k, weights.k_norm_weight, config.rms_norm_eps, with_scale=True)
         tt_v = apply_per_head_norm(tt_v, None, config.rms_norm_eps, with_scale=False)
@@ -179,6 +187,13 @@ def decode_forward(
         tt_q = apply_rope(tt_q, cos_cache, sin_cache, token_index=token_index)
         if not is_kv_shared:
             tt_k = apply_rope(tt_k, cos_cache, sin_cache, token_index=token_index)
+
+    # SDPA decode requires interleaved Q in DRAM.
+    if l1_act:
+        q_l1 = tt_q
+        tt_q = ttnn.to_memory_config(q_l1, ttnn.DRAM_MEMORY_CONFIG)
+        if tt_q is not q_l1:
+            q_l1.deallocate(True)
 
     # 5. KV cache update — skip for KV-shared layers (source layer already updated the cache)
     # Use position_idx_cache (int32) for cache ops when position_idx is uint32 (embedding lookup format)
@@ -352,7 +367,12 @@ def decode_forward(
     # 7. Concat heads + output projection + allreduce
     num_local_heads = config.num_attention_heads // tp
     tt_out = concat_heads(
-        tt_sdpa, is_decode_mode=True, num_heads=num_local_heads, head_dim=config.head_dim, mesh_device=mesh_device
+        tt_sdpa,
+        is_decode_mode=True,
+        num_heads=num_local_heads,
+        head_dim=config.head_dim,
+        mesh_device=mesh_device,
+        memory_config=ttnn.L1_MEMORY_CONFIG if l1_act else None,
     )
     tt_out = apply_output_projection(tt_out, weights, memory_config=ttnn.L1_MEMORY_CONFIG)
     tt_out = apply_allreduce(tt_out, mesh_config, ccl_manager, config.hidden_size)
