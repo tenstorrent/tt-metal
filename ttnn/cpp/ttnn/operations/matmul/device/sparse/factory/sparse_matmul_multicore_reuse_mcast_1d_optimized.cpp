@@ -561,7 +561,11 @@ tt::tt_metal::ProgramDescriptor SparseMatmulMultiCoreReuseMcast1DProgramFactory:
         get_batch_from_reader,  // get_batch_from_reader
         false,                  // in0_transpose_tile
     };
-
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
+        NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+    if (fp32_dest_acc_en && interm0_data_format == tt::DataFormat::Float32) {
+        unpack_to_dest_mode[tt::CBIndex::c_5] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    }
     // Create compute kernel
     // bool fp32_dest_acc_en = false;
     // Gelu currently has better accuracy when run in approx mode
@@ -580,13 +584,13 @@ tt::tt_metal::ProgramDescriptor SparseMatmulMultiCoreReuseMcast1DProgramFactory:
         {"cb_intermed0", tt::CBIndex::c_5},
         {"cb_in0_transposed", tt::CBIndex::c_10},
     };
-    // unpack_to_dest_mode and opt_level are left at their descriptor defaults to preserve
-    // behaviour: an empty unpack_to_dest_mode matches the legacy ComputeConfig default, and the
-    // default opt_level applies O2 for data movement and O3 for compute, as the legacy configs did.
+    // Preserve the FP32 partial-reload behavior: the Float32 intermediate CB must use
+    // UnpackToDestFp32, while all other CB entries retain the legacy Default mode.
     compute_kernel_desc.config = ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,
         .dst_full_sync_en = dst_full_sync_en,
+        .unpack_to_dest_mode = unpack_to_dest_mode,
         .math_approx_mode = math_approx_mode};
     ////////////////////////////////////////////////////////////////////////////
     //                      Descriptor Assembly
