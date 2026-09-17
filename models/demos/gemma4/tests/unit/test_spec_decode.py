@@ -2927,10 +2927,14 @@ def test_mtp_current_path_breakdown(mesh_device, reset_seeds):
         logger.info(f"[mtp-bd] component=draft fused-K{K}-draft-chain trace={draft_ms:.2f} ms")
         return
 
+    # "full" compares loop vs direct trace replay; eager generate_fused leaves
+    # _fused_trace None (GEMMA4_SPEC_TRACE defaults off in SpeculativeDecoder).
+    spec._use_trace = True
     generated, accepts = spec.generate_fused(anchor_token, anchor_pos, n_new)
     ttnn.synchronize_device(mesh_device)
     loop_ms = spec._last_fused_replay_s * 1e3 / len(accepts)
     fused_trace = spec._fused_trace
+    assert fused_trace is not None, "generate_fused with _use_trace=True must capture _fused_trace"
     start = time.perf_counter()
     for _ in range(reps):
         ttnn.execute_trace(mesh_device, fused_trace["id"], cq_id=0, blocking=False)

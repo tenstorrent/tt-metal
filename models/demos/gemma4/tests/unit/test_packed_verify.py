@@ -293,6 +293,11 @@ def test_packed_verify_batch_perf(mesh_device, reset_seeds):
     _ci = os.getenv("CI") == "true"
     Bs = [int(b) for b in os.environ.get("GEMMA4_BENCH_B", "1,8" if _ci else "1,8,16,32").split(",") if b.strip()]
     ctx = int(os.environ.get("GEMMA4_BENCH_CTX", 1024 if _ci else 2048))
+    # N300 1x2: a full local sweep (B=32 × ctx=2048) OOMs after the
+    # matches_sequential weight/KV alloc — cap to the CI-light footprint.
+    if mesh_device.get_num_devices() <= 2 and "GEMMA4_BENCH_B" not in os.environ:
+        Bs = [b for b in Bs if b <= 8]
+        ctx = min(ctx, 1024)
     K = int(os.environ.get("GEMMA4_SPEC_DRAFT_LEN", 3))
     P = K + 1
     reps = int(os.environ.get("GEMMA4_BENCH_ITERS", 3 if _ci else 20))
@@ -433,6 +438,12 @@ def test_packed_verify_batch_perf(mesh_device, reset_seeds):
         # rows user-major / position-minor: row u*P+p is user u's p-th candidate.
         x_p = _from(torch.tensor([tokens_per_user] * B, dtype=torch.int64).reshape(1, B * P), ttnn.uint32)
         pos_p = _from(torch.tensor([[c + p for u in range(B) for p in range(P)]], dtype=torch.int64), ttnn.uint32)
+        # batch-SDPA packed verify (default on at B==1) needs int32 positions for
+        # paged_update_cache / cur_pos_tensor — uint32 position_idx is RoPE-only.
+        pos_cache_p = _from(
+            torch.tensor([c + p for u in range(B) for p in range(P)], dtype=torch.int32).reshape(1, B * P),
+            ttnn.int32,
+        )
         mask_full, mask_slide = _masks(B)
         write_idxs = [_from(torch.full((B,), c + p, dtype=torch.int32), ttnn.int32) for p in range(P)]
         pt_packed = _from(pt_b, ttnn.int32)
@@ -441,6 +452,7 @@ def test_packed_verify_batch_perf(mesh_device, reset_seeds):
             return target.ttnn_packed_verify_forward(
                 x=x_p,
                 position_idx=pos_p,
+                position_idx_cache=pos_cache_p,
                 attn_mask_full=mask_full,
                 attn_mask_sliding=mask_slide,
                 packed_p=P,
@@ -458,7 +470,7 @@ def test_packed_verify_batch_perf(mesh_device, reset_seeds):
             if _is_l1_cb_overflow(e):
                 pytest.skip(_L1_OVERFLOW_REASON)
             raise
-        for t in (x_p, pos_p, mask_full, mask_slide, pt_packed, *write_idxs):
+        for t in (x_p, pos_p, pos_cache_p, mask_full, mask_slide, pt_packed, *write_idxs):
             t.deallocate(True)
 
         # ── batch-alias baseline ──────────────────────────────────────────────

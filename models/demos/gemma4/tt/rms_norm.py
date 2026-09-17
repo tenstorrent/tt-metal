@@ -1,11 +1,154 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 from torch import nn
 
 import ttnn
 from models.demos.gemma4.config import MeshConfig, ModeConfig
 from models.demos.gemma4.utils.general_utils import get_cache_file_name
+
+# Row cutoff for the width-shard *search*. Height alone is not enough: 26B
+# hidden=2816 on an 8-core WH grid needs 720,896 B/bank for the input *and*
+# again for the output (1,441,792 B) against a 1,393,472 B bank — CI
+# test_rms_norm / test_layer prefill_1024 OOMs. :func:`width_shard_spec`
+# rejects layouts whose per-core I/O exceeds the bank. 31B hidden=5376
+# still fits at 1024 (~197 KB/bank × 2). Longer prefill stays interleaved.
+_SHARDED_NORM_MAX_HEIGHT = 1024
+# Observed WH worker L1 bank after firmware (run 32690156816, 26B unit).
+# BH banks are larger; override with GEMMA4_SHARDED_NORM_L1_BANK.
+_DEFAULT_L1_BANK_BYTES = 1_393_472
+_SHARDED_NORM_ELEM_BYTES = 2  # bf16 activations on this path
+_TILE = 32
+_FP32_BYTES = 4
+
+
+def sharded_norm_scratch_bytes(height, dim, num_cores, dtype_bytes=_SHARDED_NORM_ELEM_BYTES) -> int:
+    """Per-bank CB bytes the sharded RMSNorm kernel adds on top of live I/O."""
+    del height
+    if num_cores <= 0 or int(dim) % int(num_cores) != 0:
+        return 1 << 62
+    shard_w = int(dim) // int(num_cores)
+    block_wt = max(1, shard_w // _TILE)
+    gamma = _TILE * shard_w * int(dtype_bytes)
+    stats = 2 * _TILE * _TILE * _FP32_BYTES
+    col_mask = block_wt * _TILE * _TILE * int(dtype_bytes)
+    return gamma + stats + col_mask
+
+
+def sharded_norm_enabled() -> bool:
+    return os.environ.get("GEMMA4_SHARDED_NORM", "1").lower() not in ("0", "false", "no")
+
+
+def norm_keep_sharded_enabled() -> bool:
+    return os.environ.get("GEMMA4_NORM_KEEP_SHARDED", "1").lower() not in ("0", "false", "no")
+
+
+def maybe_interleave(tensor, memory_config=None):
+    """DRAM-interleaved view of ``tensor``; no-op when already interleaved."""
+    if tensor is None or not tensor.is_sharded():
+        return tensor
+    dest = memory_config or ttnn.DRAM_MEMORY_CONFIG
+    out = ttnn.sharded_to_interleaved(tensor, dest)
+    tensor.deallocate(True)
+    return out
+
+
+def align_to_memcfg(tensor, memcfg):
+    """Reshard / I2S ``tensor`` onto ``memcfg``. Returns ``(aligned, owned)``."""
+    if tensor is None or memcfg is None or not memcfg.is_sharded():
+        return tensor, False
+    if tensor.is_sharded() and tensor.memory_config() == memcfg:
+        return tensor, False
+    return ttnn.to_memory_config(tensor, memcfg), True
+
+
+def sharded_norm_per_core_bytes(height, dim, num_cores, dtype_bytes=_SHARDED_NORM_ELEM_BYTES) -> int:
+    """Bytes of one width-shard of a ``[height, dim]`` activation on ``num_cores``."""
+    if num_cores <= 0 or dim % num_cores != 0:
+        return 1 << 62
+    return int(height) * (int(dim) // int(num_cores)) * int(dtype_bytes)
+
+
+def sharded_norm_fits_l1(
+    height,
+    dim,
+    num_cores,
+    l1_bank_bytes=_DEFAULT_L1_BANK_BYTES,
+    dtype_bytes=_SHARDED_NORM_ELEM_BYTES,
+    scratch_bytes=None,
+) -> bool:
+    """True when input + output (+ scratch) fit in one L1 bank."""
+    per = sharded_norm_per_core_bytes(height, dim, num_cores, dtype_bytes)
+    scratch = (
+        int(scratch_bytes)
+        if scratch_bytes is not None
+        else sharded_norm_scratch_bytes(height, dim, num_cores, dtype_bytes)
+    )
+    return (2 * per + scratch) <= int(l1_bank_bytes)
+
+
+def _l1_bank_bytes(mesh_device) -> int:
+    env = os.environ.get("GEMMA4_SHARDED_NORM_L1_BANK")
+    if env:
+        return int(env)
+    try:
+        dev = mesh_device.get_devices()[0] if hasattr(mesh_device, "get_devices") else mesh_device
+        if hasattr(dev, "l1_size_per_core"):
+            return int(dev.l1_size_per_core())
+    except Exception:
+        pass
+    return _DEFAULT_L1_BANK_BYTES
+
+
+def activation_physical_height(shape) -> int:
+    """Tile-padded row count a width-sharded layout must use for ``shape``."""
+    rows = 1
+    for i in range(len(shape) - 1):
+        rows *= int(shape[i])
+    tile = ttnn.TILE_SIZE
+    return ((rows + tile - 1) // tile) * tile
+
+
+def width_shard_spec(mesh_device, dim, height):
+    """``(input_memcfg, program_config)`` for width-sharded RMSNorm at ``(height, dim)``."""
+    if height <= 0 or height > _SHARDED_NORM_MAX_HEIGHT:
+        return None
+    if dim % ttnn.TILE_SIZE != 0 or height % ttnn.TILE_SIZE != 0:
+        return None
+    tiles = dim // ttnn.TILE_SIZE
+    grid = mesh_device.compute_with_storage_grid_size()
+    best = None  # (num_cores, gx, gy)
+    for gy in range(1, grid.y + 1):
+        for gx in range(1, grid.x + 1):
+            n = gx * gy
+            if tiles % n == 0 and (best is None or n > best[0]):
+                best = (n, gx, gy)
+    if best is None or best[0] == 1:
+        return None
+    num_cores, gx, gy = best
+    if not sharded_norm_fits_l1(height, dim, num_cores, l1_bank_bytes=_l1_bank_bytes(mesh_device)):
+        return None
+    block_w = tiles // num_cores
+    subblock_w = 4
+    while subblock_w > 1 and block_w % subblock_w != 0:
+        subblock_w -= 1
+    input_memcfg = ttnn.create_sharded_memory_config(
+        shape=(height, dim // num_cores),
+        core_grid=ttnn.CoreGrid(x=gx, y=gy),
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
+        compute_with_storage_grid_size=[gx, gy],
+        subblock_w=subblock_w,
+        block_h=height // ttnn.TILE_SIZE,
+        block_w=block_w,
+        inplace=False,
+    )
+    return (input_memcfg, program_config)
 
 
 class RMSNorm(nn.Module):
