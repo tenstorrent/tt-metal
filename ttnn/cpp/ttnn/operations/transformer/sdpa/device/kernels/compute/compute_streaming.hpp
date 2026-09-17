@@ -2785,7 +2785,7 @@ void sdpa_ring_v2(
                     return k_chunk * Sk_chunk_t;
                 }
             }();
-            const bool step_apply_causal = [&]() {
+            bool step_apply_causal = [&]() {
                 if constexpr (has_sliding_window) {
                     return q_start_tile < step_k_start_tile + Sk_chunk_t &&
                            q_start_tile + Sq_chunk_t > step_k_start_tile;
@@ -2832,6 +2832,9 @@ void sdpa_ring_v2(
                 pack_source_tails
                     ? packed_kv.mask_runs(k_chunk, streamed_source_ids, kv_rank_stride_Nt, chunk_size_t, packed_k_runs)
                     : 0;
+            if (pack_source_tails && step_apply_causal) {
+                step_apply_causal = packed_kv_runs_need_causal_mask(packed_k_runs, packed_k_run_count, q_start_tile);
+            }
 
             sdpa_inner_loop_step<
                 false,  // profiling_enabled

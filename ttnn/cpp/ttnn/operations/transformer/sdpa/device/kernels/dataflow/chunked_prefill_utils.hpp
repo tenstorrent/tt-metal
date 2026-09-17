@@ -19,6 +19,21 @@ struct PackedKVMaskRun {
     uint32_t column_end;
 };
 
+// Even a K tile at q_start_tile needs its within-tile diagonal mask. Skip only
+// when every run ends strictly before that tile; packed source order need not
+// be monotonic in global sequence coordinates.
+constexpr bool packed_kv_runs_need_causal_mask(const PackedKVMaskRun* runs, uint32_t count, uint32_t q_start_tile) {
+    uint32_t column_start = 0;
+    for (uint32_t run = 0; run < count; ++run) {
+        const uint32_t length = runs[run].column_end - column_start;
+        if (runs[run].global_start_tile + length > q_start_tile) {
+            return true;
+        }
+        column_start = runs[run].column_end;
+    }
+    return false;
+}
+
 // A packed attention pass concatenates equally sized physical KV sources. All sizes
 // are in tiles; the final chunk may be partial, but retains the full CB stride.
 struct PackedKVGroupPlan {

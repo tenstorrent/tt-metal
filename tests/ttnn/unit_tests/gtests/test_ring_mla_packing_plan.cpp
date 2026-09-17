@@ -34,6 +34,7 @@ TEST(RingMLAPackingPlan, PreservesEveryTileAcrossSourcesAndPartialChunks) {
                                 ASSERT_GT(count, 0u);
                                 ASSERT_LE(count, valid);
                                 uint32_t column = 0;
+                                uint32_t max_global_tile = 0;
                                 for (uint32_t run = 0; run < count; ++run) {
                                     const uint32_t begin = column;
                                     ASSERT_GT(runs[run].column_end, begin);
@@ -45,9 +46,13 @@ TEST(RingMLAPackingPlan, PreservesEveryTileAcrossSourcesAndPartialChunks) {
                                         const uint32_t expected =
                                             (local / region) * (ring * region) + source * region + local % region;
                                         ASSERT_EQ(runs[run].global_start_tile + column - begin, expected);
+                                        max_global_tile = std::max(max_global_tile, expected);
                                     }
                                 }
                                 ASSERT_EQ(column, valid);
+                                EXPECT_TRUE(packed_kv_runs_need_causal_mask(runs.data(), count, 0));
+                                EXPECT_TRUE(packed_kv_runs_need_causal_mask(runs.data(), count, max_global_tile));
+                                EXPECT_FALSE(packed_kv_runs_need_causal_mask(runs.data(), count, max_global_tile + 1));
                                 for (uint32_t dst = 0; dst < valid;) {
                                     const uint32_t segment = plan.segment_tiles(chunk, dst);
                                     ASSERT_GT(segment, 0u);
