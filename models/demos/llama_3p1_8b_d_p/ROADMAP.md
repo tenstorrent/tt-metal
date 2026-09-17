@@ -13,8 +13,8 @@ service.
 - Canonical work and external evidence live under `/data/divanovic/llama31-8b-disagg`.
 - Prefill runs on one Blackhole Galaxy with SP=4 and TP=8. The existing Blaze decode engine runs
   on SC4, for five Galaxies total across the disaggregated system.
-- Bring-up covers two independent slots and a 2,048-token logical limit including decode tokens.
-- `PREFILL_CHUNK_SIZE=1024`, `PREFILL_MAX_SEQ_LEN=2048`, and `PREFILL_NUM_LAYERS=32` are pinned.
+- The initial migration fixture covers two independent slots and a 2,048-token logical limit including decode tokens. Prefill-only correctness/performance milestones now extend through 131,072 input tokens before migration.
+- Compute chunks remain 1,024 tokens and the model has 32 layers. The tested implementation currently caps prefill at 2,048; shared capacity generalization is required before the new lengths run.
 - A prefill transformer decoder layer processes a prompt chunk. It is distinct from the later
   autoregressive Blaze decode engine, which consumes the migrated cache one decode step at a time.
 - Every implementation stage ends in a logical commit and review boundary. The user accepted the
@@ -161,7 +161,7 @@ sentinel checks must prove all out-of-range regions remain unchanged.
 ### 5. Full causal grouped-query attention
 
 **Input/setup.** Extend the attention module and add `tests/unit/test_attention_vs_ref.py`
-(**planned**). Cover chunk starts at zero and nonzero continuations, prompt lengths that end inside a
+(**published**). Cover chunk starts at zero and nonzero continuations, prompt lengths that end inside a
 tile/chunk, two distinct slots, and KV history across SP4 with four Q heads sharing each KV head.
 
 **Independent reference and expected behavior.** A direct PyTorch full-causal GQA calculation uses
@@ -222,11 +222,22 @@ post-attention RMSNorm, dense MLP, and the second residual. Use synthetic isolat
 Llama layers 0 and 13, with cache checks for K and V.
 Share accepted attention resources across layers. Validate the request and cache before writing K/V.
 
-**Preparation status (16 September 2026).** Root copied the exact three prepared files into the
-canonical tree. Host checks pass, including independent Hugging Face decoder parity with maximum
-absolute difference `1.1920928955078125e-07`. That value checks the host oracle and fixture only; it
-is not device accuracy. The launch contract is open. Device validation is starting in this order:
-`residual001`, `smoke002`, `full003`, then `Watcher004`. No decoder device result exists yet.
+**Accepted and published (16 September 2026).** Commit
+`b18a97636720e8b94c3185f65b1ea3085b6da8ee` contains the decoder and both test files.
+Full suite `attempt-007-full` passed all eight cases with no skips on all 32 chips.
+Root checked all 2,104 logged metric pairs against the unchanged limits. Worst output PCC/NL2
+was 0.99997812/0.00661932 with BF16 cache and 0.99997757/0.00669892 with BF8 cache.
+Repository hooks passed without changing the tested files.
+
+**Watcher limitation and replacement evidence.** Watcher008 failed during fabric setup because
+the ACTIVE_ETH program exceeded its reserved region. Documented NOINLINE resolved that size limit;
+Watcher009 passed the decoder calculation with no reported Watcher violation, then failed restoring
+one Ethernet core's base-firmware heartbeat during shutdown. Neither run is a Watcher-clean result.
+The user-requested single Galaxy reset, all-32-chip inventory, normal 4x8 fabric open/close, and
+unchanged normal decoder smoke010 all passed. Its clean close was at 14:42:45 UTC.
+These logs document the environment-failure exception allowed by the decoder skill. Watcher remains
+an optional diagnostic. Numerical, cache-preservation, resource-reuse and normal clean-close gates
+remain mandatory.
 
 **Independent reference and expected behavior.** A standalone Hugging Face/PyTorch Llama decoder
 layer, fed identical rounded inputs and weights, supplies hidden-state and cache references.
@@ -244,19 +255,55 @@ for finiteness before aggregation. These limits are fixed before decoder impleme
 
 ### 7. Complete 32-layer prefill
 
-**Input/setup.** Add the model composition and `tests/unit/test_prefill_model_vs_ref.py`
-(**planned**). Run real weights through all 32 layers on the SP4/TP8 Galaxy for representative
-prompt lengths, boundaries, continuation starts, and two distinct slots.
+**Input/setup.** The direct-call model includes incremental raw checkpoint loading, host token
+packing, device embedding, all 32 checkpoint layers, final RMSNorm and the vocabulary-sharded head.
+The numerical forward stays on the device. Inputs and KV cache are caller-owned. Its diagnostic
+layer callback means enqueue only; it must not publish KV migration readiness.
 
-**Independent reference and expected behavior.** The independent Hugging Face/PyTorch model and
-CPU-generated per-layer K/V provide hidden-state and cache references. Expected behavior includes
-correct layer ordering, final normalization/output contract, and valid K/V for every layer and head.
+Validation proceeds from exact embedding and terminal modules, through a one-layer wrapper and
+resource tests, to short two-slot prompts and full 2,048-token requests. The canonical 2K suite
+requires three cases for each cache dtype: boundary/restart coverage, baseline all-layer native-input
+accuracy, and an independently registered held-out prompt. Boundary endpoints include 1,033 and
+1,537, plus the aligned overlapping restart at 1,536. The target cache is BFP8_B; BF16 is a diagnostic
+comparison.
 
-**Bugs caught and pass criteria.** This exposes errors that self-consistent component tests miss:
-weight-to-layer mapping, accumulated precision drift, address aliasing, cross-layer contamination,
-and slot contamination. Verify every layer/head/slot and every participating chip, both numerically
-and with magnitude-sensitive errors. Record measured runtime after correctness; do not convert an
-unvalidated performance aspiration into a pass condition.
+**Independent reference and expected behavior.** Two complementary comparisons are required.
+The raw-FP32 reference follows the full prompt through all 32 layers and supplies final logits and
+token predictions. A separate local reference gives each checkpoint layer the exact native input
+captured at its boundary, then compares hidden output and every K/V head. It never injects data
+into the native forward. Every complete 2K tensor and every 256-token SP stripe are checked, with
+all TP replicas verified. Each dtype/prompt case produces 9,792 local comparison rows.
+
+**Bugs caught and pass criteria.** Exact embedding, checkpoint identity, layer order, two-slot
+isolation, untouched cache regions, padding, finite outputs and baseline/captured/replay equality
+remain hard checks. These supplement correlation and magnitude-sensitive errors, so a high PCC
+cannot conceal scaling or a wrong tensor coordinate. Sampled teacher-forced agreement is not
+free-generation validation or evidence that the migration transport works.
+
+**Numerical contract.** Local hidden output requires PCC >= 0.999 and NL2 <= 0.025 for BF16 cache,
+or NL2 <= 0.05 for BFP8_B cache. Local K/V requires PCC >= 0.9999 and NL2 <= 0.01 for BF16, or
+PCC >= 0.999 and NL2 <= 0.02 for BFP8_B. Raw layer-0 checks remain hard. Final raw-global logits
+require PCC >= 0.99, NL2 <= 0.15, top-1 agreement >= 90% and top-5 inclusion >= 99%.
+
+Later raw-global hidden/KV comparisons, including final hidden, retain their original limits and
+every miss as characterization. This corrects the comparison boundary rather than widening
+constants: independent stock-HF BF16 controls also exceeded old accumulated intermediate limits,
+while all-layer native-input diagnostics passed the existing decoder limits. The known BFP8_B
+raw-final-hidden stripe miss remains recorded. See
+[the accuracy contract](tests/full_model/NATIVE_INPUT_ACCURACY.md) for controls, limitations and
+test commands. All six canonical cases passed, with 39,168 local rows and no local misses.
+Independent review returned clean-pass. See [the 2K validation and timing report](docs/validation-2k.md)
+and its per-layer CSV. This accepts the direct 2K model milestone only.
+
+### 7A. Long-context correctness and performance before migration
+
+The user added 4K, 8K, 16K, 32K and 64K full-prefill milestones, then extended required coverage to 128K.
+Follow [LONG_CONTEXT_PLAN.md](LONG_CONTEXT_PLAN.md) for exact lengths, required geometry changes,
+golden-reference memory bounds, 2K per-layer/head K/V PCC reporting and the benchmark contract.
+The direct 2K model milestone is accepted under the documented numerical contract. Validate each
+longer length before publishing its performance as an accepted-model result.
+Commit a table for 2K/4K/8K/16K/32K/64K/128K with synchronized wall time, tokens/second/user and per-chunk timings.
+Keep the complete per-chunk data and reproducible commands. Runtime readiness and migration stages remain after these milestones.
 
 ### 8. Shared runtime, continuation, tail, and two-slot regressions
 
@@ -295,7 +342,7 @@ verify every layer, head, config, and slot, then run actual migrated decode and 
 with the source-golden/reference decode. Two distinct slot traces are mandatory. Mock, loopback,
 cross-endpoint, and serving gates run in increasing scope; no required hardware skip counts as pass.
 
-## Recorded evidence at this snapshot (16 September 2026)
+## Recorded evidence at this snapshot (17 September 2026)
 
 - The native build matching source `904cc323141` was available, and all six scaffold tests passed.
 - Host RoPE: 11 tests were approved at commit `4bac36b20e5`.
@@ -333,11 +380,20 @@ cross-endpoint, and serving gates run in increasing scope; no required hardware 
   checks passed for both cache dtypes. Devices closed cleanly at 13:19:12.853 UTC. This supplies final
   Task 6 acceptance evidence. Original periodic-hash failures remain characterization evidence, and
   the exact internal cause is unresolved.
-- Task 7 isolated preparation completed, and root copied the exact three files into the canonical
-  tree. Host oracle parity reached maximum absolute difference `1.1920928955078125e-07`; this is not
-  device accuracy. The launch contract is open. Device validation is starting with `residual001`,
-  `smoke002`, `full003`, then `Watcher004`; no decoder device result exists yet.
-- Decoder-layer, full-model, runtime, migration, Blaze-handoff, and serving gates have not run.
+- Task 7 is accepted and published as `b18a97636720e8b94c3185f65b1ea3085b6da8ee`.
+  Full007 passed 8/8; user-requested reset, normal mesh recovery and unchanged normal smoke010
+  passed with clean closes. Optional Watcher setup/teardown failures remain documented separately.
+- Full-model CPU host tests passed 34/34 and raw checkpoint identity passed 32/32. Embedding,
+  final norm/head, one-layer wrappers, resource tests and short 32-layer prompts passed on Galaxy.
+- The accurate full-tile SDPA exponential-mode fix is published as 734a6c29463b. The old 2K
+  accumulated-reference failure remained after that fix; its archived result is not rewritten.
+- Both cache dtypes passed all 9,792 local same-input hidden/KV comparisons in the 2K diagnostic.
+  Stock-HF BF16 controls also failed some old raw intermediate limits while preserving sampled
+  predictions. The canonical split above now has 14 passing CPU contract/mutation tests.
+- Canonical 2K boundary, baseline and held-out validation passed all six cases on the assigned
+  b07u08 and b09u02 Galaxies. Both suites had actual/verified exit 0, three JUnit cases, unchanged
+  pins and clean teardown. All 39,168 local rows passed; independent review returned clean-pass.
+- Common-runner integration, longer contexts, migration, Blaze handoff and serving remain pending.
 
 The evidence filenames are stored outside Git under
 `/data/divanovic/llama31-8b-disagg/evidence`. References to those logs do not imply that the logs are
