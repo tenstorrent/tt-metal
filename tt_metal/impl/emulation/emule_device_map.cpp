@@ -26,8 +26,6 @@ namespace tt::tt_metal::emule {
 
 void populate_bank_mapping(
     tt::umd::SWEmuleChip* sw_emu,
-    IDevice* device,
-    ChipId device_id,
     const tt_emule::SocView& soc,
     tt_emule::Core*& dram_core_out,
     uint32_t& num_dram_channels_out,
@@ -77,49 +75,6 @@ void populate_bank_mapping(
         uint16_t noc_xy = static_cast<uint16_t>(soc.l1_banks[b].noc_xy);
         l1_tbl[0 * num_l1_banks_out + b] = noc_xy;  // NOC 0
         l1_tbl[1 * num_l1_banks_out + b] = noc_xy;  // NOC 1 (same target in emule)
-    }
-
-    // ── Stage-2b diff-guard: prove the SocView values == the direct metal_SocDescriptor/allocator
-    //    reads this function used to do. Runs every dispatch (a few reads + compares); a mismatch
-    //    means the marshaller (build_soc_view) drifted and must be fixed, not silently tolerated.
-    {
-        auto& metal_soc = MetalContext::instance().get_cluster().get_soc_desc(device_id);
-        const uint32_t ref_ndram = static_cast<uint32_t>(metal_soc.get_num_dram_views());
-        TT_FATAL(
-            ref_ndram == num_dram_channels_out,
-            "emule 2b diff-guard: SocView num_dram_views ({}) != direct ({})",
-            num_dram_channels_out,
-            ref_ndram);
-        for (uint32_t ch = 0; ch < ref_ndram && ch < MAX_NUM_BANKS; ch++) {
-            auto dc0 = metal_soc.get_preferred_worker_core_for_dram_view(ch, 0);
-            auto dc1 = metal_soc.get_preferred_worker_core_for_dram_view(ch, 1);
-            uint16_t ref0 = (static_cast<uint16_t>(dc0.y) << NOC_NODE_ID_BITS) | static_cast<uint16_t>(dc0.x);
-            uint16_t ref1 = (static_cast<uint16_t>(dc1.y) << NOC_NODE_ID_BITS) | static_cast<uint16_t>(dc1.x);
-            int32_t refoff = static_cast<int32_t>(metal_soc.get_address_offset(ch));
-            TT_FATAL(
-                dram_tbl[0 * num_dram_channels_out + ch] == ref0 && dram_tbl[1 * num_dram_channels_out + ch] == ref1 &&
-                    bank_to_dram_offset[ch] == refoff,
-                "emule 2b diff-guard: SocView DRAM bank {} mismatch vs direct metal_SocDescriptor read",
-                ch);
-        }
-        if (device) {
-            const auto& allocator = device->allocator();
-            const uint32_t ref_nl1 = allocator->get_num_banks(BufferType::L1);
-            TT_FATAL(
-                ref_nl1 == num_l1_banks_out,
-                "emule 2b diff-guard: SocView num_l1_banks ({}) != direct ({})",
-                num_l1_banks_out,
-                ref_nl1);
-            for (uint32_t b = 0; b < ref_nl1 && b < MAX_NUM_BANKS; ++b) {
-                auto logical = allocator->get_logical_core_from_bank_id(b);
-                auto virt = device->virtual_core_from_logical_core(logical, CoreType::WORKER);
-                uint16_t ref = (static_cast<uint16_t>(virt.y) << NOC_NODE_ID_BITS) | static_cast<uint16_t>(virt.x);
-                TT_FATAL(
-                    l1_tbl[0 * num_l1_banks_out + b] == ref && l1_tbl[1 * num_l1_banks_out + b] == ref,
-                    "emule 2b diff-guard: SocView L1 bank {} mismatch vs direct allocator read",
-                    b);
-            }
-        }
     }
 }
 
@@ -254,24 +209,6 @@ std::unordered_map<uint64_t, tt_emule::Core*>* build_core_map(
                     auto* core = sw_emu->get_dram_channel_backing(static_cast<uint32_t>(lg.x));
                     uint64_t key = (uint64_t(dcx) << 32) | dcy;
                     (*core_map)[key] = core;
-                }
-            }
-            // Stage-2b diff-guard: the SocView preferred coords == the direct metal_SocDescriptor reads.
-            auto& msoc = MetalContext::instance().get_cluster().get_soc_desc(device_id);
-            TT_FATAL(
-                soc.dram_views.size() == msoc.get_num_dram_views(),
-                "emule 2b diff-guard: SocView num_dram_views ({}) != direct ({})",
-                soc.dram_views.size(),
-                msoc.get_num_dram_views());
-            for (uint32_t view = 0; view < soc.dram_views.size() && view < MAX_NUM_BANKS; view++) {
-                for (uint32_t noc = 0; noc < NUM_NOCS; noc++) {
-                    auto dc = msoc.get_preferred_worker_core_for_dram_view(view, noc);
-                    uint32_t ref = (static_cast<uint32_t>(dc.y) << NOC_NODE_ID_BITS) | static_cast<uint32_t>(dc.x);
-                    TT_FATAL(
-                        soc.dram_views[view].noc_xy[noc] == ref,
-                        "emule 2b diff-guard: SocView DRAM view {} noc {} coord mismatch vs direct",
-                        view,
-                        noc);
                 }
             }
         }

@@ -46,8 +46,6 @@ namespace tt::tt_metal::emule {
 // metal_SocDescriptor/allocator reads this used to do.
 void populate_bank_mapping(
     tt::umd::SWEmuleChip* sw_emu,
-    IDevice* device,
-    ChipId device_id,
     const tt_emule::SocView& soc,
     tt_emule::Core*& dram_core_out,
     uint32_t& num_dram_channels_out,

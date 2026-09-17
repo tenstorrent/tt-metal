@@ -610,7 +610,7 @@ static std::shared_ptr<ResolvedProgram> prepare_program(IDevice* device, Program
     uint32_t num_dram_channels = 0;
     uint32_t num_l1_banks = 0;
     const auto emule_soc = tt_emule::build_soc_view(device);
-    populate_bank_mapping(sw_emu, device, device_id, emule_soc, dram_core, num_dram_channels, num_l1_banks);
+    populate_bank_mapping(sw_emu, emule_soc, dram_core, num_dram_channels, num_l1_banks);
     const auto emule_desc = tt_emule::build_emule_descriptor(program, device);
 
     std::string worker_col_map_str, worker_row_map_str;
@@ -701,7 +701,6 @@ static std::shared_ptr<ResolvedProgram> prepare_program(IDevice* device, Program
 static void dispatch_to_device(
     IDevice* device, Program& program, const std::shared_ptr<ResolvedProgram>& resolved_owner, bool defer_run) {
     ResolvedProgram& resolved = *resolved_owner;
-    auto& impl = program.impl();
     auto device_id = device->id();
     auto* sw_emu = get_sw_emulated_chip(device_id);
 
@@ -710,12 +709,12 @@ static void dispatch_to_device(
     uint32_t num_l1_banks = 0;
     const auto emule_soc = tt_emule::build_soc_view(device);
     const auto emule_desc = tt_emule::build_emule_descriptor(program, device);
-    populate_bank_mapping(sw_emu, device, device_id, emule_soc, dram_core, num_dram_channels, num_l1_banks);
+    populate_bank_mapping(sw_emu, emule_soc, dram_core, num_dram_channels, num_l1_banks);
 
     auto* core_map_ptr = build_core_map(sw_emu, device, device_id, emule_soc);
     std::vector<CoreSetup> core_setups;
     setup_core_state(
-        impl, device, sw_emu, resolved.core_kernels, resolved.emule_sem_base, emule_soc, emule_desc, core_setups);
+        device, sw_emu, resolved.core_kernels, resolved.emule_sem_base, emule_soc, emule_desc, core_setups);
 
     uint8_t* dram_data = dram_core ? dram_core->l1_data() : nullptr;
 
