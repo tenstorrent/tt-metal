@@ -8,6 +8,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "metal/common/program_utils.hpp"
+#include "metal/ops/common/swiglu_packed_common.hpp"
 
 namespace {
 
@@ -79,24 +80,14 @@ SwigluPackedFwProgramFactory::cached_program_t SwigluPackedFwProgramFactory::cre
     const tt::DataFormat data_format = datatype_to_dataformat_converter(packed.dtype());
     const uint32_t tile_size_bytes = tt::tile_size(data_format);
 
-    const auto padded_shape = packed.padded_shape();
-    TT_FATAL(padded_shape.rank() == 4U, "Input tensor must be 4D");
-    // Wt = per-branch width in tiles; the packed tensor is 2*Wt wide.
-    const uint32_t Wt = padded_shape[-1] / tt::constants::TILE_WIDTH / 2U;
-    const uint32_t Ht = padded_shape[-2] / tt::constants::TILE_HEIGHT;
-    const uint32_t NC = padded_shape[0] * padded_shape[1];
-    const uint32_t total_rows = NC * Ht;
-
+    const auto geometry = swiglu_packed::block_geometry(packed.padded_shape());
+    const uint32_t Wt = geometry.Wt;
+    const uint32_t block_size = geometry.block_size;
     const auto grid_size = device->compute_with_storage_grid_size();
     const uint32_t num_cores_y = grid_size.y;
-    // Largest block <=4 dividing Wt (=4 for real MLP widths, where I/32 is a multiple of 8).
-    const uint32_t block_size = get_block_size(Wt, 4U);
-
-    const uint32_t blocks_per_row = Wt / block_size;
-    const uint32_t total_blocks = total_rows * blocks_per_row;
 
     const auto [num_cores, all_cores, core_group_1, core_group_2, num_blocks_g1, num_blocks_g2] =
-        tt::tt_metal::split_work_to_cores(grid_size, total_blocks);
+        tt::tt_metal::split_work_to_cores(grid_size, geometry.total_blocks);
 
     const uint32_t twice_block = 2U * block_size;
     create_circular_buffer(program, all_cores, kGateCbIndex, data_format, tile_size_bytes, twice_block);

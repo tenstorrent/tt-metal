@@ -2,7 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// SwiGLU elemwise backward on two separate [.,I] tensors (linear1 = silu'd branch, gate = plain).
+// SwiGLU elemwise backward on two separate [.,I] tensors: linear1 is the gate branch (silu'd) and,
+// by this op's legacy naming, `gate` is the up branch.
 // Per-block math shared with swiglu_packed_bw via swiglu_gate_bw_compute.hpp.
 
 #include "api/compute/common.h"
@@ -14,7 +15,7 @@ constexpr uint32_t block_size = get_compile_time_arg_val(1);
 constexpr uint32_t Wt = get_compile_time_arg_val(2);
 
 constexpr uint32_t cb_linear1 = tt::CBIndex::c_0;  // gate branch (silu'd)
-constexpr uint32_t cb_gate = tt::CBIndex::c_1;     // plain branch
+constexpr uint32_t cb_gate = tt::CBIndex::c_1;     // up branch
 constexpr uint32_t cb_dL_dprod = tt::CBIndex::c_2;
 constexpr uint32_t cb_dL_dlinear1 = tt::CBIndex::c_3;
 constexpr uint32_t cb_dL_dgate = tt::CBIndex::c_4;
@@ -32,7 +33,7 @@ void kernel_main() {
             cb_wait_front(cb_gate, block_size);
             cb_wait_front(cb_dL_dprod, block_size);
 
-            // linear1 is the silu'd (gate) branch; cb_gate here is the plain branch.
+            // linear1 is the silu'd (gate) branch; cb_gate here is the up branch.
             swiglu_gate_bw_block<
                 cb_linear1,
                 cb_gate,

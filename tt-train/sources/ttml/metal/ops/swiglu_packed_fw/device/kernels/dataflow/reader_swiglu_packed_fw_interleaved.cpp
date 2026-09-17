@@ -4,6 +4,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "tt-train/sources/ttml/metal/common/dataflow_utils.hpp"
+#include "tt-train/sources/ttml/metal/common/swiglu_packed_layout.hpp"
 
 constexpr uint32_t cb_gate_idx = tt::CBIndex::c_0;
 constexpr uint32_t cb_up_idx = tt::CBIndex::c_1;
@@ -21,13 +22,9 @@ void kernel_main() {
     constexpr auto packed_args = TensorAccessorArgs<2>();
     const auto packed_gen = TensorAccessor(packed_args, packed_addr);
 
-    // Packed row = 2*Wt tiles: gate [0, Wt), up [Wt, 2*Wt).
-    constexpr uint32_t packed_row_tiles = 2U * Wt;
-    constexpr uint32_t blocks_per_row = Wt / block_size;
-
     const uint32_t end_block = start_block + num_blocks_to_process;
     for (uint32_t b = start_block; b < end_block; ++b) {
-        const uint32_t gate_start = (b / blocks_per_row) * packed_row_tiles + (b % blocks_per_row) * block_size;
+        const uint32_t gate_start = swiglu_packed_gate_tile(b, Wt, block_size);
 
         read_tiles_by_row<false>(cb_gate_idx, packed_gen, gate_start, block_size, tile_bytes, block_size);
         read_tiles_by_row<false>(cb_up_idx, packed_gen, gate_start + Wt, block_size, tile_bytes, block_size);
