@@ -28,7 +28,7 @@
 //
 // Compile-time args:
 //   0: cb_input         (activation tiles; broadcast to all cores)
-//   1: input_page_size  (bytes per tile of input_tensor)
+//   1: input_page_size  (bytes per compute tile of input_tensor)
 //   2: input_num_pages  (Kt == H / 32)
 //   3: sem_input_id     (input-ready semaphore)
 //   4: sem_id           (expert-ids-ready / sequencing semaphore)
@@ -53,7 +53,13 @@
 //   23: experts_block (experts per block; the activation block held in L1 at once)
 //   24: gate_up_reserve_tiles (pages a gate_up slice reserves in cb_weights)
 //   25: down_reserve_tiles    (pages a down slice reserves in cb_weights)
-//   26+: TensorAccessorArgs(input_tensor), TensorAccessorArgs(gate_up), TensorAccessorArgs(down)
+//   26-29: routing-scalar tile geometry
+//   30-35: cores_per_expert / shards / expert groups / reduce
+//   36: src_tiles_per_page (compute tiles packed into one TensorAccessor page;
+//       TILE == 1, ROW_MAJOR stick/shard may hold several 1x32 faces)
+//   37: split_col    (first act tile of each expert that hub1 owns; == i_tiles when there is one hub)
+//   38: num_hubs     (1, or 2 for the two-hub gather/broadcast)
+//   39+: TensorAccessorArgs(input_tensor), TensorAccessorArgs(gate_up), TensorAccessorArgs(down)
 //   then: gate_up base addresses (one per expert), then down base addresses (one per expert)
 //
 // Runtime args:
@@ -62,7 +68,8 @@
 //   3: mcast_end_x     4: mcast_end_y
 //   5: num_dests       (number of receiver cores = total cores - 1)
 //   6: core_index      (this core's flat grid index, x*8 + y)
-//   7: leader_noc_x    8: leader_noc_y (core {0,0}, for the per-block slot-free ack)
+//   7: hub0_noc_x    8: hub0_noc_y   (the two gather/broadcast hubs of this core's group, as the
+//   9: hub1_noc_x   10: hub1_noc_y    ascending corners of its multicast rectangle)
 void kernel_main() {
     constexpr uint32_t cb_input_id = get_compile_time_arg_val(0);
     constexpr uint32_t input_page_size = get_compile_time_arg_val(1);
@@ -101,8 +108,11 @@ void kernel_main() {
     constexpr uint32_t num_expert_groups = get_compile_time_arg_val(33);
     constexpr uint32_t sem_reduce_id = get_compile_time_arg_val(34);
     constexpr uint32_t cb_reduce_id = get_compile_time_arg_val(35);
+    constexpr uint32_t src_tiles_per_page = get_compile_time_arg_val(36);
+    constexpr uint32_t split_col = get_compile_time_arg_val(37);
+    constexpr uint32_t num_hubs = get_compile_time_arg_val(38);
 
-    constexpr auto input_args = TensorAccessorArgs<36>();
+    constexpr auto input_args = TensorAccessorArgs<39>();
     constexpr auto gate_up_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     constexpr auto down_args = TensorAccessorArgs<gate_up_args.next_compile_time_args_offset()>();
     // The gate_up then down weight base addresses (one per expert) follow the accessor args
@@ -117,8 +127,14 @@ void kernel_main() {
     const uint32_t mcast_end_y = get_arg_val<uint32_t>(4);
     const uint32_t num_dests = get_arg_val<uint32_t>(5);
     const uint32_t core_index = get_arg_val<uint32_t>(6);
-    const uint32_t leader_noc_x = get_arg_val<uint32_t>(7);
-    const uint32_t leader_noc_y = get_arg_val<uint32_t>(8);
+    const uint32_t hub0_noc_x = get_arg_val<uint32_t>(7);
+    const uint32_t hub0_noc_y = get_arg_val<uint32_t>(8);
+    const uint32_t hub1_noc_x = get_arg_val<uint32_t>(9);
+    const uint32_t hub1_noc_y = get_arg_val<uint32_t>(10);
+
+    // This core broadcasts the activation row and is a plain receiver of the block gather: it owns
+    // an I slice (so it scatters and never acks), but it never multicasts the activations.
+    const ActGatherConfig gather{/*role=*/0u, hub0_noc_x, hub0_noc_y, hub1_noc_x, hub1_noc_y, split_col, num_hubs};
 
     // Use NoC 1 ("the other NoC") so this runs in parallel with the {0,0} sender on NoC 0.
     Noc noc(1);
@@ -130,7 +146,14 @@ void kernel_main() {
     cb_input.reserve_back(input_num_pages);
     const uint32_t input_l1 = cb_input.get_write_ptr();
     for (uint32_t p = 0; p < input_num_pages; ++p) {
-        noc.async_read(input, cb_input, input_page_size, {.page_id = p}, {.offset_bytes = p * input_page_size});
+        const uint32_t src_page = p / src_tiles_per_page;
+        const uint32_t src_off = (p % src_tiles_per_page) * input_page_size;
+        noc.async_read(
+            input,
+            cb_input,
+            input_page_size,
+            {.page_id = src_page, .offset_bytes = src_off},
+            {.offset_bytes = p * input_page_size});
     }
     noc.async_read_barrier();
 
@@ -193,8 +216,6 @@ void kernel_main() {
         experts_block,
         gate_up_reserve_tiles,
         down_reserve_tiles,
-        leader_noc_x,
-        leader_noc_y,
         rscalar_tile_h,
         rscalar_face_r_dim,
         rscalar_num_face_rows,
@@ -203,7 +224,7 @@ void kernel_main() {
         shards_per_core,
         i_shards_per_core,
         num_expert_groups,
-        /*is_group_leader=*/false,
+        gather,
         sem_reduce_id,
         cb_reduce_id);
 }

@@ -81,10 +81,12 @@ def test_moe_pcc_tp(mesh_device, reset_seeds, tmp_path, batch_size: int, seq_len
     experts = DeepSeekV4PreloadedExperts(cfg, _provider, submesh, dtype=weight_dtype, tp_size=TP_SIZE)
     moe = DeepSeekV4SparseMoeBlock(cfg, state_dict, submesh, experts=experts, tp_size=TP_SIZE)
 
-    hidden_tt = _to_tt_replicated(bundle["hidden"].unsqueeze(2), submesh)
-    tracy.signpost("moe.forward.start")
-    out_tt = moe.forward(hidden_tt)
-    tracy.signpost("moe.forward.end")
+    # One token row per user: the block's token-batched decode path is its only entry
+    # point (the model prefill drives the same path one token at a time).
+    hidden_tt = _to_tt_replicated(bundle["hidden"].unsqueeze(2), submesh).reshape([batch_size * seq_len, 1, 1, -1])
+    tracy.signpost("moe.decode_static.start")
+    out_tt = moe.decode_static(hidden_tt)
+    tracy.signpost("moe.decode_static.end")
     # All-reduce replicates the full residual; read one chip's copy.
     out_torch = ttnn.to_torch(out_tt, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
     out_torch = out_torch[0].reshape(bundle["output"].shape).to(torch.float32)
