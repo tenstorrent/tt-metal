@@ -17,7 +17,10 @@ from ....pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large 
     StableDiffusion3Pipeline,
     StableDiffusion3PipelineConfig,
 )
-from ....utils.test import line_params_req_exact_devices
+from ....utils.test import line_params, line_params_req_exact_devices
+
+# Galaxy submesh runs: SD35_SUBMESH=1 lifts the exact-physical-device-count requirement.
+_line_params = line_params if os.environ.get("SD35_SUBMESH") else line_params_req_exact_devices
 
 
 @pytest.mark.parametrize(
@@ -27,7 +30,7 @@ from ....utils.test import line_params_req_exact_devices
 @pytest.mark.parametrize(
     "model_name, image_w, image_h, guidance_scale, num_inference_steps",
     [
-        ("large", 1024, 1024, 3.5, 28),
+        ("large", 1024, 1024, 3.5, int(os.environ.get("SD35_STEPS", "28"))),  # SD35_STEPS overrides
     ],
 )
 @pytest.mark.parametrize(
@@ -48,7 +51,7 @@ from ....utils.test import line_params_req_exact_devices
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{**line_params_req_exact_devices, "l1_small_size": 32768, "trace_region_size": 50000000}],
+    [{**_line_params, "l1_small_size": 32768, "trace_region_size": 50000000}],
     ids=["line"],
     indirect=True,
 )
@@ -179,7 +182,7 @@ def test_sd35_pipeline(
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{**line_params_req_exact_devices, "l1_small_size": 32768, "trace_region_size": 50000000}],
+    [{**_line_params, "l1_small_size": 32768, "trace_region_size": 50000000}],
     ids=["line"],
     indirect=True,
 )

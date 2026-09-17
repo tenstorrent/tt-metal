@@ -26,7 +26,7 @@ from models.tt_dit.pipelines.events import PipelineEventCallback, SectionEnd, Se
 from models.tt_dit.pipelines.pipeline_api import PipelineAPIMixin
 from models.tt_dit.pipelines.stable_diffusion_35_large.text_encoder import TextEncoder
 from models.tt_dit.solvers import EulerSolver
-from models.tt_dit.utils.mesh import reshape_device
+from models.tt_dit.utils.mesh import reshape_device, settle_reshape_labeling
 from models.tt_dit.utils.tensor import from_torch_to_devices
 from models.tt_dit.utils.tracing import Tracer
 
@@ -177,13 +177,21 @@ class StableDiffusion3Pipeline(PipelineAPIMixin):
             assert encoder_shape[0] * encoder_shape[1] == 4, f"Cannot reshape {encoder_shape} to a 1x4 mesh"
             self.encoder_mesh_shape = ttnn.MeshShape(1, 4)
         else:
-            vae_submesh_idx = 1
+            # With cfg-parallel there are two submeshes and the VAE takes the second; on a single
+            # (native 1x4) submesh it shares submesh 0 with the encoder.
+            vae_submesh_idx = 1 if len(self.submesh_devices) > 1 else 0
             self.encoder_mesh_shape = ttnn.MeshShape(*encoder_shape)
         vae_device = self.submesh_devices[vae_submesh_idx]
 
         self.encoder_device = encoder_device
         self.vae_device = vae_device
         self.vae_submesh_idx = vae_submesh_idx
+
+        # The encoder/VAE reshape relabels the mesh and the return trip may not restore the original
+        # labeling (it transposes the 2x2 on a Blackhole Galaxy submesh). Settle the labeling at its
+        # fixed point now, before any weights are placed, so the DiT and the encoder each keep seeing
+        # the labeling they were loaded under.
+        settle_reshape_labeling(encoder_device, self.encoder_mesh_shape)
 
         logger.info("creating TT-NN transformer...")
         checkpoint_name = config.checkpoint_name
