@@ -643,3 +643,37 @@ def test_scatter_1d_tile_layout_negative_dim(device, shape, index_shape, dtype):
 
     assert result.shape == torch_result.shape
     assert_allclose(result, torch_result)
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [
+        (0,),  # zero-volume, rank 1
+        (2, 3, 0),  # zero last dim, rank > 1 - previously SIGFPE'd (issue #56881)
+        (2, 0, 3),  # zero interior dim, non-zero last dim - already worked before the fix
+    ],
+)
+@pytest.mark.parametrize("dim", [-1])
+def test_scatter_zero_volume_last_dim(device, shape, dim):
+    """
+    Regression test for issue #56881: a zero last dimension made
+    `input_tensor.logical_volume() / input_shape[-1]` divide 0 by 0 in the program
+    factory's work-split computation, crashing the host process with SIGFPE instead
+    of raising a catchable error. The op should return the (empty) input unchanged.
+    """
+    torch.manual_seed(0)
+    torch_dtype = torch.bfloat16
+
+    torch_input = torch.randn(shape, dtype=torch_dtype)
+    torch_index = torch.randint(0, max(shape[dim], 1), shape, dtype=torch.int64)
+    torch_src = torch.randn(shape, dtype=torch_dtype)
+
+    ttnn_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    ttnn_index = ttnn.from_torch(torch_index, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    ttnn_src = ttnn.from_torch(torch_src, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    # This must not SIGFPE and must return a tensor with the same (empty) shape as the input.
+    ttnn_result = ttnn.scatter(ttnn_input, dim, ttnn_index, ttnn_src)
+    result = ttnn.to_torch(ttnn_result)
+
+    assert result.shape == torch_input.shape

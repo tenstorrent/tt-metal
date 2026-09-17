@@ -294,7 +294,11 @@ Tensor scatter(
     validate_inputs(input_tensor, index_tensor, source_tensor, normalized_dim, opt_reduction_string);
 
     const auto& original_index_tensor_lshape = index_tensor.logical_shape();
-    if (original_input_tensor_lshape == ttnn::Shape{} || original_index_tensor_lshape == ttnn::Shape{}) {
+    if (original_input_tensor_lshape == ttnn::Shape{} || original_index_tensor_lshape == ttnn::Shape{} ||
+        input_tensor.logical_volume() == 0) {
+        // A zero-volume input (e.g. a zero last dimension) has no elements to scatter into; return it unchanged
+        // rather than reaching the program factories, which divide by input_shape[-1] to compute their work split
+        // and would otherwise SIGFPE on a zero last dim (see issue #56881).
         return input_tensor;
     }
     const auto original_layout = input_tensor.layout();
