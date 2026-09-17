@@ -36,18 +36,30 @@ plausible and gates nothing:
   *floor* rather than as the answer: it stops one lane from setting the budget when the
   distribution is tight, and the measured maximum wins when the distribution has a tail.
   Both numbers are printed so the choice is auditable.
-* **A budget past the format's ``2**mantissa_bits`` is emitted as a tolerance contract.**
-  Past that point the two values differ by more than an order of magnitude and ULP has
-  stopped being the right metric. This is where an approximate-mode transcendental in
+* **A budget past the point where it stops being tighter than the tolerance it replaces
+  is emitted as a tolerance contract.** That bound is :func:`usable_budget_ceiling`, which
+  is ``min(rtol * 2**mantissa_bits, MAX_MEANINGFUL_ULP)`` -- the ``rtol`` term, roughly
+  20x tighter than ``2**mantissa_bits`` alone: 419,430 rather than 8,388,608 for fp32, and
+  6 rather than 128 for bf16. This is where an approximate-mode transcendental in
   bfloat16 belongs, and it is the guard against "the sweep said 15616, so the budget is
   15616".
-* **Fast mode is collapsed by taking the maximum**, because ``BudgetKey`` has no fast-mode
-  dimension. Collapsing by anything but the max would emit a budget the gate cannot meet.
+* **Fast mode is measured per mode and combined by taking the maximum**, because
+  ``BudgetKey`` has no fast-mode dimension. Pooling the rows instead would let one mode's
+  percentile pull the other's budget down, and would emit a key covering a mode a partial
+  sweep never measured. Combining by anything but the max would emit a budget the gate
+  cannot meet.
 
 Keys are then collapsed where the measurements agree — over dest accumulation, then
-approximation mode, then output format — so an op whose budget does not vary prints one
-line instead of twelve. Where they disagree the dimension stays in the key, which is the
-signal that it mattered.
+approximation mode — so an op whose budget does not vary across those prints one line
+instead of four. Where they disagree the dimension stays in the key, which is the signal
+that it mattered.
+
+**Neither format dimension is ever collapsed away**, even where every cell agrees. A key
+without the input format would extend a budget to input paths this sweep never measured
+(the functional suite runs ``Bfp8_b`` inputs and this does not), and a key without the
+output format would match the unmeasured ``Float16`` and ``Bfp8_b`` outputs of a default
+fp32+bf16 run. The enrolment model rests on absent formats falling back to tolerance on
+their own, and step counts in two formats are not commensurable anyway.
 """
 
 from __future__ import annotations
@@ -63,7 +75,12 @@ from typing import Dict, List, Optional, Sequence, Tuple
 import pandas as pd
 import torch
 from helpers.format_config import DataFormat
-from helpers.llk_params import ApproximationMode, DestAccumulation, MathOperation
+from helpers.llk_params import (
+    ApproximationMode,
+    DestAccumulation,
+    FastMode,
+    MathOperation,
+)
 from helpers.ulp import (
     MANTISSA_BITS_FOR_ULP,
     MAX_MEANINGFUL_ULP,
@@ -85,6 +102,10 @@ FORMAT_BY_ABBR: Dict[str, DataFormat] = {
     "fp16": DataFormat.Float16,
     "bf16": DataFormat.Float16_b,
 }
+
+#: The reverse of :data:`FORMAT_BY_ABBR`, so the marker lookup and the comment that
+#: reports its reason cannot disagree about how a format is spelled.
+_ABBR_BY_FORMAT: Dict[DataFormat, str] = {v: k for k, v in FORMAT_BY_ABBR.items()}
 
 #: The order keys are printed in, and the order dimensions are collapsed in.
 FORMAT_ORDER = (DataFormat.Float32, DataFormat.Float16_b, DataFormat.Float16)
@@ -128,30 +149,79 @@ MIN_MEASURED_BUDGET = 1
 #: exists to replace. The honest state is "not enrolled, and here is why". Enrolling them
 #: needs the sweep's domain coverage extended toward each singularity first; then these
 #: entries come out on their own.
-_NOT_PREDICTED_BY_SWEEP = {
-    (
-        "Log",
-        "fp32",
-        "fp32",
-    ): "functional draw reaches 65536 steps where the ramp sees 1",
-    (
-        "Log",
-        "bf16",
-        "fp32",
-    ): "functional draw reaches 65536 steps where the ramp sees 1",
-    ("Log", "fp16", "fp32"): "functional draw reaches 57344 steps, ramp-derived 40960",
-    ("Log1p", "fp16", "fp32"): "near-zero tail: functional reaches 938,672,129 steps",
-    ("Log1p", "fp16", "bf16"): "near-zero tail: functional reaches 14324 steps",
-    (
-        "Atanh",
-        "fp16",
-        "fp32",
-    ): "functional draw reaches 57344 steps, ramp-derived 51200",
-    ("Gelu", "fp32", "fp32"): "near-zero tail: functional reaches 19,474,047 steps",
+#:
+#: **Each marker is scoped to the variants it was measured on.** The key is
+#: ``(op, in_abbr, out_abbr, dest_acc)``, with ``dest_acc=None`` meaning "both", because
+#: the functional divergence is a property of a variant and not of the format pair: Gelu
+#: fp32->fp32 diverges at ``dest_acc=Yes`` and Log fp32->fp32 at ``dest_acc=No``. An
+#: unscoped marker forced every approximation and destination variant of the pair onto
+#: tolerance -- 8192 points merged into one wildcard contract for Gelu -- and that threw
+#: away the cells the sweep does predict. Every ``dest_acc``-scoped entry below was
+#: re-measured against the functional suite on WH; the unscoped ones diverge on both.
+_NOT_PREDICTED_BY_SWEEP: Dict[Tuple[str, str, str, Optional[DestAccumulation]], str] = {
+    ("Log", "fp32", "fp32", DestAccumulation.No): (
+        "functional draw reaches 65536 steps where the ramp sees 1"
+    ),
+    ("Log", "bf16", "fp32", DestAccumulation.No): (
+        "functional draw reaches 65536 steps where the ramp sees 1"
+    ),
+    ("Log", "fp16", "fp32", None): (
+        "functional draw reaches 57344 steps, ramp-derived 40960"
+    ),
+    ("Log1p", "fp16", "fp32", DestAccumulation.Yes): (
+        "near-zero tail: functional reaches 938,672,129 steps"
+    ),
+    ("Log1p", "fp16", "bf16", None): ("near-zero tail: functional reaches 14324 steps"),
+    ("Atanh", "fp16", "fp32", None): (
+        "functional draw reaches 57344 steps, ramp-derived 51200"
+    ),
+    ("Gelu", "fp32", "fp32", DestAccumulation.Yes): (
+        "near-zero tail: functional reaches 19,474,047 steps"
+    ),
+    # Same near-zero tail as the fp32-output key above, one format down, and the margin
+    # is the point: the ramp's worst absolute error in the band is 5.66e-7, the functional
+    # draw's is 7.49e-7, so it needs 1.32x where the emitter applies 1.25x. Raising
+    # --headroom to cover it would loosen every budget in the table to fix one cell, which
+    # is the hand-tuning this script exists to replace.
+    ("Gelu", "fp32", "bf16", DestAccumulation.Yes): (
+        "near-zero tail: functional abs error 7.49e-07 exceeds the ramp-derived 7.08e-07 "
+        "floor, 148 steps against a 2-step budget"
+    ),
 }
+
+
+def not_predicted_reason(cell: "CellMeasurement") -> Optional[str]:
+    """Why *cell* is left on the tolerance metric, or ``None`` if it is predicted.
+
+    One lookup for both callers: :func:`_collapse`'s ``budget_of``, which decides, and
+    :meth:`EmittedKey.comment`, which reports the reason. They were written out twice,
+    so widening what a marker encodes -- as the ``dest_acc`` scoping above does -- would
+    otherwise have let the gating decision drift from the reported reason.
+    """
+    in_abbr = _ABBR_BY_FORMAT.get(cell.input_format)
+    out_abbr = _ABBR_BY_FORMAT.get(cell.output_format)
+    if in_abbr is None or out_abbr is None:
+        return None
+    for scope in (cell.dest_acc, None):
+        reason = _NOT_PREDICTED_BY_SWEEP.get((cell.op.name, in_abbr, out_abbr, scope))
+        if reason is not None:
+            return reason
+    return None
+
+
+#: The only architecture whose sweep can be turned into an active contract, because
+#: ``EmittedKey`` has no arch dimension and ``accuracy_contract()`` downgrades every other
+#: architecture to the tolerance metric. Matches ``sfpu_accuracy_budget.MEASURED_ARCH``.
+EMITTABLE_ARCH = "wh"
 
 DEFAULT_HEADROOM = 1.25
 DEFAULT_PERCENTILE = 99.9
+
+#: The ops the sweep runs in both fast modes. Mirrors
+#: ``accuracy/test_sfpu_accuracy.SUPPORTED_FAST_MODE_OPS``, kept here rather than imported
+#: so this script can read a file produced by an older revision of the harness -- the same
+#: reason ``FORMAT_BY_ABBR`` is local.
+FAST_MODE_CAPABLE_OPS = (MathOperation.Rsqrt, MathOperation.Sqrt)
 
 
 @dataclass(frozen=True)
@@ -163,6 +233,9 @@ class CellMeasurement:
     output_format: DataFormat
     approx_mode: ApproximationMode
     dest_acc: DestAccumulation
+    #: Which fast modes this measurement covers. More than one means the statistics are
+    #: the conservative combination across them; see :func:`_combine_fast_modes`.
+    fast_modes: Tuple[FastMode, ...]
     points: int
     max_ulp: int
     percentile_ulp: float
@@ -174,10 +247,60 @@ class CellMeasurement:
     near_zero_max_abs_err: float
     all_max_ulp: int
     all_percentile_ulp: float
+    all_exact_fraction: float
+    #: The per-fast-mode measurements this cell combines, when it combines more than one.
+    #: Kept so :meth:`resolve` can combine the *resolved contracts* rather than the raw
+    #: statistics -- see :func:`_combine_fast_modes`.
+    components: Tuple["CellMeasurement", ...] = ()
 
     @property
     def gateable(self) -> bool:
-        return self.nonfinite_disagreements == 0
+        """Whether a budget can be emitted for this cell at all.
+
+        Three ways it cannot, and :attr:`ungateable_reason` says which:
+
+        * A **non-finite disagreement** fails the gate at *every* budget, so printing a
+          number for it would be printing a lie.
+        * **No measurable lane** -- every point NaN on one side or both -- supplies no
+          finite evidence: the maxima come back 0, ``_budget`` floors them to
+          ``MIN_MEASURED_BUDGET`` and the result reads as a measured 1-step contract. The
+          ``max(..., 1)`` in :attr:`measurable_points` masks that state rather than
+          rejecting it.
+        * **Only one fast mode measured**, for an op that runs in both. ``BudgetKey`` has
+          no fast-mode dimension, so the key would gate the unmeasured mode too.
+        """
+        if self.nonfinite_disagreements or self.unmeasurable >= self.points:
+            return False
+        if self.op in FAST_MODE_CAPABLE_OPS and len(self.fast_modes) < 2:
+            # BudgetKey has no fast-mode dimension, so a key derived from one mode would
+            # gate the other on a number measured for neither. A partial sweep is a
+            # reason to re-run it, not to emit half a measurement.
+            return False
+        return True
+
+    @property
+    def ungateable_reason(self) -> Optional[str]:
+        """Why no budget was emitted, for the skipped-cell report."""
+        if self.nonfinite_disagreements:
+            return (
+                f"{self.nonfinite_disagreements} non-finite disagreement(s) in "
+                f"{self.points} pts -- no budget can pass this cell; fix the op or the "
+                "sweep's domain first"
+            )
+        if self.unmeasurable >= self.points:
+            return (
+                f"all {self.points} pts unmeasurable (NaN on one side or both) -- no "
+                "finite lane was measured, so there is no measurement to derive a budget "
+                "from; extend the sweep's domain first"
+            )
+        if self.op in FAST_MODE_CAPABLE_OPS and len(self.fast_modes) < 2:
+            measured = ", ".join(m.name for m in self.fast_modes) or "none"
+            return (
+                f"{self.op.name} runs in both fast modes but the sweep measured only "
+                f"{measured}; BudgetKey has no fast-mode dimension, so a key from one "
+                "mode would gate the other on an unmeasured number -- re-run the sweep"
+            )
+        return None
 
     @property
     def measurable_points(self) -> int:
@@ -200,7 +323,32 @@ class CellMeasurement:
         """
         if not self.gateable:
             return None, None
+        if not self.components:
+            return self._resolve_measurement(headroom)
 
+        # One key covers every fast mode, because BudgetKey has no fast-mode dimension,
+        # so the resolution has to hold for each. Combining the resolved pairs rather
+        # than the pooled statistics is what keeps that true: a percentile over pooled
+        # rows reaches further into the worse mode's tail than that mode's own percentile
+        # does, so the two disagree in both directions, and a ceiling refusal for one
+        # mode has to take the whole key to tolerance rather than being averaged away.
+        #
+        # `_resolve_measurement`, not `resolve`: a component carries one mode, so
+        # `gateable`'s completeness clause would reject every one of them. Completeness
+        # is a property of this cell, and it was checked above.
+        resolved = [c._resolve_measurement(headroom) for c in self.components]
+        if any(budget is None for budget, _ in resolved):
+            return None, None
+        floors = [floor for _, floor in resolved if floor is not None]
+        return (
+            max(budget for budget, _ in resolved),
+            max(floors) if floors else None,
+        )
+
+    def _resolve_measurement(
+        self, headroom: float
+    ) -> Tuple[Optional[int], Optional[float]]:
+        """One measurement's ``(budget, floor)``, without the gateability checks."""
         floor = self._floor(headroom)
         if floor is None:
             budget = self._budget(self.all_max_ulp, self.all_percentile_ulp, headroom)
@@ -256,7 +404,13 @@ class CellMeasurement:
             # minority of tiny residuals; this is the guard for everything else.
             return None
         floor = self.near_zero_max_abs_err * headroom
-        return float(f"{floor:.3g}") if floor > 0 else None
+        if floor <= 0:
+            return None
+        # `.3g` rounds to nearest, so it can land under the value it was derived from --
+        # and the gate rescues a lane only when `absolute_error <= near_zero_atol`, so a
+        # floor rounded down rejects the very lane it was measured from. The same
+        # "never below the measurement" refusal `_budget` makes with max() and ceil().
+        return max(float(f"{floor:.3g}"), self.near_zero_max_abs_err)
 
 
 def usable_budget_ceiling(output_format: DataFormat) -> float:
@@ -303,6 +457,25 @@ def agreement_bits(max_ulp: int, output_format: DataFormat) -> float:
     return bits - math.log2(max_ulp)
 
 
+def _max_and_percentile(
+    values: torch.Tensor, percentile: float
+) -> Tuple[int, float, float]:
+    """``(max, percentile, exact_fraction)`` over *values*, or zeros for an empty tensor.
+
+    One shape for the two step-count blocks in :func:`measure_cell`, which differed only
+    in whether they kept the exact fraction. The near-zero block stays separate: it
+    measures an absolute error, not a step count.
+    """
+    if values.numel() == 0:
+        return 0, 0.0, float("nan")
+    as_float = values.to(torch.float64)
+    return (
+        int(values.max()),
+        float(torch.quantile(as_float, percentile / 100.0)),
+        float((values == 0).sum()) / values.numel(),
+    )
+
+
 def _to_enum_flag(value: object, enum_cls):
     """The harness writes these as ``"0"``/``"1"``; accept the enum or a bool too."""
     if isinstance(value, enum_cls):
@@ -326,17 +499,35 @@ def load_sweep(source: Path, arch: str, ops: Optional[Sequence[str]] = None):
         )
 
     wanted = {name.lower() for name in ops} if ops else None
-    paths: List[Path] = []
+    by_suffix: Dict[str, List[Path]] = {}
     for suffix in (".parquet", ".csv"):
-        paths = [
+        found = [
             p
             for p in sorted(arch_dir.glob(f"*{suffix}"))
             if wanted is None or p.stem.lower() in wanted
         ]
-        if paths:
-            break
-    if not paths:
+        if found:
+            by_suffix[suffix] = found
+    if not by_suffix:
         raise SystemExit(f"no sweep files matching {ops or 'anything'} in {arch_dir}")
+    if len(by_suffix) > 1:
+        # Refused rather than resolved by preference. merge_shards() rewrites only the
+        # ops from the current run and leaves older per-op files in place, so after a
+        # format change or a partial run one stale .parquet made every fresh .csv
+        # invisible -- and the emitted budgets would carry today's stamp over another
+        # run's measurement. There is no run-level manifest to tell them apart, so the
+        # author has to say which set they mean.
+        listing = "; ".join(
+            f"{suffix}: {', '.join(p.name for p in files)}"
+            for suffix, files in sorted(by_suffix.items())
+        )
+        raise SystemExit(
+            f"{arch_dir} holds both parquet and csv sweep output ({listing}). "
+            "merge_shards() leaves older per-op files in place, so these may come from "
+            "different runs and there is no provenance to tell them apart. Delete the "
+            "stale set, or pass --op to name exactly the ops you mean."
+        )
+    paths = next(iter(by_suffix.values()))
 
     frames = [
         pd.read_parquet(p) if p.suffix == ".parquet" else pd.read_csv(p) for p in paths
@@ -351,8 +542,10 @@ def measure_cell(
     output_format: DataFormat,
     approx_mode: ApproximationMode,
     dest_acc: DestAccumulation,
+    fast_mode: FastMode,
     percentile: float,
     near_zero_fraction: float,
+    headroom: float = DEFAULT_HEADROOM,
 ) -> CellMeasurement:
     """Recompute the gate's integer step count over one cell's rows."""
     dtype = ulp_dtype(output_format)
@@ -368,43 +561,52 @@ def measure_cell(
     measurable = distance >= 0
     unmeasurable = int((~measurable).sum())
 
-    # Split the lanes the way the gate does: below a fraction of the tensor's own dynamic
-    # range, ulp(golden) has collapsed and a step count stops describing the kernel.
+    # Split the lanes the way the gate splits them. The gate bounds "near zero" two ways
+    # (helpers.ulp.ulp_elementwise_valid): below a fraction of the tensor's own dynamic
+    # range, *and* below `near_zero_atol / near_zero_fraction` in absolute terms. Modelling
+    # only the relative half is what let this script derive an atol from a lane the gate
+    # then refused to rescue -- measured: hardsigmoid fp32->fp32 dest_acc=Yes emitted
+    # max_ulp=10 with near_zero_atol=9.31e-09 from a lane at |golden|=7.7e-4, whose 7.45e-9
+    # error is inside that atol but whose magnitude is 800x the absolute cut, so the gate
+    # charged it 128 steps against a 10-step budget.
+    #
+    # The absolute bound depends on the atol, which is derived from the lanes the bound
+    # selects, so it is solved by iteration rather than in one pass. The set only ever
+    # shrinks -- dropping lanes can only lower the max error, which lowers the atol, which
+    # lowers the cut -- so this terminates, and the iteration cap is belt and braces.
+    absolute_error = (hardware.to(torch.float64) - golden.to(torch.float64)).abs()
     finite_golden = golden[torch.isfinite(golden)]
     dynamic_range = float(finite_golden.abs().max()) if finite_golden.numel() else 0.0
     if dynamic_range > 0:
-        near_zero = golden.abs() < near_zero_fraction * dynamic_range
+        within_relative = golden.abs() < near_zero_fraction * dynamic_range
     else:
-        near_zero = torch.ones_like(measurable)
+        within_relative = torch.ones_like(measurable)
+
+    near_zero = within_relative
+    for _ in range(64):
+        selected = measurable & near_zero
+        if not bool(selected.any()):
+            break
+        atol = float(absolute_error[selected].max()) * headroom
+        if atol <= 0:
+            break
+        narrowed = within_relative & (golden.abs() <= atol / near_zero_fraction)
+        if bool(torch.equal(narrowed, near_zero)):
+            break
+        near_zero = narrowed
 
     bulk = measurable & ~near_zero
     edge = measurable & near_zero
 
-    values = distance[bulk]
-    if values.numel() == 0:
-        max_ulp, pct, exact = 0, 0.0, float("nan")
-    else:
-        as_float = values.to(torch.float64)
-        max_ulp = int(values.max())
-        pct = float(torch.quantile(as_float, percentile / 100.0))
-        exact = float((values == 0).sum()) / values.numel()
-
-    all_values = distance[measurable]
-    if all_values.numel() == 0:
-        all_max, all_pct = 0, 0.0
-    else:
-        all_max = int(all_values.max())
-        all_pct = float(
-            torch.quantile(all_values.to(torch.float64), percentile / 100.0)
-        )
+    max_ulp, pct, exact = _max_and_percentile(distance[bulk], percentile)
+    all_max, all_pct, all_exact = _max_and_percentile(distance[measurable], percentile)
 
     edge_values = distance[edge]
     if edge_values.numel() == 0:
         near_zero_max_ulp, near_zero_abs = 0, 0.0
     else:
         near_zero_max_ulp = int(edge_values.max())
-        error = (hardware.to(torch.float64) - golden.to(torch.float64)).abs()
-        near_zero_abs = float(error[edge].max())
+        near_zero_abs = float(absolute_error[edge].max())
 
     return CellMeasurement(
         op=op,
@@ -412,6 +614,7 @@ def measure_cell(
         output_format=output_format,
         approx_mode=approx_mode,
         dest_acc=dest_acc,
+        fast_modes=(fast_mode,),
         points=int(len(rows)),
         max_ulp=max_ulp,
         percentile_ulp=pct,
@@ -423,6 +626,59 @@ def measure_cell(
         near_zero_max_abs_err=near_zero_abs,
         all_max_ulp=all_max,
         all_percentile_ulp=all_pct,
+        all_exact_fraction=all_exact,
+    )
+
+
+def _combine_fast_modes(cells: Sequence[CellMeasurement]) -> CellMeasurement:
+    """One measurement covering every fast mode, combined so no mode is understated.
+
+    ``BudgetKey`` has no fast-mode dimension, so the emitted key covers both and the
+    budget has to hold for both. Maxima combine by ``max`` -- which pooling the rows also
+    gets right -- but a **percentile over pooled rows is not the max of the per-mode
+    percentiles**: the pooled quantile reaches further into the worse mode's tail than
+    that mode's own quantile does, so the two disagree in both directions, and a ceiling
+    refusal for one mode would be averaged away rather than taking the whole key to
+    tolerance.
+
+    So each mode is measured on its own, the statistics here are the worst of each for
+    the comment, and ``components`` carries the per-mode measurements so
+    :meth:`CellMeasurement.resolve` can combine the *resolved contracts*.
+    """
+    if len(cells) == 1:
+        return cells[0]
+    first = cells[0]
+    # The statistics below are for the comment; `components` is what resolve() uses.
+    finite_exact = [
+        c.exact_fraction for c in cells if c.exact_fraction == c.exact_fraction
+    ]
+    finite_all_exact = [
+        c.all_exact_fraction
+        for c in cells
+        if c.all_exact_fraction == c.all_exact_fraction
+    ]
+    return CellMeasurement(
+        op=first.op,
+        input_format=first.input_format,
+        output_format=first.output_format,
+        approx_mode=first.approx_mode,
+        dest_acc=first.dest_acc,
+        fast_modes=tuple(
+            sorted((m for c in cells for m in c.fast_modes), key=lambda m: m.name)
+        ),
+        points=sum(c.points for c in cells),
+        max_ulp=max(c.max_ulp for c in cells),
+        percentile_ulp=max(c.percentile_ulp for c in cells),
+        exact_fraction=min(finite_exact, default=float("nan")),
+        nonfinite_disagreements=sum(c.nonfinite_disagreements for c in cells),
+        unmeasurable=sum(c.unmeasurable for c in cells),
+        near_zero_points=sum(c.near_zero_points for c in cells),
+        near_zero_max_ulp=max(c.near_zero_max_ulp for c in cells),
+        near_zero_max_abs_err=max(c.near_zero_max_abs_err for c in cells),
+        all_max_ulp=max(c.all_max_ulp for c in cells),
+        all_percentile_ulp=max(c.all_percentile_ulp for c in cells),
+        all_exact_fraction=min(finite_all_exact, default=float("nan")),
+        components=tuple(cells),
     )
 
 
@@ -431,8 +687,16 @@ def measure_all(
     formats: Optional[Sequence[DataFormat]],
     percentile: float,
     near_zero_fraction: float,
+    headroom: float = DEFAULT_HEADROOM,
 ) -> Tuple[List[CellMeasurement], List[str]]:
-    """One measurement per (op, format, approx, dest), fast mode collapsed by max."""
+    """One measurement per (op, format, approx, dest), fast mode measured per mode.
+
+    *headroom* is needed here and not only at render: the gate's near-zero band is bounded
+    by ``near_zero_atol / near_zero_fraction``, and the atol is ``headroom`` times the
+    measured error, so the lane split depends on it.
+    :meth:`CellMeasurement.resolve` must be called with the same value, which is what
+    :func:`main` does.
+    """
     ops_by_name = {op.name.lower(): op for op in MathOperation}
     measurements: List[CellMeasurement] = []
     notes: List[str] = []
@@ -460,19 +724,32 @@ def measure_all(
                     continue
                 for approx_raw, per_approx in per_in.groupby("approx_mode", sort=False):
                     approx_mode = _to_enum_flag(approx_raw, ApproximationMode)
-                    for dest_raw, cell in per_approx.groupby("dest_acc", sort=False):
-                        measurements.append(
+                    for dest_raw, per_dest in per_approx.groupby(
+                        "dest_acc", sort=False
+                    ):
+                        dest_acc = _to_enum_flag(dest_raw, DestAccumulation)
+                        # One measurement per fast mode, combined by the worst of each.
+                        # Pooling the rows would dilute the slower mode's percentile.
+                        per_mode = [
                             measure_cell(
-                                cell,
+                                rows,
                                 op,
                                 input_format,
                                 output_format,
                                 approx_mode,
-                                _to_enum_flag(dest_raw, DestAccumulation),
+                                dest_acc,
+                                _to_enum_flag(fast_raw, FastMode),
                                 percentile,
                                 near_zero_fraction,
+                                headroom,
                             )
-                        )
+                            for fast_raw, rows in per_dest.groupby(
+                                "fast_mode", sort=True
+                            )
+                        ]
+                        if not per_mode:
+                            continue
+                        measurements.append(_combine_fast_modes(per_mode))
     return measurements, notes
 
 
@@ -510,37 +787,44 @@ class EmittedKey:
             f"near_zero_atol={self.near_zero_atol!r})"
         )
 
-    def comment(self, arch: str, stamp: str) -> str:
+    def comment(self, arch: str, stamp: str, percentile: float) -> str:
         points = sum(c.points for c in self.cells)
         floored = self.near_zero_atol is not None
         worst = max((c.max_ulp if floored else c.all_max_ulp) for c in self.cells)
         pct = max(
             (c.percentile_ulp if floored else c.all_percentile_ulp) for c in self.cells
         )
+        # From the same lane set as max and percentile. Reporting the bulk fraction
+        # beside an all-lane maximum produced contradictions like Exp2's "max N ULP,
+        # 100% exact".
         exact = min(
             (
-                c.exact_fraction
-                for c in self.cells
-                if c.exact_fraction == c.exact_fraction
+                value
+                for value in (
+                    (c.exact_fraction if floored else c.all_exact_fraction)
+                    for c in self.cells
+                )
+                if value == value
             ),
             default=float("nan"),
         )
         exact_text = "n/a" if exact != exact else f"{100.0 * exact:.0f}%"
-        note = ""
+
+        # Accumulated, not reassigned. The near-zero clause used to overwrite the
+        # "measured 0, floored to 1" one, and the two are not exclusive: whenever a floor
+        # is emitted `worst` is the bulk max, so a cell whose bulk lanes are all exact
+        # gives worst == 0 and budget == MIN_MEASURED_BUDGET at the same time. That left
+        # `max_ulp=1` under a "max 0 ULP, 100% exact" comment with no explanation --
+        # which is the reading MIN_MEASURED_BUDGET's note was added to fix.
+        notes: List[str] = []
         if self.budget is None:
-            abbr = {v: k for k, v in FORMAT_BY_ABBR.items()}
             # Every cell the key covers, not cells[0] -- that is whichever group came
             # first out of a sort=False groupby, so a key spanning two output formats
             # printed one reason and silently dropped the other. Shipped once as a merged
             # Log1p key reporting 14324 steps while hiding 938,672,129.
-            reasons = []
+            reasons: List[str] = []
             for cell in self.cells:
-                marker = (
-                    cell.op.name,
-                    abbr.get(cell.input_format),
-                    abbr.get(cell.output_format),
-                )
-                reason = _NOT_PREDICTED_BY_SWEEP.get(marker)
+                reason = not_predicted_reason(cell)
                 if reason is not None and reason not in reasons:
                     reasons.append(reason)
             if reasons:
@@ -554,25 +838,33 @@ class EmittedKey:
                 (c.output_format for c in self.cells),
                 key=lambda f: MAX_MEANINGFUL_ULP[ulp_dtype(f)],
             )
-            note = (
-                f"; past the {usable_budget_ceiling(worst_format):.0f}-step point where a "
+            notes.append(
+                f"past the {usable_budget_ceiling(worst_format):.0f}-step point where a "
                 "budget stops being tighter than the tolerance it replaces, so tolerance"
             )
         if self.budget == MIN_MEASURED_BUDGET and worst == 0:
-            note = (
-                "; measured 0, floored to "
-                f"{MIN_MEASURED_BUDGET} (a finite sample cannot assert exactness)"
+            notes.append(
+                f"measured 0, floored to {MIN_MEASURED_BUDGET} (a finite sample cannot "
+                "assert exactness)"
             )
         if self.near_zero_atol is not None:
             edge_points = sum(c.near_zero_points for c in self.cells)
             edge_worst = max(c.near_zero_max_ulp for c in self.cells)
-            note = (
-                f"; {edge_points} near-zero pts reach {edge_worst} steps and are held by "
+            notes.append(
+                f"{edge_points} near-zero pts reach {edge_worst} steps and are held by "
                 "the atol floor instead"
             )
+        note = "".join(f"; {text}" for text in notes)
+        # The widest format the key covers, deliberately, like the ceiling note above.
+        # cells[0] is whichever group came first out of a sort=False groupby, so a key
+        # spanning fp32 and bf16 printed either ~23 or ~7 bits purely by row order.
+        widest = max(
+            (c.output_format for c in self.cells),
+            key=lambda f: MAX_MEANINGFUL_ULP[ulp_dtype(f)],
+        )
         return (
-            f"#   {arch}: max {worst} ULP, p99.9 {pct:.1f}, {exact_text} exact, "
-            f"~{agreement_bits(worst, self.cells[0].output_format):.0f} mantissa bits, "
+            f"#   {arch}: max {worst} ULP, p{percentile:g} {pct:.1f}, {exact_text} "
+            f"exact, ~{agreement_bits(worst, widest):.0f} mantissa bits, "
             f"{points} pts, {stamp}{note}"
         )
 
@@ -593,16 +885,9 @@ def _collapse(
     script exists to avoid printing.
     """
 
-    abbr = {v: k for k, v in FORMAT_BY_ABBR.items()}
-
     def budget_of(cell: CellMeasurement) -> Tuple[Optional[int], Optional[float]]:
         """The (budget, floor) pair for one cell, or (None, None) for tolerance."""
-        marker = (
-            cell.op.name,
-            abbr.get(cell.input_format),
-            abbr.get(cell.output_format),
-        )
-        if marker in _NOT_PREDICTED_BY_SWEEP:
+        if not_predicted_reason(cell) is not None:
             return None, None
         return cell.resolve(headroom)
 
@@ -668,25 +953,13 @@ def _collapse(
                 for approx, budget, group, dest in entries
             ]
 
-    # Collapse output_format only when every format agrees on a single key.
-    # Only collapse the output format away when each format resolved to exactly one key
-    # *and* that key still has no approx_mode/dest_acc pin of its own. Checking only the
-    # count drops a pin the approximation stage deliberately kept, and the result would
-    # gate approx=Yes and the unswept output formats on a number measured for neither --
-    # the same argument that stops input_format being collapsed.
-    single = all(
-        len(keys) == 1 and keys[0].approx_mode is None and keys[0].dest_acc is None
-        for keys in per_format.values()
-    )
-    if single and len(per_format) > 1:
-        budgets = {
-            fmt: (keys[0].budget, keys[0].near_zero_atol)
-            for fmt, keys in per_format.items()
-        }
-        if len(set(budgets.values())) == 1:
-            merged = tuple(c for keys in per_format.values() for c in keys[0].cells)
-            budget, floor = next(iter(budgets.values()))
-            return [EmittedKey(input_format, None, None, None, budget, floor, merged)]
+    # The **output** format is never collapsed away, for the same reason as the input
+    # format. A default run measures fp32 and bf16 only, so a key that dropped
+    # output_format because those two happened to agree would also match the unmeasured
+    # Float16 and Bfp8_b outputs -- and the whole enrolment model rests on absent formats
+    # falling back to tolerance on their own. Collapsing it also left comment() picking an
+    # arbitrary format to report the agreement bits against, since step counts are not
+    # commensurable between fp32 and bf16.
 
     ordered: List[EmittedKey] = []
     for fmt in FORMAT_ORDER:
@@ -702,6 +975,7 @@ def render(
     arch: str,
     headroom: float,
     stamp: str,
+    percentile: float = DEFAULT_PERCENTILE,
 ) -> str:
     by_op: Dict[MathOperation, Dict[DataFormat, List[CellMeasurement]]] = {}
     for cell in measurements:
@@ -715,7 +989,7 @@ def render(
             if input_format not in per_input:
                 continue
             for key in _collapse(per_input[input_format], headroom, input_format):
-                lines.append(f"    {key.comment(arch, stamp)}")
+                lines.append(f"    {key.comment(arch, stamp, percentile)}")
                 lines.append(f"        {key.key_source()}: {key.contract_source()},")
         lines.append("    },")
     return "\n".join(lines)
@@ -730,9 +1004,7 @@ def render_skipped(measurements: Sequence[CellMeasurement]) -> List[str]:
         out.append(
             f"#   {cell.op.name} {cell.input_format.name}->{cell.output_format.name} "
             f"approx={cell.approx_mode.name} dest_acc={cell.dest_acc.name}: "
-            f"{cell.nonfinite_disagreements} non-finite disagreement(s) in "
-            f"{cell.points} pts -- no budget can pass this cell; fix the op or the "
-            "sweep's domain first"
+            f"{cell.ungateable_reason}"
         )
     return out
 
@@ -741,7 +1013,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = argparse.ArgumentParser(
         description="Print sfpu_accuracy_budget entries derived from the accuracy sweep.",
     )
-    parser.add_argument("--arch", default="wh", help="arch subdirectory (wh/bh/qsr)")
+    parser.add_argument(
+        "--arch",
+        default="wh",
+        help="arch subdirectory to read (only 'wh' can be emitted; see below)",
+    )
     parser.add_argument(
         "--source",
         type=Path,
@@ -786,6 +1062,27 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     )
     args = parser.parse_args(argv)
 
+    if args.arch.strip().lower() != EMITTABLE_ARCH:
+        # EmittedKey has no arch dimension and accuracy_contract() downgrades every
+        # architecture but MEASURED_ARCH to the tolerance metric before it resolves a
+        # key, so text emitted from another arch's sweep cannot become an active
+        # contract: it would be plausible, measured and silently ignored. Emitting
+        # arch-qualified keys needs BudgetKey(arch=...) on the ULP entries, which ties
+        # specificity with the per-format keys and makes validate_registry() raise, and
+        # resolution support for more than one measured architecture. Until that exists
+        # this refuses rather than prints.
+        raise SystemExit(
+            f"--arch {args.arch!r} cannot be emitted. The registry has no arch dimension "
+            f"on its ULP keys and resolves every architecture but {EMITTABLE_ARCH!r} to "
+            "the tolerance metric, so these budgets would be inert. Re-run with --arch "
+            f"{EMITTABLE_ARCH}, or add multi-arch resolution first."
+        )
+
+    if args.near_zero_fraction <= 0 or args.near_zero_fraction >= 1:
+        raise SystemExit(
+            f"--near-zero-fraction must be in (0, 1); got {args.near_zero_fraction}"
+        )
+
     if args.formats.strip().lower() == "all":
         formats: Optional[List[DataFormat]] = None
     else:
@@ -801,7 +1098,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     df, files = load_sweep(args.source, args.arch, args.ops)
     measurements, notes = measure_all(
-        df, formats, args.percentile, args.near_zero_fraction
+        df, formats, args.percentile, args.near_zero_fraction, args.headroom
     )
     if not measurements:
         raise SystemExit("no measurable cells; check --op and --formats")
@@ -812,8 +1109,19 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     print(f"# Emitted by accuracy/emit_budget.py from {len(files)} sweep file(s)")
     print(
         f"# arch={args.arch} rows={len(df)} cells={len(measurements)} "
-        f"headroom={args.headroom} percentile=p{args.percentile}"
+        f"headroom={args.headroom} percentile=p{args.percentile:g} "
+        f"near_zero_fraction={args.near_zero_fraction:g}"
     )
+    if args.near_zero_fraction != NEAR_ZERO_FRACTION:
+        # The gate always applies NEAR_ZERO_FRACTION, so a different value here splits
+        # the lanes differently from the verdict it is deriving: the emitted max_ulp
+        # omits lanes the gate still charges against it. Stamped above and called out
+        # here, since AccuracyContract has nowhere to carry it.
+        print(
+            f"# WARNING: the gate splits near-zero lanes at {NEAR_ZERO_FRACTION:g}, not "
+            f"{args.near_zero_fraction:g}. Every max_ulp below omits lanes the gate will "
+            "still charge against it. Re-run at the default before pasting."
+        )
     print("# Paste into _SFPU_ACCURACY_BUDGET; every number below is measured.")
     for note in notes:
         print(f"# note: {note}")
@@ -824,7 +1132,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         for line in skipped:
             print(line)
     print()
-    print(render(gateable, args.arch, args.headroom, stamp))
+    print(render(gateable, args.arch, args.headroom, stamp, args.percentile))
     return 0
 
 

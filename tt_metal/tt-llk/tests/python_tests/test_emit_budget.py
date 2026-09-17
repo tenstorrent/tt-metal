@@ -20,8 +20,11 @@ import pytest
 import torch
 from accuracy.emit_budget import (
     DEFAULT_HEADROOM,
+    DEFAULT_PERCENTILE,
+    MANTISSA_BITS,
     NEAR_ZERO_MAX_SHARE,
     CellMeasurement,
+    EmittedKey,
     _collapse,
     _to_enum_flag,
     agreement_bits,
@@ -31,12 +34,17 @@ from accuracy.emit_budget import (
     render_skipped,
 )
 from helpers.format_config import DataFormat
-from helpers.llk_params import ApproximationMode, DestAccumulation, MathOperation
+from helpers.llk_params import (
+    ApproximationMode,
+    DestAccumulation,
+    FastMode,
+    MathOperation,
+)
 from helpers.sfpu_accuracy_budget import (
     DEFAULT,
-    Metric,
     AccuracyContract,
     BudgetKey,
+    Metric,
 )
 from helpers.ulp import MAX_MEANINGFUL_ULP, ulp_dtype
 
@@ -53,6 +61,9 @@ def _cell(**kwargs) -> CellMeasurement:
         output_format=DataFormat.Float16_b,
         approx_mode=ApproximationMode.No,
         dest_acc=DestAccumulation.No,
+        # Both modes by default: Tanh is not fast-mode capable, but a test that swaps in
+        # Rsqrt/Sqrt needs both present or the cell is ungateable by design.
+        fast_modes=(FastMode.No, FastMode.Yes),
         points=1000,
         max_ulp=1,
         percentile_ulp=1.0,
@@ -64,12 +75,15 @@ def _cell(**kwargs) -> CellMeasurement:
         near_zero_max_abs_err=0.0,
         all_max_ulp=None,
         all_percentile_ulp=None,
+        all_exact_fraction=None,
     )
     defaults.update(kwargs)
     if defaults["all_max_ulp"] is None:
         defaults["all_max_ulp"] = defaults["max_ulp"]
     if defaults["all_percentile_ulp"] is None:
         defaults["all_percentile_ulp"] = defaults["percentile_ulp"]
+    if defaults["all_exact_fraction"] is None:
+        defaults["all_exact_fraction"] = defaults["exact_fraction"]
     return CellMeasurement(**defaults)
 
 
@@ -232,6 +246,7 @@ def _measure(
         fmt,
         ApproximationMode.No,
         DestAccumulation.No,
+        FastMode.No,
         percentile,
         fraction,
     )
@@ -316,14 +331,24 @@ def test_dest_acc_stays_in_the_key_when_the_settings_disagree():
     assert all(k.dest_acc is not None for k in keys)
 
 
-def test_every_dimension_but_the_input_format_collapses_when_all_agree():
-    """The input format is never collapsed away, even here where everything agrees.
+def test_neither_format_dimension_collapses_even_when_every_cell_agrees():
+    """Both format dimensions stay pinned, for the same reason, and it is not symmetry.
 
-    A key without it would extend the budget to input paths the sweep never measured --
-    the functional suite runs ``Bfp8_b`` inputs and the accuracy sweep does not -- and a
-    much coarser path silently inheriting a budget is the exact failure this dimension was
-    added to stop: 36 of 44 functional failures under the first cut of the table were
-    ``Bfp8_b``-input variants.
+    A key without the **input** format would extend the budget to input paths the sweep
+    never measured -- the functional suite runs ``Bfp8_b`` inputs and the accuracy sweep
+    does not -- and a much coarser path silently inheriting a budget is the exact failure
+    this dimension was added to stop: 36 of 44 functional failures under the first cut of
+    the table were ``Bfp8_b``-input variants.
+
+    A key without the **output** format has the same hole in the other direction. A
+    default run measures fp32 and bf16 only, so collapsing on those two agreeing would
+    produce a wildcard matching the unmeasured Float16 and Bfp8_b outputs, and the whole
+    enrolment model rests on absent formats falling back to tolerance on their own. It
+    also left the agreement-bits figure in the comment picking whichever output format
+    came first out of a ``sort=False`` groupby, so a merged fp32+bf16 key printed either
+    ~23 or ~7 mantissa bits by row order.
+
+    approx_mode and dest_acc do still collapse: they are measured on every run.
     """
     cells = [
         _cell(
@@ -338,11 +363,20 @@ def test_every_dimension_but_the_input_format_collapses_when_all_agree():
         for dest in DestAccumulation
     ]
     keys = _collapse(cells, DEFAULT_HEADROOM, DataFormat.Float32)
-    assert len(keys) == 1
-    source = keys[0].key_source()
-    assert source == "BudgetKey(input_format=DataFormat.Float32)"
-    for collapsed in ("output_format", "approx_mode", "dest_acc"):
-        assert collapsed not in source
+    # One key per output format, not one key overall.
+    assert len(keys) == 2
+    sources = [k.key_source() for k in keys]
+    assert sources == [
+        "BudgetKey(input_format=DataFormat.Float32, output_format=DataFormat.Float32)",
+        "BudgetKey(input_format=DataFormat.Float32, "
+        "output_format=DataFormat.Float16_b)",
+    ]
+    for source in sources:
+        for collapsed in ("approx_mode", "dest_acc"):
+            assert collapsed not in source
+    # And each key reports its own format's bits, not an arbitrary one.
+    for key in keys:
+        assert len({c.output_format for c in key.cells}) == 1
 
 
 def test_a_budget_past_the_ceiling_is_emitted_as_a_tolerance_contract():
@@ -700,3 +734,382 @@ def test_the_usable_ceiling_is_the_rtol_half_not_the_whole_mantissa():
     for fmt in (DataFormat.Float32, DataFormat.Float16, DataFormat.Float16_b):
         assert usable_budget_ceiling(fmt) < MAX_MEANINGFUL_ULP[ulp_dtype(fmt)]
     assert usable_budget_ceiling(DataFormat.Float16_b) == pytest.approx(6.4)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Refusals: a cell with no evidence, and a sweep that measured half a dimension
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_a_cell_with_no_measurable_lane_gets_no_budget():
+    """A cell of matching NaNs has no non-finite *disagreement*, so it used to read as
+    gateable: both maxima came back 0, ``_budget`` floored them to
+    ``MIN_MEASURED_BUDGET``, and the table claimed a measured 1-step contract over a cell
+    that supplied no finite evidence at all. ``measurable_points``' ``max(..., 1)`` masked
+    the state rather than rejecting it."""
+    nan = float("nan")
+    cell = _measure([nan] * 64, [nan] * 64)
+    assert cell.unmeasurable == cell.points
+    assert cell.nonfinite_disagreements == 0  # matching NaNs agree positionally
+    assert not cell.gateable
+    assert "no finite lane was measured" in cell.ungateable_reason
+    assert "unmeasurable" in "\n".join(render_skipped([cell]))
+
+
+def test_a_partial_fast_mode_sweep_is_refused_rather_than_halved():
+    """``BudgetKey`` has no fast-mode dimension, so a key derived from one mode would gate
+    the other on a number measured for neither. For an op that runs in both modes that is
+    a reason to re-run the sweep, not to emit half a measurement."""
+    one_mode = _cell(op=MathOperation.Rsqrt, fast_modes=(FastMode.No,))
+    assert not one_mode.gateable
+    assert "measured only No" in one_mode.ungateable_reason
+
+    both = _cell(op=MathOperation.Rsqrt, fast_modes=(FastMode.No, FastMode.Yes))
+    assert both.gateable
+    # An op that does not run in both modes is unaffected.
+    assert _cell(op=MathOperation.Tanh, fast_modes=(FastMode.No,)).gateable
+
+
+def test_fast_modes_combine_by_the_worst_of_each_statistic():
+    """Not by pooling the rows. A percentile over pooled rows is *not* the max of the
+    per-mode percentiles -- the slower mode's tail is diluted by the other mode's rows --
+    so the floor would come out under the value one mode needs, and the budget with it.
+    """
+    from accuracy.emit_budget import _combine_fast_modes
+
+    slow = _cell(
+        fast_modes=(FastMode.No,),
+        max_ulp=40,
+        percentile_ulp=40.0,
+        exact_fraction=0.1,
+        points=500,
+        output_format=DataFormat.Float32,
+    )
+    fast = _cell(
+        fast_modes=(FastMode.Yes,),
+        max_ulp=2,
+        percentile_ulp=2.0,
+        exact_fraction=0.9,
+        points=500,
+        output_format=DataFormat.Float32,
+    )
+    combined = _combine_fast_modes([slow, fast])
+    assert combined.fast_modes == (FastMode.No, FastMode.Yes)
+    assert combined.max_ulp == 40
+    assert combined.percentile_ulp == 40.0  # not the pooled ~21
+    assert combined.exact_fraction == pytest.approx(0.1)  # the worse of the two
+    assert combined.points == 1000
+    # And the resolved budget is the one the slow mode needs.
+    assert combined.resolve(DEFAULT_HEADROOM)[0] == slow.resolve(DEFAULT_HEADROOM)[0]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The audit trail beside each budget
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_a_floored_budget_keeps_both_of_its_notes():
+    """``note`` was assigned rather than appended, so the near-zero clause overwrote the
+    "measured 0, floored to 1" one -- and the two are not exclusive. Whenever a floor is
+    emitted the reported max is the *bulk* max, so a cell whose bulk lanes are all exact
+    gives ``max 0 ULP`` beside ``max_ulp=1`` with no explanation. That is the reading the
+    floored-to-1 note was added to fix, and it was dead for every floored key."""
+    cell = _cell(
+        max_ulp=0,
+        percentile_ulp=0.0,
+        exact_fraction=1.0,
+        all_max_ulp=9000,
+        all_percentile_ulp=9000.0,
+        near_zero_points=10,
+        near_zero_max_ulp=9000,
+        near_zero_max_abs_err=1e-4,
+    )
+    budget, floor = cell.resolve(DEFAULT_HEADROOM)
+    assert budget == 1 and floor is not None
+    key = EmittedKey(
+        input_format=DataFormat.Float32,
+        output_format=DataFormat.Float16_b,
+        approx_mode=None,
+        dest_acc=None,
+        budget=budget,
+        near_zero_atol=floor,
+        cells=(cell,),
+    )
+    comment = key.comment("wh", "2026-09-17", DEFAULT_PERCENTILE)
+    assert "measured 0, floored to 1" in comment
+    assert "near-zero pts reach 9000 steps" in comment
+
+
+def test_the_comment_reports_the_percentile_it_was_given():
+    """``--percentile`` controls the budget, so labelling the figure ``p99.9`` regardless
+    emitted valid Python beside a false measurement claim."""
+    cell = _cell(max_ulp=3, percentile_ulp=3.0)
+    key = EmittedKey(
+        DataFormat.Float32, DataFormat.Float16_b, None, None, 4, None, (cell,)
+    )
+    assert "p95 " in key.comment("wh", "2026-09-17", 95.0)
+    assert "p99.9 " in key.comment("wh", "2026-09-17", 99.9)
+
+
+def test_the_exact_fraction_comes_from_the_same_lanes_as_the_maximum():
+    """With no floor emitted the reported max is the all-lane one, so the exact fraction
+    has to be too. Reporting the bulk fraction beside it produced comments like Exp2's
+    "max N ULP, 100% exact"."""
+    cell = _cell(
+        max_ulp=0,
+        percentile_ulp=0.0,
+        exact_fraction=1.0,  # the bulk lanes really are all exact
+        all_max_ulp=5,
+        all_percentile_ulp=5.0,
+        all_exact_fraction=0.4,
+        near_zero_points=0,  # so no floor is emitted and the all-lane view is used
+    )
+    key = EmittedKey(
+        DataFormat.Float32, DataFormat.Float16_b, None, None, 6, None, (cell,)
+    )
+    comment = key.comment("wh", "2026-09-17", DEFAULT_PERCENTILE)
+    assert "max 5 ULP" in comment
+    assert "40% exact" in comment
+    assert "100% exact" not in comment
+
+
+def test_the_floor_never_rounds_below_the_error_it_was_measured_from():
+    """The gate rescues a lane only when ``absolute_error <= near_zero_atol``, so a floor
+    rounded down by ``.3g`` rejects the very lane it came from. ``_budget`` makes the same
+    refusal with ``max()`` and ``ceil()``."""
+    measured = 1.2345678e-4
+    cell = _cell(
+        max_ulp=1,
+        percentile_ulp=1.0,
+        near_zero_points=10,
+        near_zero_max_ulp=99999,
+        near_zero_max_abs_err=measured,
+    )
+    floor = cell.resolve(1.0)[1]  # headroom 1.0 is where rounding could bite
+    assert floor is not None
+    assert floor >= measured
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Provenance the emitter must not fake
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_a_mixed_parquet_and_csv_directory_is_refused(tmp_path):
+    """``merge_shards()`` rewrites only the ops from the current run and leaves older
+    per-op files in place, so preferring parquet let one stale file hide every fresh csv
+    -- and the emitted budgets would carry today's stamp over another run's measurement.
+    There is no run-level manifest to tell them apart."""
+    from accuracy.emit_budget import load_sweep
+
+    arch_dir = tmp_path / "wh"
+    arch_dir.mkdir()
+    _rows([1.0], [1.0]).to_parquet(arch_dir / "tanh.parquet")
+    _rows([1.0], [1.0]).to_csv(arch_dir / "gelu.csv", index=False)
+    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+        SystemExit, match="both parquet and csv"
+    ):
+        load_sweep(tmp_path, "wh")
+
+
+def test_only_the_measured_architecture_can_be_emitted():
+    """``EmittedKey`` has no arch dimension and ``accuracy_contract()`` downgrades every
+    architecture but ``MEASURED_ARCH`` before it resolves a key, so text emitted from
+    another arch's sweep would be plausible, measured and silently inert."""
+    from accuracy.emit_budget import EMITTABLE_ARCH, main
+
+    assert EMITTABLE_ARCH == "wh"
+    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+        SystemExit, match="cannot be emitted"
+    ):
+        main(["--arch", "bh"])
+
+
+def test_a_non_default_near_zero_fraction_is_rejected_or_stamped(capsys, tmp_path):
+    """The gate always splits at ``NEAR_ZERO_FRACTION``, and ``AccuracyContract`` has
+    nowhere to carry a different one, so a regenerated table would silently omit lanes
+    the gate still charges against its ``max_ulp``."""
+    from accuracy.emit_budget import main
+
+    for bad in ("0", "1", "-0.5"):
+        with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+            SystemExit, match="must be in"
+        ):
+            main(["--near-zero-fraction", bad])
+
+
+def test_the_marker_lookup_is_scoped_to_the_variant_it_was_measured_on():
+    """A marker forced every approximation and destination variant of a format pair onto
+    tolerance, although the divergence is variant-specific: Gelu fp32->fp32 diverges at
+    ``dest_acc=Yes`` and Log fp32->fp32 at ``dest_acc=No``. The predicted cells were
+    losing their gate -- 8192 Gelu points merged into one wildcard contract."""
+    from accuracy.emit_budget import not_predicted_reason
+
+    def gelu(dest):
+        return _cell(
+            op=MathOperation.Gelu,
+            input_format=DataFormat.Float32,
+            output_format=DataFormat.Float32,
+            dest_acc=dest,
+        )
+
+    assert not_predicted_reason(gelu(DestAccumulation.Yes)) is not None
+    assert not_predicted_reason(gelu(DestAccumulation.No)) is None
+
+    def log(dest):
+        return _cell(
+            op=MathOperation.Log,
+            input_format=DataFormat.Float32,
+            output_format=DataFormat.Float32,
+            dest_acc=dest,
+        )
+
+    assert not_predicted_reason(log(DestAccumulation.No)) is not None
+    assert not_predicted_reason(log(DestAccumulation.Yes)) is None
+
+    # An unscoped marker (dest_acc=None) still covers both settings.
+    def log1p_bf16(dest):
+        return _cell(
+            op=MathOperation.Log1p,
+            input_format=DataFormat.Float16,
+            output_format=DataFormat.Float16_b,
+            dest_acc=dest,
+        )
+
+    assert all(
+        not_predicted_reason(log1p_bf16(dest)) is not None for dest in DestAccumulation
+    )
+
+    # And an unmarked op is predicted on every variant.
+    assert not_predicted_reason(_cell(op=MathOperation.Tanh)) is None
+
+
+def test_the_emitter_measures_the_flush_policy_the_gate_applies():
+    """The emitter recomputes the step count with ``ulp_distance``'s per-dtype default.
+    The gate reaches the same metric through ``ulp_elementwise_valid``, which used to
+    hardcode ``flush_subnormals=True`` -- so on a Float16 output (``--formats all``) the
+    emitter counted subnormal-band steps the gate collapsed to zero, and could derive a
+    much larger budget than the verdict it claims to gate.
+
+    Pinned as a property rather than as a comment, since the two live in different
+    modules: whatever the gate resolves for a dtype, the metric the emitter uses must
+    resolve the same."""
+    from helpers.ulp import flushes_subnormals, ulp_distance, ulp_elementwise_valid
+
+    for fmt in (DataFormat.Float32, DataFormat.Float16_b, DataFormat.Float16):
+        dtype = ulp_dtype(fmt)
+        # Two distinct values inside this dtype's subnormal band.
+        smallest = float(torch.finfo(dtype).tiny) * 2.0 ** -MANTISSA_BITS[dtype]
+        band_steps = (1 << MANTISSA_BITS[dtype]) - 1
+        golden = torch.tensor([smallest], dtype=dtype)
+        result = torch.tensor([band_steps * smallest], dtype=dtype)
+
+        emitter_view = int(ulp_distance(golden, result)[0])
+        _, gate_view, _ = ulp_elementwise_valid(golden, result, 0)
+        assert emitter_view == int(gate_view[0]), fmt.name
+        # And the band is only collapsed where the harness's datapath model flushes it.
+        assert (emitter_view == 0) is flushes_subnormals(dtype), fmt.name
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The emitter must model the gate it derives budgets for
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _gate_accepts(cell, golden, hardware, headroom=DEFAULT_HEADROOM):
+    """Feed a resolved contract back to the real gate over the data it came from."""
+    from helpers.ulp import ulp_elementwise_valid
+
+    budget, floor = cell.resolve(headroom)
+    assert budget is not None, "cell resolved to tolerance; nothing to check"
+    dtype = ulp_dtype(cell.output_format)
+    g = torch.tensor(golden, dtype=torch.float64).to(dtype)
+    h = torch.tensor(hardware, dtype=torch.float64).to(dtype)
+    is_valid, distance, _ = ulp_elementwise_valid(g, h, budget, near_zero_atol=floor)
+    return bool(is_valid.all()), budget, floor, int(distance.max())
+
+
+def test_an_emitted_budget_is_accepted_by_the_gate_on_its_own_measurement():
+    """The invariant the emitter exists to guarantee, asserted end to end rather than
+    reasoned about: whatever ``(max_ulp, near_zero_atol)`` pair comes out must make
+    ``ulp_elementwise_valid`` accept the very rows it was measured from.
+
+    This is the regression test for a real defect. The gate bounds "near zero" both
+    relatively (a fraction of the tensor's dynamic range) *and* absolutely
+    (``near_zero_atol / near_zero_fraction``); the emitter modelled only the relative
+    half, so it derived a floor from a lane the gate then refused to rescue. Measured on
+    WH: hardsigmoid fp32->fp32 ``dest_acc=Yes`` emitted ``max_ulp=10`` with
+    ``near_zero_atol=9.31e-09`` from a lane at ``|golden|=7.7e-4`` whose 7.45e-9 error is
+    inside that atol but whose magnitude is 800x the absolute cut — so the functional
+    suite charged it 128 steps against a 10-step budget.
+
+    The shape below reproduces that: a wide dynamic range, bulk lanes that are nearly
+    exact, and one small-magnitude lane whose absolute error is tiny but whose step count
+    is enormous.
+    """
+    golden = [1.0, 2.0, 4.0, 8.0] * 16 + [7.7e-4]
+    hardware = list(golden)
+    hardware[-1] = 7.7e-4 + 7.45e-9
+
+    cell = _measure(golden, hardware, fmt=DataFormat.Float32)
+    accepted, budget, floor, worst = _gate_accepts(cell, golden, hardware)
+    assert accepted, (
+        f"the gate rejected the emitter's own contract: max_ulp={budget}, "
+        f"near_zero_atol={floor}, worst measured {worst} steps"
+    )
+
+
+@pytest.mark.parametrize(
+    "fmt", [DataFormat.Float32, DataFormat.Float16_b], ids=lambda f: f.name
+)
+@pytest.mark.parametrize(
+    "headroom", [1.0, DEFAULT_HEADROOM, 2.0], ids=lambda h: f"h{h}"
+)
+def test_the_gate_accepts_the_emitted_contract_across_headrooms(fmt, headroom):
+    """``headroom`` scales the floor, which moves the absolute bound, which moves the lane
+    split — so the emitter has to be given the same headroom it will be resolved at, and
+    the invariant has to hold at each one. ``main()`` passes one value to both."""
+    from accuracy.emit_budget import measure_cell
+
+    golden = [0.5, 1.0, 2.0, 4.0, 8.0, 16.0] * 8 + [1e-3, 5e-4, 1e-4]
+    hardware = list(golden)
+    hardware[-3] = 1e-3 + 3e-9
+    hardware[-2] = 5e-4 + 2e-9
+    hardware[-1] = 1e-4 + 1e-9
+
+    cell = measure_cell(
+        _rows(golden, hardware),
+        MathOperation.Gelu,
+        DataFormat.Float32,
+        fmt,
+        ApproximationMode.No,
+        DestAccumulation.Yes,
+        FastMode.No,
+        99.9,
+        0.01,
+        headroom,
+    )
+    if cell.resolve(headroom)[0] is None:
+        pytest.skip("cell resolved to tolerance at this headroom")
+    accepted, budget, floor, worst = _gate_accepts(cell, golden, hardware, headroom)
+    assert accepted, (
+        f"{fmt.name} at headroom {headroom}: gate rejected max_ulp={budget}, "
+        f"near_zero_atol={floor} over its own rows (worst {worst} steps)"
+    )
+
+
+def test_the_near_zero_split_converges_when_the_bound_shrinks_it():
+    """The absolute bound depends on the floor, which is derived from the lanes the bound
+    selects, so the split is solved by iteration. It terminates because the set only ever
+    shrinks — dropping a lane can only lower the max error, which lowers the floor, which
+    lowers the cut. This is the case where it actually iterates."""
+    # Descending near-zero errors, so each round drops the largest remaining lane.
+    golden = [1.0] * 32 + [1e-2, 1e-3, 1e-4, 1e-5, 1e-6]
+    hardware = [1.0] * 32 + [1e-2 + 1e-4, 1e-3 + 1e-5, 1e-4 + 1e-6, 1e-5 + 1e-7, 1e-6]
+
+    cell = _measure(golden, hardware, fmt=DataFormat.Float32)
+    budget, floor = cell.resolve(DEFAULT_HEADROOM)
+    if budget is None:
+        pytest.skip("resolved to tolerance")
+    accepted, _, _, worst = _gate_accepts(cell, golden, hardware)
+    assert accepted, f"gate rejected max_ulp={budget}, floor={floor}, worst {worst}"

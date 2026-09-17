@@ -17,6 +17,7 @@ import math
 
 import pytest
 import torch
+from accuracy.emit_budget import usable_budget_ceiling
 from helpers.chip_architecture import ChipArchitecture
 from helpers.format_config import DataFormat
 from helpers.llk_params import (
@@ -444,6 +445,14 @@ def test_a_variant_specific_tolerance_needs_no_driver_override():
     assert broad.atol == 0.13
 
 
+#: The 19 ops P3 enrols from the accuracy sweep. Their keys all pin ``input_format``.
+_TRANSCENDENTALS_ENROLLED_WITH_AN_INPUT_FORMAT = frozenset(
+    op
+    for op, table in _SFPU_ACCURACY_BUDGET.items()
+    if any(key.input_format is not None for key in table)
+)
+
+
 #: Every enrolled op's resolved budget on every gateable output format, at the standard
 #: variant -- so this pins behaviour rather than restating what __post_init__ guarantees,
 #: and pins it on the formats a Float32-only table leaves unbounded. ``None`` is the
@@ -504,6 +513,13 @@ _EXPECTED_BUDGET = {
         DataFormat.Float32: None,
         DataFormat.Float16_b: None,
         DataFormat.Float16: None,
+    },
+    # The 19 transcendentals P3 enrols. Every one of their keys pins `input_format`, and
+    # `matches()` rejects a pinned field against an unset query, so a query that leaves
+    # the input format out resolves them to the tolerance contract.
+    **{
+        op: {fmt: None for fmt in ULP_FORMATS}
+        for op in _TRANSCENDENTALS_ENROLLED_WITH_AN_INPUT_FORMAT
     },
 }
 
@@ -570,6 +586,27 @@ def test_every_enrolled_op_resolves_to_the_budget_it_declares_on_float32():
         else:
             assert contract.metric is Metric.ULP, op.name
             assert contract.max_ulp == expected, op.name
+
+def test_every_enrolled_op_resolves_to_something_usable_on_a_float_format():
+    """Through ``_every_variant``, not a hand-rolled loop with ``input_format`` unset.
+
+    Every transcendental key pins ``input_format``, and ``matches()`` rejects a pinned
+    field against an unset query, so a loop that left it out sent all 19 of them to
+    ``TOLERANCE_CONTRACT`` and the ULP branch below never ran for any — a test named
+    "every enrolled op" exercising only the nine that predate them.
+    """
+    saw_ulp = set()
+    for op in enrolled_ops():
+        for fmt, contract in _every_variant(op):
+            assert contract.metric in (Metric.ULP, Metric.TOLERANCE)
+            if contract.metric == Metric.ULP:
+                assert contract.max_ulp is not None and contract.max_ulp >= 0
+                saw_ulp.add(op)
+    # The regression itself: the sweep has to reach the ULP branch for most enrolled ops,
+    # not silently resolve every one of them to tolerance.
+    assert len(saw_ulp) >= len(enrolled_ops()) - 2, sorted(
+        op.name for op in set(enrolled_ops()) - saw_ulp
+    )
 
 
 def test_enrolled_ops_is_sorted_and_stable():
@@ -646,24 +683,44 @@ def test_an_exact_op_never_carries_a_wide_budget(op):
             )
 
 
-def test_no_budget_exceeds_its_formats_meaningful_ceiling():
-    """ttnn's ``2**mantissa_bits`` line, applied to the table rather than to one call.
+def test_no_budget_exceeds_its_formats_usable_ceiling():
+    """The line past which a budget stops being *stronger* than the gate it replaces,
+    applied to the table rather than to one call.
 
-    Past it the two values differ by more than an order of magnitude and ULP has stopped
-    being the right metric — the op belongs on the tolerance metric, as Square on Float32
-    and the Bfp8_b entries are. This is the guard against "the sweep reported 15616, so
-    the budget is 15616".
+    ``min(rtol * 2**mantissa_bits, MAX_MEANINGFUL_ULP)``, the same bound
+    ``emit_budget.usable_budget_ceiling`` refuses to emit past — not
+    ``MAX_MEANINGFUL_ULP`` alone, which is roughly 100% relative error and about 20x
+    looser: 128 for bf16 against 6. Because the ULP arm of ``passed_test`` returns before
+    both ``isclose`` and PCC, a budget past this line *is* the whole gate, and
+    ``passed_test`` only warns — so a hand-edited or regenerated bf16 entry anywhere in
+    7..127 steps (``max_ulp=64`` is 50% relative error) used to pass this guard and every
+    other host test. It is the invariant that closed the Tanh and Gelu budgets in review,
+    and the table side could not see it.
+
+    Ops past the line belong on the tolerance metric, as Square on Float32 and the Bfp8_b
+    entries are. This is the guard against "the sweep reported 15616, so the budget is
+    15616".
     """
     for op in enrolled_ops():
         for fmt, contract in _every_variant(op):
             if contract.metric != Metric.ULP:
                 continue
-            ceiling = MAX_MEANINGFUL_ULP[ulp_dtype(fmt)]
+            ceiling = usable_budget_ceiling(fmt)
             assert contract.max_ulp <= ceiling, (
                 f"{op.name} on {fmt.name} has max_ulp={contract.max_ulp}, past the "
-                f"{ceiling}-step point where ULP stops meaning anything for that format. "
-                "Put the op on the tolerance metric and record the measurement instead."
+                f"{ceiling:.0f}-step point where a budget stops being tighter than the "
+                "tolerance it replaces. Put the op on the tolerance metric and record "
+                "the measurement instead."
             )
+
+
+def test_the_usable_ceiling_is_tighter_than_the_meaningful_one():
+    """Why the guard above moved off ``MAX_MEANINGFUL_ULP``: the two are not close, and
+    the looser one admits budgets that gate nothing."""
+    for fmt in ULP_FORMATS:
+        meaningful = MAX_MEANINGFUL_ULP[ulp_dtype(fmt)]
+        assert usable_budget_ceiling(fmt) < meaningful, fmt.name
+    assert usable_budget_ceiling(DataFormat.Float16_b) == 6.4
 
 
 def test_the_integer_valued_ops_are_the_only_ones_enrolled_on_bfp8_b():
