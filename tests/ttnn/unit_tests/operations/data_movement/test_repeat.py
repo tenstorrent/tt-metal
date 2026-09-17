@@ -119,21 +119,19 @@ def test_pc_repeat(device, layout, shape, repeat_shape):
 # 17975 test cases
 
 
-# --- Codegen-path coverage (implementation="codegen") ---
+# --- Codegen-path coverage ---
 #
-# ttnn.repeat defaults to implementation="auto", which routes gate-supported
-# cases to codegen and the rest to native. These duplicate the
-# correctness / program-cache checks above but force the codegen path so the
-# nightly data_movement suite exercises it regardless of the gate's verdict.
+# ttnn.repeat routes gate-supported cases to codegen and the rest to native, and offers no way to
+# ask for one: the verification-only entries below live in the private module for that reason (see
+# repeat_force.hpp). These duplicate the correctness / program-cache checks above but pin the
+# codegen path so the suite exercises it regardless of the gate's verdict.
 #
-# The codegen prim supports only a subset of cases (see
-# repeat_codegen_supported.cpp): interleaved input/output (no sharding), rank
-# 2-4, at least one repeated dim, and per-dim rules -- ROW_MAJOR rejects
-# bfloat8_b and needs last-dim width >= 2; TILE requires the repeated H/W axis
-# to be tile-aligned. Every shape below is hand-picked to satisfy that gate, so
-# implementation="codegen" resolves instead of TT_FATAL-ing. random inputs (not
-# arange) keep bf16 comparisons exact -- repeat copies values verbatim, so a
-# lossless round-trip means assert_equal holds.
+# The codegen path supports only a subset of cases (see repeat_codegen_supported.cpp): interleaved
+# input/output (no sharding), rank 2-4, at least one repeated dim, and per-dim rules -- ROW_MAJOR
+# rejects bfloat8_b and needs last-dim width >= 2; TILE requires the repeated H/W axis to be
+# tile-aligned. Every shape below is hand-picked to satisfy that gate, so the forced entry resolves
+# instead of raising. random inputs (not arange) keep bf16 comparisons exact -- repeat copies values
+# verbatim, so a lossless round-trip means assert_equal holds.
 codegen_supported_cases = [
     # (shape, repeat_shape, layout) -- TILE
     ((1, 1, 32, 32), (2, 1, 1, 1), ttnn.TILE_LAYOUT),  # N (batch) repeat
@@ -153,6 +151,9 @@ codegen_dtypes = [
 ]
 
 
+_force_codegen = ttnn._ttnn.operations.data_movement.repeat_force_codegen
+
+
 @pytest.mark.parametrize("shape, repeat_shape, layout", codegen_supported_cases)
 @pytest.mark.parametrize("dtype", codegen_dtypes)
 def test_repeat_codegen(device, shape, repeat_shape, layout, dtype):
@@ -162,7 +163,7 @@ def test_repeat_codegen(device, shape, repeat_shape, layout, dtype):
     torch_result = torch_input_tensor.repeat(repeat_shape)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=layout, device=device, dtype=ttnn_dtype)
-    output = ttnn.repeat(input_tensor, ttnn.Shape(repeat_shape), implementation="codegen")
+    output = _force_codegen(input_tensor, ttnn.Shape(repeat_shape))
     output = ttnn.to_torch(output)
 
     assert (
@@ -188,7 +189,7 @@ def test_pc_repeat_codegen(device, shape, repeat_shape, layout):
         input_tensors.append(ttnn.from_torch(torch_tensor, layout=layout, device=device, dtype=ttnn.bfloat16))
     for i in range(num_iters):
         with device.cache_entries_counter.measure():
-            output = ttnn.repeat(input_tensors[i], ttnn.Shape(repeat_shape), implementation="codegen")
+            output = _force_codegen(input_tensors[i], ttnn.Shape(repeat_shape))
         output = ttnn.to_torch(output)
         assert (
             output.shape == torch_results[i].shape
@@ -217,7 +218,7 @@ def test_pc_with_different_shapes_in_sequence(device):
     x_tt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
     # codegen-supported (interleaved, tile-aligned N-axis repeat) -> exercise the codegen path
-    ttnn.repeat(y_tt, [4, 1, 1, 1], implementation="codegen")
+    _force_codegen(y_tt, [4, 1, 1, 1])
     z_tt = ttnn.add(x_tt, y_tt)
     z_tt = x_tt + y_tt
 
@@ -232,7 +233,7 @@ def test_pc_with_different_shapes_in_sequence(device):
 
         base_count = device.cache_entries_counter.total
         with device.cache_entries_counter.measure():
-            ttnn.repeat(y_tt, [4, 1, 1, 1], implementation="codegen")
+            _force_codegen(y_tt, [4, 1, 1, 1])
         assert device.cache_entries_counter.total == base_count, "program cache entries differ on same configs"
         z_tt = ttnn.add(x_tt, y_tt)
         z_tt = x_tt + y_tt

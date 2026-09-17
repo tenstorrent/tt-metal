@@ -5,6 +5,7 @@
 #pragma once
 #include "llk_math_common_api.h"
 #include "llk_math_eltwise_binary.h"
+#include "sanitizer/api.h"
 
 /*************************************************************************
  * LLK ELTWISE BINARY
@@ -36,6 +37,17 @@ inline void llk_math_eltwise_binary_init(
     const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand_id);
 
     constexpr auto effective_math_fidelity = get_effective_math_fidelity<eltwise_binary_type, math_fidelity>();
+
+    SAN_HOOK(init<OperationFpuEltwiseBinary>(
+        StateVal<OperationFpuEltwiseBinary::EltwiseBinaryType>(to_underlying(eltwise_binary_type)),
+        StateVal<OperationFpuEltwiseBinary::BroadcastType>(to_underlying(src_b_bcast_type)),
+        StateVal<OperationFpuEltwiseBinary::MathFidelity>(to_underlying(effective_math_fidelity)),
+        StateVal<OperationFpuEltwiseBinary::ReuseDest>(to_underlying(binary_reuse_dest)),
+        StateVal<OperationFpuEltwiseBinary::AccToDest>(acc_to_dest),
+        StateVal<OperationFpuEltwiseBinary::FaceHeight>(tensor_shape.face_r_dim),
+        StateVal<OperationFpuEltwiseBinary::NumFaces>(tensor_shape.total_num_faces()),
+        StateVal<OperationFpuEltwiseBinary::NumFacesCDim>(tensor_shape.num_faces_c_dim)));
+
     _llk_math_eltwise_binary_init_<eltwise_binary_type, src_b_bcast_type, effective_math_fidelity, binary_reuse_dest>(
         tensor_shape, acc_to_dest);
 }
@@ -49,14 +61,23 @@ template <
 inline void llk_math_eltwise_binary(uint dst_index, const bool clear_fp32_dst_acc = true) {
     // DPRINT("llk_math_eltwise_binary: dst_index = {}, max dest tiles = {}\n",
     //     dst_index,
-    //     get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>());
+    //     get_dest_max_tiles_rt<DST_SYNC_MODE, DstTileShape::Tile32x32>());
 
     LLK_ASSERT(
-        (dst_index < get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>()),
+        (dst_index < get_dest_max_tiles_rt<DST_SYNC_MODE, DstTileShape::Tile32x32>()),
         "llk_math_eltwise_binary: dst index exceeds available dest register capacity. Uncomment the DPRINT "
         "block above and enable DPRINT support to inspect the dst index and max dest tile values.");
 
     constexpr auto effective_math_fidelity = get_effective_math_fidelity<eltwise_binary_type, math_fidelity>();
+
+    SAN_HOOK(execute<OperationFpuEltwiseBinary>(
+        StateVal<OperationFpuEltwiseBinary::EltwiseBinaryType>(to_underlying(eltwise_binary_type)),
+        StateVal<OperationFpuEltwiseBinary::BroadcastType>(to_underlying(src_b_bcast_type)),
+        StateVal<OperationFpuEltwiseBinary::MathFidelity>(to_underlying(effective_math_fidelity)),
+        StateVal<OperationFpuEltwiseBinary::ReuseDest>(to_underlying(binary_reuse_dest)),
+        StateDiscard<std::uint32_t>(dst_index),
+        StateDiscard<bool>(clear_fp32_dst_acc)));
+
     _llk_math_eltwise_binary_<
         eltwise_binary_type,
         src_b_bcast_type,
@@ -79,10 +100,10 @@ inline void llk_math_eltwise_binary(
     const bool clear_fp32_dst_acc = true) {
     // DPRINT("llk_math_eltwise_binary: dst_index = {}, max dest tiles = {}\n",
     //     dst_index,
-    //     get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>());
+    //     get_dest_max_tiles_rt<DST_SYNC_MODE, DstTileShape::Tile32x32>());
 
     LLK_ASSERT(
-        (dst_index < get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>()),
+        (dst_index < get_dest_max_tiles_rt<DST_SYNC_MODE, DstTileShape::Tile32x32>()),
         "llk_math_eltwise_binary: dst index exceeds available dest register capacity. Uncomment the DPRINT "
         "block above and enable DPRINT support to inspect the dst index and max dest tile values.");
 
@@ -90,6 +111,18 @@ inline void llk_math_eltwise_binary(
     const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand_id);
 
     constexpr auto effective_math_fidelity = get_effective_math_fidelity<eltwise_binary_type, math_fidelity>();
+
+    SAN_HOOK(execute<OperationFpuEltwiseBinary>(
+        StateVal<OperationFpuEltwiseBinary::EltwiseBinaryType>(to_underlying(eltwise_binary_type)),
+        StateVal<OperationFpuEltwiseBinary::BroadcastType>(to_underlying(src_b_bcast_type)),
+        StateVal<OperationFpuEltwiseBinary::MathFidelity>(to_underlying(effective_math_fidelity)),
+        StateVal<OperationFpuEltwiseBinary::ReuseDest>(to_underlying(binary_reuse_dest)),
+        StateVal<OperationFpuEltwiseBinary::FaceHeight>(tensor_shape.face_r_dim),
+        StateVal<OperationFpuEltwiseBinary::NumFaces>(tensor_shape.total_num_faces()),
+        StateVal<OperationFpuEltwiseBinary::NumFacesCDim>(tensor_shape.num_faces_c_dim),
+        StateDiscard<std::uint32_t>(dst_index),
+        StateDiscard<bool>(clear_fp32_dst_acc)));
+
     _llk_math_eltwise_binary_<
         eltwise_binary_type,
         src_b_bcast_type,

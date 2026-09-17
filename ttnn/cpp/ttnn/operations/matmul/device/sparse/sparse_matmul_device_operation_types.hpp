@@ -16,6 +16,11 @@ struct SparseMatmulParams {
     std::optional<uint32_t> nnz;
     bool is_input_a_sparse;
     bool is_input_b_sparse;
+    // When true, an `indices` operand (in optional_input_tensors[0]) drives an indexed/gather mode:
+    // the kernels iterate only the `num_active` experts named in `indices` (bB = indices[i]) instead
+    // of scanning all batchB sparsity slots, and the output batch axis is COMPACT (length num_active).
+    // Set from indices.has_value() at build time so the program hash distinguishes the two modes.
+    bool use_indices = false;
     std::optional<const operations::matmul::MatmulProgramConfig> program_config = std::nullopt;
     tt::tt_metal::MemoryConfig output_mem_config = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG;
     std::optional<tt::tt_metal::DataType> output_dtype = std::nullopt;

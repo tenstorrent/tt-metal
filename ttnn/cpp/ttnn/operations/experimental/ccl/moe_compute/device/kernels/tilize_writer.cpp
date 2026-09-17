@@ -104,7 +104,6 @@ void kernel_main() {
     // CBs
     constexpr uint32_t tilize_output_cb_id = get_named_compile_time_arg_val("tilize_output_cb_id");
     constexpr uint32_t per_expert_total_tokens_cb_id = get_named_compile_time_arg_val("per_expert_total_tokens_cb_id");
-    constexpr uint32_t total_chunks_cb_id = get_named_compile_time_arg_val("total_chunks_cb_id");
     constexpr uint32_t indices_tensor_cb_id = get_named_compile_time_arg_val("indices_tensor_cb_id");
     constexpr uint32_t scores_tensor_cb_id = get_named_compile_time_arg_val("scores_tensor_cb_id");
     constexpr uint32_t mapping_tensor_cb_id = get_named_compile_time_arg_val("mapping_tensor_cb_id");
@@ -194,9 +193,7 @@ void kernel_main() {
     // Device 2.0 migration: legacy primitives retained: these raw L1 semaphore addresses are
     // used as bases for multicast destinations (set_multicast / get_safe_multicast_noc_addr /
     // get_noc_addr) and for direct noc_semaphore_set with the legacy address-taking overload.
-    uint32_t matmul_chunk_available_semaphore_addr = get_semaphore(matmul_chunk_available_semaphore_id);
     uint32_t tilize_chunk_ready_semaphore_addr = get_semaphore(tilize_chunk_ready_semaphore_id);
-    uint32_t matmul_chunk_ready_semaphore_addr = get_semaphore(matmul_chunk_ready_semaphore_id);
 
     // Noc typed wrappers
     Noc noc_obj(noc_index);
@@ -205,7 +202,6 @@ void kernel_main() {
     // CircularBuffer typed wrappers
     CircularBuffer cb_tilize_output(tilize_output_cb_id);
     CircularBuffer cb_per_expert_total_tokens(per_expert_total_tokens_cb_id);
-    CircularBuffer cb_total_chunks(total_chunks_cb_id);
     CircularBuffer cb_indices_tensor(indices_tensor_cb_id);
     CircularBuffer cb_scores_tensor(scores_tensor_cb_id);
     CircularBuffer cb_mapping_tensor(mapping_tensor_cb_id);
@@ -418,11 +414,6 @@ void kernel_main() {
         num_tokens_per_expert[e] = per_expert_counts[e];
     }
 
-    // Wait for reader to push total_chunks
-    cb_total_chunks.wait_front(one_page);
-    [[maybe_unused]] uint32_t total_chunks =
-        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_total_chunks.get_read_ptr());
-
     /************************************************************************/
     /* Synchronization setup for signalling between tilize and matmul cores */
     /************************************************************************/
@@ -430,23 +421,9 @@ void kernel_main() {
     // Semaphore all tilize cores wait on to indicate we cand send another chunk
     // Matmul sends to tilize drain sync core, which propagates it to the tilize non-drain-sync cores
     uint32_t matmul_chunk_available_semaphore_wait_value = num_matmul_cores;
-    uint64_t matmul_chunk_available_semaphore_tilize_mcast_addr = get_safe_multicast_noc_addr(
-        tilize_mcast_start_x,
-        tilize_mcast_start_y,
-        tilize_mcast_end_x,
-        tilize_mcast_end_y,
-        matmul_chunk_available_semaphore_addr,
-        noc_index);
 
     // Semaphore we use to signal to matmul cores that a chunk has arrived
     uint32_t matmul_chunk_ready_semaphore_set_value = 1;
-    uint64_t matmul_chunk_ready_semaphore_mcast_addr = get_safe_multicast_noc_addr(
-        matmul_mcast_start_x,
-        matmul_mcast_start_y,
-        matmul_mcast_end_x,
-        matmul_mcast_end_y,
-        matmul_chunk_ready_semaphore_addr,
-        noc_index);
 
     // How many chunks we've sent to matmul so far
     uint32_t num_chunks_sent = 0;
@@ -462,13 +439,6 @@ void kernel_main() {
     uint32_t tilize_chunk_ready_wait_value = num_tilize_cores - 1;
     uint64_t tilize_chunk_ready_drain_semaphore_noc_addr =
         get_noc_addr(drain_core_noc_x, drain_core_noc_y, tilize_chunk_ready_semaphore_addr, noc_index);
-    uint64_t tilize_chunk_ready_mcast_addr = get_safe_multicast_noc_addr(
-        tilize_mcast_start_x,
-        tilize_mcast_start_y,
-        tilize_mcast_end_x,
-        tilize_mcast_end_y,
-        tilize_chunk_ready_semaphore_addr,
-        noc_index);
 
     // mcast address for the first half of the buffer
     uint64_t first_half_buffer_matmul_chunk_input_mcast_addr = get_safe_multicast_noc_addr(
@@ -551,15 +521,14 @@ void kernel_main() {
                 if (is_drain_tilize_core && num_tilize_cores > 1) {
                     // use the local value of the semaphore, which is the value we just waited on (no need to set local
                     // value)
-                    // Device 2.0 migration: legacy primitive retained: multicast loopback op using
-                    // a precomposed multicast NOC address that honors the NOC1 coordinate-swap
-                    // convention via get_safe_multicast_noc_addr
-                    noc_semaphore_set_multicast(
-                        matmul_chunk_available_semaphore_addr,
-                        matmul_chunk_available_semaphore_tilize_mcast_addr,
-                        tilize_bounding_box_num_cores - 1,
-                        false,
-                        noc_index);
+                    set_multicast_safe(
+                        matmul_chunk_available_sem,
+                        noc_obj,
+                        tilize_mcast_start_x,
+                        tilize_mcast_start_y,
+                        tilize_mcast_end_x,
+                        tilize_mcast_end_y,
+                        tilize_bounding_box_num_cores - 1);
                 }
             }
 
@@ -720,28 +689,28 @@ void kernel_main() {
                 matmul_chunk_ready_semaphore_set_value++;
 
                 // mcast sem set
-                // Device 2.0 migration: legacy primitive retained: multicast loopback set
-                // (noc_semaphore_set_multicast) uses precomposed multicast NoC address and is not yet
-                // wrapped by Semaphore<>::set_multicast in a way that takes a raw L1 source addr
-                noc_semaphore_set_multicast(
-                    matmul_chunk_ready_semaphore_addr,
-                    matmul_chunk_ready_semaphore_mcast_addr,
-                    matmul_bounding_box_num_cores,
-                    false,
-                    noc_index);
+                set_multicast_safe(
+                    matmul_chunk_ready_sem,
+                    noc_obj,
+                    matmul_mcast_start_x,
+                    matmul_mcast_start_y,
+                    matmul_mcast_end_x,
+                    matmul_mcast_end_y,
+                    matmul_bounding_box_num_cores);
 
                 // == 10 ==
                 if (num_tilize_cores > 1) {
                     // Signal to non-drain-sync cores that they can start sending the next chunk
                     // Use local semaphore value (no need to explicitly set it)
                     // Local value is from when drain-sync waits until gather process is done (8a and 5b)
-                    // Device 2.0 migration: legacy primitive retained: multicast loopback set
-                    noc_semaphore_set_multicast(
-                        tilize_chunk_ready_semaphore_addr,
-                        tilize_chunk_ready_mcast_addr,
-                        tilize_bounding_box_num_cores - 1,
-                        false,
-                        noc_index);
+                    set_multicast_safe(
+                        tilize_chunk_ready_sem,
+                        noc_obj,
+                        tilize_mcast_start_x,
+                        tilize_mcast_start_y,
+                        tilize_mcast_end_x,
+                        tilize_mcast_end_y,
+                        tilize_bounding_box_num_cores - 1);
                 }
             } else {
                 // == 11 ==
@@ -765,9 +734,8 @@ void kernel_main() {
         }
     }
 
-    // Pop the per-expert counts and total_chunks (cleanup)
+    // Pop the per-expert counts (cleanup).
     cb_per_expert_total_tokens.pop_front(one_page);
-    cb_total_chunks.pop_front(one_page);
 
     noc_obj.async_write_barrier();
     noc_obj.async_atomic_barrier();

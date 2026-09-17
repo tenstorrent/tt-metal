@@ -47,6 +47,9 @@ constexpr Topology topology = static_cast<Topology>(get_compile_time_arg_val(22)
 constexpr bool is_linear = (topology == Topology::Linear);
 constexpr uint32_t N_chunks = get_compile_time_arg_val(23);
 constexpr uint32_t N_tiles_per_chunk = get_compile_time_arg_val(24);
+// Per-chunk tile widths + prefix-sum offsets (from CHUNK_TILE_WIDTHS/CHUNK_TILE_OFFSETS defines).
+constexpr uint32_t chunk_tile_widths[N_chunks] = {CHUNK_TILE_WIDTHS};
+constexpr uint32_t chunk_tile_offsets[N_chunks + 1] = {CHUNK_TILE_OFFSETS};
 constexpr uint32_t K_tiles_per_device = get_compile_time_arg_val(25);
 constexpr uint32_t K_block_tail_tiles = get_compile_time_arg_val(26);
 
@@ -139,7 +142,10 @@ void kernel_main() {
     const uint8_t out_ready_sem_injector_noc0_x = get_arg_val<uint32_t>(argidx++);
     const uint8_t out_ready_sem_injector_noc0_y = get_arg_val<uint32_t>(argidx++);
     const uint32_t in0_core_order_index = get_arg_val<uint32_t>(argidx++);
-    const uint32_t in0_core_order_size = get_arg_val<uint32_t>(argidx++);
+    [[maybe_unused]] const uint32_t in0_core_order_size = get_arg_val<uint32_t>(argidx++);
+    // Fabric-sender chain indices, supplied by the host (order: forward then backward)
+    const uint32_t forward_in0_core_order_index = get_arg_val<uint32_t>(argidx++);
+    const uint32_t backward_in0_core_order_index = get_arg_val<uint32_t>(argidx++);
 
     // Tensor accessor for input tensor
     constexpr auto in0_args = TensorAccessorArgs<ct_arg_count>();
@@ -152,9 +158,6 @@ void kernel_main() {
         make_tensor_accessor_tuple_uniform_page_size_common(outputs_args, out_addr_common_arg_start, out_tile_size);
 
 #ifdef USE_MUX
-    uint32_t backward_in0_core_order_index = in0_core_order_size - 2;
-    uint32_t forward_in0_core_order_index = in0_core_order_size - 1;
-
     // Each fabric-sender core only parses + connects the SINGLE direction it actually uses.
     // The program factory pushes RT args for exactly one direction per core, so argidx alignment
     // stays correct. The unused-direction mux/handle is default-initialized (connection_valid=false)
@@ -346,10 +349,12 @@ void kernel_main() {
                                 defer_write_n_tile,
                                 defer_write_n_tile_end);
                         } else {
-                            write_block_sync_split<M_block_tiles, N_block_tiles, N_chunks, N_tiles_per_chunk>(
+                            write_block_sync_split<M_block_tiles, N_block_tiles, N_chunks>(
                                 noc_obj,
                                 outputs_tuple,
                                 out0_shape,
+                                chunk_tile_widths,
+                                chunk_tile_offsets,
                                 out_read_ptr,
                                 out_tile_size,
                                 defer_write_m_tile,
@@ -488,8 +493,7 @@ void kernel_main() {
                         if constexpr (num_targets_backward_direction == 0) {
                             // Dev 0 (chain head): long send via mux_backward + pkt_hdrs_forward
                             if constexpr (num_targets_forward_direction > 0) {
-                                if (in0_core_order_index >= backward_in0_core_order_index &&
-                                    in0_core_order_index < forward_in0_core_order_index &&
+                                if (in0_core_order_index == backward_in0_core_order_index &&
                                     k_block_iter < (K_num_blocks - K_blocks_per_device)) {
                                     forward_half_block_to_fabric_neighbor(
                                         noc_obj,
@@ -513,7 +517,7 @@ void kernel_main() {
                             }
                         } else {
                             // Dev k > 0: short send via mux_forward + pkt_hdrs_backward
-                            if (in0_core_order_index >= forward_in0_core_order_index &&
+                            if (in0_core_order_index == forward_in0_core_order_index &&
                                 k_block_iter < (K_num_blocks - K_blocks_per_device)) {
                                 forward_half_block_to_fabric_neighbor(
                                     noc_obj,
@@ -541,7 +545,7 @@ void kernel_main() {
                         // all devices via wrap-around relay.
                         if (k_block_iter < (K_num_blocks - (K_num_blocks / num_devices))) {
                             if constexpr (num_targets_backward_direction > 0) {
-                                if (in0_core_order_index >= forward_in0_core_order_index) {
+                                if (in0_core_order_index == forward_in0_core_order_index) {
                                     forward_half_block_to_fabric_neighbor(
                                         noc_obj,
                                         m_tile,
@@ -563,8 +567,7 @@ void kernel_main() {
                                 }
                             }
                             if constexpr (num_targets_forward_direction > 0) {
-                                if (in0_core_order_index >= backward_in0_core_order_index &&
-                                    in0_core_order_index < forward_in0_core_order_index) {
+                                if (in0_core_order_index == backward_in0_core_order_index) {
                                     forward_half_block_to_fabric_neighbor(
                                         noc_obj,
                                         m_tile,
@@ -678,10 +681,12 @@ void kernel_main() {
                             n_tile,
                             n_tile_end);
                     } else {
-                        write_block_sync_granular_split<M_block_tiles, N_block_tiles, N_chunks, N_tiles_per_chunk>(
+                        write_block_sync_granular_split<M_block_tiles, N_block_tiles, N_chunks>(
                             noc_obj,
                             outputs_tuple,
                             out0_shape,
+                            chunk_tile_widths,
+                            chunk_tile_offsets,
                             cb_out,
                             out_tile_size,
                             m_tile,

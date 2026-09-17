@@ -36,6 +36,7 @@ jobs:
 
   build-artifact:
     needs: check-harbor
+    if: ${{ !cancelled() }}
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       contents: read
@@ -49,6 +50,7 @@ jobs:
       tracy: true
   run-microbenchmarks:
     needs: [check-harbor, build-artifact]
+    if: ${{ !cancelled() && needs.build-artifact.result == 'success' }}
     uses: ./.github/workflows/metal-run-microbenchmarks-impl.yaml
     secrets: inherit
     with:

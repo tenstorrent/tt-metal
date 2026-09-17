@@ -3208,7 +3208,6 @@ m2::KernelSpec make_compute_kernel(
     bool has_bias,
     uint32_t bias_ntiles,
     bool row_broadcast_bias,
-    const std::optional<UnaryWithParam>& fused_activation,
     const std::map<std::string, std::string>& mm_kernel_defines,
     const m2::ComputeHardwareConfig& compute_hw_config) {
     std::vector<m2::DFBBinding> dfb_bindings = {
@@ -3264,14 +3263,6 @@ m2::KernelSpec make_compute_kernel(
     };
     if (has_bias) {
         cta.insert({"row_broadcast_bias", row_broadcast_bias ? 1u : 0u});
-    }
-    if (fused_activation.has_value() && fused_activation.value().op_type != UnaryOpType::RELU) {
-        using ttnn::operations::experimental::quasar::matmul::utilities::get_activation_params;
-        const auto params = get_activation_params(fused_activation.value());
-        cta.insert({"activation_type", static_cast<uint32_t>(params.type)});
-        cta.insert({"activation_param0", params.param0});
-        cta.insert({"activation_param1", params.param1});
-        cta.insert({"activation_param2", params.param2});
     }
 
     return m2::KernelSpec{
@@ -3615,11 +3606,11 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
         mm_kernel_in1_receiver_writer_other_noc_setup_defines["FUSE_BIAS"] = "1";
     }
     if (fused_activation.has_value()) {
-        if (fused_activation.value().op_type == UnaryOpType::RELU) {
-            mm_kernel_defines["PACK_RELU"] = "1";
-        } else {
-            mm_kernel_defines["SFPU_ACTIVATION"] = "1";
-        }
+        TT_FATAL(
+            fused_activation.value().op_type == UnaryOpType::RELU,
+            "Quasar 2D matmul fused activation only supports RELU (packer); packer-thread SFPU "
+            "activations (SFPU_ACTIVATION) are not supported.");
+        mm_kernel_defines["PACK_RELU"] = "1";
     }
     if (packer_l1_acc_en) {
         mm_kernel_defines["PACKER_L1_ACC"] = "1";
@@ -4265,7 +4256,6 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
         bias_tensor.has_value(),
         in1_per_core_w,
         row_broadcast_bias,
-        fused_activation,
         mm_kernel_defines,
         compute_hw_config));
 

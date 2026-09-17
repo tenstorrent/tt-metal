@@ -19,22 +19,22 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_lower_clamp_only_(sfpi::vFloat val)
     sfpi::vFloat xlog2      = (val * ONE_LN2 + 127.f);
 
     // Lower clamp only (xlog2 >= 0). Upper clamp is dead when val <= 0 (see file header).
-    sfpi::vFloat threshold_low = 0.f;
-    sfpi::vec_min_max(threshold_low, xlog2);
+    // One SFPSWAP via sfpi::max, unlike sfpi::vec_min_max's swap through a second operand.
+    xlog2 = sfpi::max(xlog2, 0.0f);
 
     sfpi::vInt z = _float_to_int32_for_exp_21f_(xlog2);
 
-    sfpi::vInt exponential_part = exexp(sfpi::reinterpret<sfpi::vFloat>(z), sfpi::ExponentMode::NoDebias);
-    sfpi::vInt fractional_part  = sfpi::exman(sfpi::reinterpret<sfpi::vFloat>(z));
+    sfpi::vInt exponential_part = exexp(sfpi::as<sfpi::vFloat>(z), sfpi::ExponentMode::Biased);
+    sfpi::vMag fractional_part  = sfpi::exman(sfpi::as<sfpi::vFloat>(z));
 
-    sfpi::vFloat frac = sfpi::int32_to_float(fractional_part, sfpi::RoundMode::NearestEven);
+    sfpi::vFloat frac = sfpi::convert<sfpi::vFloat>(fractional_part, sfpi::RoundMode::NearestAway);
     frac              = PolynomialEvaluator::eval(frac, 1.0017248f, 7.839635491371155e-08f, 4.791750143340323e-15f);
 
     sfpi::vFloat y = sfpi::setexp(frac, exponential_part);
 
     if constexpr (!is_fp32_dest_acc_en)
     {
-        y = sfpi::convert<sfpi::vFloat16b>(y, sfpi::RoundMode::NearestEven);
+        y = sfpi::convert<sfpi::vFloat16b>(y, sfpi::RoundMode::NearestAway);
     }
 
     return y;

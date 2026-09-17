@@ -34,6 +34,7 @@ jobs:
 
   build-artifact:
     needs: check-harbor
+    if: ${{ !cancelled() }}
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       contents: read
@@ -49,6 +50,7 @@ jobs:
 
   galaxy-profiler-tests:
     needs: [check-harbor, build-artifact]
+    if: ${{ !cancelled() && needs.build-artifact.result == 'success' }}
     uses: ./.github/workflows/galaxy-profiler-tests-impl.yaml
     secrets: inherit
     with:

@@ -60,6 +60,24 @@ class ThroughputCallback(TrainerCallback):
         self._tokens_in_step = 0
 
 
+class EpochCallback(TrainerCallback):
+    """Print `Epoch N completed` each time training crosses a full pass over the corpus."""
+
+    def __init__(self, steps_per_epoch: float) -> None:
+        self._steps_per_epoch = steps_per_epoch
+        self._completed = 0
+
+    def on_train_begin(self, trainer: SFTTrainer) -> None:
+        # Baseline from the starting step so resuming mid-run doesn't replay past epochs.
+        self._completed = int(trainer.step / self._steps_per_epoch)
+
+    def on_step_end(self, trainer: SFTTrainer, step: int, *args: Any, **kwargs: Any) -> None:
+        completed = int(step / self._steps_per_epoch)
+        while self._completed < completed:
+            self._completed += 1
+            print(f"Epoch {self._completed} completed")
+
+
 class MemoryTrackerCallback(TrainerCallback):
     """In-loop FORWARD_PASS / BACKWARD_PASS / FIRST_ITERATION_COMPLETE snapshots over step 1, then deregister.
 

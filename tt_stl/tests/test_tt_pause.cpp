@@ -12,14 +12,14 @@
 namespace ttsl {
 namespace {
 
-TEST(TTPauseTest, PauseDoesNotCrash) {
+TEST(TTPauseTest, CPU_PauseDoesNotCrash) {
     // Simply verify that pause can be called without crashing
     for (int i = 0; i < 1000; ++i) {
         pause();
     }
 }
 
-TEST(TTNiceSpinUntilTest, ImmediateReturnWhenPredicateTrue) {
+TEST(TTNiceSpinUntilTest, CPU_ImmediateReturnWhenPredicateTrue) {
     // Predicate is immediately true, should return without spinning
     auto start = std::chrono::steady_clock::now();
     nice_spin_until([] { return true; });
@@ -30,7 +30,7 @@ TEST(TTNiceSpinUntilTest, ImmediateReturnWhenPredicateTrue) {
     EXPECT_LT(duration.count(), 1000);
 }
 
-TEST(TTNiceSpinUntilTest, WaitsUntilPredicateBecomesTrueWithAtomicFlag) {
+TEST(TTNiceSpinUntilTest, CPU_WaitsUntilPredicateBecomesTrueWithAtomicFlag) {
     std::atomic<bool> flag{false};
 
     // Record start BEFORE thread construction so the setter's sleep is always
@@ -53,7 +53,7 @@ TEST(TTNiceSpinUntilTest, WaitsUntilPredicateBecomesTrueWithAtomicFlag) {
     setter.join();
 }
 
-TEST(TTNiceSpinUntilTest, WaitsUntilPredicateBecomesTrueWithCounter) {
+TEST(TTNiceSpinUntilTest, CPU_WaitsUntilPredicateBecomesTrueWithCounter) {
     std::atomic<int> counter{0};
 
     std::thread incrementer([&counter] {
@@ -69,7 +69,7 @@ TEST(TTNiceSpinUntilTest, WaitsUntilPredicateBecomesTrueWithCounter) {
     incrementer.join();
 }
 
-TEST(TTNiceSpinUntilTest, CustomNSpinsParameter) {
+TEST(TTNiceSpinUntilTest, CPU_CustomNSpinsParameter) {
     std::atomic<int> call_count{0};
 
     // With N_SPINS=10, we should hit the sleep branch more frequently
@@ -82,7 +82,7 @@ TEST(TTNiceSpinUntilTest, CustomNSpinsParameter) {
     EXPECT_GE(call_count.load(), 50);
 }
 
-TEST(TTNiceSpinUntilTest, CustomMaxWaitUSParameter) {
+TEST(TTNiceSpinUntilTest, CPU_CustomMaxWaitUSParameter) {
     std::atomic<bool> flag{false};
 
     std::thread setter([&flag] {
@@ -97,7 +97,7 @@ TEST(TTNiceSpinUntilTest, CustomMaxWaitUSParameter) {
     setter.join();
 }
 
-TEST(TTNiceSpinUntilTest, PredicateWithArguments) {
+TEST(TTNiceSpinUntilTest, CPU_PredicateWithArguments) {
     std::atomic<int> value{0};
 
     std::thread setter([&value] {
@@ -114,7 +114,7 @@ TEST(TTNiceSpinUntilTest, PredicateWithArguments) {
     setter.join();
 }
 
-TEST(TTNiceSpinUntilTest, PredicateWithMultipleArguments) {
+TEST(TTNiceSpinUntilTest, CPU_PredicateWithMultipleArguments) {
     std::atomic<int> a{0};
     std::atomic<int> b{0};
 
@@ -136,7 +136,7 @@ TEST(TTNiceSpinUntilTest, PredicateWithMultipleArguments) {
     setter.join();
 }
 
-TEST(TTNiceSpinUntilTest, ExponentialBackoffBehavior) {
+TEST(TTNiceSpinUntilTest, CPU_ExponentialBackoffBehavior) {
     // This test verifies the exponential backoff by checking that the function
     // doesn't consume excessive CPU time when waiting for a longer duration
     std::atomic<bool> flag{false};
@@ -159,7 +159,7 @@ TEST(TTNiceSpinUntilTest, ExponentialBackoffBehavior) {
     setter.join();
 }
 
-TEST(TTNiceSpinUntilTest, ZeroSpinsGoesDirectlyToSleep) {
+TEST(TTNiceSpinUntilTest, CPU_ZeroSpinsGoesDirectlyToSleep) {
     // With N_SPINS=1, should hit sleep on every iteration
     std::atomic<bool> flag{false};
 

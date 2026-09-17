@@ -68,3 +68,8 @@ if(NOT EXISTS "${SHAKESPEARE_FILE}")
 else()
     message(STATUS "Shakespeare text file already exists at ${SHAKESPEARE_FILE}, skipping download.")
 endif()
+
+target_precompile_headers(nano_gpt REUSE_FROM ttml_pch)
+target_precompile_headers(llama_inference REUSE_FROM ttml_pch)
+target_precompile_headers(nano_gpt_aggregator REUSE_FROM ttml_pch)
+target_precompile_headers(nano_gpt_optimizer REUSE_FROM ttml_pch)

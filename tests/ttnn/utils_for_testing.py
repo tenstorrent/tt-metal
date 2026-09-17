@@ -58,6 +58,44 @@ TORCH_INTEGER_DTYPES = [
 NP_INTEGER_DTYPES = [np.byte, np.int16, np.int32, np.int64, np.uint16, np.uint32, np.uint64]
 
 
+def make_disjoint_dram_core_range_set(device):
+    num_dram_banks = device.dram_grid_size().x
+    first_range_end = 2 if num_dram_banks == 7 else 1
+    return ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(first_range_end, 0)),
+            ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(num_dram_banks - 1, 0)),
+        }
+    )
+
+
+def make_full_dram_core_range_set(device):
+    num_dram_banks = device.dram_grid_size().x
+    return ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_dram_banks - 1, 0))})
+
+
+# DRAM core grids that can only be built once a device is available are referenced from
+# `@pytest.mark.parametrize` by a stable string key instead of by the factory callable
+# itself, so that every pytest-xdist worker collects an identical set of test IDs.
+# (A bare function object renders as `<function ... at 0x...>`, whose address differs per
+# worker process, which makes xdist abort with "different tests were collected".)
+DRAM_GRID_FACTORIES = {
+    "disjoint_dram": make_disjoint_dram_core_range_set,
+    "full_dram": make_full_dram_core_range_set,
+}
+
+
+def resolve_dram_grid(grid, device):
+    """Resolve a parametrized `grid` value into a concrete `ttnn.CoreRangeSet`.
+
+    String values are looked up in `DRAM_GRID_FACTORIES` and built for `device`;
+    already-concrete `CoreRangeSet` values are returned unchanged.
+    """
+    if isinstance(grid, str):
+        return DRAM_GRID_FACTORIES[grid](device)
+    return grid
+
+
 def construct_pcc_assert_message(message, expected_pytorch_result, actual_pytorch_result):
     messages = []
     messages.append(message)
@@ -178,6 +216,7 @@ def assert_allclose(
 
 
 def assert_with_ulp(
+    *,
     expected_result: Union[ttnn.Tensor, torch.Tensor],
     actual_result: Union[ttnn.Tensor, torch.Tensor],
     ulp_threshold=10,
@@ -194,6 +233,7 @@ def assert_with_ulp(
     Where ULP(expected) returns, for each element, the length of a single Unit of Least Precision (ULP).
 
     ``expected_result`` is the reference (golden) tensor and ``actual_result`` is the tensor under test.
+    All arguments are keyword-only because swapping the reference and actual tensors changes the metric.
     On failure the message reports the worst element as ``|calculated <actual> - golden <expected>| /
     ULP(golden)``, i.e. the first printed operand is ``actual_result`` and the divisor is the ULP of
     ``expected_result``.
@@ -889,7 +929,11 @@ def assert_div_by_zero_outputs(
     finite_mask = torch.isfinite(golden_tensor) & torch.isfinite(device_tensor)
     if finite_mask.any():
         # Safety net: not reached when golden is all ±inf after zero replacement.
-        assert_with_ulp(golden_tensor[finite_mask], device_tensor[finite_mask], ulp_threshold=ulp_threshold)
+        assert_with_ulp(
+            expected_result=golden_tensor[finite_mask],
+            actual_result=device_tensor[finite_mask],
+            ulp_threshold=ulp_threshold,
+        )
 
 
 # ---------------------------------------------------------------------------

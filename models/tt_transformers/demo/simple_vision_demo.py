@@ -186,6 +186,12 @@ def create_multimodal_model(
         dtype = ttnn.bfloat8_b
         logger.info("Setting dtype to bfloat8_b for 90B model on T3K to fit model in memory")
 
+    # NOTE: the warm-ttnn-cache HF-load skip is intentionally NOT applied to this multimodal path.
+    # The vision tower consumes several weights on the *host* (materialized without a
+    # `cache_file_name`), so a dataless placeholder silently feeds garbage and collapses accuracy
+    # (90B-Vision warm run: BERTScore F1 0.21 vs 0.55). Getting the win here needs a host-weight
+    # hybrid like the gemma3-vision path — tracked as a follow-up (#45400). checkpoint is None =>
+    # load here; {} => explicit/DP-reuse skip; populated => reuse.
     if checkpoint is None:
         checkpoint = tt_model_args.load_state_dict()
 
@@ -207,6 +213,7 @@ def create_multimodal_model(
             configuration=tt_model_args,
             use_paged_kv_cache=use_paged_kv_cache,
         )
+
     return tt_model_args, model, checkpoint
 
 
@@ -394,6 +401,9 @@ def test_multimodal_demo_text(
 
     non_trace_generated_texts = []
 
+    if enable_trace and hasattr(generator, "warmup_vision_encoder"):
+        # Compile the vision encoder for every image geometry before the decode trace is recorded.
+        generator.warmup_vision_encoder()
     for iter_num in range(warmup_iters + 1):
         logger.info(f"Iteration {iter_num}")
         current_dialogs = dialogs

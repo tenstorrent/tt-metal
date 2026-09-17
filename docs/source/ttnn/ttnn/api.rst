@@ -13,6 +13,7 @@ Device
    ttnn.close_device
    ttnn.manage_device
    ttnn.synchronize_device
+   ttnn.is_trace_capture_active
    ttnn.SetDefaultDevice
    ttnn.GetDefaultDevice
 
@@ -50,6 +51,19 @@ dimensions of a shape to multiples of 32 (tile alignment).
 
       padded = align_shape_to_tile([1, 384, 49, 96])
       # => [1, 384, 64, 96]
+
+Trace
+*****
+
+.. autosummary::
+   :toctree: api
+   :nosignatures:
+   :template: function.rst
+
+   ttnn.begin_trace_capture
+   ttnn.end_trace_capture
+   ttnn.execute_trace
+   ttnn.release_trace
 
 Memory Config
 *************
@@ -252,6 +266,7 @@ Pointwise Unary
    ttnn.silu
    ttnn.sin
    ttnn.sinh
+   ttnn.softcap
    ttnn.softplus
    ttnn.softshrink
    ttnn.softsign
@@ -288,6 +303,7 @@ Pointwise Binary
    ttnn.bitwise_and
    ttnn.bitwise_or
    ttnn.bitwise_xor
+   ttnn.clamped_silu_glu
    ttnn.div
    ttnn.div_no_nan
    ttnn.divide
@@ -334,6 +350,7 @@ Pointwise Binary
    ttnn.rpow
    ttnn.rsub
    ttnn.rsub_
+   ttnn.situ_glu
    ttnn.squared_difference
    ttnn.squared_difference_
    ttnn.subalpha
@@ -634,6 +651,7 @@ KV Cache
    ttnn.kv_cache.update_cache_for_token_
    ttnn.fill_cache
    ttnn.update_cache
+   ttnn.experimental.indexed_fused_update_cache
 
 Backward operations
 ===================
@@ -677,7 +695,6 @@ Backward operations
    ttnn.erfinv_bw
    ttnn.exp2_bw
    ttnn.exp_bw
-   ttnn.experimental.gelu_bw
    ttnn.expm1_bw
    ttnn.fill_bw
    ttnn.fill_zero_bw

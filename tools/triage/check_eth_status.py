@@ -44,7 +44,6 @@ class EthCoreDefinitions:
 
 @dataclass
 class EthCoreCheckData:
-    location: OnChipCoordinate | None = triage_field("Loc")
     port_status: str | None = triage_field("Port Status")
     retrain_count: int | None = triage_field("Retrain Count")
     rx_link_up: str | None = triage_field("RX Link Up")
@@ -52,7 +51,6 @@ class EthCoreCheckData:
     mailbox: list[str] | None = triage_field("Mailbox")
 
     def __init__(self):
-        self.location = None
         self.port_status = None
         self.retrain_count = None
         self.rx_link_up = None
@@ -212,7 +210,7 @@ def get_eth_core_data(device: Device, location: OnChipCoordinate, context: Conte
 def run(args, context: Context):
     run_checks = get_run_checks(args, context)
     BLOCK_TYPES_TO_CHECK = ["active_eth"]
-    run_checks.run_per_block_check(
+    return run_checks.run_per_block_check(
         lambda location: get_eth_core_data(location.device, location, context), block_filter=BLOCK_TYPES_TO_CHECK
     )
 

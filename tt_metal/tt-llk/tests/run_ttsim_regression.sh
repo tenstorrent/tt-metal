@@ -59,10 +59,7 @@ Options:
   -t, --timeout SEC     Per-test timeout in seconds (default: 300; env: TIMEOUT).
   -a, --architecture A  ttsim architecture: 'blackhole', 'wormhole', or
                         'quasar' (default: blackhole; env: TTSIM_ARCHITECTURE).
-                        Controls test selection and collection. Also controls
-                        auto-provisioning for blackhole/wormhole when
-                        TT_METAL_SIMULATOR is unset. Quasar currently requires
-                        TT_METAL_SIMULATOR to be set by the caller.
+                        Controls test selection and collection.
   -h, --help            Show this help message.
 
 Environment:
@@ -151,8 +148,10 @@ provision_ttsim() {
             hash_var=ttsim_wh_so_hash
             ;;
         quasar)
-            echo "ERROR: Quasar auto-provisioning is not available yet; set TT_METAL_SIMULATOR" >&2
-            exit 1
+            architecture=quasar
+            so_name=libttsim_qsr.so
+            soc_src="${REPO_ROOT}/tt_metal/soc_descriptors/quasar_32_arch_ttsim.yaml"
+            hash_var=ttsim_qsr_so_hash
             ;;
         *)
             echo "ERROR: unknown --architecture '$architecture' (expected 'blackhole', 'wormhole', or 'quasar')" >&2
@@ -243,6 +242,9 @@ fi
 # ttsim does not implement SFPLOADMACRO; default to disabling unless caller set it.
 export TT_METAL_DISABLE_SFPLOADMACRO="${TT_METAL_DISABLE_SFPLOADMACRO:-1}"
 
+# ttsim does not implement NOC API v2; default to using v1 unless caller set it.
+export TT_METAL_QUASAR_NOC_API_VERSION="${TT_METAL_QUASAR_NOC_API_VERSION:-1}"
+
 mkdir -p "$RESULTS_DIR"
 
 # ──────────────────────────────────────────────────────────────
@@ -285,7 +287,7 @@ PYTEST_BASE_ARGS=(
 if [[ "$WORKERS" -gt 0 ]]; then
     PYTEST_BASE_ARGS+=(
         -n "$WORKERS"
-        --dist=loadfile
+        --dist=worksteal
         --max-worker-restart=10000
     )
 fi
@@ -357,6 +359,7 @@ echo " Marker expr    : ${MARKER_EXPR}"
 echo " Simulator      : ${TT_METAL_SIMULATOR}"
 echo " SoC descriptor : $(dirname "$TT_METAL_SIMULATOR")/soc_descriptor.yaml"
 echo " SFPLOADMACRO   : disabled=${TT_METAL_DISABLE_SFPLOADMACRO}"
+echo " NOC API version: ${TT_METAL_QUASAR_NOC_API_VERSION}"
 echo " Workers (-n)   : ${WORKERS}"
 echo " Per-test fork  : on"
 echo " Timeout        : ${TIMEOUT}s"

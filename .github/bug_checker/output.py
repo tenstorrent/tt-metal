@@ -13,6 +13,11 @@ from .logger import logger
 REPO = os.environ.get("GITHUB_REPOSITORY", "tenstorrent/tt-metal")
 DEFAULT_RULE_REF = "main"
 
+# Appended to comments that report a check result. Commits pushed after a PR is
+# opened do not re-trigger the check automatically, so `/bug-check run` is the
+# only way to get a fresh scan — make sure readers can find it.
+RERUN_FOOTER = "\n---\n*Comment `/bug-check run` to re-run this check, or `/bug-check` to list all commands.*"
+
 
 # --- SARIF ---
 
@@ -238,4 +243,5 @@ def format_summary_comment(
     if comment_failures:
         lines.append(f"\n> **Note:** {comment_failures} comment(s) could not be posted due to API errors.")
 
+    lines.append(RERUN_FOOTER)
     return "\n".join(lines)

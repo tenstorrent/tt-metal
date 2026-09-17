@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "ttnn/tensor/tensor.hpp"
@@ -160,10 +161,9 @@ RollPlan compute_roll_plan(
 
     auto* device = input.device();
 
-    // Support both ROW_MAJOR and COL_MAJOR shard orientations.
-    // ROW_MAJOR: tensor height → grid y-axis, tensor width → grid x-axis.
-    // COL_MAJOR: tensor height → grid x-axis, tensor width → grid y-axis.
-    // This mirrors the pattern in concat_block_sharded_program_factory.cpp lines 63–66.
+    // Support both ROW_MAJOR and COL_MAJOR shard orientations. The orientation does not change
+    // how the tensor is cut into shards, only the order in which those shards are walked over the
+    // core grid: ROW_MAJOR walks it x-inner, COL_MAJOR y-inner. See shard_to_core below.
     const bool row_major_orient = out_ss.orientation == ShardOrientation::ROW_MAJOR;
     TT_FATAL(
         out_ss.grid.ranges().size() == 1, "Native sharded roll requires a single contiguous rectangular CoreRange");
@@ -171,8 +171,9 @@ RollPlan compute_roll_plan(
     const uint32_t grid_cols = grid_range.end_coord.x - grid_range.start_coord.x + 1;
     const uint32_t grid_rows = grid_range.end_coord.y - grid_range.start_coord.y + 1;
 
-    // Number of shard positions in the tensor width direction (used in shard_linear).
+    // Shard-grid extent: how many shard positions the tensor spans in each direction.
     const uint32_t n_shard_cols = W_cells / shard_cells_w;
+    const uint32_t n_shard_rows = H_cells / shard_cells_h;
 
     // Pre-compute physical core map indexed by [gy][gx]. Cores enumerated y-outer, x-inner.
     std::vector<std::vector<CoreCoord>> physical_cores(grid_rows, std::vector<CoreCoord>(grid_cols));
@@ -183,17 +184,38 @@ RollPlan compute_roll_plan(
         }
     }
 
-    // shard_linear maps (cell_row, cell_col) → core enumeration index c.
-    // The core enumeration is y-outer, x-inner, so c = gy * grid_cols + gx.
-    // ROW_MAJOR: shard (sr,sc) → (gy=sr, gx=sc) → c = sr*n_shard_cols + sc.
-    // COL_MAJOR: shard (sr,sc) → (gx=sr, gy=sc) → c = sc*grid_cols + sr.
-    auto shard_linear = [&](uint32_t row, uint32_t col) -> uint32_t {
+    const uint32_t num_cores = grid_rows * grid_cols;
+    // A shard index past the last core would index off the end of all_transfers/physical_cores.
+    TT_FATAL(
+        n_shard_rows * n_shard_cols <= num_cores,
+        "Native sharded roll: tensor spans {}x{} shards but the core grid only has {} cores",
+        n_shard_rows,
+        n_shard_cols,
+        num_cores);
+
+    // shard_index maps (cell_row, cell_col) → the buffer's linear shard index. Legacy sharding
+    // numbers shards row-major over the shard grid for every layout and both orientations
+    // (`core_to_host_pages` in tt_metal/impl/buffers/buffer.cpp), so orientation plays no part
+    // here — it only decides which core that shard index lands on (see shard_to_core).
+    auto shard_index = [&](uint32_t row, uint32_t col) -> uint32_t {
         const uint32_t sr = row / shard_cells_h;
         const uint32_t sc = col / shard_cells_w;
-        return row_major_orient ? sr * n_shard_cols + sc : sc * grid_cols + sr;
+        return sr * n_shard_cols + sc;
     };
 
-    const uint32_t num_cores = grid_rows * grid_cols;
+    // tt_metal places shard i on `corerange_to_cores(grid, n, row_wise=(orientation == ROW_MAJOR))[i]`,
+    // i.e. (gx = i % grid_cols, gy = i / grid_cols) for ROW_MAJOR and (gx = i / grid_rows,
+    // gy = i % grid_rows) for COL_MAJOR. all_transfers, physical_cores and the per-core arg loop all
+    // enumerate the grid y-outer, x-inner (c = gy * grid_cols + gx), which makes ROW_MAJOR the
+    // identity and COL_MAJOR a transpose. Conflating the two is only harmless when the shard grid
+    // happens to match the core grid (BLOCK_SHARDED); for HEIGHT/WIDTH it picks the wrong core.
+    auto shard_to_core = [&](uint32_t idx) -> uint32_t {
+        return row_major_orient ? idx : (idx % grid_rows) * grid_cols + idx / grid_rows;
+    };
+    // Inverse of shard_to_core: which shard the core at enumeration index c owns.
+    auto core_to_shard = [&](uint32_t c) -> uint32_t {
+        return row_major_orient ? c : (c % grid_cols) * grid_rows + c / grid_cols;
+    };
 
     const uint32_t l1_alignment = tt::tt_metal::hal::get_l1_alignment();
     // Sharded buffers store one shard cell-row per page, padded up to the backing memory's
@@ -262,7 +284,7 @@ RollPlan compute_roll_plan(
     for (const auto& p : col_pieces) {
         const uint32_t copy_bytes = p.len * cell_size;
         bool have_run = false;
-        uint32_t run_dst_core = 0, run_src_core = 0;
+        uint32_t run_dst_core = 0, run_src_core = 0, run_src_shard = 0;
         uint32_t run_src_off = 0, run_dst_off = 0, run_num = 0;
         auto flush = [&]() {
             if (!have_run) {
@@ -270,7 +292,7 @@ RollPlan compute_roll_plan(
             }
             all_transfers[run_dst_core].push_back(RollTransferDesc{
                 .src_physical_core = physical_cores[run_src_core / grid_cols][run_src_core % grid_cols],
-                .src_dram_shard_idx = run_src_core,
+                .src_dram_shard_idx = run_src_shard,
                 .src_l1_offset = run_src_off,
                 .dst_offset = run_dst_off,
                 .copy_size = copy_bytes,
@@ -282,8 +304,9 @@ RollPlan compute_roll_plan(
         };
         for (uint32_t r = 0; r < H_cells; r++) {
             const uint32_t src_row = is_last_dim ? r : rolled_src_row(r);
-            const uint32_t dst_core = shard_linear(r, p.dst_col);
-            const uint32_t src_core = shard_linear(src_row, p.src_col);
+            const uint32_t src_shard = shard_index(src_row, p.src_col);
+            const uint32_t dst_core = shard_to_core(shard_index(r, p.dst_col));
+            const uint32_t src_core = shard_to_core(src_shard);
             const uint32_t src_off = local_offset(src_row, p.src_col);
             const uint32_t dst_off = local_offset(r, p.dst_col);
             // Extend the run only if cores match and both offsets advance by exactly one pitch.
@@ -296,6 +319,7 @@ RollPlan compute_roll_plan(
                 have_run = true;
                 run_dst_core = dst_core;
                 run_src_core = src_core;
+                run_src_shard = src_shard;
                 run_src_off = src_off;
                 run_dst_off = dst_off;
                 run_num = 1;
@@ -397,12 +421,12 @@ RollPlan compute_roll_plan(
         return args;
     };
 
-    auto build_runtime_args_dram = [&](uint32_t dst_core_idx, const std::vector<RollTransferDesc>& descs) {
+    auto build_runtime_args_dram = [&](uint32_t dst_shard_idx, const std::vector<RollTransferDesc>& descs) {
         KernelDescriptor::CoreRuntimeArgs args;
         args.reserve(3 + descs.size() * 7);
-        args.push_back(dram_bank_id(dst_core_idx));
+        args.push_back(dram_bank_id(dst_shard_idx));
         // dst bank base = output buffer address + shard offset, from the current buffer.
-        args.push_back(dram_bank_base(plan.output_buffer, dst_core_idx));
+        args.push_back(dram_bank_base(plan.output_buffer, dst_shard_idx));
         args.push_back(static_cast<uint32_t>(descs.size()));
         for (const auto& td : descs) {
             // src_bank_id, src_bank_addr (= bank_base + intra_shard_offset), dst_offset,
@@ -421,8 +445,10 @@ RollPlan compute_roll_plan(
     // DRAM RM mode: full-shard L1 staging.
     // Per core: [dst_bank_id, dst_bank_base, num_src, (src0_bank_id, src0_addr)..., num_xfers,
     //            (src_slot, src_off, dst_off, copy_size, src_stride, dst_stride, num_rows) x N]
-    auto build_runtime_args_dram_rm = [&](uint32_t dst_core_idx, const std::vector<RollTransferDesc>& descs) {
-        // Collect unique source shards (at most 2) and assign them to staging slots 0/1.
+    auto build_runtime_args_dram_rm = [&](uint32_t dst_shard_idx, const std::vector<RollTransferDesc>& descs) {
+        // Reader hard-codes 2 staging CBs (src0/src1) and `src_base[2]`; higher-dim rolls whose
+        // shard band straddles an outer-dim period can need 3+ sources. `roll.cpp` filters those
+        // via `dram_rm_roll_needs_extra_source_shards` before dispatch — assert as belt-and-braces.
         std::vector<uint32_t> src_shards;
         std::unordered_map<uint32_t, uint32_t> src_to_slot;
         for (const auto& td : descs) {
@@ -431,10 +457,18 @@ RollPlan compute_roll_plan(
                 src_shards.push_back(td.src_dram_shard_idx);
             }
         }
+        // Not TT_ASSERT: that compiles out in Release, and exceeding 2 sources does not trap — the
+        // reader would index past `src_base[2]` and emit silently wrong data.
+        TT_FATAL(
+            src_shards.size() <= 2,
+            "Native sharded roll DRAM RM: dst shard {} needs {} src shards; caller should have filtered via "
+            "dram_rm_roll_needs_extra_source_shards.",
+            dst_shard_idx,
+            src_shards.size());
         KernelDescriptor::CoreRuntimeArgs args;
-        args.push_back(dram_bank_id(dst_core_idx));
+        args.push_back(dram_bank_id(dst_shard_idx));
         // dst bank base = output buffer address + shard offset, from the current buffer.
-        args.push_back(dram_bank_base(plan.output_buffer, dst_core_idx));
+        args.push_back(dram_bank_base(plan.output_buffer, dst_shard_idx));
         args.push_back(static_cast<uint32_t>(src_shards.size()));
         for (uint32_t s : src_shards) {
             args.push_back(dram_bank_id(s));
@@ -458,9 +492,9 @@ RollPlan compute_roll_plan(
         CoreCoord logical(grid_range.start_coord.x + c % grid_cols, grid_range.start_coord.y + c / grid_cols);
         KernelDescriptor::CoreRuntimeArgs args;
         if (is_dram_rm) {
-            args = build_runtime_args_dram_rm(c, all_transfers[c]);
+            args = build_runtime_args_dram_rm(core_to_shard(c), all_transfers[c]);
         } else if (is_dram) {
-            args = build_runtime_args_dram(c, all_transfers[c]);
+            args = build_runtime_args_dram(core_to_shard(c), all_transfers[c]);
         } else {
             // L1 mode: data rides on the input/output .buffer-bound CBs; override_runtime_arguments
             // re-points those CB addresses on every cache hit (no placeholder rt-arg needed).
@@ -560,11 +594,11 @@ ProgramDescriptor RollShardedProgramFactory::create_descriptor(
     return desc;
 }
 
-void RollDeviceOperation::override_runtime_arguments(
+void RollShardedProgramFactory::override_runtime_arguments(
     tt::tt_metal::Program& program,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value,
+    const RollParams& operation_attributes,
+    const RollInputs& tensor_args,
+    Tensor& tensor_return_value,
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
     // Buffer addresses and bank ids move per dispatch, so re-run the planner -- create_descriptor's own
     // source of truth -- and write its args into the cached program instead of rebuilding it.
@@ -593,6 +627,74 @@ void RollDeviceOperation::override_runtime_arguments(
         cb_addr_only.cbs.push_back(tt::tt_metal::CBDescriptor{.buffer = plan.output_buffer});
         tt::tt_metal::apply_descriptor_runtime_args(program, cb_addr_only);  // override-rebuild-ok: cb-addr-only
     }
+}
+
+bool dram_rm_roll_needs_extra_source_shards(const Tensor& input, uint32_t shift, int32_t dim) {
+    // Only DRAM ROW_MAJOR sharded input can hit the reader's `src_base[2]` limit. Everything
+    // else routes through kernels that don't have this shape-dependent staging cap.
+    if (!input.is_sharded() || input.memory_config().buffer_type() != BufferType::DRAM ||
+        input.layout() != Layout::ROW_MAJOR || !input.shard_spec().has_value()) {
+        return false;
+    }
+    const auto& shape = input.padded_shape();
+    const uint32_t rank = shape.rank();
+    if (dim < 0 || static_cast<uint32_t>(dim) >= rank) {
+        return false;
+    }
+    // Last-dim rolls rotate columns within a fixed row → at most 2 src column-shards, never 3+.
+    if (static_cast<uint32_t>(dim) == rank - 1) {
+        return false;
+    }
+
+    const auto& ss = input.shard_spec().value();
+    const uint32_t shard_cells_h = ss.shape[0];
+    const uint32_t shard_cells_w = ss.shape[1];
+    const uint32_t W_cells = shape[rank - 1];
+    std::vector<uint32_t> rd(rank, 1);
+    uint32_t H_cells = 1;
+    for (uint32_t i = 0; i + 1 < rank; i++) {
+        rd[i] = shape[i];
+        H_cells *= rd[i];
+    }
+    // Not a valid native shape; the real fatal will fire in compute_roll_plan.
+    if (shard_cells_w == 0 || shard_cells_h == 0 || W_cells % shard_cells_w != 0 ||
+        H_cells % shard_cells_h != 0) {
+        return false;
+    }
+
+    std::vector<uint32_t> row_stride(rank, 0);
+    {
+        uint32_t s = 1;
+        for (int32_t k = static_cast<int32_t>(rank) - 2; k >= 0; k--) {
+            row_stride[k] = s;
+            s *= rd[k];
+        }
+    }
+    const uint32_t dim_size_cells = (static_cast<uint32_t>(dim) == rank - 2) ? rd[dim] : shape[dim];
+    if (dim_size_cells == 0 || (shift % dim_size_cells) == 0) {
+        return false;  // No-op roll: every dst row's source is itself → 1 src shard per dst core.
+    }
+    const uint32_t shift_cells = shift;  // cell_h == 1 for RM.
+    auto rolled_src_row = [&](uint32_t r) -> uint32_t {
+        const uint32_t coord_d = (r / row_stride[dim]) % dim_size_cells;
+        const uint32_t src_coord_d = (coord_d + dim_size_cells - (shift_cells % dim_size_cells)) % dim_size_cells;
+        return r + (src_coord_d - coord_d) * row_stride[dim];
+    };
+
+    // Higher-dim roll: src_col == dst_col, so a dst shard's src shards differ only in row.
+    // Walk cell-rows within each dst shard row-band, count unique src shard rows.
+    const uint32_t n_shard_rows = H_cells / shard_cells_h;
+    for (uint32_t dst_sr = 0; dst_sr < n_shard_rows; ++dst_sr) {
+        std::unordered_set<uint32_t> unique_src_shard_rows;
+        for (uint32_t r_local = 0; r_local < shard_cells_h; ++r_local) {
+            const uint32_t r = dst_sr * shard_cells_h + r_local;
+            unique_src_shard_rows.insert(rolled_src_row(r) / shard_cells_h);
+            if (unique_src_shard_rows.size() > 2) {
+                return true;
+            }
+        }
+    }
+    return false;
 }
 
 }  // namespace ttnn::prim

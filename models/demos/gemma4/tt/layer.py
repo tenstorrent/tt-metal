@@ -149,6 +149,7 @@ class Gemma4DecoderLayer:
             ccl_manager=ccl_manager,
             dtype=shared_mlp_dtype,
             tensor_cache_path=f"{tensor_cache_path}/layer_{layer_idx}/mlp" if tensor_cache_path else None,
+            layer_idx=layer_idx,
         )
 
         # MoE block (router + routed experts) — split dtypes between the two
@@ -316,8 +317,10 @@ class Gemma4DecoderLayer:
         # Per-layer input embeddings (E2B/E4B) — BEFORE layer_scalar (matching HF order)
         if self.hidden_size_per_layer_input and per_layer_input is not None and hasattr(self, "per_layer_input_gate"):
             residual_pli = hidden_states
+            from models.demos.gemma4.tt.compute_config import gelu_variant
+
             gated = ttnn.linear(hidden_states, self.per_layer_input_gate)
-            gated = ttnn.gelu(gated, fast_and_approximate_mode=True)
+            gated = ttnn.gelu(gated, variant=gelu_variant())
             gated = ttnn.mul(gated, per_layer_input)
             projected = ttnn.linear(gated, self.per_layer_projection)
             normed_pli = self.post_per_layer_input_norm.forward(projected)

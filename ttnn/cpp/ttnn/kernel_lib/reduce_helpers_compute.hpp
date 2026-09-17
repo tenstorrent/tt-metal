@@ -100,6 +100,9 @@ enum class ReduceDataFormatReconfigMode { NONE, INPUT, OUTPUT, INPUT_AND_OUTPUT 
  *
  * - NoWaitNoPop: Caller manages wait/pop externally (preloaded, tiles already in CB).
  *   For REDUCE_COL tiles are accessed in row-major order, same as WaitUpfrontNoPop.
+ *
+ * Output synchronization is independent of the input policy: each output tile is
+ * reserved and pushed individually.
  */
 enum class ReduceInputPolicy { WaitAndPopPerTile, BulkWaitBulkPop, WaitUpfrontNoPop, NoWaitNoPop };
 
@@ -150,7 +153,7 @@ struct ReduceInputBlockShape {
  * Does not hold iteration state - that's provided via Accumulate wrapper.
  */
 struct AccumulationConfig {
-    // CB holding the running accumulator tile across reduce() iterations; see Accumulate below.
+    // CB holding the running output-tile stream across reduce() iterations; see Accumulate below.
     uint32_t cb_accumulator = 0;
     uint32_t dst_index = 0;  // DST register for accumulation (default: 0)
 
@@ -166,12 +169,13 @@ struct AccumulationConfig {
  *
  * The iteration index determines reload behavior:
  * - iteration == 0: skip reload (first call, no accumulated value yet)
- * - iteration > 0: reload from accumulator CB before reducing
+ * - iteration > 0: reload from the accumulator CB before reducing. The CB must expose one tile
+ *   per output, in output order; REDUCE_COL reloads and pops a complete DEST chunk at a time.
  *
  * Unsupported combinations (rejected by static_assert in reduce()):
  * - MAX + REDUCE_SCALAR: the running max cannot be reproduced by the copy_tile reload.
  * - MAX + REDUCE_ROW on Quasar: the reload needs a within-16x16-face transpose that
- *   copy_tile_to_dst_init_short asserts against on Quasar.
+ *   copy_init asserts against on Quasar.
  *
  * Usage:
  *   const auto cfg = AccumulationConfig::with_cb(cb_accum);
@@ -293,14 +297,14 @@ struct NoOp {
  * @tparam scaler_dfb_id DataflowBuffer ID containing scaler tile (compile-time CB id)
  * @tparam output_dfb_id Output DataflowBuffer ID for reduced tiles (compile-time CB id)
  *                       The input/output formats are deduced from these CB ids
- *                       (unpack_src_format / pack_dst_format), so Int32 MAX and SUM are routed to
- *                       the SFPU path automatically (Int32 has no FPU support).
- *                       Other formats use FPU/GMPOOL. Only REDUCE_ROW/REDUCE_COL Int32 MAX/SUM on
- *                       SFPU; MIN dispatched via reduce_{h,w}_neg.cpp (SFPU vs FPU branch).
+ *                       (unpack_src_format / pack_dst_format), so Int32 is routed to the SFPU path
+ *                       automatically (Int32 has no FPU support). Other formats use FPU/GMPOOL
+ *                       unless Accurate fp32 is requested. SFPU covers REDUCE_ROW/REDUCE_COL only;
+ *                       fast-mode float/bf16 MIN is dispatched via reduce_{h,w}_neg.cpp.
  * @tparam input_policy Input handling policy (default: WaitAndPopPerTile - streaming mode)
  * @tparam reconfig_mode Data format reconfiguration mode (default: INPUT_AND_OUTPUT)
- * @tparam fp32_mode Float32 precision mode (default: Fast). Accurate routes Float32 SUM through
- *                   the SFPU for full-fp32 accumulation; see ReduceFp32Mode.
+ * @tparam fp32_mode Float32 precision mode (default: Fast). Accurate routes Float32 through the
+ *                   SFPU at full fp32; see ReduceFp32Mode.
  *
  * @param input_block_shape Tile grid dimensions (rows x cols x batches)
  *              Use ReduceInputBlockShape::of(r, c, b), ::row(c), ::col(r), or ::single()

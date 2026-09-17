@@ -258,7 +258,8 @@ void add_fabric_mux_v2_to_program(
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
             .noc = forwarder_noc,
-            .named_compile_args = named_compile_args});
+            .named_compile_args = named_compile_args,
+            .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
     tt::tt_metal::SetRuntimeArgs(program, forwarder_kernel, mux_logical_core, downstream_sender_rt_args);
 
     tt::tt_metal::CreateKernel(
@@ -268,7 +269,8 @@ void add_fabric_mux_v2_to_program(
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
             .noc = manager_noc,
-            .named_compile_args = named_compile_args});
+            .named_compile_args = named_compile_args,
+            .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
 }
 
 void add_fabric_mux_v2_to_program(

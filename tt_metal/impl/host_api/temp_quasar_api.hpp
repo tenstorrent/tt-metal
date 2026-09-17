@@ -80,7 +80,6 @@ struct QuasarComputeConfig {
     std::vector<UnpackToDestMode> unpack_to_dest_mode;
     bool bfp8_pack_precise = false;
     bool math_approx_mode = false;
-    bool enable_2x_src_format = false;
 
     std::vector<uint32_t> compile_args;
 

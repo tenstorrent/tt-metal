@@ -593,12 +593,12 @@ struct ReduceToOneB1 {
             }
 
             // Initialize for binary operations
-            reconfig_data_format<SrcOrder::Regular, true>(CTArgs::local_cb, CTArgs::received_cb);
+            reconfig_full_operand(CTArgs::local_cb, CTArgs::received_cb);
             pack_reconfig_data_format<true>(CTArgs::scratch_cb);
             pack_block_contiguous_init(CTArgs::scratch_cb);
 
             // Load local tiles to dest
-            copy_tile_to_dst_init_short(CTArgs::local_cb);
+            copy_init(CTArgs::local_cb);
             cb_wait_front(CTArgs::local_cb, CTArgs::num_tiles);
             tile_regs_acquire();
             for (uint32_t i = 0; i < CTArgs::num_tiles; i++) {

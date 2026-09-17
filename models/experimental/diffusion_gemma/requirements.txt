@@ -1,12 +1,10 @@
 # DiffusionGemma bring-up — Python env (curated)
 #
-# Captured 2026-06-24 from the dedicated venv `/home/zni/venvs/tt-diffusion-gemma`
-# on the TT-QuietBox 2 (Blackhole) box (Python 3.12.12). Curated to the packages
-# DiffusionGemma's reference oracle + PCC/device harness actually use.
+# The packages DiffusionGemma's reference oracle + PCC/device harness actually
+# use (Python 3.12).
 #
 # ttnn / tt-metal are EDITABLE from THIS repo (built from source, loaded via the
-# venv's .pth) — do NOT pip-install them. For reference only, the env had:
-#     ttnn==0.65.1rc17.dev6840+gg48be0eecb6a   tt-umd==0.9.6   tt-exalens==0.3.21
+# venv's .pth) — do NOT pip-install them.
 #
 # torch is the CPU build (the reference/oracle runs on CPU; device math is ttnn on
 # Blackhole). Install torch from the CPU index, e.g.:

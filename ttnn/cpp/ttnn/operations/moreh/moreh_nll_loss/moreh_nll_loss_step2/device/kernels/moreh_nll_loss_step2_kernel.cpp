@@ -6,39 +6,34 @@
 
 #include "ttnn/kernel/compute/moreh_common.hpp"
 #include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    constexpr uint32_t per_core_tile_cnt = get_compile_time_arg_val(0);
+    constexpr auto per_core_tile_cnt = get_arg(args::per_core_tile_cnt);
 
-    constexpr uint32_t cb_weight = tt::CBIndex::c_2;
-    constexpr uint32_t cb_divisor = tt::CBIndex::c_3;
-    DataflowBuffer dfb_divisor_obj(cb_divisor);
+    DataflowBuffer dfb_tmp_weight_obj(dfb::tmp_weight);
+    DataflowBuffer dfb_tmp_input_obj(dfb::tmp_input);
+    DataflowBuffer dfb_tmp1_obj(dfb::tmp1);
+    DataflowBuffer dfb_divisor_recip_obj(dfb::divisor_recip);  // 1/divisor
+    DataflowBuffer dfb_tmp3_obj(dfb::tmp3);
 
-    constexpr uint32_t cb_tmp_weight = tt::CBIndex::c_24;
-    DataflowBuffer dfb_tmp_weight_obj(cb_tmp_weight);
-    constexpr uint32_t cb_tmp_input = tt::CBIndex::c_25;
-    DataflowBuffer dfb_tmp_input_obj(cb_tmp_input);
-    constexpr uint32_t cb_tmp1 = tt::CBIndex::c_26;
-    DataflowBuffer dfb_tmp1_obj(cb_tmp1);
-    constexpr uint32_t cb_divisor_recip = tt::CBIndex::c_27;
-    DataflowBuffer dfb_divisor_recip_obj(cb_divisor_recip);  // 1/divisor
-    constexpr uint32_t cb_tmp3 = tt::CBIndex::c_28;
-    DataflowBuffer dfb_tmp3_obj(cb_tmp3);
-
-    constexpr uint32_t cb_output = tt::CBIndex::c_16;
-    DataflowBuffer dfb_output_obj(cb_output);
+    DataflowBuffer dfb_output_obj(dfb::output);
 
     constexpr uint32_t dst0 = 0;
     constexpr uint32_t onetile = 1;
 
-    compute_kernel_hw_startup(cb_tmp_weight, cb_tmp_input, cb_output);
+    compute_kernel_hw_startup(dfb::tmp_weight, dfb::tmp_input, dfb::output);
 
 #if defined(DIVISOR)
+    // The divisor buffer only exists when a divisor tensor was supplied, so both the accessor and
+    // everything that touches it are gated on the same condition as the host-side binding.
+    DataflowBuffer dfb_divisor_obj(dfb::divisor);
+
     dfb_divisor_obj.wait_front(onetile);
 
     tile_regs_acquire();
     copy_tile_init_with_dt(dfb_divisor_obj);
-    copy_tile(cb_divisor, 0, dst0);
+    copy_tile(dfb::divisor, 0, dst0);
     recip_tile_init();
     recip_tile(dst0);
     tile_regs_commit();
@@ -56,7 +51,7 @@ void kernel_main() {
 
         tile_regs_acquire();
         copy_tile_init_with_dt(dfb_tmp_input_obj);
-        copy_tile(cb_tmp_input, 0, dst0);
+        copy_tile(dfb::tmp_input, 0, dst0);
 
         negative_tile_init();
         negative_tile(dst0);
@@ -77,7 +72,7 @@ void kernel_main() {
 
         tile_regs_acquire();
         mul_tiles_init_with_dt(dfb_tmp1_obj, dfb_tmp_weight_obj);
-        mul_tiles(cb_tmp1, cb_tmp_weight, 0, 0, dst0);
+        mul_tiles(dfb::tmp1, dfb::tmp_weight, 0, 0, dst0);
         tile_regs_commit();
 
         dfb_tmp_weight_obj.pop_front(onetile);
@@ -94,10 +89,10 @@ void kernel_main() {
         dfb_divisor_recip_obj.wait_front(onetile);
         tile_regs_acquire();
 #if defined FP32_DEST_ACC_EN
-        reconfig_data_format(cb_tmp3, cb_divisor_recip);
+        reconfig_data_format(dfb::tmp3, dfb::divisor_recip);
 #endif
-        mul_bcast_scalar_init(cb_tmp3, cb_divisor_recip);
-        mul_tiles_bcast_scalar(cb_tmp3, cb_divisor_recip, 0, 0, dst0);
+        mul_bcast_scalar_init(dfb::tmp3, dfb::divisor_recip);
+        mul_tiles_bcast_scalar(dfb::tmp3, dfb::divisor_recip, 0, 0, dst0);
         tile_regs_commit();
         dfb_tmp3_obj.pop_front(onetile);
 
@@ -126,10 +121,10 @@ void kernel_main() {
 
         tile_regs_acquire();
 #if defined FP32_DEST_ACC_EN
-        reconfig_data_format(cb_tmp1, cb_divisor_recip);
+        reconfig_data_format(dfb::tmp1, dfb::divisor_recip);
 #endif
-        mul_bcast_scalar_init(cb_tmp1, cb_divisor_recip);
-        mul_tiles_bcast_scalar(cb_tmp1, cb_divisor_recip, 0, 0, dst0);
+        mul_bcast_scalar_init(dfb::tmp1, dfb::divisor_recip);
+        mul_tiles_bcast_scalar(dfb::tmp1, dfb::divisor_recip, 0, 0, dst0);
         tile_regs_commit();
 
         dfb_tmp1_obj.pop_front(onetile);

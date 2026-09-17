@@ -26,20 +26,14 @@ sfpi_inline void _calculate_log_body_(const std::uint32_t log_base_scale_factor,
     sfpi::vFloat x  = setexp(in, 127); // set exp to exp bias (put in range of 1-2)
 
     ////////////////////////////
-    // Calculate Cheby Approximation using Horner Form Multiplication: 3rd Order
-    // x* ( x* (A*x + B) + C) + D
-    // A :0.1058, B: -0.3942, C: 0.9813, D: 0.006
-    // Run above on (x-1) so x is in ln(x+1), plug (x-1 into equation above to
-    // save the subtract and get A',B',C',D'):
-    // A' = A
-    // B' = -3A + B
-    // C' = 3a -2B + C
-    // D' = -A + B - C + D
-    // A':0.1058, B':-0.7116, C':2.0871, D':-1.4753
+    // Minimax cubic approximation of ln(x) on x in [1, 2), Horner form:
+    // x * (x * (x * A + B) + C) + D
+    // A: 0.10968964, B: -0.72910421, C: 2.11263230, D: -1.49277612
+    // max |error| over [1, 2] = 4.4e-04
     ////////////////////////////
     sfpi::vFloat a             = sfpi::vConstFloatPrgm1;
     sfpi::vFloat b             = sfpi::vConstFloatPrgm2;
-    sfpi::vFloat series_result = x * (x * (x * a + b) + 2.0871) + -1.4753f;
+    sfpi::vFloat series_result = x * (x * (x * a + b) + 2.11263230f) + -1.49277612f;
 
     ////////////////////////////
     // Convert exponent to float
@@ -107,10 +101,11 @@ inline void _calculate_log_(const int iterations, std::uint32_t log_base_scale_f
 template <bool APPROXIMATION_MODE>
 inline void _init_log_()
 {
-    sfpi::vConstFloatPrgm0 = 0.692871f; // ln2
+    sfpi::vConstFloatPrgm0 = 0.69314718f; // ln2
 
-    sfpi::vConstFloatPrgm1 = 0.1058f;
-    sfpi::vConstFloatPrgm2 = -0.7166f;
+    // Minimax cubic for ln on [1, 2); see _calculate_log_body_.
+    sfpi::vConstFloatPrgm1 = 0.10968964f;
+    sfpi::vConstFloatPrgm2 = -0.72910421f;
 }
 
 } // namespace sfpu

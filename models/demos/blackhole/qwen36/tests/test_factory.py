@@ -11,7 +11,7 @@ Centralizes what used to be copy-pasted across the per-test files:
                                        FP8 (or bf16) safetensors checkpoint
 * ``compute_pcc`` / ``compare_tensors`` — single PCC implementation
 * ``get_pcc_threshold(request)``   — per-test threshold from ``pcc_thresholds.json``
-* ``parametrize_mesh_tp()``        — the env-driven (1,4)/(1,1) mesh + FABRIC_1D idiom
+* ``parametrize_mesh_tp()``        — the env-driven (1,8)/(1,4)/(1,1) mesh + FABRIC_1D idiom
 * ``tp_composer`` / ``replicate_to_device`` — shared TP tensor helpers
 
 Heavy imports (ttnn weight loaders, ``Qwen36ModelArgs``) are kept lazy / local so
@@ -117,6 +117,92 @@ def load_mlp_layer(ckpt_dir, layer_idx):
     )
 
 
+def load_moe_layer(ckpt_dir, layer_idx):
+    """Qwen3.5-MoE layer weights — router + fused experts + gated shared expert.
+
+    Output keys match exactly the ``layers.<i>.mlp`` substate Qwen36MoE consumes:
+      ``gate.weight`` (router), ``experts.gate_up_proj`` / ``experts.down_proj``
+      (fused 3D nn.Parameters — no ``.weight`` suffix), ``shared_expert.{gate,up,down}_proj.weight``,
+      ``shared_expert_gate.weight``.
+    """
+    return load_layer_weights(
+        ckpt_dir,
+        layer_idx,
+        [
+            "gate",
+            ("experts.gate_up_proj", False),
+            ("experts.down_proj", False),
+            "shared_expert.gate_proj",
+            "shared_expert.up_proj",
+            "shared_expert.down_proj",
+            "shared_expert_gate",
+        ],
+        search_prefix="mlp.",
+    )
+
+
+def torch_moe_reference(moe_state, x, top_k, norm_topk_prob=True):
+    """Reference forward for a Qwen3.5-MoE layer (matches HF modeling_qwen3_5_moe).
+
+    moe_state: the load_moe_layer(...) dict. x: [S, H] float32. Returns [S, H].
+    router (fp32 softmax -> topk -> sum-normalize) + routed SwiGLU experts + gated
+    shared expert: out = experts + sigmoid(shared_gate(x)) * shared_mlp(x).
+    """
+    import torch.nn.functional as F
+
+    gate_up = moe_state["experts.gate_up_proj"].float()  # [E, 2I, H]
+    down = moe_state["experts.down_proj"].float()  # [E, H, I]
+    gate_w = moe_state["gate.weight"].float()  # [E, H]
+
+    logits = x @ gate_w.T
+    probs = torch.softmax(logits, dim=-1)
+    top_v, top_i = torch.topk(probs, top_k, dim=-1)
+    if norm_topk_prob:
+        top_v = top_v / top_v.sum(dim=-1, keepdim=True)
+
+    S, H = x.shape
+    out = torch.zeros(S, H)
+    for s in range(S):
+        for j in range(top_k):
+            e = int(top_i[s, j])
+            g, u = (x[s : s + 1] @ gate_up[e].T).chunk(2, dim=-1)
+            h = F.silu(g) * u
+            out[s] += top_v[s, j] * (h @ down[e].T)[0]
+
+    sg = moe_state["shared_expert.gate_proj.weight"].float()
+    su = moe_state["shared_expert.up_proj.weight"].float()
+    sd = moe_state["shared_expert.down_proj.weight"].float()
+    s_gate = moe_state["shared_expert_gate.weight"].float()  # [1, H]
+    shared = (F.silu(x @ sg.T) * (x @ su.T)) @ sd.T
+    shared = torch.sigmoid(x @ s_gate.T) * shared
+    return out + shared
+
+
+def torch_routed_experts_reference(moe_state, x, routing):
+    """Routed-experts-only reference (no shared expert), driven by an explicit dense routing.
+
+    moe_state: the load_moe_layer(...) dict. x: [S, H] float32. routing: [S, E] float32,
+    zero outside each row's selected experts. Returns [S, H].
+
+    Isolating the routed path matters because the shared expert contributes a large,
+    always-correct term: an aggregate PCC over ``experts + shared`` can stay high while
+    the routed branch itself is wrong (e.g. a per-user/per-expert axis mix-up).
+    """
+    import torch.nn.functional as F
+
+    gate_up = moe_state["experts.gate_up_proj"].float()  # [E, 2I, H]
+    down = moe_state["experts.down_proj"].float()  # [E, H, I]
+
+    S, H = x.shape
+    out = torch.zeros(S, H)
+    for s in range(S):
+        for e in torch.nonzero(routing[s], as_tuple=True)[0].tolist():
+            g, u = (x[s : s + 1] @ gate_up[e].T).chunk(2, dim=-1)
+            h = F.silu(g) * u
+            out[s] += float(routing[s, e]) * (h @ down[e].T)[0]
+    return out
+
+
 # --------------------------------------------------------------------------- #
 # PCC helpers
 # --------------------------------------------------------------------------- #
@@ -164,17 +250,23 @@ def get_pcc_threshold(request, default=0.99):
 # --------------------------------------------------------------------------- #
 # Mesh / device helpers
 # --------------------------------------------------------------------------- #
-def _resolve_mesh_shape(max_tp=4):
-    return {"P150": (1, 1), "P150x4": (1, 4)}.get(
-        os.environ.get("MESH_DEVICE"), (1, min(len(ttnn.get_device_ids()), max_tp))
-    )
+def _resolve_mesh_shape(max_tp=8):
+    # MESH_DEVICE wins outright. The device-count fallback is computed lazily (not as a
+    # ``dict.get`` default, which Python evaluates eagerly) so an explicit MESH_DEVICE never
+    # touches ttnn.get_device_ids() -- that call raises on clusters whose ClusterType lookup
+    # fails, which would otherwise break collection even for a fully-specified mesh.
+    shape = {"P150": (1, 1), "P150x4": (1, 4), "P150x8": (1, 8)}.get(os.environ.get("MESH_DEVICE"))
+    if shape is not None:
+        return shape
+    return (1, min(len(ttnn.get_device_ids()), max_tp))
 
 
-def parametrize_mesh_tp(max_tp=4):
+def parametrize_mesh_tp(max_tp=8):
     """Parametrize a TP test over the env-selected mesh shape + FABRIC_1D.
 
     Mirrors the idiom the qwen TP tests used inline: ``MESH_DEVICE=P150`` -> (1,1),
-    ``P150x4`` -> (1,4); otherwise (1, min(num_devices, max_tp)). The mesh shape
+    ``P150x4`` -> (1,4), ``P150x8`` -> (1,8); otherwise (1, min(num_devices, max_tp)).
+    The mesh shape
     gets an explicit ``RxC`` id so node names (and ``pcc_thresholds.json`` mesh
     keys) are readable.
     """
@@ -208,7 +300,7 @@ def parametrize_batch(batches=(1, 8, 32)):
     return pytest.mark.parametrize("B", [pytest.param(b, id=f"B{b}") for b in batches])
 
 
-def parametrize_mesh_only(max_tp=4):
+def parametrize_mesh_only(max_tp=8):
     """Parametrize over just the env-selected mesh shape (no device_params / fabric).
 
     For mesh tests that don't run fabric CCL ops (e.g. pure weight-loading checks),

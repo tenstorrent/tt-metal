@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "transpose_hc_sharded_program_factory.hpp"
-#include "ttnn/operations/data_movement/transpose/device/transpose_device_operation.hpp"
 
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/constants.hpp>
@@ -20,23 +19,6 @@ using namespace tt::tt_metal;
 namespace ttnn::prim {
 
 namespace {
-
-// Reader arg0 of the generic HC-sharded path. Closed form: the value is the same on every core and
-// does not depend on the per-core loop state
-inline uint32_t hc_rm_sharded_reader_arg0(const Tensor& input_tensor) {
-    return input_tensor.shard_spec().value().shape[0];  // num_sticks_per_core
-}
-
-// Reader arg0 of the special-case HC-sharded path (read_single_h_block_per_core).
-// H comes from padded_shape() to match get_runtime_args_hc_rm_sharded_special_case; the
-// hc_rm_sharded_is_special_case predicate is evaluated on logical_shape() at the call sites, and the
-// two differ for a padded shard.
-inline uint32_t hc_rm_sharded_special_case_reader_arg0(const Tensor& input_tensor) {
-    const uint32_t shard_height = input_tensor.shard_spec().value().shape[0];
-    const uint32_t H = input_tensor.padded_shape()[2];
-    const uint32_t num_H_per_core = shard_height / H > 0 ? shard_height / H : 1;
-    return static_cast<uint32_t>(num_H_per_core == 1);
-}
 
 std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime_args_hc_rm_sharded(
     const Tensor& input_tensor, uint32_t num_cores, uint32_t num_cores_x, uint32_t num_cores_y) {
@@ -75,8 +57,7 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
         }
         uint32_t num_sticks_per_core = shard_height;
 
-        std::vector<uint32_t> reader_runtime_args = {
-            hc_rm_sharded_reader_arg0(input_tensor), curr_sticks_read, curr_c, curr_h, curr_n};
+        std::vector<uint32_t> reader_runtime_args = {num_sticks_per_core, curr_sticks_read, curr_c, curr_h, curr_n};
         reader_runtime_args.insert(reader_runtime_args.end(), shard_grid_x_map.begin(), shard_grid_x_map.end());
         reader_runtime_args.insert(reader_runtime_args.end(), shard_grid_y_map.begin(), shard_grid_y_map.end());
 
@@ -281,7 +262,7 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
             }
         }
 
-        bool read_single_h_block_per_core = hc_rm_sharded_special_case_reader_arg0(input_tensor) != 0;
+        const bool read_single_h_block_per_core = num_H_per_core == 1;
 
         constexpr size_t num_reader_scalar_args = 5;
         const size_t num_non_repeat_args =
@@ -332,8 +313,7 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
     return ret_val;
 }
 
-// Selects the special-case per-core builder. Shared by create_descriptor and get_dynamic_runtime_args
-// so the reader arg0 value they emit/re-apply cannot drift.
+// Selects the special-case per-core builder.
 inline bool hc_rm_sharded_is_special_case(uint32_t shard_height, uint32_t H, uint32_t C) {
     return (shard_height % H == 0 || H % shard_height == 0) && (shard_height % C == 0 || C % shard_height == 0) &&
            (C % H == 0 || H % C == 0) && (shard_height <= C * H);
@@ -375,8 +355,7 @@ tt::tt_metal::ProgramDescriptor TransposeHCShardedProgramFactory::create_descrip
     uint32_t num_cores_y = grid_size.y;
 
     uint32_t src0_cb_index = tt::CBIndex::c_0;
-    // Sharded CBs bound to the input/output buffers: the framework re-applies
-    // UpdateDynamicCircularBufferAddress on cache hit via the .buffer member.
+    // Sharded CBs bound to the input/output buffers; override_runtime_arguments re-points them on a hit.
     desc.cbs.push_back(CBDescriptor{
         .total_size = shard_height * stick_size_bytes,
         .core_ranges = all_cores,
@@ -480,29 +459,18 @@ tt::tt_metal::ProgramDescriptor TransposeHCShardedProgramFactory::create_descrip
     return desc;
 }
 
-std::vector<tt::tt_metal::DynamicRuntimeArg> TransposeDeviceOperation::get_dynamic_runtime_args(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& /*tensor_return_value*/,
+void TransposeHCShardedProgramFactory::override_runtime_arguments(
+    tt::tt_metal::Program& program,
+    const TransposeParams& /*operation_attributes*/,
+    const TransposeInputs& tensor_args,
+    Tensor& output_tensor,
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
-    const auto factory = select_program_factory(operation_attributes, tensor_args);
-    const auto& input = tensor_args.input;
-    // HC sharded RM is CB-bound; re-apply reader arg0 (read by the kernel) on core 0 to trip the fast-path.
-    // The value is invariant for a cached program (shard height and shape are part of the program-cache
-    // hash)
-    if (std::holds_alternative<TransposeHCShardedProgramFactory>(factory)) {
-        const auto& shard = input.shard_spec().value();
-        const uint32_t H = input.logical_shape()[2], C = input.logical_shape()[1];
-        const bool special = hc_rm_sharded_is_special_case(shard.shape[0], H, C);
-        const uint32_t arg0 =
-            special ? hc_rm_sharded_special_case_reader_arg0(input) : hc_rm_sharded_reader_arg0(input);
-        return {tt::tt_metal::DynamicRuntimeArg{0, corerange_to_cores(shard.grid).front(), 0, arg0}};
-    }
-    // WH sharded RM emits one placeholder reader arg the kernel ignores; re-apply 0 to trip the fast-path.
-    if (std::holds_alternative<TransposeWHShardedRMProgramFactory>(factory)) {
-        return {tt::tt_metal::DynamicRuntimeArg{0, corerange_to_cores(input.shard_spec().value().grid).front(), 0, 0u}};
-    }
-    return {};
+    // No custom compute_program_hash, so shape and shard spec are keyed and every reader/writer arg is
+    // pinned; only the buffer addresses move, and both ride on the sharded CBs pushed above (src0, out).
+    ProgramDescriptor cb_addr_only;
+    cb_addr_only.cbs.push_back(CBDescriptor{.buffer = tensor_args.input.buffer()});
+    cb_addr_only.cbs.push_back(CBDescriptor{.buffer = output_tensor.buffer()});
+    apply_descriptor_runtime_args(program, cb_addr_only);  // override-rebuild-ok: cb-addr-only
 }
 
 }  // namespace ttnn::prim

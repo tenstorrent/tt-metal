@@ -62,6 +62,7 @@ enum watcher_features_t {
     SanitizeEthDestL1Overflow,
     SanitizeNOCMulticastInvalidRange,
     SanitizeNOCWriteWithStateBadCoord,
+    SanitizeNOCWriteWithStateAnyLenBadCoord,
     SanitizeNOCInlineWriteFromState,
     SanitizeNOCInlineWriteWithState,
     SanitizeNOCInvalidTxnId,
@@ -331,7 +332,8 @@ void RunTestOnCore(
     bool use_multicast_semaphore_inc = false;
     uint32_t mcast_dst_end_x = 0;
     uint32_t mcast_dst_end_y = 0;
-    bool use_write_with_state = false;
+    // 0: plain write; 1: one-packet stateful write; 2: any-length stateful write (see kernel).
+    uint32_t use_write_with_state = 0;
     bool use_inline_dw_write_from_state = false;
     bool use_inline_dw_write_with_state = false;
     // WH/BH expose trids [0,15]. Quasar reserves [8,31] for DFB implicit sync,
@@ -415,7 +417,17 @@ void RunTestOnCore(
             output_buf_noc_xy.y = 18;
             output_buffer_addr = 0;
             buffer_size = 32;
-            use_write_with_state = true;
+            use_write_with_state = 1;
+            break;
+        case SanitizeNOCWriteWithStateAnyLenBadCoord:
+            // Same bad coordinate through the any-length stateful path. Any-len set_state does not program
+            // AT_LEN, so a sanitizer that read the size back from the command buffer would report a 0-byte
+            // transfer (Quasar RoCC) and the expected "tried to unicast write <buffer_size> bytes" would not match.
+            output_buf_noc_xy.x = 26;
+            output_buf_noc_xy.y = 18;
+            output_buffer_addr = 0;
+            buffer_size = 32;
+            use_write_with_state = 2;
             break;
         case SanitizeNOCInlineWriteFromState:
             // Bad destination coordinate, but keep the (nonzero) destination offset: this exercises
@@ -530,7 +542,9 @@ void RunTestOnCore(
     switch (feature) {
         // Stateful write to a bad coordinate reports the same "did not map to any known core" error as a plain
         // bad-coordinate write; the destination coordinate is reconstructed from NOC_RET_ADDR state registers.
+        // The any-length variant must also report the real byte count (size is not in cmd-buf state).
         case SanitizeNOCWriteWithStateBadCoord:
+        case SanitizeNOCWriteWithStateAnyLenBadCoord:
         case SanitizeNOCAddress:
             expected = fmt::format(
                 "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} using noc{} tried to unicast write {} "
@@ -825,14 +839,13 @@ void RunTestIEth(
 
 // Run tests for host-side sanitization (uses functions that are from watcher_server.hpp).
 void CheckHostSanitization(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
-    auto* device = mesh_device->get_devices()[0];
     // Try reading from a core that doesn't exist
     constexpr CoreCoord core = {99, 99};
     uint64_t addr = 0;
     uint32_t sz_bytes = 4;
     try {
-        [[maybe_unused]] auto data =
-            tt::tt_metal::MetalContext::instance().get_cluster().read_core(device->id(), core, addr, sz_bytes);
+        [[maybe_unused]] auto data = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+            mesh_device->get_device_ids()[0], core, addr, sz_bytes);
     } catch (std::runtime_error& e) {
         const std::string expected = fmt::format("Host watcher: bad {} NOC coord {}\n", "read", core.str());
         const std::string error = std::string(e.what());
@@ -1059,6 +1072,18 @@ TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeNOCWriteWithState) {
         [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
             CoreCoord core{0, 0};
             RunTestOnCore(fixture, mesh_device, core, false, SanitizeNOCWriteWithStateBadCoord);
+        },
+        this->devices_[0]);
+}
+
+// Same through the any-length stateful path (default max_page_size). set_async_write_state does not program
+// AT_LEN there, so the sanitizer has to use the size passed to async_write_with_state; reading it back from
+// the command buffer reported a 0-byte transfer on Quasar RoCC and this test's byte count would not match.
+TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeNOCWriteWithStateAnyLen) {
+    this->RunTestOnDevice(
+        [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+            CoreCoord core{0, 0};
+            RunTestOnCore(fixture, mesh_device, core, false, SanitizeNOCWriteWithStateAnyLenBadCoord);
         },
         this->devices_[0]);
 }

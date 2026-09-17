@@ -3,6 +3,7 @@
 
 import pytest
 import torch
+from helpers.chip_architecture import ChipArchitecture
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
     ELEMENTS_PER_TILE,
@@ -25,6 +26,7 @@ from helpers.param_config import (
     get_num_blocks_and_num_tiles_in_block,
     parametrize,
 )
+from helpers.sfpu_domains import generated_nan_sign_is_asserted, specials_safe
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
@@ -559,6 +561,11 @@ def _run_int32_reduce(mathop, reduce_pool, injected_value, base_range=(-1000, 10
     return golden_tensor[:, 0], res_tensor[:, 0]
 
 
+# Green on both arches. The Blackhole INT32_MIN divergence this was written against is fixed: #49589
+# routes Int32 MAX/MIN through calculate_reduce_max_min_int32_col and perform_reduce_row_max_min_int32,
+# dedicated two's-complement compare-and-swap paths correct over the full Int32 range, rather than the
+# sign-magnitude cast around a plain SFPSWAP that ranked INT32_MIN as 0.
+#
 @pytest.mark.parametrize(
     "mathop", [MathOperation.ReduceColumn, MathOperation.ReduceRow]
 )
@@ -612,3 +619,271 @@ def test_int32_reduce_extreme(mathop, reduce_pool, injected_value, base_range):
         f"{num_mismatch} mismatched reduction lanes for {reduce_pool} {mathop} "
         f"injected={int(injected_value)} (see stdout)"
     )
+
+
+# =============================================================================
+# Cat B — IEEE specials in a reduction
+#
+# ReduceColumn and ReduceRow each carry a plain uniform(-1, 1) domain with no singularity and no
+# knee, so edge_spec() returns None and no edge sweep can reach them. What they have instead is
+# cat B, and it behaves unlike cat B anywhere else here: a reduction *propagates* its special to
+# the single output element, so one poisoned lane is the whole answer rather than one probe among
+# 4096.
+#
+# ReduceScalar is not covered by this sweep and is not driven below: sfpu_reduce_test.cpp branches
+# on REDUCE_COL and REDUCE_ROW only, so there is no scalar path to reach through this source.
+#
+# The classes below are therefore about the interaction between a special and the fold, which no
+# element-wise sweep can express:
+#
+#   pos_inf / neg_inf     one absorbing element against 31 finite lanes. Absorbs for Max/Sum,
+#                         and is *transparent* for Min -- the asymmetry is the point.
+#   both_inf              +inf and -inf in the same column. Sum must be NaN (inf + -inf); Max and
+#                         Min must still answer finitely-derived +inf / -inf.
+#   nan                   the total-order case. Under SFPSWAP's order a +NaN is the maximum, so
+#                         Min over a column containing one must return the *finite* minimum --
+#                         where torch.min propagates the NaN. This is the class that caught the
+#                         golden modelling IEEE instead of the kernel.
+#   all_inf               every lane +inf: the degenerate fold, where the pool identity is the
+#                         only other operand involved.
+#   signed_zero           every lane -0.0. Read this one narrowly: it asserts that the fold
+#                         returns *a* zero -- ruling out a NaN, an infinity or a nonzero -- and
+#                         nothing about which zero. passed_test() judges by torch.isclose plus
+#                         PCC, under which -0.0 == +0.0, so the sign cannot make this variant
+#                         fail.
+#
+#                         The sign is the interesting part and is deliberately NOT asserted yet.
+#                         Doing so needs a bitwise check plus a per-pool, per-arch expectation
+#                         that has not been measured: Sum and Average build their result through
+#                         SFPMAD, which flushes a negative-zero result to +0 on Wormhole and is
+#                         documented to preserve it on Blackhole, while Max and Min *select* an
+#                         operand through SFPSWAP and so would not flush at all. That is 2 arches
+#                         x 2 pool behaviours, and asserting it from the SFPMAD note alone would
+#                         record a guess about six of the eight cells.
+#
+# Cat C is already covered for this family by test_int32_reduce_extreme above and is deliberately
+# not repeated here.
+# =============================================================================
+
+_INF = float("inf")
+_NAN = float("nan")
+
+# The pools whose NaN is emitted by SFPMAD rather than selected from a lane. Read from the golden
+# so the test and the model cannot disagree about which those are.
+_SFPMAD_REDUCE_POOLS = UnarySFPUGolden._SFPMAD_REDUCE_POOLS
+
+# (class name, per-column injection) -- each entry fills column/row 0..k of an otherwise-1.0 tile.
+_REDUCE_SPECIAL_CLASSES = {
+    "pos_inf": [_INF],
+    "neg_inf": [-_INF],
+    "both_inf": [_INF, -_INF],
+    "nan": [_NAN],
+    "all_inf": None,  # whole tile, handled below
+    "signed_zero": None,  # whole tile, handled below
+}
+
+
+def _build_reduce_specials_tile(edge_class, torch_format, mathop):
+    """A 32x32 tile carrying *edge_class*'s specials, with the rest held at 1.0.
+
+    Every special goes into reduced lane 0 and no other lane, so a failure names the class it was
+    filed under. A scattered injection would poison every lane and the variant could then only
+    report "something in this tensor diverges".
+
+    Which cells that is depends on the direction, hence *mathop*. ReduceColumn folds down each
+    column, so lane 0 is column 0 and a multi-value class stacks down it; ReduceRow folds across
+    each row, so lane 0 is row 0 and the same class lays out along it. Writing both -- `tile[0, i]`
+    and `tile[i, 0]` -- is what put a lone -inf in lane 1 for `both_inf`, duplicating the `neg_inf`
+    stimulus inside it under either direction.
+    """
+    tile = torch.full((TILE_DIM, TILE_DIM), 1.0, dtype=torch_format)
+    if edge_class == "all_inf":
+        tile.fill_(_INF)
+        return tile
+    if edge_class == "signed_zero":
+        tile.fill_(-0.0)
+        return tile
+    for index, value in enumerate(_REDUCE_SPECIAL_CLASSES[edge_class]):
+        if mathop == MathOperation.ReduceColumn:
+            tile[index, 0] = value
+        else:
+            tile[0, index] = value
+    return tile
+
+
+def _run_float_reduce_specials(mathop, reduce_pool, edge_class, formats, dest_acc):
+    """Drive one specials class through the float reduce and return (golden, device) slices.
+
+    A near-copy of _run_int32_reduce's body rather than a shared helper: that one hardcodes Int32,
+    the two's-complement pack path and an integer stimulus, and threading a format axis plus a
+    float builder through it would need a flag per difference. If a third caller appears, factor.
+    """
+    input_dimensions = [TILE_DIM, TILE_DIM]
+    torch_format = format_dict[formats.input_format]
+    tile_cnt = input_dimensions[0] * input_dimensions[1] // ELEMENTS_PER_TILE
+
+    num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
+        DestSync.Half,
+        dest_acc,
+        formats,
+        input_dimensions,
+        TILE_DIMENSIONS,
+        BlocksCalculationAlgorithm.Standard,
+    )
+
+    src_A = _build_reduce_specials_tile(edge_class, torch_format, mathop).flatten()
+
+    dst_dim = (
+        [32, tile_cnt * 32]
+        if mathop == MathOperation.ReduceColumn
+        else input_dimensions
+    )
+
+    src_A = tilize_block(src_A, dst_dim, stimuli_format=formats.input_format).flatten()
+    src_A_untilized = untilize_block(src_A, formats.input_format, dst_dim)
+
+    golden_tensor = get_golden_generator(UnarySFPUGolden)(
+        mathop,
+        src_A_untilized,
+        formats.output_format,
+        dest_acc,
+        formats.input_format,
+        dst_dim,
+        reduce_pool=reduce_pool,
+    )
+
+    src_B = torch.zeros_like(src_A)
+
+    configuration = TestConfig(
+        "sources/sfpu_reduce_test.cpp",
+        formats,
+        templates=[
+            generate_input_dim(input_dimensions, input_dimensions),
+            APPROX_MODE(ApproximationMode.No),
+            MATH_OP(mathop=mathop, pool_type=reduce_pool),
+        ],
+        runtimes=[
+            NUM_BLOCKS(num_blocks),
+            NUM_TILES_IN_BLOCK(num_tiles_in_block),
+            TILE_COUNT(tile_cnt),
+        ],
+        variant_stimuli=StimuliConfig(
+            src_A,
+            formats.input_format,
+            src_B,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=tile_cnt,
+            tile_count_B=1,
+            tile_count_res=tile_cnt,
+        ),
+        dest_acc=dest_acc,
+        unpack_to_dest=True,
+        disable_format_inference=True,
+        compile_time_formats=True,
+    )
+    res_from_L1 = configuration.run().result
+
+    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
+    res_tensor = untilize_block(res_tensor, formats.output_format, dst_dim)
+
+    # Does the fold itself produce a NaN, before the pack path substitutes an infinity for it?
+    # Asked of the golden on a pipeline that preserves one (Float32 into a 32-bit Dest) rather
+    # than restating the pool's semantics here.
+    nan_probe = get_golden_generator(UnarySFPUGolden)(
+        mathop,
+        src_A_untilized.to(torch.float32),
+        DataFormat.Float32,
+        DestAccumulation.Yes,
+        DataFormat.Float32,
+        dst_dim,
+        reduce_pool=reduce_pool,
+    )
+    nan_probe = torch.as_tensor(nan_probe)
+
+    if mathop == MathOperation.ReduceColumn:
+        return golden_tensor[0], res_tensor[0], nan_probe[0]
+    return golden_tensor[:, 0], res_tensor[:, 0], nan_probe[:, 0]
+
+
+@pytest.mark.nightly
+@pytest.mark.parametrize(
+    "mathop", [MathOperation.ReduceColumn, MathOperation.ReduceRow]
+)
+@pytest.mark.parametrize(
+    "reduce_pool",
+    [ReducePool.Max, ReducePool.Min, ReducePool.Sum, ReducePool.Average],
+)
+@pytest.mark.parametrize("edge_class", sorted(_REDUCE_SPECIAL_CLASSES))
+@pytest.mark.parametrize(
+    "formats",
+    [
+        InputOutputFormat(DataFormat.Float32, DataFormat.Float32),
+        InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
+    ],
+    ids=["Float32->Float32", "Float16_b->Float16_b"],
+)
+def test_float_reduce_specials(mathop, reduce_pool, edge_class, formats):
+    """Cat B for the reduce family: a special reaches the output through the fold.
+
+    dest_acc follows the format rather than being a separate axis: a 32-bit input requires a
+    32-bit Dest (the suite skips the other combination everywhere), and Float16_b at dest_acc=Yes
+    is one of the two cells specials_safe() rejects -- a 16-bit input into an fp32 Dest loses -inf
+    and NaN on the way in, so the probe would never arrive. That leaves exactly one dest_acc per
+    format, and both are cells the measured matrix accepts.
+    """
+    if reduce_pool in (ReducePool.Average, ReducePool.Min) and TestConfig.WITH_COVERAGE:
+        pytest.skip(reason="https://github.com/tenstorrent/tt-llk/issues/1040")
+
+    dest_acc = (
+        DestAccumulation.Yes
+        if formats.input_format.is_32_bit()
+        else DestAccumulation.No
+    )
+
+    # The pipeline gate, same as every other cat-B consumer in this repo. Asserted rather than
+    # assumed: if the measured matrix ever stops accepting one of these two cells, this test must
+    # stop driving it rather than silently probe a pipeline that flattens the datum.
+    assert specials_safe(formats.input_format, formats.output_format, dest_acc), (
+        f"{formats.input_format.name}->{formats.output_format.name} at dest_acc={dest_acc} no "
+        "longer carries specials; re-pick this test's format axis from specials_safe()"
+    )
+
+    golden_slice, res_slice, fold_is_nan = _run_float_reduce_specials(
+        mathop, reduce_pool, edge_class, formats, dest_acc
+    )
+
+    # Where the fold produces a NaN and this pipeline cannot carry one to L1, the packer
+    # substitutes an infinity whose sign is the NaN's -- and on Wormhole `SFPMAD.md` leaves the sign
+    # of a NaN it emits unspecified ("might or might not be set"), so neither +inf nor -inf is *the*
+    # answer. Assert the magnitude on those lanes and keep the full assertion on Blackhole, which
+    # specifies the canonical 0x7fc00000.
+    #
+    # Scoped per lane by `fold_is_nan`, not per variant: the `both_inf` class has one NaN lane and
+    # 31 lanes whose +/-inf sign is perfectly well specified, and excusing the sign across the whole
+    # slice would stop checking those. `golden_slice` itself cannot be used for this -- by the time
+    # it is returned the substitution has already happened and there is no NaN left to see.
+    #
+    # Sum and Average only. They accumulate, so a NaN they produce comes out of SFPMAD and its sign
+    # is the ISA's to choose. Max and Min are a bare SFPSWAP(VEC_MIN_MAX) that *selects* a lane, so
+    # a NaN they return is the datum they picked -- Max over the `nan` class returns the input
+    # +NaN, whose sign is real -- and relaxing it here would accept a -inf and hide a broken
+    # selection or a broken order. UnarySFPUGolden._SFPMAD_REDUCE_POOLS is the same split on the
+    # golden side. Measured: 4 of 96 variants, Average over both_inf and over nan, on Float16_b.
+    if reduce_pool in _SFPMAD_REDUCE_POOLS and generated_nan_sign_is_asserted(
+        formats.input_format,
+        formats.output_format,
+        dest_acc,
+        on_wormhole=TestConfig.CHIP_ARCH == ChipArchitecture.WORMHOLE,
+    ):
+        unspecified = (
+            torch.isnan(fold_is_nan.to(torch.float32))
+            & ~torch.isfinite(golden_slice)
+            & ~torch.isfinite(res_slice)
+        )
+        golden_slice = torch.where(unspecified, golden_slice.abs(), golden_slice)
+        res_slice = torch.where(unspecified, res_slice.abs(), res_slice)
+
+    assert passed_test(
+        golden_slice, res_slice, formats.output_format
+    ), f"{reduce_pool} {mathop} on the '{edge_class}' class disagreed with the golden"

@@ -176,13 +176,21 @@ DETECTION_PATTERNS = {
 PATTERNS = {k: re.compile(v[0], re.IGNORECASE if (len(v) > 3 and v[3]) else 0) for k, v in CATEGORIES.items()}
 DETECTION_PATTERNS_COMPILED = {k: re.compile(v) for k, v in DETECTION_PATTERNS.items()}
 
-# Patterns for parsing structured data
-PORT_PATTERN = re.compile(
+# Pair patterns for content-wide extraction (tolerates whitespace between endpoints)
+PORT_PAIR_PATTERN = re.compile(
+    r"PhysicalPortEndpoint\{hostname='([^']+)',[^}]*tray_id=(\d+), port_type=(\w+), port_id=(\d+)\}"
+    r"\s*<->\s*"
     r"PhysicalPortEndpoint\{hostname='([^']+)',[^}]*tray_id=(\d+), port_type=(\w+), port_id=(\d+)\}"
 )
-CHANNEL_PATTERN = re.compile(
+CHANNEL_PAIR_PATTERN = re.compile(
+    r"PhysicalChannelEndpoint\{hostname='([^']+)', tray_id=(\d+), asic_channel=AsicChannel\{asic_location=(\d+), channel_id=(\d+)\}\}"
+    r"\s*<->\s*"
     r"PhysicalChannelEndpoint\{hostname='([^']+)', tray_id=(\d+), asic_channel=AsicChannel\{asic_location=(\d+), channel_id=(\d+)\}\}"
 )
+# Strip per-line host/time prefixes from consolidated validation logs, e.g. [bh-glx-...][16:18:23]
+HOST_TIME_PREFIX_PATTERN = re.compile(r"^\[[^\]]+\](?:\[[^\]]+\])?\s*")
+# Collapse mid-token line wraps seen in interleaved multi-host logs
+ENDPOINT_WRAP_PATTERN = re.compile(r"Physical\s*\n\s*(Channel|Port)Endpoint")
 
 # CSV field definitions
 SUMMARY_CSV_FIELDS = [
@@ -409,30 +417,122 @@ def parse_faulty_links(content: str) -> list[FaultyLink]:
     return links
 
 
-def parse_missing_connections(content: str) -> list[tuple[str, tuple, tuple]]:
-    """Parse missing port/channel connections."""
-    connections = []
-    mode = None
-    lines = content.split("\n")
+def _normalize_discovery_text(content: str) -> str:
+    """Normalize validation log text for endpoint-pair extraction.
 
-    for line in lines:
-        c = clean_mpi_line(line)
-        if "missing port/cable" in c or "Port Connections found in FSD" in c:
-            mode = "port"
-        elif "missing channel" in c or "Channel Connections found in FSD" in c:
-            mode = "channel"
-        elif mode == "port" and "PhysicalPortEndpoint" in c:
-            matches = PORT_PATTERN.findall(c)
-            if len(matches) == 2:
-                connections.append(("port", matches[0], matches[1]))
-        elif mode == "channel" and "PhysicalChannelEndpoint" in c:
-            matches = CHANNEL_PATTERN.findall(c)
-            if len(matches) == 2:
-                connections.append(("channel", matches[0], matches[1]))
-        elif mode and c and not c.startswith("-") and "Physical" not in c:
-            if "Connections" not in c and "Total" not in c:
-                mode = None
+    Strips MPI/host-time prefixes and collapses mid-token wraps so interleaved
+    multi-host logs still yield complete Physical*Endpoint pairs.
+    """
+    lines = []
+    for line in content.splitlines():
+        line = clean_mpi_line(line)
+        line = HOST_TIME_PREFIX_PATTERN.sub("", line)
+        lines.append(line)
+    text = "\n".join(lines)
+    return ENDPOINT_WRAP_PATTERN.sub(r"Physical\1Endpoint", text)
+
+
+def parse_missing_connections(content: str) -> list[tuple[str, tuple, tuple]]:
+    """Parse missing port/channel connections from validation log content.
+
+    Uses content-wide pair matching so interleaved host logs between missing
+    connection lines do not drop entries (unlike a line-mode state machine).
+    """
+    text = _normalize_discovery_text(content)
+    connections: list[tuple[str, tuple, tuple]] = []
+
+    for match in PORT_PAIR_PATTERN.finditer(text):
+        groups = match.groups()
+        connections.append(("port", groups[0:4], groups[4:8]))
+    for match in CHANNEL_PAIR_PATTERN.finditer(text):
+        groups = match.groups()
+        connections.append(("channel", groups[0:4], groups[4:8]))
     return connections
+
+
+def _format_port_endpoint(ep: tuple) -> str:
+    """Format a port endpoint for human-readable missing-link output."""
+    host, tray, _port_type, port_id = ep
+    return f"{host} tray {tray} port {port_id}"
+
+
+def _format_port_connection(ep1: tuple, ep2: tuple) -> str:
+    """Format a port connection with type once as the leading field."""
+    port_type = ep1[2] if ep1[2] == ep2[2] else f"{ep1[2]}/{ep2[2]}"
+    return f"{port_type} | {_format_port_endpoint(ep1)}  <->  {_format_port_endpoint(ep2)}"
+
+
+def _format_channel_endpoint(ep: tuple) -> str:
+    """Format a channel endpoint for human-readable missing-link output."""
+    host, tray, asic, channel = ep
+    return f"{host} tray {tray} ASIC {asic} ch {channel}"
+
+
+def unique_missing_connections(analyses: list[LogAnalysis]) -> list[tuple[str, tuple, tuple]]:
+    """Return unique missing connections across analyses, ports first then channels."""
+    seen: set[tuple] = set()
+    unique: list[tuple[str, tuple, tuple]] = []
+
+    for analysis in analyses:
+        for conn_type, ep1, ep2 in analysis.missing_connections:
+            canonical = tuple(sorted((ep1, ep2)))
+            key = (conn_type, canonical)
+            if key in seen:
+                continue
+            seen.add(key)
+            unique.append((conn_type, canonical[0], canonical[1]))
+
+    unique.sort(
+        key=lambda c: (
+            0 if c[0] == "port" else 1,
+            c[1][2] if c[0] == "port" else "",  # port_type first for readability
+            c[1],
+            c[2],
+        )
+    )
+    return unique
+
+
+def print_missing_links_summary(analyses: list[LogAnalysis]) -> None:
+    """Print concise unique missing port/cable and channel connections."""
+    unique = unique_missing_connections(analyses)
+    if not unique:
+        return
+
+    print_section_header("Missing Links")
+
+    ports = [c for c in unique if c[0] == "port"]
+    channels = [c for c in unique if c[0] == "channel"]
+
+    if ports:
+        print(f"Port/cable ({len(ports)} unique):")
+        for _, ep1, ep2 in ports:
+            print(f"  {_format_port_connection(ep1, ep2)}")
+        print()
+
+    if channels:
+        print(f"Channel ({len(channels)} unique):")
+        for _, ep1, ep2 in channels:
+            print(f"  {_format_channel_endpoint(ep1)}  <->  {_format_channel_endpoint(ep2)}")
+        print()
+
+    host_pairs: dict[tuple[str, str], dict[str, int]] = {}
+    for conn_type, ep1, ep2 in unique:
+        pair = tuple(sorted((ep1[0], ep2[0])))
+        host_pairs.setdefault(pair, {"port": 0, "channel": 0})
+        host_pairs[pair][conn_type] += 1
+
+    if host_pairs:
+        print("Affected host pairs:")
+        for (h1, h2), counts in sorted(host_pairs.items(), key=lambda x: (x[0][0], x[0][1])):
+            parts = []
+            if counts["port"]:
+                parts.append(f"{counts['port']} ports")
+            if counts["channel"]:
+                parts.append(f"{counts['channel']} channels")
+            label = h1 if h1 == h2 else f"{h1} <-> {h2}"
+            print(f"  {label}  ({', '.join(parts)})")
+        print()
 
 
 def parse_metadata(content: str, filepath: str) -> LogMetadata:
@@ -671,6 +771,8 @@ def print_summary(analyses: list[LogAnalysis], metrics: dict, show_files: bool =
         )
         print(f"{Colors.BOLD}Success Rate:{Colors.NC} {color}{rate:.1f}%{Colors.NC}\n")
 
+    print_missing_links_summary(analyses)
+
 
 def print_details(analyses: list[LogAnalysis]) -> None:
     """Print detailed faulty links and missing connections with proper formatting."""
@@ -711,44 +813,8 @@ def print_details(analyses: list[LogAnalysis]) -> None:
                 print(f"  {count:>3}x  {ftype}")
             print()
 
-    # Missing connections grouped by type
-    all_missing = [(os.path.basename(a.filepath), c) for a in analyses for c in a.missing_connections]
-    if all_missing:
-        print("=" * 100)
-        print("Missing Connections")
-        print("=" * 100 + "\n")
-
-        # Group by connection type
-        port_conns = [(log, c) for log, c in all_missing if c[0] == "port"]
-        chan_conns = [(log, c) for log, c in all_missing if c[0] == "channel"]
-
-        if port_conns:
-            print(f"Port/Cable Connections ({len(port_conns)}):")
-            for log, (_, ep1, ep2) in port_conns:
-                short = _shorten_log_name(log)
-                print(f"  {short}: {ep1[0]} tray {ep1[1]} {ep1[2]} <-> {ep2[0]} tray {ep2[1]} {ep2[2]}")
-            print()
-
-        if chan_conns:
-            print(f"Channel Connections ({len(chan_conns)}):")
-            for log, (_, ep1, ep2) in chan_conns:
-                short = _shorten_log_name(log)
-                print(
-                    f"  {short}: {ep1[0]} tray {ep1[1]} ASIC {ep1[2]} ch {ep1[3]} <-> "
-                    f"{ep2[0]} tray {ep2[1]} ASIC {ep2[2]} ch {ep2[3]}"
-                )
-            print()
-
-        # Host pair summary
-        host_pairs: dict[tuple, int] = {}
-        for _, (_, ep1, ep2) in all_missing:
-            pair = tuple(sorted([ep1[0], ep2[0]]))
-            host_pairs[pair] = host_pairs.get(pair, 0) + 1
-        if host_pairs:
-            print("Affected Host Pairs:")
-            for (h1, h2), count in sorted(host_pairs.items(), key=lambda x: -x[1]):
-                print(f"  {count:>3}x  {h1} <-> {h2}")
-            print()
+    # Missing connections: concise unique list (same formatter as default summary)
+    print_missing_links_summary(analyses)
 
 
 def print_link_histogram(analyses: list[LogAnalysis]) -> None:

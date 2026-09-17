@@ -398,7 +398,7 @@ int main(int argc, char** argv) {
                     uint32_t num_write_ptr_updates = write_size_bytes / (32 * 1024);
                     for (int i = 0; i < num_write_ptr_updates; i++) {
                         tt::tt_metal::MetalContext::instance().get_cluster().write_reg(
-                            &val_to_write, tt_cxy_pair(device->get_devices()[0]->id(), physical_core), reg_addr);
+                            &val_to_write, tt_cxy_pair(device_id, physical_core), reg_addr);
                         reg_addr += sizeof(uint32_t);
                         num_reg_writes = (reg_addr - prefetch_q_base) / sizeof(uint32_t);
                         if (num_reg_writes == num_reg_entries) {
@@ -410,10 +410,7 @@ int main(int argc, char** argv) {
                 if (write_ptr_readback_interval > 0 and num_reg_writes == write_ptr_readback_interval) {
                     std::vector<std::uint32_t> read_hex_vec(1, 0);
                     tt::tt_metal::MetalContext::instance().get_cluster().read_core(
-                        read_hex_vec.data(),
-                        sizeof(uint32_t),
-                        tt_cxy_pair(device->get_devices()[0]->id(), physical_core),
-                        reg_addr);
+                        read_hex_vec.data(), sizeof(uint32_t), tt_cxy_pair(device_id, physical_core), reg_addr);
                 }
 
                 host_write_ptr += write_size_bytes;

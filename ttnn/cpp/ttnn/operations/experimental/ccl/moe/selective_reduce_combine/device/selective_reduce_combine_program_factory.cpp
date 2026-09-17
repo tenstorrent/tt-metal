@@ -211,7 +211,7 @@ UnifiedSelectReduce::cached_mesh_workload_t UnifiedSelectReduce::create_mesh_wor
         ttnn::global_semaphore::create_global_semaphore(mesh_device, worker_core_range_set, 0));
 
     tt::tt_metal::distributed::Synchronize(
-        mesh_device, std::nullopt, {});  // interaction with subdevice needs to be investigated
+        *mesh_device, std::nullopt, {});  // interaction with subdevice needs to be investigated
 
     for (const auto& coord : tensor_coords.coords()) {
         auto cached_program = create_at(

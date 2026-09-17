@@ -189,14 +189,27 @@ Path where the above warning is also appended (CI job summary).
 
 ---
 
-## Kimi variant equivalents (only if you run the `kimi_k2_6` variant)
+## Kimi variant equivalents (only if you run the `kimi_k2_7` variant)
 
 Same roles as the DSV3 names above:
 
-- `DEEPSEEK_V3_HF_MODEL` → `KIMI_K2_6_HF_MODEL`
+- `DEEPSEEK_V3_HF_MODEL` → `KIMI_K2_7_HF_MODEL`
 - `TT_DS_PREFILL_TTNN_CACHE` → `TT_KIMI_PREFILL_TTNN_CACHE`
 - `TT_DS_PREFILL_HOST_REF_CACHE` → `TT_KIMI_PREFILL_HOST_REF_CACHE`
 - `DEEPSEEK_V3_MLA_REF_CACHE` → `KIMI_MLA_REF_CACHE`
+
+---
+
+## Mistral variant equivalents (only if you run the `mistral_small_4` variant)
+
+Same roles again:
+
+- `DEEPSEEK_V3_HF_MODEL` → `MISTRAL4_HF_MODEL`
+- `TT_DS_PREFILL_TTNN_CACHE` → `TT_MISTRAL4_PREFILL_TTNN_CACHE`
+- `TT_DS_PREFILL_HOST_REF_CACHE` → `TT_MISTRAL4_PREFILL_HOST_REF_CACHE`
+- `DEEPSEEK_V3_MLA_REF_CACHE` → `MISTRAL4_MLA_REF_CACHE`
+
+`TT_MISTRAL4_PREFILL_TTNN_CACHE` has no default — point it at a writable directory of your own.
 
 ---
 
@@ -204,10 +217,10 @@ Same roles as the DSV3 names above:
 
 A large `PREFILL_*` family exists in this module
 (`PREFILL_HF_MODEL`, `PREFILL_TTNN_CACHE`, `PREFILL_NUM_LAYERS`, `PREFILL_SP`/`PREFILL_TP`,
-`PREFILL_STANDALONE*`, `PREFILL_CHUNK_SIZE`, `PREFILL_MIGRATE_*`, `PREFILL_STRESS_*`,
+`PREFILL_STANDALONE_CHUNKED_*`, `PREFILL_CHUNK_SIZE`, `PREFILL_MIGRATE_*`, `PREFILL_STRESS_*`,
 `PREFILL_H2D_*`, `MIGRATION_DONE_FILE`, `DEEPSEEK_PREFILL_TRACE_DIR/PT`, etc.).
 
-These belong to the standalone multi-process prefill runner (`tt/runners/*`) and the
+These belong to the multi-process prefill runner (`tt/runners/*`) and the
 chunked/migration/stress tests — they are **not** read by `test_prefill_transformer.py`,
 so setting them here has no effect. Note the runner uses `PREFILL_TTNN_CACHE` /
 `PREFILL_HF_MODEL` while this test uses the `TT_DS_PREFILL_*` / `DEEPSEEK_V3_HF_MODEL`

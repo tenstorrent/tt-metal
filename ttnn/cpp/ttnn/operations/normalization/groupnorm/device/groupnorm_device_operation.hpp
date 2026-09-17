@@ -66,6 +66,7 @@ Tensor group_norm(
     std::optional<Tensor> beta,
     std::optional<Tensor> input_mask,
     std::optional<Tensor> negative_mask,
-    std::optional<Tensor> reciprocals);
+    std::optional<Tensor> reciprocals,
+    bool synthesize_negative_mask = false);
 
 }  // namespace ttnn::prim
