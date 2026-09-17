@@ -287,13 +287,15 @@ def test_weight_cache_path_ro_mount_falls_back_writable(tmp_path, monkeypatch):
 
 
 def test_wh_t3k_decode_gate_only_full_unharvested_t3k(monkeypatch):
-    """12B/31B swept decode configs must not fire on BH, N150, or harvested WH."""
+    """12B swept decode configs must not fire on BH, N150, or harvested WH."""
     from models.demos.gemma4.tt.dram_sharded import wh_t3k_decode_enabled, wh_t3k_decode_progcfg
 
     monkeypatch.setattr("models.demos.gemma4.tt.dram_sharded.is_blackhole", lambda: False)
     assert wh_t3k_decode_enabled(_FakeMesh(8, (8, 8))) is True
     assert wh_t3k_decode_progcfg(_FakeMesh(8), 3840, 1024) is not None
-    assert wh_t3k_decode_progcfg(_FakeMesh(8), 5376, 2048) is not None
+    assert wh_t3k_decode_progcfg(_FakeMesh(8), 3840, 3840) is not None
+    # 31B sliding qkv is deliberately not in the table; see the table comment.
+    assert wh_t3k_decode_progcfg(_FakeMesh(8), 5376, 2048) is None
 
     monkeypatch.setattr("models.demos.gemma4.tt.dram_sharded.is_blackhole", lambda: True)
     assert wh_t3k_decode_enabled(_FakeMesh(8, (8, 8))) is False
@@ -330,8 +332,11 @@ def _dense_decode_kn(
     return shapes
 
 
-def test_wh_t3k_decode_table_hits_only_12b_31b_tp8():
-    """E2B / E4B / 26B-A4B (k,n) at TP 1/2/4/8 must miss the T3K table; 12B/31B TP=8 hit."""
+def test_wh_t3k_decode_table_hits_only_12b_tp8():
+    """E2B / E4B / 26B-A4B (k,n) at TP 1/2/4/8 must miss the T3K table; 12B TP=8 hits.
+
+    The table is 12B-only: every 31B shape must miss it.
+    """
     from models.demos.gemma4.tt.dram_sharded import _WH_T3K_DECODE_1D
 
     keys = set(_WH_T3K_DECODE_1D)
@@ -360,10 +365,14 @@ def test_wh_t3k_decode_table_hits_only_12b_31b_tp8():
     assert s12["o_proj_global"] == (1024, 3840)
     assert set(s12.values()) <= keys
 
+    # 31B has NO entry. Sliding qkv (5376, 2048) was the table's only 31B shape
+    # and was removed: it bought 31B nothing measurable (long-context-128k TTFT
+    # 77463 vs 77478 ms) while its blocking change alone tipped 128k decode from
+    # clean (718 chars, md5 d1c6e4f208) into a 39x repetition loop (546 chars).
     s31 = _dense_decode_kn(5376, 32, 16, 256, 21504, 8, global_hd=512, global_kv=4)
     assert s31["qkv_slide"] == (5376, 2048)
-    assert s31["qkv_slide"] in keys
-    # 31B MLP / o_proj / qkv-global were swept; auto won — must stay absent.
+    assert s31["qkv_slide"] not in keys
+    # The rest were swept too; auto won — must stay absent.
     assert s31["gate_up"] not in keys
     assert s31["down"] not in keys
     assert s31["o_proj_slide"] not in keys

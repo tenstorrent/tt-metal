@@ -55,7 +55,7 @@ class Gemma4Precision:
     """Per-module dtype mapping. Construct via ``Gemma4Precision.load(...)``
     or directly with ``Gemma4Precision({...})``."""
 
-    def __init__(self, overrides=None, single_tile_dest_acc=True):
+    def __init__(self, overrides=None, single_tile_dest_acc=True, ccl_topology=None):
         self._overrides = dict(overrides) if overrides else {}
         # Whether the m<=32 projections accumulate in fp32. Model-wide, not
         # per-module or per-mesh, and deliberately not keyed on the weight
@@ -63,12 +63,19 @@ class Gemma4Precision:
         # weights. Measurements and rationale live with the decision, in
         # ``single_tile_matmul_ckc``.
         self.single_tile_dest_acc = bool(single_tile_dest_acc)
+        # Forced CCL topology, or None to let default_ccl_topology pick from the
+        # arch. Model-wide like single_tile_dest_acc: Ring and Linear reduce in
+        # different orders, so this is a numerics knob, not a perf-only one.
+        self.ccl_topology = ccl_topology
 
     def get(self, module_name, default=ttnn.bfloat16):
         return self._overrides.get(module_name, default)
 
     def __repr__(self):
-        return f"Gemma4Precision({self._overrides!r}, single_tile_dest_acc={self.single_tile_dest_acc})"
+        return (
+            f"Gemma4Precision({self._overrides!r}, single_tile_dest_acc={self.single_tile_dest_acc}, "
+            f"ccl_topology={self.ccl_topology!r})"
+        )
 
     @classmethod
     def load(cls, model_path, mesh_shape):
@@ -108,6 +115,12 @@ class Gemma4Precision:
                 f"precision_overrides.json[{model_key}][single_tile_dest_acc]={dest_acc!r} — expected true/false"
             )
 
+        topology = model_entry.get("ccl_topology")
+        if topology is not None and topology not in ("ring", "linear"):
+            raise ValueError(
+                f"precision_overrides.json[{model_key}][ccl_topology]={topology!r} — expected 'ring' or 'linear'"
+            )
+
         # Mesh-specific override wins over "default"
         raw = model_entry.get(mesh_key) or model_entry.get("default") or {}
         resolved = {}
@@ -120,7 +133,7 @@ class Gemma4Precision:
                     f"unknown dtype; expected one of {sorted(_DTYPE_BY_NAME)}"
                 )
             resolved[k] = _DTYPE_BY_NAME[v]
-        return cls(resolved, single_tile_dest_acc=dest_acc)
+        return cls(resolved, single_tile_dest_acc=dest_acc, ccl_topology=topology)
 
 
 _DEST_ACC_BY_MODEL = {}

@@ -23,6 +23,12 @@ from models.demos.gemma4.tt.model import Gemma4Model
 from models.demos.gemma4.tt.model_config import Gemma4AssistantArgs, Gemma4ModelArgs
 from models.demos.gemma4.tt.precision import Gemma4Precision
 
+# precision_overrides.json spells the topology; ttnn owns the enum.
+_CCL_TOPOLOGY_BY_NAME = {
+    "ring": ttnn.Topology.Ring,
+    "linear": ttnn.Topology.Linear,
+}
+
 # Weights gemma4 consumes on the HOST (not just via ttnn.as_tensor) and that therefore must be
 # loaded for real even on a warm cache (see #45400 follow-up analysis of models/demos/gemma4/tt):
 #  - token embedding: F.embedding(tokens, _embed_weight_cpu)      (model.py:1218/1238/1421)
@@ -94,8 +100,16 @@ def create_tt_model(
         # is_moe must follow the checkpoint: the CCLManager default is True
         # and would force Linear on Wormhole T3K even for dense 12B/31B.
         # 26B-A4B stays Linear — Ring drops its full-model PCC below 0.76.
+        #
+        # A model may still pin the topology in precision_overrides.json, which
+        # wins over the arch default. 31B pins Linear: Ring's reduction order is
+        # enough to tip its 128k decode into a repetition loop (532 chars, 40x)
+        # where Linear is clean (718 chars) — see that file for the measurement.
+        precision = Gemma4Precision.load(model_path, tuple(mesh_device.shape))
+        topology = _CCL_TOPOLOGY_BY_NAME.get(precision.ccl_topology)
         ccl_manager = CCLManager(
             mesh_device,
+            topology=topology,
             is_moe=bool(getattr(model_args, "enable_moe_block", False)),
         )
     else:

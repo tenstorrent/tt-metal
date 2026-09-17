@@ -385,7 +385,11 @@ _WH_T3K_DECODE_1D = {
     (1920, 3840): (8, 5, 2, 3, 3),
     (512, 3840): (8, 5, 1, 3, 3),
     (1024, 3840): (8, 5, 2, 3, 3),
-    (5376, 2048): (8, 8, 8, 1, 1),
+    # (5376, 2048) -- 31B qkv at tp=8 -- is deliberately absent. Every other
+    # entry is a 12B shape; this was the table's only 31B one, and it bought
+    # 31B nothing measurable (128k TTFT 77463 vs 77478 ms) while its blocking
+    # change was on its own enough to tip 128k decode from clean (718 chars)
+    # into a 39x repetition loop (546 chars). Re-add only with a 128k re-run.
 }
 
 
