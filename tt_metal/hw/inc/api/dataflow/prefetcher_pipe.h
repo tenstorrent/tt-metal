@@ -756,16 +756,15 @@ public:
 
     FORCE_INLINE uint32_t get_entry_size() { return interface_.sender.fifo_page_size; }
 
-    // True while the sender has published entries this receiver has not yet popped. Reads both
-    // halves of this receiver's counter pair -- entries_sent sits one L1_ALIGNMENT below
-    // entries_acked, the relationship wait_front() relies on -- so the pair layout stays inside
-    // the class. Receiver participants only.
+    // True while the sender has published entries this receiver has not yet popped. Reads this
+    // receiver's slot in each credit block -- the same two counters wait_front() compares -- so
+    // where they live stays inside the class. Receiver participants only.
     FORCE_INLINE bool has_unconsumed_entries() {
         auto* acked_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(interface_.receiver.aligned_pages_acked_ptr);
-        auto* sent_ptr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(interface_.receiver.aligned_pages_acked_ptr - L1_ALIGNMENT);
-        // pages_sent arrives via NOC; pages_acked is written by this receiver.
-        return load_remote_l1_credit(sent_ptr) != load_local_l1_credit(acked_ptr);
+        auto* sent_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(interface_.receiver.aligned_pages_sent_ptr);
+        // pages_sent arrives via NOC; pages_acked is written by this receiver, so it is a plain
+        // cached load -- the same pair of accesses wait_front() spins on.
+        return load_remote_l1_credit(sent_ptr) != *acked_ptr;
     }
 
 #if !defined(COMPILE_FOR_TRISC)

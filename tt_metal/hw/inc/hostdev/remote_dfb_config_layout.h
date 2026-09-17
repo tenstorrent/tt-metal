@@ -31,8 +31,8 @@
 //   │     word[6]  noc_xy_offset         // page-relative → after header
 //   │     word[7]  pages_sent_offset
 //   │     word[8]  pages_acked_offset
-//   │     word[9]  reserved (0)          // active lane count P travels in the per-program
-//   │                                    // kernel-config slot, see remote_dfb_constants.h
+//   │     word[9]  peer_counter_offset   // 0 unless the peer's page sits at a different
+//   │                                    // address than this one (DRAM sender); see below
 //   ├── NOC XY table
 //   ├── pad → PREFETCHER_PIPE_CREDIT_BLOCK_ALIGN
 //   ├── SENT block   (word[7]) — one L1_ALIGNMENT slot per (receiver, lane)
@@ -49,7 +49,8 @@
 //   lines, so a line holding both kinds of word would, on eviction, overwrite the peer's
 //   NoC-written counter with a stale copy. With the split, a dirty line can only ever hold
 //   words the same core wrote. The sender page and every receiver page share this layout, so
-//   the same slot offset addresses the mirror counter on the peer.
+//   the same slot offset addresses the mirror counter on the peer -- unless the two pages sit
+//   at different addresses, which word[9] covers.
 //
 //   Active lane count P (receiver kernel num_threads / relay num_producers) is not in
 //   the page: it is packed into the program's kernel-config slot so it arrives in CQ order
@@ -84,7 +85,18 @@ inline constexpr uint32_t PREFETCHER_PIPE_CFG_APPLIED_ENTRY_SIZE = 5;
 inline constexpr uint32_t PREFETCHER_PIPE_CFG_NOC_XY_OFFSET = 6;
 inline constexpr uint32_t PREFETCHER_PIPE_CFG_PAGES_SENT_OFFSET = 7;
 inline constexpr uint32_t PREFETCHER_PIPE_CFG_PAGES_ACKED_OFFSET = 8;
-// word[9] reserved.
+
+// Page-relative offset (uint32, may wrap) from this page's own address to the base of the peer's
+// mirror counters, for the one case where the peer's config page does not sit at this page's
+// address: a DRAM-sender pipe, whose sender page lives in the programmable DRAM core's L1 arena
+// rather than in the receivers' persistent L1. Zero means the peer page shares this page's
+// address -- every worker-sender pipe -- and then word[7] / word[8] already address both ends.
+//
+// On a receiver page it is the delta to this receiver's acked slot on the sender page, the target
+// of its ack atomic. On a DRAM sender's page it is the delta to the receivers' SENT block base;
+// only the DRISC sender helpers read that one (internal/prefetcher_pipe_dram_sender.h), since the
+// device PrefetcherPipe class never runs on a DRAM core.
+inline constexpr uint32_t PREFETCHER_PIPE_CFG_PEER_COUNTER_OFFSET = 9;
 
 // Quasar: config pages reserve this many lane (sent,acked) slots per receiver so
 // consumer relay bind can activate up to this many producers without resizing

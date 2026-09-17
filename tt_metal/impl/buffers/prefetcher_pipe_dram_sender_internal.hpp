@@ -45,8 +45,8 @@ struct PrefetcherPipeDramSenderInternals {
         uint32_t recv_index_base,
         BufferType buffer_type);
 
-    // DRISC L1 address of this pipe's sender config page (9-word header, receiver NOC XY table,
-    // and the per-receiver entries_sent/entries_acked pairs). Pre-written by the constructor on
+    // DRISC L1 address of this pipe's sender config page (10-word header, receiver NOC XY table,
+    // and the per-receiver entries_sent and entries_acked blocks). Pre-written by the constructor on
     // every device, at an offset reserved on this pipe's sender core alone -- so sibling pipes on
     // other banks may report the same address. The DRISC kernel hands it straight to
     // setup_prefetcher_pipe_interface.
