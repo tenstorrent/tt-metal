@@ -340,7 +340,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         _llk_pack_<DST_SYNC_MODE, is_fp32_dest_acc_en, ckernel::PackMode::Default>(
                             block_tile, L1_ADDRESS(buffer_Res[block_start + block_tile]));
                     }
-                    _llk_pack_isolate_stallwait_pack_wrapper_();
                 }
             }
         }
@@ -366,6 +365,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
             }
         }
 
+        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        {
+            _llk_pack_isolate_stallwait_pack_wrapper_();
+        }
         PROFILER_SYNC();
     }
 }

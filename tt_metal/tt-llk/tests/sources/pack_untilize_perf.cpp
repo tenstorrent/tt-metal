@@ -208,7 +208,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 {
                     _llk_pack_untilize_wrapper_<BLOCK_CT_DIM, FULL_CT_DIM>(
                         PERF_ADDRESS(PERF_OUTPUT, tile), formats.pack_dst, FACE_R_DIM, 4 /* num_faces */, 0 /* tile_dst_rt_offset */);
-                    _llk_pack_isolate_stallwait_pack_wrapper_();
                 }
             }
         }
@@ -224,6 +223,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
                 }
             }
+        }
+        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        {
+            _llk_pack_isolate_stallwait_pack_wrapper_();
         }
         PROFILER_SYNC();
     }

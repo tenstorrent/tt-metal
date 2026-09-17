@@ -197,7 +197,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     {
                         _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en>(block_tile, PERF_ADDRESS(PERF_OUTPUT, block_start + block_tile));
                     }
-                    _llk_pack_isolate_stallwait_pack_wrapper_();
                 }
             }
         }
@@ -217,6 +216,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
                 }
             }
+        }
+        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        {
+            _llk_pack_isolate_stallwait_pack_wrapper_();
         }
         PROFILER_SYNC();
     }

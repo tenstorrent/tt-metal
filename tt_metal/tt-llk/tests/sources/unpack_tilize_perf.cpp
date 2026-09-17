@@ -260,12 +260,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             "Block tile index exceeds maximum destination tiles");
                         _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, pack_exec_mode_v<UNTILIZE>>(i, PERF_ADDRESS(PERF_OUTPUT, i));
                     }
-                    // Match the real pipeline's destination-batch completion
-                    // cadence without adding its math semaphore or ZEROACC work.
-                    _llk_pack_isolate_stallwait_pack_wrapper_();
                     remaining_tiles -= num_tiles;
                 }
             }
+            _llk_pack_isolate_stallwait_pack_wrapper_();
             PROFILER_SYNC();
             return;
         }

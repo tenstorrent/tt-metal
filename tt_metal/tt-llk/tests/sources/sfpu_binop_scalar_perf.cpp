@@ -257,7 +257,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             "block_tile exceeds max dest tiles");
                         _llk_pack_<DST_SYNC_MODE, is_fp32_dest_acc_en>(block_tile, PERF_ADDRESS(PERF_OUTPUT, block_start + block_tile));
                     }
-                    _llk_pack_isolate_stallwait_pack_wrapper_();
                 }
             }
         }
@@ -282,6 +281,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
             }
         }
 
+        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        {
+            _llk_pack_isolate_stallwait_pack_wrapper_();
+        }
         PROFILER_SYNC();
     }
 }

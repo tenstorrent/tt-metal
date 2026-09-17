@@ -233,7 +233,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 for (int block = 0; block < NUM_BLOCKS; ++block)
                 {
                     _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>(0, PERF_ADDRESS(PERF_OUTPUT, block * NUM_TILES_IN_BLOCK));
-                    _llk_pack_isolate_stallwait_pack_wrapper_();
                 }
             }
         }
@@ -250,6 +249,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
             }
         }
 
+        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        {
+            _llk_pack_isolate_stallwait_pack_wrapper_();
+        }
         PROFILER_SYNC();
     }
     _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
