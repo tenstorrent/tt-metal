@@ -29,6 +29,26 @@
 #define PROCESS_ACTIVATIONS_(op) PROCESS_##op##_ACTIVATIONS
 #define HAS_ACTIVATIONS(op) P_COMPL(IS_EMPTY(PROCESS_ACTIVATIONS(op, 0)))
 
+// SrcA uses the binary LHS format between activation passes and binary chunks.
+// This is a FORMAT reference, not necessarily the buffer supplying the next tile:
+// binary_ng_program_factory gives the LHS broadcast temporary (c_5) the same
+// format as the original LHS (c_0). With LHS activation, use its intermediate
+// (c_3), whose format can differ from c_0 (e.g. LOGADDEXP). No runtime tracking.
+#define BINARY_LHS_FORMAT_CB (HAS_ACTIVATIONS(LHS) ? tt::CBIndex::c_3 : tt::CBIndex::c_0)
+
+#if defined(TRISC_UNPACK) && !HAS_ACTIVATIONS(LHS) && HAS_ACTIVATIONS(RHS)
+// An absent c_5 has Invalid (0xff) format. Otherwise it must be interchangeable
+// with c_0 for reconfiguration, including the geometry programmed on restoration.
+static_assert(
+    unpack_src_format[5] == 0xff ||
+        (unpack_src_format[0] == unpack_src_format[5] && unpack_dst_format[0] == unpack_dst_format[5] &&
+         unpack_tile_num_faces[0] == unpack_tile_num_faces[5] &&
+         unpack_tile_face_r_dim[0] == unpack_tile_face_r_dim[5] && unpack_partial_face[0] == unpack_partial_face[5] &&
+         unpack_narrow_tile[0] == unpack_narrow_tile[5] && unpack_tile_r_dim[0] == unpack_tile_r_dim[5] &&
+         unpack_tile_c_dim[0] == unpack_tile_c_dim[5] && unpack_tile_size[0] == unpack_tile_size[5]),
+    "binary_ng: LHS broadcast buffer no longer matches the shared SrcA format reference");
+#endif
+
 #define BCAST_OP P_CAT(BCAST_OP_, BCAST_INPUT)
 #define OTHER_OP P_CAT(BCAST_OP_, P_COMPL(BCAST_INPUT))
 #define BCAST_OP_0 LHS
