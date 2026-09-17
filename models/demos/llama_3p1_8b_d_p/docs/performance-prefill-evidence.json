@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "scope": "saved2k_verified4k_and8k_eager_performance_no_golden_accuracy_claim",
+  "scope": "saved2k_verified4k_8k_16k_eager_performance_no_golden_accuracy_claim",
   "measurements": [
     {
       "context_length": 2048,
@@ -2896,10 +2896,2050 @@
           "title": "Great Expectations"
         }
       ]
+    },
+    {
+      "context_length": 16384,
+      "attempt": "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-runs-007/16k-c04-001/attempts/attempt-002-bfp8-16k",
+      "report": {
+        "path": "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-runs-007/16k-c04-001/attempts/attempt-002-bfp8-16k/captures-16384/report.json",
+        "sha256": "686c346519cdb56075d2c7fa01fb6c834097017af1ce1e76579815856dfdc37e"
+      },
+      "report_status": "performance_complete_no_accuracy_claim",
+      "report_accuracy_status": "No golden accuracy claim; book continuation predictions are observations only",
+      "verification": {
+        "path": "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-runs-007/16k-c04-001/attempts/attempt-002-bfp8-16k/verification.json",
+        "sha256": "72e16bfb1b7ec86288c8f6de6f847636fd2ff7cdf1089bbd857353b9be88b9c2"
+      },
+      "verification_fields": {
+        "verified_exit": 0,
+        "actual_exit": 0,
+        "dispatch_exit": 0,
+        "reasons": [],
+        "full_model_accepted": false,
+        "execution_verified": true,
+        "scope": "error-free full32 prefill and performance; book next-token observations only; no golden accuracy acceptance",
+        "ended_utc": "2026-09-17T09:19:23.072242+00:00"
+      },
+      "source_head": "7cb03649b4ec4db7492c49ec91c7fe02f490a87b",
+      "source_repository": "/data/divanovic/llama31-8b-disagg/repos/tt-metal",
+      "source_pin_count": 14603,
+      "source_map": {
+        "path": "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-runs-007/16k-c04-001/attempts/attempt-002-bfp8-16k/source-hashes.json",
+        "sha256": "561f4d11597a66adca9bb4437133391526dedaf6acbbb691187ae51215b4521d"
+      },
+      "source_manifest_sha256": "561f4d11597a66adca9bb4437133391526dedaf6acbbb691187ae51215b4521d",
+      "before_node_after_equal": true,
+      "source_heads_equal": true,
+      "selected_source_sha256": {
+        "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-launch-006/launch.py": "146a638cd143b2d524e05b4c6920d0da41c4e78400244ff0049a28a1f420b09e",
+        "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-launch-007/launch.py": "182916fd5ea41e9a6567bccdb01c957e8aae6ea964c963012a0f3cf3c82cbeab",
+        "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-preparation-006/long_context_performance_helpers.py": "d6a96c40f5d4ea53675ed80584d0695597b77fc5e444ccbc4972caf146b9154a",
+        "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-preparation-007/long_context_performance_helpers.py": "d6a96c40f5d4ea53675ed80584d0695597b77fc5e444ccbc4972caf146b9154a",
+        "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-preparation-007/test_long_context_performance.py": "cf518f6617e09a7317a7d4ab0745591bcabb049d81741a7389573647604b31c0",
+        "/data/divanovic/llama31-8b-disagg/repos/tt-metal/models/demos/llama_3p1_8b_d_p/tt/__init__.py": "5dce07d5450b8b62d8e38ca9845d7abdabd7107e59cf000967393ac0cb074f76",
+        "/data/divanovic/llama31-8b-disagg/repos/tt-metal/models/demos/llama_3p1_8b_d_p/tt/attention.py": "776a46d34b1c10ea3b9dc772ea9f7b8b3b606af7d2d907e5e249f7e8edccd45f",
+        "/data/divanovic/llama31-8b-disagg/repos/tt-metal/models/demos/llama_3p1_8b_d_p/tt/config.py": "3c6a067625d38d9bf043028fc7d33b2591a9b980f50c980f3b2f7b50da7be979",
+        "/data/divanovic/llama31-8b-disagg/repos/tt-metal/models/demos/llama_3p1_8b_d_p/tt/decoder.py": "df0b04fb7d0d47929d7a0ffdd7d55a7cd72229e49342ea3d99bf0f4b7421186f",
+        "/data/divanovic/llama31-8b-disagg/repos/tt-metal/models/demos/llama_3p1_8b_d_p/tt/input.py": "f3cf1c295097e09978c13bebde970b33d67a5127d800f5f28b3505f15f9eedf6",
+        "/data/divanovic/llama31-8b-disagg/repos/tt-metal/models/demos/llama_3p1_8b_d_p/tt/kv_cache.py": "5ebd451510be99ad333fc1f17835334c8fb2129df7a181274996a6aa2b790757",
+        "/data/divanovic/llama31-8b-disagg/repos/tt-metal/models/demos/llama_3p1_8b_d_p/tt/mlp.py": "acc1eaecafdcf1f23393a628d4af1ed5da0c2a39447f4a1123cfafef39ba236e",
+        "/data/divanovic/llama31-8b-disagg/repos/tt-metal/models/demos/llama_3p1_8b_d_p/tt/model.py": "84853c75742290abde0a284175ef883aaa189622a29929571def2c32bb8aa830",
+        "/data/divanovic/llama31-8b-disagg/repos/tt-metal/models/demos/llama_3p1_8b_d_p/tt/model_config.py": "8ff96daea641929f86e27ce8a32f7fb7b62e1ef90f9c15ce2b456c64257b15cb",
+        "/data/divanovic/llama31-8b-disagg/repos/tt-metal/models/demos/llama_3p1_8b_d_p/tt/prefill_geometry.py": "984c4f6aa53895c0601ab9a58b2123bbc8fd20cce100200dfaa10be82734bf71",
+        "/data/divanovic/llama31-8b-disagg/repos/tt-metal/models/demos/llama_3p1_8b_d_p/tt/qkv.py": "cce1242a47f086faae7db51369c231b9ea80c97742a1e9c1b5e90adf40d99d82",
+        "/data/divanovic/llama31-8b-disagg/repos/tt-metal/models/demos/llama_3p1_8b_d_p/tt/rms_norm.py": "23f70af620f4c684e393ee55470c606711e161f0e33b6b0a531111eda77df2d9",
+        "/data/divanovic/llama31-8b-disagg/repos/tt-metal/models/demos/llama_3p1_8b_d_p/tt/rope.py": "7e8402b816e28187b3cbdfea81223309f3bad79b30ec4ebdb3e922bf73022a37",
+        "/data/divanovic/llama31-8b-disagg/repos/tt-metal/models/demos/llama_3p1_8b_d_p/tt/runners/__init__.py": "5dce07d5450b8b62d8e38ca9845d7abdabd7107e59cf000967393ac0cb074f76",
+        "/data/divanovic/llama31-8b-disagg/repos/tt-metal/models/demos/llama_3p1_8b_d_p/tt/runners/adapters/__init__.py": "5dce07d5450b8b62d8e38ca9845d7abdabd7107e59cf000967393ac0cb074f76",
+        "/data/divanovic/llama31-8b-disagg/repos/tt-metal/models/demos/llama_3p1_8b_d_p/tt/runners/adapters/llama_3p1_8b.py": "de8d310f079977ae9f81655aaeb8e00ae0ffdf02c0d2adb60b955cb9c54da5a4",
+        "/data/divanovic/llama31-8b-disagg/repos/tt-metal/models/demos/llama_3p1_8b_d_p/tt/runners/kv_chunk_table.py": "36484a06d08103d57dc98d30b7866af89f202c00d23e9c946f229e662de6a3ab",
+        "/data/divanovic/llama31-8b-disagg/repos/tt-metal/models/demos/llama_3p1_8b_d_p/tt/runners/kv_layout.py": "531e87c02a9e30b8a635fb793c78333181959e49ba3b9b088602dea795e302cf",
+        "/data/divanovic/llama31-8b-disagg/repos/tt-metal/models/demos/llama_3p1_8b_d_p/tt/tt_prefill_runtime.py": "7d0dece1f073bb85b46c97878b025ef10fb3172c8b72f5526ea4f3028e26ae6e",
+        "/data/divanovic/llama31-8b-disagg/repos/tt-metal/models/demos/llama_3p1_8b_d_p/tt/weights.py": "027b05e465e10fb5491a1ead4608e6fb1c5e6cd84da214da8ff79e5918db88df",
+        "/data/divanovic/llama31-8b-disagg/repos/tt-metal/ttnn/cpp/ttnn/operations/experimental/quasar/transformer/sdpa/device/kernels/compute/compute_common.hpp": "a08c8861617c6275272a8e39443c586fb91d4ba1fb444054970da9f25e52d3c9",
+        "/data/divanovic/llama31-8b-disagg/repos/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp": "c67e91ad533a1a0ebca805a7e4df4fdd6d3d8f1760291d70c17276f3c6b2e0ec"
+      },
+      "controller_sha256": "182916fd5ea41e9a6567bccdb01c957e8aae6ea964c963012a0f3cf3c82cbeab",
+      "invocation": {
+        "path": "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-runs-007/16k-c04-001/attempts/attempt-002-bfp8-16k/invocation.json",
+        "sha256": "01b32aba1775e436f04c102f19bde3cdfc659e9ef5938bb7414ba5e03b56f59f"
+      },
+      "pytest_command": [
+        "timeout",
+        "--signal=TERM",
+        "--kill-after=60",
+        "1800",
+        "/data/divanovic/llama31-8b-disagg/runtime/python_env/bin/python",
+        "-B",
+        "-m",
+        "pytest",
+        "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-preparation-007/test_long_context_performance.py::test_full_prefill_long_context_performance[blackhole-mesh_device0-device_params0]",
+        "--rootdir=.",
+        "-c",
+        "/dev/null",
+        "-p",
+        "conftest",
+        "-p",
+        "performance_pytest_plugin",
+        "-vv",
+        "-s",
+        "--junitxml=/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-runs-007/16k-c04-001/attempts/attempt-002-bfp8-16k/pytest.xml"
+      ],
+      "junit": {
+        "path": "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-runs-007/16k-c04-001/attempts/attempt-002-bfp8-16k/pytest.xml",
+        "sha256": "60a1776638d14788bf961861544f22f5651e117f2676446ba69beb8ff906c819"
+      },
+      "junit_case": "test_full_prefill_long_context_performance[blackhole-mesh_device0-device_params0]",
+      "node": "bh-glx-120-c04u14",
+      "job_id": "108887",
+      "measured_requests": 6,
+      "measured_chunks": 96,
+      "complete_requests": 8,
+      "complete_output_checks": 4096,
+      "summary": [
+        {
+          "slot": 0,
+          "measured_requests": 3,
+          "prompt_wall_seconds": {
+            "count": 3,
+            "minimum": 8.734832020985777,
+            "median": 8.747287370002596,
+            "maximum": 8.778167647993541,
+            "samples": [
+              8.734832020985777,
+              8.747287370002596,
+              8.778167647993541
+            ]
+          },
+          "forward_wall_seconds": {
+            "count": 3,
+            "minimum": 8.718288595977356,
+            "median": 8.727025975007564,
+            "maximum": 8.761432072060416,
+            "samples": [
+              8.718288595977356,
+              8.727025975007564,
+              8.761432072060416
+            ]
+          },
+          "tokens_per_second_per_user": {
+            "count": 3,
+            "minimum": 1866.448746139515,
+            "median": 1873.0378124064237,
+            "maximum": 1875.7086525117822,
+            "samples": [
+              1875.7086525117822,
+              1873.0378124064237,
+              1866.448746139515
+            ]
+          },
+          "chunks": [
+            {
+              "start": 0,
+              "end": 1024,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.5492597010015743,
+                "median": 0.5506471600092482,
+                "maximum": 0.5520413979975274,
+                "samples": [
+                  0.5492597010015743,
+                  0.5506471600092482,
+                  0.5520413979975274
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.5481544569920516,
+                "median": 0.5495447200082708,
+                "maximum": 0.5509440250025364,
+                "samples": [
+                  0.5481544569920516,
+                  0.5495447200082708,
+                  0.5509440250025364
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.0010973729949910194,
+                "median": 0.0011024400009773672,
+                "maximum": 0.0011052440095227212,
+                "samples": [
+                  0.0011052440095227212,
+                  0.0011024400009773672,
+                  0.0010973729949910194
+                ]
+              }
+            },
+            {
+              "start": 1024,
+              "end": 2048,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.5486646330100484,
+                "median": 0.5489351809956133,
+                "maximum": 0.5582317030057311,
+                "samples": [
+                  0.5582317030057311,
+                  0.5489351809956133,
+                  0.5486646330100484
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.5476382270135218,
+                "median": 0.5478852899977937,
+                "maximum": 0.5572130090004066,
+                "samples": [
+                  0.5572130090004066,
+                  0.5478852899977937,
+                  0.5476382270135218
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.0010186940053245053,
+                "median": 0.0010264059965265915,
+                "maximum": 0.0010498909978196025,
+                "samples": [
+                  0.0010186940053245053,
+                  0.0010498909978196025,
+                  0.0010264059965265915
+                ]
+              }
+            },
+            {
+              "start": 2048,
+              "end": 3072,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.5488309350039344,
+                "median": 0.5489296629966702,
+                "maximum": 0.550991921001696,
+                "samples": [
+                  0.550991921001696,
+                  0.5488309350039344,
+                  0.5489296629966702
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.5477803429967025,
+                "median": 0.5479222550056875,
+                "maximum": 0.5499729059956735,
+                "samples": [
+                  0.5499729059956735,
+                  0.5477803429967025,
+                  0.5479222550056875
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.001007407990982756,
+                "median": 0.0010190150060225278,
+                "maximum": 0.0010505920072318986,
+                "samples": [
+                  0.0010190150060225278,
+                  0.0010505920072318986,
+                  0.001007407990982756
+                ]
+              }
+            },
+            {
+              "start": 3072,
+              "end": 4096,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.5491179360105889,
+                "median": 0.5506218430091394,
+                "maximum": 0.5518446849891916,
+                "samples": [
+                  0.5518446849891916,
+                  0.5506218430091394,
+                  0.5491179360105889
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.5481250099983299,
+                "median": 0.5495539039984578,
+                "maximum": 0.5508200109907193,
+                "samples": [
+                  0.5508200109907193,
+                  0.5495539039984578,
+                  0.5481250099983299
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.0009929260122589767,
+                "median": 0.0010246739984722808,
+                "maximum": 0.0010679390106815845,
+                "samples": [
+                  0.0010246739984722808,
+                  0.0010679390106815845,
+                  0.0009929260122589767
+                ]
+              }
+            },
+            {
+              "start": 4096,
+              "end": 5120,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.5487304319976829,
+                "median": 0.5505666200042469,
+                "maximum": 0.5517793270119,
+                "samples": [
+                  0.5517793270119,
+                  0.5505666200042469,
+                  0.5487304319976829
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.5477401210082462,
+                "median": 0.5481812380021438,
+                "maximum": 0.5507430560101056,
+                "samples": [
+                  0.5507430560101056,
+                  0.5481812380021438,
+                  0.5477401210082462
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.0009903109894366935,
+                "median": 0.0010362710017943755,
+                "maximum": 0.0023853820021031424,
+                "samples": [
+                  0.0010362710017943755,
+                  0.0023853820021031424,
+                  0.0009903109894366935
+                ]
+              }
+            },
+            {
+              "start": 5120,
+              "end": 6144,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.5470402990031289,
+                "median": 0.5483647439978085,
+                "maximum": 0.5504516549990512,
+                "samples": [
+                  0.5470402990031289,
+                  0.5483647439978085,
+                  0.5504516549990512
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.5459783699916443,
+                "median": 0.5473017629992682,
+                "maximum": 0.5494448289973661,
+                "samples": [
+                  0.5459783699916443,
+                  0.5473017629992682,
+                  0.5494448289973661
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.0010068260016851127,
+                "median": 0.001061929011484608,
+                "maximum": 0.0010629809985402972,
+                "samples": [
+                  0.001061929011484608,
+                  0.0010629809985402972,
+                  0.0010068260016851127
+                ]
+              }
+            },
+            {
+              "start": 6144,
+              "end": 7168,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.5440130210045027,
+                "median": 0.5481407350016525,
+                "maximum": 0.5498054739873623,
+                "samples": [
+                  0.5440130210045027,
+                  0.5498054739873623,
+                  0.5481407350016525
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.5430687390035018,
+                "median": 0.546696831996087,
+                "maximum": 0.5471429220051505,
+                "samples": [
+                  0.5430687390035018,
+                  0.546696831996087,
+                  0.5471429220051505
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.000944282001000829,
+                "median": 0.0009978129965020344,
+                "maximum": 0.0031086419912753627,
+                "samples": [
+                  0.000944282001000829,
+                  0.0031086419912753627,
+                  0.0009978129965020344
+                ]
+              }
+            },
+            {
+              "start": 7168,
+              "end": 8192,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.543758728003013,
+                "median": 0.5465317810012493,
+                "maximum": 0.5468824020063039,
+                "samples": [
+                  0.543758728003013,
+                  0.5468824020063039,
+                  0.5465317810012493
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.542734646005556,
+                "median": 0.5455301730107749,
+                "maximum": 0.5458122599957278,
+                "samples": [
+                  0.542734646005556,
+                  0.5458122599957278,
+                  0.5455301730107749
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.0010016079904744402,
+                "median": 0.0010240819974569604,
+                "maximum": 0.0010701420105760917,
+                "samples": [
+                  0.0010240819974569604,
+                  0.0010701420105760917,
+                  0.0010016079904744402
+                ]
+              }
+            },
+            {
+              "start": 8192,
+              "end": 9216,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.5452132189966505,
+                "median": 0.545525497989729,
+                "maximum": 0.546844273005263,
+                "samples": [
+                  0.5452132189966505,
+                  0.545525497989729,
+                  0.546844273005263
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.5441266419948079,
+                "median": 0.5444835489906836,
+                "maximum": 0.545845389002352,
+                "samples": [
+                  0.5441266419948079,
+                  0.5444835489906836,
+                  0.545845389002352
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.000998884002910927,
+                "median": 0.0010419489990454167,
+                "maximum": 0.0010865770018426701,
+                "samples": [
+                  0.0010865770018426701,
+                  0.0010419489990454167,
+                  0.000998884002910927
+                ]
+              }
+            },
+            {
+              "start": 9216,
+              "end": 10240,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.5438015729887411,
+                "median": 0.5464932359900558,
+                "maximum": 0.5465869049949106,
+                "samples": [
+                  0.5438015729887411,
+                  0.5464932359900558,
+                  0.5465869049949106
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.5427860839990899,
+                "median": 0.5454495750018395,
+                "maximum": 0.5456119070004206,
+                "samples": [
+                  0.5427860839990899,
+                  0.5454495750018395,
+                  0.5456119070004206
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.0009749979944899678,
+                "median": 0.0010154889896512032,
+                "maximum": 0.0010436609882162884,
+                "samples": [
+                  0.0010154889896512032,
+                  0.0010436609882162884,
+                  0.0009749979944899678
+                ]
+              }
+            },
+            {
+              "start": 10240,
+              "end": 11264,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.5441509199881693,
+                "median": 0.5467697809945093,
+                "maximum": 0.5502008409966948,
+                "samples": [
+                  0.5441509199881693,
+                  0.5502008409966948,
+                  0.5467697809945093
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.5431237329903524,
+                "median": 0.5457686540030409,
+                "maximum": 0.5491350060037803,
+                "samples": [
+                  0.5431237329903524,
+                  0.5491350060037803,
+                  0.5457686540030409
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.0010011269914684817,
+                "median": 0.001027186997816898,
+                "maximum": 0.0010658349929144606,
+                "samples": [
+                  0.001027186997816898,
+                  0.0010658349929144606,
+                  0.0010011269914684817
+                ]
+              }
+            },
+            {
+              "start": 11264,
+              "end": 12288,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.5426195640029619,
+                "median": 0.5444069350050995,
+                "maximum": 0.5466732860077173,
+                "samples": [
+                  0.5426195640029619,
+                  0.5444069350050995,
+                  0.5466732860077173
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.54162015899783,
+                "median": 0.5433707040065201,
+                "maximum": 0.5455582270078594,
+                "samples": [
+                  0.54162015899783,
+                  0.5433707040065201,
+                  0.5455582270078594
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.0009994050051318482,
+                "median": 0.0010362309985794127,
+                "maximum": 0.0011150589998578653,
+                "samples": [
+                  0.0009994050051318482,
+                  0.0010362309985794127,
+                  0.0011150589998578653
+                ]
+              }
+            },
+            {
+              "start": 12288,
+              "end": 13312,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.5446340380003676,
+                "median": 0.5458014860050753,
+                "maximum": 0.5469466990034562,
+                "samples": [
+                  0.5446340380003676,
+                  0.5458014860050753,
+                  0.5469466990034562
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.5436089840077329,
+                "median": 0.5447708230058197,
+                "maximum": 0.5459735030017328,
+                "samples": [
+                  0.5436089840077329,
+                  0.5447708230058197,
+                  0.5459735030017328
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.0009731960017234087,
+                "median": 0.0010250539926346391,
+                "maximum": 0.0010306629992555827,
+                "samples": [
+                  0.0010250539926346391,
+                  0.0010306629992555827,
+                  0.0009731960017234087
+                ]
+              }
+            },
+            {
+              "start": 13312,
+              "end": 14336,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.5439167279982939,
+                "median": 0.5439528720016824,
+                "maximum": 0.5570445670018671,
+                "samples": [
+                  0.5439167279982939,
+                  0.5439528720016824,
+                  0.5570445670018671
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.5429217700002482,
+                "median": 0.5429363710136386,
+                "maximum": 0.5555205609998666,
+                "samples": [
+                  0.5429217700002482,
+                  0.5429363710136386,
+                  0.5555205609998666
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.0009949579980457202,
+                "median": 0.0010165009880438447,
+                "maximum": 0.001524006002000533,
+                "samples": [
+                  0.0009949579980457202,
+                  0.0010165009880438447,
+                  0.001524006002000533
+                ]
+              }
+            },
+            {
+              "start": 14336,
+              "end": 15360,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.5427330050006276,
+                "median": 0.5434526489989366,
+                "maximum": 0.5509130420105066,
+                "samples": [
+                  0.5427330050006276,
+                  0.5434526489989366,
+                  0.5509130420105066
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.5416888019972248,
+                "median": 0.5424110099993413,
+                "maximum": 0.5499050140060717,
+                "samples": [
+                  0.5416888019972248,
+                  0.5424110099993413,
+                  0.5499050140060717
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.001008028004434891,
+                "median": 0.0010416389995953068,
+                "maximum": 0.0010442030034027994,
+                "samples": [
+                  0.0010442030034027994,
+                  0.0010416389995953068,
+                  0.001008028004434891
+                ]
+              }
+            },
+            {
+              "start": 15360,
+              "end": 16384,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.5307916909951018,
+                "median": 0.5327507609908935,
+                "maximum": 0.5437313959992025,
+                "samples": [
+                  0.5307916909951018,
+                  0.5327507609908935,
+                  0.5437313959992025
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.5297272280004108,
+                "median": 0.5317125869914889,
+                "maximum": 0.5427612549974583,
+                "samples": [
+                  0.5297272280004108,
+                  0.5317125869914889,
+                  0.5427612549974583
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.0009701410017441958,
+                "median": 0.0010381739994045347,
+                "maximum": 0.0010644629946909845,
+                "samples": [
+                  0.0010644629946909845,
+                  0.0010381739994045347,
+                  0.0009701410017441958
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "slot": 1,
+          "measured_requests": 3,
+          "prompt_wall_seconds": {
+            "count": 3,
+            "minimum": 8.770790704991668,
+            "median": 8.772628771999734,
+            "maximum": 8.796333455000422,
+            "samples": [
+              8.772628771999734,
+              8.796333455000422,
+              8.770790704991668
+            ]
+          },
+          "forward_wall_seconds": {
+            "count": 3,
+            "minimum": 8.754785577009898,
+            "median": 8.755833375020302,
+            "maximum": 8.77106938502402,
+            "samples": [
+              8.755833375020302,
+              8.77106938502402,
+              8.754785577009898
+            ]
+          },
+          "tokens_per_second_per_user": {
+            "count": 3,
+            "minimum": 1862.5942369983989,
+            "median": 1867.6271874508195,
+            "maximum": 1868.0185802034325,
+            "samples": [
+              1867.6271874508195,
+              1862.5942369983989,
+              1868.0185802034325
+            ]
+          },
+          "chunks": [
+            {
+              "start": 0,
+              "end": 1024,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.5501525540021248,
+                "median": 0.5528998700028751,
+                "maximum": 0.553969333996065,
+                "samples": [
+                  0.553969333996065,
+                  0.5501525540021248,
+                  0.5528998700028751
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.5490282809914788,
+                "median": 0.5516571080079302,
+                "maximum": 0.5528291070077103,
+                "samples": [
+                  0.5528291070077103,
+                  0.5490282809914788,
+                  0.5516571080079302
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.001124273010645993,
+                "median": 0.0011402269883546978,
+                "maximum": 0.0012427619949448854,
+                "samples": [
+                  0.0011402269883546978,
+                  0.001124273010645993,
+                  0.0012427619949448854
+                ]
+              }
+            },
+            {
+              "start": 1024,
+              "end": 2048,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.5472919570020167,
+                "median": 0.5473342100012815,
+                "maximum": 0.5485586620052345,
+                "samples": [
+                  0.5472919570020167,
+                  0.5473342100012815,
+                  0.5485586620052345
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.5463113089936087,
+                "median": 0.5463166580011602,
+                "maximum": 0.5475560420018155,
+                "samples": [
+                  0.5463166580011602,
+                  0.5463113089936087,
+                  0.5475560420018155
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.0009752990008564666,
+                "median": 0.001002620003418997,
+                "maximum": 0.0010229010076727718,
+                "samples": [
+                  0.0009752990008564666,
+                  0.0010229010076727718,
+                  0.001002620003418997
+                ]
+              }
+            },
+            {
+              "start": 2048,
+              "end": 3072,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.5469973930012202,
+                "median": 0.5514146729983622,
+                "maximum": 0.5521897439903114,
+                "samples": [
+                  0.5521897439903114,
+                  0.5469973930012202,
+                  0.5514146729983622
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.5460070319968509,
+                "median": 0.5504078170051798,
+                "maximum": 0.5511655610025628,
+                "samples": [
+                  0.5511655610025628,
+                  0.5460070319968509,
+                  0.5504078170051798
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.0009903610043693334,
+                "median": 0.0010068559931823984,
+                "maximum": 0.0010241829877486452,
+                "samples": [
+                  0.0010241829877486452,
+                  0.0009903610043693334,
+                  0.0010068559931823984
+                ]
+              }
+            },
+            {
+              "start": 3072,
+              "end": 4096,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.5458513379999204,
+                "median": 0.5471627520018956,
+                "maximum": 0.5496706270059804,
+                "samples": [
+                  0.5458513379999204,
+                  0.5471627520018956,
+                  0.5496706270059804
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.5447705010010395,
+                "median": 0.5461695760022849,
+                "maximum": 0.5487210670107743,
+                "samples": [
+                  0.5447705010010395,
+                  0.5461695760022849,
+                  0.5487210670107743
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.0009495599952060729,
+                "median": 0.0009931759996106848,
+                "maximum": 0.0010808369988808408,
+                "samples": [
+                  0.0010808369988808408,
+                  0.0009931759996106848,
+                  0.0009495599952060729
+                ]
+              }
+            },
+            {
+              "start": 4096,
+              "end": 5120,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.5461566979938652,
+                "median": 0.5466543470101897,
+                "maximum": 0.549315212003421,
+                "samples": [
+                  0.5461566979938652,
+                  0.5466543470101897,
+                  0.549315212003421
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.545149280995247,
+                "median": 0.5456562239996856,
+                "maximum": 0.5483763980009826,
+                "samples": [
+                  0.545149280995247,
+                  0.5456562239996856,
+                  0.5483763980009826
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.0009388140024384484,
+                "median": 0.0009981230105040595,
+                "maximum": 0.0010074169986182824,
+                "samples": [
+                  0.0010074169986182824,
+                  0.0009981230105040595,
+                  0.0009388140024384484
+                ]
+              }
+            },
+            {
+              "start": 5120,
+              "end": 6144,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.5442476030002581,
+                "median": 0.5463083159993403,
+                "maximum": 0.5490486810012953,
+                "samples": [
+                  0.5442476030002581,
+                  0.5463083159993403,
+                  0.5490486810012953
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.5432659450016217,
+                "median": 0.5452947490121005,
+                "maximum": 0.5481055700074648,
+                "samples": [
+                  0.5432659450016217,
+                  0.5452947490121005,
+                  0.5481055700074648
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.0009431109938304871,
+                "median": 0.000981657998636365,
+                "maximum": 0.0010135669872397557,
+                "samples": [
+                  0.000981657998636365,
+                  0.0010135669872397557,
+                  0.0009431109938304871
+                ]
+              }
+            },
+            {
+              "start": 6144,
+              "end": 7168,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.5453466390026733,
+                "median": 0.5484918820002349,
+                "maximum": 0.5513367490057135,
+                "samples": [
+                  0.5453466390026733,
+                  0.5513367490057135,
+                  0.5484918820002349
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.5442998820071807,
+                "median": 0.5475191669975175,
+                "maximum": 0.5503484010114335,
+                "samples": [
+                  0.5442998820071807,
+                  0.5503484010114335,
+                  0.5475191669975175
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.0009727150027174503,
+                "median": 0.0009883479942800477,
+                "maximum": 0.0010467569954926148,
+                "samples": [
+                  0.0010467569954926148,
+                  0.0009883479942800477,
+                  0.0009727150027174503
+                ]
+              }
+            },
+            {
+              "start": 7168,
+              "end": 8192,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.5482635679945815,
+                "median": 0.552119710991974,
+                "maximum": 0.5631596160092158,
+                "samples": [
+                  0.552119710991974,
+                  0.5631596160092158,
+                  0.5482635679945815
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.5472338079998735,
+                "median": 0.5510746770014521,
+                "maximum": 0.5549597860081121,
+                "samples": [
+                  0.5510746770014521,
+                  0.5549597860081121,
+                  0.5472338079998735
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.0010297599947080016,
+                "median": 0.0010450339905219153,
+                "maximum": 0.008199830001103692,
+                "samples": [
+                  0.0010450339905219153,
+                  0.008199830001103692,
+                  0.0010297599947080016
+                ]
+              }
+            },
+            {
+              "start": 8192,
+              "end": 9216,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.5486366709956201,
+                "median": 0.5518147099937778,
+                "maximum": 0.5554841779958224,
+                "samples": [
+                  0.5554841779958224,
+                  0.5518147099937778,
+                  0.5486366709956201
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.5476312959945062,
+                "median": 0.550825590005843,
+                "maximum": 0.5544413269963115,
+                "samples": [
+                  0.5544413269963115,
+                  0.550825590005843,
+                  0.5476312959945062
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.0009891199879348278,
+                "median": 0.0010053750011138618,
+                "maximum": 0.001042850999510847,
+                "samples": [
+                  0.001042850999510847,
+                  0.0009891199879348278,
+                  0.0010053750011138618
+                ]
+              }
+            },
+            {
+              "start": 9216,
+              "end": 10240,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.5475919180025812,
+                "median": 0.5511938859999646,
+                "maximum": 0.5590169990027789,
+                "samples": [
+                  0.5590169990027789,
+                  0.5511938859999646,
+                  0.5475919180025812
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.5466231790051097,
+                "median": 0.5502091520029353,
+                "maximum": 0.5579623899975559,
+                "samples": [
+                  0.5579623899975559,
+                  0.5502091520029353,
+                  0.5466231790051097
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.0009687389974715188,
+                "median": 0.0009847339970292524,
+                "maximum": 0.0010546090052230284,
+                "samples": [
+                  0.0010546090052230284,
+                  0.0009847339970292524,
+                  0.0009687389974715188
+                ]
+              }
+            },
+            {
+              "start": 10240,
+              "end": 11264,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.5472177040064707,
+                "median": 0.5481813590013189,
+                "maximum": 0.5556082630064338,
+                "samples": [
+                  0.5556082630064338,
+                  0.5481813590013189,
+                  0.5472177040064707
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.5462136819987791,
+                "median": 0.547189345001243,
+                "maximum": 0.5545387720048893,
+                "samples": [
+                  0.5545387720048893,
+                  0.547189345001243,
+                  0.5462136819987791
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.0009920140000758693,
+                "median": 0.001004022007691674,
+                "maximum": 0.0010694910015445203,
+                "samples": [
+                  0.0010694910015445203,
+                  0.0009920140000758693,
+                  0.001004022007691674
+                ]
+              }
+            },
+            {
+              "start": 11264,
+              "end": 12288,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.547927844003425,
+                "median": 0.5490255409968086,
+                "maximum": 0.5542108800000278,
+                "samples": [
+                  0.5490255409968086,
+                  0.5542108800000278,
+                  0.547927844003425
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.5469210279989056,
+                "median": 0.5479925949912285,
+                "maximum": 0.5512208669970278,
+                "samples": [
+                  0.5479925949912285,
+                  0.5512208669970278,
+                  0.5469210279989056
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.0010068160045193508,
+                "median": 0.0010329460055800155,
+                "maximum": 0.0029900130030000582,
+                "samples": [
+                  0.0010329460055800155,
+                  0.0029900130030000582,
+                  0.0010068160045193508
+                ]
+              }
+            },
+            {
+              "start": 12288,
+              "end": 13312,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.5440760880010203,
+                "median": 0.5490762639965396,
+                "maximum": 0.5508812049956759,
+                "samples": [
+                  0.5440760880010203,
+                  0.5508812049956759,
+                  0.5490762639965396
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.5430310340016149,
+                "median": 0.54809520598792,
+                "maximum": 0.5499045439937618,
+                "samples": [
+                  0.5430310340016149,
+                  0.5499045439937618,
+                  0.54809520598792
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.0009766610019141808,
+                "median": 0.0009810580086195841,
+                "maximum": 0.0010450539994053543,
+                "samples": [
+                  0.0010450539994053543,
+                  0.0009766610019141808,
+                  0.0009810580086195841
+                ]
+              }
+            },
+            {
+              "start": 13312,
+              "end": 14336,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.544463040001574,
+                "median": 0.5509261830011383,
+                "maximum": 0.5510538630041992,
+                "samples": [
+                  0.544463040001574,
+                  0.5509261830011383,
+                  0.5510538630041992
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.5433972750033718,
+                "median": 0.5499432030046592,
+                "maximum": 0.5500702209974406,
+                "samples": [
+                  0.5433972750033718,
+                  0.5499432030046592,
+                  0.5500702209974406
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.0009829799964791164,
+                "median": 0.0009836420067586005,
+                "maximum": 0.0010657649982022122,
+                "samples": [
+                  0.0010657649982022122,
+                  0.0009829799964791164,
+                  0.0009836420067586005
+                ]
+              }
+            },
+            {
+              "start": 14336,
+              "end": 15360,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.5437135120009771,
+                "median": 0.5471086610050406,
+                "maximum": 0.5505089549988043,
+                "samples": [
+                  0.5437135120009771,
+                  0.5505089549988043,
+                  0.5471086610050406
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.5426663350081071,
+                "median": 0.5462023760046577,
+                "maximum": 0.5495275160064921,
+                "samples": [
+                  0.5426663350081071,
+                  0.5495275160064921,
+                  0.5462023760046577
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.0009062850003829226,
+                "median": 0.000981438992312178,
+                "maximum": 0.001047176992869936,
+                "samples": [
+                  0.001047176992869936,
+                  0.000981438992312178,
+                  0.0009062850003829226
+                ]
+              }
+            },
+            {
+              "start": 15360,
+              "end": 16384,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.5340205040120054,
+                "median": 0.5344625049910974,
+                "maximum": 0.5394609459908679,
+                "samples": [
+                  0.5340205040120054,
+                  0.5394609459908679,
+                  0.5344625049910974
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.5329320349992486,
+                "median": 0.5334516119910404,
+                "maximum": 0.5384738099965034,
+                "samples": [
+                  0.5329320349992486,
+                  0.5384738099965034,
+                  0.5334516119910404
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.0009871359943645075,
+                "median": 0.0010108930000569671,
+                "maximum": 0.001088469012756832,
+                "samples": [
+                  0.001088469012756832,
+                  0.0009871359943645075,
+                  0.0010108930000569671
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "setup": {
+        "fixture_and_tokenizer_load_wall_seconds": 3.157499086999451,
+        "model_and_cache_load_wall_seconds": 206.8023211809923
+      },
+      "warmups": [
+        {
+          "slot": 0,
+          "phase": "warmup",
+          "prompt_wall_seconds": 250.95104336200166,
+          "forward_wall_seconds": 250.91966014099307,
+          "programs_before": 10,
+          "programs_after": 244
+        },
+        {
+          "slot": 1,
+          "phase": "warmup",
+          "prompt_wall_seconds": 8.71863401599694,
+          "forward_wall_seconds": 8.702304833990638,
+          "programs_before": 244,
+          "programs_after": 244
+        }
+      ],
+      "readback_hash_wall_seconds": [
+        {
+          "slot": 0,
+          "phase": "warmup",
+          "repetition": 0,
+          "seconds": 9.286055242992006
+        },
+        {
+          "slot": 1,
+          "phase": "warmup",
+          "repetition": 0,
+          "seconds": 9.089721511001699
+        },
+        {
+          "slot": 0,
+          "phase": "measured",
+          "repetition": 0,
+          "seconds": 9.49023185900296
+        },
+        {
+          "slot": 1,
+          "phase": "measured",
+          "repetition": 0,
+          "seconds": 9.250666321997414
+        },
+        {
+          "slot": 0,
+          "phase": "measured",
+          "repetition": 1,
+          "seconds": 9.304703795001842
+        },
+        {
+          "slot": 1,
+          "phase": "measured",
+          "repetition": 1,
+          "seconds": 9.412555605988018
+        },
+        {
+          "slot": 0,
+          "phase": "measured",
+          "repetition": 2,
+          "seconds": 9.309621034000884
+        },
+        {
+          "slot": 1,
+          "phase": "measured",
+          "repetition": 2,
+          "seconds": 9.472469539992744
+        }
+      ],
+      "root_verification": {
+        "path": "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-runs-007/16k-c04-001/attempts/attempt-002-bfp8-16k/root-verification.json",
+        "sha256": "dd750f2cd1c5f6b96006615397d6bbc392314a4a44113df61e6919971b9148bc"
+      },
+      "root_verification_fields": {
+        "status": "passed",
+        "scope": "full32 16K eager execution, finite/repeat outputs, measured wall timing and book-token observations; no golden accuracy or decode claim",
+        "verified_utc": "2026-09-17T09:30:04.765963+00:00",
+        "actual_dispatch_verified": [
+          0,
+          0,
+          0
+        ],
+        "requests": 8,
+        "measured_requests": 6,
+        "chunk_calls": 128,
+        "output_checks": 4096,
+        "source_pin_count": 14603,
+        "source_maps_equal": true,
+        "junit_cases": 1,
+        "clean_close": "2026-09-17 09:18:41.533 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1314)",
+        "per_slot": [
+          {
+            "slot": 0,
+            "median_prompt_seconds": 8.747287370002596,
+            "median_tokens_per_second_per_user": 1873.0378124064237,
+            "chunk_forward_medians_seconds": [
+              0.5495447200082708,
+              0.5478852899977937,
+              0.5479222550056875,
+              0.5495539039984578,
+              0.5481812380021438,
+              0.5473017629992682,
+              0.546696831996087,
+              0.5455301730107749,
+              0.5444835489906836,
+              0.5454495750018395,
+              0.5457686540030409,
+              0.5433707040065201,
+              0.5447708230058197,
+              0.5429363710136386,
+              0.5424110099993413,
+              0.5317125869914889
+            ]
+          },
+          {
+            "slot": 1,
+            "median_prompt_seconds": 8.772628771999734,
+            "median_tokens_per_second_per_user": 1867.6271874508195,
+            "chunk_forward_medians_seconds": [
+              0.5516571080079302,
+              0.5463166580011602,
+              0.5504078170051798,
+              0.5461695760022849,
+              0.5456562239996856,
+              0.5452947490121005,
+              0.5475191669975175,
+              0.5510746770014521,
+              0.550825590005843,
+              0.5502091520029353,
+              0.547189345001243,
+              0.5479925949912285,
+              0.54809520598792,
+              0.5499432030046592,
+              0.5462023760046577,
+              0.5334516119910404
+            ]
+          }
+        ],
+        "raw_report_sha256": "686c346519cdb56075d2c7fa01fb6c834097017af1ce1e76579815856dfdc37e"
+      },
+      "book_fixture": {
+        "manifest_path": "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/book-fixture-tokenizer-001/manifest.json",
+        "manifest_sha256": "69cd38111c60d5e0f1691d7eb2ffc99d2cefc7097b39b8ffbac61ef028491c43"
+      },
+      "book_observations": [
+        {
+          "argmax_token_id": 3005,
+          "top5": [
+            {
+              "token_id": 3005,
+              "piece": " She",
+              "logit": 18.625,
+              "probability": 0.30815789625319173
+            },
+            {
+              "token_id": 578,
+              "piece": " The",
+              "logit": 17.625,
+              "probability": 0.11336495466619148
+            },
+            {
+              "token_id": 4314,
+              "piece": " These",
+              "logit": 17.125,
+              "probability": 0.0687593207419779
+            },
+            {
+              "token_id": 2435,
+              "piece": " They",
+              "logit": 17.0,
+              "probability": 0.060679887578616226
+            },
+            {
+              "token_id": 6385,
+              "piece": " Her",
+              "logit": 17.0,
+              "probability": 0.060679887578616226
+            }
+          ],
+          "expected_next_token_rank": 11,
+          "expected_next_token_probability": 0.019699875221425033,
+          "final_logits_float32_sha256": "2579893a7009784be3b4230d266c17dfd77834f0f7af97819b9b271abf470341",
+          "slot": 0,
+          "phase": "warmup",
+          "repetition": 0,
+          "final_prompt_position": 16383,
+          "chunk_start": 15360,
+          "sp": 3,
+          "local_row": 255,
+          "tp_order": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7
+          ],
+          "vocab_size": 128256,
+          "scope": "book_continuation_observation_no_semantic_threshold",
+          "book_id": "1342",
+          "title": "Pride and Prejudice",
+          "expected_next_token_id": 763,
+          "expected_next_token": " In",
+          "expected_next_word": "In",
+          "trailing_prompt_excerpt": "time afterwards from the two elegant ladies who waited on his sisters.",
+          "actual_following_excerpt": "In spite of this amendment, however, she requested to have a note"
+        },
+        {
+          "argmax_token_id": 323,
+          "top5": [
+            {
+              "token_id": 323,
+              "piece": " and",
+              "logit": 22.25,
+              "probability": 0.7534906184882871
+            },
+            {
+              "token_id": 422,
+              "piece": " if",
+              "logit": 20.25,
+              "probability": 0.10197386626924282
+            },
+            {
+              "token_id": 719,
+              "piece": " but",
+              "logit": 19.75,
+              "probability": 0.061850276381731704
+            },
+            {
+              "token_id": 779,
+              "piece": " so",
+              "logit": 19.375,
+              "probability": 0.04250903184742268
+            },
+            {
+              "token_id": 1054,
+              "piece": " \u201c",
+              "logit": 17.75,
+              "probability": 0.008370524672384435
+            }
+          ],
+          "expected_next_token_rank": 1,
+          "expected_next_token_probability": 0.7534906184882871,
+          "final_logits_float32_sha256": "6278e6e3e143ae35d8379f607bb9a8395756a5b38586301d4926bdd00c41346a",
+          "slot": 1,
+          "phase": "warmup",
+          "repetition": 0,
+          "final_prompt_position": 16383,
+          "chunk_start": 15360,
+          "sp": 3,
+          "local_row": 255,
+          "tp_order": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7
+          ],
+          "vocab_size": 128256,
+          "scope": "book_continuation_observation_no_semantic_threshold",
+          "book_id": "1400",
+          "title": "Great Expectations",
+          "expected_next_token_id": 323,
+          "expected_next_token": " and",
+          "expected_next_word": "and",
+          "trailing_prompt_excerpt": "said he would go, if Joe would. Joe said he was agreeable,",
+          "actual_following_excerpt": "and would take me, if Mrs. Joe approved. We never should have"
+        },
+        {
+          "argmax_token_id": 3005,
+          "top5": [
+            {
+              "token_id": 3005,
+              "piece": " She",
+              "logit": 18.625,
+              "probability": 0.30815789625319173
+            },
+            {
+              "token_id": 578,
+              "piece": " The",
+              "logit": 17.625,
+              "probability": 0.11336495466619148
+            },
+            {
+              "token_id": 4314,
+              "piece": " These",
+              "logit": 17.125,
+              "probability": 0.0687593207419779
+            },
+            {
+              "token_id": 2435,
+              "piece": " They",
+              "logit": 17.0,
+              "probability": 0.060679887578616226
+            },
+            {
+              "token_id": 6385,
+              "piece": " Her",
+              "logit": 17.0,
+              "probability": 0.060679887578616226
+            }
+          ],
+          "expected_next_token_rank": 11,
+          "expected_next_token_probability": 0.019699875221425033,
+          "final_logits_float32_sha256": "2579893a7009784be3b4230d266c17dfd77834f0f7af97819b9b271abf470341",
+          "slot": 0,
+          "phase": "measured",
+          "repetition": 0,
+          "final_prompt_position": 16383,
+          "chunk_start": 15360,
+          "sp": 3,
+          "local_row": 255,
+          "tp_order": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7
+          ],
+          "vocab_size": 128256,
+          "scope": "book_continuation_observation_no_semantic_threshold",
+          "book_id": "1342",
+          "title": "Pride and Prejudice",
+          "expected_next_token_id": 763,
+          "expected_next_token": " In",
+          "expected_next_word": "In",
+          "trailing_prompt_excerpt": "time afterwards from the two elegant ladies who waited on his sisters.",
+          "actual_following_excerpt": "In spite of this amendment, however, she requested to have a note"
+        },
+        {
+          "argmax_token_id": 323,
+          "top5": [
+            {
+              "token_id": 323,
+              "piece": " and",
+              "logit": 22.25,
+              "probability": 0.7534906184882871
+            },
+            {
+              "token_id": 422,
+              "piece": " if",
+              "logit": 20.25,
+              "probability": 0.10197386626924282
+            },
+            {
+              "token_id": 719,
+              "piece": " but",
+              "logit": 19.75,
+              "probability": 0.061850276381731704
+            },
+            {
+              "token_id": 779,
+              "piece": " so",
+              "logit": 19.375,
+              "probability": 0.04250903184742268
+            },
+            {
+              "token_id": 1054,
+              "piece": " \u201c",
+              "logit": 17.75,
+              "probability": 0.008370524672384435
+            }
+          ],
+          "expected_next_token_rank": 1,
+          "expected_next_token_probability": 0.7534906184882871,
+          "final_logits_float32_sha256": "6278e6e3e143ae35d8379f607bb9a8395756a5b38586301d4926bdd00c41346a",
+          "slot": 1,
+          "phase": "measured",
+          "repetition": 0,
+          "final_prompt_position": 16383,
+          "chunk_start": 15360,
+          "sp": 3,
+          "local_row": 255,
+          "tp_order": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7
+          ],
+          "vocab_size": 128256,
+          "scope": "book_continuation_observation_no_semantic_threshold",
+          "book_id": "1400",
+          "title": "Great Expectations",
+          "expected_next_token_id": 323,
+          "expected_next_token": " and",
+          "expected_next_word": "and",
+          "trailing_prompt_excerpt": "said he would go, if Joe would. Joe said he was agreeable,",
+          "actual_following_excerpt": "and would take me, if Mrs. Joe approved. We never should have"
+        },
+        {
+          "argmax_token_id": 3005,
+          "top5": [
+            {
+              "token_id": 3005,
+              "piece": " She",
+              "logit": 18.625,
+              "probability": 0.30815789625319173
+            },
+            {
+              "token_id": 578,
+              "piece": " The",
+              "logit": 17.625,
+              "probability": 0.11336495466619148
+            },
+            {
+              "token_id": 4314,
+              "piece": " These",
+              "logit": 17.125,
+              "probability": 0.0687593207419779
+            },
+            {
+              "token_id": 2435,
+              "piece": " They",
+              "logit": 17.0,
+              "probability": 0.060679887578616226
+            },
+            {
+              "token_id": 6385,
+              "piece": " Her",
+              "logit": 17.0,
+              "probability": 0.060679887578616226
+            }
+          ],
+          "expected_next_token_rank": 11,
+          "expected_next_token_probability": 0.019699875221425033,
+          "final_logits_float32_sha256": "2579893a7009784be3b4230d266c17dfd77834f0f7af97819b9b271abf470341",
+          "slot": 0,
+          "phase": "measured",
+          "repetition": 1,
+          "final_prompt_position": 16383,
+          "chunk_start": 15360,
+          "sp": 3,
+          "local_row": 255,
+          "tp_order": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7
+          ],
+          "vocab_size": 128256,
+          "scope": "book_continuation_observation_no_semantic_threshold",
+          "book_id": "1342",
+          "title": "Pride and Prejudice",
+          "expected_next_token_id": 763,
+          "expected_next_token": " In",
+          "expected_next_word": "In",
+          "trailing_prompt_excerpt": "time afterwards from the two elegant ladies who waited on his sisters.",
+          "actual_following_excerpt": "In spite of this amendment, however, she requested to have a note"
+        },
+        {
+          "argmax_token_id": 323,
+          "top5": [
+            {
+              "token_id": 323,
+              "piece": " and",
+              "logit": 22.25,
+              "probability": 0.7534906184882871
+            },
+            {
+              "token_id": 422,
+              "piece": " if",
+              "logit": 20.25,
+              "probability": 0.10197386626924282
+            },
+            {
+              "token_id": 719,
+              "piece": " but",
+              "logit": 19.75,
+              "probability": 0.061850276381731704
+            },
+            {
+              "token_id": 779,
+              "piece": " so",
+              "logit": 19.375,
+              "probability": 0.04250903184742268
+            },
+            {
+              "token_id": 1054,
+              "piece": " \u201c",
+              "logit": 17.75,
+              "probability": 0.008370524672384435
+            }
+          ],
+          "expected_next_token_rank": 1,
+          "expected_next_token_probability": 0.7534906184882871,
+          "final_logits_float32_sha256": "6278e6e3e143ae35d8379f607bb9a8395756a5b38586301d4926bdd00c41346a",
+          "slot": 1,
+          "phase": "measured",
+          "repetition": 1,
+          "final_prompt_position": 16383,
+          "chunk_start": 15360,
+          "sp": 3,
+          "local_row": 255,
+          "tp_order": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7
+          ],
+          "vocab_size": 128256,
+          "scope": "book_continuation_observation_no_semantic_threshold",
+          "book_id": "1400",
+          "title": "Great Expectations",
+          "expected_next_token_id": 323,
+          "expected_next_token": " and",
+          "expected_next_word": "and",
+          "trailing_prompt_excerpt": "said he would go, if Joe would. Joe said he was agreeable,",
+          "actual_following_excerpt": "and would take me, if Mrs. Joe approved. We never should have"
+        },
+        {
+          "argmax_token_id": 3005,
+          "top5": [
+            {
+              "token_id": 3005,
+              "piece": " She",
+              "logit": 18.625,
+              "probability": 0.30815789625319173
+            },
+            {
+              "token_id": 578,
+              "piece": " The",
+              "logit": 17.625,
+              "probability": 0.11336495466619148
+            },
+            {
+              "token_id": 4314,
+              "piece": " These",
+              "logit": 17.125,
+              "probability": 0.0687593207419779
+            },
+            {
+              "token_id": 2435,
+              "piece": " They",
+              "logit": 17.0,
+              "probability": 0.060679887578616226
+            },
+            {
+              "token_id": 6385,
+              "piece": " Her",
+              "logit": 17.0,
+              "probability": 0.060679887578616226
+            }
+          ],
+          "expected_next_token_rank": 11,
+          "expected_next_token_probability": 0.019699875221425033,
+          "final_logits_float32_sha256": "2579893a7009784be3b4230d266c17dfd77834f0f7af97819b9b271abf470341",
+          "slot": 0,
+          "phase": "measured",
+          "repetition": 2,
+          "final_prompt_position": 16383,
+          "chunk_start": 15360,
+          "sp": 3,
+          "local_row": 255,
+          "tp_order": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7
+          ],
+          "vocab_size": 128256,
+          "scope": "book_continuation_observation_no_semantic_threshold",
+          "book_id": "1342",
+          "title": "Pride and Prejudice",
+          "expected_next_token_id": 763,
+          "expected_next_token": " In",
+          "expected_next_word": "In",
+          "trailing_prompt_excerpt": "time afterwards from the two elegant ladies who waited on his sisters.",
+          "actual_following_excerpt": "In spite of this amendment, however, she requested to have a note"
+        },
+        {
+          "argmax_token_id": 323,
+          "top5": [
+            {
+              "token_id": 323,
+              "piece": " and",
+              "logit": 22.25,
+              "probability": 0.7534906184882871
+            },
+            {
+              "token_id": 422,
+              "piece": " if",
+              "logit": 20.25,
+              "probability": 0.10197386626924282
+            },
+            {
+              "token_id": 719,
+              "piece": " but",
+              "logit": 19.75,
+              "probability": 0.061850276381731704
+            },
+            {
+              "token_id": 779,
+              "piece": " so",
+              "logit": 19.375,
+              "probability": 0.04250903184742268
+            },
+            {
+              "token_id": 1054,
+              "piece": " \u201c",
+              "logit": 17.75,
+              "probability": 0.008370524672384435
+            }
+          ],
+          "expected_next_token_rank": 1,
+          "expected_next_token_probability": 0.7534906184882871,
+          "final_logits_float32_sha256": "6278e6e3e143ae35d8379f607bb9a8395756a5b38586301d4926bdd00c41346a",
+          "slot": 1,
+          "phase": "measured",
+          "repetition": 2,
+          "final_prompt_position": 16383,
+          "chunk_start": 15360,
+          "sp": 3,
+          "local_row": 255,
+          "tp_order": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7
+          ],
+          "vocab_size": 128256,
+          "scope": "book_continuation_observation_no_semantic_threshold",
+          "book_id": "1400",
+          "title": "Great Expectations",
+          "expected_next_token_id": 323,
+          "expected_next_token": " and",
+          "expected_next_word": "and",
+          "trailing_prompt_excerpt": "said he would go, if Joe would. Joe said he was agreeable,",
+          "actual_following_excerpt": "and would take me, if Mrs. Joe approved. We never should have"
+        }
+      ],
+      "prompt_identity": [
+        {
+          "slot": 0,
+          "tokens": 16384,
+          "token_ids_sha256": "54cfbf435b370842b790207ab8841c03f72b0c5d38669d1a01767b4935843901",
+          "book_id": "1342",
+          "title": "Pride and Prejudice"
+        },
+        {
+          "slot": 1,
+          "tokens": 16384,
+          "token_ids_sha256": "2e1c6304390e4b90b7810499e5446571b478d58547ec8f983b7004f4ec8dddba",
+          "book_id": "1400",
+          "title": "Great Expectations"
+        }
+      ]
     }
   ],
   "pending_contexts": [
-    16384,
     32768,
     65536,
     131072
@@ -2930,6 +4970,15 @@
     "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-runs-006/8k-b09-001/attempts/attempt-002-bfp8-8k/pytest-command.json": "d154719375b4972a40796ba8f5e46f1c3ce3b302a7f3e8b54b6ea03e18623beb",
     "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-publication-preparation-002/independent-verification.json": "2b39a112dbf9f5c150e829d268a2b1fad862d36260eae1388781dd9c8c2408b4",
     "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-runs-006/8k-b09-001/attempts/attempt-002-bfp8-8k/root-verification.json": "998a26c4e8ef7f3ecac8f90a700f115bad26c6686330c7b11ab26881fea580f9",
-    "/data/divanovic/llama31-8b-disagg/repos/tt-metal/models/demos/llama_3p1_8b_d_p/docs/performance-prefill-evidence.json": "906c8e09262281c27597a9e561c5dff25c490869e71a9e9a0fa2fef2b2d76a87"
+    "/data/divanovic/llama31-8b-disagg/repos/tt-metal/models/demos/llama_3p1_8b_d_p/docs/performance-prefill-evidence.json": "f672f42d859dbf4d7081b6ca07ef10e454d3aee8549ef3baf7a04c54d627df36",
+    "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-runs-007/16k-c04-001/attempts/attempt-002-bfp8-16k/captures-16384/report.json": "686c346519cdb56075d2c7fa01fb6c834097017af1ce1e76579815856dfdc37e",
+    "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-runs-007/16k-c04-001/attempts/attempt-002-bfp8-16k/verification.json": "72e16bfb1b7ec86288c8f6de6f847636fd2ff7cdf1089bbd857353b9be88b9c2",
+    "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-runs-007/16k-c04-001/attempts/attempt-002-bfp8-16k/invocation.json": "01b32aba1775e436f04c102f19bde3cdfc659e9ef5938bb7414ba5e03b56f59f",
+    "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-runs-007/16k-c04-001/attempts/attempt-002-bfp8-16k/source-hashes.json": "561f4d11597a66adca9bb4437133391526dedaf6acbbb691187ae51215b4521d",
+    "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-runs-007/16k-c04-001/attempts/attempt-002-bfp8-16k/node-source-hashes.json": "561f4d11597a66adca9bb4437133391526dedaf6acbbb691187ae51215b4521d",
+    "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-runs-007/16k-c04-001/attempts/attempt-002-bfp8-16k/post-source-hashes.json": "561f4d11597a66adca9bb4437133391526dedaf6acbbb691187ae51215b4521d",
+    "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-runs-007/16k-c04-001/attempts/attempt-002-bfp8-16k/pytest-command.json": "e9896db233705c9cdf334f45f3350619c4baaae1de1fea7988fb77aa0099e437",
+    "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-runs-007/16k-c04-001/attempts/attempt-002-bfp8-16k/root-verification.json": "dd750f2cd1c5f6b96006615397d6bbc392314a4a44113df61e6919971b9148bc",
+    "/data/divanovic/llama31-8b-disagg/repos/tt-metal/models/demos/llama_3p1_8b_d_p/docs/performance-prefill.md": "7e60785fc3ec62250638a52b43096375b18f94b75bd2b90e9f733a9594875d36"
   }
 }

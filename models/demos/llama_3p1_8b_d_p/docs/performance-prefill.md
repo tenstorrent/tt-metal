@@ -3,7 +3,7 @@
 
 # Llama-3.1-8B-Instruct: prefill performance
 
-**8K execution and performance passed on 17 September 2026.** The two slots reached about **2,854 and 2,842 tokens/s/user**. These are warmed eager host-wall measurements on one Blackhole Galaxy. Saved 2K and 4K results are retained without new runs.
+**16K execution and performance passed on 17 September 2026.** The two slots reached about **1,873 and 1,868 tokens/s/user**. These are warmed eager host-wall measurements on one Blackhole Galaxy. Saved 2K, 4K and 8K results are retained without new runs.
 
 Each chunk runs embedding, all 32 decoder layers, final RMSNorm and the full vocabulary head. Configuration: SP4/TP8, two independent slots, BF16 weights/activations, BFP8_B cache, 1,024-token chunks, no tracing. Capacity equals the tested prompt length.
 
@@ -19,8 +19,10 @@ One warmup ran per slot. Then three measured requests ran per slot, alternating 
 | 4K books | 1 | 1,062.032 (1,057.305–1,066.372) | 1,057.849 (1,053.245–1,061.879) | 3,856.76 (3,841.06–3,874.00) |
 | 8K books | 0 | 2,870.726 (2,865.775–2,892.967) | 2,862.449 (2,855.382–2,884.643) | 2,853.63 (2,831.69–2,858.56) |
 | 8K books | 1 | 2,882.602 (2,882.293–2,883.411) | 2,874.283 (2,874.074–2,875.482) | 2,841.88 (2,841.08–2,842.18) |
+| 16K books | 0 | 8,747.287 (8,734.832–8,778.168) | 8,727.026 (8,718.289–8,761.432) | 1,873.04 (1,866.45–1,875.71) |
+| 16K books | 1 | 8,772.629 (8,770.791–8,796.333) | 8,755.833 (8,754.786–8,771.069) | 1,867.63 (1,862.59–1,868.02) |
 
-2K used the earlier chat fixtures and source snapshot; 4K and 8K use book passages and the capacity-enabled model. Their fixed book endpoints differ. This table records both workloads. It is not a controlled speedup or regression comparison.
+2K used the earlier chat fixtures and source snapshot; 4K, 8K and 16K use book passages and the capacity-enabled model. Their fixed book endpoints differ. The 4K/8K runs used b09u02; the 16K run used c04u14. This table records different contexts, fixtures and machines. It is not a controlled speedup or regression comparison.
 
 ## Per-chunk medians
 
@@ -54,8 +56,40 @@ One warmup ran per slot. Then three measured requests ran per slot, alternating 
 | 8K books | 1 | [5120,6144) | 359.503 | 360.529 |
 | 8K books | 1 | [6144,7168) | 360.456 | 361.483 |
 | 8K books | 1 | [7168,8192) | 349.203 | 350.171 |
+| 16K books | 0 | [0,1024) | 549.545 | 550.647 |
+| 16K books | 0 | [1024,2048) | 547.885 | 548.935 |
+| 16K books | 0 | [2048,3072) | 547.922 | 548.930 |
+| 16K books | 0 | [3072,4096) | 549.554 | 550.622 |
+| 16K books | 0 | [4096,5120) | 548.181 | 550.567 |
+| 16K books | 0 | [5120,6144) | 547.302 | 548.365 |
+| 16K books | 0 | [6144,7168) | 546.697 | 548.141 |
+| 16K books | 0 | [7168,8192) | 545.530 | 546.532 |
+| 16K books | 0 | [8192,9216) | 544.484 | 545.525 |
+| 16K books | 0 | [9216,10240) | 545.450 | 546.493 |
+| 16K books | 0 | [10240,11264) | 545.769 | 546.770 |
+| 16K books | 0 | [11264,12288) | 543.371 | 544.407 |
+| 16K books | 0 | [12288,13312) | 544.771 | 545.801 |
+| 16K books | 0 | [13312,14336) | 542.936 | 543.953 |
+| 16K books | 0 | [14336,15360) | 542.411 | 543.453 |
+| 16K books | 0 | [15360,16384) | 531.713 | 532.751 |
+| 16K books | 1 | [0,1024) | 551.657 | 552.900 |
+| 16K books | 1 | [1024,2048) | 546.317 | 547.334 |
+| 16K books | 1 | [2048,3072) | 550.408 | 551.415 |
+| 16K books | 1 | [3072,4096) | 546.170 | 547.163 |
+| 16K books | 1 | [4096,5120) | 545.656 | 546.654 |
+| 16K books | 1 | [5120,6144) | 545.295 | 546.308 |
+| 16K books | 1 | [6144,7168) | 547.519 | 548.492 |
+| 16K books | 1 | [7168,8192) | 551.075 | 552.120 |
+| 16K books | 1 | [8192,9216) | 550.826 | 551.815 |
+| 16K books | 1 | [9216,10240) | 550.209 | 551.194 |
+| 16K books | 1 | [10240,11264) | 547.189 | 548.181 |
+| 16K books | 1 | [11264,12288) | 547.993 | 549.026 |
+| 16K books | 1 | [12288,13312) | 548.095 | 549.076 |
+| 16K books | 1 | [13312,14336) | 549.943 | 550.926 |
+| 16K books | 1 | [14336,15360) | 546.202 | 547.109 |
+| 16K books | 1 | [15360,16384) | 533.452 | 534.463 |
 
-The [six measured requests](performance-prefill-4k-requests.csv) and [all 24 measured chunks](performance-prefill-4k-chunks.csv) retain the unrounded seconds. The [six 8K measured requests](performance-prefill-8k-requests.csv) and [all 48 8K measured chunks](performance-prefill-8k-chunks.csv) use the same units. Independently calculated medians need not add exactly.
+The [six measured requests](performance-prefill-4k-requests.csv) and [all 24 measured chunks](performance-prefill-4k-chunks.csv) retain the unrounded seconds. The [six 8K measured requests](performance-prefill-8k-requests.csv) and [all 48 8K measured chunks](performance-prefill-8k-chunks.csv) use the same units. The [six 16K measured requests](performance-prefill-16k-requests.csv) and [all 96 16K measured chunks](performance-prefill-16k-chunks.csv) retain the same unrounded seconds. Independently calculated medians need not add exactly.
 
 ## What the timer includes
 
@@ -107,6 +141,27 @@ The 8,192-token raw-book inputs include one BOS and use the same Instruct checkp
 
 The first prediction, **not**, matches the next book word. For “before my”, **eyes** is plausible; the actual word **face** ranks second. All repeats gave the same observations. This remains a next-token sanity check, not a golden numerical accuracy or free-running generation test. The compact evidence JSON retains all eight observations at each book context.
 
+## 16K startup and book observations
+
+| 16K startup or check | Wall time |
+|---|---:|
+| Fixture/tokenizer load | 3.157 s |
+| Model/cache load and synchronization | 206.802 s |
+| Slot 0 warmup | 250.951 s |
+| Slot 1 warmup | 8.719 s |
+| Post-timer readback/check/ranking per request | 9.090–9.490 s |
+
+The first 16K warmup grew the program cache from 10 to 244 entries. All six measured requests stayed at 244. All 4,096 chip/chunk checks across eight requests were finite and exactly matched their slot/chunk warmup. The complete pytest case took 667.629 seconds; that includes setup and cold work and is not warmed prefill latency.
+
+Each fixed 16,384-token raw-book prefix includes one BOS and uses the same Instruct checkpoint. No chat template or decode loop ran.
+
+| Book | Prompt ending | Predicted token | Actual book token | Actual token rank | Top five tokens |
+|---|---|---|---|---:|---|
+| Pride and Prejudice | …the two elegant ladies who waited on his sisters. | She | In | 11 | `She`, `The`, `These`, `They`, `Her` |
+| Great Expectations | …go, if Joe would. Joe said he was agreeable, | and | and | 1 | `and`, `if`, `but`, `so`, `“` |
+
+**She** is a plausible start of a new sentence, but it does not match the book's **In**, which ranks 11th. **and** matches the next token in Great Expectations and ranks first. All repeats gave the same observations. These two endpoints are a next-token sanity check, not a golden accuracy result or a free-running generation test.
+
 ## Coverage and limits
 
 | Length | Status |
@@ -114,9 +169,10 @@ The first prediction, **not**, matches the next book word. For “before my”, 
 | 2K | Detailed full-model/KV validation published; saved performance retained |
 | 4K | Full 32-layer book execution, finite/repeated outputs and eager timing passed |
 | 8K | Full 32-layer book execution, finite/repeated outputs and eager timing passed |
-| 16K / 32K / 64K / 128K | Pending live results; fixed book inputs prepared |
+| 16K | Full 32-layer book execution, finite/repeated outputs and eager timing passed |
+| 32K / 64K / 128K | Pending live results; fixed book inputs prepared |
 
-No golden KV comparison was run in the 4K or 8K benchmarks. The earlier incomplete larger-context golden matrix remains historical and is not called a complete pass. Future lengths use one combined execution/performance/book run after resource review. Native migration and SC4 decode have separate gates.
+No golden KV comparison was run in the 4K, 8K or 16K benchmarks. The earlier incomplete larger-context golden matrix remains historical and is not called a complete pass. Future lengths use one combined execution/performance/book run after resource review. Native migration has separate tests. Decoder and SC4 work are outside the current scope.
 
 Attention currently gathers and reorders the entire configured cache for every layer/chunk before selecting the logical prefix. A short prompt with a larger allocation may have different latency. Do not infer 128K performance from these results. These numbers do not measure concurrent serving, decode, device kernel time, network TTFT or general numerical accuracy.
 
@@ -159,5 +215,24 @@ The site-specific files below are on shared Exabox storage. They bind the exact 
 | Controller | 146a638cd143b2d524e05b4c6920d0da41c4e78400244ff0049a28a1f420b09e |
 | Test | cf518f6617e09a7317a7d4ab0745591bcabb049d81741a7389573647604b31c0 |
 | Full source/native pin manifest | 33738df25eab9b4c4be0dd4918f18b32e420b39b16ecc3a6a0df688895e7afd8 |
+
+### 16K source and reproduction
+
+16K ran on **bh-glx-120-c04u14**, job **108887**, source HEAD **7cb03649b4ec4db7492c49ec91c7fe02f490a87b**. Actual/dispatch/verified exits are 0. One exact JUnit case passed without errors/skips; all **14,603** pinned files stayed unchanged. The 32-device mesh closed at **2026-09-17 09:18:41.533 UTC**. Root verification independently recomputed the timing and coverage checks.
+
+- [16K root verification](/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-runs-007/16k-c04-001/attempts/attempt-002-bfp8-16k/root-verification.json)
+- [16K controller verification](/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-runs-007/16k-c04-001/attempts/attempt-002-bfp8-16k/verification.json)
+- [Exact 16K pytest command](/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-runs-007/16k-c04-001/attempts/attempt-002-bfp8-16k/pytest-command.json)
+- [Frozen reusable test](/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-preparation-007/test_long_context_performance.py)
+- [Reusable launcher and guarded commands](/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-launch-007/README.md)
+- [16K source manifest](/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-runs-007/16k-c04-001/attempts/attempt-002-bfp8-16k/source-hashes.json)
+
+| 16K artifact | SHA256 |
+|---|---|
+| Report | 686c346519cdb56075d2c7fa01fb6c834097017af1ce1e76579815856dfdc37e |
+| Root verification | dd750f2cd1c5f6b96006615397d6bbc392314a4a44113df61e6919971b9148bc |
+| Controller | 182916fd5ea41e9a6567bccdb01c957e8aae6ea964c963012a0f3cf3c82cbeab |
+| Test | cf518f6617e09a7317a7d4ab0745591bcabb049d81741a7389573647604b31c0 |
+| Full source/native pin manifest | 561f4d11597a66adca9bb4437133391526dedaf6acbbb691187ae51215b4521d |
 
 Do not repeat saved measurements for documentation, tests or other small changes that leave execution unchanged. Reconsider measurement after material changes to precision, communication, chunking, model work or kernels.
