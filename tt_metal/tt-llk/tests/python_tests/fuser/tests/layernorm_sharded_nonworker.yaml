@@ -1,0 +1,148 @@
+dest_acc: true
+skip_for_perf: true
+
+loops:
+  subblock:
+    in0: {count: 8}
+    in1: {count: 8}
+    dest: [0, 1, 2, 3]
+    out: {count: 8}
+  local_reduce:
+    in0: {count: 8}
+    in1: {count: 8, step: 0}
+    dest: {count: 4, step: 0}
+  local_stats:
+    dest: [0]
+    out: {count: 2}
+  column_broadcast:
+    in0: {count: 8}
+    in1: [0, 0, 0, 0, 1, 1, 1, 1]
+    dest: [0, 1, 2, 3]
+    out: {count: 8}
+  row_broadcast:
+    in0: {count: 8}
+    in1: [0, 1, 2, 3, 0, 1, 2, 3]
+    dest: [0, 1, 2, 3]
+    out: {count: 8}
+
+operands:
+  - {name: x, dims: [64, 128], format: Float16_b}
+  - {name: residual, dims: [64, 128], format: Float16_b}
+  - {name: scaler, dims: [32, 32], format: Float16_b, const_value: 0.0078125}
+  - {name: ex_global, dims: [64, 32], format: Float32}
+  - {name: inv_std_global, dims: [64, 32], format: Float32, const_value: 1.0}
+  - {name: gamma, dims: [32, 128], format: Float32}
+  - {name: beta, dims: [32, 128], format: Float32}
+  - {name: input_sum, dims: [64, 128], format: Float32}
+  - {name: ex_partial, dims: [64, 32], format: Float32}
+  - {name: xmm, dims: [64, 128], format: Float32}
+  - {name: xmm2, dims: [64, 128], format: Float32}
+  - {name: var_partial, dims: [64, 32], format: Float32}
+  - {name: normalized, dims: [64, 128], format: Float32}
+  - {name: gamma_out, dims: [64, 128], format: Float32}
+  - {name: output, dims: [64, 128], format: Float16_b}
+
+operations:
+  - math:
+      - type: Fpu
+        operation: Elwadd
+        unpacker: UnpackerAB
+        math_fidelity: LoFi
+        block_size: [32, 32]
+        in0: x
+        in1: residual
+        loop: subblock
+    pack:
+      - {output: input_sum, block_size: [32, 32], loop: subblock}
+
+  - math:
+      - type: Fpu
+        operation: Reduce
+        unpacker: ReduceUnpacker
+        reduce_dim: REDUCE_ROW
+        reduce_pool: AVG
+        math_fidelity: HiFi2
+        block_size: [32, 32]
+        in0: input_sum
+        in1: scaler
+        loop: local_reduce
+    pack:
+      - {output: ex_partial, block_size: [32, 32], loop: local_stats}
+
+  - math:
+      - type: Fpu
+        operation: Elwsub
+        unpacker: UnpackerAB
+        broadcast_type: COL
+        math_fidelity: LoFi
+        block_size: [32, 32]
+        in0: input_sum
+        in1: ex_global
+        loop: column_broadcast
+    pack:
+      - {output: xmm, block_size: [32, 32], loop: subblock}
+
+  - math:
+      - type: Fpu
+        operation: Elwmul
+        unpacker: UnpackerAB
+        math_fidelity: HiFi2
+        block_size: [32, 32]
+        in0: xmm
+        in1: xmm
+        loop: subblock
+    pack:
+      - {output: xmm2, block_size: [32, 32], loop: subblock}
+
+  - math:
+      - type: Fpu
+        operation: Reduce
+        unpacker: ReduceUnpacker
+        reduce_dim: REDUCE_ROW
+        reduce_pool: AVG
+        math_fidelity: HiFi2
+        block_size: [32, 32]
+        in0: xmm2
+        in1: scaler
+        loop: local_reduce
+    pack:
+      - {output: var_partial, block_size: [32, 32], loop: local_stats}
+
+  - math:
+      - type: Fpu
+        operation: Elwmul
+        unpacker: UnpackerAB
+        broadcast_type: COL
+        math_fidelity: HiFi2
+        block_size: [32, 32]
+        in0: xmm
+        in1: inv_std_global
+        loop: column_broadcast
+    pack:
+      - {output: normalized, block_size: [32, 32], loop: subblock}
+
+  - math:
+      - type: Fpu
+        operation: Elwmul
+        unpacker: UnpackerAB
+        broadcast_type: ROW
+        math_fidelity: HiFi2
+        block_size: [32, 32]
+        in0: normalized
+        in1: gamma
+        loop: row_broadcast
+    pack:
+      - {output: gamma_out, block_size: [32, 32], loop: subblock}
+
+  - math:
+      - type: Fpu
+        operation: Elwadd
+        unpacker: UnpackerAB
+        broadcast_type: ROW
+        math_fidelity: LoFi
+        block_size: [32, 32]
+        in0: gamma_out
+        in1: beta
+        loop: row_broadcast
+    pack:
+      - {output: output, block_size: [32, 32], loop: subblock}

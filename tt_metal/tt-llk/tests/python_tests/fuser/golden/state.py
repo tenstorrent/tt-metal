@@ -179,8 +179,6 @@ class Inputs:
     ):
         self.view_a = view_a
         self.view_b = view_b
-        # Actual extents of the region, so row/block-granular unpack goldens can
-        # gather all the tiles a single call covers (remainder aware).
         self.block_tiles_x = block_tiles_x
         self.block_tiles_y = block_tiles_y
 
