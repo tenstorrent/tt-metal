@@ -1,11 +1,21 @@
-# Design: swap the deterministic SAT engine CaDiCaL → kissat_extras (incremental Kissat)
+# Plan: swap the deterministic SAT engine CaDiCaL → kissat_extras (incremental Kissat)
 
-**Area:** fabric / scaleout inter-mesh min-host SAT solver · **Status:** DESIGN ONLY (no code changes in this
-PR) · **Author:** (rsong) · **Companion experiments:** `MERGESAT_EXPERIMENT.md`, `HARVEST_FINDINGS.md`.
+**Area:** fabric / scaleout inter-mesh min-host SAT solver · **Status:** ACCEPTED — implementation to follow
+(this PR is the design/plan of record; no code changes here) · **Author:** (rsong) · **Companion
+experiments:** `MERGESAT_EXPERIMENT.md`, `HARVEST_FINDINGS.md`.
 
-This document proposes replacing the solver's deterministic engine — currently **CaDiCaL 2.2.1** — with
-**kissat_extras** (an incremental fork of Kissat, `jix/kissat_extras`), and lays out exactly what we would
-implement, what we would delete, what improves, and what we cannot yet do. **It does not perform the swap.**
+## Decision (accepted)
+**We will use kissat_extras as the deterministic SAT engine, replacing CaDiCaL 2.2.1.** Rationale: 2–150×
+faster on the real min-host CNFs, deterministic (verified), genuinely incremental (where CaDiCaL's incremental
+stalls), and algorithmically identical to CaDiCaL so placement *quality* is unchanged. Preferred constraints
+stay exactly as-is (hard cardinality) — no re-encoding. The pool / learner / phase-warm machinery is deleted
+(net-negative, and depended on CaDiCaL-only hooks). CaDiCaL is kept as a one-env-var fallback during rollout.
+Considered and **declined**: phase-based soft-preference biasing (would keep us on CaDiCaL for a heuristic that
+kissat's raw speed almost certainly outweighs; not worth blocking the swap). Implementation follows the phased
+plan in §7.
+
+This document lays out exactly what we implement, what we delete, what improves, what we cannot yet do, and the
+kissat features we can adopt. **This PR does not perform the swap; it is the agreed plan.**
 
 ---
 
