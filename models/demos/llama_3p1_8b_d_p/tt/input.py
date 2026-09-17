@@ -5,25 +5,20 @@
 
 import torch
 
+from models.demos.llama_3p1_8b_d_p.tt.prefill_geometry import DEFAULT_MAX_SEQ_LEN, PrefillGeometry
+
 CHUNK_SIZE = 1024
 LOCAL_CHUNK_SIZE = 256
-MAX_SEQ_LEN = 2048
+MAX_SEQ_LEN = DEFAULT_MAX_SEQ_LEN
 VOCAB_SIZE = 128256
 
 
-def validate_chunk_range(actual_start, actual_end):
+def validate_chunk_range(actual_start, actual_end, *, max_seq_len=DEFAULT_MAX_SEQ_LEN):
     """Validate logical bounds; a padded physical chunk never extends the context limit."""
-    if type(actual_start) is not int or type(actual_end) is not int:
-        raise TypeError("actual_start and actual_end must be eager Python ints")
-    if actual_start < 0 or actual_start % 32:
-        raise ValueError("actual_start must be nonnegative and aligned to 32 tokens")
-    if not actual_start < actual_end <= MAX_SEQ_LEN:
-        raise ValueError("a chunk must satisfy 0 <= actual_start < actual_end <= 2048")
-    if actual_end - actual_start > CHUNK_SIZE:
-        raise ValueError("a chunk can contain at most 1024 valid tokens")
+    PrefillGeometry(max_seq_len).validate_chunk_range(actual_start, actual_end)
 
 
-def pack_token_ids(token_ids, *, actual_start, actual_end, pad_id=0):
+def pack_token_ids(token_ids, *, actual_start, actual_end, pad_id=0, max_seq_len=DEFAULT_MAX_SEQ_LEN):
     """Return CPU [1,1,1,1024] IDs in SP-row order, ready to shard on dimension 3.
 
     ``token_ids`` contains exactly the true input interval, without a padded suffix. Absolute
@@ -31,7 +26,7 @@ def pack_token_ids(token_ids, *, actual_start, actual_end, pad_id=0):
     an overlapping restart such as [32,65). The runtime must not call this on an already reshuffled
     H2D input: that input goes directly to the model's device-token entry point.
     """
-    validate_chunk_range(actual_start, actual_end)
+    validate_chunk_range(actual_start, actual_end, max_seq_len=max_seq_len)
     if type(pad_id) is not int or not 0 <= pad_id < VOCAB_SIZE:
         raise ValueError("pad_id must be an integer inside the model vocabulary")
     if not isinstance(token_ids, torch.Tensor):
@@ -54,13 +49,15 @@ def pack_token_ids(token_ids, *, actual_start, actual_end, pad_id=0):
     return packed.reshape(1, 1, 1, CHUNK_SIZE)
 
 
-def upload_token_chunk(mesh_device, token_ids, *, actual_start, actual_end, pad_id=0):
+def upload_token_chunk(mesh_device, token_ids, *, actual_start, actual_end, pad_id=0, max_seq_len=DEFAULT_MAX_SEQ_LEN):
     """Allocate caller-owned UINT32 row-major device IDs; this is an explicit host input step."""
     import ttnn
 
     if tuple(mesh_device.shape) != (4, 8) or mesh_device.get_num_devices() != 32:
         raise ValueError("token upload requires the full SP4/TP8 Galaxy")
-    packed = pack_token_ids(token_ids, actual_start=actual_start, actual_end=actual_end, pad_id=pad_id)
+    packed = pack_token_ids(
+        token_ids, actual_start=actual_start, actual_end=actual_end, pad_id=pad_id, max_seq_len=max_seq_len
+    )
     return ttnn.from_torch(
         packed,
         device=mesh_device,

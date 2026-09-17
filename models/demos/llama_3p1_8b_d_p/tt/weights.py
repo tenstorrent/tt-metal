@@ -8,6 +8,8 @@ from pathlib import Path
 
 from safetensors import safe_open
 
+from models.demos.llama_3p1_8b_d_p.tt.prefill_geometry import DEFAULT_MAX_SEQ_LEN, PrefillGeometry
+
 LAYER_SHAPES = {
     "input_layernorm.weight": (4096,),
     "self_attn.q_proj.weight": (4096, 4096),
@@ -21,8 +23,9 @@ LAYER_SHAPES = {
 }
 
 
-def validate_checkpoint_config(config):
+def validate_checkpoint_config(config, *, max_seq_len=DEFAULT_MAX_SEQ_LEN):
     """Reject architectural substitutions before allocating device weights."""
+    geometry = PrefillGeometry(max_seq_len)
     required = {
         "model_type": "llama",
         "hidden_size": 4096,
@@ -54,8 +57,8 @@ def validate_checkpoint_config(config):
     }.items():
         if rope.get(name) != expected:
             raise ValueError(f"checkpoint rope_scaling.{name}={rope.get(name)!r}; expected {expected!r}")
-    if config.get("max_position_embeddings", 0) < 2048:
-        raise ValueError("checkpoint context is smaller than the fixed 2048-token serving limit")
+    if config.get("max_position_embeddings", 0) < geometry.max_seq_len:
+        raise ValueError(f"checkpoint context is smaller than the requested {geometry.max_seq_len}-token limit")
 
 
 class CheckpointWeights:
@@ -65,10 +68,10 @@ class CheckpointWeights:
     retain their original HF row order and dtype. No Q/K permutation or RoPE conversion occurs.
     """
 
-    def __init__(self, path):
+    def __init__(self, path, *, max_seq_len=DEFAULT_MAX_SEQ_LEN):
         self.path = Path(path).resolve()
         self.config = json.loads((self.path / "config.json").read_text())
-        validate_checkpoint_config(self.config)
+        validate_checkpoint_config(self.config, max_seq_len=max_seq_len)
         self.index = json.loads((self.path / "model.safetensors.index.json").read_text())["weight_map"]
 
     def _read(self, names_and_shapes):

@@ -42,7 +42,7 @@ class DecoderLayer:
                 table,
                 mesh_device,
                 name=f"decoder RoPE {name}",
-                shape=(1, 1, 768, 128),
+                shape=(1, 1, attention.geometry.rope_local_sequence, 128),
                 dtype=ttnn.bfloat16,
             )
         _validate_device_tensor(

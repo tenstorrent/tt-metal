@@ -306,8 +306,8 @@ def test_allocate_kv_cache_is_zero_and_has_migration_page_geometry(mesh_device, 
         allocate_kv_cache(mesh_device, mesh_config, num_users=1)
     with expect_error(ValueError, "num_layers=32"):
         allocate_kv_cache(mesh_device, mesh_config, num_layers=31)
-    with expect_error(ValueError, "max_seq_len=2048"):
-        allocate_kv_cache(mesh_device, mesh_config, max_seq_len=1024)
+    with expect_error(ValueError, "positive multiple of 1024"):
+        allocate_kv_cache(mesh_device, mesh_config, max_seq_len=2049)
     wrong_mesh = SimpleNamespace(mesh_shape=(8, 4), sp=8, tp=4, sp_axis=0, tp_axis=1)
     with expect_error(ValueError, "requires mesh_shape"):
         allocate_kv_cache(mesh_device, wrong_mesh)
@@ -381,7 +381,7 @@ def test_write_kv_chunk_places_bounded_rows_and_reuses_programs(mesh_device, cac
         ({"slot_idx": 0, "layer_idx": 0, "actual_start": 1024, "actual_end": 2049}, "actual range"),
         (
             {"slot_idx": 0, "layer_idx": 0, "actual_start": 0, "actual_end": 1025},
-            "actual_end must be within",
+            "at most 1024",
         ),
     ]
     for metadata, message in invalid_cases:

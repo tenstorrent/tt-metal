@@ -10,6 +10,7 @@ from models.demos.llama_3p1_8b_d_p.tt.attention import FullCausalAttention, _val
 from models.demos.llama_3p1_8b_d_p.tt.config import MeshConfig
 from models.demos.llama_3p1_8b_d_p.tt.decoder import DecoderLayer
 from models.demos.llama_3p1_8b_d_p.tt.input import validate_chunk_range
+from models.demos.llama_3p1_8b_d_p.tt.prefill_geometry import DEFAULT_MAX_SEQ_LEN, PrefillGeometry
 from models.demos.llama_3p1_8b_d_p.tt.rms_norm import RMSNorm
 from models.demos.llama_3p1_8b_d_p.tt.rope import build_indexed_rope, build_transformation_mat
 from models.demos.llama_3p1_8b_d_p.tt.weights import CheckpointWeights
@@ -145,15 +146,26 @@ class PrefillModel:
     Calls must remain sequential because layers share attention buffers and KV storage.
     """
 
-    def __init__(self, mesh_device, checkpoint_path, *, num_layers=32, cache_dtype=ttnn.bfloat8_b, enable_lm_head=True):
+    def __init__(
+        self,
+        mesh_device,
+        checkpoint_path,
+        *,
+        num_layers=32,
+        cache_dtype=ttnn.bfloat8_b,
+        enable_lm_head=True,
+        max_seq_len=DEFAULT_MAX_SEQ_LEN,
+    ):
         if type(num_layers) is not int or not 1 <= num_layers <= 32:
             raise ValueError("num_layers must be an integer in [1,32]")
         if type(enable_lm_head) is not bool:
             raise TypeError("enable_lm_head must be a bool")
         self.mesh_device = mesh_device
+        self.geometry = PrefillGeometry(max_seq_len)
+        self.max_seq_len = self.geometry.max_seq_len
         self.mesh_config = MeshConfig((4, 8), 8)
         _validate_mesh(mesh_device, self.mesh_config, "PrefillModel")
-        weights = CheckpointWeights(checkpoint_path)
+        weights = CheckpointWeights(checkpoint_path, max_seq_len=self.max_seq_len)
         self.num_layers = num_layers
         self.embedding = None
         self.head = None
@@ -163,8 +175,10 @@ class PrefillModel:
         self.transformation_mat = None
         self.closed = False
         try:
-            self.attention = FullCausalAttention(mesh_device, self.mesh_config, cache_dtype=cache_dtype)
-            self.rope_tables = tuple(build_indexed_rope(mesh_device, max_seq_len=2048, chunk_size=1024))
+            self.attention = FullCausalAttention(
+                mesh_device, self.mesh_config, cache_dtype=cache_dtype, max_seq_len=self.max_seq_len
+            )
+            self.rope_tables = tuple(build_indexed_rope(mesh_device, max_seq_len=self.max_seq_len, chunk_size=1024))
             self.transformation_mat = build_transformation_mat(mesh_device)
             self.embedding = TokenEmbedding(mesh_device, weights.embedding())
             for layer_idx in range(num_layers):
@@ -208,7 +222,7 @@ class PrefillModel:
         """
         if self.closed:
             raise RuntimeError("PrefillModel is closed")
-        validate_chunk_range(actual_start, actual_end)
+        validate_chunk_range(actual_start, actual_end, max_seq_len=self.max_seq_len)
         _validate_tokens(token_ids, self.mesh_device)
         if type(skip_lm_head) is not bool:
             raise TypeError("skip_lm_head must be a bool")
