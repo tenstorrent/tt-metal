@@ -39,3 +39,15 @@ template <typename T>
 FORCE_INLINE T get_arg_val(int arg_idx) {
     return ::get_arg_val<T>(HYB_RT_BASE + arg_idx);
 }
+
+// Same lookup rule, applied to the circular-buffer calls: these resolve to the union kernel's
+// single out-of-line copy instead of the always_inline one, for both halves and without touching
+// either body. See hybrid_cb_shims.hpp.
+#ifdef HYB_CB_FRONT
+using hyb_cb::cb_pop_front;
+using hyb_cb::cb_wait_front;
+#endif
+#ifdef HYB_CB_BACK
+using hyb_cb::cb_push_back;
+using hyb_cb::cb_reserve_back;
+#endif
