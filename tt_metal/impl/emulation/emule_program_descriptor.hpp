@@ -137,7 +137,9 @@ struct KernelDescriptor {
     uint32_t processor_type = 0;                                        // get_kernel_processor_type(0)
     bool is_compute = false;                                            // processor_class == COMPUTE
     bool is_quasar_compute = false;  // is_compute && dynamic_cast<QuasarComputeKernel>
-    uint32_t dm_processor = 0;  // DataMovementKernel::config().processor (RISCV_0/1->BRISC/NCRISC)
+    uint32_t dm_processor = 0;       // DataMovementKernel::config().processor (RISCV_0/1->BRISC/NCRISC)
+    bool is_data_movement = false;   // dynamic_cast<DataMovementKernel> succeeds
+    uint32_t compile_processor_index = 0;  // hal.get_processor_index(core_type, class, COMPILE_FOR idx)
     bool has_compute_config = false;                          // config() held a ComputeConfig
     bool fp32_dest_acc_en = false, dst_full_sync_en = false;  // ComputeKernel::config()
     std::vector<uint32_t> proc_ids;
