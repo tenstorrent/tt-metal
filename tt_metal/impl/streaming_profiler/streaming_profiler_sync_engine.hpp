@@ -14,6 +14,7 @@
 #include <vector>
 
 #include <string>
+#include <unordered_set>
 
 #include "hostdev/streaming_profiler_common.h"
 #include "impl/streaming_profiler/streaming_profiler_consumer.hpp"
@@ -22,15 +23,6 @@
 
 namespace tt::tt_metal::streaming_profiler {
 
-// A named (host TSC tick, value) series for a plotting sink to place on the device timeline.
-struct SyncPlotPoint {
-    int64_t tsc = 0;
-    double value = 0.0;
-};
-struct SyncPlot {
-    std::string name;
-    std::vector<SyncPlotPoint> points;
-};
 
 // The chip's AICLK wall clock against its refclk, as its idle-eth pusher models it (eth_clock_pusher.cpp): one
 // segment per PLL multiple, each a line the pusher sends POINTS of -- (refclk r, the line's wall at r) with the
@@ -335,8 +327,8 @@ public:
     // host series.
     PlacementMap& map() { return map_; }
     const PlacementMap& map() const { return map_; }
-    // The series on_capture_end computed for a plotting sink (each chip's AICLK, the sync error per link), once.
-    std::vector<SyncPlot> take_plots() { return std::exchange(plots_, {}); }
+    // Whether on_capture_end's series (each chip's AICLK, the sync error per link) go to Tracy as plots.
+    void plot_to_tracy(bool on) { plots_to_tracy_ = on; }
 
 private:
     using Round = LinkSolver::Round;
@@ -358,6 +350,12 @@ private:
     };
     bool round_error(
         const CaptureContext::Link& L, const Round& r, int64_t& tsc_a, double& err, RoundTerms* terms = nullptr) const;
+    // A (host TSC tick, value) series as a Tracy plot; the TSC is the timer stamp Tracy places it by.
+    struct PlotPoint {
+        int64_t tsc = 0;
+        double value = 0.0;
+    };
+    void plot(const std::string& name, const std::vector<PlotPoint>& points);
 
     PlacementMap map_;
     CaptureContext ctx_;
@@ -367,7 +365,8 @@ private:
     // The composed root transforms as of the newest accepted link solution.
     std::map<uint32_t, RootXf> to_root_;
     uint64_t to_root_gen_ = ~0ull;
-    std::vector<SyncPlot> plots_;
+    bool plots_to_tracy_ = false;
+    std::unordered_set<std::string> plot_names_;  // Tracy keys a plot by its name's address, for the process
 };
 
 }  // namespace tt::tt_metal::streaming_profiler

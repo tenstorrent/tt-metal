@@ -11,7 +11,6 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
-#include <unordered_set>
 #include <vector>
 
 #include <tracy/TracyTTDevice.hpp>
@@ -20,8 +19,6 @@
 #include "impl/streaming_profiler/streaming_profiler_consumer.hpp"
 
 namespace tt::tt_metal::streaming_profiler {
-
-struct SyncPlot;
 
 class Service;
 
@@ -37,9 +34,6 @@ public:
     ~TracySink();
     TracySink(const TracySink&) = delete;
     TracySink& operator=(const TracySink&) = delete;
-
-    // The sync engine's series for the capture just ended, placed on the device timeline; from the Service at detach.
-    void emit_plots(std::vector<SyncPlot> plots);
 
 private:
     using Batch = experimental::streaming_profiler::Batch<experimental::streaming_profiler::RecordType::All>;
@@ -76,8 +70,6 @@ private:
     void push_zone(const Core& core, std::string_view name, int64_t start_tsc, int64_t end_tsc, uint32_t color);
     void push_marker(
         const Core& core, std::string_view name, int64_t tsc, uint32_t runtime_id, std::span<const uint64_t> values);
-    const char* intern_name(const std::string& name);
-    void plot_point(const char* name, double value, int64_t tsc);
 
     Service& service_;
     ConsumerHandle handle_ = 0;
@@ -86,9 +78,6 @@ private:
     // The GPU contexts' origin sits this far before anchor_tracy_, so a record from device bring-up keeps its real
     // place instead of falling off the front.
     int64_t origin_margin_ns_ = 0;
-    // Records the origin still could not hold: clamped to the origin and counted; nonzero means a defect upstream,
-    // never expected in a healthy capture.
-    uint64_t clamped_zones_ = 0, clamped_markers_ = 0, clamped_plot_points_ = 0;
     uint64_t lane_key_ = ~uint64_t{0};
     Lane lane_hit_;
     std::unordered_map<uint64_t, CoreEntry> cores_;
@@ -96,7 +85,6 @@ private:
     std::vector<SrclocEntry> srcloc_table_;     // open addressing, power-of-two size, at most half full
     [[maybe_unused]] size_t srcloc_count_ = 0;  // ditto: only the Tracy-enabled srcloc path touches it
     std::unordered_map<std::string, const void*> srclocs_;
-    std::unordered_set<std::string> plot_names_;
 };
 
 }  // namespace tt::tt_metal::streaming_profiler

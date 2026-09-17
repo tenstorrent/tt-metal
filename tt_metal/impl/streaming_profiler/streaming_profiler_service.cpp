@@ -236,7 +236,6 @@ void Service::attach_producer(Producer& producer) {
 void Service::detach_producer(Producer& producer) {
     std::lock_guard<std::mutex> topo(topology_mu_);
     bool last = false;
-    std::vector<SyncPlot> plots;
     {
         std::unique_lock<std::mutex> lk(mu_);
         auto it = std::find(producers_.begin(), producers_.end(), &producer);
@@ -249,10 +248,6 @@ void Service::detach_producer(Producer& producer) {
         wait_acks(lk);
         producers_.erase(it);
         last = producers_.empty();
-        plots = sync_->take_plots();
-    }
-    if (tracy_) {
-        tracy_->emit_plots(std::move(plots));
     }
     if (last) {
         {
@@ -297,6 +292,7 @@ void Service::register_builtin_consumers(const tt::llrt::RunTimeOptions& rtoptio
     std::call_once(builtins_once_, [&] {
         if (rtoptions.get_streaming_profiler_tracy_enabled()) {
             tracy_ = std::make_unique<TracySink>(*this);
+            sync_->plot_to_tracy(true);
         }
         auto add_public = [&]<typename C>(const char* name, const std::shared_ptr<C>& c) {
             using B = typename C::Batch;

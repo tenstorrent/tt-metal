@@ -14,6 +14,8 @@
 #include <string>
 
 #include <fmt/format.h>
+#include <tracy/Tracy.hpp>
+#include <client/TracyProfiler.hpp>
 
 #include "impl/streaming_profiler/spsc_packet.h"
 #include "impl/streaming_profiler/streaming_profiler_service.hpp"
@@ -28,7 +30,6 @@ void SyncEngine::on_attach(const CaptureContext& ctx) {
     links_.reset(ctx_);
     series_.reset();
     to_root_gen_ = ~0ull;
-    plots_.clear();
     // A chip the capture cannot place -- no eth tracker, or no link path to the root -- is finished at once, so no
     // consumer waits for it.
     std::vector<bool> reach(ctx.devices.size(), false);
@@ -792,7 +793,7 @@ void SyncEngine::publish_error_plots() {
         // rounds' raw offsets (the ruler's noise -- a stamp glitch shows here, a map error does not; the link rate
         // wanders ~0.1 ppm over a run, so a single run-wide line would not do) and the sender's round trip (a glitch
         // on either sender stamp shows here, one on the receiver does not).
-        std::vector<SyncPlotPoint> pts;
+        std::vector<PlotPoint> pts;
         std::vector<double> resid, rtt, raw_x, raw_y, turn, path;
         const double path_med = LinkSolver::path_median(rounds, 0, n);
         size_t off_path = 0;
@@ -812,7 +813,7 @@ void SyncEngine::publish_error_plots() {
             if (!round_error(L, r, H, e, &t)) {
                 continue;
             }
-            pts.push_back(SyncPlotPoint{H, e});
+            pts.push_back(PlotPoint{H, e});
             terms.push_back(t);
             se += e;
             ss += static_cast<long double>(e) * e;
@@ -938,7 +939,7 @@ void SyncEngine::publish_error_plots() {
             std::string worst;
             for (size_t k = 0; k < std::min<size_t>(5, order.size()); k++) {
                 const size_t i = order[k];
-                const SyncPlotPoint& p = pts[i];
+                const PlotPoint& p = pts[i];
                 worst += fmt::format(
                     " {:+.0f} ns at {:.3f} s (nearest node: chip {} {:.0f} us, chip {} {:.0f} us; stamp resid "
                     "{:+.0f} "
@@ -992,8 +993,7 @@ void SyncEngine::publish_error_plots() {
                 std::fclose(ef);
             }
         }
-        plots_.push_back(
-            SyncPlot{fmt::format("d2d sync error chip{} vs chip{} (ns)", L.chip_b, L.chip_a), std::move(pts)});
+        plot(fmt::format("d2d sync error chip{} vs chip{} (ns)", L.chip_b, L.chip_a), pts);
     }
 }
 
@@ -1003,7 +1003,7 @@ void SyncEngine::publish_clock_plots() {
             continue;
         }
         const uint32_t chip = ctx_.devices[dev].chip_id;
-        std::vector<SyncPlotPoint> pts;
+        std::vector<PlotPoint> pts;
         for (const LocalClockModel::Run& run : fit.runs) {
             if (run.n == 0 || run.slope() <= 0.0) {
                 continue;
@@ -1011,13 +1011,27 @@ void SyncEngine::publish_clock_plots() {
             const double ghz = run.slope() * LocalClockModel::kRefclkHz * 1e-9;
             for (const double r : {run.r_first, run.r_last}) {
                 const double root = map_.lookup_root(chip, std::llround(run.wall_of_refclk(r)));
-                pts.push_back(SyncPlotPoint{std::llround(map_.host_tsc(root)), ghz});
+                pts.push_back(PlotPoint{std::llround(map_.host_tsc(root)), ghz});
             }
         }
         if (!pts.empty()) {
-            plots_.push_back(SyncPlot{fmt::format("AICLK chip{} (GHz)", chip), std::move(pts)});
+            plot(fmt::format("AICLK chip{} (GHz)", chip), pts);
         }
     }
+}
+
+void SyncEngine::plot([[maybe_unused]] const std::string& name, [[maybe_unused]] const std::vector<PlotPoint>& points) {
+#if defined(TRACY_ENABLE)
+    if (!plots_to_tracy_) {
+        return;
+    }
+    const char* nm = plot_names_.insert(name).first->c_str();
+    for (const PlotPoint& p : points) {
+        if (p.tsc > 0) {
+            tracy::Profiler::PlotDataAt(nm, p.value, p.tsc);
+        }
+    }
+#endif
 }
 
 void SyncEngine::on_capture_end(const CaptureContext& ctx) {

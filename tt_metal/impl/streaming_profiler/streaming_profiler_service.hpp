@@ -208,8 +208,8 @@ public:
     // is missed. The engine attaches first, so its covers exist before any consumer parks a batch on them.
     void attach_producer(Producer& producer);
     // Returns once the engine and every consumer have drained the producer's queues and released its readers: the
-    // engine first, so its final publish makes every cover final before the consumers flush what they parked; then
-    // the engine's plots go to the Tracy sink. Detaching the last producer writes the file sinks.
+    // engine first, so its final publish makes every cover final before the consumers flush what they parked.
+    // Detaching the last producer writes the file sinks.
     void detach_producer(Producer& producer);
     bool is_active() const;
 

@@ -18,7 +18,6 @@
 #endif
 
 #include "impl/streaming_profiler/streaming_profiler_service.hpp"
-#include "impl/streaming_profiler/streaming_profiler_sync_engine.hpp"
 #include "impl/streaming_profiler/streaming_profiler_placement_map.hpp"
 
 namespace tt::tt_metal::streaming_profiler {
@@ -254,15 +253,8 @@ void TracySink::push_zone(
     [[maybe_unused]] int64_t end_tsc,
     [[maybe_unused]] uint32_t color) {
 #if defined(TRACY_ENABLE)
-    int64_t s = timeline_ns(start_tsc), e = timeline_ns(end_tsc);
-    if (s < 0) {
-        clamped_zones_++;
-        s = 0;
-    }
-    if (e < s) {
-        clamped_zones_++;
-        e = s;
-    }
+    const int64_t s = std::max<int64_t>(timeline_ns(start_tsc), 0);
+    const int64_t e = std::max(timeline_ns(end_tsc), s);
     const Lane ln = lane(core);
     TracyTTPushZone(
         ln.ctx,
@@ -280,11 +272,7 @@ void TracySink::push_marker(
     [[maybe_unused]] uint32_t runtime_id,
     [[maybe_unused]] std::span<const uint64_t> values) {
 #if defined(TRACY_ENABLE)
-    int64_t ts = timeline_ns(tsc);
-    if (ts < 0) {
-        clamped_markers_++;
-        ts = 0;
-    }
+    const int64_t ts = std::max<int64_t>(timeline_ns(tsc), 0);
     TracyTTCtx ctx = lane(core).ctx;
     tracy::TTDeviceMarker marker;
     marker.chip_id = core.chip_id;
@@ -311,38 +299,5 @@ void TracySink::push_marker(
     TracyTTPushMarkerLockfree(ctx, marker);
 #endif
 }
-
-// PlotDataAt takes an absolute timer stamp, which a TSC tick already is; a zone at the same tick lands at the same
-// place through its context.
-void TracySink::plot_point([[maybe_unused]] const char* name, [[maybe_unused]] double value, int64_t tsc) {
-#if defined(TRACY_ENABLE)
-    if (tsc <= 0) {
-        clamped_plot_points_++;
-        return;
-    }
-    tracy::Profiler::PlotDataAt(name, value, tsc);
-#endif
-}
-
-void TracySink::emit_plots(std::vector<SyncPlot> plots) {
-    for (const SyncPlot& plot : plots) {
-        [[maybe_unused]] const char* nm = intern_name(plot.name);
-        for ([[maybe_unused]] const SyncPlotPoint& p : plot.points) {
-            plot_point(nm, p.value, p.tsc);
-        }
-    }
-    if (clamped_zones_ != 0 || clamped_markers_ != 0 || clamped_plot_points_ != 0) {
-        log_warning(
-            tt::LogMetal,
-            "[streaming profiler] Tracy sink clamped {} zones, {} markers and {} plot points to the timeline origin: "
-            "records placed before the contexts' origin",
-            clamped_zones_,
-            clamped_markers_,
-            clamped_plot_points_);
-    }
-}
-
-// PlotDataAt keys a plot by its name POINTER, so every name lives for the sink's lifetime.
-const char* TracySink::intern_name(const std::string& name) { return plot_names_.insert(name).first->c_str(); }
 
 }  // namespace tt::tt_metal::streaming_profiler
