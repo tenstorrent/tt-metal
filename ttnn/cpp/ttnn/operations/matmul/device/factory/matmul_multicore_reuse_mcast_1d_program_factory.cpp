@@ -4082,9 +4082,36 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
         // of the partials buffer (see above), else on the partials buffer itself. Metal 2.0 also
         // *requires* an explicit entry for a Float32 buffer a compute kernel consumes with
         // enable_32_bit_dest on, which is exactly this case.
-        if (fp32_dest_acc_en && interm0_data_format == tt::DataFormat::Float32) {
-            unpack_modes(compute_hw)
-                .emplace(bias_reload_alias ? INTERM0_ALIAS_DFB : INTERM0_DFB, tt::tt_metal::UnpackMode::UnpackToDest);
+        //
+        // That requirement covers EVERY Float32 buffer this kernel consumes, not just the partials:
+        // omitting one is a TT_FATAL at program build, where legacy defaulted silently. Legacy held
+        // Default (= UnpackToSrc) everywhere except the partials view marked below, so reproduce
+        // that -- one UnpackToDest, UnpackToSrc for the rest. The entries must track the bindings
+        // below: add a Float32 buffer to the compute kernel and it needs one here too.
+        if (fp32_dest_acc_en) {
+            const DFBSpecName marked = bias_reload_alias ? INTERM0_ALIAS_DFB : INTERM0_DFB;
+            const bool mark = interm0_data_format == tt::DataFormat::Float32;
+            auto add_if_float32 = [&](const DFBSpecName& name, tt::DataFormat fmt) {
+                if (fmt != tt::DataFormat::Float32) {
+                    return;
+                }
+                unpack_modes(compute_hw).emplace(
+                    name,
+                    (mark && name == marked) ? tt::tt_metal::UnpackMode::UnpackToDest
+                                             : tt::tt_metal::UnpackMode::UnpackToSrc);
+            };
+            add_if_float32(IN0_DFB, in0_data_format);
+            add_if_float32(IN1_DFB, in1_data_format);
+            add_if_float32(INTERM0_DFB, interm0_data_format);
+            if (bias_reload_alias) {
+                add_if_float32(INTERM0_ALIAS_DFB, interm0_data_format);
+            }
+            if (bias_tensor.has_value()) {
+                add_if_float32(BIAS_DFB, bias_data_format);
+            }
+            if (in0_transpose_tile) {
+                add_if_float32(IN0_TRANSPOSED_DFB, in0_data_format);
+            }
         }
 
         Group<DFBBinding> compute_dfb_bindings = {
@@ -5175,11 +5202,32 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifac
         double_buffer_dest(compute_hw) = true;
 
         // See create_program_mcast_in0_artifacts for why the fp32 partials reload needs UnpackToDest,
-        // and why the flag goes on the alias when bias is fused. Metal 2.0 also *requires* an explicit
-        // entry for a Float32 buffer a compute kernel consumes with enable_32_bit_dest on.
-        if (fp32_dest_acc_en && interm0_data_format == tt::DataFormat::Float32) {
-            unpack_modes(compute_hw)
-                .emplace(bias_reload_alias ? INTERM0_ALIAS_DFB : INTERM0_DFB, tt::tt_metal::UnpackMode::UnpackToDest);
+        // why the flag goes on the alias when bias is fused, and why every Float32 buffer this kernel
+        // consumes needs an entry -- not just the partials.
+        if (fp32_dest_acc_en) {
+            const DFBSpecName marked = bias_reload_alias ? INTERM0_ALIAS_DFB : INTERM0_DFB;
+            const bool mark = interm0_data_format == tt::DataFormat::Float32;
+            auto add_if_float32 = [&](const DFBSpecName& name, tt::DataFormat fmt) {
+                if (fmt != tt::DataFormat::Float32) {
+                    return;
+                }
+                unpack_modes(compute_hw).emplace(
+                    name,
+                    (mark && name == marked) ? tt::tt_metal::UnpackMode::UnpackToDest
+                                             : tt::tt_metal::UnpackMode::UnpackToSrc);
+            };
+            add_if_float32(IN0_DFB, in0_data_format);
+            add_if_float32(IN1_DFB, in1_data_format);
+            add_if_float32(INTERM0_DFB, interm0_data_format);
+            if (bias_reload_alias) {
+                add_if_float32(INTERM0_ALIAS_DFB, interm0_data_format);
+            }
+            if (bias_tensor.has_value()) {
+                add_if_float32(BIAS_DFB, bias_data_format);
+            }
+            if (in0_transpose_tile) {
+                add_if_float32(IN0_TRANSPOSED_DFB, in0_data_format);
+            }
         }
 
         Group<DFBBinding> compute_dfb_bindings = {
