@@ -43,11 +43,11 @@
 #ifdef SITU_GLU
 #include "api/compute/situ_glu.h"
 #endif
-#include "moe_fused_swiglu_compute_helpers.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/moe_fused_swiglu/device/kernels/moe_fused_swiglu_compute_helpers.hpp"
 #include "tt_metal/tools/profiler/kernel_profiler.hpp"
 
-#include "moe_fused_swiglu_common.hpp"   // the ONE definition of the mailbox word layout
-#include "moe_fused_swiglu_ct_args.hpp"  // the ONE definition of the compile-time arg order
+#include "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/moe_fused_swiglu/device/kernels/moe_fused_swiglu_common.hpp"  // the ONE definition of the mailbox word layout
+#include "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/moe_fused_swiglu/device/kernels/moe_fused_swiglu_ct_args.hpp"  // the ONE definition of the compile-time arg order
 // Under HYB_NS this body is one half of the union kernel: everything below is namespaced so
 // the two halves cannot collide at file scope, and the shims rebase its argument indices into
 // the concatenated lists. Without HYB_NS it is the standalone kernel, unchanged.
