@@ -332,3 +332,73 @@ done
 
 Worth redoing whenever the sliding halo, `ring_joint_sdpa`, or the sliding program config
 changes. The pre-halo captures are the only baseline for it, so they should not be deleted.
+
+---
+
+## Opening these captures yourself
+
+Everything is on `bh-glx-120-b03u02` under `/data/kmabee/gemma4_runs/`. `tt-perf-report` is
+already installed there (`pip install tt-perf-report`; v1.2.9 at `~/.local/bin`).
+
+| tag | chunk | chunk_idx | prior KV | pytest node id |
+|---|---:|---:|---:|---|
+| `floor_c2048` | 2048 | 0 | 0 | `[blackhole-chunk0-both-sz2048-ctx_256k-8x4]` |
+| `floor_c4096` | 4096 | 0 | 0 | `[blackhole-chunk0-both-sz4096-ctx_256k-8x4]` |
+| `floor_c8192` | 8192 | 0 | 0 | `[blackhole-chunk0-both-sz8192-ctx_256k-8x4]` |
+| `deep_c2048_i24` | 2048 | 24 | 49152 | `[blackhole-chunk24-both-sz2048-ctx_256k-8x4]` |
+| `deep_c4096_i12` | 4096 | 12 | 49152 | `[blackhole-chunk12-both-sz4096-ctx_256k-8x4]` |
+| `deep_c8192_i6` | 8192 | 6 | 49152 | `[blackhole-chunk6-both-sz8192-ctx_256k-8x4]` |
+
+Each `<tag>/profiler/reports/<timestamp>/` holds:
+
+| file | size | what |
+|---|---:|---|
+| `ops_perf_results_<ts>.csv` | ~37 MB | **what `tt-perf-report` reads** |
+| `tracy_profile_log_host.tracy` | ~420 MB | open in the Tracy GUI |
+| `profile_log_device.csv` | ~4.8 GB | raw device rows; the ops report already distils it, safe to delete |
+
+### One-liner
+
+`view.sh <tag> <global|local>` resolves the report path and the signposts for you:
+
+```bash
+cd /data/kmabee/gemma4_runs
+./view.sh                              # list the captures
+./view.sh deep_c2048_i24 global        # the decisive one: 3662 us SDPA, 114 cores
+./view.sh deep_c8192_i6  global        # compare: 8266 us for 4x the prefix work
+./view.sh floor_c2048    local         # the floor: LayerNorm on 8-32 cores
+./view.sh deep_c8192_i6  local --no-advice
+```
+
+Extra arguments pass through to `tt-perf-report`, e.g. `--no-summary`, `--no-advice`,
+`--csv out.csv`, `--group-by category`.
+
+### Or by hand
+
+```bash
+tt-perf-report \
+  --start-signpost gemma4-layer-global-chunk24-start \
+  --end-signpost   gemma4-layer-global-chunk24-stop \
+  /data/kmabee/gemma4_runs/deep_c2048_i24/profiler/reports/*/ops_perf_results_*.csv
+```
+
+The signpost name is `gemma4-layer-{global|local}-chunk{chunk_idx}-{start|stop}`, where
+`chunk_idx` is the one in the table above — **not** the chunk size, and the sliding layer is
+`local`.
+
+### Regenerating a capture from scratch
+
+`run_deepidx.sh` (in `/data/kmabee/gemma4_runs/`) is the driver that produced the three deep
+captures; `mk_reports.sh` renders a capture's two layer types to files, and `cmp_ops.py`
+builds the side-by-side tables in this document. A single capture directly:
+
+```bash
+source /data/kmabee/gemma4_runs/env.sh && cd $TT_METAL_HOME
+TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=20000 \
+python_env/bin/python3 -m tracy -r -p -v -o /tmp/mycapture/profiler -m pytest \
+  "models/demos/gemma4_d_p/demo/text_demo_prefill.py::test_prefill_layer_perf_chunk_n[blackhole-chunk24-both-sz2048-ctx_256k-8x4]" -sv
+```
+
+~12 min per capture. `python -m tracy` starts a WASM web-UI server that looks like it has
+hung before it writes the report — let it run. A killed run can be recovered with
+`--process-logs-only`.
