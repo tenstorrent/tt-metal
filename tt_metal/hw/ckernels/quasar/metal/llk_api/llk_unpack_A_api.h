@@ -36,7 +36,7 @@
  */
 template <
     BroadcastType BType = BroadcastType::NONE,
-    [[maybe_unused]] bool acc_to_dest = false,
+    bool acc_to_dest /*maybe_unused*/ = false,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
     bool unpack_to_dest = false>
 inline void llk_unpack_A_init(
@@ -124,7 +124,7 @@ inline void llk_unpack_A_init(
  */
 template <
     BroadcastType BType = BroadcastType::NONE,
-    [[maybe_unused]] bool acc_to_dest = false,
+    bool acc_to_dest /*maybe_unused*/ = false,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
     bool unpack_to_dest = false>
 inline void llk_unpack_A(const std::uint32_t operand, const std::uint32_t tile_index) {
@@ -165,7 +165,7 @@ inline void llk_unpack_A(const std::uint32_t operand, const std::uint32_t tile_i
 // TODO: AM; Optimize block calls by using ntiles per unpack, issue #40798
 template <
     BroadcastType BType = BroadcastType::NONE,
-    [[maybe_unused]] bool acc_to_dest = false,
+    bool acc_to_dest /*maybe_unused*/ = false,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
     bool unpack_to_dest = false>
 inline void llk_unpack_A_block(
@@ -191,6 +191,26 @@ inline void llk_unpack_A_block(
         }
         WAYPOINT("UPAD");
     }
+}
+
+/**
+ * @brief Toggle the unpacker engine to order a POP after its WAIT: STALLWAIT on SrcA-clear then a
+ *        clear-SrcA UNPACR_NOP (no CB read, no DEST write, no pop). Reads nothing from L1.
+ *
+ * Call between llk_wait_tiles and llk_pop_tiles on a buffer that is being drained (by llk_pop_tiles) but
+ * whose data is not needed. Unlike the WH/BH version -- a debug-only SrcA flush with no ordering role --
+ * this is a required Quasar primitive: the UNPACR_NOP is a real unpacker TDMA that orders the POP_TILES
+ * after its WAIT_TILES on dfb_id (TEN-4746 / #48552). Because it reads nothing, PACKER_L1_ACC is
+ * undisturbed. The STALLWAIT ensures SrcA is free before the clear, so it cannot clobber a SrcA bank
+ * still owned by an in-flight op; SrcA is cleared only (the next op re-unpacks it).
+ *
+ * @param dfb_id  The dataflow buffer whose WAIT/POP this orders. Disarms the TEN-4746 tile-counter guard
+ *                that llk_wait_tiles armed for it (llk_pop_tiles asserts the buffer was disarmed).
+ */
+inline void llk_unpack_dummy(const std::uint32_t dfb_id) {
+    TTI_STALLWAIT(p_stall::STALL_UNPACK, 0, 0, p_stall::SRCA_CLR);
+    TTI_UNPACR_NOP(p_unpacr::UNP_A, 0, 0, 0, p_unpacr::UNP_CLRSRC_ZERO, p_unpacr::UNP_CLRSRC);
+    LLK_TDMA_GUARD_NOTE_TDMA(dfb_id);  // TEN-4746: UNPACR_NOP orders POP after WAIT -> disarm this dfb
 }
 
 template <BroadcastType BType = BroadcastType::NONE>

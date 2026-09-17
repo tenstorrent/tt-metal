@@ -17,6 +17,15 @@ from .model_config import (
     PRESET_CONFIGS,
 )
 
+from .camera_rig import (
+    CameraSpec,
+    ring_camera_rig,
+    build_lidar2img,
+    camera_rig_for_dataset,
+    lidar2img_for_dataset,
+    img_metas_for_dataset,
+)
+
 __all__ = [
     # Data config
     "DatasetConfig",
@@ -34,4 +43,11 @@ __all__ = [
     "create_custom_config",
     "MODEL_VARIANTS",
     "PRESET_CONFIGS",
+    # Camera rig
+    "CameraSpec",
+    "ring_camera_rig",
+    "build_lidar2img",
+    "camera_rig_for_dataset",
+    "lidar2img_for_dataset",
+    "img_metas_for_dataset",
 ]

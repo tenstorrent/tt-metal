@@ -218,14 +218,11 @@ class TestConfig:
     ENABLE_PERF_COUNTERS: ClassVar[bool] = False
     # One run observes one group of 8 L1 interfaces; sweep this to cover all of them.
     PERF_L1_MUX_GROUP: ClassVar[int] = int(os.environ.get("LLK_PERF_L1_MUX_GROUP", "0"))
-    DUMP_RAW_COUNTERS: ClassVar[bool] = False
-    DUMP_RAW_METRICS: ClassVar[bool] = False
-    DUMP_CSV_COUNTERS: ClassVar[bool] = False
+    DUMP_PERF_COUNTERS: ClassVar[bool] = False
 
     # === Addresses ===
     RUNTIME_ADDRESS_NON_COVERAGE: ClassVar[int] = 0x20000
     RUNTIME_ADDRESS_COVERAGE: ClassVar[int] = 0x6E000
-    TRISC_PROFILER_BARRIER_ADDRESS: ClassVar[int] = 0x16AFF4
     TRISC_START_ADDRS: ClassVar[list[int]] = [0x16DFF0, 0x16DFF4, 0x16DFF8]
     THREAD_PERFORMANCE_DATA_BUFFER_LENGTH = 0x400
     THREAD_PERFORMANCE_DATA_BUFFER = [
@@ -239,7 +236,7 @@ class TestConfig:
     # Shared config + per-zone data layout (must match counters.h).
     # Shared config (200 words = 800 B) at base; per-zone data (5 bank-cycle
     # words + 200 counter-count words + sync = 860 B) follows.
-    # 8 zones × 860 + 800 = 7680 B, fits below profiler region at 0x16AFF4.
+    # 8 zones × 860 + 800 = 7680 B, fits below profiler region at 0x16AFF0.
     PERF_COUNTERS_BASE_ADDR: ClassVar[int] = 0x169000
     PERF_COUNTERS_MAX_ZONES: ClassVar[int] = 8  # Max zones (must match counters.h)
     _PERF_COUNTERS_CONFIG_WORDS: ClassVar[int] = 200
@@ -359,9 +356,6 @@ class TestConfig:
                     0x16D000,  # Pack
                     0x16E000,  # SFPU
                 ]
-                TestConfig.TRISC_PROFILER_BARRIER_ADDRESS = (
-                    0x16AFF0  # BARRIER_START for 4 cores
-                )
             case _:
                 raise ValueError(
                     "Must provide CHIP_ARCH environment variable (wormhole / blackhole / quasar)"
@@ -420,13 +414,9 @@ class TestConfig:
 
     @staticmethod
     def perf_run_tag() -> str:
-        """Directory name for this run's reports. Unique per invocation.
+        """Name for this run's reports: the directory, the Parquet, and its run_id.
 
-        Purely a filesystem concern: it never reaches the published table. The
-        Parquet's ``run_id`` cannot serve here because every shard of one CI
-        workflow shares it by design (it is a ROW_KEY column, and the data team's
-        notion of "one run" spans all shards) — naming directories after it would
-        make two shards collide the moment their artefacts are unzipped together.
+        Unique per invocation, which is the one property all three need.
 
         Seeded into the environment on first use so xdist workers and the
         controller agree; the pytest plugin sets it before workers spawn.
@@ -541,10 +531,10 @@ class TestConfig:
             in (ChipArchitecture.WORMHOLE, ChipArchitecture.BLACKHOLE)
             else ""
         )
-        # Allow disabling LLK_ASSERT via env var for shape-coverage discovery runs:
-        # with asserts off and DEVICE_PRINT_ENABLED on, LLK_VALIDATE_TENSOR_SHAPE_*
-        # emits newly-seen TensorShapes via DPRINT instead of ebreaking the kernel,
-        # so a single run can enumerate every (fn_name, shape) pair exercised.
+        # Allow disabling LLK_ASSERT via env var for shape-coverage discovery runs
+        # and for perf jobs (set TT_LLK_DISABLE_ASSERTS=1 in the runner).
+        # With asserts off and DEVICE_PRINT_ENABLED on, LLK_VALIDATE_TENSOR_SHAPE_*
+        # emits newly-seen TensorShapes via DPRINT instead of ebreaking the kernel.
         llk_assert_define = (
             ""
             if os.environ.get("TT_LLK_DISABLE_ASSERTS") == "1"
@@ -570,6 +560,7 @@ class TestConfig:
                     )
                 ],
                 "-I../common",
+                "-I../tools/include",
                 "-I../../hw/inc",
                 "-Ifirmware/riscv/common",
                 "-Ihelpers/include",
@@ -1199,6 +1190,12 @@ class TestConfig:
 
         pytest.skip()
 
+    def _barrier_reservation_include(self) -> str:
+        """First in the unit, so barrier.h's reservation covers the driver whatever it includes first."""
+        if self.profiler_build != ProfilerBuild.Yes:
+            return ""
+        return '#include "barrier.h"\n'
+
     def _kernel_source_include(self) -> str:
         """C++ snippet that pulls in this variant's driver.
 
@@ -1783,7 +1780,10 @@ class TestConfig:
                 run_shell_command(  # %.elf : path/to/kernel/test.cpp trisc.cpp [coverage.o libgcov.a]
                     compile_command,
                     TestConfig.TESTS_WORKING_DIR,
-                    (f"{self._kernel_source_include()}#include  <trisc.cpp>\n"),
+                    (
+                        f"{self._barrier_reservation_include()}"
+                        f"{self._kernel_source_include()}#include  <trisc.cpp>\n"
+                    ),
                 )
 
             with ThreadPoolExecutor(
@@ -1828,8 +1828,12 @@ class TestConfig:
         # Extracting coverage stream from device, for all kernel parts, for all their compilation units
         coverage_stream = b""
         for trisc_name in TestConfig.KERNEL_COMPONENTS:
-            temp_elf = parse_elf(VARIANT_DIR / f"elf/{trisc_name}.elf")
-            coverage_start = temp_elf.symbols["__coverage_start"].value
+            # ttexalens.parse_elf takes `elf_path: str`; its native ElfFile binding
+            # rejects a PosixPath outright, so stringify rather than relying on
+            # pathlib duck-typing.
+            temp_elf = parse_elf(str(VARIANT_DIR / f"elf/{trisc_name}.elf"))
+            coverage_symbol = temp_elf.find_symbol_by_name("__coverage_start")
+            coverage_start = coverage_symbol.value if coverage_symbol else None
             if not coverage_start:
                 raise TTException(
                     f"__coverage_start not found in variant's {trisc_name}.elf"

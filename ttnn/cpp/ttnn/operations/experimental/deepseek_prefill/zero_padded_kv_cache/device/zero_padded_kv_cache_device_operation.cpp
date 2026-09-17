@@ -69,6 +69,21 @@ void validate_runtime_args(
     TT_FATAL(args.cluster_axis == 0 || args.cluster_axis == 1, "cluster_axis ({}) must be 0 or 1", args.cluster_axis);
     const auto& cache = tensor_args.cache;
 
+    // The TILE branch of the factory derives Wt/cache_H_pages and the cache_tile_size compile arg from
+    // the architectural 32x32 constants, and the reader's face loop hardcodes the 32x32 four-face
+    // layout; the tile is absent from compute_program_hash. Checked here rather than in the miss
+    // validator so it also runs on the cache-hit path, where a non-standard tile would otherwise alias
+    // onto a cached 32x32 program and zero the wrong region of the cache.
+    if (cache.layout() == Layout::TILE) {
+        const auto tile = cache.tensor_spec().tile();
+        TT_FATAL(
+            tile.get_height() == TILE_HEIGHT && tile.get_width() == TILE_WIDTH,
+            "zero_padded_kv_cache does not currently support tiles other than 32x32, but cache has a {}x{} "
+            "tile",
+            tile.get_height(),
+            tile.get_width());
+    }
+
     // Metadata-path invariant + tensor validation. The path is selected on slot_idx.has_value(), but the
     // factory dereferences valid_global->buffer() whenever slot_idx is set, so a mismatched optional would
     // null-deref -- reject it up front. Then validate each metadata tensor's structural properties (device,
@@ -84,6 +99,13 @@ void validate_runtime_args(
             TT_FATAL(meta.storage_type() == StorageType::DEVICE, "metadata tensor {} must be on device", name);
             TT_FATAL(meta.dtype() == DataType::UINT32, "metadata tensor {} must be UINT32", name);
             TT_FATAL(meta.layout() == Layout::ROW_MAJOR, "metadata tensor {} must be ROW_MAJOR", name);
+            // A sharded metadata tensor changes the shape and length of the accessor block the kernels
+            // append, and both sibling ops reject it; the hashed memory config keeps it off a cached
+            // program but would still let it compile on a fresh miss.
+            TT_FATAL(
+                !meta.is_sharded(),
+                "zero_padded_kv_cache does not currently support sharded metadata tensors, but {} is sharded",
+                name);
             TT_FATAL(
                 meta.logical_volume() == 1,
                 "metadata tensor {} must be a single element (got {})",
@@ -93,6 +115,15 @@ void validate_runtime_args(
         };
         validate_meta(tensor_args.slot_idx.value(), "slot_idx");
         validate_meta(tensor_args.valid_global.value(), "valid_global");
+        // The reader and writer each emit a single TensorAccessorArgs built from slot_idx and use it for
+        // both metadata reads, so a differing memory config on valid_global would resolve its address
+        // through the wrong bank table.
+        TT_FATAL(
+            tensor_args.slot_idx->memory_config() == tensor_args.valid_global->memory_config(),
+            "zero_padded_kv_cache does not currently support slot_idx and valid_global having different "
+            "memory configs, because one TensorAccessor serves both reads (got buffer types {} and {})",
+            tensor_args.slot_idx->memory_config().buffer_type(),
+            tensor_args.valid_global->memory_config().buffer_type());
     }
 
     // slot_idx is a host value only on the scalar path; on the tensor path it lives in the device
@@ -102,6 +133,12 @@ void validate_runtime_args(
         TT_FATAL(args.slot_idx < num_slots, "slot_idx ({}) out of range for num_slots ({})", args.slot_idx, num_slots);
     }
 
+    // Checked here rather than only in the miss validator because device() is dereferenced on the next
+    // line and returns nullptr for host storage, so on a hit the fault would land there instead.
+    TT_FATAL(
+        cache.storage_type() == StorageType::DEVICE,
+        "cache must be on device, but its storage type is {}",
+        cache.storage_type());
     const auto& mesh_view = cache.device()->get_view();
     TT_FATAL(mesh_view.is_mesh_2d(), "zero_padded_kv_cache requires a 2D mesh");
     const uint32_t sp_factor = (args.cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
@@ -154,7 +191,7 @@ ZeroPaddedKvCacheDeviceOperation::program_factory_t ZeroPaddedKvCacheDeviceOpera
 void ZeroPaddedKvCacheDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& cache = tensor_args.cache;
-    TT_FATAL(cache.storage_type() == StorageType::DEVICE, "cache must be on device");
+    // cache storage is pinned in validate_runtime_args so it also runs on hits.
     TT_FATAL(cache.buffer()->buffer_type() == BufferType::DRAM, "zero_padded_kv_cache requires a DRAM-backed cache");
     TT_FATAL(
         cache.layout() == Layout::TILE || cache.layout() == Layout::ROW_MAJOR,
@@ -227,7 +264,11 @@ ttsl::hash::hash_t ZeroPaddedKvCacheDeviceOperation::compute_program_hash(
         cache.dtype(),
         cache.layout(),
         cache.memory_config(),
-        cache.padded_shape());
+        cache.padded_shape(),
+        // On the metadata path the reader and writer bake a TensorAccessorArgs built from slot_idx into
+        // their compile-time args, so the bank table it selects cannot be refreshed on a cache hit. Only
+        // the config is keyed, never the value; valid_global is pinned to match by validate_runtime_args.
+        tensor_args.slot_idx.has_value() ? tensor_args.slot_idx->memory_config() : MemoryConfig{});
 }
 
 tt::tt_metal::ProgramDescriptor ZeroPaddedKvCacheDeviceOperation::ProgramFactory::create_descriptor(

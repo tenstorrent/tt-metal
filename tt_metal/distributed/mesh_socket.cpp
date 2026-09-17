@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt_stl/reflection.hpp>
+#include <tt-metalium/experimental/per_core_allocation/mesh_buffer.hpp>
 #include "tt_metal/distributed/mesh_socket_utils.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/debug/inspector/inspector.hpp"
@@ -249,6 +250,31 @@ MeshSocket::MeshSocket(const std::shared_ptr<MeshDevice>& device, const SocketCo
         is_sender = local_mesh_binding[0] == config_.sender_mesh_id.value();
     }
 
+    // Ranks that are neither endpoint took the early return above and allocate nothing, including
+    // ranks co-owning this submesh. That is only safe when every socket buffer is per-core and so
+    // stays on the endpoint cores: a lockstep buffer is replicated across the submesh and would
+    // occupy L1 on co-owners that never reserved it, whose next allocation lands on top. Reject
+    // it before allocating rather than corrupting a peer's L1.
+    //
+    // create_socket_pair and mesh-scoped sockets are built by every co-owner, so lockstep buffers
+    // remain correct there and are not checked.
+    if ((rank_scoped_socket_ || same_mesh) && mesh_is_coowned(*device)) {
+        const auto sender_cores = socket_endpoint_cores(config_, SocketEndpoint::SENDER).size();
+        const auto receiver_cores = socket_endpoint_cores(config_, SocketEndpoint::RECEIVER).size();
+        TT_FATAL(
+            socket_is_fully_per_core(config_),
+            "A rank-scoped socket on a submesh co-owned by several ranks requires every socket buffer to be "
+            "per-core, so that it occupies L1 only on its two endpoint cores and the co-owners -- which build "
+            "nothing for this socket -- have nothing to reserve. Got per_core_allocation={} (needs "
+            "TT_METAL_ALLOCATOR_MODE_HYBRID=1 before the device is opened), storage={}, {} distinct sender "
+            "(device, core) pair(s) and {} receiver (needs exactly 1 each). Fix whichever of those is wrong, "
+            "or place the stage on a submesh a single rank drives.",
+            config_.socket_mem_config.per_core_allocation,
+            config_.socket_mem_config.socket_storage_type,
+            sender_cores,
+            receiver_cores);
+    }
+
     if (is_sender) {
         socket_endpoint_type_ = SocketEndpoint::SENDER;
         config_buffer_ = create_socket_config_buffer(device, config_, socket_endpoint_type_);
@@ -275,11 +301,29 @@ void MeshSocket::connect_with_peer(const std::shared_ptr<multihost::DistributedC
         if (socket_endpoint_type_ == SocketEndpoint::SENDER) {
             forward_descriptor_to_peer(local_endpoint_desc, peer_rank, context);
             remote_endpoint_desc = receive_and_verify_descriptor_from_peer(local_endpoint_desc, peer_rank, context);
-            fabric_node_id_map_ = generate_fabric_node_id_map(config_);
+            fabric_node_id_map_ = generate_fabric_node_id_map(
+                config_,
+                /*sender_device=*/nullptr,
+                /*receiver_device=*/nullptr,
+                /*peer_sender_chip_ids=*/
+                socket_endpoint_type_ == SocketEndpoint::RECEIVER ? remote_endpoint_desc.local_chip_ids
+                                                                  : std::vector<uint32_t>{},
+                /*peer_receiver_chip_ids=*/
+                socket_endpoint_type_ == SocketEndpoint::SENDER ? remote_endpoint_desc.local_chip_ids
+                                                                : std::vector<uint32_t>{});
         } else {
             remote_endpoint_desc = receive_and_verify_descriptor_from_peer(local_endpoint_desc, peer_rank, context);
             forward_descriptor_to_peer(local_endpoint_desc, peer_rank, context);
-            fabric_node_id_map_ = generate_fabric_node_id_map(config_);
+            fabric_node_id_map_ = generate_fabric_node_id_map(
+                config_,
+                /*sender_device=*/nullptr,
+                /*receiver_device=*/nullptr,
+                /*peer_sender_chip_ids=*/
+                socket_endpoint_type_ == SocketEndpoint::RECEIVER ? remote_endpoint_desc.local_chip_ids
+                                                                  : std::vector<uint32_t>{},
+                /*peer_receiver_chip_ids=*/
+                socket_endpoint_type_ == SocketEndpoint::SENDER ? remote_endpoint_desc.local_chip_ids
+                                                                : std::vector<uint32_t>{});
         }
         write_socket_configs(config_buffer_, local_endpoint_desc, remote_endpoint_desc, socket_endpoint_type_);
         execute_with_timeout(
@@ -290,12 +334,30 @@ void MeshSocket::connect_with_peer(const std::shared_ptr<multihost::DistributedC
             forward_descriptor_to_peer(local_endpoint_desc, socket_endpoint_type_, context, rank_translation_table_);
             remote_endpoint_desc = receive_and_verify_descriptor_from_peer(
                 local_endpoint_desc, socket_endpoint_type_, context, rank_translation_table_);
-            fabric_node_id_map_ = generate_fabric_node_id_map(config_);
+            fabric_node_id_map_ = generate_fabric_node_id_map(
+                config_,
+                /*sender_device=*/nullptr,
+                /*receiver_device=*/nullptr,
+                /*peer_sender_chip_ids=*/
+                socket_endpoint_type_ == SocketEndpoint::RECEIVER ? remote_endpoint_desc.local_chip_ids
+                                                                  : std::vector<uint32_t>{},
+                /*peer_receiver_chip_ids=*/
+                socket_endpoint_type_ == SocketEndpoint::SENDER ? remote_endpoint_desc.local_chip_ids
+                                                                : std::vector<uint32_t>{});
         } else {
             remote_endpoint_desc = receive_and_verify_descriptor_from_peer(
                 local_endpoint_desc, socket_endpoint_type_, context, rank_translation_table_);
             forward_descriptor_to_peer(local_endpoint_desc, socket_endpoint_type_, context, rank_translation_table_);
-            fabric_node_id_map_ = generate_fabric_node_id_map(config_);
+            fabric_node_id_map_ = generate_fabric_node_id_map(
+                config_,
+                /*sender_device=*/nullptr,
+                /*receiver_device=*/nullptr,
+                /*peer_sender_chip_ids=*/
+                socket_endpoint_type_ == SocketEndpoint::RECEIVER ? remote_endpoint_desc.local_chip_ids
+                                                                  : std::vector<uint32_t>{},
+                /*peer_receiver_chip_ids=*/
+                socket_endpoint_type_ == SocketEndpoint::SENDER ? remote_endpoint_desc.local_chip_ids
+                                                                : std::vector<uint32_t>{});
         }
         write_socket_configs(config_buffer_, local_endpoint_desc, remote_endpoint_desc, socket_endpoint_type_);
 
@@ -348,6 +410,18 @@ std::shared_ptr<MeshBuffer> MeshSocket::get_data_buffer() const {
 };
 
 std::shared_ptr<MeshBuffer> MeshSocket::get_config_buffer() const { return config_buffer_; }
+
+DeviceAddr MeshSocket::get_config_buffer_address() const {
+    TT_FATAL(config_buffer_, "Socket has no config buffer; it was never allocated on this rank.");
+    if (!socket_endpoint_uses_per_core_allocation(config_, socket_endpoint_type_)) {
+        return config_buffer_->address();
+    }
+    // A per-core buffer's address lives on each device's Buffer, one per core; the mesh-level
+    // scalar stays 0. Per-core requires a single (device, core) for the endpoint, so resolve there.
+    const auto cores = socket_endpoint_cores(config_, socket_endpoint_type_);
+    const auto& core = *cores.begin();
+    return experimental::per_core_allocation::get_per_core_address(*config_buffer_, core.device_coord, core.core_coord);
+}
 
 const SocketConfig& MeshSocket::get_config() const { return config_; }
 

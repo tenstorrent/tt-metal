@@ -23,6 +23,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include "impl/program/program_impl.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <umd/device/types/arch.hpp>
@@ -144,14 +145,7 @@ bool run_mul_reduce_scalar_test(distributed::MeshDevice& mesh_device, const MulR
     distributed::EnqueueWriteMeshBuffer(cq, src0_dram_buffer, packed_input0, /*blocking=*/true);
     distributed::EnqueueWriteMeshBuffer(cq, src1_dram_buffer, packed_input1, /*blocking=*/true);
 
-    // Wrap the program into a MeshWorkload and dispatch via the mesh command queue.
-    // This path works under both fast dispatch and slow dispatch, unlike detail::LaunchProgram.
-    distributed::MeshWorkload workload;
-    auto zero_coord = distributed::MeshCoordinate(0, 0);
-    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    workload.add_program(device_range, std::move(program));
-    distributed::EnqueueMeshWorkload(cq, workload, false);
-    distributed::Finish(cq);
+    LaunchProgram(mesh_device, std::move(program));
 
     std::vector<uint32_t> result_vec;
     distributed::EnqueueReadMeshBuffer(cq, result_vec, dst_dram_buffer, /*blocking=*/true);
@@ -195,9 +189,8 @@ class MulReduceScalarTest : public LLKMeshDeviceSingleCardFixture, public testin
 
 // Standard 32x32-tile suite parametrized by tile count.
 TEST_P(MulReduceScalarTest, MulReduceScalar) {
-    auto& mesh_device = *devices_[0];
     int num_tiles = GetParam();
-    ASSERT_TRUE(run_mul_reduce_scalar_test(mesh_device, {.num_tiles = num_tiles, .tile_height = 32}));
+    ASSERT_TRUE(run_mul_reduce_scalar_test(this->device(), {.num_tiles = num_tiles, .tile_height = 32}));
 }
 
 // Instantiate the test suite with different tile counts
@@ -211,9 +204,8 @@ INSTANTIATE_TEST_SUITE_P(
 class MulReduceScalarTinyTileTest : public LLKMeshDeviceSingleCardFixture, public testing::WithParamInterface<int> {};
 
 TEST_P(MulReduceScalarTinyTileTest, MulReduceScalarTinyTile) {
-    auto& mesh_device = *devices_[0];
     int num_tiles = GetParam();
-    ASSERT_TRUE(run_mul_reduce_scalar_test(mesh_device, {.num_tiles = num_tiles, .tile_height = 16}));
+    ASSERT_TRUE(run_mul_reduce_scalar_test(this->device(), {.num_tiles = num_tiles, .tile_height = 16}));
 }
 
 INSTANTIATE_TEST_SUITE_P(

@@ -112,7 +112,9 @@ class TtDFlashDrafter:
             assert self.chunk_size is not None, "chunk_size is required to build the drafter rope table (KV-tail rank)"
             hf = build_drafter_rope_hf_config(self.config, max_seq_len=self.cache_seq)
             self._rope = RotarySetup(hf, self.mesh_device, sp_axis=self.sp_axis).get_rope_tensors_indexed(
-                cache_seq_len_global=self.cache_seq, chunk_size_global=self.chunk_size
+                cache_seq_len_global=self.cache_seq,
+                chunk_size_global=self.chunk_size,
+                tail_slack=True,
             )
         # K/V caches are owned by the CALLER (see allocate_dflash_kv_cache) and passed into
         # forward() — the drafter does not hold them, mirroring the MLA prefill model's kvpe_cache.
@@ -322,6 +324,7 @@ class TtDFlashDrafter:
         kv_actual_global: int = 0,
         *,
         slot_idx: int = 0,
+        actual_end: Optional[int] = None,
     ) -> None:
         """Finalize into the caller-owned ``k_cache``/``v_cache`` (allocate via
         ``allocate_dflash_kv_cache``): consume the accumulated TP-partial FC output, TP-reduce it,
@@ -338,6 +341,9 @@ class TtDFlashDrafter:
 
         ``slot_idx`` selects which user's cache slot to fill; the cache is user-major
         (``slot_idx * num_hidden_layers + layer_idx``), as ``allocate_dflash_kv_cache`` lays it out.
+
+        ``actual_end`` is the end of the chunk's real tokens: given it, the writes skip the padded tail,
+        so only the real tokens have to fit (the same clamp the verifier's KVPE write uses).
 
         The taps for this chunk need NOT be seq-contiguous: token ids entering the transformer are already
         block-cyclic-gathered, so each chip's tap slice is exactly the rows its cache shard will hold, and
@@ -378,9 +384,20 @@ class TtDFlashDrafter:
         assert (
             kv_actual_global % ttnn.TILE_SIZE == 0
         ), f"kv_actual_global ({kv_actual_global}) must be tile-aligned (a multiple of {ttnn.TILE_SIZE})"
-        assert kv_actual_global + chunk_global <= self.cache_seq, (
-            f"kv_actual_global ({kv_actual_global}) + chunk_global ({chunk_global}) exceeds the global cache "
-            f"depth ({self.cache_seq}); construct with a larger max_seq_len (windowing happens at migration)"
+        # With actual_end the writes are clamped to the real tokens, so that is what must fit.
+        write_end = (
+            -(-actual_end // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+            if actual_end is not None
+            else kv_actual_global + chunk_global
+        )
+        assert write_end <= self.cache_seq, (
+            f"this chunk writes up to {write_end} (kv_actual_global={kv_actual_global}, "
+            f"chunk_global={chunk_global}, actual_end={actual_end}), past the global cache depth "
+            f"({self.cache_seq}); construct with a larger max_seq_len (windowing happens at migration)"
+        )
+        assert actual_end is None or kv_actual_global <= actual_end <= kv_actual_global + chunk_global, (
+            f"actual_end ({actual_end}) must lie in this chunk's window "
+            f"[{kv_actual_global}, {kv_actual_global + chunk_global}]"
         )
         assert self.cache_seq % chunk_global == 0, (
             f"cache_seq ({self.cache_seq}) must be a whole number of chunk_global ({chunk_global}) blocks; "
@@ -459,6 +476,7 @@ class TtDFlashDrafter:
                     num_layers=cfg.num_hidden_layers,
                     kv_actual_global=kv_actual_global,
                     cluster_axis=self.sp_axis,
+                    valid_global=actual_end,
                 )
             ttnn.deallocate(k)
             ttnn.deallocate(v)

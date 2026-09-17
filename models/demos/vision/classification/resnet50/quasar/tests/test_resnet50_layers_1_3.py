@@ -71,7 +71,7 @@ def test_resnet50_layers_1_3(device, use_pretrained_weight, model_location_gener
             use_pretrained_weight=use_pretrained_weight,
             model_location_generator=model_location_generator,
         )
-        tt_inputs_host, input_mem_config = test_infra.setup_l1_sharded_input(device)
+        tt_inputs_host, input_mem_config = test_infra.setup_input(device)
         test_infra.input_tensor = tt_inputs_host.to(device, input_mem_config)
         dev_l3 = test_infra.run()  # with the gate set, run() returns the layer3 output [1,1,NHW,1024]
 

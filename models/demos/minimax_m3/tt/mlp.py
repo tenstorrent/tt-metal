@@ -132,9 +132,19 @@ class MLP:
         mc = extract_mesh_config(mesh_device)
         dgs, ndg = mc.dispatch_group_size, mc.num_dispatch_groups
         E = hf_config.num_local_experts
+        # Size the dispatch buffer for the worst case (all top-k picks of every column token on one
+        # chip) so dispatch can never drop rows; TtMiniMaxMoE relies on that to run combine with
+        # init_zeros=False. compute_constants' base capacity is dgs*seq, hence factor = top-k.
+        # DRAM cost vs the previous factor 2 (+2*dgs*seq = 16384 rows x emb 6144 per chip): the bf16
+        # ROW_MAJOR dispatch buffer grows ~192 MiB, and the fused routed-expert op allocates a fresh
+        # bfp8 TILE output of the same row count (~102 MiB) while the dispatch buffer is still alive,
+        # so the peak growth during experts_mm is ~294 MiB per chip. Combine output is seq*topk rows
+        # and does not scale with this factor.
+        topk = hf_config.num_experts_per_tok
         experts_per_chip, metadata_len, max_buf, max_tok = compute_constants(
-            ep_seq_len_per_chip, E, hf_config.num_experts_per_tok, mesh_device.get_num_devices(), dgs, 2
+            ep_seq_len_per_chip, E, topk, mesh_device.get_num_devices(), dgs, topk
         )
+        assert max_buf >= dgs * ep_seq_len_per_chip * topk, "dispatch buffer below worst case; rows could drop"
         # MiniMax experts: w1=gate, w3=up, w2=down (direct map, no transpose). None in cache-only mode —
         # TtRoutedExpert then loads the tilized per-expert weights straight from the cache.
         routed_w = (

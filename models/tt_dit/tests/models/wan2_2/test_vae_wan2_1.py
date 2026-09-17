@@ -1066,7 +1066,14 @@ def test_wan_mid_block(
         "downsample_3_480p",
     ],
 )
-@pytest.mark.parametrize("cache_len", [None, 0, 1, 2], ids=["cache_none", "cache_0", "cache_1", "cache_2"])
+# cache_len=0: empty cache, first iteration (list of Nones); 1,2: populated from previous passes.
+# NOTE: Here we deliberately always test with a cache (i.e. a cache of len=0 is not the same thing
+# as cache=None). Even though feat_cache of None is valid in HF's module API, it is never executed
+# by HF's end-to-end encoder/decoder, which always pass a list. In fact, in our implementation of
+# WanResample, feat_cache=None in the downsample3d branch reproduces the cached path's arithmetic in
+# a single pass, so our result there will differ from HF's anyways (HF would do a no-op if
+# feat_cache=None).
+@pytest.mark.parametrize("cache_len", [0, 1, 2], ids=["cache_0", "cache_1", "cache_2"])
 @pytest.mark.parametrize("mean, std", [(0, 1)])
 @pytest.mark.parametrize(
     "mesh_device, h_axis, w_axis, num_links", MESH_CONFIGS_WITH_LINKS, ids=MESH_CONFIG_IDS, indirect=["mesh_device"]
@@ -1124,17 +1131,15 @@ def test_wan_resample(
     else:
         logger.warning("Computing reference results from scratch (wan_resample).")
         torch_input_tensor = torch.randn(B, dim, T, H, W, dtype=torch_dtype) * std + mean
-        torch_cache_tensors = None
-        if cache_len is not None:
-            torch_cache_tensors = []
-            for i in range(num_convs):
-                if cache_len == 0:
-                    torch_cache_tensors.append(None)
-                else:
-                    torch_cache_tensors.append(
-                        torch.randn(B, dim, cache_len, H // cache_divisor, W // cache_divisor, dtype=torch_dtype) * std
-                        + mean
-                    )
+        torch_cache_tensors = []
+        for i in range(num_convs):
+            if cache_len == 0:
+                torch_cache_tensors.append(None)
+            else:
+                torch_cache_tensors.append(
+                    torch.randn(B, dim, cache_len, H // cache_divisor, W // cache_divisor, dtype=torch_dtype) * std
+                    + mean
+                )
 
     tt_input_tensor, logical_h, _ = torch_to_tt_input(
         torch_input_tensor,
@@ -1145,33 +1150,24 @@ def test_wan_resample(
         height_factor_multiplier=pad_factor_multiplier,
     )
 
-    # cache_len=None: no caching at all (pass feat_cache=None)
-    # cache_len=0: empty cache, first iteration (list of Nones)
-    # cache_len=1,2: populated cache from previous passes
-    if cache_len is None:
-        torch_feat_cache = None
-        tt_feat_cache = None
-        torch_feat_idx = [0]
-        tt_feat_idx = [0]
-    else:
-        torch_feat_cache = []
-        tt_feat_cache = []
-        torch_feat_idx = [0]
-        tt_feat_idx = [0]
-        for i in range(num_convs):
-            if torch_cache_tensors[i] is not None:
-                torch_feat_cache.append(torch_cache_tensors[i])
-                tt_cache_tensor, _, _ = torch_to_tt_input(
-                    torch_cache_tensors[i],
-                    mesh_device=mesh_device,
-                    parallel_config=parallel_config,
-                    h_axis=h_axis,
-                    w_axis=w_axis,
-                )
-                tt_feat_cache.append(tt_cache_tensor)
-            else:
-                torch_feat_cache.append(None)
-                tt_feat_cache.append(None)
+    torch_feat_cache = []
+    tt_feat_cache = []
+    torch_feat_idx = [0]
+    tt_feat_idx = [0]
+    for i in range(num_convs):
+        if torch_cache_tensors[i] is not None:
+            torch_feat_cache.append(torch_cache_tensors[i])
+            tt_cache_tensor, _, _ = torch_to_tt_input(
+                torch_cache_tensors[i],
+                mesh_device=mesh_device,
+                parallel_config=parallel_config,
+                h_axis=h_axis,
+                w_axis=w_axis,
+            )
+            tt_feat_cache.append(tt_cache_tensor)
+        else:
+            torch_feat_cache.append(None)
+            tt_feat_cache.append(None)
 
     if golden is None:
         with torch.no_grad():
@@ -1622,7 +1618,7 @@ def test_wan_decoder3d(
 @pytest.mark.parametrize("T", [1, 10], ids=["_1f", "10f"])
 # @pytest.mark.parametrize("mean, std", [(0, 1), (2, 3), (-2, 3)])
 @pytest.mark.parametrize("mean, std", [(0, 1)])
-@pytest.mark.parametrize("t_chunk_size", [1, 4, None], ids=["chunk_1", "chunk_4", "no_cache_full_T"])
+@pytest.mark.parametrize("t_chunk_size", [1, 4, None], ids=["chunk_1", "chunk_4", "no_cache_fullT"])
 @pytest.mark.parametrize(
     "dtype, MIN_PCC, MAX_RMSE",
     [

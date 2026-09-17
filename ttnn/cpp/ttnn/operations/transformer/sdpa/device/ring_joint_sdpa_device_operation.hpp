@@ -50,7 +50,7 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     int32_t dim,
     const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
     uint32_t num_links,
-    uint32_t cluster_axis,
+    std::optional<uint32_t> cluster_axis,
     const MeshDevice& mesh_device,
     ttnn::ccl::Topology topology,
     CoreCoord ccl_core_grid_offset,
@@ -69,6 +69,7 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     const std::optional<ttnn::Tensor>& kv_actual_isl_tensor = std::nullopt,
     uint32_t kv_cache_num_layers = 1,
     uint32_t kv_cache_layer_idx = 0,
-    std::optional<uint32_t> sliding_window_size = std::nullopt);
+    std::optional<uint32_t> sliding_window_size = std::nullopt,
+    bool circular_kv_cache = false);
 
 }  // namespace ttnn::prim

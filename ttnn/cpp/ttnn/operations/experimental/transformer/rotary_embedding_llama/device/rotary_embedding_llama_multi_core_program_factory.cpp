@@ -52,7 +52,11 @@ ttnn::device_operation::ProgramArtifacts RotaryEmbeddingLlamaMultiCore::create_p
     const uint32_t rotary_seq_len_t = std::min({seq_len_t, cos_seq_len_t, sin_seq_len_t});
 
     if (seq_len_t != cos_seq_len_t || seq_len_t != sin_seq_len_t) {
-        log_warning(
+        // Routine during autoregressive decode: cos/sin caches are pre-allocated for the full
+        // context length while the input carries only the current token(s), so input_Ht is
+        // always smaller than cos_Ht/sin_Ht. This is expected, by-design behavior, not a
+        // degraded condition, so it is not actionable at warning severity.
+        log_debug(
             tt::LogOp,
             "rotary_embedding_llama sequence tile coverage mismatch: input_Ht={}, cos_Ht={}, sin_Ht={}, "
             "rotary_Ht={}. Tiles beyond rotary_Ht will be zero-filled in the output.",
@@ -228,7 +232,7 @@ ttnn::device_operation::ProgramArtifacts RotaryEmbeddingLlamaMultiCore::create_p
     KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source = kComputeSource,
-        .compiler_options = {.defines = reload_define},
+        .compiler_options = {.defines = reload_define, .opt_level = KernelBuildOptLevel::O3},
         .dfb_bindings =
             {DFBBinding{
                  .dfb_spec_name = INPUT_DFB, .accessor_name = "input", .endpoint_type = DFBEndpointType::CONSUMER},

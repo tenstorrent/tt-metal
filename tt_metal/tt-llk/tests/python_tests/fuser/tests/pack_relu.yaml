@@ -28,8 +28,7 @@ operations:
   # Input [0, 1.1] → Neg → [-1.1, 0]. No relu, negatives preserved.
   - math:
       - type: "Fpu"
-        src_a: "input_A"
-        src_b: "input_B"
+        in0: "input_A"
         operation: "Datacopy"
         unpacker: "UnpackerA"
         math_fidelity: "LoFi"
@@ -46,8 +45,8 @@ operations:
   # A - B ∈ [-1.1, 1.1], mix of pos/neg. ZERO_RELU zeros negatives.
   - math:
       - type: "Fpu"
-        src_a: "input_A"
-        src_b: "input_B"
+        in0: "input_A"
+        in1: "input_B"
         operation: "Elwsub"
         unpacker: "UnpackerAB"
         math_fidelity: "LoFi"
@@ -60,8 +59,7 @@ operations:
   # A ∈ [0.0, 1.1]. Values ≤ 0.5 zeroed, values > 0.5 kept.
   - math:
       - type: "Fpu"
-        src_a: "input_A"
-        src_b: "input_B"
+        in0: "input_A"
         operation: "Datacopy"
         unpacker: "UnpackerA"
         math_fidelity: "LoFi"
@@ -75,8 +73,8 @@ operations:
   # A * B ∈ [0, 1.21]. Clamped to [0, 0.5] by max threshold=0.5.
   - math:
       - type: "Fpu"
-        src_a: "input_A"
-        src_b: "input_B"
+        in0: "input_A"
+        in1: "input_B"
         operation: "Elwmul"
         unpacker: "UnpackerAB"
         math_fidelity: "LoFi"

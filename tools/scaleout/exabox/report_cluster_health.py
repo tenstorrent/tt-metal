@@ -27,6 +27,7 @@ from cluster_health_schema import SCHEMA_ID, TEST_TYPES, validate_record
 from report_adapters import reason_for, status_for
 from report_backfill import Leftover, discover_leftovers, filter_leftovers, leftover_key, parse_window_date
 from analyze_host_health_results import parse_diag_report
+from summarize_physical_artifact import as_pass_pct, summarize_physical_artifact
 from resolve_host_ring_order import (
     parse_textproto,
     read_descriptor_text,
@@ -434,6 +435,7 @@ class RecordRequest:
     ts: str | None
     incomplete: bool = False
     incomplete_reason: str = ""
+    pass_pct: float | None = None
 
 
 def _cli_overlay(args: argparse.Namespace) -> dict[str, Any]:
@@ -458,10 +460,52 @@ def _cli_overlay(args: argparse.Namespace) -> dict[str, Any]:
     }
 
 
+def apply_physical_inference(
+    request: RecordRequest,
+    *,
+    pass_pct_override: float | None = None,
+    infer_hosts: bool = False,
+    infer_code: bool = False,
+) -> RecordRequest:
+    """Fill physical ``pass_pct`` (and optional hosts/code) from artifact logs."""
+    if request.test_type != "physical" or request.incomplete:
+        if pass_pct_override is not None:
+            request.pass_pct = pass_pct_override
+        return request
+
+    summary = summarize_physical_artifact(request.artifact_dir)
+    if pass_pct_override is not None:
+        request.pass_pct = pass_pct_override
+    elif summary.pass_pct is not None:
+        request.pass_pct = summary.pass_pct
+
+    if infer_code and request.analyzer_code is None and summary.analyzer_code is not None:
+        request.analyzer_code = summary.analyzer_code
+
+    if infer_hosts and not parse_hosts(request.hosts) and summary.hosts:
+        _warn(f"inferred hosts from artifact: {summary.hosts}")
+        request.hosts = summary.hosts
+    return request
+
+
+def resolve_pass_pct_override(raw: Any) -> float | None:
+    """Validate an explicit ``--pass-pct`` value, or return None when omitted.
+
+    Raises ValueError when the option was supplied but is not a finite number
+    in [0, 100]. Callers must not treat that case as “infer from artifact.”
+    """
+    if raw is None:
+        return None
+    rate = as_pass_pct(raw)
+    if rate is None:
+        raise ValueError("pass_pct: must be a finite number in [0, 100]")
+    return rate
+
+
 def record_request_from_cli(args: argparse.Namespace) -> RecordRequest:
-    return RecordRequest(
+    request = RecordRequest(
         test_type=args.test_type,
-        hosts=args.hosts,
+        hosts=args.hosts or "",
         analyzer_code=args.analyzer_code,
         artifact_dir=args.artifact_dir,
         duration_s=args.duration_s,
@@ -469,6 +513,12 @@ def record_request_from_cli(args: argparse.Namespace) -> RecordRequest:
         incomplete=bool(getattr(args, "incomplete", False)),
         incomplete_reason=getattr(args, "incomplete_reason", "") or "",
         **_cli_overlay(args),
+    )
+    return apply_physical_inference(
+        request,
+        pass_pct_override=resolve_pass_pct_override(getattr(args, "pass_pct", None)),
+        infer_hosts=not parse_hosts(request.hosts),
+        infer_code=args.analyzer_code is None,
     )
 
 
@@ -517,6 +567,11 @@ def build_record(args: RecordRequest) -> dict[str, Any]:
 
     if args.duration_s is not None:
         record["duration_s"] = args.duration_s
+
+    if args.test_type == "physical":
+        rate = as_pass_pct(args.pass_pct)
+        if rate is not None:
+            record["pass_pct"] = rate
 
     labels = parse_labels(args.label)
     if status != "passed" and "failure_reason" not in labels:
@@ -701,7 +756,7 @@ def leftover_namespace(leftover: Leftover, args: argparse.Namespace) -> RecordRe
     overlay["label"] = labels
     overlay["source"] = args.source or "backfill"
     overlay["trigger_kind"] = args.trigger_kind or "backfill"
-    return RecordRequest(
+    request = RecordRequest(
         test_type=leftover.test_type,
         hosts=leftover.hosts,
         analyzer_code=leftover.analyzer_code,
@@ -712,6 +767,17 @@ def leftover_namespace(leftover: Leftover, args: argparse.Namespace) -> RecordRe
         incomplete_reason=leftover.incomplete_reason,
         **overlay,
     )
+    request = apply_physical_inference(request, infer_hosts=False, infer_code=False)
+    if (
+        request.test_type == "physical"
+        and not request.incomplete
+        and request.pass_pct is None
+        and leftover.source.is_file()
+    ):
+        from_wrapper = summarize_physical_artifact(leftover.source)
+        if from_wrapper.pass_pct is not None:
+            request.pass_pct = from_wrapper.pass_pct
+    return request
 
 
 def run_backfill(args: argparse.Namespace) -> int:
@@ -859,6 +925,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dry-run", action="store_true", help="Print JSON only; never write")
     parser.add_argument("--duration-s", dest="duration_s", type=float)
     parser.add_argument("--ts", help="RFC3339 UTC timestamp (default: now)")
+    parser.add_argument(
+        "--pass-pct",
+        dest="pass_pct",
+        type=float,
+        default=None,
+        help=argparse.SUPPRESS,
+    )
     parser.add_argument("--topology", default=None, help=argparse.SUPPRESS)
     return parser
 
@@ -878,11 +951,17 @@ def main(argv: list[str] | None = None) -> int:
         if args.test_type or args.hosts or args.artifact_dir:
             parser.error("--from-artifact-dir cannot be combined with --test-type / --hosts / --artifact-dir")
         return run_backfill(args)
-    if not args.test_type or not args.hosts or not args.artifact_dir:
-        parser.error(
-            "--test-type, --hosts, and --artifact-dir are required "
-            "(or pass --from-artifact-dir / --from-diag-report)"
-        )
+    if not args.test_type or not args.artifact_dir:
+        parser.error("--test-type and --artifact-dir are required (or pass --from-artifact-dir / --from-diag-report)")
+    if args.pass_pct is not None and args.test_type != "physical":
+        parser.error("--pass-pct is only valid with --test-type physical")
+    if args.pass_pct is not None:
+        try:
+            resolve_pass_pct_override(args.pass_pct)
+        except ValueError as exc:
+            parser.error(str(exc))
+    if not args.hosts and args.test_type != "physical":
+        parser.error("--hosts is required (physical can infer hosts from --artifact-dir)")
     try:
         record = build_record(record_request_from_cli(args))
     except ValueError as exc:
