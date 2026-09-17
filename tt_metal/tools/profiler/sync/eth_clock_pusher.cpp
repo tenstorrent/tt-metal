@@ -564,9 +564,20 @@ inline uint32_t pack_linked_frame(uint32_t xy, uint32_t prof_l1) {
         return 0;
     }
     for (uint32_t r = 0; r < kNumEthRisc; r++) {
-        if (takes[r] != 0) {
-            const uint32_t ring_l1 = prof_l1 + kp::PROFILER_L1_CONTROL_BUFFER_SIZE + r * kRingBytes;
-            noc_async_read(get_noc_addr(x, y, ring_l1), img_base + r * kRingBytes, kRingBytes);
+        if (takes[r] == 0) {
+            continue;
+        }
+        const uint32_t ring_l1 = prof_l1 + kp::PROFILER_L1_CONTROL_BUFFER_SIZE + r * kRingBytes;
+        const uint32_t img = img_base + r * kRingBytes;
+        const uint32_t hm = starts[r] & (kRingWords - 1u);
+        if (hm + takes[r] <= kRingWords) {
+            noc_async_read(get_noc_addr(x, y, ring_l1 + hm * 4u), img + hm * 4u, takes[r] * 4u);
+        } else if (kp::spsc_span_wrap_image(starts[r], takes[r], kRingWords)) {
+            noc_async_read(get_noc_addr(x, y, ring_l1), img, kRingBytes);
+        } else {
+            const uint32_t first = kRingWords - hm;
+            noc_async_read(get_noc_addr(x, y, ring_l1 + hm * 4u), img + hm * 4u, first * 4u);
+            noc_async_read(get_noc_addr(x, y, ring_l1), img, (takes[r] - first) * 4u);
         }
     }
     noc_async_read_barrier();
