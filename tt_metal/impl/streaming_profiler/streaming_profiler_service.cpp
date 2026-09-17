@@ -292,7 +292,6 @@ void Service::register_builtin_consumers(const tt::llrt::RunTimeOptions& rtoptio
     std::call_once(builtins_once_, [&] {
         if (rtoptions.get_streaming_profiler_tracy_enabled()) {
             tracy_ = std::make_unique<TracySink>(*this);
-            sync_->plot_to_tracy(true);
         }
         auto add_public = [&]<typename C>(const char* name, const std::shared_ptr<C>& c) {
             using B = typename C::Batch;

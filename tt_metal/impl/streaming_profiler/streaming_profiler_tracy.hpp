@@ -6,7 +6,6 @@
 
 #include <array>
 #include <cstdint>
-#include <cstdlib>
 #include <span>
 #include <string>
 #include <string_view>
@@ -56,9 +55,6 @@ private:
     };
 
     void on_batch(const Batch& batch);
-    // TT_METAL_STREAMING_PROFILER_TRACY_PLOTS_ONLY: the trace carries the clock and d2d sync plots and no records,
-    // so an hours-long stress capture stays a few MB.
-    const bool plots_only_ = std::getenv("TT_METAL_STREAMING_PROFILER_TRACY_PLOTS_ONLY") != nullptr;
     void emit_zone(const experimental::streaming_profiler::Zone& z);
     void emit_data(const experimental::streaming_profiler::TimestampedData& d);
     void emit_event(const experimental::streaming_profiler::Event& e);

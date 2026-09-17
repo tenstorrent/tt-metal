@@ -1022,9 +1022,6 @@ void SyncEngine::publish_clock_plots() {
 
 void SyncEngine::plot([[maybe_unused]] const std::string& name, [[maybe_unused]] const std::vector<PlotPoint>& points) {
 #if defined(TRACY_ENABLE)
-    if (!plots_to_tracy_) {
-        return;
-    }
     const char* nm = plot_names_.insert(name).first->c_str();
     for (const PlotPoint& p : points) {
         if (p.tsc > 0) {

@@ -327,8 +327,6 @@ public:
     // host series.
     PlacementMap& map() { return map_; }
     const PlacementMap& map() const { return map_; }
-    // Whether on_capture_end's series (each chip's AICLK, the sync error per link) go to Tracy as plots.
-    void plot_to_tracy(bool on) { plots_to_tracy_ = on; }
 
 private:
     using Round = LinkSolver::Round;
@@ -350,7 +348,9 @@ private:
     };
     bool round_error(
         const CaptureContext::Link& L, const Round& r, int64_t& tsc_a, double& err, RoundTerms* terms = nullptr) const;
-    // A (host TSC tick, value) series as a Tracy plot; the TSC is the timer stamp Tracy places it by.
+    // A (host TSC tick, value) series as a Tracy plot (each chip's AICLK, the sync error per link); the TSC is the
+    // timer stamp Tracy places it by. Emitted whenever Tracy is compiled in: the record sink is what an env var
+    // turns on, the plots ride with the profiler.
     struct PlotPoint {
         int64_t tsc = 0;
         double value = 0.0;
@@ -365,7 +365,6 @@ private:
     // The composed root transforms as of the newest accepted link solution.
     std::map<uint32_t, RootXf> to_root_;
     uint64_t to_root_gen_ = ~0ull;
-    bool plots_to_tracy_ = false;
     std::unordered_set<std::string> plot_names_;  // Tracy keys a plot by its name's address, for the process
 };
 

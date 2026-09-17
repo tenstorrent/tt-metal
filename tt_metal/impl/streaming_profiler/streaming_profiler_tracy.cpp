@@ -93,9 +93,6 @@ TracySink::~TracySink() {
 }
 
 void TracySink::on_batch(const Batch& batch) {
-    if (plots_only_) {
-        return;
-    }
     for (const api::Zone& z : batch.zones()) {
         emit_zone(z);
     }
