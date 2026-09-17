@@ -372,6 +372,8 @@ def _findings(envelope: dict) -> dict:
     code is not a clean run, and this is the field that says so. WARN, not FAIL:
     it is lost coverage, not a statement about the hardware.
     """
+    if not envelope:
+        return check("qsfp_findings", WARN, "snapshot envelope missing; collector findings unavailable", ip="other")
     findings = [str(f) for f in (envelope.get("FINDINGS") or [])]
     if not findings:
         return check("qsfp_findings", PASS, "collector reported no findings", ip="other")
