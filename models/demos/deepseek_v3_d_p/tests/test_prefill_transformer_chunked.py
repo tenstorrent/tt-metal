@@ -2395,8 +2395,9 @@ def glm_chunked_perf_gate(variant, use_trace, num_layers, n_chunks, num_iters, p
 @pytest.mark.parametrize("variant", ["kimi_k2_7"], indirect=True, ids=["kimi_k2_7"])
 @pytest.mark.skipif(not is_blackhole(), reason="Kimi requires Blackhole")
 @pytest.mark.skipif(
-    not is_high_power(),
-    reason="perf job requires a high-power (>=130W TDP) galaxy; guards the exabox.tenstorrent.com/power=14kw label",
+    not (is_high_power() or os.environ.get("DS_PERF_IGNORE_POWER") == "1"),
+    reason="perf job requires a high-power (>=130W TDP) galaxy; guards the exabox.tenstorrent.com/power=14kw label. "
+    "DS_PERF_IGNORE_POWER=1 runs it anyway, for bring-up only",
 )
 @pytest.mark.timeout(0)
 def test_kimi_prefill_transformer_chunked_perf(
@@ -2648,8 +2649,9 @@ def test_ds_prefill_transformer_chunked_no_pcc(
 @pytest.mark.parametrize("variant", ["glm_5_1", "glm_5_2"], indirect=True, ids=["glm51", "glm52"])
 @pytest.mark.skipif(not is_blackhole(), reason="GLM DSA ops (indexer / sparse SDPA) are Blackhole-only")
 @pytest.mark.skipif(
-    not is_high_power(),
-    reason="perf job requires a high-power (>=130W TDP) galaxy; guards the exabox.tenstorrent.com/power=14kw label",
+    not (is_high_power() or os.environ.get("DS_PERF_IGNORE_POWER") == "1"),
+    reason="perf job requires a high-power (>=130W TDP) galaxy; guards the exabox.tenstorrent.com/power=14kw label. "
+    "DS_PERF_IGNORE_POWER=1 runs it anyway, for bring-up only",
 )
 @pytest.mark.timeout(0)
 def test_glm_prefill_transformer_chunked_no_pcc(
