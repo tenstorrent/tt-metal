@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "context_length": 16384,
+  "repository": "/absolute/path/to/tt-metal",
+  "checkpoint": "/absolute/path/to/Llama-3.1-8B-Instruct",
+  "source_pins": {
+    "path": "/absolute/path/to/source-pins.json",
+    "sha256": "REPLACE_WITH_SHA256"
+  },
+  "book_fixture": {
+    "manifest_path": "/absolute/path/to/book-manifest.json",
+    "manifest_sha256": "REPLACE_WITH_SHA256"
+  }
+}

@@ -1,0 +1,736 @@
+{
+  "samples": [
+    {
+      "slot": 0,
+      "phase": "warmup",
+      "repetition": 0,
+      "tokens": 2048,
+      "prompt_wall_seconds": 177.83202608700958,
+      "forward_wall_seconds": 177.82038696599193,
+      "tokens_per_second_per_user": 11.51648578191397,
+      "prompt_unattributed_wall_seconds": 1.782603794708848e-05,
+      "programs_before": 10,
+      "programs_after": 116,
+      "chunks": [
+        {
+          "start": 0,
+          "end": 1024,
+          "tokens": 1024,
+          "prompt_chunk_wall_seconds": 160.93137549998937,
+          "forward_wall_seconds": 160.92077357298695,
+          "upload_and_sync_wall_seconds": 0.010601927002426237
+        },
+        {
+          "start": 1024,
+          "end": 2048,
+          "tokens": 1024,
+          "prompt_chunk_wall_seconds": 16.900632760982262,
+          "forward_wall_seconds": 16.899613393004984,
+          "upload_and_sync_wall_seconds": 0.001019367977278307
+        }
+      ],
+      "clock_timestamps": {
+        "prompt_start": 177669.566981616,
+        "prompt_end": 177847.399007703,
+        "chunks": [
+          {
+            "start": 0,
+            "end": 1024,
+            "chunk_start": 177669.566983088,
+            "forward_start": 177669.577585015,
+            "forward_end": 177830.498358588
+          },
+          {
+            "start": 1024,
+            "end": 2048,
+            "chunk_start": 177830.498364927,
+            "forward_start": 177830.499384295,
+            "forward_end": 177847.398997688
+          }
+        ]
+      }
+    },
+    {
+      "slot": 1,
+      "phase": "warmup",
+      "repetition": 0,
+      "tokens": 2048,
+      "prompt_wall_seconds": 0.4258817990194075,
+      "forward_wall_seconds": 0.4239085909794085,
+      "tokens_per_second_per_user": 4808.846033607256,
+      "prompt_unattributed_wall_seconds": 6.420013960450888e-06,
+      "programs_before": 116,
+      "programs_after": 116,
+      "chunks": [
+        {
+          "start": 0,
+          "end": 1024,
+          "tokens": 1024,
+          "prompt_chunk_wall_seconds": 0.22075284301536158,
+          "forward_wall_seconds": 0.21978882799157873,
+          "upload_and_sync_wall_seconds": 0.0009640150237828493
+        },
+        {
+          "start": 1024,
+          "end": 2048,
+          "tokens": 1024,
+          "prompt_chunk_wall_seconds": 0.20512253599008545,
+          "forward_wall_seconds": 0.20411976298782974,
+          "upload_and_sync_wall_seconds": 0.001002773002255708
+        }
+      ],
+      "clock_timestamps": {
+        "prompt_start": 177848.617707584,
+        "prompt_end": 177849.043589383,
+        "chunks": [
+          {
+            "start": 0,
+            "end": 1024,
+            "chunk_start": 177848.617708505,
+            "forward_start": 177848.61867252,
+            "forward_end": 177848.838461348
+          },
+          {
+            "start": 1024,
+            "end": 2048,
+            "chunk_start": 177848.838464263,
+            "forward_start": 177848.839467036,
+            "forward_end": 177849.043586799
+          }
+        ]
+      }
+    },
+    {
+      "slot": 0,
+      "phase": "measured",
+      "repetition": 0,
+      "tokens": 2048,
+      "prompt_wall_seconds": 0.42717061200528406,
+      "forward_wall_seconds": 0.42520251200767234,
+      "tokens_per_second_per_user": 4794.337303275597,
+      "prompt_unattributed_wall_seconds": 6.48896093480289e-06,
+      "programs_before": 116,
+      "programs_after": 116,
+      "chunks": [
+        {
+          "start": 0,
+          "end": 1024,
+          "tokens": 1024,
+          "prompt_chunk_wall_seconds": 0.21861417702166364,
+          "forward_wall_seconds": 0.21767578000435606,
+          "upload_and_sync_wall_seconds": 0.0009383970173075795
+        },
+        {
+          "start": 1024,
+          "end": 2048,
+          "tokens": 1024,
+          "prompt_chunk_wall_seconds": 0.20854994602268562,
+          "forward_wall_seconds": 0.20752673200331628,
+          "upload_and_sync_wall_seconds": 0.001023214019369334
+        }
+      ],
+      "clock_timestamps": {
+        "prompt_start": 177850.210196472,
+        "prompt_end": 177850.637367084,
+        "chunks": [
+          {
+            "start": 0,
+            "end": 1024,
+            "chunk_start": 177850.210197263,
+            "forward_start": 177850.21113566,
+            "forward_end": 177850.42881144
+          },
+          {
+            "start": 1024,
+            "end": 2048,
+            "chunk_start": 177850.428814244,
+            "forward_start": 177850.429837458,
+            "forward_end": 177850.63736419
+          }
+        ]
+      }
+    },
+    {
+      "slot": 1,
+      "phase": "measured",
+      "repetition": 0,
+      "tokens": 2048,
+      "prompt_wall_seconds": 0.43499787998734973,
+      "forward_wall_seconds": 0.4308644520060625,
+      "tokens_per_second_per_user": 4708.068922219939,
+      "prompt_unattributed_wall_seconds": 6.9909729063510895e-06,
+      "programs_before": 116,
+      "programs_after": 116,
+      "chunks": [
+        {
+          "start": 0,
+          "end": 1024,
+          "tokens": 1024,
+          "prompt_chunk_wall_seconds": 0.2244120610121172,
+          "forward_wall_seconds": 0.22337344399420545,
+          "upload_and_sync_wall_seconds": 0.001038617017911747
+        },
+        {
+          "start": 1024,
+          "end": 2048,
+          "tokens": 1024,
+          "prompt_chunk_wall_seconds": 0.2105788280023262,
+          "forward_wall_seconds": 0.20749100801185705,
+          "upload_and_sync_wall_seconds": 0.003087819990469143
+        }
+      ],
+      "clock_timestamps": {
+        "prompt_start": 177851.836388588,
+        "prompt_end": 177852.271386468,
+        "chunks": [
+          {
+            "start": 0,
+            "end": 1024,
+            "chunk_start": 177851.83638956,
+            "forward_start": 177851.837428177,
+            "forward_end": 177852.060801621
+          },
+          {
+            "start": 1024,
+            "end": 2048,
+            "chunk_start": 177852.060804685,
+            "forward_start": 177852.063892505,
+            "forward_end": 177852.271383513
+          }
+        ]
+      }
+    },
+    {
+      "slot": 0,
+      "phase": "measured",
+      "repetition": 1,
+      "tokens": 2048,
+      "prompt_wall_seconds": 0.4325621770112775,
+      "forward_wall_seconds": 0.4306077270011883,
+      "tokens_per_second_per_user": 4734.579463582193,
+      "prompt_unattributed_wall_seconds": 8.051982149481773e-06,
+      "programs_before": 116,
+      "programs_after": 116,
+      "chunks": [
+        {
+          "start": 0,
+          "end": 1024,
+          "tokens": 1024,
+          "prompt_chunk_wall_seconds": 0.22341761901043355,
+          "forward_wall_seconds": 0.22245835099602118,
+          "upload_and_sync_wall_seconds": 0.0009592680144123733
+        },
+        {
+          "start": 1024,
+          "end": 2048,
+          "tokens": 1024,
+          "prompt_chunk_wall_seconds": 0.2091365060186945,
+          "forward_wall_seconds": 0.20814937600516714,
+          "upload_and_sync_wall_seconds": 0.0009871300135273486
+        }
+      ],
+      "clock_timestamps": {
+        "prompt_start": 177853.471422804,
+        "prompt_end": 177853.903984981,
+        "chunks": [
+          {
+            "start": 0,
+            "end": 1024,
+            "chunk_start": 177853.471423716,
+            "forward_start": 177853.472382984,
+            "forward_end": 177853.694841335
+          },
+          {
+            "start": 1024,
+            "end": 2048,
+            "chunk_start": 177853.6948448,
+            "forward_start": 177853.69583193,
+            "forward_end": 177853.903981306
+          }
+        ]
+      }
+    },
+    {
+      "slot": 1,
+      "phase": "measured",
+      "repetition": 1,
+      "tokens": 2048,
+      "prompt_wall_seconds": 0.4317129030241631,
+      "forward_wall_seconds": 0.42966113801230676,
+      "tokens_per_second_per_user": 4743.89342003376,
+      "prompt_unattributed_wall_seconds": 7.4410345405340195e-06,
+      "programs_before": 116,
+      "programs_after": 116,
+      "chunks": [
+        {
+          "start": 0,
+          "end": 1024,
+          "tokens": 1024,
+          "prompt_chunk_wall_seconds": 0.2224554969870951,
+          "forward_wall_seconds": 0.2214252830017358,
+          "upload_and_sync_wall_seconds": 0.0010302139853592962
+        },
+        {
+          "start": 1024,
+          "end": 2048,
+          "tokens": 1024,
+          "prompt_chunk_wall_seconds": 0.20924996500252746,
+          "forward_wall_seconds": 0.20823585501057096,
+          "upload_and_sync_wall_seconds": 0.0010141099919565022
+        }
+      ],
+      "clock_timestamps": {
+        "prompt_start": 177855.095256596,
+        "prompt_end": 177855.526969499,
+        "chunks": [
+          {
+            "start": 0,
+            "end": 1024,
+            "chunk_start": 177855.095257397,
+            "forward_start": 177855.096287611,
+            "forward_end": 177855.317712894
+          },
+          {
+            "start": 1024,
+            "end": 2048,
+            "chunk_start": 177855.317716179,
+            "forward_start": 177855.318730289,
+            "forward_end": 177855.526966144
+          }
+        ]
+      }
+    },
+    {
+      "slot": 0,
+      "phase": "measured",
+      "repetition": 2,
+      "tokens": 2048,
+      "prompt_wall_seconds": 0.434197108988883,
+      "forward_wall_seconds": 0.43214887802605517,
+      "tokens_per_second_per_user": 4716.751810644681,
+      "prompt_unattributed_wall_seconds": 6.7909713834524155e-06,
+      "programs_before": 116,
+      "programs_after": 116,
+      "chunks": [
+        {
+          "start": 0,
+          "end": 1024,
+          "tokens": 1024,
+          "prompt_chunk_wall_seconds": 0.22497282101539895,
+          "forward_wall_seconds": 0.22392862601554953,
+          "upload_and_sync_wall_seconds": 0.0010441949998494238
+        },
+        {
+          "start": 1024,
+          "end": 2048,
+          "tokens": 1024,
+          "prompt_chunk_wall_seconds": 0.20921749700210057,
+          "forward_wall_seconds": 0.20822025201050565,
+          "upload_and_sync_wall_seconds": 0.0009972449915949255
+        }
+      ],
+      "clock_timestamps": {
+        "prompt_start": 177856.759195084,
+        "prompt_end": 177857.193392193,
+        "chunks": [
+          {
+            "start": 0,
+            "end": 1024,
+            "chunk_start": 177856.759196156,
+            "forward_start": 177856.760240351,
+            "forward_end": 177856.984168977
+          },
+          {
+            "start": 1024,
+            "end": 2048,
+            "chunk_start": 177856.984172092,
+            "forward_start": 177856.985169337,
+            "forward_end": 177857.193389589
+          }
+        ]
+      }
+    },
+    {
+      "slot": 1,
+      "phase": "measured",
+      "repetition": 2,
+      "tokens": 2048,
+      "prompt_wall_seconds": 0.42961277498397976,
+      "forward_wall_seconds": 0.4275954389886465,
+      "tokens_per_second_per_user": 4767.083567466935,
+      "prompt_unattributed_wall_seconds": 6.870977813377976e-06,
+      "programs_before": 116,
+      "programs_after": 116,
+      "chunks": [
+        {
+          "start": 0,
+          "end": 1024,
+          "tokens": 1024,
+          "prompt_chunk_wall_seconds": 0.22127037000609562,
+          "forward_wall_seconds": 0.2202942160074599,
+          "upload_and_sync_wall_seconds": 0.0009761539986357093
+        },
+        {
+          "start": 1024,
+          "end": 2048,
+          "tokens": 1024,
+          "prompt_chunk_wall_seconds": 0.20833553400007077,
+          "forward_wall_seconds": 0.20730122298118658,
+          "upload_and_sync_wall_seconds": 0.001034311018884182
+        }
+      ],
+      "clock_timestamps": {
+        "prompt_start": 177858.394508941,
+        "prompt_end": 177858.824121716,
+        "chunks": [
+          {
+            "start": 0,
+            "end": 1024,
+            "chunk_start": 177858.394509812,
+            "forward_start": 177858.395485966,
+            "forward_end": 177858.615780182
+          },
+          {
+            "start": 1024,
+            "end": 2048,
+            "chunk_start": 177858.615783027,
+            "forward_start": 177858.616817338,
+            "forward_end": 177858.824118561
+          }
+        ]
+      }
+    }
+  ],
+  "summary": {
+    "per_slot": [
+      {
+        "slot": 0,
+        "measured_requests": 3,
+        "prompt_wall_seconds": {
+          "count": 3,
+          "minimum": 0.42717061200528406,
+          "median": 0.4325621770112775,
+          "maximum": 0.434197108988883,
+          "samples": [
+            0.42717061200528406,
+            0.4325621770112775,
+            0.434197108988883
+          ]
+        },
+        "forward_wall_seconds": {
+          "count": 3,
+          "minimum": 0.42520251200767234,
+          "median": 0.4306077270011883,
+          "maximum": 0.43214887802605517,
+          "samples": [
+            0.42520251200767234,
+            0.4306077270011883,
+            0.43214887802605517
+          ]
+        },
+        "tokens_per_second_per_user": {
+          "count": 3,
+          "minimum": 4716.751810644681,
+          "median": 4734.579463582193,
+          "maximum": 4794.337303275597,
+          "samples": [
+            4794.337303275597,
+            4734.579463582193,
+            4716.751810644681
+          ]
+        },
+        "chunks": [
+          {
+            "start": 0,
+            "end": 1024,
+            "prompt_chunk_wall_seconds": {
+              "count": 3,
+              "minimum": 0.21861417702166364,
+              "median": 0.22341761901043355,
+              "maximum": 0.22497282101539895,
+              "samples": [
+                0.21861417702166364,
+                0.22341761901043355,
+                0.22497282101539895
+              ]
+            },
+            "forward_wall_seconds": {
+              "count": 3,
+              "minimum": 0.21767578000435606,
+              "median": 0.22245835099602118,
+              "maximum": 0.22392862601554953,
+              "samples": [
+                0.21767578000435606,
+                0.22245835099602118,
+                0.22392862601554953
+              ]
+            },
+            "upload_and_sync_wall_seconds": {
+              "count": 3,
+              "minimum": 0.0009383970173075795,
+              "median": 0.0009592680144123733,
+              "maximum": 0.0010441949998494238,
+              "samples": [
+                0.0009383970173075795,
+                0.0009592680144123733,
+                0.0010441949998494238
+              ]
+            }
+          },
+          {
+            "start": 1024,
+            "end": 2048,
+            "prompt_chunk_wall_seconds": {
+              "count": 3,
+              "minimum": 0.20854994602268562,
+              "median": 0.2091365060186945,
+              "maximum": 0.20921749700210057,
+              "samples": [
+                0.20854994602268562,
+                0.2091365060186945,
+                0.20921749700210057
+              ]
+            },
+            "forward_wall_seconds": {
+              "count": 3,
+              "minimum": 0.20752673200331628,
+              "median": 0.20814937600516714,
+              "maximum": 0.20822025201050565,
+              "samples": [
+                0.20752673200331628,
+                0.20814937600516714,
+                0.20822025201050565
+              ]
+            },
+            "upload_and_sync_wall_seconds": {
+              "count": 3,
+              "minimum": 0.0009871300135273486,
+              "median": 0.0009972449915949255,
+              "maximum": 0.001023214019369334,
+              "samples": [
+                0.001023214019369334,
+                0.0009871300135273486,
+                0.0009972449915949255
+              ]
+            }
+          }
+        ]
+      },
+      {
+        "slot": 1,
+        "measured_requests": 3,
+        "prompt_wall_seconds": {
+          "count": 3,
+          "minimum": 0.42961277498397976,
+          "median": 0.4317129030241631,
+          "maximum": 0.43499787998734973,
+          "samples": [
+            0.43499787998734973,
+            0.4317129030241631,
+            0.42961277498397976
+          ]
+        },
+        "forward_wall_seconds": {
+          "count": 3,
+          "minimum": 0.4275954389886465,
+          "median": 0.42966113801230676,
+          "maximum": 0.4308644520060625,
+          "samples": [
+            0.4308644520060625,
+            0.42966113801230676,
+            0.4275954389886465
+          ]
+        },
+        "tokens_per_second_per_user": {
+          "count": 3,
+          "minimum": 4708.068922219939,
+          "median": 4743.89342003376,
+          "maximum": 4767.083567466935,
+          "samples": [
+            4708.068922219939,
+            4743.89342003376,
+            4767.083567466935
+          ]
+        },
+        "chunks": [
+          {
+            "start": 0,
+            "end": 1024,
+            "prompt_chunk_wall_seconds": {
+              "count": 3,
+              "minimum": 0.22127037000609562,
+              "median": 0.2224554969870951,
+              "maximum": 0.2244120610121172,
+              "samples": [
+                0.2244120610121172,
+                0.2224554969870951,
+                0.22127037000609562
+              ]
+            },
+            "forward_wall_seconds": {
+              "count": 3,
+              "minimum": 0.2202942160074599,
+              "median": 0.2214252830017358,
+              "maximum": 0.22337344399420545,
+              "samples": [
+                0.22337344399420545,
+                0.2214252830017358,
+                0.2202942160074599
+              ]
+            },
+            "upload_and_sync_wall_seconds": {
+              "count": 3,
+              "minimum": 0.0009761539986357093,
+              "median": 0.0010302139853592962,
+              "maximum": 0.001038617017911747,
+              "samples": [
+                0.001038617017911747,
+                0.0010302139853592962,
+                0.0009761539986357093
+              ]
+            }
+          },
+          {
+            "start": 1024,
+            "end": 2048,
+            "prompt_chunk_wall_seconds": {
+              "count": 3,
+              "minimum": 0.20833553400007077,
+              "median": 0.20924996500252746,
+              "maximum": 0.2105788280023262,
+              "samples": [
+                0.2105788280023262,
+                0.20924996500252746,
+                0.20833553400007077
+              ]
+            },
+            "forward_wall_seconds": {
+              "count": 3,
+              "minimum": 0.20730122298118658,
+              "median": 0.20749100801185705,
+              "maximum": 0.20823585501057096,
+              "samples": [
+                0.20749100801185705,
+                0.20823585501057096,
+                0.20730122298118658
+              ]
+            },
+            "upload_and_sync_wall_seconds": {
+              "count": 3,
+              "minimum": 0.0010141099919565022,
+              "median": 0.001034311018884182,
+              "maximum": 0.003087819990469143,
+              "samples": [
+                0.003087819990469143,
+                0.0010141099919565022,
+                0.001034311018884182
+              ]
+            }
+          }
+        ]
+      }
+    ],
+    "warmups": [
+      {
+        "slot": 0,
+        "phase": "warmup",
+        "repetition": 0,
+        "tokens": 2048,
+        "prompt_wall_seconds": 177.83202608700958,
+        "forward_wall_seconds": 177.82038696599193,
+        "tokens_per_second_per_user": 11.51648578191397,
+        "prompt_unattributed_wall_seconds": 1.782603794708848e-05,
+        "programs_before": 10,
+        "programs_after": 116,
+        "chunks": [
+          {
+            "start": 0,
+            "end": 1024,
+            "tokens": 1024,
+            "prompt_chunk_wall_seconds": 160.93137549998937,
+            "forward_wall_seconds": 160.92077357298695,
+            "upload_and_sync_wall_seconds": 0.010601927002426237
+          },
+          {
+            "start": 1024,
+            "end": 2048,
+            "tokens": 1024,
+            "prompt_chunk_wall_seconds": 16.900632760982262,
+            "forward_wall_seconds": 16.899613393004984,
+            "upload_and_sync_wall_seconds": 0.001019367977278307
+          }
+        ],
+        "clock_timestamps": {
+          "prompt_start": 177669.566981616,
+          "prompt_end": 177847.399007703,
+          "chunks": [
+            {
+              "start": 0,
+              "end": 1024,
+              "chunk_start": 177669.566983088,
+              "forward_start": 177669.577585015,
+              "forward_end": 177830.498358588
+            },
+            {
+              "start": 1024,
+              "end": 2048,
+              "chunk_start": 177830.498364927,
+              "forward_start": 177830.499384295,
+              "forward_end": 177847.398997688
+            }
+          ]
+        }
+      },
+      {
+        "slot": 1,
+        "phase": "warmup",
+        "repetition": 0,
+        "tokens": 2048,
+        "prompt_wall_seconds": 0.4258817990194075,
+        "forward_wall_seconds": 0.4239085909794085,
+        "tokens_per_second_per_user": 4808.846033607256,
+        "prompt_unattributed_wall_seconds": 6.420013960450888e-06,
+        "programs_before": 116,
+        "programs_after": 116,
+        "chunks": [
+          {
+            "start": 0,
+            "end": 1024,
+            "tokens": 1024,
+            "prompt_chunk_wall_seconds": 0.22075284301536158,
+            "forward_wall_seconds": 0.21978882799157873,
+            "upload_and_sync_wall_seconds": 0.0009640150237828493
+          },
+          {
+            "start": 1024,
+            "end": 2048,
+            "tokens": 1024,
+            "prompt_chunk_wall_seconds": 0.20512253599008545,
+            "forward_wall_seconds": 0.20411976298782974,
+            "upload_and_sync_wall_seconds": 0.001002773002255708
+          }
+        ],
+        "clock_timestamps": {
+          "prompt_start": 177848.617707584,
+          "prompt_end": 177849.043589383,
+          "chunks": [
+            {
+              "start": 0,
+              "end": 1024,
+              "chunk_start": 177848.617708505,
+              "forward_start": 177848.61867252,
+              "forward_end": 177848.838461348
+            },
+            {
+              "start": 1024,
+              "end": 2048,
+              "chunk_start": 177848.838464263,
+              "forward_start": 177848.839467036,
+              "forward_end": 177849.043586799
+            }
+          ]
+        }
+      }
+    ]
+  }
+}
