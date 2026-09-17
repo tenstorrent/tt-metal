@@ -1555,7 +1555,7 @@ def test_tt_drafter_greedychain_acceptance(mesh_device, reset_seeds):
 
 
 @_needs_assistant
-@parametrize_mesh_with_fabric(mesh_shapes=[(1, 1), (1, 4)])
+@parametrize_mesh_with_fabric(mesh_shapes=[(1, 1), (1, 4), (1, 8)])
 def test_spec_decode_matches_greedy(mesh_device, reset_seeds):
     """Greedy spec-decode matches plain greedy decode, EXCEPT at target near-ties.
 
@@ -1667,7 +1667,7 @@ def test_spec_decode_matches_greedy(mesh_device, reset_seeds):
 
 
 @_needs_assistant
-@parametrize_mesh_with_fabric(mesh_shapes=[(1, 1), (1, 4)])
+@parametrize_mesh_with_fabric(mesh_shapes=[(1, 1), (1, 4), (1, 8)])
 def test_verify_batchsize_invariance(mesh_device, reset_seeds):
     """Isolate batch-size numerics from spec accept logic.
 
