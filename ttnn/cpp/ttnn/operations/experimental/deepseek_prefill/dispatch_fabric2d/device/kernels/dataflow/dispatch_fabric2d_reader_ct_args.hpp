@@ -31,6 +31,8 @@ struct ReaderRtArg {
         // Bound unconditionally so host and kernel never disagree about the arg layout; in non-fanout
         // mode it points at a stand-in the kernel does not read.
         kFanoutReachAddr,
+        // Bound unconditionally for the same reason.
+        kPaddingConfigAddr,
         kCount,
     };
 };
@@ -68,6 +70,7 @@ struct ReaderCtArgs {
         kMcMetaAddr,
         kUntilizeSemAddr,
         kUntilizeStripes,
+        kHasPaddingConfig,
         // Blocks appended after the scalars, in this order. Kept as base indices so a later field can be
         // added without renumbering anything the kernel already reads.
         kRingChipIdsBase,
@@ -118,6 +121,8 @@ struct ReaderCtArgs {
     // stripes is the row-major path: the input accessor already points at the tokens.
     uint32_t untilize_sem_addr;
     uint32_t untilize_stripes;
+    // Read the two padding words and bound the routing pass at the real token count.
+    uint32_t has_padding_config;
     uint32_t ring_chip_ids_base;
     uint32_t assignment_base;
     uint32_t in_chunks_base;
@@ -167,6 +172,7 @@ struct ReaderCtArgs {
         mc_meta_addr(l1.mc_meta),
         untilize_sem_addr(plan.untilize_sem_addr),
         untilize_stripes(plan.untilize_stripes),
+        has_padding_config(args.has_padding_config ? 1u : 0u),
         ring_chip_ids_base(kCount),
         assignment_base(kCount + args.device->shape()[args.axis]),
         in_chunks_base(assignment_base + own_count * ASSIGNMENT_WORDS),
@@ -213,6 +219,7 @@ struct ReaderCtArgs {
         w[kMcMetaAddr] = mc_meta_addr;
         w[kUntilizeSemAddr] = untilize_sem_addr;
         w[kUntilizeStripes] = untilize_stripes;
+        w[kHasPaddingConfig] = has_padding_config;
         w[kRingChipIdsBase] = ring_chip_ids_base;
         w[kAssignmentBase] = assignment_base;
         w[kInChunksBase] = in_chunks_base;
@@ -272,6 +279,7 @@ struct ReaderCtArgs {
         mc_meta_addr(get_compile_time_arg_val(kMcMetaAddr)),
         untilize_sem_addr(get_compile_time_arg_val(kUntilizeSemAddr)),
         untilize_stripes(get_compile_time_arg_val(kUntilizeStripes)),
+        has_padding_config(get_compile_time_arg_val(kHasPaddingConfig)),
         ring_chip_ids_base(get_compile_time_arg_val(kRingChipIdsBase)),
         assignment_base(get_compile_time_arg_val(kAssignmentBase)),
         in_chunks_base(get_compile_time_arg_val(kInChunksBase)),
@@ -296,6 +304,7 @@ struct ReaderCtArgs {
     static constexpr auto out_meta_args = TensorAccessorArgs<out_payload_args.next_compile_time_args_offset()>();
     static constexpr auto fwd_args = TensorAccessorArgs<out_meta_args.next_compile_time_args_offset()>();
     static constexpr auto reach_args = TensorAccessorArgs<fwd_args.next_compile_time_args_offset()>();
+    static constexpr auto padding_args = TensorAccessorArgs<reach_args.next_compile_time_args_offset()>();
 #endif
 };
 

@@ -48,7 +48,10 @@ std::optional<UntilizePlan> plan_untilize(
     UntilizePlan plan;
     plan.tiles_per_row = static_cast<uint32_t>(input.logical_shape()[-1]) / tt::constants::TILE_WIDTH;
     plan.block_ct_dim = untilize_block_ct_dim(plan.tiles_per_row);
-    plan.num_stripes = seq_len_per_chip / tt::constants::TILE_HEIGHT;
+    // A ragged tail gets a whole stripe of its own, which the packer fills with the tile's padding
+    // rows the way production `dispatch` does. Staging is allocated to match, so those rows land in
+    // pages past the sequence that nothing reads -- the routing pass walks tokens, not stripes.
+    plan.num_stripes = (seq_len_per_chip + tt::constants::TILE_HEIGHT - 1) / tt::constants::TILE_HEIGHT;
     plan.tile_bytes = static_cast<uint32_t>(input.buffer()->aligned_page_size());
     plan.token_bytes = token_bytes;
     plan.sem_addr = sem_addr;
