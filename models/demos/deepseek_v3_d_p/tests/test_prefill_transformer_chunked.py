@@ -188,9 +188,12 @@ KV_CACHE_PCC_THRESHOLD = 0.85
 INDEXER_K_PCC_THRESHOLD = 0.95
 
 # Per-chunk baseline medians (seconds) for the perf gate, derived from completed Galaxy runs. Keyed by
-# (num_layers, n_chunks, num_iters) so only exact configs with CI numbers are gated; every other combo
+# (num_layers, n_chunks, num_iters) so only exact calibrated configs are gated; every other combo
 # in the sweep stays record-only. Each list has one entry per chunk (index c == chunk c). Recalibrate
-# from completed Galaxy CI runs that exercise the exact configuration, and record the source run.
+# from completed Galaxy runs using the exact CI workload and flags, and record the source run.
+# September 17 calibration: d1ff6544 (main 458a5c17), high-power bh-glx-120-b08u08, Slurm 108952.
+# Both registry commands ran all 61 layers / 11 chunks / 10 iterations; medians omit iteration 0.
+# Evidence and the matching golden-output check are recorded in PR #56108's September 17 follow-up.
 #
 # Traced and untraced get SEPARATE tables and SEPARATE margins, selected by mode in
 # `kimi_chunked_perf_gate` -- a traced baseline can never gate an untraced run or vice versa. The two
@@ -198,27 +201,27 @@ INDEXER_K_PCC_THRESHOLD = 0.95
 # overhead, which can dominate the early chunks and obscure that ramp.
 KIMI_TRACED_BASELINE_CHUNK_TIMES_S = {
     # test_kimi_prefill_transformer_chunked_perf[...-L61-preload0-chunks_eleven-ten_iters-traced]
-    # (55k / code_debug). These numbers were updated for the K2.6 -> K2.7 weights transition (#54944),
-    # then re-cut twice. Recentered to CI run 34492835936 / job 102927415897.
+    # 55k / code_debug, LOGURU_LEVEL=INFO, default SHM tracking. Recentered after the main merge;
+    # the old CI run 34492835936 / job 102927415897 reference rejected faster chunks 8-10.
     (61, 11, 10): [
-        0.413,
-        0.419,
-        0.452,
-        0.481,
-        0.513,
-        0.549,
-        0.584,
-        0.623,
-        0.676,
-        0.716,
-        0.756,
+        0.412,
+        0.421,
+        0.454,
+        0.480,
+        0.514,
+        0.546,
+        0.573,
+        0.604,
+        0.650,
+        0.691,
+        0.729,
     ],
 }
 KIMI_UNTRACED_BASELINE_CHUNK_TIMES_S = {
     # test_kimi_prefill_transformer_chunked_perf[...-L61-preload0-chunks_eleven-ten_iters-notrace]
     # 55k / code_debug: per-chunk medians over nine post-warmup iterations on a Galaxy with
     # TT_METAL_SHM_TRACKING_DISABLED=1 and LOGURU_LEVEL=ERROR. Tolerance is 5%.
-    (61, 11, 10): [0.710, 0.708, 0.710, 0.709, 0.711, 0.717, 0.711, 0.713, 0.725, 0.763, 0.797],
+    (61, 11, 10): [0.718, 0.711, 0.710, 0.709, 0.711, 0.719, 0.717, 0.711, 0.712, 0.721, 0.731],
 }
 
 # Per-mode +/- tolerance band around each baseline chunk median (fraction). Traced replays a captured
@@ -1493,10 +1496,10 @@ def run_chunked_transformer_updated(
     tracks the real valid length and grows with preload_isl (realistic per-depth perf).
 
     Perf gate: when `baseline_chunk_times_s` is provided (a per-chunk list of baseline medians pulled
-    from a known-good CI run), each chunk's measured median must stay within +/- `perf_margin` of its
-    baseline; a single `perf_margin` covers every chunk. The table appends the baseline, tolerance band,
-    and PASS/FAIL per chunk, and the run fails if any chunk is out of band. When no baseline is given the
-    table is record-only (perf-exploration combos).
+    from a validated Galaxy run of the same workload), each chunk's measured median must stay within
+    +/- `perf_margin` of its baseline; a single `perf_margin` covers every chunk. The table appends the
+    baseline, tolerance band, and PASS/FAIL per chunk, and the run fails if any chunk is out of band.
+    When no baseline is given the table is record-only (perf-exploration combos).
 
     `check_pcc` asserts the two CACHE PCCs (KVPE and, when the variant has one, the DSA indexer-K cache)
     after the run. Works identically traced and untraced, because the caches are read back once the run
