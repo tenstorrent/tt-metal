@@ -26,6 +26,27 @@ python models/experimental/diffusion_drive/scripts/profile_forward.py --iters 20
   agent head dilute the remaining gain.
 - The traced path is what the NavSim in-process agent runs, so it is the number that matters for deployment.
 
+### 1.1 Independent measurements — read the conditions before comparing
+
+Three runs of the command above exist, and the absolute latencies span ~3×:
+
+| Run | Hardware | eager | traced | speedup |
+|---|---|---|---|---|
+| this report | Wormhole N300s | 71.4 ms (14.0 FPS) | 44.9 ms (22.3 FPS) | 1.58× |
+| reviewer | Wormhole N300 (IRD) | 220.7 ms (4.5 FPS) | 117.7 ms (8.5 FPS) | 1.88× |
+| follow-up | Blackhole p150a | 68.3 ms (14.6 FPS) | 41.1 ms (24.3 FPS) | 1.66× |
+
+**The speedup is stable (1.58–1.88×); the absolutes are not.** Two of the three runs agree to within
+~8% and the third is ~3× slower, which points at build/runtime configuration rather than the model —
+though the cause has not been isolated, so treat the following as candidates rather than a diagnosis.
+Build type (`Release` vs debug/ASan) is the first thing to check. `TT_METAL_WATCHER` is the second: it
+is **off by default**, so it only applies if the environment enables it, but when enabled it polls every
+core over PCIe and costs ~25% on a full suite here.
+
+So: **treat the speedup as the reproducible claim and the absolutes as environment-specific.** If your
+numbers differ by an order of magnitude, check your build type and whether the watcher is enabled before
+suspecting the model. Conditions for this report: batch 1, production resolution, real checkpoint.
+
 ## 2. Conv+ReLU fusion (Stage 2 "relu with conv")
 
 38 `conv → ttnn.relu` pairs were fused into the conv's output writeback via
