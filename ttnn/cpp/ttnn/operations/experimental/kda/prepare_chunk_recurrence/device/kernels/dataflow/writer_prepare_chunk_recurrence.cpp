@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/cpp/ttnn/operations/experimental/kda/chronological_selections/device/kernels/chronology.hpp"
+
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
@@ -10,7 +12,16 @@
 #include "experimental/kernel_args.h"
 
 template <uint32_t Ct, uint32_t Kt, uint32_t Vt>
-TT_KERNEL void writer(uint32_t work_item_start, uint32_t work_item_count) {
+TT_KERNEL void writer(uint32_t work_item_start, uint32_t work_item_count, uint32_t num_chunks) {
+    uint32_t valid_chunks = num_chunks;
+     {
+        DataflowBuffer control(dfb::chronology_writer);
+        control.wait_front(1);
+        valid_chunks =
+            kda_chronology::load(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(control.get_read_ptr())).valid_rows /
+            32;
+        control.pop_front(1);
+    }
     constexpr uint32_t cc = Ct * Ct;
     constexpr uint32_t ck = Ct * Kt;
     constexpr uint32_t cv = Ct * Vt;
@@ -47,6 +58,9 @@ TT_KERNEL void writer(uint32_t work_item_start, uint32_t work_item_count) {
     };
     for (uint32_t index = 0; index < work_item_count; ++index) {
         const uint32_t work_item = work_item_start + index;
+        if (work_item % num_chunks >= valid_chunks) {
+            continue;
+        }
         drain(v_beta, v_beta_accessor, cv, work_item * cv);
         drain(t_inv, t_inv_accessor, cc, work_item * cc);
         drain(kd, kd_accessor, ck, work_item * ck);

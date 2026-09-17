@@ -14,16 +14,21 @@ ttnn::device_operation::MeshWorkloadArtifacts ChronologicalSelectionsFactory::cr
     const ttnn::MeshCoordinateRangeSet& tensor_coords) {
     using namespace tt::tt_metal::experimental;
     const auto& actual_start = in.actual_start.mesh_tensor();
+    const auto& actual_end = (in.actual_end ? *in.actual_end : in.actual_start).mesh_tensor();
     const auto& out = outputs[0].mesh_tensor();
     const KernelSpecName kernel{"derive"};
     const ScratchpadSpecName scratch{"scratch"};
-    const TensorParamName sn{"actual_start"}, on{"output"};
+    const TensorParamName sn{"actual_start"}, en{"actual_end"}, on{"output"};
     KernelSpec reader{
         .unique_id = kernel,
         .source = "ttnn/cpp/ttnn/operations/experimental/kda/chronological_selections/device/kernels/derive.cpp",
         .scratchpad_bindings = {{scratch, "scratch"}},
-        .tensor_bindings = {{sn, "actual_start"}, {on, "output"}},
-        .compile_time_args = {{"BH", a.batch_heads}, {"K", a.key_dim}, {"V", a.value_dim}},
+        .tensor_bindings = {{sn, "actual_start"}, {en, "actual_end"}, {on, "output"}},
+        .compile_time_args =
+            {{"has_actual_end", uint32_t(in.actual_end.has_value())},
+             {"BH", a.batch_heads},
+             {"K", a.key_dim},
+             {"V", a.value_dim}},
         .hw_config = ttnn::create_reader_datamovement_config(actual_start.device().arch()),
     };
     ProgramSpec spec{
@@ -31,12 +36,14 @@ ttnn::device_operation::MeshWorkloadArtifacts ChronologicalSelectionsFactory::cr
         .kernels = {std::move(reader)},
         .scratchpads = {{.unique_id = scratch, .size_per_node = 32}},
         .tensor_parameters =
-            {{.unique_id = sn, .spec = actual_start.tensor_spec()}, {.unique_id = on, .spec = out.tensor_spec()}},
+            {{.unique_id = sn, .spec = actual_start.tensor_spec()},
+             {.unique_id = en, .spec = actual_end.tensor_spec()},
+             {.unique_id = on, .spec = out.tensor_spec()}},
         .work_units =
             {{.name = "main", .kernels = {kernel}, .target_nodes = CoreRangeSet({CoreRange({0, 0}, {0, 0})})}},
     };
     ProgramRunArgs run;
-    run.tensor_args = {{sn, actual_start}, {on, out}};
+    run.tensor_args = {{sn, actual_start}, {en, actual_end}, {on, out}};
     return kda_factory_detail::chronology_workload(
         {.spec = std::move(spec), .run_params = std::move(run)},
         tensor_coords,

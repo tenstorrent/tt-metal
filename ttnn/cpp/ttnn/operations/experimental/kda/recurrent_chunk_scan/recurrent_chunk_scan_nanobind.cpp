@@ -20,6 +20,12 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
             Y_n     = q_decay_n @ S_n + intra_n @ U_n
             S_{n+1} = final_decay_n * S_n + k_dec_t_n @ U_n
 
+        Optional ``actual_end`` is a replicated UINT32 row-major scalar, with
+        the same lifetime as ``actual_start``. It defines a nonempty 32-aligned
+        interval within physical capacity; omission uses the full capacity.
+        Bounds may change during trace replay. Padded group outputs are unspecified.
+        Bounds are caller preconditions and are not read back on the host.
+
         Args:
             v_beta (ttnn.Tensor): Prepared values ``[B*H*G, N, 32, V]``.
             kd (ttnn.Tensor): Prepared decayed keys ``[B*H*G, N, 32, K]``.
@@ -82,7 +88,8 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
 
         nb::arg("memory_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
-        nb::arg("sequence_parallel_axis") = 0);
+        nb::arg("sequence_parallel_axis") = 0,
+        nb::arg("actual_end") = nb::none());
 
     ttnn::bind_function<"summarize_chunk_recurrence", "ttnn.experimental.kda.">(
         mod,
@@ -102,6 +109,12 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
 
             B = F(0)
             A = F(I) - B
+
+        Optional ``actual_end`` is a replicated UINT32 row-major scalar, with
+        the same lifetime as ``actual_start``. It defines a nonempty 32-aligned
+        interval within physical capacity; omission uses the full capacity.
+        Bounds may change during trace replay. Padded group outputs are unspecified.
+        Bounds are caller preconditions and are not read back on the host.
 
         Args:
             v_beta (ttnn.Tensor): Prepared values ``[B*H*G, N, 32, V]``.
@@ -160,7 +173,8 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
 
         nb::arg("memory_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
-        nb::arg("sequence_parallel_axis") = 0);
+        nb::arg("sequence_parallel_axis") = 0,
+        nb::arg("actual_end") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::kda::recurrent_chunk_scan::detail
