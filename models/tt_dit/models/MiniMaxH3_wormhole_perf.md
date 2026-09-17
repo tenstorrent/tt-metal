@@ -304,13 +304,58 @@ all scale with it, against K/V's two buffers on Sk. That is why `(512, 256)` is 
 `(256, 512)` fits at the same product. The untried direction is therefore **smaller q with larger
 k**, which also halves the ring K-loop iterations — the property that made k=512 beat k=256.
 
-A widened sweep is running over q in {128, 192, 256} x k in {512, 640, 768, 1024}. q is restricted
-to values that tile 63 cores well at seq 13632: 256 (0.0% slot waste), 192 (1.4%), 128 (0.9%);
-160/224/320 are worse and excluded.
+That prediction was **wrong**, and the widened sweep closes the question. q in {192, 256} x k in
+{512, 640, 768, 1024} (q=128 excluded, see below):
 
-**TODO** — result of the widened sweep. Caveat to carry into it: the arithmetic above does *not*
-predict `(512, 256)`'s failure, so a circular buffer is missing from the model. Treat it as a
-candidate generator and let the device report feasibility; the harness prints exact byte counts.
+| rank | q_chunk | k_chunk | duration | iters/core | FPU util | math util |
+|---|---|---|---|---|---|---|
+| 1 | **256** | **512** | **171.694 ms** | 2592 | 48.1% | 35.6% |
+| 2 | 192 | 512 | 190.572 ms | 3456 | 43.3-43.7% | 32.1% |
+| 3 | 192 | 640 | 193.960 ms | 2816 | 42.6-42.9% | 31.5% |
+| — | 192 | 768 / 1024 | L1 infeasible | | | |
+| — | 256 | 640 / 768 / 1024 | L1 infeasible | | | |
+
+Smaller q *does* unlock a larger k — `(192, 640)` builds where `(256, 640)` does not, the first
+k > 512 point run on this shape — but it is **13% slower**. Two reasons, both visible above:
+
+  * Larger q chunks are more efficient per core. FPU utilization drops 48.1% -> 42.6% and math
+    utilization 35.6% -> 31.5% going from q=256 to q=192.
+  * "Larger k halves the ring K-loop" ignores that shrinking q *multiplies* the Q-chunk count.
+    iters/core goes 2592 at (256, 512) to 2816 at (192, 640) — more iterations, not fewer. The two
+    effects oppose each other and q dominates.
+
+So `(256, 512)`, which `measured_sdpa_chunk_sizes[13632]` already ships, is optimal. **Chunk-size
+tuning at 15 s is exhausted**: 3 feasible points measured, 5 ruled out by L1. The ~48% FPU / 35.6%
+math utilization is inherent to the ring joint SDPA kernel at this shape.
+
+### L1 envelope for the ring joint SDPA, calibrated
+
+The four L1 failures carry exact byte counts, which fit the footprint exactly (Sq = q/32,
+Sk = k/32):
+
+```
+bytes = 2048*Sq*Sk + 67584*Sq + 32768*Sk + 116032        (Wormhole max: 1,499,136)
+```
+
+Per unit that is 1 tile for `Sq*Sk`, **33 tiles for Sq and 16 for Sk** — so Sq is about twice as
+expensive as Sk, which is why `(512, 256)` fails while `(256, 512)` fits at the same product. The
+`Sq*Sk` coefficient being one tile rather than two also says the mask CB is not allocated here,
+consistent with `is_causal=False`. Observed: `(6,24)` 1,602,880 B; `(8,20)` 1,639,744 B; `(8,24)`
+1,836,352 B; `(6,32)` 1,963,328 B. Reusable for any future chunk question on this part.
+
+### q_chunk=128 hangs the op
+
+`q=128` is excluded from the list because it **hangs**, twice, at seq_local 13632 with k=512 — the
+second time on a board freshly recovered with `tt-smi -glx_reset` and verified to open and map the
+fabric, so this is not board degradation. Signature: ~6 cores spinning on the dispatch poll with
+flat RSS, no I/O, no compilation; recovery needs another `glx_reset`.
+
+Nothing static rules it out. Unlike the exp path, `use_streaming_compute` in
+`ring_joint_sdpa_program_factory.cpp:1340` is just `!fp32_dest_acc_en` and does not depend on
+`Sq_chunk_t`. But the same factory documents a sibling failure at lines 1388-1397, where Phase-2
+reserves the full `Sq_chunk_t*vDHt` output in a single `reserve_back` and "blocks forever (deadlock
+seen at q_chunk=256 causal)". Same family, different trigger. Worth a bug report with this repro;
+it is not on the path to a faster 15 s, since q=128 was slower than q=192 in every feasible k.
 
 ## Perf experiments
 
@@ -319,7 +364,8 @@ candidate generator and let the device report feasibility; the harness prints ex
 | 1 | Matmul blockings, all 4 shapes x 3 durations, 8x8/8x9 grids | **done** | 3.5% of matmul time at 15 s; ff1 and ff2 landed, 0.5% of a forward |
 | 2 | Fused MM/RS at 8x5/8x6/8x7 matmul grids | **done** | All worse than unfused; stays disabled |
 | 3 | SDPA chunk sizes, q in {256,384,512} x k in {256,512} | **done** | Shipped `(256, 512)` already optimal; larger q L1-infeasible |
-| 4 | SDPA chunk sizes, small-q / large-k (q<=256, k>=512) | **running** | **TODO** |
+| 3b | `q_chunk=128` | **done** | Reproducibly hangs the op (2x, clean board). Not a perf path — q=128 was slower than q=192 at every feasible k — but worth reporting |
+| 4 | SDPA chunk sizes, small-q / large-k (q<=256, k>=512) | **done** | Hypothesis disproved. `(192, 640)` is feasible — the first k>512 point on this shape — but 13% slower than the shipped `(256, 512)`; larger q is more per-core efficient and shrinking q raises iters/core. Chunk tuning at 15 s is exhausted. L1 envelope calibrated as a by-product |
 | 5 | Re-profile the block with landed configs | not started | **TODO** |
 | 6 | Pipeline re-run: warm total, denoise, ms/fwd, CLIP | not started | **TODO** |
 | 7 | `use_exp_ring_sdpa` on Wormhole | not started | **TODO** — gated on `is_blackhole() and sp_factor == 32`, but `exp_ring_joint_sdpa_program_factory.cpp` has no arch gate and the sp check is described in-tree as "a proxy for the 4x32 shape". On WH the other conditions already hold (`tp_factor == 4`, `exp_ring_num_passes = ceil(14/9) = 2 <= 3`). A different kernel on the op that is 70% of the block, so the largest single lever available — but it needs PCC and CLIP validation, not a timing check |

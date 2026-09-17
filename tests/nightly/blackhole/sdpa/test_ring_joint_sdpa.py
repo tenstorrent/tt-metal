@@ -400,7 +400,16 @@ def generate_ring_joint_perf_model_configs(
         # therefore SMALLER q with LARGER k -- which also halves the ring's K-loop iterations, the
         # thing that made k=512 win in the first place. q is restricted to the values that tile 63
         # cores well at seq 13632: 256 (0.0% slot waste), 192 (1.4%) and 128 (0.9%).
-        ("minimax_h3_15s_768p", 13632, [128, 192, 256], [512, 640, 768, 1024]),
+        # q=128 is excluded: it reproducibly HANGS the op at this shape on a Wormhole Galaxy
+        # (seq_local 13632, k=512), twice, the second time on a board freshly recovered with
+        # `tt-smi -glx_reset` and verified to open and map the fabric. Signature is ~6 cores
+        # spinning on the dispatch poll with flat RSS; the board then needs another glx_reset.
+        # Nothing static rules it out -- unlike the exp path, `use_streaming_compute` here is just
+        # `!fp32_dest_acc_en` and does not depend on Sq_chunk_t -- but the factory does document a
+        # sibling failure at ring_joint_sdpa_program_factory.cpp:1388-1397, where Phase-2 reserves
+        # the full Sq_chunk_t*vDHt output in one `reserve_back` and "blocks forever (deadlock seen
+        # at q_chunk=256 causal)". Same family, different trigger.
+        ("minimax_h3_15s_768p", 13632, [192, 256], [512, 640, 768, 1024]),
     ):
         perf_configs[_name] = ModelConfig(
             name=_name,
