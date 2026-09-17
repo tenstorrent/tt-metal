@@ -419,7 +419,10 @@ ttnn::device_operation::MeshWorkloadArtifacts RecurrentChunkScanProgramFactory::
         run_args.tensor_args.emplace(tail_final_state_tensor_name, outputs[3].mesh_tensor());
     }
     kda_factory_detail::bind_chronology(spec, run_args, in.actual_start, reader, compute);
-    if (summary) {
+    kda_factory_detail::bind_actual_end(spec, run_args, in.actual_end, in.actual_start, reader);
+    // The writer reads the chronology channel on the same condition as the reader publishes it.
+    writer.compile_time_args.insert({"has_actual_end", static_cast<uint32_t>(in.actual_end.has_value())});
+    if (summary || in.actual_end.has_value()) {
         const tt::tt_metal::experimental::DFBSpecName writer_chronology{"chronology_writer"};
         spec.dataflow_buffers.push_back({
             .unique_id = writer_chronology,

@@ -12,6 +12,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import make_actual_start
 from models.common.utility_functions import run_for_blackhole, skip_with_llk_assert, skip_with_watcher
 from tests.ttnn.nightly.unit_tests.operations.experimental.kda import kda_performance_model_test_utils as perf_model
 from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
@@ -236,8 +237,12 @@ def _to_device(
 
 
 def _device_inputs(inputs: tuple[torch.Tensor, ...], device: ttnn.Device) -> tuple[ttnn.Tensor, ...]:
-    return tuple(
-        _to_device(tensor, device, ttnn.bfloat16 if index < 4 else ttnn.float32) for index, tensor in enumerate(inputs)
+    return (
+        *tuple(
+            _to_device(tensor, device, ttnn.bfloat16 if index < 4 else ttnn.float32)
+            for index, tensor in enumerate(inputs)
+        ),
+        make_actual_start(device, 0),
     )
 
 
@@ -251,8 +256,9 @@ def _run(
 ) -> list[ttnn.Tensor]:
     with ttnn.manage_config("throw_exception_on_fallback", True):
         return ttnn.experimental.kda.prepare_chunk_recurrence(
-            *inputs,
+            *inputs[:-1],
             num_heads,
+            actual_start=inputs[-1],
             output_bf16_mask=output_bf16_mask,
             memory_config=memory_config,
             compute_kernel_config=compute_kernel_config,

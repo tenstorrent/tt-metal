@@ -12,6 +12,7 @@
 namespace ttnn::experimental::prim {
 
 struct PrepareChunkRecurrenceParams {
+    uint32_t sequence_parallel_axis;
     uint32_t num_heads;
     uint32_t num_chunks;
     uint32_t key_dim;
@@ -27,6 +28,8 @@ struct PrepareChunkRecurrenceInputs {
     Tensor v;
     Tensor g;
     Tensor beta;
+    Tensor actual_start;
+    std::optional<Tensor> actual_end;
 };
 
 }  // namespace ttnn::experimental::prim

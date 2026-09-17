@@ -14,7 +14,7 @@ _layout = ttnn._ttnn.operations.experimental.kda._selection_layout
 class ChronologicalSelections:
     """Select convolution history, affine transforms, and recurrent states.
 
-    The private UINT32 row-major device table has shape (7 + 2 * SP size, 8)
+    The private UINT32 row-major device table has shape (8 + 2 * SP size, 8)
     per device and contains selection instructions, not activations or states.
     Each aligned record has eight words: history
     records use three row indices, and recurrence selections use consecutive
@@ -35,6 +35,10 @@ class ChronologicalSelections:
     def select_predecessor_history(self, gathered_history: ttnn.Tensor) -> ttnn.Tensor:
         """The preceding physical rank's history from the gathered candidates."""
         return self._select_rows(gathered_history, _layout.PREDECESSOR_HISTORY)
+
+    def select_local_final_history(self, projected_qkv: ttnn.Tensor, sp_size: int) -> ttnn.Tensor:
+        """Last three locally valid rows; ignored when this rank is empty."""
+        return self._select_rows(projected_qkv, _layout.local_final_history(sp_size))
 
     def select_final_history(self, candidates: ttnn.Tensor) -> ttnn.Tensor:
         """History at the logical sequence end, replicated for the next call."""

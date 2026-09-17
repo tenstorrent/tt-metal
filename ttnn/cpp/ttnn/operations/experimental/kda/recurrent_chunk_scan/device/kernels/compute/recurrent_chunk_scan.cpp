@@ -409,8 +409,10 @@ TT_KERNEL void compute(uint32_t num_chunks, uint32_t group) {
         DataflowBuffer chronology(dfb::chronology_compute);
         topology = kda_chronology::receive(chronology);
     }
-    const uint32_t reset_chunk =
-        topology.reset_chunk(group, topology.local_rows / tt::constants::TILE_HEIGHT / num_chunks);
+    const uint32_t groups = topology.local_rows / tt::constants::TILE_HEIGHT / num_chunks;
+    const uint32_t reset_chunk = topology.reset_chunk(group, groups);
+    num_chunks = topology.valid_chunks(group, groups);
+    if (num_chunks == 0) { return; }
     if constexpr (summary) {
         compute_summary<Ct, Kt, Vt>(num_chunks, reset_chunk);
     } else {
