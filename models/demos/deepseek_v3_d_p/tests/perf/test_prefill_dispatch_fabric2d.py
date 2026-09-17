@@ -273,20 +273,23 @@ def test_dispatch_fabric2d_perf_worker(mesh_device, device_params, num_links, se
     # Two transports, one routing draw, one board state. Store-and-forward moves the same bytes the
     # production op does, so it is expected at parity; multicast is where the link bytes come out.
     #
-    # Launched back to back on purpose. These iterations used to synchronise between every one, not for
-    # measurement but because the op deadlocked when a chip that finished early started sending into a
-    # neighbour still retiring the previous launch. The reader now gives its arrival counter back
-    # exactly what it consumed instead of zeroing it, so an early announcement survives the reset --
-    # and this loop is the production-geometry case that proves it, since a traced replay will have no
-    # host syncs either.
+    # Synchronised between launches, and not for measurement: per-op DEVICE time is unaffected by host
+    # pacing -- a synced capture and an unsynchronised one agree within noise. The forwarding region is
+    # one allocation reused at the same offsets every launch, and nothing back-pressures a chip that is
+    # a launch ahead; it writes into its neighbour's copy whether or not that neighbour has drained it.
+    # `test_dispatch_fabric2d_region_reuse_under_skew` reproduces the corruption that follows, so an
+    # unsynchronised loop here would measure a configuration the op cannot yet be run in. The arrival
+    # counter's own cross-launch race is fixed and is not what this guards.
     signpost("dispatch_fabric2d")
     for _ in range(ITERATIONS):
         fabric2d(False)
+        ttnn.synchronize_device(mesh_device)
     ttnn.synchronize_device(mesh_device)
 
     signpost("dispatch_fabric2d_multicast")
     for _ in range(ITERATIONS):
         fabric2d(True)
+        ttnn.synchronize_device(mesh_device)
     ttnn.synchronize_device(mesh_device)
 
     # What multicast costs before it saves anything: the table the phase above was handed, produced on
