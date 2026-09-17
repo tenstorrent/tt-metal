@@ -389,8 +389,11 @@ def generate_ring_joint_perf_model_configs(
     # 63 exactly -- so Wormhole is where the candidate list is widest. 9216 and 13632 already land
     # clean on both, and carry a narrower list to confirm rather than to search.
     for _name, _seq_len, _q_chunks, _k_chunks in (
-        ("minimax_h3_5s_768p", 4768, [256, 320, 384, 544, 576], [256, 384, 512]),
-        ("minimax_h3_10s_768p", 9216, [256, 352, 512], [256, 512]),
+        # seq_len is the pipeline's rows/device with the gate's 39-token prompt (4736 / 9184 / 13664),
+        # not the 4768 / 9216 / 13632 an audio-undercounting harness used to report. Slot arithmetic is
+        # unchanged to the tile, and padding buckets prompt length, so these are the stable values.
+        ("minimax_h3_5s_768p", 4736, [256, 320, 384, 544, 576], [256, 384, 512]),
+        ("minimax_h3_10s_768p", 9184, [256, 352, 512], [256, 512]),
         # 15 s carries the widened list. The first pass here swept q in {256, 384, 512} x k in
         # {256, 512} and found the shipped (256, 512) already best, with every larger-q candidate
         # L1-infeasible. That search was bounded on the wrong axis: the CB footprint is dominated by
@@ -409,7 +412,7 @@ def generate_ring_joint_perf_model_configs(
         # sibling failure at ring_joint_sdpa_program_factory.cpp:1388-1397, where Phase-2 reserves
         # the full Sq_chunk_t*vDHt output in one `reserve_back` and "blocks forever (deadlock seen
         # at q_chunk=256 causal)". Same family, different trigger.
-        ("minimax_h3_15s_768p", 13632, [192, 256], [512, 640, 768, 1024]),
+        ("minimax_h3_15s_768p", 13664, [192, 256], [512, 640, 768, 1024]),
     ):
         perf_configs[_name] = ModelConfig(
             name=_name,

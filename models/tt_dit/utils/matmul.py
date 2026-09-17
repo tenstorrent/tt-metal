@@ -13,6 +13,34 @@ from models.common.utility_functions import is_blackhole
 
 # Track unique warning signatures to avoid stdout spam
 _warned_matmul_signatures = set()
+_logged_m_per_core_signatures = set()
+
+
+def _same_m_per_core_match(grid_dict, M, K, N, grid_x):
+    """A table entry for the same (K, N) whose M puts the same number of M tiles on each core.
+
+    A blocking is chosen against ``M_per_core = ceil(M_tiles / grid_x)`` -- how many rows of tiles each
+    core walks -- not against M itself. Two Ms with the same ``M_per_core`` pose the identical per-core
+    problem, so an entry swept at one is valid at the other. This is what makes the tables robust to
+    the difference between a harness's packed length and the pipeline's (e.g. 13632 vs 13664, both
+    ``M_per_core`` 54 on an 8-wide grid) and to prompt length within a padding bucket. M is taken as
+    parallelised across ``grid_x``, matching ``get_per_core_dims`` in ``sweep_mm_block_sizes.py``,
+    which produced the tables. Only consulted after an exact ``(M, K, N)`` miss; nearest M wins ties.
+
+    Returns ``(matched_M, config_tuple)`` or ``None``.
+    """
+    if not grid_dict or not grid_x:
+        return None
+    target = math.ceil(math.ceil(M / 32) / grid_x)
+    best = None
+    for (m, k, n), cfg in grid_dict.items():
+        if k != K or n != N or m == M:
+            continue
+        if math.ceil(math.ceil(m / 32) / grid_x) == target and (best is None or abs(m - M) < abs(best[0] - M)):
+            best = (m, cfg)
+    return best
+
+
 _warned_1d_matmul_signatures = set()
 
 # ---------------------------------------------------------------------------
@@ -602,6 +630,18 @@ def get_matmul_config(M, K, N, core_grid, default_block_size=None, use_heuristic
     grid_dict = _grid_config_lookup.get((grid_x, grid_y))
     if grid_dict is not None:
         config_tuple = grid_dict.get((M, K, N))
+        if config_tuple is None:
+            near = _same_m_per_core_match(grid_dict, M, K, N, grid_x)
+            if near is not None:
+                matched_m, config_tuple = near
+                signature = (M, K, N, grid_x, grid_y)
+                if signature not in _logged_m_per_core_signatures:
+                    logger.info(
+                        f"No exact blocking for (M, K, N) = ({M}, {K}, {N}) on {grid_x}x{grid_y}; using the "
+                        f"entry swept at M={matched_m}, which has the same M_per_core "
+                        f"({math.ceil(math.ceil(M / 32) / grid_x)} M tiles per core)"
+                    )
+                    _logged_m_per_core_signatures.add(signature)
 
     # Unpack: 3-tuple (M_block_size, K_block_size, N_block_size) or
     # 4-tuple (M_block_size, K_block_size, N_block_size, (sub_h, sub_w))
@@ -702,7 +742,8 @@ def get_agmm_config(
     # exactly num_links groups, matching the op's `ceil(in0_axis / workers) == num_links` assert.
     # For the default transposed grid this is the same 6 the old `full_grid.x // num_links` gave.
     legacy_workers = math.ceil((legacy_grid.x if transpose_core_grid else legacy_grid.y) / num_links)
-    table_hit = _grid_config_lookup.get((legacy_grid.x, legacy_grid.y), {}).get((M, K, N)) is not None
+    _legacy_table = _grid_config_lookup.get((legacy_grid.x, legacy_grid.y), {})
+    table_hit = (M, K, N) in _legacy_table or _same_m_per_core_match(_legacy_table, M, K, N, legacy_grid.x) is not None
     if core_grid is not None or default_block_size is not None or use_heuristic or table_hit:
         config = get_matmul_config(M, K, N, legacy_grid, default_block_size, use_heuristic)
         return legacy_grid, config, legacy_workers

@@ -96,6 +96,7 @@ from .packing import (
     build_packed_sequence,
     build_rope_tables,
     build_row_timesteps,
+    padded_sequence_length,
     patchify_video_latents,
     prepare_keyframe_image,
     resolve_canvas_size,
@@ -1883,8 +1884,7 @@ class MiniMaxH3Pipeline:
         t_preamble = time.time()
         anchor_rows = video_rows[:num_cond].clone() if num_cond else None
         anchor_audio_rows = audio_rows[:num_cond_audio].clone() if num_cond_audio else None
-        alignment = self.sp_factor * ttnn.TILE_SIZE
-        padded_len = ((layout.sequence_length + alignment - 1) // alignment) * alignment
+        padded_len = padded_sequence_length(layout.sequence_length, self.sp_factor)
         self.last_padded_len = padded_len
         logger.info(
             f"packed sequence {layout.sequence_length} -> {padded_len} padded, "

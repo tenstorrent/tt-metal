@@ -80,11 +80,18 @@ class MiniMaxH3Attention(Module):
 
     # Per-device sequence length -> measured-best ring SDPA (q_chunk_size, k_chunk_size).
     # See `_sdpa_program_config` for how these were obtained and why the optimum moves with length.
-    # 4768 / 9216 / 13632 are 768P at 5s / 10s / 15s, packed and padded, divided by SP=8.
+    # 4736 / 9184 / 13664 are 768P at 5s / 10s / 15s with the perf gate's 39-token prompt, packed and
+    # padded to SP * TILE, divided by SP=8 -- the values the pipeline logs as "rows/device". These keys
+    # were 4768 / 9216 / 13632 until 2026-09-17, taken from a harness that counted audio latents once
+    # (the pipeline packs two rows per latent) and assumed a 512-token prompt; the pipeline never
+    # produced them, so this table never hit and every duration ran the fallback. 10 s and 15 s were
+    # unaffected (measured == fallback); 5 s now applies (320, 384) as originally intended -- measured
+    # on Blackhole's 110 SDPA cores, and not yet re-checked on Wormhole's 63. Padding buckets prompt
+    # length: at 15 s any prompt of 1-250 tokens lands on 13664. See MiniMaxH3_rows_per_device_mismatch.md.
     measured_sdpa_chunk_sizes = {
-        4768: (320, 384),
-        9216: (256, 512),
-        13632: (256, 512),
+        4736: (320, 384),
+        9184: (256, 512),
+        13664: (256, 512),
     }
 
     def __init__(

@@ -23,9 +23,12 @@ from ....models.transformers.minimax_h3.transformer_block_minimax_h3 import Mini
 from ....parallel.config import DiTParallelConfig, ParallelFactor
 from ....parallel.manager import CCLManager
 from ....pipelines.minimax_h3.packing import (
+    MINIMAX_H3_AUDIO_CHANNELS,
     MINIMAX_H3_FPS,
     align_num_frames,
     audio_latent_num_frames,
+    packed_sequence_length,
+    padded_sequence_length,
     resolve_canvas_size,
     video_latent_num_frames,
 )
@@ -47,7 +50,12 @@ TIME_EMBED_DIM = REAL_BLOCK_CONFIG["time_embed_dim"]
 
 PATCH_SIZE = (1, 2, 2)
 VAE_SPATIAL_DOWNSAMPLE = 16  # prod(spatial_downsample_factors) from the video VAE config
-NUM_TEXT_TOKENS = 512
+# The perf gate's prompt (`CALIBRATED_FOX_PROMPT`) tokenizes to 39, recorded at MiniMaxH3.md:311 and
+# :427. It used to be 512 here, which -- together with audio being counted once below -- put this harness
+# at 4768 / 9216 / 13632 rows/device against the pipeline's 4736 / 9184 / 13664, so every M-keyed table
+# derived from it was dead on arrival. The exact count matters less than the bucket: padding is to
+# `sp_factor * TILE` = 256 rows, so at 15 s any prompt from 1 to 250 tokens gives the same rows/device.
+NUM_TEXT_TOKENS = 39
 ASPECT = (16, 9)
 
 
@@ -59,7 +67,10 @@ def _packed_sizes(duration_s: float) -> dict:
     )
     num_frames = align_num_frames(int(duration_s * MINIMAX_H3_FPS))
     latent_frames = video_latent_num_frames(num_frames)
-    num_audio = audio_latent_num_frames(num_frames)
+    num_audio_latents = audio_latent_num_frames(num_frames)
+    # ROWS, not latents: `packed_layout`, `seq_len` and `sim_seq_len` all count rows, and the pipeline
+    # packs `MINIMAX_H3_AUDIO_CHANNELS` rows per latent (`packing.py`, `build_packed_sequence`).
+    num_audio = num_audio_latents * MINIMAX_H3_AUDIO_CHANNELS
     num_video = latent_frames * tokens_per_latent_frame
     return {
         "height": height,
@@ -70,8 +81,9 @@ def _packed_sizes(duration_s: float) -> dict:
         "grid_w": width // VAE_SPATIAL_DOWNSAMPLE // PATCH_SIZE[2],
         "num_video": num_video,
         "num_audio": num_audio,
+        "num_audio_latents": num_audio_latents,
         "num_text": NUM_TEXT_TOKENS,
-        "seq_len": NUM_TEXT_TOKENS + num_audio + num_video,
+        "seq_len": packed_sequence_length(NUM_TEXT_TOKENS, num_audio_latents, num_video),
     }
 
 
@@ -118,9 +130,7 @@ def test_minimax_h3_transformer_block_perf(
 
     sizes = _packed_sizes(duration_s)
     seq_len = sizes["seq_len"]
-    alignment = sp_factor * ttnn.TILE_SIZE * SIM
-    padded_len = ((seq_len + alignment - 1) // alignment) * alignment
-    padded_len = padded_len // SIM
+    padded_len = padded_sequence_length(seq_len, sp_factor * SIM) // SIM
     logger.info(
         f"{duration_s:g}s @ {sizes['height']}x{sizes['width']}: {sizes['num_frames']} frames -> "
         f"{sizes['latent_frames']} latent frames x {sizes['grid_h']}x{sizes['grid_w']} patches = "
