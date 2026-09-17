@@ -123,6 +123,7 @@ RUNNER_SCRIPTS = [
 PYTEST_INI = "tt_metal/tt-llk/tests/python_tests/pytest.ini"
 PERF_CORE = "tt_metal/tt-llk/tests/python_tests/helpers/perf/core.py"
 PROFILER = "tt_metal/tt-llk/tests/python_tests/helpers/profiler.py"
+WIDE_SCHEMA = "tt_metal/tt-llk/tests/python_tests/helpers/perf/wide_schema.py"
 
 
 def patch_maxschedchunk(body, value):
@@ -158,6 +159,21 @@ def patch_run_count(sha, count, env):
         PROFILER: [
             ('.agg(["mean", "std"])', '.agg(["mean", "std", "min"])'),
             ("for stat in (MEAN, STD)]", 'for stat in (MEAN, STD, "min")]'),
+        ],
+        # Rule 1 of the perf infra: a CSV column that is not in DB_SCHEMA is
+        # dropped, and the run fails the schema gate. Declare the min() columns
+        # at both sites that enumerate the timing statistics.
+        WIDE_SCHEMA: [
+            ("    for kind in (MEAN, STD)\n", '    for kind in (MEAN, STD, "min")\n'),
+            (
+                "    for base in (metric, stat_column(metric, MEAN), stat_column(metric, STD))",
+                "    for base in (\n"
+                "        metric,\n"
+                "        stat_column(metric, MEAN),\n"
+                "        stat_column(metric, STD),\n"
+                '        stat_column(metric, "min"),\n'
+                "    )",
+            ),
         ],
     }
 
