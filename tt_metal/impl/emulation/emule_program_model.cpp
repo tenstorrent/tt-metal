@@ -35,6 +35,12 @@ void collect_kernels(
 
     const auto& hal = MetalContext::instance().hal();
     const uint32_t num_pct = hal.get_programmable_core_type_count();
+    // Index the descriptor's cores by (logical_x, logical_y) for first-core geometry lookups
+    // and per-core kernel (launch offset + RTA) lookups.
+    std::map<std::pair<uint32_t, uint32_t>, const tt_emule::CoreDescriptor*> core_index;
+    for (const auto& c : desc.cores) {
+        core_index[{c.logical_x, c.logical_y}] = &c;
+    }
     for (uint32_t pct = 0; pct < num_pct; ++pct) {
         auto& kernels = impl.get_kernels(pct);
         // (kernel_id, logical_core) → kg: a kernel that runs on cores in
@@ -154,14 +160,10 @@ void collect_kernels(
             // Locate this kernel's first-core CoreDescriptor for the CB/DFB geometry tables
             // (first_core = start of the kernel's first core range, matching build_kernel_defines).
             const tt_emule::CoreDescriptor* first_core_desc = nullptr;
-            const auto& kcrs = kernel->core_range_set();
-            if (!kcrs.ranges().empty()) {
-                const auto fc = kcrs.ranges().begin()->start_coord;
-                for (const auto& c : desc.cores) {
-                    if (c.logical_x == fc.x && c.logical_y == fc.y) {
-                        first_core_desc = &c;
-                        break;
-                    }
+            if (!kd.core_ranges.empty()) {
+                auto ci = core_index.find({kd.core_ranges.front().sx, kd.core_ranges.front().sy});
+                if (ci != core_index.end()) {
+                    first_core_desc = ci->second;
                 }
             }
             auto defines = build_kernel_defines_from_desc(
@@ -403,37 +405,81 @@ void collect_kernels(
                 kernel->get_kernel_processor_class(),
                 kernel->get_kernel_processor_type(0));
 
-            const auto& core_range_set = kernel->core_range_set();
-            for (const auto& core_range : core_range_set.ranges()) {
-                for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; ++x) {
-                    for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; ++y) {
+            {  // STAGE 2b diff-guard: kd.core_ranges match kernel->core_range_set()
+                std::vector<uint32_t> _pod, _priv;
+                for (const auto& r : kd.core_ranges) {
+                    _pod.insert(_pod.end(), {r.sx, r.sy, r.ex, r.ey});
+                }
+                for (const auto& r : kernel->core_range_set().ranges()) {
+                    _priv.insert(
+                        _priv.end(),
+                        {static_cast<uint32_t>(r.start_coord.x),
+                         static_cast<uint32_t>(r.start_coord.y),
+                         static_cast<uint32_t>(r.end_coord.x),
+                         static_cast<uint32_t>(r.end_coord.y)});
+                }
+                TT_FATAL(
+                    _pod == _priv,
+                    "emule descriptor diff-guard: core_ranges mismatch (kernel {})",
+                    static_cast<uint32_t>(kernel_id));
+            }
+            for (const auto& r : kd.core_ranges) {
+                for (uint32_t x = r.sx; x <= r.ex; ++x) {
+                    for (uint32_t y = r.sy; y <= r.ey; ++y) {
                         CoreCoord logical_core(x, y);
-                        // KG lookup is per (kernel, logical_core): same kernel
-                        // on different cores may sit in different KGs with
-                        // distinct kernel_config layouts.
-                        auto kg_it = kernel_core_to_kg.find({kernel_id, logical_core});
-                        uint32_t kernel_config_base = 0;
-                        uint16_t rta_off = kRtaCrtaNoArgsSentinel;
-                        uint16_t crta_off = kRtaCrtaNoArgsSentinel;
-                        if (kg_it != kernel_core_to_kg.end()) {
-                            auto kc = kg_it->second->launch_msg.view().kernel_config();
-                            kernel_config_base = static_cast<uint32_t>(kc.kernel_config_base()[pct]);
-                            auto rta = kc.rta_offset()[processor_index];
-                            rta_off = rta.rta_offset();
-                            crta_off = rta.crta_offset();
+                        // Per (kernel, core): launch offsets + unique RTA, resolved by the marshaller.
+                        const tt_emule::CoreKernel* ck = nullptr;
+                        if (auto ci = core_index.find({x, y}); ci != core_index.end()) {
+                            for (const auto& kk : ci->second->kernels) {
+                                if (kk.kernel == static_cast<uint32_t>(kernel_id)) {
+                                    ck = &kk;
+                                    break;
+                                }
+                            }
                         }
-                        // Runtime-arg values (unique + common) for this kernel on this
-                        // core; the Object-Intent check uses them to find its I/O tensors
-                        // (see ObjectIntentTracker::pre_launch_snapshot). Build once, copy.
+                        uint32_t kernel_config_base = ck ? ck->kernel_config_base : 0;
+                        uint16_t rta_off = ck ? ck->rta_offset : kRtaCrtaNoArgsSentinel;
+                        uint16_t crta_off = ck ? ck->crta_offset : kRtaCrtaNoArgsSentinel;
+                        // Runtime-arg values (unique + common) for this kernel on this core; the
+                        // Object-Intent check uses them to find its I/O tensors. Build once, copy.
                         std::vector<uint32_t> rt_arg_values;
                         uint32_t num_unique_rt = 0;
-                        if (kernel->cores_with_runtime_args().count(logical_core) != 0) {
-                            const auto& ra = kernel->runtime_args(logical_core);
-                            num_unique_rt = static_cast<uint32_t>(ra.size());
-                            rt_arg_values.insert(rt_arg_values.end(), ra.begin(), ra.end());
+                        if (ck != nullptr) {
+                            num_unique_rt = static_cast<uint32_t>(ck->unique_rt_args.size());
+                            rt_arg_values = ck->unique_rt_args;
                         }
-                        const auto& cra = kernel->common_runtime_args();
-                        rt_arg_values.insert(rt_arg_values.end(), cra.begin(), cra.end());
+                        rt_arg_values.insert(
+                            rt_arg_values.end(), kd.common_runtime_args.begin(), kd.common_runtime_args.end());
+
+                        {  // STAGE 2b diff-guard: launch offsets + RTA vs the private KG/firmware read
+                            auto kg_it = kernel_core_to_kg.find({kernel_id, logical_core});
+                            uint32_t _kcb = 0;
+                            uint16_t _rta = kRtaCrtaNoArgsSentinel, _crta = kRtaCrtaNoArgsSentinel;
+                            if (kg_it != kernel_core_to_kg.end()) {
+                                auto kc = kg_it->second->launch_msg.view().kernel_config();
+                                _kcb = static_cast<uint32_t>(kc.kernel_config_base()[pct]);
+                                auto rta = kc.rta_offset()[processor_index];
+                                _rta = rta.rta_offset();
+                                _crta = rta.crta_offset();
+                            }
+                            std::vector<uint32_t> _priv_rt;
+                            uint32_t _priv_n = 0;
+                            if (kernel->cores_with_runtime_args().count(logical_core) != 0) {
+                                const auto& ra = kernel->runtime_args(logical_core);
+                                _priv_n = static_cast<uint32_t>(ra.size());
+                                _priv_rt.insert(_priv_rt.end(), ra.begin(), ra.end());
+                            }
+                            const auto& _cra = kernel->common_runtime_args();
+                            _priv_rt.insert(_priv_rt.end(), _cra.begin(), _cra.end());
+                            TT_FATAL(
+                                kernel_config_base == _kcb && rta_off == _rta && crta_off == _crta,
+                                "emule descriptor diff-guard: launch offsets mismatch (kernel {})",
+                                static_cast<uint32_t>(kernel_id));
+                            TT_FATAL(
+                                num_unique_rt == _priv_n && rt_arg_values == _priv_rt,
+                                "emule descriptor diff-guard: runtime args mismatch (kernel {})",
+                                static_cast<uint32_t>(kernel_id));
+                        }
 
                         uint8_t tidx = 0;
                         for (uint8_t proc_id : procs.proc_ids) {
