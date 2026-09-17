@@ -380,7 +380,9 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
                         g.partial_face,
                         g.narrow_tile};
                 }
-                // TODO(stage2): finalize L1 offset (core_lookup_).
+                auto cl = dfb->core_lookup_.find(core);
+                dd.has_finalize = (cl != dfb->core_lookup_.end());
+                dd.finalize_l1_offset = dd.has_finalize ? cl->second.second : 0;  // 0-based L1 offset
                 cs.dfbs.push_back(std::move(dd));
             }
 
