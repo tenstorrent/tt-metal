@@ -434,7 +434,7 @@ RingWritePlan build_ring_write_plan(
     // Chunked sliding consumes the local slab followed by its cyclic
     // predecessor. Keep that dependency on direction 1 for every device,
     // independent of the dense ring's parity-based split.
-    if (args.has_sliding_window() && tensor_args.is_chunked() && !args.is_cross) {
+    if (args.has_sliding_window() && tensor_args.is_chunked(args.kv_stripe_split) && !args.is_cross) {
         plan.forward_writes_expected = 1;
         plan.backward_writes_expected = 0;
         return plan;
@@ -503,10 +503,10 @@ RingJointRuntimeDerivation build_runtime_derivation(
     derivation.logical_lt = tt::div_up(joint_input_params.logical_l, tt::constants::TILE_HEIGHT);
     // Cross is non-causal on chunked-shaped tensors, so kernels and the work planner use the
     // non-chunked path.
-    derivation.kernel_chunked = tensor_args.is_chunked() && !args.is_cross;
+    derivation.kernel_chunked = tensor_args.is_chunked(args.kv_stripe_split) && !args.is_cross;
     // The metadata path derives kv_actual_isl on-device for chunked prefill.
     derivation.kv_pad_rotation_enabled =
-        args.has_kv_pad_rotation() || (tensor_args.has_metadata() && tensor_args.is_chunked());
+        args.has_kv_pad_rotation() || (tensor_args.has_metadata() && tensor_args.is_chunked(args.kv_stripe_split));
     derivation.kernel_is_causal = args.is_causal && !derivation.kernel_chunked;
 
     TT_FATAL(
@@ -598,17 +598,18 @@ void write_runtime_arg(RuntimeArgsData& args, uint32_t index, uint32_t value, co
 
 // Tile-rows of the latent KV the fused all-gather must move for this chunk: the first
 // ceil(logical_n / chunk_global) block-cyclic slabs (a contiguous per-device page prefix), so an
-// oversized (growing) KV cache only moves kv_actual-sized data. Returns nullopt when KV-pad rotation
-// is off (gather the full input). Shared by the descriptor-create path (so the first / cache-miss
+// oversized (growing) KV cache only moves the requested prefix. Non-chunked
+// attention gathers the full input. Shared by the descriptor-create path (so the first / cache-miss
 // dispatch is bounded) and the cache-hit override path.
 std::optional<uint32_t> compute_gather_valid_Ht(
     const ttnn::prim::RingJointSDPAParams& args, const ttnn::prim::RingJointSDPAInputs& tensor_args) {
-    if (!args.has_kv_pad_rotation() && !(tensor_args.has_metadata() && tensor_args.is_chunked())) {
+    if (!tensor_args.is_chunked(args.kv_stripe_split) || args.is_cross) {
         return std::nullopt;
     }
     const uint32_t ring_size = static_cast<uint32_t>(args.all_gather_operation_attributes.ring_size);
     const uint32_t n_local_q = tensor_args.input_q.padded_shape()[2];  // per-device Q slab (chunk_local)
-    const uint32_t chunk_global = n_local_q * ring_size;
+    const uint32_t region = n_local_q / args.kv_stripe_split;
+    const uint32_t chunk_global = region * ring_size;
     if (tensor_args.has_metadata()) {
         // Metadata path: the all-gather reader recomputes this per dispatch from kv_actual_isl
         // (ring_attention_all_gather_reader.cpp) and CLAMPS against the value baked here, so a
@@ -622,7 +623,7 @@ std::optional<uint32_t> compute_gather_valid_Ht(
         return tensor_args.input_k.padded_shape()[2] / tt::constants::TILE_HEIGHT;
     }
     const uint32_t valid_slabs = (static_cast<uint32_t>(args.logical_n) + chunk_global - 1) / chunk_global;
-    return valid_slabs * (n_local_q / tt::constants::TILE_HEIGHT);
+    return valid_slabs * (region / tt::constants::TILE_HEIGHT);
 }
 
 void apply_ring_joint_scalar_runtime_args(
@@ -1091,7 +1092,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     const uint32_t logical_lt = tt::div_up(logical_l, tt::constants::TILE_HEIGHT);
     const uint32_t DHt = DH / tt::constants::TILE_WIDTH;
     const uint32_t vDHt = vDH / tt::constants::TILE_WIDTH;
-    const bool kv_pad_from_metadata = tensor_args.has_metadata() && tensor_args.is_chunked();
+    const bool kv_pad_from_metadata = tensor_args.has_metadata() && tensor_args.is_chunked(args.kv_stripe_split);
     const bool kv_pad_rotation_enabled = args.has_kv_pad_rotation() || kv_pad_from_metadata;
     const RingJointRuntimePlan runtime_plan = build_runtime_plan(args, tensor_args, ring_write_plan);
     const RingJointRuntimeArgLayout runtime_arg_layout = get_runtime_arg_layout(args, tensor_args);
@@ -1817,8 +1818,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // Group physical KV shards by the KV/Q shard ratio, independently of mesh size
     // and sequence length. Other attention modes retain their established traversal.
     const bool group_kv_sources = use_streaming_compute && kt_inplace_v && kernel_chunked && rank_mapping.full_mesh &&
-                                  args.kv_stripe_split > 1 && L == 0 && !has_sliding_window &&
-                                  !kv_pad_rotation_enabled && !slot_from_metadata && !args.is_balanced;
+                                  args.kv_stripe_split > 1 && L == 0 && !has_sliding_window && !args.is_balanced;
     defines["GROUPED_KV_SOURCE_COUNT"] = std::to_string(group_kv_sources ? args.kv_stripe_split : 1);
 
     // NOTE: CreateKernel calls are deferred until after chain construction so that
@@ -3008,8 +3008,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             compute_gather_valid_Ht(args, tensor_args),
             tensor_args.slot_id,
             tensor_args.kv_actual_isl,
-            // chunk_local_tiles: per-device Q slab in tiles, for the reader's on-device gather-extent recompute.
-            tensor_args.input_q.padded_shape()[2] / tt::constants::TILE_HEIGHT,
+            // Per-source KV region: the gather's ring includes TP stripes, unlike Q's SP ring.
+            tensor_args.input_q.padded_shape()[2] / args.kv_stripe_split / tt::constants::TILE_HEIGHT,
             // (user, layer)-major KV-cache batch factor: the all-gather reader computes the gathered slot as
             // slot_id[0] * kv_cache_num_layers + kv_cache_layer_idx. Defaults (1, 0) keep callers unaffected.
             args.kv_cache_num_layers,

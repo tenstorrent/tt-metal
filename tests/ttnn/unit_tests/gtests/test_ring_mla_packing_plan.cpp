@@ -82,11 +82,31 @@ TEST(RingMLAPackingPlan, PreservesEveryTileAcrossSourcesAndPartialChunks) {
 
 TEST(RingMLAPackingPlan, UsesRuntimeLengthAndActivityOnProgramReuse) {
     EXPECT_EQ(packed_kv_source_group_size(4, 8, 25, 200, 0xff), 4u);
-    EXPECT_EQ(packed_kv_source_group_size(4, 8, 25, 199, 0xff), 1u);
+    EXPECT_EQ(packed_kv_source_group_size(4, 8, 25, 199, 0xff), 4u);
     EXPECT_EQ(packed_kv_source_group_size(4, 8, 25, 200, 0x7f), 1u);
     EXPECT_EQ(packed_kv_source_group_size(4, 32, 25, 800, 0xffffffff), 4u);
+    EXPECT_EQ(packed_kv_source_group_size(4, 32, 25, 160, 0xffffffff), 4u);
+    EXPECT_EQ(packed_kv_source_group_size(4, 32, 5, 160, 0xffffffff), 4u);
+    EXPECT_EQ(packed_kv_source_group_size(4, 32, 25, 801, 0xffffffff), 1u);
+    EXPECT_EQ(packed_kv_source_group_size(4, 32, 25, 0, 0xffffffff), 1u);
     EXPECT_EQ(packed_kv_source_group_size(4, 32, 25, 800, 0x7fffffff), 1u);
     EXPECT_EQ(packed_kv_source_group_size(1, 8, 25, 200, 0xff), 1u);
     EXPECT_EQ(packed_kv_source_group_size(3, 8, 25, 200, 0xff), 1u);
     EXPECT_EQ(packed_kv_source_group_size(4, 8, 0, 0, 0xff), 1u);
+}
+
+TEST(RingMLAPackingPlan, ClipsCacheCapacityToPopulatedSlabs) {
+    for (uint32_t ring : {8u, 32u}) {
+        for (uint32_t region : {1u, 2u, 5u}) {
+            const uint32_t capacity = region * 64;
+            const uint32_t chunk = ring * region;
+            for (uint32_t logical = 1; logical <= capacity * ring; ++logical) {
+                const uint32_t tiles = packed_kv_source_tiles(capacity, logical, region, ring);
+                EXPECT_EQ(tiles, ((logical + chunk - 1) / chunk) * region);
+                EXPECT_LE(tiles, capacity);
+                EXPECT_GE(tiles * ring, logical);
+                EXPECT_LT((tiles - region) * ring, logical);
+            }
+        }
+    }
 }

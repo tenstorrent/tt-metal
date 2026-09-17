@@ -94,15 +94,31 @@ struct PackedKVGroupPlan {
     }
 };
 
-// Runtime logical length can change on program-cache reuse. Do not apply a plan
-// for a full cache to a padded/partially active cache using the same program.
+// Each source owns one region per global prefill chunk. Clip an oversized
+// input cache to the slabs touched by this invocation; keep the physical source
+// stride separate so remote reads still address the persistent gather correctly.
+constexpr uint32_t packed_kv_source_tiles(
+    uint32_t capacity_tiles, uint32_t logical_tiles, uint32_t region_tiles, uint32_t ring_size) {
+    if (region_tiles == 0 || ring_size == 0) {
+        return capacity_tiles;
+    }
+    const uint32_t global_chunk_tiles = region_tiles * ring_size;
+    const uint32_t slabs = (logical_tiles + global_chunk_tiles - 1) / global_chunk_tiles;
+    const uint32_t valid_tiles = slabs * region_tiles;
+    return valid_tiles < capacity_tiles ? valid_tiles : capacity_tiles;
+}
+
+// Chunked causal masking uses absolute packed-run positions, so it also masks
+// an unfilled cache tail. All sources must still participate in the group;
+// configurations with inactive sources retain their per-source traversal.
 constexpr uint32_t packed_kv_source_group_size(
     uint32_t configured, uint32_t ring_size, uint32_t source_tiles, uint32_t logical_tiles, uint32_t active_mask) {
     if (ring_size == 0 || ring_size > 32 || source_tiles == 0 || configured <= 1 || ring_size % configured != 0) {
         return 1;
     }
     const uint32_t all_sources = ~uint32_t{0} >> (32 - ring_size);
-    return logical_tiles == source_tiles * ring_size && active_mask == all_sources ? configured : 1;
+    return logical_tiles > 0 && logical_tiles <= source_tiles * ring_size && active_mask == all_sources ? configured
+                                                                                                        : 1;
 }
 
 struct KVPadRotationContext {

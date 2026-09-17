@@ -6045,7 +6045,11 @@ def test_ring_joint_attention_minimax3_gqa_chunked_perf_impl(model_name, qk_conf
     [ttnn.FabricConfig.FABRIC_2D_TORUS_XY, ttnn.FabricConfig.FABRIC_2D],
     ids=["torus_xy", "fabric_2d"],
 )
-@pytest.mark.parametrize("cache_chunks", [5, 8], ids=["depth5_tail", "depth8"])
+@pytest.mark.parametrize(
+    "cache_chunks,valid_chunks",
+    [(n, n) for n in (1, 2, 3, 4, 5, 8)] + [(8, n) for n in (1, 3, 5)],
+    ids=["depth1", "depth2", "depth3", "depth4", "depth5_tail", "depth8", "prefix1", "prefix3", "prefix5"],
+)
 # Against the 2-tile cache region: 1 tile stays inside it, 4 tiles cross one boundary, 8 tiles cross
 # three. K=352 also exceeds the entire depth-five local cache (320 rows).
 # The diagonal stamp takes a jump per boundary, so a K chunk may span any number of regions.
@@ -6053,7 +6057,17 @@ def test_ring_joint_attention_minimax3_gqa_chunked_perf_impl(model_name, qk_conf
     "k_chunk", [32, 128, 256, 352, 640, 1280, 2048], ids=["k32", "k128", "k256", "k352", "k640", "k1280", "k2048"]
 )
 @pytest.mark.parametrize("q_chunk", [32, 64], ids=["inplace_v", "materialized_v"])
-def test_ring_mla_full_mesh_tp_striped_kv_accuracy(fabric_config, cache_chunks, k_chunk, q_chunk):
+def test_ring_mla_full_mesh_tp_striped_kv_accuracy(
+    fabric_config,
+    cache_chunks,
+    valid_chunks,
+    k_chunk,
+    q_chunk,
+    expect_error,
+    actual_isl=False,
+    prefix_offset=0,
+    metadata=False,
+):
     """A TP-deduped KV cache: striped over every device while Q stays sharded over SP alone.
 
     kv_stripe_split = kv_shards / q_shards = tp, so tp ring shards share each Q rank. The cache is
@@ -6062,7 +6076,8 @@ def test_ring_mla_full_mesh_tp_striped_kv_accuracy(fabric_config, cache_chunks, 
     geometry and the local-to-global tile mapping index by the Q rank.
 
     Q is the FINAL chunk of the prefix, which is where the plain chunked path puts it
-    (q_start = logical_nt - q_local*q_ring_size), so no kv-pad rotation is needed.
+    (q_start = logical_nt - q_local*q_ring_size). The actual_isl variant explicitly selects
+    the model's kv-pad rotation path with the same absolute Q positions.
     """
     mesh_config = replace(MESH_CONFIG, sp_size=2, tp_size=4) if MESH_CONFIG.num_devices == 8 else MESH_CONFIG
     sp, tp = mesh_config.sp_size, mesh_config.tp_size
@@ -6070,7 +6085,14 @@ def test_ring_mla_full_mesh_tp_striped_kv_accuracy(fabric_config, cache_chunks, 
         pytest.skip(f"needs a non-degenerate 2D mesh, got {mesh_config}")
 
     # sp_outer: the production (sp, tp) mesh with SP on axis 0, so the TP striping is innermost.
-    runtime = open_ring_joint_sdpa_runtime(mesh_config, full_mesh=True, fabric_config=fabric_config, sp_outer=True)
+    runtime = open_ring_joint_sdpa_runtime(
+        mesh_config,
+        full_mesh=True,
+        fabric_config=fabric_config,
+        sp_outer=True,
+        trace_region_size=RING_MLA_TRACE_REGION_SIZE if metadata else 0,
+    )
+    trace_id = None
     try:
         mesh_device = runtime.mesh_device
         ring_size = mesh_device.get_num_devices()
@@ -6081,8 +6103,7 @@ def test_ring_mla_full_mesh_tp_striped_kv_accuracy(fabric_config, cache_chunks, 
         chunk_global = region * ring_size  # one chunk across the whole mesh
         q_local = chunk_global // sp  # Q rows per device: tp regions
         kv_local = cache_chunks * region  # cache rows per device, across every chunk
-        logical_n = cache_chunks * chunk_global
-        assert q_local < kv_local, f"striping needs the chunked path: q_local={q_local} kv_local={kv_local}"
+        logical_n = valid_chunks * chunk_global + prefix_offset
 
         b, nhq, nhk, d_q, d_k, d_v = 1, 4, 1, 64, 64, 32
         torch.manual_seed(2026)
@@ -6090,8 +6111,16 @@ def test_ring_mla_full_mesh_tp_striped_kv_accuracy(fabric_config, cache_chunks, 
         q_start = logical_n - chunk_global  # Q is the final chunk
         q_global = fa_rand(b, nhq, chunk_global, d_q)
 
+        q_host = q_global
+        valid_rows = list(range(chunk_global))
+        if actual_isl:
+            q_host, _, valid_rows, _, _ = build_kv_pad_rotation_mla_inputs(
+                kv_global[:, :, :q_start, :], q_global, kv_global[:, :, q_start:, :], q_start, sp, q_local
+            )
+
         # Block-cyclic cache: device r holds rows [c*C + r*R, +R) of chunk c, laid out chunk-major.
-        kv_per_dev = torch.zeros(b, ring_size, nhk, kv_local, d_k, dtype=kv_global.dtype)
+        # Poison the unfilled tail with finite values: causal masking must exclude it.
+        kv_per_dev = torch.full((b, ring_size, nhk, kv_local, d_k), 17.0, dtype=kv_global.dtype)
         for pos in range(logical_n):
             chunk = pos // chunk_global
             within = pos % chunk_global
@@ -6101,7 +6130,7 @@ def test_ring_mla_full_mesh_tp_striped_kv_accuracy(fabric_config, cache_chunks, 
 
         # Q: contiguous per SP rank, so a plain axis-0 shard hands each rank its slab.
         tt_q = ttnn.from_torch(
-            q_global,
+            q_host,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
@@ -6115,7 +6144,7 @@ def test_ring_mla_full_mesh_tp_striped_kv_accuracy(fabric_config, cache_chunks, 
             mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=2),
         )
         gathered_kv = ttnn.from_torch(
-            torch.zeros(b, nhk, ring_size * kv_local, d_k),
+            torch.full((b, nhk, 1024 * 1024, d_k), 13.0),
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
@@ -6130,12 +6159,9 @@ def test_ring_mla_full_mesh_tp_striped_kv_accuracy(fabric_config, cache_chunks, 
             k_chunk_size=k_chunk,
             exp_approx_mode=False,
         )
-        tt_out, _ = ttnn.transformer.ring_mla(
-            tt_q,
-            tt_kv,
+        op_kwargs = dict(
             persistent_output_buffer_kv=gathered_kv,
             head_dim_v=d_v,
-            logical_n=logical_n,
             program_config=program_config,
             compute_kernel_config=runtime.compute_kernel_config,
             dim=2,
@@ -6149,7 +6175,45 @@ def test_ring_mla_full_mesh_tp_striped_kv_accuracy(fabric_config, cache_chunks, 
             use_column_major_ccl=True,
             is_balanced=False,
         )
+        if metadata:
+            tt_slot_id, tt_actual_isl = _make_ring_mla_metadata(mesh_device, 0, 0)
+            op_kwargs.update(slot_id=tt_slot_id, kv_actual_isl_tensor=tt_actual_isl)
+        elif actual_isl:
+            op_kwargs.update(kv_actual_isl=q_start, kv_cache_batch_idx=0)
+
+        def invoke():
+            return ttnn.transformer.ring_mla(
+                tt_q, tt_kv, logical_n=cache_chunks * chunk_global if metadata else logical_n, **op_kwargs
+            )[0]
+
+        tt_out = invoke()
+        if metadata:
+            # Capture at zero, then grow and shrink ISL without patching host runtime args.
+            ttnn.synchronize_device(mesh_device)
+            ttnn.deallocate(tt_out)
+            trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+            tt_out = invoke()
+            ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+            for actual_start in (q_start, 0, q_start):
+                ttnn.copy_host_to_device_tensor(_ring_mla_host_scalar_tensor(mesh_device, actual_start), tt_actual_isl)
+                ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=True)
+
+        if cache_chunks == valid_chunks == 1 and k_chunk == 640 and q_chunk == 32:
+            with expect_error(RuntimeError, "must not exceed input KV capacity"):
+                ttnn.transformer.ring_mla(tt_q, tt_kv, logical_n=logical_n + 32, **op_kwargs)
+            with expect_error(RuntimeError, "must include the full Q chunk"):
+                ttnn.transformer.ring_mla(tt_q, tt_kv, logical_n=logical_n - 32, **op_kwargs)
         ttnn.synchronize_device(mesh_device)
+
+        # A 1M output is capacity, not the gather extent. Check an untouched tile
+        # just beyond the live prefix in source 1 (or beyond all sources when full).
+        populated_chunks = math.ceil(logical_n / chunk_global)
+        untouched_row = (
+            kv_local + populated_chunks * region if populated_chunks < cache_chunks else ring_size * kv_local
+        )
+        untouched = ttnn.slice(gathered_kv, (0, 0, untouched_row, 0), (b, nhk, untouched_row + 32, d_k))
+        for shard in ttnn.get_device_tensors(untouched):
+            assert torch.all(ttnn.to_torch(shard) == 13.0), "gather overwrote unused persistent capacity"
 
         # Q ranks own tp consecutive devices, so lane-mates ran identical work; take one per SP rank.
         shards = [ttnn.to_torch(s) for s in ttnn.get_device_tensors(tt_out)]
@@ -6163,7 +6227,7 @@ def test_ring_mla_full_mesh_tp_striped_kv_accuracy(fabric_config, cache_chunks, 
                     f"lane-mates diverge at sp_rank={sp_rank}, lane={lane}: PCC={lane_pcc}. Same Q slab and "
                     f"same gathered KV, so only ring accumulation order should differ"
                 )
-        output = torch.cat([shards[sp_rank * tp] for sp_rank in range(sp)], dim=2)[:, :, :chunk_global, :d_v]
+        output = torch.cat([shards[sp_rank * tp] for sp_rank in range(sp)], dim=2)[:, :, valid_rows, :d_v]
 
         # Causal reference with Q at its absolute offset in the prefix.
         qf = q_global.float()
@@ -6184,7 +6248,30 @@ def test_ring_mla_full_mesh_tp_striped_kv_accuracy(fabric_config, cache_chunks, 
         )
         assert output_pass, f"TP-striped ring_mla PCC {output_pcc} below {DEFAULT_PCC_THRESHOLD}"
     finally:
+        if trace_id is not None:
+            ttnn.release_trace(runtime.mesh_device, trace_id)
         close_ring_joint_sdpa_runtime(runtime)
+
+
+@pytest.mark.parametrize("k_chunk", [128, 352, 640, 1280], ids=["k128", "k352", "k640", "k1280"])
+@pytest.mark.parametrize("valid_chunks,prefix_offset", [(1, 0), (3, 0), (5, 0), (1, 32), (3, 288)])
+@pytest.mark.parametrize("q_chunk", [32, 64], ids=["inplace_v", "materialized_v"])
+@pytest.mark.parametrize("metadata", [False, True], ids=["scalar", "metadata"])
+def test_ring_mla_full_mesh_tp_striped_actual_isl_accuracy(
+    valid_chunks, prefix_offset, q_chunk, metadata, k_chunk, expect_error
+):
+    """Packed K coordinates must compose with rotated Q and dynamic ISL, including wrapped slabs."""
+    test_ring_mla_full_mesh_tp_striped_kv_accuracy(
+        ttnn.FabricConfig.FABRIC_2D,
+        8,
+        valid_chunks,
+        k_chunk,
+        q_chunk,
+        expect_error,
+        actual_isl=True,
+        prefix_offset=prefix_offset,
+        metadata=metadata,
+    )
 
 
 @pytest.mark.parametrize(

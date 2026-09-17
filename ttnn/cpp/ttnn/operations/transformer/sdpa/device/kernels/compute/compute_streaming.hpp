@@ -1043,7 +1043,36 @@ static void apply_lightweight_mask_streaming(
                     }
                 }
 
-                if constexpr (kv_pad_rotation_enabled) {
+                if (packed_k_runs != nullptr) {
+                    // The packed plan already splits columns into contiguous sequence intervals.
+                    if (apply_causal || kv_pad_rotation_enabled) {
+                        uint32_t rs = 0;
+                        for (uint32_t run = 0; run < packed_k_run_count; ++run) {
+                            const uint32_t re = packed_k_runs[run].column_end;
+                            const int32_t diag_col = q_pos - static_cast<int32_t>(packed_k_runs[run].global_start_tile);
+                            if (diag_col < 0) {
+                                stamper.neginf_range(rs, re);
+                            } else if (static_cast<uint32_t>(diag_col) < re - rs) {
+                                stamper.stamp_tile_at(static_cast<int32_t>(rs) + diag_col, primary_diag_idx);
+                                stamper.neginf_range(rs + static_cast<uint32_t>(diag_col) + 1, re);
+                            }
+                            if constexpr (kv_pad_rotation_enabled) {
+                                const uint32_t k_base = packed_k_runs[run].global_start_tile;
+                                const uint32_t valid = kv_pad_rotation.logical_tile_count > k_base
+                                                           ? kv_pad_rotation.logical_tile_count - k_base
+                                                           : 0;
+                                if (valid < re - rs) {
+                                    stamper.neginf_range(rs + valid, re);
+                                }
+                            }
+                            rs = re;
+                        }
+                    }
+                    // Packed tails need no K-coordinate decoding beyond the final run.
+                    const uint32_t valid_cols =
+                        packed_k_run_count ? packed_k_runs[packed_k_run_count - 1].column_end : 0;
+                    stamper.neginf_range(valid_cols, mask_cols);
+                } else if constexpr (kv_pad_rotation_enabled) {
                     for (uint32_t col = 0; col < mask_cols; col++) {
                         const uint32_t local_k_tile = kv_pad_rotation.k_local_start_tile + col;
                         if (local_k_tile >= kv_pad_kv_local_padded_Nt) {
@@ -1060,22 +1089,6 @@ static void apply_lightweight_mask_streaming(
                         const int32_t k_pos = static_cast<int32_t>(k_pos_u32);
                         l1_acc_causal_col_mask(
                             mask_cb, out_cb, row_offset, col, q_pos, k_pos, neginf_idx, primary_diag_idx);
-                    }
-                } else if (packed_k_runs != nullptr) {
-                    // The packed plan already splits columns into contiguous sequence intervals.
-                    if (apply_causal) {
-                        uint32_t rs = 0;
-                        for (uint32_t run = 0; run < packed_k_run_count; ++run) {
-                            const uint32_t re = packed_k_runs[run].column_end;
-                            const int32_t diag_col = q_pos - static_cast<int32_t>(packed_k_runs[run].global_start_tile);
-                            if (diag_col < 0) {
-                                stamper.neginf_range(rs, re);
-                            } else if (static_cast<uint32_t>(diag_col) < re - rs) {
-                                stamper.stamp_tile_at(static_cast<int32_t>(rs) + diag_col, primary_diag_idx);
-                                stamper.neginf_range(rs + static_cast<uint32_t>(diag_col) + 1, re);
-                            }
-                            rs = re;
-                        }
                     }
                 } else if (straddle_col == 0) {
                     // Fast path: K coords contiguous across cols.
@@ -2377,17 +2390,19 @@ void sdpa_ring_v2(
     // Tile offset of this call's Q chunk within cb_q_in (head-serial passes; 0 otherwise).
     const uint32_t q_base_tiles = 0,
     const uint32_t* streamed_source_ids = nullptr,
-    const uint32_t packed_group_tiles = 0) {
+    const uint32_t packed_group_source_count = 0) {
     init_sdpa_streaming_semaphores();
-    const bool pack_source_tails = packed_group_tiles != 0;
-    const PackedKVGroupPlan packed_kv{
-        local_padded_Nt, pack_source_tails ? packed_group_tiles / local_padded_Nt : 1, Sk_chunk_t};
+    const bool pack_source_tails = packed_group_source_count != 0;
 
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
     constexpr bool has_sliding_window = sliding_window_size > 0;
     // Stride for local-cache -> global-sequence mapping. Equals the Q slab when the cache is sharded
     // like Q; narrower once the KV is striped finer, in which case several shards share one Q rank.
     constexpr uint32_t kv_rank_stride_Nt = kv_region_Nt != 0 ? kv_region_Nt : q_local_padded_Nt;
+    const PackedKVGroupPlan packed_kv{
+        packed_kv_source_tiles(local_padded_Nt, logical_nt, kv_rank_stride_Nt, ring_size),
+        pack_source_tails ? packed_group_source_count : 1,
+        Sk_chunk_t};
     constexpr uint32_t kv_stripe_split = kv_rank_stride_Nt != 0 ? q_local_padded_Nt / kv_rank_stride_Nt : 1;
     static_assert(!has_sliding_window || chunked_enabled, "Sliding windows require chunked prefill");
     // is_causal: diagonal stamp only on iter 0 (K is local-frame). Chunked: every iter (absolute coords).
@@ -2613,11 +2628,11 @@ void sdpa_ring_v2(
         const uint32_t q_k_loop_count = has_sliding_window ? per_q_valid_kv : num_kv_chunks;
         for (uint32_t k_chunk = 0; k_chunk < q_k_loop_count; ++k_chunk) {
             const auto sliding_k_chunk = sliding_q_plan.k_chunk_at(k_chunk);
-            const uint32_t source_ring_id =
-                streamed_source_ids
-                    ? streamed_source_ids
-                          [pack_source_tails ? k_chunk * Sk_chunk_t / local_padded_Nt : k_chunk / num_local_k_chunks]
-                    : (has_sliding_window ? sliding_k_chunk.source_ring_id : ring_id);
+            const uint32_t source_ring_id = streamed_source_ids
+                                                ? streamed_source_ids
+                                                      [pack_source_tails ? packed_kv.source_index(k_chunk * Sk_chunk_t)
+                                                                         : k_chunk / num_local_k_chunks]
+                                                : (has_sliding_window ? sliding_k_chunk.source_ring_id : ring_id);
             const uint32_t source_k_chunk = streamed_source_ids
                                                 ? k_chunk % num_local_k_chunks
                                                 : (has_sliding_window ? sliding_k_chunk.source_k_chunk : k_chunk);
@@ -2863,7 +2878,7 @@ void sdpa_ring_v2(
                 cb_mask_in,
                 Sk_chunk_t,
                 kv_pad_rotation_enabled,
-                q_local_padded_Nt,
+                kv_rank_stride_Nt,
                 chunk_size_t,
                 local_padded_Nt,
                 v_cb_physical_width_t,

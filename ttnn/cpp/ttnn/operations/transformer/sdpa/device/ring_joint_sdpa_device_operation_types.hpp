@@ -180,7 +180,12 @@ struct RingJointSDPAInputs {
     // Q is the latest slab, K is the populated prefix from chunk 0 through the current chunk.
     uint32_t local_kv_seq_len() const { return static_cast<uint32_t>(input_k.logical_shape()[2]); }
 
-    bool is_chunked() const { return input_q.logical_shape()[2] < local_kv_seq_len(); }
+    // TP-striped KV is block-cyclic even for the first prefill chunk: its local
+    // region is narrower than Q by kv_stripe_split. Shape comparison alone
+    // would misclassify the first kv_stripe_split chunks as full prefill.
+    bool is_chunked(uint32_t kv_stripe_split) const {
+        return kv_stripe_split > 1 || input_q.logical_shape()[2] < local_kv_seq_len();
+    }
 
     // Latent-V optimization: absent V means the reader reuses K's buffer
     // and reads the first vDHt head-dim tiles (V's logical head dim).

@@ -617,7 +617,8 @@ void kernel_main() {
     const uint32_t source_group_size = packed_kv_source_group_size(
         GROUPED_KV_SOURCE_COUNT, ring_size, kv_local_padded_Nt, logical_nt, active_ring_iter_mask);
     const bool stream_sources = source_group_size > 1;
-    const PackedKVGroupPlan packed_kv{kv_local_padded_Nt, source_group_size, Sk_chunk_t};
+    const PackedKVGroupPlan packed_kv{
+        packed_kv_source_tiles(kv_local_padded_Nt, logical_nt, kv_region_Nt, ring_size), source_group_size, Sk_chunk_t};
     const uint32_t sdpa_ring_iterations = has_sliding_window ? 1 : ring_size / source_group_size;
     for (uint32_t ring_iter = 0; ring_iter < sdpa_ring_iterations; ++ring_iter) {
         uint32_t streamed_first_source = ring_index;

@@ -301,7 +301,7 @@ void validate_runtime_patched_scalars(const RingJointSDPAParams& args, const Rin
             chunk_capacity);
     }
 
-    if (args.has_sliding_window() && tensor_args.is_chunked()) {
+    if (args.has_sliding_window() && tensor_args.is_chunked(args.kv_stripe_split)) {
         const auto q_group_size = tensor_args.input_q.logical_shape()[2] * args.ring_size;
         // One complete group is enough: at logical_n == q_group_size device 0 clips its
         // window at token 0 and devices 1..R-1 consume predecessors within that group.
@@ -492,10 +492,9 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     const uint32_t NVH = tensor_args.v_num_heads();
     const uint32_t VDH = tensor_args.v_head_dim(args.latent_v_head_dim);
 
-    // Chunked-prefill (`tensor_args.is_chunked()`): Q is shorter than the per-device K shard
-    // (latest slab against a growing K cache). Chunk 0 has equal shapes and uses the regular
-    // is_causal=True path.
-    const bool is_chunked = tensor_args.is_chunked();
+    // TP-striped KV always uses the block-cyclic chunked mapping. Otherwise,
+    // Q shorter than K denotes incremental prefill; equal shapes use full prefill.
+    const bool is_chunked = tensor_args.is_chunked(args.kv_stripe_split);
 
     const auto dtype = input_tensor_q.dtype();
     if ((!args.is_causal && !is_chunked) || args.is_cross) {
@@ -539,15 +538,8 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     auto k_chunk_size = args.get_k_chunk_size();
     const bool has_kv_pad_rotation = args.has_kv_pad_rotation();
 
-    if (ag.full_mesh) {
-        TT_FATAL(
-            gathered_buffer_n == N_local_kv * args.ring_size,
-            "Full-mesh RingJointSDPA gathered sequence extent must equal local extent times ring size; got {} vs "
-            "{} * {}",
-            gathered_buffer_n,
-            N_local_kv,
-            args.ring_size);
-    }
+    // Persistent gather capacity may exceed this invocation's input prefix,
+    // including on the full-mesh path. The common capacity check below applies.
 
     if (args.has_sliding_window()) {
         const uint32_t window_size = args.sliding_window_size.value();
@@ -628,25 +620,15 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         args.logical_n > 0,
         "Logical sequence length must be > 0; kernels derive last-valid-tile = logical_nt - 1 and would underflow.");
 
+    // Compare Q against the aggregate KV owned by its SP rank, not one TP stripe.
+    // A single striped prefill chunk has kv_stripe_split narrower KV regions.
     TT_FATAL(
-        N_local_q <= N_local_kv,
-        "Per-device Q seq length must be <= per-device K/V seq length. Equal: full-prefill path. Less: "
-        "chunked-prefill path. Greater is undefined. Got N_local_q={}, N_local_kv={}",
+        N_local_q <= N_local_kv * args.kv_stripe_split,
+        "Per-device Q seq length must fit the KV regions for its Q rank. "
+        "Got N_local_q={}, N_local_kv={}, kv_stripe_split={}",
         N_local_q,
-        N_local_kv);
-
-    // A TP-striped cache is block-cyclic by construction: a device holds one narrow region of EVERY
-    // chunk, not one contiguous run of the sequence. Only the chunked mapping can express that, and
-    // kv_local >= q_local then forces the cache to be at least kv_stripe_split chunks deep.
-    TT_FATAL(
-        args.kv_stripe_split == 1 || is_chunked,
-        "kv_stripe_split={} requires the chunked-prefill path (per-device Q strictly shorter than "
-        "per-device K/V): a striped cache holds one region per chunk rather than a contiguous run, so it "
-        "must be at least {} chunks deep. Got N_local_q={}, N_local_kv={}",
-        args.kv_stripe_split,
-        args.kv_stripe_split,
-        N_local_q,
-        N_local_kv);
+        N_local_kv,
+        args.kv_stripe_split);
 
     // The sliding path derives Q's absolute start as logical_nt - ring_size * q_slab + ring_index *
     // q_slab, and builds its halo layout with the Q slab as the cache region. Both read ring_size as
@@ -801,11 +783,16 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     }
 
     TT_FATAL(
-        args.logical_n <= N_global,
-        "Logical sequence length must be less than or equal to global sequence length. Got logical sequence length: "
-        "{}, global sequence length: {}",
+        args.logical_n <= N_local_kv * args.ring_size,
+        "Logical sequence length must not exceed input KV capacity. Got logical sequence length: "
+        "{}, input KV capacity: {}",
         args.logical_n,
-        N_global);
+        N_local_kv * args.ring_size);
+    if (is_chunked && !args.is_cross && !has_kv_pad_rotation && !tensor_args.has_metadata()) {
+        TT_FATAL(
+            args.logical_n >= N_local_q * (args.ring_size / args.kv_stripe_split),
+            "Chunked prefill logical sequence length must include the full Q chunk");
+    }
 
     if (has_joint_tensors) {
         TT_FATAL(
