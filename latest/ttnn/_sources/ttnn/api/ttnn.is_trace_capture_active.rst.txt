@@ -1,0 +1,8 @@
+﻿ttnn.is\_trace\_capture\_active
+===============================
+
+.. currentmodule:: ttnn
+
+.. _ttnn.is_trace_capture_active:
+
+.. autodata:: ttnn.is_trace_capture_active

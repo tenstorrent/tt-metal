@@ -456,6 +456,11 @@ The same kv_cache_batch_idx selects the K and V cache slot, and the full K/V seq
 dimension is treated as valid. When kv_actual_isl is provided, the chunked path switches
 to KV-pad-aware rotation: logical_n remains the total valid KV length after this iteration,
 while kv_actual_isl marks the prior valid cache length before the current chunk.</p>
+<p>Metadata (trace-safe) path: slot_id / kv_actual_isl_tensor replace the host kv_cache_batch_idx /
+kv_actual_isl (mixing the two forms is rejected) and the cache batch is slot * kv_cache_num_layers +
+kv_cache_layer_idx on both forms. logical_n stays the real total valid length: on chunked shapes the
+kernels derive it on-device as kv_actual_isl[0] + chunk and the program hash does not key it, so one
+program serves every chunk depth.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Returns<span class="colon">:</span>
 </dt>

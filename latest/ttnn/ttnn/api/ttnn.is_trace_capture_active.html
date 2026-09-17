@@ -4,13 +4,13 @@
   <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
 
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>ttnn.synchronize_device &mdash; TT-NN™  documentation</title>
+  <title>ttnn.is_trace_capture_active &mdash; TT-NN™  documentation</title>
       <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/css/theme.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/copybutton.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/tt_theme.css" type="text/css" />
     <link rel="shortcut icon" href="../../_static/favicon.png"/>
-    <link rel="canonical" href="/tt-metal/latest/ttnn/ttnn/api/ttnn.synchronize_device.html" />
+    <link rel="canonical" href="/tt-metal/latest/ttnn/ttnn/api/ttnn.is_trace_capture_active.html" />
   <!--[if lt IE 9]>
     <script src="../../_static/js/html5shiv.min.js"></script>
   <![endif]-->
@@ -27,8 +27,8 @@
     <script src="../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
-    <link rel="next" title="ttnn.is_trace_capture_active" href="ttnn.is_trace_capture_active.html" />
-    <link rel="prev" title="ttnn.manage_device" href="ttnn.manage_device.html" />
+    <link rel="next" title="ttnn.SetDefaultDevice" href="ttnn.SetDefaultDevice.html" />
+    <link rel="prev" title="ttnn.synchronize_device" href="ttnn.synchronize_device.html" />
  <link rel="stylesheet" href="https://docs.tenstorrent.com/_static/tt_theme.css">
 
 <script>
@@ -235,11 +235,11 @@
 <li class="toctree-l3"><a class="reference internal" href="ttnn.open_device.html">ttnn.open_device</a></li>
 <li class="toctree-l3"><a class="reference internal" href="ttnn.close_device.html">ttnn.close_device</a></li>
 <li class="toctree-l3"><a class="reference internal" href="ttnn.manage_device.html">ttnn.manage_device</a></li>
-<li class="toctree-l3 current"><a class="current reference internal" href="#">ttnn.synchronize_device</a><ul>
-<li class="toctree-l4"><a class="reference internal" href="#ttnn.synchronize_device"><code class="docutils literal notranslate"><span class="pre">synchronize_device</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="ttnn.synchronize_device.html">ttnn.synchronize_device</a></li>
+<li class="toctree-l3 current"><a class="current reference internal" href="#">ttnn.is_trace_capture_active</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#ttnn.is_trace_capture_active"><code class="docutils literal notranslate"><span class="pre">is_trace_capture_active</span></code></a></li>
 </ul>
 </li>
-<li class="toctree-l3"><a class="reference internal" href="ttnn.is_trace_capture_active.html">ttnn.is_trace_capture_active</a></li>
 <li class="toctree-l3"><a class="reference internal" href="ttnn.SetDefaultDevice.html">ttnn.SetDefaultDevice</a></li>
 <li class="toctree-l3"><a class="reference internal" href="ttnn.GetDefaultDevice.html">ttnn.GetDefaultDevice</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#deprecated-device-apis">Deprecated Device APIs</a></li>
@@ -303,7 +303,7 @@
           <div role="navigation" aria-label="Page navigation">
   <ul class="wy-breadcrumbs">
   <li><a href="../../index.html">Home</a></li><li class="breadcrumb-item"><a href="../api.html">APIs</a></li>
-  <li class="breadcrumb-item active">ttnn.synchronize_device</li>
+  <li class="breadcrumb-item active">ttnn.is_trace_capture_active</li>
       <li class="wy-breadcrumbs-aside">
       </li>
   </ul>
@@ -312,51 +312,33 @@
           <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
            <div itemprop="articleBody">
              
-  <section id="ttnn-synchronize-device">
-<h1>ttnn.synchronize_device<a class="headerlink" href="#ttnn-synchronize-device" title="Permalink to this heading"></a>
+  <section id="ttnn-is-trace-capture-active">
+<h1>ttnn.is_trace_capture_active<a class="headerlink" href="#ttnn-is-trace-capture-active" title="Permalink to this heading"></a>
 </h1>
 <span class="target" id="id1"></span><dl class="py data">
-<dt class="sig sig-object py" id="ttnn.synchronize_device">
-<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">synchronize_device</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">&lt;nanobind.nb_func</span> <span class="pre">object&gt;</span></em><a class="headerlink" href="#ttnn.synchronize_device" title="Permalink to this definition"></a>
+<dt class="sig sig-object py" id="ttnn.is_trace_capture_active">
+<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">is_trace_capture_active</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">&lt;nanobind.nb_func</span> <span class="pre">object&gt;</span></em><a class="headerlink" href="#ttnn.is_trace_capture_active" title="Permalink to this definition"></a>
 </dt>
 <dd>
-<p>ttnn._ttnn.multi_device.MeshDevice, cq_id: ttnn._ttnn.types.QueueId | None = None, sub_device_ids: collections.abc.Sequence[ttnn._ttnn.device.SubDeviceId] = []) -&gt; None</p>
-<p>Synchronize the device with host by waiting for all operations to complete.
-If cq_id is provided then only the operations associated with that cq_id are waited for,
-otherwise operations for all command queues are waited on.
-If the device has been configured with sub-devices, then sub_device_ids can be provided to only wait
-for the operations that ran on the specified sub-devices, otherwise all sub-devices (the entire chip) are waited on.</p>
+<p>ttnn._ttnn.multi_device.MeshDevice) -&gt; bool</p>
+<p>Returns True if a metal trace is currently being captured on any command queue of the device.</p>
+<p>Operations that synchronize with host (event recording, reads, writes) are not supported while a
+trace is being captured, so callers that would otherwise synchronize must skip doing so.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span>
 </dt>
 <dd class="field-odd">
-<ul class="simple">
-<li><p><span class="tt-api-param-name"><strong>device</strong> (<em>ttnn.device.Device</em>)</span><span class="tt-api-param-desc">The device to synchronize with.</span></p></li>
-<li><p><span class="tt-api-param-name"><strong>cq_id</strong> (<em>int</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">The command queue ID to synchronize. Defaults to <cite>None</cite>.</span></p></li>
-<li><p><span class="tt-api-param-name"><strong>sub_device_ids</strong> (<em>List</em><em>[</em><em>ttnn.SubDeviceId</em><em>]</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">The sub-device IDs to synchronize. Defaults to sub-devices set by set_sub_device_stall_group.</span></p></li>
-</ul>
+<p><span class="tt-api-param-name"><strong>device</strong> (<em>ttnn.MeshDevice</em>)</span><span class="tt-api-param-desc">The device to query.</span></p>
 </dd>
 <dt class="field-even">Returns<span class="colon">:</span>
 </dt>
 <dd class="field-even">
-<p><span class="tt-api-param-name"><cite>None</cite></span><span class="tt-api-param-desc">The op ensures that all operations are completed.</span></p>
+<p><span class="tt-api-param-name"><cite>bool</cite></span><span class="tt-api-param-desc">whether a trace capture is in progress.</span></p>
 </dd>
-</dl>
-<div class="admonition-example admonition">
-<p class="admonition-title">Example</p>
-<div class="doctest highlight-default notranslate">
-<div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="n">device_id</span> <span class="o">=</span> <span class="mi">0</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">device</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">open_device</span><span class="p">(</span><span class="n">device_id</span><span class="o">=</span><span class="n">device_id</span><span class="p">)</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="c1"># Assume some operations are queued on the device</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">ttnn</span><span class="o">.</span><span class="n">synchronize_device</span><span class="p">(</span><span class="n">device</span><span class="p">)</span>
-</pre></div>
-</div>
-</div>
-<dl class="field-list simple">
 <dt class="field-odd">Type<span class="colon">:</span>
 </dt>
 <dd class="field-odd">
-<p>synchronize_device(device</p>
+<p>is_trace_capture_active(device</p>
 </dd>
 </dl>
 </dd>
@@ -369,8 +351,8 @@ for the operations that ran on the specified sub-devices, otherwise all sub-devi
            </div>
           </div>
           <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
-        <a href="ttnn.manage_device.html" class="btn btn-neutral float-left" title="ttnn.manage_device" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
-        <a href="ttnn.is_trace_capture_active.html" class="btn btn-neutral float-right" title="ttnn.is_trace_capture_active" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+        <a href="ttnn.synchronize_device.html" class="btn btn-neutral float-left" title="ttnn.synchronize_device" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="ttnn.SetDefaultDevice.html" class="btn btn-neutral float-right" title="ttnn.SetDefaultDevice" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
     </div>
 
   <hr/>
