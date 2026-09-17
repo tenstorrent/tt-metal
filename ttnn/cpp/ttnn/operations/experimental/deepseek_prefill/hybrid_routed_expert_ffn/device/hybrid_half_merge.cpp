@@ -11,7 +11,7 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/hal.hpp>
-#include "moe_fused_swiglu_geometry.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/moe_fused_swiglu/device/moe_fused_swiglu_geometry.hpp"
 
 namespace ttnn::operations::experimental::deepseek_prefill::hybrid_routed_expert_ffn {
 
@@ -52,11 +52,12 @@ uint32_t merge_semaphores(const ProgramDescriptor& fused, const ProgramDescripto
 
     const uint32_t barrier_id = by_id.rbegin()->first + 1;
     TT_FATAL(
-        barrier_id < fused::geometry::NUM_DEVICE_SEMAPHORES,
+        barrier_id <
+            ::ttnn::operations::experimental::deepseek_prefill::moe_fused_swiglu::geometry::NUM_DEVICE_SEMAPHORES,
         "the merged program needs {} semaphores (both halves' shared block plus the pass barrier) but a core has "
         "{}; the halves' blocks are {} and {} ids wide",
         barrier_id + 1,
-        fused::geometry::NUM_DEVICE_SEMAPHORES,
+        ::ttnn::operations::experimental::deepseek_prefill::moe_fused_swiglu::geometry::NUM_DEVICE_SEMAPHORES,
         fused.semaphores.size(),
         unified.semaphores.size());
 
