@@ -34,14 +34,6 @@
 namespace tt::tt_metal::streaming_profiler {
 
 namespace {
-// One idle-eth core's reading of one tile: the core's wall tick minus the tile's, each NoC's read round trip, and
-// the NoC 0 minus NoC 1 reading in half ticks.
-struct TileReading {
-    int64_t value = 0;
-    uint32_t rtt0 = 0, rtt1 = 0;
-    int32_t ddiff = 0;
-};
-
 // Solves the normal equations N x = r by Gaussian elimination with partial pivoting; a pivot of zero leaves that
 // unknown at 0 (an unobserved tile).
 std::vector<double> solve_normal(std::vector<std::vector<double>> N, std::vector<double> r) {
@@ -140,14 +132,45 @@ void SyncDevices::stop(tt::Cluster& cluster) {
     stop_links(cluster);
 }
 
-// Every idle eth core reads every Tensix tile and every other idle eth tile, one core at a time so nothing else is
-// on the NoC, and the tiles' offsets are solved together: each reading says tile - source, the pusher fixes the
-// origin. Three numbers per chip come out of it: how far apart the tiles' clocks are, how well the sources agree on
-// each tile (the placement's likely error), and what the round trips bound the error to with no symmetry assumed:
-// on the torus a read's request and response together cover whole rings at a fixed latency per hop
-// (RoutingPaths.md, README.md of the NoC ISA docs), so a round trip minus its rings is the two ends' own handling,
-// and the register sample lies somewhere inside the far end's share of it.
-std::vector<double> SyncDevices::solve_tiles(uint32_t di) {
+// One idle-eth core's reading of one tile: the core's wall tick minus the tile's, each NoC's read round trip, and
+// the NoC 0 minus NoC 1 reading in half ticks.
+struct SyncDevices::TileReading {
+    int64_t value = 0;
+    uint32_t rtt0 = 0, rtt1 = 0;
+    int32_t ddiff = 0;
+};
+
+// One reading as an equation: value = x[t] - x[s] + x[path], x being pusher wall minus tile wall. -1 is the pusher
+// (the origin, x = 0) or, for the path, a two-ring read.
+struct SyncDevices::TileObs {
+    int32_t s, t;
+    uint32_t src;  // source order
+    TileReading r;
+    CoreCoord from, to;  // raw NoC 0 coordinates
+};
+
+// The unknowns: the Tensix tiles, the helper sources, then two path terms. A read within the source's column or row
+// covers one ring, the rest two; the one-ring reads sit a fixed few ticks off the two-ring ones, so each of those two
+// paths gets an unknown of its own, found from the tiles both kinds of source read, instead of pulling on the tiles'
+// offsets.
+struct SyncDevices::TileUnknowns {
+    size_t n_tiles, n_helpers;
+    size_t col() const { return n_tiles + n_helpers; }
+    size_t row() const { return n_tiles + n_helpers + 1; }
+    size_t count() const { return n_tiles + n_helpers + 2; }
+    int32_t path_of(const TileObs& o) const {
+        if (o.from.x == o.to.x) {
+            return static_cast<int32_t>(col());
+        }
+        return o.from.y == o.to.y ? static_cast<int32_t>(row()) : -1;
+    }
+    double fit_of(const TileObs& o, const std::vector<double>& x) const {
+        const auto x_of = [&](int32_t u) { return u < 0 ? 0.0 : x[static_cast<size_t>(u)]; };
+        return x_of(o.t) - x_of(o.s) + x_of(path_of(o));
+    }
+};
+
+std::vector<SyncDevices::TileObs> SyncDevices::read_tiles(uint32_t di, std::vector<TileReading>& loops) {
     auto& cluster = MetalContext::instance(context_id_).get_cluster();
     const Device& d = devices_[di].d;
     const uint32_t nt = static_cast<uint32_t>(d.tensix.size());
@@ -181,90 +204,83 @@ std::vector<double> SyncDevices::solve_tiles(uint32_t di) {
         return true;
     };
     // Sources: the pusher, then the helpers; a source's tile list is the Tensix tiles, then the other sources in
-    // source order. Unknowns: the Tensix tiles, then the helpers; the pusher is the origin.
-    std::vector<CoreCoord> src_logical, src_virt, src_phys;
-    for (const CoreCoords& h : d.eth) {
-        src_logical.push_back(h.logical);
-        src_virt.push_back(h.virt);
-        src_phys.push_back(h.phys);
-    }
+    // source order.
     std::vector<std::vector<TileReading>> readings(ns);
-    std::vector<TileReading> loops(ns);
+    loops.assign(ns, TileReading{});
     for (uint32_t s = 0; s < ns; s++) {
+        const CoreCoords& src = d.eth[s];
         std::vector<uint32_t> table(kernel_profiler::ETH_TILE_XY_0, 0);
         for (const CoreCoords& c : d.tensix) {
             table.push_back(packed_xy(c.virt));
         }
         for (uint32_t o = 0; o < ns; o++) {
             if (o != s) {
-                table.push_back(packed_xy(src_virt[o]));
+                table.push_back(packed_xy(d.eth[o].virt));
             }
         }
         table[kernel_profiler::ETH_TILE_N] = nt + nh;
         cluster.write_core(
             table.data(),
             static_cast<uint32_t>(table.size() * sizeof(uint32_t)),
-            tt_cxy_pair(d.chip_id, src_virt[s]),
+            tt_cxy_pair(d.chip_id, src.virt),
             eth_l1_.table);
         Program p = CreateProgram();
-        const KernelHandle kid = create_pusher_kernel(p, eth_l1_, d.eth[s], /*measure_only=*/true);
-        SetRuntimeArgs(p, kid, src_logical[s], std::vector<uint32_t>{0});
+        const KernelHandle kid = create_pusher_kernel(p, eth_l1_, src, /*measure_only=*/true);
+        SetRuntimeArgs(p, kid, src.logical, std::vector<uint32_t>{0});
         detail::CompileProgram(d.device, p, /*force_slow_dispatch=*/true);
         detail::WriteRuntimeArgsToDevice(d.device, p, /*force_slow_dispatch=*/true);
         detail::LaunchProgram(d.device, p, /*wait_until_cores_done=*/false, /*force_slow_dispatch=*/true);
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
-        while (!read_table(src_virt[s], nt + nh, readings[s], loops[s])) {
+        while (!read_table(src.virt, nt + nh, readings[s], loops[s])) {
             TT_FATAL(
                 std::chrono::steady_clock::now() < deadline,
                 "streaming profiler: device {} idle eth ({},{}) tile table not written within 2 s",
                 d.chip_id,
-                src_logical[s].x,
-                src_logical[s].y);
+                src.logical.x,
+                src.logical.y);
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
         detail::WaitProgramDone(d.device, p, false);
     }
-
-    // Observations: for source s and its i-th listed tile, value = source wall - tile wall = x_tile - x_source
-    // with x = pusher wall - tile wall (x_pusher = 0). Unknown index: Tensix i -> i, helper h -> nt + h.
-    struct Obs {
-        int32_t s, t;  // unknown indices; -1 is the pusher
-        uint32_t src;  // source order
-        TileReading r;
-        CoreCoord from, to;  // raw NoC 0 coordinates
-    };
-    std::vector<Obs> obs;
+    // Unknown index: Tensix i -> i, helper h -> nt + h, the pusher -1.
     const auto unknown_of_source = [&](uint32_t s) { return s == 0 ? -1 : static_cast<int32_t>(nt + s - 1); };
+    std::vector<TileObs> obs;
     for (uint32_t s = 0; s < ns; s++) {
         uint32_t listed = 0;
         for (uint32_t i = 0; i < nt; i++, listed++) {
-            obs.push_back(Obs{
-                unknown_of_source(s), static_cast<int32_t>(i), s, readings[s][listed], src_phys[s], d.tensix[i].phys});
+            obs.push_back(TileObs{
+                unknown_of_source(s),
+                static_cast<int32_t>(i),
+                s,
+                readings[s][listed],
+                d.eth[s].phys,
+                d.tensix[i].phys});
         }
         for (uint32_t o = 0; o < ns; o++) {
-            if (o == s) {
-                continue;
+            if (o != s) {
+                obs.push_back(TileObs{
+                    unknown_of_source(s),
+                    unknown_of_source(o),
+                    s,
+                    readings[s][listed++],
+                    d.eth[s].phys,
+                    d.eth[o].phys});
             }
-            obs.push_back(
-                Obs{unknown_of_source(s), unknown_of_source(o), s, readings[s][listed++], src_phys[s], src_phys[o]});
         }
     }
-    // A read within the source's column or row covers one ring, the rest two; the one-ring reads sit a fixed few
-    // ticks off the two-ring ones, so each of those two paths gets an unknown of its own, found from the tiles
-    // both kinds of source read, instead of pulling on the tiles' offsets.
-    const size_t nu = nt + nh + 2;
-    const size_t kCol = nt + nh, kRow = nt + nh + 1;
-    const auto path_of = [&](const Obs& o) -> int32_t {
-        if (o.from.x == o.to.x) {
-            return static_cast<int32_t>(kCol);
-        }
-        return o.from.y == o.to.y ? static_cast<int32_t>(kRow) : -1;
-    };
-    std::vector<std::vector<double>> N(nu, std::vector<double>(nu, 0.0));
-    std::vector<double> rhs(nu, 0.0);
-    for (const Obs& o : obs) {
+    return obs;
+}
+
+std::vector<double> SyncDevices::solve_tiles(uint32_t di) {
+    const Device& d = devices_[di].d;
+    std::vector<TileReading> loops;
+    const std::vector<TileObs> obs = read_tiles(di, loops);
+    const TileUnknowns u{d.tensix.size(), d.eth.size() - 1};
+    std::vector<std::vector<double>> N(u.count(), std::vector<double>(u.count(), 0.0));
+    std::vector<double> rhs(u.count(), 0.0);
+    for (const TileObs& o : obs) {
         const double v = static_cast<double>(o.r.value);
-        const int32_t cols[3] = {o.t, o.s, path_of(o)};
+        const int32_t cols[3] = {o.t, o.s, u.path_of(o)};
         const double coef[3] = {1.0, -1.0, 1.0};
         for (int i = 0; i < 3; i++) {
             if (cols[i] < 0) {
@@ -279,30 +295,103 @@ std::vector<double> SyncDevices::solve_tiles(uint32_t di) {
         }
     }
     const std::vector<double> x = solve_normal(N, rhs);
-    const auto x_of = [&](int32_t u) { return u < 0 ? 0.0 : x[static_cast<size_t>(u)]; };
-    const auto fit_of = [&](const Obs& o) {
-        const int32_t pth = path_of(o);
-        return x_of(o.t) - x_of(o.s) + (pth >= 0 ? x[static_cast<size_t>(pth)] : 0.0);
-    };
-    const double ns_per_tick = 1.0 / d.frequency_ghz;
+    log_noc_split(d, obs);
+    log_tile_fit(d, obs, loops, x, u);
+    return x;
+}
 
-    const auto [xlo, xhi] = std::minmax_element(x.begin(), x.begin() + nt);
+// The two NoCs' split of each reading against the routes: on NoC 0 a request runs right then down, its response on
+// round the same way, so the request is ahead of the midpoint by half the hop imbalance; NoC 1 mirrors it. Per hop
+// and per wrap link fitted, the residual is what the routes do not explain.
+void SyncDevices::log_noc_split(const Device& d, const std::vector<TileObs>& obs) const {
+    const auto& soc = MetalContext::instance(context_id_).get_cluster().get_soc_desc(d.chip_id);
+    const uint32_t W = static_cast<uint32_t>(soc.grid_size.x), H = static_cast<uint32_t>(soc.grid_size.y);
+    std::vector<std::vector<double>> M(4, std::vector<double>(4, 0.0));
+    std::vector<double> mr(4, 0.0);
+    std::vector<std::array<double, 4>> rows;
+    std::vector<double> vals;
+    for (const TileObs& o : obs) {
+        const int64_t dxr = (static_cast<int64_t>(o.to.x) - static_cast<int64_t>(o.from.x) + W) % W;
+        const int64_t dyr = (static_cast<int64_t>(o.to.y) - static_cast<int64_t>(o.from.y) + H) % H;
+        const std::array<double, 4> a = {
+            dxr ? static_cast<double>(2 * dxr - static_cast<int64_t>(W)) : 0.0,
+            dyr ? static_cast<double>(2 * dyr - static_cast<int64_t>(H)) : 0.0,
+            dxr ? (o.to.x < o.from.x ? 1.0 : -1.0) : 0.0,
+            dyr ? (o.to.y < o.from.y ? 1.0 : -1.0) : 0.0};
+        const double v = 0.5 * static_cast<double>(o.r.ddiff);  // NoC 0 minus NoC 1 midpoint error, ticks
+        for (size_t i = 0; i < 4; i++) {
+            for (size_t j = 0; j < 4; j++) {
+                M[i][j] += a[i] * a[j];
+            }
+            mr[i] += a[i] * v;
+        }
+        rows.push_back(a);
+        vals.push_back(v);
+    }
+    const std::vector<double> fit = solve_normal(M, mr);
+    double rss = 0.0, rworst = 0.0;
+    for (size_t k = 0; k < rows.size(); k++) {
+        double pred = 0.0;
+        for (size_t i = 0; i < 4; i++) {
+            pred += rows[k][i] * fit[i];
+        }
+        const double res = vals[k] - pred;
+        rss += res * res;
+        rworst = std::max(rworst, std::fabs(res));
+    }
+    // The split only sees the two NoCs' per-hop costs summed; their difference is the two round trips'
+    // difference, both covering the same rings.
+    double d_sum = 0.0;
+    int32_t d_worst = 0;
+    for (const TileObs& o : obs) {
+        const int32_t dd = static_cast<int32_t>(o.r.rtt1) - static_cast<int32_t>(o.r.rtt0);
+        d_sum += dd;
+        d_worst = std::abs(dd) > std::abs(d_worst) ? dd : d_worst;
+    }
+    log_info(
+        tt::LogMetal,
+        "[streaming profiler] Device {}: tile reads on the two NoCs split as the torus routes say: {:.2f} ticks "
+        "per x hop, {:.2f} per y hop, wrap links {:+.1f} x {:+.1f} y; unexplained {:.1f} ticks rms, {:.1f} worst; "
+        "NoC 1 round trips against NoC 0: {:+.2f} ticks mean, {:+d} worst",
+        d.chip_id,
+        fit[0],
+        fit[1],
+        fit[2],
+        fit[3],
+        rows.empty() ? 0.0 : std::sqrt(rss / static_cast<double>(rows.size())),
+        rworst,
+        obs.empty() ? 0.0 : d_sum / static_cast<double>(obs.size()),
+        d_worst);
+}
+
+// Three numbers per chip: how far apart the tiles' clocks are, how well the sources agree on each tile (the
+// placement's likely error), and what the round trips bound the error to with no symmetry assumed: on the torus a
+// read's request and response together cover whole rings at a fixed latency per hop (RoutingPaths.md, README.md of
+// the NoC ISA docs), so a round trip minus its rings is the two ends' own handling, and the register sample lies
+// somewhere inside the far end's share of it.
+void SyncDevices::log_tile_fit(
+    const Device& d,
+    const std::vector<TileObs>& obs,
+    const std::vector<TileReading>& loops,
+    const std::vector<double>& x,
+    const TileUnknowns& u) const {
+    const double ns_per_tick = 1.0 / d.frequency_ghz;
+    const auto [xlo, xhi] = std::minmax_element(x.begin(), x.begin() + static_cast<std::ptrdiff_t>(u.n_tiles));
     double ss = 0.0, worst = 0.0;
-    for (const Obs& o : obs) {
-        const double res = static_cast<double>(o.r.value) - fit_of(o);
+    for (const TileObs& o : obs) {
+        const double res = static_cast<double>(o.r.value) - u.fit_of(o, x);
         ss += res * res;
         worst = std::max(worst, std::fabs(res));
     }
     const double rms = obs.empty() ? 0.0 : std::sqrt(ss / static_cast<double>(obs.size()));
-    // A read's round trip is its rings (x ring, y ring, both, or neither for the loopback read),
-    // each a fixed transit, plus the two ends' handling. The ring transits come from the round trips by class;
-    // what remains of a read is its ends, and the sample lies inside the far end's part, so a placement is off by
-    // at most half of (this read's ends + the source's loopback ends), whatever the split.
-    const auto& soc = cluster.get_soc_desc(d.chip_id);
-    const uint32_t W = static_cast<uint32_t>(soc.grid_size.x), H = static_cast<uint32_t>(soc.grid_size.y);
+    // A read's round trip is its rings (x ring, y ring, both, or neither for the loopback read), each a fixed
+    // transit, plus the two ends' handling. The ring transits come from the round trips by class, over the loopback:
+    // y ring from same-column reads, x ring from same-row reads, and the general class checks their sum (its excess
+    // is the turns). What remains of a read is its ends, and the sample lies inside the far end's part, so a
+    // placement is off by at most half of (this read's ends + the source's loopback ends), whatever the split.
     double sum_row = 0.0, sum_col = 0.0, sum_gen = 0.0;
     uint32_t n_row = 0, n_col = 0, n_gen = 0;
-    for (const Obs& o : obs) {
+    for (const TileObs& o : obs) {
         const double ends = static_cast<double>(o.r.rtt0) - static_cast<double>(loops[o.src].rtt0);
         const bool same_col = o.from.x == o.to.x, same_row = o.from.y == o.to.y;
         if (same_col) {
@@ -316,13 +405,11 @@ std::vector<double> SyncDevices::solve_tiles(uint32_t di) {
             n_gen++;
         }
     }
-    // Ring transits from the class means, over the loopback: y ring from same-column reads, x ring from
-    // same-row reads, and the general class checks their sum (its excess is the turns).
     const double y_ring = n_col ? sum_col / n_col : 0.0;
     const double x_ring = n_row ? sum_row / n_row : 0.0;
     const double turns = n_gen ? sum_gen / n_gen - x_ring - y_ring : 0.0;
     double bound = 0.0, transit_rms = 0.0;
-    for (const Obs& o : obs) {
+    for (const TileObs& o : obs) {
         const bool same_col = o.from.x == o.to.x, same_row = o.from.y == o.to.y;
         const double transit =
             (same_col ? 0.0 : x_ring) + (same_row ? 0.0 : y_ring) + (same_col || same_row ? 0.0 : turns);
@@ -332,67 +419,6 @@ std::vector<double> SyncDevices::solve_tiles(uint32_t di) {
         bound = std::max(bound, 0.5 * (ends + static_cast<double>(loops[o.src].rtt0)));
     }
     transit_rms = obs.empty() ? 0.0 : std::sqrt(transit_rms / static_cast<double>(obs.size()));
-    // The two NoCs' split of each reading against the routes: on NoC 0 a request runs right then down, its
-    // response on round the same way, so the request is ahead of the midpoint by half the hop imbalance; NoC 1
-    // mirrors it. Per hop and per wrap link fitted, the residual is what the routes do not explain.
-    {
-        std::vector<std::vector<double>> M(4, std::vector<double>(4, 0.0));
-        std::vector<double> mr(4, 0.0);
-        std::vector<std::array<double, 4>> rows;
-        std::vector<double> vals;
-        for (const Obs& o : obs) {
-            const int64_t dxr = (static_cast<int64_t>(o.to.x) - static_cast<int64_t>(o.from.x) + W) % W;
-            const int64_t dyr = (static_cast<int64_t>(o.to.y) - static_cast<int64_t>(o.from.y) + H) % H;
-            const std::array<double, 4> a = {
-                dxr ? static_cast<double>(2 * dxr - static_cast<int64_t>(W)) : 0.0,
-                dyr ? static_cast<double>(2 * dyr - static_cast<int64_t>(H)) : 0.0,
-                dxr ? (o.to.x < o.from.x ? 1.0 : -1.0) : 0.0,
-                dyr ? (o.to.y < o.from.y ? 1.0 : -1.0) : 0.0};
-            const double v = 0.5 * static_cast<double>(o.r.ddiff);  // NoC 0 minus NoC 1 midpoint error, ticks
-            for (size_t i = 0; i < 4; i++) {
-                for (size_t j = 0; j < 4; j++) {
-                    M[i][j] += a[i] * a[j];
-                }
-                mr[i] += a[i] * v;
-            }
-            rows.push_back(a);
-            vals.push_back(v);
-        }
-        const std::vector<double> fit = solve_normal(M, mr);
-        double rss = 0.0, rworst = 0.0;
-        for (size_t k = 0; k < rows.size(); k++) {
-            double pred = 0.0;
-            for (size_t i = 0; i < 4; i++) {
-                pred += rows[k][i] * fit[i];
-            }
-            const double res = vals[k] - pred;
-            rss += res * res;
-            rworst = std::max(rworst, std::fabs(res));
-        }
-        // The split only sees the two NoCs' per-hop costs summed; their difference is the two round trips'
-        // difference, both covering the same rings.
-        double d_sum = 0.0;
-        int32_t d_worst = 0;
-        for (const Obs& o : obs) {
-            const int32_t d = static_cast<int32_t>(o.r.rtt1) - static_cast<int32_t>(o.r.rtt0);
-            d_sum += d;
-            d_worst = std::abs(d) > std::abs(d_worst) ? d : d_worst;
-        }
-        log_info(
-            tt::LogMetal,
-            "[streaming profiler] Device {}: tile reads on the two NoCs split as the torus routes say: {:.2f} ticks "
-            "per x hop, {:.2f} per y hop, wrap links {:+.1f} x {:+.1f} y; unexplained {:.1f} ticks rms, {:.1f} worst; "
-            "NoC 1 round trips against NoC 0: {:+.2f} ticks mean, {:+d} worst",
-            d.chip_id,
-            fit[0],
-            fit[1],
-            fit[2],
-            fit[3],
-            rows.empty() ? 0.0 : std::sqrt(rss / static_cast<double>(rows.size())),
-            rworst,
-            obs.empty() ? 0.0 : d_sum / static_cast<double>(obs.size()),
-            d_worst);
-    }
     log_info(
         tt::LogMetal,
         "[streaming profiler] Device {}: {} tiles' wall clocks span {:.0f} ticks ({:.1f} ns), solved from {} idle eth "
@@ -401,23 +427,22 @@ std::vector<double> SyncDevices::solve_tiles(uint32_t di) {
         "({:.1f} ns) from the reads' own ends (rings: x {:.0f}, y {:.0f}, turns {:.0f} ticks; ends model residual "
         "{:.1f} ticks rms)",
         d.chip_id,
-        nt,
+        u.n_tiles,
         *xhi - *xlo,
         (*xhi - *xlo) * ns_per_tick,
-        ns,
+        loops.size(),
         obs.size(),
         rms,
         worst,
         rms * ns_per_tick,
-        x[kCol],
-        x[kRow],
+        x[u.col()],
+        x[u.row()],
         bound,
         bound * ns_per_tick,
         x_ring,
         y_ring,
         turns,
         transit_rms);
-    return x;
 }
 
 void SyncDevices::measure_tiles(uint32_t di, CaptureContext::Device& cap) {

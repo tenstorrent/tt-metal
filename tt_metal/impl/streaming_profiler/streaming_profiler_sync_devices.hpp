@@ -102,7 +102,21 @@ private:
         uint32_t chip_a = 0, chip_b = 0;
         uint32_t stop_a = 0, stop_b = 0;
     };
+    struct TileReading;
+    struct TileObs;
+    struct TileUnknowns;
+    // Every idle eth core reads every Tensix tile and every other idle eth tile, one core at a time so nothing else is
+    // on the NoC; each reading is one equation, tile minus source. `loops` gets each source's read of itself.
+    std::vector<TileObs> read_tiles(uint32_t di, std::vector<TileReading>& loops);
+    // The offsets solved together, the pusher the origin; logged with what the readings say about their own error.
     std::vector<double> solve_tiles(uint32_t di);
+    void log_tile_fit(
+        const Device& d,
+        const std::vector<TileObs>& obs,
+        const std::vector<TileReading>& loops,
+        const std::vector<double>& x,
+        const TileUnknowns& u) const;
+    void log_noc_split(const Device& d, const std::vector<TileObs>& obs) const;
     void stop_links(tt::Cluster& cluster);
 
     const ContextId context_id_;
