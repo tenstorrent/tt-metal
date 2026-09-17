@@ -27,11 +27,6 @@ struct MoEComputeDeviceOperation {
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
-    // #54864: the combine fabric mux is sized against live L1 occupancy on its own cores, which the
-    // default key (attributes + tensor specs) does not cover. Without this term a program built while
-    // the mux cores were clear gets replayed after something has been allocated underneath the mux.
-    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
-
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);

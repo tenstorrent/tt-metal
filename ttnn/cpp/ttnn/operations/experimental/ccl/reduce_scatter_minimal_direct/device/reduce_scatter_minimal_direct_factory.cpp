@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-logger/tt-logger.hpp>
 #include "reduce_scatter_minimal_direct_factory.hpp"
 
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -213,24 +212,6 @@ tt::tt_metal::WorkloadDescriptor ReduceScatterMinimalDirectProgramFactory::creat
         sems.push_back(
             ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0, sem_buffer_type));
     }
-    // TEMP PROBE #54864 -- remove before merge.
-    {
-        const auto& wg = sems[SemaphoreIndex::writer_gen(operation_attributes.num_devices)];
-        const auto& rg = sems[SemaphoreIndex::reader_gen(operation_attributes.num_devices)];
-        log_warning(
-            tt::LogOp,
-            "[54864][rs-direct] sem_buffer_type={} l1_base=0x{:x} lowest_occupied_compute_l1=0x{:x} "
-            "reader_gen=0x{:x} writer_gen=0x{:x} arrivals[0]=0x{:x} n_sems={} cores={}",
-            sem_buffer_type == tt::tt_metal::BufferType::L1_SMALL ? "L1_SMALL" : "L1",
-            mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1),
-            mesh_device->lowest_occupied_compute_l1_address().value_or(0),
-            rg.address(),
-            wg.address(),
-            sems[0].address(),
-            sems.size(),
-            available_cores.str());
-    }
-
     tt::tt_metal::distributed::Synchronize(*mesh_device, std::nullopt, subdevices);
 
     const bool needs_init_sync =

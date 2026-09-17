@@ -323,6 +323,7 @@ def gen_tensors(
     "device_params",
     [
         {
+            "l1_small_size": 16384,
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
             "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
@@ -658,6 +659,7 @@ def _run_test(
     "device_params",
     [
         {
+            "l1_small_size": 16384,
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
             "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
@@ -752,6 +754,7 @@ def test_decode(
     "device_params",
     [
         {
+            "l1_small_size": 16384,
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
             "trace_region_size": 500000,

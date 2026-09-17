@@ -685,6 +685,14 @@ def setup_decoder_layer(setup, reference_layer, local_batch_size, seq_len, layer
     [False, True],
     ids=["unpaged", "paged"],
 )
+@pytest.mark.parametrize(
+    # #56769: the fused throughput-experts path builds a fabric mux, which carves raw L1 outside the
+    # allocator. GlobalSemaphores must therefore come from L1_SMALL (the top slice of L1), out of the
+    # mux's reach -- with l1_small_size = 0 they land in the mux's region and get silently overwritten.
+    "device_params",
+    [{"l1_small_size": 16384}],
+    indirect=True,
+)
 def test_decoder(
     mesh_device, device_params, batch_size, seq_len, layer_idx, paged, test_modules, test_thresholds, reset_seeds
 ):
