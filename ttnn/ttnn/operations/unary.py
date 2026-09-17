@@ -72,7 +72,7 @@ def _get_unary_golden_table():
         # Tensor.view requires the torch dtype corresponding to the TTNN output dtype.
         return x.view(ttnn.ttnn_dtype_to_torch_dtype(dtype))
 
-    return {
+    name_to_golden_function = {
         "abs": torch.abs,
         "atan": torch.atan,
         "bitcast": torch_bitcast,
@@ -136,7 +136,7 @@ def _get_unary_golden_table():
         "lgamma": torch.lgamma,
         "log1p": torch.log1p,
         "mish": lambda _x: torch.nn.functional.mish(_x.to(torch.float)),
-        "hardmish": torch_hardmish,
+        "hardmish": lambda _x: torch_hardmish(_x),
         "multigammaln": torch_multigammaln,
         "rad2deg": torch.rad2deg,
         "sinh": torch.sinh,
@@ -144,23 +144,18 @@ def _get_unary_golden_table():
         "swish": torch.nn.functional.silu,
         "tril": torch.tril,
         "triu": torch.triu,
-        # Chain-only names without a standalone named ttnn function (used by unary_chain goldens).
-        "recip": torch.reciprocal,
-        "trunc": torch.trunc,
-        "frac": torch.frac,
-        "round": torch.round,
-        "gelu_tanh": lambda x: torch.nn.functional.gelu(x, approximate="tanh"),
     }
+
+    golden_keys = set(name_to_golden_function.keys())
+    function_names = {function.__name__.split(".")[-1] for function in TTNN_ELTWISE_UNARY_CPP_FUNCTIONS}
+    if golden_keys != function_names:
+        raise ImportError(f"Missing or extra golden functions:\n{golden_keys}\nshould be equal to\n{function_names}")
+
+    return name_to_golden_function
 
 
 def register_ttnn_cpp_unary_function(unary_function):
     name_to_golden_function = _get_unary_golden_table()
-    # The table also carries chain-only names (recip, trunc, ...); every registered function must have an entry.
-    missing_names = {function.__name__.split(".")[-1] for function in TTNN_ELTWISE_UNARY_CPP_FUNCTIONS} - set(
-        name_to_golden_function.keys()
-    )
-    if missing_names:
-        raise ImportError(f"Missing golden functions for: {sorted(missing_names)}")
 
     def _golden_function(input_tensor: ttnn.Tensor, *args, **_):
         torch_function = name_to_golden_function[unary_function.__name__.split(".")[-1]]
@@ -1091,14 +1086,32 @@ def _unary_chain_torch_ops():
 
 
 def _get_unary_chain_torch_op(op_type):
+    import torch
+
     """Map a UnaryOpType to a torch callable taking (x, *params). Covers the ops commonly fused via unary_chain."""
     function_names, param_ops = _unary_chain_torch_ops()
     if op_type in param_ops:
         return param_ops[op_type], True
     function_name = function_names.get(op_type, op_type.name.lower())
-    golden_function = _get_unary_golden_table().get(function_name)
+
+    extra_golden_function = {
+        # Chain-only names without a standalone named ttnn function (used by unary_chain goldens).
+        "recip": torch.reciprocal,
+        "trunc": torch.trunc,
+        "frac": torch.frac,
+        "round": torch.round,
+        "gelu_tanh": lambda x: torch.nn.functional.gelu(x, approximate="tanh"),
+    }.get(function_name)
+
+    if extra_golden_function:
+        golden_function = extra_golden_function
+
+    else:
+        golden_function = _get_unary_golden_table().get(function_name)
+
     if golden_function is None:
         raise NotImplementedError(f"unary_chain golden does not support UnaryOpType.{op_type}")
+
     return golden_function, False
 
 
