@@ -41,6 +41,26 @@ _VAE_SCALE_FACTOR = 8
 _DEFAULT_CHECKPOINT = "stabilityai/stable-diffusion-3.5-large"
 
 _PRESETS: dict[tuple[int, ...], dict] = {
+    # 4-chip BH QuietBox 2 exposed as a native 1x4 row. Only one mesh axis is wide,
+    # so sp and tp cannot each take an axis the way the 2x2 preset does: tp takes
+    # all 4 chips on axis 1 and sp stays factor 1. cfg is disabled (factor 1), and
+    # the encoder/VAE need no reshape because the submesh is already 1x4.
+    #
+    # `topology` is part of this preset because a 1x4 row needs Ring, while every
+    # other config here is Linear and `default()` / `create_pipeline()` default to
+    # Linear. Without it the server path (create_pipeline, which passes no topology)
+    # would silently build a Linear config for a mesh that needs Ring.
+    #
+    # Matches the proven test case `1x4cfg0sp0tp1` in
+    # models/tt_dit/tests/models/sd35/test_pipeline_sd35.py, which pairs it with
+    # ring device params and trace_region_size=50000000.
+    (1, 4): {
+        "cfg": (1, 0),
+        "sp": (1, 0),
+        "tp": (4, 1),
+        "num_links": 2,
+        "topology": ttnn.Topology.Ring,
+    },
     # 4-chip (single 4-chip cfg-submesh): cfg is disabled (factor 1) because the
     # encoder/VAE require the cfg-submesh to be exactly 4 chips (reshaped to 1x4).
     # DiT runs sp2 x tp2 on the 2x2 mesh. T5 is auto-disabled (reshape path).
@@ -86,6 +106,12 @@ class StableDiffusion3PipelineConfig:
         checkpoint_name: str = _DEFAULT_CHECKPOINT,
     ) -> StableDiffusion3PipelineConfig:
         preset = _PRESETS.get(tuple(mesh_shape), {})
+
+        # A preset may pin its own topology (the 1x4 row needs Ring). An explicit
+        # caller argument still wins; this only replaces the Linear default for
+        # callers that pass nothing, such as create_pipeline().
+        if topology == ttnn.Topology.Linear and "topology" in preset:
+            topology = preset["topology"]
 
         if dit_parallel_config is None:
             dit_parallel_config = DiTParallelConfig.from_tuples(cfg=preset["cfg"], sp=preset["sp"], tp=preset["tp"])
