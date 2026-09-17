@@ -5,15 +5,14 @@
 import torch
 from helpers.llk_params import ReducePool
 
-from ..state import tile_operation
+from ..state import tile_dimensions
 from .reduce_common import reduce_tile
 
 
 def reduce_golden(call, state, node, operation, config):
-    single = tile_operation(operation)
-    dimensions = single.max_output_dimensions
+    dimensions = tile_dimensions(operation.tile_shape)
     tensor_a, tensor_b = state.source_registers.pop_operands(dimensions)
-    reduced = reduce_tile(tensor_a, tensor_b, config, single, node)
+    reduced = reduce_tile(tensor_a, tensor_b, config, operation, node)
     if call.dest not in state.reduced_tiles:
         state.reduced_tiles.add(call.dest)
         state.dest.set(call.dest, reduced)

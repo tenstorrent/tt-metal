@@ -4,13 +4,12 @@
 
 import torch
 
-from ..state import tile_operation
+from ..state import tile_dimensions
 from .reduce_common import reduce_tile
 
 
 def reduce_block_max_row_golden(call, state, node, operation, config):
-    single = tile_operation(operation)
-    dimensions = single.max_output_dimensions
+    dimensions = tile_dimensions(operation.tile_shape)
     result = None
     for _ in call.tiles:
         tensor_a, _ = state.source_registers.pop()
@@ -20,7 +19,7 @@ def reduce_block_max_row_golden(call, state, node, operation, config):
             tensor_a,
             None,
             config,
-            single,
+            operation,
             node,
             block_max=True,
         )

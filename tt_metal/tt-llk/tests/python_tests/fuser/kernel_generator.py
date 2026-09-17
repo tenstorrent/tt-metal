@@ -6,20 +6,38 @@ import os
 import shutil
 import subprocess
 from pathlib import Path
-from typing import Dict
+from typing import Dict, List
 
 from helpers.chip_architecture import ChipArchitecture
 
 from .fuser_config import FuserConfig
+from .pipeline_plan import PlannedBlock, plan_pipeline
 
 FUSED_TESTS_DIR = Path("sources/fused_tests")
+
+
+def render_kernel(thread: str, headers, body: str) -> str:
+    includes = "\n".join(f'#include "{header}"' for header in sorted(headers))
+    return (
+        f"\n"
+        f"#ifdef LLK_TRISC_{thread}\n"
+        f"\n"
+        f"{includes}\n"
+        f"\n"
+        f"void run_kernel([[maybe_unused]] const volatile struct RuntimeParams& params)\n"
+        f"{{\n"
+        f"{body}"
+        f"}}\n"
+        f"\n"
+        f"#endif\n"
+    )
 
 
 class UnpackKernelGenerator:
     def __init__(self, config: FuserConfig):
         self.config = config
 
-    def generate(self) -> str:
+    def generate(self, plans: List[List[PlannedBlock]]) -> str:
         # Collect all unique headers from all operations
         all_headers = set()
         for op in self.config.pipeline:
@@ -30,65 +48,29 @@ class UnpackKernelGenerator:
                 ):
                     all_headers.update(fused_compute.unpacker.get_headers())
 
-        # Generate include statements
-        includes = "\n".join([f'#include "{header}"' for header in sorted(all_headers)])
-
-        # Generate unpacker calls for all operations
         unpack_calls = "".join(
-            [op.unpack(self.config.global_config) for op in self.config.pipeline]
+            op.unpack(self.config.global_config, blocks)
+            for op, blocks in zip(self.config.pipeline, plans)
         )
-
-        code = (
-            f"\n"
-            f"#ifdef LLK_TRISC_UNPACK\n"
-            f"\n"
-            f"{includes}\n"
-            f"\n"
-            f"void run_kernel([[maybe_unused]] const volatile struct RuntimeParams& params)\n"
-            f"{{\n"
-            f"{unpack_calls}"
-            f"}}\n"
-            f"\n"
-            f"#endif\n"
-        )
-
-        return code
+        return render_kernel("UNPACK", all_headers, unpack_calls)
 
 
 class MathKernelGenerator:
     def __init__(self, config: FuserConfig):
         self.config = config
 
-    def generate(self) -> str:
+    def generate(self, plans: List[List[PlannedBlock]]) -> str:
         # Collect all unique headers from all operations
         all_headers = set()
         for op in self.config.pipeline:
             for unit in op.get_math_units():
                 all_headers.update(unit.get_headers())
 
-        # Generate include statements
-        includes = "\n".join([f'#include "{header}"' for header in sorted(all_headers)])
-
-        # Generate math calls for all operations
         math_calls = "".join(
-            [op.do_math(self.config.global_config) for op in self.config.pipeline]
+            op.do_math(self.config.global_config, blocks)
+            for op, blocks in zip(self.config.pipeline, plans)
         )
-
-        code = (
-            f"\n"
-            f"#ifdef LLK_TRISC_MATH\n"
-            f"\n"
-            f"{includes}\n"
-            f"\n"
-            f"void run_kernel([[maybe_unused]] const volatile struct RuntimeParams& params)\n"
-            f"{{\n"
-            f"{math_calls}"
-            f"}}\n"
-            f"\n"
-            f"#endif\n"
-        )
-
-        return code
+        return render_kernel("MATH", all_headers, math_calls)
 
 
 class SfpuKernelGenerator:
@@ -115,36 +97,18 @@ class PackKernelGenerator:
     def __init__(self, config: FuserConfig):
         self.config = config
 
-    def generate(self) -> str:
+    def generate(self, plans: List[List[PlannedBlock]]) -> str:
         # Collect all unique headers from all operations
         all_headers = set()
         for op in self.config.pipeline:
             for pack_node in op.pack_nodes:
                 all_headers.update(pack_node.get_headers())
 
-        # Generate include statements
-        includes = "\n".join([f'#include "{header}"' for header in sorted(all_headers)])
-
-        # Generate packer calls for all operations
         pack_calls = "".join(
-            [op.pack(self.config.global_config) for op in self.config.pipeline]
+            op.pack(self.config.global_config, blocks)
+            for op, blocks in zip(self.config.pipeline, plans)
         )
-
-        code = (
-            f"\n"
-            f"#ifdef LLK_TRISC_PACK\n"
-            f"\n"
-            f"{includes}\n"
-            f"\n"
-            f"void run_kernel([[maybe_unused]] const volatile struct RuntimeParams& params)\n"
-            f"{{\n"
-            f"{pack_calls}"
-            f"}}\n"
-            f"\n"
-            f"#endif\n"
-        )
-
-        return code
+        return render_kernel("PACK", all_headers, pack_calls)
 
 
 class FusedKernelGenerator:
@@ -156,10 +120,14 @@ class FusedKernelGenerator:
         self.sfpu_gen = SfpuKernelGenerator(self.config)
 
     def generate_all(self) -> Dict[str, str]:
+        plans = [
+            plan_pipeline(op, self.config.global_config.dest_acc.value)
+            for op in self.config.pipeline
+        ]
         return {
-            "unpack": self.unpack_gen.generate(),
-            "math": self.math_gen.generate(),
-            "pack": self.pack_gen.generate(),
+            "unpack": self.unpack_gen.generate(plans),
+            "math": self.math_gen.generate(plans),
+            "pack": self.pack_gen.generate(plans),
             "sfpu": self.sfpu_gen.generate(),
         }
 

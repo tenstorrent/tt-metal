@@ -6,12 +6,13 @@ from helpers.golden_generators import ReduceGolden, get_golden_generator
 from helpers.llk_params import ReduceDimension, ReducePool
 from helpers.tilize_untilize import tilize_block, untilize_block
 
+from ..state import tile_dimensions
+
 
 def reduce_tile(tensor_a, tensor_b, config, operation, node, block_max=False):
     output_format = config.sentinel.golden_math_format
     tile_shape = operation.tile_shape
-    dimensions = operation.max_output_dimensions
-    tile_dims = (tile_shape.total_row_dim(), tile_shape.total_col_dim())
+    tile_dims = tile_dimensions(tile_shape)
     num_faces = tile_shape.total_num_faces()
     reduce_dim = ReduceDimension.Row if block_max else node.fpu.reduce_dim
     pool_type = ReducePool.Max if block_max else node.fpu.reduce_pool
@@ -21,7 +22,7 @@ def reduce_tile(tensor_a, tensor_b, config, operation, node, block_max=False):
         result = reduce(
             tilize_block(
                 tensor,
-                dimensions,
+                tile_dims,
                 output_format,
                 num_faces,
                 tile_dimensions=tile_dims,
@@ -35,7 +36,7 @@ def reduce_tile(tensor_a, tensor_b, config, operation, node, block_max=False):
         return untilize_block(
             result.flatten(),
             output_format,
-            dimensions,
+            tile_dims,
             tile_dimensions=tile_dims,
             num_faces=num_faces,
         ).flatten()
@@ -46,4 +47,4 @@ def reduce_tile(tensor_a, tensor_b, config, operation, node, block_max=False):
         result = src_reduced * span * tensor_b.flatten()[0].item()
     else:
         result = src_reduced
-    return result.reshape(dimensions).to(src_reduced.dtype)
+    return result.reshape(tile_dims).to(src_reduced.dtype)

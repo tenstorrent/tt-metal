@@ -19,8 +19,7 @@ class UnpackReduceTilize(Unpacker):
 
     golden_fn = staticmethod(reduce_tilize_a_golden)
 
-    def __init__(self, reduce_dim, reduce_pool):
-        self.reduce_dim = reduce_dim
+    def __init__(self, reduce_pool):
         self.reduce_pool = reduce_pool
 
     def get_headers(self) -> List[str]:

@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from collections import deque
-from copy import copy
 from typing import TYPE_CHECKING, Dict, List, Optional
 
 import torch
@@ -11,22 +10,11 @@ from helpers.llk_params import format_dict
 from helpers.tilize_untilize import tilize_block, untilize_block
 
 if TYPE_CHECKING:
-    from ..l1_operation import L1Operation
     from ..operand import Operand
 
 
 def tile_dimensions(tile_shape) -> tuple:
     return (tile_shape.total_row_dim(), tile_shape.total_col_dim())
-
-
-def tile_operation(operation: "L1Operation") -> "L1Operation":
-    dimensions = tile_dimensions(operation.tile_shape)
-    single = copy(operation)
-    single.max_output_dimensions = dimensions
-    single.block_size = dimensions
-    single.block_tiles_x = 1
-    single.block_tiles_y = 1
-    return single
 
 
 class OperandTiles:
@@ -127,13 +115,11 @@ class DestBank:
         tile_dims: tuple,
         num_faces: int,
         dtype,
-        block_tiles_x: int = None,
-        block_tiles_y: int = None,
     ):
         self.tile_dims = tile_dims
         self.num_faces = num_faces
-        self.block_tiles_x = block_tiles_x
-        self.block_tiles_y = block_tiles_y
+        self.block_tiles_x = None
+        self.block_tiles_y = None
         self._tiles = [torch.zeros(tile_dims, dtype=dtype) for _ in range(tiles)]
 
     def __len__(self) -> int:

@@ -4,12 +4,11 @@
 
 from helpers.golden_generators import EltwiseBinaryGolden, get_golden_generator
 
-from ..state import tile_operation
+from ..state import tile_dimensions
 
 
 def sub_bcast_col_custom_golden(call, state, node, operation, config):
-    single = tile_operation(operation)
-    dimensions = single.max_output_dimensions
+    dimensions = tile_dimensions(operation.tile_shape)
     for tile in call.tiles:
         tensor_a, tensor_b = state.source_registers.pop()
         result = get_golden_generator(EltwiseBinaryGolden)(
@@ -18,6 +17,6 @@ def sub_bcast_col_custom_golden(call, state, node, operation, config):
             tensor_b,
             config.sentinel.golden_math_format,
             node.math_fidelity,
-            tile_shape=single.tile_shape,
+            tile_shape=operation.tile_shape,
         ).reshape(dimensions)
         state.dest.set(tile.dest, result)

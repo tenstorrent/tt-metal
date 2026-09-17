@@ -26,7 +26,6 @@ from helpers.llk_params import (
     AccToDest,
     ApproximationMode,
     BroadcastType,
-    ClearFP32DstAcc,
     DataFormat,
     DestSync,
     EltwiseBinaryReuseDestType,
@@ -350,6 +349,25 @@ MATMUL_DIMS = lambda a, b: (a[0], b[1])
 SRC_A_DIMS = lambda a, b: a
 
 
+def parse_sfpu_operation(value, supported_ops, kind: str) -> MathOperation:
+    if isinstance(value, str):
+        try:
+            value = MathOperation[value]
+        except KeyError:
+            valid_ops = sorted(op.name for op in supported_ops)
+            raise ValueError(
+                f"Unknown operation: {value}, expected one of: {', '.join(valid_ops)}"
+            )
+    if not isinstance(value, MathOperation):
+        raise ValueError(f"Invalid operation: {value}")
+    if value not in supported_ops:
+        valid_ops = sorted(op.name for op in supported_ops)
+        raise ValueError(
+            f"{value.name} is not a supported {kind} SFPU operation, expected one of: {', '.join(valid_ops)}"
+        )
+    return value
+
+
 class UnarySfpuMathSchema(BaseModel):
     """Base schema for unary SFPU math nodes (type="UnarySfpu").
 
@@ -373,22 +391,7 @@ class UnarySfpuMathSchema(BaseModel):
     @field_validator("operation", mode="before")
     @classmethod
     def parse_operation(cls, v):
-        if isinstance(v, str):
-            try:
-                v = MathOperation[v]
-            except KeyError:
-                valid_ops = sorted(op.name for op in cls._sfpu_ops)
-                raise ValueError(
-                    f"Unknown operation: {v}, expected one of: {', '.join(valid_ops)}"
-                )
-        if not isinstance(v, MathOperation):
-            raise ValueError(f"Invalid operation: {v}")
-        if v not in cls._sfpu_ops:
-            valid_ops = sorted(op.name for op in cls._sfpu_ops)
-            raise ValueError(
-                f"{v.name} is not a supported unary SFPU operation, expected one of: {', '.join(valid_ops)}"
-            )
-        return v
+        return parse_sfpu_operation(v, cls._sfpu_ops, "unary")
 
     def to_node(self, operands):
         sfpu = type(self)._sfpu_cls(
@@ -425,22 +428,7 @@ class BinarySfpuMathSchema(BaseModel):
     @field_validator("operation", mode="before")
     @classmethod
     def parse_operation(cls, v):
-        if isinstance(v, str):
-            try:
-                v = MathOperation[v]
-            except KeyError:
-                valid_ops = sorted(op.name for op in cls._sfpu_ops)
-                raise ValueError(
-                    f"Unknown operation: {v}, expected one of: {', '.join(valid_ops)}"
-                )
-        if not isinstance(v, MathOperation):
-            raise ValueError(f"Invalid operation: {v}")
-        if v not in cls._sfpu_ops:
-            valid_ops = sorted(op.name for op in cls._sfpu_ops)
-            raise ValueError(
-                f"{v.name} is not a supported binary SFPU operation, expected one of: {', '.join(valid_ops)}"
-            )
-        return v
+        return parse_sfpu_operation(v, cls._sfpu_ops, "binary")
 
     def to_node(self, operands):
         sfpu = type(self)._sfpu_cls(
@@ -529,11 +517,9 @@ class FpuMathSchemaBase(BaseModel):
         src_a = None
         if self.in0 is not None:
             src_a = operands.get(self.in0)
-            src_a.is_input = True
         src_b = None
         if self.in1 is not None:
             src_b = operands.get(self.in1)
-            src_b.is_input = True
 
         factory, checks = type(self)._fpu_map[self.operation]
 
@@ -549,13 +535,6 @@ class FpuMathSchemaBase(BaseModel):
 
         fpu = factory(self)
 
-        clear_fp32_dst_acc = (
-            ClearFP32DstAcc.Yes
-            if self.reuse_dest == EltwiseBinaryReuseDestType.DEST_TO_SRCA
-            or self.reuse_dest == EltwiseBinaryReuseDestType.DEST_TO_SRCB
-            else ClearFP32DstAcc.No
-        )
-
         kwargs = {
             "transpose_within_face": self.transpose_within_face,
             "transpose_faces": self.transpose_faces,
@@ -563,7 +542,6 @@ class FpuMathSchemaBase(BaseModel):
             "reuse_dest": self.reuse_dest,
             "math_fidelity": self.math_fidelity,
             "enforce_fp32_accumulation": self.enforce_fp32_accumulation,
-            "clear_fp32_dst_acc": clear_fp32_dst_acc,
             "acc_to_dest": self.acc_to_dest,
             "unpack_to_dest": self.unpack_to_dest,
         }
@@ -756,7 +734,6 @@ class OperationSchemaBase(BaseModel):
                 f"{capacity} fit (dest_sync={self.dest_sync.name}, "
                 f"dest_acc={dest_acc})"
             )
-        bank_block_size = [bank_y * tile_r, bank_x * tile_c]
 
         for m in self.math:
             if isinstance(m, FpuMathSchemaBase):
@@ -795,17 +772,9 @@ class OperationSchemaBase(BaseModel):
 
         max_out_dims = self._calculate_max_output_dimensions(operands)
 
-        reduce_dim = None
-        for node in math_ops:
-            if isinstance(node, FpuNode) and hasattr(node.fpu, "reduce_dim"):
-                reduce_dim = node.fpu.reduce_dim
-                break
-
         kwargs = {
-            "block_size": bank_block_size,
             "tile_shape": tile_shape,
             "dest_sync": self.dest_sync,
-            "reduce_dim": reduce_dim,
         }
         kwargs.update(self._arch_kwargs())
 

@@ -41,11 +41,9 @@ class FpuNode:
         transpose_faces: Transpose = Transpose.No,
         transpose_within_face: Transpose = Transpose.No,
         broadcast_type: BroadcastType = BroadcastType.None_,
-        data_copy_type: DataCopyType = DataCopyType.A2D,
         reuse_dest: EltwiseBinaryReuseDestType = EltwiseBinaryReuseDestType.NONE,
         math_fidelity: MathFidelity = MathFidelity.LoFi,
         enforce_fp32_accumulation: EnforceFP32Accumulation = EnforceFP32Accumulation.No,
-        clear_fp32_dst_acc: ClearFP32DstAcc = ClearFP32DstAcc.No,
         acc_to_dest: AccToDest = AccToDest.No,
         unpack_to_dest: UnpackToDest = UnpackToDest.No,
         loop_spec=None,
@@ -61,22 +59,25 @@ class FpuNode:
         self.reuse_dest = reuse_dest
         self.math_fidelity = math_fidelity
         self.enforce_fp32_accumulation = enforce_fp32_accumulation
-        self.clear_fp32_dst_acc = clear_fp32_dst_acc
         self.acc_to_dest = acc_to_dest
         self.unpack_to_dest = unpack_to_dest
 
-        if (
-            self.broadcast_type != BroadcastType.None_
-            and data_copy_type == DataCopyType.A2D
+    @property
+    def data_copy_type(self) -> DataCopyType:
+        return (
+            DataCopyType.B2D
+            if self.broadcast_type != BroadcastType.None_
+            else DataCopyType.A2D
+        )
+
+    @property
+    def clear_fp32_dst_acc(self) -> ClearFP32DstAcc:
+        if self.reuse_dest in (
+            EltwiseBinaryReuseDestType.DEST_TO_SRCA,
+            EltwiseBinaryReuseDestType.DEST_TO_SRCB,
         ):
-            self.data_copy_type = DataCopyType.B2D
-        elif (
-            self.broadcast_type == BroadcastType.None_
-            and data_copy_type == DataCopyType.B2D
-        ):
-            self.data_copy_type = DataCopyType.A2D
-        else:
-            self.data_copy_type = data_copy_type
+            return ClearFP32DstAcc.Yes
+        return ClearFP32DstAcc.No
 
     def unpack_init(
         self,

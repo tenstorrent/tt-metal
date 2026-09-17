@@ -6,12 +6,11 @@ import torch
 from helpers.golden_generators import EltwiseBinaryGolden, get_golden_generator
 from helpers.llk_params import AccToDest, EltwiseBinaryReuseDestType
 
-from ..state import tile_operation
+from ..state import tile_dimensions
 
 
 def _eltwise(call, state, node, operation, config, force_accumulate):
-    single = tile_operation(operation)
-    dimensions = single.max_output_dimensions
+    dimensions = tile_dimensions(operation.tile_shape)
     for tile in call.tiles:
         tensor_a, tensor_b = state.source_registers.pop()
         accumulate = force_accumulate or node.acc_to_dest == AccToDest.Yes
@@ -34,7 +33,7 @@ def _eltwise(call, state, node, operation, config, force_accumulate):
             tensor_b,
             config.sentinel.golden_math_format,
             node.math_fidelity,
-            tile_shape=single.tile_shape,
+            tile_shape=operation.tile_shape,
         ).reshape(dimensions)
         if accumulate:
             result = result + tensor_dst

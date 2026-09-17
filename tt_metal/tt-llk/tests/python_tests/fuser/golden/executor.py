@@ -32,18 +32,21 @@ class GoldenExecutor:
         ]
         self.output_format = self.pack_nodes[0].output.data_format
         self.buffers = {id(node.output): {} for node in self.pack_nodes}
+        operands = {
+            id(operand): operand
+            for node in operation.math_nodes
+            if isinstance(node, FpuNode)
+            for operand in (node.src_a, node.src_b)
+            if operand is not None
+        }
         self.views = {}
-        for node in operation.math_nodes:
-            if not isinstance(node, FpuNode):
-                continue
-            for slot, operand in (("a", node.src_a), ("b", node.src_b)):
-                if operand is not None and (node, slot) not in self.views:
-                    source = (
-                        operand.raw_data
-                        if golden_type == GoldenType.L1_GOLDEN
-                        else operand.master_golden
-                    )
-                    self.views[(node, slot)] = OperandTiles(operand, source)
+        for key, operand in operands.items():
+            source = (
+                operand.raw_data
+                if golden_type == GoldenType.L1_GOLDEN
+                else operand.master_golden
+            )
+            self.views[key] = OperandTiles(operand, source)
 
     def _dest_size(self, planned: PlannedBlock) -> int:
         if not self.operation.custom_op:
@@ -73,8 +76,8 @@ class GoldenExecutor:
             math = planned.plan(node, "math")
             state.begin_fpu(
                 Inputs(
-                    self.views.get((node, "a")),
-                    self.views.get((node, "b")),
+                    self.views.get(id(node.src_a)),
+                    self.views.get(id(node.src_b)),
                     math.block.block_cols,
                     math.block.block_rows,
                 )
@@ -96,7 +99,6 @@ class GoldenExecutor:
                 self.operation,
                 node,
                 output_format=node.output.data_format,
-                set_math_format=False,
             )
             state.output = self.buffers[id(node.output)]
             self._run_node(planned.plan(node, "pack"), bank, state)
@@ -117,8 +119,6 @@ class GoldenExecutor:
                         tile_dimensions(operation.tile_shape),
                         operation.tile_shape.total_num_faces(),
                         dest_dtype,
-                        planned.region.block_tiles_x,
-                        planned.region.block_tiles_y,
                     ),
                     relu_configs,
                 )

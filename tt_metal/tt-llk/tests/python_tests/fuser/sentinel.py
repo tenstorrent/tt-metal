@@ -31,26 +31,27 @@ class FuserSentinel:
     state and emit reconfig only when formats actually change.
     """
 
-    _unpack_A_src: Optional[DataFormat] = field(default=None, repr=False)
-    _unpack_A_dst: Optional[DataFormat] = field(default=None, repr=False)
-    _unpack_B_src: Optional[DataFormat] = field(default=None, repr=False)
-    _unpack_B_dst: Optional[DataFormat] = field(default=None, repr=False)
+    _unpack_A_src: Optional[DataFormat] = field(default=None, init=False, repr=False)
+    _unpack_A_dst: Optional[DataFormat] = field(default=None, init=False, repr=False)
+    _unpack_B_src: Optional[DataFormat] = field(default=None, init=False, repr=False)
+    _unpack_B_dst: Optional[DataFormat] = field(default=None, init=False, repr=False)
 
-    _unpack_face_r_dim_a: Optional[int] = field(default=None, repr=False)
-    _unpack_num_faces_a: Optional[int] = field(default=None, repr=False)
-    _unpack_face_r_dim_b: Optional[int] = field(default=None, repr=False)
-    _unpack_num_faces_b: Optional[int] = field(default=None, repr=False)
+    _unpack_face_r_dim_a: Optional[int] = field(default=None, init=False, repr=False)
+    _unpack_num_faces_a: Optional[int] = field(default=None, init=False, repr=False)
+    _unpack_face_r_dim_b: Optional[int] = field(default=None, init=False, repr=False)
+    _unpack_num_faces_b: Optional[int] = field(default=None, init=False, repr=False)
 
-    _math_format: Optional[DataFormat] = field(default=None, repr=False)
-    _sfpu_format: Optional[DataFormat] = field(default=None, repr=False)
-    _format_operation: Optional["L1Operation"] = field(default=None, repr=False)
-    _dest_sources: dict = field(default_factory=dict, repr=False)
+    _math_format: Optional[DataFormat] = field(default=None, init=False, repr=False)
+    _sfpu_format: Optional[DataFormat] = field(default=None, init=False, repr=False)
+    _dest_sources: dict = field(default_factory=dict, init=False, repr=False)
 
-    _pack_src: Optional[DataFormat] = field(default=None, repr=False)
-    _pack_dst: Optional[DataFormat] = field(default=None, repr=False)
+    _pack_src: Optional[DataFormat] = field(default=None, init=False, repr=False)
+    _pack_dst: Optional[DataFormat] = field(default=None, init=False, repr=False)
 
-    golden_math_format: Optional[DataFormat] = field(default=None, repr=False)
-    golden_pack_src: Optional[DataFormat] = field(default=None, repr=False)
+    golden_math_format: Optional[DataFormat] = field(
+        default=None, init=False, repr=False
+    )
+    golden_pack_src: Optional[DataFormat] = field(default=None, init=False, repr=False)
 
     def reset_unpack_formats(self):
         self._unpack_A_src = None
@@ -98,7 +99,6 @@ class FuserSentinel:
         for block in blocks:
             for node, sources in block.dest_sources.items():
                 self._dest_sources.setdefault(node, set()).update(sources)
-        self._format_operation = operation
 
     @staticmethod
     def _single_dest_format(formats, node) -> Optional[DataFormat]:
@@ -115,8 +115,6 @@ class FuserSentinel:
         operation: "L1Operation",
         compute_node,
     ) -> Optional[DataFormat]:
-        if self._format_operation is not operation:
-            self.prepare_operation(config, operation)
         output_format = operation._get_pack_nodes()[0].output.data_format
         formats = {
             self._infer_node_formats(config, source, output_format, operation)[4]
@@ -250,8 +248,6 @@ class FuserSentinel:
         """Infer pack_src and pack_dst formats for a given pack node."""
         output_format = pack_node.output.data_format
 
-        if self._format_operation is not operation:
-            self.prepare_operation(config, operation)
         formats = {
             self._infer_node_formats(config, source, output_format, operation)[5]
             for source in self._dest_sources.get(pack_node, ())
@@ -557,7 +553,6 @@ class FuserSentinel:
         operation: "L1Operation",
         compute_node=None,
         output_format: DataFormat = DataFormat.Float16_b,
-        set_math_format: bool = True,
     ):
         """Compute and store format values for golden generation.
 
@@ -585,8 +580,7 @@ class FuserSentinel:
                 _, _, _, _, math_fmt, pack_src = self._infer_output_formats(
                     config, output_format
                 )
-            if set_math_format:
-                self.golden_math_format = math_fmt
+            self.golden_math_format = math_fmt
             self.golden_pack_src = pack_src
             return
 

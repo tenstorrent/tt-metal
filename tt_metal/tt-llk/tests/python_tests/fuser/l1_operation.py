@@ -10,11 +10,9 @@ from helpers.llk_params import (
     DestSync,
     GoldenType,
     ReduceDimension,
-    StochasticRounding,
     Tilize,
 )
-from helpers.tile_constants import DEFAULT_TILE_C_DIM, DEFAULT_TILE_R_DIM
-from helpers.tile_shape import TileShape, construct_tile_shape
+from helpers.tile_shape import TileShape
 
 from .arch_common import fpu_common, pack_common, unpack_common
 from .base_fpu import Fpu
@@ -35,25 +33,24 @@ class L1Operation:
     math_nodes: List[Union[FpuNode, SfpuNode]]
     pack_nodes: List[Union[PackNode, SfpuNode]]
     max_output_dimensions: Tuple[int, int]
-    tile_shape: TileShape = field(
-        default_factory=lambda: construct_tile_shape(
-            (DEFAULT_TILE_R_DIM, DEFAULT_TILE_C_DIM)
-        )
-    )
-    stage_id: int = 0
-    needs_pack_sync: bool = False
-    has_pack_consumer: bool = False
-    throttle: int = 0
-    stochastic_rnd: StochasticRounding = StochasticRounding.No
-    tiny_tiles: bool = False
+    tile_shape: TileShape
+    stage_id: int = field(default=0, init=False)
+    needs_pack_sync: bool = field(default=False, init=False)
+    has_pack_consumer: bool = field(default=False, init=False)
     dest_sync: DestSync = DestSync.Half
-    block_size: Tuple[int, int] = (32, 32)
-    reduce_dim: Optional[ReduceDimension] = None
     bh_tilize: Tilize = Tilize.No
 
     def __post_init__(self):
-        self.block_tiles_x = self.block_size[1] // self.tile_shape.total_col_dim()
-        self.block_tiles_y = self.block_size[0] // self.tile_shape.total_row_dim()
+        nodes = self.math_nodes + self.pack_nodes
+        self.block_tiles_x = max(node.block_tiles_x for node in nodes)
+        self.block_tiles_y = max(node.block_tiles_y for node in nodes)
+
+    @property
+    def reduce_dim(self) -> Optional[ReduceDimension]:
+        for node in self.math_nodes:
+            if isinstance(node, FpuNode) and hasattr(node.fpu, "reduce_dim"):
+                return node.fpu.reduce_dim
+        return None
 
     @property
     def custom_op(self) -> bool:
@@ -99,9 +96,9 @@ class L1Operation:
 
         return len({signature(op) for op in ops}) <= 1
 
-    def _batch_loop(self, config, body_fn, init_fn=None, uninit_fn=None) -> str:
+    def _batch_loop(self, blocks, body_fn, init_fn=None, uninit_fn=None) -> str:
         code = ""
-        for planned in plan_pipeline(self, config.dest_acc.value):
+        for planned in blocks:
             body = planned.bank.emit_banks(
                 lambda constants: body_fn(planned, constants)
             )
@@ -137,8 +134,8 @@ class L1Operation:
         code += "}\n"
         return code
 
-    def unpack(self, config: "GlobalConfig") -> str:
-        config.sentinel.prepare_operation(config, self)
+    def unpack(self, config: "GlobalConfig", blocks: List[PlannedBlock]) -> str:
+        config.sentinel.prepare_operation(config, self, blocks)
         unpack_ops = [
             cu
             for cu in self.math_nodes
@@ -196,7 +193,7 @@ class L1Operation:
         code += self._zone_loop(
             config,
             "TILE_LOOP",
-            self._batch_loop(config, batch_body, init_fn, uninit_fn),
+            self._batch_loop(blocks, batch_body, init_fn, uninit_fn),
         )
 
         uninit_code = ""
@@ -206,8 +203,8 @@ class L1Operation:
 
         return code
 
-    def do_math(self, config: "GlobalConfig") -> str:
-        config.sentinel.prepare_operation(config, self)
+    def do_math(self, config: "GlobalConfig", blocks: List[PlannedBlock]) -> str:
+        config.sentinel.prepare_operation(config, self, blocks)
         code = f"// Operation {self.stage_id}: Math Setup\n"
         fpu_ops = [cu for cu in self.math_nodes if isinstance(cu, FpuNode)]
         hoist = len(fpu_ops) == 1
@@ -267,7 +264,7 @@ class L1Operation:
         code += self._zone_loop(
             config,
             "TILE_LOOP",
-            self._batch_loop(config, batch_body, init_fn, uninit_fn),
+            self._batch_loop(blocks, batch_body, init_fn, uninit_fn),
         )
 
         uninit_code = ""
@@ -284,8 +281,8 @@ class L1Operation:
         }
         return len(formats) <= 1
 
-    def pack(self, config: "GlobalConfig") -> str:
-        config.sentinel.prepare_operation(config, self)
+    def pack(self, config: "GlobalConfig", blocks: List[PlannedBlock]) -> str:
+        config.sentinel.prepare_operation(config, self, blocks)
         code = f"// Operation {self.stage_id}: Packer\n"
         pack_only = self._get_pack_nodes()
         hoist = len(pack_only) == 1 and len(self.pack_nodes) == 1
@@ -343,7 +340,7 @@ class L1Operation:
         code += self._zone_loop(
             config,
             "TILE_LOOP",
-            self._batch_loop(config, batch_body, init_fn, uninit_fn),
+            self._batch_loop(blocks, batch_body, init_fn, uninit_fn),
         )
 
         uninit_code = pack_common.packer_sync_with_unpacker(config, self)
@@ -368,6 +365,5 @@ class L1Operation:
         result += "\n  Pack:"
         for node in self.pack_nodes:
             result += f"\n    {node.output if isinstance(node, PackNode) else node}"
-        result += f"\n  Block Size: {self.block_size}\n"
-        result += f"  Dest Sync: {self.dest_sync}\n"
+        result += f"\n  Dest Sync: {self.dest_sync}\n"
         return result

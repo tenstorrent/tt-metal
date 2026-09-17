@@ -53,7 +53,6 @@ class UnpackerA(Unpacker):
     def __init__(
         self, reuse_dest: EltwiseBinaryReuseDestType = EltwiseBinaryReuseDestType.NONE
     ):
-        self.reuse_dest = reuse_dest
         if reuse_dest != EltwiseBinaryReuseDestType.NONE:
             self.granularity = InvocationGranularity.TILE
 
