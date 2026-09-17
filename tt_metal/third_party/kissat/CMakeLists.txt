@@ -60,3 +60,31 @@ set_target_properties(
 
 find_package(Threads REQUIRED)
 target_link_libraries(kissat PUBLIC Threads::Threads m)
+
+# kissat vendors its own copy of "kitten" (a sub-solver), and so does CaDiCaL. The fabric SAT engine keeps
+# both backends linkable at once (CaDiCaL default, kissat opt-in via TT_TOPO_SAT_ENGINE), so both archives
+# reach the same link (libtt_metal.so) and their duplicate kitten_* globals cause "multiple definition"
+# errors. kissat is only ever called through its public C API, so we localize every non-kissat_* symbol in
+# the built archive. See localize_symbols.cmake for the full rationale and mechanism.
+find_program(TT_KISSAT_LD ld)
+find_program(TT_KISSAT_OBJCOPY objcopy)
+find_program(TT_KISSAT_NM nm)
+find_program(TT_KISSAT_AR ar)
+if(TT_KISSAT_LD AND TT_KISSAT_OBJCOPY AND TT_KISSAT_NM AND TT_KISSAT_AR)
+    add_custom_command(
+        TARGET kissat
+        POST_BUILD
+        COMMAND
+            ${CMAKE_COMMAND} -DKISSAT_LIB=$<TARGET_FILE:kissat> -DTOOL_AR=${TT_KISSAT_AR}
+            -DTOOL_LD=${TT_KISSAT_LD} -DTOOL_OBJCOPY=${TT_KISSAT_OBJCOPY} -DTOOL_NM=${TT_KISSAT_NM} -P
+            ${CMAKE_CURRENT_SOURCE_DIR}/localize_symbols.cmake
+        COMMENT "Localizing kissat non-public symbols (avoid kitten_* clash with CaDiCaL)"
+        VERBATIM
+    )
+else()
+    message(
+        WARNING
+        "kissat: ld/objcopy/nm/ar not all found; skipping symbol localization. Linking both kissat and "
+        "CaDiCaL into one target may fail with duplicate kitten_* symbols."
+    )
+endif()
