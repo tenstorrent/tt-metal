@@ -1030,7 +1030,7 @@ class LTXPipeline:
         cache_module.load_model(
             state.model,
             model_name=state.cache_name,
-            subfolder="transformer",
+            subfolder=state.model.weight_cache_subfolder(),
             parallel_config=self.parallel_config,
             mesh_shape=tuple(self.mesh_device.shape),
             mesh_device=self.mesh_device,
