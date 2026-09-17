@@ -7,12 +7,9 @@
 #include "emule_kernel_defines.hpp"
 #include "emule_metal2_emit.hpp"
 
-#include "impl/program/program_impl.hpp"
-#include "impl/kernels/kernel.hpp"
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/hal.hpp>
 #include "jit_build/jit_build_settings.hpp"
-#include "jit_build/jit_build_utils.hpp"
 #include <tt-logger/tt-logger.hpp>
 
 namespace tt::tt_metal::emule {

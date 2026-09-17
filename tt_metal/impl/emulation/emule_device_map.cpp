@@ -10,7 +10,6 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/device.hpp>
 #include "impl/context/metal_context.hpp"
-#include "llrt/metal_soc_descriptor.hpp"
 #include "umd/device/chip/sw_emule_chip.hpp"
 #include "umd/device/chip_helpers/simulation_sysmem_manager.hpp"  // SysmemManager::get_pcie_base_for_arch
 #include "tt_emule/device.hpp"
