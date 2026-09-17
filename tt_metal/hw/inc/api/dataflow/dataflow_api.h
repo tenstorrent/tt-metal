@@ -22,7 +22,6 @@
 #include "hostdev/dev_msgs.h"
 #include "api/tensor/tensor_accessor.h"
 #include "tools/profiler/kernel_profiler.hpp"
-#include "tools/profiler/synchronization_event_profiler.hpp"
 #include "internal/debug/sanitize.h"
 #include "api/debug/assert.h"
 
@@ -1952,8 +1951,6 @@ FORCE_INLINE
 void noc_semaphore_wait(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val) {
     RECORD_NOC_EVENT(NocEventType::SEMAPHORE_WAIT, false, -1);
 
-    // Waits key on the local L1 offset (the waiter is the recording core); remote sets key on the
-    // full NoC address, which carries the coordinates needed to pair the two sides.
     WAYPOINT("NSW");
     {
         SYNC_WAIT("SYNC-SEM-WAIT", reinterpret_cast<uintptr_t>(sem_addr));

@@ -8,7 +8,7 @@
 #include "core_config.h"
 #include "noc/noc_parameters.h"
 #include "api/debug/dprint.h"
-#include "tools/profiler/synchronization_event_profiler.hpp"
+#include "tools/profiler/kernel_profiler.hpp"
 
 namespace ckernel {
 #ifdef ARCH_QUASAR

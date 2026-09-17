@@ -8,7 +8,7 @@
 #include "api/dataflow/noc.h"
 #include "api/debug/assert.h"
 #include "api/dataflow/semaphore_binding_token.h"
-#include "tools/profiler/synchronization_event_profiler.hpp"
+#include "tools/profiler/kernel_profiler.hpp"
 
 /**
  * @brief Semaphore synchronization primitive for programmable cores.
@@ -113,9 +113,6 @@ public:
 #endif
         } else if constexpr (SCOPE == SemScope::EXTERNAL) {
 #ifndef COMPILE_FOR_TRISC
-            // No marker here: noc_semaphore_inc emits SYNC-SEM-SET-REMOTE with the full NoC
-            // address, which is the one that names the destination. A local SYNC-SEM-SET
-            // alongside it would report one increment as two signals.
             noc_semaphore_inc(::get_noc_addr(l1_offset_), value);
             noc_async_atomic_barrier();
 #else
@@ -221,8 +218,6 @@ public:
                 const bool ok = (*sem_addr) >= value;
                 if (ok) {
                     WAYPOINT("NSDD");
-                    // No marker: the subtract below is a noc_semaphore_inc, which records
-                    // SYNC-SEM-SET-REMOTE itself. See up()'s EXTERNAL branch.
                     // Atomic subtract: the NoC only has atomic ADD (INCR_GET), so add the two's complement.
                     noc_semaphore_inc(sem_noc, (uint32_t)(0u - value));
                     noc_async_atomic_barrier();
@@ -242,7 +237,6 @@ public:
                 } while ((*sem_addr) < value);
             }
             WAYPOINT("NSDD");
-            // No marker: noc_semaphore_inc records SYNC-SEM-SET-REMOTE itself.
             noc_semaphore_inc(::get_noc_addr(l1_offset_), (uint32_t)(0u - value));
             noc_async_atomic_barrier();
 #else
