@@ -20,6 +20,7 @@ class ProgramImpl;
 }
 namespace tt_emule {
 struct EmuleProgramDescriptor;
+struct SocView;
 }
 
 namespace tt::tt_metal::emule {
@@ -58,6 +59,7 @@ void collect_kernels(
     std::map<std::string, DeferredCompile>& deferred_compiles,
     std::unordered_map<std::string, std::function<void()>>& resolved_fns,
     std::vector<std::string>& inline_src_temps,
-    const tt_emule::EmuleProgramDescriptor& desc);
+    const tt_emule::EmuleProgramDescriptor& desc,
+    const tt_emule::SocView& soc);
 
 }  // namespace tt::tt_metal::emule

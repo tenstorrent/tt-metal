@@ -641,7 +641,8 @@ static std::shared_ptr<ResolvedProgram> prepare_program(IDevice* device, Program
         deferred_compiles,
         resolved_fns,
         inline_src_temps,
-        emule_desc);
+        emule_desc,
+        emule_soc);
     jit_compile_pending(deferred_compiles, resolved_fns, inline_src_temps);
 
     ResolvedProgram resolved;

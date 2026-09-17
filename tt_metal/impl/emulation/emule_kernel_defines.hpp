@@ -9,6 +9,7 @@
 
 #include "impl/kernels/kernel.hpp"        // Kernel, experimental::quasar::Quasar*Kernel
 #include "impl/program/program_impl.hpp"  // detail::ProgramImpl
+#include "emule_program_descriptor.hpp"   // tt_emule::KernelDescriptor / CoreDescriptor / SocView
 
 namespace tt::tt_metal::emule {
 
@@ -21,6 +22,19 @@ static constexpr uint32_t EMULE_SEM_ALIGN = 16;
 std::map<std::string, std::string> build_kernel_defines(
     Kernel& kernel,
     detail::ProgramImpl& impl,
+    uint32_t num_dram_channels,
+    uint32_t num_l1_banks,
+    const std::string& worker_col_map_str,
+    const std::string& worker_row_map_str,
+    uint32_t emule_sem_base);
+
+// Descriptor-consuming twin of build_kernel_defines: reads only the POD (KernelDescriptor,
+// the kernel's first-core CoreDescriptor for CB/DFB geometry, SocView) — no tt-metal
+// Kernel/ProgramImpl. first_core_desc is null when the kernel occupies no cores.
+std::map<std::string, std::string> build_kernel_defines_from_desc(
+    const tt_emule::KernelDescriptor& kd,
+    const tt_emule::CoreDescriptor* first_core_desc,
+    const tt_emule::SocView& soc,
     uint32_t num_dram_channels,
     uint32_t num_l1_banks,
     const std::string& worker_col_map_str,
