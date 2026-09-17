@@ -2,22 +2,20 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Unified matmul reader: streams the A and B slices for this cluster's C subblocks.
+// Unified matmul reader: streams the A and B slices for this cluster's blocks of C.
 //
-// GEMM view, all sizes in 32x32 tiles: C[M x N] = A[M x K] x B[K x N]. A C subblock is the
-// per_core_M x per_core_N tiles of C at origin (subblock_M_tile, subblock_N_tile) in one batch. This
-// cluster starts at (first_batch, first_M_tile, first_N_tile) and produces num_subblocks of them, stepping
-// per_core_N tiles across N, then per_core_M tiles down M, then into the next batch. For each subblock and
-// each K iteration the reader pushes
-//   - one A slice: the subblock's rows of A, K_iteration_tiles wide    -> [per_core_M][K_iteration_tiles] tiles
-//   - one B slice: the subblock's columns of B, K_iteration_tiles tall -> [K_iteration_tiles][per_core_N] tiles
-// both row-major, which is the layout the compute kernel indexes. Loop order (subblock, K iteration)
-// matches it.
+// GEMM view, all sizes in 32x32 tiles: C[M x N] = A[M x K] x B[K x N]. A block is the per_core_M x
+// per_core_N tiles of C at origin (block_M_tile, block_N_tile) in one batch. This cluster starts at
+// (first_batch, first_M_tile, first_N_tile) and produces num_blocks of them, stepping per_core_N tiles
+// across N, then per_core_M tiles down M, then into the next batch. For each block and each K iteration
+// the reader pushes
+//   - one A slice: the block's rows of A, K_iteration_tiles wide    -> [per_core_M][K_iteration_tiles] tiles
+//   - one B slice: the block's columns of B, K_iteration_tiles tall -> [K_iteration_tiles][per_core_N] tiles
+// both row-major, which is the layout the compute kernel indexes. Loop order (block, K iteration) matches it.
 //
-// Edge subblocks: tiles past M_tiles / N_tiles are never read; their slots keep stale L1, which only
-// reaches C tiles the writer drops (a valid C tile uses valid A rows and valid B columns only). When K is
-// not a multiple of the tile dim, the padding columns of A's last K tile are zeroed so they contribute
-// nothing.
+// Edge blocks: tiles past M_tiles / N_tiles are never read; their slots keep stale L1, which only reaches
+// C tiles the writer drops (a valid C tile uses valid A rows and valid B columns only). When K is not a
+// multiple of the tile dim, the padding columns of A's last K tile are zeroed so they contribute nothing.
 //
 // A and B are addressed by tile index through the tensor accessor (page id == row-major tile index within
 // the tensor), so interleaved, L1-sharded and DRAM-sharded inputs are one code path.
@@ -33,11 +31,11 @@
 #include "ttnn/operations/kernel_helper_functions/pad_tile.hpp"
 
 void kernel_main() {
-    // Per-core runtime args: where this cluster's run of C subblocks starts and how long it is.
+    // Per-core runtime args: where this cluster's run of blocks starts and how long it is.
     const uint32_t first_batch = get_arg(args::first_batch);
     const uint32_t first_M_tile = get_arg(args::first_M_tile);
     const uint32_t first_N_tile = get_arg(args::first_N_tile);
-    const uint32_t num_subblocks = get_arg(args::num_subblocks);
+    const uint32_t num_blocks = get_arg(args::num_blocks);
 
     constexpr uint32_t M_tiles = get_arg(args::M_tiles);
     constexpr uint32_t K_tiles = get_arg(args::K_tiles);
@@ -69,27 +67,25 @@ void kernel_main() {
     const uint32_t B_slot_bytes = B_slice.get_entry_size();
 
     uint32_t batch = first_batch;
-    uint32_t subblock_M_tile = first_M_tile;  // origin of the current C subblock, in tiles
-    uint32_t subblock_N_tile = first_N_tile;
-    for (uint32_t subblock = 0; subblock < num_subblocks; ++subblock) {
+    uint32_t block_M_tile = first_M_tile;  // origin of the current block, in tiles
+    uint32_t block_N_tile = first_N_tile;
+    for (uint32_t block = 0; block < num_blocks; ++block) {
         const uint32_t A_batch_first_tile = batch * A_tiles_per_batch;
         const uint32_t B_batch_first_tile = broadcast_B_over_batch ? 0 : batch * B_tiles_per_batch;
-        // Rows / columns of this subblock that lie inside the matrices (edge subblocks are clipped).
-        const uint32_t valid_M_tiles =
-            (M_tiles - subblock_M_tile < per_core_M) ? (M_tiles - subblock_M_tile) : per_core_M;
-        const uint32_t valid_N_tiles =
-            (N_tiles - subblock_N_tile < per_core_N) ? (N_tiles - subblock_N_tile) : per_core_N;
+        // Rows / columns of this block that lie inside the matrices (edge blocks are clipped).
+        const uint32_t valid_M_tiles = (M_tiles - block_M_tile < per_core_M) ? (M_tiles - block_M_tile) : per_core_M;
+        const uint32_t valid_N_tiles = (N_tiles - block_N_tile < per_core_N) ? (N_tiles - block_N_tile) : per_core_N;
 
         for (uint32_t K_iteration = 0; K_iteration < num_K_iterations; ++K_iteration) {
             const uint32_t first_K_tile = K_iteration * K_iteration_tiles;
 
-            // A slice: rows subblock_M_tile.., columns first_K_tile.. (invalid rows trail, so they are
+            // A slice: rows block_M_tile.., columns first_K_tile.. (invalid rows trail, so they are
             // simply not written).
             A_slice.reserve_back(A_slice_tiles);
             {
                 uint32_t slot_offset = 0;
                 for (uint32_t m = 0; m < valid_M_tiles; ++m) {
-                    uint32_t A_tile_index = A_batch_first_tile + (subblock_M_tile + m) * K_tiles + first_K_tile;
+                    uint32_t A_tile_index = A_batch_first_tile + (block_M_tile + m) * K_tiles + first_K_tile;
                     for (uint32_t k = 0; k < K_iteration_tiles; ++k, ++A_tile_index, slot_offset += A_slot_bytes) {
                         noc.async_read(
                             A, A_slice, A_tile_bytes, {.page_id = A_tile_index}, {.offset_bytes = slot_offset});
@@ -97,12 +93,12 @@ void kernel_main() {
                 }
             }
 
-            // B slice: rows first_K_tile.., columns subblock_N_tile.. (invalid columns keep their slot).
+            // B slice: rows first_K_tile.., columns block_N_tile.. (invalid columns keep their slot).
             B_slice.reserve_back(B_slice_tiles);
             {
                 uint32_t slot_offset = 0;
                 for (uint32_t k = 0; k < K_iteration_tiles; ++k) {
-                    uint32_t B_tile_index = B_batch_first_tile + (first_K_tile + k) * N_tiles + subblock_N_tile;
+                    uint32_t B_tile_index = B_batch_first_tile + (first_K_tile + k) * N_tiles + block_N_tile;
                     for (uint32_t n = 0; n < per_core_N; ++n, ++B_tile_index, slot_offset += B_slot_bytes) {
                         if (n < valid_N_tiles) {
                             noc.async_read(
@@ -131,13 +127,13 @@ void kernel_main() {
             B_slice.push_back(B_slice_tiles);
         }
 
-        // Next C subblock: across N, then down M, then the next batch.
-        subblock_N_tile += per_core_N;
-        if (subblock_N_tile >= N_tiles) {
-            subblock_N_tile = 0;
-            subblock_M_tile += per_core_M;
-            if (subblock_M_tile >= M_tiles) {
-                subblock_M_tile = 0;
+        // Next block: across N, then down M, then the next batch.
+        block_N_tile += per_core_N;
+        if (block_N_tile >= N_tiles) {
+            block_N_tile = 0;
+            block_M_tile += per_core_M;
+            if (block_M_tile >= M_tiles) {
+                block_M_tile = 0;
                 ++batch;
             }
         }
