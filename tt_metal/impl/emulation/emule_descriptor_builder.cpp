@@ -21,6 +21,7 @@
 #include "llrt/metal_soc_descriptor.hpp"
 #include "emule_device_map.hpp"              // NOC_NODE_ID_BITS
 #include "emule_kernel_defines.hpp"          // compute_proc_ids_and_thread_count, ProcIdList
+#include "emule_tile_geometry.hpp"           // resolve_tile_geometry, ResolvedTileGeometry
 #include "jit_build/jit_build_settings.hpp"  // NamedCTArgNamespaces, NamedRuntimeArgNamespaces
 #include <tt-metalium/kernel_types.hpp>      // DataMovementConfig/ComputeConfig, DataMovementProcessor
 
@@ -165,6 +166,7 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
                     kd.dm_processor = static_cast<uint32_t>(dc->processor);
                 }
                 if (const auto* cc = std::get_if<ComputeConfig>(&cfg)) {
+                    kd.has_compute_config = true;
                     kd.fp32_dest_acc_en = cc->fp32_dest_acc_en;
                     kd.dst_full_sync_en = cc->dst_full_sync_en;
                 }
@@ -250,17 +252,20 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
                     b.index = idx;
                     b.page_size = cb->page_size(idx);
                     b.num_pages = cb->num_pages(idx);
-                    b.data_format = static_cast<uint32_t>(cb->data_format(idx));
-                    if (const auto& t = cb->tile(idx)) {
-                        b.tile = TileGeom{
-                            t->get_height(),
-                            t->get_width(),
-                            static_cast<bool>(t->get_partial_face()),
-                            static_cast<bool>(t->get_narrow_tile())};
-                    }
-                    if (const auto& f = cb->unpack_face_geometry(idx)) {
-                        b.unpack_face = FaceGeom{f->face_r_dim, f->num_faces};
-                    }
+                    const auto fmt = cb->data_format(idx);
+                    b.data_format = static_cast<uint32_t>(fmt);
+                    // Apply silicon's tile/face precedence here (marshaller has the live Tile);
+                    // the POD carries only the resolved primitives. Mirrors build_kernel_defines.
+                    const tt::tt_metal::emule::ResolvedTileGeometry g =
+                        tt::tt_metal::emule::resolve_tile_geometry(cb->tile(idx), cb->unpack_face_geometry(idx));
+                    b.geom = ResolvedGeom{
+                        g.tile.get_tile_size(fmt),
+                        g.tile.get_height(),
+                        g.tile.get_width(),
+                        g.face_r_dim,
+                        g.num_faces,
+                        g.partial_face,
+                        g.narrow_tile};
                     cd.buffers.push_back(std::move(b));
                 }
                 cs.cbs.push_back(std::move(cd));
@@ -281,7 +286,20 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
                 dd.consumer_risc_mask = c.consumer_risc_mask;
                 dd.cap = static_cast<AccessPattern>(static_cast<uint8_t>(c.cap));
                 dd.data_format = static_cast<uint32_t>(c.data_format);
-                // TODO(stage2): tile / unpack_face geometry, finalize L1 offset (core_lookup_).
+                // Only valid-format DFBs feed the geometry tables (build_kernel_defines skips Invalid).
+                if (c.data_format != tt::DataFormat::Invalid) {
+                    const tt::tt_metal::emule::ResolvedTileGeometry g =
+                        tt::tt_metal::emule::resolve_tile_geometry(c.tile, c.unpack_face_geometry);
+                    dd.geom = ResolvedGeom{
+                        g.tile.get_tile_size(c.data_format),
+                        g.tile.get_height(),
+                        g.tile.get_width(),
+                        g.face_r_dim,
+                        g.num_faces,
+                        g.partial_face,
+                        g.narrow_tile};
+                }
+                // TODO(stage2): finalize L1 offset (core_lookup_).
                 cs.dfbs.push_back(std::move(dd));
             }
 
