@@ -630,7 +630,6 @@ static std::shared_ptr<ResolvedProgram> prepare_program(IDevice* device, Program
     std::unordered_map<std::string, std::function<void()>> resolved_fns;
     std::vector<std::string> inline_src_temps;
     collect_kernels(
-        impl,
         num_dram_channels,
         num_l1_banks,
         worker_col_map_str,
