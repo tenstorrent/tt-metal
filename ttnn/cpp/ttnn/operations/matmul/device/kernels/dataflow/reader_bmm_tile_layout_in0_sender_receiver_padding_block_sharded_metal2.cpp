@@ -2,63 +2,78 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// NOTE: A Metal 2.0 fork of this kernel lives beside it, as
-// reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded_metal2.cpp. Ops ported to Metal 2.0 bind the fork;
-// this file serves the consumers still on the legacy API. Until the last of them migrates and this file is retired,
-// changes here likely belong in the fork too.
+// Metal 2.0 fork of reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded.cpp, which
+// lives beside it. Factories ported to Metal 2.0 bind this fork; the original serves the consumers
+// still on the legacy ProgramDescriptor API. Until the last of them migrates and the original is
+// retired, changes to either copy likely belong in the other too.
+//
+// The binding and argument names below are this fork's interface: every factory that later ports
+// onto it inherits them and cannot rename them.
+//
+// The per-sender mcast NOC coordinate lists stay *varargs*: they are indexed collections whose
+// lengths (num_x, num_y) are compile-time args rather than source literals, so no element has a
+// stable name. They occupy the vararg block in host order -- the num_x x-coordinates first, then
+// the num_y y-coordinates -- so element j of the y list is get_vararg(num_x + j).
+//
+// The CCL fused-op receiver is gated behind FUSE_OP rather than a compile-time arg: MatmulOpReceiver
+// consumes *positional* runtime args through an index it advances by reference, and it lives outside
+// this op's directory (ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp), so it cannot be fed
+// from named arguments without changing a file this port may not touch.
 
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
+#ifdef FUSE_OP
 #include "ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
+#endif
 #include "ttnn/operations/kernel_helper_functions/pad_tile.hpp"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    constexpr bool core_has_output_block_work = static_cast<bool>(get_compile_time_arg_val(0));
-    constexpr bool core_in_in0_receiver_mcast_grid = static_cast<bool>(get_compile_time_arg_val(1));
+    constexpr bool core_has_output_block_work = static_cast<bool>(get_arg(args::core_has_output_block_work));
+    constexpr bool core_in_in0_receiver_mcast_grid = static_cast<bool>(get_arg(args::core_in_in0_receiver_mcast_grid));
 
-    constexpr uint32_t in0_block_num_tiles = get_compile_time_arg_val(2);
-    constexpr uint32_t in0_block_size_bytes = get_compile_time_arg_val(3);
-    constexpr uint32_t in0_last_ktile_w = get_compile_time_arg_val(4);
-    constexpr uint32_t in0_last_ktile_h = get_compile_time_arg_val(5);
+    constexpr auto in0_block_num_tiles = get_arg(args::in0_block_num_tiles);
+    constexpr auto in0_block_size_bytes = get_arg(args::in0_block_size_bytes);
+    constexpr auto in0_last_ktile_w = get_arg(args::in0_last_ktile_w);
+    constexpr auto in0_last_ktile_h = get_arg(args::in0_last_ktile_h);
 
     // in0/in1 common args
-    constexpr uint32_t num_blocks_inner_dim = get_compile_time_arg_val(6);
-    constexpr uint32_t num_blocks_w_dim = get_compile_time_arg_val(7);
-    constexpr uint32_t num_blocks_h_dim = get_compile_time_arg_val(8);
+    constexpr auto num_blocks_inner_dim = get_arg(args::num_blocks_inner_dim);
+    constexpr auto num_blocks_w_dim = get_arg(args::num_blocks_w_dim);
+    constexpr auto num_blocks_h_dim = get_arg(args::num_blocks_h_dim);
     // in0 mcast args
-    constexpr uint32_t in0_mcast_num_dests = get_compile_time_arg_val(11);
-    constexpr uint32_t in0_mcast_num_cores = get_compile_time_arg_val(12);
-    constexpr uint32_t num_x = get_compile_time_arg_val(13);
-    constexpr uint32_t num_y = get_compile_time_arg_val(14);
-    constexpr bool transpose_mcast = static_cast<bool>(get_compile_time_arg_val(15));
-    constexpr uint32_t shard_width_in_tiles = get_compile_time_arg_val(16);
-    constexpr uint32_t shard_height_in_tiles = get_compile_time_arg_val(17);
-    constexpr uint32_t in0_block_w = get_compile_time_arg_val(18);
-    constexpr uint32_t in0_block_h = get_compile_time_arg_val(19);
+    constexpr auto in0_mcast_num_dests = get_arg(args::in0_mcast_num_dests);
+    constexpr auto in0_mcast_num_cores = get_arg(args::in0_mcast_num_cores);
+    constexpr auto num_x = get_arg(args::num_x);
+    constexpr auto num_y = get_arg(args::num_y);
+    constexpr bool transpose_mcast = static_cast<bool>(get_arg(args::transpose_mcast));
+    constexpr auto shard_width_in_tiles = get_arg(args::shard_width_in_tiles);
+    constexpr auto shard_height_in_tiles = get_arg(args::shard_height_in_tiles);
+    constexpr auto in0_block_w = get_arg(args::in0_block_w);
+    constexpr auto in0_block_h = get_arg(args::in0_block_h);
 
-    constexpr uint32_t batch = get_compile_time_arg_val(20);
-    constexpr bool fuse_op = static_cast<bool>(get_compile_time_arg_val(21));
+    constexpr auto batch = get_arg(args::batch);
 
+#ifdef FUSE_OP
     uint32_t rt_args_idx = 0;
-    const uint32_t sender_id = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
-    const uint32_t in0_mcast_dest_noc_start_x = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
-    const uint32_t in0_mcast_dest_noc_start_y = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
-    const uint32_t in0_mcast_dest_noc_end_x = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
-    const uint32_t in0_mcast_dest_noc_end_y = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
-    tt_l1_ptr uint32_t* in0_mcast_noc_x =
-        reinterpret_cast<tt_l1_ptr uint32_t*>(get_arg_addr(static_cast<int>(increment_arg_idx(rt_args_idx, num_x))));
-    tt_l1_ptr uint32_t* in0_mcast_noc_y =
-        reinterpret_cast<tt_l1_ptr uint32_t*>(get_arg_addr(static_cast<int>(increment_arg_idx(rt_args_idx, num_y))));
+#endif
+    const uint32_t sender_id = get_arg(args::sender_id);
+    const uint32_t in0_mcast_dest_noc_start_x = get_arg(args::in0_mcast_dest_noc_start_x);
+    const uint32_t in0_mcast_dest_noc_start_y = get_arg(args::in0_mcast_dest_noc_start_y);
+    const uint32_t in0_mcast_dest_noc_end_x = get_arg(args::in0_mcast_dest_noc_end_x);
+    const uint32_t in0_mcast_dest_noc_end_y = get_arg(args::in0_mcast_dest_noc_end_y);
 
-    constexpr uint32_t dfb_id_in0 = get_named_compile_time_arg_val("cb_in0");
-    constexpr uint32_t dfb_id_in2 = get_named_compile_time_arg_val("cb_in0_sharded");  // Sharded cb
+    // in0 is filled here from this core's shard (or from a remote sender's multicast) and drained by
+    // the compute kernel; in0_sharded is the resident shard itself, borrowed onto the tensor memory.
+    constexpr auto dfb_id_in0 = dfb::in0;
+    constexpr auto dfb_id_in2 = dfb::in0_sharded;
 
     constexpr uint32_t in0_single_tile_size_bytes = get_tile_size(dfb_id_in0);
     constexpr DataFormat in0_data_format = get_dataformat(dfb_id_in0);
@@ -77,9 +92,9 @@ void kernel_main() {
     DataflowBuffer dfb_in2(dfb_id_in2);
     // local address that will be atomically incremented by mcast receivers, to know when all receivers are ready
     // to receive the mcast
-    Semaphore<> sender_sem(get_compile_time_arg_val(9));
+    Semaphore sender_sem(sem::in0_mcast_sender);
     // Set ur local VALID value, to be mcasted to destinations flag address after the data has been mcasted
-    Semaphore<> receiver_sem(get_compile_time_arg_val(10));
+    Semaphore receiver_sem(sem::in0_mcast_receiver);
 
     constexpr uint32_t num_remote_senders = (num_blocks_inner_dim + num_blocks_per_shard - 1) / num_blocks_per_shard;
     uint32_t remote_sender_noc_x[num_remote_senders];
@@ -88,8 +103,8 @@ void kernel_main() {
         uint32_t x = 0;
         uint32_t y = 0;
         for (uint32_t i = 0; i < num_remote_senders; ++i) {
-            remote_sender_noc_x[i] = in0_mcast_noc_x[x];
-            remote_sender_noc_y[i] = in0_mcast_noc_y[y];
+            remote_sender_noc_x[i] = get_vararg(x);
+            remote_sender_noc_y[i] = get_vararg(num_x + y);
             ++y;
             if (y == num_y) {
                 y = 0;
@@ -100,8 +115,8 @@ void kernel_main() {
         uint32_t x = 0;
         uint32_t y = 0;
         for (uint32_t i = 0; i < num_remote_senders; ++i) {
-            remote_sender_noc_x[i] = in0_mcast_noc_x[x];
-            remote_sender_noc_y[i] = in0_mcast_noc_y[y];
+            remote_sender_noc_x[i] = get_vararg(x);
+            remote_sender_noc_y[i] = get_vararg(num_x + y);
             ++x;
             if (x == num_x) {
                 x = 0;
@@ -116,15 +131,14 @@ void kernel_main() {
     const uint32_t in0_tensor_shard_read_addr = dfb_in2.get_read_ptr();
     uint32_t in0_tensor_read_addr = 0;
 
-    MatmulOpReceiver fused_op_receiver;
-    if constexpr (fuse_op) {
-        fused_op_receiver = MatmulOpReceiver(
-            sender_id < num_remote_senders, /* wait_for_op_signal */
-            rt_args_idx,
-            num_blocks_inner_dim,
-            in0_block_w /* tiles_per_block (in the same dimension as tensor slice) */
-        );
-    }
+#ifdef FUSE_OP
+    MatmulOpReceiver fused_op_receiver = MatmulOpReceiver(
+        sender_id < num_remote_senders, /* wait_for_op_signal */
+        rt_args_idx,
+        num_blocks_inner_dim,
+        in0_block_w /* tiles_per_block (in the same dimension as tensor slice) */
+    );
+#endif
 
     for (uint32_t b = 0; b < batch; ++b) {
         uint32_t in0_tensor_current_h_dim_block_start_addr = in0_tensor_shard_read_addr;
@@ -135,16 +149,16 @@ void kernel_main() {
                     uint32_t block_id = block / num_blocks_per_shard;
                     // If used fused op, make block_id conform to ordering of tensor slices from all
                     // gather
-                    if constexpr (fuse_op) {
-                        block_id = fused_op_receiver.align_to_slice_and_sync(block, sender_id);
-                    }
+#ifdef FUSE_OP
+                    block_id = fused_op_receiver.align_to_slice_and_sync(block, sender_id);
+#endif
 
                     dfb_in0.reserve_back(in0_block_num_tiles);
 
                     // All cores in receiver grid need to participate in receiving regardless if they produce output
-                    // work or not. Otherwise, data corruption since we mcast from and to the same CB (eg.
+                    // work or not. Otherwise, data corruption since we mcast from and to the same buffer (eg.
                     // extract_shard_sub_blocks). If we only ever mcast with loopback src (ie. always to a different
-                    // CB), we can have just the cores that produce work participate in receiving.
+                    // buffer), we can have just the cores that produce work participate in receiving.
                     if constexpr (core_in_in0_receiver_mcast_grid) {
                         // Set in0 semaphore value to INVALID
                         receiver_sem.set(INVALID);
@@ -237,9 +251,9 @@ void kernel_main() {
                         }
                         sender_sem.set(0);
 
-                        // Now we have the block in the CB address, we can mcast to dests!
+                        // Now we have the block in the buffer's address, we can mcast to dests!
                         if constexpr (core_in_in0_receiver_mcast_grid) {
-                            // Mcast from/to same CB
+                            // Mcast from/to same buffer
                             if constexpr (extract_shard_sub_blocks) {
                                 // multicast to every core in receiver grid EXCLUDING myself
                                 // Skip if there are no other cores since this core already has the data.
@@ -260,10 +274,10 @@ void kernel_main() {
                                         true);
                                 }
                             }
-                            // Mcast from different CB to another CB
+                            // Mcast from different buffer to another buffer
                             else {
                                 if constexpr (in0_mcast_num_cores == 1) {
-                                    // noc_async_write if we only want to copy data between CB locally
+                                    // noc_async_write if we only want to copy data between buffers locally
                                     const UnicastEndpoint ucast_dst;
                                     noc.async_write(
                                         CoreLocalMem<uint32_t>(in0_tensor_read_addr),
@@ -353,10 +367,10 @@ void kernel_main() {
                     }
                     dfb_in0.push_back(in0_block_num_tiles);
 
-                    // If core does not produce output block work, free dfb_id_in0 immediately.
+                    // If core does not produce output block work, free the in0 buffer immediately.
                     // This is necessary since mcast is in lockstep; this ensures write ptr addresses are synced
                     // properly for cores that only send and have no compute / writer active. Technically, don't have to
-                    // do this if dfb_id_in0 is not double buffered.
+                    // do this if the in0 buffer is not double buffered.
                     if constexpr (!core_has_output_block_work) {
                         dfb_in0.pop_front(in0_block_num_tiles);
                     }

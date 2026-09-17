@@ -2,106 +2,111 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// NOTE: A Metal 2.0 fork of this kernel lives beside it, as
-// reader_bmm_tile_layout_in1_receiver_writer_padding_metal2.cpp. Ops ported to Metal 2.0 bind the fork; this
-// file serves the consumers still on the legacy API. Until the last of them migrates and this
-// file is retired, changes here likely belong in the fork too.
+// Metal 2.0 fork of reader_bmm_tile_layout_in1_receiver_writer_padding.cpp, which lives beside it.
+// Factories ported to Metal 2.0 bind this fork; the original serves the consumers still on the
+// legacy ProgramDescriptor API. Until the last of them migrates and the original is retired, changes
+// to either copy likely belong in the other too.
+//
+// The binding and argument names below are this fork's interface: every factory that later ports
+// onto it inherits them and cannot rename them.
+//
+// The reduce-scatter op signaler is gated behind FUSE_OP_REDUCE_SCATTER rather than a compile-time
+// arg: OpSignaler consumes *positional* runtime args through an index it advances by reference, and
+// it lives outside this op's directory (ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp), so
+// it cannot be fed from named arguments without changing a file this port may not touch.
 
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
+#ifdef FUSE_OP_REDUCE_SCATTER
 #include "ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
+#endif
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
+
 void kernel_main() {
     // READER
+#ifdef FUSE_OP_REDUCE_SCATTER
     uint32_t rt_args_idx = 0;
+#endif
     // in1 mcast args
-    const uint32_t in1_mcast_sender_noc_x = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
-    const uint32_t in1_mcast_sender_noc_y = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
+    const uint32_t in1_mcast_sender_noc_x = get_arg(args::in1_mcast_sender_noc_x);
+    const uint32_t in1_mcast_sender_noc_y = get_arg(args::in1_mcast_sender_noc_y);
 
     // WRITER
     // out tensor args
-    const uint32_t out_tensor_addr = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
-    uint32_t out_tensor_start_tile_id = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
+    uint32_t out_tensor_start_tile_id = get_arg(args::out_tensor_start_tile_id);
 
     // padding args (WRITER)
-    const uint32_t out_num_nonzero_subblocks_h = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
-    const uint32_t out_last_num_nonzero_subblocks_h = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
-    const uint32_t out_last_subblock_h = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
-    const uint32_t padded_block_tiles_h_skip = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
+    const uint32_t out_num_nonzero_subblocks_h = get_arg(args::out_num_nonzero_subblocks_h);
+    const uint32_t out_last_num_nonzero_subblocks_h = get_arg(args::out_last_num_nonzero_subblocks_h);
+    const uint32_t out_last_subblock_h = get_arg(args::out_last_subblock_h);
+    const uint32_t padded_block_tiles_h_skip = get_arg(args::padded_block_tiles_h_skip);
 
-    const uint32_t out_num_nonzero_subblocks_w = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
-    const uint32_t out_last_num_nonzero_subblocks_w = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
-    const uint32_t out_last_subblock_w = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
-    const uint32_t padded_subblock_tiles_addr_skip = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
-    const uint32_t padded_block_tiles_w_skip = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
+    const uint32_t out_num_nonzero_subblocks_w = get_arg(args::out_num_nonzero_subblocks_w);
+    const uint32_t out_last_num_nonzero_subblocks_w = get_arg(args::out_last_num_nonzero_subblocks_w);
+    const uint32_t out_last_subblock_w = get_arg(args::out_last_subblock_w);
+    const uint32_t padded_subblock_tiles_addr_skip = get_arg(args::padded_subblock_tiles_addr_skip);
+    const uint32_t padded_block_tiles_w_skip = get_arg(args::padded_block_tiles_w_skip);
 
 #ifndef OUT_SHARDED
-    const uint32_t last_num_blocks_h_dim = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
-    const uint32_t last_num_blocks_w_dim = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
+    const uint32_t last_num_blocks_h_dim = get_arg(args::last_num_blocks_h_dim);
+    const uint32_t last_num_blocks_w_dim = get_arg(args::last_num_blocks_w_dim);
 #endif
 
     // COMPILE TIME ARGS
     // READER
     // in1 block args
-    constexpr uint32_t in1_block_num_tiles = get_compile_time_arg_val(0);
+    constexpr auto in1_block_num_tiles = get_arg(args::in1_block_num_tiles);
     // in0/in1 common args
-    constexpr uint32_t num_blocks_inner_dim = get_compile_time_arg_val(1);
-    constexpr uint32_t num_blocks_w_dim = get_compile_time_arg_val(2);
-    constexpr uint32_t num_blocks_h_dim = get_compile_time_arg_val(3);
-    // in1 mcast args
+    constexpr auto num_blocks_inner_dim = get_arg(args::num_blocks_inner_dim);
+    constexpr auto num_blocks_w_dim = get_arg(args::num_blocks_w_dim);
+    constexpr auto num_blocks_h_dim = get_arg(args::num_blocks_h_dim);
     // batch args
-    constexpr uint32_t batch = get_compile_time_arg_val(6);
+    constexpr auto batch = get_arg(args::batch);
 
     // WRITER
     // out tensor args
-    constexpr uint32_t out_tensor_stride_w = get_compile_time_arg_val(7);
-    constexpr uint32_t out_tensor_stride_h = get_compile_time_arg_val(8);
-    constexpr uint32_t out_tensor_next_subblock_stride_w = get_compile_time_arg_val(9);
-    constexpr uint32_t out_tensor_next_subblock_stride_h = get_compile_time_arg_val(10);
-    constexpr uint32_t out_tensor_next_w_dim_block_stride = get_compile_time_arg_val(11);
-    constexpr uint32_t out_tensor_next_h_dim_block_stride = get_compile_time_arg_val(12);
+    constexpr auto out_tensor_stride_w = get_arg(args::out_tensor_stride_w);
+    constexpr auto out_tensor_stride_h = get_arg(args::out_tensor_stride_h);
+    constexpr auto out_tensor_next_subblock_stride_w = get_arg(args::out_tensor_next_subblock_stride_w);
+    constexpr auto out_tensor_next_subblock_stride_h = get_arg(args::out_tensor_next_subblock_stride_h);
+    constexpr auto out_tensor_next_w_dim_block_stride = get_arg(args::out_tensor_next_w_dim_block_stride);
+    constexpr auto out_tensor_next_h_dim_block_stride = get_arg(args::out_tensor_next_h_dim_block_stride);
 
     // out subblock args
-    constexpr uint32_t out_subblock_w = get_compile_time_arg_val(13);
-    constexpr uint32_t out_subblock_h = get_compile_time_arg_val(14);
-    constexpr uint32_t out_subblock_tile_count = get_compile_time_arg_val(15);
+    constexpr auto out_subblock_w = get_arg(args::out_subblock_w);
+    constexpr auto out_subblock_h = get_arg(args::out_subblock_h);
+    constexpr auto out_subblock_tile_count = get_arg(args::out_subblock_tile_count);
 
     // batch args
-    constexpr uint32_t MtNt = get_compile_time_arg_val(16);  // if 0
+    constexpr auto MtNt = get_arg(args::MtNt);  // if 0
     // Don't need batch; same as batch from READER args
 
 #ifdef FUSE_BIAS
     // in3 block args
-    constexpr uint32_t in3_block_w = get_compile_time_arg_val(17);
-
-    constexpr uint32_t dfb_id_in3 = get_named_compile_time_arg_val("cb_bias");
+    constexpr auto in3_block_w = get_arg(args::in3_block_w);
 #endif
-    constexpr bool fuse_op_reduce_scatter = static_cast<bool>(get_compile_time_arg_val(18));
 
-    constexpr auto out_args = TensorAccessorArgs<19>();
-    OpSignaler op_signaler;
-    if constexpr (fuse_op_reduce_scatter) {
-        op_signaler = OpSignaler(rt_args_idx);
-    }
+#ifdef FUSE_OP_REDUCE_SCATTER
+    OpSignaler op_signaler = OpSignaler(rt_args_idx);
+#endif
     // WRITER
-
-    constexpr uint32_t dfb_id_in1 = get_named_compile_time_arg_val("cb_in1");
-
-    // WRITER
-    constexpr uint32_t dfb_id_out0 = get_named_compile_time_arg_val("cb_out");
 
     const Noc noc;
-    DataflowBuffer dfb_in1(dfb_id_in1);
-    DataflowBuffer dfb_out(dfb_id_out0);
-    Semaphore<> sender_sem(get_compile_time_arg_val(4));
-    Semaphore<> receiver_sem(get_compile_time_arg_val(5));
+    // in1 is filled here from the sender's multicast and drained by the compute kernel; out is filled
+    // by the compute kernel's packer and drained here.
+    DataflowBuffer dfb_in1(dfb::in1);
+    DataflowBuffer dfb_out(dfb::out);
+    Semaphore sender_sem(sem::in1_mcast_sender);
+    Semaphore receiver_sem(sem::in1_mcast_receiver);
 #ifdef FUSE_BIAS
-    DataflowBuffer dfb_in3(dfb_id_in3);
+    // bias is filled here from the sender's multicast and consumed by the compute kernel's bias add.
+    DataflowBuffer dfb_in3(dfb::bias);
 #endif
 
     // WRITER
@@ -109,7 +114,7 @@ void kernel_main() {
     const uint32_t output_single_tile_size_bytes = dfb_out.get_tile_size();
 
     // WRITER
-    const auto s = TensorAccessor(out_args, out_tensor_addr);
+    const auto s = TensorAccessor(tensor::out);
     // `s` is only consumed inside the `#ifndef OUT_SHARDED` write path below; mark it used so
     // sharded builds don't warn (-Wunused-but-set-variable).
     (void)s;
@@ -233,10 +238,10 @@ void kernel_main() {
         }
         out_tensor_start_tile_id += MtNt;
 
-        if (fuse_op_reduce_scatter) {
-            // Signal reduce_scatter to go
-            op_signaler.synchronize_workers_and_signal_op(0);
-        }
+#ifdef FUSE_OP_REDUCE_SCATTER
+        // Signal reduce_scatter to go
+        op_signaler.synchronize_workers_and_signal_op(0);
+#endif
     }
 
 #ifdef OUT_SHARDED

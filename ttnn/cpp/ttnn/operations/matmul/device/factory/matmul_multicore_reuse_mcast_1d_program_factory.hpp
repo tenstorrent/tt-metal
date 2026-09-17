@@ -25,6 +25,10 @@ struct matmul_mcast_1d_common_override_variables_t {
 struct MatmulMultiCoreReuseMcast1DProgramFactory {
     using shared_variables_t = matmul_mcast_1d_common_override_variables_t;
 
+    // Not the cache-hit hook for this factory: it is void-returning, so the factory satisfies
+    // ProgramSpecFactoryConcept and the framework refreshes the tensor bindings itself. This method
+    // survives because the MeshWorkload sibling factory below and all_gather_matmul_async call it
+    // directly, supplying the shared_variables_t that create_program_artifacts does not produce.
     static void override_runtime_arguments(
         tt::tt_metal::Program& program,
         const shared_variables_t& shared_variables,
@@ -32,11 +36,10 @@ struct MatmulMultiCoreReuseMcast1DProgramFactory {
         const ttnn::prim::MatmulInputs& tensor_args,
         std::vector<ttnn::Tensor>& tensor_return_value);
 
-    static tt::tt_metal::ProgramDescriptor create_descriptor(
+    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
         const ttnn::prim::MatmulParams& operation_attributes,
         const ttnn::prim::MatmulInputs& tensor_args,
-        std::vector<ttnn::Tensor>& tensor_return_value,
-        const std::optional<CoreRangeSet>& core_range_set = std::nullopt);
+        std::vector<ttnn::Tensor>& tensor_return_value);
 };
 
 struct MatmulMeshWorkloadMultiCoreReuseMcast1DProgramFactory {
