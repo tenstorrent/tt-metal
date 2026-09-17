@@ -5,12 +5,13 @@
 // The credit bookkeeping the two DRAM-sender transports share.
 //
 // A programmable DRAM core (Blackhole DRISC) can drive either a DRAM-sender GlobalCircularBuffer or
-// a DRAM-sender PrefetcherPipe. Both keep one (sent, acked) counter pair per receiver in the
-// sender's own L1, count credit in L1_ALIGNMENT-sized units, and read acks the same way; they
-// differ only in the byte stride between pairs, which is why that stride is a parameter here rather
-// than a constant. A GlobalCircularBuffer packs the pairs at uint32 stride
-// (REMOTE_CB_LOCAL_PAGES_STRIDE), a PrefetcherPipe keeps the 2 * L1_ALIGNMENT stride its
-// worker-sender counterpart uses. Either way acked sits half a stride above sent.
+// a DRAM-sender PrefetcherPipe. Both keep one entries_sent and one entries_acked counter per
+// receiver in the sender's own L1, count credit in L1_ALIGNMENT-sized units, and read acks the same
+// way; they differ only in where those counters sit, which is why the two bases and the
+// per-receiver stride are parameters here rather than constants. A GlobalCircularBuffer interleaves
+// the two at uint32 stride (REMOTE_CB_LOCAL_PAGES_STRIDE, acked half a stride above sent); a
+// PrefetcherPipe keeps two separate blocks so no cache line holds both a locally written and a
+// NoC-written counter (remote_dfb_config_layout.h).
 //
 // These are the two loops whose reasoning is easy to get subtly wrong -- the clamp below, and the
 // ack spin -- so both transports run one copy.
@@ -26,13 +27,13 @@
 
 namespace experimental {
 
-// Free credit units at the most-backed-up receiver, without blocking. `ring_units` is the ring's
-// capacity in the same units, and doubles as the answer when nothing is outstanding.
+// Free credit units at the most-backed-up receiver, without blocking. `sent_base` / `acked_base`
+// are receiver 0's two counters and `stride_bytes` the step to the next receiver's. `ring_units` is
+// the ring's capacity in the same units, and doubles as the answer when nothing is outstanding.
 FORCE_INLINE uint32_t dram_sender_min_free_units(
-    uint32_t local_counters_ptr, uint32_t num_receivers, uint32_t local_pages_stride, uint32_t ring_units) {
-    volatile tt_l1_ptr uint32_t* sent_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(local_counters_ptr);
-    volatile tt_l1_ptr uint32_t* acked_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(local_counters_ptr + local_pages_stride / 2);
+    uint32_t sent_base, uint32_t acked_base, uint32_t stride_bytes, uint32_t num_receivers, uint32_t ring_units) {
+    volatile tt_l1_ptr uint32_t* sent_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sent_base);
+    volatile tt_l1_ptr uint32_t* acked_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(acked_base);
     uint32_t min_free = ring_units;
     invalidate_l1_cache();
     for (uint32_t r = 0; r < num_receivers; ++r) {
@@ -44,25 +45,26 @@ FORCE_INLINE uint32_t dram_sender_min_free_units(
         if (free_units < min_free) {
             min_free = free_units;
         }
-        sent_ptr += local_pages_stride / sizeof(uint32_t);
-        acked_ptr += local_pages_stride / sizeof(uint32_t);
+        sent_ptr += stride_bytes / sizeof(uint32_t);
+        acked_ptr += stride_bytes / sizeof(uint32_t);
     }
     return min_free;
 }
 
 // Spin until every receiver has acked everything this sender published.
 FORCE_INLINE void dram_sender_barrier(
-    uint32_t local_counters_ptr, uint32_t num_receivers, uint32_t local_pages_stride) {
-    volatile tt_l1_ptr uint32_t* sent_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(local_counters_ptr);
+    uint32_t sent_base, uint32_t acked_base, uint32_t stride_bytes, uint32_t num_receivers) {
+    volatile tt_l1_ptr uint32_t* sent_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sent_base);
+    volatile tt_l1_ptr uint32_t* acked_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(acked_base);
     for (uint32_t r = 0; r < num_receivers; ++r) {
-        volatile tt_l1_ptr uint32_t* acked_ptr = sent_ptr + (local_pages_stride / 2) / sizeof(uint32_t);
         while (true) {
             invalidate_l1_cache();
             if (*acked_ptr == *sent_ptr) {
                 break;
             }
         }
-        sent_ptr += local_pages_stride / sizeof(uint32_t);
+        sent_ptr += stride_bytes / sizeof(uint32_t);
+        acked_ptr += stride_bytes / sizeof(uint32_t);
     }
 }
 
