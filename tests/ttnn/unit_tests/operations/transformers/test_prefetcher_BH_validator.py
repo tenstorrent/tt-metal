@@ -43,7 +43,14 @@ _GCB_DEPTH_PAGES = 4  # small ring so the validator stresses reserve_back/wait_f
 
 @pytest.mark.parametrize(
     "weight_name",
-    ["free_sender_mpfe_weight", "noc1_sender_mpfe_weight", "ordinary_mpfe_weight"],
+    [
+        "free_sender_mpfe_weight",
+        "noc1_sender_mpfe_weight",
+        "ordinary_mpfe_weight",
+        "idle_free_sender_mpfe_weight",
+        "idle_noc1_sender_mpfe_weight",
+        "idle_ordinary_mpfe_weight",
+    ],
 )
 def test_tensor_prefetcher_rejects_invalid_mpfe_weight(device, expect_error, weight_name):
     with expect_error(RuntimeError, "MPFE weights must be in"):

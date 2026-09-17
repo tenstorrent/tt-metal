@@ -1,8 +1,7 @@
 # Tensor Prefetcher MPFE weight benchmark
 
-The Blackhole Device-side Tensor Prefetcher holds static GDDR MPFE weights from
-startup until shutdown. Defaults, in free-sender / NOC1-sender /
-ordinary-operation order, are:
+The Blackhole Device-side Tensor Prefetcher defaults to static GDDR MPFE
+weights. In free-sender / NOC1-sender / ordinary-operation order, they are:
 
 ```text
 0 / 1 / 5
@@ -13,17 +12,24 @@ prevents one sender from running ahead and contending with the peer that gates
 overall completion. The measured FF1 cost was indistinguishable from zero, while
 the repeated-request contention benchmark improved by approximately 1–1.6%.
 
-Stopping the Tensor Prefetcher restores all three hardware weights to `0/0/0`.
+Optional idle weights enable a dynamic policy: the kernel starts idle, switches
+to the active weights while processing each PREFETCH request, and restores the
+idle weights afterward. Stopping the Tensor Prefetcher always restores all three
+hardware weights to `0/0/0`.
 
 ## MPFE controls
 
-The weights are optional Tensor Prefetcher configuration overrides:
+The active weights and optional idle weights are Tensor Prefetcher configuration
+overrides:
 
 ```cpp
 tt::tt_metal::experimental::TensorPrefetcherConfig config{
     .free_sender_mpfe_weight = 0,
     .noc1_sender_mpfe_weight = 1,
     .ordinary_mpfe_weight = 5,
+    .idle_free_sender_mpfe_weight = 0,
+    .idle_noc1_sender_mpfe_weight = 0,
+    .idle_ordinary_mpfe_weight = 0,
 };
 tt::tt_metal::experimental::StartTensorPrefetcher(mesh_device, config);
 ```
@@ -36,13 +42,17 @@ ttnn.experimental.start_tensor_prefetcher(
     free_sender_mpfe_weight=0,
     noc1_sender_mpfe_weight=1,
     ordinary_mpfe_weight=5,
+    idle_free_sender_mpfe_weight=0,
+    idle_noc1_sender_mpfe_weight=0,
+    idle_ordinary_mpfe_weight=0,
 )
 ```
 
-Each value must be an integer from 0 through 7. The weights are fixed from
-startup until shutdown; changing them requires stopping and restarting the
-prefetcher, but does not require another Metal/TTNN build. Omitted fields (or
-Python `None`) select the defaults.
+Each value must be an integer from 0 through 7. The three active values default
+to `0/1/5`. An omitted idle field (or Python `None`) inherits its corresponding
+active value, so existing callers remain static. Changing configuration requires
+stopping and restarting the prefetcher, but does not require another Metal/TTNN
+build.
 
 ## Benchmark controls
 
@@ -53,6 +63,9 @@ convenience:
 TT_METAL_BENCHMARK_TENSOR_PREFETCHER_FREE_SENDER_WEIGHT=0
 TT_METAL_BENCHMARK_TENSOR_PREFETCHER_NOC1_SENDER_WEIGHT=1
 TT_METAL_BENCHMARK_TENSOR_PREFETCHER_ORDINARY_WEIGHT=5
+TT_METAL_BENCHMARK_TENSOR_PREFETCHER_IDLE_FREE_SENDER_WEIGHT=0
+TT_METAL_BENCHMARK_TENSOR_PREFETCHER_IDLE_NOC1_SENDER_WEIGHT=0
+TT_METAL_BENCHMARK_TENSOR_PREFETCHER_IDLE_ORDINARY_WEIGHT=0
 ```
 
 The Python benchmark helper validates set values and passes them explicitly to
@@ -68,8 +81,9 @@ After building, run the compact sanity matrix:
 tests/scripts/single_card/run_bh_tensor_prefetcher_mpfe_sanity.sh
 ```
 
-It covers the default, `000`, `014`, `037`, and `777`. Every case
-performs initial and final byte validation and verifies clean shutdown.
+It covers the default, static `000`, `014`, `037`, and `777`, plus dynamic
+idle `000` to active `015`. Every case performs initial and final byte
+validation and verifies clean shutdown.
 
 Run one contention measurement directly:
 
@@ -84,6 +98,45 @@ tests/ttnn/unit_tests/operations/transformers/test_prefetcher_BH_bw_bench.py::te
 ```
 
 Set `TT_METAL_BENCHMARK_RESULT_JSONL` to append machine-readable metrics.
+
+## Mixed Llama-8B FF1 and SDPA
+
+The mixed benchmark queues a receiver-contiguous Llama-8B FF1 weight, runs
+decode SDPA against DRAM-resident K/V while the DRISCs prefetch, and then
+consumes FF1 from the GCB. This supplies model-shaped traffic to both sides of
+the MPFE arbiter. Context length changes the amount of ordinary K/V traffic:
+
+```bash
+PYTHONPATH=$PWD \
+TT_METAL_BENCHMARK_TENSOR_PREFETCHER_FREE_SENDER_WEIGHT=0 \
+TT_METAL_BENCHMARK_TENSOR_PREFETCHER_NOC1_SENDER_WEIGHT=1 \
+TT_METAL_BENCHMARK_TENSOR_PREFETCHER_ORDINARY_WEIGHT=5 \
+TT_METAL_BENCHMARK_TENSOR_PREFETCHER_IDLE_FREE_SENDER_WEIGHT=0 \
+TT_METAL_BENCHMARK_TENSOR_PREFETCHER_IDLE_NOC1_SENDER_WEIGHT=0 \
+TT_METAL_BENCHMARK_TENSOR_PREFETCHER_IDLE_ORDINARY_WEIGHT=0 \
+BENCH_SDPA_CONTEXT=1024 \
+BENCH_TRACE_REPEATS=20 \
+pytest -sv \
+tests/ttnn/unit_tests/operations/transformers/test_prefetcher_BH_mpfe_mixed_bench.py::test_mpfe_mixed_llama8b_ff1_sdpa
+```
+
+Run the focused randomized comparison with:
+
+```bash
+tests/scripts/single_card/run_bh_tensor_prefetcher_mpfe_mixed.py
+```
+
+It compares static `000`, synchronized static `015`, and dynamic
+`000` to `015` across contexts 512, 1024, 2048, and 4096. Configure it with
+`MPFE_MIXED_CONTEXTS`, `MPFE_MIXED_ITERATIONS`, `BENCH_TRACE_REPEATS`,
+`MPFE_RANDOM_SEED`, and `OUTPUT_DIR`. Results include raw JSONL,
+`summary.csv`, `paired-comparisons.csv`, the exact manifest, and pytest logs.
+The dynamic-minus-static-015 comparison isolates idle restoration because both
+use the same active weights and sender rendezvous.
+
+Dynamic priority can help only when ordinary work continues after a prefetch
+request finishes. If prefetch occupies the entire SDPA interval, dynamic should
+match static aside from its request-boundary register writes.
 
 ## End-to-end matmul
 
