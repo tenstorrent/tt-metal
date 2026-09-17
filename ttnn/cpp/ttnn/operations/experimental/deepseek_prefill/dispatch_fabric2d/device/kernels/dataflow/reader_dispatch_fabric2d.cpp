@@ -205,17 +205,22 @@ void build_expert_slots(const Control& c) {
     }
     // Inclusive of the dispatch table's trailing sentinel column, so that a padded token's unguarded
     // lookup resolves to "not in this group" here exactly as it did when the pass read the table
-    // itself. Writing that entry separately would be a line no routing draw can reach.
+    // itself.
+    //
+    // The guard bounds the write rather than trusting the table, whose WIDTH is validated on the host
+    // but whose VALUES are not: a column naming a row off the axis, or one row too many, would put
+    // `slot` in the next row's buckets and at the last row past the block entirely. A relay would then
+    // size a chunk from an inverse its neighbour does not share, and the axis would wait forever.
+    // Refusing the entry makes a malformed table produce no pages instead of corrupting L1.
     for (uint32_t e = 0; e <= ct.num_routed_experts; e++) {
         const int32_t row = c.table[e];
-        if (row < 0) {
+        if (row < 0 || (uint32_t)row >= ct.extent || c.row_fill[(uint32_t)row] >= ct.experts_per_chip) {
             c.expert_slot[e] = dspf2d::ES_NOT_HERE;
             continue;
         }
         const uint32_t r = (uint32_t)row;
         const uint32_t j = c.row_fill[r];
         c.row_fill[r] = j + 1u;
-        ASSERT(j < ct.experts_per_chip);
         const uint32_t slot = r * ct.experts_per_chip + j;
         c.chip_experts[slot] = e;
         uint32_t w = slot;
@@ -249,6 +254,11 @@ void build_expert_slots(const Control& c) {
 void size_buckets(const Control& c) {
     const uint32_t n_slots = ct.extent * ct.experts_per_chip;
     const uint32_t local_first = ct.my_row * ct.experts_per_chip;
+    // One entry per (token, pick) is what the block holds, and the total cannot exceed it. The lengths
+    // come from host tensors that nothing ties to seq_len, so an offsets table inconsistent with the
+    // input would otherwise run the fill -- and the tail zeroing behind it -- through every block after
+    // this one and into the global semaphores. A consistent table never reaches the cap.
+    const uint32_t max_entries = ct.seq_len * ct.topk;
     uint32_t at = 0;
     for (uint32_t b = 0; b < n_slots; b++) {
         const uint32_t e = c.chip_experts[b];
@@ -258,7 +268,8 @@ void size_buckets(const Control& c) {
         const bool bucketed = !ct.fanout || (b >= local_first && b < local_first + ct.experts_per_chip);
         c.bucket_start[b] = at;
         c.bucket_fill[b] = at;
-        at += bucketed ? run_len(c, ct.my_row, e) : 0u;
+        const uint32_t n = bucketed ? run_len(c, ct.my_row, e) : 0u;
+        at = (at + n > max_entries) ? max_entries : at + n;
     }
     c.bucket_start[n_slots] = at;
 }
