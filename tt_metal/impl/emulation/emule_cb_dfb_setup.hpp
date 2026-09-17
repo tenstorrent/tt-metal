@@ -28,6 +28,7 @@ namespace tt::umd {
 class SWEmuleChip;
 }
 namespace tt_emule {
+struct SocView;
 struct EmuleProgramDescriptor;
 }
 
@@ -99,6 +100,7 @@ void setup_core_state(
     tt::umd::SWEmuleChip* sw_emu,
     std::map<CoreCoord, std::vector<KernelInfo>>& core_kernels,
     uint32_t emule_sem_base,
+    const tt_emule::SocView& soc,
     const tt_emule::EmuleProgramDescriptor& pd,
     std::vector<CoreSetup>& core_setups);
 

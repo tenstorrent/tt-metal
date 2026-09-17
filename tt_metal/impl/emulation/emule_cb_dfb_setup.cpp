@@ -331,12 +331,41 @@ void setup_core_state(
     tt::umd::SWEmuleChip* sw_emu,
     std::map<CoreCoord, std::vector<KernelInfo>>& core_kernels,
     uint32_t emule_sem_base,
+    const tt_emule::SocView& soc,
     const tt_emule::EmuleProgramDescriptor& pd,
     std::vector<CoreSetup>& core_setups) {
-    auto& metal_ctx = MetalContext::instance(impl.get_context_id());
-    const auto fabric_node = metal_ctx.get_control_plane().get_fabric_node_id_from_physical_chip_id(device->id());
-    const uint32_t routing_table_base = static_cast<uint32_t>(
-        metal_ctx.hal().get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::ROUTING_TABLE));
+    // Routing identity + routing-table base from the SocView (marshalled once per device).
+    const uint32_t tensix_ct = static_cast<uint32_t>(HalProgrammableCoreType::TENSIX);
+    uint32_t routing_table_base = 0;
+    bool found_tensix_pct = false;
+    for (const auto& p : soc.pcts) {
+        if (p.core_type == tensix_ct) {
+            routing_table_base = p.routing_table_addr;
+            found_tensix_pct = true;
+            break;
+        }
+    }
+    TT_FATAL(found_tensix_pct, "SocView has no TENSIX programmable core type");
+    const uint16_t my_mesh_id = static_cast<uint16_t>(soc.mesh_id);
+    const uint16_t my_device_id = static_cast<uint16_t>(soc.chip_id);
+
+    // DIFF-GUARD against the private control-plane / HAL reads.
+    {
+        auto& metal_ctx = MetalContext::instance(impl.get_context_id());
+        const auto fabric_node = metal_ctx.get_control_plane().get_fabric_node_id_from_physical_chip_id(device->id());
+        const uint32_t rt = static_cast<uint32_t>(
+            metal_ctx.hal().get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::ROUTING_TABLE));
+        TT_FATAL(
+            routing_table_base == rt && my_mesh_id == static_cast<uint16_t>(*fabric_node.mesh_id) &&
+                my_device_id == static_cast<uint16_t>(fabric_node.chip_id),
+            "descriptor routing identity mismatch (rt {} vs {}, mesh {} vs {}, dev {} vs {})",
+            routing_table_base,
+            rt,
+            my_mesh_id,
+            static_cast<uint16_t>(*fabric_node.mesh_id),
+            my_device_id,
+            static_cast<uint16_t>(fabric_node.chip_id));
+    }
     for (auto& [logical_core, ki_list] : core_kernels) {
         if (!sw_emu) {
             continue;
@@ -349,8 +378,8 @@ void setup_core_state(
         // Fabric initialization writes this routing-table identity on silicon. Mirror it here because
         // SWEmule's launch-owned worker L1 does not retain the earlier control-plane broadcast.
         auto* routing_info = reinterpret_cast<tt::tt_fabric::routing_l1_info_t*>(core->l1_ptr(routing_table_base));
-        routing_info->my_mesh_id = static_cast<uint16_t>(*fabric_node.mesh_id);
-        routing_info->my_device_id = static_cast<uint16_t>(fabric_node.chip_id);
+        routing_info->my_mesh_id = my_mesh_id;
+        routing_info->my_device_id = my_device_id;
         uint8_t phys_x = static_cast<uint8_t>(phys.x);
         uint8_t phys_y = static_cast<uint8_t>(phys.y);
 
