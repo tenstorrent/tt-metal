@@ -27,6 +27,10 @@ class GLM51Config:
     # aggregate-optimal cut over that sawtooth (+0.15% against a per-count oracle, worst cell
     # +17% at 576).
     ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD = 320
+    # Run that split as ONE dispatch rather than two, so the layer can be overlapped with
+    # combine. Costs ~7 us per dispatch: the union program's kernel config fits the
+    # kernel-config ring once but not twice, so each launch waits on the previous one's workers.
+    ROUTED_EXPERT_FUSE_HYBRID_DISPATCH = True
     INTERMEDIATE_SIZE = 12288  # Dense FFN hidden dimension
 
     # MoE configuration

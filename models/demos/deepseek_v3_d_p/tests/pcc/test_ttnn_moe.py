@@ -539,6 +539,7 @@ def run_model(
         routed_expert_hybrid_token_threshold=getattr(
             variant.model_config, "ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD", None
         ),
+        routed_expert_fuse_hybrid_dispatch=getattr(variant.model_config, "ROUTED_EXPERT_FUSE_HYBRID_DISPATCH", None),
         shared_expert_activations_dtype=ttnn.bfloat16,
         shared_expert_weights_dtype=ttnn.bfloat8_b,
         shared_expert_activation=shared_activation,
