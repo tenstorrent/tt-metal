@@ -13,6 +13,7 @@
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/experimental/profiler.hpp>
 #include <tt_metal.hpp>
+#include "tt_metal_profiler.hpp"
 #include <fstream>
 
 #include "context/metal_env_accessor.hpp"
@@ -96,7 +97,7 @@ uint32_t get_available_worker_core_count_for_program(
     const DispatchCoreConfig& dispatch_core_config) {
     const auto decoded = detail::DecodePerDeviceProgramID(encoded_runtime_host_id);
     const std::optional<tt::ProgramSubDeviceInfo> sub_device_info =
-        tt::GetProgramSubDevice(chip_id, decoded.base_program_id);
+        tt::GetProgramSubDevice(MetalContext::instance().get_context_id(), chip_id, decoded.base_program_id);
     if (sub_device_info.has_value() && sub_device_info->num_available_worker_cores > 0) {
         return sub_device_info->num_available_worker_cores;
     }
@@ -851,6 +852,7 @@ std::vector<AnalysisConfig> loadAnalysisConfigsFromJSON(const std::filesystem::p
     const nlohmann::json configs_json = nlohmann::json::parse(json_ifs);
 
     std::vector<AnalysisConfig> configs;
+    configs.reserve(configs_json.size());
     for (const auto& config_json : configs_json) {
         configs.push_back(config_json.get<AnalysisConfig>());
     }

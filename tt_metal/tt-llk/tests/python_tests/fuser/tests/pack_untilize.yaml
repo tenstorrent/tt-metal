@@ -1,0 +1,21 @@
+# Datacopy packed out with PackUntilize: dest is written to L1 row-major.
+
+operands:
+  - name: "input_A"
+    dims: [256, 256]
+    format: "Float16_b"
+  - name: "output"
+    dims: [256, 256]
+    format: "Float16_b"
+
+operations:
+  - math:
+      - type: "Fpu"
+        in0: "input_A"
+        operation: "Datacopy"
+        unpacker: "UnpackerA"
+        math_fidelity: "LoFi"
+    block_size: [64, 128]
+    pack:
+      - output: "output"
+        packer: "PackUntilize"

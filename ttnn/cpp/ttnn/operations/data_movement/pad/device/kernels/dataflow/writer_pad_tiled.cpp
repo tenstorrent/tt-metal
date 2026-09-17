@@ -10,6 +10,7 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 // This kernel keeps track of which page (tile) we are on from a logical tensor perspective, and fills the output with
 // either the input or padding respectively
@@ -19,30 +20,33 @@
 // [0:2, 0:2, 0:1, 0:1] we wait for the reader to send us the correct tile, and then write it, otherwise we
 // write padding.
 void kernel_main() {
-    constexpr uint32_t input_dfb_id = get_compile_time_arg_val(0);
-    constexpr uint32_t output_cb_id = get_compile_time_arg_val(1);
-    constexpr uint32_t pad_val_dfb_id = get_compile_time_arg_val(2);
-    constexpr uint32_t page_size = get_compile_time_arg_val(3);
-    constexpr uint32_t num_dims = get_compile_time_arg_val(4);
-    constexpr uint32_t pad_value = get_compile_time_arg_val(5);
-    constexpr uint32_t element_size = get_compile_time_arg_val(6);
+    constexpr auto page_size = get_arg(args::page_size);
+    constexpr auto num_dims = get_arg(args::num_dims);
+    constexpr auto pad_value = get_arg(args::pad_value);
+    constexpr auto element_size = get_arg(args::element_size);
     constexpr uint32_t num_elements = page_size / element_size;
 
-    uint32_t rt_ind = 0;
-    const uint32_t output_addr = get_arg_val<uint32_t>(rt_ind++);
-    const uint32_t num_pages_to_write = get_arg_val<uint32_t>(rt_ind++);
-    const uint32_t start_offset = get_arg_val<uint32_t>(rt_ind++);
-    volatile tt_l1_ptr uint32_t* input_page_shape = (tt_l1_ptr uint32_t*)(get_arg_addr(rt_ind));
-    volatile tt_l1_ptr uint32_t* output_page_shape = input_page_shape + num_dims;
-    volatile tt_l1_ptr uint32_t* input_id_per_dim = output_page_shape + num_dims;
-    volatile tt_l1_ptr uint32_t* output_id_per_dim = input_id_per_dim + num_dims;
+    const auto num_pages_to_write = get_arg(args::num_pages_to_write);
+    const auto start_offset = get_arg(args::start_offset);
 
-    constexpr auto dst_args = TensorAccessorArgs<7>();
+    // Four num_dims-long runtime vararg blocks, in host push order. The two id_per_dim blocks are
+    // advanced as this kernel walks the output, so they are copied into locals: get_vararg() reads
+    // a vararg but cannot write one back.
+    uint32_t input_page_shape[num_dims];
+    uint32_t output_page_shape[num_dims];
+    uint32_t input_id_per_dim[num_dims];
+    uint32_t output_id_per_dim[num_dims];
+    for (uint32_t d = 0; d < num_dims; d++) {
+        input_page_shape[d] = get_vararg(d);
+        output_page_shape[d] = get_vararg(num_dims + d);
+        input_id_per_dim[d] = get_vararg(2 * num_dims + d);
+        output_id_per_dim[d] = get_vararg(3 * num_dims + d);
+    }
 
-    const auto s0 = TensorAccessor(dst_args, output_addr);
+    const auto s0 = TensorAccessor(tensor::dst);
     Noc noc;
-    DataflowBuffer dfb_input(input_dfb_id);
-    DataflowBuffer dfb_pad_val(pad_val_dfb_id);
+    DataflowBuffer dfb_input(dfb::in0);
+    DataflowBuffer dfb_pad_val(dfb::pad);
 
     // Reserve and push the pad value into the circular buffer, generalized for any contiguous dtype
     dfb_pad_val.reserve_back(1);
@@ -55,7 +59,7 @@ void kernel_main() {
         }
     }
     dfb_pad_val.push_back(1);
-    // Our scratchpad cb is now a tile full of padding.
+    // Our scratchpad DFB is now a tile full of padding.
 
     bool within_input_region;
     uint32_t output_page_offset = start_offset;

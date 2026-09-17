@@ -12,6 +12,16 @@ namespace ttnn::experimental::prim {
 struct DropoutProgramFactory {
     static tt::tt_metal::ProgramDescriptor create_descriptor(
         const DropoutParams& args, const DropoutInputs& tensor_args, Tensor& output);
+
+    // Patches ALL per-dispatch state (seed, src/dst addresses) into the cached program on every cache
+    // hit -- in place, no descriptor rebuild. seed is hash-excluded (per-device offset applied when
+    // use_per_device_seed); supersedes get_dynamic_runtime_args and resolve_bindings.
+    static void override_runtime_arguments(
+        tt::tt_metal::Program& program,
+        const DropoutParams& operation_attributes,
+        const DropoutInputs& tensor_args,
+        Tensor& tensor_return_value,
+        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
 };
 
 struct DropoutMeshWorkloadFactory {
@@ -24,6 +34,15 @@ struct DropoutMeshWorkloadFactory {
         const DropoutInputs& tensor_args,
         Tensor& output,
         const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate);
+
+    // Delegates to DropoutProgramFactory: both factories emit the same per-core layout, so one
+    // implementation keeps the cache-hit patch from drifting between them.
+    static void override_runtime_arguments(
+        tt::tt_metal::Program& program,
+        const DropoutParams& operation_attributes,
+        const DropoutInputs& tensor_args,
+        Tensor& tensor_return_value,
+        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
 };
 
 }  // namespace ttnn::experimental::prim

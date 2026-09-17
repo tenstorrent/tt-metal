@@ -25,6 +25,7 @@ def cluster_type_to_sku_name(cluster_type: ttnn.cluster.ClusterType) -> str:
         ttnn.cluster.ClusterType.P150: "bh_p150",
         ttnn.cluster.ClusterType.P300: "bh_p300",
         ttnn.cluster.ClusterType.P300_X2: "bh_quietbox_2",
+        ttnn.cluster.ClusterType.P150_X8: "bh_loudbox",
         ttnn.cluster.ClusterType.BLACKHOLE_GALAXY: "bh_galaxy_perf",
     }
 

@@ -10,7 +10,6 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/device.hpp>
-#include <tt-metalium/tt_metal_profiler.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 
 using namespace tt;

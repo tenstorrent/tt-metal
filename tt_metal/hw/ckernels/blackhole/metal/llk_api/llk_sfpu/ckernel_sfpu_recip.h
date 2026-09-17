@@ -395,6 +395,7 @@ void recip_init() {
     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
     math::reset_counters(p_setrwc::SET_ABD_F);
     if constexpr (!legacy_compat) {
+        sfpu_reciprocal_init<false>();  // set vConstFloatPrgm0 for sfpu_reciprocal_iter
         if constexpr (APPROXIMATION_MODE) {
             _init_reciprocal_fast_7b_();
         } else if constexpr (is_fp32_dest_acc_en) {

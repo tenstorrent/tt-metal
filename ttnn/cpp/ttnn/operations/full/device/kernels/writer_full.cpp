@@ -5,33 +5,33 @@
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 #include "full_kernel_common.hpp"
 
 void kernel_main() {
-    uint32_t output_addr = get_arg_val<uint32_t>(0);
-    uint32_t fill_value = get_arg_val<uint32_t>(1);
-    uint32_t num_pages_per_core = get_arg_val<uint32_t>(2);
-    uint32_t start_id = get_arg_val<uint32_t>(3);
+    uint32_t fill_value = get_arg(args::fill_value);
+    uint32_t num_pages_per_core = get_arg(args::num_pages_per_core);
+    uint32_t start_id = get_arg(args::start_id);
 
-    constexpr uint32_t cb_value = get_compile_time_arg_val(0);
-    constexpr uint32_t elems_per_page = get_compile_time_arg_val(1);
-    constexpr uint32_t page_size = get_compile_time_arg_val(2);
-    constexpr auto dst_args = TensorAccessorArgs<3>();
+    constexpr uint32_t elems_per_page = get_arg(args::elems_per_page);
+    constexpr uint32_t page_size = get_arg(args::page_size);
 
     value val;
     val.u = fill_value;
 
     Noc noc;
-    CircularBuffer cb(cb_value);
+    // Holds the single fill-value page this instance builds and then writes to every output page it
+    // owns. This instance is the buffer's only toucher: it fills the page and drains it itself.
+    DataflowBuffer dfb(dfb::value);
 
-    cb.reserve_back(onepage);
+    dfb.reserve_back(onepage);
 
-    uint32_t write_addr = cb.get_write_ptr();
+    uint32_t write_addr = dfb.get_write_ptr();
 
     if (val.u == 0) {
-        zero_buffer(cb_value, page_size);
+        zero_buffer(dfb, page_size);
     } else {
 #ifdef OUTPUT_DTYPE_BFLOAT16
         auto ptr = reinterpret_cast<uint16_t*>(write_addr);
@@ -53,17 +53,17 @@ void kernel_main() {
 #endif
     }
 
-    cb.push_back(1);
+    dfb.push_back(1);
 
-    const auto s = TensorAccessor(dst_args, output_addr);
+    const auto s = TensorAccessor(tensor::output);
 
-    cb.wait_front(1);
+    dfb.wait_front(1);
 
     uint32_t end_id = start_id + num_pages_per_core;
     for (std::uint32_t i = start_id; i < end_id; i++) {
-        noc.async_write(cb, s, s.get_aligned_page_size(), {}, {.page_id = i});
+        noc.async_write(dfb, s, s.get_aligned_page_size(), {}, {.page_id = i});
     }
     noc.async_writes_flushed();
-    cb.pop_front(1);
+    dfb.pop_front(1);
     noc.async_write_barrier();
 }

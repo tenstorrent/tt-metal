@@ -47,15 +47,16 @@ constexpr uint32_t output_tensor_Ht = get_compile_time_arg_val(14);
 constexpr uint32_t output_tensor_C = get_compile_time_arg_val(15);
 constexpr bool fuse_op = get_compile_time_arg_val(16);
 constexpr uint32_t reverse = get_compile_time_arg_val(17) == 1;
+constexpr uint32_t barrier_target_count = get_compile_time_arg_val(18);
 #ifdef USE_WORKER_MUX
-constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(18);
-constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(19);
-constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(20);
-constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(21);
-constexpr uint32_t num_mux_clients = get_compile_time_arg_val(22);
-constexpr uint32_t rt_arg_count = 23;
+constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(19);
+constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(20);
+constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(21);
+constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(22);
+constexpr uint32_t num_mux_clients = get_compile_time_arg_val(23);
+constexpr uint32_t rt_arg_count = 24;
 #else
-constexpr uint32_t rt_arg_count = 18;
+constexpr uint32_t rt_arg_count = 19;
 #endif
 
 constexpr ccl_routing_utils::line_unicast_route_info_t forward_unicast_route_info =
@@ -222,8 +223,16 @@ void kernel_main() {
 #else
     fabric_connection.open();
 
+    // An edge device of a line has no neighbour in one direction, so the connection manager holds
+    // no sender for it and get_{forward,backward}_connection() would trip its own ASSERT. Every send
+    // below is already gated on detail::valid_targets(direction) (see the comment there: the writers
+    // at the end of the line pointing outward do not send over fabric), and teardown closes the
+    // manager rather than this pointer, so leave it null in that case. Mirrors the USE_WORKER_MUX
+    // path above, which already nulls the pointer when its connection is invalid.
     auto* fabric_direction_connection =
-        direction ? &fabric_connection.get_backward_connection() : &fabric_connection.get_forward_connection();
+        direction
+            ? (fabric_connection.has_backward_connection() ? &fabric_connection.get_backward_connection() : nullptr)
+            : (fabric_connection.has_forward_connection() ? &fabric_connection.get_forward_connection() : nullptr);
 #endif
     // pre-populate packet headers
     auto pkt_scatter_hdr = PacketHeaderPool::allocate_header();
@@ -278,7 +287,7 @@ void kernel_main() {
             }
         }
 
-        noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), ring_size - 1);
+        noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), barrier_target_count);
         noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 0);
     }
 
@@ -316,15 +325,22 @@ void kernel_main() {
 
     // only initialize if we're actually going to send something over fabric
     if (detail::valid_targets(direction)) {
-        static_assert(num_tiles_to_write_per_packet <= 4, "tiles per packet > 4 is unsupported");
+        // A one-tile packet uses the unicast header below, but the scatter header is still pre-populated for
+        // the shared packet-state setup. Scatter writes require at least two chunks, so seed that otherwise-unused
+        // header with the minimum valid chunk count rather than the one-tile unicast packet size.
+        constexpr uint32_t scatter_header_chunk_count = num_tiles_to_write_per_packet < NOC_SCATTER_WRITE_MIN_CHUNKS
+                                                            ? NOC_SCATTER_WRITE_MIN_CHUNKS
+                                                            : num_tiles_to_write_per_packet;
+        static_assert(
+            scatter_header_chunk_count <= NOC_SCATTER_WRITE_MAX_CHUNKS, "tiles per packet > 4 is unsupported");
         uint64_t dummy_addrs[4] = {0, 0, 0, 0};
         uint16_t chunk_sizes[3] = {page_size, page_size, page_size};
         fabric_unicast_noc_scatter_write_set_state<
             UnicastScatterWriteUpdateMask::ChunkSizes | UnicastScatterWriteUpdateMask::PayloadSize>(
             pkt_scatter_hdr,
             static_cast<uint8_t>(unicast_route_info.distance_in_hops),
-            NocUnicastScatterCommandHeader(dummy_addrs, chunk_sizes, num_tiles_to_write_per_packet),
-            page_size * num_tiles_to_write_per_packet);
+            NocUnicastScatterCommandHeader(dummy_addrs, chunk_sizes, scatter_header_chunk_count),
+            page_size * scatter_header_chunk_count);
 
         fabric_unicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::PayloadSize>(
             pkt_unicast_hdr, static_cast<uint8_t>(unicast_route_info.distance_in_hops), nullptr, page_size);

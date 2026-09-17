@@ -24,13 +24,12 @@
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
-#include "api/debug/ring_buffer.h"  // DEBUG: reshard ebreak bisect (remove after)
 
 void kernel_main() {
-    WATCHER_RING_BUFFER_PUSH(0x22DD0001);  // DEBUG: RRD start
     constexpr bool read_from_dram = get_arg(args::interface_with_dram);
     constexpr uint32_t unit_size = get_arg(args::unit_size);
 #ifdef UNALIGNED
+    constexpr uint32_t local_unit_size_padded = get_arg(args::local_unit_size_padded);
     constexpr uint32_t remote_unit_size_padded = get_arg(args::remote_unit_size_padded);
 #endif
     constexpr AllocatorBankType bank_type = read_from_dram ? AllocatorBankType::DRAM : AllocatorBankType::L1;
@@ -50,9 +49,13 @@ void kernel_main() {
     uint32_t l1_write_addr = shard_cb.get_write_ptr() + write_offset;
     uint32_t vararg_idx = 0;
 #ifdef UNALIGNED
+    constexpr uint32_t remote_units_per_shard = get_arg(args::remote_units_per_shard);
+    constexpr uint32_t is_reader = get_arg(args::is_reader);
+    // Second RISC uses the upper half so both do not write the same scratch bytes.
+    constexpr uint32_t scratch_base_offset = is_reader ? 0 : remote_units_per_shard * remote_unit_size_padded;
     DataflowBuffer cb_scratch(dfb::scratch_cb);
-    uint32_t l1_scratch_write_addr = cb_scratch.get_write_ptr();
-    uint32_t l1_scratch_read_addr = cb_scratch.get_read_ptr();
+    uint32_t l1_scratch_write_addr = cb_scratch.get_write_ptr() + scratch_base_offset;
+    uint32_t l1_scratch_read_addr = cb_scratch.get_read_ptr() + scratch_base_offset;
     for (uint32_t i = 0; i < num_reads; ++i) {
         uint32_t bank_id = get_vararg(vararg_idx++);
         uint32_t src_offset = get_vararg(vararg_idx++);
@@ -74,36 +77,21 @@ void kernel_main() {
                  .noc_y = (uint32_t)my_y[noc.get_noc_id()],
                  .addr = pad_align_addr},
                 {.offset_bytes = 0});
-            l1_write_addr += unit_size;
+            l1_write_addr += local_unit_size_padded;
             pad_align_addr += remote_unit_size_padded;
         }
         noc.async_read_barrier();
     }
 #else
-    // DEBUG: reshard ebreak bisect. If PREREAD (with src_addr/l1_write_addr) shows but POSTLOOP doesn't,
-    // the trap is inside noc.async_read(bank,...); if PREREAD is missing, setup (get_bank_base_address/
-    // get_write_ptr) trapped. Remove after.
-    WATCHER_RING_BUFFER_PUSH(0x22DD0002);  // RRD prealigned-loop
-    WATCHER_RING_BUFFER_PUSH((uint32_t)src_addr);
-    WATCHER_RING_BUFFER_PUSH((uint32_t)l1_write_addr);
-    WATCHER_RING_BUFFER_PUSH((uint32_t)num_reads);
     for (uint32_t i = 0; i < num_reads; ++i) {
         uint32_t bank_id = get_vararg(vararg_idx++);
         uint32_t addr = src_addr + get_vararg(vararg_idx++);
         uint32_t units_to_transfer = get_vararg(vararg_idx++);
         uint32_t read_size = units_to_transfer * unit_size;
-        if (i == 0) {
-            WATCHER_RING_BUFFER_PUSH(0x22DD0003);  // RRD first-read
-            WATCHER_RING_BUFFER_PUSH((uint32_t)bank_id);
-            WATCHER_RING_BUFFER_PUSH((uint32_t)addr);
-            WATCHER_RING_BUFFER_PUSH((uint32_t)read_size);
-        }
         CoreLocalMem<uint32_t> dst(l1_write_addr);
         noc.async_read(bank, dst, read_size, {.bank_id = bank_id, .addr = addr}, {.offset_bytes = 0});
         l1_write_addr += read_size;
     }
-    WATCHER_RING_BUFFER_PUSH(0x22DD0004);  // RRD postloop
     noc.async_read_barrier();
-    WATCHER_RING_BUFFER_PUSH(0x22DD0005);  // RRD end
 #endif
 }

@@ -48,7 +48,7 @@ inline void _llk_math_topk_xl_copy_init_([[maybe_unused]] const std::uint32_t ds
 // Minimal slice of _llk_math_eltwise_unary_datacopy_: A2D, no SrcB broadcast, TopK-XL MOP already programmed in init.
 inline void _llk_math_topk_xl_copy_(const std::uint32_t dst_index, const std::uint32_t dst_format, const std::uint32_t elements_this_tile)
 {
-    if (is_32bit_input(dst_format, dst_format))
+    if (elements_this_tile != 0 && is_32bit_input(dst_format, dst_format))
     {
         math_unpack_to_dest_math_ready();
         // clear to -inf first for padding

@@ -83,7 +83,7 @@ void kernel_main() {
     dfb_scalar_args_obj.wait_front(5);
     dfb_one_obj.wait_front(onetile);
 
-    binary_op_init_common(cb_param_in, cb_scalar_args, cb_param_out);
+    compute_kernel_hw_startup(cb_param_in, cb_scalar_args, cb_param_out);
 
     for (uint32_t b = 0; b < per_core_tile_cnt; ++b) {
         // grad += grad + param * weight_decay;
@@ -161,7 +161,7 @@ void kernel_main() {
         dfb_tmp1_obj.wait_front(onetile);
         dfb_tmp1_obj.reserve_back(onetile);
         WITH_FP32_DEST_ACC(reconfig_data_format(cb_one, cb_tmp1));
-        sub_tiles_init(cb_one, cb_tmp1);
+        sub_init(cb_one, cb_tmp1);
         sub_tiles(cb_one, cb_tmp1, first_tile, first_tile, dst0);
         recip_tile_init();
         recip_tile(dst0);
@@ -210,11 +210,11 @@ void kernel_main() {
         dfb_tmp1_obj.reserve_back(onetile);
 
 #ifdef AMSGRAD
-        mul_tiles_init(tmp_cb_max_exp_avg_sq, cb_tmp1);
+        mul_init(tmp_cb_max_exp_avg_sq, cb_tmp1);
         WITH_FP32_DEST_ACC(reconfig_data_format(tmp_cb_max_exp_avg_sq, cb_tmp1));
         mul_tiles(tmp_cb_max_exp_avg_sq, cb_tmp1, first_tile, first_tile, dst0);
 #else
-        mul_tiles_init(tmp_cb_exp_avg_sq, cb_tmp1);
+        mul_init(tmp_cb_exp_avg_sq, cb_tmp1);
         WITH_FP32_DEST_ACC(reconfig_data_format(tmp_cb_exp_avg_sq, cb_tmp1));
         mul_tiles(tmp_cb_exp_avg_sq, cb_tmp1, first_tile, first_tile, dst0);
 #endif
@@ -237,7 +237,7 @@ void kernel_main() {
         dfb_tmp1_obj.wait_front(onetile);
         dfb_tmp1_obj.reserve_back(onetile);
         WITH_FP32_DEST_ACC(reconfig_data_format(cb_tmp1, cb_scalar_args));
-        add_tiles_init(cb_tmp1, cb_scalar_args);
+        add_init(cb_tmp1, cb_scalar_args);
         add_tiles(cb_tmp1, cb_scalar_args, first_tile, eps_tile, dst0);
         recip_tile_init();
         recip_tile(dst0);
@@ -268,7 +268,7 @@ void kernel_main() {
         tile_regs_acquire();
         dfb_tmp2_obj.wait_front(onetile);
         WITH_FP32_DEST_ACC(reconfig_data_format(cb_one, cb_tmp2));
-        sub_tiles_init(cb_one, cb_tmp2);
+        sub_init(cb_one, cb_tmp2);
         sub_tiles(cb_one, cb_tmp2, first_tile, first_tile, dst0);
         recip_tile_init();
         recip_tile(dst0);

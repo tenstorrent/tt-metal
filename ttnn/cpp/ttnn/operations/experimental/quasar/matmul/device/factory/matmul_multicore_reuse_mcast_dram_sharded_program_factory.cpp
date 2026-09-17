@@ -658,6 +658,7 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
     uint32_t sender_id = 0;
     for (auto core : mcast_senders_coords) {
         std::vector<uint32_t> mm_in0_sender_args;
+        mm_in0_sender_args.reserve(3 + in0_mcast_sender_noc_x.size() + in0_mcast_sender_noc_y.size());
 
         uint32_t worker_core_type;
         if (find(storage_worker_common.begin(), storage_worker_common.end(), core) != storage_worker_common.end()) {
@@ -683,6 +684,7 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
     std::vector<CoreCoord> mcast_receiver_coords = corerange_to_cores(mcast_receivers);
     for (auto core : mcast_receiver_coords) {
         std::vector<uint32_t> mm_in0_receiver_args;
+        mm_in0_receiver_args.reserve(3 + in0_mcast_sender_noc_x.size() + in0_mcast_sender_noc_y.size());
         uint32_t worker_core_type = 3;
         mm_in0_receiver_args.push_back((std::uint32_t)worker_core_type);
         mm_in0_receiver_args.push_back((std::uint32_t)0);
@@ -711,6 +713,7 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
     // Compute and in1 sender/writer runtime args
     uint32_t bank_id = 0;
     std::vector<uint32_t> bank_ids;
+    bank_ids.reserve(all_worker_cores_ordered.size());
     uint32_t curr_storage_core_idx = 0;
     uint32_t per_core_N_storage_curr_stride = 0;
 

@@ -22,10 +22,11 @@ runs:
   using: 'composite'
   steps:
     - name: Delete Allocation
-      uses: ./.github/actions/ttop-await-resource
-      with:
-        namespace: ${{ inputs.namespace }}
-        resource: allocation/${{ inputs.allocationName }}
-        mode: delete
-        timeoutSeconds: ${{ inputs.timeoutSeconds }}
-        retries: ${{ inputs.retries }}
+      shell: bash
+      env:
+        NAMESPACE: ${{ inputs.namespace }}
+        RESOURCE: allocation/${{ inputs.allocationName }}
+        MODE: delete
+        OVERALL_TIMEOUT: ${{ inputs.timeoutSeconds }}
+        RETRIES: ${{ inputs.retries }}
+      run: "$GITHUB_ACTION_PATH/../ttop-await-resource/await.sh"

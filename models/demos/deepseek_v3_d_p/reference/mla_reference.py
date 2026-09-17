@@ -43,6 +43,44 @@ class MLAReference(nn.Module):
         # forward() is overridden below to use memory-efficient F.scaled_dot_product_attention.
         self.attention = DeepseekV3Attention(config, layer_idx=layer_idx)
 
+        # Mistral Small 4 carries a full YaRN block but applies NO mscale to the softmax scale --
+        # `Mistral4Attention` sets `self.scaling = qk_head_dim ** -0.5` unconditionally and its
+        # rotary reports attention_scaling = 1.0. DeepseekV3Attention.__init__ folds mscale^2 in
+        # whenever `rope_scaling["mscale_all_dim"]` is truthy, which would make this reference
+        # disagree with the model it is standing in for (and with tt/mla/mla.py, which honours the
+        # same flag). Absent (-> False) on every other variant, so their scale is unchanged.
+        if bool(getattr(config, "mla_disable_yarn_mscale", False)):
+            self.attention.softmax_scale = (config.qk_nope_head_dim + config.qk_rope_head_dim) ** -0.5
+
+        # Mistral's query temperature. Present only in Mistral's rope_scaling, so absent (-> None)
+        # leaves every other variant unchanged. Re-derived rather than imported from
+        # transformers.models.mistral4: this class is the vendored half of the reference head-to-head,
+        # and sharing Mistral's helper would put the code under test on both sides.
+        rope_scaling = getattr(config, "rope_scaling", None) or {}
+        self.llama4_beta = rope_scaling.get("llama_4_scaling_beta")
+        self.llama4_orig_max = rope_scaling.get("original_max_position_embeddings")
+        if self.llama4_beta is not None and not self.llama4_orig_max:
+            raise ValueError("llama_4_scaling_beta is set but rope_scaling has no original_max_position_embeddings")
+
+        # Kimi-K3 deltas; both absent (-> False) on every other variant.
+        self.use_nope = bool(getattr(config, "mla_use_nope", False))
+        self.use_output_gate = bool(getattr(config, "mla_use_output_gate", False))
+        if self.use_output_gate:
+            # On self.attention so the "model.layers.N.self_attn.*" state dict reaches it.
+            self.attention.g_proj = nn.Linear(
+                config.hidden_size, config.num_attention_heads * config.v_head_dim, bias=False
+            )
+
+    def _llama4_attn_scale(self, position_ids: torch.Tensor) -> torch.Tensor:
+        """``1 + beta*ln(1 + floor(pos/orig_max))``, shaped [bsz, 1, seq, 1] to broadcast over q.
+
+        fp32 regardless of module dtype: the term sits just above 1.0 and adjacent windows are ~0.01
+        apart by 50k, which bf16 cannot resolve.
+        """
+        pos = position_ids.to(torch.float32)
+        scale = 1.0 + self.llama4_beta * torch.log(1.0 + torch.floor(pos / self.llama4_orig_max))
+        return scale[:, None, :, None]
+
     def forward(
         self,
         hidden_states: torch.Tensor,
@@ -78,6 +116,14 @@ class MLAReference(nn.Module):
         else:
             q = attn.q_b_proj(attn.q_a_layernorm(attn.q_a_proj(hidden_states)))
         q = q.view(bsz, q_len, attn.num_heads, attn.q_head_dim).transpose(1, 2)
+
+        # Before the split; Mistral4Attention scales query_states after RoPE, which is equivalent --
+        # wkv_b1 is a matmul and RoPE a rotation, so a per-row scale commutes with both.
+        if self.llama4_beta is not None:
+            if position_ids is None:
+                raise ValueError("llama4 query scale needs position_ids for the absolute positions")
+            q = q * self._llama4_attn_scale(position_ids).to(q.dtype)
+
         q_nope, q_pe = torch.split(q, [attn.qk_nope_head_dim, attn.qk_rope_head_dim], dim=-1)
 
         # Absorbed Q: q_nope projected into latent space
@@ -90,12 +136,14 @@ class MLAReference(nn.Module):
         k_pe = k_pe.view(bsz, 1, q_len, attn.qk_rope_head_dim)
         k_nope = attn.kv_a_layernorm(compressed_kv).view(bsz, 1, q_len, attn.kv_lora_rank)
 
-        # RoPE
-        kv_seq_len = k_nope.shape[-2]
-        if past_key_value is not None:
-            kv_seq_len += past_key_value.get_seq_length(attn.layer_idx)
-        cos, sin = attn.rotary_emb(k_nope, seq_len=kv_seq_len, meta_style=True)
-        q_pe, k_pe = apply_rotary_pos_emb(q_pe, k_pe, cos, sin, position_ids, meta_style=True)
+        # RoPE; NoPE (Kimi-K3) skips it -- q_pe / k_pe stay unrotated but are still concatenated below.
+        sin = cos = None
+        if not self.use_nope:
+            kv_seq_len = k_nope.shape[-2]
+            if past_key_value is not None:
+                kv_seq_len += past_key_value.get_seq_length(attn.layer_idx)
+            cos, sin = attn.rotary_emb(k_nope, seq_len=kv_seq_len, meta_style=True)
+            q_pe, k_pe = apply_rotary_pos_emb(q_pe, k_pe, cos, sin, position_ids, meta_style=True)
 
         # Assemble query_states and key_states (KVPE)
         query_states = k_pe.new_empty(bsz, attn.num_heads, q_len, attn.kv_lora_rank + attn.qk_rope_head_dim)
@@ -162,6 +210,12 @@ class MLAReference(nn.Module):
 
         attn_output = attn_output.transpose(1, 2).contiguous()
         attn_output = attn_output.reshape(bsz, q_len, attn.num_heads * attn.v_head_dim)
+
+        # Kimi-K3 output gate; head-major over the last dim, as the device path applies it after
+        # nlp_concat_heads. Cannot move before wkv_b2: g * (attn @ W_b2) != (g * attn) @ W_b2.
+        if self.use_output_gate:
+            attn_output = attn_output * attn.g_proj(hidden_states).sigmoid()
+
         attn_output = attn.o_proj(attn_output)
 
         return attn_output, None, past_key_value

@@ -17,6 +17,7 @@
 #include "tt_metal/third_party/umd/device/api/umd/device/types/core_coordinates.hpp"
 #include "llrt/metal_soc_descriptor.hpp"
 #include "tt_metal.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt_stl/fmt.hpp>
 
@@ -357,39 +358,90 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
                   builder_context.get_channel_trimming_global_overrides())
             : std::nullopt;
 
-    // If this router trims down to a terminal-only VC0 shape, inspect the exact
-    // peer router on this physical link and only enable speedy RX when that peer
-    // independently trims down to the matching worker-only source shape.
+    // Inspect the exact peer router on this physical link whenever this local
+    // router can use a speedy VC0 path. Its captured sender packet size controls
+    // this router's receiver-credit cadence. The terminal speedy-RX decision is
+    // separately constrained to the existing non-UDM Fabric2D configuration.
     auto maybe_finalize_vc0_fast_path_pair = [&]() {
-        if (!fabric_context.is_2D_routing_enabled() || fabric_tensix_extension_udm_mode || location.is_dispatch_link ||
-            local_node.mesh_id != location.remote_node.mesh_id || !local_vc0_fast_path_info.has_value() ||
-            !(local_vc0_fast_path_info->worker_only_nonforwarding ||
-              local_vc0_fast_path_info->terminal_only_nonforwarding)) {
+        if (!local_vc0_fast_path_info.has_value()) {
             return;
         }
 
-        const auto [connected_peer_node, connected_peer_chan] =
-            control_plane.get_connected_mesh_chip_chan_ids(local_node, location.eth_chan);
+        // A terminal may become speedy only after its exact peer is resolved;
+        // all other conditions use the same predicate as the ERISC builder.
+        const bool local_can_use_speedy_vc0 = vc0_speedy_path_enabled(
+                                                  actual_sender_channels_per_vc[0],
+                                                  fabric_context.need_deadlock_avoidance_support(eth_direction),
+                                                  *local_vc0_fast_path_info) ||
+                                              local_vc0_fast_path_info->terminal_only_nonforwarding;
+        if (!local_can_use_speedy_vc0) {
+            return;
+        }
+
+        const auto connected_peer = control_plane.try_get_connected_mesh_chip_chan_ids(local_node, location.eth_chan);
+        if (!connected_peer.has_value()) {
+            log_debug(
+                tt::LogFabric,
+                "Channel trimming: unable to resolve peer for chip {} channel {}; using conservative receiver credit "
+                "amortization",
+                device->id(),
+                location.eth_chan);
+            return;
+        }
+        const auto [connected_peer_node, connected_peer_chan] = *connected_peer;
         if (connected_peer_node != location.remote_node) {
+            log_debug(
+                tt::LogFabric,
+                "Channel trimming: resolved peer {} for chip {} channel {} does not match router peer {}; using "
+                "conservative receiver credit amortization",
+                connected_peer_node,
+                device->id(),
+                location.eth_chan,
+                location.remote_node);
             return;
         }
 
         auto peer_direction = control_plane.get_forwarding_direction(connected_peer_node, local_node);
         if (!peer_direction.has_value()) {
+            log_debug(
+                tt::LogFabric,
+                "Channel trimming: unable to determine the peer forwarding direction from {} to {}; using conservative "
+                "receiver credit amortization",
+                connected_peer_node,
+                local_node);
             return;
         }
 
+        // Logical-to-physical mapping membership guarantees that routing-channel metadata was seeded for this node.
+        const auto peer_physical_chip_id =
+            control_plane.try_get_physical_chip_id_from_fabric_node_id(connected_peer_node);
+        if (!peer_physical_chip_id.has_value()) {
+            log_debug(
+                tt::LogFabric,
+                "Channel trimming: peer {} is not mapped to a local physical chip; using conservative receiver "
+                "credit amortization",
+                connected_peer_node);
+            return;
+        }
         const auto peer_channel_counts = compute_router_channel_counts(
             fabric_context, control_plane, connected_peer_node, *peer_direction, location.is_dispatch_link);
-        const auto peer_physical_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(connected_peer_node);
         auto peer_vc0_fast_path_info = resolve_vc0_trim_fast_path_info(
-            builder_context, peer_physical_chip_id, connected_peer_chan, peer_channel_counts);
+            builder_context, *peer_physical_chip_id, connected_peer_chan, peer_channel_counts);
         if (!peer_vc0_fast_path_info.has_value()) {
+            log_debug(
+                tt::LogFabric,
+                "Channel trimming: no peer capture entry for chip {} channel {}; using conservative receiver credit "
+                "amortization",
+                *peer_physical_chip_id,
+                connected_peer_chan);
             return;
         }
 
-        local_vc0_fast_path_info->enable_terminal_speedy_rx =
-            local_vc0_fast_path_info->terminal_only_nonforwarding && peer_vc0_fast_path_info->worker_only_nonforwarding;
+        apply_vc0_trim_fast_path_peer_info(
+            *local_vc0_fast_path_info,
+            *peer_vc0_fast_path_info,
+            fabric_context.is_2D_routing_enabled() && local_node.mesh_id == location.remote_node.mesh_id &&
+                !fabric_tensix_extension_udm_mode && !location.is_dispatch_link);
     };
     maybe_finalize_vc0_fast_path_pair();
 

@@ -108,7 +108,8 @@ void kernel_main() {
 
     CircularBuffer cb_dst(dst_cb_id);
 
-    init_sfpu(dst_cb_id, dst_cb_id);
+    compute_kernel_hw_startup(dst_cb_id, dst_cb_id);
+    copy_init(dst_cb_id);
     rand_tile_init(seed);
     for (uint32_t p = 0; p < num_pairs; p++) {
         generate_standard_normal_tiles<true>(cb_dst);

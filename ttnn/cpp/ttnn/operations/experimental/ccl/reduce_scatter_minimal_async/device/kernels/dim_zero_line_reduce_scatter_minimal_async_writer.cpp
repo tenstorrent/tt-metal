@@ -47,8 +47,9 @@ constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val
 constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(13);
 constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(14);
 constexpr uint32_t num_mux_clients = get_compile_time_arg_val(15);
+constexpr uint32_t barrier_target_count = get_compile_time_arg_val(16);
 
-constexpr uint32_t num_ct_args = 16;
+constexpr uint32_t num_ct_args = 17;
 
 constexpr ccl_routing_utils::line_unicast_route_info_t forward_unicast_route_info =
     ccl_routing_utils::get_line_unicast_route_info_from_args<num_ct_args>();
@@ -123,7 +124,8 @@ void kernel_main() {
     CircularBuffer cb_reader_output(cb_reader_output_id);
 
     const auto& unicast_route_info = (is_forward) ? forward_unicast_route_info : backward_unicast_route_info;
-    const auto& multicast_route_info = (is_forward) ? forward_multicast_route_info : backward_multicast_route_info;
+    [[maybe_unused]] const auto& multicast_route_info =
+        (is_forward) ? forward_multicast_route_info : backward_multicast_route_info;
 
     constexpr uint32_t ct_idx =
         num_ct_args + 2 * (ccl_routing_utils::num_line_unicast_args + ccl_routing_utils::num_line_multicast_args);
@@ -215,36 +217,29 @@ void kernel_main() {
 
     if (use_barrier_sem) {
         if (num_targets_in_direction) {
-            ccl_routing_utils::fabric_set_line_multicast_route(pkt_hdr_seminc, multicast_route_info);
-            fabric_multicast_noc_unicast_atomic_inc_set_state<
+            // Use neighbor unicast instead of multicast to support reshaped 'logical linear' mesh devices
+            ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_seminc, unicast_route_info);
+            fabric_unicast_noc_unicast_atomic_inc_set_state<
                 UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
                 pkt_hdr_seminc,
-                static_cast<uint8_t>(multicast_route_info.start_distance_in_hops),
-                static_cast<uint8_t>(multicast_route_info.range_hops),
+                static_cast<uint8_t>(unicast_route_info.distance_in_hops),
                 tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
                     0,                           // ignore
                     static_cast<uint32_t>(1)});  // increment 1
 
-            // multicast to both the forward and backward worker on all devices in your line that your write to
-            // device going in the same direction
-            uint64_t same_direction_barrier_sem_noc_addr_in_pkt =
-                safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, barrier_sem, 0);
-            fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
-                mux_connection_handle,
-                pkt_hdr_seminc,
-                tt::tt_fabric::NocUnicastAtomicIncCommandHeader{same_direction_barrier_sem_noc_addr_in_pkt, 0});
-
-            // device going in the opposite direction
             uint64_t opposite_direction_barrier_sem_noc_addr_in_pkt =
                 safe_get_noc_addr(opposite_core_sem_noc0_x, opposite_core_sem_noc0_y, barrier_sem, 0);
-            fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
+            fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
                 mux_connection_handle,
                 pkt_hdr_seminc,
                 tt::tt_fabric::NocUnicastAtomicIncCommandHeader{opposite_direction_barrier_sem_noc_addr_in_pkt, 0});
-        }
 
-        noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), ring_size - 1);
-        noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 0);
+            // Exactly one increment arrives: the two workers sharing a link (Dk forward and Dk+1
+            // backward) handshake with each other, so the target is structurally 1 and does not
+            // depend on barrier_target_count.
+            noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 1);
+            noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 0);
+        }
     }
 
     uint64_t out_ready_sem_noc_addr_in_pkt =

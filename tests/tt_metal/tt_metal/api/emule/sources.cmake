@@ -22,6 +22,7 @@ list(
     ${CMAKE_CURRENT_LIST_DIR}/test_alignment_writes.cpp
     ${CMAKE_CURRENT_LIST_DIR}/test_cb_leak.cpp
     ${CMAKE_CURRENT_LIST_DIR}/test_cb_pages.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/test_emule_host_wait.cpp
     ${CMAKE_CURRENT_LIST_DIR}/test_host_alignment.cpp
     ${CMAKE_CURRENT_LIST_DIR}/test_metadata_size.cpp
     ${CMAKE_CURRENT_LIST_DIR}/test_noc_without_barrier.cpp

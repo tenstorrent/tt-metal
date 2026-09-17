@@ -41,7 +41,7 @@ std::pair<DeviceAddr, DeviceAddr> l1_service_range(const Hal& hal) {
 
 // ServiceCoreManagerImpl
 
-ServiceCoreManagerImpl::ServiceCoreManagerImpl(MetalEnvImpl& env) : env_(env) {}
+ServiceCoreManagerImpl::ServiceCoreManagerImpl(MetalEnvImpl& env, MetalContext& ctx) : env_(env), ctx_(ctx) {}
 
 void ServiceCoreManagerImpl::claim(IDevice* device, const std::vector<CoreCoord>& cores) {
     const auto& cluster = env_.get_cluster();
@@ -96,7 +96,8 @@ void ServiceCoreManagerImpl::release(IDevice* device, const std::vector<CoreCoor
 void ServiceCoreManagerImpl::wait_done(IDevice* device, CoreCoord core) const {
     const auto physical_core = device->virtual_core_from_logical_core(core, CoreType::WORKER);
     std::unordered_set<CoreCoord> not_done{physical_core};
-    tt::llrt::internal_::wait_until_cores_done(device->id(), dev_msgs::RUN_MSG_GO, not_done);
+    auto& context = MetalContext::instance(extract_context_id(device));
+    tt::llrt::internal_::wait_until_cores_done(context, device->id(), dev_msgs::RUN_MSG_GO, not_done);
 }
 
 std::unordered_set<CoreCoord> ServiceCoreManagerImpl::claimed_cores(ChipId device_id) const {
@@ -123,7 +124,7 @@ std::vector<CoreCoord> ServiceCoreManagerImpl::get_claimable_cores(IDevice* devi
         env_.get_rtoptions().get_fast_dispatch(),
         "get_claimable_cores() requires Fast Dispatch to be active. "
         "Call initialize_fast_dispatch() first.");
-    auto available = MetalContext::instance().get_dispatch_core_manager().get_available_dispatch_cores(device->id());
+    auto available = ctx_.get_dispatch_core_manager().get_available_dispatch_cores(device->id());
     // Filter out cores already claimed in this session so consecutive calls reflect current state.
     const auto claimed = claimed_cores(device->id());
     std::erase_if(available, [&claimed](const CoreCoord& c) { return claimed.contains(c); });
@@ -252,7 +253,8 @@ std::optional<DeviceAddr> ServiceCoreManagerImpl::lowest_allocated_address(ChipI
 
 // ServiceCoreManager Public interface
 
-ServiceCoreManager::ServiceCoreManager(MetalEnvImpl& env) : pimpl_(std::make_unique<ServiceCoreManagerImpl>(env)) {}
+ServiceCoreManager::ServiceCoreManager(MetalEnvImpl& env, MetalContext& ctx) :
+    pimpl_(std::make_unique<ServiceCoreManagerImpl>(env, ctx)) {}
 ServiceCoreManager::~ServiceCoreManager() = default;
 
 std::vector<CoreCoord> ServiceCoreManager::get_claimable_cores(IDevice* device) const {

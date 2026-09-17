@@ -10,6 +10,7 @@
 #include <sub_device_types.hpp>
 #include <tt_align.hpp>
 #include <tt_stl/span.hpp>
+#include <algorithm>
 #include <limits>
 #include <utility>
 #include <vector>
@@ -24,11 +25,12 @@
 #include "impl/allocator/allocator_types.hpp"
 #include "impl/sub_device/sub_device_impl.hpp"
 #include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
+#include "tt_metal/impl/allocator/allocator.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "distributed/mesh_trace.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/xy_pair.hpp>
-#include "vector_aligned.hpp"
+#include "impl/dispatch/vector_aligned.hpp"
 #include <impl/dispatch/dispatch_query_manager.hpp>
 
 using MeshTraceId = tt::tt_metal::distributed::MeshTraceId;
@@ -46,8 +48,7 @@ static_assert(
 
 std::atomic<uint64_t> SubDeviceManager::next_sub_device_manager_id_ = 0;
 
-SubDeviceManager::SubDeviceManager(
-    ttsl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size, IDevice* device) :
+SubDeviceManager::SubDeviceManager(ttsl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size, IDevice* device) :
     id_(next_sub_device_manager_id_++), sub_devices_(sub_devices.begin(), sub_devices.end()), device_(device) {
     TT_ASSERT(device != nullptr, "Device must not be null");
     context_id_ = extract_context_id(device);
@@ -150,6 +151,15 @@ std::shared_ptr<MeshTraceBuffer> SubDeviceManager::get_trace(const MeshTraceId& 
     return nullptr;
 }
 
+DeviceAddr SubDeviceManager::get_max_trace_high_water_mark() const {
+    DeviceAddr max_high_water_mark = 0;
+    for (const auto& trace_entry : trace_buffer_pool_) {
+        const auto& trace_buffer = trace_entry.second;
+        max_high_water_mark = std::max(max_high_water_mark, trace_buffer->dram_high_water_mark);
+    }
+    return max_high_water_mark;
+}
+
 bool SubDeviceManager::has_allocations() const {
     for (const auto& allocator : sub_device_allocators_) {
         if (allocator && allocator->get_num_allocated_buffers() > 0) {
@@ -160,6 +170,8 @@ bool SubDeviceManager::has_allocations() const {
 }
 
 DeviceAddr SubDeviceManager::local_l1_size() const { return local_l1_size_; }
+
+DeviceAddr SubDeviceManager::global_l1_bottom_reservation_size() const { return global_l1_bottom_reservation_size_; }
 
 const std::vector<SubDeviceId>& SubDeviceManager::get_sub_device_stall_group() const { return sub_device_stall_group_; }
 
@@ -260,6 +272,7 @@ void SubDeviceManager::populate_sub_allocators() {
         return;
     }
     const auto& global_allocator_config = device_->allocator_impl()->get_config();
+    auto& persistent_l1 = device_->allocator_impl()->persistent_l1();
     // Construct allocator config from soc_desc
     // Take max alignment to satisfy NoC rd/wr constraints
     // Tensix/Eth -> PCIe/DRAM src and dst addrs must be L1_ALIGNMENT aligned
@@ -278,15 +291,31 @@ void SubDeviceManager::populate_sub_allocators() {
             // These are compute cores, so they should have a single bank
             l1_bank_remap.push_back(device_->allocator()->get_bank_ids_from_logical_core(BufferType::L1, core)[0]);
         }
+        const DeviceAddr local_l1_base = tt::align(
+            persistent_l1.high_water_mark(compute_cores),
+            std::max(global_allocator_config.l1_alignment, global_allocator_config.dram_alignment));
+        global_l1_bottom_reservation_size_ = std::max(
+            global_l1_bottom_reservation_size_,
+            local_l1_base - global_allocator_config.l1_unreserved_base + local_l1_size_);
+        TT_FATAL(
+            local_l1_base + local_l1_size_ <=
+                global_allocator_config.worker_l1_size - global_allocator_config.l1_small_size,
+            "Sub-device {} local L1 region [{}, {}) exceeds allocatable worker L1 limit {} after persistent "
+            "allocations",
+            i,
+            local_l1_base,
+            local_l1_base + local_l1_size_,
+            global_allocator_config.worker_l1_size - global_allocator_config.l1_small_size);
+        persistent_l1_seals_.push_back(persistent_l1.seal(compute_cores));
         AllocatorConfig config(
             {.num_dram_channels = global_allocator_config.num_dram_channels,
              .dram_bank_size = 0,
              .dram_bank_offsets = global_allocator_config.dram_bank_offsets,
              .dram_unreserved_base = global_allocator_config.dram_unreserved_base,
              .dram_alignment = global_allocator_config.dram_alignment,
-             .l1_unreserved_base = global_allocator_config.l1_unreserved_base,
+             .l1_unreserved_base = static_cast<uint32_t>(local_l1_base),
              .worker_grid = compute_cores,
-             .worker_l1_size = global_allocator_config.l1_unreserved_base + local_l1_size_,
+             .worker_l1_size = static_cast<size_t>(local_l1_base + local_l1_size_),
              .l1_small_size = 0,
              .trace_region_size = 0,
              .core_type_from_noc_coord_table = {},  // Populated later

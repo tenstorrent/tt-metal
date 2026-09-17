@@ -8,33 +8,31 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    const uint32_t src_addr = get_arg_val<uint32_t>(0);
-    const uint32_t N = get_arg_val<uint32_t>(1);
-    const uint32_t C = get_arg_val<uint32_t>(2);
-    const uint32_t HtWt = get_arg_val<uint32_t>(3);
-    const uint32_t batch_step = get_arg_val<uint32_t>(4);    // CHtWt - HtWt
-    const uint32_t channel_step = get_arg_val<uint32_t>(5);  // NCHtWt - HtWt
-    const uint32_t num_pages = get_arg_val<uint32_t>(6);
-    const uint32_t start_id = get_arg_val<uint32_t>(7);
-    uint32_t hw = get_arg_val<uint32_t>(8);
-    uint32_t n = get_arg_val<uint32_t>(9);
+    const uint32_t N = get_arg(args::N);
+    const uint32_t C = get_arg(args::C);
+    const uint32_t HtWt = get_arg(args::HtWt);
+    const uint32_t batch_step = get_arg(args::batch_step);      // CHtWt - HtWt
+    const uint32_t channel_step = get_arg(args::channel_step);  // NCHtWt - HtWt
+    const uint32_t num_pages = get_arg(args::num_pages);
+    const uint32_t start_id = get_arg(args::start_id);
+    uint32_t hw = get_arg(args::hw);
+    uint32_t n = get_arg(args::n);
 
-    constexpr uint32_t dfb_id_in0 = get_compile_time_arg_val(0);
-    constexpr uint32_t page_size = get_compile_time_arg_val(1);
-    constexpr uint32_t read_size = get_compile_time_arg_val(2);
-    constexpr auto src_args = TensorAccessorArgs<3>();
+    constexpr auto page_size = get_arg(args::page_size);
+    constexpr auto read_size = get_arg(args::read_size);
 
     // ublocks size defined in tiles
     constexpr uint32_t onepage = 1;
 
-    const auto s = TensorAccessor(src_args, src_addr);
+    const auto s = TensorAccessor(tensor::src);
 
     Noc noc;
-    DataflowBuffer dfb(dfb_id_in0);
+    DataflowBuffer dfb(dfb::in0);
 
-    // read a ublock of tiles from src to CB, and then push the ublock to unpacker
+    // read a ublock of tiles from src to DFB, and then push the ublock to unpacker
     uint32_t page_idx = start_id;
     for (uint32_t i = 0; i < num_pages; ++i) {
         dfb.reserve_back(onepage);
@@ -43,8 +41,8 @@ void kernel_main() {
         // RM-only: the helper splits a logical "row page" across multiple shards laterally
         // when the buffer is BLOCK/WIDTH-sharded. TILE-layout path below must keep the
         // original single-page transfer since each tile is one indivisible NOC unit.
-        const uint32_t cb_write_ptr = dfb.get_write_ptr();
-        tt::data_movement::common::noc_async_read_sharded(noc, cb_write_ptr, s, page_idx, 0, read_size);
+        const uint32_t dfb_write_ptr = dfb.get_write_ptr();
+        tt::data_movement::common::noc_async_read_sharded(noc, dfb_write_ptr, s, page_idx, 0, read_size);
 #else
         noc.async_read(s, dfb, page_size, {.page_id = page_idx}, {.offset_bytes = 0});
 #endif

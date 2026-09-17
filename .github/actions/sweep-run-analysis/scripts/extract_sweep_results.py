@@ -31,7 +31,11 @@ def get_current_run(conn, github_run_id: int) -> Optional[dict]:
             """
             SELECT run_id, run_contents, card_type, git_sha, git_branch, run_start_ts,
                    test_count, pass_count, fail_count,
-                   ROUND(pass_count * 100.0 / NULLIF(test_count, 0), 2) AS pass_pct
+                   -- Of EXECUTED, not of total: test_count includes vectors marked NOT_RUN by the
+                   -- infra classifiers (dead device, fabric bring-up failure, TLB exhaustion), which
+                   -- never ran an op kernel. Counting them as non-passing reports a device outage as
+                   -- a pass-rate drop -- run 32546013297 was 1253/1253 executed but announced 99.37 pct.
+                   ROUND(pass_count * 100.0 / NULLIF(pass_count + fail_count, 0), 2) AS pass_pct
             FROM sweep_run
             WHERE github_pipeline_id = %s
             """,
@@ -54,7 +58,11 @@ def get_previous_run(conn, run_contents: str, card_type: str, git_branch: str, c
             """
             SELECT run_id, run_start_ts,
                    test_count, pass_count, fail_count,
-                   ROUND(pass_count * 100.0 / NULLIF(test_count, 0), 2) AS pass_pct
+                   -- Of EXECUTED, not of total: test_count includes vectors marked NOT_RUN by the
+                   -- infra classifiers (dead device, fabric bring-up failure, TLB exhaustion), which
+                   -- never ran an op kernel. Counting them as non-passing reports a device outage as
+                   -- a pass-rate drop -- run 32546013297 was 1253/1253 executed but announced 99.37 pct.
+                   ROUND(pass_count * 100.0 / NULLIF(pass_count + fail_count, 0), 2) AS pass_pct
             FROM sweep_run
             WHERE run_contents = %s
               AND card_type = %s
@@ -74,7 +82,11 @@ def get_previous_run(conn, run_contents: str, card_type: str, git_branch: str, c
             """
             SELECT run_id, run_start_ts,
                    test_count, pass_count, fail_count,
-                   ROUND(pass_count * 100.0 / NULLIF(test_count, 0), 2) AS pass_pct
+                   -- Of EXECUTED, not of total: test_count includes vectors marked NOT_RUN by the
+                   -- infra classifiers (dead device, fabric bring-up failure, TLB exhaustion), which
+                   -- never ran an op kernel. Counting them as non-passing reports a device outage as
+                   -- a pass-rate drop -- run 32546013297 was 1253/1253 executed but announced 99.37 pct.
+                   ROUND(pass_count * 100.0 / NULLIF(pass_count + fail_count, 0), 2) AS pass_pct
             FROM sweep_run
             WHERE run_contents = %s
               AND card_type = %s
@@ -99,7 +111,14 @@ def detect_pass_rate_regressions(conn, current_run_id: int, prev_run_id: int) ->
                     SPLIT_PART(full_test_name, '.', 1) || '.' || SPLIT_PART(full_test_name, '.', 2) AS module_name,
                     COUNT(*) AS total,
                     COUNT(*) FILTER (WHERE status = 'pass') AS passed,
-                    COUNT(*) FILTER (WHERE status LIKE 'fail%%') AS failed
+                    COUNT(*) FILTER (WHERE status LIKE 'fail%%') AS failed,
+                    -- executed = the vectors that actually ran an op; see the note on pass_pct
+                    -- xpass included to match push_sweep_results._is_failure(), which counts it in
+                    -- the run-level fail_count. Excluding it here would drop xpass rows from the
+                    -- denominator and inflate a module's rate. No xpass rows exist today, so this
+                    -- keeps the two levels consistent rather than fixing an observed miscount.
+                    COUNT(*) FILTER (WHERE status = 'pass' OR status LIKE 'fail%%' OR status = 'xpass')
+                        AS executed
                 FROM sweep_test
                 WHERE run_id = %s
                 GROUP BY module_name
@@ -108,21 +127,28 @@ def detect_pass_rate_regressions(conn, current_run_id: int, prev_run_id: int) ->
                 SELECT
                     SPLIT_PART(full_test_name, '.', 1) || '.' || SPLIT_PART(full_test_name, '.', 2) AS module_name,
                     COUNT(*) AS total,
-                    COUNT(*) FILTER (WHERE status = 'pass') AS passed
+                    COUNT(*) FILTER (WHERE status = 'pass') AS passed,
+                    -- xpass included to match push_sweep_results._is_failure(), which counts it in
+                    -- the run-level fail_count. Excluding it here would drop xpass rows from the
+                    -- denominator and inflate a module's rate. No xpass rows exist today, so this
+                    -- keeps the two levels consistent rather than fixing an observed miscount.
+                    COUNT(*) FILTER (WHERE status = 'pass' OR status LIKE 'fail%%' OR status = 'xpass')
+                        AS executed
                 FROM sweep_test
                 WHERE run_id = %s
                 GROUP BY module_name
             )
             SELECT
                 c.module_name AS module,
-                ROUND(p.passed * 100.0 / NULLIF(p.total, 0), 2) AS prev,
-                ROUND(c.passed * 100.0 / NULLIF(c.total, 0), 2) AS current,
-                ROUND(c.passed * 100.0 / NULLIF(c.total, 0), 2) -
-                    ROUND(p.passed * 100.0 / NULLIF(p.total, 0), 2) AS delta
+                ROUND(p.passed * 100.0 / NULLIF(p.executed, 0), 2) AS prev,
+                ROUND(c.passed * 100.0 / NULLIF(c.executed, 0), 2) AS current,
+                ROUND(c.passed * 100.0 / NULLIF(c.executed, 0), 2) -
+                    ROUND(p.passed * 100.0 / NULLIF(p.executed, 0), 2) AS delta
             FROM current_modules c
             LEFT JOIN previous_modules p ON c.module_name = p.module_name
-            WHERE ROUND(c.passed * 100.0 / NULLIF(c.total, 0), 2) <
-                  COALESCE(ROUND(p.passed * 100.0 / NULLIF(p.total, 0), 2), 100)
+            WHERE c.executed > 0
+              AND ROUND(c.passed * 100.0 / NULLIF(c.executed, 0), 2) <
+                  COALESCE(ROUND(p.passed * 100.0 / NULLIF(p.executed, 0), 2), 100)
             ORDER BY delta ASC
             """,
             (current_run_id, prev_run_id),

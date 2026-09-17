@@ -45,7 +45,10 @@ def run_exp_ring_joint_sdpa(
     num_buffers_per_channel=32,
 ):
     full_compute_grid = submesh.compute_with_storage_grid_size()
-    sdpa_compute_grid = (full_compute_grid.x - 1, full_compute_grid.y)
+    # The op reserves the last column for the fabric MUX (sdpa_grid.x = x - 1) and needs one Q
+    # chunk per SDPA column, so size the grid from the chunk count.
+    local_padded_N = padded_seq_len // tuple(submesh.shape)[rp_axis]
+    sdpa_compute_grid = (math.ceil(local_padded_N / q_chunk_size) + 1, full_compute_grid.y)
 
     # Basic CCL setup
     ccl_sub_device_crs = ttnn.CoreRangeSet(
@@ -359,13 +362,24 @@ def run_test_exp_ring_joint_sdpa(
     ids=["ring"],
 )
 @pytest.mark.parametrize(
-    "mesh_device, num_links, nh, base_seq_len, rp_axis, rp_factor, up_axis, up_factor",
+    "mesh_device, num_links, nh, base_seq_len, rp_axis, rp_factor, up_axis, up_factor, q_chunk_size, k_chunk_size",
     [
-        ((4, 32), 2, 40, 75600, 1, 32, 0, 4),
-        ((4, 8), 2, 40, 18944, 1, 8, 0, 4),
-        ((1, 4), 2, 10, 8960, 1, 4, 0, 1),
+        ((4, 32), 2, 40, 75600, 1, 32, 0, 4, 224, 512),
+        # Head-serial passes: nh/up_factor heads land on each device and the op walks
+        # ceil(heads_per_device / grid_rows) of them per core row as serial passes. With 10 grid
+        # rows, 40 heads -> 10 per device -> 1 pass; 80 heads -> 20 per device -> 2 passes.
+        ((4, 32), 2, 80, 75600, 1, 32, 0, 4, 224, 512),
+        # Minimal spillover: 44 heads -> 11 per device -> row 0 runs 2 passes (heads 0 and 10),
+        # rows 1-9 run 1 pass (heads 1-9) on the same P=2 build. Isolates the multi-pass row.
+        ((4, 32), 2, 44, 75600, 1, 32, 0, 4, 224, 512),
+        # H3 15s: 108544 = 106 * 1024 -> 3392 local tiles -> q=320 (11 columns), k=384. Resident Q
+        # does not fit L1 at P=2, so this is the one config that exercises the factory's streamed-Q
+        # fallback (stream_q). 56 heads -> 14/device: rows 0-3 run 2 passes, rows 4-9 run 1.
+        ((4, 32), 2, 56, 108544, 1, 32, 0, 4, 320, 384),
+        ((4, 8), 2, 40, 18944, 1, 8, 0, 4, 224, 512),
+        ((1, 4), 2, 10, 8960, 1, 4, 0, 1, 224, 512),
     ],
-    ids=["4x32", "4x8", "1x4"],
+    ids=["4x32", "4x32_2pass", "4x32_1spill", "4x32_2pass_streamq", "4x8", "1x4"],
     indirect=["mesh_device"],
 )
 @pytest.mark.skipif(
@@ -381,13 +395,13 @@ def test_exp_ring_joint_sdpa_dit_bh_glx_custom(
     rp_factor,
     up_axis,
     up_factor,
+    q_chunk_size,
+    k_chunk_size,
     all_gather_topology,
     reset_seeds,
 ):
     dtype = ttnn.bfloat16
     b, joint_seq_len, d = 1, 0, 128
-    q_chunk_size = 224
-    k_chunk_size = 512
     n_iters = 5
     trace_enabled = False
     skip_check = False

@@ -16,6 +16,9 @@ from tests.ttnn.unit_tests.operations.test_utils import (
 )
 from loguru import logger
 
+# Module-scoped device: opens once per file instead of once per test case.
+pytestmark = pytest.mark.use_module_device
+
 fp32_dest_acc_en = [
     False,  # for grayskull
 ]
@@ -212,6 +215,8 @@ def test_moreh_sgd_callback(
         pytest.skip()
 
     torch.manual_seed(0)
+    # Start from an empty cache: the module-scoped device carries entries over from earlier tests in this file.
+    device.clear_program_cache()
     num_program_cache_entries_list = []
     compute_kernel_config = get_compute_kernel_options(fp32_dest_acc_en)
 

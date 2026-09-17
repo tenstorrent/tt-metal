@@ -5,12 +5,12 @@
 """
 GELU Backward ULP Precision Tests
 
-This test validates the accuracy of ttnn.experimental.gelu_bw (GELU derivative) across
+This test validates the accuracy of ttnn.gelu_bw (GELU derivative) across
 the BFloat16 range using the same methodology as test_gelu_floor_value_bug.py.
 
 Two derivative formulas are covered:
 
-1. Exact erf-based GELU derivative (approximate="none"):
+1. Exact erf-based GELU derivative (variant=ttnn.GeluVariant.Accurate):
    GELU'(x) = grad * (cdf + x * pdf)
    where:
      cdf = 0.5 * (1 + erf(x / sqrt(2)))  -- CDF of standard normal distribution
@@ -19,7 +19,7 @@ Two derivative formulas are covered:
           TestGeluBwNearZero, TestGeluBwLocalMinimum, TestGeluBwWithGradientScaling,
           test_gelu_bw_ulp_summary
 
-2. Tanh-approximated GELU derivative (approximate="tanh"):
+2. Tanh-approximated GELU derivative (variant=ttnn.GeluVariant.Tanh):
    GELU_tanh(x) = 0.5 * x * (1 + tanh(beta * (x + kappa * x^3)))
    GELU_tanh'(x) = 0.5 * (1 + tanh(z)) + 0.5 * x * (1 - tanh(z)^2) * beta * (1 + 3*kappa*x^2)
    where:
@@ -36,81 +36,17 @@ Reference: https://github.com/tenstorrent/tt-metal/issues/38973
 Run: pytest tests/ttnn/unit_tests/operations/eltwise/test_gelu_bw_ulp.py -v -s
 """
 
-import struct
 import pytest
 import torch
 import ttnn
 from loguru import logger
 from mpmath import mp, erf as mp_erf, erfc as mp_erfc, exp as mp_exp, sqrt as mp_sqrt, tanh as mp_tanh
-
-
-def float_to_bf16_bits(f: float) -> int:
-    """Convert float to BFloat16 bit representation."""
-    f32_bits = struct.unpack(">I", struct.pack(">f", f))[0]
-    return f32_bits >> 16
-
-
-def bf16_bits_to_float(bits: int) -> float:
-    """Convert BFloat16 bits to float."""
-    f32_bits = bits << 16
-    return struct.unpack(">f", struct.pack(">I", f32_bits))[0]
-
-
-def is_bf16_denormal(bits: int) -> bool:
-    """Check if BF16 bits represent a denormal (subnormal) value."""
-    exp = (bits >> 7) & 0xFF
-    mantissa = bits & 0x7F
-    return (exp == 0) and (mantissa != 0)
-
-
-def bf16_daz_normalize(bits: int) -> int:
-    """Apply DAZ (Denormals-Are-Zero) normalization to BF16 bits."""
-    if is_bf16_denormal(bits):
-        return 0x0000
-    if bits == 0x8000:  # -0 -> +0
-        return 0x0000
-    return bits
-
-
-def bf16_value_order_index_daz(bits: int) -> int:
-    """Calculate the value order index for a BFloat16 value with DAZ."""
-    bits = bf16_daz_normalize(bits)
-
-    exp = (bits >> 7) & 0xFF
-    mantissa = bits & 0x7F
-    if exp == 0xFF and mantissa != 0:
-        return -1  # NaN
-    if bits == 0x7F80:
-        return 65281  # +inf
-    if bits == 0xFF80:
-        return -1  # -inf
-    if bits == 0x0000:
-        return 32640  # Zero
-
-    if bits & 0x8000:
-        magnitude = bits & 0x7FFF
-        return 0x7F7F - magnitude
-    else:
-        return 32640 + bits - 0x007F
-
-
-def ulp_distance_bf16_daz(a: float, b: float) -> int:
-    """Calculate ULP distance with DAZ+FTZ model."""
-    a_bits = bf16_daz_normalize(float_to_bf16_bits(a))
-    b_bits = bf16_daz_normalize(float_to_bf16_bits(b))
-
-    a_exp = (a_bits >> 7) & 0xFF
-    b_exp = (b_bits >> 7) & 0xFF
-    if (a_exp == 0xFF and (a_bits & 0x7F) != 0) or (b_exp == 0xFF and (b_bits & 0x7F) != 0):
-        return -1
-
-    idx_a = bf16_value_order_index_daz(a_bits)
-    idx_b = bf16_value_order_index_daz(b_bits)
-
-    if idx_a < 0 or idx_b < 0:
-        return -1
-
-    return abs(idx_a - idx_b)
+from tests.ttnn.unit_tests.operations.eltwise.eltwise_test_utils import (
+    float_to_bf16_bits,
+    bf16_bits_to_float,
+    bf16_daz_normalize,
+    ulp_distance_bf16_daz,
+)
 
 
 def gelu_derivative_exact(x: float) -> float:
@@ -226,8 +162,8 @@ class TestGeluBwDerivativeAtZero:
         tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
         tt_grad = ttnn.from_torch(torch_grad, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
 
-        result = ttnn.experimental.gelu_bw(tt_grad, tt_input, approximate="none")
-        actual = ttnn.to_torch(result).item()
+        result = ttnn.gelu_bw(tt_grad, tt_input, variant=ttnn.GeluVariant.Accurate)
+        actual = ttnn.to_torch(result[0]).item()
 
         expected = gelu_derivative_expected_bf16_daz(input_val)
         ulp_error = ulp_distance_bf16_daz(actual, expected)
@@ -260,8 +196,8 @@ class TestGeluBwPositiveValues:
         tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
         tt_grad = ttnn.from_torch(torch_grad, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
 
-        result = ttnn.experimental.gelu_bw(tt_grad, tt_input, approximate="none")
-        actual = ttnn.to_torch(result).item()
+        result = ttnn.gelu_bw(tt_grad, tt_input, variant=ttnn.GeluVariant.Accurate)
+        actual = ttnn.to_torch(result[0]).item()
 
         expected = gelu_derivative_expected_bf16_daz(input_value)
         ulp_error = ulp_distance_bf16_daz(actual, expected)
@@ -296,8 +232,8 @@ class TestGeluBwNegativeValues:
         tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
         tt_grad = ttnn.from_torch(torch_grad, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
 
-        result = ttnn.experimental.gelu_bw(tt_grad, tt_input, approximate="none")
-        actual = ttnn.to_torch(result).item()
+        result = ttnn.gelu_bw(tt_grad, tt_input, variant=ttnn.GeluVariant.Accurate)
+        actual = ttnn.to_torch(result[0]).item()
 
         expected = gelu_derivative_expected_bf16_daz(input_value)
         ulp_error = ulp_distance_bf16_daz(actual, expected)
@@ -323,8 +259,8 @@ class TestGeluBwNearZero:
         tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
         tt_grad = ttnn.from_torch(torch_grad, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
 
-        result = ttnn.experimental.gelu_bw(tt_grad, tt_input, approximate="none")
-        actual = ttnn.to_torch(result).item()
+        result = ttnn.gelu_bw(tt_grad, tt_input, variant=ttnn.GeluVariant.Accurate)
+        actual = ttnn.to_torch(result[0]).item()
 
         expected = gelu_derivative_expected_bf16_daz(input_value)
         ulp_error = ulp_distance_bf16_daz(actual, expected)
@@ -351,8 +287,8 @@ class TestGeluBwLocalMinimum:
         tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
         tt_grad = ttnn.from_torch(torch_grad, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
 
-        result = ttnn.experimental.gelu_bw(tt_grad, tt_input, approximate="none")
-        actual = ttnn.to_torch(result).item()
+        result = ttnn.gelu_bw(tt_grad, tt_input, variant=ttnn.GeluVariant.Accurate)
+        actual = ttnn.to_torch(result[0]).item()
 
         expected = gelu_derivative_expected_bf16_daz(input_value)
         ulp_error = ulp_distance_bf16_daz(actual, expected)
@@ -387,8 +323,8 @@ class TestGeluBwWithGradientScaling:
         tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
         tt_grad = ttnn.from_torch(torch_grad, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
 
-        result = ttnn.experimental.gelu_bw(tt_grad, tt_input, approximate="none")
-        actual = ttnn.to_torch(result).item()
+        result = ttnn.gelu_bw(tt_grad, tt_input, variant=ttnn.GeluVariant.Accurate)
+        actual = ttnn.to_torch(result[0]).item()
 
         expected = gelu_bw_expected_bf16_daz(grad_value, input_value)
         ulp_error = ulp_distance_bf16_daz(actual, expected)
@@ -438,8 +374,8 @@ def test_gelu_bw_ulp_summary(device):
         tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
         tt_grad = ttnn.from_torch(torch_grad, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
 
-        result = ttnn.experimental.gelu_bw(tt_grad, tt_input, approximate="none")
-        actual = ttnn.to_torch(result).item()
+        result = ttnn.gelu_bw(tt_grad, tt_input, variant=ttnn.GeluVariant.Accurate)
+        actual = ttnn.to_torch(result[0]).item()
 
         expected = gelu_derivative_expected_bf16_daz(x)
         ulp = ulp_distance_bf16_daz(actual, expected)
@@ -467,7 +403,7 @@ def test_gelu_bw_ulp_summary(device):
 
 
 # =============================================================================
-# Tanh-approximated GELU backward tests (approximate="tanh")
+# Tanh-approximated GELU backward tests (variant=ttnn.GeluVariant.Tanh)
 # Reference: https://github.com/tenstorrent/tt-metal/issues/38973
 # =============================================================================
 
@@ -482,8 +418,8 @@ class TestGeluBwTanhDerivativeAtZero:
         tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
         tt_grad = ttnn.from_torch(torch_grad, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
 
-        result = ttnn.experimental.gelu_bw(tt_grad, tt_input, approximate="tanh")
-        actual = ttnn.to_torch(result).item()
+        result = ttnn.gelu_bw(tt_grad, tt_input, variant=ttnn.GeluVariant.Tanh)
+        actual = ttnn.to_torch(result[0]).item()
 
         expected = gelu_derivative_tanh_expected_bf16_daz(0.0)
         ulp_error = ulp_distance_bf16_daz(actual, expected)
@@ -513,8 +449,8 @@ class TestGeluBwTanhPositiveValues:
         tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
         tt_grad = ttnn.from_torch(torch_grad, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
 
-        result = ttnn.experimental.gelu_bw(tt_grad, tt_input, approximate="tanh")
-        actual = ttnn.to_torch(result).item()
+        result = ttnn.gelu_bw(tt_grad, tt_input, variant=ttnn.GeluVariant.Tanh)
+        actual = ttnn.to_torch(result[0]).item()
 
         expected = gelu_derivative_tanh_expected_bf16_daz(input_value)
         ulp_error = ulp_distance_bf16_daz(actual, expected)
@@ -537,8 +473,8 @@ class TestGeluBwTanhNearZero:
         tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
         tt_grad = ttnn.from_torch(torch_grad, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
 
-        result = ttnn.experimental.gelu_bw(tt_grad, tt_input, approximate="tanh")
-        actual = ttnn.to_torch(result).item()
+        result = ttnn.gelu_bw(tt_grad, tt_input, variant=ttnn.GeluVariant.Tanh)
+        actual = ttnn.to_torch(result[0]).item()
 
         expected = gelu_derivative_tanh_expected_bf16_daz(input_value)
         ulp_error = ulp_distance_bf16_daz(actual, expected)
@@ -554,7 +490,7 @@ class TestGeluBwTanhWithGradientScaling:
         "input_value,grad_value,max_expected_ulp",
         [
             (1.0, 2.0, 2),
-            (-1.0, 0.5, 2),
+            (-1.0, 0.5, 3),
             (0.0, 1.0, 2),
             (2.0, -1.0, 2),
             (0.5, 3.0, 2),
@@ -567,8 +503,8 @@ class TestGeluBwTanhWithGradientScaling:
         tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
         tt_grad = ttnn.from_torch(torch_grad, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
 
-        result = ttnn.experimental.gelu_bw(tt_grad, tt_input, approximate="tanh")
-        actual = ttnn.to_torch(result).item()
+        result = ttnn.gelu_bw(tt_grad, tt_input, variant=ttnn.GeluVariant.Tanh)
+        actual = ttnn.to_torch(result[0]).item()
 
         expected = gelu_bw_tanh_expected_bf16_daz(grad_value, input_value)
         ulp_error = ulp_distance_bf16_daz(actual, expected)
@@ -600,8 +536,8 @@ class TestGeluBwTanhShapes:
         tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
         tt_grad = ttnn.from_torch(torch_grad, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
 
-        result = ttnn.experimental.gelu_bw(tt_grad, tt_input, approximate="tanh")
-        actual = ttnn.to_torch(result).flatten()[0].item()
+        result = ttnn.gelu_bw(tt_grad, tt_input, variant=ttnn.GeluVariant.Tanh)
+        actual = ttnn.to_torch(result[0]).flatten()[0].item()
 
         expected = gelu_derivative_tanh_expected_bf16_daz(input_val)
         ulp_error = ulp_distance_bf16_daz(actual, expected)

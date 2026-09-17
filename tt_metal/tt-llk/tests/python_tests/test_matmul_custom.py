@@ -1,11 +1,11 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import List
-
+import pytest
 import torch
+from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.device import BootMode
-from helpers.format_config import DataFormat, FormatConfig, is_dest_acc_needed
+from helpers.format_config import DataFormat, is_dest_acc_needed
 from helpers.golden_generators import MatmulGolden, get_golden_generator
 from helpers.llk_params import DestAccumulation, MathFidelity, format_dict
 from helpers.matmul_sweep import (
@@ -20,41 +20,40 @@ from helpers.test_variant_parameters import (
     CRK_TILE_DIMM,
     MATH_FIDELITY,
     NUM_FACES,
+    THROTTLE_LEVEL,
     TILE_COUNT,
 )
 from helpers.tilize_untilize import tilize_block
 from helpers.utils import passed_test
 
+# Throttle levels supported by the no-mop matmul math LLK. Throttle only inserts
+# NOPs between MVMULs to cap compute throughput, so the numeric result is IDENTICAL
+# for every level -> the golden is the same MatmulGolden as the non-throttled path.
+#
+# Blackhole implements run_throttled_sequence_no_mop<1..5>, so it sweeps 0-5.
+# Wormhole B0's LLK static_asserts THROTTLE_LEVEL == 0 (llk_math_matmul_custom_no_mop.h:
+# "Wormhole custom no-mop matmul only supports THROTTLE_LEVEL == 0") -- levels 1-5 have no
+# throttle sequences and do not compile there. Any non-Blackhole arch is therefore level 0
+# only; throttle 1-5 on WH is unsupported by design, not an untested gap. This gate is
+# arch-explicit (not a bare else) so a future arch that gains throttle sequences must opt in.
+if get_chip_architecture() == ChipArchitecture.BLACKHOLE:
+    THROTTLE_LEVELS = [0, 1, 2, 3, 4, 5]
+else:
+    THROTTLE_LEVELS = [0]
 
-def generate_format_aware_matmul_combinations(
-    formats_list: List[FormatConfig],
-    dest_acc_modes: List[DestAccumulation],
-):
+
+def _dest_bank_max_tiles(formats, dest_acc):
+    """Max result-tile count for a (format, dest_acc) pair on DestSync.Half.
+
+    A 32-bit destination register (dest_acc=Yes, or a format the harness forces
+    onto 32-bit dest) holds 4 tiles; the 16-bit destination holds 8. Mirrors
+    perf_matmul._dest_bank_max_tiles so test and perf coverage share the rule.
     """
-    Generate matmul dimension combinations for multiple tiles.
-
-    Rules:
-    1. Format outliers (Float16_b->Float16, Bfp8_b->Float16) MUST use dest_acc=Yes
-    2. Running matmul tests on DestSync.Half, max tile count is 8
-    3. When dest_acc=Yes: max 4 tiles (32-bit dest register)
-    4. When dest_acc=No: max 8 tiles (16-bit dest register)
-
-    Returns: List of (format, dest_acc, dimensions) tuples
-    """
-    combinations = []
-
-    for fmt in formats_list:
-        base_max_tiles = 4 if is_dest_acc_needed(fmt) else 8
-
-        for dest_acc in dest_acc_modes:
-            max_tiles = 4 if dest_acc == DestAccumulation.Yes else base_max_tiles
-            dimensions_list = generate_matmul_dimension_combinations(max_tiles)
-            combinations.extend([(fmt, dest_acc, dims) for dims in dimensions_list])
-
-    return combinations
+    if is_dest_acc_needed(formats) or dest_acc == DestAccumulation.Yes:
+        return 4
+    return 8
 
 
-# Generate format-aware combinations
 MATMUL_FORMATS = input_output_formats(
     [
         DataFormat.Float16_b,
@@ -64,31 +63,18 @@ MATMUL_FORMATS = input_output_formats(
     ]
 )
 DEST_ACC_MODES = [DestAccumulation.No, DestAccumulation.Yes]
-ALL_MATMUL_COMBINATIONS = generate_format_aware_matmul_combinations(
-    MATMUL_FORMATS, DEST_ACC_MODES
-)
 
 
-@parametrize(
-    math_fidelity=[
-        MathFidelity.LoFi,
-        MathFidelity.HiFi2,
-        MathFidelity.HiFi3,
-        MathFidelity.HiFi4,
-    ],
-    format_dest_acc_and_dims=ALL_MATMUL_COMBINATIONS,
-)
-def test_matmul_custom(
+def _run_matmul_custom(
     math_fidelity,
-    format_dest_acc_and_dims,
-    boot_mode=BootMode.DEFAULT,
+    formats,
+    dest_acc,
+    input_A_dimensions,
+    input_B_dimensions,
+    throttle_level: int,
+    boot_mode: BootMode,
 ):
-    torch_format = format_dict[format_dest_acc_and_dims[0].output_format]
-
-    formats = format_dest_acc_and_dims[0]
-    dest_acc = format_dest_acc_and_dims[1]
-    input_A_dimensions = format_dest_acc_and_dims[2][0]
-    input_B_dimensions = format_dest_acc_and_dims[2][1]
+    torch_format = format_dict[formats.output_format]
 
     sfpu_false_spec = StimuliSpec.uniform(low=0.0, high=1.0)
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
@@ -132,7 +118,7 @@ def test_matmul_custom(
     configuration = TestConfig(
         "sources/matmul_custom_test.cpp",
         formats,
-        templates=[MATH_FIDELITY(math_fidelity)],
+        templates=[MATH_FIDELITY(math_fidelity), THROTTLE_LEVEL(throttle_level)],
         runtimes=[
             NUM_FACES(),
             TILE_COUNT(matmul_dims.output_tile_cnt),
@@ -163,3 +149,90 @@ def test_matmul_custom(
     assert passed_test(
         golden_tensor, res_tensor, formats.output_format
     ), "Assert against golden failed"
+
+
+@parametrize(
+    math_fidelity=[
+        MathFidelity.LoFi,
+        MathFidelity.HiFi2,
+        MathFidelity.HiFi3,
+        MathFidelity.HiFi4,
+    ],
+    formats=MATMUL_FORMATS,
+    dest_acc=DEST_ACC_MODES,
+    # dimensions depends on (formats, dest_acc): the max result-tile count is set by
+    # which dest register the pair lands in (see _dest_bank_max_tiles). Kept as its
+    # own axis -- rather than a packed (format, dest_acc, dims) tuple -- so test and
+    # perf coverage line up axis-for-axis (cf. perf_matmul.matmul_combos).
+    dimensions=lambda formats, dest_acc: generate_matmul_dimension_combinations(
+        _dest_bank_max_tiles(formats, dest_acc)
+    ),
+)
+def test_matmul_custom(
+    math_fidelity,
+    formats,
+    dest_acc,
+    dimensions,
+    boot_mode=BootMode.DEFAULT,
+):
+    input_A_dimensions, input_B_dimensions = dimensions
+    _run_matmul_custom(
+        math_fidelity,
+        formats,
+        dest_acc,
+        input_A_dimensions,
+        input_B_dimensions,
+        throttle_level=0,
+        boot_mode=boot_mode,
+    )
+
+
+# Representative fidelity x format subset for the throttle sweep. Throttle inserts
+# NOPs between MVMULs without changing the numeric result, so it is orthogonal to
+# format/fidelity/dims; a small subset per throttle level keeps the sweep tractable
+# while still crossing LoFi (single-phase) and HiFi (multi-phase) code paths and
+# both 16-bit (Float16_b) and 32-bit (Float32) operands.
+THROTTLE_FORMATS = input_output_formats([DataFormat.Float16_b, DataFormat.Float32])
+# Single 32x32 output tile (ct=rt=kt=1). This is the regime the throttled no-mop
+# matmul is designed and used in (the SDPA full-tile path); the hand-written
+# throttle sequences replay a fixed single-tile MVMUL walk. Multi-tile / multi-K
+# accumulation is validated at throttle 0 by test_matmul_custom above.
+THROTTLE_DIMS = ([32, 32], [32, 32])
+
+
+@parametrize(
+    throttle_level=THROTTLE_LEVELS,
+    math_fidelity=[MathFidelity.LoFi, MathFidelity.HiFi4],
+    formats=THROTTLE_FORMATS,
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+)
+def test_matmul_custom_throttle(
+    throttle_level,
+    math_fidelity,
+    formats,
+    dest_acc,
+    boot_mode=BootMode.DEFAULT,
+):
+    # Known limitation of the current LLK: throttle levels 4 and 5 only advance
+    # the fidelity-phase counter on the final MVMUL of the sequence (they use
+    # ADDR_MOD_4 with fidelity.incr=0 at the phase boundary, unlike levels 1-3
+    # which use the fidelity-incrementing ADDR_MOD_5/6). For a high-fidelity
+    # (multi-phase) matmul this collapses the extra phases and yields ~half the
+    # result, so levels 4/5 are only correct for single-phase (LoFi) fidelity.
+    # Cover levels 4/5 with LoFi and levels 0-3 with both fidelities.
+    if throttle_level >= 4 and math_fidelity != MathFidelity.LoFi:
+        pytest.skip(
+            "throttle levels 4/5 do not increment the fidelity phase per LLK; "
+            "only correct for LoFi (single-phase)"
+        )
+
+    input_A_dimensions, input_B_dimensions = THROTTLE_DIMS
+    _run_matmul_custom(
+        math_fidelity,
+        formats,
+        dest_acc,
+        input_A_dimensions,
+        input_B_dimensions,
+        throttle_level=throttle_level,
+        boot_mode=boot_mode,
+    )

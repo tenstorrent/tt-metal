@@ -100,7 +100,11 @@ inline __attribute__((always_inline)) uint32_t get_noc_counter_address(uint32_t 
     static_assert(proc_t < MaxDMProcessorsPerCoreType);
     static_assert(static_cast<std::underlying_type_t<NocBarrierType>>(barrier_type) < NUM_BARRIER_TYPES);
 
+#if defined(COMPILE_FOR_DISPATCH_ENGINE)
+    constexpr uint32_t base = MEM_DISPATCH_NOC_COUNTER_BASE;
+#else
     constexpr uint32_t base = MEM_NOC_COUNTER_BASE;
+#endif
     constexpr uint32_t size = MEM_NOC_COUNTER_SIZE;
 
     // Calculate most of the offset at compile time. Only the noc is variable at runtime.
@@ -208,6 +212,8 @@ inline __attribute__((always_inline)) void noc_cmd_buf_save_state(
 }
 
 inline __attribute__((always_inline)) void noc_clear_packet_tag(uint32_t /* noc */, uint32_t /* cmd_buf */) {}
+
+inline __attribute__((always_inline)) void noc_clear_packet_tags(uint32_t /* noc */) {}
 
 inline __attribute__((always_inline)) void noc_cmd_buf_restore_state(
     uint32_t noc, uint32_t cmd_buf, const NocCmdBufState* state) {
@@ -1520,7 +1526,7 @@ template <
 inline __attribute__((always_inline)) void noc_read_with_state(
     uint32_t noc, uint64_t src_addr, uint32_t dst_addr, uint32_t size) {
     static_assert(noc_mode != DM_DYNAMIC_NOC, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
-    if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+    if constexpr (send && noc_mode == DM_DYNAMIC_NOC) {
         inc_noc_counter_val<proc_type, NocBarrierType::READS_NUM_ISSUED>(noc, 1);
     }
 
@@ -1546,7 +1552,10 @@ inline __attribute__((always_inline)) void noc_read_with_state(
         NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
     }
 
-    if constexpr (noc_mode == DM_DEDICATED_NOC) {
+    // Only a call that issues a transaction has a response to account for. ncrisc_noc_reads_flushed() compares this
+    // counter against NIU_MST_RD_RESP_RECEIVED, so counting a call that merely programs state would leave
+    // noc_async_read_barrier() waiting on a response that was never requested.
+    if constexpr (send && noc_mode == DM_DEDICATED_NOC) {
         noc_reads_num_issued[noc] += 1;
     }
 }

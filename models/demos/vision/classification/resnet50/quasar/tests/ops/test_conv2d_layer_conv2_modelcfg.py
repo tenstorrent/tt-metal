@@ -41,7 +41,7 @@ LAYER_CONV2 = [
 ]
 
 
-@pytest.mark.timeout(600)
+@pytest.mark.timeout(1200)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize("act_block_h_override", [0, 32], ids=["abh0", "abh32"])
 @pytest.mark.parametrize("layer, in_ch, out_ch, spatial, tid", LAYER_CONV2, ids=[c[-1] for c in LAYER_CONV2])

@@ -117,6 +117,18 @@ class Model:
             mesh_config: Mesh configuration for parallelization
         """
         self.mesh_device = mesh_device
+        # Runtime bounds for the post-prefill tail's slice. Allocated here, before any trace
+        # exists: created lazily on first use they would themselves be stranded across replays.
+        self._tail_slice_start = ttnn.from_torch(
+            torch.zeros(4, dtype=torch.int32),
+            device=mesh_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+        self._tail_slice_end = ttnn.from_torch(
+            torch.zeros(4, dtype=torch.int32),
+            device=mesh_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
         self.vocab_size = hf_config.vocab_size
         self.hf_config = hf_config
         self.core_grid = ttnn.CoreCoord(8, 8)
@@ -148,6 +160,10 @@ class Model:
         self.cos_matrix = self.rope_setup.cos_matrix
         self.sin_matrix = self.rope_setup.sin_matrix
         self.transformation_mats = self.rope_setup.get_both_trans_mats()
+        # Prefill rope slices, keyed by sequence length. See prepare_inputs_prefill: the slice is a device
+        # op, so recomputing it per call allocates -- and on a traced prefill it allocates with the trace
+        # live, then throws the result away (the replay uses the matrices bound at capture time).
+        self._prefill_rope_slices = {}
 
         if state_dict:
             embedding_weight = substate(state_dict, "model.embed_tokens")["weight"]
@@ -606,6 +622,35 @@ class Model:
         applies final norm + lm_head, so this method only slices logits.
         """
         get_last_token = (last_token_idx // 32) * 32
+        seq_len = int(logits.shape[-2])
+        # Pass the offset at runtime rather than as a compile-time attribute. With literal bounds
+        # every distinct prompt offset compiles its own slice program, and this runs after the
+        # prefill traces are captured, so each one is stranded across trace replays. Warmup cannot
+        # cover it either: it only sees bucket-length mock prompts, and real prompts are shorter.
+        #
+        # The tensor-args path needs a tile-aligned slice, which this already is - 32 rows starting
+        # at a multiple of 32 - so num_devices = seq_len // 32 selects exactly that window and the
+        # program keys on the prefill bucket instead of the offset.
+        if seq_len % 32 == 0:
+            for device_tensor, values in (
+                (self._tail_slice_start, [0, 0, get_last_token, 0]),
+                (self._tail_slice_end, [1, 1, get_last_token + 32, int(logits.shape[-1])]),
+            ):
+                ttnn.copy_host_to_device_tensor(
+                    ttnn.from_torch(
+                        torch.tensor(values, dtype=torch.int32),
+                        mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                    ),
+                    device_tensor,
+                )
+            return ttnn.slice(
+                input_tensor=logits,
+                starts=self._tail_slice_start,
+                ends=self._tail_slice_end,
+                slice_dim=2,
+                num_devices=seq_len // 32,
+            )
+
         logits = ttnn.slice(
             logits,
             (0, 0, get_last_token, 0),
@@ -711,6 +756,12 @@ class Model:
         empty_slots=None,
     ):
         """Row-parallel batched prefill: 1 user per row per iteration.
+
+
+        Allocation only -- do not compile from here. Compiling a decode program at this point makes the
+        capture below deadlock in the MoE dispatch, and compiling one before any prefill has run deadlocks
+        in the MoE combine's global-semaphore setup instead. That is why the rest of decode trace setup
+        still happens later, in the decode loop, with this trace already live.
 
         ``empty_slots``: optional list of decoder slot ids, one per input user.
         If supplied, users are first reordered so that array-index ``i`` lands
@@ -1096,12 +1147,18 @@ class Model:
             if len(tokens_embd.shape) == 3:
                 tokens_embd = ttnn.unsqueeze_to_4D(tokens_embd)
 
-        # Prepare rotation matrices (slice from rope_setup like tt-transformers model.py lines 156-159)
+        # Prepare rotation matrices (slice from rope_setup like tt-transformers model.py lines 156-159).
+        # Cached per sequence length: the slice runs on device, so recomputing it allocates. On a traced
+        # prefill that allocation happens with the trace live -- and is then discarded, since the replay
+        # uses the matrices that were bound when the trace was captured.
         seq_len = self.args.max_seq_len if trace_enabled else tokens_embd.shape[-2]
-        rot_mats_global = [
-            self.rope_setup.cos_matrix_prefill[:, :, :seq_len, :],
-            self.rope_setup.sin_matrix_prefill[:, :, :seq_len, :],
-        ]
+        rot_mats_global = self._prefill_rope_slices.get(seq_len)
+        if rot_mats_global is None:
+            rot_mats_global = [
+                self.rope_setup.cos_matrix_prefill[:, :, :seq_len, :],
+                self.rope_setup.sin_matrix_prefill[:, :, :seq_len, :],
+            ]
+            self._prefill_rope_slices[seq_len] = rot_mats_global
         rot_mats_local = None
 
         # Prepare page tables if provided

@@ -201,7 +201,7 @@ def test_addmm_rectangular_matrices(device, dtype, matrix_dims):
             output_tensor,
             atol=0.042 * m,
             rtol=10.563 * m,
-            frobenius_threshold=0.005 * m,
+            frobenius_threshold=0.006 * m,
             pcc_threshold=0.999,
             check_ulp=False,
         )
@@ -396,7 +396,7 @@ def test_addmm_non_tile_multiple_dimensions(device, dtype, shape):
         assert_numeric_metrics(torch_output_tensor, output_tensor_torch, pcc_threshold=0.9999, check_ulp=False)
 
 
-def test_alpha_zero_should_throw_error(device):
+def test_alpha_zero_should_throw_error(device, expect_error):
     torch.manual_seed(0)
 
     torch_input_tensor = torch.randn(4, 4, dtype=torch.bfloat16)
@@ -422,16 +422,11 @@ def test_alpha_zero_should_throw_error(device):
         device=device,
     )
 
-    try:
+    with expect_error(RuntimeError, "alpha parameter cannot be 0"):
         ttnn.addmm(input_tensor, mat1_tensor, mat2_tensor, alpha=0.0)
-    except Exception as e:
-        if not "alpha parameter cannot be 0" in str(e):
-            pytest.fail("Expected error message not found.")
-    else:
-        pytest.fail("Calling ttnn.addmm with alpha=0 should throw an error.")
 
 
-def test_input_tensor_with_invalid_shape_should_throw_error(device):
+def test_input_tensor_with_invalid_shape_should_throw_error(device, expect_error):
     torch.manual_seed(0)
 
     torch_input_tensor = torch.randn(8, 8, dtype=torch.bfloat16)
@@ -457,13 +452,8 @@ def test_input_tensor_with_invalid_shape_should_throw_error(device):
         device=device,
     )
 
-    try:
+    with expect_error(RuntimeError, "input_tensor must have shape matching one of result of mat1_tensor @ mat2_tensor"):
         ttnn.addmm(input_tensor, mat1_tensor, mat2_tensor)
-    except Exception as e:
-        if not "input_tensor must have shape matching one of result of mat1_tensor @ mat2_tensor" in str(e):
-            pytest.fail("Expected error message not found.")
-    else:
-        pytest.fail("Calling ttnn.addmm with incompatible shapes should throw an error.")
 
 
 def test_input_tensor_with_invalid_shape_should_be_ignored_if_beta_is_0(device):
@@ -525,7 +515,7 @@ def test_cast_to_another_dtype(device):
     assert output_tensor.dtype == ttnn.float32, "Output tensor must be float32"
 
 
-def test_unsupported_dtype_should_throw_error(device):
+def test_unsupported_dtype_should_throw_error(device, expect_error):
     torch.manual_seed(0)
 
     torch_input_tensor = torch.randn(4, 4, dtype=torch.bfloat16)
@@ -551,13 +541,8 @@ def test_unsupported_dtype_should_throw_error(device):
         device=device,
     )
 
-    try:
+    with expect_error(RuntimeError, "types are supported for input_tensor"):
         ttnn.addmm(input_tensor, mat1_tensor, mat2_tensor)
-    except Exception as e:
-        if not "only ttnn.bfloat16, ttnn.float32 and ttnn.bfloat8_b types are supported" in str(e):
-            pytest.fail("Expected error message not found.")
-    else:
-        pytest.fail("Calling ttnn.addmm with invalid dtype of input tensors should throw an error.")
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b])

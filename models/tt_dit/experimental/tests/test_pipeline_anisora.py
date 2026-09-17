@@ -68,13 +68,15 @@ def test_pipeline_inference(
 
     pipeline = AniSoraPipeline.create_pipeline(
         mesh_device=mesh_device,
-        num_links=num_links,
-        dynamic_load=dynamic_load,
-        topology=topology,
-        is_fsdp=is_fsdp,
         height=height,
         width=width,
         num_frames=num_frames,
+        config_overrides={
+            "num_links": num_links,
+            "dynamic_load": dynamic_load,
+            "topology": topology,
+            "is_fsdp": is_fsdp,
+        },
     )
 
     prompt = "An anime girl smiling, soft lighting, cinematic."
@@ -181,13 +183,15 @@ def test_pipeline_inference_random_weights(
     try:
         pipeline = AniSoraPipeline.create_pipeline(
             mesh_device=mesh_device,
-            num_links=num_links,
-            dynamic_load=dynamic_load,
-            topology=topology,
-            is_fsdp=is_fsdp,
             height=height,
             width=width,
             num_frames=num_frames,
+            config_overrides={
+                "num_links": num_links,
+                "dynamic_load": dynamic_load,
+                "topology": topology,
+                "is_fsdp": is_fsdp,
+            },
         )
     finally:
         os.environ.pop("TT_DIT_RANDOM_WEIGHTS", None)

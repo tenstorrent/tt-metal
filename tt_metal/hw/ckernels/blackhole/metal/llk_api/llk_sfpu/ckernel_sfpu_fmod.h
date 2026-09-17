@@ -44,7 +44,7 @@ inline void calculate_fmod() {
         v_else { quotient = v * recip_val; }
         v_endif
 
-        v_if(quotient > v * recip_val) {
+        v_if(exp < 23 && quotient * s > v) {
             quotient = quotient - 1;
         }
         v_endif;
@@ -57,7 +57,7 @@ inline void calculate_fmod() {
 
         constexpr auto iter = 10;
         for (int l = 0; l < iter; l++) {
-            v_if(v >= s) { v = s - v; }
+            v_if(v >= s) { v = v - s; }
             v_endif;
         }
         v_if(sfpi::abs(v) - s == 0.0f) { v = 0.0f; }

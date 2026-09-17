@@ -88,8 +88,8 @@ std::vector<std::string> build_gpp_argv(
     };
     append(cflags);
     append(includes);
-    // Each define is one argv element, passed verbatim (no shell) — this is what makes
-    // map-valued defines like -DKERNEL_COMPILE_TIME_ARG_MAP={"cb_in0",1},... survive.
+    // Each define is one argv element, passed verbatim (no shell) — this is what makes defines
+    // carrying shell metacharacters, like -DFULL_KERNEL_NAME="<name>", survive unescaped.
     args.insert(args.end(), defines.begin(), defines.end());
     switch (action) {
         case GppAction::Compile:
@@ -219,6 +219,40 @@ std::vector<tt::jit_build::GeneratedFile> read_directory_files(
     return files;
 }
 
+std::string format_named_ct_arg_map(const std::unordered_map<std::string, std::uint32_t>& named_args) {
+    std::vector<const std::pair<const std::string, std::uint32_t>*> sorted;
+    sorted.reserve(named_args.size());
+    for (const auto& entry : named_args) {
+        sorted.push_back(&entry);
+    }
+    std::sort(sorted.begin(), sorted.end(), [](const auto* a, const auto* b) { return a->first < b->first; });
+
+    // Whole-model kernels reach 100 KB+ here; size it up front rather than growing ~1750 times.
+    std::size_t reserved = 0;
+    for (const auto* entry : sorted) {
+        reserved += entry->first.size() + 16;
+    }
+    std::string out;
+    out.reserve(reserved);
+
+    for (const auto* entry : sorted) {
+        if (!out.empty()) {
+            out += ',';
+        }
+        out += "{\"";
+        out += entry->first;
+        out += "\",";
+        out += std::to_string(entry->second);
+        out += '}';
+    }
+    return out;
+}
+
+std::string format_named_ct_arg_map_header(const std::unordered_map<std::string, std::uint32_t>& named_args) {
+    return "// AUTO-GENERATED -- do not edit.\n#pragma once\n\n#define KERNEL_COMPILE_TIME_ARG_MAP " +
+           format_named_ct_arg_map(named_args) + "\n";
+}
+
 void create_file(const std::string& file_path_str) {
     namespace fs = std::filesystem;
 
@@ -236,12 +270,20 @@ uint64_t FileRenamer::unique_id_ = []() {
 }();
 
 std::string FileRenamer::generate_temp_path(const std::filesystem::path& target_path) {
+    // unique_id_ is initialized once per process, so a fork()ed child inherits the
+    // parent's value and would otherwise generate byte-identical temp paths. Mix in
+    // the live pid so forked siblings -- e.g. pytest --forked test processes sharing
+    // one kernel cache -- never collide on the same temp file.
+    //
+    // Formatted in one call rather than through an intermediate tag string: this runs
+    // once per source file during JIT setup, and the extra allocation measured more
+    // expensive than the getpid() syscall it accompanies.
     std::filesystem::path path(target_path);
     if (path.has_extension()) {
-        path.replace_extension(fmt::format("{}{}", unique_id_, path.extension().string()));
+        path.replace_extension(fmt::format("{}_{}{}", unique_id_, ::getpid(), path.extension().string()));
         return path.string();
     }
-    return fmt::format("{}.{}", target_path.string(), unique_id_);
+    return fmt::format("{}.{}_{}", target_path.string(), unique_id_, ::getpid());
 }
 
 FileRenamer::FileRenamer(const std::string& target_path) :

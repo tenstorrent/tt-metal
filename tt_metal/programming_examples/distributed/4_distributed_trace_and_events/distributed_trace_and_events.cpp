@@ -224,10 +224,10 @@ int main() {
     EnqueueMeshWorkload(mesh_device->mesh_command_queue(), add_mesh_workload, true);
     EnqueueMeshWorkload(mesh_device->mesh_command_queue(), multiply_and_subtract_mesh_workload, true);
     // =========== Step 5: Trace the MeshWorkloads using the Workload Dispatch CQ ===========
-    auto trace_id = BeginTraceCapture(mesh_device.get(), workload_cq_id);
+    auto trace_id = mesh_device->begin_mesh_trace(workload_cq);
     EnqueueMeshWorkload(mesh_device->mesh_command_queue(), add_mesh_workload, false);
     EnqueueMeshWorkload(mesh_device->mesh_command_queue(), multiply_and_subtract_mesh_workload, false);
-    mesh_device->end_mesh_trace(workload_cq_id, trace_id);
+    mesh_device->end_mesh_trace(workload_cq, trace_id);
 
     // =========== Step 6: Populate inputs ===========
     uint32_t workload_0_src0_val = 2;
@@ -255,7 +255,7 @@ int main() {
     MeshEvent write_event = data_movement_cq.enqueue_record_event();
     workload_cq.enqueue_wait_for_event(write_event);
     // =========== Step 8: Run MeshTrace on MeshCQ0 ===========
-    mesh_device->replay_mesh_trace(workload_cq_id, trace_id, false);
+    mesh_device->replay_mesh_trace(workload_cq, trace_id, false);
     // Synchronize
     MeshEvent trace_event = workload_cq.enqueue_record_event();
     data_movement_cq.enqueue_wait_for_event(trace_event);

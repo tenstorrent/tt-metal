@@ -18,6 +18,14 @@
       "owners": ["ncvetkovicTT"]
     },
     {
+      "id": "eltwise-binary-legacy-inits",
+      "description": "Legacy eltwise binary init API in tt_metal/hw/inc/api/compute/eltwise_binary.h: binary_op_init_common, add_tiles_init, sub_tiles_init, mul_tiles_init (both overloads), binary_dest_reuse_tiles_init, and binary_dest_reuse_tiles. Replaced by compute_kernel_hw_startup() once at kernel start + the per-op add_init/sub_init/mul_init API. The dest-reuse path (one operand taken from DST) is the per-op {add,sub,mul}_reuse_dest_init<reuse_dest> init paired with {add,sub,mul}_reuse_dest_tiles<reuse_dest> execute. Also covers the broadcast inits in bcast.h: the binary init_bcast and add/sub/mul_bcast_{rows,cols,scalar}_init_short (replaced by compute_kernel_hw_startup() + bcast_init<OP,DIM> / {op}_bcast_{dim}_init), the unary full init unary_bcast_init(icb, ocb) (replaced by compute_kernel_hw_startup(icb, ocb) + the 1-arg unary_bcast_init(icb)), and the bespoke reconfigure_unary_bcast (replaced by generic reconfig_data_format_srca/_srcb + pack_reconfig_data_format + unary_bcast_init(icb)). All deprecated shims usable until September 15th, 2026; remove once all call sites are migrated.",
+      "files": ["tt_metal/hw/inc/api/compute/eltwise_binary.h", "tt_metal/hw/inc/api/compute/bcast.h"],
+      "introduced_by_pr": 50745,
+      "grace": "30d",
+      "owners": ["ncvetkovicTT"]
+    },
+    {
       "id": "pack-tile-block-rename",
       "description": "pack_tile_block in tt_metal/hw/inc/api/compute/pack.h renamed to pack_block for a uniform op_block Compute API surface (tt-metal#47477). The pack_tile_block forwarding shim is retained only for backwards compatibility; delete it once all call sites are migrated to pack_block.",
       "files": ["tt_metal/hw/inc/api/compute/pack.h"],
@@ -38,6 +46,38 @@
       "description": "The reconfig_data_format / reconfig_data_format_srca / reconfig_data_format_srcb overloads that take <to_from_int8, is_tile_dim_reconfig_en> are deprecated (tt-metal#34499). int8/unsigned state is now always derived from the format (to_from_int8 is ignored, closing a latent stale-bit bug), and the two-source form gained a SrcOrder tag (added as a same-name overload; an explicit <bool, ...> call still selects the deprecated bool overloads by type) so matmul stops swapping operands by hand. In-repo call sites are already migrated to the current API (reconfig_data_format<SrcOrder>() and reconfig_data_format_skip_int8()); these deprecated bool overloads remain only for external callers during the grace period. The cleanup PR deletes them and the now-vestigial to_from_int8 flag.",
       "files": ["tt_metal/hw/inc/api/compute/reconfig_data_format.h"],
       "introduced_by_pr": 49119,
+      "grace": "30d",
+      "owners": ["ncvetkovicTT"]
+    },
+    {
+      "id": "copy-eltwise-unary-legacy-inits",
+      "description": "Legacy copy / eltwise-unary init API: copy_tile_init, copy_tile_to_dst_init_short, copy_tile_to_dst_init_short_with_dt in tt_metal/hw/inc/api/compute/tile_move_copy.h and unary_op_init_common, init_sfpu in tt_metal/hw/inc/api/compute/eltwise_unary/eltwise_unary.h. Replaced by compute_kernel_hw_startup(icb, ocb) + copy_init(icb); data-format reconfiguration via reconfig_data_format_srca. Deprecation messages state a fixed removal date of September 20th, 2026.",
+      "files": [
+        "tt_metal/hw/inc/api/compute/tile_move_copy.h",
+        "tt_metal/hw/inc/api/compute/eltwise_unary/eltwise_unary.h",
+        "docs/source/tt-metalium/tt_metal/apis/kernel_apis/pack_unpack/copy_tile.rst"
+      ],
+      "introduced_by_pr": 49924,
+      "grace": "30d",
+      "owners": ["ncvetkovicTT"]
+    },
+    {
+      "id": "mesh-command-queue-id-host-api-overloads",
+      "description": "The Runtime API entry points that identify a command queue by raw id are deprecated in favor of overloads taking MeshCommandQueue& (tt-metal#51559): BeginTraceCapture(MeshDevice*, uint8_t) -> MeshDevice::begin_mesh_trace(MeshCommandQueue&), Synchronize(MeshDevice*, std::optional<uint8_t>, ...) -> Synchronize(MeshDevice&, ttsl::optional_reference<MeshCommandQueue>, ...), MeshDevice::{begin,end,replay}_mesh_trace(uint8_t, ...) -> the same members taking MeshCommandQueue&, and MeshEvent(uint32_t, MeshDevice*, uint32_t, const MeshCoordinateRange&) -> MeshEvent(uint32_t, MeshCommandQueue&, const MeshCoordinateRange&). All in-repo call sites are already migrated; the id-based overloads remain only for external callers during the grace period. The cleanup PR deletes them and their definitions in distributed.cpp, mesh_device.cpp and mesh_event.cpp, leaving only the MeshCommandQueue& forms.",
+      "files": [
+        "tt_metal/api/tt-metalium/distributed.hpp",
+        "tt_metal/api/tt-metalium/mesh_device.hpp",
+        "tt_metal/api/tt-metalium/mesh_event.hpp"
+      ],
+      "introduced_by_pr": 51559,
+      "grace": "4w",
+      "owners": ["riverwuTT"]
+    },
+    {
+      "id": "reconfig-data-format-is-tile-dim-intent-apis",
+      "description": "The is_tile_dim_reconfig_en template bool on reconfig_data_format / _srca / _srcb (and the _skip_int8 forms) is replaced by intent-named entry points (tt-metal#34499, closes tt-metal#47382): reconfig_data_format() is now format + tile size only (geometry off), reconfig_full_operand() adds tile/face geometry (what <..., true> did), and reconfig_tile_shape() reprograms tile size + geometry only (no format; a genuine unpack-side split). reconfig_full_operand and reconfig_tile_shape are Wormhole/Blackhole only -- on Quasar tile geometry is programmed at op init, so those APIs are not defined there. The deprecated <SrcOrder, is_tile_dim_reconfig_en> overloads (including the _skip_int8 forms) preserve today's exact behavior and are disambiguated from the older <to_from_int8, is_tile_dim_reconfig_en> bool overloads by first template arg type. All in-repo call sites are migrated to reconfig_full_operand*(); these deprecated overloads remain only for external callers during the grace period. The cleanup PR removes them.",
+      "files": ["tt_metal/hw/inc/api/compute/reconfig_data_format.h"],
+      "introduced_by_pr": 52253,
       "grace": "30d",
       "owners": ["ncvetkovicTT"]
     }

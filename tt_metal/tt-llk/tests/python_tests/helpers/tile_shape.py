@@ -51,6 +51,11 @@ class TileShape:
         return self.num_faces_r_dim * self.num_faces_c_dim
 
     @property
+    def tile_dims(self) -> Tuple[int, int]:
+        """Get total tile dimensions as (rows, cols)"""
+        return (self.total_row_dim(), self.total_col_dim())
+
+    @property
     def cpp_value(self) -> str:
         return f"ckernel::TensorShape{{{self.face_r_dim}, {self.face_c_dim}, {self.num_faces_r_dim}, {self.num_faces_c_dim}}}"
 

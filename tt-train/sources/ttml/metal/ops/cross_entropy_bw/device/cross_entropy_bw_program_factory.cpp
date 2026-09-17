@@ -305,7 +305,7 @@ CrossEntropyBackwardProgramFactory::cached_program_t CrossEntropyBackwardProgram
     }
 
     {
-        std::vector<uint32_t> writer_compile_time_args{block_size, Wt, scaler_bits};
+        std::vector<uint32_t> writer_compile_time_args{block_size, Wt, scaler_bits, mask_w};
         tt::tt_metal::TensorAccessorArgs(output_buffer).append_to(writer_compile_time_args);
         kernels.writer = create_writer_kernel(program, all_cores, writer_compile_time_args, defines, kWriterKernelPath);
     }

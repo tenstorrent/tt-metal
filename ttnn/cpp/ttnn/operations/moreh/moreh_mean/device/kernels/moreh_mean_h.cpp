@@ -26,7 +26,7 @@ void kernel_main() {
     DataflowBuffer dfb_masked_input_obj(dfb::masked_input);
     constexpr bool do_mask_h = (origin_H % TILE_HEIGHT) != 0;
 
-    binary_op_init_common(dfb::input, dfb::input, dfb::out);
+    compute_kernel_hw_startup(dfb::input, dfb::input, dfb::out);
 
     dfb_scaler_obj.wait_front(1);  // scaler tile from the reader
 
