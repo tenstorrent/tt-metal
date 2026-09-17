@@ -7,7 +7,6 @@
 #include "emule_kernel_defines.hpp"
 #include "emule_metal2_emit.hpp"
 
-#include "impl/context/metal_context.hpp"
 #include <tt-metalium/hal.hpp>
 #include <tt-logger/tt-logger.hpp>
 
