@@ -177,6 +177,9 @@ on:
       manylinux-docker-image:
         description: "Docker tag for the ManyLinux Docker image"
         value: ${{ inputs.manylinux-docker-image || jobs.build-docker-image.outputs.manylinux-tag }}
+      llk-ci-docker-image:
+        description: "Docker tag for the LLK CI image (empty when docker images were passed in pre-built)"
+        value: ${{ jobs.build-docker-image.outputs.llk-ci-tag }}
       packages-artifact-name:
         description: "Name to give download-artifact to get the packages"
         value: >-

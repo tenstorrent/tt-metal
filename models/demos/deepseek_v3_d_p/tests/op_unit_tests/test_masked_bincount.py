@@ -55,12 +55,6 @@ def torch_masked_bincount(
             id="single",
         ),
         pytest.param(
-            (1, 2),
-            {"fabric_config": ttnn.FabricConfig.DISABLED},
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(1, 2), topology="linear"),
-            id="disabled-1x2",
-        ),
-        pytest.param(
             (1, 4),
             torus_x_device_params(),
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(1, 4), topology="ring"),

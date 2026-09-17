@@ -20,7 +20,7 @@ void kernel_main() {
 
     constexpr uint32_t stats_tiles = rms_norm ? 1 : 2;
 
-    Semaphore<> reduce_sender_sem(sem::reduce_sender);
+    Semaphore reduce_sender_sem(sem::reduce_sender);
     DataflowBuffer dfb_ex_global_obj(dfb::ex_global);
 
     reduce_sender_sem.set(INVALID);

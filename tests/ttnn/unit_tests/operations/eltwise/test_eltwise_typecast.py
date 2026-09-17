@@ -197,6 +197,52 @@ def test_typecast_zero_fp_to_int(device, pt_input_dtype, tt_input_dtype, tt_outp
     assert torch.all(result == 0), f"0.0 -> {tt_output_dtype} produced non-zero values: {result.unique().tolist()}"
 
 
+@pytest.mark.parametrize("tt_input_dtype", [ttnn.float32, ttnn.bfloat16])
+def test_typecast_fp_to_int32_saturates_out_of_range(device, tt_input_dtype):
+    """Regression for #55933: out-of-range floats saturate to the int32 limit of their own sign.
+
+    calculate_typecast_fp32_to_int32 loads INT32_MIN as the saturation constant for every
+    overflowing lane and only negates negative inputs, so positive overflow used to come
+    out as INT32_MIN. The random inputs in test_run_eltwise_typecast_op stay far inside the
+    int32 range, so this test covers both overflow directions and the values either side of
+    the boundary. NaN is left out: SFPSETCC is unspecified for it.
+    """
+    values = [
+        # positive overflow, starting at the first float32 at 2^31
+        2.0**31,
+        3e9,
+        1e38,
+        float("inf"),
+        # negative overflow, starting at the first float32 below -2^31
+        -2147483904.0,
+        -3e9,
+        -1e38,
+        float("-inf"),
+        # in range, including the largest float32 below 2^31 and -2^31 itself
+        2147483520.0,
+        -(2.0**31),
+        2.0**30,
+        -(2.0**30),
+        65536.0,
+        -65536.0,
+        1.0,
+        -1.0,
+        0.0,
+    ]
+    torch_input = torch.tensor([values], dtype=torch.float32)
+    tt_input = ttnn.from_torch(torch_input, dtype=tt_input_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    # Expected values come from what the device holds, because bfloat16 packing rounds some inputs.
+    held = ttnn.to_torch(tt_input).to(torch.float64)
+    int32_info = torch.iinfo(torch.int32)
+    expected = held.trunc().clamp(int32_info.min, int32_info.max).to(torch.int32)
+
+    tt_output = ttnn.typecast(tt_input, tt_input_dtype, ttnn.int32)
+    assert tt_output.dtype == ttnn.int32
+    # Compared in int64 so a mis-saturated lane reports its real distance instead of an int32 wrap.
+    assert_equal(expected.to(torch.int64), ttnn.to_torch(tt_output).to(torch.int64))
+
+
 @pytest.mark.skip("Issue #17237: Does not work with new mantissa rounding")
 def test_typecast_bf16_to_bfp8_b(device):
     torch.manual_seed(0)

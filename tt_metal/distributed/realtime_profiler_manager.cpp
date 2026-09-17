@@ -124,6 +124,15 @@ RealtimeProfilerEligibility evaluate_realtime_profiler_eligibility(IDevice* devi
     const auto& cluster = metal.get_cluster();
     auto& dispatch_core_manager = metal.get_dispatch_core_manager();
 
+    // The two profilers have separate data paths (this one reads dispatch_s timestamps through a reserved tensix),
+    // but running them together produced ~1800 "zone with end < start" real-time records per ResNet run; until that
+    // is understood the real-time profiler stands down in streaming mode.
+    if (metal.rtoptions().get_streaming_profiler_enabled()) {
+        log_info(
+            tt::LogMetal, "Real-time profiler disabled on device {}: TT_METAL_STREAMING_PROFILER is set.", device_id);
+        return {};
+    }
+
     // Gate mock/emulated targets: D2HSocket::init_host_buffer_hugepage dereferences a real PCIe hugepage absent there.
     if (cluster.is_mock_or_emulated()) {
         log_debug(
@@ -481,7 +490,7 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
     ring_.emplace(std::min(kMaxRingCapacity, max_consumer_batch_records * kRingHeadroomBatches));
 
     for (const auto& dev_state : devices_) {
-        tt::NotifyProgramRealtimeProfilerActivated(dev_state.chip_id);
+        tt::NotifyProgramRealtimeProfilerActivated(context_id_, dev_state.chip_id);
     }
 
     run_init_sync();
@@ -1297,7 +1306,7 @@ void RealtimeProfilerManager::shutdown() {
     // Clear activation state before destroying per-device records so concurrent
     // tt::IsProgramRealtimeProfilerActive() queries don't observe a chip mid-shutdown.
     for (const auto& dev_state : devices_) {
-        tt::NotifyProgramRealtimeProfilerDeactivated(dev_state.chip_id);
+        tt::NotifyProgramRealtimeProfilerDeactivated(context_id_, dev_state.chip_id);
     }
     devices_.clear();
 }

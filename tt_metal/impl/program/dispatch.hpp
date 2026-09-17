@@ -120,12 +120,24 @@ uint32_t finalize_cross_node_dfbs(
     ttsl::Span<detail::ProgramImpl*> programs,
     uint32_t base_offset);
 
+uint32_t finalize_prefetcher_pipes(
+    const MetalContext& metal_ctx,
+    uint32_t programmable_core_type_index,
+    ttsl::Span<detail::ProgramImpl*> programs,
+    uint32_t base_offset);
+
 // Cores of a kernel group that share the same CrossNodeDFB kernel-config payload.
 // Each rectangle in `cores` can be covered by a single multicast.
 struct CrossNodeDFBCoreGroup {
     // word[0]=num_slots, then num_slots x [config_page_addr, entry_size, relay_dfb_id].
     std::vector<uint32_t> payload;
     // Any core of the group; used to recover the participant records behind the payload.
+    CoreCoord representative_core;
+    CoreRangeSet cores;
+};
+
+struct PrefetcherPipeCoreGroup {
+    std::vector<uint32_t> payload;
     CoreCoord representative_core;
     CoreRangeSet cores;
 };
@@ -140,6 +152,16 @@ std::vector<CrossNodeDFBCoreGroup> partition_cores_by_cross_node_dfb_payload(
     const std::unordered_map<CoreCoord, std::vector<detail::ProgramImpl::CrossNodeDFBParticipant>>&
         per_core_cross_node_dfbs,
     uint8_t num_program_slots);
+
+// Dense per-core PrefetcherPipe slot payload. The relay word of each slot also carries the
+// pipe's active credit lane count, resolved from the program's attachment at build time so a
+// relay / Attach that armed lanes after this core's participant record was added is picked up.
+std::vector<uint32_t> build_prefetcher_pipe_config_payload(
+    const detail::ProgramImpl& program,
+    const std::vector<detail::ProgramImpl::PrefetcherPipeParticipant>& sparse_participants);
+
+std::vector<PrefetcherPipeCoreGroup> partition_cores_by_prefetcher_pipe_payload(
+    const detail::ProgramImpl& program, const CoreRangeSet& kernel_group_cores);
 
 uint32_t finalize_kernel_bins(
     IDevice* device,

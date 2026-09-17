@@ -20,7 +20,11 @@ from loguru import logger
 import ttnn
 
 from ....pipelines.minimax_h3.packing import MINIMAX_H3_FPS, align_num_frames, resolve_canvas_size
-from ....pipelines.minimax_h3.pipeline_minimax_h3 import MiniMaxH3Pipeline
+from ....pipelines.minimax_h3.pipeline_minimax_h3 import (
+    MiniMaxH3Pipeline,
+    _requested_audio_t_factor,
+    _resolve_audio_t_shard,
+)
 from ..wan2_2.common import check_output_sanity
 from .common import GALAXY_MESHES
 from .common_av import (
@@ -75,6 +79,41 @@ SWEEP = [
     for seconds in DURATIONS_S
     for ratio in ASPECT_RATIOS
 ]
+
+
+# Pure (no-device) coverage for the audio T-shard resolver: axis selection, tie-break, 8->4->1 fallback.
+@pytest.mark.parametrize(
+    ("requested", "mesh_shape", "tp_axis", "sp_axis", "expected"),
+    [
+        (8, (4, 8), 0, 1, (8, 1)),  # factor 8 -> size-8 SP axis
+        (8, (8, 4), 1, 0, (8, 0)),  # reversed 8x4 -> size-8 axis 0
+        (4, (4, 8), 0, 1, (4, 0)),  # factor 4 -> size-4 TP axis
+        (8, (4, 32), 0, 1, (4, 0)),  # no size-8 axis -> fall back to 4
+        (8, (1, 1), 0, 1, (1, None)),  # single device -> unsharded
+        (4, (4, 4), 0, 1, (4, 0)),  # equal axes -> prefer TP
+        (1, (4, 8), 0, 1, (1, None)),  # explicit unsharded
+        (2, (4, 8), 0, 1, (1, None)),  # below the 4/8 chain -> unsharded
+        (32, (4, 32), 0, 1, (32, 1)),  # opt-in 32 on a quad -> the 32-wide inter-host axis
+        (32, (4, 8), 0, 1, (8, 1)),  # requesting 32 on a single galaxy -> falls to 8
+    ],
+)
+def test_resolve_audio_t_shard(requested, mesh_shape, tp_axis, sp_axis, expected):
+    assert _resolve_audio_t_shard(requested, mesh_shape, tp_axis, sp_axis) == expected
+
+
+def test_requested_audio_t_factor_precedence(monkeypatch, expect_error):
+    # explicit kwarg wins over the env var
+    monkeypatch.setenv("MINIMAX_H3_AUDIO_T_FACTOR", "32")
+    assert _requested_audio_t_factor(4) == (4, False)
+    # env var fills the default when the kwarg is None
+    assert _requested_audio_t_factor(None) == (32, True)
+    # no kwarg, no env -> default 8
+    monkeypatch.delenv("MINIMAX_H3_AUDIO_T_FACTOR", raising=False)
+    assert _requested_audio_t_factor(None) == (8, False)
+    # a non-integer env value is a clear error, not a silent fallback
+    monkeypatch.setenv("MINIMAX_H3_AUDIO_T_FACTOR", "thirty-two")
+    with expect_error(ValueError, "MINIMAX_H3_AUDIO_T_FACTOR"):
+        _requested_audio_t_factor(None)
 
 
 @pytest.mark.timeout(7200)

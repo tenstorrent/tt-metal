@@ -14,6 +14,7 @@
 #include <boost/algorithm/string/replace.hpp>
 #include <cstdlib>
 
+#include <algorithm>
 #include <fstream>
 #include <optional>
 #include <sstream>
@@ -26,6 +27,7 @@
 #include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/program.hpp>
+#include <internal/graph_function_abort.hpp>
 #include <unordered_map>
 
 using namespace tt::tt_metal;
@@ -36,6 +38,10 @@ inline bool from_bool_param(const std::string& value) {
     return (
         (value.length() == 4) && ('t' == value[0] || 'T' == value[0]) && ('r' == value[1] || 'R' == value[1]) &&
         ('u' == value[2] || 'U' == value[2]) && ('e' == value[3] || 'E' == value[3]));
+}
+
+bool is_graph_processor(const std::shared_ptr<IGraphProcessor>& processor) {
+    return dynamic_cast<ttnn::graph::GraphProcessor*>(processor.get()) != nullptr;
 }
 
 std::string tensorMemoryLayoutToString(TensorMemoryLayout layout) {
@@ -175,12 +181,7 @@ bool GraphProcessor::is_detailed_buffer_tracing_enabled() { return capture_detai
 
 bool GraphProcessor::has_active_instance() {
     const auto& processors = tt::tt_metal::GraphTracker::instance().get_processors();
-    for (const auto& processor : processors) {
-        if (dynamic_cast<GraphProcessor*>(processor.get()) != nullptr) {
-            return true;
-        }
-    }
-    return false;
+    return std::any_of(processors.begin(), processors.end(), is_graph_processor);
 }
 
 void GraphProcessor::set_pending_program_factory(std::string type, std::size_t index, bool cache_hit) {
@@ -551,7 +552,7 @@ void GraphProcessor::track_function_start(
     graph[counter].input_tensors = current_input_tensors;
 }
 
-void GraphProcessor::track_function_end_impl() {
+node_id GraphProcessor::track_function_end_impl() {
     // Calculate duration - get end time first for accuracy
     uint64_t duration_ns = 0;
     if (!function_start_times.empty()) {
@@ -587,16 +588,8 @@ void GraphProcessor::track_function_end_impl() {
         params[kProgramCacheHit] = pending_program_factory_->cache_hit ? "true" : "false";
         const auto& processors = tt::tt_metal::GraphTracker::instance().get_processors();
         // Reset after the last GraphProcessor copies.
-        bool last_graph_processor = true;
-        auto it = processors.rbegin();
-        while (it != processors.rend()) {
-            if (dynamic_cast<GraphProcessor*>(it->get()) != nullptr) {
-                last_graph_processor = (it->get() == this);
-                break;
-            }
-            ++it;
-        }
-        if (last_graph_processor) {
+        const auto it = std::find_if(processors.rbegin(), processors.rend(), is_graph_processor);
+        if (it == processors.rend() || it->get() == this) {
             pending_program_factory_.reset();
         }
     }
@@ -607,16 +600,55 @@ void GraphProcessor::track_function_end_impl() {
     if (stacking_level == 1 && capture_detailed_buffer_tracing_ && !captured_mesh_devices.empty()) {
         per_op_buffers_[function_start_id] = ttnn::reports::get_buffers(captured_mesh_devices);
     }
+
+    return counter;
 }
 
 void GraphProcessor::track_function_end() {
     const std::lock_guard<std::mutex> lock(mutex);
+    if (!has_open_function()) {
+        // An end with no matching start, e.g. a capture that began inside an already-open scope.
+        // Honouring it would pop the capture_start sentinel and leave every later end reading off
+        // an empty stack.
+        log_debug(tt::LogAlways, "Ignoring function_end with no open function_start");
+        return;
+    }
     this->track_function_end_impl();
-    TT_ASSERT(!current_op_id.empty());  // we should always have capture_start on top
+    current_op_id.pop();
+}
+
+void GraphProcessor::abort_open_function_impl(std::string_view reason) {
+    // The scope is closed like any other so the trace stays balanced and later operations keep
+    // their real nesting; the marker is what tells the two apart downstream. There is no output
+    // to record: the operation never produced one.
+    const node_id end_id = this->track_function_end_impl();
+    graph[end_id].params[kAborted] = "true";
+    if (!reason.empty()) {
+        graph[end_id].params[kAbortReason] = std::string(reason);
+    }
     current_op_id.pop();
 }
 
 void GraphProcessor::track_function_end(const std::any& output_tensors) {
+    if (const auto* abort = std::any_cast<internal::GraphFunctionAbort>(&output_tensors)) {
+        const std::lock_guard<std::mutex> lock(mutex);
+        if (abort->unwind_all) {
+            // Innermost first, so the scopes are closed in the order they would have been on the
+            // way out of the operation that abandoned them.
+            while (has_open_function()) {
+                log_debug(tt::LogAlways, "Unwinding abandoned op: {}", graph[current_op_id.top()].params[kName]);
+                this->abort_open_function_impl(abort->reason);
+            }
+            return;
+        }
+        if (!has_open_function()) {
+            log_debug(tt::LogAlways, "Ignoring function_abort with no open function_start");
+            return;
+        }
+        this->abort_open_function_impl(abort->reason);
+        return;
+    }
+
     static constexpr std::array end_function_any_map{
         make_process<std::vector<Tensor>, &GraphProcessor::end_function_process>(),
         make_process<std::vector<std::optional<Tensor>>, &GraphProcessor::end_function_process>(),
@@ -625,6 +657,10 @@ void GraphProcessor::track_function_end(const std::any& output_tensors) {
     };
 
     const std::lock_guard<std::mutex> lock(mutex);
+    if (!has_open_function()) {
+        log_debug(tt::LogAlways, "Ignoring function_end with no open function_start");
+        return;
+    }
     this->track_function_end_impl();
 
     const auto* const it = std::ranges::find(
@@ -635,7 +671,6 @@ void GraphProcessor::track_function_end(const std::any& output_tensors) {
     } else {
         log_debug(tt::LogAlways, "output any type name ignored: {}", output_tensors.type().name());
     }
-    TT_ASSERT(!current_op_id.empty());  // we should always have capture_start on top
     current_op_id.pop();
 }
 

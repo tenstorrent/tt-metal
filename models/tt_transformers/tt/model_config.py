@@ -109,6 +109,96 @@ def compute_padded_vocab_size(vocab_size: int, num_devices: int) -> int:
     return nearest_multiple(vocab_size, ttnn.TILE_SIZE * num_devices)
 
 
+def compute_galaxy_padded_vocab_size(vocab_size: int, num_devices: int) -> int:
+    """Preserve Galaxy's 128K layout while accommodating larger vocabularies."""
+    return compute_padded_vocab_size(max(vocab_size, 128 * 1024), num_devices)
+
+
+def compute_galaxy_width_shard_cores(width: int, max_cores: int = 32) -> int:
+    """Use the largest core count that leaves a tile-aligned width shard."""
+    if width <= 0 or width % ttnn.TILE_SIZE != 0:
+        raise ValueError(f"width must be a positive multiple of {ttnn.TILE_SIZE}, got {width}")
+    width_tiles = width // ttnn.TILE_SIZE
+    num_cores = min(max_cores, width_tiles)
+    while width_tiles % num_cores != 0:
+        num_cores -= 1
+    return num_cores
+
+
+# Silicon-validated Llama-70B 7x4 MLP reduce-scatter grid.
+_GALAXY_FF1_LEGACY_CORES = 28
+
+
+def create_galaxy_ff1_out_reduce_scatter_memcfg(hidden_dim: int, mesh_rows: int, mesh_cols: int) -> ttnn.MemoryConfig:
+    """Create the Galaxy FF1 reduce-scatter *output* layout.
+
+    ``ReduceScatterMinimalAsyncDeviceOperation::compute_output_specs`` derives the
+    output shape itself as ``input_shape[dim] / ring_size``; this memory config only
+    supplies the layout for that shape, so it must describe the scattered width, not
+    the pre-scatter width.
+
+    w1/w3 are 2D-sharded ``dims=(-1, -2)`` (mlp.py), so ``hidden_dim`` splits across
+    ``mesh_rows`` and the per-device FF1 output is ``hidden_dim // mesh_rows``. The
+    collective then scatters that over ``cluster_axis=1``, i.e. ``mesh_cols`` devices.
+
+    The silicon-validated Galaxy demo agrees: its reduce-scatter input is 3840 wide
+    (``SHARDED_FF12_OUT_RING_MEMCFG`` / ``SHARDED_FF12_PRE_MUL_RING_REDUCE_MEMCFG``,
+    the 28672 // 8 = 3584 per-device width padded to a 30-core layout) and its output
+    ``REDUCE_SCATTER_OUT_MEMCFG`` is ``[32, 32]`` over 30 cores = 960 = 3840 // 4.
+
+    Keeps the legacy 7x4 grid wherever it tile-aligns the scattered width, which for
+    Llama-70B it does exactly: 28672 // 8 // 4 = 896 = 28 * 32.
+    """
+    per_device_width = hidden_dim // mesh_rows // mesh_cols
+    legacy_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, 3))})
+    num_cores, core_grid = _GALAXY_FF1_LEGACY_CORES, legacy_grid
+
+    if per_device_width % (_GALAXY_FF1_LEGACY_CORES * ttnn.TILE_SIZE) != 0:
+        # The legacy 28-core grid cannot tile-align this width. Try a core count that
+        # can, but fall back to the legacy layout if no supported core grid exists --
+        # this config is only consumed on the Galaxy decode path (mlp.py, dim == 8192),
+        # so an unusable width here must stay harmless rather than raise during
+        # ModelArgs construction on every SKU.
+        if per_device_width % ttnn.TILE_SIZE == 0:
+            candidate_cores = compute_galaxy_width_shard_cores(per_device_width)
+            candidate_grid = num_to_coregrid(candidate_cores)
+            if candidate_grid is not None:
+                num_cores, core_grid = candidate_cores, candidate_grid
+        if core_grid is legacy_grid:
+            logger.warning(
+                f"Galaxy FF1 per-device width {per_device_width} is not tile-shardable across "
+                f"{_GALAXY_FF1_LEGACY_CORES} cores and has no supported alternative grid; keeping "
+                "the legacy layout. Only consumed on the Galaxy decode path."
+            )
+
+    # Round the shard up to a tile boundary. This is exact for every width a grid can
+    # cover evenly (Llama-70B 896 = 28 * 32, Qwen-72B 1024 = 32 * 32) and mirrors what
+    # the validated demo does otherwise -- its 30-core layout pads 896 up to 960.
+    shard_width = math.ceil(per_device_width / num_cores / ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+
+    # LAYOUT HISTORY -- start here if Galaxy decode perf or L1 usage regresses (PR #53838).
+    #
+    #   Llama-70B (hidden_dim 28672):  [32, 128] over 28 cores  ->  [32, 32] over 28 cores
+    #                                   3584 columns                 896 columns
+    #
+    # 3584 is the pre-scatter per-device width (28672 // 8); 896 is what
+    # reduce_scatter_minimal_async actually emits (28672 // 8 // 4). Same 7x4 grid,
+    # 4x less L1 for this buffer.
+    #
+    # The collective tolerates an over-provisioned output shard spec -- the old value
+    # was oversized, not wrong -- so a regression here would show up as perf or L1
+    # pressure, never as a failed assertion. If Galaxy decode slows down or starts
+    # hitting L1 limits, revert this shard width to `per_device_width // num_cores`
+    # with `per_device_width = hidden_dim // mesh_rows` and see if it recovers.
+    return ttnn.create_sharded_memory_config(
+        shape=(32, shard_width),
+        core_grid=core_grid,
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+
 def should_pad_sampling_logits_to_power_of_2(
     base_model_name: str, padded_vocab_size: int, sampling_splits: int
 ) -> bool:
@@ -506,6 +596,7 @@ class ModelArgs:
             "Qwen2.5-VL-72B-Instruct": "models/tt_transformers/model_params/Qwen2.5-VL-72B-Instruct",
             "Qwen3-VL-32B-Instruct": "models/tt_transformers/model_params/Qwen3-VL-32B-Instruct",
             "Qwen3-32B": "models/tt_transformers/model_params/Qwen3-32B",
+            "EXAONE-4.5-33B": "models/tt_transformers/model_params/EXAONE-4.5-33B",
             "Qwen2.5-72B-Instruct": "models/tt_transformers/model_params/Qwen2.5-72B-Instruct",
             "Qwen2.5-32B-Instruct": "models/tt_transformers/model_params/Qwen2.5-32B-Instruct",
             "Meta-Llama-3-8B": "models/tt_transformers/model_params/Meta-Llama-3-8B",
@@ -570,6 +661,17 @@ class ModelArgs:
 
         self.rms_norm_add_unit_offset = False
         self.embed_scale = None
+        # Post-norm decoder (EXAONE-4.x): no input_layernorm; norms are applied to the
+        # attention/MLP outputs before the residual adds. Set in _set_model_specific_params().
+        self.use_post_norm = False
+        # Hybrid-rope inversion (EXAONE-4.x): sliding layers use the (llama3-scaled)
+        # rope while full-attention layers are NoPE. rope_scaling_local feeds the local
+        # rope setup; use_global_nope neutralizes the global setup's cos/sin to identity.
+        self.rope_scaling_local = None
+        self.use_global_nope = False
+        # Text-only port of a multimodal checkpoint: keeps is_multimodal False so the
+        # text pipeline (AutoModel class choice aside) is used end-to-end.
+        self.force_text_only = False
         # Final logit soft-capping (Gemma-2). None => disabled, so no effect on other models.
         # Attention-score softcapping (HF attn_logit_softcapping=50.0) is intentionally
         # not stored or applied: ttnn SDPA has no softcap hook, and HF documents that
@@ -936,13 +1038,12 @@ class ModelArgs:
             # TODO: Migrate these to use getter methods after TTTv2 migration
             # These configs are used by mlp.py for TG (Galaxy) multi-device setups
             # ============================================================================
-            self.model_config["FF1_OUT_REDUCE_SCATTER_MEMCFG"] = ttnn.create_sharded_memory_config(
-                shape=(32, self.hidden_dim // 28 // 8),  # shard_grid_cores = 28, num_devices=8
-                core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, 3))}),
-                strategy=ttnn.ShardStrategy.WIDTH,
-                orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                use_height_and_width_as_shard_shape=True,
-            )  # if self.dim==8192 else ttnn.DRAM_MEMORY_CONFIG
+            # Sized to the reduce-scatter output width, not the pre-scatter width. See the
+            # LAYOUT HISTORY note in create_galaxy_ff1_out_reduce_scatter_memcfg if Galaxy
+            # decode perf or L1 usage regresses -- Llama-70B went [32, 128] -> [32, 32].
+            self.model_config["FF1_OUT_REDUCE_SCATTER_MEMCFG"] = create_galaxy_ff1_out_reduce_scatter_memcfg(
+                self.hidden_dim, self.cluster_shape[0], self.cluster_shape[1]
+            )
 
             self.model_config["FF1_OUT_GATHERED_MEMCFG"] = ttnn.create_sharded_memory_config(
                 shape=(32 * 4, self.hidden_dim // 8 // 8),
@@ -1076,7 +1177,9 @@ class ModelArgs:
             )
 
             def _get_xattn_kv_prefill_mem_cfg(seq_len):
-                M = (self.n_kv_heads // self.num_devices) * seq_len
+                # max(1, ...): KV replication (n_kv_heads < num_devices) makes the integer
+                # divide 0, which would build a 0-row shard config; clamp to one KV head/device.
+                M = max(1, self.n_kv_heads // self.num_devices) * seq_len
                 cores_x, cores_y = self.find_grid(M // ttnn.TILE_SIZE)
                 return ttnn.create_sharded_memory_config(
                     (
@@ -1277,7 +1380,7 @@ class ModelArgs:
         """Get the sharded memory config for MLP input."""
         if mode == Mode.DECODE:
             if self.is_galaxy:
-                return self.get_mlp_act_mem_config("decode")
+                return self.get_mlp_act_mem_config(Mode.DECODE)
             elif prefetcher is not None:
                 return ttnn.create_sharded_memory_config(
                     shape=(32, self.dim // prefetcher.ring_size),
@@ -1338,6 +1441,9 @@ class ModelArgs:
                         k=self.dim,
                         n=self.hidden_dim // self.cluster_shape[1],
                         num_cores=self.mlp_core_grid.num_cores,
+                        num_workers_per_dram_bank=self.get_dram_sharded_matmul_num_workers(
+                            TensorGroup.FF1_FF3, self.hidden_dim // self.cluster_shape[1]
+                        ),
                     )
         elif mode == Mode.PREFILL:
             return self.matmul_config(
@@ -1391,9 +1497,10 @@ class ModelArgs:
                         k=self.hidden_dim // self.cluster_shape[1],
                         n=self.dim,
                         num_cores=self.mlp2_core_grid.num_cores,
+                        num_workers_per_dram_bank=self.get_dram_sharded_matmul_num_workers(TensorGroup.FF2, self.dim),
                     )
         elif mode == Mode.PREFILL:
-            if seq_len > 128:
+            if self.use_minimal_prefill_matmul(seq_len):
                 grid = self.mlp2_grid(seq_len)
                 return ttnn.MinimalMatmulConfig(
                     M_block_size=8,
@@ -1708,6 +1815,9 @@ class ModelArgs:
                     k=self.dim,
                     n=self.qkv_size // self.num_devices,
                     num_cores=self.attn_input_grid.num_cores,
+                    num_workers_per_dram_bank=self.get_dram_sharded_matmul_num_workers(
+                        TensorGroup.WQKV, self.qkv_size // self.num_devices
+                    ),
                 )
         elif mode == Mode.PREFILL:
             self.MAX_QKV_MM_SEQ_LEN = 2048
@@ -1740,8 +1850,13 @@ class ModelArgs:
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
+    def use_minimal_prefill_matmul(self, seq_len: int) -> bool:
+        # Qwen's 128-token prompts can run singly or be flattened into a larger
+        # batched prefill.
+        return seq_len > 128 or (seq_len == 128 and self.base_model_name == "Qwen3-32B" and self.device_name == "T3K")
+
     def use_minimal_qkv_prefill_matmul(self, seq_len: int) -> bool:
-        if seq_len > 128:
+        if self.use_minimal_prefill_matmul(seq_len):
             return True
 
         # The regular 128-token QKV prefill matmul over-allocates L1 on Llama 8B
@@ -2001,6 +2116,7 @@ class ModelArgs:
                     k=(self.n_heads * self.head_dim) // self.num_devices,
                     n=self.dim,
                     num_cores=self.n_heads // self.num_devices,
+                    num_workers_per_dram_bank=self.get_dram_sharded_matmul_num_workers(TensorGroup.WO, self.dim),
                 )
         elif mode == Mode.PREFILL:
             return None
@@ -2166,8 +2282,10 @@ class ModelArgs:
     @lru_cache(maxsize=None)
     def get_attn_kv_prefill_mem_config(self, seq_len: int = 1):
         """Get the memory config for KV cache fill during prefill."""
+        # max(1, ...): KV replication (n_kv_heads < num_devices) makes the integer divide 0,
+        # which would build a 0-row shard config; clamp to one KV head per device.
         return ttnn.create_sharded_memory_config(
-            (((self.n_kv_heads // self.cluster_shape[1]) * seq_len // (8 * 8)), self.head_dim),
+            ((max(1, self.n_kv_heads // self.cluster_shape[1]) * seq_len // (8 * 8)), self.head_dim),
             ttnn.CoreGrid(y=8, x=8),
             ttnn.ShardStrategy.HEIGHT,
             ttnn.ShardOrientation.ROW_MAJOR,
@@ -2451,6 +2569,9 @@ class ModelArgs:
                 "DeepSeek-R1-Distill-Llama-70B": {"N150": None, "N300": None, "T3K": 32, "TG": 128, "P150x4": 128},
                 "Qwen2.5-7B": {"N150": 4, "N300": 32, "T3K": 128, "TG": 128, "P150x4": 128},
                 "Qwen2.5-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128, "P150x4": 128, "P150x8": 128},
+                # Large single-chunk prefill matters for EXAONE: chunked prefill is
+                # unsupported on sliding-window layers (48 of its 64 layers).
+                "EXAONE-4.5-33B": {"P150x8": 128},
                 "Qwen2.5-Coder-32B": {"N150": None, "N300": None, "P150x4": 128},
                 "Qwen2.5-72B": {"N150": None, "N300": None, "T3K": 16, "TG": 128, "P150x4": 128, "P150x8": 128},
                 "Qwen2.5-VL-3B": {"N150": 128, "N300": 128, "T3K": None, "TG": None, "P150x4": None},
@@ -2735,6 +2856,25 @@ class ModelArgs:
             self.sdpa_decode_k_chunk_size = 64
             self.sdpa_decode_use_default_compute_config = True
 
+        # EXAONE-4.x (incl. the EXAONE-4.5 text decoder, whose text model_type is
+        # exaone4): post-norm residual order with no input_layernorm —
+        #   h = x + post_attention_layernorm(attn(x)); out = h + post_feedforward_layernorm(mlp(h))
+        # — and hybrid rope inverted vs Gemma-3: RoPE (llama3-scaled, theta 1e6) is
+        # applied ONLY on sliding_attention layers while full_attention layers are
+        # NoPE (no positional encoding). See HF modeling_exaone4.py.
+        if self.model_type is not None and str(self.model_type).lower() in ("exaone4", "exaone4_5", "exaone4_5_text"):
+            self.use_post_norm = True
+            # Sliding (local) layers take the checkpoint's rope scaling; global
+            # (full-attention) layers take identity cos/sin via use_global_nope.
+            self.rope_scaling_local = self.rope_scaling
+            self.rope_scaling = None
+            self.use_global_nope = True
+            # EXAONE-4.5 checkpoints ship a vision tower (model.visual.*) and an MTP
+            # module (mtp.*); this port runs the text decoder only. transformers
+            # itself drops mtp.* on load (_keys_to_ignore_on_load_unexpected).
+            self.force_text_only = True
+            self.is_multimodal = False
+
     def _set_params_from_dict(self, config):
         eos_token_id = config.get("eos_token_id", None)
         self.image_token_index = config.get("image_token_index", None)
@@ -2768,7 +2908,7 @@ class ModelArgs:
         # Pad vocab_size to be divisible by (32 * num_devices) for proper shard alignment
         tile_size = 32
         if self.is_galaxy:
-            self.padded_vocab_size = 128 * 1024
+            self.padded_vocab_size = compute_galaxy_padded_vocab_size(self.vocab_size, self.num_devices)
         elif self.num_devices == 0:
             # No mesh (e.g. reference-output generation): pad to tile_size only
             self.padded_vocab_size = math.ceil(self.vocab_size / tile_size) * tile_size
@@ -2835,6 +2975,10 @@ class ModelArgs:
                 "Qwen2.5-32B": 16,
                 "Qwen2.5-7B": 16,
                 "QwQ-32B": 16,
+                # 27392/8 = 3424 = 107 tiles (prime) -> find_grid_k_n degenerates to a
+                # single core (1x1 norm grid overflows L1; 1-core MLP matmuls). Pad to
+                # 28672 (112 tiles/device, gcd(160,112)=16 -> 16-core grids).
+                "EXAONE-4.5-33B": 16,
             }.get(self.base_model_name, 0)
 
             # Override MLP padding cores from env var
@@ -2900,7 +3044,7 @@ class ModelArgs:
         self.mlp_activation_type = self._get_hidden_activation_type(text_config)
 
         self._set_vision_params(config)
-        self.is_multimodal = "vision_config" in config or self.is_vision()
+        self.is_multimodal = not self.force_text_only and ("vision_config" in config or self.is_vision())
         self.vision_chunk_size = config.get("vision_chunk_size", 896)
         self.vision_max_num_chunks = config.get("vision_max_num_chunks", 4)
         if "vision_num_cross_attention_layers" in config:
@@ -3035,7 +3179,7 @@ class ModelArgs:
                     merged_vision_config = merge_vision_config(config)
                     self._set_vision_params({"vision_config": merged_vision_config})
 
-            self.is_multimodal = "vision_config" in config or self.is_vision()
+            self.is_multimodal = not self.force_text_only and ("vision_config" in config or self.is_vision())
         else:
             self._set_params_from_dict(config)
 
@@ -3306,6 +3450,14 @@ class ModelArgs:
         from transformers import AutoModelForCausalLM, AutoModelForImageTextToText
 
         if not self.is_multimodal:
+            # Text-only ports of multimodal checkpoints (e.g. EXAONE-4.5): the
+            # composite config class only maps to an image-text-to-text model —
+            # load that; text-only inputs bypass its vision tower entirely.
+            if (
+                type(self.hf_config) not in AutoModelForCausalLM._model_mapping
+                and type(self.hf_config) in AutoModelForImageTextToText._model_mapping
+            ):
+                return AutoModelForImageTextToText
             return AutoModelForCausalLM
 
         # AutoModelForVision2Seq was removed in transformers 5.x; its model mapping
@@ -3394,6 +3546,14 @@ class ModelArgs:
                     # Standard: convert to Meta format
                     state_dict = convert_vision_hf_to_meta(state_dict, self.head_dim)
         else:
+            if self.force_text_only:
+                # Text-only port of a multimodal checkpoint (e.g. EXAONE-4.5): drop
+                # the vision tower and auxiliary heads (MTP) before key sniffing —
+                # vision `attn.qkv` keys would otherwise trip fuse_qkv, and mtp.layers.*
+                # keys would collide with the layer-trim loop below.
+                state_dict = {
+                    k: v for k, v in state_dict.items() if not (k.startswith(("model.visual.", "visual.", "mtp.")))
+                }
             self.fuse_qkv = any(["qkv" in layer_name for layer_name in state_dict.keys()])
             self.fuse_mlp = any(["gate_up" in layer_name for layer_name in state_dict.keys()])
             state_dict = standardize_hf_keys(state_dict)
@@ -3470,6 +3630,51 @@ class ModelArgs:
             fused_activation=fused_activation,
             fuse_batch=fuse_batch,
         )
+
+    def dram_decode_in0_block_w(self, k: int, n: int, num_cores: int) -> int:
+        """in0_block_w for a DRAM-sharded decode matmul with one reader per bank.
+
+        The activation multicast is one semaphore-gated block per sender, chained across senders,
+        so the chain costs the block count K / in0_block_w. The factory lets a block span several
+        consecutive activation shards, which takes the block count off the shard grid.
+
+        Widening is not free. A block wider than a shard is gathered over the NoC into the sender
+        before the multicast, so those shards cross the NoC twice. The multicast overlaps the
+        block's weight read, so the chain is exposed only while a hop costs more than the weight
+        a worker reads for that block: once bw x per_worker_N covers it, a wider block buys
+        nothing and still pays the gather. Sweeping every legal in0_block_w over 21 decode shapes
+        on P300 (Llama-3.2-1B, Llama-3.1-8B, Qwen3-8B and Qwen3-32B at one, four and eight
+        devices) puts a hop at about HOP_IN_WEIGHT_TILES weight tiles: the rule then picks the
+        measured optimum on 20 of the 21, one step short on the last, and no width slower than
+        stock on any. 100 and 112 give the same result, so it sits in a plateau rather than on a
+        cliff.
+
+        The constant is a hardware ratio, one hop's fixed cost over the time a worker takes to
+        stream one weight tile, so it moves with the bank count, the DRAM bandwidth and the NoC,
+        not with the model. Anything that changes the fixed cost of a hop moves it down and this
+        has to be refitted.
+        """
+        HOP_IN_WEIGHT_TILES = 100
+        k_tiles = k // ttnn.TILE_SIZE
+        per_core_k = k_tiles // num_cores
+        per_worker_n = math.ceil(n / (ttnn.TILE_SIZE * self.dram_grid_size.x))
+        l1_budget_tiles = 800 * 1024 // (3 * 1088)
+        base = self.find_largest_divisor(per_core_k)
+        # Only ever widen, and only while a block's own weight read is shorter than one hop.
+        # Widening halves the hops and doubles the weight a hop has to hide behind, so past the
+        # crossover it buys nothing and still pays the gather. The L1 budget is the looser of the
+        # two bounds and stays as a cap. A wide-N projection such as the LM head is already past
+        # the crossover at the stock width, which is why the stock width is also the floor.
+        for bw in range(min(16, k_tiles), base, -1):
+            if k_tiles % bw:
+                continue
+            if per_core_k % bw and bw % per_core_k:
+                continue
+            if bw * per_worker_n > HOP_IN_WEIGHT_TILES:
+                continue
+            if bw * per_worker_n <= l1_budget_tiles:
+                return bw
+        return base
 
     def dram_shard_core_grid_for_k(self, k: int) -> Tuple[int, int]:
         rows, cols = self.find_grid(k // ttnn.TILE_SIZE)
@@ -3585,7 +3790,27 @@ class ModelArgs:
                 return i
         return 1  # Fallback to 1 if no divisor found
 
-    def dram_matmul_config(self, m: int, k: int, n: int, num_cores=None, fused_activation=None):
+    def get_dram_sharded_matmul_num_workers(self, tensor_group: TensorGroup, n: int) -> int:
+        """Return the validated P150 reader count for a Llama 3.1 8B decode projection."""
+        if self.base_model_name != "Llama-3.1-8B" or self.device_name != "P150":
+            return 1
+
+        if tensor_group not in (TensorGroup.FF1_FF3, TensorGroup.FF2, TensorGroup.WQKV, TensorGroup.WO):
+            return 1
+
+        num_workers = 2
+        shard_width_tiles = math.ceil(n / (ttnn.TILE_SIZE * self.dram_grid_size.x))
+        return num_workers if shard_width_tiles % num_workers == 0 else 1
+
+    def dram_matmul_config(
+        self,
+        m: int,
+        k: int,
+        n: int,
+        num_cores=None,
+        fused_activation=None,
+        num_workers_per_dram_bank: int = 1,
+    ):
         # in0_block_w must evenly divide k and be no larger than tile_size * num_cores
         if num_cores is None:
             # num_cores = self.dram_shard_core_grid_for_k(k).num_cores
@@ -3594,11 +3819,16 @@ class ModelArgs:
                 k % (ttnn.TILE_SIZE * num_cores) == 0
             ), f"k must be divisible by tile_size * num_cores: {k} % {ttnn.TILE_SIZE * num_cores} != 0"
             # assert n % (ttnn.TILE_SIZE * num_cores) == 0, f"n must be divisible by tile_size * num_cores: {n} % {ttnn.TILE_SIZE * num_cores} != 0"
+        if not self.is_galaxy and self.prefetcher is None:
+            in0_block_w = self.dram_decode_in0_block_w(k, n, num_cores)
+        else:
+            in0_block_w = self.find_largest_divisor(k // (ttnn.TILE_SIZE * num_cores))
         return ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
-            in0_block_w=self.find_largest_divisor(k // (ttnn.TILE_SIZE * num_cores)),
+            in0_block_w=in0_block_w,
             per_core_M=math.ceil(m / ttnn.TILE_SIZE),
             per_core_N=math.ceil(n / (ttnn.TILE_SIZE * num_cores)),
             fused_activation=fused_activation,
+            num_workers_per_dram_bank=num_workers_per_dram_bank,
         )
 
     def matmul_1d_ring_config(
@@ -3805,6 +4035,7 @@ class ModelArgs:
             "gemma-3-27b": "google/gemma-3-27b-it",
             "Qwen3.6-27B": "Qwen/Qwen3.6-27B",
             "LFM2.5-VL-1.6B": "LiquidAI/LFM2.5-VL-1.6B",
+            "EXAONE-4.5-33B": "LGAI-EXAONE/EXAONE-4.5-33B",
         }
 
         logger.info(f"Tokenizer path: {self.TOKENIZER_PATH}")
@@ -4332,16 +4563,33 @@ class ModelArgs:
                 use_height_and_width_as_shard_shape=True,
             )
 
+            # Prefer a tile-aligned width shard, but never hand num_to_coregrid a core
+            # count it cannot map -- it returns None, which create_sharded_memory_config
+            # rejects with "Invalid core_grid type". Fall back to the legacy expression
+            # in that case so dims that built a config before still build one.
+            self_out_width = self.dim // 4
+            self_out_cores = compute_galaxy_width_shard_cores(self_out_width)
+            if num_to_coregrid(self_out_cores) is None:
+                self_out_cores = min(32, self_out_width // ttnn.TILE_SIZE)
+            self_out_grid = num_to_coregrid(self_out_cores)
+
             self.model_config["SELF_OUT_GATHERED_MEMCFG"] = lambda mesh_rows: ttnn.create_sharded_memory_config(
-                shape=(32 * mesh_rows, self.dim // 4 // min(32, self.dim // 4 // 32)),
-                core_grid=num_to_coregrid(min(32, self.dim // 4 // 32)),
+                shape=(32 * mesh_rows, self_out_width // self_out_cores),
+                core_grid=self_out_grid,
                 strategy=ttnn.ShardStrategy.WIDTH,
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
                 use_height_and_width_as_shard_shape=True,
             )
+
+            # The gathered attention output is n_local_heads * head_dim wide, which is
+            # only equal to dim // cluster_shape[0] when n_heads * head_dim == dim.
+            # Qwen3-32B (dim 5120, 64 heads, 8 KV heads, head_dim 128) gathers 1024
+            # columns, while Qwen2.5-32B / QwQ-32B (40 heads) gather 640 -- so keying
+            # this off dim would break the latter. Derive it from the head geometry.
+            gather_users_cores = min(32, (self.n_heads // self.n_kv_heads) * self.head_dim // ttnn.TILE_SIZE)
             self.model_config["GATHER_USERS_MEMCFG"] = lambda mesh_cols: ttnn.create_sharded_memory_config(
                 shape=(32 * mesh_cols, 32),  # mesh_cols = 4
-                core_grid=num_to_coregrid(min(32, self.dim // 8 // 32)),
+                core_grid=num_to_coregrid(gather_users_cores),
                 strategy=ttnn.ShardStrategy.WIDTH,
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
                 use_height_and_width_as_shard_shape=True,

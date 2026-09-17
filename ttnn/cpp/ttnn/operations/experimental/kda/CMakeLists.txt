@@ -6,7 +6,12 @@ add_library(TTNN::Ops::Experimental::KDA::Common ALIAS ttnn_op_experimental_kda_
 tt_reuse_precompile_headers(ttnn_op_experimental_kda_common TT::CommonPCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_kda_common)
 
-target_sources(ttnn_op_experimental_kda_common PRIVATE factory/kda_factory_utils.cpp)
+target_sources(
+    ttnn_op_experimental_kda_common
+    PRIVATE
+        factory/kda_factory_utils.cpp
+        kda_performance_model.cpp
+)
 target_include_directories(ttnn_op_experimental_kda_common PRIVATE ${FixmeOpAPIDir})
 target_link_libraries(ttnn_op_experimental_kda_common PRIVATE TT::Metalium PUBLIC TTNN::Core)
 install(TARGETS ttnn_op_experimental_kda_common LIBRARY COMPONENT tar)
