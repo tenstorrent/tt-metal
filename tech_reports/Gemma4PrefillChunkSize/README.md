@@ -14,7 +14,7 @@ sliding-window halo, and neither is the fabric.**
 
 | | 2048 vs 8192 | cause | whose |
 |---|---|---|---|
-| **per-chunk term** | **2.16x** | a **~70 ms floor** that doesn't shrink with the chunk, paid 4x more often (chunk is 4x smaller but only 1.85x cheaper) | ~84% the **50 sliding** layers, by count |
+| **per-chunk term** | **2.16x** | a **~94 ms cost** that doesn't shrink with the chunk, paid 4x more often (chunk is 4x smaller but only 1.85x cheaper) | ~84% the **50 sliding** layers, by count |
 | **prefix term** | **1.99x** | the attention op leaves **71% of the core grid idle** at chunk 2048 (32 work units on ~110 cores) and pays 4x as many steps | **100%** the **10 full-attention** layers |
 | | **= 2.09x** | | |
 
@@ -31,20 +31,29 @@ with how much context precedes each chunk:
 | 16384 | 16 | 443.7 ms | 7.10 s | 4.45 s | 11.55 s |
 | 32768 | 8 | 928.2 ms | 7.43 s | 3.53 s | 10.96 s |
 
-### Effect 1 — a fixed ~70 ms floor per chunk, paid 4x more often (2.16x)
+### Effect 1 — a fixed ~94 ms cost per chunk, paid 4x more often (2.16x)
 
-Every chunk pays **~70 ms that does not shrink when the chunk shrinks**. A 4x smaller chunk is
-only 1.85x cheaper, so 4x as many chunks costs 2.16x more overall. What the floor is:
+Every chunk pays **~94 ms that does not shrink when the chunk shrinks**. A 4x smaller chunk is
+only 1.85x cheaper, so 4x as many chunks costs 2.16x more overall. What it is, apportioned by
+the per-op shares measured in [`PER_OP_TABLES.md`](PER_OP_TABLES.md):
 
 | component | per chunk | why it does not scale with the chunk |
 |---|---:|---|
-| matmul weight reads | ~30 ms | the layer's **127 MB of weights** (per device, TP=4, bfp8) are read once per chunk whatever the token count. 2x the math from M=512→1024 costs only **1.09x** the time — saturated at the weight-read bound |
-| `rms_norm` | ~18 ms | `ttnn.rms_norm` parallelises over **rows only**. A 256-row slab is 8 tiles → **8 of 120 cores**, each reducing a 168-tile-wide row-block. 4x the rows uses 4x the cores for **1.22x** the time |
-| sliding-window SDPA halo | ~10 ms | the halo is a constant 1024 tokens regardless of chunk size |
-| heads / rope / tilize / TP collectives | ~12 ms | TP collectives are only **4%** of the floor — they scale properly |
+| matmul weight reads | ~41 ms | the layer's **127 MB of weights** (per device, TP=4, bfp8) are read once per chunk whatever the token count. 2x the math from M=512→1024 costs only **1.09x** the time — saturated at the weight-read bound |
+| `rms_norm` | ~24 ms | `ttnn.rms_norm` parallelises over **rows only**. A 256-row slab is 8 tiles → **8 of 120 cores**, each reducing a 168-tile-wide row-block. 4x the rows uses 4x the cores for **1.22x** the time |
+| sliding-window SDPA halo | ~13 ms | the halo is a constant 1024 tokens regardless of chunk size |
+| heads / rope / tilize / TP collectives | ~16 ms | TP collectives are only **4%** of the floor — they scale properly |
 
 **~84% of the floor is the 50 sliding layers** — not because each is expensive, but because there
-are 50 of them. Their cost is chassis (weight reads, norms), not attention.
+are 50 of them. Their cost is chassis (weight reads, norms), not attention. (Confirmed per-op
+independently at **83%** — see [`PER_OP_TABLES.md`](PER_OP_TABLES.md).)
+
+> **On the number itself.** An earlier revision quoted this floor as **70.4 ms**. That is the
+> *excess over ideal token scaling* at chunk 2048, which is algebraically three quarters of the
+> chunk-invariant cost — not the cost itself. The chunk-invariant cost is **~94 ms** (whole-model
+> affine fit over 2048–8192: 94.2 ms; independent per-op fit: 105–113 ms). The `rms_norm` row
+> above, 24 ms, is confirmed directly by the per-op fit at **24.3 ms**. The 2.16x / 1.99x / 2.09x
+> results are measured from per-chunk device times and do not depend on either figure.
 
 ### Effect 2 — the prefix attention wastes 71% of the grid at chunk 2048 (1.99x)
 
@@ -107,7 +116,7 @@ on this path**. The "why" came from causal ablations.
 | 6 | **Off-model microbenchmarks** — standalone single-device scripts | that `rms_norm` is width-bound and precision-insensitive; that the in-model matmul config already beats a default | iterates in seconds instead of minutes |
 | 7 | **Reading the op's source** | the work-unit math `div_up(B·NH·num_q_chunks, num_cores)`, and that idle cores are not skipped | `ring_joint_sdpa_program_factory.cpp` |
 
-**Cross-validation was the point.** The ~70 ms floor was reached three independent ways
+**Cross-validation was the point.** The floor was reached three independent ways
 (whole-model fit, layer-count differencing, per-op summation) agreeing to **0.3%**. "The prefix
 term is 100% global layers" was confirmed three ways (depth curves, per-op capture, layer-count
 differencing) agreeing to **0.6–3.4%**.
@@ -142,6 +151,7 @@ HiFi2 (PCC 0.99967 vs 0.99965) for **1.755x** the prefix cost.
 
 | file | contents |
 |---|---|
+| [`PER_OP_TABLES.md`](PER_OP_TABLES.md) | **`tt-perf-report` per-op tables**, chunk 2048/4096/8192 side by side, at chunk index 0 and at a matched prior context of 49152 tokens. Confirms per-op that exactly one op grows with context and that the sliding layer is flat to 0.8%. Includes the corrected commands and two profiler-column traps |
 | [`CHUNK_SIZE_ANATOMY.md`](CHUNK_SIZE_ANATOMY.md) | the full record: every measurement, per-op tables, the occupancy model, the ablations, both retractions, method traps, reproduction commands |
 | [`NEXT_SESSION.md`](NEXT_SESSION.md) | handoff: what is solid, what is still open, the traps, the diagnostics to re-apply |
 | analysis scripts — **not in-tree**, they live in `~/debug-docs/gemma4_chunk_size_anatomy-noissue/scripts/` (private repo `kmabeeTT/debug-docs`) | 20 scripts and runners — `why_2x.py` (the two-term split), `occupancy_model.py`, `parse_nlayers.py` (layer differencing), `floor_ops.py` (per-op), `fit_e2e.py`, `micro_*.py` |
