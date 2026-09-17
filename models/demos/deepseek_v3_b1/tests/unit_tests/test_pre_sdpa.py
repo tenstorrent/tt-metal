@@ -31,6 +31,8 @@ from models.demos.deepseek_v3_b1.weights.transforms.attention import (
     fuse_q_ab_kv_a,
 )
 
+NUM_DEVICES = 8
+
 
 def test_get_device_mla_work_assignment():
     """Unit tests for get_device_mla_work_assignment, covering the key SP scenarios.
@@ -215,6 +217,7 @@ def test_get_device_mla_work_assignment():
 )
 @pytest.mark.parametrize("noc_mode", [ttnn.NOC_MODE.DM_DYNAMIC_NOC])
 @pytest.mark.requires_grid_size((13, 10))
+@pytest.mark.requires_num_devices(NUM_DEVICES)
 def test_pre_sdpa(
     bh_2d_mesh_device,
     mesh_rows,
