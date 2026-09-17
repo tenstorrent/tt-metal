@@ -2326,3 +2326,88 @@ wrong line" finding. Ship it on those terms or hold it back; do not ship it as m
 * The rebase of the eval submodule onto its main, and with it the `perf_shim` / `op_window`
   reconciliation.
 * Naming for the successor op — deferred.
+
+---
+
+## 4m. The Gemma-4-12B regression — what it is, what it is not, and what the pipeline must learn (2026-09-17)
+
+*Follows 4l.8. Everything below is measured on this box (4× p150b, same board and harvesting as
+`bh_quietbox_2`, so the 1×4 mesh run reproduces CI to every digit: 0.8971450092151074).*
+
+### 4m.1 Localisation — settled by bisection, no theory
+
+| block norms | per-head q/k/v norms | full-model PCC |
+|---|---|---|
+| generated | generated | **0.897** (fails) |
+| native | generated | 0.878 |
+| generated | **native** | **0.9836** — better than all-native |
+| native | native | 0.9728 |
+
+The 193 block-norm calls are **not** the problem — they improve the model. The 144 per-head
+q/k/v calls (`attention/operations.py:150,152`, shape `[1,1,heads×S,256]`, plain interleaved,
+`v` without gamma) carry all of it. Within them: q/k alone 0.971, v alone 0.978, any 6-layer
+quarter 0.977–0.986, layers 0–23 0.900 — **super-additive**, no single call or region.
+
+### 4m.2 What it is NOT — each excluded by a matched control
+
+* Not a buffer/side-effect: copying the output to a fresh buffer → 0.897 unchanged; a device
+  sync after each call → unchanged; program cache off → unchanged; watcher clean, PCC
+  bit-identical under it. **The returned values, and only they, carry the damage.**
+* Not the mesh: all four devices correct with distinct data.
+* Not padding, dtype, layout, memory config: identical to native.
+* Not the compute config: byte-identical defaults `{HiFi4, approx=True, fp32_acc=False}`; an
+  explicit config equal to the default reproduces 0.897 exactly.
+* Not the rsqrt: same `_calculate_sqrt_body_<APPROX, RECIPROCAL, FAST_APPROX=false>`, same
+  `APPROX` and `DST_ACCUM_MODE` from the same JIT descriptors, same bf16 convert.
+* Not a test cliff: native passes under fp32 acc (0.983), no-approx (0.973), HiFi2 (0.987).
+* Not the compounding of a benign per-call error: per-element error against fp64 is equal
+  (gen 4.0e-3 / nat 4.1e-3 median over 144 calls); random per-element noise of that size
+  injected into native → 0.980; twice it → 0.948; zero-mean per-row coherent 0.2 % → 0.986,
+  0.8 % → 0.901; one-sided +1 ulp on 40 %/70 % of rows → 0.986/0.984. **None reach 0.897.**
+
+### 4m.3 What IS measurably different — and still does not explain it
+
+Replaying both ops on the real dumped q/k/v inputs (bf16-ulp level, against fp64):
+
+* 78–94 % of the gen–nat difference is the **per-row scale** (the rsqrt), and the generated
+  op's scale is **biased upward**: k +0.72 ulp with 97 % of rows ≥ 0 (native −0.003, 88 % ≤ 0);
+  v +0.45 (native −0.06). One-sided ⇒ truncation-like. `fp32_dest_acc_en=True` removes it
+  (+0.07). The bias is flat across widths 1–64 tiles (+0.25…+0.58) while native's drifts to
+  **−1.5 ulp at 64 tiles** — native is worse on wide rows, which is why the generated block
+  norms score better.
+* But transplanting that bias class onto native does not reproduce the failure, and per-token
+  structure is flat (every token +0.7 on k). **A real, previously invisible defect of the
+  generated op; not the cause of this regression.**
+* Partial transplants of gen−nat onto native are **invalid through bf16**: a sub-ulp change
+  rounds back to the original value. Both "row-scale only" and "residual only" collapsed to
+  ≈baseline (0.967, 0.973). Only whole bf16 values survive; element mixing of the two real
+  outputs is the faithful tool (running, 4m.5).
+
+### 4m.4 What the pipeline must learn — independent of the final element-level answer
+
+1. **A per-call correctness gate is blind to this class by construction.** 23,500 golden
+   cells, 416 reference cases, 140 traced configs, PCC/L2/max-rel/scale/bias — every one
+   measured the op in isolation and every one passed. The only detector was a whole-model
+   test with a token-level check. For an op that replaces a production symbol, **the model
+   e2e entries are the gate, not evidence** (4k.8, 4k.12 said "backstop"; upgrade it).
+2. **"Statistically equivalent to native" is not "safe to substitute."** The generated output
+   is indistinguishable from native's by every isolated statistic, yet 3× more harmful than
+   random noise of its own magnitude to a softmax consumer. The pipeline needs a
+   **consumer-differential test**: run the op's output through the downstream primitive it
+   feeds (here q·kᵀ → softmax) and compare against native *there*, not at the op boundary.
+3. **Signed error is a required metric.** The +0.5-ulp one-sided row-scale bias is a genuine
+   defect the suite cannot express — all its tolerances are magnitudes. Add a sign test on the
+   per-row statistic against an exact reference (native itself would fail it on wide rows;
+   the standard is *unbiased vs exact*, not *matches native*).
+4. **Precision decisions were made by perf agents under a PCC gate.** `ReduceFp32Mode::Fast`,
+   hand-written SFPU finalizers, chunked accumulation — each measured "correct" by PCC. A
+   PCC gate cannot see rounding direction; those refinements must be gated on 3.
+5. **Perturbation experiments through bf16 mislead.** Four of my injections were silent
+   no-ops (×1.002, ×1.004, ×(1+2⁻⁸) round to 1.0; a replicated-from-device-0 injection on a
+   TP-sharded tensor gave 0.147 with zero noise). Every injection needs a zero-magnitude
+   control that returns the exact baseline digits before its result means anything.
+
+### 4m.5 Open at the time of writing
+
+Element-mixing runs (`where(mask, gen, nat)`: random 50 %, channel half, high-dynamic-range
+rows) — the quantization-free bisection over the difference set. Result appended below.
