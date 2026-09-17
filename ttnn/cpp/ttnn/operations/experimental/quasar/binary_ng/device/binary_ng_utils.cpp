@@ -938,7 +938,8 @@ const NativeTuning& native_tuning() {
         // would have no protective value and would kill the fallback reference arm on any arch.
         if (!t.enabled) {
             const bool any_knob_set = t.implicit_sync || t.entries_per_thread != 2 || t.reader_threads != 1 ||
-                                      t.compute_threads != 1 || t.writer_threads != 1;
+                                      t.compute_threads != 1 || t.writer_threads != 1 || t.tiles_per_cycle != 0 ||
+                                      t.dm_batch != 1;
             if (any_knob_set) {
                 log_warning(
                     tt::LogOp,
@@ -970,13 +971,14 @@ const NativeTuning& native_tuning() {
         // number.
         log_info(
             tt::LogOp,
-            "binary_ng Quasar-native ENABLED: R={} C={} W={} entries_per_thread={} tiles_per_cycle={}. "
-            "Sync is EXPLICIT.",
+            "binary_ng Quasar-native ENABLED: R={} C={} W={} entries_per_thread={} tiles_per_cycle={} "
+            "dm_batch={}. Sync is EXPLICIT.",
             t.reader_threads,
             t.compute_threads,
             t.writer_threads,
             t.entries_per_thread,
-            t.tiles_per_cycle);
+            t.tiles_per_cycle,
+            t.dm_batch);
         return t;
     }();
     return tuning;

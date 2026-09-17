@@ -301,3 +301,51 @@ def test_native_uneven_tile_counts_multithread(rcw):
     src = _ARM_SRC.format(rcw=repr(tuple(rcw)), tile_counts=repr(_RAGGED_TILE_COUNTS))
     p = subprocess.run([sys.executable, "-c", src], env=env, capture_output=True, text=True, timeout=3600)
     assert p.returncode == 0, f"arm R={rcw[0]} C={rcw[1]} W={rcw[2]} failed:\n{p.stdout}\n{p.stderr[-2000:]}"
+
+
+# --- Dataflow batching above one tile counter per role ---------------------------------------------
+#
+# A DM role that owns several tile counters batches WITHIN each counter and rotates BETWEEN them. Counter
+# c holds the tiles from thread_id + c*num_threads spaced num_tcs*num_threads apart, so a batch drawn
+# from one counter strides by that product. That mapping is the DFB's producer/consumer pairing as
+# implemented today, not a documented contract. If the pairing changes upstream, nothing else in the
+# tree notices: the output silently permutes, or a counter is asked for tiles it is never credited and
+# the writer blocks forever. This test is what would notice.
+#
+# Per-cluster tile counts on the 32-cluster grid are tiles/32, then split over a role's counters. At 1
+# and 3 some counters draw nothing (zero-work threads); at 9 every counter gets one short batch and
+# none a full one; at 41 counter 0 gets one full batch of 8 plus a tail; at 65 counter 0 gets two full
+# batches, the ring wraps at slot 16, and a tail of one follows.
+_DM_BATCH_TILE_COUNTS = [32, 96, 288, 1312, 2080]
+
+# Reader owns C/R counters and the writer C/W. 4,4,2 is the shipping thread split with the writer on
+# two counters; 1,4,1 puts both roles on four. Together they cover every counter count the walk has
+# to rotate through.
+_DM_BATCH_ARMS = [(4, 4, 2), (1, 4, 1)]
+
+
+@pytest.mark.skipif(not _native_enabled(), reason="native factory not enabled (TTNN_QSR_NATIVE)")
+@pytest.mark.parametrize("rcw", _DM_BATCH_ARMS, ids=lambda t: "R{}C{}W{}".format(*t))
+def test_native_dm_batch_above_one_counter_is_bit_exact(rcw):
+    """dm_batch=8 on a role that owns more than one tile counter must stay bit-exact.
+
+    Depth 16 is the smallest legal depth: a batch occupies n consecutive slots and the ring wraps only
+    afterwards, so the factory demands entries_per_thread >= 2n and entries_per_thread % n == 0.
+
+    One process per arm, as above. The timeout is the failure detector for a broken pairing: a counter
+    asked for more tiles than it receives hangs rather than corrupts. TILES_PER_CYCLE is dropped from
+    the inherited env so a shell that set it cannot turn this into a compute-batching run.
+    """
+    env = {
+        **os.environ,
+        "TTNN_QSR_NATIVE": "1",
+        "TTNN_QSR_READER_THREADS": str(rcw[0]),
+        "TTNN_QSR_COMPUTE_THREADS": str(rcw[1]),
+        "TTNN_QSR_WRITER_THREADS": str(rcw[2]),
+        "TTNN_QSR_DM_BATCH": "8",
+        "TTNN_QSR_ENTRIES_PER_THREAD": "16",
+    }
+    env.pop("TTNN_QSR_TILES_PER_CYCLE", None)
+    src = _ARM_SRC.format(rcw=repr(tuple(rcw)), tile_counts=repr(_DM_BATCH_TILE_COUNTS))
+    p = subprocess.run([sys.executable, "-c", src], env=env, capture_output=True, text=True, timeout=600)
+    assert p.returncode == 0, f"dm_batch=8 arm R={rcw[0]} C={rcw[1]} W={rcw[2]} failed:\n{p.stdout}\n{p.stderr[-2000:]}"

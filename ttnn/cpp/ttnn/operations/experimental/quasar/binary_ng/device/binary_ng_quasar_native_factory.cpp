@@ -580,7 +580,7 @@ ProgramArtifacts create_no_bcast_artifacts(
         num_tiles_per_cycle = std::min<uint32_t>(is_sfpu ? 2u : 8u, c_full_shard_tiles);
     }
     // EXPERIMENTAL (TTNN_QSR_TILES_PER_CYCLE): reach the batched path on interleaved operands, which the
-    // all_borrowed branch above cannot. Capacity is the hard bound -- wait_front(n) never completes if n
+    // all_borrowed branch above cannot. Capacity is one hard bound -- wait_front(n) never completes if n
     // exceeds it -- so check it here rather than letting the op hang.
     if (t.tiles_per_cycle != 0) {
         num_tiles_per_cycle = t.tiles_per_cycle;
@@ -590,6 +590,11 @@ ProgramArtifacts create_no_bcast_artifacts(
             num_tiles_per_cycle,
             2 * num_tiles_per_cycle,
             t.entries_per_thread);
+        TT_FATAL(
+            t.entries_per_thread % num_tiles_per_cycle == 0,
+            "TTNN_QSR_TILES_PER_CYCLE={} must divide TTNN_QSR_ENTRIES_PER_THREAD={}, or a batch straddles the ring end",
+            num_tiles_per_cycle,
+            t.entries_per_thread);
     }
     // Same capacity rule for the dataflow side: reserve_back(n) / wait_front(n) cannot complete if n
     // exceeds per-thread capacity, which is entries_per_thread for these rings.
@@ -598,6 +603,14 @@ ProgramArtifacts create_no_bcast_artifacts(
         "TTNN_QSR_DM_BATCH={} needs TTNN_QSR_ENTRIES_PER_THREAD >= {} for double buffering, got {}",
         t.dm_batch,
         2 * t.dm_batch,
+        t.entries_per_thread);
+    // A batch occupies n consecutive slots from the write pointer and the ring wraps only AFTER the
+    // batch, so a batch that straddles the counter's end writes past it. The per-thread depth must be
+    // a multiple of the batch size to keep every batch inside the counter.
+    TT_FATAL(
+        t.entries_per_thread % t.dm_batch == 0,
+        "TTNN_QSR_DM_BATCH={} must divide TTNN_QSR_ENTRIES_PER_THREAD={}, or a batch straddles the ring end",
+        t.dm_batch,
         t.entries_per_thread);
 
     // --- DFB names. compute uses pre_lhs/pre_rhs/out (+post_lhs/post_rhs when activations); reader/
@@ -696,15 +709,24 @@ ProgramArtifacts create_no_bcast_artifacts(
         num_tiles_per_cycle,
         in_producers_consumers,
         out_producers_consumers);
-    // The dataflow side is a different constraint, not the same one: push_back(n) credits ONE tile
-    // counter and rotates tc_idx once, and a DM kernel can address only the active counter -- so a
-    // batching DM role must own exactly one, which is C <= R for the reader and C <= W for the writer.
+    // Tile counters each DM role round-robins, mirroring dataflow_buffer.cpp's num_tcs_to_rr: the
+    // reader produces into the in DFB and the writer consumes from the out DFB, so each owns the
+    // ratio when compute is the wider side. The kernels need it to stride a batch within one counter.
+    const uint32_t reader_num_tcs = t.compute_threads >= t.reader_threads ? t.compute_threads / t.reader_threads : 1u;
+    const uint32_t writer_num_tcs = t.compute_threads >= t.writer_threads ? t.compute_threads / t.writer_threads : 1u;
+    // The counter-major walk assumes counter c of a role feeds lane thread_id + c*num_threads. That is
+    // the DFB's producer/consumer pairing today, not a documented contract, and it needs an integer
+    // ratio when compute is the wider side. State it here in our knobs' terms.
     TT_FATAL(
-        t.dm_batch == 1 || (t.compute_threads <= t.reader_threads && t.compute_threads <= t.writer_threads),
-        "binary_ng Quasar-native: TTNN_QSR_DM_BATCH {} > 1 requires one tile counter per batching DM "
-        "role, i.e. C <= R and C <= W (R={}, C={}, W={})",
-        t.dm_batch,
-        t.reader_threads,
+        t.compute_threads < t.reader_threads || t.compute_threads % t.reader_threads == 0,
+        "binary_ng Quasar-native: TTNN_QSR_COMPUTE_THREADS={} must be a multiple of TTNN_QSR_READER_THREADS={} "
+        "for the reader's counter-major walk",
+        t.compute_threads,
+        t.reader_threads);
+    TT_FATAL(
+        t.compute_threads < t.writer_threads || t.compute_threads % t.writer_threads == 0,
+        "binary_ng Quasar-native: TTNN_QSR_COMPUTE_THREADS={} must be a multiple of TTNN_QSR_WRITER_THREADS={} "
+        "for the writer's counter-major walk",
         t.compute_threads,
         t.writer_threads);
 
@@ -889,7 +911,7 @@ ProgramArtifacts create_no_bcast_artifacts(
         .compiler_options = {.defines = reader_defines_tbl},
         .dfb_bindings = reader_dfb_bindings,
         .tensor_bindings = reader_tensor_bindings,
-        .compile_time_args = {{"dm_batch", t.dm_batch}},
+        .compile_time_args = {{"dm_batch", t.dm_batch}, {"num_tcs", reader_num_tcs}},
         .runtime_arg_schema =
             {.runtime_arg_names =
                  {"start_tile_id",
@@ -938,7 +960,7 @@ ProgramArtifacts create_no_bcast_artifacts(
         .compiler_options = {.defines = writer_defines_tbl},
         .dfb_bindings = writer_dfb_bindings,
         .tensor_bindings = writer_tensor_bindings,
-        .compile_time_args = {{"dm_batch", t.dm_batch}},
+        .compile_time_args = {{"dm_batch", t.dm_batch}, {"num_tcs", writer_num_tcs}},
         .runtime_arg_schema = {.runtime_arg_names = writer_rt_names},
         .hw_config =
             ttnn::create_writer_datamovement_config(a.device()->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
