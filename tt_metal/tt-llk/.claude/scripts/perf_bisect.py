@@ -92,7 +92,7 @@ def save_state(path, state):
 # --- dispatching ------------------------------------------------------------
 
 
-def dispatch_inputs(sha):
+def dispatch_inputs(sha, arch="blackhole"):
     """The dispatch inputs this commit's workflow actually declares.
 
     The form has grown over time — `upload-to-warehouse` and `pipeline` are
@@ -106,7 +106,7 @@ def dispatch_inputs(sha):
     declared = set((on.get("workflow_dispatch") or {}).get("inputs") or {})
 
     wanted = {
-        "architecture": "blackhole",
+        "architecture": arch,
         "speed-of-light": "false",
         "upload-to-warehouse": "false",
         "pipeline": "",
@@ -121,6 +121,8 @@ RUNNER_SCRIPTS = [
 
 
 PYTEST_INI = "tt_metal/tt-llk/tests/python_tests/pytest.ini"
+PERF_CORE = "tt_metal/tt-llk/tests/python_tests/helpers/perf/core.py"
+PROFILER = "tt_metal/tt-llk/tests/python_tests/helpers/profiler.py"
 
 
 def patch_maxschedchunk(body, value):
@@ -131,6 +133,47 @@ def patch_maxschedchunk(body, value):
     if not n:
         raise RuntimeError("no --maxschedchunk in pytest.ini to patch")
     return new
+
+
+def patch_run_count(sha, count, env):
+    """Measure each point `count` times and also record the minimum.
+
+    Two one-line changes. core.run() takes its repeat count from the
+    environment so the runner can set it without touching every call site,
+    and the stats aggregation gains min() alongside mean() and std() so one
+    run yields both views of the same executions.
+    """
+    for path, old, new in (
+        (
+            PERF_CORE,
+            "def run(self, perf_report: PerfReport, run_count=1):",
+            "def run(self, perf_report: PerfReport, run_count=None):\n"
+            '        run_count = run_count or int(os.environ.get("PERF_RUN_COUNT", "1"))',
+        ),
+        (
+            PROFILER,
+            '.agg(["mean", "std"])',
+            '.agg(["mean", "std", "min"])',
+        ),
+    ):
+        body = git("show", f"{sha}:{path}")
+        if old not in body:
+            raise RuntimeError(f"{path}: cannot find the line to patch")
+        blob = subprocess.run(
+            ["git", "hash-object", "-w", "--stdin"],
+            input=body.replace(old, new, 1),
+            text=True,
+            capture_output=True,
+            check=True,
+        ).stdout.strip()
+        mode = git("ls-tree", sha, "--", path).split()[0]
+        subprocess.run(
+            ["git", "update-index", "--cacheinfo", f"{mode},{blob},{path}"],
+            env=env,
+            check=True,
+            capture_output=True,
+        )
+    return f"run_count={count}, min() recorded"
 
 
 def apply_commit_files(sha, apply_ref, env):
@@ -168,7 +211,13 @@ def apply_commit_files(sha, apply_ref, env):
 
 
 def patch_runner(
-    body, *, workers=None, test_filter=None, split_into=None, slice_group=1
+    body,
+    *,
+    workers=None,
+    test_filter=None,
+    split_into=None,
+    slice_group=1,
+    run_count=None,
 ):
     """Reshape one perf runner script for a controlled experiment.
 
@@ -180,6 +229,12 @@ def patch_runner(
     """
     import re
 
+    if run_count is not None:
+        body = body.replace(
+            "mkdir -p perf_data",
+            f"export PERF_RUN_COUNT={run_count}\nmkdir -p perf_data",
+            1,
+        )
     if workers is not None:
         body = re.sub(r"-n \d+", f"-n {workers}", body)
     if test_filter is not None:
@@ -203,7 +258,9 @@ def patch_runner(
     return body
 
 
-def force_non_sol(sha, maxschedchunk=None, apply_ref=None, runner_opts=None):
+def force_non_sol(
+    sha, maxschedchunk=None, apply_ref=None, runner_opts=None, run_count=None
+):
     """A commit on top of `sha` whose perf runners measure with SoL off.
 
     Speed of light cannot be turned off from a dispatch on older commits: before
@@ -220,6 +277,10 @@ def force_non_sol(sha, maxschedchunk=None, apply_ref=None, runner_opts=None):
     subprocess.run(["git", "read-tree", sha], env=env, check=True, capture_output=True)
 
     how = {}
+    if run_count is None and runner_opts:
+        run_count = runner_opts.get("run_count")
+    if run_count is not None:
+        how["run_count"] = patch_run_count(sha, run_count, env)
     if apply_ref:
         how["apply"] = apply_commit_files(sha, apply_ref, env)
     if maxschedchunk is not None:
@@ -318,6 +379,7 @@ def runner_opts_of(args):
         "workers": getattr(args, "workers", None),
         "test_filter": getattr(args, "test_filter", None),
         "split_into": getattr(args, "split_into", None),
+        "run_count": getattr(args, "run_count", None),
     }
     if not any(v is not None for v in opts.values()):
         return None
@@ -332,10 +394,14 @@ def variant_key(sha, args):
         key += f"+{short(git('rev-parse', args.apply))}"
     if getattr(args, "maxschedchunk", None) is not None:
         key += f"+chunk{args.maxschedchunk}"
+    arch = getattr(args, "arch", None)
+    if arch and arch != "blackhole":
+        key += f"+{arch[:2]}"
     for name, tag in (
         ("workers", "n"),
         ("split_into", "s"),
         ("slice_group", "g"),
+        ("run_count", "rc"),
         ("test_filter", "k"),
     ):
         v = getattr(args, name, None)
@@ -345,7 +411,9 @@ def variant_key(sha, args):
     return key
 
 
-def push_branch(sha, index, maxschedchunk=None, apply_ref=None, runner_opts=None):
+def push_branch(
+    sha, index, maxschedchunk=None, apply_ref=None, runner_opts=None, arch=None
+):
     """One branch per run, because the workflow cancels its own concurrency group.
 
     llk-perf.yaml sets `group: <workflow>-<arch>-<github.ref>` with
@@ -354,6 +422,8 @@ def push_branch(sha, index, maxschedchunk=None, apply_ref=None, runner_opts=None
     different group, and the two runs proceed in parallel.
     """
     suffix = "" if maxschedchunk is None else f"-c{maxschedchunk}"
+    if arch and arch != "blackhole":
+        suffix = f"-{arch[:2]}{suffix}"
     if apply_ref:
         suffix = f"-{short(git('rev-parse', apply_ref))[:7]}{suffix}"
     if runner_opts:
@@ -362,6 +432,7 @@ def push_branch(sha, index, maxschedchunk=None, apply_ref=None, runner_opts=None
             ("n", "workers"),
             ("s", "split_into"),
             ("g", "slice_group"),
+            ("rc", "run_count"),
         ):
             if runner_opts.get(key) is not None:
                 suffix += f"-{tag}{runner_opts[key]}"
@@ -392,7 +463,7 @@ def runs_on(branch):
 
 def start_runs(sha, count, args_ns=None):
     """Dispatch one run per branch and return their ids."""
-    inputs = dispatch_inputs(sha)
+    inputs = dispatch_inputs(sha, getattr(args_ns, "arch", None) or "blackhole")
     print(f"  dispatch inputs: {inputs}")
     ids = []
     for i in range(1, count + 1):
@@ -402,6 +473,7 @@ def start_runs(sha, count, args_ns=None):
             getattr(args_ns, "maxschedchunk", None),
             getattr(args_ns, "apply", None),
             runner_opts_of(args_ns) if args_ns else None,
+            getattr(args_ns, "arch", None) if args_ns else None,
         )
         before = {r["databaseId"] for r in runs_on(branch)}
         args = ["gh", "workflow", "run", WORKFLOW, "--repo", REPO, "--ref", branch]
@@ -623,7 +695,9 @@ def measure(sha, args, state):
         commit=sha,
         subject=subject,
         run_ids=run_ids,
-        dispatch_inputs=dispatch_inputs(sha),
+        dispatch_inputs=dispatch_inputs(
+            sha, getattr(args, "arch", None) or "blackhole"
+        ),
     )
 
     verdict = "UNSTABLE" if result["fires"] else "stable"
@@ -765,6 +839,17 @@ def main(argv=None):
         type=int,
         help="replace the shard split; group 1 runs that slice and every other "
         "group exits, so one card runs one sequence",
+    )
+    ap.add_argument(
+        "--run-count",
+        type=int,
+        help="measure each point this many times in one run and record min() beside mean(). Interference from neighbouring cores can only add cycles, so min is the aggregation that should survive it",
+    )
+    ap.add_argument(
+        "--arch",
+        default="blackhole",
+        choices=("blackhole", "wormhole"),
+        help="which architecture to measure. Everything so far is Blackhole; #53763 measured Wormhole as noisier on a single card, so whether the chunk effect is arch-specific is an open question",
     )
     ap.add_argument(
         "--slice-group",
