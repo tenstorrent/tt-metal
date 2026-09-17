@@ -9,6 +9,7 @@
 #include <vector>
 
 #include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/mesh_coord.hpp>
 
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
