@@ -42,13 +42,32 @@ std::optional<UntilizePlan> plan_untilize(
     uint32_t sem_addr,
     tt::tt_metal::Buffer* staging);
 
-// The pool that turns a TILE input into staging: every core of the op's universe no stream took, each
+// Untilizers per link, a link being its two streams. Five keeps ten of them on 20 stripes at the
+// production shape (seq 640, emb 7168) with the stream readers' `dspf2d_wait_untilize` zone at zero;
+// that zone rising off zero is the signal this is too low, and it is the only one.
+constexpr uint32_t UNTILIZERS_PER_LINK = 5;
+
+// Where the pool ended up relative to where it is designed to be.
+enum class UntilizerPoolFallback : uint8_t {
+    kNone,          // all of it in the row under the streams
+    kNoRowBelow,    // the carve has no row under the streams; the pool shares their row
+    kRowTooNarrow,  // the row exists but has fewer spare cores than the pool wants
+};
+
+// The pool that turns a TILE input into staging: a bounded subset of the universe's spare cores, each
 // running a reader / pack_untilize / writer trio over its round-robin share of the stripes.
+//
+// UNTILIZERS_PER_LINK per link, capped at one per stripe, in the row directly under the streams and
+// spread across the streams' columns. The streams sit in the row under the eth cores; an untilizer on
+// that same row puts its DRAM reads and staging writes on the NoC row the streams' own DRAM traffic
+// (forwarding pages, output pages, staging reads) already fills, and the row below is the closest one
+// that does not. A carve with no such row -- one row -- gets the pool drawn from whatever spare cores
+// it has, correct and slower, and the return value says so for the caller to report once per build.
 //
 // These cores run nothing else, which is what lets the untilize circular buffers take most of their
 // L1 -- and it is why the pool is drawn from the universe rather than from the grid: on the model's
 // split, everything outside it belongs to the shared expert running at the same time.
-void add_untilizer_pool(
+UntilizerPoolFallback add_untilizer_pool(
     tt::tt_metal::ProgramDescriptor& desc,
     const StreamPlacements& streams,
     const CoreRangeSet& universe,
