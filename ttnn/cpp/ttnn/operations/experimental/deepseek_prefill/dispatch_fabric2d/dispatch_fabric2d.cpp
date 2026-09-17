@@ -44,12 +44,13 @@ std::array<ttnn::Tensor, 2> dispatch_fabric2d(
         usable,
         topology);
 
-    // Every core this op may occupy. The model runs dispatch on a sub-device that is one row of the
-    // compute grid while the shared expert holds the rest, so a TILE input's untilizer pool has to be
-    // drawn from the same row rather than from wherever there is space -- and the caller says so by
-    // passing that sub-device, exactly as it does to the sibling `dispatch`. Defaulting to the first
-    // sub-device means no sub-device manager loaded gives the whole grid, which is what a standalone
-    // caller wants and what a test gets.
+    // Every core this op may occupy: the caller's carve, exactly as for the sibling `dispatch`. The
+    // streams take the row under their eth cores and a TILE input's untilizer pool wants the row under
+    // that, so a carve that gives the op two rows gets the placement the tiled input is designed for;
+    // a one-row carve -- the model's while the shared expert holds the rest of the grid -- runs
+    // correctly with the pool on the streams' row, and the program factory says so once per build.
+    // Defaulting to the first sub-device means no sub-device manager loaded gives the whole grid,
+    // which is what a standalone caller wants and what a test gets.
     auto* mesh_device = input_tensor.device();
     const auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
     const tt::tt_metal::CoreRangeSet universe =
