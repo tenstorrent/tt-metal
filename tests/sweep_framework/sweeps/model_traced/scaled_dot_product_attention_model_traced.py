@@ -9,6 +9,7 @@ import torch
 
 import ttnn
 from models.common.utility_functions import torch_random
+from ttnn.operations.sdpa_reference import sdpa_reference
 
 # Import master config loader for traced model configurations
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
@@ -465,12 +466,11 @@ def run(
         allowed = (kj <= qi) & (kj > qi - int(_sw))
         torch_attn_mask = torch.where(allowed, 0.0, float("-inf")).to(torch.float32)
         _golden_causal = False
-    torch_output_golden = torch.nn.functional.scaled_dot_product_attention(
+    torch_output_golden = sdpa_reference(
         torch_q_golden,
         torch_k_golden,
         torch_v_golden,
         attn_mask=torch_attn_mask,
-        dropout_p=0.0,
         is_causal=_golden_causal,
         scale=_scale,
     )

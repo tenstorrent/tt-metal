@@ -14,6 +14,7 @@ from loguru import logger
 import pytest
 import math
 import numpy as np
+from ttnn.operations.sdpa_reference import sdpa_reference
 
 
 def is_watcher_enabled():
@@ -27,7 +28,6 @@ def nearest_n(x, n):
 def nearest_pow_2(x):
     if x < 1:
         raise ValueError("x must be >= 1")
-    import math
 
     power = math.ceil(math.log2(x))
     return 1 << power
@@ -316,17 +316,11 @@ def run_test_sdpa_decode_multi_pos(
 
         Q_slice = Q[:, :, :nh, :].permute(1, 2, 0, 3)  # b, nh, 1, d
         K_slice = K[:, :, :padded_layer_len, :]  # b, nkv, S, d
-        K_slice = torch.cat(
-            [K_slice[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1
-        )  # b, nh, S, d
         V_slice = V[:, :, :padded_layer_len, :]  # b, nkv, S, d
-        V_slice = torch.cat(
-            [V_slice[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1
-        )  # b, nh, S, d
         attn_mask_slice = attn_mask[:, :nh, :, :]  # b, nh, 1, S
 
-        expect = torch.nn.functional.scaled_dot_product_attention(
-            Q_slice, K_slice, V_slice, attn_mask_slice, scale=scale, is_causal=False
+        expect = sdpa_reference(
+            Q_slice, K_slice, V_slice, attn_mask=attn_mask_slice, scale=scale, is_causal=False
         )  # b, nh, 1, d
         expect = expect.squeeze(2).unsqueeze(0)
 
@@ -521,16 +515,10 @@ def run_test_sdpa_decode_single_iter(
 
     Q_slice = Q[:, :, :nh, :].permute(1, 2, 0, 3)  # b, nh, 1, d
     K_slice = K[:, :, :padded_layer_len, :]  # b, nkv, S, d
-    K_slice = torch.cat(
-        [K_slice[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1
-    )  # b, nh, S, d
     V_slice = V[:, :, :padded_layer_len, :]  # b, nkv, S, d
-    V_slice = torch.cat(
-        [V_slice[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1
-    )  # b, nh, S, d
     attn_mask_slice = attn_mask[:, :nh, :, :]  # b, nh, 1, S
-    expect = torch.nn.functional.scaled_dot_product_attention(
-        Q_slice, K_slice, V_slice, attn_mask_slice, scale=scale, is_causal=False
+    expect = sdpa_reference(
+        Q_slice, K_slice, V_slice, attn_mask=attn_mask_slice, scale=scale, is_causal=False
     )  # b, nh, 1, d
     expect = expect.squeeze(2).unsqueeze(0)
 
@@ -741,17 +729,11 @@ def run_test_sdpa_decode_paged_attention(
 
         Q_slice = Q[:, :, :nh, :].permute(1, 2, 0, 3)  # b, nh, 1, d
         K_slice = K[:, :, :padded_layer_len, :]  # b, nkv, S, d
-        K_slice = torch.cat(
-            [K_slice[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1
-        )  # b, nh, S, d
         V_slice = V[:, :, :padded_layer_len, :]  # b, nkv, S, d
-        V_slice = torch.cat(
-            [V_slice[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1
-        )  # b, nh, S, d
         attn_mask_slice = attn_mask[:, :nh, :, :]  # b, nh, 1, S
 
-        expect = torch.nn.functional.scaled_dot_product_attention(
-            Q_slice, K_slice, V_slice, attn_mask_slice, scale=scale, is_causal=False
+        expect = sdpa_reference(
+            Q_slice, K_slice, V_slice, attn_mask=attn_mask_slice, scale=scale, is_causal=False
         )  # b, nh, 1, d
         expect = expect.squeeze(2).unsqueeze(0)
 
@@ -968,13 +950,7 @@ def run_test_sdpa_decode_paged_attention_single_iter(
 
     Q_slice = Q[:, :, :nh, :].permute(1, 2, 0, 3)  # b, nh, 1, d
     K_slice = K[:, :, :padded_layer_len, :]  # b, nkv, S, d
-    K_slice = torch.cat(
-        [K_slice[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1
-    )  # b, nh, S, d
     V_slice = V[:, :, :padded_layer_len, :]  # b, nkv, S, d
-    V_slice = torch.cat(
-        [V_slice[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1
-    )  # b, nh, S, d
 
     attn_mask = torch.zeros((b, padded_num_heads, 1, padded_layer_len))
     for i in range(b):
@@ -983,8 +959,8 @@ def run_test_sdpa_decode_paged_attention_single_iter(
 
     attn_mask_slice = attn_mask[:, :nh, :, :]  # b, nh, 1, S
 
-    expect = torch.nn.functional.scaled_dot_product_attention(
-        Q_slice, K_slice, V_slice, attn_mask_slice, scale=scale, is_causal=False
+    expect = sdpa_reference(
+        Q_slice, K_slice, V_slice, attn_mask=attn_mask_slice, scale=scale, is_causal=False
     )  # b, nh, 1, d
     expect = expect.squeeze(2).unsqueeze(0)
 
@@ -1052,8 +1028,8 @@ def run_test_sdpa_decode_ndpcc(device, b, nh, nkv, s, d, dtype, grid_size, q_dty
         V_slice = V[:, :, :padded_layer_len, :]
         attn_mask_slice = attn_mask[:, :, :nh, :].permute(1, 2, 0, 3)  # b, nh, 1, S
 
-        expect = torch.nn.functional.scaled_dot_product_attention(
-            Q_slice, K_slice, V_slice, attn_mask_slice, scale=scale, is_causal=False
+        expect = sdpa_reference(
+            Q_slice, K_slice, V_slice, attn_mask=attn_mask_slice, scale=scale, is_causal=False
         )  # b, nh, 1, d
         expect = expect.squeeze(2).unsqueeze(0)
 

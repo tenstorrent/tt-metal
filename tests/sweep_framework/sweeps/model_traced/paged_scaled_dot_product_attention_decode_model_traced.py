@@ -4,11 +4,13 @@
 
 
 from functools import partial
+import re
 
 import torch
 
 import ttnn
 from models.common.utility_functions import torch_random
+from ttnn.operations.sdpa_reference import golden_paged_scaled_dot_product_attention_decode
 
 # Import master config loader for traced model configurations
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
@@ -59,22 +61,19 @@ def _vector_dispatch_axis(kwargs):
     return dispatch_axis_for_grid(*program_config_grid_bounds(pc_val))
 
 
-from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, extract_named_tensor_kwargs
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import (
+    build_op_kwargs,
+    extract_named_tensor_kwargs,
+    parse_dict_value,
+)
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 
 TIMEOUT = 300
 
-# NOTE:
-# -----
-# For most ops, the model_traced suite uses real traced configurations from
-# production models plus a PyTorch/TTNN golden.  For paged SDPA decode the
-# correctness oracle is substantially more complex (see
-# tests/tt_eager/python_api_testing/unit_testing/misc/test_scaled_dot_product_attention_decode.py),
-# and we do not yet have a lightweight reference that matches all traced cases.
-# Until such a golden is implemented, we deliberately *do not* enable the
-# model_traced suite for this op to avoid claiming coverage we do not have.
-#
+# The ordinary host oracle uses the production paged-SDPA reference. The
+# device-shard readback below keeps a local adapter because it describes mesh
+# placement and packed output layout rather than attention math.
 # Load traced configurations from real model tests (V2 format)
 loader = MasterConfigLoader()
 model_traced_params = loader.get_suite_parameters("ttnn.transformer.paged_scaled_dot_product_attention_decode")
@@ -146,140 +145,6 @@ def _paged_sdpa_input_shard_axis_and_factor(placement_dict):
             axis = d
             factor *= n
     return axis, factor
-
-
-def _paged_sdpa_decode_chip_attn(
-    q_chip, k_cache_chip, v_cache_chip, page_table, cur_pos, num_users, page_size, sliding_window_size=None
-):
-    """Compute per-chip paged attention output: (B, H_q, num_users, D_chip).
-    q_chip:       (B, H_q, num_users, D_chip)
-    k_cache_chip: (num_pages, H_kv, page_size, D_chip)
-    v_cache_chip: (num_pages, H_kv, page_size, D_chip)
-    page_table:   (B_pt, max_pages) int  — shared across users (rows: user idx mod B_pt)
-    cur_pos:      shape varies; we use cur_pos[user_idx % cur_pos.numel()]
-    """
-    B, H_q, U, D = q_chip.shape
-    num_pages, H_kv, _, _ = k_cache_chip.shape
-    out = torch.zeros((B, H_q, num_users, D), dtype=torch.float32)
-    pt = page_table.long().view(page_table.shape[0], -1) if page_table.ndim >= 2 else page_table.long().view(1, -1)
-    cp = cur_pos.long().view(-1)
-    cp_max = num_pages * page_size - 1
-    for u in range(num_users):
-        cp_u = int(cp[u % cp.numel()].item()) if cp.numel() > 0 else 0
-        if cp_u < 0:
-            continue  # nothing to attend to
-        cp_u = min(cp_u, cp_max)
-        n_active = cp_u + 1
-        n_pages_active = (n_active + page_size - 1) // page_size
-        pt_row = pt[u % pt.shape[0]]
-        # Clamp page indices into [0, num_pages-1] so torch indexing stays valid
-        # for randomly-generated inputs.
-        pages = pt_row[:n_pages_active].clamp_(0, num_pages - 1)
-        k_pages = k_cache_chip[pages]  # (n_pages_active, H_kv, page_size, D)
-        v_pages = v_cache_chip[pages]
-        # Concat along sequence axis (page_size) → (H_kv, n_pages_active*page_size, D)
-        k_seq = k_pages.permute(1, 0, 2, 3).reshape(H_kv, -1, D)
-        v_seq = v_pages.permute(1, 0, 2, 3).reshape(H_kv, -1, D)
-        # Sliding-window: ttnn paged_sdpa_decode with sliding_window_size=W
-        # only attends to the last W positions before cur_pos.
-        if sliding_window_size is not None and sliding_window_size > 0:
-            start = max(0, n_active - int(sliding_window_size))
-        else:
-            start = 0
-        k_seq = k_seq[:, start:n_active, :]
-        v_seq = v_seq[:, start:n_active, :]
-        # GQA broadcast: K/V repeat to H_q heads
-        if H_kv < H_q:
-            rep = H_q // H_kv
-            k_seq = k_seq.repeat_interleave(rep, dim=0)
-            v_seq = v_seq.repeat_interleave(rep, dim=0)
-        q_u = q_chip[0, :, u, :]  # (H_q, D)
-        # Multi-head attention: when H_q != H_kv, handle GQA/MQA
-        H_k = k_seq.shape[0]
-        H_q_local = q_u.shape[0]
-        if H_q_local < H_k:
-            # MQA: each Q head attends to all K/V heads independently
-            # Expand Q to match K, compute attention, then average per Q head group
-            q_expanded = q_u.repeat_interleave(H_k // max(H_q_local, 1), dim=0)[:H_k]
-            scores = torch.einsum("hd,htd->ht", q_expanded.float(), k_seq.float()) / (D**0.5)
-            attn = torch.softmax(scores, dim=-1)
-            out_expanded = torch.einsum("ht,htd->hd", attn, v_seq.float())
-            # Reduce back: average groups of H_k/H_q heads
-            group = H_k // max(H_q_local, 1)
-            out_u = out_expanded.view(H_q_local, group, D).mean(dim=1)
-        else:
-            scores = torch.einsum("hd,htd->ht", q_u.float(), k_seq.float()) / (D**0.5)
-            attn = torch.softmax(scores, dim=-1)
-            out_u = torch.einsum("ht,htd->hd", attn, v_seq.float())
-        out[0, :, u, :] = out_u
-    return out
-
-
-def _paged_sdpa_decode_golden(
-    torch_q,
-    torch_k_cache,
-    torch_v_cache,
-    page_table,
-    cur_pos,
-    num_users,
-    padded_users,
-    factor,
-    sliding_window_size=None,
-):
-    """Slice Q/K/V on dim -1 by `factor`, run per-chip paged attention, concat on -1.
-    Returns tensor with shape (B, H_q, padded_users, D_global)."""
-    B, H_q, U, D = torch_q.shape
-    num_pages, H_kv, page_size, _ = torch_k_cache.shape
-    if factor > 1:
-        q_chunks = torch.chunk(torch_q, factor, dim=-1)
-        k_chunks = torch.chunk(torch_k_cache, factor, dim=-1)
-        v_chunks = torch.chunk(torch_v_cache, factor, dim=-1)
-    else:
-        q_chunks = (torch_q,)
-        k_chunks = (torch_k_cache,)
-        v_chunks = (torch_v_cache,)
-    per_chip = [
-        _paged_sdpa_decode_chip_attn(q, k, v, page_table, cur_pos, num_users, page_size, sliding_window_size)
-        for q, k, v in zip(q_chunks, k_chunks, v_chunks)
-    ]
-    out = torch.cat(per_chip, dim=-1)  # (B, H_q, num_users, D_global)
-    if padded_users != num_users:
-        padded = torch.zeros((B, H_q, padded_users, out.shape[-1]), dtype=out.dtype)
-        padded[:, :, :num_users, :] = out
-        return padded
-    return out
-
-
-def _batch_paged_golden(q_heads, k_chip, v_chip, page_row, pos, block, scale, sliding_window=None):
-    """Causal paged attention for ONE batch from device-resident shards.
-
-    q_heads [NQH, D]; k_chip/v_chip [num_blocks, n_kv_heads, block, D]; page_row
-    maps logical->physical pages; pos = most-recent cache index (inclusive).
-    Returns [NQH, D]. GQA/MQA: q head h attends KV head h // (NQH // n_kv_heads),
-    so the golden must NOT collapse to KV head 0 (that ignores heads 1..n_kv-1
-    and yields a wrong result for multi-KV-head configs).
-    """
-    d = q_heads.shape[-1]
-    nqh = q_heads.shape[0]
-    nkvh = k_chip.shape[1]
-    n_active = int(pos) + 1
-    n_blocks = (n_active + block - 1) // block
-    pages = page_row[:n_blocks].long().clamp_(0, k_chip.shape[0] - 1)
-    rep = max(1, nqh // max(1, nkvh))
-    out = torch.empty((nqh, d), dtype=torch.float32)
-    for h in range(nqh):
-        kvh = min(h // rep, nkvh - 1)
-        k_seq = k_chip[pages, kvh].reshape(-1, d)[:n_active].float()
-        v_seq = v_chip[pages, kvh].reshape(-1, d)[:n_active].float()
-        # Sliding-window (local) attention: the query at position pos attends to
-        # only the last `sliding_window` tokens (gemma sliding layers). Without
-        # this the golden does full attention -> wrong vs the windowed device op.
-        if sliding_window and n_active > int(sliding_window):
-            k_seq = k_seq[-int(sliding_window) :]
-            v_seq = v_seq[-int(sliding_window) :]
-        w = torch.softmax((q_heads[h].float() @ k_seq.t()) * scale, dim=-1)
-        out[h] = w @ v_seq
-    return out
 
 
 def run(
@@ -443,62 +308,6 @@ def run(
         # Best-effort fallback: at least keep values within the valid range.
         torch_input_d = torch.randint(0, max(_num_pages, 1), tuple(shape_d), dtype=torch.int32)
         torch_input_e = torch.randint(1, _seq_len_max, tuple(shape_e), dtype=torch.int32)
-
-    if len(shape_a) == 4:
-        try:
-            B_q, num_users, H_q, D = shape_a
-            num_pg, H_kv, pg_size, _ = shape_b
-            cur_p = torch_input_e.long().view(-1)
-            pt_full = torch_input_d.long()
-            if pt_full.ndim >= 2:
-                pt_full = pt_full.view(pt_full.shape[0], -1)
-            else:
-                pt_full = pt_full.view(1, -1)
-            _scale = kwargs.get("scale", D**-0.5)
-            if _scale == "__ABSENT__" or _scale is None:
-                _scale = D**-0.5
-            _scale = float(_scale)
-            _k_chunk = 256
-            _pc = kwargs.get("program_config")
-            if isinstance(_pc, dict):
-                import re as _re_pc
-
-                _kcm = _re_pc.search(r"k_chunk_size=(\d+)", str(_pc.get("value", "")))
-                if _kcm:
-                    _k_chunk = int(_kcm.group(1))
-
-            golden_out = torch.zeros(B_q, num_users, H_q, D, dtype=torch.float32)
-            for u in range(num_users):
-                cp_u = int(cur_p[u % cur_p.numel()].item()) if cur_p.numel() > 0 else 0
-                cp_u = min(max(cp_u, 0), num_pg * pg_size - 1)
-                n_active = cp_u + 1
-                padded_len = n_active
-                if _k_chunk > 0:
-                    padded_len = ((n_active + _k_chunk - 1) // _k_chunk) * _k_chunk
-                n_pages_active = (padded_len + pg_size - 1) // pg_size
-                pt_row = pt_full[u % pt_full.shape[0]]
-                max_pages = pt_row.shape[0]
-                n_pages_active = min(n_pages_active, max_pages)
-                padded_len = min(padded_len, n_pages_active * pg_size)
-                pages = pt_row[:n_pages_active].clamp(0, num_pg - 1)
-                k_pages = torch_input_b[pages].float()
-                v_pages = torch_input_c[pages].float()
-                k_seq = k_pages.permute(1, 0, 2, 3).reshape(H_kv, -1, D)[:, :padded_len, :]
-                v_seq = v_pages.permute(1, 0, 2, 3).reshape(H_kv, -1, D)[:, :padded_len, :]
-                K_exp = torch.cat([k_seq[i : i + 1].repeat(H_q // H_kv, 1, 1) for i in range(H_kv)], dim=0).unsqueeze(0)
-                V_exp = torch.cat([v_seq[i : i + 1].repeat(H_q // H_kv, 1, 1) for i in range(H_kv)], dim=0).unsqueeze(0)
-                q_u = torch_input_a[0, u : u + 1, :H_q, :].permute(1, 0, 2).unsqueeze(0).float()
-                mask = torch.zeros(1, H_q, 1, padded_len)
-                mask[:, :, :, cp_u + 1 :] = float("-inf")
-                attn_out = torch.nn.functional.scaled_dot_product_attention(
-                    q_u, K_exp, V_exp, attn_mask=mask, scale=_scale, is_causal=False
-                )
-                golden_out[0, u, :, :] = attn_out.squeeze(2)
-            torch_output_tensor = golden_out.to(torch_input_a.dtype)
-        except Exception:
-            torch_output_tensor = torch_input_a.clone()
-    else:
-        torch_output_tensor = torch_input_a.clone()
 
     # Convert to TTNN tensors
     def _is_sharded_memory_config(mc):
@@ -674,8 +483,6 @@ def run(
     if "program_config" not in op_kwargs:
         traced_pc = kwargs.get("program_config")
         if isinstance(traced_pc, dict) and traced_pc.get("type") == "SDPAProgramConfig":
-            import re
-
             val = traced_pc.get("value", "")
             # Grid is recorded either as "(x=8,y=8)" or "8-9" (a grid SIZE).
             gm = re.search(r"compute_with_storage_grid_size=\(x=(\d+),y=(\d+)\)", val) or re.search(
@@ -717,8 +524,6 @@ def run(
     # Pass memory_config from V2 vector when present (master records it).
     v2_memory_config = kwargs.get("memory_config")
     if v2_memory_config is not None and v2_memory_config != "__ABSENT__":
-        from tests.sweep_framework.sweep_utils.op_kwargs_utils import parse_dict_value
-
         op_kwargs.setdefault("memory_config", parse_dict_value("memory_config", v2_memory_config))
 
     ttnn_output = ttnn.transformer.paged_scaled_dot_product_attention_decode(
@@ -744,6 +549,7 @@ def run(
     v_dts = ttnn.get_device_tensors(tensor_c) if is_mesh_device else [tensor_c]
     pt_dts = ttnn.get_device_tensors(tensor_d) if is_mesh_device else [tensor_d]
     cp_dts = ttnn.get_device_tensors(tensor_e) if is_mesh_device else [tensor_e]
+    sink_dts = ttnn.get_device_tensors(sink_tensor) if is_mesh_device and sink_tensor is not None else [sink_tensor]
 
     o0 = ttnn.to_torch(out_dts[0])
 
@@ -771,7 +577,8 @@ def run(
     if _scale in (None, "__ABSENT__"):
         _scale = float(D) ** -0.5
     _scale = float(_scale)
-    block = ttnn.to_torch(k_dts[0]).shape[2]
+    _is_causal = op_kwargs.get("is_causal", True)
+    _sliding_window = op_kwargs.get("sliding_window_size")
 
     all_g, all_d = [], []
     for i in range(len(out_dts)):
@@ -782,18 +589,25 @@ def run(
         cp = ttnn.to_torch(cp_dts[i]).reshape(-1)
         pt = ttnn.to_torch(pt_dts[i])
         pt = pt.reshape(pt.shape[-2], -1) if pt.ndim >= 2 else pt.reshape(1, -1)
+        sink = None
+        if sink_dts[0] is not None:
+            sink = ttnn.to_torch(sink_dts[i]).reshape(-1)[:NH]
         for k in range(b_eff):
-            _sw = op_kwargs.get("sliding_window_size")
-            g = _batch_paged_golden(
-                qc[k % qc.shape[0]],
+            # The surrounding logic only adapts per-device placement and packed
+            # output layout. Attention semantics stay in the production golden.
+            page_row = pt[k % pt.shape[0]].long().clamp(0, kc.shape[0] - 1).unsqueeze(0)
+            cur_pos = cp[k % cp.numel()].reshape(1)
+            g = golden_paged_scaled_dot_product_attention_decode(
+                qc[k % qc.shape[0]].unsqueeze(0).unsqueeze(0),
                 kc,
                 vc,
-                pt[k % pt.shape[0]],
-                int(cp[k % cp.numel()].item()),
-                block,
-                _scale,
-                sliding_window=_sw,
-            )
+                page_row,
+                is_causal=_is_causal,
+                cur_pos_tensor=cur_pos,
+                attention_sink=sink,
+                scale=_scale,
+                sliding_window_size=_sliding_window,
+            )[0, 0]
             all_g.append(g)
             all_d.append(ot[0, stride * k, :NH, :].float())
     pcc = check_with_pcc(torch.stack(all_g), torch.stack(all_d), 0.99)

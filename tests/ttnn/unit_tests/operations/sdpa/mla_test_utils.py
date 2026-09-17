@@ -13,6 +13,7 @@ from models.common.utility_functions import nearest_y
 import ttnn
 from loguru import logger
 import pytest
+from ttnn.operations.sdpa_reference import sdpa_reference
 
 from models.tt_transformers.tt.common import (
     PagedAttentionConfig,
@@ -34,12 +35,15 @@ def scaled_dot_product_attention_reference(Q, K, V, start_indices, padded_layer_
 
     Q_slice = Q[:, :nh, :, :]
     K_slice = K[:, :nkv, :padded_layer_len, :]
-    K_slice = torch.cat([K_slice[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1)
     V_slice = V[:, :, :padded_layer_len, :]
-    V_slice = torch.cat([V_slice[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1)
     attn_mask_slice = attn_mask[:, :nh, :, :]
-    out = torch.nn.functional.scaled_dot_product_attention(
-        Q_slice, K_slice, V_slice, attn_mask_slice, scale=scale, is_causal=False
+    out = sdpa_reference(
+        Q_slice,
+        K_slice,
+        V_slice,
+        attn_mask=attn_mask_slice,
+        scale=scale,
+        is_causal=False,
     )
 
     return out
@@ -85,20 +89,22 @@ def scaled_dot_product_attention_reference_prefill(Q, K, V, scale, is_causal=Tru
             if is_causal and seq_start == 0 and seq_end == S:
                 # Full-sequence chunk: the square is_causal flag is exactly
                 # correct and lets PyTorch pick the fast fused kernel.
-                out = torch.nn.functional.scaled_dot_product_attention(
-                    q_chunk, k_heads, v_heads, scale=scale, is_causal=True
-                )
+                out = sdpa_reference(q_chunk, k_heads, v_heads, scale=scale, is_causal=True)
             elif is_causal:
                 # Offset Q-chunk: the square is_causal flag doesn't apply, so
                 # build the explicit causal mask for this chunk's positions.
                 q_pos = torch.arange(seq_start, seq_end).unsqueeze(1)
                 k_pos = torch.arange(seq_end).unsqueeze(0)
                 mask = (k_pos <= q_pos).unsqueeze(0).unsqueeze(0)
-                out = torch.nn.functional.scaled_dot_product_attention(
-                    q_chunk, k_heads[:, :, :seq_end], v_heads[:, :, :seq_end], attn_mask=mask, scale=scale
+                out = sdpa_reference(
+                    q_chunk,
+                    k_heads[:, :, :seq_end],
+                    v_heads[:, :, :seq_end],
+                    attn_mask=mask,
+                    scale=scale,
                 )
             else:
-                out = torch.nn.functional.scaled_dot_product_attention(q_chunk, k_heads, v_heads, scale=scale)
+                out = sdpa_reference(q_chunk, k_heads, v_heads, scale=scale)
             attn_out[:, h_start:h_end, seq_start:seq_end] = out
 
     return attn_out
