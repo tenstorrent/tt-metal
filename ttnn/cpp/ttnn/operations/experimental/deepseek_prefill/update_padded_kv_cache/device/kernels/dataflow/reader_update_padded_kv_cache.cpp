@@ -22,9 +22,9 @@
 // scalar program, which carries no metadata accessor args.
 template <bool HasMeta>
 static void run_reader() {
-    const uint32_t src_addr = get_arg_val<uint32_t>(0);  // per-core; buffers arrive as Buffer* -> addresses
-    const uint32_t num_pages = get_arg_val<uint32_t>(1);
-    const uint32_t core_blocks_written = get_arg_val<uint32_t>(2);
+    const uint32_t src_addr = get_common_arg_val<uint32_t>(8);
+    const uint32_t num_pages = get_arg_val<uint32_t>(0);
+    const uint32_t core_blocks_written = get_arg_val<uint32_t>(1);
 
     const uint32_t linear_coord = get_common_arg_val<uint32_t>(0);
     const uint32_t linear_factor = get_common_arg_val<uint32_t>(1);
