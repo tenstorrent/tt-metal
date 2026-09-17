@@ -5,11 +5,13 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/tensor/tensor_accessor.h"
+#include "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/csa_compressor/device/kernels/csa_compressor_runtime_args.hpp"
 
 void kernel_main() {
-    const uint32_t output_addr = get_arg_val<uint32_t>(0);
-    const uint32_t output_tiles = get_arg_val<uint32_t>(1);
-    const uint32_t first_output_tile = get_arg_val<uint32_t>(2);
+    namespace rt = csa_compressor::runtime_args;
+    const uint32_t output_addr = get_arg_val<uint32_t>(rt::index(rt::Writer::OutputAddress));
+    const uint32_t output_tiles = get_arg_val<uint32_t>(rt::index(rt::Writer::OutputTiles));
+    const uint32_t first_output_tile = get_arg_val<uint32_t>(rt::index(rt::Writer::FirstOutputTile));
     constexpr uint32_t pooled_cb = get_compile_time_arg_val(0);
     constexpr auto output_args = TensorAccessorArgs<1>();
 

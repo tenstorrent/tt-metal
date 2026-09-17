@@ -12,6 +12,7 @@
 #include "api/compute/eltwise_unary/recip.h"
 #include "api/compute/pack.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/csa_compressor/device/kernels/csa_compressor_runtime_args.hpp"
 
 namespace {
 
@@ -28,12 +29,13 @@ constexpr uint32_t kWeight = 2;
 }  // namespace
 
 void kernel_main() {
+    namespace rt = csa_compressor::runtime_args;
     constexpr uint32_t candidate_kv_cb = get_compile_time_arg_val(0);
     constexpr uint32_t candidate_score_cb = get_compile_time_arg_val(1);
     constexpr uint32_t pooled_cb = get_compile_time_arg_val(2);
     constexpr uint32_t ca_bias_cb = get_compile_time_arg_val(3);
     constexpr uint32_t cb_bias_cb = get_compile_time_arg_val(4);
-    const uint32_t output_tiles = get_arg_val<uint32_t>(0);
+    const uint32_t output_tiles = get_arg_val<uint32_t>(rt::index(rt::Compute::OutputTiles));
 
     compute_kernel_hw_startup(candidate_score_cb, candidate_kv_cb, pooled_cb);
     DataflowBuffer candidate_kv(candidate_kv_cb);

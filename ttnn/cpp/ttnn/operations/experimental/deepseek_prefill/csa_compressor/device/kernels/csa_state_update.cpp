@@ -8,6 +8,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/tensor/tensor_accessor.h"
+#include "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/csa_compressor/device/kernels/csa_compressor_runtime_args.hpp"
 
 namespace {
 
@@ -64,17 +65,18 @@ inline void copy_tile_row(
 }  // namespace
 
 void kernel_main() {
-    const uint32_t kv_addr = get_arg_val<uint32_t>(0);
-    const uint32_t gate_addr = get_arg_val<uint32_t>(1);
-    const uint32_t bias_addr = get_arg_val<uint32_t>(2);
-    const uint32_t base_kv_addr = get_arg_val<uint32_t>(3);
-    const uint32_t base_score_addr = get_arg_val<uint32_t>(4);
-    const uint32_t output_kv_addr = get_arg_val<uint32_t>(5);
-    const uint32_t output_score_addr = get_arg_val<uint32_t>(6);
-    const uint32_t local_valid = get_arg_val<uint32_t>(7);
-    const uint32_t absolute_start = get_arg_val<uint32_t>(8);
-    const uint32_t state_tiles = get_arg_val<uint32_t>(9);
-    const uint32_t first_state_tile = get_arg_val<uint32_t>(10);
+    namespace rt = csa_compressor::runtime_args;
+    const uint32_t kv_addr = get_arg_val<uint32_t>(rt::index(rt::State::KvAddress));
+    const uint32_t gate_addr = get_arg_val<uint32_t>(rt::index(rt::State::GateAddress));
+    const uint32_t bias_addr = get_arg_val<uint32_t>(rt::index(rt::State::BiasAddress));
+    const uint32_t base_kv_addr = get_arg_val<uint32_t>(rt::index(rt::State::BaseKvAddress));
+    const uint32_t base_score_addr = get_arg_val<uint32_t>(rt::index(rt::State::BaseScoreAddress));
+    const uint32_t output_kv_addr = get_arg_val<uint32_t>(rt::index(rt::State::OutputKvAddress));
+    const uint32_t output_score_addr = get_arg_val<uint32_t>(rt::index(rt::State::OutputScoreAddress));
+    const uint32_t local_valid = get_arg_val<uint32_t>(rt::index(rt::State::LocalValid));
+    const uint32_t absolute_start = get_arg_val<uint32_t>(rt::index(rt::State::AbsoluteStart));
+    const uint32_t state_tiles = get_arg_val<uint32_t>(rt::index(rt::State::StateTiles));
+    const uint32_t first_state_tile = get_arg_val<uint32_t>(rt::index(rt::State::FirstStateTile));
 
     constexpr uint32_t input_width_tiles = get_compile_time_arg_val(0);
     constexpr uint32_t state_width_tiles = get_compile_time_arg_val(1);
