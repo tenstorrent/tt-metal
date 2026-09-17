@@ -88,32 +88,34 @@ struct MatmulMultiCoreProgramConfig {
 
 // Placement-first program config for the Quasar-native matmul (stage A of GH#41910).
 //
-// The caller describes the work directly instead of picking a 1D / 2D / DRAM-sharded strategy:
-//   - `cores`      the clusters that take part;
-//   - `per_core_M` / `per_core_N`  the output block (in tiles) each cluster owns.
-// The factory tiles the output into ceil(Mt / per_core_M) x ceil(Nt / per_core_N) blocks, numbers
-// them row-major, and hands them out to `cores` in enumeration order (x fastest when
-// `row_major_cores`, y fastest otherwise). A core gets a contiguous run of blocks; when there are
-// fewer blocks than cores the trailing cores idle, when there are more each core loops over its run.
-// Blocks on the right / bottom edge are computed at full size and clipped on read and write, so any
-// Mt / Nt works. Every operand is addressed by page id through the tensor accessor, so interleaved,
+// GEMM vocabulary, all sizes in 32x32 tiles: C[M x N] = A[M x K] x B[K x N]. The caller describes the
+// work directly instead of picking a 1D / 2D / DRAM-sharded strategy:
+//   - `cores`                    the clusters that take part;
+//   - `per_core_M` / `per_core_N` the C block (in tiles) each cluster produces in one go.
+// The factory tiles C into ceil(M_tiles / per_core_M) x ceil(N_tiles / per_core_N) blocks, numbers them
+// row-major, makes one work item per (batch, C block) and hands the items to `cores` in enumeration order
+// (x fastest when `row_major_cores`, y fastest otherwise). A core gets a contiguous run of items; when
+// there are fewer items than cores the trailing cores idle, when there are more each core loops over its
+// run. Blocks on the right / bottom edge are computed at full size and clipped on read and write, so any
+// M / N works. Every operand is addressed by tile index through the tensor accessor, so interleaved,
 // L1-sharded and DRAM-sharded tensors all take the same kernels. The legacy strategies are particular
-// choices of (cores, per_core_M, per_core_N): e.g. a 1D "mcast_in0" matmul is per_core_M = Mt on a
+// choices of (cores, per_core_M, per_core_N): e.g. a 1D "mcast_in0" matmul is per_core_M = M_tiles on a
 // row of cores, a 2D matmul is a rectangle of cores with per_core_M x per_core_N blocks.
 //
 // Stage A limits: one NEO, one reader and one writer per cluster; no data sharing between clusters;
 // no bias (the op applies it as a separate add), no fused activation, no untilize, 32x32 tiles only,
-// sharded output needs batch 1 and exactly one block per core.
+// sharded output needs batch 1 and exactly one C block per core.
 struct MatmulUnifiedProgramConfig {
     CoreRangeSet cores;
     std::size_t per_core_M{};
     std::size_t per_core_N{};
-    // K block in tiles; must divide Kt. 0 = auto (largest divisor of Kt <= 8 whose buffers fit L1).
-    std::size_t in0_block_w = 0;
+    // K tiles accumulated per step (one A panel + one B panel in L1 at a time); must divide K_tiles.
+    // 0 = auto: the largest divisor of K_tiles <= 8 whose rings fit L1.
+    std::size_t K_step_tiles = 0;
     // DST subblock in tiles; must divide per_core_M / per_core_N and hold <= 8 tiles (4 with fp32
     // accumulation). 0 for both = auto.
-    std::size_t out_subblock_h = 0;
-    std::size_t out_subblock_w = 0;
+    std::size_t subblock_M_tiles = 0;
+    std::size_t subblock_N_tiles = 0;
     bool row_major_cores = true;
 };
 
