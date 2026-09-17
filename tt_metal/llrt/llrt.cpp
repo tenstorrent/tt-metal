@@ -27,6 +27,7 @@
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "hal_types.hpp"
 #include "llrt.hpp"
+#include "zone_meta.hpp"
 #include <umd/device/driver_atomics.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 #include <llrt/tt_cluster.hpp>
@@ -57,6 +58,12 @@ const ll_api::memory& get_risc_binary(
         ll_api::memory* mutable_ptr = new ll_api::memory(path, loading);
         if (update_callback) {
             update_callback(*mutable_ptr);
+        }
+        // Every device-executed image, kernel or firmware, passes through here before it can run, so
+        // harvesting .tt_zone_meta registers a zone's name strictly before that zone can reach the host.
+        // Streaming only: the DRAM profiler's ELFs carry no .tt_zone_meta and resolve names its own way.
+        if (tt::tt_metal::MetalContext::instance().rtoptions().get_streaming_profiler_enabled()) {
+            ZoneMetaRegistry::instance().ingest_elf(path);
         }
 
         lock.lock();

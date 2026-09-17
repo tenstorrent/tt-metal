@@ -54,7 +54,7 @@ class TtPrefillRuntimeConfig:
     # l1_small_size > 0. Enable for Kimi (single expert group, device gate). See TtMoERoutingSetup.
     routing_use_l1_small_for_semaphores: bool = False
     # Static model-dimension constants for the model being built
-    # (DeepSeekV3Config | KimiK26Config). Drives expert counts, dense-layer
+    # (DeepSeekV3Config | KimiK27Config). Drives expert counts, dense-layer
     # count, route groups, etc. in the TT layer code. Supplied by the model
     # adapter — no default, so the runtime never bakes in a specific model.
     model_cfg: Optional[type] = None
