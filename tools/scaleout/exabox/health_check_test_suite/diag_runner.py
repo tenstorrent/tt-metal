@@ -2649,7 +2649,8 @@ def run_diag(
             qsfp_phase.error = repr(e)
             qsfp_phase.add(Check(name="qsfp_collect", status=SKIP, details=repr(e), ip="other"))
     qsfp_phase.duration_s = time.time() - t0
-    qsfp_phase.rollup()
+    if any(c.status != SKIP for c in qsfp_phase.checks):
+        qsfp_phase.rollup()
     report["phases"]["qsfp_tests"] = asdict(qsfp_phase)
     print_phase_summary("qsfp_tests", report["phases"]["qsfp_tests"])
 
