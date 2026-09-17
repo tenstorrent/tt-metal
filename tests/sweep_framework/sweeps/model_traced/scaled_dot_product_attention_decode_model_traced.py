@@ -5,12 +5,7 @@
 import torch
 
 import ttnn
-from ttnn.operations.sdpa_reference import sdpa_decode_reference
-from tests.sweep_framework.master_config_loader_v2 import (
-    MasterConfigLoader,
-    dict_to_compute_kernel_config,
-    dict_to_program_config,
-)
+from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
 from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     create_mesh_device,
     get_mesh_composer,
@@ -24,6 +19,7 @@ from tests.ttnn.unit_tests.operations.sdpa.sdpa_test_utils import (
     fa_rand,
     get_chunk_size,
     nearest_n,
+    nearest_pow_2,
 )
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 
@@ -136,21 +132,44 @@ def run(
     # Calculate padded_layer_len (unit test uses this for K/V slicing)
     padded_layer_len = nearest_n(cur_pos + 1, k_chunk_size)
 
-    # Slice K/V to the kernel-visible padded length, then use the same decode
-    # reference that comparison mode attaches to the operation.
+    # Calculate padded_num_heads for attention mask
+    padded_num_heads = nearest_pow_2(nearest_n(nh_q, n=32))
+
+    # PyTorch reference - EXACTLY following unit test pattern
+    attn_mask = torch.zeros((b, padded_num_heads, 1, padded_layer_len))
+    for i in range(b):
+        start_idx = start_indices[i]
+        attn_mask[i, :, :, start_idx + 1 :] = torch.finfo(torch.float32).min
+
+    # Prepare Q, K, V for PyTorch SDPA
+    Q_slice = Q[:, :, :nh_q, :].permute(1, 2, 0, 3)  # [1, b, nh_q, d] -> [b, nh_q, 1, d]
+
+    # Slice K, V to padded_layer_len BEFORE GQA expansion (unit test approach)
     K_slice = K[:, :, :padded_layer_len, :]
     V_slice = V[:, :, :padded_layer_len, :]
+
+    # GQA: Expand K, V heads to match Q heads if needed
+    if nh_kv < nh_q and nh_q % nh_kv == 0:
+        K_slice = torch.cat([K_slice[:, i : i + 1, :, :].repeat(1, nh_q // nh_kv, 1, 1) for i in range(nh_kv)], dim=1)
+        V_slice = torch.cat([V_slice[:, i : i + 1, :, :].repeat(1, nh_q // nh_kv, 1, 1) for i in range(nh_kv)], dim=1)
+
+    attn_mask_slice = attn_mask[:, :nh_q, :, :]
 
     # Compute scale
     compute_scale = d**-0.5 if scale is None else float(scale)
 
-    torch_output = sdpa_decode_reference(
-        Q[:, :, :nh_q, :],
+    # PyTorch SDPA with explicit mask
+    torch_output_ref = torch.nn.functional.scaled_dot_product_attention(
+        Q_slice,
         K_slice,
         V_slice,
-        cur_pos=start_indices,
+        attn_mask=attn_mask_slice,
         scale=compute_scale,
+        is_causal=False,
     )
+
+    # Reshape to match TTNN output format: [b, nh_q, 1, d] -> [1, b, nh_q, d]
+    torch_output = torch_output_ref.squeeze(2).unsqueeze(0)
 
     # Create TTNN tensors using unit test approach
     dram_memcfg = ttnn.DRAM_MEMORY_CONFIG
@@ -246,6 +265,8 @@ def run(
         else:
             pc_x, pc_y = 0, 0
         if pc_x <= device_grid.x and pc_y <= device_grid.y and pc_x * pc_y <= device_cores:
+            from tests.sweep_framework.master_config_loader_v2 import dict_to_program_config
+
             program_config = dict_to_program_config(pc_dict)
     elif all([program_config_compute_grid, program_config_q_chunk_size, program_config_k_chunk_size]):
         # Legacy V1 split params fallback
@@ -266,6 +287,8 @@ def run(
     compute_kernel_config = None
     ckc_dict = kwargs.get("compute_kernel_config")
     if isinstance(ckc_dict, dict) and "math_fidelity" in ckc_dict:
+        from tests.sweep_framework.master_config_loader_v2 import dict_to_compute_kernel_config
+
         compute_kernel_config = dict_to_compute_kernel_config(ckc_dict)
     elif compute_kernel_config_math_fidelity is not None:
         # Legacy V1 split params fallback
