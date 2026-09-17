@@ -894,6 +894,55 @@ def _run_case(device, case: ReduceCase, *, keep_empty_auxiliary_cb=False) -> tup
     return actual, _golden(case, logical_chunks)
 
 
+@pytest.mark.parametrize("dtype", (ttnn.bfloat16, ttnn.float32))
+def test_reduce_auxiliary_scalers_and_masks_over_dirty_memory(device, dtype):
+    """Zero-valued scalers overwrite consumed lanes; masks clear poisoned padding."""
+    tile_type = _PLANNER.ReduceAuxiliaryTileType
+    recipes = [
+        _PLANNER.ReduceAuxiliaryTileSpec(0.25, tile_type.FIRST_ROW, TILE),
+        _PLANNER.ReduceAuxiliaryTileSpec(0.0, tile_type.FIRST_ROW, TILE),
+        _PLANNER.ReduceAuxiliaryTileSpec(1.0, tile_type.FIRST_ROW, 7),
+        _PLANNER.ReduceAuxiliaryTileSpec(1.0, tile_type.FIRST_COLUMN, 7),
+        _PLANNER.ReduceAuxiliaryTileSpec(0.25, tile_type.FIRST_ROW_PER_FACE_ROW, 7),
+        _PLANNER.ReduceAuxiliaryTileSpec(0.0, tile_type.ZERO, 0),
+    ]
+    shape = (len(recipes) * TILE, TILE)
+    auxiliary = ttnn.from_torch(
+        torch.full(shape, 7.0),
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=_sharded_memory_config(shape),
+    )
+    compile_args = [23]
+    _PLANNER.ReduceAuxiliaryPlan(CB_SCALER, recipes).append_to(compile_args)
+    result = ttnn.generic_op(
+        [auxiliary],
+        ttnn.ProgramDescriptor(
+            kernels=[
+                ttnn.KernelDescriptor(
+                    kernel_source=PLAN_SEQUENCE_AUX_KERNEL,
+                    source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+                    core_ranges=_single_core(),
+                    compile_time_args=compile_args,
+                    config=ttnn.ReaderConfigDescriptor(),
+                )
+            ],
+            semaphores=[],
+            cbs=[ttnn.cb_descriptor_from_sharded_tensor(CB_SCALER, auxiliary)],
+        ),
+    )
+    tiles = ttnn.to_torch(result).reshape(len(recipes), TILE, TILE).to(torch.float32)
+    for tile, value in ((tiles[0], 0.25), (tiles[1], 0.0)):
+        torch.testing.assert_close(tile[[0, 16], :], torch.full((2, TILE), value), rtol=0, atol=0)
+    expected_masks = torch.zeros((4, TILE, TILE))
+    expected_masks[0, [0, 16], :7] = 1.0
+    expected_masks[1, :7, 0] = 1.0
+    expected_masks[2, 0, :7] = 0.25
+    expected_masks[2, 0, 16:23] = 0.25
+    torch.testing.assert_close(tiles[2:], expected_masks, rtol=0, atol=0)
+
+
 @pytest.mark.parametrize("dim", ("REDUCE_ROW", "REDUCE_COL"))
 @pytest.mark.parametrize("pool", ("SUM", "MAX"))
 def test_reduce_local_blocks_on_multiple_cores(device, dim, pool):

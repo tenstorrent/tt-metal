@@ -29,6 +29,9 @@ namespace dataflow_kernel_lib {
  * that unit's dataflow work; it fills and pushes the aggregate CB once, and all
  * compute calls use slices of those same tiles. Do not loop over the compute
  * call count or try to infer a call's partial mode from this physical recipe.
+ * Full, static first-row scalers initialize only the rows consumed by reduction;
+ * their other lanes are unspecified. Partial/runtime masks and zero tiles are
+ * cleared before their valid lanes are filled.
  *
  * @code{.cpp}
  * // AUXILIARY_ARGS_OFFSET follows this kernel's own CTA prefix.

@@ -39,6 +39,13 @@
 
 namespace ttnn::kernel_lib {
 
+// An empty recipe has no auxiliary binding. Preserve that absence rather than
+// substituting another buffer for scaler metadata.
+template <typename BindingToken>
+constexpr std::uint32_t optional_auxiliary_cb(const BindingToken* binding) {
+    return binding ? static_cast<std::uint32_t>(*binding) : reduce_plan_args::no_cb_id;
+}
+
 /** Constexpr view of one physical auxiliary-tile specification. */
 template <std::uint32_t CTA_OFFSET, std::uint32_t TILE_INDEX, std::uint32_t TILE_COUNT>
 struct ReduceAuxiliaryTileArgs {

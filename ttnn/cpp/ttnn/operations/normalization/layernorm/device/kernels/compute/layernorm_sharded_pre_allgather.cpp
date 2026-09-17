@@ -43,7 +43,6 @@ void kernel_main() {
     const volatile uint32_t subblock_w_volatile = get_arg(args::subblock_w);
     constexpr auto num_subblocks_w = get_arg(args::num_subblocks_w);
     constexpr auto num_tiles_per_block = get_arg(args::num_tiles_per_block);
-    constexpr bool FLOAT32_DTYPE = get_arg(args::float32_dtype) == 1;
     constexpr auto num_blocks_second_stage = get_arg(args::num_blocks_second_stage);
 
     const uint32_t num_reduce_tiles_per_block_h = get_arg(
@@ -78,7 +77,7 @@ void kernel_main() {
     constexpr uint32_t dfb_in_id = dfb_in0;
 #endif
     DataflowBuffer dfb_in(dfb_in_id);
-    constexpr uint32_t dfb_scaler_id = dfb::scaler;
+    constexpr uint32_t dfb_scaler_id = ttnn::kernel_lib::optional_auxiliary_cb(dfb::get_token_if_present<"scaler">());
     constexpr uint32_t dfb_scaler_global_id = dfb::scaler_global;
     constexpr uint32_t dfb_x = dfb::x;     // x minus mean
     constexpr uint32_t dfb_x2_id = dfb_x;  // x^2
@@ -98,7 +97,6 @@ void kernel_main() {
     DataflowBuffer dfb_col_mask_packed(dfb_col_mask_packed_id);
 #endif
 
-    DataflowBuffer dfb_scaler(dfb_scaler_id);
     DataflowBuffer dfb_x2(dfb_x2_id);
     const DataflowBuffer dfb_ex_partial2(dfb_ex_partial2_id);
     DataflowBuffer dfb_scaler_global(dfb_scaler_global_id);
@@ -157,12 +155,6 @@ void kernel_main() {
 #endif
 
 #ifndef RMSNORM
-    dfb_scaler.wait_front(1);
-#ifdef FUSE_PRE_ADD
-    reconfig_data_format(dfb_in0, dfb_in_id, dfb_in1, dfb_scaler_id);
-#else
-    reconfig_data_format_srcb(dfb_in_id, dfb_scaler_id);
-#endif
 #ifdef DO_COL_MASK
     // Non-tile-aligned width: the E[x] reduce must average over the logical width, so mask any
     // padding columns out of the input first. The masked copy goes to the x^2 scratch,
@@ -247,13 +239,9 @@ void kernel_main() {
 
     // E(x^2)
     dfb_x2.wait_front(num_tiles_per_block);
-#ifdef RMSNORM
-    dfb_scaler.wait_front(1);
-#endif  // RMSNORM
 
     // RMS E(x2) #Layernorm //E(x) and E(x^2)
     reduce_local_shard<dfb_x2_id, dfb_scaler_id, dfb_ex_partial2_id>(num_reduce_tiles_per_block_h);
-    reconfig_data_format(dfb_x2_id, dfb_scaler_id);
     dfb_x2.pop_front(num_tiles_per_block);
 
     // global reduce, the combine destination <-- dfb_ex_external2_id, dfb_ex_partial2_id
@@ -297,9 +285,13 @@ void kernel_main() {
         dfb_scaler_global.pop_front(1);
     }
 #endif
-    // The single scaler tile is waited once (by the E[x] reduce on the LayerNorm path or the E[x^2]
-    // reduce on the RMSNorm path) but never popped; pop it once here so the buffer is left balanced.
-    dfb_scaler.pop_front(get_arg(args::reduce_auxiliary_tiles));
+    // The local auxiliary tiles are shared by the reductions; release them once.
+    if constexpr (get_arg(args::reduce_auxiliary_tiles) != 0) {
+        DataflowBuffer dfb_scaler(dfb_scaler_id);
+        // A core can select an auxiliary-free call while the tail call needs this recipe.
+        dfb_scaler.wait_front(get_arg(args::reduce_auxiliary_tiles));
+        dfb_scaler.pop_front(get_arg(args::reduce_auxiliary_tiles));
+    }
 #ifdef DO_COL_MASK
     // The column mask is waited once near the top of the kernel (on every core) and read by tile index
     // at every masking site; pop its block_w tiles once here so the buffer is left balanced.

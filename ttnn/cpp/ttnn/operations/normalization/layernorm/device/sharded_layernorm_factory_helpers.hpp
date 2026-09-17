@@ -315,7 +315,7 @@ struct SpecConfig {
 
     std::vector<uint32_t> reduce_compute_args;
     std::vector<uint32_t> reduce_auxiliary_args;
-    uint32_t reduce_auxiliary_tiles = 1;
+    uint32_t reduce_auxiliary_tiles = 0;
     tt::DataFormat reduce_auxiliary_format = tt::DataFormat::Float16_b;
 
     // Fused-activation preprocessor definitions for the compute kernel

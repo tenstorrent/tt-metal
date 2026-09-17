@@ -642,13 +642,15 @@ void add_dataflow_buffer_specs(m2::ProgramSpec& spec, const SpecConfig& c) {
     }
 
     if (!c.use_welford) {
-        const uint32_t auxiliary_tile_size = tt::tile_size(c.reduce_auxiliary_format);
-        add_dfb(
-            spec,
-            SCALER,
-            c.reduce_auxiliary_tiles * auxiliary_tile_size,
-            auxiliary_tile_size,
-            c.reduce_auxiliary_format);
+        if (c.reduce_auxiliary_tiles != 0) {
+            const uint32_t auxiliary_tile_size = tt::tile_size(c.reduce_auxiliary_format);
+            add_dfb(
+                spec,
+                SCALER,
+                c.reduce_auxiliary_tiles * auxiliary_tile_size,
+                auxiliary_tile_size,
+                c.reduce_auxiliary_format);
+        }
 
         // The pre-all-gather compute kernel folds epsilon into the post-all-gather stage instead, so
         // it never reads an epsilon tile.
@@ -982,7 +984,9 @@ m2::KernelSpec::CompileTimeArgs writer_compile_time_args(
 
 void bind_writer_resources(m2::KernelSpec& kernel, const SpecConfig& c) {
     if (c.is_pre_all_gather) {
-        bind_dfb(kernel, SCALER, "scaler", m2::DFBEndpointType::PRODUCER);
+        if (c.reduce_auxiliary_tiles != 0) {
+            bind_dfb(kernel, SCALER, "scaler", m2::DFBEndpointType::PRODUCER);
+        }
         bind_dfb(kernel, SCALER_GLOBAL, "scaler_global", m2::DFBEndpointType::PRODUCER);
         if (c.do_col_mask) {
             bind_dfb(kernel, COL_MASK, "col_mask", m2::DFBEndpointType::PRODUCER);
@@ -991,11 +995,7 @@ void bind_writer_resources(m2::KernelSpec& kernel, const SpecConfig& c) {
     }
 
     if (!c.use_welford) {
-        if (c.is_post_all_gather) {
-            // After the all-gather the compute kernel reduces the gathered statistics with the global
-            // scaler alone, so the per-core scaler the writer still generates is never drained.
-            bind_self_loop(kernel, SCALER, "scaler");
-        } else {
+        if (c.reduce_auxiliary_tiles != 0) {
             bind_dfb(kernel, SCALER, "scaler", m2::DFBEndpointType::PRODUCER);
         }
         bind_dfb(kernel, EPS, "eps", m2::DFBEndpointType::PRODUCER);
@@ -1107,7 +1107,9 @@ void bind_compute_resources(m2::KernelSpec& kernel, const SpecConfig& c, bool is
         if (c.has_b) {
             bind_self_loop(kernel, IN_PRE_ADD, "in_pre_add");
         }
-        bind_dfb(kernel, SCALER, "scaler", m2::DFBEndpointType::CONSUMER);
+        if (c.reduce_auxiliary_tiles != 0) {
+            bind_dfb(kernel, SCALER, "scaler", m2::DFBEndpointType::CONSUMER);
+        }
         bind_dfb(kernel, SCALER_GLOBAL, "scaler_global", m2::DFBEndpointType::CONSUMER);
         bind_dfb(kernel, EX_PARTIAL2, "ex_partial2", m2::DFBEndpointType::PRODUCER);
         bind_dfb(kernel, EX_EXTERNAL2, "ex_external2", m2::DFBEndpointType::CONSUMER);
@@ -1164,7 +1166,9 @@ void bind_compute_resources(m2::KernelSpec& kernel, const SpecConfig& c, bool is
             bind_self_loop(kernel, X_WELFORD, "x_welford");
         }
     } else {
-        bind_dfb(kernel, SCALER, "scaler", m2::DFBEndpointType::CONSUMER);
+        if (c.reduce_auxiliary_tiles != 0) {
+            bind_dfb(kernel, SCALER, "scaler", m2::DFBEndpointType::CONSUMER);
+        }
         bind_dfb(kernel, EPS, "eps", m2::DFBEndpointType::CONSUMER);
         bind_dfb(kernel, SCALER_GLOBAL, "scaler_global", m2::DFBEndpointType::CONSUMER);
         bind_dfb(kernel, EX_PARTIAL2, "ex_partial2", m2::DFBEndpointType::PRODUCER);

@@ -374,23 +374,26 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
                 auto block = rh::ReduceBlockSpec::tiled(block_ht * 32, tiles * 32, reduce_dtype, reduce_dtype);
                 block.resident_input_tiles = block_ht * block_wt;
                 block.input_row_stride_tiles = block_wt;
+                // Aligned additive reductions apply winv in compute and need no scaler tile.
+                block.allow_empty_auxiliary = true;
                 auto plan = rh::make_reduce_plan(
                     block, ReduceOpMath::SUM, ReduceOpDim::W, winv, ReduceFp32Mode::Fast, hardware);
                 plan.reconfig_mode = compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT;
                 rh::ReduceCallPlan call{
                     .input_cb_id = 0,
                     .auxiliary_cb_id = 1,
-                    .auxiliary_tile_offset = static_cast<uint32_t>(local_auxiliary.tiles.size()),
+                    .auxiliary_tile_offset =
+                        plan.auxiliary_tiles.empty() ? 0 : static_cast<uint32_t>(local_auxiliary.tiles.size()),
                     .output_cb_id = 2,
                     .accumulator_cb_id = std::nullopt,
                     .plan = plan};
                 rh::ReduceCallArgs(call).append_to(config.reduce_compute_args);
                 local_auxiliary.tiles.insert(
                     local_auxiliary.tiles.end(), plan.auxiliary_tiles.begin(), plan.auxiliary_tiles.end());
-                config.reduce_auxiliary_format = plan.find_cb(rh::ReduceCbRole::Auxiliary)->data_format;
+                if (const auto* auxiliary = plan.find_cb(rh::ReduceCbRole::Auxiliary)) {
+                    config.reduce_auxiliary_format = auxiliary->data_format;
+                }
             }
-        } else {
-            local_auxiliary.tiles.push_back({winv, rh::ReduceAuxiliaryTileType::FirstRow, 32});
         }
         config.reduce_auxiliary_tiles = local_auxiliary.tiles.size();
         rh::ReduceAuxiliaryArgs(local_auxiliary).append_to(config.reduce_auxiliary_args);

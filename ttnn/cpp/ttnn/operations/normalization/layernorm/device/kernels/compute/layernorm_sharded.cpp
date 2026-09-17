@@ -49,8 +49,6 @@ void kernel_main() {
     const volatile uint32_t subblock_w_volatile = get_arg(args::subblock_w);
     constexpr auto num_subblocks_w = get_arg(args::num_subblocks_w);
     constexpr auto num_tiles_per_block = get_arg(args::num_tiles_per_block);
-    constexpr bool FLOAT32_DTYPE = get_arg(args::float32_dtype) == 1;
-    constexpr bool FP32_DEST_ACC = compute_kernel_lib::get_fp32_dest_acc_enabled();
     constexpr bool LEGACY_RSQRT = get_arg(args::legacy_rsqrt) == 1;
     constexpr auto num_blocks_second_stage = get_arg(args::num_blocks_second_stage);
     // gamma and beta each gate a buffer that only exists when their tensor was supplied, so the flag
@@ -99,7 +97,7 @@ void kernel_main() {
     constexpr uint32_t scaler0 = 0;
 
     constexpr uint32_t dfb_in0 = dfb::in0;
-    constexpr uint32_t dfb_scaler_id = dfb::scaler;
+    constexpr uint32_t dfb_scaler_id = ttnn::kernel_lib::optional_auxiliary_cb(dfb::get_token_if_present<"scaler">());
     constexpr uint32_t dfb_eps = dfb::eps;
     constexpr uint32_t dfb_scaler_global_id = dfb::scaler_global;
     constexpr uint32_t dfb_x = dfb::x;  // x minus mean
@@ -154,7 +152,6 @@ void kernel_main() {
     DataflowBuffer dfb_col_mask_packed(dfb_col_mask_packed_id);
 #endif
 
-    DataflowBuffer dfb_scaler(dfb_scaler_id);
     DataflowBuffer dfb_scaler_global(dfb_scaler_global_id);
 #ifdef FUSE_GAMMA
     DataflowBuffer dfb_gamma(dfb_gamma_id);
@@ -235,16 +232,10 @@ void kernel_main() {
         index_h_offset += block_w;
     }
     dfb_in.push_back(num_tiles_per_block);
-#ifndef RMSNORM
-    reconfig_data_format(dfb_in0, dfb_in_id, dfb_in1, dfb_scaler_id);
-#else
+#ifdef RMSNORM
     reconfig_data_format(dfb_in0, dfb_in_id, dfb_in1, dfb_in_id);
 #endif
     dfb_in.wait_front(num_tiles_per_block);
-#else
-#ifndef RMSNORM
-    reconfig_data_format_srcb(dfb_in0, dfb_scaler_id);
-#endif  // RMSNORM
 #endif  // FUSE_PRE_ADD
 
 #ifndef RMSNORM
@@ -271,7 +262,6 @@ void kernel_main() {
     }
     dfb_mask_scratch.push_back(num_tiles_per_block);
     dfb_mask_scratch.wait_front(num_tiles_per_block);
-    reconfig_data_format_srcb(dfb_col_mask_packed_id, dfb_scaler_id);
     constexpr uint32_t dfb_ex_reduce_input = dfb_mask_scratch_id;
 #else
     constexpr uint32_t dfb_ex_reduce_input = dfb_in_id;
@@ -281,8 +271,6 @@ void kernel_main() {
 #ifdef DO_COL_MASK
     dfb_mask_scratch.pop_front(num_tiles_per_block);
 #endif
-    reconfig_data_format(dfb_ex_external_id, dfb_scaler_id);
-
     // global reduce, dfb_ex_id <-- dfb_ex_external_id, dfb_ex_partial_id
     if constexpr (is_allgather_worker) {
         reconfig_data_format(dfb_scaler_global_id, dfb_ex_external_id);
@@ -309,16 +297,12 @@ void kernel_main() {
         }
         reduce_uninit();
         dfb_ex.push_back(static_cast<uint16_t>(num_tiles_per_allgather_worker));
-        reconfig_data_format(dfb_ex_external_id, dfb_scaler_global_id);
         dfb_ex.wait_front(static_cast<uint16_t>(num_tiles_per_allgather_worker));
     }
 
     // x - E[x]
-    if constexpr (FLOAT32_DTYPE) {
-        reconfig_data_format(dfb_in_id, dfb_ex_global_id);
-    }
+    reconfig_data_format(dfb_in_id, dfb_ex_global_id);
     index_h_offset = 0;
-    reconfig_data_format_srca(dfb_ex_external_id, dfb_in_id);
     sub_bcast_cols_init(dfb_in_id, dfb_ex_global_id);
     dfb_xmm.reserve_back(num_tiles_per_block);
     for (uint32_t i = 0; i < block_h; i++) {
@@ -401,19 +385,10 @@ void kernel_main() {
     dfb_xmm2.wait_front(num_tiles_per_block);
 #endif
 
-#if defined RMSNORM and not defined FUSED_PRE_ADD
-    reconfig_data_format(dfb_xmm_id, dfb_xmm2_id, dfb_xmm_id, dfb_scaler_id);
-#else
-    if constexpr (FLOAT32_DTYPE) {
-        reconfig_data_format(dfb_xmm_id, dfb_xmm2_id, dfb_xmm_id, dfb_scaler_id);
-    }
-#endif
-
     dfb_xmm2.wait_front(num_tiles_per_block);
 
     // Var(x)
     reduce_local_shard<dfb_xmm2_id, dfb_scaler_id, dfb_ex_partial2_id>(num_reduce_tiles_per_block_h);
-    reconfig_data_format(dfb_xmm2_id, dfb_scaler_id);
     dfb_xmm2.pop_front(num_tiles_per_block);
 
     // global reduce, dfb_ex2_id <-- dfb_ex_external2_id, dfb_ex_partial2_id
@@ -443,11 +418,8 @@ void kernel_main() {
         }
         reduce_uninit();
         dfb_ex2.push_back(static_cast<uint16_t>(num_tiles_per_allgather_worker));
-        reconfig_data_format(dfb_xmm2_id, dfb_scaler_id);
-
         if (enable_sqrt) {
-            // The planned auxiliary buffer can be FP32; epsilon is BF16.
-            // Configure its format explicitly before leaving the reduce path.
+            // Configure the variance and epsilon operands for the addition.
             reconfig_data_format(dfb_ex2_id, dfb_eps);
             DataflowBuffer(dfb_eps).wait_front(1);
             for (uint32_t i = 0; i < num_tiles_per_allgather_worker; i++) {
@@ -472,18 +444,8 @@ void kernel_main() {
     if constexpr (!do_gamma && !do_beta) {
         pack_reconfig_data_format(dfb_out_id);
     }
-// (x - Ex) * 1/[sqrt(Var + eps)]
-#if defined RMSNORM and not defined FUSE_PRE_ADD
-    if constexpr (FLOAT32_DTYPE) {
-        reconfig_data_format(dfb_xmm_id, dfb_ex_global_id);
-    } else {
-        reconfig_data_format_srca(dfb_ex2_id, dfb_xmm_id);
-    }
-#else
-    if constexpr (FLOAT32_DTYPE) {
-        reconfig_data_format(dfb_xmm_id, dfb_ex_global_id);
-    }
-#endif
+    // (x - Ex) * 1/[sqrt(Var + eps)]
+    reconfig_data_format(dfb_xmm_id, dfb_ex_global_id);
     mul_bcast_cols_init(dfb_xmm_id, dfb_ex_global_id);
     index_h_offset = 0;
     dfb_im.reserve_back(num_tiles_per_block);
@@ -602,9 +564,13 @@ void kernel_main() {
         dfb_out.wait_front(num_tiles_per_block);
     }
 #endif
-    // The single scaler tile is waited by both reductions (E[x] and Var[x]) but never popped;
-    // pop it once at the end so the buffer is left balanced.
-    dfb_scaler.pop_front(get_arg(args::reduce_auxiliary_tiles));
+    // The local auxiliary tiles are shared by E[x] and Var[x]; release them once.
+    if constexpr (get_arg(args::reduce_auxiliary_tiles) != 0) {
+        DataflowBuffer dfb_scaler(dfb_scaler_id);
+        // A core can select an auxiliary-free call while the tail call needs this recipe.
+        dfb_scaler.wait_front(get_arg(args::reduce_auxiliary_tiles));
+        dfb_scaler.pop_front(get_arg(args::reduce_auxiliary_tiles));
+    }
     if constexpr (is_allgather_worker) {
         // The global-reduce scaler tile is pushed once (only on all-gather worker cores) and read by
         // tile index across the E[x] and Var[x] global reductions without being popped. Pop it once

@@ -180,14 +180,21 @@ FORCE_INLINE void prepare_tile() {
     dfb.reserve_back(1);
     const uint32_t write_addr = dfb.get_write_ptr();
 
-    Noc noc;
-    noc.async_write_zeros(dfb, get_tile_size(cb_id));
-    noc.write_zeros_l1_barrier();
+    // Native reduction reads only the first row of each face in a full scaler.
+    // Those rows are overwritten below; the remaining lanes need no initialization.
+    // Partial and runtime masks still need zeroes in every inactive lane.
+    constexpr bool full_scaler = tile_type == ttnn::kernel_lib::ReduceAuxiliaryTileType::FirstRow &&
+                                 !Tile::has_runtime_extent && Tile::num_valid_elements == tile_c_dim;
+    if constexpr (!full_scaler) {
+        Noc noc;
+        noc.async_write_zeros(dfb, get_tile_size(cb_id));
+        noc.write_zeros_l1_barrier();
+    }
 
     if constexpr (tile_type != ttnn::kernel_lib::ReduceAuxiliaryTileType::Zero) {
         const float value = __builtin_bit_cast(float, static_cast<uint32_t>(Tile::value_bits));
         const uint32_t packed_value = float_to_scaler_bits<data_format>(value);
-        if (packed_value != 0) {
+        if (full_scaler || packed_value != 0) {
             if constexpr (tile_type == ttnn::kernel_lib::ReduceAuxiliaryTileType::FirstRow) {
                 fill_first_row_valid_columns<data_format, face_rows, faces_per_row>(
                     addr_to_l1_ptr(write_addr), packed_value, valid_elements);

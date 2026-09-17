@@ -63,7 +63,9 @@ void kernel_main() {
         using LocalArgs = ttnn::kernel_lib::ReduceAuxiliaryArgs<0>;
         using ScaledArgs = ttnn::kernel_lib::ReduceAuxiliaryArgs<LocalArgs::next_compile_time_args_offset()>;
         using IdentityArgs = ttnn::kernel_lib::ReduceAuxiliaryArgs<ScaledArgs::next_compile_time_args_offset()>;
-        using LocalAuxiliary = ttnn::kernel_lib::BoundReduceAuxiliaryArgs<LocalArgs, dfb::scaler>;
+        using LocalAuxiliary = ttnn::kernel_lib::BoundReduceAuxiliaryArgs<
+            LocalArgs,
+            ttnn::kernel_lib::optional_auxiliary_cb(dfb::get_token_if_present<"scaler">())>;
         dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<LocalAuxiliary>();
 
         const uint32_t eps = get_arg(args::eps);
