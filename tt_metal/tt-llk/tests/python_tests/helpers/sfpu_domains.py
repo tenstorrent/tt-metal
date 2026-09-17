@@ -1925,21 +1925,12 @@ SPECIALS_READY_OPS: FrozenSet[MathOperation] = frozenset(
         # Divergences worth reading before trusting one of these: each is xfailed per combination
         # in the sweep rather than smoothed over in the golden.
         MathOperation.Reciprocal,  # 1/+/-0 = +/-inf, 1/+/-inf = +/-0; kernel gives +0 for NaN
-        # The sqrt family agrees everywhere since the signed-zero / -inf fixes. Two scopes to
-        # keep in mind, neither reachable from this sweep, which runs FastMode.No: Sqrt's and
-        # Rsqrt's edge arms are all gated on !FAST_APPROX, so the fast path keeps its standing
-        # trade of every edge guard for speed. And a zero's sign is invisible here (see the
-        # note below), so the raw bits are read by
-        # test_eltwise_unary_sfpu.test_sqrt_family_negative_zero_regression instead.
-        MathOperation.Sqrt,  # sqrt(-inf) = NaN, sqrt(NaN) = NaN, sqrt(+/-0) = +/-0
-        MathOperation.Rsqrt,  # rsqrt(-inf) = NaN, rsqrt(+/-0) = +/-inf
-        # SqrtCustom is reached only through the test-only calculate_sqrt_custom wrapper,
-        # which opts into NEGATIVE_INFINITY_SAFE, so that is the instantiation certified here.
-        # The default one, which erfinv / asin / acos use, still returns -inf for
-        # sqrt_custom(-inf). No divergence is recorded for it because none of the three can be
-        # handed a -inf, and it is left that way because the guard costs erfinv 1.127x and asin
-        # 1.067x, measured on a WH n150 -- the derivation is in ckernel_sfpu_sqrt_custom.h.
-        MathOperation.SqrtCustom,  # as Sqrt, on the guarded instantiation this sweep builds
+        # The sqrt family passes the whole sweep since the signed-zero / -inf fixes. Zero signs
+        # are invisible to passed_test(), so test_sqrt_family_negative_zero_regression reads
+        # the raw bits. The scopes tagged on the entries are argued in the kernel headers.
+        MathOperation.Sqrt,  # sqrt(-inf) = NaN, sqrt(NaN) = NaN, sqrt(+/-0) = +/-0; !FAST_APPROX
+        MathOperation.Rsqrt,  # rsqrt(-inf) = NaN, rsqrt(+/-0) = +/-inf; !FAST_APPROX
+        MathOperation.SqrtCustom,  # as Sqrt, on the NEGATIVE_INFINITY_SAFE instantiation
         # These goldens have to route through torch: math.sin / cos / acos / asin / tan *raise*
         # on a non-finite input instead of returning NaN, so a `math.*` call in a unary golden
         # is the same trap.
