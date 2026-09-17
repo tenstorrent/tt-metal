@@ -132,18 +132,21 @@ uint32_t write_shared_config_words(
     return i;
 }
 
-// The sender's config page. `pages_acked_offset` is word[8], the base of the *receivers'* counter
-// pairs relative to this page's own address: all of a pipe's receiver pages share one L1 address,
-// so that base plus 2*r*L1_ALIGNMENT reaches receiver r's slot. `receiver_noc_xy` is the receivers'
-// physical coords on the device this page is destined for, in receiver order.
+// The sender's config page. Words 7 and 8 are this sender's own SENT and ACKED block bases, as on
+// any pipe's sender page. `peer_counter_offset` is word[9]: the base of the *receivers'* SENT block
+// relative to this page's own address, needed because a DRAM sender's page sits in DRISC L1 instead
+// of at the receivers' page address. All of a pipe's receiver pages do share one L1 address, so
+// that single base plus r*L1_ALIGNMENT reaches receiver r's slot. `receiver_noc_xy` is the
+// receivers' physical coords on the device this page is destined for, in receiver order.
 std::vector<uint32_t> build_sender_config_page(
     const PrefetcherPipePageCommon& common,
-    uint32_t pages_acked_offset,
+    uint32_t peer_counter_offset,
     const std::vector<CoreCoord>& receiver_noc_xy) {
     std::vector<uint32_t> page(words_per_page(common), 0);
     uint32_t i = write_shared_config_words(page, common, PipeEndpoint::Sender);
-    page[i++] = common.layout.counters_offset;  // word[7]: this sender's own counter pairs
-    page[i++] = pages_acked_offset;
+    page[i++] = common.layout.sent_offset;   // word[7]: local sent/wr block
+    page[i++] = common.layout.acked_offset;  // word[8]: local acked block (receivers' NoC atomics)
+    page[i++] = peer_counter_offset;
     for (const CoreCoord& phys : receiver_noc_xy) {
         page[i++] = static_cast<uint32_t>(phys.x);
         page[i++] = static_cast<uint32_t>(phys.y);
@@ -153,28 +156,31 @@ std::vector<uint32_t> build_sender_config_page(
     return page;
 }
 
-// One receiver's config page. `pages_acked_offset` is word[8], the delta from this page's own
-// address to the peer counter slot this receiver NOC-increments; for a DRAM sender that delta
-// crosses into DRISC L1 and may wrap.
+// One receiver's config page. `peer_counter_offset` is word[9], the delta from this page's own
+// address to the acked slot this receiver NOC-increments on the sender; for a DRAM sender that
+// delta crosses into DRISC L1 and may wrap.
 std::vector<uint32_t> build_receiver_config_page(
     const PrefetcherPipePageCommon& common,
     uint32_t receiver_index,
-    uint32_t pages_acked_offset,
+    uint32_t peer_counter_offset,
     CoreCoord sender_noc_xy) {
     std::vector<uint32_t> page(words_per_page(common), 0);
     uint32_t i = write_shared_config_words(page, common, PipeEndpoint::Receiver);
-    // word[7]: this receiver's own counter pair (sent at +0, acked at +L1_ALIGNMENT). Offsets are
-    // page-relative and every receiver page of a pipe sits at the same L1 address, which is what
-    // lets the sender reach receiver r's slot as remote_counters_base + 2*r*L1_ALIGNMENT.
-    page[i++] = common.layout.counters_offset + 2 * receiver_index * common.l1_alignment;
-    page[i++] = pages_acked_offset;
+    // Words 7 and 8: this receiver's slot within each credit block. Offsets are page-relative and
+    // every receiver page of a pipe sits at the same L1 address, which is what lets the sender
+    // reach receiver r's sent slot as one base plus r*L1_ALIGNMENT. A DRAM-sender pipe is
+    // single-lane, so a receiver's slot stride is one L1_ALIGNMENT.
+    const uint32_t slot = receiver_index * common.l1_alignment;
+    page[i++] = common.layout.sent_offset + slot;   // word[7]: sender's NoC atomics land here
+    page[i++] = common.layout.acked_offset + slot;  // word[8]: local acked (cached stores)
+    page[i++] = peer_counter_offset;
     page[i++] = static_cast<uint32_t>(sender_noc_xy.x);
     page[i++] = static_cast<uint32_t>(sender_noc_xy.y);
     return page;
 }
 
 // Receiver order, page layout, and the fields every config page of one pipe repeats: the preamble
-// each of the three page builders below would otherwise recompute.
+// each of the two DRAM-sender page builders below would otherwise recompute.
 //
 // Receiver order is the pipe's slab-numbering contract, and the two sender flavours number
 // differently. A DRAM-sender pipe traverses row-wise, matching build_dram_sender_mapping's
@@ -200,7 +206,9 @@ PrefetcherPipePageContext build_page_context(
         .receivers = std::move(receivers),
         .common =
             PrefetcherPipePageCommon{
-                .layout = compute_prefetcher_pipe_config_page_layout(num_recv, l1_alignment),
+                // A DRAM sender is never Attached and so can never be handed more than one
+                // pipe-consumer thread: one credit lane per receiver.
+                .layout = compute_prefetcher_pipe_config_page_layout(num_recv, /*num_credit_lanes=*/1, l1_alignment),
                 .l1_alignment = l1_alignment,
                 .num_receivers = num_recv,
                 .data_base_addr = data_base_addr,
@@ -283,10 +291,10 @@ PrefetcherPipeImpl::PrefetcherPipeImpl(
     }
 }
 
-void PrefetcherPipeImpl::set_config_page_geometry(uint32_t page_size, uint32_t counters_offset) {
+void PrefetcherPipeImpl::set_config_page_geometry(uint32_t page_size, uint32_t credit_reset_offset) {
     config_page_size_ = page_size;
-    credit_reset_offset_ = counters_offset;
-    credit_reset_size_ = page_size - counters_offset;
+    credit_reset_offset_ = credit_reset_offset;
+    credit_reset_size_ = page_size - credit_reset_offset;
 }
 
 void PrefetcherPipeImpl::build_config_pages() {
@@ -366,9 +374,9 @@ std::unordered_map<CoreCoord, std::vector<uint32_t>> PrefetcherPipeImpl::build_d
     const auto& layout = common.layout;
     const uint32_t num_recv = common.num_receivers;
 
-    // Base of the sender's counter pairs, inside its config page in DRISC L1.
-    const uint32_t drisc_counters_base =
-        static_cast<uint32_t>(drisc_config_page_alloc_->addr()) + layout.counters_offset;
+    // Base of the sender's ACKED block, inside its config page in DRISC L1: where this pipe's
+    // receivers aim their ack atomics.
+    const uint32_t drisc_acked_base = static_cast<uint32_t>(drisc_config_page_alloc_->addr()) + layout.acked_offset;
     // The receiver's ack NOC-inc lands on the DRAM core, so it needs that core's virtual coord on
     // this device rather than a worker coord.
     const auto sender_virtual = target_device->virtual_core_from_logical_core(sender_core_, CoreType::DRAM);
@@ -376,10 +384,10 @@ std::unordered_map<CoreCoord, std::vector<uint32_t>> PrefetcherPipeImpl::build_d
     std::unordered_map<CoreCoord, std::vector<uint32_t>> pages;
     pages.reserve(num_recv);
     for (uint32_t ri = 0; ri < num_recv; ++ri) {
-        // setup_prefetcher_pipe_interface adds word[8] to the receiver's own page address, so
+        // setup_prefetcher_pipe_interface adds word[9] to the receiver's own page address, so
         // store the difference between the two L1 address spaces. It may wrap; the device side
         // does the same uint32 arithmetic.
-        const uint32_t drisc_acked_slot = drisc_counters_base + 2 * ri * l1_alignment + l1_alignment;
+        const uint32_t drisc_acked_slot = drisc_acked_base + ri * l1_alignment;
         pages[receiver_vec[ri]] =
             build_receiver_config_page(common, ri, drisc_acked_slot - config_address_, sender_virtual);
     }
@@ -394,25 +402,31 @@ void PrefetcherPipeImpl::initialize_dram_sender_config_page() {
         receiver_cores_, sender_core_type_, l1_alignment, data_address_, ring_size_, initial_entry_size_);
     const auto& layout = common.layout;
     const uint32_t num_recv = common.num_receivers;
-    set_config_page_geometry(layout.page_size, layout.counters_offset);
+    TT_FATAL(
+        credit_lane_capacity_ == 1,
+        "DRAM-sender PrefetcherPipe reserved {} credit lanes per receiver: the DRISC sender helpers address one slot "
+        "per receiver, so Quasar's multi-lane pipe consumers are not supported from a DRAM sender",
+        credit_lane_capacity_);
+    set_config_page_geometry(layout.page_size, layout.sent_offset);
 
     // Reserved on this sender's core alone: a pipe on another bank can hold the same offset, so a
     // set of one-sender pipes costs the small DRISC zone one page rather than one page per pipe.
-    // The page's own counters are NOC-atomic targets, hence the L1 alignment.
-    drisc_config_page_alloc_ =
-        device_->impl().drisc_l1_arena().allocate_on(sender_core_, layout.page_size, l1_alignment);
+    // Page-relative block offsets are only line-aligned if the page itself is, and the page's own
+    // counters are NOC-atomic targets -- hence the larger of the two alignments.
+    drisc_config_page_alloc_ = device_->impl().drisc_l1_arena().allocate_on(
+        sender_core_, layout.page_size, std::max(l1_alignment, PREFETCHER_PIPE_CREDIT_BLOCK_ALIGN));
     const auto config_page_addr = static_cast<uint32_t>(drisc_config_page_alloc_->addr());
 
-    // word[8] on a sender page is the base of the *receivers'* counter pairs. All of this pipe's
-    // receiver pages share one L1 address, so a single base plus 2*r*L1_ALIGNMENT reaches receiver
-    // r's own slot. setup_prefetcher_pipe_interface adds the stored delta to the sender's own page
-    // address and then packs the result into 24 bits.
-    const uint32_t receiver_counters_base = config_address_ + layout.counters_offset;
+    // word[9] on a DRAM sender's page is the base of the *receivers'* SENT block. All of this
+    // pipe's receiver pages share one L1 address, so a single base plus r*L1_ALIGNMENT reaches
+    // receiver r's own slot. The DRISC sender helpers add the stored delta to the sender's own page
+    // address and then pack the result into 24 bits.
+    const uint32_t receiver_sent_base = config_address_ + layout.sent_offset;
     TT_FATAL(
-        (receiver_counters_base & ~dev_msgs::REMOTE_CB_PACKED_ADDR_MASK) == 0,
+        (receiver_sent_base & ~dev_msgs::REMOTE_CB_PACKED_ADDR_MASK) == 0,
         "Receiver counter base 0x{:x} does not fit the packed remote-pointer field (mask 0x{:x}) used for sender "
         "credits",
-        receiver_counters_base,
+        receiver_sent_base,
         dev_msgs::REMOTE_CB_PACKED_ADDR_MASK);
 
     std::vector<CoreCoord> receiver_phys(num_recv);
@@ -423,7 +437,7 @@ void PrefetcherPipeImpl::initialize_dram_sender_config_page() {
             receiver_phys[r] = dev->worker_core_from_logical_core(receiver_vec[r]);
         }
         const std::vector<uint32_t> page =
-            build_sender_config_page(common, receiver_counters_base - config_page_addr, receiver_phys);
+            build_sender_config_page(common, receiver_sent_base - config_page_addr, receiver_phys);
         write_dram_sender_l1(*device_, dev, sender_core_, config_page_addr, std::as_bytes(std::span(page)));
     }
 }

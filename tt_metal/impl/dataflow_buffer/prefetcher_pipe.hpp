@@ -129,10 +129,10 @@ private:
      *     NOC, and is never Attached: DRAM cores are not dispatched to, so the DRISC kernel builds
      *     its sender interface from an explicit config-page address instead of a launch-message
      *     slot.
-     *   - Credit counters cross L1 address spaces. The sender's remote-counter base and each
-     *     receiver's ack target are page-relative deltas the host computes so that a sender's
-     *     `base + 2*r*L1_ALIGNMENT` lands on receiver r's own page, and a receiver's ack lands
-     *     in DRISC L1.
+     *   - Credit counters cross L1 address spaces. Both endpoints carry a page-relative delta to
+     *     the peer's counter base (word[9]) that the host computes, so that a sender's
+     *     `base + r*L1_ALIGNMENT` lands in receiver r's own page, and a receiver's ack lands in
+     *     DRISC L1. On a worker-sender pipe, where the two pages share an address, that delta is 0.
      */
     PrefetcherPipeImpl(
         distributed::MeshDevice* mesh_device,
@@ -155,9 +155,9 @@ private:
     // every device.
     void initialize_dram_sender_config_page();
     void write_config_to_device();
-    // Record the config-page geometry the credit reset works from: the counter pairs sit in the
-    // page's tail, so the reset window is everything from the first counter to the end of the page.
-    void set_config_page_geometry(uint32_t page_size, uint32_t counters_offset);
+    // Record the config-page geometry the credit reset works from: both credit blocks sit in the
+    // page's tail, so the reset window is everything from the SENT block to the end of the page.
+    void set_config_page_geometry(uint32_t page_size, uint32_t credit_reset_offset);
     void release_allocations() noexcept;
 
     uint64_t data_allocation_id_ = 0;

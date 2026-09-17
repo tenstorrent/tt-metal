@@ -11,13 +11,14 @@
 //   * the host stamping a real PrefetcherPipe sender config page into DRISC L1,
 //   * credits crossing L1 address spaces in both directions (sender credit -> worker L1,
 //     receiver ack -> DRISC L1),
-//   * the sender keeping each receiver's write cursor in that receiver's counter slot in the
+//   * the sender keeping each receiver's write cursor in that receiver's SENT credit slot in the
 //     config page, so the cursor survives across programs,
 //   * per-sender DRISC L1 placement: a pipe reserves its config page on its own sender core, so a
 //     whole set of pipes costs the small DRISC zone one offset.
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -36,6 +37,7 @@
 #include "device_fixture.hpp"
 #include "tests/tt_metal/tt_metal/api/dram_sender_fixture.hpp"
 #include "distributed/mesh_device_impl.hpp"
+#include "hostdev/remote_dfb_config_layout.h"
 #include "impl/buffers/drisc_l1_arena.hpp"
 #include "impl/buffers/prefetcher_pipe_dram_sender_internal.hpp"
 #include "impl/context/metal_context.hpp"
@@ -233,23 +235,28 @@ void expect_ring_slot(
 }
 
 // Every receiver acked everything its sender published, read back from that sender's DRISC-L1
-// counters. Pairs are strided by 2 * L1_ALIGNMENT with entries_sent first, entries_acked next.
+// credit blocks. The page header words name both block bases, and within a block a receiver's slot
+// is one L1_ALIGNMENT -- a DRAM-sender pipe reserves one credit lane per receiver.
 void expect_credits_drained(
     distributed::MeshDevice& mesh_device, const PipeSet& set, uint32_t expected_units_per_receiver) {
     const uint32_t l1_alignment =
         MetalContext::instance(context_id_of(mesh_device)).hal().get_alignment(HalMemType::L1);
-    const uint32_t stride_words = 2 * l1_alignment / sizeof(uint32_t);
-    const uint32_t acked_word = l1_alignment / sizeof(uint32_t);
+    const uint32_t stride_words = l1_alignment / sizeof(uint32_t);
 
     for (size_t s = 0; s < set.pipes.size(); ++s) {
         const auto& [sender_logical, receivers] = set.mapping[s];
         const uint32_t num_receivers = receivers.num_cores();
-        const DeviceAddr counters_base =
-            experimental::sender_state_drisc_l1_base(*set.pipes[s]) + set.pipes[s]->credit_reset_offset();
-        const auto counters = read_drisc_l1(mesh_device, sender_logical, counters_base, num_receivers * stride_words);
+        const DeviceAddr page_base = experimental::sender_state_drisc_l1_base(*set.pipes[s]);
+        const auto header = read_drisc_l1(mesh_device, sender_logical, page_base, PREFETCHER_PIPE_CONFIG_HEADER_WORDS);
+        const auto read_block = [&](uint32_t base_word) {
+            return read_drisc_l1(
+                mesh_device, sender_logical, page_base + header[base_word], num_receivers * stride_words);
+        };
+        const auto sent_block = read_block(PREFETCHER_PIPE_CFG_PAGES_SENT_OFFSET);
+        const auto acked_block = read_block(PREFETCHER_PIPE_CFG_PAGES_ACKED_OFFSET);
         for (uint32_t r = 0; r < num_receivers; ++r) {
-            const uint32_t sent = counters[r * stride_words];
-            const uint32_t acked = counters[r * stride_words + acked_word];
+            const uint32_t sent = sent_block[r * stride_words];
+            const uint32_t acked = acked_block[r * stride_words];
             EXPECT_EQ(sent, expected_units_per_receiver)
                 << "sender " << sender_logical.str() << " receiver " << r << " published " << sent << " credit units";
             EXPECT_EQ(sent, acked) << "sender " << sender_logical.str() << " receiver " << r
@@ -397,10 +404,13 @@ TEST_F(PrefetcherPipeDramSenderFixture, PipesOnDistinctSendersShareOneDriscOffse
     auto& arena = mesh_device_->impl().drisc_l1_arena();
     const uint32_t l1_alignment =
         MetalContext::instance(context_id_of(*mesh_device_)).hal().get_alignment(HalMemType::L1);
+    // A config page is placed at the credit-block alignment so its page-relative block offsets are
+    // line-aligned too; probe with the same alignment the live pages were allocated with.
+    const uint32_t page_alignment = std::max(l1_alignment, PREFETCHER_PIPE_CREDIT_BLOCK_ALIGN);
     const uint32_t page_size = split_bank.pipes[0]->config_page_size();
-    EXPECT_NE(arena.allocate_on(split_bank.mapping[0].first, page_size, l1_alignment)->addr(), shared_base)
+    EXPECT_NE(arena.allocate_on(split_bank.mapping[0].first, page_size, page_alignment)->addr(), shared_base)
         << "a second range on a live sender's own core must not overlap its config page";
-    EXPECT_NE(arena.allocate(page_size, l1_alignment)->addr(), shared_base)
+    EXPECT_NE(arena.allocate(page_size, page_alignment)->addr(), shared_base)
         << "a uniform range is reserved on every bank, so it must clear every per-core page";
 }
 
