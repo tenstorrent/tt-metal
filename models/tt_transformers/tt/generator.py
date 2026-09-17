@@ -2473,7 +2473,8 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 else None
             )
             sampled_outputs.append(
-                sampling_module.sample(
+                self._sample_traced(
+                    sampling_module,
                     logits=logits_i,
                     tt_out_tok=tt_out_tok,
                     enable_trace=sampling_enable_trace,
@@ -2481,6 +2482,43 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 )
             )
         return sampled_outputs
+
+    @staticmethod
+    def _sample_traced(sampling_module, *, logits, tt_out_tok, enable_trace, skip_precompile):
+        """Replay the captured sampling trace even while a request carries an explicit seed.
+
+        ``SamplingGenerator.sample`` drops to EAGER dispatch whenever any slot has a request seed,
+        because the seed manager rewrites the persistent seed tensor every token and the shared code
+        errs on the side of never replaying against a stale seed. That guard is written for a host
+        that can race the device. Here every decode step runs on ONE command queue, in order: the
+        seed write (``get_new_values`` -> ``copy_host_to_device_tensor``, issued just before this
+        call) is queued ahead of the replay, and the trace's ``ttnn.manual_seed`` reads that same
+        persistent buffer at replay time -- so the replay sees exactly this token's seeds, as the
+        eager path would. What the eager path costs is the sampler's ~45 programs host-dispatched
+        every token (top-k, gathers, offsets, the tie-break chain, seed, draw) behind the decode
+        trace; measured here that dispatch, not device work, was the sampling stage's cost.
+
+        Slot selection and validation mirror ``sample`` so the two never disagree on which trace a
+        configuration replays. Unseeded batches take ``sample`` unchanged.
+        """
+        if not enable_trace or not sampling_module.seed_manager.has_active_request_seed():
+            return sampling_module.sample(
+                logits=logits,
+                tt_out_tok=tt_out_tok,
+                enable_trace=enable_trace,
+                skip_precompile=skip_precompile,
+            )
+        key, slot = sampling_module._trace_slot(
+            sampling_module._penalties_active,
+            getattr(sampling_module, "_log_probs_active", False),
+            sampling_module.tt_sampling.force_argmax_sampling,
+        )
+        if slot["id"] is None:
+            sampling_module.capture_trace(logits, tt_out_tok=tt_out_tok, skip_precompile=skip_precompile)
+            # Capture only records; replay once so the returned buffer holds THIS step's token.
+            return sampling_module._execute_trace(key)
+        sampling_module._validate_trace_inputs(slot, logits, tt_out_tok)
+        return sampling_module._execute_trace(key)
 
     @staticmethod
     def _decode_token_feedback_buffer(model, device_inputs):
