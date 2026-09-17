@@ -11,24 +11,11 @@
  * LLK PACK REDUCE
  *************************************************************************/
 
-// Select the LLK specialization locally so callers can keep passing a runtime output CB.
+// Pass the output geometry through one shared LLK mask configuration path.
 // The LLKOperand API (experimental/2_0/) supplies the same geometry from its output TensorShape.
 template <PoolType reduce_type, ReduceDim dim, PackMode pack_mode = PackMode::Default>
 inline void llk_pack_reduce_mask_config_impl(const std::uint32_t face_r_dim, const TileGeometry geometry) {
-    switch (geometry) {
-        case TileGeometry::Faces1x1:
-            _llk_pack_reduce_mask_config_<reduce_type, dim, pack_mode, TileGeometry::Faces1x1>(face_r_dim);
-            break;
-        case TileGeometry::Faces1x2:
-            _llk_pack_reduce_mask_config_<reduce_type, dim, pack_mode, TileGeometry::Faces1x2>(face_r_dim);
-            break;
-        case TileGeometry::Faces2x1:
-            _llk_pack_reduce_mask_config_<reduce_type, dim, pack_mode, TileGeometry::Faces2x1>(face_r_dim);
-            break;
-        case TileGeometry::Faces2x2:
-            _llk_pack_reduce_mask_config_<reduce_type, dim, pack_mode, TileGeometry::Faces2x2>(face_r_dim);
-            break;
-    }
+    _llk_pack_reduce_mask_config_<reduce_type, dim, pack_mode>(face_r_dim, geometry);
 }
 
 // Derive the face grid from the output CB's tile dimensions and face height.
