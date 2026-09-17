@@ -165,21 +165,25 @@ def main() -> int:
             f"{r['ttft'] * 1000:8.1f}ms {r['ttft_min'] * 1000:8.1f}ms {r['decode']:8.1f} t/s"
         )
 
-    if rows:
-        worst = max(rows, key=lambda r: r["bucket"])
-        decodes = [r["decode"] for r in rows if r["decode"] == r["decode"]]
-        med_decode = statistics.median(decodes) if decodes else float("nan")
-        print(
-            f"\ngates: TTFT <= {TTFT_GATE_S * 1000:.0f}ms on the largest bucket, "
-            f"decode >= {DECODE_GATE_TOKS:.0f} tok/s/user"
-        )
-        print(
-            f"  largest bucket ({worst['bucket']}): TTFT {worst['ttft'] * 1000:.1f}ms "
-            f"-> {'PASS' if worst['ttft'] <= TTFT_GATE_S else 'MISS'}"
-        )
-        print(f"  median decode: {med_decode:.1f} tok/s -> {'PASS' if med_decode >= DECODE_GATE_TOKS else 'MISS'}")
+    if not rows:
+        print("===============================================")
+        return 1
+
+    worst = max(rows, key=lambda r: r["bucket"])
+    decodes = [r["decode"] for r in rows if r["decode"] == r["decode"]]
+    med_decode = statistics.median(decodes) if decodes else float("nan")
+    ttft_pass = worst["ttft"] <= TTFT_GATE_S
+    decode_pass = med_decode >= DECODE_GATE_TOKS
+    print(
+        f"\ngates: TTFT <= {TTFT_GATE_S * 1000:.0f}ms on the largest bucket, "
+        f"decode >= {DECODE_GATE_TOKS:.0f} tok/s/user"
+    )
+    print(
+        f"  largest bucket ({worst['bucket']}): TTFT {worst['ttft'] * 1000:.1f}ms -> {'PASS' if ttft_pass else 'MISS'}"
+    )
+    print(f"  median decode: {med_decode:.1f} tok/s -> {'PASS' if decode_pass else 'MISS'}")
     print("===============================================")
-    return 0
+    return 0 if (ttft_pass and decode_pass) else 1
 
 
 if __name__ == "__main__":
