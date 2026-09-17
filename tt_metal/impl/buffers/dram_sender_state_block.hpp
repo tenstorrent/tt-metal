@@ -47,8 +47,9 @@ struct DramSenderStateBlock {
     //
     // (The per-receiver ring-index (g_r) rotation table that used to follow the NOC XY table is
     // gone: the streaming rotation is now host-owned and carried per-tensor in the request page,
-    // not stamped into L1. So are this sender's slab base and the set-wide max receiver count,
-    // which ride the request header. See tensor_prefetcher_request.hpp.)
+    // not stamped into L1. So is this sender's bank-local slab base, which rides every layout slot
+    // of its request page. Nothing carries a set-wide receiver maximum any more -- an entry names
+    // its layout slot by byte offset. See tensor_prefetcher_request.hpp.)
 } __attribute__((packed));
 
 static_assert(sizeof(DramSenderStateBlock) == 10 * sizeof(uint32_t), "DramSenderStateBlock layout drift");

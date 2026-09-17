@@ -33,13 +33,16 @@ namespace prefetcher_pipe_dram_sender {
 
 struct PrefetcherPipeDramSenderInternals {
     // Construct a PrefetcherPipe whose sender is the programmable DRAM core
-    // `dram_sender_logical` (a DRAM-logical coord, x == bank id).
+    // `dram_sender_logical` (a DRAM-logical coord, x == bank id). `recv_index_base` is the
+    // bank-local slab index this sender's first receiver owns, which only the factory knows
+    // because only it holds the whole bank's receiver split.
     static std::shared_ptr<PrefetcherPipe> make_dram_sender(
         distributed::MeshDevice* mesh_device,
         CoreCoord dram_sender_logical,
         const CoreRangeSet& receiver_cores,
         uint32_t ring_size,
         uint32_t initial_entry_size,
+        uint32_t recv_index_base,
         BufferType buffer_type);
 
     // DRISC L1 address of this pipe's sender config page (9-word header, receiver NOC XY table,

@@ -77,10 +77,11 @@ void start_tensor_prefetcher(
 // delivery transport. See the metal-level QueueTensorPrefetcherRequest overloads for the one extra
 // precondition PrefetcherPipe delivery imposes: every tensor must be receiver-contiguous.
 //
-// `prefetcher_pipes` is one PrefetcherPipe per DRAM sender core, as
-// create_prefetcher_pipes_for_tensor_prefetcher returned them: a pipe's position is what assigns its
-// sender a bank-local slab base, so the list has to keep that order (a bank's pipes adjacent, the
-// leading one owning that bank's leading receivers). An empty list means no pipe target. Keep the
+// `prefetcher_pipes` is one PrefetcherPipe per DRAM sender core, from one
+// create_prefetcher_pipes_for_tensor_prefetcher call. Each pipe already knows the bank-local slabs
+// its sender owns, so any order or subset of that call's pipes is accepted; pipes from two
+// different calls are not, since both would number a bank's slabs from 0. An empty list means no
+// pipe target. Keep the
 // pipes alive for as long as any program has Attached them or the prefetcher may still deliver into
 // them -- dropping the last owner of one frees its ring and config pages.
 void queue_tensor_prefetcher_request(
