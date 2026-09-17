@@ -24,6 +24,7 @@ Bring-up in progress. This directory holds what is finished, and nothing that is
 | 8 | Sampling (`sampling.py`) | host | **done**, matches `transformers` |
 | 9 | Codec encoder, waveform → codes | device | **done**, latents PCC 0.9999 |
 | 10 | Voice clone: reference clip → prompt → speech | host + device | **done**, prompt bit-exact |
+| 11 | VoiceDesign: a voice described in a sentence | host + device | **done**, prompt bit-exact |
 
 The speaker encoder reads a reference clip and emits one 2048-wide vector, which occupies a
 single position of the talker's prompt. Its width matches the talker's hidden size, so
@@ -66,8 +67,11 @@ context: the prompt carries the clip's transcript beside its codes, so the model
 the clip said as well as hearing how it sounded. Give it three to ten seconds of clean
 speech, and make the transcript cover the whole clip.
 
-Either demo takes `--speaker ryan` instead of `--ref` to use one of the nine CustomVoice
-voices, and `--ckpt` to point at a checkpoint directory.
+Either demo takes `--instruct "A calm older man speaking slowly, with a slight rasp."`
+instead of `--ref`, which designs a voice from the description rather than a recording, or
+`--speaker ryan` to use one of the nine CustomVoice voices. `--ckpt` points at a checkpoint
+directory, which you need for the first two, since each way of choosing a voice lives in a
+different release.
 
 ## Voice cloning
 
@@ -123,6 +127,35 @@ clip's vector and the clone's: **0.9948**, against 0.8230 for an unrelated voice
 Streaming text input is the one regime still missing. With `non_streaming_mode=False`
 upstream sums the two tracks position by position and feeds whatever text is left over
 during decode, as a real `trailing_text_hidden` rather than a constant pad.
+
+## Voice design
+
+The third way to pick a voice: describe it. No clip, no speaker id, one sentence of English.
+
+```python
+waveform, codes = pipeline.generate_design(
+    "This voice was never recorded.",
+    "A calm older man speaking slowly, with a slight rasp and a warm low pitch.",
+)
+```
+
+This needs the **VoiceDesign** release, `tts_model_type: voice_design`. Its `talker_config`
+is Base's field for field, so every ported block runs on it untouched and only the prompt
+differs. `generate_design` checks `tts_model_type` first and says which checkpoint to fetch
+rather than producing a voice the instruction never shaped.
+
+Two things separate the prompt from CustomVoice's. It has **no speaker position**, which
+shortens the head from nine positions to eight. And the instruction goes in **whole**: the
+text to speak has its role tokens sliced off, the instruction keeps its `<|im_start|>user`
+opener and `<|im_end|>` closer, and it sits on the text track with nothing added from the
+codec track. Capturing upstream's own assembly under transformers 4.57.3 and diffing gives
+**max absolute difference 0.0** at 37 positions with a language tag, 33 with `Auto`, and 20
+with an empty instruction, which upstream treats as no instruction at all.
+
+Whether the instruction reaches the voice is measurable two ways. At a fixed seed, changing
+it moves 382 of 384 codes. And the Base checkpoint's speaker encoder puts two designs of the
+same sentence at cosine **0.8923**, against 0.99 for one speaker and 0.82 for an unrelated
+pair, so the description carries most of the way.
 
 ## Speed
 
@@ -192,14 +225,20 @@ export QWEN3_TTS_CKPT=$(pwd)/qwen3_tts_ref
 tiered-CI convention), then the default repo at a pinned revision. Override the revision with
 `$QWEN3_TTS_REVISION`.
 
-The checkpoint holds two top-level prefixes, `speaker_encoder.` (76 tensors, 12.0M parameters)
-and `talker.` (the rest). Readers open the file lazily and name their keys, so speaker-encoder
+Three releases share one architecture and differ in which voices they answer to, so the
+suite needs all three: **Base** carries `speaker_encoder` and an empty `spk_id` and clones
+from a clip, **CustomVoice** the nine named speakers and no encoder, **VoiceDesign** neither,
+taking a sentence of English instead. `tts_model_type` in `config.json` is how each says
+which it is, and the pipeline reads it before refusing the wrong input.
+
+The Base checkpoint holds two top-level prefixes, `speaker_encoder.` (76 tensors, 12.0M
+parameters) and `talker.` (the rest). Readers open the file lazily and name their keys, so speaker-encoder
 work never materialises the talker.
 
 ## Tests
 
 The suite is self-contained: references are computed live in-process from the checkpoint, so
-it needs only the checkpoints and, for the device tests, a card. 108 tests, 200 s warm.
+it needs only the checkpoints and, for the device tests, a card. 118 tests, 200 s warm.
 
 ```bash
 pytest models/demos/audio/qwen3_tts/tests/                             # everything
@@ -212,6 +251,7 @@ pytest models/demos/audio/qwen3_tts/tests/pcc/test_codec_pcc.py        # codec d
 pytest models/demos/audio/qwen3_tts/tests/pcc/test_codec_encoder_pcc.py  # codec encoder
 pytest models/demos/audio/qwen3_tts/tests/pcc/test_pipeline.py         # end to end, CustomVoice
 pytest models/demos/audio/qwen3_tts/tests/pcc/test_clone_pcc.py       # end to end, voice clone
+pytest models/demos/audio/qwen3_tts/tests/pcc/test_voice_design_pcc.py  # end to end, VoiceDesign
 ```
 
 `test_checkpoint_loading.py` derives every speaker-encoder tensor name and shape from

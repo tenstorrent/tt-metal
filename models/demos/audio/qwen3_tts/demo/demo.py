@@ -16,6 +16,11 @@ Clone a voice from a clip (needs the **Base** checkpoint):
     python -m models.demos.audio.qwen3_tts.demo.demo "Text to speak." \\
         --ref my_voice.wav --ref-text "exactly what my_voice.wav says"
 
+Describe a voice instead of recording one (needs the **VoiceDesign** checkpoint):
+
+    python -m models.demos.audio.qwen3_tts.demo.demo "Text to speak." \\
+        --instruct "A calm older man speaking slowly, with a slight rasp."
+
 Or use one of the nine built-in speakers (needs the **CustomVoice** checkpoint):
 
     python -m models.demos.audio.qwen3_tts.demo.demo "Text to speak." --speaker ryan
@@ -29,8 +34,9 @@ it sounded. A wrong transcript degrades the clone. Three to ten seconds of clean
 the useful range; the whole clip is used, so the transcript must cover all of it.
 
 Checkpoint resolution: --ckpt > $QWEN3_TTS_CKPT > $HF_MODEL > the Base repo from the HF hub.
-Cloning and named speakers live in different releases: Base carries the speaker encoder and
-no speakers, CustomVoice the nine speakers and no encoder.
+The three ways of choosing a voice live in three releases, and each refuses the others'
+input: Base carries the speaker encoder and no speakers, CustomVoice the nine speakers and
+no encoder, VoiceDesign neither.
 """
 
 import argparse
@@ -114,6 +120,7 @@ def run(
     ref=None,
     ref_text=None,
     speaker=None,
+    instruct=None,
     out="out.wav",
     seed=None,
     language=None,
@@ -121,7 +128,7 @@ def run(
     ckpt=None,
     similarity=True,
 ):
-    """Speak `text`, either in the `ref` clip's voice or as a named `speaker`.
+    """Speak `text` in the `ref` clip's voice, as a named `speaker`, or as `instruct` describes.
 
     Writes a 24 kHz wav to `out` and returns its path, or None if the model stopped before
     producing a frame.
@@ -132,8 +139,12 @@ def run(
 
     if ckpt:
         os.environ["QWEN3_TTS_CKPT"] = os.path.abspath(ckpt)
-    if bool(ref) == bool(speaker):
-        raise ValueError("pass exactly one of --ref (clone a clip) or --speaker (a built-in voice)")
+    chosen = [name for name, value in (("--ref", ref), ("--speaker", speaker), ("--instruct", instruct)) if value]
+    if len(chosen) != 1:
+        raise ValueError(
+            "pass exactly one of --ref (clone a clip), --speaker (a built-in voice) or "
+            f"--instruct (describe a voice); got {', '.join(chosen) or 'none'}"
+        )
     if ref and not str(ref_text or "").strip():
         raise ValueError("--ref-text is required with --ref: this model clones in context, see the module docstring")
 
@@ -165,13 +176,18 @@ def run(
         pipeline = Qwen3TTSPipeline(device, max_frames=max_frames, seed=seed)
         print(f"  weights in {time.time() - loaded:.1f} s")
 
-        print(f"\nText: {text!r}   (seed={seed}, language={language or 'Auto' if ref else 'English'})")
+        tag = language or ("English" if speaker else "Auto")
+        print(f"\nText: {text!r}   (seed={seed}, language={tag})")
+        if instruct:
+            print(f"Voice: {instruct!r}")
         print("  the first utterance compiles its kernels; later ones in the same process do not")
         started = time.time()
         if ref:
-            waveform, codes = pipeline.generate_clone(text, reference, language=language or "Auto")
+            waveform, codes = pipeline.generate_clone(text, reference, language=tag)
+        elif instruct:
+            waveform, codes = pipeline.generate_design(text, instruct, language=tag)
         else:
-            waveform, codes = pipeline.generate(text, speaker=speaker, language=language or "English")
+            waveform, codes = pipeline.generate(text, speaker=speaker, language=tag)
         elapsed = time.time() - started
 
         spoken = waveform.reshape(-1)
@@ -209,6 +225,10 @@ def main():
   python -m models.demos.audio.qwen3_tts.demo.demo "Hello from my own voice." \\
       --ref my_voice.wav --ref-text "what my voice clip says, word for word"
 
+  # a voice described in words (VoiceDesign checkpoint)
+  python -m models.demos.audio.qwen3_tts.demo.demo "Hello there." \\
+      --instruct "A calm older man speaking slowly, with a slight rasp."
+
   # one of the nine built-in speakers (CustomVoice checkpoint)
   python -m models.demos.audio.qwen3_tts.demo.demo "Hello there." --speaker ryan
 
@@ -221,6 +241,7 @@ def main():
     parser.add_argument("--ref", help="Reference voice clip to clone (.wav/.flac/.ogg, any rate)")
     parser.add_argument("--ref-text", help="What the reference clip says, word for word. Required with --ref")
     parser.add_argument("--speaker", help="A built-in CustomVoice speaker instead of a clone (e.g. ryan)")
+    parser.add_argument("--instruct", help="Describe the voice in words instead (VoiceDesign checkpoint)")
     parser.add_argument("--out", default="out.wav", help="Output wav path (default: out.wav)")
     parser.add_argument("--seed", type=int, default=None, help="Sampling seed (default: unseeded)")
     parser.add_argument("--language", default=None, help="Language name (default: Auto to clone, English otherwise)")
@@ -236,6 +257,7 @@ def main():
         ref=args.ref,
         ref_text=args.ref_text,
         speaker=args.speaker,
+        instruct=args.instruct,
         out=args.out,
         seed=args.seed,
         language=args.language,

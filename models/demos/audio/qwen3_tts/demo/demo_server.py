@@ -14,6 +14,11 @@ Clone a voice (needs the **Base** checkpoint):
     python -m models.demos.audio.qwen3_tts.demo.demo_server \\
         --ref my_voice.wav --ref-text "exactly what my_voice.wav says"
 
+Describe a voice instead of recording one (needs **VoiceDesign**):
+
+    python -m models.demos.audio.qwen3_tts.demo.demo_server \\
+        --instruct "A calm older man speaking slowly, with a slight rasp."
+
 Or start from one of the nine built-in speakers (needs **CustomVoice**):
 
     python -m models.demos.audio.qwen3_tts.demo.demo_server --speaker ryan
@@ -21,6 +26,7 @@ Or start from one of the nine built-in speakers (needs **CustomVoice**):
 Commands, besides plain text to speak:
 
     \\ref PATH | TRANSCRIPT   clone a new clip; the transcript is required and goes after |
+    \\instruct DESCRIPTION    redesign the voice from words (VoiceDesign checkpoint)
     \\speaker NAME            switch to a built-in CustomVoice speaker (drops any clone)
     \\language NAME           set the language tag, or Auto to let the model infer
     \\seed N                  set the base seed; utterance i uses N + i, so repeats vary
@@ -62,6 +68,7 @@ def main():
     parser.add_argument("--ref", help="Reference voice clip to clone (.wav/.flac/.ogg, any rate)")
     parser.add_argument("--ref-text", help="What the reference clip says, word for word. Required with --ref")
     parser.add_argument("--speaker", help="A built-in CustomVoice speaker instead of a clone (e.g. ryan)")
+    parser.add_argument("--instruct", help="Describe the voice in words instead (VoiceDesign checkpoint)")
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED, help=f"Base sampling seed (default: {DEFAULT_SEED})")
     parser.add_argument("--language", default=None, help="Language name (default: Auto to clone, English otherwise)")
     parser.add_argument("--max-frames", type=int, default=400, help="Frame budget, 12.5 a second (default: 400)")
@@ -71,8 +78,12 @@ def main():
 
     if args.ckpt:
         os.environ["QWEN3_TTS_CKPT"] = os.path.abspath(args.ckpt)
-    if bool(args.ref) == bool(args.speaker):
-        parser.error("pass exactly one of --ref (clone a clip) or --speaker (a built-in voice)")
+    chosen = [n for n, v in (("--ref", args.ref), ("--speaker", args.speaker), ("--instruct", args.instruct)) if v]
+    if len(chosen) != 1:
+        parser.error(
+            "pass exactly one of --ref (clone a clip), --speaker (a built-in voice) or "
+            f"--instruct (describe a voice); got {', '.join(chosen) or 'none'}"
+        )
     if args.ref and not str(args.ref_text or "").strip():
         parser.error("--ref-text is required with --ref: this model clones in context")
 
@@ -93,6 +104,7 @@ def main():
     try:
         clip = reference = None
         speaker = args.speaker
+        instruct = args.instruct
         language = args.language
         seed = args.seed
         measure = False
@@ -102,13 +114,16 @@ def main():
         print(bar)
         if args.ref:
             clip, reference = _read_reference(device, None, args.ref, args.ref_text)
+        elif instruct:
+            print(f"  VOICE:  {instruct!r}")
         started = time.time()
         pipeline = Qwen3TTSPipeline(device, max_frames=args.max_frames, seed=seed)
         print(f"  WEIGHTS: {time.time() - started:.1f} s")
 
         print(bar)
         print("Ready. Type text and press ENTER to speak it.")
-        print("Commands: \\ref PATH | TRANSCRIPT   \\speaker NAME   \\language NAME")
+        print("Commands: \\ref PATH | TRANSCRIPT   \\instruct DESCRIPTION   \\speaker NAME")
+        print("          \\language NAME")
         print("          \\seed N   \\similarity   \\quit")
         print(bar)
 
@@ -142,13 +157,19 @@ def main():
                     measure = not measure
                     print(f"  similarity measurement {'on' if measure else 'off'}")
                 elif command == "\\speaker":
-                    speaker, clip, reference = argument, None, None
+                    speaker, instruct, clip, reference = argument, None, None, None
                     print(f"  speaker = {speaker}  (needs the CustomVoice checkpoint)")
+                elif command == "\\instruct":
+                    if not argument:
+                        print("  ERROR: \\instruct needs a description of the voice")
+                    else:
+                        instruct, speaker, clip, reference = argument, None, None, None
+                        print(f"  voice = {instruct!r}  (needs the VoiceDesign checkpoint)")
                 elif command == "\\ref":
                     path, _, transcript = argument.partition("|")
                     try:
                         clip, reference = _read_reference(device, pipeline, path.strip(), transcript.strip())
-                        speaker = None
+                        speaker = instruct = None
                     except Exception as error:
                         print(f"  ERROR: {error}")
                 else:
@@ -161,6 +182,8 @@ def main():
                 started = time.time()
                 if reference is not None:
                     waveform, codes = pipeline.generate_clone(line, reference, language=language or "Auto")
+                elif instruct:
+                    waveform, codes = pipeline.generate_design(line, instruct, language=language or "Auto")
                 else:
                     waveform, codes = pipeline.generate(line, speaker=speaker, language=language or "English")
                 elapsed = time.time() - started

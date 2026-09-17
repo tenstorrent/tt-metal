@@ -11,6 +11,7 @@ Two entry points, and which one works depends on the checkpoint:
 
     generate(text, speaker=...)          CustomVoice: one of nine named speakers
     generate_clone(text, reference)      Base: a voice taken from a reference clip
+    generate_design(text, instruction)   VoiceDesign: a voice described in a sentence
 
 `build_clone_reference` turns a clip into the `CloneReference` the second takes, running the
 codec encoder and the speaker encoder once each.
@@ -251,6 +252,18 @@ def _prompt_head(tables, role_ids, language_id, speaker_embed):
     return head, codec_track[:, -1:]
 
 
+def _prompt_body(tables, text_ids, codec_bos):
+    """The text to speak, then `tts_eos`, each against `codec_pad`; then `codec_bos`.
+
+    The tail of every prompt here, and the last thing the model sees before it starts
+    producing frames. Returns [1, n_text + 2, 2048].
+    """
+    codec_pad = checkpoint.talker_config()["codec_pad_id"]
+    spoken = torch.cat([tables.text(text_ids), tables.tts_eos], dim=1)
+    body = spoken + tables.codec([codec_pad] * spoken.shape[1])
+    return torch.cat([body, tables.tts_pad + codec_bos], dim=1)
+
+
 def build_custom_voice_prefill(text, speaker, language, tables=None):
     """The dual-track prompt for CustomVoice, non-streaming.
 
@@ -270,14 +283,56 @@ def build_custom_voice_prefill(text, speaker, language, tables=None):
     head, codec_bos = _prompt_head(
         tables, prompt_ids[:ROLE_IDS], resolve_language(language, key), tables.codec([speakers[key]])
     )
+    return torch.cat([head, _prompt_body(tables, text_ids, codec_bos)], dim=1), prompt_ids
 
-    # The text itself, then tts_eos, each against codec_pad; then codec_bos against tts_pad.
-    body = torch.cat([tables.text(text_ids), tables.tts_eos], dim=1) + tables.codec(
-        [talker_config["codec_pad_id"]] * (len(text_ids) + 1)
-    )
-    tail = tables.tts_pad + codec_bos
 
-    return torch.cat([head, body, tail], dim=1), prompt_ids
+def is_voice_design_checkpoint():
+    """Whether the resolved checkpoint is the VoiceDesign release.
+
+    Three releases carry the same architecture and answer to different prompts, and
+    `tts_model_type` is how they say which: `base` clones from a clip, `custom_voice` speaks
+    as one of nine named speakers, `voice_design` takes a sentence describing a voice.
+    """
+    return checkpoint.model_config().get("tts_model_type") == "voice_design"
+
+
+def build_voice_design_prefill(text, instruction, language="Auto", tables=None):
+    """The dual-track prompt for VoiceDesign, non-streaming.
+
+    Returns (embeddings [1, P, 2048], prompt_ids) where P is
+    `n_instruction + n_text + 10`, or two less when the language tag is off and the
+    instruction is empty.
+
+    A third checkpoint release, `tts_model_type: voice_design`. Its architecture is Base's
+    exactly, so every ported block runs on it unchanged; the voice comes from a sentence of
+    English rather than a clip or a speaker id.
+
+    The instruction goes **first, whole, and on the text track alone**: no slicing off its
+    role tokens the way the text to speak gets sliced, and nothing added from the codec
+    track. Then the usual head, which has no speaker position here, then the text.
+
+    An empty instruction is allowed and upstream treats it as no instruction at all, which
+    leaves the model to invent a voice.
+
+    Refuses the other two releases. They were never shown an instruction, so they would
+    speak in some voice the description had no part in choosing rather than fail.
+    """
+    if not is_voice_design_checkpoint():
+        raise ValueError(
+            "an instruction needs the VoiceDesign checkpoint (this one is "
+            f"{checkpoint.model_config().get('tts_model_type')!r}); point $QWEN3_TTS_CKPT "
+            "or $HF_MODEL at Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign"
+        )
+
+    tables = tables or HostEmbeddings()
+    prompt_ids = frontend.text_ids(text)
+    text_ids = prompt_ids[ROLE_IDS:-TAIL_IDS]
+    head, codec_bos = _prompt_head(tables, prompt_ids[:ROLE_IDS], resolve_language(language), None)
+
+    parts = [head, _prompt_body(tables, text_ids, codec_bos)]
+    if str(instruction or "").strip():
+        parts.insert(0, tables.text(frontend.instruction_ids(instruction)))
+    return torch.cat(parts, dim=1), prompt_ids
 
 
 def build_voice_clone_prefill(text, reference, language="Auto", tables=None):
@@ -312,11 +367,12 @@ def build_voice_clone_prefill(text, reference, language="Auto", tables=None):
     )
 
     # Text track: the reference transcript, the text to speak, then tts_eos, all against
-    # codec_pad.
+    # codec_pad. The reference transcript comes first, which is the whole point of ICL.
     spoken = torch.cat([tables.text(list(reference_ids) + list(text_ids)), tables.tts_eos], dim=1)
     body = spoken + tables.codec([talker_config["codec_pad_id"]] * spoken.shape[1])
 
-    # Codec track: codec_bos, then the reference clip frame by frame, against tts_pad.
+    # Codec track: codec_bos, then the reference clip frame by frame, against tts_pad. This
+    # replaces `_prompt_body`'s single `codec_bos` tail, since the clip rides behind it.
     voice = torch.cat([codec_bos, tables.frames(reference.codes)], dim=1) + tables.tts_pad
 
     return torch.cat([head, body, voice], dim=1), prompt_ids
@@ -486,6 +542,25 @@ class Qwen3TTSPipeline:
         """
         limit = min(max_frames or self.max_frames, self.max_frames)
         embeddings, _ = build_custom_voice_prefill(text, speaker, language, self.tables)
+        codes = self._decode_frames(embeddings, limit, on_frame)
+        started = time.time()
+        waveform = self.codec.decode(codes.t().unsqueeze(0)).reshape(1, -1)
+        self.last_timings["codec_s"] = time.time() - started
+        return waveform, codes
+
+    def generate_design(self, text, instruction, language="Auto", max_frames=None, on_frame=None):
+        """text spoken in a voice described in words -> (waveform [1, N], codes [frames, 16]).
+
+        Needs the **VoiceDesign** checkpoint, the third release: `tts_model_type` reads
+        `voice_design`, and neither Base nor CustomVoice answers to an instruction. Its
+        architecture is Base's, so nothing else about the pipeline changes.
+
+        `instruction` is a sentence of English describing the voice, such as "A calm older
+        man speaking slowly, with a slight rasp." An empty one is allowed, and leaves the
+        model to invent a voice. `build_voice_design_prefill` refuses the other releases.
+        """
+        limit = min(max_frames or self.max_frames, self.max_frames)
+        embeddings, _ = build_voice_design_prefill(text, instruction, language, self.tables)
         codes = self._decode_frames(embeddings, limit, on_frame)
         started = time.time()
         waveform = self.codec.decode(codes.t().unsqueeze(0)).reshape(1, -1)
