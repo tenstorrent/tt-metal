@@ -15,6 +15,7 @@
 #include <x86intrin.h>
 #include <ctime>
 #include "impl/streaming_profiler/streaming_profiler_host_probe.hpp"
+#include "tt_metal/common/chunked_log.hpp"
 
 #include <condition_variable>
 #include <limits>
@@ -43,51 +44,34 @@ constexpr Key key_max() {
     }
 }
 
-// One series: nodes in fixed chunks reached through a fixed table, so an append never moves a node a reader may be
-// looking at; the chunks stay allocated across captures.
+// One series: its nodes, the newest SyncCorrections::kSeriesNodes of them, the cover, and the generation that
+// invalidates cursors built on an earlier capture.
 constexpr uint32_t kHostSeries = std::numeric_limits<uint32_t>::max();
 
 template <typename Key>
 struct Log {
     using Node = PlacementNode<Key>;
-    static constexpr uint32_t kChunkShift = 12;
-    static constexpr uint32_t kChunkNodes = 1u << kChunkShift;
-    static constexpr uint32_t kChunks = 256;
-    static constexpr uint32_t kCapacity = kChunks * kChunkNodes;
-    std::array<std::atomic<Node*>, kChunks> chunks{};
-    alignas(64) std::atomic<uint32_t> count{0};
+    ChunkedLog<Node> nodes{SyncCorrections::kSeriesNodes};
+    Key last_at = key_min<Key>();  // the newest node's key, the writer's own copy
     alignas(64) std::atomic<Key> cover{key_min<Key>()};
-    alignas(64) std::atomic<uint32_t> gen{0};  // bumped by clear(): cursors built on an earlier capture miss
+    alignas(64) std::atomic<uint32_t> gen{0};
     bool full_warned = false;
 
-    const Node& at(uint32_t i) const noexcept {
-        return chunks[i >> kChunkShift].load(std::memory_order_relaxed)[i & (kChunkNodes - 1)];
-    }
     void append(uint32_t chip_id, const Node& node) {
-        const uint32_t n = count.load(std::memory_order_relaxed);
-        if (n != 0 && node.at <= at(n - 1).at) {
+        if (nodes.count() != nodes.first() && node.at <= last_at) {
             return;
         }
-        if (n >= kCapacity) {
-            if (!full_warned) {
-                full_warned = true;
-                log_warning(
-                    tt::LogMetal,
-                    "[streaming profiler] d2d sync: {} has {} placement nodes, the series' capacity; later records "
-                    "convert on the newest tangent",
-                    chip_id == kHostSeries ? std::string("the host") : "chip " + std::to_string(chip_id),
-                    n);
-            }
-            extend(node.at);
-            return;
+        if (!full_warned && nodes.count() - nodes.first() == nodes.capacity()) {
+            full_warned = true;
+            log_warning(
+                tt::LogMetal,
+                "[streaming profiler] d2d sync: {} has {} placement nodes, the series' capacity; records before its "
+                "oldest kept node convert on that node's tangent",
+                chip_id == kHostSeries ? std::string("the host") : "chip " + std::to_string(chip_id),
+                nodes.capacity());
         }
-        Node* chunk = chunks[n >> kChunkShift].load(std::memory_order_relaxed);
-        if (chunk == nullptr) {
-            chunk = new Node[kChunkNodes];
-            chunks[n >> kChunkShift].store(chunk, std::memory_order_release);
-        }
-        chunk[n & (kChunkNodes - 1)] = node;
-        count.store(n + 1, std::memory_order_release);
+        nodes.push(node);
+        last_at = node.at;
         extend(node.at);
     }
     void extend(Key c) {
@@ -98,7 +82,8 @@ struct Log {
     void clear() {
         gen.fetch_add(1, std::memory_order_release);
         cover.store(key_min<Key>(), std::memory_order_release);
-        count.store(0, std::memory_order_release);
+        nodes.clear();
+        last_at = key_min<Key>();
         full_warned = false;
     }
 };
@@ -126,7 +111,6 @@ SteadySlots g_steady;
 template <typename Key>
 struct Cursor {
     uint32_t gen = 0;
-    uint32_t i = 0;
     Key a = key_max<Key>();
     Key b = key_min<Key>();
     Key origin{};
@@ -144,75 +128,64 @@ inline double on_line(const Cursor<Key>& c, Key t) noexcept {
     return c.value + c.slope * static_cast<double>(t - c.origin);
 }
 
-// The last node at or before t, from a hint; records arrive nearly in order, so a few steps usually reach it.
+// Puts the cursor on the segment holding t and places t; false when the series has no node. The segment's nodes
+// come from a binary search over the retained range; a read that fails (the writer retired that chunk meanwhile)
+// starts over from the new oldest node.
 template <typename Key>
-uint32_t locate(const Log<Key>& log, uint32_t n, uint32_t hint, Key t) noexcept {
-    uint32_t i = hint < n ? hint : 0;
-    for (int steps = 0; steps < 8; steps++) {
-        if (i + 1 < n && log.at(i + 1).at <= t) {
-            i++;
-        } else if (i > 0 && log.at(i).at > t) {
-            i--;
-        } else {
-            return i;
-        }
-    }
-    uint32_t lo = 0, hi = n;  // first node past t
-    while (lo < hi) {
-        const uint32_t mid = lo + (hi - lo) / 2;
-        if (log.at(mid).at <= t) {
-            lo = mid + 1;
-        } else {
-            hi = mid;
-        }
-    }
-    return lo - 1;
-}
-
-template <typename Key>
-bool refill(Log<Key>& log, Cursor<Key>& c, Key t, double& value) noexcept {
+bool refill(const Log<Key>& log, Cursor<Key>& c, Key t, double& value) noexcept {
     using Node = PlacementNode<Key>;
-    const uint32_t gen = log.gen.load(std::memory_order_acquire);
-    const Key cover = log.cover.load(std::memory_order_acquire);
-    const uint32_t n = log.count.load(std::memory_order_acquire);
-    if (n == 0) {
-        c = Cursor<Key>{.gen = gen, .sigma = std::numeric_limits<float>::infinity()};
-        return false;
-    }
-    const Node& first = log.at(0);
-    if (t < first.at) {
-        // Before the first node: back along its tangent, measured from the node itself.
-        c = Cursor<Key>{gen, 0, key_min<Key>(), first.at, first.at, first.value, first.tangent, first.sigma_ns};
+    for (;;) {
+        const uint32_t gen = log.gen.load(std::memory_order_acquire);
+        const Key cover = log.cover.load(std::memory_order_acquire);
+        const uint64_t f = log.nodes.first();
+        const uint64_t n = log.nodes.count();
+        if (n == f) {
+            c = Cursor<Key>{.gen = gen, .sigma = std::numeric_limits<float>::infinity()};
+            return false;
+        }
+        Node a{}, b{};
+        uint64_t lo = f, hi = n;  // first node past t
+        bool retired = false;
+        while (lo < hi && !retired) {
+            const uint64_t mid = lo + (hi - lo) / 2;
+            retired = !log.nodes.read(mid, a);
+            if (a.at <= t) {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        if (retired || !log.nodes.read(lo == f ? f : lo - 1, a)) {
+            continue;
+        }
+        if (lo == f) {
+            // Before the oldest node: back along its tangent, measured from the node itself.
+            c = Cursor<Key>{gen, key_min<Key>(), a.at, a.at, a.value, a.tangent, a.sigma_ns};
+        } else if (lo < n) {
+            if (!log.nodes.read(lo, b)) {
+                continue;
+            }
+            c = Cursor<Key>{
+                gen,
+                a.at,
+                b.at,
+                a.at,
+                a.value,
+                (b.value - a.value) / static_cast<double>(b.at - a.at),
+                std::max(a.sigma_ns, b.sigma_ns)};
+        } else if (t <= cover) {
+            c = Cursor<Key>{gen, a.at, cover, a.at, a.value, a.tangent, a.sigma_ns + kOpenMarginNs};
+        } else {
+            // Past the cover: a batch the service released before the sync covered it (counted and reported as a
+            // fault). The newest tangent carries on; holding still here would collapse every such record onto one
+            // instant. Not cached, the cover moves.
+            c = Cursor<Key>{.gen = gen, .sigma = a.sigma_ns + kOpenMarginNs};
+            value = a.value + a.tangent * static_cast<double>(t - a.at);
+            return true;
+        }
         value = on_line(c, t);
         return true;
     }
-    const uint32_t i = locate(log, n, c.gen == gen ? c.i : 0, t);
-    const Node& a = log.at(i);
-    if (i + 1 < n) {
-        const Node& b = log.at(i + 1);
-        c = Cursor<Key>{
-            gen,
-            i,
-            a.at,
-            b.at,
-            a.at,
-            a.value,
-            (b.value - a.value) / static_cast<double>(b.at - a.at),
-            std::max(a.sigma_ns, b.sigma_ns)};
-        value = on_line(c, t);
-        return true;
-    }
-    if (t <= cover) {
-        c = Cursor<Key>{gen, i, a.at, cover, a.at, a.value, a.tangent, a.sigma_ns + kOpenMarginNs};
-        value = on_line(c, t);
-        return true;
-    }
-    // Past the cover: a batch the service released before the sync covered it (counted and reported as a fault).
-    // The newest tangent carries on; holding still here would collapse every such record onto one instant. Not
-    // cached, the cover moves.
-    c = Cursor<Key>{.gen = gen, .i = i, .sigma = a.sigma_ns + kOpenMarginNs};
-    value = a.value + a.tangent * static_cast<double>(t - a.at);
-    return true;
 }
 
 // Places t on the series through the cursor (refilled when it is not there); false when the series has no node.
@@ -289,18 +262,26 @@ int64_t SyncCorrections::cover_ticks(uint32_t chip_id) noexcept {
 uint64_t SyncCorrections::cover_generation() noexcept { return g_cover_generation.load(std::memory_order_acquire); }
 
 size_t SyncCorrections::published(uint32_t chip_id) noexcept {
-    return chip_id < kMaxChips ? logs()[chip_id].count.load(std::memory_order_acquire) : 0;
+    if (chip_id >= kMaxChips) {
+        return 0;
+    }
+    const Log<int64_t>& log = logs()[chip_id];
+    return log.nodes.count() - log.nodes.first();
 }
 
-size_t SyncCorrections::host_published() noexcept { return host_log().count.load(std::memory_order_acquire); }
+size_t SyncCorrections::host_published() noexcept {
+    const Log<double>& log = host_log();
+    return log.nodes.count() - log.nodes.first();
+}
 
 std::vector<HostNode> SyncCorrections::host_nodes() {
     const Log<double>& log = host_log();
-    const uint32_t n = log.count.load(std::memory_order_acquire);
     std::vector<HostNode> out;
-    out.reserve(n);
-    for (uint32_t i = 0; i < n; i++) {
-        out.push_back(log.at(i));
+    for (uint64_t i = log.nodes.first(), n = log.nodes.count(); i < n; i++) {
+        HostNode node{};
+        if (log.nodes.read(i, node)) {
+            out.push_back(node);
+        }
     }
     return out;
 }

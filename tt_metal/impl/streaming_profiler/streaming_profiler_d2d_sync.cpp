@@ -358,6 +358,51 @@ double D2dSyncConsumer::max_closure_ns() const {
     return worst;
 }
 
+double D2dSyncConsumer::Series::root_at(double H) const {
+    if (nodes.empty()) {
+        return std::numeric_limits<double>::quiet_NaN();
+    }
+    auto it = std::upper_bound(nodes.begin(), nodes.end(), H, [](double h, const Node& n) { return h < n.H; });
+    if (it == nodes.begin()) {
+        return it->root + it->tangent * (H - it->H);
+    }
+    const Node& a = *(it - 1);
+    if (it == nodes.end()) {
+        return a.root + a.tangent * (H - a.H);
+    }
+    return a.root + (it->root - a.root) * (H - a.H) / (it->H - a.H);
+}
+
+double D2dSyncConsumer::Series::sigma_at(double H) const {
+    if (nodes.empty()) {
+        return std::numeric_limits<double>::infinity();
+    }
+    auto it = std::upper_bound(nodes.begin(), nodes.end(), H, [](double h, const Node& n) { return h < n.H; });
+    const Node& b = it == nodes.end() ? nodes.back() : *it;
+    const Node& a = it == nodes.begin() ? *it : *(it - 1);
+    return std::max(a.sigma, b.sigma) + (it == nodes.end() ? kFreezeNs : 0.0);
+}
+
+double D2dSyncConsumer::tsc_at(double root) const {
+    if (SyncCorrections::host_published() != host_seen_) {
+        host_nodes_ = SyncCorrections::host_nodes();
+        host_seen_ = host_nodes_.size();
+    }
+    if (host_nodes_.empty()) {
+        return 0.0;
+    }
+    auto it = std::upper_bound(
+        host_nodes_.begin(), host_nodes_.end(), root, [](double r, const HostNode& n) { return r < n.at; });
+    if (it == host_nodes_.begin()) {
+        return it->value + it->tangent * (root - it->at);
+    }
+    const HostNode& a = *(it - 1);
+    if (it == host_nodes_.end()) {
+        return a.value + a.tangent * (root - a.at);
+    }
+    return a.value + (it->value - a.value) * (root - a.at) / (it->at - a.at);
+}
+
 D2dSyncConsumer::Fresh D2dSyncConsumer::fresh_nodes(const Series& s, const LocalClockModel& fit, const RootXf& xf) const {
     const std::vector<LocalClockModel::Run>& runs = fit.runs;
     // A node places one instant of a run on the root: its eth wall tick (the key every record of the chip is looked
@@ -582,7 +627,8 @@ void D2dSyncConsumer::log_summary() const {
         log_info(
             tt::LogMetal,
             "[streaming profiler] d2d sync chip {}: local clock {} points in {} segments ({} steps), {} raw transition "
-            "samples; applied AICLK mean {:.5f} GHz (segment min {:.5f}, max {:.5f}; boot anchor {:.5f}), spread {:.1f} "
+            "samples; applied AICLK mean {:.5f} GHz (segment min {:.5f}, max {:.5f}; boot anchor {:.5f}), spread "
+            "{:.1f} "
             "ppm; {} correction nodes, the tangent extended {} times",
             chip,
             l.model.points,
@@ -594,7 +640,7 @@ void D2dSyncConsumer::log_summary() const {
             smax * to_ghz,
             anchor_ghz,
             mean > 0.0 ? (smax - smin) / mean * 1e6 : 0.0,
-            SyncCorrections::published(chip),
+            published_.contains(dev) ? published_.at(dev).linked.nodes.size() : 0,
             published_.contains(dev) ? published_.at(dev).linked.extended : 0);
         if (const auto pit = published_.find(dev); pit != published_.end() && pit->second.linked.dropped != 0) {
             log_warning(
@@ -782,22 +828,29 @@ void D2dSyncConsumer::dump_csv() const {
         for (const auto& kv : local_) {
             const uint32_t dev = kv.first;
             const uint32_t chip = dev < ctx_.devices.size() ? ctx_.devices[dev].chip_id : dev;
+            const auto ps = published_.find(dev);
+            if (ps == published_.end() || ps->second.linked.nodes.empty()) {
+                continue;
+            }
+            const Series& series = ps->second.linked;
             for (const LocalClockModel::Run& b : kv.second.model.runs) {
                 if (b.n == 0 || b.slope() <= 0.0) {
                     continue;
                 }
                 for (double r = b.r_first; r <= b.r_last; r += 50000.0) {
                     const int64_t T = static_cast<int64_t>(b.wall_of_refclk(r));
-                    const int64_t tsc = SyncCorrections::lookup_tsc(chip, T);
+                    const double root = series.root_at(static_cast<double>(T));
+                    const int64_t tsc = std::llround(tsc_at(root));
                     std::fprintf(
                         f,
                         "%u,%lld,%.3f,%lld,%lld,%lld\n",
                         chip,
                         static_cast<long long>(T),
-                        SyncCorrections::lookup_root(chip, T),
+                        root,
                         static_cast<long long>(tsc),
                         static_cast<long long>(SyncCorrections::tsc_to_mono_ns(tsc)),
-                        static_cast<long long>(SyncCorrections::lookup_error_ns(chip, T)));
+                        static_cast<long long>(
+                            std::ceil(3.0 * series.sigma_at(static_cast<double>(T)) + max_closure_ns())));
                 }
             }
         }
@@ -878,7 +931,8 @@ void D2dSyncConsumer::publish_rate_plots() {
         if (la == local_.end() || lb == local_.end()) {
             continue;
         }
-        if (SyncCorrections::published(L.chip_a) == 0) {
+        const auto pa = published_.find(L.dev_a);
+        if (pa == published_.end() || pa->second.linked.nodes.empty()) {
             continue;
         }
         const size_t n = prim.size();
@@ -905,7 +959,7 @@ void D2dSyncConsumer::publish_rate_plots() {
         const size_t stride = std::max<size_t>(8, n / 250);
         for (size_t m = std::max<size_t>(16, stride); m <= n; m += stride) {
             // This point's instant: the sender's eth wall at the last round's end, placed as its records are.
-            const int64_t H = SyncCorrections::lookup_tsc(L.chip_a, static_cast<int64_t>(rounds[m - 1].t2));
+            const int64_t H = std::llround(tsc_at(pa->second.linked.root_at(static_cast<double>(rounds[m - 1].t2))));
             struct RT {
                 double off, mid;
                 uint64_t rtt;
@@ -977,7 +1031,9 @@ bool D2dSyncConsumer::round_error(
     if (la == local_.cend() || lb == local_.cend()) {
         return false;
     }
-    if (SyncCorrections::published(L.chip_a) == 0 || SyncCorrections::published(L.chip_b) == 0) {
+    const auto pa = published_.find(L.dev_a), pb = published_.find(L.dev_b);
+    if (pa == published_.end() || pb == published_.end() || pa->second.linked.nodes.empty() ||
+        pb->second.linked.nodes.empty()) {
         return false;
     }
     double wa = 0.0, wb = 0.0;
@@ -994,9 +1050,9 @@ bool D2dSyncConsumer::round_error(
     RoundTerms t;
     t.wall_a = wa;
     t.wall_b = wb;
-    t.root_a = SyncCorrections::lookup_root(L.chip_a, std::llround(wa));
-    t.root_b = SyncCorrections::lookup_root(L.chip_b, std::llround(wb));
-    tsc_a = SyncCorrections::lookup_tsc(L.chip_a, std::llround(wa));
+    t.root_a = pa->second.linked.root_at(static_cast<double>(std::llround(wa)));
+    t.root_b = pb->second.linked.root_at(static_cast<double>(std::llround(wb)));
+    tsc_a = std::llround(tsc_at(t.root_a));
     err = (t.root_b - t.root_a) * (1e9 / LocalClockModel::kRefclkHz);
     if (terms != nullptr) {
         *terms = t;

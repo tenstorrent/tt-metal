@@ -42,9 +42,10 @@ struct SteadySegment {
 
 // Append-only series of frozen nodes, strictly increasing in their key: one per chip, written by the d2d sync
 // consumer, and the host series, written by the probe; read by every consumer thread converting a record's time.
-// Nodes never move or go away within a capture, so a reader keeps a thread-local cursor on the segment it last used
-// and converts without touching shared state until the record leaves the segment. Before a chip's first node, or
-// the host's, its records have no place on the host timeline.
+// Nodes never move within a capture and a series keeps its newest kSeriesNodes, so a reader keeps a thread-local
+// cursor on the segment it last used and converts without touching shared state until the record leaves the segment.
+// Before a chip's first node, or the host's, its records have no place on the host timeline; before the oldest kept
+// node they convert on its tangent.
 //
 // A series' cover is the key up to which the newest node's tangent has been confirmed: a record at or before it
 // converts against frozen data on both sides. Writer order is nodes, count, cover (release); readers load the cover
@@ -52,6 +53,9 @@ struct SteadySegment {
 class SyncCorrections {
 public:
     static constexpr uint32_t kMaxChips = 256;
+    // Nodes a series keeps (32 MB); the oldest go as newer ones arrive. Nodes come per local clock step and per host
+    // burst, so this spans hours of a capture and any consumer's lag behind the sync.
+    static constexpr uint32_t kSeriesNodes = 1u << 20;
     // Appends a node past every earlier one (a node at the last node's key is dropped) and moves the cover to it.
     static void append(uint32_t chip_id, SyncNode node);
     // The newest node's tangent holds up to cover_ticks; the cover never moves back.

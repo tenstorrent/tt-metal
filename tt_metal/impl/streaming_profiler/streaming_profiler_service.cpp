@@ -503,8 +503,8 @@ void Service::consumer_thread(Consumer& c) {
         release_delivered();
         return any;
     };
-    // Room for a batch of `words` frame words in every arena; the oldest waiting batch goes out uncovered when the
-    // arenas are full.
+    // Room for a batch of `words` frame words in every arena; the oldest waiting batch goes out when the arenas are
+    // full, counted as unplaced if the sync has not covered it yet.
     auto reserve = [&](size_t words, uint32_t frames, uint8_t*& z, uint8_t*& e, uint8_t*& d) {
         const size_t rec_bytes = (words / 2 + profiler::kSpscSinkSlackRecs) * profiler::kSpscRecBytes;
         const size_t data_bytes = rec_bytes + words * 4 + size_t{32} * frames;
@@ -521,12 +521,15 @@ void Service::consumer_thread(Consumer& c) {
                 words);
             for (Parked& pk : parked) {
                 if (!pk.delivered) {
+                    AttachedStream& s = *pk.a->streams[pk.stream];
+                    if (c.hooks.waits_for_sync && pk.n.newest_ticks > SyncCorrections::cover_ticks(s.chip)) {
+                        c.unplaced.fetch_add(1, std::memory_order_relaxed);
+                        c.unplaced_full.fetch_add(1, std::memory_order_relaxed);
+                        const int64_t at = now_ns();
+                        note_unplaced(at, pk.parked_at_ns != 0 ? at - pk.parked_at_ns : 0);
+                    }
                     deliver(pk);
-                    pk.a->streams[pk.stream]->pending.pop_front();
-                    c.unplaced.fetch_add(1, std::memory_order_relaxed);
-                    c.unplaced_full.fetch_add(1, std::memory_order_relaxed);
-                    const int64_t at = now_ns();
-                    note_unplaced(at, pk.parked_at_ns != 0 ? at - pk.parked_at_ns : 0);
+                    s.pending.pop_front();
                     break;
                 }
             }

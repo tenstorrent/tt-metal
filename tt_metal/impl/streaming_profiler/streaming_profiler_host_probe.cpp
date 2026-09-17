@@ -293,51 +293,58 @@ void HostProbe::run() {
     const auto t_start = std::chrono::steady_clock::now();
     size_t k = 0;
     int64_t next_pair_ms = 0;
+    const auto elapsed_ms = [&] {
+        return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t_start)
+            .count();
+    };
+    const auto take = [&](int64_t now_ms) {
+        HostLine before = line();
+        BurstPoint p{};
+        if (!burst(p)) {
+            return;
+        }
+        const double pred_err_ns = before.ok ? (p.tsc - before.tsc_of(p.refclk)) / ticks_per_ns_ : 0.0;
+        points_.push_back(p);
+        while (points_.size() > kWindowBursts) {
+            points_.pop_front();
+        }
+        refit();
+        bursts_++;
+        const HostLine l = line();
+        rtt_lo_ns_ = std::min(rtt_lo_ns_, static_cast<double>(p.rtt_min_ticks) / ticks_per_ns_);
+        rtt_hi_ns_ = std::max(rtt_hi_ns_, static_cast<double>(p.rtt_min_ticks) / ticks_per_ns_);
+        if (before.ok && before.bursts >= 3) {
+            predicted_++;
+            pred_ss_ns_ += pred_err_ns * pred_err_ns;
+            pred_worst_ns_ = std::max(pred_worst_ns_, std::abs(pred_err_ns));
+        }
+        // A node per burst: the line as it stands, at the burst's own instant. Records placed between two
+        // bursts run on the newer node's tangent; those placed later interpolate between the nodes.
+        if (l.ok && l.bursts >= 3) {
+            SyncCorrections::append_host(HostNode{
+                .at = p.refclk,
+                .value = l.tsc_of(p.refclk),
+                .tangent = l.b,
+                .sigma_ns = static_cast<float>(l.sigma_ns)});
+        }
+        trail.push_back(Trail{
+            now_ms / 1e3,
+            p.refclk,
+            p.tsc,
+            p.kept,
+            static_cast<double>(p.rtt_min_ticks) / ticks_per_ns_,
+            static_cast<double>(p.rtt_p50_ticks) / ticks_per_ns_,
+            l.ok ? l.b / ticks_per_ns_ : 0.0,
+            l.sigma_ns,
+            pred_err_ns});
+    };
     while (!stop_.load(std::memory_order_acquire)) {
-        const int64_t now_ms =
-            std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t_start).count();
+        const int64_t now_ms = elapsed_ms();
         const int64_t due = k < std::size(kSchedule) ? kSchedule[k]
                                                      : kSchedule[std::size(kSchedule) - 1] +
                                                            100 * static_cast<int64_t>(k + 1 - std::size(kSchedule));
         if (now_ms >= due) {
-            HostLine before = line();
-            BurstPoint p{};
-            if (burst(p)) {
-                const double pred_err_ns = before.ok ? (p.tsc - before.tsc_of(p.refclk)) / ticks_per_ns_ : 0.0;
-                points_.push_back(p);
-                while (points_.size() > kWindowBursts) {
-                    points_.pop_front();
-                }
-                refit();
-                bursts_++;
-                const HostLine l = line();
-                rtt_lo_ns_ = std::min(rtt_lo_ns_, static_cast<double>(p.rtt_min_ticks) / ticks_per_ns_);
-                rtt_hi_ns_ = std::max(rtt_hi_ns_, static_cast<double>(p.rtt_min_ticks) / ticks_per_ns_);
-                if (before.ok && before.bursts >= 3) {
-                    predicted_++;
-                    pred_ss_ns_ += pred_err_ns * pred_err_ns;
-                    pred_worst_ns_ = std::max(pred_worst_ns_, std::abs(pred_err_ns));
-                }
-                // A node per burst: the line as it stands, at the burst's own instant. Records placed between two
-                // bursts run on the newer node's tangent; those placed later interpolate between the nodes.
-                if (l.ok && l.bursts >= 3) {
-                    SyncCorrections::append_host(HostNode{
-                        .at = p.refclk,
-                        .value = l.tsc_of(p.refclk),
-                        .tangent = l.b,
-                        .sigma_ns = static_cast<float>(l.sigma_ns)});
-                }
-                trail.push_back(Trail{
-                    now_ms / 1e3,
-                    p.refclk,
-                    p.tsc,
-                    p.kept,
-                    static_cast<double>(p.rtt_min_ticks) / ticks_per_ns_,
-                    static_cast<double>(p.rtt_p50_ticks) / ticks_per_ns_,
-                    l.ok ? l.b / ticks_per_ns_ : 0.0,
-                    l.sigma_ns,
-                    pred_err_ns});
-            }
+            take(now_ms);
             k++;
         }
         if (now_ms >= next_pair_ms) {
@@ -345,6 +352,14 @@ void HostProbe::run() {
             next_pair_ms = now_ms + 100;
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    // A capture shorter than the schedule's third burst would end without a line: the bursts still owed come now,
+    // and the last spans the capture with the first.
+    for (int tries = 0; tries < 8; tries++) {
+        if (const HostLine l = line(); l.ok && l.bursts >= 3) {
+            break;
+        }
+        take(elapsed_ms());
     }
     if (const char* csv = std::getenv("TT_METAL_STREAMING_PROFILER_D2D_CSV"); csv != nullptr && *csv != 0) {
         if (std::FILE* f = std::fopen((std::string(csv) + ".probe.csv").c_str(), "w"); f != nullptr) {

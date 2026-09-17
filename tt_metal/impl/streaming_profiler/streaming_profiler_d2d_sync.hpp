@@ -267,6 +267,11 @@ private:
     // fit, `knots` how many run boundaries have their nodes, `last_r` the refclk of the newest node or cover.
     struct Series {
         std::vector<Node> nodes;
+        // The root refclk at wall tick H as the published series places it: between its nodes, along the first's
+        // tangent before them, along the last's beyond. NaN with no node.
+        double root_at(double H) const;
+        // The larger sigma of the nodes bracketing H.
+        double sigma_at(double H) const;
         size_t knots = 0;
         double last_r = -1.0;
         double cover_H = -1.0;
@@ -278,6 +283,10 @@ private:
         Series linked;
     };
     std::map<uint32_t, Published> published_;
+    // The host series as last read, for the checks' own root -> TSC step.
+    mutable std::vector<HostNode> host_nodes_;
+    mutable size_t host_seen_ = 0;
+    double tsc_at(double root) const;
     // The composed root transforms as of the newest accepted link solution.
     std::map<uint32_t, RootXf> to_root_;
     uint64_t solve_gen_ = 0;

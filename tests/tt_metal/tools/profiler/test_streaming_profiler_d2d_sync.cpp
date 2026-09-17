@@ -289,6 +289,28 @@ int main() {
         std::snprintf(what, sizeof what, "composed placement vs two-level lookup over %zu instants (ns)", n);
         check_near(what, worst, 0.0, tick_ns + 0.1);
     }
+    // A series past its capacity keeps its newest nodes: placement on them is unchanged, and a key before the oldest
+    // kept node still places, on that node's tangent.
+    {
+        constexpr uint32_t chip = 3;
+        constexpr int64_t step = 1000;
+        const double a = 7.5e12, b = 0.037;  // root = a + b * wall, an exact line so every placement has one answer
+        const uint32_t n = SyncCorrections::kSeriesNodes + 1;
+        for (uint32_t i = 0; i < n; i++) {
+            const int64_t at = static_cast<int64_t>(i) * step;
+            SyncCorrections::append(chip, SyncNode{.at = at, .value = a + b * static_cast<double>(at), .tangent = b});
+        }
+        const auto on_line = [&](int64_t at) {
+            return SyncCorrections::lookup_root(chip, at) - (a + b * static_cast<double>(at));
+        };
+        check_near("retained: newest node", on_line(static_cast<int64_t>(n - 1) * step), 0.0, 1e-3);
+        check_near("retained: a node mid-series", on_line(static_cast<int64_t>(n / 2) * step + step / 2), 0.0, 1e-3);
+        check_near("retained: the retired first node (on the oldest kept tangent)", on_line(0), 0.0, 1e-3);
+        if (SyncCorrections::lookup_root(chip, 0) == 0.0) {
+            std::printf("FAIL retained: a key before the oldest kept node no longer places\n");
+            g_fail++;
+        }
+    }
     if (SyncCorrections::published(2) == 0) {
         std::printf("FAIL (d) chip2 published 0 nodes: the leaf never reached the root\n");
         g_fail++;
