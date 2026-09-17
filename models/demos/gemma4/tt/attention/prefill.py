@@ -736,26 +736,28 @@ def _prefill_forward_single(
         use_persistent_tail = isinstance(chunk_start_idx, ttnn.Tensor)
         if sliding_tail_in is not None:
             k_tail, v_tail, tail_valid = unpack_sliding_tail(sliding_tail_in)
-            # Do not left-pad K/V with zeros — those rows have no validity mask
-            # and dilute softmax (384 real + 640 pad → 385/1024 instead of 1.0).
-            # Use the live suffix only; Q pad matches that length so concat stays square.
-            k_tail, v_tail = _slice_valid_kv_suffix(
-                k_tail,
-                v_tail,
-                tail_valid,
-                config.head_dim,
-                deallocate_inputs=not use_persistent_tail,
-            )
-            tail_len = int(k_tail.shape[-2])
+            # Traced short first-buckets stash an unpadded tail (< hist); pad
+            # here so concat stays square. Eager APC often already padded.
+            if int(k_tail.shape[-2]) != hist:
+                k_tail, v_tail = _left_pad_kv_to_hist(
+                    k_tail,
+                    v_tail,
+                    hist,
+                    config.head_dim,
+                    # Never free persistent ring buffers; eager stashes are owned here.
+                    deallocate_inputs=not use_persistent_tail,
+                )
+            tail_len = hist
             nqh = int(tt_q.shape[1])
             # Filler Q rows (outputs discarded). Prefer the chunk's leading
-            # rows when ``seq_len >= tail_len``; APC remnant chunks can be
-            # shorter, so left-pad Q with zeros instead of slicing past tt_q.
-            if seq_len >= tail_len:
-                q_pad = ttnn.slice(tt_q, [0, 0, 0, 0], [1, nqh, tail_len, config.head_dim])
+            # rows when ``seq_len >= hist``; APC remnant chunks can be shorter
+            # than ``hist`` (e.g. 128/384), so left-pad Q with zeros instead of
+            # slicing past ``tt_q`` (TT_FATAL Ends hist > tensor seq).
+            if seq_len >= hist:
+                q_pad = ttnn.slice(tt_q, [0, 0, 0, 0], [1, nqh, hist, config.head_dim])
             else:
                 q_zeros = ttnn.zeros(
-                    [1, nqh, tail_len - seq_len, config.head_dim],
+                    [1, nqh, hist - seq_len, config.head_dim],
                     dtype=tt_q.dtype,
                     layout=ttnn.TILE_LAYOUT,
                     device=tt_q.device(),
@@ -784,7 +786,15 @@ def _prefill_forward_single(
             v_cat.deallocate(True)
             tt_sdpa = ttnn.slice(sdpa_full, [0, 0, tail_len, 0], [1, nqh, tail_len + seq_len, config.head_dim])
             sdpa_full.deallocate(True)
-            # Keep k_tail/v_tail until the next-tail merge below.
+            # Merge/stash only the live tail rows, not left-pad zeros.
+            if int(tail_valid) < tail_len:
+                k_tail, v_tail = _slice_valid_kv_suffix(
+                    k_tail,
+                    v_tail,
+                    tail_valid,
+                    config.head_dim,
+                    deallocate_inputs=not use_persistent_tail,
+                )
         else:
             # No in-memory tail. Correct for the first chunk (chunk_offset==0).
             # Continuation without a tail (e.g. prior scheduler chunk took the
@@ -811,7 +821,7 @@ def _prefill_forward_single(
         # Next tail = last hist of [valid prior window | current chunk], not
         # current-only (a short continuation would otherwise drop live history).
         prev_for_merge = (k_tail, v_tail) if sliding_tail_in is not None else None
-        prev_valid_for_merge = tail_len if sliding_tail_in is not None else None
+        prev_valid_for_merge = int(tail_valid) if sliding_tail_in is not None else None
         sliding_tail_stash = _clone_sliding_prefill_tail(
             tt_k,
             tt_v,
