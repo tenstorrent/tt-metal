@@ -514,3 +514,116 @@ def test_the_fixed_target_s_drafter_does_not_depend_on_the_step_before_it(monkey
     after_another_step = propose(model)
 
     assert after_another_step.tolist() == expected.tolist()
+
+
+def _solo_model(monkeypatch, accept_depth=None):
+    monkeypatch.setenv("TT_SPEC_DRAFT_POLICY", "solo")
+    return _model(monkeypatch, accept_depth=accept_depth)
+
+
+def test_the_solo_policy_offers_the_full_draft_length_to_a_lone_request(monkeypatch):
+    """One live request, so speculation is worth trying: offer everything."""
+    model = _solo_model(monkeypatch)
+    committed = torch.tensor([[100, 0, 0, 0]], dtype=torch.int32)
+    positions = torch.tensor([[5, 6, 7, 8]], dtype=torch.int32)
+    counts = torch.tensor([1], dtype=torch.int32)
+
+    out = model.propose_draft_tokens(3, committed, positions, counts, hidden=None)
+
+    assert out.num_valid.tolist() == [3]
+    assert out.draft_token_ids.shape == (1, 3)
+
+
+def test_the_solo_policy_offers_nothing_once_a_peer_is_live(monkeypatch):
+    """Two live requests, so the batch is doing the work: offer nothing.
+
+    `num_valid` at 0 is how that is said. Returning fewer ids, or ids the
+    runner is meant to recognise as empty, would both be unreadable: the ids
+    are `[B, K]` whatever happens, because a device graph has one shape.
+    """
+    model = _solo_model(monkeypatch)
+    committed = torch.tensor([[100, 0, 0, 0], [200, 0, 0, 0]], dtype=torch.int32)
+    positions = torch.tensor([[5, 6, 7, 8], [9, 10, 11, 12]], dtype=torch.int32)
+    counts = torch.tensor([1, 1], dtype=torch.int32)
+
+    out = model.propose_draft_tokens(3, committed, positions, counts, hidden=None)
+
+    assert out.num_valid.tolist() == [0, 0]
+    assert out.draft_token_ids.shape == (2, 3)
+
+
+def test_the_solo_policy_counts_live_requests_and_not_padded_rows(monkeypatch):
+    """A padding row is not a peer.
+
+    The rows reaching the drafter are padded to the wire batch size, so a lone
+    request arrives in a block of eight rows on a server launched for eight. A
+    policy counting rows would see a full batch and never offer anything. What
+    separates them is the position: the runner leaves a padding row's committed
+    positions negative for exactly this.
+    """
+    model = _solo_model(monkeypatch)
+    rows = 8
+    committed = torch.zeros((rows, 4), dtype=torch.int32)
+    committed[0, 0] = 100
+    positions = torch.full((rows, 4), -1, dtype=torch.int32)
+    positions[0] = torch.tensor([5, 6, 7, 8], dtype=torch.int32)
+    counts = torch.ones(rows, dtype=torch.int32)
+
+    out = model.propose_draft_tokens(3, committed, positions, counts, hidden=None)
+
+    assert out.num_valid.tolist() == [3] * rows
+
+
+def test_the_always_policy_says_nothing_about_how_much_it_offers(monkeypatch):
+    """`None` means every row is offered the full length.
+
+    The policy that measures a fixed committed width always drafts, so it has
+    nothing to declare, and a drafter written before `num_valid` existed keeps
+    working for the same reason.
+    """
+    model = _model(monkeypatch)
+    committed = torch.tensor([[100, 0, 0, 0]], dtype=torch.int32)
+    positions = torch.tensor([[5, 6, 7, 8]], dtype=torch.int32)
+    counts = torch.tensor([1], dtype=torch.int32)
+
+    out = model.propose_draft_tokens(3, committed, positions, counts, hidden=model._verify_hidden)
+
+    assert out.num_valid is None
+
+
+def test_the_solo_policy_declares_what_the_plugin_must_know(monkeypatch):
+    """Two declarations move with the policy, and both have to.
+
+    The plugin reads these off the class at configuration time. It sends this
+    model ordinary decode steps only if the plan says it serves them, and it
+    keeps a drafter that requires a fed hidden state off those steps, because
+    they produce no hidden handle. A policy asking to be drafted for on those
+    steps must therefore declare the first and not the second.
+    """
+    from types import SimpleNamespace
+
+    config = SimpleNamespace(model_config=SimpleNamespace(max_model_len=2048))
+
+    monkeypatch.setenv("TT_SPEC_DRAFT_POLICY", "solo")
+    import importlib
+
+    import models.vllm_test_utils.spec_test.test_model as module
+
+    importlib.reload(module)
+    assert module.DummySpecDecodeModel.spec_plan(config, 8, 5).supports_narrow_decode
+    assert "hidden_feed" not in module.DummySpecDecodeModel.model_capabilities["spec_requirements"]
+    assert module.DummySpecDecodeModel.model_capabilities["spec_hidden_handoff"] == []
+
+    monkeypatch.delenv("TT_SPEC_DRAFT_POLICY")
+    importlib.reload(module)
+    assert not module.DummySpecDecodeModel.spec_plan(config, 8, 5).supports_narrow_decode
+    assert "hidden_feed" in module.DummySpecDecodeModel.model_capabilities["spec_requirements"]
+    assert module.DummySpecDecodeModel.model_capabilities["spec_hidden_handoff"] == ["roundtrip"]
+
+
+def test_an_unknown_draft_policy_is_refused(monkeypatch, expect_error):
+    """A typo in the policy must not silently select the default."""
+    monkeypatch.setenv("TT_SPEC_DRAFT_POLICY", "sollo")
+
+    with expect_error(ValueError, "TT_SPEC_DRAFT_POLICY"):
+        DummySpecDecodeModel(mesh_device=None, max_batch_size=8, vocab_size=VOCAB)

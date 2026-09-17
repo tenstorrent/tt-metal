@@ -129,6 +129,39 @@ commits 37 tokens and a text prompt commits 10.
 The depth is per row and never reduced across the batch, so a row that carries
 fewer drafts than another does not shorten it.
 
+## The two draft policies
+
+`TT_SPEC_DRAFT_POLICY` decides how much this model's drafter offers, and it is
+a separate axis from the accept depth above: the depth says what the verify
+accepts, the policy says what the drafter proposes.
+
+| `TT_SPEC_DRAFT_POLICY` | What the drafter offers | What it is for |
+| --- | --- | --- |
+| unset, or `always` | the full draft length on every step | a fixed committed width, which is what a per-step cost has to divide cleanly |
+| `solo` | the full length while one request is live, nothing while more are | the adaptive shape a real deployment has, where speculation pays for a lone request and loses to batching for a full one |
+
+The `solo` policy says "nothing" with `DraftOutput.num_valid` at 0 for the
+row, never by returning fewer ids or by filling them with a token it hopes the
+runner reads as empty: the id tensor is `[B, K]` whatever happens, because a
+device graph has one shape. It counts live requests from the committed
+positions and not from the number of rows, because the rows are padded to the
+wire batch size and a padding row's positions are negative for exactly this.
+
+Two declarations move with it, because the plugin reads them off the class at
+configuration time. `spec_plan` reports `supports_narrow_decode=True`, which is
+what lets the plugin send a step with nothing to verify as this model's own
+ordinary decode, and those steps are the ones that can overlap. And the
+drafter stops requiring a fed hidden state: such a step returns no
+`VerifyOutput` and so no hidden handle, and the plugin keeps a drafter that
+needs one on the verify path, which would defeat the policy. Under this policy
+the drafter continues from the committed block alone.
+
+What the policy is for, concretely: a server with speculation configured used
+to run every decode step as a verify, and a verify is never overlapped, so
+configuring speculation cost the server its asynchronous batched decoding.
+With this policy the batched steps are ordinary overlapping decodes and the
+solo steps speculate.
+
 ## What the measurement mode measures
 
 The cost of the whole loop with no device work in it: the scheduler, the

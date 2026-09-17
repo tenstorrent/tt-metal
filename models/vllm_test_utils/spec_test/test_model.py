@@ -21,6 +21,42 @@ from models.vllm_test_utils.no_op_test.test_model import DummyNoOpModel
 TARGET_DEPTH = "depth"
 TARGET_FIXED = "fixed"
 
+# How the drafter decides how much to offer. ``always`` offers the full draft
+# length on every step, which is what a fixed-width measurement needs.
+# ``solo`` offers it only while one request is live and nothing otherwise,
+# which is the adaptive shape a real deployment has: speculation pays for a
+# lone request and loses to batching for a full one.
+DRAFT_POLICY_ALWAYS = "always"
+DRAFT_POLICY_SOLO = "solo"
+
+
+def _draft_policy():
+    """The configured draft policy, read from the environment.
+
+    Read here rather than on the instance because the plugin reads
+    ``model_capabilities`` and calls ``spec_plan`` off the class, at
+    configuration time, before any instance exists. A launch sets this in the
+    server process's environment, so an import-time read sees it.
+    """
+    return os.environ.get("TT_SPEC_DRAFT_POLICY", DRAFT_POLICY_ALWAYS)
+
+
+def _declared_spec_requirements():
+    """What this model's drafter reads, which the policy decides.
+
+    Under ``always`` the drafter is only ever asked after a verify, so it can
+    require the target hidden state and does, to keep the handoff under test.
+
+    Under ``solo`` it is asked after ordinary decode steps too, and those
+    return no hidden handle at all. A drafter requiring a fed hidden state
+    cannot serve them, and the plugin keeps such a model on the verify path
+    for exactly that reason, which would defeat the policy. So this policy's
+    drafter reads the committed block and nothing else, and says so.
+    """
+    if _draft_policy() == DRAFT_POLICY_SOLO:
+        return ["device_propose"]
+    return ["device_propose", "hidden_feed"]
+
 
 class DummySpecDecodeModel(DummyNoOpModel):
     """Dummy model implementing the speculative-decoding contract.
@@ -86,14 +122,14 @@ class DummySpecDecodeModel(DummyNoOpModel):
         # a device drafter. An n-gram launch requires neither and is unaffected:
         # admission checks that the method's requirements are a subset of what
         # the model declares, so declaring more never refuses a launch.
-        "spec_requirements": ["device_propose", "hidden_feed"],
+        "spec_requirements": _declared_spec_requirements(),
         # How the target hidden state reaches the drafter. ``roundtrip`` and
         # not ``on_device``, because what this model returns is a host Python
         # object carrying no hidden state at all: it exists so the handoff's
         # one checkable property, that the runner hands back the object the
         # verify produced, can be asserted. A model that keeps real hidden
         # state in device memory declares ``on_device``.
-        "spec_hidden_handoff": ["roundtrip"],
+        "spec_hidden_handoff": (["roundtrip"] if _draft_policy() != DRAFT_POLICY_SOLO else []),
         # The deferred speculative path asks two things of a model: that its
         # readback serve a ``[B, 1+K]`` verify whose committed length the host
         # decides after the forward, and that the verify's hidden handle stay
@@ -126,13 +162,20 @@ class DummySpecDecodeModel(DummyNoOpModel):
         self.target = os.environ.get("TT_SPEC_TARGET", TARGET_DEPTH)
         if self.target not in (TARGET_DEPTH, TARGET_FIXED):
             raise ValueError(f"TT_SPEC_TARGET must be {TARGET_DEPTH!r} or {TARGET_FIXED!r}, " f"got {self.target!r}")
+        self.draft_policy = os.environ.get("TT_SPEC_DRAFT_POLICY", DRAFT_POLICY_ALWAYS)
+        if self.draft_policy not in (DRAFT_POLICY_ALWAYS, DRAFT_POLICY_SOLO):
+            raise ValueError(
+                f"TT_SPEC_DRAFT_POLICY must be {DRAFT_POLICY_ALWAYS!r} or "
+                f"{DRAFT_POLICY_SOLO!r}, got {self.draft_policy!r}"
+            )
         # Set by every verify and checked by the drafter. None before the first
         # verify, which is also the state a propose arriving before any verify
         # would be caught by.
         self._verify_hidden = None
         logger.info(
             f"DummySpecDecodeModel: target={self.target} accept_depth="
-            f"{'all' if self.accept_depth is None else self.accept_depth}"
+            f"{'all' if self.accept_depth is None else self.accept_depth} "
+            f"draft_policy={self.draft_policy}"
         )
 
     def _fixed_choice(self, tokens, positions):
@@ -214,7 +257,13 @@ class DummySpecDecodeModel(DummyNoOpModel):
             extra_bytes_per_token=0,
             accept_modes=(ACCEPT_MODE_ARGMAX_IDS,),
             drafter_state=DRAFTER_STATE_INTERNAL,
-            supports_narrow_decode=False,
+            # Under the adaptive policy this model is asked to decode steps
+            # that verify nothing, which is the whole point of that policy:
+            # those steps are ordinary decodes and can overlap. It serves them
+            # with the decode its base class already implements, so it grows no
+            # input shape for them. Under ``always`` every step carries drafts
+            # and the question never arises.
+            supports_narrow_decode=_draft_policy() == DRAFT_POLICY_SOLO,
         )
 
     def decode_forward(self, *args, **kwargs):
@@ -329,7 +378,13 @@ class DummySpecDecodeModel(DummyNoOpModel):
             num_drafts,
             call="propose",
         )
-        if hidden is not self._verify_hidden:
+        if self.draft_policy == DRAFT_POLICY_SOLO and hidden is None:
+            # A step with nothing to verify returns no hidden handle, and this
+            # policy exists to be asked on exactly those steps. It drafts from
+            # the committed block alone, which is why it declares no
+            # ``hidden_feed`` requirement.
+            pass
+        elif hidden is not self._verify_hidden:
             raise ValueError(
                 "propose_draft_tokens received a hidden handle that is not the "
                 "one this model's verify returned, so the runner replaced or "
@@ -358,7 +413,30 @@ class DummySpecDecodeModel(DummyNoOpModel):
         else:
             offsets = torch.arange(1, num_drafts + 1, dtype=torch.int64)
             drafts = (last + offsets.unsqueeze(0)) % self.vocab_size
-        return DraftOutput(draft_token_ids=drafts.to(torch.int32))
+        return DraftOutput(
+            draft_token_ids=drafts.to(torch.int32), num_valid=self._num_valid(committed_positions, num_drafts)
+        )
+
+    def _num_valid(self, committed_positions, num_drafts):
+        """How many drafts each row is offered, under this draft policy.
+
+        ``None`` under ``always``, which means every row is offered the full
+        draft length: the runner reads that as "all of it" and a drafter that
+        always drafts needs to say nothing.
+
+        Under ``solo`` the offer is the full length while one request is live
+        and nothing while more are. Live requests are counted from the
+        committed positions, not from the number of rows: the rows are padded
+        to the wire batch size, and a padding row's position is negative
+        precisely so that it can be told from a request. Counting rows would
+        make a one-request batch look like a full one and this policy would
+        never offer anything.
+        """
+        if self.draft_policy == DRAFT_POLICY_ALWAYS:
+            return None
+        rows = int(committed_positions.shape[0])
+        live = int((committed_positions[:, 0] >= 0).sum())
+        return torch.full((rows,), num_drafts if live == 1 else 0, dtype=torch.int32)
 
     def _plain_fixed(self, *args, **kwargs):
         """An ordinary decode under the ``fixed`` target.
