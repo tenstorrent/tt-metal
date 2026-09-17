@@ -31,7 +31,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> qkv_causal_conv1d_silu(
     const std::optional<ttnn::Tensor>& wrap_indicator = std::nullopt,
     const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
-    const std::optional<ttnn::Tensor>& chronology = std::nullopt,
+    const std::optional<ttnn::Tensor>& actual_start = std::nullopt,
+    uint32_t sequence_parallel_axis = 0,
     const std::optional<ttnn::Tensor>& predecessor_carry = std::nullopt);
 
 }  // namespace ttnn::experimental::kda

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "chronological_topology_device_operation.hpp"
+#include "../chronology.hpp"
 #include "ttnn/operations/experimental/kda/factory/kda_factory_utils.hpp"
 namespace ttnn::experimental::prim {
 ChronologyOperation::program_factory_t ChronologyOperation::select_program_factory(
@@ -9,26 +10,24 @@ ChronologyOperation::program_factory_t ChronologyOperation::select_program_facto
     return ChronologyFactory{};
 }
 void ChronologyOperation::validate_on_program_cache_miss(const operation_attributes_t& a, const tensor_args_t& in) {
-    TT_FATAL(a.sp_size > 0 && a.local_rows > 0 && a.local_rows % 32 == 0, "chronology: invalid partition geometry");
-    TT_FATAL(a.batch_heads > 0 && a.key_dim > 0 && a.value_dim > 0, "chronology: invalid state geometry");
-    for (const auto* t : {&in.start, &in.rank}) {
-        kda_factory_detail::check_allocated_device_tensor(*t, "chronology", "control");
-        kda_factory_detail::check_layout(*t, Layout::ROW_MAJOR, "chronology", "control");
-        kda_factory_detail::check_dtype(*t, DataType::UINT32, "chronology", "control");
-        kda_factory_detail::check_interleaved(*t, "chronology", "control");
-        TT_FATAL(t->logical_shape().volume() == 1, "chronology: start and rank must be scalar tensors");
-    }
-    kda_factory_detail::check_same_device(in.start, in.rank, "chronology", "rank");
+    kda_factory_detail::check_actual_start(in.actual_start, in.actual_start, "chronological_topology");
+    TT_FATAL(
+        a.sequence_parallel_axis < in.actual_start.device()->shape().dims() && a.local_rows > 0 &&
+            a.local_rows % 32 == 0,
+        "chronological_topology: invalid partition geometry");
+    TT_FATAL(a.batch_heads > 0 && a.key_dim > 0 && a.value_dim > 0, "chronological_topology: invalid state geometry");
 }
 ChronologyOperation::spec_return_value_t ChronologyOperation::compute_output_specs(
-    const operation_attributes_t& a, const tensor_args_t&) {
+    const operation_attributes_t& a, const tensor_args_t& in) {
     return {tt::tt_metal::TensorSpec(
-        Shape({8 + 2 * a.sp_size, 8}),
+        Shape(
+            {kda_chronology::selection::record_count(in.actual_start.device()->shape()[a.sequence_parallel_axis]),
+             kda_chronology::selection::record_width}),
         tt::tt_metal::TensorLayout(
             DataType::UINT32, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), ttnn::DRAM_MEMORY_CONFIG))};
 }
 ChronologyOperation::tensor_return_value_t ChronologyOperation::create_output_tensors(
     const operation_attributes_t& a, const tensor_args_t& in) {
-    return {create_device_tensor(compute_output_specs(a, in)[0], in.start.device())};
+    return {create_device_tensor(compute_output_specs(a, in)[0], in.actual_start.device())};
 }
 }  // namespace ttnn::experimental::prim

@@ -37,6 +37,12 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
                 Tail state is unfolded: one ``[K,V]`` matrix per ``B*H``.
 
         Keyword Args:
+            actual_start (ttnn.Tensor, optional): Replicated UINT32 row-major scalar
+                containing the absolute position of the chunk's first token. Its
+                value must be nonnegative and 32-aligned. Keep its address stable
+                and update its contents before replay of a captured trace.
+            sequence_parallel_axis (int, optional): Mesh axis partitioning the
+                sequence. Native mesh coordinates supply each device's rank.
             tail_state (ttnn.Tensor, optional): Carry to reload at ``wrap_chunk``,
                 ``[B*H, K, V]`` in FLOAT32. Required when ``wrap_chunk`` is nonzero
                 and ignored otherwise.
@@ -79,7 +85,8 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
         nb::arg("wrap_chunk") = 0,
         nb::arg("memory_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
-        nb::arg("chronology") = nb::none());
+        nb::arg("actual_start") = nb::none(),
+        nb::arg("sequence_parallel_axis") = 0);
 
     ttnn::bind_function<"summarize_chunk_recurrence", "ttnn.experimental.kda.">(
         mod,
@@ -114,6 +121,12 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
                 ``[B*H*G, N, 32, 32]`` in FLOAT32.
 
         Keyword Args:
+            actual_start (ttnn.Tensor, optional): Replicated UINT32 row-major scalar
+                containing the absolute position of the chunk's first token. Its
+                value must be nonnegative and 32-aligned. Keep its address stable
+                and update its contents before replay of a captured trace.
+            sequence_parallel_axis (int, optional): Mesh axis partitioning the
+                sequence. Native mesh coordinates supply each device's rank.
             groups_per_head (int, optional): Groups folded into the leading
                 dimension. Defaults to 1.
             wrap_indicator (ttnn.Tensor, optional): Required device-local scalar
@@ -133,10 +146,10 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
                 returns ``tail_A`` and ``tail_B`` with the same shapes.
 
         Note:
-            With ``chronology``, summaries are packed directly to BFLOAT16 for
+            With ``actual_start``, summaries are packed directly to BFLOAT16 for
             KDA transport. Inactive slots are unspecified and may only be consumed
-            by topology-aware reduce/scan operations using the same controls.
-            Without chronology, all summaries remain FLOAT32.
+            by reduce/scan operations using the same actual_start and partition geometry.
+            Without actual_start, all summaries remain FLOAT32.
 
             The current summary path requires ``K=V``. ``q_decay`` and ``intra`` are
             accepted as part of the shared prepared-chunk protocol but do not contribute
@@ -158,7 +171,8 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
         nb::arg("emit_tail_summaries") = false,
         nb::arg("memory_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
-        nb::arg("chronology") = nb::none());
+        nb::arg("actual_start") = nb::none(),
+        nb::arg("sequence_parallel_axis") = 0);
 }
 
 }  // namespace ttnn::operations::experimental::kda::recurrent_chunk_scan::detail

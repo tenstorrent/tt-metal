@@ -29,6 +29,7 @@ struct RecurrentChunkScanParams {
     // group. The ordinary two-output contract stays unchanged when false.
     bool emit_tail_summaries;
     RecurrentChunkScanMode mode;
+    uint32_t sequence_parallel_axis;
     tt::tt_metal::MemoryConfig output_mem_config;
     DeviceComputeKernelConfig compute_kernel_config;
 };
@@ -49,7 +50,7 @@ struct RecurrentChunkScanInputs {
     // Its value is data, not an operation attribute, so one mesh program can
     // make a device-local summary limit or recurrent reseed decision.
     std::optional<Tensor> wrap_indicator;
-    std::optional<Tensor> chronology;
+    std::optional<Tensor> actual_start;
 };
 
 }  // namespace ttnn::experimental::prim

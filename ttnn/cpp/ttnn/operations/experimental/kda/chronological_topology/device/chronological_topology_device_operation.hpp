@@ -7,19 +7,18 @@
 #include "ttnn/metal_v2_artifacts.hpp"
 namespace ttnn::experimental::prim {
 struct ChronologyParams {
-    uint32_t sp_size;
+    uint32_t sequence_parallel_axis;
     uint32_t local_rows;
     uint32_t batch_heads;
     uint32_t key_dim;
     uint32_t value_dim;
 };
 struct ChronologyInputs {
-    Tensor start;
-    Tensor rank;
+    Tensor actual_start;
 };
 struct ChronologyFactory {
-    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
-        const ChronologyParams&, const ChronologyInputs&, std::vector<Tensor>&);
+    static ttnn::device_operation::MeshWorkloadArtifacts create_mesh_workload_artifacts(
+        const ChronologyParams&, const ChronologyInputs&, std::vector<Tensor>&, const ttnn::MeshCoordinateRangeSet&);
 };
 struct ChronologyOperation {
     using operation_attributes_t = ChronologyParams;

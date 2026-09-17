@@ -20,7 +20,7 @@ from models.demos.deepseek_v3_d_p.tt.kda.config import (
     KDAProgramConfig,
 )
 from models.demos.deepseek_v3_d_p.tt.kda.convolution import exchange_convolution_carry
-from models.demos.deepseek_v3_d_p.tt.kda.device_chronology import DeviceChronology, rank_tensor
+from models.demos.deepseek_v3_d_p.tt.kda.device_chronology import DeviceChronology
 from models.demos.deepseek_v3_d_p.tt.kda.recurrence import KDARecurrence
 from models.demos.deepseek_v3_d_p.tt.kda.weights import KDAWeights, load_kda_weights
 from models.tt_transformers.tt.ccl import TT_CCL
@@ -161,9 +161,6 @@ class ttKDA:
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
-        self._sp_rank = (
-            rank_tensor(self.device, self.sequence_parallel_axis) if self.sequence_parallel_size > 1 else None
-        )
 
     @property
     def _convolution_width(self) -> int:
@@ -233,11 +230,12 @@ class ttKDA:
         qkv: ttnn.Tensor,
         incoming_layer_carry: ttnn.Tensor,
         chronology: DeviceChronology | None,
+        actual_start: ttnn.Tensor,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
         config = self.config
         if chronology is None:
             batch, rows, width = qkv.shape
-            new_state = ttnn.slice(qkv, (0, rows - 3, 0), (batch, rows, width))
+            new_state = ttnn.slice(qkv, (0, rows - (config.conv_kernel_size - 1), 0), (batch, rows, width))
             predecessor = None
         else:
             predecessor, new_state = exchange_convolution_carry(
@@ -251,7 +249,8 @@ class ttKDA:
             config.k_dim,
             config.v_dim,
             program_config=self.qkv_convolution_program_config,
-            chronology=chronology.controls if chronology is not None else None,
+            actual_start=actual_start if chronology is not None else None,
+            sequence_parallel_axis=self.sequence_parallel_axis,
             predecessor_carry=predecessor,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
@@ -406,21 +405,19 @@ class ttKDA:
             chronology = DeviceChronology(
                 ttnn.experimental.kda.chronological_topology(
                     actual_start,
-                    self._sp_rank,
-                    self.sequence_parallel_size,
+                    self.sequence_parallel_axis,
                     hidden_states.shape[1],
                     self.config.num_heads,
                     self.config.head_k_dim,
                     self.config.head_v_dim,
                 ),
-                self.sequence_parallel_size,
             )
         projected = self._project_inputs(hidden_states)
         qkv = ttnn.to_layout(projected.qkv, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         convolution_state = ttnn.to_layout(
             state.convolution, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
-        q, k, v, new_convolution = self._convolve_qkv(qkv, convolution_state, chronology)
+        q, k, v, new_convolution = self._convolve_qkv(qkv, convolution_state, chronology, actual_start)
         gate, beta = self._compute_gates(
             beta=projected.beta,
             decay_rank=projected.decay_rank,
@@ -434,6 +431,7 @@ class ttKDA:
                 beta=beta,
                 initial_state=state.recurrent,
                 chronology=chronology,
+                actual_start=actual_start,
             )
         else:
             new_recurrent, output = self.recurrence(

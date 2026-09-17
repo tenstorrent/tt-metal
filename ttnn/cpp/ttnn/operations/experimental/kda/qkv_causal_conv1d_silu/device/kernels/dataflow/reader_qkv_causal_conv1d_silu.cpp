@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/cpp/ttnn/operations/experimental/kda/chronological_topology/chronology.hpp"
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc.h"
@@ -36,7 +37,14 @@ FORCE_INLINE void load_weight_block(
 // Rows of causal history per fragment: one fewer than the four learned taps.
 constexpr uint32_t history_rows_per_plane = 3;
 
-template <uint32_t block_ct, uint32_t num_blocks, uint32_t has_wrap_indicator, uint32_t dynamic_chronology>
+template <
+    uint32_t block_ct,
+    uint32_t num_blocks,
+    uint32_t has_wrap_indicator,
+    uint32_t dynamic_chronology,
+    uint32_t sp_rank,
+    uint32_t sp_size,
+    uint32_t local_rows>
 TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count, uint32_t wrap_row) {
     const auto input = TensorAccessor(tensor::input);
     const auto history = TensorAccessor(tensor::history);
@@ -51,12 +59,14 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count, uint32_t wrap_row) {
     uint32_t device_wrap_row = wrap_row;
     bool initial_from_predecessor = false;
     if constexpr (dynamic_chronology) {
-        const auto chronology = TensorAccessor(tensor::chronology);
-        noc.async_read(chronology, CoreLocalMem<uint32_t>(activation.get_write_ptr()), 32, {.page_id = 0}, {});
+        const auto actual_start = TensorAccessor(tensor::actual_start);
+        noc.async_read(
+            actual_start, CoreLocalMem<uint32_t>(activation.get_write_ptr()), sizeof(uint32_t), {.page_id = 0}, {});
         noc.async_read_barrier();
-        const auto control = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(activation.get_write_ptr());
-        device_wrap_row = control[2] ? control[1] : 0;
-        initial_from_predecessor = control[3] != control[0];
+        const auto* words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(activation.get_write_ptr());
+        const auto topology = kda_chronology::derive(words[0], sp_rank, sp_size, local_rows);
+        device_wrap_row = topology.local_split ? topology.head_rows : 0;
+        initial_from_predecessor = topology.rank != topology.boundary;
     } else if constexpr (has_wrap_indicator) {
         const auto wrap_indicator = TensorAccessor(tensor::wrap_indicator);
         // The activation buffer has not been queued yet, so its first word is

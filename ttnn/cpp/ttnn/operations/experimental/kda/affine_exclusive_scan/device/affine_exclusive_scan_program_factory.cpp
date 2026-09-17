@@ -21,8 +21,11 @@
 
 namespace ttnn::experimental::prim {
 
-ttnn::device_operation::ProgramArtifacts AffineExclusiveScanProgramFactory::create_program_artifacts(
-    const AffineExclusiveScanParams& attrs, const AffineExclusiveScanInputs& in, std::vector<Tensor>& outputs) {
+ttnn::device_operation::MeshWorkloadArtifacts AffineExclusiveScanProgramFactory::create_mesh_workload_artifacts(
+    const AffineExclusiveScanParams& attrs,
+    const AffineExclusiveScanInputs& in,
+    std::vector<Tensor>& outputs,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords) {
     const auto& a = in.a.mesh_tensor();
     const auto& b = in.b.mesh_tensor();
     const auto& initial_state = in.initial_state.mesh_tensor();
@@ -40,7 +43,7 @@ ttnn::device_operation::ProgramArtifacts AffineExclusiveScanProgramFactory::crea
     const uint32_t group_heads = attrs.batch_heads * groups_per_head;
     const uint32_t key_matrix_tiles = key_tiles * key_tiles;
     const uint32_t state_matrix_tiles = key_tiles * value_tiles;
-    const uint32_t reset_group = attrs.segmented && !in.chronology.has_value()
+    const uint32_t reset_group = attrs.segmented && !in.actual_start.has_value()
                                      ? attrs.wrap_group + static_cast<uint32_t>(attrs.split_in_group) - 1
                                      : 0;
 
@@ -307,11 +310,16 @@ ttnn::device_operation::ProgramArtifacts AffineExclusiveScanProgramFactory::crea
         {wrap_indicator_tensor_name, wrap_indicator},
     };
 
-    kda_factory_detail::bind_chronology(program_spec, program_run_args, in.chronology, in.a, false);
-    return ttnn::device_operation::ProgramArtifacts{
-        .spec = std::move(program_spec),
-        .run_params = std::move(program_run_args),
-    };
+    kda_factory_detail::bind_chronology(program_spec, program_run_args, in.actual_start, in.a, false);
+    return kda_factory_detail::chronology_workload(
+        ttnn::device_operation::ProgramArtifacts{
+            .spec = std::move(program_spec),
+            .run_params = std::move(program_run_args),
+        },
+        tensor_coords,
+        device,
+        attrs.sequence_parallel_axis,
+        attrs.local_rows);
 }
 
 }  // namespace ttnn::experimental::prim

@@ -4,6 +4,20 @@
 #pragma once
 #include <cstdint>
 namespace kda_chronology {
+namespace selection {
+constexpr uint32_t record_width = 8;  // One aligned 32-byte UINT32 record.
+constexpr uint32_t history_rows = 3;  // Four-tap convolution retains three preceding tokens.
+constexpr uint32_t slice_rank = 4;
+constexpr uint32_t outgoing_history = 0;
+constexpr uint32_t predecessor_history = outgoing_history + 1;
+constexpr uint32_t final_history = predecessor_history + 1;
+constexpr uint32_t local_entry_state = final_history + 1;
+constexpr uint32_t final_state = local_entry_state + 2;
+constexpr uint32_t affine_transforms = final_state + 2;
+constexpr uint32_t affine_transform(uint32_t step) { return affine_transforms + 2 * step; }
+constexpr uint32_t record_count(uint32_t sp_size) { return affine_transform(sp_size); }
+}  // namespace selection
+
 struct Topology {
     uint32_t boundary;
     uint32_t head_rows;
@@ -29,6 +43,16 @@ struct Topology {
 inline Topology load(const volatile uint32_t* words) {
     return {words[0], words[1], words[2], words[3], words[4], words[5], words[6], words[7]};
 }
+inline void store(volatile uint32_t* words, const Topology& topology) {
+    words[0] = topology.boundary;
+    words[1] = topology.head_rows;
+    words[2] = topology.local_split;
+    words[3] = topology.rank;
+    words[4] = topology.final_owner;
+    words[5] = topology.split;
+    words[6] = topology.local_rows;
+    words[7] = 0;
+}
 template <typename Buffer>
 inline Topology receive(Buffer& buffer) {
     buffer.wait_front(1);
@@ -44,12 +68,12 @@ inline Topology receive(Buffer& buffer) {
     buffer.pop_front(1);
     return result;
 }
-inline Topology derive(uint32_t start, uint32_t rank, uint32_t partitions, uint32_t rows) {
-    const uint32_t boundary = (start / rows) % partitions;
-    const bool split = partitions > 1 && start % rows != 0;
+inline Topology derive(uint32_t actual_start, uint32_t rank, uint32_t partitions, uint32_t rows) {
+    const uint32_t boundary = (actual_start / rows) % partitions;
+    const bool split = partitions > 1 && actual_start % rows != 0;
     return {
         boundary,
-        rows - start % rows,
+        rows - actual_start % rows,
         uint32_t(split && rank == boundary),
         rank,
         split ? boundary : (boundary + partitions - 1) % partitions,

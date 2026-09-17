@@ -3,16 +3,28 @@
 
 #include "chronological_topology_nanobind.hpp"
 #include "chronological_topology.hpp"
+#include "chronology.hpp"
 #include "ttnn-nanobind/bind_function.hpp"
 namespace ttnn::operations::experimental::kda::chronological_topology::detail {
 void bind_chronological_topology(nb::module_& mod) {
+    // Private representation contract shared with the model's DeviceChronology adapter.
+    auto layout = mod.def_submodule("_chronology_layout");
+    using namespace kda_chronology::selection;
+    layout.attr("HISTORY_ROWS") = history_rows;
+    layout.attr("SLICE_RANK") = slice_rank;
+    layout.attr("OUTGOING_HISTORY") = outgoing_history;
+    layout.attr("PREDECESSOR_HISTORY") = predecessor_history;
+    layout.attr("FINAL_HISTORY") = final_history;
+    layout.attr("LOCAL_ENTRY_STATE") = local_entry_state;
+    layout.attr("FINAL_STATE") = final_state;
+    layout.def("affine_transform", &affine_transform);
+
     ttnn::bind_function<"chronological_topology", "ttnn.experimental.kda.">(
         mod,
-        "Derive fixed-size KDA control and selection records from device start metadata.",
+        "Derive KDA selection records from device actual_start and static mesh geometry.",
         &ttnn::experimental::kda::chronological_topology,
-        nb::arg("start").noconvert(),
-        nb::arg("rank").noconvert(),
-        nb::arg("sp_size"),
+        nb::arg("actual_start").noconvert(),
+        nb::arg("sequence_parallel_axis"),
         nb::arg("local_rows"),
         nb::arg("batch_heads"),
         nb::arg("key_dim"),

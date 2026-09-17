@@ -46,8 +46,8 @@ void RecurrentChunkScanOperation::validate_on_program_cache_miss(
     using namespace kda_factory_detail;
     const std::string_view operation_name =
         attrs.mode == RecurrentChunkScanMode::RECURRENT ? "recurrent_chunk_scan" : "summarize_chunk_recurrence";
-    if (in.chronology) {
-        kda_factory_detail::check_chronology(in.t_inv, *in.chronology, operation_name);
+    if (in.actual_start) {
+        kda_factory_detail::check_actual_start(in.t_inv, *in.actual_start, operation_name);
     }
     check_protocol_tensor(in.v_beta, "v_beta", true, operation_name);
     check_protocol_tensor(in.kd, "kd", true, operation_name);
@@ -134,11 +134,11 @@ void RecurrentChunkScanOperation::validate_on_program_cache_miss(
             "{}: ordinary summaries do not accept wrap controls; use emit_tail_summaries",
             operation_name);
         TT_FATAL(
-            !attrs.emit_tail_summaries || in.wrap_indicator.has_value() || in.chronology.has_value(),
+            !attrs.emit_tail_summaries || in.wrap_indicator.has_value() || in.actual_start.has_value(),
             "{}: tail summaries require a device-local wrap_indicator",
             operation_name);
         TT_FATAL(
-            !attrs.emit_tail_summaries || attrs.wrap_chunk > 0 || in.chronology.has_value(),
+            !attrs.emit_tail_summaries || attrs.wrap_chunk > 0 || in.actual_start.has_value(),
             "{}: tail summaries require a nonzero wrap_chunk",
             operation_name);
     }
@@ -151,7 +151,7 @@ void RecurrentChunkScanOperation::validate_on_program_cache_miss(
 RecurrentChunkScanOperation::spec_return_value_t RecurrentChunkScanOperation::compute_output_specs(
     const operation_attributes_t& attrs, const tensor_args_t& in) {
     const bool summary = attrs.mode == RecurrentChunkScanMode::SUMMARY;
-    const bool compact_summary = summary && in.chronology.has_value();
+    const bool compact_summary = summary && in.actual_start.has_value();
     const auto output_dtype = summary && !compact_summary ? DataType::FLOAT32 : DataType::BFLOAT16;
     const auto output_layout = TensorLayout(output_dtype, PageConfig(Layout::TILE), attrs.output_mem_config);
     const auto state_layout = TensorLayout(
@@ -237,7 +237,8 @@ std::vector<Tensor> recurrent_chunk_scan(
     bool emit_tail_summaries,
     const MemoryConfig& output_mem_config,
     const DeviceComputeKernelConfig& compute_kernel_config,
-    const std::optional<Tensor>& chronology) {
+    const std::optional<Tensor>& actual_start,
+    uint32_t sequence_parallel_axis) {
     const auto& value_shape = v_beta.logical_shape();
     const auto& key_shape = kd.logical_shape();
     const std::string_view operation_name =
@@ -253,6 +254,7 @@ std::vector<Tensor> recurrent_chunk_scan(
             .wrap_chunk = wrap_chunk,
             .emit_tail_summaries = emit_tail_summaries,
             .mode = mode,
+            .sequence_parallel_axis = sequence_parallel_axis,
             .output_mem_config = output_mem_config,
             .compute_kernel_config = compute_kernel_config},
         RecurrentChunkScanInputs{
@@ -266,7 +268,7 @@ std::vector<Tensor> recurrent_chunk_scan(
             .initial_state = initial_state,
             .tail_state = tail_state,
             .wrap_indicator = wrap_indicator,
-            .chronology = chronology});
+            .actual_start = actual_start});
 }
 
 }  // namespace ttnn::experimental::prim

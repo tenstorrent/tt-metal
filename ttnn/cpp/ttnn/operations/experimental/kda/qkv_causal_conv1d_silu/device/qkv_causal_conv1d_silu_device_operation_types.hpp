@@ -23,6 +23,7 @@ struct QkvCausalConv1dSiluParams {
     // must never reach across this row -- it reaches into the second history
     // plane instead. Tile aligned, so no 32-row output tile ever straddles it.
     uint32_t wrap_row;
+    uint32_t sequence_parallel_axis;
     tt::tt_metal::MemoryConfig output_mem_config;
     DeviceComputeKernelConfig compute_kernel_config;
 };
@@ -35,7 +36,7 @@ struct QkvCausalConv1dSiluInputs {
     Tensor tap2;
     Tensor tap3;
     std::optional<Tensor> wrap_indicator;
-    std::optional<Tensor> chronology;
+    std::optional<Tensor> actual_start;
     std::optional<Tensor> predecessor_carry;
 };
 
