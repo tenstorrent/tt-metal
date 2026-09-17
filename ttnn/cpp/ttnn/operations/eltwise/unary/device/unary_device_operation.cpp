@@ -232,6 +232,14 @@ tt::tt_metal::TensorSpec UnaryDeviceOperation::compute_output_specs(
         const auto output_layout = tensor_args.input.layout();
         const auto& memory_layout = args.memory_config.memory_layout();
         const auto& buffer_type = args.memory_config.buffer_type();
+
+        // ND_SHARDED does not carry a 2D shard_spec to reconstruct from. Reusing it is safe and the input's
+        // ND distribution still describes the output.
+        if (!args.memory_config.shard_spec().has_value() && args.memory_config.nd_shard_spec().has_value()) {
+            return tt::tt_metal::TensorSpec(
+                output_shape, TensorLayout(args.output_dtype, PageConfig(output_layout), args.memory_config));
+        }
+
         auto shard_spec_opt = args.memory_config.shard_spec();
 
         if (!shard_spec_opt.has_value()) {

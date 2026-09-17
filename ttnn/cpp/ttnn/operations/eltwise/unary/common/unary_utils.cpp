@@ -37,6 +37,10 @@ bool is_native_L1_sharding(
     if (!input_spec.memory_config().is_sharded()) {
         return false;
     }
+    // ND_SHARDED config carries nd_shard_spec and not shard_spec
+    if (!input_spec.memory_config().shard_spec().has_value() || !output_memory_config.shard_spec().has_value()) {
+        return false;
+    }
     if (is_uneven(input_spec)) {
         return false;
     }
@@ -44,12 +48,8 @@ bool is_native_L1_sharding(
         output_memory_config.buffer_type() == tt::tt_metal::BufferType::DRAM) {
         return false;
     }
-    if (output_memory_config.shard_spec().has_value() && input_spec.memory_config().shard_spec().has_value()) {
-        const auto& in_grid = input_spec.memory_config().shard_spec()->grid;
-        const auto& out_grid = output_memory_config.shard_spec()->grid;
-        if (in_grid != out_grid) {
-            return false;
-        }
+    if (input_spec.memory_config().shard_spec()->grid != output_memory_config.shard_spec()->grid) {
+        return false;
     }
     return true;
 }
