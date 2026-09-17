@@ -9,7 +9,7 @@ import math
 import pathlib
 import subprocess
 
-REPORT_DIR = pathlib.Path(__file__).resolve().parents[1] / "tests" / "kv_pcc_reports"
+REPORT_DIR = pathlib.Path(__file__).resolve().parents[1] / "kv_pcc_reports"
 
 
 def digest(value):
@@ -141,7 +141,7 @@ class KvPccRun:
 
     def finish(self, records):
         report = make_report(self.configuration, records)
-        repo = pathlib.Path(__file__).resolve().parents[4]
+        repo = pathlib.Path(__file__).resolve().parents[5]
         revision = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, text=True, capture_output=True)
         report["provenance"] = {
             "revision": revision.stdout.strip() or None,
