@@ -248,19 +248,20 @@ def test_dispatch_fabric2d_perf_worker(mesh_device, device_params, num_links, se
 
     # Two transports, one routing draw, one board state. Store-and-forward moves the same bytes the
     # production op does, so it is expected at parity; multicast is where the link bytes come out.
-    # Synchronising every iteration is not measurement hygiene, it is what keeps the op from
-    # deadlocking. Back-to-back launches let a chip that finishes early start sending into a
-    # neighbour that is still retiring the previous launch, and the arrival counters do not survive
-    # that. Per-op device duration is unaffected by host pacing, so the numbers stay comparable.
+    #
+    # Launched back to back on purpose. These iterations used to synchronise between every one, not for
+    # measurement but because the op deadlocked when a chip that finished early started sending into a
+    # neighbour still retiring the previous launch. The reader now gives its arrival counter back
+    # exactly what it consumed instead of zeroing it, so an early announcement survives the reset --
+    # and this loop is the production-geometry case that proves it, since a traced replay will have no
+    # host syncs either.
     signpost("dispatch_fabric2d")
     for _ in range(ITERATIONS):
         fabric2d(False)
-        ttnn.synchronize_device(mesh_device)
     ttnn.synchronize_device(mesh_device)
 
     signpost("dispatch_fabric2d_multicast")
     for _ in range(ITERATIONS):
         fabric2d(True)
-        ttnn.synchronize_device(mesh_device)
     ttnn.synchronize_device(mesh_device)
     signpost("done")
