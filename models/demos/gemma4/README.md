@@ -424,38 +424,63 @@ batch-8/batch-32 concurrent mode and no bucket past its own ISL ceiling) — `ms
 `tok/s/user` are the post-prefill decode-loop rate in both, so they're comparable; `TTFT` is
 each run's own prefill wall time.
 
+Re-measured after syncing this branch's L1-budget/prefill-fidelity infra (`ccl.py`,
+`compute_config.py`, `generator.py`, `rms_norm.py`, `shared_mlp.py`, `attention/{operations,prefill}.py`,
+and the shared `tt_transformers/tt/generator.py` base class) with `ign/gemma4_dflash_wh_changes` —
+baseline long-context TTFT dropped substantially as a result (e.g. 128k: 131.1s → 59.4s), while
+`ms/tok`/`tok/s/user` are unchanged (only prefill got faster, not decode). DFlash's long-context
+rows (7.5k+) also pick up a real speedup from `DFlashDrafter`'s new context-length-aware
+`block_size` default (see the note below the tables).
+
 **Baseline (no DFlash):**
 
 | ISL bucket (`-k`) | ISL | Batch | 31B TTFT (ms) | 31B ms/tok | 31B tok/s/user |
 |---|---:|:-:|---:|---:|---:|
-| `batch-1` | 128 | 1 | 88.5 | 43.38 | 23.05 |
-| `batch-8` | 128 | 8 | 697.7 | 48.33 | 20.69 |
-| `batch-32` | 128 | 32 | 2,764.3 | 63.90 | 15.65 |
-| `long-context-4k` | 4k | 1 | 5,101.8 | 45.60 | 21.93 |
-| `long-context-32k` | 32k | 1 | 43,664.2 | 49.34 | 20.27 |
-| `long-context-64k` | 64k | 1 | 82,027.4 | 53.59 | 18.66 |
-| `long-context-128k` | 128k | 1 | 131,126.6 | 59.12 | 16.91 |
+| `batch-1` | 128 | 1 | 93.7 | 43.41 | 23.03 |
+| `batch-8` | 128 | 8 | 692.8 | 48.93 | 20.44 |
+| `batch-32` | 128 | 32 | 2,770.7 | 63.53 | 15.74 |
+| `long-context-4k` | 4k | 1 | 1,577.9 | 45.63 | 21.91 |
+| `long-context-32k` | 32k | 1 | 13,431.6 | 49.40 | 20.24 |
+| `long-context-64k` | 64k | 1 | 30,623.9 | 53.64 | 18.64 |
+| `long-context-128k` | 128k | 1 | 59,359.4 | 59.16 | 16.90 |
 | `long-context-256k` | 256k | 1 | **OOM** — see [Supported ISL range](#supported-isl-range-and-why-its-not-the-full-262144-hf-declares) | — | — |
 
 **DFlash (traced):**
 
-| ISL bucket | ISL | Batch | 31B TTFT (ms) | 31B ms/tok | 31B tok/s/user |
-|---|---:|:-:|---:|---:|---:|
-| `batch-1`-equiv | 44 | 1 | 2,202 | 15.08 | 66.3 |
-| `long-context-4k`-equiv | 3,808 | 1 | 2,457 | 10.64 | 94.0 |
-| ~8k (extra) | 7,548 | 1 | 11,852 | 27.10 | 36.9 |
-| ~16k (extra) | 14,780 | 1 | 20,223 | 33.33 | 30.0 |
-| ~24k (extra) | 22,145 | 1 | 24,274 | 39.84 | 25.1 |
-| `batch-8` / `batch-32` | — | 8 / 32 | not supported — DFlash has no concurrent-batch mode | | |
-| `long-context-32k` / `64k` / `128k` / `256k` | — | 1 | not supported — exceeds DFlash's verified ~24.7k ISL ceiling on T3K | | |
+| ISL bucket | ISL | Batch | `block_size` | 31B TTFT (ms) | 31B ms/tok | 31B tok/s/user |
+|---|---:|:-:|:-:|---:|---:|---:|
+| `batch-1`-equiv | 44 | 1 | 16 | 2,161 | 16.42 | 60.9 |
+| `long-context-4k`-equiv | 3,808 | 1 | 16 | 2,404 | 11.06 | 90.4 |
+| ~8k (extra) | 7,548 | 1 | 8 | 3,954 | 24.69 | 40.5 |
+| ~16k (extra) | 14,780 | 1 | 8 | 14,447 | 29.68 | 33.7 |
+| ~24k (extra) | 22,145 | 1 | 8 | 20,285 | 33.11 | 30.2 |
+| `batch-8` / `batch-32` | — | 8 / 32 | — | not supported — DFlash has no concurrent-batch mode | | |
+| `long-context-32k` / `64k` / `128k` / `256k` | — | 1 | — | not supported — exceeds DFlash's verified ~24.7k ISL ceiling on T3K | | |
 
 The 4k row was originally measured at TTFT=80.2s — a clear outlier, *longer* than the 8k row's
 TTFT despite half the tokens. Confirmed as a one-time kernel/cache-build tax, not a real cost:
-an isolated 2-pass re-run hit it AGAIN on the first (cold) pass — 81.8s — then dropped to 2.46s
-on the second (warm) pass in the same process, matching this table's monotonic trend across
-buckets. Acceptance rate and generated tokens were identical both passes (correctness
-unaffected); only wall-clock prefill time was inflated. The table above reports the warm
-number. Moral: always run a fresh shape combination at least twice before trusting its TTFT.
+an isolated 2-pass re-run hit it AGAIN on the first (cold) pass — 81.8s — then dropped to a warm
+pass matching this table's monotonic trend across buckets. Acceptance rate and generated tokens
+were identical both passes (correctness unaffected); only wall-clock prefill time was inflated.
+The table above reports the warm number. Moral: always run a fresh shape combination at least
+twice before trusting its TTFT — TTFT specifically is noisy run-to-run (kernel/program-cache
+state, not block_size or any code path here), by up to ~2x even on a warm cache; `ms/tok`/
+`tok/s/user` are the steady-state numbers worth trusting from a single run.
+
+**`block_size` (K) auto-tuning:** `DFlashDrafter` now shrinks its default speculative block from
+the checkpoint's own 16 to 8 once the caller's upfront `ctx_len_hint` exceeds
+`GEMMA4_DFLASH_LONG_CTX_THRESHOLD` (default 6000; `demo/dflash_fused_decoder_demo.py` passes its
+own `MAX_SEQ_LEN` as the hint). `GEMMA4_DFLASH_BLOCK`, if set, still overrides this
+unconditionally, and any caller that doesn't pass `ctx_len_hint` (e.g. `generator_vllm.py`'s
+serving path) is unaffected. The threshold is real-hardware-calibrated, not derived from the
+drafter's architectural `sliding_window` (2048) — an earlier version used `sliding_window` as
+the cutoff, but a real T3K A/B sweep (`block_size=8` vs. the default 16, same buckets as above)
+falsified that: at ISL 3,808 (already past the window), `block_size=8` measured 36.9 tok/s vs.
+`block_size=16`'s ~90 tok/s, a 60% regression, because that bucket's mean-accepted-drafts/
+iteration is already the best of any measured bucket (8.56) at the default block_size. Only ISL
+7,548+ shows a real win from `block_size=8` (+7 to +16% tok/s in the table above). 6000 is simply
+the midpoint of the two measured bracketing points (3,808 good at 16, 7,548 good at 8) — not
+verified tighter than that; narrowing it further needs measurement at ISL between those two.
 
 #### Acceptance rate depends on prompt *structure*, not just ISL
 
