@@ -182,6 +182,7 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
                     tt::tt_metal::emule::compute_proc_ids_and_thread_count(k, qdm, qck);
                 kd.proc_ids.assign(procs.proc_ids.begin(), procs.proc_ids.end());
                 kd.num_threads = procs.num_threads;
+                kd.is_quasar_compute = kd.is_compute && (qck != nullptr);
             }
             // Metal 2.0 binding handles (mirror build_metal2_snapshot).
             kd.bindings.is_metal2 = k.is_metal2_kernel();
