@@ -165,6 +165,29 @@ Standalone `high_bw_all_gather` delivering the identical 32.44 MB to every chip,
 
 Splitting into 32 smaller shards costs **43 us**, a 10% bandwidth penalty on 4x smaller payloads.
 
+### 6. All-gather read prefetch depth
+
+`kPrefetchPackets` in the ring-attention all-gather program factory is a hardcoded 4, and the reader's
+CB scales with it (`kDoubleBufferingFactor * kPrefetchPackets * num_pages_per_packet`). It sets how far
+the gather's local reader runs ahead of its fabric writer, so it is the closest thing in the code to
+letting the gather move on. Rebuilt at 8 and re-swept:
+
+| setting | depth 4 | depth 8 | delta |
+| --- | ---: | ---: | ---: |
+| 8-ring k640 ch11 | 5.7625 | 5.7614 | -0.02% |
+| 32-ring k352 ch11 | 6.7219 | 6.7343 | +0.18% |
+| 32-ring k640 ch11 | 7.0604 | 7.0428 | -0.25% |
+| 8-ring k640 ch12 | 6.2748 | 6.2795 | +0.07% |
+| 32-ring k192 ch12 | 7.6167 | 7.6186 | +0.02% |
+| 32-ring k320 ch12 | 7.1639 | 7.1147 | -0.69% |
+| 32-ring k384 ch12 | 7.1080 | 7.1166 | +0.12% |
+| 32-ring k480 ch12 | 7.0386 | 7.0429 | +0.06% |
+| 32-ring k640 ch12 | 7.0805 | 7.0787 | -0.03% |
+
+No effect anywhere -- the largest move is 0.69%, inside the 2-3% within-arm spread -- and no L1
+failure, so the doubled CB fits. Consistent with experiment 5: the gather already runs about 13x
+ahead of consumption, so reading further ahead cannot help. The constant is left at 4.
+
 ## Conclusions
 
 **Padding does not add time; it wastes time already being spent.** At k=640 the 32-ring processes
@@ -195,6 +218,17 @@ with step count and would have shown up there. Extra straddle runs are too small
 The one variable that differs between the two comparisons is units per ring step: 11 where the cost
 vanishes, 3 where it is 25.2 us/step. Why low units-per-step costs that much is not answerable from
 whole-op timing.
+
+Two plan items were checked directly rather than argued about. The fused all-gather's bank-owned
+eligibility (`supports_output_bank_owned_schedule`) turns only on layout and page size -- not ring
+size or shard bytes -- so the 8-ring and 32-ring get the identical schedule; `high_bw_all_gather`'s
+byte floors are a different op's rules and do not apply here. And the gather's read prefetch depth is
+excluded by experiment 6.
+
+One plan item is genuinely unimplemented: the midpoint/completion protocol of PR #54741 is off for
+ring_mla (`/*partial_readiness_enabled=*/false` in `ring_joint_sdpa_program_factory.cpp`), so a
+consumer waits for a whole shard rather than a half. That favours the 8-ring, whose shards are 4x
+larger, so it is unlikely to be the residual -- but it is unbuilt.
 
 **What would settle it.** The realtime profiler reports one duration per program, and a fused op is
 one program spanning CCL and compute cores, so it cannot show where inside the op the time goes.
