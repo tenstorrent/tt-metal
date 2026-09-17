@@ -559,12 +559,8 @@ def test_moreh_norm_backward_p_inf(input_shape, p, dim_rtol_atol, keepdim, devic
     input = make_no_tie_inf_input(input_shape, dim)
     output_grad_shape, _ = compute_output_shape(input_shape, dim, keepdim=keepdim)
     output_grad = torch.empty(output_grad_shape, dtype=torch.float32).uniform_(-1, 1)
-    _, expected_input_grad = torch_norm(
-        input, output_grad, p=p, dim=dim, keepdim=keepdim, do_backward=True
-    )
-    _, actual_input_grad = ttnn_norm(
-        input, output_grad, p=p, dim=dim, keepdim=keepdim, do_backward=True, device=device
-    )
+    _, expected_input_grad = torch_norm(input, output_grad, p=p, dim=dim, keepdim=keepdim, do_backward=True)
+    _, actual_input_grad = ttnn_norm(input, output_grad, p=p, dim=dim, keepdim=keepdim, do_backward=True, device=device)
     passing, out = comp_allclose(expected_input_grad, actual_input_grad, rtol=rtol, atol=atol)
     logger.info(f"input_grad's {out}")
     assert passing
