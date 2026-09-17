@@ -460,8 +460,4 @@ def test_binary_div_edge_case_ttnn(fast_and_approximate_mode, rounding_mode, dev
     golden_tensor = golden_function(in_data1, in_data2, rounding_mode)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    if ttnn_dtype == ttnn.bfloat16:
-        golden_tensor = torch.where(
-            torch.isnan(golden_tensor), torch.tensor(float("inf"), dtype=golden_tensor.dtype), golden_tensor
-        )
     assert_with_ulp(expected_result=golden_tensor, actual_result=output_tensor, ulp_threshold=0, allow_nonfinite=True)
