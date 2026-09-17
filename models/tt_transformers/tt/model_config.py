@@ -2464,6 +2464,7 @@ class ModelArgs:
                 self.dim,
                 split_size,
                 self.lm_head_core_grid.num_cores,
+                num_workers_per_dram_bank=2,
             )
 
     @lru_cache(maxsize=None)

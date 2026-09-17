@@ -206,7 +206,9 @@ class MLP(LightweightModule):
         w1_out = ttnn.linear(
             x,
             self.w1,
-            dtype=ttnn.bfloat8_b if TG else activation_dtype or ttnn.bfloat16,
+            dtype=ttnn.bfloat8_b
+            if TG
+            else (ttnn.bfloat8_b if mode == Mode.DECODE else (activation_dtype or ttnn.bfloat16)),
             core_grid=None,  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_1 else None,
             compute_kernel_config=li_ff1_3_compute_kernel_cfg,
             program_config=None if use_tg_decode_no_prefetch else pc_1,
@@ -314,17 +316,24 @@ class MLP(LightweightModule):
                     ),
                 )
 
-        w2_in = ttnn.mul(
-            w1_out,
-            w3_out,
-            input_tensor_a_activations=[self.activation_type],
-            dtype=activation_dtype or ttnn.bfloat8_b,
-            memory_config=w1_out.memory_config(),
-        )
-
         if mode == Mode.DECODE and not TG and self.prefetcher is None:
-            # w2 may use a different core grid, this is a no-op if they already match
-            w2_in = ttnn.to_memory_config(w2_in, self.args.get_mlp_binary_mult_mem_config(mode))
+            # w2 may use a different core grid; produce the mul directly in w2's layout
+            # so the separate reshard after the mul is not needed.
+            w2_in = ttnn.mul(
+                w1_out,
+                w3_out,
+                input_tensor_a_activations=[self.activation_type],
+                dtype=activation_dtype or ttnn.bfloat8_b,
+                memory_config=self.args.get_mlp_binary_mult_mem_config(mode),
+            )
+        else:
+            w2_in = ttnn.mul(
+                w1_out,
+                w3_out,
+                input_tensor_a_activations=[self.activation_type],
+                dtype=activation_dtype or ttnn.bfloat8_b,
+                memory_config=w1_out.memory_config(),
+            )
 
         ttnn.deallocate(w3_out)
         ttnn.deallocate(w1_out)
