@@ -29,16 +29,31 @@
 #define PROCESS_ACTIVATIONS_(op) PROCESS_##op##_ACTIVATIONS
 #define HAS_ACTIVATIONS(op) P_COMPL(IS_EMPTY(PROCESS_ACTIVATIONS(op, 0)))
 
-// SrcA uses the binary LHS format between activation passes and binary chunks.
+// Physical LHS means the tensor in c_0, not necessarily the mathematical LHS.
 // This is a FORMAT reference, not necessarily the buffer supplying the next tile:
 // binary_ng_program_factory gives the LHS broadcast temporary (c_5) the same
 // format as the original LHS (c_0). With LHS activation, use its intermediate
 // (c_3), whose format can differ from c_0 (e.g. LOGADDEXP). No runtime tracking.
-#define BINARY_LHS_FORMAT_CB (HAS_ACTIVATIONS(LHS) ? tt::CBIndex::c_3 : tt::CBIndex::c_0)
+// LLK broadcast kernels may temporarily select either input's format. The factory
+// only enables that route for matching input dtypes and excludes op_has_exp,
+// which can change intermediate formats. Revisit this contract if that gate changes.
+#define BINARY_PHYSICAL_LHS_FORMAT_CB (HAS_ACTIVATIONS(LHS) ? tt::CBIndex::c_3 : tt::CBIndex::c_0)
+
+// FPU scalar-first kernels start SrcA from physical RHS (the scalar), and keep
+// that operand order in binary_tiles_init. Host activation defines are already
+// mapped to physical slots, so RHS selects c_1/c_4 here, not the logical RHS.
+// SFPU scalar-first kernels instead load c_0 first and swap DST operand indices;
+// their preprocessing must continue to restore BINARY_PHYSICAL_LHS_FORMAT_CB.
+#if SCALAR_IS_LHS
+#define BINARY_FPU_SRCA_FORMAT_CB (HAS_ACTIVATIONS(RHS) ? tt::CBIndex::c_4 : tt::CBIndex::c_1)
+#else
+#define BINARY_FPU_SRCA_FORMAT_CB BINARY_PHYSICAL_LHS_FORMAT_CB
+#endif
 
 #if defined(TRISC_UNPACK) && !HAS_ACTIVATIONS(LHS) && HAS_ACTIVATIONS(RHS)
 // An absent c_5 has Invalid (0xff) format. Otherwise it must be interchangeable
 // with c_0 for reconfiguration, including the geometry programmed on restoration.
+// This checks descriptor equivalence, not the current hardware SrcA state.
 static_assert(
     unpack_src_format[5] == 0xff ||
         (unpack_src_format[0] == unpack_src_format[5] && unpack_dst_format[0] == unpack_dst_format[5] &&

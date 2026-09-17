@@ -63,6 +63,7 @@ def _check_abs(op, a, b, side, **kwargs):
     torch.testing.assert_close(actual, expected, rtol=0, atol=0)
 
 
+@pytest.mark.nightly
 @pytest.mark.parametrize("op", [ttnn.add, ttnn.multiply], ids=["add", "multiply"])
 @pytest.mark.parametrize("a_dtype,b_dtype", _DTYPE_PAIRS)
 @pytest.mark.parametrize("a_shape,b_shape", _SHAPES)
@@ -74,10 +75,54 @@ def test_fused_abs_formats(device, op, a_dtype, b_dtype, a_shape, b_shape, side)
 
 
 @pytest.mark.parametrize("op", [ttnn.add, ttnn.multiply], ids=["add", "multiply"])
+@pytest.mark.parametrize("a_dtype,b_dtype", _DTYPE_PAIRS[:2])
+@pytest.mark.parametrize("side", ["lhs", "rhs", "both"])
+def test_fused_abs_formats_smoke(device, op, a_dtype, b_dtype, side):
+    shape = (1, 1, 32, 288)
+    _check_abs(op, _input(device, shape, a_dtype, 3), _input(device, shape, b_dtype, 13), side)
+
+
+# Column, scalar-tensor, and combined row/column broadcast in both directions.
+@pytest.mark.parametrize("a_shape,b_shape", _SHAPES[3:9])
+def test_fused_abs_broadcast_smoke(device, a_shape, b_shape):
+    a = _input(device, a_shape, ttnn.bfloat16, 3)
+    b = _input(device, b_shape, ttnn.bfloat16, 13)
+    _check_abs(ttnn.multiply, a, b, "both")
+
+
+@pytest.mark.parametrize("op", [ttnn.add, ttnn.multiply], ids=["add", "multiply"])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
 @pytest.mark.parametrize("side", ["lhs", "rhs", "both"])
 def test_fused_abs_python_scalar(device, op, dtype, side):
     _check_abs(op, _input(device, (1, 1, 32, 288), dtype, 3), -2.5, side)
+
+
+@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b])
+@pytest.mark.parametrize("fast", [True, False], ids=["fast", "accurate"])
+@pytest.mark.parametrize("side", ["lhs", "rhs", "both"])
+def test_fused_abs_scalar_first(device, dtype, fast, side):
+    # Noncommutative op: logical LHS is the scalar, but physical c_0 is the tensor.
+    # Fast block-float subtraction uses FPU with a BF16 scalar, so its SrcA starts
+    # from c_1/c_4. FP32 dispatches to SFPU even in fast mode and still loads c_0 first.
+    tensor = _input(device, (1, 1, 32, 288), dtype, 3)
+    reference_tensor = ttnn.to_torch(tensor).float()
+    scalar = -2.5
+    lhs = side in ("lhs", "both")
+    rhs = side in ("rhs", "both")
+    expected = (abs(scalar) if lhs else scalar) - (reference_tensor.abs() if rhs else reference_tensor)
+    activation = [ttnn.UnaryWithParam(ttnn.UnaryOpType.ABS)]
+    actual = ttnn.to_torch(
+        ttnn.subtract(
+            scalar,
+            tensor,
+            fast_and_approximate_mode=fast,
+            input_tensor_a_activations=activation if lhs else [],
+            input_tensor_b_activations=activation if rhs else [],
+            dtype=ttnn.bfloat16,
+            sub_core_grids=_one_core(),
+        )
+    ).float()
+    torch.testing.assert_close(actual, expected, rtol=0, atol=0)
 
 
 @pytest.mark.parametrize("a_dtype,b_dtype", _DTYPE_PAIRS[:2])
@@ -95,11 +140,14 @@ def test_fused_abs_sharded_multiply(device, a_dtype, b_dtype, side):
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat4_b])
 @pytest.mark.parametrize("both", [False, True])
-def test_activation_intermediate_changes_format(device, dtype, both):
+@pytest.mark.parametrize("a_shape,b_shape", _SHAPES[:5])
+def test_activation_intermediate_changes_format(device, dtype, both, a_shape, b_shape):
     # LOGADDEXP's EXP intermediates use BF16, not the block-float input format.
     # Matching input types are required by this operation's dtype policy.
-    a = _input(device, (1, 1, 32, 288), dtype, 3)
-    b = _input(device, (1, 1, 32, 288), dtype, 13)
+    # Broadcasting must retain the software fallback when intermediates change
+    # format; the LLK broadcast route assumes interchangeable input formats.
+    a = _input(device, a_shape, dtype, 3)
+    b = _input(device, b_shape, dtype, 13)
     reference_a, reference_b = ttnn.to_torch(a).float(), ttnn.to_torch(b).float()
     activation = [ttnn.UnaryWithParam(ttnn.UnaryOpType.ABS)] if both else []
     if both:
