@@ -263,27 +263,7 @@ uint64_t PlacementMap::cover_generation() const noexcept {
     return impl_->cover_generation.load(std::memory_order_acquire);
 }
 
-size_t PlacementMap::published(uint32_t chip_id) const noexcept {
-    if (chip_id >= kMaxChips) {
-        return 0;
-    }
-    const Log<int64_t>& log = impl_->chips[chip_id];
-    return log.nodes.count() - log.nodes.first();
-}
-
 size_t PlacementMap::host_published() const noexcept { return impl_->host.nodes.count() - impl_->host.nodes.first(); }
-
-std::vector<HostNode> PlacementMap::host_nodes() const {
-    const Log<double>& log = impl_->host;
-    std::vector<HostNode> out;
-    for (uint64_t i = log.nodes.first(), n = log.nodes.count(); i < n; i++) {
-        HostNode node{};
-        if (log.nodes.read(i, node)) {
-            out.push_back(node);
-        }
-    }
-    return out;
-}
 
 double PlacementMap::lookup_root(uint32_t chip_id, int64_t wall) const noexcept {
     double root = 0.0;
@@ -291,6 +271,14 @@ double PlacementMap::lookup_root(uint32_t chip_id, int64_t wall) const noexcept 
         return 0.0;
     }
     return root;
+}
+
+double PlacementMap::host_tsc(double root) const noexcept {
+    double tsc = 0.0;
+    if (!place(impl_->host, view_of(impl_.get()).host, root, tsc)) {
+        return 0.0;
+    }
+    return tsc;
 }
 
 int64_t PlacementMap::lookup_tsc(uint32_t chip_id, int64_t wall) const noexcept {

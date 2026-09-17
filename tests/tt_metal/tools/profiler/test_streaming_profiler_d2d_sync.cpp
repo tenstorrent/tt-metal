@@ -202,11 +202,6 @@ int main() {
     burst(/*snd*/ 0, 0 * kN, /*rcv*/ 1, 0 * kN);  // link (0 e0 -> 1 e0): chip 1's e0 is core index 0
     burst(/*snd*/ 1, 1 * kN, /*rcv*/ 2, 0 * kN);  // link (1 e1 -> 2 e0): chip 1's e1 is core index 1
     sync.on_capture_end(ctx);
-    std::printf(
-        "nodes published: chip0 %zu chip1 %zu chip2 %zu\n",
-        sync.map().published(0),
-        sync.map().published(1),
-        sync.map().published(2));
 
     // A record's placement: its eth wall tick through the chip's series, as the service places a record at release.
     const auto placed_ns = [&](int c, double tau) {
@@ -291,8 +286,8 @@ int main() {
             g_fail++;
         }
     }
-    if (sync.map().published(2) == 0) {
-        std::printf("FAIL (d) chip2 published 0 nodes: the leaf never reached the root\n");
+    if (sync.map().lookup_tsc(2, std::llround(wall(2, 0.5))) == 0) {
+        std::printf("FAIL (d) chip2 is not placed: the leaf never reached the root\n");
         g_fail++;
     }
     if (g_fail != 0) {

@@ -79,11 +79,9 @@ public:
     // series composed into one line per segment pair, one multiply-add per record while a batch stays inside it. 0
     // when nothing places the tick yet.
     int64_t place_host(uint32_t chip_id, int64_t wall) const noexcept;
-    // How many nodes a chip has (0 = none).
-    size_t published(uint32_t chip_id) const noexcept;
+    // The host TSC tick of a root refclk tick; 0 before the host's first node.
+    double host_tsc(double root) const noexcept;
     size_t host_published() const noexcept;
-    // A copy of the host series, for the capture-end dumps.
-    std::vector<HostNode> host_nodes() const;
     // The wall tick the chip's series covers: INT64_MIN before its first node, INT64_MAX once finished.
     int64_t cover_ticks(uint32_t chip_id) const noexcept;
     // Moves whenever any chip's cover does, so a consumer holding batches re-reads covers only then.

@@ -348,41 +348,6 @@ std::map<uint32_t, D2dSyncConsumer::RootXf> D2dSyncConsumer::root_transforms(
     return to_root;
 }
 
-double D2dSyncConsumer::Series::root_at(double H) const {
-    if (nodes.empty()) {
-        return std::numeric_limits<double>::quiet_NaN();
-    }
-    auto it = std::upper_bound(nodes.begin(), nodes.end(), H, [](double h, const Node& n) { return h < n.H; });
-    if (it == nodes.begin()) {
-        return it->root + it->tangent * (H - it->H);
-    }
-    const Node& a = *(it - 1);
-    if (it == nodes.end()) {
-        return a.root + a.tangent * (H - a.H);
-    }
-    return a.root + (it->root - a.root) * (H - a.H) / (it->H - a.H);
-}
-
-double D2dSyncConsumer::tsc_at(double root) const {
-    if (map_.host_published() != host_seen_) {
-        host_nodes_ = map_.host_nodes();
-        host_seen_ = host_nodes_.size();
-    }
-    if (host_nodes_.empty()) {
-        return 0.0;
-    }
-    auto it = std::upper_bound(
-        host_nodes_.begin(), host_nodes_.end(), root, [](double r, const HostNode& n) { return r < n.at; });
-    if (it == host_nodes_.begin()) {
-        return it->value + it->tangent * (root - it->at);
-    }
-    const HostNode& a = *(it - 1);
-    if (it == host_nodes_.end()) {
-        return a.value + a.tangent * (root - a.at);
-    }
-    return a.value + (it->value - a.value) * (root - a.at) / (it->at - a.at);
-}
-
 D2dSyncConsumer::Fresh D2dSyncConsumer::fresh_nodes(const Series& s, const LocalClockModel& fit, const RootXf& xf) const {
     const std::vector<LocalClockModel::Run>& runs = fit.runs;
     // A node places one instant of a run on the root: its eth wall tick (the key every record of the chip is looked
@@ -811,9 +776,9 @@ bool D2dSyncConsumer::round_error(
     RoundTerms t;
     t.wall_a = wa;
     t.wall_b = wb;
-    t.root_a = pa->second.root_at(static_cast<double>(std::llround(wa)));
-    t.root_b = pb->second.root_at(static_cast<double>(std::llround(wb)));
-    tsc_a = std::llround(tsc_at(t.root_a));
+    t.root_a = map_.lookup_root(ctx_.devices[L.dev_a].chip_id, std::llround(wa));
+    t.root_b = map_.lookup_root(ctx_.devices[L.dev_b].chip_id, std::llround(wb));
+    tsc_a = std::llround(map_.host_tsc(t.root_a));
     err = (t.root_b - t.root_a) * (1e9 / LocalClockModel::kRefclkHz);
     if (terms != nullptr) {
         *terms = t;
@@ -1045,6 +1010,7 @@ void D2dSyncConsumer::publish_clock_plots() const {
         if (ps == published_.end() || ps->second.nodes.empty() || dev >= ctx_.devices.size()) {
             continue;
         }
+        const uint32_t chip = ctx_.devices[dev].chip_id;
         std::vector<SyncPlotPoint> pts;
         for (const LocalClockModel::Run& run : fit.runs) {
             if (run.n == 0 || run.slope() <= 0.0) {
@@ -1052,12 +1018,12 @@ void D2dSyncConsumer::publish_clock_plots() const {
             }
             const double ghz = run.slope() * LocalClockModel::kRefclkHz * 1e-9;
             for (const double r : {run.r_first, run.r_last}) {
-                const double root = ps->second.root_at(std::llround(run.wall_of_refclk(r)));
-                pts.push_back(SyncPlotPoint{std::llround(tsc_at(root)), ghz});
+                const double root = map_.lookup_root(chip, std::llround(run.wall_of_refclk(r)));
+                pts.push_back(SyncPlotPoint{std::llround(map_.host_tsc(root)), ghz});
             }
         }
         if (!pts.empty()) {
-            SyncPlots::publish(fmt::format("AICLK chip{} (GHz)", ctx_.devices[dev].chip_id), std::move(pts));
+            SyncPlots::publish(fmt::format("AICLK chip{} (GHz)", chip), std::move(pts));
         }
     }
 }
