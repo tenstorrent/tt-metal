@@ -15,6 +15,7 @@ void kernel_main() {
     constexpr uint32_t dest_l1_addr = get_arg(args::dest_l1_addr);
     constexpr uint32_t addr_stride = get_arg(args::addr_stride);
     constexpr uint32_t packed_receiver_coords = get_arg(args::receiver_coords);
+    constexpr uint32_t noc_id = get_arg(args::noc_id);
 
     // Extract receiver coordinates
     uint32_t receiver_x = (packed_receiver_coords >> 16) & 0xFFFF;
@@ -29,9 +30,9 @@ void kernel_main() {
             for (uint32_t i = 0; i < num_writes; i++) {
                 uint32_t write_value = same_value ? write_value_base : (write_value_base + i);
                 if constexpr (use_posted_writes) {
-                    noc_inline_dw_write<InlineWriteDst::DEFAULT, true>(dest_noc_addr, write_value, 0xF, noc_index);
+                    noc_inline_dw_write<InlineWriteDst::DEFAULT, true>(dest_noc_addr, write_value, 0xF, noc_id);
                 } else {
-                    noc_inline_dw_write<InlineWriteDst::DEFAULT, false>(dest_noc_addr, write_value, 0xF, noc_index);
+                    noc_inline_dw_write<InlineWriteDst::DEFAULT, false>(dest_noc_addr, write_value, 0xF, noc_id);
                 }
             }
 
@@ -42,9 +43,9 @@ void kernel_main() {
                 uint64_t dest_noc_addr = get_noc_addr(receiver_x, receiver_y, current_local_addr);
                 uint32_t write_value = same_value ? write_value_base : (write_value_base + i);
                 if constexpr (use_posted_writes) {
-                    noc_inline_dw_write<InlineWriteDst::DEFAULT, true>(dest_noc_addr, write_value, 0xF, noc_index);
+                    noc_inline_dw_write<InlineWriteDst::DEFAULT, true>(dest_noc_addr, write_value, 0xF, noc_id);
                 } else {
-                    noc_inline_dw_write<InlineWriteDst::DEFAULT, false>(dest_noc_addr, write_value, 0xF, noc_index);
+                    noc_inline_dw_write<InlineWriteDst::DEFAULT, false>(dest_noc_addr, write_value, 0xF, noc_id);
                 }
             }
         }
@@ -60,5 +61,5 @@ void kernel_main() {
     DeviceTimestampedData("Transaction size in bytes", 32);
     DeviceTimestampedData("Same destination", same_destination);
     DeviceTimestampedData("Same value", same_value);
-    DeviceTimestampedData("NoC Index", noc_index);
+    DeviceTimestampedData("NoC Index", noc_id);
 }

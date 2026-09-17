@@ -89,6 +89,7 @@ bool run_dm(distributed::MeshDevice& mesh_device, const DirectWriteConfig& test_
             {"write_val_base", test_config.write_value_base},
             {"same_dest", test_config.same_destination ? 1u : 0u},
             {"addr_stride", test_config.addr_stride},
+            {"noc_id", static_cast<uint32_t>(test_config.noc_id)},
             {"num_subordinates", test_config.num_subordinates},
             {"start_x", (uint32_t)sub_worker_start_coord.x},
             {"start_y", (uint32_t)sub_worker_start_coord.y},
@@ -111,7 +112,8 @@ bool run_dm(distributed::MeshDevice& mesh_device, const DirectWriteConfig& test_
             {"same_value", test_config.same_value ? 1u : 0u},
             {"dest_l1_addr", l1_base_address},
             {"addr_stride", test_config.addr_stride},
-            {"receiver_coords", packed_receiver_core_coordinates}};
+            {"receiver_coords", packed_receiver_core_coordinates},
+            {"noc_id", static_cast<uint32_t>(test_config.noc_id)}};
     }
 
     // Choose kernel based on approach
