@@ -41,11 +41,12 @@ _COMPRESS_RATIOS = {
 _CASES = [
     pytest.param(DeepSeekV4ProConfig, 0.98, 0, "heavily_compressed_attention", "hash_moe", id="pro-L0-hca-hash"),
     # TODO this row does not reach 0.98: 0.9597 at full MoE width, reproducible to 0.0018 over seeds
-    # 0, 42 and 1234, where the hash row next to it is unaffected at 0.9893. Moving the whole gate to
-    # the host (HOST_ALL) does not recover it, so it is not where the top-k runs. Needs a debug pass,
-    # and the next step is the teacher-forced chunked block on a real trace: the router sees random
-    # activations here, and L3 is HCA + top-k there too, so that run says whether the error survives
-    # real activations or is an artifact of this test's input.
+    # 0, 42 and 1234, where the hash row next to it is unaffected at 0.9893. It is an artifact of the
+    # random input, not a device error: test_block_chunked.py runs the same pair (L3, HCA + top-k) on
+    # the golden's own activations and the checkpoint's weights and measures 0.9969, against a
+    # reference ceiling of 0.9999. A score-routed MoE fed random activations sits on near-tied top-k
+    # margins, so what this row grades is the router's tie-breaking. Decide what it should assert:
+    # the floor this regime supports, or nothing at all.
     pytest.param(DeepSeekV4ProConfig, 0.98, 3, "heavily_compressed_attention", "moe", id="pro-L3-hca-topk"),
     pytest.param(DeepSeekV4FlashConfig, 0.988, 0, "sliding_attention", "hash_moe", id="flash-L0-swa-hash"),
     pytest.param(DeepSeekV4FlashConfig, 0.988, 3, "heavily_compressed_attention", "moe", id="flash-L3-hca-topk"),
