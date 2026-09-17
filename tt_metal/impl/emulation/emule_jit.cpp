@@ -20,6 +20,7 @@
 #include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
 
+#include "jit_build/jit_build_settings.hpp"
 #include "jit_build/jit_build_utils.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_emule/kernel_patcher.hpp"
@@ -160,8 +161,8 @@ static std::function<void()> jit_compile_kernel(
     const std::vector<uint32_t>& compile_args,
     const std::unordered_map<std::string, uint32_t>& named_compile_args,
     // Blaze-only experimental named args (issue #50953) — begin
-    const NamedCTArgNamespaces& named_ct_arg_namespaces,
-    const NamedRuntimeArgNamespaces& named_runtime_arg_namespaces,
+    const tt_emule::NamedCtNamespaces& named_ct_arg_namespaces,
+    const tt_emule::NamedRtNamespaces& named_runtime_arg_namespaces,
     // Blaze-only experimental named args (issue #50953) — end
     const std::map<std::string, std::string>& defines,
     const std::string& extra_include_flags,
@@ -204,8 +205,17 @@ static std::function<void()> jit_compile_kernel(
     // 2c. Blaze EXPERIMENTAL named kernel args.
     // Emule's JIT path bypasses genfiles; call the experimental helper to
     // emit named_args_generated.h. Included from wrapper.cpp when non-empty.
-    bool has_named_args =
-        experimental::blaze::emit_named_args_header(dir, named_ct_arg_namespaces, named_runtime_arg_namespaces);
+    // Materialize the private NamedRuntimeArgNamespaces from the POD (dispatch int -> enum); the CT
+    // POD type is structurally identical to NamedCTArgNamespaces, so it binds to the emitter directly.
+    NamedRuntimeArgNamespaces rt_private;
+    for (const auto& [ns, entries] : named_runtime_arg_namespaces) {
+        auto& out = rt_private[ns];
+        for (const auto& e : entries) {
+            out.push_back(
+                NamedRuntimeArgEntry{e.field, e.index, e.length, static_cast<RuntimeArgDispatch>(e.dispatch)});
+        }
+    }
+    bool has_named_args = experimental::blaze::emit_named_args_header(dir, named_ct_arg_namespaces, rt_private);
     ////////////////////////////////////////////////////////////
 
     // 3. Write wrapper.cpp

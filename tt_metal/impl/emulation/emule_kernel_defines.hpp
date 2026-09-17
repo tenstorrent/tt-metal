@@ -7,8 +7,6 @@
 #include <string>
 #include <vector>
 
-#include "impl/kernels/kernel.hpp"        // Kernel, experimental::quasar::Quasar*Kernel
-#include "impl/program/program_impl.hpp"  // detail::ProgramImpl
 #include "emule_program_descriptor.hpp"   // tt_emule::KernelDescriptor / CoreDescriptor / SocView
 
 namespace tt::tt_metal::emule {
@@ -30,16 +28,6 @@ std::map<std::string, std::string> build_kernel_defines_from_desc(
     const std::string& worker_col_map_str,
     const std::string& worker_row_map_str,
     uint32_t emule_sem_base);
-
-// Per-kernel thread count and the processor ids each thread runs as.
-struct ProcIdList {
-    std::vector<uint8_t> proc_ids;
-    uint32_t num_threads;
-};
-ProcIdList compute_proc_ids_and_thread_count(
-    Kernel& kernel,
-    experimental::quasar::QuasarDataMovementKernel* qdm,
-    experimental::quasar::QuasarComputeKernel* qck);
 
 // Quasar compute TRISC-guard scan result (compile-4-variants vs runtime-TRISC vs single).
 struct TriscMode {

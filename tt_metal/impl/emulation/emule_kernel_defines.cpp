@@ -6,15 +6,12 @@
 #include <cstdlib>
 #include <fstream>
 #include <iterator>
-#include <set>
 #include <sstream>
 #include <string>
 
 #include "emule_device_map.hpp"     // NUM_NOCS
 #include "emule_sanitizers.hpp"     // EMULE_NUM_CBS
 #include "emule_tile_geometry.hpp"  // resolve_tile_geometry, ResolvedTileGeometry
-#include "impl/context/metal_context.hpp"
-#include "impl/kernels/kernel.hpp"
 #include <tt-metalium/experimental/fabric/fabric.hpp>  // is_2d_fabric_config
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/hal_types.hpp>
@@ -217,39 +214,6 @@ std::map<std::string, std::string> build_kernel_defines_from_desc(
         defines["DST_SYNC_FULL"] = kd.dst_full_sync_en ? "1" : "0";
     }
     return defines;
-}
-
-// Determine per-kernel thread count and the processor ids each thread runs as:
-// - QuasarDataMovementKernel: one thread per DM processor (0..7).
-// - QuasarComputeKernel: one thread per NEO engine (0..3), each running 4 TRISCs.
-// - Other kernels: single thread at the kernel's processor type.
-ProcIdList compute_proc_ids_and_thread_count(
-    Kernel& kernel,
-    experimental::quasar::QuasarDataMovementKernel* qdm,
-    experimental::quasar::QuasarComputeKernel* qck) {
-    ProcIdList out{};
-    out.num_threads = 1;
-    if (qdm && !qdm->get_dm_processors().empty()) {
-        for (const auto& proc : qdm->get_dm_processors()) {
-            out.proc_ids.push_back(
-                static_cast<uint8_t>(static_cast<std::underlying_type_t<std::remove_cvref_t<decltype(proc)>>>(proc)));
-        }
-        out.num_threads = static_cast<uint32_t>(qdm->get_dm_processors().size());
-    } else if (qck) {
-        std::set<uint8_t> neo_ids_seen;
-        for (const auto& proc : qck->get_compute_processors()) {
-            uint8_t neo_id = static_cast<uint8_t>(
-                static_cast<std::underlying_type_t<std::remove_cvref_t<decltype(proc)>>>(proc) /
-                experimental::quasar::QUASAR_NUM_COMPUTE_PROCESSORS_PER_TENSIX_ENGINE);
-            if (neo_ids_seen.insert(neo_id).second) {
-                out.proc_ids.push_back(neo_id);
-            }
-        }
-        out.num_threads = static_cast<uint32_t>(neo_ids_seen.size());
-    } else {
-        out.proc_ids.push_back(static_cast<uint8_t>(kernel.get_kernel_processor_type(0)));
-    }
-    return out;
 }
 
 // For Quasar compute kernels, scan the source for TRISC guards:
