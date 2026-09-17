@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Configuration classes for transformer training."""
+
 import os
 import yaml
 from dataclasses import dataclass
@@ -39,6 +40,29 @@ class DeviceConfig:
         # so large models (e.g. 32B) never materialize a full replicated copy on one chip.
         # Set to false to opt into the eager (full-replicated, then shard) path.
         self.lazy_parameter_init = device_config.get("lazy_parameter_init", True)
+        # FSDP: keep the trailing blocks whose unsharded bf16 weights fit in this many GiB per device
+        # gathered between forward and backward, saving their backward all-gather (the last block is
+        # always kept, it is free). `.inf` keeps every block: -2 % step time on TinyLlama 8 chips,
+        # -2.6 % on 32, in exchange for holding the whole unsharded model in DRAM.
+        self.fsdp_keep_gathered_gib = float(device_config.get("fsdp_keep_gathered_gib", 0.0))
+        # FSDP: run the collectives on a CCL sub-device from a second command queue so they overlap
+        # compute (see ttml.fsdp.enable_overlap and docs/FSDP.md). Reserves `fsdp_ccl_subdevice`
+        # (`{columns: N}` or `{rows: N}`) of every chip's grid, so it pays when the exposed
+        # collectives are a larger share of the step than the reserved cores are of the grid. One
+        # column (default, 11x10 compute grid) measured 3-10 % faster on TinyLlama at 1-6 samples per
+        # device and 8-32 chips; one row (12x9 grid, 2x faster collectives) only edges it at 1 sample
+        # on 8 chips and is 11 % slower than no overlap at 6 -- the grid shape matters to the ops.
+        # Needs tile-aligned shards (the auto shard dim takes care of that).
+        self.fsdp_overlap_collectives = bool(device_config.get("fsdp_overlap_collectives", False))
+        subdevice = dict(device_config.get("fsdp_ccl_subdevice", {"columns": 1}))
+        unknown = set(subdevice) - {"rows", "columns"}
+        if unknown:
+            raise ValueError(f"fsdp_ccl_subdevice: unknown keys {sorted(unknown)}; use 'rows' and/or 'columns'")
+        self.fsdp_ccl_subdevice_rows = int(subdevice.get("rows", 0))
+        self.fsdp_ccl_subdevice_columns = int(subdevice.get("columns", 0))
+        # How many blocks the collective queue may run ahead of compute; the gather pool holds twice
+        # that many full-shape copies of a block's weights. 3 measured ~1 % faster than 2 on TinyLlama.
+        self.fsdp_overlap_lookahead = int(device_config.get("fsdp_overlap_lookahead", 2))
 
     def total_devices(self) -> int:
         """Get total number of devices in mesh.
