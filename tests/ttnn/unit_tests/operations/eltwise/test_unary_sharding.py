@@ -194,6 +194,47 @@ def test_unary_uneven_sharding_fallback(ttnn_op, device):
     assert torch.equal(ttnn_output, golden_tensor)
 
 
+@pytest.mark.parametrize("ttnn_op", [ttnn.abs, ttnn.relu])
+@pytest.mark.parametrize(
+    "input_shape",
+    [
+        torch.Size([1, 1, 128, 32]),  # shard wider than the tensor -> stays ND_SHARDED
+        torch.Size([1, 1, 128, 64]),  # exactly expressible in 2D -> normalizes to HEIGHT_SHARDED
+    ],
+)
+def test_unary_nd_sharded_fallback(ttnn_op, input_shape, device):
+    """An ND-sharded input falls back to the interleaved path and returns correct data."""
+    torch.manual_seed(42)
+    torch_input = torch.empty(input_shape, dtype=torch.bfloat16).uniform_(-100, 100)
+    golden_function = ttnn.get_golden_function(ttnn_op)
+    golden_tensor = golden_function(torch_input, device=device)
+
+    # An ND grid over DRAM must be a single row at y == 0
+    nd_shard_config = ttnn.MemoryConfig(
+        ttnn.BufferType.DRAM,
+        ttnn.NdShardSpec(
+            shard_shape=ttnn.Shape([1, 1, 64, 64]),
+            grid=ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (1, 0))}),
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            shard_distribution_strategy=ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+        ),
+    )
+
+    ttnn_input = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=nd_shard_config,
+    )
+    assert ttnn_input.memory_config().is_sharded()
+    if input_shape[-1] == 32:
+        assert ttnn_input.memory_config().shard_spec is None
+
+    ttnn_output = ttnn.to_torch(ttnn_op(ttnn_input))
+    assert torch.equal(ttnn_output, golden_tensor)
+
+
 @pytest.mark.parametrize(
     "input_shape, shard_shape, core_grid, strategy",
     [
