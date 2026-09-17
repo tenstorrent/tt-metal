@@ -110,10 +110,6 @@ class Gemma4DecoderLayer:
             packed_sliding_rope=packed_sliding_rope,
         )
 
-        # The normed sublayer output is written by the norm and read by the very next
-        # add, touching no matmul, CCL or SDPA in between -- the one shape of chain L1
-        # pays for. The add itself must land in DRAM: its result is the next residual,
-        # and it feeds a norm whose output goes straight into the qkv projection.
         act_mc = prefill_short_lived_memcfg()
         attn_output = self.post_attention_layernorm.forward(attn_output, memory_config=act_mc)
         hidden_states = ttnn.add(residual, attn_output, memory_config=act_mc)
@@ -140,8 +136,6 @@ class Gemma4DecoderLayer:
             residual,
             normed,
             activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.MUL_UNARY_SFPU, self.layer_scalar)],
-            # Next layer's residual: it stays live across that layer's attention,
-            # including SDPA, which is already L1-tight. Keep it in DRAM.
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         residual.deallocate(True)
