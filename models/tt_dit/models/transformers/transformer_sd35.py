@@ -309,23 +309,38 @@ class SD35TransformerBlock(Module):
                 **self.ccl_manager.get_ag_hyperparams(spatial_normed_1BND.shape),
             )
 
-        # Fused MM+RS+addcmul: ff2's row-parallel matmul, its reduce-scatter, and the gate-multiply
-        # + residual-add become one op instead of three. The fused kernel requires batch size 1
-        # (asserts padded_shape[0]==1 and [1]==1), but this model batches CFG cond+uncond as
-        # batch=2, so we flatten (1, B, N, .) -> (1, 1, B*N, .) first and reshape back after. The
-        # gate (spatial_gate_ff) is a broadcast-over-N tensor (1, B, 1, D); the fused kernel has no
-        # broadcast support, so it must be materialized to (1, B, N, D) before flattening. Only
-        # registered for the exact (M, K, N) this model's spatial FFN hits on this device's compute
-        # grid (see _register_ff2_mmrs_config); any other shape falls back to the plain path.
+        # Fused MM+RS for ff2's row-parallel matmul + its reduce-scatter (one op instead of two).
+        # The gate-multiply + residual-add are done as separate, un-flattened ops afterward rather
+        # than fused into the same op via addcmul_a/addcmul_b.
+        #
+        # Bug found by manual inspection (garbled/noise output on every 1x4 run, root-caused via
+        # bisection): the previous version passed the real residual/gate as addcmul_a/addcmul_b
+        # into forward_fused_addcmul directly. Confirmed by isolation test that the fused matmul+RS
+        # itself (with this same batch-flatten) is correct -- feeding it neutral addcmul_a=0,
+        # addcmul_b=1 and doing gate/residual separately produced a correct image; reintroducing the
+        # real addcmul_a/addcmul_b (even after fixing the gate's flatten to avoid ttnn.repeat on a
+        # degenerate broadcast dim, via a per-batch slice+concat) still produced noise. That points
+        # at the fused kernel's own addcmul handling for this shape/mesh, not the Python-side
+        # reshape/gate construction -- same class of issue as the fused-AGMM kernel bug already
+        # flagged as blocked on this 1-row mesh. Keeping the fused matmul+RS (the expensive part)
+        # and dropping only the addcmul fusion keeps most of the win: 7.03s vs 6.71-6.76s fully
+        # fused (which was fast but wrong) and 7.16s with the whole fused path disabled.
+        #
+        # The fused kernel requires batch size 1 (asserts padded_shape[0]==1 and [1]==1), but this
+        # model batches CFG cond+uncond as batch=2, so we flatten (1, B, N, .) -> (1, 1, B*N, .)
+        # before the call and reshape back after. Only registered for the exact (M, K, N) this
+        # model's spatial FFN hits on this device's compute grid (see _register_ff2_mmrs_config);
+        # any other shape falls back to the plain path.
         b_dim, n_tok, k_dim = spatial_normed_1BND.shape[1], spatial_normed_1BND.shape[2], spatial_normed_1BND.shape[3]
         d_local = spatial_1BND.shape[3]
         if self._use_fused_ff_addcmul and b_dim * n_tok == 8192:
             x_flat = ttnn.reshape(spatial_normed_1BND, (1, 1, b_dim * n_tok, k_dim))
             residual_flat = ttnn.reshape(spatial_1BND, (1, 1, b_dim * n_tok, d_local))
-            gate_full = ttnn.repeat(spatial_gate_ff, (1, 1, n_tok, 1))
-            gate_flat = ttnn.reshape(gate_full, (1, 1, b_dim * n_tok, d_local))
-            out_flat = self.ff.forward_fused_addcmul(x_flat, addcmul_a=residual_flat, addcmul_b=gate_flat, scalar=1.0)
-            spatial_1BND = ttnn.reshape(out_flat, (1, b_dim, n_tok, d_local))
+            zero_flat = residual_flat * 0.0
+            one_flat = zero_flat + 1.0
+            ff2_flat = self.ff.forward_fused_addcmul(x_flat, addcmul_a=zero_flat, addcmul_b=one_flat, scalar=1.0)
+            ff2_1BND = ttnn.reshape(ff2_flat, (1, b_dim, n_tok, d_local))
+            spatial_1BND = spatial_1BND + ff2_1BND * spatial_gate_ff
         else:
             spatial_ff_1BND = self.ff(spatial_normed_1BND)
             spatial_ff_1BND = spatial_ff_1BND * spatial_gate_ff
