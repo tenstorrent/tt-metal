@@ -394,6 +394,7 @@ class MiniMaxH3Vae:
         # Defaults to a plain strict load, which is what every existing test does.
         self._weight_loader = weight_loader
         self._stitcher = None
+        self._yuv_pool = None
         self._blender = None
         # Blend the tile grid on device and read back the assembled canvas, instead of reading
         # overlapping tiles and blending them on host.
@@ -558,6 +559,8 @@ class MiniMaxH3Vae:
             # Per-wave readback durations, not just their sum: a mean hides a slow first wave, and
             # comparing a mean against someone else's min-of-N is how a 2x phantom appears.
             "yuv_extract": 0.0,
+            "readback_join": 0.0,
+            "stitch_blend": 0.0,
             "readback_each": [],
             "device_each": [],
             # Only populated under `profile`: each needs a synchronize to be separable.
@@ -633,14 +636,33 @@ class MiniMaxH3Vae:
             f"({self.mesh_device.get_num_devices()} devices, "
             f"{units / waves if waves else 0:.1f} units/wave)"
         )
-        phases = ("decoder", "assemble", "yuv_prep", "yuv_convert", "yuv_dma", "yuv_extract", "yuv_scatter")
+        phases = (
+            "decoder",
+            "assemble",
+            "stitch_blend",
+            "yuv_prep",
+            "yuv_convert",
+            "yuv_dma",
+            "yuv_extract",
+            "yuv_scatter",
+        )
         if any(p.get(name) for name in phases):
             logger.info("    phase split (profile=True serializes these; shares, not a warm total):")
             for name in phases:
                 share = 100 * p[name] / total if total else 0.0
                 per_wave = p[name] / waves * 1000 if waves else 0.0
                 logger.info(f"      {name:<12} {p[name]:6.2f} s  ({share:4.1f} %)  {per_wave:6.1f} ms/wave")
-        for name in ("device", "readback", "stitch", "unpatchify", "tiling", "upload", "host_prep", "residual"):
+        for name in (
+            "device",
+            "readback",
+            "readback_join",
+            "stitch",
+            "unpatchify",
+            "tiling",
+            "upload",
+            "host_prep",
+            "residual",
+        ):
             share = 100 * p[name] / total if total else 0.0
             per_wave = f"  {p[name] / waves * 1000:6.0f} ms/wave" if waves and name in ("device", "readback") else ""
             logger.info(f"    {name:<12} {p[name]:6.2f} s  ({share:4.1f} %){per_wave}")
@@ -1022,6 +1044,7 @@ class MiniMaxH3Vae:
             self._stitcher = DeviceTileStitcher(self.mesh_device)
 
         canvases = []
+        pending: list = []
         for group_start in range(0, len(chunk_latents), chunks_per_wave):
             group = chunk_latents[group_start : group_start + chunks_per_wave]
 
@@ -1113,26 +1136,44 @@ class MiniMaxH3Vae:
                     ttnn.synchronize_device(self.mesh_device)
                 elapsed = time.perf_counter() - mark
                 profile["device"] += elapsed
+                profile["stitch_blend"] += elapsed
                 profile["device_each"].append(elapsed)
 
                 mark = time.perf_counter()
                 canvas_shape = tuple(canvas.shape)
                 canvas_dtype = str(canvas.dtype)
                 if output_type == "yuv420":
-                    out = self._read_canvas_yuv(canvas)
-                    read_bytes = out.size
+                    # The readback's host half -- the shard wrap and the planar scatter, both
+                    # GIL-releasing -- goes to a worker, so it runs while the next wave's decoder
+                    # is already on the device. One frame in flight, and the queue is FIFO, so
+                    # `canvases` still comes out in chunk order.
+                    finish = self._read_canvas_yuv(canvas, defer=True)
+                    ttnn.deallocate(canvas)
+                    frames, canvas_h, canvas_w = canvas_shape[-3], canvas_shape[-2], canvas_shape[-1]
+                    read_bytes = frames * canvas_h * canvas_w * 3 // 2
+                    pending.append(self._yuv_finish_pool.submit(finish))
                 else:
                     out = local_device_to_torch(canvas).float()
+                    ttnn.deallocate(canvas)
                     read_bytes = out.numel() * out.element_size()
-                ttnn.deallocate(canvas)
+                    canvases.append(out)
                 elapsed = time.perf_counter() - mark
                 profile["readback"] += elapsed
                 profile["readback_each"].append(elapsed)
                 profile["shape"] = canvas_shape
                 profile["dtype"] = canvas_dtype
                 profile["readback_mb"] += read_bytes / 1e6
-                canvases.append(out)
+                if len(pending) > 1:
+                    mark = time.perf_counter()
+                    canvases.append(pending.pop(0).result())
+                    profile["readback_join"] += time.perf_counter() - mark
             ttnn.deallocate(gathered)
+        if pending:
+            # Whatever is left had no wave behind it to hide under.
+            mark = time.perf_counter()
+            canvases.extend(future.result() for future in pending)
+            pending.clear()
+            profile["readback_join"] += time.perf_counter() - mark
         return canvases
 
     def _decode_clips_neighbor_stitched(self, chunk_latents: list[torch.Tensor], output_type: str = "float") -> list:
@@ -1389,7 +1430,14 @@ class MiniMaxH3Vae:
             out.append(flat.reshape(frames, canvas_h * 3 // 2, canvas_w))
         return out
 
-    def _read_canvas_yuv(self, canvas: ttnn.Tensor) -> np.ndarray:
+    @property
+    def _yuv_finish_pool(self) -> ThreadPoolExecutor:
+        """One worker: the AVX2 concat brings its own threads and the frames must stay in order."""
+        if self._yuv_pool is None:
+            self._yuv_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="h3_yuv_finish")
+        return self._yuv_pool
+
+    def _read_canvas_yuv(self, canvas: ttnn.Tensor, *, defer: bool = False):
         """Convert the replicated canvas to YUV 4:2:0 on device and read it back as planar uint8.
 
         Two things earn their keep here. The `clamp` is the reference's post-stitch `clamp(0, 1)`,
@@ -1426,7 +1474,10 @@ class MiniMaxH3Vae:
             self.mesh_device,
             ccl_manager=self.ccl_manager,
             timings=self._profile if self.profile else None,
+            defer=defer,
         )
+        if defer:
+            return lambda: planar().reshape(-1, height * 3 // 2, width)
         return planar.reshape(planar.shape[0], height * 3 // 2, width)
 
     def decode_clip(self, z_BCTHW: torch.Tensor) -> torch.Tensor:
