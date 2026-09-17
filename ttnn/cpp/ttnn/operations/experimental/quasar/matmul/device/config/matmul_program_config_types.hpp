@@ -92,15 +92,14 @@ struct MatmulMultiCoreProgramConfig {
 // work directly instead of picking a 1D / 2D / DRAM-sharded strategy:
 //   - `cores`                    the clusters that take part;
 //   - `per_core_M` / `per_core_N` the C subblock (in tiles) each cluster produces in one go.
-// The factory tiles C into ceil(M_tiles / per_core_M) x ceil(N_tiles / per_core_N) blocks, numbers them
-// row-major, makes one work item per (batch, C subblock) and hands the items to `cores` in enumeration order
-// (x fastest when `row_major_cores`, y fastest otherwise). A core gets a contiguous run of items; when
-// there are fewer items than cores the trailing cores idle, when there are more each core loops over its
-// run. Blocks on the right / bottom edge are computed at full size and clipped on read and write, so any
-// M / N works. Every operand is addressed by tile index through the tensor accessor, so interleaved,
+// The factory walks C in subblocks (across N, then down M, then the next batch) and hands that walk to
+// `cores` in enumeration order (x fastest when `row_major_cores`, y fastest otherwise) as contiguous
+// runs; when there are fewer subblocks than cores the trailing cores idle, when there are more each core
+// produces several. Subblocks on the right / bottom edge are computed at full size and clipped on read
+// and write, so any M / N works. Every operand is addressed by tile index through the tensor accessor, so interleaved,
 // L1-sharded and DRAM-sharded tensors all take the same kernels. The legacy strategies are particular
 // choices of (cores, per_core_M, per_core_N): e.g. a 1D "mcast_in0" matmul is per_core_M = M_tiles on a
-// row of cores, a 2D matmul is a rectangle of cores with per_core_M x per_core_N blocks.
+// row of cores, a 2D matmul is a rectangle of cores with per_core_M x per_core_N subblocks.
 //
 // Stage A limits: one NEO, one reader and one writer per cluster; no data sharing between clusters;
 // no bias (the op applies it as a separate add), no fused activation, no untilize, 32x32 tiles only,
