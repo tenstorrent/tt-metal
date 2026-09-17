@@ -18,6 +18,7 @@ from ...layers.linear import ColParallelLinear, Linear, prepare_chunked_linear_o
 from ...layers.module import Module, ModuleList
 from ...layers.normalization import DistributedLayerNorm, LayerNorm
 from ...utils import cache
+from ...utils.matmul import FusedMMRSConfig, register_fused_mmrs_configs
 from ...utils.padding import PaddingConfig
 from ...utils.substate import rename_substate
 from .attention_sd35 import SD35JointAttention
@@ -25,6 +26,39 @@ from .attention_sd35 import SD35JointAttention
 if TYPE_CHECKING:
     from ...parallel.config import DiTParallelConfig
     from ...parallel.manager import CCLManager
+
+_registered_mmrs_grids: set[tuple[int, int]] = set()
+
+
+def _register_ff2_mmrs_config(mesh_device: ttnn.MeshDevice) -> None:
+    """Register a fused MM+RS blocking for this device's actual compute grid.
+
+    get_fused_mmrs_config's built-in fallbacks (swept table entries and the v2.3 rule engine) all
+    assume a 12-wide Blackhole grid; this 4-chip QuietBox's grid is 11x10, which is both narrower
+    than 12 and, being 11 (prime), can't split evenly the way 12 does. Constrain the matmul grid to
+    11x8 (fits inside 11x10, leaving 2 rows for the reduce-scatter) with a simple blocking verified
+    correct (PCC ~1.0 against a torch reference) rather than falling through to the unfitted 12x8
+    default, which errors outright on this grid.
+    """
+    device_grid = mesh_device.compute_with_storage_grid_size()
+    key = (device_grid.x, device_grid.y)
+    if key in _registered_mmrs_grids:
+        return
+    if key != (11, 10):
+        return
+    register_fused_mmrs_configs(
+        {
+            device_grid: {
+                # ff2 (main spatial FFN), batch flattened into the row dim: the fused op requires
+                # batch size 1 (padded_shape[0]==1 and [1]==1), but this model batches CFG
+                # cond+uncond as batch=2, so the caller flattens (1,2,4096,K) -> (1,1,8192,K)
+                # before calling and reshapes back after (see forward()).
+                # M=8192 (2*4096 spatial tokens), K=inner_dim/tp=9728/4=2432, N=dim_out=2432.
+                (8192, 2432, 2432): FusedMMRSConfig(ttnn.CoreCoord(11, 8), 8, 4, 4, 2, 1, None, 1, mm_window_blocks=2),
+            }
+        }
+    )
+    _registered_mmrs_grids.add(key)
 
 
 # adapted from https://github.com/huggingface/diffusers/blob/v0.31.0/src/diffusers/models/attention_processor.py
@@ -123,6 +157,9 @@ class SD35TransformerBlock(Module):
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             ccl_manager=ccl_manager,
         )
+        self._use_fused_ff_addcmul = parallel_config.tensor_parallel.factor > 1
+        if self._use_fused_ff_addcmul:
+            _register_ff2_mmrs_config(mesh_device)
 
         self.norm2_context = None
         self.ff_context = None
@@ -272,10 +309,27 @@ class SD35TransformerBlock(Module):
                 **self.ccl_manager.get_ag_hyperparams(spatial_normed_1BND.shape),
             )
 
-        spatial_ff_1BND = self.ff(spatial_normed_1BND)
-        spatial_ff_1BND = spatial_ff_1BND * spatial_gate_ff
-
-        spatial_1BND += spatial_ff_1BND
+        # Fused MM+RS+addcmul: ff2's row-parallel matmul, its reduce-scatter, and the gate-multiply
+        # + residual-add become one op instead of three. The fused kernel requires batch size 1
+        # (asserts padded_shape[0]==1 and [1]==1), but this model batches CFG cond+uncond as
+        # batch=2, so we flatten (1, B, N, .) -> (1, 1, B*N, .) first and reshape back after. The
+        # gate (spatial_gate_ff) is a broadcast-over-N tensor (1, B, 1, D); the fused kernel has no
+        # broadcast support, so it must be materialized to (1, B, N, D) before flattening. Only
+        # registered for the exact (M, K, N) this model's spatial FFN hits on this device's compute
+        # grid (see _register_ff2_mmrs_config); any other shape falls back to the plain path.
+        b_dim, n_tok, k_dim = spatial_normed_1BND.shape[1], spatial_normed_1BND.shape[2], spatial_normed_1BND.shape[3]
+        d_local = spatial_1BND.shape[3]
+        if self._use_fused_ff_addcmul and b_dim * n_tok == 8192:
+            x_flat = ttnn.reshape(spatial_normed_1BND, (1, 1, b_dim * n_tok, k_dim))
+            residual_flat = ttnn.reshape(spatial_1BND, (1, 1, b_dim * n_tok, d_local))
+            gate_full = ttnn.repeat(spatial_gate_ff, (1, 1, n_tok, 1))
+            gate_flat = ttnn.reshape(gate_full, (1, 1, b_dim * n_tok, d_local))
+            out_flat = self.ff.forward_fused_addcmul(x_flat, addcmul_a=residual_flat, addcmul_b=gate_flat, scalar=1.0)
+            spatial_1BND = ttnn.reshape(out_flat, (1, b_dim, n_tok, d_local))
+        else:
+            spatial_ff_1BND = self.ff(spatial_normed_1BND)
+            spatial_ff_1BND = spatial_ff_1BND * spatial_gate_ff
+            spatial_1BND += spatial_ff_1BND
 
         if self.context_pre_only:
             return spatial_1BND, None
