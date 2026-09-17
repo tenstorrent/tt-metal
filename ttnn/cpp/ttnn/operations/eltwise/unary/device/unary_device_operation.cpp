@@ -291,27 +291,25 @@ ttsl::hash::hash_t UnaryDeviceOperation::compute_program_hash(
         dst_shard_vol = shard_specs->output_shard_spec.numel() / out_tile_hw;
     }
 
+    // tensor_layout contains dtype, layout, memory_config and page config. A Metal 2.0 TensorParameter relaxation
+    // requires tensor_layout to be exactly equal and no relaxation flag reaches inside it, so any
+    // component left out here is a cache collision that fails validation on hit instead of
+    // rebuilding. Shape is not a part of tensor_layout, so omitting it below still works.
+
     // TODO: For ROW_MAJOR, page size depends on width. Hashing padded_shape ensures
     // different widths get separate cache entries. Consider hashing only the last
     // dimension to allow cache reuse when only height differs
     if (input_tensor.layout() == Layout::ROW_MAJOR) {
         return operation::hash_operation<UnaryDeviceOperation>(
             attributes,
-            input_tensor.dtype(),
-            input_tensor.layout(),
-            input_tensor.memory_config(),
+            input_tensor.tensor_spec().tensor_layout(),
             input_tensor.padded_shape(),
             src_shard_vol,
             dst_shard_vol);
     }
 
     return operation::hash_operation<UnaryDeviceOperation>(
-        attributes,
-        input_tensor.dtype(),
-        input_tensor.layout(),
-        input_tensor.memory_config(),
-        src_shard_vol,
-        dst_shard_vol);
+        attributes, input_tensor.tensor_spec().tensor_layout(), src_shard_vol, dst_shard_vol);
 }
 
 bool UnaryDeviceOperation::skip_launch(
