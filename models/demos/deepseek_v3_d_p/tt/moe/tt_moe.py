@@ -271,7 +271,9 @@ class TtMoe(LightweightModule):
             gate_score_func: Router affinity applied to the raw logits. None keeps
                 TtMoEGateConfig's default. Read by the grouped-topk gate and by both hash gates.
             gate_hash_table: tid2eid table, (vocab_size, num_experts_per_tok). Required by the
-                HASH_HOST / HASH_DEVICE gate modes. Not cached -- the gate replicates it.
+                HASH_HOST / HASH_DEVICE gate modes. Not cached -- the gate replicates it. TtMoe is
+                the lowest layer that takes it: no caller above supplies it yet, so those modes are
+                reachable only by constructing TtMoe directly.
             gate_fallback_mode: Fallback mode for gate (default: HOST_ALL)
             overlap_shared_expert_with_dispatch: If True, run the shared expert and dispatch
                 on disjoint sub-devices so they overlap on-chip. If False, skip sub-device
