@@ -61,10 +61,12 @@ public:
     Devices& operator=(const Devices&) = delete;
 
     // Brings the drainers up on every eligible local Blackhole device. A device that fails is logged and left
-    // unarmed, so its markers are overwritten rather than blocked on.
+    // unarmed, so its markers are overwritten rather than blocked on; one whose bring-up throws stops every drainer
+    // already up and returns nothing.
     std::vector<CapturedDevice> boot(const std::shared_ptr<distributed::MeshDevice>& mesh_device);
-    // Stops every relay through its stop word (1 = quiesce, then 2 = release the NIU once it is done), reporting
-    // each relay's states through `on_state` (may be empty), then disarms the device's producers. A relay that does
+    // Stops every drainer that came up through its stop word (1 = quiesce, then 2 = release the NIU once it is
+    // done), reporting each relay's states through `on_state`, then disarms the device's producers. Empty
+    // `on_state` means no consumer drains the sockets, and the host acks their pages itself. A drainer that does
     // not finish within 10 s is a fault. The resident idle FW is left alone.
     void quiesce(const RelayStateFn& on_state);
     // After the relays swept to empty and the capture detached: the producer-owned stall counters, and every
@@ -166,6 +168,8 @@ private:
         const DrainerL1& l1,
         std::unique_ptr<Program> program,
         std::string_view what);
+    // quiesce() for one device: its drainers that came up, then its producers disarmed, then the relays released.
+    void stop_device(uint32_t device_index, const DeviceCtx& ctx, const RelayStateFn& on_state);
     // Stops one drainer through its stop word and reports Drained, then Done, through `on_state`; one that does not
     // finish within 10 s is a fault.
     void stop_drainer(

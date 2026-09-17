@@ -177,6 +177,8 @@ void launch_resident(IDevice* device, Program& program) {
     detail::LaunchProgram(device, program, /*wait_until_cores_done=*/false, /*force_slow_dispatch=*/true);
 }
 
+std::string_view first_line(std::string_view s) { return s.substr(0, s.find('\n')); }
+
 }  // namespace
 
 Devices::DeviceCtx::DeviceCtx() = default;
@@ -275,7 +277,6 @@ std::vector<CapturedDevice> Devices::boot(const std::shared_ptr<distributed::Mes
     carve_eth_l1(hal, aeth_unreserved, aeth_unres_size);
 
     sync_ = std::make_unique<SyncDevices>(context_id_, eth_l1_, aeth_unreserved, aeth_unres_size);
-    std::vector<CapturedDevice> out;
     for (const auto& coord : distributed::MeshCoordinateRange(mesh_device->shape())) {
         if (!mesh_device->is_local(coord)) {
             continue;
@@ -283,20 +284,46 @@ std::vector<CapturedDevice> Devices::boot(const std::shared_ptr<distributed::Mes
         DeviceCtx ctx;
         ctx.device = mesh_device->get_device(coord);
         ctx.chip_id = static_cast<uint32_t>(ctx.device->id());
-        if (!boot_device(mesh_device, ctx, coord)) {
+        bool up = false;
+        try {
+            up = boot_device(mesh_device, ctx, coord);
+        } catch (const std::exception& e) {
+            // Stopped while every socket still exists: a drainer's last push into memory this process no longer
+            // maps is an IOMMU fault against the device.
+            log_warning(
+                tt::LogMetal,
+                "[streaming profiler] Device {}: bring-up failed ({}); disabled for this session.",
+                ctx.chip_id,
+                first_line(e.what()));
+            devices_.push_back(std::move(ctx));
+            try {
+                quiesce({});
+            } catch (const std::exception& stop_error) {
+                log_warning(
+                    tt::LogMetal,
+                    "[streaming profiler] stopping the drainers after the failed bring-up also failed ({})",
+                    first_line(stop_error.what()));
+            }
+            return {};
+        }
+        if (!up) {
             log_warning(
                 tt::LogMetal,
                 "[streaming profiler] Device {}: no DRISC relay -- producers stay unarmed (markers are DROPPED, but "
                 "the workload will not stall waiting for a consumer)",
                 ctx.chip_id);
+            stop_device(static_cast<uint32_t>(devices_.size()), ctx, {});
             sync_->truncate(static_cast<uint32_t>(devices_.size()));
             continue;
         }
         ctx.out.chip_id = ctx.chip_id;
         ctx.out.numa_node =
             static_cast<int>(MetalContext::instance(context_id_).get_cluster().get_numa_node_for_device(ctx.chip_id));
-        out.push_back(std::move(ctx.out));
         devices_.push_back(std::move(ctx));
+    }
+    std::vector<CapturedDevice> out;
+    for (DeviceCtx& ctx : devices_) {
+        out.push_back(std::move(ctx.out));
     }
     if (!devices_.empty()) {
         sync_->plan_links();
@@ -411,6 +438,10 @@ void Devices::enumerate_worker_grid(const std::shared_ptr<distributed::MeshDevic
     }
 }
 
+// Every relay's NIU into stream mode, in one launch, run to completion. D2HSocket construction writes its
+// config into DRISC L1 from the host, which only lands once the NIU terminates inbound traffic at L1. One
+// launch: every LaunchProgram carries a dram_barrier that MMIO-polls a core in every DRAM channel, and a
+// barrier that reaches a core already in stream mode never completes.
 bool Devices::choose_relay_cores(const std::shared_ptr<distributed::MeshDevice>& mesh_device, DeviceCtx& ctx) {
     auto& cluster = MetalContext::instance(context_id_).get_cluster();
     const uint32_t chip = ctx.chip_id;
@@ -768,11 +799,17 @@ void Devices::stop_drainer(
     std::string_view what,
     const RelayStateFn& on_state) {
     auto& cluster = MetalContext::instance(context_id_).get_cluster();
+    // No consumer (a bring-up that failed): the drainer's barrier completes on the host's own acks.
+    distributed::D2HSocket* sock =
+        !on_state && r.sock_idx < ctx.out.sockets.size() ? ctx.out.sockets[r.sock_idx].get() : nullptr;
     write_u32(cluster, ctx.chip_id, r.core.virt, r.stop_addr, kernel_profiler::kRelayStopQuiesce);
     bool drained = false;
     uint32_t state = 0;
     const bool done = poll_word(
         cluster, tt_cxy_pair(ctx.chip_id, r.core.virt), r.state_addr, std::chrono::seconds(10), [&](uint32_t w) {
+            if (sock != nullptr && sock->pages_available() != 0) {
+                sock->discard_pending_pages();
+            }
             state = w & kernel_profiler::kRelayDoneMask;
             if (!drained && on_state && state == kernel_profiler::kRelayDrainedWord) {
                 on_state(device_index, r.sock_idx, RelayState::Drained);
@@ -793,21 +830,25 @@ void Devices::stop_drainer(
 }
 
 void Devices::quiesce(const RelayStateFn& on_state) {
-    auto& cluster = MetalContext::instance(context_id_).get_cluster();
     if (sync_) {
-        sync_->stop(cluster);
+        sync_->stop(MetalContext::instance(context_id_).get_cluster());
     }
     for (uint32_t di = 0; di < devices_.size(); di++) {
-        const DeviceCtx& ctx = devices_[di];
-        for (uint32_t d = 0; d < ctx.relays.size(); d++) {
-            stop_drainer(di, ctx, ctx.relays[d], fmt::format("relay {}", d), on_state);
-        }
-        if (ctx.pusher) {
-            stop_drainer(di, ctx, *ctx.pusher, "idle-eth pusher", on_state);
-        }
-        // Nothing drains the rings any more: a producer blocked on a full one is released and overwrites from here on.
-        set_producers_armed(ctx, false);
+        stop_device(di, devices_[di], on_state);
     }
+}
+
+void Devices::stop_device(uint32_t device_index, const DeviceCtx& ctx, const RelayStateFn& on_state) {
+    for (uint32_t d = 0; d < ctx.relays.size(); d++) {
+        if (ctx.relays[d].program) {
+            stop_drainer(device_index, ctx, ctx.relays[d], fmt::format("relay {}", d), on_state);
+        }
+    }
+    if (ctx.pusher && ctx.pusher->program) {
+        stop_drainer(device_index, ctx, *ctx.pusher, "idle-eth pusher", on_state);
+    }
+    // Nothing drains the rings any more: a producer blocked on a full one is released and overwrites from here on.
+    set_producers_armed(ctx, false);
 }
 
 // One MMIO pass per roster core: the producer-owned stall counters, and each lane's tail against the consumed-words
