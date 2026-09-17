@@ -32,6 +32,7 @@ tt_dit/
 │   ├── Mochi_1.md       # Mochi-1 model documentation
 │   ├── Wan2_2.md        # Wan2.2-A14B model documentation
 │   ├── Wan2_2_TI2V_5B.md # Wan2.2-TI2V-5B model documentation (T2V + I2V)
+│   ├── Wan2_2_TI2V_nadim_opt.md # Wan2.2-TI2V-5B I2V enablement + optimization notes
 │   └── LTX2.md          # LTX-2.3 model documentation
 ├── encoders/            # Text encoder implementations
 │   ├── clip/           # CLIP encoder
