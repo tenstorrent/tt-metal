@@ -41,12 +41,11 @@
 
 #include "impl/context/metal_context.hpp"
 #include "impl/kernels/kernel.hpp"
-#include "impl/streaming_profiler/streaming_profiler_link_sync.hpp"
+#include "hostdev/streaming_profiler_common.h"
 #include "llrt/tt_cluster.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
-namespace link_sync = tt::tt_metal::streaming_profiler::link_sync;
 
 namespace {
 
@@ -189,8 +188,8 @@ int main(int argc, char** argv) {
     const uint32_t unres_size = hal.get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
     // The link's L1 at the top of the region as in the product; the handshake at its base as in the product's
     // resident kernels; the table between them.
-    const uint32_t link_l1 = unres + unres_size - link_sync::kL1Bytes;
-    const uint32_t ctl = link_l1 + link_sync::kCtlOffset;
+    const uint32_t link_l1 = unres + unres_size - kernel_profiler::kLinkSyncL1Bytes;
+    const uint32_t ctl = link_l1 + kernel_profiler::kLinkSyncCtlOffset;
     const uint32_t table = unres + 4096;
     const uint32_t rows = std::min<uint32_t>(4096, (link_l1 - table - 4) / 16);
 
@@ -269,12 +268,12 @@ int main(int argc, char** argv) {
         detail::LaunchProgram(dev_a, *L.ps, /*wait_until_cores_done=*/false, /*force_slow_dispatch=*/true);
     }
     for (const Link& L : links) {
-        cluster.write_core(&link_sync::kCtlRun, sizeof(uint32_t), tt_cxy_pair(L.chip_a, L.virt_a), ctl);
+        cluster.write_core(&kernel_profiler::kLinkSyncCtlRun, sizeof(uint32_t), tt_cxy_pair(L.chip_a, L.virt_a), ctl);
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(static_cast<int64_t>(seconds * 1000.0)));
 
     const auto stop_end = [&](uint32_t chip, const CoreCoord& virt) {
-        cluster.write_core(&link_sync::kCtlStop, sizeof(uint32_t), tt_cxy_pair(chip, virt), ctl);
+        cluster.write_core(&kernel_profiler::kLinkSyncCtlStop, sizeof(uint32_t), tt_cxy_pair(chip, virt), ctl);
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
         for (;;) {
             uint32_t done = 0;

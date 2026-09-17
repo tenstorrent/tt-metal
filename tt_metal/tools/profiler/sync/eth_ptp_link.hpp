@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <type_traits>
 
+#include "hostdev/streaming_profiler_common.h"
 #include "internal/ethernet/eth_ptp.hpp"
 #if defined(PROFILE_KERNEL) && defined(PROFILE_STREAMING)
 #include "tools/profiler/kernel_profiler.hpp"
@@ -40,12 +41,12 @@ constexpr uint32_t kBurstsPerRound = kTripsPerRound / kBurstFrames;
 // what counts the frames among the queue's hand-offs; 80 bytes is the first two-unit size, 96 leaves a unit's margin
 // either way. Frames of 16 to 128 bytes hand off in the same time.
 constexpr uint32_t kFrameBytes = 96;
-// The L1 both ends own, the same addresses on both (streaming_profiler_link_sync.hpp): where the peer's pilot lands,
+// The L1 both ends own, the same addresses on both (kernel_profiler::kLinkSyncL1Bytes): where the peer's pilot lands,
 // the frame slots, then the control and diagnostic words.
 constexpr uint32_t kPilotOffset = 0;
 constexpr uint32_t kSlotsOffset = kFrameBytes;
 constexpr uint32_t kSlotsBytes = kBurstFrames * kFrameBytes;
-constexpr uint32_t kCtlOffset = kSlotsOffset + kSlotsBytes;
+constexpr uint32_t kCtlOffset = kernel_profiler::kLinkSyncCtlOffset;
 constexpr uint32_t kFrameTicks = 12;       // 240 ns between a burst's frames: a receiver takes a frame in ~150 cycles
 constexpr uint32_t kFramePhaseStep = 157;  // odd, so the 256 phases are a permutation
 // Waits on a link the fabric may be loading: our frames queue behind its at the MAC on the way out, and the frames
@@ -56,11 +57,12 @@ constexpr uint32_t kBurstFollowSpins = 256;  // polls for each of a burst's late
 // The control word at the diagnostics' base, the host's: rounds are issued only while it reads kCtlRun, and a
 // resident kernel exits on kCtlStop. Set once the profiler's consumer and trackers are up, so no round predates
 // the clock coverage that places it.
-constexpr uint32_t kCtlRun = 1, kCtlStop = 2;
-constexpr uint32_t kHwUnitsPerNs = 4;
+constexpr uint32_t kCtlRun = kernel_profiler::kLinkSyncCtlRun, kCtlStop = kernel_profiler::kLinkSyncCtlStop;
+constexpr uint32_t kHwUnitsPerNs = kernel_profiler::kLinkSyncStampUnitsPerNs;
 static_assert(kTripsPerRound % kBurstFrames == 0 && kBurstFrames >= 2 && (kFramePhaseStep & 1) == 1);
 static_assert(kFrameBytes >= 80 && kFrameBytes % 16 == 0 && kFrameBytes >= sizeof(eth_channel_sync_t));
-static_assert(kCtlOffset == 480);  // streaming_profiler_link_sync.hpp kCtlOffset
+static_assert(kSlotsOffset + kSlotsBytes <= kCtlOffset);
+static_assert(kCtlOffset + 8 + 14 * sizeof(uint32_t) <= kernel_profiler::kLinkSyncL1Bytes);  // StopDiag::write
 
 // Frame j of a round rides in slot j % kBurstFrames, the same L1 address on both ends, so the receiver's echo lands
 // on the word the sender polls. The sync word carries the round and the trip, so a slot's stale content can match

@@ -488,9 +488,9 @@ void SyncDevices::plan_links() {
 void SyncDevices::launch_links() {
     auto& cluster = MetalContext::instance(context_id_).get_cluster();
     // The link's L1 is the top of the active eth core's UNRESERVED region, the same place whether a resident kernel
-    // or a router runs the end (link_sync::kL1Bytes; the routers' config leaves it clear).
-    const uint32_t link_l1 = aeth_unreserved_ + aeth_unres_size_ - link_sync::kL1Bytes;
-    const uint32_t stop_addr = link_l1 + link_sync::kCtlOffset;
+    // or a router runs the end (the routers' config leaves it clear).
+    const uint32_t link_l1 = aeth_unreserved_ + aeth_unres_size_ - kernel_profiler::kLinkSyncL1Bytes;
+    const uint32_t stop_addr = link_l1 + kernel_profiler::kLinkSyncCtlOffset;
     for (const CaptureContext::Link& L : links_) {
         IDevice* dev_a = devices_[L.dev_a].d.device;
         IDevice* dev_b = devices_[L.dev_b].d.device;
@@ -520,7 +520,7 @@ void SyncDevices::launch_links() {
                 L.chip_b,
                 L.eth_b.x,
                 L.eth_b.y,
-                50'000'000u / link_sync::kPaceTicks);
+                kernel_profiler::kEthRefclkHz / kernel_profiler::kLinkSyncPaceTicks);
             continue;
         }
         const uint32_t zero[2] = {0, 0};  // stop + done, clear before launch
@@ -538,7 +538,7 @@ void SyncDevices::launch_links() {
             "tt_metal/tools/profiler/sync/eth_ptp_link_receiver.cpp",
             L.eth_b,
             EthernetConfig{.noc = NOC::RISCV_0_default});
-        SetRuntimeArgs(*ps, kid_s, L.eth_a, {link_l1, link_sync::kPaceTicks});
+        SetRuntimeArgs(*ps, kid_s, L.eth_a, {link_l1, kernel_profiler::kLinkSyncPaceTicks});
         SetRuntimeArgs(*pr, kid_r, L.eth_b, {link_l1});
         try {
             detail::CompileProgram(dev_a, *ps, /*force_slow_dispatch=*/true);
@@ -576,11 +576,12 @@ void SyncDevices::launch_links() {
             L.chip_b,
             L.eth_b.x,
             L.eth_b.y,
-            50'000'000u / link_sync::kPaceTicks);
+            kernel_profiler::kEthRefclkHz / kernel_profiler::kLinkSyncPaceTicks);
     }
     // Every planned end is in place (launched here, or a router that has been waiting): let the senders go.
     for (const ResidentSync& r : link_syncs_) {
-        cluster.write_core(&link_sync::kCtlRun, sizeof(uint32_t), tt_cxy_pair(r.chip_a, r.virt_a), r.stop_a);
+        cluster.write_core(
+            &kernel_profiler::kLinkSyncCtlRun, sizeof(uint32_t), tt_cxy_pair(r.chip_a, r.virt_a), r.stop_a);
     }
 }
 
@@ -608,7 +609,8 @@ void SyncDevices::stop_links(tt::Cluster& cluster) {
         const bool resident = r.ps != nullptr;
         // Sender first: its current round still completes off the live receiver, then it stops between rounds; a
         // resident sender exits, a router-hosted one goes quiet.
-        cluster.write_core(&link_sync::kCtlStop, sizeof(uint32_t), tt_cxy_pair(r.chip_a, r.virt_a), r.stop_a);
+        cluster.write_core(
+            &kernel_profiler::kLinkSyncCtlStop, sizeof(uint32_t), tt_cxy_pair(r.chip_a, r.virt_a), r.stop_a);
         if (resident) {
             poll_done(r.chip_a, r.virt_a, r.stop_a + 4, "sender");
         }
@@ -625,7 +627,8 @@ void SyncDevices::stop_links(tt::Cluster& cluster) {
         cluster.read_core(&da, sizeof(da), tt_cxy_pair(r.chip_a, r.virt_a), r.stop_a + 8);
         // Now the receiver sees no further frame; a resident one exits on its stop word.
         if (resident) {
-            cluster.write_core(&link_sync::kCtlStop, sizeof(uint32_t), tt_cxy_pair(r.chip_b, r.virt_b), r.stop_b);
+            cluster.write_core(
+                &kernel_profiler::kLinkSyncCtlStop, sizeof(uint32_t), tt_cxy_pair(r.chip_b, r.virt_b), r.stop_b);
             poll_done(r.chip_b, r.virt_b, r.stop_b + 4, "receiver");
         }
         cluster.read_core(&db, sizeof(db), tt_cxy_pair(r.chip_b, r.virt_b), r.stop_b + 8);

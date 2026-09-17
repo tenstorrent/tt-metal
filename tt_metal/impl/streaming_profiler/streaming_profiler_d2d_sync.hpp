@@ -13,6 +13,7 @@
 #include <utility>
 #include <vector>
 
+#include "hostdev/streaming_profiler_common.h"
 #include "impl/streaming_profiler/streaming_profiler_consumer.hpp"
 #include "impl/streaming_profiler/streaming_profiler_decode.hpp"
 #include "impl/streaming_profiler/streaming_profiler_placement_map.hpp"
@@ -27,7 +28,7 @@ namespace tt::tt_metal::streaming_profiler {
 // around a transition are only counted.
 class LocalClockModel {
 public:
-    static constexpr double kRefclkHz = 50e6;
+    static constexpr double kRefclkHz = kernel_profiler::kEthRefclkHz;
     // A line behind fewer samples than this has its intercept fixed too loosely (>0.25 tick) to freeze a node on.
     static constexpr uint32_t kSettledCount = 16;
     // How far from a segment's close the crossing with the next line may lie: the pusher confirms a step within
@@ -282,9 +283,9 @@ private:
     std::map<std::pair<uint32_t, uint32_t>, std::pair<size_t, bool>> side_of_;
     std::vector<LinkSolution> solved_;                         // per ctx_.links index
     uint64_t dropped_kind_ = 0;
-    // One hardware-stamp payload unit in 20 ns refclk ticks: the kernels report round averages in quarter-ns units
-    // (eth_ptp_link.hpp kHwUnitsPerNs); the two must agree.
-    static constexpr double kHwUnitTicks = 1.0 / 80.0;
+    // Refclk ticks per stamp unit: the kernels report a round's stamp averages in kLinkSyncStampUnitsPerNs per ns.
+    static constexpr double kHwUnitTicks =
+        1.0 / (kernel_profiler::kLinkSyncStampUnitsPerNs * (1e9 / kernel_profiler::kEthRefclkHz));
     // A hardware round whose one-way delay inside the stamps sits this far from the window's median had a frame
     // delayed on one leg, and its offset is off by that same amount; the delay itself holds to 0.5 ns.
     static constexpr double kPathDevNs = 2.0;

@@ -125,6 +125,17 @@ constexpr std::uint32_t eth_tile_out_word(std::uint32_t n_tiles, std::uint32_t t
     return ETH_TILE_XY_0 + n_tiles + ETH_TILE_OUT_WORDS * tile;
 }
 
+// The device-to-device link sync's contract between the host, its resident kernels and the fabric routers: the eth
+// tile's refclk, the unit a round's stamp averages are reported in, the L1 the two ends own at the top of the active
+// eth core's unreserved region with the control word inside it (done at +4, diagnostics from +8), and the round
+// period in refclk ticks.
+static constexpr std::uint32_t kEthRefclkHz = 50'000'000u;
+static constexpr std::uint32_t kLinkSyncStampUnitsPerNs = 4;
+static constexpr std::uint32_t kLinkSyncL1Bytes = 640;
+static constexpr std::uint32_t kLinkSyncCtlOffset = 480;
+static constexpr std::uint32_t kLinkSyncCtlRun = 1, kLinkSyncCtlStop = 2;
+static constexpr std::uint32_t kLinkSyncPaceTicks = 500'000;  // a round every 10 ms
+
 // STICKY_META (SPSC/drainer backend, legacy / synthetic bench path only): an 8B context packet whose high
 // word carries (core_x, core_y, risc) + this type and whose low word is a 32-bit host-side ID. The host
 // forward-fills that identity onto the following timing markers. Its type sits in the same bits as a
