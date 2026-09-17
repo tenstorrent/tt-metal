@@ -160,6 +160,7 @@ inline void _llk_pack_untilize_uninit_wrapper_(
 
 inline void _llk_pack_isolate_stallwait_pack_wrapper_()
 {
+    TTI_STALLWAIT(ckernel::p_stall::STALL_THREAD, ckernel::p_stall::PACK);
 }
 
 inline bool _llk_pack_skip_bh_tilize_workaround_wrapper_(const std::uint32_t pack_src_format)
