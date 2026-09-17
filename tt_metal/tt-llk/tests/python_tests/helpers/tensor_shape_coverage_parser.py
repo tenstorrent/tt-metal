@@ -84,6 +84,7 @@ SHAPE_NAMES = {
 # Coverage checkers are TRISC-scoped (no per-API enum); these lists only decide
 # which harvested log tags feed which header on emit/seed.
 MATH_FUNCTIONS = (
+    "_llk_math_eltwise_binary_init_",
     "_llk_math_eltwise_binary_standard_",
     "_llk_math_eltwise_binary_standard_init_",
     "eltwise_binary_configure_mop_standard",

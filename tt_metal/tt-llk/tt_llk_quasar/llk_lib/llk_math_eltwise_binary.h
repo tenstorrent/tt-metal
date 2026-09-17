@@ -8,16 +8,28 @@
 
 #include "llk_math_common.h"
 #include "tensor_shape.h"
+#include "tensor_shape_coverage_math.h"
 using namespace ckernel;
 using namespace ckernel::trisc;
 using namespace ckernel::math;
 
+/**
+ * @brief Get the padded destination footprint of one binary operand face.
+ *
+ * @param tensor_shape: Shape shared by both operands.
+ * @return Rows occupied by one face, including the sparse eight-row minimum.
+ */
 constexpr std::uint32_t _eltwise_binary_rows_per_face_(const ckernel::TensorShape& tensor_shape)
 {
-    // Pack places each tiny face in an eight-row slot in dest.
-    return tensor_shape.face_r_dim < ELTWISE_MATH_ROWS ? ELTWISE_MATH_ROWS : tensor_shape.face_r_dim;
+    return tensor_shape.face_r_dim * quasar_tiny_face_stride(tensor_shape);
 }
 
+/**
+ * @brief Get the destination stride between binary output tiles.
+ *
+ * @param tensor_shape: Shape shared by both operands.
+ * @return Destination rows occupied by all faces, including padding.
+ */
 constexpr std::uint32_t _eltwise_binary_dest_rows_per_tile_(const ckernel::TensorShape& tensor_shape)
 {
     return tensor_shape.total_num_faces() * _eltwise_binary_rows_per_face_(tensor_shape);
@@ -290,6 +302,7 @@ inline void _llk_math_eltwise_di_binary_addrmod_()
  *       @ref _llk_unpack_unary_operand_init_ (the dummy-dvalid path that lets MOVD2A/B fill the reused source register). On the pack thread, pair with
  *       @ref _llk_pack_init_ (T2).
  * @note @ref _llk_math_eltwise_binary_ runs the configured op with matching template args.
+ * @note Use full-height faces for destination reuse and for four-face tiles.
  */
 template <
     EltwiseBinaryType ELTWISE_BINARY_TYPE,
@@ -298,6 +311,10 @@ template <
     bool ENABLE_DIRECT_INDEXING           = false>
 inline void _llk_math_eltwise_binary_init_(const ckernel::TensorShape& tensor_shape, bool acc_to_dest = false)
 {
+    LLK_ASSERT(
+        reuse_dest == EltwiseBinaryReuseDestType::NONE || tensor_shape.face_r_dim == MAX_FACE_R_DIM, "Eltwise binary destination reuse requires 16-row faces");
+    LLK_ASSERT(tensor_shape.total_num_faces() != NUM_FACES || tensor_shape.face_r_dim == MAX_FACE_R_DIM, "Eltwise binary four-face tiles require 16-row faces");
+    LLK_VALIDATE_TENSOR_SHAPE_MATH("_llk_math_eltwise_binary_init_", tensor_shape);
     _set_tile_shape_idx_gpr_(_eltwise_binary_dest_rows_per_tile_(tensor_shape));
 
     if constexpr (ENABLE_DIRECT_INDEXING)
