@@ -280,6 +280,8 @@ def test_idle_preflight_rejects_unknown_owner_and_missing_devices(tmp_path, expe
         (directory / "pids").write_text("")
     guard.require_idle_tt(4, tmp_path)
     (tmp_path / "0/pids").write_text("0\n0\n")
+    guard.require_idle_tt(4, tmp_path)
+    (tmp_path / "0/pids").write_text("1234\n")
     with expect_error(RuntimeError, "idle devices"):
         guard.require_idle_tt(4, tmp_path)
     (tmp_path / "0/pids").unlink()

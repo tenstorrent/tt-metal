@@ -193,7 +193,7 @@ def run(command, *, runner_grace=20, shutdown_timeout=30):
 
 
 def require_idle_tt(expected_devices, driver_root=Path("/proc/driver/tenstorrent")):
-    owners = {str(path): path.read_text().split() for path in driver_root.glob("*/pids")}
+    owners = {str(path): [pid for pid in path.read_text().split() if pid != "0"] for path in driver_root.glob("*/pids")}
     if len(owners) != expected_devices or any(owners.values()):
         raise RuntimeError(f"TT launch requires {expected_devices} idle devices; observed owner entries: {owners}")
 
