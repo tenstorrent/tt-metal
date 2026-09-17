@@ -1,0 +1,111 @@
+name: "[eltwise] Determinism and correctness (daily)"
+
+# Runs every eltwise op N times on identical inputs and requires that every run is bit-identical
+# to the first, and that the first matches the golden. Run 1 populates the program cache and the
+# rest hit it, so a cache-path divergence surfaces here rather than as an intermittent failure
+# somewhere downstream.
+#
+# Deliberately standalone rather than an input on ttnn-run-sweeps: this needs its own schedule and
+# its own failure signal, and folding it in would multiply device time for every op group rather
+# than the eltwise ones.
+
+on:
+  workflow_dispatch:
+    inputs:
+      runs:
+        description: "Times to run each op. Needs >= 2 for the comparison to mean anything."
+        type: string
+        default: "3"
+      arch:
+        type: choice
+        options:
+          - wormhole_b0
+          - blackhole
+        default: wormhole_b0
+      runner-label:
+        type: choice
+        options:
+          - N150
+          - N300
+          - P150b
+        default: N150
+  schedule:
+    # 05:00 UTC daily. ttnn-run-sweeps already occupies 02:00 and 03:00.
+    - cron: "0 5 * * *"
+
+run-name: "eltwise determinism x${{ inputs.runs || '3' }} (${{ inputs.arch || 'wormhole_b0' }})"
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
+
+  build-artifact:
+    needs: check-harbor
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      contents: read
+      packages: write
+    secrets: inherit
+    with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
+      build-type: Release
+      build-inplace-wheel: true
+
+  eltwise-determinism:
+    name: "eltwise determinism x${{ inputs.runs || '3' }}"
+    needs: [check-harbor, build-artifact]
+    if: ${{ !cancelled() && needs.build-artifact.result == 'success' }}
+    container:
+      image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      env:
+        TT_METAL_HOME: /work
+        PYTHONPATH: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        ARCH_NAME: ${{ inputs.arch || 'wormhole_b0' }}
+        LOGURU_LEVEL: INFO
+        GITHUB_ACTIONS: true
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work
+        - /dev/hugepages-1G:/dev/hugepages-1G
+      options: "--device /dev/tenstorrent"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work
+    timeout-minutes: 60
+    runs-on: tt-ubuntu-2204-${{ inputs.runner-label || 'N150' }}-viommu-stable
+    steps:
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          submodules: recursive
+          path: docker-job
+      - name: ⬇️  Setup Job
+        uses: ./docker-job/.github/actions/setup-job
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+          wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      - name: Run eltwise determinism and correctness
+        env:
+          # The test file reads this; >= 2 or the run-to-run comparison has nothing to compare.
+          ELTWISE_DETERMINISM_RUNS: ${{ inputs.runs || '3' }}
+        run: |
+          if ! [[ "$ELTWISE_DETERMINISM_RUNS" =~ ^[0-9]+$ ]] || (( ELTWISE_DETERMINISM_RUNS < 2 )); then
+            echo "::error::runs must be an integer >= 2, got '$ELTWISE_DETERMINISM_RUNS'"
+            exit 1
+          fi
+          pytest tests/ttnn/unit_tests/operations/eltwise/test_eltwise_determinism.py \
+            -v --tb=short --junitxml=/work/generated/test_reports/eltwise_determinism.xml
+      - name: Upload test report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: eltwise-determinism-report-${{ inputs.arch || 'wormhole_b0' }}
+          path: /work/generated/test_reports/
+          retention-days: 7
