@@ -184,9 +184,40 @@ static void init_core_semaphores(
 static std::vector<DFBAllocInfo> allocate_dfbs_on_core(
     tt_emule::Core* core,
     const CoreCoord& logical_core,
+    const std::vector<tt_emule::DfbDescriptor>& dfbs,
     const std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>>& dfb_impls) {
     core->reset_dfb_sync();
-    if (dfb_impls.empty()) {
+
+    // DIFF-GUARD: the POD DfbDescriptors must mirror dataflow_buffers_on_core 1:1, same order,
+    // including the newly-marshalled finalize offset (core_lookup_).
+    {
+        size_t gi = 0;
+        for (auto& dfb_impl : dfb_impls) {
+            if (!dfb_impl) {
+                continue;
+            }
+            const auto& c = dfb_impl->config;
+            auto cl = dfb_impl->core_lookup_.find(logical_core);
+            bool has_finalize = (cl != dfb_impl->core_lookup_.end());
+            uint32_t finalize_addr = has_finalize ? cl->second.second : 0;
+            TT_FATAL(
+                gi < dfbs.size() && dfbs[gi].device_slot == dfb_impl->device_slot &&
+                    dfbs[gi].entry_size == c.entry_size && dfbs[gi].num_entries == c.num_entries &&
+                    dfbs[gi].num_producers == c.num_producers && dfbs[gi].num_consumers == c.num_consumers &&
+                    dfbs[gi].producer_risc_mask == c.producer_risc_mask &&
+                    dfbs[gi].consumer_risc_mask == c.consumer_risc_mask &&
+                    dfbs[gi].cap == static_cast<tt_emule::AccessPattern>(static_cast<uint8_t>(c.cap)) &&
+                    dfbs[gi].has_finalize == has_finalize && dfbs[gi].finalize_l1_offset == finalize_addr,
+                "descriptor DFB mismatch on core ({},{}) dfb {}",
+                logical_core.x,
+                logical_core.y,
+                gi);
+            ++gi;
+        }
+        TT_FATAL(gi == dfbs.size(), "descriptor DFB count mismatch on core ({},{})", logical_core.x, logical_core.y);
+    }
+
+    if (dfbs.empty()) {
         // Nothing to allocate, so the L1 bump allocator never grows and there's
         // nothing to reset. Skipping reset also leaves the mmap-init zeros at
         // MEM_ZEROS_BASE undisturbed for kernels that NOC-read the region.
@@ -205,28 +236,25 @@ static std::vector<DFBAllocInfo> allocate_dfbs_on_core(
     }
 
     std::vector<DFBAllocInfo> dfb_allocs;
-    dfb_allocs.reserve(dfb_impls.size());
+    dfb_allocs.reserve(dfbs.size());
     // Compute bridge sharing: a compute-consumer input DFB and a compute-producer
     // output DFB with matching dimensions share L1 (real HW routes through the
     // register file). Independent compute-consumer inputs (e.g. matmul in0/in1)
     // must NOT share.
     constexpr uint16_t TENSIX_MASK = 0xFF00u;  // bits 8-15
     std::unordered_map<uint64_t, uint32_t> bridge_consumer_alloc;
-    for (auto& dfb_impl : dfb_impls) {
-        uint32_t device_slot = dfb_impl->device_slot;
-        auto& cfg = dfb_impl->config;
-        uint32_t total = cfg.entry_size * cfg.num_entries;
-        uint64_t dim_key = (static_cast<uint64_t>(cfg.entry_size) << 32) | cfg.num_entries;
-        bool compute_is_consumer = (cfg.consumer_risc_mask & TENSIX_MASK) != 0;
-        bool compute_is_producer = (cfg.producer_risc_mask & TENSIX_MASK) != 0;
-        // Prefer the finalize-allocated L1 offset (so host/test verification
-        // hits the same offset); fall back to bump-alloc when absent. L1 offset
-        // model: base_addr is a 0-based L1 offset (finalize supplies the offset
-        // directly; l1_alloc returns one too). Use a found-flag, not addr != 0,
-        // as the "has finalize" test — offset 0 is a valid L1 address.
-        auto cl = dfb_impl->core_lookup_.find(logical_core);
-        bool has_finalize = (cl != dfb_impl->core_lookup_.end());
-        uint32_t finalize_addr = has_finalize ? cl->second.second : 0;  // 0-based L1 offset
+    for (const auto& dd : dfbs) {
+        uint32_t device_slot = dd.device_slot;
+        uint32_t total = dd.entry_size * dd.num_entries;
+        uint64_t dim_key = (static_cast<uint64_t>(dd.entry_size) << 32) | dd.num_entries;
+        bool compute_is_consumer = (dd.consumer_risc_mask & TENSIX_MASK) != 0;
+        bool compute_is_producer = (dd.producer_risc_mask & TENSIX_MASK) != 0;
+        // Prefer the finalize-allocated L1 offset (so host/test verification hits the same
+        // offset); fall back to bump-alloc when absent. base_addr is a 0-based L1 offset
+        // (finalize supplies it directly; l1_alloc returns one too). Use the found-flag,
+        // not addr != 0, as the "has finalize" test — offset 0 is a valid L1 address.
+        bool has_finalize = dd.has_finalize;
+        uint32_t finalize_addr = dd.finalize_l1_offset;  // 0-based L1 offset
         uint32_t base_addr;
         if (compute_is_producer && !compute_is_consumer) {
             auto it = bridge_consumer_alloc.find(dim_key);
@@ -242,9 +270,9 @@ static std::vector<DFBAllocInfo> allocate_dfbs_on_core(
         // core's L1 to get the host pointer the DFB/CB sync state stores.
         uint8_t* base = core->l1_data() + base_addr;
         // STRIDED: M = max(P, C); ALL: M = P.
-        bool is_all = (cfg.cap == ::dfb::AccessPattern::ALL);
-        uint32_t M = is_all ? cfg.num_producers : std::max<uint32_t>(cfg.num_producers, cfg.num_consumers);
-        uint32_t capacity = cfg.num_entries / M;
+        bool is_all = (dd.cap == tt_emule::AccessPattern::ALL);
+        uint32_t M = is_all ? dd.num_producers : std::max<uint32_t>(dd.num_producers, dd.num_consumers);
+        uint32_t capacity = dd.num_entries / M;
 
         // Also populate CB sync state for this DFB so compute ops (pack_tile,
         // matmul_tiles) can reuse the same L1 buffer via cb_read_ptr/cb_write_ptr.
@@ -259,14 +287,14 @@ static std::vector<DFBAllocInfo> allocate_dfbs_on_core(
         core->init_cb_sync(
             static_cast<uint8_t>(device_slot),
             base,
-            cfg.entry_size,
-            cfg.num_entries,
+            dd.entry_size,
+            dd.num_entries,
             /*globally_allocated=*/false);
 
         // STRIDED gets M TCs, ALL DM-DM gets P*C, spaced by MAX_TC_SLOTS_PER_DFB so DFBs cannot
         // collide. DFBSyncState belongs to the same model, so it is populated here too.
         if (tc_backed) {
-            core->init_dfb_sync(device_slot, base, cfg.entry_size, cfg.num_entries, capacity);
+            core->init_dfb_sync(device_slot, base, dd.entry_size, dd.num_entries, capacity);
             if (device_slot >= (tt_emule::TILE_COUNTERS_PER_NEO / tt_emule::MAX_TC_SLOTS_PER_DFB)) {
                 // counter_base assigns out of NEO 0 only. Lifting this means spreading DFBs
                 // across NEOs and threading neo_id through the CB->DFB bridge.
@@ -274,7 +302,7 @@ static std::vector<DFBAllocInfo> allocate_dfbs_on_core(
                     "Quasar DFB device slot exceeds safe TC range (max 8 DFBs per NEO with neo_id=0)");
             }
             uint8_t counter_base = static_cast<uint8_t>(device_slot * tt_emule::MAX_TC_SLOTS_PER_DFB);
-            uint32_t num_tcs_to_init = is_all ? static_cast<uint32_t>(cfg.num_producers) * cfg.num_consumers : M;
+            uint32_t num_tcs_to_init = is_all ? static_cast<uint32_t>(dd.num_producers) * dd.num_consumers : M;
             for (uint32_t tc_idx = 0; tc_idx < num_tcs_to_init; ++tc_idx) {
                 auto& tc = core->tile_counters()->get(0, counter_base + static_cast<uint8_t>(tc_idx));
                 tc.capacity = capacity;
@@ -283,17 +311,16 @@ static std::vector<DFBAllocInfo> allocate_dfbs_on_core(
             }
         }
 
-        dfb_allocs.push_back({device_slot, base_addr, &cfg});
-        log_debug(
-            tt::LogMetal,
-            "  Core({},{}) DFB[{}]: addr=0x{:x} entry_size={} num_entries={} total={}",
-            logical_core.x,
-            logical_core.y,
-            device_slot,
-            base_addr,
-            cfg.entry_size,
-            cfg.num_entries,
-            total);
+        dfb_allocs.push_back(
+            {device_slot,
+             base_addr,
+             dd.entry_size,
+             dd.num_entries,
+             dd.num_producers,
+             dd.num_consumers,
+             dd.producer_risc_mask,
+             dd.consumer_risc_mask,
+             is_all});
     }
     return dfb_allocs;
 }
@@ -344,8 +371,8 @@ void setup_core_state(
         auto dfb_impls = impl.dataflow_buffers_on_core(logical_core);
         // Quasar-only. Null on WH/BH keeps the cb_api CB->DFB bridge short-circuited, and stops
         // a slot legal up to get_arch_num_circular_buffers() indexing the MAX_DFBS-sized array.
-        bool has_tc_dfbs = !dfb_impls.empty() && MetalContext::instance().hal().has_tile_counter_registers();
-        std::vector<DFBAllocInfo> dfb_allocs = allocate_dfbs_on_core(core, logical_core, dfb_impls);
+        bool has_tc_dfbs = !cd->dfbs.empty() && MetalContext::instance().hal().has_tile_counter_registers();
+        std::vector<DFBAllocInfo> dfb_allocs = allocate_dfbs_on_core(core, logical_core, cd->dfbs, dfb_impls);
 
         uint32_t sem_region_size = tt::tt_metal::NUM_SEMAPHORES * EMULE_SEM_ALIGN;
         core_setups.push_back(
@@ -369,97 +396,96 @@ void setup_core_state(
 // ---------------------------------------------------------------------------
 static void populate_dfb_interface_slots(
     tt_emule::EmuleDFBInterface& iface, const DFBAllocInfo& alloc, uint8_t proc_id, bool is_tensix) {
-    const auto& cfg = *alloc.cfg;
-    const uint32_t total = cfg.entry_size * cfg.num_entries;
+    const uint32_t total = alloc.entry_size * alloc.num_entries;
 
     // Compute proc_bit per-alloc: WH/BH ComputeKernel sets bit 2,
     // Quasar uses bits 8+ (detect by presence of high mask bits).
     uint16_t proc_bit;
     if (is_tensix) {
-        bool quasar_masks = ((cfg.producer_risc_mask | cfg.consumer_risc_mask) & 0xFF00u) != 0;
+        bool quasar_masks = ((alloc.producer_risc_mask | alloc.consumer_risc_mask) & 0xFF00u) != 0;
         proc_bit = quasar_masks ? static_cast<uint16_t>(1u << (proc_id + ::dfb::TENSIX_RISC_OFFSET))
                                 : static_cast<uint16_t>(1u << 2);
     } else {
         proc_bit = static_cast<uint16_t>(1u << proc_id);
     }
-    bool is_all = (cfg.cap == ::dfb::AccessPattern::ALL);
-    uint32_t M = is_all ? cfg.num_producers : std::max<uint32_t>(cfg.num_producers, cfg.num_consumers);
-    uint32_t stride_size = M * cfg.entry_size;
+    bool is_all = alloc.is_all;
+    uint32_t M = is_all ? alloc.num_producers : std::max<uint32_t>(alloc.num_producers, alloc.num_consumers);
+    uint32_t stride_size = M * alloc.entry_size;
     if (alloc.device_slot >= (tt_emule::TILE_COUNTERS_PER_NEO / tt_emule::MAX_TC_SLOTS_PER_DFB)) {
         return;
     }
     uint8_t counter_base = static_cast<uint8_t>(alloc.device_slot * tt_emule::MAX_TC_SLOTS_PER_DFB);
 
-    bool is_producer = (cfg.producer_risc_mask & proc_bit) != 0;
-    bool is_consumer = (cfg.consumer_risc_mask & proc_bit) != 0;
+    bool is_producer = (alloc.producer_risc_mask & proc_bit) != 0;
+    bool is_consumer = (alloc.consumer_risc_mask & proc_bit) != 0;
     if (!is_producer && !is_consumer) {
         return;
     }
 
     iface.active = true;
-    iface.entry_size = cfg.entry_size;
+    iface.entry_size = alloc.entry_size;
     iface.stride_size = stride_size;
-    iface.num_entries = cfg.num_entries;
+    iface.num_entries = alloc.num_entries;
     iface.tc_idx = 0;
     iface.broadcast_tc = false;
     iface.rd_entry_idx = 0;
     iface.wr_entry_idx = 0;
 
     if (is_producer) {
-        uint8_t p = static_cast<uint8_t>(std::popcount(cfg.producer_risc_mask & (proc_bit - 1u)));
+        uint8_t p = static_cast<uint8_t>(std::popcount(alloc.producer_risc_mask & (proc_bit - 1u)));
         if (is_all) {
             // ALL DM-DM: producer broadcasts to all consumer TCs.
             iface.broadcast_tc = true;
-            iface.num_tcs_to_rr = static_cast<uint8_t>(cfg.num_consumers);
-            iface.stride_size = cfg.entry_size;
-            uint32_t capacity_per_p = cfg.num_entries / cfg.num_producers;
-            uint32_t producer_ptr = alloc.base_addr + p * capacity_per_p * cfg.entry_size;
-            fill_dfb_slots(iface, cfg.num_consumers, [&](uint32_t c) {
+            iface.num_tcs_to_rr = static_cast<uint8_t>(alloc.num_consumers);
+            iface.stride_size = alloc.entry_size;
+            uint32_t capacity_per_p = alloc.num_entries / alloc.num_producers;
+            uint32_t producer_ptr = alloc.base_addr + p * capacity_per_p * alloc.entry_size;
+            fill_dfb_slots(iface, alloc.num_consumers, [&](uint32_t c) {
                 return DfbSlotInit{
-                    static_cast<uint8_t>(counter_base + p * cfg.num_consumers + c),
+                    static_cast<uint8_t>(counter_base + p * alloc.num_consumers + c),
                     alloc.base_addr,
                     alloc.base_addr + total,
                     producer_ptr};
             });
         } else {
-            uint32_t num_tcs = M / cfg.num_producers;
+            uint32_t num_tcs = M / alloc.num_producers;
             iface.num_tcs_to_rr = static_cast<uint8_t>(num_tcs);
             fill_dfb_slots(iface, num_tcs, [&](uint32_t k) {
-                uint8_t tc_idx = static_cast<uint8_t>(p + k * cfg.num_producers);
+                uint8_t tc_idx = static_cast<uint8_t>(p + k * alloc.num_producers);
                 return DfbSlotInit{
                     static_cast<uint8_t>(counter_base + tc_idx),
                     alloc.base_addr,
                     alloc.base_addr + total,
-                    alloc.base_addr + tc_idx * cfg.entry_size};
+                    alloc.base_addr + tc_idx * alloc.entry_size};
             });
         }
     } else {
-        uint8_t c = static_cast<uint8_t>(std::popcount(cfg.consumer_risc_mask & (proc_bit - 1u)));
+        uint8_t c = static_cast<uint8_t>(std::popcount(alloc.consumer_risc_mask & (proc_bit - 1u)));
         if (is_all) {
             // ALL DM-DM consumer: drain each producer's TC block fully.
-            iface.num_tcs_to_rr = static_cast<uint8_t>(cfg.num_producers);
-            iface.stride_size = cfg.entry_size;
+            iface.num_tcs_to_rr = static_cast<uint8_t>(alloc.num_producers);
+            iface.stride_size = alloc.entry_size;
             iface.drain_per_tc = true;
-            uint32_t capacity_per_p = cfg.num_entries / cfg.num_producers;
-            uint32_t sub_range = capacity_per_p * cfg.entry_size;
-            fill_dfb_slots(iface, cfg.num_producers, [&](uint32_t p) {
+            uint32_t capacity_per_p = alloc.num_entries / alloc.num_producers;
+            uint32_t sub_range = capacity_per_p * alloc.entry_size;
+            fill_dfb_slots(iface, alloc.num_producers, [&](uint32_t p) {
                 uint32_t sub_base = alloc.base_addr + p * sub_range;
                 return DfbSlotInit{
-                    static_cast<uint8_t>(counter_base + p * cfg.num_consumers + c),
+                    static_cast<uint8_t>(counter_base + p * alloc.num_consumers + c),
                     sub_base,
                     sub_base + sub_range,
                     sub_base};
             });
         } else {
-            uint32_t num_tcs = M / cfg.num_consumers;
+            uint32_t num_tcs = M / alloc.num_consumers;
             iface.num_tcs_to_rr = static_cast<uint8_t>(num_tcs);
             fill_dfb_slots(iface, num_tcs, [&](uint32_t k) {
-                uint8_t tc_idx = static_cast<uint8_t>(c + k * cfg.num_consumers);
+                uint8_t tc_idx = static_cast<uint8_t>(c + k * alloc.num_consumers);
                 return DfbSlotInit{
                     static_cast<uint8_t>(counter_base + tc_idx),
                     alloc.base_addr,
                     alloc.base_addr + total,
-                    alloc.base_addr + tc_idx * cfg.entry_size};
+                    alloc.base_addr + tc_idx * alloc.entry_size};
             });
         }
     }
