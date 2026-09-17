@@ -68,7 +68,7 @@
       "test_full_model_decode[blackhole-1x8]": 0.97,
       "_comment_wormhole_gate": "12B had no wormhole_b0 full_model gate, so WH runs fell through to get_pcc_threshold's 0.99 unmeasured default and reported red at every value. Gated at 0.98 -- the same number Gemma4-31B already uses for test_full_model[wormhole_b0-1x8] -- rather than a 12B-specific value.",
       "test_full_model[wormhole_b0-1x8]": 0.98,
-      "_comment_wormhole_decode": "WH T3K dense models use Ring CCL (create_tt_model used to default is_moe=True and force Linear). Ring changes reduction order; 12B decode measured 0.9884 with matching argmax. Gate below measured so the 0.99 default does not fail a real-weight local run. Prefill full_model stayed 0.997.",
+      "_comment_wormhole_decode": "WH T3K dense models use Ring CCL (create_tt_model used to default is_moe=True and force Linear). Ring changes reduction order and that costs 12B decode accuracy: measured on a real T3K, same test, Linear 0.9929 vs Ring 0.9884 (-0.0045). Linear clears the 0.99 default; Ring does not, which is why this key exists. Ring was kept deliberately for ~10% TTFT, on the evidence that the loss does not reach the output: argmax matches HF (236770) on this test, and 12B generation is clean at every demo bucket including long-context-128k on Ring (803 chars, no loop). Do NOT read the gate as 12B's unavoidable accuracy -- it is the Ring number, and pinning 12B to Linear in precision_overrides.json recovers 0.9929. Gate 0.0034 below measured, per this file's ~0.01-below-measured convention. Prefill full_model stayed 0.997. 31B is unaffected: it pins Linear at >=128k (Ring loops its 128k decode) and is clean on Ring at 64k.",
       "test_full_model_decode[wormhole_b0-1x8]": 0.985
     },
     "1x4": {
