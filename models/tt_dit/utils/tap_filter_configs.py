@@ -90,6 +90,8 @@ _FORMULATIONS: dict[DeviceKey, dict[ShapeKey, Any]] = {
     # (the 2x4 T-sharding gives a different channel ladder than the galaxy), in 4 fresh processes of <= 6 shapes.
     # Full-C wins at every width; the chunk widths do not fit or are slower. Without these rows every fresh
     # process probed all 23 shapes (~3.5 min of the first gen's audio decode on the loudbox).
+    # No _SLICES rows for this grid yet: the sweep took one clip length per key and one of its counts did not
+    # hold at a longer length (test_every_table_row_runs_as_tabled); add them from a multi-length sweep.
     ("blackhole", 11, 10): {
         (768, 12, 2): "direct",
         (768, 7, 1): "direct",
@@ -129,21 +131,6 @@ _SLICES: dict[DeviceKey, dict[ShapeKey, tuple[int, int]]] = {
         (8, 7, 1): (482400, 4),
         # LTX vocoder, same 2026-09-16 sweep: the one LTX shape where an explicit count beat auto-slicing (30 %).
         (24, 12, 2): (12160, 1),
-    },
-    # Same 2026-09-17 loudbox sweep: rows where an explicit count beat conv1d's auto-slicing by >= 10 %.
-    ("blackhole", 11, 10): {
-        (768, 12, 2): (755, 1),
-        (768, 7, 1): (755, 1),
-        (256, 7, 1): (1806, 1),
-        (192, 12, 2): (3020, 1),
-        (192, 7, 1): (3020, 1),
-        (128, 12, 2): (9030, 2),
-        (96, 12, 2): (6040, 1),
-        (96, 7, 1): (6040, 1),
-        (48, 7, 1): (12080, 1),
-        (24, 12, 2): (24160, 1),
-        (16, 7, 1): (72240, 1),
-        (2, 43, 1): (288562, 2),
     },
 }
 
