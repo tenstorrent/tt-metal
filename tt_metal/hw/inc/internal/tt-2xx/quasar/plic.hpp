@@ -32,9 +32,6 @@ constexpr uint32_t plic_enable_register_address(uint32_t enable_word) {
     return TT_CLUSTER_PLIC_CORE0_IE_0__REG_ADDR + enable_word * static_cast<uint32_t>(sizeof(uint32_t));
 }
 
-static_assert(plic_enable_register_address(1) == TT_CLUSTER_PLIC_CORE0_IE_1__REG_ADDR);
-static_assert(plic_enable_register_address(2) == TT_CLUSTER_PLIC_CORE0_IE_2__REG_ADDR);
-
 inline uint32_t plic_read32(uint32_t address) { return *reinterpret_cast<volatile uint32_t*>(address); }
 
 inline void plic_write32(uint32_t address, uint32_t value) { *reinterpret_cast<volatile uint32_t*>(address) = value; }

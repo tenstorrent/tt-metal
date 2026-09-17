@@ -158,8 +158,7 @@ void DispatchQueryManager::reset(DispatchCoreConfig& dispatch_core_config, uint8
     // FDS go/completion is a Quasar DE path. The go wire is per dispatch engine, so FDS needs one CQ per dispatch
     // engine.
     fds_signalling_enabled_ = resolved_dispatch_core_type_ == CoreType::DISPATCH && hal.supports_fds() &&
-                              !rtoptions.get_disable_fds() && rtoptions.get_fast_dispatch() &&
-                              cq_dispatch_layout_.num_cqs_per_core == 1;
+                              rtoptions.get_fast_dispatch() && cq_dispatch_layout_.num_cqs_per_core == 1;
     // Reset the dispatch cores reported by the manager. Will be re-populated when the associated query is made
     dispatch_cores_ = {};
 }
