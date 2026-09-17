@@ -121,6 +121,31 @@ private:
     bool enabled_ = false;
 };
 
+// Records the per-program metadata (kernel sources, core count) the real-time profiler attaches to
+// its records, keyed by the physical devices a program is launched on. Resolves the enable check
+// once per launch; the device-id scratch vector is reused across programs.
+class ProgramMetadataRecorder {
+public:
+    explicit ProgramMetadataRecorder(MeshDevice* mesh_device) :
+        context_id_(extract_context_id(mesh_device)), enabled_(tt::IsProgramMetadataRecordingEnabled(context_id_)) {}
+
+    void record(const std::vector<IDevice*>& devices, tt::tt_metal::detail::ProgramImpl& program) {
+        if (!enabled_) {
+            return;
+        }
+        device_ids_.clear();
+        for (const auto* device : devices) {
+            device_ids_.push_back(device->id());
+        }
+        tt::RecordProgramMetadata(context_id_, program, device_ids_);
+    }
+
+private:
+    ContextId context_id_;
+    bool enabled_ = false;
+    std::vector<ChipId> device_ids_;
+};
+
 [[maybe_unused]] MeshCoordinate get_local_start_coord(MeshDevice* mesh_device, const MeshCoordinateRange& range) {
     for (const auto& coord : range) {
         if (mesh_device->impl().is_local(coord)) {
@@ -404,6 +429,7 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
     ZoneScopedN("EnqueueProgram");
     auto lock = lock_api_function_();
     in_use_ = true;
+    ProgramMetadataRecorder program_metadata_recorder(mesh_device_);
     // The active sub-device manager id doubles as the key for per-program cached command sequences.
     const uint64_t active_sub_device_manager_id = *mesh_device_->get_active_sub_device_manager_id();
     const auto& sub_device_ids = mesh_workload.impl().determine_sub_device_ids(mesh_device_);
@@ -455,6 +481,7 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
             trace_node.trace_nodes.push_back(std::pair<MeshCoordinateRange, TraceNode>(
                 device_range,
                 program_dispatch::create_trace_node(program.impl(), mesh_device_, num_workers, use_prefetcher_cache)));
+            program_metadata_recorder.record(mesh_device_->impl().get_local_devices(device_range), program.impl());
         }
         trace_node.multicast_go_signals = mcast_go_signals;
         trace_node.unicast_go_signals = unicast_go_signals;
@@ -570,6 +597,7 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
             static_cast<uint8_t>(this->id()));
 
         const auto& local_devices = mesh_device_->impl().get_local_devices(device_range);
+        program_metadata_recorder.record(local_devices, program.impl());
         sub_device_recorder.record(local_devices, program.get_runtime_id(), sub_device_id);
         this->write_program_commands_to_devices(
             local_devices, program_cmd_seq, dispatch_metadata.stall_first, dispatch_metadata.stall_before_program);
