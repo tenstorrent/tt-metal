@@ -1,5 +1,5 @@
 {
-  "last_scan_date": "2026-09-16",
+  "last_scan_date": "2026-09-17",
   "scanned_run_ids": [
     "30227858718",
     "30387358745",
@@ -22,6 +22,7 @@
     "31362719766",
     "31566814739",
     "31596449343",
+    "31720311397",
     "32028413134",
     "32053638633",
     "32101971921",
@@ -41,24 +42,25 @@
     "33710037838",
     "33799208648",
     "33946342890",
+    "34079232201",
     "34085742089",
     "34182246734",
-    "34079232201",
-    34310201941,
     "34189578249",
-    "31720311397",
+    "34310201941",
+    "34468470764",
     "34582955027",
     "34678003004",
     "34718628456",
-    "34468470764",
-    "34779455412",
     "34767848588",
     "34773537078",
+    "34779455412",
     "34791548125",
-    "34825924120",
     "34802226325",
+    "34825924120",
     "34912310664",
-    "35073346503"
+    "35073346503",
+    "35149719755",
+    "35188425857"
   ],
   "workflows_sampled": [
     "merge-gate.yaml",
@@ -568,11 +570,27 @@
       "category": 2,
       "validation_workflow_dispatched": "galaxy-unit-tests",
       "dispatched": "2026-09-16",
+      "status": "reported-inconclusive-ready-for-review",
+      "reported": true,
+      "nonterminal_reported": true,
+      "note": "PR #56799 resolved: validation run 35149719755 (galaxy-unit-tests) completed/failure overall. Galaxy distributed ops tests job 104977706867 failed on unrelated device-timeout/FW-init hardware infra issue, not the target warning. Grepped test-execution log: 0 occurrences of target warning, but also 0 occurrences of layernorm_sharded_pre_allgather (no JIT-compile evidence for the kernel) -- inconclusive per category-2 caveat, not confirmed. Commented outcome (/codeowners ping) and marked ready for review (2026-09-17).",
+      "last_state": "failure"
+    },
+    {
+      "branch": "silencer/demote-throttle-matmul-perf-info",
+      "title": "Demote matmul-throttle info logs to debug",
+      "pattern": "Throttle matmul perf to max N% - 5 log_info lines in throttle_mm_perf(), fires once per throttled matmul/conv2d program build (15x in one job sample)",
+      "source_run_id": "35188425857",
+      "source_job_id": "105097543406",
+      "source_workflow": "tt-metal-l2-nightly.yaml",
+      "category": 6,
+      "validation_workflow_dispatched": "tt-metal-l2-nightly",
+      "dispatched": "2026-09-17",
       "status": "pr-opened-dispatch-requested",
       "reported": false,
       "nonterminal_reported": false,
-      "note": "PR opened this run for the layernorm_sharded_pre_allgather.cpp num_tiles_per_partial_result unused-var warning. Moved declaration/RMSNORM-conditional init inside the IS_ALLGATHER_WORKER block where it's actually used. Dispatched galaxy-unit-tests for validation; awaiting run outcome next scan."
+      "note": "PR opened this run for compute_throttle_utils.cpp: demoted the 5 'Throttle matmul perf to max N%' log_info calls to log_debug (category 6, over-verbose message demotion). Dispatched tt-metal-l2-nightly for validation; awaiting run outcome next scan."
     }
   ],
-  "backlog_cursor": "Phase A this run (2026-09-16): resolved the one unreported in-flight entry -- PR #56699 (pydantic ConfigDict migration for ImageMedia). Validation run 35022746538 (models-t3-e2e-tests) completed/failure, but failure job (Galaxy Tiny Deepseek v3 DDP=32 train e2e) never touches ImageMedia/common.py. Llama 3.2-11B Vision e2e job 104564917873 (runs simple_vision_demo, constructing PIL.Image/ImageMedia inputs) passed with 0 occurrences of the target PydanticDeprecatedSince20 warning in its warnings summary -- confirmed. Commented outcome and marked ready for review. Phase B this run: sampled galaxy-unit-tests run 35073346503 (jobs: Galaxy distributed ops tests [wh_galaxy] 104722685012, Galaxy Fabric tests [wh_galaxy] 104722685851). Histogram: 320x UMD warning (bind_area_to_memory_nodeset/init_hugepage NumaNode mismatch -- lives in vendored tt-umd submodule, tt-metal doesn't own the source, candidate for an issue rather than a PR if pursued next); 906x Test info (pytest-side, not source-emittable); 22x Fabric/Distributed info (routine). Diagnostic channel: 30x copy_dest_value deprecated-decl (already tracked PR #56360); 3x NEW -Wunused-but-set-variable: num_tiles_per_partial_result in layernorm_sharded_pre_allgather.cpp -- declared/set unconditionally but only read inside #ifdef IS_ALLGATHER_WORKER. Fixed by scoping the declaration into that block (this run's one target-producing action). GHA-annotation channel empty this sample. Residue was CI/docker/env boilerplate, nothing new. Next run: reconcile this PR's galaxy-unit-tests dispatch outcome; if pursuing the UMD hugepage warning, open an issue (not a PR) since tt-metal doesn't own tt-umd source -- note it's vendored via tt_metal/third_party/umd submodule; continue rotating through remaining unsampled tracked workflows (tt-metal-l2-nightly, blackhole-sanity-tests not recently covered)."
+  "backlog_cursor": "Phase A this run (2026-09-17): resolved PR #56799 (layernorm-pre-allgather num_tiles_per_partial_result unused-var fix). Validation run 35149719755 (galaxy-unit-tests) completed/failure - device-timeout/FW-init hardware infra failure, unrelated to the fix; also no JIT-compile evidence for the affected kernel in that job's log, so validation is inconclusive rather than confirmed. Commented outcome and marked ready for review. Phase B this run: sampled tt-metal-l2-nightly run 35188425857 (jobs: ttnn nightly data_movement tests [bh_p100] 105097592667, Galaxy CCL tests [wh_galaxy] 105097594962, syseng-didt-tests/didt_sdxl_conv[wh_n150_civ2] 105097543406). Histogram: 27x UMD info, 15x Op info (all 'Throttle matmul perf to max 33%' from compute_throttle_utils.cpp - category 6 demotion candidate, NEW target fixed this run), 5x Device info, 2x each BuildKernels/Distributed/Fabric info, 2 warning lines (Sysmem hugepage advice + unknown motherboard fallback in physical_system_discovery.cpp - both single-occurrence, not spam). Diagnostic channel empty. GHA-annotation channel: 19 lines, mostly CI/cache infra boilerplate, nothing new actionable. Residue (7782 lines) was pytest/docker/env boilerplate, nothing new. Fixed compute_throttle_utils.cpp: demoted the 5 log_info 'Throttle matmul perf to max N%' calls to log_debug (this run's one target-producing action). Dispatched tt-metal-l2-nightly for validation. Next run: reconcile this PR's dispatch outcome (check build-artifact build logs for compile success and a test-execution job's logs for absence of 'Throttle matmul perf to max' at info level); continue rotating through remaining tracked workflows not recently sampled (blackhole-sanity-tests, vllm-model-tests, runtime-perf-tests); if pursuing the tt-umd hugepage warning noted in a prior run, open an issue (not a PR) since tt-metal doesn't own tt-umd source."
 }
