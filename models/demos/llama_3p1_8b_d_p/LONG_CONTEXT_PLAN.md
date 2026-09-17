@@ -11,9 +11,11 @@ The user revised the plan on 17 September:
 - Measure warmed prompt wall time, throughput per user and each 1,024-token chunk.
 - Show the next predicted word for two fixed book passages.
 - Do not run golden KV comparisons at these larger lengths.
-- Develop and test native migration in parallel, starting at 2K.
+- Develop and test native migration on the prefill side in parallel, starting at 2K.
+- Do not develop or test the decode side. Use passive buffers for native transport verification.
 
-Use only the assigned Galaxies: **b09u02 for performance** and **b07u08 for migration**.
+Use only the assigned Galaxies: **c04u14 for prefill validation/performance** and **b09u02 for native migration work**.
+The old b07u08 allocation is released. The live page records current job IDs and lease times.
 Keep SP=4, TP=8, two independent slots, BF16 weights/activations and BFP8_B cache.
 
 ## Milestones and present evidence
@@ -27,7 +29,7 @@ Keep SP=4, TP=8, two independent slots, BF16 weights/activations and BFP8_B cach
 | 16K / 32K / 64K / 128K | Fixed book inputs ready; resource costs reviewed from source | Review the prior measured length and current memory/lease before each run |
 | 2K migration runtime | Live H2D/readiness/table gate and local packed copy passed: four interleaved chunks, 128 acknowledgements, all 16 configs and 65,536 byte-identical destination pages | Build the native transfer dependencies, then test tt-d-gen transfer |
 | Native KV transfer | Host contracts and local same-device packed copy pass; native-manager transfer remains untested | Build prerequisites, then two-host native transfer and exact destination-byte checks |
-| SC4 decode handoff | Not tested | User-assigned decode machines and a working native loopback |
+| Decode / SC4 handoff | Outside the current scope by user instruction | No decode preparation or tests |
 
 The former larger-context golden-matrix plan is historical.
 The remaining 4K held-out golden work was stopped at the user's request.
@@ -70,14 +72,15 @@ The test reads next-token logits; it does not append that token or run autoregre
 1. Use the real H2D input service and the accepted 2K model.
 2. Confirm device completion before layer-ready acknowledgements.
 3. Export live source addresses and all physical device identities.
-4. Read packed source pages through a verified ownership-safe API.
-5. Run the native tt-d-gen manager into distinct destination allocations.
+4. Prove that table reads match an independent live cache view; then read packed source pages.
+5. Connect layer acknowledgements to the real native source client; transfer into passive destination allocations.
 6. Compare every packed byte, across K/V, heads, layers, slots and positions.
-7. Test continuation, failures and cross-endpoint SC4 decode.
+7. Test continuation, slot isolation/reuse, failures, drain and source-buffer lifetime.
+8. Qualify each requested capacity through 128K without larger-context golden KV comparisons.
 
 The first live runtime test does not prove native byte transfer.
 Native transfer does not by itself prove correct generated text.
-Served decode also needs prompt/output headroom within the chosen cache capacity.
+The passive receiver runs no decoder model. Decoder compatibility and served output are outside this task.
 No Llama-specific change to native manager copy semantics has been shown necessary.
 
 ## Resource checks
@@ -97,3 +100,7 @@ See [prefill performance](docs/performance-prefill.md) for saved 2K results, ver
 The 2K runtime result uses a corrected direct-run lifecycle verifier. The original verifier expected a pytest-only log message. The correction checks the native 32-device fabric event, exact physical inventory and final close. The original result is preserved; no model rerun or native-manager pass is implied. See the [root verification](/data/divanovic/llama31-8b-disagg/evidence/task-10-native-migration/readiness-003-verifier-correction-001/root-verification.json).
 
 The local copy gate verified all 65,536 BFP8 pages (285,212,672 bytes), including exponent data, in independent source and destination allocations. Source pages stayed unchanged. This uses TTNN copy, so it does not establish native-manager transport. See the [packed-copy root verification](/data/divanovic/llama31-8b-disagg/evidence/task-10-native-migration/packed-copy-launch-preparation-001/run/root-verification.json).
+
+## Prefill migration acceptance plan
+
+See [the required tests and completion criteria](docs/migration-prefill-tests.md). The guide maps GPT-OSS and shared prefill gates to Llama, distinguishes local copy from native transfer, and explains the native source registration and acknowledgement path. It includes current evidence and a two-prompt test story.
