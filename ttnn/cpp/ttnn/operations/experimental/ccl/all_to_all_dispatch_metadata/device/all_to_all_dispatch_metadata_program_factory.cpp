@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "all_to_all_dispatch_metadata_device_operation.hpp"
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/buffer.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <vector>
 #include <ranges>
@@ -41,13 +43,22 @@ auto launch_mux_workers(
     const size_t buffer_size_bytes_full_size_channel = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
     const uint32_t l1_unreserved_base_address =
         mesh_device.allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+    // Pin the mux below the L1_SMALL slice (#56769). L1_SMALL is flush with the top of worker L1, so its
+    // floor is the end of the regular L1 bank. This op does not consult live occupancy at all, so without
+    // the ceiling its map is bounded only by the physical end of L1 -- including the region GlobalSemaphores
+    // are allocated from. The ceiling is static, so it cannot go stale in the program cache. With
+    // l1_small_size = 0 it equals the physical end and nothing changes.
+    const size_t l1_small_floor_address =
+        l1_unreserved_base_address + mesh_device.allocator()->get_bank_size(tt::tt_metal::BufferType::L1);
     auto mux_kernel_config = tt::tt_fabric::FabricMuxConfig(
         num_full_size_channels,
         num_header_only_channels,
         num_buffers_full_size_channels,
         0,
         buffer_size_bytes_full_size_channel,
-        l1_unreserved_base_address);
+        l1_unreserved_base_address,
+        tt::CoreType::WORKER,
+        l1_small_floor_address);
 
     // Need num_links × neighbors.size() mux cores (one per link per direction)
     const uint32_t num_mux_cores_needed = num_links * neighbors.size();

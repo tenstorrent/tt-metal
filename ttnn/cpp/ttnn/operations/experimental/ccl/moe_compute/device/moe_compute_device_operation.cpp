@@ -4,7 +4,6 @@
 
 #include "ttnn/operations/experimental/ccl/moe_compute/moe_core_placement.hpp"
 #include "kernels/moe_ring_common.h"
-#include <tt-logger/tt-logger.hpp>
 #include "moe_compute_device_operation.hpp"
 #include "moe_compute_program_factory.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
@@ -29,33 +28,6 @@ constexpr auto DOUBLE_BUFFER_SIZE = 2;
 MoEComputeDeviceOperation::program_factory_t MoEComputeDeviceOperation::select_program_factory(
     const operation_attributes_t&, const tensor_args_t&) {
     return MoEComputeMeshWorkloadFactory{};
-}
-
-ttsl::hash::hash_t MoEComputeDeviceOperation::compute_program_hash(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    // Everything the default key covers, plus the one piece of state the mux sizing depends on.
-    //
-    // launch_mux_workers shrinks the mux memory map to fit under the lowest L1 address occupied on
-    // the mux cores. That reading is a build-time snapshot, so a program cached when the mux cores
-    // were clear stays valid in the cache after a later allocation (reduce_scatter's GlobalSemaphores,
-    // #54864) descends into the mux's span -- and the mux then writes over it every iteration.
-    // Folding the reading into the key forces a rebuild, and the shrink loop re-fits the map.
-    //
-    // Scoped to the mux cores so ordinary L1 traffic elsewhere on the device does not evict this
-    // program; only an allocation that could actually alias the mux moves the hash.
-    std::optional<tt::tt_metal::DeviceAddr> mux_cores_lowest_occupied_l1;
-    if (operation_attributes.combine_params.has_value()) {
-        mux_cores_lowest_occupied_l1 = detail::lowest_occupied_l1_on_cores(
-            *tensor_args.tilize_input_tensor.device(), operation_attributes.combine_params->mux_core_range_set);
-    }
-    log_warning(
-        tt::LogOp,
-        "[54864][hash] called: combine={} mux_cores_lowest=0x{:x} n_alloc_buffers={}",
-        operation_attributes.combine_params.has_value(),
-        mux_cores_lowest_occupied_l1.value_or(0),
-        tensor_args.tilize_input_tensor.device()->allocator()->get_allocated_buffers().size());
-    return ttsl::hash::hash_objects_with_default_seed(
-        operation_attributes, tensor_args, mux_cores_lowest_occupied_l1);
 }
 
 void MoEComputeDeviceOperation::validate_on_program_cache_hit(

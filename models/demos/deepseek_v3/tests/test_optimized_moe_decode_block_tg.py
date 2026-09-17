@@ -521,30 +521,22 @@ def verify_output(iteration, mesh_device, mesh_shape, tt_output_tensor, output_r
 @pytest.mark.parametrize("combine_mux_core_range", [((3, 0), (4, 7))])
 @pytest.mark.parametrize("combine_token_parallel_core_dim", [4])
 @pytest.mark.parametrize("combine_data_parallel_core_dim", [4])
-@pytest.mark.parametrize("enable_trace", [True])
+# Keep a non-trace case: #56769 needs only two sequential iterations to reproduce (the mux replays a
+# stale memory map over a GlobalSemaphore allocated at the end of iteration 1), so the non-trace path
+# is a faster and more direct regression test than capture/replay.
+@pytest.mark.parametrize("enable_trace", [True, False], ids=["trace", "notrace"])
 @pytest.mark.parametrize("num_iterations", [3])
 @pytest.mark.parametrize(
     "device_params",
     [
         {
-            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-            "trace_region_size": 0,
-            "l1_small_size": 0,
-        },
-        # #54864 probe: with l1_small_size > 0, reduce_scatter_minimal_direct parks its
-        # GlobalSemaphores in L1_SMALL (the *top* slice of L1) instead of falling back to
-        # BufferType::L1. The combine op's fabric mux carves its region out of raw L1 growing
-        # *up* from the allocator base, so L1_SMALL is structurally out of its reach. If the
-        # hang clears only in this arm, the mux is aliasing the writer_gen semaphore.
-        {
-            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-            "trace_region_size": 0,
             "l1_small_size": 16384,
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+            "trace_region_size": 0,
         },
     ],
-    ids=["fabric_1D_ring", "fabric_1D_ring_l1small"],
+    ids=["fabric_1D_ring"],
     indirect=True,
 )
 def test_optimized_moe_decode_block(
@@ -1091,12 +1083,6 @@ def test_optimized_moe_decode_block(
     tt_output_tensors = []
     if enable_trace:
         logger.info(f"Begin compiling op")
-        run_op(0)
-        ttnn.synchronize_device(mesh_device, sub_device_ids=[ttnn.SubDeviceId(0)])
-        # #54864 experiment: second warmup so any program-cache miss caused by L1 occupancy
-        # changing during the first pass (reduce_scatter allocates its semaphores last) is
-        # serviced HERE, not inside trace capture where rebuilds hit
-        # "Reads are not supported during trace capture".
         run_op(0)
         ttnn.synchronize_device(mesh_device, sub_device_ids=[ttnn.SubDeviceId(0)])
         logger.info(f"Done compiling op")

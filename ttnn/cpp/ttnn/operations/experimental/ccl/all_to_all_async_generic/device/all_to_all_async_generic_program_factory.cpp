@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/buffer.hpp>
 #include "all_to_all_async_generic_program_factory.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
@@ -727,11 +729,17 @@ AllToAllAsyncGenericProgram::create_at(
 
     constexpr uint8_t num_mux_buffers_per_channel = 2;
     const uint32_t mux_config_clients = std::max(1u, workers_per_direction);
+    // Pin the mux below the L1_SMALL slice so its map can never overlap a GlobalSemaphore (#56769). Static
+    // bound, so it cannot go stale in the program cache; equals the physical L1 end when l1_small_size = 0.
+    const size_t mux_l1_base_address = device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+    const size_t mux_l1_small_floor_address =
+        mux_l1_base_address + device->allocator()->get_bank_size(tt::tt_metal::BufferType::L1);
     tt::tt_fabric::FabricMuxV2Config mux_config(
         /*num_channels=*/static_cast<uint8_t>(mux_config_clients),
         /*num_buffers_per_channel=*/num_mux_buffers_per_channel,
         /*channel_buffer_size_bytes=*/tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(),
-        /*base_l1_address=*/device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1));
+        /*base_l1_address=*/mux_l1_base_address,
+        /*usable_l1_end_address=*/mux_l1_small_floor_address);
     if (use_worker_mux) {
         TT_FATAL(
             mux_config.get_memory_map_end_address() <= device->l1_size_per_core(),

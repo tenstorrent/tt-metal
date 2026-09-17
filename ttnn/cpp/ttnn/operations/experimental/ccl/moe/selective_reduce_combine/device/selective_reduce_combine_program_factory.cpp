@@ -5,7 +5,6 @@
 #include <ranges>
 #include <vector>
 
-#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/work_split.hpp>
@@ -71,29 +70,6 @@ SelectiveReduceCombineWorkerLayout compute_worker_layout(
     };
 }
 
-// Lowest L1 address occupied by an allocator-managed buffer that actually lands on `cores`.
-//
-// MeshDevice::lowest_occupied_compute_l1_address() is the minimum across *every* bank, so a buffer
-// sharded onto cores the mux never touches drags it down just as hard as one sitting on a mux core.
-// Sizing the mux off that aggregate costs fabric buffering for collisions that cannot happen. The
-// mux only cares about its own cores, so ask about those: interleaved L1 buffers span every bank and
-// therefore always count, while a sharded buffer counts only if its grid meets `cores`.
-std::optional<tt::tt_metal::DeviceAddr> lowest_occupied_l1_on_cores(
-    const MeshDevice& mesh_device, const CoreRangeSet& cores) {
-    std::optional<tt::tt_metal::DeviceAddr> lowest;
-    for (const auto* buffer : mesh_device.allocator()->get_allocated_buffers()) {
-        if (buffer->buffer_type() != tt::tt_metal::BufferType::L1) {
-            continue;  // L1_SMALL is the top slice; it can never be the lowest occupied address.
-        }
-        if (buffer->has_shard_spec() && !buffer->shard_spec().grid().intersects(cores)) {
-            continue;
-        }
-        const tt::tt_metal::DeviceAddr address = buffer->address();
-        lowest = lowest.has_value() ? std::min<tt::tt_metal::DeviceAddr>(*lowest, address) : address;
-    }
-    return lowest;
-}
-
 tt::tt_fabric::FabricMuxConfig get_fabric_mux_config(
     const uint32_t num_full_size_channels,
     const uint32_t num_header_only_channels,
@@ -101,13 +77,17 @@ tt::tt_fabric::FabricMuxConfig get_fabric_mux_config(
     uint8_t num_buffers_header_only_channels,
     const size_t buffer_size_bytes_full_size_channel,
     const uint32_t l1_unreserved_base_address,
-    const std::optional<uint32_t>& occupied_l1_tensor_addr) {
+    const std::optional<uint32_t>& occupied_l1_tensor_addr,
+    const size_t usable_l1_end_address) {
     TT_FATAL(
         num_buffers_full_size_channels > 0 && num_buffers_header_only_channels > 0,
         "Not enough L1 space for mux core memory requirements given current occupancy. Likely too many experts per "
         "device");
 
-    const auto config = tt::tt_fabric::FabricMuxConfig(
+    // Size the map with no ceiling first, so this search is what shrinks the buffer counts. Passing the
+    // ceiling to the constructor up front would make *it* fatal on the first oversized candidate and the
+    // shrink below would never get a turn.
+    const auto candidate = tt::tt_fabric::FabricMuxConfig(
         num_full_size_channels,
         num_header_only_channels,
         num_buffers_full_size_channels,
@@ -115,7 +95,17 @@ tt::tt_fabric::FabricMuxConfig get_fabric_mux_config(
         buffer_size_bytes_full_size_channel,
         l1_unreserved_base_address);
 
-    if (occupied_l1_tensor_addr.has_value() && config.get_memory_map_end_address() > *occupied_l1_tensor_addr) {
+    // Fit under whichever ceiling is lower: the live occupancy reading (best effort -- a build-time
+    // snapshot, so a later allocation can still descend past it) or the L1_SMALL floor (static, so it can
+    // never go stale).
+    std::optional<size_t> ceiling = occupied_l1_tensor_addr.has_value()
+                                        ? std::optional<size_t>(*occupied_l1_tensor_addr)
+                                        : std::nullopt;
+    if (usable_l1_end_address != 0) {
+        ceiling = ceiling.has_value() ? std::min<size_t>(*ceiling, usable_l1_end_address) : usable_l1_end_address;
+    }
+
+    if (ceiling.has_value() && candidate.get_memory_map_end_address() > *ceiling) {
         return get_fabric_mux_config(
             num_full_size_channels,
             num_header_only_channels,
@@ -123,10 +113,21 @@ tt::tt_fabric::FabricMuxConfig get_fabric_mux_config(
             --num_buffers_header_only_channels,
             buffer_size_bytes_full_size_channel,
             l1_unreserved_base_address,
-            occupied_l1_tensor_addr);
+            occupied_l1_tensor_addr,
+            usable_l1_end_address);
     }
 
-    return config;
+    // It fits, so hand back a config that carries the ceiling. Identical memory map, but FabricMuxConfig
+    // now asserts the invariant itself -- a backstop if this function's arithmetic ever drifts.
+    return tt::tt_fabric::FabricMuxConfig(
+        num_full_size_channels,
+        num_header_only_channels,
+        num_buffers_full_size_channels,
+        num_buffers_header_only_channels,
+        buffer_size_bytes_full_size_channel,
+        l1_unreserved_base_address,
+        tt::CoreType::WORKER,
+        usable_l1_end_address);
 }
 
 auto launch_mux_workers(
@@ -147,8 +148,32 @@ auto launch_mux_workers(
     const auto l1_unreserved_base_address =
         mesh_device.allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
 
-    // Keyed on the mux's own cores, not the device-wide aggregate -- see lowest_occupied_l1_on_cores.
-    const auto occupied_l1_tensor_addr = lowest_occupied_l1_on_cores(mesh_device, mux_core_range_set);
+    const auto occupied_l1_tensor_addr = mesh_device.lowest_occupied_compute_l1_address();
+
+    // The mux carves raw L1 growing up from l1_unreserved_base_address, outside the allocator, so the
+    // allocator never learns those bytes are taken and may hand them to a later allocation. That is
+    // survivable for a tensor -- its producer rewrites it every iteration -- but not for a GlobalSemaphore,
+    // whose value is written once at allocation and thereafter only incremented by the kernels that read
+    // it. One clobber of a carried counter is unrecoverable, which is the #56769 hang.
+    //
+    // The fix is to keep semaphores out of the mux's reach entirely: with l1_small_size > 0 they are
+    // allocated from L1_SMALL, which sits at the *top* of L1, and the ceiling below pins the mux beneath
+    // it. Without an L1_SMALL region there is nowhere safe to put them, and we cannot detect the collision
+    // later -- at this point the semaphores do not exist yet, so an occupancy check cannot see them.
+    const auto l1_small_bank_size = mesh_device.allocator()->get_bank_size(tt::tt_metal::BufferType::L1_SMALL);
+    TT_FATAL(
+        l1_small_bank_size > 0,
+        "The fabric mux reserves raw L1 on cores {} outside the allocator, but this device was opened with "
+        "l1_small_size = 0. GlobalSemaphores then fall back to BufferType::L1 and can be allocated inside the "
+        "mux's region, which silently overwrites them and hangs (#56769). Open the mesh device with "
+        "l1_small_size > 0 (16384 is sufficient) so semaphores are placed in L1_SMALL, above the mux.",
+        mux_core_range_set.str());
+
+    // Static: the L1_SMALL slice is flush with the top of worker L1, so its floor is the end of the regular
+    // L1 bank. Unlike the occupancy reading this cannot change as buffers come and go, so a mux map built
+    // against it never goes stale and stays valid for the lifetime of the cached program.
+    const size_t l1_small_floor_address = l1_unreserved_base_address +
+                                          mesh_device.allocator()->get_bank_size(tt::tt_metal::BufferType::L1);
 
     auto mux_kernel_config = get_fabric_mux_config(
         num_full_size_channels,
@@ -157,22 +182,8 @@ auto launch_mux_workers(
         num_buffers_header_only_channels,
         buffer_size_bytes_full_size_channel,
         l1_unreserved_base_address,
-        occupied_l1_tensor_addr);
-
-    // TEMP PROBE #54864 -- remove before merge.
-    log_warning(
-        tt::LogOp,
-        "[54864][combine-mux] l1_unreserved_base=0x{:x} lowest_occupied_compute_l1=0x{:x} "
-        "mux_memory_map_end=0x{:x} mux_cores={}",
-        l1_unreserved_base_address,
-        occupied_l1_tensor_addr.value_or(0),
-        mux_kernel_config.get_memory_map_end_address(),
-        mux_core_range_set.str());
-    log_warning(
-        tt::LogOp,
-        "[54864][combine-mux] aggregate_lowest=0x{:x} mux_cores_lowest=0x{:x}",
-        mesh_device.lowest_occupied_compute_l1_address().value_or(0),
-        occupied_l1_tensor_addr.value_or(0));
+        occupied_l1_tensor_addr,
+        l1_small_floor_address);
 
     // Calculate required vs available mux cores for fabric communication (one core per link per neighbor)
     const uint32_t needed_cores = num_links * neighbors.size();

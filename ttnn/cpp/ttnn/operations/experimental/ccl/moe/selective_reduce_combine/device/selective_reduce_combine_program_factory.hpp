@@ -29,13 +29,6 @@ SelectiveReduceCombineWorkerLayout compute_worker_layout(
     uint32_t num_data_parallel_cores,
     bool local_combine = false);
 
-
-// Lowest L1 address occupied by an allocator-managed buffer that actually lands on `cores`.
-// Unlike MeshDevice::lowest_occupied_compute_l1_address() (a min across every bank), this ignores
-// buffers sharded away from `cores`, so the mux is not shrunk for collisions that cannot happen.
-std::optional<tt::tt_metal::DeviceAddr> lowest_occupied_l1_on_cores(
-    const tt::tt_metal::distributed::MeshDevice& mesh_device, const CoreRangeSet& cores);
-
 }  // namespace detail
 
 struct SelectiveReduceCombineProgramArtifacts {

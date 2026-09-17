@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 ///
+#include <tt-metalium/allocator.hpp>
 #include <algorithm>
 
 #include <tt-metalium/core_coord.hpp>
@@ -599,11 +600,18 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
     // clients close their connections, so no explicit termination signalling is required. The mux
     // kernels themselves are created per-core in the loop below via add_fabric_mux_v2_to_program (each
     // needs the src/dst fabric node ids + link for the direction it forwards to).
+    // Pin the mux below the L1_SMALL slice so its map can never overlap a GlobalSemaphore (#56769).
+    // L1_SMALL is flush with the top of worker L1, so its floor is the end of the regular L1 bank. This is a
+    // static bound, so unlike a live occupancy reading it cannot go stale in the program cache. With
+    // l1_small_size = 0 it equals the physical end of L1 and nothing changes.
+    const size_t mux_l1_small_floor_address =
+        l1_unreserved_base_address + mesh_device->allocator()->get_bank_size(tt::tt_metal::BufferType::L1);
     tt::tt_fabric::FabricMuxV2Config mux_config(
         static_cast<uint8_t>(num_workers_per_direction),
         static_cast<uint8_t>(num_buffers_full_size_channels),
         buffer_size_bytes_full_size_channel,
-        mux_base_l1_address);
+        mux_base_l1_address,
+        mux_l1_small_floor_address);
 
     auto reader_named_compile_args = operations::experimental::ccl::detail::get_ring_reader_named_compile_args(
         ring_index,
