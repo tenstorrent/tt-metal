@@ -97,7 +97,7 @@ from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_p
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import full_indexer_rank, num_full_indexer_layers
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.mtp_prefill.device_windows import MTPUnionEmbedding
-from models.demos.deepseek_v3_d_p.tt.mtp_prefill.tt_mtp import CHAIN_FROM_NORM, TtMTPPredictor
+from models.demos.deepseek_v3_d_p.tt.mtp_prefill.tt_mtp import TtMTPPredictor
 from models.demos.deepseek_v3_d_p.tt.mtp_prefill.utils import MTP_CACHE_ENV, MTP_CACHE_PREFIX, enable_mtp_indexer_slot
 from models.demos.deepseek_v3_d_p.tt.runners.input_prep import prepare_prefill_input_tensor, prepare_prefill_mtp_tokens
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
@@ -795,14 +795,8 @@ def test_mtp_transformer_chunks(
     assert transformer.num_kvpe_cache_layers == num_layers + NUM_LEVELS
     assert transformer.num_mtp_levels == NUM_LEVELS
 
-    # Teacher forcing hands level k the device's ``out_head_normed[k-1]``, which is H^{k-1} only
-    # under the "norm" chaining convention. Asserted, not assumed: chain_from is a constructor
-    # argument, and flipping it makes every level>0 comparison below meaningless, with no shape
-    # error to say so.
-    assert predictor.chain_from == CHAIN_FROM_NORM, (
-        f"the reference below is teacher-forced with out_head_normed, so the device must chain from "
-        f"it too; predictor.chain_from is {predictor.chain_from!r}"
-    )
+    # Teacher forcing hands level k the device's ``out_head_normed[k-1]`` — H^{k-1}, matching how
+    # TtMTPPredictor chains levels: shared_head.norm(h^k), not the raw block output.
 
     # One persistent SparseMLAReference PER LEVEL, carried across all three chunks. Per level because
     # each level owns its own KV cache -- one shared instance would let level k attend to level k-1's

@@ -188,12 +188,6 @@ def glm_mtp_module_reference(
     return x, out, out_head_normed, kvpe_cache
 
 
-# ``h^{k-1}`` — which of the previous level's two output forms feeds level k's ``hnorm``.
-CHAIN_FROM_NORM = "norm"  # out_head_normed, i.e. shared_head.norm(h^{k-1})
-CHAIN_FROM_RAW = "raw"  # out, i.e. h^{k-1} straight off the decoder layer
-CHAIN_FROM_CHOICES = (CHAIN_FROM_NORM, CHAIN_FROM_RAW)
-
-
 def glm_mtp_predictor_reference(
     config,
     mla_weights,
@@ -208,7 +202,6 @@ def glm_mtp_predictor_reference(
     moe_weights: dict | None = None,
     num_levels: int | None = None,
     index_share: bool = True,
-    chain_from: str = CHAIN_FROM_NORM,
     positions: torch.Tensor | None = None,
     hiddens=None,
     mla_refs=None,
@@ -237,9 +230,6 @@ def glm_mtp_predictor_reference(
             cosmetic: with ``seq_len > config.index_topk`` (5120 > 2048) top-k is selective on ~60%
             of rows, so a reference that recomputed per level would disagree with a sharing device
             on most of the sequence and the disagreement would look like a module bug.
-        chain_from: which output form of level k-1 feeds level k's ``hnorm`` —
-            ``"norm"`` (``out_head_normed``, the default) or ``"raw"`` (``out``). Kept a parameter
-            on both sides so settling it is a flag flip and a PCC comparison, not an edit.
         hiddens: teacher forcing. K hidden states, ``hiddens[k]`` used as level k+1's ``H^k``
             INSTEAD of the chained value. ``None`` (the default) chains, matching the device.
             Pass the DEVICE's own per-level hidden states to compare each level against the
@@ -266,7 +256,6 @@ def glm_mtp_predictor_reference(
         level that wrote the wrong slot fails loudly. Nothing else catches a slot collision — each
         level reads back only what it just wrote, so its *output* is right either way.
     """
-    assert chain_from in CHAIN_FROM_CHOICES, f"chain_from must be one of {CHAIN_FROM_CHOICES}, got {chain_from!r}"
     embeds = list(embeds)
     if num_levels is None:
         num_levels = len(embeds)
@@ -311,6 +300,7 @@ def glm_mtp_predictor_reference(
         outs.append(out)
         normeds.append(out_head_normed)
         kvpes.append(kvpe)
-        h = out_head_normed if chain_from == CHAIN_FROM_NORM else out
+        # H^k = shared_head.norm(h^k); mirrors TtMTPPredictor.forward.
+        h = out_head_normed
 
     return xs, outs, normeds, torch.cat(kvpes, dim=0)

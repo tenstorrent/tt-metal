@@ -38,7 +38,6 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.reference.glm_5_2.mtp import (
-    CHAIN_FROM_NORM,
     fused_mtp_reference,
     glm_mtp_module_reference,
     glm_mtp_predictor_reference,
@@ -474,10 +473,6 @@ def test_mtp_predictor_pcc(
     topology = per_axis_topology(device_params["fabric_config"])
     mesh_shape = list(mesh_device.shape)
     layer_idx = mtp_cfg.mtp_layer_idx
-    # Pinned locally and passed to BOTH sides: a default that changed on one side only would show up
-    # as a numerical failure at level 2 rather than as the configuration mismatch it is.
-    chain_from = CHAIN_FROM_NORM
-
     config = _glm52_config_for_mtp(config_only, seq_len, layer_idx)
     hidden = config.hidden_size
     assert hidden == mtp_cfg.hidden_size
@@ -494,7 +489,6 @@ def test_mtp_predictor_pcc(
         seq_len=seq_len,
         num_levels=num_levels,
         layer_idx=layer_idx,
-        chain_from=chain_from,
         tp_axis=TP_AXIS,
         num_links=num_links,
         topology=topology,
@@ -511,7 +505,7 @@ def test_mtp_predictor_pcc(
 
     logger.info(f"[mtp predictor] running {num_levels} device level(s), index_share={predictor.index_share}")
     res = predictor.forward(
-        [_to_device(e, mesh_device) for e in embeds],
+        lambda k, _prev: _to_device(embeds[k], mesh_device),
         _to_device(h0, mesh_device),
         rope_tensors=rope_tensors,
         kvpe_cache=kvpe_cache,
@@ -533,7 +527,6 @@ def test_mtp_predictor_pcc(
         moe_weights=moe_weights,
         num_levels=num_levels,
         index_share=predictor.index_share,
-        chain_from=chain_from,
     )
 
     tt_kv = res.kv_cache  # host torch already, [K, 1, seq, kv_lora_rank + qk_rope_head_dim]
@@ -570,7 +563,7 @@ def test_mtp_predictor_pcc(
         assert pe_pcc > kv_threshold, f"L{lvl} KVPE PE PCC {pe_pcc:.6f} below {kv_threshold}"
 
     ttnn.synchronize_device(mesh_device)
-    logger.success(f"[mtp predictor] K={num_levels} passed (chain_from={chain_from})")
+    logger.success(f"[mtp predictor] K={num_levels} passed")
 
 
 @pytest.mark.parametrize(
@@ -640,7 +633,7 @@ def test_mtp_predictor_index_share(
 
     def _run(share: bool):
         return predictor.forward(
-            [_to_device(e, mesh_device) for e in embeds],
+            lambda k, _prev: _to_device(embeds[k], mesh_device),
             _to_device(h0, mesh_device),
             rope_tensors=rope_tensors,
             kvpe_cache=kvpe_cache,

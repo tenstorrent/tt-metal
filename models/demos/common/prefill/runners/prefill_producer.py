@@ -646,7 +646,7 @@ def _kvpe_pcc_vs_golden(golden, device_kv, kv_lora: int, golden_pe_layout: str =
 
 
 def _mtp_golden_source(trunk_trace_dir):
-    """Where the MTP levels' golden comes from, and which rope convention it stores.
+    """Where the MTP levels' golden comes from, and which rope conventions it stores.
 
     The MTP golden lives in its OWN trace: a tail trace holds kv_cache/layer_{NUM_LAYERS..} and no
     trunk layer, the trunk trace holds the trunk and no MTP layer, so one trace_dir cannot serve both.
@@ -658,10 +658,21 @@ def _mtp_golden_source(trunk_trace_dir):
     "interleaved" and is not: transformers' `apply_rotary_pos_emb_interleave` de-interleaves its input
     (`view(d//2, 2).transpose(4, 3)`) and then applies plain `rotate_half`, so the name describes the
     weight convention it accepts and its OUTPUT is half-split. Measured both ways on this trace, so
-    PREFILL_MTP_GOLDEN_PE_LAYOUT is here for a golden that really is interleaved, not for that one."""
+    PREFILL_MTP_GOLDEN_PE_LAYOUT is here for a golden that really is interleaved, not for that one.
+
+    The INDEX key needs its own layout, and for the same trace the answer differs from k_pe's: GLM-5.2
+    is rope-asymmetric (MLA half-split, DSA indexer interleaved per `indexer_rope_interleave`), so HF's
+    uniform `rotate_half` gets k_pe right and the index key wrong in one forward pass. Both defaults are
+    half-split because that is what the one tail trace stores; a regenerated trace that ropes its index
+    key interleaved sets PREFILL_MTP_GOLDEN_INDEX_ROPE_LAYOUT=interleaved and the re-base becomes a
+    no-op. Unlike k_pe's, this one cannot be a reindex -- see _rebase_index_k_rope."""
     spec = os.environ.get("PREFILL_MTP_TRACE_DIR", "").strip()
     mtp_dir = resolve_trace_dir(spec) if spec else trunk_trace_dir
-    return mtp_dir, os.environ.get("PREFILL_MTP_GOLDEN_PE_LAYOUT", "").strip() or "half_split"
+    return (
+        mtp_dir,
+        os.environ.get("PREFILL_MTP_GOLDEN_PE_LAYOUT", "").strip() or "half_split",
+        os.environ.get("PREFILL_MTP_GOLDEN_INDEX_ROPE_LAYOUT", "").strip() or "half_split",
+    )
 
 
 def _check_mtp_kv_slots(
@@ -727,7 +738,7 @@ def _check_mtp_kv_slots(
     if not per_level:
         return None  # no MTP level is resident on this rank (only the last rank runs them)
 
-    golden_dir, pe_layout = _mtp_golden_source(trace_dir)
+    golden_dir, pe_layout, _ = _mtp_golden_source(trace_dir)
     missing = [NUM_LAYERS + k for k, _ in per_level if not kv_golden_present(golden_dir, NUM_LAYERS + k)]
     if missing:
         logger.info(
@@ -913,6 +924,29 @@ def _full_indexer_layer_indices(num_layers: int):
     return [layer for layer in range(num_layers) if not indexer_layer_is_reused(hf_config, layer)]
 
 
+def _mtp_index_diag(golden, dev, slot_id: int, layer: int) -> None:
+    """PREFILL_MTP_INDEX_DIAG=1: localize an MTP index-K mismatch. Splits the PCC by chunk and by the
+    index key's two column halves (rope is the FIRST 64, nope the rest -- opposite of MLA), which
+    separates "one column half is wrong" from "only the first N chunks were written"; both fit the
+    aggregate figure. Dumps both tensors so the rest of the diagnosis needs no device."""
+    from tests.ttnn.utils_for_testing import comp_pcc
+
+    g, d = golden.float(), dev.float()
+    rope = g.shape[-1] // 2
+    for lo, hi in ((0, rope), (rope, g.shape[-1])):
+        _, pcc = comp_pcc(g[:, lo:hi], d[:, lo:hi])
+        logger.info(f"[producer]   mtp_index cols [{lo:>3},{hi:>3}) -> {pcc:.6f}")
+    for lo in range(0, g.shape[0], CHUNK_SIZE):
+        hi = min(lo + CHUNK_SIZE, g.shape[0])
+        _, pcc = comp_pcc(g[lo:hi], d[lo:hi])
+        logger.info(f"[producer]   mtp_index rows [{lo:>6},{hi:>6}) -> {pcc:.6f}")
+    out = os.environ.get("PREFILL_MTP_INDEX_DIAG_DIR", "generated/mtp_index_diag")
+    os.makedirs(out, exist_ok=True)
+    dest = os.path.join(out, f"mtp_index_slot{slot_id}_layer{layer}.pt")
+    torch.save({"golden": golden, "device": dev}, dest)
+    logger.info(f"[producer]   mtp_index tensors dumped -> {dest}")
+
+
 def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_len: int, trace_dir):
     from models.demos.deepseek_v3_d_p.tt.mla.indexer import normalized_hadamard_matrix
     from models.demos.deepseek_v3_d_p.tt.runners.prefill_kv_validation import (
@@ -971,26 +1005,55 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
     if mtp_min is not None:
         mins["mtp"] = mtp_min
     if _num_model_configs(table) > 1:
-        if not index_golden_present(trace_dir):
-            logger.warning(
-                f"[producer] slot {slot_id}: table has an index config but {trace_dir} carries no "
-                f"indexer-key golden; validating the KVPE cache only (device index cache NOT checked)."
-            )
-            return mins
-
         index_head_dim = ADAPTER.model_config.INDEX_HEAD_DIM
         index_hadamard = normalized_hadamard_matrix(index_head_dim).float()
         n_index_layers = table.config(1).num_layers
         full_layers = _full_indexer_layer_indices(NUM_LAYERS)
-        index_rows = list(range(n_index_layers)) if full_layers is None else full_layers
-        assert full_layers is None or max(full_layers) < n_index_layers, (
-            f"config 1 has {n_index_layers} rows but layers [0,{NUM_LAYERS}) put a full indexer at layer "
-            f"{max(full_layers)}. On the layer axis the extent must cover the deepest full-indexer "
-            f"layer; a compacted (rank-axis) table reaching here would read another layer's keys."
-        )
+        # (layer, golden trace): the MTP row's golden lives in a different trace from the trunk's, so
+        # each side is gated on ITS OWN trace. A trunk trace with no indexer key (some vLLM dumps ship
+        # only dsa_topk_indices_*) must not silently take the MTP check down with it.
+        index_rows = []
+        if index_golden_present(trace_dir):
+            index_rows = [
+                (layer, trace_dir) for layer in (range(n_index_layers) if full_layers is None else full_layers)
+            ]
+            assert full_layers is None or max(full_layers) < n_index_layers, (
+                f"config 1 has {n_index_layers} rows but layers [0,{NUM_LAYERS}) put a full indexer at layer "
+                f"{max(full_layers)}. On the layer axis the extent must cover the deepest full-indexer "
+                f"layer; a compacted (rank-axis) table reaching here would read another layer's keys."
+            )
+        else:
+            logger.warning(
+                f"[producer] slot {slot_id}: table has an index config but {trace_dir} carries no "
+                f"indexer-key golden; the trunk index cache is NOT checked."
+            )
+        n_trunk_rows = len(index_rows)
+        # The MTP module owns ONE indexer, shared by every level, in the slot right past the trunk --
+        # enable_mtp_indexer_slot declares it, and config 1 is published on the layer axis, so this
+        # layer number selects it. Its golden is in the MTP tail trace; ask that trace for it, since
+        # index_golden_present(trunk) is True for layers this one does not carry.
+        mtp_index_layer = None
+        mtp_index_layout = "interleaved"
+        if MTP_LEVELS and full_layers is not None:
+            mtp_dir, _, mtp_index_layout = _mtp_golden_source(trace_dir)
+            if index_golden_present(mtp_dir, NUM_LAYERS):
+                assert NUM_LAYERS < n_index_layers, (
+                    f"config 1 has {n_index_layers} rows, so the MTP indexer slot at layer {NUM_LAYERS} "
+                    f"is off its layer axis: the table was built compacted and this lookup would read "
+                    f"another layer's keys."
+                )
+                mtp_index_layer = NUM_LAYERS
+                index_rows.append((mtp_index_layer, mtp_dir))
+            else:
+                logger.warning(
+                    f"[producer] slot {slot_id}: {mtp_dir} carries no indexer-key golden for layer "
+                    f"{NUM_LAYERS}; the MTP index cache is NOT checked."
+                )
+
         min_index = 1.0
         checked_index = 0
-        for layer in index_rows:
+        mtp_index_pcc = None
+        for layer, golden_dir in index_rows:
             loc0 = table.lookup(layer, 0, slot_id, 1)
             try:
                 _resolve_unique_id(table.get_device_group(loc0.device_group_index).fabric_node_ids, device_map)
@@ -1007,18 +1070,44 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
                 decoded_rows.append(_decode_kv_chunk(raw, index_head_dim))
             dev_ik = torch.cat(decoded_rows, dim=0)[:real_len]
 
-            golden_ik = _load_golden_index_k(trace_dir, layer, real_len)
+            # Only the MTP row is re-based: the trunk goldens come from a vLLM trace that already
+            # ropes its index key interleaved (measured; they read 0.9846 as stored), so re-basing them
+            # would BREAK them -- this is the row whose trace disagrees, not a blanket conversion.
+            is_mtp_row = layer == mtp_index_layer
+            golden_ik = _load_golden_index_k(
+                golden_dir, layer, real_len, rope_layout=mtp_index_layout if is_mtp_row else "interleaved"
+            )
             dev_ik = (dev_ik.float() @ index_hadamard).to(torch.bfloat16)
             _, pcc_index = comp_pcc(golden_ik, dev_ik)
-            min_index = min(min_index, pcc_index)
-            checked_index += 1
+            if is_mtp_row:
+                mtp_index_pcc = pcc_index
+                if mtp_index_layout != "interleaved":
+                    # Log the as-stored figure next to it. The re-based one is the device's verdict, but
+                    # alone it would read as the trace agreeing with the device, which it does not.
+                    _, pcc_stored = comp_pcc(_load_golden_index_k(golden_dir, layer, real_len), dev_ik)
+                    logger.info(
+                        f"[producer]   mtp_index golden as-stored ({mtp_index_layout}) {pcc_stored:.6f} -> "
+                        f"re-based onto the device's rope pairing {pcc_index:.6f}"
+                    )
+                if os.environ.get("PREFILL_MTP_INDEX_DIAG", "0") == "1":
+                    _mtp_index_diag(golden_ik, dev_ik, slot_id, layer)
+            else:
+                min_index = min(min_index, pcc_index)
+                checked_index += 1
             logger.info(f"[producer] slot {slot_id} layer {layer:>2} index PCC: {pcc_index:.5f}")
 
-        logger.info(
-            f"[producer] slot {slot_id} index PCC over [0,{real_len}) across "
-            f"{checked_index}/{len(index_rows)} local layers -> {min_index:.6f}"
-        )
-        mins["index"] = min_index
+        # Absent, not a fictitious 1.0, when nothing was compared -- same convention as "mtp" above.
+        if checked_index:
+            logger.info(
+                f"[producer] slot {slot_id} index PCC over [0,{real_len}) across "
+                f"{checked_index}/{n_trunk_rows} local layers -> {min_index:.6f}"
+            )
+            mins["index"] = min_index
+        # Its own number, not folded into "index": the trunk figure stays comparable across runs, and
+        # this is the one that says whether the MTP module's indexer is right. Same gate either way.
+        if mtp_index_pcc is not None:
+            logger.info(f"[producer] slot {slot_id} MTP layer {mtp_index_layer} index PCC -> {mtp_index_pcc:.6f}")
+            mins["mtp_index"] = mtp_index_pcc
 
     return mins
 
