@@ -19,6 +19,8 @@
 
 #define HYB_MERGED 1
 #include "hybrid_merged_prologue.hpp"
+// Declarations only -- the real CB API is not in scope until a half pulls it in.
+#include "hybrid_cb_shims.hpp"
 
 #define HYB_NS hyb_fused
 #define HYB_CT_BASE 0
@@ -55,6 +57,10 @@
 
 // After both halves, so it sees the dataflow API they pulled in; compiles to nothing on a compute
 // kernel, which has no NoC of its own.
+// Both halves have pulled in the CB API by now, so the shims declared above can be defined.
+#define HYB_CB_SHIMS_DEFINE 1
+#include "hybrid_cb_shims.hpp"
+
 #include "hybrid_pass_barrier.hpp"
 
 void kernel_main() {
