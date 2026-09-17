@@ -1,5 +1,11 @@
 # Early-exit cost attribution against PR #56632
 
+**Comparison scope:** this report compares a padded 5120-token prototype with
+the PR physically cropped to the valid length. It explains a loss of efficiency
+relative to trimming, not a slowdown against the PR's unpadded 5120-token run.
+For the requested fixed-5120 baseline and padding sweep, see
+[fixed-capacity experiments](KDA_FIXED_CAPACITY_PADDING.md).
+
 ## Finding
 
 **Preparation's fixed work assignment is the main source of the recurrence
