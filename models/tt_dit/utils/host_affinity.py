@@ -74,48 +74,77 @@ def one_thread_per_core(sysfs_cpu: str | None = None, allowed: set[int] | None =
 
 
 def pin_one_thread_per_core(reason: str = "LTX pipeline") -> list[int] | None:
-    """Apply the one-sibling-per-core affinity mask to this process (idempotent).
+    """Narrow every thread that still carries the full CPU mask to one hardware thread per core.
 
-    Only narrows the current mask (never widens a mask an operator already set), honours
-    ``LTX_PIN_CORES=0``, and logs once. Returns the CPUs pinned to, or ``None`` if nothing changed.
+    Only threads whose mask is the whole online set are touched: tt-metal pins its per-device dispatch
+    and reader threads to single CPUs of its own choosing (spread over both sibling sets), and those
+    placements must be left alone -- re-pinning them measured worse than not pinning at all. Threads
+    created later inherit their creator's mask, and helpers born before the first call can still spawn
+    full-mask threads, so the call is repeated after the device is open; it is cheap and idempotent per
+    thread. torch's intra-op pool is capped to the chosen core count as well (it sizes itself from the
+    CPU count it saw at import). Honours ``LTX_PIN_CORES=0``; no-op without SMT.
     """
-    global _applied
     if os.environ.get("LTX_PIN_CORES", "1") in ("0", "false", "False"):
         return None
-    if _applied is not None:
-        return sorted(_applied)
     if not hasattr(os, "sched_getaffinity"):
         return None
     try:
-        current = set(os.sched_getaffinity(0))
+        full = set(os.sched_getaffinity(0)) if _applied is None else _full_set()
     except OSError:
         return None
-    chosen = one_thread_per_core(allowed=current)
-    if chosen is None or set(chosen) == current:
+    chosen = _applied if _applied is not None else set(one_thread_per_core(allowed=full) or [])
+    if not chosen or chosen == full:
         return None
-    # Affinity is per thread on Linux, and the device's dispatch and reader threads already exist by the
-    # time a pipeline is built (the mesh is opened first), so pin every thread of the process, not just
-    # the caller; threads created later inherit their creator's mask.
-    pinned, failed = 0, 0
+    narrowed = 0
     for tid in _thread_ids():
         try:
-            os.sched_setaffinity(tid, set(chosen))
-            pinned += 1
+            mask = set(os.sched_getaffinity(tid))
         except OSError:
-            failed += 1  # a thread that exited between listing and pinning
-    if pinned == 0:
-        logger.warning("host affinity: could not pin any thread; leaving the mask alone")
-        return None
-    _applied = set(chosen)
-    logger.info(
-        f"host affinity: {reason} pinned to one hardware thread per core: {len(chosen)} of {len(current)} CPUs, "
-        f"{pinned} threads (LTX_PIN_CORES=0 disables)"
-    )
-    return sorted(_applied)
+            continue  # exited between listing and reading
+        if mask != full:
+            continue  # explicitly placed (tt-metal) or already narrowed: leave it
+        try:
+            os.sched_setaffinity(tid, chosen)
+            narrowed += 1
+        except OSError:
+            continue
+    first = _applied is None
+    _set_applied(chosen, full)
+    if first:
+        _cap_torch_threads(len(chosen))
+    if narrowed or first:
+        logger.info(
+            f"host affinity: {reason}: {len(chosen)} of {len(full)} CPUs (one hardware thread per core), "
+            f"narrowed {narrowed} full-mask threads (LTX_PIN_CORES=0 disables)"
+        )
+    return sorted(chosen)
+
+
+_full: set[int] | None = None
+
+
+def _full_set() -> set[int]:
+    return set(_full) if _full is not None else set(os.sched_getaffinity(0))
+
+
+def _set_applied(chosen: set[int], full: set[int]) -> None:
+    global _applied, _full
+    _applied, _full = set(chosen), set(full)
+
+
+def _cap_torch_threads(n: int) -> None:
+    """torch sizes its intra-op pool from the CPU count it saw at import; cap it to the pinned cores."""
+    try:
+        import torch
+
+        if torch.get_num_threads() > n:
+            torch.set_num_threads(n)
+    except Exception:  # torch absent or pool already fixed: nothing to do
+        return
 
 
 def _thread_ids() -> list[int]:
-    """All thread ids of this process (``/proc/self/task``), the calling thread first; falls back to just 0."""
+    """All thread ids of this process (``/proc/self/task``); falls back to just the caller."""
     try:
         tids = sorted(int(t) for t in os.listdir("/proc/self/task"))
     except OSError:
