@@ -24,6 +24,7 @@ from tracy import signpost
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.demos.deepseek_v3_d_p.tt.moe import routing_collector
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping, get_ep_mesh_mapper
 from models.demos.deepseek_v3_d_p.tt.moe.tt_combine import TtCombineModule
 from models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch import TtDispatchModule
@@ -298,6 +299,7 @@ class TtMoe(LightweightModule):
         self.experts_per_chip = experts_per_chip
         self.num_routed_experts = num_routed_experts
         self.num_experts_per_tok = num_experts_per_tok
+        self.layer_idx = layer_idx
         self.seq_len_per_chip = seq_len_per_chip
         self.emb_dim = emb_dim
         self.hidden_dim = hidden_dim
@@ -803,6 +805,19 @@ class TtMoe(LightweightModule):
         x = ttnn.deallocate(x, force=True)
         scores = ttnn.to_memory_config(scores, ttnn.DRAM_MEMORY_CONFIG)
         indices = ttnn.to_memory_config(indices, ttnn.DRAM_MEMORY_CONFIG)
+
+        if routing_collector.wants(self.layer_idx):
+            # Reference only. The buffer is already in DRAM and dispatch has consumed it, so this
+            # costs a live allocation and nothing else -- reading it here would synchronize the
+            # host inside the region being timed.
+            routing_collector.retain(
+                self.layer_idx,
+                indices,
+                actual_start=actual_start,
+                actual_isl=actual_isl,
+                num_routed_experts=self.num_routed_experts,
+                num_experts_per_tok=self.num_experts_per_tok,
+            )
 
         signpost("dispatch_and_shared_expert_end")
 

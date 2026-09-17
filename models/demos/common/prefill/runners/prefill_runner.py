@@ -520,6 +520,15 @@ def main() -> None:
 
     _serve_request(runtime, kv_caches, mesh_device, hf_config, rank, num_ranks, is_first_rank)
 
+    if os.environ.get("TT_MOE_ROUTING_CAPTURE"):
+        # Drained here rather than per forward: the selections stay on device until the request
+        # has finished and the measurement boundary has closed. Imported lazily so this runner
+        # keeps working for models that do not ship the collector.
+        from models.demos.deepseek_v3_d_p.tt.moe import routing_collector
+
+        out_dir = os.environ.get("TT_MOE_ROUTING_OUT", "moe_routing")
+        routing_collector.drain(mesh_device, os.path.join(out_dir, f"rank{rank}.pt"))
+
     _release_trace = getattr(runtime, "release_trace", None)
     if _release_trace is not None:
         _release_trace()

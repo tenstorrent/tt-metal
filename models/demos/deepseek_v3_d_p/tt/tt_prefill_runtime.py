@@ -17,6 +17,7 @@ from models.demos.deepseek_v3_d_p.tt.dflash_prefill.dflash_drafter_config import
 from models.demos.deepseek_v3_d_p.tt.dflash_prefill.tt_dflash_drafter import TtDFlashDrafter
 from models.demos.deepseek_v3_d_p.tt.dflash_prefill.utils import load_drafter_state_dict
 from models.demos.deepseek_v3_d_p.tt.mla.rope import ChunkMetadata, _llama4_scale_geometry
+from models.demos.deepseek_v3_d_p.tt.moe import routing_collector
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE
 from models.demos.deepseek_v3_d_p.tt.runners.input_prep import prepare_prefill_input_tensor
@@ -693,6 +694,8 @@ class TtPrefillRuntime:
         # Not gated on self.compiled: compile() warms up by calling prefill_chunk() once before
         # marking the runtime compiled. The model must exist, though.
         assert self.model_built, "build the model before prefill_chunk()"
+        # TtMoe.forward is not handed request_id, so the routing collector reads it from here.
+        routing_collector.set_request(request_id, actual_start)
         # Host-side scalars are validated only when supplied. On the traced serving path they arrive
         # None: the per-chunk (slot_id, actual_start, actual_end) live on-device in metadata_msg and are
         # copied into the persistent buffers below, so there are no host ints to range-check.
