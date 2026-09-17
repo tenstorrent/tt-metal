@@ -3,9 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Thin wrapper around compute_kernel_lib::reduce<>. The input data format is deduced from the input
-// buffer inside the helper, so Int32 MAX, MIN and SUM are routed to the SFPU path automatically;
-// otherwise FPU/GMPOOL. Accurate fp32 also uses the SFPU; fast-mode float/bf16 MIN is lowered to
-// -MAX(-x) via reduce_{h,w}_neg on the host.
+// buffer inside the helper, so Int32 MAX, MIN and SUM, and bf16 MIN, are routed to the SFPU path
+// automatically; otherwise FPU/GMPOOL. Accurate fp32 also uses the SFPU. Every other MIN (bfloat8_b,
+// fast-mode fp32, Quasar bf16) never reaches here: the host rewrites it as -MAX(-x) and dispatches
+// reduce_{h,w}_neg instead.
 
 #include <cstdint>
 #include "api/compute/cb_api.h"
