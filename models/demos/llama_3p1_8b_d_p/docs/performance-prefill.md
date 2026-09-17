@@ -3,7 +3,7 @@
 
 # Llama-3.1-8B-Instruct: prefill performance
 
-**32K execution and performance passed on 17 September 2026.** The two slots reached about **1,076 and 1,072 tokens/s/user**. These are warmed eager host-wall measurements. Saved 2K, 4K, 8K and 16K results are retained without new runs.
+**64K execution and performance passed on 17 September 2026.** Both slots reached about **541 tokens/s/user**, with warmed prompt wall time about **121.2 seconds**. These are eager host-wall measurements. Saved 2K, 4K, 8K, 16K and 32K results are retained without new runs.
 
 Each chunk runs embedding, all 32 decoder layers, final RMSNorm and the full vocabulary head. Configuration: SP4/TP8, two independent slots, BF16 weights/activations, BFP8_B cache, 1,024-token chunks, no tracing. Capacity equals the tested prompt length.
 
@@ -23,8 +23,10 @@ One warmup ran per slot. Then three measured requests ran per slot, alternating 
 | 16K books | 1 | 8,772.629 (8,770.791–8,796.333) | 8,755.833 (8,754.786–8,771.069) | 1,867.63 (1,862.59–1,868.02) |
 | 32K books | 0 | 30,440.846 (30,173.171–30,580.015) | 30,408.173 (30,138.385–30,542.304) | 1,076.45 (1,071.55–1,086.00) |
 | 32K books | 1 | 30,563.509 (30,309.807–30,729.001) | 30,524.658 (30,269.160–30,690.541) | 1,072.13 (1,066.35–1,081.10) |
+| 64K books | 0 | 121,224.269 (120,942.946–121,959.984) | 121,153.030 (120,865.290–121,880.157) | 540.62 (537.36–541.88) |
+| 64K books | 1 | 121,168.995 (120,655.567–121,542.637) | 121,099.289 (120,583.446–121,473.366) | 540.86 (539.20–543.17) |
 
-2K used the earlier chat fixtures and source snapshot; 4K, 8K, 16K and 32K use book passages and the capacity-enabled model. Their fixed book endpoints differ. The 4K/8K runs used b09u02; the 16K/32K runs used c04u14. This table records different contexts, fixtures and machines. It is not a controlled speedup or regression comparison.
+2K used the earlier chat fixtures and source snapshot; 4K, 8K, 16K, 32K and 64K use book passages and the capacity-enabled model. Their fixed book endpoints differ. The 4K/8K runs used b09u02; the 16K/32K/64K runs used c04u14. This table records different contexts, fixtures and machines. It is not a controlled speedup or regression comparison.
 
 ## Per-chunk medians
 
@@ -154,8 +156,136 @@ One warmup ran per slot. Then three measured requests ran per slot, alternating 
 | 32K books | 1 | [29696,30720) | 946.670 | 947.737 |
 | 32K books | 1 | [30720,31744) | 949.222 | 950.268 |
 | 32K books | 1 | [31744,32768) | 938.838 | 939.884 |
+| 64K books | 0 | [0,1024) | 1908.547 | 1909.671 |
+| 64K books | 0 | [1024,2048) | 1906.390 | 1907.403 |
+| 64K books | 0 | [2048,3072) | 1911.814 | 1912.827 |
+| 64K books | 0 | [3072,4096) | 1922.413 | 1923.442 |
+| 64K books | 0 | [4096,5120) | 1922.943 | 1923.995 |
+| 64K books | 0 | [5120,6144) | 1926.295 | 1927.299 |
+| 64K books | 0 | [6144,7168) | 1891.665 | 1892.644 |
+| 64K books | 0 | [7168,8192) | 1900.895 | 1901.936 |
+| 64K books | 0 | [8192,9216) | 1889.849 | 1890.889 |
+| 64K books | 0 | [9216,10240) | 1879.974 | 1880.966 |
+| 64K books | 0 | [10240,11264) | 1899.361 | 1900.372 |
+| 64K books | 0 | [11264,12288) | 1909.442 | 1910.465 |
+| 64K books | 0 | [12288,13312) | 1922.069 | 1923.153 |
+| 64K books | 0 | [13312,14336) | 1930.365 | 1931.375 |
+| 64K books | 0 | [14336,15360) | 1904.997 | 1905.968 |
+| 64K books | 0 | [15360,16384) | 1927.441 | 1928.426 |
+| 64K books | 0 | [16384,17408) | 1880.878 | 1881.853 |
+| 64K books | 0 | [17408,18432) | 1897.142 | 1898.155 |
+| 64K books | 0 | [18432,19456) | 1909.822 | 1910.840 |
+| 64K books | 0 | [19456,20480) | 1895.661 | 1896.638 |
+| 64K books | 0 | [20480,21504) | 1927.990 | 1928.989 |
+| 64K books | 0 | [21504,22528) | 1902.132 | 1904.210 |
+| 64K books | 0 | [22528,23552) | 1875.060 | 1876.068 |
+| 64K books | 0 | [23552,24576) | 1873.901 | 1874.988 |
+| 64K books | 0 | [24576,25600) | 1890.536 | 1894.524 |
+| 64K books | 0 | [25600,26624) | 1891.082 | 1893.356 |
+| 64K books | 0 | [26624,27648) | 1885.701 | 1886.754 |
+| 64K books | 0 | [27648,28672) | 1886.543 | 1887.481 |
+| 64K books | 0 | [28672,29696) | 1888.355 | 1889.512 |
+| 64K books | 0 | [29696,30720) | 1883.824 | 1884.847 |
+| 64K books | 0 | [30720,31744) | 1882.864 | 1883.890 |
+| 64K books | 0 | [31744,32768) | 1883.808 | 1884.841 |
+| 64K books | 0 | [32768,33792) | 1873.129 | 1874.101 |
+| 64K books | 0 | [33792,34816) | 1910.067 | 1911.189 |
+| 64K books | 0 | [34816,35840) | 1930.136 | 1931.228 |
+| 64K books | 0 | [35840,36864) | 1893.574 | 1894.618 |
+| 64K books | 0 | [36864,37888) | 1891.638 | 1894.413 |
+| 64K books | 0 | [37888,38912) | 1892.049 | 1893.094 |
+| 64K books | 0 | [38912,39936) | 1887.610 | 1888.637 |
+| 64K books | 0 | [39936,40960) | 1903.971 | 1905.022 |
+| 64K books | 0 | [40960,41984) | 1904.194 | 1905.243 |
+| 64K books | 0 | [41984,43008) | 1904.426 | 1905.478 |
+| 64K books | 0 | [43008,44032) | 1884.954 | 1886.052 |
+| 64K books | 0 | [44032,45056) | 1886.250 | 1887.360 |
+| 64K books | 0 | [45056,46080) | 1895.108 | 1896.211 |
+| 64K books | 0 | [46080,47104) | 1904.624 | 1905.643 |
+| 64K books | 0 | [47104,48128) | 1873.918 | 1874.969 |
+| 64K books | 0 | [48128,49152) | 1879.301 | 1880.364 |
+| 64K books | 0 | [49152,50176) | 1883.829 | 1884.929 |
+| 64K books | 0 | [50176,51200) | 1876.648 | 1877.783 |
+| 64K books | 0 | [51200,52224) | 1888.315 | 1889.403 |
+| 64K books | 0 | [52224,53248) | 1888.175 | 1889.253 |
+| 64K books | 0 | [53248,54272) | 1882.761 | 1884.992 |
+| 64K books | 0 | [54272,55296) | 1884.471 | 1885.568 |
+| 64K books | 0 | [55296,56320) | 1875.051 | 1876.106 |
+| 64K books | 0 | [56320,57344) | 1878.304 | 1879.376 |
+| 64K books | 0 | [57344,58368) | 1882.681 | 1883.742 |
+| 64K books | 0 | [58368,59392) | 1873.346 | 1874.811 |
+| 64K books | 0 | [59392,60416) | 1877.426 | 1878.487 |
+| 64K books | 0 | [60416,61440) | 1884.351 | 1885.430 |
+| 64K books | 0 | [61440,62464) | 1858.056 | 1859.125 |
+| 64K books | 0 | [62464,63488) | 1874.012 | 1875.013 |
+| 64K books | 0 | [63488,64512) | 1887.715 | 1891.799 |
+| 64K books | 0 | [64512,65536) | 1850.040 | 1851.072 |
+| 64K books | 1 | [0,1024) | 1929.433 | 1930.585 |
+| 64K books | 1 | [1024,2048) | 1932.247 | 1933.283 |
+| 64K books | 1 | [2048,3072) | 1914.646 | 1915.682 |
+| 64K books | 1 | [3072,4096) | 1902.091 | 1903.087 |
+| 64K books | 1 | [4096,5120) | 1913.449 | 1915.433 |
+| 64K books | 1 | [5120,6144) | 1907.979 | 1909.004 |
+| 64K books | 1 | [6144,7168) | 1917.979 | 1919.012 |
+| 64K books | 1 | [7168,8192) | 1930.105 | 1931.134 |
+| 64K books | 1 | [8192,9216) | 1933.415 | 1934.441 |
+| 64K books | 1 | [9216,10240) | 1925.031 | 1926.047 |
+| 64K books | 1 | [10240,11264) | 1910.848 | 1911.925 |
+| 64K books | 1 | [11264,12288) | 1914.312 | 1915.299 |
+| 64K books | 1 | [12288,13312) | 1920.201 | 1921.189 |
+| 64K books | 1 | [13312,14336) | 1927.908 | 1931.135 |
+| 64K books | 1 | [14336,15360) | 1925.357 | 1926.404 |
+| 64K books | 1 | [15360,16384) | 1897.943 | 1899.009 |
+| 64K books | 1 | [16384,17408) | 1907.715 | 1908.766 |
+| 64K books | 1 | [17408,18432) | 1906.040 | 1907.029 |
+| 64K books | 1 | [18432,19456) | 1905.244 | 1906.320 |
+| 64K books | 1 | [19456,20480) | 1880.153 | 1881.139 |
+| 64K books | 1 | [20480,21504) | 1886.440 | 1887.432 |
+| 64K books | 1 | [21504,22528) | 1892.200 | 1893.226 |
+| 64K books | 1 | [22528,23552) | 1887.569 | 1888.641 |
+| 64K books | 1 | [23552,24576) | 1882.245 | 1883.323 |
+| 64K books | 1 | [24576,25600) | 1878.257 | 1879.289 |
+| 64K books | 1 | [25600,26624) | 1885.295 | 1887.044 |
+| 64K books | 1 | [26624,27648) | 1876.152 | 1877.198 |
+| 64K books | 1 | [27648,28672) | 1874.303 | 1875.279 |
+| 64K books | 1 | [28672,29696) | 1879.745 | 1880.770 |
+| 64K books | 1 | [29696,30720) | 1904.970 | 1905.995 |
+| 64K books | 1 | [30720,31744) | 1878.839 | 1879.894 |
+| 64K books | 1 | [31744,32768) | 1873.314 | 1874.369 |
+| 64K books | 1 | [32768,33792) | 1878.763 | 1879.868 |
+| 64K books | 1 | [33792,34816) | 1865.103 | 1866.125 |
+| 64K books | 1 | [34816,35840) | 1869.128 | 1870.162 |
+| 64K books | 1 | [35840,36864) | 1864.342 | 1865.377 |
+| 64K books | 1 | [36864,37888) | 1859.161 | 1860.220 |
+| 64K books | 1 | [37888,38912) | 1886.592 | 1887.613 |
+| 64K books | 1 | [38912,39936) | 1868.221 | 1869.214 |
+| 64K books | 1 | [39936,40960) | 1890.757 | 1891.819 |
+| 64K books | 1 | [40960,41984) | 1876.352 | 1877.443 |
+| 64K books | 1 | [41984,43008) | 1879.834 | 1880.831 |
+| 64K books | 1 | [43008,44032) | 1880.122 | 1881.218 |
+| 64K books | 1 | [44032,45056) | 1869.456 | 1870.538 |
+| 64K books | 1 | [45056,46080) | 1884.440 | 1885.510 |
+| 64K books | 1 | [46080,47104) | 1879.769 | 1880.828 |
+| 64K books | 1 | [47104,48128) | 1893.989 | 1895.098 |
+| 64K books | 1 | [48128,49152) | 1887.373 | 1888.441 |
+| 64K books | 1 | [49152,50176) | 1887.197 | 1888.265 |
+| 64K books | 1 | [50176,51200) | 1889.019 | 1890.130 |
+| 64K books | 1 | [51200,52224) | 1885.031 | 1886.109 |
+| 64K books | 1 | [52224,53248) | 1887.036 | 1888.121 |
+| 64K books | 1 | [53248,54272) | 1869.236 | 1870.294 |
+| 64K books | 1 | [54272,55296) | 1864.239 | 1865.341 |
+| 64K books | 1 | [55296,56320) | 1878.818 | 1879.876 |
+| 64K books | 1 | [56320,57344) | 1868.519 | 1869.725 |
+| 64K books | 1 | [57344,58368) | 1868.227 | 1869.335 |
+| 64K books | 1 | [58368,59392) | 1863.265 | 1864.354 |
+| 64K books | 1 | [59392,60416) | 1876.662 | 1877.746 |
+| 64K books | 1 | [60416,61440) | 1860.206 | 1861.717 |
+| 64K books | 1 | [61440,62464) | 1896.371 | 1897.428 |
+| 64K books | 1 | [62464,63488) | 1896.564 | 1897.653 |
+| 64K books | 1 | [63488,64512) | 1862.118 | 1863.238 |
+| 64K books | 1 | [64512,65536) | 1863.159 | 1864.257 |
 
-The [six measured requests](performance-prefill-4k-requests.csv) and [all 24 measured chunks](performance-prefill-4k-chunks.csv) retain the unrounded seconds. The [six 8K measured requests](performance-prefill-8k-requests.csv) and [all 48 8K measured chunks](performance-prefill-8k-chunks.csv) use the same units. The [six 16K measured requests](performance-prefill-16k-requests.csv) and [all 96 16K measured chunks](performance-prefill-16k-chunks.csv) retain the same unrounded seconds. The [six 32K measured requests](performance-prefill-32k-requests.csv) and [all 192 32K measured chunks](performance-prefill-32k-chunks.csv) retain the same unrounded seconds. Independently calculated medians need not add exactly.
+The [six measured requests](performance-prefill-4k-requests.csv) and [all 24 measured chunks](performance-prefill-4k-chunks.csv) retain the unrounded seconds. The [six 8K measured requests](performance-prefill-8k-requests.csv) and [all 48 8K measured chunks](performance-prefill-8k-chunks.csv) use the same units. The [six 16K measured requests](performance-prefill-16k-requests.csv) and [all 96 16K measured chunks](performance-prefill-16k-chunks.csv) retain the same unrounded seconds. The [six 32K measured requests](performance-prefill-32k-requests.csv) and [all 192 32K measured chunks](performance-prefill-32k-chunks.csv) retain the same unrounded seconds. The [six 64K measured requests](performance-prefill-64k-requests.csv) and [all 384 64K measured chunks](performance-prefill-64k-chunks.csv) retain the same unrounded seconds. Independently calculated medians need not add exactly.
 
 ## What the timer includes
 
@@ -249,6 +379,27 @@ Each fixed 32,768-token raw-book prefix includes one BOS and uses the same Instr
 
 After “and it”, the model predicts **is**. The actual book token is **always**, ranked **71st**, so this endpoint does not match the book. **the** matches the next token in Great Expectations and ranks first. All repeats gave the same observations. These two endpoints are a next-token sanity check, not a golden accuracy result or a free-running generation test.
 
+## 64K startup and book observations
+
+| 64K startup or check | Wall time |
+|---|---:|
+| Fixture/tokenizer load | 1.538 s |
+| Model/cache load and synchronization | 75.419 s |
+| Slot 0 warmup | 752.110 s |
+| Slot 1 warmup | 120.499 s |
+| Post-timer readback/check/ranking per request | 37.374–37.992 s |
+
+The first 64K warmup grew the program cache from 10 to 676 entries. All six measured requests stayed at 676. All 16,384 chip/chunk checks across eight requests were finite and exactly matched their slot/chunk warmup. The complete pytest case took 2031.316 seconds; that includes setup and cold work and is not warmed prefill latency.
+
+Each fixed 65,536-token raw-book prefix includes one BOS and uses the same Instruct checkpoint. No chat template or decode loop ran.
+
+| Book | Prompt ending | Predicted token | Actual book token | Actual token rank | Top five tokens |
+|---|---|---|---|---:|---|
+| Pride and Prejudice | …care about, and who was equally poor?” “But there | is | seems | 12 | `is`, `are`, `was`, `may`, `must` |
+| Great Expectations | …bundle of incompetence always to be dragged and shouldered. | And | I | 2 | `And`, `I`, `It`, `She`, `What` |
+
+After “But there”, **is** is a plausible continuation; the book uses **seems**, ranked 12th. At the Great Expectations sentence boundary, the model predicts **And**; the book's **I** ranks second. Neither endpoint matches the actual next book token. All repeats gave the same observations. These are next-token observations, not a golden accuracy result or a free-running generation test.
+
 ## Coverage and limits
 
 | Length | Status |
@@ -258,9 +409,10 @@ After “and it”, the model predicts **is**. The actual book token is **always
 | 8K | Full 32-layer book execution, finite/repeated outputs and eager timing passed |
 | 16K | Full 32-layer book execution, finite/repeated outputs and eager timing passed |
 | 32K | Full 32-layer book execution, finite/repeated outputs and eager timing checks completed |
-| 64K / 128K | Pending live results; fixed book inputs prepared |
+| 64K | Full 32-layer book execution, finite/repeated outputs and eager timing checks completed |
+| 128K | Pending live result; fixed book inputs prepared |
 
-No golden KV comparison was run in the 4K, 8K, 16K or 32K benchmarks. The earlier incomplete larger-context golden matrix remains historical and is not called a complete pass. Future lengths use one combined execution/performance/book run after resource review. Native migration has separate tests. Decoder and SC4 work are outside the current scope.
+No golden KV comparison was run in the 4K, 8K, 16K, 32K or 64K benchmarks. The earlier incomplete larger-context golden matrix remains historical and is not called a complete pass. Future lengths use one combined execution/performance/book run after resource review. Native migration has separate tests. Decoder and SC4 work are outside the current scope.
 
 Attention currently gathers and reorders the entire configured cache for every layer/chunk before selecting the logical prefix. A short prompt with a larger allocation may have different latency. Do not infer 128K performance from these results. These numbers do not measure concurrent serving, decode, device kernel time, network TTFT or general numerical accuracy.
 
@@ -343,5 +495,24 @@ The site-specific files below are on shared Exabox storage. They bind the exact 
 | Controller | 182916fd5ea41e9a6567bccdb01c957e8aae6ea964c963012a0f3cf3c82cbeab |
 | Test | cf518f6617e09a7317a7d4ab0745591bcabb049d81741a7389573647604b31c0 |
 | Full source/native pin manifest | ae958102a1d21e69d5f08329ee61ab170a2090b4b3feb3cf79fb198769de7ca7 |
+
+### 64K source and reproduction
+
+64K ran on **bh-glx-120-c04u14**, job **108887**, source HEAD **79cfe66a2068413715921cc2098237863d8cfc11**. Actual/dispatch/verified exits are 0. One exact JUnit case passed without errors/skips; all **14,666** pinned files stayed unchanged. The 32-device mesh closed at **2026-09-17 11:29:01.810 UTC**. Root verification independently recomputed timing and checked coverage, source identity and both book observations. This accepts the execution/performance scope only.
+
+- [64K root verification](/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-runs-007/64k-c04-001/root-verification.json)
+- [64K controller verification](/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-runs-007/64k-c04-001/attempts/attempt-002-bfp8-64k/verification.json)
+- [Exact 64K pytest command](/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-runs-007/64k-c04-001/attempts/attempt-002-bfp8-64k/pytest-command.json)
+- [Frozen reusable test](/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-preparation-007/test_long_context_performance.py)
+- [Reusable launcher and guarded commands](/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-launch-007/README.md)
+- [64K source manifest](/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-runs-007/64k-c04-001/attempts/attempt-002-bfp8-64k/source-hashes.json)
+
+| 64K artifact | SHA256 |
+|---|---|
+| Report | 5c27a68f0b956fc3dbdd8c6eff922d55c0bde75dbcc4ed19bf55b0d73a57da96 |
+| Root verification | 1e323e0b97003e797bbd051641ae876c3abfd83ac9d7b4264ee02f213daef8b6 |
+| Controller | 182916fd5ea41e9a6567bccdb01c957e8aae6ea964c963012a0f3cf3c82cbeab |
+| Test | cf518f6617e09a7317a7d4ab0745591bcabb049d81741a7389573647604b31c0 |
+| Full source/native pin manifest | 5d0586a2b56a85ac98ddc58867831aa53d8f3efd166c5df2f3b925cd8cb5dec3 |
 
 Do not repeat saved measurements for documentation, tests or other small changes that leave execution unchanged. Reconsider measurement after material changes to precision, communication, chunking, model work or kernels.

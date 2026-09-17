@@ -14,8 +14,8 @@ The user revised the plan on 17 September:
 - Develop and test native migration on the prefill side in parallel, starting at 2K.
 - Do not develop or test the decode side. Use passive buffers for native transport verification.
 
-Use only the assigned Galaxies: **c04u14 for prefill validation/performance** and **b09u02 for native migration work**.
-The old b07u08 allocation is released. The live page records current job IDs and lease times.
+Use only user-assigned Galaxies. The c04u14 and b09u02 allocations used for the saved tests are no longer active.
+Source preparation and publication continue; new device runs wait for assigned hardware. The live page records current hardware status.
 Keep SP=4, TP=8, two independent slots, BF16 weights/activations and BFP8_B cache.
 
 ## Milestones and present evidence
@@ -27,8 +27,9 @@ Keep SP=4, TP=8, two independent slots, BF16 weights/activations and BFP8_B cach
 | 4K full model | Book benchmark passed: eight requests, 1,024 finite/repeated chip outputs, stable sources and clean close; median 3,869 / 3,857 tokens/s/user | Retain these measurements; advance to the next length |
 | 8K | Book benchmark passed: eight requests, 2,048 finite/repeated chip outputs, stable sources and clean close; median 2,854 / 2,842 tokens/s/user | Retain these measurements; 16K execution is now verified |
 | 16K | Book benchmark passed: eight requests, 4,096 finite/repeated chip outputs, stable sources and clean close; median 1,873 / 1,868 tokens/s/user | Retain these measurements; 32K execution is now verified |
-| 32K | Book benchmark passed: eight requests, 8,192 finite/repeated chip outputs, stable sources and clean close; median 1,076 / 1,072 tokens/s/user | Retain these measurements; advance to 64K after resource review |
-| 64K / 128K | Fixed book inputs ready; resource costs reviewed from source | Review the prior measured length and current memory/lease before each run |
+| 32K | Book benchmark passed: eight requests, 8,192 finite/repeated chip outputs, stable sources and clean close; median 1,076 / 1,072 tokens/s/user | Retain these measurements; 64K execution is now verified |
+| 64K | Full32 book benchmark passed: eight requests, 16,384 finite/repeated chip outputs, stable sources and clean close; 121.224 / 121.169 s, 540.618 / 540.864 tokens/s/user | Retain these measurements; 128K is next after hardware/resource checks |
+| 128K | Fixed book inputs ready; resource costs reviewed from source; not run | Await assigned hardware, then validate memory/lease and run |
 | 2K migration runtime | Live H2D/readiness/table gate and local packed copy passed: four interleaved chunks, 128 acknowledgements, all 16 configs and 65,536 byte-identical destination pages | Build the native transfer dependencies, then test tt-d-gen transfer |
 | Native KV transfer | Host contracts and local same-device packed copy pass; native-manager transfer remains untested | Build prerequisites, then two-host native transfer and exact destination-byte checks |
 | Decode / SC4 handoff | Outside the current scope by user instruction | No decode preparation or tests |
@@ -97,7 +98,7 @@ Do not infer 128K execution or performance from capacity allocation or short-con
 
 ## Published measurement scope
 
-See [prefill performance](docs/performance-prefill.md) for saved 2K results, verified 4K, 8K, 16K and 32K book measurements, all measured request/chunk samples and exact evidence hashes. Larger lengths remain pending; no full golden-matrix acceptance is implied.
+See [prefill performance](docs/performance-prefill.md) for saved 2K results, verified 4K, 8K, 16K, 32K and 64K book measurements, all measured request/chunk samples and exact evidence hashes. 128K remains pending; no full golden-matrix acceptance is implied.
 
 The 2K runtime result uses a corrected direct-run lifecycle verifier. The original verifier expected a pytest-only log message. The correction checks the native 32-device fabric event, exact physical inventory and final close. The original result is preserved; no model rerun or native-manager pass is implied. See the [root verification](/data/divanovic/llama31-8b-disagg/evidence/task-10-native-migration/readiness-003-verifier-correction-001/root-verification.json).
 
