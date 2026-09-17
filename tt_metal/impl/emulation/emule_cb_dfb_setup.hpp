@@ -20,16 +20,14 @@
 
 namespace tt::tt_metal {
 class IDevice;
-namespace detail {
-class ProgramImpl;
-}
-namespace experimental::dfb {
-struct DataflowBufferConfig;
-}
 }  // namespace tt::tt_metal
 namespace tt::umd {
 class SWEmuleChip;
 }
+namespace tt_emule {
+struct SocView;
+struct EmuleProgramDescriptor;
+}  // namespace tt_emule
 
 namespace tt::tt_metal::emule {
 
@@ -60,17 +58,21 @@ struct KernelInfo {
     uint32_t num_unique_rt_args = 0;
 };
 
-// DFB allocation info for a single DFB on a core. Only device_slot and base_addr
-// are genuinely new per-core state; everything else (entry_size, num_entries,
-// risc masks, num_producers/consumers, cap) is read from the borrowed config
-// pointer, whose backing DataflowBufferImpl is owned by ProgramImpl and
-// outlives one program execution.
+// DFB allocation info for a single DFB on a core. device_slot and base_addr are the
+// per-core allocation result; the config scalars are copied from the DfbDescriptor POD
+// so launch_cores needs no tt-metal DFB type.
 struct DFBAllocInfo {
     // Matches the dfb::<name> accessor value the emulated kernel uses, so all per-core tables
     // (CB sync, tile counters, interface slots) are keyed by slot rather than by program-wide id.
     uint32_t device_slot = 0;
     uint32_t base_addr = 0;
-    const tt::tt_metal::experimental::dfb::DataflowBufferConfig* cfg = nullptr;
+    uint32_t entry_size = 0;
+    uint32_t num_entries = 0;
+    uint8_t num_producers = 0;
+    uint8_t num_consumers = 0;
+    uint16_t producer_risc_mask = 0;
+    uint16_t consumer_risc_mask = 0;
+    bool is_all = false;  // config cap == ALL
 };
 
 struct CoreSetup {
@@ -90,11 +92,12 @@ struct CoreSetup {
 
 // Definitions in emule_cb_dfb_setup.cpp.
 void setup_core_state(
-    detail::ProgramImpl& impl,
     IDevice* device,
     tt::umd::SWEmuleChip* sw_emu,
     std::map<CoreCoord, std::vector<KernelInfo>>& core_kernels,
     uint32_t emule_sem_base,
+    const tt_emule::SocView& soc,
+    const tt_emule::EmuleProgramDescriptor& pd,
     std::vector<CoreSetup>& core_setups);
 
 std::vector<std::unique_ptr<tt_emule::EmuleDFBInterface[]>> build_per_thread_dfb_interfaces(

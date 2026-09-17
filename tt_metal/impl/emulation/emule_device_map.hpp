@@ -15,6 +15,7 @@ class SWEmuleChip;
 }
 namespace tt_emule {
 class Core;
+struct SocView;  // the marshaller's flat device-geometry POD (emule_program_descriptor.hpp)
 }
 
 // Bank-mapping constants and the four bank arrays live at GLOBAL scope with unmangled
@@ -39,12 +40,13 @@ extern int32_t bank_to_l1_offset[MAX_NUM_BANKS];
 
 namespace tt::tt_metal::emule {
 
-// Populate the DRAM/L1 bank arrays above from the SoC descriptor + host allocator, so a
-// kernel's interleaved-address bank index resolves to the worker/DRAM core the host wrote.
+// Populate the DRAM/L1 bank arrays above from the marshaller's SocView (built by
+// tt_emule::build_soc_view), so a kernel's interleaved-address bank index resolves to the
+// worker/DRAM core the host wrote. A runtime diff-guard asserts SocView == the direct
+// metal_SocDescriptor/allocator reads this used to do.
 void populate_bank_mapping(
     tt::umd::SWEmuleChip* sw_emu,
-    IDevice* device,
-    ChipId device_id,
+    const tt_emule::SocView& soc,
     tt_emule::Core*& dram_core_out,
     uint32_t& num_dram_channels_out,
     uint32_t& num_l1_banks_out);
@@ -62,7 +64,7 @@ uint64_t get_pcie_base_cached(uint32_t device_id);
 // Build (cached) the physical {x,y}->Core* map for a device's NOC resolution. The cache globals
 // are exposed below because the fabric resolver reads them directly to resolve a peer chip's map.
 std::unordered_map<uint64_t, tt_emule::Core*>* build_core_map(
-    tt::umd::SWEmuleChip* sw_emu, IDevice* device, ChipId device_id);
+    tt::umd::SWEmuleChip* sw_emu, IDevice* device, ChipId device_id, const tt_emule::SocView& soc);
 
 extern std::mutex g_core_map_mutex;
 extern std::unordered_map<uint32_t, std::shared_ptr<std::unordered_map<uint64_t, tt_emule::Core*>>> g_core_map_cache;

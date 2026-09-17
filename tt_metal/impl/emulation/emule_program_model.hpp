@@ -1,9 +1,9 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
-// collect_kernels — per-programmable-core-type kernel-group iteration that builds the JIT
-// variant set. Produces PendingKernelInfo (consumed by the engine's launch path) and
-// DeferredCompile tasks (emule_jit). See docs.
+// collect_kernels — walks the descriptor's kernels and builds the JIT variant set. Produces
+// PendingKernelInfo (consumed by the engine's launch path) and DeferredCompile tasks (emule_jit).
+// Reads only EmuleProgramDescriptor + SocView — no private tt-metal Program/Kernel. See docs.
 
 #include <cstdint>
 #include <functional>
@@ -15,9 +15,10 @@
 #include <tt-metalium/core_coord.hpp>
 #include "emule_jit.hpp"  // DeferredCompile
 
-namespace tt::tt_metal::detail {
-class ProgramImpl;
-}
+namespace tt_emule {
+struct EmuleProgramDescriptor;
+struct SocView;
+}  // namespace tt_emule
 
 namespace tt::tt_metal::emule {
 
@@ -42,9 +43,9 @@ struct PendingKernelInfo {
     uint32_t num_unique_rt_args = 0;  // size of the per-core (rta) region; see KernelInfo
 };
 
-// Definition in emule_program_model.cpp.
+// Definition in emule_program_model.cpp. Reads only the descriptor + SocView (no private
+// tt-metal Program/Kernel); the marshaller (build_emule_descriptor) is the sole private reader.
 void collect_kernels(
-    detail::ProgramImpl& impl,
     uint32_t num_dram_channels,
     uint32_t num_l1_banks,
     const std::string& worker_col_map_str,
@@ -54,6 +55,8 @@ void collect_kernels(
     std::map<CoreCoord, std::vector<PendingKernelInfo>>& pending_core_kernels,
     std::map<std::string, DeferredCompile>& deferred_compiles,
     std::unordered_map<std::string, std::function<void()>>& resolved_fns,
-    std::vector<std::string>& inline_src_temps);
+    std::vector<std::string>& inline_src_temps,
+    const tt_emule::EmuleProgramDescriptor& desc,
+    const tt_emule::SocView& soc);
 
 }  // namespace tt::tt_metal::emule

@@ -20,6 +20,7 @@
 #include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
 
+#include "jit_build/jit_build_settings.hpp"
 #include "jit_build/jit_build_utils.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_emule/kernel_patcher.hpp"
@@ -160,8 +161,8 @@ static std::function<void()> jit_compile_kernel(
     const std::vector<uint32_t>& compile_args,
     const std::unordered_map<std::string, uint32_t>& named_compile_args,
     // Blaze-only experimental named args (issue #50953) — begin
-    const NamedCTArgNamespaces& named_ct_arg_namespaces,
-    const NamedRuntimeArgNamespaces& named_runtime_arg_namespaces,
+    const tt_emule::NamedCtNamespaces& named_ct_arg_namespaces,
+    const tt_emule::NamedRtNamespaces& named_runtime_arg_namespaces,
     // Blaze-only experimental named args (issue #50953) — end
     const std::map<std::string, std::string>& defines,
     const std::string& extra_include_flags,
@@ -204,8 +205,17 @@ static std::function<void()> jit_compile_kernel(
     // 2c. Blaze EXPERIMENTAL named kernel args.
     // Emule's JIT path bypasses genfiles; call the experimental helper to
     // emit named_args_generated.h. Included from wrapper.cpp when non-empty.
-    bool has_named_args =
-        experimental::blaze::emit_named_args_header(dir, named_ct_arg_namespaces, named_runtime_arg_namespaces);
+    // Materialize the private NamedRuntimeArgNamespaces from the POD (dispatch int -> enum); the CT
+    // POD type is structurally identical to NamedCTArgNamespaces, so it binds to the emitter directly.
+    NamedRuntimeArgNamespaces rt_private;
+    for (const auto& [ns, entries] : named_runtime_arg_namespaces) {
+        auto& out = rt_private[ns];
+        for (const auto& e : entries) {
+            out.push_back(
+                NamedRuntimeArgEntry{e.field, e.index, e.length, static_cast<RuntimeArgDispatch>(e.dispatch)});
+        }
+    }
+    bool has_named_args = experimental::blaze::emit_named_args_header(dir, named_ct_arg_namespaces, rt_private);
     ////////////////////////////////////////////////////////////
 
     // 3. Write wrapper.cpp
@@ -384,9 +394,9 @@ std::string get_extra_include_flags() {
 // ---------------------------------------------------------------------------
 // Resolve a kernel's source to an on-disk path. FILE_PATH sources are used as-is;
 // inline sources are spilled to a temp file and tracked for cleanup.
-std::string resolve_kernel_source_path(const KernelSource& ksrc, std::vector<std::string>& inline_src_temps) {
-    if (ksrc.source_type_ == KernelSource::FILE_PATH) {
-        return ksrc.path_.string();
+std::string resolve_kernel_source_path(const tt_emule::SourceRef& src, std::vector<std::string>& inline_src_temps) {
+    if (src.is_file) {
+        return src.path;
     }
     static constexpr int kTmpSuffixLen = 4;  // length of ".cpp" suffix
     char tmpf[] = "/tmp/tt_emule_src_XXXXXX.cpp";
@@ -394,7 +404,7 @@ std::string resolve_kernel_source_path(const KernelSource& ksrc, std::vector<std
     if (fd < 0) {
         throw std::runtime_error("execute_program_emulated: mkstemps failed");
     }
-    const std::string& content = ksrc.source_;
+    const std::string& content = src.inline_src;
     const char* buf = content.c_str();
     size_t remaining = content.size();
     while (remaining > 0) {
@@ -413,14 +423,14 @@ std::string resolve_kernel_source_path(const KernelSource& ksrc, std::vector<std
 }
 
 // A same-relative-path source in jit_hw is emule's implementation of a Metal file kernel.
-std::string resolve_emule_kernel_source_shadow(const std::string& src_path, ContextId context_id) {
+std::string resolve_emule_kernel_source_shadow(const std::string& src_path, uint32_t context_id) {
     std::error_code ec;
     const auto source = std::filesystem::weakly_canonical(src_path, ec);
     if (ec) {
         return src_path;
     }
-    const auto root =
-        std::filesystem::weakly_canonical(MetalContext::instance(context_id).rtoptions().get_root_dir(), ec);
+    const auto root = std::filesystem::weakly_canonical(
+        MetalContext::instance(ContextId{static_cast<int>(context_id)}).rtoptions().get_root_dir(), ec);
     if (ec) {
         return src_path;
     }

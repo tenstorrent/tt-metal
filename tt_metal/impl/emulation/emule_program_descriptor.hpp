@@ -24,7 +24,6 @@
 #include <array>
 #include <cstdint>
 #include <map>
-#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -41,8 +40,9 @@ using KernelHandle = uint32_t;
 struct DramView {  // one per metal_SocDescriptor DRAM view
     uint32_t noc_xy[2] = {
         0, 0};  // [NOC0,NOC1] = (y<<NOC_NODE_ID_BITS)|x  get_preferred_worker_core_for_dram_view(v,noc)
-    uint32_t address_offset = 0;   // metal_SocDescriptor::get_address_offset(v)
-    uint32_t logical_channel = 0;  // umd soc_descriptor::translate_coord_to(TRANSLATED->LOGICAL)
+    uint32_t address_offset = 0;  // metal_SocDescriptor::get_address_offset(v)
+    // The umd LOGICAL channel is resolved on the consumer side (build_core_map) from the chip's own
+    // umd descriptor, so it is not carried here.
 };
 struct L1Bank {
     uint32_t logical_x = 0, logical_y = 0;  // allocator->get_logical_core_from_bank_id(b)
@@ -82,7 +82,7 @@ struct SourceRef {  // Kernel::kernel_source()
 struct NamedRtEntry {  // NamedRuntimeArgEntry (jit_build_settings.hpp)
     std::string field;
     uint32_t index = 0, length = 0;
-    bool dispatch = false;
+    uint32_t dispatch = 0;  // RuntimeArgDispatch enum value (kept numeric for cache-key parity)
 };
 using NamedCtNamespaces =
     std::map<std::string, std::vector<std::pair<std::string, uint32_t>>>;    // process_named_ct_arg_namespaces
@@ -120,6 +120,10 @@ struct Bindings {
     std::vector<ScratchBinding> scratch;
 };
 
+struct CoreRange4 {
+    uint32_t sx = 0, sy = 0, ex = 0, ey = 0;
+};  // an inclusive logical core-range box (KernelGroup / kernel core_range_set)
+
 struct KernelDescriptor {
     KernelHandle id = 0;
     SourceRef source;                                                   // kernel_source()
@@ -133,42 +137,49 @@ struct KernelDescriptor {
     uint32_t processor_class = 0;                                       // get_kernel_processor_class()
     uint32_t processor_type = 0;                                        // get_kernel_processor_type(0)
     bool is_compute = false;                                            // processor_class == COMPUTE
-    uint32_t dm_processor = 0;  // DataMovementKernel::config().processor (RISCV_0/1->BRISC/NCRISC)
+    bool is_quasar_compute = false;        // is_compute && dynamic_cast<QuasarComputeKernel>
+    uint32_t dm_processor = 0;             // DataMovementKernel::config().processor (RISCV_0/1->BRISC/NCRISC)
+    bool is_data_movement = false;         // dynamic_cast<DataMovementKernel> succeeds
+    uint32_t compile_processor_index = 0;  // hal.get_processor_index(core_type, class, COMPILE_FOR idx)
+    bool has_compute_config = false;       // config() held a ComputeConfig
     bool fp32_dest_acc_en = false, dst_full_sync_en = false;  // ComputeKernel::config()
     std::vector<uint32_t> proc_ids;
     uint32_t num_threads = 1;                   // Quasar get_dm/compute_processors, else single
     std::vector<uint32_t> common_runtime_args;  // common_runtime_args()  (program-wide)
     Bindings bindings;                          // build_metal2_snapshot()
-    // core_range_set + per-core unique runtime args are per-core -> CoreKernel below.
+    std::vector<CoreRange4> core_ranges;        // core_range_set().ranges()  (per-core placement bound)
+    // Per-core launch offsets + unique runtime args live in CoreKernel below.
 };
 
-// Per (kernel, logical-core): the unique runtime-arg values on this core.
+// Per (kernel, logical-core): the launch offsets + unique runtime-arg values on this core.
+// The marshaller resolves the KernelGroup launch_msg here so the consumer needs no KG/firmware read.
 struct CoreKernel {
     KernelHandle kernel = 0;
-    std::vector<uint32_t> unique_rt_args;  // Kernel::runtime_args(core)  (empty => use common_runtime_args)
+    uint32_t kernel_config_base = 0;                     // KG launch_msg kernel_config()[pct]
+    uint16_t rta_offset = 0xFFFF, crta_offset = 0xFFFF;  // KG rta_offset[processor_index] (0xFFFF = no args)
+    std::vector<uint32_t> unique_rt_args;                // Kernel::runtime_args(core)  (empty => common only)
 };
 
 // ─────────────────────────────── Circular buffers ───────────────────────────────
 // Silicon keeps TWO stores; the POD mirrors them and NEVER folds them:
 //   RING  = the four L1 config words -> tt_emule::CBSyncState.
 //   GEOM  = the compile-time tile/face descriptor -> build_kernel_defines / EMULE_TILE_*.
-// tile_size derives from the Tile, never from page_size. The precedence
-// (explicit FaceGeometry > CB Tile > full-tile) is EMULE logic, so the POD carries
-// the RAW optionals and resolve_tile_geometry (emule_tile_geometry) applies it.
-struct TileGeom {
-    uint32_t r_dim = 0, c_dim = 0;
-    bool partial_face = false, narrow_tile = false;
-};  // tile(idx) -> Tile::get_height/width/partial_face/narrow_tile
-struct FaceGeom {
-    uint32_t face_r_dim = 0, num_faces = 0;
-};  // unpack_face_geometry(idx)
-struct CbBuffer {                         // one local buffer index
-    uint8_t index = 0;                    // local_buffer_indices()
-    uint32_t page_size = 0;               // page_size(index)    -- RING
-    uint32_t num_pages = 0;               // num_pages(index)    -- RING
-    uint32_t data_format = 0;             // data_format(index)  (tt::DataFormat raw) -- GEOM
-    std::optional<TileGeom> tile;         // tile(index)                 -- GEOM (raw)
-    std::optional<FaceGeom> unpack_face;  // unpack_face_geometry(index) -- GEOM (raw)
+// tile_size derives from the Tile, never from page_size. The tile/face precedence
+// (explicit FaceGeometry > CB Tile > full-tile) is EMULE logic that needs the live
+// tt-metal Tile, so the MARSHALLER applies resolve_tile_geometry and stores the
+// RESOLVED primitives here; consumers read them directly and never rebuild a Tile.
+struct ResolvedGeom {        // resolve_tile_geometry(tile, unpack_face) applied on the marshaller side
+    uint32_t tile_size = 0;  // ResolvedTileGeometry::tile.get_tile_size(data_format)
+    uint32_t tile_r_dim = 32, tile_c_dim = 32;   // effective tile height / width
+    uint32_t face_r_dim = 16, num_faces = 4;     // resolved face_r_dim / num_faces
+    uint32_t partial_face = 0, narrow_tile = 0;  // effective tile partial_face / narrow_tile flags
+};
+struct CbBuffer {              // one local buffer index
+    uint8_t index = 0;         // local_buffer_indices()
+    uint32_t page_size = 0;    // page_size(index)    -- RING
+    uint32_t num_pages = 0;    // num_pages(index)    -- RING
+    uint32_t data_format = 0;  // data_format(index)  (tt::DataFormat raw) -- GEOM
+    ResolvedGeom geom;         // tile(index) + unpack_face_geometry(index), resolved -- GEOM
 };
 struct CbDescriptor {
     uint32_t address = 0;             // address()            -- RING
@@ -187,8 +198,7 @@ struct DfbDescriptor {
     bool has_finalize = false;
     uint32_t finalize_l1_offset = 0;  // core_lookup_[core].second.second
     uint32_t data_format = 0;         // config.data_format  (feeds the CB tables)
-    std::optional<TileGeom> tile;
-    std::optional<FaceGeom> unpack_face;  // config.tile / .unpack_face_geometry
+    ResolvedGeom geom;                // config.tile / .unpack_face_geometry, resolved (valid data_format only)
 };
 
 // ─────────────────────────────── Semaphores ───────────────────────────────
@@ -206,9 +216,6 @@ struct SemaphoreDescriptor {
 struct ProcLaunchOffset {
     uint32_t processor_index = 0, rta_offset = 0, crta_offset = 0;
 };
-struct CoreRange4 {
-    uint32_t sx = 0, sy = 0, ex = 0, ey = 0;
-};  // KernelGroup::core_ranges.ranges()
 struct KernelGroupDescriptor {
     uint32_t pct = 0;                            // programmable-core-type index
     uint32_t kernel_config_base = 0;             // kc.kernel_config_base()[pct]
@@ -238,6 +245,7 @@ struct EmuleProgramDescriptor {
     ProgramConfig config;
     std::vector<KernelGroupDescriptor> kernel_groups;
     std::unordered_map<KernelHandle, KernelDescriptor> kernels;  // union of get_kernels(pct)
+    std::vector<KernelHandle> kernel_order;  // get_kernels(pct) order across pcts (collect_kernels drives on it)
     std::vector<CoreDescriptor> cores;                           // logical_cores()
     std::vector<SemaphoreDescriptor> semaphores;                 // semaphores()
     // SocView is device-scoped (program-invariant) -> build once, pass alongside.

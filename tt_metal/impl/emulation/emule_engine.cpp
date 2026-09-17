@@ -609,7 +609,9 @@ static std::shared_ptr<ResolvedProgram> prepare_program(IDevice* device, Program
     tt_emule::Core* dram_core = nullptr;
     uint32_t num_dram_channels = 0;
     uint32_t num_l1_banks = 0;
-    populate_bank_mapping(sw_emu, device, device_id, dram_core, num_dram_channels, num_l1_banks);
+    const auto emule_soc = tt_emule::build_soc_view(device);
+    populate_bank_mapping(sw_emu, emule_soc, dram_core, num_dram_channels, num_l1_banks);
+    const auto emule_desc = tt_emule::build_emule_descriptor(program, device);
 
     std::string worker_col_map_str, worker_row_map_str;
     build_worker_coord_maps(device, worker_col_map_str, worker_row_map_str);
@@ -628,7 +630,6 @@ static std::shared_ptr<ResolvedProgram> prepare_program(IDevice* device, Program
     std::unordered_map<std::string, std::function<void()>> resolved_fns;
     std::vector<std::string> inline_src_temps;
     collect_kernels(
-        impl,
         num_dram_channels,
         num_l1_banks,
         worker_col_map_str,
@@ -638,7 +639,9 @@ static std::shared_ptr<ResolvedProgram> prepare_program(IDevice* device, Program
         pending_core_kernels,
         deferred_compiles,
         resolved_fns,
-        inline_src_temps);
+        inline_src_temps,
+        emule_desc,
+        emule_soc);
     jit_compile_pending(deferred_compiles, resolved_fns, inline_src_temps);
 
     ResolvedProgram resolved;
@@ -698,18 +701,20 @@ static std::shared_ptr<ResolvedProgram> prepare_program(IDevice* device, Program
 static void dispatch_to_device(
     IDevice* device, Program& program, const std::shared_ptr<ResolvedProgram>& resolved_owner, bool defer_run) {
     ResolvedProgram& resolved = *resolved_owner;
-    auto& impl = program.impl();
     auto device_id = device->id();
     auto* sw_emu = get_sw_emulated_chip(device_id);
 
     tt_emule::Core* dram_core = nullptr;
     uint32_t num_dram_channels = 0;
     uint32_t num_l1_banks = 0;
-    populate_bank_mapping(sw_emu, device, device_id, dram_core, num_dram_channels, num_l1_banks);
+    const auto emule_soc = tt_emule::build_soc_view(device);
+    const auto emule_desc = tt_emule::build_emule_descriptor(program, device);
+    populate_bank_mapping(sw_emu, emule_soc, dram_core, num_dram_channels, num_l1_banks);
 
-    auto* core_map_ptr = build_core_map(sw_emu, device, device_id);
+    auto* core_map_ptr = build_core_map(sw_emu, device, device_id, emule_soc);
     std::vector<CoreSetup> core_setups;
-    setup_core_state(impl, device, sw_emu, resolved.core_kernels, resolved.emule_sem_base, core_setups);
+    setup_core_state(
+        device, sw_emu, resolved.core_kernels, resolved.emule_sem_base, emule_soc, emule_desc, core_setups);
 
     uint8_t* dram_data = dram_core ? dram_core->l1_data() : nullptr;
 
@@ -731,11 +736,10 @@ void execute_program_emulated(IDevice* device, Program& program) {
     auto device_id = device->id();
     log_debug(tt::LogMetal, "execute_program_emulated: device {} starting", device_id);
 
-    // STAGE 1: build + discard (validation); consumers land in Stage 2.
+    // STAGE 1: build + discard the full descriptor (validation); its consumers land in later 2b units.
+    // SocView is now consumed for real by populate_bank_mapping (prepare_program / dispatch_to_device).
     auto _emule_desc = tt_emule::build_emule_descriptor(program, device);
-    auto _emule_soc = tt_emule::build_soc_view(device);
     (void)_emule_desc;
-    (void)_emule_soc;
     // Mark the fabric connection-route table stale: the next op's first connection record clears it, so
     // routes stay scoped to the current op (this op's builds already recorded before this launch).
     g_conn_route_dirty.store(true, std::memory_order_relaxed);

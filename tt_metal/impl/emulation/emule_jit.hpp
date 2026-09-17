@@ -13,9 +13,8 @@
 #include <unordered_map>
 #include <vector>
 
-#include "jit_build/jit_build_settings.hpp"
-#include "impl/kernels/kernel.hpp"
 #include "emule_metal2_emit.hpp"
+#include "emule_program_descriptor.hpp"  // tt_emule::SourceRef, Named{Ct,Rt}Namespaces
 
 namespace tt::tt_metal::emule {
 
@@ -29,8 +28,8 @@ struct DeferredCompile {
     ////////////////////////////////////////////////////////////
     // Blaze-only experimental named args
     // Removal is tracked by issue #50953
-    NamedCTArgNamespaces named_ct_arg_namespaces;
-    NamedRuntimeArgNamespaces named_runtime_arg_namespaces;
+    tt_emule::NamedCtNamespaces named_ct_arg_namespaces;
+    tt_emule::NamedRtNamespaces named_runtime_arg_namespaces;
     ////////////////////////////////////////////////////////////
     std::map<std::string, std::string> defines;
     std::string extra_inc;
@@ -44,8 +43,8 @@ extern std::unordered_map<std::string, std::function<void()>> g_jit_cache;
 std::uint64_t fnv1a_hash(const std::string& s);
 std::function<void()> disk_cache_lookup(const std::string& cache_key, const std::string& src_path);
 std::string get_extra_include_flags();
-std::string resolve_kernel_source_path(const KernelSource& ksrc, std::vector<std::string>& inline_src_temps);
-std::string resolve_emule_kernel_source_shadow(const std::string& src_path, ContextId context_id);
+std::string resolve_kernel_source_path(const tt_emule::SourceRef& src, std::vector<std::string>& inline_src_temps);
+std::string resolve_emule_kernel_source_shadow(const std::string& src_path, uint32_t context_id);
 void jit_compile_pending(
     std::map<std::string, DeferredCompile>& deferred_compiles,
     std::unordered_map<std::string, std::function<void()>>& resolved_fns,
