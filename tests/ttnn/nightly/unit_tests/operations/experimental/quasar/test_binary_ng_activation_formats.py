@@ -4,10 +4,12 @@
 
 """Format-state regressions for the experimental Quasar API.
 
-Mixed input formats exercise descriptor kernels on WH/BH; the descriptor
-factory is not executable on Quasar yet (QUASAR_PARITY_GAPS.md). Matching formats
-also exercise the named-DFB factory. The Quasar-native factory currently rejects
-activations. Passing on WH/BH does not validate Quasar-specific LLKs or packers.
+Cases named wh_bh_descriptor cover the WH/BH descriptor implementation, not
+Quasar regressions awaiting a fix. Cases named shared_dfb and the sharded tests
+remain enabled for Quasar's supported routing as well as WH/BH. See
+QUASAR_PARITY_GAPS.md for the factory capability boundary. The Quasar-native
+factory currently rejects activations; these tests do not expand its routing.
+Passing on WH/BH does not validate Quasar-specific LLKs or packers.
 """
 
 import math
@@ -17,7 +19,11 @@ import torch
 
 import ttnn
 
-pytestmark = pytest.mark.nightly
+# This module is selected by TTNN's nightly directory-based CI jobs.
+_WH_BH_ONLY = pytest.mark.skipif(
+    ttnn.get_arch_name() not in ("wormhole_b0", "blackhole"),
+    reason="WH/BH-only descriptor-kernel coverage; Quasar uses the separate DFB implementation",
+)
 
 _GRID = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
 _FULL = (1, 1, 96, 96)  # nine tiles: repeated iterations; sharded cases also have a remainder
@@ -32,6 +38,17 @@ _SHAPES = [
     ((1, 1, 1, 96), (1, 1, 96, 1)),
     ((1, 1, 96, 1), (1, 1, 1, 96)),
 ]
+
+# Keep architecture coverage explicit in the parameter sets, rather than
+# skipping unsupported dtype/shape combinations inside the numerical checks.
+_SHARED_DFB_CASES = [(ttnn.bfloat16, ttnn.bfloat16, shapes) for shapes in _SHAPES] + [
+    (dtype, dtype, (_FULL, _FULL)) for dtype in (ttnn.float32, ttnn.bfloat8_b)
+]
+_WH_BH_DESCRIPTOR_CASES = [
+    (a_dtype, b_dtype, shapes)
+    for a_dtype, b_dtype in [(ttnn.float32, ttnn.bfloat16), (ttnn.bfloat16, ttnn.float32)]
+    for shapes in _SHAPES
+] + [(dtype, dtype, shapes) for dtype in (ttnn.float32, ttnn.bfloat8_b) for shapes in _SHAPES[1:]]
 
 
 def _input(device, shape, dtype, offset, memory_config=ttnn.DRAM_MEMORY_CONFIG):
@@ -52,22 +69,15 @@ def _activations(side):
 
 @pytest.mark.parametrize("op_name", ["add", "multiply"])
 @pytest.mark.parametrize(
-    "a_dtype,b_dtype",
-    [
-        (ttnn.float32, ttnn.bfloat16),
-        (ttnn.bfloat16, ttnn.float32),
-        (ttnn.bfloat16, ttnn.bfloat16),
-        (ttnn.float32, ttnn.float32),
-        (ttnn.bfloat8_b, ttnn.bfloat8_b),
+    "a_dtype,b_dtype,shapes",
+    [pytest.param(*case, id=f"shared_dfb-{i}") for i, case in enumerate(_SHARED_DFB_CASES)]
+    + [
+        pytest.param(*case, id=f"wh_bh_descriptor-{i}", marks=_WH_BH_ONLY)
+        for i, case in enumerate(_WH_BH_DESCRIPTOR_CASES)
     ],
 )
-@pytest.mark.parametrize("shapes", _SHAPES)
 @pytest.mark.parametrize("side", ["none", "lhs", "rhs", "both"])
 def test_fused_activation_formats(device, op_name, a_dtype, b_dtype, shapes, side):
-    if device.arch() == ttnn.device.Arch.QUASAR and a_dtype != b_dtype:
-        pytest.skip("Mixed dtypes require the descriptor factory, which is not executable on Quasar yet")
-    if device.arch() == ttnn.device.Arch.QUASAR and a_dtype != ttnn.bfloat16 and shapes[0] != shapes[1]:
-        pytest.skip("Non-BF16 broadcasts require the descriptor factory, not yet executable on Quasar")
     a, ah = _input(device, shapes[0], a_dtype, 1)
     b, bh = _input(device, shapes[1], b_dtype, 5)
     if side in ("lhs", "both"):
@@ -82,11 +92,16 @@ def test_fused_activation_formats(device, op_name, a_dtype, b_dtype, shapes, sid
 
 
 @pytest.mark.parametrize("op_name", ["subtract", "multiply"])
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b])
+@pytest.mark.parametrize(
+    "dtype",
+    [
+        pytest.param(ttnn.bfloat16, id="shared_dfb-bf16"),
+        pytest.param(ttnn.float32, id="shared_dfb-fp32"),
+        pytest.param(ttnn.bfloat8_b, id="wh_bh_descriptor-bfp8", marks=_WH_BH_ONLY),
+    ],
+)
 @pytest.mark.parametrize("side", ["none", "lhs", "rhs", "both"])
 def test_fused_scalar_activation_formats(device, op_name, dtype, side):
-    if device.arch() == ttnn.device.Arch.QUASAR and dtype == ttnn.bfloat8_b:
-        pytest.skip("Block-float scalars require the descriptor factory, not yet executable on Quasar")
     # Quasar's experimental API currently exposes tensor-first scalar operations.
     a, ah = _input(device, _FULL, dtype, 3)
     scalar = 2.5  # Keep RHS-RELU cases nonzero so a corrupt tensor cannot hide behind multiply-by-zero.
@@ -122,10 +137,15 @@ def test_fused_activation_sharded_chunks(device, op_name, dtype, side):
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat4_b])
-@pytest.mark.parametrize("shapes", _SHAPES[:3])
+@pytest.mark.parametrize(
+    "shapes",
+    [
+        pytest.param(_SHAPES[0], id="shared_dfb-full"),
+        pytest.param(_SHAPES[1], id="wh_bh_descriptor-lhs-row", marks=_WH_BH_ONLY),
+        pytest.param(_SHAPES[2], id="wh_bh_descriptor-rhs-row", marks=_WH_BH_ONLY),
+    ],
+)
 def test_activation_intermediate_format(device, dtype, shapes):
-    if device.arch() == ttnn.device.Arch.QUASAR and shapes[0] != shapes[1]:
-        pytest.skip("Format-changing broadcasts require the descriptor factory, not yet executable on Quasar")
     a, ah = _input(device, shapes[0], dtype, 1)
     b, bh = _input(device, shapes[1], dtype, 5)
     # LOGADDEXP's implicit EXP preprocessing changes block-float inputs to BF16
