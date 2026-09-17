@@ -86,6 +86,7 @@
 #include "ttnn/operations/experimental/deepseek_moe_post_combine_tilize/deepseek_moe_post_combine_tilize_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/post_combine_reduce/post_combine_reduce_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/masked_bincount/masked_bincount_nanobind.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/moe_fanout_reach/moe_fanout_reach_nanobind.hpp"
 #include "ttnn/operations/experimental/high_bw_all_gather/high_bw_all_gather_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/offset_cumsum/offset_cumsum_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/moe_padding_config/moe_padding_config_nanobind.hpp"
@@ -165,6 +166,7 @@ void py_module(nb::module_& mod) {
     matmul::detail::bind_group_attn_matmul(mod);
     matmul_decode::detail::bind_matmul_decode_operation(mod);
     deepseek_prefill::masked_bincount::detail::bind_experimental_masked_bincount_operation(mod);
+    deepseek_prefill::moe_fanout_reach::detail::bind_experimental_moe_fanout_reach_operation(mod);
     high_bw_all_gather::detail::bind_experimental_high_bw_all_gather_operation(mod);
     deepseek_prefill::combine_fabric2d::detail::bind_experimental_combine_fabric2d_operation(mod);
     deepseek_prefill::dispatch_fabric2d::detail::bind_experimental_dispatch_fabric2d_operation(mod);
