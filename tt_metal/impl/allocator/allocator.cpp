@@ -47,7 +47,9 @@ AllocatorImpl::AllocatorImpl(const AllocatorConfig& alloc_config) :
 void AllocatorImpl::validate_bank_assignments() const {
     TT_ASSERT(not bank_id_to_dram_channel_.empty() and not dram_channel_to_bank_ids_.empty());
     TT_ASSERT(dram_channel_to_bank_ids_.size() == config_->num_dram_channels);
-    TT_ASSERT(not bank_id_to_logical_core_.empty() and not logical_core_to_bank_ids_.empty());
+    TT_ASSERT(not logical_core_to_bank_ids_.empty());
+    // A package with no Tensix cores has no worker L1 and therefore no L1 banks to assign.
+    TT_ASSERT(config_->worker_grid.empty() or not bank_id_to_logical_core_.empty());
 }
 
 void AllocatorImpl::init_one_bank_per_channel() {
