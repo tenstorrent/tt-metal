@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import textwrap
@@ -850,7 +851,13 @@ def run_reviews(repo: Repo, reviews: list, head_sha: str = "headsha"):
     )
     (repo.root / "empty").mkdir(exist_ok=True)
     (repo.root / "empty/placeholder.json").write_text("[]")
-    result = subprocess.run([sys.executable, str(shim)], cwd=repo.root, capture_output=True, text=True)
+    result = subprocess.run(
+        [sys.executable, str(shim)],
+        cwd=repo.root,
+        env=dict(os.environ, GITHUB_OUTPUT=str(repo.root / "github-output")),
+        capture_output=True,
+        text=True,
+    )
     server.shutdown()
     return result.returncode, result.stdout, result.stderr
 
@@ -863,6 +870,7 @@ def test_approval_from_the_files_own_code_owner_satisfies_the_gate(repo: Repo):
     )
     assert code == 0, stderr
     assert "approved by: @mtairum" in stdout
+    assert "review-met=true" in (repo.root / "github-output").read_text().splitlines()
 
 
 def test_approval_from_an_unrelated_owner_does_not_satisfy_the_gate(repo: Repo):
@@ -870,16 +878,18 @@ def test_approval_from_an_unrelated_owner_does_not_satisfy_the_gate(repo: Repo):
     repo.write(".github/CODEOWNERS", CODEOWNERS)
     repo.write("tests/pipeline_reorg/sample_galaxy_tests.yaml", BASE_GALAXY_YAML.replace("test_alpha", "test_beta"))
     code, _, stderr = run_reviews(repo, [{"state": "APPROVED", "commit_id": "headsha", "user": {"login": "roseli-TT"}}])
-    assert code == 1
+    assert code == 0, stderr
+    assert "review-met=false" in (repo.root / "github-output").read_text().splitlines()
     assert "@mtairum" in stderr
 
 
-def test_approval_on_a_stale_commit_does_not_count(repo: Repo):
+def test_approval_on_an_earlier_commit_survives_a_push(repo: Repo):
+    """Match the existing policy: main does not dismiss approvals on a push."""
     repo.write(".github/CODEOWNERS", CODEOWNERS)
     repo.write("tests/pipeline_reorg/sample_galaxy_tests.yaml", BASE_GALAXY_YAML.replace("test_alpha", "test_beta"))
     code, _, stderr = run_reviews(repo, [{"state": "APPROVED", "commit_id": "oldsha", "user": {"login": "mtairum"}}])
-    assert code == 1
-    assert "approving review on headsha" in stderr
+    assert code == 0, stderr
+    assert "review-met=true" in (repo.root / "github-output").read_text().splitlines()
 
 
 def test_team_owned_path_falls_back_to_any_approval(repo: Repo):
@@ -890,13 +900,15 @@ def test_team_owned_path_falls_back_to_any_approval(repo: Repo):
     )
     assert code == 0, stderr
     assert "falling back to the normal CODEOWNERS review requirement" in stdout
+    assert "review-met=true" in (repo.root / "github-output").read_text().splitlines()
 
 
 def test_team_owned_path_with_no_approval_still_blocks(repo: Repo):
     repo.write(".github/CODEOWNERS", CODEOWNERS)
     repo.write("tests/pipeline_reorg/sample_team_tests.yaml", BASE_GALAXY_YAML)
     code, _, stderr = run_reviews(repo, [])
-    assert code == 1
+    assert code == 0, stderr
+    assert "review-met=false" in (repo.root / "github-output").read_text().splitlines()
     assert "a code owner" in stderr
 
 
@@ -908,7 +920,8 @@ def test_unsupported_yaml_is_blocked_not_skipped(repo: Repo):
     repo.write(".github/CODEOWNERS", CODEOWNERS)
     repo.write("tests/pipeline_reorg/sample_vllm_tests.yaml", BASE_GALAXY_YAML.replace("wh_galaxy", "bh_p150"))
     code, _, stderr = run_reviews(repo, [])
-    assert code == 1
+    assert code == 0, stderr
+    assert "review-met=false" in (repo.root / "github-output").read_text().splitlines()
     assert "sample_vllm_tests.yaml" in stderr
 
 
