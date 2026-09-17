@@ -1,18 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 """TP validation for Qwen3.5/3.6 Gated DeltaNet on a Blackhole mesh.
-
-One file per component (decode / chunk-prefill), sharing the loaders and mesh
-parametrization from ``test_factory``:
-
-* ``test_gdn_tp``         — decode PCC @ pos0 (recurrent state starts at zero, so
-  o = beta*(q̂·k̂)*v); the torch reference covers the sharded QKV/Z/AB reorder,
-  per-channel conv, GQA head expansion, L2 norm, gated RMSNorm, Z-gate, output
-  projection, and reduce-scatter. Plus a second decode step for shape/NaN.
-* ``test_gdn_tp_prefill`` — chunk-prefill (FIR conv + shared chunk kernel) must
-  agree with step-by-step decode over the same tokens (zero init state). An
-  internal-consistency check across two code paths; no hand-written reference.
-
 Run:
     MESH_DEVICE=P150x4 HF_MODEL=Qwen/Qwen3.6-27B \
       pytest models/demos/blackhole/qwen36/tests/test_gdn_tp.py -v -s
@@ -52,6 +40,7 @@ def test_gdn_tp(mesh_device, B, reset_seeds, ensure_gc, request):
 
     Checks PCC for the full GDN forward pass (QKV proj, conv tap, L2 norm, beta gating,
     gated RMSNorm, output proj) and runs a second decode step to catch shape/NaN regressions.
+
     """
     os.environ.setdefault("HF_MODEL", model_path())
     args = Qwen36ModelArgs(mesh_device, max_batch_size=B, max_seq_len=256)
@@ -556,3 +545,55 @@ def test_gdn_tp_fused_chunk_prefill(mesh_device, monkeypatch, reset_seeds, ensur
     passing_fd, pcc_fd = comp_pcc(dec, fused, thr)
     logger.info(f"GDN fused-chunk prefill vs step-decode PCC (T={T}) = {pcc_fd}")
     assert passing_fd, f"fused chunk prefill disagrees with step-by-step decode: PCC {pcc_fd} < {thr}"
+
+
+@torch.no_grad()
+@parametrize_mesh_tp()
+@pytest.mark.parametrize("OUTER_CHUNK_SIZE", [512, 2048], ids=["OUTER_CHUNK_SIZE512", "OUTER_CHUNK_SIZE2048"])
+def test_gdn_out_agmm_vs_mmrs(mesh_device, OUTER_CHUNK_SIZE, reset_seeds, ensure_gc):
+    """GDN prefill out-projection: column-parallel AG+matmul vs the row-parallel matmul+reduce-scatter.
+    Runs one forward_prefill with out-AGMM prefill enabled and disabled, and PCCs the two outputs against each other.
+
+    OUTER_CHUNK_SIZE: how the prompt is split; one forward_prefill call receives one outer chunk as input;
+    """
+    os.environ.setdefault("HF_MODEL", model_path())
+    args = Qwen36ModelArgs(mesh_device, max_batch_size=1, max_seq_len=4096)
+    nd = mesh_device.get_num_devices()
+    if nd == 1:
+        pytest.skip("TP-only")
+    li = next(i for i, t in enumerate(args.attention_type_list) if t == "linear_attention")
+    sd = load_gdn_layer(args.CKPT_DIR, li)
+    from models.tt_transformers.tt.ccl import TT_CCL
+
+    tt_ccl = TT_CCL(mesh_device)
+    tw = load_gdn_weights_tp(mesh_device, sd, args)
+    gdn = TPGatedDeltaNet(mesh_device, args, tw, tt_ccl)
+    assert gdn._out_colpar_prefill, "column-parallel prefill out-proj not active"
+    composer = tp_composer(mesh_device)
+
+    x = torch.randn(1, 1, OUTER_CHUNK_SIZE, args.dim, dtype=torch.bfloat16)
+    x_tt = shard_to_device(mesh_device, x, dim=-1)
+
+    # CHUNK_SIZE: how the input to forward_prefill is split and processed by the GDN kernel;
+    # The parameter is used by the sequential GDN kernel only. The (default and used here)
+    # fused/phased kernel hardcodes 32.
+    CHUNK_SIZE = 128
+    logger.info(f"[AGMM] OUTER_CHUNK_SIZE={OUTER_CHUNK_SIZE} starting AGMM out-proj arm")
+    gdn.reset_state()
+    o = gdn.forward_prefill(x_tt, chunk_size=CHUNK_SIZE)
+    got = ttnn.to_torch(o, mesh_composer=composer).reshape(OUTER_CHUNK_SIZE, -1).float()
+    ttnn.deallocate(o)
+    logger.info(f"[AGMM] OUTER_CHUNK_SIZE={OUTER_CHUNK_SIZE} AGMM arm OK, out shape {tuple(got.shape)}")
+
+    logger.info(f"[AGMM] OUTER_CHUNK_SIZE={OUTER_CHUNK_SIZE} starting MMRS reference arm")
+    gdn._out_colpar_prefill = False
+    gdn.reset_state()
+    o2 = gdn.forward_prefill(x_tt, chunk_size=CHUNK_SIZE)
+    ref = ttnn.to_torch(o2, mesh_composer=composer).reshape(OUTER_CHUNK_SIZE, -1).float()
+    ttnn.deallocate(o2)
+    gdn._out_colpar_prefill = True
+    logger.info(f"[AGMM] OUTER_CHUNK_SIZE={OUTER_CHUNK_SIZE} MMRS arm OK")
+
+    passing, pcc = comp_pcc(ref, got, 0.99)
+    logger.info(f"GDN out-proj AGMM vs MMRS PCC (OUTER_CHUNK_SIZE={OUTER_CHUNK_SIZE}) = {pcc}")
+    assert passing, f"AGMM/MMRS mismatch at OUTER_CHUNK_SIZE={OUTER_CHUNK_SIZE}: {pcc}"
