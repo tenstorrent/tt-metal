@@ -167,7 +167,9 @@ def apply_commit_files(sha, apply_ref, env):
     return f"{len(files)} file(s) from {short(apply_ref)}"
 
 
-def patch_runner(body, *, workers=None, test_filter=None, split_into=None):
+def patch_runner(
+    body, *, workers=None, test_filter=None, split_into=None, slice_group=1
+):
     """Reshape one perf runner script for a controlled experiment.
 
     `workers` sets -n on both passes; 1 means a single xdist worker, so a single
@@ -188,7 +190,7 @@ def patch_runner(body, *, workers=None, test_filter=None, split_into=None):
     if split_into is not None:
         body = body.replace(
             '--splits "$N_GROUPS" --group "$GROUP"',
-            f"--splits {split_into} --group 1",
+            f"--splits {split_into} --group {slice_group}",
         )
         marker = "mkdir -p perf_data"
         guard = (
@@ -317,7 +319,10 @@ def runner_opts_of(args):
         "test_filter": getattr(args, "test_filter", None),
         "split_into": getattr(args, "split_into", None),
     }
-    return opts if any(v is not None for v in opts.values()) else None
+    if not any(v is not None for v in opts.values()):
+        return None
+    opts["slice_group"] = getattr(args, "slice_group", None) or 1
+    return opts
 
 
 def variant_key(sha, args):
@@ -327,7 +332,12 @@ def variant_key(sha, args):
         key += f"+{short(git('rev-parse', args.apply))}"
     if getattr(args, "maxschedchunk", None) is not None:
         key += f"+chunk{args.maxschedchunk}"
-    for name, tag in (("workers", "n"), ("split_into", "s"), ("test_filter", "k")):
+    for name, tag in (
+        ("workers", "n"),
+        ("split_into", "s"),
+        ("slice_group", "g"),
+        ("test_filter", "k"),
+    ):
         v = getattr(args, name, None)
         if v is not None:
             v = str(v).replace("/", "_").replace(" ", "")[:20]
@@ -348,7 +358,11 @@ def push_branch(sha, index, maxschedchunk=None, apply_ref=None, runner_opts=None
         suffix = f"-{short(git('rev-parse', apply_ref))[:7]}{suffix}"
     if runner_opts:
         # Name the variant, or a single-core run overwrites the 15-worker one.
-        for tag, key in (("n", "workers"), ("s", "split_into")):
+        for tag, key in (
+            ("n", "workers"),
+            ("s", "split_into"),
+            ("g", "slice_group"),
+        ):
             if runner_opts.get(key) is not None:
                 suffix += f"-{tag}{runner_opts[key]}"
     branch = f"{BRANCH_PREFIX}{short(sha)}{suffix}-r{index}"
@@ -751,6 +765,13 @@ def main(argv=None):
         type=int,
         help="replace the shard split; group 1 runs that slice and every other "
         "group exits, so one card runs one sequence",
+    )
+    ap.add_argument(
+        "--slice-group",
+        type=int,
+        help="which group of --split-into to measure (default 1). Group 2 of 20 "
+        "straddles the matmul boundary, so it mixes modules — which a "
+        "single-module slice cannot, and heterogeneity is what is under test",
     )
     ap.add_argument(
         "--apply",
