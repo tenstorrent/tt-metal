@@ -138,30 +138,38 @@ def patch_maxschedchunk(body, value):
 def patch_run_count(sha, count, env):
     """Measure each point `count` times and also record the minimum.
 
-    Two one-line changes. core.run() takes its repeat count from the
-    environment so the runner can set it without touching every call site,
-    and the stats aggregation gains min() alongside mean() and std() so one
-    run yields both views of the same executions.
+    Interference from neighbouring cores can only add cycles to a measurement,
+    so min() over several executions is the aggregation that should survive it
+    where mean() does not.
+
+    Three edits across two files. core.run() takes its repeat count from the
+    environment so the runner can set it without touching every call site;
+    _stats_timings gains min() in BOTH the aggregation and the column names it
+    builds by hand, which have to stay the same length or pandas raises.
     """
-    for path, old, new in (
-        (
-            PERF_CORE,
-            "def run(self, perf_report: PerfReport, run_count=1):",
-            "def run(self, perf_report: PerfReport, run_count=None):\n"
-            '        run_count = run_count or int(os.environ.get("PERF_RUN_COUNT", "1"))',
-        ),
-        (
-            PROFILER,
-            '.agg(["mean", "std"])',
-            '.agg(["mean", "std", "min"])',
-        ),
-    ):
+    edits = {
+        PERF_CORE: [
+            (
+                "def run(self, perf_report: PerfReport, run_count=1):",
+                "def run(self, perf_report: PerfReport, run_count=None):\n"
+                '        run_count = run_count or int(os.environ.get("PERF_RUN_COUNT", "1"))',
+            )
+        ],
+        PROFILER: [
+            ('.agg(["mean", "std"])', '.agg(["mean", "std", "min"])'),
+            ("for stat in (MEAN, STD)]", 'for stat in (MEAN, STD, "min")]'),
+        ],
+    }
+
+    for path, changes in edits.items():
         body = git("show", f"{sha}:{path}")
-        if old not in body:
-            raise RuntimeError(f"{path}: cannot find the line to patch")
+        for old, new in changes:
+            if old not in body:
+                raise RuntimeError(f"{path}: cannot find {old[:40]!r}")
+            body = body.replace(old, new, 1)
         blob = subprocess.run(
             ["git", "hash-object", "-w", "--stdin"],
-            input=body.replace(old, new, 1),
+            input=body,
             text=True,
             capture_output=True,
             check=True,
