@@ -1279,6 +1279,12 @@ class MiniMaxH3Vae:
                 ttnn.synchronize_device(self.mesh_device)
                 profile["decoder"] += time.perf_counter() - mark
                 mark = time.perf_counter()
+            # Same choice the gather path makes, and for the same reason: `NeighborTileBlender`'s
+            # band weights are float32, so bfloat16 pixels make the blend a mixed-precision matmul
+            # and its output differs from the gather path's by ~2.9 levels of 255. Cast while
+            # `decoded` is still TILE, where it costs no layout conversion.
+            if self._blend_dtype == ttnn.float32:
+                decoded = ttnn.typecast(decoded, ttnn.float32)
             decoded = ttnn.to_layout(decoded, ttnn.ROW_MAJOR_LAYOUT)
             pixels = unpatchify_device(
                 decoded,
