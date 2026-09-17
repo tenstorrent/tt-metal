@@ -21,7 +21,7 @@ Measured on a BH Galaxy, mesh 8x4 (CP8 / TP4), branch `kmabee/gemma4-swa-multiho
 | | |
 |---|---|
 | **The question** | why is chunk 2048 **2.09x** slower than 8192 over a 256k prompt? |
-| **The answer** | **two independent ~2x effects, in different layers.** (1) A fixed **~70 ms per-chunk floor** paid 4x more often — **2.16x**. (2) The prefix attention leaves **71% of the core grid idle** at chunk 2048 — **1.99x**. |
+| **The answer** | **two independent ~2x effects, in different layers.** (1) A fixed **~94 ms per-chunk cost** paid 4x more often — **2.16x**. (2) The prefix attention leaves **71% of the core grid idle** at chunk 2048 — **1.99x**. |
 | **The floor is** | matmul weight reads ~30 ms (127 MB/layer/device, read once per chunk) + `rms_norm` ~18 ms (row-parallel only ⇒ 8 of 120 cores) + sliding halo ~10 ms + ~12 ms other. **84% of it is the 50 sliding layers, by count.** |
 | **The prefix term is** | **100% the 10 full-attention layers' `RingJointSDPA`.** Sliding layers are exactly flat (slope −0.0001 ms/index over 256k). |
 | **That op is bound by** | **MAC throughput on QK^T and PV.** Not bytes (−47% K/V bytes ⇒ 0.998x), not softmax (⇒ 1.007x), not fabric. Fidelity LoFi ⇒ 0.786x, HiFi4 ⇒ 1.755x. |
@@ -44,7 +44,7 @@ fixes**. Neither is the sliding-window halo, and neither needs a fabric explanat
 
 | | 2048 vs 8192 | cause | whose |
 |---|---|---|---|
-| **per-chunk term** `N·a(C)` | **2.16x** | a **~70 ms floor** that doesn't shrink with the chunk, paid 4x more often (128 chunks × 131 ms; chunk is 4x smaller but `a` only falls 1.85x) | **~84%** the **50 sliding** layers, by count |
+| **per-chunk term** `N·a(C)` | **2.16x** | a **~94 ms cost** that doesn't shrink with the chunk, paid 4x more often (128 chunks × 131 ms; chunk is 4x smaller but `a` only falls 1.85x) | **~84%** the **50 sliding** layers, by count |
 | **prefix term** `slope·N(N−1)/2` | **1.99x** | the attention op leaves **71% of the core grid idle** at chunk 2048 (32 work units on ~110 cores) and pays 4x as many steps | **100%** the **10 full-attention** layers' `RingJointSDPA` |
 | | **= 2.09x** | | |
 
@@ -659,7 +659,7 @@ HiFi2; this is worth knowing for any other path that reached for HiFi4 expecting
    on QK^T and PV.** Bytes, softmax exp and `k_chunk` are all ruled out. The follow-on lever is
    fidelity, which is **blocked on an accuracy eval** (§7.2d), not on more perf work. No
    `DeviceZone` kernel instrumentation needed — zones would only split QK from PV, both MACs.
-4. **Matmul DRAM efficiency at small M** — biggest single floor item (~27 ms of the ~70 ms); ≥159 GB/s achieved
+4. **Matmul DRAM efficiency at small M** — biggest single floor item (~41 ms of the ~94 ms); ≥159 GB/s achieved
    suggests headroom, not physics, but it is the hardest.
 5. Do **not** spend time on fabric links, a fabric mux, a line-multicast halo, or the rendezvous
    protocol — all measured to be worth ~nothing: the halo payload is invariant at
@@ -720,3 +720,24 @@ type).
 Prior records: `gemma4_prefill_chunk_scaling-noissue/` (private repo `kmabeeTT/debug-docs`) (the 8k-vs-16k work this corrects) and
 `gemma4_swa_multihop_halo-noissue/` (same private repo) plus the sibling report
 [`../SlidingWindowMultiHopHalo/`](../SlidingWindowMultiHopHalo/README.md) (the multi-hop halo and the chunk-size sweep).
+
+---
+
+## Addendum (2026-09-17) — per-op tables, and the floor's basis
+
+See [`PER_OP_TABLES.md`](PER_OP_TABLES.md) for `tt-perf-report` views of chunk 2048 / 4096 /
+8192 side by side, captured both at chunk index 0 and at a matched prior context of 49152
+tokens. Three things there supersede or sharpen this document:
+
+1. **The floor is quoted on a new basis.** §"the floor is 70.4 ms" derives the per-layer
+   *excess over perfect token scaling*, `2.181 − 4.029/4 = 1.174 ms`, ×60. For
+   `cost = F + k·tokens` that excess is exactly `¾·F`, so the chunk-invariant cost is
+   `70.4/0.75 = 93.9 ms`. Confirmed by an affine fit of the measured `a(C)` over 2048–8192
+   (94.2 ms) and by a per-op fit (105–113 ms). All component figures in this document that
+   sum to 70.4 ms are on the old basis; multiply by 1.335 for the chunk-invariant basis.
+2. **"The prefix term is 100% global layers" is now a per-op measurement, not an inference.**
+   99.8–100.0% of a global layer's growth between prior context 0 and 49152 tokens is
+   `RingJointSDPADeviceOperation`; the sliding layer moves by +0.2% / +0.8% / −0.1%.
+3. **The occupancy model passed a pre-registered discriminating test.** At matched prior
+   context, chunk 2048 does 0.25x the prefix work and takes 0.443x the time, against 0.50x
+   predicted from work-unit depth and 0.25x for an efficiency-neutral op.
