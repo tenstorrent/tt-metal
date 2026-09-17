@@ -16,6 +16,8 @@
 #include <tt_stl/assert.hpp>           // TT_FATAL
 #include <tt-metalium/constants.hpp>   // tt::constants::TILE_WIDTH
 #include <tt-metalium/core_coord.hpp>  // CoreCoord
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/mesh_device.hpp>
 
 #include "ttnn/distributed/types.hpp"                 // ttnn::MeshCoordinate
 #include "ttnn/operations/ccl/ccl_common.hpp"         // get_linearized_index_from_physical_coord
@@ -55,6 +57,40 @@ inline DsaQkBatching dsa_qk_batching(uint32_t subblock_basis, uint32_t QC, uint3
     const bool single_chunk = (qk_batch_heads == subblock_basis) && !stream_heads;
     const uint32_t qk_col_batch = (KC >= 2 && single_chunk) ? KC : 1u;
     return {qk_batch_heads, qk_col_batch};
+}
+
+// Config for callers that leave program_config unspecified: every head resident, one q tile row per unit and
+// the widest k chunk whose buffers fit L1, which is the full strip path. One head at a time if nothing fits.
+inline IndexerScoreProgramConfig default_program_config(
+    uint32_t Hi, uint32_t Tt, uint32_t Dt, uint32_t q_tile_bytes, uint32_t k_tile_bytes, uint64_t l1_budget) {
+    constexpr uint64_t bf16_tile = 2048;
+    for (uint32_t KC : {16u, 8u, 4u, 2u}) {
+        if (KC > Tt) {
+            continue;
+        }
+        // The make_cb sizes of both factories at QC 1 and HB Hi with bf16 accumulation, plus an eighth of slack.
+        const uint64_t bytes = uint64_t(Hi) * Dt * q_tile_bytes + 2ull * KC * Dt * k_tile_bytes +
+                               (uint64_t(Hi) + 2 + uint64_t(KC) * Hi + 4ull * KC) * bf16_tile;
+        if (bytes + bytes / 8 <= l1_budget) {
+            return {tt::constants::TILE_HEIGHT, KC * tt::constants::TILE_WIDTH, 0};
+        }
+    }
+    return {};
+}
+
+// Head streaming q buffer depth: as many head blocks as fit in half the L1 budget, never fewer than before.
+inline uint32_t streaming_q_depth(uint64_t q_block_bytes, uint64_t l1_budget) {
+    for (uint32_t depth : {8u, 4u}) {
+        if (depth * q_block_bytes <= l1_budget / 2) {
+            return depth;
+        }
+    }
+    return 2;
+}
+
+inline uint64_t cb_l1_budget(const Tensor& q) {
+    return q.device()->l1_size_per_core() -
+           q.device()->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
 }
 
 // Shared physical axis tables preserve harvested/non-contiguous coordinates.

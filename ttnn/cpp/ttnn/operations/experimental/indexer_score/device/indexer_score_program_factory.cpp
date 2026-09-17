@@ -206,7 +206,8 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
         q_mcast_on);
 
     // Allocate each CB by its CbArg slot; make_cb assigns the next continuous index.
-    make_cb(cb_q_arg, (stream_heads ? 2 : 1) * HB * QC * Dt, q_fmt, q_tile);
+    const uint32_t q_depth = stream_heads ? streaming_q_depth(uint64_t(HB) * QC * Dt * q_tile, cb_l1_budget(q)) : 1;
+    make_cb(cb_q_arg, q_depth * HB * QC * Dt, q_fmt, q_tile);
     make_cb(cb_k_arg, 2 * KC * Dt, k_fmt, k_tile);
     make_cb(cb_w_arg, Hi * QC, tt::DataFormat::Float16_b, bf16_tile);
     make_cb(cb_mask_arg, num_mask_tiles, tt::DataFormat::Float16_b, bf16_tile);
