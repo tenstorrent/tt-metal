@@ -11,6 +11,10 @@
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_plan_args_common.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_types.hpp"
 
+// Supplied by the compute/dataflow runtime argument API, as for TensorAccessor.
+template <typename T>
+T get_arg_val(int arg_idx);
+
 /**
  * @file reduce_plan_args.hpp
  * @brief Constexpr device views over host-planned reduction arguments.
@@ -22,7 +26,7 @@
  * [kernel-owned prefix][call_count][call_0]...[call_(call_count - 1)]
  * @endcode
  *
- * Read call_count at the known unit offset, then address each fixed-width call
+ * Read call_count at the known unit offset, then address each call
  * with ReduceCallAtT. The count is only a bound for walking the calls. A kernel
  * must not derive accumulation, finalization, partial-tile handling, or any
  * other behavior from the count or call index; each ReduceCallArgs carries
@@ -32,12 +36,20 @@
  * variable-width ReduceAuxiliaryArgs per planning unit. It carries the shared
  * auxiliary CB ID and aggregate physical tile recipe. When multiple units are
  * appended, the next compute unit begins at
- * `first_call_offset + call_count * call_compile_time_arg_count()`. Use
+ * `ReduceCallAtT<first_call_offset, call_count - 1>::next_compile_time_args_offset()`. Use
  * ReduceAuxiliaryArgs::next_compile_time_args_offset() for the next dataflow
  * unit.
  */
 
 namespace ttnn::kernel_lib {
+
+struct ReduceRuntimeShape {
+    std::uint32_t height = 0;
+    std::uint32_t width = 0;
+    std::uint32_t batches = 0;
+
+    bool has_override() const { return height != 0 || width != 0 || batches != 0; }
+};
 
 // An empty recipe has no auxiliary binding. Preserve that absence rather than
 // substituting another buffer for scaler metadata.
@@ -191,7 +203,25 @@ public:
     static constexpr std::uint32_t columns = word<reduce_plan_args::CallWord::Columns>();
     static constexpr std::uint32_t batches = word<reduce_plan_args::CallWord::Batches>();
     static constexpr std::uint32_t tail_runtime_arg_offset = word<reduce_plan_args::CallWord::TailRuntimeArgOffset>();
-    static constexpr bool is_tail = tail_runtime_arg_offset != reduce_plan_args::no_runtime_arg;
+    static constexpr bool has_tail_variant = reduce_plan_args::extract(
+        configuration,
+        reduce_plan_args::config::has_tail_variant_shift,
+        reduce_plan_args::config::has_tail_variant_mask);
+    static constexpr bool is_tail = reduce_plan_args::extract(
+        configuration, reduce_plan_args::config::uses_tail_shape_shift, reduce_plan_args::config::uses_tail_shape_mask);
+    using Tail = ReduceCallArgs<CTA_OFFSET + reduce_plan_args::call_compile_time_arg_count()>;
+    // The descriptor carries both compile-time metadata and the location of
+    // its per-core override. reduce<Call>() consumes this view internally.
+    static ReduceRuntimeShape runtime_shape() {
+        if constexpr (tail_runtime_arg_offset != reduce_plan_args::no_runtime_arg) {
+            return {
+                get_arg_val<std::uint32_t>(tail_runtime_arg_offset),
+                get_arg_val<std::uint32_t>(tail_runtime_arg_offset + 1),
+                get_arg_val<std::uint32_t>(tail_runtime_arg_offset + 2)};
+        } else {
+            return {};
+        }
+    }
     static constexpr std::uint32_t logical_h = word<reduce_plan_args::CallWord::LogicalHeight>();
     static constexpr std::uint32_t logical_w = word<reduce_plan_args::CallWord::LogicalWidth>();
     static constexpr bool has_output_mask =
@@ -218,7 +248,9 @@ public:
         reduce_plan_args::chunk_and_auxiliary::auxiliary_tile_count_mask);
     static constexpr std::uint32_t post_scale_bits = word<reduce_plan_args::CallWord::PostScaleBits>();
 
-    static constexpr std::uint32_t num_compile_time_args() { return reduce_plan_args::call_compile_time_arg_count(); }
+    static constexpr std::uint32_t num_compile_time_args() {
+        return reduce_plan_args::call_compile_time_arg_count() * (has_tail_variant ? 2 : 1);
+    }
 
     static constexpr std::uint32_t next_compile_time_args_offset() { return CTA_OFFSET + num_compile_time_args(); }
 
@@ -259,13 +291,20 @@ public:
         "A non-accumulating call must use accumulation index zero");
 };
 
-// Address one fixed-size call in a planning unit. FIRST_CALL_CTA_OFFSET points
-// immediately after that unit's call-count word. This alias performs only
-// address arithmetic; it does not interpret the count or derive behavior from
-// CALL_INDEX.
+// Skip each call's optional tail record when locating the next call. Static
+// calls retain their original fixed-size representation.
 template <std::uint32_t FIRST_CALL_CTA_OFFSET, std::uint32_t CALL_INDEX>
-using ReduceCallAtT =
-    ReduceCallArgs<FIRST_CALL_CTA_OFFSET + CALL_INDEX * reduce_plan_args::call_compile_time_arg_count()>;
+constexpr std::uint32_t reduce_call_offset() {
+    if constexpr (CALL_INDEX == 0) {
+        return FIRST_CALL_CTA_OFFSET;
+    } else {
+        return ReduceCallArgs<
+            reduce_call_offset<FIRST_CALL_CTA_OFFSET, CALL_INDEX - 1>()>::next_compile_time_args_offset();
+    }
+}
+
+template <std::uint32_t FIRST_CALL_CTA_OFFSET, std::uint32_t CALL_INDEX>
+using ReduceCallAtT = ReduceCallArgs<reduce_call_offset<FIRST_CALL_CTA_OFFSET, CALL_INDEX>()>;
 
 // Metal 2 assigns physical buffer IDs when resolving ProgramSpec bindings.
 // Such factories serialize dense, kernel-local logical IDs and bind them here
@@ -277,6 +316,7 @@ private:
     static constexpr std::uint32_t cb_ids[] = {CB_IDS...};
 
 public:
+    using Tail = BoundReduceCallArgs<typename Call::Tail, CB_IDS...>;
     static_assert(Call::input_cb_id < sizeof...(CB_IDS));
     static_assert(Call::auxiliary_cb_id == reduce_plan_args::no_cb_id || Call::auxiliary_cb_id < sizeof...(CB_IDS));
     static_assert(Call::output_cb_id < sizeof...(CB_IDS));

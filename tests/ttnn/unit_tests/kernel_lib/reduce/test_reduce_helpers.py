@@ -1099,14 +1099,13 @@ def test_reduce_local_blocks_on_multiple_cores(device, dim, pool):
 )
 @pytest.mark.parametrize("fp32_dest", (False, True))
 def test_reduce_runtime_tail_cores(device, dim, pool, algorithm, calls, explicit_scalar, fp32_dest):
-    """Plan each exact tail before compilation; only tails receive their planned shape RTAs."""
+    """One compiled descriptor serves full and tail cores; only runtime overrides differ."""
     core_count, max_batches = 3, 2
     max_h, max_w, row_stride = 288, 256, 10
     allocation_rows = max_batches * (max_h // TILE)
     output_capacity = max_batches * (max_h // TILE if dim == "REDUCE_ROW" else max_w // TILE)
     output_dtype = ttnn.float32 if fp32_dest else ttnn.bfloat16
     grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(2, 0))])
-    groups = ((0,), (1,), (2,))
     input_bytes = allocation_rows * row_stride * ttnn.tile_size(ttnn.bfloat16)
     output_bytes = output_capacity * ttnn.tile_size(output_dtype)
     accumulator_bytes = output_bytes if calls > 1 else 0
@@ -1136,47 +1135,47 @@ def test_reduce_runtime_tail_cores(device, dim, pool, algorithm, calls, explicit
     )
     if dim == "REDUCE_COL":
         tail_shapes = tuple(tuple((w, h, b) for h, w, b in shapes) for shapes in tail_shapes)
-    for shape_pair in tail_shapes:
-        shapes = ((max_h, max_w, max_batches), *shape_pair)
-        plans = []
-        for indices in groups:
-            tail = _PLANNER.ReduceTailConfig(_PLANNER.ReduceValidShape(*shapes[indices[0]]), 2) if indices[0] else None
-            block = _PLANNER.ReduceBlockSpec(
-                max_h,
-                max_w,
-                ttnn.bfloat16,
-                output_dtype,
-                batches=max_batches,
-                input_row_stride_tiles=row_stride,
-                resident_input_tiles=allocation_rows * row_stride,
-                resident_output_tiles=output_capacity,
-                tail=tail,
-            )
-            plans.append(
-                _PLANNER.make_reduce_sequence_plan(
-                    reductions=[
-                        (
-                            CB_INPUT,
-                            _PLANNER.ReduceCallConfig(
-                                block, _REDUCE_MATH[pool], _REDUCE_DIM[dim], scalar, _PLANNER.ReduceFp32Mode.FAST
-                            ),
-                        )
-                        for _ in range(calls)
-                    ],
-                    cb_ids=_PLANNER.ReduceSequenceCbIds(CB_SCALER, CB_ACCUMULATOR, CB_OUTPUT),
-                    hardware=hardware,
-                    algorithm=(
-                        _PLANNER.ReduceAlgorithm.REDUCE_TILE
-                        if algorithm == "REDUCE_TILE"
-                        else _PLANNER.ReduceAlgorithm.ACCUMULATE_VIA_ADD
+    tail_shapes = tuple(shape for pair in tail_shapes for shape in pair)
+    # Repeat the first geometry with the tail on a different core. Both launches
+    # must have identical compile-time payloads, as do all cores in each launch.
+    previous_args = None
+    for shape_index, tail_shape in enumerate((tail_shapes[0], *tail_shapes)):
+        tail_core = shape_index % core_count
+        shapes = [(max_h, max_w, max_batches)] * core_count
+        shapes[tail_core] = tail_shape
+        block = _PLANNER.ReduceBlockSpec(
+            max_h,
+            max_w,
+            ttnn.bfloat16,
+            output_dtype,
+            batches=max_batches,
+            input_row_stride_tiles=row_stride,
+            resident_input_tiles=allocation_rows * row_stride,
+            resident_output_tiles=output_capacity,
+            tail=_PLANNER.ReduceTailConfig(_PLANNER.ReduceValidShape(*tail_shape), 2),
+        )
+        sequence = _PLANNER.make_reduce_sequence_plan(
+            reductions=[
+                (
+                    CB_INPUT,
+                    _PLANNER.ReduceCallConfig(
+                        block, _REDUCE_MATH[pool], _REDUCE_DIM[dim], scalar, _PLANNER.ReduceFp32Mode.FAST
                     ),
                 )
-            )
-        assert plans[0].calls[0].plan.tail is None
-        assert plans[1].calls[0].plan.tail is not None
-        # Size the shared physical allocation for the largest planned recipe.
-        auxiliary_tiles = max(len(plan.auxiliary.tiles) for plan in plans)
+                for _ in range(calls)
+            ],
+            cb_ids=_PLANNER.ReduceSequenceCbIds(CB_SCALER, CB_ACCUMULATOR, CB_OUTPUT),
+            hardware=hardware,
+            algorithm=_ALGORITHM[algorithm],
+        )
+        plan = sequence.calls[0].plan
+        assert plan.tail_plan is not None
+        auxiliary_tiles = len(sequence.auxiliary.tiles)
         assert auxiliary_tiles * ttnn.tile_size(ttnn.bfloat16) <= hardware.available_l1_bytes
+        compute_args, auxiliary_args = _serialize_plan(sequence)
+        if shape_index == 1:
+            assert previous_args == (compute_args, auxiliary_args)
+        previous_args = (compute_args, auxiliary_args)
 
         physical = torch.full((core_count, allocation_rows * TILE, row_stride * TILE), 128, dtype=torch.bfloat16)
         expected = []
@@ -1201,36 +1200,25 @@ def test_reduce_runtime_tail_cores(device, dim, pool, algorithm, calls, explicit
                 core_expected.append(golden)
             expected.append(torch.stack(core_expected))
 
-        kernels = []
-        for indices, sequence in zip(groups, plans):
-            cores = [ttnn.CoreCoord(i, 0) for i in indices]
-            core_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(cores[0], cores[-1])])
-            compute_args, auxiliary_args = _serialize_plan(sequence)
-            compute_runtime = []
-            if sequence.calls[0].plan.tail is not None:
-                for index, core in zip(indices, cores):
-                    shape_args = sequence.calls[0].plan.get_runtime_shape_args()
-                    assert shape_args == list(shapes[index])
-                    compute_runtime.append((core, [111, 222] + shape_args))
-            kernels.extend(
-                [
-                    ttnn.KernelDescriptor(
-                        kernel_source=PLAN_SEQUENCE_AUX_KERNEL,
-                        core_ranges=core_ranges,
-                        compile_time_args=auxiliary_args,
-                        config=ttnn.ReaderConfigDescriptor(),
-                    ),
-                    ttnn.KernelDescriptor(
-                        kernel_source=PLAN_SEQUENCE_KERNEL,
-                        core_ranges=core_ranges,
-                        compile_time_args=compute_args,
-                        runtime_args=compute_runtime,
-                        config=ttnn.ComputeConfigDescriptor(
-                            math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=fp32_dest
-                        ),
-                    ),
-                ]
-            )
+        compute_runtime = [
+            (ttnn.CoreCoord(index, 0), [111, 222] + plan.get_runtime_shape_args(use_tail=index == tail_core))
+            for index in range(core_count)
+        ]
+        kernels = [
+            ttnn.KernelDescriptor(
+                kernel_source=PLAN_SEQUENCE_AUX_KERNEL,
+                core_ranges=grid,
+                compile_time_args=auxiliary_args,
+                config=ttnn.ReaderConfigDescriptor(),
+            ),
+            ttnn.KernelDescriptor(
+                kernel_source=PLAN_SEQUENCE_KERNEL,
+                core_ranges=grid,
+                compile_time_args=compute_args,
+                runtime_args=compute_runtime,
+                config=ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=fp32_dest),
+            ),
+        ]
         input_tensor = ttnn.from_torch(
             physical.reshape(core_count * allocation_rows * TILE, row_stride * TILE),
             dtype=ttnn.bfloat16,
@@ -1294,7 +1282,7 @@ def test_reduce_runtime_tail_cores(device, dim, pool, algorithm, calls, explicit
 )
 @pytest.mark.parametrize("fp32_input", (False, True))
 def test_reduce_runtime_tail_stream_wraps(device, dim, pool, algorithm, fp32_input):
-    """Exact planned tails preserve packet boundaries and normalization through FIFO wraps."""
+    """Full and tail overrides use the same compiled kernels through repeated FIFO wraps."""
     input_dtype = ttnn.float32 if fp32_input else ttnn.bfloat16
     for height, width, batches in ((135, 135, 2), (64, 64, 1), (1, 17, 2)):
         block = _PLANNER.ReduceBlockSpec(
@@ -1339,90 +1327,98 @@ def test_reduce_runtime_tail_stream_wraps(device, dim, pool, algorithm, fp32_inp
         compute_args, auxiliary_args = _serialize_plan(sequence)
         # The test reader uses the same call metadata to count the planned packets.
         auxiliary_args += sequence.calls[0].compile_time_args
-        ht, wt = (height + 31) // TILE, (width + 31) // TILE
-        values = (torch.arange(batches * height * width).reshape(batches, height, width) % 7 - 3).to(torch.bfloat16)
-        padded = torch.full((batches, ht * TILE, wt * TILE), 128, dtype=torch.bfloat16)
-        padded[:, :height, :width] = values
-        if dim == "REDUCE_ROW":
-            padded[:, height:, :] = float("nan")
-        else:
-            padded[:, :, width:] = float("nan")
-        tiles = []
-        for batch in range(batches):
-            for out in range(0, ht if dim == "REDUCE_ROW" else wt, group):
-                for base in range(0, wt if dim == "REDUCE_ROW" else ht, axis):
-                    for a in range(axis):
-                        for o in range(group):
-                            h, w = (out + o, base + a) if dim == "REDUCE_ROW" else (base + a, out + o)
-                            tiles.append(
-                                padded[batch, h * TILE : (h + 1) * TILE, w * TILE : (w + 1) * TILE]
-                                if h < ht and w < wt
-                                else torch.full((TILE, TILE), 999, dtype=torch.bfloat16)
-                            )
-        source_values = torch.cat(tiles, dim=0)
-        source = ttnn.from_torch(
-            source_values,
-            dtype=input_dtype,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-            memory_config=_sharded_memory_config(source_values.shape),
-        )
-        output = ttnn.from_torch(
-            torch.full((16 * TILE, TILE), -999.0),
-            dtype=ttnn.float32,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-            memory_config=_sharded_memory_config((16 * TILE, TILE)),
-        )
-        runtime = [(ttnn.CoreCoord(0, 0), plan.get_runtime_shape_args())]
-        result = ttnn.generic_op(
-            [source, output],
-            ttnn.ProgramDescriptor(
-                kernels=[
-                    ttnn.KernelDescriptor(
-                        kernel_source="tests/ttnn/unit_tests/kernel_lib/reduce/kernels/reduce_tail_stream_reader.cpp",
-                        core_ranges=_single_core(),
-                        compile_time_args=auxiliary_args,
-                        config=ttnn.ReaderConfigDescriptor(),
-                    ),
-                    ttnn.KernelDescriptor(
-                        kernel_source=PLAN_SEQUENCE_KERNEL,
-                        core_ranges=_single_core(),
-                        compile_time_args=compute_args,
-                        runtime_args=runtime,
-                        defines=[("EXTERNAL_READER", "1")],
-                        config=ttnn.ComputeConfigDescriptor(
-                            math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True
+        for use_tail in (False, True):
+            height, width, batches = (
+                (block.tail.shape.height, block.tail.shape.width, block.tail.shape.batches)
+                if use_tail
+                else (256, 256, 2)
+            )
+            ht, wt = (height + 31) // TILE, (width + 31) // TILE
+            values = (torch.arange(batches * height * width).reshape(batches, height, width) % 7 - 3).to(torch.bfloat16)
+            padded = torch.full((batches, ht * TILE, wt * TILE), 128, dtype=torch.bfloat16)
+            padded[:, :height, :width] = values
+            if dim == "REDUCE_ROW":
+                padded[:, height:, :] = float("nan")
+            else:
+                padded[:, :, width:] = float("nan")
+            tiles = []
+            for batch in range(batches):
+                for out in range(0, ht if dim == "REDUCE_ROW" else wt, group):
+                    for base in range(0, wt if dim == "REDUCE_ROW" else ht, axis):
+                        for a in range(axis):
+                            for o in range(group):
+                                h, w = (out + o, base + a) if dim == "REDUCE_ROW" else (base + a, out + o)
+                                tiles.append(
+                                    padded[batch, h * TILE : (h + 1) * TILE, w * TILE : (w + 1) * TILE]
+                                    if h < ht and w < wt
+                                    else torch.full((TILE, TILE), 999, dtype=torch.bfloat16)
+                                )
+            source_values = torch.cat(tiles, dim=0)
+            source = ttnn.from_torch(
+                source_values,
+                dtype=input_dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                memory_config=_sharded_memory_config(source_values.shape),
+            )
+            output = ttnn.from_torch(
+                torch.full((16 * TILE, TILE), -999.0),
+                dtype=ttnn.float32,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                memory_config=_sharded_memory_config((16 * TILE, TILE)),
+            )
+            runtime = [(ttnn.CoreCoord(0, 0), plan.get_runtime_shape_args(use_tail=use_tail))]
+            result = ttnn.generic_op(
+                [source, output],
+                ttnn.ProgramDescriptor(
+                    kernels=[
+                        ttnn.KernelDescriptor(
+                            kernel_source="tests/ttnn/unit_tests/kernel_lib/reduce/kernels/reduce_tail_stream_reader.cpp",
+                            core_ranges=_single_core(),
+                            compile_time_args=auxiliary_args,
+                            runtime_args=runtime,
+                            config=ttnn.ReaderConfigDescriptor(),
                         ),
-                    ),
-                ],
-                semaphores=[],
-                cbs=[
-                    ttnn.cb_descriptor_from_sharded_tensor(3, source),
-                    ttnn.cb_descriptor_from_sharded_tensor(CB_OUTPUT, output),
-                    _scratch_cb(CB_INPUT, input_dtype, input_pages),
-                    _scratch_cb(CB_SCALER, input_dtype, len(sequence.auxiliary.tiles)),
-                ],
-            ),
-        )
-        count = batches * (ht if dim == "REDUCE_ROW" else wt)
-        result_tiles = ttnn.to_torch(result).reshape(16, TILE, TILE)
-        lanes = result_tiles[:count, :, 0] if dim == "REDUCE_ROW" else result_tiles[:count, 0, :]
-        lanes = lanes.reshape(batches, -1)
-        valid_outputs = height if dim == "REDUCE_ROW" else width
-        reduce_dim = -1 if dim == "REDUCE_ROW" else -2
-        golden = values.float().amax(reduce_dim) if pool == "MAX" else values.float().sum(reduce_dim)
-        if pool == "AVG":
-            golden /= width if dim == "REDUCE_ROW" else height
-        torch.testing.assert_close(lanes[:, :valid_outputs], golden, rtol=0.01, atol=0.01)
-        assert torch.all(lanes[:, valid_outputs:] == 0)
-        assert torch.all(result_tiles[count:] == -999)
+                        ttnn.KernelDescriptor(
+                            kernel_source=PLAN_SEQUENCE_KERNEL,
+                            core_ranges=_single_core(),
+                            compile_time_args=compute_args,
+                            runtime_args=runtime,
+                            defines=[("EXTERNAL_READER", "1")],
+                            config=ttnn.ComputeConfigDescriptor(
+                                math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True
+                            ),
+                        ),
+                    ],
+                    semaphores=[],
+                    cbs=[
+                        ttnn.cb_descriptor_from_sharded_tensor(3, source),
+                        ttnn.cb_descriptor_from_sharded_tensor(CB_OUTPUT, output),
+                        _scratch_cb(CB_INPUT, input_dtype, input_pages),
+                        _scratch_cb(CB_SCALER, input_dtype, len(sequence.auxiliary.tiles)),
+                    ],
+                ),
+            )
+            count = batches * (ht if dim == "REDUCE_ROW" else wt)
+            result_tiles = ttnn.to_torch(result).reshape(16, TILE, TILE)
+            lanes = result_tiles[:count, :, 0] if dim == "REDUCE_ROW" else result_tiles[:count, 0, :]
+            lanes = lanes.reshape(batches, -1)
+            valid_outputs = height if dim == "REDUCE_ROW" else width
+            reduce_dim = -1 if dim == "REDUCE_ROW" else -2
+            golden = values.float().amax(reduce_dim) if pool == "MAX" else values.float().sum(reduce_dim)
+            if pool == "AVG":
+                golden /= width if dim == "REDUCE_ROW" else height
+            torch.testing.assert_close(lanes[:, :valid_outputs], golden, rtol=0.01, atol=0.01)
+            assert torch.all(lanes[:, valid_outputs:] == 0)
+            assert torch.all(result_tiles[count:] == -999)
 
 
 @pytest.mark.parametrize("dim", ("REDUCE_ROW", "REDUCE_COL"))
 @pytest.mark.parametrize("algorithm", ("REDUCE_TILE", "ACCUMULATE_VIA_ADD"))
 @pytest.mark.parametrize("scalar", (None, 1 / 1024, 0.0, 1.0))
-def test_reduce_full_and_tail_average(device, dim, algorithm, scalar):
+@pytest.mark.parametrize("use_tail", (False, True))
+def test_reduce_full_and_tail_average(device, dim, algorithm, scalar, use_tail):
     """Use the combined valid extent only when no explicit scalar is supplied."""
     height, width = (65, 256) if dim == "REDUCE_ROW" else (256, 65)
     tail_height, tail_width = (65, 135) if dim == "REDUCE_ROW" else (135, 65)
@@ -1431,7 +1427,9 @@ def test_reduce_full_and_tail_average(device, dim, algorithm, scalar):
     output_tiles = 3
     input_ids = (CB_INPUT, 3)
     tensors, reductions, sums = [], [], []
-    for index, (valid_h, valid_w) in enumerate(((height, width), (tail_height, tail_width))):
+    for index, (valid_h, valid_w) in enumerate(
+        ((height, width), (tail_height, tail_width) if use_tail else (height, width))
+    ):
         values = ((torch.arange(valid_h * valid_w).reshape(valid_h, valid_w) + index) % 13 - 6).to(torch.bfloat16)
         physical = torch.full((padded_h, padded_w), 128, dtype=torch.bfloat16)
         physical[:valid_h, :valid_w] = values
@@ -1455,7 +1453,7 @@ def test_reduce_full_and_tail_average(device, dim, algorithm, scalar):
             ttnn.float32,
             resident_input_tiles=input_tiles,
             resident_output_tiles=output_tiles,
-            tail=_PLANNER.ReduceTailConfig(_PLANNER.ReduceValidShape(valid_h, valid_w)) if index else None,
+            tail=_PLANNER.ReduceTailConfig(_PLANNER.ReduceValidShape(tail_height, tail_width)) if index else None,
         )
         config = _PLANNER.ReduceCallConfig(block, _PLANNER.ReduceMath.AVG, _REDUCE_DIM[dim])
         assert config.scalar is None
@@ -1497,7 +1495,9 @@ def test_reduce_full_and_tail_average(device, dim, algorithm, scalar):
                     kernel_source=PLAN_SEQUENCE_KERNEL,
                     core_ranges=_single_core(),
                     compile_time_args=compute_args,
-                    runtime_args=[(ttnn.CoreCoord(0, 0), sequence.calls[1].plan.get_runtime_shape_args())],
+                    runtime_args=[
+                        (ttnn.CoreCoord(0, 0), sequence.calls[1].plan.get_runtime_shape_args(use_tail=use_tail))
+                    ],
                     config=ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True),
                 ),
             ],
@@ -1512,9 +1512,87 @@ def test_reduce_full_and_tail_average(device, dim, algorithm, scalar):
     )
     tiles = ttnn.to_torch(result).reshape(output_tiles, TILE, TILE)
     lanes = (tiles[:, :, 0] if dim == "REDUCE_ROW" else tiles[:, 0, :]).reshape(-1)
-    scale = 1 / (256 + 135) if scalar is None else scalar
+    scale = 1 / (256 + (135 if use_tail else 256)) if scalar is None else scalar
     torch.testing.assert_close(lanes[:65], (sums[0] + sums[1]) * scale, rtol=0.02, atol=0.02)
-    assert torch.all(lanes[65:] == 0)
+    if use_tail:
+        assert torch.all(lanes[65:] == 0)
+
+
+def test_reduce_runtime_tail_rebinds_both_algorithms(device):
+    """One call binds physical CBs for an auxiliary-free full path and a masked native tail."""
+    block = _PLANNER.ReduceBlockSpec(
+        32,
+        256,
+        ttnn.bfloat16,
+        ttnn.float32,
+        resident_input_tiles=8,
+        resident_output_tiles=1,
+        allow_empty_auxiliary=True,
+        tail=_PLANNER.ReduceTailConfig(_PLANNER.ReduceValidShape(32, 17)),
+    )
+    sequence = _PLANNER.make_reduce_sequence_plan(
+        reductions=[(0, _PLANNER.ReduceCallConfig(block, _PLANNER.ReduceMath.AVG, _PLANNER.ReduceDimension.ROW))],
+        cb_ids=_PLANNER.ReduceSequenceCbIds(1, 16, 2),
+        hardware=_PLANNER.ReduceHardwareConfig(
+            arch=device.arch(),
+            fp32_dest_acc_en=True,
+            dst_full_sync_en=False,
+            available_l1_bytes=ttnn.get_max_worker_l1_unreserved_size(),
+        ),
+    )
+    plan = sequence.calls[0].plan
+    assert plan.full_auxiliary_tile_count == 0
+    assert plan.tail_plan.algorithm == _PLANNER.ReduceAlgorithm.REDUCE_TILE
+    assert plan.algorithm == _PLANNER.ReduceAlgorithm.ACCUMULATE_VIA_ADD
+    compute_args, auxiliary_args = _serialize_plan(sequence)
+    for use_tail in (False, True):
+        width = 17 if use_tail else 256
+        values = (torch.arange(32 * width).reshape(32, width) % 7 - 3).to(torch.bfloat16)
+        physical = torch.full((32, 256), 128, dtype=torch.bfloat16)
+        physical[:, :width] = values
+        source = ttnn.from_torch(
+            physical,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=_sharded_memory_config(physical.shape),
+        )
+        output = ttnn.from_torch(
+            torch.zeros((32, 32)),
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=_sharded_memory_config((32, 32)),
+        )
+        result = ttnn.generic_op(
+            [source, output],
+            ttnn.ProgramDescriptor(
+                kernels=[
+                    ttnn.KernelDescriptor(
+                        kernel_source=PLAN_SEQUENCE_AUX_KERNEL,
+                        core_ranges=_single_core(),
+                        compile_time_args=auxiliary_args,
+                        config=ttnn.ReaderConfigDescriptor(),
+                    ),
+                    ttnn.KernelDescriptor(
+                        kernel_source="tests/ttnn/unit_tests/kernel_lib/reduce/kernels/reduce_bound_tail.cpp",
+                        core_ranges=_single_core(),
+                        compile_time_args=compute_args,
+                        runtime_args=[(ttnn.CoreCoord(0, 0), plan.get_runtime_shape_args(use_tail))],
+                        config=ttnn.ComputeConfigDescriptor(
+                            math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True
+                        ),
+                    ),
+                ],
+                semaphores=[],
+                cbs=[
+                    ttnn.cb_descriptor_from_sharded_tensor(3, source),
+                    ttnn.cb_descriptor_from_sharded_tensor(16, output),
+                    _scratch_cb(1, ttnn.bfloat16, len(sequence.auxiliary.tiles)),
+                ],
+            ),
+        )
+        torch.testing.assert_close(ttnn.to_torch(result)[:, 0], values.float().mean(-1), rtol=0.01, atol=0.01)
 
 
 def test_reduce_plan_sequence_repeated_input_cb(device):

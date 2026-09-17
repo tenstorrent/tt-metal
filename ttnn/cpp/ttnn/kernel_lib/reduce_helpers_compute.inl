@@ -1735,7 +1735,7 @@ ALWI void reduce(
 }
 
 template <typename Call, typename PostReduceOp>
-ALWI void reduce(PostReduceOp post_reduce_op) {
+ALWI void reduce_planned_variant(PostReduceOp post_reduce_op) {
     static_assert(
         Call::path == ttnn::kernel_lib::ReducePath::Tiled,
         "The planned reduce<Call>() overload currently supports tiled calls only");
@@ -1751,15 +1751,7 @@ ALWI void reduce(PostReduceOp post_reduce_op) {
     [[maybe_unused]] uint32_t output_index = 0;
     if constexpr (Call::is_tail) {
         static_assert(Call::reduce_dim != ReduceDim::REDUCE_SCALAR, "Runtime tail shapes require W or H reduction");
-        valid_h = get_arg_val<uint32_t>(Call::tail_runtime_arg_offset);
-        valid_w = get_arg_val<uint32_t>(Call::tail_runtime_arg_offset + 1);
-        const uint32_t batches = get_arg_val<uint32_t>(Call::tail_runtime_arg_offset + 2);
-        // Runtime arguments only transport the exact shape used by the host
-        // to plan scalers, masks, chunks and cross-call normalization.
-        ASSERT(valid_h == Call::logical_h);
-        ASSERT(valid_w == Call::logical_w);
-        ASSERT(batches == Call::batches);
-        shape = ReduceInputBlockShape::of((valid_h + 31) / 32, (valid_w + 31) / 32, batches);
+        shape = ReduceInputBlockShape::of((valid_h + 31) / 32, (valid_w + 31) / 32, Call::batches);
         if constexpr (!should_pop(Call::input_policy)) {
             constexpr uint32_t row_pitch = Call::row_stride == 0 ? Call::columns : Call::row_stride;
             layout = ReduceInputMemoryLayout::with_strides(row_pitch, Call::rows * row_pitch);
@@ -1864,6 +1856,31 @@ ALWI void reduce(PostReduceOp post_reduce_op) {
             Call::partial_mode,
             chunk,
             Call::auxiliary_tile_offset);
+    }
+}
+
+template <typename Call, typename PostReduceOp>
+ALWI void reduce(PostReduceOp post_reduce_op) {
+    if constexpr (Call::has_tail_variant) {
+        // A single compiled call supports the whole grid. The override selects
+        // traversal, masks, auxiliary slice and normalization together; no
+        // core identity or separate kernel specialization is involved.
+        const bool use_tail = Call::runtime_shape().has_override();
+        using Tail = typename Call::Tail;
+        if constexpr (Tail::is_tail) {
+            const auto local = Tail::runtime_shape();
+            ASSERT(
+                use_tail ? local.height == Tail::logical_h && local.width == Tail::logical_w &&
+                               local.batches == Tail::batches
+                         : !local.has_override());
+        }
+        if (use_tail) {
+            reduce_planned_variant<Tail>(post_reduce_op);
+        } else {
+            reduce_planned_variant<Call>(post_reduce_op);
+        }
+    } else {
+        reduce_planned_variant<Call>(post_reduce_op);
     }
 }
 

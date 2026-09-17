@@ -6,6 +6,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <utility>
 #include <vector>
@@ -59,8 +60,9 @@ struct ReduceValidShape {
     std::uint32_t batches = 1;
 };
 
-// The exact tail shape is required during planning. Compute may receive that
-// same shape in runtime arguments; auxiliary tiles are entirely compile-time.
+// Plan both the ordinary block and this exact tail. At runtime [0, 0, 0]
+// selects the ordinary block; this shape selects the tail on any core using
+// the same compiled kernel. Both auxiliary recipes are prepared upfront.
 struct ReduceTailConfig {
     ReduceValidShape shape;
     std::uint32_t compute_runtime_arg_offset = 0;
@@ -162,6 +164,12 @@ struct ReducePlan {
     std::uint32_t input_row_stride_tiles = 0;
     std::uint32_t reduce_factor = 1;
     std::optional<ReduceTailConfig> tail;
+    // The ordinary case is stored in this plan; the alternative is selected
+    // at runtime. auxiliary_tiles contains the union of both recipes.
+    std::shared_ptr<ReducePlan> tail_plan;
+    std::uint32_t full_auxiliary_tile_count = 0;
+    std::uint32_t tail_auxiliary_tile_offset = 0;
+    std::uint32_t tail_selector_arg_offset = reduce_plan_args::no_runtime_arg;
     std::uint32_t logical_h = 0;
     std::uint32_t logical_w = 0;
 
@@ -181,9 +189,9 @@ struct ReducePlan {
     std::size_t total_owned_l1_bytes = 0;
 
     const ReduceCbRequirement* find_cb(ReduceCbRole role) const;
-    // Serialize the already-planned [height, width, batches] for tail cores.
-    // Changing a tail shape requires a new plan and compile-time arguments.
-    std::vector<std::uint32_t> get_runtime_shape_args() const;
+    // Use the same compiled plan on full and tail cores. Initialize the runtime
+    // slots on all cores: zero selects full work, the known shape selects tail.
+    std::vector<std::uint32_t> get_runtime_shape_args(bool use_tail = true) const;
 };
 
 // The block consumed by one reduce invocation on one core. Shapes are in elements;
@@ -208,13 +216,14 @@ struct ReduceBlockSpec {
     // Absent: the planner sizes the corresponding FIFO/staging allocation.
     std::optional<std::uint32_t> resident_input_tiles;
     std::optional<std::uint32_t> resident_output_tiles;
-    // Absent: reduce the whole logical block. Present: shape gives the exact
-    // valid tail within this block, known before planning. Normalization and
-    // auxiliary tiles use that shape. Compute receives the same shape at the
-    // configured runtime offset. Resident inputs retain this block's row and
-    // batch pitches. FIFO producers stream valid work in fixed-size packets of
-    // chunk.input_tiles() pages,
-    // padding the final axis/output group so each packet fits the CB ring.
+    // Absent: reduce the whole logical block. Present: also plan this known
+    // smaller shape, including its normalization and auxiliary tiles. Runtime
+    // arguments select full or tail work on each core of the same kernel grid.
+    // In an accumulated sequence, the configured tails form one alternative
+    // scenario and must be enabled together; calls without tails retain their
+    // geometry but use that scenario's combined AVG divisor. Resident input
+    // retains the full block's pitches. FIFO producers use the common planned
+    // packet size and pad unused pages at the final axis/output group.
     std::optional<ReduceTailConfig> tail;
 
     // Allow algorithms that do not read auxiliary tiles to return an empty

@@ -51,7 +51,7 @@
  * @endcode
  *
  * No sequence object is passed to the kernel. The kernel reads call_count at
- * the known suffix offset and addresses the fixed-width calls in order. Include
+ * the known suffix offset and addresses the calls in order. Include
  * reduce_plan_args.hpp alongside this header for these device views:
  *
  * @code{.cpp}
@@ -80,6 +80,12 @@
  *     issue_calls();
  * }
  * @endcode
+ *
+ * A tail-capable Call includes the full and planned tail alternatives and the
+ * runtime override offset. reduce<Call>() selects between them internally:
+ * [0, 0, 0] chooses full work; the planned [height, width, batches] chooses tail
+ * work, including its auxiliary slice and AVG normalization. The caller uses
+ * the same call type and compiled kernel on all cores of the grid.
  *
  * call_count only bounds the walk. Never infer accumulation, final-call, or
  * partial-tile behavior from I: Call carries all of it explicitly. Calls may
@@ -299,7 +305,7 @@ namespace compute_kernel_lib {
  * where rows have padding (row_stride > logical width).
  */
 struct ReduceInputMemoryLayout {
-    std::uint32_t row_stride = 0;  // 0 = auto-detect from Wt (contiguous row-major)
+    std::uint32_t row_stride = 0;    // 0 = auto-detect from Wt (contiguous row-major)
     std::uint32_t batch_stride = 0;  // 0 = rows * row_stride; resident inputs only
 
     explicit constexpr ReduceInputMemoryLayout() = default;

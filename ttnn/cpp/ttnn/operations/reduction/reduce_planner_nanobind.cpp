@@ -213,9 +213,17 @@ void bind_reduce_planner(nb::module_& mod) {
         .def_ro("Wt", &host::ReducePlan::Wt)
         .def_ro("batches", &host::ReducePlan::batches)
         .def_ro("tail", &host::ReducePlan::tail)
+        .def_prop_ro(
+            "tail_plan",
+            [](const host::ReducePlan& self) -> std::optional<host::ReducePlan> {
+                return self.tail_plan ? std::optional<host::ReducePlan>{*self.tail_plan} : std::nullopt;
+            })
+        .def_ro("full_auxiliary_tile_count", &host::ReducePlan::full_auxiliary_tile_count)
+        .def_ro("tail_auxiliary_tile_offset", &host::ReducePlan::tail_auxiliary_tile_offset)
+        .def_ro("tail_selector_arg_offset", &host::ReducePlan::tail_selector_arg_offset)
         .def_ro("logical_h", &host::ReducePlan::logical_h)
         .def_ro("logical_w", &host::ReducePlan::logical_w)
-        .def("get_runtime_shape_args", &host::ReducePlan::get_runtime_shape_args)
+        .def("get_runtime_shape_args", &host::ReducePlan::get_runtime_shape_args, nb::arg("use_tail") = true)
         .def_ro("input_row_stride_tiles", &host::ReducePlan::input_row_stride_tiles)
         .def_ro("reduce_factor", &host::ReducePlan::reduce_factor)
         .def_ro("post_scale", &host::ReducePlan::post_scale)
@@ -241,7 +249,7 @@ void bind_reduce_planner(nb::module_& mod) {
             nb::arg("input_cb_id"),
             nb::arg("auxiliary_cb_id"),
             nb::arg("output_cb_id"),
-            "Serialize one fixed-size non-accumulating compute call for the caller's CB namespace.")
+            "Serialize one non-accumulating compute call, including its optional runtime tail alternative.")
         .def(
             "auxiliary_compile_time_args",
             [](const host::ReducePlan& self, std::uint32_t auxiliary_cb_id) {
@@ -379,7 +387,7 @@ void bind_reduce_planner(nb::module_& mod) {
         .def_prop_ro(
             "compile_time_args",
             [](const host::ReduceCallPlan& self) { return host::ReduceCallArgs(self).get_compile_time_args(); },
-            "One fixed-size, independently decodable compute-call record.");
+            "One independently decodable compute call, including its optional runtime tail alternative.");
 
     nb::class_<host::ReduceSequencePlan>(planner, "ReduceSequencePlan")
         .def_ro("calls", &host::ReduceSequencePlan::calls)

@@ -9,8 +9,9 @@
 namespace ttnn::kernel_lib::reduce_plan_args {
 
 // Host and device deliberately share only these small wire-format descriptions.
-// Compute kernels receive one call-count word followed by fixed-size calls in
-// execution order. Dataflow kernels separately receive one aggregate auxiliary
+// Compute kernels receive one call-count word followed by calls in execution
+// order. A call has one fixed-size record and, when enabled, a second record for
+// its runtime tail alternative. Dataflow kernels receive one aggregate auxiliary
 // recipe for the entire planning unit. Both payloads may be appended after
 // kernel-owned compile-time arguments.
 inline constexpr std::uint32_t call_count_word_count = 1;
@@ -67,6 +68,10 @@ inline constexpr std::uint32_t accumulation_mode_shift = 16;
 inline constexpr std::uint32_t accumulation_mode_mask = 0x3;
 inline constexpr std::uint32_t partial_mode_shift = 18;
 inline constexpr std::uint32_t partial_mode_mask = 0x3;
+inline constexpr std::uint32_t has_tail_variant_shift = 20;
+inline constexpr std::uint32_t has_tail_variant_mask = 0x1;
+inline constexpr std::uint32_t uses_tail_shape_shift = 21;
+inline constexpr std::uint32_t uses_tail_shape_mask = 0x1;
 }  // namespace config
 
 namespace circular_buffers {

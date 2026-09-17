@@ -57,7 +57,7 @@ The equivalent C++ host calls are `sequence.append_to(compute_args)` and
 the same order; each compute block keeps its own count and each unit keeps its own auxiliary descriptor. The
 device kernels receive these flat words—no sequence object is passed to either kernel.
 
-The compute kernel reads the unit's length and addresses the fixed-width calls in their planned order:
+The compute kernel reads the unit's length and addresses calls in their planned order:
 
 ```cpp
 constexpr uint32_t reduce_args_offset = 1;  // after kernel_iters
@@ -111,16 +111,31 @@ CB is always present. Required native scalers, partial masks and planned tail
 masks remain in the plan with either setting. A later call may introduce an
 accumulation zero tile even when the first call needs no auxiliaries; allocation
 must therefore follow the complete aggregate recipe.
-For uniform allocations across full and tail cores, take the maximum across
-their plans as well; full cores may have empty recipes while tails need masks.
+For a tail-capable plan, the aggregate recipe already includes the tiles needed
+by both full and tail cores. Its CB requirements cover both runtime paths.
 
 Tail shapes must be supplied to `ReduceTailConfig.shape` as a `ReduceValidShape`
 before calling the planner. The planner validates that exact shape against the
-enclosing `ReduceBlockSpec`, then uses it for algorithm selection, chunk sizes,
-automatic AVG normalization and auxiliary tile extents. Aligned edges need no mask.
-`ReducePlan.get_runtime_shape_args()` returns the already-planned shape for the
-tail compute kernel; changing it requires replanning. Auxiliary kernels need no
-runtime shape: their tile patterns, values and valid extents are all compile-time.
+enclosing `ReduceBlockSpec`, then plans both full and tail work in one compile-time
+payload. Both automatic AVG divisors and auxiliary tile recipes are known upfront;
+distinct tail tiles are appended, while identical recipes can share storage.
+Aligned edges need no mask. The full plan is exposed in `ReducePlan`; `tail_plan`
+exposes its alternative. Streamed paths use a common padded packet geometry.
+
+Install that same compute kernel and compile-time arguments on the whole grid.
+Initialize its shape runtime slots on every core: `plan.get_runtime_shape_args(False)`
+returns `[0, 0, 0]` for full work, and `plan.get_runtime_shape_args()` returns the
+known tail shape for a tail core. The kernel calls `reduce<Call>()` once; the helper
+reads `Call::runtime_shape()` and selects traversal, masks and normalization
+internally. Changing which core is a tail requires only runtime arguments.
+Introducing a different tail geometry requires replanning its auxiliary recipe.
+
+For accumulated calls, the full and tail scenarios each use their combined valid
+extent when AVG has no explicit scalar. All configured tail overrides in a sequence
+must select the same scenario. Calls with no shape change still switch normalization
+when another call becomes a tail. Auxiliary generation needs no runtime shape;
+both constant recipes are prepared on all cores. Existing factories that install
+different compile-time specializations on distinct core ranges continue to do so.
 
 `ReduceCallConfig.scalar` is optional (`None` in Python, `std::nullopt` in C++).
 For AVG, omitting it divides by the exact valid reduction extent, including the
