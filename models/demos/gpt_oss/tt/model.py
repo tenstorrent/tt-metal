@@ -117,6 +117,18 @@ class Model:
             mesh_config: Mesh configuration for parallelization
         """
         self.mesh_device = mesh_device
+        # Runtime bounds for the post-prefill tail's slice. Allocated here, before any trace
+        # exists: created lazily on first use they would themselves be stranded across replays.
+        self._tail_slice_start = ttnn.from_torch(
+            torch.zeros(4, dtype=torch.int32),
+            device=mesh_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+        self._tail_slice_end = ttnn.from_torch(
+            torch.zeros(4, dtype=torch.int32),
+            device=mesh_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
         self.vocab_size = hf_config.vocab_size
         self.hf_config = hf_config
         self.core_grid = ttnn.CoreCoord(8, 8)
@@ -610,6 +622,35 @@ class Model:
         applies final norm + lm_head, so this method only slices logits.
         """
         get_last_token = (last_token_idx // 32) * 32
+        seq_len = int(logits.shape[-2])
+        # Pass the offset at runtime rather than as a compile-time attribute. With literal bounds
+        # every distinct prompt offset compiles its own slice program, and this runs after the
+        # prefill traces are captured, so each one is stranded across trace replays. Warmup cannot
+        # cover it either: it only sees bucket-length mock prompts, and real prompts are shorter.
+        #
+        # The tensor-args path needs a tile-aligned slice, which this already is - 32 rows starting
+        # at a multiple of 32 - so num_devices = seq_len // 32 selects exactly that window and the
+        # program keys on the prefill bucket instead of the offset.
+        if seq_len % 32 == 0:
+            for device_tensor, values in (
+                (self._tail_slice_start, [0, 0, get_last_token, 0]),
+                (self._tail_slice_end, [1, 1, get_last_token + 32, int(logits.shape[-1])]),
+            ):
+                ttnn.copy_host_to_device_tensor(
+                    ttnn.from_torch(
+                        torch.tensor(values, dtype=torch.int32),
+                        mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                    ),
+                    device_tensor,
+                )
+            return ttnn.slice(
+                input_tensor=logits,
+                starts=self._tail_slice_start,
+                ends=self._tail_slice_end,
+                slice_dim=2,
+                num_devices=seq_len // 32,
+            )
+
         logits = ttnn.slice(
             logits,
             (0, 0, get_last_token, 0),

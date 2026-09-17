@@ -32,14 +32,14 @@ void kernel_main() {
     constexpr auto s_args = TensorAccessorArgs<5>();
     const auto s = TensorAccessor(s_args, src_addr);
 
-    Noc noc;
+    const Noc noc;
     DataflowBuffer dfb_in0(dfb_id_in0);
     DataflowBuffer dfb_in1(dfb_id_in1);
     const uint32_t tile_bytes_in0 = dfb_in0.get_entry_size();
 
 #if not GENERATE_INDICES
     // Precomputed indices tensor accessor
-    constexpr auto indices_args = TensorAccessorArgs<s_args.next_compile_time_args_offset()>();
+    constexpr auto indices_args = TensorAccessorArgs<decltype(s_args)::next_compile_time_args_offset()>();
     const uint32_t src_indices_addr = get_arg_val<uint32_t>(4);
     const auto indices_accessor = TensorAccessor(indices_args, src_indices_addr);
     const uint32_t tile_bytes_in1 = dfb_in1.get_entry_size();
@@ -49,7 +49,7 @@ void kernel_main() {
         for (uint32_t j = start_wt; j < start_wt + Wt_local; ++j) {
             // Stream input value tile from DRAM to local circular buffer
             dfb_in0.reserve_back(onetile);
-            noc.async_read(s, dfb_in0, tile_bytes_in0, {.page_id = i * Wt + j}, {.offset_bytes = 0});
+            noc.async_read(s, dfb_in0, tile_bytes_in0, {.page_id = (i * Wt) + j}, {.offset_bytes = 0});
             noc.async_read_barrier();
             dfb_in0.push_back(onetile);
 #if GENERATE_INDICES

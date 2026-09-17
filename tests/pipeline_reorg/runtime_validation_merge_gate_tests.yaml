@@ -18,6 +18,7 @@
     bh_p150b_civ2_viommu:
       timeout: 15
   team: runtime
+  budget_type: merge_gate
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
 
 - name: runtime validation smoke cpu-only
@@ -32,4 +33,5 @@
     github_hosted_cpu:
       timeout: 10
   team: runtime
+  budget_type: merge_gate
   owner_id: U099A7FMKL2 # Manish Sudumbrekar

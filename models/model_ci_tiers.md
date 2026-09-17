@@ -36,6 +36,16 @@ Tier 3 models are compatible with the latest TT-Metal releases but are not optim
 
 # Current Model Assignments
 
+## Agentic Research Models
+
+These models use the [weekly Agentic Research pipeline](#agentic-research-model-tests).
+
+| Model implementation | System | Tier | Weekly coverage |
+|----------------------|--------|------|-----------------|
+| Llama3.1-8B QB2 TP4 | BH QuietBox 2 | 3 | Decoder PCC and trace replay; scored IFEval serving |
+
+## Daily Model Pipelines
+
 The initial release of the 3-tier model CI includes models owned by the models-team. We plan to onboard the remaining models incrementally to reduce CI load. The current list of models and systems in the new pipelines can be seen below.
 
 
@@ -51,6 +61,7 @@ it is classified differently on different systems.
 | Llama3.3-70B | WH Galaxy |
 | Qwen3-32B | WH Galaxy, BH Galaxy |
 | Qwen3.6-27B | BH QuietBox 2 |
+| Qwen3.6-35B-A3B | BH QuietBox 2 |
 | GPT-OSS 120B | WH LLMBox, WH Galaxy, BH QuietBox 2, BH Galaxy |
 | MiniMax-M3 | BH P150, BH Galaxy |
 | Gemma-4-12B | BH QuietBox 2 |
@@ -114,14 +125,17 @@ it is classified differently on different systems.
 | Mamba-2.8B | WH N150 |
 | Phi-3-mini | WH N150 |
 | Janus-Pro-7B | BH P150 |
+| HunyuanImage-3.0 | BH QuietBox 2 |
 | Panoptic-DeepLab | BH P150 |
 | BEVFormer | BH P150 |
 | Mistral-Small-3.1-24B | WH LLMBox, BH QuietBox 2 |
 | Stable Diffusion 3.5 Large | WH LLMBox |
 | Mochi-1-preview | WH LLMBox, WH Galaxy |
+| XTTS-v2 | BH P150 |
 | VGGNet | WH N150 |
 | BERT-Tiny | WH N150 |
 | BERT-Large | WH N150 |
+| ModernBERT-base | WH N300 |
 | DistilBERT | WH N150 |
 | SqueezeBERT | WH N150 |
 | MNIST MLP classifier | WH N150 |
@@ -136,7 +150,7 @@ it is classified differently on different systems.
 
 # Pipelines
 
-Each test type has a per-tier GitHub Actions workflow and a shared configuration file. The workflows are separated by tier to allow independent scheduling, but the test definitions live in a single config YAML per pipeline.
+End-to-End, Unit, and Sweep tests have per-tier GitHub Actions workflows and a shared configuration file for each test type. vLLM Model Tests and Agentic Research Model Tests each use one workflow for all registered tiers.
 
 ## End-to-End Tests
 
@@ -223,6 +237,48 @@ Models covered (system · classification tier):
 | Gemma-4-31B | WH LLMBox | 2 |
 | Gemma-4-E2B | WH N150 | 3 |
 | NoOp (vLLM overhead) | WH Galaxy | 1 |
+
+## Agentic Research Model Tests
+
+This pipeline tests models brought up through agentic research. It runs every
+**Saturday at 07:00 UTC**. All registered tiers run on that schedule. Each model
+and hardware pair has its own tier, test coverage, and time budget.
+
+| Item | File |
+|------|------|
+| Workflow | [Agentic Research Model Tests](../.github/workflows/agentic-research-model-tests.yaml) |
+| Test commands | [agentic_research_model_tests.yaml](../tests/pipeline_reorg/agentic_research_model_tests.yaml) |
+| Time budgets | [time_budget.yaml](../.github/time_budget.yaml) |
+| Shared runner | [models-e2e-tests-impl.yaml](../.github/workflows/models-e2e-tests-impl.yaml) |
+
+Each test entry contains an explicit `cmd: |` block with its environment, setup,
+test, and cleanup commands. Keep those commands in the YAML so reviewers and
+dashboards can read the full procedure in one place. To reproduce a test locally,
+run its block from the checkout with the required hardware and model weights.
+
+For a manual run, select **Run workflow** in GitHub Actions. Choose `model`, `sku`,
+and `tier`, or leave them at `all`. Use `vllm-tt-plugin-ref` to select a plugin
+branch or tag. It temporarily defaults to `yieldthought/llama31-qb2-serving`
+for both manual and scheduled runs, until [vllm-tt-plugin #116](https://github.com/tenstorrent/vllm-tt-plugin/pull/116)
+merges. A selection with no matching tests fails before the build starts. The
+Saturday schedule becomes active after the workflow is merged to the default branch.
+
+To add a model:
+
+1. Add its command, model identifier, owner, and team to the test YAML.
+2. For each SKU, set `tier` and `timeout` in minutes.
+3. Set the total budget under `models.agentic_research_tier<N>.<sku>` in
+   `time_budget.yaml`. The sum of test timeouts for that tier and SKU must fit
+   the budget. The initial QB2 Tier 3 budget is **12 minutes**, including setup,
+   model tests, serving, and reporting. The [10-minute validation run](https://github.com/tenstorrent/tt-metal/actions/runs/34480800119)
+   passed all 24 model tests and completed 54 of 56 serving requests before its
+   timeout; the budget includes room for completion and runner variance.
+4. Add any new model or SKU to the workflow's manual choices. Add the required
+   targets to [model_targets.yaml](model_targets.yaml).
+
+The shared runner collects test reports and benchmark data, then checks the
+central targets. Tier 3 requires accuracy targets. Its `perf` field can be
+omitted or set to `{}`; measured performance is still reported.
 
 ## Other Pipelines
 

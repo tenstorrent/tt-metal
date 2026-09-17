@@ -268,6 +268,7 @@ class TtPrefillBlock(LightweightModule):
         overlap_shared_expert_with_dispatch: bool = True,
         first_layer_idx: Optional[int] = None,
         tp_shard_kv: bool = False,
+        llama4_scale_cache: Optional[dict] = None,
     ):
         super().__init__()
         self.routing_use_l1_small_for_semaphores = routing_use_l1_small_for_semaphores
@@ -349,6 +350,7 @@ class TtPrefillBlock(LightweightModule):
             sparse_kv_cache_format=sparse_kv_cache_format,
             first_layer_idx=first_layer_idx,
             tp_shard_kv=tp_shard_kv,
+            llama4_scale_cache=llama4_scale_cache,
         )
 
         if kv_only:
@@ -528,10 +530,13 @@ class TtPrefillBlock(LightweightModule):
             mla.set_trace_controller(controller)
 
     def release_sub_device_managers(self):
-        """Remove this block's MoE overlap sub-device manager before mesh close (no-op otherwise)."""
+        """Remove this block's registered overlap managers before mesh close (no-op otherwise)."""
         ffn = getattr(self, "ffn", None)
         if ffn is not None and hasattr(ffn, "release_sub_device_manager"):
             ffn.release_sub_device_manager()
+        mla = getattr(self, "mla", None)
+        if mla is not None and hasattr(mla, "release_sparse_mla_overlap_manager"):
+            mla.release_sparse_mla_overlap_manager()
 
     def forward(
         self,

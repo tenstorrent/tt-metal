@@ -93,7 +93,6 @@ class Precision(Enum):
         return self.label
 
 
-CORRECTION_NUM_TILES = 5
 CORRECTION_TILE_NAMES = ("prev_max", "worker_max", "cur_max", "prev_sum", "worker_sum")
 CORRECTION_SCALE_BF16_VALUES = (0x3F80, 0x3E80)  # (1.0, 0.25)
 
@@ -340,11 +339,13 @@ def _correction_stimulus_tiles(torch_format):
 
 
 def _dest_configurations():
-    """Dest configurations that can hold five tiles."""
+    """Cover both the four-tile FP32 half-sync layout and the five-tile layout."""
     return [
         (Precision.Bf16Dest, DestSync.Half),
         (Precision.Bf16Dest, DestSync.Full),
+        (Precision.Fp32Dest, DestSync.Half),
         (Precision.Fp32Dest, DestSync.Full),
+        (Precision.Fp32E2E, DestSync.Half),
         (Precision.Fp32E2E, DestSync.Full),
     ]
 
@@ -361,11 +362,16 @@ def test_sfpu_sdpa_correction(dest_config, scale_bf16):
     torch_format = format_dict[formats.input_format]
 
     src_tiles = _correction_stimulus_tiles(torch_format)
+    reuse_cur_max_tile = precision != Precision.Bf16Dest and dest_sync == DestSync.Half
+    if reuse_cur_max_tile:
+        src_tiles = [src_tiles[0], src_tiles[1], src_tiles[4], src_tiles[3]]
+    num_tiles = len(src_tiles)
     src_B = torch.zeros(ELEMENTS_PER_TILE, dtype=torch_format)
 
     golden_tiles = get_golden_generator(SdpaCorrectionGolden)(
         [t.view(TILE_DIM, TILE_DIM) for t in src_tiles],
         scale=_bf16_to_float(scale_bf16),
+        reuse_cur_max_tile=reuse_cur_max_tile,
     )
 
     src_A_tilized = torch.cat(
@@ -389,9 +395,9 @@ def test_sfpu_sdpa_correction(dest_config, scale_bf16):
             src_B,
             formats.input_format,
             formats.output_format,
-            tile_count_A=CORRECTION_NUM_TILES,
+            tile_count_A=num_tiles,
             tile_count_B=1,
-            tile_count_res=CORRECTION_NUM_TILES,
+            tile_count_res=num_tiles,
         ),
         dest_acc=precision.dest_acc,
         unpack_to_dest=precision.unpack_to_dest,
@@ -407,13 +413,13 @@ def test_sfpu_sdpa_correction(dest_config, scale_bf16):
             formats.output_format,
             TILE_DIMENSIONS,
         )
-        for i in range(CORRECTION_NUM_TILES)
+        for i in range(num_tiles)
     ]
 
     for name, src, res, golden in zip(
         CORRECTION_TILE_NAMES, src_tiles, res_tiles, golden_tiles
     ):
-        # All five regions are addressed by the same strided walk, so a write outside the
+        # All regions are addressed by the same strided walk, so a write outside the
         # footprint in any one of them is a stride bug.
         unexpected = _footprint_violations(src.view(TILE_DIM, TILE_DIM), res)
         assert not unexpected, (

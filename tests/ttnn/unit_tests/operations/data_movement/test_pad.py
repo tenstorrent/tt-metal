@@ -58,24 +58,39 @@ def test_pad_rm(device, n, c, h, w, padding, torch_padding, value, dtype):
 
 
 @pytest.mark.parametrize(
-    "shape,padding,torch_padding",
+    "shape,padding,torch_padding,use_multicore",
     [
-        ((8, 1, 1, 1), ((0, 0), (0, 0), (0, 0), (0, 191)), (0, 191, 0, 0, 0, 0, 0, 0)),
-        ((1, 1, 1, 2), ((0, 0), (0, 0), (0, 0), (0, 254)), (0, 254, 0, 0, 0, 0, 0, 0)),
-        ((4, 1, 1, 4), ((0, 0), (0, 0), (0, 0), (0, 60)), (0, 60, 0, 0, 0, 0, 0, 0)),
+        ((8, 1, 1, 1), ((0, 0), (0, 0), (0, 0), (0, 191)), (0, 191, 0, 0, 0, 0, 0, 0), True),
+        ((1, 1, 1, 2), ((0, 0), (0, 0), (0, 0), (0, 254)), (0, 254, 0, 0, 0, 0, 0, 0), True),
+        ((4, 1, 1, 4), ((0, 0), (0, 0), (0, 0), (0, 60)), (0, 60, 0, 0, 0, 0, 0, 0), True),
+        ((1, 1, 1, 1985), ((0, 0), (0, 0), (0, 0), (49290, 0)), (49290, 0, 0, 0, 0, 0, 0, 0), True),
+        pytest.param(
+            (1, 1, 1, 1985),
+            ((0, 0), (0, 0), (0, 0), (49290, 0)),
+            (49290, 0, 0, 0, 0, 0, 0, 0),
+            False,
+            marks=pytest.mark.xfail(
+                raises=AssertionError,
+                strict=True,
+                reason="single-core RM pad writes the padding after the data instead of before it: "
+                "https://github.com/tenstorrent/tt-metal/issues/56323",
+            ),
+        ),
     ],
 )
 @pytest.mark.parametrize("value", [0])
-def test_pad_rm_small_to_large_width(device, shape, padding, torch_padding, value):
+def test_pad_rm_small_to_large_width(device, shape, padding, torch_padding, use_multicore, value):
     """Regression test for issue #39875: padding from very small width to large width
-    caused CB allocation to exceed L1 size due to using input width for stick batching."""
+    caused CB allocation to exceed L1 size due to using input width for stick batching,
+    and for wide padded rows whose fixed 16-row CB depth exceeded L1 on both the
+    multi-core and single-core row-major factories."""
     torch.manual_seed(0)
 
     torch_input_tensor = torch.rand(shape).bfloat16().float()
     torch_output_tensor = torch.nn.functional.pad(torch_input_tensor, torch_padding, mode="constant", value=value)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, dtype=ttnn.bfloat16)
-    output_tensor = ttnn.pad(input_tensor, padding=padding, value=value)
+    output_tensor = ttnn.pad(input_tensor, padding=padding, value=value, use_multicore=use_multicore)
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert output_tensor.shape == torch_output_tensor.shape

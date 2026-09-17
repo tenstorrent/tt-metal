@@ -532,7 +532,7 @@ ttnn::device_operation::ProgramArtifacts SDPAOperation::SDPAProgramFactory::crea
     const DFBSpecName CU_WINDOW{"cu_window_seqlens"};
     const DFBSpecName IDENTITY_SCALE_IN{"identity_scale_in"};
     const DFBSpecName COL_IDENTITY{"col_identity"};
-    const DFBSpecName PAGE_TABLE{"page_table"};
+    const ScratchpadSpecName PAGE_TABLE_SCRATCH{"page_table"};
     const DFBSpecName CHUNK_START_IDX_COMPUTE{"chunk_start_idx_compute"};
     const DFBSpecName CHUNK_START_IDX_WRITER{"chunk_start_idx_writer"};
     const DFBSpecName ATTENTION_SINK{"attention_sink"};
@@ -735,13 +735,8 @@ ttnn::device_operation::ProgramArtifacts SDPAOperation::SDPAProgramFactory::crea
                 .data_format_metadata = off_df});
         }
     }
-    if (is_chunked) {
-        dfbs.push_back(DataflowBufferSpec{
-            .unique_id = PAGE_TABLE,
-            .entry_size = page_table_stick_size,
-            .num_entries = 1,
-            .data_format_metadata = page_table_df});
-    }
+    // Chunked page table: the reader both fills and reads it (former DM self-loop DFB). Converted to a
+    // private node-local Scratchpad -- registered on spec.scratchpads and bound to the reader below.
     if (flexible_chunked) {
         constexpr uint32_t chunk_start_idx_page_size = 32;
         dfbs.push_back(DataflowBufferSpec{
@@ -1377,12 +1372,12 @@ ttnn::device_operation::ProgramArtifacts SDPAOperation::SDPAProgramFactory::crea
             TensorBinding{.tensor_parameter_name = T_ATTENTION_SINK, .accessor_name = "attention_sink"});
         reader_defines.insert({"USE_ATTENTION_SINK", "1"});
     }
+    Group<ScratchpadBinding> reader_scratch;
     if (is_chunked) {
-        // Page table is filled and read within the reader — self-loop.
-        reader_dfbs.push_back(DFBBinding{
-            .dfb_spec_name = PAGE_TABLE, .accessor_name = "page_table", .endpoint_type = DFBEndpointType::PRODUCER});
-        reader_dfbs.push_back(DFBBinding{
-            .dfb_spec_name = PAGE_TABLE, .accessor_name = "page_table", .endpoint_type = DFBEndpointType::CONSUMER});
+        // Page table is filled and read within the reader. Formerly a DM self-loop DFB; now a private
+        // node-local Scratchpad the reader stages into and indexes directly.
+        reader_scratch.push_back(
+            ScratchpadBinding{.scratchpad_spec_name = PAGE_TABLE_SCRATCH, .accessor_name = "page_table"});
         reader_tensors.push_back(TensorBinding{.tensor_parameter_name = T_PAGE_TABLE, .accessor_name = "page_table"});
         reader_defines.insert({"IS_CHUNKED", "1"});
     }
@@ -1452,10 +1447,13 @@ ttnn::device_operation::ProgramArtifacts SDPAOperation::SDPAProgramFactory::crea
 
     KernelSpec reader{
         .unique_id = READER,
-        .source = "ttnn/cpp/ttnn/operations/experimental/quasar/transformer/sdpa/device/kernels/dataflow/reader_interleaved.cpp",
+        .source =
+            "ttnn/cpp/ttnn/operations/experimental/quasar/transformer/sdpa/device/kernels/dataflow/"
+            "reader_interleaved.cpp",
         .compiler_options = {.defines = reader_defines},
         .dfb_bindings = reader_dfbs,
         .semaphore_bindings = reader_sems,
+        .scratchpad_bindings = reader_scratch,
         .tensor_bindings = reader_tensors,
         .compile_time_args = reader_cta,
         .runtime_arg_schema = {.runtime_arg_names = reader_rta_names},
@@ -1713,11 +1711,18 @@ ttnn::device_operation::ProgramArtifacts SDPAOperation::SDPAProgramFactory::crea
 
     // ---- ProgramSpec ----
 
+    Group<ScratchpadSpec> scratchpads;
+    if (is_chunked) {
+        // size_per_node = entry_size * num_entries = page_table_stick_size * 1 (single entry).
+        scratchpads.push_back(ScratchpadSpec{.unique_id = PAGE_TABLE_SCRATCH, .size_per_node = page_table_stick_size});
+    }
+
     ProgramSpec spec{
         .name = "sdpa_quasar",
         .kernels = {reader, writer, compute},
         .dataflow_buffers = dfbs,
         .semaphores = sems,
+        .scratchpads = scratchpads,
         .tensor_parameters = tensor_params,
         .work_units = {WorkUnitSpec{.name = "main", .kernels = {READER, WRITER, COMPUTE}, .target_nodes = core_grid}},
     };
