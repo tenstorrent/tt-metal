@@ -118,16 +118,16 @@ operands:
     format: "Float16_b"
 
 operations:
-  - math:
-      - type: "Fpu"
-        in0: "x"
-        operation: "Datacopy"
-        unpacker: "UnpackerTilizeA"
-        math_fidelity: "LoFi"
-    block_size: [32, 64]
-    pack:
-      - output: "x_tiled"
-        packer: "Packer"
+  # - math:
+  #     - type: "Fpu"
+  #       in0: "x"
+  #       operation: "Datacopy"
+  #       unpacker: "UnpackerTilizeA"
+  #       math_fidelity: "LoFi"
+  #   block_size: [32, 64]
+  #   pack:
+  #     - output: "x_tiled"
+  #       packer: "Packer"
 
   - math:
       - type: "Fpu"
@@ -343,13 +343,13 @@ operations:
       - output: "out_tiled"
         packer: "Packer"
 
-  - math:
-      - type: "Fpu"
-        in0: "out_tiled"
-        operation: "Datacopy"
-        unpacker: "UnpackerA"
-        math_fidelity: "LoFi"
-    block_size: [32, 64]
-    pack:
-      - output: "output"
-        packer: "PackUntilize"
+  # - math:
+  #     - type: "Fpu"
+  #       in0: "out_tiled"
+  #       operation: "Datacopy"
+  #       unpacker: "UnpackerA"
+  #       math_fidelity: "LoFi"
+  #   block_size: [32, 64]
+  #   pack:
+  #     - output: "output"
+  #       packer: "PackUntilize"
