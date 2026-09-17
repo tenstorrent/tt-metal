@@ -51,21 +51,26 @@ def manage_config(name: str, value):
     original_value = getattr(CONFIG, name)
     setattr(CONFIG, name, value)
     logger.debug(f"Set ttnn.CONFIG.{name} to {value}")
-    yield
     try:
-        setattr(CONFIG, name, original_value)
-        logger.debug(f"Restored ttnn.CONFIG.{name} to {original_value}")
-    except Exception as e:
-        # Some config attributes (e.g., path-like) do not accept None; fallback to empty string
-        # afuller
-        if original_value is None:
-            try:
-                setattr(CONFIG, name, "")
-                logger.debug(f"Restored ttnn.CONFIG.{name} to empty string as a substitute for None")
-            except Exception as e2:
-                logger.error(f"{e2}. ERROR_A! Cannot reset ttnn.CONFIG.{name} to a safe default (original was None)")
-        else:
-            logger.error(f"{e}. ERROR_A! Cannot reset ttnn.CONFIG.{name} to {original_value}")
+        yield
+    finally:
+        # Restore even when the block raises, or the value leaks into everything that runs afterwards.
+        try:
+            setattr(CONFIG, name, original_value)
+            logger.debug(f"Restored ttnn.CONFIG.{name} to {original_value}")
+        except Exception as e:
+            # Some config attributes (e.g., path-like) do not accept None; fallback to empty string
+            # afuller
+            if original_value is None:
+                try:
+                    setattr(CONFIG, name, "")
+                    logger.debug(f"Restored ttnn.CONFIG.{name} to empty string as a substitute for None")
+                except Exception as e2:
+                    logger.error(
+                        f"{e2}. ERROR_A! Cannot reset ttnn.CONFIG.{name} to a safe default (original was None)"
+                    )
+            else:
+                logger.error(f"{e}. ERROR_A! Cannot reset ttnn.CONFIG.{name} to {original_value}")
 
 
 from ttnn._ttnn.multi_device import (
@@ -313,6 +318,7 @@ from ttnn.device import (
     close_device,
     manage_device,
     synchronize_device,
+    is_trace_capture_active,
     dump_device_memory_state,
     get_memory_view,
     get_allocator_base_address,
@@ -474,7 +480,6 @@ from ttnn.operations.matmul import (
     MatmulParams,
     MatmulInputs,
     MatmulDeviceOperation,
-    MatmulMultiCoreReuseOptimizedProgramFactory,
     create_matmul_attributes,
     matmul_select_program_factory,
 )

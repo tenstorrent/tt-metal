@@ -43,8 +43,8 @@ struct MeshPartitionDeviceOperation {
             const std::vector<ttnn::Tensor>&)>;
 
         // -- shared variables --------------------------------------------
-        // Remembers which slice factory built this coord's Program so the cache hit patches the
-        // slot layout that factory baked (see patch_slice_program_addresses).
+        // Remembers which slice factory built this coord's Program so the cache hit re-applies the
+        // run args that factory declared (see slice_program_run_args).
         struct shared_variables_t {
             prim::SliceDeviceOperation::program_factory_t slice_program_factory;
         };
