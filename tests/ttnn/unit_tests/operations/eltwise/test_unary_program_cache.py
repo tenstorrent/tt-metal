@@ -12,8 +12,9 @@ The unary operation uses 3 ProgramFactory variants:
   - UnaryShardedProgramFactory (sharded input)
 
 compute_program_hash() hashes:
-  TILE layout:  args, input tensor_layout, src/dst shard volumes
-  ROW_MAJOR:    args, input tensor_layout, padded_shape, src/dst shard volumes
+  TILE layout:  args, input tensor_layout, output tensor_layout, src/dst shard volumes
+  ROW_MAJOR:    args, input tensor_layout, output tensor_layout, padded_shape,
+                src/dst shard volumes
 
 Where args = entire operation_attributes_t via to_hash() (op_chain, output_dtype,
 memory_config, fp32_dest_acc_en, preserve_fp32_precision, bfp8_pack_precise,
@@ -30,7 +31,9 @@ tensor-backed circular-buffer base address (by CBIndex: c_0=input, c_2=output).
 
 For TILE layout, volume is NOT hashed, so differently-shaped calls share one
 cache entry and override_runtime_arguments re-applies the new shape's work split
-on the hit. Because addresses are re-derived from the actual current tensors
+on the hit. The one exception is an interleaved TILE tensor overpadded past its
+tile boundary: its Alignment resolves to the padded H/W rather than the tile dims,
+so those tensors do key on padded shape and fragment per shape. Because addresses are re-derived from the actual current tensors
 (never inferred from Buffer* identity), in-place (out=x) and mixed in-place/
 out-of-place reuse of one cache entry stay correct by construction.
 """
@@ -166,7 +169,11 @@ def test_unary_cache_miss_different_memory_configs(device):
 
 def test_unary_cache_miss_different_tiles(device):
     """Two TILE tensors identical in dtype, logical shape, padded shape and memory config, differing
-    only in their Tile dims -> separate cache entries."""
+    only in their Tile dims -> separate cache entries.
+
+    Values are asserted for the 32x32 tile only. relu on a 16x32 tile returns wrong data currently
+    since buffer and CB sizes come from tile_size(DataFormat), which assumes 32x32, while the work split
+    reads the real tile."""
     device.cache_entries_counter.reset()
     shape = [1, 1, 64, 64]
     padded_shapes = []
@@ -184,9 +191,34 @@ def test_unary_cache_miss_different_tiles(device):
         )
         padded_shapes.append(tt_a.padded_shape)
         with device.cache_entries_counter.measure():
-            ttnn.relu(tt_a)
+            tt_out = ttnn.relu(tt_a)
+        if tile == [32, 32]:
+            assert_equal(torch.relu(torch_a), ttnn.to_torch(tt_out))
 
     assert padded_shapes[0] == padded_shapes[1]
+    assert device.cache_entries_counter.total == 2
+
+
+def test_unary_cache_miss_different_alignments(device):
+    """Two TILE tensors identical in dtype, logical shape and memory config, differing only in
+    padded shape -> separate cache entries."""
+    device.cache_entries_counter.reset()
+    logical = [1, 1, 32, 32]
+
+    for padded in ([1, 1, 64, 64], [1, 1, 96, 96]):
+        torch.manual_seed(0)
+        torch_a = torch.rand(logical, dtype=torch.bfloat16) + 0.1
+        # Legacy Tensor.pad drives padded_shape past round_up(logical, tile); from_torch
+        # pads to the tile multiple (non-overpadded).
+        host = ttnn.from_torch(torch_a, layout=ttnn.ROW_MAJOR_LAYOUT)
+        tt_a = host.pad(padded, [0] * len(logical), 0.0).to(ttnn.TILE_LAYOUT).to(device)
+        assert tt_a.padded_shape == ttnn.Shape(padded)
+        assert tt_a.shape == ttnn.Shape(logical)
+
+        with device.cache_entries_counter.measure():
+            tt_out = ttnn.relu(tt_a)
+        assert_equal(torch.relu(torch_a), ttnn.to_torch(tt_out))
+
     assert device.cache_entries_counter.total == 2
 
 

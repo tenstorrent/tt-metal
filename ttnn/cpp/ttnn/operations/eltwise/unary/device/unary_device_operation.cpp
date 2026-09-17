@@ -291,10 +291,17 @@ ttsl::hash::hash_t UnaryDeviceOperation::compute_program_hash(
         dst_shard_vol = shard_specs->output_shard_spec.numel() / out_tile_hw;
     }
 
-    // tensor_layout contains dtype, layout, memory_config and page config. A Metal 2.0 TensorParameter relaxation
-    // requires tensor_layout to be exactly equal and no relaxation flag reaches inside it, so any
-    // component left out here is a cache collision that fails validation on hit instead of
-    // rebuilding. Shape is not a part of tensor_layout, so omitting it below still works.
+    // tensor_layout contains dtype, layout, memory_config, page config and alignment. A Metal 2.0
+    // TensorParameter relaxation requires tensor_layout to be exactly equal and no relaxation flag
+    // reaches inside it, so any component left out here is a cache collision that fails validation on
+    // hit instead of rebuilding.
+    //
+    // Shape is not a member of tensor_layout, but it is not fully excluded by hashing one either. For
+    // an interleaved TILE tensor overpadded past its tile boundary, legacyShapeToAlignment returns
+    // {padded_h, padded_w} and not tile dims. Unary builds its output through fromPaddedShape. Chaining
+    // unaries over an overpadded tensor keys the next one on that padded shape and such tensors fragment
+    // per padded H/W. Tile-aligned tensors take the branch that returns the tile dims, so the common case
+    // still shares one entry across shapes.
     //
     // The output needs its own term rather than riding on the input's. A preallocated output carries a
     // caller-chosen spec that compute_output_specs returns verbatim, and the only cross-check against
@@ -302,23 +309,14 @@ ttsl::hash::hash_t UnaryDeviceOperation::compute_program_hash(
     // split is derived from the OUTPUT tile (unary_program_factory.cpp), so a collision on that slot
     // mis-sizes the split as well as failing the binding.
 
-    // TODO: For ROW_MAJOR, page size depends on width. Hashing padded_shape ensures
-    // different widths get separate cache entries. Consider hashing only the last
-    // dimension to allow cache reuse when only height differs
-    if (input_tensor.layout() == Layout::ROW_MAJOR) {
-        return operation::hash_operation<UnaryDeviceOperation>(
-            attributes,
-            input_tensor.tensor_spec().tensor_layout(),
-            output_spec.tensor_layout(),
-            input_tensor.padded_shape(),
-            src_shard_vol,
-            dst_shard_vol);
-    }
-
     return operation::hash_operation<UnaryDeviceOperation>(
         attributes,
         input_tensor.tensor_spec().tensor_layout(),
         output_spec.tensor_layout(),
+        // TODO: For ROW_MAJOR, page size depends on width. Hashing padded_shape ensures
+        // different widths get separate cache entries. Consider hashing only the last
+        // dimension to allow cache reuse when only height differs
+        input_tensor.layout() == Layout::ROW_MAJOR ? std::optional{input_tensor.padded_shape()} : std::nullopt,
         src_shard_vol,
         dst_shard_vol);
 }
