@@ -35,24 +35,24 @@ public:
 private:
     static constexpr uint32_t kNumRisc = 5;
 
+    // Kernel start and end in device cycles (the CSV's CYCLE columns) and on the host TSC (every [ns] column): a
+    // difference of cycles has no single rate to convert with under DVFS, the host span has.
     struct OpAgg {
-        uint64_t k_start = UINT64_MAX, k_start_last = 0, k_end = 0;
-        uint64_t dm_start = UINT64_MAX;  // earliest BRISC/NCRISC kernel start
-        std::array<uint64_t, kNumRisc> risc_start{};
-        std::array<uint64_t, kNumRisc> risc_end{};
-        std::map<uint32_t, std::pair<uint64_t, uint64_t>> cores;  // core -> (kernel start, end)
-        OpAgg() { risc_start.fill(UINT64_MAX); }
-    };
-
-    struct DeviceMeta {
-        uint32_t chip_id = 0;
-        double frequency_ghz = 0.0;
+        uint64_t k_start = UINT64_MAX, k_end = 0;
+        int64_t h_start = INT64_MAX, h_start_last = INT64_MIN, h_end = INT64_MIN;
+        int64_t h_dm_start = INT64_MAX;  // earliest BRISC/NCRISC kernel start
+        std::array<int64_t, kNumRisc> h_risc_start{};
+        std::array<int64_t, kNumRisc> h_risc_end{};
+        std::map<uint32_t, std::pair<int64_t, int64_t>> cores;  // core -> (kernel start, end), host TSC
+        OpAgg() {
+            h_risc_start.fill(INT64_MAX);
+            h_risc_end.fill(INT64_MIN);
+        }
     };
 
     FILE* f_ = nullptr;
     std::map<std::tuple<uint32_t, uint32_t, uint32_t>, OpAgg> ops_;  // (chip, runtime host-id, execution)
     std::map<std::tuple<uint32_t, uint32_t, uint32_t, uint32_t>, uint32_t> pair_count_;  // (chip, core, risc, prog)
-    std::unordered_map<uint32_t, DeviceMeta> devices_;  // from the records: one frequency per chip
 };
 
 }  // namespace tt::tt_metal::streaming_profiler

@@ -331,6 +331,15 @@ int64_t SyncCorrections::lookup_error_ns(uint32_t chip_id, int64_t wall) noexcep
     return static_cast<int64_t>(std::ceil(e));
 }
 
+double SyncCorrections::lookup_rate_ghz(uint32_t chip_id, int64_t wall) noexcept {
+    double root = 0.0;
+    if (chip_id >= kMaxChips || !place_root(chip_id, wall, root)) {
+        return 0.0;
+    }
+    const double slope = t_cursors[chip_id].slope;  // root refclk ticks per wall tick
+    return slope > 0.0 ? 50e6 * 1e-9 / slope : 0.0;
+}
+
 void SyncCorrections::set_asymmetry_ns(double ns) noexcept { g_asymmetry_ns.store(ns, std::memory_order_relaxed); }
 
 void SyncCorrections::set_steady(const SteadySegment& segment) noexcept {
@@ -438,5 +447,8 @@ int64_t sync_error_ns(uint16_t chip_id, int64_t wall) noexcept {
 }
 int64_t tsc_to_steady_ns(int64_t tsc) noexcept {
     return tt::tt_metal::streaming_profiler::SyncCorrections::tsc_to_mono_ns(tsc);
+}
+double sync_rate_ghz(uint16_t chip_id, int64_t wall) noexcept {
+    return tt::tt_metal::streaming_profiler::SyncCorrections::lookup_rate_ghz(chip_id, wall);
 }
 }  // namespace tt::tt_metal::experimental::streaming_profiler::detail

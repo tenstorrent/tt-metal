@@ -134,6 +134,7 @@ constexpr RecordType accepted_batch() {
 int64_t sync_place_tsc(uint16_t chip_id, int64_t wall) noexcept;
 int64_t sync_error_ns(uint16_t chip_id, int64_t wall) noexcept;
 int64_t tsc_to_steady_ns(int64_t tsc) noexcept;
+double sync_rate_ghz(uint16_t chip_id, int64_t wall) noexcept;
 }  // namespace detail
 
 /** @brief The host's time-stamp counter, in ticks: the clock records are placed in and the clock Tracy's timeline runs
@@ -175,12 +176,15 @@ public:
     std::chrono::nanoseconds host_time_error() const {
         return std::chrono::nanoseconds(detail::sync_error_ns(chip_id_, static_cast<int64_t>(timestamp_) + offset_));
     }
-    /** @brief The chip's clock frequency in GHz. */
-    double frequency_ghz() const { return frequency_hz_ * 1e-9; }
+    /** @brief The chip's clock frequency in GHz at this record's instant. */
+    double frequency_ghz() const {
+        const double ghz = detail::sync_rate_ghz(chip_id_, static_cast<int64_t>(timestamp_) + offset_);
+        return ghz > 0.0 ? ghz : frequency_hz_ * 1e-9;
+    }
 
 protected:
     std::chrono::nanoseconds ticks_to_ns(uint64_t ticks) const {
-        return std::chrono::nanoseconds(static_cast<int64_t>(static_cast<double>(ticks) * 1e9 / frequency_hz_));
+        return std::chrono::nanoseconds(static_cast<int64_t>(static_cast<double>(ticks) / frequency_ghz()));
     }
     // The record's tick in its chip's eth wall domain (a worker lane's ticks plus the chip's constant tile offset),
     // placed on the host TSC by the chip's frozen nodes, then read in the requested clock.
@@ -221,8 +225,15 @@ public:
     uint64_t start_timestamp() const { return timestamp_; }
     /** @brief End of the zone in device clock ticks. */
     uint64_t end_timestamp() const { return timestamp_ + duration_; }
-    /** @brief Length of the zone. */
-    std::chrono::nanoseconds duration() const { return ticks_to_ns(duration_); }
+    /** @brief Length of the zone on the host clock. */
+    std::chrono::nanoseconds duration() const {
+        const int64_t s = detail::sync_place_tsc(chip_id_, static_cast<int64_t>(timestamp_) + offset_);
+        const int64_t e = detail::sync_place_tsc(chip_id_, static_cast<int64_t>(timestamp_ + duration_) + offset_);
+        if (s != 0 && e >= s) {
+            return tsc_clock::to_ns(tsc_clock::duration(e - s));
+        }
+        return ticks_to_ns(duration_);
+    }
     /** @brief Start of the zone on the host clock. */
     template <record_clock Clock = std::chrono::steady_clock>
     typename Clock::time_point start_time() const {

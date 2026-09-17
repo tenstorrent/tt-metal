@@ -25,27 +25,29 @@ void OpsCsvConsumer::operator()(const Batch& batch) {
             continue;
         }
         const api::Core c = z.core();
-        if (!devices_.contains(c.chip_id)) {
-            devices_.emplace(c.chip_id, DeviceMeta{static_cast<uint32_t>(c.chip_id), z.frequency_ghz()});
-        }
         const uint32_t risc = static_cast<uint32_t>(c.risc);
         const uint32_t core_key = (static_cast<uint32_t>(c.logical.y) << 16) | static_cast<uint32_t>(c.logical.x);
         // The wrapper zone never self-nests, so the k-th one on a lane for a prog is execution k.
         uint32_t& completed = pair_count_[{c.chip_id, core_key, risc, z.runtime_id()}];
         OpAgg& op = ops_[{c.chip_id, z.runtime_id(), completed}];
         completed++;
-        const uint64_t start = z.start_timestamp();
-        const uint64_t end = z.end_timestamp();
-        auto& core = op.cores[core_key];
-        op.k_start = std::min(op.k_start, start);
-        op.k_start_last = std::max(op.k_start_last, start);
-        if (risc <= 1) {
-            op.dm_start = std::min(op.dm_start, start);
+        op.k_start = std::min(op.k_start, z.start_timestamp());
+        op.k_end = std::max(op.k_end, z.end_timestamp());
+        const auto [hs, he] = z.host_span<api::tsc_clock>();
+        const int64_t start = hs.time_since_epoch().count(), end = he.time_since_epoch().count();
+        if (start == 0 || end == 0) {
+            continue;  // released before the sync covered it: no host span
         }
-        op.risc_start[risc] = std::min(op.risc_start[risc], start);
+        auto& core = op.cores[core_key];
+        op.h_start = std::min(op.h_start, start);
+        op.h_start_last = std::max(op.h_start_last, start);
+        if (risc <= 1) {
+            op.h_dm_start = std::min(op.h_dm_start, start);
+        }
+        op.h_risc_start[risc] = std::min(op.h_risc_start[risc], start);
         core.first = core.first == 0 ? start : std::min(core.first, start);
-        op.k_end = std::max(op.k_end, end);
-        op.risc_end[risc] = std::max(op.risc_end[risc], end);
+        op.h_end = std::max(op.h_end, end);
+        op.h_risc_end[risc] = std::max(op.h_risc_end[risc], end);
         core.second = std::max(core.second, end);
     }
 }
@@ -63,45 +65,43 @@ void OpsCsvConsumer::write_csv() {
         f);
     for (const auto& [key, op] : ops_) {
         const auto& [chip, prog, exec] = key;
-        const auto mit = devices_.find(chip);
-        const DeviceMeta meta = mit != devices_.end() ? mit->second : DeviceMeta{chip, 0.0};
-        const double freq = meta.frequency_ghz;
-        auto ns = [&](uint64_t start, uint64_t end) {
-            return (freq > 0.0 && end > start && start != UINT64_MAX) ? (end - start) / freq : 0.0;
+        auto ns = [](int64_t start, int64_t end) {
+            return end > start && start != INT64_MAX
+                       ? static_cast<double>(api::tsc_clock::to_ns(api::tsc_clock::duration(end - start)).count())
+                       : 0.0;
         };
-        uint64_t core_min = UINT64_MAX, core_max = 0, core_sum = 0;
+        double core_min = 0.0, core_max = 0.0, core_sum = 0.0;
         uint32_t core_n = 0;
         for (const auto& [c, se] : op.cores) {
             if (se.first == 0 || se.second <= se.first) {
                 continue;
             }
-            const uint64_t d = se.second - se.first;
-            core_min = std::min(core_min, d);
+            const double d = ns(se.first, se.second);
+            core_min = core_n == 0 ? d : std::min(core_min, d);
             core_max = std::max(core_max, d);
             core_sum += d;
             core_n++;
         }
-        auto cyc_ns = [&](uint64_t cyc) { return freq > 0.0 ? cyc / freq : 0.0; };
         std::fprintf(
             f,
             "%u,%u,%u,%u,%llu,%llu,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f\n",
-            meta.chip_id,
+            chip,
             prog,
             exec,
             core_n,
             static_cast<unsigned long long>(op.k_start == UINT64_MAX ? 0 : op.k_start),
             static_cast<unsigned long long>(op.k_end),
-            ns(op.k_start, op.k_end),
-            ns(op.dm_start, op.k_end),
-            core_n != 0 ? cyc_ns(core_min) : 0.0,
-            core_n != 0 ? cyc_ns(core_max) : 0.0,
-            core_n != 0 ? cyc_ns(core_sum) / core_n : 0.0,
-            ns(op.k_start, op.k_start_last),
-            ns(op.risc_start[0], op.risc_end[0]),
-            ns(op.risc_start[1], op.risc_end[1]),
-            ns(op.risc_start[2], op.risc_end[2]),
-            ns(op.risc_start[3], op.risc_end[3]),
-            ns(op.risc_start[4], op.risc_end[4]));
+            ns(op.h_start, op.h_end),
+            ns(op.h_dm_start, op.h_end),
+            core_min,
+            core_max,
+            core_n != 0 ? core_sum / core_n : 0.0,
+            ns(op.h_start, op.h_start_last),
+            ns(op.h_risc_start[0], op.h_risc_end[0]),
+            ns(op.h_risc_start[1], op.h_risc_end[1]),
+            ns(op.h_risc_start[2], op.h_risc_end[2]),
+            ns(op.h_risc_start[3], op.h_risc_end[3]),
+            ns(op.h_risc_start[4], op.h_risc_end[4]));
     }
     std::fclose(f);
 }

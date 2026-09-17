@@ -69,6 +69,9 @@ public:
     // The uncertainty of that placement against other chips' records: kSigmas standard deviations of its segment's
     // nodes plus the fleet's path asymmetry; INT64_MAX before the chip's first node.
     static int64_t lookup_error_ns(uint32_t chip_id, int64_t wall) noexcept;
+    // The chip's AICLK at wall tick `wall` in GHz, from the segment of its clock model that holds it (the node
+    // tangent is root refclk per wall tick); 0 while nothing places that tick.
+    static double lookup_rate_ghz(uint32_t chip_id, int64_t wall) noexcept;
     static constexpr double kSigmas = 3.0;
     // The largest loop closure the link solutions have shown, the part of a placement's error the loops can see
     // but no link's stamps can.
