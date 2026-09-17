@@ -53,20 +53,19 @@ namespace sfpu
 template <
     int ITERATIONS,
     std::uint32_t BANK_MASK,
-    std::uint32_t MY_BANK,
     std::uint32_t GLOBAL_BANK_SHIFT,
     std::uint32_t WITHIN_BANK_MASK,
     std::uint32_t OUT_SHIFT = 0>
-inline void _sparse_k_filter_tile_()
+inline void _sparse_k_filter_tile_runtime_(std::uint32_t my_bank)
 {
     using namespace sfpi;
     // Bank-addressed index: bits [0, WITHIN_BANK_BITS) are the within-bank slot
     // (== DM0 `local`, decoded to page/offset via tokens_per_page), and the
     // 6-bit global-bank field sits at GLOBAL_BANK_SHIFT (local_bank | device<<3).
-    // Test the bank field in place (constants shifted at compile time) so the
+    // Test the bank field in place (bank mask shifted at compile time) so the
     // hot predicate stays a single AND + compare — no per-lane shift of idx.
     constexpr int BANK_FIELD = static_cast<int>(BANK_MASK) << static_cast<int>(GLOBAL_BANK_SHIFT);
-    constexpr int MY_FIELD   = static_cast<int>(MY_BANK) << static_cast<int>(GLOBAL_BANK_SHIFT);
+    const int MY_FIELD       = static_cast<int>(my_bank) << static_cast<int>(GLOBAL_BANK_SHIFT);
     for (int d = 0; d < ITERATIONS; d++)
     {
         vInt idx = dst_reg[0];
@@ -80,6 +79,18 @@ inline void _sparse_k_filter_tile_()
         dst_reg[0] = enc;
         dst_reg++;
     }
+}
+
+template <
+    int ITERATIONS,
+    std::uint32_t BANK_MASK,
+    std::uint32_t MY_BANK,
+    std::uint32_t GLOBAL_BANK_SHIFT,
+    std::uint32_t WITHIN_BANK_MASK,
+    std::uint32_t OUT_SHIFT = 0>
+inline void _sparse_k_filter_tile_()
+{
+    _sparse_k_filter_tile_runtime_<ITERATIONS, BANK_MASK, GLOBAL_BANK_SHIFT, WITHIN_BANK_MASK, OUT_SHIFT>(MY_BANK);
 }
 
 } // namespace sfpu
