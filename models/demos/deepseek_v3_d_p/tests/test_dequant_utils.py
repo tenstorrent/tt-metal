@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Pure-torch unit tests for the Kimi K2.6 compressed-tensors INT4 dequant path.
+"""Pure-torch unit tests for the compressed-tensors INT4 dequant path.
 
 These exercise the bit-manipulation-heavy unpacker (little-endian 4-bit lane extraction,
 offset-binary decode, per-group scale broadcast) and the config-group parameter extraction

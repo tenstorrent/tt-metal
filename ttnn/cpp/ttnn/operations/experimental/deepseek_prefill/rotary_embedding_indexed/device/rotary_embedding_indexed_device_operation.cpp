@@ -52,6 +52,21 @@ constexpr uint32_t kMetadataBytes = 16;  // CB page size (16B L1 alignment floor
 const DFBSpecName META_DFB{"meta"};
 const TensorParamName METADATA_PARAM{"metadata"};
 
+uint32_t axis_extent(const distributed::MeshDeviceView& mesh_view, uint32_t axis) {
+    return axis == 0 ? mesh_view.num_rows() : mesh_view.num_cols();
+}
+
+uint32_t subshard_extent(const distributed::MeshDeviceView& mesh_view, const std::optional<uint32_t>& axis) {
+    return axis.has_value() ? axis_extent(mesh_view, *axis) : 1;
+}
+
+// Cos/sin retain the full SP slab; recover its tile height from the query subshard for both
+// host bounds validation and the reader's compile-time geometry.
+uint32_t full_sp_slab_tiles(
+    const Tensor& input, const distributed::MeshDeviceView& mesh_view, const std::optional<uint32_t>& axis) {
+    return (input.padded_shape()[-2] / TILE_HEIGHT) * subshard_extent(mesh_view, axis);
+}
+
 // Structural + per-call checks shared by the cache-miss and cache-hit paths. The structural checks
 // (cluster_axis, 2D mesh, chunk height) run on both paths; the kv_actual_global VALUE checks run only
 // on the SCALAR path — on the METADATA path kv_actual_global lives in the 1-element device tensor
@@ -75,7 +90,13 @@ void validate_runtime_args(
         cos.storage_type());
     const auto& mesh_view = cos.device()->get_view();
     TT_FATAL(mesh_view.is_mesh_2d(), "rotary_embedding_indexed requires a 2D mesh");
-    const uint32_t chunk_local_t = input.padded_shape()[-2] / TILE_HEIGHT;
+    if (args.seq_subshard_axis.has_value()) {
+        TT_FATAL(
+            args.seq_subshard_axis.value() < 2 && args.seq_subshard_axis.value() != args.cluster_axis,
+            "seq_subshard_axis must be a different mesh axis from cluster_axis");
+        TT_FATAL(input.logical_shape()[-2] % TILE_HEIGHT == 0, "sequence subshards must contain whole query tiles");
+    }
+    const uint32_t chunk_local_t = full_sp_slab_tiles(input, mesh_view, args.seq_subshard_axis);
     // chunk_local_t is the per-chip chunk height in tiles and is used by the reader as a
     // divisor/modulus to derive the boundary chip; a zero-height input chunk would divide by zero.
     TT_FATAL(chunk_local_t > 0, "input chunk seq dim ({}) must be at least one tile", input.padded_shape()[-2]);
@@ -144,7 +165,7 @@ void validate_runtime_args(
     // offset, and chips after it stay on this slab. The max is the pre-boundary value WHEN a
     // pre-boundary chip exists (boundary_chip > 0); when kv_actual_global is exactly slab-aligned
     // (boundary_chip == 0) no chip jumps ahead, so a flat (+1 slab) bound would be off by a slab.
-    const uint32_t sp_factor = (args.cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
+    const uint32_t sp_factor = axis_extent(mesh_view, args.cluster_axis);
     const uint32_t kv_actual_global_t = args.kv_actual_global / TILE_HEIGHT;
     const uint32_t cos_shard_Ht = cos.padded_shape()[-2] / TILE_HEIGHT;
     const uint32_t chunk_global_t = sp_factor * chunk_local_t;
@@ -262,6 +283,7 @@ ttsl::hash::hash_t RotaryEmbeddingIndexedDeviceOperation::compute_program_hash(
     auto hash = tt::tt_metal::operation::hash_operation<RotaryEmbeddingIndexedDeviceOperation>(
         tensor_args.metadata.has_value(),
         args.cluster_axis,
+        args.seq_subshard_axis,
         args.compute_kernel_config,
         args.output_mem_config,
         tensor_args.input.tensor_spec(),
@@ -316,9 +338,14 @@ RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::create_at(
     // sp_factor is the mesh extent along the cluster axis and my_sp_coord is this chip's index along it.
     // Both are structural (per mesh coordinate) and constant across calls, so they are baked as CTAs.
     const auto& mesh_view = mesh_device->get_view();
-    const uint32_t sp_factor = (args.cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
+    const uint32_t sp_factor = axis_extent(mesh_view, args.cluster_axis);
+    // Use the cache tensor for the SP coordinate and the query tensor for its subshard coordinate.
     const uint32_t my_sp_coord =
         ::ttnn::ccl::get_linearized_index_from_physical_coord(tensor_args.cos, coord, args.cluster_axis);
+    const uint32_t subshard_coord =
+        args.seq_subshard_axis.has_value()
+            ? ::ttnn::ccl::get_linearized_index_from_physical_coord(tensor_args.input, coord, args.seq_subshard_axis)
+            : 0;
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(mesh_device->arch(), args.compute_kernel_config);
@@ -473,7 +500,9 @@ RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::create_at(
              {"rotary_Ht", rotary_seq_len_t},
              {"tile_height", TILE_HEIGHT},  // reader divides kv_actual_global (tokens) into tiles
              {"my_sp_coord", my_sp_coord},
-             {"sp_factor", sp_factor}},
+             {"sp_factor", sp_factor},
+             {"chunk_local_t", full_sp_slab_tiles(tensor_args.input, mesh_view, args.seq_subshard_axis)},
+             {"query_offset_t", seq_len_t * subshard_coord}},
         .runtime_arg_schema = reader_schema,
         .hw_config = create_reader_datamovement_config(mesh_device->arch())};
 
@@ -678,7 +707,8 @@ ttnn::Tensor rotary_embedding_indexed(
     uint32_t kv_actual_global,
     uint32_t cluster_axis,
     const std::optional<MemoryConfig>& memory_config,
-    const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
+    const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
+    const std::optional<uint32_t>& seq_subshard_axis) {
     using OperationType = ttnn::operations::experimental::deepseek_prefill::rotary_embedding_indexed::
         RotaryEmbeddingIndexedDeviceOperation;
 
@@ -696,6 +726,7 @@ ttnn::Tensor rotary_embedding_indexed(
 
     auto attrs = OperationType::operation_attributes_t{
         .cluster_axis = cluster_axis,
+        .seq_subshard_axis = seq_subshard_axis,
         .kv_actual_global = kv_actual_global,
         .output_mem_config = out_mem_config,
         .compute_kernel_config = kernel_config_val,

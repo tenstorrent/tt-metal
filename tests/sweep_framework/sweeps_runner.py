@@ -747,6 +747,19 @@ def _is_device_hang_message(message) -> bool:
 _DEVICE_FATAL_SIGNATURES = (
     "unexpected run_mailbox value",
     "read unexpected run_mailbox",
+    # The PCIe link to a board is returning all-ones, i.e. the board has fallen off the bus.
+    # UMD raises it as PcieHangError from device/tt_device/tt_device_error.cpp:
+    #   Read 0xffffffff over PCIe ID 13: the board should be reset.
+    # Same class as the run_mailbox wedge and just as sticky -- a board that stops answering
+    # over PCIe does not come back within the job, and every subsequent vector fails on it
+    # identically. Seen on scheduled lead-models run 35046397921 job mesh8x4_col_2d, where all
+    # 23 of the job's failing vectors carried this one message and were booked as test
+    # failures; three sibling Galaxy lanes in the same run independently reported a failed
+    # tt-smi reset of device 16 and a device canary of 2+2 != 4 returning 0.0 across all
+    # 32768 elements, so the board really was gone rather than the op being wrong.
+    # Matched on the invariant tail: both the value read and the PCIe ID are format
+    # substitutions in the UMD message and vary between boards and faults.
+    "the board should be reset",
 )
 
 
