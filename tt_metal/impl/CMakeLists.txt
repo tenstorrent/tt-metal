@@ -156,7 +156,12 @@ if(TT_METAL_USE_EMULE)
     # The residual emule code in impl (marshaller + facade) and any emule .cpp not yet moved
     # include the headers that moved to tt-emule-blaze src/emulation; that dir is exported PUBLIC
     # by tt_emule_runtime (compile-only genex, no link edge).
-    target_include_directories(impl PRIVATE $<TARGET_PROPERTY:tt_emule_runtime,INTERFACE_INCLUDE_DIRECTORIES>)
+    target_include_directories(
+        impl
+        PRIVATE
+            $<TARGET_PROPERTY:tt_emule_runtime,INTERFACE_INCLUDE_DIRECTORIES>
+            ${CMAKE_CURRENT_SOURCE_DIR}/emulation # residual emule headers not yet moved (transitional bare includes)
+    )
 endif()
 
 # Generate Inspector RPC stub file
