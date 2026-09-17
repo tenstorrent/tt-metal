@@ -256,6 +256,7 @@ private:
     struct AttachedStream;
     struct Attached;
     struct Parked;
+    class ConsumerLoop;
     void consumer_thread(Consumer& c);
     void post_control(Consumer& c, Producer* producer, bool attach);
     void wait_acks(std::unique_lock<std::mutex>& lk);
