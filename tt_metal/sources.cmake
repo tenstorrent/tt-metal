@@ -189,7 +189,6 @@ set(TT_METAL_SOURCES
     impl/streaming_profiler/streaming_profiler_service.cpp
     impl/streaming_profiler/streaming_profiler_sync_devices.cpp
     impl/streaming_profiler/streaming_profiler_sync_engine.cpp
-    impl/streaming_profiler/streaming_profiler_placement_map.cpp
     impl/streaming_profiler/streaming_profiler_tracy.cpp
     impl/streaming_profiler/streaming_profiler_zone_csv.cpp
     hal.cpp

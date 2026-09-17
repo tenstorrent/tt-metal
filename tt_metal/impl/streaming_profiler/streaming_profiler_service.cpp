@@ -22,7 +22,6 @@
 #include "llrt/rtoptions.hpp"
 #include "impl/streaming_profiler/streaming_profiler_decode.hpp"
 #include "impl/streaming_profiler/streaming_profiler_ops_csv.hpp"
-#include "impl/streaming_profiler/streaming_profiler_placement_map.hpp"
 #include "impl/streaming_profiler/streaming_profiler_tracy.hpp"
 #include "impl/streaming_profiler/streaming_profiler_zone_csv.hpp"
 
@@ -767,7 +766,7 @@ private:
     }
 
     Consumer& c_;
-    const PlacementMap& map_;
+    const ClockMap& map_;
     Arena zones_arena_, events_arena_, data_arena_;
     std::deque<Parked> parked_;  // every undelivered or unreleased batch, in decode order
     uint64_t covers_seen_ = ~0ull;

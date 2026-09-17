@@ -115,7 +115,7 @@ int64_t SteadyView::mono_ns(int64_t tsc) noexcept {
     return seg.mono_of(tsc);
 }
 
-HostProbe::HostProbe(tt::Cluster& cluster, uint32_t chip_id, PlacementMap& map) :
+HostProbe::HostProbe(tt::Cluster& cluster, uint32_t chip_id, ClockMap& map) :
     cluster_(cluster), chip_id_(chip_id), map_(map) {
     ticks_per_ns_ = tsc_ticks_per_ns();
     const auto pcie =

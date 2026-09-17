@@ -215,7 +215,7 @@ public:
 
     // The Tracy sink and the CSV writers rtoptions select; subsequent calls do nothing.
     void register_builtin_consumers(const tt::llrt::RunTimeOptions& rtoptions);
-    // The device<->device sync engine, owner of the placement map.
+    // The device<->device sync engine, owner of the clock map.
     SyncEngine& sync();
 
     // A producer calls this once after a pass that published. A reader takes wake_token() before checking the queues

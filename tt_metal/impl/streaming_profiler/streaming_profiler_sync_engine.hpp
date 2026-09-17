@@ -5,11 +5,13 @@
 #pragma once
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <optional>
 #include <map>
+#include <memory>
 #include <utility>
 #include <vector>
 
@@ -19,7 +21,6 @@
 #include "hostdev/streaming_profiler_common.h"
 #include "impl/streaming_profiler/streaming_profiler_consumer.hpp"
 #include "impl/streaming_profiler/streaming_profiler_decode.hpp"
-#include "impl/streaming_profiler/streaming_profiler_placement_map.hpp"
 
 namespace tt::tt_metal::streaming_profiler {
 
@@ -249,8 +250,75 @@ private:
     static constexpr size_t kPendingMax = 4096;
 };
 
+// One frozen node of a placement series: at `at` the placement is `value`, linear to the next node, and past the
+// newest node along `tangent` (d value / d at) as far as the series' cover reaches.
+template <typename Key>
+struct ClockNode {
+    Key at{};
+    double value = 0.0;
+    double tangent = 0.0;
+};
+// A chip's series: its eth wall tick -> the root chip's refclk tick, from the link solutions and the local fits alone,
+// so two chips' records at one instant differ by nothing the host contributes. Worker lanes reach the eth wall
+// domain through their chip's constant tile offset, so one series places every record of a chip.
+using SyncNode = ClockNode<int64_t>;
+// The fleet's one host series: the root's refclk tick -> host TSC tick, from the host probe.
+using HostNode = ClockNode<double>;
+
+// The sync engine's clock map: one series per chip (its eth wall tick -> the root chip's refclk tick) and the
+// host series (the root's refclk tick -> host TSC tick). The sync engine writes the chip series and the host probe
+// the host series; the service's consumer threads read them to place records. Each series is append-only within a
+// capture, strictly increasing in its key, and keeps its newest kSeriesNodes: a record before the oldest kept node
+// converts on that node's tangent. Before a chip's first node, or the host's, its records have no place on the host
+// timeline.
+//
+// Reads never lock and never block the writer (IndexedRing). A reader keeps a thread-local cursor on the segment it
+// last converted in and converts without touching shared state until a record leaves the segment. A series' cover
+// is the key up to which the newest node's tangent has been confirmed: a record at or before it converts against
+// frozen data on both sides.
+class ClockMap {
+public:
+    static constexpr uint32_t kMaxChips = 256;
+    // Nodes a series keeps (32 MB at most); the oldest go as newer ones arrive. Nodes come per local clock step and
+    // per host burst, so this spans hours of a capture and any consumer's lag behind the sync.
+    static constexpr uint32_t kSeriesNodes = 1u << 20;
+
+    ClockMap();
+    ~ClockMap();
+    ClockMap(const ClockMap&) = delete;
+    ClockMap& operator=(const ClockMap&) = delete;
+
+    // Appends a node past every earlier one (a node at the last node's key is dropped) and moves the cover to it.
+    void append(uint32_t chip_id, SyncNode node);
+    // The newest node's tangent holds up to cover_ticks; the cover never moves back.
+    void extend(uint32_t chip_id, int64_t cover_ticks);
+    // The series is complete for the capture: every later instant converts on the newest tangent.
+    void finish(uint32_t chip_id);
+    // Empties a chip's series for a new capture.
+    void clear(uint32_t chip_id);
+    void append_host(HostNode node);
+
+    // The root refclk tick of a chip's eth wall tick; 0 before the chip's first node.
+    double lookup_root(uint32_t chip_id, int64_t wall) const noexcept;
+    // Wall tick `wall` of chip `chip_id` on host_clock (tenths of a ns of the TSC): the chip series and the host
+    // series composed into one line per segment pair, one multiply-add per record while a batch stays inside it. 0
+    // when nothing places the tick yet.
+    int64_t place_host(uint32_t chip_id, int64_t wall) const noexcept;
+    // The host TSC tick of a root refclk tick; 0 before the host's first node.
+    double host_tsc(double root) const noexcept;
+    size_t host_published() const noexcept;
+    // The wall tick the chip's series covers: INT64_MIN before its first node, INT64_MAX once finished.
+    int64_t cover_ticks(uint32_t chip_id) const noexcept;
+    // Moves whenever any chip's cover does, so a consumer holding batches re-reads covers only then.
+    uint64_t cover_generation() const noexcept;
+
+private:
+    struct Impl;
+    std::unique_ptr<Impl> impl_;
+};
+
 // Each chip's published placement series: its clock model's segments and its root transform turned into the
-// PlacementMap's nodes. Nodes are frozen once published (consumers have placed records against them), so a publish
+// ClockMap's nodes. Nodes are frozen once published (consumers have placed records against them), so a publish
 // only appends beyond them: a node where the map bends (a segment boundary, the first sample) and the open
 // segment's frontier when it has left the frozen tangent.
 class SeriesPublisher {
@@ -273,7 +341,7 @@ public:
         size_t extended = 0;  // frontier samples that only advanced the cover
     };
 
-    explicit SeriesPublisher(PlacementMap& map) : map_(map) {}
+    explicit SeriesPublisher(ClockMap& map) : map_(map) {}
     void reset() { series_.clear(); }
     // Publishes one chip's series from its fit and root transform as they stand; true when the chip's cover moved.
     bool publish(uint32_t dev, uint32_t chip, const LocalClockModel& fit, const RootXf& xf);
@@ -301,7 +369,7 @@ private:
     void freeze_append(Series& s, uint32_t chip, const Node& n);
     void push_node(Series& s, uint32_t chip, const Node& n);
 
-    PlacementMap& map_;
+    ClockMap& map_;
     std::map<uint32_t, Series> series_;  // device index -> series
     // A frontier within this much of the newest tangent extends the cover instead of freezing a node; the published
     // map then sits within it of the fit's own estimate. A mature run's estimate moves ~0.02 ns per keepalive sample,
@@ -313,7 +381,7 @@ private:
 //
 // LOCAL points feed one LocalClockModel per device. LINK samples feed the LinkSolver, refclk against refclk, so DVFS
 // on either wall clock cannot enter the link solve. From those the SeriesPublisher publishes, per chip, a placement
-// series in the PlacementMap every record is placed through: the chip's eth wall tick onto the root chip's refclk,
+// series in the ClockMap every record is placed through: the chip's eth wall tick onto the root chip's refclk,
 // which the host probe's series takes onto the host. Published incrementally for live sinks, finally at capture end.
 // Driven from the Service's sync thread, which decodes the eth pushers' streams and hands it every clock sample in
 // order; a capture is on_attach, the samples, on_capture_end. The unit test drives it the same way.
@@ -323,10 +391,10 @@ public:
     void on_attach(const CaptureContext& ctx);
     void on_clock(const ClockSample& s);
     void on_capture_end(const CaptureContext& ctx);
-    // The placement map the service places records with: this engine writes its chip series, the host probe its
+    // The clock map the service places records with: this engine writes its chip series, the host probe its
     // host series.
-    PlacementMap& map() { return map_; }
-    const PlacementMap& map() const { return map_; }
+    ClockMap& map() { return map_; }
+    const ClockMap& map() const { return map_; }
 
 private:
     using Round = LinkSolver::Round;
@@ -368,7 +436,7 @@ private:
     };
     void plot(const std::string& name, const std::vector<PlotPoint>& points);
 
-    PlacementMap map_;
+    ClockMap map_;
     CaptureContext ctx_;
     std::map<uint32_t, LocalClockModel> local_;  // device index -> local fit
     LinkSolver links_;

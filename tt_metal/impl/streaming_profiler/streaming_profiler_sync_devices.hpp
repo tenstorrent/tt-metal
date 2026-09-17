@@ -22,7 +22,7 @@
 #include <tt-metalium/kernel_types.hpp>
 #include "impl/context/context_types.hpp"
 #include "impl/streaming_profiler/streaming_profiler_consumer.hpp"
-#include "impl/streaming_profiler/streaming_profiler_placement_map.hpp"
+#include "impl/streaming_profiler/streaming_profiler_sync_engine.hpp"
 #include "hostdev/streaming_profiler_common.h"
 
 namespace tt {
@@ -83,7 +83,7 @@ struct HostLine {
 class HostProbe {
 public:
     // Writes the host series of `map` while it runs.
-    HostProbe(tt::Cluster& cluster, uint32_t chip_id, PlacementMap& map);
+    HostProbe(tt::Cluster& cluster, uint32_t chip_id, ClockMap& map);
     ~HostProbe();
     HostProbe(const HostProbe&) = delete;
     HostProbe& operator=(const HostProbe&) = delete;
@@ -106,7 +106,7 @@ private:
 
     tt::Cluster& cluster_;
     const uint32_t chip_id_;
-    PlacementMap& map_;
+    ClockMap& map_;
     uint32_t pcie_x_ = 0, pcie_y_ = 0;  // translated
     tt::umd::TlbWindow* window_ = nullptr;
     uint32_t cfr_hi_ = 0, cfr_lo_last_ = 0;
