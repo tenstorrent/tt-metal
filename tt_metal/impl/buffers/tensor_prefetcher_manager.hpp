@@ -142,7 +142,8 @@ private:
 
     struct Request {
         // One logical socket page. PREFETCH carries one page per entry in target_sender_indices:
-        // the header names that sender's target state and slab base. STOP / WAIT_CQ carry one
+        // the header names that sender's target state, and its layout slots that sender's slab
+        // base. STOP / WAIT_CQ carry one
         // shared page and leave target_sender_indices empty to broadcast to every provisioned
         // sender.
         std::vector<std::vector<uint8_t>> sender_pages;
@@ -176,6 +177,10 @@ private:
         // order. A GCB plants every sender's block at one uniform offset and so repeats it; the
         // pipes hold one address each.
         std::vector<uint32_t> state_addr_per_sender;
+        // Bank-local slab index of each sender's first receiver, in mapping order: local receiver
+        // r of sender s reads slab recv_index_base_per_sender[s] + r. Stamped into every layout
+        // slot of that sender's page.
+        std::vector<uint32_t> recv_index_base_per_sender;
         // Transport for every tensor in the request.
         TensorPrefetcherTransport transport = TENSOR_PREFETCHER_TRANSPORT_GLOBAL_CB;
         // Per-receiver ring capacity in bytes; a tensor's page_bytes_per_recv must fit.

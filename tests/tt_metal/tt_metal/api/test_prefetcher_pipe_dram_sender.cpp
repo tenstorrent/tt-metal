@@ -341,11 +341,13 @@ TEST_F(PrefetcherPipeDramSenderFixture, DualSendersSplitBankReceivers) {
     ASSERT_EQ(set.mapping.at(0).second.num_cores(), 2u);
     ASSERT_EQ(set.mapping.at(1).second.num_cores(), 2u);
     ASSERT_NE(set.mapping.at(0).first, set.mapping.at(1).first);
-    // Both senders drive this bank, and the leading pipe owns ceil(n/2) of its receivers. A caller
-    // handing the pipes on as a list is held to that split, since it is what the two senders'
-    // bank-local slab bases are derived from.
+    // Both senders drive this bank, and the leading pipe owns ceil(n/2) of its receivers. Each
+    // pipe carries the bank-local slab base that split gives it, so a caller passing the pipes on
+    // is free to reorder them.
     EXPECT_EQ(set.pipes.at(0)->sender_core().x, set.pipes.at(1)->sender_core().x);
     EXPECT_EQ(set.pipes.at(0)->receiver_cores().num_cores(), (kNumReceivers + 1) / 2);
+    EXPECT_EQ(set.pipes.at(0)->impl().recv_index_base(), 0u);
+    EXPECT_EQ(set.pipes.at(1)->impl().recv_index_base(), (kNumReceivers + 1) / 2);
 
     // Each sender addresses its own receivers as local indices 0..n-1, so the pattern is preloaded
     // per sender with labels restarting at 0.
