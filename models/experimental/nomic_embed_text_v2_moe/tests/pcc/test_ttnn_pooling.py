@@ -12,6 +12,7 @@ import torch
 
 import ttnn
 
+from models.common.metrics import compute_max_abs_error
 from models.common.utility_functions import run_for_blackhole
 from models.experimental.nomic_embed_text_v2_moe.reference import postprocessing
 from models.experimental.nomic_embed_text_v2_moe.tests.pcc.module_common import (
@@ -31,15 +32,41 @@ MODULE_PCC = 0.999
 
 @pytest.mark.parametrize("batch, seqlen", TOKEN_SHAPES)
 def test_mean_pool(device, config, batch, seqlen):
-    """Mask-weighted mean over the sequence axis, against reference.mean_pool."""
+    """Mask-weighted mean over the sequence axis, against reference.mean_pool.
+
+    Each row is given a different keep count, and the result is asserted in absolute terms as
+    well as by PCC. PCC is scale-invariant, so a divisor that counted every position rather than
+    the kept ones would still correlate at 1.0 when every row keeps the same number.
+    """
     x = hidden_states(batch, seqlen, config.hidden_size)
-    mask = keep_mask(batch, seqlen, (seqlen * 3) // 4)
+    mask = keep_mask(batch, seqlen, [(seqlen * 3) // 4, seqlen // 2][:batch])
 
     pooled = pooling.mean_pool(to_device(to_block_layout(x), device), pooling_mask(mask, device))
 
     ref = postprocessing.mean_pool(x, mask)
+    got = ttnn.to_torch(pooled).float().reshape(batch, config.hidden_size)
     assert tuple(pooled.shape) == (batch, 1, 1, config.hidden_size)
+    assert compute_max_abs_error(got, ref) < 1e-2, "the divisor is not the kept-token count"
     assert_with_pcc(ref.reshape(batch, 1, 1, config.hidden_size), pooled, MODULE_PCC)
+
+
+@pytest.mark.parametrize("batch, seqlen", TOKEN_SHAPES)
+def test_mean_pool_survives_a_fully_padded_row(device, config, batch, seqlen):
+    """A row that keeps nothing must pool to zeros, not to inf.
+
+    The keep count is the divisor, so an all-zero mask row divides by zero and returns inf across
+    every feature without raising. The reference floors the divisor; so does the module. The
+    tokenizer always emits bos so this row cannot come from it, but mean_pool takes whatever mask
+    its caller builds.
+    """
+    x = hidden_states(batch, seqlen, config.hidden_size)
+    mask = keep_mask(batch, seqlen, 0)
+
+    pooled = pooling.mean_pool(to_device(to_block_layout(x), device), pooling_mask(mask, device))
+
+    got = ttnn.to_torch(pooled).float()
+    assert torch.isfinite(got).all(), "a fully padded row divided by zero"
+    assert compute_max_abs_error(got, torch.zeros_like(got)) == 0
 
 
 @pytest.mark.parametrize("batch, seqlen", TOKEN_SHAPES)
@@ -93,11 +120,17 @@ def test_matryoshka_truncate_rejects_an_oversized_dim(device, config, expect_err
 
 @pytest.mark.parametrize("batch", [1, 2])
 def test_l2_normalize(device, config, batch):
-    """Unit norm along the feature axis, against reference.l2_normalize."""
-    x = torch.randn(batch, 1, 1, config.hidden_size)
+    """Unit norm along the feature axis, against reference.l2_normalize.
+
+    The norm is asserted directly, not just the PCC. PCC is scale-invariant, so a function that
+    returned its input untouched would pass a PCC gate against a normalized reference.
+    """
+    x = torch.randn(batch, 1, 1, config.hidden_size) * 5.0
 
     out = pooling.l2_normalize(to_device(x, device))
 
+    got = ttnn.to_torch(out).float().reshape(batch, config.hidden_size)
+    assert torch.allclose(got.norm(dim=-1), torch.ones(batch), atol=1e-2), "output is not unit norm"
     assert_with_pcc(postprocessing.l2_normalize(x), out, MODULE_PCC)
 
 

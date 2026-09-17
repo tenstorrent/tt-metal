@@ -19,6 +19,9 @@ from typing import Optional
 
 import ttnn
 
+# Matches reference/postprocessing.mean_pool's own clamp on the keep count.
+MASK_SUM_FLOOR = 1e-9
+
 
 def mean_pool(hidden_states: ttnn.Tensor, mask_weights: ttnn.Tensor) -> ttnn.Tensor:
     """Average each text's token vectors, ignoring padding.
@@ -37,11 +40,14 @@ def mean_pool(hidden_states: ttnn.Tensor, mask_weights: ttnn.Tensor) -> ttnn.Ten
         ttnn.Tensor: (B, 1, 1, H), one vector per text. Not unit norm.
     """
     weighted = ttnn.multiply(hidden_states, mask_weights)
-    pooled = ttnn.divide(
-        ttnn.sum(weighted, dim=2, keepdim=True),
-        ttnn.sum(mask_weights, dim=2, keepdim=True),
-    )
+    # The divisor is floored the way the reference floors it. A fully padded row has a keep count
+    # of zero, and dividing by it returns inf across all 768 features rather than raising, so the
+    # row would leave here looking like data. Such a row cannot come from the tokenizer, which
+    # always emits bos, but mean_pool takes any mask its caller builds.
+    kept = ttnn.clamp(ttnn.sum(mask_weights, dim=2, keepdim=True), min=MASK_SUM_FLOOR)
+    pooled = ttnn.divide(ttnn.sum(weighted, dim=2, keepdim=True), kept)
     ttnn.deallocate(weighted)
+    ttnn.deallocate(kept)
     return pooled
 
 

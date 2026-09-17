@@ -93,7 +93,7 @@ def encoder_input(reference_model, config, batch, seqlen, seed=0):
 
 @pytest.fixture
 def tt_encoder(device, config, tt_config, state_dict):
-    return TtNomicBertEncoder(device, config, tt_config, state_dict, state_dict_prefix="encoder")
+    return TtNomicBertEncoder(device, config, tt_config, state_dict, PREFIX)
 
 
 def pooled_cosine(reference_output: torch.Tensor, got: torch.Tensor, mask: torch.Tensor) -> float:

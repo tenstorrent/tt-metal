@@ -38,7 +38,7 @@ def reference(config, state_dict):
 
 @pytest.fixture
 def tt_embeddings(device, config, tt_config, state_dict):
-    return TtNomicBertEmbeddings(device, config, tt_config, state_dict, state_dict_prefix="embeddings")
+    return TtNomicBertEmbeddings(device, config, tt_config, state_dict, PREFIX)
 
 
 @pytest.mark.parametrize("batch, seqlen", TOKEN_SHAPES)

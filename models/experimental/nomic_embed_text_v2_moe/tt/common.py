@@ -7,10 +7,10 @@ Weight reorientation and expert packing run once at load and never touch the dev
 tables and the attention mask are built on the host and returned on device; the two reshapes
 take device tensors.
 
-Two layouts carry the activation between sub-blocks:
+Two layouts carry the activation, and only the first crosses a block boundary:
 
-    (B, 1, S, H)      attention and pooling, where the batch axis has to stay separate
-    (1, 1, B*S, H)    everything else, one flat token axis
+    (B, 1, S, H)      every block boundary, and inside attention and pooling
+    (1, 1, B*S, H)    inside the MoE layer, one flat token axis
 
 Neither is a preference. Attention mixes tokens along S, so flattening the batch away lets one
 text attend to another: PCC 0.71 against per-sequence attention, a wrong answer rather than a
@@ -22,9 +22,14 @@ every batch dim of the activation is 1, so (1, 1, T, H) x (1, E, H, F) gives (1,
 (B, 1, S, H) raises outright. The spare dim at position 1 is what the expert axis expands into
 and what fast_reduce_nc collapses again.
 
-Those two are what crosses a sub-block boundary, not every shape in the model. Sub-blocks take
-others internally, (B, A, S, D) head-split, (1, B*A, S, D) for rotary and (1, E, T, F) across
-the experts, each produced and consumed by the op that owns it.
+So tt/moe.py flattens on entry and unflattens on exit, which is where the reference does its own
+x.view(-1, H), and nothing else in the encoder reshapes: ttnn.linear, ttnn.layer_norm and
+ttnn.gelu are token-wise and take the batch-separated form unchanged. That confines the round
+trip to the six MoE layers, 12 reshapes rather than the 24 a flat-everywhere contract would
+need around attention.
+
+Sub-blocks take other shapes internally, (B, A, S, D) head-split, (1, B*A, S, D) for rotary and
+(1, E, T, F) across the experts, each produced and consumed by the op that owns it.
 
 The flat form keeps tokens batch-major, matching the reference's own x.view(-1, H), so the
 router's per-token weights stay aligned with the expert outputs.

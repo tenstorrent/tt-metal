@@ -27,13 +27,13 @@ class TtNomicBertEmbeddings(LightweightModule):
     excluded at the attention mask and at pooling instead.
     """
 
-    def __init__(self, device, config, tt_config, state_dict, state_dict_prefix="embeddings"):
+    def __init__(self, device, config, tt_config, state_dict, state_dict_prefix="embeddings."):
         super().__init__()
         self.tt_config = tt_config
 
-        table = state_dict[f"{state_dict_prefix}.word_embeddings.weight"]
+        table = state_dict[f"{state_dict_prefix}word_embeddings.weight"]
         if config.type_vocab_size > 0:
-            table = table + state_dict[f"{state_dict_prefix}.token_type_embeddings.weight"][0]
+            table = table + state_dict[f"{state_dict_prefix}token_type_embeddings.weight"][0]
 
         # ROW_MAJOR: ttnn.embedding reads the table row-wise and rejects a tiled one.
         self.word_embeddings = to_device(table, device, dtype=tt_config.weight_dtype, layout=ttnn.ROW_MAJOR_LAYOUT)

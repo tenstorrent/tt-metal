@@ -72,19 +72,24 @@ def from_block_layout(x: ttnn.Tensor) -> torch.Tensor:
     return out.reshape(batch, seqlen, hidden)
 
 
-def keep_mask(batch: int, seqlen: int, keep: int) -> torch.Tensor:
+def keep_mask(batch: int, seqlen: int, keep) -> torch.Tensor:
     """(B, S) keep-mask with the trailing positions padded out.
 
     Args:
         batch: Rows.
         seqlen: Sequence length.
-        keep: Number of leading real tokens; the rest are padding.
+        keep: Number of leading real tokens, either one count for every row or one per row. A
+            ragged mask is what catches a pooling divisor that counts padding, since a uniform
+            keep count makes that error a pure scale, which PCC cannot see.
 
     Returns:
         torch.Tensor: (B, S) int64, 1 for real tokens and 0 for padding.
     """
+    counts = [keep] * batch if isinstance(keep, int) else list(keep)
+    assert len(counts) == batch, f"{len(counts)} keep counts for {batch} rows"
     mask = torch.ones(batch, seqlen, dtype=torch.long)
-    mask[:, keep:] = 0
+    for row, count in enumerate(counts):
+        mask[row, count:] = 0
     return mask
 
 

@@ -25,15 +25,17 @@ class TtNomicBertEncoder(LightweightModule):
     per forward pass instead of once per block saves 11 repetitions of the same host work.
     """
 
-    def __init__(self, device, config, tt_config, state_dict, state_dict_prefix="encoder"):
+    def __init__(self, device, config, tt_config, state_dict, state_dict_prefix="encoder."):
         super().__init__()
+        # The trailing dot is part of the prefix, as it is for every module here. Inserting the
+        # separator instead would make "encoder." build "encoder..layers.0." and raise KeyError.
         self.layers = [
             TtNomicBertBlock(
                 device,
                 config,
                 tt_config,
                 state_dict,
-                f"{state_dict_prefix}.layers.{idx}.",
+                f"{state_dict_prefix}layers.{idx}.",
                 moe=config.is_moe_layer(idx),
             )
             for idx in range(config.num_hidden_layers)

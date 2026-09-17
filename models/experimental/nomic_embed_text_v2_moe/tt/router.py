@@ -84,8 +84,15 @@ class TtNomicRouter(LightweightModule):
         """
         probabilities, values, indices = self.select(x)
 
+        # ttnn.zeros rather than zeros_like(typecast(probabilities)): the destination only needs
+        # the shape, and the cast would convert a (1, 1, T, E) tensor to throw its values away.
         dense = ttnn.scatter(
-            ttnn.zeros_like(ttnn.typecast(probabilities, self.tt_config.activation_dtype)),
+            ttnn.zeros(
+                probabilities.shape,
+                dtype=self.tt_config.activation_dtype,
+                layout=self.tt_config.layout,
+                device=probabilities.device(),
+            ),
             dim=-1,
             index=indices,
             src=ttnn.typecast(values, self.tt_config.activation_dtype),
