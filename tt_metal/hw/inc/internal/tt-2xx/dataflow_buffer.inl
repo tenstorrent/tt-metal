@@ -362,10 +362,12 @@ inline uint32_t DataflowBuffer::get_tile_address(uint32_t tile_index) {
             slot.base_addr + dfb_slot_cursor_offset_units(local_dfb_interface_, slot, slot.rd_entry_idx);
         const uint32_t offset_address = static_cast<uint32_t>(local_dfb_interface_.stride_size) * tile_index;
         address = address_units_to_bytes(base_address + offset_address);
+        DPRINT("unpack address=0x{:x}\n", address);
         mailbox_write(ckernel::ThreadId::MathThreadId, address);
         mailbox_write(ckernel::ThreadId::PackThreadId, address);
+        mailbox_write(ckernel::ThreadId::IsolateSfpuThreadId, address);
     }
-#elif defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_PACK)
+#elif defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_PACK) || defined(UCK_CHLKC_ISOLATE_SFPU)
     address = mailbox_read(ckernel::ThreadId::UnpackThreadId);
 #endif
     return address;
@@ -387,10 +389,12 @@ T DataflowBuffer::read_tile_value(uint32_t tile_index, uint32_t element_offset) 
         const uint32_t offset_address = static_cast<uint32_t>(local_dfb_interface_.stride_size) * tile_index;
         const uint32_t byte_address = address_units_to_bytes(base_address + offset_address);
         value = reinterpret_cast<volatile T*>(byte_address)[element_offset];
+        DPRINT("unpack value=0x{:x}\n", static_cast<uint32_t>(value));
         mailbox_write(ckernel::ThreadId::MathThreadId, static_cast<uint32_t>(value));
         mailbox_write(ckernel::ThreadId::PackThreadId, static_cast<uint32_t>(value));
+        mailbox_write(ckernel::ThreadId::IsolateSfpuThreadId, static_cast<uint32_t>(value));
     }
-#elif defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_PACK)
+#elif defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_PACK) || defined(UCK_CHLKC_ISOLATE_SFPU)
     value = static_cast<T>(mailbox_read(ckernel::ThreadId::UnpackThreadId));
 #endif
     return value;

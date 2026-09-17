@@ -104,7 +104,7 @@ TEST_F(UnitMeshFixture, DataflowBufferReadTileValue) {
 
     m2::DataMovementHardwareConfig producer_hw;
     m2::ComputeHardwareConfig consumer_hw;
-    if (device->arch() == ARCH::QUASAR) {
+    if (this->device().arch() == ARCH::QUASAR) {
         producer_hw = m2::DataMovementGen2Config{.disable_dfb_implicit_sync_for = {DFB}};
         consumer_hw = m2::ComputeGen2Config{};
     } else {

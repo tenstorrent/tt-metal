@@ -3,8 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/compute/common.h"
-#include "api/compute/eltwise_unary/eltwise_unary.h"
-#include "api/compute/tile_move_copy.h"
+#include "api/compute/tile_move_copy.h"  // dummy_unpack (TEN-4746)
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/debug/dprint.h"
 #include "dev_mem_map.h"
@@ -17,8 +16,8 @@ void kernel_main() {
     const uint32_t result_l1_addr = get_arg(args::result_l1_addr);
 
     DataflowBuffer dfb(dfb::in);
+    // copy_init not needed: drain uses dummy_unpack (UNPACR_NOP), not copy_tile.
     compute_kernel_hw_startup(dfb.get_id(), dfb.get_id());
-    copy_init(dfb.get_id());
 
     // Keep both entries at the front so tile_index 1 exercises fifo_page_size stride.
     // Each TRISC thread writes the same mailbox-broadcast results to its own L1 slot so
@@ -28,27 +27,35 @@ void kernel_main() {
 
     dfb.wait_front(num_entries_per_consumer);
 
-#ifdef TRISC_UNPACK
+#if defined(TRISC_UNPACK) || defined(TRISC_MATH) || defined(TRISC_PACK)
+    // Peek L1 right after wait_front (all three TRISCs call get_tile_address for the mailbox handshake).
     {
-        const uint32_t read_ptr_bytes = dfb.get_read_ptr() << cb_addr_shift;
-        volatile tt_l1_ptr uint32_t* const w = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(read_ptr_bytes);
-        // Sampled on this core only: cross-core DPRINT interleaving cannot establish ordering, but
-        // the posted count read here tells us whether wait_front had credits when it returned.
-        // posted < num_entries_per_consumer => wait_front returned without waiting.
-        LocalDFBInterface& intf = get_local_dfb_interface(dfb.get_id());
-        const auto& slot = intf.tc_slots[intf.tc_idx];
-        const uint8_t tc_id = dfb::get_counter_id(slot.packed_tile_counter);
+        const uint32_t tile0_addr = dfb.get_tile_address(0);
+        const uint32_t tile1_addr = dfb.get_tile_address(1);
+        volatile tt_l1_ptr uint32_t* const tile0 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tile0_addr);
+        volatile tt_l1_ptr uint32_t* const tile1 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tile1_addr);
         DPRINT(
-            "consumer trisc={} mask={:#x} tc_idx={} tc_id={} posted={} cap={} rd_ptr={:#x} w0={:#x} w1={:#x}\n",
-            (uint32_t)ckernel::csr_read<ckernel::CSR::TRISC_ID>(),
-            (uint32_t)intf.tensix_trisc_mask,
-            (uint32_t)intf.tc_idx,
-            (uint32_t)tc_id,
-            (uint32_t)(ckernel::trisc::tile_counters[tc_id].f.posted & 0xFFFFu),
-            (uint32_t)ckernel::trisc::tile_counters[tc_id].f.buf_capacity,
-            read_ptr_bytes,
-            w[0],
-            w[1]);
+            "after wait_front tile0=0x{:x} w0=0x{:x} w1=0x{:x} tile1=0x{:x} w0=0x{:x} w1=0x{:x}\n",
+            tile0_addr,
+            tile0[0],
+            tile0[1],
+            tile1_addr,
+            tile1[0],
+            tile1[1]);
+#ifdef ARCH_QUASAR
+        volatile tt_l1_ptr uint32_t* const tile0_uc =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tile0_addr + MEM_L1_UNCACHED_BASE);
+        volatile tt_l1_ptr uint32_t* const tile1_uc =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tile1_addr + MEM_L1_UNCACHED_BASE);
+        DPRINT(
+            "after wait_front uncached tile0=0x{:x} w0=0x{:x} w1=0x{:x} tile1=0x{:x} w0=0x{:x} w1=0x{:x}\n",
+            tile0_addr + MEM_L1_UNCACHED_BASE,
+            tile0_uc[0],
+            tile0_uc[1],
+            tile1_addr + MEM_L1_UNCACHED_BASE,
+            tile1_uc[0],
+            tile1_uc[1]);
+#endif
     }
 #endif
 
@@ -58,16 +65,42 @@ void kernel_main() {
     results[3] = dfb.read_tile_value<uint32_t>(1, 1);
 
     const uint32_t tile_addr = dfb.get_tile_address(1);
+#if defined(TRISC_UNPACK) || defined(TRISC_MATH) || defined(TRISC_PACK) || defined(TRISC_ISOLATE_SFPU)
+    DPRINT(
+        "after get_tile_address r0=0x{:x} r1=0x{:x} r2=0x{:x} r3=0x{:x} "
+        "tile1_addr=0x{:x}\n",
+        results[0],
+        results[1],
+        results[2],
+        results[3],
+        tile_addr);
+#endif
+
     results[4] = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tile_addr);
     results[5] = static_cast<uint32_t>(dfb.read_tile_value<uint16_t>(1, 0));
     results[6] = static_cast<uint32_t>(dfb.read_tile_value<uint16_t>(1, 1));
 
-    tile_regs_acquire();
+#if defined(TRISC_UNPACK) || defined(TRISC_MATH) || defined(TRISC_PACK) || defined(TRISC_ISOLATE_SFPU)
+    DPRINT(
+        "after read_tile_value r0=0x{:x} r1=0x{:x} r2=0x{:x} r3=0x{:x} r4=0x{:x} r5=0x{:x} r6=0x{:x} "
+        "tile1_addr=0x{:x}\n",
+        results[0],
+        results[1],
+        results[2],
+        results[3],
+        results[4],
+        results[5],
+        results[6],
+        tile_addr);
+#endif
+
+    // Drain without tile_regs_acquire/copy_tile/release: that path left PACK's Tensix busy so
+    // firmware tensix_sync() after kernel_main hung with MEM_READ_NO_RESPONSE. TEN-4746 still
+    // requires a real UNPACR between wait_front and pop_front — use UNPACR_NOP via dummy_unpack.
     for (uint32_t i = 0; i < num_entries_per_consumer; ++i) {
-        copy_tile(dfb.get_id(), 0, 0);  // dummy copy to avoid UNPACK wait -> pop trap on Quasar
+        dummy_unpack(dfb.get_id());
         dfb.pop_front(1);
     }
-    tile_regs_release();
 
 #if defined(TRISC_UNPACK) || defined(TRISC_MATH) || defined(TRISC_PACK)
 #ifdef ARCH_QUASAR

@@ -42,23 +42,10 @@ void kernel_main() {
             dfb.reserve_back(1);
             noc.async_read(tensor_accessor, dfb, entry_size, {.page_id = page_id}, {});
             noc.async_read_barrier();
-#ifdef ARCH_QUASAR
-            {
-                const uint32_t wr_ptr = dfb.get_write_ptr();
-                volatile tt_l1_ptr uint32_t* const landed =
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(wr_ptr + MEM_L1_UNCACHED_BASE);
-                DPRINT(
-                    "producer page {} wr_ptr={:#x} landed[0]={:#x} landed[1]={:#x}\n",
-                    page_id,
-                    wr_ptr,
-                    landed[0],
-                    landed[1]);
-            }
-#endif
             dfb.push_back(1);
         }
     }
-    // DPRINT("PFW\n");
+    DPRINT("PFW\n");
     dfb.finish();
-    // DPRINT("PFD\n");
+    DPRINT("PFD\n");
 }
