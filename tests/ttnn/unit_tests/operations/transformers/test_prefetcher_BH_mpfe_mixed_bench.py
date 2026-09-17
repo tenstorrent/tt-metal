@@ -2,12 +2,12 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Mixed Llama-8B decode traffic benchmark for Tensor Prefetcher MPFE policies.
+"""Mixed Llama-8B TP2 decode traffic benchmark for Tensor Prefetcher MPFE policies.
 
-Each replay queues one receiver-contiguous FF1 weight, runs decode SDPA against
-DRAM-resident K/V while the DRISCs fill the GCB, then consumes the weight with
-the FF1 matmul. This gives dynamic policies a model-shaped ordinary-traffic
-interval in which the prefetch request may finish and restore its idle weights.
+Each replay queues one receiver-contiguous per-device FF1 weight, runs decode
+SDPA against DRAM-resident K/V while the DRISCs fill a whole-layer GCB, then
+consumes the weight with the FF1 matmul. Full buffering lets the request finish
+and restore dynamic idle weights while ordinary SDPA traffic is still active.
 """
 
 import math
@@ -40,7 +40,7 @@ _NUM_HEADS = 32
 _NUM_KV_HEADS = 8
 _HEAD_DIM = 128
 _FF1_K = 4096
-_FF1_N = 14336
+_FF1_N = 7168  # Llama-3.1-8B FF1 per-device N at tensor parallelism 2.
 _RECEIVERS_PER_BANK = 8
 _BF8_BYTES_PER_ELEMENT = 1088 / 1024.0
 
@@ -95,7 +95,7 @@ def _ff1_program_config(ring_cols: int, ring_rows: int, n_padded: int, ring_size
         hop_cores=ttnn.CoreRangeSet([]),
         num_global_cb_receivers=_RECEIVERS_PER_BANK,
         untilize_out=False,
-        stream_in1=True,
+        stream_in1=False,
     )
 
 
@@ -177,14 +177,12 @@ def test_mpfe_mixed_llama8b_ff1_sdpa(device):
         for bank in range(num_dram_banks)
     ]
     ff1_program_config = _ff1_program_config(ring_cols, ring_rows, n_padded, ring_size)
-    in1_page_bytes = (
-        (k_padded // ring_size // ttnn.TILE_SIZE)
-        * (n_padded // ring_size // ttnn.TILE_SIZE)
-        * 1088
-    )
-    window_blocks = int(os.environ.get("BENCH_GCB_WINDOW_BLOCKS", "4"))
-    assert 2 <= window_blocks <= ring_size
-    gcb_size = window_blocks * in1_page_bytes
+    # The production TP2 slice fits one complete receiver shard under the
+    # 65,535-page GCB limit even on a seven-bank harvested device. Unlike the
+    # previous shallow streaming benchmark, this allows prefetch to finish
+    # before SDPA and creates a real dynamic-idle interval.
+    gcb_size = int(k_padded * (n_padded // ring_size) * _BF8_BYTES_PER_ELEMENT)
+    assert gcb_size // 16 < 65535
     gcb = ttnn.experimental.create_global_circular_buffer_for_matmul_1d(
         device,
         [ff1_program_config],
@@ -283,7 +281,6 @@ def test_mpfe_mixed_llama8b_ff1_sdpa(device):
     block_count = ttnn.experimental.tensor_prefetcher_block_count_for_matmul_1d(
         ff1_program_config, tt_weight, gcb
     )
-    rotation = list(range(block_count))
     policy = resolve_mpfe_benchmark_weights()
     trace_id = None
     prefetcher_started = False
@@ -294,7 +291,7 @@ def test_mpfe_mixed_llama8b_ff1_sdpa(device):
         # One model-shaped warmup also validates that both cached programs consume
         # exactly one balanced prefetch request before trace capture.
         ttnn.experimental.queue_tensor_prefetcher_request(
-            device, [(tt_weight, block_count, rotation)], global_cb=gcb
+            device, [(tt_weight, block_count)], global_cb=gcb
         )
         sdpa_warmup = run_sdpa()
         ff1_warmup = run_ff1()
@@ -320,7 +317,7 @@ def test_mpfe_mixed_llama8b_ff1_sdpa(device):
         try:
             ttnn.experimental.queue_tensor_prefetcher_request(
                 device,
-                [(tt_weight, block_count, rotation)],
+                [(tt_weight, block_count)],
                 global_cb=gcb,
                 capture_into_trace=True,
             )
@@ -363,7 +360,7 @@ def test_mpfe_mixed_llama8b_ff1_sdpa(device):
             "num_dram_banks": num_dram_banks,
             "ring_size": ring_size,
             "dual_senders": True,
-            "gcb_window_blocks": window_blocks,
+            "gcb_buffered_blocks": block_count,
             "sdpa_context": context,
             "trace_repeats": trace_repeats,
             "elapsed_ms": elapsed * 1e3,

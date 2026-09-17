@@ -17,20 +17,21 @@ TEST="tests/ttnn/unit_tests/operations/transformers/test_prefetcher_BH_bw_bench.
 
 cd "$TT_METAL_HOME"
 
-# name|active free|active NOC1|active ordinary|idle free|idle NOC1|idle ordinary;
+# name|active free|active NOC1|active ordinary|idle free|idle NOC1|idle ordinary|sync;
 # "-" leaves that setting unset.
 CASES=(
-    "default|-|-|-|-|-|-"
-    "static-000|0|0|0|-|-|-"
-    "static-014|0|1|4|-|-|-"
-    "static-037|0|3|7|-|-|-"
-    "static-777|7|7|7|-|-|-"
-    "dynamic-000-to-015|0|1|5|0|0|0"
+    "default|-|-|-|-|-|-|-"
+    "static-000|0|0|0|-|-|-|-"
+    "static-014|0|1|4|-|-|-|-"
+    "static-015-no-sync|0|1|5|-|-|-|0"
+    "static-037|0|3|7|-|-|-|-"
+    "static-777|7|7|7|-|-|-|-"
+    "dynamic-000-to-015|0|1|5|0|0|0|1"
 )
 
 failures=()
 for spec in "${CASES[@]}"; do
-    IFS="|" read -r name free_weight noc1_weight ordinary_weight idle_free idle_noc1 idle_ordinary <<< "$spec"
+    IFS="|" read -r name free_weight noc1_weight ordinary_weight idle_free idle_noc1 idle_ordinary sync <<< "$spec"
     printf '\n== MPFE sanity: %s ==\n' "$name"
 
     env_args=(
@@ -40,6 +41,7 @@ for spec in "${CASES[@]}"; do
         -u TT_METAL_BENCHMARK_TENSOR_PREFETCHER_IDLE_FREE_SENDER_WEIGHT
         -u TT_METAL_BENCHMARK_TENSOR_PREFETCHER_IDLE_NOC1_SENDER_WEIGHT
         -u TT_METAL_BENCHMARK_TENSOR_PREFETCHER_IDLE_ORDINARY_WEIGHT
+        -u TT_METAL_BENCHMARK_TENSOR_PREFETCHER_SYNCHRONIZE_SENDERS
         -u TT_METAL_BENCHMARK_RESULT_JSONL
         -u TT_METAL_SLOW_DISPATCH_MODE
         "ARCH_NAME=blackhole"
@@ -58,6 +60,8 @@ for spec in "${CASES[@]}"; do
         env_args+=("TT_METAL_BENCHMARK_TENSOR_PREFETCHER_IDLE_NOC1_SENDER_WEIGHT=$idle_noc1")
     [[ "$idle_ordinary" == "-" ]] ||
         env_args+=("TT_METAL_BENCHMARK_TENSOR_PREFETCHER_IDLE_ORDINARY_WEIGHT=$idle_ordinary")
+    [[ "$sync" == "-" ]] ||
+        env_args+=("TT_METAL_BENCHMARK_TENSOR_PREFETCHER_SYNCHRONIZE_SENDERS=$sync")
 
     if ! env "${env_args[@]}" "$PYTHON" -m pytest -sv "$TEST" "$@"; then
         failures+=("$name")

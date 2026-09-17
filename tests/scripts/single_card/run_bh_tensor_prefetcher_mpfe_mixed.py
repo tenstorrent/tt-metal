@@ -35,6 +35,7 @@ MPFE_ENV_NAMES = (
     "IDLE_FREE_SENDER_WEIGHT",
     "IDLE_NOC1_SENDER_WEIGHT",
     "IDLE_ORDINARY_WEIGHT",
+    "SYNCHRONIZE_SENDERS",
 )
 
 
@@ -43,12 +44,14 @@ class Policy:
     label: str
     active: tuple[int, int, int]
     idle: tuple[int, int, int] | None = None
+    synchronize_senders: bool = True
 
 
 POLICIES = (
-    Policy("static-000", (0, 0, 0)),
-    Policy("static-015", (0, 1, 5)),
-    Policy("dynamic-000-to-015", (0, 1, 5), (0, 0, 0)),
+    Policy("static-000-no-sync", (0, 0, 0), synchronize_senders=False),
+    Policy("static-015-no-sync", (0, 1, 5), synchronize_senders=False),
+    Policy("static-015-sync", (0, 1, 5)),
+    Policy("dynamic-000-to-015-sync", (0, 1, 5), (0, 0, 0)),
 )
 
 
@@ -117,10 +120,9 @@ class MixedRunner:
         self.contexts = parse_contexts()
         self.iterations = env_int("MPFE_MIXED_ITERATIONS", 5)
         self.trace_repeats = env_int("BENCH_TRACE_REPEATS", 20)
-        self.gcb_window_blocks = env_int("BENCH_GCB_WINDOW_BLOCKS", 4, minimum=2)
         self.seed = env_int("MPFE_RANDOM_SEED", 0x4D495845, minimum=0)
         self.manifest = {
-            "schema_version": 1,
+            "schema_version": 2,
             "git_revision": subprocess.check_output(
                 ["git", "rev-parse", "HEAD"], cwd=TT_METAL_HOME, text=True
             ).strip(),
@@ -129,13 +131,13 @@ class MixedRunner:
             "contexts": list(self.contexts),
             "iterations": self.iterations,
             "trace_repeats": self.trace_repeats,
-            "gcb_window_blocks": self.gcb_window_blocks,
             "random_seed": self.seed,
             "policies": [
                 {
                     "label": policy.label,
                     "active": list(policy.active),
                     "idle": list(policy.idle) if policy.idle is not None else None,
+                    "synchronize_senders": policy.synchronize_senders,
                 }
                 for policy in POLICIES
             ],
@@ -167,7 +169,6 @@ class MixedRunner:
             raise RuntimeError(f"{self.results_path} contains a record for a different benchmark")
         if (
             record.get("trace_repeats") != self.trace_repeats
-            or record.get("gcb_window_blocks") != self.gcb_window_blocks
             or record.get("sdpa_context") not in self.contexts
         ):
             raise RuntimeError(f"{self.results_path} contains a record incompatible with its manifest")
@@ -177,6 +178,7 @@ class MixedRunner:
             policy is None
             or record.get("active_weights") != list(policy.active)
             or record.get("idle_weights") != list(expected_idle)
+            or record.get("synchronize_senders") != policy.synchronize_senders
         ):
             raise RuntimeError(f"{self.results_path} contains mismatched policy metadata")
 
@@ -209,13 +211,13 @@ class MixedRunner:
                 + (f":{environment['PYTHONPATH']}" if environment.get("PYTHONPATH") else ""),
                 "BENCH_SDPA_CONTEXT": str(context),
                 "BENCH_TRACE_REPEATS": str(self.trace_repeats),
-                "BENCH_GCB_WINDOW_BLOCKS": str(self.gcb_window_blocks),
                 "TT_METAL_BENCHMARK_RESULT_JSONL": str(self.temp_result_path),
                 "TT_METAL_BENCHMARK_RUN_LABEL": policy.label,
                 "TT_METAL_BENCHMARK_SUITE_ITERATION": str(iteration),
                 f"{MPFE_ENV_PREFIX}FREE_SENDER_WEIGHT": str(policy.active[0]),
                 f"{MPFE_ENV_PREFIX}NOC1_SENDER_WEIGHT": str(policy.active[1]),
                 f"{MPFE_ENV_PREFIX}ORDINARY_WEIGHT": str(policy.active[2]),
+                f"{MPFE_ENV_PREFIX}SYNCHRONIZE_SENDERS": "1" if policy.synchronize_senders else "0",
             }
         )
         if policy.idle is not None:
@@ -263,6 +265,7 @@ class MixedRunner:
                 "run_sequence": sequence,
                 "active_weights": list(policy.active),
                 "idle_weights": list(policy.idle if policy.idle is not None else policy.active),
+                "synchronize_senders": policy.synchronize_senders,
             }
         )
         signature = (record["num_dram_banks"], record["ring_size"])
@@ -329,8 +332,9 @@ def write_reports(output_dir: Path, records: list[dict], contexts: tuple[int, ..
                 )
 
     comparisons = (
-        ("active-priority", "static-015", "static-000"),
-        ("dynamic-restoration", "dynamic-000-to-015", "static-015"),
+        ("active-priority", "static-015-no-sync", "static-000-no-sync"),
+        ("sender-sync", "static-015-sync", "static-015-no-sync"),
+        ("dynamic-restoration", "dynamic-000-to-015-sync", "static-015-sync"),
     )
     with comparison_path.open("w", newline="", encoding="utf-8") as output:
         writer = csv.writer(output)

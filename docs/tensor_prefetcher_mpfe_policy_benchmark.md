@@ -30,6 +30,7 @@ tt::tt_metal::experimental::TensorPrefetcherConfig config{
     .idle_free_sender_mpfe_weight = 0,
     .idle_noc1_sender_mpfe_weight = 0,
     .idle_ordinary_mpfe_weight = 0,
+    .synchronize_senders = true,
 };
 tt::tt_metal::experimental::StartTensorPrefetcher(mesh_device, config);
 ```
@@ -45,6 +46,7 @@ ttnn.experimental.start_tensor_prefetcher(
     idle_free_sender_mpfe_weight=0,
     idle_noc1_sender_mpfe_weight=0,
     idle_ordinary_mpfe_weight=0,
+    synchronize_senders=True,
 )
 ```
 
@@ -52,7 +54,9 @@ Each value must be an integer from 0 through 7. The three active values default
 to `0/1/5`. An omitted idle field (or Python `None`) inherits its corresponding
 active value, so existing callers remain static. Changing configuration requires
 stopping and restarting the prefetcher, but does not require another Metal/TTNN
-build.
+build. Sender synchronization defaults on. It may be disabled for static
+comparisons, but dynamic ordinary-operation weights require it because that MPFE
+slot is shared by both senders.
 
 ## Benchmark controls
 
@@ -66,6 +70,7 @@ TT_METAL_BENCHMARK_TENSOR_PREFETCHER_ORDINARY_WEIGHT=5
 TT_METAL_BENCHMARK_TENSOR_PREFETCHER_IDLE_FREE_SENDER_WEIGHT=0
 TT_METAL_BENCHMARK_TENSOR_PREFETCHER_IDLE_NOC1_SENDER_WEIGHT=0
 TT_METAL_BENCHMARK_TENSOR_PREFETCHER_IDLE_ORDINARY_WEIGHT=0
+TT_METAL_BENCHMARK_TENSOR_PREFETCHER_SYNCHRONIZE_SENDERS=1
 ```
 
 The Python benchmark helper validates set values and passes them explicitly to
@@ -81,9 +86,9 @@ After building, run the compact sanity matrix:
 tests/scripts/single_card/run_bh_tensor_prefetcher_mpfe_sanity.sh
 ```
 
-It covers the default, static `000`, `014`, `037`, and `777`, plus dynamic
-idle `000` to active `015`. Every case performs initial and final byte
-validation and verifies clean shutdown.
+It covers the default, representative static weights, static `015` without
+request synchronization, and dynamic idle `000` to active `015`. Every case
+performs initial and final byte validation and verifies clean shutdown.
 
 Run one contention measurement directly:
 
@@ -101,10 +106,12 @@ Set `TT_METAL_BENCHMARK_RESULT_JSONL` to append machine-readable metrics.
 
 ## Mixed Llama-8B FF1 and SDPA
 
-The mixed benchmark queues a receiver-contiguous Llama-8B FF1 weight, runs
-decode SDPA against DRAM-resident K/V while the DRISCs prefetch, and then
-consumes FF1 from the GCB. This supplies model-shaped traffic to both sides of
-the MPFE arbiter. Context length changes the amount of ordinary K/V traffic:
+The mixed benchmark queues a receiver-contiguous per-device Llama-8B TP2 FF1
+weight (`4096x7168`), runs decode SDPA against DRAM-resident K/V while the
+DRISCs prefetch, and then consumes FF1 from the GCB. The complete FF1 receiver
+shard fits in the GCB even on a seven-bank harvested device, allowing prefetch
+to complete and restore dynamic idle weights while SDPA is still generating
+ordinary traffic. Context length changes the amount of ordinary K/V traffic:
 
 ```bash
 PYTHONPATH=$PWD \
@@ -126,15 +133,15 @@ Run the focused randomized comparison with:
 tests/scripts/single_card/run_bh_tensor_prefetcher_mpfe_mixed.py
 ```
 
-It compares static `000`, synchronized static `015`, and dynamic
-`000` to `015` across contexts 512, 1024, 2048, and 4096. Configure it with
+It compares unsynchronized static `000`, unsynchronized static `015`,
+synchronized static `015`, and synchronized dynamic `000` to `015` across
+contexts 512, 1024, 2048, and 4096. Configure it with
 `MPFE_MIXED_CONTEXTS`, `MPFE_MIXED_ITERATIONS`, `BENCH_TRACE_REPEATS`,
-`BENCH_GCB_WINDOW_BLOCKS` (default 4), `MPFE_RANDOM_SEED`, and `OUTPUT_DIR`.
-The FF1 matmul streams from this shallow GCB window so production-sized weights
-also fit the harvested-device L1 page limit. Results include raw JSONL,
-`summary.csv`, `paired-comparisons.csv`, the exact manifest, and pytest logs.
-The dynamic-minus-static-015 comparison isolates idle restoration because both
-use the same active weights and sender rendezvous.
+`MPFE_RANDOM_SEED`, and `OUTPUT_DIR`. Results include raw JSONL, `summary.csv`,
+`paired-comparisons.csv`, the exact manifest, and pytest logs. The reports
+separately measure active priority, sender synchronization, and dynamic idle
+restoration; the final comparison holds active weights and synchronization
+constant.
 
 Dynamic priority can help only when ordinary work continues after a prefetch
 request finishes. If prefetch occupies the entire SDPA interval, dynamic should
