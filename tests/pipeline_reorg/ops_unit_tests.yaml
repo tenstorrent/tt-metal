@@ -131,7 +131,7 @@
       -m requires_host_iommu -xv --timeout=600
   skus:
     bh_p150b_civ2_viommu:
-      timeout: 7
+      timeout: 15
   owner_id: U09L76N1MAT  # Nenad Babin
   team: ttnn
   budget_type: unit
