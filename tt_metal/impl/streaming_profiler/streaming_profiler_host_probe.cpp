@@ -9,10 +9,8 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
-#include <ctime>
 #include <string>
 #include <vector>
-#include <x86intrin.h>
 
 #include <numa.h>
 #include <tt-logger/tt-logger.hpp>
@@ -41,30 +39,7 @@ constexpr size_t kWindowPairs = 20;
 // A steady pair off the segment by more than the pair bracket can explain is a slew step.
 constexpr double kSteadyKinkNs = 40.0;
 
-int64_t mono_ns(clockid_t id) {
-    timespec ts{};
-    clock_gettime(id, &ts);
-    return static_cast<int64_t>(ts.tv_sec) * 1'000'000'000 + ts.tv_nsec;
-}
-
 }  // namespace
-
-int64_t tsc_now() noexcept {
-    _mm_lfence();
-    const int64_t t = static_cast<int64_t>(__rdtsc());
-    _mm_lfence();
-    return t;
-}
-
-double tsc_ticks_per_ns() {
-    static const double rate = [] {
-        const int64_t t0 = tsc_now(), r0 = mono_ns(CLOCK_MONOTONIC_RAW);
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-        const int64_t r1 = mono_ns(CLOCK_MONOTONIC_RAW), t1 = tsc_now();
-        return static_cast<double>(t1 - t0) / static_cast<double>(r1 - r0);
-    }();
-    return rate;
-}
 
 HostProbe::HostProbe(tt::Cluster& cluster, uint32_t chip_id, PlacementMap& map) :
     cluster_(cluster), chip_id_(chip_id), map_(map) {
@@ -206,7 +181,7 @@ void HostProbe::steady_pair() {
     int64_t best_gap = INT64_MAX, best_tsc = 0, best_mono = 0;
     for (int i = 0; i < 16; i++) {
         const int64_t t0 = tsc_now();
-        const int64_t m = mono_ns(CLOCK_MONOTONIC);
+        const int64_t m = clock_ns(CLOCK_MONOTONIC);
         const int64_t t1 = tsc_now();
         if (t1 - t0 < best_gap) {
             best_gap = t1 - t0;

@@ -11,6 +11,7 @@
 #include <thread>
 #include <vector>
 
+#include "impl/streaming_profiler/streaming_profiler_host_clock.hpp"
 #include "impl/streaming_profiler/streaming_profiler_placement_map.hpp"
 
 namespace tt {
@@ -21,10 +22,6 @@ class TlbWindow;
 }
 
 namespace tt::tt_metal::streaming_profiler {
-
-// The host TSC, fenced, in ticks; and its rate, measured once per process against CLOCK_MONOTONIC_RAW.
-int64_t tsc_now() noexcept;
-double tsc_ticks_per_ns();
 
 // The root chip's refclk on the host TSC: tsc = a + b * refclk, fitted over the recent probe bursts.
 struct HostLine {

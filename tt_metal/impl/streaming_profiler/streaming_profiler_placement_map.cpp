@@ -11,10 +11,7 @@
 
 #include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/experimental/streaming_profiler.hpp>
-#include <x86intrin.h>
-#include <ctime>
-#include "impl/streaming_profiler/streaming_profiler_host_probe.hpp"
+#include "impl/streaming_profiler/streaming_profiler_host_clock.hpp"
 #include "tt_metal/common/indexed_ring.hpp"
 
 #include <condition_variable>
@@ -187,19 +184,6 @@ ThreadView& view_of(const void* owner) noexcept {
     return t_view;
 }
 
-double units_per_tsc() {
-    static const double u = 10.0 / tsc_ticks_per_ns();
-    return u;
-}
-
-// The steady view: double-buffered under a generation, so a reader that sees the new generation sees the whole
-// segment.
-struct SteadySlots {
-    SteadySegment seg[2];
-    std::atomic<uint32_t> gen{0};
-};
-SteadySlots g_steady;
-
 }  // namespace
 
 struct PlacementMap::Impl {
@@ -329,30 +313,6 @@ int64_t PlacementMap::place_host(uint32_t chip_id, int64_t wall) const noexcept 
     return std::llround(k.value);
 }
 
-void SteadyView::set(const SteadySegment& segment) noexcept {
-    const uint32_t g = g_steady.gen.load(std::memory_order_relaxed);
-    g_steady.seg[(g + 1) & 1] = segment;
-    g_steady.gen.store(g + 1, std::memory_order_release);
-}
-
-int64_t SteadyView::mono_ns(int64_t tsc) noexcept {
-    thread_local uint32_t gen = ~0u;
-    thread_local SteadySegment seg;
-    const uint32_t g = g_steady.gen.load(std::memory_order_acquire);
-    if (g != gen) {
-        seg = g_steady.seg[g & 1];
-        gen = g;
-    }
-    if (!seg.ok) {
-        // The stand-in pair is taken once per thread and generation.
-        timespec ts{};
-        clock_gettime(CLOCK_MONOTONIC, &ts);
-        const int64_t mono = static_cast<int64_t>(ts.tv_sec) * 1'000'000'000 + ts.tv_nsec;
-        seg = SteadySegment{static_cast<int64_t>(__rdtsc()), mono, 1.0 / tsc_ticks_per_ns(), true};
-    }
-    return seg.mono_of(tsc);
-}
-
 namespace {
 std::mutex& plots_mutex() {
     static std::mutex m;
@@ -413,22 +373,3 @@ void SyncPlots::wait_complete(std::chrono::milliseconds timeout) {
 }
 
 }  // namespace tt::tt_metal::streaming_profiler
-
-namespace tt::tt_metal::experimental::streaming_profiler {
-host_clock::time_point host_clock::now() noexcept { return from_tsc(tt::tt_metal::streaming_profiler::tsc_now()); }
-int64_t host_clock::tsc(time_point t) noexcept {
-    return std::llround(
-        static_cast<double>(t.time_since_epoch().count()) / tt::tt_metal::streaming_profiler::units_per_tsc());
-}
-host_clock::time_point host_clock::from_tsc(int64_t ticks) noexcept {
-    return time_point(
-        duration(std::llround(static_cast<double>(ticks) * tt::tt_metal::streaming_profiler::units_per_tsc())));
-}
-}  // namespace tt::tt_metal::experimental::streaming_profiler
-
-namespace tt::tt_metal::experimental::streaming_profiler::detail {
-int64_t host_to_steady_ns(int64_t host) noexcept {
-    return tt::tt_metal::streaming_profiler::SteadyView::mono_ns(
-        host_clock::tsc(host_clock::time_point(host_clock::duration(host))));
-}
-}  // namespace tt::tt_metal::experimental::streaming_profiler::detail

@@ -6,7 +6,6 @@
 
 #include <atomic>
 #include <chrono>
-#include <cmath>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -29,14 +28,6 @@ struct PlacementNode {
 using SyncNode = PlacementNode<int64_t>;
 // The fleet's one host series: the root's refclk tick -> host TSC tick, from the host probe.
 using HostNode = PlacementNode<double>;
-
-// The host TSC on CLOCK_MONOTONIC, one line between two NTP slews: mono_ns = mono0 + (tsc - tsc0) * ns_per_tick.
-struct SteadySegment {
-    int64_t tsc0 = 0, mono0 = 0;
-    double ns_per_tick = 0.0;
-    bool ok = false;
-    int64_t mono_of(int64_t tsc) const { return mono0 + std::llrint(static_cast<double>(tsc - tsc0) * ns_per_tick); }
-};
 
 // The sync engine's placement map: one series per chip (its eth wall tick -> the root chip's refclk tick) and the
 // host series (the root's refclk tick -> host TSC tick). The sync engine writes the chip series and the host probe
@@ -90,15 +81,6 @@ public:
 private:
     struct Impl;
     std::unique_ptr<Impl> impl_;
-};
-
-// The host TSC on steady_clock as the host probe measures it: one segment for the process, readable from any thread
-// and cached per thread. No capture is involved, so the API's steady_time() reads it with no device open.
-class SteadyView {
-public:
-    static void set(const SteadySegment& segment) noexcept;
-    // A TSC/CLOCK_MONOTONIC pair taken here stands in until a probe publishes a segment.
-    static int64_t mono_ns(int64_t tsc) noexcept;
 };
 
 // A named (host TSC tick, value) series a consumer computes once a capture is complete -- the d2d sync's error per
