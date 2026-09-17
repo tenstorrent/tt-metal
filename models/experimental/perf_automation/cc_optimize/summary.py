@@ -914,11 +914,52 @@ def _is_win(attempt) -> bool:
 
 
 def _win_set(attempts, baseline_ms=None) -> set:
-    """Delegates to the ledger, which owns which attempts actually reduced the measured time."""
+    """Delegates to the ledger, which owns which attempts actually reduced the measured time --
+    then narrows to attempts that were also BANKED.
+
+    A measured improvement and a saved improvement are different facts, and only git_commit
+    (perf_mcp._record_committed_win) proves the second one. It writes a SEPARATE row for that --
+    the attempt that measured the win never carries a commit marker, and the commit row never
+    carries the delta that proves it was a win -- so neither row can answer this about itself.
+    Matched back by op + rung via perf_mcp's own _op_match, the same rule every other op/rung
+    comparison in this tool already uses, rather than a second, looser one here.
+
+    ABSENT ENTIRELY means unknown, not "not banked": commit_record is a newer field, and reading
+    its total absence as "nothing was banked" would blank every historical report to zero ticks,
+    including runs with real, verified commits recorded before this field existed (measured:
+    Voxtral, 434 attempt rows, 30 real commits, 0 commit-marked rows -- the field simply predates
+    them). Falls back to today's behaviour whenever it cannot tell.
+    """
     try:
-        return _ledger().winning_indices(attempts, baseline_ms)
+        wins = _ledger().winning_indices(attempts, baseline_ms)
     except Exception:  # noqa: BLE001
         return set()
+    if not wins:
+        return wins
+    rows = attempts or []
+    if not any(isinstance(a, dict) and a.get("commit_record") for a in rows):
+        return wins  # this ledger predates commit rows entirely; unfiltered is the honest answer
+    _m = _perf_mcp()
+    _match = getattr(_m, "_op_match", None) if _m else None
+    if not callable(_match):
+        return wins  # cannot verify banking here; do not silently blank the report
+    banked = set()
+    for i in wins:
+        a = rows[i] if 0 <= i < len(rows) else None
+        if not isinstance(a, dict):
+            continue
+        rung = str(a.get("kernel_kind") or "").strip().lower()
+        sig = a.get("op_signature")
+        for b in rows:
+            if (
+                isinstance(b, dict)
+                and b.get("commit_record")
+                and str(b.get("kernel_kind") or "").strip().lower() == rung
+                and _match(sig, b)
+            ):
+                banked.add(i)
+                break
+    return banked
 
 
 # THE MATH-FIDELITY RUNGS, ONE LIST. _fidelity_breakdown held it as a local so the ladder always

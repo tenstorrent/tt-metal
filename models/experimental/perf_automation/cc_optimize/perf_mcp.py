@@ -983,6 +983,23 @@ def _load_target() -> dict:
         return {}
 
 
+def _stamp_target_measurement(ms) -> None:
+    """Add THIS measurement to the current target, so a git_commit called right after (for the same
+    target) can see it via _load_target(). Reuses _persist_target's own write rather than a second
+    one, so the in-memory copy and the on-disk copy can never disagree about which fields exist.
+
+    A no-op when there is no current target (nothing to stamp), which is the same "absent evidence
+    is not evidence of absence" rule _record_committed_win's own guard already applies -- this
+    function's job is only to make the field available when a target genuinely exists, never to
+    invent one.
+    """
+    t = _load_target()
+    if not t:
+        return
+    t["measured_ms"] = ms
+    _persist_target(t)
+
+
 def _append_attempt(rec: dict) -> list:
     attempts = _load_attempts()
     sig, kind, note = rec.get("op_signature"), rec.get("kernel_kind"), rec.get("note") or ""
@@ -1576,7 +1593,9 @@ def _op_ladder_status(open_op: dict, op_code: str, attempts: list) -> tuple[bool
     # four hand-written sums this replaces were one copy per knob, and a fifth would have been a knob
     # that is offered forever because its tries never saturate.
     _rung_tries = collections.Counter(
-        _normalise_rung(a.get("kernel_kind")) for a in matches if not a.get("measurement_failed")
+        _normalise_rung(a.get("kernel_kind"))
+        for a in matches
+        if not a.get("measurement_failed") and not a.get("commit_record")
     )
     # A RUNG THAT CANNOT SUCCEED MUST STOP BEING OFFERED, the same rule host_overhead already applies
     # a few lines below ("an attempt that wedged the device may never have got far enough to have
@@ -5246,7 +5265,6 @@ def _record_committed_win(message: str, sha: str = "") -> None:
                 "measured_ms": t.get("measured_ms"),
                 "fullpipe_ms": (_fullpipe_ms_now() or (None, None))[0],
                 "fullpipe_best_ms": (_fullpipe_ms_now() or (None, None))[1],
-                "baseline_at_record": _baseline_at_record(),
                 # The baseline this verdict was reached against, so a resumed run can tell whether it still
                 # applies to the same work before skipping the lever.
                 "baseline_at_record": _baseline_at_record(),
@@ -5254,6 +5272,11 @@ def _record_committed_win(message: str, sha: str = "") -> None:
                 "wedged": False,
                 "kernel_detected_in_source": True,
                 "commit": sha or None,
+                # A COMMIT ROW, NOT A SECOND ATTEMPT. record_kernel_attempt already logged the try;
+                # this row exists only to prove it was banked. _rung_allowance and _op_ladder_status
+                # must not count it toward a rung's retry cap, or a real win burns the same budget
+                # twice -- once for trying, once for saving.
+                "commit_record": True,
                 "note": "committed: " + " ".join((message or "").split())[:140],
             }
         )
@@ -5620,6 +5643,7 @@ def _rung_allowance(op_signature: str, kernel_kind: str, attempts: list) -> tupl
         for a in matches
         if _normalise_rung(a.get("kernel_kind")) == rung
         and not a.get("measurement_failed")
+        and not a.get("commit_record")
         and a.get("measured_ms") is not None
     )
     # A WEDGE NEVER HAS measured_ms, so the sum above cannot see it -- a rung that crashes every time
@@ -5746,6 +5770,14 @@ def record_kernel_attempt(
     except Exception:  # noqa: BLE001
         stages = []
     _ms = round(float(measured_ms), 4)
+    # GIVE THE TARGET ITS MEASUREMENT. git_commit's _record_committed_win reads _load_target() for
+    # measured_ms before it will bank a win -- correctly, since "a commit is not a measurement" (see
+    # its own docstring) -- but nothing ever wrote that field onto the target: _persist_target only
+    # ever receives termination_check's ten-field next_target dict, which never carries a
+    # measurement, and measure_candidate never touches the target at all. So that guard could never
+    # pass, on any commit, on any model -- not intermittently, always. The number is right here,
+    # one call earlier; stamp it onto the SAME target object a git_commit called next will read.
+    _stamp_target_measurement(_ms)
     # CLOSED-RUNG CHECK RUNS FIRST, BEFORE the verdict is claimed. `_attempt_fullpipe_verdict()`
     # CONSUMES the measurement id (one replay, one attempt), so when it ran ahead of this check a
     # refusal still burned the measurement: the agent recorded a closed rung by mistake, got refused,
