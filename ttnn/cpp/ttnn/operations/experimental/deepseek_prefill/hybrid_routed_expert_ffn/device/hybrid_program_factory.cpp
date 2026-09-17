@@ -2887,10 +2887,13 @@ MergedKernelSources merged_kernel_sources() {
 // less the scratch margin. Both halves are checked against it, so it is by construction at least
 // as large as either half's buffers -- which is what the arena must hold, since the passes are
 // laid out over it one at a time rather than side by side.
-// The device-open setting this op is validated at, and the allocator base it produces
-// (base = L1 size - worker_l1_size). Checked rather than assumed: see validate_on_program_cache_miss.
-constexpr uint32_t kValidatedWorkerL1Size = 1'444'864;
-constexpr uint32_t kMinAllocatorBase = 128'000;
+// The allocator base a Blackhole device gets at the default worker_l1_size, which is the
+// configuration this op is validated at. A caller may only make the arena SMALLER than the
+// default, never larger: the kernel-config ring is everything between the fixed firmware region
+// and the allocator base, so it grows only as worker_l1_size shrinks. Checked rather than
+// assumed: see validate_on_program_cache_miss.
+constexpr uint32_t kDefaultWorkerL1Size = 1'461'248;
+constexpr uint32_t kMinAllocatorBase = 111'616;
 
 uint32_t arena_bytes_for(tt::tt_metal::IDevice* device) {
     constexpr uint32_t kL1ScratchMargin = 48 * 1024;
@@ -3034,18 +3037,19 @@ void validate_arguments(const HybridRoutedExpertFfnParams& op, const HybridRoute
         fused::validate(fused_attributes(op), fused_inputs(t));
 
         // A union program carries BOTH halves' kernel binaries, so its config is far larger than
-        // either op's alone, and the kernel-config ring has to hold it. That ring is everything
-        // between the fixed firmware region and the allocator base, so it grows only as
-        // worker_l1_size shrinks -- the base moving up IS the ring getting bigger. Left to
-        // tt_metal this surfaces as "Program size too large for kernel config buffer", which
-        // reports two numbers but not the knob that moves them.
+        // either op's alone, and the kernel-config ring has to hold it. It fits the ring the
+        // device gets by default with a little room to spare, so the only way to break it is to
+        // open the device with a LARGER arena than the default, which moves the allocator base
+        // down and takes those bytes off the ring. Left to tt_metal that surfaces as "Program
+        // size too large for kernel config buffer", which reports two numbers but not the knob
+        // that moves them.
         const uint32_t base = t.x.device()->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
         TT_FATAL(
             base >= kMinAllocatorBase,
-            "hybrid_routed_expert_ffn needs the device opened with worker_l1_size <= {}: the union program's "
-            "kernel config does not fit the kernel-config ring otherwise. The allocator base is at {} but this "
-            "op needs it at {} or above.",
-            kValidatedWorkerL1Size,
+            "hybrid_routed_expert_ffn needs the device opened with worker_l1_size <= {} (the Blackhole default): "
+            "the union program's kernel config does not fit the kernel-config ring otherwise. The allocator base "
+            "is at {} but this op needs it at {} or above.",
+            kDefaultWorkerL1Size,
             base,
             kMinAllocatorBase);
     }

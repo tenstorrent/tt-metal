@@ -34,9 +34,6 @@ from tests.ttnn.profiling.realtime_profiler_utils import (
     require_realtime_profiler,
 )
 from tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill import ci_pruning
-from tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_hybrid_routed_expert_ffn_port import (
-    _UNION_WORKER_L1_SIZE,
-)
 
 # Not wired into any model yet.
 pytestmark = pytest.mark.uncollect_if(pred=ci_pruning.no_production_counterpart)
@@ -222,7 +219,6 @@ def _measure_pair(device, active_counts, threshold: int):
 
 
 @pytest.mark.skipif(not is_blackhole(), reason="the routed expert is Blackhole-only")
-@pytest.mark.parametrize("device_params", [{"worker_l1_size": _UNION_WORKER_L1_SIZE}], indirect=True)
 @pytest.mark.parametrize("distribution", list(_DISTRIBUTIONS), ids=list(_DISTRIBUTIONS))
 def test_one_op_vs_two_ops(device, distribution: str):
     two_op_ns, one_op_ns, two_op_period, one_op_period = _measure_pair(device, _DISTRIBUTIONS[distribution], _THRESHOLD)
@@ -251,7 +247,6 @@ def _alternating_counts(n_experts: int) -> list:
 
 
 @pytest.mark.skipif(not is_blackhole(), reason="the routed expert is Blackhole-only")
-@pytest.mark.parametrize("device_params", [{"worker_l1_size": _UNION_WORKER_L1_SIZE}], indirect=True)
 @pytest.mark.parametrize("n_experts", _EXPERTS_PER_CHIP_SWEEP)
 def test_overhead_vs_experts_per_chip(device, n_experts: int):
     """Does the union op's overhead scale with experts per chip, or is it per dispatch?"""
