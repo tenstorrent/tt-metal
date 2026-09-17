@@ -79,11 +79,16 @@ void collect_kernels(
             // Blaze-only experimental named args
             // Removal is tracked by issue #50953
             NamedCTArgNamespaces named_ct_arg_namespaces = kd.named_ct_arg_namespaces;
+            // NamedRuntimeArgEntry is a private type (DeferredCompile holds it), so rebuild it
+            // from the POD NamedRtEntry (field/index/length/dispatch flattened by the marshaller).
             NamedRuntimeArgNamespaces named_runtime_arg_namespaces;
-            kernel->process_named_runtime_args(
-                [&named_runtime_arg_namespaces](const NamedRuntimeArgNamespaces& namespaces) {
-                    named_runtime_arg_namespaces = namespaces;
-                });
+            for (const auto& [ns, entries] : kd.named_runtime_arg_namespaces) {
+                auto& out = named_runtime_arg_namespaces[ns];
+                for (const auto& e : entries) {
+                    out.push_back(
+                        NamedRuntimeArgEntry{e.field, e.index, e.length, static_cast<RuntimeArgDispatch>(e.dispatch)});
+                }
+            }
             ////////////////////////////////////////////////////////////
             {  // STAGE 2b diff-guards: POD vs private read
                 std::vector<uint32_t> _priv_ct = kernel->compile_time_args();
@@ -91,6 +96,22 @@ void collect_kernels(
                 NamedCTArgNamespaces _priv_ctns;
                 kernel->process_named_ct_arg_namespaces(
                     [&_priv_ctns](const NamedCTArgNamespaces& ns) { _priv_ctns = ns; });
+                NamedRuntimeArgNamespaces _priv_nrt;
+                kernel->process_named_runtime_args(
+                    [&_priv_nrt](const NamedRuntimeArgNamespaces& ns) { _priv_nrt = ns; });
+                // NamedRuntimeArgEntry has no operator==; compare a canonical serialization.
+                auto serialize_nrt = [](const NamedRuntimeArgNamespaces& m) {
+                    std::string s;
+                    for (const auto& [ns, entries] : m) {
+                        s += ns + "{";
+                        for (const auto& e : entries) {
+                            s += e.field + ":" + std::to_string(e.index) + "," + std::to_string(e.length) + "," +
+                                 std::to_string(static_cast<uint32_t>(e.dispatch)) + ";";
+                        }
+                        s += "}";
+                    }
+                    return s;
+                };
                 TT_FATAL(
                     compile_args == _priv_ct,
                     "emule descriptor diff-guard: compile_time_args mismatch (kernel {})",
@@ -102,6 +123,10 @@ void collect_kernels(
                 TT_FATAL(
                     named_ct_arg_namespaces == _priv_ctns,
                     "emule descriptor diff-guard: named_ct_arg_namespaces mismatch (kernel {})",
+                    static_cast<uint32_t>(kernel_id));
+                TT_FATAL(
+                    serialize_nrt(named_runtime_arg_namespaces) == serialize_nrt(_priv_nrt),
+                    "emule descriptor diff-guard: named_runtime_arg_namespaces mismatch (kernel {})",
                     static_cast<uint32_t>(kernel_id));
             }
             // Locate this kernel's first-core CoreDescriptor for the CB/DFB geometry tables
