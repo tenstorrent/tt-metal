@@ -74,23 +74,51 @@ def test_a_missing_drafter_still_reports_absence(monkeypatch, tmp_path):
     assert gv._hf_snapshot_glob("models--z-lab--does-not-exist") is None
 
 
-def test_offline_miss_does_not_attempt_a_fetch(monkeypatch, tmp_path):
-    """HF_HUB_OFFLINE means the shared cache is authoritative.
+def test_a_read_only_cache_does_not_attempt_a_fetch(monkeypatch, tmp_path):
+    """A :ro weights mount is cache-only.
 
-    A shared NFS weights mount is :ro, and HF writes metadata on every HEAD
-    call, so a fetch there fails with "Read-only file system" rather than
-    populating anything. The caller reports the miss with the env var that
-    overrides it instead.
+    HF writes metadata on every HEAD call, so a fetch into a read-only mount
+    fails with "Read-only file system" rather than populating anything. The
+    caller reports the miss instead.
     """
-    monkeypatch.setattr(gv, "_hf_hub_cache_dirs", lambda: [str(tmp_path / "empty")])
+    ro = tmp_path / "ro"
+    ro.mkdir()
+    ro.chmod(0o555)
+    try:
+        monkeypatch.setattr(gv, "_hf_hub_cache_dirs", lambda: [str(ro)])
+        called = []
+        monkeypatch.setattr(
+            "huggingface_hub.snapshot_download",
+            lambda *a, **k: called.append(k) or "/never",
+        )
+        assert gv._hf_resolve_repo("z-lab/nope", "models--z-lab--nope") is None
+        assert called == []
+    finally:
+        ro.chmod(0o755)
+
+
+def test_a_writable_cache_fetches_even_with_offline_set(monkeypatch, tmp_path):
+    """Write access is the operator asking for the fetch.
+
+    HF_HUB_OFFLINE is set for the read-only case; it must not veto a fetch into
+    a cache the operator deliberately made writable, and it is restored after.
+    """
+    root = tmp_path / "rw"
+    root.mkdir()
+    monkeypatch.setattr(gv, "_hf_hub_cache_dirs", lambda: [str(root)])
     monkeypatch.setenv("HF_HUB_OFFLINE", "1")
-    called = []
-    monkeypatch.setattr(
-        "huggingface_hub.snapshot_download",
-        lambda *a, **k: called.append(k) or "/never",
-    )
-    assert gv._hf_resolve_repo("z-lab/nope", "models--z-lab--nope") is None
-    assert called == []
+    seen = {}
+
+    def fake_download(*a, **k):
+        seen["offline_during_call"] = os.environ.get("HF_HUB_OFFLINE")
+        seen.update(k)
+        return str(root / "fetched")
+
+    monkeypatch.setattr("huggingface_hub.snapshot_download", fake_download)
+    got = gv._hf_resolve_repo("z-lab/x", "models--z-lab--x")
+    assert got == str(root / "fetched")
+    assert seen["offline_during_call"] is None, "offline must be cleared for the call"
+    assert os.environ.get("HF_HUB_OFFLINE") == "1", "and restored afterwards"
 
 
 def test_a_cache_hit_never_reaches_the_hub(monkeypatch, tmp_path):
@@ -111,6 +139,7 @@ def test_an_online_miss_fetches_the_repo(monkeypatch, tmp_path):
     """Cache-then-hub, the way transformers resolves the target model."""
     # Pin the search roots: ~/.cache is the final fallback and a dev box may
     # genuinely have the drafter cached there, which would mask the fetch.
+    (tmp_path / "empty").mkdir(exist_ok=True)
     monkeypatch.setattr(gv, "_hf_hub_cache_dirs", lambda: [str(tmp_path / "empty")])
     monkeypatch.delenv("HF_HUB_OFFLINE", raising=False)
     asked = {}
@@ -126,6 +155,7 @@ def test_an_online_miss_fetches_the_repo(monkeypatch, tmp_path):
 
 
 def test_a_failed_fetch_is_reported_as_a_miss_not_an_exception(monkeypatch, tmp_path):
+    (tmp_path / "empty").mkdir(exist_ok=True)
     monkeypatch.setattr(gv, "_hf_hub_cache_dirs", lambda: [str(tmp_path / "empty")])
     monkeypatch.delenv("HF_HUB_OFFLINE", raising=False)
 

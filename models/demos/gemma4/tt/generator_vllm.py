@@ -2150,33 +2150,60 @@ def _hf_snapshot_glob(repo_dir):
     return None
 
 
+def _hf_cache_is_writable():
+    """Whether the HF hub cache can be written, i.e. whether a fetch can land.
+
+    This, not HF_HUB_OFFLINE, is the condition that decides it. The CI weights
+    share is mounted :ro by default and :rw when the operator asks for write
+    access, and HF_HUB_OFFLINE is set because HF writes metadata (refs/main,
+    .no_exist markers) on every HEAD call, which fails on a :ro mount with
+    "Read-only file system". When the mount IS writable that objection is gone
+    and a fetch is exactly what the operator asked for, so probe the mount
+    rather than reading a flag that stands in for it.
+    """
+    for root in _hf_hub_cache_dirs():
+        probe = root if os.path.isdir(root) else os.path.dirname(root.rstrip("/"))
+        if probe and os.path.isdir(probe) and os.access(probe, os.W_OK):
+            return True, root
+    return False, None
+
+
 def _hf_resolve_repo(repo_id, cache_dir_name):
     """Cache first, then the hub -- the way the TARGET model is resolved.
 
-    transformers ``from_pretrained`` looks in HF_HUB_CACHE and downloads what
-    is missing, honouring HF_HUB_OFFLINE and HF_TOKEN. A drafter that only
-    globbed the cache diverged from that: on a SKU whose weights-cache-mode
-    permits downloads the target model appears and the drafter does not, and
-    the failure reads as a missing checkpoint rather than "nobody fetched it".
+    transformers ``from_pretrained`` reads HF_HUB_CACHE and downloads what is
+    missing. A drafter that only globbed the cache diverged from that: the
+    target model appears and the drafter does not, and the failure reads as a
+    missing checkpoint rather than "nobody fetched it".
 
     Returns a local path, or None when the repo is neither cached nor
-    fetchable. Offline is not an error here: the caller reports the miss with
-    the env var that overrides it, which is more use than an HF stack trace.
+    fetchable. A read-only cache is not an error here: the caller reports the
+    miss with the env var that overrides it, which is more use than an HF
+    stack trace.
     """
     hit = _hf_snapshot_glob(cache_dir_name)
     if hit:
         return hit
-    if os.environ.get("HF_HUB_OFFLINE", "").strip() in ("1", "true", "yes"):
+    writable, root = _hf_cache_is_writable()
+    if not writable:
         logger.info(
-            f"Gemma4: {repo_id} is not in the HF cache and HF_HUB_OFFLINE is set, "
-            "so it will not be fetched; the cache must be seeded out of band"
+            f"Gemma4: {repo_id} is not in the HF cache and the cache is read-only, "
+            "so it will not be fetched; seed it or re-run with write access"
         )
         return None
     try:
         from huggingface_hub import snapshot_download
 
-        path = snapshot_download(repo_id=repo_id)
-        logger.info(f"Gemma4: fetched {repo_id} to {path}")
+        # HF_HUB_OFFLINE is set for the read-only case, which does not apply to
+        # a writable cache; clear it for this call only so the fetch is allowed.
+        saved = {k: os.environ.pop(k, None) for k in ("HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE")}
+        try:
+            path = snapshot_download(repo_id=repo_id)
+        finally:
+            for k, v in saved.items():
+                if v is not None:
+                    os.environ[k] = v
+        logger.info(f"Gemma4: fetched {repo_id} into {root}")
         return path
     except Exception as exc:  # network, auth, or a repo that does not exist
         logger.warning(f"Gemma4: could not fetch {repo_id}: {type(exc).__name__}: {exc}")
