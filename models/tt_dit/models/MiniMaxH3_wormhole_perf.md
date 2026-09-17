@@ -400,6 +400,17 @@ all closed.
    so "this call hangs on a 32-device WH mesh" is not the whole story. The default is left at 10
    pending a root cause, which makes the override mandatory on Wormhole.
 
+3. **M-keyed tuning tables key on a per-device length the pipeline never runs.** Every 768P
+   table keys on 4768 / 9216 / 13632 rows/device; the pipeline runs 4736 / 9184 / 13664 and
+   logs it on every run (`packed sequence ... rows/device`). The constants trace to
+   `test_performance_minimax_h3.py::_packed_sizes`, which counts audio latents once where the
+   pipeline packs two rows per latent (`packing.py:261`) and assumes a 512-token prompt where
+   the gate runs 39. The lookups are exact-key, so the `9e97f1541bc` ff1/ff2 entries are never
+   selected and the 5 s `measured_sdpa_chunk_sizes` entry never applies. Deliberately left
+   unfixed pending a decision on the text budget — see
+   **`MiniMaxH3_rows_per_device_mismatch.md`** for the evidence, propagation history, proposed
+   fix and a 30 s host-only check.
+
 ## VBench (16:9/5s, verified passing)
 
 | dimension | score | bar |
