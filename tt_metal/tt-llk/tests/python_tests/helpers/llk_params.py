@@ -274,8 +274,6 @@ class MathOperation(Enum):
     SfpuRsubInt32 = OpSpec("RSUB_INT32", MathOpType.SFPU_BINARY)
     SfpuMask = OpSpec("MASK", MathOpType.SFPU_BINARY)
     SfpuAtan2 = OpSpec("ATAN2", MathOpType.SFPU_BINARY)
-    # Dest-to-Dest tile copy (src0 → dst; src1 unused). cpp_enum_value matches
-    # ckernel::BinaryOp::COPY_DEST on Quasar.
     SfpuCopyDest = OpSpec("COPY_DEST", MathOpType.SFPU_BINARY)
     SfpuMulInt32 = OpSpec("MUL_INT32", MathOpType.SFPU_BINARY)
     SfpuIsclose = OpSpec("ISCLOSE", MathOpType.SFPU_BINARY)
