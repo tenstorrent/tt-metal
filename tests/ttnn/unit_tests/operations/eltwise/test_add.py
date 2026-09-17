@@ -143,6 +143,27 @@ def test_add_and_apply_activations(device, shape, activations):
     assert output_tensor.shape == shape
 
 
+@pytest.mark.parametrize("shape", [(1, 1, 32, 32)])
+@pytest.mark.parametrize("activations", [[], [ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)]])
+def test_in_place_add_and_apply_activations(device, shape, activations):
+    torch.manual_seed(0)
+
+    torch_input_tensor_a = torch.rand(shape, dtype=torch.bfloat16)
+    torch_input_tensor_b = torch.rand(shape, dtype=torch.bfloat16)
+    torch_output_tensor = torch_input_tensor_a + torch_input_tensor_b
+
+    for activation in activations:
+        if activation == "relu":
+            torch_output_tensor = torch.relu(torch_output_tensor)
+
+    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn.add_(input_tensor_a, input_tensor_b, activations=activations)
+    output_tensor = ttnn.to_torch(output_tensor)
+    assert_with_ulp(expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=1)
+    assert output_tensor.shape == shape
+
+
 @pytest.mark.parametrize("input_a_sharded", [True, False])
 @pytest.mark.parametrize("input_b_sharded", [True, False])
 @pytest.mark.parametrize("out_sharded", [True, False])
