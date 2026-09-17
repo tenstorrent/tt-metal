@@ -381,6 +381,7 @@ from ttnn.core import (
 tile_size = ttnn._ttnn.tensor.tile_size
 element_size = ttnn._ttnn.tensor.element_size
 experimental_create_sharded_tensor_view = ttnn._ttnn.tensor.experimental_create_sharded_tensor_view
+prepare_generic_op = ttnn._ttnn.operations.generic.prepare_generic_op
 
 import ttnn.reflection
 
