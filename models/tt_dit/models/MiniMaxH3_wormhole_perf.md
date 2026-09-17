@@ -205,6 +205,7 @@ above), measured at `fsdp1`.
 | baseline, other host (`c825d089e31` tables) | 633.1 s | 609.3 s | 12435 | 42.0x | 36.31 | 246.31 ms |
 | baseline, **this host**, tuned entries disabled | 612.9 s | 590.9 s | 12058.3 | 40.6x | — (audio gate) | **TODO** |
 | **best found**, this host, `a07012d7d8a` | **612.2 s** | **587.4 s** | **11988.4** | 40.6x | — (audio gate) | **TODO** |
+| best found, this host, **healthy weight cache** (gate PASS) | 621.0 s | 599.2 s | 12230 | 41.2x | **35.88** (min 34.69, bar 33.0) | **TODO** |
 
 Same host, same weights, same everything, one run each, 2026-09-17: the landed ff1 + ff2 blockings
 are worth **-69.9 ms/fwd, -0.58%** (steady 12057 -> 11990 ms/step; denoise 590.9 -> 587.4 s). The
@@ -216,11 +217,18 @@ the doc's tables would have claimed 3.6% -- host, not the fix. Only the same-hos
 measurement of the change. Total compute moved just 0.7 s because VAE decode varied +2.8 s between
 the two runs, which the DiT blockings cannot touch; ms/fwd is the metric that isolates them.
 
-**CLIP is blank because both runs failed `check_audio_sanity`** -- see Open issues 4. The generation
-completes and the timing table prints before that assertion, so the perf rows are valid; the gate
-fires before CLIP is computed. `open_clip` is installed here, so CLIP follows a passing audio gate.
-**Block device-only is TODO** because the per-op re-profile needs `test_performance_minimax_h3.py`
-under Tracy, which imports the pinned `diffusers` fork this host does not have.
+**CLIP is blank on the two A/B rows because both runs failed `check_audio_sanity`**, and the fourth
+row is why: the on-host weight cache those runs loaded was damaged (single-byte flips in a few
+shards of the text encoder -- root cause in Open issues 1, chain of evidence in experiment 12).
+The generation completes and the timing table prints before that assertion, so the A/B perf rows
+are valid measurements of the blockings; only their outputs were garbage. With the cache rebuilt
+and verified the same code passes every gate: clipped 0.000%, CLIP **35.88** against the other
+host's 36.31 at baseline. The fourth row's 12230 ms/fwd is 2.0% slower than the 11988 the same code
+measured four hours earlier across two board resets; the two A/B rows were taken back-to-back and
+differ by 0.58%, so that pair remains the measurement of the blockings and the 2% is run-to-run /
+board-state spread, not attributable to anything in the tree. **Block device-only is TODO** because
+the per-op re-profile needs `test_performance_minimax_h3.py` under Tracy, which imports the pinned
+`diffusers` fork this host does not have.
 
 Cold (first-generation) figures are deliberately not tabulated: `TT_DIT_CACHE_DIR` did not exist on
 this host, so the warmup built the sharded-tensor cache from 62 GB of safetensors on top of every
@@ -396,9 +404,9 @@ it is not on the path to a faster 15 s, since q=128 was slower than q=192 in eve
 | 3b | `q_chunk=128` | **done** | Reproducibly hangs the op (2x, clean board). Not a perf path — q=128 was slower than q=192 at every feasible k — but worth reporting |
 | 4 | SDPA chunk sizes, small-q / large-k (q<=256, k>=512) | **done** | Hypothesis disproved. `(192, 640)` is feasible — the first k>512 point on this shape — but 13% slower than the shipped `(256, 512)`; larger q is more per-core efficient and shrinking q raises iters/core. Chunk tuning at 15 s is exhausted. L1 envelope calibrated as a by-product |
 | 5 | Re-profile the block with landed configs | blocked | **TODO** — needs the pinned `diffusers` fork; not installed here |
-| 6 | Pipeline re-run: warm total, denoise, ms/fwd, CLIP | **done** (perf) | Same-host A/B: **-69.9 ms/fwd, -0.58%**, exactly the isolated-sweep prediction. CLIP **TODO**: both runs fail the audio gate before CLIP is computed (issue 4) |
+| 6 | Pipeline re-run: warm total, denoise, ms/fwd, CLIP | **done** | Same-host A/B: **-69.9 ms/fwd, -0.58%**, exactly the isolated-sweep prediction. CLIP **35.88** (min 34.69, bar 33.0) once the damaged cache was rebuilt (experiment 12); the A/B pair itself produced garbage output and no CLIP |
 | 11 | Numerics of the landed blockings (the sweep never checked) | **done** | ff2 (8,7,10) pcc 1.0000000 vs torch, identical to (8,8,8) to one bf16 ulp; ff1 (8,7,10) pcc 0.9999843 on the real SwiGLU ring, = (8,3,14) to 6 dp. Both PASS |
-| 12 | Audio gate: 3.3% of samples at full scale at 15 s / 16:9 on this host | not started | **TODO** — identical 3.3% with tuned entries on and off, so not tuning. Deterministic. Leads: `audio_vae` denormalization (`latents_mean/std` in its config), and the weights resolver pins no HF revision (this host pulled `42ed227e`; the other host's is unrecorded) |
+| 12 | Audio gate: 3.3% of samples at full scale at 15 s / 16:9 on this host | **done** (root-caused, fixed, gate passes) | **Not a scaling bug and not audio-specific: a damaged weight cache.** Chain: (a) the decoded waveform matched the diffusers audio VAE bit-for-bit given the same latents, so the decoder was innocent; (b) the final audio latents were white noise (lag-1 autocorrelation 0.003) and equal to the seed-0 initial noise plus **one 32-vector broadcast to all 1206 rows** (per-row deviation 0.0000) -- the DiT emitted a row-constant velocity at every step, and the video rows showed the same collapse (row-norm min == median over 107,856 rows); (c) a per-stage probe of one step found every input and the embed/pack stages healthy but `context_embedder IN`, the 39 x 5120 text tap, at `mean|x| = 2.8e29`; those rows drive the residual to inf by block 49, `norm_out` then emits one constant row and both heads return one row for every position; (d) the same encoder loaded from safetensors scores PCC 0.999993 against HF `layers[49]`, loaded from the cache PCC -0.000000; a `save -> load` round trip on the healthy board is bit-exact 452/452, and a byte diff of the two caches shows **196 single-byte flips in 47 of 452 files, 156 of them in shard slot 9 and 34 in slot 0** -- a data-integrity fault on two chips during the cache-creating run, not software. Why the *first* run failed too: the pipeline evicts the text encoder after each `encode_prompt`, and the test generates twice, so run 1's measured generation was already a cache hit. Fix: cache rebuilt (verified), `cache.load_model` now verifies a written cache before marking it complete, and `encode_prompt` trips on a non-finite / >1e6 tap. Result: clipped **0.000%**, CLIP **35.88** |
 | 7 | `use_exp_ring_sdpa` on Wormhole | not started | **TODO** — gated on `is_blackhole() and sp_factor == 32`, but `exp_ring_joint_sdpa_program_factory.cpp` has no arch gate and the sp check is described in-tree as "a proxy for the 4x32 shape". On WH the other conditions already hold (`tp_factor == 4`, `exp_ring_num_passes = ceil(14/9) = 2 <= 3`). A different kernel on the op that is 70% of the block, so the largest single lever available — but it needs PCC and CLIP validation, not a timing check |
 | 8 | FSDP layout conversions | not started | **TODO** — tilize/untilize go 0.13 -> 3.13 ms under FSDP, a 23x blowup and a quarter of the whole FSDP cost spent on format round-trips rather than communication. Cheapest apparent win in the breakdown |
 | 9 | Ring SDPA kernel utilization | not started | **TODO** — 48.8% FPU / 35.6% math at the shipped chunk size, shown to be inherent to the kernel at this shape rather than a chunk-size miss. Work is in the kernel |
@@ -408,15 +416,28 @@ it is not on the path to a faster 15 s, since q=128 was slower than q=192 in eve
 
 Fixed items have been removed; their forensics live in the commits and in
 **`MiniMaxH3_wormhole_hang.md`**. The mid-denoise hang (root-caused, 18/18 pass), the accidental
-Wormhole fused MM/RS path (`eab3dfbd599`) and the VBench setup gaps (now in `MiniMaxH3.md`) were
-all closed.
+Wormhole fused MM/RS path (`eab3dfbd599`), the VBench setup gaps (now in `MiniMaxH3.md`) and the
+15 s audio-gate failure (a damaged weight cache -- experiment 12) were all closed.
 
-1. **Cache key omits device params** — `cache.load_model` keys on parallel config, mesh
-   shape, dtype and FSDP, but not `l1_small_size`/device params. A cache written under a
-   broken device config is silently reused forever. This cost a long debugging detour: a
-   cache built during a run with `l1_small_size=0` produced text embeddings with
-   `absmax=2.5e30` and a coherent video of the wrong subject (CLIP 13.12 instead of 37.36).
-   Consider a validity marker.
+1. **A weight cache can be written damaged, and nothing downstream can tell.** Twice now a
+   `TT_DIT_CACHE_DIR` entry has produced text embeddings at `absmax ~ 1e30` and a run that fails
+   only at the audio gate (this host) or produces a coherent video of the wrong subject (the other
+   host, CLIP 13.12 instead of 37.36). The other host's case was attributed to a cache built
+   under `l1_small_size=0`; this host's cache was built by the test itself with its own device
+   params, and a byte diff against a good rebuild shows the actual damage: **196 single-byte flips
+   in 47 of 452 text-encoder tensorbins, 156 in shard slot 9 and 34 in slot 0** (mesh (1,1) and
+   (0,0) in row-major shard order), while a 47 GB `save -> load` round trip on the same board
+   later that evening was bit-exact. That is a transient data-integrity fault on two chips, 1.5 h
+   after a `tt-smi -glx_reset`, and the two-host symmetry suggests the same thing happened there.
+   *Software guards landed:* `cache.load_model` reloads every tensor it wrote and compares it
+   shard-by-shard with the resident weights before `cache_dict.json` is created (`TT_DIT_CACHE_VERIFY=0`
+   opts out); a mismatch is logged per tensor and the cache stays unmarked, so it is rebuilt next
+   run while the current run continues on the resident weights. `encode_prompt` raises on a
+   non-finite or `> 1e6` tap (real taps peak near 2e4) with a message naming the cache, instead of
+   40 minutes later at the audio gate. *Still open:* the flips happened on the way to disk or in
+   device memory -- the resident weights of the cache-creating run were not checked -- so the
+   two chips deserve a look (telemetry, link error counters), and a cache-key term for device
+   params is still worth having for the `l1_small_size=0` class of problem.
 
 2. **`sweep_mm_block_sizes.py` cannot complete on a Wormhole Galaxy at its default flush
    cadence.** With `PROFILER_DUMP_EVERY = 10` the sweep stops making progress at the first
@@ -449,17 +470,12 @@ all closed.
    blockings measured optimal / within noise). Root cause and history:
    **`MiniMaxH3_rows_per_device_mismatch.md`**.
 
-4. **`check_audio_sanity` fails at 15 s / 16:9 on this host: 3.3% of samples at |x| >= 0.999**
-   (gate < 1%). Reproduced twice, and **identical to the decimal with the tuned blockings enabled
-   and disabled**, so it is not caused by the tuning and not sensitive to matmul rounding order --
-   which points at a systematic scaling issue rather than noise. The gate's comment says exactly
-   that: widespread clipping "means the denormalization is wrong, not that the mix is loud". The
-   other host passed this gate 18/18. Not yet investigated. The `.wav` is not saved on failure
-   (the test asserts before `write_artifacts`), so the first step is capturing it. Leads:
-   `audio_vae` denormalization (`latents_mean`/`latents_std`, 32 channels, in its `config.json`),
-   the WH audio-decode path, and the fact that `weights_minimax_h3.py` pins no HF revision -- this
-   host resolved `42ed227ee7df`, the other host's snapshot is unrecorded, so the two may differ.
-   Blocks the CLIP column above.
+4. **`test_text_encoder_minimax_h3.py` does not check the tensor the pipeline consumes.** It
+   imports `TAP` from the pinned `diffusers` fork (so it cannot run here at all) and taps
+   `layers[TAP]`, i.e. `hidden_states[51]`, while the pipeline builds 50 layers and returns the
+   output of layer index 49, `hidden_states[50]`. Self-consistent, but a regression in the
+   pipeline's tap would not show. Noticed while standing in for it during experiment 12 -- the
+   stand-in (`text_encoder_check.py`, scratch) compared against HF `layers[49]`.
 
 ## VBench (16:9/5s, verified passing)
 
@@ -492,6 +508,7 @@ All committed on `jameslee/bringup_h3_wh_galaxy`; nothing here needs local patch
 | `c0af23ba607` | Documents the rows/device mismatch: tables keyed on 13632, pipeline runs 13664 |
 | `664578b377e` | Point fix: ff1/ff2 re-keyed 13632 -> 13664 |
 | `a07012d7d8a` | Structural fix: `_packed_sizes` audio/text bug, `packing.py` helpers routed through the pipeline, `M_per_core` matching in `get_matmul_config`/`get_agmm_config`, every M literal re-keyed. Live-confirmed; blockings PCC-validated |
+| *this commit* | Audio gate root-caused to a damaged weight cache (experiment 12, Open issues 1). `cache.verify_saved_model` + `TT_DIT_CACHE_VERIFY` gate before `cache_dict.json`; `encode_prompt` tripwire `MINIMAX_H3_TEXT_EMBED_ABSMAX`. First passing 15 s / 16:9 run on this host: CLIP 35.88 |
 
 `dit_fsdp` defaults **off**, overridable with `MINIMAX_H3_DIT_FSDP`. Given these results,
 `dit_fsdp: True` belongs in `_PRESETS_WH` (12 GB/chip needs the headroom far more than it needs
