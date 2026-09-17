@@ -44,9 +44,7 @@ sfpi_inline sfpi::vFloat _calculate_sqrt_body_(const sfpi::vFloat x) {
             v_if(infinity_minus_x_bits != 0 && _bits_without_sign_(x) != 0) {
                 y = y * t;
                 if constexpr (!FAST_APPROX) {
-                    // Every lane reaching here is sign-negative with a non-zero magnitude:
-                    // this region already excludes +/-0 and +inf, so a bare sign test is
-                    // enough and the magnitude test does not have to be repeated.
+                    // This region already excludes +/-0 and +inf, so a bare sign test is enough.
                     v_if(x < 0.0F) {
                         y = std::numeric_limits<float>::quiet_NaN();  // nan for fp32, inf for bf16
                     }
@@ -82,9 +80,7 @@ sfpi_inline sfpi::vFloat _calculate_sqrt_body_(const sfpi::vFloat x) {
             v_if(infinity_minus_x_bits != 0 && _bits_without_sign_(x) != 0) {
                 y = one_minus_xyy * half_y + y;
                 if constexpr (!FAST_APPROX) {
-                    // Every lane reaching here is sign-negative with a non-zero magnitude:
-                    // this region already excludes +/-0 and +inf, so a bare sign test is
-                    // enough and the magnitude test does not have to be repeated.
+                    // This region already excludes +/-0 and +inf, so a bare sign test is enough.
                     v_if(x < 0.0F) {
                         y = std::numeric_limits<float>::quiet_NaN();  // nan for fp32, inf for bf16
                     }
@@ -97,33 +93,23 @@ sfpi_inline sfpi::vFloat _calculate_sqrt_body_(const sfpi::vFloat x) {
         } else {
             sfpi::vFloat half_xy = 0.5f * xy;
             // If x == inf, we need to skip to avoid y = inf - inf = nan; y will already be inf.
-            // Keep this as `<` and not `!=`. What `<` buys is skipping *positive* NaN: under
-            // `!=` the step would run on it and come back sign-flipped (0xFFD00001, measured),
-            // which a bf16 pack then turns into -inf. It does not skip negative NaN -- this
-            // ordered integer compare is a wrapping subtract-and-test-sign, so 0xFF800001..
-            // 0xFFFFFFFF still read as less than infinity_bits and do run the step. That is
-            // harmless only because the `x < 0.0F` clamp below rewrites every sign-set lane.
+            // Keep this as `<`, not `!=`: it skips positive NaN, which would otherwise run the
+            // step and come back sign-flipped (a bf16 pack then makes that -inf). Negative NaN
+            // does run the step -- the compare wraps -- but the clamp below rewrites it.
             v_if(sfpi::as<sfpi::vInt>(x) < infinity_bits) { y = one_minus_xyy * half_xy + xy; }
             v_endif;
         }
     }
-    // Every edge guard lives under !FAST_APPROX, as the negative clamp alone did before these
-    // arms were added: sqrt_tile<true>/rsqrt_tile<true> trade all edge handling for speed, so on
-    // that path a negative still returns the unclamped seed and sqrt(-0) is +0. The results
-    // claimed below are therefore claims about FAST_APPROX=false -- the default of
-    // sqrt_tile/rsqrt_tile, and what the edge sweep and the signed-zero regression test run.
+    // All edge handling is gated on !FAST_APPROX, as the negative clamp alone was before: the
+    // fast path trades every edge guard for speed, so there a negative is unclamped and
+    // sqrt(-0) is +0. Everything below is a FAST_APPROX=false claim.
     if constexpr (!FAST_APPROX) {
-        // `x < 0.0F` is a sign-bit test, so it claims -0.0 as well; a zero magnitude is kept out
-        // of it and answered on its own. Behaviour here is measured rather than specified -- the
-        // derivation is with the edge sweep in test_eltwise_unary_sfpu.py.
+        // `x < 0.0F` is a sign-bit test, so it claims -0.0 as well; zero magnitudes are kept
+        // out of it and answered separately.
         if constexpr (!RECIPROCAL) {
-            // rsqrt's clamp is not here: it sits inside the refinement guard above, where the
-            // predicate already excludes +/-0 and +inf, so it needs no magnitude test of its
-            // own. Measured on a WH n150: that placement is worth ~3-4% on Rsqrt.
-            // sqrt(+/-0) = +/-0: return x, because the refinement above cannot produce a signed
-            // zero. test_sqrt_family_negative_zero_regression is the standing check. Two other
-            // shapes were measured and are worse: copysgn plus a strictly-negative `-x > 0.0F`
-            // clamp, and folding the zero into the refinement guard's v_else.
+            // rsqrt's clamp is inside the refinement guard above, where the predicate already
+            // excludes +/-0 and +inf.
+            // sqrt(+/-0) = +/-0: return x, because the refinement cannot produce a signed zero.
             v_if(_bits_without_sign_(x) == 0) { y = x; }
             v_elseif(x < 0.0F) {
                 y = std::numeric_limits<float>::quiet_NaN();  // returns nan for fp32 and inf for bf16
