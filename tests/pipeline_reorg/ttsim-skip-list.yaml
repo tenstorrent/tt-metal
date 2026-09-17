@@ -5,6 +5,40 @@
 # Tests that apply to all architectures are duplicated in each section.
 
 wormhole_b0:
+  # Temporary: ttsim v1.10.8 does not support PACR edge_mode=1 (negative-infinity padding).
+  # Observed failures: https://github.com/tenstorrent/tt-metal/actions/runs/35098306354
+  # Revisit after a ttsim fix or kernel workaround supports this packer mode.
+  # The trailing [ limits parameterized selectors to this exact function name.
+  - tests/ttnn/unit_tests/base_functionality/test_comparison_mode.py::test_softmax[
+  - tests/ttnn/unit_tests/operations/fused/test_eltwise_softmax_in_place.py::test_eltwise_softmax_in_place_test[
+  - tests/ttnn/unit_tests/operations/fused/test_softmax_program_cache.py::test_scale_mask_softmax_cache_miss_different_mask_dtypes
+  - tests/ttnn/unit_tests/operations/fused/test_softmax_program_cache.py::test_scale_mask_softmax_cache_miss_different_mask_memory_configs
+  - tests/ttnn/unit_tests/operations/fused/test_softmax_program_cache.py::test_scale_mask_softmax_cache_reuse_same_mask_config
+  - tests/ttnn/unit_tests/operations/fused/test_softmax_program_cache.py::test_softmax_cache_miss_different_dims_5d
+  - tests/ttnn/unit_tests/operations/fused/test_softmax_program_cache.py::test_softmax_cache_miss_different_factories
+  - tests/ttnn/unit_tests/operations/fused/test_softmax_program_cache.py::test_softmax_cache_miss_different_input_dtypes
+  - tests/ttnn/unit_tests/operations/fused/test_softmax_program_cache.py::test_softmax_cache_miss_different_memory_configs
+  - tests/ttnn/unit_tests/operations/fused/test_softmax_program_cache.py::test_softmax_cache_miss_different_shapes
+  - tests/ttnn/unit_tests/operations/fused/test_softmax_program_cache.py::test_softmax_cache_reuse_same_config_4d
+  - tests/ttnn/unit_tests/operations/fused/test_softmax_program_cache.py::test_softmax_cache_reuse_same_config_5d
+  - tests/ttnn/unit_tests/operations/reduce/test_manual_seed.py::test_manual_seed_base_functionality
+  - tests/ttnn/unit_tests/operations/reduce/test_max.py::test_max[
+  - tests/ttnn/unit_tests/operations/reduce/test_max.py::test_max_2d[
+  - tests/ttnn/unit_tests/operations/reduce/test_max.py::test_max_dim[
+  - tests/ttnn/unit_tests/operations/reduce/test_max.py::test_max_fp32_fast_and_approximate_mode[
+  - tests/ttnn/unit_tests/operations/reduce/test_max.py::test_max_global[
+  - tests/ttnn/unit_tests/operations/reduce/test_reduction_min.py::test_min_fp32_fast_and_approximate_mode[
+  - tests/ttnn/unit_tests/operations/reduce/test_reduction_min.py::test_min_multi_dim[
+  - tests/ttnn/unit_tests/operations/reduce/test_reduction_sharded_topology.py::test_reduce_dram_sharded_full_bank_width_h_reduce[
+  - tests/ttnn/unit_tests/operations/reduce/test_reduction_sharded_topology.py::test_reduce_dram_sharded_full_hw_reduce[
+  - tests/ttnn/unit_tests/operations/reduce/test_sampling.py::test_sampling_callback[
+  - tests/ttnn/unit_tests/operations/reduce/test_tiebreak_input_adjust.py::test_tiebreak_boosts_lowest_global_index_for_greedy_users[
+  - tests/ttnn/unit_tests/operations/reduce/test_tiebreak_input_adjust.py::test_tiebreak_is_repeatable
+  - tests/ttnn/unit_tests/operations/transformers/test_transformer.py::test_transformer_attention_softmax[
+  - tests/ttnn/unit_tests/operations/transformers/test_transformer.py::test_transformer_attention_softmax_[
+  - tests/ttnn/unit_tests/operations/transformers/test_transformer.py::test_transformer_attention_softmax_inplace_numeric_stability[
+  - tests/ttnn/unit_tests/operations/transformers/test_transformer.py::test_transformer_attention_softmax_numeric_stability[
+
   # Job-level timeouts -- can be cut down still
   - tests/ttnn/unit_tests/base_functionality/test_copy.py::test_copy_rm_interleaved_to_nd_sharded_large_row
   - tests/ttnn/unit_tests/base_functionality/test_copy.py::test_copy_rm_interleaved_to_legacy_2D_sharded_large_row
@@ -35,6 +69,65 @@ wormhole_b0:
   - tests/ttnn/unit_tests/base_functionality/test_reshape.py::test_reshape_oob
 
 blackhole:
+  # Temporary: ttsim v1.10.8 does not support TILE_FACE_SET_MAPPING_0 (cfg register 36).
+  # Observed failures: https://github.com/tenstorrent/tt-metal/actions/runs/35098306354
+  # Revisit after a ttsim fix or kernel workaround supports tile-face masking.
+  # The trailing [ limits parameterized selectors to this exact function name.
+  - tests/ttnn/unit_tests/base_functionality/test_comparison_mode.py::test_softmax[
+  - tests/ttnn/unit_tests/base_functionality/test_graph_capture.py::test_graph_capture_without_memory_config
+  - tests/ttnn/unit_tests/base_functionality/test_graph_capture.py::test_graph_capture_without_memory_config_json_output
+  - tests/ttnn/unit_tests/operations/fused/test_batch_norm.py::test_batch_norm[
+  - tests/ttnn/unit_tests/operations/fused/test_batch_norm.py::test_batch_norm_mixed_precision[
+  - tests/ttnn/unit_tests/operations/fused/test_batch_norm.py::test_batch_norm_tests[
+  - tests/ttnn/unit_tests/operations/fused/test_distributed_layernorm.py::test_pre_all_gather_wide_row_fp32_dest_acc_fits_l1[
+  - tests/ttnn/unit_tests/operations/fused/test_distributed_layernorm_sharded.py::test_simulated_distributed_layernorm[
+  - tests/ttnn/unit_tests/operations/fused/test_eltwise_softmax_in_place.py::test_eltwise_softmax_in_place_test[
+  - tests/ttnn/unit_tests/operations/fused/test_group_norm.py::test_group_norm_sharded_all_config[
+  - tests/ttnn/unit_tests/operations/fused/test_group_norm.py::test_group_norm_sharded_dirty_padding_tile_aligned_groups[
+  - tests/ttnn/unit_tests/operations/fused/test_group_norm.py::test_group_norm_with_block_sharded_v2_8x8_grid[
+  - tests/ttnn/unit_tests/operations/fused/test_layer_norm_sharded.py::test_layer_norm_sharded_single_stage[
+  - tests/ttnn/unit_tests/operations/fused/test_layer_norm_sharded.py::test_layer_norm_sharded_two_stage[
+  - tests/ttnn/unit_tests/operations/fused/test_rms_norm.py::test_rms_norm_row_major[
+  - tests/ttnn/unit_tests/operations/fused/test_rms_norm_sharded.py::test_rms_norm_sharded_single_stage[
+  - tests/ttnn/unit_tests/operations/fused/test_softmax.py::test_large_fill_softmax[
+  - tests/ttnn/unit_tests/operations/pool/test_adaptive_pool2d.py::test_adaptive_pool2d[
+  - tests/ttnn/unit_tests/operations/pool/test_avgpool2d.py::test_avg_pool2d_global_pool_post_commit[
+  - tests/ttnn/unit_tests/operations/pool/test_avgpool2d.py::test_global_avg_pool2d_memory_config[
+  - tests/ttnn/unit_tests/operations/pool/test_global_avg_pool2d.py::test_global_avg_pool2d_legacy_pad_to_tile[
+  - tests/ttnn/unit_tests/operations/pool/test_global_avg_pool2d.py::test_global_avg_pool2d_nd_sharded_row_major_non_tile_aligned_h[
+  - tests/ttnn/unit_tests/operations/pool/test_global_avg_pool2d.py::test_global_avg_pool2d_non_tile_aligned[
+  - tests/ttnn/unit_tests/operations/pool/test_global_avg_pool2d.py::test_run_average_pool2d[
+  - tests/ttnn/unit_tests/operations/reduce/test_manual_seed.py::test_manual_seed_base_functionality
+  - tests/ttnn/unit_tests/operations/reduce/test_max.py::test_max[
+  - tests/ttnn/unit_tests/operations/reduce/test_max.py::test_max_2d[
+  - tests/ttnn/unit_tests/operations/reduce/test_max.py::test_max_fp32_fast_and_approximate_mode[
+  - tests/ttnn/unit_tests/operations/reduce/test_max.py::test_max_global[
+  - tests/ttnn/unit_tests/operations/reduce/test_reduction.py::test_sum_8d_tensor_dims[
+  - tests/ttnn/unit_tests/operations/reduce/test_reduction_mean.py::test_mean[
+  - tests/ttnn/unit_tests/operations/reduce/test_reduction_sharded_topology.py::test_reduce_dram_sharded[
+  - tests/ttnn/unit_tests/operations/reduce/test_sampling.py::test_sampling_sub_32_users[
+  - tests/ttnn/unit_tests/operations/reduce/test_sum.py::test_sum[
+  - tests/ttnn/unit_tests/operations/reduce/test_sum.py::test_sum_4d[
+  - tests/ttnn/unit_tests/operations/reduce/test_sum.py::test_sum_global[
+  - tests/ttnn/unit_tests/operations/sdpa/test_bounded_sliding_kv_cache.py::test_bounded_sliding_kv_cache_position_modulo_round_trip
+  - tests/ttnn/unit_tests/operations/sdpa/test_mla_decode.py::test_flash_mla_decode[
+  - tests/ttnn/unit_tests/operations/sdpa/test_paged_sdpa_decode_flexible_geometry.py::test_legacy_no_override[
+  - tests/ttnn/unit_tests/operations/sdpa/test_paged_sdpa_decode_flexible_geometry.py::test_override_matches_alloc_is_noop
+  - tests/ttnn/unit_tests/operations/sdpa/test_paged_sdpa_decode_flexible_geometry.py::test_override_view_full_into_sliding_buffer
+  - tests/ttnn/unit_tests/operations/sdpa/test_sdpa_decode.py::test_sdpa_decode[
+  - tests/ttnn/unit_tests/operations/sdpa/test_sdpa_decode.py::test_sdpa_decode_fp32_half_sync_cross_core_reduction
+  - tests/ttnn/unit_tests/operations/sdpa/test_sdpa_decode.py::test_sdpa_decode_ignore_users[
+  - tests/ttnn/unit_tests/operations/sdpa/test_sdpa_decode.py::test_sdpa_decode_program_cache[
+  - tests/ttnn/unit_tests/operations/sdpa/test_sdpa_decode.py::test_sdpa_decode_sharded[
+  - tests/ttnn/unit_tests/operations/sdpa/test_sdpa_prefill.py::test_sdpa_sliding_window[
+  - tests/ttnn/unit_tests/operations/sdpa/test_sdpa_prefill.py::test_sdpa_with_attention_sink[
+  - tests/ttnn/unit_tests/operations/sdpa/test_windowed_sdpa.py::test_windowed_sdpa_q_token_offset[
+  - tests/ttnn/unit_tests/operations/sdpa/test_windowed_sdpa.py::test_windowed_sdpa_smoke[
+  - tests/ttnn/unit_tests/operations/transformers/test_transformer.py::test_transformer_attention_softmax[
+  - tests/ttnn/unit_tests/operations/transformers/test_transformer.py::test_transformer_attention_softmax_[
+  - tests/ttnn/unit_tests/operations/transformers/test_transformer.py::test_transformer_attention_softmax_inplace_numeric_stability[
+  - tests/ttnn/unit_tests/operations/transformers/test_transformer.py::test_transformer_attention_softmax_numeric_stability[
+
   # Job-level timeouts
   - tests/ttnn/unit_tests/operations/conv/test_conv2d.py
   - tests/ttnn/unit_tests/operations/conv/test_conv3d.py
