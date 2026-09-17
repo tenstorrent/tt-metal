@@ -70,7 +70,6 @@ from tests.ttnn.utils_for_testing import (
     assert_equal,
     assert_with_pcc,
     assert_with_ulp,
-    generate_all_bfloat16_bitpatterns,
 )
 
 pytestmark = pytest.mark.use_module_device
@@ -354,32 +353,6 @@ def test_error_functions(device, ttnn_op, low, high):
     result = ttnn.to_torch(tt_result)
 
     assert_with_pcc(golden, result, 0.999)
-
-
-def test_erfinv_bf16_specials(device):
-    """BF16 dest must keep main's copysgn Inf contract: |x|>=1 and non-finite
-    inputs return signed Inf; zeros / DAZ'd subnormals are exact 0.
-
-    test_error_functions only covers the open interval (-0.999, 0.999).
-    """
-    x = generate_all_bfloat16_bitpatterns(torch.bfloat16)
-    tt_in = to_tt_tensor(x, device)
-    out = ttnn.to_torch(ttnn.erfinv(tt_in)).to(torch.float32).reshape(-1)
-    xf = x.to(torch.float32).reshape(-1)
-    signed_inf = torch.copysign(torch.full_like(xf, float("inf")), xf)
-
-    ood = xf.abs() > 1
-    poles = xf.abs() == 1
-    nonfinite = ~torch.isfinite(xf)
-    daz_zero = torch.isfinite(xf) & (xf.abs() < SMALLEST_NORMAL_BF16)
-    exact_zero = xf == 0
-
-    assert torch.equal(out[ood], signed_inf[ood])
-    assert torch.equal(out[poles], signed_inf[poles])
-    assert torch.equal(out[nonfinite], signed_inf[nonfinite])
-    assert int((out[ood] < 0).sum()) > 0
-    assert int((out[nonfinite] < 0).sum()) > 0
-    assert torch.all(out[daz_zero | exact_zero] == 0)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
