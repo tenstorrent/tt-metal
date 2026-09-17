@@ -14,7 +14,7 @@
 #include <vector>
 
 #include <tt-metalium/core_coord.hpp>
-#include "emule_program_model.hpp"      // kRtaCrtaNoArgsSentinel
+#include "emule_program_descriptor.hpp"  // kRtaCrtaNoArgsSentinel, EmuleProgramDescriptor/SocView
 #include "tt_emule/device.hpp"          // tt_emule::Core
 #include "tt_emule/dfb_sync_state.hpp"  // tt_emule::EmuleDFBInterface
 
@@ -45,8 +45,8 @@ struct KernelInfo {
     // L1 address of rt-args = kernel_config_base + rta_offset_in_kc (per-RISC,
     // read from kg->launch_msg). Sentinel = kernel has no args on this RISC.
     uint32_t kernel_config_base = 0;
-    uint16_t rta_offset_in_kc = kRtaCrtaNoArgsSentinel;
-    uint16_t crta_offset_in_kc = kRtaCrtaNoArgsSentinel;
+    uint16_t rta_offset_in_kc = tt_emule::kRtaCrtaNoArgsSentinel;
+    uint16_t crta_offset_in_kc = tt_emule::kRtaCrtaNoArgsSentinel;
     // Runtime-arg values handed to this kernel on its core (see PendingKernelInfo).
     std::vector<uint32_t> rt_arg_values;
     // Kernel source path; owns the string __emule_kernel_name points at during
