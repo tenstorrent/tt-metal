@@ -94,13 +94,15 @@ env:
   # its LoudBox perf legs call run_device_perf, which shells out to `python3 -m tracy`.
   # Without a profiler build the gate dispatches them and they fail on "Tracy tools
   # not found" -- a gate artefact, not a test failure. blackhole-e2e-tests.yaml itself
-  # builds with `tracy: true` for the same reason.
+  # builds with `tracy: true` for the same reason. models_device_perf_tests.yaml is the
+  # same case: every entry runs test_device_perf.py / run_device_profiler, i.e. tracy.
   TRACY_BUILD_YAMLS: >-
     galaxy_profiler_tests.yaml
     single_card_profiler_tests.yaml
     t3k_profiler_tests.yaml
     runtime_perf_profiler_tests.yaml
     blackhole_e2e_tests.yaml
+    models_device_perf_tests.yaml
 
 jobs:
   scope:
