@@ -29,9 +29,6 @@ from tests.ttnn.profiling.realtime_profiler_utils import (
     require_realtime_profiler,
 )
 from tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill import ci_pruning
-from tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_hybrid_routed_expert_ffn_port import (
-    _UNION_WORKER_L1_SIZE,
-)
 
 pytestmark = pytest.mark.uncollect_if(pred=ci_pruning.no_production_counterpart)
 
@@ -64,7 +61,6 @@ def _idx_tensor(device, values):
 
 
 @pytest.mark.skipif(not is_blackhole(), reason="the routed expert is Blackhole-only")
-@pytest.mark.parametrize("device_params", [{"worker_l1_size": _UNION_WORKER_L1_SIZE}], indirect=True)
 @pytest.mark.parametrize("active", sorted({*_FUSED_BASELINE_NS, *_UNIFIED_BASELINE_NS}))
 def test_union_op_per_expert_cost(device, active: int):
     require_realtime_profiler("the per-expert union-op cost comparison")

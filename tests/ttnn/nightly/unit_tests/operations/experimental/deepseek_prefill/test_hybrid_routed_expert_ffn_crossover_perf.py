@@ -37,9 +37,6 @@ from tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test
     _ISL_ALLOCATED_TOKENS,
     _ISL_EXHAUSTIVE_SWEEP,
 )
-from tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_hybrid_routed_expert_ffn_port import (
-    _UNION_WORKER_L1_SIZE,
-)
 
 pytestmark = pytest.mark.uncollect_if(pred=ci_pruning.no_production_counterpart)
 
@@ -59,7 +56,6 @@ def _idx_tensor(device, values):
 
 
 @pytest.mark.skipif(not is_blackhole(), reason="the routed expert is Blackhole-only")
-@pytest.mark.parametrize("device_params", [{"worker_l1_size": _UNION_WORKER_L1_SIZE}], indirect=True)
 @pytest.mark.parametrize("model", list(_MODELS), ids=list(_MODELS))
 @pytest.mark.parametrize("active", _ISL_EXHAUSTIVE_SWEEP)
 def test_union_vs_two_op_crossover(device, model: str, active: int):

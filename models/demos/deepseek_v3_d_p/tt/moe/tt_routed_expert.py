@@ -413,12 +413,12 @@ class TtRoutedExpert(LightweightModule):
         # Run the hybrid split as ONE dispatch instead of two. Same two implementations, same
         # bands, same grid -- they are compiled into one program per RISC-V and run as ordered
         # passes, which is what lets the layer be overlapped with combine. Costs ~7 us per
-        # dispatch (the union program's config does not fit the kernel-config ring twice, so each
-        # launch waits for the previous one's workers), flat in the expert count.
+        # dispatch (the union program's config fits the kernel-config ring once but not twice, so
+        # each launch waits for the previous one's workers), flat in the expert count.
         #
-        # Needs the device opened with worker_l1_size <= 1444864 for the same reason; the op
-        # checks and says so. Off by default because that is a device-open decision the caller
-        # owns, not something a module can change underneath them.
+        # Runs at the device's default worker_l1_size; the op rejects an arena larger than the
+        # default, which would take those bytes off the ring. Off by default because the extra
+        # per-dispatch cost only pays for itself where the combine overlap is actually wired up.
         # Left unset, TT_ROUTED_EXPERT_FUSE_DISPATCH=1 decides, so a model that does not thread the
         # flag through its own config can still be run both ways for comparison.
         if fuse_hybrid_dispatch is None:

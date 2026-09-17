@@ -19,6 +19,9 @@
 
 #define HYB_MERGED 1
 #include "hybrid_merged_prologue.hpp"
+// FIRST, ahead of any header that pulls in the LLK pack/unpack lib: this one works by renaming
+// the helpers for everything parsed after it, so what it reaches is exactly what follows it.
+#include "hybrid_llk_shims.hpp"
 // Declarations only -- the real CB API is not in scope until a half pulls it in.
 #include "hybrid_cb_shims.hpp"
 
