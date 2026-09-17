@@ -8,9 +8,6 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "metal/common/program_utils.hpp"
-#include "profiler_no_op_device_operation_types.hpp"
-#include "tt-metalium/host_api.hpp"
-#include "ttnn/types.hpp"
 
 namespace {
 
@@ -22,38 +19,21 @@ constexpr auto kWriterKernelPath =
     "tt-train/sources/ttml/metal/ops/profiler_no_op/device/kernels/dataflow/"
     "writer_profiler_no_op_interleaved_id.cpp";
 
-// reader runtime args
-constexpr uint32_t kInputBufferIdx = 0;
-// writer runtime args
-constexpr uint32_t kOutputBufferIdx = 0;
-
 constexpr auto kInputCbIndex = tt::CBIndex::c_0;
 
 }  // namespace
 
 namespace ttml::metal::ops::profiler_no_op::device {
 
-/**
- *   Helper struct to hold references to all kernels we create,
- *        used during runtime argument setup.
- */
-struct CrossEntropyBackwardKernels {
-    tt::tt_metal::KernelHandle reader;
-    tt::tt_metal::KernelHandle writer;
-};
-
-ProfilerNoopProgramFactory::cached_program_t ProfilerNoopProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
+tt::tt_metal::ProgramDescriptor ProfilerNoopProgramFactory::create_descriptor(
+    const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
     // -------------------------------------------------------------------------
-    // 1) Setup device, data formats, tile sizes, and compute split
+    // 1) Data formats, tile sizes and the work split
     // -------------------------------------------------------------------------
     const auto& input = tensor_args.input;
-
     auto* device = input.device();
-
-    tt::tt_metal::Program program{};
 
     tt::DataFormat input_data_format = datatype_to_dataformat_converter(input.dtype());
     TT_FATAL(input_data_format == tt::DataFormat::Float16_b, "Input data format must be Float16_b");
@@ -69,29 +49,13 @@ ProfilerNoopProgramFactory::cached_program_t ProfilerNoopProgramFactory::create(
     uint32_t NC = tensor_shape[0] * tensor_shape[1];
     uint32_t total_rows_to_process = NC * Ht;
 
-    // get number of free cores
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
-    // compile arguments
     uint32_t block_size = get_block_size(Wt, 4U);
 
     auto [num_cores, all_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, total_rows_to_process);
-
-    // -------------------------------------------------------------------------
-    // 2) Create and configure circular buffers
-    // -------------------------------------------------------------------------
-
-    const uint32_t twice_block_size = 2U * block_size;
-    auto data_format = input_data_format;  // tt::DataFormat::Float16_b
-
-    [[maybe_unused]] auto cb_dataflow = create_circular_buffer(
-        program, all_cores, kInputCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size);
-
-    // -------------------------------------------------------------------------
-    // 3) Create reader/writer kernels
-    // -------------------------------------------------------------------------
 
     auto* input_buffer = input.buffer();
     TT_FATAL(
@@ -105,32 +69,30 @@ ProfilerNoopProgramFactory::cached_program_t ProfilerNoopProgramFactory::create(
         "Output buffer must be in DRAM. Output buffer of type {}",
         enchantum::to_string(output_buffer->buffer_type()));
 
-    // configure defines
-    std::map<std::string, std::string> defines;
+    // -------------------------------------------------------------------------
+    // 2) Circular buffers
+    // -------------------------------------------------------------------------
+    tt::tt_metal::ProgramDescriptor program;
 
-    CrossEntropyBackwardKernels kernels;
-    {
-        std::vector<uint32_t> reader_compile_time_args{block_size, Wt};
-        tt::tt_metal::TensorAccessorArgs(input_buffer).append_to(reader_compile_time_args);
-        kernels.reader = create_reader_kernel(program, all_cores, reader_compile_time_args, defines, kReaderKernelPath);
-    }
-
-    {
-        std::vector<uint32_t> writer_compile_time_args{block_size, Wt};
-        tt::tt_metal::TensorAccessorArgs(output_buffer).append_to(writer_compile_time_args);
-        kernels.writer = create_writer_kernel(program, all_cores, writer_compile_time_args, defines, kWriterKernelPath);
-    }
+    const uint32_t twice_block_size = 2U * block_size;
+    program.cbs.push_back(make_cb_descriptor(
+        all_cores, kInputCbIndex, input_data_format, bfloat16_single_tile_size_bytes, twice_block_size));
 
     // -------------------------------------------------------------------------
-    // 4) Create compute kernels for profiler_no_op
+    // 3) Reader/writer kernels (no compute kernel: the op only moves data)
     // -------------------------------------------------------------------------
+    std::vector<uint32_t> reader_compile_time_args{block_size, Wt};
+    tt::tt_metal::TensorAccessorArgs(input_buffer).append_to(reader_compile_time_args);
+    auto reader = make_reader_kernel_descriptor(all_cores, reader_compile_time_args, {}, kReaderKernelPath);
 
-    // No compute kernels are needed for the profiler_no_op operation
+    std::vector<uint32_t> writer_compile_time_args{block_size, Wt};
+    tt::tt_metal::TensorAccessorArgs(output_buffer).append_to(writer_compile_time_args);
+    auto writer = make_writer_kernel_descriptor(all_cores, writer_compile_time_args, {}, kWriterKernelPath);
 
     // -------------------------------------------------------------------------
-    // 5) Assign runtime args for each core
+    // 4) Per-core runtime args. Buffers are bound, not addressed: the framework fills in the address when the
+    //    program is built and again on every cache hit.
     // -------------------------------------------------------------------------
-
     for_each_core_with_work(
         num_cores,
         num_cores_y,
@@ -141,58 +103,14 @@ ProfilerNoopProgramFactory::cached_program_t ProfilerNoopProgramFactory::create(
         [&](const CoreWork& work) {
             const auto& [core, core_index, num_rows, start_row, in_group_1] = work;
             // Reader kernel: (input_addr, number_of_rows, offset_in_rows)
-            SetRuntimeArgs(program, kernels.reader, core, {input_buffer->address(), num_rows, start_row});
+            reader.emplace_runtime_args(core, {input_buffer, num_rows, start_row});
             // Writer kernel: (dst_addr, number_of_rows, offset_in_rows)
-            SetRuntimeArgs(program, kernels.writer, core, {output_buffer->address(), num_rows, start_row});
+            writer.emplace_runtime_args(core, {output_buffer, num_rows, start_row});
         });
 
-    // -------------------------------------------------------------------------
-    // 6) Return the fully configured program & relevant shared variables
-    // -------------------------------------------------------------------------
-
-    return cached_program_t{
-        std::move(program),
-        {/* profiler_no_opreader_kernel_id  = */ kernels.reader,
-         /* profiler_no_op_writer_kernel_id  = */ kernels.writer,
-         /* core_group_1              = */ core_group_1,
-         /* core_group_2              = */ core_group_2,
-         /* num_cores                 = */ num_cores,
-         /* num_cores_y               = */ num_cores_y}};
-}
-
-void ProfilerNoopProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
-    auto& program = cached_program.program;
-    auto& shared_variables = cached_program.shared_variables;
-    auto& profiler_no_op_reader_kernel_id = shared_variables.reader_kernel_id;
-    auto& profiler_no_op_writer_kernel_id = shared_variables.writer_kernel_id;
-
-    uint32_t num_cores = shared_variables.num_cores;
-    uint32_t num_cores_y = shared_variables.num_cores_y;
-
-    auto* input_buffer = tensor_args.input.buffer();
-    auto* output_buffer = tensor_return_value.buffer();
-
-    // Only address arguments need updating here; tile counts remain the same as in create().
-    auto& reader_runtime_args = GetRuntimeArgs(program, profiler_no_op_reader_kernel_id);
-    auto& writer_runtime_args = GetRuntimeArgs(program, profiler_no_op_writer_kernel_id);
-
-    for_each_core(num_cores, num_cores_y, [&](const tt::tt_metal::CoreCoord& core) {
-        // Update input buffers for the reader kernel
-        {
-            auto& runtime_args = reader_runtime_args[core.x][core.y];
-            runtime_args[kInputBufferIdx] = input_buffer->address();
-        }
-
-        // Update output buffers for the writer kernel
-        {
-            auto& runtime_args = writer_runtime_args[core.x][core.y];
-            runtime_args[kOutputBufferIdx] = output_buffer->address();
-        }
-    });
+    program.kernels.push_back(std::move(reader));
+    program.kernels.push_back(std::move(writer));
+    return program;
 }
 
 }  // namespace ttml::metal::ops::profiler_no_op::device
