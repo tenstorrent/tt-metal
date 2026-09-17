@@ -329,6 +329,10 @@ class LTXDistilledPipeline(LTXPipeline):
         # so an earlier warmup (or an encode) leaves the DiT evicted — a second warmup_buffers call
         # (e.g. the IC-LoRA s1_ref/s2_ref family after a base s1/s2 pass) would otherwise denoise on
         # evicted weights ("parameter has no data" at adaln_single). No-op when already resident.
+        # The resident upsampler goes first (see _register_coresident_exclusions): every DiT reload
+        # after a decode must land where the captures below saw the DiT.
+        if self.upsampler is not None and os.environ.get("LTX_UPSAMPLER_RESIDENT", "1") != "0":
+            self._prepare_upsampler()
         self._prepare_transformer(0)
 
         # Zeros at the real shapes compile the shape-driven kernels; the encoder is warmed

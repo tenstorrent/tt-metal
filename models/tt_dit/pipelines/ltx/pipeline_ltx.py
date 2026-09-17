@@ -948,12 +948,19 @@ class LTXPipeline:
 
         for i, m in enumerate(models):
             m._coresident_peers = [*models[:i], *models[i + 1 :], self.vae_decoder, self.vae_encoder]
+        # The upsampler (120 MB/chip on the 2x4) is resident for the worker's life: only the 22B DiT
+        # contends with the 1080p decode peak, and evicting it cost a reload before every stage 2
+        # (1.5 s from disk). It must then be in NOBODY's eviction list and be loaded before the DiT at
+        # warmup: a reload that lands elsewhere shifts every later DiT reload under the traces the
+        # captures baked (measured: noise). LTX_UPSAMPLER_RESIDENT=0 restores the eviction.
+        resident_upsampler = os.environ.get("LTX_UPSAMPLER_RESIDENT", "1") != "0"
+        ups_peer = [] if resident_upsampler else [self.upsampler]
         if self.vae_decoder is not None:
-            self.vae_decoder._coresident_peers = [*models, self.upsampler, self.vae_encoder]
+            self.vae_decoder._coresident_peers = [*models, *ups_peer, self.vae_encoder]
         if self.upsampler is not None:
-            self.upsampler._coresident_peers = [self.vae_decoder, self.vae_encoder]
+            self.upsampler._coresident_peers = [] if resident_upsampler else [self.vae_decoder, self.vae_encoder]
         if self.vae_encoder is not None:
-            self.vae_encoder._coresident_peers = [*models, self.vae_decoder, self.upsampler]
+            self.vae_encoder._coresident_peers = [*models, self.vae_decoder, *ups_peer]
 
         for m in [*models, self.vae_decoder, self.upsampler, self.vae_encoder]:
             if m is not None:
@@ -967,7 +974,7 @@ class LTXPipeline:
             enc_peers = [*models]
             if self.vae_decoder is not None:
                 enc_peers.append(self.vae_decoder)
-            if self.upsampler is not None:
+            if self.upsampler is not None and not resident_upsampler:
                 enc_peers.append(self.upsampler)
             for m in enc_peers:
                 m.register_coresident_exclusions(self.vae_encoder)
@@ -981,7 +988,7 @@ class LTXPipeline:
         ref_encoders = [e for e in (self.vae_ref_encoder_s1, self.vae_ref_encoder_full) if e is not None]
         for ref_enc in ref_encoders:
             ref_peers = [*models]
-            for extra in (self.vae_decoder, self.upsampler, self.vae_encoder):
+            for extra in (self.vae_decoder, *ups_peer, self.vae_encoder):
                 if extra is not None:
                     ref_peers.append(extra)
             ref_peers += [e for e in ref_encoders if e is not ref_enc]
