@@ -23,6 +23,13 @@
 namespace ckernel
 {
 
-constexpr std::uint32_t TRISC_ID = COMPILE_FOR_TRISC;
+// COMPILE_FOR_TRISC is the cluster-GLOBAL processor id (NEO_n_COMPUTE_m = n*4 + m, 0..15); the
+// per-Neo thread id this indexes config by is that id modulo 4. See the ThreadId enum note in
+// ckernel_defs.h, and the same reduction in ckernel.h's mailbox self-checks.
+constexpr std::uint32_t TRISC_ID = COMPILE_FOR_TRISC % 4;
+
+// Validates the define itself: the id must name a compute processor of the 4-Neo cluster. (Asserting
+// TRISC_ID < 4 would be vacuous - the reduction above already guarantees it.)
+static_assert(COMPILE_FOR_TRISC < 16, "COMPILE_FOR_TRISC must be a Quasar compute processor id in [0, 15]");
 
 } // namespace ckernel
