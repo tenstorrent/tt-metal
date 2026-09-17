@@ -996,16 +996,10 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             break;
 
         // TT_METAL_DEVICE_PROFILER_SYNC_EVENTS
-        // Compiles the synchronization-event instrumentation into every kernel
-        // (-DPROFILE_SYNC_EVENTS): a zone around every blocking CB/semaphore primitive plus a point
-        // marker for every releasing signal, which is what the critical-path tool pairs across cores.
-        // See tools/profiler/synchronization_event_profiler.hpp.
-        //
-        // Streaming only, and NOT implied by TT_METAL_STREAMING_PROFILER: it multiplies marker volume
-        // by the number of sync primitives a kernel executes, so it is opt-in on top. Ignored without
-        // TT_METAL_STREAMING_PROFILER, since the gate in that header also requires PROFILE_STREAMING.
+        // Enables profiling for synchronization events (cb reserve/wait/push/pop, semaphore set/wait).
+        // Requires TT_METAL_STREAMING_PROFILER to be enabled as well.
         // Default: false
-        // Usage: export TT_METAL_STREAMING_PROFILER=1 TT_METAL_DEVICE_PROFILER_SYNC_EVENTS=1
+        // Usage: export TT_METAL_DEVICE_PROFILER_SYNC_EVENTS=1
         case EnvVarID::TT_METAL_DEVICE_PROFILER_SYNC_EVENTS:
             this->profiler_sync_events_enabled = is_env_enabled(value);
             break;
