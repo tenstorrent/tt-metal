@@ -163,35 +163,16 @@ Tensor pre_scatter_transform_tensor(
     const int8_t dim,
     const bool is_dim_last_idx,
     const std::optional<Shape>& index_shape = std::nullopt) {
-    if (input_tensor.logical_shape() == ttnn::Shape{1} || input_tensor.logical_shape() == ttnn::Shape{0}) {
-        return input_tensor;
-    }
-
-    Tensor processed_tensor = input_tensor;
-    if (index_shape.has_value()) {
-        const ttsl::SmallVector<uint32_t> start(index_shape->rank(), 0);
-        const ttsl::SmallVector<uint32_t> steps(index_shape->rank(), 1);
-        const ttsl::SmallVector<uint32_t> end(index_shape->cbegin(), index_shape->cend());
-        processed_tensor = ttnn::slice(processed_tensor, start, end, steps, processed_tensor.memory_config());
-    }
-    // if layout is tile, convert to row-major first
-    if (processed_tensor.layout() != Layout::ROW_MAJOR) {
-        processed_tensor = ttnn::to_layout(processed_tensor, Layout::ROW_MAJOR);
-    }
-    // transposing a row-major tensor here
-    processed_tensor = reduction_common::perform_transpose(processed_tensor, is_dim_last_idx, dim, -1);
-    processed_tensor = pad_rank_up_to_4d(processed_tensor);
-
-    return processed_tensor;
-}
-
-Tensor pre_scatter_transform_tensor(
-    const Tensor& input_tensor,
-    Shape& after_transpose_shape,
-    const int8_t dim,
-    const bool is_dim_last_idx,
-    const std::optional<Shape>& index_shape = std::nullopt) {
-    if (input_tensor.logical_shape() == ttnn::Shape{1} || input_tensor.logical_shape() == ttnn::Shape{0}) {
+    // Deliberately does NOT short-circuit Shape{1}: this function runs once per operand, so
+    // returning a rank-1 tensor early left it at rank 1 while its siblings were padded to rank 4.
+    // The reader takes its stride count from the input rank alone and reads index_dims at that
+    // width, so a rank-4 input against a rank-1 index read three shape varargs the factory never
+    // wrote and skipped the scatter for every stick. Shape{1} is an ordinary rank-1 tensor and the
+    // transform below handles it: dim == 0 == rank-1 makes the transpose a no-op and the padding
+    // takes it to (1,1,1,1), matching its siblings.
+    // The Shape{0} arm is kept as-is but is inert: it only skips the transform, and the factory
+    // still divides by the zero last dim, so a zero extent SIGFPEs either way - see #56881.
+    if (input_tensor.logical_shape() == ttnn::Shape{0}) {
         return input_tensor;
     }
 
@@ -208,7 +189,6 @@ Tensor pre_scatter_transform_tensor(
     }
     // transposing a row-major tensor here
     processed_tensor = reduction_common::perform_transpose(processed_tensor, is_dim_last_idx, dim, -1);
-    after_transpose_shape = processed_tensor.logical_shape();
     processed_tensor = pad_rank_up_to_4d(processed_tensor);
 
     return processed_tensor;
@@ -216,19 +196,19 @@ Tensor pre_scatter_transform_tensor(
 
 Tensor post_scatter_transform_tensor(
     Tensor& output_tensor,
-    const Shape& after_transpose_shape,
     const int32_t dim,
     const bool is_dim_last_idx,
     const Shape& original_logical_shape,
     const Layout& original_layout) {
     const auto orig_rank = original_logical_shape.rank();
 
+    // Only the padding applied on the way in has to be undone. Rank >= 4 was passed through
+    // untouched, so the device output already carries the post-transpose shape and there is
+    // nothing to restore before the transpose below.
     if (orig_rank == 1) {
         output_tensor = ttnn::reshape(output_tensor, original_logical_shape);
     } else if (orig_rank < 4) {
         output_tensor = ttnn::squeeze_from_4D(output_tensor, orig_rank);
-    } else if (orig_rank > 4) {
-        output_tensor = ttnn::reshape(output_tensor, after_transpose_shape);
     }
 
     // transposing a row-major tensor here
@@ -319,9 +299,8 @@ Tensor scatter(
     // - row-major
     // - transposed to have the last dimension as last axis
     // - unsqueezed to 4D if of a lower rank (a higher rank is passed through as-is)
-    Shape after_transpose_shape;
     Tensor transformed_input_tensor =
-        pre_scatter_transform_tensor(input_tensor, after_transpose_shape, normalized_dim, input_tensor_is_dim_last_idx);
+        pre_scatter_transform_tensor(input_tensor, normalized_dim, input_tensor_is_dim_last_idx);
 
     Tensor transformed_index_tensor =
         pre_scatter_transform_tensor(index_tensor, normalized_dim, input_tensor_is_dim_last_idx);
@@ -343,12 +322,7 @@ Tensor scatter(
         reduction,
         sub_core_grid);
     output = post_scatter_transform_tensor(
-        output,
-        after_transpose_shape,
-        normalized_dim,
-        input_tensor_is_dim_last_idx,
-        original_input_tensor_lshape,
-        original_layout);
+        output, normalized_dim, input_tensor_is_dim_last_idx, original_input_tensor_lshape, original_layout);
     return output;
 }
 
