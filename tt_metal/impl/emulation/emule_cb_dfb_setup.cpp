@@ -9,16 +9,10 @@
 #include "emule_kernel_defines.hpp"
 #include "emule_program_descriptor.hpp"
 #include "emule_sanitizers.hpp"
-#include "impl/program/program_impl.hpp"
-#include "impl/buffers/circular_buffer.hpp"
-#include "impl/buffers/semaphore.hpp"
-#include "impl/dataflow_buffer/dataflow_buffer_impl.hpp"
-#include "impl/context/metal_context.hpp"
+#include "tt_metal/hw/inc/internal/tt-2xx/dataflow_buffer/dataflow_buffer_config.h"  // ::dfb::TENSIX_RISC_OFFSET
 #include <tt-metalium/device.hpp>
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include <tt-metalium/hal.hpp>  // HalProgrammableCoreType
 #include "hostdevcommon/fabric_common.h"
-#include "llrt/metal_soc_descriptor.hpp"
 #include "umd/device/chip/sw_emule_chip.hpp"
 #include "tt_emule/tile_counter.hpp"
 #include <tt-logger/tt-logger.hpp>
@@ -52,51 +46,8 @@ static void fill_dfb_slots(tt_emule::EmuleDFBInterface& iface, uint32_t n, SlotF
 }
 
 static void init_core_cb_sync(
-    tt_emule::Core* core,
-    detail::ProgramImpl& impl,
-    const CoreCoord& logical_core,
-    const tt_emule::CoreDescriptor& cd,
-    std::vector<uint64_t>& persistent_cb_ranges) {
+    tt_emule::Core* core, const tt_emule::CoreDescriptor& cd, std::vector<uint64_t>& persistent_cb_ranges) {
     core->reset_cb_sync();
-
-    // DIFF-GUARD: the POD CBs must mirror circular_buffers_on_core 1:1, same order.
-    {
-        size_t gi = 0;
-        for (auto& cb_impl : impl.circular_buffers_on_core(logical_core)) {
-            if (!cb_impl) {
-                continue;
-            }
-            TT_FATAL(
-                gi < cd.cbs.size() && cd.cbs[gi].address == cb_impl->address() &&
-                    cd.cbs[gi].total_size == cb_impl->size() &&
-                    cd.cbs[gi].globally_allocated == cb_impl->globally_allocated(),
-                "descriptor CB header mismatch on core ({},{}) cb {}",
-                logical_core.x,
-                logical_core.y,
-                gi);
-            size_t bi = 0;
-            for (uint8_t idx : cb_impl->local_buffer_indices()) {
-                TT_FATAL(
-                    bi < cd.cbs[gi].buffers.size() && cd.cbs[gi].buffers[bi].index == idx &&
-                        cd.cbs[gi].buffers[bi].page_size == cb_impl->page_size(idx) &&
-                        cd.cbs[gi].buffers[bi].num_pages == cb_impl->num_pages(idx),
-                    "descriptor CB buffer mismatch on core ({},{}) cb {} idx {}",
-                    logical_core.x,
-                    logical_core.y,
-                    gi,
-                    idx);
-                ++bi;
-            }
-            TT_FATAL(
-                bi == cd.cbs[gi].buffers.size(),
-                "descriptor CB buffer count mismatch on core ({},{}) cb {}",
-                logical_core.x,
-                logical_core.y,
-                gi);
-            ++gi;
-        }
-        TT_FATAL(gi == cd.cbs.size(), "descriptor CB count mismatch on core ({},{})", logical_core.x, logical_core.y);
-    }
 
     // Record this core's globally-allocated (persistent) CB extents so Object-Intent
     // exempts kernel writes anywhere in them (§12). Separate pass so the exempt set
@@ -139,8 +90,6 @@ static void init_core_cb_sync(
 // Write semaphore initial values into L1 at the HAL-derived semaphore base.
 static void init_core_semaphores(
     tt_emule::Core* core,
-    detail::ProgramImpl& impl,
-    const CoreCoord& logical_core,
     const tt_emule::CoreDescriptor& cd,
     const std::vector<tt_emule::SemaphoreDescriptor>& sems,
     uint32_t emule_sem_base) {
@@ -152,22 +101,6 @@ static void init_core_semaphores(
         }
         return 0;
     };
-
-    // DIFF-GUARD: the POD (id, initial_value) list must match the semaphores initialized
-    // on this core by impl.semaphores(), in order.
-    {
-        std::vector<std::pair<uint32_t, uint32_t>> ref;
-        for (auto& sem : impl.semaphores()) {
-            if (sem.initialized_on_logical_core(logical_core)) {
-                ref.emplace_back(sem.id(), sem.initial_value());
-            }
-        }
-        std::vector<std::pair<uint32_t, uint32_t>> pod;
-        for (uint32_t sid : cd.semaphore_ids) {
-            pod.emplace_back(sid, initial_value_of(sid));
-        }
-        TT_FATAL(ref == pod, "descriptor semaphore mismatch on core ({},{})", logical_core.x, logical_core.y);
-    }
 
     for (uint32_t sem_id : cd.semaphore_ids) {
         uint32_t sem_addr = emule_sem_base + sem_id * EMULE_SEM_ALIGN;
@@ -182,41 +115,8 @@ static void init_core_semaphores(
 // Allocate L1 for each DFB on a core, register CB-sync bridges, and — on Quasar —
 // initialize tile counters. Returns per-DFB allocation info consumed by launch_cores.
 static std::vector<DFBAllocInfo> allocate_dfbs_on_core(
-    tt_emule::Core* core,
-    const CoreCoord& logical_core,
-    const tt_emule::SocView& soc,
-    const std::vector<tt_emule::DfbDescriptor>& dfbs,
-    const std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>>& dfb_impls) {
+    tt_emule::Core* core, const tt_emule::SocView& soc, const std::vector<tt_emule::DfbDescriptor>& dfbs) {
     core->reset_dfb_sync();
-
-    // DIFF-GUARD: the POD DfbDescriptors must mirror dataflow_buffers_on_core 1:1, same order,
-    // including the newly-marshalled finalize offset (core_lookup_).
-    {
-        size_t gi = 0;
-        for (auto& dfb_impl : dfb_impls) {
-            if (!dfb_impl) {
-                continue;
-            }
-            const auto& c = dfb_impl->config;
-            auto cl = dfb_impl->core_lookup_.find(logical_core);
-            bool has_finalize = (cl != dfb_impl->core_lookup_.end());
-            uint32_t finalize_addr = has_finalize ? cl->second.second : 0;
-            TT_FATAL(
-                gi < dfbs.size() && dfbs[gi].device_slot == dfb_impl->device_slot &&
-                    dfbs[gi].entry_size == c.entry_size && dfbs[gi].num_entries == c.num_entries &&
-                    dfbs[gi].num_producers == c.num_producers && dfbs[gi].num_consumers == c.num_consumers &&
-                    dfbs[gi].producer_risc_mask == c.producer_risc_mask &&
-                    dfbs[gi].consumer_risc_mask == c.consumer_risc_mask &&
-                    dfbs[gi].cap == static_cast<tt_emule::AccessPattern>(static_cast<uint8_t>(c.cap)) &&
-                    dfbs[gi].has_finalize == has_finalize && dfbs[gi].finalize_l1_offset == finalize_addr,
-                "descriptor DFB mismatch on core ({},{}) dfb {}",
-                logical_core.x,
-                logical_core.y,
-                gi);
-            ++gi;
-        }
-        TT_FATAL(gi == dfbs.size(), "descriptor DFB count mismatch on core ({},{})", logical_core.x, logical_core.y);
-    }
 
     if (dfbs.empty()) {
         // Nothing to allocate, so the L1 bump allocator never grows and there's
@@ -327,7 +227,6 @@ static std::vector<DFBAllocInfo> allocate_dfbs_on_core(
 }
 
 void setup_core_state(
-    detail::ProgramImpl& impl,
     IDevice* device,
     tt::umd::SWEmuleChip* sw_emu,
     std::map<CoreCoord, std::vector<KernelInfo>>& core_kernels,
@@ -350,31 +249,6 @@ void setup_core_state(
     const uint16_t my_mesh_id = static_cast<uint16_t>(soc.mesh_id);
     const uint16_t my_device_id = static_cast<uint16_t>(soc.chip_id);
 
-    // DIFF-GUARD against the private control-plane / HAL reads.
-    {
-        auto& metal_ctx = MetalContext::instance(impl.get_context_id());
-        const auto fabric_node = metal_ctx.get_control_plane().get_fabric_node_id_from_physical_chip_id(device->id());
-        const uint32_t rt = static_cast<uint32_t>(
-            metal_ctx.hal().get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::ROUTING_TABLE));
-        TT_FATAL(
-            routing_table_base == rt && my_mesh_id == static_cast<uint16_t>(*fabric_node.mesh_id) &&
-                my_device_id == static_cast<uint16_t>(fabric_node.chip_id),
-            "descriptor routing identity mismatch (rt {} vs {}, mesh {} vs {}, dev {} vs {})",
-            routing_table_base,
-            rt,
-            my_mesh_id,
-            static_cast<uint16_t>(*fabric_node.mesh_id),
-            my_device_id,
-            static_cast<uint16_t>(fabric_node.chip_id));
-        TT_FATAL(
-            soc.has_tile_counter_registers == metal_ctx.hal().has_tile_counter_registers() &&
-                soc.arch_num_circular_buffers == metal_ctx.hal().get_arch_num_circular_buffers(),
-            "descriptor HAL scalar mismatch (tc {} vs {}, num_cbs {} vs {})",
-            soc.has_tile_counter_registers,
-            metal_ctx.hal().has_tile_counter_registers(),
-            soc.arch_num_circular_buffers,
-            metal_ctx.hal().get_arch_num_circular_buffers());
-    }
     for (auto& [logical_core, ki_list] : core_kernels) {
         if (!sw_emu) {
             continue;
@@ -403,14 +277,13 @@ void setup_core_state(
         TT_FATAL(cd != nullptr, "no CoreDescriptor for core ({},{})", logical_core.x, logical_core.y);
 
         std::vector<uint64_t> persistent_cb_ranges;
-        init_core_cb_sync(core, impl, logical_core, *cd, persistent_cb_ranges);
-        init_core_semaphores(core, impl, logical_core, *cd, pd.semaphores, emule_sem_base);
+        init_core_cb_sync(core, *cd, persistent_cb_ranges);
+        init_core_semaphores(core, *cd, pd.semaphores, emule_sem_base);
 
-        auto dfb_impls = impl.dataflow_buffers_on_core(logical_core);
         // Quasar-only. Null on WH/BH keeps the cb_api CB->DFB bridge short-circuited, and stops
         // a slot legal up to get_arch_num_circular_buffers() indexing the MAX_DFBS-sized array.
         bool has_tc_dfbs = !cd->dfbs.empty() && soc.has_tile_counter_registers;
-        std::vector<DFBAllocInfo> dfb_allocs = allocate_dfbs_on_core(core, logical_core, soc, cd->dfbs, dfb_impls);
+        std::vector<DFBAllocInfo> dfb_allocs = allocate_dfbs_on_core(core, soc, cd->dfbs);
 
         uint32_t sem_region_size = tt::tt_metal::NUM_SEMAPHORES * EMULE_SEM_ALIGN;
         core_setups.push_back(
