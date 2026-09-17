@@ -30,7 +30,6 @@ void collect_kernels(
     std::unordered_map<std::string, std::function<void()>>& resolved_fns,
     std::vector<std::string>& inline_src_temps,
     const tt_emule::EmuleProgramDescriptor& desc) {
-    (void)desc;  // STAGE 2b: threaded in; consumers land in the next sub-steps.
     static const char* trisc_define_names[] = {"TRISC_UNPACK", "TRISC_MATH", "TRISC_PACK", "TRISC_ISOLATE_SFPU"};
 
     const auto& hal = MetalContext::instance().hal();
@@ -54,6 +53,11 @@ void collect_kernels(
             }
         }
         for (auto& [kernel_id, kernel] : kernels) {
+            // STAGE 2b: consume the marshalled descriptor for this kernel. Diff-guards
+            // (stripped in the final sub-step) prove each POD field byte-exact against
+            // the private read while both paths coexist.
+            const auto& kd = desc.kernels.at(kernel_id);
+
             const auto& ksrc = kernel->kernel_source();
             std::string src_path = resolve_kernel_source_path(ksrc, inline_src_temps);
             if (ksrc.source_type_ == KernelSource::FILE_PATH) {
@@ -68,27 +72,47 @@ void collect_kernels(
             kernel->process_include_paths(
                 [&kernel_extra_inc](const std::string& p) { kernel_extra_inc += " -I\"" + p + "\""; });
 
-            auto compile_args = kernel->compile_time_args();
-            auto named_compile_args = kernel->named_compile_time_args();
+            std::vector<uint32_t> compile_args = kd.compile_time_args;
+            std::unordered_map<std::string, uint32_t> named_compile_args = kd.named_compile_time_args;
             ////////////////////////////////////////////////////////////
             // Blaze-only experimental named args
             // Removal is tracked by issue #50953
-            NamedCTArgNamespaces named_ct_arg_namespaces;
-            kernel->process_named_ct_arg_namespaces([&named_ct_arg_namespaces](const NamedCTArgNamespaces& namespaces) {
-                named_ct_arg_namespaces = namespaces;
-            });
+            NamedCTArgNamespaces named_ct_arg_namespaces = kd.named_ct_arg_namespaces;
             NamedRuntimeArgNamespaces named_runtime_arg_namespaces;
             kernel->process_named_runtime_args(
                 [&named_runtime_arg_namespaces](const NamedRuntimeArgNamespaces& namespaces) {
                     named_runtime_arg_namespaces = namespaces;
                 });
             ////////////////////////////////////////////////////////////
+            {  // STAGE 2b diff-guards: POD vs private read
+                std::vector<uint32_t> _priv_ct = kernel->compile_time_args();
+                std::unordered_map<std::string, uint32_t> _priv_nca = kernel->named_compile_time_args();
+                NamedCTArgNamespaces _priv_ctns;
+                kernel->process_named_ct_arg_namespaces(
+                    [&_priv_ctns](const NamedCTArgNamespaces& ns) { _priv_ctns = ns; });
+                TT_FATAL(
+                    compile_args == _priv_ct,
+                    "emule descriptor diff-guard: compile_time_args mismatch (kernel {})",
+                    static_cast<uint32_t>(kernel_id));
+                TT_FATAL(
+                    named_compile_args == _priv_nca,
+                    "emule descriptor diff-guard: named_compile_time_args mismatch (kernel {})",
+                    static_cast<uint32_t>(kernel_id));
+                TT_FATAL(
+                    named_ct_arg_namespaces == _priv_ctns,
+                    "emule descriptor diff-guard: named_ct_arg_namespaces mismatch (kernel {})",
+                    static_cast<uint32_t>(kernel_id));
+            }
             auto defines = build_kernel_defines(
                 *kernel, impl, num_dram_channels, num_l1_banks, worker_col_map_str, worker_row_map_str, emule_sem_base);
 
             // Tensix/compute kernels use bits 8+ in the DFB RISC mask (TENSIX_RISC_OFFSET),
             // while DM kernels use bits 0-7 directly.
-            bool is_tensix = (kernel->get_kernel_processor_class() == HalProcessorClassType::COMPUTE);
+            bool is_tensix = kd.is_compute;
+            TT_FATAL(
+                is_tensix == (kernel->get_kernel_processor_class() == HalProcessorClassType::COMPUTE),
+                "emule descriptor diff-guard: is_compute mismatch (kernel {})",
+                static_cast<uint32_t>(kernel_id));
             auto* qdm = dynamic_cast<experimental::quasar::QuasarDataMovementKernel*>(kernel.get());
             auto* qck = dynamic_cast<experimental::quasar::QuasarComputeKernel*>(kernel.get());
             bool is_quasar_compute = is_tensix && (qck != nullptr);
