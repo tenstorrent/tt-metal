@@ -39,6 +39,7 @@ _METADATA_P_SCORES_OFFSET = 192
 # at byte 256, so we keep the decode window at 256B even though the device
 # struct is 512B.
 _METADATA_DECODE_BYTES = 256
+NUM_DEVICES = 8
 
 
 def _decode_p_metadata(ttnn_metadata, k: int, device_idx: int | None = None):
@@ -295,6 +296,7 @@ def test_sampling_argmax_single_device_101_cores(device, seed, final_core_idx):
     ids=["test_1", "test_2", "test_3", "test_4"],
 )
 @pytest.mark.requires_grid_size(101)
+@pytest.mark.requires_num_devices(NUM_DEVICES)
 # TODO(#43087): Root-cause this exact Blackhole 4x2 FABRIC_2D mesh setup failure and remove the temporary skip.
 # @pytest.mark.skip(
 #     reason="[SKIP REASON]: 4x2 FABRIC_2D mesh_device setup for test_sampling_argmax_mesh_4x2_axis_x hit Fabric Router "
@@ -1034,6 +1036,7 @@ def create_fabric_router_config(max_payload_size):
     ids=["test_1", "test_2", "test_3", "test_4", "test_5", "test_6", "test_7", "test_8"],
 )
 @pytest.mark.requires_grid_size(101)
+@pytest.mark.requires_num_devices(NUM_DEVICES)
 def test_sampling_topk_mesh(
     bh_2d_mesh_device,
     final_mesh_coord,

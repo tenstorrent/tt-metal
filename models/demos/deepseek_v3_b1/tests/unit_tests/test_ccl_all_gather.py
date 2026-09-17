@@ -247,6 +247,7 @@ def _verify_per_slot_identity(submesh, ttnn_result, inputs, expected_slot_tensor
     ],
     indirect=True,
 )
+@pytest.mark.requires_num_devices(NUM_DEVICES)
 def test_ccl_all_gather_deterministic_fill(
     bh_2d_mesh_device,
     output_shape,
@@ -318,6 +319,7 @@ def test_ccl_all_gather_deterministic_fill(
     ],
     indirect=True,
 )
+@pytest.mark.requires_num_devices(NUM_DEVICES)
 def test_ccl_all_gather(
     bh_2d_mesh_device,
     output_shape,
@@ -384,6 +386,7 @@ def test_ccl_all_gather(
     ],
     indirect=True,
 )
+@pytest.mark.requires_num_devices(NUM_DEVICES)
 def test_ccl_all_gather_chunk_matrix(
     bh_2d_mesh_device,
     output_shape,
