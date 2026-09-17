@@ -11,6 +11,7 @@ from fuser.fuser_config import GlobalConfig
 from fuser.golden.unpack.unpack import unpack_golden
 from fuser.indexing import InvocationGranularity
 from fuser.l1_operation import L1Operation
+from helpers.llk_params import ReduceDimension, ReducePool
 
 
 class ReduceUnpacker(Unpacker):
@@ -20,6 +21,9 @@ class ReduceUnpacker(Unpacker):
     def __init__(self, reduce_dim, reduce_pool):
         self.reduce_dim = reduce_dim
         self.reduce_pool = reduce_pool
+        self.reverse_operands = (
+            reduce_dim == ReduceDimension.Row and reduce_pool != ReducePool.Max
+        )
 
     def get_headers(self) -> List[str]:
         return [

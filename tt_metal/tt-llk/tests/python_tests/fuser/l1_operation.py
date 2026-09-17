@@ -92,6 +92,7 @@ class L1Operation:
                     for src in (op.src_a, op.src_b)
                 ),
                 type(op.unpacker),
+                getattr(op.unpacker, "reverse_operands", False),
                 op.reuse_dest,
                 op.unpack_to_dest,
             )
