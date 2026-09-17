@@ -142,10 +142,13 @@ _FLUSHES_SUBNORMALS: Dict[torch.dtype, bool] = {
 
 # ttnn's sanity ceiling (``utils_for_testing.assert_with_ulp``): 2**mantissa_bits. Adding
 # 2**mantissa_bits to an IEEE magnitude pattern bumps the exponent field by one and leaves
-# the mantissa alone, so that many steps is exactly one binade: bf16 ``1.0 = 0x3F80``,
-# ``+0x80 = 0x4000 = 2.0``. A budget above the ceiling therefore says the two values are
-# more than a factor of two apart in the normal range -- not an order of magnitude, which
-# would need ``ceil(log2(10) * 2**mantissa_bits)`` steps -- at which point ULP has stopped
+# the mantissa alone, so that many steps is exactly one binade -- from *any* mantissa:
+# bf16 ``1.0 = 0x3F80``, ``+0x80 = 0x4000 = 2.0``. A budget above the ceiling therefore
+# says the two values are more than a factor of two apart in the normal range, and not an
+# order of magnitude, which is a bit over three binades' worth of steps -- not a fixed
+# count, because rank is affine in value *within* a binade, so a fixed ratio costs a
+# variable number of ranks depending on where in the binade the pair starts (bf16
+# ``1.0 -> 10.0`` is 416 steps, ``1.5 -> 15.0`` is 432). Past the ceiling ULP has stopped
 # being the right metric and the op belongs on the tolerance one. Inside a subnormal band
 # the steps are absolute rather than proportional, so the same count spans the band.
 MAX_MEANINGFUL_ULP: Dict[torch.dtype, int] = {
@@ -176,8 +179,22 @@ def ulp_dtype(fmt: DataFormat) -> torch.dtype:
 
 
 def flushes_subnormals(dtype: torch.dtype) -> bool:
-    """Whether collapsing *dtype*'s subnormal band is the right default. See the table."""
-    return _FLUSHES_SUBNORMALS.get(dtype, True)
+    """Whether collapsing *dtype*'s subnormal band is the right default. See the table.
+
+    Raises for a dtype the metric does not measure, rather than defaulting. Every
+    supported dtype is an explicit row in ``_FLUSHES_SUBNORMALS``, so a default could only
+    ever fire for an unsupported one -- and ``True`` is the polarity the table's own
+    comment calls error-hiding, which is why the module docstring says the default is per
+    dtype *rather than* ``True``. Without this, ``local_step(1.0, torch.float64)`` handed
+    back ``2**-52`` where :func:`ulp_distance` raises for the same dtype.
+    """
+    try:
+        return _FLUSHES_SUBNORMALS[dtype]
+    except KeyError:
+        raise ValueError(
+            f"flushes_subnormals: unsupported dtype {dtype}; supported: "
+            f"{', '.join(str(d) for d in _FLUSHES_SUBNORMALS)}"
+        ) from None
 
 
 def _value_order_index(
@@ -353,27 +370,54 @@ def local_step(
       ``ulp()`` carries for the same reason.
     * The gap is not symmetric at a power of two: below a boundary it is half the size it
       is above. *toward* names the value the step is being counted to -- the result, at
-      the gate -- and when that lies below ``|value|`` the downward gap is the one a
-      counted step actually crossed. Without it a one-step bf16 result immediately below
-      ``1.0`` would be reported as ``1 ULP = 7.8125e-3`` when the step it took was
-      ``3.90625e-3``: the very asymmetry this integer metric exists to avoid.
+      the gate -- and when the path to it leaves ``value`` heading toward zero, the
+      downward gap is the one a counted step actually crossed. Without it a one-step bf16
+      result immediately below ``1.0`` would be reported as ``1 ULP = 7.8125e-3`` when the
+      step it took was ``3.90625e-3``: the very asymmetry this integer metric exists to
+      avoid.
+
+      Direction is taken from the *signed* delta, not from ``abs(toward) < magnitude``.
+      Comparing magnitudes loses the direction whenever the pair straddles zero:
+      ``1.0 -> -2.0`` has the larger magnitude on the far side, but the first step out of
+      ``1.0`` is downward, and reporting the upward gap there names the wrong side of the
+      boundary.
     """
     if not math.isfinite(value):
         return float("nan")
+    if dtype not in _ULP_DTYPES:
+        # The one public entry point with no other dtype check. Refused rather than
+        # answered, so it cannot disagree with ulp_distance about what is measurable --
+        # and an explicit flush_subnormals= would otherwise skip flushes_subnormals()'s
+        # own guard.
+        raise ValueError(
+            f"local_step: unsupported dtype {dtype}; supported: "
+            f"{', '.join(str(d) for d in _ULP_DTYPES)}"
+        )
     if flush_subnormals is None:
         flush_subnormals = flushes_subnormals(dtype)
 
     info = torch.finfo(dtype)
     magnitude = abs(value)
-    if flush_subnormals and magnitude < info.tiny:
-        # The band is compacted out of the ranking, so one step from here is the jump to
-        # the smallest normal.
+    # Does the first step out of `value` head toward zero? From the signed delta, so a
+    # sign-crossing pair is judged on where the path starts rather than where it ends.
+    heads_toward_zero = (
+        toward is not None
+        and math.isfinite(toward)
+        and math.copysign(1.0, value) * (toward - value) < 0.0
+    )
+
+    if flush_subnormals and (
+        magnitude < info.tiny or (magnitude == info.tiny and heads_toward_zero)
+    ):
+        # With the band compacted out of the ranking, zero and every subnormal share rank
+        # 0 and the smallest normal is rank 1 -- so one counted step is `tiny` both on the
+        # way out of the band and on the way into it. The boundary case matters: at
+        # exactly `tiny` the raw downward gap is the smallest *subnormal*, which
+        # understates the step by 2**mantissa_bits.
         return float(info.tiny)
 
     scalar = torch.tensor(magnitude, dtype=dtype)
-    step_is_downward = float(scalar) == info.max or (
-        toward is not None and math.isfinite(toward) and abs(toward) < magnitude
-    )
+    step_is_downward = float(scalar) == info.max or heads_toward_zero
     if step_is_downward:
         downward = torch.nextafter(scalar, torch.tensor(0.0, dtype=dtype))
         return float((scalar - downward).to(torch.float32))
@@ -462,6 +506,15 @@ def within_ulp(
     :data:`UNMEASURABLE` sentinel is never compared against a budget by hand. *mask*
     selects the lanes under judgement — pass one to exclude lanes an op's own edge rules
     have already settled.
+
+    **Omitting** *fmt* skips the format allowlist as well as the label, and asserts the
+    caller has already put the tensors on the lattice they mean. ``format_dict`` collapses
+    ``Bfp8_b``/``Bfp4_b``/every ``Mx*``/``Fp8_e4m3`` onto ``torch.bfloat16`` and ``Tf32``
+    onto ``torch.float32``, so an unnamed float32 tensor holding ``Tf32`` values is
+    measured on the float32 lattice and a one-step Tf32 error reads as ~8192 steps --
+    below ``MAX_MEANINGFUL_ULP[float32]``, so :func:`warn_if_threshold_unmeaningful` does
+    not catch it either. ``passed_test`` always threads its ``output_data_format`` through,
+    so the gate is never in that position; a direct caller over raw tensors is.
 
     Returns ``(ok, message)``; the message is worth logging on a pass too, which turns a
     functional test into an accuracy datapoint without changing its verdict.

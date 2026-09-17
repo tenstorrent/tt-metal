@@ -312,11 +312,12 @@ def test_within_ulp_passes_when_both_sides_are_nan():
 
 
 def test_within_ulp_mask_excludes_lanes_already_settled():
+    budget = 1
     golden = torch.tensor([1.0, 1.0], dtype=torch.float32)
     result = torch.tensor([1.0, 1000.0], dtype=torch.float32)
-    assert not within_ulp(golden, result, 1)[0]
+    assert not within_ulp(golden, result, budget)[0]
     mask = torch.tensor([True, False])
-    assert within_ulp(golden, result, 1, mask=mask)[0]
+    assert within_ulp(golden, result, budget, mask=mask)[0]
 
 
 def test_within_ulp_passes_when_every_lane_is_masked_out():
@@ -593,14 +594,21 @@ def test_flushing_is_a_no_op_for_the_formats_that_already_flush(dtype):
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+# ``pytest.approx`` defaults to ``abs=1e-12``, which is larger than every value in a
+# subnormal band -- so a bare ``approx(tiny)`` accepts any subnormal-scale number at all
+# and cannot fail. Every comparison at that scale below passes ``abs=0`` so the relative
+# tolerance is the only one in play; without it the flush-boundary test one section down
+# stayed green with its fix reverted.
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32], ids=str)
 def test_the_reported_step_inside_a_flushed_band_is_the_jump_to_the_normal(dtype):
     """With the band collapsed, one counted step out of zero lands on the smallest
     normal. Reporting the raw ``nextafter`` gap there understates it by
     ``2**mantissa_bits`` and contradicts the distance the same message prints."""
     tiny = float(torch.finfo(dtype).tiny)
-    assert local_step(0.0, dtype, flush_subnormals=True) == pytest.approx(tiny)
-    assert local_step(tiny / 4, dtype, flush_subnormals=True) == pytest.approx(tiny)
+    assert local_step(0.0, dtype, flush_subnormals=True) == pytest.approx(tiny, abs=0)
+    assert local_step(tiny / 4, dtype, flush_subnormals=True) == pytest.approx(
+        tiny, abs=0
+    )
     # Without the collapse it is the true gap, which is far smaller.
     assert local_step(tiny / 4, dtype, flush_subnormals=False) < tiny
 
@@ -608,13 +616,112 @@ def test_the_reported_step_inside_a_flushed_band_is_the_jump_to_the_normal(dtype
 def test_the_reported_step_for_fp16_near_zero_is_the_true_gap():
     """fp16 does not flush, so there is nothing to compact and the raw gap is correct."""
     smallest = 2.0**-24
-    assert local_step(smallest, torch.float16) == pytest.approx(smallest)
+    assert local_step(smallest, torch.float16) == pytest.approx(smallest, abs=0)
+
+
+@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32], ids=str)
+def test_the_step_into_a_flushed_band_is_the_jump_it_makes(dtype):
+    """The boundary the band check used to sit just outside of.
+
+    With the band collapsed, zero and every subnormal share rank 0 and the smallest normal
+    is rank 1 -- so one counted step at ``tiny`` heading *down* lands on zero and is worth
+    ``tiny``. The raw downward gap there is the smallest *subnormal*, which understates the
+    step by ``2**mantissa_bits`` and disagrees with the integer ranking that
+    ``test_flush_makes_smallest_normal_one_step_from_zero`` pins.
+    """
+    tiny = float(torch.finfo(dtype).tiny)
+    mantissa_bits = MANTISSA_BITS[dtype]
+
+    # Down from the smallest normal: one step, and it is the whole jump to zero.
+    assert int(ulp_distance(_t([tiny], dtype), _t([0.0], dtype))[0]) == 1
+    assert local_step(tiny, dtype, toward=0.0) == pytest.approx(tiny, abs=0)
+    # The raw gap, which is what it used to report.
+    assert local_step(tiny, dtype, toward=0.0, flush_subnormals=False) == pytest.approx(
+        tiny * 2.0**-mantissa_bits, abs=0
+    )
+    # Upward from the smallest normal is an ordinary normal-range step.
+    assert local_step(tiny, dtype, toward=2.0 * tiny) == pytest.approx(
+        tiny * 2.0**-mantissa_bits, abs=0
+    )
+    # And inside the band it stays the jump out, in either direction.
+    assert local_step(tiny / 4, dtype, toward=0.0) == pytest.approx(tiny, abs=0)
+    assert local_step(tiny / 4, dtype, toward=1.0) == pytest.approx(tiny, abs=0)
+
+
+def test_the_reported_step_is_taken_from_the_signed_direction_not_the_magnitude():
+    """``abs(toward) < magnitude`` loses the direction whenever the pair straddles zero.
+
+    ``1.0 -> -2.0`` has the larger magnitude on the far side, so a magnitude comparison
+    calls it upward -- but the first step out of ``1.0`` is downward, and the gap below a
+    power of two is half the one above it, so that names the wrong side of the boundary.
+    """
+    # Crossing zero: the path leaves 1.0 heading down, whatever |toward| is.
+    assert local_step(1.0, torch.bfloat16, toward=-2.0) == pytest.approx(2.0**-8)
+    assert local_step(1.0, torch.bfloat16, toward=-0.5) == pytest.approx(2.0**-8)
+    # A negative value is symmetric: "toward zero" means increasing, not decreasing.
+    assert local_step(-1.0, torch.bfloat16, toward=2.0) == pytest.approx(2.0**-8)
+    assert local_step(-1.0, torch.bfloat16, toward=-2.0) == pytest.approx(2.0**-7)
+    # Same sign, no crossing: unchanged.
+    assert local_step(1.0, torch.bfloat16, toward=0.5) == pytest.approx(2.0**-8)
+    assert local_step(1.0, torch.bfloat16, toward=2.0) == pytest.approx(2.0**-7)
+
+
+@pytest.mark.parametrize(
+    "dtype", [torch.float64, torch.int32, torch.bool], ids=lambda d: str(d)
+)
+def test_the_step_and_the_flush_default_refuse_a_dtype_the_metric_does_not_measure(
+    dtype,
+):
+    """``.get(dtype, True)`` invented an answer for a dtype ``ulp_distance`` refuses, and
+    ``True`` is the error-hiding polarity the table's comment warns about:
+    ``local_step(1.0, torch.float64)`` handed back ``2**-52``. ``local_step`` needs its own
+    guard as well, because an explicit ``flush_subnormals=`` skips the lookup entirely.
+    """
+    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+        ValueError, match="unsupported dtype"
+    ):
+        flushes_subnormals(dtype)
+    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+        ValueError, match="unsupported dtype"
+    ):
+        local_step(1.0, dtype)
+    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+        ValueError, match="unsupported dtype"
+    ):
+        local_step(1.0, dtype, flush_subnormals=True)
 
 
 def test_a_verdict_at_the_top_of_the_range_reports_a_finite_step():
     golden = _t([float(torch.finfo(torch.bfloat16).max)], torch.bfloat16)
     result = _step_down(float(torch.finfo(torch.bfloat16).max), torch.bfloat16)
     ok, message = within_ulp(golden, result, 0, fmt=DataFormat.Float16_b)
+    assert not ok
+    assert "1 ULP = inf" not in message
+
+
+@pytest.mark.parametrize("dtype", FLOAT_DTYPES, ids=str)
+def test_the_finfo_max_fixup_carries_its_own_weight(dtype):
+    """The test above does not reach the ``float(scalar) == info.max`` branch: its result
+    is smaller in magnitude, so the *direction* check already sends it downward and
+    deleting the ``info.max`` disjunct leaves it green.
+
+    Two cases that need the disjunct, over every dtype rather than bf16 only:
+
+    * no ``toward`` at all, where nothing else can choose a direction;
+    * ``+max`` against ``-max``, where the magnitudes are equal so the path does not head
+      toward zero, and the upward branch would report ``1 ULP = inf``.
+    """
+    largest = float(torch.finfo(dtype).max)
+    assert math.isfinite(local_step(largest, dtype))
+    assert math.isfinite(local_step(largest, dtype, toward=-largest))
+    # Same binade downward, so it is exactly the step below the largest finite.
+    expected = largest - float(_step_down(largest, dtype))
+    assert local_step(largest, dtype) == pytest.approx(expected)
+    assert local_step(largest, dtype, toward=-largest) == pytest.approx(expected)
+
+    golden = _t([largest], dtype)
+    result = _t([-largest], dtype)
+    ok, message = within_ulp(golden, result, 0)
     assert not ok
     assert "1 ULP = inf" not in message
 
@@ -686,11 +793,9 @@ def test_the_reported_step_below_a_power_of_two_is_the_gap_it_crossed():
     a result that stepped *down* across ``1.0`` would print ``1 ULP = 7.8125e-3`` for a
     step of ``3.90625e-3`` -- the asymmetry the integer count exists to avoid, reappearing
     in the diagnostic that sits next to it."""
-    below, above = 2.0**-3, 2.0**-2  # one bf16 step each side of 1/8 -> gaps differ 2x
     assert local_step(1.0, torch.bfloat16, toward=0.0) == pytest.approx(2.0**-8)
     assert local_step(1.0, torch.bfloat16, toward=2.0) == pytest.approx(2.0**-7)
     assert local_step(1.0, torch.bfloat16) == pytest.approx(2.0**-7)
-    assert below < above  # the binades the two gaps belong to
 
     golden = _t([1.0], torch.bfloat16)
     result = _step_down(1.0, torch.bfloat16)
