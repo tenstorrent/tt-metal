@@ -71,7 +71,7 @@ Any one of these means the op is not ready for an in-place Quasar uplift right n
 | CB index `tt::CBIndex::c_0` | named **DFB** `dfb::in0` + `DataflowBuffer` object |
 | buffer-address RTA + `TensorAccessorArgs<N>()` | bound **tensor parameter** `tensor::src` + `TensorAccessor(tensor::src)` |
 | positional `get_arg_val<uint32_t>(i)` | named `get_arg(args::name)` |
-| sync-free / DM self-loop scratch CB | **Scratchpad** / **LocalTensorAccessor** (Gen1 self-loop is legal; **Gen2 rejects a DM self-loop** — a uplift item, see §6) |
+| sync-free / DM self-loop scratch CB | **Scratchpad** / **LocalTensorAccessor** (Gen1 self-loop is legal; **Gen2 rejects a DM self-loop** — an uplift item, see §6) |
 | kernel `opt_level` (absent → O2 DM / O3 compute) | `KernelSpec::compiler_options.opt_level` — **carry the resolved legacy value verbatim** (§4) |
 
 Tokens (`dfb::`, `args::`, `tensor::`, `scratch::`) come from the `KernelSpec` bindings via `#include "experimental/kernel_args.h"`. This is all base-recipe material — see `metal2_port.md` / `migration_guide.md`.
