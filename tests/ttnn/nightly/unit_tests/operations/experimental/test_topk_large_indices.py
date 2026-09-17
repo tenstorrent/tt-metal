@@ -126,7 +126,12 @@ def test_topk_large_indices_random_bfloat16_ties_return_distinct_indices(device)
         (512, 2, 0),
         (512, 31, 0),
         (512, 32, 17),  # chunk id 31 and a partial final chunk
-        (512, 33, 0),  # first width that keeps the classic body for small K
+        (512, 33, 0),  # first width that runs segmented at K 512
+        (512, 64, 0),
+        (512, 65, 0),
+        (512, 129, 0),
+        (512, 256, 0),
+        (512, 257, 3),
         (1024, 1, 0),
         (1024, 31, 0),
         (1024, 32, 0),
@@ -156,6 +161,8 @@ def test_topk_large_indices_fused_segment_boundaries(device, k, num_chunks, tail
     "k,llk_k,num_chunks,tail_trim",
     [
         (512, 512, 32, 7),  # fused end-to-end: winners span all chunk stamps
+        (512, 512, 40, 7),  # segmented at K 512 with winners in both segments
+        (64, 512, 40, 7),  # small k on the same segmented body
         (768, 1024, 40, 7),  # snapped K: segmented mode and a multi-chunk partial final segment
         (2048, 2048, 40, 7),  # direct segmented mode with winners in both segments
     ],
@@ -171,20 +178,20 @@ def test_topk_large_indices_spread_winners_decode_global_indices(device, k, llk_
 def test_topk_large_indices_program_cache_separates_compute_body_modes(device):
     k = 512
     fused_input = _make_large_index_input(num_rows=1, n=32 * k, k=k)
-    classic_input = _make_large_index_input(num_rows=1, n=33 * k, k=k)
+    segmented_input = _make_large_index_input(num_rows=1, n=33 * k, k=k)
 
     device.enable_program_cache()
     device.clear_program_cache()
     try:
         fused = ttnn.experimental.topk_large_indices(_to_device(fused_input, device), k=k)
         entries_after_fused = device.num_program_cache_entries()
-        classic = ttnn.experimental.topk_large_indices(_to_device(classic_input, device), k=k)
-        entries_after_classic = device.num_program_cache_entries()
+        segmented = ttnn.experimental.topk_large_indices(_to_device(segmented_input, device), k=k)
+        entries_after_segmented = device.num_program_cache_entries()
 
         assert entries_after_fused > 0
-        assert entries_after_classic == entries_after_fused + 1
+        assert entries_after_segmented == entries_after_fused + 1
         _assert_topk_matches_torch(fused_input, fused, k)
-        _assert_topk_matches_torch(classic_input, classic, k)
+        _assert_topk_matches_torch(segmented_input, segmented, k)
     finally:
         device.clear_program_cache()
 
