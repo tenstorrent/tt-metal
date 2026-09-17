@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <memory>
+#include <string_view>
 
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/constants.hpp>
@@ -84,12 +85,9 @@ dspf2d::ControlGeometry control_geometry(const DispatchFabric2dParams& args, uin
 }
 
 L1Layout compute_l1_layout(
-    ttnn::MeshDevice* mesh,
-    uint32_t token_bytes,
-    uint32_t control_bytes,
-    uint32_t seq_len_per_chip,
-    uint32_t sem_floor,
-    bool fanout) {
+    ttnn::MeshDevice* mesh, uint32_t token_bytes, const dspf2d::ControlGeometry& g, uint32_t sem_floor) {
+    const bool fanout = g.fanout != 0u;
+    const uint32_t control_bytes = dspf2d::control_region_bytes(g);
     const uint32_t base =
         static_cast<uint32_t>(mesh->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1));
     L1Layout l;
@@ -112,16 +110,26 @@ L1Layout compute_l1_layout(
     // region is read straight out of DRAM.
     l.control = (l.mc_meta + meta_bytes + 63u) & ~63u;
     const uint32_t end = l.control + control_bytes;
+    // Naming every driver rather than one: the ring scales with the token page, while the control
+    // region's blocks divide between those that scale with the sequence and those that scale with the
+    // expert count and the ring extent, and which of them overflowed is not something the caller can
+    // infer from a single total.
     TT_FATAL(
         end <= sem_floor,
-        "dispatch_fabric2d: L1 layout needs {} B (ends at 0x{:x}) but the global-semaphore region starts at "
-        "0x{:x}. Reduce seq_len_per_chip ({}), whose routing index is {} B of it, or the token page ({} B).",
+        "dispatch_fabric2d: the L1 layout needs {} B, ending at 0x{:x}, but the global semaphores start at 0x{:x}. "
+        "The token ring is {} B of it at a {} B token page; the control region is {} B and grows with "
+        "seq_len_per_chip={}, num_routed_experts={}, extent={}, experts_per_chip={} and topk={}.",
         end - base,
         end,
         sem_floor,
-        seq_len_per_chip,
+        dspf2d::NUM_L1_SLOTS * (token_bytes + dspf2d::FORWARDING_METADATA_SIZE),
+        token_bytes,
         control_bytes,
-        token_bytes);
+        g.seq_len,
+        g.num_routed_experts,
+        g.extent,
+        g.experts_per_chip,
+        g.topk);
     return l;
 }
 
@@ -157,47 +165,52 @@ RingSemaphores allocate_ring_semaphores(ttnn::MeshDevice* mesh, const CoreRangeS
     return sems;
 }
 
-// Never initialised and never read back: pure staging for tokens passing through a chip. One page per
-// token, and the page is token + routing tail so a single fabric write lands both.
-struct ForwardingBuffer {
+// A device buffer the op allocates for itself, never initialises and never reads back on the host. The
+// workload holds the owner so it survives a program-cache hit, which is what lets the kernels address
+// it by a runtime argument the framework rewrites per dispatch.
+struct OwnedScratch {
     std::shared_ptr<ttnn::Tensor> owner;
     tt::tt_metal::Buffer* buffer = nullptr;
-    uint32_t pages_per_stream = 0;
 };
 
-ForwardingBuffer allocate_forwarding_buffer(
-    ttnn::MeshDevice* mesh, const DispatchFabric2dParams& args, uint32_t token_bytes, uint32_t extent) {
-    ForwardingBuffer fwd;
-    // Fan-out puts at most one page per token per direction through a region rather than one per
-    // (token, expert) pair per destination, so its bound is a different expression, not a scaling of
-    // the other. Loose by a whole chunk under the terminal rule, since the last of a stream's m chunks
-    // is identically empty -- deliberately not tightened: this bound is the only thing standing
-    // between a stream and its neighbour's slice of a shared tensor, and the kernel's own check of it
-    // is an ASSERT that is compiled out on this hardware.
-    fwd.pages_per_stream =
-        args.fanout
-            ? mc_fwd_pages_per_stream(extent, args.num_links, args.seq_len_per_chip)
-            : fwd_pages_per_stream(
-                  extent, args.num_links, args.seq_len_per_chip, args.num_experts_per_tok, args.experts_per_chip);
-    const uint32_t page_bytes = token_bytes + dspf2d::FORWARDING_METADATA_SIZE;
-    TT_FATAL(
-        page_bytes % 64 == 0, "dispatch_fabric2d: forwarding page {} B must be 64-byte aligned for DRAM", page_bytes);
-    const uint32_t pages = fwd.pages_per_stream * stream_count(args.num_links);
+// Typed UINT32 rather than by what the pages hold, so that a page is EXACTLY page_bytes rather than
+// that rounded up to an alignment: every one of these buffers is addressed by page index from a kernel
+// that computed the index itself, and a page wider than it thinks would shear the whole buffer.
+OwnedScratch allocate_scratch(
+    ttnn::MeshDevice* mesh, uint32_t num_pages, uint32_t page_bytes, std::string_view what) {
+    TT_FATAL(page_bytes % 64 == 0, "dispatch_fabric2d: {} page {} B must be 64-byte aligned for DRAM", what, page_bytes);
     const tt::tt_metal::TensorSpec spec(
-        ttnn::Shape({pages, page_bytes / static_cast<uint32_t>(sizeof(uint32_t))}),
+        ttnn::Shape({num_pages, page_bytes / static_cast<uint32_t>(sizeof(uint32_t))}),
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::UINT32,
             tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR),
             tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM}));
+    OwnedScratch scratch;
     // Throws if it does not fit DRAM, which IS the "verify it fits" check.
-    fwd.owner = std::make_shared<ttnn::Tensor>(create_device_tensor(spec, mesh));
-    fwd.buffer = fwd.owner->buffer();
+    scratch.owner = std::make_shared<ttnn::Tensor>(create_device_tensor(spec, mesh));
+    scratch.buffer = scratch.owner->buffer();
     TT_FATAL(
-        fwd.buffer->aligned_page_size() == page_bytes,
-        "dispatch_fabric2d: forwarding page is {} B after alignment but the op addresses it as {} B",
-        fwd.buffer->aligned_page_size(),
+        scratch.buffer->aligned_page_size() == page_bytes,
+        "dispatch_fabric2d: {} page is {} B after alignment but the op addresses it as {} B",
+        what,
+        scratch.buffer->aligned_page_size(),
         page_bytes);
-    return fwd;
+    return scratch;
+}
+
+// Pages one stream may put through its slice of the forwarding region.
+//
+// Fan-out puts at most one page per token per direction through a region rather than one per
+// (token, expert) pair per destination, so its bound is a different expression, not a scaling of the
+// other. Loose by a whole chunk under the terminal rule, since the last of a stream's m chunks is
+// identically empty -- deliberately not tightened: this bound is the only thing standing between a
+// stream and its neighbour's slice of a shared tensor, and the kernel's own check of it is an ASSERT
+// that is compiled out on this hardware.
+uint32_t fwd_pages_for(const DispatchFabric2dParams& args, uint32_t extent) {
+    return args.fanout ? mc_fwd_pages_per_stream(extent, args.num_links, args.seq_len_per_chip)
+                       : fwd_pages_per_stream(
+                             extent, args.num_links, args.seq_len_per_chip, args.num_experts_per_tok,
+                             args.experts_per_chip);
 }
 
 }  // namespace
@@ -230,10 +243,19 @@ tt::tt_metal::WorkloadDescriptor DispatchFabric2dProgramFactory::create_workload
     validate_chunk_agreement(extent, args.num_links);
     const auto placement = decide_placement(mesh, args.axis, args.num_links, args.worker_core_range_set);
     const auto sems = allocate_ring_semaphores(mesh, args.worker_core_range_set);
-    const auto fwd = allocate_forwarding_buffer(mesh, args, token_bytes, extent);
-    // Only under TILE. The row-major path allocates nothing and runs the program it always has.
+    // One page per token passing through a chip, and the page is token + routing tail so a single
+    // fabric write lands both.
+    const uint32_t fwd_pages = fwd_pages_for(args, extent);
+    const OwnedScratch fwd = allocate_scratch(
+        mesh,
+        fwd_pages * stream_count(args.num_links),
+        token_bytes + dspf2d::FORWARDING_METADATA_SIZE,
+        "forwarding");
+    // Only under TILE: where a tiled input's tokens end up, one row-major page each, so the stream
+    // cores address a token by page index exactly as they do a row-major input. The row-major path
+    // allocates nothing and runs the program it always has.
     const OwnedScratch staging =
-        tiled ? allocate_staging_buffer(mesh, args.seq_len_per_chip, token_bytes) : OwnedScratch{};
+        tiled ? allocate_scratch(mesh, args.seq_len_per_chip, token_bytes, "staging") : OwnedScratch{};
     const auto untilize = plan_untilize(
         tensor_args.input_tensor,
         tensor_return_value[0],
@@ -241,13 +263,7 @@ tt::tt_metal::WorkloadDescriptor DispatchFabric2dProgramFactory::create_workload
         token_bytes,
         static_cast<uint32_t>(sems.untilized.address()),
         staging.buffer);
-    const L1Layout l1 = compute_l1_layout(
-        mesh,
-        token_bytes,
-        dspf2d::control_region_bytes(control_geometry(args, extent)),
-        args.seq_len_per_chip,
-        sems.lowest_address(),
-        args.fanout);
+    const L1Layout l1 = compute_l1_layout(mesh, token_bytes, control_geometry(args, extent), sems.lowest_address());
 
     tt::tt_metal::Buffer* dram[dspf2d::ReaderRtArg::kCount] = {};
     // Under TILE the tokens reach the stream cores through staging, and the accessor arguments are
@@ -300,7 +316,7 @@ tt::tt_metal::WorkloadDescriptor DispatchFabric2dProgramFactory::create_workload
             KernelPlan plan;
             plan.stream = stream;
             plan.extent = extent;
-            plan.fwd_pages_per_stream = fwd.pages_per_stream;
+            plan.fwd_pages_per_stream = fwd_pages;
             plan.ring_filled_addr = static_cast<uint32_t>(sems.filled.address());
             plan.ring_freed_addr = static_cast<uint32_t>(sems.freed.address());
             plan.fwd_arrived_addr = static_cast<uint32_t>(sems.fwd_arrived.address());
