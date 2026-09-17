@@ -15,12 +15,15 @@ constexpr std::uint32_t reduce_args_offset = 1;
 constexpr std::uint32_t call_count = get_compile_time_arg_val(reduce_args_offset);
 constexpr std::uint32_t first_call_args_offset =
     reduce_args_offset + ttnn::kernel_lib::reduce_plan_args::call_count_word_count;
+#ifndef RUNTIME_ARG_OFFSET
+#define RUNTIME_ARG_OFFSET 0
+#endif
 
 static_assert(kernel_owned_arg == 17, "The reduce args must preserve the kernel-owned prefix");
 static_assert(call_count > 0, "A planned reduction sequence must contain at least one call");
 
 template <std::uint32_t CallIndex>
-using CallAt = ttnn::kernel_lib::ReduceCallAtT<first_call_args_offset, CallIndex>;
+using CallAt = ttnn::kernel_lib::ReduceCallAtT<first_call_args_offset, CallIndex, RUNTIME_ARG_OFFSET>;
 
 template <typename Call>
 constexpr std::uint32_t input_tile_count() {

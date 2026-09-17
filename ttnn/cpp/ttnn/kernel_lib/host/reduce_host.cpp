@@ -74,8 +74,14 @@ void validate_block(
                 shape.batches > 0 && shape.batches <= block.batches,
             "Reduce planner: exact tail shape must be nonzero and within the local block");
         TT_FATAL(
-            block.input_layout == Layout::TILE && block.output_layout == Layout::TILE && dim != ReduceOpDim::HW,
-            "Reduce planner: runtime tail shapes require a tiled W or H reduction");
+            block.input_layout == Layout::TILE && block.output_layout == Layout::TILE,
+            "Reduce planner: runtime tail shapes require tiled input and output");
+        TT_FATAL(
+            dim != ReduceOpDim::HW ||
+                (block.resident_input_tiles && block.batches == 1 && shape.batches == 1 &&
+                 block.logical_h % tile_h == 0 && shape.height % tile_h == 0 && shape.width == block.logical_w &&
+                 block.logical_w == block.padded_w && block.logical_w % tile_w == 0),
+            "Reduce planner: HW tails require resident whole tile rows at the full block width, in a single batch");
         TT_FATAL(
             block.input_tile == tt::tt_metal::Tile{} && block.output_tile == tt::tt_metal::Tile{},
             "Reduce planner: runtime tail masks require standard 32x32 input and output tiles");

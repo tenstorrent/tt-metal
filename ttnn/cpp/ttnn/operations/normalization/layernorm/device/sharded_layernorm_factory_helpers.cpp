@@ -1362,6 +1362,11 @@ void add_kernel_and_work_unit_specs(
     //----------------------------------------------------------------------
     auto compute_schema = [&](bool is_all_to_all_worker) {
         m2::KernelSpec::RuntimeArgSchema schema;
+        if (!c.reduce_tail_runtime_args.empty()) {
+            // ReduceCallArgs<0, 0> reads this shape directly. Named kernel
+            // arguments follow it and retain their generated accessors.
+            schema.runtime_arg_names = {"reduce_valid_height", "reduce_valid_width", "reduce_valid_batches"};
+        }
         schema.runtime_arg_names.push_back("num_reduce_tiles_per_block_h");
         if (is_all_to_all_worker) {
             schema.runtime_arg_names.push_back("num_rows_per_all_to_all_worker");
@@ -1736,6 +1741,16 @@ RunArgsAndWriterVarargs build_run_args(
         // Compute
         //------------------------------------------------------------------
         auto& compute = is_all_to_all ? compute_all_to_all : *compute_not_all_to_all;
+        if (!config.reduce_tail_runtime_args.empty()) {
+            const bool use_tail = idx.num_reduce_tiles_per_block_h < ctx.block_wt;
+            const auto& shape = config.reduce_tail_runtime_args;
+            m2::AddRuntimeArgsForNode(
+                compute.runtime_arg_values,
+                core,
+                {{"reduce_valid_height", use_tail ? shape[0] : 0},
+                 {"reduce_valid_width", use_tail ? shape[1] : 0},
+                 {"reduce_valid_batches", use_tail ? shape[2] : 0}});
+        }
         if (!config.use_welford && !config.is_post_all_gather) {
             const uint32_t last_tiles =
                 tt::div_up(ctx.logical_K, TILE_WIDTH) - (ctx.grid.num_blocks - 1) * ctx.block_wt;

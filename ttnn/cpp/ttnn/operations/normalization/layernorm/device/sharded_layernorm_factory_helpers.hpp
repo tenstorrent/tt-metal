@@ -314,6 +314,7 @@ struct SpecConfig {
     m2::ComputeHardwareConfig compute_hw;
 
     std::vector<uint32_t> reduce_compute_args;
+    std::vector<uint32_t> reduce_tail_runtime_args;
     std::vector<uint32_t> reduce_auxiliary_args;
     uint32_t reduce_auxiliary_tiles = 0;
     tt::DataFormat reduce_auxiliary_format = tt::DataFormat::Float16_b;

@@ -1420,6 +1420,7 @@ def test_reduce_runtime_tail_stream_wraps(device, dim, pool, algorithm, fp32_inp
 @pytest.mark.parametrize("use_tail", (False, True))
 def test_reduce_full_and_tail_average(device, dim, algorithm, scalar, use_tail):
     """Use the combined valid extent only when no explicit scalar is supplied."""
+    runtime_arg_offset = 4
     height, width = (65, 256) if dim == "REDUCE_ROW" else (256, 65)
     tail_height, tail_width = (65, 135) if dim == "REDUCE_ROW" else (135, 65)
     padded_h, padded_w = ((height + 31) // TILE) * TILE, ((width + 31) // TILE) * TILE
@@ -1496,8 +1497,13 @@ def test_reduce_full_and_tail_average(device, dim, algorithm, scalar, use_tail):
                     core_ranges=_single_core(),
                     compile_time_args=compute_args,
                     runtime_args=[
-                        (ttnn.CoreCoord(0, 0), sequence.calls[1].plan.get_runtime_shape_args(use_tail=use_tail))
+                        (
+                            ttnn.CoreCoord(0, 0),
+                            [999] * runtime_arg_offset
+                            + sequence.calls[1].plan.get_runtime_shape_args(use_tail=use_tail),
+                        )
                     ],
+                    defines=[("RUNTIME_ARG_OFFSET", str(runtime_arg_offset))],
                     config=ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True),
                 ),
             ],
@@ -1518,7 +1524,8 @@ def test_reduce_full_and_tail_average(device, dim, algorithm, scalar, use_tail):
         assert torch.all(lanes[65:] == 0)
 
 
-def test_reduce_runtime_tail_rebinds_both_algorithms(device):
+@pytest.mark.parametrize("runtime_arg_offset", [0, 7])
+def test_reduce_runtime_tail_rebinds_both_algorithms(device, runtime_arg_offset):
     """One call binds physical CBs for an auxiliary-free full path and a masked native tail."""
     block = _PLANNER.ReduceBlockSpec(
         32,
@@ -1578,7 +1585,13 @@ def test_reduce_runtime_tail_rebinds_both_algorithms(device):
                         kernel_source="tests/ttnn/unit_tests/kernel_lib/reduce/kernels/reduce_bound_tail.cpp",
                         core_ranges=_single_core(),
                         compile_time_args=compute_args,
-                        runtime_args=[(ttnn.CoreCoord(0, 0), plan.get_runtime_shape_args(use_tail))],
+                        runtime_args=[
+                            (
+                                ttnn.CoreCoord(0, 0),
+                                [999] * runtime_arg_offset + plan.get_runtime_shape_args(use_tail),
+                            )
+                        ],
+                        defines=[("RUNTIME_ARG_OFFSET", str(runtime_arg_offset))],
                         config=ttnn.ComputeConfigDescriptor(
                             math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True
                         ),
@@ -1593,6 +1606,78 @@ def test_reduce_runtime_tail_rebinds_both_algorithms(device):
             ),
         )
         torch.testing.assert_close(ttnn.to_torch(result)[:, 0], values.float().mean(-1), rtol=0.01, atol=0.01)
+
+
+@pytest.mark.parametrize("algorithm", ("REDUCE_TILE", "ACCUMULATE_VIA_ADD"))
+def test_reduce_resident_hw_row_tail(device, algorithm):
+    """A resident HW tail skips whole padded rows and uses its preplanned AVG divisor."""
+    block = _PLANNER.ReduceBlockSpec(
+        160,
+        64,
+        ttnn.bfloat16,
+        ttnn.float32,
+        resident_input_tiles=10,
+        resident_output_tiles=1,
+        tail=_PLANNER.ReduceTailConfig(_PLANNER.ReduceValidShape(64, 64)),
+    )
+    sequence = _PLANNER.make_reduce_sequence_plan(
+        reductions=[
+            (CB_INPUT, _PLANNER.ReduceCallConfig(block, _PLANNER.ReduceMath.AVG, _PLANNER.ReduceDimension.SCALAR))
+        ],
+        cb_ids=_PLANNER.ReduceSequenceCbIds(CB_SCALER, CB_ACCUMULATOR, CB_OUTPUT),
+        hardware=_PLANNER.ReduceHardwareConfig(
+            arch=device.arch(),
+            fp32_dest_acc_en=True,
+            dst_full_sync_en=False,
+            available_l1_bytes=ttnn.get_max_worker_l1_unreserved_size(),
+        ),
+        algorithm=_ALGORITHM[algorithm],
+    )
+    compute_args, auxiliary_args = _serialize_plan(sequence)
+    for use_tail in (False, True):
+        height = 64 if use_tail else 160
+        values = (torch.arange(height * 64).reshape(height, 64) % 7).to(torch.bfloat16)
+        physical = torch.full((160, 64), 128, dtype=torch.bfloat16)
+        physical[:height] = values
+        source = ttnn.from_torch(
+            physical, layout=ttnn.TILE_LAYOUT, device=device, memory_config=_sharded_memory_config(physical.shape)
+        )
+        output = ttnn.from_torch(
+            torch.zeros((32, 32)),
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=_sharded_memory_config((32, 32)),
+        )
+        result = ttnn.generic_op(
+            [source, output],
+            ttnn.ProgramDescriptor(
+                kernels=[
+                    ttnn.KernelDescriptor(
+                        kernel_source=PLAN_SEQUENCE_AUX_KERNEL,
+                        core_ranges=_single_core(),
+                        compile_time_args=auxiliary_args,
+                        config=ttnn.ReaderConfigDescriptor(),
+                    ),
+                    ttnn.KernelDescriptor(
+                        kernel_source=PLAN_SEQUENCE_KERNEL,
+                        core_ranges=_single_core(),
+                        compile_time_args=compute_args,
+                        runtime_args=[(ttnn.CoreCoord(0, 0), sequence.calls[0].plan.get_runtime_shape_args(use_tail))],
+                        config=ttnn.ComputeConfigDescriptor(
+                            math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True
+                        ),
+                    ),
+                ],
+                semaphores=[],
+                cbs=[
+                    ttnn.cb_descriptor_from_sharded_tensor(CB_INPUT, source),
+                    ttnn.cb_descriptor_from_sharded_tensor(CB_OUTPUT, output),
+                    _scratch_cb(CB_SCALER, ttnn.bfloat16, len(sequence.auxiliary.tiles)),
+                ],
+            ),
+        )
+        torch.testing.assert_close(ttnn.to_torch(result)[0, 0], values.float().mean(), rtol=0.01, atol=0.01)
 
 
 def test_reduce_plan_sequence_repeated_input_cb(device):

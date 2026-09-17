@@ -7,6 +7,7 @@
 #include <cstdint>
 
 #include "api/compile_time_args.h"
+#include "api/debug/assert.h"
 #include "llk_defs.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_plan_args_common.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_types.hpp"
@@ -49,6 +50,9 @@ struct ReduceRuntimeShape {
     std::uint32_t batches = 0;
 
     bool has_override() const { return height != 0 || width != 0 || batches != 0; }
+    bool matches(std::uint32_t h, std::uint32_t w, std::uint32_t b) const {
+        return height == h && width == w && batches == b;
+    }
 };
 
 // An empty recipe has no auxiliary binding. Preserve that absence rather than
@@ -127,14 +131,17 @@ public:
 /**
  * @brief Constexpr device view of one host-planned reduction call.
  *
- * Instances do not own storage. Every member is decoded from the kernel compile-time argument array, in the
- * same style as TensorAccessorArgs<CTA_OFFSET>. The descriptor is
+ * All fields are decoded from the kernel compile-time argument array, in the
+ * same style as TensorAccessorArgs<CTA_OFFSET>. RTA_OFFSET locates the planner's
+ * runtime argument section; serialized per-call offsets are relative to it.
+ * No descriptor instance is needed: reduce<Call>() reads the runtime arguments
+ * through the type when the planned call supports a tail. The descriptor is
  * self-contained: accumulation mode/index, partial mode, auxiliary slice,
  * algorithm, CB IDs, shape, input policy, and reconfiguration choices are all
  * call properties. In particular, partial_mode is authoritative; kernels must
  * not infer partial handling by examining the auxiliary tiles.
  */
-template <std::uint32_t CTA_OFFSET>
+template <std::uint32_t CTA_OFFSET, std::uint32_t RTA_OFFSET = 0>
 struct ReduceCallArgs {
 private:
     template <reduce_plan_args::CallWord FIELD>
@@ -202,14 +209,24 @@ public:
     static constexpr std::uint32_t rows = word<reduce_plan_args::CallWord::Rows>();
     static constexpr std::uint32_t columns = word<reduce_plan_args::CallWord::Columns>();
     static constexpr std::uint32_t batches = word<reduce_plan_args::CallWord::Batches>();
-    static constexpr std::uint32_t tail_runtime_arg_offset = word<reduce_plan_args::CallWord::TailRuntimeArgOffset>();
+    static constexpr std::uint32_t relative_tail_runtime_arg_offset =
+        word<reduce_plan_args::CallWord::TailRuntimeArgOffset>();
+    static_assert(
+        relative_tail_runtime_arg_offset == reduce_plan_args::no_runtime_arg ||
+            (RTA_OFFSET <= reduce_plan_args::no_runtime_arg - 3U &&
+             relative_tail_runtime_arg_offset <= reduce_plan_args::no_runtime_arg - 3U - RTA_OFFSET),
+        "Reduction runtime argument offset overflows the shape record");
+    static constexpr std::uint32_t tail_runtime_arg_offset =
+        relative_tail_runtime_arg_offset == reduce_plan_args::no_runtime_arg
+            ? reduce_plan_args::no_runtime_arg
+            : RTA_OFFSET + relative_tail_runtime_arg_offset;
     static constexpr bool has_tail_variant = reduce_plan_args::extract(
         configuration,
         reduce_plan_args::config::has_tail_variant_shift,
         reduce_plan_args::config::has_tail_variant_mask);
     static constexpr bool is_tail = reduce_plan_args::extract(
         configuration, reduce_plan_args::config::uses_tail_shape_shift, reduce_plan_args::config::uses_tail_shape_mask);
-    using Tail = ReduceCallArgs<CTA_OFFSET + reduce_plan_args::call_compile_time_arg_count()>;
+    using Tail = ReduceCallArgs<CTA_OFFSET + reduce_plan_args::call_compile_time_arg_count(), RTA_OFFSET>;
     // The descriptor carries both compile-time metadata and the location of
     // its per-core override. reduce<Call>() consumes this view internally.
     static ReduceRuntimeShape runtime_shape() {
@@ -220,6 +237,21 @@ public:
                 get_arg_val<std::uint32_t>(tail_runtime_arg_offset + 2)};
         } else {
             return {};
+        }
+    }
+    static bool use_tail() {
+        if constexpr (has_tail_variant) {
+            const auto override = runtime_shape();
+            const bool selected = override.has_override();
+            if constexpr (Tail::is_tail) {
+                const auto local =
+                    Tail::tail_runtime_arg_offset == tail_runtime_arg_offset ? override : Tail::runtime_shape();
+                ASSERT(
+                    selected ? local.matches(Tail::logical_h, Tail::logical_w, Tail::batches) : !local.has_override());
+            }
+            return selected;
+        } else {
+            return false;
         }
     }
     static constexpr std::uint32_t logical_h = word<reduce_plan_args::CallWord::LogicalHeight>();
@@ -303,8 +335,8 @@ constexpr std::uint32_t reduce_call_offset() {
     }
 }
 
-template <std::uint32_t FIRST_CALL_CTA_OFFSET, std::uint32_t CALL_INDEX>
-using ReduceCallAtT = ReduceCallArgs<reduce_call_offset<FIRST_CALL_CTA_OFFSET, CALL_INDEX>()>;
+template <std::uint32_t FIRST_CALL_CTA_OFFSET, std::uint32_t CALL_INDEX, std::uint32_t RTA_OFFSET = 0>
+using ReduceCallAtT = ReduceCallArgs<reduce_call_offset<FIRST_CALL_CTA_OFFSET, CALL_INDEX>(), RTA_OFFSET>;
 
 // Metal 2 assigns physical buffer IDs when resolving ProgramSpec bindings.
 // Such factories serialize dense, kernel-local logical IDs and bind them here

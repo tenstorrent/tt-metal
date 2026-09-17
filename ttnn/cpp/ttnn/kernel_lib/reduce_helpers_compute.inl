@@ -1750,7 +1750,11 @@ ALWI void reduce_planned_variant(PostReduceOp post_reduce_op) {
     [[maybe_unused]] uint32_t valid_w = Call::logical_w;
     [[maybe_unused]] uint32_t output_index = 0;
     if constexpr (Call::is_tail) {
-        static_assert(Call::reduce_dim != ReduceDim::REDUCE_SCALAR, "Runtime tail shapes require W or H reduction");
+        static_assert(
+            Call::reduce_dim != ReduceDim::REDUCE_SCALAR ||
+                (!should_pop(Call::input_policy) && Call::batches == 1 && Call::logical_h % 32 == 0 &&
+                 Call::logical_w == Call::columns * 32),
+            "HW tails require resident whole tile rows at the full width, in a single batch");
         shape = ReduceInputBlockShape::of((valid_h + 31) / 32, (valid_w + 31) / 32, Call::batches);
         if constexpr (!should_pop(Call::input_policy)) {
             constexpr uint32_t row_pitch = Call::row_stride == 0 ? Call::columns : Call::row_stride;
@@ -1865,16 +1869,8 @@ ALWI void reduce(PostReduceOp post_reduce_op) {
         // A single compiled call supports the whole grid. The override selects
         // traversal, masks, auxiliary slice and normalization together; no
         // core identity or separate kernel specialization is involved.
-        const bool use_tail = Call::runtime_shape().has_override();
         using Tail = typename Call::Tail;
-        if constexpr (Tail::is_tail) {
-            const auto local = Tail::runtime_shape();
-            ASSERT(
-                use_tail ? local.height == Tail::logical_h && local.width == Tail::logical_w &&
-                               local.batches == Tail::batches
-                         : !local.has_override());
-        }
-        if (use_tail) {
+        if (Call::use_tail()) {
             reduce_planned_variant<Tail>(post_reduce_op);
         } else {
             reduce_planned_variant<Call>(post_reduce_op);

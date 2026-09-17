@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
+#include <type_traits>
 
 #define BCAST_LLKOP EltwiseBinaryType::ELWMUL
 #define BCAST_DIM BroadcastType::COL
@@ -22,11 +23,10 @@
 #include "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/groupnorm_constants.hpp"
 #include "api/dataflow/dataflow_buffer.h"
 
-template <uint32_t Input, uint32_t Output>
+template <uint32_t Input, uint32_t Output, uint32_t RuntimeArgsOffset>
 ALWI void reduce_local_group(uint32_t rows) {
-    using Full = ttnn::kernel_lib::BoundReduceCallArgs<ttnn::kernel_lib::ReduceCallArgs<0>, Input, 2, Output>;
-    using Tail = ttnn::kernel_lib::
-        BoundReduceCallArgs<ttnn::kernel_lib::ReduceCallArgs<Full::next_compile_time_args_offset()>, Input, 2, Output>;
+    using Call =
+        ttnn::kernel_lib::BoundReduceCallArgs<ttnn::kernel_lib::ReduceCallArgs<0, RuntimeArgsOffset>, Input, 2, Output>;
     if (rows == 0) {
         DataflowBuffer output(Output);
         output.reserve_back(1);
@@ -39,19 +39,16 @@ ALWI void reduce_local_group(uint32_t rows) {
         pack_tile(0, Output);
         tile_regs_release();
         output.push_back(1);
-    } else if (rows == Full::rows) {
-        compute_kernel_lib::reduce<Full>();
     } else {
-        compute_kernel_lib::reduce<Tail>();
+        compute_kernel_lib::reduce<Call>();
     }
 }
 
 template <uint32_t Output>
 ALWI void reduce_global_group() {
-    using First = ttnn::kernel_lib::ReduceCallArgs<0>;
-    using Second = ttnn::kernel_lib::ReduceCallArgs<First::next_compile_time_args_offset()>;
+    using Local = ttnn::kernel_lib::ReduceCallArgs<0>;
     using Call = ttnn::kernel_lib::
-        BoundReduceCallArgs<ttnn::kernel_lib::ReduceCallArgs<Second::next_compile_time_args_offset()>, 10, 4, Output>;
+        BoundReduceCallArgs<ttnn::kernel_lib::ReduceCallArgs<Local::next_compile_time_args_offset()>, 10, 4, Output>;
     compute_kernel_lib::reduce<Call>();
 }
 
@@ -326,7 +323,7 @@ void kernel_main() {
             // Start Average Calc
             // Start Local Reduce
             dfb_input_mask.wait_front(mask_tiles_per_group);
-            for (uint32_t out_block_index = 0; out_block_index < num_out_blocks_padded; out_block_index++) {
+            auto average_block = [&](auto runtime_offset, uint32_t out_block_index) {
                 uint32_t out_block_h_actual;
                 if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
                     out_block_h_actual = out_block_h_last;
@@ -408,11 +405,17 @@ void kernel_main() {
 
                 // Partial/E[x]
                 dfb_x.wait_front(static_cast<uint16_t>(out_block_hw_normal));
-                reduce_local_group<dfb_x_id, dfb_ex_partial_id>(out_block_h_actual);
+                reduce_local_group<dfb_x_id, dfb_ex_partial_id, decltype(runtime_offset)::value>(out_block_h_actual);
                 dfb_x.pop_front(static_cast<uint16_t>(out_block_hw_normal));
 
                 dfb_ex_partial.wait_front(1);
+            };
+            // Each call site supplies its runtime-record offset as a template
+            // argument. reduce<Call>() alone interprets the record's shape.
+            for (uint32_t out_block_index = 0; out_block_index + 1 < num_out_blocks_padded; ++out_block_index) {
+                average_block(std::integral_constant<uint32_t, 0>{}, out_block_index);
             }
+            average_block(std::integral_constant<uint32_t, 3>{}, num_out_blocks_padded - 1);
             // End Local Redcue
             // Start Global Reduce
             if constexpr (is_mcast_sender) {
@@ -427,7 +430,7 @@ void kernel_main() {
 
             // Start Variance Calc
             // Start Local Reduce
-            for (uint32_t out_block_index = 0; out_block_index < num_out_blocks_padded; out_block_index++) {
+            auto variance_block = [&](auto runtime_offset, uint32_t out_block_index) {
                 uint32_t out_block_h_actual;
                 if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
                     out_block_h_actual = out_block_h_last;
@@ -556,9 +559,13 @@ void kernel_main() {
 
                 // Partial-Var(x)
                 dfb_xmm.wait_front(static_cast<uint16_t>(out_block_hw_normal));
-                reduce_local_group<dfb_xmm_id, dfb_ex2_partial_id>(out_block_h_actual);
+                reduce_local_group<dfb_xmm_id, dfb_ex2_partial_id, decltype(runtime_offset)::value>(out_block_h_actual);
                 dfb_xmm.pop_front(static_cast<uint16_t>(out_block_hw_normal));
+            };
+            for (uint32_t out_block_index = 0; out_block_index + 1 < num_out_blocks_padded; ++out_block_index) {
+                variance_block(std::integral_constant<uint32_t, 0>{}, out_block_index);
             }
+            variance_block(std::integral_constant<uint32_t, 3>{}, num_out_blocks_padded - 1);
             // End Local Reduce
             // Start Global Reduce
             if constexpr (is_mcast_sender) {

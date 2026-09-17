@@ -567,6 +567,50 @@ TEST(ReduceHostPlanner, TailAuxiliaryTilesParticipateInL1Budget) {
     EXPECT_NO_THROW(make_reduce_plan(block, ReduceOpMath::MAX, ReduceOpDim::W, 1.0F, ReduceFp32Mode::Fast, hardware));
 }
 
+TEST(ReduceHostPlanner, ResidentWholeRowHWTailsUseTheirOwnNormalization) {
+    using namespace tt::tt_metal;
+    using namespace ttnn::kernel_lib::host;
+    const ReduceHardwareConfig hardware{
+        .arch = tt::ARCH::WORMHOLE_B0, .fp32_dest_acc_en = true, .available_l1_bytes = 1U << 20};
+    auto block = ReduceBlockSpec::tiled(160, 64, DataType::BFLOAT16, DataType::FLOAT32);
+    block.resident_input_tiles = 10;
+    block.resident_output_tiles = 1;
+    block.tail = ReduceTailConfig{{64, 64, 1}};
+    for (const auto algorithm :
+         {compute_kernel_lib::ReduceAlgorithm::ReduceTile, compute_kernel_lib::ReduceAlgorithm::AccumulateViaAdd}) {
+        const auto sequence = make_reduce_sequence_plan(
+            {{0, {block, ReduceOpMath::AVG, ReduceOpDim::HW, std::nullopt, ReduceFp32Mode::Fast}}},
+            {1, 2, 16},
+            hardware,
+            algorithm);
+        const auto& full = sequence.calls[0].plan;
+        ASSERT_NE(full.tail_plan, nullptr);
+        const auto& tail = *full.tail_plan;
+        EXPECT_EQ(tail.logical_h, 64U);
+        EXPECT_EQ(tail.logical_w, 64U);
+        EXPECT_EQ(tail.Ht, full.Ht);
+        EXPECT_EQ(tail.partial_mode, compute_kernel_lib::ReducePartialMode::None);
+        if (algorithm == compute_kernel_lib::ReduceAlgorithm::ReduceTile) {
+            EXPECT_FLOAT_EQ(full.auxiliary_tiles[0].value, std::sqrt(1.0F / (160 * 64)));
+            EXPECT_FLOAT_EQ(tail.auxiliary_tiles[0].value, std::sqrt(1.0F / (64 * 64)));
+        } else {
+            EXPECT_EQ(full.reduce_factor, 160U * 64);
+            EXPECT_EQ(tail.reduce_factor, 64U * 64);
+        }
+    }
+    block.tail->shape.height = 63;
+    EXPECT_ANY_THROW(make_reduce_plan(block, ReduceOpMath::AVG, ReduceOpDim::HW, ReduceFp32Mode::Fast, hardware));
+    block.tail->shape = {64, 32, 1};
+    EXPECT_ANY_THROW(make_reduce_plan(block, ReduceOpMath::AVG, ReduceOpDim::HW, ReduceFp32Mode::Fast, hardware));
+    block.tail->shape = {64, 64, 1};
+    block.batches = 2;
+    block.resident_input_tiles = 20;
+    EXPECT_ANY_THROW(make_reduce_plan(block, ReduceOpMath::AVG, ReduceOpDim::HW, ReduceFp32Mode::Fast, hardware));
+    block.batches = 1;
+    block.resident_input_tiles.reset();
+    EXPECT_ANY_THROW(make_reduce_plan(block, ReduceOpMath::AVG, ReduceOpDim::HW, ReduceFp32Mode::Fast, hardware));
+}
+
 TEST(ReduceHostPlanner, TailPlanningRejectsUnsupportedMaskBackends) {
     using namespace tt::tt_metal;
     using namespace ttnn::kernel_lib::host;

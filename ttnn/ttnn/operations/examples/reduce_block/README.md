@@ -125,15 +125,34 @@ exposes its alternative. Streamed paths use a common padded packet geometry.
 Install that same compute kernel and compile-time arguments on the whole grid.
 Initialize its shape runtime slots on every core: `plan.get_runtime_shape_args(False)`
 returns `[0, 0, 0]` for full work, and `plan.get_runtime_shape_args()` returns the
-known tail shape for a tail core. The kernel calls `reduce<Call>()` once; the helper
-reads `Call::runtime_shape()` and selects traversal, masks and normalization
-internally. Changing which core is a tail requires only runtime arguments.
+known tail shape for a tail core. The kernel calls `reduce<Call>()` once;
+`ReduceCallArgs` reads and validates the override, and the helper selects
+traversal, masks and normalization internally. Changing which core is a tail
+requires only runtime arguments.
 Introducing a different tail geometry requires replanning its auxiliary recipe.
+
+`ReduceCallArgs<compile_time_offset, runtime_args_offset>` is a compile-time view.
+Both offsets are template parameters, and the kernel only calls `reduce<Call>()`.
+The runtime offset locates the planner's runtime argument section; offsets encoded
+in each call are relative to that section. It defaults to zero for existing callers.
+The helper reads the shape, validates it and selects the planned variant internally.
+No descriptor object or caller-side shape decoding is needed. For a single call
+starting at zero in both argument lists, use `ReduceCallArgs<0, 0>`.
+
+The sharded layernorm factory supplies each core's shape in that runtime section.
+Interleaved groupnorm supplies ordinary-block and final-block records; their call
+sites use the same compile-time record with runtime offsets 0 and 3 respectively.
+Without a planned tail, the descriptor reads no runtime shape arguments.
+
+Runtime tails support tiled W/H reductions with standard 32x32 tiles. HW tails
+also support a resident, single-batch block shortened by whole tile rows at its
+full width; partial HW masks and streamed HW tails remain unsupported.
 
 For accumulated calls, the full and tail scenarios each use their combined valid
 extent when AVG has no explicit scalar. All configured tail overrides in a sequence
 must select the same scenario. Calls with no shape change still switch normalization
-when another call becomes a tail. Auxiliary generation needs no runtime shape;
+when another call becomes a tail. `ReduceCallAtT<first_offset, call_index, runtime_args_offset>`
+propagates the runtime section offset across a sequence. Auxiliary generation needs no runtime shape;
 both constant recipes are prepared on all cores. Existing factories that install
 different compile-time specializations on distinct core ranges continue to do so.
 

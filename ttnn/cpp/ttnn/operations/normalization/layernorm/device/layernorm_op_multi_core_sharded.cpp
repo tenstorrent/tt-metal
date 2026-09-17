@@ -370,29 +370,32 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
             const uint32_t last_tiles = logical_tiles - (grid.num_blocks - 1) * block_wt;
             // The existing elementwise column mask also zeros output padding.
             // Describe full tiles here; the final shard can own fewer tiles.
-            for (uint32_t tiles : {block_wt, last_tiles}) {
-                auto block = rh::ReduceBlockSpec::tiled(block_ht * 32, tiles * 32, reduce_dtype, reduce_dtype);
-                block.resident_input_tiles = block_ht * block_wt;
-                block.input_row_stride_tiles = block_wt;
-                // Aligned additive reductions apply winv in compute and need no scaler tile.
-                block.allow_empty_auxiliary = true;
-                auto plan = rh::make_reduce_plan(
-                    block, ReduceOpMath::SUM, ReduceOpDim::W, winv, ReduceFp32Mode::Fast, hardware);
-                plan.reconfig_mode = compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT;
-                rh::ReduceCallPlan call{
-                    .input_cb_id = 0,
-                    .auxiliary_cb_id = 1,
-                    .auxiliary_tile_offset =
-                        plan.auxiliary_tiles.empty() ? 0 : static_cast<uint32_t>(local_auxiliary.tiles.size()),
-                    .output_cb_id = 2,
-                    .accumulator_cb_id = std::nullopt,
-                    .plan = plan};
-                rh::ReduceCallArgs(call).append_to(config.reduce_compute_args);
-                local_auxiliary.tiles.insert(
-                    local_auxiliary.tiles.end(), plan.auxiliary_tiles.begin(), plan.auxiliary_tiles.end());
-                if (const auto* auxiliary = plan.find_cb(rh::ReduceCbRole::Auxiliary)) {
-                    config.reduce_auxiliary_format = auxiliary->data_format;
-                }
+            auto block = rh::ReduceBlockSpec::tiled(block_ht * 32, block_wt * 32, reduce_dtype, reduce_dtype);
+            block.resident_input_tiles = block_ht * block_wt;
+            block.input_row_stride_tiles = block_wt;
+            if (last_tiles < block_wt) {
+                block.tail = rh::ReduceTailConfig{{block_ht * 32, last_tiles * 32, 1}};
+            }
+            // Aligned additive reductions apply winv in compute and need no scaler tile.
+            block.allow_empty_auxiliary = true;
+            auto plan =
+                rh::make_reduce_plan(block, ReduceOpMath::SUM, ReduceOpDim::W, winv, ReduceFp32Mode::Fast, hardware);
+            plan.reconfig_mode = compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT;
+            if (plan.tail_plan) {
+                plan.tail_plan->reconfig_mode = plan.reconfig_mode;
+                config.reduce_tail_runtime_args = plan.get_runtime_shape_args();
+            }
+            rh::ReduceCallPlan call{
+                .input_cb_id = 0,
+                .auxiliary_cb_id = 1,
+                .auxiliary_tile_offset = 0,
+                .output_cb_id = 2,
+                .accumulator_cb_id = std::nullopt,
+                .plan = plan};
+            rh::ReduceCallArgs(call).append_to(config.reduce_compute_args);
+            local_auxiliary.tiles = plan.auxiliary_tiles;
+            if (const auto* auxiliary = plan.find_cb(rh::ReduceCbRole::Auxiliary)) {
+                config.reduce_auxiliary_format = auxiliary->data_format;
             }
         }
         config.reduce_auxiliary_tiles = local_auxiliary.tiles.size();

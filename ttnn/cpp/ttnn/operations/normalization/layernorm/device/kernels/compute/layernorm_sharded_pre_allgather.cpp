@@ -20,18 +20,10 @@
 
 // SPLIT REDUCE across Cores
 template <uint32_t Input, uint32_t Auxiliary, uint32_t Output>
-ALWI void reduce_local_shard(uint32_t valid_tiles) {
-    using Full = ttnn::kernel_lib::BoundReduceCallArgs<ttnn::kernel_lib::ReduceCallArgs<0>, Input, Auxiliary, Output>;
-    using Tail = ttnn::kernel_lib::BoundReduceCallArgs<
-        ttnn::kernel_lib::ReduceCallArgs<Full::next_compile_time_args_offset()>,
-        Input,
-        Auxiliary,
-        Output>;
-    if (valid_tiles == Full::columns) {
-        compute_kernel_lib::reduce<Full>();
-    } else {
-        compute_kernel_lib::reduce<Tail>();
-    }
+ALWI void reduce_local_shard() {
+    using Call =
+        ttnn::kernel_lib::BoundReduceCallArgs<ttnn::kernel_lib::ReduceCallArgs<0, 0>, Input, Auxiliary, Output>;
+    compute_kernel_lib::reduce<Call>();
 }
 
 void kernel_main() {
@@ -45,9 +37,6 @@ void kernel_main() {
     constexpr auto num_tiles_per_block = get_arg(args::num_tiles_per_block);
     constexpr auto num_blocks_second_stage = get_arg(args::num_blocks_second_stage);
 
-    const uint32_t num_reduce_tiles_per_block_h = get_arg(
-        args::num_reduce_tiles_per_block_h);  // This value is the same for all cores, except ones that have
-                                              // padding tiles in it. In that case, skip reduce for padding tiles.
     // Only the cores that gather run the cross-core combine. They alone read its runtime arguments and
     // write its two possible destinations, so the distinction is a compile-time one and everything the
     // combine needs lives inside it.
@@ -142,7 +131,8 @@ void kernel_main() {
     dfb_in.wait_front(num_tiles_per_block);
     pack_reconfig_data_format(dfb_in_id, dfb_x2_id);
 #else
-    // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
+    // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup
+    // full-init behaviour) should become a targeted DST re-arm.
     compute_kernel_hw_startup(dfb_in_id, dfb_in_id, dfb_x2_id);
 #endif
 
@@ -181,12 +171,12 @@ void kernel_main() {
     dfb_x2.push_back(num_tiles_per_block);
     dfb_x2.wait_front(num_tiles_per_block);
     // E[x] over the masked input.
-    reduce_local_shard<dfb_x2_id, dfb_scaler_id, dfb_ex_partial2_id>(num_reduce_tiles_per_block_h);
+    reduce_local_shard<dfb_x2_id, dfb_scaler_id, dfb_ex_partial2_id>();
     dfb_x2.pop_front(num_tiles_per_block);
     reconfig_data_format(dfb_in_id, dfb_in_id);
 #else
     // E[x],
-    reduce_local_shard<dfb_in_id, dfb_scaler_id, dfb_ex_partial2_id>(num_reduce_tiles_per_block_h);
+    reduce_local_shard<dfb_in_id, dfb_scaler_id, dfb_ex_partial2_id>();
     reconfig_data_format(dfb_in_id, dfb_in_id);
 #endif  // DO_COL_MASK
 #else
@@ -241,7 +231,7 @@ void kernel_main() {
     dfb_x2.wait_front(num_tiles_per_block);
 
     // RMS E(x2) #Layernorm //E(x) and E(x^2)
-    reduce_local_shard<dfb_x2_id, dfb_scaler_id, dfb_ex_partial2_id>(num_reduce_tiles_per_block_h);
+    reduce_local_shard<dfb_x2_id, dfb_scaler_id, dfb_ex_partial2_id>();
     dfb_x2.pop_front(num_tiles_per_block);
 
     // global reduce, the combine destination <-- dfb_ex_external2_id, dfb_ex_partial2_id

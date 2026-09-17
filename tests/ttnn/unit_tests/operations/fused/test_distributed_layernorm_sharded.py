@@ -11,6 +11,7 @@ processed as chunks) on one device, and the all-gather is stood in for by reshar
 per-slice statistics onto a single core. No real multi-device execution or collective runs — only the
 on-device pre/post all-gather op path is exercised.
 """
+
 import ttnn
 import torch
 import pytest
@@ -604,7 +605,6 @@ def _run_simulated_distributed_norm_multi_core(device, is_rmsnorm, w, num_cores_
     num_cores = num_cores_w * num_cores_h
     shard_wt = math.ceil(w / num_cores / tile_width)  # tiles per shard
     shard_w = shard_wt * tile_width
-    physical_w = shard_w * num_cores  # logical w padded out to whole shards
 
     torch.manual_seed(0)
     torch_input_tensor = torch.normal(0.0, 1.0, size=(1, 1, 32, w), dtype=torch.bfloat16)
@@ -647,11 +647,10 @@ def _run_simulated_distributed_norm_multi_core(device, is_rmsnorm, w, num_cores_
     )
     tt_stats = ttnn.to_memory_config(tt_stats, memory_config=stats_sharded_config)
 
-    # Gamma is read as whole tiles per core, so it must span the full physical width; the columns beyond
-    # the logical width only ever multiply discarded padding, so their values do not matter.
-    torch_weight_padded = torch.nn.functional.pad(torch_weight, (0, physical_w - w))
+    # Gamma's padded width must match the tensor's tile-rounded width, which can
+    # be smaller than the combined shard allocations when the final shard is short.
     tt_weight = ttnn.from_torch(
-        torch_weight_padded,
+        torch_weight,
         layout=ttnn.TILE_LAYOUT,
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -675,7 +674,7 @@ def _run_simulated_distributed_norm_multi_core(device, is_rmsnorm, w, num_cores_
 
 
 @pytest.mark.parametrize("is_rmsnorm", [True, False], ids=["rmsnorm", "layernorm"])
-@pytest.mark.parametrize("w", [120, 240])
+@pytest.mark.parametrize("w", [120, 200, 240])
 @pytest.mark.parametrize("num_cores_w", [2])
 @pytest.mark.parametrize("eps", [1e-6])
 def test_simulated_distributed_norm_multi_core_non_tile_aligned_width(device, is_rmsnorm, w, num_cores_w, eps):

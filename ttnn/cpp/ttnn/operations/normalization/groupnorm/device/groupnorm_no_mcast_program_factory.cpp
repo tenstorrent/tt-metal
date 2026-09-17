@@ -1488,6 +1488,13 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
         for (size_t j = 0; j < group.size(); ++j) {
             CoreCoord core = group[j];
             CoreCoord virtual_core = virtual_group[j];
+            const bool first_group = equal_batches_per_core || (virtual_core.y <= last_row_with_extra_batch);
+            const auto& runtime_args =
+                first_group ? reduce_group_1.local_runtime_args : reduce_group_2.local_runtime_args;
+            if (!runtime_args.empty()) {
+                auto& compute = first_group ? compute_desc_g1 : compute_desc_g2;
+                compute.runtime_args.emplace_back(core, runtime_args);
+            }
             uint32_t in0_start_id = 0;
             uint32_t out_tile_start_id = 0;
             if (equal_batches_per_core || (virtual_core.y <= last_row_with_extra_batch)) {
@@ -1606,8 +1613,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
             }
             if (input_mask.has_value()) {
                 // Wrap on the set size, not the whole tensor: the row-masked set is an offset off this.
-                input_mask_tile_start_id =
-                    (input_mask_tile_start_id + input_mask_num_tiles_per_core) % mask_set_tiles;
+                input_mask_tile_start_id = (input_mask_tile_start_id + input_mask_num_tiles_per_core) % mask_set_tiles;
             }
         }
 

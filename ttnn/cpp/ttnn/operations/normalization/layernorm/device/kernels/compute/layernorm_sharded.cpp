@@ -21,18 +21,10 @@
 
 // SPLIT REDUCE across Cores
 template <uint32_t Input, uint32_t Auxiliary, uint32_t Output>
-ALWI void reduce_local_shard(uint32_t valid_tiles) {
-    using Full = ttnn::kernel_lib::BoundReduceCallArgs<ttnn::kernel_lib::ReduceCallArgs<0>, Input, Auxiliary, Output>;
-    using Tail = ttnn::kernel_lib::BoundReduceCallArgs<
-        ttnn::kernel_lib::ReduceCallArgs<Full::next_compile_time_args_offset()>,
-        Input,
-        Auxiliary,
-        Output>;
-    if (valid_tiles == Full::columns) {
-        compute_kernel_lib::reduce<Full>();
-    } else {
-        compute_kernel_lib::reduce<Tail>();
-    }
+ALWI void reduce_local_shard() {
+    using Call =
+        ttnn::kernel_lib::BoundReduceCallArgs<ttnn::kernel_lib::ReduceCallArgs<0, 0>, Input, Auxiliary, Output>;
+    compute_kernel_lib::reduce<Call>();
 }
 
 void kernel_main() {
@@ -71,9 +63,6 @@ void kernel_main() {
     constexpr bool is_allgather_worker = false;
 #endif
 
-    const uint32_t num_reduce_tiles_per_block_h = get_arg(
-        args::num_reduce_tiles_per_block_h);  // This value is the same for all cores, except ones that have
-                                              // padding tiles in it. In that case, skip reduce for padding tiles.
 #ifdef IS_ALLGATHER_WORKER
     const uint32_t num_tiles_per_allgather_worker = get_arg(args::num_rows_per_all_to_all_worker);
     const bool use_two_stage_reduce = get_arg(args::use_two_stage_reduce) == 1;
@@ -267,7 +256,7 @@ void kernel_main() {
     constexpr uint32_t dfb_ex_reduce_input = dfb_in_id;
 #endif
     // E[x],
-    reduce_local_shard<dfb_ex_reduce_input, dfb_scaler_id, dfb_ex_partial_id>(num_reduce_tiles_per_block_h);
+    reduce_local_shard<dfb_ex_reduce_input, dfb_scaler_id, dfb_ex_partial_id>();
 #ifdef DO_COL_MASK
     dfb_mask_scratch.pop_front(num_tiles_per_block);
 #endif
@@ -388,7 +377,7 @@ void kernel_main() {
     dfb_xmm2.wait_front(num_tiles_per_block);
 
     // Var(x)
-    reduce_local_shard<dfb_xmm2_id, dfb_scaler_id, dfb_ex_partial2_id>(num_reduce_tiles_per_block_h);
+    reduce_local_shard<dfb_xmm2_id, dfb_scaler_id, dfb_ex_partial2_id>();
     dfb_xmm2.pop_front(num_tiles_per_block);
 
     // global reduce, dfb_ex2_id <-- dfb_ex_external2_id, dfb_ex_partial2_id

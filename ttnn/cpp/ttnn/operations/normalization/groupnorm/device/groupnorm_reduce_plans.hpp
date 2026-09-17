@@ -7,12 +7,15 @@
 #include "ttnn/kernel_lib/host/reduce_host.hpp"
 #include "groupnorm_program_utils.hpp"
 #include "kernels/groupnorm_constants.hpp"
-#include <algorithm>
+#include <optional>
 
 namespace ttnn::prim {
 
 struct GroupNormReducePlans {
     std::vector<uint32_t> calls;
+    // Ordinary blocks use offset 0; the final block uses offset 3. Both
+    // offsets select the same compile-time call and its preplanned variants.
+    std::vector<uint32_t> local_runtime_args;
     ttnn::kernel_lib::host::ReduceAuxiliaryPlan local_auxiliary{2, {}};
     ttnn::kernel_lib::host::ReduceAuxiliaryPlan global_auxiliary{4, {}};
 
@@ -24,6 +27,8 @@ struct GroupNormReducePlans {
 
 // Local shapes describe masked tiles. HW reduction cannot mask both the row
 // and column padding, so group selection and spatial masks stay in compute.
+// Sharded callers use two independent local calls. Interleaved callers set
+// second_is_tail to describe a runtime alternative within one local call.
 inline GroupNormReducePlans make_groupnorm_reduce_plans(
     uint32_t first_rows,
     uint32_t first_columns,
@@ -36,7 +41,8 @@ inline GroupNormReducePlans make_groupnorm_reduce_plans(
     const ttnn::kernel_lib::host::ReduceHardwareConfig& hardware,
     compute_kernel_lib::ReduceInputPolicy second_policy = compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop,
     compute_kernel_lib::ReduceDataFormatReconfigMode first_native_reconfig =
-        compute_kernel_lib::ReduceDataFormatReconfigMode::NONE) {
+        compute_kernel_lib::ReduceDataFormatReconfigMode::NONE,
+    bool second_is_tail = false) {
     using namespace tt::tt_metal;
     namespace rh = ttnn::kernel_lib::host;
     GroupNormReducePlans result;
@@ -46,21 +52,31 @@ inline GroupNormReducePlans make_groupnorm_reduce_plans(
                       compute_kernel_lib::ReduceInputPolicy policy,
                       rh::ReduceAuxiliaryPlan& auxiliary,
                       compute_kernel_lib::ReduceDataFormatReconfigMode native_reconfig =
-                          compute_kernel_lib::ReduceDataFormatReconfigMode::NONE) {
-        auto plan = rh::make_reduce_plan(
-            rh::ReduceBlockSpec::tiled(rows * 32, columns * 32, dtype, dtype),
-            ReduceOpMath::SUM,
-            ReduceOpDim::HW,
-            scalar,
-            ReduceFp32Mode::Fast,
-            hardware);
-        plan.input_policy = policy;
+                          compute_kernel_lib::ReduceDataFormatReconfigMode::NONE,
+                      std::optional<uint32_t> tail_rows = std::nullopt) {
+        auto block = rh::ReduceBlockSpec::tiled(rows * 32, columns * 32, dtype, dtype);
+        if (tail_rows.has_value()) {
+            block.resident_input_tiles = rows * columns;
+            block.tail = rh::ReduceTailConfig{{*tail_rows * 32, columns * 32, 1}};
+        }
+        auto plan =
+            rh::make_reduce_plan(block, ReduceOpMath::SUM, ReduceOpDim::HW, scalar, ReduceFp32Mode::Fast, hardware);
         // Existing native calls retain caller-owned format state. The sharded
         // mean follows masking and must restore its reduction operands instead.
         // Add consumes two inputs instead of input/scaler and configures that pair.
-        plan.reconfig_mode = plan.algorithm == compute_kernel_lib::ReduceAlgorithm::ReduceTile
-                                 ? native_reconfig
-                                 : compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT;
+        auto configure = [&](rh::ReducePlan& variant) {
+            variant.input_policy = policy;
+            variant.reconfig_mode = variant.algorithm == compute_kernel_lib::ReduceAlgorithm::ReduceTile
+                                        ? native_reconfig
+                                        : compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT;
+        };
+        configure(plan);
+        if (plan.tail_plan) {
+            configure(*plan.tail_plan);
+            result.local_runtime_args = plan.get_runtime_shape_args(false);
+            const auto tail_args = plan.get_runtime_shape_args();
+            result.local_runtime_args.insert(result.local_runtime_args.end(), tail_args.begin(), tail_args.end());
+        }
         const rh::ReduceCallPlan call{
             .input_cb_id = 0,
             .auxiliary_cb_id = 1,
@@ -71,14 +87,20 @@ inline GroupNormReducePlans make_groupnorm_reduce_plans(
         rh::ReduceCallArgs(call).append_to(result.calls);
         auxiliary.tiles.insert(auxiliary.tiles.end(), plan.auxiliary_tiles.begin(), plan.auxiliary_tiles.end());
     };
+    TT_FATAL(
+        !second_is_tail || (second_rows <= first_rows && second_columns == first_columns),
+        "Groupnorm tail must use at most the full rows and the same width");
     append(
         first_rows,
         first_columns,
         local_scalar,
         compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop,
         result.local_auxiliary,
-        first_native_reconfig);
-    append(second_rows, second_columns, local_scalar, second_policy, result.local_auxiliary);
+        first_native_reconfig,
+        second_is_tail && second_rows < first_rows ? std::optional{second_rows} : std::nullopt);
+    if (!second_is_tail) {
+        append(second_rows, second_columns, local_scalar, second_policy, result.local_auxiliary);
+    }
     append(
         global_tiles,
         1,
@@ -112,18 +134,20 @@ inline GroupNormReducePlans make_interleaved_groupnorm_reduce_plans(
         (padded_blocks * num_cores * dfb_ex_external_slot_pitch_bytes + single_tile_size - 1) / single_tile_size;
     const float divisor =
         static_cast<float>(reduce_factor) * (pad.active ? static_cast<float>(pad.logical_hw) / pad.padded_hw : 1.0F);
-    // An empty final block emits a zero tile in compute; its unused descriptor
-    // must still describe a nonempty tensor.
+    // An empty final block emits a zero tile in compute and needs no tail plan.
     return make_groupnorm_reduce_plans(
         normal_rows,
         block_w,
-        std::max(1u, last_rows),
+        last_rows == 0 ? normal_rows : last_rows,
         block_w,
         global_tiles,
         1.0F / divisor,
         1.0F / num_cores,
         dtype,
-        hardware);
+        hardware,
+        compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop,
+        compute_kernel_lib::ReduceDataFormatReconfigMode::NONE,
+        true);
 }
 
 }  // namespace ttnn::prim

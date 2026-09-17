@@ -86,6 +86,9 @@
  * [0, 0, 0] chooses full work; the planned [height, width, batches] chooses tail
  * work, including its auxiliary slice and AVG normalization. The caller uses
  * the same call type and compiled kernel on all cores of the grid.
+ * ReduceCallArgs<CTA_OFFSET, RTA_OFFSET> supplies both argument-section offsets
+ * as template parameters. The helper reads and validates runtime geometry
+ * internally; the caller supplies only the Call type to reduce<Call>().
  *
  * call_count only bounds the walk. Never infer accumulation, final-call, or
  * partial-tile behavior from I: Call carries all of it explicitly. Calls may
