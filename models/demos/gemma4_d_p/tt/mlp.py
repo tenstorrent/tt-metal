@@ -21,13 +21,6 @@ class MLP:
         self.hidden_size = hf_config.hidden_size
         self.intermediate_size = hf_config.intermediate_size
 
-        # Load-bearing, not a tuning knob. ttnn only threads a matmul's activation into
-        # the program config when a user grid is given; with no grid it picks the simple
-        # config, which drops the activation and re-applies it as a standalone unary op
-        # -- exactly the pass the fused GELU below exists to remove. The grid also picks
-        # a better config in its own right: it is worth ~220us per layer here even
-        # before the fusion, and it is what makes L1 activations a win rather than a 4x
-        # loss. All three projections use it for that reason.
         grid = mesh_device.compute_with_storage_grid_size()
         self.core_grid = ttnn.CoreGrid(y=grid.y, x=grid.x)
 
@@ -89,18 +82,10 @@ class MLP:
 
     def __call__(self, hidden_states):
         """Apply column-parallel gate/up projections and row-parallel down projection."""
-        # All three intermediates are short-lived, deallocated in this call, and touch no
-        # SDPA input and no collective, so they are L1 candidates. Measured on the grid
-        # config below, L1 is faster for all three -- including `hidden`, down_proj's in0.
-        # The L1-interleaved-in0 penalty that layer.py documents is a property of the
-        # simple program config, not of matmul: it does not appear on this path.
+        # All three intermediates are short-lived, deallocated in this call, and
+        # touch no SDPA input and no collective, so they are L1 candidates.
         act_mc = prefill_short_lived_memcfg()
 
-        # GELU rides on the gate matmul as a fused kernel activation. On its own it is a
-        # full read and write of a [1024, 5376] tensor for one SFPU op per tile.
-        # "gelu_tanh" resolves to the same UnaryOpType that GeluVariant.Tanh selects, so
-        # this stays gelu_pytorch_tanh rather than the erf or LUT variant, and the result
-        # is bit-identical to the separate gelu at the same core_grid.
         gate = ttnn.linear(
             hidden_states,
             self.gate_proj,
@@ -116,15 +101,10 @@ class MLP:
             core_grid=self.core_grid,
             memory_config=act_mc,
         )
-        # mul takes its output config from the first input, so this only says out loud
-        # what `gate` already decided -- but it is what keeps the two in step if either
-        # side of the flag changes.
         hidden = ttnn.mul(gate, up, memory_config=act_mc)
         gate.deallocate(True)
         up.deallocate(True)
-        # The output must be DRAM ahead of ccl_allreduce -- an L1 activation clashes with
-        # the circular buffers the collective reserves -- and matmul would otherwise
-        # inherit L1 from `hidden`, so DRAM is explicit here.
+        # Pack output to DRAM ahead of ccl_allreduce.
         output = ttnn.linear(
             hidden,
             self.down_proj,
