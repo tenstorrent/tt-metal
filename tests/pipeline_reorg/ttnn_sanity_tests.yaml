@@ -348,17 +348,25 @@
 # ("LLK ttsim regression [sim_quasar_xl]"), including the xl runner: ubuntu-latest is
 # too small for a model e2e under the simulator.
 #
-# Starting set is deliberately two tests. setup-ttsim already exports
-# TT_METAL_SLOW_DISPATCH_MODE=1 for every sim_* SKU; it is kept inline so the cmd is
-# the same one that is run by hand. The ttsim leg in ttnn-sanity-tests-impl.yaml adds
-# `-n 4` via PYTEST_ADDOPTS, and ttsim-skip-list.yaml holds no quasar entries, so the
-# two pytest invocations run exactly as written.
+# Starting set is deliberately two tests, cheapest first: to_device is a graph-op
+# smoke test, so when it fails there is no point spending the resnet50 e2e run.
+#
+# `-n 0` runs both serially from the start. The ttsim leg in ttnn-sanity-tests-impl.yaml
+# exports `-n 4` through PYTEST_ADDOPTS; command-line args beat PYTEST_ADDOPTS, so -n 0
+# here wins. Under xdist the resnet50 leg reported only "worker 'gw1' crashed" and the
+# real simulator error (UnimplementedFunctionality: rv64_custom_2) showed up solely in
+# the impl's serial retry -- going serial up front makes the first failure the useful one
+# and halves the work.
+#
+# setup-ttsim already exports TT_METAL_SLOW_DISPATCH_MODE=1 for every sim_* SKU; it is
+# kept inline so the cmd is the same one that is run by hand. ttsim-skip-list.yaml holds
+# no quasar entries, so nothing is deselected here.
 - name: "ttnn quasar group"
   cmd: >-
-    TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="3,2" TT_METAL_SLOW_DISPATCH_MODE=1 RESNET_PCC_LOG=1
-    pytest -q models/demos/vision/classification/resnet50/quasar/tests/test_resnet50_e2e.py::test_resnet50_e2e[pretrained-device_params0]
-    && TT_METAL_SLOW_DISPATCH_MODE=1 MESH_DEVICE=N150
-    pytest -q models/experimental/llama32_1b_quasar/tests/graph_ops/test_to_device.py
+    TT_METAL_SLOW_DISPATCH_MODE=1 MESH_DEVICE=N150
+    pytest -q -n 0 models/experimental/llama32_1b_quasar/tests/graph_ops/test_to_device.py
+    && TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="3,2" TT_METAL_SLOW_DISPATCH_MODE=1 RESNET_PCC_LOG=1
+    pytest -q -n 0 models/demos/vision/classification/resnet50/quasar/tests/test_resnet50_e2e.py::test_resnet50_e2e[pretrained-device_params0]
   skus:
     sim_quasar_xl:
       timeout: 60
