@@ -47,7 +47,7 @@ struct SteadySegment {
 // converts on that node's tangent. Before a chip's first node, or the host's, its records have no place on the host
 // timeline.
 //
-// Reads never lock and never block the writer (ChunkedLog). A reader keeps a thread-local cursor on the segment it
+// Reads never lock and never block the writer (IndexedRing). A reader keeps a thread-local cursor on the segment it
 // last converted in and converts without touching shared state until a record leaves the segment. A series' cover
 // is the key up to which the newest node's tangent has been confirmed: a record at or before it converts against
 // frozen data on both sides.

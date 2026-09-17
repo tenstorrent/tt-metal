@@ -16,10 +16,10 @@
 namespace tt::tt_metal {
 
 /**
- * @brief Single-writer, multi-reader bounded log with lock-free reads by index.
+ * @brief Single-writer, multi-reader ring of the newest items, read by their append index without locks.
  *
  * One writer appends items, which get consecutive indices; any thread reads any retained item by index. Items live
- * in fixed chunks reached through a table, so an append never moves an item. A full log retires its oldest chunk
+ * in fixed chunks reached through a table, so an append never moves an item. A full ring retires its oldest chunk
  * and reuses it for the next items; the retained items are [first(), count()), and both only grow.
  *
  * A read is lock-free and never blocks the writer: it copies the item and then checks the chunk's sequence
@@ -33,8 +33,8 @@ namespace tt::tt_metal {
  * @tparam T Element type.
  */
 template <typename T>
-class ChunkedLog {
-    static_assert(std::is_trivially_copyable_v<T>, "ChunkedLog items are copied as atomic words");
+class IndexedRing {
+    static_assert(std::is_trivially_copyable_v<T>, "IndexedRing items are copied as atomic words");
 
 public:
     static constexpr uint64_t kChunkItems = 4096;
@@ -43,17 +43,17 @@ public:
      * @brief Constructs a log retaining at most @p capacity items.
      * @param capacity Rounded down to whole chunks, at least one chunk. Chunks are allocated as items reach them.
      */
-    explicit ChunkedLog(uint64_t capacity) :
+    explicit IndexedRing(uint64_t capacity) :
         chunks_(std::max<uint64_t>(1, capacity / kChunkItems)),
         table_(std::make_unique<std::atomic<Chunk*>[]>(chunks_)) {}
 
-    ~ChunkedLog() {
+    ~IndexedRing() {
         for (uint64_t k = 0; k < chunks_; k++) {
             delete table_[k].load(std::memory_order_relaxed);
         }
     }
-    ChunkedLog(const ChunkedLog&) = delete;
-    ChunkedLog& operator=(const ChunkedLog&) = delete;
+    IndexedRing(const IndexedRing&) = delete;
+    IndexedRing& operator=(const IndexedRing&) = delete;
 
     /** @brief The most items retained at once: whole chunks. */
     [[nodiscard]] uint64_t capacity() const noexcept { return chunks_ * kChunkItems; }

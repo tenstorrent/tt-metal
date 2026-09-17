@@ -15,7 +15,7 @@
 #include <x86intrin.h>
 #include <ctime>
 #include "impl/streaming_profiler/streaming_profiler_host_probe.hpp"
-#include "tt_metal/common/chunked_log.hpp"
+#include "tt_metal/common/indexed_ring.hpp"
 
 #include <condition_variable>
 #include <limits>
@@ -49,7 +49,7 @@ constexpr uint32_t kHostSeries = std::numeric_limits<uint32_t>::max();
 template <typename Key>
 struct Log {
     using Node = PlacementNode<Key>;
-    ChunkedLog<Node> nodes{PlacementMap::kSeriesNodes};
+    IndexedRing<Node> nodes{PlacementMap::kSeriesNodes};
     Key last_at = key_min<Key>();  // the writer's own copy
     alignas(64) std::atomic<Key> cover{key_min<Key>()};
     alignas(64) std::atomic<uint32_t> gen{0};
