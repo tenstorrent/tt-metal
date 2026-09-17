@@ -73,8 +73,8 @@ Receiver::Receiver(std::unique_ptr<Devices> relays, std::vector<CapturedDevice> 
         ctx_.devices.back().chip_id = dev.chip_id;
         ctx_.devices.back().clock = dev.clock;
     }
-    ctx_.links = relays_->links();
-    ctx_.root_dev = relays_->root_dev();
+    ctx_.links = relays_->sync().links();
+    ctx_.root_dev = relays_->sync().root_dev();
     ctx_.d2d_csv_path = MetalContext::instance(relays_->context_id()).rtoptions().get_streaming_profiler_d2d_csv_path();
     for (const auto& st : streams_) {
         streams_view_.push_back(
@@ -115,7 +115,7 @@ std::unique_ptr<Receiver> Receiver::create(const std::shared_ptr<distributed::Me
     }
     // Ordered after the ingest threads: the link syncs' armed producers stall without a live drain.
     receiver->relays_->release_eth_pushers();
-    receiver->relays_->run_link_sync();
+    receiver->relays_->sync().launch_links();
     return receiver;
 }
 
