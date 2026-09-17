@@ -427,18 +427,14 @@ void SyncPlots::wait_complete(std::chrono::milliseconds timeout) {
 }  // namespace tt::tt_metal::streaming_profiler
 
 namespace tt::tt_metal::experimental::streaming_profiler {
-namespace {
-double units_per_tsc() {
-    static const double u = 10.0 / tt::tt_metal::streaming_profiler::tsc_ticks_per_ns();
-    return u;
-}
-}  // namespace
 host_clock::time_point host_clock::now() noexcept { return from_tsc(tt::tt_metal::streaming_profiler::tsc_now()); }
 int64_t host_clock::tsc(time_point t) noexcept {
-    return std::llround(static_cast<double>(t.time_since_epoch().count()) / units_per_tsc());
+    return std::llround(
+        static_cast<double>(t.time_since_epoch().count()) / tt::tt_metal::streaming_profiler::units_per_tsc());
 }
 host_clock::time_point host_clock::from_tsc(int64_t ticks) noexcept {
-    return time_point(duration(std::llround(static_cast<double>(ticks) * units_per_tsc())));
+    return time_point(
+        duration(std::llround(static_cast<double>(ticks) * tt::tt_metal::streaming_profiler::units_per_tsc())));
 }
 }  // namespace tt::tt_metal::experimental::streaming_profiler
 
