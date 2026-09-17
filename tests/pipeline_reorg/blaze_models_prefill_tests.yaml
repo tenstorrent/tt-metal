@@ -1291,18 +1291,6 @@
       cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
     fi
     cd "${TT_METAL_HOME}"
-    # Traced prefill (#55085) on the 4-galaxy pipeline.
-    #
-    # READ BEFORE MERGING. Measured on a local quad (2026-09-11), 1M/205 chunks, sum of per-rank
-    # ms/chunk, with PCC passing 4/4 either way:
-    #   tp_sharded : untraced 2721.9 -> traced 2944.4 ms  (+8.2%, i.e. traced is SLOWER)
-    #   sp_only    : untraced 2141.0 -> traced 1866.9 ms  (-12.8%)
-    # The +8.2% reproduced three times (CI, and the quad at both 28 and 4 users). Since #56608 made
-    # tp_shard_kv a DERIVED property (mla.py: _has_indexer and tp_factor > 1), GLM-5.2 is now
-    # tp_sharded ALWAYS and the fast sp_only variant no longer exists -- so this line enables the
-    # configuration that measured slower, with no way to opt out. Keep it only to reproduce that
-    # measurement; fix the tp_shard traced path before treating it as an enablement.
-    export PREFILL_USE_TRACE=1
     exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm52
   test_type: prefill_runner_kv_pcc
   test_tags: [glm_5_2, runner, kv_cache]

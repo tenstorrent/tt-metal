@@ -36,14 +36,7 @@ case "${MODEL}" in
   glm52)
     export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/glm52_prefill_runner_kv}"
     MANIFEST="${MANIFEST_DIR}/glm52.json"
-    # Traced prefill for GLM-5.2 landed in #55085. Default stays UNTRACED; set PREFILL_USE_TRACE=1
-    # to measure it. The runner requires KV_ONLY_LAST_LAYER=1 (its default) when tracing: the
-    # LM-head tail calls synchronize_device(), which TT_FATALs inside begin_trace_capture.
-    # Anything the RANKS need belongs in RUNNER_ENV (or RUNNER_OVERRIDES), not in the caller's
-    # shell: ttrun's --mpi-args forward only PATH and LD_LIBRARY_PATH, so a plain export here is
-    # invisible to the ranks and the failure only shows up after ttrun has already spun up.
-    RUNNER_ENV="export TT_METAL_SHM_TRACKING_DISABLED=1; export LOGURU_LEVEL=ERROR; \
-        export PREFILL_USE_TRACE=${PREFILL_USE_TRACE:-0};"
+    RUNNER_ENV="export TT_METAL_SHM_TRACKING_DISABLED=1; export LOGURU_LEVEL=ERROR;"
     PRODUCER_ENV="export PREFILL_PRODUCER_MANIFEST='${MANIFEST}'; \
         export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/glm-traces/vllm-glm52-indexer-kcache-55k;"
     ;;
