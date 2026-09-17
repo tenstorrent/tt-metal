@@ -62,6 +62,15 @@ TEST(HashCollisionTest, CPU_OrderMatters) {
     EXPECT_NE(hash_shape({1, 2}), hash_shape({2, 1}));
 }
 
+TEST(HashCollisionTest, CPU_SequenceLengthPrefixMatters) {
+    // Sequences that differ only in length must hash differently; otherwise a shorter key can
+    // alias a longer one. This pair collides under an element-only fold of mix_into, so it
+    // specifically requires the size prefix in hash_sized_range.
+    const std::vector<uint64_t> shorter{0};
+    const std::vector<uint64_t> longer{0, 0x1ddf'57c6'84e2'3251ULL};
+    EXPECT_NE(hash_objects_with_default_seed(shorter), hash_objects_with_default_seed(longer));
+}
+
 // --- Determinism ---------------------------------------------------------------------------
 
 TEST(HashCollisionTest, CPU_Deterministic) {
