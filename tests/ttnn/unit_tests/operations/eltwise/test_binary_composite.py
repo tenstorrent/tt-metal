@@ -1388,15 +1388,16 @@ def test_clamped_silu_glu_limit_guard(device, expect_error, limit):
     ids=["explicit_DRAM", "unset_follows_input"],
 )
 def test_prelu_scalar_honours_memory_config(input_shapes, device, weight, requested_memcfg, expected_memcfg):
-    """The scalar prelu overloads must return in the requested memory config.
+    """Both scalar prelu overloads place the result where the caller asks.
 
-    Both dropped it: `output_mem_config` was commented out in the signature and
-    `prelu_sfpu` was called without it. The tensor-tensor overload directly below them
-    already threaded it, so only these two diverged.
+    An explicit `memory_config` controls the returned tensor's placement; an unset one
+    follows the input. The two cases are deliberately different configurations: the input
+    sits in L1 and DRAM is requested, so a config that is accepted but never applied is
+    distinguishable from one that is honoured. With matching configs the requested and
+    inherited values coincide and the assertion holds either way. The unset case pins the
+    default, which is a separate path and can regress on its own (#55359).
 
-    The input is placed in L1 with DRAM requested; with matching configs the inherited
-    and requested values coincide and the defect is invisible. The unset case pins the
-    existing default, which follows the input.
+    See #56835.
     """
     _, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
     input_tensor = ttnn.to_memory_config(input_tensor, ttnn.L1_MEMORY_CONFIG)
