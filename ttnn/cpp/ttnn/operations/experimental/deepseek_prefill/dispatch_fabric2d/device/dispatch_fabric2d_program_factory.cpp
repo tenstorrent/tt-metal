@@ -49,9 +49,7 @@ uint32_t token_size_bytes(const ttnn::Tensor& out_payload) {
     return static_cast<uint32_t>(out_payload.buffer()->aligned_page_size());
 }
 
-bool input_is_tiled(const DispatchFabric2dInputs& t) {
-    return t.input_tensor.layout() == tt::tt_metal::Layout::TILE;
-}
+bool input_is_tiled(const DispatchFabric2dInputs& t) { return t.input_tensor.layout() == tt::tt_metal::Layout::TILE; }
 
 std::vector<uint32_t> ring_chip_ids(ttnn::MeshDevice* mesh, const ttnn::MeshCoordinate& coord, uint32_t axis) {
     const uint32_t extent = static_cast<uint32_t>(mesh->shape()[static_cast<int32_t>(axis)]);
@@ -176,9 +174,9 @@ struct OwnedScratch {
 // Typed UINT32 rather than by what the pages hold, so that a page is EXACTLY page_bytes rather than
 // that rounded up to an alignment: every one of these buffers is addressed by page index from a kernel
 // that computed the index itself, and a page wider than it thinks would shear the whole buffer.
-OwnedScratch allocate_scratch(
-    ttnn::MeshDevice* mesh, uint32_t num_pages, uint32_t page_bytes, std::string_view what) {
-    TT_FATAL(page_bytes % 64 == 0, "dispatch_fabric2d: {} page {} B must be 64-byte aligned for DRAM", what, page_bytes);
+OwnedScratch allocate_scratch(ttnn::MeshDevice* mesh, uint32_t num_pages, uint32_t page_bytes, std::string_view what) {
+    TT_FATAL(
+        page_bytes % 64 == 0, "dispatch_fabric2d: {} page {} B must be 64-byte aligned for DRAM", what, page_bytes);
     const tt::tt_metal::TensorSpec spec(
         ttnn::Shape({num_pages, page_bytes / static_cast<uint32_t>(sizeof(uint32_t))}),
         tt::tt_metal::TensorLayout(
@@ -207,10 +205,10 @@ OwnedScratch allocate_scratch(
 // stream and its neighbour's slice of a shared tensor, and the kernel's own check of it is an ASSERT
 // that is compiled out on this hardware.
 uint32_t fwd_pages_for(const DispatchFabric2dParams& args, uint32_t extent) {
-    return args.fanout ? mc_fwd_pages_per_stream(extent, args.num_links, args.seq_len_per_chip)
-                       : fwd_pages_per_stream(
-                             extent, args.num_links, args.seq_len_per_chip, args.num_experts_per_tok,
-                             args.experts_per_chip);
+    return args.fanout
+               ? mc_fwd_pages_per_stream(extent, args.num_links, args.seq_len_per_chip)
+               : fwd_pages_per_stream(
+                     extent, args.num_links, args.seq_len_per_chip, args.num_experts_per_tok, args.experts_per_chip);
 }
 
 }  // namespace
@@ -229,6 +227,17 @@ tt::tt_metal::WorkloadDescriptor DispatchFabric2dProgramFactory::create_workload
         "dispatch_fabric2d: metadata page is {} B but the last hop writes {} B into it",
         meta_bytes,
         dspf2d::METADATA_WIRE_BYTES);
+    // A forwarded packet is the token plus its 64-byte routing tail, and a terminal delivery the token
+    // plus 16 metadata bytes; the tail is the larger, so it is the bound the fabric has to admit. A
+    // payload the cap does not admit is not rejected: a channel slot is exactly one header plus the
+    // cap, so the bytes past it land in the next slot, on top of a packet that has not gone out.
+    TT_FATAL(
+        token_bytes + dspf2d::FWD_EXTRA_BYTES <= tt::tt_fabric::get_tt_fabric_max_payload_size_bytes(),
+        "dispatch_fabric2d: token page {} B + {} B routing tail exceeds the fabric max payload {}. Increase "
+        "max_packet_payload_size_bytes in FabricRouterConfig.",
+        token_bytes,
+        dspf2d::FWD_EXTRA_BYTES,
+        tt::tt_fabric::get_tt_fabric_max_payload_size_bytes());
     const bool tiled = input_is_tiled(tensor_args);
     if (!tiled) {
         // The row-major path reads tokens straight out of the input, so the two pages have to be the
@@ -247,10 +256,7 @@ tt::tt_metal::WorkloadDescriptor DispatchFabric2dProgramFactory::create_workload
     // fabric write lands both.
     const uint32_t fwd_pages = fwd_pages_for(args, extent);
     const OwnedScratch fwd = allocate_scratch(
-        mesh,
-        fwd_pages * stream_count(args.num_links),
-        token_bytes + dspf2d::FORWARDING_METADATA_SIZE,
-        "forwarding");
+        mesh, fwd_pages * stream_count(args.num_links), token_bytes + dspf2d::FORWARDING_METADATA_SIZE, "forwarding");
     // Only under TILE: where a tiled input's tokens end up, one row-major page each, so the stream
     // cores address a token by page index exactly as they do a row-major input. The row-major path
     // allocates nothing and runs the program it always has.
@@ -337,7 +343,7 @@ tt::tt_metal::WorkloadDescriptor DispatchFabric2dProgramFactory::create_workload
             snd.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
             snd.core_ranges = CoreRangeSet(CoreRange(self.worker_logical));
             snd.compile_time_args =
-                dspf2d::SenderCtArgs(token_bytes, meta_bytes, self, downstream, l1, plan, args.fanout).to_ct_word_arr();
+                dspf2d::SenderCtArgs(token_bytes, self, downstream, l1, plan, args.fanout).to_ct_word_arr();
             snd.config = tt::tt_metal::DataMovementConfigDescriptor{
                 .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
                 // NOC_1 routes -Y first, so a worker one row from its eth core reaches it in a single hop.
@@ -382,7 +388,6 @@ tt::tt_metal::WorkloadDescriptor DispatchFabric2dProgramFactory::create_workload
             rdr.compile_time_args = dspf2d::ReaderCtArgs(
                                         args,
                                         token_bytes,
-                                        meta_bytes,
                                         linearized,
                                         row,
                                         static_cast<uint32_t>(mesh->get_fabric_node_id(coord).chip_id),
@@ -407,7 +412,35 @@ tt::tt_metal::WorkloadDescriptor DispatchFabric2dProgramFactory::create_workload
                 rdr_rt.push_back(dram[i]);
             }
             rdr.emplace_runtime_args(self.worker_logical, rdr_rt);
+
+            // The three compute RISCs of the same core take three of the four lanes of the routing-index
+            // build. They get the reader's compile-time arguments verbatim: the pass they run is the
+            // reader's own code, carving the same control region from the same constants. The vector
+            // carries per-core words the pass never reads, so the JIT builds one TRISC binary per
+            // stream core rather than per chip; a cold cache pays that once. No runtime args: nothing
+            // they touch is an allocation.
+            tt::tt_metal::KernelDescriptor pro;
+            pro.kernel_source =
+                "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/dispatch_fabric2d/device/kernels/compute/"
+                "prologue_lane_dispatch_fabric2d.cpp";
+            pro.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
+            pro.core_ranges = CoreRangeSet(CoreRange(self.worker_logical));
+            pro.compile_time_args = rdr.compile_time_args;
+            pro.config = tt::tt_metal::ComputeConfigDescriptor{};
             desc.kernels.push_back(std::move(rdr));
+            desc.kernels.push_back(std::move(pro));
+
+            // The words the four lanes hand off on. Program semaphores rather than words in the op's
+            // own L1: the runtime writes the initial value on every launch, so a lane can never take
+            // what a previous launch -- or an aborted one -- left behind for a signal.
+            for (uint32_t id = 0; id < dspf2d::PROLOGUE_SEMAPHORES; id++) {
+                desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
+                    .id = id,
+                    .core_type = tt::CoreType::WORKER,
+                    .core_ranges = CoreRangeSet(CoreRange(self.worker_logical)),
+                    .initial_value = 0,
+                });
+            }
 
             std::vector<uint32_t> snd_rt{1u};  // num_connections
             tt::tt_fabric::append_routing_plane_connection_manager_rt_args(

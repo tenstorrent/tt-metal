@@ -86,6 +86,24 @@ constexpr uint32_t META_PAD_STRIDE = 64;
 // Words per assignment in the reader's assignment block: [dst_chip_id, dst_row, split_idx, split_count].
 constexpr uint32_t ASSIGNMENT_WORDS = 4;
 
+// The RISCs of one stream core that build the routing index together, one contiguous slice of the
+// tokens each: the reader, and the three compute RISCs the op has no tile math for. Pinned by the
+// core, not tunable: the compute kernel is built once per TRISC and maps each build to one lane, and
+// a lane nobody runs would leave the reader waiting forever. The sender is not a lane: it would need
+// the reader's whole geometry in its own arguments for a fifth of the work.
+enum PrologueLane : uint32_t { kLaneReader, kLaneUnpack, kLaneMath, kLanePack, kLaneCount };
+constexpr uint32_t PROLOGUE_LANES = kLaneCount;
+
+// Program semaphores the lanes hand off on, initialised to zero by the runtime on EVERY launch, which
+// is what a word in op-private L1 can never promise. tables_ready goes to 1 when the reader has built
+// the tables the lanes read; each lane's own semaphore goes to 1 after its count pass and 2 after its
+// fill pass.
+constexpr uint32_t kSemTablesReady = 0;
+constexpr uint32_t prologue_lane_sem(uint32_t lane) { return 1u + lane; }
+constexpr uint32_t PROLOGUE_SEMAPHORES = 1u + PROLOGUE_LANES;
+constexpr uint32_t kLaneCounted = 1;
+constexpr uint32_t kLaneFilled = 2;
+
 // Ring slot = token + routing tail. 64 keeps the slot stride DRAM-aligned (14336 + 64 = 64 * 225), which
 // lets a fabric write target a (token_size + 64)-byte forwarding page directly.
 constexpr uint32_t FORWARDING_METADATA_SIZE = 64;
@@ -100,11 +118,15 @@ constexpr uint32_t FORWARDING_METADATA_SIZE = 64;
 // Dispatch writes each token to TWO tensors at one page index, so both destination addresses travel with
 // it; combine needs only one. All uint64_t so a sender needs no sub-word loads.
 struct FwdMetadata {
-    // First, because the last hop sends these words straight out of the slot to the metadata page and a
-    // fabric write's L1 source has to be aligned. The tail starts at slot_base + token_size, and a token
-    // page is 64-byte aligned, so offset 0 of the tail is the only place in it that is.
+    // First, because the last hop sends the token and these words as ONE scatter packet straight out of
+    // the slot: the token is the first chunk, and the second chunk begins at the byte after it, which is
+    // this field. Anything placed before it would go to the metadata page instead. The token size is a
+    // multiple of the 16-byte NoC write alignment, which is what keeps that second chunk's source aligned
+    // with the metadata page it lands on.
     uint32_t meta[3];             // (src chip, token index, top-k slot), the metadata this token carries
-    uint32_t pad;                 // makes the addresses below 8-byte aligned
+    // Makes the addresses below 8-byte aligned, and travels: it is the fourth word of the 16 the last
+    // hop writes to the metadata page, so whoever fills a slot zeroes it once.
+    uint32_t pad;
     uint64_t final_payload_addr;  // token page address on the FINAL destination chip
     uint64_t final_meta_addr;     // metadata page address on that same chip
     uint64_t dst_chip;            // final destination chip id
@@ -148,8 +170,8 @@ static_assert(FO_PAGE_BITS + FO_HOP_BITS + FO_SLOT_BITS <= 32);
 // corrupt a page, it routes the token to another chip.
 constexpr uint32_t ES_SLOT_BITS = 16;  // bucket index, extent * experts_per_chip of them
 constexpr uint32_t ES_SLOT_MASK = (1u << ES_SLOT_BITS) - 1u;
-constexpr uint32_t ES_LOCAL_BIT = 1u << ES_SLOT_BITS;           // the expert lives on this chip
-constexpr uint32_t ES_DIR_SHIFT = ES_SLOT_BITS + 1u;            // 0 clockwise, 1 counter-clockwise
+constexpr uint32_t ES_LOCAL_BIT = 1u << ES_SLOT_BITS;  // the expert lives on this chip
+constexpr uint32_t ES_DIR_SHIFT = ES_SLOT_BITS + 1u;   // 0 clockwise, 1 counter-clockwise
 constexpr uint32_t ES_DIR_BIT = 1u << ES_DIR_SHIFT;
 constexpr uint32_t ES_HOP_FIELD = FO_HOP_MASK << FO_HOP_SHIFT;  // hops away, in FanoutMetadata position
 // An expert of another dispatch group. Distinguishable from any live word because the fields above
@@ -239,18 +261,18 @@ static_assert(sizeof(FanoutDelivery) == 24);
 
 // Prebuilt packet headers a ring slot needs. A header is read out of L1 asynchronously while the next
 // send is being built, so every packet in flight from one slot needs its own or the one still going
-// out is torn. Index 0 is the forward, or the payload of a unicast last hop; index 1 is the metadata
-// beside it and goes unused under fan-out. From FO_FIRST_DELIVERY_HDR the headers come in pairs, one
-// pair per destination a fan-out slot delivers into the next chip -- and that slot may still forward,
-// so the pairs cannot reuse index 0.
+// out is torn. Index 0 is the forward, or the one packet of a unicast last hop, and the only header
+// unicast needs. Under fan-out, from FO_FIRST_DELIVERY_HDR there is one more per destination a slot
+// delivers into the next chip -- and that slot may still forward, so they cannot reuse index 0.
 //
 // The host reserves the pool from this same expression. A pool shorter than the kernel's stride puts
 // the last slots' headers on top of what follows, which under fan-out is the delivery records those
 // very sends read their addresses from.
-constexpr uint32_t FO_FIRST_DELIVERY_HDR = 2;
-constexpr uint32_t headers_per_slot(bool fanout) { return fanout ? FO_FIRST_DELIVERY_HDR + 2u * FO_MAX_DESTS : 2u; }
-// The highest index deliver_remotely can reach, against what the pool provides.
-static_assert(FO_FIRST_DELIVERY_HDR + 2u * (FO_MAX_DESTS - 1u) + 1u < headers_per_slot(true));
+constexpr uint32_t FO_FIRST_DELIVERY_HDR = 1;
+constexpr uint32_t headers_per_slot(bool fanout) { return fanout ? FO_FIRST_DELIVERY_HDR + FO_MAX_DESTS : 1u; }
+// Pins headers_per_slot's body to the index deliver_remotely forms, FO_FIRST_DELIVERY_HDR + i. The
+// runtime bound on i is staged_count in the sender, which clamps the tail's counts to FO_MAX_DESTS.
+static_assert(FO_FIRST_DELIVERY_HDR + (FO_MAX_DESTS - 1u) < headers_per_slot(true));
 
 // Asserted so that whoever changes this layout has to acknowledge they need some other means of ensuring
 // every device runs kernels built from the same metadata format.
@@ -274,7 +296,7 @@ constexpr uint64_t CMD_FORWARD = 2;      // push one page further along the stre
 constexpr uint64_t CMD_FORWARD_END = 3;  // as CMD_FORWARD, and the last page of its chunk
 // Fan-out only: nothing is left past the chip across the cable, so no PAGE is forwarded. The slot's
 // staged deliveries still go out, up to FO_MAX_DESTS of them aimed at that chip's output pages and
-// two fabric packets each -- so this is not a silent slot, and the counts in the tail rather than
+// one scatter packet each -- so this is not a silent slot, and the counts in the tail rather than
 // this command say what it sends. The slot still has to travel the ring in order, since handing it
 // back would reorder the sender's view of it.
 constexpr uint64_t CMD_NO_FORWARD = 4;
@@ -317,7 +339,7 @@ constexpr uint32_t MC_MAX_HOPS = (1u << FO_HOP_BITS);
 // any extent this op runs on.
 constexpr uint32_t mc_reach_row_bytes(uint32_t ring_extent) { return (mc_reach_hops(ring_extent) * 4u + 63u) & ~63u; }
 
-// --- The reader's L1 control region -------------------------------------------------------------
+// --- The stream core's L1 control region --------------------------------------------------------
 //
 // One ordered list of blocks, sized here and nowhere else. The host reserves the sum and the kernel
 // carves the offsets, and a mismatch between those two overruns into the global semaphores with no
@@ -333,7 +355,6 @@ enum ControlBlock : uint32_t {
     kCbAlloc,
     kCbChipExperts,
     kCbRowFill,
-    kCbBucketFill,
     kCbBucketStart,
     kCbEntries,
     kCbMcEntries,
@@ -342,8 +363,15 @@ enum ControlBlock : uint32_t {
     kCbPadding,
     kCbInStart,
     kCbOutStart,
+    // Per prologue lane: routed picks per bucket in its token slice, its page and entry cursors, and
+    // the fan-out entries it wrote per direction. Written by that lane; its counts are read by the
+    // later lanes and the reader after the exchange, its cursors are its own.
+    kCbLane,
     kCbCount
 };
+
+// Words one lane owns in kCbLane: cnt, next_page, next_entry (one per bucket slot each), then mc_n[2].
+constexpr uint32_t prologue_lane_words(uint32_t bucket_slots) { return 3u * bucket_slots + 2u; }
 
 struct ControlGeometry {
     uint32_t seq_len = 0;
@@ -369,10 +397,11 @@ constexpr uint32_t control_chunk_start_slots(const ControlGeometry& g) {
 }
 
 // One destination's metadata words, padded so the next one starts aligned as well. A NoC write needs
-// its L1 source to agree with its destination modulo the transfer's alignment, and the metadata page
-// it lands on is 16-byte aligned: at four bare words the source sits wherever the blocks above happen
-// to leave it, and a write from an odd offset arrives rotated -- (src, token, slot) reads back as
-// (junk, src, token).
+// its L1 source to agree with its destination modulo the transfer's alignment, and both destinations
+// these words have -- the metadata page of a local delivery, the byte after the token in a fabric
+// channel buffer for a remote one -- are 16-byte aligned: at four bare words the source sits wherever
+// the blocks above happen to leave it, and a write from an odd offset arrives rotated -- (src, token,
+// slot) reads back as (junk, src, token).
 constexpr uint32_t MC_META_SLOT_BYTES = 64;
 
 constexpr uint32_t control_block_raw_bytes(const ControlGeometry& g, uint32_t block) {
@@ -394,7 +423,6 @@ constexpr uint32_t control_block_raw_bytes(const ControlGeometry& g, uint32_t bl
         // than a corner of another one: the blocks below are indexed by bucket slot, and a buffer
         // carrying two index domains is how a later edit corrupts the region silently.
         case kCbRowFill: return 4u * g.extent;
-        case kCbBucketFill: return 4u * g.extent * g.experts_per_chip;
         // Exclusive prefix sums with a closing total: bucket b's entries run from bucket_start[b] to
         // bucket_start[b + 1], so there is one more of these than there are buckets and the next
         // bucket's start is what bounds the fill.
@@ -410,6 +438,7 @@ constexpr uint32_t control_block_raw_bytes(const ControlGeometry& g, uint32_t bl
         case kCbPadding: return PADDING_CONFIG_BYTES;
         case kCbInStart: return 4u * control_chunk_start_slots(g);
         case kCbOutStart: return 4u * control_chunk_start_slots(g);
+        case kCbLane: return 4u * PROLOGUE_LANES * prologue_lane_words(g.extent * g.experts_per_chip);
         default: return 0u;
     }
 }
