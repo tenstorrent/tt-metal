@@ -40,23 +40,31 @@ def _geometry():
 
 
 @pytest.mark.timeout(1800)
+@pytest.mark.parametrize(
+    "blend_dtype",
+    [pytest.param(ttnn.float32, id="fp32"), pytest.param(ttnn.bfloat16, id="bf16")],
+)
 @pytest.mark.parametrize(("mesh_device", "device_params"), SINGLE_DEVICE, indirect=["mesh_device", "device_params"])
-def test_stitch_matches_host_at_production_geometry(mesh_device, reset_seeds):
-    """The whole 4x7 stitch, device against host."""
+def test_stitch_matches_host_at_production_geometry(mesh_device, reset_seeds, blend_dtype):
+    """The whole 4x7 stitch, device against host, in both dtypes the decode can blend in."""
     height_overlaps, width_overlaps = _geometry()
     rows, columns = len(height_overlaps) + 1, len(width_overlaps) + 1
     logger.info(f"grid {rows}x{columns} = {rows * columns} tiles, overlaps h={height_overlaps} w={width_overlaps}")
 
     tiles = [[torch.randn(1, CHANNELS, PIXEL_FRAMES, 256, 256) for _ in range(columns)] for _ in range(rows)]
+    if blend_dtype == ttnn.bfloat16:
+        # Round the reference's inputs too: the decoder already emits bfloat16, so what is on trial
+        # here is the blend's arithmetic, not the precision of the tiles going into it.
+        tiles = [[tile.bfloat16().float() for tile in row] for row in tiles]
     expected = stitch_tiles(tiles, height_overlaps, width_overlaps)
     assert expected.shape[-2:] == (HEIGHT, WIDTH), f"host stitch gave {tuple(expected.shape[-2:])}"
 
     stitcher = DeviceTileStitcher(mesh_device)
     device_tiles = [
-        [ttnn.from_torch(t, dtype=ttnn.float32, device=mesh_device, layout=ttnn.TILE_LAYOUT) for t in row]
+        [ttnn.from_torch(t, dtype=blend_dtype, device=mesh_device, layout=ttnn.TILE_LAYOUT) for t in row]
         for row in tiles
     ]
-    actual = ttnn.to_torch(stitcher.stitch(device_tiles, height_overlaps, width_overlaps))
+    actual = ttnn.to_torch(stitcher.stitch(device_tiles, height_overlaps, width_overlaps)).float()
 
     assert actual.shape == expected.shape, f"{tuple(actual.shape)} != {tuple(expected.shape)}"
     assert_quality(expected, actual, pcc=0.9999, relative_rmse=0.02)

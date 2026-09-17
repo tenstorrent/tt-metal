@@ -14,9 +14,10 @@ asymmetric**. For an interior tile the corner region is `b*L + (1-b)*(a*A + (1-a
 O(1) error over roughly a ninth of every frame, which surfaces as visible seams. So this mirrors the
 reference order exactly, tile by tile, rather than reformulating it.
 
-The blend runs in **float32** on device even though the decoder emits bfloat16, because the host path
-it replaces blends in float32 (`.float()` before `stitch_tiles`). Keeping the same precision is what
-lets the existing PCC and roundtrip-PSNR gates carry over unchanged.
+The blend runs in whatever dtype its tiles carry. float32 is what the host path it replaces used
+(`.float()` before `stitch_tiles`), which is how the existing PCC and roundtrip-PSNR gates carried
+over unchanged. bfloat16 is what the decoder actually emits and halves the bytes the blend moves;
+both are gated in `test_stitch_device_minimax_h3.py`.
 """
 
 from __future__ import annotations
@@ -37,7 +38,10 @@ class DeviceTileStitcher:
     of 32 -- and `ttnn.slice` drops to untilize -> row-major -> retilize for exactly that case. The
     trims then hand `ttnn.concat` extents of 80 and 176, which is tile padding on the concat dim and
     triggers the same fallback again. `binary_ng` takes ROW_MAJOR operands and keeps the layout on
-    output, so the arithmetic is unaffected and the blend stays float32.
+    output, so the arithmetic is unaffected.
+
+    The ramp is built in its tiles' own dtype. bfloat16 tiles meeting a float32 ramp is what produced
+    garbage-scale output on this ttnn, so the two are never allowed to disagree.
     """
 
     def __init__(self, mesh_device: ttnn.MeshDevice) -> None:

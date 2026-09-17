@@ -157,6 +157,10 @@ _DEFAULT_AUDIO_PACK = "5:2,6:4"
 _AUDIO_RESAMPLER_SPLIT_ENV = "MINIMAX_H3_AUDIO_RESAMPLER_SPLIT"
 # Conv split mode of the audio decoder when the caller passes none ("full" = main's accurate default).
 _AUDIO_SPLIT_ENV = "MINIMAX_H3_AUDIO_SPLIT"
+# Dtype of the video VAE's tile blend when the caller passes none. "fp32" is the gated default; "bf16" keeps the
+# precision the decoder emits and halves the bytes through unpatchify, the gathers and the blend.
+_VAE_BLEND_DTYPE_ENV = "MINIMAX_H3_VAE_BLEND_DTYPE"
+_DEFAULT_VAE_BLEND_DTYPE = "fp32"
 
 
 def _audio_resampler_split_mode() -> str | None:
