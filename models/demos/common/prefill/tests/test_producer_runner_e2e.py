@@ -154,6 +154,7 @@ SCENARIOS = {
             # The table describes all 78 layers, so the last layer must still WRITE its KV; the runner's
             # default headless-last-layer optimization would leave layer 77 empty.
             "PREFILL_KV_ONLY_LAST_LAYER": "0",
+            "PREFILL_STANDALONE_CHUNKED_PCC": "0.85",
         },
         # 78 layers of GLM-5.2 weights + kernel JIT, then a two-config PCC sweep of ~174k sequential
         # read_dram_umd block reads (78 x 1760 for KVPE + 21 x 1760 for the index cache). Both phases

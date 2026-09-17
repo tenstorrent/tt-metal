@@ -290,7 +290,7 @@ def run_sparse_mla_accuracy_case(
         mesh_shape=mesh_shape,
         sp_axis=sp_axis,
         num_kvpe_cache_layers=1,
-        tp_axis=1,
+        tp_axis=tp_axis,
     )
 
     logger.info(f"[{variant.name}] sparse MLA accuracy: running TT inference")
@@ -368,7 +368,7 @@ def run_sparse_mla_determinism_case(
             mesh_shape=mesh_shape,
             sp_axis=sp_axis,
             num_kvpe_cache_layers=1,
-            tp_axis=1,
+            tp_axis=tp_axis,
         )
         # Sparse has no single-shot path: one chunk, spanning the whole sequence, at offset 0.
         tt_output, _, _, shard_dims = run_mla_inference(
@@ -440,10 +440,12 @@ def run_sparse_mla_chunked_case(
         sp_axis=sp_axis,
         num_kvpe_cache_layers=1,
         num_users=num_users,
-        tp_axis=1,
+        tp_axis=tp_axis,
     )
 
-    tt_index_kv_cache = _init_index_kv_cache(config, mesh_device, seq_len, mesh_shape, sp_axis, slot_num=num_users)
+    tt_index_kv_cache = _init_index_kv_cache(
+        config, mesh_device, seq_len, mesh_shape, sp_axis, slot_num=num_users, tp_axis=tp_axis
+    )
     logger.debug(f"[{variant.name}] sparse MLA chunked: constructing TT module and indexed RoPE tensors")
     mla_tt = ttMLA(
         config,
@@ -595,9 +597,11 @@ def run_sparse_mla_pad_overflow_case(
         sp_axis=sp_axis,
         num_kvpe_cache_layers=1,
         num_users=num_users,
-        tp_axis=1,
+        tp_axis=tp_axis,
     )
-    tt_index_kv_cache = _init_index_kv_cache(config, mesh_device, seq_len, mesh_shape, sp_axis, slot_num=num_users)
+    tt_index_kv_cache = _init_index_kv_cache(
+        config, mesh_device, seq_len, mesh_shape, sp_axis, slot_num=num_users, tp_axis=tp_axis
+    )
     mla_tt = ttMLA(
         config,
         weights,
@@ -725,9 +729,9 @@ def run_sparse_mla_kv_only_case(variant, config, mesh_device, seq_len, chunk, ds
         mesh_shape=mesh_shape,
         sp_axis=sp_axis,
         num_kvpe_cache_layers=1,
-        tp_axis=1,
+        tp_axis=tp_axis,
     )
-    tt_index_kv_cache = _init_index_kv_cache(config, mesh_device, seq_len, mesh_shape, sp_axis)
+    tt_index_kv_cache = _init_index_kv_cache(config, mesh_device, seq_len, mesh_shape, sp_axis, tp_axis=tp_axis)
     mla_tt = ttMLA(
         config,
         weights,
@@ -776,7 +780,7 @@ def run_sparse_mla_kv_only_case(variant, config, mesh_device, seq_len, chunk, ds
     )
     cache_sr = _collect_kvpe_cache(tt_kvpe_cache, mesh_device)[:, :1]
     # sp*tp stripes -- see _collect_kvpe_cache.
-    positions = blockcyclic_positions(mesh_shape[sp_axis] * mesh_shape[1], chunk, cache_sr.shape[2])
+    positions = blockcyclic_positions(mesh_shape[sp_axis] * mesh_shape[tp_axis], chunk, cache_sr.shape[2])
     cache_natural = torch.empty(cache_sr.shape[2], cache_sr.shape[-1], dtype=torch.bfloat16)
     cache_natural[positions] = cache_sr[0, 0]
     _, kv_msg = assert_with_pcc(ref_kvpe, cache_natural[:chunk].unsqueeze(0).unsqueeze(0), SPARSE_KVPE_PCC)
@@ -1030,7 +1034,7 @@ def test_sparse_mla_indexer_reuse_chunked(
             mesh_shape=mesh_shape,
             sp_axis=sp_axis,
             num_kvpe_cache_layers=1,
-            tp_axis=1,  # KV dedup: the sparse path stripes the cache over SP*TP, its only layout
+            tp_axis=tp_axis,  # KV dedup: the sparse path stripes the cache over SP*TP, its only layout
         )
 
     # Sparse has no single-shot path: one chunk, spanning the whole sequence, at offset 0.

@@ -843,6 +843,8 @@ def test_glm52_sparse_mla_overlap_growing_prefix_cache_and_lifetime(
     # smaller meshes, so derive it instead of hardcoding one mesh's number.
     sp, tp = int(mesh_device.shape[SP_AXIS]), int(mesh_device.shape[TP_AXIS])
     chunk = max(256, sp * tp * ttnn.TILE_SIZE)
+
+    # We want 2 chunks as we are looping through sequence
     seq_len = 2 * chunk
     config = config_only
     config.max_seq_len = seq_len
