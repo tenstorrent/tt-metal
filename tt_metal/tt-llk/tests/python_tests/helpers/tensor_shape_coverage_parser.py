@@ -95,6 +95,7 @@ MATH_FUNCTIONS = (
 )
 
 UNPACK_FUNCTIONS = (
+    "_llk_unpack_binary_operands_init_",
     "_llk_unpack_AB_init_",
     "_llk_unpack_AB_mop_config_",
     "_llk_unpack_A_init_",
