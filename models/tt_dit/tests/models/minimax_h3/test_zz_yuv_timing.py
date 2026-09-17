@@ -24,7 +24,9 @@ from .common_av import CALIBRATED_FOX_PROMPT, artifact_dir, log_timing_table, ru
 
 NUM_INFERENCE_STEPS = 5
 EXPECTED_FORWARDS = NUM_INFERENCE_STEPS - 1
-SEED = 0
+# MINIMAX_H3_SEED overrides it, so a sweep can move off seed 0 -- the audio a seed produces is part of the
+# generation, not the decoder, so comparing decoder configurations does not require keeping it.
+SEED = int(os.environ.get("MINIMAX_H3_SEED", "0"))
 ASPECT_RATIO = (16, 9)
 DURATIONS_S = [5, 10, 15]
 VSA_SPARSITY = 0.9
