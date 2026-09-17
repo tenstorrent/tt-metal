@@ -147,6 +147,18 @@ jobs:
           name: perf-data-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}
           path: ${{ env.LLK_PATH }}/perf_data/runs/
 
+      # EXPERIMENT (not for merge): publish the per-worker perf CSVs the harness
+      # already writes as <test>.gw<N>.csv, so every measurement can be attributed
+      # to the xdist worker -- and hence the Tensix core -- that produced it.
+      # Purely additive: changes no timing, scheduling, or measurement.
+      - name: Upload per-worker perf CSVs (experiment)
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        if: always()
+        with:
+          name: perf-worker-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}
+          path: ${{ runner.temp }}/tt-llk-build/temp_perf_data/
+          if-no-files-found: warn
+
       - name: Upload test logs on failure
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         if: failure()
