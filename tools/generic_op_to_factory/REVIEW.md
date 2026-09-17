@@ -23,6 +23,17 @@ Reusable agent task (replace paths, not with production run IDs):
 > Prefer canonical geometry/format APIs, allocation-returned resource IDs, and
 > shared host/kernel argument schemas with derived counts. Check for duplicated
 > numeric IDs/offsets/counts rather than treating named literals as sufficient.
+> Review policy usages, not only definitions: distinguish hardware-derived
+> geometry/format sizes from scheduling targets, buffering depths and memory
+> headroom. Require clear units and pipeline reasons for chosen depths. Trace
+> each CB's capacity from planning through allocation and kernel push/pop quantum;
+> avoid independent copies of those equations. Prefer a small resource-oriented
+> sizing helper where needed, not a generic tuning framework or a literal H0
+> transcription. Keep tensor-backed storage and alias lifetimes explicit. Do not
+> silently replace a conservative fit bound with exact allocation during cleanup:
+> that can change blocking, cache keys and performance. Inspect boundary/alias
+> tests against the actual native helper and descriptor, with independent expected
+> cases. Python planner tests alone cannot validate native sizing.
 > Inspect the framework's hash and hit paths: address/scalar updates, optional
 > presence, alias topology, descriptor reconstruction, scans, allocations,
 > validation and language-boundary work. Check both miss and return-to-key hits,
@@ -44,7 +55,11 @@ Reusable agent task (replace paths, not with production run IDs):
 
 The author reconciles each finding; a test passing is not evidence that a code
 quality finding is resolved. Fix defects and run proportionate checks. Source
-changes are made in place. Rerun `validate_port run` in the same workspace to rebuild
+changes are made in place. Group related findings into coherent repair batches;
+use `validate_port batch` for the affected cases plus neighboring regressions.
+Do not demand a full golden sweep after every individual fix. After a few batches
+or a broad kernel/wiring change, rerun full acceptance. Focused passes alone cannot
+close the review gate. Rerun `validate_port run` in the same workspace to rebuild
 and pass the original acceptance tests, then `run --through native_compare` for
 golden comparison. The driver invalidates previous passes and review approval
 when the implementation changes; old logs remain history, not current evidence.

@@ -333,12 +333,17 @@ class PortValidation:
         self.runner.runtime, self.runner.workspace = self.runtime, self.workspace
         self.runner.config = {**self.config, "capture_metrics": False}
 
+    def records(self):
+        yield from self.state["stages"].values()
+        if "focused" in self.state:
+            yield self.state["focused"]
+
     def validate(self):
         if str(self.workspace) != self.config["workspace"] or digest(self.planned) != self.state["plan_sha256"]:
             raise ExportError("Validation workspace identity changed")
         if plan(self.config) != self.planned:
             raise ExportError("Source changed during validation; stop editing, then rerun in this workspace")
-        for record in self.state["stages"].values():
+        for record in self.records():
             if record["status"] == "complete":
                 for path, sha in record["evidence"].items():
                     if file_hash(path) != sha:
@@ -347,7 +352,7 @@ class PortValidation:
     def check_unfinished_commands(self):
         # Check before resetting stages as well as before retrying: an old test
         # process must never overlap a new build or device invocation.
-        for record in self.state["stages"].values():
+        for record in self.records():
             for old in record["attempts"]:
                 for path in (self.workspace / old).glob("*.command.json"):
                     command = json.loads(path.read_bytes())
@@ -376,7 +381,7 @@ class PortValidation:
                 "Validation inputs, configuration, tooling or acceptance tests changed; review the contract"
             )
         self.check_unfinished_commands()
-        for record in self.state["stages"].values():
+        for record in self.records():
             attempts = record["attempts"]
             record.clear()
             record.update(status="pending", attempts=attempts)
@@ -385,11 +390,11 @@ class PortValidation:
         write_json(self.workspace / "plan.json", self.planned)
         write_json(self.workspace / "state.json", self.state)
         print(
-            "PORT: implementation edited in place; previous results superseded, rebuilding and rerunning acceptance",
+            "PORT: implementation edited in place; previous results superseded, rebuilding before requested checks",
             flush=True,
         )
 
-    def execute(self, stage, attempt):
+    def execute(self, stage, attempt, *, selection=None):
         c = self.config
         if stage == "build":
             self.runner.command(c["build_argv"], attempt, "build", activate=True)
@@ -434,7 +439,7 @@ class PortValidation:
                 },
             )
             return evidence
-        if stage in ("source_smoke", "source", "native_smoke", "native", "acceptance"):
+        if stage in ("source_smoke", "source", "native_smoke", "native", "acceptance", "focused"):
             if stage.endswith("smoke") and c["smoke_nodeid"] is None:
                 write_json(
                     attempt / "skipped.json", {"reason": "Optional smoke omitted; full golden suite remains required"}
@@ -447,14 +452,18 @@ class PortValidation:
                 "mode": mode,
                 "aliases": c["source_aliases"],
             }
-            if stage == "acceptance":
-                route.update(aliases=[], tests=c["acceptance_tests"])
-            write_json(attempt / "route.json", route)
             tests = (
                 c["acceptance_tests"]
                 if stage == "acceptance"
                 else [c["smoke_nodeid"] if stage.endswith("smoke") else self.planned["suite"]]
             )
+            if stage == "focused":
+                tests = selection["tests"]
+            if stage in ("acceptance", "focused"):
+                # The adapter verifies collected files; pytest itself resolves
+                # explicit node IDs, including parameterized cases, within them.
+                route.update(aliases=[], tests=list(dict.fromkeys(test.split("::", 1)[0] for test in tests)))
+            write_json(attempt / "route.json", route)
             argv = ["./scripts/run_safe_pytest.sh", "--run-all"]
             if stage in ("source", "native") and c["precompile"]:
                 argv += [
@@ -480,7 +489,7 @@ class PortValidation:
             argv += [
                 "-p",
                 "tools.generic_op_to_factory.native_adapter",
-                "--migration-acceptance-route" if stage == "acceptance" else "--migration-route",
+                "--migration-acceptance-route" if stage in ("acceptance", "focused") else "--migration-route",
                 str(attempt / "route.json"),
             ]
             argv += [f"--junitxml={attempt / 'junit.xml'}"]
@@ -497,7 +506,7 @@ class PortValidation:
             rows = parse_junit_xml(attempt / "junit.xml")
             if not rows:
                 raise ExportError("No test outcomes")
-            if stage == "acceptance" and (
+            if stage in ("acceptance", "focused") and (
                 not any(r["status"] == "passed" for r in rows) or any(r["status"] != "passed" for r in rows)
             ):
                 raise ExportError("Every selected native acceptance test must pass; skips and xfails are not accepted")
@@ -564,47 +573,91 @@ class PortValidation:
             raise ExportError("Case outcomes differ; see comparison.json")
         return {}
 
+    def run_stage(self, stage, record, *, retry=False, selection=None):
+        if record["status"] == "complete":
+            return
+        if record["status"] != "pending":
+            if not retry:
+                raise ExportError(f"{stage} is {record['status']}; inspect then explicitly --retry")
+            self.check_unfinished_commands()
+        attempt = self.workspace / "attempts" / stage / f"{len(record['attempts']) + 1:03d}"
+        if not attempt.resolve().is_relative_to(self.workspace):
+            raise ExportError("Attempt path is redirected")
+        attempt.mkdir(parents=True)
+        record["attempts"].append(str(attempt.relative_to(self.workspace)))
+        record.update(status="running", started_at=now())
+        write_json(attempt / "candidate.json", {"plan_sha256": self.state["plan_sha256"]})
+        if selection is not None:
+            write_json(attempt / "selection.json", selection)
+        write_json(self.workspace / "state.json", self.state)
+        print(f"PORT: {stage} started ({attempt})", flush=True)
+        try:
+            evidence = (
+                self.execute(stage, attempt, selection=selection)
+                if selection is not None
+                else self.execute(stage, attempt)
+            )
+            self.validate()
+            evidence.update({str(p): file_hash(p) for p in attempt.iterdir() if p.is_file()})
+            record.update(status="complete", evidence=evidence, finished_at=now())
+        except BaseException as error:
+            record.update(
+                status=(
+                    "interrupted" if isinstance(error, (KeyboardInterrupt, subprocess.TimeoutExpired)) else "blocked"
+                ),
+                error=str(error),
+                finished_at=now(),
+            )
+            write_json(self.workspace / "state.json", self.state)
+            raise
+        write_json(self.workspace / "state.json", self.state)
+        print(f"PORT: {stage} complete", flush=True)
+
+    def run_batch(self, tests, reason, *, retry=False):
+        """Run a repair batch's selected cases, never the full acceptance gate."""
+        if (
+            not isinstance(tests, list)
+            or not tests
+            or any(not isinstance(test, str) for test in tests)
+            or len(set(tests)) != len(tests)
+        ):
+            raise ExportError("Batch tests must be a nonempty unique list of acceptance files or node IDs")
+        for test in tests:
+            parts = test.split("::")
+            if parts[0] not in self.config["acceptance_tests"] or any(not part for part in parts):
+                raise ExportError("Batch tests must select files or node IDs from the initial acceptance_tests")
+        if not isinstance(reason, str) or not reason.strip():
+            raise ExportError("Batch reason must describe grouped findings and regression coverage")
+        selection = {"tests": tests, "reason": reason, "scope": "focused_only", "satisfies_acceptance_gate": False}
+        with locked(self.workspace):
+            self.state = json.loads((self.workspace / "state.json").read_bytes())
+            self.refresh_candidate()
+            self.validate()
+            self.check_unfinished_commands()
+            # Even unchanged-code diagnostics can expose a new failure. Do not
+            # leave a previous final receipt current while doing focused repair.
+            for stage in STAGES[STAGES.index("acceptance") :]:
+                record = self.state["stages"][stage]
+                attempts = record["attempts"]
+                record.clear()
+                record.update(status="pending", attempts=attempts)
+            previous = self.state.get("focused", {}).get("attempts", [])
+            self.state["focused"] = {"status": "pending", "attempts": previous, **selection}
+            write_json(self.workspace / "state.json", self.state)
+            for stage in ("build", "factory_contract"):
+                self.run_stage(stage, self.state["stages"][stage], retry=retry)
+            self.run_stage("focused", self.state["focused"], selection=selection)
+            print("PORT: focused batch passed; full acceptance and final validation remain pending", flush=True)
+            return self.state
+
     def run(self, through="acceptance", retry=False):
         with locked(self.workspace):
             self.state = json.loads((self.workspace / "state.json").read_bytes())
             self.refresh_candidate()
             self.validate()
+            self.check_unfinished_commands()
             for stage in STAGES[: STAGES.index(through) + 1]:
-                record = self.state["stages"][stage]
-                if record["status"] == "complete":
-                    continue
-                if record["status"] != "pending":
-                    if not retry:
-                        raise ExportError(f"{stage} is {record['status']}; inspect then explicitly --retry")
-                    self.check_unfinished_commands()
-                attempt = self.workspace / "attempts" / stage / f"{len(record['attempts']) + 1:03d}"
-                if not attempt.resolve().is_relative_to(self.workspace):
-                    raise ExportError("Attempt path is redirected")
-                attempt.mkdir(parents=True)
-                record["attempts"].append(str(attempt.relative_to(self.workspace)))
-                record.update(status="running", started_at=now())
-                write_json(attempt / "candidate.json", {"plan_sha256": self.state["plan_sha256"]})
-                write_json(self.workspace / "state.json", self.state)
-                print(f"PORT: {stage} started ({attempt})", flush=True)
-                try:
-                    evidence = self.execute(stage, attempt)
-                    self.validate()
-                    evidence.update({str(p): file_hash(p) for p in attempt.iterdir() if p.is_file()})
-                    record.update(status="complete", evidence=evidence, finished_at=now())
-                except BaseException as error:
-                    record.update(
-                        status=(
-                            "interrupted"
-                            if isinstance(error, (KeyboardInterrupt, subprocess.TimeoutExpired))
-                            else "blocked"
-                        ),
-                        error=str(error),
-                        finished_at=now(),
-                    )
-                    write_json(self.workspace / "state.json", self.state)
-                    raise
-                write_json(self.workspace / "state.json", self.state)
-                print(f"PORT: {stage} complete", flush=True)
+                self.run_stage(stage, self.state["stages"][stage], retry=retry)
             return self.state
 
 
@@ -637,6 +690,13 @@ def main():
     command.add_argument("--workspace", type=Path, required=True)
     command.add_argument("--through", choices=STAGES, default="acceptance")
     command.add_argument("--retry", action="store_true")
+    batch = sub.add_parser("batch", help="Test one repair batch; does not satisfy full acceptance")
+    batch.add_argument("--workspace", type=Path, required=True)
+    batch.add_argument(
+        "--test", dest="tests", action="append", required=True, help="Acceptance file or pytest node ID; repeatable"
+    )
+    batch.add_argument("--reason", required=True, help="Grouped findings and why these regression cases cover the fix")
+    batch.add_argument("--retry", action="store_true", help="Retry a blocked build or factory-contract check")
     sub.add_parser("status").add_argument("--workspace", type=Path, required=True)
     args = parser.parse_args()
     signal.signal(signal.SIGTERM, _interrupted)
@@ -645,6 +705,8 @@ def main():
             result = (plan if args.action == "plan" else initialize)(json.loads(args.config.read_bytes()))
         elif args.action == "status":
             result = json.loads((args.workspace / "state.json").read_bytes())
+        elif args.action == "batch":
+            result = PortValidation(args.workspace).run_batch(args.tests, args.reason, retry=args.retry)
         else:
             result = PortValidation(args.workspace).run(args.through, args.retry)
         print(json.dumps(result, indent=2, sort_keys=True))

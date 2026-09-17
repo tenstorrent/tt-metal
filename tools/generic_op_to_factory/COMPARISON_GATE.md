@@ -26,8 +26,12 @@ flowchart TD
     A[Prepare evaluated source and initial acceptance tests] --> B[Build and factory contract]
     B --> P[Run native acceptance tests]
     P --> Q{Acceptance passes?}
-    Q -- No --> Y[Agent fixes factory in place]
-    Y --> B
+    Q -- No --> Y[Agent groups findings and fixes one batch in place]
+    Y --> R[Build, contract and focused regression cases]
+    R --> S{Batch passes?}
+    S -- No --> Y
+    S -- Yes, more local fixes --> Y
+    S -- Periodic or broad-change checkpoint --> B
     Q -- Yes --> C[Original Python golden suite on target]
     C --> D{Source baseline admissible?}
     D -- Yes --> E[Native golden suite on same target]
@@ -56,6 +60,9 @@ change invalidates previous passes; final golden checks, performance evidence an
 review must describe the corrected code. The driver defaults to acceptance only;
 golden checks are explicitly requested after that loop passes. Repairs are agent-led,
 not an automatic LLM invocation inside the driver.
+Use [repair batches](PORT_FLOW.md#repair-batches-feedback-without-a-full-suite-after-every-fix)
+for interim feedback; a focused pass does not satisfy full acceptance. Full
+acceptance checkpoints interrupt the batch loop before final golden validation.
 
 ## 2. Freeze what is being compared
 

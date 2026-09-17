@@ -32,6 +32,11 @@ reference. Record untested supported branches, inapplicable features and future
 native-only checks separately. A test function name without its actual case
 values is not a useful coverage record.
 
+For memory-limited planners, include buffer presence, units, page/transfer quanta,
+alias lifetimes and the distinction between actual allocation and conservative
+headroom. Identify which budget/block boundaries are covered by observable
+Python tests, source-only inspection, or deferred direct native host tests.
+
 ## Execution and outcome
 
 Include commands, selector values, seeds/tolerances, logs, JUnit paths, raw pytest

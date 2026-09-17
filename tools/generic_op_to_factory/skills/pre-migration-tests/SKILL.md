@@ -57,6 +57,10 @@ broader workflows automatically.
 
 Use [references/cases.md](references/cases.md) to choose cases and assertions.
 Map each current validation rule and meaningful planner branch to a named case.
+For memory-limited or buffered planners, use the
+[buffer-capacity checks](references/cases.md#buffer-capacity-and-planning-policy)
+to select layout, format, block-boundary and alias cases. Record which checks
+observe source planning and which will need the real native planner later.
 For each varying field, record whether it needs a different program, changes on
 a cache hit, or is safely omitted from the key. Cite the source reason.
 

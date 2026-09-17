@@ -211,6 +211,41 @@ Use host-only tests for real pure planner functions when possible. Mocked device
 or descriptor tests cannot prove real allocation, synchronization or numerical
 results. Keep that limitation visible in the handoff.
 
+## Buffer capacity and planning policy
+
+When buffering or available memory affects the plan, distinguish hardware facts
+(tile geometry, format/page bytes and allocator limits) from chosen policy
+(prefetch depth, work per core and safety headroom). Record units and the source
+reason for each policy. A named constant is not evidence that its usages agree.
+
+Choose supported cases that exercise:
+
+- Layout/format branches with different CB presence, page bytes or buffering
+  units. A depth in whole blocks is not a depth in tile-rows.
+- One full block, multiple blocks and a partial final block; uneven per-core
+  widths where capacities must remain compatible with push/pop quanta.
+- Optional-buffer and alias transitions, including a shared allocation whose
+  larger demand changes with block size or format. Check lifetime assumptions.
+- Exact-fit and just-too-small budgets through a real pure planner interface,
+  if exposed. Keep tensor-backed resident storage separate from scratch CBs;
+  count shared storage once in actual allocation. A deliberately conservative
+  planning bound may count extra headroom: record and test that distinction.
+
+Inspect concrete descriptor capacities against the budget and kernel transfer
+quanta, not just outputs or the planner's own total. Reusing the same formula as
+both implementation and expected result cannot catch a shared arithmetic error.
+Use hand-calculated representative cases and invariant/boundary checks alongside
+the independent numerical reference. Do not freeze every heuristic value as an
+API contract: label translation-preservation tests separately from correctness.
+
+Generate the observable Python acceptance cases now. Source-only planner tests
+stay outside native acceptance. If the C++ planner is not exposed to Python,
+handoff any required direct native sizing checks for an additive host C++ test;
+do not substitute the old Python planner or invent device-memory pressure with
+uncontrolled allocations. Tests do not establish maintainable C++ structure:
+the later [factory review](../../../REVIEW.md) must also trace policy uses and
+check that sizing and allocation cannot silently drift apart.
+
 ## Keep failures honest
 
 Unsupported configurations get explicit rejection tests where the API promises

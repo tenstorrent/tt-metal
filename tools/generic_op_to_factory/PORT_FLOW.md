@@ -15,9 +15,10 @@ instead of `preparation`, `export`, `phase` and
 baseline comes from running the unchanged operation and golden suite already
 on that branch; DB retrieval and a historical checkout are not involved.
 
-The development loop is **edit the ProgramDescriptor factory in place → incremental
-parity-enabled build → factory contract → native acceptance tests → inspect failures
-and fix the factory → repeat**. Use the acceptance tests generated at the start;
+The development loop is **collect findings → group related fixes → edit the
+ProgramDescriptor factory in place → incremental parity-enabled build → factory
+contract → focused native regression tests → repeat**, with full native acceptance
+at periodic checkpoints and before final validation. Use the acceptance tests generated at the start;
 do not weaken assertions to accommodate a factory defect. The agent makes the fixes;
 the driver runs checks, reports failures, and invalidates stale results. It does
 not invoke an LLM automatically.
@@ -41,6 +42,55 @@ not implemented: evidence-to-checkpoint/environment binding needs its own gate.
 The factory, routing, evidence and review contracts below apply to both modes.
 The old preparation commands/config below are retained only for historical
 reconstruction, **not the starting point for new post-evaluation migrations**.
+
+## Repair batches: feedback without a full suite after every fix
+
+First run full native acceptance to collect the failure set. Keep the runner's
+`--run-all` behavior: ordinary failures should not prevent discovering independent
+issues. A crash/hang or build failure is a blocker to fix first, not a reason to
+guess the remaining failures. Combine test failures with code-review findings.
+
+The author classifies findings as factory defects, test defects, setup failures
+or unresolved contract questions. Group factory fixes by cause: for example,
+reader/writer argument wiring, cache/address refresh, or API validation. Fix one
+coherent group before testing. Do not require a full sweep after each edited line
+or each finding. Do not silently change assertions to make the factory pass.
+
+Use `batch` to select existing acceptance files or explicit pytest node IDs.
+Choose the failing cases **and neighboring regression cases**. For cache fixes,
+include misses, hits, fresh buffers, return-to-key and relevant alias transitions.
+The `--reason` records the findings addressed and why this selection is sufficient
+for interim feedback; it is reviewed prose, not an automatic coverage proof.
+
+```bash
+python3 -m tools.generic_op_to_factory.validate_port batch \
+  --workspace /absolute/validation \
+  --test tests/ttnn/unit_tests/operations/sample/test_cache.py::test_refresh \
+  --test tests/ttnn/unit_tests/operations/sample/test_cache.py::test_alias_return \
+  --reason "Refresh batch: fix both stale bindings; cover fresh buffers and alias return"
+# Full acceptance checkpoint, not full goldens:
+python3 -m tools.generic_op_to_factory.validate_port run --workspace /absolute/validation
+```
+
+The batch command reuses a matching completed build/contract check, or rebuilds
+after implementation edits. It runs only the selected native tests, with the same
+parity configuration, safe runner and no-fallback guard as full acceptance. All
+selected cases must pass; skip/xfail is not success. Selection, rationale, code
+fingerprint, command, JUnit and logs are saved under `attempts/focused/NNN/`.
+A new batch invocation is an explicit retry of its selected cases. `--retry` is
+needed if an unchanged build or factory-contract stage was previously blocked.
+
+**A focused pass is not an acceptance pass.** Batches leave acceptance and later
+stages pending, even if an older final receipt exists. `run` still executes the
+entire configured acceptance suite; focused selections never replace that list.
+
+Use full acceptance after roughly two or three coherent batches, immediately
+after broad kernel/CB/argument-wiring changes or uncertain impact, and before
+requesting final golden comparison. This cadence and issue grouping are agent
+instructions, not an automatically inferred dependency graph or batch-count gate.
+Final goldens, safety/performance evidence and review must cover the final code;
+only an unchanged candidate can reuse its completed validation stages. The driver
+does not automatically schedule Watcher or performance experiments.
 
 ## Native acceptance tests: more than cache tests
 
@@ -180,7 +230,8 @@ validation and retain its changed-baseline scope in completion evidence.
    fallback to `generic_op` is permitted in the native path.
 5. Supply a native entry-point mapping and operation-specific cache regression
    tests to `tools.generic_op_to_factory.validate_port`. That driver runs build → compiled factory contract → native acceptance tests.
-   Fix the factory in place and repeat until those tests pass. Then request optional source smoke
+   Group fixes in place and use focused `batch` checks between full acceptance
+   checkpoints. Once full acceptance passes, request optional source smoke
    → target-source golden suite → DB comparison → optional native smoke → native golden
    suite → source/native comparison → independent code-quality /
    host-performance review → scoped completion evidence. Use the independent
@@ -216,7 +267,8 @@ python3 -m tools.generic_op_to_factory.prepare_target --preparation /absolute/pr
 
 python3 -m tools.generic_op_to_factory.validate_port plan --config /absolute/port.json
 python3 -m tools.generic_op_to_factory.validate_port init --config /absolute/port.json
-# Repeat this command after each in-place factory fix. It stops at acceptance.
+# Full acceptance checkpoint after grouped repairs and before final validation.
+# Use `batch` between checkpoints (see Repair batches above).
 python3 -m tools.generic_op_to_factory.validate_port run --workspace /absolute/new-validation
 # Once acceptance passes, run the two full golden suites on this candidate.
 python3 -m tools.generic_op_to_factory.validate_port run --workspace /absolute/new-validation --through native_compare

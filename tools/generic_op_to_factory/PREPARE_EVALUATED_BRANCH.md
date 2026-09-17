@@ -123,7 +123,8 @@ python3 -m tools.generic_op_to_factory.validate_port plan --config /localdev/ast
 python3 -m tools.generic_op_to_factory.validate_port init --config /localdev/astancov/sample-migration-target/generated/generic_op_to_factory/inputs/port.json
 python3 -m tools.generic_op_to_factory.validate_port run \
   --workspace /localdev/astancov/sample-migration-target/generated/generic_op_to_factory/validation --through acceptance
-# Fix the factory in place and repeat acceptance until it passes. Then:
+# Group fixes in place; use `batch` for focused checks between full acceptance
+# checkpoints (see PORT_FLOW.md). Once full acceptance passes:
 python3 -m tools.generic_op_to_factory.validate_port run \
   --workspace /localdev/astancov/sample-migration-target/generated/generic_op_to_factory/validation --through native_compare
 # Obtain independent review and supply review.json using REVIEW.md.
@@ -131,8 +132,9 @@ python3 -m tools.generic_op_to_factory.validate_port run \
   --workspace /localdev/astancov/sample-migration-target/generated/generic_op_to_factory/validation --through complete
 ```
 
-Development repeats the incremental build and focused native acceptance suite
-in the same worktree. The initial acceptance tests stay unchanged; the agent fixes
+Development groups fixes and repeats the incremental build and selected native
+regression cases in the same worktree. Periodically run full acceptance, and always
+do so before final validation. The initial acceptance tests stay unchanged; the agent fixes
 the factory. A plain `run` stops at acceptance. Final validation adds one full
 source golden and one full native golden on the same candidate build. Factory
 edits invalidate earlier passes and review without requiring a new workspace.

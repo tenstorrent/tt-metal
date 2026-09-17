@@ -554,3 +554,147 @@ def test_port_rejects_missing_acceptance_tests(port):
         ExportError, match="Required validation source"
     ):
         validate_port.plan(port)
+
+
+def test_repair_batch_runs_selected_nodes_without_full_suites(port):
+    validate_port.initialize(port)
+    validation = validate_port.PortValidation(port["workspace"])
+    selected = ["tests/test_cache.py::test_refresh", "tests/test_cache.py::test_alias[return]"]
+    validation.run_batch(selected, "Fix refresh and cover alias return regression")
+    attempt = validation.workspace / "attempts/focused/001"
+    command = json.loads((attempt / "focused.command.json").read_bytes())
+    assert all(test in command["argv"] for test in selected)
+    assert "--run-all" in command["argv"]
+    assert "--migration-acceptance-route" in command["argv"]
+    route = json.loads((attempt / "route.json").read_bytes())
+    assert route["tests"] == ["tests/test_cache.py"]
+    assert route["mode"] == "native" and route["aliases"] == []
+    selection = json.loads((attempt / "selection.json").read_bytes())
+    assert selection["tests"] == selected
+    assert not selection["satisfies_acceptance_gate"]
+    assert validation.state["focused"]["status"] == "complete"
+    assert all(validation.state["stages"][s]["status"] == "pending" for s in validate_port.STAGES[2:])
+    assert not (validation.workspace / "attempts/acceptance").exists()
+    assert not (validation.workspace / "attempts/source").exists()
+
+
+def test_repair_batches_reuse_build_until_edit_then_full_acceptance_covers_all_files(port):
+    runtime = Path(port["runtime"])
+    (runtime / "tests/test_api.py").write_text("# another acceptance file\n")
+    port["acceptance_tests"].append("tests/test_api.py")
+    validate_port.initialize(port)
+    validation = validate_port.PortValidation(port["workspace"])
+    for _ in range(2):
+        validation.run_batch(["tests/test_cache.py"], "Cache batch and neighboring transitions")
+    assert len(validation.state["stages"]["build"]["attempts"]) == 1
+    (runtime / port["factory_contract"]["factory_source"]).write_text("// next coherent repair\n")
+    validation.run_batch(["tests/test_api.py"], "Validation batch with valid and invalid requests")
+    assert len(validation.state["stages"]["build"]["attempts"]) == 2
+    assert len(validation.state["focused"]["attempts"]) == 3
+    validation.run()
+    command = json.loads((validation.workspace / "attempts/acceptance/001/acceptance.command.json").read_bytes())
+    assert all(test in command["argv"] for test in port["acceptance_tests"])
+    assert validation.state["stages"]["acceptance"]["status"] == "complete"
+    assert validation.state["stages"]["source"]["status"] == "pending"
+
+
+@pytest.mark.parametrize(
+    "tests",
+    [
+        [],
+        [None],
+        ["tests/test_cache.py"] * 2,
+        ["tests/elsewhere.py"],
+        ["tests/test_cache.py::"],
+        ["../tests/test_cache.py"],
+        ["--collect-only"],
+    ],
+)
+def test_batch_rejects_invalid_or_out_of_contract_selection(port, tests):
+    validate_port.initialize(port)
+    validation = validate_port.PortValidation(port["workspace"])
+    with pytest.raises(ExportError, match="Batch tests"):  # allow-pytest.raises: selection boundary
+        validation.run_batch(tests, "Synthetic batch")
+    assert not (validation.workspace / "attempts").exists()
+
+
+def test_batch_requires_a_reason(port):
+    validate_port.initialize(port)
+    validation = validate_port.PortValidation(port["workspace"])
+    with pytest.raises(ExportError, match="Batch reason"):  # allow-pytest.raises: auditable scope
+        validation.run_batch(port["acceptance_tests"], " ")
+
+
+@pytest.mark.parametrize("status", ["failed", "error", "skipped", "xfail", "xpass"])
+def test_focused_nonpass_blocks_batch_and_cannot_preserve_old_completion(port, monkeypatch, status):
+    validate_port.initialize(port)
+    validation = validate_port.PortValidation(port["workspace"])
+    validation.run()
+    record_review(validation)
+    validation.run("complete")
+    original = validate_port.parse_junit_xml
+
+    def outcomes(path):
+        rows = original(path)
+        if "focused" in Path(path).parts:
+            rows[0]["status"] = status
+        return rows
+
+    monkeypatch.setattr(validate_port, "parse_junit_xml", outcomes)
+    with pytest.raises(ExportError, match="Every selected native acceptance test"):  # allow-pytest.raises: focused gate
+        validation.run_batch(port["acceptance_tests"], "Investigate a new finding")
+    assert validation.state["focused"]["status"] == "blocked"
+    assert validation.state["stages"]["acceptance"]["status"] == "pending"
+    assert validation.state["stages"]["complete"]["status"] == "pending"
+
+
+def test_focused_edit_during_execution_blocks_pass(port, monkeypatch):
+    validate_port.initialize(port)
+    validation = validate_port.PortValidation(port["workspace"])
+    original = validation.execute
+
+    def edit_during_batch(stage, attempt, **kwargs):
+        evidence = original(stage, attempt, **kwargs)
+        if stage == "focused":
+            (Path(port["runtime"]) / port["factory_contract"]["factory_source"]).write_text("// concurrent edit\n")
+        return evidence
+
+    monkeypatch.setattr(validation, "execute", edit_during_batch)
+    with pytest.raises(ExportError, match="Source changed during validation"):  # allow-pytest.raises: freshness
+        validation.run_batch(port["acceptance_tests"], "Check repair")
+    assert validation.state["focused"]["status"] == "blocked"
+
+
+def test_unfinished_focused_command_blocks_another_batch_and_rebuild(port):
+    import os
+
+    validate_port.initialize(port)
+    validation = validate_port.PortValidation(port["workspace"])
+    validation.run_batch(port["acceptance_tests"], "First repair")
+    (validation.workspace / "attempts/focused/001/live.command.json").write_text(json.dumps({"pid": os.getpid()}))
+    with pytest.raises(ExportError, match="may still be alive"):  # allow-pytest.raises: full run also serializes
+        validation.run()
+    (Path(port["runtime"]) / port["factory_contract"]["factory_source"]).write_text("// repair\n")
+    with pytest.raises(ExportError, match="may still be alive"):  # allow-pytest.raises: concurrency guard
+        validation.run_batch(port["acceptance_tests"], "Next repair")
+    assert len(validation.state["focused"]["attempts"]) == 1
+
+
+def test_focused_failure_can_be_retried_without_rerunning_build(port, monkeypatch):
+    validate_port.initialize(port)
+    validation = validate_port.PortValidation(port["workspace"])
+    original = validation.execute
+
+    def fail_batch(stage, attempt, **kwargs):
+        if stage == "focused":
+            raise ExportError("Synthetic focused failure")
+        return original(stage, attempt, **kwargs)
+
+    monkeypatch.setattr(validation, "execute", fail_batch)
+    with pytest.raises(ExportError, match="Synthetic focused failure"):  # allow-pytest.raises: diagnostic retry
+        validation.run_batch(port["acceptance_tests"], "First batch")
+    monkeypatch.setattr(validation, "execute", original)
+    validation.run_batch(port["acceptance_tests"], "Investigated setup; retry this batch")
+    assert len(validation.state["stages"]["build"]["attempts"]) == 1
+    assert len(validation.state["focused"]["attempts"]) == 2
+    assert validation.state["focused"]["status"] == "complete"

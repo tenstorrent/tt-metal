@@ -34,7 +34,9 @@ step; it does not add an automated gate to the validation driver.
 3. [Map the operation](MAPPING.md) and author its native
    [ProgramDescriptor factory](FACTORY_CONTRACT.md).
 4. [Build and run native acceptance tests](PORT_FLOW.md). Fix the factory in place
-   and repeat in the same workspace; `validate_port run` stops at acceptance by default.
+   in coherent batches; use `validate_port batch` for focused regression checks
+   between full acceptance checkpoints. `validate_port run` runs full acceptance,
+   not full goldens, by default. See [repair batches](PORT_FLOW.md#repair-batches-feedback-without-a-full-suite-after-every-fix).
 5. After acceptance passes, explicitly run source/native golden comparison, then complete
    the [independent review gate](REVIEW.md).
 
