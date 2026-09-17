@@ -319,6 +319,20 @@ def test_indexer_score_knobs(device, q_chunk, k_chunk, head_group, chunk_start):
 
 
 @pytest.mark.parametrize(
+    "heads, dim, sq, t",
+    [(64, 128, 64, 256), (64, 128, 2048, 8192), (128, 128, 512, 8192)],
+    ids=["mini", "probe", "wide"],
+)
+def test_indexer_score_default_config(device, heads, dim, sq, t):
+    """No program_config: the op picks every head resident and the widest k chunk that fits L1."""
+    q, k, w = make_inputs(heads, dim, sq, t)
+    chunk_start = t - sq
+    out = run_dsa(q, k, w, chunk_start, device)
+    ref = indexer_score_dsa_ref(q, k, w, chunk_start)
+    assert_indexer_match(out, ref, sq, t, check_neg=True)
+
+
+@pytest.mark.parametrize(
     "heads, dim, sq, t, chunk_start, q_chunk, k_chunk, head_group",
     [
         (64, 128, 128, 128, 0, 32, 32, 0),  # prefill square: no history, fully-causal triangle from tile 0

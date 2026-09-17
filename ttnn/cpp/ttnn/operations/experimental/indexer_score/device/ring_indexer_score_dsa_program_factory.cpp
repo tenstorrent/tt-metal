@@ -270,7 +270,8 @@ ProgramDescriptor build_ring_program_descriptor(
     // hoisting the matmul<->eltwise reinit out of the per-head loop (shared with the classic factory).
     const auto [qk_batch_heads, qk_col_batch] = dsa_qk_batching(subblock_basis, QC, KC, stream_heads);
 
-    make_cb(cb_q_arg, (stream_heads ? 2 : 1) * HB * QC * Dt, q_fmt, q_tile);
+    const uint32_t q_depth = stream_heads ? streaming_q_depth(uint64_t(HB) * QC * Dt * q_tile, cb_l1_budget(q)) : 1;
+    make_cb(cb_q_arg, q_depth * HB * QC * Dt, q_fmt, q_tile);
     make_cb(cb_k_arg, 2 * KC * Dt, k_fmt, k_tile);
     make_cb(cb_w_arg, Hi * QC, tt::DataFormat::Float16_b, bf16_tile);
     make_cb(cb_mask_arg, num_mask_tiles, tt::DataFormat::Float16_b, bf16_tile);
