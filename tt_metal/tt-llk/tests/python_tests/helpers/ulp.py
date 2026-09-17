@@ -140,9 +140,14 @@ _FLUSHES_SUBNORMALS: Dict[torch.dtype, bool] = {
     torch.float16: False,
 }
 
-# ttnn's sanity ceiling (``utils_for_testing.assert_with_ulp``): 2**mantissa_bits. A budget
-# above this says the two values differ by more than an order of magnitude, at which point
-# ULP has stopped being the right metric and the op belongs on the tolerance one.
+# ttnn's sanity ceiling (``utils_for_testing.assert_with_ulp``): 2**mantissa_bits. Adding
+# 2**mantissa_bits to an IEEE magnitude pattern bumps the exponent field by one and leaves
+# the mantissa alone, so that many steps is exactly one binade: bf16 ``1.0 = 0x3F80``,
+# ``+0x80 = 0x4000 = 2.0``. A budget above the ceiling therefore says the two values are
+# more than a factor of two apart in the normal range -- not an order of magnitude, which
+# would need ``ceil(log2(10) * 2**mantissa_bits)`` steps -- at which point ULP has stopped
+# being the right metric and the op belongs on the tolerance one. Inside a subnormal band
+# the steps are absolute rather than proportional, so the same count spans the band.
 MAX_MEANINGFUL_ULP: Dict[torch.dtype, int] = {
     dtype: 1 << spec.mantissa_bits for dtype, spec in _ULP_DTYPES.items()
 }
@@ -271,7 +276,17 @@ def ulp_stats(
     only; the unmeasurable ones are counted separately so they cannot quietly shrink a
     mean. ``worst_index`` is a flat index into the original tensor, which is what makes a
     failure reproducible.
+
+    *mask* must be shaped like *distance*. It is checked rather than broadcast because a
+    per-op budget computes it dynamically: a ``(1,)`` mask would broadcast all the way
+    through and silently judge either every lane or none, and a wrong-length one would
+    surface as a bare ``RuntimeError`` from the ``&`` below.
     """
+    if mask is not None and mask.shape != distance.shape:
+        raise ValueError(
+            f"ulp_stats: mask shape {tuple(mask.shape)} does not match distance "
+            f"{tuple(distance.shape)}"
+        )
     flat = distance.reshape(-1).to(torch.int64)
     selected = (
         torch.ones_like(flat, dtype=torch.bool) if mask is None else mask.reshape(-1)
@@ -317,7 +332,11 @@ def ulp_stats(
 
 
 def local_step(
-    value: float, dtype: torch.dtype, *, flush_subnormals: Optional[bool] = None
+    value: float,
+    dtype: torch.dtype,
+    *,
+    toward: Optional[float] = None,
+    flush_subnormals: Optional[bool] = None,
 ) -> float:
     """Size of one *counted* step of *dtype* at ``|value|``, as the metric counts it.
 
@@ -332,6 +351,12 @@ def local_step(
       infinite and a failure at the top of the range reads "1 ULP = inf". The binade is
       the same downward, so measure it that way. This is the ``finfo.max`` fixup ttnn's
       ``ulp()`` carries for the same reason.
+    * The gap is not symmetric at a power of two: below a boundary it is half the size it
+      is above. *toward* names the value the step is being counted to -- the result, at
+      the gate -- and when that lies below ``|value|`` the downward gap is the one a
+      counted step actually crossed. Without it a one-step bf16 result immediately below
+      ``1.0`` would be reported as ``1 ULP = 7.8125e-3`` when the step it took was
+      ``3.90625e-3``: the very asymmetry this integer metric exists to avoid.
     """
     if not math.isfinite(value):
         return float("nan")
@@ -346,7 +371,10 @@ def local_step(
         return float(info.tiny)
 
     scalar = torch.tensor(magnitude, dtype=dtype)
-    if float(scalar) == info.max:
+    step_is_downward = float(scalar) == info.max or (
+        toward is not None and math.isfinite(toward) and abs(toward) < magnitude
+    )
+    if step_is_downward:
         downward = torch.nextafter(scalar, torch.tensor(0.0, dtype=dtype))
         return float((scalar - downward).to(torch.float32))
     upward = torch.nextafter(scalar, torch.tensor(float("inf"), dtype=dtype))
@@ -371,7 +399,11 @@ def ulp_failure_message(
 
     *stats* accepts an already-computed :func:`ulp_stats` dict, so a caller that needed the
     verdict first does not pay for a second pass over the same distances — this message is
-    built on passes too, so the duplicate ran on every call.
+    built on passes too, so the duplicate ran on every call. Supplying it *asserts that the
+    stats were computed over the same* ``mask``: *mask* is read only on the branch that
+    recomputes them, so a caller that passes unmasked stats alongside a mask gets a
+    ``worst_index`` in a lane the mask excluded and lane counts from the wrong population.
+    :func:`within_ulp` passes the two together and keeps them consistent.
     """
     if stats is None:
         stats = ulp_stats(distance, mask)
@@ -382,7 +414,12 @@ def ulp_failure_message(
     index = stats["worst_index"]
     golden_value = float(golden.reshape(-1)[index])
     result_value = float(result.reshape(-1)[index])
-    step = local_step(golden_value, golden.dtype, flush_subnormals=flush_subnormals)
+    step = local_step(
+        golden_value,
+        golden.dtype,
+        toward=result_value,
+        flush_subnormals=flush_subnormals,
+    )
     budget = "" if max_ulp is None else f" (budget {max_ulp})"
     return (
         f"max {stats['max']} ULP @ [{index}]{budget}: result {result_value!r} vs golden "
@@ -403,8 +440,9 @@ def warn_if_threshold_unmeaningful(max_ulp: float, dtype: torch.dtype) -> bool:
         return False
     logger.warning(
         f"max_ulp={max_ulp} exceeds the largest meaningful ULP budget for {dtype} "
-        f"({ceiling} = 2**mantissa_bits). Past it the two values differ by more than an "
-        "order of magnitude and the op belongs on the tolerance metric, not this one."
+        f"({ceiling} = 2**mantissa_bits, one binade). Past it the two values are more than "
+        "a factor of two apart in the normal range and the op belongs on the tolerance "
+        "metric, not this one."
     )
     return True
 
@@ -439,9 +477,26 @@ def within_ulp(
         # in ulp_distance cannot tell them apart: without this, a verdict labelled
         # "Bfp8_b" would come back measured in bfloat16 steps, which is exactly the
         # measurement ulp_dtype exists to refuse.
-        ulp_dtype(fmt)
+        expected = ulp_dtype(fmt)
+        if golden.dtype != expected:
+            # Allowlisting the format is not enough on its own: two float32 tensors
+            # labelled Float16_b would be measured in float32 steps under a Float16_b
+            # verdict, applying the wrong lattice to the gate. The label and the lattice
+            # have to be the same claim.
+            raise ValueError(
+                f"within_ulp: {fmt.name} is measured in {expected}, but the tensors are "
+                f"{golden.dtype}; cast both to the output format's dtype first"
+            )
     warn_if_threshold_unmeaningful(max_ulp, golden.dtype)
 
+    if mask is not None and mask.shape != golden.shape:
+        # Checked, not broadcast: a (1,) mask would broadcast through every operation
+        # below and silently judge either all lanes or none, and a wrong-length one would
+        # only surface as a bare RuntimeError from ulp_stats.
+        raise ValueError(
+            f"within_ulp: mask shape {tuple(mask.shape)} does not match golden "
+            f"{tuple(golden.shape)}"
+        )
     selected = torch.ones_like(golden, dtype=torch.bool) if mask is None else mask
     mismatched = nonfinite_mismatches(golden, result) & selected
     if bool(mismatched.any()):

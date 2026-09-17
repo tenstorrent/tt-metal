@@ -283,11 +283,12 @@ def test_nan_sign_is_not_judged_here():
 
 @pytest.mark.parametrize("dtype", FLOAT_DTYPES, ids=str)
 def test_within_ulp_boundary_is_inclusive(dtype):
+    # One name for both, so the test cannot drift into 2 <= 3 and stay green while no
+    # longer testing the inclusive boundary it is named for.
+    budget = 3
     golden = _t([1.0], dtype)
-    at_budget = _step_up(1.0, dtype, 3)
-    over_budget = _step_up(1.0, dtype, 4)
-    assert within_ulp(golden, at_budget, 3)[0]
-    assert not within_ulp(golden, over_budget, 3)[0]
+    assert within_ulp(golden, _step_up(1.0, dtype, budget), budget)[0]
+    assert not within_ulp(golden, _step_up(1.0, dtype, budget + 1), budget)[0]
 
 
 def test_within_ulp_does_not_pass_on_the_unmeasurable_sentinel():
@@ -514,12 +515,35 @@ def test_identical_tensors_are_zero_steps_apart(dtype):
 
 
 def test_a_non_contiguous_input_is_measured_correctly():
-    """``view()`` on the bit pattern needs a contiguous buffer; a transposed tile is the
-    ordinary case in this harness, so the copy must happen inside the metric."""
-    golden = torch.ones(4, 6, dtype=torch.bfloat16).t()
-    result = golden.clone()
+    """A transposed tile is the ordinary case in this harness, so the flattening inside
+    the metric has to stay in step with the caller's own flat indexing.
+
+    Distinct values and a known perturbation, not a constant tensor: over a constant
+    tensor ``distance.max() == 0`` holds under any ordering, so the test could not fail.
+    Contiguity itself is not what is load-bearing today -- an equal-itemsize ``view()``
+    carries strides through -- but it becomes so for a future different-width
+    ``bits_dtype`` (fp8), and this is the assertion that would catch a desynchronised
+    flatten either way."""
+    golden = torch.arange(24).reshape(4, 6).to(torch.bfloat16).t()
     assert not golden.is_contiguous()
-    assert int(ulp_distance(golden, result).max()) == 0
+    assert len(set(golden.reshape(-1).tolist())) == 24
+
+    steps = 5
+    position = (
+        3,
+        1,
+    )  # a position whose flat index differs before and after transposing
+    result = golden.clone()
+    result[position] = _step_up(float(golden[position]), torch.bfloat16, steps)[0]
+
+    distance = ulp_distance(golden, result)
+    assert int(distance.max()) == steps
+    stats = ulp_stats(distance)
+    assert stats["max"] == steps
+    # The flat index has to point back at the perturbed lane of the transposed view.
+    expected_flat = position[0] * golden.shape[1] + position[1]
+    assert stats["worst_index"] == expected_flat
+    assert float(golden.reshape(-1)[stats["worst_index"]]) == float(golden[position])
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -615,6 +639,75 @@ def test_within_ulp_refuses_a_format_with_no_per_element_ulp(fmt):
         ValueError, match="no per-element ULP"
     ):
         within_ulp(values, values.clone(), 1, fmt=fmt)
+
+
+@pytest.mark.parametrize(
+    "fmt,wrong",
+    [
+        (DataFormat.Float16_b, torch.float32),
+        (DataFormat.Float32, torch.bfloat16),
+        (DataFormat.Float16, torch.float32),
+    ],
+    ids=lambda x: getattr(x, "name", str(x)),
+)
+def test_within_ulp_refuses_a_supported_format_that_disagrees_with_the_dtype(
+    fmt, wrong
+):
+    """Allowlisting the format is not the whole check. Two float32 tensors labelled
+    ``Float16_b`` would be measured in float32 steps under a Float16_b verdict -- the
+    wrong lattice for the gate, and a wrong pass/fail, with nothing in the message to say
+    so. The label and the lattice have to be the same claim."""
+    values = torch.ones(4, dtype=wrong)
+    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+        ValueError, match="but the tensors are"
+    ):
+        within_ulp(values, values.clone(), 1, fmt=fmt)
+
+
+@pytest.mark.parametrize("shape", [(1,), (4,), (3, 4)], ids=str)
+def test_the_verdict_refuses_a_mask_it_would_otherwise_broadcast(shape):
+    """``mask`` is the input a per-op budget registry computes dynamically, so a
+    wrong-shaped one has to be a named error. A ``(1,)`` mask is the dangerous case: it
+    broadcasts all the way through and silently judges every lane or none."""
+    golden = torch.ones(2, 6, dtype=torch.bfloat16)
+    mask = torch.ones(shape, dtype=torch.bool)
+    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+        ValueError, match="mask shape"
+    ):
+        within_ulp(golden, golden.clone(), 1, mask=mask)
+    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+        ValueError, match="mask shape"
+    ):
+        ulp_stats(ulp_distance(golden, golden.clone()), mask)
+
+
+def test_the_reported_step_below_a_power_of_two_is_the_gap_it_crossed():
+    """The gap is half as large below a boundary as above it. Reporting the upward gap for
+    a result that stepped *down* across ``1.0`` would print ``1 ULP = 7.8125e-3`` for a
+    step of ``3.90625e-3`` -- the asymmetry the integer count exists to avoid, reappearing
+    in the diagnostic that sits next to it."""
+    below, above = 2.0**-3, 2.0**-2  # one bf16 step each side of 1/8 -> gaps differ 2x
+    assert local_step(1.0, torch.bfloat16, toward=0.0) == pytest.approx(2.0**-8)
+    assert local_step(1.0, torch.bfloat16, toward=2.0) == pytest.approx(2.0**-7)
+    assert local_step(1.0, torch.bfloat16) == pytest.approx(2.0**-7)
+    assert below < above  # the binades the two gaps belong to
+
+    golden = _t([1.0], torch.bfloat16)
+    result = _step_down(1.0, torch.bfloat16)
+    ok, message = within_ulp(golden, result, 0, fmt=DataFormat.Float16_b)
+    assert not ok
+    assert "max 1 ULP" in message
+    assert f"{2.0 ** -8:.6e}" in message
+    assert f"{2.0 ** -7:.6e}" not in message
+
+
+def test_the_reported_step_above_a_power_of_two_is_unchanged():
+    """The upward gap stays the default, so nothing about an ordinary failure moves."""
+    golden = _t([1.0], torch.bfloat16)
+    result = _step_up(1.0, torch.bfloat16, 3)
+    ok, message = within_ulp(golden, result, 0, fmt=DataFormat.Float16_b)
+    assert not ok
+    assert f"{2.0 ** -7:.6e}" in message
 
 
 def test_within_ulp_still_works_without_a_format():
