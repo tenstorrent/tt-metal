@@ -334,7 +334,6 @@ FORCE_INLINE void cb_acquire_pages_dispatch_s(uint32_t n) {
     num_pages_acquired += n;
 }
 
-// Safe only because the caller has already consumed a command; see fd_seed_upstream_sem.
 template <uint32_t noc_xy, uint32_t sem_id>
 FORCE_INLINE void cb_release_pages_dispatch_s(uint32_t n) {
 #ifdef ARCH_QUASAR

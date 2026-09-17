@@ -266,8 +266,7 @@
 #define MEM_DISPATCH_PACKET_HEADER_POOL_BASE \
     (MEM_DISPATCH_TENSIX_FABRIC_CONNECTIONS_BASE + MEM_TENSIX_FABRIC_CONNECTIONS_SIZE)
 
-// Dispatch-engine copies of the three semaphore side-regions; see the Tensix chain above for what each
-// one holds and why the cached pool is kept separate.
+// Dispatch-engine copies of the Tensix semaphore side-regions above; see there for what each holds.
 #define MEM_DISPATCH_NOC_CAS_RET_BASE \
     (((MEM_DISPATCH_PACKET_HEADER_POOL_BASE + MEM_PACKET_HEADER_POOL_SIZE) + 63) & ~63)
 #define MEM_DISPATCH_NOC_CAS_RET_SIZE 64
@@ -276,16 +275,21 @@
 #define MEM_DISPATCH_DM_CACHED_SEM_BASE (MEM_DISPATCH_NOC_SEM_LOCK_BASE + MEM_DISPATCH_NOC_SEM_LOCK_SIZE)
 #define MEM_DISPATCH_DM_CACHED_SEM_ROW 8
 #define MEM_DISPATCH_DM_CACHED_SEM_SIZE 128  // keep >= NUM_SEMAPHORES * MEM_DISPATCH_DM_CACHED_SEM_ROW
-// Guard size edits: all three regions must stay whole, 64B-aligned cache lines.
 #if (MEM_DISPATCH_NOC_CAS_RET_SIZE % 64 != 0) || (MEM_DISPATCH_NOC_SEM_LOCK_SIZE % 64 != 0) || \
     (MEM_DISPATCH_DM_CACHED_SEM_BASE % 64 != 0) || (MEM_DISPATCH_DM_CACHED_SEM_SIZE % 64 != 0)
 #error "CAS-ret/lock regions and the cached semaphore pool must be whole, aligned 64B cache lines"
 #endif
 
-#define MEM_DISPATCH_MAP_END (MEM_DISPATCH_DM_CACHED_SEM_BASE + MEM_DISPATCH_DM_CACHED_SEM_SIZE)
+// Everything above MEM_DISPATCH_MAP_END shifts with it, so the span must stay a multiple of the 2 kB
+// cache set period or the kernel config ring and text move to different sets. Outer % keeps the pad 0, not 2048.
+#define MEM_DISPATCH_SEM_REGIONS_END (MEM_DISPATCH_DM_CACHED_SEM_BASE + MEM_DISPATCH_DM_CACHED_SEM_SIZE)
+#define MEM_DISPATCH_SEM_REGIONS_SPAN \
+    (MEM_DISPATCH_SEM_REGIONS_END - (MEM_DISPATCH_PACKET_HEADER_POOL_BASE + MEM_PACKET_HEADER_POOL_SIZE))
+#define MEM_DISPATCH_MAP_ALIGN_PAD ((2048 - (MEM_DISPATCH_SEM_REGIONS_SPAN % 2048)) % 2048)
+#define MEM_DISPATCH_MAP_END (MEM_DISPATCH_SEM_REGIONS_END + MEM_DISPATCH_MAP_ALIGN_PAD)
+#define MEM_DISPATCH_MAP_SPAN (MEM_DISPATCH_SEM_REGIONS_SPAN + MEM_DISPATCH_MAP_ALIGN_PAD)
 
-// Resolved per build target: device code names these and gets its own core's layout. The per-layout
-// names stay available for code that describes one core type from the other.
+// Pre-resolved form of the two layouts, so shared device code names one symbol instead of its own #if.
 #if defined(COMPILE_FOR_DISPATCH_ENGINE)
 #define MEM_SEM_CAS_RET_BASE MEM_DISPATCH_NOC_CAS_RET_BASE
 #define MEM_SEM_CAS_RET_SIZE MEM_DISPATCH_NOC_CAS_RET_SIZE
@@ -303,6 +307,10 @@
 #define MEM_SEM_CACHED_POOL_ROW MEM_DM_CACHED_SEM_ROW
 #define MEM_SEM_CACHED_POOL_SIZE MEM_DM_CACHED_SEM_SIZE
 #endif
+
+// Span covering all three regions above, for the boot-time zeroing that treats them as one block.
+#define MEM_SEM_REGIONS_BASE MEM_SEM_CAS_RET_BASE
+#define MEM_SEM_REGIONS_SIZE (MEM_SEM_CACHED_POOL_BASE + MEM_SEM_CACHED_POOL_SIZE - MEM_SEM_CAS_RET_BASE)
 
 // Only DM0 needs an init-local staging area on a dispatch engine. RTA/semaphore kernel config overlays its start.
 #define MEM_DISPATCH_KERNEL_CONFIG_SIZE (2 * 1024)

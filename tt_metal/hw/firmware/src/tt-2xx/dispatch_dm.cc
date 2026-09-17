@@ -108,12 +108,7 @@ extern "C" uint32_t _start1() {
         do_crt1(__ldm_data_start);
         // Must precede the ready flag below, which releases the other pushers.
         WATCHER_RING_BUFFER_INIT();
-        // Discard before zeroing: a dirty line at boot could otherwise write back over the zeros.
-        constexpr uint32_t sem_words_size = MEM_SEM_CAS_RET_SIZE + MEM_SEM_LOCK_SIZE + MEM_SEM_CACHED_POOL_SIZE;
-        invalidate_l2_cache_range(MEM_SEM_CAS_RET_BASE, sem_words_size);
-        for (uint32_t w = 0; w < sem_words_size / 4; w++) {
-            reinterpret_cast<volatile uint32_t*>(MEM_L1_UNCACHED_BASE + MEM_SEM_CAS_RET_BASE)[w] = 0;
-        }
+        zero_semaphore_regions();
         (*GET_MAILBOX_ADDRESS_DEV(fw_shared_globals_ready))[hartid] = SHARED_GLOBALS_READY_GO;
     }
     extern uint32_t __ldm_tdata_init[];

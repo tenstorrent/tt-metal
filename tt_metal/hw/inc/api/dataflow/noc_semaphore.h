@@ -9,10 +9,6 @@
 #include "api/debug/assert.h"
 #include "api/dataflow/semaphore_binding_token.h"
 
-// Never hardcode TENSIX here: sem_l1_base[] is populated for every core type, so a wrong index
-// silently resolves to a valid pointer into another core type's kernel-config region.
-constexpr ProgrammableCoreType semaphore_core_type = static_cast<ProgrammableCoreType>(PROGRAMMABLE_CORE_TYPE);
-
 /**
  * @brief Semaphore synchronization primitive for programmable cores.
  *
@@ -40,7 +36,7 @@ constexpr ProgrammableCoreType semaphore_core_type = static_cast<ProgrammableCor
  *  - relay_unicast(dst_sem, ...): Set a different remote semaphore on one core to this semaphore's local value.
  *  - relay_multicast(dst_sem, ...): Multicast this semaphore's local value into a different destination semaphore.
  */
-template <ProgrammableCoreType core_type = semaphore_core_type, SemScope SCOPE = SemScope::LOCAL_NONATOMIC>
+template <ProgrammableCoreType core_type = ProgrammableCoreType::TENSIX, SemScope SCOPE = SemScope::LOCAL_NONATOMIC>
 class Semaphore {
     // Lets relay_unicast / relay_multicast read dst_sem's private members without a public accessor.
     template <ProgrammableCoreType OT, SemScope OS>
@@ -462,4 +458,4 @@ private:
 
 // `Semaphore s(sem::name);` adopts the mechanism the host baked into the token.
 template <std::uint32_t SEM_ID, SemScope TOK_SCOPE>
-Semaphore(SemaphoreBindingToken<SEM_ID, TOK_SCOPE>) -> Semaphore<semaphore_core_type, TOK_SCOPE>;
+Semaphore(SemaphoreBindingToken<SEM_ID, TOK_SCOPE>) -> Semaphore<ProgrammableCoreType::TENSIX, TOK_SCOPE>;

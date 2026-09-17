@@ -90,27 +90,25 @@ FORCE_INLINE volatile T tt_l1_ptr* uncached_l1_ptr(uintptr_t addr) {
     return reinterpret_cast<volatile T tt_l1_ptr*>(l1_uncached_addr(addr));
 }
 
-// Credits dispatch and dispatch_s return to prefetch. A cached AMO reaches only the local node's pool
-// row, which FD satisfies by co-locating all three stages on one dispatch engine
-// (expand_quasar_dispatch_engine_pool_for_fd_assignment). Emule has no cached pool.
+// Credits dispatch and dispatch_s return to prefetch. A cached AMO only reaches the local node's
+// pool row, which works because Quasar FD is hd-only -- all three stages share one dispatch engine,
+// enforced by the #error in cq_prefetch.cpp. Emule has no cached pool.
 #if defined(ARCH_QUASAR) && !defined(TT_EMULE_USE_L1_POOL)
 constexpr SemScope fd_upstream_sem_scope = SemScope::DM_LOCAL_CACHED;
 #else
 constexpr SemScope fd_upstream_sem_scope = SemScope::LOCAL_NONATOMIC;
 #endif
 
-// The token is synthesized because its constructor is the only one accepting a scope other than
-// LOCAL_NONATOMIC. Build at the point of use, never store: non-cached scopes resolve through
-// sem_l1_base, which firmware does not populate until firmware_config_init() runs.
+// Never store in a global: the constructor resolves through sem_l1_base, which firmware populates only
+// in firmware_config_init(). The token is built here, not host-generated, because only it takes a scope.
 template <uint32_t sem_id, SemScope scope>
 FORCE_INLINE auto fd_semaphore() {
     return Semaphore<programmable_core_type, scope>(SemaphoreBindingToken<sem_id, scope>{});
 }
 
-// The pool sits outside the kernel config buffer, so the host's init write reaches only the ordinary
-// semaphore slot; copy it across. A plain store is safe despite the consumers already running: a
-// consumer returns credits only after consuming a command, which prefetch can only send after seeding.
-// A consumer that released credits before consuming one would break this silently.
+// The host's init write lands in the ordinary semaphore slot, not the pool, so copy it across. Remove this
+// if FD becomes a Metal 2.0 kernel -- codegen's init_dm_local_cached() does it. A plain store is safe here:
+// a consumer returns credits only after consuming a command, which prefetch can only send after seeding.
 template <uint32_t sem_id>
 FORCE_INLINE void fd_seed_upstream_sem() {
     if constexpr (fd_upstream_sem_scope == SemScope::DM_LOCAL_CACHED) {

@@ -27,12 +27,14 @@
 #include "noc/noc_parameters.h"  // PCIE_ALIGNMENT
 
 // FABRIC_RELAY is defined exactly when !is_hd(), so this catches an _h/_d build.
-// Quasar FD assumes prefetcher and dispatcher share a Tensix. A split build must resolve:
+// Quasar FD assumes all three stages share one dispatch engine. A split build must resolve:
 //   - Payload-before-credit ordering: fabric relay does not honour the NoC packet flush tag this file uses.
 //   - Credit return: fd_upstream_sem_scope is not gated on the variant, so a split build must force
-//     LOCAL_NONATOMIC, route the release through the NoC, and drop the fd_seed_upstream_sem calls.
+//     LOCAL_NONATOMIC and release via the remote up() overload; the seeding calls then compile out.
 //   - DispatchSRelayInlineState shares cmd buf 0 with DispatchRelayInlineState, so both inherit one
 //     DEST_COORD; valid only while dispatch_s is co-resident.
+//   - Sub-command copies pass first_line_invalidated=!cmddat_wrap_enable, which is only free because the
+//     _hd loop instantiates process_cmd with wrapping off. A _d build wraps and re-reads the full extent.
 #if defined(ARCH_QUASAR) && defined(FABRIC_RELAY)
 #error "Quasar FD supports the _hd prefetcher only; the split _h/_d variants are not supported yet."
 #endif
@@ -1796,7 +1798,6 @@ uint32_t process_stall(uintptr_t cmd_ptr) {
     auto sync_sem = fd_semaphore<my_downstream_sync_sem_id, fd_upstream_sem_scope>();
     uint32_t heartbeat = 0;
     do {
-        invalidate_l1_cache();
         IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat, CQ_PREFETCH_CMD_BARE_MIN_SIZE);
     } while (sync_sem.value() != count);
     WAYPOINT("PSD");
@@ -3130,7 +3131,9 @@ void kernel_main_hd() {
     uint32_t l1_cache[l1_cache_elements_rounded];
     PrefetchExecBufState exec_buf_state;
 
-    // Must precede any downstream traffic.
+    // Must precede any downstream traffic. Only these three qualify for the cached pool: every writer is
+    // a co-resident DM using a local AMO. The downstream_* credits publish payload, so they must ride the
+    // NoC with it; my_upstream_cb_sem_id is host-written. A NoC write must never target the pool.
     fd_seed_upstream_sem<my_downstream_cb_sem_id>();
     fd_seed_upstream_sem<my_downstream_sync_sem_id>();
     fd_seed_upstream_sem<my_dispatch_s_cb_sem_id>();

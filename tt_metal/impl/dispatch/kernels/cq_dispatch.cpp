@@ -190,7 +190,6 @@ RelayClientType relay_client;
 
 // Release policies are TU-local so we can use the local relay_client instance
 struct NocReleasePolicy {
-    // Safe only because the caller has already consumed a command; see fd_seed_upstream_sem.
     template <uint8_t noc_idx, uint32_t noc_xy, uint32_t sem_id>
     static FORCE_INLINE void release(uint32_t pages) {
 #ifdef ARCH_QUASAR
