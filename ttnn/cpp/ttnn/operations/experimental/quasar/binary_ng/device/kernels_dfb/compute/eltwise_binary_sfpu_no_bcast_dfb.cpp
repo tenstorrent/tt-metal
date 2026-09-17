@@ -71,24 +71,13 @@ FORCE_INLINE void process_sfpu_tiles(
 #endif
 
     tile_regs_acquire();
-#ifdef ARCH_QUASAR
-    // On Quasar the data-format reconfig is a no-op, so copy_init alone reprograms the unpacker
-    // descriptor to point at each operand before its copy_tile loop. matches_metal_v2_slice requires
-    // lhs and rhs to share a data format, so no SrcA data-format reconfig is needed here.
-    copy_init(dfb_post_lhs_id);
-#else
     reconfig_data_format_srca(dfb_post_rhs_id, dfb_post_lhs_id);
     copy_init(dfb_post_lhs_id);
-#endif
     for (uint32_t i = 0; i < n; ++i) {
         copy_tile(dfb_post_lhs_id, i, i * 2);
     }
-#ifdef ARCH_QUASAR
-    copy_init(dfb_post_rhs_id);
-#else
     reconfig_data_format_srca(dfb_post_lhs_id, dfb_post_rhs_id);
     copy_init(dfb_post_rhs_id);
-#endif
     for (uint32_t i = 0; i < n; ++i) {
         copy_tile(dfb_post_rhs_id, i, i * 2 + 1);
 #if HAS_ACTIVATIONS(POST)

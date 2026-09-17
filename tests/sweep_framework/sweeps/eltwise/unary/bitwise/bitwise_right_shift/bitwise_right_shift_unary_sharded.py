@@ -2,24 +2,28 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Optional, Tuple
-from functools import partial
-
-import json
-import torch
 import random
+from functools import partial
+from typing import Optional, Tuple
+
+import torch
 import ttnn
-import math
-from tests.sweep_framework.sweep_utils.utils import gen_shapes, sanitize_shape_rm
+from models.common.utility_functions import torch_random
+
 from tests.sweep_framework.sweep_utils.sharding_utils import (
     gen_sharded_spec_unary,
-    parse_sharding_spec,
     invalidate_vector_sharding,
+    parse_sharding_spec,
 )
-from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
-
-from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
-from models.common.utility_functions import torch_random
+from tests.sweep_framework.sweep_utils.utils import sanitize_shape_rm
+from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import (
+    gen_func_with_cast_tt,
+)
+from tests.ttnn.utils_for_testing import (
+    check_with_pcc,
+    start_measuring_time,
+    stop_measuring_time,
+)
 
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 120
@@ -35,7 +39,7 @@ parameters = {
     "nightly": {
         "input_spec": gen_sharded_spec_unary(4, max_tensor_size_per_core=20 * 1024, layouts=["TILE_LAYOUT"]),
         "shift_bits": list(range(1, 31)),
-        "input_a_dtype": [ttnn.int32],
+        "input_a_dtype": [ttnn.int32, ttnn.uint32],
     },
 }
 
@@ -104,9 +108,15 @@ def run(
     torch_input_tensor_a = gen_func_with_cast_tt(
         partial(torch_random, low=-2147483647, high=2147483648, dtype=torch.int32), input_a_dtype
     )(input_shape)
+    if input_a_dtype == ttnn.uint32:
+        torch_input_tensor_a = torch_input_tensor_a.to(torch.uint32)
 
     golden_function = ttnn.get_golden_function(ttnn.bitwise_right_shift)
-    torch_output_tensor = golden_function(torch_input_tensor_a, shift_bits).to(torch.int32)
+    torch_output_tensor = golden_function(torch_input_tensor_a, shift_bits)
+    if torch_output_tensor.dtype == torch.uint32:
+        torch_output_tensor = torch_output_tensor.view(torch.int32)
+    else:
+        torch_output_tensor = torch_output_tensor.to(torch.int32)
 
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
@@ -120,6 +130,10 @@ def run(
     result = ttnn.bitwise_right_shift(input_tensor_a, shift_bits, memory_config=sharded_config)
     e2e_perf = stop_measuring_time(start_time)
     output_tensor = ttnn.to_torch(result)
+    if output_tensor.dtype == torch.uint32:
+        output_tensor = output_tensor.view(torch.int32)
+    else:
+        output_tensor = output_tensor.to(torch.int32)
 
     pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.999)
     return [pcc, e2e_perf]

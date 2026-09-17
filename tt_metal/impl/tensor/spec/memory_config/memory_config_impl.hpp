@@ -21,13 +21,15 @@ public:
         std::optional<ShardSpec> shard_spec,
         std::optional<NdShardSpec> nd_shard_spec,
         bool created_with_nd_shard_spec,
-        bool per_core_allocation = false) :
+        bool per_core_allocation = false,
+        bool range_lockstep_allocation = false) :
         memory_layout_(memory_layout),
         buffer_type_(buffer_type),
         shard_spec_(std::move(shard_spec)),
         nd_shard_spec_(std::move(nd_shard_spec)),
         created_with_nd_shard_spec_(created_with_nd_shard_spec),
-        per_core_allocation_(per_core_allocation) {}
+        per_core_allocation_(per_core_allocation),
+        range_lockstep_allocation_(range_lockstep_allocation) {}
 
     MemoryConfigImpl(const MemoryConfigImpl&) = default;
     MemoryConfigImpl(MemoryConfigImpl&&) noexcept = default;
@@ -42,6 +44,8 @@ public:
     bool created_with_nd_shard_spec_ = false;
     // Experimental: access only via experimental::per_core_allocation free functions.
     bool per_core_allocation_ = false;
+    // Experimental: access only via experimental::range_lockstep_allocation free functions.
+    bool range_lockstep_allocation_ = false;
 };
 
 }  // namespace tt::tt_metal

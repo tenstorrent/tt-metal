@@ -1240,7 +1240,7 @@ public:
         tt_metal::SetRuntimeArgs(program, dispatch_kernel, disp_logical, {0u, 0u, 0u});
 
         device_data.overflow_check(this->device_);
-        tt_metal::LaunchProgram(*this->mesh_device_, std::move(program), /*wait_until_cores_done=*/true);
+        tt_metal::LaunchProgram(*this->mesh_device_, std::move(program));
         const bool pass = device_data.validate(this->device_);
         EXPECT_TRUE(pass) << "SD Dispatcher test failed validation";
     }

@@ -1,0 +1,39 @@
+# Per-path exceptions: mark specific findings intentional rather than disabling
+# a checker everywhere. Filters are filepath (an fnmatch glob), checker_name
+# (exact) and report_hash (prefix). The schema key is $version, not version,
+# which --help does not mention.
+#
+# Applied by the consolidate job at parse time, so a change costs one job re-run
+# rather than sixteen hardware legs. When a rule is warranted, and which
+# candidates were rejected: tech_reports/code-indexing/kernel-clang-tidy.md.
+
+$version: 1
+
+rules:
+  # Including a .cpp is how the JIT builds a kernel: jit_build emits
+  # kernel_includes.hpp and the chlkc_{math,pack,unpack}.cpp prologs, each
+  # pulling the kernel body in as a source file. chlkc_list.h does it in-repo.
+  - filters:
+      filepath: "*/kernel_includes.hpp"
+      checker_name: bugprone-suspicious-include
+    actions:
+      review_status: intentional
+      reason: "The JIT includes the kernel body as a source file by design."
+
+  - filters:
+      filepath: "*/chlkc_*"
+      checker_name: bugprone-suspicious-include
+    actions:
+      review_status: intentional
+      reason: "The JIT includes the kernel body as a source file by design."
+
+  # Tensix register and config definitions, derived from the hardware rather
+  # than hand-written. An enum is invisible to #if, which these are tested with.
+  # Scoped rather than disabled: all 3,968 findings are under this one path, and
+  # the checker is worth keeping on kernel code.
+  - filters:
+      filepath: "*/hw/inc/internal/*"
+      checker_name: modernize-macro-to-enum
+    actions:
+      review_status: intentional
+      reason: "Hardware register definitions; must stay preprocessor macros."

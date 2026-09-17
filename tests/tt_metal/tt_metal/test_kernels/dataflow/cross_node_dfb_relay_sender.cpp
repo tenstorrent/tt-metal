@@ -24,12 +24,13 @@ void kernel_main() {
     constexpr uint32_t batch_size = get_compile_time_arg_val(3);
 
     const uint32_t staging_base = get_arg_val<uint32_t>(0);
+    const CoreLocalMem<uint8_t> staging(staging_base);
     Noc noc;
     experimental::CrossNodeDFB cn_dfb(remote_dfb_id);
 
     for (uint32_t offset = 0; offset < total_entries; offset += batch_size) {
         cn_dfb.reserve_back(batch_size);
-        cn_dfb.write_broadcast(staging_base + offset * entry_size, batch_size, noc);
+        cn_dfb.write_broadcast(noc, staging, batch_size, {.offset_bytes = offset * entry_size});
         cn_dfb.flush_writes(noc);
         cn_dfb.push_back(batch_size, noc);
     }

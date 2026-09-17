@@ -248,6 +248,10 @@ class Llama3RuntimeConfig:
     max_prefill_chunk_size: int
     max_context_len: int
     trace_prefill_supported_seq_lens: tuple[int, ...] = (128, 1024)
+    supports_batched_prefill: bool = True
+    max_prefill_batch_size: int = 32
+    disable_batched_prefill: bool = False
+    batched_prefill_batched_extract: bool = True
 
     def can_enable_trace(self, prefill_seq_len, num_cached_tokens=0):
         return (
@@ -400,7 +404,15 @@ def _max_prefill_chunk_size(mesh_device) -> int:
     override = os.getenv("MAX_PREFILL_CHUNK_SIZE")
     if override is not None:
         return int(override) * 1024
-    return {"N150": 4, "N300": 64, "N150x4": 4, "T3K": 128}[get_device_name(mesh_device)] * 1024
+    return {
+        "N150": 4,
+        "N300": 64,
+        "N150x4": 4,
+        "T3K": 128,
+        "P150": 4,
+        "P300": 4,
+        "P150x4": 128,
+    }[get_device_name(mesh_device)] * 1024
 
 
 def _trace_prefill_supported_seq_lens(
@@ -408,12 +420,23 @@ def _trace_prefill_supported_seq_lens(
 ) -> tuple[int, ...]:
     supported_seq_lens_by_device = {
         "N150": (128, 1024),
+        "P150": (128, 1024),
+        "P300": (128, 1024),
+        "P150x4": (128, 1024),
         "N300": (128, 1024, 2048, 4096, 8192),
         "N150x4": (128, 1024, 2048, 4096, 8192),
         "T3K": (128, 1024, 2048, 4096, 8192),
     }
     supported_seq_lens = supported_seq_lens_by_device[device_name]
     return tuple(seq_len for seq_len in supported_seq_lens if seq_len <= min(max_prefill_chunk_size, max_seq_len))
+
+
+def _disable_batched_prefill(mesh_device) -> bool:
+    """Resolve the model/SKU half of the sequential-prefill policy."""
+
+    return get_device_name(mesh_device) in {"P150", "P300", "P150x4", "P150x8"} or bool(
+        os.getenv("DISABLE_BATCHED_PREFILL")
+    )
 
 
 def _weight_cache_path(model_cache_path: Path, *, instruct: bool, dtype):
@@ -439,6 +462,7 @@ def from_pretrained(
     n_layers: int | None = None,
     dtype=ttnn.bfloat8_b,
     paged_attention_config=None,
+    converted_state_dict: dict[str, torch.Tensor] | None = None,
 ):
     """Build a product-level TTTv2 Llama-3.1-8B model from an HF checkpoint."""
     from models.common.models.llama3_8b.model import Llama3Transformer1D, build_llama3_transformer_1d_config
@@ -482,12 +506,16 @@ def from_pretrained(
         rope_cos=rope_cos,
         rope_sin=rope_sin,
         model_cache_path=model_cache_path,
-        state_dict=load_converted_state_dict(
-            hf_model,
-            head_dim=text_config["hidden_size"] // text_config["num_attention_heads"],
-            n_heads=text_config["num_attention_heads"],
-            n_kv_heads=text_config["num_key_value_heads"],
-            n_layers=num_hidden_layers,
+        state_dict=(
+            converted_state_dict
+            if converted_state_dict is not None
+            else load_converted_state_dict(
+                hf_model,
+                head_dim=text_config["hidden_size"] // text_config["num_attention_heads"],
+                n_heads=text_config["num_attention_heads"],
+                n_kv_heads=text_config["num_key_value_heads"],
+                n_layers=num_hidden_layers,
+            )
         ),
         optimizations=optimizations,
         weight_cache_path=_weight_cache_path(model_cache_path, instruct=instruct, dtype=dtype),
@@ -511,6 +539,12 @@ def from_pretrained(
         max_prefill_chunk_size=max_prefill_chunk_size,
         max_context_len=text_config["max_position_embeddings"],
         trace_prefill_supported_seq_lens=trace_prefill_supported_seq_lens,
+        # TTTv1 disables batched prefill for Llama-3.1-8B on every supported
+        # BlackHole SKU because BH prefill reductions are batch-variant. The
+        # executor independently disables it for device sampling so serving
+        # also has finite program/trace coverage on every architecture.
+        disable_batched_prefill=_disable_batched_prefill(mesh_device),
+        batched_prefill_batched_extract=not os.environ.get("DISABLE_BATCHED_EXTRACT"),
     )
     return Llama3ForCausalLM(
         model=Llama3Transformer1D(model_config),

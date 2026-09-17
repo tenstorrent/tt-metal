@@ -8,6 +8,8 @@ case on the production shape. The fast post-commit smoke is in
 tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa.py (shared helpers in sparse_sdpa_test_utils.py).
 """
 
+import statistics
+
 import pytest
 import torch
 from loguru import logger
@@ -16,6 +18,8 @@ import ttnn
 from models.common.utility_functions import run_for_blackhole, skip_with_llk_assert, skip_with_watcher
 from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
 from tests.ttnn.unit_tests.operations.sdpa.sparse_sdpa_test_utils import (
+    ATTENTION_SINK_SHAPES,
+    make_attention_sink_inputs,
     make_inputs,
     golden,
     to_dev,
@@ -351,4 +355,80 @@ def test_sparse_sdpa_indexed_cache_hit_host_dispatch_is_cheap(device):
     assert min_us < 1000.0, (
         f"indexed cache-hit host dispatch {min_us:.0f}us: override_runtime_arguments is rebuilding the full "
         f"descriptor on every hit instead of patching the runtime-arg slots in place"
+    )
+
+
+def _attention_sink_op(device, H, S, TOPK, dim, kc):
+    q, kv, indices, sink, scale = make_attention_sink_inputs(H, S, TOPK, dim)
+    tt_q = to_dev(q, device, ttnn.bfloat16)
+    tt_kv = to_dev(kv, device, ttnn.bfloat16)
+    tt_idx = to_dev(indices.to(torch.int32), device, ttnn.uint32)
+    tt_sink = to_dev(sink, device, ttnn.bfloat16)
+
+    def run():
+        return ttnn.transformer.sparse_sdpa(
+            tt_q,
+            tt_kv,
+            tt_idx,
+            dim,
+            kv_format=ttnn.transformer.SparseKVFormat.BF16,
+            scale=scale,
+            k_chunk_size=kc,
+            attention_sink=tt_sink,
+        )
+
+    return run
+
+
+@run_for_blackhole()
+@pytest.mark.parametrize("H,S,TOPK,dim,kc", ATTENTION_SINK_SHAPES)
+def test_sparse_sdpa_attention_sink_determinism(device, H, S, TOPK, dim, kc):
+    run = _attention_sink_op(device, H, S, TOPK, dim, kc)
+    reference = ttnn.to_torch(run())
+    assert torch.isfinite(reference).all()
+    entries = device.num_program_cache_entries()
+    # Compare BF16 storage bits, including signed zero, across ten cache-hit executions.
+    for iteration in range(10):
+        actual = ttnn.to_torch(run())
+        assert torch.equal(
+            reference.view(torch.int16), actual.view(torch.int16)
+        ), f"Attention sink output changed on repeat {iteration + 1}"
+    assert device.num_program_cache_entries() == entries, "Repeated sink calls must reuse the cached program"
+
+
+# Blackhole BF16 baselines measured 2026-09-12: median of five warmed device executions.
+# Keys are (H, S, TOPK, dim, kc), matching ATTENTION_SINK_SHAPES.
+_ATTENTION_SINK_EXPECTED_MS = {
+    (128, 4, 128, 64, 32): 0.028223,
+    (64, 640, 640, 512, 128): 1.270069,
+    (128, 640, 1152, 512, 128): 2.547384,
+}
+
+
+@run_for_blackhole()
+@pytest.mark.parametrize("H,S,TOPK,dim,kc", ATTENTION_SINK_SHAPES)
+@pytest.mark.requires_host_iommu
+@skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
+@skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
+def test_sparse_sdpa_attention_sink_perf(device, H, S, TOPK, dim, kc):
+    if not ttnn.device.IsProgramRealtimeProfilerActive():
+        pytest.fail("Real-time profiler must be active for attention sink perf checks (needs IOMMU)")
+    run = _attention_sink_op(device, H, S, TOPK, dim, kc)
+    run()  # Compile and warm the program cache before measuring device execution.
+    ttnn.synchronize_device(device)
+    entries = device.num_program_cache_entries()
+    samples = []
+    for _ in range(5):
+        out, record = profile_realtime_program(device, run)
+        assert tuple(out.shape) == (1, H, S, dim)
+        samples.append(record["duration_ns"] / 1e6)
+    assert device.num_program_cache_entries() == entries
+    duration_ms = statistics.median(samples)
+    logger.info(f"Attention sink H={H} S={S} TOPK={TOPK} dim={dim} kc={kc}: {duration_ms:.6f} ms; {samples=}")
+    expected_ms = _ATTENTION_SINK_EXPECTED_MS[H, S, TOPK, dim, kc]
+    lower = expected_ms * (1 - SPARSE_PERF_MARGIN)
+    upper = expected_ms * (1 + SPARSE_PERF_MARGIN)
+    assert lower <= duration_ms <= upper, (
+        f"Attention sink device duration {duration_ms:.6f} ms outside band [{lower:.6f}, {upper:.6f}] ms "
+        f"(expected {expected_ms:.6f} ms, margin +/- {SPARSE_PERF_MARGIN * 100:.0f}%)"
     )

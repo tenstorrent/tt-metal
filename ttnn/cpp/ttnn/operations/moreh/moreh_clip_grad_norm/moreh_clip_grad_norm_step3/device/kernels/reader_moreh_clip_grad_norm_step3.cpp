@@ -24,7 +24,7 @@ void kernel_main() {
     const auto input_addrg = TensorAccessor(input_args, input_addr);
 
     // clip_coef_clamped
-    constexpr auto coef_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
+    constexpr auto coef_args = TensorAccessorArgs<decltype(input_args)::next_compile_time_args_offset()>();
     const auto coef_addrg = TensorAccessor(coef_args, clip_coef_clamped_addr);
 
     Noc noc;

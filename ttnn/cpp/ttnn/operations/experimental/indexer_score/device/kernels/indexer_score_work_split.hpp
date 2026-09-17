@@ -13,6 +13,9 @@
 
 namespace ttnn::operations::experimental::indexer_score {
 
+// Largest ring the fused reader supports; sizes its per-shard FusedRingGate arrays.
+constexpr uint32_t kMaxRingSize = 32;
+
 // Schedule: every q-row-group is dealt the full [0, k_len_tiles) k rectangle (not just its causal
 // prefix), so the deal is uniform across groups -- which is what lets the banded multicast apply.
 // Future/diagonal tiles are computed and masked to -inf in-band (see valid_prefix_tiles); cost is

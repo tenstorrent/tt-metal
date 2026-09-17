@@ -13,6 +13,7 @@
 #include "tt-metalium/buffer_types.hpp"
 #include "tt-metalium/hal.hpp"
 #include "tt-metalium/kernel_types.hpp"
+#include "tt-metalium/mesh_device.hpp"
 #include "tt-metalium/work_split.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
@@ -335,7 +336,6 @@ void validate_matmul_reuse_work_split(
 
 }  // namespace ttnn::operations::matmul::utilities
 
-
 namespace ttnn::prim::dram_sharded_helpers {
 
 void validate_num_workers_per_dram_bank(std::size_t workers_per_bank) {
@@ -424,6 +424,7 @@ std::vector<DramBankReaderAssignment> get_dram_bank_reader_assignments(
         "Multiple readers per DRAM bank currently require a NOC0 data-movement kernel");
 
     const auto worker_grid = device->compute_with_storage_grid_size();
+    auto* mesh_device = dynamic_cast<tt::tt_metal::distributed::MeshDevice*>(device);
     std::set<tt::tt_metal::CoreCoord> used(primary_workers.begin(), primary_workers.end());
 
     for (uint32_t bank = 0; bank < primary_workers.size(); ++bank) {
@@ -443,8 +444,18 @@ std::vector<DramBankReaderAssignment> get_dram_bank_reader_assignments(
                     // All readers use AllocatorBank on the same NOC and therefore target the same
                     // firmware-approved endpoint. Place additional readers near the bank's primary
                     // reader to minimize NOC hops without routing one NOC to multiple endpoints.
-                    const uint32_t cost = tt::tt_metal::experimental::Device::get_worker_noc_hop_distance(
-                        device, candidate, primary_workers[bank], noc);
+                    // This factory shares one logical reader placement across the mesh, as it
+                    // already does for primary readers. Use a representative chip for the hop
+                    // heuristic; bank addressing still uses each executing chip's allocator table.
+                    const uint32_t cost = mesh_device ? tt::tt_metal::experimental::Device::get_worker_noc_hop_distance(
+                                                            mesh_device,
+                                                            tt::tt_metal::distributed::MeshCoordinate::zero_coordinate(
+                                                                mesh_device->shape().dims()),
+                                                            candidate,
+                                                            primary_workers[bank],
+                                                            noc)
+                                                      : tt::tt_metal::experimental::Device::get_worker_noc_hop_distance(
+                                                            device, candidate, primary_workers[bank], noc);
                     // Equal-cost candidates use the same endpoint and hop count. Keep the first candidate in ascending
                     // x/y scan order so that the assignment is deterministic without adding a second routing objective.
                     if (cost < best_cost) {

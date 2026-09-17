@@ -22,8 +22,6 @@ using CommonDataFormat = tt::DataFormat;
 using CommonDataFormat = DataFormat;
 #endif
 
-#include <cstddef>
-
 #if !defined(ENV_LLK_INFRA)
 // Deprecated buffer size from old DPRINT implementation. Used only to verify that buffers are still the same size.
 constexpr static std::uint32_t DPRINT_BUFFER_SIZE = 204;  // per thread

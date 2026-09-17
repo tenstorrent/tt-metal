@@ -3,6 +3,8 @@
 
 from types import SimpleNamespace
 
+import pytest
+
 from models.common.models.qwen3_32b import model as qwen_model
 
 
@@ -104,6 +106,118 @@ def test_all_gather_rmsnorm_honors_memory_config_when_tensor_is_already_full_wid
 
     assert qwen_model._all_gather_rmsnorm_tensor(norm, x, memory_config=requested_memory_config) is converted_tensor
     assert calls == [(x, requested_memory_config)]
+
+
+@pytest.mark.parametrize(
+    "cluster_type",
+    [qwen_model.ttnn.cluster.ClusterType.P150_X4, qwen_model.ttnn.cluster.ClusterType.P300_X2],
+)
+def test_qwen_rmsnorm_and_logits_all_gathers_pin_ring_for_bh_four_die_products(cluster_type, monkeypatch):
+    mesh = SimpleNamespace(
+        arch=lambda: qwen_model.ttnn.device.Arch.BLACKHOLE,
+        get_num_devices=lambda: 4,
+    )
+    ccl = SimpleNamespace(
+        get_and_cycle_ag_semaphore_handles=lambda: object(),
+        get_and_cycle_barrier_semaphore_handle=lambda: object(),
+    )
+    memory_config = object()
+    tensor = SimpleNamespace(shape=(1, 1, 32, 1280), memory_config=lambda: memory_config)
+    norm = SimpleNamespace(
+        config=SimpleNamespace(
+            mesh_device=mesh,
+            weight=SimpleNamespace(source=SimpleNamespace(numel=lambda: 5120)),
+            tt_ccl=ccl,
+        )
+    )
+    topologies = []
+
+    def fake_all_gather(value, **kwargs):
+        topologies.append(kwargs["topology"])
+        return value
+
+    monkeypatch.setattr(qwen_model.ttnn.cluster, "get_cluster_type", lambda: cluster_type)
+    monkeypatch.setattr(qwen_model.ttnn.experimental, "all_gather_async", fake_all_gather)
+    monkeypatch.setattr(qwen_model.ttnn, "untilize", lambda value, **_kwargs: value)
+
+    assert qwen_model._all_gather_rmsnorm_tensor(norm, tensor) is tensor
+    model = SimpleNamespace(num_devices=4, tt_ccl=ccl, mesh_device=mesh)
+    assert qwen_model.Qwen3_32B.gather_and_untilize_logits(model, tensor) is tensor
+    assert topologies == [qwen_model.ttnn.Topology.Ring, qwen_model.ttnn.Topology.Ring]
+
+
+def test_qwen_ccl_topology_preserves_wormhole_t3k_ring(monkeypatch):
+    mesh = SimpleNamespace(
+        arch=lambda: qwen_model.ttnn.device.Arch.WORMHOLE_B0,
+        get_num_devices=lambda: 8,
+    )
+    monkeypatch.setattr(
+        qwen_model.ttnn.cluster,
+        "get_cluster_type",
+        lambda: qwen_model.ttnn.cluster.ClusterType.T3K,
+    )
+
+    assert qwen_model._qwen3_ccl_topology(mesh) == qwen_model.ttnn.Topology.Ring
+
+
+@pytest.mark.parametrize(
+    ("arch", "cluster_type", "num_devices"),
+    [
+        (qwen_model.ttnn.device.Arch.BLACKHOLE, qwen_model.ttnn.cluster.ClusterType.P150_X8, 4),
+        (qwen_model.ttnn.device.Arch.BLACKHOLE, qwen_model.ttnn.cluster.ClusterType.P150_X4, 8),
+        (qwen_model.ttnn.device.Arch.WORMHOLE_B0, qwen_model.ttnn.cluster.ClusterType.T3K, 4),
+    ],
+)
+def test_qwen_ccl_topology_rejects_mismatched_product_identity(
+    arch, cluster_type, num_devices, monkeypatch, expect_error
+):
+    mesh = SimpleNamespace(arch=lambda: arch, get_num_devices=lambda: num_devices)
+    monkeypatch.setattr(qwen_model.ttnn.cluster, "get_cluster_type", lambda: cluster_type)
+
+    with expect_error(ValueError, "Qwen3-32B CCL supports"):
+        qwen_model._qwen3_ccl_topology(mesh)
+
+
+def test_decode_reshards_final_norm_output_to_lm_head_input_memory_config(monkeypatch):
+    """Guard the BH final-norm -> LMHead sharding boundary without opening hardware."""
+
+    decode_norm_memcfg = object()
+    lm_head_memcfg = SimpleNamespace(is_sharded=lambda: True)
+    gathered = object()
+    normalized = SimpleNamespace(memory_config=lambda: decode_norm_memcfg)
+    resharded = object()
+    logits = object()
+    calls = []
+
+    norm = SimpleNamespace(
+        config=SimpleNamespace(decode_memory_config=decode_norm_memcfg),
+        decode_forward=lambda x: calls.append(("norm", x)) or normalized,
+    )
+    lm_head = SimpleNamespace(
+        config=SimpleNamespace(input_memcfg=lm_head_memcfg),
+        forward=lambda x: calls.append(("lm_head", x)) or logits,
+    )
+    model = SimpleNamespace(layers=[], norm=norm, lm_head=lm_head)
+
+    def fake_all_gather(final_norm, x, *, memory_config):
+        calls.append(("all_gather", final_norm, x, memory_config))
+        return gathered
+
+    def fake_reshard(x, memory_config):
+        calls.append(("reshard", x, memory_config))
+        return resharded
+
+    monkeypatch.setattr(qwen_model, "_all_gather_rmsnorm_tensor", fake_all_gather)
+    monkeypatch.setattr(qwen_model.ttnn, "reshard", fake_reshard)
+
+    x_embed = object()
+    assert qwen_model.Qwen3_32B.decode_forward(model, x_embed, object(), (object(), object())) is logits
+    assert calls == [
+        ("all_gather", norm, x_embed, decode_norm_memcfg),
+        ("norm", gathered),
+        ("reshard", normalized, lm_head_memcfg),
+        ("lm_head", resharded),
+    ]
 
 
 def test_decoder_layer_prefill_calls_chunk_capable_attention_entrypoint(monkeypatch):

@@ -67,6 +67,12 @@ public:
             ADDR_CRTA_OFFSET % sizeof(uint32_t) == 0, "TensorBindingToken: ADDR_CRTA_OFFSET must be 4-byte aligned");
     }
 
+    // Construct from the "binding not present" token.
+    // Meant to be used with `get_token_if_present` to make the token-not-exist branch compile.
+    // This will never be run in runtime & NullTensorBindingToken is not constructible.
+    [[nodiscard]] explicit LocalTensorAccessor(const tensor_accessor::NullTensorBindingToken&) noexcept :
+        LocalTensorAccessor(uint32_t{0}) {}
+
     // Legacy constructor: from a raw node-local L1 base address (a byte address).
     // (Typically a legacy Buffer's address passed into the kernel as a CRTA.)
     [[nodiscard]] explicit LocalTensorAccessor(uint32_t bank_base_address) noexcept :

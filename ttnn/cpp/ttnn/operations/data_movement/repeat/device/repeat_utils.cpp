@@ -3,9 +3,10 @@
 
 #include "ttnn/operations/data_movement/repeat/device/repeat_utils.hpp"
 
-#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
+
+#include "ttnn/operations/data_movement/common/synthesize_output_shard_spec.hpp"
 
 namespace ttnn::operations::data_movement::repeat {
 
@@ -183,11 +184,13 @@ std::optional<ShardSpec> generate_repeat_shard_spec(
     const ttnn::Shape& padded_out_shape,
     TensorMemoryLayout memory_layout,
     std::optional<ShardOrientation> orientation_hint) {
+    if (memory_layout != TensorMemoryLayout::HEIGHT_SHARDED && memory_layout != TensorMemoryLayout::WIDTH_SHARDED &&
+        memory_layout != TensorMemoryLayout::BLOCK_SHARDED) {
+        return std::nullopt;
+    }
     auto* device = input_tensor.device();
     auto compute_grid_size = device->compute_with_storage_grid_size();
-    CoreRangeSet all_cores(CoreRange({0, 0}, {compute_grid_size.x - 1, compute_grid_size.y - 1}));
-    uint32_t num_cores = all_cores.num_cores();
-    if (num_cores == 0) {
+    if (compute_grid_size.x == 0 || compute_grid_size.y == 0) {
         return std::nullopt;
     }
 
@@ -195,60 +198,37 @@ std::optional<ShardSpec> generate_repeat_shard_spec(
     for (int32_t i = 0; i < static_cast<int32_t>(padded_out_shape.rank()) - 1; ++i) {
         tensor_height *= static_cast<uint64_t>(padded_out_shape[i]);
     }
-    uint64_t tensor_width = padded_out_shape[-1];
+    const uint64_t tensor_width = padded_out_shape[-1];
     if (tensor_height == 0 || tensor_width == 0) {
         return std::nullopt;
     }
 
-    std::array<uint32_t, 2> shard_shape = {0, 0};
-    if (memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
-        auto height_padded = tt::round_up(tensor_height, static_cast<uint64_t>(num_cores) * tt::constants::TILE_HEIGHT);
-        auto shard_height =
-            tt::round_up(tt::div_up(height_padded, static_cast<uint64_t>(num_cores)), tt::constants::TILE_HEIGHT);
-        shard_shape = {static_cast<uint32_t>(shard_height), static_cast<uint32_t>(tensor_width)};
-    } else if (memory_layout == TensorMemoryLayout::WIDTH_SHARDED) {
-        auto shard_width =
-            tt::round_up(tt::div_up(tensor_width, static_cast<uint64_t>(num_cores)), tt::constants::TILE_WIDTH);
-        shard_shape = {static_cast<uint32_t>(tensor_height), static_cast<uint32_t>(shard_width)};
-    } else if (memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
-        CoreCoord grid_size = all_cores.bounding_box().grid_size();
-        if (grid_size.x == 0 || grid_size.y == 0) {
-            return std::nullopt;
-        }
-        auto height_padded =
-            tt::round_up(tensor_height, static_cast<uint64_t>(grid_size.y) * tt::constants::TILE_HEIGHT);
-        auto shard_height =
-            tt::round_up(tt::div_up(height_padded, static_cast<uint64_t>(grid_size.y)), tt::constants::TILE_HEIGHT);
-        auto shard_width =
-            tt::round_up(tt::div_up(tensor_width, static_cast<uint64_t>(grid_size.x)), tt::constants::TILE_WIDTH);
-        shard_shape = {static_cast<uint32_t>(shard_height), static_cast<uint32_t>(shard_width)};
-    } else {
-        return std::nullopt;  // INTERLEAVED / unsupported — caller handles.
-    }
+    auto spec = common::synthesize_output_shard_spec(
+        compute_grid_size,
+        tensor_height,
+        tensor_width,
+        memory_layout,
+        {.is_tile = true,
+         .orientation_hint = orientation_hint,
+         .input_orientation = input_tensor.shard_spec().has_value()
+                                  ? std::optional{input_tensor.shard_spec()->orientation}
+                                  : std::nullopt,
+         .caller_tag = "Repeat"});
 
-    // RM: reject if page_size not L1-aligned (16 bytes).
+    // RM-only dispatch guards (page-size L1 alignment + exact width divisibility); not shard-shape math.
     if (input_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR) {
         const uint64_t page_size_bytes =
-            static_cast<uint64_t>(shard_shape[1]) * static_cast<uint64_t>(input_tensor.element_size());
+            static_cast<uint64_t>(spec.shape[1]) * static_cast<uint64_t>(input_tensor.element_size());
         constexpr uint64_t kL1Alignment = 16;
         if (page_size_bytes == 0 || (page_size_bytes % kL1Alignment) != 0) {
             return std::nullopt;
         }
-        if (tensor_width % shard_shape[1] != 0) {
+        if (tensor_width % spec.shape[1] != 0) {
             return std::nullopt;
         }
     }
 
-    log_debug(
-        tt::LogOp, "Repeat: synthesised shard spec ({}, {}) over {} cores", shard_shape[0], shard_shape[1], num_cores);
-    // Prefer explicit hint, then input's orientation, else ROW_MAJOR.
-    ShardOrientation orientation = ShardOrientation::ROW_MAJOR;
-    if (orientation_hint.has_value()) {
-        orientation = *orientation_hint;
-    } else if (input_tensor.shard_spec().has_value()) {
-        orientation = input_tensor.shard_spec()->orientation;
-    }
-    return ShardSpec(all_cores, shard_shape, orientation);
+    return spec;
 }
 
 }  // namespace ttnn::operations::data_movement::repeat

@@ -139,7 +139,7 @@ def run_unary_fp32_test_with_ulp(device, ttnn_function, torch_function, max_ulp,
 
     # The input covers both signs of NaN and infinity. With NaN-preserving transfer enabled,
     # allow_nonfinite still requires matching NaN/Inf positions and exact signed infinities.
-    assert_with_ulp(y_torch, tt_out, max_ulp, allow_nonfinite=True)
+    assert_with_ulp(expected_result=y_torch, actual_result=tt_out, ulp_threshold=max_ulp, allow_nonfinite=True)
 
 
 def test_atan_fp32(device):
@@ -193,7 +193,12 @@ def run_unary_test(device, h, w, ttnn_function, ulp=1, allow_nonfinite=False, pc
     if pcc_check:
         assert_with_pcc(torch_output_tensor, output_tensor, pcc)
     else:
-        assert_with_ulp(torch_output_tensor, output_tensor, ulp, allow_nonfinite=allow_nonfinite)
+        assert_with_ulp(
+            expected_result=torch_output_tensor,
+            actual_result=output_tensor,
+            ulp_threshold=ulp,
+            allow_nonfinite=allow_nonfinite,
+        )
 
 
 @pytest.mark.parametrize("h", [64])

@@ -194,7 +194,9 @@ inline void move_d2a_fixed_face(const std::uint8_t addrmod)
     // MOVD2A src is relative to dest_section_base + dest_counter.
     // Use fixed offsets (0, 8) — the dest counter handles face progression.
     // NOTE: For different tile dimensions we need different amounts of MOV* instructions; see separate issue.
-    TTI_STALLWAIT(p_stall::STALL_MATH, 0, 0, p_stall::SRCA_VLD);
+    // MATH drains the preceding math instructions so their source-bank release has landed before
+    // SRCA_VLD tests the bank that MOVD2A will write.
+    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::NOTHING, p_stall::MATH, p_stall::SRCA_VLD);
     TTI_MOVD2A(0, 0, addrmod, p_movd2a::MOV_8_ROWS, 0);
     TTI_MOVD2A(0, 8, addrmod, p_movd2a::MOV_8_ROWS, 8);
 }
@@ -204,7 +206,9 @@ inline void move_d2b_fixed_face(const std::uint8_t addrmod)
     // MOVD2B src is relative to dest_section_base + dest_counter.
     // Use fixed offsets (0, 8) — the dest counter handles face progression.
     // NOTE: For different tile dimensions we need different amounts of MOV* instructions; see separate issue.
-    TTI_STALLWAIT(p_stall::STALL_MATH, 0, 0, p_stall::SRCB_VLD);
+    // MATH drains the preceding math instructions so their source-bank release has landed before
+    // SRCB_VLD tests the bank that MOVD2B will write.
+    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::NOTHING, p_stall::MATH, p_stall::SRCB_VLD);
     TTI_MOVD2B(0, 0, addrmod, p_movd2b::MOV_8_ROWS, 0, 0);
     TTI_MOVD2B(0, 8, addrmod, p_movd2b::MOV_8_ROWS, 0, 8);
 }

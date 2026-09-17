@@ -83,7 +83,9 @@ def _build_profiler_cmd(
         device_analysis_opt = "".join(device_analysis_opt_list)
     if capture_perf_counters_groups:
         assert type(capture_perf_counters_groups) == list
-        capture_perf_counters_opt = "--profiler-capture-perf-counters=" + ",".join(capture_perf_counters_groups)
+        capture_perf_counters_opt = (
+            "--profiler-capture-perf-counters=" + ",".join(capture_perf_counters_groups) + " --perf-counter-multipass"
+        )
 
     cmd_call = "" if is_command_binary_exe else "-m"
     # Quote the embedded command so that arguments like `-k "expr with spaces"` survive through the outer shell

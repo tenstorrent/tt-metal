@@ -536,12 +536,15 @@ public:
                 (uint32_t)get_dst_ptr<AddressType::NOC>(dst, dst_args),
                 noc_id_);
         } else {
-            // In order to sanitize, need to grab full noc addr + xfer size from state.
+            // Any-len set_state does not program AT_LEN (size is supplied here). Sanitize with
+            // size_bytes — reading AT_LEN from the cmd buf would falsely report zero-length
+            // (common on Quasar RoCC where set_state only sticky-programs coordinates).
             auto src_addr = get_src_ptr<AddressType::LOCAL_L1>(src, src_args);
             auto dst_addr =
                 get_dst_ptr<AddressType::NOC>(dst, dst_args);  // NoC target was programmed in set_async_write_state
-            RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_WITH_STATE, src_addr, 0ull, 0, -1, posted, noc_id_);
-            DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_WITH_ADDR_AND_SIZE_STATE(noc_id_, dst_addr, src_addr);
+            RECORD_NOC_EVENT_WITH_ADDR(
+                NocEventType::WRITE_WITH_STATE, src_addr, dst_addr, size_bytes, -1, posted, noc_id_);
+            DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc_id_, dst_addr, src_addr, size_bytes);
 
             WAYPOINT("NWPW");
             ncrisc_noc_write_any_len_with_state<noc_mode, posted>(

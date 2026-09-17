@@ -73,15 +73,15 @@
 #include "api/compute/bcast.h"
 #endif
 
-// SwiGLU-OAI and SiTU-GLU both evaluate their activation as one binary SFPU op over the
-// raw gate/up accumulators, so they share the phase-3 path below and differ only in the op
-// called. The program factory sets exactly one of the two variant defines; each variant
+// SwiGLU-OAI, SiTU-GLU and clamped SiLU-GLU all evaluate their activation as one binary SFPU
+// op over the raw gate/up accumulators, so they share the phase-3 path below and differ only
+// in the op called. The program factory sets exactly one variant define; each variant
 // caches as a distinct program, so a stray second define would mean wrong numerics with no
 // host-side signal.
-#if defined(SWIGLU_OAI) && defined(SITU_GLU)
-#error "SWIGLU_OAI and SITU_GLU are mutually exclusive activation variants"
+#if (defined(SWIGLU_OAI) + defined(SITU_GLU) + defined(CLAMPED_SILU_GLU)) > 1
+#error "SWIGLU_OAI, SITU_GLU and CLAMPED_SILU_GLU are mutually exclusive activation variants"
 #endif
-#if defined(SWIGLU_OAI) || defined(SITU_GLU)
+#if defined(SWIGLU_OAI) || defined(SITU_GLU) || defined(CLAMPED_SILU_GLU)
 #define FUSED_BINARY_ACT 1
 #endif
 
@@ -99,6 +99,11 @@
 // Computes (beta_gate*tanh(gate/beta_gate)*sigmoid(gate)) * (beta_up*tanh(up/beta_up)).
 // Bakes SituGluConfigKimi (beta_gate=4.0, beta_up=25.0), Kimi K3's config.
 #include "api/compute/situ_glu.h"
+#endif
+
+#ifdef CLAMPED_SILU_GLU
+// Computes silu(min(gate,L)) * clamp(up,±L). Bakes ClampedSiluGluConfigDsV4 (limit=10.0).
+#include "api/compute/clamped_silu_glu.h"
 #endif
 
 namespace {
@@ -660,8 +665,8 @@ FORCE_INLINE void matmul_phase_fused_gu(
 
 // Both ops share the (gate, up, out) dst-index signature and bake their constants into a
 // config struct, so only these lines differ. Each variant is named explicitly rather than
-// left to an #else, so adding a third one fails the build instead of silently compiling as
-// whichever variant owned the fallback.
+// left to an #else, so a new one fails the build instead of silently compiling as whichever
+// variant owned the fallback.
 #if defined(SWIGLU_OAI)
 #define BINARY_ACT_INIT() MATH((ckernel::llk_math_eltwise_binary_sfpu_swiglu_init()))
 #define BINARY_ACT_TILE(fp32, g, u, o) MATH((ckernel::llk_math_eltwise_binary_sfpu_swiglu<fp32>(g, u, o)))
@@ -669,6 +674,10 @@ FORCE_INLINE void matmul_phase_fused_gu(
 // situ_glu_tile takes its fp32-dest mode from DST_ACCUM_MODE and wraps itself in MATH().
 #define BINARY_ACT_INIT() situ_glu_tile_init()
 #define BINARY_ACT_TILE(fp32, g, u, o) situ_glu_tile(g, u, o)
+#elif defined(CLAMPED_SILU_GLU)
+// clamped_silu_glu_tile takes its fp32-dest mode from DST_ACCUM_MODE and wraps itself in MATH().
+#define BINARY_ACT_INIT() clamped_silu_glu_tile_init()
+#define BINARY_ACT_TILE(fp32, g, u, o) clamped_silu_glu_tile(g, u, o)
 #else
 #error "FUSED_BINARY_ACT is set but no activation variant matched"
 #endif
@@ -910,6 +919,8 @@ void kernel_main() {
     // is what lets the reader and writer leave the padded down weights and the
     // padded hidden (gate/up N-OOB) columns unwritten: nothing ever reduces them.
     constexpr uint32_t d_K_down_tiles = get_compile_time_arg_val(34);
+    constexpr uint32_t min_active_tokens = get_compile_time_arg_val(35);
+    constexpr uint32_t max_active_tokens = get_compile_time_arg_val(36);
 
     // CBs
     constexpr uint32_t cb_in0_x = get_named_compile_time_arg_val("cb_in0_x");
@@ -950,7 +961,7 @@ void kernel_main() {
     CircularBuffer counts_scratch_cb(cb_counts_scratch);
     CircularBuffer idx_scratch_cb(cb_idx_scratch);
 
-    // Wait for the reader (BRISC) to push the counts/idx into shared L1. They
+    // Wait for the reader (NCRISC) to push the counts/idx into shared L1. They
     // are pushed ONCE and stay resident, so UNPACK can re-index them per expert.
     counts_scratch_cb.wait_front(1);
     idx_scratch_cb.wait_front(1);
@@ -963,8 +974,9 @@ void kernel_main() {
     // the pack thread). Same total compute, better pipelining.
     // Init once — shared across all experts.
 #ifdef FUSED_BINARY_ACT
-    // The binary activations init their own SFPU tables (recip for SwiGLU-OAI,
-    // tanh for SiTU-GLU) instead of silu's.
+    // The binary activations init their own SFPU tables (recip for SwiGLU-OAI and clamped
+    // SiLU-GLU, tanh for SiTU-GLU) instead of silu's. The recip table sets
+    // vConstFloatPrgm0 = 2.0f, which nothing between here and the tile calls reprograms.
     BINARY_ACT_INIT();
 #else
     silu_tile_init();
@@ -987,7 +999,10 @@ void kernel_main() {
             const volatile tt_l1_ptr uint32_t* idx_ptr =
                 reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(idx_l1_addr);
             const uint32_t global_expert_id = idx_ptr[local_expert_id];
-            count_value = counts_ptr[global_expert_id];
+            // Hybrid dispatch: experts outside this op's band belong to the other
+            // routed-expert op and are dropped here exactly like a zero count.
+            count_value =
+                adaptive_chunk::count_in_band(counts_ptr[global_expert_id], min_active_tokens, max_active_tokens);
             ckernel::mailbox_write(ckernel::ThreadId::MathThreadId, count_value);
             ckernel::mailbox_write(ckernel::ThreadId::PackThreadId, count_value);
         }));

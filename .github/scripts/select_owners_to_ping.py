@@ -2,8 +2,11 @@
 """Select which CodeOwners to ping for a pending PR review.
 
 Extracted from the inline `Select owners for notification` step of
-`.github/workflows/codeowners-group-analysis.yaml`. The behaviour is a faithful
-port of the original bash: same inputs, same selection rules, same outputs.
+`.github/workflows/codeowners-group-analysis.yaml`. Which rules are pending, and
+which owners are eligible for them, is unchanged from the original bash. Only the
+final pick within a rule differs: the two slots used to be filled at random and
+are now filled by availability, so a review request lands on someone who can act
+on it today.
 
 Inputs (environment variables):
   TEAM_MEMBERS        Contents of ${RUNNER_TEMP}/team_members.txt, i.e. a
@@ -22,6 +25,22 @@ Inputs (environment variables):
   PR_AUTHOR_LOGIN     PR author login (excluded from pinging).
   GITHUB_OUTPUT       Path to the step output file (GitHub Actions).
 
+Optional inputs, used to rank candidates by availability. Each one is a pure
+improvement: with none of them set the selection still works, it just treats
+every candidate as equally reachable and the pick is random, as it was
+before.
+
+  SLACK_USERS_FILE    Path to the `users.list` dump the notify job already
+                      writes (${RUNNER_TEMP}/slack_users.json). Supplies each
+                      member's timezone offset and status, i.e. working hours
+                      and out-of-office.
+  SLACK_BOT_TOKEN     Slack bot token, used only for `users.getPresence` to
+                      break ties within an availability tier.
+  GITHUB_TOKEN        Used to resolve a login's full name when it does not match
+                      a Slack handle directly, mirroring the workflow's own
+                      lookup so the tier is computed for the person who will
+                      actually be mentioned.
+
 Outputs (appended to $GITHUB_OUTPUT):
   selected-owners        comma-separated, sorted+deduped individual logins
   selected-slack-groups  comma-separated Slack group IDs
@@ -30,9 +49,14 @@ Outputs (appended to $GITHUB_OUTPUT):
 
 from __future__ import annotations
 
+import json
 import os
 import random
+import re
 import sys
+import urllib.error
+import urllib.request
+from datetime import datetime, timezone
 
 # --- team -> Slack group mapping (ID + handle) --------------------------------
 # Kept identical to the original workflow's get_slack_group_id / _handle.
@@ -75,6 +99,47 @@ BYPASS_TEAM = "@tenstorrent/codeowner-bypass"
 API_OWNERS_TEAM = "@tenstorrent/metalium-api-owners"
 API_REQUIRED_REVIEWER = "akerteszTT"
 
+# --- availability ladder ------------------------------------------------------
+# Owners of a pending rule are ranked before the two ping slots are filled, so a
+# review request lands on someone who can act on it today. Out-of-office is the
+# only tier that is skipped rather than deprioritised, and even that is undone
+# when skipping would leave the rule with nobody: an unanswered ping still beats
+# no ping.
+TIER_WORKING = 0  # inside local working hours, no out-of-office status
+TIER_REACHABLE = 1  # no out-of-office status, but outside working hours
+TIER_OOO = 2  # marked out of office
+
+WORK_START_HOUR = 9
+WORK_END_HOUR = 18  # exclusive, so 09:00-17:59 local
+
+OOO_EMOJI = {
+    ":palm_tree:",
+    ":ooo:",
+    ":airplane:",
+    ":no_entry:",
+    ":face_with_thermometer:",
+    ":hospital:",
+}
+OOO_TEXT = re.compile(
+    r"\b(ooo|out of office|off today|pto|vacation|holiday|on leave|annual leave|sick|parental)\b",
+    re.IGNORECASE,
+)
+
+# Logins whose Slack profile the workflow's fuzzy matcher cannot find. Kept in
+# sync with the `find_slack_user_id` case list in
+# `.github/workflows/codeowners-group-analysis.yaml` so that the tier is computed
+# for the same person the ping step goes on to mention.
+SLACK_ID_OVERRIDES: dict[str, str] = {
+    "mradosavljevicTT": "U0837MYG788",
+    "nsextonTT": "U08TVGQGGAE",
+    "ncvetkovicTT": "U07AUABTEP6",
+    "jvegaTT": "U07M7QZ0BQA",
+}
+
+# users.getPresence is rate limited and only ever breaks a tie, so cap the calls
+# and treat anyone past the cap as away rather than slowing the job down.
+PRESENCE_LOOKUP_LIMIT = 40
+
 
 def log(msg: str) -> None:
     print(msg, flush=True)
@@ -107,6 +172,184 @@ def approved_exact(login: str, approved_reviewers: str) -> bool:
     return login in approved_reviewers.replace(",", "\n").split("\n")
 
 
+# --------------------------------------------------------------------------- #
+# Availability
+# --------------------------------------------------------------------------- #
+def is_ooo(user: dict, now_utc: int) -> bool:
+    """Whether a Slack profile is flagged out of office right now."""
+    profile = user.get("profile") or {}
+    expiry = profile.get("status_expiration") or 0
+    if expiry and expiry <= now_utc:
+        return False  # an expired status Slack has not cleared yet
+    if (profile.get("status_emoji") or "") in OOO_EMOJI:
+        return True
+    return bool(OOO_TEXT.search(profile.get("status_text") or ""))
+
+
+def local_time(user: dict, now_utc: int) -> tuple[int, int]:
+    """(hour, weekday) where the member is, Monday = 0.
+
+    Slack reports `tz_offset` as the member's *current* offset from UTC, DST
+    already applied, so this needs no timezone database.
+    """
+    moment = datetime.fromtimestamp(now_utc + int(user.get("tz_offset") or 0), tz=timezone.utc)
+    return moment.hour, moment.weekday()
+
+
+def availability_tier(user: dict | None, now_utc: int) -> int:
+    """Rank a candidate for pinging. Lower is better."""
+    if user is None:
+        # No Slack match. We cannot tell what their day looks like, so treat them
+        # as reachable rather than penalising them into the out-of-office tier.
+        return TIER_REACHABLE
+    if is_ooo(user, now_utc):
+        return TIER_OOO
+    hour, weekday = local_time(user, now_utc)
+    if weekday < 5 and WORK_START_HOUR <= hour < WORK_END_HOUR:
+        return TIER_WORKING
+    return TIER_REACHABLE
+
+
+def _name_fields(user: dict) -> list[str]:
+    profile = user.get("profile") or {}
+    return [
+        user.get("real_name") or "",
+        profile.get("real_name") or "",
+        profile.get("display_name") or "",
+    ]
+
+
+class SlackDirectory:
+    """Resolve a GitHub login to the Slack profile the ping step will mention.
+
+    The match order mirrors `find_slack_user_id` in
+    `.github/workflows/codeowners-group-analysis.yaml`: hardcoded overrides, then
+    the GitHub full name, then the login, then a word-by-word match accepted only
+    when exactly one user matches. Matching the workflow matters — ranking a
+    candidate by someone else's timezone would be worse than not ranking at all.
+
+    Every failure path returns None, which `availability_tier` treats as merely
+    reachable, so a missing token or an unreachable API degrades the ordering
+    instead of breaking the selection.
+    """
+
+    def __init__(self, users: list[dict], github_token: str = "", slack_token: str = "") -> None:
+        self.users = users
+        self.github_token = github_token
+        self.slack_token = slack_token
+        self.by_id = {u.get("id"): u for u in users if u.get("id")}
+        self._user_cache: dict[str, dict | None] = {}
+        self._full_names: dict[str, str] = {}
+        self._presence: dict[str, bool] = {}
+        self._presence_calls = 0
+
+    @classmethod
+    def from_env(cls) -> "SlackDirectory":
+        users: list[dict] = []
+        path = os.environ.get("SLACK_USERS_FILE", "")
+        if path and os.path.isfile(path):
+            try:
+                with open(path, encoding="utf-8") as fh:
+                    loaded = json.load(fh)
+                if isinstance(loaded, list):
+                    users = [u for u in loaded if isinstance(u, dict)]
+                log(f"DEBUG select-owners: loaded {len(users)} Slack users for availability ranking")
+            except (OSError, ValueError) as exc:
+                log(f"WARNING select-owners: could not read {path} ({exc}); picking at random")
+        else:
+            log("DEBUG select-owners: no Slack user list; picking at random")
+        return cls(
+            users,
+            github_token=os.environ.get("GITHUB_TOKEN", ""),
+            slack_token=os.environ.get("SLACK_BOT_TOKEN", ""),
+        )
+
+    # -- GitHub full name (the workflow's first matching key) ------------------
+    def full_name(self, login: str) -> str:
+        if login in self._full_names:
+            return self._full_names[login]
+        name = ""
+        if self.github_token:
+            request = urllib.request.Request(f"https://api.github.com/users/{login}")
+            request.add_header("Authorization", f"Bearer {self.github_token}")
+            request.add_header("Accept", "application/vnd.github+json")
+            request.add_header("User-Agent", "tt-metal-codeowners-ping")
+            try:
+                with urllib.request.urlopen(request, timeout=15) as response:
+                    name = (json.load(response).get("name") or "").strip()
+            except (urllib.error.URLError, ValueError, TimeoutError) as exc:
+                log(f"DEBUG select-owners: no GitHub profile for {login} ({exc})")
+        self._full_names[login] = name
+        return name
+
+    def _match(self, login: str) -> dict | None:
+        override = SLACK_ID_OVERRIDES.get(login)
+        if override:
+            return self.by_id.get(override)
+
+        # Step order and exact-case comparisons are copied from the workflow. It
+        # is tempting to try the login first and skip the GitHub call, but a
+        # display_name that happens to equal someone else's login would then
+        # resolve to a different person here than in the ping itself.
+        full_name = self.full_name(login)
+        if full_name:
+            for user in self.users:
+                profile = user.get("profile") or {}
+                if full_name in (user.get("real_name") or "", profile.get("real_name") or ""):
+                    return user
+            for user in self.users:
+                if ((user.get("profile") or {}).get("display_name") or "") == full_name:
+                    return user
+
+        for user in self.users:
+            profile = user.get("profile") or {}
+            if login in (user.get("name") or "", profile.get("display_name") or ""):
+                return user
+
+        # Word-by-word, and only when a word identifies exactly one person. A
+        # surname shared by two colleagues has to fall through rather than guess.
+        for word in full_name.split():
+            if len(word) < 3:
+                continue
+            needle = word.lower()
+            hits = [u for u in self.users if any(needle in field.lower() for field in _name_fields(u))]
+            if len(hits) == 1:
+                return hits[0]
+        return None
+
+    def user(self, login: str) -> dict | None:
+        if login not in self._user_cache:
+            self._user_cache[login] = self._match(login)
+        return self._user_cache[login]
+
+    def tier(self, login: str, now_utc: int) -> int:
+        return availability_tier(self.user(login), now_utc)
+
+    def active(self, login: str) -> bool:
+        """Slack presence, used only to order people within a tier.
+
+        Never a filter: `away` means no recent keyboard input, so letting it
+        exclude anyone would risk a PR that pings nobody because a screensaver
+        came on.
+        """
+        if login in self._presence:
+            return self._presence[login]
+        result = False
+        user = self.user(login)
+        if user and self.slack_token and self._presence_calls < PRESENCE_LOOKUP_LIMIT:
+            self._presence_calls += 1
+            request = urllib.request.Request(f"https://slack.com/api/users.getPresence?user={user.get('id')}")
+            request.add_header("Authorization", f"Bearer {self.slack_token}")
+            try:
+                with urllib.request.urlopen(request, timeout=15) as response:
+                    payload = json.load(response)
+                result = bool(payload.get("ok")) and payload.get("presence") == "active"
+            except (urllib.error.URLError, ValueError, TimeoutError) as exc:
+                log(f"DEBUG select-owners: presence lookup failed for {login} ({exc})")
+        self._presence[login] = result
+        return result
+
+
 class Selector:
     def __init__(self) -> None:
         # TEAM_MEMBERS may be passed inline or via a file path (the original
@@ -122,6 +365,11 @@ class Selector:
         self.approved_reviewers = os.environ.get("APPROVED_REVIEWERS", "")
         self.moreh_members = os.environ.get("MOREH_TEAM_MEMBERS", "")
         self.pr_author = os.environ.get("PR_AUTHOR_LOGIN", "")
+
+        # Availability data is optional: without it every candidate ranks the
+        # same and the pick stays random.
+        self.now_utc = int(datetime.now(tz=timezone.utc).timestamp())
+        self.directory = SlackDirectory.from_env()
 
         # Parse "team:members" file once into a lookup (first entry wins, as the
         # original `grep "^$team:" | head -1` did).
@@ -211,19 +459,42 @@ class Selector:
             result[key] = has_approval
         return result
 
-    # -- pick up to 2 owners at random (parity with RANDOM % n twice) ----------
-    @staticmethod
-    def pick_two(candidates: list[str]) -> list[str]:
-        n = len(candidates)
-        if n == 0:
+    # -- pick up to 2 owners, most available first ------------------------------
+    def pick_two(self, candidates: list[str]) -> list[str]:
+        """Pick the two owners most likely to act on the request.
+
+        Out-of-office candidates are dropped first, but only if that leaves
+        someone: a rule where everyone is away still gets pinged. The two slots
+        are then filled in tier order rather than stopping after one in-hours
+        reviewer, because asking a single person halves the chance of a reply.
+        Within a tier the pick stays random, so re-running `/codeowners ping`
+        reaches a fresh pair instead of nagging the two people who already did
+        not reply. Slack presence only sorts a tier that has more candidates
+        than remaining slots, which keeps the presence calls to the one group
+        where they change the answer.
+        """
+        if not candidates:
             return []
-        if n == 1:
-            return [candidates[0]]
-        r1 = random.randrange(n)
-        r2 = random.randrange(n)
-        while r2 == r1:
-            r2 = random.randrange(n)
-        return [candidates[r1], candidates[r2]]
+        pool = [c for c in candidates if self.directory.tier(c, self.now_utc) < TIER_OOO]
+        if not pool:
+            log("All candidates are marked out of office; pinging them anyway")
+            pool = list(candidates)
+
+        chosen: list[str] = []
+        for tier in sorted({self.directory.tier(c, self.now_utc) for c in pool}):
+            need = 2 - len(chosen)
+            if need <= 0:
+                break
+            group = [c for c in pool if self.directory.tier(c, self.now_utc) == tier]
+            random.shuffle(group)
+            if len(group) > need:
+                # Stable sort, so the shuffle above still orders equal presence.
+                group.sort(key=lambda c: 0 if self.directory.active(c) else 1)
+            chosen.extend(group[:need])
+
+        for login in chosen:
+            log(f"DEBUG select-owners: {login} tier={self.directory.tier(login, self.now_utc)}")
+        return chosen
 
     def unapproved_filtered(self, candidates: list[str]) -> list[str]:
         """Drop approved reviewers, moreh members, and the PR author."""

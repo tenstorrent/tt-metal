@@ -31,7 +31,7 @@ def test_celu_arange(device):
 
     tt_result = ttnn.celu(tt_in)
     result = ttnn.to_torch(tt_result)
-    assert_with_ulp(golden, result, 1, allow_nonfinite=True)
+    assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=1, allow_nonfinite=True)
 
 
 @pytest.mark.parametrize(

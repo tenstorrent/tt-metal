@@ -49,18 +49,19 @@ def test_deepseek_v3_moe_perf_loudbox():
     """
     run_moe_perf_with_approximation(
         command_8x1=_CMD_8X1,
-        # Re-cut 2026-08-28 on the CI LoudBox (bh_loudbox), run 33194029504. One sample.
-        # The 2D matmul program configs are the whole delta: against main on the same box and day
-        # the Matmul bucket falls 2,201,295 -> 381,174 ns while Other (3,615,143 -> 3,617,678) and
-        # CCL (17,690 -> 22,700) hold, so 5_895_298 centred on a matmul shape nothing builds now.
-        expected_ns_8x1=4_021_552,
+        # Re-cut 2026-09-07 on the CI LoudBox (bh_loudbox), run 34128459250. One sample.
+        # The routed expert is the whole delta: it reads 994,733 ns against a 2,365,321 ns
+        # remainder the previous centre also had to contain, which puts the op alone at 1.67x --
+        # inside the 1.10-1.69x its own gate records at these token counts.
+        expected_ns_8x1=3_360_055,
         model_name_8x1="deepseek_v3_moe_lb_8x1_torus_y_dispatch_combine",
         command_2x4=_CMD_2X4,
-        # Re-cut 2026-08-28 on the CI LoudBox (bh_loudbox), run 33194029504. One sample,
-        # superseding the 9_339_547 two-run CI mean cut earlier the same day. Same cause as 8x1:
-        # Matmul 715,503 -> 216,878 ns against main, Other flat within 0.2%. This gate still has
-        # to be cut on the CI runner -- the dev box bh-lb-15 reads it 2.7% slower.
-        expected_ns_2x4=8_840_595,
+        # Re-cut 2026-09-07 on the CI LoudBox (bh_loudbox), run 34128459250. One sample.
+        # Same cause as 8x1, and this slot is the most exposed to it: the routed expert is 61% of
+        # the total at 4,044,853 ns against a 2,541,825 ns remainder, so the op alone moved 1.56x.
+        # This gate still has to be cut on the CI runner -- the dev box bh-lb-15 reads it 2.7%
+        # slower.
+        expected_ns_2x4=6_586_678,
         model_name_2x4="deepseek_v3_moe_lb_2x4_fabric2d_gate",
         subdir="deepseek_v3_moe",
         margin=0.03,

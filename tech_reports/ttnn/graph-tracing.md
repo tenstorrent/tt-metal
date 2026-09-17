@@ -272,7 +272,7 @@ The importer produces output compatible with the ttnn-visualizer:
 - Input tensor IDs (instead of heuristic extraction from C++ graph connections)
 - Output tensor IDs (instead of C++ function_end connections)
 
-The importer matches `python_io` records to graph nodes by operation name, consuming them in order.
+The importer matches `python_io` records to graph nodes by operation name, consuming them in order. A failed start still consumes its record, so it is not paired with a later operation of the same name.
 
 **Tensor lifting**: When nested operations are filtered, their input/output tensor associations are "lifted" to the parent operation. For example, `ttnn.conv2d` might internally call `ttnn::matmul` which produces an output tensor — that tensor is attributed to `ttnn.conv2d` in the database. Internal tensors (produced and consumed within the same parent scope) are excluded.
 
@@ -629,6 +629,10 @@ Example device-op `function_start` params:
 **function_end params:**
 - `name`: Operation name
 - `duration_ns`: Wall-clock duration (optional)
+- `aborted`: `"true"` when the operation left by exception instead of returning (optional)
+- `abort_reason`: The exception message, when available (optional)
+
+A failing operation still emits `function_end`, so the trace stays balanced. Later operations keep their real nesting and remain visible as top-level operations in the report.
 
 ### tensor
 
@@ -676,14 +680,20 @@ Circular buffer events for streaming/multi-buffering.
 
 ### error
 
-The C++ graph processor does not emit error nodes directly. Instead, the Python importer detects **orphan operations** — `function_start` nodes without a matching `function_end` — and records them as `incomplete_operation` errors. Legacy JSON files with explicit error nodes are also supported.
+The C++ graph processor does not emit error nodes directly. The importer records a failing operation in the `errors` table from, in order of preference:
+
+1. A Python exception captured with the operation (type and message).
+2. A `function_end` with `aborted: "true"` (`error_type` is `aborted_operation`; message is `abort_reason`). Nested aborts are attributed to the enclosing reported operation.
+3. A `function_start` with no matching `function_end` (`error_type` is `incomplete_operation`). This covers older reports and a capture that ends while an operation is still open.
+
+Legacy JSON files with explicit error nodes are also supported.
 
 **Database `errors` table columns:**
 - `operation_id`: The operation where the error was detected
 - `operation_name`: Name of the operation
-- `error_type`: `"incomplete_operation"` (inferred) or explicit type from JSON
+- `error_type`: The Python exception type, `"aborted_operation"`, `"incomplete_operation"`, or an explicit type from JSON
 - `error_message`: Human-readable description
-- `stack_trace`: Empty (reserved for future use)
+- `stack_trace`: The Python stack at the failing operation, when recorded
 - `timestamp`: Empty (reserved for future use)
 
 ---

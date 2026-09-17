@@ -14,6 +14,7 @@
 #include "hostdevcommon/common_values.hpp"
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operations/compute_throttle_utils.hpp"
@@ -405,6 +406,7 @@ static ProgramDescriptor create_program_batch_sharded_descriptor(
         in1_writer_compile_args.push_back(bias_buffer_page_size);
         in1_writer_compile_args.push_back(bias_buffer_num_pages);
         in1_writer_compile_args.push_back(in3_block_tiles);
+        tt::tt_metal::TensorAccessorArgs(*bias_tensor).append_to(in1_writer_compile_args);
     }
 
     uint32_t in0_num_subblocks = per_core_M / out_subblock_h;

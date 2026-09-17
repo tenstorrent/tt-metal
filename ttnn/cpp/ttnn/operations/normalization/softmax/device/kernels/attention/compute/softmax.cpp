@@ -47,7 +47,7 @@ void calc_numeric_stable(std::uint32_t Wt, std::uint32_t ndst) {
         for (std::uint32_t wt8 = 0; wt8 < rem; wt8++) {
             sub_tiles_bcast_cols(dfb_in, dfb_max, wt + wt8, 0, wt8);
         }
-        dfb_out_obj.reserve_back(rem);
+        dfb_out_obj.reserve_back(static_cast<uint16_t>(rem));
         for (std::uint32_t wt8 = 0; wt8 < rem; wt8++) {
             exp_tile<EXP_APPROX>(wt8);  // exp on DST[0]
         }
@@ -57,11 +57,11 @@ void calc_numeric_stable(std::uint32_t Wt, std::uint32_t ndst) {
             pack_tile(wt8, dfb_out);  // reuse the exps buffer again, this time in a circular manner
         }
         tile_regs_release();
-        dfb_out_obj.push_back(rem);
+        dfb_out_obj.push_back(static_cast<uint16_t>(rem));
     }
-    dfb_in_obj.pop_front(Wt);
+    dfb_in_obj.pop_front(static_cast<uint16_t>(Wt));
     dfb_max_obj.pop_front(1);
-    dfb_out_obj.wait_front(Wt);
+    dfb_out_obj.wait_front(static_cast<uint16_t>(Wt));
 }
 
 // CB consumers cannot wrap mid-fifo: pops in one cycle must land exactly on fifo_limit.
@@ -72,11 +72,11 @@ ALWI void cycle_dfb_pad(std::uint32_t dfb_id, std::uint32_t pad) {
     if (pad == 0) {
         return;
     }
-    DataflowBuffer dfb(dfb_id);
-    dfb.reserve_back(pad);
-    dfb.push_back(pad);
-    dfb.wait_front(pad);
-    dfb.pop_front(pad);
+    DataflowBuffer dfb(static_cast<uint16_t>(dfb_id));
+    dfb.reserve_back(static_cast<uint16_t>(pad));
+    dfb.push_back(static_cast<uint16_t>(pad));
+    dfb.wait_front(static_cast<uint16_t>(pad));
+    dfb.pop_front(static_cast<uint16_t>(pad));
 }
 
 // Same, for CBs whose padding tiles the reader already pushed: only consume them.
@@ -84,9 +84,9 @@ ALWI void drain_dfb_pad(std::uint32_t dfb_id, std::uint32_t pad) {
     if (pad == 0) {
         return;
     }
-    DataflowBuffer dfb(dfb_id);
-    dfb.wait_front(pad);
-    dfb.pop_front(pad);
+    DataflowBuffer dfb(static_cast<uint16_t>(dfb_id));
+    dfb.wait_front(static_cast<uint16_t>(pad));
+    dfb.pop_front(static_cast<uint16_t>(pad));
 }
 
 void kernel_main() {
@@ -128,7 +128,7 @@ void kernel_main() {
     DataflowBuffer dfb_recipsumexps_obj(dfb_recipsumexps);
     DataflowBuffer dfb_in0_obj(dfb_in0);
     DataflowBuffer dfb_out0_obj(dfb_out0);
-#if FUSED_SCALE_MASK
+#ifdef FUSED_SCALE_MASK
     // fused_scale/fused_attn/scale_mask are bound only on the fused scale-mask path.
     constexpr auto dfb_fused_scale = dfb::fused_scale;
     constexpr auto dfb_fused_attn = dfb::fused_attn;
@@ -160,7 +160,7 @@ void kernel_main() {
     dfb_max_scaler_obj.wait_front(1);  // comes from the reader
     dfb_sum_scaler_obj.wait_front(1);  // comes from the reader
 
-#if FUSED_SCALE_MASK
+#ifdef FUSED_SCALE_MASK
     dfb_fused_scale_obj.wait_front(1);
 #endif
 
@@ -168,7 +168,7 @@ void kernel_main() {
     std::uint32_t ht = start_ht;
     bool wait_mask = true;
     for (std::uint32_t ncht = 0; ncht < NCHt; ncht++) {
-#if FUSED_SCALE_MASK
+#ifdef FUSED_SCALE_MASK
         reconfig_data_format(dfb_in0, dfb_fused_scale);
         pack_reconfig_data_format(dfb_scale_mask);
         mul_bcast_scalar_init(dfb_in0, dfb_fused_scale);
@@ -363,7 +363,7 @@ void kernel_main() {
         for (std::uint32_t wt = 0; wt < Wt; wt += ndst) {
             const std::uint32_t rem = (wt + ndst > Wt) ? (Wt - wt) : ndst;  // clamped final block
             tile_regs_acquire();
-            dfb_out0_obj.reserve_back(rem);
+            dfb_out0_obj.reserve_back(static_cast<uint16_t>(rem));
             for (std::uint32_t wt8 = 0; wt8 < rem; wt8++) {
                 // wt+wt8 since we pop Wt after the entire loop
                 mul_tiles_bcast<BroadcastType::COL>(
@@ -375,15 +375,15 @@ void kernel_main() {
                 pack_tile(wt8, dfb_out0);
             }
             tile_regs_release();
-            dfb_out0_obj.push_back(rem);
+            dfb_out0_obj.push_back(static_cast<uint16_t>(rem));
         }
         dfb_recipsumexps_obj.pop_front(1);
-        dfb_exps_obj.pop_front(Wt);
+        dfb_exps_obj.pop_front(static_cast<uint16_t>(Wt));
 
         // Realign CBs before the next row when Wt does not fill them exactly.
         drain_dfb_pad(dfb_in0, in0_pad);
         cycle_dfb_pad(dfb_exps, exps_pad);
-#if FUSED_SCALE_MASK
+#ifdef FUSED_SCALE_MASK
         cycle_dfb_pad(dfb_scale_mask, scale_mask_pad);
 #ifdef NUMERIC_STABLE
         // Without NUMERIC_STABLE, dfb_x aliases dfb_exps; cycling it again would drift it per row.
@@ -394,15 +394,15 @@ void kernel_main() {
         cycle_dfb_pad(dfb_x, exps_pad);
 #endif
         if (out0_pad > 0) {
-            dfb_out0_obj.reserve_back(out0_pad);
-            dfb_out0_obj.push_back(out0_pad);  // writer drains, does not write to DRAM
+            dfb_out0_obj.reserve_back(static_cast<uint16_t>(out0_pad));
+            dfb_out0_obj.push_back(static_cast<uint16_t>(out0_pad));  // writer drains, does not write to DRAM
         }
     }  // NCHt loop
     // The scaler tiles are each waited once and reused across the whole NCHt loop; pop them at
     // the end so the CBs are left balanced.
     dfb_max_scaler_obj.pop_front(1);
     dfb_sum_scaler_obj.pop_front(1);
-#if FUSED_SCALE_MASK
+#ifdef FUSED_SCALE_MASK
     dfb_fused_scale_obj.pop_front(1);
 #endif
 }

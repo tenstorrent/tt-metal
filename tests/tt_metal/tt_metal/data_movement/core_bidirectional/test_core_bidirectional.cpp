@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "multi_device_fixture.hpp"
+#include "device_fixture.hpp"
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
@@ -287,7 +287,7 @@ void packet_sizes_test(
 
 // ========== Directed Ideal Tests ==========
 
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementCoreBidirectionalDirectedIdealSameKernel) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementCoreBidirectionalDirectedIdealSameKernel) {
     GTEST_SKIP() << "Skipping test";  // Timeout issue (#36428)
 
     // Test ID (Arbitrary)
@@ -301,7 +301,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementCoreBidirectionalDirectedIdea
         get_mesh_device(), test_id, master_core_coord, subordinate_core_coord, write_vc, same_kernel);
 }
 
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementCoreBidirectionalDirectedIdealDifferentKernels) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementCoreBidirectionalDirectedIdealDifferentKernels) {
     GTEST_SKIP() << "Skipping test";  // Timeout issue (#36428)
 
     // Test ID (Arbitrary)
@@ -317,7 +317,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementCoreBidirectionalDirectedIdea
 
 // ========== Same VC Tests ==========
 
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementCoreBidirectionalSameVCSameKernel) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementCoreBidirectionalSameVCSameKernel) {
     GTEST_SKIP() << "Skipping test";  // Timeout issue (#36428)
 
     // Test ID (Arbitrary)
@@ -330,7 +330,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementCoreBidirectionalSameVCSameKe
         get_mesh_device(), test_id, master_core_coord, subordinate_core_coord, same_kernel);
 }
 
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementCoreBidirectionalSameVCDifferentKernels) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementCoreBidirectionalSameVCDifferentKernels) {
     GTEST_SKIP() << "Skipping test";  // Timeout issue (#36428)
 
     // Test ID (Arbitrary)
@@ -345,7 +345,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementCoreBidirectionalSameVCDiffer
 
 // ========== Write VC Sweep Tests ==========
 
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementCoreBidirectionalWriteVCSweepSameKernel) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementCoreBidirectionalWriteVCSweepSameKernel) {
     GTEST_SKIP() << "Skipping test";  // Timeout issue (#36428)
 
     // Test ID base
@@ -363,7 +363,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementCoreBidirectionalWriteVCSweep
     }
 }
 
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementCoreBidirectionalWriteVCSweepDifferentKernels) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementCoreBidirectionalWriteVCSweepDifferentKernels) {
     GTEST_SKIP() << "Skipping test";  // Timeout issue (#36428)
 
     // Test ID base
@@ -383,7 +383,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementCoreBidirectionalWriteVCSweep
 
 // ========== Packet Sizes Tests ==========
 
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementCoreBidirectionalPacketSizesSameKernel) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementCoreBidirectionalPacketSizesSameKernel) {
     // Test ID
     uint32_t test_id = 146;
     bool same_kernel = true;
@@ -394,7 +394,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementCoreBidirectionalPacketSizesS
         get_mesh_device(), test_id, master_core_coord, subordinate_core_coord, same_kernel);
 }
 
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementCoreBidirectionalPacketSizesDifferentKernels) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementCoreBidirectionalPacketSizesDifferentKernels) {
     // Test ID
     uint32_t test_id = 147;
     bool same_kernel = false;
@@ -407,7 +407,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementCoreBidirectionalPacketSizesD
 
 // ========== Custom Test Case ==========
 
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementCoreBidirectionalCustom) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementCoreBidirectionalCustom) {
     GTEST_SKIP() << "Skipping test";  // Timeout issue (#36428)
 
     // Test ID

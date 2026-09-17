@@ -17,11 +17,24 @@ from models.common.llm_runtime.vllm_adapter import (
     VLLMAdapter,
     VLLMAdapterConfig,
 )
+from models.common.models.llama3_8b import generator as llama3_generator_module
 from models.common.models.llama3_8b.executor import Llama3Executor
 from models.common.models.llama3_8b.generator import Llama3Generator
+from models.common.models.llama33_70b import generator as llama70_generator_module
+from models.common.models.qwen2_7b.generator import Qwen2Generator
+from models.common.models.qwen3_32b import generator as qwen3_generator_module
+from models.common.models.qwen25_7b.generator import Qwen25Generator
+from models.common.models.qwen25_72b.generator import Qwen25_72BGenerator
+from models.common.models.qwen25_coder_32b.generator import Qwen25Coder32BGenerator
 
 
-def _adapter(*, trace=None, paged_config=None, model_dtype=ttnn.bfloat8_b):
+def _adapter(
+    *,
+    trace=None,
+    paged_config=None,
+    model_dtype=ttnn.bfloat8_b,
+    request_state_fields=("prompt_tokens", "output_tokens", "slot_remap"),
+):
     return VLLMAdapter(
         VLLMAdapterConfig.resolve(
             trace=trace or TraceConfig(mode="all"),
@@ -30,6 +43,7 @@ def _adapter(*, trace=None, paged_config=None, model_dtype=ttnn.bfloat8_b):
             expected_kv_heads_per_device=8,
             expected_head_dim=128,
             model_kv_cache_dtype=model_dtype,
+            request_state_fields=request_state_fields,
         )
     )
 
@@ -56,6 +70,7 @@ def test_config_resolves_canonical_static_policy_and_is_frozen(expect_error):
     assert config.expected_head_dim == 128
     assert isinstance(config.expected_head_dim, int)
     assert config.model_kv_cache_dtypes == (ttnn.bfloat8_b,) * 32
+    assert config.request_state_fields == ()
     with expect_error(dataclasses.FrozenInstanceError, "cannot assign to field"):
         config.expected_num_layers = 1
     with expect_error(ValueError, "expected_num_layers"):
@@ -192,7 +207,7 @@ def test_normalizer_signatures_are_explicit(method_name, expected):
     assert [(name, parameter.kind, parameter.default) for name, parameter in parameters.items()] == expected
 
 
-def test_normalized_typed_dicts_have_stable_required_key_order():
+def test_normalized_typed_dicts_have_stable_key_order_and_optional_request_state():
     assert tuple(NormalizedPrefillKwargs.__annotations__) == (
         "tokens",
         "page_table",
@@ -201,8 +216,14 @@ def test_normalized_typed_dicts_have_stable_required_key_order():
         "empty_slots",
         "kv_cache",
         "sampling_params",
+        "prompt_tokens",
+        "output_tokens",
+        "slot_remap",
     )
-    assert NormalizedPrefillKwargs.__required_keys__ == frozenset(NormalizedPrefillKwargs.__annotations__)
+    assert NormalizedPrefillKwargs.__required_keys__ == frozenset(
+        {"tokens", "page_table", "prompt_lens", "start_pos", "empty_slots", "kv_cache", "sampling_params"}
+    )
+    assert NormalizedPrefillKwargs.__optional_keys__ == frozenset({"prompt_tokens", "output_tokens", "slot_remap"})
     assert tuple(NormalizedDecodeKwargs.__annotations__) == (
         "tokens",
         "start_pos",
@@ -210,8 +231,14 @@ def test_normalized_typed_dicts_have_stable_required_key_order():
         "kv_cache",
         "sampling_params",
         "reset_batch",
+        "prompt_tokens",
+        "output_tokens",
+        "slot_remap",
     )
-    assert NormalizedDecodeKwargs.__required_keys__ == frozenset(NormalizedDecodeKwargs.__annotations__)
+    assert NormalizedDecodeKwargs.__required_keys__ == frozenset(
+        {"tokens", "start_pos", "page_table", "kv_cache", "sampling_params", "reset_batch"}
+    )
+    assert NormalizedDecodeKwargs.__optional_keys__ == frozenset({"prompt_tokens", "output_tokens", "slot_remap"})
 
 
 def test_normalize_prefill_positional_call_without_mutating_caller_kwargs():
@@ -242,8 +269,10 @@ def test_normalize_prefill_positional_call_without_mutating_caller_kwargs():
     assert normalized["empty_slots"] is None
     assert normalized["kv_cache"] is None
     assert normalized["sampling_params"] == "sampling"
+    assert normalized["prompt_tokens"] is compatibility_kwargs["prompt_tokens"]
+    assert normalized["output_tokens"] is compatibility_kwargs["output_tokens"]
+    assert normalized["slot_remap"] is compatibility_kwargs["slot_remap"]
     assert enable_trace is True
-    assert compatibility_kwargs.keys().isdisjoint(normalized)
     assert tuple(compatibility_kwargs) == (
         "page_tables_per_layer",
         "prompt_tokens",
@@ -264,16 +293,158 @@ def test_normalize_decode_converts_existing_tensors_and_flattens_column_tokens()
         compatibility_kwargs={"slot_remap": [0, 1]},
     )
 
-    assert tuple(normalized) == tuple(NormalizedDecodeKwargs.__annotations__)
+    assert tuple(normalized) == (
+        "tokens",
+        "start_pos",
+        "page_table",
+        "kv_cache",
+        "sampling_params",
+        "reset_batch",
+        "slot_remap",
+    )
     assert normalized["tokens"].shape == (2,)
     assert normalized["tokens"].dtype == torch.long
     assert normalized["start_pos"].dtype == torch.long
     assert normalized["page_table"].dtype == torch.int32
     assert normalized["kv_cache"] is None
     assert normalized["sampling_params"] is None
+    assert "prompt_tokens" not in normalized
+    assert "output_tokens" not in normalized
+    assert normalized["slot_remap"] == [0, 1]
     assert normalized["reset_batch"] is False
     assert enable_trace is True
-    assert "slot_remap" not in normalized
+
+
+@pytest.mark.parametrize("method_name", ["normalize_prefill", "normalize_decode"])
+@pytest.mark.parametrize(
+    "compatibility_kwargs",
+    (None, {"prompt_tokens": None, "output_tokens": None, "slot_remap": None}),
+)
+def test_normalize_omits_unsupplied_or_none_request_state(method_name, compatibility_kwargs):
+    adapter = _adapter(trace=TraceConfig(mode="all"), request_state_fields=())
+    args = (
+        (torch.zeros((1, 1)), torch.zeros((1, 1)))
+        if method_name == "normalize_prefill"
+        else (torch.zeros(1), torch.zeros(1), torch.zeros((1, 1)))
+    )
+
+    normalized, _ = getattr(adapter, method_name)(
+        *args,
+        enable_trace=True,
+        compatibility_kwargs=compatibility_kwargs,
+    )
+
+    assert not ({"prompt_tokens", "output_tokens", "slot_remap"} & normalized.keys())
+
+
+class _NarrowQwenRequestTarget:
+    def __init__(self):
+        self.calls = []
+
+    def prefill_forward(
+        self,
+        tokens,
+        page_table,
+        *,
+        prompt_lens=None,
+        start_pos=None,
+        empty_slots=None,
+        kv_cache=None,
+        sampling_params=None,
+        execution=None,
+    ):
+        self.calls.append(
+            (
+                "prefill",
+                {
+                    "tokens": tokens,
+                    "page_table": page_table,
+                    "prompt_lens": prompt_lens,
+                    "start_pos": start_pos,
+                    "empty_slots": empty_slots,
+                    "kv_cache": kv_cache,
+                    "sampling_params": sampling_params,
+                    "execution": execution,
+                },
+            )
+        )
+        return "prefill"
+
+    def decode_forward(
+        self,
+        tokens,
+        start_pos,
+        page_table,
+        *,
+        kv_cache=None,
+        sampling_params=None,
+        reset_batch=False,
+        read_from_device=True,
+        execution=None,
+    ):
+        self.calls.append(
+            (
+                "decode",
+                {
+                    "tokens": tokens,
+                    "start_pos": start_pos,
+                    "page_table": page_table,
+                    "kv_cache": kv_cache,
+                    "sampling_params": sampling_params,
+                    "reset_batch": reset_batch,
+                    "read_from_device": read_from_device,
+                    "execution": execution,
+                },
+            )
+        )
+        return "decode"
+
+
+@pytest.mark.parametrize(
+    "generator_class",
+    (Qwen2Generator, Qwen25Generator, Qwen25_72BGenerator, Qwen25Coder32BGenerator),
+)
+def test_qwen_generator_dispatch_omits_absent_state_for_narrow_request_surface(generator_class):
+    generator = object.__new__(generator_class)
+    generator._adapter = _adapter(request_state_fields=())
+    generator.target = _NarrowQwenRequestTarget()
+    prefill_execution = object()
+    decode_execution = object()
+    generator._select_prefill_execution = lambda normalized, requested: prefill_execution
+    generator._select_execution = lambda operation, requested: decode_execution
+
+    request_state = {"prompt_tokens": object(), "output_tokens": object(), "slot_remap": [0]}
+    assert generator.prefill_forward([[1]], [[0]], enable_trace=False, **request_state) == "prefill"
+    assert generator.decode_forward([1], [0], [[0]], enable_trace=False, **request_state) == "decode"
+
+    assert [name for name, _ in generator.target.calls] == ["prefill", "decode"]
+    assert generator.target.calls[0][1]["execution"] is prefill_execution
+    assert generator.target.calls[1][1]["execution"] is decode_execution
+
+
+@pytest.mark.parametrize(
+    "generator_module",
+    (llama3_generator_module, llama70_generator_module, qwen3_generator_module),
+)
+def test_stateful_generator_adapter_reuses_executor_request_state_allowlist(monkeypatch, generator_module):
+    request_state_fields = ("prompt_tokens", "output_tokens", "slot_remap")
+    lane = SimpleNamespace(
+        model=object(),
+        config=SimpleNamespace(
+            trace=TraceConfig(mode="decode_only"),
+            paged_kv_cache=PagedKVCacheConfig(block_size=32, max_num_blocks=128, dtype=ttnn.bfloat8_b),
+        ),
+        _request_state_fields=request_state_fields,
+    )
+    monkeypatch.setattr(
+        generator_module,
+        "_model_kv_metadata",
+        lambda model: ((ttnn.bfloat8_b,), 1, 1, 128),
+    )
+
+    adapter = generator_module._build_vllm_adapter(lane)
+
+    assert adapter.config.request_state_fields == request_state_fields
 
 
 @pytest.mark.parametrize(
@@ -553,6 +724,9 @@ class _ExplicitGeneratorTarget:
         empty_slots=None,  # ↓ Lane routing
         kv_cache=None,  # ↓ Borrowed resources
         sampling_params=None,  # ↓ Sampling
+        prompt_tokens=None,  # ↓ Request-owned sampling state
+        output_tokens=None,
+        slot_remap=None,
         execution=None,  # ↓ Internal dispatch
     ):
         self._record("compile_prefill", locals())
@@ -565,6 +739,9 @@ class _ExplicitGeneratorTarget:
         *,
         kv_cache=None,  # ↓ Borrowed resources
         sampling_params=None,  # ↓ Sampling
+        prompt_tokens=None,  # ↓ Request-owned sampling state
+        output_tokens=None,
+        slot_remap=None,
         reset_batch=False,  # ↓ State transition
         execution=None,  # ↓ Internal dispatch
     ):
@@ -580,6 +757,9 @@ class _ExplicitGeneratorTarget:
         empty_slots=None,  # ↓ Lane routing
         kv_cache=None,  # ↓ Borrowed resources
         sampling_params=None,  # ↓ Sampling
+        prompt_tokens=None,  # ↓ Request-owned sampling state
+        output_tokens=None,
+        slot_remap=None,
         execution=None,  # ↓ Internal dispatch
     ):
         self._record("prefill_forward", locals())
@@ -593,6 +773,9 @@ class _ExplicitGeneratorTarget:
         *,
         kv_cache=None,  # ↓ Borrowed resources
         sampling_params=None,  # ↓ Sampling
+        prompt_tokens=None,  # ↓ Request-owned sampling state
+        output_tokens=None,
+        slot_remap=None,
         reset_batch=False,  # ↓ State transition
         read_from_device=True,  # ↓ Output policy
         execution=None,  # ↓ Internal dispatch

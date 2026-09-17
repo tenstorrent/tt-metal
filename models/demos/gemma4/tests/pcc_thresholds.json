@@ -37,10 +37,14 @@
       "test_full_model[blackhole-1x1]": 0.96
     },
     "1x2": {
+      "_comment_via_harness_full": "Same #47311 SDPA-reduce precision gap as the other via_harness full-attention entries in this file. P300 1x2 measured 0.985264 (bit-stable across runs) once #56466 restored the bf16 decode per-head norm; the fp32 norm from #55948 had been masking the gap at 0.9953, and pre-#55948 the node sat at 0.9920, 0.002 above the 0.99 default.",
+      "test_attention_paged_decode_via_harness[blackhole-full-1x2]": 0.984,
       "test_attention_prefill[blackhole-seq4096-global-1x2]": 0.97,
       "test_full_model[blackhole-1x2]": 0.95
     },
     "1x4": {
+      "_comment_via_harness_full": "Same #47311 SDPA-reduce precision gap; QuietBox 1x4 measured 0.985232 after #56466 (0.9953 with the #55948 fp32 norm, 0.9920 before #55948).",
+      "test_attention_paged_decode_via_harness[blackhole-full-1x4]": 0.984,
       "test_attention_prefill[blackhole-seq4096-global-1x4]": 0.97,
       "test_full_model[blackhole-1x4]": 0.96
     }

@@ -596,6 +596,11 @@ void add_activation_defines(
             unary::utils::update_macro_defines(a.type(), defines);
             return std::move(process);
         });
+    // The activations run in the SFPU kernels the unary op uses; give them the same input-dtype define so the
+    // float32 variants are compiled for float32 operands.
+    if (!activations.empty() && dtype.has_value()) {
+        unary::utils::add_input_dtype_defines(*dtype, defines);
+    }
 }
 
 std::map<std::string, std::string> make_dataflow_defines(

@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include "dev_mem_map.h"
+#include "internal/debug/assert_common.h"
 
 #if defined(ARCH_QUASAR) && defined(COMPILE_FOR_TRISC)
 #include "ckernel.h"
@@ -64,6 +65,9 @@ inline __attribute__((always_inline)) void init_hw_thread_idx() { hw_thread_idx 
 // ETH Blackhole/Quasar: Index 0 to 1
 inline __attribute__((always_inline)) uint32_t get_hw_thread_idx() {
 #if defined(ARCH_QUASAR) && (defined(COMPILE_FOR_TRISC) || defined(COMPILE_FOR_DM))
+    // A stack overflow into the TLS region below clobbers hw_thread_idx, which then indexes the debug
+    // mailboxes out of bounds.
+    ASSERT(hw_thread_idx == read_hw_thread_idx(), DebugAssertTripped);
     return hw_thread_idx;
 #else
     return PROCESSOR_INDEX;

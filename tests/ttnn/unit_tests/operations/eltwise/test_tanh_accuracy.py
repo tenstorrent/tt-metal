@@ -192,7 +192,7 @@ def test_tanh_height_sharded(device, input_shapes, high, low, torch_dtype, ttnn_
     golden_tensor = golden_function(in_data)
 
     assert_allclose(output_tensor, golden_tensor, rtol=1e-05, atol=atol)
-    assert_with_ulp(golden_tensor, output_tensor, ulp_threshold=1)
+    assert_with_ulp(expected_result=golden_tensor, actual_result=output_tensor, ulp_threshold=1)
 
 
 def return_mem_config(mem_config_string):
@@ -334,4 +334,4 @@ def test_tanh_fp32_special_values(device):
         torch.signbit(result)[finite_mask], torch.signbit(golden)[finite_mask]
     ), f"Sign bit mismatch: result={result.tolist()} golden={golden.tolist()}"
 
-    assert_with_ulp(golden, result, 5, allow_nonfinite=True)
+    assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=5, allow_nonfinite=True)

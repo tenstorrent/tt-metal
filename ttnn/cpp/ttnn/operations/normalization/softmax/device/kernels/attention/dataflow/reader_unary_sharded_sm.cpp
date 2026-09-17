@@ -16,8 +16,8 @@ void kernel_main() {
     constexpr auto dfb_max_scaler = dfb::max_scaler;
     constexpr auto dfb_sum_scaler = dfb::sum_scaler;
 
-#if FUSED_SCALE_MASK
-    Noc noc;
+#ifdef FUSED_SCALE_MASK
+    const Noc noc;
 
     constexpr auto dfb_fused_scale = dfb::fused_scale;
     const std::uint32_t pre_scale = get_arg(args::pre_scale);
@@ -32,7 +32,7 @@ void kernel_main() {
 
     constexpr auto dfb_attn = dfb::fused_attn;
     DataflowBuffer dfb_attn_obj(dfb_attn);
-    std::uint32_t mask_tile_bytes = dfb_attn_obj.get_entry_size();
+    const std::uint32_t mask_tile_bytes = dfb_attn_obj.get_entry_size();
     std::uint32_t mask_id = mask_start_tile_id;
 
     const auto addr_mask = TensorAccessor(tensor::mask);

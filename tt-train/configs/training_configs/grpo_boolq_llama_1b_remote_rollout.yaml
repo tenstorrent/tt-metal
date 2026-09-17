@@ -31,7 +31,7 @@ training_config:
     checkpointing: false
     checkpoint_interval: 0
     prompts_to_train: 80
-    temperature: 1.5
+    temperature: 1.0
     max_completion_length: 256
     num_generations: 4
     warmup_steps: 0

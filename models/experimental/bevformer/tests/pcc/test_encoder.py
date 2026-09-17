@@ -10,6 +10,7 @@ from models.experimental.bevformer.tt.tt_encoder import TTBEVFormerEncoder
 from models.experimental.bevformer.reference.encoder import BEVFormerEncoder
 from models.experimental.bevformer.config.encoder_config import (
     get_preset_config,
+    img_metas_for_dataset,
 )
 
 
@@ -43,30 +44,18 @@ DEFAULT_MODEL_CONFIG = DEFAULT_TEST_CONFIG.model_config
 PRINT_DETAILED_COMPARISON_FLAG = False
 
 
-def create_sample_img_metas(
-    batch_size: int, num_cams: int = DEFAULT_DATASET_CONFIG.num_cams, image_shape: tuple = (900, 1600)
-) -> List[Dict[str, Any]]:
-    """Create img_metas with random lidar2img matrices (matching reference implementation).
+def create_sample_img_metas(batch_size: int, dataset_config=DEFAULT_DATASET_CONFIG) -> List[Dict[str, Any]]:
+    """Create img_metas from the dataset's deterministic surround-view rig.
+
+    ``lidar2img`` decides ``bev_mask`` and therefore the spatial-cross-attention
+    rebatch length, so random matrices would make every spatial-path tensor shape
+    depend on the RNG draw order.
 
     Args:
         batch_size: Number of batches
-        num_cams: Number of cameras
-        image_shape: Tuple of (height, width) for camera images
+        dataset_config: Dataset config supplying camera count, resolution, and rig
     """
-    img_metas = []
-
-    for batch_idx in range(batch_size):
-        # Generate random lidar2img matrices for each camera
-        lidar2img_matrices = [torch.randn(4, 4).tolist() for _ in range(num_cams)]
-
-        height, width = image_shape
-        meta = {
-            "img_shape": [(height, width, 3)] * num_cams,
-            "lidar2img": lidar2img_matrices,
-        }
-        img_metas.append(meta)
-
-    return img_metas
+    return img_metas_for_dataset(dataset_config, batch_size)
 
 
 @pytest.mark.parametrize(
@@ -112,7 +101,6 @@ def test_bevformer_encoder_forward(
     num_levels = model_config.num_levels
 
     # Use spatial shapes from dataset config (limited to num_levels)
-    image_shape = dataset_config.input_size  # Use actual input size from config
     spatial_shapes_list = dataset_config.spatial_shapes[:num_levels]  # Take required number of levels
     spatial_shapes = torch.tensor(spatial_shapes_list, dtype=torch.long)
 
@@ -135,9 +123,9 @@ def test_bevformer_encoder_forward(
     if len(level_start_index) > num_levels:
         level_start_index = level_start_index[:num_levels]
 
-    # Camera metadata for point sampling (convert width, height to height, width for img_metas)
-    img_shape = (image_shape[1], image_shape[0])  # (height, width) for img_metas
-    img_metas = create_sample_img_metas(batch_size, num_cams, img_shape)
+    # Camera metadata for point sampling; the rig derives resolution and camera
+    # count from the dataset config itself
+    img_metas = create_sample_img_metas(batch_size, dataset_config)
 
     # Convert tensors to ttnn format for ttnn model
     tt_bev_query = ttnn.from_torch(bev_query, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)

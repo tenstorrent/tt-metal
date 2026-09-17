@@ -84,10 +84,9 @@ class MigrationDriver:
             self._pair_cross_endpoint()
 
     def _attach_client(self):
-        from models.demos.common.prefill.runners.migration import _import_migration_client, _resolve_queue_names
+        from models.demos.common.prefill.runners.migration import _attach_migration_client
 
-        cmd_q, table_q, resp_q = _resolve_queue_names()
-        client = _import_migration_client().MigrationLayerClient(cmd_q, table_q, resp_q)
+        client, cmd_q, table_q, resp_q = _attach_migration_client()
         logger.info(f"[migration_driver] client attached: cmd={cmd_q} table={table_q} resp={resp_q}")
         return client
 

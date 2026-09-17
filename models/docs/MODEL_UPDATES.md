@@ -4,6 +4,13 @@
 >
 > Please refer to the front-page [README](../../README.md) for the latest verified release for each model.
 
+## August 25, 2026
+
+### [EXAONE 4.5](https://github.com/tenstorrent/tt-metal/tree/main/models/tt_transformers)
+- Added support for EXAONE-4.5-33B text inference on Blackhole LoudBox (8xP150) to [TT-Transformers](https://github.com/tenstorrent/tt-metal/tree/main/models/tt_transformers), including hybrid sliding window / global attention and 128K context length.
+- Added an experimental on-device vision tower in [models/experimental/exaone45_vl](https://github.com/tenstorrent/tt-metal/tree/main/models/experimental/exaone45_vl) and a host-vision hybrid demo ([exaone_45_vision_hybrid.py](https://github.com/tenstorrent/tt-metal/tree/main/models/tt_transformers/demo/exaone_45_vision_hybrid.py)).
+- Added a text-only vLLM generator class (`Exaone4_5_ForConditionalGeneration`) in [generator_vllm.py](https://github.com/tenstorrent/tt-metal/tree/main/models/tt_transformers/tt/generator_vllm.py).
+
 ## December 8, 2025
 
 ### [Qwen3-32B - Galaxy](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/llama3_70b_galaxy)
@@ -174,12 +181,12 @@
 ### [Llama 3.2 - 1B/3B/11B](https://github.com/tenstorrent/tt-metal/tree/main/models/tt_transformers)
 - Created a new shared codebase for the Llama3 family of models, with newly added support for Llama3.2-1B/3B/11B.
 
-### [Llama 3/3.1 - 70B](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/t3000/llama3_70b)
+### [Llama 3/3.1 - 70B](https://github.com/tenstorrent/tt-metal/tree/main/models/tt_transformers)
 - Added support for the `ttnn.experimental.rotary_embedding_llama` op in decode mode, eliminating unnecessary device transfers of rotation matrices.
 
 ## October 21, 2024
 
-### [Llama 3/3.1 - 70B](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/t3000/llama3_70b)
+### [Llama 3/3.1 - 70B](https://github.com/tenstorrent/tt-metal/tree/main/models/tt_transformers)
 - Enabled prefill workloads to pad to multiples of 1024 instead of powers of 2, improving overall performance for longer sequences
 
 ## October 7, 2024
@@ -191,7 +198,7 @@
 
 ## September 23, 2024
 
-### [Llama 3/3.1 - 70B](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/t3000/llama3_70b)
+### [Llama 3/3.1 - 70B](https://github.com/tenstorrent/tt-metal/tree/main/models/tt_transformers)
 - Added support for 128K context length using PagedAttention
 - Added a continuous batching demo for running multiple batches of users consecutively
 - Added the option to enable TT-NN tracing
@@ -237,7 +244,7 @@
 - Runs fast prefill for sequence lengths of up to 512 tokens
 - Supports a maximum context length of 8K tokens
 
-### [Llama 3/3.1 - 70B](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/t3000/llama3_70b)
+### [Llama 3/3.1 - 70B](https://github.com/tenstorrent/tt-metal/tree/main/models/tt_transformers)
 - Added support for LLaMA 3.1 70B (new scaled rotary position embeddings)
 - Prefill and decode now support 8K context length with batch size 16
 

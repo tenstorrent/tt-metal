@@ -34,7 +34,7 @@ from models.demos.minimax_m3.tt.ccl import CCLManager
 from models.demos.minimax_m3.tt.mlp import MLP
 from models.demos.minimax_m3.utils.general_utils import get_default_num_links
 
-from ..test_factory import parametrize_mesh_with_fabric
+from ..test_factory import compose_tp_hidden, parametrize_mesh_with_fabric
 
 # Real M3 MoE dims (from configs/MiniMax-M3/config.json).
 HIDDEN, E, TOPK = 6144, 128, 4
@@ -130,13 +130,12 @@ def test_ep_moe_vs_ref(mesh_device, device_params, seq_len, reset_seeds):
         device=mesh_device,
         dtype=ttnn.bfloat16,
     )
-    out = mlp(tt_x)  # [1, 1, S, H] per device (full emb, replicated across cols)
+    out = mlp(tt_x)  # per device [1, 1, S, H] (replicated residual) or [1, 1, S, H/tp] (sharded)
     ttnn.synchronize_device(mesh_device)
 
-    # Per-row read: device index = r*cols (col 0; all cols hold the same all-gathered full-emb output).
     dts = ttnn.get_device_tensors(out)
     for r in range(rows):
-        row = ttnn.to_torch(dts[r * cols]).float().reshape(-1, HIDDEN)[:seq_len]
+        row = compose_tp_hidden(dts, r, cols).reshape(-1, HIDDEN)[:seq_len]
         passing, pcc = comp_pcc(ref[r], row, 0.95)
         logger.info(f"prompt{r}: pcc={pcc}")
         assert passing, f"prompt {r} EP MoE PCC fail: {pcc}"

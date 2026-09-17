@@ -465,19 +465,9 @@ class VisionAttention(LightweightModule):
 
         # SDPA
         if chunk_start_idx is not None:
-            # todo)) the use of chunked SDPA seem to imply the use of kv_cache (as keys_BKSD and values_BKSD are associated with kv_cache); Is this correct?
-            attn_output_84SD = ttnn.transformer.chunked_scaled_dot_product_attention(
-                q_heads_1QSD_8b,
-                keys_BKSD,
-                values_BKSD,
-                page_table,
-                chunk_start_idx,
-                scale=self.scale,
-                compute_kernel_config=self.compute_kernel_config_hifi4,
-                program_config=self.configuration.get_attn_sdpa_program_config(
-                    Mode.PREFILL, seq_len, chunk_start_idx, None
-                ),
-            )
+            # The vision tower has no KV cache; the copied chunked-SDPA branch
+            # referenced undefined keys/values tensors and could never run.
+            raise NotImplementedError("Chunked prefill is not supported for the vision tower")
         else:
             attn_output_84SD = ttnn.transformer.scaled_dot_product_attention(
                 q_heads_1QSD_8b,

@@ -5,7 +5,9 @@
 #include <tt_stl/span.hpp>
 #include <device.hpp>
 #include <tt-metalium/allocator.hpp>
+#include "impl/buffers/buffer_impl.hpp"
 #include <algorithm>
+#include <mutex>
 #include <optional>
 #include <stack>
 #include <type_traits>
@@ -446,7 +448,7 @@ bool are_pages_larger_than_max_prefetch_cmd_size(const Buffer& buffer, uint32_t 
 }
 
 uint32_t calculate_partial_page_size(const Buffer& buffer) {
-    const HalMemType buffer_mem_type = buffer.memory_type();
+    const HalMemType buffer_mem_type = buffer.impl().memory_type();
     const uint32_t partial_page_size = tt::align(
         DispatchSettings::BASE_PARTIAL_PAGE_SIZE_DISPATCH,
         MetalContext::instance(extract_context_id(buffer.device()))
@@ -1190,25 +1192,36 @@ bool write_to_device_buffer(
             const uint8_t* pinned_host_base = static_cast<const uint8_t*>(pinned_memory->get_host_ptr());
             const uint8_t* src_ptr = static_cast<const uint8_t*>(src);
             const uint64_t pinned_size = pinned_memory->get_buffer_size();
-            auto region = buffer.root_buffer_region();
+            auto region = buffer.impl().root_buffer_region();
             const uint8_t* src_region_start = src_ptr + region.offset;
             const uint8_t* src_region_end = src_region_start + region.size;
             // Check against L1 alignment because we need the copy from the prefetcher to the dispatcher to be aligned.
-            if (reinterpret_cast<uintptr_t>(src_region_start) % hal.get_read_alignment(HalMemType::L1) != 0) {
-                log_info(
-                    tt::LogMetal,
-                    "Pinned source memory start address {:#x} must be aligned {} B",
-                    reinterpret_cast<uintptr_t>(src_region_start),
-                    hal.get_read_alignment(HalMemType::HOST));
+            const uint32_t pinned_src_alignment = hal.get_read_alignment(HalMemType::L1);
+            if (reinterpret_cast<uintptr_t>(src_region_start) % pinned_src_alignment != 0) {
+                // Once per process: buffer writes run inside per-step model loops.
+                static std::once_flag unaligned_pinned_src_warned;
+                std::call_once(unaligned_pinned_src_warned, [&] {
+                    log_info(
+                        tt::LogMetal,
+                        "Pinned source memory start address {:#x} must be aligned to {} B to be read directly by the "
+                        "device; copying through the command queue instead. This message is emitted once per process.",
+                        reinterpret_cast<uintptr_t>(src_region_start),
+                        pinned_src_alignment);
+                });
             } else if ((src_region_start < pinned_host_base) or (pinned_host_base + pinned_size < src_region_end)) {
-                log_info(
-                    tt::LogMetal,
-                    "Pinned memory region must contain source buffer region: pinned region start:{:#X} end:{:#X} src "
-                    "start:{:#X} end:{:#X}",
-                    reinterpret_cast<uintptr_t>(pinned_host_base),
-                    reinterpret_cast<uintptr_t>(pinned_host_base + pinned_size),
-                    reinterpret_cast<uintptr_t>(src_region_start),
-                    reinterpret_cast<uintptr_t>(src_region_end));
+                // Once per process: buffer writes run inside per-step model loops.
+                static std::once_flag pinned_src_out_of_region_warned;
+                std::call_once(pinned_src_out_of_region_warned, [&] {
+                    log_info(
+                        tt::LogMetal,
+                        "Pinned memory region must contain source buffer region: pinned region start:{:#X} end:{:#X} "
+                        "src start:{:#X} end:{:#X}; copying through the command queue instead. This message is "
+                        "emitted once per process.",
+                        reinterpret_cast<uintptr_t>(pinned_host_base),
+                        reinterpret_cast<uintptr_t>(pinned_host_base + pinned_size),
+                        reinterpret_cast<uintptr_t>(src_region_start),
+                        reinterpret_cast<uintptr_t>(src_region_end));
+                });
             } else {
                 const uint64_t src_offset_base = static_cast<uintptr_t>(src_region_start - pinned_host_base);
                 pinned_src_addr = pinned_noc_base + src_offset_base;
@@ -1352,8 +1365,8 @@ bool write_to_device_buffer(
         // Empty filter -> no-op (consistent with the sharded path); nothing was actually written.
         return false;
     }
-    auto root_buffer = buffer.root_buffer();
-    auto region = buffer.root_buffer_region();
+    auto root_buffer = buffer.impl().root_buffer(buffer);
+    auto region = buffer.impl().root_buffer_region();
     InterleavedBufferWriteDispatchParamsVariant dispatch_params_variant = initialize_interleaved_buf_dispatch_params(
         *root_buffer,
         cq_id,
@@ -1403,8 +1416,8 @@ ShardedBufferReadDispatchParams initialize_sharded_buf_read_dispatch_params(
 
 BufferReadDispatchParams initialize_interleaved_buf_read_dispatch_params(
     Buffer& buffer, uint32_t cq_id, ttsl::Span<const uint32_t> expected_num_workers_completed) {
-    auto root_buffer = buffer.root_buffer();
-    const BufferRegion region = buffer.root_buffer_region();
+    auto root_buffer = buffer.impl().root_buffer(buffer);
+    const BufferRegion region = buffer.impl().root_buffer_region();
     IDevice* device = root_buffer->device();
 
     BufferReadDispatchParams dispatch_params;
@@ -1448,7 +1461,10 @@ void issue_read_buffer_dispatch_command_sequence(
 
     // Precompute whether pinned direct write is feasible, and derive dst noc params
     const bool is_unpadded = (buffer.page_size() == dispatch_params.padded_page_size);
-    const bool has_pinned_inputs = (dispatch_params.dst != nullptr && dispatch_params.pinned_memory != nullptr);
+    // A direct D2H transfer writes the host mapping, so device-read-only mappings must use the regular host path.
+    const bool has_pinned_inputs =
+        dispatch_params.dst != nullptr && dispatch_params.pinned_memory != nullptr &&
+        dispatch_params.pinned_memory->get_device_access() == experimental::PinnedMemoryDeviceAccess::ReadWrite;
     const uint64_t xfer_bytes = static_cast<uint64_t>(dispatch_params.pages_per_txn) * dispatch_params.padded_page_size;
     bool use_pinned_transfer = false;
     uint32_t pinned_dst_noc_xy = 0;

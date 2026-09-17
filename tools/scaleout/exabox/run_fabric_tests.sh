@@ -574,8 +574,19 @@ fi
 # Create output directory if it doesn't exist
 mkdir -p "$OUTPUT_DIR"
 
+# test_tt_fabric resolves report paths against its own root_dir unless it is
+# given an absolute path, which under Docker is a container-internal directory
+# that --rm destroys on exit. Stage each run's reports under /tmp, which is
+# writable on every host and mounted by mpi-docker, then retrieve them below.
+OUTPUT_DIR_ABS="$(cd "$OUTPUT_DIR" && pwd)"
 RUN_TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
-LOG_FILE="$OUTPUT_DIR/fabric_tests_${RUN_TIMESTAMP}.log"
+REPORT_RUN_ID="${RUN_TIMESTAMP}_$$"
+SUMMARY_REPORT="/tmp/tt_fabric_pairwise_validation_summary_${REPORT_RUN_ID}.log"
+DETAIL_REPORT="/tmp/tt_fabric_pairwise_validation_detailed_${REPORT_RUN_ID}.log"
+SUMMARY_REPORT_NAME="pairwise_validation_summary_${RUN_TIMESTAMP}.log"
+DETAIL_REPORT_NAME="pairwise_validation_detailed_${RUN_TIMESTAMP}.log"
+
+LOG_FILE="$OUTPUT_DIR_ABS/fabric_tests_${RUN_TIMESTAMP}.log"
 Z_RANKFILE=""   # 4x32z OpenMPI rankfile; set below when CONFIG=4x32z
 
 echo "=========================================="
@@ -620,6 +631,8 @@ echo ""
 EXTRA_BINARY_ARGS=()
 if [[ "$TEST_BINARY" == *test_tt_fabric ]]; then
     EXTRA_BINARY_ARGS+=(--show-progress-detail --show-workers --progress-interval 1)
+    EXTRA_BINARY_ARGS+=(--validation-summary-file "$SUMMARY_REPORT")
+    EXTRA_BINARY_ARGS+=(--validation-detail-file "$DETAIL_REPORT")
 fi
 if [[ -n "$FILTER" ]]; then
     EXTRA_BINARY_ARGS+=(--filter "$FILTER")
@@ -890,11 +903,7 @@ write_quad_split_rankfile() {
     Z_GLOBAL_HOST=(--hostfile "$Z_RANKFILE" --map-by "rankfile:file=$Z_RANKFILE")
 }
 
-# Marker used to detect reports written during this run (vs. stale ones from a
-# previous run). We compare report mtimes against this file with bash's `-nt`.
-RUN_START_MARKER="$(mktemp)"
 cleanup_run_artifacts() {
-    rm -f "$RUN_START_MARKER"
     [[ -n "$Z_RANKFILE" ]] && rm -f "$Z_RANKFILE"
 }
 trap cleanup_run_artifacts EXIT
@@ -1237,18 +1246,48 @@ echo "=========================================="
 echo "Tests completed at $(date)"
 echo "Results logged to: $LOG_FILE"
 
-# Copy any pairwise-validation reports written by test_tt_fabric (only rank 0
-# writes them, and only when a hang is detected) into the user's --output dir
-# so all artifacts for this run live in one place. Only copy reports that were
-# written during this run (newer than $RUN_START_MARKER) so we don't pick up
-# stale files from a previous invocation.
-REPORT_SRC_DIR="${TT_METAL_HOME:-.}/generated/fabric"
-for report in pairwise_validation_summary.log pairwise_validation_detailed.log; do
-    if [[ -f "$REPORT_SRC_DIR/$report" && "$REPORT_SRC_DIR/$report" -nt "$RUN_START_MARKER" ]]; then
-        cp "$REPORT_SRC_DIR/$report" "$OUTPUT_DIR/"
-        echo "Copied report: $OUTPUT_DIR/$report"
+# Rank 0 is the only rank that writes pairwise-validation reports, and only
+# when a hang is detected. The reports were staged at known, per-run /tmp paths
+# so they can be copied locally or fetched without parsing paths from log text.
+if [[ "$TEST_BINARY" == *test_tt_fabric ]] &&
+    grep -q "confirmed hung cluster-wide" "$LOG_FILE" 2>/dev/null; then
+    # --tag-output prefixes rank 0's lines with "[1,0]<stream>: [host:pid]".
+    RANK0_HOST="$(sed -nE 's/^\[1,0\]<std(out|err)>: \[([^]:]+):[0-9]+\].*/\2/p' "$LOG_FILE" 2>/dev/null | head -1)"
+    if [[ -n "$RANK0_HOST" ]]; then
+        echo "Rank 0 host (from tagged output): $RANK0_HOST"
+    else
+        RANK0_HOST="${HOSTS%%,*}"
+        echo "Rank 0 host not found in tagged output; assuming first configured host: $RANK0_HOST"
     fi
-done
+
+    # Same ssh options mpirun is launched with, plus BatchMode/ConnectTimeout
+    # so an unreachable rank 0 fails fast instead of prompting or blocking.
+    SCP_OPTS=(
+        -q
+        -o BatchMode=yes
+        -o StrictHostKeyChecking=false
+        -o UserKnownHostsFile=/dev/null
+        -o LogLevel=ERROR
+        -o ConnectTimeout=15
+    )
+    REPORT_SOURCES=("$SUMMARY_REPORT" "$DETAIL_REPORT")
+    REPORT_NAMES=("$SUMMARY_REPORT_NAME" "$DETAIL_REPORT_NAME")
+
+    for i in "${!REPORT_SOURCES[@]}"; do
+        report="${REPORT_SOURCES[$i]}"
+        dest="$OUTPUT_DIR_ABS/${REPORT_NAMES[$i]}"
+        if [[ -f "$report" ]] && cp "$report" "$dest"; then
+            rm -f "$report"
+            echo "Hang report: $dest"
+        elif scp "${SCP_OPTS[@]}" "$RANK0_HOST:$report" "$dest" 2>/dev/null; then
+            ssh "${SCP_OPTS[@]}" "$RANK0_HOST" rm -f -- "$report" 2>/dev/null || true
+            echo "Hang report: $dest (fetched from rank 0 host $RANK0_HOST)"
+        else
+            echo "WARNING: expected rank 0 ($RANK0_HOST) report could not be retrieved: $report" >&2
+            echo "         Retrieve it with: scp $RANK0_HOST:$report $dest" >&2
+        fi
+    done
+fi
 
 print_fabric_final_summary "$LOG_FILE"
 FABRIC_RESULT=$?

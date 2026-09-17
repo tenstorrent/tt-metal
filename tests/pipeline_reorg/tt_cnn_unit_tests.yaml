@@ -22,6 +22,7 @@
       timeout: 10
   owner_id: U076Z1JJUQZ # Artem Yerofieiev
   team: ttnn
+  budget_type: unit
   category: cnn_pipeline
 
 - name: tt-cnn builder unit tests
@@ -31,4 +32,5 @@
       timeout: 10
   owner_id: U076Z1JJUQZ # Artem Yerofieiev
   team: ttnn
+  budget_type: unit
   category: cnn_builder

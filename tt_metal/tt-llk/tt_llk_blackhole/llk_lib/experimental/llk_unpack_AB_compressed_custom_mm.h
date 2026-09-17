@@ -249,7 +249,7 @@ inline void _llk_unpack_AB_compressed_custom_mm_(
         meta >>= 3;
     }
 
-    t6_semaphore_get(semaphore::UNPACK_SYNC);
+    t6_semaphore_get<p_stall::UNPACK>(semaphore::UNPACK_SYNC);
 
     wait_for_next_context(1);
     reset_config_context();

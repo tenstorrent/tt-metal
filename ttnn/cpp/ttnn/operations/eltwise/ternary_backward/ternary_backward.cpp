@@ -23,6 +23,8 @@ std::vector<Tensor> addcmul_bw(
     auto output_mem_config = memory_config.value_or(input_a.memory_config());
     std::vector<Tensor> grad_tensor;
     grad_tensor.reserve(3);
+    // Passthrough gradient, see #53874: no eltwise backward op relocates it.
+    // output[0] keeps grad's own memory config rather than output_mem_config.
     grad_tensor.emplace_back(grad);
     Tensor grad_a = ttnn::multiply(
         ttnn::multiply(grad, tensor2, std::nullopt, output_mem_config), value, std::nullopt, output_mem_config);
@@ -43,9 +45,8 @@ std::vector<Tensor> addcdiv_bw(
     auto output_mem_config = memory_config.value_or(input_a.memory_config());
     std::vector<Tensor> grad_tensor;
     grad_tensor.reserve(3);
-    // grad is passed through unchanged, so output[0] keeps grad's memory config rather
-    // than output_mem_config. Intentional: no eltwise backward op relocates the
-    // passthrough gradient. See #53874.
+    // Passthrough gradient, see #53874: no eltwise backward op relocates it.
+    // output[0] keeps grad's own memory config rather than output_mem_config.
     grad_tensor.emplace_back(grad);
     float t_inf = std::numeric_limits<float>::infinity();
     float t_nan = std::nanf("");

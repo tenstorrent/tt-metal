@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "moe_grouped_topk_device_operation.hpp"
+#include <tt-metalium/circular_buffer_constants.h>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/cb_utils.hpp"
@@ -71,7 +72,8 @@ MoeGroupedTopkDeviceOperation::ProgramFactory::cached_program_t MoeGroupedTopkDe
     const uint32_t compute_page_size = tt::tile_size(compute_data_format);
 
     uint32_t n_activated_expert_tiles = tt::div_up(operation_attributes.n_activated_experts, 32);
-    uint32_t uint16_page_size = output_indices.buffer()->page_size();
+    // Template-side index tiles are uint32 so they reach 32-bit DEST as plain integers; outputs stay uint16.
+    const uint32_t uint32_page_size = tt::tile_size(tt::DataFormat::UInt32);
     tt::tt_metal::create_cb(
         cb_in_scores, program, all_cores, scores.buffer()->page_size(), 2 * width_tiles, scores_data_format);
     tt::tt_metal::create_cb(
@@ -117,9 +119,9 @@ MoeGroupedTopkDeviceOperation::ProgramFactory::cached_program_t MoeGroupedTopkDe
     auto cb_expert_index_template = tt::CBIndex::c_8;
     tt::tt_metal::create_cb(cb_sorted_group_scores, program, all_cores, compute_page_size, 2, compute_data_format);
     tt::tt_metal::create_cb(
-        cb_sorted_expert_indices_temp, program, all_cores, uint16_page_size, 2, tt::DataFormat::UInt16);
+        cb_sorted_expert_indices_temp, program, all_cores, uint32_page_size, 2, tt::DataFormat::UInt32);
     tt::tt_metal::create_cb(
-        cb_expert_index_template, program, all_cores, uint16_page_size, width_tiles, tt::DataFormat::UInt16);
+        cb_expert_index_template, program, all_cores, uint32_page_size, width_tiles, tt::DataFormat::UInt32);
 
     uint32_t num_group_tiles = tt::div_up(operation_attributes.n_groups, 32);
     auto cb_group_index_template = tt::CBIndex::c_9;
@@ -127,7 +129,7 @@ MoeGroupedTopkDeviceOperation::ProgramFactory::cached_program_t MoeGroupedTopkDe
     auto cb_top_experts_per_group = tt::CBIndex::c_11;
     auto cb_sorted_group_order = tt::CBIndex::c_12;
     tt::tt_metal::create_cb(
-        cb_group_index_template, program, all_cores, uint16_page_size, num_group_tiles, tt::DataFormat::UInt16);
+        cb_group_index_template, program, all_cores, uint32_page_size, num_group_tiles, tt::DataFormat::UInt32);
     tt::tt_metal::create_cb(
         cb_top_experts_per_group,
         program,
@@ -158,9 +160,9 @@ MoeGroupedTopkDeviceOperation::ProgramFactory::cached_program_t MoeGroupedTopkDe
         cb_winning_group_indices,
         program,
         all_cores,
-        output_indices.buffer()->page_size(),
+        uint32_page_size,
         operation_attributes.topk_groups,
-        tt::DataFormat::UInt16);
+        tt::DataFormat::UInt32);
 
     auto cb_reduce_intermediate = tt::CBIndex::c_15;
     auto cb_final_indices_transposed = tt::CBIndex::c_16;
@@ -280,6 +282,18 @@ MoeGroupedTopkDeviceOperation::ProgramFactory::cached_program_t MoeGroupedTopkDe
 
     std::vector<uint32_t> compute_compile_time_args = {};
 
+    // Default-unpacked fp32 tiles reach DEST through SrcA as TF32, i.e. with zero low 13 mantissa bits;
+    // the kernel's rank-tag stable engine keeps its tag inside those bits and is lossless only then.
+    // sort_keys_tf32 certifies it from the modes actually passed for the two CBs the rank-tag sorts
+    // read (an UnpackToDestFp32 mode there turns it off and the kernel keeps the comparator engine).
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
+        NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+    const auto default_unpack = [&](tt::CBIndex cb) {
+        return unpack_to_dest_mode[static_cast<uint32_t>(cb)] == tt::tt_metal::UnpackToDestMode::Default;
+    };
+    const bool sort_keys_tf32 = default_unpack(cb_biased_scores) && default_unpack(cb_group_summed_scores);
+    compute_named_compile_time_args["sort_keys_tf32"] = static_cast<uint32_t>(sort_keys_tf32);
+
     bool fp32_dest_acc_en = true;
     auto compute_kernel_id = CreateKernel(
         program,
@@ -288,6 +302,7 @@ MoeGroupedTopkDeviceOperation::ProgramFactory::cached_program_t MoeGroupedTopkDe
         all_cores,
         ComputeConfig{
             .fp32_dest_acc_en = fp32_dest_acc_en,
+            .unpack_to_dest_mode = unpack_to_dest_mode,
             .compile_args = compute_compile_time_args,
             .named_compile_args = compute_named_compile_time_args});
 

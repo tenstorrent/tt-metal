@@ -32,6 +32,9 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
             output_head_major (bool): default False. When True, o is returned head-major as
                 [B*HV, T, V] in TILE layout (skips the token<->head permute round-trip);
                 otherwise token-major [B, T, HV, V] ROW_MAJOR.
+            use_mcast (bool): default True. The scan phase multicasts its shared inputs from one
+                sender core per head to that head's sibling V-block cores; False makes every core
+                read them from DRAM itself. Meant as a validation argument.
             memory_config (ttnn.MemoryConfig, optional).
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional).
             eye, tril, ones (ttnn.Tensor, optional): [1,1,C,C] fp32 TILE constant tiles (identity,
@@ -64,6 +67,7 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
         nb::arg("chunk_size") = 64,
         nb::arg("use_qk_l2norm") = false,
         nb::arg("output_head_major") = false,
+        nb::arg("use_mcast") = true,
         nb::arg("memory_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("eye") = nb::none(),

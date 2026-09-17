@@ -55,6 +55,7 @@ std::uint8_t my_relative_y_ __attribute__((used));
 #if defined(UCK_CHLKC_PACK)
 thread_local LocalDFBInterface g_dfb_interface[dfb::MAX_ACTIVE_DFBS_PACK] __attribute__((used));
 thread_local std::uint8_t g_dfb_logical_to_compact[dfb::NUM_DFBS] __attribute__((used));
+thread_local DFBTCSlot g_dfb_tc_slots[dfb::MAX_PACK_TC_SLOTS] __attribute__((used));
 #else
 thread_local LocalDFBInterface g_dfb_interface[dfb::NUM_DFBS] __attribute__((used));
 #endif

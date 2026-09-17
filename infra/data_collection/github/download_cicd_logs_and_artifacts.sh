@@ -13,16 +13,89 @@ set_up_dirs() {
     mkdir -p generated/cicd/$workflow_run_id/logs
 }
 
+# Artifacts persist across attempts, so a re-run would otherwise re-download every
+# test_reports_* zip the first attempt produced. Later attempts fetch only the reports
+# created since the attempt started; the rest were collected when the earlier attempt was
+# analysed. First attempts keep the unconditional path and pay no extra listing.
 download_artifacts() {
     local repo=$1
     local workflow_run_id=$2
+    local attempt_number=$3
+
+    if [[ -n "$attempt_number" && "$attempt_number" -gt 1 ]]; then
+        download_artifacts_created_since_attempt_start "$repo" "$workflow_run_id" "$attempt_number"
+        return
+    fi
 
     echo "[info] Downloading test reports for workflow run $workflow_run_id"
-    api_output=$(gh api --paginate /repos/$repo/actions/runs/$workflow_run_id/artifacts | jq -r '.artifacts[] | .name')
-    if echo "$api_output" | grep -q "test_reports_"; then
-        gh run download --repo $repo -D generated/cicd/$workflow_run_id/artifacts --pattern test_reports_* $workflow_run_id
-    else
-        echo "[Warning] Test reports not found for workflow run $workflow_run_id"
+    # `gh run download` lists the run's artifacts itself, so the separate
+    # /artifacts listing that used to gate this call was a second (paginated) request
+    # spent only to decide whether to make the first. A run with no test_reports_*
+    # artifact makes this a no-op, which is the same outcome the gate produced.
+    #
+    # gh's own message is kept and reported: "no artifacts match" and "rate limit
+    # exceeded" both land here, and collapsing the second into "not found" is how a
+    # throttled fetch gets mistaken for a run that simply had no test reports.
+    local download_error
+    if ! download_error=$(gh run download --repo $repo -D generated/cicd/$workflow_run_id/artifacts --pattern 'test_reports_*' $workflow_run_id 2>&1 >/dev/null); then
+        echo "[Warning] Test reports not downloaded for workflow run $workflow_run_id: ${download_error:-no reason given}"
+    fi
+}
+
+# Only the test_reports_* artifacts this attempt produced.
+download_artifacts_created_since_attempt_start() {
+    local repo=$1
+    local workflow_run_id=$2
+    local attempt_number=$3
+
+    local attempt_started
+    if ! attempt_started=$(gh api "/repos/$repo/actions/runs/$workflow_run_id/attempts/$attempt_number" --jq '.run_started_at' 2>&1); then
+        echo "[Warning] could not read attempt $attempt_number start time (${attempt_started:-no reason given}); downloading all test reports"
+        download_artifacts "$repo" "$workflow_run_id" 1
+        return
+    fi
+    echo "[info] attempt $attempt_number started $attempt_started; only test reports newer than that are this attempt's"
+
+    local listing
+    if ! listing=$(gh api --paginate "/repos/$repo/actions/runs/$workflow_run_id/artifacts" 2>&1); then
+        echo "[Warning] could not list artifacts for workflow run $workflow_run_id: ${listing:-no reason given}"
+        return
+    fi
+
+    # Lexicographic compare is ordering-correct for the UTC "...Z" form the API returns.
+    local fresh
+    fresh=$(printf '%s' "$listing" | jq -r --arg since "$attempt_started" \
+        '[.artifacts[]? | select((.name | startswith("test_reports_")) and .created_at > $since) | .name] | unique | .[]')
+
+    if [[ -z "$fresh" ]]; then
+        echo "[info] attempt $attempt_number uploaded no new test reports; the earlier attempt's analysis collected the rest"
+        return
+    fi
+
+    local -a fresh_names=()
+    local -a name_args=()
+    local name
+    while IFS= read -r name; do
+        [[ -z "$name" ]] && continue
+        fresh_names+=("$name")
+        name_args+=(--name "$name")
+    done <<< "$fresh"
+    echo "[info] downloading ${#fresh_names[@]} new test report artifact(s) for attempt $attempt_number"
+
+    # One invocation for all names, because each `gh run download` re-lists the artifacts.
+    # Its layout depends on the count: several --name args each get a <name>/ directory,
+    # but a lone --name flattens into -D. The parsers glob for test_reports_* directories,
+    # so a flattened download would silently yield no test results -- name that directory
+    # ourselves.
+    local dest="generated/cicd/$workflow_run_id/artifacts"
+    if [[ "${#fresh_names[@]}" -eq 1 ]]; then
+        dest="$dest/${fresh_names[0]}"
+        mkdir -p "$dest"
+    fi
+
+    local download_error
+    if ! download_error=$(gh run download --repo $repo -D "$dest" "${name_args[@]}" $workflow_run_id 2>&1 >/dev/null); then
+        echo "[Warning] Test reports not downloaded for workflow run $workflow_run_id: ${download_error:-no reason given}"
     fi
 }
 
@@ -77,6 +150,108 @@ get_jobs_with_pagination_fallback() {
     fi
 }
 
+# Fetch job logs an archive at a time rather than a job at a time, via
+#   GET /repos/{repo}/actions/runs/{id}/attempts/{n}/logs
+#
+# An attempt's archive holds only the jobs that ran in THAT attempt, while the jobs list
+# returns every job of the run. A re-run's archive is therefore nearly empty while its
+# jobs list is full, and fetching only the current attempt leaves most jobs to the
+# per-job fallback -- the old one-request-per-job cost.
+#
+# Hence the walk: extract attempt n, then n-1 ... 1 while jobs that ran still have no
+# log. One request per attempt instead of one per job. Newest-first also means a job
+# re-run in a later attempt keeps the later log, since the extractor never overwrites.
+#
+# The jobs list cannot shortcut this: its run_attempt field is just the attempt that was
+# queried, and job ids are disjoint between attempts, so which attempt ran a job is only
+# knowable by elimination.
+#
+# Unpacking is a Python helper rather than `unzip`; see extract_job_logs_from_archive.py,
+# which also covers the entry-name-to-job-id mapping. Anything no archive covers falls
+# through to the per-job path in download_logs_for_all_jobs.
+
+# Jobs whose conclusion says they ran but which still have no log. Local only, no API.
+count_ran_jobs_missing_logs() {
+    local logs_dir=$1
+    local jobs_data=$2
+
+    local missing=0
+    local job_id
+    while IFS= read -r job_id; do
+        [[ -z "$job_id" ]] && continue
+        [[ -s "$logs_dir/$job_id.log" ]] || missing=$((missing + 1))
+    done < <(printf '%s' "$jobs_data" | jq -r '.jobs[]? | select(.conclusion != "skipped" and .conclusion != null) | .id')
+    echo "$missing"
+}
+
+# Extract one attempt's archive. Non-zero means the archive could not be fetched or
+# unpacked, which the caller treats as "try the next attempt" rather than as fatal.
+extract_one_attempt_archive() {
+    local repo=$1
+    local workflow_run_id=$2
+    local attempt=$3
+    local jobs_file=$4
+    local logs_dir=$5
+
+    local script_dir
+    script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+    local tmp_dir
+    tmp_dir=$(mktemp -d)
+    local archive="$tmp_dir/logs.zip"
+
+    # gh >= 2.97.0 needs the escape-sequence flag, older images in the fleet lack it.
+    # Errors are surfaced, not discarded: a 403 here means the repo's REST budget is gone.
+    local archive_error retry_error
+    if ! archive_error=$(gh api --allow-escape-sequences "/repos/$repo/actions/runs/$workflow_run_id/attempts/$attempt/logs" 2>&1 >"$archive"); then
+        if ! retry_error=$(gh api "/repos/$repo/actions/runs/$workflow_run_id/attempts/$attempt/logs" 2>&1 >"$archive"); then
+            echo "[Warning] could not download the attempt $attempt log archive: ${retry_error:-no reason given}"
+            echo "[Warning] first try (with --allow-escape-sequences) said: ${archive_error:-no reason given}"
+            rm -rf "$tmp_dir"
+            return 1
+        fi
+    fi
+
+    if ! python3 "$script_dir/extract_job_logs_from_archive.py" \
+            --archive "$archive" \
+            --jobs-json "$jobs_file" \
+            --logs-dir "$logs_dir"; then
+        rm -rf "$tmp_dir"
+        return 1
+    fi
+
+    rm -rf "$tmp_dir"
+    return 0
+}
+
+download_logs_archives_walking_attempts() {
+    local repo=$1
+    local workflow_run_id=$2
+    local attempt_number=$3
+    local jobs_data=$4
+
+    local logs_dir="generated/cicd/$workflow_run_id/logs"
+    local tmp_dir
+    tmp_dir=$(mktemp -d)
+    local jobs_file="$tmp_dir/jobs.json"
+    printf '%s' "$jobs_data" > "$jobs_file"
+
+    local attempt
+    for (( attempt = attempt_number; attempt >= 1; attempt-- )); do
+        echo "[info] fetching attempt $attempt's logs as one archive"
+        extract_one_attempt_archive "$repo" "$workflow_run_id" "$attempt" "$jobs_file" "$logs_dir" || true
+
+        local missing
+        missing=$(count_ran_jobs_missing_logs "$logs_dir" "$jobs_data")
+        if [[ "$missing" -eq 0 ]]; then
+            echo "[info] every job that ran has a log after $(( attempt_number - attempt + 1 )) archive request(s)"
+            break
+        fi
+        echo "[info] $missing job(s) that ran still have no log"
+    done
+
+    rm -rf "$tmp_dir"
+}
+
 download_logs_for_all_jobs() {
     local repo=$1
     local workflow_run_id=$2
@@ -87,25 +262,29 @@ download_logs_for_all_jobs() {
     # Get jobs using the pagination fallback function
     jobs_data=$(get_jobs_with_pagination_fallback "$repo" "$workflow_run_id" "$attempt_number")
 
+    download_logs_archives_walking_attempts "$repo" "$workflow_run_id" "$attempt_number" "$jobs_data"
+
     # Process the jobs data
-    # is_civ2 is true when any runs-on label starts with tt-ubuntu- (CIv2 runners)
-    echo "$jobs_data" | jq -c '.jobs[] | {id: .id, conclusion: .conclusion, is_civ2: ([.labels[]? | select(startswith("tt-ubuntu-"))] | length > 0)}' | while read -r job; do
+    echo "$jobs_data" | jq -c '.jobs[] | {id: .id, conclusion: .conclusion}' | while read -r job; do
         job_id=$(echo "$job" | jq -r '.id')
         job_conclusion=$(echo "$job" | jq -r '.conclusion')
-        is_civ2=$(echo "$job" | jq -r '.is_civ2')
-        echo "[info] download logs for job with id $job_id, attempt number $attempt_number"
-        # https://github.com/tenstorrent/tt-metal/issues/12966
-        # We bypass any log download that returned a non-zero exit code so the downloader doesn't crash midway.
-        # williamly: We may want to check http status code for robustness in the future again but it may be costly in terms of api calls used.
-        # We output escape sequences, gh cli >= 2.97.0 requires --allow-escape-sequences else it fails. Fall back to regular call for older images.
-        gh api --allow-escape-sequences /repos/$repo/actions/jobs/$job_id/logs > generated/cicd/$workflow_run_id/logs/$job_id.log || \
-            gh api /repos/$repo/actions/jobs/$job_id/logs > generated/cicd/$workflow_run_id/logs/$job_id.log || true
+        # The archives above normally supplied this already, so only jobs they missed
+        # cost a request. Skipped jobs have no log to serve, and asking cost two requests
+        # each -- the first 404 is a non-zero exit, so the "||" retry fires and 404s too.
+        if [[ ! -s generated/cicd/$workflow_run_id/logs/$job_id.log ]] &&
+           [[ "$job_conclusion" != "skipped" && "$job_conclusion" != "null" && -n "$job_conclusion" ]]; then
+            echo "[info] download logs for job with id $job_id, attempt number $attempt_number"
+            # https://github.com/tenstorrent/tt-metal/issues/12966
+            # We bypass any log download that returned a non-zero exit code so the downloader doesn't crash midway.
+            # williamly: We may want to check http status code for robustness in the future again but it may be costly in terms of api calls used.
+            # We output escape sequences, gh cli >= 2.97.0 requires --allow-escape-sequences else it fails. Fall back to regular call for older images.
+            gh api --allow-escape-sequences /repos/$repo/actions/jobs/$job_id/logs > generated/cicd/$workflow_run_id/logs/$job_id.log || \
+                gh api /repos/$repo/actions/jobs/$job_id/logs > generated/cicd/$workflow_run_id/logs/$job_id.log || true
+        fi
 
-        # Download annotations for failed jobs (failure reason) and for CIv2 runner jobs.
-        # CIv2 runners emit node-name and card-serial notice annotations at job start
-        # (see tenstorrent/github-ci-infra#1408) which we use to identify the physical node/card.
-        if [[ "$job_conclusion" == "failure" || "$is_civ2" == "true" ]]; then
-            echo "[info] downloading annotations for job $job_id (conclusion=$job_conclusion, civ2=$is_civ2)"
+        # Download annotations for failed jobs only (failure reason).
+        if [[ "$job_conclusion" == "failure" ]]; then
+            echo "[info] downloading annotations for job $job_id (conclusion=$job_conclusion)"
             gh api /repos/$repo/check-runs/$job_id/annotations > generated/cicd/$workflow_run_id/logs/${job_id}_annotations.json
         fi
     done
@@ -149,7 +328,7 @@ main() {
     fi
 
     set_up_dirs "$workflow_run_id"
-    download_artifacts "$repo" "$workflow_run_id"
+    download_artifacts "$repo" "$workflow_run_id" "$attempt_number"
     download_logs_for_all_jobs "$repo" "$workflow_run_id" "$attempt_number"
 }
 

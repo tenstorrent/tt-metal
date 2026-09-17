@@ -17,6 +17,7 @@
   name: Galaxy UMD unit tests
   model: unit
   team: umd
+  budget_type: unit
   owner_id: U09769N29BN # Aleksa Marković
   # owner: see issue #29677
   auto_triage: true
@@ -29,6 +30,7 @@
   name: UMD API tests
   model: unit
   team: umd
+  budget_type: unit
   owner_id: U09769N29BN # Aleksa Marković
   auto_triage: true
   cmd: ./build/test/umd/api/api_tests
@@ -41,6 +43,7 @@
   name: Galaxy Fabric tests
   model: fabric
   team: scaleout
+  budget_type: unit
   owner_id: U08EE956Q8Z # Allan Liu
   auto_triage: true
   cmd: |
@@ -58,6 +61,7 @@
   name: Galaxy Multi-Process tests
   model: multiprocess
   team: scaleout
+  budget_type: unit
   owner_id: U0709049XNK # Aditya Saigal
   auto_triage: false
   cmd: |
@@ -78,6 +82,7 @@
   name: Galaxy distributed ops tests
   model: distributed-ops
   team: ttnn
+  budget_type: unit
   owner_id: U044T8U8DEF # Johanna Rock
   auto_triage: true
   cmd: |

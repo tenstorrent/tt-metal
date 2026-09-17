@@ -9,6 +9,7 @@
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/experimental/kda/factory/kda_factory_utils.hpp"
+#include "ttnn/operations/experimental/kda/kda_performance_model.hpp"
 
 using namespace tt::tt_metal;
 
@@ -120,6 +121,22 @@ QkvCausalConv1dSiluOperation::tensor_return_value_t QkvCausalConv1dSiluOperation
         create_device_tensor(specs[0], in.input.device()),
         create_device_tensor(specs[1], in.input.device()),
         create_device_tensor(specs[2], in.input.device())};
+}
+
+tt::tt_metal::operation::OpPerformanceModelGeneral<QkvCausalConv1dSiluOperation::tensor_return_value_t>
+QkvCausalConv1dSiluOperation::create_op_performance_model(
+    const operation_attributes_t& attrs, const tensor_args_t& in, tensor_return_value_t& outputs) {
+    using namespace kda_performance_model;
+
+    const auto& input_shape = in.input.logical_shape();
+    const double width = static_cast<double>(attrs.q_width) + attrs.k_width + attrs.v_width;
+    const double elements = static_cast<double>(input_shape[0]) * attrs.sequence * width;
+    const KdaFpuWork work{
+        .fpu_multiply_ops = 4.0 * elements,
+        .fpu_add_ops = 3.0 * elements,
+    };
+    const std::array<const Tensor*, 6> inputs = {&in.input, &in.history, &in.tap0, &in.tap1, &in.tap2, &in.tap3};
+    return make_profiler_model(work, inputs, outputs, attrs.compute_kernel_config.math_fidelity);
 }
 
 std::vector<Tensor> qkv_causal_conv1d_silu(

@@ -16,6 +16,7 @@ import ttnn
 from models.common.models.qwen3_32b.model import (
     DEFAULT_HF_REVISION,
     QWEN3_32B_ACCURACY,
+    QWEN3_32B_BH_TP4_CLUSTER_TYPES,
     QWEN3_32B_PERFORMANCE,
     Qwen3_32B,
     Qwen3_32BPagedAttentionConfig,
@@ -169,18 +170,30 @@ def _qwen_stop_token_ids(tokenizer) -> tuple[int, ...]:
 
 
 def _trace_seq_lens(num_devices: int, max_prefill_chunk_size: int, max_seq_len: int) -> tuple[int, ...]:
-    if num_devices != 8:
-        raise ValueError(f"Qwen3-32B supports exactly 8 devices (T3K), got {num_devices}")
-    return tuple(length for length in (128, 1024) if length <= min(max_prefill_chunk_size, max_seq_len))
+    if num_devices not in (4, 8):
+        raise ValueError(f"Qwen3-32B supports T3K (8 devices) or P150x4 (4 devices), got {num_devices}")
+    candidates = (128, 1024)
+    return tuple(length for length in candidates if length <= min(max_prefill_chunk_size, max_seq_len))
 
 
-def _cache_path(hf_model: str, mesh_device, cache_dir: Path | str | None) -> Path:
+def _resolve_supported_sku(*, arch, cluster_type, num_devices: int) -> str:
+    if arch == ttnn.device.Arch.WORMHOLE_B0 and cluster_type == ttnn.cluster.ClusterType.T3K and num_devices == 8:
+        return "T3K"
+    if arch == ttnn.device.Arch.BLACKHOLE and cluster_type in QWEN3_32B_BH_TP4_CLUSTER_TYPES and num_devices == 4:
+        return "P150x4"
+    raise ValueError(
+        "Qwen3-32B supports physical Wormhole T3K (8 devices) or BlackHole P150_X4/P300_X2 (4 devices); "
+        f"got arch={arch}, cluster_type={cluster_type}, num_devices={num_devices}"
+    )
+
+
+def _cache_path(hf_model: str, mesh_device, cache_dir: Path | str | None, *, sku: str) -> Path:
     if cache_dir is not None:
         path = Path(cache_dir)
     elif os.getenv("TT_CACHE_PATH"):
         path = Path(os.environ["TT_CACHE_PATH"])
     else:
-        path = Path("model_cache") / hf_model / "T3K"
+        path = Path("model_cache") / hf_model / sku
     path.mkdir(parents=True, exist_ok=True)
     return path
 
@@ -226,8 +239,11 @@ def from_pretrained(
 ) -> Qwen3_32BForCausalLM:
     del dtype
     num_devices = mesh_device.get_num_devices()
-    if num_devices != 8:
-        raise ValueError(f"Qwen3-32B supports exactly 8 devices (T3K), got {num_devices}")
+    sku = _resolve_supported_sku(
+        arch=mesh_device.arch(),
+        cluster_type=ttnn.cluster.get_cluster_type(),
+        num_devices=num_devices,
+    )
     ttnn.SetDefaultDevice(mesh_device)
     hf_config = AutoConfig.from_pretrained(
         hf_model,
@@ -245,7 +261,7 @@ def from_pretrained(
         raise TypeError("optimizations must be 'accuracy', 'performance', or Qwen3_32BPrecisionConfig")
     if not (1 <= resolved_layers <= hf_config.num_hidden_layers):
         raise ValueError(f"n_layers must be in [1, {hf_config.num_hidden_layers}], got {resolved_layers}")
-    cache_path = _cache_path(hf_model, mesh_device, cache_dir)
+    cache_path = _cache_path(hf_model, mesh_device, cache_dir, sku=sku)
     if paged_attention_config is None:
         block_size = 32
     else:
@@ -278,6 +294,9 @@ def from_pretrained(
         max_batch_size=max_batch_size,
         cluster_shape=list(mesh_device.shape),
         kv_cache_dtype=precision.kv_cache_dtype,
+        # TTTv1 disables batched prefill for Qwen3-32B on P150x4. Keep that
+        # architecture policy construction-time and retain the env A/B escape hatch on T3K.
+        disable_batched_prefill=sku == "P150x4" or bool(os.getenv("DISABLE_BATCHED_PREFILL")),
         batched_prefill_batched_extract=not os.environ.get("DISABLE_BATCHED_EXTRACT"),
     )
     tokenizer = load_tokenizer(hf_model, hf_revision)

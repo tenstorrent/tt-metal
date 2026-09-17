@@ -13,6 +13,7 @@
 #include <memory>
 #include <optional>
 #include <span>
+#include <spawn.h>
 #include <string>
 #include <sys/wait.h>
 #include <thread>
@@ -37,10 +38,31 @@
 #include "distributed/mesh_trace.hpp"
 #include "llrt/core_descriptor.hpp"
 
+// Clang TSan sets __has_feature(thread_sanitizer) but not always __SANITIZE_THREAD__.
+#if defined(__has_feature)
+#if __has_feature(thread_sanitizer) && !defined(__SANITIZE_THREAD__)
+#define __SANITIZE_THREAD__ 1
+#endif
+#endif
+
 namespace tt::tt_metal {
 namespace {
 
 constexpr const char* kObserverChildEnv = "TT_METAL_DISPATCH_TELEMETRY_OBSERVER_PCI_DEVICE_ID";
+
+// Copies environ, replacing an existing KEY= if present. Pointers alias `observer_env`.
+std::vector<char*> envp_with_observer_pci_id(std::string& observer_env) {
+    const std::string prefix = std::string(kObserverChildEnv) + "=";
+    std::vector<char*> envp;
+    for (char** entry = environ; entry != nullptr && *entry != nullptr; ++entry) {
+        if (std::strncmp(*entry, prefix.c_str(), prefix.size()) != 0) {
+            envp.push_back(*entry);
+        }
+    }
+    envp.push_back(observer_env.data());
+    envp.push_back(nullptr);
+    return envp;
+}
 
 template <typename TCoreType>
 Program create_blank_program(const TCoreType& core) {
@@ -395,12 +417,16 @@ TEST_F(DispatchTelemetryReadApiTest, SMCControlIsInitialized) {
     const uint8_t control_flags = control->flags;
     const uint32_t dispatch_telemetry_addr = control->dispatch_telemetry_addr;
     const uint8_t num_hw_cqs = control->num_hw_cqs;
+    const uint16_t num_worker_cores = control->num_worker_cores;
     EXPECT_EQ(control_version, dispatch_telemetry_types::DISPATCH_TELEMETRY_VERSION);
     EXPECT_EQ(control_signature, dispatch_telemetry_types::SMC_TELEMETRY_SIGNATURE);
     EXPECT_EQ(control_flags, 0);
     EXPECT_EQ(dispatch_telemetry_addr, expected_addr);
     EXPECT_EQ(num_hw_cqs, device()->num_hw_cqs());
     ASSERT_LE(num_hw_cqs, dispatch_telemetry_types::RESERVED_CQ_SPACE);
+    const CoreCoord compute_grid = device()->compute_with_storage_grid_size();
+    EXPECT_EQ(num_worker_cores, compute_grid.x * compute_grid.y);
+    EXPECT_GT(num_worker_cores, 0u);
 
     {
         auto& metal_context = MetalContext::instance();
@@ -485,6 +511,7 @@ TEST_F(DispatchTelemetrySlowDispatchTest, SMCControlIsInitialized) {
     const uint8_t control_flags = control->flags;
     const uint32_t dispatch_telemetry_addr = control->dispatch_telemetry_addr;
     const uint8_t num_hw_cqs = control->num_hw_cqs;
+    const uint16_t num_worker_cores = control->num_worker_cores;
     EXPECT_EQ(control_version, dispatch_telemetry_types::DISPATCH_TELEMETRY_VERSION);
     EXPECT_EQ(control_signature, dispatch_telemetry_types::SMC_TELEMETRY_SIGNATURE);
     EXPECT_TRUE(
@@ -493,6 +520,9 @@ TEST_F(DispatchTelemetrySlowDispatchTest, SMCControlIsInitialized) {
     EXPECT_EQ(dispatch_telemetry_addr, expected_addr);
     EXPECT_EQ(num_hw_cqs, device()->num_hw_cqs());
     ASSERT_LE(num_hw_cqs, dispatch_telemetry_types::RESERVED_CQ_SPACE);
+    const CoreCoord compute_grid = device()->compute_with_storage_grid_size();
+    EXPECT_EQ(num_worker_cores, compute_grid.x * compute_grid.y);
+    EXPECT_GT(num_worker_cores, 0u);
 
     for (auto smc_coords : control->cq_dispatch_core_coords) {
         const uint32_t prefetch_xy = smc_coords.prefetch_xy;
@@ -531,6 +561,11 @@ TEST(DispatchTelemetryObserverChild, ReadInfoFromDeviceOwnedByAnotherProcess) {
 }
 
 TEST_F(DispatchTelemetryHostL1WaitTest, ReadInfoFromSeparateProcessWhileDeviceInUse) {
+#ifdef __SANITIZE_THREAD__
+    GTEST_SKIP() << "TSan has no happens-before across processes when a child attaches to a live "
+                    "device the parent still owns; posix_spawn only avoids fork-from-multithreaded-parent";
+#endif
+
     constexpr const char* observerChildFilter =
         "DispatchTelemetryObserverChild.ReadInfoFromDeviceOwnedByAnotherProcess";
 
@@ -554,27 +589,25 @@ TEST_F(DispatchTelemetryHostL1WaitTest, ReadInfoFromSeparateProcessWhileDeviceIn
     }
     ASSERT_TRUE(worker_started);
 
-    pid_t pid = fork();
-    if (pid == -1) {
-        const int fork_errno = errno;
+    // posix_spawn is the POSIX way to start a process from a multi-threaded parent
+    // (fork()+execv() is unsafe once the CQ reader / executor pool exist).
+    std::string observer_env = std::string(kObserverChildEnv) + "=" + std::to_string(pci_device_num);
+    std::vector<char*> envp = envp_with_observer_pci_id(observer_env);
+    const std::string filter_arg = std::string("--gtest_filter=") + observerChildFilter;
+    char* const argv[] = {const_cast<char*>("/proc/self/exe"), const_cast<char*>(filter_arg.c_str()), nullptr};
+
+    pid_t pid = 0;
+    const int spawn_ret = posix_spawn(&pid, argv[0], nullptr, nullptr, argv, envp.data());
+    if (spawn_ret != 0) {
         release_core_and_finish(worker_core);
-        FAIL() << "fork() failed: " << std::strerror(fork_errno);
-    }
-
-    if (pid == 0) {
-        const std::string pci_device_id = std::to_string(pci_device_num);
-        if (setenv(kObserverChildEnv, pci_device_id.c_str(), 1) != 0) {
-            _exit(2);
-        }
-
-        const std::string filter_arg = std::string("--gtest_filter=") + observerChildFilter;
-        char* const args[] = {const_cast<char*>("/proc/self/exe"), const_cast<char*>(filter_arg.c_str()), nullptr};
-        execv("/proc/self/exe", args);
-        _exit(3);
+        FAIL() << "posix_spawn() failed: " << std::strerror(spawn_ret);
     }
 
     int status = 0;
-    const pid_t wait_result = waitpid(pid, &status, 0);
+    pid_t wait_result = -1;
+    do {
+        wait_result = waitpid(pid, &status, 0);
+    } while (wait_result < 0 && errno == EINTR);
     release_core_and_finish(worker_core);
 
     ASSERT_EQ(wait_result, pid) << "waitpid failed";
@@ -1575,8 +1608,8 @@ TEST_F(DispatchTelemetryHostL1WaitTest, DispatchCoreEfficiencyAndUtilization) {
         auto info = telemetry.read_info();
         ASSERT_TRUE(info.has_value());
         ASSERT_TRUE(info->device_core_efficiency_since_last_read.has_value());
-        // Since we're only putting work on the tensix cores and not the eth cores, core efficiency will not be
-        // exactly 1.0
+        // Dispatch tensix and ethernet tiles are excluded from the worker-core denominator, so a
+        // wait covering the full compute grid should report near-1.0 efficiency.
         EXPECT_GT(info->device_core_efficiency_since_last_read.value(), 0.9f);
         ASSERT_TRUE(info->info_cqs.front().utilization_since_last_read.has_value());
         EXPECT_FLOAT_EQ(info->info_cqs.front().utilization_since_last_read.value(), 1.0f);

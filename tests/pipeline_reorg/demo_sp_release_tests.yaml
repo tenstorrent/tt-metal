@@ -26,6 +26,7 @@
       timeout: 10
   owner_id: U03HY7MK4BT
   team: models
+  budget_type: demo
 
 - name: "Single Galaxy - Decoder Sweep vs reference (DeepSeek V3 B1)"
   cmd: |
@@ -53,6 +54,7 @@
       timeout: 30
   owner_id: U0ALAR9B78T # Brayden Zhang
   team: models
+  budget_type: demo
 
 - name: "Single Galaxy - Decoder Sweep multi-slot stress (DeepSeek V3 B1)"
   cmd: |
@@ -80,6 +82,7 @@
       timeout: 60
   owner_id: U0ALAR9B78T # Brayden Zhang
   team: models
+  budget_type: demo
 
 # ============================================================================
 # DeepSeek V3 B1 Unit Tests (Blitz) - Blackhole Galaxy
@@ -95,6 +98,7 @@
       timeout: 35
   owner_id: U087S3K319A # Austin Ho
   team: models
+  budget_type: demo
 
 - name: bh_galaxy_DeepSeek_B1_Unit_Tests_PureLocalMatmulExpert
   cmd: |
@@ -106,6 +110,7 @@
       timeout: 75
   owner_id: U06MJ6CVCGZ # Yu Gao
   team: models
+  budget_type: demo
 
 - name: bh_galaxy_DeepSeek_B1_Unit_Tests_PureLocalSingleDeviceRemainder
   cmd: |
@@ -117,6 +122,7 @@
       timeout: 15
   owner_id: U07D5N7QL4U # Joseph Chu
   team: models
+  budget_type: demo
 
 - name: bh_galaxy_DeepSeek_B1_Unit_Tests_SpecialModes
   cmd: |
@@ -129,6 +135,7 @@
       timeout: 15
   owner_id: U08FXFFH7L0 # Abhishek Agarwal
   team: models
+  budget_type: demo
 
 - name: bh_galaxy_DeepSeek_B1_Unit_Tests_Fabric2DHostIO
   cmd: |
@@ -142,6 +149,7 @@
       timeout: 65
   owner_id: U088DBNUKGR # Evan Smal
   team: models
+  budget_type: demo
 
 - name: bh_galaxy_DeepSeek_B1_Unit_Tests_MoreFabric
   cmd: |
@@ -156,3 +164,4 @@
       timeout: 15
   owner_id: U03PUAKE719 # Miguel Tairum
   team: models
+  budget_type: demo

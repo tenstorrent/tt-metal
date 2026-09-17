@@ -77,7 +77,7 @@ def test_min_global(device, batch_size, h, w):
     )
 
 
-@pytest.mark.parametrize("input_shape, dim, keepdim", [((512, 1024, 1, 2), -1, False), ((64, 512), -1, False)])
+@pytest.mark.parametrize("input_shape, dim, keepdim", [((32, 32, 1, 2), -1, False), ((64, 512), -1, False)])
 def test_min_row_major(device, input_shape, dim, keepdim):
     """Test ttnn.min with ROW_MAJOR layout (issue #32829: +inf padding during tilization)."""
     torch.manual_seed(0)

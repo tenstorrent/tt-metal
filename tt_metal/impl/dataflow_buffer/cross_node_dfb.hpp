@@ -18,22 +18,22 @@
 namespace tt::tt_metal {
 
 class Buffer;
-class IDevice;
 class Program;
+
+namespace distributed {
+class MeshDevice;
+}
 
 namespace experimental {
 
 class CrossNodeDFB {
 public:
-    // sender_receiver_mapping: M (sender_core, receiver_CoreRangeSet) pairs.
-    // Topology rules:
-    //   - No duplicate sender cores.
-    //   - No duplicate receiver cores within a sender's set.
-    //   - No receiver core appears in more than one sender's set (disjoint receivers).
-    //   - Sender and receiver sets are disjoint (no core plays both roles).
+    // One sender core and a non-empty receiver CoreRangeSet (1:1 or 1:N).
+    // Sender and receiver cores must be disjoint.
     CrossNodeDFB(
-        IDevice* device,
-        const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_mapping,
+        distributed::MeshDevice* device,
+        CoreCoord sender_core,
+        const CoreRangeSet& receiver_cores,
         uint32_t entry_size,
         uint32_t num_entries,
         BufferType buffer_type = BufferType::L1);
@@ -42,8 +42,9 @@ public:
     // `data_buffer` for the CrossNodeDFB lifetime; this object only records its address.
     // The config Buffer is owned by CrossNodeDFB
     CrossNodeDFB(
-        IDevice* device,
-        const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_mapping,
+        distributed::MeshDevice* device,
+        CoreCoord sender_core,
+        const CoreRangeSet& receiver_cores,
         uint32_t entry_size,
         uint32_t num_entries,
         Buffer& data_buffer);
@@ -68,11 +69,11 @@ public:
     // Per-core host config page (page-relative words 5–7). Missing cores are not participants.
     const std::vector<uint32_t>& config_page(const CoreCoord& core) const;
 
+    CoreCoord sender_core() const { return sender_core_; }
     const CoreRangeSet& sender_cores() const;
     const CoreRangeSet& receiver_cores() const;
     const CoreRangeSet& all_cores() const;
-    const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping() const;
-    IDevice* get_device() const { return device_; }
+    distributed::MeshDevice* get_device() const { return device_; }
 
     // Retarget the data ring to `data_buffer` and rebuild host config pages in place.
     // The next program launch picks up the updates.
@@ -85,7 +86,7 @@ private:
     // Allocate the program-owned sharded config Buffer. Its contents are populated at launch.
     void allocate_config_buffer(BufferType config_buffer_type);
     // Build host config page images (Create or UpdateDynamic).
-    void rebuild_config_pages();
+    void build_config_pages();
     // Point at an external data ring address; drops any CrossNode-owned ring.
     void set_data_address(uint32_t data_address);
 
@@ -97,8 +98,8 @@ private:
     // Data-ring L1 address. From owned_dfb_buffer_ when owning; from the caller's Buffer
     // when borrowing. Device config/relays only need this address.
     uint32_t data_address_ = 0;
-    IDevice* device_ = nullptr;
-    std::vector<std::pair<CoreCoord, CoreRangeSet>> sender_receiver_mapping_;
+    distributed::MeshDevice* device_ = nullptr;
+    CoreCoord sender_core_;
     CoreRangeSet sender_cores_;
     CoreRangeSet receiver_cores_;
     CoreRangeSet all_cores_;
@@ -112,7 +113,7 @@ private:
 };
 
 /**
- * @brief Allocates a CrossNodeDFB and wires it into `program` on all mapping cores.
+ * @brief Allocates a CrossNodeDFB and wires it into `program` on the sender and receivers.
  *
  * Same-program only: creates the data/config Buffers and host config pages, stores the host
  * object in the program, and returns the dense `remote_dfb_id` for kernel compile-time
@@ -124,15 +125,16 @@ private:
  */
 uint8_t CreateCrossNodeDFB(
     Program& program,
-    IDevice* device,
-    const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_mapping,
+    distributed::MeshDevice* device,
+    CoreCoord sender_core,
+    const CoreRangeSet& receiver_cores,
     uint32_t entry_size,
     uint32_t num_entries,
     BufferType buffer_type = BufferType::L1);
 
 /**
  * @brief Creates a CrossNodeDFB backed by a user-supplied sharded L1 data buffer
- * and wires it into `program` on all mapping cores.
+ * and wires it into `program` on the sender and receivers.
  *
  * Config pages are host-only until launch writes the dedicated config Buffer.
  * `data_buffer` must match the shard layout
@@ -144,8 +146,9 @@ uint8_t CreateCrossNodeDFB(
  */
 uint8_t CreateCrossNodeDFB(
     Program& program,
-    IDevice* device,
-    const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_mapping,
+    distributed::MeshDevice* device,
+    CoreCoord sender_core,
+    const CoreRangeSet& receiver_cores,
     uint32_t entry_size,
     uint32_t num_entries,
     Buffer& data_buffer);

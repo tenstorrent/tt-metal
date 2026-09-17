@@ -85,21 +85,17 @@ struct p_unpacr
     constexpr static std::uint32_t UNP_CLRSRC_ONE_INT8        = 0x2;
 };
 
-// TODO: RT Review this struct, bits do not match for UNPACR_NOP
+// Values here are PER-OPERAND: Blackhole's UNPACR_NOP takes each control as its own
+// operand, unlike Wormhole's single packed NoOp immediate. See TT_OP_UNPACR_NOP.
 struct p_unpacr_nop
 {
     constexpr static std::uint32_t UNP_POP = 0b000;
     constexpr static std::uint32_t CLR_SRC = 0b01;
     constexpr static std::uint32_t UNP_NOP = 0b010;
 
-    constexpr static std::uint32_t UNP_ZEROSRC   = 0b001;
-    constexpr static std::uint32_t UNP_NEGINFSRC = 0b101;
+    constexpr static std::uint32_t UNP_ZEROSRC = 0b001;
 
     constexpr static std::uint32_t SET_DVALID = 0x1;
-
-    constexpr static std::uint32_t UNP_ZEROSRC_RESET_ALL_BANKS    = 0b1001; // default is clear current bank
-    constexpr static std::uint32_t UNP_ZEROSRC_STALL_RESET_WR_RDY = 0b10001;
-    constexpr static std::uint32_t UNP_ZEROSRC_SET_DVALID         = 0b1000001;
 
     constexpr static std::uint32_t UNP0 = 0x0;
     constexpr static std::uint32_t UNP1 = 0x1;
@@ -433,8 +429,9 @@ struct p_sfpswap
     constexpr static std::uint32_t ROWS_03_MAX     = 4;
     constexpr static std::uint32_t ROW_0_MAX       = 5;
     constexpr static std::uint32_t ROW_1_MAX       = 6;
-    constexpr static std::uint32_t ROW_2_MAX       = 5;
-    constexpr static std::uint32_t ROW_3_MAX       = 6;
+    // ROW_2_MAX/ROW_3_MAX were wrongly aliased to ROW_0/ROW_1 (5/6); the ISA (and the Quasar copy) define them as 7/8.
+    constexpr static std::uint32_t ROW_2_MAX = 7;
+    constexpr static std::uint32_t ROW_3_MAX = 8;
 };
 
 struct p_exp

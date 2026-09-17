@@ -8,7 +8,7 @@ from typing import Dict, List, Optional, Union
 
 import torch
 from PIL import Image
-from pydantic import BaseModel, validator
+from pydantic import BaseModel, field_validator
 
 # ``AutoModelForImageTextToText`` (the replacement for ``AutoModelForVision2Seq``,
 # which was removed in transformers 5.x) is only consumed by the
@@ -60,7 +60,7 @@ class ToolCall(BaseModel):
     tool_name: Union[BuiltinTool, str]
     arguments: Dict[str, RecursiveType]
 
-    @validator("tool_name", pre=True)
+    @field_validator("tool_name", mode="before")
     @classmethod
     def validate_field(cls, v):
         if isinstance(v, str):

@@ -1178,9 +1178,9 @@ def test_demo_text(
             ), f"max_generated_tokens ({max_generated_tokens}) needs to be <= than paged_cache_max_seq_len ({paged_cache_max_seq_len})"
         profiler.end(f"preprocess_prefill_inputs", iteration=batch_idx)
 
-        # when doing repeating batches, set kv-caches to zero, to avoid context leaking
-
-        if batch_idx != 0:
+        # Clear K/V between requests, and compile the in-place reset on the first
+        # batch too. Its program-cache buffers must exist before trace capture.
+        if repeat_batches > 1:
             for i in range(len(model)):
                 for layer in model[i].layers:
                     k_cache, v_cache = layer.attention.layer_past

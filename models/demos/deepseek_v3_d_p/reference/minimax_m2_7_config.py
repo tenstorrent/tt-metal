@@ -29,6 +29,11 @@ class MiniMaxM27Config:
     # Reference route_tokens_to_experts sum-normalizes with no extra scaling.
     ROUTE_SCALE = 1.0
 
+    # Gate-test device-mode scores bar. pcc_scores sorts both sides, so this measures the
+    # selected-weight distribution rather than slot alignment; 256 experts, top-8 floors at
+    # 0.9977 on a 2x4 Blackhole mesh, the tightest reachable shape.
+    GATE_SCORES_PCC_DEVICE = 0.987
+
     # Model architecture
     NUM_LAYERS = 62
     VOCAB_SIZE = 200064

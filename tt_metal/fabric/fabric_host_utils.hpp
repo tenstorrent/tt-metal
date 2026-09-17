@@ -52,6 +52,17 @@ inline bool has_genuine_torus_axis(FabricType fabric_type, const MeshShape& mesh
 // mesh_shape: [rows, cols], used to compare realized per-axis torus connectivity.
 bool requires_more_connectivity(FabricType requested_type, FabricType available_type, const MeshShape& mesh_shape);
 
+// True when the fabric config (not the descriptor's declared dim_types) is the origin of a torus on
+// this axis. On a genuine torus axis the wrap cables physically consume every port of that axis;
+// smaller extents leave those ports open, but they still belong to the torus by convention: deadlock
+// avoidance is derived per direction from the fabric config, so an inter-mesh link placed on such a
+// port can face a peer that labels the axis differently and hang (issue #54650). Edge ports of a
+// config-driven torus axis are therefore reserved (excluded from inter-mesh use); an axis the
+// descriptor itself declares as RING keeps its boundary ports.
+inline bool is_config_driven_torus_axis(FabricType requested_type, FabricType declared_type, uint32_t axis) {
+    return has_flag(requested_type, torus_flag_for_axis(axis)) && !has_flag(declared_type, torus_flag_for_axis(axis));
+}
+
 // Compute maximum 1D hops across all meshes in topology
 // Returns max(rows-1, cols-1) across all meshes, representing longest linear path
 // Returns 0 for empty input or single-chip meshes

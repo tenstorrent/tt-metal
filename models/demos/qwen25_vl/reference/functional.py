@@ -434,11 +434,9 @@ def qwen2_5_vision_transformer(
     """
 
     # Apply patch embedding
-    print(f"hidden_states: {hidden_states.shape}")
     hidden_states = qwen2_5_vision_patch_embed(
         hidden_states, state_dict["patch_embed"], patch_size, temporal_patch_size
     )
-    print(f"hidden_states after patch embed: {hidden_states.shape}")
     seq_len, _ = hidden_states.size()
 
     # Preprocess the input

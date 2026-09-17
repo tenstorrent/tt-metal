@@ -21,7 +21,15 @@ template <bool APPROXIMATION_MODE, int NEWTON_ITERATIONS = 2>
 sfpi_inline sfpi::vFloat sfpu_sqrt_custom(sfpi::vFloat in) {
     sfpi::vFloat val = in;
     sfpi::vFloat out = val;
-    v_if(val != 0.0f) {
+    // Skipped lanes pass `val` through, already the answer for +/-0 and +inf. Non-finite needs
+    // excluding because the +inf seed (~5.2e-20) squares to a denormal, SFPMAD flushes it to +0,
+    // and 0 * -inf = NaN: sqrt_custom(+inf) was NaN and consumers inherited it (erfinv(+/-1)).
+    //
+    //
+    // Residual: -inf passes through where IEEE and the golden give NaN. No negative-to-NaN guard,
+    // because erfinv's NR undershoot makes `tmp + intermediate_result` (ckernel_sfpu_erfinv.h:40)
+    // non-positive for small in-domain x, which would turn erfinv(1e-6) into NaN.
+    v_if(val != 0.0f && sfpi::is_finite(val)) {
         sfpi::vUInt magic = sfpi::as<sfpi::vUInt>(sfpi::vFloat(sfpi::sFloat16b(0x5f37)));
         sfpi::vFloat approx = sfpi::as<sfpi::vFloat>(magic - (sfpi::as<sfpi::vUInt>(val) >> 1));
         sfpi::vFloat neg_half_val = val * -0.5f;

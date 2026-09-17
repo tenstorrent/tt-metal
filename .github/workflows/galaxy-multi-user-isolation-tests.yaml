@@ -120,6 +120,44 @@ jobs:
             # not a tt-metal issue. Since this CI only needs one representative test to verify
             # inter-container isolation, we narrow down to a single test combination to avoid the problem.
             test_args: "-k 'non-trace and not ring and not broken and linear_2D and bfloat_8 and not DRAM'"
+          # ETH isolation reset tests. Implemented and working, but held until the
+          # hardware is stable: BH tray_reset reproducibly drops tray 2's eth link.
+          # - arch: wormhole_b0
+          #   scenario: tray_reset
+          #   repeat_count: 2
+          #   num_containers: 4
+          #   chips_per_container: 8
+          #   container_prefix: tray_reset
+          #   mesh_descriptor: t3k_mesh_graph_descriptor.textproto
+          #   test_path: tests/nightly/t3000/ccl/test_all_gather.py
+          #   test_args: "-k 'not fabric_ring'"
+          # - arch: blackhole
+          #   scenario: tray_reset
+          #   repeat_count: 400
+          #   num_containers: 4
+          #   chips_per_container: 8
+          #   container_prefix: bh_tray_reset
+          #   mesh_descriptor: p150_x8_mesh_graph_descriptor.textproto
+          #   test_path: tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/nightly/test_all_gather_nightly.py
+          #   test_args: "-k 'non-trace and not ring and not broken and linear_2D and bfloat_8 and not DRAM'"
+          # - arch: wormhole_b0
+          #   scenario: asic_reset
+          #   repeat_count: 1500
+          #   num_containers: 32
+          #   chips_per_container: 1
+          #   container_prefix: chip_reset
+          #   mesh_descriptor: n150_mesh_graph_descriptor.textproto
+          #   test_path: tests/ttnn/unit_tests/operations/eltwise/test_fill.py
+          #   test_args: "-k test_fill"
+          # - arch: blackhole
+          #   scenario: asic_reset
+          #   repeat_count: 1500
+          #   num_containers: 32
+          #   chips_per_container: 1
+          #   container_prefix: bh_chip_reset
+          #   mesh_descriptor: p150_mesh_graph_descriptor.textproto
+          #   test_path: tests/ttnn/unit_tests/operations/eltwise/test_fill.py
+          #   test_args: "-k test_fill"
     runs-on:
       - topology-6u
       - arch-${{ matrix.arch }}
@@ -150,13 +188,91 @@ jobs:
       - name: Install Wheel
         run: |
           python3 -m pip install --force-reinstall ttnn-*.whl
-      - name: Generate tray to PCIe device mapping
+      - name: Reset and health-check cluster
+        # A cold/degraded cluster yields an inconsistent descriptor that crashes
+        # serialize_cluster_descriptor() in the next step (SYS-1634 / BH-84).
+        timeout-minutes: 25
+        env:
+          DEV_IMAGE: ${{ needs.build-artifact.outputs.dev-docker-image }}
         run: |
-          python3 .github/scripts/utils/generate_tray_mapping.py
+          HEALTH_CHECK=./build/test/tt_metal/tt_fabric/test_system_health
+          # Run the binary inside the dev image, which carries its runtime deps
+          # (OpenMPI etc.) that are absent on the bare-metal runner. LD_LIBRARY_PATH
+          # is *prepended* to the image's own value on purpose: build/lib holds the
+          # extracted libtt_metal.so, while libmpi.so.40 (ULFM OpenMPI) only resolves
+          # via the path the image already sets.
+          health_check() {
+            docker run --rm --privileged \
+              --device /dev/tenstorrent --device /dev/ipmi0 \
+              -v /dev/hugepages-1G:/dev/hugepages-1G \
+              -v "$PWD":/work -w /work -e TT_METAL_HOME=/work \
+              "$DEV_IMAGE" \
+              bash -c 'export LD_LIBRARY_PATH="/work/build/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"; exec ./build/test/tt_metal/tt_fabric/test_system_health'
+          }
+          if [ ! -x "$HEALTH_CHECK" ]; then
+            echo "::warning::test_system_health not in the build artifact; resetting without link verification"
+            exec python3 .github/scripts/utils/cluster_recover.py reset
+          fi
+          # A full galaxy reset takes minutes, so a handful of attempts is the most
+          # that fits the step timeout -- and a state that survives 3 resets is not
+          # the transient cold-start this works around.
+          ATTEMPTS=3
+          for i in $(seq 1 $ATTEMPTS); do
+            echo "Reset/health-check attempt $i of $ATTEMPTS"
+            if python3 .github/scripts/utils/cluster_recover.py reset && health_check; then
+              echo "Reset + health check passed"
+              exit 0
+            fi
+            echo "Attempt $i failed, retrying in 5s..."
+            sleep 5
+          done
+          echo "Cluster did not become healthy after $ATTEMPTS reset attempts"
+          exit 1
+      - name: Generate tray to PCIe device mapping
+        # Retry with a reset in between: the first cluster open of a nightly run
+        # can still hit a transient degraded state (manual re-runs historically
+        # pass), so automate that recovery instead of failing the whole job.
+        # Budget covers 3 mapping attempts plus the 2 galaxy resets between them.
+        timeout-minutes: 20
+        run: |
+          # A board reset does not free a stale process still holding the device,
+          # so kill holders too (sudo: needed to read other users' /proc fds).
+          free_tt_devices() { sudo python3 .github/scripts/utils/cluster_recover.py free || true; sleep 3; }
+          # A missing/unenumerated device yields an incomplete mapping that would
+          # only fail later in create-files with no recovery; treat it as a failed
+          # attempt so the reset+retry below can bring the device back.
+          EXPECTED=$(( ${{ matrix.num_containers }} * ${{ matrix.chips_per_container }} ))
+          generate_ok() {
+            local count
+            python3 .github/scripts/utils/generate_tray_mapping.py || return 1
+            count=$(python3 -c "import yaml; d=yaml.safe_load(open('tray_to_pcie_device_mapping.yaml')); print(sum(len(v) for v in d.get('device_mapping', {}).values()))") || return 1
+            if [ "$count" -ne "$EXPECTED" ]; then
+              echo "Incomplete cluster: mapped $count devices, expected $EXPECTED"
+              return 1
+            fi
+          }
+          ATTEMPTS=3
+          free_tt_devices
+          for i in $(seq 1 $ATTEMPTS); do
+            echo "generate_tray_mapping attempt $i of $ATTEMPTS"
+            if generate_ok; then
+              echo "Tray mapping generated successfully"
+              exit 0
+            fi
+            echo "generate_tray_mapping failed on attempt $i"
+            if [ "$i" -lt "$ATTEMPTS" ]; then
+              free_tt_devices
+              echo "Resetting cluster before retry..."
+              python3 .github/scripts/utils/cluster_recover.py reset || true
+              sleep 10
+            fi
+          done
+          echo "generate_tray_mapping failed after $ATTEMPTS attempts"
+          exit 1
       - name: Create Docker Compose file
         run: |
           TRAY_MAPPING_ARG=""
-          if [ "${{ matrix.scenario }}" = "tray" ] || [ "${{ matrix.scenario }}" = "tp2" ]; then
+          if [ "${{ matrix.scenario }}" = "tray" ] || [ "${{ matrix.scenario }}" = "tp2" ] || [ "${{ matrix.scenario }}" = "tray_reset" ]; then
             TRAY_MAPPING_ARG="--tray-mapping-file tray_to_pcie_device_mapping.yaml"
           fi
           python3 .github/scripts/utils/multi-user-create-files.py \
@@ -166,20 +282,36 @@ jobs:
             $TRAY_MAPPING_ARG \
             --mesh-descriptor ${{ matrix.mesh_descriptor }} \
             --container-prefix ${{ matrix.container_prefix }}
-      - name: Run Docker Compose
-        timeout-minutes: 10
+      - name: Pull container image
+        # Pull the dev image up-front so its (multi-minute) download does not eat
+        # into the container-readiness wait budget below. Previously the image
+        # pull happened inside `docker compose up -d` while the readiness timer
+        # was already running, so a slow pull timed the wait out on its first
+        # iteration before any container could write its marker file.
+        timeout-minutes: 15
         run: |
+          # --ignore-pull-failures: `up -d` below pulls when the image is
+          # missing, so a registry blip must not fail a cache-warm job.
+          docker compose -p multi-user -f multi-user-dc.yaml pull --ignore-pull-failures
+      - name: Run Docker Compose
+        timeout-minutes: 15
+        run: |
+          shopt -s nullglob
           CONTAINERS_DIR=".multi-user-galaxy-docker-files"
           REQUIRED_CONTAINERS=${{ matrix.num_containers }}
-          TIMEOUT=300
+          # Budget covers only in-container dependency install (uv pip install)
+          # across all containers, not the image pull (done in the previous step).
+          TIMEOUT=600
           CONTAINER_PREFIX="${{ matrix.container_prefix }}"
 
           rm -rf "$CONTAINERS_DIR"
           mkdir -p "$CONTAINERS_DIR"
 
-          EPOCH_START=$(date +%s)
-
           docker compose -p multi-user -f multi-user-dc.yaml up -d
+
+          # Start timing only after containers are up, so the wait measures
+          # container readiness rather than image-pull latency.
+          EPOCH_START=$(date +%s)
 
           # wait for container marker files to appear (with timeout)
           while true; do
@@ -199,6 +331,7 @@ jobs:
           echo "All $REQUIRED_CONTAINERS docker containers have started (found $count)."
 
       - name: Run the tests
+        if: matrix.scenario != 'tray_reset' && matrix.scenario != 'asic_reset'
         timeout-minutes: 15
         run: |
           NUM_CONTAINERS=${{ matrix.num_containers }}
@@ -245,6 +378,31 @@ jobs:
           TEST_NAME=$(basename "${TEST_PATH}" .py)
           # Output: ">>> Running single/test_fill in chip-0" etc.
           run_test "${{ matrix.scenario }}/${TEST_NAME}" "pytest -v ${TEST_PATH} ${TEST_ARGS}" || true
+
+      - name: Run reset isolation test
+        if: matrix.scenario == 'tray_reset' || matrix.scenario == 'asic_reset'
+        # Survivors hold one long run each; ~20min at the repeat_counts above.
+        timeout-minutes: 35
+        run: |
+          if [ "${{ matrix.scenario }}" = "tray_reset" ]; then
+            RESET_DEVICE_IDS=$(python3 -c "
+          import yaml
+          with open('tray_to_pcie_device_mapping.yaml') as f:
+              m = yaml.safe_load(f)
+          devices = m['device_mapping']['1']
+          print(','.join(str(d) for d in devices))
+          ")
+          else
+            # asic_reset: reset device 0 only (used by chip_reset-0 / bh_chip_reset-0)
+            RESET_DEVICE_IDS="0"
+          fi
+          bash .github/scripts/utils/run-reset-isolation-test.sh \
+            ${{ matrix.num_containers }} \
+            "${{ matrix.container_prefix }}" \
+            "${{ matrix.test_path }}" \
+            "${{ matrix.test_args }}" \
+            "$RESET_DEVICE_IDS" \
+            ${{ matrix.repeat_count }}
 
       - name: Check test results
         run: |

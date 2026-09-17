@@ -12,48 +12,48 @@
 #include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 
-void mask_tile_in_reader(uint32_t l1_addr, uint32_t mask_w = 32, uint32_t mask_h = 32) {
+static void mask_tile_in_reader(uint32_t l1_addr, uint32_t mask_w = 32, uint32_t mask_h = 32) {
     union {
         float f;
         uint32_t u;
     } zero;
     zero.f = 0.0f;
-    CoreLocalMem<uint16_t> ptr(l1_addr);
+    const CoreLocalMem<uint16_t> ptr(l1_addr);
     for (uint32_t h = 0; h < 16; h++) {
         // sub tile 0
         {
-            uint32_t mask_w_0 = (mask_w >= 16) ? 16 : mask_w;
-            uint32_t mask_h_0 = (mask_h >= 16) ? 16 : mask_h;
+            const uint32_t mask_w_0 = (mask_w >= 16) ? 16 : mask_w;
+            const uint32_t mask_h_0 = (mask_h >= 16) ? 16 : mask_h;
             uint32_t w = (h >= mask_h_0) ? 0 : mask_w_0;
             for (; w < 16; w++) {
-                ptr[h * 16 + w] = uint16_t(zero.u >> 16);
+                ptr[(h * 16) + w] = uint16_t(zero.u >> 16);
             }
         }
         // sub tile 1
         {
-            uint32_t mask_w_1 = (mask_w < 16) ? 0 : mask_w - 16;
-            uint32_t mask_h_0 = (mask_h >= 16) ? 16 : mask_h;
+            const uint32_t mask_w_1 = (mask_w < 16) ? 0 : mask_w - 16;
+            const uint32_t mask_h_0 = (mask_h >= 16) ? 16 : mask_h;
             uint32_t w = (h >= mask_h_0) ? 0 : mask_w_1;
             for (; w < 16; w++) {
-                ptr[h * 16 + w + 256] = uint16_t(zero.u >> 16);
+                ptr[(h * 16) + w + 256] = uint16_t(zero.u >> 16);
             }
         }
         // sub tile 2
         {
-            uint32_t mask_w_0 = (mask_w >= 16) ? 16 : mask_w;
-            uint32_t mask_h_1 = (mask_h < 16) ? 0 : mask_h - 16;
+            const uint32_t mask_w_0 = (mask_w >= 16) ? 16 : mask_w;
+            const uint32_t mask_h_1 = (mask_h < 16) ? 0 : mask_h - 16;
             uint32_t w = (h >= mask_h_1) ? 0 : mask_w_0;
             for (; w < 16; w++) {
-                ptr[h * 16 + w + 512] = uint16_t(zero.u >> 16);
+                ptr[(h * 16) + w + 512] = uint16_t(zero.u >> 16);
             }
         }
         // sub tile 3
         {
-            uint32_t mask_w_1 = (mask_w < 16) ? 0 : mask_w - 16;
-            uint32_t mask_h_1 = (mask_h < 16) ? 0 : mask_h - 16;
+            const uint32_t mask_w_1 = (mask_w < 16) ? 0 : mask_w - 16;
+            const uint32_t mask_h_1 = (mask_h < 16) ? 0 : mask_h - 16;
             uint32_t w = (h >= mask_h_1) ? 0 : mask_w_1;
             for (; w < 16; w++) {
-                ptr[h * 16 + w + 768] = uint16_t(zero.u >> 16);
+                ptr[(h * 16) + w + 768] = uint16_t(zero.u >> 16);
             }
         }
     }
@@ -73,7 +73,7 @@ void kernel_main() {
     uint32_t l1_write_addr_in1;
     const auto s1 = TensorAccessor(tensor::src1);
 
-    Noc noc;
+    const Noc noc;
     DataflowBuffer dfb_in0(dfb::in0);
     DataflowBuffer dfb_in1(dfb::in1);
     const auto in0_tile_bytes = dfb_in0.get_tile_size();
@@ -81,7 +81,7 @@ void kernel_main() {
 
     constexpr uint32_t onetile = 1;
     for (uint32_t i = start_id; i < start_id + num_tiles; i++) {
-        bool last_tile = i == (start_id + num_tiles - 1);
+        const bool last_tile = i == (start_id + num_tiles - 1);
         dfb_in0.reserve_back(onetile);
         l1_write_addr_in0 = dfb_in0.get_write_ptr();
         noc.async_read(s0, dfb_in0, in0_tile_bytes, {.page_id = i}, {.offset_bytes = 0});

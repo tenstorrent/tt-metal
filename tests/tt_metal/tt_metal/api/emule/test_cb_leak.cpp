@@ -62,7 +62,7 @@ TEST_F(UnitMeshFixture, Dirty_CB_ReserveWithoutPush) {
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
     EXPECT_DEATH(
-        LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true),
+        LaunchProgram(this->device(), std::move(program)),
         ".*Dirty CB Detected: Core \\(0, 0\\) CB 0 was not flushed!.*");
 }
 
@@ -103,7 +103,7 @@ TEST_F(UnitMeshFixture, Dirty_CB_WaitWithoutPop) {
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
     EXPECT_DEATH(
-        LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true),
+        LaunchProgram(this->device(), std::move(program)),
         ".*Dirty CB Detected: Core \\(0, 0\\) CB 0 was not flushed!.*");
 }
 
@@ -150,7 +150,7 @@ TEST_F(UnitMeshFixture, Dirty_CB_LookaheadReserve_NoViolation) {
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
     // Must NOT abort — lookahead over-reservation is correct on silicon.
-    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
+    LaunchProgram(this->device(), std::move(program));
     SUCCEED();
 
     ::unsetenv("TT_METAL_EMULE_ASAN");
@@ -193,7 +193,7 @@ TEST_F(UnitMeshFixture, Dirty_CB_Balanced_NoViolation) {
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
     // Must NOT abort.
-    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
+    LaunchProgram(this->device(), std::move(program));
     SUCCEED();
 
     ::unsetenv("TT_METAL_EMULE_ASAN");
@@ -233,7 +233,7 @@ TEST_F(UnitMeshFixture, Dirty_CB_SkipEnv_Suppresses) {
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
     // Must NOT abort — the Dirty CB check is suppressed by the opt-out env var.
-    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
+    LaunchProgram(this->device(), std::move(program));
     SUCCEED();
 
     ::unsetenv("TT_METAL_EMULE_ASAN_SKIP_DIRTY_CB");

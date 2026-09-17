@@ -15,6 +15,7 @@
 
 #include <cstdint>
 #include <vector>
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 #ifndef OVERRIDE_KERNEL_PREFIX
 #define OVERRIDE_KERNEL_PREFIX ""
@@ -29,7 +30,6 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarTraceSingleReplay) {
                         "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
     }
 
-    IDevice* dev = devices_[0]->get_devices()[0];
     auto mesh_device = devices_[0];
     const experimental::NodeCoord node{0, 0};
 
@@ -65,14 +65,14 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarTraceSingleReplay) {
 
     // Warm up
     std::vector<uint32_t> zeros(1, 0);
-    tt_metal::detail::WriteToDeviceL1(dev, node, address, zeros);
+    slow_dispatch::WriteToL1(*mesh_device, node, address, zeros);
     distributed::EnqueueMeshWorkload(cq, workload, true);
     std::vector<uint32_t> warm_up_result(1, 0);
-    tt_metal::detail::ReadFromDeviceL1(dev, node, address, sizeof(uint32_t), warm_up_result);
+    slow_dispatch::ReadFromL1(*mesh_device, node, address, sizeof(uint32_t), warm_up_result);
     ASSERT_EQ(warm_up_result[0], value);
 
     // Capture trace
-    tt_metal::detail::WriteToDeviceL1(dev, node, address, zeros);
+    slow_dispatch::WriteToL1(*mesh_device, node, address, zeros);
     distributed::MeshTraceId trace_id = mesh_device->begin_mesh_trace(cq);
     distributed::EnqueueMeshWorkload(cq, workload, false);
     mesh_device->end_mesh_trace(cq, trace_id);
@@ -80,7 +80,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarTraceSingleReplay) {
     // Replay trace
     mesh_device->replay_mesh_trace(cq, trace_id, true);
     std::vector<uint32_t> trace_result(1, 0);
-    tt_metal::detail::ReadFromDeviceL1(dev, node, address, sizeof(uint32_t), trace_result);
+    slow_dispatch::ReadFromL1(*mesh_device, node, address, sizeof(uint32_t), trace_result);
     ASSERT_EQ(trace_result[0], value);
 
     mesh_device->release_mesh_trace(trace_id);
@@ -92,7 +92,6 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarTraceMultipleReplays) {
                         "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
     }
 
-    IDevice* dev = devices_[0]->get_devices()[0];
     auto mesh_device = devices_[0];
     const experimental::NodeCoord node{0, 0};
 
@@ -129,10 +128,10 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarTraceMultipleReplays) {
 
     // Warm up
     std::vector<uint32_t> zeros(1, 0);
-    tt_metal::detail::WriteToDeviceL1(dev, node, address, zeros);
+    slow_dispatch::WriteToL1(*mesh_device, node, address, zeros);
     distributed::EnqueueMeshWorkload(cq, workload, true);
     std::vector<uint32_t> warm_up_result(1, 0);
-    tt_metal::detail::ReadFromDeviceL1(dev, node, address, sizeof(uint32_t), warm_up_result);
+    slow_dispatch::ReadFromL1(*mesh_device, node, address, sizeof(uint32_t), warm_up_result);
     ASSERT_EQ(warm_up_result[0], value);
 
     // Capture trace
@@ -144,12 +143,12 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarTraceMultipleReplays) {
     constexpr uint32_t num_replays = 5;
     for (uint32_t i = 0; i < num_replays; i++) {
         std::vector<uint32_t> zeros(1, 0);
-        tt_metal::detail::WriteToDeviceL1(dev, node, address, zeros);
+        slow_dispatch::WriteToL1(*mesh_device, node, address, zeros);
 
         mesh_device->replay_mesh_trace(cq, trace_id, true);
 
         std::vector<uint32_t> result(1, 0);
-        tt_metal::detail::ReadFromDeviceL1(dev, node, address, sizeof(uint32_t), result);
+        slow_dispatch::ReadFromL1(*mesh_device, node, address, sizeof(uint32_t), result);
         ASSERT_EQ(result[0], value);
     }
 
@@ -162,7 +161,6 @@ TEST_F(QuasarMultiCQMeshDeviceSingleCardFixture, QuasarTraceMultipleReplaysAcros
                         "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
     }
 
-    IDevice* dev = devices_[0]->get_devices()[0];
     auto mesh_device = devices_[0];
     const experimental::NodeCoord node{0, 0};
 
@@ -209,10 +207,10 @@ TEST_F(QuasarMultiCQMeshDeviceSingleCardFixture, QuasarTraceMultipleReplaysAcros
     std::vector<uint32_t> zeros(1, 0);
 
     // Warm up + capture the CQ0 trace.
-    tt_metal::detail::WriteToDeviceL1(dev, node, address_0, zeros);
+    slow_dispatch::WriteToL1(*mesh_device, node, address_0, zeros);
     distributed::EnqueueMeshWorkload(cq0, wl0, true);
     std::vector<uint32_t> warm_up_0(1, 0);
-    tt_metal::detail::ReadFromDeviceL1(dev, node, address_0, sizeof(uint32_t), warm_up_0);
+    slow_dispatch::ReadFromL1(*mesh_device, node, address_0, sizeof(uint32_t), warm_up_0);
     ASSERT_EQ(warm_up_0[0], value_0);
 
     distributed::MeshTraceId trace_id_0 = mesh_device->begin_mesh_trace(cq0);
@@ -220,10 +218,10 @@ TEST_F(QuasarMultiCQMeshDeviceSingleCardFixture, QuasarTraceMultipleReplaysAcros
     mesh_device->end_mesh_trace(cq0, trace_id_0);
 
     // Warm up + capture the CQ1 trace.
-    tt_metal::detail::WriteToDeviceL1(dev, node, address_1, zeros);
+    slow_dispatch::WriteToL1(*mesh_device, node, address_1, zeros);
     distributed::EnqueueMeshWorkload(cq1, wl1, true);
     std::vector<uint32_t> warm_up_1(1, 0);
-    tt_metal::detail::ReadFromDeviceL1(dev, node, address_1, sizeof(uint32_t), warm_up_1);
+    slow_dispatch::ReadFromL1(*mesh_device, node, address_1, sizeof(uint32_t), warm_up_1);
     ASSERT_EQ(warm_up_1[0], value_1);
 
     distributed::MeshTraceId trace_id_1 = mesh_device->begin_mesh_trace(cq1);
@@ -233,18 +231,18 @@ TEST_F(QuasarMultiCQMeshDeviceSingleCardFixture, QuasarTraceMultipleReplaysAcros
     // Interleave replays of both CQs' traces and verify each lands its own value each round.
     constexpr uint32_t num_replays = 5;
     for (uint32_t i = 0; i < num_replays; i++) {
-        tt_metal::detail::WriteToDeviceL1(dev, node, address_0, zeros);
-        tt_metal::detail::WriteToDeviceL1(dev, node, address_1, zeros);
+        slow_dispatch::WriteToL1(*mesh_device, node, address_0, zeros);
+        slow_dispatch::WriteToL1(*mesh_device, node, address_1, zeros);
 
         mesh_device->replay_mesh_trace(cq0, trace_id_0, true);
         mesh_device->replay_mesh_trace(cq1, trace_id_1, true);
 
         std::vector<uint32_t> result_0(1, 0);
-        tt_metal::detail::ReadFromDeviceL1(dev, node, address_0, sizeof(uint32_t), result_0);
+        slow_dispatch::ReadFromL1(*mesh_device, node, address_0, sizeof(uint32_t), result_0);
         ASSERT_EQ(result_0[0], value_0);
 
         std::vector<uint32_t> result_1(1, 0);
-        tt_metal::detail::ReadFromDeviceL1(dev, node, address_1, sizeof(uint32_t), result_1);
+        slow_dispatch::ReadFromL1(*mesh_device, node, address_1, sizeof(uint32_t), result_1);
         ASSERT_EQ(result_1[0], value_1);
     }
 

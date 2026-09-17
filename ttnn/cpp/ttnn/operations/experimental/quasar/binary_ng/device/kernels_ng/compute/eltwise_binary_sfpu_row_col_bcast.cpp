@@ -90,7 +90,6 @@ ALWI void process_tile(
         exp_cb_raw_other.pop_front(num_tiles_per_cycle);
         // unary_bcast_uninit<BroadcastType::ROW>(cb_raw_other);
         pack_reconfig_data_format(cb_llk_post, cb_out);
-        PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(cb_out)));
 
         PREPROCESS(OTHER_OP, DataflowBuffer(cb_llk_post), exp_cb_post_other, exp_cb_out, num_tiles_per_cycle);
         exp_cb_post_other.wait_front(num_tiles_per_cycle);

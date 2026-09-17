@@ -68,9 +68,9 @@ void kernel_main() {
     constexpr uint32_t index_half_bytes = get_compile_time_arg_val(7);  // 1024 (u16) / 2048 (u32)
     constexpr bool index_is_u32 = get_compile_time_arg_val(8) == 1;
     constexpr auto values_args = TensorAccessorArgs<9>();
-    constexpr auto indices_args = TensorAccessorArgs<values_args.next_compile_time_args_offset()>();
-    constexpr auto src_args = TensorAccessorArgs<indices_args.next_compile_time_args_offset()>();
-    constexpr auto idx_args = TensorAccessorArgs<src_args.next_compile_time_args_offset()>();
+    constexpr auto indices_args = TensorAccessorArgs<decltype(values_args)::next_compile_time_args_offset()>();
+    constexpr auto src_args = TensorAccessorArgs<decltype(indices_args)::next_compile_time_args_offset()>();
+    constexpr auto idx_args = TensorAccessorArgs<decltype(src_args)::next_compile_time_args_offset()>();
 
     // Page sizes (2048 B bf16 / 2048 or 4096 B index tiles, 2048 B source tiles /
     // k_rounded*4 B sticks) are baked compile-time by the host's TensorAccessorArgs.

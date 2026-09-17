@@ -443,10 +443,12 @@ def _mxint_block_aware_compare(
     two, so 2^floor(log2(amax)) == amax == max(|g|,|r|) and ULP == block scale,
     preserving the original MxInt2 behavior.
 
-    Tilizes first to match HW's block layout (32-element block = one face
-    row-pair), so block scales line up with how HW derived them.
+    Groups the tensors as they are, in 32-element blocks, which is how the
+    packer's scales line up against them and how the golden's own quantizer
+    groups: reshaping to a different 32 scores each element against a block
+    whose maximum neither side used, and the allowance for a one-step block
+    exponent then comes out sized for the wrong magnitude.
     """
-    from helpers.tilize_untilize import tilize_block, untilize_block
 
     BLOCK = 32
     TILE_SIZE = 1024
@@ -458,14 +460,8 @@ def _mxint_block_aware_compare(
     if n == 0:
         return torch.ones(0, dtype=torch.bool)
 
-    if n % TILE_SIZE == 0:
-        num_tiles = n // TILE_SIZE
-        tile_dim = (32 * num_tiles, 32)
-        g_til = tilize_block(g_flat, tile_dim, DataFormat.Float32).flatten()
-        r_til = tilize_block(r_flat, tile_dim, DataFormat.Float32).flatten()
-    else:
-        g_til = g_flat
-        r_til = r_flat
+    g_til = g_flat
+    r_til = r_flat
 
     # Batch over 32-element blocks (zero-pad a partial tail block; padded zeros
     # never raise a block's amax, so the real elements compare identically).
@@ -503,18 +499,7 @@ def _mxint_block_aware_compare(
 
     is_valid_til = ((diff <= bound) | both_nan).reshape(-1)[:n]
 
-    if n % TILE_SIZE == 0:
-        num_tiles = n // TILE_SIZE
-        tile_dim = (32 * num_tiles, 32)
-        is_valid = (
-            untilize_block(is_valid_til.float(), DataFormat.Float32, tile_dim)
-            .flatten()
-            .bool()
-        )
-    else:
-        is_valid = is_valid_til
-
-    return is_valid
+    return is_valid_til
 
 
 _RECORD_TEST_ORDER: bool = False

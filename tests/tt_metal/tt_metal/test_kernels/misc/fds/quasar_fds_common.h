@@ -54,6 +54,12 @@ inline void finish(status_ptr status, uint32_t l1_address, uint32_t num_slots, u
 
 inline status_ptr begin_dispatch(uint32_t l1_address, uint32_t num_slots) {
     status_ptr status = begin(l1_address, num_slots);
+    // Interrupts are disabled defensively, for a sharper version of the reason below: a kernel that
+    // died while armed would leave a level standing on this node, and the level is derived rather
+    // than latched, so no later program could quiet it by acknowledging anything. Out of reset
+    // every threshold and every count is zero, which is a firing condition, so this also covers a
+    // node whose enable register was set before its groups were configured.
+    overlay::FdsDispatch::fds_config_interrupt_en(0);
     // Auto dispatch is disabled defensively: a kernel that died between enabling it and its
     // teardown would leave the output multiplexer on the queue path, turning every later direct
     // write on this engine into silence far from the fault. The outbox parks on the output bus,
@@ -70,6 +76,9 @@ inline status_ptr begin_dispatch(uint32_t l1_address, uint32_t num_slots) {
 
 inline status_ptr begin_worker(uint32_t l1_address, uint32_t num_slots) {
     status_ptr status = begin(l1_address, num_slots);
+    // Same defensive interrupt disable as begin_dispatch, for the same reason: this register map
+    // has its own enable register and its own all-zero reset state.
+    overlay::FdsNeo::fds_config_interrupt_en(0);
     // Same defensive disable as begin_dispatch, and the same limit on what it can reset. The
     // outbox park matters more on this map: zero is input register 0, and a stale zero outbox
     // under a mistimed enable would divert a status-clearing write into the queue and emit it as
@@ -195,3 +204,26 @@ constexpr uint32_t kTokenDelivered = 11;
 constexpr uint32_t kMismatchedGo = 2;
 constexpr uint32_t kMatchedGo = 3;
 }  // namespace fds_outbox
+
+// Status slots and failure codes shared by the interrupt kernels, whose protocol lives in
+// quasar_fds_interrupt.h. Slot 0 is the result word as everywhere else. The interrupt count in
+// slot 1 doubles as the handler's flag: the handler bumps it last, so a kernel that sees it move
+// knows the handler ran to the end, and the kernels wait on it rather than on a separate word.
+namespace fds_interrupt_status {
+constexpr uint32_t kSlotInterruptCount = 1;
+// The PLIC source the handler claimed. Kernels that make no claim check put something else in
+// slot 2 and name it themselves.
+constexpr uint32_t kSlotClaimedSource = 2;
+
+// The armed interrupt never arrived.
+constexpr uint32_t kTimeoutInterrupt = 0x5A5A0070;
+// One arrived inside a window that had to stay quiet.
+constexpr uint32_t kUnexpectedInterrupt = 0x5A5A0071;
+// The claim named a source other than 16 + the group under test.
+constexpr uint32_t kWrongSource = 0x5A5A0072;
+// mcause was not a machine external interrupt.
+constexpr uint32_t kWrongCause = 0x5A5A0073;
+// mhartid landed outside the PLIC's context range, so no context offset could be computed and
+// nothing was armed at all.
+constexpr uint32_t kBadHartContext = 0x5A5A0074;
+}  // namespace fds_interrupt_status

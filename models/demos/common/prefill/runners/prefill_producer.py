@@ -19,6 +19,7 @@ from loguru import logger
 
 import ttnn
 from models.demos.common.prefill.adapter import DEFAULT_MODEL, get_adapter
+from models.demos.common.prefill.runners.migration import is_per_host_storage, migration_table_path
 from models.demos.common.prefill.runners.runner_utils import load_trace_token_ids, resolve_trace_dir
 
 
@@ -108,16 +109,13 @@ def _chunk_to_host_array(chunk_token_ids):
     )
 
 
-_PER_HOST_FS_PREFIXES = ("/tmp", "/dev/shm", "/run", "/var/tmp")
-
-
 def _require_shared_table_path(world_size: int) -> None:
     if world_size <= 1:
         return
-    table_path = os.path.abspath(os.environ.get("PREFILL_MIGRATION_TABLE_PATH", "/tmp/prefill_kv_chunk_table.pb"))
-    if any(table_path == p or table_path.startswith(p + "/") for p in _PER_HOST_FS_PREFIXES):
+    table_path = os.path.abspath(migration_table_path())
+    if is_per_host_storage(table_path):
         logger.error(
-            f"[producer] PREFILL_MIGRATION_TABLE_PATH={table_path!r} is on per-host storage; multi-rank "
+            f"[producer] KV chunk table {table_path!r} is on per-host storage; multi-rank "
             f"(world_size={world_size}) validators on other hosts cannot read rank 0's table. Point it at "
             "shared/NFS storage (e.g. /data/...)."
         )
@@ -125,7 +123,7 @@ def _require_shared_table_path(world_size: int) -> None:
 
 
 def _read_kv_chunk_table(timeout_s: int):
-    table_path = os.environ.get("PREFILL_MIGRATION_TABLE_PATH", "/tmp/prefill_kv_chunk_table.pb")
+    table_path = migration_table_path()
     deadline = time.perf_counter() + timeout_s
     while not os.path.exists(table_path):
         if time.perf_counter() > deadline:
@@ -893,8 +891,10 @@ def _percentile(sorted_values: list, p: float) -> float:
 
 def _load_token_pool(trace_dir, num_tokens: int) -> list:
     pool = load_trace_token_ids(trace_dir, num_tokens)
+    if not pool:
+        raise ValueError(f"trace {trace_dir} carries no token_ids; cannot build a token pool")
     if len(pool) < num_tokens:
-        pool = pool + [1] * (num_tokens - len(pool))
+        pool = pool * -(-num_tokens // len(pool))
     return pool[:num_tokens]
 
 
@@ -1057,8 +1057,8 @@ def main() -> None:
     if cfg.verify and ack_channel is None:
         logger.error(
             "[producer] CHECK_PCC=1 but LayerAck channel missing — UMD read would race the runner's "
-            "prefill (H2D push return ≠ layers done). Set PREFILL_ENABLE_LAYER_ACK=1 on the runner "
-            "(Gate 1 mock defaults this on via run_prefill_migration_gate.sh)."
+            "prefill (H2D push return ≠ layers done). The master rank always owns this channel, so "
+            "either the runner is not up yet or it died before wiring acks."
         )
         sys.exit(1)
     if not cfg.verify:

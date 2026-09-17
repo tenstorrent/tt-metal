@@ -29,7 +29,7 @@ M3 stores three cache tensors (`k`, `v`, `index_k`). `k`/`v` are TP-head-sharded
 
 | File | Owns |
 |------|------|
-| `manifests/minimax_m3.json` | model: `PREFILL_MODEL`, 60 layers, `M3_INDEX_CACHE_BF16` |
+| `manifests/minimax_m3.json` | model: `PREFILL_MODEL`, `M3_INDEX_CACHE_BF16` (layer count comes from the adapter) |
 | `manifests/m3_binding_mock_migration_1rank.yaml` | Gate 1 runner: 1-rank topology + mock-migration env |
 | `manifests/m3_binding_loopback_migration_1rank.yaml` | Gate 2 runner: 1-rank topology + real-migration env |
 | `manifests/m3_producer_mock_migration.yaml` | Gate 1 producer: 2 slots × 2 chunks, golden PCC |

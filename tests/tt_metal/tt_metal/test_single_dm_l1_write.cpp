@@ -11,6 +11,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include <numeric>
 
 #ifndef OVERRIDE_KERNEL_PREFIX
@@ -90,7 +91,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, SingleDmL1Write) {
         .kernels = {dm_kernel_spec},
         .work_units = {main_wu},
     };
-    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = experimental::MakeProgramFromSpec(this->device(), spec);
 
     experimental::ProgramRunArgs params;
     params.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
@@ -176,7 +177,6 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, FullGridDmL1Write_L1a) {
     if (std::getenv("TT_METAL_SIMULATOR") == nullptr) {
         GTEST_SKIP() << "This test can only be run using a simulator.";
     }
-    IDevice* dev = devices_[0]->get_devices()[0];
     auto mesh_device = devices_[0];
     const auto grid = mesh_device->compute_with_storage_grid_size();
     // Skip on the smaller 1x3/2x3 configs; this suite targets the 8x4 Quasar grid.
@@ -192,7 +192,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, FullGridDmL1Write_L1a) {
     for (uint32_t y = 0; y < grid.y; ++y) {
         for (uint32_t x = 0; x < grid.x; ++x) {
             std::vector<uint32_t> z{0xffffffffu};
-            tt_metal::detail::WriteToDeviceL1(dev, experimental::NodeCoord{x, y}, address, z);
+            slow_dispatch::WriteToL1(this->device(), experimental::NodeCoord{x, y}, address, z);
         }
     }
 
@@ -238,8 +238,8 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, FullGridDmL1Write_L1a) {
         std::string row;
         for (uint32_t x = 0; x < grid.x; ++x) {
             std::vector<uint32_t> r(1, 0xdeadbeefu);
-            tt_metal::detail::ReadFromDeviceL1(
-                dev, experimental::NodeCoord{x, static_cast<uint32_t>(y)}, address, sizeof(uint32_t), r);
+            slow_dispatch::ReadFromL1(
+                this->device(), experimental::NodeCoord{x, static_cast<uint32_t>(y)}, address, sizeof(uint32_t), r);
             const uint32_t sig = sig_of(x, static_cast<uint32_t>(y));
             if (r[0] == sig) {
                 row += ". ";
@@ -265,7 +265,6 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, FullGridCompute_L1c) {
     if (std::getenv("TT_METAL_SIMULATOR") == nullptr) {
         GTEST_SKIP() << "This test can only be run using a simulator.";
     }
-    IDevice* dev = devices_[0]->get_devices()[0];
     auto mesh_device = devices_[0];
     const auto grid = mesh_device->compute_with_storage_grid_size();
     // Skip on the smaller 1x3/2x3 configs; this suite targets the 8x4 Quasar grid.
@@ -283,7 +282,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, FullGridCompute_L1c) {
     for (uint32_t y = 0; y < grid.y; ++y) {
         for (uint32_t x = 0; x < grid.x; ++x) {
             std::vector<uint32_t> z(16, 0xC0FFEEu);
-            tt_metal::detail::WriteToDeviceL1(dev, experimental::NodeCoord{x, y}, l1_address, z);
+            slow_dispatch::WriteToL1(this->device(), experimental::NodeCoord{x, y}, l1_address, z);
         }
     }
 
@@ -327,8 +326,12 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, FullGridCompute_L1c) {
         std::string row;
         for (uint32_t x = 0; x < grid.x; ++x) {
             std::vector<uint32_t> r(16, 0xdeadbeefu);
-            tt_metal::detail::ReadFromDeviceL1(
-                dev, experimental::NodeCoord{x, static_cast<uint32_t>(y)}, l1_address, 16 * sizeof(uint32_t), r);
+            slow_dispatch::ReadFromL1(
+                this->device(),
+                experimental::NodeCoord{x, static_cast<uint32_t>(y)},
+                l1_address,
+                16 * sizeof(uint32_t),
+                r);
             if (r == expected) {
                 row += ". ";
                 ++ok;
@@ -354,7 +357,6 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, GridMulticastFanOut) {
     if (std::getenv("TT_METAL_SIMULATOR") == nullptr) {
         GTEST_SKIP() << "This test can only be run using a simulator.";
     }
-    IDevice* dev = devices_[0]->get_devices()[0];
     auto mesh_device = devices_[0];
     const auto grid = mesh_device->compute_with_storage_grid_size();
     if (grid.x != 8u || grid.y != 4u) {
@@ -370,7 +372,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, GridMulticastFanOut) {
     for (uint32_t y = 0; y < grid.y; ++y) {
         for (uint32_t x = 0; x < grid.x; ++x) {
             std::vector<uint32_t> z{sentinel};
-            tt_metal::detail::WriteToDeviceL1(dev, experimental::NodeCoord{x, y}, address, z);
+            slow_dispatch::WriteToL1(this->device(), experimental::NodeCoord{x, y}, address, z);
         }
     }
 
@@ -396,7 +398,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, GridMulticastFanOut) {
     };
     experimental::WorkUnitSpec wu{.name = "main", .kernels = {MCAST}, .target_nodes = src_node};
     experimental::ProgramSpec spec{.name = "grid_mcast_fanout", .kernels = {mcast_spec}, .work_units = {wu}};
-    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = experimental::MakeProgramFromSpec(this->device(), spec);
 
     experimental::ProgramRunArgs params;
     params.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
@@ -422,8 +424,8 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, GridMulticastFanOut) {
         std::string row;
         for (uint32_t x = 0; x < grid.x; ++x) {
             std::vector<uint32_t> r(1, 0u);
-            tt_metal::detail::ReadFromDeviceL1(
-                dev, experimental::NodeCoord{x, static_cast<uint32_t>(y)}, address, sizeof(uint32_t), r);
+            slow_dispatch::ReadFromL1(
+                this->device(), experimental::NodeCoord{x, static_cast<uint32_t>(y)}, address, sizeof(uint32_t), r);
             if (r[0] == value) {
                 row += ". ";
                 ++ok;

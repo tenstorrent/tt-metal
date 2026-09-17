@@ -4,7 +4,7 @@
 
 """
 Kimi MoE device-perf gate on the 8x4 galaxy, one test parametrized over the Kimi generations
-(K2.6 dense-expert MoE and K3 LatentMoE), measured with the real-time program profiler -- same
+(K2.7 dense-expert MoE and K3 LatentMoE), measured with the real-time program profiler -- same
 mechanism as ``test_ttnn_hca_perf.py``, which already gates HCA perf on this SKU.
 
 What the number is: over the programs the MoE forward dispatched, the sum of each program's
@@ -28,7 +28,7 @@ What the number excludes, verified on an 8x4 galaxy (warm caches, 58 programs x 
 
 Recalibrating one generation: set its ``expected_ns`` to ``None`` and the test measures and logs
 without gating, printing the value to set it back to. Do that on any box whose baseline you need to
-re-cut. Both generations run in one job (``kimi_moe_perf``); select one with ``-k k2_6`` / ``-k k3``.
+re-cut. Both generations run in one job (``kimi_moe_perf``); select one with ``-k k2_7`` / ``-k k3``.
 """
 
 import os
@@ -39,7 +39,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import is_blackhole
-from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
+from models.demos.deepseek_v3_d_p.reference.kimi_k2_7_config import KimiK27Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tests.pcc.test_ttnn_moe import run_model
@@ -58,7 +58,7 @@ _SEQ_LEN_PER_CHIP = PREFILL_CHUNK_TOKENS_PER_CHIP
 _DISPATCH_BUFFER_CAPACITY_FACTOR = 5
 
 # Both generations carry FABRIC_PAYLOAD_SIZE = 7168, so one device_params axis serves both.
-_FABRIC_PAYLOAD_SIZE = KimiK26Config.FABRIC_PAYLOAD_SIZE
+_FABRIC_PAYLOAD_SIZE = KimiK27Config.FABRIC_PAYLOAD_SIZE
 
 # The profiler's default 1s collection deadline is sized for a single block's programs. The MoE
 # forward at 896 experts dispatches far more, and records arrive asynchronously from the receiver
@@ -84,20 +84,27 @@ class _MoEPerfCase:
     extra: dict = field(default_factory=dict)
 
 
-# K2.6: 384 experts / top-8 over the 7168 embedding, no LatentMoE plumbing.
+# K2.7: 384 experts / top-8 over the 7168 embedding, no LatentMoE plumbing.
 #
-# Re-centred 2026-08-28: the 2D matmul program configs on this branch moved the midpoint, so the
-# 6,945,590 five-sample mean now measures a matmul shape nothing builds. Per the repo's rule that
-# is fixed by lowering the midpoint, never by widening the margin.
+# Re-centred 2026-09-03: device time came in at 5,413,674 ns, 9.9% below the old band's lower edge
+# (previous midpoint 6,260,834). Per the repo's rule that is fixed by lowering the midpoint, never by
+# widening the margin. ONE sample, from the failing gate run itself.
 #
-# Measured on a high-power 8x4 BH galaxy (nominal DDR), warm forward, run 33194039175: 6,574,780 ns.
-# ONE sample -- the K2.6 warm-up spread below was characterised on the superseded shape and is not
-# re-verified here.
-_K2_6 = _MoEPerfCase(
-    label="kimi-k2.6",
-    config=KimiK26Config,
-    expected_ns=6_574_780,
-    # 4%, not 3%: K2.6 runs FIRST in the merged job, so it absorbs the warm-up variability that K3,
+# This drop is an order of magnitude larger than the previous re-centre (13.5% vs 0.8%), so it is a
+# real change in the work rather than drift: it is a SPEEDUP, and this branch reorders the shared
+# expert against dispatch, which is exactly the kind of change that moves this number. If a later
+# run does not reproduce ~5.41 ms, treat that as evidence this sample caught something transient and
+# re-cut from the median of several runs rather than re-lowering again.
+#
+# Previous history: re-centred 2026-09-02 to 6,260,834 from 6,574,780 (run 33194039175).
+#
+# K2.7-Code is architecturally identical to K2.6 (61 layers, 384 routed experts, same dims), so the
+# MoE shapes are unchanged; only the label moved.
+_K2_7 = _MoEPerfCase(
+    label="kimi-k2.7",
+    config=KimiK27Config,
+    expected_ns=5_413_674,
+    # 4%, not 3%: K2.7 runs FIRST in the merged job, so it absorbs the warm-up variability that K3,
     # running second on an already-warm device, does not -- five samples on the previous shape spanned
     # 7.12% peak to peak against K3's 0.44%. Do NOT tighten this to match K3; the asymmetry is a
     # property of the job order, not of the midpoint. Sub-nominal DDR doubles it to 8%.
@@ -110,17 +117,18 @@ _K2_6 = _MoEPerfCase(
 # This case measures the checkpoint's SiTU-GLU on every FFN site and reports 35 programs, on this
 # branch and on unmodified main alike.
 #
-# Re-centred 2026-08-28: the 2D matmul program configs land on the 3584-latent projections this case
-# runs, so the previous 11,063,717 centres on a matmul shape nothing builds. This gate has gone stale
-# downward three times now; per the repo's rule it is fixed by lowering the midpoint, never by
-# widening the margin.
+# The midpoint tracks the MoE forward's op order: the number is a sum of per-program critical paths,
+# so issuing dispatch ahead of the shared expert moves it. A midpoint that goes stale downward is
+# fixed by lowering it, never by widening the margin.
 #
-# Measured on a high-power 8x4 BH galaxy (nominal DDR), warm forward, run 33194039175: 9,535,901 ns.
-# ONE sample, against the four-sample 0.44% spread that set the margin below.
+# Measured on a high-power 8x4 BH galaxy (nominal DDR), warm forward, run 33642820055: 8,369,824 ns
+# over the same 35 programs -- that count is what separates a real drop from a record window closing
+# early and under-reporting the sum. ONE sample, against the four-sample 0.44% spread that set the
+# margin below.
 _K3 = _MoEPerfCase(
     label="kimi-k3",
     config=KimiK3Config,
-    expected_ns=9_535_901,
+    expected_ns=8_369_824,
     # 3% retained: K3 runs second on an already-warm device and four samples on the previous shape
     # spanned just 0.44% peak to peak, so 3% is already generous -- the midpoint is what goes stale
     # here, not the width. Sub-nominal DDR doubles it to 6% via adjust_margin_for_ddr_speed.
@@ -135,10 +143,10 @@ _K3 = _MoEPerfCase(
     ),
 )
 
-# "k2_6" / "k3", not "kimi_k2_6" / "kimi_k3": pytest -k is substring-based, so the ids must stay
+# "k2_7" / "k3", not "kimi_k2_7" / "kimi_k3": pytest -k is substring-based, so the ids must stay
 # disjoint -- a bare "kimi" id would match both generations and widen every `-k` selector.
 _CASES = [
-    pytest.param("kimi_k2_6", _K2_6, id="k2_6"),
+    pytest.param("kimi_k2_7", _K2_7, id="k2_7"),
     pytest.param("kimi_k3", _K3, id="k3"),
 ]
 

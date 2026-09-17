@@ -6,6 +6,7 @@
 
 #include <cstdint>
 
+#include "ckernel_ops.h"
 #include "ckernel_trisc_common.h"
 #include "cpack_common.h"
 #include "llk_assert.h"
@@ -174,9 +175,6 @@ inline void _llk_pack_dest_dvalid_section_done_()
 template <ReduceDim REDUCE_DIMENSION>
 inline void _llk_pack_reduce_mask_config_(const TensorShape& tensor_shape)
 {
-    // Wait for packer to finish to avoid breaking its current configuration
-    TTI_STALLWAIT(p_stall::STALL_CFG, 0, 0, p_stall::PACK0);
-
     cfg_rmw(THCON_PACKER0_REG1_EDGE_MASK_MODE_RMW, ckernel::pack::EDGE_MASK_MODE_ZERO);
 
     // This register specifies which datums will not have the mask applied
@@ -221,9 +219,6 @@ inline void _llk_pack_reduce_mask_config_(const TensorShape& tensor_shape)
             cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE3_RMW, ckernel::pack::EDGE_MASK_FACE_ROW0_MASK_1);
         }
     }
-
-    // Stall until all config instructions are done
-    TTI_STALLWAIT(p_stall::PACK0, 0, 0, p_stall::TRISC_CFG);
 }
 
 /**
@@ -233,9 +228,6 @@ inline void _llk_pack_reduce_mask_config_(const TensorShape& tensor_shape)
  */
 inline void _llk_pack_reduce_mask_clear_()
 {
-    // Wait for packer to finish to avoid breaking its current configuration
-    TTI_STALLWAIT(p_stall::STALL_CFG, 0, 0, p_stall::PACK0);
-
     // Edge mask mode is disabled
     cfg_rmw(THCON_PACKER0_REG1_EDGE_MASK0_RMW, ckernel::pack::EDGE_MASK_ROW_DATUMS_NONE);
 
@@ -244,9 +236,6 @@ inline void _llk_pack_reduce_mask_clear_()
     cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE1_RMW, ckernel::pack::EDGE_MASK_FACE_ALL_ROWS_MASK_0);
     cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE2_RMW, ckernel::pack::EDGE_MASK_FACE_ALL_ROWS_MASK_0);
     cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE3_RMW, ckernel::pack::EDGE_MASK_FACE_ALL_ROWS_MASK_0);
-
-    // Stall until all config instructions are done
-    TTI_STALLWAIT(p_stall::PACK0, 0, 0, p_stall::TRISC_CFG);
 }
 
 /**

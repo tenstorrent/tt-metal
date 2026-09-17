@@ -22,7 +22,8 @@ namespace {
 void bind_quantize(nb::module_& mod) {
     auto doc = fmt::format(
         R"doc(
-        {2}
+        Quantizes a floating-point tensor into an integer tensor: ``q = input_tensor / scale + zero_point``,
+        per tensor by default or per channel along :attr:`axis`.
 
         Args:
             input_tensor (ttnn.Tensor): the input tensor.
@@ -30,8 +31,10 @@ void bind_quantize(nb::module_& mod) {
             zero_point (ttnn.Tensor or Number): the quantization zero point.
 
         Keyword Args:
-            axis (Number, optional): the axis of the quantization dimension of the input tensor.
+            axis (int, optional): the axis of the quantization dimension of the input tensor. Defaults to `None`.
+            dtype (ttnn.DataType, optional): data type for the output tensor. Defaults to `None`.
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
+            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -44,22 +47,13 @@ void bind_quantize(nb::module_& mod) {
 
                * - Dtypes
                  - Layouts
-               * - {3}
+               * - {0}
                  - TILE
 
             bfloat8_b/bfloat4_b supports only on TILE_LAYOUT
 
             When :attr:`scale` and :attr:`zero_point` are tensors, they must be FLOAT32.
-
-        Example:
-            >>> input_tensor = ttnn.from_torch(torch.tensor([[0.1, 0.2], [0.3, 0.4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> scale = 0.001173
-            >>> zero_point = -213
-            >>> output = {1}(input_tensor, scale, zero_point)
         )doc",
-        "quantize",
-        "ttnn.quantize",
-        "Quantize Operation",
         "BFLOAT16, BFLOAT8_B, BFLOAT4_B, FLOAT32");
 
     ttnn::bind_function<"quantize">(
@@ -79,7 +73,9 @@ void bind_quantize(nb::module_& mod) {
 void bind_requantize(nb::module_& mod) {
     auto doc = fmt::format(
         R"doc(
-        {2}
+        Re-expresses an already quantized tensor on a different scale and zero point:
+        ``q' = (input_tensor - in_zero_point) * in_scale / out_scale + out_zero_point``.
+        Equivalent to dequantizing and then quantizing with the output scale and zero point.
 
         Args:
             input_tensor (ttnn.Tensor): the input tensor.
@@ -89,8 +85,10 @@ void bind_requantize(nb::module_& mod) {
             out_zero_point (ttnn.Tensor or Number): the output quantization zero point.
 
         Keyword Args:
-            axis (Number, optional): the axis of the quantization dimension of the input tensor.
+            axis (int, optional): the axis of the quantization dimension of the input tensor. Defaults to `None`.
+            dtype (ttnn.DataType, optional): data type for the output tensor. Defaults to `None`.
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
+            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -103,7 +101,7 @@ void bind_requantize(nb::module_& mod) {
 
                * - Dtypes
                  - Layouts
-               * - {3}
+               * - {0}
                  - TILE
 
             bfloat8_b/bfloat4_b supports only on TILE_LAYOUT
@@ -122,30 +120,22 @@ void bind_requantize(nb::module_& mod) {
             **Execution Paths:**
 
             When all four parameters (in_scale, in_zero_point, out_scale, out_zero_point) are provided as tensors and an axis is specified:
+
             - The operation uses a path with explicit shape expansion and broadcasting.
             - Per-tensor parameters (scalar tensors) are broadcast to match the input tensor shape.
             - Per-channel parameters (1D tensors) are reshaped and expanded along the specified axis.
             - The implementation performs the mathematical requantization in floating point and typecasts to the output dtype: q' = q * (s_in/s_out) + (z_out - z_in * s_in/s_out).
 
             When all four parameters are provided as scalar values (float/int32):
+
             - Uses a path with a specialized kernel operation.
             - Computes the requantization directly in a single fused operation.
 
             When there is a mix of scalar and tensor parameters:
+
             - Falls back to a composite operation path.
             - Decomposes requantization into separate dequantize and quantize operations.
-
-        Example:
-            >>> input_tensor = ttnn.from_torch(torch.tensor([[0.1, 0.2], [0.3, 0.4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> in_scale = 0.001173
-            >>> in_zero_point = -213
-            >>> out_scale = 0.002727
-            >>> out_zero_point = -73
-            >>> output = {1}(input_tensor, in_scale, in_zero_point, out_scale, out_zero_point)
         )doc",
-        "requantize",
-        "ttnn.requantize",
-        "Re-quantize Operation",
         "INT32");
 
     ttnn::bind_function<"requantize">(
@@ -167,7 +157,8 @@ void bind_requantize(nb::module_& mod) {
 void bind_dequantize(nb::module_& mod) {
     auto doc = fmt::format(
         R"doc(
-        {2}
+        Converts a quantized integer tensor back to floating point: ``t = (input_tensor - zero_point) * scale``,
+        per tensor by default or per channel along :attr:`axis`.
 
         Args:
             input_tensor (ttnn.Tensor): the input tensor.
@@ -175,8 +166,10 @@ void bind_dequantize(nb::module_& mod) {
             zero_point (ttnn.Tensor or Number): the quantization zero point.
 
         Keyword Args:
-            axis (Number, optional): the axis of the quantization dimension of the input tensor.
+            axis (int, optional): the axis of the quantization dimension of the input tensor. Defaults to `None`.
+            dtype (ttnn.DataType, optional): data type for the output tensor. Defaults to `None`.
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
+            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -189,22 +182,13 @@ void bind_dequantize(nb::module_& mod) {
 
                * - Dtypes
                  - Layouts
-               * - {3}
+               * - {0}
                  - TILE
 
             bfloat8_b/bfloat4_b supports only on TILE_LAYOUT
 
             Input tensor dtype must be INT32. When :attr:`scale` and :attr:`zero_point` are tensors, they must be FLOAT32.
-
-        Example:
-            >>> input_tensor = ttnn.from_torch(torch.tensor([[-127 -42], [43 127]], dtype=torch.int32), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> scale = 0.001173
-            >>> zero_point = -213
-            >>> output = {1}(input_tensor, scale, zero_point)
         )doc",
-        "dequantize",
-        "ttnn.dequantize",
-        "De-quantize Operation",
         "INT32");
 
     ttnn::bind_function<"dequantize">(

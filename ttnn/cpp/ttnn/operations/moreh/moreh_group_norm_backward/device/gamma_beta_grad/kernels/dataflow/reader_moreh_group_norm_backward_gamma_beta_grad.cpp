@@ -125,8 +125,11 @@ void kernel_main() {
 
             // mean, rstd (1, 1, N, num_groups)
             // mean_rstd_idx = n * num_groups + g
+            // The group of a channel is c_global / (C / num_groups); c_idx is core-local,
+            // so recover the global channel the same way the sibling writer does.
+            const auto c_global = outer_idx + tile_offset / HtWt;
             mean_rstd_n_idx = n_idx;
-            mean_rstd_g_idx = c_idx % num_groups;
+            mean_rstd_g_idx = c_global / (num_channels / num_groups);
 
             mean_rstd_tile_h_idx = mean_rstd_n_idx / TILE_H;
             mean_rstd_tile_w_idx = mean_rstd_g_idx / TILE_W;

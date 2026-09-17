@@ -1443,6 +1443,9 @@ static inline Program build_single_dfb_program_2_0(distributed::MeshDevice& mesh
              .endpoint_type = m2::DFBEndpointType::CONSUMER,
              .access_pattern = p.cap}};
         k.compile_time_args = {{"num_entries_per_consumer", per_consumer}};
+        // Declared so the kernel source stays compilable; these probes never launch, and the
+        // kernel's digest reporting is only consumed by run_single_dfb_program_2_0.
+        k.runtime_arg_schema = {.runtime_arg_names = {"result_l1_addr"}};
         return k;
     };
 

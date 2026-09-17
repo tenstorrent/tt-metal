@@ -79,9 +79,7 @@ inline std::vector<ShardedHeightPerCoreArgs> get_pad_runtime_args_rm_sharded(
     bool row_major,
     uint32_t shard_height_padded,
     uint32_t shard_height_unpadded,
-    const CoreCoord& unpadded_grid_start,
-    uint32_t num_cores_x_unpadded,
-    uint32_t num_cores_y_unpadded) {
+    const std::vector<CoreCoord>& unpadded_cores) {
     tt::tt_metal::IDevice* device = input_tensor.device();
 
     auto input_shape = input_tensor.padded_shape();
@@ -141,7 +139,7 @@ inline std::vector<ShardedHeightPerCoreArgs> get_pad_runtime_args_rm_sharded(
 
         // figure out the stick id in a shard, and the core id for the stick.
         std::map<std::pair<uint32_t, uint32_t>, std::vector<uint32_t>> core_stick_map;
-        auto first_core = device->worker_core_from_logical_core(unpadded_grid_start);
+        auto first_core = device->worker_core_from_logical_core(unpadded_cores.front());
         std::pair<uint32_t, uint32_t> prev_xy_pair = std::make_pair(first_core.x, first_core.y);
         for (uint32_t j = 0; j < num_sticks_per_core_padded; ++j) {
             int stick_id = stick_ids_per_core[j];
@@ -153,21 +151,12 @@ inline std::vector<ShardedHeightPerCoreArgs> get_pad_runtime_args_rm_sharded(
                 uint32_t shard_id = stick_id / num_sticks_per_core_unpadded;
                 uint32_t stick_id_in_shard = stick_id - (shard_id * num_sticks_per_core_unpadded);
 
-                uint32_t shard_grid_inner_dim = row_major ? num_cores_x_unpadded : num_cores_y_unpadded;
-                uint32_t shard_grid_outer_dim_id = shard_id / shard_grid_inner_dim;
-                uint32_t shard_grid_inner_dim_id = shard_id - (shard_grid_outer_dim_id * shard_grid_inner_dim);
-
-                uint32_t worker_y_logical =
-                    unpadded_grid_start.y + (row_major ? shard_grid_outer_dim_id : shard_grid_inner_dim_id);
-                uint32_t worker_x_logical =
-                    unpadded_grid_start.x + (row_major ? shard_grid_inner_dim_id : shard_grid_outer_dim_id);
-
-                // worker_*_logical are absolute logical coordinates. Compare against absolute unpadded-grid bounds.
-                uint32_t unpadded_grid_end_x = unpadded_grid_start.x + num_cores_x_unpadded;
-                uint32_t unpadded_grid_end_y = unpadded_grid_start.y + num_cores_y_unpadded;
-                if (worker_x_logical < unpadded_grid_end_x and worker_y_logical < unpadded_grid_end_y) {
-                    auto core_physical =
-                        device->worker_core_from_logical_core(CoreCoord{worker_x_logical, worker_y_logical});
+                // shard_id indexes the input shard grid in its own traversal order. Index the
+                // grid's real core list rather than deriving coordinates from its bounding box:
+                // a sharded tensor may live on a non-contiguous grid (e.g. {[1-0 - 3-7],
+                // [5-0 - 6-7]}), whose bounding box also covers cores that hold no shard.
+                if (shard_id < unpadded_cores.size()) {
+                    auto core_physical = device->worker_core_from_logical_core(unpadded_cores[shard_id]);
                     // save stick id in a shard, and core coord into a map
                     std::pair<uint32_t, uint32_t> xy_pair = row_major
                                                                 ? std::make_pair(core_physical.y, core_physical.x)
@@ -263,14 +252,8 @@ ttnn::device_operation::ProgramArtifacts PadRmShardedHeightOnlyProgramFactory::c
     uint32_t shard_height_unpadded = shard_spec_unpadded.shape[0];
     bool row_major = shard_spec_unpadded.orientation == ShardOrientation::ROW_MAJOR;
 
-    [[maybe_unused]] auto& all_cores_unpadded = shard_spec_unpadded.grid;
-    [[maybe_unused]] uint32_t num_cores_unpadded = shard_spec_unpadded.num_cores();
-    auto bbox_unpadded = shard_spec_unpadded.grid.bounding_box();
-    CoreCoord grid_size_unpadded = {
-        bbox_unpadded.end_coord.x - bbox_unpadded.start_coord.x + 1,
-        bbox_unpadded.end_coord.y - bbox_unpadded.start_coord.y + 1};
-    uint32_t num_cores_x_unpadded = grid_size_unpadded.x;
-    uint32_t num_cores_y_unpadded = grid_size_unpadded.y;
+    const auto& all_cores_unpadded = shard_spec_unpadded.grid;
+    uint32_t num_cores_unpadded = shard_spec_unpadded.num_cores();
 
     log_debug(tt::LogOp, "num_unpadded_sticks: {}", num_unpadded_sticks);
     log_debug(tt::LogOp, "shard_height_unpadded: {}", shard_height_unpadded);
@@ -283,12 +266,6 @@ ttnn::device_operation::ProgramArtifacts PadRmShardedHeightOnlyProgramFactory::c
 
     auto& all_cores_padded = shard_spec_padded.grid;
     uint32_t num_cores_padded = shard_spec_padded.num_cores();
-    auto bbox_padded = shard_spec_padded.grid.bounding_box();
-    CoreCoord grid_size_padded = {
-        bbox_padded.end_coord.x - bbox_padded.start_coord.x + 1,
-        bbox_padded.end_coord.y - bbox_padded.start_coord.y + 1};
-    uint32_t num_cores_x_padded = grid_size_padded.x;
-    uint32_t num_cores_y_padded = grid_size_padded.y;
 
     log_debug(tt::LogOp, "num_unpadded_sticks: {}", num_unpadded_sticks);
     log_debug(tt::LogOp, "shard_height_unpadded: {}", shard_height_unpadded);
@@ -353,9 +330,7 @@ ttnn::device_operation::ProgramArtifacts PadRmShardedHeightOnlyProgramFactory::c
         row_major,
         shard_height_padded,
         shard_height_unpadded,
-        bbox_unpadded.start_coord,
-        num_cores_x_unpadded,
-        num_cores_y_unpadded);
+        corerange_to_cores(all_cores_unpadded, num_cores_unpadded, row_major));
 
     // The reader's vararg block length is data-dependent (it grows with the number of source
     // cores and coalesced chunks a core gathers from), but a KernelSpec declares one vararg count
@@ -452,15 +427,11 @@ ttnn::device_operation::ProgramArtifacts PadRmShardedHeightOnlyProgramFactory::c
     KernelRunArgs reader_run_args{.kernel = SH_H_READER};
     KernelRunArgs writer_run_args{.kernel = SH_H_WRITER};
 
+    // Iterate the output shard grid's real cores. Deriving them from the bounding box emits
+    // runtime args for cores in the gaps of a non-contiguous grid, where the kernels do not run.
+    const auto padded_cores_in_order = corerange_to_cores(all_cores_padded, num_cores_padded, row_major);
     for (uint32_t i = 0; i < num_cores_padded; i++) {
-        CoreCoord core;
-        if (row_major) {
-            core = {
-                bbox_padded.start_coord.x + i % num_cores_x_padded, bbox_padded.start_coord.y + i / num_cores_x_padded};
-        } else {
-            core = {
-                bbox_padded.start_coord.x + i / num_cores_y_padded, bbox_padded.start_coord.y + i % num_cores_y_padded};
-        }
+        const CoreCoord& core = padded_cores_in_order[i];
         const auto& core_args = all_runtime_args[i];
 
         AddRuntimeArgsForNode(reader_run_args.runtime_arg_values, core, {{"num_cores_read", core_args.num_cores_read}});

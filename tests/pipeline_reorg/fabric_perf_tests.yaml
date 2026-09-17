@@ -32,6 +32,7 @@
     wh_llmbox_perf:
       timeout: 45
   team: scaleout
+  budget_type: perf
   owner_id: U06US5C7M7X # Sean Nijjar
   upload_benchmarks: true
 
@@ -43,6 +44,7 @@
     wh_llmbox_perf:
       timeout: 45
   team: scaleout
+  budget_type: perf
   owner_id: U06US5C7M7X # Sean Nijjar
 
 - name: T3K ubench - Fabric Mux V2 Throughput
@@ -51,4 +53,5 @@
     wh_llmbox_perf:
       timeout: 45
   team: scaleout
+  budget_type: perf
   owner_id: U06US5C7M7X # Sean Nijjar

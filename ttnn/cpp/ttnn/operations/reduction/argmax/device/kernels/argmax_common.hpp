@@ -112,7 +112,7 @@ inline uint32_t calculate_argmax_index(
     const uint32_t i,
     const uint32_t inner_dim_units,
     const uint32_t red_dim_units) {
-    return reduce_all ? (k * inner_dim_units * red_dim_units + j * red_dim_units + i) : i;
+    return reduce_all ? ((k * inner_dim_units * red_dim_units) + (j * red_dim_units) + i) : i;
 }
 
 /**
@@ -214,8 +214,8 @@ void compare_values(
 template <DataFormat data_format, typename ValueType, typename CompareFunc>
 inline void process_core_data(
     const uint32_t inner_idx,
-    volatile tt_l1_ptr ValueType* i_red_vals,
-    volatile tt_l1_ptr uint32_t* i_red_idxs,
+    const volatile tt_l1_ptr ValueType* i_red_vals,
+    const volatile tt_l1_ptr uint32_t* i_red_idxs,
     decltype(get_default_value<data_format>())& max_val,
     uint32_t& max_idx,
     CompareFunc compare_func) {
@@ -262,11 +262,11 @@ inline void process_value_comparison(
     const uint32_t red_dim_units,
     CompareFunc compare_func) {
     if (compare_func(val, max_val)) {
-        auto full_idx = outer_idx * inner_dim_units * red_dim_units + j * red_dim_units + i;
+        auto full_idx = (outer_idx * inner_dim_units * red_dim_units) + (j * red_dim_units) + i;
         max_idx = reduce_all ? full_idx : i;
         max_val = val;
     } else if (val == max_val) {
-        auto full_idx = outer_idx * inner_dim_units * red_dim_units + j * red_dim_units + i;
+        auto full_idx = (outer_idx * inner_dim_units * red_dim_units) + (j * red_dim_units) + i;
         max_idx = reduce_all ? std::min(max_idx, full_idx) : std::min(max_idx, i);
     }
 }

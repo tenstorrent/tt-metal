@@ -15,6 +15,15 @@ OUTPUT_ARCH(riscv)
 
 #include "dev_mem_map.h"
 
+/* Fake VMAs for the kernel profiler's zone-metadata sections below. The value is arbitrary: both
+   sections are (INFO), so they are non-ALLOC, never appear in a PT_LOAD and are never placed on the
+   device, and the host resolves the pointers they hold by subtracting the section's own sh_addr
+   (llrt/zone_meta.cpp). They only need a defined base so that the link-time pointers from
+   .tt_zone_meta into .tt_zone_str are well-formed. Kept 1 MB apart and clear of the device memory
+   map, continuing the ladder the .device_print_strings sections started at 0x6400000. */
+#define TT_ZONE_STR_VMA 0x6600000
+#define TT_ZONE_META_VMA 0x6700000
+
 #if defined(COMPILE_FOR_BRISC)
 #define DATA_START MEM_LOCAL_BASE
 #define DATA_SIZE MEM_BRISC_LOCAL_SIZE
@@ -149,6 +158,29 @@ SECTIONS
       __device_print_strings_info_start = .;
       KEEP(*(.device_print_strings_info))
       __device_print_strings_info_end = .;
+    . = ALIGN(4);
+  }
+
+  /* Zone names + __FILE__ strings for the kernel profiler. Mergeable strings, so each distinct
+     string is stored once however many zones reference it. .tt_zone_meta holds VMAs into here,
+     which the host rebases by this section's sh_addr. (INFO) strips SHF_ALLOC, so the section
+     never enters a PT_LOAD and costs no device memory. */
+  .tt_zone_str TT_ZONE_STR_VMA (INFO) :
+  {
+    __tt_zone_str_start = .;
+    KEEP(*(.tt_zone_str))
+    __tt_zone_str_end = .;
+    . = ALIGN(4);
+  }
+
+  /* Zone source locations: a fixed-stride array of 16-byte {zone_id, name_ptr, file_ptr, line}
+     records emitted by TT_ZONE_DEFINE_ID (hostdev/profiler_zone_id.h), which the host walks
+     by that stride. (INFO) for the same reason as above. */
+  .tt_zone_meta TT_ZONE_META_VMA (INFO) :
+  {
+    __tt_zone_meta_start = .;
+    KEEP(*(.tt_zone_meta))
+    __tt_zone_meta_end = .;
     . = ALIGN(4);
   }
 

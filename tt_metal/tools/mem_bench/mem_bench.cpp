@@ -199,10 +199,7 @@ TestResult mem_bench_copy_with_active_kernel(benchmark::State& state) {
 
         double wait_for_kernel_time = execute_work_synced_start(
             1,
-            [device, &pgm](int /*thread_idx*/) {
-                // Program
-                LaunchProgram(*device, std::move(pgm), true);
-            },
+            [device, &pgm](int /*thread_idx*/) { LaunchProgram(*device, std::move(pgm)); },
             [&]() {
                 if (ctx.enable_host_copy_with_kernels) {
                     // Host copy while waiting for program
@@ -263,10 +260,7 @@ TestResult mem_bench_copy_active_kernel_different_page(benchmark::State& state) 
 
         double wait_for_kernel_time = execute_work_synced_start(
             1,
-            [device, &pgm](int /*thread_idx*/) {
-                // Program
-                LaunchProgram(*device, std::move(pgm), true);
-            },
+            [device, &pgm](int /*thread_idx*/) { LaunchProgram(*device, std::move(pgm)); },
             [&]() {
                 // Host copy while waiting for program
                 host_copy_time =
@@ -308,12 +302,12 @@ TestResult mem_bench_multi_mmio_devices(
                      .value()});
         }
 
+        std::vector<distributed::MeshWorkload> workloads;
         execute_work_synced_start(
             1,
-            [devices, &programs](int /*thread_idx*/) {
-                // Program
+            [devices, &programs, &workloads](int /*thread_idx*/) {
                 for (auto& [device_id, pgm] : programs) {
-                    LaunchProgram(*devices.at(device_id), std::move(pgm), false);
+                    workloads.push_back(LaunchProgramAsync(*devices.at(device_id), std::move(pgm)));
                 }
             },
             []() {});
@@ -420,10 +414,7 @@ TestResult mem_bench_copy_with_read_and_write_kernel(benchmark::State& state) {
 
         double wait_for_kernel_time = execute_work_synced_start(
             1,
-            [device, &pgm](int /*thread_idx*/) {
-                // Program
-                LaunchProgram(*device, std::move(pgm), true);
-            },
+            [device, &pgm](int /*thread_idx*/) { LaunchProgram(*device, std::move(pgm)); },
             [&]() {
                 // Host copy while waiting for program
                 host_copy_time =

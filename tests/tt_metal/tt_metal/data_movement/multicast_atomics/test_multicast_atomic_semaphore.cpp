@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "multi_device_fixture.hpp"
+#include "device_fixture.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "../dm_common.hpp"
 #include <tt-metalium/distributed.hpp>
@@ -214,7 +214,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const Multic
 
 /* ========== TEST CASES ========== */
 
-TEST_F(GenericMeshDeviceFixture, MulticastAtomicSingleSource) {
+TEST_F(UnitMeshFastDispatchFixture, MulticastAtomicSingleSource) {
     uint32_t test_id = 342;
 
     auto mesh_device = get_mesh_device();
@@ -237,7 +237,7 @@ TEST_F(GenericMeshDeviceFixture, MulticastAtomicSingleSource) {
     EXPECT_TRUE(unit_tests::dm::multicast_atomics::run_dm(mesh_device, config));
 }
 
-TEST_F(GenericMeshDeviceFixture, MulticastAtomicMultiSource) {
+TEST_F(UnitMeshFastDispatchFixture, MulticastAtomicMultiSource) {
     uint32_t test_id = 343;
 
     auto mesh_device = get_mesh_device();
@@ -260,7 +260,7 @@ TEST_F(GenericMeshDeviceFixture, MulticastAtomicMultiSource) {
     EXPECT_TRUE(unit_tests::dm::multicast_atomics::run_dm(mesh_device, config));
 }
 
-TEST_F(GenericMeshDeviceFixture, MulticastAtomicSingleSourceNOC1) {
+TEST_F(UnitMeshFastDispatchFixture, MulticastAtomicSingleSourceNOC1) {
     uint32_t test_id = 344;
 
     auto mesh_device = get_mesh_device();
@@ -283,7 +283,7 @@ TEST_F(GenericMeshDeviceFixture, MulticastAtomicSingleSourceNOC1) {
     EXPECT_TRUE(unit_tests::dm::multicast_atomics::run_dm(mesh_device, config));
 }
 
-TEST_F(GenericMeshDeviceFixture, MulticastAtomicMultiSourceNOC1) {
+TEST_F(UnitMeshFastDispatchFixture, MulticastAtomicMultiSourceNOC1) {
     uint32_t test_id = 345;
 
     auto mesh_device = get_mesh_device();
@@ -306,7 +306,7 @@ TEST_F(GenericMeshDeviceFixture, MulticastAtomicMultiSourceNOC1) {
     EXPECT_TRUE(unit_tests::dm::multicast_atomics::run_dm(mesh_device, config));
 }
 
-TEST_F(GenericMeshDeviceFixture, MulticastAtomicLargerIncrement) {
+TEST_F(UnitMeshFastDispatchFixture, MulticastAtomicLargerIncrement) {
     uint32_t test_id = 346;
 
     auto mesh_device = get_mesh_device();
@@ -331,7 +331,7 @@ TEST_F(GenericMeshDeviceFixture, MulticastAtomicLargerIncrement) {
     EXPECT_TRUE(unit_tests::dm::multicast_atomics::run_dm(mesh_device, config));
 }
 
-TEST_F(GenericMeshDeviceFixture, MulticastAtomicLargerIncrementNOC1) {
+TEST_F(UnitMeshFastDispatchFixture, MulticastAtomicLargerIncrementNOC1) {
     uint32_t test_id = 347;
 
     auto mesh_device = get_mesh_device();
@@ -358,7 +358,7 @@ TEST_F(GenericMeshDeviceFixture, MulticastAtomicLargerIncrementNOC1) {
 
 /* ========== NOC 2.0 API TEST CASES ========== */
 
-TEST_F(GenericMeshDeviceFixture, MulticastAtomicSingleSource_2_0) {
+TEST_F(UnitMeshFastDispatchFixture, MulticastAtomicSingleSource_2_0) {
     uint32_t test_id = 348;
 
     auto mesh_device = get_mesh_device();
@@ -382,7 +382,7 @@ TEST_F(GenericMeshDeviceFixture, MulticastAtomicSingleSource_2_0) {
     EXPECT_TRUE(unit_tests::dm::multicast_atomics::run_dm(mesh_device, config));
 }
 
-TEST_F(GenericMeshDeviceFixture, MulticastAtomicLargerIncrement_2_0) {
+TEST_F(UnitMeshFastDispatchFixture, MulticastAtomicLargerIncrement_2_0) {
     uint32_t test_id = 349;
 
     auto mesh_device = get_mesh_device();
@@ -408,7 +408,7 @@ TEST_F(GenericMeshDeviceFixture, MulticastAtomicLargerIncrement_2_0) {
     EXPECT_TRUE(unit_tests::dm::multicast_atomics::run_dm(mesh_device, config));
 }
 
-TEST_F(GenericMeshDeviceFixture, MulticastAtomicMultiSource_2_0) {
+TEST_F(UnitMeshFastDispatchFixture, MulticastAtomicMultiSource_2_0) {
     uint32_t test_id = 350;
 
     auto mesh_device = get_mesh_device();
@@ -432,7 +432,7 @@ TEST_F(GenericMeshDeviceFixture, MulticastAtomicMultiSource_2_0) {
     EXPECT_TRUE(unit_tests::dm::multicast_atomics::run_dm(mesh_device, config));
 }
 
-TEST_F(GenericMeshDeviceFixture, MulticastAtomicSingleSourceNOC1_2_0) {
+TEST_F(UnitMeshFastDispatchFixture, MulticastAtomicSingleSourceNOC1_2_0) {
     uint32_t test_id = 351;
 
     auto mesh_device = get_mesh_device();
@@ -456,7 +456,7 @@ TEST_F(GenericMeshDeviceFixture, MulticastAtomicSingleSourceNOC1_2_0) {
     EXPECT_TRUE(unit_tests::dm::multicast_atomics::run_dm(mesh_device, config));
 }
 
-TEST_F(GenericMeshDeviceFixture, MulticastAtomicMultiSourceNOC1_2_0) {
+TEST_F(UnitMeshFastDispatchFixture, MulticastAtomicMultiSourceNOC1_2_0) {
     uint32_t test_id = 352;
 
     auto mesh_device = get_mesh_device();
@@ -480,7 +480,7 @@ TEST_F(GenericMeshDeviceFixture, MulticastAtomicMultiSourceNOC1_2_0) {
     EXPECT_TRUE(unit_tests::dm::multicast_atomics::run_dm(mesh_device, config));
 }
 
-TEST_F(GenericMeshDeviceFixture, MulticastAtomicLargerIncrementNOC1_2_0) {
+TEST_F(UnitMeshFastDispatchFixture, MulticastAtomicLargerIncrementNOC1_2_0) {
     uint32_t test_id = 353;
 
     auto mesh_device = get_mesh_device();

@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+from dataclasses import dataclass
 from typing import Optional
 
 from loguru import logger
@@ -33,6 +34,25 @@ CCL_NUM_BUFFERS_PER_CHANNEL = 2
 _tt_ccl_cache: dict[int, "TT_CCL"] = {}
 
 
+@dataclass(frozen=True)
+class SparseMlaOverlapResources:
+    profile: str
+    manager_id: object
+    topk_subdevice_id: ttnn.SubDeviceId
+    gather_subdevice_id: ttnn.SubDeviceId
+    topk_core_grid: ttnn.CoreRangeSet
+    gather_core_grid: ttnn.CoreRangeSet
+    ready_semaphore: object
+    data_valid_semaphore: object
+
+
+_SPARSE_MLA_OVERLAP_PROFILE_GRIDS = {
+    "galaxy_80_40": (12, 10),
+    "loudbox_80_40": (12, 10),
+    "qb2_80_30": (11, 10),
+}
+
+
 def get_tt_ccl(mesh_device: ttnn.MeshDevice) -> "TT_CCL":
     """Get or create TT_CCL for mesh_device (cached per device id)."""
     mesh_id = mesh_device.id()
@@ -42,7 +62,9 @@ def get_tt_ccl(mesh_device: ttnn.MeshDevice) -> "TT_CCL":
 
 
 def clear_tt_ccl_cache():
-    """Clear cache (for testing)."""
+    """Release registered sparse-MLA managers, then clear the cache (for testing)."""
+    for tt_ccl in _tt_ccl_cache.values():
+        tt_ccl.release_sparse_mla_overlap_manager()
     _tt_ccl_cache.clear()
 
 
@@ -142,6 +164,113 @@ class TT_CCL:
         # Persistent ring-indexer gathered-K scratch buffers shared by every layer's DSA indexer,
         # keyed by shape signature. See get_indexer_ring_k_buffer.
         self.indexer_ring_k_buffers: dict[tuple, "ttnn.Tensor"] = {}
+
+        # One model-wide sparse-MLA overlap manager and external high-BW-gather semaphore pair.
+        # Full-indexer layers execute serially, so they reuse the same resources. The pair belongs
+        # exclusively to the SP KV-prefix gather branch and is never shared with the TP index gather.
+        self.sparse_mla_overlap_resources: SparseMlaOverlapResources | None = None
+
+    def get_sparse_mla_overlap_resources(self, profile: str) -> SparseMlaOverlapResources:
+        """Create or return the exact 80/40 production or 80/30 QB2 overlap profile.
+
+        Resource creation happens outside the hot forward path. Semaphore allocation is followed by a
+        mesh-wide synchronization so every participating device observes the zero initialization before
+        the first Fabric atomic increment.
+        """
+        profile = profile.lower()
+        if profile == "auto":
+            grid = self.mesh_device.compute_with_storage_grid_size()
+            profile = {
+                (11, 10): "qb2_80_30",
+                (12, 10): "loudbox_80_40",
+            }.get((grid.x, grid.y))
+            if profile is None:
+                raise ValueError(
+                    "automatic sparse MLA overlap requires an 11x10 QB2 or 12x10 "
+                    f"LoudBox/Galaxy Tensix grid, got {grid.x}x{grid.y}"
+                )
+        if profile not in _SPARSE_MLA_OVERLAP_PROFILE_GRIDS:
+            raise ValueError(
+                f"unknown sparse MLA overlap profile {profile!r}; expected one of "
+                f"{sorted(_SPARSE_MLA_OVERLAP_PROFILE_GRIDS)}"
+            )
+        existing = self.sparse_mla_overlap_resources
+        if existing is not None:
+            if existing.profile != profile:
+                raise ValueError(
+                    f"mesh already owns sparse MLA overlap profile {existing.profile!r}; "
+                    f"cannot also create {profile!r}"
+                )
+            return existing
+
+        grid = self.mesh_device.compute_with_storage_grid_size()
+        expected_grid = _SPARSE_MLA_OVERLAP_PROFILE_GRIDS[profile]
+        if (grid.x, grid.y) != expected_grid:
+            raise ValueError(
+                f"sparse MLA overlap profile {profile!r} requires a {expected_grid[0]}x{expected_grid[1]} "
+                f"Tensix grid, got {grid.x}x{grid.y}"
+            )
+
+        topk_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 9))])
+        gather_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(8, 0), ttnn.CoreCoord(grid.x - 1, 9))])
+        assert topk_core_grid.num_cores() == 80
+        expected_gather_cores = 40 if grid.x == 12 else 30
+        assert gather_core_grid.num_cores() == expected_gather_cores
+
+        manager_id = self.mesh_device.create_sub_device_manager(
+            [ttnn.SubDevice([topk_core_grid]), ttnn.SubDevice([gather_core_grid])],
+            0,
+        )
+        try:
+            l1_small_view = ttnn.get_memory_view(self.mesh_device, ttnn.BufferType.L1_SMALL)
+            semaphore_buffer_type = (
+                ttnn.BufferType.L1_SMALL if l1_small_view.total_bytes_per_bank > 0 else ttnn.BufferType.L1
+            )
+            ready_semaphore = ttnn.create_global_semaphore(self.mesh_device, gather_core_grid, 0, semaphore_buffer_type)
+            data_valid_semaphore = ttnn.create_global_semaphore(
+                self.mesh_device, gather_core_grid, 0, semaphore_buffer_type
+            )
+            ttnn.synchronize_device(self.mesh_device)
+        except Exception:
+            self.mesh_device.remove_sub_device_manager(manager_id)
+            raise
+
+        resources = SparseMlaOverlapResources(
+            profile=profile,
+            manager_id=manager_id,
+            topk_subdevice_id=ttnn.SubDeviceId(0),
+            gather_subdevice_id=ttnn.SubDeviceId(1),
+            topk_core_grid=topk_core_grid,
+            gather_core_grid=gather_core_grid,
+            ready_semaphore=ready_semaphore,
+            data_valid_semaphore=data_valid_semaphore,
+        )
+        self.sparse_mla_overlap_resources = resources
+        logger.info(
+            f"Sparse MLA overlap profile {profile}: top-k={topk_core_grid.num_cores()} cores, "
+            f"KV gather={gather_core_grid.num_cores()} cores"
+        )
+        return resources
+
+    def reset_sparse_mla_overlap_semaphores(self) -> None:
+        """Drain and restore caller-owned gather semaphores after an aborted overlap region."""
+        resources = self.sparse_mla_overlap_resources
+        if resources is None:
+            return
+        ttnn.synchronize_device(self.mesh_device)
+        ttnn.reset_global_semaphore_value(resources.ready_semaphore, 0)
+        ttnn.reset_global_semaphore_value(resources.data_valid_semaphore, 0)
+        ttnn.synchronize_device(self.mesh_device)
+
+    def release_sparse_mla_overlap_manager(self) -> None:
+        """Idempotently drain, reset, and unregister sparse-MLA overlap resources before mesh close."""
+        resources = self.sparse_mla_overlap_resources
+        if resources is None:
+            return
+        self.mesh_device.clear_loaded_sub_device_manager()
+        self.reset_sparse_mla_overlap_semaphores()
+        self.mesh_device.remove_sub_device_manager(resources.manager_id)
+        self.sparse_mla_overlap_resources = None
 
     def get_mla_ring_attention_buffers(
         self,

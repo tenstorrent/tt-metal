@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "multi_device_fixture.hpp"
 #include "device_fixture.hpp"
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
@@ -189,7 +188,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const DramSh
 }  // namespace unit_tests::dm::dram_sharded
 
 /* ========== Directed Ideal Test Case; Test id = 84 ========== */
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMShardedReadDirectedIdeal) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementDRAMShardedReadDirectedIdeal) {
     auto mesh_device = get_mesh_device();
     const uint32_t test_id = 84;
 
@@ -217,7 +216,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMShardedReadDirectedIdeal)
 }
 
 /* ========== Sweep over varying number of tiles per DRAM bank; Test id = 85 ========== */
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMShardedReadTileNumbers) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementDRAMShardedReadTileNumbers) {
     auto mesh_device = get_mesh_device();
 
     // Parameters
@@ -250,7 +249,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMShardedReadTileNumbers) {
 }
 
 /* ========== Sweep over varying number of DRAM banks; Test id = 86 ========== */
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMShardedReadBankNumbers) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementDRAMShardedReadBankNumbers) {
     auto mesh_device = get_mesh_device();
 
     // Parameters
@@ -283,7 +282,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMShardedReadBankNumbers) {
 }
 
 /* ========== Directed Ideal Test Case with Transaction IDs; Test id = 87 ========== */
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMShardedReadTridDirectedIdeal) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementDRAMShardedReadTridDirectedIdeal) {
     auto mesh_device = get_mesh_device();
 
     // Parameters
@@ -311,7 +310,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMShardedReadTridDirectedId
     EXPECT_TRUE(run_dm(mesh_device, test_config));
 }
 
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMShardedReadDirectedIdeal2_0) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementDRAMShardedReadDirectedIdeal2_0) {
     auto mesh_device = get_mesh_device();
 
     DataFormat l1_data_format = DataFormat::Float16_b;
@@ -336,7 +335,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMShardedReadDirectedIdeal2
     EXPECT_TRUE(run_dm(mesh_device, test_config));
 }
 
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMShardedReadTileNumbers2_0) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementDRAMShardedReadTileNumbers2_0) {
     auto mesh_device = get_mesh_device();
 
     // Parameters
@@ -372,7 +371,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMShardedReadTileNumbers2_0
     }
 }
 
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMShardedReadBankNumbers2_0) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementDRAMShardedReadBankNumbers2_0) {
     auto mesh_device = get_mesh_device();
 
     DataFormat l1_data_format = DataFormat::Float16_b;
@@ -403,7 +402,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMShardedReadBankNumbers2_0
     }
 }
 
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMShardedReadTridDirectedIdeal_2_0) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementDRAMShardedReadTridDirectedIdeal_2_0) {
     auto mesh_device = get_mesh_device();
 
     // Parameters

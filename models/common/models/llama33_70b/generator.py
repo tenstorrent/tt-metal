@@ -75,6 +75,7 @@ class Llama33_70BGenerator:
         "supports_prefix_caching": True,
         "supports_async_decode": True,
         "supports_sample_on_device": True,
+        "max_device_top_k": 32,
         "accepts_trace_mode": True,
     }
     requires_prefill_trace_warmup = True
@@ -447,6 +448,7 @@ def _build_vllm_adapter(lane) -> VLLMAdapter:
             expected_kv_heads_per_device=kv_heads_per_device,
             expected_head_dim=head_dim,
             model_kv_cache_dtype=model_kv_cache_dtypes,
+            request_state_fields=lane._request_state_fields,
         )
     )
 

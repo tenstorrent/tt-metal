@@ -36,7 +36,7 @@ ProgramDescriptor ConcatBlockShardedProgramFactory::create_descriptor(
 
     const uint32_t rank = input_tensors[0].logical_shape().rank();
     // ConcatBlockShardedProgramFactory supports concat only on the last two dims (H, W)
-    const bool is_width_concat = dim == rank - 1;
+    const bool width_concat = is_width_concat(rank, dim);
 
     ProgramDescriptor desc;
 
@@ -196,7 +196,7 @@ ProgramDescriptor ConcatBlockShardedProgramFactory::create_descriptor(
             const uint32_t sh = row_major_orient ? gy : gx;  // shard height index
             const uint32_t sw = row_major_orient ? gx : gy;  // shard width index
 
-            if (is_width_concat) {
+            if (width_concat) {
                 const uint32_t out_col_start = sw * output_shard_w;
                 const uint32_t out_col_end = out_col_start + output_shard_w;
                 const uint32_t num_rows_units = to_units_h(output_shard_h);

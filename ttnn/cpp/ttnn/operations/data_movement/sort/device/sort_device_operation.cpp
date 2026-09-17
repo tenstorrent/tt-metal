@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <bit>
+
 #include "sort_device_operation.hpp"
 #include "tt_stl/assert.hpp"
 #include "ttnn/device_operation.hpp"
@@ -82,6 +84,16 @@ void SortDeviceOperation::validate_on_program_cache_miss(
         "Operation requires input to be on Device. Input storage type: {}",
         static_cast<int>(input.storage_type()));
 
+    // The index-aware comparator network only exists in the WH/BH LLKs (the Quasar LLK
+    // static_asserts it off), and the CrossCore factory compiles it for BOTH stabilities.
+    // Reject other architectures here so the caller gets an actionable error instead of a
+    // kernel JIT failure.
+    const auto arch = input.device()->arch();
+    TT_FATAL(
+        arch == tt::ARCH::WORMHOLE_B0 || arch == tt::ARCH::BLACKHOLE,
+        "Sort is not supported on {}: the sort LLK network is only implemented on Wormhole and Blackhole",
+        arch);
+
     TT_FATAL(input_pshape.rank() == 4, "Input shape must be 4D, got {}", input_pshape.rank());
 
     const int8_t rank = static_cast<int8_t>(input_pshape.rank());
@@ -107,13 +119,19 @@ void SortDeviceOperation::validate_on_program_cache_miss(
     // select_program_factory routes UINT16 with Wt > SORT_WT_THRESHOLD to
     // MultiCore to work around that.
 
-    // Width must be a multiple of 64 regardless of layout.
+    // Width must be a power of two >= 64 regardless of layout: the bitonic
+    // engines have no j < Wt partner guard and truncate log2(Wt), so a
+    // non-power-of-two width (e.g. 192 — a multiple of 64) silently produces
+    // garbage rather than failing. The public ttnn.sort composite always pads
+    // the sort dim to the next power of two >= 64 with +/-inf sentinels, so
+    // this only rejects direct prim calls.
     // For TILE the relevant dimension is the padded width; for ROW_MAJOR it is
     // the logical width (padding was already applied in pre_sort_transform_tensor).
     const uint32_t checked_w = is_row_major ? input_lshape[-1] : input_pshape[-1];
     TT_FATAL(
-        checked_w % 64 == 0,
-        "Input shape inner dim {} must be a multiple of 64, pad with +/-infinity if necessary",
+        checked_w >= 64 && std::has_single_bit(checked_w),
+        "Input shape inner dim {} must be a power of two >= 64. Use ttnn.sort, which pads the sort dimension "
+        "with +/-infinity to the next power of two.",
         checked_w);
 
     // Height constraint: the kernel always works on TILE_HEIGHT (32) row groups.
@@ -121,6 +139,13 @@ void SortDeviceOperation::validate_on_program_cache_miss(
     // For ROW_MAJOR layout: pre_sort_transform_tensor in sort.cpp pads the H
     //   dimension automatically, so combined_h is always a multiple of 32 here.
     const uint32_t combined_h = input_pshape[0] * input_pshape[1] * input_pshape[2];
+    // Empty tensors must not reach a program factory: a factory that derives
+    // its work split from the row count would divide by zero, and the rest
+    // would build zero-work programs.
+    TT_FATAL(
+        combined_h > 0,
+        "Sort device op requires a non-empty input tensor (shape[0]*shape[1]*shape[2] must be > 0), got shape {}.",
+        input_pshape);
     TT_FATAL(
         combined_h % tt::constants::TILE_HEIGHT == 0,
         "Input combined height (shape[0]*shape[1]*shape[2] = {}) must be a multiple of 32.",

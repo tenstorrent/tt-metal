@@ -74,7 +74,7 @@ TEST_F(UnitMeshFixture, Tensor_Padding_Violation_SanityCheck) {
 
     // 3. The emulator should intercept the illegal write inside l1_ptr
     EXPECT_DEATH(
-        LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true),
+        LaunchProgram(this->device(), std::move(program)),
         ".*Tensor Padding Violation: Attempted to write to a padded memory region at address 0x.*");
 }
 

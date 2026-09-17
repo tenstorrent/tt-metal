@@ -58,11 +58,6 @@ void kernel_main() {
     copy_init(dfb_eff_a.get_id());
 
     for (uint32_t tile_id = 0; tile_id < num_tiles; ++tile_id) {
-        // Each broadcast block below retargets the packer at its broadcast CB and must hand it back
-        // to dfb_out: pack data format is sticky packer state, and the broadcast CBs carry the input
-        // dtypes while dfb_out carries the output dtype, which differ whenever a preallocated output
-        // tensor changes it. The unpack formats need no matching restore -- is_llk_bcast() admits
-        // this path only when all three inputs share one dtype, so every unpack source agrees.
 #if BCAST_A
         {
             dfb_pre_a.wait_front(num_tiles_per_cycle);
@@ -81,8 +76,6 @@ void kernel_main() {
             tile_regs_release();
 
             dfb_pre_a.pop_front(num_tiles_per_cycle);
-            pack_reconfig_data_format(/*old*/ dfb_bcast_a.get_id(), /*new*/ dfb_out.get_id());
-            PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(dfb_out.get_id())));
         }
 #endif
 
@@ -104,8 +97,6 @@ void kernel_main() {
             tile_regs_release();
 
             dfb_pre_b.pop_front(num_tiles_per_cycle);
-            pack_reconfig_data_format(/*old*/ dfb_bcast_b.get_id(), /*new*/ dfb_out.get_id());
-            PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(dfb_out.get_id())));
         }
 #endif
 
@@ -127,8 +118,6 @@ void kernel_main() {
             tile_regs_release();
 
             dfb_pre_c.pop_front(num_tiles_per_cycle);
-            pack_reconfig_data_format(/*old*/ dfb_bcast_c.get_id(), /*new*/ dfb_out.get_id());
-            PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(dfb_out.get_id())));
         }
 #endif
 

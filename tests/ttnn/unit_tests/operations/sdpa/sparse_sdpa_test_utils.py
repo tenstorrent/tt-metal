@@ -7,6 +7,7 @@ Correctness uses SMALL parametric shapes (the golden gathers sel[S,k,D]; the ful
 640/2048/56320 shape is ~2.8 GiB and is only exercised by the perf-only test in the nightly suite).
 """
 
+import pytest
 import torch
 
 import ttnn
@@ -15,7 +16,7 @@ import ttnn
 MASKED_INDEX = 0xFFFFFFFF  # sentinel: a masked slot (scores -inf, contributes 0); a contiguous tail per row
 
 
-def sparse_mla(q, kvpe, indices, scale, v_dim):
+def sparse_mla(q, kvpe, indices, scale, v_dim, attention_sink=None):
     """Torch reference for the sparse-MLA prefill op. Absorbed MQA over the top-k selected latents named by
     `indices` (one shared latent KV head); masking is baked into `indices` (index == MASKED_INDEX scores -inf).
     Dims are derived from the inputs; V is the leading `v_dim` cols of the K_DIM-wide kvpe.
@@ -33,7 +34,12 @@ def sparse_mla(q, kvpe, indices, scale, v_dim):
     )
     scores = torch.einsum("bhsd,bsjd->bhsj", q, sel) * scale  # full-K_DIM scores [B,H,S,k]
     scores = scores.masked_fill(masked.view(B, 1, S, k), float("-inf"))
+    if attention_sink is not None:
+        sink_scores = attention_sink.float().expand(B, H, S, 1) * scale
+        scores = torch.cat([scores, sink_scores], dim=-1)
     probs = scores.softmax(dim=-1, dtype=torch.float32).to(q.dtype)
+    if attention_sink is not None:
+        probs = probs[..., :-1]
     return torch.einsum("bhsj,bsjd->bhsd", probs, sel[..., :v_dim])  # weighted sum of V views [B,H,S,v_dim]
 
 
@@ -50,8 +56,8 @@ def make_inputs(H, S, T, TOPK, k_dim, n_valid_fn, seed=0):
     return q, kv, indices
 
 
-def golden(q, kv, indices, scale, v_dim):
-    return sparse_mla(q, kv[0, 0], indices.to(torch.int64), scale, v_dim)  # [1,H,S,v_dim]
+def golden(q, kv, indices, scale, v_dim, attention_sink=None):
+    return sparse_mla(q, kv[0, 0], indices.to(torch.int64), scale, v_dim, attention_sink)  # [1,H,S,v_dim]
 
 
 def to_dev(t, device, dtype):
@@ -98,3 +104,20 @@ def run_op(
 
 def pcc(out, golden_t):
     return torch.corrcoef(torch.stack([out.flatten().float(), golden_t.flatten().float()]))[0, 1].item()
+
+
+# DeepSeek-V4 CSA geometries, shared by correctness, determinism, and performance tests.
+ATTENTION_SINK_SHAPES = [
+    pytest.param(128, 4, 128, 64, 32, id="small-boundaries"),
+    pytest.param(64, 640, 128 + 512, 512, 128, id="v4-flash-full-selection"),
+    pytest.param(128, 640, 128 + 1024, 512, 128, id="v4-pro-full-selection"),
+]
+
+
+def make_attention_sink_inputs(H, S, TOPK, dim):
+    # Keep the boundary smoke's partial chunks; CSA cases use every selected key.
+    q, kv, indices = make_inputs(H, S, 2 * TOPK, TOPK, dim, lambda s: [1, 31, 65, TOPK][s] if S == 4 else TOPK)
+    scale = dim**-0.5
+    # Span negligible to dominant sinks in the scaled-logit domain for every head dimension.
+    sink = (torch.linspace(-4, 8, H) / scale).reshape(1, 1, 1, H).to(torch.bfloat16)
+    return q.to(torch.bfloat16), kv.to(torch.bfloat16), indices, sink, scale

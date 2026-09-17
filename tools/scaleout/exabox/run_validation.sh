@@ -97,7 +97,7 @@ HOSTS=""
 DOCKER_IMAGE=""
 # Default image used when --image is omitted (or passed with no value). Bump to the current
 # last-known-good tag as needed (see tools/scaleout/exabox/README.md).
-DOCKER_IMAGE_DEFAULT="ghcr.io/tenstorrent/tt-metal/upstream-tests-bh-glx:v0.66.0-dev20260115-28-g6eccf7061a"
+DOCKER_IMAGE_DEFAULT="ghcr.io/tenstorrent/tt-metal/upstream-tests-bh-glx:v0.79.0-dev20260903-20-gcc9c295fdf0"
 SKIP_VERSION_CHECK=false
 CABLING_DESCRIPTOR_PATH="/data/scaleout_configs/bh_glx_exabox/cabling_descriptor.textproto"
 DEPLOYMENT_DESCRIPTOR_PATH="/data/scaleout_configs/bh_glx_exabox/deployment_descriptor.textproto"

@@ -23,7 +23,7 @@ void compare_requested_and_actual_capabilities(
 
     switch (arch) {
         case tt::ARCH::BLACKHOLE: {
-            constexpr tt::umd::semver_t k_min_2_erisc_version(1, 7, 0);
+            constexpr tt::umd::SemVer k_min_2_erisc_version(1, 7, 0);
             // If ethernet firmware cannot be queried assume it's ok
             // This occurs on the simulator
             const bool eth_fw_ok = !fw_versions.eth_fw || (fw_versions.eth_fw.value() >= k_min_2_erisc_version);

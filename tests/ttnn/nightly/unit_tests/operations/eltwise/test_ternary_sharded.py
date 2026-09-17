@@ -1739,5 +1739,5 @@ def test_ternary_sharded_program_cache_sequence(device):
         out_torch = ttnn.to_torch(out)
         golden = torch.where(torch_pred.bool(), torch_true, torch_false)
         golden = golden.to(out_torch.dtype)
-        assert_with_ulp(out_torch, golden)
+        assert_with_ulp(expected_result=golden, actual_result=out_torch)
     assert device.num_program_cache_entries() == 2

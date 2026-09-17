@@ -12,7 +12,7 @@
 namespace tt::tt_metal {
 
 struct FirmwareVersions {
-    std::optional<tt::umd::semver_t> eth_fw;
+    std::optional<tt::umd::SemVer> eth_fw;
     std::optional<tt::umd::FirmwareBundleVersion> firmware_bundle;
 };
 

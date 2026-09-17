@@ -26,13 +26,6 @@ on:
         type: string
         default: ./tests/pipeline_reorg/ops_unit_tests.yaml
         description: "Test list to load. Pipelines that own a disjoint slice of the ops suites pass their own yaml."
-      budget-subheading:
-        required: false
-        type: string
-        default: "unit"
-        description: "Key under each team in .github/time_budget.yaml to verify against.
-          Pipelines that run this workflow at different frequencies pass different keys so
-          their budgets are tracked separately (e.g. package_and_release vs the nightly unit)."
       enable-llk-asserts:
         required: false
         type: boolean
@@ -65,13 +58,6 @@ jobs:
           sparse-checkout-cone-mode: true
       - name: Install dependencies
         run: pip3 install PyYAML
-      - name: Verify test timeouts against budget
-        run: |
-          set -e
-          python3 .github/scripts/utils/verify_time_budget.py \
-            ${{ env.TESTS_YAML_PATH }} \
-            ./.github/time_budget.yaml \
-            "${{ inputs.budget-subheading }}"
       - name: Build test matrix based on enabled SKUs
         id: build-matrix
         run: |

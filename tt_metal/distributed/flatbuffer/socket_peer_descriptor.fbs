@@ -39,6 +39,12 @@ table SocketPeerDescriptor {
     config_buffer_address: uint64;
     data_buffer_address: uint64;
     exchange_tag: uint32;
+    // Fabric chip id of THIS endpoint's core for each connection, in socket_connections order,
+    // resolved from the sender's own device handle. The peer uses these instead of re-deriving the
+    // chip from a coord: that derivation assumes a submesh starts at its owning rank's host slice,
+    // which is false when a submesh is shared by several ranks. Appended last, so a peer that does
+    // not send it still deserializes (the reader falls back to the old derivation).
+    local_chip_ids: [uint32];
 }
 
 root_type SocketPeerDescriptor;

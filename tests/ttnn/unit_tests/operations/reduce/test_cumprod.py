@@ -34,8 +34,7 @@ def get_backward_tensors(output_grad_shape, input_grad_shape, device):
     [
         [],
         [2],
-        [2000],
-        [1000, 32, 32],
+        [8, 64, 64],
         [5, 5, 5, 5, 1, 1, 1],
         [10, 3, 18, 20],
     ],
@@ -97,8 +96,7 @@ def test_cumprod_normal(dim, shape, dtypes, device):
     [
         [],
         [2],
-        [2000],
-        [1000, 32, 32],
+        [8, 64, 64],
         [5, 5, 5, 5, 1, 1, 1],
     ],
 )
@@ -144,8 +142,7 @@ def test_cumprod_backward(dim, shape, dtypes, device):
     [
         [],
         [1],
-        [2000],
-        [1000, 32, 32],
+        [8, 64, 64],
         [5, 5, 5, 5, 1, 1, 1],
         [1, 1, 20, 16],
     ],

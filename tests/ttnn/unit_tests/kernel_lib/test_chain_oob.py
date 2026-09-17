@@ -1,0 +1,279 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+"""
+Out-of-bounds / boundary tests for eltwise_chain.
+
+DST-capacity cases: the helper static_asserts every element's DEST slot against DEST_AUTO_LIMIT,
+which depends on the compute config:
+
+    sync mode      bf16 (fp32_acc off)    fp32 (fp32_acc on)
+    half-sync             8                       4
+    full-sync           16                       8
+
+So a slot legal in one config is over-limit in another. Each test pins (slot, dst_full_sync_en,
+fp32_dest_acc_en) and asserts either a legal slot compiles + reproduces the input, or an over-limit
+slot FAILS to compile with "DEST slot exceeds DEST_AUTO_LIMIT" (surfaced as a generic_op exception).
+"""
+
+import pytest
+import torch
+import ttnn
+from loguru import logger
+import tests.ttnn.unit_tests.kernel_lib.chain_test_lib as lib
+
+KERNEL = "ttnn/cpp/ttnn/kernel_lib/tests/eltwise/chain/oob/dst_slot.cpp"
+DST_OVERFLOW_MSG = "DEST slot exceeds"
+
+
+def _run_identity_copy(device, slot, num_tiles, fp32_dest_acc_en, dst_full_sync_en, host_input=None):
+    """Build + run the dst_slot identity-copy chain. Returns (golden, output) torch tensors."""
+    shape = [1, 1, 32, 32 * num_tiles]
+    dt = ttnn.bfloat16
+    core_grid = lib.single_core_grid()
+
+    if host_input is None:
+        torch_in, tt_in = lib.make_input(shape, dt, device, seed=101)
+    else:
+        assert tuple(host_input.shape) == tuple(shape)
+        torch_in = host_input.to(torch.bfloat16)
+        tt_in = ttnn.from_torch(
+            torch_in, dtype=dt, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+    tt_out = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), dt, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG)
+    cbs = [
+        lib.cb_descriptor(0, dt, 2, core_grid),
+        lib.cb_descriptor(16, dt, 2, core_grid),
+    ]
+    reader = lib.build_reader_kernel([tt_in], num_tiles, core_grid)
+    writer = lib.build_writer_1out_kernel(tt_out, num_tiles, core_grid)
+    compute = lib.build_compute_kernel(
+        KERNEL,
+        compile_time_args=[num_tiles, slot],
+        core_grid=core_grid,
+        fp32_dest_acc_en=fp32_dest_acc_en,
+        dst_full_sync_en=dst_full_sync_en,
+    )
+    program = ttnn.ProgramDescriptor(kernels=[reader, writer, compute], semaphores=[], cbs=cbs)
+    output = ttnn.generic_op([tt_in, tt_out], program)
+    return torch_in.to(torch.float32), ttnn.to_torch(output).to(torch.float32)
+
+
+# =============================================================================
+# Positive twin — a legal slot compiles, runs, and copies the input exactly.
+# =============================================================================
+def test_dst_slot3_legal_fp32(device):
+    """D3 is the highest legal half-sync FP32 slot, providing the positive twin for FP32 overflow."""
+    golden, out = _run_identity_copy(device, slot=3, num_tiles=4, fp32_dest_acc_en=True, dst_full_sync_en=False)
+    assert torch.equal(golden, out)
+
+
+def test_dst_slot7_legal_bf16(device):
+    """D7 is the highest legal half-sync BF16 slot (the positive twin for D8 rejection)."""
+    golden, out = _run_identity_copy(device, slot=7, num_tiles=4, fp32_dest_acc_en=False, dst_full_sync_en=False)
+    assert torch.equal(golden, out)
+
+
+def test_zero_tiles_is_a_noop(device):
+    """A zero-tile chain must not touch the caller's input, output, or DFB lifecycle windows."""
+    dt = ttnn.bfloat16
+    physical_shape = [1, 1, 32, 32]
+    core_grid = lib.single_core_grid()
+    torch_in = torch.full(physical_shape, 1.0, dtype=torch.bfloat16)
+    sentinel = torch.full(physical_shape, -0.5, dtype=torch.bfloat16)
+    tt_in = ttnn.from_torch(torch_in, dtype=dt, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_out = ttnn.from_torch(sentinel, dtype=dt, layout=ttnn.TILE_LAYOUT, device=device)
+    program = ttnn.ProgramDescriptor(
+        kernels=[
+            lib.build_reader_kernel([tt_in], 0, core_grid),
+            lib.build_writer_1out_kernel(tt_out, 0, core_grid),
+            lib.build_compute_kernel(KERNEL, [0, 0], core_grid),
+        ],
+        semaphores=[],
+        cbs=[lib.cb_descriptor(0, dt, 1, core_grid), lib.cb_descriptor(16, dt, 1, core_grid)],
+    )
+    out = ttnn.to_torch(ttnn.generic_op([tt_in, tt_out], program)).to(torch.bfloat16)
+    assert torch.equal(out, sentinel)
+
+
+def test_identity_chain_bf16_special_value_contract(device):
+    """BF16 copy/pack canonicalizes NaN to +inf and -0 to +0, while preserving signed infinities."""
+    values = torch.tensor([-0.0, 0.0, float("inf"), float("-inf"), float("nan"), -1.5, 2.0], dtype=torch.bfloat16)
+    host_input = values.repeat((32 * 32 + len(values) - 1) // len(values))[: 32 * 32].reshape(1, 1, 32, 32)
+    _, out = _run_identity_copy(
+        device, slot=0, num_tiles=1, fp32_dest_acc_en=False, dst_full_sync_en=False, host_input=host_input
+    )
+    expected = torch.where(
+        torch.isnan(host_input),
+        torch.full_like(host_input, float("inf")),
+        torch.where(host_input == 0, torch.zeros_like(host_input), host_input),
+    ).to(torch.float32)
+    assert torch.equal(out, expected)
+
+
+# =============================================================================
+# Slot 8 over the half-sync bf16 limit (8). Must fail to compile.
+# =============================================================================
+def test_dst_overflow_halfsync_bf16(device, expect_error):
+    """D8 is not < 8 (half-sync bf16 limit) -> the per-element static_assert must fire."""
+    with expect_error(Exception, DST_OVERFLOW_MSG):
+        _run_identity_copy(device, slot=8, num_tiles=4, fp32_dest_acc_en=False, dst_full_sync_en=False)
+    logger.debug("D8 over half-sync bf16 limit correctly rejected at compile time")
+
+
+# =============================================================================
+# Cross-mode boundary. Slot 5: legal half-sync bf16 (limit 8),
+#          over-limit once fp32_dest_acc shrinks the limit to 4.
+# =============================================================================
+def test_dst_slot5_legal_bf16(device):
+    """Same slot, bf16 half-sync (limit 8): 5 < 8 -> compiles + runs correctly."""
+    golden, out = _run_identity_copy(device, slot=5, num_tiles=4, fp32_dest_acc_en=False, dst_full_sync_en=False)
+    assert torch.equal(golden, out)
+
+
+def test_dst_slot5_overflow_fp32(device, expect_error):
+    """Same slot under fp32_dest_acc (limit 4): 5 is not < 4 -> must fail to compile."""
+    with expect_error(Exception, DST_OVERFLOW_MSG):
+        _run_identity_copy(device, slot=5, num_tiles=4, fp32_dest_acc_en=True, dst_full_sync_en=False)
+    logger.debug("fp32: slot=5 over fp32 half-sync limit (4) correctly rejected")
+
+
+# =============================================================================
+# Runtime block_size clamp. block_size is a runtime IterationShape field, so it
+# can't be static_asserted; the chain clamps it down to chain_max_block_v at runtime
+# so it can NEVER overflow DEST. An over-large block_size
+# must therefore still produce the exact identity copy (clamp only changes loop structure).
+#
+# The chain here is a Bulk + Block reader (block-capable), so block_size is honored. Bulk
+# stages the whole window upfront -> the input CB must hold all n pages.
+# =============================================================================
+BLOCK_KERNEL = "ttnn/cpp/ttnn/kernel_lib/tests/eltwise/chain/oob/block_clamp.cpp"
+
+
+@pytest.mark.parametrize("block_size", [0, 1000], ids=["zero-normalizes-to-one", "oversized-clamps"])
+def test_block_size_clamp_identity(device, block_size):
+    """A zero block size normalizes to one; an oversized value clamps to the DEST limit. Both preserve identity."""
+    n = 16
+    dt = ttnn.bfloat16
+    shape = [1, 1, 32, 32 * n]
+    core_grid = lib.single_core_grid()
+
+    torch_in, tt_in = lib.make_input(shape, dt, device, seed=303)
+    tt_out = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), dt, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG)
+    # Bulk reader/writer stage the full window upfront -> size both CBs for all n tiles.
+    cbs = [lib.cb_descriptor(0, dt, n, core_grid), lib.cb_descriptor(16, dt, n, core_grid)]
+    reader = lib.build_reader_kernel([tt_in], n, core_grid)
+    writer = lib.build_writer_1out_kernel(tt_out, n, core_grid)
+    compute = lib.build_compute_kernel(BLOCK_KERNEL, [n, block_size], core_grid)
+
+    program = ttnn.ProgramDescriptor(kernels=[reader, writer, compute], semaphores=[], cbs=cbs)
+    output = ttnn.generic_op([tt_in, tt_out], program)
+    golden = torch_in.to(torch.float32)
+    out = ttnn.to_torch(output).to(torch.float32)
+    assert torch.equal(golden, out)
+
+
+# =============================================================================
+# Exhaustive classification. An element without a kind tag (CB reader / CB writer /
+# DEST-only) must be rejected at compile time instead of silently no-opping
+# through every chain stage.
+# =============================================================================
+UNCLASSIFIED_KERNEL = "ttnn/cpp/ttnn/kernel_lib/tests/eltwise/chain/oob/unclassified_element.cpp"
+UNCLASSIFIED_MSG = "every element must carry exactly one kind tag"
+
+
+def test_unclassified_element_rejected(device, expect_error):
+    """A tag-less element in the chain must fail to compile, not silently no-op."""
+    num_tiles = 2
+    dt = ttnn.bfloat16
+    shape = [1, 1, 32, 32 * num_tiles]
+    core_grid = lib.single_core_grid()
+
+    torch_in, tt_in = lib.make_input(shape, dt, device, seed=131)
+    tt_out = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), dt, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG)
+    cbs = [lib.cb_descriptor(0, dt, 2, core_grid), lib.cb_descriptor(16, dt, 2, core_grid)]
+    reader = lib.build_reader_kernel([tt_in], num_tiles, core_grid)
+    writer = lib.build_writer_1out_kernel(tt_out, num_tiles, core_grid)
+    compute = lib.build_compute_kernel(UNCLASSIFIED_KERNEL, [num_tiles], core_grid)
+    program = ttnn.ProgramDescriptor(kernels=[reader, writer, compute], semaphores=[], cbs=cbs)
+
+    with expect_error(Exception, UNCLASSIFIED_MSG):
+        ttnn.generic_op([tt_in, tt_out], program)
+    logger.debug("tag-less chain element correctly rejected at compile time")
+
+
+# =============================================================================
+# Shared CB lifecycle and shared-PRNG ownership are compile-time-only contracts.
+# =============================================================================
+SHARED_CB_LIFECYCLE_KERNEL = "ttnn/cpp/ttnn/kernel_lib/tests/eltwise/chain/oob/shared_cb_lifecycle.cpp"
+SHARED_CB_LIFECYCLE_MSG = "staged CB window shares its front"
+PRNG_SEED_KERNEL = "ttnn/cpp/ttnn/kernel_lib/tests/eltwise/chain/oob/prng_seed.cpp"
+PRNG_SEED_MSG = "one shared hardware PRNG"
+RUNTIME_PRNG_KERNEL = "ttnn/cpp/ttnn/kernel_lib/tests/eltwise/chain/oob/runtime_prng.cpp"
+RUNTIME_PRNG_MSG = "non-PRNG DEST-only"
+CONVENIENCE_ARITY_KERNEL = "ttnn/cpp/ttnn/kernel_lib/tests/eltwise/chain/oob/convenience_arity.cpp"
+
+
+def _expect_chain_compile_rejection(device, kernel, compile_time_args, message, with_input):
+    num_tiles = compile_time_args[0]
+    dt = ttnn.bfloat16
+    shape = [1, 1, 32, 32 * num_tiles]
+    core_grid = lib.single_core_grid()
+    tt_out = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), dt, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG)
+    cbs = [lib.cb_descriptor(16, dt, 2, core_grid)]
+    inputs = [tt_out]
+    if with_input:
+        _, tt_in = lib.make_input(shape, dt, device, seed=191)
+        cbs.insert(0, lib.cb_descriptor(0, dt, 2, core_grid))
+        inputs.insert(0, tt_in)
+        reader = lib.build_reader_kernel([tt_in], num_tiles, core_grid)
+    else:
+        reader = None
+    writer = lib.build_writer_1out_kernel(tt_out, num_tiles, core_grid)
+    compute = lib.build_compute_kernel(kernel, compile_time_args, core_grid)
+    kernels = [writer, compute] if reader is None else [reader, writer, compute]
+    program = ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs)
+
+    return inputs, program, message
+
+
+def test_shared_cb_staged_window_rejected_owner_first(device, expect_error):
+    inputs, program, message = _expect_chain_compile_rejection(
+        device, SHARED_CB_LIFECYCLE_KERNEL, [2, 1], SHARED_CB_LIFECYCLE_MSG, with_input=True
+    )
+    with expect_error(Exception, message):
+        ttnn.generic_op(inputs, program)
+
+
+def test_shared_cb_staged_window_rejected_peer_first(device, expect_error):
+    inputs, program, message = _expect_chain_compile_rejection(
+        device, SHARED_CB_LIFECYCLE_KERNEL, [2, 0], SHARED_CB_LIFECYCLE_MSG, with_input=True
+    )
+    with expect_error(Exception, message):
+        ttnn.generic_op(inputs, program)
+
+
+def test_multiple_prng_seeders_rejected(device, expect_error):
+    inputs, program, message = _expect_chain_compile_rejection(
+        device, PRNG_SEED_KERNEL, [2], PRNG_SEED_MSG, with_input=True
+    )
+    with expect_error(Exception, message):
+        ttnn.generic_op(inputs, program)
+
+
+def test_runtime_conditional_prng_seeder_rejected(device, expect_error):
+    inputs, program, message = _expect_chain_compile_rejection(
+        device, RUNTIME_PRNG_KERNEL, [2], RUNTIME_PRNG_MSG, with_input=True
+    )
+    with expect_error(Exception, message):
+        ttnn.generic_op(inputs, program)
+
+
+@pytest.mark.parametrize("mode", [0, 1], ids=["binary-used-as-unary", "unary-used-as-binary"])
+def test_convenience_wrapper_arity_rejected(device, expect_error, mode):
+    inputs, program, message = _expect_chain_compile_rejection(
+        device, CONVENIENCE_ARITY_KERNEL, [2, mode], "DEST operation", with_input=True
+    )
+    with expect_error(Exception, message):
+        ttnn.generic_op(inputs, program)

@@ -48,7 +48,7 @@ void process_loaded_tile_all_h_columns(
         const uint32_t col_offset = is_left_face ? 0 : face_width;
         // Base row-within-tile for this face (bottom faces start at face_height).
         const uint32_t base_row_in_tile = (face_id < 2) ? 0 : face_height;
-        const uint32_t base_global_h = h_tile * ctx.tile_height + base_row_in_tile;
+        const uint32_t base_global_h = (h_tile * ctx.tile_height) + base_row_in_tile;
 
         // Outer loop: column — load accumulator once into a register, scan all rows,
         // store back once.  This matches the register-caching pattern of the width

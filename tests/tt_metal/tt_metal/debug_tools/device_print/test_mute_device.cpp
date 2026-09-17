@@ -42,10 +42,6 @@ protected:
         tt::tt_metal::MetalContext::instance().rtoptions().set_feature_chip_ids(
             tt::llrt::RunTimeDebugFeatureDprint, {});
     }
-    void ExtraTearDown() override {
-        MetalContext::instance()
-            .teardown();  // Teardown dprint server so we can re-init later with all devices enabled again
-    }
 };
 
 namespace {

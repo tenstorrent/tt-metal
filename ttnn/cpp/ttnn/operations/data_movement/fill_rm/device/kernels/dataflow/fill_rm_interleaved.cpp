@@ -6,7 +6,7 @@
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/dataflow_buffer.h"
+#include "api/scratchpad.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
 
@@ -29,25 +29,29 @@ void kernel_main() {
     const auto s0 = TensorAccessor(tensor::out);
 
     // DPRINT("fill_rm_8bank: NC={} H={} W={} fillH={} fillW={}\n", NC, H, W, fillH, fillW);
-    DataflowBuffer dfb_in0(dfb::in0);
-    DataflowBuffer dfb_in1(dfb::in1);
+    Scratchpad<uint16_t> in0(scratch::in0);
+    Scratchpad<uint16_t> in1(scratch::in1);
 
-    dfb_in0.reserve_back(16);
-    dfb_in1.reserve_back(16);
-    std::uint32_t l1_w_addr = dfb_in0.get_write_ptr();
-    std::uint32_t l1_zeros_addr = dfb_in1.get_write_ptr();
     std::uint32_t w;
     for (w = 0; w < fillW; w++) {
-        reinterpret_cast<std::uint16_t*>(l1_w_addr)[w] = val_hi;
+        in0[w] = val_hi;
     }
     for (w = fillW; w < W; w++) {
-        reinterpret_cast<std::uint16_t*>(l1_w_addr)[w] = val_lo;
+        in0[w] = val_lo;
     }
     for (w = 0; w < W; w++) {
-        reinterpret_cast<std::uint16_t*>(l1_zeros_addr)[w] = val_lo;
+        in1[w] = val_lo;
     }
-    dfb_in0.push_back(16);
-    dfb_in1.push_back(16);
+
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+    // Quasar DM: the fills above are CPU stores that land in the RISC's L1 D$/L2, not shared L1, and
+    // the NoC below reads shared L1 directly. Flush the filled range (W bf16 elements = W<<1 bytes)
+    // so the NoC writes see the fills. No-op on WH/BH (CPU stores are coherent to the NoC there and
+    // flush_l2_cache_range is tt-2xx-only). #51763 fixed this for the tt_memmove fallback but not for
+    // direct scratchpad stores like these.
+    flush_l2_cache_range(static_cast<uintptr_t>(in0.get_base_address()), static_cast<size_t>(W << 1));
+    flush_l2_cache_range(static_cast<uintptr_t>(in1.get_base_address()), static_cast<size_t>(W << 1));
+#endif
 
     Noc noc;
     std::uint32_t nch_dst = 0;
@@ -56,10 +60,10 @@ void kernel_main() {
         for (std::uint32_t h = 0; h < H; h++) {
             if (h < fillH) {
                 noc.async_write(
-                    dfb_in0, s0, (W << 1), {.offset_bytes = 0}, {.page_id = nch_dst});  // TODO(AP): segment this write
+                    in0, s0, (W << 1), {.offset_bytes = 0}, {.page_id = nch_dst});  // TODO(AP): segment this write
             } else {
                 noc.async_write(
-                    dfb_in1, s0, (W << 1), {.offset_bytes = 0}, {.page_id = nch_dst});  // TODO(AP): segment this write
+                    in1, s0, (W << 1), {.offset_bytes = 0}, {.page_id = nch_dst});  // TODO(AP): segment this write
             }
             noc.async_write_barrier();
             nch_dst++;

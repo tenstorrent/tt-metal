@@ -13,6 +13,7 @@
 #include "hw/inc/internal/tt-2xx/quasar/dev_mem_map.h"
 #include "impl/context/metal_context.hpp"
 #include "llrt/rtoptions.hpp"
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 #ifndef OVERRIDE_KERNEL_PREFIX
 #define OVERRIDE_KERNEL_PREFIX ""
@@ -39,8 +40,6 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, MultiDmAddTwoInts) {
             "Movement kernels.");
         log_error(tt::LogTest, "For example, export TT_METAL_DPRINT_CORES=(0,0),(1,0)");
     }
-
-    IDevice* dev = mesh_device->get_devices()[0];
 
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
     distributed::MeshWorkload workload;
@@ -121,12 +120,10 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, MultiDmAddTwoInts) {
     distributed::EnqueueMeshWorkload(cq, workload, true);
 
     std::vector<uint32_t> result_core_0(3, 0);
-    tt_metal::detail::ReadFromDeviceL1(
-        dev, CoreCoord(0, 0), result_base, sizeof(uint32_t) * 3, result_core_0);
+    slow_dispatch::ReadFromL1(this->device(), CoreCoord(0, 0), result_base, sizeof(uint32_t) * 3, result_core_0);
 
     std::vector<uint32_t> result_core_1(3, 0);
-    tt_metal::detail::ReadFromDeviceL1(
-        dev, CoreCoord(1, 0), result_base, sizeof(uint32_t) * 3, result_core_1);
+    slow_dispatch::ReadFromL1(this->device(), CoreCoord(1, 0), result_base, sizeof(uint32_t) * 3, result_core_1);
 
     ASSERT_EQ(result_core_0, (std::vector<uint32_t>{3, 7, 11}));
     ASSERT_EQ(result_core_1, (std::vector<uint32_t>{3, 7, 15}));

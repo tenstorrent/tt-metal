@@ -16,7 +16,7 @@ from models.common.llm_runtime.prefill.postprocess import PrefillPostprocessor
 from models.common.llm_runtime.prefill.sampling_helpers import _TILE_SIZE, _merge_log_probs, _select_sample_log_prob
 from models.common.llm_runtime.prefill.signatures import PreparedPrefill
 from models.common.llm_runtime.tensor_resources import attach_cleanup_failures, raise_cleanup_failures
-from models.common.sampling import SamplingParams
+from models.common.sampling.sampling_params import SamplingParams
 
 
 @dataclass(frozen=True)
@@ -114,7 +114,9 @@ class PrefillResultAssembler:
                             output_logits[source_row] = combined[0, 0, local_row, :vocab_size].float()
                 else:
                     relative_last = (request.last_token_indices[0] - request.cached_tokens[0]) % _TILE_SIZE
-                    if request.kind == "single" and not request.uses_chunked_prefill:
+                    if request.kind == "single" and (
+                        not request.uses_chunked_prefill or int(host_primary.shape[2]) == 1
+                    ):
                         relative_last = 0
                     output_logits[request.source_rows[0]] = process_output_prefill(
                         host_primary,

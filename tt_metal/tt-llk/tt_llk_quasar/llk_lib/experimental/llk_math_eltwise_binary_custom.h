@@ -44,7 +44,7 @@ using namespace ckernel::math;
  * @note @ref _llk_math_sub_bcast_cols_reuse_custom_ runs the configured op on this thread.
  */
 template <EltwiseBinaryType eltwise_binary_type, BroadcastType broadcast_type>
-inline void _llk_math_eltwise_binary_init_custom_([[maybe_unused]] const ckernel::TensorShape& tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE)
+inline void _llk_math_eltwise_binary_init_custom_([[maybe_unused]] const ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE)
 {
     static_assert(broadcast_type == BroadcastType::COL, "custom sub bcast-col path supports COL broadcast only");
     static_assert(eltwise_binary_type == EltwiseBinaryType::ELWSUB, "custom sub bcast-col path supports ELWSUB only");
@@ -72,7 +72,7 @@ inline void _llk_math_eltwise_binary_init_custom_([[maybe_unused]] const ckernel
  *       that slot; see @ref _sfpu_configure_addrmod_. ADDR_MOD_5/6 are left holding this op's values.
  */
 inline void _llk_math_sub_bcast_cols_reuse_custom_(
-    const std::uint32_t ct_dim = 1, const ckernel::TensorShape& tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE, const std::uint32_t dst_index = 0)
+    const std::uint32_t ct_dim = 1, const ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE, const std::uint32_t dst_index = 0)
 {
     LLK_ASSERT(validate_tensor_shape_sub_bcast_col_custom_(tensor_shape), "custom sub bcast-col path supports 32x32 and 16x32 tiles only");
 
