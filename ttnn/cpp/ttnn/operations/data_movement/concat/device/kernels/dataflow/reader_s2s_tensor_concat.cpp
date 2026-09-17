@@ -14,7 +14,7 @@
 // leading index rather than append whole shards (#55342): block b of input i lands
 // b * output_block_stride into the output shard and starts b * input_block_stride into the input.
 // num_blocks is 1 for width concat and for the rank-4 (1, 1, H, W) case, where the block loop
-// runs once and this is exactly the append it always was.
+// runs once and the copy reduces to a plain append.
 void kernel_main() {
     constexpr uint32_t output_dfb_id = get_compile_time_arg_val(0);
     constexpr uint32_t page_size = get_compile_time_arg_val(1);
@@ -40,16 +40,20 @@ void kernel_main() {
         const uint32_t input_base_read_addr = input_dfb.get_read_ptr() + input_read_offset;
         const uint32_t output_base_write_addr = base_l1_write_addr + input_write_offset;
 
+        // Once per input, not once per block. This programs page_size and the burst config;
+        // every async_read_with_state below passes its own address, which is why l1_read_addr can
+        // advance per page without re-setting state. Re-issuing it per block would cost a
+        // leading-index multiple of the NOC state programming for no behavioural difference.
+        noc.set_async_read_state<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
+            UnicastEndpoint{},
+            page_size,
+            {.noc_x = (uint32_t)my_x[noc.get_noc_id()],
+             .noc_y = (uint32_t)my_y[noc.get_noc_id()],
+             .addr = input_base_read_addr});
+
         for (uint32_t block_idx = 0; block_idx < num_blocks; block_idx++) {
             uint32_t l1_write_addr = output_base_write_addr + block_idx * output_block_stride;
             uint32_t l1_read_addr = input_base_read_addr + block_idx * input_block_stride;
-
-            noc.set_async_read_state<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
-                UnicastEndpoint{},
-                page_size,
-                {.noc_x = (uint32_t)my_x[noc.get_noc_id()],
-                 .noc_y = (uint32_t)my_y[noc.get_noc_id()],
-                 .addr = l1_read_addr});
 
             for (uint32_t stick_idx = 0; stick_idx < input_num_sticks; stick_idx++) {
                 for (uint32_t page_idx = 0; page_idx < input_num_pages_per_stick; page_idx++) {

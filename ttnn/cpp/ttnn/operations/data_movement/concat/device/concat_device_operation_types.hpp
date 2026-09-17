@@ -36,9 +36,9 @@ constexpr bool is_height_concat(uint32_t rank, uint32_t dim) { return rank >= 2 
 // rows at b, then input 1's rows at b, and so on. This returns the number of those leading
 // indices -- the "blocks" the copy has to be split into.
 //
-// It is 1 exactly when every dim before rank-2 is 1, which is the usual rank-4 model case
-// (1, 1, H, W). That is why the factories appending whole shards looked correct for so long
-// (#55342): at one block, appending *is* interleaving.
+// It is 1 exactly when every dim before rank-2 is 1, the usual rank-4 model case (1, 1, H, W).
+// At one block, appending whole shards and interleaving coincide, so that case cannot distinguish
+// them (#55342).
 //
 // All inputs agree on this value: they differ only in the concat dim, which is not a leading dim.
 inline uint32_t num_leading_blocks(const Tensor& tensor) {
