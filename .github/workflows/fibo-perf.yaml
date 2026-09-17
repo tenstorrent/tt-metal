@@ -1,0 +1,185 @@
+name: "(BH Galaxy) FIBO perf"
+
+# Wall-clock / device-profile perf runs for BriaFibo on the 4x8 Blackhole Galaxy.
+#
+# This workflow never compiles tt-metal. `use-artifacts-from-run` defaults to a PINNED run whose
+# build + wheel artifacts are downloaded instead (build-artifact.yaml skips its compile and wheel
+# jobs whenever that input is non-empty). Two reasons:
+#
+#   * FIBO lives entirely in models/ -- Python that the test job takes from its own checkout -- so
+#     the branch needs no build of its own. The pinned build is the merge-base of this branch.
+#   * Perf numbers are only comparable across runs if the ttnn binaries are identical. Resolving
+#     the build dynamically ("newest green main") would silently re-baseline every run, so the id
+#     is pinned here and bumping it is a reviewable one-line commit.
+#
+# Bumping the pin: dispatch build-artifact.yaml on the ref you want, take its run id, and change
+# PINNED_BUILD_RUN below. Artifacts expire 90 days after the source run was created.
+
+on:
+  workflow_dispatch:
+    inputs:
+      test:
+        description: "Which perf test to run"
+        required: true
+        default: "wall-clock (json, traced, cfg)"
+        type: choice
+        options:
+          # Production configuration: FIBO's intended structured-JSON prompt at gs=5.0.
+          - "wall-clock (json, traced, cfg)"
+          # Cheaper smoke: free-text prompt, 3 measured runs instead of 8.
+          - "wall-clock (short text, traced)"
+          # Tracy device-op profile. Needs a tracy build -- see use-artifacts-from-run below.
+          - "device profile (denoise)"
+      use-artifacts-from-run:
+        description: >-
+          Pinned run ID supplying the build + wheel artifacts. The default is a build of this
+          branch's merge-base. Set this to a TRACY build's run id when running "device profile",
+          and tick `tracy` below to match -- the artifact lookup keys on _profiler_ in the name.
+          Empty compiles the dispatched ref instead (slow; only needed if you changed C++).
+        required: false
+        type: string
+        default: "28798057464"
+      tracy:
+        description: "Source run was built with tracy (required for the device-profile test)"
+        required: false
+        type: boolean
+        default: false
+      pytest-timeout:
+        description: "Per-test pytest timeout in seconds"
+        required: false
+        type: string
+        default: "2600"
+      extra-pytest-args:
+        description: "Appended to the pytest invocation (e.g. a narrower -k)"
+        required: false
+        type: string
+        default: ""
+
+run-name: "FIBO perf — ${{ inputs.test }}"
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
+
+  # Compiles nothing while `use-artifacts-from-run` is non-empty: the download-artifacts job
+  # fetches the pinned run's artifacts and re-publishes them under their original names, so the
+  # build-artifact-name / wheel-artifact-name outputs below are the pinned build's.
+  build-artifact:
+    needs: check-harbor
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      contents: read
+      packages: write
+    secrets: inherit
+    with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
+      build-wheel: true
+      tracy: ${{ inputs.tracy }}
+      use-artifacts-from-run: ${{ inputs.use-artifacts-from-run }}
+
+  fibo-perf:
+    needs: [check-harbor, build-artifact]
+    if: ${{ !cancelled() && needs.build-artifact.result == 'success' }}
+    name: ${{ inputs.test }}
+    timeout-minutes: 75
+    # bh_galaxy in .github/sku_config.yaml. Spelled out because this workflow drives a single
+    # known SKU rather than a test-list matrix.
+    runs-on:
+      - arch-blackhole
+      - pipeline-functional
+      - topology-6u
+      - in-service
+    container:
+      image: ${{ needs.build-artifact.outputs.dev-docker-image || 'docker-image-unresolved!' }}
+      env:
+        TT_METAL_HOME: /work
+        PYTHONPATH: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        ARCH_NAME: blackhole
+        LOGURU_LEVEL: INFO
+        GTEST_OUTPUT: xml:/work/generated/test_reports/
+        # FIBO resolves its checkpoint through huggingface_hub with local_files_only=False, so the
+        # hub has to be reachable on a cold cache. /mnt/MLPerf is mounted read-only below, which HF
+        # cannot write metadata into -- point HF_HOME at the container's own writable /tmp and let
+        # only the (read-only) hub cache come from the NFS mount.
+        HF_HUB_OFFLINE: "0"
+        HF_HOME: /tmp/hf
+        HF_HUB_CACHE: /mnt/MLPerf/huggingface/hub
+        HF_TOKEN: ${{ secrets.HUGGINGFACE_TOKEN }}
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - /dev/hugepages-1G:/dev/hugepages-1G
+        - /mnt/MLPerf:/mnt/MLPerf:ro
+      options: "--device /dev/tenstorrent --privileged -v /sys:/sys"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
+    steps:
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          submodules: recursive
+          path: docker-job
+
+      - name: ⬇️  Setup Job
+        uses: ./docker-job/.github/actions/setup-job
+        timeout-minutes: 15
+        with:
+          build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+          wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+
+      - name: Report which build is in use
+        run: |
+          echo "build artifact : ${{ needs.build-artifact.outputs.build-artifact-name }}"
+          echo "wheel artifact : ${{ needs.build-artifact.outputs.wheel-artifact-name }}"
+          if [ -n "${{ inputs.use-artifacts-from-run }}" ]; then
+            echo "reused from    : https://github.com/${GITHUB_REPOSITORY}/actions/runs/${{ inputs.use-artifacts-from-run }}"
+          else
+            echo "reused from    : nothing — this run compiled the dispatched ref"
+          fi
+
+      - name: ${{ inputs.test }}
+        timeout-minutes: 60
+        run: |
+          mkdir -p generated/test_reports
+          PERF_TEST="models/tt_dit/tests/models/bria_fibo/test_performance_bria_fibo.py"
+          # mesh_device1 is the (4, 8) Galaxy mesh (mesh_device0 is the 2x2 QB2 dev mesh). The
+          # negations are load-bearing: pytest joins parameter ids with "-", so the substring
+          # "traced" also matches "untraced" and "cfg" also matches "nocfg".
+          case "${{ inputs.test }}" in
+            "wall-clock (json, traced, cfg)")
+              TEST="${PERF_TEST}::test_fibo_pipeline_perf_breakdown_json"
+              SELECT="mesh_device1 and not untraced and not nocfg"
+              ;;
+            "wall-clock (short text, traced)")
+              TEST="${PERF_TEST}::test_fibo_pipeline_perf_breakdown_short_text"
+              SELECT="mesh_device1 and not untraced"
+              ;;
+            "device profile (denoise)")
+              TEST="${PERF_TEST}::test_fibo_denoise_device_profile"
+              SELECT="mesh_device1"
+              ;;
+            *)
+              echo "::error::unhandled test selection '${{ inputs.test }}'"
+              exit 1
+              ;;
+          esac
+          # -s so the per-stage breakdown table reaches the log; the test logs it via loguru at
+          # the end of the run and it is the entire point of the job.
+          pytest -s -v --timeout "${{ inputs.pytest-timeout }}" "${TEST}" \
+            -k "${SELECT}" ${{ inputs.extra-pytest-args }}
+
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        with:
+          prefix: "fibo_perf_"
+
+      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
+        if: always()

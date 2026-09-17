@@ -72,6 +72,13 @@ jobs:
       tracy: ${{ inputs.tracy }}
       build-wheel: true
       ref: ${{ inputs.commit || github.sha }}
+      # BRANCH-LOCAL: pinned so FIBO perf dispatches from this ref never compile. Run 28798057464
+      # is a scheduled main build of this branch's merge-base (2eb991a4100117464d67d5331bd6968470bf9daa);
+      # FIBO is Python-only under models/, taken from the checkout, so its own build is pure latency.
+      # Hardcoded rather than exposed as a dispatch input on purpose: main's copy of this workflow
+      # has no such input, and inputs may be validated against the default branch. Expires 2026-10-04.
+      # Revert with the rest of this file once fibo-perf.yaml lands on main.
+      use-artifacts-from-run: "28798057464"
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       build-type: ${{ inputs.build-type || 'Release' }}
       enable-lto: ${{ inputs.enable-lto || false }}
@@ -88,11 +95,21 @@ jobs:
         LD_LIBRARY_PATH: /work/build/lib
         GTEST_OUTPUT: xml:/work/generated/test_reports/
         TT_METAL_HOME: /work
+        # Hugging Face: models that resolve a checkpoint through huggingface_hub need a writable
+        # HF_HOME, because /mnt/MLPerf below is mounted read-only and the hub writes metadata
+        # (refs/main, .no_exist markers) even on a cache hit -- otherwise Errno 30. Only the
+        # (read-only) blob cache comes from the mount. HF_HUB_OFFLINE is deliberately left unset,
+        # which means online, so a cold cache can still resolve.
+        HF_HOME: /tmp/hf
+        HF_HUB_CACHE: /mnt/MLPerf/huggingface/hub
+        HF_TOKEN: ${{ secrets.HUGGINGFACE_TOKEN }}
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - ${{ !contains(inputs.runner-label, 'viommu') && '/dev/hugepages-1G:/dev/hugepages-1G' || '/nohugepages:/nohugepages' }}
         - ${{ !contains(inputs.runner-label, 'tt-ubuntu-2204') && '/mnt/MLPerf:/mnt/MLPerf:ro' || '/donotmount:/donotmount:ro' }}
-      options: "--device /dev/tenstorrent"
+      # --privileged -v /sys:/sys matches models-e2e-tests-impl.yaml; multi-chip meshes (Galaxy,
+      # QuietBox) need the sysfs topology that a bare --device mount does not expose.
+      options: "--device /dev/tenstorrent --privileged -v /sys:/sys"
     defaults:
       run:
         shell: bash
