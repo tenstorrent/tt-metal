@@ -9,14 +9,16 @@
 //   - the Gen1 circular buffers become dataflow buffers, so the page-size check becomes an
 //     entry-size check. Gen2 rejects a data-movement kernel bound as both ends of a DFB, so this
 //     kernel takes the producer end and a blank compute kernel alongside it takes the consumer end
-//   - the semaphore value is not checked: Gen2 rejects a non-zero initial value, so the Gen1
-//     "reads back SEM_VAL" assertion has no equivalent, and checking for zero would pass whether
-//     or not the semaphore was ever placed
+//   - Gen2 rejects a non-zero semaphore initial value, so the Gen1 "reads back SEM_VAL" assertion
+//     becomes "reads back zero, then leaves it non-zero". Every launch re-sends the semaphore
+//     payload, so a re-dispatched program seeing zero again proves dispatch placed the value
+//     rather than that the L1 happened to be clear
 
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "api/dataflow/noc_semaphore.h"
 #include "api/debug/dprint.h"
 #include "experimental/kernel_args.h"
 
@@ -54,6 +56,19 @@ static inline uint32_t read_cycle_count() {
             ASSERT(0);                                                                    \
             while (true); /* Hang kernel if values aren't correct */                      \
         }                                                                                 \
+    }
+
+// Semaphore accessor names are compile-time tokens too. The blank compute kernel alongside this one
+// never touches a semaphore, so poisoning a slot here cannot be observed by a sibling.
+#define VERIFY_SEM(idx)                                                              \
+    {                                                                                \
+        Semaphore s(sem::sem_##idx);                                                 \
+        if (s.value() != 0) {                                                        \
+            DPRINT("{} Actual semaphore value: {} Expected: 0\n", (idx), s.value()); \
+            ASSERT(0);                                                               \
+            while (true); /* Hang kernel if values aren't correct */                 \
+        }                                                                            \
+        s.up(1);                                                                     \
     }
 
 void kernel_main() {
@@ -118,6 +133,55 @@ void kernel_main() {
 #endif
 #if NUM_TEST_DFBS > 15
     VERIFY_DFB(15)
+#endif
+
+#if NUM_TEST_SEMS > 0
+    VERIFY_SEM(0)
+#endif
+#if NUM_TEST_SEMS > 1
+    VERIFY_SEM(1)
+#endif
+#if NUM_TEST_SEMS > 2
+    VERIFY_SEM(2)
+#endif
+#if NUM_TEST_SEMS > 3
+    VERIFY_SEM(3)
+#endif
+#if NUM_TEST_SEMS > 4
+    VERIFY_SEM(4)
+#endif
+#if NUM_TEST_SEMS > 5
+    VERIFY_SEM(5)
+#endif
+#if NUM_TEST_SEMS > 6
+    VERIFY_SEM(6)
+#endif
+#if NUM_TEST_SEMS > 7
+    VERIFY_SEM(7)
+#endif
+#if NUM_TEST_SEMS > 8
+    VERIFY_SEM(8)
+#endif
+#if NUM_TEST_SEMS > 9
+    VERIFY_SEM(9)
+#endif
+#if NUM_TEST_SEMS > 10
+    VERIFY_SEM(10)
+#endif
+#if NUM_TEST_SEMS > 11
+    VERIFY_SEM(11)
+#endif
+#if NUM_TEST_SEMS > 12
+    VERIFY_SEM(12)
+#endif
+#if NUM_TEST_SEMS > 13
+    VERIFY_SEM(13)
+#endif
+#if NUM_TEST_SEMS > 14
+    VERIFY_SEM(14)
+#endif
+#if NUM_TEST_SEMS > 15
+    VERIFY_SEM(15)
 #endif
 
     for (uint32_t i = 0; i < num_common_rt_args; i++) {
