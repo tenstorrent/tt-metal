@@ -273,7 +273,9 @@ class LTXPipeline:
         # dynamic_load page-in, at the cost of holding that many rank-sized factor
         # sets in DRAM. 0 disables the cache.
         self.lora_cache_capacity = int(lora_cache_capacity)
-        self._active_lora: LTXAdapterHandle | None = None
+        # Active adapters as (handle, scale) pairs, innermost first. Several may
+        # be bound at once; their deltas sum on device.
+        self._active_lora: list[tuple[LTXAdapterHandle, float | None]] = []
 
         self.num_attention_heads = num_attention_heads
         self.attention_head_dim = attention_head_dim
@@ -716,38 +718,51 @@ class LTXPipeline:
         self.lora_cache_capacity = int(n)
         self._apply_lora_cache_capacity()
 
-    def set_active_lora(self, handle: LTXAdapterHandle | None) -> None:
-        """Bind ``handle`` (or unbind, if None) on device: ``weight.data += scale*A@B``
-        per LoRA Linear. No host fuse, no weight reload."""
+    def set_active_loras(self, stack) -> None:
+        """Bind several adapters at once: ``weight.data += sum_i scale_i*A_i@B_i``
+        per LoRA Linear. No host fuse, no weight reload.
+
+        ``stack`` is a sequence of ``handle`` or ``(handle, scale)``, innermost
+        first; an empty sequence unbinds everything. A ``scale`` of ``None`` uses
+        the scale the adapter was registered with, so passing one here retunes an
+        adapter's strength without re-registering it — which matters, since
+        registration is what costs (a rank-384 adapter is gigabytes on host).
+
+        Stacking is how a style adapter and a distillation adapter combine: the
+        deltas simply sum.
+        """
         if not self.lora_enabled:
             raise RuntimeError("pipeline was built with lora_enabled=False; on-device LoRA swap is unavailable")
+        entries: list[tuple[LTXAdapterHandle, float | None]] = [
+            e if isinstance(e, (tuple, list)) else (e, None) for e in (stack or [])
+        ]
         if self.transformer is None:
             # Nothing resident to unbind on teardown; a real bind needs the transformer built.
-            if handle is None:
-                self._active_lora = None
+            if not entries:
+                self._active_lora = []
                 return
             raise RuntimeError("transformer not instantiated; call the pipeline's build/prime path first")
+
         mods = dict(iter_lora_modules(self.transformer))
-        if handle is None:
-            for mod in mods.values():
-                mod.unbind_active()
-            self._active_lora = None
-            return
-        # Bind every module the handle targets; unbind the rest so a delta merged
-        # by a previously-active adapter (whose coverage the new handle doesn't
-        # share) is removed rather than left stale on the base weight.
+        # Every module gets its whole stack in one call. Modules that no handle
+        # targets get an empty stack, i.e. unbound — otherwise a delta merged by a
+        # previously-active adapter (whose coverage this stack doesn't share) is
+        # left stale on the base weight.
         for module_path, mod in mods.items():
-            idx = handle.target_indices.get(module_path)
-            if idx is None:
-                mod.unbind_active()
-            else:
-                mod.bind_active(idx)
-        missing = [p for p in handle.target_indices if p not in mods]
+            mod.bind_stack(
+                [(h.target_indices[module_path], sc) for h, sc in entries if module_path in h.target_indices]
+            )
+        missing = sorted({p for h, _ in entries for p in h.target_indices if p not in mods})
         if missing:
             logger.warning(
-                f"set_active_lora: {len(missing)} handle target(s) not found on transformer — skipping: {missing[:5]}"
+                f"set_active_loras: {len(missing)} handle target(s) not found on transformer — skipping: {missing[:5]}"
             )
-        self._active_lora = handle
+        self._active_lora = entries
+
+    def set_active_lora(self, handle: LTXAdapterHandle | None) -> None:
+        """Bind a single ``handle`` (or unbind, if None). Shorthand for
+        :meth:`set_active_loras`."""
+        self.set_active_loras([] if handle is None else [(handle, None)])
 
     def load_lora_weights(self, path: str, *, strength: float = 1.0, name: str = "") -> LTXAdapterHandle:
         """Register + activate a LoRA in one call. Returns the handle for later swaps."""

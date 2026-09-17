@@ -117,7 +117,7 @@ def test_ondevice_lora_bind_matches_host_delta(
         return
 
     transformer_id = id(pipeline.transformer)
-    assert pipeline._active_lora is None, "fresh pipeline must have no active LoRA"
+    assert not pipeline._active_lora, "fresh pipeline must have no active LoRA"
 
     path, module = _first_qkv_lora_module(pipeline.transformer)
     assert module is not None, "no attn1.to_qkv LoRA module found — is lora_enabled wired?"
@@ -130,9 +130,11 @@ def test_ondevice_lora_bind_matches_host_delta(
     fused_w = _read_weight(module.weight)
     assert not torch.allclose(fused_w, base_w), "bind did not change the weight"
 
-    # host recompute of the SAME registered delta; scale folded in exactly as _apply_delta does.
-    adapter = module.lora_bank[module.active_idx]
-    delta_oi = module.active_scale * (adapter.B.to(torch.float32) @ adapter.A.to(torch.float32))  # [out,in]
+    # host recompute of the SAME registered delta; scale folded in exactly as _apply_delta_stack does.
+    assert len(module.active_stack) == 1, f"expected a single bound adapter, got {module.active_stack}"
+    bank_idx, bound_scale = module.active_stack[0]
+    adapter = module.lora_bank[bank_idx]
+    delta_oi = bound_scale * (adapter.B.to(torch.float32) @ adapter.A.to(torch.float32))  # [out,in]
     delta = delta_oi if delta_oi.shape == base_w.shape else delta_oi.T
     assert delta.shape == base_w.shape, f"delta {tuple(delta.shape)} vs weight {tuple(base_w.shape)}"
     expected = base_w.to(torch.float32) + delta
@@ -143,14 +145,87 @@ def test_ondevice_lora_bind_matches_host_delta(
 
     # --- unbind ------------------------------------------------------------
     pipeline.unload_lora_weights()
-    assert pipeline._active_lora is None
+    assert not pipeline._active_lora
     assert id(pipeline.transformer) == transformer_id, "model object was rebuilt, not reused"
-    restored_w = _read_weight(module.weight)
-    # fuse-mode unbind subtracts in bf16 — close, not bit-exact (see lora.py drift note).
-    assert torch.allclose(
-        restored_w.to(torch.float32), base_w.to(torch.float32), atol=1e-2
-    ), "unbind did not restore the base weight within bf16 drift"
+    restored_w = _read_weight(module.weight).to(torch.float32)
+
+    # Unbind must actually move the weight back off the merged value. Comparing
+    # against the fused weight is the check that discriminates: a residue-vs-base
+    # bound cannot, because a correct unbind and an unbind that did nothing both
+    # leave a residue on the order of the delta.
+    assert not torch.allclose(restored_w, fused_w.to(torch.float32)), "unbind did not change the weight"
+
+    # How far off base it lands is precision-dependent and not asserted here.
+    # Every write rounds the result into W's own dtype, and for a block format
+    # that rounding is a requantization to the tile's shared exponent, so the
+    # residue can exceed the delta itself — measured ~4x under all_bf8_lofi
+    # against ~1x at bf16. Logged because it is useful, not load-bearing.
+    delta_mag = delta.abs().max().item()
+    residue = (restored_w - base_w.to(torch.float32)).abs().max().item()
+    logger.info(f"[{path}] residue after subtract-unbind: {residue:.5f} (delta max {delta_mag:.5f})")
+
+    # The invariant production actually relies on: a page-out and reload re-seeds
+    # the base weights, so that residue can never accumulate across generations.
+    # LTX gets this on every generation for free because the VAE is a coresident
+    # exclusion of the transformer. Without it, repeated bind/unbind walks W away
+    # from the base — fastest when the weights are quantized.
+    pipeline.transformer.deallocate_weights()
+    pipeline._prepare_transformer(0)
+    reload_residue = (_read_weight(module.weight).to(torch.float32) - base_w.to(torch.float32)).abs().max().item()
+    logger.info(f"[{path}] residue after evict + reload: {reload_residue:.7f}")
+    assert reload_residue <= 1e-6, f"evict + reload did not restore the base weight: residue {reload_residue}"
     logger.info("On-device LoRA bind/unbind weight checks passed.")
+
+    # --- stack: several adapters bound at once ------------------------------
+    # Registered twice from the same file at different scales, which gives two
+    # distinct bank slots and so exercises stack summation and per-member scale
+    # without needing a second adapter on disk. Shares the pipeline built above
+    # because a 22B build costs ~90s.
+    #
+    # Re-read the base here rather than reusing base_w: the bind/unbind cycle
+    # above leaves a small residue in W by design (see the drift note in
+    # layers/lora.py), and these checks are about the stack, not that residue.
+    stack_base_w = _read_weight(module.weight).clone().to(torch.float32)
+
+    h1 = pipeline.register_lora_adapter(lora, scale=0.5, name="stack_a")
+    h2 = pipeline.register_lora_adapter(lora, scale=0.25, name="stack_b")
+    pipeline.set_active_loras([h1, h2])
+    assert len(module.active_stack) == 2, f"expected a 2-deep stack, got {module.active_stack}"
+
+    stacked_w = _read_weight(module.weight).to(torch.float32)
+    d_sum = None
+    for bank_idx, sc in module.active_stack:
+        a = module.lora_bank[bank_idx]
+        d = sc * (a.B.to(torch.float32) @ a.A.to(torch.float32))
+        d_sum = d if d_sum is None else d_sum + d
+    d_sum = d_sum if d_sum.shape == stack_base_w.shape else d_sum.T
+    ok, pcc = comp_pcc(stack_base_w + d_sum, stacked_w, pcc=0.999)
+    logger.info(f"[{path}] 2-deep stack vs summed host deltas: {pcc}")
+    assert ok, f"stacked weight disagrees with the sum of the host deltas: {pcc}"
+
+    # The A/B LRU has to cover the whole stack, else each bind and unbind
+    # re-uploads whichever members fell off the LRU end.
+    assert module.lora_cache_capacity >= 2, f"cache capacity not raised for the stack: {module.lora_cache_capacity}"
+
+    # Retuning one member's strength must re-bind, never re-register — that is
+    # what keeps a strength tweak cheap for a multi-GB adapter.
+    bank_len = len(module.lora_bank)
+    pipeline.set_active_loras([(h1, 0.75), (h2, 0.25)])
+    assert len(module.lora_bank) == bank_len, "re-scaling grew the bank; it must only re-bind"
+    assert module.active_stack[0][1] == 0.75, module.active_stack
+
+    # Unregistering one member leaves the rest of the stack merged.
+    pipeline.set_active_loras([h1, h2])
+    two_deep_w = _read_weight(module.weight).clone()
+    module.unregister_lora(module.active_stack[0][0])
+    assert len(module.active_stack) == 1, f"unregister should leave one member, got {module.active_stack}"
+    assert not torch.allclose(
+        _read_weight(module.weight), two_deep_w
+    ), "unregistering a stacked member did not change the merged weight"
+
+    pipeline.set_active_loras([])
+    assert not module.active_stack and not module.is_lora_active
+    logger.info("On-device LoRA stack checks passed.")
 
     if os.environ.get("RUN_LORA_GEN", "0") in ("1", "true", "True"):
         steps = int(os.environ.get("STEPS", "6"))

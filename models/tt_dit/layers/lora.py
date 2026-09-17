@@ -51,16 +51,30 @@ replacements with a zero-overhead empty-bank fast path in
 follow-up — needs perf validation that the empty-bank forward is
 truly identical to the base.
 
-Note: bind/unbind in fuse mode adds and subtracts the delta in bf16,
-which is not bit-exactly inverse. W drifts by ~O(N · eps_bf16) over N
-swap cycles. In production this is bounded automatically by
-``dynamic_load=True`` (``cache.load_model`` restores the cached base
-on every page-in). For static pipelines (``dynamic_load=False``) that
-need bit-exact restore across many swaps, snapshot the state dict once
-at construction and call ``load_torch_state_dict`` to re-seed W when
-drift becomes material. (With the A/B cache enabled — ``cache_capacity>0``
-— unbind subtracts the *same* device delta that bind added for a cached
-adapter, so those swap cycles are exact and do not drift.)
+Note: bind/unbind in fuse mode adds and subtracts the delta in W's own
+dtype, which is not bit-exactly inverse — ``ttnn.add(W, d, out=W)``
+rounds the sum back into W. W therefore drifts by ~O(N · eps) over N
+swap cycles, and the per-cycle residue can exceed the adapter's own
+delta when W is a block format: measured on LTX-22B, bf16 leaves
+~0.004 per cycle and ``bfloat8_b`` ~0.016, against a delta of ~0.008,
+because the merge is requantized to the per-tile shared exponent.
+The A/B cache bounds the *delta*'s contribution (the same device
+factors serve bind and unbind) but not W's own rounding.
+
+In production this is bounded by ``dynamic_load=True``: the reload
+restores the cached base weights, wiping the residue. Note that only a
+genuine page-out does so — re-running the load while the weights are
+still resident short-circuits and restores nothing. LTX gets the
+page-out for free because the VAE is a coresident exclusion of the
+transformer, so every generation re-seeds. For static pipelines
+(``dynamic_load=False``) that need bit-exact restore across many swaps,
+snapshot the state dict once at construction and call
+``load_torch_state_dict`` to re-seed W when drift becomes material.
+
+A bound *stack* would multiply this by its depth if each member were
+written into W separately, so ``_apply_delta_stack`` sums the members'
+deltas first and touches W exactly once — a whole-stack bind/unbind
+pair costs the same two roundings as a single adapter.
 
 Fuse-mode A/B cache (``cache_capacity``)
 ----------------------------------------
@@ -75,6 +89,7 @@ factors are plain tensors, not tracked ``Parameters``, so
 ``cache_capacity`` adapters per Linear. ``cache_capacity=0`` disables it
 and restores the upload-then-free behavior.
 """
+
 from __future__ import annotations
 
 from collections import OrderedDict
@@ -120,19 +135,23 @@ class LoRAMixin:
             raise ValueError(f"lora_mode must be one of {self.LORA_MODES}; got {mode!r}")
         self.lora_mode = mode
         self.lora_bank: list[LoRAAdapter | None] = []
-        self.active_idx: int | None = None
-        self.active_scale: float = 1.0
+        # Active adapters, innermost first, as (bank index, scale). Several may
+        # be bound at once: their deltas sum, which is how a style adapter and a
+        # distillation adapter are combined.
+        self.active_stack: list[tuple[int, float]] = []
         # Fuse-mode LRU of device-resident A/B factors, keyed by bank index:
         # {idx: (A_dev, B_dev, scale)}, MRU last. Bounded to ``lora_cache_capacity``
         # adapters; 0 disables caching (upload-then-free per bind).
         self.lora_cache_capacity: int = int(cache_capacity)
         self._ab_cache: OrderedDict[int, tuple[ttnn.Tensor, ttnn.Tensor, float]] = OrderedDict()
-        # ``active_idx`` records intent (which adapter should be used).
+        # ``active_stack`` records intent (which adapters should be used).
         # ``_delta_applied`` (fuse mode) records whether the merge is
-        # currently present on the on-device weight. These can diverge
-        # under dynamic_load: when the transformer is paged out the
-        # device weight is gone; when it pages back in the cached base
-        # weight is restored and the delta must be re-applied.
+        # currently present on the on-device weight — all-or-nothing for
+        # the whole stack, matching page-out, which frees the entire
+        # weight at once. These can diverge under dynamic_load: when the
+        # transformer is paged out the device weight is gone; when it
+        # pages back in the cached base weight is restored and the stack
+        # must be re-applied.
         self._delta_applied: bool = False
         # Device-resident A/B for runtime mode (None when no adapter
         # is bound or when the layer is paged out).
@@ -144,7 +163,7 @@ class LoRAMixin:
     def is_lora_active(self) -> bool:
         """True if any LoRA is currently bound (whether or not the on-device
         side state is currently realized — e.g. paged out under dynamic_load)."""
-        return self.active_idx is not None
+        return bool(self.active_stack)
 
     # ---- bank management ----
     def register_lora(
@@ -187,8 +206,9 @@ class LoRAMixin:
     def unregister_lora(self, idx: int) -> None:
         if not (0 <= idx < len(self.lora_bank)):
             return
-        if self.active_idx == idx:
-            self.unbind_active()
+        if any(i == idx for i, _ in self.active_stack):
+            # Drop only this member; the rest of the stack stays bound.
+            self.bind_stack([(i, sc) for i, sc in self.active_stack if i != idx])
         self._drop_cached_ab(idx)
         self.lora_bank[idx] = None
 
@@ -203,40 +223,52 @@ class LoRAMixin:
             self._evict_ab_cache()
 
     # ---- bind / unbind ----
-    def bind_active(self, idx: int, scale: float | None = None) -> None:
-        """Make bank[idx] the active LoRA.
+    def bind_stack(self, pairs) -> None:
+        """Make ``pairs`` — ``(bank_idx, scale)`` entries, innermost first — the
+        active stack, replacing whatever was bound.
 
-        If a different adapter is currently bound, it is removed first.
-        When the layer's weights are not currently on device (dynamic_load
-        page-out), the merge is deferred — ``active_idx`` and ``active_scale``
-        record the intent and ``reapply_after_load`` will pick it up on
-        the next load.
+        All members' deltas are summed into ``W``. A ``scale`` of ``None`` uses
+        the adapter's registered scale, so passing a scale here overrides it
+        without re-registering. The previous stack is unmerged first, so deltas
+        never pile up across binds. When the layer is paged out the merge is
+        deferred: the stack records the intent and ``reapply_after_load`` picks
+        it up on the next load.
         """
-        # Validate the target slot BEFORE touching the current active adapter,
-        # so a bad idx doesn't leave W with the prior delta half-undone.
-        if not (0 <= idx < len(self.lora_bank)) or self.lora_bank[idx] is None:
-            raise IndexError(f"invalid lora slot {idx}")
+        resolved: list[tuple[int, float]] = []
+        for entry in pairs:
+            idx, scale = entry if isinstance(entry, (tuple, list)) else (entry, None)
+            # Validate every slot BEFORE touching the current stack, so a bad
+            # idx can't leave W with the previous delta half-undone.
+            if not (0 <= idx < len(self.lora_bank)) or self.lora_bank[idx] is None:
+                raise IndexError(f"invalid lora slot {idx}")
+            adapter = self.lora_bank[idx]
+            resolved.append((idx, adapter.scale if scale is None else float(scale)))
 
-        adapter = self.lora_bank[idx]
-        use_scale = adapter.scale if scale is None else float(scale)
-
-        # Idempotent: don't subtract-and-re-add the same delta — that round-trip
-        # accumulates bf16 quantization drift in W.
-        if self.active_idx == idx and self.active_scale == use_scale:
+        # Idempotent: re-merging an identical stack would round W twice for
+        # nothing, and that round-trip is what accumulates drift.
+        if resolved == self.active_stack:
             return
 
-        if self.active_idx is not None:
+        if self.active_stack:
             self._undo_active()
 
-        self.active_idx = idx
-        self.active_scale = use_scale
-        if self.is_loaded():
+        # The A/B LRU must hold the whole stack, or every bind and unbind
+        # re-uploads the members that fell off the LRU end.
+        if 0 < self.lora_cache_capacity < len(resolved):
+            self.set_lora_cache_capacity(len(resolved))
+
+        self.active_stack = resolved
+        if resolved and self.is_loaded():
             self._realize_active()
 
+    def bind_active(self, idx: int, scale: float | None = None) -> None:
+        """Make bank[idx] the only active LoRA — single-adapter shorthand for
+        :meth:`bind_stack`."""
+        self.bind_stack([(idx, scale)])
+
     def unbind_active(self) -> None:
-        if self.active_idx is None:
-            return
-        self._undo_active()
+        """Unbind every active adapter, restoring the base weight."""
+        self.bind_stack([])
 
     def _realize_active(self) -> None:
         """Materialize the on-device effect of the active adapter.
@@ -245,31 +277,28 @@ class LoRAMixin:
         for the forward path to consume.
         """
         if self.lora_mode == "fuse":
-            self._apply_delta(self.active_idx, self.active_scale, sign=+1)
+            self._apply_delta_stack(self.active_stack, sign=+1)
             self._delta_applied = True
         else:  # runtime
-            adapter = self.lora_bank[self.active_idx]
-            self._upload_runtime_ab(adapter.A, adapter.B)
+            self._upload_runtime_stack()
 
     def _undo_active(self) -> None:
         if self.is_loaded():
             if self.lora_mode == "fuse" and self._delta_applied:
-                if self.lora_bank[self.active_idx] is not None:
-                    self._apply_delta(self.active_idx, self.active_scale, sign=-1)
+                self._apply_delta_stack(self.active_stack, sign=-1)
             elif self.lora_mode == "runtime":
                 self._free_runtime_ab()
         self._delta_applied = False
-        self.active_idx = None
-        self.active_scale = 1.0
+        self.active_stack = []
 
     def reapply_after_load(self) -> None:
-        """Re-materialize the active adapter after a dynamic_load reload.
+        """Re-materialize the active stack after a dynamic_load reload.
 
         Called by the pipeline after a reload restores the cached base
         weights and (for runtime mode) wipes the device-resident A/B.
-        No-op when no adapter is active or the effect is already in place.
+        No-op when nothing is bound or the effect is already in place.
         """
-        if self.active_idx is None or not self.is_loaded():
+        if not self.active_stack or not self.is_loaded():
             return
         if self.lora_mode == "fuse" and self._delta_applied:
             return
@@ -286,7 +315,7 @@ class LoRAMixin:
         super().deallocate_weights()
 
     def deallocate_lora(self) -> None:
-        if self.active_idx is not None:
+        if self.active_stack:
             self.unbind_active()
         self._free_ab_cache()
         self.lora_bank = []
@@ -352,23 +381,48 @@ class LoRAMixin:
         return super().forward_fused_addcmul(*args, **kwargs)
 
     # ---- internals ----
-    def _apply_delta(self, idx: int, scale: float, sign: int) -> None:
-        """Add (``sign>0``) or subtract (``sign<0``) bank[idx]'s ``+scale`` delta
-        into ``self.weight.data`` in place (fuse mode). The device A/B factors
-        come from the LRU cache when enabled, so a re-bind or a post-reload
-        re-merge skips the host upload; the same cached ``+scale`` delta serves
-        both bind and unbind, making the pair an exact negation. The full-size
-        delta itself is never cached (that would cost a whole weight per adapter)."""
-        A_dev, B_dev, owned = self._acquire_delta_ab(idx, float(scale))
-        delta = ttnn.matmul(A_dev, B_dev, compute_kernel_config=self.compute_config)
-        if owned:
-            ttnn.deallocate(A_dev)
-            ttnn.deallocate(B_dev)
-        if sign > 0:
-            ttnn.add(self.weight.data, delta, output_tensor=self.weight.data)
-        else:
-            ttnn.subtract(self.weight.data, delta, output_tensor=self.weight.data)
-        ttnn.deallocate(delta)
+    def _apply_delta_stack(self, pairs, sign: int) -> None:
+        """Add (``sign>0``) or subtract (``sign<0``) the combined delta of every
+        ``(bank_idx, scale)`` in ``pairs``, with a single write to
+        ``self.weight.data`` (fuse mode).
+
+        The members are summed into one accumulator first, deliberately. Each
+        write to ``weight.data`` rounds the result back into W's dtype, so a
+        per-member loop would round W once per adapter and make the unwind
+        order-dependent — subtracting in a different sequence than the adds
+        passes through different intermediates and does not return. Summing
+        first costs one weight-sized temporary and keeps a whole-stack
+        bind/unbind pair exactly as accurate as the single-adapter case.
+
+        Device A/B factors come from the LRU cache when enabled, so a re-bind
+        or a post-reload re-merge skips the host upload, and the same cached
+        ``+scale`` factors serve both directions. Members whose bank slot has
+        been unregistered are skipped. The full-size delta is never cached —
+        that would cost a whole weight per adapter."""
+        acc = None
+        try:
+            for idx, scale in pairs:
+                if self.lora_bank[idx] is None:
+                    continue
+                A_dev, B_dev, owned = self._acquire_delta_ab(idx, float(scale))
+                delta = ttnn.matmul(A_dev, B_dev, compute_kernel_config=self.compute_config)
+                if owned:
+                    ttnn.deallocate(A_dev)
+                    ttnn.deallocate(B_dev)
+                if acc is None:
+                    acc = delta
+                else:
+                    ttnn.add(acc, delta, output_tensor=acc)
+                    ttnn.deallocate(delta)
+            if acc is None:
+                return
+            if sign > 0:
+                ttnn.add(self.weight.data, acc, output_tensor=self.weight.data)
+            else:
+                ttnn.subtract(self.weight.data, acc, output_tensor=self.weight.data)
+        finally:
+            if acc is not None:
+                ttnn.deallocate(acc)
 
     def _acquire_delta_ab(self, idx: int, scale: float) -> tuple[ttnn.Tensor, ttnn.Tensor, bool]:
         """Return ``(A_dev, B_dev, owned)`` for bank[idx]'s ``+scale`` delta
@@ -391,8 +445,10 @@ class LoRAMixin:
         return A_dev, B_dev, False
 
     def _evict_ab_cache(self) -> None:
-        # Trim from the LRU end. The active adapter is always the MRU (just
-        # inserted or touched), so for capacity >= 1 it is never evicted.
+        # Trim from the LRU end. Only the most recently acquired member is
+        # guaranteed safe, so capacity must be >= the bound stack depth or
+        # earlier members are evicted and re-uploaded on the next traversal;
+        # ``bind_stack`` raises the capacity to cover the stack.
         while len(self._ab_cache) > self.lora_cache_capacity:
             _, (A_old, B_old, _) = self._ab_cache.popitem(last=False)
             ttnn.deallocate(A_old)
@@ -410,10 +466,24 @@ class LoRAMixin:
             ttnn.deallocate(B_dev)
         self._ab_cache.clear()
 
-    def _upload_runtime_ab(self, A_torch: torch.Tensor, B_torch: torch.Tensor) -> None:
-        """Upload A and B for the runtime forward path. The active scale
-        is baked into B so forward stays as two pure matmuls + one add."""
-        self._runtime_A, self._runtime_B = self._upload_ab_for_w_sharding(A_torch, B_torch, scale=self.active_scale)
+    def _upload_runtime_stack(self) -> None:
+        """Upload the active stack as one A/B pair for the runtime forward path.
+
+        ``sum_i s_i * (x @ A_i) @ B_i`` equals
+        ``(x @ [A_1 | ... | A_M]) @ [s_1*B_1 ; ... ; s_M*B_M]``, so a stack is a
+        single upload at a larger inner rank and ``forward`` is unchanged — still
+        two matmuls and one add. Scales are folded into B here, so the upload
+        takes ``scale=1.0``. The concat happens on the host before the bf16 cast,
+        keeping the same rounding boundary as the single-adapter path.
+
+        Unlike fuse mode there is no A/B cache here, so every stack change
+        re-uploads the concatenated pair."""
+        entries = [(self.lora_bank[i], s) for i, s in self.active_stack if self.lora_bank[i] is not None]
+        if not entries:
+            return
+        A_cat = torch.cat([a.A for a, _ in entries], dim=0)  # [sum(rank), in]
+        B_cat = torch.cat([a.B * s for a, s in entries], dim=1)  # [out, sum(rank)]
+        self._runtime_A, self._runtime_B = self._upload_ab_for_w_sharding(A_cat, B_cat, scale=1.0)
 
     def _free_runtime_ab(self) -> None:
         if self._runtime_A is not None:

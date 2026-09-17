@@ -19,6 +19,7 @@ flow against the default (``fuse``) mode.
 Run with:
     pytest -xvs models/tt_dit/experimental/tests/test_adapter_loader.py
 """
+
 from __future__ import annotations
 
 import tempfile
@@ -221,4 +222,4 @@ def test_pipeline_bind_unbind_walks_all_modules(mesh_device: ttnn.MeshDevice) ->
         for part in dotted.split("."):
             cur = cur[int(part)] if part.isdigit() else getattr(cur, part)
         assert not cur.is_lora_active
-        assert cur.active_idx is None
+        assert not cur.active_stack
