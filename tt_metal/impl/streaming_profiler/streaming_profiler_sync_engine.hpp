@@ -24,13 +24,24 @@
 
 namespace tt::tt_metal::streaming_profiler {
 
+// One record of the sync stream (hostdev/streaming_profiler_common.h, kSyncRecordWords) as the engine takes it: the
+// device and roster core that wrote it, its kind and role, the round a link stamp names, the reading, and the wall
+// clock at it.
+struct ClockSample {
+    uint32_t dev;
+    uint32_t core;
+    uint32_t kind;
+    uint32_t round;
+    uint32_t role;
+    uint64_t value;
+    uint64_t ts;
+};
 
 // The chip's AICLK wall clock against its refclk, as its idle-eth pusher models it (eth_clock_pusher.cpp): one
 // segment per PLL multiple, each a line the pusher sends POINTS of -- (refclk r, the line's wall at r) with the
 // multiple k8 and the count of samples behind the line in the record's round word. The newest point of the open
 // segment stands for it; a CLOSE point ends a segment at its last on-line sample; a new multiple, or a point after
-// a close, opens the next; and consecutive segments meet where their lines cross. The raw samples the pusher sends
-// around a transition are only counted.
+// a close, opens the next; and consecutive segments meet where their lines cross.
 class LocalClockModel {
 public:
     static constexpr double kRefclkHz = kernel_profiler::kEthRefclkHz;
@@ -53,14 +64,11 @@ public:
     };
 
     std::vector<Run> runs;  // in time order, disjoint in refclk
-    uint64_t n_total = 0;   // clock records received: points, closes and raw samples
-    uint64_t points = 0;
-    uint64_t raws = 0;
+    uint64_t points = 0;    // points and closes received
     uint64_t transitions = 0;  // segments after the first
 
     // A point of the open segment's line, or the segment's close. An older point than the newest is superseded.
     void add_point(uint64_t refclk, uint64_t wall, uint32_t k8, uint32_t n, bool close) {
-        n_total++;
         points++;
         const double r = static_cast<double>(refclk), w = static_cast<double>(wall);
         if (runs.empty() || runs.back().closed || runs.back().k8 != static_cast<double>(k8)) {
@@ -79,11 +87,6 @@ public:
         cur.n = n;
         cur.closed = close;
     }
-    void add_raw() {
-        n_total++;
-        raws++;
-    }
-
     // The segment holding refclk r: the last one starting at or before it (the first, for anything earlier).
     const Run& run_at(double r) const {
         auto it = std::upper_bound(runs.begin(), runs.end(), r, [](double x, const Run& a) { return x < a.r_first; });

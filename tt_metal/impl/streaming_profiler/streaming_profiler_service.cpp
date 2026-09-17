@@ -12,6 +12,7 @@
 #include <limits>
 #include <memory>
 #include <thread>
+#include <unordered_map>
 #include <utility>
 
 #include <tracy/Tracy.hpp>
@@ -326,7 +327,6 @@ void Service::open_stream(AttachedStream& s, const CaptureContext& ctx, const Pr
     }
     s.dec.st = &s.state;
     s.dec.lanes = s.lanes.data();
-    s.dec.dev = ps.dev;
 }
 
 // A reader thread over every attached producer's streams: the attach and detach requests the Service posts, the
@@ -477,31 +477,23 @@ private:
     const std::atomic<bool>* stop_;
 };
 
-// The sync engine's thread: the eth pushers' streams, decoded for the clock samples their decoders route to the
-// engine, the records dropped. Attached before and detached before any consumer, so the covers the consumers wait
-// for exist first and are final when they flush.
+// The sync engine's thread: the eth pushers' sync streams, whose frames carry the sync's records raw
+// (hostdev/streaming_profiler_common.h, kSyncRecordWords), read here into the engine. Attached before and detached
+// before any consumer, so the covers the consumers wait for exist first and are final when they flush.
 class Service::SyncLoop : public StreamWalker {
 public:
-    explicit SyncLoop(Service& service) :
-        StreamWalker(service, service.sync_control_, "sp-sync", nullptr),
-        zones_(std::make_unique_for_overwrite<uint8_t[]>(kRecScratchBytes)),
-        events_(std::make_unique_for_overwrite<uint8_t[]>(kRecScratchBytes)),
-        data_(std::make_unique_for_overwrite<uint8_t[]>(kDataScratchBytes)) {}
+    explicit SyncLoop(Service& service) : StreamWalker(service, service.sync_control_, "sp-sync", nullptr) {}
 
 private:
-    // One frame's records, the most a frame can decode to.
-    static constexpr size_t kRecScratchBytes =
-        (profiler::kSpscMaxFrameWords / 2 + profiler::kSpscSinkSlackRecs) * profiler::kSpscRecBytes;
-    static constexpr size_t kDataScratchBytes = kRecScratchBytes + profiler::kSpscMaxFrameWords * 4 + 32;
+    bool wants(const ProducerStream& ps) const override { return ps.sync; }
 
-    bool wants(const ProducerStream& ps) const override { return ps.eth; }
-
-    void opened(Attached& a, const CaptureContext& ctx) override {
-        for (auto& s : a.streams) {
-            s->dec.clock_ctx = service_.sync_.get();
-            s->dec.clock_fn = [](void* engine, const ClockSample& cs) {
-                static_cast<SyncEngine*>(engine)->on_clock(cs);
-            };
+    void opened(Attached&, const CaptureContext& ctx) override {
+        core_of_.clear();
+        core_of_.resize(ctx.devices.size());
+        for (size_t d = 0; d < ctx.devices.size(); d++) {
+            for (size_t c = 0; c < ctx.devices[d].core_xy.size(); c++) {
+                core_of_[d].emplace(ctx.devices[d].core_xy[c], static_cast<uint32_t>(c));
+            }
         }
         service_.sync_->on_attach(ctx);
     }
@@ -511,13 +503,33 @@ private:
         if (!walk(a, s, w)) {
             return false;
         }
+        namespace kp = kernel_profiler;
+        const uint32_t dev = a.producer->streams()[s.stream].dev;
         const std::byte* p = frames_buf_.get();
         for (uint32_t i = 0; i < w.frames; i++) {
-            s.dec.decode_frame(
-                reinterpret_cast<const uint32_t*>(p), frame_words_[i], {zones_.get(), events_.get(), data_.get()});
+            const uint32_t* f = reinterpret_cast<const uint32_t*>(p);
+            const uint32_t n = f[kp::SPSC_PREFIX_HEAD_0];
+            const auto core = core_of_[dev].find(f[kp::SPSC_PREFIX_XY]);
+            TT_FATAL(
+                core != core_of_[dev].end() && kp::SPSC_SPAN_PREFIX_WORDS + n * kp::kSyncRecordWords <= frame_words_[i],
+                "streaming profiler: a sync frame of chip {} names core {:#x} with {} records in {} words",
+                s.chip,
+                f[kp::SPSC_PREFIX_XY],
+                n,
+                frame_words_[i]);
+            for (uint32_t r = 0; r < n; r++) {
+                const uint32_t* rec = f + kp::SPSC_SPAN_PREFIX_WORDS + r * kp::kSyncRecordWords;
+                service_.sync_->on_clock(ClockSample{
+                    .dev = dev,
+                    .core = core->second,
+                    .kind = rec[kp::SYNC_META] >> 8,
+                    .round = rec[kp::SYNC_ROUND],
+                    .role = rec[kp::SYNC_META] & 0xFFu,
+                    .value = (static_cast<uint64_t>(rec[kp::SYNC_VALUE_HI]) << 32) | rec[kp::SYNC_VALUE_LO],
+                    .ts = (static_cast<uint64_t>(rec[kp::SYNC_WALL_HI]) << 32) | rec[kp::SYNC_WALL_LO]});
+            }
             p += size_t{frame_words_[i]} * 4;
         }
-        s.dec.commit();
         return true;
     }
 
@@ -527,7 +539,7 @@ private:
             if (s->dropped != 0) {
                 log_warning(
                     tt::LogMetal,
-                    "[streaming profiler] the sync engine missed {} bytes of chip {}'s clock stream",
+                    "[streaming profiler] the sync engine missed {} bytes of chip {}'s sync stream",
                     s->dropped,
                     s->chip);
             }
@@ -535,7 +547,7 @@ private:
         }
     }
 
-    std::unique_ptr<uint8_t[]> zones_, events_, data_;
+    std::vector<std::unordered_map<uint32_t, uint32_t>> core_of_;  // per device: a frame's XY -> its roster core
 };
 
 void Service::sync_thread() { SyncLoop(*this).run(); }
@@ -553,7 +565,7 @@ public:
         data_arena_(kDataArenaBytes) {}
 
 private:
-    bool wants(const ProducerStream&) const override { return true; }
+    bool wants(const ProducerStream& ps) const override { return !ps.sync; }
 
     void opened(Attached& a, const CaptureContext&) override { a.capture = ++c_.captures; }
 

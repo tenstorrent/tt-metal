@@ -124,18 +124,6 @@ inline constexpr size_t kFrameRecsReserve = kMaxFrameRecs + profiler::kSpscSinkS
 inline constexpr size_t kFrameDataBytesReserve =
     kFrameRecsReserve * profiler::kSpscRecBytes + profiler::kSpscMaxPayloadWords * 4 + 32;
 
-// A decoded PP_CLOCK sample: chip, producing lane, clock kind, the round and role a link stamp names, the whole
-// reading, and the full wall timestamp.
-struct ClockSample {
-    uint32_t dev;
-    uint32_t lane;
-    uint32_t kind;
-    uint32_t round;
-    uint32_t role;
-    uint64_t value;
-    uint64_t ts;
-};
-
 // One stream's decode, owned by one thread; the wire-integrity totals are its owner's to report.
 struct StreamDecoder {
     profiler::SpanDecodeState* st = nullptr;
@@ -143,10 +131,6 @@ struct StreamDecoder {
     const profiler::SpscRecConsts* lanes = nullptr;  // per lane: what its records carry besides the packet's words
     StreamStats stats;
     uint64_t stall_zones = 0;
-    // Idle-eth PP_CLOCK samples are routed here at decode, never delivered as records. null clock_fn = drop.
-    uint32_t dev = 0;  // index into capture_context().devices, stamped on each ClockSample
-    void* clock_ctx = nullptr;
-    void (*clock_fn)(void*, const ClockSample&) = nullptr;
 
     // Where a frame's records go: kFrameRecsReserve records of room for zones and for events, kFrameDataBytesReserve
     // bytes for timestamped data.
@@ -187,9 +171,6 @@ inline StreamDecoder::Produced StreamDecoder::decode_frame(const uint32_t* frame
     // through `this` would be reloaded after every such store.
     const SpscRecConsts* const lane_consts = lanes;
     const uint64_t seq = batch_seq;
-    void (*const clock_fn)(void*, const ClockSample&) = this->clock_fn;
-    void* const clock_ctx = this->clock_ctx;
-    const uint32_t clock_dev = this->dev;
     uint8_t* const zb = out.zones;
     uint8_t* const eb = out.events;
     uint8_t* const db = out.data;
@@ -197,7 +178,7 @@ inline StreamDecoder::Produced StreamDecoder::decode_frame(const uint32_t* frame
     // The two point offsets share one register, data's in the high half: an array indexed by the packet kind would
     // live in memory and put every update on a store-to-load chain.
     uint64_t pt_off = 0;
-    uint64_t zm = 0, sz = 0, oreg = 0, rc = 0, fixes = 0, ck = 0;
+    uint64_t zm = 0, sz = 0, oreg = 0, rc = 0, fixes = 0;
     uint64_t lane_ts = 0;
     uint64_t frame_ts = 0;
     uint8_t* lane_rec = nullptr;
@@ -343,26 +324,7 @@ inline StreamDecoder::Produced StreamDecoder::decode_frame(const uint32_t* frame
                                            fixes += x.fixes;
                                            oreg += x.regressions;
                                        };
-            if (t == PP_CLOCK) {
-                // 4-word clock sample (spsc_packet.h); full wall = this lane's sticky-timer hi | wall_lo.
-                if (left >= 4u) {
-                    if (clock_fn) {
-                        const uint32_t low27 = pp_low27(src[0]);
-                        clock_fn(
-                            clock_ctx,
-                            ClockSample{
-                                clock_dev,
-                                lane,
-                                (low27 >> PP_CLOCK_KIND_SHIFT) & 0x7u,
-                                src[3] >> PP_CLOCK_ROUND_SHIFT,
-                                src[3] & PP_CLOCK_ROLE_MASK,
-                                (static_cast<uint64_t>(src[2]) << 24) | (low27 & PP_CLOCK_VALUE_MASK),
-                                lc.th_hi | src[1]});
-                    }
-                    ck++;
-                    got = 4;
-                }
-            } else if ((kSpscPointTypes >> t) & 1u) {
+            if ((kSpscPointTypes >> t) & 1u) {
                 // Points: the same head record for every point kind, Data with a payload behind its size word. One
                 // branch for them all keeps random alternation from mispredicting, so the run gate below tests the
                 // words for a run of four of each fixed-size point kind without branching on t first.
@@ -496,7 +458,6 @@ inline StreamDecoder::Produced StreamDecoder::decode_frame(const uint32_t* frame
     stats.records += rc;
     stats.order_regressions += oreg;
     stats.epoch_fixes += fixes;
-    stats.clock_samples += ck;
     stall_zones += sz;
     int64_t newest_ticks = std::numeric_limits<int64_t>::min();
     if (frame_ts != 0) {

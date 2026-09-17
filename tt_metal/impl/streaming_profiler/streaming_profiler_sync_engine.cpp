@@ -337,16 +337,11 @@ void SyncEngine::on_attach(const CaptureContext& ctx) {
 }
 
 void SyncEngine::on_clock(const ClockSample& s) {
-    if (s.kind != PP_CLOCK_LOCAL_REFCLK) {
+    if (s.kind != kernel_profiler::kSyncKindLocal) {
         links_.on_stamp(s);
         return;
     }
-    LocalClockModel& l = local_[s.dev];
-    if (s.role == PP_CLOCK_LOCAL_RAW) {
-        l.add_raw();
-        return;
-    }
-    l.add_point(s.value, s.ts, s.round & 0xFFu, s.round >> 8, s.role == PP_CLOCK_LOCAL_CLOSE);
+    local_[s.dev].add_point(s.value, s.ts, s.round & 0xFFu, s.round >> 8, s.role == kernel_profiler::kSyncLocalClose);
     if (publish_dev(s.dev)) {
         service().wake_consumers();
     }
@@ -367,17 +362,18 @@ void LinkSolver::reset(const CaptureContext& ctx) {
 }
 
 void LinkSolver::on_stamp(const ClockSample& s) {
-    const auto side = side_of_.find({s.dev, s.lane / profiler::kSpscNRiscDecode});
-    if (s.kind != PP_CLOCK_LINK_PTP || side == side_of_.end()) {
+    namespace kp = kernel_profiler;
+    const auto side = side_of_.find({s.dev, s.core});
+    if (s.kind != kp::kSyncKindLink || side == side_of_.end()) {
         dropped_++;
         return;
     }
     const auto [li, sender] = side->second;
     Stamp Round::* slot = nullptr;
     if (sender) {
-        slot = s.role == PP_CLOCK_ROLE_T0 ? &Round::t0 : s.role == PP_CLOCK_ROLE_T2 ? &Round::t2 : nullptr;
+        slot = s.role == kp::kSyncRoleT0 ? &Round::t0 : s.role == kp::kSyncRoleT2 ? &Round::t2 : nullptr;
     } else {
-        slot = s.role == PP_CLOCK_ROLE_T1 ? &Round::t1 : s.role == PP_CLOCK_ROLE_T1B ? &Round::t1b : nullptr;
+        slot = s.role == kp::kSyncRoleT1 ? &Round::t1 : s.role == kp::kSyncRoleT1B ? &Round::t1b : nullptr;
     }
     if (slot == nullptr) {
         dropped_++;
@@ -810,7 +806,7 @@ void SyncEngine::log_summary() const {
     if (links_.dropped() != 0) {
         log_warning(
             tt::LogMetal,
-            "[streaming profiler] d2d sync: {} PP_CLOCK samples ignored (unknown kind, a core on no link, or a role "
+            "[streaming profiler] d2d sync: {} sync records ignored (unknown kind, a core on no link, or a role "
             "that end does not stamp)",
             links_.dropped());
     }
@@ -836,9 +832,9 @@ void SyncEngine::log_clock_models() const {
         if (nb == 0) {
             log_warning(
                 tt::LogMetal,
-                "[streaming profiler] d2d sync chip {}: {} clock records but no segment of the local clock model",
+                "[streaming profiler] d2d sync chip {}: {} clock points but no segment of the local clock model",
                 chip,
-                l.n_total);
+                l.points);
             continue;
         }
         const double mean = static_cast<double>(ssum / wsum);
@@ -846,15 +842,13 @@ void SyncEngine::log_clock_models() const {
         const double anchor_ghz = dev < ctx_.devices.size() ? ctx_.devices[dev].frequency_ghz : 0.0;
         log_info(
             tt::LogMetal,
-            "[streaming profiler] d2d sync chip {}: local clock {} points in {} segments ({} steps), {} raw transition "
-            "samples; applied AICLK mean {:.5f} GHz (segment min {:.5f}, max {:.5f}; boot anchor {:.5f}), spread "
-            "{:.1f} "
-            "ppm; {} correction nodes, the tangent extended {} times",
+            "[streaming profiler] d2d sync chip {}: local clock {} points in {} segments ({} steps); applied AICLK "
+            "mean {:.5f} GHz (segment min {:.5f}, max {:.5f}; boot anchor {:.5f}), spread {:.1f} ppm; {} correction "
+            "nodes, the tangent extended {} times",
             chip,
             l.points,
             nb,
             l.transitions,
-            l.raws,
             mean * to_ghz,
             smin * to_ghz,
             smax * to_ghz,

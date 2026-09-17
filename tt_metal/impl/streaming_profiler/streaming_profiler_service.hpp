@@ -166,7 +166,7 @@ struct ProducerStream {
     const std::atomic<uint64_t>* walked = nullptr;  // bytes, absolute
     uint32_t dev = 0;                               // index into capture_context().devices
     std::span<const std::atomic<uint64_t>> marks;   // frame boundaries, one per kMarkBytes of `fifo`
-    bool eth = false;  // an idle-eth pusher's socket: the chip's clock samples and link stamps, no worker frames
+    bool sync = false;  // an idle-eth pusher's sync socket: the sync's records raw, for the sync engine alone
 };
 
 // One capture's streams and what a consumer needs to decode them. Valid from attach_producer() until

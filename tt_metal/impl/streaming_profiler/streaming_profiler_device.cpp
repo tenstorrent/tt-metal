@@ -63,11 +63,12 @@ constexpr uint32_t kCfgReserve = 8 * 1024;
 constexpr uint32_t kMiscBytes = 1024;  // done(64) + stop(64), with headroom
 constexpr uint32_t kPageSize = kernel_profiler::SPSC_SPAN_PAGE_WORDS * 4;
 constexpr uint32_t kNRisc = kernel_profiler::PROFILER_SPSC_TENSIX_RISC;
-// Idle-eth clock pushers: one socket per idle-eth core. A 5-word PP_CLOCK record per ms, plus a few dozen around each
-// DVFS step, is well under 1 MB/s even at hundreds of steps a second, so 1 MiB of host FIFO (a single 2 MiB-aligned
-// carve of the host channel) is generous; the relays' budget is untouched.
+// Idle-eth pushers: two sockets per idle-eth core, the linked cores' profiler frames and the sync's records. A few
+// 32 B sync records per ms, and the routers' own zones, are well under 1 MB/s, so 1 MiB of host FIFO each (a single
+// 2 MiB-aligned carve of the host channel) is generous; the relays' budget is untouched.
 constexpr uint32_t kEthFifoBytes = 1u << 20;
 constexpr uint32_t kEthRingBytes = 2048;  // model::kRingSamples raw samples of 16 B (eth_clock_pusher.cpp)
+constexpr uint32_t kEthSyncRingBytes = kernel_profiler::kSyncRingBytes;
 // A drainer's control block: done and heartbeat words, then the stop word one stride up.
 constexpr uint32_t kCtrlBytes = 2 * kernel_profiler::kRelayCtrlWordStride;
 // Pusher scratch for one linked core: its control vector, then its two ring images (BH eth has DM0 and DM1).
@@ -229,17 +230,22 @@ void Devices::carve_eth_l1(const Hal& hal, uint32_t& aeth_unreserved, uint32_t& 
         eth_prof_l1_ = hal.get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::PROFILER);
         const uint32_t ebase = hal.get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::UNRESERVED);
         const uint32_t esize = hal.get_dev_size(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::UNRESERVED);
-        const uint32_t need =
-            kCfgReserve + kCtrlBytes + slot_bytes_ + kEthScratchBytes + kEthTableBytes + kEthRingBytes + kPageSize;
+        const uint32_t need = kCfgReserve + kCtrlBytes + slot_bytes_ + kEthScratchBytes + kEthTableBytes +
+                              kEthRingBytes + kEthSyncRingBytes + kPageSize;
         if (esize >= need) {
             eth_l1_.cfg = ebase + esize - kCfgReserve;
+            eth_l1_.sync_cfg = eth_l1_.cfg + kCfgReserve / 2;
             eth_l1_.ctrl = eth_l1_.cfg - kCtrlBytes;
             eth_l1_.stage =
                 (eth_l1_.ctrl - slot_bytes_) & ~(kPageSize - 1u);  // the pack pads assume a page-aligned slot
             eth_l1_.scratch = (eth_l1_.stage - kEthScratchBytes) & ~(kPageSize - 1u);
             eth_l1_.table = (eth_l1_.scratch - kEthTableBytes) & ~(kPageSize - 1u);
             eth_l1_.ring = eth_l1_.table - kEthRingBytes;
-            eth_ok_ = eth_l1_.ring >= ebase;
+            eth_l1_.sync_ring = eth_l1_.ring - kEthSyncRingBytes;
+            eth_l1_.link_ring = aeth_ok_ ? aeth_unreserved + aeth_unres_size - kernel_profiler::kLinkSyncL1Bytes +
+                                               kernel_profiler::kLinkSyncRingOffset
+                                         : 0u;
+            eth_ok_ = eth_l1_.sync_ring >= ebase;
         }
         if (!eth_ok_) {
             log_warning(
@@ -647,10 +653,10 @@ bool Devices::launch_relay(
         fmt::format("relay {}", d));
 }
 
-// One idle ethernet core per chip joins the DECODE roster as a standard 5-lane core: its DM0 lane carries the PP_CLOCK
-// tracker, every other lane is always empty, and the decoder skips a lane whose extent is 0 exactly as it does an idle
-// TRISC. It never joins the relay roster: the core pushes its own ring over its own socket. The lowest (y, x) idle
-// core, so the choice is stable run to run (the set is unordered).
+// One idle ethernet core per chip joins the DECODE roster as a standard 5-lane core: its DM0 lane carries its own
+// firmware markers, every other lane is always empty, and the decoder skips a lane whose extent is 0 exactly as it
+// does an idle TRISC. It never joins the relay roster: the core pushes its own ring over its own socket. The lowest
+// (y, x) idle core, so the choice is stable run to run (the set is unordered).
 void Devices::enumerate_eth_cores(DeviceCtx& ctx) {
     auto& cluster = MetalContext::instance(context_id_).get_cluster();
     const uint32_t chip = ctx.chip_id;
@@ -719,11 +725,16 @@ bool Devices::launch_eth_pusher(
             ctx,
             coord,
             p,
-            DrainerL1{.core_type = HalProgrammableCoreType::IDLE_ETH, .cfg = eth_l1_.cfg, .fifo_bytes = kEthFifoBytes},
+            DrainerL1{
+                .core_type = HalProgrammableCoreType::IDLE_ETH,
+                .cfg = eth_l1_.cfg,
+                .sync_cfg = eth_l1_.sync_cfg,
+                .fifo_bytes = kEthFifoBytes},
             std::move(program),
             "idle-eth pusher")) {
         return false;
     }
+    ctx.out.sync_socket = p.sock_idx + 1;
     log_info(
         tt::LogMetal,
         "[streaming profiler] Device {}: idle-eth clock pusher on eth ({},{}) up; drains {} active eth core(s)",
@@ -745,6 +756,10 @@ bool Devices::launch_drainer(
     auto& cluster = MetalContext::instance(context_id_).get_cluster();
     try {
         auto socket = make_socket(mesh_device, coord, d.core.phys, l1.fifo_bytes, l1.cfg, l1.core_type);
+        std::unique_ptr<distributed::D2HSocket> sync_socket;
+        if (l1.sync_cfg != 0) {
+            sync_socket = make_socket(mesh_device, coord, d.core.phys, l1.fifo_bytes, l1.sync_cfg, l1.core_type);
+        }
         // A stale done, heartbeat or stop word from the previous run reads as this run's live state (teardown leaves
         // stop at 1 or 2, and the drainer loop exits on nonzero stop).
         const std::array<uint32_t, kCtrlBytes / sizeof(uint32_t)> zero{};
@@ -757,6 +772,10 @@ bool Devices::launch_drainer(
         }
         d.sock_idx = static_cast<uint32_t>(ctx.out.sockets.size());
         ctx.out.sockets.push_back(std::move(socket));
+        if (sync_socket) {
+            ctx.out.sockets.push_back(std::move(sync_socket));
+            d.n_sockets = 2;
+        }
         d.program = std::move(program);
     } catch (const std::exception& e) {
         // A code-region overflow fails the load, not the start, and the run then exits 0 with every marker dropped.
@@ -799,20 +818,26 @@ void Devices::stop_drainer(
     std::string_view what,
     const RelayStateFn& on_state) {
     auto& cluster = MetalContext::instance(context_id_).get_cluster();
-    // No consumer (a bring-up that failed): the drainer's barrier completes on the host's own acks.
-    distributed::D2HSocket* sock =
-        !on_state && r.sock_idx < ctx.out.sockets.size() ? ctx.out.sockets[r.sock_idx].get() : nullptr;
+    // No consumer (a bring-up that failed): the drainer's barriers complete on the host's own acks.
+    std::vector<distributed::D2HSocket*> socks;
+    for (uint32_t k = 0; !on_state && k < r.n_sockets && r.sock_idx + k < ctx.out.sockets.size(); k++) {
+        socks.push_back(ctx.out.sockets[r.sock_idx + k].get());
+    }
     write_u32(cluster, ctx.chip_id, r.core.virt, r.stop_addr, kernel_profiler::kRelayStopQuiesce);
     bool drained = false;
     uint32_t state = 0;
     const bool done = poll_word(
         cluster, tt_cxy_pair(ctx.chip_id, r.core.virt), r.state_addr, std::chrono::seconds(10), [&](uint32_t w) {
-            if (sock != nullptr && sock->pages_available() != 0) {
-                sock->discard_pending_pages();
+            for (distributed::D2HSocket* sock : socks) {
+                if (sock->pages_available() != 0) {
+                    sock->discard_pending_pages();
+                }
             }
             state = w & kernel_profiler::kRelayDoneMask;
             if (!drained && on_state && state == kernel_profiler::kRelayDrainedWord) {
-                on_state(device_index, r.sock_idx, RelayState::Drained);
+                for (uint32_t k = 0; k < r.n_sockets; k++) {
+                    on_state(device_index, r.sock_idx + k, RelayState::Drained);
+                }
                 drained = true;
             }
             return state == kernel_profiler::kRelayDoneWord;
@@ -823,9 +848,9 @@ void Devices::stop_drainer(
         ctx.chip_id,
         what,
         state);
-    if (on_state) {
-        // Done follows the drainer's socket barrier, so the host has already acked every byte this socket carries.
-        on_state(device_index, r.sock_idx, RelayState::Done);
+    // Done follows the drainer's socket barriers, so the host has already acked every byte its sockets carry.
+    for (uint32_t k = 0; on_state && k < r.n_sockets; k++) {
+        on_state(device_index, r.sock_idx + k, RelayState::Done);
     }
 }
 

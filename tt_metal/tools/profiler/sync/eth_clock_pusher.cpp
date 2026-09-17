@@ -2,16 +2,17 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Resident idle-eth clock tracker that PUSHES ITS OWN RING, and drains its chip's active eth cores too.
+// Resident idle-eth clock tracker and sync pusher, which drains its chip's active eth cores too.
 //
 // Runs on one idle ethernet core per chip for the life of the profiling session. It keeps the chip's AICLK wall
-// clock modelled against the eth tile's free-running 50 MHz counter (the local clock model below) and writes points
-// of that model into its own SPSC lane as PP_CLOCK, then ships that lane to the host over its OWN D2H socket in the
-// relay wire format (SPSC span frames). Between samples it also acts as a mini-relay for the chip's ACTIVE eth
-// cores: those run the fabric router and can spend no cycles on egress, so this core NoC-reads their control
-// vectors and rings, packs a frame stamped with THEIR coordinate, pushes it on the same socket, and writes their
-// heads back -- the decoder resolves a frame's core by its XY, so one socket carries every core this pusher serves,
-// exactly as one relay socket carries its cores.
+// clock modelled against the eth tile's free-running 50 MHz counter (the local clock model below). Points of that
+// model, and the link ends' stamp averages read from the ring at the end of each active eth core's link L1, go to
+// the host as sync frames over the SYNC socket (hostdev/streaming_profiler_common.h, kSyncRecordWords), which the
+// sync engine reads itself. Between samples it also acts as a mini-relay for the chip's ACTIVE eth cores: those run
+// the fabric router and can spend no cycles on egress, so this core NoC-reads their control vectors and rings, packs
+// a frame stamped with THEIR coordinate, pushes it on the PROFILER socket, and writes their heads back -- the decoder
+// resolves a frame's core by its XY, so that socket carries every core this pusher serves exactly as one relay
+// socket carries its cores.
 //
 // WHY THE ETH CORE PUSHES: the DRAM relay is unrolled for exactly five Tensix RISCs per core and an eth core has
 // two. Putting eth in the relay roster meant a heterogeneous frame format through the relay, the frame sizing and
@@ -45,6 +46,10 @@ constexpr uint32_t kScratchAddr = get_compile_time_arg_val(5);
 constexpr uint32_t kTileTableAddr = get_compile_time_arg_val(6);  // hostdev EthTileTable
 constexpr uint32_t kMeasureOnly = get_compile_time_arg_val(7);    // write the tile table and exit
 constexpr uint32_t kRingAddr = get_compile_time_arg_val(8);       // model::kRingSamples raw samples, for transitions
+constexpr uint32_t kSyncCfgAddr = get_compile_time_arg_val(9);    // the sync socket's D2HSocket config
+constexpr uint32_t kSyncRingAddr = get_compile_time_arg_val(10);  // this core's points, kSyncRingRecords of them
+constexpr uint32_t kLinkRingAddr =
+    get_compile_time_arg_val(11);  // the link ends' sync ring, one address on every active eth core; 0 = none
 
 namespace kp = kernel_profiler;
 
@@ -89,9 +94,32 @@ namespace eth_ptp = tt::tt_metal::eth_ptp;
 //
 // A step shows as kConfirm consecutive samples off the line by more than kOffTicks. The old segment's last on-line
 // sample closes it; the new slope is locked once the newest kWinTicks of samples lie on one line, which rejects the
-// PLL's glide; the samples of a transition go to the host raw so the glide itself can be seen. Nothing here is a
-// typed-in correction: the bracket cancels the read latency by construction, k8 is integer arithmetic, and the
-// intercept is a mean.
+// PLL's glide. Nothing here is a typed-in correction: the bracket cancels the read latency by construction, k8 is
+// integer arithmetic, and the intercept is a mean.
+
+// This core's points, in a ring of kSyncRingRecords the sweep drains into sync frames; a point the ring has no room
+// for is skipped, never waited for: the next one carries the same line.
+namespace sync {
+static uint32_t g_head = 0, g_tail = 0;
+inline volatile tt_l1_ptr uint32_t* rec(uint32_t i) {
+    return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+        kSyncRingAddr + (i % kp::kSyncRingRecords) * kp::kSyncRecordWords * 4u);
+}
+inline void write(uint32_t kind, uint32_t role, uint32_t round, uint64_t value, uint64_t wall) {
+    if (g_tail - g_head == kp::kSyncRingRecords) {
+        return;
+    }
+    volatile tt_l1_ptr uint32_t* r = rec(g_tail);
+    r[kp::SYNC_META] = (kind << 8) | role;
+    r[kp::SYNC_ROUND] = round;
+    r[kp::SYNC_VALUE_LO] = static_cast<uint32_t>(value);
+    r[kp::SYNC_VALUE_HI] = static_cast<uint32_t>(value >> 32);
+    r[kp::SYNC_WALL_LO] = static_cast<uint32_t>(wall);
+    r[kp::SYNC_WALL_HI] = static_cast<uint32_t>(wall >> 32);
+    g_tail++;
+}
+}  // namespace sync
+
 namespace model {
 constexpr uint32_t kRingSamples = 128;  // raw samples kept, ~5 us apart: ~600 us deep
 constexpr uint32_t kConfirm = 4;           // consecutive off-line samples that make a step
@@ -107,7 +135,6 @@ constexpr uint32_t kCountMax = 1u << 22;   // the residue sum stops here, and it
 // a sweep can hold sampling for ~100 us, so no point ever lands on a step the model has not yet seen.
 constexpr uint32_t kPointLagTicks = 8192;
 constexpr uint64_t kReanchorTicks = 1ull << 30;  // multiple of 8: the anchor moves along the exact line
-constexpr uint32_t kPreDepartureRaw = 8;         // ring entries before a departure that go to the host with it
 static_assert((kRingSamples & (kRingSamples - 1)) == 0 && kReanchorTicks % 8 == 0);
 
 struct Raw {
@@ -130,21 +157,8 @@ struct Model {
     uint32_t acq_count = 0;
     uint64_t r_lock = 0;  // where the segment's line begins: the oldest sample of the window that locked it
     uint64_t r_last_point = 0;
-    uint32_t ring_n = 0;    // ring entries written; the newest is ring()[(ring_n - 1) & (kRingSamples - 1)]
-    bool emit_raw = false;  // ring pushes also go to the host: from a departure to the new segment's first point
+    uint32_t ring_n = 0;  // ring entries written; the newest is ring()[(ring_n - 1) & (kRingSamples - 1)]
 };
-
-inline __attribute__((always_inline)) void write_raw(uint64_t r, uint64_t w) {
-    if (kp::ring_has_room(kp::CLOCK_RECORD_WORDS)) {
-        kp::ring_write_clock(
-            kp::ppfmt::CLOCK_LOCAL_REFCLK,
-            r,
-            static_cast<uint32_t>(w),
-            static_cast<uint32_t>(w >> 32),
-            0,
-            kp::ppfmt::CLOCK_LOCAL_RAW);
-    }
-}
 
 inline __attribute__((always_inline)) void ring_push(Model& m, uint64_t r, uint64_t w) {
     volatile tt_l1_ptr Raw& e = ring()[m.ring_n & (kRingSamples - 1)];
@@ -153,9 +167,6 @@ inline __attribute__((always_inline)) void ring_push(Model& m, uint64_t r, uint6
     e.w_lo = static_cast<uint32_t>(w);
     e.w_hi = static_cast<uint32_t>(w >> 32);
     m.ring_n++;
-    if (m.emit_raw) {
-        write_raw(r, w);
-    }
 }
 
 // The line's wall at refclk r, in eighths of a tick.
@@ -164,22 +175,12 @@ inline int64_t line_w8(const Model& m, uint64_t r) {
 }
 
 // A point of the line at refclk r, never before the segment's own start: the host keeps segments disjoint in refclk.
-// Skipped without room, never waited for: the next one carries the same line.
 inline void write_point(Model& m, uint64_t r, uint32_t role) {
     r = r > m.r_lock ? r : m.r_lock;
     m.r_last_point = r;
-    if (!kp::ring_has_room(kp::CLOCK_RECORD_WORDS)) {
-        return;
-    }
     const uint64_t w = static_cast<uint64_t>((line_w8(m, r) + 4) >> 3);
     const uint32_t n = m.n < kCountMax ? m.n : kCountMax - 1;
-    kp::ring_write_clock(
-        kp::ppfmt::CLOCK_LOCAL_REFCLK,
-        r,
-        static_cast<uint32_t>(w),
-        static_cast<uint32_t>(w >> 32),
-        m.k8 | (n << 8),
-        role);
+    sync::write(kp::kSyncKindLocal, role, m.k8 | (n << 8), r, w);
 }
 
 inline void begin_acquire(Model& m, uint64_t r_from) {
@@ -188,7 +189,6 @@ inline void begin_acquire(Model& m, uint64_t r_from) {
     m.sum = 0;
     m.r_acq0 = r_from;
     m.acq_count = 0;
-    m.emit_raw = true;
 }
 
 // Locks the slope from the newest kWinTicks of the ring when those samples lie on one line: the slope from the
@@ -239,16 +239,10 @@ __attribute__((noinline)) bool try_lock(Model& m, uint64_t r_now) {
     return true;
 }
 
-// A confirmed step: the old line closes at its last on-line sample, the ring's recent entries give the host the
-// approach to the departure, and the slope acquisition restarts from the departure.
+// A confirmed step: the old line closes at its last on-line sample and the slope acquisition restarts from the
+// departure.
 __attribute__((noinline, cold)) void step(Model& m) {
-    write_point(m, m.r_last_on, kp::ppfmt::CLOCK_LOCAL_CLOSE);
-    const uint32_t avail = m.ring_n < kRingSamples ? m.ring_n : kRingSamples;
-    const uint32_t back = avail < kPreDepartureRaw ? avail : kPreDepartureRaw;
-    for (uint32_t i = back; i >= 1; i--) {
-        const volatile tt_l1_ptr Raw& e = ring()[(m.ring_n - i) & (kRingSamples - 1)];
-        write_raw(raw_r(e), raw_w(e));
-    }
+    write_point(m, m.r_last_on, kp::kSyncLocalClose);
     begin_acquire(m, m.r_dep);
 }
 
@@ -280,13 +274,12 @@ inline __attribute__((always_inline)) void feed(Model& m, uint64_t r, uint64_t w
         if ((m.n & (m.n - 1)) == 0) {
             m.c8 = m.sum / static_cast<int32_t>(m.n);
             if (m.n >= kFirstPointN && m.n <= kLastDoublingN) {
-                write_point(m, r - kPointLagTicks, kp::ppfmt::CLOCK_LOCAL_POINT);
-                m.emit_raw = false;
+                write_point(m, r - kPointLagTicks, kp::kSyncLocalPoint);
             }
         }
     }
     if (r - m.r_last_point >= kPointTicks) {
-        write_point(m, r - kPointLagTicks, kp::ppfmt::CLOCK_LOCAL_POINT);
+        write_point(m, r - kPointLagTicks, kp::kSyncLocalPoint);
     }
     if (r - m.ra >= kReanchorTicks) {
         m.ra += kReanchorTicks;
@@ -478,6 +471,25 @@ inline uint32_t finish_frame(volatile tt_l1_ptr uint32_t* frame, uint32_t xy, ui
     return (bytes + kPageBytes - 1u) & ~(kPageBytes - 1u);
 }
 
+// A sync frame for core `xy`: records [first, first + n) of the ring of `ring_records` at `recs`.
+inline uint32_t pack_sync_frame(
+    uint32_t xy, const volatile tt_l1_ptr uint32_t* recs, uint32_t first, uint32_t n, uint32_t ring_records) {
+    volatile tt_l1_ptr uint32_t* frame = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kStageAddr);
+    for (uint32_t r = 0; r < kNumRisc; r++) {
+        frame[kp::SPSC_PREFIX_HEAD_0 + r] = 0;
+    }
+    frame[kp::SPSC_PREFIX_HEAD_0] = n;
+    uint32_t off = kPrefix;
+    for (uint32_t i = 0; i < n; i++) {
+        copy_words(frame + off, recs + ((first + i) % ring_records) * kp::kSyncRecordWords, kp::kSyncRecordWords);
+        off += kp::kSyncRecordWords;
+    }
+    while (off < kPrefix + kWireCtrl) {
+        frame[off++] = 0;
+    }
+    return finish_frame(frame, xy, off);
+}
+
 // This core: rings and control vector are local. Advances its own heads -- this RISC is their consumer.
 inline uint32_t pack_own_frame() {
     volatile tt_l1_ptr uint32_t* cv = kp::profiler_control_buffer;
@@ -602,8 +614,62 @@ void kernel_main() {
 
     SocketSenderInterface sender = create_sender_socket_interface(kSocketConfigAddr);
     set_sender_socket_page_size(sender, kPageBytes);
+    SocketSenderInterface sync_sender = create_sender_socket_interface(kSyncCfgAddr);
+    set_sender_socket_page_size(sync_sender, kPageBytes);
     noc_write_init_state<write_cmd_buf>(NOC_INDEX, NOC_UNICAST_WRITE_VC);
 
+    const auto sweep_sync = [&]() {
+        while (sync::g_head != sync::g_tail) {
+            const uint32_t left = sync::g_tail - sync::g_head;
+            const uint32_t n = left < kp::kSyncFrameRecords ? left : kp::kSyncFrameRecords;
+            ship(sync_sender, pack_sync_frame(kMyXy, sync::rec(0), sync::g_head, n, kp::kSyncRingRecords));
+            sync::g_head += n;
+        }
+    };
+    // A linked core's sync ring image, read into the scratch past its ring images.
+    constexpr uint32_t kLinkScratch = kScratchAddr + kp::PROFILER_L1_CONTROL_BUFFER_SIZE + kNumEthRisc * kRingBytes;
+    constexpr uint32_t kLinkRingBytes = kp::kLinkSyncRingRecords * kp::kSyncRecordWords * 4u;
+    constexpr uint32_t kTailBlock = (kp::SPSC_LINK_SYNC_TAIL * 4u) & ~63u;
+    static_assert(kLinkScratch + kLinkRingBytes <= kScratchAddr + 4608);
+    uint32_t link_cursor[kMaxLinked] = {};
+    // Linked core i's records [cursor, tail), the tail from the control vector pack_linked_frame just read. The end
+    // never waits for this core, so a tail more than a ring ahead means the oldest are gone. A round's two records
+    // land back to back, so a run reaching into the ring's last two slots re-reads the tail after the image and drops
+    // what the end may have overwritten meanwhile.
+    const auto ship_link_sync = [&](uint32_t i) {
+        if (kLinkRingAddr == 0) {
+            return;
+        }
+        volatile tt_l1_ptr uint32_t* cv = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kScratchAddr);
+        const uint32_t tail = cv[kp::SPSC_LINK_SYNC_TAIL];
+        if (tail == link_cursor[i]) {
+            return;
+        }
+        const uint32_t x = linked_xy[i] & 0xFFFFu, y = linked_xy[i] >> 16;
+        uint32_t first =
+            tail - link_cursor[i] > kp::kLinkSyncRingRecords ? tail - kp::kLinkSyncRingRecords : link_cursor[i];
+        noc_async_read(get_noc_addr(x, y, kLinkRingAddr), kLinkScratch, kLinkRingBytes);
+        noc_async_read_barrier();
+        if (tail - first > kp::kLinkSyncRingRecords - 2) {
+            noc_async_read(get_noc_addr(x, y, linked_l1[i] + kTailBlock), kScratchAddr + kTailBlock, 64);
+            noc_async_read_barrier();
+            const uint32_t now = cv[kp::SPSC_LINK_SYNC_TAIL];
+            if (now - first > kp::kLinkSyncRingRecords) {
+                first = now - kp::kLinkSyncRingRecords;
+            }
+        }
+        if (first < tail) {
+            ship(
+                sync_sender,
+                pack_sync_frame(
+                    linked_xy[i],
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kLinkScratch),
+                    first,
+                    tail - first,
+                    kp::kLinkSyncRingRecords));
+        }
+        link_cursor[i] = tail;
+    };
     const auto sweep = [&]() {
         uint32_t bytes = pack_own_frame();
         if (bytes != 0) {
@@ -614,7 +680,9 @@ void kernel_main() {
             if (bytes != 0) {
                 ship(sender, bytes);
             }
+            ship_link_sync(i);
         }
+        sweep_sync();
     };
 
     // Sampling waits for the host's go word, written once the receiver's ingest threads drain this socket. Started
@@ -665,8 +733,10 @@ void kernel_main() {
     sweep();
     *done = kp::kRelayDrainedWord;
     socket_barrier(sender);
+    socket_barrier(sync_sender);
     noc_async_writes_flushed();
     update_socket_config(sender);
+    update_socket_config(sync_sender);
     *done = kp::kRelayDoneWord;
 #endif
 }

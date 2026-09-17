@@ -512,7 +512,10 @@ KernelHandle create_pusher_kernel(Program& program, const EthL1& l1, const CoreC
                 l1.scratch,
                 l1.table,
                 measure_only ? 1u : 0u,
-                l1.ring}});
+                l1.ring,
+                l1.sync_cfg,
+                l1.sync_ring,
+                l1.link_ring}});
 }
 
 SyncDevices::SyncDevices(

@@ -81,7 +81,7 @@ Receiver::Receiver(std::unique_ptr<Devices> relays, std::vector<CapturedDevice> 
              &st->walked_bytes,
              st->dev,
              std::span<const std::atomic<uint64_t>>(st->marks),
-             st->sock_idx >= devices_[st->dev].n_relay_sockets});
+             st->sock_idx == devices_[st->dev].sync_socket});
     }
 }
 
@@ -315,7 +315,6 @@ void Receiver::finish_stream(uint32_t stream, uint64_t dropped_bytes, const Stre
     c.zones = std::max(c.zones, st.zones);
     c.order_regressions = std::max(c.order_regressions, st.order_regressions);
     c.epoch_fixes = std::max(c.epoch_fixes, st.epoch_fixes);
-    c.clock_samples = std::max(c.clock_samples, st.clock_samples);
 }
 
 void Receiver::log_report() const {
@@ -332,7 +331,6 @@ void Receiver::log_report() const {
         t.zones += c.zones;
         t.order_regressions += c.order_regressions;
         t.epoch_fixes += c.epoch_fixes;
-        t.clock_samples += c.clock_samples;
     }
     log_info(
         tt::LogMetal,
@@ -347,12 +345,6 @@ void Receiver::log_report() const {
     if (t.epoch_fixes != 0) {
         log_info(
             tt::LogMetal, "[streaming profiler] {} timestamps repaired for the wall-clock latch race", t.epoch_fixes);
-    }
-    if (t.clock_samples != 0) {
-        log_info(
-            tt::LogMetal,
-            "[streaming profiler] {} PP_CLOCK samples decoded from the idle-eth clock trackers",
-            t.clock_samples);
     }
     if (consumer_dropped != 0) {
         log_warning(

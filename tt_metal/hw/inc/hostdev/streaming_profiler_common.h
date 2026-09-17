@@ -69,7 +69,10 @@ enum SpscControlBuffer {
     // the BroadcastRing. 8 slots so SPSC_CONTROL_END stays inside the 64-word vector.
     SPSC_STALL_COUNT_0 = 2 * PROFILER_SPSC_MAX_RISC + 2,
     SPSC_STALL_COUNT_MAX = 8,
-    SPSC_CONTROL_END = SPSC_STALL_COUNT_0 + SPSC_STALL_COUNT_MAX,  // first unused word; grow the layout here
+    // On an active eth core hosting a link end: the tail of its sync ring (kLinkSyncRingOffset), records written.
+    // Here rather than in the link L1 so the pusher's per-sweep read of this vector already carries it.
+    SPSC_LINK_SYNC_TAIL = SPSC_STALL_COUNT_0 + SPSC_STALL_COUNT_MAX,
+    SPSC_CONTROL_END = SPSC_LINK_SYNC_TAIL + 1,  // first unused word; grow the layout here
 };
 // Runtime-id slot of Tensix RISC `risc`: 21..23, then 29..30 past the tails.
 constexpr std::uint32_t spsc_state_prog_word(std::uint32_t risc) {
@@ -122,10 +125,41 @@ constexpr std::uint32_t eth_tile_out_word(std::uint32_t n_tiles, std::uint32_t t
 // period in refclk ticks.
 static constexpr std::uint32_t kEthRefclkHz = 50'000'000u;
 static constexpr std::uint32_t kLinkSyncStampUnitsPerNs = 4;
-static constexpr std::uint32_t kLinkSyncL1Bytes = 640;
+static constexpr std::uint32_t kLinkSyncL1Bytes = 800;
 static constexpr std::uint32_t kLinkSyncCtlOffset = 480;
 static constexpr std::uint32_t kLinkSyncCtlRun = 1, kLinkSyncCtlStop = 2;
 static constexpr std::uint32_t kLinkSyncPaceTicks = 500'000;  // a round every 10 ms
+
+// The sync's records, 8 words: [SYNC_META] kind << 8 | role; [SYNC_ROUND]; the reading and the wall clock at it as
+// two words each. A link end writes a round's two stamp averages into the ring at the end of its link L1
+// (kLinkSyncRingRecords slots) and publishes the count in its control vector (SPSC_LINK_SYNC_TAIL); it never waits
+// for a reader, so a pusher a whole ring behind loses the oldest. The pusher reads every linked core's control vector
+// each sweep regardless, reads the ring when the tail moved, keeps its own clock model's points in a ring of
+// kSyncRingRecords in its L1, and ships them all on its sync socket as sync frames: the SPSC frame prefix (w0, payload
+// words, the source core's XY) with the record count at SPSC_PREFIX_HEAD_0, then the records, the payload padded to
+// SPSC_SPAN_WIRE_CTRL_WORDS at least so the ingest's frame walk accepts it. Never a profiler record: the sync engine
+// reads its socket itself.
+static constexpr std::uint32_t kSyncRecordWords = 8;
+enum SyncRecordWord : std::uint32_t {
+    SYNC_META = 0,
+    SYNC_ROUND,
+    SYNC_VALUE_LO,
+    SYNC_VALUE_HI,
+    SYNC_WALL_LO,
+    SYNC_WALL_HI,
+};
+// LOCAL: a point of the chip's clock model, value the refclk, wall its line there, round = k8 | n << 8. LINK: a
+// round's 1588 stamp average in kLinkSyncStampUnitsPerNs per ns.
+static constexpr std::uint32_t kSyncKindLocal = 0, kSyncKindLink = 1;
+static constexpr std::uint32_t kSyncLocalPoint = 0, kSyncLocalClose = 1;
+static constexpr std::uint32_t kSyncRoleT0 = 0, kSyncRoleT1 = 1, kSyncRoleT1B = 2, kSyncRoleT2 = 3;
+static constexpr std::uint32_t kLinkSyncRingOffset = 544;
+static constexpr std::uint32_t kLinkSyncRingRecords = 8;
+static constexpr std::uint32_t kSyncRingRecords = 128;
+static constexpr std::uint32_t kSyncRingBytes = kSyncRingRecords * kSyncRecordWords * 4;
+static constexpr std::uint32_t kSyncFrameRecords = 32;  // records per sync frame at most
+static_assert(kLinkSyncRingOffset + kLinkSyncRingRecords * kSyncRecordWords * 4 <= kLinkSyncL1Bytes);
+static_assert(kLinkSyncRingRecords <= kSyncFrameRecords);
 
 // STICKY_META (SPSC/drainer backend, legacy / synthetic bench path only): an 8B context packet whose high
 // word carries (core_x, core_y, risc) + this type and whose low word is a 32-bit host-side ID. The host

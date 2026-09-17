@@ -26,13 +26,18 @@
 #include <cstdlib>
 #include <vector>
 
-#include "impl/streaming_profiler/spsc_packet.h"
 #include "impl/streaming_profiler/streaming_profiler_sync_engine.hpp"
 #include "impl/streaming_profiler/streaming_profiler_sync_devices.hpp"
 
 using namespace tt::tt_metal;
 using namespace tt::tt_metal::streaming_profiler;
 namespace api = tt::tt_metal::experimental::streaming_profiler;
+
+// The sync's record kinds and roles (hostdev/streaming_profiler_common.h).
+constexpr uint32_t kLocal = kernel_profiler::kSyncKindLocal, kLink = kernel_profiler::kSyncKindLink;
+constexpr uint32_t kPoint = kernel_profiler::kSyncLocalPoint, kClose = kernel_profiler::kSyncLocalClose;
+constexpr uint32_t kT0 = kernel_profiler::kSyncRoleT0, kT1 = kernel_profiler::kSyncRoleT1;
+constexpr uint32_t kT1B = kernel_profiler::kSyncRoleT1B, kT2 = kernel_profiler::kSyncRoleT2;
 
 static int g_fail = 0;
 static void check_near(const char* what, double got, double want, double tol) {
@@ -69,9 +74,16 @@ double hw_stamp(int chip, double tau) { return refclk(chip, tau) * 80.0; }
 double tsc(double tau) { return kTsc0 + tau * 1e9 * kTicksPerNs; }
 double host_ns(double tau) { return kHostBase + tau * 1e9; }
 
+// `lane` is the roster lane (core * lanes per core), as the callers were written; the engine takes the core.
 ClockSample sample(uint32_t dev, uint32_t lane, uint32_t kind, uint32_t round, uint32_t role, double rc, double w) {
     return ClockSample{
-        dev, lane, kind, round, role, static_cast<uint64_t>(std::llround(rc)), static_cast<uint64_t>(std::llround(w))};
+        dev,
+        lane / profiler::kSpscNRiscDecode,
+        kind,
+        round,
+        role,
+        static_cast<uint64_t>(std::llround(rc)),
+        static_cast<uint64_t>(std::llround(w))};
 }
 
 int main() {
@@ -128,13 +140,7 @@ int main() {
     constexpr uint32_t kK8Fast = 216, kK8Slow = 215;  // 27.0 and 26.875 wall ticks per refclk tick, in eighths
     const auto point = [&](int c, double tau, uint32_t k8, uint32_t n, bool close) {
         sync.on_clock(sample(
-            static_cast<uint32_t>(c),
-            0,
-            PP_CLOCK_LOCAL_REFCLK,
-            k8 | (n << 8),
-            close ? PP_CLOCK_LOCAL_CLOSE : PP_CLOCK_LOCAL_POINT,
-            refclk(c, tau),
-            wall(c, tau)));
+            static_cast<uint32_t>(c), 0, kLocal, k8 | (n << 8), close ? kClose : kPoint, refclk(c, tau), wall(c, tau)));
     };
     bool switched = false;
     for (int k = 0; k < 1000; k++) {
@@ -159,34 +165,27 @@ int main() {
     const auto burst = [&](uint32_t snd_dev, uint32_t snd_lane, uint32_t rcv_dev, uint32_t rcv_lane) {
         const auto receiver = [&](uint32_t k) {
             const double t = 0.020 + k * 10e-6;
+            sync.on_clock(
+                sample(rcv_dev, rcv_lane, kLink, k, kT1, hw_stamp(rcv_dev, t + kOneWay), wall(rcv_dev, t + kOneWay)));
             sync.on_clock(sample(
                 rcv_dev,
                 rcv_lane,
-                PP_CLOCK_LINK_PTP,
+                kLink,
                 k,
-                PP_CLOCK_ROLE_T1,
-                hw_stamp(rcv_dev, t + kOneWay),
-                wall(rcv_dev, t + kOneWay)));
-            sync.on_clock(sample(
-                rcv_dev,
-                rcv_lane,
-                PP_CLOCK_LINK_PTP,
-                k,
-                PP_CLOCK_ROLE_T1B,
+                kT1B,
                 hw_stamp(rcv_dev, t + kOneWay + kTurn),
                 wall(rcv_dev, t + kOneWay + kTurn)));
         };
         for (uint32_t k = 0; k < 300; k++) {
             const double t = 0.020 + k * 10e-6;
-            sync.on_clock(sample(
-                snd_dev, snd_lane, PP_CLOCK_LINK_PTP, k, PP_CLOCK_ROLE_T0, hw_stamp(snd_dev, t), wall(snd_dev, t)));
+            sync.on_clock(sample(snd_dev, snd_lane, kLink, k, kT0, hw_stamp(snd_dev, t), wall(snd_dev, t)));
             if (k % 11 != 5) {
                 sync.on_clock(sample(
                     snd_dev,
                     snd_lane,
-                    PP_CLOCK_LINK_PTP,
+                    kLink,
                     k,
-                    PP_CLOCK_ROLE_T2,
+                    kT2,
                     hw_stamp(snd_dev, t + 2 * kOneWay + kTurn),
                     wall(snd_dev, t + 2 * kOneWay + kTurn)));
             }

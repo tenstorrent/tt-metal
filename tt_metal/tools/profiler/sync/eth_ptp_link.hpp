@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // The streaming profiler's link half on the tile's 1588 hardware (internal/ethernet/eth_ptp.hpp): the session every
-// sync kernel opens, how a round's frames are exchanged and its stamps accumulated and reported, and the PP_CLOCK
-// records the two kernels write. Without the streaming profiler the record path compiles to nothing.
+// sync kernel opens, how a round's frames are exchanged and its stamps accumulated and reported, and the sync
+// records the two ends leave in their mailbox for the pusher (hostdev/streaming_profiler_common.h).
 
 #pragma once
 
@@ -28,10 +28,8 @@ struct RouterHook {
 
 #if defined(ARCH_BLACKHOLE)
 
+#include "hostdev/dev_msgs.h"
 #include "internal/ethernet/eth_ptp.hpp"
-#if defined(PROFILE_KERNEL) && defined(PROFILE_STREAMING)
-#include "tools/profiler/kernel_profiler.hpp"
-#endif
 
 namespace tt::tt_metal::eth_ptp {
 
@@ -80,7 +78,7 @@ constexpr uint32_t kPaceTicks =
 static_assert(kTripsPerRound % kBurstFrames == 0 && kBurstFrames >= 2 && (kFramePhaseStep & 1) == 1);
 static_assert(kFrameBytes >= 80 && kFrameBytes % 16 == 0 && kFrameBytes >= sizeof(eth_channel_sync_t));
 static_assert(kSlotsOffset + kSlotsBytes <= kCtlOffset);
-static_assert(kCtlOffset + 8 + 14 * sizeof(uint32_t) <= kernel_profiler::kLinkSyncL1Bytes);  // StopDiag::write
+static_assert(kCtlOffset + 8 + 14 * sizeof(uint32_t) <= kernel_profiler::kLinkSyncRingOffset);  // StopDiag::write
 
 // Frame j of a round rides in slot j % kBurstFrames, the same L1 address on both ends, so the receiver's echo lands
 // on the word the sender polls. The sync word carries the round and the trip, so a slot's stale content can match
@@ -291,43 +289,58 @@ __attribute__((noinline)) inline bool collect_burst(
     return true;
 }
 
-// The records: one PP_CLOCK per stamp, this core's refclk against its wall clock with the round's number and the
-// stamp's role (spsc_packet.h), so the host pairs the two ends by identity and fits refclk against refclk: DVFS on
-// either chip's wall clock cannot enter the link solve.
+// The records: one per stamp average, this core's refclk-domain reading against its wall clock with the round's
+// number and the stamp's role, so the host pairs the two ends by identity and fits refclk against refclk: DVFS on
+// either chip's wall clock cannot enter the link solve. They go to the ring at the end of this core's link L1
+// (hostdev kLinkSyncRingOffset), its count published in this core's profiler control vector for the pusher's sweep.
 namespace link {
-#if defined(PROFILE_KERNEL) && defined(PROFILE_STREAMING)
-constexpr uint32_t kRoleT0 = kernel_profiler::ppfmt::CLOCK_ROLE_T0;
-constexpr uint32_t kRoleT1 = kernel_profiler::ppfmt::CLOCK_ROLE_T1;
-constexpr uint32_t kRoleT1B = kernel_profiler::ppfmt::CLOCK_ROLE_T1B;
-constexpr uint32_t kRoleT2 = kernel_profiler::ppfmt::CLOCK_ROLE_T2;
-// Room for `records` clock records in this core's ring, without waiting: a producer on an eth core must not stall,
-// and a round a side has no room for is one the host never completes; nothing behind it shifts.
-inline __attribute__((always_inline)) bool room(uint32_t records) {
-    return kernel_profiler::ring_has_room(records * kernel_profiler::CLOCK_RECORD_WORDS);
-}
-// A hardware stamp average, placed at the wall clock of its recording.
-inline __attribute__((always_inline)) void record_hw(uint64_t value, uint32_t round, uint32_t role) {
-    const Instant t = read_instant();
-    kernel_profiler::ring_write_clock(kernel_profiler::ppfmt::CLOCK_LINK_PTP, value, t.wall_lo, t.wall_hi, round, role);
-}
-#elif defined(ETH_PTP_LINK_TABLE)
+constexpr uint32_t kRoleT0 = kernel_profiler::kSyncRoleT0;
+constexpr uint32_t kRoleT1 = kernel_profiler::kSyncRoleT1;
+constexpr uint32_t kRoleT1B = kernel_profiler::kSyncRoleT1B;
+constexpr uint32_t kRoleT2 = kernel_profiler::kSyncRoleT2;
+#if defined(ETH_PTP_LINK_TABLE)
 // The acceptance test's sink (programming_examples/profiler/test_eth_ptp_link): a count word at ETH_PTP_LINK_TABLE,
 // then {round, role, value lo, value hi} rows, ETH_PTP_LINK_TABLE_ROWS of them.
-constexpr uint32_t kRoleT0 = 0, kRoleT1 = 1, kRoleT1B = 2, kRoleT2 = 3;
-inline bool room(uint32_t records) { return rd(ETH_PTP_LINK_TABLE) + records <= ETH_PTP_LINK_TABLE_ROWS; }
-inline void record_hw(uint64_t value, uint32_t round, uint32_t role) {
-    const uint32_t n = rd(ETH_PTP_LINK_TABLE);
-    volatile uint32_t* row = reinterpret_cast<volatile uint32_t*>(ETH_PTP_LINK_TABLE + 4 + n * 16);
-    row[0] = round;
-    row[1] = role;
-    row[2] = static_cast<uint32_t>(value);
-    row[3] = static_cast<uint32_t>(value >> 32);
-    wr(ETH_PTP_LINK_TABLE, n + 1);
-}
+struct Ring {
+    void open(uint32_t) {}
+    void record_hw(uint64_t value, uint32_t round, uint32_t role) {
+        const uint32_t n = rd(ETH_PTP_LINK_TABLE);
+        if (n >= ETH_PTP_LINK_TABLE_ROWS) {
+            return;
+        }
+        volatile uint32_t* row = reinterpret_cast<volatile uint32_t*>(ETH_PTP_LINK_TABLE + 4 + n * 16);
+        row[0] = round;
+        row[1] = role;
+        row[2] = static_cast<uint32_t>(value);
+        row[3] = static_cast<uint32_t>(value >> 32);
+        wr(ETH_PTP_LINK_TABLE, n + 1);
+    }
+};
 #else
-constexpr uint32_t kRoleT0 = 0, kRoleT1 = 0, kRoleT1B = 0, kRoleT2 = 0;
-inline bool room(uint32_t) { return false; }
-inline void record_hw(uint64_t, uint32_t, uint32_t) {}
+struct Ring {
+    uint32_t base = 0, n = 0;
+    volatile uint32_t* tail = nullptr;
+    void open(uint32_t l1) {
+        base = l1 + kernel_profiler::kLinkSyncRingOffset;
+        n = 0;
+        tail = reinterpret_cast<volatile uint32_t*>(GET_MAILBOX_ADDRESS_DEV(profiler.control_vector)) +
+               kernel_profiler::SPSC_LINK_SYNC_TAIL;
+        *tail = 0;
+    }
+    void record_hw(uint64_t value, uint32_t round, uint32_t role) {
+        const Instant t = read_instant();
+        volatile uint32_t* r = reinterpret_cast<volatile uint32_t*>(
+            base + (n % kernel_profiler::kLinkSyncRingRecords) * kernel_profiler::kSyncRecordWords * 4);
+        r[kernel_profiler::SYNC_META] = (kernel_profiler::kSyncKindLink << 8) | role;
+        r[kernel_profiler::SYNC_ROUND] = round;
+        r[kernel_profiler::SYNC_VALUE_LO] = static_cast<uint32_t>(value);
+        r[kernel_profiler::SYNC_VALUE_HI] = static_cast<uint32_t>(value >> 32);
+        r[kernel_profiler::SYNC_WALL_LO] = t.wall_lo;
+        r[kernel_profiler::SYNC_WALL_HI] = t.wall_hi;
+        asm volatile("fence" ::: "memory");
+        *tail = ++n;
+    }
+};
 #endif
 }  // namespace link
 
@@ -358,13 +371,15 @@ struct SenderLink {
     Pacer pacer;
     StopDiag diag;
     HwRound rnd;
+    link::Ring ring;
     uint32_t round = 0;
-    bool emit = false, ok = false;
+    bool ok = false;
 
     bool open() { return sess.begin(); }
     void start(uint32_t l1, uint32_t ctl, uint32_t pace_ticks) {
         slot_base = l1;
         diag_addr = ctl;
+        ring.open(l1);
         burst_ticks = pace_ticks / kBurstsPerRound;
         for (uint32_t j = 0; j < kBurstFrames; j++) {
             volatile eth_channel_sync_t* s = slot(slot_base, j);
@@ -421,11 +436,9 @@ private:
         diag.write(diag_addr);
     }
     void close_round() {
-        if (emit) {
-            if (ok && sess.timer_ok && rnd.complete(kTripsPerRound)) {
-                link::record_hw(rnd.tx.q(sess), round, link::kRoleT0);
-                link::record_hw(rnd.rx.q(sess), round, link::kRoleT2);
-            }
+        if (ok && sess.timer_ok && rnd.complete(kTripsPerRound)) {
+            ring.record_hw(rnd.tx.q(sess), round, link::kRoleT0);
+            ring.record_hw(rnd.rx.q(sess), round, link::kRoleT2);
         }
         diag.note_round(rnd, ok, false);
         write_diag();
@@ -454,7 +467,6 @@ private:
             }
             round = next_round++;
             rnd.begin(round);
-            emit = link::room(2);
             ok = true;
         }
         const uint64_t tag = 0x5000'0000'0000'0000ull | bursts;
@@ -489,7 +501,8 @@ struct ReceiverLink {
     LinkSession sess;
     uint32_t slot_base = 0, diag_addr = 0;
     uint32_t round = 0, expect = 0;
-    bool started = false, emit = false, ok = false, mid_burst = false, armed = false;
+    link::Ring ring;
+    bool started = false, ok = false, mid_burst = false, armed = false;
     Anchor at;
     Instant start_at{};
     StopDiag diag;
@@ -500,6 +513,7 @@ struct ReceiverLink {
     void start(uint32_t l1, uint32_t ctl, uint32_t = 0) {
         slot_base = l1;
         diag_addr = ctl;
+        ring.open(l1);
         for (uint32_t j = 0; j < kBurstFrames; j++) {
             volatile eth_channel_sync_t* s = slot(slot_base, j);
             s->bytes_sent = 0;
@@ -558,11 +572,9 @@ private:
         diag.write(diag_addr);
     }
     void close_round() {
-        if (emit) {
-            if (ok && sess.timer_ok && rnd.complete(kTripsPerRound)) {
-                link::record_hw(rnd.rx.q(sess), round, link::kRoleT1);
-                link::record_hw(rnd.tx.q(sess), round, link::kRoleT1B);
-            }
+        if (ok && sess.timer_ok && rnd.complete(kTripsPerRound)) {
+            ring.record_hw(rnd.rx.q(sess), round, link::kRoleT1);
+            ring.record_hw(rnd.tx.q(sess), round, link::kRoleT1B);
         }
         diag.note_round(rnd, ok, false);
         write_diag();
@@ -581,7 +593,6 @@ private:
             started = true;
             round = s->reserved_2;
             rnd.begin(round);
-            emit = link::room(2);
             ok = true;
         } else if (key != frame_key(round, j)) {
             s->bytes_sent = 0;  // a frame of a round already given up

@@ -41,8 +41,9 @@ namespace streaming_profiler {
 struct CapturedDevice {
     uint32_t chip_id = 0;
     int numa_node = -1;                                            // the node the sockets bind their FIFOs to
-    std::vector<std::unique_ptr<distributed::D2HSocket>> sockets;  // the relays' in relay order, then the eth pushers'
+    std::vector<std::unique_ptr<distributed::D2HSocket>> sockets;  // the relays' in relay order, then the pusher's two
     uint32_t n_relay_sockets = 0;
+    uint32_t sync_socket = UINT32_MAX;  // the pusher's sync socket: the sync's records, for the sync engine alone
     CaptureContext::Device ctx;
 };
 
@@ -91,13 +92,15 @@ private:
     struct Drainer {
         std::unique_ptr<Program> program;
         CoreCoords core;
-        uint32_t sock_idx = 0;    // into CapturedDevice::sockets
+        uint32_t sock_idx = 0;  // into CapturedDevice::sockets; n_sockets of them, the pusher's sync socket second
+        uint32_t n_sockets = 1;
         uint64_t state_addr = 0;  // the control block as the host addresses it
         uint64_t stop_addr = 0;
     };
     struct DrainerL1 {
         HalProgrammableCoreType core_type;
-        uint32_t cfg = 0;  // the socket config
+        uint32_t cfg = 0;       // the socket config
+        uint32_t sync_cfg = 0;  // the pusher's sync socket config; 0 = one socket
         uint32_t fifo_bytes = 0;
     };
     // A 5-lane core in the decode roster and the L1 base of its control vector. A blocking producer is armed for the

@@ -156,11 +156,12 @@ struct CoreCoords {
     CoreCoord logical, virt, phys;
 };
 
-// The idle-eth pusher's L1, carved from the top of IDLE_ETH UNRESERVED: socket config, ctrl words (done/heartbeat,
-// go, stop), one frame slot, the linked-core scratch, the tile table, the sample ring. The tile measurement runs the
-// pusher's kernel in measure-only mode, so it shares the carve.
+// The idle-eth pusher's L1, carved from the top of IDLE_ETH UNRESERVED: the two socket configs, ctrl words
+// (done/heartbeat, go, stop), one frame slot, the linked-core scratch, the tile table, the sample ring, the sync
+// ring of its clock model's points. link_ring is the link ends' sync ring on every active eth core (0 without active
+// eth). The tile measurement runs the pusher's kernel in measure-only mode, so it shares the carve.
 struct EthL1 {
-    uint32_t cfg = 0, ctrl = 0, stage = 0, scratch = 0, table = 0, ring = 0;
+    uint32_t cfg = 0, sync_cfg = 0, ctrl = 0, stage = 0, scratch = 0, table = 0, ring = 0, sync_ring = 0, link_ring = 0;
 };
 constexpr uint32_t kEthPointUs = 1000;  // the open segment's line reaches the host at least this often
 // Tile table (hostdev EthTileTable): the header, a coordinate per Tensix tile and an int64 offset per tile.
