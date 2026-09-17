@@ -332,9 +332,11 @@ def decode_forward(
         exp_approx_mode=False,
     )
 
-    sdpa_out_mem = q_sharded_mem if l1_act else ttnn.DRAM_MEMORY_CONFIG
+    sdpa_num_local_kv_heads = 1 if weights.kv_replicated else config.num_key_value_heads // tp
+    # SDPA forbids a sharded output when local KV heads > 1 (GQA). 12B TP=8 is
+    # 1 local KV head; 31B sliding is 2, so keep DRAM there and still I2S in concat.
+    sdpa_out_mem = q_sharded_mem if l1_act and sdpa_num_local_kv_heads == 1 else ttnn.DRAM_MEMORY_CONFIG
     if page_table is not None:
-        sdpa_num_local_kv_heads = 1 if weights.kv_replicated else config.num_key_value_heads // tp
         tt_sdpa = ttnn.transformer.paged_scaled_dot_product_attention_decode(
             tt_q,
             k_cache,
