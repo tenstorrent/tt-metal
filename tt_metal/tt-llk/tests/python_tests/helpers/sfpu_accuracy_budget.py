@@ -35,16 +35,36 @@ loose it gates nothing or so tight it flakes; each entry carries the measurement
 from in a trailing comment, with the architecture and date, so the next person can tell a
 deliberate budget from a hopeful one.
 
-**A budget binds every call site of the driver, including the edge sweep.** The recorded
-numbers come from ``accuracy/accuracy_harness.py``, which builds its stimulus from
-``for_op(...).spec_A`` -- the op's *safe domain* -- so they say nothing on their own about
-``test_eltwise_unary_sfpu_edges``, which passes its own ``edge_spec(...)`` with the
-plus/minus inf, NaN and signed-zero probes and the format extremes. The ULP arm returns
-before both the tolerance gate and PCC, so on the edge stimuli a zero-headroom budget has
-no backstop. Enrolling an op therefore means measuring both: the edge sweep was run for
-the nine ops below and every variant holds at its enrolled budget.
+**A budget binds every call site of the driver, and the driver has five stimulus
+sources.** The recorded numbers come from the ``(op, format, dest_acc, approx_mode,
+dimensions)`` sweep in ``test_eltwise_unary_sfpu`` -- not from
+``accuracy/accuracy_harness.py``, which only ever runs the transcendentals plus
+``Exp``/``Reciprocal``, omits ``Bfp8_b`` from its formats and has no dimensions axis, so
+it cannot have produced them. That driver builds its stimulus from
+``exclude_undefined(mathop, for_op_pipeline(...).spec_A)``.
+
+The other four sources are the reason enrolling an op is not just "read the sweep":
+
+* ``test_eltwise_unary_sfpu_edges`` passes its own ``edge_spec(...)`` with the plus/minus
+  inf, NaN and signed-zero probes and the format extremes;
+* ``_signbit``, ``_isinf_isnan`` and ``_threshold`` each build a hand-made spec and run
+  ULP-gateable ``Float16_b``/``Float32``. None of the ops below reaches them today, but
+  the ``ReluMin``/``ReluMax`` entries parked "for a later pass" *are* what the threshold
+  sweep drives, with every third lane on the tie.
+
+The ULP arm returns before both the tolerance gate and PCC, so on any of these a
+zero-headroom budget has no backstop. Enrolling an op means measuring every sweep that
+reaches it.
+
+The edge sweep was run for the nine ops below and every variant it *generates* holds at
+its enrolled budget. It is parametrized over ``input_output_formats([Float16_b,
+Float32])``, so it never produces a ``Bfp8_b`` output -- and ``Floor``/``Ceil``/``Trunc``
+carry a live ``max_ulp=0`` there through an unrestricted ``DEFAULT``, unlike
+``Abs``/``Neg``/``Square``, which have a ``Bfp8_b`` carve-out. That variant has no edge
+measurement and no backstop; extending the edge sweep to ``Bfp8_b`` would close it.
   wh: edges 42 passed / 6 skipped for Abs/Neg/Identity/Floor/Ceil/Trunc and
       7 passed / 17 skipped for Square/SigmoidAppx/GeluAppx, 2026-09-17
+      (Float16_b and Float32 outputs only -- see above)
 """
 
 from __future__ import annotations
@@ -79,11 +99,15 @@ class Metric(Enum):
 class AccuracyContract:
     """How closely one op's output must match its golden, and by which metric.
 
-    ``metric="ulp"`` means the verdict is "every element within *max_ulp* representable
-    steps", with the tolerance and PCC checks skipped. ``metric="tolerance"`` is the
-    harness's historical gate. The two sets of fields are mutually exclusive and
-    :meth:`__post_init__` enforces that, so a half-converted entry cannot sit in the
-    table looking plausible.
+    ``metric=Metric.ULP`` means the verdict is "every element within *max_ulp*
+    representable steps", with the tolerance and PCC checks skipped.
+    ``metric=Metric.TOLERANCE`` is the harness's historical gate. The two sets of fields
+    are mutually exclusive and :meth:`__post_init__` enforces that, so a half-converted
+    entry cannot sit in the table looking plausible.
+
+    The enum members, not the strings ``"ulp"``/``"tolerance"``: ``Metric`` is a bare
+    ``Enum``, so ``"ulp" != Metric.ULP`` and an entry written with the string would have
+    fallen through to the tolerance arm.
     """
 
     metric: Metric = Metric.ULP
@@ -93,6 +117,22 @@ class AccuracyContract:
     near_zero_atol: Optional[float] = None
 
     def __post_init__(self) -> None:
+        if not isinstance(self.metric, Metric):
+            # The annotation is not a check: Python does not enforce enum membership, so
+            # `metric="ulp"` -- or any typo -- previously took the `else` branch below and
+            # became a *tolerance* contract, silently switching off the intended gate.
+            raise ValueError(
+                f"metric must be a Metric member, got {self.metric!r}; use "
+                f"{Metric.ULP} or {Metric.TOLERANCE}"
+            )
+        for name in ("atol", "rtol", "near_zero_atol"):
+            value = getattr(self, name)
+            if value is not None and value < 0:
+                # passed_test applies an override only `if custom_atol is not None and
+                # custom_atol >= 0`, so a negative atol/rtol read in the table as a
+                # declared tolerance and then silently ran against the per-format
+                # default. A negative near_zero_atol is a silently inert floor.
+                raise ValueError(f"{name} must not be negative, got {value}")
         if self.metric == Metric.ULP:
             if self.max_ulp is None:
                 raise ValueError("a ulp contract needs max_ulp")
@@ -241,13 +281,37 @@ _COARSE_LUT_TOLERANCE = AccuracyContract(metric=Metric.TOLERANCE, atol=0.13, rto
 BFP8_B_EXACT_INTEGER_DOMAIN = 128.0
 
 
+def budget_table(
+    *entries: Tuple[BudgetKey, AccuracyContract]
+) -> Dict[BudgetKey, AccuracyContract]:
+    """One op's table, built from pairs so a repeated key is an error.
+
+    ``BudgetKey`` is frozen, so two identical keys in a dict literal are equal and
+    hash-equal and Python silently keeps the later contract -- which means
+    :func:`validate_registry` received an already-deduplicated table and the tie-raise in
+    :func:`resolve_contract` could never fire for the duplicate :class:`BudgetKey`'s
+    docstring promises to reject. It saw one entry, not two. A copy-pasted
+    ``BudgetKey(output_format=Float16_b)`` replacing a measured budget with a broader one
+    would have failed nothing.
+    """
+    table: Dict[BudgetKey, AccuracyContract] = {}
+    for key, contract in entries:
+        if key in table:
+            raise ValueError(
+                f"duplicate budget key {key.describe()}: a dict literal would have kept "
+                "only the later contract, and no guard downstream can see the first one"
+            )
+        table[key] = contract
+    return table
+
+
 def _exact_everywhere() -> Dict[BudgetKey, AccuracyContract]:
     """A fresh 0-step table, for the ops measured exact on every output format.
 
     A factory rather than one dict literal aliased three ways, so a retune of one op
     cannot silently move the others.
     """
-    return {DEFAULT: AccuracyContract(max_ulp=0)}
+    return budget_table((DEFAULT, AccuracyContract(max_ulp=0)))
 
 
 _SFPU_ACCURACY_BUDGET: Dict[MathOperation, Dict[BudgetKey, AccuracyContract]] = {
@@ -279,23 +343,36 @@ _SFPU_ACCURACY_BUDGET: Dict[MathOperation, Dict[BudgetKey, AccuracyContract]] = 
     # results are exact by construction, so any movement is a real signal and should
     # fail rather than be absorbed. They are the flakiness canaries for the metric: if
     # one of these starts failing, the golden or the datapath moved, not the kernel.
+    # Each recorded number is a maximum over the *input* pipelines too: BudgetKey has no
+    # input_format axis, and input_output_formats() is a full cross product, so the "80
+    # variants" below is 2 outputs x 5 inputs x 2 approx x 2 dest_acc x 2 dimensions. The
+    # 1-step pack allowance therefore also binds Float16_b->Float16_b and Bfp8_b->Float16_b,
+    # which are bit-exact by construction for a sign-bit op -- so "zero headroom" holds for
+    # the pipeline that set the maximum and is slack for the others. The axis is excluded
+    # here because no enrolled cell has a *tighter* per-input number worth keying on yet;
+    # P3 adds input_format to BudgetKey for the transcendentals, where the input pipeline
+    # does move the measurement.
     #   wh: Abs/Neg max 0 ULP on Float32 (32 variants), 1 ULP on Float16/Float16_b
-    #       (80 variants); Identity max 0 on Float32 (52), 1 on Float16_b (4), 2026-09-16
-    MathOperation.Abs: {
-        DEFAULT: AccuracyContract(max_ulp=1),
-        BudgetKey(output_format=DataFormat.Float32): AccuracyContract(max_ulp=0),
-        BudgetKey(output_format=DataFormat.Bfp8_b): _BFP8_B_QUANTIZATION_DOMINATES,
-    },
-    MathOperation.Neg: {
-        DEFAULT: AccuracyContract(max_ulp=1),
-        BudgetKey(output_format=DataFormat.Float32): AccuracyContract(max_ulp=0),
-        BudgetKey(output_format=DataFormat.Bfp8_b): _BFP8_B_QUANTIZATION_DOMINATES,
-    },
-    MathOperation.Identity: {
-        DEFAULT: AccuracyContract(max_ulp=1),
-        BudgetKey(output_format=DataFormat.Float32): AccuracyContract(max_ulp=0),
-        BudgetKey(output_format=DataFormat.Bfp8_b): _BFP8_B_QUANTIZATION_DOMINATES,
-    },
+    #       (80 variants); Identity max 0 on Float32, 1 on Float16_b (4), 2026-09-16
+    MathOperation.Abs: budget_table(
+        (DEFAULT, AccuracyContract(max_ulp=1)),
+        (BudgetKey(output_format=DataFormat.Float32), AccuracyContract(max_ulp=0)),
+        (BudgetKey(output_format=DataFormat.Bfp8_b), _BFP8_B_QUANTIZATION_DOMINATES),
+    ),
+    MathOperation.Neg: budget_table(
+        (DEFAULT, AccuracyContract(max_ulp=1)),
+        (BudgetKey(output_format=DataFormat.Float32), AccuracyContract(max_ulp=0)),
+        (BudgetKey(output_format=DataFormat.Bfp8_b), _BFP8_B_QUANTIZATION_DOMINATES),
+    ),
+    # Identity is keyed per format rather than through a DEFAULT, because unlike Abs/Neg
+    # it was never in BROAD_SWEEP_OPS: only BROAD_FORMATS/FORMATS_BFP4_B reach a Float16
+    # output, so fp16 was never measured for it at all. Square measured 1 step on
+    # Float16_b and 4 on Float16, so fp16 is not safely interpolated from bf16 here -- an
+    # unmeasured format falls back to the tolerance metric instead.
+    MathOperation.Identity: budget_table(
+        (BudgetKey(output_format=DataFormat.Float32), AccuracyContract(max_ulp=0)),
+        (BudgetKey(output_format=DataFormat.Float16_b), AccuracyContract(max_ulp=1)),
+    ),
     # ── One multiply, and one open question ─────────────────────────────────
     # x*x has rounding slack the sign-bit ops do not: the golden evaluates in float64 and
     # applies the Dest and output roundings, the hardware rounds in the datapath, and the
@@ -313,14 +390,15 @@ _SFPU_ACCURACY_BUDGET: Dict[MathOperation, Dict[BudgetKey, AccuracyContract]] = 
     # the number is recorded rather than blessed.
     #   wh: Float16_b max 1 ULP (40 variants), Float16 max 4 (40),
     #       Float32 max 65536 @ dest_acc=No / 32768 @ dest_acc=Yes (32), 2026-09-16
-    MathOperation.Square: {
-        DEFAULT: AccuracyContract(max_ulp=4),
-        BudgetKey(output_format=DataFormat.Float16_b): AccuracyContract(max_ulp=1),
-        BudgetKey(output_format=DataFormat.Float32): AccuracyContract(
-            metric=Metric.TOLERANCE
+    MathOperation.Square: budget_table(
+        (DEFAULT, AccuracyContract(max_ulp=4)),
+        (BudgetKey(output_format=DataFormat.Float16_b), AccuracyContract(max_ulp=1)),
+        (
+            BudgetKey(output_format=DataFormat.Float32),
+            AccuracyContract(metric=Metric.TOLERANCE),
         ),
-        BudgetKey(output_format=DataFormat.Bfp8_b): _BFP8_B_QUANTIZATION_DOMINATES,
-    },
+        (BudgetKey(output_format=DataFormat.Bfp8_b), _BFP8_B_QUANTIZATION_DOMINATES),
+    ),
     # ── Still on the tolerance metric, moved here from the test body ─────────
     # These were CUSTOM_TOLERANCES in test_eltwise_unary_sfpu: a coarse 3-segment LUT
     # whose absolute error peaks near the knees, carrying atol=0.13 so the sweep passes.
@@ -329,8 +407,8 @@ _SFPU_ACCURACY_BUDGET: Dict[MathOperation, Dict[BudgetKey, AccuracyContract]] = 
     # improvement a LUT retune produces. They keep the tolerance metric until there is a
     # measured step budget to replace it with, but the number now sits next to the op
     # instead of in a dict in a test file.
-    MathOperation.SigmoidAppx: {DEFAULT: _COARSE_LUT_TOLERANCE},
-    MathOperation.GeluAppx: {DEFAULT: _COARSE_LUT_TOLERANCE},
+    MathOperation.SigmoidAppx: budget_table((DEFAULT, _COARSE_LUT_TOLERANCE)),
+    MathOperation.GeluAppx: budget_table((DEFAULT, _COARSE_LUT_TOLERANCE)),
 }
 
 
@@ -382,15 +460,66 @@ def accuracy_contract(
         # utils.py that are already the stronger criterion; a per-element step count
         # against their bf16 view is not a property of the element.
         return TOLERANCE_CONTRACT
-    if arch != MEASURED_ARCH:
-        # Every number in the table was measured on Wormhole with no headroom added, so
-        # letting it bind on an architecture that was never swept would make the
-        # "re-measure on Blackhole first" caveat unenforceable -- and WH and BH SFPUs
-        # differ in available instructions and therefore in kernel. Adding arch=WORMHOLE
-        # to the ULP keys instead would tie specificity with the per-format keys and make
-        # validate_registry() raise, so the gate is here.
+    if arch != MEASURED_ARCH and not _key_names_arch(
+        op, arch, output_format, approx_mode, dest_acc
+    ):
+        # Every *unkeyed* number in the table was measured on Wormhole with no headroom
+        # added, so letting it bind on an architecture that was never swept would make the
+        # "re-measure on Blackhole first" caveat unenforceable -- WH and BH SFPUs differ
+        # in available instructions and therefore in kernel.
+        #
+        # A contract whose winning key names `arch` explicitly is exempt: that is a
+        # measurement someone took *on* that architecture, and downgrading it made the
+        # advertised arch dimension impossible to use for enrolling Blackhole or Quasar.
+        # Adding arch=WORMHOLE to the shared keys instead would tie specificity with the
+        # per-format keys and make validate_registry() raise, which is why the default is
+        # a gate here rather than a key there.
         return TOLERANCE_CONTRACT
     return contract
+
+
+def _key_names_arch(
+    op: MathOperation,
+    arch: ChipArchitecture,
+    output_format: DataFormat,
+    approx_mode: Optional[ApproximationMode],
+    dest_acc: Optional[DestAccumulation],
+) -> bool:
+    """Whether the key that wins for this variant pins ``arch`` itself.
+
+    Asked separately rather than returned from :func:`resolve_contract`, so that
+    function keeps its single-purpose signature and can go on being tested against small
+    purpose-built tables.
+    """
+    table = _SFPU_ACCURACY_BUDGET.get(op)
+    if not table:
+        return False
+    matched = [
+        key
+        for key in table
+        if key.arch is not None
+        and key.matches(
+            approx_mode=approx_mode,
+            output_format=output_format,
+            dest_acc=dest_acc,
+            arch=arch,
+        )
+    ]
+    if not matched:
+        return False
+    # Only if an arch-pinned key is among the most specific matches -- otherwise a
+    # broader arch-pinned key would exempt a narrower shared one.
+    best = max(
+        key.specificity
+        for key in table
+        if key.matches(
+            approx_mode=approx_mode,
+            output_format=output_format,
+            dest_acc=dest_acc,
+            arch=arch,
+        )
+    )
+    return any(key.specificity == best for key in matched)
 
 
 def resolve_contract(
@@ -448,16 +577,26 @@ def validate_registry() -> None:
     """
     from .ulp import _ULP_PROXY_DTYPES, ULP_FORMATS
 
-    formats = list(ULP_FORMATS) + list(_ULP_PROXY_DTYPES)
+    # Every output format a driver may pass, not only the ULP-capable ones:
+    # accuracy_contract() calls resolve_contract() *before* the has_ulp_gate downgrade, so
+    # the tie check runs for formats that end up on the tolerance metric -- Bfp4_b among
+    # them, which FORMATS_BFP4_B reaches for six enrolled ops. And None on the two axes
+    # that default to it, since matches() treats an unset caller dimension as a
+    # wildcard-only subset: a tie between BudgetKey(output_format=Bfp4_b) and
+    # BudgetKey(dest_acc=Yes) would otherwise surface mid device run.
+    gateable = list(ULP_FORMATS) + list(_ULP_PROXY_DTYPES)
+    formats = gateable + [f for f in DataFormat if f not in gateable]
+    approx_modes = list(ApproximationMode) + [None]
+    dest_accs = list(DestAccumulation) + [None]
     for op, table in _SFPU_ACCURACY_BUDGET.items():
         if not table:
             raise ValueError(
                 f"{op.name} has an empty budget entry; remove it so the op falls back to "
                 "the tolerance metric explicitly"
             )
-        for approx_mode in ApproximationMode:
+        for approx_mode in approx_modes:
             for output_format in formats:
-                for dest_acc in DestAccumulation:
+                for dest_acc in dest_accs:
                     for arch in ChipArchitecture:
                         accuracy_contract(
                             op,
