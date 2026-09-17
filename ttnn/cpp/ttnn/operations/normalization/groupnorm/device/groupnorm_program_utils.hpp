@@ -69,8 +69,10 @@ std::pair<uint32_t, uint32_t> find_max_tile_span(uint32_t W, uint32_t group_size
 // Tiles the row-major path keeps resident in c_17 for one per-core group.
 uint32_t groupnorm_tilized_group_tiles(uint32_t block_ht, uint32_t num_out_blocks, uint32_t block_wt);
 
-// Auto-select num_out_blocks from tensor volume / virtual core count: next power of two,
-// capped at 256. Shared by the program factories and the L1-fit estimate.
+// Memory-based num_out_blocks heuristic: next power of two, capped at 256.
+// Shared by the program factories and the L1-fit estimate. The factories may then
+// increase a single block to two via groupnorm_bf16_num_out_blocks for accuracy;
+// the L1-fit estimate deliberately retains the conservative, unsplit CB footprint.
 // `volume` is H * W * C (padded), `num_virtual_cores` is num_virtual_cols * num_virtual_rows.
 uint32_t groupnorm_heuristic_num_out_blocks(uint32_t volume, uint32_t num_virtual_cores);
 
