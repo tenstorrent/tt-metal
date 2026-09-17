@@ -158,3 +158,42 @@ def test_min_fp32_fast_and_approximate_mode(device, input_shape, dim, scalar, fa
         assert_allclose(torch_output_tensor, output_tensor, rtol=1e-3, atol=1e-2)
     else:
         assert_equal(torch_output_tensor, output_tensor)
+
+
+@pytest.mark.parametrize(
+    "input_shape",
+    [
+        (1, 1, 32, 256),  # Wt=8
+        (1, 1, 256, 32),  # Ht=8
+        (1, 1, 128, 544),  # Wt=17
+        (1, 1, 60, 100),  # tile-unaligned
+    ],
+)
+@pytest.mark.parametrize("dim", [-1, -2, None])
+@pytest.mark.parametrize("fp32_dest_acc_en", [False, True], ids=["dest16", "dest32"])
+def test_min_bfloat16_dest_modes(device, input_shape, dim, fp32_dest_acc_en):
+    """bfloat16 min over both DEST widths. The SFPU reduce sizes its chunk from DEST capacity,
+    so fp32_dest_acc_en halves it; the shapes straddle both chunk boundaries."""
+    torch.manual_seed(0)
+
+    torch_input_tensor = torch_random(input_shape, -100, 100, dtype=torch.bfloat16)
+    torch_output_tensor = torch.amin(torch_input_tensor, dim=dim)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
+    # Padding sits below every input value, so a chunk reading past the valid region returns it.
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
+
+    output_tensor = ttnn.min(
+        input_tensor,
+        dim=dim,
+        compute_kernel_config=ttnn.init_device_compute_kernel_config(
+            device.arch(),
+            # HiFi4 with fp32_dest_acc_en can return wrong results on Wormhole.
+            math_fidelity=ttnn.MathFidelity.HiFi3,
+            math_approx_mode=False,
+            fp32_dest_acc_en=fp32_dest_acc_en,
+        ),
+    )
+    output_tensor = ttnn.to_torch(ttnn.from_device(output_tensor)).reshape(torch_output_tensor.shape)
+
+    assert_equal(torch_output_tensor, output_tensor)
