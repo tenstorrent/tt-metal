@@ -17,20 +17,10 @@ namespace tt::tt_metal::emule {
 // emits it as the EMULE_SEM_ALIGN define; the runner's sem-region setup uses it for addressing.
 static constexpr uint32_t EMULE_SEM_ALIGN = 16;
 
-// Build the full defines map for a kernel: subclass-derived + arch + emulator
-// constants (banking, alignments, worker maps, sem base, CB tile sizes).
-std::map<std::string, std::string> build_kernel_defines(
-    Kernel& kernel,
-    detail::ProgramImpl& impl,
-    uint32_t num_dram_channels,
-    uint32_t num_l1_banks,
-    const std::string& worker_col_map_str,
-    const std::string& worker_row_map_str,
-    uint32_t emule_sem_base);
-
-// Descriptor-consuming twin of build_kernel_defines: reads only the POD (KernelDescriptor,
-// the kernel's first-core CoreDescriptor for CB/DFB geometry, SocView) — no tt-metal
-// Kernel/ProgramImpl. first_core_desc is null when the kernel occupies no cores.
+// Build the full defines map for a kernel from the POD: subclass-derived process_defines +
+// arch/fabric/alignments (SocView) + banking/worker-maps/sem (scalar params) + the EMULE_TILE_*
+// CB/DFB geometry tables (the kernel's first-core CoreDescriptor). Reads no tt-metal Kernel/
+// ProgramImpl. first_core_desc is null when the kernel occupies no cores.
 std::map<std::string, std::string> build_kernel_defines_from_desc(
     const tt_emule::KernelDescriptor& kd,
     const tt_emule::CoreDescriptor* first_core_desc,
