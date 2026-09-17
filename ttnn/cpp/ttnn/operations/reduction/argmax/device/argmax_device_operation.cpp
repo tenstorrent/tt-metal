@@ -4,8 +4,11 @@
 #include "argmax_device_operation.hpp"
 #include "ttnn/operations/reduction/reduce_op_validation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/device_operation.hpp"
 #include "argmax_utils.hpp"
+
+#include <tt-metalium/hal.hpp>
 
 using namespace tt::tt_metal;
 
@@ -75,6 +78,14 @@ ttsl::SmallVector<uint32_t> get_output_shape(const Tensor& input_tensor, const s
 
 ArgMaxDeviceOperation::program_factory_t ArgMaxDeviceOperation::select_program_factory(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    // The path was decided once, on the host, by select_argmax_path (see
+    // argmax.cpp); this only maps it onto a factory. Eligibility for the two
+    // vector paths is enforced in validate_on_program_cache_miss.
+    switch (args.path) {
+        case ArgMaxPath::Rvv: return ArgMaxRvvTileProgramFactory{};
+        case ArgMaxPath::Sfpu: return ArgMaxSfpuTileProgramFactory{};
+        case ArgMaxPath::ScalarReader: break;
+    }
     if (uses_multicore_path(args, tensor_args)) {
         return ArgMaxMultiCoreProgramFactory{};
     }
@@ -131,18 +142,23 @@ void ArgMaxDeviceOperation::validate_on_program_cache_miss(
 
     const auto& optional_output_tensor = tensor_args.optional_output_tensor;
     if (optional_output_tensor.has_value()) {
+        const auto& output_tensor = optional_output_tensor.value();
+        TT_FATAL(is_device_tensor(output_tensor), "Argmax preallocated output tensor must be allocated on device");
         TT_FATAL(
-            optional_output_tensor.value().dtype() == DataType::UINT32,
+            output_tensor.device() == input_tensor_a.device(),
+            "Argmax preallocated output tensor must be on the same device/mesh as the input tensor");
+        TT_FATAL(
+            output_tensor.dtype() == DataType::UINT32,
             "Only UINT32 is supported for outputs, got {}",
-            optional_output_tensor.value().dtype());
+            output_tensor.dtype());
         TT_FATAL(
-            optional_output_tensor.value().memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+            output_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
             "Only INTERLEAVED memory layout is supported for outputs, got {}",
-            optional_output_tensor.value().memory_config().memory_layout());
+            output_tensor.memory_config().memory_layout());
         TT_FATAL(
-            optional_output_tensor.value().layout() == Layout::ROW_MAJOR,
+            output_tensor.layout() == Layout::ROW_MAJOR,
             "Output tensor must have ROW_MAJOR layout, got {}",
-            optional_output_tensor.value().layout());
+            output_tensor.layout());
     }
 
     if (args.dim.has_value()) {
@@ -185,11 +201,127 @@ void ArgMaxDeviceOperation::validate_on_program_cache_miss(
             input_tensor_a.layout());
     }
 
-    if (uses_multicore_path(args, tensor_args) && args.sub_core_grids.has_value()) {
+    if (args.sub_core_grids.has_value()) {
         ReduceOpDeviceGridValidationOptions grid_opts;
         grid_opts.sub_grid_contained_in_device_grid = &args.sub_core_grids.value();
-        grid_opts.sub_grid_label = "Multicore argmax sub_core_grids";
+        grid_opts.sub_grid_label = "sub_core_grids";
         validate_reduce_op_tensor(tensor_args.input, "Argmax", "input", &grid_opts);
+    }
+
+    // Vector-path eligibility. Under automatic dispatch these are
+    // unreachable: select_argmax_path (argmax.cpp) checks the same
+    // preconditions and demotes to ArgMaxPath::ScalarReader instead of
+    // choosing a path that would trip one. They stay as hard errors because
+    // (a) they are the invariant the selector is written against -- if the two
+    // ever drift, this fails loudly instead of miscompiling a kernel, and
+    // (b) the verification-only forced entries (argmax_force.hpp) reach the
+    // paths directly, and a forced leg must refuse a case it cannot serve
+    // rather than fall back, or a comparison against the scalar readers would
+    // be vacuous.
+    if (args.path == ArgMaxPath::Rvv) {
+        TT_FATAL(
+            tt::tt_metal::hal::get_arch() == tt::ARCH::BLACKHOLE,
+            "argmax RVV path requires a Blackhole device (TRISC vector unit)");
+        TT_FATAL(input_layout == Layout::TILE, "argmax RVV path requires TILE layout input, got {}", input_layout);
+        TT_FATAL(
+            input_tensor_a.dtype() == DataType::BFLOAT16,
+            "argmax RVV path requires BFLOAT16 input, got {}",
+            input_tensor_a.dtype());
+        TT_FATAL(args.dim.has_value(), "argmax RVV path requires an explicit dim (last dim)");
+        const int32_t rank = static_cast<int32_t>(input_tensor_a.logical_shape().rank());
+        // Rank 1 is supported and is the path's H == 1 shape (the program
+        // factory binds h_logical = 1 for it). Rank 0 is not: it has no
+        // reduction axis, and normalize_dim(-1, 0) == -1 would satisfy the
+        // last-dim check below and then index logical_shape[-1] out of bounds.
+        TT_FATAL(rank >= 1, "argmax RVV path requires an input of rank >= 1, got rank {}", rank);
+        const int32_t normalized_dim = normalize_dim(static_cast<int32_t>(args.dim.value()), rank);
+        TT_FATAL(
+            normalized_dim == rank - 1,
+            "argmax RVV path supports only last-dim reduction, got dim={} (normalized={}) for rank {}",
+            args.dim.value(),
+            normalized_dim,
+            rank);
+        const uint32_t tile_w = input_tensor_a.tensor_spec().tile().get_width();
+        const uint32_t tile_h = input_tensor_a.tensor_spec().tile().get_height();
+        TT_FATAL(tile_w == 32 && tile_h == 32, "argmax RVV path requires standard 32x32 tiles");
+        const auto& logical_shape = input_tensor_a.logical_shape();
+        TT_FATAL(
+            logical_shape[-1] % tile_w == 0,
+            "argmax RVV path requires the reduction dim ({}) to be a multiple of the tile width {} "
+            "(no width padding)",
+            logical_shape[-1],
+            tile_w);
+    }
+
+    if (args.path == ArgMaxPath::Sfpu) {
+        // Blackhole-only for now: the path's special-value semantics (NaN
+        // treated as a same-signed infinity, denormals and -0 flushed to zero,
+        // documented in argmax_sfpu_tile_compute.cpp) are silicon-validated on
+        // Blackhole.
+        // Nothing in the kernels is architecturally Blackhole-specific;
+        // enabling Wormhole is a follow-up gated on re-running the
+        // special-value cases there.
+        TT_FATAL(
+            tt::tt_metal::hal::get_arch() == tt::ARCH::BLACKHOLE,
+            "argmax SFPU path is currently supported on Blackhole only");
+        TT_FATAL(input_layout == Layout::TILE, "argmax SFPU path requires TILE layout input, got {}", input_layout);
+        TT_FATAL(
+            input_tensor_a.dtype() == DataType::BFLOAT16,
+            "argmax SFPU path requires BFLOAT16 input, got {}",
+            input_tensor_a.dtype());
+        TT_FATAL(args.dim.has_value(), "argmax SFPU path requires an explicit dim (last dim)");
+        const int32_t rank = static_cast<int32_t>(input_tensor_a.logical_shape().rank());
+        // Same rank-0 hazard as the RVV block above. Automatic dispatch keeps
+        // rank 1 off this path as well (select_argmax_path), but that is a
+        // routing choice, not a kernel limit, so a forced-path caller may
+        // still measure it.
+        TT_FATAL(rank >= 1, "argmax SFPU path requires an input of rank >= 1, got rank {}", rank);
+        const int32_t normalized_dim = normalize_dim(static_cast<int32_t>(args.dim.value()), rank);
+        TT_FATAL(
+            normalized_dim == rank - 1,
+            "argmax SFPU path supports only last-dim reduction, got dim={} (normalized={}) for rank {}",
+            args.dim.value(),
+            normalized_dim,
+            rank);
+        const uint32_t tile_w = input_tensor_a.tensor_spec().tile().get_width();
+        const uint32_t tile_h = input_tensor_a.tensor_spec().tile().get_height();
+        TT_FATAL(tile_w == 32 && tile_h == 32, "argmax SFPU path requires standard 32x32 tiles");
+        const auto& logical_shape = input_tensor_a.logical_shape();
+        TT_FATAL(
+            logical_shape[-1] % tile_w == 0,
+            "argmax SFPU path requires the reduction dim ({}) to be a multiple of the tile width {} "
+            "(no width padding)",
+            logical_shape[-1],
+            tile_w);
+    }
+
+    const auto& optional_maxval = tensor_args.optional_maxval_tensor;
+    if (optional_maxval.has_value()) {
+        TT_FATAL(
+            args.path != ArgMaxPath::ScalarReader,
+            "argmax max-value output is only produced by the vector paths (RVV / SFPU)");
+        const auto& maxval = optional_maxval.value();
+        TT_FATAL(is_device_tensor(maxval), "argmax max-value tensor must be allocated on device");
+        // Device affinity: the program is launched from the input tensor, so a
+        // maxval buffer on a different device/mesh would have its (foreign)
+        // address bound into this device's kernel.
+        TT_FATAL(
+            maxval.device() == input_tensor_a.device(),
+            "argmax max-value tensor must be on the same device/mesh as the input tensor");
+        TT_FATAL(
+            maxval.dtype() == DataType::BFLOAT16, "argmax max-value tensor must be BFLOAT16, got {}", maxval.dtype());
+        TT_FATAL(
+            maxval.layout() == Layout::ROW_MAJOR, "argmax max-value tensor must be ROW_MAJOR, got {}", maxval.layout());
+        TT_FATAL(
+            maxval.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+            "argmax max-value tensor must be INTERLEAVED, got {}",
+            maxval.memory_config().memory_layout());
+        const auto expected_shape = ttnn::Shape(get_output_shape(input_tensor_a, args.dim, args.keepdim));
+        TT_FATAL(
+            maxval.logical_shape() == expected_shape,
+            "argmax max-value tensor has shape {}, expected the index output shape {}",
+            maxval.logical_shape(),
+            expected_shape);
     }
 }
 
@@ -221,7 +353,9 @@ ttnn::Tensor argmax(
     bool keepdim,
     const std::optional<CoreRangeSet>& sub_core_grids,
     const tt::tt_metal::MemoryConfig& output_mem_config,
-    std::optional<ttnn::Tensor> optional_output_tensor) {
+    std::optional<ttnn::Tensor> optional_output_tensor,
+    ArgMaxPath path,
+    std::optional<ttnn::Tensor> optional_maxval_tensor) {
     return ttnn::device_operation::launch<ArgMaxDeviceOperation>(
         ArgMaxDeviceOperation::operation_attributes_t{
             .output_dtype = output_dtype,
@@ -229,9 +363,12 @@ ttnn::Tensor argmax(
             .keepdim = keepdim,
             .sub_core_grids = sub_core_grids,
             .output_mem_config = output_mem_config,
+            .path = path,
         },
         ArgMaxDeviceOperation::tensor_args_t{
-            .input = input, .optional_output_tensor = std::move(optional_output_tensor)});
+            .input = input,
+            .optional_output_tensor = std::move(optional_output_tensor),
+            .optional_maxval_tensor = std::move(optional_maxval_tensor)});
 }
 
 }  // namespace ttnn::prim
