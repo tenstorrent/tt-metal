@@ -139,6 +139,39 @@ ProgramDescriptor ConcatBlockShardedProgramFactory::create_descriptor(
     const uint32_t out_units_w = to_units_w(output_shard_w);
     const uint32_t dst_stride_bytes = out_units_w * unit_size;
 
+    // Columns each input contributes, and the output's real flattened width.
+    //
+    // These come from the tensors' own widths, not from input_shard_w * shard_grid_w. That
+    // product is the allocated shard *capacity*, and block sharding lets the last width shard be
+    // part padding -- flattened width 11 across three shards of 4 has a capacity of 12. Advancing
+    // the cursor by capacity instead of the real width folds that padding into every input after
+    // the first, shifting them all one column late (see the issue this fixes). Shard width is
+    // still what maps a column to its source core, just below.
+    std::vector<uint32_t> input_total_w(num_input_tensors);
+    uint32_t out_total_w = 0;
+    if (width_concat) {
+        for (uint32_t i = 0; i < num_input_tensors; i++) {
+            input_total_w[i] = input_tensors[i].padded_shape()[-1];
+            out_total_w += input_total_w[i];
+        }
+        // Width concat sums the inputs' widths, so this is a restatement of the output spec.
+        TT_FATAL(
+            out_total_w == output.padded_shape()[-1],
+            "Width concat: inputs contribute {} columns but the output's width is {} (shape {}).",
+            out_total_w,
+            output.padded_shape()[-1],
+            output.padded_shape());
+        // The shards have to be able to hold the result; they may hold more (ragged tail).
+        TT_FATAL(
+            output_shard_w * shard_grid_w >= out_total_w,
+            "Width concat: output shards span {} x {} columns, too few for the {} columns of shape "
+            "{}.",
+            output_shard_w,
+            shard_grid_w,
+            out_total_w,
+            output.padded_shape());
+    }
+
     // --- Circular Buffers ---
     for (uint32_t i = 0; i < num_input_tensors; i++) {
         const uint32_t in_num_units = to_units_h(input_shard_h[i]) * to_units_w(input_shard_w[i]);
@@ -198,12 +231,14 @@ ProgramDescriptor ConcatBlockShardedProgramFactory::create_descriptor(
 
             if (width_concat) {
                 const uint32_t out_col_start = sw * output_shard_w;
-                const uint32_t out_col_end = out_col_start + output_shard_w;
+                // Clipped to the real width: the last width shard can extend past it, and those
+                // columns are padding with no source column to copy from.
+                const uint32_t out_col_end = std::min(out_col_start + output_shard_w, out_total_w);
                 const uint32_t num_rows_units = to_units_h(output_shard_h);
 
                 uint32_t cum_w = 0;
                 for (uint32_t inp_id = 0; inp_id < num_input_tensors; inp_id++) {
-                    const uint32_t inp_total_w = input_shard_w[inp_id] * shard_grid_w;
+                    const uint32_t inp_total_w = input_total_w[inp_id];
                     const uint32_t inp_shard_w_val = input_shard_w[inp_id];
 
                     const uint32_t overlap_start = std::max(out_col_start, cum_w);
