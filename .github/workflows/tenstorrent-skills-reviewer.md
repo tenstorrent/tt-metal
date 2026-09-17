@@ -375,7 +375,13 @@ These describe **impact, not merge gates**. This workflow is advisory and cannot
 Load `/tt-split-pr-by-codeowners` for the semantics and the judgement, and run its matcher against those files:
 
 ```bash
-python3 .github/skills/common/tt-split-pr-by-codeowners/scripts/codeowners_map.py \
+# gh versions may install flat or bucketed skill directories.
+SPLIT_SCRIPT=$(find .github/skills -type f -path '*/tt-split-pr-by-codeowners/scripts/codeowners_map.py' -print -quit)
+if [ -z "$SPLIT_SCRIPT" ]; then
+  echo "CODEOWNERS matcher is missing; split check could not run" >&2
+  exit 1
+fi
+python3 "$SPLIT_SCRIPT" \
   --codeowners /tmp/gh-aw/agent/CODEOWNERS.base \
   --files-from /tmp/gh-aw/agent/pr-files.txt \
   --expect-files <changed_files> \
