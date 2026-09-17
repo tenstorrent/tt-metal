@@ -602,11 +602,13 @@ class LTXDistilledPipeline(LTXPipeline):
         return not images and os.environ.get("LTX_DEVICE_RESIDENT", "1") != "0"
 
     def _replicated_channel_vec(self, v: torch.Tensor) -> ttnn.Tensor:
+        """Per-channel stats as an fp32 ``(1, 1, 1, C)`` device tensor: the host path applies them in fp32,
+        and rounding them to bf16 alone costs ~0.4 % per channel on the stage-2 input."""
         return ttnn.from_torch(
             v.reshape(1, 1, 1, -1).float(),
             device=self.mesh_device,
             layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat16,
+            dtype=ttnn.float32,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
 
@@ -616,7 +618,8 @@ class LTXDistilledPipeline(LTXPipeline):
         """Stage-1 tokens (``(1, 1, video_N, C)``, sequence-sharded on ``sp_axis``, normalized) -> the 2x
         upsampled, re-normalized tokens ``(1, 1, video_N2_real, C)`` replicated on every device. Mirrors
         ``upsample_latent`` (un-normalize -> replicate-pad H/W to the upsampler's mesh factors -> upsampler ->
-        crop -> re-normalize) with on-device gathers/partitions instead of the host gather + scatter."""
+        crop -> re-normalize) with on-device gathers/partitions instead of the host gather + scatter. The
+        result is fp32, like the host path's, so the stage-2 noise mix sees the same values."""
         ccl = self.ccl_manager
         ups = self.upsampler
         upc = ups.parallel_config
@@ -626,7 +629,11 @@ class LTXDistilledPipeline(LTXPipeline):
         mean_t, std_t = self._replicated_channel_vec(mean), self._replicated_channel_vec(std)
 
         x = ccl.all_gather(tt_tokens, dim=2, mesh_axis=sp_axis, use_hyperparams=False)  # replicated tokens
+        # Same numerics as the host path: un-normalize in fp32, then bf16 into the upsampler (the host uploads
+        # bf16), fp32 again for the re-normalize and the noise mix that follows.
+        x = ttnn.typecast(x, ttnn.float32)
         x = ttnn.add(ttnn.multiply(x, std_t), mean_t)  # un-normalize (padded rows are garbage, sliced next)
+        x = ttnn.typecast(x, ttnn.bfloat16)
         x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
         x = ttnn.slice(x, [0, 0, 0, 0], [1, 1, n_real, C])
         x = ttnn.reshape(x, (latent_frames, s1_h, s1_w, C))  # THWC (B=1 folded)
@@ -652,7 +659,8 @@ class LTXDistilledPipeline(LTXPipeline):
         x = ttnn.slice(x, [0, 0, 0, 0], [latent_frames, 2 * s1_h, 2 * s1_w, C])
         x = ttnn.reshape(x, (1, 1, latent_frames * 2 * s1_h * 2 * s1_w, C))
         x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
-        return ttnn.multiply(ttnn.subtract(x, mean_t), ttnn.reciprocal(std_t))  # re-normalize
+        x = ttnn.typecast(x, ttnn.float32)
+        return ttnn.multiply(ttnn.subtract(x, mean_t), ttnn.reciprocal(std_t))  # re-normalize, fp32
 
     def _noise_video_latent_device(
         self, tokens_replicated: ttnn.Tensor, video_N_real: int, video_N: int, sigma: float, seed: int, sp_axis: int
@@ -671,7 +679,7 @@ class LTXDistilledPipeline(LTXPipeline):
         if video_N > video_N_real:
             base = ttnn.pad(base, [(0, 0), (0, 0), (0, video_N - video_N_real), (0, 0)], 0.0)
         base = ttnn.mesh_partition(base, dim=2, cluster_axis=sp_axis)
-        base32 = ttnn.typecast(base, ttnn.float32)
+        base32 = base if base.dtype == ttnn.float32 else ttnn.typecast(base, ttnn.float32)
         noise32 = ttnn.typecast(noise_dev, ttnn.float32)
         lat = ttnn.add(ttnn.multiply(noise32, sigma), ttnn.multiply(base32, 1.0 - sigma))
         return ttnn.typecast(lat, ttnn.bfloat16)
