@@ -34,11 +34,23 @@ Numbers here are **measured**, not guessed. A budget derived from nothing is eit
 loose it gates nothing or so tight it flakes; each entry carries the measurement it came
 from in a trailing comment, with the architecture and date, so the next person can tell a
 deliberate budget from a hopeful one.
+
+**A budget binds every call site of the driver, including the edge sweep.** The recorded
+numbers come from ``accuracy/accuracy_harness.py``, which builds its stimulus from
+``for_op(...).spec_A`` -- the op's *safe domain* -- so they say nothing on their own about
+``test_eltwise_unary_sfpu_edges``, which passes its own ``edge_spec(...)`` with the
+plus/minus inf, NaN and signed-zero probes and the format extremes. The ULP arm returns
+before both the tolerance gate and PCC, so on the edge stimuli a zero-headroom budget has
+no backstop. Enrolling an op therefore means measuring both: the edge sweep was run for
+the nine ops below and every variant holds at its enrolled budget.
+  wh: edges 42 passed / 6 skipped for Abs/Neg/Identity/Floor/Ceil/Trunc and
+      7 passed / 17 skipped for Square/SigmoidAppx/GeluAppx, 2026-09-17
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, fields
+from enum import Enum
 from typing import Any, Dict, Optional, Tuple
 
 from .chip_architecture import ChipArchitecture
@@ -50,8 +62,17 @@ from .ulp import has_ulp_gate
 #: tolerance metric anywhere else until the sweep has been re-run there.
 MEASURED_ARCH = ChipArchitecture.WORMHOLE
 
-METRIC_ULP = "ulp"
-METRIC_TOLERANCE = "tolerance"
+
+class Metric(Enum):
+    """Which gate a contract is written against.
+
+    An enum rather than a ``str``, so an unknown metric is unrepresentable instead of
+    being caught by a hand-rolled check in ``__post_init__`` -- every dimension of
+    :class:`BudgetKey` is already a real enum.
+    """
+
+    ULP = "ulp"
+    TOLERANCE = "tolerance"
 
 
 @dataclass(frozen=True)
@@ -65,19 +86,14 @@ class AccuracyContract:
     table looking plausible.
     """
 
-    metric: str = METRIC_ULP
+    metric: Metric = Metric.ULP
     max_ulp: Optional[int] = None
     atol: Optional[float] = None
     rtol: Optional[float] = None
     near_zero_atol: Optional[float] = None
 
     def __post_init__(self) -> None:
-        if self.metric not in (METRIC_ULP, METRIC_TOLERANCE):
-            raise ValueError(
-                f"unknown accuracy metric {self.metric!r}; expected "
-                f"{METRIC_ULP!r} or {METRIC_TOLERANCE!r}"
-            )
-        if self.metric == METRIC_ULP:
+        if self.metric == Metric.ULP:
             if self.max_ulp is None:
                 raise ValueError("a ulp contract needs max_ulp")
             if self.max_ulp < 0:
@@ -91,7 +107,7 @@ class AccuracyContract:
             if self.max_ulp is not None or self.near_zero_atol is not None:
                 raise ValueError(
                     "max_ulp and near_zero_atol belong to the ulp metric; set "
-                    f"metric={METRIC_ULP!r} to use them"
+                    f"metric={Metric.ULP} to use them"
                 )
 
     def passed_test_kwargs(self) -> Dict[str, Any]:
@@ -100,7 +116,7 @@ class AccuracyContract:
         Keeps the driver's call site to one ``**`` expansion, so switching an op between
         metrics is a registry edit and never a driver edit.
         """
-        if self.metric == METRIC_ULP:
+        if self.metric == Metric.ULP:
             return {"max_ulp": self.max_ulp, "near_zero_atol": self.near_zero_atol}
         return {"custom_atol": self.atol, "custom_rtol": self.rtol}
 
@@ -108,7 +124,7 @@ class AccuracyContract:
 #: What an unenrolled op, or an enrolled op on a format with no per-element ULP, is
 #: judged by: the per-format ``atol``/``rtol`` defaults plus ``PCC > 0.99``, exactly as
 #: before. ``atol=None``/``rtol=None`` let ``passed_test`` use its own table.
-TOLERANCE_CONTRACT = AccuracyContract(metric=METRIC_TOLERANCE)
+TOLERANCE_CONTRACT = AccuracyContract(metric=Metric.TOLERANCE)
 
 
 @dataclass(frozen=True)
@@ -212,7 +228,11 @@ DEFAULT = BudgetKey()
 # integers, which a shared exponent represents exactly, and they measure 0 steps.
 #   wh: Abs/Neg max 15616 ULP, Square max 17664, Floor/Ceil/Trunc max 0, 2026-09-16
 # ─────────────────────────────────────────────────────────────────────────────
-_BFP8_B_QUANTIZATION_DOMINATES = AccuracyContract(metric=METRIC_TOLERANCE)
+_BFP8_B_QUANTIZATION_DOMINATES = AccuracyContract(metric=Metric.TOLERANCE)
+
+#: The two coarse 3-segment LUT approximations, which share one number because they share
+#: one cause. Named once so a retune cannot move SigmoidAppx and leave GeluAppx behind.
+_COARSE_LUT_TOLERANCE = AccuracyContract(metric=Metric.TOLERANCE, atol=0.13, rtol=0.05)
 
 #: The domain that makes a 0-step Bfp8_b budget legitimate for the integer-valued ops:
 #: every block maximum stays below 2**7, so the shared exponent represents their results
@@ -297,7 +317,7 @@ _SFPU_ACCURACY_BUDGET: Dict[MathOperation, Dict[BudgetKey, AccuracyContract]] = 
         DEFAULT: AccuracyContract(max_ulp=4),
         BudgetKey(output_format=DataFormat.Float16_b): AccuracyContract(max_ulp=1),
         BudgetKey(output_format=DataFormat.Float32): AccuracyContract(
-            metric=METRIC_TOLERANCE
+            metric=Metric.TOLERANCE
         ),
         BudgetKey(output_format=DataFormat.Bfp8_b): _BFP8_B_QUANTIZATION_DOMINATES,
     },
@@ -309,12 +329,8 @@ _SFPU_ACCURACY_BUDGET: Dict[MathOperation, Dict[BudgetKey, AccuracyContract]] = 
     # improvement a LUT retune produces. They keep the tolerance metric until there is a
     # measured step budget to replace it with, but the number now sits next to the op
     # instead of in a dict in a test file.
-    MathOperation.SigmoidAppx: {
-        DEFAULT: AccuracyContract(metric=METRIC_TOLERANCE, atol=0.13, rtol=0.05)
-    },
-    MathOperation.GeluAppx: {
-        DEFAULT: AccuracyContract(metric=METRIC_TOLERANCE, atol=0.13, rtol=0.05)
-    },
+    MathOperation.SigmoidAppx: {DEFAULT: _COARSE_LUT_TOLERANCE},
+    MathOperation.GeluAppx: {DEFAULT: _COARSE_LUT_TOLERANCE},
 }
 
 
@@ -322,34 +338,30 @@ def accuracy_contract(
     op: MathOperation,
     *,
     output_format: DataFormat,
+    arch: ChipArchitecture,
     approx_mode: Optional[ApproximationMode] = None,
     dest_acc: Optional[DestAccumulation] = None,
-    arch: Optional[ChipArchitecture] = None,
 ) -> AccuracyContract:
     """The contract for one op variant, or :data:`TOLERANCE_CONTRACT` if it has none.
 
     Falling back rather than raising is what makes enrolment incremental: an unenrolled
     op, and an enrolled op asked about a format with no per-element ULP, both keep the
     behaviour they have today.
-    """
-    if arch is not None and arch != MEASURED_ARCH:
-        # Every number in the table was measured on Wormhole with no headroom added, so
-        # letting it bind on an architecture that was never swept would make the
-        # "re-measure on Blackhole first" caveat unenforceable -- and WH and BH SFPUs
-        # differ in available instructions and therefore in kernel. Adding arch=WORMHOLE
-        # to the ULP keys instead would tie specificity with the per-format keys and make
-        # validate_registry() raise, so the gate is here.
-        return TOLERANCE_CONTRACT
 
+    *arch* is required, unlike the other three dimensions. Those may be left unset and
+    then match only a wildcard key, which is the rule :meth:`BudgetKey.matches` documents:
+    guessing would hand back a budget measured for the other setting. Architecture is the
+    one dimension where the numbers explicitly do not transfer, so defaulting it to
+    ``None`` would have resolved an unknown chip straight against the Wormhole table --
+    the inverse of that rule, in the dimension that can least afford it. A caller that
+    forgets the keyword now fails at the call rather than silently reinstating the
+    Blackhole problem this gate exists to close.
+    """
     table = _SFPU_ACCURACY_BUDGET.get(op)
     if table is None:
         return TOLERANCE_CONTRACT
-    if not has_ulp_gate(output_format):
-        # The coarse block floats and the MX formats have block-aware lattice compares in
-        # utils.py that are already the stronger criterion; a per-element step count
-        # against their bf16 view is not a property of the element.
-        return TOLERANCE_CONTRACT
-    return resolve_contract(
+
+    contract = resolve_contract(
         table,
         label=op.name,
         approx_mode=approx_mode,
@@ -357,6 +369,28 @@ def accuracy_contract(
         dest_acc=dest_acc,
         arch=arch,
     )
+    # Resolve first, then downgrade only a *ULP* contract. Both gates below are about
+    # whether a step count is measurable and trustworthy here, and neither says anything
+    # about a declared tolerance: gating before the lookup dropped SigmoidAppx's and
+    # GeluAppx's atol=0.13 on every architecture but Wormhole, and would drop any future
+    # tolerance contract on a block float, in both cases back to the default atol=0.05
+    # those numbers exist to widen.
+    if contract.metric != Metric.ULP:
+        return contract
+    if not has_ulp_gate(output_format):
+        # The coarse block floats and the MX formats have block-aware lattice compares in
+        # utils.py that are already the stronger criterion; a per-element step count
+        # against their bf16 view is not a property of the element.
+        return TOLERANCE_CONTRACT
+    if arch != MEASURED_ARCH:
+        # Every number in the table was measured on Wormhole with no headroom added, so
+        # letting it bind on an architecture that was never swept would make the
+        # "re-measure on Blackhole first" caveat unenforceable -- and WH and BH SFPUs
+        # differ in available instructions and therefore in kernel. Adding arch=WORMHOLE
+        # to the ULP keys instead would tie specificity with the per-format keys and make
+        # validate_registry() raise, so the gate is here.
+        return TOLERANCE_CONTRACT
+    return contract
 
 
 def resolve_contract(
