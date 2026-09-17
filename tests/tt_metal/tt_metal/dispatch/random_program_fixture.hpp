@@ -23,6 +23,11 @@
 
 namespace tt::tt_metal {
 
+// A DM-produced, Tensix-consumed DFB takes one of the 16 DM-visible tile counters on its tensix, so
+// that is the ceiling here rather than the 32 device slots Gen2 allows. It also matches the length of
+// the accessor ladders in random_program_2_0.cpp and dispatcher_kernel_size_and_runtime_2_0.cpp.
+constexpr uint32_t k_gen2_max_num_dfbs = 16;
+
 class UnitMeshRandomProgramFixture : virtual public UnitMeshCQSingleCardProgramFixture {
 protected:
     static const uint32_t MIN_KERNEL_SIZE_BYTES = 20;
@@ -39,11 +44,6 @@ protected:
     static const uint32_t MIN_NUM_SEMS = 0;
     static const uint32_t MAX_NUM_SEMS = NUM_SEMAPHORES;
     static const uint32_t SEM_VAL = 1;
-
-    // A DM-produced, Tensix-consumed DFB takes one of the 16 DM-visible tile counters on its
-    // tensix, so that is the ceiling here rather than the 32 device slots Gen2 allows. It also
-    // matches the length of the accessor ladder in dispatcher_kernel_size_and_runtime_2_0.cpp.
-    static const uint32_t MAX_NUM_DFBS = 16;
 
     static const uint32_t MIN_NUM_CBS = 0;
     static const uint32_t MIN_CB_PAGE_SIZE = 16;
@@ -256,7 +256,7 @@ private:
         }
         // hal().get_arch_num_circular_buffers() reports 64 on Quasar, far more DFBs than a single
         // node has tile counters for, so clamp both ends of the range.
-        kernel_properties.max_num_cbs = std::min(kernel_properties.max_num_cbs, MAX_NUM_DFBS);
+        kernel_properties.max_num_cbs = std::min(kernel_properties.max_num_cbs, k_gen2_max_num_dfbs);
         kernel_properties.min_num_cbs = std::min(kernel_properties.min_num_cbs, kernel_properties.max_num_cbs);
         const CoreRangeSet cores = this->get_cores(kernel_core_type);
 

@@ -39,6 +39,8 @@ All three tests skip at runtime on Quasar because `noc_inline_dw_write` does not
 
 - A posted write completes, but the destination L1 word keeps its initial value (test 507 read back `0x00000000` where `0x1234000f` was expected).
 - A non-posted write never acks, so `noc_async_write_barrier` spins forever and the test hangs.
-- Writes that advance the destination address hang the same way. This is consistent with `noc_fast_write_dw_inline` deriving its byte-enable as `be << (addr & (NOC_WORD_BYTES - 1))`; Quasar's `NOC_WORD_BYTES` is 256, so any address that is not 256B-aligned shifts a `uint32_t` by 32 or more.
+- Writes that advance the destination address hang the same way.
+
+The root cause is not established; the dedicated issue tracks it.
 
 The suite itself is no longer the blocker. It was ported from the Metal 1.0 `DataMovementConfig` path — which `CreateKernel` rejects on Quasar — to the Metal 2.0 `KernelSpec` / `DataMovementGen2Config` path used by the `_2_0` tests in the neighbouring suites, and it passes on Gen1. Remove the skips once the NoC V2 inline-write path is fixed. Tracked by issue #55386.
