@@ -75,6 +75,13 @@ class PaddleOCRVLForConditionalGeneration(VLGenerator, SupportsMultiModal):
         cls, hf_config, mesh_device, max_batch_size, max_seq_len, tt_data_parallel=1, optimizations=None
     ):
         assert tt_data_parallel == 1, "PaddleOCR-VL runs on a single submesh"
+        # tt_data_parallel alone doesn't bound mesh_device's width: some multi-chip
+        # widths (e.g. TP=2) pass every downstream divisibility check silently instead
+        # of failing, so the device count is checked explicitly here.
+        assert mesh_device.get_num_devices() == 1, (
+            f"PaddleOCR-VL supports a single Blackhole die only; got a "
+            f"{mesh_device.get_num_devices()}-device mesh {tuple(mesh_device.shape)}"
+        )
         if max_seq_len > MAX_SEQ_LEN_NATIVE:
             logger.warning(f"max_seq_len {max_seq_len} exceeds native {MAX_SEQ_LEN_NATIVE}; clamping")
             max_seq_len = MAX_SEQ_LEN_NATIVE
