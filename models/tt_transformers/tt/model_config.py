@@ -3179,6 +3179,12 @@ class ModelArgs:
         # trace+1cq: 8.144 -> 8.123 ms/token, prefill 22.30 -> 22.28 ms).
         self.pad_logits_to_power_of_2 = False
 
+        # Sampling top-k grid lever (see tt/sampling_rowsplit.py): the routed Blackhole top-k
+        # parallelises by row, so a 32-user block over the 32064-wide per-device vocab shard
+        # runs on 32 of 110 cores. Viewing the block as 2 column chunks doubles the rows (and
+        # cores) and halves the per-core chunk walk, with no data movement. 0 disables.
+        self.sampling_topk_row_split = 2
+
         self.unpadded_hidden_dim = self.hidden_dim
         # Don't need to pad for CPU runs
         if self.num_devices:

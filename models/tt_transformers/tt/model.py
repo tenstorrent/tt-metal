@@ -11,6 +11,7 @@ from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
 from models.common.sampling.generator import SamplingGenerator
 from models.common.sampling.tt_sampling import TOPK_MAX_WIDTH, TTSampling
+from models.tt_transformers.tt.sampling_rowsplit import enable_row_split_topk
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.common import Mode, copy_host_to_device
 from models.tt_transformers.tt.decoder import TransformerBlock
@@ -181,6 +182,11 @@ class Transformer(LightweightModule):
                 mesh_device=mesh_device,
                 tt_ccl=self.tt_ccl,
             )
+            # Run the per-device sampling top-k on N x the rows (cores) by re-describing the
+            # logits block as N column chunks; a no-op wherever the shape does not allow it.
+            row_split = getattr(args, "sampling_topk_row_split", 0)
+            if row_split:
+                enable_row_split_topk(self.sampling.tt_sampling, row_split)
         else:
             self.sampling = None
 
