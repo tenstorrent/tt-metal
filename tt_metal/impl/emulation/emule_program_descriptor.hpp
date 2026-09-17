@@ -24,7 +24,6 @@
 #include <array>
 #include <cstdint>
 #include <map>
-#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -134,6 +133,7 @@ struct KernelDescriptor {
     uint32_t processor_type = 0;                                        // get_kernel_processor_type(0)
     bool is_compute = false;                                            // processor_class == COMPUTE
     uint32_t dm_processor = 0;  // DataMovementKernel::config().processor (RISCV_0/1->BRISC/NCRISC)
+    bool has_compute_config = false;                          // config() held a ComputeConfig
     bool fp32_dest_acc_en = false, dst_full_sync_en = false;  // ComputeKernel::config()
     std::vector<uint32_t> proc_ids;
     uint32_t num_threads = 1;                   // Quasar get_dm/compute_processors, else single
@@ -152,23 +152,22 @@ struct CoreKernel {
 // Silicon keeps TWO stores; the POD mirrors them and NEVER folds them:
 //   RING  = the four L1 config words -> tt_emule::CBSyncState.
 //   GEOM  = the compile-time tile/face descriptor -> build_kernel_defines / EMULE_TILE_*.
-// tile_size derives from the Tile, never from page_size. The precedence
-// (explicit FaceGeometry > CB Tile > full-tile) is EMULE logic, so the POD carries
-// the RAW optionals and resolve_tile_geometry (emule_tile_geometry) applies it.
-struct TileGeom {
-    uint32_t r_dim = 0, c_dim = 0;
-    bool partial_face = false, narrow_tile = false;
-};  // tile(idx) -> Tile::get_height/width/partial_face/narrow_tile
-struct FaceGeom {
-    uint32_t face_r_dim = 0, num_faces = 0;
-};  // unpack_face_geometry(idx)
-struct CbBuffer {                         // one local buffer index
-    uint8_t index = 0;                    // local_buffer_indices()
-    uint32_t page_size = 0;               // page_size(index)    -- RING
-    uint32_t num_pages = 0;               // num_pages(index)    -- RING
-    uint32_t data_format = 0;             // data_format(index)  (tt::DataFormat raw) -- GEOM
-    std::optional<TileGeom> tile;         // tile(index)                 -- GEOM (raw)
-    std::optional<FaceGeom> unpack_face;  // unpack_face_geometry(index) -- GEOM (raw)
+// tile_size derives from the Tile, never from page_size. The tile/face precedence
+// (explicit FaceGeometry > CB Tile > full-tile) is EMULE logic that needs the live
+// tt-metal Tile, so the MARSHALLER applies resolve_tile_geometry and stores the
+// RESOLVED primitives here; consumers read them directly and never rebuild a Tile.
+struct ResolvedGeom {        // resolve_tile_geometry(tile, unpack_face) applied on the marshaller side
+    uint32_t tile_size = 0;  // ResolvedTileGeometry::tile.get_tile_size(data_format)
+    uint32_t tile_r_dim = 32, tile_c_dim = 32;   // effective tile height / width
+    uint32_t face_r_dim = 16, num_faces = 4;     // resolved face_r_dim / num_faces
+    uint32_t partial_face = 0, narrow_tile = 0;  // effective tile partial_face / narrow_tile flags
+};
+struct CbBuffer {              // one local buffer index
+    uint8_t index = 0;         // local_buffer_indices()
+    uint32_t page_size = 0;    // page_size(index)    -- RING
+    uint32_t num_pages = 0;    // num_pages(index)    -- RING
+    uint32_t data_format = 0;  // data_format(index)  (tt::DataFormat raw) -- GEOM
+    ResolvedGeom geom;         // tile(index) + unpack_face_geometry(index), resolved -- GEOM
 };
 struct CbDescriptor {
     uint32_t address = 0;             // address()            -- RING
@@ -187,8 +186,7 @@ struct DfbDescriptor {
     bool has_finalize = false;
     uint32_t finalize_l1_offset = 0;  // core_lookup_[core].second.second
     uint32_t data_format = 0;         // config.data_format  (feeds the CB tables)
-    std::optional<TileGeom> tile;
-    std::optional<FaceGeom> unpack_face;  // config.tile / .unpack_face_geometry
+    ResolvedGeom geom;                // config.tile / .unpack_face_geometry, resolved (valid data_format only)
 };
 
 // ─────────────────────────────── Semaphores ───────────────────────────────

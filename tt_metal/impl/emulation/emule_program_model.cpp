@@ -29,7 +29,8 @@ void collect_kernels(
     std::map<std::string, DeferredCompile>& deferred_compiles,
     std::unordered_map<std::string, std::function<void()>>& resolved_fns,
     std::vector<std::string>& inline_src_temps,
-    const tt_emule::EmuleProgramDescriptor& desc) {
+    const tt_emule::EmuleProgramDescriptor& desc,
+    const tt_emule::SocView& soc) {
     static const char* trisc_define_names[] = {"TRISC_UNPACK", "TRISC_MATH", "TRISC_PACK", "TRISC_ISOLATE_SFPU"};
 
     const auto& hal = MetalContext::instance().hal();
@@ -103,8 +104,42 @@ void collect_kernels(
                     "emule descriptor diff-guard: named_ct_arg_namespaces mismatch (kernel {})",
                     static_cast<uint32_t>(kernel_id));
             }
-            auto defines = build_kernel_defines(
-                *kernel, impl, num_dram_channels, num_l1_banks, worker_col_map_str, worker_row_map_str, emule_sem_base);
+            // Locate this kernel's first-core CoreDescriptor for the CB/DFB geometry tables
+            // (first_core = start of the kernel's first core range, matching build_kernel_defines).
+            const tt_emule::CoreDescriptor* first_core_desc = nullptr;
+            const auto& kcrs = kernel->core_range_set();
+            if (!kcrs.ranges().empty()) {
+                const auto fc = kcrs.ranges().begin()->start_coord;
+                for (const auto& c : desc.cores) {
+                    if (c.logical_x == fc.x && c.logical_y == fc.y) {
+                        first_core_desc = &c;
+                        break;
+                    }
+                }
+            }
+            auto defines = build_kernel_defines_from_desc(
+                kd,
+                first_core_desc,
+                soc,
+                num_dram_channels,
+                num_l1_banks,
+                worker_col_map_str,
+                worker_row_map_str,
+                emule_sem_base);
+            {  // STAGE 2b diff-guard: POD defines vs the private-read build
+                auto _priv_defines = build_kernel_defines(
+                    *kernel,
+                    impl,
+                    num_dram_channels,
+                    num_l1_banks,
+                    worker_col_map_str,
+                    worker_row_map_str,
+                    emule_sem_base);
+                TT_FATAL(
+                    defines == _priv_defines,
+                    "emule descriptor diff-guard: kernel defines mismatch (kernel {})",
+                    static_cast<uint32_t>(kernel_id));
+            }
 
             // Tensix/compute kernels use bits 8+ in the DFB RISC mask (TENSIX_RISC_OFFSET),
             // while DM kernels use bits 0-7 directly.
