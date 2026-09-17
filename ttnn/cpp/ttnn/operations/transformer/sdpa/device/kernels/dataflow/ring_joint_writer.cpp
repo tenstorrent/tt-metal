@@ -613,12 +613,27 @@ void kernel_main() {
 
     // Track non-skipped iters so the first active iter starts with fresh accumulators (matches compute).
     bool seen_active_iter = false;
-    constexpr uint32_t sdpa_ring_iterations = has_sliding_window ? 1 : ring_size;
+    // DIAGNOSTIC: 6400-token full-mesh fixture only; four physical sources per attention pass.
+    constexpr uint32_t source_group_size = ring_size == 8 ? 4 : 1;
+    constexpr bool stream_sources = source_group_size > 1;
+    constexpr uint32_t sdpa_ring_iterations = has_sliding_window ? 1 : ring_size / source_group_size;
     for (uint32_t ring_iter = 0; ring_iter < sdpa_ring_iterations; ++ring_iter) {
+        uint32_t streamed_first_source = ring_index;
+        if constexpr (stream_sources) {
+            for (uint32_t s = 0; s < source_group_size; ++s) {
+                const uint32_t source =
+                    ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
+                        fused_op_receiver.get_next_ring_id_and_sync(), mesh_rows, mesh_cols, snake_orientation);
+                if (s == 0) {
+                    streamed_first_source = source;
+                }
+            }
+        }
         // Sliding compute consumes all local/halo source ranges in one logical pass, so the
         // writer sees exactly one final output per Q and never enters deferred staging.
         const uint32_t ring_id =
-            has_sliding_window
+            stream_sources ? streamed_first_source
+            : has_sliding_window
                 ? ring_index
                 : ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
                       fused_op_receiver.get_next_ring_id_and_sync(), mesh_rows, mesh_cols, snake_orientation);
@@ -724,7 +739,9 @@ void kernel_main() {
             // Deferred norm: accumulates across ring iterations with exponential rescaling.
             // Single Q-chunk: accumulators persist in L1, write final output on last ring_iter.
             // Multi Q-chunk: raw accumulators round-trip through DRAM between ring iterations.
-            const bool is_last_ring_iter = is_last_active_ring_iter(active_ring_iter_mask, ring_iter);
+            const bool is_last_ring_iter =
+                (stream_sources ? ring_iter + 1 == sdpa_ring_iterations
+                                : is_last_active_ring_iter(active_ring_iter_mask, ring_iter));
             const bool single_q_chunk = (global_q_end - global_q_start == 1);
             constexpr uint32_t sum_offset = q_local_padded_Nt + Lt;
             constexpr uint32_t out_num_tiles = Sq_chunk_t * vDHt;

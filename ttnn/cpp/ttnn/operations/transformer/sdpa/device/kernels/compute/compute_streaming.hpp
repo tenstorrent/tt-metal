@@ -2353,7 +2353,8 @@ void sdpa_ring_v2(
     // True (unpadded) joint length in tiles; joint K chunks starting at/after it are pure padding.
     const uint32_t logical_lt = 0,
     // Tile offset of this call's Q chunk within cb_q_in (head-serial passes; 0 otherwise).
-    const uint32_t q_base_tiles = 0) {
+    const uint32_t q_base_tiles = 0,
+    const uint32_t* streamed_source_ids = nullptr) {
     init_sdpa_streaming_semaphores();
 
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
@@ -2544,9 +2545,9 @@ void sdpa_ring_v2(
         // Placed after balanced-skip guards so skipped Q chunks don't pay for the scan.
         uint32_t per_q_valid_kv = has_sliding_window ? sliding_q_plan.total_k_chunk_count : 0;
         for (uint32_t k = 0; !has_sliding_window && k < num_kv_chunks; ++k) {
-            const uint32_t source_ring_id = ring_id;
-            const uint32_t source_k_chunk = k;
-            const bool is_joint = k >= num_local_k_chunks;
+            const uint32_t source_ring_id = streamed_source_ids ? streamed_source_ids[k / num_local_k_chunks] : ring_id;
+            const uint32_t source_k_chunk = streamed_source_ids ? k % num_local_k_chunks : k;
+            const bool is_joint = !streamed_source_ids && k >= num_local_k_chunks;
             if (try_skip_oob_kv(source_ring_id, source_k_chunk, is_joint)) {
                 continue;
             }
@@ -2582,9 +2583,13 @@ void sdpa_ring_v2(
         const uint32_t q_k_loop_count = has_sliding_window ? per_q_valid_kv : num_kv_chunks;
         for (uint32_t k_chunk = 0; k_chunk < q_k_loop_count; ++k_chunk) {
             const auto sliding_k_chunk = sliding_q_plan.k_chunk_at(k_chunk);
-            const uint32_t source_ring_id = has_sliding_window ? sliding_k_chunk.source_ring_id : ring_id;
-            const uint32_t source_k_chunk = has_sliding_window ? sliding_k_chunk.source_k_chunk : k_chunk;
-            const bool kv_chunk_is_joint = !has_sliding_window && k_chunk >= num_local_k_chunks;
+            const uint32_t source_ring_id = streamed_source_ids
+                                                ? streamed_source_ids[k_chunk / num_local_k_chunks]
+                                                : (has_sliding_window ? sliding_k_chunk.source_ring_id : ring_id);
+            const uint32_t source_k_chunk = streamed_source_ids
+                                                ? k_chunk % num_local_k_chunks
+                                                : (has_sliding_window ? sliding_k_chunk.source_k_chunk : k_chunk);
+            const bool kv_chunk_is_joint = !streamed_source_ids && !has_sliding_window && k_chunk >= num_local_k_chunks;
             if (try_skip_oob_kv(source_ring_id, source_k_chunk, kv_chunk_is_joint)) {
                 // Sliding plans are clipped to logical_n before chunking. Treat a future mismatch
                 // as a device failure rather than leaving the writer waiting for a missing signal.
@@ -2742,7 +2747,7 @@ void sdpa_ring_v2(
                         source_ring_id, source_k_chunk * Sk_chunk_t);
                 } else if constexpr (chunked_enabled) {
                     return kv_global_tile_for_local<true, local_padded_Nt, chunk_size_t, kv_rank_stride_Nt>(
-                        ring_id, k_chunk * Sk_chunk_t);
+                        source_ring_id, source_k_chunk * Sk_chunk_t);
                 } else {
                     return k_chunk * Sk_chunk_t;
                 }

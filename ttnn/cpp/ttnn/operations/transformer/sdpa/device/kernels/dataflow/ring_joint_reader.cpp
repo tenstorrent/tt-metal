@@ -494,11 +494,7 @@ void kernel_main() {
                 ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
                     fused_op_receiver.seq.ring_index, mesh_rows, mesh_cols, snake_orientation);
             const auto qmap = ring_joint::build_kv_pad_q_mapping_device(
-                kv_actual_tile_count,
-                logical_nt,
-                q_ring_size,
-                q_local_padded_Nt,
-                tensor_rank / kv_stripe_split);
+                kv_actual_tile_count, logical_nt, q_ring_size, q_local_padded_Nt, tensor_rank / kv_stripe_split);
             const auto masks = ring_joint::build_ring_work_masks_device<full_mesh_rank_mapping>(
                 fused_op_receiver.seq.ring_index,
                 ring_size,
@@ -699,8 +695,12 @@ void kernel_main() {
             fused_op_receiver.get_next_ring_id_and_consume_one_signal();
         }
     }
-    constexpr uint32_t sdpa_ring_iterations = has_sliding_window ? 1 : ring_size;
+    // DIAGNOSTIC: 6400-token full-mesh fixture only; four physical sources per attention pass.
+    constexpr uint32_t source_group_size = ring_size == 8 ? 4 : 1;
+    constexpr bool stream_sources = source_group_size > 1;
+    constexpr uint32_t sdpa_ring_iterations = has_sliding_window ? 1 : ring_size / source_group_size;
     for (uint32_t ring_iter = 0; ring_iter < sdpa_ring_iterations; ++ring_iter) {
+        const auto group_start_seq = fused_op_receiver.seq;
         const bool ring_iter_is_active = has_sliding_window || ((active_ring_iter_mask >> ring_iter) & 1u) != 0;
         // Sliding already advanced/synchronized the sequencer above and uses a synthetic local
         // iteration whose K loop decodes the real source ring ID for each chunk.
@@ -722,7 +722,9 @@ void kernel_main() {
         // Compute consumes one sink tile for each real Q only when it normalizes on the
         // final active ring iteration. Keep the producer cadence identical, including
         // balanced Q chunks whose final iteration takes the normalize-only path.
-        const bool is_last_ring_iter = has_sliding_window || is_last_active_ring_iter(active_ring_iter_mask, ring_iter);
+        const bool is_last_ring_iter =
+            has_sliding_window || (stream_sources ? ring_iter + 1 == sdpa_ring_iterations
+                                                  : is_last_active_ring_iter(active_ring_iter_mask, ring_iter));
         // Iterate over KV blocks gathered on ring.
         // Sharded joint: the fused all-gather delivers one remote L/P shard per ring iteration (local
         // slice is read from the local joint tensor, same as spatial). Each shard is available right
@@ -738,7 +740,7 @@ void kernel_main() {
         }
 
         uint32_t KV_chunks_processed_in_iter = 0;
-        uint32_t iter_num_kv_chunks = num_kv_chunks;
+        uint32_t iter_num_kv_chunks = num_kv_chunks * source_group_size;
 
         // In causal balanced case processing KV received from other devices:
         //
@@ -773,6 +775,10 @@ void kernel_main() {
         uint32_t gqa_group_q_iter = 0;
 
         for (uint32_t q_iter = 0; q_iter < loop_q_count; ++q_iter) {
+            if constexpr (stream_sources) {
+                fused_op_receiver.seq = group_start_seq;
+            }
+            uint32_t streamed_source_id = ring_id;
             // Check if this is a real iteration or only padded chain/mcast synchronization.
             const bool is_padded_iter = (q_iter >= q_per_core);
 
@@ -875,9 +881,20 @@ void kernel_main() {
             // (q_per_core > 1) -> deadlock. Reads Q exactly once per q_iter, so no extra work.
             bool first_k_for_q = true;
             for (uint32_t k_chunk = 0; k_chunk < q_k_loop_count; ++k_chunk) {
+                if constexpr (stream_sources) {
+                    if (k_chunk % num_local_k_chunks == 0) {
+                        streamed_source_id =
+                            ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
+                                fused_op_receiver.get_next_ring_id_and_sync(), mesh_rows, mesh_cols, snake_orientation);
+                    }
+                }
                 const auto sliding_k_chunk = sliding_q_plan.k_chunk_at(k_chunk);
-                const uint32_t source_ring_id = has_sliding_window ? sliding_k_chunk.source_ring_id : ring_id;
-                const uint32_t source_k_chunk = has_sliding_window ? sliding_k_chunk.source_k_chunk : k_chunk;
+                const uint32_t source_ring_id = stream_sources
+                                                    ? streamed_source_id
+                                                    : (has_sliding_window ? sliding_k_chunk.source_ring_id : ring_id);
+                const uint32_t source_k_chunk = stream_sources
+                                                    ? k_chunk % num_local_k_chunks
+                                                    : (has_sliding_window ? sliding_k_chunk.source_k_chunk : k_chunk);
                 /**
                  * Iterate over all KV chunks for this Q chunk.
                  * If this is the last ring ID, we will also read from joint KV.
@@ -885,13 +902,12 @@ void kernel_main() {
                  */
                 const bool kv_chunk_is_joint = !has_sliding_window && has_joint_k && k_chunk >= num_local_k_chunks;
                 const bool kv_chunk_is_beyond_logical_n =
-                    !kv_chunk_is_joint &&
-                    !kv_chunk_starts_before_logical_end<
-                        kv_pad_rotation_enabled,
-                        chunked_enabled,
-                        kv_local_padded_Nt,
-                        chunk_size_t,
-                        kv_region_Nt>(source_ring_id, source_k_chunk * Sk_chunk_t, logical_nt);
+                    !kv_chunk_is_joint && !kv_chunk_starts_before_logical_end<
+                                              kv_pad_rotation_enabled,
+                                              chunked_enabled,
+                                              kv_local_padded_Nt,
+                                              chunk_size_t,
+                                              kv_region_Nt>(source_ring_id, source_k_chunk * Sk_chunk_t, logical_nt);
 
                 // Sharded joint: this ring iteration serves shard `ring_id`, whose global joint tile
                 // range starts at ring_id * Lt_local. A joint K chunk whose global start tile is

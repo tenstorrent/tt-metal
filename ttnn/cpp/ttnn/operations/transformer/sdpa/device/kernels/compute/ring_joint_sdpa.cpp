@@ -256,12 +256,24 @@ void kernel_main() {
             kv_pad_q_valid_tile_count}};
     // The first active iter starts with fresh accumulators; restoring would read stale staging.
     bool seen_active_iter = false;
-    constexpr uint32_t sdpa_ring_iterations = has_sliding_window ? 1 : ring_size;
+    // DIAGNOSTIC: 6400-token full-mesh fixture only; four physical sources per attention pass.
+    constexpr uint32_t source_group_size = ring_size == 8 ? 4 : 1;
+    constexpr bool stream_sources = source_group_size > 1;
+    constexpr uint32_t sdpa_ring_iterations = has_sliding_window ? 1 : ring_size / source_group_size;
     for (uint32_t ring_iter = 0; ring_iter < sdpa_ring_iterations; ++ring_iter) {
+        uint32_t streamed_source_ids[source_group_size];
+        if constexpr (stream_sources) {
+            for (uint32_t s = 0; s < source_group_size; ++s) {
+                streamed_source_ids[s] =
+                    ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
+                        fused_op_indexer.get_next_ring_id_and_sync(), mesh_rows, mesh_cols, snake_orientation);
+            }
+        }
         // Sliding folds all local/halo source ranges into one synthetic local iteration.
         // The dataflow reader has already waited for the required halo completion signals.
         const uint32_t ring_id =
-            has_sliding_window
+            stream_sources ? streamed_source_ids[0]
+            : has_sliding_window
                 ? ring_index
                 : ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
                       fused_op_indexer.get_next_ring_id_and_sync(), mesh_rows, mesh_cols, snake_orientation);
@@ -273,7 +285,8 @@ void kernel_main() {
         // Sharded joint: one L/P shard per ring iteration — process joint K/V on every iteration.
         // Replicated joint: All data already present process joint when ring_id == ring_size-1
         const bool do_joint_kv = has_gathered_joint_k ? true : (ring_id == ring_size - 1);
-        const uint32_t num_kv_chunks = do_joint_kv ? num_local_k_chunks + num_joint_k_chunks : num_local_k_chunks;
+        const uint32_t num_kv_chunks =
+            (do_joint_kv ? num_local_k_chunks + num_joint_k_chunks : num_local_k_chunks) * source_group_size;
         const bool is_first_active_iter = !seen_active_iter;
         seen_active_iter = true;
 
@@ -370,7 +383,9 @@ void kernel_main() {
             lw_mask.joint_n_padded_tiles = joint_n_padded_tiles_iter;
         }
 
-        const bool is_last_ring_iter = has_sliding_window || is_last_active_ring_iter(active_ring_iter_mask, ring_iter);
+        const bool is_last_ring_iter =
+            has_sliding_window || (stream_sources ? ring_iter + 1 == sdpa_ring_iterations
+                                                  : is_last_active_ring_iter(active_ring_iter_mask, ring_iter));
 
         // Per-ring-iter K-chunk count and Q-skip flag — shared by v1 (sdpa_ring) and v2
         // (sdpa_ring_v2) paths.
@@ -465,7 +480,9 @@ void kernel_main() {
                 use_zigzag_balancing,
                 chunked_context,
                 is_first_active_iter,
-                logical_lt);
+                logical_lt,
+                0,
+                stream_sources ? streamed_source_ids : nullptr);
         } else {
             assert_kv_pad_rotation_streaming_only<kv_pad_rotation_enabled>();
             // This path's single chunked slab param drives BOTH the Q mapping (which strides by the Q
