@@ -120,10 +120,12 @@ class SpeculativeDecoder:
         self._batched_reseed = True
         # QWEN36_TRACED_RESEED=1 replays the BATCHED reseed from a captured trace instead of
         # dispatching its programs from host every iteration. Same device work and the same KV
-        # writes; only the host dispatch goes away. Default off until it has an A/B behind it — the
-        # eager batched reseed stays the fallback, and the eager per-slot loop stays the fallback
-        # past EAGER_RESEED_PROMPT_LEN (there is no trace for a shape that varies with m).
-        self._traced_reseed = bool(int(os.environ.get("QWEN36_TRACED_RESEED", "0")))
+        # writes; only the host dispatch goes away. On by default now: the 3-knob A/B (P150x4,
+        # Qwen3.8-27B, B=1 greedy) gave +3.2-10.6% tok/s across all 8 demo ISLs, acceptance
+        # unchanged — QWEN36_TRACED_RESEED=0 opts out; the eager batched reseed stays the fallback,
+        # and the eager per-slot loop stays the fallback past EAGER_RESEED_PROMPT_LEN (there is no
+        # trace for a shape that varies with m).
+        self._traced_reseed = bool(int(os.environ.get("QWEN36_TRACED_RESEED", "1")))
         # Declared here so the loop can test `self._rsd_trace_id is not None` without a getattr
         # dance; filled in by alloc_reseed_buffers / _capture_reseed_trace and torn down by
         # _release_reseed_trace (the same convention model.py follows for the _drf_* handles).
@@ -140,9 +142,10 @@ class SpeculativeDecoder:
         # (Qwen36Model.capture_draft_trace / draft_traced) instead of dispatching its K x ~dozens of
         # programs from python every iteration. Same device work, same drafter KV writes, same
         # cos/sin values, so the drafts are the ones _draft would have produced; only the host
-        # dispatch goes away. Default off until it has an A/B behind it — `_draft` stays the
-        # fallback and is what runs whenever the capture did not happen.
-        self._traced_draft = bool(int(os.environ.get("QWEN36_TRACED_DRAFT", "0")))
+        # dispatch goes away. On by default now: the 3-knob A/B (P150x4, Qwen3.8-27B, B=1 greedy)
+        # gave +3.2-10.6% tok/s across all 8 demo ISLs, acceptance unchanged — QWEN36_TRACED_DRAFT=0
+        # opts out; `_draft` stays the fallback and is what runs whenever the capture did not happen.
+        self._traced_draft = bool(int(os.environ.get("QWEN36_TRACED_DRAFT", "1")))
         # The batched reseed's scratch block (its padding rows' KV sink) is the MTP cache's extra LAST
         # block, index = cache block count - 1 (_allocate_mtp_kv_cache allocates one block past the
         # sequence's own). It is derived from the CACHE in generate(), never from the page table's

@@ -163,7 +163,10 @@ class Qwen36MTP:
         self._vocab_shard = 0
         self._maxval_c = 0
         self._maxval_r = 0
-        if bool(int(os.environ.get("QWEN36_DRAFT_SHARDED_ARGMAX", "0"))):
+        # On by default; QWEN36_DRAFT_SHARDED_ARGMAX=0 opts out. Changes the DRAFTER's argmax
+        # reduction order — a bf16 near-tie can draft a different token, shifting acceptance only
+        # (verify arbitrates every draft, so correctness holds); measured acceptance was identical.
+        if bool(int(os.environ.get("QWEN36_DRAFT_SHARDED_ARGMAX", "1"))):
             self._init_sharded_argmax(parent)
 
     def _init_sharded_argmax(self, parent):
