@@ -2181,20 +2181,16 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
                     // One output block per core; the shard grid is the active cores in assignment
                     // order, so the accessor's shard -> core mapping is the factory's block -> core
                     // mapping and every core writes its own shard.
-                    const auto plan = plan_unified_matmul(input_tensor_a, input_tensor_b, program_config, attributes);
-                    std::vector<CoreRange> ranges;
-                    ranges.reserve(plan.cores.size());
-                    for (const auto& core : plan.cores) {
-                        ranges.emplace_back(core, core);
-                    }
-                    const CoreRangeSet grid = CoreRangeSet(ranges).merge_ranges();
-                    const auto orientation =
+                    const UnifiedMatmulPlan plan =
+                        plan_unified_matmul(input_tensor_a, input_tensor_b, program_config, attributes);
+                    const CoreRangeSet grid(ttsl::Span<const CoreCoord>(plan.cores));
+                    const ShardOrientation orientation =
                         plan.row_major_cores ? ShardOrientation::ROW_MAJOR : ShardOrientation::COL_MAJOR;
                     ShardSpec shard_spec = ShardSpec{
                         grid,
                         {plan.per_core_M * in0_tile.get_height(), plan.per_core_N * in1_tile.get_width()},
                         orientation};
-                    auto mem_config = tt::tt_metal::MemoryConfig(
+                    const tt::tt_metal::MemoryConfig mem_config(
                         plan.sharded_output_layout(), attributes.output_mem_config.buffer_type(), shard_spec);
                     return {tt::tt_metal::TensorSpec(
                         output_shape,
