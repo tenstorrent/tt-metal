@@ -254,7 +254,6 @@ def _gemma4_stop_tokens(tokenizer, model_path):
         logger.warning("Gemma4 could not read generation_config eos_token_id ({}); using tokenizer eos", e)
     if tokenizer.eos_token_id is not None and tokenizer.eos_token_id not in stop:
         stop.append(tokenizer.eos_token_id)
-    logger.info("Gemma4 stop tokens: {}", stop)
     return stop
 
 

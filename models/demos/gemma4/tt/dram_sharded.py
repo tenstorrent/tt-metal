@@ -155,9 +155,6 @@ def _prefill_hifi4_ckc():
     )
 
 
-_SINGLE_TILE_FID_LOGGED = False
-
-
 def single_tile_matmul_ckc(m, dest_acc=None):
     """Fidelity/accumulation for the one-tile matmuls every tuned config declines.
 
@@ -223,10 +220,6 @@ def single_tile_matmul_ckc(m, dest_acc=None):
         from models.demos.gemma4.tt.precision import default_single_tile_dest_acc
 
         dest_acc = default_single_tile_dest_acc()
-    global _SINGLE_TILE_FID_LOGGED
-    if not _SINGLE_TILE_FID_LOGGED:
-        logger.info(f"Gemma4 single-tile matmul fidelity=hifi3{'_fp32' if dest_acc else ''}")
-        _SINGLE_TILE_FID_LOGGED = True
     return ttnn.WormholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.HiFi3,
         math_approx_mode=False,
