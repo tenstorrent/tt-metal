@@ -74,13 +74,14 @@ case "${MODEL}" in
     ;;
 esac
 
-# Asset paths come from the manifest + the model adapter, never from this script: the preflight below has
-# to probe exactly what the ranks will open, and a path restated here would drift from the adapter that
-# owns it. Prompt trace and drafter golden MUST come from the same tap (dflash_27_context_kv_55k's
-# metadata records tap_source=vllm-kimi-k27-codedebug-56320) -- a golden paired with a different prompt
-# yields a plausible-looking PCC in the 0.2-0.6 range rather than an error, so the adapter holds both.
-ASSETS=$(python3 "${TT_METAL_HOME}/models/demos/common/prefill/runners/ci/resolve_dflash_assets.py" --manifest "${MANIFEST}") || { echo "could not resolve dflash assets for '${MODEL}'" >&2; exit 2; }
-eval "${ASSETS}"
+MPIRUN=$(command -v mpirun-ulfm || command -v mpirun)
+# ttrun writes the allocated hosts here in CI, rank 0 first -- the same file the sibling KV leg reads.
+if [ -z "${PREFILL_HOSTS:-}" ] && [ -f "${TTRUN_DIR:-/etc/ttop}/hostfile" ]; then
+  PREFILL_HOSTS=$(awk 'NF {printf "%s,", $1}' "${TTRUN_DIR:-/etc/ttop}/hostfile" | sed 's/,$//')
+fi
+# No apostrophe in this message: bash treats a single quote inside ${var:?word} as opening a quote
+# context even within double quotes, and the script fails to parse rather than to run.
+HOSTS="${PREFILL_HOSTS:?PREFILL_HOSTS must list the rank hosts, rank 0 first (e.g. hostA,hostB)}"
 
 # sc1 is single-galaxy. It takes the same STAGED code path as sc4 -- PREFILL_MOCK_MIGRATION all-gathers
 # the stage layouts at any rank count -- so what it does not cover is the remote HOST, not the branch: one
@@ -97,17 +98,31 @@ MGD="${MGD_DIR}/${MODEL}_${CONFIG}_mgd.textproto"
 if [ ! -f "${MGD}" ] && [ "${CONFIG}" = sc2 ]; then
   MGD="${TT_METAL_HOME}/models/demos/common/prefill/runners/topology_configuration/pipeline_prefill_2galaxy_connected_mesh_graph_descriptor.textproto"
 fi
-# Every /mnt/models asset is consumed on the WORKERS -- ranks load the checkpoints, the producer reads the
-# golden -- and the orchestrator this script runs on is a different machine that need not mount it at all.
-# Probing these paths locally reports a fully staged cluster as empty. Only MGD is ours to check here; it
-# ships in the checkout. HF_MODEL and TRACE_DIR are gated too -- otherwise they surface deep inside the
-# runner, after weight load has begun, as a stack trace rather than a path.
+# Asset paths come from the manifest + the model adapter, never from this script: the preflight has to
+# probe exactly what the ranks will open, and a path restated here would drift from the adapter that owns
+# it. Prompt trace and drafter golden MUST come from the same tap (dflash_27_context_kv_55k's metadata
+# records tap_source=vllm-kimi-k27-codedebug-56320) -- a golden paired with a different prompt yields a
+# plausible-looking PCC in the 0.2-0.6 range rather than an error, so the adapter holds both.
+#
+# Resolved AND probed on the workers, for two independent reasons. The ttnn wheel is installed per-node
+# over MPI, so the launcher has no bindings: importing the adapter stack there dies on numpy before it can
+# read a path. And every /mnt/models asset is consumed on a worker -- ranks load the checkpoints, the
+# producer reads the golden -- while the orchestrator need not mount it at all, so probing locally reports
+# a fully staged cluster as empty. Only MGD is ours to check here; it ships in the checkout.
 # One pass over all workers, since staging is per host: a leg can be one sync away on one and several on
 # another, and each gap found alone costs a whole reservation to find the next.
-ASSET_PROBE="for e in 'verifier checkpoint=${HF_MODEL}' 'drafter checkpoint=${DFLASH_MODEL}' 'prompt trace=${TRACE_DIR}' 'drafter golden=${GOLDEN_KV_DIR}'; do [ -d \"\${e#*=}\" ] || echo \"MISSING \$(hostname) \${e%%=*}: \${e#*=}\"; done"
+PROBE=$("${MPIRUN}" --host "${HOSTS}" --pernode --bind-to none --allow-run-as-root \
+  -x PATH -x LD_LIBRARY_PATH \
+  bash -lc "cd '${TT_METAL_HOME}'; \
+    export PYTHONPATH='${TT_METAL_HOME}'; \
+    exec python3 models/demos/common/prefill/runners/ci/resolve_dflash_assets.py \
+      --manifest '${MANIFEST}' --format probe" 2>&1) || {
+  printf 'could not resolve dflash assets for %s on a worker:\n%s\n' "${MODEL}" "${PROBE}" >&2
+  exit 2
+}
 MISSING=""
 [ -f "${MGD}" ] || MISSING="  mesh-graph descriptor: ${MGD}"$'\n'
-WORKER_MISSING=$(mpirun --pernode bash -lc "${ASSET_PROBE}" 2>/dev/null | sed -n 's/^MISSING /  /p' | sort -u || true)
+WORKER_MISSING=$(printf '%s\n' "${PROBE}" | sed -n 's/^MISSING /  /p' | sort -u)
 [ -z "${WORKER_MISSING}" ] || MISSING="${MISSING}${WORKER_MISSING}"$'\n'
 if [ -n "${MISSING}" ]; then
   printf 'missing inputs for %s/%s:\n%s' "${MODEL}" "${CONFIG}" "${MISSING}" >&2
@@ -145,14 +160,6 @@ mkdir -p "${TTRUN_CWD}"
 
 TTRUN_PY="${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py"
 TCP_IFACE="${PREFILL_TCP_IFACE:-ens5f0np0}"
-MPIRUN=$(command -v mpirun-ulfm || command -v mpirun)
-# ttrun writes the allocated hosts here in CI, rank 0 first -- the same file the sibling KV leg reads.
-if [ -z "${PREFILL_HOSTS:-}" ] && [ -f "${TTRUN_DIR:-/etc/ttop}/hostfile" ]; then
-  PREFILL_HOSTS=$(awk 'NF {printf "%s,", $1}' "${TTRUN_DIR:-/etc/ttop}/hostfile" | sed 's/,$//')
-fi
-# No apostrophe in this message: bash treats a single quote inside ${var:?word} as opening a quote
-# context even within double quotes, and the script fails to parse rather than to run.
-HOSTS="${PREFILL_HOSTS:?PREFILL_HOSTS must list the rank hosts, rank 0 first (e.g. hostA,hostB)}"
 
 cleanup() {
   if [ -n "${RUNNER_PID:-}" ] && kill -0 "${RUNNER_PID}" 2>/dev/null; then
