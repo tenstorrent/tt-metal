@@ -200,7 +200,7 @@ std::unordered_map<uint32_t, std::shared_ptr<std::unordered_map<uint64_t, tt_emu
 static std::unordered_map<uint32_t, tt::umd::SWEmuleChip*> g_core_map_sw_emu;
 
 std::unordered_map<uint64_t, tt_emule::Core*>* build_core_map(
-    tt::umd::SWEmuleChip* sw_emu, IDevice* device, ChipId device_id) {
+    tt::umd::SWEmuleChip* sw_emu, IDevice* device, ChipId device_id, const tt_emule::SocView& soc) {
     std::lock_guard<std::mutex> lock(g_core_map_mutex);
     auto& core_map = g_core_map_cache[device_id];
     if (core_map && g_core_map_sw_emu[device_id] != sw_emu) {
@@ -241,16 +241,37 @@ std::unordered_map<uint64_t, tt_emule::Core*>* build_core_map(
         // the host write path resolves the same LOGICAL channel. Keying by view index
         // would split one channel across multiple backings → host/kernel read mismatch.
         {
+            // Preferred worker coords come from the SocView; the umd LOGICAL channel (physical DRAM
+            // channel) still resolves through the chip's own umd descriptor — not tt-metal state.
             auto& umd = sw_emu->get_soc_descriptor();
+            for (uint32_t view = 0; view < soc.dram_views.size() && view < MAX_NUM_BANKS; view++) {
+                for (uint32_t noc = 0; noc < NUM_NOCS; noc++) {
+                    uint32_t enc = soc.dram_views[view].noc_xy[noc];
+                    uint32_t dcx = enc & NOC_NODE_MASK;
+                    uint32_t dcy = enc >> NOC_NODE_ID_BITS;
+                    auto lg =
+                        umd.translate_coord_to(tt_xy_pair(dcx, dcy), CoordSystem::TRANSLATED, CoordSystem::LOGICAL);
+                    auto* core = sw_emu->get_dram_channel_backing(static_cast<uint32_t>(lg.x));
+                    uint64_t key = (uint64_t(dcx) << 32) | dcy;
+                    (*core_map)[key] = core;
+                }
+            }
+            // Stage-2b diff-guard: the SocView preferred coords == the direct metal_SocDescriptor reads.
             auto& msoc = MetalContext::instance().get_cluster().get_soc_desc(device_id);
-            for (uint32_t view = 0; view < msoc.get_num_dram_views() && view < MAX_NUM_BANKS; view++) {
+            TT_FATAL(
+                soc.dram_views.size() == msoc.get_num_dram_views(),
+                "emule 2b diff-guard: SocView num_dram_views ({}) != direct ({})",
+                soc.dram_views.size(),
+                msoc.get_num_dram_views());
+            for (uint32_t view = 0; view < soc.dram_views.size() && view < MAX_NUM_BANKS; view++) {
                 for (uint32_t noc = 0; noc < NUM_NOCS; noc++) {
                     auto dc = msoc.get_preferred_worker_core_for_dram_view(view, noc);
-                    auto lg =
-                        umd.translate_coord_to(tt_xy_pair(dc.x, dc.y), CoordSystem::TRANSLATED, CoordSystem::LOGICAL);
-                    auto* core = sw_emu->get_dram_channel_backing(static_cast<uint32_t>(lg.x));
-                    uint64_t key = (uint64_t(dc.x) << 32) | dc.y;
-                    (*core_map)[key] = core;
+                    uint32_t ref = (static_cast<uint32_t>(dc.y) << NOC_NODE_ID_BITS) | static_cast<uint32_t>(dc.x);
+                    TT_FATAL(
+                        soc.dram_views[view].noc_xy[noc] == ref,
+                        "emule 2b diff-guard: SocView DRAM view {} noc {} coord mismatch vs direct",
+                        view,
+                        noc);
                 }
             }
         }

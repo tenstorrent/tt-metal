@@ -40,8 +40,9 @@ using KernelHandle = uint32_t;
 struct DramView {  // one per metal_SocDescriptor DRAM view
     uint32_t noc_xy[2] = {
         0, 0};  // [NOC0,NOC1] = (y<<NOC_NODE_ID_BITS)|x  get_preferred_worker_core_for_dram_view(v,noc)
-    uint32_t address_offset = 0;   // metal_SocDescriptor::get_address_offset(v)
-    uint32_t logical_channel = 0;  // umd soc_descriptor::translate_coord_to(TRANSLATED->LOGICAL)
+    uint32_t address_offset = 0;  // metal_SocDescriptor::get_address_offset(v)
+    // The umd LOGICAL channel is resolved on the consumer side (build_core_map) from the chip's own
+    // umd descriptor, so it is not carried here.
 };
 struct L1Bank {
     uint32_t logical_x = 0, logical_y = 0;  // allocator->get_logical_core_from_bank_id(b)
