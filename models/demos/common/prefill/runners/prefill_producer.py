@@ -615,22 +615,53 @@ def _read_kv_slice(table, device_map, config_id, layer, slot_id, read_len, head_
     return torch.cat(rows, dim=0)[:read_len]
 
 
-def _kvpe_pcc_vs_golden(golden, device_kv, kv_lora: int):
+def _golden_pe_as_device(golden_pe, layout: str):
+    """A golden's rope tail in the device's column order (Meta-interleaved).
+
+    Both traces we compare against are half-split -- the two rotated halves stored as [0,32) and
+    [32,64) -- and need re-interleaving. `interleaved` is here for a golden that is not, and getting
+    the pick wrong is the one way to read pcc_pe ~ 0 while pcc_nope stays ~ 1, since the untouched
+    latent columns cannot see the mistake."""
+    if layout == "interleaved":
+        return golden_pe
+    if layout != "half_split":
+        raise ValueError(f"unknown golden pe layout {layout!r} (expected 'half_split' or 'interleaved')")
+    pe_dim = golden_pe.shape[-1]
+    return torch.stack([golden_pe[:, : pe_dim // 2], golden_pe[:, pe_dim // 2 :]], dim=-1).reshape(-1, pe_dim)
+
+
+def _kvpe_pcc_vs_golden(golden, device_kv, kv_lora: int, golden_pe_layout: str = "half_split"):
     """PCC one layer's KVPE row against its golden, split into the two column groups that fail
     differently: `nope` (the [0, kv_lora) KV-LoRA latent) and `pe` (the rope tail).
 
-    The golden's rope columns are HF-layout (half-split) while the device stores them Meta-interleaved,
-    so the golden half is re-interleaved before comparing. Shared by the trunk loop and the MTP levels:
-    an MTP level is a GLM decoder layer writing the same 576-wide row, so it needs identical treatment,
-    and one copy means a rope-convention change cannot fix one caller and silently miss the other."""
+    Shared by the trunk loop and the MTP levels: an MTP level is a GLM decoder layer writing the same
+    576-wide row, so it needs identical treatment, and one copy means a rope-convention change cannot
+    fix one caller and silently miss the other. They differ only in `golden_pe_layout`, because they
+    read different traces -- see _golden_pe_as_device and _mtp_golden_source."""
     from tests.ttnn.utils_for_testing import comp_pcc
 
     _, pcc_nope = comp_pcc(golden[:, :kv_lora], device_kv[:, :kv_lora])
-    golden_pe = golden[:, kv_lora:]
-    pe_dim = golden_pe.shape[-1]
-    golden_pe = torch.stack([golden_pe[:, : pe_dim // 2], golden_pe[:, pe_dim // 2 :]], dim=-1).reshape(-1, pe_dim)
-    _, pcc_pe = comp_pcc(golden_pe, device_kv[:, kv_lora:])
+    _, pcc_pe = comp_pcc(_golden_pe_as_device(golden[:, kv_lora:], golden_pe_layout), device_kv[:, kv_lora:])
     return pcc_nope, pcc_pe
+
+
+def _mtp_golden_source(trunk_trace_dir):
+    """Where the MTP levels' golden comes from, and which rope convention it stores.
+
+    The MTP golden lives in its OWN trace: a tail trace holds kv_cache/layer_{NUM_LAYERS..} and no
+    trunk layer, the trunk trace holds the trunk and no MTP layer, so one trace_dir cannot serve both.
+    PREFILL_MTP_TRACE_DIR points at the tail trace; unset, the trunk trace is used and the comparison
+    skips itself for want of those layers.
+
+    The rope layout is half-split for both traces we have, so the default carries over from the trunk.
+    An HF tail trace records `kv_rope_layout: as_computed` -- HF's output verbatim -- which reads like
+    "interleaved" and is not: transformers' `apply_rotary_pos_emb_interleave` de-interleaves its input
+    (`view(d//2, 2).transpose(4, 3)`) and then applies plain `rotate_half`, so the name describes the
+    weight convention it accepts and its OUTPUT is half-split. Measured both ways on this trace, so
+    PREFILL_MTP_GOLDEN_PE_LAYOUT is here for a golden that really is interleaved, not for that one."""
+    spec = os.environ.get("PREFILL_MTP_TRACE_DIR", "").strip()
+    mtp_dir = resolve_trace_dir(spec) if spec else trunk_trace_dir
+    return mtp_dir, os.environ.get("PREFILL_MTP_GOLDEN_PE_LAYOUT", "").strip() or "half_split"
 
 
 def _check_mtp_kv_slots(
@@ -643,19 +674,19 @@ def _check_mtp_kv_slots(
     1. **Plumbing, always run.** Every level's slot was actually written through the runner, and each
        level got its OWN slot. A slot collision leaves the model outputs identical and is invisible in
        every other check, which is why it is asserted here rather than inferred.
-    2. **Golden PCC, run only when the trace carries one.** SKIPPED on every trace dumped so far: none
-       of them contains KVPE for layers past the trunk, so there is nothing to compare against and (1)
-       is the whole gate. Meanwhile the MTP math is gated against a torch reference in
+    2. **Golden PCC, run only when a trace carries one.** The MTP golden lives in a separate tail trace
+       (kv_cache for the layers past the trunk, and no trunk layer), so it is read from
+       PREFILL_MTP_TRACE_DIR; with that unset the trunk trace is used, carries no such layer, and (1) is
+       the whole gate. Either way the MTP math is also gated against a torch reference in
        models/demos/deepseek_v3_d_p/tests/mtp_prefill/.
 
     Returns the min PCC across levels, or ``None`` when unmeasured -- so an absent golden stays ABSENT
     from the caller's mapping rather than reporting a fictitious 1.0.
 
-    The PCC path is written now so that it starts running the moment a trace with
-    ``kv_cache/layer_{NUM_LAYERS+k}`` lands, with no edit here. It bakes in two assumptions that should
-    be re-validated against that first trace rather than rediscovered:
-      * level ``k``'s golden is layer ``NUM_LAYERS + k``, matching the flat KVPE slot the device writes;
-      * its rope columns are HF half-split like the trunk's, hence the same re-interleave.
+    Level ``k``'s golden is layer ``NUM_LAYERS + k``, matching the flat KVPE slot the device writes --
+    the GLM-5.2 tail trace states the same mapping in its own ``mtp.kv_slots``. Its rope columns are
+    half-split like the trunk's -- measured, not inferred from the trace's metadata; see
+    _mtp_golden_source.
     """
     from models.demos.deepseek_v3_d_p.tt.runners.prefill_kv_validation import _load_golden_kv_post, kv_golden_present
 
@@ -696,24 +727,33 @@ def _check_mtp_kv_slots(
     if not per_level:
         return None  # no MTP level is resident on this rank (only the last rank runs them)
 
-    missing = [NUM_LAYERS + k for k, _ in per_level if not kv_golden_present(trace_dir, NUM_LAYERS + k)]
+    golden_dir, pe_layout = _mtp_golden_source(trace_dir)
+    missing = [NUM_LAYERS + k for k, _ in per_level if not kv_golden_present(golden_dir, NUM_LAYERS + k)]
     if missing:
         logger.info(
-            f"[producer] slot {slot_id} MTP: golden KV comparison SKIPPED -- {trace_dir} carries no "
+            f"[producer] slot {slot_id} MTP: golden KV comparison SKIPPED -- {golden_dir} carries no "
             f"kv_post_transform for layer(s) {missing}. The plumbing checks above are the only MTP gate; "
             f"MTP numerics are covered by tests/mtp_prefill/."
         )
         return None
+    logger.info(f"[producer] slot {slot_id} MTP: golden KV from {golden_dir} (pe columns: {pe_layout})")
 
+    from tests.ttnn.utils_for_testing import comp_pcc
+
+    rejected = "half_split" if pe_layout == "interleaved" else "interleaved"
     min_pcc = 1.0
     for k, kv in per_level:
         layer = NUM_LAYERS + k
-        golden = _load_golden_kv_post(trace_dir, layer, real_len)
-        pcc_nope, pcc_pe = _kvpe_pcc_vs_golden(golden, kv, kv_lora)
+        golden = _load_golden_kv_post(golden_dir, layer, real_len)
+        pcc_nope, pcc_pe = _kvpe_pcc_vs_golden(golden, kv, kv_lora, pe_layout)
         min_pcc = min(min_pcc, pcc_nope, pcc_pe)
+        # The convention NOT chosen, alongside the one being gated. The two are a column permutation
+        # apart, so the wrong pick reads ~0 against a ~1 nope -- printing both makes that legible on
+        # first contact with a new trace instead of looking like broken MTP math.
+        _, pe_rejected = comp_pcc(_golden_pe_as_device(golden[:, kv_lora:], rejected), kv[:, kv_lora:])
         logger.info(
             f"[producer] slot {slot_id} MTP level {k} (layer {layer:>2}) KV PCC: "
-            f"nope={pcc_nope:.5f} pe={pcc_pe:.5f}"
+            f"nope={pcc_nope:.5f} pe={pcc_pe:.5f} (pe as {rejected}: {pe_rejected:.5f})"
         )
     logger.info(
         f"[producer] slot {slot_id} MTP KV PCC over [0,{real_len}) across {len(per_level)}/{MTP_LEVELS} "

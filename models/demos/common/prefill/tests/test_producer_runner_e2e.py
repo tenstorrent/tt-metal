@@ -30,6 +30,12 @@ NUM_LAYERS = int(os.environ.get("PREFILL_NUM_LAYERS", "2"))
 # 56320 rows (= 11 x CHUNK_SIZE). The adapter's own prefill_trace_default omits dsa/, which would leave
 # the merged table's index config with no golden to PCC against.
 GLM52_TRACE = "/mnt/models/deepseek-prefill-cache/glm-traces/vllm-glm52-indexer-kcache-55k"
+# The MTP levels' golden is a SECOND trace: it carries kv_cache/layer_{78..84} and no trunk layer,
+# while GLM52_TRACE carries the trunk and nothing past it, so one trace_dir cannot serve both. Its
+# prompt is GLM52_TRACE's 56320 ids plus 8 lookahead ids, so the two agree on every row a chunk of
+# this scenario prefills. Its rope columns are half-split like the trunk's despite the HF dump
+# declaring `kv_rope_layout: as_computed` -- see _mtp_golden_source.
+GLM52_MTP_TRACE = os.environ.get("GLM52_MTP_TRACE", "/mnt/models/deepseek-prefill-cache/glm-traces/mtp-glm52-55k")
 # GLM-5.2 pretrained checkpoint + the MTP weight cache tree (layer 78 block + the fused MTP weights),
 # for the MTP4 scenario. The MTP weights are keyed on layer 78, which the trunk cache does not carry,
 # so they live in their own tree with the same <variant>_<arch>_<N>dev/<sp>x<tp> leaf.
@@ -199,12 +205,11 @@ SCENARIOS = {
     #      * the last rank embeds each level's window on device and runs the four levels, writing
     #        KVPE slots 78..81 and sharing one indexer slot (index_share_for_mtp_iteration).
     #
-    #    The golden trace carries no KV for the layers past the trunk, so the MTP-vs-golden PCC SKIPS
-    #    itself and says which layers it wanted; that math is gated against a torch reference in
-    #    deepseek_v3_d_p/tests/mtp_prefill/. The comparison is written and starts running by itself
-    #    the moment a trace carrying kv_cache/layer_{78..81} is dropped in -- no edit here. What a
-    #    serving run does gate is the pair of things only it can show: every level's slot was written,
-    #    and no two levels share a slot (a collision is invisible in the model outputs).
+    #    Each level's KVPE is PCC'd against GLM52_MTP_TRACE and joins the same PREFILL_STANDALONE_
+    #    CHUNKED_PCC gate as the trunk's -- an MTP level is a layer of this same model cache. It is a
+    #    chained measurement: level 1 consumes the trunk's own post-norm hidden, so the trunk floor is
+    #    inside every level's number. What only a serving run can gate is the pair of things the PCC
+    #    cannot see: every level's slot was written, and no two levels share one.
     #
     #    Needs the MTP weight cache (layer 78 + the fused MTP weights); the runner will NOT build it
     #    inside the serving process. Populate it with tests/mtp_prefill/test_mtp_transformer_chunks.py.
@@ -215,6 +220,7 @@ SCENARIOS = {
         "env": {
             "PREFILL_MODEL": "glm_5_2",
             "PREFILL_TRACE_DIR": GLM52_TRACE,
+            "PREFILL_MTP_TRACE_DIR": GLM52_MTP_TRACE,
             "PREFILL_KV_ONLY_LAST_LAYER": "0",  # MTP level 1 consumes the last layer's post-norm hidden
             "PREFILL_MTP_LEVELS": "4",
             # Read by BOTH roles: the runner sizes its sockets/caches from it and the producer builds

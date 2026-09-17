@@ -1257,7 +1257,11 @@ class TtPrefillRuntime:
             from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import merged_num_layers
 
             # The merged table spans EVERY stage, so the map covers the model's layers, not this rank's slice.
-            total_layers = merged_num_layers(stage_layouts[0]) if stage_layouts else self.config.num_layers
+            # The no-stage_layouts fallback (single-rank / mock migration) must span the MTP tail too --
+            # the same `+ mtp_tail` kv_migration_stages applies -- or the map is a row short of the index
+            # cache, which IS sized with the MTP layer's indexer slot.
+            mtp_tail = self.config.mtp_levels if self.config.is_last_rank else 0
+            total_layers = merged_num_layers(stage_layouts[0]) if stage_layouts else self.config.num_layers + mtp_tail
             # MTP widens the KVPE stage by K slots that own no indexer, and `indexer_layer_is_reused`
             # reports False past the end of `indexer_types` -- clamp so those slots stay out of the map.
             total_layers = min(total_layers, len(self.hf_config.indexer_types))
