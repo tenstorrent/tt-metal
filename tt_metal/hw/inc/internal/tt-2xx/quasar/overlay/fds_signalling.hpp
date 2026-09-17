@@ -45,143 +45,66 @@ constexpr uint32_t sub_device_from_go_group(uint32_t group_id) { return group_id
 // One interrupt bit per payload group, shifted past the idle group 0.
 constexpr uint32_t go_interrupt_mask(uint32_t num_go_groups) { return ((uint32_t{1} << num_go_groups) - 1) << 1; }
 
-inline void compiler_memory_barrier() { asm volatile("" ::: "memory"); }
-
-inline void dispatch_disable_auto_dispatch() {
-    compiler_memory_barrier();
-    FdsDispatch::fds_disable_auto_dispatch();
-    compiler_memory_barrier();
-}
+inline void dispatch_disable_auto_dispatch() { FdsDispatch::fds_disable_auto_dispatch(); }
 
 // A crossing-FIFO write can be acknowledged and dropped when the receiver is not ready, so these
 // configuration writes are guarded by a readback.
-inline uint32_t dispatch_read_filter_length() {
-    compiler_memory_barrier();
-    uint32_t threshold = FDS_INTF_READ(TT_FDS_DISPATCH_FILTER_COUNT_THRESHOLD_REG_ADDR);
-    compiler_memory_barrier();
-    return threshold;
-}
+inline uint32_t dispatch_read_filter_length() { return FDS_INTF_READ(TT_FDS_DISPATCH_FILTER_COUNT_THRESHOLD_REG_ADDR); }
 
 inline void dispatch_config_filter_length(uint32_t threshold) {
     do {
-        compiler_memory_barrier();
         FdsDispatch::fds_config_filter_length(threshold);
-        compiler_memory_barrier();
     } while (dispatch_read_filter_length() != threshold);
 }
 
-inline void dispatch_config_interrupt_enable(uint32_t mask) {
-    compiler_memory_barrier();
-    FdsDispatch::fds_config_interrupt_en(mask);
-    compiler_memory_barrier();
-}
+inline void dispatch_config_interrupt_enable(uint32_t mask) { FdsDispatch::fds_config_interrupt_en(mask); }
 
 inline void dispatch_config_group(uint32_t group_id, uint32_t lane_mask, uint32_t count_threshold) {
-    compiler_memory_barrier();
     FdsDispatch::fds_config_groupid(group_id, lane_mask, count_threshold);
-    compiler_memory_barrier();
 }
 
-inline void dispatch_write_go(uint32_t value) {
-    compiler_memory_barrier();
-    FdsDispatch::fds_go(false, value);
-    compiler_memory_barrier();
-}
+inline void dispatch_write_go(uint32_t value) { FdsDispatch::fds_go(false, value); }
 
-inline uint32_t dispatch_read_go() {
-    compiler_memory_barrier();
-    uint32_t value = FDS_INTF_READ(TT_FDS_DISPATCH_DISPATCH_TO_TENSIX_REG_ADDR);
-    compiler_memory_barrier();
-    return value;
-}
+inline uint32_t dispatch_read_go() { return FDS_INTF_READ(TT_FDS_DISPATCH_DISPATCH_TO_TENSIX_REG_ADDR); }
 
-inline uint32_t dispatch_read_group_status(uint32_t group_id) {
-    compiler_memory_barrier();
-    uint32_t group_status = FdsDispatch::fds_read_group_status(group_id);
-    compiler_memory_barrier();
-    return group_status;
-}
+inline uint32_t dispatch_read_group_status(uint32_t group_id) { return FdsDispatch::fds_read_group_status(group_id); }
 
-inline void dispatch_clear_worker_status(uint32_t worker_lane) {
-    compiler_memory_barrier();
-    FdsDispatch::fds_clear_neo_status(worker_lane);
-    compiler_memory_barrier();
-}
+inline void dispatch_clear_worker_status(uint32_t worker_lane) { FdsDispatch::fds_clear_neo_status(worker_lane); }
 
-inline uint32_t dispatch_read_group_count(uint32_t group_id) {
-    compiler_memory_barrier();
-    uint32_t group_count = FdsDispatch::fds_read_group_count(group_id);
-    compiler_memory_barrier();
-    return group_count;
-}
+inline uint32_t dispatch_read_group_count(uint32_t group_id) { return FdsDispatch::fds_read_group_count(group_id); }
 
-inline void worker_disable_auto_dispatch() {
-    compiler_memory_barrier();
-    FdsNeo::fds_disable_auto_dispatch();
-    compiler_memory_barrier();
-}
+inline void worker_disable_auto_dispatch() { FdsNeo::fds_disable_auto_dispatch(); }
 
-inline uint32_t worker_read_filter_length() {
-    compiler_memory_barrier();
-    uint32_t threshold = FDS_INTF_READ(TT_FDS_TENSIXNEO_FILTER_COUNT_THRESHOLD_REG_ADDR);
-    compiler_memory_barrier();
-    return threshold;
-}
+inline uint32_t worker_read_filter_length() { return FDS_INTF_READ(TT_FDS_TENSIXNEO_FILTER_COUNT_THRESHOLD_REG_ADDR); }
 
 inline void worker_config_filter_length(uint32_t threshold) {
     do {
-        compiler_memory_barrier();
         FdsNeo::fds_config_filter_length(threshold);
-        compiler_memory_barrier();
     } while (worker_read_filter_length() != threshold);
 }
 
-inline void worker_config_interrupt_enable(uint32_t mask) {
-    compiler_memory_barrier();
-    FdsNeo::fds_config_interrupt_en(mask);
-    compiler_memory_barrier();
-}
+inline void worker_config_interrupt_enable(uint32_t mask) { FdsNeo::fds_config_interrupt_en(mask); }
 
 inline void worker_config_group(uint32_t group_id, uint32_t lane_mask, uint32_t count_threshold) {
-    compiler_memory_barrier();
     FdsNeo::fds_config_groupid(group_id, lane_mask, count_threshold);
-    compiler_memory_barrier();
 }
 
-inline uint32_t worker_read_group_status(uint32_t group_id) {
-    compiler_memory_barrier();
-    uint32_t group_status = FdsNeo::fds_read_group_status(group_id);
-    compiler_memory_barrier();
-    return group_status;
-}
+inline uint32_t worker_read_group_status(uint32_t group_id) { return FdsNeo::fds_read_group_status(group_id); }
 
-inline void worker_clear_dispatch_status(uint32_t dispatch_lane) {
-    compiler_memory_barrier();
-    FdsNeo::fds_clear_de_status(dispatch_lane);
-    compiler_memory_barrier();
-}
+inline void worker_clear_dispatch_status(uint32_t dispatch_lane) { FdsNeo::fds_clear_de_status(dispatch_lane); }
 
-inline uint32_t worker_read_done() {
-    // The done output must be read back so a dropped crossing-FIFO write is retried.
-    compiler_memory_barrier();
-    uint32_t done_value = FdsNeo::fds_read_done();
-    compiler_memory_barrier();
-    return done_value;
-}
+// The done output must be read back so a dropped crossing-FIFO write is retried.
+inline uint32_t worker_read_done() { return FdsNeo::fds_read_done(); }
 
 inline void worker_clear_done() {
     do {
-        compiler_memory_barrier();
         FdsNeo::fds_clear_done();
-        compiler_memory_barrier();
     } while (worker_read_done() != 0);
 }
 
 inline void worker_signal_done(uint32_t group_id) {
     do {
-        compiler_memory_barrier();
         FdsNeo::fds_done(false, group_id);
-        compiler_memory_barrier();
     } while (worker_read_done() != group_id);
 }
 
