@@ -108,8 +108,9 @@ the **timed** pass. All six 15 s OOMed in warmup.
 
 ## Per-op device breakdown — one transformer block, 15 s / 16:9 (Tracy)
 
-Measured 2026-09-17 on `3a2f7fea259`, after the ff2 fix, with the Wormhole `GALAXY_RING` rows
-added in `2076022d032`. One block, warm iteration between `start`/`stop` signposts.
+Measured 2026-09-17 on `bc1d99d05f6`: Wormhole `GALAXY_RING` rows, the re-keyed 15 s ff1/ff2
+blockings, and `_packed_sizes` producing the length the pipeline runs. One block, warm iteration
+between `start`/`stop` signposts, both FSDP settings.
 
 ```bash
 scripts/run_safe_pytest.sh --profile \
@@ -124,72 +125,80 @@ Two quoting/config traps, both load-bearing:
   in embedded single quotes so the re-shell cannot glob the `[...]`.
 - `pytest.ini` sets `timeout = 300`, too short for the 15 s shape. Override with `--timeout 3600`.
 
-Shape (test-reported, matching the pipeline's packing helpers): 1344x768, 362 frames -> 107 latent
-frames x 24x42 patches = 107856 video + 603 audio + 512 text = seq_len 108971, padded 109056,
-**13632 rows/device** at SP=8.
+Shape, as the pipeline packs it and as the test logs it: 1344x768, 362 frames -> 107 latent frames
+x 24x42 patches = 107856 video rows + 603 audio latents x 2 channels = 1206 audio rows + 39 text
+tokens = seq_len 109101, padded to `sp_factor * TILE` = 256 -> 109312, **13664 rows/device** at
+SP=8. Block input shard 13664 x 1344 bf16 = 36.7 MB/device.
 
-| op | fsdp1 ms | fsdp0 ms | delta |
-|---|---|---|---|
-| **RingJointSDPADeviceOperation** | **172.52** | **172.50** | +0.02 |
-| AllGatherMinimalMatmulAsyncOp (3) | 33.11 | 32.57 | +0.54 |
-| EmbeddingsDeviceOperation (6) | 10.37 | 10.32 | +0.04 |
-| MinimalMatmulDeviceOperation (2) | 8.84 | 8.87 | -0.03 |
-| AllGatherAsyncDeviceOperation (4) | 4.10 | — | +4.10 |
-| AllBroadcastDeviceOperation | 3.96 | — | +3.96 |
-| DitFusedDistributedRmsnorm (4) | 2.94 | 2.91 | +0.03 |
-| ReduceScatterMinimalAsync | 2.75 | 2.78 | -0.02 |
-| UntilizeWithUnpadding | 1.76 | 0.07 | +1.69 |
-| ConcatDeviceOperation | 1.55 | — | +1.55 |
-| TilizeWithValPadding | 1.37 | 0.06 | +1.31 |
-| *(remaining 8 ops)* | 3.04 | 3.02 | +0.02 |
-| **device only** | **246.31** | **233.10** | **+13.21 (5.7%)** |
-| **device + op gap** | **259.40** | **241.67** | +17.73 |
-| SDPA share of block | 70.0% | 74.0% | |
+| op | calls | fsdp1 ms | fsdp0 ms | delta |
+|---|---|---|---|---|
+| **RingJointSDPADeviceOperation** | 1 | **174.56** | **174.57** | -0.01 |
+| AllGatherMinimalMatmulAsyncOp | 3 | 32.25 | 31.61 | +0.64 |
+| EmbeddingsDeviceOperation | 6 | 10.41 | 10.35 | +0.06 |
+| MinimalMatmulDeviceOperation | 2 | 8.54 | 8.55 | -0.02 |
+| AllBroadcastDeviceOperation | 1 | 3.99 | — | +3.99 |
+| AllGatherAsyncDeviceOperation | 4 | 3.96 | — | +3.96 |
+| DitFusedDistributedRmsnorm | 4 | 2.99 | 2.64 | +0.35 |
+| ReduceScatterMinimalAsync | 1 | 2.78 | 2.78 | 0.00 |
+| UntilizeWithUnpadding | 21 | 1.76 | 0.07 | +1.70 |
+| ConcatDeviceOperation | 1 | 1.51 | — | +1.51 |
+| TilizeWithValPadding | 8 | 1.35 | 0.06 | +1.30 |
+| *(remaining 8 ops)* | | 2.81 | 2.78 | +0.04 |
+| **device only** | | **246.92** | **233.41** | **+13.51 (5.8%)** |
+| **device + op gap** | | **250.80** | **238.46** | +12.34 |
+| SDPA share of block | | 70.7% | 74.8% | |
 
-Projected over 50 layers: **12.32 s/step** device-only, 12.97 s with op gaps (616 / 648 s per
+Projected over 50 layers: **12.35 s/step** device-only, 12.54 s with op gaps (617 / 627 s per
 50-step video). The 16:9/15 s row above measures the same configuration end-to-end at
 **12435 ms/forward**, which lands inside that bracket exactly as `project_block_perf.py` intends:
-`device only` is the underestimate (no dispatch gaps), `device + op gap` the overestimate. So the
-50-layer block stack is **99.1%** of the forward on the device-only figure, leaving ~0.1 s for the
-refiner, input projections, `norm_out` and the output heads. Corroborating that the comparison is
-apples-to-apples: 21:9 and 16:9 both give 1008 tokens/latent frame (1536x672 -> 21x48;
-1344x768 -> 24x42), and their measured forwards agree to 0.1% (12447 vs 12435).
+`device only` is the underestimate (no dispatch gaps) at 99.3% of the forward, `device + op gap`
+the overestimate at 100.8%. The 50-layer block stack is therefore the whole forward to within the
+bracket's width; the refiner, input projections, `norm_out` and output heads fit in the remainder.
 
 ### Findings
 
-1. **Ring SDPA is 70% of the block** at 48.8% FPU utilization (`PM FPU UTIL (%)`, consistent
-   across all 32 devices). Nothing else is close.
-2. **FSDP costs 5.7%** — inside the 5-11% the pipeline sweep saw, and it decomposes exactly:
-   AllGatherAsync 4.10 + AllBroadcast 3.96 + Concat 1.55 + Untilize 1.69 + Tilize 1.31 = 12.61 of
-   the 13.21 ms delta.
-3. **Layout conversions blow up 23x under FSDP** — tilize/untilize go 0.13 -> 3.13 ms, a quarter of
-   the whole FSDP cost spent on format round-trips rather than communication. Cheapest apparent win.
-4. **The ff2 fix is confirmed live**: `ReduceScatterMinimalAsyncDeviceOperation` is present and
-   there is no fused `Matmul_RS` row, which is what `eab3dfbd599` intended.
+1. **Ring SDPA is 71% of the block** at 48.3% FPU utilization (`PM FPU UTIL (%)`, 47.5-48.7 across
+   all 32 devices). Nothing else is close: the three fused all-gather+matmuls are 13%, the six adaLN
+   embedding gathers 4%, the two plain matmuls 3.5%.
+2. **FSDP costs 5.8%** (13.51 ms/block) — inside the 5-11% the pipeline sweep saw. Three ops exist
+   only with FSDP on: AllBroadcast 3.99 + AllGatherAsync 3.96 + Concat 1.51 = 9.46 ms. The rest is
+   layout conversion (+3.00, next item), a slightly larger fused AG+matmul (+0.64) and RMSNorm (+0.35).
+3. **Layout conversions grow 24x under FSDP** — tilize + untilize go 0.13 -> 3.12 ms, 22% of the
+   FSDP cost spent on format round-trips rather than communication. Cheapest apparent win.
+4. **ff2 runs the intended Wormhole path**: `ReduceScatterMinimalAsyncDeviceOperation` is present
+   and there is no fused `Matmul_RS` row.
 
 ### SDPA chunk sizes: already optimal at 15 s
 
-`test_ring_joint_attention_create_perf_table[minimax_h3_15s_768p]` (run plain — it self-shells
-`run_device_profiler`, so wrapping it in `--profile` would nest profilers):
+`test_ring_joint_attention_create_perf_table[minimax_h3_15s_768p]` at 13664 rows/device, sweeping
+`q in {192, 256} x k in {512, 640, 768, 1024}` (run plain — it self-shells `run_device_profiler`,
+so wrapping it in `--profile` would nest profilers):
 
-| rank | q_chunk | k_chunk | duration | FPU util | math util | slot waste |
-|---|---|---|---|---|---|---|
-| 1 | **256** | **512** | **171.693 ms** | 48.1-49.3% | 35.6% | 0.0% |
-| 2 | 384 | 256 | 192.593 ms | 42.9% | 31.8% | 0.0% |
-| 3 | 256 | 256 | 195.029 ms | 42.3% | 31.4% | 0.0% |
-| — | 384/512, 512/256, 512/512 | | L1 infeasible | | | |
+| rank | q_chunk | k_chunk | duration | iters/core | pad waste | slot waste | FPU util | math util |
+|---|---|---|---|---|---|---|---|---|
+| 1 | **256** | **512** | **175.269 ms** | 2592 | 2.3% | 0.0% | 47.3-47.7% | 35.1% |
+| 2 | 192 | 640 | 184.930 ms | 2816 | 4.1% | 0.0% | 44.9-46.1% | 33.2% |
+| 3 | 192 | 512 | 185.212 ms | 3456 | 2.3% | 0.0% | 44.8-45.7% | 33.2% |
+| — | 192 | 768 / 1024 | L1 infeasible | | | | | |
+| — | 256 | 640 / 768 / 1024 | L1 infeasible | | | | | |
 
-`(256, 512)` is what `measured_sdpa_chunk_sizes[13632]` already ships. The three larger-q candidates
-fail with `Statically allocated circular buffers on core range [0-0 - 6-8] grow to 1844544 B which
-is beyond max L1 size of 1499136 B` — Wormhole's 1.5 MB/core, and that core range is the 7x9 = 63
-compute grid. The harness independently reports "63 compute + 9 CCL = 72 total cores" and 0.0% slot
-waste (756 work items / 63 = 12 passes exactly), and measures SDPA at 171.693 ms against 172.52 ms
-in-block, 0.5% apart.
+`(256, 512)` is what `measured_sdpa_chunk_sizes[13664]` ships, and it wins by 5.5%. The five
+infeasible points fail with `Statically allocated circular buffers on core range [0-0 - 6-8] grow to
+N B which is beyond max L1 size of 1499136 B` — Wormhole's 1.5 MB/core, on the 7x9 = 63 compute grid
+— at N = 1,602,880 (192/768), 1,639,744 (256/640), 1,836,352 (256/768), 1,963,328 (192/1024) and
+2,229,568 (256/1024), each matching the L1 envelope calibrated under *Sweeps run* below.
 
-So the ~50% FPU / 35.6% math utilization is **inherent to the ring joint SDPA kernel at this
-shape, not a chunk-size miss**. At 70% of the block it is the only thing worth attacking, but the
-work is in the kernel. Note the contrast with 5 s, where `q=320` at seq 4768 wastes 16.7% of the
-63 slots and chunk tuning *does* have headroom.
+Slot waste is zero at both feasible q: 13664 rows give 54 Q chunks at q=256 (54 x 14 heads = 756 =
+12 x 63) and 72 at q=192 (1008 = 16 x 63), so the ranking is decided by per-core efficiency, not
+scheduling — and larger q wins, FPU utilization 47.5% against 45.5%. The harness reports
+"63 compute + 9 CCL = 72 total cores" and measures SDPA at 175.269 ms against 174.56 ms in-block,
+0.4% apart.
+
+So chunk-size tuning at 15 s is exhausted: 3 feasible points, 5 ruled out by L1, and the shipped
+config is the best of them. The ~48% FPU / 35% math utilization is **inherent to the ring joint SDPA
+kernel at this shape**. At 71% of the block it is the only thing worth attacking, but the work is in
+the kernel. Note the contrast with 5 s, where `q=320` wastes 16.7% of the 63 slots and chunk
+tuning *does* have headroom.
 
 Caveat: `CORE COUNT` for `RingJointSDPADeviceOperation` reads 71, not 63, because the profiler
 counts the fused CCL workers — `ccl_core_grid_offset=(7, 0)` with `use_column_major_ccl=True`
@@ -209,7 +218,7 @@ above), measured at `fsdp1`.
 
 Same host, same weights, same everything, one run each, 2026-09-17: the landed ff1 + ff2 blockings
 are worth **-69.9 ms/fwd, -0.58%** (steady 12057 -> 11990 ms/step; denoise 590.9 -> 587.4 s). The
-isolated sweep predicted 1327 us/layer x 50 = 66 ms/step; measured 67-70. The prediction holds.
+isolated sweep predicted 1250.5 us/layer x 50 = 62.5 ms/step; measured 67-70. The prediction holds.
 
 Read the three rows carefully: the other-host baseline is ~3% slower on this shape than this host's
 own baseline (12435 vs 12058 ms/fwd) with identical code paths, so comparing the after-run against
@@ -218,7 +227,7 @@ measurement of the change. Total compute moved just 0.7 s because VAE decode var
 the two runs, which the DiT blockings cannot touch; ms/fwd is the metric that isolates them.
 
 CLIP was not computed on the two A/B runs. The fourth row is the same code run later with a rebuilt
-weight cache (verified with `TT_DIT_CACHE_VERIFY=1` -- see Code changes) and carries the
+weight cache (verified with `TT_DIT_CACHE_VERIFY=1` -- `verify_saved_model` in `utils/cache.py`) and carries the
 CLIP: **35.88** against the other host's 36.31 at baseline. Its 12230 ms/fwd is 2.0% off the A/B pair
 taken four hours earlier across two board resets; the pair was back-to-back and differs by 0.58%, so it
 remains the measurement of the blockings and the 2% is run-to-run / board-state spread. **Block
@@ -261,7 +270,7 @@ All matmul numbers come from `models/tt_dit/utils/sweep_mm_block_sizes.py` again
 # One shape. MM_SWEEP_PROFILER_DUMP_EVERY is mandatory on a WH Galaxy -- see Open issues 2.
 MM_SWEEP_PROFILER_DUMP_EVERY=100000 python -m pytest \
   models/tt_dit/utils/sweep_mm_block_sizes.py::test_mm_sweep \
-  -k "13632_5376_7168_8x8_agmm_ff1_swiglu and wh_4x8_ring" -s
+  -k "13664_5376_7168_8x8_agmm_ff1_swiglu and wh_4x8_ring" -s
 ```
 
 Wormhole's compute grid is **8x9 = 72 cores** against Blackhole's 12x10, so the AGMM worker grid is
@@ -269,37 +278,31 @@ Wormhole's compute grid is **8x9 = 72 cores** against Blackhole's 12x10, so the 
 the full 8x9. Neither grid is one Blackhole produces, so every H3 blocking the model carried for
 these shapes had been swept on a grid that does not exist on the part.
 
-### Matmul blockings — time saved against what the model ran before
+### Matmul blockings — 15 s, M=13664
 
-| shape | op / grid | 5 s (M=4768) | 10 s (M=9216) | **15 s (M=13632)** |
-|---|---|---|---|---|
-| ff1 | AGMM 8x8 | 16.0% | 9.6% | **6.3%** |
-| ff2 | matmul 8x9 | 15.2% | 6.8% | **4.0%** |
-| qkv | AGMM 8x8 | 8.4% | 3.5% | **0.0%** |
-| to_out | AGMM 8x8 | 7.5% | 2.6% | **0.4%** |
-| total matmul | | 12.8% | 6.7% | **3.5%** |
-| per denoise step | | 100 ms | 89 ms | **67 ms** |
-| share of one forward | | 3.5% | 1.4% | **0.5%** |
+All four 15 s shapes swept with `sweep_mm_block_sizes.py` on `wh_4x8_ring` at the pipeline's 13664
+rows/device: 1419 combos, every one `OK`. "Pre-tuning" is what the model ran before any Wormhole
+entry existed -- the (K, N)-keyed `AGMM_BLOCK_SIZES` defaults for the three AGMM shapes, and the
+hardcoded (8, 8, 8) for ff2's plain matmul.
 
-Winning blockings, and the reason they are keyed per-M:
+| shape | op / grid | combos | pre-tuning | shipped now | rank | best measured | saved vs pre-tuning |
+|---|---|---|---|---|---|---|---|
+| ff1 | AGMM 8x8 | 320 | (8, 3, 14) 16718.0 us | **(8, 7, 10)** 15709.9 us | 1 | = shipped | **6.0%** |
+| ff2 | matmul 8x9 | 322 | (8, 8, 8) 7013.1 us | **(8, 7, 10)** 6770.7 us | 2 | (12, 7, 8) 6668.2 us | **3.5%** (4.9% at best) |
+| qkv | AGMM 8x8 | 425 | (8, 7, 12) 10401.8 us | (8, 7, 12) *unchanged* | 2 | (8, 6, 12) 10351.4 us | 0 (0.5% at best) |
+| to_out | AGMM 8x8 | 352 | (8, 8, 6) 4332.8 us | (8, 8, 6) *unchanged* | 3 | (14, 8, 6) 4312.8 us | 0 (0.5% at best) |
+| **total, as shipped** | | | | | | | **1250.5 us/block = 62.5 ms/step = 0.50% of the 12435 ms forward** |
 
-| shape | 5 s | 10 s | 15 s |
-|---|---|---|---|
-| ff1 | (10, 7, 10) | (12, 7, 8) | (8, 7, 10) |
-| ff2 | (6, 8, 12) | (10, 8, 4) | (8, 7, 10) |
-| qkv | (10, 7, 8) | (10, 7, 8) | (8, 7, 12) *(= shipped)* |
-| to_out | (10, 8, 8) | (12, 8, 6) | (14, 8, 6) |
+ff1's landed `(8, 7, 10)` is the sweep winner outright. ff2's landed `(8, 7, 10)` is rank 2:
+`(12, 7, 8)` measures 1.5% faster (102.5 us/block, ~5 ms/step) but the sweep is timing-only and
+that blocking has not been PCC-validated, so it is **not landed** -- `(8, 7, 10)` was validated at
+pcc 1.0000000 and stays. qkv and to_out keep their `AGMM_BLOCK_SIZES` defaults: both are within
+0.5% of the best combo, comparable to the ~0.3% run-to-run spread, so neither is worth an entry.
 
-Every winner differs by duration. `AGMM_BLOCK_SIZES` is keyed on `(K, N)` alone, on the argument
-that block shape does not track M — established on Blackhole's 120-core grid and **false here**:
-ff2's 5 s winner `(6, 8, 12)` ranks 71st of 314 at M=9216 and is 14.6% off that length's best,
-*worse than the untuned default*. Landing one duration's winner through a `(K, N)`-keyed table
-would speed up 5 s and regress 10 s. `M_per_core` goes 19 -> 36 -> 54 across the three, and the
-winners' `M_block` tracks it. Both entries landed are therefore keyed on `(M, K, N)`.
-
-Only ff1 and ff2 were landed for 15 s. qkv's shipped `(8, 7, 12)` measured rank 1 of 407 -- already
-optimal -- and to_out's best beat its shipped blocking by 15 us on 4327, i.e. 0.4%, inside the
-~0.3% run-to-run spread measured from repeat rows.
+Why the two landed entries are keyed on `(M, K, N)` rather than added to the `(K, N)`-keyed model
+table, and how `get_matmul_config` falls back on equal `M_per_core` after an exact miss, is
+documented in `models/tt_dit/utils/matmul.py` -- the module docstring and the `grid_88_configs` /
+`grid_89_configs` entries.
 
 ### Fused MM/RS on Wormhole — stays disabled
 
@@ -322,8 +325,7 @@ disabling it, the conclusion holds.
 
 ### SDPA chunk sizes
 
-First pass at 15 s (q in {256, 384, 512} x k in {256, 512}) found the shipped `(256, 512)` already
-best; see the section above. That search was bounded on the wrong axis. From the CB allocation in
+Sweeping only q >= 256 with k <= 512 bounds the search on the wrong axis. From the CB allocation in
 `ring_joint_sdpa_program_factory.cpp:1296-1308`:
 
 ```
@@ -356,7 +358,7 @@ k > 512 point run on this shape — but it is **13% slower**. Two reasons, both 
     iters/core goes 2592 at (256, 512) to 2816 at (192, 640) — more iterations, not fewer. The two
     effects oppose each other and q dominates.
 
-So `(256, 512)`, which `measured_sdpa_chunk_sizes[13632]` already ships, is optimal. **Chunk-size
+So `(256, 512)`, which `measured_sdpa_chunk_sizes[13664]` already ships, is optimal. **Chunk-size
 tuning at 15 s is exhausted**: 3 feasible points measured, 5 ruled out by L1. The ~48% FPU / 35.6%
 math utilization is inherent to the ring joint SDPA kernel at this shape.
 
@@ -436,23 +438,18 @@ all closed.
    so "this call hangs on a 32-device WH mesh" is not the whole story. The default is left at 10
    pending a root cause, which makes the override mandatory on Wormhole.
 
-3. **M-keyed tuning tables key on a per-device length the pipeline never runs.** Every 768P
-   table keys on 4768 / 9216 / 13632 rows/device; the pipeline runs 4736 / 9184 / 13664 and
-   logs it on every run (`packed sequence ... rows/device`). The constants trace to
-   `test_performance_minimax_h3.py::_packed_sizes`, which counts audio latents once where the
-   pipeline packs two rows per latent (`packing.py:261`) and assumes a 512-token prompt where
-   the gate runs 39. The lookups are exact-key, so nothing hit.
-
-   *Fixed in `a07012d7d8a`.* `_packed_sizes` counts audio in rows and uses the gate's 39-token
-   prompt; both the length and the padding go through new `packing.py` helpers
-   (`packed_sequence_length`, `padded_sequence_length`) that the pipeline itself now uses, so the
-   two cannot diverge again. `get_matmul_config`/`get_agmm_config` fall back to a same-(K, N) entry
-   with the same `M_per_core` after an exact miss, which makes every table robust to a 32-row
-   discrepancy and to prompt length within a padding bucket. All M literals re-keyed to
-   4736 / 9184 / 13664. Confirmed on a live generation: `13664 rows/device`, and neither ff1 nor
-   ff2 appears among the fallback warnings (qkv and to_out do, by design -- their shipped
-   blockings measured optimal / within noise). Root cause and history:
-   **`MiniMaxH3_rows_per_device_mismatch.md`**.
+3. **M-keyed tuning tables and the pipeline disagreed on the per-device length** — *fixed in
+   `a07012d7d8a`*. Every 768P table now keys on **4736 / 9184 / 13664** rows/device (5 s / 10 s /
+   15 s), which is what the pipeline packs and logs on every run (`packed sequence ... rows/device`).
+   `test_performance_minimax_h3.py::_packed_sizes` counts audio in rows (two per latent,
+   `packing.py:261`) and uses the gate's 39-token prompt, and both the length and the padding go
+   through `packing.py` helpers (`packed_sequence_length`, `padded_sequence_length`) that the pipeline
+   itself uses, so the two cannot diverge again. `get_matmul_config`/`get_agmm_config` fall back to a
+   same-(K, N) entry with the same `M_per_core` after an exact miss, which makes every table robust
+   to a 32-row discrepancy and to prompt length within a padding bucket. Confirmed on a live
+   generation: `13664 rows/device`, and neither ff1 nor ff2 appears among the fallback warnings (qkv
+   and to_out do, by design -- their shipped blockings measured optimal / within noise). Root cause
+   and history: **`MiniMaxH3_rows_per_device_mismatch.md`**.
 
 ## VBench (16:9/5s, verified passing)
 
@@ -466,36 +463,3 @@ all closed.
 
 CLIP 37.36 vs 33.0 bar (docs record 37.37 for Blackhole; imaging_quality 0.6896).
 Only 16:9/5s has been VBench-verified; the sweep ran with `RUN_VBENCH=0`.
-
-## Code changes backing these numbers
-
-All committed on `jameslee/bringup_h3_wh_galaxy`; nothing here needs local patches.
-
-| commit | change |
-|---|---|
-| `88563f81db5` | Wormhole bringup: `weights_minimax_h3.py` (snapshot resolver), `_PRESETS_WH` + arch-aware `resolve_mesh_preset`, `coresident` passthrough, `_release_audio()`, `is_fsdp` on the DiT build **and** its `cache.load_model`, `_L1_SMALL_WH = 32768` / `_ring_4k`, arch-aware `log_timing_table`, HF download docs |
-| `eab3dfbd599` | `has_mmrs_config` takes the device core grid and asks `resolves_fused_mmrs_config`; Wormhole falls back to matmul + `reduce_scatter_minimal_async`. Also a guard in `FusedMMRSConfig.get_params` that raises instead of deadlocking when the RS zone yields <1 worker/link |
-| `2076022d032` | Wormhole rows in `GALAXY_RING` (both FSDP settings) so the block perf test can run here at all, `_BH_ONLY`/`_WH_ONLY` arch marks (both 4x8 rows ask for 32 devices, so only the arch can separate them), and `sp_simulate > 1` skips off Blackhole |
-| `3a2f7fea259` | `MeshConfig.detect()` is arch-aware — it hardcoded Blackhole's 12x10 for any 32-device host, so a WH Galaxy reported 110 SDPA cores instead of 63. Plus the `minimax_h3_{5s,10s,15s}_768p` perf configs, which `measured_sdpa_chunk_sizes` cited but which were absent from the tree |
-| `8cd05961cbe` | Perf sweep restated at 18/18 after the MM/RS gate fix |
-| `c825d089e31` | Per-op device breakdown of one block at 15 s / 16:9, and `tools/project_block_perf.py` |
-| `50908410b42` | Wormhole H3 shapes in `sweep_mm_block_sizes.py` (4 shapes x 3 durations, plus fused MM/RS at three matmul grids), `MM_SWEEP_PROFILER_DUMP_EVERY` override, `L1_BUDGET_KB` note |
-| `9e97f1541bc` | `grid_88_configs` ff1 and `grid_89_configs` ff2 entries (keyed 13632 -- dead, see below); widened 15 s SDPA chunk lists; the sweep write-up |
-| `e5c39cbdd47` | 15 s SDPA chunk search closed out: shipped `(256, 512)` optimal; calibrated L1 envelope; `q=128` hang recorded |
-| `c0af23ba607` | Documents the rows/device mismatch: tables keyed on 13632, pipeline runs 13664 |
-| `664578b377e` | Point fix: ff1/ff2 re-keyed 13632 -> 13664 |
-| `a07012d7d8a` | Structural fix: `_packed_sizes` audio/text bug, `packing.py` helpers routed through the pipeline, `M_per_core` matching in `get_matmul_config`/`get_agmm_config`, every M literal re-keyed. Live-confirmed; blockings PCC-validated |
-| `b0f4071ee12` + follow-ups | `cache.verify_saved_model`, opt-in via `TT_DIT_CACHE_VERIFY=1`: a written cache is reloaded and compared shard-by-shard before it is marked complete. First 15 s / 16:9 run on this host with CLIP: 35.88 |
-
-`dit_fsdp` defaults **off**, overridable with `MINIMAX_H3_DIT_FSDP`. Given these results,
-`dit_fsdp: True` belongs in `_PRESETS_WH` (12 GB/chip needs the headroom far more than it needs
-5.7% of the block); Blackhole at 32 GB can stay unsharded. That decision is deliberately left
-open — experiment 10 above.
-
-### A note on the L1 budget in the sweep harness
-
-`L1_BUDGET_KB` stays at 1400 for both architectures. Scaling it to 1328 for Wormhole's smaller L1
-(1,499,136 B against Blackhole's 1,572,864 B) looked prudent and was wrong: combos estimated up to
-~1424 KB build and run there, and the tighter bound excluded ff1's actual optimum `(10, 7, 10)` at
-1380 KB along with qkv's shipped `(8, 7, 12)` at 1352 KB — so the sweep could not measure the
-baseline it was meant to beat. Both were recovered with an explicit-combo pass.
