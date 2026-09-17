@@ -306,8 +306,8 @@ def _distributed_prefix(
         )
         carry = ttnn.add(carry, b_for_carry, memory_config=working_memory)
 
-    chronological_entries = ttnn.concat(entry_states, dim=0, memory_config=output_memory)
-    local_entries = chronology.select_block(chronological_entries, 4, chronology.sp_size)
+    chronological_entries = ttnn.concat(entry_states, dim=0, memory_config=working_memory)
+    local_entries = chronology.select_block(chronological_entries, 4, chronology.sp_size, memory_config=working_memory)
     entry = ttnn.reshape(local_entries, (batch_heads, key_dim, value_dim))
     final_state = ttnn.reshape(ttnn.to_memory_config(carry, output_memory), (batch_heads, key_dim, value_dim))
     return entry, final_state

@@ -41,7 +41,9 @@ class DeviceChronology:
     sp_size: int
 
     def indices(self, row: int, width: int) -> ttnn.Tensor:
-        return ttnn.reshape(ttnn.slice(self.controls, (row, 0), (row + 1, width)), (width,))
+        return ttnn.reshape(
+            ttnn.slice(self.controls, (row, 0), (row + 1, width), memory_config=ttnn.L1_MEMORY_CONFIG), (width,)
+        )
 
     def select_block(
         self,
