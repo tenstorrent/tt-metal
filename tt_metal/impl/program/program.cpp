@@ -1369,12 +1369,24 @@ uint8_t detail::ProgramImpl::add_cross_node_dfb(experimental::CrossNodeDFB gdfb)
     return remote_dfb_id;
 }
 
-uint8_t detail::ProgramImpl::add_prefetcher_pipe_attachment(
-    experimental::PrefetcherPipeImpl& prefetcher_pipe,
+const detail::ProgramImpl::PrefetcherPipeSlot& detail::ProgramImpl::get_prefetcher_pipe_slot(
+    uint8_t prefetcher_pipe_id) const {
+    TT_FATAL(
+        prefetcher_pipe_id < prefetcher_pipe_slots_.size(),
+        "PrefetcherPipe slot {} does not exist in program {} ({} slot(s))",
+        prefetcher_pipe_id,
+        this->id,
+        prefetcher_pipe_slots_.size());
+    return prefetcher_pipe_slots_[prefetcher_pipe_id];
+}
+
+uint8_t detail::ProgramImpl::reserve_prefetcher_pipe_slot(
     const CoreRangeSet& cores,
+    const CoreRangeSet& receiver_cores,
+    uint32_t ring_size,
     uint32_t entry_size,
-    uint32_t num_pipe_consumer_threads) {
-    TT_FATAL(this->compiled_.empty(), "Cannot attach PrefetcherPipe to an already compiled program {}", this->id);
+    uint32_t num_credit_lanes) {
+    TT_FATAL(this->compiled_.empty(), "Cannot add a PrefetcherPipe slot to an already compiled program {}", this->id);
 
     for (const auto& [core, remote_bits] : per_core_remote_cb_indices_) {
         TT_FATAL(
@@ -1384,14 +1396,99 @@ uint8_t detail::ProgramImpl::add_prefetcher_pipe_attachment(
     }
 
     TT_FATAL(
-        next_prefetcher_pipe_slot_ < std::numeric_limits<uint8_t>::max(),
+        prefetcher_pipe_slots_.size() < std::numeric_limits<uint8_t>::max(),
         "PrefetcherPipe id would wrap uint8_t (ids are [0, 255); 0xFF is NO_PREFETCHER_PIPE)");
 
     TT_FATAL(cores.num_cores() > 0, "AttachPrefetcherPipe requires a non-empty core set");
+    TT_FATAL(
+        cores.intersection(receiver_cores).num_cores() == receiver_cores.num_cores(),
+        "PrefetcherPipe slot receiver cores must be a subset of the slot cores");
+
+    const uint32_t l1_alignment = MetalContext::instance(this->get_context_id()).hal().get_alignment(HalMemType::L1);
+    TT_FATAL(entry_size > 0, "PrefetcherPipe entry_size must be > 0");
+    TT_FATAL(
+        entry_size % l1_alignment == 0,
+        "PrefetcherPipe entry_size {} must be a multiple of L1_ALIGNMENT {}",
+        entry_size,
+        l1_alignment);
+    TT_FATAL(
+        entry_size <= ring_size, "PrefetcherPipe entry_size {} must not exceed ring_size {}", entry_size, ring_size);
+
+    TT_FATAL(num_credit_lanes >= 1, "AttachPrefetcherPipe num_pipe_consumer_threads must be >= 1");
+    if (receiver_cores.num_cores() == 0) {
+        TT_FATAL(
+            num_credit_lanes == 1,
+            "AttachPrefetcherPipe: sender-only Attach cannot set num_pipe_consumer_threads ({})",
+            num_credit_lanes);
+    }
+    // Lane mode needs an exact, P-divisible entry ring (lane_capacity_units asserts the same on
+    // device). Checked again against the live pipe at bind, where the lane capacity is known.
+    if (num_credit_lanes > 1) {
+        TT_FATAL(
+            ring_size % entry_size == 0,
+            "PrefetcherPipe with {} credit lanes requires entry_size {} to divide ring_size {}",
+            num_credit_lanes,
+            entry_size,
+            ring_size);
+        TT_FATAL(
+            (ring_size / entry_size) % num_credit_lanes == 0,
+            "PrefetcherPipe ring holds {} entries of {} bytes, which is not a multiple of {} credit lanes",
+            ring_size / entry_size,
+            entry_size,
+            num_credit_lanes);
+    }
+
+    const uint8_t prefetcher_pipe_id = static_cast<uint8_t>(prefetcher_pipe_slots_.size());
+    for (const auto& core_range : cores.ranges()) {
+        for (const auto& core : core_range) {
+            auto& participants = per_core_prefetcher_pipes_[core];
+            for (const auto& a : participants) {
+                TT_FATAL(
+                    a.prefetcher_pipe_id != prefetcher_pipe_id,
+                    "PrefetcherPipe slot {} already has a participant on core {}",
+                    prefetcher_pipe_id,
+                    core.str());
+            }
+            participants.push_back(
+                {.prefetcher_pipe_id = prefetcher_pipe_id,
+                 .config_page_addr = 0,
+                 .entry_size = entry_size,
+                 .relay_dfb_id = std::numeric_limits<uint8_t>::max(),
+                 .pipe = nullptr});
+        }
+    }
+    prefetcher_pipe_slots_.push_back(
+        {.cores = cores,
+         .receiver_cores = receiver_cores,
+         .ring_size = ring_size,
+         .entry_size = entry_size,
+         .num_credit_lanes = num_credit_lanes,
+         .relay_dfb_host_id = std::nullopt});
+    return prefetcher_pipe_id;
+}
+
+void detail::ProgramImpl::bind_prefetcher_pipe_to_slot(
+    uint8_t prefetcher_pipe_id, const CoreRangeSet& cores, experimental::PrefetcherPipeImpl& prefetcher_pipe) {
+    const PrefetcherPipeSlot& slot = get_prefetcher_pipe_slot(prefetcher_pipe_id);
+    TT_FATAL(cores.num_cores() > 0, "PrefetcherPipe slot {} bind requires a non-empty core set", prefetcher_pipe_id);
+    TT_FATAL(
+        slot.cores.intersection(cores).num_cores() == cores.num_cores(),
+        "PrefetcherPipe slot {} bind cores {} must be a subset of the slot cores {}",
+        prefetcher_pipe_id,
+        cores.str(),
+        slot.cores.str());
+
+    // The pipe must cover every bound core, and the slot's declared roles must be the pipe's.
     const CoreRangeSet& all_cores = prefetcher_pipe.all_cores();
     TT_FATAL(
         all_cores.intersection(cores).num_cores() == cores.num_cores(),
         "AttachPrefetcherPipe cores must be a subset of the PrefetcherPipe mapping cores");
+    TT_FATAL(
+        prefetcher_pipe.ring_size() == slot.ring_size,
+        "PrefetcherPipe slot {} was built for ring_size {} but the bound pipe has ring_size {}",
+        prefetcher_pipe_id,
+        slot.ring_size,
+        prefetcher_pipe.ring_size());
 
     const CoreRangeSet& sender_cores = prefetcher_pipe.sender_cores();
     const uint32_t attached_sender_count = sender_cores.intersection(cores).num_cores();
@@ -1408,58 +1505,109 @@ uint8_t detail::ProgramImpl::add_prefetcher_pipe_attachment(
         "AttachPrefetcherPipe cannot split receiver cores across Programs: attached {} of {} receivers",
         attached_receiver_count,
         receiver_cores.num_cores());
-
-    TT_FATAL(num_pipe_consumer_threads >= 1, "AttachPrefetcherPipe num_pipe_consumer_threads must be >= 1");
-    if (attached_receiver_count == 0) {
+    {
+        const CoreRangeSet pipe_receivers_here = receiver_cores.intersection(cores);
+        const CoreRangeSet slot_receivers_here = slot.receiver_cores.intersection(cores);
         TT_FATAL(
-            num_pipe_consumer_threads == 1,
-            "AttachPrefetcherPipe: sender-only Attach cannot set num_pipe_consumer_threads ({})",
-            num_pipe_consumer_threads);
+            pipe_receivers_here.num_cores() == slot_receivers_here.num_cores() &&
+                pipe_receivers_here.intersection(slot_receivers_here).num_cores() == slot_receivers_here.num_cores(),
+            "PrefetcherPipe slot {} declares receiver cores {} on the bound cores, but the pipe's receivers there "
+            "are {}",
+            prefetcher_pipe_id,
+            slot_receivers_here.str(),
+            pipe_receivers_here.str());
     }
 
-    const uint32_t l1_alignment = MetalContext::instance(this->get_context_id()).hal().get_alignment(HalMemType::L1);
-    TT_FATAL(entry_size > 0, "PrefetcherPipe entry_size must be > 0");
-    TT_FATAL(
-        entry_size % l1_alignment == 0,
-        "PrefetcherPipe entry_size {} must be a multiple of L1_ALIGNMENT {}",
-        entry_size,
-        l1_alignment);
-    TT_FATAL(
-        entry_size <= prefetcher_pipe.ring_size(),
-        "PrefetcherPipe entry_size {} must not exceed ring_size {}",
-        entry_size,
-        prefetcher_pipe.ring_size());
+    // Sticky: a core binds one pipe object for the program's lifetime.
+    for (const CoreCoord& core : corerange_to_cores(cores)) {
+        const auto& participants = per_core_prefetcher_pipes_.at(core);
+        auto participant = std::find_if(participants.begin(), participants.end(), [prefetcher_pipe_id](const auto& a) {
+            return a.prefetcher_pipe_id == prefetcher_pipe_id;
+        });
+        TT_FATAL(
+            participant != participants.end(),
+            "Internal error: PrefetcherPipe slot {} missing on core {}",
+            prefetcher_pipe_id,
+            core.str());
+        TT_FATAL(
+            participant->pipe == nullptr || participant->pipe == &prefetcher_pipe,
+            "PrefetcherPipe slot {} on core {} is already bound to a different PrefetcherPipe object; a Program "
+            "binds one pipe per slot for its lifetime",
+            prefetcher_pipe_id,
+            core.str());
+    }
 
-    // Lane mode needs an exact, P-divisible entry ring. Check against the lanes this Attach
-    // asks for and against lanes already armed by an earlier Attach / relay (a sender-only
-    // Attach with a non-dividing entry size would otherwise assert on device).
+    // Lane mode needs an exact, P-divisible entry ring. Check against the lanes this slot asks
+    // for and against lanes already armed by an earlier bind / relay (a sender-only bind with a
+    // non-dividing entry size would otherwise assert on device).
     prefetcher_pipe.validate_lane_geometry(
-        entry_size, std::max(num_pipe_consumer_threads, prefetcher_pipe.num_credit_lanes()));
+        slot.entry_size, std::max(slot.num_credit_lanes, prefetcher_pipe.num_credit_lanes()));
+    if (slot.relay_dfb_host_id.has_value()) {
+        TT_FATAL(
+            slot.num_credit_lanes <= prefetcher_pipe.credit_lane_capacity(),
+            "PrefetcherPipe relay num_producers {} exceeds credit lane capacity {} "
+            "(Quasar sizes the config page for PREFETCHER_PIPE_MAX_CREDIT_LANES at pipe create)",
+            slot.num_credit_lanes,
+            prefetcher_pipe.credit_lane_capacity());
+    }
     if (attached_receiver_count != 0) {
-        // Arm lane credits for multi-DM pipe consumers (with or without a relay). Last, so a
-        // rejected Attach leaves the persistent pipe untouched.
-        prefetcher_pipe.set_active_credit_lanes(num_pipe_consumer_threads);
+        // Arm lane credits for multi-DM pipe consumers (with or without a relay). Last of the
+        // checks, so a rejected bind leaves the persistent pipe untouched.
+        prefetcher_pipe.set_active_credit_lanes(slot.num_credit_lanes);
     }
 
-    const uint8_t prefetcher_pipe_id = next_prefetcher_pipe_slot_++;
-
-    for (const auto& core_range : cores.ranges()) {
-        for (const auto& core : core_range) {
-            auto& participants = per_core_prefetcher_pipes_[core];
-            for (const auto& a : participants) {
-                TT_FATAL(
-                    a.prefetcher_pipe_id != prefetcher_pipe_id,
-                    "PrefetcherPipe slot {} already has a participant on core {}",
-                    prefetcher_pipe_id,
-                    core.str());
+    // Relay: the borrowed DFB aliases the pipe ring. Several pipes may share one slot (one per
+    // node); a relay over them needs one ring address, so all must agree.
+    if (slot.relay_dfb_host_id.has_value() && attached_receiver_count != 0) {
+        auto relay_dfb = get_dataflow_buffer(*slot.relay_dfb_host_id);
+        TT_FATAL(relay_dfb != nullptr, "Relay DFB host id {} does not exist", *slot.relay_dfb_host_id);
+        if (relay_dfb->core_ranges.intersects(cores)) {
+            bool relay_already_bound = false;
+            for (const CoreCoord& core : corerange_to_cores(relay_dfb->core_ranges)) {
+                for (const auto& a : per_core_prefetcher_pipes_.at(core)) {
+                    if (a.prefetcher_pipe_id == prefetcher_pipe_id && a.pipe != nullptr && a.pipe != &prefetcher_pipe) {
+                        relay_already_bound = true;
+                    }
+                }
             }
-            participants.push_back(
-                {prefetcher_pipe_id,
-                 prefetcher_pipe.config_address(),
-                 entry_size,
-                 std::numeric_limits<uint8_t>::max()});
+            TT_FATAL(
+                !relay_already_bound || relay_dfb->borrowed_addr_ == prefetcher_pipe.buffer_address(),
+                "PrefetcherPipe slot {} relays several pipes through DFB {}, but their rings differ: 0x{:x} vs "
+                "0x{:x}. Pipes relayed by one DFB must share a ring address (create them from one space).",
+                prefetcher_pipe_id,
+                *slot.relay_dfb_host_id,
+                relay_dfb->borrowed_addr_,
+                prefetcher_pipe.buffer_address());
+            relay_dfb->set_borrowed_memory_base_addr(prefetcher_pipe.buffer_address());
         }
     }
+
+    for (const CoreCoord& core : corerange_to_cores(cores)) {
+        auto& participants = per_core_prefetcher_pipes_.at(core);
+        auto participant = std::find_if(participants.begin(), participants.end(), [prefetcher_pipe_id](const auto& a) {
+            return a.prefetcher_pipe_id == prefetcher_pipe_id;
+        });
+        participant->pipe = &prefetcher_pipe;
+        participant->config_page_addr = prefetcher_pipe.config_address();
+    }
+}
+
+uint8_t detail::ProgramImpl::add_prefetcher_pipe_attachment(
+    experimental::PrefetcherPipeImpl& prefetcher_pipe,
+    const CoreRangeSet& cores,
+    uint32_t entry_size,
+    uint32_t num_pipe_consumer_threads) {
+    TT_FATAL(this->compiled_.empty(), "Cannot attach PrefetcherPipe to an already compiled program {}", this->id);
+    TT_FATAL(cores.num_cores() > 0, "AttachPrefetcherPipe requires a non-empty core set");
+    const CoreRangeSet& all_cores = prefetcher_pipe.all_cores();
+    TT_FATAL(
+        all_cores.intersection(cores).num_cores() == cores.num_cores(),
+        "AttachPrefetcherPipe cores must be a subset of the PrefetcherPipe mapping cores");
+
+    const CoreRangeSet receiver_cores = prefetcher_pipe.receiver_cores().intersection(cores);
+    const uint8_t prefetcher_pipe_id = reserve_prefetcher_pipe_slot(
+        cores, receiver_cores, prefetcher_pipe.ring_size(), entry_size, num_pipe_consumer_threads);
+    bind_prefetcher_pipe_to_slot(prefetcher_pipe_id, cores, prefetcher_pipe);
     prefetcher_pipe_attachments_[prefetcher_pipe_id] = &prefetcher_pipe;
     return prefetcher_pipe_id;
 }
@@ -1508,11 +1656,13 @@ void detail::ProgramImpl::validate_prefetcher_pipe_consumer_threads(const Kernel
                 if (!checked.insert(participant.prefetcher_pipe_id).second) {
                     continue;
                 }
-                const auto& pipe = get_prefetcher_pipe_attachment(participant.prefetcher_pipe_id);
-                if (!pipe.receiver_cores().contains(core)) {
+                const PrefetcherPipeSlot& slot = get_prefetcher_pipe_slot(participant.prefetcher_pipe_id);
+                if (!slot.receiver_cores.contains(core)) {
                     continue;  // sender: partition-R uses the kernel's own thread count, no lane binding
                 }
-                const uint32_t lanes = pipe.num_credit_lanes();
+                // A bound pipe may have been armed by another program; otherwise the slot's own P.
+                const uint32_t lanes =
+                    participant.pipe != nullptr ? participant.pipe->num_credit_lanes() : slot.num_credit_lanes;
                 // "Some" rather than "every": a receiver core may also host unrelated DM kernels.
                 // Keeps the common single-kernel mismatch from becoming a silent device hang.
                 if (std::find(dm_thread_counts.begin(), dm_thread_counts.end(), lanes) == dm_thread_counts.end()) {
@@ -1522,8 +1672,9 @@ void detail::ProgramImpl::validate_prefetcher_pipe_consumer_threads(const Kernel
                     }
                     TT_THROW(
                         "PrefetcherPipe slot {} on receiver core {} is armed for {} credit lane(s) "
-                        "(AttachPrefetcherPipe num_pipe_consumer_threads / relay num_producers) but no Quasar DM "
-                        "kernel on that core has num_threads_per_cluster == {} (found: {})",
+                        "(AttachPrefetcherPipe num_pipe_consumer_threads / relay num_producers / receiver kernel "
+                        "num_threads) but no Quasar DM kernel on that core has num_threads_per_cluster == {} (found: "
+                        "{})",
                         participant.prefetcher_pipe_id,
                         core.str(),
                         lanes,
@@ -1536,74 +1687,123 @@ void detail::ProgramImpl::validate_prefetcher_pipe_consumer_threads(const Kernel
 }
 
 std::optional<uint8_t> detail::ProgramImpl::get_prefetcher_pipe_id_for_relay(uint32_t relay_dfb_host_id) const {
-    for (const auto& [prefetcher_pipe_id, registered_relay_host_id] : prefetcher_pipe_relay_host_ids_) {
-        if (registered_relay_host_id == relay_dfb_host_id) {
-            return prefetcher_pipe_id;
+    for (size_t prefetcher_pipe_id = 0; prefetcher_pipe_id < prefetcher_pipe_slots_.size(); ++prefetcher_pipe_id) {
+        if (prefetcher_pipe_slots_[prefetcher_pipe_id].relay_dfb_host_id == relay_dfb_host_id) {
+            return static_cast<uint8_t>(prefetcher_pipe_id);
         }
     }
     return std::nullopt;
 }
 
-void detail::ProgramImpl::register_prefetcher_pipe_relay_dfb(
-    const CoreRangeSet& receiver_cores, uint8_t prefetcher_pipe_id, uint32_t relay_dfb_host_id) {
+void detail::ProgramImpl::register_prefetcher_pipe_relay_dfb(uint8_t prefetcher_pipe_id, uint32_t relay_dfb_host_id) {
     TT_FATAL(
         this->compiled_.empty(), "Cannot register a PrefetcherPipe relay on an already compiled program {}", this->id);
-
-    experimental::PrefetcherPipeImpl& pipe = get_prefetcher_pipe_attachment(prefetcher_pipe_id);
+    TT_FATAL(
+        prefetcher_pipe_id < prefetcher_pipe_slots_.size(),
+        "PrefetcherPipe slot {} does not exist",
+        prefetcher_pipe_id);
+    PrefetcherPipeSlot& slot = prefetcher_pipe_slots_[prefetcher_pipe_id];
 
     auto relay_dfb = get_dataflow_buffer(relay_dfb_host_id);
     TT_FATAL(relay_dfb != nullptr, "Relay DFB host id {} does not exist", relay_dfb_host_id);
     TT_FATAL(relay_dfb->borrows_memory(), "PrefetcherPipe relay DFB {} must use borrowed memory", relay_dfb_host_id);
     TT_FATAL(
-        pipe.ring_size() % relay_dfb->config.entry_size == 0,
+        slot.receiver_cores.num_cores() > 0,
+        "PrefetcherPipe slot {} has no receiver cores in this program; a relay lives on the receivers",
+        prefetcher_pipe_id);
+    TT_FATAL(
+        slot.ring_size % relay_dfb->config.entry_size == 0,
         "PrefetcherPipe relay entry size {} must divide PrefetcherPipe ring size {}",
         relay_dfb->config.entry_size,
-        pipe.ring_size());
+        slot.ring_size);
     TT_FATAL(
-        relay_dfb->config.num_entries == pipe.ring_size() / relay_dfb->config.entry_size,
+        relay_dfb->config.num_entries == slot.ring_size / relay_dfb->config.entry_size,
         "PrefetcherPipe relay depth {} must equal ring_size/entry_size ({})",
         relay_dfb->config.num_entries,
-        pipe.ring_size() / relay_dfb->config.entry_size);
+        slot.ring_size / relay_dfb->config.entry_size);
     TT_FATAL(
-        relay_dfb->config.num_producers <= pipe.credit_lane_capacity(),
-        "PrefetcherPipe relay num_producers {} exceeds credit lane capacity {} "
-        "(Quasar sizes the config page for PREFETCHER_PIPE_MAX_CREDIT_LANES at pipe create)",
-        relay_dfb->config.num_producers,
-        pipe.credit_lane_capacity());
-    pipe.validate_lane_geometry(relay_dfb->config.entry_size, relay_dfb->config.num_producers);
+        relay_dfb->config.entry_size == slot.entry_size,
+        "PrefetcherPipe relay entry size {} must match Attach dense entry_size {}",
+        relay_dfb->config.entry_size,
+        slot.entry_size);
+    const CoreRangeSet& relay_cores = relay_dfb->core_ranges;
     TT_FATAL(
-        relay_dfb->core_ranges == receiver_cores.merge_ranges(),
-        "Relay DFB core ranges must match the declared relay receiver cores");
-    TT_FATAL(
-        pipe.receiver_cores().merge(receiver_cores).num_cores() == pipe.receiver_cores().num_cores(),
-        "PrefetcherPipe relay cores must be a subset of the PrefetcherPipe receiver cores");
-    // Same field as AttachPrefetcherPipe(..., num_pipe_consumer_threads). Upgrade from 1 or
-    // no-op if already equal; mismatch with a prior Attach is rejected inside set_active.
-    // After the geometry checks so a rejected relay leaves the persistent pipe untouched.
-    pipe.set_active_credit_lanes(relay_dfb->config.num_producers);
+        relay_cores.num_cores() > 0 &&
+            slot.receiver_cores.intersection(relay_cores).num_cores() == relay_cores.num_cores(),
+        "Relay DFB core ranges {} must be receiver cores of PrefetcherPipe slot {} ({})",
+        relay_cores.str(),
+        prefetcher_pipe_id,
+        slot.receiver_cores.str());
     TT_FATAL(
         relay_dfb->device_slot < std::numeric_limits<uint8_t>::max(),
         "Relay DFB device slot {} cannot be represented in PrefetcherPipe receiver metadata",
         relay_dfb->device_slot);
-
-    auto relay_it = prefetcher_pipe_relay_host_ids_.find(prefetcher_pipe_id);
     TT_FATAL(
-        relay_it == prefetcher_pipe_relay_host_ids_.end() || relay_it->second == relay_dfb_host_id,
+        !slot.relay_dfb_host_id.has_value() || *slot.relay_dfb_host_id == relay_dfb_host_id,
         "PrefetcherPipe slot {} already has relay DFB host id {}",
         prefetcher_pipe_id,
-        relay_it != prefetcher_pipe_relay_host_ids_.end() ? relay_it->second : 0);
-    prefetcher_pipe_relay_host_ids_[prefetcher_pipe_id] = relay_dfb_host_id;
+        slot.relay_dfb_host_id.value_or(0));
 
-    relay_dfb->set_borrowed_memory_base_addr(pipe.buffer_address());
-    const uint8_t relay_device_slot = static_cast<uint8_t>(relay_dfb->device_slot);
-
-    for (const CoreCoord& core : corerange_to_cores(receiver_cores)) {
-        auto participant_it = per_core_prefetcher_pipes_.find(core);
+    // Same field as AttachPrefetcherPipe(..., num_pipe_consumer_threads): upgrade from 1 or no-op
+    // if already equal; a mismatch with a prior Attach is rejected.
+    const uint32_t num_producers = relay_dfb->config.num_producers;
+    TT_FATAL(num_producers >= 1, "PrefetcherPipe relay num_producers must be >= 1");
+    TT_FATAL(
+        slot.num_credit_lanes == 1 || slot.num_credit_lanes == num_producers,
+        "PrefetcherPipe num_pipe_consumer_threads already set to {}, cannot reprogram to {}",
+        slot.num_credit_lanes,
+        num_producers);
+    if (num_producers > 1) {
         TT_FATAL(
-            participant_it != per_core_prefetcher_pipes_.end(),
-            "PrefetcherPipe must be attached on relay receiver core {} before registering its relay",
-            core.str());
-        auto& participants = participant_it->second;
+            (slot.ring_size / slot.entry_size) % num_producers == 0,
+            "PrefetcherPipe ring holds {} entries of {} bytes, which is not a multiple of {} credit lanes",
+            slot.ring_size / slot.entry_size,
+            slot.entry_size,
+            num_producers);
+    }
+
+    // Pipes already bound on the receivers (legacy Attach-then-relay order): apply the pipe-side
+    // effects now. Metal 2.0 binds later and does the same in bind_prefetcher_pipe_to_slot.
+    std::vector<experimental::PrefetcherPipeImpl*> bound_pipes;
+    for (const CoreCoord& core : corerange_to_cores(relay_cores)) {
+        for (const auto& a : per_core_prefetcher_pipes_.at(core)) {
+            if (a.prefetcher_pipe_id == prefetcher_pipe_id && a.pipe != nullptr &&
+                std::find(bound_pipes.begin(), bound_pipes.end(), a.pipe) == bound_pipes.end()) {
+                bound_pipes.push_back(a.pipe);
+            }
+        }
+    }
+    for (experimental::PrefetcherPipeImpl* pipe : bound_pipes) {
+        TT_FATAL(
+            num_producers <= pipe->credit_lane_capacity(),
+            "PrefetcherPipe relay num_producers {} exceeds credit lane capacity {} "
+            "(Quasar sizes the config page for PREFETCHER_PIPE_MAX_CREDIT_LANES at pipe create)",
+            num_producers,
+            pipe->credit_lane_capacity());
+        pipe->validate_lane_geometry(relay_dfb->config.entry_size, num_producers);
+    }
+    for (experimental::PrefetcherPipeImpl* pipe : bound_pipes) {
+        // After the geometry checks so a rejected relay leaves the persistent pipe untouched.
+        pipe->set_active_credit_lanes(num_producers);
+    }
+    if (!bound_pipes.empty()) {
+        for (experimental::PrefetcherPipeImpl* pipe : bound_pipes) {
+            TT_FATAL(
+                pipe->buffer_address() == bound_pipes.front()->buffer_address(),
+                "PrefetcherPipe slot {} relays several pipes through DFB {}, but their rings differ: 0x{:x} vs 0x{:x}",
+                prefetcher_pipe_id,
+                relay_dfb_host_id,
+                bound_pipes.front()->buffer_address(),
+                pipe->buffer_address());
+        }
+        relay_dfb->set_borrowed_memory_base_addr(bound_pipes.front()->buffer_address());
+    }
+
+    slot.num_credit_lanes = num_producers;
+    slot.relay_dfb_host_id = relay_dfb_host_id;
+    const uint8_t relay_device_slot = static_cast<uint8_t>(relay_dfb->device_slot);
+    for (const CoreCoord& core : corerange_to_cores(relay_cores)) {
+        auto& participants = per_core_prefetcher_pipes_.at(core);
         auto participant = std::find_if(participants.begin(), participants.end(), [prefetcher_pipe_id](const auto& a) {
             return a.prefetcher_pipe_id == prefetcher_pipe_id;
         });
@@ -1611,12 +1811,6 @@ void detail::ProgramImpl::register_prefetcher_pipe_relay_dfb(
             participant != participants.end(),
             "PrefetcherPipe slot {} is not present on relay receiver core {}",
             prefetcher_pipe_id,
-            core.str());
-        TT_FATAL(
-            participant->entry_size == relay_dfb->config.entry_size,
-            "PrefetcherPipe relay entry size {} must match Attach dense entry_size {} on core {}",
-            relay_dfb->config.entry_size,
-            participant->entry_size,
             core.str());
         TT_FATAL(
             participant->relay_dfb_id == std::numeric_limits<uint8_t>::max() ||
@@ -1627,6 +1821,72 @@ void detail::ProgramImpl::register_prefetcher_pipe_relay_dfb(
             core.str());
         participant->relay_dfb_id = relay_device_slot;
     }
+}
+
+void detail::ProgramImpl::register_prefetcher_pipe_parameter(
+    const std::string& name, PrefetcherPipeParameterBinding binding) {
+    auto [it, inserted] = prefetcher_pipe_parameters_.try_emplace(name, std::move(binding));
+    TT_FATAL(inserted, "PrefetcherPipeParameter '{}' is already registered in program {}", name, this->id);
+}
+
+const detail::ProgramImpl::PrefetcherPipeParameterBinding* detail::ProgramImpl::get_prefetcher_pipe_parameter(
+    const std::string& name) const {
+    auto it = prefetcher_pipe_parameters_.find(name);
+    return it == prefetcher_pipe_parameters_.end() ? nullptr : &it->second;
+}
+
+std::vector<std::string> detail::ProgramImpl::get_registered_prefetcher_pipe_parameter_names() const {
+    std::vector<std::string> names;
+    names.reserve(prefetcher_pipe_parameters_.size());
+    for (const auto& [name, binding] : prefetcher_pipe_parameters_) {
+        names.push_back(name);
+    }
+    std::sort(names.begin(), names.end());
+    return names;
+}
+
+void detail::ProgramImpl::bind_prefetcher_pipe_parameter(
+    const std::string& name, experimental::PrefetcherPipeImpl& prefetcher_pipe) {
+    auto it = prefetcher_pipe_parameters_.find(name);
+    TT_FATAL(it != prefetcher_pipe_parameters_.end(), "Program declares no PrefetcherPipeParameter '{}'", name);
+    PrefetcherPipeParameterBinding& binding = it->second;
+
+    if (binding.bound_pipe == &prefetcher_pipe) {
+        return;  // sticky: same object again is a no-op
+    }
+    TT_FATAL(
+        binding.bound_pipe == nullptr,
+        "PrefetcherPipeParameter '{}' is already bound to a different PrefetcherPipe object; a Program binds a "
+        "parameter to one pipe for its lifetime (re-supplying the same pipe is a no-op)",
+        name);
+
+    TT_FATAL(
+        prefetcher_pipe.sender_core() == binding.sender,
+        "PrefetcherPipeParameter '{}' declares sender node ({},{}) but the supplied pipe's sender is ({},{})",
+        name,
+        binding.sender.x,
+        binding.sender.y,
+        prefetcher_pipe.sender_core().x,
+        prefetcher_pipe.sender_core().y);
+    TT_FATAL(
+        prefetcher_pipe.receiver_cores().num_cores() == binding.receivers.num_cores() &&
+            prefetcher_pipe.receiver_cores().intersection(binding.receivers).num_cores() ==
+                binding.receivers.num_cores(),
+        "PrefetcherPipeParameter '{}' declares receiver nodes {} but the supplied pipe's receivers are {}",
+        name,
+        binding.receivers.str(),
+        prefetcher_pipe.receiver_cores().str());
+    TT_FATAL(
+        prefetcher_pipe.ring_size() == binding.ring_size,
+        "PrefetcherPipeParameter '{}' declares ring_size {} but the supplied pipe has ring_size {}",
+        name,
+        binding.ring_size,
+        prefetcher_pipe.ring_size());
+
+    for (const auto& slot_cores : binding.slots) {
+        bind_prefetcher_pipe_to_slot(slot_cores.prefetcher_pipe_id, slot_cores.cores, prefetcher_pipe);
+    }
+    binding.bound_pipe = &prefetcher_pipe;
 }
 
 const experimental::CrossNodeDFB& detail::ProgramImpl::get_cross_node_dfb(uint8_t remote_dfb_id) const {

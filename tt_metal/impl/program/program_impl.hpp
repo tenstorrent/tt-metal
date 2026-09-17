@@ -330,12 +330,31 @@ public:
         uint8_t relay_dfb_id;
     };
 
-    // Non-owning PrefetcherPipe attachment record.
+    // Per-core PrefetcherPipe slot record. A slot is reserved (geometry only) before the program
+    // compiles and bound to a live pipe object afterwards: `pipe` / `config_page_addr` stay
+    // null / 0 until bind_prefetcher_pipe_to_slot runs for this core. Dispatch reads the record only when a
+    // program is enqueued, by which point every participant must be bound.
     struct PrefetcherPipeParticipant {
         uint8_t prefetcher_pipe_id;
         uint32_t config_page_addr;
         uint32_t entry_size;
         uint8_t relay_dfb_id;
+        // Live pipe this core's slot is bound to (non-owning; the handle must outlive the program).
+        experimental::PrefetcherPipeImpl* pipe = nullptr;
+    };
+
+    // Program-wide PrefetcherPipe slot (dense [0, num) id space, one per kernel accessor). Holds
+    // the geometry the program was built against so finalize / dispatch never need a live pipe.
+    struct PrefetcherPipeSlot {
+        CoreRangeSet cores;           // every core the slot is present on in this program
+        CoreRangeSet receiver_cores;  // subset of `cores` where this slot's kernel is a pipe receiver
+        uint32_t ring_size = 0;
+        uint32_t entry_size = 0;
+        // Receiver-side credit lanes P this program declares for the slot (AttachPrefetcherPipe
+        // num_pipe_consumer_threads / relay num_producers / Metal 2.0 receiver kernel num_threads).
+        // 1 on sender-only slots; the bound pipe's live value is what dispatch packs.
+        uint32_t num_credit_lanes = 1;
+        std::optional<uint32_t> relay_dfb_host_id;
     };
 
     // Read-only accessor for dispatch to iterate CrossNodeDFB participant records.
@@ -365,28 +384,76 @@ public:
         return per_core_prefetcher_pipes_;
     }
 
-    uint8_t num_prefetcher_pipe_slots() const { return next_prefetcher_pipe_slot_; }
+    uint8_t num_prefetcher_pipe_slots() const { return static_cast<uint8_t>(prefetcher_pipe_slots_.size()); }
+    const PrefetcherPipeSlot& get_prefetcher_pipe_slot(uint8_t prefetcher_pipe_id) const;
 
+    // Reserve a PrefetcherPipe slot from geometry alone (before compile). `receiver_cores` is the
+    // subset of `cores` on which this slot's kernel consumes; `num_credit_lanes` is the P those
+    // receivers run with (1 when `receiver_cores` is empty). Returns the dense slot id the kernel
+    // constructs its PrefetcherPipe with.
+    uint8_t reserve_prefetcher_pipe_slot(
+        const CoreRangeSet& cores,
+        const CoreRangeSet& receiver_cores,
+        uint32_t ring_size,
+        uint32_t entry_size,
+        uint32_t num_credit_lanes);
+
+    // Bind a live pipe to a reserved slot on `cores` (a subset of the slot's cores whose sender /
+    // receiver split matches the pipe's). Validates the pipe against the slot geometry, arms the
+    // pipe's credit lanes when receivers are bound, points the slot's relay DFB (if any) at the
+    // pipe ring, and fills the per-core records. Rebinding the same pipe is a no-op; a different
+    // pipe on an already-bound core is rejected. Legal after compile.
+    void bind_prefetcher_pipe_to_slot(
+        uint8_t prefetcher_pipe_id, const CoreRangeSet& cores, experimental::PrefetcherPipeImpl& prefetcher_pipe);
+
+    // Legacy one-shot: reserve + bind on `cores` from the pipe's own geometry.
     uint8_t add_prefetcher_pipe_attachment(
         experimental::PrefetcherPipeImpl& prefetcher_pipe,
         const CoreRangeSet& cores,
         uint32_t entry_size,
         uint32_t num_pipe_consumer_threads = 1);
 
+    // The single pipe bound to a slot by add_prefetcher_pipe_attachment (legacy path only; a
+    // Metal 2.0 slot may bind one pipe per node and has no single attachment).
     experimental::PrefetcherPipeImpl& get_prefetcher_pipe_attachment(uint8_t prefetcher_pipe_id);
     const experimental::PrefetcherPipeImpl& get_prefetcher_pipe_attachment(uint8_t prefetcher_pipe_id) const;
     std::optional<uint8_t> get_prefetcher_pipe_id_for_relay(uint32_t relay_dfb_host_id) const;
 
-    // Finalize-time check for `kernel_group`: on every receiver core of an attached
-    // PrefetcherPipe, some Quasar DM kernel must run exactly P = pipe active credit lanes
-    // threads (hart tid binds to lane tid on device, where the guard is a debug-only ASSERT).
+    // Finalize-time check for `kernel_group`: on every receiver core of a PrefetcherPipe slot,
+    // some Quasar DM kernel must run exactly P = the slot's credit lanes threads (hart tid binds
+    // to lane tid on device, where the guard is a debug-only ASSERT). Works from slot geometry, so
+    // it holds before any pipe is bound.
     void validate_prefetcher_pipe_consumer_threads(const KernelGroup& kernel_group) const;
 
-    // Mark a normal local DFB as the typed relay for a PrefetcherPipe this core participates in.
-    // The local DFB borrows the PrefetcherPipe data buffer; its device_slot is emitted
-    // only on receiver cores and consumed by PrefetcherPipe::bind_relay().
-    void register_prefetcher_pipe_relay_dfb(
-        const CoreRangeSet& receiver_cores, uint8_t prefetcher_pipe_id, uint32_t relay_dfb_host_id);
+    // Mark a borrowed-memory local DFB as the typed relay of a PrefetcherPipe slot on that slot's
+    // receiver cores. Validated against the slot geometry (before compile, before any pipe is
+    // bound); the relay's num_producers becomes the slot's credit lanes. The DFB is pointed at the
+    // ring when a pipe binds (immediately for pipes already bound). Its device_slot is emitted only
+    // on receiver cores and consumed by PrefetcherPipe::bind_relay().
+    void register_prefetcher_pipe_relay_dfb(uint8_t prefetcher_pipe_id, uint32_t relay_dfb_host_id);
+
+    // Metal 2.0: a PrefetcherPipeParameter's placement in this program. One parameter may feed
+    // several slots (one per accessor group that names it), on the cores where that group's
+    // kernel runs and the parameter's pipe is present.
+    struct PrefetcherPipeParameterBinding {
+        CoreCoord sender;
+        CoreRangeSet receivers;
+        uint32_t ring_size = 0;
+        struct SlotCores {
+            uint8_t prefetcher_pipe_id;
+            CoreRangeSet cores;
+        };
+        std::vector<SlotCores> slots;
+        // Pipe object bound by SetProgramRunArgs; sticky for the program's lifetime.
+        experimental::PrefetcherPipeImpl* bound_pipe = nullptr;
+    };
+    void register_prefetcher_pipe_parameter(const std::string& name, PrefetcherPipeParameterBinding binding);
+    const PrefetcherPipeParameterBinding* get_prefetcher_pipe_parameter(const std::string& name) const;
+    std::vector<std::string> get_registered_prefetcher_pipe_parameter_names() const;
+    // Bind `prefetcher_pipe` to every slot the parameter feeds. Validates the pipe's geometry
+    // against the parameter, then bind_prefetcher_pipe_to_slot per slot. Same pipe again: no-op;
+    // a different pipe: rejected.
+    void bind_prefetcher_pipe_parameter(const std::string& name, experimental::PrefetcherPipeImpl& prefetcher_pipe);
 
     // Allocates TCs and remapper configs, cannot be done on creation because we need to determine if a set of DFBs on a
     // core require remapper being enabled
@@ -597,10 +664,12 @@ private:
     uint8_t next_cross_node_dfb_slot_ = 0;
 
     std::unordered_map<CoreCoord, std::vector<PrefetcherPipeParticipant>> per_core_prefetcher_pipes_;
+    // Slot geometry, indexed by prefetcher_pipe_id.
+    std::vector<PrefetcherPipeSlot> prefetcher_pipe_slots_;
+    // Legacy AttachPrefetcherPipe: the one pipe bound to a slot (Metal 2.0 slots are absent here).
     std::unordered_map<uint8_t, experimental::PrefetcherPipeImpl*> prefetcher_pipe_attachments_;
-    // Optional typed relay: prefetcher_pipe_id → local DFB host id (from CreatePrefetcherPipeRelayDataflowBuffer).
-    std::unordered_map<uint8_t, uint32_t> prefetcher_pipe_relay_host_ids_;
-    uint8_t next_prefetcher_pipe_slot_ = 0;
+    // Metal 2.0: PrefetcherPipeParameter name -> placement + bound pipe.
+    std::unordered_map<std::string, PrefetcherPipeParameterBinding> prefetcher_pipe_parameters_;
     tt::tt_metal::experimental::dfb::detail::TileCounterAllocator tile_counter_allocator_;
     tt::tt_metal::experimental::dfb::detail::RemapperIndexAllocator remapper_index_allocator_;
     tt::tt_metal::experimental::dfb::detail::TxnIdAllocator txn_id_allocator_;

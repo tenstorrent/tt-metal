@@ -425,12 +425,21 @@ uint32_t CreatePrefetcherPipeRelayDataflowBuffer(
         config.num_entries,
         pipe.ring_size() / config.entry_size);
 
+    // The relay lives on receiver cores this program attached (the slot's receivers).
+    const auto& slot = program.impl().get_prefetcher_pipe_slot(prefetcher_pipe_id);
+    TT_FATAL(
+        slot.receiver_cores.intersection(receiver_cores).num_cores() == receiver_cores.num_cores(),
+        "CreatePrefetcherPipeRelayDataflowBuffer: relay cores {} must be receiver cores attached to slot {} ({})",
+        receiver_cores.str(),
+        prefetcher_pipe_id,
+        slot.receiver_cores.str());
+
     auto relay_config = config;
     relay_config.borrows_memory = true;
     relay_config.is_relay = true;
     const uint32_t relay_dfb_id = dfb::CreateDataflowBuffer(program, receiver_cores, relay_config);
     // register_prefetcher_pipe_relay_dfb programs active credit lanes from num_producers.
-    program.impl().register_prefetcher_pipe_relay_dfb(receiver_cores, prefetcher_pipe_id, relay_dfb_id);
+    program.impl().register_prefetcher_pipe_relay_dfb(prefetcher_pipe_id, relay_dfb_id);
     return relay_dfb_id;
 }
 

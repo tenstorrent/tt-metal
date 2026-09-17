@@ -591,6 +591,8 @@ struct Metal2BindingsSnapshot {
     std::map<std::string, SemaphoreBindingHandle> sem_accessors;
     std::vector<TaEntry> ta_accessors;
     std::vector<ScratchEntry> scratch_accessors;
+    // PrefetcherPipe accessor -> program slot id (sorted by name, matches genfiles.cpp).
+    std::map<std::string, uint8_t> pipe_accessors;
 
     // Distinguishes kernels that share source/CTAs/defines but bind different
     // IDs — without this they collide on cache key and the second silently
@@ -615,6 +617,9 @@ struct Metal2BindingsSnapshot {
         }
         for (const auto& sp : scratch_accessors) {
             s += ":scratch:" + sp.name + "=" + std::to_string(sp.size_bytes) + "," + std::to_string(sp.addr_crta_word);
+        }
+        for (const auto& [name, id] : pipe_accessors) {
+            s += ":pipe:" + name + "=" + std::to_string(id);
         }
         for (const auto& name : runtime_arg_names) {
             s += ":rta:" + name;
@@ -857,6 +862,8 @@ static Metal2BindingsSnapshot build_metal2_snapshot(const tt::tt_metal::Kernel& 
         [&s](const std::string& name, uint32_t size_bytes, uint32_t addr_crta_word) {
             s.scratch_accessors.push_back({name, size_bytes, addr_crta_word});
         });
+    kernel.process_prefetcher_pipe_binding_handles(
+        [&s](const std::string& name, uint8_t prefetcher_pipe_id) { s.pipe_accessors[name] = prefetcher_pipe_id; });
     return s;
 }
 
@@ -886,6 +893,9 @@ static void emit_metal2_namespaces(
     }
     if (!s.scratch_accessors.empty()) {
         f << "#include \"api/scratchpad.h\"\n";
+    }
+    if (!s.pipe_accessors.empty()) {
+        f << "#include \"api/dataflow/dfb_binding_token.h\"\n";
     }
 
     if (has_args) {
@@ -951,6 +961,13 @@ static void emit_metal2_namespaces(
               << "u};\n";
         }
         f << "}  // namespace scratch\n";
+    }
+    if (!s.pipe_accessors.empty()) {
+        f << "namespace pipe {\n";
+        for (const auto& [name, id] : s.pipe_accessors) {
+            f << "constexpr PrefetcherPipeBindingToken " << name << "{" << static_cast<uint32_t>(id) << "};\n";
+        }
+        f << "}  // namespace pipe\n";
     }
 
     // Vararg helpers — always emitted for Metal 2.0 kernels (mirrors
