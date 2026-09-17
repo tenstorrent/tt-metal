@@ -25,11 +25,19 @@ export PYTHONPATH="${TT_METAL_HOME}"
 MANIFEST_DIR="${TT_METAL_HOME}/models/demos/deepseek_v3_d_p/tt/runners/manifests"
 MGD_DIR="${TT_METAL_HOME}/models/demos/common/prefill/runners/topology_configuration/ci"
 
-# The drafter golden spans 55k, so the request is sized to it rather than to a perf depth: the drafter
-# cache is allocated at max_seq_len x num_users and every position outside the golden is unverifiable.
+# Two lengths, not one. The request runs to MAX_SEQ_LEN so the drafter is timed at the depth the
+# verifier legs are timed at, while PCC is gated on GOLDEN_LEN: the drafter golden spans 55k and every
+# position past it is unverifiable. Past the trace's own tokens the producer's pool repeats them, which
+# makes the tail a throughput workload and nothing else -- it must never be PCC'd.
 CHUNK_SIZE=5120
 GOLDEN_LEN=56320
-MAX_SEQ_LEN=56320
+MAX_SEQ_LEN=256000
+REAL_CHUNKS=$((MAX_SEQ_LEN / CHUNK_SIZE))
+# Start, the last chunk wholly inside the golden, midpoint, end. The window that the throughput probe
+# averages over runs forward from each of these, so the first three carry a rate and the last a latency.
+PROBE_CHUNKS="0,$((GOLDEN_LEN / CHUNK_SIZE - 1)),$((REAL_CHUNKS / 2 - 1)),$((REAL_CHUNKS - 1))"
+# One user, unlike the verifier leg's 86 on sc4: the drafter cache is allocated at max_seq_len x
+# num_users and slot 0 is the only slot with a golden behind it, so extra slots buy no coverage here.
 NUM_USERS_DEFAULT=1
 
 # D2D FIFO. DFlash packs [hidden || drafter-partial] into a 2*H-wide activation, so the pipeline handoff
@@ -125,8 +133,9 @@ MR_DIR=$(mktemp -d "${PREFILL_SHARED_DIR}/${MODEL}_dflash_XXXXXX")
 TABLE_PATH="${MR_DIR}/kv_chunk_table.pb"
 PCC_DIR="${MR_DIR}/pcc_verdict"
 RANKLOGS="${MR_DIR}/ranklogs"
+TIMING_DIR="${MR_DIR}/timing"
 PRODUCER_LOG="${MR_DIR}/producer.log"
-mkdir -p "${PCC_DIR}" "${RANKLOGS}"
+mkdir -p "${PCC_DIR}" "${RANKLOGS}" "${TIMING_DIR}"
 # ttrun writes generated/ttrun/<id>/ relative to its own CWD and hands the ranks that path as an
 # absolute one. Launched from TT_METAL_HOME, rank 0 lands rank_bindings.yaml on its own node, where
 # the launcher -- a different machine in CI -- cannot see it and calls Phase 1 silently failed.
@@ -169,6 +178,16 @@ cleanup() {
   echo "==================== drafter KV PCC ===================="
   grep -h -E "drafter KV PCC|min over all|kv_cache_pcc_complete" "${PRODUCER_LOG}" 2>/dev/null | tail -20 \
     || echo "no drafter PCC lines -- were the dflash_* configs in the table?"
+  # Timing is the other half of this leg and it is only in the rank logs, so summarize before MR_DIR
+  # goes away. Non-fatal: a perf summary that cannot be built must not turn a passing PCC run red.
+  if [ -d "${RANKLOGS}" ]; then
+    python3 "${TT_METAL_HOME}/models/demos/common/prefill/runners/ci/summarize_ci_run.py" \
+      --ranklogs "${RANKLOGS}" --timing-dir "${TIMING_DIR}" --real-chunks "${REAL_CHUNKS}" \
+      --chunk-size "${CHUNK_SIZE}" \
+      --probe-chunks "${PROBE_CHUNKS}" \
+      --summary-name "${MODEL}_dflash_${CONFIG}" \
+      || echo "summary generation failed (non-fatal)"
+  fi
   if [ -n "${PREFILL_KEEP_RUN_DIR:-}" ]; then
     echo "keeping run dir (PREFILL_KEEP_RUN_DIR set): ${MR_DIR}"
   else
@@ -198,6 +217,7 @@ python3 "${TTRUN_PY}" \
     export PREFILL_MAX_SEQ_LEN=${MAX_SEQ_LEN}; \
     export PREFILL_NUM_USERS=${PREFILL_NUM_USERS:-${NUM_USERS_DEFAULT}}; \
     export PREFILL_TRACE_DIR='${TRACE_DIR}'; \
+    export PREFILL_TIMING_DIR='${TIMING_DIR}'; \
     export PREFILL_DFLASH=1; \
     export DFLASH_HF_MODEL='${DFLASH_MODEL}'; \
     export PREFILL_DFLASH_GOLDEN_KV_DIR='${GOLDEN_KV_DIR}'; \
@@ -306,7 +326,8 @@ set +e
     export PREFILL_TRACE_DIR='${TRACE_DIR}'; \
     export PREFILL_DFLASH_GOLDEN_KV_DIR='${GOLDEN_KV_DIR}'; \
     export PREFILL_PRODUCER_CHECK_PCC=1; \
-    export PREFILL_PRODUCER_CHUNKS=$((GOLDEN_LEN / CHUNK_SIZE)); \
+    export PREFILL_PRODUCER_CHUNKS=${REAL_CHUNKS}; \
+    export PREFILL_PCC_GOLDEN_LEN=${GOLDEN_LEN}; \
     export PREFILL_PRODUCER_MAX_REQUESTS=1; \
     export PREFILL_PRODUCER_MULTI_TURN_PROB=0; \
     export PREFILL_STANDALONE_CHUNKED_PCC=${PCC_THRESHOLD}; \

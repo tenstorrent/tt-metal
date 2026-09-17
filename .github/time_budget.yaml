@@ -198,11 +198,11 @@ shield:
     # depths and its bringup is dominated by streaming a 1.5 TB TTNN cache off the models share on
     # four ranks at once -- 42.6 and 65.9 min to all ranks serving on runs 34648535999 and
     # 34659612357, and run 34831600450 was killed at 106 min under a 100 min cap.
-    # Kimi-K2.7 carries the DFlash drafter KV legs, 45 on bh_sc4 and 60 on bh_sc1 on top of the
+    # Kimi-K2.7 carries the DFlash drafter KV legs, 45 on bh_sc4 and 75 on bh_sc1 on top of the
     # verifier entries.
-    # bh_sc1: Kimi-K2.7 130 + GLM-5.2 80 + Kimi-K3 60.
+    # bh_sc1: Kimi-K2.7 145 + GLM-5.2 80 + Kimi-K3 60.
     bh_sc4: 345
-    bh_sc1: 270
+    bh_sc1: 285
 
 scaleout:
   merge_gate:
