@@ -97,8 +97,6 @@ public:
 private:
     struct BurstPoint {
         double tsc, refclk;  // means of the kept reads
-        uint32_t kept;
-        int64_t rtt_min_ticks;
     };
     void run();
     uint32_t read_cfr_lo();
@@ -119,10 +117,6 @@ private:
     HostLine line_;
     SteadySegment steady_;
     uint64_t bursts_ = 0, reads_ = 0, kept_ = 0;
-    // Each burst against the line the previous bursts predicted for it: the host placement's error 100 ms ahead.
-    uint64_t predicted_ = 0;
-    double pred_ss_ns_ = 0.0, pred_worst_ns_ = 0.0;
-    double rtt_lo_ns_ = 1e9, rtt_hi_ns_ = 0.0;  // the bursts' tightest round trips: one mode when the thread stays put
     std::atomic<bool> stop_{false};
     std::thread thread_;
 };
@@ -232,17 +226,12 @@ private:
     struct TileObs;
     struct TileUnknowns;
     // Every idle eth core reads every Tensix tile and every other idle eth tile, one core at a time so nothing else is
-    // on the NoC; each reading is one equation, tile minus source. `loops` gets each source's read of itself.
-    std::vector<TileObs> read_tiles(uint32_t di, std::vector<TileReading>& loops);
-    // The offsets solved together, the pusher the origin; logged with what the readings say about their own error.
+    // on the NoC; each reading is one equation, tile minus source.
+    std::vector<TileObs> read_tiles(uint32_t di);
+    // The offsets solved together, the pusher the origin; logged with the sources' agreement on them.
     std::vector<double> solve_tiles(uint32_t di);
     void log_tile_fit(
-        const Device& d,
-        const std::vector<TileObs>& obs,
-        const std::vector<TileReading>& loops,
-        const std::vector<double>& x,
-        const TileUnknowns& u) const;
-    void log_noc_split(const Device& d, const std::vector<TileObs>& obs) const;
+        const Device& d, const std::vector<TileObs>& obs, const std::vector<double>& x, const TileUnknowns& u) const;
     void stop_links(tt::Cluster& cluster);
 
     const ContextId context_id_;

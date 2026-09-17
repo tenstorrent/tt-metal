@@ -94,7 +94,6 @@ namespace eth_ptp = tt::tt_metal::eth_ptp;
 // intercept is a mean.
 namespace model {
 constexpr uint32_t kRingSamples = 128;  // raw samples kept, ~5 us apart: ~600 us deep
-constexpr uint32_t kRingStride = 1;
 constexpr uint32_t kConfirm = 4;           // consecutive off-line samples that make a step
 constexpr int64_t kOffTicks = 16;          // off the line by this much is off: a 1/8 step gets there in 2.6 us
 constexpr uint32_t kAcqTicks = 4096;       // refclk after a departure before the first lock test (82 us)
@@ -131,7 +130,6 @@ struct Model {
     uint32_t acq_count = 0;
     uint64_t r_lock = 0;  // where the segment's line begins: the oldest sample of the window that locked it
     uint64_t r_last_point = 0;
-    uint32_t stride = 0;
     uint32_t ring_n = 0;    // ring entries written; the newest is ring()[(ring_n - 1) & (kRingSamples - 1)]
     bool emit_raw = false;  // ring pushes also go to the host: from a departure to the new segment's first point
 };
@@ -255,10 +253,7 @@ __attribute__((noinline, cold)) void step(Model& m) {
 }
 
 inline __attribute__((always_inline)) void feed(Model& m, uint64_t r, uint64_t w) {
-    if (++m.stride == kRingStride) {
-        m.stride = 0;
-        ring_push(m, r, w);
-    }
+    ring_push(m, r, w);
     if (m.k8 == 0) {
         if (r - m.r_acq0 >= kAcqTicks && ++m.acq_count >= kAcqTestEvery) {
             m.acq_count = 0;
