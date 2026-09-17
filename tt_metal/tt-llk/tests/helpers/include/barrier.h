@@ -54,11 +54,35 @@ constexpr bool is_action_thread()
 // Quasar has 32 Tensix semaphores (tt_tensix_pkg.sv SEM_COUNT), and a TRISC reaches all of them through the
 // PC buffer (words 32 to 63), which is the path semaphore_post/get/read below take. The Tensix instructions
 // see them as four banks of eight, and t6_sem() can only build a bank-0 mask, so no LLK op can reach bank 1
-// even by accident: the pair below is out of the way by construction rather than by convention. Both indices
-// come out of reset at 0 with max 15, and the arrival drain leaves them at 0 after every rendezvous, so a
-// killed run cannot strand a count that the next one would misread as an arrival.
-constexpr std::uint8_t ARRIVE_SEM  = 8;
-constexpr std::uint8_t RELEASE_SEM = 9;
+// even by accident: the indices below are out of the way by construction rather than by convention. They come
+// out of reset at 0 with max 15, and the arrival drain leaves the arrival count at 0 after every rendezvous, so
+// a killed run cannot strand a count that the next one would misread as an arrival.
+//
+// Every peer has its own release semaphore. With one shared release count a peer that had already reached the
+// next rendezvous (the idle sfpu stub, with nothing between one zone boundary and the next) could take the
+// token meant for a peer whose poll was still held back by its Tensix queue, and that peer then waited for
+// good; the emulator hit it deterministically on the MxFp8R eltwise binary kernel once the zone entry grew by
+// one L1 read.
+constexpr std::uint8_t ARRIVE_SEM       = 8;
+constexpr std::uint8_t RELEASE_SEM_BASE = 9; // unpack 9, math 10, sfpu 11
+
+constexpr std::uint8_t release_sem_of(std::uint32_t peer)
+{
+    return static_cast<std::uint8_t>(RELEASE_SEM_BASE + peer);
+}
+
+constexpr std::uint8_t my_release_sem()
+{
+#if defined(LLK_TRISC_UNPACK)
+    return release_sem_of(0);
+#elif defined(LLK_TRISC_MATH)
+    return release_sem_of(1);
+#elif defined(LLK_TRISC_ISOLATE_SFPU)
+    return release_sem_of(2);
+#else
+    return release_sem_of(0); // the action thread never waits on one
+#endif
+}
 
 #else
 
@@ -66,6 +90,19 @@ constexpr std::uint8_t RELEASE_SEM = 9;
 // the arrival drain would eat the token of any driver that also posted one.
 constexpr std::uint8_t ARRIVE_SEM  = ckernel::semaphore::PACK_DONE;
 constexpr std::uint8_t RELEASE_SEM = ckernel::semaphore::UNPACK_OPERAND_SYNC;
+
+// Blackhole has no third free semaphore, so its two peers share the release count; both are busy threads on
+// every run type, so neither reaches the next rendezvous before the other has consumed its token.
+constexpr std::uint8_t release_sem_of(std::uint32_t)
+{
+    return RELEASE_SEM;
+}
+
+constexpr std::uint8_t my_release_sem()
+{
+    return RELEASE_SEM;
+}
+
 #pragma GCC poison PACK_DONE UNPACK_OPERAND_SYNC
 
 #endif
@@ -92,16 +129,16 @@ __attribute__((always_inline)) inline void rendezvous(bool is_action_thread, Act
 
         for (std::uint32_t i = 0; i < NUM_THREADS - 1; ++i)
         {
-            ckernel::semaphore_post(RELEASE_SEM);
+            ckernel::semaphore_post(release_sem_of(i));
         }
     }
     else
     {
         ckernel::semaphore_post(ARRIVE_SEM);
-        while (ckernel::semaphore_read(RELEASE_SEM) == 0)
+        while (ckernel::semaphore_read(my_release_sem()) == 0)
         {
         }
-        ckernel::semaphore_get(RELEASE_SEM);
+        ckernel::semaphore_get(my_release_sem());
     }
 
     ckernel::fence_compiler();
