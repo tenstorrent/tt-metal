@@ -19,7 +19,7 @@ constexpr uint32_t record_count(uint32_t sp_size) { return affine_transform(sp_s
 }  // namespace selection
 
 struct Topology {
-    uint32_t boundary;
+    uint32_t first_rank;
     uint32_t head_rows;
     uint32_t local_split;
     uint32_t rank;
@@ -44,7 +44,7 @@ inline Topology load(const volatile uint32_t* words) {
     return {words[0], words[1], words[2], words[3], words[4], words[5], words[6], words[7]};
 }
 inline void store(volatile uint32_t* words, const Topology& topology) {
-    words[0] = topology.boundary;
+    words[0] = topology.first_rank;
     words[1] = topology.head_rows;
     words[2] = topology.local_split;
     words[3] = topology.rank;
@@ -69,14 +69,14 @@ inline Topology receive(Buffer& buffer) {
     return result;
 }
 inline Topology derive(uint32_t actual_start, uint32_t rank, uint32_t partitions, uint32_t rows) {
-    const uint32_t boundary = (actual_start / rows) % partitions;
+    const uint32_t first_rank = (actual_start / rows) % partitions;
     const bool split = partitions > 1 && actual_start % rows != 0;
     return {
-        boundary,
+        first_rank,
         rows - actual_start % rows,
-        uint32_t(split && rank == boundary),
+        uint32_t(split && rank == first_rank),
         rank,
-        split ? boundary : (boundary + partitions - 1) % partitions,
+        split ? first_rank : (first_rank + partitions - 1) % partitions,
         uint32_t(split),
         rows,
         0};

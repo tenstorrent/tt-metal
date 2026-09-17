@@ -3,6 +3,6 @@
 
 #pragma once
 #include <nanobind/nanobind.h>
-namespace ttnn::operations::experimental::kda::chronological_topology::detail {
-void bind_chronological_topology(nanobind::module_&);
+namespace ttnn::operations::experimental::kda::chronological_selections::detail {
+void bind_chronological_selections(nanobind::module_&);
 }

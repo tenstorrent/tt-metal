@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/cpp/ttnn/operations/experimental/kda/chronological_topology/chronology.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/kda/chronological_selections/chronology.hpp"
 //
 // Phase B (scan) compute kernel: the sequential-over-chunk recurrence for one
 // head.

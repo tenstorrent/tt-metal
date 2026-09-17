@@ -6,11 +6,11 @@ from dataclasses import dataclass
 
 import ttnn
 
-_layout = ttnn._ttnn.operations.experimental.kda._chronology_layout
+_layout = ttnn._ttnn.operations.experimental.kda._selection_layout
 
 
 @dataclass(frozen=True)
-class DeviceChronology:
+class ChronologicalSelections:
     """Select convolution history, affine transforms, and recurrent states.
 
     The private UINT32 row-major device table has shape (7 + 2 * SP size, 8)
@@ -21,8 +21,8 @@ class DeviceChronology:
 
     Records describe outgoing/predecessor/final history, local entry/final
     recurrent state, then one affine-transform bounds pair per SP step.
-    Native ``chronological_topology`` produces the table; its shared layout
-    definitions are exposed privately through ``_chronology_layout``.
+    Native ``chronological_selections`` produces the table; its shared layout
+    definitions are exposed privately through ``_selection_layout``.
     """
 
     _selection_records: ttnn.Tensor

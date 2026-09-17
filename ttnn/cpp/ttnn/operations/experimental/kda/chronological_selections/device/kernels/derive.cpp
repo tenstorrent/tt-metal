@@ -7,7 +7,7 @@
 #include "api/core_local_mem.h"
 #include "api/scratchpad.h"
 #include "api/tensor/noc_traits.h"
-#include "ttnn/cpp/ttnn/operations/experimental/kda/chronological_topology/chronology.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/kda/chronological_selections/chronology.hpp"
 using namespace kda_chronology;
 template <uint32_t sp_rank, uint32_t sp_size, uint32_t local_rows, uint32_t BH, uint32_t K, uint32_t V>
 TT_KERNEL void derive() {
@@ -36,11 +36,11 @@ TT_KERNEL void derive() {
         } else {
             uint32_t selected;
             if (row < selection::final_state) {
-                selected = (t.rank + sp_size - t.boundary) % sp_size;
+                selected = (t.rank + sp_size - t.first_rank) % sp_size;
             } else if (row < selection::affine_transforms) {
                 selected = t.split ? t.final_owner : sp_size;
             } else {
-                selected = (t.boundary + (row - selection::affine_transforms) / 2) % sp_size;
+                selected = (t.first_rank + (row - selection::affine_transforms) / 2) % sp_size;
             }
             const bool end = (row - selection::local_entry_state) % 2 != 0;
             words[0] = selected + uint32_t(end);
