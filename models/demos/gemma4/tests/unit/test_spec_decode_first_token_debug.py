@@ -474,6 +474,10 @@ def _debug_legacy_reseed_loop(spec, tokenizer, tp, anchor_token, anchor_pos, num
 @pytest.mark.parametrize("mesh_device", [_mesh_device_param()], indirect=True)
 def test_spec_first_token_debug(mesh_device, reset_seeds):
     """Compare TARGET vs MTP/assistant over multiple greedy spec-decode iterations."""
+    from models.demos.gemma4.tests.test_factory import skip_if_config_only_checkpoint
+
+    skip_if_config_only_checkpoint()
+
     from models.demos.gemma4.tt.common import create_assistant_model
     from models.demos.gemma4.tt.generator import Gemma4Generator
     from models.demos.gemma4.tt.spec_decode import SpeculativeDecoder

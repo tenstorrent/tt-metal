@@ -21,6 +21,7 @@ import torch
 import ttnn
 from models.demos.gemma4.config import MeshConfig, ModeConfig
 from models.demos.gemma4.tt.attention import Gemma4Attention, Gemma4AttentionConfig
+from models.demos.gemma4.tt.attention.prefill import unpack_sliding_tail
 from models.demos.gemma4.tt.ccl import CCLManager
 
 from ...tests.test_factory import (
@@ -693,7 +694,10 @@ def test_sliding_tail_survives_cross_call_chunking(mesh_device, reset_seeds, req
     # The tail must be alive after the first call.
     tail = (getattr(tt_attn, "_sliding_tails_by_key", None) or {}).get(None)
     assert tail is not None, "Sliding tail was not persisted after chunk 1"
-    assert all(t.is_allocated() for t in tail), "Sliding tail tensor(s) are not allocated — the clone fix is missing"
+    k_tail, v_tail, _ = unpack_sliding_tail(tail)
+    assert (
+        k_tail.is_allocated() and v_tail.is_allocated()
+    ), "Sliding tail tensor(s) are not allocated — the clone fix is missing"
     # endregion
 
     # region Chunk 2 (chunk_start_idx=chunk_size, consumes persisted tail)
@@ -744,7 +748,8 @@ def test_sliding_tail_survives_cross_call_chunking(mesh_device, reset_seeds, req
 
     tail_after_decode = (getattr(tt_attn, "_sliding_tails_by_key", None) or {}).get(None)
     assert tail_after_decode is not None, "Tail must survive decode so async APC continuations keep sliding_tail_in"
-    assert all(t.is_allocated() for t in tail_after_decode), "Tail deallocated during decode"
+    k_tail, v_tail, _ = unpack_sliding_tail(tail_after_decode)
+    assert k_tail.is_allocated() and v_tail.is_allocated(), "Tail deallocated during decode"
 
     # A fresh prefill at chunk_start==0 must release the prior request's tail.
     x_new = torch.randn(1, 1, chunk_size, config.hidden_size, dtype=torch.bfloat16)
@@ -763,7 +768,8 @@ def test_sliding_tail_survives_cross_call_chunking(mesh_device, reset_seeds, req
     out_new.deallocate(True)
     tail_after_reset = (getattr(tt_attn, "_sliding_tails_by_key", None) or {}).get(None)
     assert tail_after_reset is not None, "New prefill at start=0 should stash a fresh tail"
-    assert all(t.is_allocated() for t in tail_after_reset)
+    k_tail, v_tail, _ = unpack_sliding_tail(tail_after_reset)
+    assert k_tail.is_allocated() and v_tail.is_allocated()
     # endregion
 
 
@@ -838,8 +844,9 @@ def test_short_first_chunk_stashes_padded_sliding_tail(mesh_device, reset_seeds,
     out1.deallocate(True)
     tail = (getattr(tt_attn, "_sliding_tails_by_key", None) or {}).get(None)
     assert tail is not None, "Short first chunk must stash a padded sliding tail"
-    assert all(t.is_allocated() for t in tail)
-    assert int(tail[0].shape[-2]) == hist, f"Expected padded hist={hist}, got {tail[0].shape[-2]}"
+    k_tail, v_tail, _ = unpack_sliding_tail(tail)
+    assert k_tail.is_allocated() and v_tail.is_allocated()
+    assert int(k_tail.shape[-2]) == hist, f"Expected padded hist={hist}, got {k_tail.shape[-2]}"
 
     # Continuation at chunk_start=384 with chunk_page_table — needs the tail.
     x2 = torch.randn(1, 1, cont_len, config.hidden_size, dtype=torch.bfloat16)

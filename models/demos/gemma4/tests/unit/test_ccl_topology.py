@@ -57,6 +57,8 @@ def test_ccl_topology_linear_on_wh_8_device_mesh(monkeypatch):
     """WH T3K 1x8: keep Linear — Ring regresses 26B-A4B full-model PCC < 0.76."""
     monkeypatch.delenv("GEMMA4_CCL_TOPOLOGY", raising=False)
     monkeypatch.setattr("models.demos.gemma4.tt.ccl.is_blackhole", lambda: False)
+    # CI sets HF_MODEL to gemma-4-31B-it (config-only); dense 31B on WH n>=8 uses Ring.
+    monkeypatch.setenv("HF_MODEL", "models/demos/gemma4/configs/gemma-4-26B-A4B-it")
     assert default_ccl_topology(_FakeMesh(8)) == ttnn.Topology.Linear
 
 

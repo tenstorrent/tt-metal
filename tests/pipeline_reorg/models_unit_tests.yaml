@@ -495,6 +495,7 @@
       --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_tracy_csv.py \
       --ignore=models/demos/gemma4/tests/unit/test_batched_prefill_perf.py \
       --ignore=models/demos/gemma4/tests/unit/test_packed_verify.py \
+      --ignore=models/demos/gemma4/tests/unit/test_spec_decode_first_token_debug.py \
       --deselect models/demos/gemma4/tests/unit/test_model.py::test_full_model \
       -k "not test_bridge_ and not test_full_model_parity and not test_attention_decode_paged_batched and not test_sampling_" \
       models/demos/gemma4/tests/unit/
@@ -523,6 +524,7 @@
       --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_tracy_csv.py \
       --ignore=models/demos/gemma4/tests/unit/test_batched_prefill_perf.py \
       --ignore=models/demos/gemma4/tests/unit/test_packed_verify.py \
+      --ignore=models/demos/gemma4/tests/unit/test_spec_decode_first_token_debug.py \
       --deselect models/demos/gemma4/tests/unit/test_model.py::test_full_model \
       -k "not test_bridge_ and not test_full_model_parity and not test_attention_decode_paged_batched and not test_sampling_" \
       models/demos/gemma4/tests/unit/
@@ -555,6 +557,7 @@
       --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_tracy_csv.py \
       --ignore=models/demos/gemma4/tests/unit/test_batched_prefill_perf.py \
       --ignore=models/demos/gemma4/tests/unit/test_packed_verify.py \
+      --ignore=models/demos/gemma4/tests/unit/test_spec_decode_first_token_debug.py \
       --deselect models/demos/gemma4/tests/unit/test_model.py::test_full_model \
       -k "not test_bridge_ and not test_full_model_parity and not test_attention_decode_paged_batched and not test_sampling_" \
       models/demos/gemma4/tests/unit/
@@ -591,6 +594,7 @@
       --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_tracy_csv.py \
       --ignore=models/demos/gemma4/tests/unit/test_batched_prefill_perf.py \
       --ignore=models/demos/gemma4/tests/unit/test_packed_verify.py \
+      --ignore=models/demos/gemma4/tests/unit/test_spec_decode_first_token_debug.py \
       --deselect models/demos/gemma4/tests/unit/test_model.py::test_full_model \
       -k "not test_bridge_ and not test_full_model_parity and not test_attention_decode_paged_batched and not test_sampling_" \
       models/demos/gemma4/tests/unit/
@@ -625,6 +629,7 @@
       --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_tracy_csv.py \
       --ignore=models/demos/gemma4/tests/unit/test_batched_prefill_perf.py \
       --ignore=models/demos/gemma4/tests/unit/test_packed_verify.py \
+      --ignore=models/demos/gemma4/tests/unit/test_spec_decode_first_token_debug.py \
       --deselect models/demos/gemma4/tests/unit/test_model.py::test_full_model \
       -k "not test_bridge_ and not test_full_model_parity and not test_attention_decode_paged_batched and not test_sampling_" \
       models/demos/gemma4/tests/unit/
