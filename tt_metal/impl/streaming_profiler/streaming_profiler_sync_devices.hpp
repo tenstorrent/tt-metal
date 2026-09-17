@@ -53,8 +53,8 @@ KernelHandle create_pusher_kernel(Program& program, const EthL1& l1, const CoreC
 
 // The device-to-device sync's use of the devices. At boot it measures each chip's tile clock offsets before any
 // relay or pusher is on the NoC and plans the eth links; once the receiver drains the sockets it launches the link
-// ends (resident kernels, or the fabric routers' roles) and the host probe; at quiesce it stops them and re-reads
-// the tiles. The stamps and clock samples travel the D2H path like every record and are consumed by D2dSyncConsumer.
+// ends (resident kernels, or the fabric routers' roles) and the host probe; at quiesce it stops them. The stamps and
+// clock samples travel the D2H path like every record and are consumed by D2dSyncConsumer.
 class SyncDevices {
 public:
     struct Device {
@@ -77,8 +77,6 @@ public:
     // Reads every tile from every idle eth core and solves the offsets into cap.tile_offset. Nothing else of ours
     // may be on the NoC.
     void measure_tiles(uint32_t di, CaptureContext::Device& cap);
-    // The same reading once the capture's kernels have stopped, against the table the capture ran with.
-    void recheck_tiles(uint32_t di);
     // Every eligible eth link between the devices, all of a pair's links.
     void plan_links();
     // The host probe on the root chip: the first device with an idle eth core.
@@ -94,8 +92,6 @@ public:
 private:
     struct DeviceState {
         Device d;
-        std::vector<double> tile_solution;  // pusher wall minus tile wall, Tensix tiles first
-        std::chrono::steady_clock::time_point tile_solved_at{};
     };
     struct ResidentSync {
         std::unique_ptr<Program> ps, pr;
@@ -105,7 +101,7 @@ private:
         uint32_t chip_a = 0, chip_b = 0;
         uint32_t stop_a = 0, stop_b = 0;
     };
-    std::vector<double> solve_tiles(uint32_t di, const char* when);
+    std::vector<double> solve_tiles(uint32_t di);
     void stop_links(tt::Cluster& cluster);
 
     const ContextId context_id_;

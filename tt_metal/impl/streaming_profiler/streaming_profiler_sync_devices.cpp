@@ -147,7 +147,7 @@ void SyncDevices::stop(tt::Cluster& cluster) {
 // on the torus a read's request and response together cover whole rings at a fixed latency per hop
 // (RoutingPaths.md, README.md of the NoC ISA docs), so a round trip minus its rings is the two ends' own handling,
 // and the register sample lies somewhere inside the far end's share of it.
-std::vector<double> SyncDevices::solve_tiles(uint32_t di, const char* when) {
+std::vector<double> SyncDevices::solve_tiles(uint32_t di) {
     auto& cluster = MetalContext::instance(context_id_).get_cluster();
     const Device& d = devices_[di].d;
     const uint32_t nt = static_cast<uint32_t>(d.tensix.size());
@@ -395,14 +395,12 @@ std::vector<double> SyncDevices::solve_tiles(uint32_t di, const char* when) {
     }
     log_info(
         tt::LogMetal,
-        "[streaming profiler] Device {} at {}: {} tiles' wall clocks span {:.0f} ticks ({:.1f} ns), solved from {} "
-        "idle "
-        "eth sources over {} reads; the sources disagree by {:.2f} ticks rms, {:.1f} worst ({:.2f} ns rms); one-ring "
+        "[streaming profiler] Device {}: {} tiles' wall clocks span {:.0f} ticks ({:.1f} ns), solved from {} idle eth "
+        "sources over {} reads; the sources disagree by {:.2f} ticks rms, {:.1f} worst ({:.2f} ns rms); one-ring "
         "reads sit {:+.1f} (column) {:+.1f} (row) ticks off two-ring ones; a placement is off by at most {:.1f} ticks "
         "({:.1f} ns) from the reads' own ends (rings: x {:.0f}, y {:.0f}, turns {:.0f} ticks; ends model residual "
         "{:.1f} ticks rms)",
         d.chip_id,
-        when,
         nt,
         *xhi - *xlo,
         (*xhi - *xlo) * ns_per_tick,
@@ -423,55 +421,9 @@ std::vector<double> SyncDevices::solve_tiles(uint32_t di, const char* when) {
 }
 
 void SyncDevices::measure_tiles(uint32_t di, CaptureContext::Device& cap) {
-    DeviceState& st = devices_[di];
-    const std::vector<double> x = solve_tiles(di, "arm");
-    std::vector<int64_t>& off = cap.tile_offset;
-    for (size_t i = 0; i < st.d.tensix.size(); i++) {
-        off[i] = std::llround(x[i]);
-    }
-    st.tile_solution = x;
-    st.tile_solved_at = std::chrono::steady_clock::now();
-}
-
-// The same measurement once the capture's kernels are all stopped and the NoC is quiet again, against the table the
-// capture ran with. Every tile's clock ticks on the one AICLK, so the skew between tiles must not have moved through
-// the workload's clock steps, and their offset to the eth clock must not have moved either; either would mean the
-// table placed the records after the move wrong.
-void SyncDevices::recheck_tiles(uint32_t di) {
-    const DeviceState& st = devices_[di];
-    const Device& d = st.d;
-    const size_t nt = d.tensix.size();
-    if (st.tile_solution.size() < nt) {
-        return;
-    }
-    const std::vector<double> x = solve_tiles(di, "capture end");
-    double common = 0.0;
-    for (size_t i = 0; i < nt; i++) {
-        common += x[i] - st.tile_solution[i];
-    }
-    common /= static_cast<double>(nt);
-    double ss = 0.0, worst = 0.0;
-    for (size_t i = 0; i < nt; i++) {
-        const double d = (x[i] - st.tile_solution[i]) - common;
-        ss += d * d;
-        worst = std::max(worst, std::fabs(d));
-    }
-    const double elapsed_s =
-        std::chrono::duration<double>(std::chrono::steady_clock::now() - st.tile_solved_at).count();
-    const bool moved = worst > 1.0 || std::fabs(common) > 1.0;
-    const std::string line = fmt::format(
-        "[streaming profiler] Device {}: tile clocks re-read {:.1f} s after arm: tile-to-tile skew moved {:.2f} ticks "
-        "rms, {:.1f} worst; the eth-minus-tensix offset moved {:+.0f} ticks in common (0 while every tile's clock "
-        "runs with the eth's)",
-        d.chip_id,
-        elapsed_s,
-        std::sqrt(ss / static_cast<double>(nt)),
-        worst,
-        common);
-    if (moved) {
-        log_warning(tt::LogMetal, "{}: the table the capture ran with did not hold", line);
-    } else {
-        log_info(tt::LogMetal, "{}", line);
+    const std::vector<double> x = solve_tiles(di);
+    for (size_t i = 0; i < devices_[di].d.tensix.size(); i++) {
+        cap.tile_offset[i] = std::llround(x[i]);
     }
 }
 

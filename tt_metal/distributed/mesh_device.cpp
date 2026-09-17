@@ -1026,6 +1026,11 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
             distributed_context_->barrier();
         }
 
+        // TODO #20966: Remove these calls
+        for (auto* device : view_->get_devices()) {
+            dynamic_cast<Device*>(device)->set_mesh_device(parent_mesh_);
+        }
+
         // Only one mesh device can use a CQ on a physical device at a time, or else teardown or some other operation
         // will hang. Validate this.
         for (uint32_t cq_id = 0; cq_id < mesh_command_queues_.size(); cq_id++) {
@@ -1074,14 +1079,6 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
         realtime_profiler_.reset();
     }
     streaming_profiler_.reset();
-
-    // TODO #20966: Remove these calls. Kept below the profilers: their teardown launches programs on the physical
-    // devices, and a launch validates against the device's mesh, which must still be this one rather than the parent.
-    if (is_initialized()) {
-        for (auto* device : view_->get_devices()) {
-            dynamic_cast<Device*>(device)->set_mesh_device(parent_mesh_);
-        }
-    }
 
     // Drain any in-flight Tensor prefetcher kernel and release its state before the
     // rest of the mesh tears down. If the caller forgot to call StopTensorPrefetcher

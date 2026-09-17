@@ -794,7 +794,6 @@ void Devices::quiesce(const RelayStateFn& on_state) {
         }
         if (ctx.pusher) {
             stop_drainer(di, ctx, *ctx.pusher, "idle-eth pusher", on_state);
-            sync_->recheck_tiles(di);
         }
         // Nothing drains the rings any more: a producer blocked on a full one is released and overwrites from here on.
         set_producers_armed(ctx, false);
