@@ -5,7 +5,8 @@
 // Acceptance test for the streaming profiler's 1588 link layer (tools/profiler/sync/eth_ptp_link.hpp on
 // hw/inc/internal/ethernet/eth_ptp.hpp) on real links, with no profiler pipeline: the two product link ends run as
 // resident kernels on every ethernet link between local chips and record their stamp averages into an L1 table the
-// host reads back. Per link: rounds issued, complete at both ends and inside the path band; each end's stamp drops;
+// host reads back; the kernels are the product's own resident ends. Per link: rounds issued, complete at both ends
+// and inside the path band; each end's stamp drops;
 // one way, turnaround and round trip inside the stamps; the offset-and-rate fit with its residual; the stamps' own
 // noise. Per chip pair with several links: the fits' disagreement, which is the difference of the links' path
 // asymmetries, the one term the sync cannot see from a single link.
@@ -248,12 +249,12 @@ int main(int argc, char** argv) {
         L.ps = std::make_unique<Program>(CreateProgram());
         const auto kid_r = CreateKernel(
             *L.pr,
-            "tt_metal/programming_examples/profiler/test_eth_ptp_link/kernels/eth_ptp_link_receiver.cpp",
+            "tt_metal/tools/profiler/sync/eth_ptp_link_receiver.cpp",
             L.eth_b,
             EthernetConfig{.noc = NOC::RISCV_0_default, .defines = defines});
         const auto kid_s = CreateKernel(
             *L.ps,
-            "tt_metal/programming_examples/profiler/test_eth_ptp_link/kernels/eth_ptp_link_sender.cpp",
+            "tt_metal/tools/profiler/sync/eth_ptp_link_sender.cpp",
             L.eth_a,
             EthernetConfig{.noc = NOC::RISCV_0_default, .defines = defines});
         SetRuntimeArgs(*L.pr, kid_r, L.eth_b, {link_l1});

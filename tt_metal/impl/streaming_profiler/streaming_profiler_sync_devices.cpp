@@ -34,10 +34,6 @@
 namespace tt::tt_metal::streaming_profiler {
 
 namespace {
-constexpr uint32_t kLinkSyncChannels = 1;
-constexpr uint32_t kLinkSyncSamples = 240;
-constexpr uint32_t kLinkSyncSampleSize = 16;
-
 // One idle-eth core's reading of one tile: the core's wall tick minus the tile's, each NoC's read round trip, and
 // the NoC 0 minus NoC 1 reading in half ticks.
 struct TileReading {
@@ -512,10 +508,10 @@ void SyncDevices::plan_links() {
 // socket_reserve_pages, and the armed sync kernels wedged an eth core (a board reset).
 void SyncDevices::launch_links() {
     auto& cluster = MetalContext::instance(context_id_).get_cluster();
-    // The stop/done words sit at the top of the active eth core's UNRESERVED region, clear of the sync kernel's eth
-    // channels (which start at its base) and its profiler ring, past the frame slots of a router-hosted end, which
-    // keeps its diagnostics at the same place (link_sync::kL1Bytes, kCtlOffset).
-    const uint32_t stop_addr = aeth_unreserved_ + aeth_unres_size_ - link_sync::kL1Bytes + link_sync::kCtlOffset;
+    // The link's L1 is the top of the active eth core's UNRESERVED region, the same place whether a resident kernel
+    // or a router runs the end (link_sync::kL1Bytes; the routers' config leaves it clear).
+    const uint32_t link_l1 = aeth_unreserved_ + aeth_unres_size_ - link_sync::kL1Bytes;
+    const uint32_t stop_addr = link_l1 + link_sync::kCtlOffset;
     for (const CaptureContext::Link& L : links_) {
         IDevice* dev_a = devices_[L.dev_a].d.device;
         IDevice* dev_b = devices_[L.dev_b].d.device;
@@ -551,23 +547,20 @@ void SyncDevices::launch_links() {
         const uint32_t zero[2] = {0, 0};  // stop + done, clear before launch
         cluster.write_core(zero, sizeof(zero), tt_cxy_pair(L.chip_a, virt_a), stop_addr);
         cluster.write_core(zero, sizeof(zero), tt_cxy_pair(L.chip_b, virt_b), stop_addr);
-        const std::vector<uint32_t> ct = {kLinkSyncChannels, kLinkSyncSamples, kLinkSyncSampleSize};
         auto ps = std::make_unique<Program>(CreateProgram());
         auto pr = std::make_unique<Program>(CreateProgram());
         const auto kid_s = CreateKernel(
             *ps,
-            "tt_metal/tools/profiler/sync/sync_device_kernel_sender.cpp",
+            "tt_metal/tools/profiler/sync/eth_ptp_link_sender.cpp",
             L.eth_a,
-            EthernetConfig{.noc = NOC::RISCV_0_default, .compile_args = ct});
+            EthernetConfig{.noc = NOC::RISCV_0_default});
         const auto kid_r = CreateKernel(
             *pr,
-            "tt_metal/tools/profiler/sync/sync_device_kernel_receiver.cpp",
+            "tt_metal/tools/profiler/sync/eth_ptp_link_receiver.cpp",
             L.eth_b,
-            EthernetConfig{.noc = NOC::RISCV_0_default, .compile_args = ct});
-        // The stop word and pace ride as RUNTIME args (positional compile args past index 2 do not reach an eth
-        // kernel here). Sender: {stop_addr, pace}; receiver: {stop_addr}.
-        SetRuntimeArgs(*ps, kid_s, L.eth_a, {stop_addr, link_sync::kPaceTicks});
-        SetRuntimeArgs(*pr, kid_r, L.eth_b, {stop_addr});
+            EthernetConfig{.noc = NOC::RISCV_0_default});
+        SetRuntimeArgs(*ps, kid_s, L.eth_a, {link_l1, link_sync::kPaceTicks});
+        SetRuntimeArgs(*pr, kid_r, L.eth_b, {link_l1});
         try {
             detail::CompileProgram(dev_a, *ps, /*force_slow_dispatch=*/true);
             detail::CompileProgram(dev_b, *pr, /*force_slow_dispatch=*/true);
