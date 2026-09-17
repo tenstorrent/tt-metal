@@ -131,6 +131,14 @@ FORCE_INLINE bool run_sender_channel_step_speedy(
 
             const size_t payload_size_bytes = pkt_header->get_payload_size_including_header();
 
+            // The far end is not necessarily a speedy receiver: channel trimming can pair this
+            // sender with a normal receiver (an inter-mesh terminal, or a forwarding router), and
+            // that receiver returns credits to the channel named in the header. Workers never
+            // write this byte, so it holds whatever the header pool last held.
+            if constexpr (!skip_src_ch_id_update) {
+                pkt_header->src_ch_id = sender_channel_index;
+            }
+
             bool busy = internal_::eth_txq_is_busy(sender_txq_id);
 
             const auto dest_addr = outbound_to_receiver_channel_pointers.remote_receiver_channel_address_ptr;
