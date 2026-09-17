@@ -6,6 +6,7 @@
 
 #include <tt_stl/assert.hpp>
 #include <umd/device/cluster_descriptor.hpp>
+#include <umd/device/types/core_coordinates.hpp>
 
 #include "impl/context/metal_context.hpp"
 #include "impl/device/device_manager.hpp"
@@ -100,6 +101,14 @@ std::vector<DramBankInfo> get_dram_bank_table(std::uint32_t device_id) {
         });
     }
     return out;
+}
+
+std::pair<std::uint32_t, std::uint32_t> translated_to_logical(
+    std::uint32_t device_id, std::uint32_t x, std::uint32_t y) {
+    const auto& soc_desc = MetalContext::instance().get_cluster().get_soc_desc(device_id);
+    tt::umd::CoreCoord coord{{x, y}, tt::CoreType::TENSIX, tt::CoordSystem::TRANSLATED};
+    auto logical = soc_desc.translate_coord_to(coord, tt::CoordSystem::LOGICAL);
+    return {logical.x, logical.y};
 }
 
 }  // namespace tt::tt_metal::internal

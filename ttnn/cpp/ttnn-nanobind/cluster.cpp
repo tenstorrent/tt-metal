@@ -11,6 +11,7 @@
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/string.h>
+#include <nanobind/stl/tuple.h>
 #include <tt-metalium/tt_metal.hpp>
 #include <internal/cluster_noc_helpers.hpp>
 
@@ -229,6 +230,27 @@ void bind_ttnn_cluster(nb::module_& mod) {
             Notes:
                 - The device must be opened first (e.g. via
                   ``ttnn.open_mesh_device``); otherwise this throws.
+        )doc");
+
+    mod.def(
+        "translated_to_logical",
+        [](uint32_t device_id, uint32_t x, uint32_t y) -> std::tuple<uint32_t, uint32_t> {
+            auto [lx, ly] = tt::tt_metal::internal::translated_to_logical(device_id, x, y);
+            return {lx, ly};
+        },
+        nb::arg("device_id"),
+        nb::arg("x"),
+        nb::arg("y"),
+        R"doc(
+            Convert TRANSLATED coordinates to LOGICAL coordinates.
+
+            Args:
+                device_id (int): Logical chip id.
+                x (int): TRANSLATED x coordinate.
+                y (int): TRANSLATED y coordinate.
+
+            Returns:
+                tuple[int, int]: (logical_x, logical_y) in the program's grid coordinate system.
         )doc");
 }
 

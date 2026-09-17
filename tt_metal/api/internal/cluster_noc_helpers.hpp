@@ -8,6 +8,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <utility>
 #include <vector>
 
 namespace tt::tt_metal::internal {
@@ -100,5 +101,16 @@ struct DramBankInfo {
  * @return One entry per DRAM bank, indexed by @c bank_id.
  */
 std::vector<DramBankInfo> get_dram_bank_table(std::uint32_t device_id);
+
+/**
+ * @brief Convert TRANSLATED coordinates to LOGICAL coordinates.
+ *
+ * @param device_id Logical chip id.
+ * @param x TRANSLATED x coordinate.
+ * @param y TRANSLATED y coordinate.
+ * @return (logical_x, logical_y) in the program's grid coordinate system.
+ */
+std::pair<std::uint32_t, std::uint32_t> translated_to_logical(
+    std::uint32_t device_id, std::uint32_t x, std::uint32_t y);
 
 }  // namespace tt::tt_metal::internal
