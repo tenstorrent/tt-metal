@@ -1,38 +1,63 @@
-# Gemma4 prefill: per-request chunk width, and the correctness blocker it exposed
+# Gemma4 prefill: per-request chunk width — investigated, measured, not pursued
 
-Measured on a BH Galaxy, mesh 8x4 (CP8/TP4), branch `kmabee/gemma4-swa-multihop-halo`.
-Gemma4-31B: 60 layers = 50 sliding + 10 full attention, sliding window 1024.
+Measured on a BH Galaxy, mesh 8x4 (CP8/TP4). Gemma4-31B: 60 layers = 50 sliding + 10 full
+attention, sliding window 1024.
 
 Follow-on to [`../Gemma4PrefillChunkSize/`](../Gemma4PrefillChunkSize/README.md), which measured
-that no single prefill chunk width is good at both ends of the ISL range.
+that no single prefill chunk width is good at both ends of the ISL range. This report asked whether
+choosing the width *per request* is worth building. **The answer is no**, and the rest of this
+document is why.
 
 ---
 
-## TL;DR
+## TL;DR — why this is not being pursued
 
-**Two things, and the second one gates the first.**
+**It buys 1.21x, and almost everything else it appears to buy is available for free.**
 
-1. **Per-request chunk width works and is worth it.** One model, one KV cache, two captured
-   traces; the width is chosen at admission from the prompt length. The selector picked the
-   measured-cheapest width in **4 of 4** prompt lengths, for **1.42x** over pinning 4096 and a
-   **1.68x per-request geometric mean (up to 5.28x)** over pinning 32768.
+Measured, three buckets {4096, 8192, 32768}, every prompt run at every width, against the shipping
+fixed 8192: **1.19x** on the workload, **1.00x–1.39x** per request. But the short-prompt half of
+that — 1.39x at 4,096 tokens — comes entirely from avoiding padding, and is **fully available by
+deploying a single fixed width of 4096**, which the prior report already identified as the best
+single setting. Once you subtract what a one-line config change gives you, the genuine incremental
+value of per-request width is **1.21x at 256k context, and nothing else.**
 
-2. **The implementation has a bug: a model built with several widths computes the wrong answer
-   even at a width it shares with a single-width build.** Same prompt, one layer, identical
-   `ring_cache` geometry — chunk 8192 from a `(8192,)` build and from a `(4096, 8192, 32768)`
-   build differ at **PCC 0.869**, `max_abs_diff` 29.9. So per-request bucketing as implemented here
-   is **not functionally correct**, and the fault is mine, not the model's.
+Against that 1.21x:
 
-**Retracted (2026-09-17):** an earlier version of this report claimed Gemma4 prefill is inherently
-not chunk-width invariant, that this predated the work, and that it invalidated the published
-8192 -> 32768 throughput recommendation. **All three claims are withdrawn.** They rested on
-cross-width comparisons made *inside a single multi-width build* — that is, inside the bug above.
-The single-vs-multi-width control that would have caught it was identified as missing but not run
-until later. `ring_joint` matching torch at every width (§4) is consistent with the op having been
-correct all along.
+| | |
+|---|---|
+| **It is not correct today** | A model built with several widths computes a different answer at a width it shares with a single-width build: chunk 8192 at **PCC 0.869** (`max_abs_diff` 29.9), one layer, identical KV geometry. That is a bug in this implementation (§4), unfixed |
+| **Two silent-corruption modes** | The ring KV cache is block-cyclic with period `C`. Changing width mid-request, or a decode worker reading with the wrong period, corrupts the prefix and **raises nothing** |
+| **Scheduling gets worse, invisibly** | The quantum becomes non-uniform: 176 ms for a 4096-wide chunk vs **928 ms** for a 32768-wide one. Under continuous batching a short request behind a wide chunk eats up to ~930 ms of head-of-line blocking. **Every number in this report is single-request on an exclusive mesh and cannot see this** |
+| **It leaks into disaggregation** | Width becomes per-slot state that must cross the prefill/decode process boundary in slot metadata |
+| **The policy is not a tiering** | With three buckets the optimal width **oscillates 11 times** over [4k, 256k], flipping between 8192 and 32768 at every padding remainder. Two users with similar prompt lengths get different widths and different TTFT (§3) |
+| **Memory per bucket** | One captured 60-layer trace per width (900 MB of trace region for three) plus a chunk-major RoPE table per width (~67 MB/device, and never read on the traced path) |
 
-The mechanism in (1) is sound and separately validated (padding is bit-exact, replay is exact,
-the negative control fires). The blocker is underneath it, in the attention op.
+**Recommendation: deploy a single fixed width chosen from the ISL distribution** — 4096 if short
+prompts dominate, 8192 as the balanced default, 16384/32768 if long contexts dominate. Revisit
+per-request width only if the ISL distribution is strongly bimodal *and* 1.21x at long context is
+worth a per-slot invariant with silent failure modes.
+
+### What is worth keeping from this
+
+* The measured cost model `T(P,C) = N·a(C) + slope(C)·N(N-1)/2` predicted four newly measured
+  chunk-8192 points to **0.7–1.3%**. It is a reliable way to choose a fixed width for a given ISL
+  distribution without running the hardware (§1, §3).
+* **Padding is bit-exact** (PCC 1.0): a prompt served in a chunk wider than it fills gets exactly
+  the answer a fitting chunk would. Useful independently — it means chunk-size changes never need
+  to worry about the padded tail (§5).
+* **`ring_joint` sliding SDPA is width-neutral** against torch at every width on both SP4 and SP8,
+  including geometries with no in-tree coverage. Worth landing those cases as tests (§4).
+* Two methodological lessons that cost real time here: **a bucket set can only be judged against
+  widths it does not contain** (the first version of this report reported 1.42x against a pair's own
+  two members, while that pair actually loses 0.69x to shipping 8192 mid-range), and **two
+  configurations of one model must be compared in separate processes** — comparing them inside one
+  build is what produced three retracted claims.
+
+**Retracted (2026-09-17):** an earlier version claimed Gemma4 prefill is inherently not
+chunk-width invariant, that this predated the work, and that it invalidated the published
+8192 → 32768 throughput recommendation. **All three are withdrawn.** They rested on cross-width
+comparisons made inside a single multi-width build — inside the bug in §4. `ring_joint` matching
+torch at every width was the signal that the op had been correct all along.
 
 ---
 
@@ -71,7 +96,8 @@ second, nearly-empty wide chunk. Measured at 36,864 tokens: **1693 ms** at chunk
 **1985 ms** at chunk 32768 — the narrow bucket wins again, 8k tokens *after* it first lost.
 
 **Any policy written as `narrow if prompt < T else wide` is wrong in that band.** Pinned by
-`test_selection_is_sawtooth_not_a_single_threshold`.
+`test_selection_is_sawtooth_not_a_single_threshold`. It gets worse with more buckets — the
+three-bucket policy oscillates **eleven** times (§3).
 
 ## 3. Measured, three buckets, against the shipping config
 
@@ -257,42 +283,21 @@ D=models/demos/gemma4_d_p/tests/test_variable_chunk_prefill.py
 # host-only: cost model, sawtooth, geometry validation (~2 s, no device)
 ./python_env/bin/python3 -m pytest models/demos/gemma4_d_p/tests/unit/test_chunk_buckets.py -q
 
-# the perf claim: every prompt at both widths (~3 min)
+# the perf claim: every prompt at all three widths (~5.5 min)
 ./python_env/bin/python3 -m pytest "$D" -k beats_either_fixed_width -sv
 
-# padding / determinism / negative control, and the xfail width-invariance gate (~5 min)
-./python_env/bin/python3 -m pytest "$D" -k "correct_within_a_width or width_invariant" -sv -rxX
+# padding invariance / replay determinism / negative control (~3 min)
+./python_env/bin/python3 -m pytest "$D" -k correct_within_a_width -sv
 
-# other bucket pairs
+# the single-vs-multi-width control -- TWO processes, ~2 min each. This is the one that
+# retracted three claims; a one-process version cannot see the defect.
+GEMMA4_WIDTHS=8192 GEMMA4_SAVE_PT=/tmp/ref8192.pt \
+  ./python_env/bin/python3 -m pytest "$D" -k multi_width_build -sv
+GEMMA4_WIDTHS=4096,8192,32768 GEMMA4_REFERENCE_PT=/tmp/ref8192.pt \
+  ./python_env/bin/python3 -m pytest "$D" -k multi_width_build -sv -rxX   # xfail(strict) today
+
+# other bucket sets
 GEMMA4_CHUNK_BUCKETS=8192,32768 ./python_env/bin/python3 -m pytest "$D" -k beats -sv
 ```
 
 Run logs from this session: `/data/kmabee/gemma4_runs/varchunk/`.
-
----
-
-## 8. Should this ship? No.
-
-Recorded because the investigation reached a clear answer, against the thing it was built to do.
-
-**What it is worth, measured:** 1.19x on the workload above against the shipping 8192, per-request
-1.00x-1.39x. And the short-prompt half of that (1.39x at 4,096) is **fully available from a single
-fixed width of 4096**, with no new machinery at all — the prior report already found 4096 the best
-single setting. So the genuine *incremental* value of per-request width is only the long-context
-term, **1.21x at 256k**.
-
-**What it costs:**
-
-| cost | detail |
-|---|---|
-| **Correctness** | broken today (§4), and the layout has two silent-corruption modes: width changed mid-request, and decode reading with the wrong block-cyclic period. Neither raises |
-| **Scheduling** | the quantum becomes non-uniform — 176 ms for a 4096 chunk vs 928 ms for a 32768 one. Under continuous batching a short request behind a wide chunk eats up to ~930 ms of head-of-line blocking. **Every number in this report is single-request on an exclusive mesh and cannot see this** |
-| **Disagg** | per-slot width must cross the process boundary in slot metadata; `iter_cache_chunk_locations` is already width-parametric, but a wrong period at the decode worker is silent corruption |
-| **Memory** | one captured 60-layer trace per bucket (900 MB of trace region for three), plus one chunk-major RoPE table per width (~67 MB/device, and **never read on the traced path**) |
-| **Predictability** | the 11-switch policy above |
-
-**Recommendation.** Deploy a single fixed width chosen from the ISL distribution — 4096 if short
-prompts dominate, 8192 as the balanced default, 16384/32768 if long contexts dominate. Revisit
-per-request width only if the ISL distribution is strongly bimodal *and* the 1.21x long-context term
-is worth a per-slot invariant with silent failure modes. The code here is kept as a measured answer
-to "what would it buy", not as a candidate for merge.
