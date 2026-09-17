@@ -159,30 +159,6 @@
   team: models
   budget_type: vllm
 
-# ── Gemma4 speculative legs on the BH LoudBox ──────────────────────
-#
-# Two rails, three legs. All select their serving class through extra-env:
-# this pipeline launches server_example_tt.py directly and never reads a
-# tt-inference-server model spec, so TT_MODEL_CLASS_OVERRIDES is the only way
-# to say which class serves. tt-config carries override_tt_config and
-# additional-server-args carries vLLM flags; the class override is neither.
-#
-# PREREQUISITE: the drafter checkpoints must be in the runner's HF cache. The
-# model resolves them by repo id rather than a configured path
-# (_dflash_default_snapshot globs
-# ~/.cache/huggingface/hub/models--z-lab--gemma-4-31B-it-DFlash/snapshots/*,
-# and the MTP assistant resolves the same way). A missing checkpoint is
-# rejected at CONFIG time, so the leg fails at server start, not lazily.
-#
-# coherence-test is on for all three deliberately: the benchmark gate checks
-# request COMPLETION only, and a speculative rail that commits wrong tokens
-# returns well-formed garbage with completed == num_prompts.
-
-# 31B dFlash BLOCK rail: the model owns the speculation loop and emits a
-# block per step, falling back to plain batched decode above concurrency 1.
-# GEMMA4_DFLASH_MAX_SPEC_ISL=131072 is the spec-capture frontier -- a longer
-# prompt serves as plain baseline for its whole lifetime, because above it the
-# fused tap hook took the engine down (TT_FATAL shape mismatch at 196608).
 - name: "Gemma4-31B dFlash tp=8"
   model: google/gemma-4-31B-it
   coherence-test: true
@@ -202,10 +178,6 @@
   team: models
   budget_type: vllm
 
-# 12B MTP: the it-assistant drafter cross-attends the target's own KV, so it
-# needs no prefill taps and no drafter cache of its own. Serving knobs mirror
-# the "Gemma4-12B tp=8" leg above, including the batched-prefill/bounded
-# sliding config that avoids the 1x8 concurrent prefill+decode wedge.
 - name: "Gemma4-12B MTP tp=8"
   model: google/gemma-4-12B-it
   coherence-test: true
