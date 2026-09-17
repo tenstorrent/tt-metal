@@ -492,6 +492,8 @@
 #define MEM_CCE_BANK_TO_NOC_SIZE (MEM_BANK_TO_NOC_XY_SIZE + MEM_BANK_OFFSET_SIZE)
 #define MEM_CCE_KERNEL_CONFIG_BASE (MEM_CCE_BANK_TO_NOC_SCRATCH + MEM_CCE_BANK_TO_NOC_SIZE)
 #define MEM_CCE_KERNEL_CONFIG_SIZE (2 * 1024)
+#define MEM_CCE_KERNEL_BASE ((MEM_CCE_KERNEL_CONFIG_BASE + MEM_CCE_KERNEL_CONFIG_SIZE + 63) & ~63)
+#define MEM_CCE_KERNEL_SIZE MEM_DM_KERNEL_SIZE
 #define MEM_CCE_STACK_MIN_SIZE MEM_DM_STACK_MIN_SIZE
 // Device-side mailbox pointer (hart view). Use the uncached SRAM alias so boot-hart .data and
 // subordinate_sync are coherent across harts. Host HAL uses the 0-based MEM_CCE_MAILBOX_BASE.

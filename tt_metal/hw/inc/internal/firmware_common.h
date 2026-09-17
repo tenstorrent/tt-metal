@@ -152,10 +152,11 @@ uint32_t firmware_config_init(
         sem_l1_base[index] =
             (uint32_t tt_l1_ptr*)(kernel_config_base[index] + launch_msg_address->kernel_config.sem_offset[index]);
     }
-#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM) && !defined(COMPILE_FOR_DRISC)
     // TODO: Remove MEM_L1_UNCACHED_BASE here and invalidate cache lines when cache invalidating
     // functionality is ready for Quasar
-    // Note that the uncached address range is only valid for Quasar DM cores.
+    // Note that the uncached address range is only valid for Quasar Tensix/dispatch DM cores.
+    // CCE SRAM uses its own uncached alias (MEM_DRISC_MAILBOX_BASE).
     rta_l1_base = (uint32_t tt_l1_ptr*)(kernel_config_base[core_type_index] +
                                         launch_msg_address->kernel_config.rta_offset[processor_index].rta_offset +
                                         MEM_L1_UNCACHED_BASE);

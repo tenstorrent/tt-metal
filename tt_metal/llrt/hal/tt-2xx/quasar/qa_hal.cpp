@@ -91,10 +91,6 @@ namespace tt::tt_metal {
 class HalJitBuildQueryQuasar : public hal_2xx::HalJitBuildQueryBase {
 public:
     using HalJitBuildQueryBase::HalJitBuildQueryBase;
-    bool supports_kernel_build(
-        HalProgrammableCoreType core_type, HalProcessorClassType /*processor_class*/) const override {
-        return core_type != HalProgrammableCoreType::DRAM;
-    }
 
     std::string linker_flags(const Params& params) const override {
         std::string flags;
@@ -120,7 +116,17 @@ public:
                 flags += fmt::format("-Wl,--defsym=__local_base={} ", cce_tls);
                 flags += fmt::format("-Wl,--defsym=__local_stride={} ", MEM_CCE_LOCAL_SIZE);
             } else {
-                TT_THROW("CCE kernel JIT is not implemented yet");
+                const DeviceAddr cce_kn_text = MEM_CCE_SRAM_LOCAL_BASE + MEM_CCE_KERNEL_BASE;
+                flags += fmt::format("-Wl,--defsym=__kn_text={} ", cce_kn_text);
+                flags += fmt::format("-Wl,--defsym=__text_size={} ", MEM_CCE_KERNEL_SIZE);
+                flags += fmt::format("-Wl,--defsym=__fw_data={} ", cce_data);
+                flags += fmt::format("-Wl,--defsym=__kn_data={} ", cce_data + MEM_CCE_GLOBAL_SIZE);
+                flags += fmt::format("-Wl,--defsym=__data_size={} ", MEM_CCE_GLOBAL_SIZE);
+                flags += fmt::format("-Wl,--defsym=__fw_tls={} ", cce_tls);
+                flags += fmt::format("-Wl,--defsym=__tls_size={} ", MEM_CCE_LOCAL_SIZE);
+                flags += fmt::format("-Wl,--defsym=__min_stack={} ", MEM_CCE_STACK_MIN_SIZE);
+                flags += fmt::format("-Wl,--defsym=__local_base={} ", cce_tls);
+                flags += fmt::format("-Wl,--defsym=__local_stride={} ", MEM_CCE_LOCAL_SIZE);
             }
         } else if (params.processor_class == HalProcessorClassType::DM) {
             const DeviceAddr dm_global_base = params.core_type == HalProgrammableCoreType::DISPATCH
@@ -468,10 +474,10 @@ public:
                 }
                 break;
             case HalProgrammableCoreType::DRAM:
-                if (params.processor_class == HalProcessorClassType::DM && params.is_fw) {
-                    return "runtime/hw/toolchain/quasar/firmware_dm.ld";
+                if (params.processor_class == HalProcessorClassType::DM) {
+                    return fmt::format("runtime/hw/toolchain/quasar/{}_dm.ld", params.is_fw ? "firmware" : "kernel");
                 }
-                TT_THROW("CCE kernel JIT is not implemented yet");
+                TT_THROW("CCE kernels are data-movement only");
             default:
                 TT_THROW(
                     "Unsupported programmable core type {} to query linker script",

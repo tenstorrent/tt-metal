@@ -59,7 +59,7 @@ HalCoreInfoType create_dram_mem_map() {
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::PROFILER)] = GET_CCE_MAILBOX_ADDRESS_HOST(profiler);
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::KERNEL_CONFIG)] = MEM_CCE_KERNEL_CONFIG_BASE;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::UNRESERVED)] =
-        tt::align(MEM_CCE_KERNEL_CONFIG_BASE + MEM_CCE_KERNEL_CONFIG_SIZE, max_alignment);
+        tt::align(MEM_CCE_KERNEL_BASE + MEM_CCE_KERNEL_SIZE, max_alignment);
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::CORE_INFO)] = GET_CCE_MAILBOX_ADDRESS_HOST(core_info);
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::GO_MSG)] = GET_CCE_MAILBOX_ADDRESS_HOST(go_messages);
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::GO_MSG_INDEX)] =
