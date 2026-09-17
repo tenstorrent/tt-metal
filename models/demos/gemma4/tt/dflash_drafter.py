@@ -165,6 +165,57 @@ def _rope_tables(head_dim, theta, max_pos):
     return emb.cos().to(torch.bfloat16), emb.sin().to(torch.bfloat16)
 
 
+def recommended_dflash_block_size(
+    ctx_len_hint: int | None,
+    checkpoint_block_size: int,
+    *,
+    long_context_threshold: int = int(_os.environ.get("GEMMA4_DFLASH_LONG_CTX_THRESHOLD", 6000)),
+    long_context_block_size: int = 8,
+) -> int:
+    """Heuristic ``block_size`` (K) pick for sessions whose context is long enough
+    that a smaller speculative block measurably helps.
+
+    NOT gated on the drafter's architectural ``sliding_window`` (2048, see
+    ``config.py``) -- an earlier version of this function used that as the
+    threshold, but a real T3K A/B sweep (block_size=8 vs. the checkpoint's own
+    default 16, across the same ISL buckets as models/demos/gemma4/README.md's
+    "Full ISL sweep" table) falsified it: at ISL 3,808 (already past the
+    2048-token window), block_size=8 measured 36.9 tok/s vs. block_size=16's
+    ~92 tok/s -- a 60% REGRESSION, not an improvement, because that bucket's
+    mean-accepted-drafts/iteration is actually its best of any measured bucket
+    (8.56, vs. 5.67 at ISL 44) at the checkpoint's default block_size. Only at
+    ISL 7,548+ does block_size=8 measure a net win (+7-16% tok/s; mean accepted
+    drops in absolute terms -- e.g. 2.81 vs. 3.02 at ISL 7,548 -- but rises as a
+    fraction of the smaller block, and the shorter per-iteration verify more
+    than compensates). So the true inflection sits somewhere between ISL 3,808
+    and 7,548 -- NOT bracketed any tighter than that by real measurement, and
+    not something ``sliding_window`` (or any other architectural constant)
+    predicts; ``long_context_threshold``'s default (6000) is simply the
+    midpoint of the two measured points, overridable via
+    ``GEMMA4_DFLASH_LONG_CTX_THRESHOLD`` pending a real sweep to narrow it down
+    further. The original ~5.1/7-vs-~2.9/7 reference comparison motivating
+    block_size=8 as an alternative geometry at all (see the
+    ``GEMMA4_DFLASH_BLOCK`` comment a few lines below this function) does not
+    state what ISL it was measured at, so it cannot resolve this either.
+
+    Only applies when the caller has an upfront ``ctx_len_hint`` for the whole
+    session (e.g. a benchmark/demo script that knows its target ISL before
+    constructing the drafter) -- returns ``checkpoint_block_size`` unchanged
+    when ``ctx_len_hint`` is unknown (``None``, the default), so existing
+    callers that don't pass a hint see no behavior change. Does not attempt
+    to be "adaptive" mid-session: block_size is baked into the steady-state
+    Metal trace's fixed shapes for the life of one ``DFlashDrafter`` instance
+    (see generate.py's module docstring), so this can only be chosen once,
+    upfront -- not re-picked per iteration as the real context grows.
+
+    ``GEMMA4_DFLASH_BLOCK``, if set, always wins over this (see call site) --
+    this heuristic only supplies the DEFAULT an operator hasn't overridden.
+    """
+    if ctx_len_hint is None or ctx_len_hint <= long_context_threshold:
+        return checkpoint_block_size
+    return min(checkpoint_block_size, long_context_block_size)
+
+
 class DFlashDrafter:
     """Device-side dFlash drafter (see module docstring)."""
 
@@ -178,6 +229,7 @@ class DFlashDrafter:
         tensor_cache_path=None,
         dtype=ttnn.bfloat16,
         max_ctx=262144 + 2048,
+        ctx_len_hint=None,
     ):
         """
         Args:
@@ -190,6 +242,14 @@ class DFlashDrafter:
                 gathers of the per-iteration noise rows.
             mesh_config: gemma4 MeshConfig (tp over mesh axis 1).
             ccl_manager: the target's CCL manager (all_reduce/all_gather).
+            ctx_len_hint: caller's upfront estimate of this session's context
+                length (e.g. the target ISL bucket), used ONLY to pick a
+                smaller default block_size once that estimate already exceeds
+                the drafter's sliding_window -- see
+                ``recommended_dflash_block_size``. None (default) preserves
+                the previous behavior exactly (checkpoint's own block_size
+                unless GEMMA4_DFLASH_BLOCK overrides it). Ignored entirely when
+                GEMMA4_DFLASH_BLOCK is set -- that always wins.
         """
         from safetensors import safe_open
 
@@ -206,15 +266,27 @@ class DFlashDrafter:
         self.n_heads = cfg["num_attention_heads"]
         self.n_kv_heads = cfg["num_key_value_heads"]
         self.head_dim = cfg["head_dim"]
+        self.sliding_window = cfg.get("sliding_window")
         # Block-size override (tt-blaze atupe/gemma4-0824-dflash runs this SAME
         # checkpoint at block 8 BY DEFAULT and accepts ~5.1/7 vs our 16-block
         # ~2.9-of-first-7: fewer mask tokens in the bidirectional denoise ->
         # cleaner early positions). Checkpoint config says 16; 8 is the other
-        # geometry tt-blaze supports in production.
-        self.block_size = int(_os.environ.get("GEMMA4_DFLASH_BLOCK", cfg["block_size"]))
+        # geometry tt-blaze supports in production. GEMMA4_DFLASH_BLOCK always
+        # wins when set; otherwise, callers with an upfront ctx_len_hint get a
+        # smaller default once that estimate is long enough to benefit (see
+        # recommended_dflash_block_size -- NOT simply "past sliding_window";
+        # real measurement matters here, an earlier version of this that used
+        # sliding_window as the threshold was measured to regress ISL ~3.8k by
+        # 60%) -- callers without one (ctx_len_hint=None) see the unchanged
+        # checkpoint default.
+        self.block_size = int(
+            _os.environ.get(
+                "GEMMA4_DFLASH_BLOCK",
+                recommended_dflash_block_size(ctx_len_hint, cfg["block_size"]),
+            )
+        )
         self.mask_token_id = cfg["dflash_config"]["mask_token_id"]
         self.target_layer_ids = list(cfg["dflash_config"]["target_layer_ids"])
-        self.sliding_window = cfg.get("sliding_window")
         self.layer_types = list(cfg["layer_types"])
         if len(self.layer_types) < self.n_layers:  # config lists per-layer types
             self.layer_types = self.layer_types + [self.layer_types[-1]] * (self.n_layers - len(self.layer_types))
