@@ -237,8 +237,8 @@ Tensor quantize(
         is_supported_quantized_dtype(c_dtype),
         "Quantize only supports int32, int8 or uint8 outputs for now, got {}",
         c_dtype);
-    // per-channel path narrows with ttnn::typecast(float, int8/uint8), which wraps
-    // mod 256 instead of saturating, so reject it here.
+    // per-channel narrows through narrow_composite_result, which saturates, but int8/uint8
+    // output is not enabled on that path yet, so reject it here.
     TT_FATAL(
         !(axis.has_value() && is_narrow_quantized_dtype(c_dtype)),
         "Per-channel (axis) quantize does not support int8/uint8 output yet; use int32 output or per-tensor quantize");
