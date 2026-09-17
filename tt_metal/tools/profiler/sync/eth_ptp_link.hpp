@@ -31,8 +31,7 @@ using LinkSession = StampSession<kLinkTxq, kLinkHeaderRow, kLinkTcamRow, kLinkLa
 // the tick whatever the cadence or AICLK, and the mean's rounding noise falls to ~0.4 ns per round. The stamp
 // request is armed once per burst, and the queue's counters tell the frames' stamps from those of a keepalive the
 // queue had waiting (arm_burst, collect_burst). Each side sums its stamps unpaired, so a round counts only if every
-// frame produced both of a side's stamps. The round's first frame is exchanged alone before the next is issued, so
-// its software stamps see an idle queue on both ends.
+// frame produced both of a side's stamps.
 constexpr uint32_t kTripsPerRound = 256;
 constexpr uint32_t kBurstFrames = 4;
 constexpr uint32_t kBurstsPerRound = kTripsPerRound / kBurstFrames;
@@ -48,7 +47,6 @@ constexpr uint32_t kSlotsBytes = kBurstFrames * kFrameBytes;
 constexpr uint32_t kCtlOffset = kSlotsOffset + kSlotsBytes;
 constexpr uint32_t kFrameTicks = 12;       // 240 ns between a burst's frames: a receiver takes a frame in ~150 cycles
 constexpr uint32_t kFramePhaseStep = 157;  // odd, so the 256 phases are a permutation
-constexpr uint32_t kEchoSpins = 50'000;    // polls for the first frame's echo before the round is given up: ~1 ms
 // Waits on a link the fabric may be loading: our frames queue behind its at the MAC on the way out, and the frames
 // of a burst then reach the receiver spread out. Both are bounds on a step's hold.
 constexpr uint32_t kBurstStampSpins =
@@ -286,11 +284,6 @@ constexpr uint32_t kRoleT2 = kernel_profiler::ppfmt::CLOCK_ROLE_T2;
 inline __attribute__((always_inline)) bool room(uint32_t records) {
     return kernel_profiler::ring_has_room(records * kernel_profiler::CLOCK_RECORD_WORDS);
 }
-// A software stamp, read as an Instant at the event and recorded whenever the trip's work is done.
-inline __attribute__((always_inline)) void record_sw(const Instant& t, uint32_t round, uint32_t role) {
-    kernel_profiler::ring_write_clock(
-        kernel_profiler::ppfmt::CLOCK_LINK_REFCLK, t.refclk, t.wall_lo, t.wall_hi, round, role);
-}
 // A hardware stamp average, placed at the wall clock of its recording.
 inline __attribute__((always_inline)) void record_hw(uint64_t value, uint32_t round, uint32_t role) {
     const Instant t = read_instant();
@@ -299,7 +292,6 @@ inline __attribute__((always_inline)) void record_hw(uint64_t value, uint32_t ro
 #else
 constexpr uint32_t kRoleT0 = 0, kRoleT1 = 0, kRoleT1B = 0, kRoleT2 = 0;
 inline bool room(uint32_t) { return false; }
-inline void record_sw(const Instant&, uint32_t, uint32_t) {}
 inline void record_hw(uint64_t, uint32_t, uint32_t) {}
 #endif
 }  // namespace link
@@ -307,14 +299,12 @@ inline void record_hw(uint64_t, uint32_t, uint32_t) {}
 // The two ends of a link, driven by whoever owns the core -- a resident kernel or the fabric router: open() before
 // the link handshake, start() once the peer is up, step() as often as the core can spare, stop() at teardown. A step
 // returns at once when nothing is due; when a burst (sender) or a frame (receiver) is due it is handled whole, so a
-// step holds the core for ~1 us at most. SwStamps adds the round's first trip as software stamps, a second stream
-// the host checks the hardware one against; it costs the sender a wait for that trip's echo, ~1 us once per round,
-// so a router leaves it off. DataCache says whether the core runs with its L1 data cache on, in which case a step
-// invalidates before polling what the peer or the host wrote; a router runs with it off and skips the fence. Both
-// are constant-initialised: the ERISC runs no dynamic init.
+// step holds the core for ~1 us at most. DataCache says whether the core runs with its L1 data cache on, in which case
+// a step invalidates before polling what the peer or the host wrote; a router runs with it off and skips the fence.
+// Both are constant-initialised: the ERISC runs no dynamic init.
 constexpr uint32_t kRatioTicks = 1000;  // 20 us before a slot: read jitter of tens of cycles is under a tenth of a step
 
-template <bool SwStamps, bool DataCache = true>
+template <bool DataCache = true>
 struct SenderLink {
     LinkSession sess;
     uint32_t slot_base = 0, burst_ticks = 0;
@@ -331,8 +321,7 @@ struct SenderLink {
     StopDiag diag;
     HwRound rnd;
     uint32_t round = 0;
-    bool emit = false, ok = false, gave_up = false;
-    Instant t0{}, t2{};
+    bool emit = false, ok = false;
 
     bool open() { return sess.begin(); }
     void start(uint32_t l1, uint32_t pace_ticks, uint32_t diag) {
@@ -384,16 +373,12 @@ private:
     }
     void close_round() {
         if (emit) {
-            if constexpr (SwStamps) {
-                link::record_sw(t0, round, link::kRoleT0);
-                link::record_sw(t2, round, link::kRoleT2);
-            }
             if (ok && sess.timer_ok && rnd.complete(kTripsPerRound)) {
                 link::record_hw(rnd.tx.q(sess), round, link::kRoleT0);
                 link::record_hw(rnd.rx.q(sess), round, link::kRoleT2);
             }
         }
-        diag.note_round(rnd, ok, gave_up);
+        diag.note_round(rnd, ok, false);
         write_diag();
     }
     // A burst: the previous burst's echo stamps, the round's records at a round boundary, then kBurstFrames frames
@@ -420,9 +405,8 @@ private:
             }
             round = next_round++;
             rnd.begin(round);
-            emit = link::room(SwStamps ? 4 : 2);
+            emit = link::room(2);
             ok = true;
-            gave_up = false;
         }
         const uint64_t tag = 0x5000'0000'0000'0000ull | bursts;
         Anchor at;
@@ -438,30 +422,10 @@ private:
                 pacer.until(w0 + i * spacing + frame_phase_cycles(j, c16) - phase0);
                 s->reserved_2 = round;
                 s->bytes_sent = frame_key(round, j);
-                if constexpr (SwStamps) {
-                    if (j == 0) {
-                        t0 = read_instant();
-                    }
-                }
                 issue(s);
             }
             if (!collect_burst(sess, at, rnd.tx, diag)) {
                 ok = false;
-            }
-            if constexpr (SwStamps) {
-                // The receiver echoes a burst once its last frame is in, so the first frame's echo follows the burst.
-                if (j0 == 0) {
-                    volatile eth_channel_sync_t* s = slot(slot_base, 0);
-                    for (uint32_t spin = 0; s->bytes_sent != 0; spin++) {
-                        if (spin == kEchoSpins) {
-                            ok = false;
-                            gave_up = true;
-                            break;
-                        }
-                        invalidate_l1_cache();
-                    }
-                    t2 = read_instant();
-                }
             }
         }
         diag.note_hold(rd(kWallClockLo) - hold0);
@@ -470,14 +434,14 @@ private:
     }
 };
 
-template <bool SwStamps, bool DataCache = true>
+template <bool DataCache = true>
 struct ReceiverLink {
     LinkSession sess;
     uint32_t slot_base = 0, diag_addr = 0;
     uint32_t round = 0, expect = 0;
     bool started = false, emit = false, ok = false, mid_burst = false, armed = false;
     Anchor at;
-    Instant start_at{}, t1{}, t1b{};
+    Instant start_at{};
     StopDiag diag;
     HwRound rnd;
 
@@ -544,10 +508,6 @@ private:
     }
     void close_round() {
         if (emit) {
-            if constexpr (SwStamps) {
-                link::record_sw(t1, round, link::kRoleT1);
-                link::record_sw(t1b, round, link::kRoleT1B);
-            }
             if (ok && sess.timer_ok && rnd.complete(kTripsPerRound)) {
                 link::record_hw(rnd.rx.q(sess), round, link::kRoleT1);
                 link::record_hw(rnd.tx.q(sess), round, link::kRoleT1B);
@@ -570,9 +530,8 @@ private:
             started = true;
             round = s->reserved_2;
             rnd.begin(round);
-            emit = link::room(SwStamps ? 4 : 2);
+            emit = link::room(2);
             ok = true;
-            t1 = now;
         } else if (key != frame_key(round, j)) {
             s->bytes_sent = 0;  // a frame of a round already given up
             return false;
@@ -597,11 +556,6 @@ private:
             }
         }
         s->bytes_sent = 0;
-        if constexpr (SwStamps) {
-            if (j == 0) {
-                t1b = read_instant();
-            }
-        }
         issue(s);
         if (i == kBurstFrames - 1 && armed) {
             if (!collect_burst(sess, at, rnd.tx, diag)) {

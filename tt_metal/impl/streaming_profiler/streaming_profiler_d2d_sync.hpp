@@ -180,22 +180,16 @@ private:
         Stamp t0, t1, t1b, t2;
         bool complete() const { return t0.have && t2.have && t1.have && t1b.have; }
     };
-    // A link's rounds of one stamp kind: the complete ones in the order they completed, the rest waiting for their
+    // A link's rounds: the complete ones in the order they completed, the rest waiting for their
     // other end. A round whose other end never reports (no ring room there, a lapped consumer) is evicted once
     // kPendingMax newer rounds are waiting; nothing behind it shifts.
     struct LinkRounds {
         std::vector<Round> rounds;
         std::map<uint32_t, Round> pending;
     };
-    struct LinkStreams {
-        LinkRounds sw, hw;
-        bool have_hw() const { return !hw.rounds.empty(); }
-        const LinkRounds& primary() const { return have_hw() ? hw : sw; }
-    };
     // A solved link: receiver refclk = sender refclk + offset + rate * (sender refclk - mid).
     struct LinkSolution {
         bool ok = false;
-        bool hw = false;
         double solved_at = 0.0;     // the sender chip's refclk at the newest round of the last solve
         double precision_ns = 0.0;  // residual_rms_ns / sqrt(kept): the offset estimate's own precision
         uint32_t dev_snd = 0, dev_rcv = 0;
@@ -205,10 +199,10 @@ private:
     };
 
     int64_t core_index(uint32_t dev, const CoreCoord& eth) const;
-    // A round in the refclk domain: each end's midpoint, and for hardware rounds the sender's round trip, the
-    // receiver's turnaround and the one-way delay inside the stamps, in ns.
-    static double mid_a(const Round& r, bool hw);
-    static double mid_b(const Round& r, bool hw);
+    // A round in the refclk domain: each end's midpoint; the sender's round trip, the receiver's turnaround and the
+    // one-way delay inside the stamps, in ns.
+    static double mid_a(const Round& r);
+    static double mid_b(const Round& r);
     static double rtt_ns(const Round& r) {
         return (static_cast<double>(r.t2.value) - static_cast<double>(r.t0.value)) * kHwUnitTicks * 20.0;
     }
@@ -220,13 +214,12 @@ private:
     // The fleet timeline's root: the chip the host probe reads, fixed for the capture.
     uint32_t root_dev() const { return ctx_.root_dev; }
     void try_solve_links(bool final);
-    // One round in the refclk domain: the sender's midpoint, the receiver's stamp minus it, and the round trip in
-    // wall ticks (0 for hardware stamps, which need no trip-time filter).
+    // One round in the refclk domain: the sender's midpoint and the receiver's minus it.
     struct RoundPoint {
-        double mid, off, rtt;
+        double mid, off;
     };
     // Whether the solution was accepted into `out`.
-    bool solve_link(const CaptureContext::Link& L, std::vector<RoundPoint> pts, bool hw, LinkSolution& out) const;
+    bool solve_link(const CaptureContext::Link& L, std::vector<RoundPoint> pts, LinkSolution& out) const;
     // A device's refclk onto the root's: root_refclk = scale * dev_refclk + shift; prec_ns the precision of the
     // solutions composed along the way.
     struct RootXf {
@@ -251,7 +244,6 @@ private:
     bool round_error(
         const CaptureContext::Link& L,
         const Round& r,
-        bool hw,
         int64_t& tsc_a,
         double& err,
         RoundTerms* terms = nullptr) const;
@@ -312,7 +304,7 @@ private:
     void push_node(Series& s, uint32_t chip, const Node& n);
     CaptureContext ctx_;
     std::map<uint32_t, LocalState> local_;  // device index -> local fit
-    std::vector<LinkStreams> links_;  // per ctx_.links index
+    std::vector<LinkRounds> links_;         // per ctx_.links index
     // (device index, decoder core index) -> the link the core stamps for, and whether as its sender.
     std::map<std::pair<uint32_t, uint32_t>, std::pair<size_t, bool>> side_of_;
     std::vector<LinkSolution> solved_;                         // per ctx_.links index

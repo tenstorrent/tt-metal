@@ -76,6 +76,8 @@ double wall(int chip, double tau) {
     }
     return kW0[chip] + kF0 * kTauSwitch + kSlow * kF0 * (tau - kTauSwitch);
 }
+// A 1588 stamp of the event at tau, in the refclk domain's quarter-ns (kHwUnitTicks).
+double hw_stamp(int chip, double tau) { return refclk(chip, tau) * 80.0; }
 double tsc(double tau) { return kTsc0 + tau * 1e9 * kTicksPerNs; }
 double host_ns(double tau) { return kHostBase + tau * 1e9; }
 
@@ -174,32 +176,32 @@ int main() {
             sync.on_clock(sample(
                 rcv_dev,
                 rcv_lane,
-                PP_CLOCK_LINK_REFCLK,
+                PP_CLOCK_LINK_PTP,
                 k,
                 PP_CLOCK_ROLE_T1,
-                refclk(rcv_dev, t + kOneWay),
+                hw_stamp(rcv_dev, t + kOneWay),
                 wall(rcv_dev, t + kOneWay)));
             sync.on_clock(sample(
                 rcv_dev,
                 rcv_lane,
-                PP_CLOCK_LINK_REFCLK,
+                PP_CLOCK_LINK_PTP,
                 k,
                 PP_CLOCK_ROLE_T1B,
-                refclk(rcv_dev, t + kOneWay + kTurn),
+                hw_stamp(rcv_dev, t + kOneWay + kTurn),
                 wall(rcv_dev, t + kOneWay + kTurn)));
         };
         for (uint32_t k = 0; k < 300; k++) {
             const double t = 0.020 + k * 10e-6;
             sync.on_clock(sample(
-                snd_dev, snd_lane, PP_CLOCK_LINK_REFCLK, k, PP_CLOCK_ROLE_T0, refclk(snd_dev, t), wall(snd_dev, t)));
+                snd_dev, snd_lane, PP_CLOCK_LINK_PTP, k, PP_CLOCK_ROLE_T0, hw_stamp(snd_dev, t), wall(snd_dev, t)));
             if (k % 11 != 5) {
                 sync.on_clock(sample(
                     snd_dev,
                     snd_lane,
-                    PP_CLOCK_LINK_REFCLK,
+                    PP_CLOCK_LINK_PTP,
                     k,
                     PP_CLOCK_ROLE_T2,
-                    refclk(snd_dev, t + 2 * kOneWay + kTurn),
+                    hw_stamp(snd_dev, t + 2 * kOneWay + kTurn),
                     wall(snd_dev, t + 2 * kOneWay + kTurn)));
             }
             if (k % 7 != 3 && k != 100) {

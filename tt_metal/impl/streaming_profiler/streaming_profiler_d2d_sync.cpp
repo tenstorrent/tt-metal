@@ -24,7 +24,7 @@ namespace tt::tt_metal::streaming_profiler {
 void D2dSyncConsumer::on_attach(const CaptureContext& ctx) {
     ctx_ = ctx;
     local_.clear();
-    links_.assign(ctx.links.size(), LinkStreams{});
+    links_.assign(ctx.links.size(), LinkRounds{});
     side_of_.clear();
     for (size_t li = 0; li < ctx.links.size(); li++) {
         const CaptureContext::Link& L = ctx.links[li];
@@ -85,7 +85,7 @@ void D2dSyncConsumer::on_clock(const ClockSample& s) {
         return;
     }
     const auto side = side_of_.find({s.dev, s.lane / profiler::kSpscNRiscDecode});
-    if ((s.kind != PP_CLOCK_LINK_REFCLK && s.kind != PP_CLOCK_LINK_PTP) || side == side_of_.end()) {
+    if (s.kind != PP_CLOCK_LINK_PTP || side == side_of_.end()) {
         dropped_kind_++;
         return;
     }
@@ -100,8 +100,7 @@ void D2dSyncConsumer::on_clock(const ClockSample& s) {
         dropped_kind_++;
         return;
     }
-    const bool hw = s.kind == PP_CLOCK_LINK_PTP;
-    LinkRounds& lr = hw ? links_[li].hw : links_[li].sw;
+    LinkRounds& lr = links_[li];
     Round& r = lr.pending[s.round];
     r.id = s.round;
     r.*slot = Stamp{.value = s.value, .wall = s.ts, .have = true};
@@ -116,13 +115,12 @@ void D2dSyncConsumer::on_clock(const ClockSample& s) {
     // As-delivered errors: a round is evaluated once both chips' covers reach its stamps, the moment a consumer
     // waiting on them converts its records.
     const CaptureContext::Link& L = ctx_.links[li];
-    const std::vector<Round>& rounds = links_[li].primary().rounds;
-    const bool phw = links_[li].have_hw();
+    const std::vector<Round>& rounds = links_[li].rounds;
     for (; live_done_[li] < rounds.size(); live_done_[li]++) {
         int64_t H = 0;
         double e = 0.0;
         RoundTerms t;
-        if (!round_error(L, rounds[live_done_[li]], phw, H, e, &t)) {
+        if (!round_error(L, rounds[live_done_[li]], H, e, &t)) {
             continue;
         }
         if (t.wall_a > static_cast<double>(map_.cover_ticks(L.chip_a)) ||
@@ -162,15 +160,13 @@ void D2dSyncConsumer::try_solve_links(bool final) {
         if (ca < 0 || cb < 0) {
             continue;
         }
-        const LinkStreams& ls = links_[li];
-        const bool hw = ls.have_hw();
-        const std::vector<Round>& rounds = ls.primary().rounds;
+        const std::vector<Round>& rounds = links_[li].rounds;
         const size_t n = rounds.size();
         if (final) {
             log_info(
                 tt::LogMetal,
                 "[streaming profiler] d2d sync link {} (dev {} eth({},{}) core {}) -> (dev {} eth({},{}) core {}): "
-                "software rounds {} complete, {} pending; hardware rounds {} complete, {} pending",
+                "{} rounds complete, {} pending",
                 li,
                 L.dev_a,
                 L.eth_a.x,
@@ -180,22 +176,13 @@ void D2dSyncConsumer::try_solve_links(bool final) {
                 L.eth_b.x,
                 L.eth_b.y,
                 cb,
-                ls.sw.rounds.size(),
-                ls.sw.pending.size(),
-                ls.hw.rounds.size(),
-                ls.hw.pending.size());
+                rounds.size(),
+                links_[li].pending.size());
         }
-        const auto la = local_.find(L.dev_a);
-        const auto lb = local_.find(L.dev_b);
-        if (n == 0 || (!hw && (la == local_.end() || lb == local_.end() || la->second.model.runs.empty() ||
-                               lb->second.model.runs.empty()))) {
+        if (n == 0) {
             continue;
         }
-        const auto to_refclk = [](const LocalClockModel& fit, uint64_t wall) {
-            const double wd = static_cast<double>(wall);
-            return fit.run_at_wall(wd).refclk_of_wall(wd);
-        };
-        const auto pos = [&](const Round& r) { return hw ? mid_a(r, true) : to_refclk(la->second.model, r.t0.wall); };
+        const auto pos = [](const Round& r) { return mid_a(r); };
         const double newest = pos(rounds[n - 1]);
         // Live: the first solution once kFirstSolveTicks of rounds are in, so held records are released, then one
         // every half window. Final: whatever the window holds, if it is enough for a fit at all.
@@ -214,40 +201,25 @@ void D2dSyncConsumer::try_solve_links(bool final) {
         out.solved_at = newest;
         std::vector<RoundPoint> pts;
         pts.reserve(w);
-        if (hw) {
-            const double path_med = path_median(rounds, begin, n);
-            out.path_dropped = 0;
-            for (size_t i = begin; i < n; i++) {
-                const Round& r = rounds[i];
-                if (std::abs(path_ns(r) - path_med) > kPathDevNs) {
-                    out.path_dropped++;
-                    continue;
-                }
-                const double mid = mid_a(r, true);
-                pts.push_back(RoundPoint{mid, mid_b(r, true) - mid, 0.0});
+        const double path_med = path_median(rounds, begin, n);
+        out.path_dropped = 0;
+        for (size_t i = begin; i < n; i++) {
+            const Round& r = rounds[i];
+            if (std::abs(path_ns(r) - path_med) > kPathDevNs) {
+                out.path_dropped++;
+                continue;
             }
-        } else {
-            for (size_t i = begin; i < n; i++) {
-                const Round& r = rounds[i];
-                if (r.t0.wall == 0 || r.t2.wall == 0 || r.t1.wall == 0 || r.t1b.wall == 0 || r.t2.wall < r.t0.wall) {
-                    continue;
-                }
-                const double mid = 0.5 * (to_refclk(la->second.model, r.t0.wall) + to_refclk(la->second.model, r.t2.wall));
-                const double mid_rcv =
-                    0.5 * (to_refclk(lb->second.model, r.t1.wall) + to_refclk(lb->second.model, r.t1b.wall));
-                pts.push_back(RoundPoint{mid, mid_rcv - mid, static_cast<double>(r.t2.wall - r.t0.wall)});
-            }
-            std::sort(pts.begin(), pts.end(), [](const RoundPoint& a, const RoundPoint& b) { return a.rtt < b.rtt; });
-            pts.resize(std::clamp<size_t>(pts.size() / 4, std::min<size_t>(8, pts.size()), pts.size()));
+            const double mid = mid_a(r);
+            pts.push_back(RoundPoint{mid, mid_b(r) - mid});
         }
-        if (solve_link(L, std::move(pts), hw, out)) {
+        if (solve_link(L, std::move(pts), out)) {
             out.rounds = w;
             solve_gen_++;
             map_.set_asymmetry_ns(max_closure_ns());
             log_info(
                 tt::LogMetal,
                 "[streaming profiler] d2d sync link chip {} -> chip {}: solved at round {} over {} ({} kept): offset "
-                "{:.1f} ns, rate {:.3f} ppm, residual {:.1f} ns{}{}",
+                "{:.1f} ns, rate {:.3f} ppm, residual {:.1f} ns{}",
                 L.chip_a,
                 L.chip_b,
                 n,
@@ -256,18 +228,17 @@ void D2dSyncConsumer::try_solve_links(bool final) {
                 out.offset_ns,
                 out.rate_ppm,
                 out.residual_rms_ns,
-                hw ? " [hw]" : " [sw]",
                 out.path_dropped != 0 ? fmt::format(", {} rounds off the stamp path band", out.path_dropped) : "");
         }
     }
 }
 
-double D2dSyncConsumer::mid_a(const Round& r, bool hw) {
-    return 0.5 * (static_cast<double>(r.t0.value) + static_cast<double>(r.t2.value)) * (hw ? kHwUnitTicks : 1.0);
+double D2dSyncConsumer::mid_a(const Round& r) {
+    return 0.5 * (static_cast<double>(r.t0.value) + static_cast<double>(r.t2.value)) * kHwUnitTicks;
 }
 
-double D2dSyncConsumer::mid_b(const Round& r, bool hw) {
-    return 0.5 * (static_cast<double>(r.t1.value) + static_cast<double>(r.t1b.value)) * (hw ? kHwUnitTicks : 1.0);
+double D2dSyncConsumer::mid_b(const Round& r) {
+    return 0.5 * (static_cast<double>(r.t1.value) + static_cast<double>(r.t1b.value)) * kHwUnitTicks;
 }
 
 double D2dSyncConsumer::path_median(const std::vector<Round>& rounds, size_t begin, size_t n) {
@@ -670,7 +641,7 @@ void D2dSyncConsumer::log_summary() const {
         log_info(
             tt::LogMetal,
             "[streaming profiler] d2d sync link chip {} eth({},{}) -> chip {} eth({},{}): {} rounds ({} kept); refclk "
-            "domain offset {:.1f} ns, rate {:.3f} ppm, residual rms {:.1f} ns, estimate precision {:.2f} ns{}",
+            "domain offset {:.1f} ns, rate {:.3f} ppm, residual rms {:.1f} ns, estimate precision {:.2f} ns",
             L.chip_a,
             L.eth_a.x,
             L.eth_a.y,
@@ -682,8 +653,7 @@ void D2dSyncConsumer::log_summary() const {
             s.offset_ns,
             s.rate_ppm,
             s.residual_rms_ns,
-            s.precision_ns,
-            s.hw ? " [1588 hardware stamps]" : "");
+            s.precision_ns);
     }
     // Loop closure. The tree composes every chip onto the root through some of the links; a solved link the tree
     // did not take predicts the same receiver refclk a second way, and the two ways can differ only by path
@@ -726,8 +696,7 @@ void D2dSyncConsumer::log_summary() const {
 // The link solve: receiver refclk = sender refclk + offset + rate * (sender refclk - mean midpoint), a straight line
 // through the rounds' (midpoint, receiver minus midpoint) points with two passes of 3-sigma trimming. A solution
 // that is not finite, beyond 100 ppm or a millisecond of residual is refused and the previous one stands.
-bool D2dSyncConsumer::solve_link(
-    const CaptureContext::Link& L, std::vector<RoundPoint> pts, bool hw, LinkSolution& out) const {
+bool D2dSyncConsumer::solve_link(const CaptureContext::Link& L, std::vector<RoundPoint> pts, LinkSolution& out) const {
     if (pts.size() < 4) {
         return false;
     }
@@ -792,7 +761,6 @@ bool D2dSyncConsumer::solve_link(
         return false;
     }
     out.ok = true;
-    out.hw = hw;
     out.dev_snd = L.dev_a;
     out.dev_rcv = L.dev_b;
     out.rate = slope;
@@ -925,7 +893,7 @@ void D2dSyncConsumer::publish_rate_plots() {
         if (L.dev_a >= ctx_.devices.size()) {
             continue;
         }
-        const std::vector<Round>& prim = links_[li].primary().rounds;
+        const std::vector<Round>& prim = links_[li].rounds;
         const auto la = local_.find(L.dev_a);
         const auto lb = local_.find(L.dev_b);
         if (la == local_.end() || lb == local_.end()) {
@@ -1022,7 +990,7 @@ void D2dSyncConsumer::publish_rate_plots() {
 }
 
 bool D2dSyncConsumer::round_error(
-    const CaptureContext::Link& L, const Round& r, bool hw, int64_t& tsc_a, double& err, RoundTerms* terms) const {
+    const CaptureContext::Link& L, const Round& r, int64_t& tsc_a, double& err, RoundTerms* terms) const {
     if (L.dev_a >= ctx_.devices.size() || L.dev_b >= ctx_.devices.size()) {
         return false;
     }
@@ -1036,14 +1004,8 @@ bool D2dSyncConsumer::round_error(
         pb->second.linked.nodes.empty()) {
         return false;
     }
-    double wa = 0.0, wb = 0.0;
-    if (hw) {
-        wa = la->second.model.wall_at(mid_a(r, true));
-        wb = lb->second.model.wall_at(mid_b(r, true));
-    } else if (r.t0.wall != 0 && r.t2.wall != 0 && r.t1.wall != 0 && r.t1b.wall != 0 && r.t2.wall >= r.t0.wall) {
-        wa = 0.5 * (static_cast<double>(r.t0.wall) + static_cast<double>(r.t2.wall));
-        wb = 0.5 * (static_cast<double>(r.t1.wall) + static_cast<double>(r.t1b.wall));
-    }
+    const double wa = la->second.model.wall_at(mid_a(r));
+    const double wb = lb->second.model.wall_at(mid_b(r));
     if (wa <= 0.0 || wb <= 0.0) {
         return false;
     }
@@ -1068,69 +1030,44 @@ bool D2dSyncConsumer::round_error(
 void D2dSyncConsumer::publish_error_plots() const {
     for (size_t li = 0; li < ctx_.links.size(); li++) {
       const CaptureContext::Link& L = ctx_.links[li];
-      const LinkStreams& ls = links_[li];
-      for (const bool hw : {true, false}) {
-          const std::vector<Round>& rounds = (hw ? ls.hw : ls.sw).rounds;
+      {
+          const std::vector<Round>& rounds = links_[li].rounds;
           if (rounds.empty()) {
               continue;
           }
-          const bool is_primary = hw == ls.have_hw();
-          const char* tag = hw ? " [hw stamps]" : " [sw stamps]";
           const size_t n = rounds.size();
-          // Software rounds carry the ERISC's jitter (~15-20 ns rms over all rounds); as the solver does, the check
-          // keeps only the fastest quartile by round trip, where the stamps are good to ~2 ns.
-          uint64_t rtt_cut = std::numeric_limits<uint64_t>::max();
-          if (!hw) {
-              std::vector<uint64_t> rtts;
-              rtts.reserve(n);
-              for (const Round& r : rounds) {
-                  if (r.t2.wall >= r.t0.wall) {
-                      rtts.push_back(r.t2.wall - r.t0.wall);
-                  }
-              }
-              if (rtts.size() >= 8) {
-                  std::nth_element(rtts.begin(), rtts.begin() + rtts.size() / 4, rtts.end());
-                  rtt_cut = rtts[rtts.size() / 4];
-              }
-          }
           // Per round, next to the placement error: the stamps' own residual against a line through the neighbouring
           // rounds' raw offsets (the ruler's noise -- a stamp glitch shows here, a map error does not; the link rate
           // wanders ~0.1 ppm over a run, so a single run-wide line would not do) and the sender's round trip (a glitch
           // on either sender stamp shows here, one on the receiver does not).
           std::vector<SyncPlotPoint> pts;
           std::vector<double> resid, rtt, raw_x, raw_y, turn, path;
-          const double path_med = hw ? path_median(rounds, 0, n) : std::numeric_limits<double>::quiet_NaN();
+          const double path_med = path_median(rounds, 0, n);
           size_t off_path = 0;
           std::vector<RoundTerms> terms;
           pts.reserve(n);
           rtt.reserve(n);
           terms.reserve(n);
           long double se = 0, ss = 0;
-          const double ghz_a = std::max(ctx_.devices[L.dev_a].clock.frequency_ghz, 0.1);
           for (const Round& r : rounds) {
-              if (!hw && r.t2.wall - r.t0.wall > rtt_cut) {
-                  continue;
-              }
-              if (hw && std::abs(path_ns(r) - path_med) > kPathDevNs) {
+              if (std::abs(path_ns(r) - path_med) > kPathDevNs) {
                   off_path++;
                   continue;
               }
               int64_t H = 0;
               double e = 0.0;
               RoundTerms t;
-              if (!round_error(L, r, hw, H, e, &t)) {
+              if (!round_error(L, r, H, e, &t)) {
                   continue;
               }
               pts.push_back(SyncPlotPoint{H, e});
               terms.push_back(t);
               se += e;
               ss += static_cast<long double>(e) * e;
-              if (hw) {
-                  raw_x.push_back(mid_a(r, true));
-                  raw_y.push_back(mid_b(r, true) - raw_x.back());
-              }
-              rtt.push_back(hw ? rtt_ns(r) : (static_cast<double>(r.t2.wall) - static_cast<double>(r.t0.wall)) / ghz_a);
-              path.push_back(hw ? path_ns(r) : std::numeric_limits<double>::quiet_NaN());
+              raw_x.push_back(mid_a(r));
+              raw_y.push_back(mid_b(r) - raw_x.back());
+              rtt.push_back(rtt_ns(r));
+              path.push_back(path_ns(r));
               turn.push_back(rtt.back() - 2.0 * path.back());
           }
           if (pts.empty()) {
@@ -1138,7 +1075,7 @@ void D2dSyncConsumer::publish_error_plots() const {
           }
           resid.assign(pts.size(), 0.0);
           long double srr = 0;
-          if (hw && pts.size() >= 8) {
+          if (pts.size() >= 8) {
               constexpr size_t kHalf = 12;
               for (size_t i = 0; i < pts.size(); i++) {
                   const size_t lo = i > kHalf ? i - kHalf : 0, hi = std::min(pts.size(), i + kHalf + 1);
@@ -1165,7 +1102,7 @@ void D2dSyncConsumer::publish_error_plots() const {
               rtt_median = tmp[tmp.size() / 2];
           }
           const double nn = static_cast<double>(pts.size());
-          if (hw) {
+          {
               const auto pct = [](std::vector<double> v, double q) {
                   std::erase_if(v, [](double x) { return std::isnan(x); });
                   if (v.empty()) {
@@ -1177,7 +1114,7 @@ void D2dSyncConsumer::publish_error_plots() const {
               };
               log_info(
                   tt::LogMetal,
-                  "[streaming profiler] d2d sync link chip {} -> chip {} [hw stamps]: one way inside the stamps {:.1f} "
+                  "[streaming profiler] d2d sync link chip {} -> chip {}: one way inside the stamps {:.1f} "
                   "ns "
                   "(p10 {:.1f}, p90 {:.1f}); receiver's stamped turnaround {:.1f} ns (p10 {:.1f}, p90 {:.1f}); "
                   "sender's "
@@ -1198,19 +1135,16 @@ void D2dSyncConsumer::publish_error_plots() const {
           }
           log_info(
               tt::LogMetal,
-              "[streaming profiler] d2d sync error chip {} vs chip {}{}: {} rounds, mean {:+.1f} ns, rms {:.1f} ns{}{}",
+              "[streaming profiler] d2d sync error chip {} vs chip {}: {} rounds, mean {:+.1f} ns, rms {:.1f} ns{}",
               L.chip_b,
               L.chip_a,
-              tag,
               pts.size(),
               static_cast<double>(se) / nn,
               std::sqrt(static_cast<double>(ss) / nn),
-              is_primary ? " (the solving stamps)" : " (checking the map solved from the other stamps)",
-              hw && pts.size() >= 8
-                  ? fmt::format(
-                        "; the stamps' own noise (residual to the neighbouring rounds): rms {:.1f} ns",
-                        std::sqrt(static_cast<double>(srr / static_cast<long double>(pts.size()))))
-                  : "");
+              pts.size() >= 8 ? fmt::format(
+                                    "; the stamps' own noise (residual to the neighbouring rounds): rms {:.1f} ns",
+                                    std::sqrt(static_cast<double>(srr / static_cast<long double>(pts.size()))))
+                              : "");
           // The five worst rounds, how far each sits from a correction node of either chip, and its two glitch
           // indicators: a map error has a small residual; a stamp glitch has a large one and often a shifted round
           // trip.
@@ -1255,7 +1189,7 @@ void D2dSyncConsumer::publish_error_plots() const {
                   worst += fmt::format(
                       " {:+.0f} ns at {:.3f} s (nearest node: chip {} {:.0f} us, chip {} {:.0f} us; stamp resid "
                       "{:+.0f} "
-                      "ns, {} {:+.1f} ns vs median);",
+                      "ns, path {:+.1f} ns vs median);",
                       p.value,
                       static_cast<double>(SteadyView::mono_ns(p.tsc) - SteadyView::mono_ns(pts.front().tsc)) / 1e9,
                       L.chip_a,
@@ -1263,20 +1197,17 @@ void D2dSyncConsumer::publish_error_plots() const {
                       L.chip_b,
                       node_b_us[i],
                       resid[i],
-                      hw && !std::isnan(path[i]) ? "path" : "rtt",
-                      hw && !std::isnan(path[i]) ? path[i] - path_med : rtt[i] - rtt_median);
+                      path[i] - path_med);
               }
               log_info(
                   tt::LogMetal,
-                  "[streaming profiler] d2d sync error chip {} vs chip {}{}: worst rounds{}",
+                  "[streaming profiler] d2d sync error chip {} vs chip {}: worst rounds{}",
                   L.chip_b,
                   L.chip_a,
-                  tag,
                   worst);
           }
           if (const std::string& csv = ctx_.d2d_csv_path; !csv.empty()) {
-              if (std::FILE* ef = std::fopen(
-                      fmt::format("{}.err_{}_{}{}.csv", csv, L.chip_b, L.chip_a, hw ? "_hw" : "_sw").c_str(), "w");
+              if (std::FILE* ef = std::fopen(fmt::format("{}.err_{}_{}.csv", csv, L.chip_b, L.chip_a).c_str(), "w");
                   ef != nullptr) {
                   std::fprintf(
                       ef,
@@ -1293,8 +1224,8 @@ void D2dSyncConsumer::publish_error_plots() const {
                           rtt[i] - rtt_median,
                           node_a_us[i],
                           node_b_us[i],
-                          hw ? raw_x[i] : 0.0,
-                          hw ? raw_x[i] + raw_y[i] : 0.0,
+                          raw_x[i],
+                          raw_x[i] + raw_y[i],
                           t.wall_a,
                           t.wall_b,
                           t.root_a,
@@ -1306,11 +1237,7 @@ void D2dSyncConsumer::publish_error_plots() const {
                   std::fclose(ef);
               }
           }
-          SyncPlots::publish(
-              fmt::format("d2d sync error chip{} vs chip{} (ns){}", L.chip_b, L.chip_a, tag), std::move(pts));
-          if (!is_primary) {
-              continue;
-          }
+          SyncPlots::publish(fmt::format("d2d sync error chip{} vs chip{} (ns)", L.chip_b, L.chip_a), std::move(pts));
           // The live series: what a sink converting on arrival applied. Rounds before the chip's first linked publish
           // carry the whole uncorrected anchor difference; they are counted apart so the rest can be read.
           if (li < live_err_.size() && !live_err_[li].empty()) {
@@ -1355,12 +1282,11 @@ void D2dSyncConsumer::on_capture_end(const CaptureContext& ctx) {
     // Rounds still ahead of the watermark at capture end are what the final flush releases: evaluate them against the
     // final map so the live series is complete.
     for (size_t li = 0; li < ctx_.links.size() && li < live_done_.size(); li++) {
-        const std::vector<Round>& rounds = links_[li].primary().rounds;
-        const bool hw = links_[li].have_hw();
+        const std::vector<Round>& rounds = links_[li].rounds;
         for (; live_done_[li] < rounds.size(); live_done_[li]++) {
             int64_t H = 0;
             double e = 0.0;
-            if (round_error(ctx_.links[li], rounds[live_done_[li]], hw, H, e)) {
+            if (round_error(ctx_.links[li], rounds[live_done_[li]], H, e)) {
                 live_err_[li].push_back(SyncPlotPoint{H, e});
             }
         }

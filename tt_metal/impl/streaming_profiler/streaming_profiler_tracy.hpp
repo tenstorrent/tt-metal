@@ -71,8 +71,8 @@ private:
     void push_zone(const Core& core, std::string_view name, int64_t start_tsc, int64_t end_tsc, uint32_t color);
     void push_marker(
         const Core& core, std::string_view name, int64_t tsc, uint32_t runtime_id, std::span<const uint64_t> values);
-    // Device<->device sync plots, all RATES. Per chip and per sync kind (the 3 us LOCAL tracker, the LINK stamps
-    // at the rounds' cadence): the chip's applied AICLK over the ROOT chip's at the same instant -- the factor that
+    // Device<->device sync plots, all RATES. Per chip: the chip's applied AICLK over the ROOT chip's at the same
+    // instant -- the factor that
     // scales its wall-clock rate onto the root's; the root reads exactly 1. Each stream's AICLK comes from a sliding
     // dwall/drefclk over its PP_CLOCK samples. Plus the cross-chip refclk scale regression the d2d consumer publishes
     // through SyncPlots.

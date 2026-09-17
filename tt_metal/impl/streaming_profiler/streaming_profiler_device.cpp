@@ -1367,14 +1367,6 @@ void Devices::release_eth_pushers() {
 // kernels wedged an eth core (a board reset). A binary that failed to compile is never launched.
 void Devices::run_link_sync() {
     auto& cluster = MetalContext::instance(context_id_).get_cluster();
-    // TT_METAL_STREAMING_PROFILER_D2D_HW_TS=1: the sync kernels stamp their frames with the eth tile's 1588 hardware
-    // (MAC egress, RX classifier ingress) instead of reading the clock in software around them.
-    const bool hw_stamps = std::getenv("TT_METAL_STREAMING_PROFILER_D2D_HW_TS") != nullptr;
-    const std::map<std::string, std::string> sync_defines =
-        hw_stamps ? std::map<std::string, std::string>{{"D2D_HW_TS", "1"}} : std::map<std::string, std::string>{};
-    if (hw_stamps) {
-        log_info(tt::LogMetal, "[streaming profiler] link sync: 1588 hardware stamps");
-    }
     // The stop/done words sit at the top of the active eth core's UNRESERVED region, clear of the sync kernel's eth
     // channels (which start at its base) and its profiler ring, past the frame slots of a router-hosted end, which
     // keeps its diagnostics at the same place (link_sync::kL1Bytes, kCtlOffset).
@@ -1422,12 +1414,12 @@ void Devices::run_link_sync() {
             *ps,
             "tt_metal/tools/profiler/sync/sync_device_kernel_sender.cpp",
             L.eth_a,
-            EthernetConfig{.noc = NOC::RISCV_0_default, .compile_args = ct, .defines = sync_defines});
+            EthernetConfig{.noc = NOC::RISCV_0_default, .compile_args = ct});
         const auto kid_r = CreateKernel(
             *pr,
             "tt_metal/tools/profiler/sync/sync_device_kernel_receiver.cpp",
             L.eth_b,
-            EthernetConfig{.noc = NOC::RISCV_0_default, .compile_args = ct, .defines = sync_defines});
+            EthernetConfig{.noc = NOC::RISCV_0_default, .compile_args = ct});
         // The stop word and pace ride as RUNTIME args (positional compile args past index 2 do not reach an eth
         // kernel here). Sender: {stop_addr, pace}; receiver: {stop_addr}.
         SetRuntimeArgs(*ps, kid_s, L.eth_a, {stop_addr, link_sync::kPaceTicks});

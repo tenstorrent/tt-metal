@@ -56,7 +56,7 @@
 #define PP_CLOCK_ROUND_SHIFT 2u
 #define PP_CLOCK_ROLE_MASK 0x3u
 #define PP_CLOCK_LOCAL_REFCLK 0u /* this chip's refclk against its wall clock, from the idle-eth tracker */
-#define PP_CLOCK_LINK_REFCLK 1u  /* a sync round's software stamp: the refclk read at the stamp */
+/* 1 is retired (was LINK_REFCLK, the software link stamps); never reuse it. */
 #define PP_CLOCK_LINK_PTP 2u     /* a sync round's 1588 hardware stamps averaged, in quarter-ns of the refclk domain */
 #define PP_CLOCK_LOCAL_RAW 0u    /* LOCAL: a raw (refclk, wall) sample of a transition */
 #define PP_CLOCK_LOCAL_POINT 1u  /* LOCAL: a point of the open segment's line; round = k8 | count << 8 */
