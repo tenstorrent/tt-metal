@@ -85,7 +85,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
     float eps = operation_attributes.eps;
     const auto& compute_kernel_config = operation_attributes.compute_kernel_config;
 
-    auto input_tile = a.tensor_spec().tile();
+    auto input_tile = compute_tile_for_layernorm(a);
     // Extract program config
     CoreCoord compute_with_storage_grid_size;
     uint32_t subblock_wt = 0;
@@ -158,7 +158,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
     const uint32_t logical_K = a.logical_shape()[-1];
 
     // Compute grid and worker distribution using helper structs
-    auto grid = GridParams::compute(a, block_ht, device->compute_with_storage_grid_size());
+    auto grid = GridParams::compute(a, block_ht, device->compute_with_storage_grid_size(), input_tile.get_height());
     auto workers = WorkerDistribution::compute(grid, block_ht);
     auto core_ranges = CoreRanges::compute(grid, workers);
 
@@ -224,8 +224,9 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
     auto dfb_sizes = dfb_size_params.compute();
 
     // Get kernel paths using helper
-    bool use_row_major_kernel = (gamma.has_value() && gamma.value().layout() == Layout::ROW_MAJOR) ||
-                                (beta.has_value() && beta.value().layout() == Layout::ROW_MAJOR);
+    bool use_row_major_kernel =
+        a.layout() != Layout::ROW_MAJOR && ((gamma.has_value() && gamma.value().layout() == Layout::ROW_MAJOR) ||
+                                            (beta.has_value() && beta.value().layout() == Layout::ROW_MAJOR));
     auto kernel_paths = KernelPaths::get(is_pre_all_gather, is_post_all_gather, use_row_major_kernel, use_welford);
 
     // NOC selection
@@ -355,6 +356,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
         .reader_noc = reader_noc,
         .writer_noc = writer_noc,
         .compute_hw = to_compute_hardware_config(device->arch(), compute_kernel_config),
+        .tile = input_tile,
     };
     if (operation_attributes.fused_activation.has_value()) {
         const auto& act = operation_attributes.fused_activation.value();

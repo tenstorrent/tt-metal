@@ -4,6 +4,7 @@
 
 #include "shard_spec_validation.hpp"
 
+#include <tt-metalium/constants.hpp>
 #include <tt-metalium/math.hpp>
 
 namespace ttnn::operations::normalization::detail {
@@ -17,8 +18,11 @@ void validate_sharded_input(
     const auto& shard_spec = tensor.shard_spec().value();
     const auto& shard_shape = shard_spec.shape;
     const auto& shard_grid = shard_spec.grid;
-    const uint32_t tile_h = tensor.tensor_spec().tile().get_height();
-    const uint32_t tile_w = tensor.tensor_spec().tile().get_width();
+    // ROW_MAJOR shards are dense rows, not 32-high tiles. Compute still packs 1x32 faces
+    // (same contract as matmul_decode), so height is aligned to 1 and width to TILE_WIDTH.
+    const uint32_t tile_h = tensor.layout() == Layout::ROW_MAJOR ? 1u : tensor.tensor_spec().tile().get_height();
+    const uint32_t tile_w =
+        tensor.layout() == Layout::ROW_MAJOR ? tt::constants::TILE_WIDTH : tensor.tensor_spec().tile().get_width();
 
     TT_FATAL(shard_grid.num_cores() > 0, "Shard grid must have at least one core");
 

@@ -165,9 +165,9 @@ uint32_t get_num_blocks(bool mcast_1d, bool row_wise, CoreCoord grid_size, const
 // Grid and worker distribution
 //////////////////////////////////////////////////////////////////////////////
 
-GridParams GridParams::compute(const Tensor& input, uint32_t block_ht, CoreCoord compute_with_storage_grid_size) {
+GridParams GridParams::compute(
+    const Tensor& input, uint32_t block_ht, CoreCoord compute_with_storage_grid_size, uint32_t tile_height) {
     auto spec = input.shard_spec().value();
-    const uint32_t tile_height = input.tensor_spec().tile().get_height();
     uint32_t M = input.physical_volume() / input.padded_shape()[-1];
     uint32_t block_h = block_ht * tile_height;
     bool mcast = M == block_h;
@@ -653,7 +653,7 @@ void add_dataflow_buffer_specs(m2::ProgramSpec& spec, const SpecConfig& c) {
         // Global reduce scaler: Float32 when the intermediates are Float32, otherwise bfloat16.
         const tt::DataFormat scaler_global_format =
             c.dfb_data_format == tt::DataFormat::Float32 ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
-        const uint32_t scaler_global_tile_size = tt::tile_size(scaler_global_format);
+        const uint32_t scaler_global_tile_size = c.tile.get_tile_size(scaler_global_format);
         add_dfb(spec, SCALER_GLOBAL, scaler_global_tile_size, scaler_global_tile_size, scaler_global_format);
 
         // Scratch holding the masked input for the LayerNorm E[x] reduction, so the input buffer stays
@@ -754,6 +754,14 @@ void add_dataflow_buffer_specs(m2::ProgramSpec& spec, const SpecConfig& c) {
         add_dfb(spec, STATS, sizes.stats_dfb_size, c.stats_single_tile_size, c.stats_dfb_data_format, STATS_T);
         add_dfb(spec, STATS_REDUCED, sizes.stats_reduced_dfb_size, c.single_tile_size, c.dfb_data_format);
         add_dfb(spec, VAR, sizes.ex_global_dfb_size, c.single_tile_size, c.dfb_data_format);
+    }
+
+    // Compute consumes these as c.tile (32x32 for TILE input, 1x32 for ROW_MAJOR WIDTH_SHARDED).
+    // The reciprocal LUT is not a tile.
+    for (auto& dfb : spec.dataflow_buffers) {
+        if (dfb.unique_id != RECIPROCALS) {
+            dfb.tile_format_metadata = c.tile;
+        }
     }
 }
 

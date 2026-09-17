@@ -350,6 +350,72 @@ def test_rms_norm_sharded_width_default_config(device, h, w, dtype):
     )
 
 
+def test_rms_norm_rm_width_sharded_hyperhead_flatten(device):
+    """DeepSeekV4 HyperHead decode flatten RMSNorm.
+
+    hyperconnection.py:301 reshapes ``[B, S, H, D]`` to ``[1, 1, t, hc * d]`` then calls
+    unweighted ``ttnn.rms_norm``. Decode uses t=1, hc=4, d=4096 -> ``[1, 1, 1, 16384]``,
+    ROW_MAJOR WIDTH_SHARDED L1, eps=1e-6, typically 64 cores with shard ``[1, 256]``.
+    Compute consumes the RM shard as 1x32 faces (same contract as matmul_decode).
+    """
+    torch.manual_seed(0)
+
+    grid = device.compute_with_storage_grid_size()
+    num_cores_h, num_cores_w = 8, 8
+    if grid.x < num_cores_w or grid.y < num_cores_h:
+        pytest.skip(f"HyperHead flatten RMSNorm needs an 8x8 grid, got {grid.x}x{grid.y}")
+
+    dtype = torch.bfloat16
+    eps = 1e-6
+    h, w = 1, 16384
+    num_cores_total = num_cores_h * num_cores_w
+    shard_height, shard_width = h, w // num_cores_total  # [1, 256]
+
+    torch_input = torch.randn((1, 1, h, w), dtype=dtype)
+
+    shard_spec = ttnn.ShardSpec(
+        ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(0, 0),
+                    ttnn.CoreCoord(num_cores_w - 1, num_cores_h - 1),
+                )
+            }
+        ),
+        [shard_height, shard_width],
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    sharded_mem_config = ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        buffer_type=ttnn.BufferType.L1,
+        shard_spec=shard_spec,
+    )
+
+    input_tensor = ttnn.from_torch(
+        torch_input,
+        device=device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=sharded_mem_config,
+    )
+
+    output_tensor = ttnn.rms_norm(input_tensor, epsilon=eps, memory_config=input_tensor.memory_config())
+    assert output_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
+    assert output_tensor.is_sharded()
+
+    output_torch = ttnn.to_torch(ttnn.from_device(output_tensor))
+    x = torch_input.float()
+    golden = (x * torch.rsqrt(x.pow(2).mean(dim=-1, keepdim=True) + eps)).to(dtype)
+
+    assert_numeric_metrics(
+        golden,
+        output_torch,
+        pcc_threshold=0.999,
+        rtol=0.031,
+        atol=0.052,
+        frobenius_threshold=0.010,
+    )
+
+
 # Geometry cases (see UNEVEN_MULTICORE_LOGICAL_WIDTH_CASES in sharded_test_utils.py for the covered
 # tile-aligned-uneven and non-tile-aligned widths).
 @pytest.mark.parametrize(

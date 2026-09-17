@@ -534,6 +534,11 @@ class DeepSeekV4Model(DeepSeekV4Module):
         # :meth:`prepare_static_decode`).
         self._pkt_socket = None
         self._out_socket = None
+        # Replay-thread state lives here so :meth:`shutdown` is a no-op on the eager path
+        # (tests/demos register it on the ExitStack even when traces are never captured).
+        self._traced_captured = False
+        self._replay_queue: queue.Queue = queue.Queue()
+        self._replay_thread: Optional[threading.Thread] = None
         self._out_plan: Optional[tuple[int, int]] = None  # (rows, cols) of one output
         self._out_torch_dtype: Optional[torch.dtype] = None
         self._paged_groups: dict[str, PagedGroup] = {}
@@ -1643,11 +1648,9 @@ class DeepSeekV4Model(DeepSeekV4Module):
             output_rm = ttnn.allocate_tensor_on_device(streams_rm.spec, to_submesh)
             ttnn.experimental.send_direct_async(streams_rm, sender_socket)
             ttnn.experimental.recv_direct_async(output_rm, receiver_socket)
-            output_tensor = ttnn.to_layout(output_rm, ttnn.TILE_LAYOUT)
         streams.deallocate(True)
         streams_rm.deallocate(True)
-        output_rm.deallocate(True)
-        return output_tensor
+        return output_rm
 
     def decode(self, token_id: int, pos: int, rope: dict) -> ttnn.Tensor:
         """Generate one step: feed ``token_id`` at absolute position ``pos`` against

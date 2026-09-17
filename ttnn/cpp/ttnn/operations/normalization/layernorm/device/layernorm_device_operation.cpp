@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "layernorm_device_operation.hpp"
+#include "ttnn/operations/normalization/layernorm/device/layernorm_common.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
 #include "ttnn/device_operation.hpp"
@@ -30,16 +31,45 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
     const auto& gamma = tensor_args.weight;
     const auto& beta = tensor_args.bias;
     const auto& stats = tensor_args.stats;
-    const uint32_t tile_height = a.tensor_spec().tile().get_height();
-    const uint32_t tile_width = a.tensor_spec().tile().get_width();
+    const auto compute_tile = compute_tile_for_layernorm(a);
+    const uint32_t tile_height = compute_tile.get_height();
+    const uint32_t tile_width = compute_tile.get_width();
+    const uint32_t tensor_tile_height = a.tensor_spec().tile().get_height();
+    const bool input_is_row_major = a.layout() == Layout::ROW_MAJOR;
 
     TT_FATAL(
-        a.layout() == Layout::TILE || (a.layout() == Layout::ROW_MAJOR && !a.is_sharded()),
-        "Input tensor must have TILE layout (ROW_MAJOR is only supported for non-sharded tensors), got: {}",
+        a.layout() == Layout::TILE || a.layout() == Layout::ROW_MAJOR,
+        "Input tensor must have TILE or ROW_MAJOR layout, got: {}",
         a.layout());
-    TT_FATAL(
-        !(a.layout() == Layout::ROW_MAJOR && a.is_sharded()), "ROW_MAJOR input is not supported with sharded tensors");
-    if (a.layout() == Layout::ROW_MAJOR) {
+    if (input_is_row_major && a.is_sharded()) {
+        TT_FATAL(
+            operation_attributes.norm_type == LayerNormType::RMSNORM,
+            "ROW_MAJOR sharded input is only supported for RMSNorm");
+        TT_FATAL(
+            a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED,
+            "ROW_MAJOR sharded input must be WIDTH_SHARDED, got: {}",
+            a.memory_config().memory_layout());
+        TT_FATAL(
+            a.dtype() == DataType::BFLOAT16 || a.dtype() == DataType::FLOAT32,
+            "ROW_MAJOR WIDTH_SHARDED RMSNorm requires BFLOAT16 or FLOAT32 (1x32 faces are contiguous row chunks), "
+            "got: {}",
+            a.dtype());
+        TT_FATAL(
+            operation_attributes.distributed_norm_stage == DistributedLayerNormStage::NOT_DISTRIBUTED,
+            "ROW_MAJOR WIDTH_SHARDED RMSNorm does not support distributed norm");
+        TT_FATAL(!b.has_value(), "ROW_MAJOR WIDTH_SHARDED RMSNorm does not support a residual tensor");
+        if (gamma.has_value()) {
+            TT_FATAL(
+                gamma.value().layout() == Layout::ROW_MAJOR,
+                "ROW_MAJOR WIDTH_SHARDED RMSNorm requires ROW_MAJOR gamma (TILE gamma is 32x32, compute is 1x32)");
+        }
+        if (beta.has_value()) {
+            TT_FATAL(
+                beta.value().layout() == Layout::ROW_MAJOR,
+                "ROW_MAJOR WIDTH_SHARDED RMSNorm requires ROW_MAJOR beta (TILE beta is 32x32, compute is 1x32)");
+        }
+    }
+    if (input_is_row_major) {
         TT_FATAL(
             a.logical_shape()[-1] % tile_width == 0,
             "ROW_MAJOR input requires W ({}) to be a multiple of tile width ({})",
@@ -84,9 +114,9 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
                 gamma.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
             TT_FATAL(a.device() == gamma.value().device(), "Input and gamma tensors must be on same device");
             TT_FATAL(
-                gamma.value().padded_shape()[-2] == tile_height,
+                gamma.value().padded_shape()[-2] == tensor_tile_height,
                 "Gamma tensor height must equal tile height ({}), got: {}",
-                tile_height,
+                tensor_tile_height,
                 gamma.value().padded_shape()[-2]);
         } else {
             TT_FATAL(
@@ -133,9 +163,9 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
                 beta.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
             TT_FATAL(a.device() == beta.value().device(), "Input and beta tensors must be on same device");
             TT_FATAL(
-                beta.value().padded_shape()[-2] == tile_height,
+                beta.value().padded_shape()[-2] == tensor_tile_height,
                 "Beta tensor height must equal tile height ({}), got: {}",
-                tile_height,
+                tensor_tile_height,
                 beta.value().padded_shape()[-2]);
         } else {
             TT_FATAL(
@@ -460,11 +490,19 @@ tt::tt_metal::TensorSpec LayerNormDeviceOperation::compute_output_specs(
                         mem_config.memory_layout(), mem_config.buffer_type(), input_tensor.shard_spec());
                 }
 
+                // ROW_MAJOR PageConfig cannot carry a custom 1x32 tile; compute still packs those
+                // faces. For BF16/FP32 a 1x32 face is 32 contiguous row elements and writes
+                // straight into the ROW_MAJOR buffer (same contract as matmul_decode).
+                const auto output_layout = input_tensor.layout();
+                const PageConfig page_config = output_layout == Layout::ROW_MAJOR
+                                                   ? PageConfig(Layout::ROW_MAJOR)
+                                                   : PageConfig(Layout::TILE, input_tile);
+
                 return tt::tt_metal::TensorSpec(
                     output_shape,
                     TensorLayout::fromPaddedShape(
                         operation_attributes.dtype.value_or(input_tensor.dtype()),
-                        PageConfig(Layout::TILE, input_tile),
+                        page_config,
                         mem_config,
                         output_shape,
                         output_padded_shape));

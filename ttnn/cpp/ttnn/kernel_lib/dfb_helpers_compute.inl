@@ -92,15 +92,28 @@ constexpr uint32_t DFB_COMPUTE_ADDR_SHIFT = 4; // almeet
 
 template <DataFormat format>
 ALWI bool is_valid_dfb_tile_page_size(uint32_t dfb_id) {
-    uint32_t tile_size = get_full_tile_size<format>();
-    uint32_t page_size_bytes = get_local_cb_interface(dfb_id).fifo_page_size << DFB_COMPUTE_ADDR_SHIFT;
-    return page_size_bytes == tile_size;
+    return is_valid_dfb_tile_page_size(dfb_id, format);
 }
 
 ALWI bool is_valid_dfb_tile_page_size(uint32_t dfb_id, DataFormat format) {
-    uint32_t tile_size = get_full_tile_size(format);
     uint32_t page_size_bytes = get_local_cb_interface(dfb_id).fifo_page_size << DFB_COMPUTE_ADDR_SHIFT;
-    return page_size_bytes == tile_size;
+#if defined(UCK_CHLKC_PACK)
+    const uint32_t tile_r_dim = pack_tile_r_dim[dfb_id];
+    const uint32_t tile_c_dim = pack_tile_c_dim[dfb_id];
+#else
+    const uint32_t tile_r_dim = unpack_tile_r_dim[dfb_id];
+    const uint32_t tile_c_dim = unpack_tile_c_dim[dfb_id];
+#endif
+    if (tile_r_dim == 32 && tile_c_dim == 32) {
+        return page_size_bytes == get_full_tile_size(format);
+    }
+    // Block-float pages are not a uniform per-datum scale of the 32x32 size.
+    if (is_block_float_format(static_cast<uint32_t>(format))) {
+        return page_size_bytes == get_full_tile_size(format);
+    }
+    constexpr uint32_t full_datums = 32 * 32;
+    const uint32_t expected = (get_full_tile_size(format) / full_datums) * tile_r_dim * tile_c_dim;
+    return page_size_bytes == expected;
 }
 #endif  // !ARCH_QUASAR
 

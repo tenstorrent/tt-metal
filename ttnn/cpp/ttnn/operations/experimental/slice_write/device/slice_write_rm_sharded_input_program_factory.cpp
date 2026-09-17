@@ -5,6 +5,8 @@
 #include "slice_write_rm_sharded_input_program_factory.hpp"
 
 #include <cstdint>
+#include <map>
+#include <string>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/hal.hpp>
@@ -51,9 +53,18 @@ SliceWriteRuntimeArgs get_slice_write_runtime_args_rm_sharded_input(
 
     bool rm_orientation = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
     bool is_block_sharded = input_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
+    bool is_width_sharded = input_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED;
 
     uint32_t output_row_size_bytes = output_shape[-1] * input_tensor.element_size();
     uint32_t input_row_size_bytes = input_shard_shape[1] * input_tensor.element_size();
+    if (is_width_sharded) {
+        const uint32_t dram_alignment = hal::get_dram_alignment();
+        TT_FATAL(
+            input_row_size_bytes % dram_alignment == 0,
+            "WIDTH_SHARDED slice_write shard width in bytes ({}) must be a multiple of DRAM alignment ({})",
+            input_row_size_bytes,
+            dram_alignment);
+    }
 
     std::uint32_t num_dims = static_cast<std::uint32_t>(input_shape.rank());
     std::vector<uint32_t> num_input_sticks_per_dim(num_dims);
@@ -149,6 +160,9 @@ SliceWriteRuntimeArgs get_slice_write_runtime_args_rm_sharded_input(
         if (is_block_sharded) {
             core_w_index = rm_orientation ? core.x : core.y;
             core_h_index = rm_orientation ? core.y : core.x;
+        } else if (is_width_sharded) {
+            core_h_index = 0;
+            core_w_index = core_index;
         }
         const uint32_t num_sticks_read = core_h_index * num_sticks_per_core;
         const uint32_t width_offset = core_w_index * input_row_size_bytes;
@@ -171,7 +185,6 @@ SliceWriteRuntimeArgs get_slice_write_runtime_args_rm_sharded_input(
 
         uint32_t this_input_row_size_bytes = std::min(input_row_size_bytes, output_row_size_bytes - width_offset);
         WriterKernelArgs writer_kernel_args = common_writer_kernel_args;
-        writer_kernel_args[0] += width_offset;
         writer_kernel_args[2] = this_input_row_size_bytes;
 
         uint32_t num_sticks_this_core =
@@ -193,6 +206,7 @@ SliceWriteRuntimeArgs get_slice_write_runtime_args_rm_sharded_input(
         writer_kernel_args[addr_offset++] = num_sticks_this_core;
         writer_kernel_args[addr_offset] = num_read_per_barrier;
         writer_kernel_args.insert(writer_kernel_args.end(), id_per_dim.begin(), id_per_dim.end());
+        writer_kernel_args.push_back(width_offset);
 
         ReaderKernelArgs reader_kernel_args = {num_sticks_per_core};
         ret_val[core_index] = {reader_kernel_args, writer_kernel_args};
@@ -218,8 +232,9 @@ SliceWriteRMShardedInputProgramFactory::cached_program_t SliceWriteRMShardedInpu
     TT_FATAL(input.shard_spec().has_value(), "Input tensor should be sharded");
     TT_FATAL(
         input.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED ||
+            input.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED ||
             input.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED,
-        "Input tensor should be height or block sharded");
+        "Input tensor should be height, width, or block sharded");
     auto shard_spec = input.shard_spec().value();
     auto input_cores = shard_spec.grid;
     bool rm_orientation = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
@@ -280,6 +295,8 @@ SliceWriteRMShardedInputProgramFactory::cached_program_t SliceWriteRMShardedInpu
     std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)src0_cb_index};
     std::vector<uint32_t> writer_compile_time_args_vec = {(std::uint32_t)src0_cb_index, 0};
     tt::tt_metal::TensorAccessorArgs(dst_buffer).append_to(writer_compile_time_args_vec);
+    std::map<std::string, std::string> writer_defines;
+    writer_defines["SLICE_WRITE_DST_BYTE_OFFSET"] = "1";
 
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -292,7 +309,7 @@ SliceWriteRMShardedInputProgramFactory::cached_program_t SliceWriteRMShardedInpu
         "ttnn/cpp/ttnn/operations/experimental/slice_write/device/kernels/dataflow/"
         "slice_write_writer_interleaved.cpp",
         input_cores,
-        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args_vec));
+        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args_vec, writer_defines));
 
     const auto iter_cores = corerange_to_cores(input_cores, std::nullopt, rm_orientation);
 

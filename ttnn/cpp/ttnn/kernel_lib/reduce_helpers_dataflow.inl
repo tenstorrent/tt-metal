@@ -44,16 +44,15 @@ FORCE_INLINE uint32_t float_to_scaler_bits(float value) {
 // Format-aware fill_each_face_row0
 // =============================================================================
 
-template <DataFormat data_format, uint32_t num_faces>
+template <DataFormat data_format, uint32_t num_faces, uint32_t face_r_dim = tt::constants::FACE_HEIGHT>
 FORCE_INLINE void fill_each_face_row0(volatile tt_l1_ptr uint32_t* ptr, uint32_t scaler) {
     static_assert(
         data_format == DataFormat::Float16_b || data_format == DataFormat::Float32,
         "fill_each_face_row0 only supports Float16_b (bfloat16) and Float32 formats");
 
-    constexpr uint32_t face_size_u32 =
-        (data_format == DataFormat::Float32) ? FACE_SIZE_U32_FP32 : FACE_SIZE_U32;
     constexpr uint32_t row_size_u32 =
         (data_format == DataFormat::Float32) ? ROW_SIZE_U32_FP32 : ROW_SIZE_U32;
+    constexpr uint32_t face_size_u32 = face_r_dim * row_size_u32;
 
     for (uint32_t face = 0; face < num_faces; ++face) {
         uint32_t face_offset = face * face_size_u32;
@@ -89,7 +88,8 @@ template <
     DataFormat data_format,
     ReduceDim reduce_dim,
     uint32_t face_rows,
-    uint32_t faces_per_row>
+    uint32_t faces_per_row,
+    uint32_t face_r_dim = tt::constants::FACE_HEIGHT>
 FORCE_INLINE void fill_each_face_row0_partial(
     volatile tt_l1_ptr uint32_t* ptr, uint32_t scaler, uint32_t valid_reduce_dim_elements_in_tile) {
     static_assert(
@@ -99,8 +99,9 @@ FORCE_INLINE void fill_each_face_row0_partial(
         reduce_dim == ReduceDim::REDUCE_ROW || reduce_dim == ReduceDim::REDUCE_COL,
         "fill_each_face_row0_partial only supports partial valid elements for REDUCE_ROW and REDUCE_COL");
 
-    constexpr uint32_t face_size_u32 =
-        (data_format == DataFormat::Float32) ? FACE_SIZE_U32_FP32 : FACE_SIZE_U32;
+    constexpr uint32_t row_size_u32 =
+        (data_format == DataFormat::Float32) ? ROW_SIZE_U32_FP32 : ROW_SIZE_U32;
+    constexpr uint32_t face_size_u32 = face_r_dim * row_size_u32;
 
     for (uint32_t face_row = 0; face_row < face_rows; ++face_row) {
         for (uint32_t face_col = 0; face_col < faces_per_row; ++face_col) {
@@ -116,7 +117,7 @@ FORCE_INLINE void fill_each_face_row0_partial(
                     cols_in_face = remaining < cols_per_face ? remaining : cols_per_face;
                 }
             } else {
-                constexpr uint32_t rows_per_face = tt::constants::FACE_HEIGHT;
+                constexpr uint32_t rows_per_face = face_r_dim;
                 const uint32_t face_row_start = face_row * rows_per_face;
                 if (valid_reduce_dim_elements_in_tile > face_row_start) {
                     const uint32_t remaining = valid_reduce_dim_elements_in_tile - face_row_start;
@@ -140,10 +141,14 @@ FORCE_INLINE void prepare_reduce_scaler(float scaler_f, uint32_t valid_reduce_di
     constexpr DataFormat data_format = get_dataformat(dfb_id);
     constexpr uint32_t tile_r_dim = get_tile_r_dim<dfb_id>();
     constexpr uint32_t tile_c_dim = get_tile_c_dim<dfb_id>();
-    static_assert(tile_r_dim % tt::constants::FACE_HEIGHT == 0, "tile height must be a multiple of FACE_HEIGHT");
-    static_assert(tile_c_dim % tt::constants::FACE_WIDTH == 0, "tile width must be a multiple of FACE_WIDTH");
-    constexpr uint32_t face_rows = tile_r_dim / tt::constants::FACE_HEIGHT;
-    constexpr uint32_t faces_per_row = tile_c_dim / tt::constants::FACE_WIDTH;
+    constexpr uint32_t face_r_dim =
+        tile_r_dim < tt::constants::FACE_HEIGHT ? tile_r_dim : tt::constants::FACE_HEIGHT;
+    constexpr uint32_t face_c_dim =
+        tile_c_dim < tt::constants::FACE_WIDTH ? tile_c_dim : tt::constants::FACE_WIDTH;
+    static_assert(tile_r_dim % face_r_dim == 0, "tile height must be a multiple of face height");
+    static_assert(tile_c_dim % face_c_dim == 0, "tile width must be a multiple of face width");
+    constexpr uint32_t face_rows = tile_r_dim / face_r_dim;
+    constexpr uint32_t faces_per_row = tile_c_dim / face_c_dim;
     constexpr uint32_t num_faces = face_rows * faces_per_row;
     static_assert(
         reduce_dim != ReduceDim::REDUCE_SCALAR
@@ -170,12 +175,12 @@ FORCE_INLINE void prepare_reduce_scaler(float scaler_f, uint32_t valid_reduce_di
     uint32_t scaler = float_to_scaler_bits<data_format>(scaler_f);
     if (scaler != 0) {
         if constexpr (reduce_dim == ReduceDim::REDUCE_SCALAR) {
-            fill_each_face_row0<data_format, num_faces>(addr_to_l1_ptr(write_addr), scaler);
+            fill_each_face_row0<data_format, num_faces, face_r_dim>(addr_to_l1_ptr(write_addr), scaler);
         } else {
             if (valid_reduce_dim_elements_in_tile == full_dim) {
-                fill_each_face_row0<data_format, num_faces>(addr_to_l1_ptr(write_addr), scaler);
+                fill_each_face_row0<data_format, num_faces, face_r_dim>(addr_to_l1_ptr(write_addr), scaler);
             } else {
-                fill_each_face_row0_partial<data_format, reduce_dim, face_rows, faces_per_row>(
+                fill_each_face_row0_partial<data_format, reduce_dim, face_rows, faces_per_row, face_r_dim>(
                     addr_to_l1_ptr(write_addr), scaler, valid_reduce_dim_elements_in_tile);
             }
         }

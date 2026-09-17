@@ -65,6 +65,8 @@ void bind_normalization_rms_norm(nb::module_& mod) {
                  - layout
                * - BFLOAT16, FLOAT32, BFLOAT8_B
                  - TILE
+               * - BFLOAT16, FLOAT32
+                 - ROW_MAJOR (WIDTH_SHARDED L1 only; compute uses 1x32 faces)
 
             .. list-table:: residual_input_tensor
                :header-rows: 1
@@ -89,6 +91,8 @@ void bind_normalization_rms_norm(nb::module_& mod) {
                  - layout
                * - BFLOAT16, FLOAT32, BFLOAT8_B (matching input)
                  - TILE
+               * - BFLOAT16, FLOAT32 (matching input)
+                 - ROW_MAJOR (when input is ROW_MAJOR WIDTH_SHARDED)
 
         Memory Support:
             - Interleaved: DRAM and L1
@@ -97,6 +101,8 @@ void bind_normalization_rms_norm(nb::module_& mod) {
         Limitations:
             - All input tensors must be on-device and have a rank >= 1.
             - Unsharded tensors must be interleaved, sharded inputs cannot be height-sharded.
+            - ROW_MAJOR WIDTH_SHARDED input is unweighted-or-ROW_MAJOR-gamma RMSNorm only (no residual,
+              no distributed stages). Compute packs 1x32 faces; output stays ROW_MAJOR WIDTH_SHARDED.
             - If `residual_input_tensor` is provided, it must match the :attr:`input_tensor`'s padded shape.
             - If the `weight`/`bias` tensors are TILE layout: last padded dim must match :attr:`input_tensor`'s last padded dim.
             - If the `weight`/`bias` tensors are ROW_MAJOR layout: last padded dim must be TILE_WIDTH.

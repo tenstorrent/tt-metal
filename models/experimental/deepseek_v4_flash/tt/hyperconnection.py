@@ -14,7 +14,7 @@ from .decode_prefetch import (
     hc_fn_ring_specs,
 )
 from .l1_weights import packed_weight_spec
-from .layers import Linear, LinearDecode, _rms_norm_unweighted
+from .layers import LinearDecode, _rms_norm_unweighted
 from .weight_cache import WeightCache, _as_cache, _load_weight, _materialize, _memo
 
 # Partial-K cut for the fused ``fn`` matmul, read off the layout registry rather than
@@ -267,9 +267,25 @@ class DeepSeekV4HyperHead(DeepSeekV4Module):
     ``weights`` keys: ``hc_fn`` ``[H, H*D]``, ``hc_base`` ``[H]``, ``hc_scale``
     (scalar). Unlike :class:`DeepSeekV4HyperConnection` there is no ``post`` /
     ``comb`` placement: the head only produces the collapsed sequence.
+
+    ``hc_fn`` is the same large-K / one-tile-N cut as the fused hyper-connection
+    ``fn`` (K = H*D, N = H padded to a tile), so it uses the same partial-K
+    :class:`LinearDecode` (``k_blocks`` from :data:`HC_FN_GCB`, ``n_blocks=1``).
+    Without the prefetcher the weight stays L1-resident: the slab is small
+    enough that a per-step DRAM copy is not worth it. Under the prefetcher it
+    streams through the shared ``HC_FN_GCB`` ring.
     """
 
-    def __init__(self, config, weights: dict, device: ttnn.MeshDevice, cache: Optional[WeightCache] = None):
+    def __init__(
+        self,
+        config,
+        weights: dict,
+        device: ttnn.MeshDevice,
+        cache: Optional[WeightCache] = None,
+        use_prefetcher: bool = False,
+        prefetch_buffers: Optional[dict] = None,
+        weight_dtype: ttnn.DataType = ttnn.bfloat16,
+    ):
         self.device = device
         self.hc = config.hc_mult
         self.hidden = config.hidden_size
@@ -277,7 +293,47 @@ class DeepSeekV4HyperHead(DeepSeekV4Module):
         self.norm_eps = config.rms_norm_eps
         cache = _as_cache(cache)
 
-        self.fn = Linear(weights["hc_fn"], device, cache.file("hc_fn"))  # [H, H*D]
+        fn = _memo(weights["hc_fn"])  # [H, H*D]
+        k = self.hc * self.hidden
+        n = ((self.hc + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+
+        def fn_weight():
+            w = fn()[: self.hc]
+            if w.shape[0] < n:
+                w = torch.nn.functional.pad(w, (0, 0, 0, n - w.shape[0]))
+            return w
+
+        prefetch = {}
+        if use_prefetcher:
+            check_decode_layout(HC_FN_GCB, k, n)
+            if prefetch_buffers is None:
+                prefetch_buffers = {}
+            prefetch = {
+                "use_prefetcher": True,
+                "global_cb": ensure_named_gcb(
+                    prefetch_buffers,
+                    HC_FN_GCB,
+                    device,
+                    hc_fn_ring_specs(),
+                    weight_dtype,
+                    num_pages=HC_FN_GCB_PAGES,
+                ),
+                "global_cb_page_bytes": hc_fn_page_bytes(weight_dtype),
+            }
+        self.fn = LinearDecode(
+            fn_weight,
+            device,
+            cache.file("hc_fn.decode"),
+            dtype=weight_dtype,
+            K=k,
+            N=n,
+            partial_width_sharded=True,
+            k_blocks=_HC_FN_K_BLOCKS,
+            n_blocks=1,
+            tile_height=1,
+            keep_weights_in_l1=not use_prefetcher,
+            **prefetch,
+        )
         base_src = weights["hc_base"]
         self.base = _load_weight(
             _materialize(
@@ -292,17 +348,38 @@ class DeepSeekV4HyperHead(DeepSeekV4Module):
         scale_src = weights["hc_scale"]
         self.scale = float((scale_src() if callable(scale_src) else scale_src).flatten().tolist()[0])
 
+    def prefetch_weights(self):
+        """Queue the ``hc_fn`` prefetch when that weight is streamed through a GCB."""
+        self.fn.fetch_weights()
+
     def forward(self, hidden_streams: ttnn.Tensor) -> ttnn.Tensor:
         """``hidden_streams`` ``[B, S, H, D]`` -> ``[B, S, 1, D]``."""
         b, s, hc, d = hidden_streams.shape
         t = b * s
 
-        flat = ttnn.reshape(hidden_streams, [1, 1, t, hc * d])
-        flat_mem_config = width_sharded_l1_config(1, hc * d, self.device)
-        flat = ttnn.to_memory_config(flat, flat_mem_config)
-        flat = _rms_norm_unweighted(flat, self.norm_eps)
+        if hidden_streams.layout == ttnn.ROW_MAJOR_LAYOUT:
+            # mix_streams decode output is RM WIDTH_SHARDED with shard height H=4.
+            # ``to_layout(TILE)`` always builds a TILE TensorLayout from the *source*
+            # shard spec, so a dest memory_config with height padded to 32 is ignored
+            # and (4, 64) still fails the 32x32 check. Drop to interleaved first.
+            if hidden_streams.is_sharded():
+                hidden_streams = ttnn.to_memory_config(hidden_streams, ttnn.DRAM_MEMORY_CONFIG)
+            hidden_streams = ttnn.to_layout(hidden_streams, ttnn.TILE_LAYOUT)
 
-        mixes = self.fn(flat)  # [1,1,T,H]
+        tile_height = hidden_streams.get_tile().tile_shape[0]
+        flat_mem_config = self.fn.get_input_memory_config(t, hc * d, tile_height)
+        flat = ttnn.reshape(hidden_streams, [1, 1, t, hc * d], memory_config=flat_mem_config)
+        flat = _rms_norm_unweighted(flat, self.norm_eps)
+        flat = ttnn.tilize(
+            flat,
+            tile=SINGLE_USER_TILE,
+            memory_config=with_tile_height(flat.memory_config(), t, tile_height=1),
+        )
+        mixes = self.fn(flat)  # [1,1,T,N_padded]
+        # N is padded to a tile for the decode matmul; keep only the H mix weights.
+        mixes = ttnn.reshape(mixes, [1, 1, t, hc], mixes.padded_shape, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if mixes.layout != ttnn.TILE_LAYOUT:
+            mixes = ttnn.to_layout(mixes, ttnn.TILE_LAYOUT)
         pre = ttnn.add(ttnn.sigmoid(ttnn.add(ttnn.multiply(mixes, self.scale), self.base)), self.eps)
         _profile(self.device)
         hs = ttnn.reshape(hidden_streams, [1, t, hc, d])

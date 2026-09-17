@@ -144,8 +144,8 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreShardedRetileProgramFact
     // (MAX_CHUNK_TILES tiles) and process the shard in `num_width_chunks` passes; the compute
     // kernel manually seeks the borrowed src/out DFB pointers per (chunk, tile-row). We pick the
     // largest divisor of tiles_per_block that fits under the cap so num_chunks divides evenly.
-    constexpr uint32_t MAX_CHUNK_ELEMS = 256;
-    constexpr uint32_t MAX_CHUNK_TILES = MAX_CHUNK_ELEMS / TILE_WIDTH;
+    static constexpr uint32_t MAX_CHUNK_ELEMS = 256;
+    static constexpr uint32_t MAX_CHUNK_TILES = MAX_CHUNK_ELEMS / TILE_WIDTH;
     static_assert(MAX_CHUNK_TILES > 0, "MAX_CHUNK_ELEMS must be at least one tile wide");
     auto compute_chunk_tiles = [](uint32_t total_tiles) {
         const uint32_t cap = std::min<uint32_t>(total_tiles, MAX_CHUNK_TILES);

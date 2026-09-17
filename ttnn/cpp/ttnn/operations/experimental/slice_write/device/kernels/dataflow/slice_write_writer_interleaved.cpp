@@ -5,7 +5,9 @@
 #include <stdint.h>
 #include <algorithm>
 #include "api/dataflow/dataflow_api.h"
-#include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/dataflow/noc.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     const uint32_t dst_addr = get_arg_val<uint32_t>(0);
@@ -21,6 +23,14 @@ void kernel_main() {
 #ifdef UNPAD_INPUT_WIDTH
     const uint32_t padding_width_ntiles = get_arg_val<uint32_t>(21);
 #endif
+#ifdef SLICE_WRITE_DST_BYTE_OFFSET
+    // After the three num_dims-long arrays (unpadded, padded, id_per_dim). Per-core column
+    // offset into each interleaved output stick; must not be baked into dst_addr because
+    // TensorAccessor page mapping is relative to the buffer base.
+    const uint32_t dst_byte_offset = get_arg_val<uint32_t>(9 + 3 * num_dims);
+#else
+    constexpr uint32_t dst_byte_offset = 0;
+#endif
 
 #ifdef DEBUG
     DPRINT("dst_addr: {}\n", dst_addr);
@@ -34,6 +44,9 @@ void kernel_main() {
     DPRINT("num_read_per_barrier: {}\n", num_read_per_barrier);
 #ifdef UNPAD_INPUT_WIDTH
     DPRINT("padding_width_ntiles: {}\n", padding_width_ntiles);
+#endif
+#ifdef SLICE_WRITE_DST_BYTE_OFFSET
+    DPRINT("dst_byte_offset: {}\n", dst_byte_offset);
 #endif
 
 #endif
@@ -50,7 +63,7 @@ void kernel_main() {
     const uint32_t noc_write_size = std::min(output_stick_size, input_stick_size);
 
     Noc noc;
-    experimental::CB cb_out0(cb_id_out0);
+    DataflowBuffer cb_out0(cb_id_out0);
 
     uint32_t dst_stick_id = start_id;
     uint32_t sticks_read = 0;
@@ -66,7 +79,11 @@ void kernel_main() {
             }
 #else
             noc.async_write(
-                cb_out0, s0, noc_write_size, {.offset_bytes = src_offset + page_offset}, {.page_id = dst_stick_id});
+                cb_out0,
+                s0,
+                noc_write_size,
+                {.offset_bytes = src_offset + page_offset},
+                {.page_id = dst_stick_id, .offset_bytes = dst_byte_offset});
 #endif
 #ifdef DEBUG
             DPRINT(
