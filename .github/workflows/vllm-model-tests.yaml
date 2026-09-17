@@ -89,7 +89,7 @@ on:
         required: false
         type: boolean
         default: false
-        description: "Enable read-write access to /mnt/MLPerf (e.g. to regenerate tensor cache). Default is read-only."
+        description: "Enable read-write access to /mnt/MLPerf: regenerates the tensor cache and lets HF download any missing weights (target model or speculative drafter) into the share. Default is read-only, which uses only what is already cached."
 
 permissions:
   packages: write

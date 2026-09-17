@@ -36,7 +36,7 @@ on:
         type: string
         default: "all"
       mlperf-read-only:
-        description: "Mount /mnt/MLPerf as read-only (set to false to allow tt_cache write-through during first-use)"
+        description: "Mount /mnt/MLPerf as read-only, and keep HF offline so only cached weights are used. Set to false to mount :rw and let HF populate missing weights (target model or speculative drafter) on first use."
         required: false
         type: boolean
         default: true
@@ -142,15 +142,20 @@ jobs:
         PYTHONPATH: ${{ inputs.vllm-source == 'fork' && '/work:/work/vllm' || '/work:/work/vllm-tt-plugin/src' }}
         LD_LIBRARY_PATH: /work/build/lib
         LOGURU_LEVEL: INFO
-        # Same rule as models-e2e/models-unit. Only the per-runner BH cache modes
-        # (local-disk, lfc) need HF online so first use can populate the cache.
-        # Shared NFS modes (cloud-mlperf, yyz4-mnt-models) keep HF offline: those
-        # mount :ro and HF writes metadata (refs/main, .no_exist markers) on every
-        # HEAD call even when the model is already cached, which fails with
-        # `OSError [Errno 30] Read-only file system`. With this, the drafter
-        # checkpoints resolve exactly like the target model -- cache on a shared
-        # mount, fetched on a per-runner one.
-        HF_HUB_OFFLINE: ${{ (matrix.test-group['weights-cache-mode'] == 'local-disk' || matrix.test-group['weights-cache-mode'] == 'lfc') && '0' || '1' }}
+        # HF goes online exactly when the weights cache is WRITABLE, so a first
+        # run populates it and later runs read it:
+        #   * per-runner BH modes (local-disk, lfc) mount :rw always;
+        #   * shared NFS modes (cloud-mlperf, yyz4-mnt-models) mount :ro unless
+        #     the operator unticks mlperf-read-only, which makes them :rw.
+        # Offline is not a preference, it is what a :ro mount forces: HF writes
+        # metadata (refs/main, .no_exist markers) on every HEAD call even when the
+        # model is already cached, and that fails with
+        # `OSError [Errno 30] Read-only file system`. Since the mount expression
+        # below already honours mlperf-read-only, this honours it too -- otherwise
+        # unticking the box gives a writable share that nothing is allowed to fill.
+        # Weights resolve identically for the target model and the speculative
+        # drafters, both via HF_HUB_CACHE.
+        HF_HUB_OFFLINE: ${{ (matrix.test-group['weights-cache-mode'] == 'local-disk' || matrix.test-group['weights-cache-mode'] == 'lfc' || !inputs.mlperf-read-only) && '0' || '1' }}
         HF_TOKEN: ${{ secrets.HUGGINGFACE_TOKEN }}
         HF_HUB_CACHE: /mnt/MLPerf/huggingface/hub
         TT_CACHE_HOME: /mnt/MLPerf/huggingface/tt_cache
