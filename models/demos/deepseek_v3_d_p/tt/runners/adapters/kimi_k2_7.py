@@ -23,6 +23,10 @@ class KimiK27Adapter(KimiK26Adapter):
     hf_model_default = "/mnt/models/moonshotai/Kimi-K2_7-Code-dequantized"
     ttnn_cache_default = "/mnt/models/moonshotai/Kimi-K2_7-Code-Cache/Kimi-K2_7-Code-Cache-prefill"
     prefill_trace_default = "/mnt/models/deepseek-prefill-cache/golden/structured_traces/vllm-kimi-k27-codedebug-56320"
+    # supports_dflash comes from K2.6; these name the drafter actually trained against K2.7. The golden is
+    # keyed to prefill_trace_default's prompt, so the two move together.
+    dflash_model_default = "/mnt/models/blaze/closed_do_not_share/Kimi-K2.7-Code-DFlash"
+    dflash_golden_default = "/mnt/models/deepseek-prefill-cache/golden/dflash_27_context_kv_55k"
 
     # --- test metadata (HF download coordinates) ---
     hf_repo_id = "moonshotai/Kimi-K2.7-Code"

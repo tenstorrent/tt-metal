@@ -81,9 +81,8 @@ NUM_USERS = int(os.environ.get("PREFILL_NUM_USERS", 2))
 CAPACITY_FACTOR = int(os.environ.get("PREFILL_CAPACITY_FACTOR", 8))
 _gate_mode_name = os.environ.get("PREFILL_GATE_FALLBACK_MODE", ADAPTER.default_gate_mode)
 KV_ONLY_LAST_LAYER = os.environ.get("PREFILL_KV_ONLY_LAST_LAYER", "1") == "1"
-DFLASH_ENABLED = (
-    ADAPTER.supports_dflash and os.environ.get("PREFILL_DFLASH", "0") == "1" and bool(os.environ.get("DFLASH_HF_MODEL"))
-)
+DFLASH_MODEL = os.environ.get("DFLASH_HF_MODEL") or ADAPTER.dflash_model_default
+DFLASH_ENABLED = ADAPTER.supports_dflash and os.environ.get("PREFILL_DFLASH", "0") == "1" and bool(DFLASH_MODEL)
 
 # KV dedup: also shard the KV/index caches across TP (1/(sp*tp) slice per device) instead of TP-replicating
 # them. Storage only, cache content bit-identical; sparse (DSA) path only.
@@ -413,7 +412,7 @@ def _print_config() -> None:
         (
             "DFLASH_ENABLED",
             f"{DFLASH_ENABLED} (adapter.supports_dflash={ADAPTER.supports_dflash}, "
-            f"DFLASH_HF_MODEL={os.environ.get('DFLASH_HF_MODEL') or '<unset>'})",
+            f"drafter={DFLASH_MODEL or '<unset>'})",
         ),
         ("PREFILL_USE_TRACE", f"{USE_TRACE} (trace_region={_TRACE_REGION_SIZE >> 20} MB)"),
         ("PREFILL_TP_SHARD_KV", str(TP_SHARD_KV)),
@@ -519,6 +518,7 @@ def main() -> None:
         gate_mode_name=_gate_mode_name,
         kv_only_last_layer=is_last_rank and KV_ONLY_LAST_LAYER,
         dflash_enabled=DFLASH_ENABLED,
+        dflash_checkpoint_path=DFLASH_MODEL,
         weight_cache_path=ADAPTER.weight_cache_path(GLOBAL_MESH_SHAPE),
         tp_shard_kv=TP_SHARD_KV,
         sparse_kv_cache_format=ADAPTER.default_sparse_kv_cache_format,
