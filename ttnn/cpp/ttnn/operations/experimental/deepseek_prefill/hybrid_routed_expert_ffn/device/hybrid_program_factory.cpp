@@ -15,8 +15,6 @@
 
 // Each half's own types, which its body below is written against. The headers that used to carry
 // these were the per-half program factory headers; the interface they declared is now one call.
-#include "moe_fused_swiglu_types.hpp"
-#include "unified_routed_expert_ffn_types.hpp"
 
 #include <algorithm>
 #include <string>
@@ -33,7 +31,6 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt_stl/assert.hpp>
 #include "moe_fused_swiglu_geometry.hpp"
-#include "moe_fused_swiglu_geometry.hpp"  // fused::geometry::CB_COUNT -- this half's CB block start
 #include <initializer_list>
 #include <map>
 #include <tuple>

@@ -10,9 +10,8 @@
 #include <vector>
 
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "device/hybrid_routed_expert_ffn_types.hpp"
 #include "ttnn/tensor/tensor.hpp"
-
-#include "device/unified_routed_expert_ffn_types.hpp"  // RoutedExpertActivation
 
 namespace ttnn::operations::experimental::deepseek_prefill::hybrid_routed_expert_ffn {
 
