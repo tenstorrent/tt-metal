@@ -32,11 +32,24 @@ def prepare(source, output):
         assert sorted(mapping.values()) == list(range(128))
         shuffled = [original[i : i + 4] for i in range(0, 20480, 4)]
         random.Random(20260911).shuffle(shuffled)
+        # Slot permutation WITHIN each device: new_id // 16 == old_id // 16, so every expert keeps
+        # its chip. Per-chip load, destination totals, fanout, locality and padded totals are all
+        # unchanged; only the slot an expert occupies moves. Isolates ordering from load.
+        rng = random.Random(20260917)
+        slot_map = {}
+        for d in range(8):
+            block = list(range(d * 16, (d + 1) * 16))
+            permuted = block[:]
+            rng.shuffle(permuted)
+            slot_map.update(dict(zip(block, permuted)))
+        assert all(slot_map[e] // 16 == e // 16 for e in range(128))
+        assert sorted(slot_map.values()) == list(range(128))
         variants = {
             "captured": original,
             "placement_balanced": [mapping[e] for e in original],
             "source_shuffled": [e for token in shuffled for e in token],
             "uniform": [(i * 4 + k) % 128 for i in range(5120) for k in range(4)],
+            "slot_permuted": [slot_map[e] for e in original],
         }
         for mode, ids in variants.items():
             assert all(len(set(ids[i : i + 4])) == 4 for i in range(0, 20480, 4))
@@ -58,7 +71,9 @@ def prepare(source, output):
                 "destination_max_mean": max(device) / 2560,
                 "source_destination_assignments": traffic,
                 "token_destination_fanout_histogram": dict(fanout),
-                "old_to_new_expert_id": [mapping[e] for e in range(128)] if mode == "placement_balanced" else None,
+                "old_to_new_expert_id": [mapping[e] for e in range(128)]
+                if mode == "placement_balanced"
+                else ([slot_map[e] for e in range(128)] if mode == "slot_permuted" else None),
                 "indices": ids,
             }
             path = output / f"layer{layer}-{mode}.json"
