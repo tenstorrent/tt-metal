@@ -167,8 +167,24 @@ struct DFBAdvancedOptions {
     // Rules for aliased DFBs:
     //   - Every DFB in the alias group must list every other member as an alias
     //   - Aliased DFBs must have the same total size (num_entries * entry_size).
-    //   - All members must target the same node set
-    //     (derived from their bound kernels' WorkUnitSpecs).
+    //   - Members' node sets (derived from their bound kernels' WorkUnitSpecs) must be
+    //     either identical or fully disjoint. Partial overlap is rejected.
+    //
+    // The two permitted coverages mean different things:
+    //
+    //   Identical nodes -- MEMORY REUSE. The members are two views of one L1 region on the
+    //     same nodes. This is the "no guarantees against clobbering" case above.
+    //
+    //   Disjoint nodes -- ADDRESS CO-LOCATION. The members sit at the same L1 offset on
+    //     different nodes and share no memory. This is what a NoC multicast needs: a
+    //     multicast writes one L1 offset on every destination, so a sender that derives
+    //     that offset from its own local DFB cursor must have its DFB at the receivers'
+    //     offset. When the sender's node is outside the receivers' DFB (nothing consumes
+    //     there, so the per-node one-producer-one-consumer invariant keeps it out), the two
+    //     cannot be a single DFB, and the offsets cannot be left to allocation order --
+    //     each node set's base comes from its own persistent-L1 high-water mark.
+    //     Co-located members must also have identical entry_size and num_entries, so their
+    //     cursors advance in step.
     Group<DFBSpecName> alias_with;
 
     ////////////////////////////////////////////////////////////////////////////////
