@@ -2411,3 +2411,30 @@ Replaying both ops on the real dumped q/k/v inputs (bf16-ulp level, against fp64
 
 Element-mixing runs (`where(mask, gen, nat)`: random 50 %, channel half, high-dynamic-range
 rows) — the quantization-free bisection over the difference set. Result appended below.
+
+**4m.5 result — element mixing (native everywhere; per-head output = gen on the mask, native elsewhere):**
+
+| elements taken from the generated op | PCC |
+|---|---|
+| none (baseline) | 0.9728 |
+| random 50 % | 0.958 |
+| low-dynamic-range rows (50 %) | 0.958 |
+| high-dynamic-range rows (50 %) | 0.974 |
+| channels 0–127 | 0.951 |
+| channels 128–255 | 0.978 |
+| channels 0–63 / 64–127 alone | 0.972 / 0.980 |
+| all (= generated per-head) | 0.878 |
+
+Offline, the op-side difference has **no channel, tile, token or gamma structure** (flip rate flat
+across all eight tiles on every call). So the asymmetries above are not properties of the op's
+error but of the consumer, and the dominant fact is the **dose curve**: 0 % → 0.973, 50 % → 0.958,
+100 % → 0.878 — strongly super-linear, with quarters harmless and halves mildly harmful. The
+low-range ("ordinary token") rows carry more than the high-range ones — the reverse of where the
+op's largest per-element errors sit. **The exact bf16 rounding pattern of the generated op is
+what the softmax cannot tolerate; no synthetic perturbation matched it, and it cannot be
+decomposed through bf16.** Root mechanism inside the kernel: not identified. Verified workaround:
+`fp32_dest_acc_en=True` on this path (0.975). The pipeline lessons in 4m.4 do not depend on it.
+
+*Diagnostic hooks in `models/demos/gemma4/tt/{rms_norm.py,layer.py,attention/operations.py}`
+were working-tree only and have been reverted; the TEMPORARY trace commit `0d38c356add`
+remains on both branches and should be dropped before any PR.*
