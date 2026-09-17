@@ -22,6 +22,7 @@ Run the profile first with the model's scripts/run_prefill_profile.sh, which pri
 from __future__ import annotations
 
 import argparse
+import html
 import json
 import os
 import sys
@@ -303,6 +304,10 @@ def build_html(byclass, acc, acct, csv_path, spec: ZoneSpec):
         key=lambda r: -r[2],
     )[:12]
 
+    # The payload is dropped into a <script> block and the title into <title>. Both carry strings that
+    # came from the command line (the CSV's basename, the spec's model name), so escape the characters
+    # that could end the script block or the tag: JSON stays valid with <-style escapes, and the
+    # page-side renderer HTML-escapes every string it puts into the DOM (esc()).
     payload = json.dumps(
         {
             "title": f"{spec.model_name} prefill — zone profile",
@@ -322,7 +327,9 @@ def build_html(byclass, acc, acct, csv_path, spec: ZoneSpec):
         },
         separators=(",", ":"),
     )
-    return TEMPLATE.replace("__TITLE__", f"{spec.model_name} prefill zone profile").replace("__PAYLOAD__", payload)
+    payload = payload.replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
+    title = html.escape(f"{spec.model_name} prefill zone profile")
+    return TEMPLATE.replace("__TITLE__", title).replace("__PAYLOAD__", payload)
 
 
 TEMPLATE = r"""<title>__TITLE__</title>

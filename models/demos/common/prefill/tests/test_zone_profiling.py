@@ -498,6 +498,15 @@ class TestCli:
         page = html.read_text()
         assert "Test prefill zone profile" in page and '"numDevices":1' in page and '"warnings":[]' in page
 
+    def test_html_escapes_strings_that_came_from_the_command_line(self, tmp_path):
+        # The CSV's basename lands in the page's <script> payload; a hostile name must not close the block.
+        path = tmp_path / "evil<script>alert(1)<x&y>.csv"
+        _write_csv(path, self.ROWS)
+        acc, summary, byclass = V.collect(path, SPEC)
+        page = V.build_html(byclass, acc, V.accounting(acc, byclass, SPEC), path, SPEC)
+        assert "<script>alert" not in page
+        assert "evil\\u003cscript\\u003ealert(1)\\u003cx\\u0026y\\u003e.csv" in page
+
     def test_visualize_cli_carries_truncation_into_the_report(self, tmp_path, capsys):
         path, html = tmp_path / "ops.csv", tmp_path / "report.html"
         _write_csv(path, [start(ROOT), start("layer00_a"), op(MS)])  # cut off mid-layer
