@@ -308,33 +308,34 @@ MISTRAL4_TRACED_BASELINE_CHUNK_TIMES_S: dict[tuple[int, int, int], list[float]] 
     ],
 }
 MISTRAL4_UNTRACED_BASELINE_CHUNK_TIMES_S: dict[tuple[int, int, int], list[float]] = {
-    # Cut on bh_sc1_high_power from run 35025548110. Flat ~0.58 s/chunk: untraced is host-dispatch
+    # Cut on bh_sc1_high_power from run 35232130029. Flat ~0.51 s/chunk: untraced is host-dispatch
     # bound, so it catches an eager-dispatch regression and cannot see MLA at all -- the logged depth
-    # split reads b = 0.21 ms, which is what "cannot see MLA" looks like.
+    # split reads b = -0.06 ms, which is what "cannot see MLA" looks like.
     #
-    # Unchanged by main's drift (a went 579.5 -> 583.0 ms), which is the expected asymmetry: device
-    # speedups do not reach a host-dispatch-bound row. It passed 0/20 out of band at 10%.
+    # Fourth cut. The previous table (~0.58 s, run 35025548110) went 20/20 out of band low after the
+    # rebase onto afe5bdf50f8: a dropped 583.0 -> 511.4 ms, 12.6%, so the host dispatch path itself
+    # got faster. Spread across the 20 chunks is 0.506-0.520, +/-1.4%, against a 10% band.
     (36, 20, 10): [
-        0.586,
-        0.583,
-        0.586,
-        0.582,
-        0.584,
-        0.584,
-        0.583,
-        0.589,
-        0.586,
-        0.580,
-        0.579,
-        0.580,
-        0.582,
-        0.584,
-        0.590,
-        0.588,
-        0.588,
-        0.587,
-        0.586,
-        0.590,
+        0.509,
+        0.507,
+        0.517,
+        0.511,
+        0.520,
+        0.512,
+        0.507,
+        0.510,
+        0.507,
+        0.508,
+        0.513,
+        0.509,
+        0.514,
+        0.511,
+        0.510,
+        0.507,
+        0.506,
+        0.513,
+        0.513,
+        0.512,
     ],
 }
 
