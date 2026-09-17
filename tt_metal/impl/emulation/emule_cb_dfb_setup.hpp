@@ -20,9 +20,6 @@
 
 namespace tt::tt_metal {
 class IDevice;
-namespace detail {
-class ProgramImpl;
-}
 }  // namespace tt::tt_metal
 namespace tt::umd {
 class SWEmuleChip;
@@ -95,7 +92,6 @@ struct CoreSetup {
 
 // Definitions in emule_cb_dfb_setup.cpp.
 void setup_core_state(
-    detail::ProgramImpl& impl,
     IDevice* device,
     tt::umd::SWEmuleChip* sw_emu,
     std::map<CoreCoord, std::vector<KernelInfo>>& core_kernels,
