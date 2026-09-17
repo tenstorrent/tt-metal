@@ -2028,6 +2028,7 @@ class SpeculativeDecoder:
         trace serve a new request WITHOUT capturing again.
         """
         tr = self._fused_trace
+        K = self.draft_len
         h_tok = self._host_tokens([cur_token])
         ttnn.copy_host_to_device_tensor(h_tok, tr["anchor_tok"])
         h_tok.deallocate(True)
