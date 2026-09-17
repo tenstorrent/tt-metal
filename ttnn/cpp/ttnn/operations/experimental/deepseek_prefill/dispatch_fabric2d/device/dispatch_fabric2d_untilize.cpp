@@ -35,28 +35,6 @@ constexpr const char* kKernelDir =
 
 }  // namespace
 
-OwnedScratch allocate_staging_buffer(ttnn::MeshDevice* mesh, uint32_t seq_len_per_chip, uint32_t token_bytes) {
-    TT_FATAL(
-        token_bytes % 64 == 0,
-        "dispatch_fabric2d: a TILE input needs the token page ({} B) to be 64-byte aligned for DRAM",
-        token_bytes);
-    const tt::tt_metal::TensorSpec spec(
-        ttnn::Shape({seq_len_per_chip, token_bytes / static_cast<uint32_t>(sizeof(uint32_t))}),
-        tt::tt_metal::TensorLayout(
-            tt::tt_metal::DataType::UINT32,
-            tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR),
-            tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM}));
-    OwnedScratch staging;
-    staging.owner = std::make_shared<ttnn::Tensor>(create_device_tensor(spec, mesh));
-    staging.buffer = staging.owner->buffer();
-    TT_FATAL(
-        staging.buffer->aligned_page_size() == token_bytes,
-        "dispatch_fabric2d: staging page is {} B after alignment but a token is {} B",
-        staging.buffer->aligned_page_size(),
-        token_bytes);
-    return staging;
-}
-
 std::optional<UntilizePlan> plan_untilize(
     const ttnn::Tensor& input,
     const ttnn::Tensor& out_payload,
@@ -74,27 +52,23 @@ std::optional<UntilizePlan> plan_untilize(
     plan.tile_bytes = static_cast<uint32_t>(input.buffer()->aligned_page_size());
     plan.token_bytes = token_bytes;
     plan.sem_addr = sem_addr;
-    plan.data_format = tt::tt_metal::datatype_to_dataformat_converter(out_payload.dtype());
+    plan.tile_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
+    plan.row_format = tt::tt_metal::datatype_to_dataformat_converter(out_payload.dtype());
     plan.input = input.buffer();
     plan.staging = staging;
 
-    // The packer writes its rows at a stride of tiles_per_row * TILE_WIDTH datums, while the writer
-    // beside it and the staging page both count a row as token_bytes. Those agree only while the row
-    // needs no alignment padding; if they ever diverge, every token after the first of a stripe
-    // shears by the difference, which is the one failure this path has no way to notice.
-    const uint32_t packed_row_bytes = plan.tiles_per_row * tt::constants::TILE_WIDTH *
-                                      static_cast<uint32_t>(input.element_size());
+    // The packer writes its rows at a stride of tiles_per_row * TILE_WIDTH datums in the PAYLOAD's
+    // format, while the writer beside it and the staging page both count a row as token_bytes. Those
+    // agree only while the row needs no alignment padding; if they ever diverge, every token after the
+    // first of a stripe shears by the difference, which is the one failure this path has no way to
+    // notice.
+    const uint32_t packed_row_bytes =
+        plan.tiles_per_row * tt::constants::TILE_WIDTH * static_cast<uint32_t>(out_payload.element_size());
     TT_FATAL(
         packed_row_bytes == token_bytes,
         "dispatch_fabric2d: the untilizer packs a row as {} B but a token page is {} B",
         packed_row_bytes,
         token_bytes);
-    TT_FATAL(
-        input.dtype() == out_payload.dtype(),
-        "dispatch_fabric2d: a TILE input is {} but the output payload is {}; the untilize circular "
-        "buffer is one format for both",
-        input.dtype(),
-        out_payload.dtype());
     return plan;
 }
 
@@ -116,20 +90,21 @@ void add_untilizer_pool(
         .core_ranges = pool_cores,
         .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_0),
-            .data_format = plan.data_format,
+            .data_format = plan.tile_format,
             .page_size = plan.tile_bytes,
         }}},
     });
     // Untilized rows, compute -> writer. A whole number of stripes, so a stripe's rows are one
     // contiguous run -- pack_untilize writes each column block at an offset into that run. The index
     // is c_11 to match the sibling `dispatch` op's untilize output, so a profile of the two reads the
-    // same.
+    // same. Its format is the payload's rather than the input's: the packer converts as it writes here,
+    // which is where that op puts its BFLOAT16 -> FP8 conversion too.
     desc.cbs.push_back(tt::tt_metal::CBDescriptor{
         .total_size = 2u * tt::constants::TILE_HEIGHT * plan.token_bytes,
         .core_ranges = pool_cores,
         .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_11),
-            .data_format = plan.data_format,
+            .data_format = plan.row_format,
             .page_size = plan.token_bytes,
         }}},
     });
