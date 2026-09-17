@@ -8,9 +8,8 @@ Kimi K2.7-Code Model Configuration (text tower only).
 Single source of truth for model dimension constants.
 Values from HuggingFace config.json for Kimi-K2.7-Code (``text_config``).
 
-Deliberately standalone rather than subclassing ``KimiK26Config``. The two generations agree on every
-dimension today, so inheritance would have been shorter -- but it would also mean an edit made for
-K2.6 silently moved K2.7, and it would hide which values K2.7 actually asserts.
+Deliberately standalone: every dimension is asserted here rather than inherited from another
+generation's config, so an edit made for a sibling model cannot silently move K2.7.
 """
 
 
