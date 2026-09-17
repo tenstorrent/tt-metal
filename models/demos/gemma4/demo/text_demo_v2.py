@@ -935,20 +935,30 @@ def _run_spec_decode(
     )
     target = generator.model[0]
     model_args = generator.model_args
-    model_args_list = model_args if isinstance(model_args, (list, tuple)) else [model_args]
 
     page_table = create_tt_page_table(batch_size, paged_attention_config)
 
-    prefill_enable_trace, device_sampling_params = _prepare_demo_prefill_warmup(
-        generator=generator,
-        tt_kv_cache=tt_kv_cache,
-        sampling_params=sampling_params,
-        enable_trace=enable_trace,
-        max_seq_len=max_seq_len,
-        model_args_list=model_args_list,
-        batch_size=batch_size,
-        input_prompts=input_prompts,
+    # Spec decode never consumes the prefill argmax — anchor_token comes from the
+    # encoded prompt. Skip on-device prefill sampling (plain demo default) so TTFT
+    # matches main and avoids ~20ms of wasted device sampling on short ISLs.
+    from models.demos.gemma4.tt.generator_trace import chunked_prefill_trace_enabled
+
+    prefill_trace_max = int(os.environ.get("GEMMA4_PREFILL_TRACE_MAX_SEQ", 4096))
+    prefill_enable_trace = enable_trace and (max_seq_len < prefill_trace_max or chunked_prefill_trace_enabled())
+    if enable_trace and not prefill_enable_trace:
+        logger.info(
+            f"Prefill trace disabled (max_seq_len={max_seq_len} >= {prefill_trace_max}); "
+            f"decode stays traced. Set GEMMA4_PREFILL_TRACE_MAX_SEQ or "
+            f"GEMMA4_CHUNKED_PREFILL_TRACE=1 to override."
+        )
+    logger.info("Warming up prefill...")
+    generator.warmup_model_prefill(
+        kv_cache=tt_kv_cache,
+        enable_trace=prefill_enable_trace,
+        can_sample_on_device=False,
+        greedy_only=True,
     )
+    logger.info("Warmup complete")
 
     input_tokens_prefill_pt, encoded_prompts, decoding_pos, prefill_lens = preprocess_inputs_prefill(
         [prompt], tokenizer, model_args, instruct, max_generated_tokens, max_prefill_len=max_seq_len
@@ -956,19 +966,19 @@ def _run_spec_decode(
     input_tokens_prefill_pt = torch.stack(input_tokens_prefill_pt).view(batch_size, -1)
 
     logger.info("Spec-decode prefill...")
-    _, prefill_out, prefill_elapsed = _run_demo_prefill(
-        generator=generator,
-        input_tokens_prefill_pt=input_tokens_prefill_pt,
+    prefill_t0 = time.perf_counter()
+    prefill_logits = generator.prefill_forward_text(
+        input_tokens_prefill_pt,
         page_table=page_table,
-        tt_kv_cache=tt_kv_cache,
-        decoding_pos=decoding_pos,
-        prefill_enable_trace=prefill_enable_trace,
-        device_sampling_params=device_sampling_params,
-        temperature=temperature,
-        top_p=top_p,
+        kv_cache=tt_kv_cache,
+        prompt_lens=decoding_pos,
+        warmup_prefill=False,
+        enable_trace=prefill_enable_trace,
     )
-    if device_sampling_params is None and hasattr(prefill_out, "deallocate"):
-        prefill_out.deallocate(True)
+    ttnn.synchronize_device(mesh_device)
+    prefill_elapsed = time.perf_counter() - prefill_t0
+    if hasattr(prefill_logits, "deallocate"):
+        prefill_logits.deallocate(True)
 
     prompt_len = int(decoding_pos[0])
     anchor_pos = prompt_len - 1
