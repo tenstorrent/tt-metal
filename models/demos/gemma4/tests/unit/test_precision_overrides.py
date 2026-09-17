@@ -44,9 +44,8 @@ def test_unknown_model_still_empty():
 
 
 def test_ccl_topology_pinned_for_31b():
-    """31B must resolve Linear on every mesh: Ring's reduction order tips its
-    128k decode into a repetition loop. Model-wide, so it is read off the model
-    entry and must not depend on the mesh key."""
+    """31B JSON still pins Linear (applied at max_seq_len >= 128k in create_tt_model).
+    Model-wide, so it is read off the model entry and must not depend on the mesh key."""
     for mesh in ((1, 4), (1, 8)):
         assert Gemma4Precision.load("google/gemma-4-31B-it", mesh).ccl_topology == "linear"
     assert Gemma4Precision.load(SNAPSHOT_PATH, (1, 8)).ccl_topology == "linear"

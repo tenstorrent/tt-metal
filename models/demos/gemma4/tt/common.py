@@ -18,7 +18,7 @@ import ttnn
 from models.common.weight_cache import build_cached_state_dict, mark_weight_cache_complete, weight_cache_is_complete
 from models.demos.gemma4.config import MeshConfig, ModeConfig
 from models.demos.gemma4.tt.assistant.model import Gemma4AssistantModel
-from models.demos.gemma4.tt.ccl import CCLManager
+from models.demos.gemma4.tt.ccl import CCLManager, effective_pinned_ccl_topology
 from models.demos.gemma4.tt.model import Gemma4Model
 from models.demos.gemma4.tt.model_config import Gemma4AssistantArgs, Gemma4ModelArgs
 from models.demos.gemma4.tt.precision import Gemma4Precision
@@ -102,15 +102,20 @@ def create_tt_model(
         # 26B-A4B stays Linear — Ring drops its full-model PCC below 0.76.
         #
         # A model may still pin the topology in precision_overrides.json, which
-        # wins over the arch default. 31B pins Linear: Ring's reduction order is
-        # enough to tip its 128k decode into a repetition loop (532 chars, 40x)
-        # where Linear is clean (718 chars) — see that file for the measurement.
+        # wins over the arch default. 31B pins Linear at max_seq_len >= 128k
+        # (Ring loops 128k decode); below that the pin is dropped so dense T3K
+        # decode stays on Ring. Measurements live in that JSON comment.
         precision = Gemma4Precision.load(model_path, tuple(mesh_device.shape))
-        topology = _CCL_TOPOLOGY_BY_NAME.get(precision.ccl_topology)
+        is_moe = bool(getattr(model_args, "enable_moe_block", False))
+        topology = effective_pinned_ccl_topology(
+            _CCL_TOPOLOGY_BY_NAME.get(precision.ccl_topology),
+            is_moe=is_moe,
+            max_seq_len=max_seq_len,
+        )
         ccl_manager = CCLManager(
             mesh_device,
             topology=topology,
-            is_moe=bool(getattr(model_args, "enable_moe_block", False)),
+            is_moe=is_moe,
         )
     else:
         ccl_manager = None

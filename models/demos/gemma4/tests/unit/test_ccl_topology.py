@@ -15,7 +15,13 @@ from models.demos.gemma4.tt.attention.operations import (
     PREFILL_SDPA_MAX_SEQ,
     prefill_short_lived_memcfg,
 )
-from models.demos.gemma4.tt.ccl import ccl_async_enabled, default_ccl_packet_bytes, default_ccl_topology
+from models.demos.gemma4.tt.ccl import (
+    LINEAR_PIN_MIN_SEQ_LEN,
+    ccl_async_enabled,
+    default_ccl_packet_bytes,
+    default_ccl_topology,
+    effective_pinned_ccl_topology,
+)
 from models.demos.gemma4.tt.dram_sharded import can_dram_shard
 
 
@@ -110,6 +116,19 @@ def test_bundled_configs_wh_t3k_topology_follows_moe(monkeypatch):
         # Smaller WH meshes must not pick up the T3K Ring default.
         assert default_ccl_topology(_FakeMesh(1), is_moe=is_moe) == ttnn.Topology.Linear, name
         assert default_ccl_topology(_FakeMesh(2), is_moe=is_moe) == ttnn.Topology.Linear, name
+
+
+def test_31b_linear_pin_only_at_128k():
+    """Dense Linear pin applies at 128k; shorter seq and Ring/None pins pass through."""
+    assert effective_pinned_ccl_topology(ttnn.Topology.Linear, is_moe=False, max_seq_len=1024) is None
+    assert effective_pinned_ccl_topology(ttnn.Topology.Linear, is_moe=False, max_seq_len=64 * 1024) is None
+    assert (
+        effective_pinned_ccl_topology(ttnn.Topology.Linear, is_moe=False, max_seq_len=LINEAR_PIN_MIN_SEQ_LEN)
+        is ttnn.Topology.Linear
+    )
+    assert effective_pinned_ccl_topology(ttnn.Topology.Linear, is_moe=True, max_seq_len=1024) is ttnn.Topology.Linear
+    assert effective_pinned_ccl_topology(None, is_moe=False, max_seq_len=1024) is None
+    assert effective_pinned_ccl_topology(ttnn.Topology.Ring, is_moe=False, max_seq_len=1024) is ttnn.Topology.Ring
 
 
 def test_ccl_topology_env_override_beats_device_count(monkeypatch):

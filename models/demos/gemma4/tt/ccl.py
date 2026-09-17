@@ -140,6 +140,25 @@ def ccl_sync_rs_chunks(padded_height: int | None = None) -> int:
     return 1
 
 
+# 31B JSON Linear pin is a 128k-decode numerics fix (Ring loops). Apply it only
+# at this length and above; shorter dense decode stays on Ring. 64k Ring was
+# coherent on a real WH T3K (text_demo_v2 long-context-64k).
+LINEAR_PIN_MIN_SEQ_LEN = 128 * 1024
+
+
+def effective_pinned_ccl_topology(pinned, *, is_moe: bool, max_seq_len):
+    """Drop a dense-model Linear pin when ``max_seq_len`` is below 128k.
+
+    ``pinned`` is a ``ttnn.Topology`` or ``None``. MoE keeps Linear at every
+    length. ``None`` lets ``CCLManager`` take the arch default.
+    """
+    if pinned != ttnn.Topology.Linear or is_moe:
+        return pinned
+    if max_seq_len is None or int(max_seq_len) >= LINEAR_PIN_MIN_SEQ_LEN:
+        return pinned
+    return None
+
+
 def default_ccl_topology(mesh_device=None, is_moe: bool = True):
     """Default CCL topology for Gemma4 TP collectives.
 
