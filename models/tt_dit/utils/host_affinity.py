@@ -22,10 +22,10 @@ Two mechanisms are provided:
    process BEFORE torch is imported. The re-execed process inherits the pinned mask from PID start, so
    torch/OMP pools and tt-metal device threads land inside the chosen cores -- equivalent to launching
    under ``taskset`` but fully in-process. This is the mechanism that reaches the taskset-class
-   numbers (~6.2 s under ``taskset -c 0-31``); it is gated behind ``LTX_PIN_PREIMPORT=1`` and must be
-   invoked from the earliest pytest hook, before any device is opened (re-exec after device open risks
-   a wedge). An off-device thread-map test confirmed the re-execed process confines all threads to the
-   chosen cores with none on the sibling set and the torch pool sized to the chosen count.
+   numbers: galaxy ring traced replay 6.2 s re-execed (measured, no taskset) vs 6.6-6.7 s without.
+   The LTX test conftest calls it from the earliest pytest hook by default (``LTX_PIN_PREIMPORT=0``
+   skips it); any other entry point (a server, a script) should call it as its first statement, before
+   importing torch or ttnn and before any device is opened (re-exec after device open risks a wedge).
 
 ``LTX_PIN_CORES=0`` disables both; on hosts without SMT (or without the sysfs topology) both are no-ops.
 """
