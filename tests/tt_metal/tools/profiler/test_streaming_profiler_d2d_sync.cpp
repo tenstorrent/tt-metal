@@ -28,7 +28,7 @@
 
 #include "impl/streaming_profiler/spsc_packet.h"
 #include "impl/streaming_profiler/streaming_profiler_d2d_sync.hpp"
-#include "impl/streaming_profiler/streaming_profiler_sync_correction.hpp"
+#include "impl/streaming_profiler/streaming_profiler_placement_map.hpp"
 
 using namespace tt::tt_metal;
 using namespace tt::tt_metal::streaming_profiler;
@@ -292,7 +292,7 @@ int main() {
         constexpr uint32_t chip = 3;
         constexpr int64_t step = 1000;
         const double a = 7.5e12, b = 0.037;  // root = a + b * wall, an exact line so every placement has one answer
-        const uint32_t n = SyncCorrections::kSeriesNodes + 1;
+        const uint32_t n = PlacementMap::kSeriesNodes + 1;
         for (uint32_t i = 0; i < n; i++) {
             const int64_t at = static_cast<int64_t>(i) * step;
             sync.map().append(chip, SyncNode{.at = at, .value = a + b * static_cast<double>(at), .tangent = b});

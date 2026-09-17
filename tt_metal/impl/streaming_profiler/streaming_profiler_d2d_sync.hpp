@@ -15,7 +15,7 @@
 
 #include "impl/streaming_profiler/streaming_profiler_consumer.hpp"
 #include "impl/streaming_profiler/streaming_profiler_decode.hpp"
-#include "impl/streaming_profiler/streaming_profiler_sync_correction.hpp"
+#include "impl/streaming_profiler/streaming_profiler_placement_map.hpp"
 
 namespace tt::tt_metal::streaming_profiler {
 
@@ -141,13 +141,13 @@ public:
 // LOCAL points feed one LocalClockModel per device. LINK samples (the boot-time eth sync rounds: sender round start
 // and end, receiver arrival) are paired by round and solved refclk against refclk, so DVFS on either wall clock
 // cannot enter the link solve. From those the consumer publishes, per chip, a time-indexed correction to the baked
-// host anchor every Record carries (SyncCorrections; Record::host_time composes it):
+// host anchor every Record carries (PlacementMap; Record::host_time composes it):
 //
 //   root chip r:      host(T) = H_r + (R_r(T) - R_r(A_r)) * P_r         (static host anchor o applied-AICLK term)
 //   non-root chip c:  host(T) = H_r + (link(R_c(T)) - R_r(A_r)) * P_r   (the same, on the root's timeline)
 //
-// where R_x(T) inverts the constant-rate run holding wall tick T, A_x/H_x are the chip's boot anchor (tick, host ns), P_x
-// its refclk period taken as k_mean/hz so it is consistent with that anchor, and link() maps c's refclk onto r's by
+// where R_x(T) inverts the constant-rate run holding wall tick T, A_x/H_x are the chip's boot anchor (tick, host ns),
+// P_x its refclk period taken as k_mean/hz so it is consistent with that anchor, and link() maps c's refclk onto r's by
 // the solved offset and rate about the burst midpoint. Published incrementally for live sinks, finally at capture end.
 // Runs entirely on its consumer's thread.
 class D2dSyncConsumer {
@@ -157,11 +157,11 @@ public:
     void on_capture_end(const CaptureContext& ctx);
     // The placement map the service places records with: this engine writes its chip series, the host probe its
     // host series.
-    SyncCorrections& map() { return map_; }
-    const SyncCorrections& map() const { return map_; }
+    PlacementMap& map() { return map_; }
+    const PlacementMap& map() const { return map_; }
 
 private:
-    SyncCorrections map_;
+    PlacementMap map_;
     struct LocalState {
         LocalClockModel model;
         std::vector<std::pair<uint64_t, uint64_t>>
@@ -312,7 +312,6 @@ private:
     void push_node(Series& s, uint32_t chip, const Node& n);
     CaptureContext ctx_;
     std::map<uint32_t, LocalState> local_;  // device index -> local fit
-    const char* const csv_path_ = std::getenv("TT_METAL_STREAMING_PROFILER_D2D_CSV");
     std::vector<LinkStreams> links_;  // per ctx_.links index
     // (device index, decoder core index) -> the link the core stamps for, and whether as its sender.
     std::map<std::pair<uint32_t, uint32_t>, std::pair<size_t, bool>> side_of_;

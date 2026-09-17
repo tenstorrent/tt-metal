@@ -17,13 +17,7 @@
 
 namespace tt::tt_metal::streaming_profiler::link_sync {
 
-bool enabled() {
-    static const bool on = [] {
-        const char* v = std::getenv("TT_METAL_STREAMING_PROFILER_LINK_SYNC");
-        return v == nullptr || std::strcmp(v, "0") != 0;
-    }();
-    return on;
-}
+bool enabled() { return MetalContext::instance().rtoptions().get_streaming_profiler_link_sync_enabled(); }
 
 namespace {
 // Whether an eth core can carry the sync: any connected core without fabric; with fabric, only a core the topology

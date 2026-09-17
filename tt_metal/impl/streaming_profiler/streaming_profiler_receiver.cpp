@@ -75,6 +75,7 @@ Receiver::Receiver(std::unique_ptr<Devices> relays, std::vector<CapturedDevice> 
     }
     ctx_.links = relays_->links();
     ctx_.root_dev = relays_->root_dev();
+    ctx_.d2d_csv_path = MetalContext::instance(relays_->context_id()).rtoptions().get_streaming_profiler_d2d_csv_path();
     for (const auto& st : streams_) {
         streams_view_.push_back(
             {st->fifo,

@@ -21,6 +21,7 @@
 #include <cstdint>
 #include <limits>
 #include <span>
+#include <string>
 #include <vector>
 
 #include <tt-metalium/experimental/streaming_profiler.hpp>
@@ -66,6 +67,7 @@ struct CaptureContext {
     };
     std::vector<Link> links;
     uint32_t root_dev = 0;  // index into `devices`: the chip the host probe reads and every link path leads to
+    std::string d2d_csv_path;  // TT_METAL_STREAMING_PROFILER_D2D_CSV; empty = no sync diagnostics
 };
 
 // What the decoder writes into every record of a lane besides the packet's own words (Record's coordinate, chip and

@@ -80,6 +80,7 @@ public:
     const std::vector<CaptureContext::Link>& links() const { return links_; }
     // The root chip's refclk on the host TSC (null when no chip has an eth tracker), and that chip's index.
     uint32_t root_dev() const { return root_dev_; }
+    ContextId context_id() const { return context_id_; }
 
 private:
     static constexpr uint32_t kMaxRelays = 8;

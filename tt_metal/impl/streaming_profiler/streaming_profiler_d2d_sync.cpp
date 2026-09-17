@@ -17,7 +17,7 @@
 
 #include "impl/streaming_profiler/spsc_packet.h"
 #include "impl/streaming_profiler/streaming_profiler_service.hpp"
-#include "impl/streaming_profiler/streaming_profiler_sync_correction.hpp"
+#include "impl/streaming_profiler/streaming_profiler_placement_map.hpp"
 
 namespace tt::tt_metal::streaming_profiler {
 
@@ -73,7 +73,7 @@ void D2dSyncConsumer::on_clock(const ClockSample& s) {
         LocalState& l = local_[s.dev];
         if (s.role == PP_CLOCK_LOCAL_RAW) {
             l.model.add_raw();
-            if (csv_path_ != nullptr) {
+            if (!ctx_.d2d_csv_path.empty()) {
                 l.samples.emplace_back(s.value, s.ts);
             }
             return;
@@ -817,13 +817,13 @@ bool D2dSyncConsumer::solve_link(
 // local-vs-linked error, so the accuracy numbers exist even if the Tracy capture is fiddly. One row per run start and per ms
 // bucket per chip. Gated on TT_METAL_STREAMING_PROFILER_D2D_CSV=<path>.
 void D2dSyncConsumer::dump_csv() const {
-    const char* path = std::getenv("TT_METAL_STREAMING_PROFILER_D2D_CSV");
-    if (path == nullptr || *path == 0) {
+    const std::string& path = ctx_.d2d_csv_path;
+    if (path.empty()) {
         return;
     }
     // Each chip's placement, one row per run start and per ms: its eth wall tick, the root refclk, host TSC and
     // steady_clock ns it lands on, and the bound.
-    if (std::FILE* f = std::fopen(path, "w"); f != nullptr) {
+    if (std::FILE* f = std::fopen(path.c_str(), "w"); f != nullptr) {
         std::fprintf(f, "chip,wall_tick,root_refclk,tsc,steady_ns,error_ns\n");
         for (const auto& kv : local_) {
             const uint32_t dev = kv.first;
@@ -859,7 +859,7 @@ void D2dSyncConsumer::dump_csv() const {
         log_warning(tt::LogMetal, "[streaming profiler] d2d sync: cannot open CSV {}", path);
         return;
     }
-    if (std::FILE* nf = std::fopen((std::string(path) + ".nodes.csv").c_str(), "w"); nf != nullptr) {
+    if (std::FILE* nf = std::fopen((path + ".nodes.csv").c_str(), "w"); nf != nullptr) {
         std::fprintf(nf, "chip,wall_tick,refclk,root_refclk,sigma_ns\n");
         for (const auto& [dev, pub] : published_) {
             const uint32_t chip = dev < ctx_.devices.size() ? ctx_.devices[dev].chip_id : dev;
@@ -869,7 +869,7 @@ void D2dSyncConsumer::dump_csv() const {
         }
         std::fclose(nf);
     }
-    if (std::FILE* hf = std::fopen((std::string(path) + ".host.csv").c_str(), "w"); hf != nullptr) {
+    if (std::FILE* hf = std::fopen((path + ".host.csv").c_str(), "w"); hf != nullptr) {
         std::fprintf(hf, "root_refclk,tsc,tangent,sigma_ns\n");
         for (const HostNode& nd : map_.host_nodes()) {
             std::fprintf(hf, "%.3f,%.0f,%.9f,%.2f\n", nd.at, nd.value, nd.tangent, nd.sigma_ns);
@@ -877,7 +877,7 @@ void D2dSyncConsumer::dump_csv() const {
         std::fclose(hf);
     }
     // The runs themselves, one row each: where the local map bends and by how much.
-    if (std::FILE* rf = std::fopen((std::string(path) + ".runs.csv").c_str(), "w"); rf != nullptr) {
+    if (std::FILE* rf = std::fopen((path + ".runs.csv").c_str(), "w"); rf != nullptr) {
         std::fprintf(rf, "chip,wall_first,wall_last,n,slope,ratio\n");
         for (const auto& kv : local_) {
             const uint32_t dev = kv.first;
@@ -899,7 +899,7 @@ void D2dSyncConsumer::dump_csv() const {
         }
         std::fclose(rf);
     }
-    if (std::FILE* sf = std::fopen((std::string(path) + ".samples.csv").c_str(), "w"); sf != nullptr) {
+    if (std::FILE* sf = std::fopen((path + ".samples.csv").c_str(), "w"); sf != nullptr) {
         std::fprintf(sf, "chip,refclk,wall\n");
         for (const auto& kv : local_) {
             const uint32_t dev = kv.first;
@@ -1274,7 +1274,7 @@ void D2dSyncConsumer::publish_error_plots() const {
                   tag,
                   worst);
           }
-          if (const char* csv = std::getenv("TT_METAL_STREAMING_PROFILER_D2D_CSV"); csv != nullptr && *csv != 0) {
+          if (const std::string& csv = ctx_.d2d_csv_path; !csv.empty()) {
               if (std::FILE* ef = std::fopen(
                       fmt::format("{}.err_{}_{}{}.csv", csv, L.chip_b, L.chip_a, hw ? "_hw" : "_sw").c_str(), "w");
                   ef != nullptr) {

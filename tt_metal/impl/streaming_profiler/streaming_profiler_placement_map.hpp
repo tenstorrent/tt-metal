@@ -51,7 +51,7 @@ struct SteadySegment {
 // last converted in and converts without touching shared state until a record leaves the segment. A series' cover
 // is the key up to which the newest node's tangent has been confirmed: a record at or before it converts against
 // frozen data on both sides.
-class SyncCorrections {
+class PlacementMap {
 public:
     static constexpr uint32_t kMaxChips = 256;
     // Nodes a series keeps (32 MB at most); the oldest go as newer ones arrive. Nodes come per local clock step and
@@ -59,10 +59,10 @@ public:
     static constexpr uint32_t kSeriesNodes = 1u << 20;
     static constexpr double kSigmas = 3.0;
 
-    SyncCorrections();
-    ~SyncCorrections();
-    SyncCorrections(const SyncCorrections&) = delete;
-    SyncCorrections& operator=(const SyncCorrections&) = delete;
+    PlacementMap();
+    ~PlacementMap();
+    PlacementMap(const PlacementMap&) = delete;
+    PlacementMap& operator=(const PlacementMap&) = delete;
 
     // Appends a node past every earlier one (a node at the last node's key is dropped) and moves the cover to it.
     void append(uint32_t chip_id, SyncNode node);

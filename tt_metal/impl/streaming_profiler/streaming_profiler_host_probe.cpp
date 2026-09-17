@@ -66,8 +66,8 @@ double tsc_ticks_per_ns() {
     return rate;
 }
 
-HostProbe::HostProbe(tt::Cluster& cluster, uint32_t chip_id, SyncCorrections& map) :
-    cluster_(cluster), chip_id_(chip_id), map_(map) {
+HostProbe::HostProbe(tt::Cluster& cluster, uint32_t chip_id, PlacementMap& map, std::string csv_path) :
+    cluster_(cluster), chip_id_(chip_id), map_(map), csv_path_(std::move(csv_path)) {
     ticks_per_ns_ = tsc_ticks_per_ns();
     const auto pcie =
         cluster_.get_driver()->get_soc_descriptor(chip_id).get_cores(CoreType::PCIE, CoordSystem::TRANSLATED);
@@ -362,8 +362,8 @@ void HostProbe::run() {
         }
         take(elapsed_ms());
     }
-    if (const char* csv = std::getenv("TT_METAL_STREAMING_PROFILER_D2D_CSV"); csv != nullptr && *csv != 0) {
-        if (std::FILE* f = std::fopen((std::string(csv) + ".probe.csv").c_str(), "w"); f != nullptr) {
+    if (!csv_path_.empty()) {
+        if (std::FILE* f = std::fopen((csv_path_ + ".probe.csv").c_str(), "w"); f != nullptr) {
             std::fprintf(f, "t_s,refclk,tsc,kept,rtt_min_ns,rtt_p50_ns,period_ns,resid_ns,pred_err_ns\n");
             for (const Trail& t : trail) {
                 std::fprintf(

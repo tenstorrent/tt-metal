@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "impl/streaming_profiler/streaming_profiler_sync_correction.hpp"
+#include "impl/streaming_profiler/streaming_profiler_placement_map.hpp"
 
 #include <algorithm>
 #include <array>
@@ -44,14 +44,14 @@ constexpr Key key_max() {
     }
 }
 
-// One series: its nodes, the newest SyncCorrections::kSeriesNodes of them, the cover, and the generation that
+// One series: its nodes, the newest PlacementMap::kSeriesNodes of them, the cover, and the generation that
 // invalidates cursors built on an earlier capture.
 constexpr uint32_t kHostSeries = std::numeric_limits<uint32_t>::max();
 
 template <typename Key>
 struct Log {
     using Node = PlacementNode<Key>;
-    ChunkedLog<Node> nodes{SyncCorrections::kSeriesNodes};
+    ChunkedLog<Node> nodes{PlacementMap::kSeriesNodes};
     Key last_at = key_min<Key>();  // the newest node's key, the writer's own copy
     alignas(64) std::atomic<Key> cover{key_min<Key>()};
     alignas(64) std::atomic<uint32_t> gen{0};
@@ -190,9 +190,9 @@ struct Composed {
 // A thread's cursors on one map: rebuilt when the thread turns to another map.
 struct ThreadView {
     const void* owner = nullptr;
-    std::array<Cursor<int64_t>, SyncCorrections::kMaxChips> chip{};
+    std::array<Cursor<int64_t>, PlacementMap::kMaxChips> chip{};
     Cursor<double> host{};
-    std::array<Composed, SyncCorrections::kMaxChips> composed{};
+    std::array<Composed, PlacementMap::kMaxChips> composed{};
 };
 constinit thread_local ThreadView t_view;
 ThreadView& view_of(const void* owner) noexcept {
@@ -219,17 +219,17 @@ SteadySlots g_steady;
 
 }  // namespace
 
-struct SyncCorrections::Impl {
+struct PlacementMap::Impl {
     std::array<Log<int64_t>, kMaxChips> chips;
     Log<double> host;
     alignas(64) std::atomic<uint64_t> cover_generation{0};
     std::atomic<double> asymmetry_ns{0.0};
 };
 
-SyncCorrections::SyncCorrections() : impl_(std::make_unique<Impl>()) {}
-SyncCorrections::~SyncCorrections() = default;
+PlacementMap::PlacementMap() : impl_(std::make_unique<Impl>()) {}
+PlacementMap::~PlacementMap() = default;
 
-void SyncCorrections::append(uint32_t chip_id, SyncNode node) {
+void PlacementMap::append(uint32_t chip_id, SyncNode node) {
     if (chip_id >= kMaxChips) {
         return;
     }
@@ -244,22 +244,22 @@ void SyncCorrections::append(uint32_t chip_id, SyncNode node) {
     impl_->cover_generation.fetch_add(1, std::memory_order_release);
 }
 
-void SyncCorrections::extend(uint32_t chip_id, int64_t cover_ticks) {
+void PlacementMap::extend(uint32_t chip_id, int64_t cover_ticks) {
     if (chip_id < kMaxChips) {
         impl_->chips[chip_id].extend(cover_ticks);
         impl_->cover_generation.fetch_add(1, std::memory_order_release);
     }
 }
 
-void SyncCorrections::finish(uint32_t chip_id) { extend(chip_id, std::numeric_limits<int64_t>::max()); }
+void PlacementMap::finish(uint32_t chip_id) { extend(chip_id, std::numeric_limits<int64_t>::max()); }
 
-void SyncCorrections::clear(uint32_t chip_id) {
+void PlacementMap::clear(uint32_t chip_id) {
     if (chip_id < kMaxChips) {
         impl_->chips[chip_id].clear();
     }
 }
 
-void SyncCorrections::append_host(HostNode node) {
+void PlacementMap::append_host(HostNode node) {
     TT_FATAL(
         std::isfinite(node.at) && std::isfinite(node.value) && std::isfinite(node.tangent) && node.tangent > 0.0 &&
             node.tangent < 1e4,
@@ -270,22 +270,22 @@ void SyncCorrections::append_host(HostNode node) {
     impl_->host.append(kHostSeries, node);
 }
 
-void SyncCorrections::extend_host(double cover_root) { impl_->host.extend(cover_root); }
+void PlacementMap::extend_host(double cover_root) { impl_->host.extend(cover_root); }
 
-void SyncCorrections::set_asymmetry_ns(double ns) noexcept { impl_->asymmetry_ns.store(ns, std::memory_order_relaxed); }
+void PlacementMap::set_asymmetry_ns(double ns) noexcept { impl_->asymmetry_ns.store(ns, std::memory_order_relaxed); }
 
-int64_t SyncCorrections::cover_ticks(uint32_t chip_id) const noexcept {
+int64_t PlacementMap::cover_ticks(uint32_t chip_id) const noexcept {
     if (chip_id >= kMaxChips) {
         return std::numeric_limits<int64_t>::max();
     }
     return impl_->chips[chip_id].cover.load(std::memory_order_acquire);
 }
 
-uint64_t SyncCorrections::cover_generation() const noexcept {
+uint64_t PlacementMap::cover_generation() const noexcept {
     return impl_->cover_generation.load(std::memory_order_acquire);
 }
 
-size_t SyncCorrections::published(uint32_t chip_id) const noexcept {
+size_t PlacementMap::published(uint32_t chip_id) const noexcept {
     if (chip_id >= kMaxChips) {
         return 0;
     }
@@ -293,11 +293,9 @@ size_t SyncCorrections::published(uint32_t chip_id) const noexcept {
     return log.nodes.count() - log.nodes.first();
 }
 
-size_t SyncCorrections::host_published() const noexcept {
-    return impl_->host.nodes.count() - impl_->host.nodes.first();
-}
+size_t PlacementMap::host_published() const noexcept { return impl_->host.nodes.count() - impl_->host.nodes.first(); }
 
-std::vector<HostNode> SyncCorrections::host_nodes() const {
+std::vector<HostNode> PlacementMap::host_nodes() const {
     const Log<double>& log = impl_->host;
     std::vector<HostNode> out;
     for (uint64_t i = log.nodes.first(), n = log.nodes.count(); i < n; i++) {
@@ -309,7 +307,7 @@ std::vector<HostNode> SyncCorrections::host_nodes() const {
     return out;
 }
 
-double SyncCorrections::lookup_root(uint32_t chip_id, int64_t wall) const noexcept {
+double PlacementMap::lookup_root(uint32_t chip_id, int64_t wall) const noexcept {
     double root = 0.0;
     if (chip_id >= kMaxChips || !place(impl_->chips[chip_id], view_of(impl_.get()).chip[chip_id], wall, root)) {
         return 0.0;
@@ -317,7 +315,7 @@ double SyncCorrections::lookup_root(uint32_t chip_id, int64_t wall) const noexce
     return root;
 }
 
-int64_t SyncCorrections::lookup_tsc(uint32_t chip_id, int64_t wall) const noexcept {
+int64_t PlacementMap::lookup_tsc(uint32_t chip_id, int64_t wall) const noexcept {
     if (chip_id >= kMaxChips) {
         return 0;
     }
@@ -329,7 +327,7 @@ int64_t SyncCorrections::lookup_tsc(uint32_t chip_id, int64_t wall) const noexce
     return std::llrint(tsc);
 }
 
-int64_t SyncCorrections::place_host(uint32_t chip_id, int64_t wall) const noexcept {
+int64_t PlacementMap::place_host(uint32_t chip_id, int64_t wall) const noexcept {
     if (chip_id >= kMaxChips) {
         return 0;
     }
@@ -365,7 +363,7 @@ int64_t SyncCorrections::place_host(uint32_t chip_id, int64_t wall) const noexce
     return std::llround(k.value);
 }
 
-int64_t SyncCorrections::lookup_error_ns(uint32_t chip_id, int64_t wall) const noexcept {
+int64_t PlacementMap::lookup_error_ns(uint32_t chip_id, int64_t wall) const noexcept {
     double root = 0.0;
     if (chip_id >= kMaxChips) {
         return std::numeric_limits<int64_t>::max();

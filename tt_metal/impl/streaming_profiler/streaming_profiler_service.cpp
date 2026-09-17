@@ -23,7 +23,7 @@
 #include "llrt/rtoptions.hpp"
 #include "impl/streaming_profiler/streaming_profiler_decode.hpp"
 #include "impl/streaming_profiler/streaming_profiler_ops_csv.hpp"
-#include "impl/streaming_profiler/streaming_profiler_sync_correction.hpp"
+#include "impl/streaming_profiler/streaming_profiler_placement_map.hpp"
 #include "impl/streaming_profiler/streaming_profiler_tracy.hpp"
 #include "impl/streaming_profiler/streaming_profiler_zone_csv.hpp"
 
@@ -344,7 +344,7 @@ void Service::register_builtin_consumers(const tt::llrt::RunTimeOptions& rtoptio
 }
 
 void Service::consumer_thread(Consumer& c) {
-    const SyncCorrections& map = sync_->map();
+    const PlacementMap& map = sync_->map();
     c.started_ns = now_ns();
     const std::string name = "sp-con:" + c.name;
     tracy::SetThreadName(name.c_str());

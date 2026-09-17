@@ -137,6 +137,8 @@ enum class EnvVarID {
     TT_METAL_STREAMING_PROFILER_FIFO_MB,           // Streaming profiler host FIFO per D2H socket, MiB
     TT_METAL_STREAMING_PROFILER_OPS_CSV,           // Streaming profiler ops CSV path
     TT_METAL_STREAMING_PROFILER_ZONE_CSV,          // Streaming profiler zone CSV path
+    TT_METAL_STREAMING_PROFILER_D2D_CSV,           // Streaming profiler device sync diagnostics CSV path
+    TT_METAL_STREAMING_PROFILER_LINK_SYNC,         // Streaming profiler device-to-device link sync (default on)
     TT_METAL_DEVICE_PROFILER_DISPATCH,             // Enable dispatch core profiling
     TT_METAL_PROFILER_SYNC,                        // Enable synchronous profiling
     TT_METAL_DEVICE_PROFILER_NOC_EVENTS,           // Enable NoC events profiling
@@ -1063,6 +1065,23 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Usage: export TT_METAL_STREAMING_PROFILER_ZONE_CSV=/tmp/zones.csv
         case EnvVarID::TT_METAL_STREAMING_PROFILER_ZONE_CSV:
             this->streaming_profiler_zone_csv_path = std::string(value);
+            break;
+
+        // TT_METAL_STREAMING_PROFILER_D2D_CSV
+        // Path prefix for the device sync's diagnostics: the placement map, the host probe's bursts and the tile
+        // clock readings, one CSV each next to it. Empty writes nothing.
+        // Default: "" (off)
+        // Usage: export TT_METAL_STREAMING_PROFILER_D2D_CSV=/tmp/d2d.csv
+        case EnvVarID::TT_METAL_STREAMING_PROFILER_D2D_CSV:
+            this->streaming_profiler_d2d_csv_path = std::string(value);
+            break;
+
+        // TT_METAL_STREAMING_PROFILER_LINK_SYNC
+        // 0 leaves the device-to-device link sync out: chips are not placed on one timeline.
+        // Default: 1 (on)
+        // Usage: export TT_METAL_STREAMING_PROFILER_LINK_SYNC=0
+        case EnvVarID::TT_METAL_STREAMING_PROFILER_LINK_SYNC:
+            this->streaming_profiler_link_sync_enabled = is_env_enabled(value);
             break;
 
         // TT_METAL_DEVICE_PROFILER_DISPATCH

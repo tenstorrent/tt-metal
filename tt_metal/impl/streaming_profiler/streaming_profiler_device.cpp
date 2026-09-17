@@ -343,7 +343,11 @@ std::vector<CapturedDevice> Devices::boot(const std::shared_ptr<distributed::Mes
     }
     for (uint32_t di = 0; di < devices_.size(); di++) {
         if (!devices_[di].eth.empty()) {
-            host_probe_ = std::make_shared<HostProbe>(cluster, devices_[di].chip_id, service().sync().map());
+            host_probe_ = std::make_shared<HostProbe>(
+                cluster,
+                devices_[di].chip_id,
+                service().sync().map(),
+                MetalContext::instance(context_id_).rtoptions().get_streaming_profiler_d2d_csv_path());
             root_dev_ = di;
             break;
         }
@@ -904,7 +908,8 @@ std::vector<double> Devices::solve_tiles(const DeviceCtx& ctx, const char* when)
         const int32_t pth = path_of(o);
         return x_of(o.t) - x_of(o.s) + (pth >= 0 ? x[static_cast<size_t>(pth)] : 0.0);
     };
-    if (const char* csv = std::getenv("TT_METAL_STREAMING_PROFILER_D2D_CSV"); csv != nullptr && *csv != 0) {
+    if (const std::string& csv = MetalContext::instance(context_id_).rtoptions().get_streaming_profiler_d2d_csv_path();
+        !csv.empty()) {
         // Every reading behind the solve, for reading back a table gone wrong: one row per (source, tile).
         const std::string path = fmt::format("{}.tiles.{}.chip{}.csv", csv, when, ctx.chip_id);
         if (std::FILE* f = std::fopen(path.c_str(), "w"); f != nullptr) {

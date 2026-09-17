@@ -8,10 +8,11 @@
 #include <cstdint>
 #include <deque>
 #include <mutex>
+#include <string>
 #include <thread>
 #include <vector>
 
-#include "impl/streaming_profiler/streaming_profiler_sync_correction.hpp"
+#include "impl/streaming_profiler/streaming_profiler_placement_map.hpp"
 
 namespace tt {
 class Cluster;
@@ -44,7 +45,8 @@ struct HostLine {
 class HostProbe {
 public:
     // Writes the host series of `map` while it runs.
-    HostProbe(tt::Cluster& cluster, uint32_t chip_id, SyncCorrections& map);
+    // `csv_path` non-empty: the bursts are written to <csv_path>.probe.csv when the probe stops.
+    HostProbe(tt::Cluster& cluster, uint32_t chip_id, PlacementMap& map, std::string csv_path);
     ~HostProbe();
     HostProbe(const HostProbe&) = delete;
     HostProbe& operator=(const HostProbe&) = delete;
@@ -69,7 +71,8 @@ private:
 
     tt::Cluster& cluster_;
     const uint32_t chip_id_;
-    SyncCorrections& map_;
+    PlacementMap& map_;
+    const std::string csv_path_;
     uint32_t pcie_x_ = 0, pcie_y_ = 0;  // translated
     tt::umd::TlbWindow* window_ = nullptr;
     uint32_t cfr_hi_ = 0, cfr_lo_last_ = 0;

@@ -22,7 +22,7 @@
 #include "impl/streaming_profiler/streaming_profiler_d2d_sync.hpp"
 #include "impl/streaming_profiler/streaming_profiler_service.hpp"
 #include "impl/streaming_profiler/streaming_profiler_decode.hpp"
-#include "impl/streaming_profiler/streaming_profiler_sync_correction.hpp"
+#include "impl/streaming_profiler/streaming_profiler_placement_map.hpp"
 
 namespace tt::tt_metal::streaming_profiler {
 
