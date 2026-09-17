@@ -31,7 +31,7 @@
 #include "api/core_local_mem.h"
 #include "api/debug/assert.h"
 #include "../adaptive_chunk.hpp"
-#include "../weight_runs.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/weight_runs.hpp"
 // Under HYB_NS this body is one half of the union kernel: everything below is namespaced so
 // the two halves cannot collide at file scope, and the shims rebase its argument indices into
 // the concatenated lists. Without HYB_NS it is the standalone kernel, unchanged.
