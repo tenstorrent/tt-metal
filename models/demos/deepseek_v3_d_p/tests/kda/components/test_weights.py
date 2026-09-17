@@ -9,7 +9,7 @@ import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.reference.kda import kda_forward_reference
 from models.demos.deepseek_v3_d_p.reference.kda.config import KDAConfig
-from models.demos.deepseek_v3_d_p.tests.kda.utils import random_weights
+from models.demos.deepseek_v3_d_p.tests.kda.utils import make_actual_start, random_weights
 from models.demos.deepseek_v3_d_p.tt.kda.kda import ttKDA
 from models.demos.deepseek_v3_d_p.tt.kda.weights import load_kda_weights
 from models.tt_transformers.tt.ccl import TT_CCL
@@ -163,7 +163,7 @@ def test_tp_layer_with_nonsquare_state_matches_reference(mesh_device: ttnn.MeshD
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
     with ttnn.manage_config("throw_exception_on_fallback", True):
-        output, state = layer.forward(hidden_tt, initial_state)
+        output, state = layer.forward(hidden_tt, initial_state, make_actual_start(layer.device))
 
     actual_output = ttnn.to_torch(output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))
     recurrent_shards = _host_shards(state.recurrent)

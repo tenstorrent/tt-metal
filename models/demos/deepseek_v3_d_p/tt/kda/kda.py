@@ -20,7 +20,7 @@ from models.demos.deepseek_v3_d_p.tt.kda.config import (
     KDAProgramConfig,
 )
 from models.demos.deepseek_v3_d_p.tt.kda.convolution import exchange_convolution_carry
-from models.demos.deepseek_v3_d_p.tt.kda.device_chronology import DeviceChronology, rank_tensor, start_tensor
+from models.demos.deepseek_v3_d_p.tt.kda.device_chronology import DeviceChronology, rank_tensor
 from models.demos.deepseek_v3_d_p.tt.kda.recurrence import KDARecurrence
 from models.demos.deepseek_v3_d_p.tt.kda.weights import KDAWeights, load_kda_weights
 from models.tt_transformers.tt.ccl import TT_CCL
@@ -165,9 +165,6 @@ class ttKDA:
             rank_tensor(self.device, self.sequence_parallel_axis) if self.sequence_parallel_size > 1 else None
         )
 
-        self._eager_start = start_tensor(self.device, 0) if self.sequence_parallel_size > 1 else None
-        self._eager_start_value = 0
-
     @property
     def _convolution_width(self) -> int:
         return self.config.q_dim + self.config.k_dim + self.config.v_dim
@@ -197,21 +194,17 @@ class ttKDA:
         self,
         hidden_states: ttnn.Tensor,
         state: KdaState,
-        actual_start: int | ttnn.Tensor,
+        actual_start: ttnn.Tensor,
     ) -> None:
         """Validate shape/type plus the documented SP state-distribution contract."""
-        if not isinstance(actual_start, (int, ttnn.Tensor)):
-            raise TypeError("actual_start must be an integer or a device UINT32 scalar")
+        if not isinstance(actual_start, ttnn.Tensor):
+            raise TypeError("actual_start must be a device UINT32 scalar")
         if isinstance(actual_start, ttnn.Tensor) and (
             actual_start.dtype != ttnn.uint32
             or actual_start.layout != ttnn.ROW_MAJOR_LAYOUT
             or any(dimension != 1 for dimension in actual_start.shape)
         ):
             raise ValueError("device actual_start must be a UINT32 row-major scalar")
-        if isinstance(actual_start, int) and (
-            actual_start < 0 or actual_start >= 2**32 or actual_start % KDA_CHUNK_SIZE
-        ):
-            raise ValueError(f"actual_start must be a non-negative multiple of {KDA_CHUNK_SIZE}, got {actual_start}")
         if len(hidden_states.shape) != 3 or hidden_states.shape[-1] != self.config.hidden_size:
             raise ValueError(
                 f"hidden_states shape {tuple(hidden_states.shape)} must be [B,T,{self.config.hidden_size}]"
@@ -390,20 +383,17 @@ class ttKDA:
         self,
         hidden_states: ttnn.Tensor,
         state: KdaState,
-        actual_start: int | ttnn.Tensor = 0,
+        actual_start: ttnn.Tensor,
     ) -> tuple[ttnn.Tensor, KdaState]:
         """Run prefill KDA and return replacement logical carries.
 
         ``actual_start`` is the absolute global position of this chunk's first
         token. It selects the chronological SP segment order for MLA's
-        block-cyclic layout; the default of zero is the natural order and is
-        numerically identical to the pre-offset path. Every SP rank must observe
-        the same value. For trace replay, pass a replicated UINT32 row-major
-        scalar tensor and update its contents at the same address. Its value must
-        be nonnegative and 32-aligned; no device-to-host validation is performed.
-        Integer starts reuse layer-owned metadata: warm the requested integer
-        before capture. Later integer calls update that shared buffer; use caller-
-        owned device metadata when traces need independent start lifetimes.
+        block-cyclic layout. The caller owns a replicated UINT32 row-major scalar
+        and must keep it alive at the captured address throughout trace use.
+        Update its contents before replay; every SP rank must observe the same
+        nonnegative, 32-aligned position. No device-to-host value validation is
+        performed. Pass an explicit zero-valued tensor for a zero-start call.
 
         The input state is only read. No tensor reachable from it is used as a
         ``ttnn.copy`` destination or retained on this layer. The returned output
@@ -413,18 +403,9 @@ class ttKDA:
         self._validate_forward(hidden_states, state, actual_start)
         chronology = None
         if self.sequence_parallel_size > 1:
-            if isinstance(actual_start, int):
-                if actual_start != self._eager_start_value:
-                    source = start_tensor(self.device, actual_start)
-                    ttnn.copy(source, self._eager_start)
-                    ttnn.deallocate(source)
-                    self._eager_start_value = actual_start
-                metadata = self._eager_start
-            else:
-                metadata = actual_start
             chronology = DeviceChronology(
                 ttnn.experimental.kda.chronological_topology(
-                    metadata,
+                    actual_start,
                     self._sp_rank,
                     self.sequence_parallel_size,
                     hidden_states.shape[1],

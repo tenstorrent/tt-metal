@@ -11,7 +11,7 @@ import torch
 import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import kda_state_dict_sha256
-from models.demos.deepseek_v3_d_p.tests.kda.utils import make_small_kda_test_config, random_weights
+from models.demos.deepseek_v3_d_p.tests.kda.utils import make_actual_start, make_small_kda_test_config, random_weights
 from models.demos.deepseek_v3_d_p.tt.kda.config import KDAProgramConfig, KDARecurrenceProgramConfig
 from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState, ttKDA
 from models.demos.deepseek_v3_d_p.tt.kda.weights import KDAWeights, load_kda_weights
@@ -29,7 +29,7 @@ def _forward(layer: ttKDA, hidden: torch.Tensor, state: KdaState) -> torch.Tenso
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     with ttnn.manage_config("throw_exception_on_fallback", True):
-        output, _ = layer.forward(hidden_tt, state)
+        output, _ = layer.forward(hidden_tt, state, make_actual_start(layer.device))
     return ttnn.to_torch(output)
 
 

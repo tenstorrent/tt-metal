@@ -8,7 +8,7 @@ import torch
 import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.reference.kda import kda_forward_reference
-from models.demos.deepseek_v3_d_p.tests.kda.utils import make_small_kda_test_config, random_weights
+from models.demos.deepseek_v3_d_p.tests.kda.utils import make_actual_start, make_small_kda_test_config, random_weights
 from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState, ttKDA
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_accurate, assert_bit_identical
 
@@ -24,7 +24,7 @@ def _forward(layer: ttKDA, hidden: torch.Tensor, state: KdaState) -> tuple[torch
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     with ttnn.manage_config("throw_exception_on_fallback", True):
-        output, next_state = layer.forward(hidden_tt, state)
+        output, next_state = layer.forward(hidden_tt, state, make_actual_start(layer.device))
     return ttnn.to_torch(output), next_state
 
 
@@ -78,8 +78,9 @@ def test_trace_replay_matches_eager_without_mutating_input_state(device: ttnn.De
     )
     layer = ttKDA(device, config, random_weights(config))
 
+    actual_start_tt = make_actual_start(device)
     with ttnn.manage_config("throw_exception_on_fallback", True):
-        eager_output, _ = layer.forward(hidden_tt, layer.allocate_state())
+        eager_output, _ = layer.forward(hidden_tt, layer.allocate_state(), actual_start_tt)
     ttnn.synchronize_device(device)
     eager_result = ttnn.to_torch(eager_output)
 
@@ -87,7 +88,7 @@ def test_trace_replay_matches_eager_without_mutating_input_state(device: ttnn.De
     input_state_before = (ttnn.to_torch(input_state.recurrent), ttnn.to_torch(input_state.convolution))
     trace_id = ttnn.begin_trace_capture(device, cq_id=0)
     with ttnn.manage_config("throw_exception_on_fallback", True):
-        output, next_state = layer.forward(hidden_tt, input_state)
+        output, next_state = layer.forward(hidden_tt, input_state, actual_start_tt)
     ttnn.end_trace_capture(device, trace_id, cq_id=0)
     assert next_state.recurrent is not input_state.recurrent
     assert next_state.convolution is not input_state.convolution

@@ -28,6 +28,7 @@ from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import KIMI_K3_FIRS
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     KimiK3TestCase,
     check_kimi_k3_accuracy,
+    make_actual_start,
     make_kimi_k3_device_case,
     make_kimi_k3_test_case,
     make_synthetic_kimi_k3_test_case,
@@ -260,8 +261,10 @@ def _log_device_program_times(
     next_state = None
     profiled_results: list[tuple[ttnn.Tensor, KdaState]] = []
 
+    actual_start_tt = make_actual_start(mesh_device, actual_start)
+
     def run_profiled_forward() -> tuple[ttnn.Tensor, KdaState]:
-        result = layer.forward(hidden, state, actual_start)
+        result = layer.forward(hidden, state, actual_start_tt)
         profiled_results.append(result)
         return result
 
@@ -370,9 +373,10 @@ def _trace_wall_samples_ms(
     trace_id = None
     output = None
     next_state = None
+    actual_start_tt = make_actual_start(mesh_device, actual_start)
     try:
         state = _allocate_state(layer)
-        warm_output, warm_state = layer.forward(hidden, state, actual_start)
+        warm_output, warm_state = layer.forward(hidden, state, actual_start_tt)
         ttnn.synchronize_device(mesh_device)
         ttnn.deallocate(warm_output)
         warm_output = None
@@ -380,7 +384,7 @@ def _trace_wall_samples_ms(
         warm_state = None
 
         trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-        output, next_state = layer.forward(hidden, state, actual_start)
+        output, next_state = layer.forward(hidden, state, actual_start_tt)
         ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
         ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
         ttnn.synchronize_device(mesh_device)
@@ -454,7 +458,7 @@ def test_kimi_k3_layer_1_perf(
     initial_state = _allocate_state(layer)
     start = time.perf_counter()
     with ttnn.manage_config("throw_exception_on_fallback", True):
-        output, state = layer.forward(hidden_tt, initial_state)
+        output, state = layer.forward(hidden_tt, initial_state, make_actual_start(layer.device))
     ttnn.synchronize_device(mesh_device)
     device_forward_ms = (time.perf_counter() - start) * 1e3
     try:

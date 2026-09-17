@@ -15,6 +15,7 @@ from models.demos.deepseek_v3_d_p.tests.kda.layer.test_offset import (
     _to_sp_input,
 )
 from models.demos.deepseek_v3_d_p.tests.kda.perf.test_layer_perf import _deallocate_state
+from models.demos.deepseek_v3_d_p.tests.kda.utils import make_actual_start
 
 
 @pytest.mark.parametrize(
@@ -50,6 +51,7 @@ def test_convolution_exchange_in_layer(mesh_device, tp_axis, device_params, monk
         config, weights, hidden, expected_output, expected_state = _reference_case(sp * local_rows)
         layer = _build_layer(mesh_device, config, weights, axis, tp_axis, summary_group_chunks=20)
     for actual_start in (0, local_rows, 32, (sp - 1) * local_rows + 320):
+        actual_start_tt = make_actual_start(mesh_device, actual_start)
         permutation = _mla_row_permutation(actual_start, sp, local_rows)
         hidden_tt = _to_sp_input(hidden[:, permutation, :], mesh_device, axis)
         with monkeypatch.context() as patch:
@@ -63,12 +65,12 @@ def test_convolution_exchange_in_layer(mesh_device, tp_axis, device_params, monk
             patch.setattr(ttnn.experimental.kda, "recurrent_chunk_scan", counted_scan)
             state = layer.allocate_state(batch_size=1)
             for _ in range(2):
-                output, next_state = layer.forward(hidden_tt, state, actual_start)
+                output, next_state = layer.forward(hidden_tt, state, actual_start_tt)
                 ttnn.synchronize_device(mesh_device)
                 ttnn.deallocate(output)
                 _deallocate_state(next_state)
             trace = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-            output, next_state = layer.forward(hidden_tt, state, actual_start)
+            output, next_state = layer.forward(hidden_tt, state, actual_start_tt)
             ttnn.end_trace_capture(mesh_device, trace, cq_id=0)
             # Exactly one scan per warm forward and capture, with native grouping.
             assert scans == [local_rows // 640] * 3, scans

@@ -27,8 +27,11 @@ from models.demos.deepseek_v3_d_p.tests.kda.perf.test_layer_perf import (
     _deallocate_state,
     _log_device_program_times,
 )
-from models.demos.deepseek_v3_d_p.tests.kda.utils import make_kimi_k3_device_case, make_synthetic_kimi_k3_test_case
-from models.demos.deepseek_v3_d_p.tt.kda.device_chronology import start_tensor
+from models.demos.deepseek_v3_d_p.tests.kda.utils import (
+    make_actual_start,
+    make_kimi_k3_device_case,
+    make_synthetic_kimi_k3_test_case,
+)
 
 pytestmark = [pytest.mark.timeout(3600)]
 
@@ -86,7 +89,7 @@ def test_offset_handling_cost(
     sweep = _offset_sweep(local_rows)
     samples: dict[str, list[float]] = {name: [] for name in sweep}
     sweep_items = list(sweep.items())
-    metadata = start_tensor(mesh_device, 0)
+    metadata = make_actual_start(mesh_device, 0)
     state = _allocate_state(layer)
     for _ in range(2):
         warm_output, warm_state = layer.forward(hidden_tt, state, metadata)
@@ -100,7 +103,7 @@ def test_offset_handling_cost(
         for sample_index in range(_TIMING_SAMPLES):
             ordered_items = sweep_items[sample_index:] + sweep_items[:sample_index]
             for name, actual_start in ordered_items:
-                source = start_tensor(mesh_device, actual_start)
+                source = make_actual_start(mesh_device, actual_start)
                 ttnn.copy(source, metadata)
                 ttnn.deallocate(source)
                 ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=True)
