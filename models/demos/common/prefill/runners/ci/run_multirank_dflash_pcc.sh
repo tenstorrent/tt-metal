@@ -36,17 +36,6 @@ REAL_CHUNKS=$((MAX_SEQ_LEN / CHUNK_SIZE))
 # Start, the last chunk wholly inside the golden, midpoint, end. The window that the throughput probe
 # averages over runs forward from each of these, so the first three carry a rate and the last a latency.
 PROBE_CHUNKS="0,$((GOLDEN_LEN / CHUNK_SIZE - 1)),$((REAL_CHUNKS / 2 - 1)),$((REAL_CHUNKS - 1))"
-# One user, unlike the verifier leg's 86 on sc4: the drafter cache is allocated at max_seq_len x
-# num_users and slot 0 is the only slot with a golden behind it, so extra slots buy no coverage here.
-NUM_USERS_DEFAULT=1
-
-# D2D FIFO. DFlash packs [hidden || drafter-partial] into a 2*H-wide activation, so the pipeline handoff
-# costs twice the L1 of a plain run and the FIFO has to shrink to pay for it. Measured on 2 galaxies:
-# 32768 overflows rank 1 by 27136 B ("Statically allocated circular buffers in program N clash with L1
-# buffers ... L1 buffer allocated at 1536128 and static circular buffer region ends at 1563264"), which
-# caps the FIFO at 5632; 4096 is the next power of two under it and is also the value a plain Kimi
-# 2-galaxy run settled on. It fails on rank 1 at MLA_START of layer 0, i.e. only once tokens flow --
-# never at init -- so a too-large value survives weight load and warmup before killing the run.
 # Verifier threshold is the sibling KV leg's value for this trace and depth -- run_multirank_pcc.sh gates
 # the same cache on the same golden, so the two legs must not disagree on what a passing verifier is.
 # The drafter gate is held at that same value and never above it: an unnormalized V carries the verifier's
@@ -58,29 +47,40 @@ NUM_USERS_DEFAULT=1
 PCC_THRESHOLD=0.85
 DFLASH_PCC_THRESHOLD="${PREFILL_DFLASH_PCC:-0.85}"
 
+# The dflash manifest differs from the plain one by the knobs a drafter run needs, so the two legs cannot
+# share a file. What it pins, and why, since JSON cannot say it:
+#   PREFILL_USE_TRACE=0    -- the drafter path is not trace-captured (prefill_runner asserts the pair).
+#   PREFILL_LAYER_ACK_D2H=1 -- each rank stands up its own LayerAckService from D2H device records.
+#      Without it the non-first ranks take the host-ring branch and connect() to
+#      /tt_prefill_layer_completion_ring_N with a HARD-CODED 30 s timeout, which a rank that finished
+#      weight load minutes earlier blows through whenever the ranks skew (cold vs warm page cache differs
+#      by 10+ min here). The sibling KV leg sets this for the same reason.
+#   PREFILL_PP_D2D_FIFO_BYTES=4096 -- DFlash packs [hidden || drafter-partial] into a 2*H-wide
+#      activation, so the pipeline handoff costs twice the L1 of a plain run and the FIFO has to shrink to
+#      pay for it. Measured on 2 galaxies: 32768 overflows rank 1 by 27136 B ("Statically allocated
+#      circular buffers in program N clash with L1 buffers ... L1 buffer allocated at 1536128 and static
+#      circular buffer region ends at 1563264"), which caps the FIFO at 5632; 4096 is the next power of
+#      two under it and is also the value a plain Kimi 2-galaxy run settled on. It fails on rank 1 at
+#      MLA_START of layer 0, i.e. only once tokens flow -- never at init -- so a too-large value survives
+#      weight load and warmup before killing the run.
+#   PREFILL_NUM_USERS=1    -- unlike the verifier leg's 86 on sc4: the drafter cache is allocated at
+#      max_seq_len x num_users and slot 0 is the only slot with a golden behind it, so extra slots buy no
+#      coverage. Every one of these stays overridable -- the manifest is applied with setdefault.
 case "${MODEL}" in
-  kimi27)
-    MANIFEST="${MANIFEST_DIR}/kimi27.json"
-    HF_MODEL=/mnt/models/moonshotai/Kimi-K2_7-Code-dequantized
-    DFLASH_MODEL=/mnt/models/blaze/closed_do_not_share/Kimi-K2.7-Code-DFlash
-    # Prompt trace and drafter golden MUST come from the same tap: dflash_27_context_kv_55k's metadata
-    # records tap_source=vllm-kimi-k27-codedebug-56320. Pairing a golden with a different prompt yields a
-    # plausible-looking PCC in the 0.2-0.6 range rather than an error.
-    TRACE_DIR=/mnt/models/deepseek-prefill-cache/golden/structured_traces/vllm-kimi-k27-codedebug-56320
-    GOLDEN_KV_DIR=/mnt/models/deepseek-prefill-cache/golden/dflash_27_context_kv_55k
-    ;;
-  kimi26)
-    MANIFEST="${MANIFEST_DIR}/kimi26.json"
-    HF_MODEL=models/demos/deepseek_v3_d_p/reference/kimi_k2_6
-    DFLASH_MODEL=/mnt/models/Kimi-K2.6-DFlash
-    TRACE_DIR=/mnt/models/deepseek-prefill-cache/golden/structured_traces/kimi_debug_55k_vllm
-    GOLDEN_KV_DIR=/mnt/models/deepseek-prefill-cache/golden/dflash_context_kv_55k_v3
-    ;;
+  kimi27) MANIFEST="${MANIFEST_DIR}/kimi27_dflash.json" ;;
   *)
-    echo "unknown model key '${MODEL}' (expected kimi26 or kimi27 -- only Kimi-K2.x ships a drafter)" >&2
+    echo "unknown model key '${MODEL}' (expected kimi27 -- only Kimi-K2.7 ships a drafter)" >&2
     exit 2
     ;;
 esac
+
+# Asset paths come from the manifest + the model adapter, never from this script: the preflight below has
+# to probe exactly what the ranks will open, and a path restated here would drift from the adapter that
+# owns it. Prompt trace and drafter golden MUST come from the same tap (dflash_27_context_kv_55k's
+# metadata records tap_source=vllm-kimi-k27-codedebug-56320) -- a golden paired with a different prompt
+# yields a plausible-looking PCC in the 0.2-0.6 range rather than an error, so the adapter holds both.
+ASSETS=$(python3 "${TT_METAL_HOME}/models/demos/common/prefill/runners/ci/resolve_dflash_assets.py" --manifest "${MANIFEST}") || { echo "could not resolve dflash assets for '${MODEL}'" >&2; exit 2; }
+eval "${ASSETS}"
 
 # sc1 is single-galaxy. It takes the same STAGED code path as sc4 -- PREFILL_MOCK_MIGRATION all-gathers
 # the stage layouts at any rank count -- so what it does not cover is the remote HOST, not the branch: one
@@ -211,28 +211,13 @@ python3 "${TTRUN_PY}" \
     export PYTHONPATH='${TT_METAL_HOME}'; \
     export PYTHONUNBUFFERED=1; \
     export PREFILL_MANIFEST='${MANIFEST}'; \
-    export PREFILL_HF_MODEL='${HF_MODEL}'; \
-    export PREFILL_FABRIC_MODE=2d_torus_xy; \
     export PREFILL_CHUNK_SIZE=${CHUNK_SIZE}; \
     export PREFILL_MAX_SEQ_LEN=${MAX_SEQ_LEN}; \
-    export PREFILL_NUM_USERS=${PREFILL_NUM_USERS:-${NUM_USERS_DEFAULT}}; \
-    export PREFILL_TRACE_DIR='${TRACE_DIR}'; \
     export PREFILL_TIMING_DIR='${TIMING_DIR}'; \
-    export PREFILL_DFLASH=1; \
-    export DFLASH_HF_MODEL='${DFLASH_MODEL}'; \
-    export PREFILL_DFLASH_GOLDEN_KV_DIR='${GOLDEN_KV_DIR}'; \
-    export PREFILL_USE_TRACE=0; \
-    # Each rank stands up its own LayerAckService from D2H device records. Without this the non-first
-    # ranks take the host-ring branch and connect() to /tt_prefill_layer_completion_ring_N with a
-    # HARD-CODED 30 s timeout -- which a rank that finished weight load minutes earlier blows through
-    # whenever the ranks skew (cold vs warm page cache differs by 10+ min here). The sibling KV leg
-    # sets this for the same reason.
-    export PREFILL_LAYER_ACK_D2H=1; \
     export PREFILL_ENABLE_MIGRATION=1; \
     export PREFILL_MOCK_MIGRATION=1; \
     export PREFILL_MIGRATION_TABLE_PATH='${TABLE_PATH}'; \
     export PREFILL_MIGRATION_DEVICE_MAP_PATH=/tmp/dflash_kv_device_map.json; \
-    export PREFILL_PP_D2D_FIFO_BYTES=${PREFILL_PP_D2D_FIFO_BYTES:-4096}; \
     export PREFILL_SYNC_PER_CHUNK=1; \
     export LOGURU_LEVEL=INFO; \
     exec python3 -m models.demos.common.prefill.runners.prefill_runner" &
@@ -319,12 +304,8 @@ set +e
   bash -lc "cd '${TT_METAL_HOME}'; \
     export PYTHONPATH='${TT_METAL_HOME}'; \
     export PREFILL_PRODUCER_MANIFEST='${MANIFEST}'; \
-    export PREFILL_HF_MODEL='${HF_MODEL}'; \
     export PREFILL_CHUNK_SIZE=${CHUNK_SIZE}; \
     export PREFILL_MAX_SEQ_LEN=${MAX_SEQ_LEN}; \
-    export PREFILL_NUM_USERS=${PREFILL_NUM_USERS:-${NUM_USERS_DEFAULT}}; \
-    export PREFILL_TRACE_DIR='${TRACE_DIR}'; \
-    export PREFILL_DFLASH_GOLDEN_KV_DIR='${GOLDEN_KV_DIR}'; \
     export PREFILL_PRODUCER_CHECK_PCC=1; \
     export PREFILL_PRODUCER_CHUNKS=${REAL_CHUNKS}; \
     export PREFILL_PCC_GOLDEN_LEN=${GOLDEN_LEN}; \

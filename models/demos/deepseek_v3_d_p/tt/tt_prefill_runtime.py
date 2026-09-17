@@ -64,8 +64,11 @@ class TtPrefillRuntimeConfig:
     # The pipeline sets it on the last rank.
     kv_only_last_layer: bool = False
     # Build the DFlash drafter context-KV cache during this prefill (opt-in). Every rank builds its owned fc
-    # slices from $DFLASH_HF_MODEL; only the last rank builds the KV tail + cache.
+    # slices from the drafter checkpoint; only the last rank builds the KV tail + cache.
     dflash_enabled: bool = False
+    # Drafter checkpoint dir. Empty falls back to $DFLASH_HF_MODEL, which is how the standalone tests that
+    # build a runtime directly still reach one.
+    dflash_checkpoint_path: str = ""
     # Pipeline-parallel rank slicing. first_layer_idx is the global index of this
     # rank's first layer; is_first_rank gates the embedding, is_last_rank marks the
     # final stage (non-last ranks forward the hidden state instead of running a tail).
@@ -263,11 +266,13 @@ class TtPrefillRuntime:
         """Build this rank's DFlash speculative-drafter when ``config.dflash_enabled``.
 
         Each rank taps only the target layers it owns; the last rank also builds the KV tail and allocates
-        the caller-owned context K/V caches. Checkpoint (config + weights) comes from ``$DFLASH_HF_MODEL``."""
-        path = os.environ.get("DFLASH_HF_MODEL")
+        the caller-owned context K/V caches. Checkpoint (config + weights) comes from
+        ``config.dflash_checkpoint_path``, else ``$DFLASH_HF_MODEL``."""
+        path = self.config.dflash_checkpoint_path or os.environ.get("DFLASH_HF_MODEL")
         assert path, (
-            "DFlash drafter build requires DFLASH_HF_MODEL=/path/to/Kimi-K2.x-DFlash "
-            "(a dir with config.json + model.safetensors)"
+            "DFlash drafter build needs a checkpoint dir (config.json + model.safetensors): set "
+            "dflash_checkpoint_path, give the model adapter a dflash_model_default, or export "
+            "DFLASH_HF_MODEL=/path/to/Kimi-K2.x-DFlash"
         )
         dcfg = DFlashDrafterConfig.from_pretrained(path)
         # The adapter gates which MODEL may run DFlash (ADAPTER.supports_dflash, checked in the runner); this

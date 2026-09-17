@@ -1041,6 +1041,7 @@ def _verify_resident_slots(
                 slot_id,
                 real_len,
                 read_config_slice=read_dflash_slice,
+                golden_dir=os.environ.get("PREFILL_DFLASH_GOLDEN_KV_DIR") or ADAPTER.dflash_golden_default,
                 threshold=dflash_threshold,
                 rope_convention="interleaved",
             )
