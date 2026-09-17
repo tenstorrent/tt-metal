@@ -1215,8 +1215,15 @@ class LTXDistilledPipeline(LTXPipeline):
     # ----- device-resident stage transition (T2V) -----------------------------------------------------------
     def _device_resident(self, images) -> bool:
         """Keep the video latent on device from stage 1 through the upsampler into stage 2 (T2V only).
-        ``LTX_DEVICE_RESIDENT=0`` restores the host round-trip."""
-        return not images and os.environ.get("LTX_DEVICE_RESIDENT", "1") != "0"
+        On by default on a Linear mesh; the 4x8 Ring hangs at the stage-2 replay with a device-resident
+        input (measured on blx02), so a Ring mesh takes the host round-trip unless ``LTX_DEVICE_RESIDENT=1``
+        forces it. ``LTX_DEVICE_RESIDENT=0`` restores the host round-trip everywhere."""
+        if images:
+            return False
+        flag = os.environ.get("LTX_DEVICE_RESIDENT")
+        if flag is not None:
+            return flag != "0"
+        return self.ccl_manager.topology != ttnn.Topology.Ring
 
     def _replicated_channel_vec(self, v: torch.Tensor) -> ttnn.Tensor:
         return ttnn.from_torch(
