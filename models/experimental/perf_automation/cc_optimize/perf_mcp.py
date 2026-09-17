@@ -1112,6 +1112,70 @@ def _autorecord_wedge(reason: str, killed_by_watchdog: bool = False) -> None:
         pass
 
 
+def _autorecord_diverged(op_signature: str, kernel_kind: str, note: str, fp: dict) -> None:
+    """Give a diverged attempt a ledger row, so the rung it was tried on can eventually close.
+
+    record_kernel_attempt refuses to bank a diverged reading as a win or a loss -- correctly, since
+    `_attempt_fullpipe_verdict` keeps own=False for it and that must not change (a >8% blowup is
+    nearly always the degraded-device regime, not the edit, per the comment at that check). But
+    refusing the record ALSO means the row is never written at all, so _rung_allowance never sees
+    it: 284 of 305 full-pipeline checks on one nemotron matmul came back diverged, none were
+    recordable, and its dtype/block/shard rungs still read 0 tries after ~14 hours -- the tool has
+    no memory any of it happened, and keeps re-offering the same rung forever.
+
+    Shaped exactly like _autorecord_wedge's row (same fields _rung_allowance/_op_match/the report
+    already read) rather than a second store: measured_ms stays None (nothing was banked), wedged
+    stays False (it did not crash), and "diverged": True is the one new fact -- the same way
+    "wedged": True already tells the ladder an attempt happened without a usable number.
+
+    board_clamped carries the ONE reason this must not count anyway: _measure_full_pipeline_guarded
+    already discards a clamped reading and retries (or errors outright if the board never cools), so
+    a diverged verdict cannot normally originate from a clamped run -- but PERF_MCP_THERMAL_GATE=0
+    turns that guard off, and a diverged row minted from a hot board must not close a rung that was
+    never actually tried. _LAST_RUN_CLAMPED is already computed for exactly this moment; reading it
+    here costs nothing and adds no second detector.
+
+    Marks the verdict CONSUMED on success, the same as the ok/regressed path does, so a second
+    record_kernel_attempt call against the same unmeasured diverged reading (no fresh
+    check_full_pipeline_latency in between) cannot mint a second row for the one attempt that
+    happened.
+    """
+    ident = _verdict_identity(fp)
+    if ident is not None:
+        try:
+            path = _consumed_verdict_path()
+            if json.loads(path.read_text()) == ident:
+                return  # this diverged reading already has its row
+        except Exception:  # noqa: BLE001
+            pass
+    rec = {
+        "op_signature": op_signature,
+        "kernel_kind": _normalise_rung(kernel_kind),
+        "measurement_failed": False,
+        "measured_ms": None,
+        "beat_baseline": False,
+        "note": note,
+        "stages": [],
+        "kernel_detected_in_source": False,
+        "wedged": False,
+        "diverged": True,
+        "board_clamped": bool(globals().get("_LAST_RUN_CLAMPED")),
+        "retryable": False,
+        "needs_device_recovery": False,
+        "evidence": {},
+        "diff": "",
+    }
+    try:
+        _append_attempt(rec)
+    except Exception:  # noqa: BLE001
+        return
+    if ident is not None:
+        try:
+            _consumed_verdict_path().write_text(json.dumps(ident))
+        except OSError:
+            pass
+
+
 def _summary_mod():
     import importlib.util
 
@@ -1529,6 +1593,14 @@ def _op_ladder_status(open_op: dict, op_code: str, attempts: list) -> tuple[bool
     # treating an unknown as non-retryable would exclude them on a missing value, not a judgement).
     for _a in _load_attempts_all():
         if _a.get("wedged") and _a.get("retryable") is False and _op_match(op_code, _a):
+            _rung_tries[_normalise_rung(_a.get("kernel_kind"))] += 1
+    # SAME BLIND SPOT, SAME FIX, for a diverged reading instead of a wedge: record_kernel_attempt
+    # refuses to bank a >8% full-pipeline blowup as a win or a loss, so _rung_tries above cannot see
+    # it either, and a rung whose every attempt diverges never closes. Excluded when board_clamped is
+    # truthy for the same reason as _rung_allowance: a hot board making a reading look bad is not the
+    # rung being genuinely tried.
+    for _a in _load_attempts_all():
+        if _a.get("diverged") and not _a.get("board_clamped") and _op_match(op_code, _a):
             _rung_tries[_normalise_rung(_a.get("kernel_kind"))] += 1
     grid = (open_op.get("grid") or "").lower()
     wdtype = (open_op.get("weight_dtype") or "").lower()
@@ -5561,6 +5633,18 @@ def _rung_allowance(op_signature: str, kernel_kind: str, attempts: list) -> tupl
         for a in matches
         if _normalise_rung(a.get("kernel_kind")) == rung and a.get("wedged") and a.get("retryable") is False
     )
+    # A DIVERGED READING ALSO NEVER HAS measured_ms -- record_kernel_attempt refuses to bank a >8%
+    # blowup as a real win or loss (own=False, see _attempt_fullpipe_verdict), so the sum above cannot
+    # see these either. Same failure shape as the wedge case just above: a rung whose every attempt
+    # diverges never closes, and the caller keeps being offered it. Counted only when NOT
+    # board_clamped -- a clamped reading cannot normally reach "diverged" at all (the guarded
+    # full-pipeline measurer discards and retries a clamped run), but if PERF_MCP_THERMAL_GATE=0 lets
+    # one through, it must not close a rung that a hot board, not the edit, made look bad.
+    tries += sum(
+        1
+        for a in matches
+        if _normalise_rung(a.get("kernel_kind")) == rung and a.get("diverged") and not a.get("board_clamped")
+    )
     # SAME FILTER AS `tries` ABOVE, for the same reason. went_deeper cuts the knob allowance from
     # _MAX_KNOB_RETRIES to 1 because "a second knob search is not worth it after a structural or
     # kernel rung EXISTS" -- but a row with measured_ms=None is not a rung that exists, it is a rung
@@ -5712,6 +5796,15 @@ def record_kernel_attempt(
         and "wedged" not in (note or "").lower()
         and os.environ.get("PERF_MCP_ALLOW_UNMEASURED_ATTEMPT") != "1"
     ):
+        # A DIVERGED READING STILL GETS A ROW, though never a verdict. own=False stays exactly as it
+        # was for "diverged" -- a >8% blowup is nearly always the degraded-device regime, not the
+        # edit, so it must never be banked as a measured win or loss. But refusing the row too meant
+        # the rung it was tried on could never close: 284 of 305 full-pipeline checks on one op came
+        # back diverged, none were recordable, and the rung read 0 tries after ~14 hours of retrying
+        # it. See _autorecord_diverged.
+        _fp_now = gate_verdicts().get("full_pipeline") or {}
+        if str(_fp_now.get("status")) == "diverged":
+            _autorecord_diverged(op_signature, kernel_kind, note, _fp_now)
         return {
             "recorded": False,
             "refused": (

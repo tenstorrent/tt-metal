@@ -58,7 +58,14 @@ _OWNERS = {
         {
             "cc_optimize/measurements.py": {"is_win"},
             # the writer stamps the flag; it must agree with the measurement at write time
-            "cc_optimize/perf_mcp.py": {"record_kernel_attempt", "_record_committed_win", "_autorecord_wedge"},
+            "cc_optimize/perf_mcp.py": {
+                "record_kernel_attempt",
+                "_record_committed_win",
+                "_autorecord_wedge",
+                # Same shape as _autorecord_wedge: a diverged reading is never banked as a win, so
+                # this always stamps the literal False -- never derives one.
+                "_autorecord_diverged",
+            },
             "cc_optimize/summary.py": set(),
         },
     ),
