@@ -45,6 +45,23 @@ void UnaryDeviceOperation::validate_on_program_cache_miss(
         "Unary: Operands need to be allocated in buffers on the device. Buffer is null.");
 
     for (const auto& op : args.op_chain) {
+        if (op.type() == operations::unary::UnaryOpType::POWER ||
+            op.type() == operations::unary::UnaryOpType::POWER_ITERATIVE) {
+            // Both kernels compute in float (2^(p*log2(x)) / repeated float multiply). An integer tile
+            // would be consumed as float32 bit patterns and the float result stored through an integer
+            // output tensor (#56853). Integer pow is handled in the composite via int multiply.
+            const DataType effective_out = output_tensor.has_value() ? output_tensor->dtype() : args.output_dtype;
+            TT_FATAL(
+                tt::tt_metal::is_floating_point(input_tensor.dtype()),
+                "Unary: {} requires a floating point input, got dtype {}",
+                op.type(),
+                input_tensor.dtype());
+            TT_FATAL(
+                tt::tt_metal::is_floating_point(effective_out),
+                "Unary: {} requires a floating point output, got dtype {}",
+                op.type(),
+                effective_out);
+        }
         if (op.type() == operations::unary::UnaryOpType::LGAMMA) {
             TT_FATAL(
                 input_tensor.dtype() == DataType::BFLOAT16 || input_tensor.dtype() == DataType::FLOAT32,
