@@ -83,7 +83,9 @@ protected:
             // Deliberately unguarded: consuming the PCH must not declare this twice. Its source line must survive.
             file << "struct PchOperationPrefix { static constexpr int value = __LINE__; };\n";
             file << "constexpr int pch_probe_define = PCH_PROBE_DEFINE;\n";
-            file << "#ifdef COMPILE_FOR_TRISC\n#include \"api/compute/common.h\"\n#endif\n";
+            // The DeepSeek startup helpers read CB formats that the prefix only declares.
+            file << "#ifdef COMPILE_FOR_TRISC\n#include \"api/compute/common.h\"\n"
+                    "#include \"api/compute/experimental/deepseek_compute_kernel_hw_startup.h\"\n#endif\n";
             if (!dependency.empty()) {
                 file << "#include \"" << dependency.string() << "\"\n";
             }
