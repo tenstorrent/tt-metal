@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <set>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -15,12 +16,29 @@ class FactorySystemDescriptor;
 
 namespace tt::scaleout_tools {
 
+class FsdQuery;
+
+// Names one hierarchy tier of one subgroup: the links whose endpoints' instance_path LCP is exactly `depth`
+// and which lie in the depth-`depth` subgroup containing `member_hostname`.
+//
+// Passed to validation so the expected link set comes from the FSD hierarchy rather than from whatever
+// discovery happened to find. The difference matters for a partial GSD: scoping by discovered hosts silently
+// drops an absent host's links, while scoping by the hierarchy keeps them in scope so they surface as missing.
+struct HierarchyTierScope {
+    const FsdQuery* query = nullptr;  // must outlive the call
+    std::string member_hostname;      // any host of the subgroup; usually the local host
+    uint32_t depth = 0;
+};
+
 // Read-only query interface over a FactorySystemDescriptor.
 // Builds a hostname -> host_id index once; the referenced proto must outlive this object.
 class FsdQuery {
 public:
     explicit FsdQuery(const fsd::proto::FactorySystemDescriptor& fsd);
     FsdQuery(fsd::proto::FactorySystemDescriptor&&) = delete;
+
+    // Hostname of a host by positional host_id (the inverse of the hostname index).
+    const std::string& get_hostname(uint32_t host_id) const;
 
     // Full instance_path segments of a host (root -> host).
     std::vector<std::string> get_instance_path(uint32_t host_id) const;
@@ -48,6 +66,21 @@ public:
     // fewer than `depth` segments group by their full path. Groups are ordered deterministically by prefix,
     // host_ids ascending within a group. This is the subgroup set for per-hierarchy-node phased discovery.
     std::vector<std::vector<uint32_t>> hierarchy_partition(uint32_t depth) const;
+
+    // Index into hierarchy_partition(depth) of the subgroup containing `hostname`. Deterministic across ranks
+    // (same FSD everywhere), which makes it usable directly as a collective split color.
+    uint32_t subgroup_index(const std::string& hostname, uint32_t depth) const;
+
+    // Hostnames of the depth-`depth` subgroup containing `hostname` (including it). Known a priori from the
+    // FSD, so callers can tell "this host should be here" apart from "this host was discovered" — the
+    // distinction that lets an absent host be reported rather than silently dropped from scope.
+    std::set<std::string> subgroup_hosts(const std::string& hostname, uint32_t depth) const;
+
+    // Number of eth_connections this tier holds `hostname`'s subgroup responsible for: those at exactly `depth`
+    // with both endpoints inside the depth-`depth` subgroup containing `hostname`. Matches the scope that
+    // validate_fsd_against_gsd applies, so it is the expected-connection count for one subgroup at one tier.
+    // Counted from the FSD alone (no discovery), so it is the a-priori figure a tier should have covered.
+    uint32_t count_subgroup_tier_connections(const std::string& hostname, uint32_t depth) const;
 
 private:
     uint32_t host_id_for(const std::string& hostname) const;

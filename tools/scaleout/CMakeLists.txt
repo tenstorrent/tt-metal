@@ -176,6 +176,28 @@ target_link_libraries(
         cxxopts::cxxopts
 )
 
+add_executable(generate_hostfile)
+target_sources(generate_hostfile PRIVATE ${GENERATE_HOSTFILE_SRCS})
+
+set_target_properties(
+    generate_hostfile
+    PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY
+            ${Metalium_BINARY_DIR}/tools/scaleout
+)
+
+add_dependencies(generate_hostfile scaleout_generated_protos)
+
+target_include_directories(generate_hostfile SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
+
+target_link_libraries(
+    generate_hostfile
+    PRIVATE
+        scaleout_tools
+        protobuf::libprotobuf
+        cxxopts::cxxopts
+)
+
 add_executable(run_regen_descriptors)
 target_sources(run_regen_descriptors PRIVATE ${RUN_REGEN_DESCRIPTORS_SRCS})
 
