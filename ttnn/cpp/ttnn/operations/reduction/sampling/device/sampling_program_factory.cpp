@@ -122,12 +122,9 @@ ttnn::device_operation::ProgramArtifacts SamplingProgramFactory::create_program_
     // is gated on !(WH || BH) so new architectures default to the safe 32-bit path.
     const bool use_32bit_index = !(device->arch() == tt::ARCH::WORMHOLE_B0 || device->arch() == tt::ARCH::BLACKHOLE);
 
-    // Use the stable bitonic top-k network where the LLK implements it (WH/BH). #53557 switched the
-    // sampling kernel to the unstable network for SFPU sort speed; with it, seeded top-k sampling on
-    // Llama-3.3-70B Galaxy intermittently returned a token whose sampled-token logprob was non-finite
-    // (vLLM "Out of range float values are not JSON compliant", 2026-09-14). Keep the stable network
-    // until the unstable path's index handling is validated for sampling; Quasar keeps unstable.
-    const bool stable_sort = (device->arch() == tt::ARCH::WORMHOLE_B0 || device->arch() == tt::ARCH::BLACKHOLE);
+    // Use the stable bitonic top-k network: on exact value ties the candidate at the lowest position
+    // wins, so the sampled index does not depend on how the network swaps equal values.
+    const bool stable_sort = true;
 
     tt::DataFormat input_values_dfb_data_format =
         tt::tt_metal::datatype_to_dataformat_converter(input_values_tensor.dtype());
