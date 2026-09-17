@@ -346,6 +346,11 @@ def push_branch(sha, index, maxschedchunk=None, apply_ref=None, runner_opts=None
     suffix = "" if maxschedchunk is None else f"-c{maxschedchunk}"
     if apply_ref:
         suffix = f"-{short(git('rev-parse', apply_ref))[:7]}{suffix}"
+    if runner_opts:
+        # Name the variant, or a single-core run overwrites the 15-worker one.
+        for tag, key in (("n", "workers"), ("s", "split_into")):
+            if runner_opts.get(key) is not None:
+                suffix += f"-{tag}{runner_opts[key]}"
     branch = f"{BRANCH_PREFIX}{short(sha)}{suffix}-r{index}"
     head, _ = force_non_sol(sha, maxschedchunk, apply_ref, runner_opts)
     git("push", "--force", f"git@github.com:{REPO}.git", f"{head}:refs/heads/{branch}")
@@ -382,6 +387,7 @@ def start_runs(sha, count, args_ns=None):
             i,
             getattr(args_ns, "maxschedchunk", None),
             getattr(args_ns, "apply", None),
+            runner_opts_of(args_ns) if args_ns else None,
         )
         before = {r["databaseId"] for r in runs_on(branch)}
         args = ["gh", "workflow", "run", WORKFLOW, "--repo", REPO, "--ref", branch]
