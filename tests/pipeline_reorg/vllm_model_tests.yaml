@@ -253,7 +253,7 @@
 - name: "Gemma4-31B"
   model: google/gemma-4-31B-it
   coherence-test: true
-  server-timeout: 35
+  server-timeout: 20
   benchmark-timeout: 5
   mesh-device: P150x4
   arch: arch-blackhole
@@ -262,7 +262,7 @@
   multimodal: false
   skus:
     bh_quietbox_2:
-      timeout: 50
+      timeout: 35
       tier: 1
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models
