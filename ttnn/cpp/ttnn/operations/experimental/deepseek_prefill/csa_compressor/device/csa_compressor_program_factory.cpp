@@ -4,16 +4,20 @@
 #include "csa_compressor_device_operation.hpp"
 
 #include <algorithm>
+#include <utility>
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
 
+#include "kernels/csa_compressor_runtime_args.hpp"
+
 namespace ttnn::experimental::prim {
 namespace {
 
 using namespace tt::tt_metal;
+namespace rt = ::csa_compressor::runtime_args;
 
 constexpr uint32_t kTileBytes = 32 * 32 * sizeof(uint16_t);
 constexpr uint32_t kCandidateKvCb = tt::CBIndex::c_0;
@@ -63,6 +67,114 @@ CBDescriptor cb_descriptor(uint32_t cb, uint32_t pages, const CoreRangeSet& core
 // kv/gate pack the Ca and Cb halves side by side, so the head dimension is half the projection width.
 uint32_t factory_head_dim_of(const Tensor& kv) { return kv.logical_shape()[-1] / 2; }
 
+struct CheckedRuntimeArgs {
+    KernelDescriptor::RTArgList values;
+    uint32_t size = 0;
+
+    template <typename Arg, typename Value>
+    void push(Arg expected, const Value& value, const char* name) {
+        const uint32_t expected_index = static_cast<uint32_t>(expected);
+        TT_FATAL(
+            size == expected_index,
+            "CSA runtime arg {} expected index {}, got {} before append",
+            name,
+            expected_index,
+            size);
+        values.push_back(value);
+        size++;
+    }
+
+    template <typename Arg>
+    KernelDescriptor::RTArgList finish(Arg count) {
+        TT_FATAL(
+            size == static_cast<uint32_t>(count),
+            "CSA runtime arg list has {} entries, expected {}",
+            size,
+            static_cast<uint32_t>(count));
+        return std::move(values);
+    }
+};
+
+struct StateRuntimeArgs {
+    Buffer* kv;
+    Buffer* gate;
+    Buffer* bias;
+    Buffer* base_kv;
+    Buffer* base_score;
+    Buffer* output_kv;
+    Buffer* output_score;
+    uint32_t local_valid;
+    uint32_t absolute_start;
+    uint32_t state_tiles;
+    uint32_t first_state_tile;
+
+    KernelDescriptor::RTArgList to_list() const {
+        CheckedRuntimeArgs args;
+        args.push(rt::State::KvAddress, kv, "state.kv");
+        args.push(rt::State::GateAddress, gate, "state.gate");
+        args.push(rt::State::BiasAddress, bias, "state.bias");
+        args.push(rt::State::BaseKvAddress, base_kv, "state.base_kv");
+        args.push(rt::State::BaseScoreAddress, base_score, "state.base_score");
+        args.push(rt::State::OutputKvAddress, output_kv, "state.output_kv");
+        args.push(rt::State::OutputScoreAddress, output_score, "state.output_score");
+        args.push(rt::State::LocalValid, local_valid, "state.local_valid");
+        args.push(rt::State::AbsoluteStart, absolute_start, "state.absolute_start");
+        args.push(rt::State::StateTiles, state_tiles, "state.state_tiles");
+        args.push(rt::State::FirstStateTile, first_state_tile, "state.first_state_tile");
+        return args.finish(rt::State::Count);
+    }
+};
+
+struct ReaderRuntimeArgs {
+    Buffer* kv;
+    Buffer* gate;
+    Buffer* bias;
+    Buffer* predecessor_kv;
+    Buffer* predecessor_score;
+    uint32_t output_tiles;
+    uint32_t complete_windows;
+    uint32_t absolute_start;
+    uint32_t first_output_tile;
+
+    KernelDescriptor::RTArgList to_list() const {
+        CheckedRuntimeArgs args;
+        args.push(rt::Reader::KvAddress, kv, "reader.kv");
+        args.push(rt::Reader::GateAddress, gate, "reader.gate");
+        args.push(rt::Reader::BiasAddress, bias, "reader.bias");
+        args.push(rt::Reader::PredecessorKvAddress, predecessor_kv, "reader.predecessor_kv");
+        args.push(rt::Reader::PredecessorScoreAddress, predecessor_score, "reader.predecessor_score");
+        args.push(rt::Reader::OutputTiles, output_tiles, "reader.output_tiles");
+        args.push(rt::Reader::CompleteWindows, complete_windows, "reader.complete_windows");
+        args.push(rt::Reader::AbsoluteStart, absolute_start, "reader.absolute_start");
+        args.push(rt::Reader::FirstOutputTile, first_output_tile, "reader.first_output_tile");
+        return args.finish(rt::Reader::Count);
+    }
+};
+
+struct ComputeRuntimeArgs {
+    uint32_t output_tiles;
+
+    KernelDescriptor::RTArgList to_list() const {
+        CheckedRuntimeArgs args;
+        args.push(rt::Compute::OutputTiles, output_tiles, "compute.output_tiles");
+        return args.finish(rt::Compute::Count);
+    }
+};
+
+struct WriterRuntimeArgs {
+    Buffer* output;
+    uint32_t output_tiles;
+    uint32_t first_output_tile;
+
+    KernelDescriptor::RTArgList to_list() const {
+        CheckedRuntimeArgs args;
+        args.push(rt::Writer::OutputAddress, output, "writer.output");
+        args.push(rt::Writer::OutputTiles, output_tiles, "writer.output_tiles");
+        args.push(rt::Writer::FirstOutputTile, first_output_tile, "writer.first_output_tile");
+        return args.finish(rt::Writer::Count);
+    }
+};
+
 KernelDescriptor state_kernel_descriptor(
     const CsaStateInputs& args,
     std::array<Tensor, 2>& outputs,
@@ -98,21 +210,23 @@ KernelDescriptor state_kernel_descriptor(
     descriptor.runtime_args.reserve(num_cores);
     uint32_t first_tile = 0;
     for (uint32_t i = 0; i < num_cores; ++i) {
-        KernelDescriptor::RTArgList runtime_args;
-        runtime_args.reserve(11);
-        runtime_args.push_back(args.kv.buffer());
-        runtime_args.push_back(args.gate.buffer());
-        runtime_args.push_back(args.position_bias.buffer());
-        runtime_args.push_back(args.base_kv_state.buffer());
-        runtime_args.push_back(args.base_score_state.buffer());
-        runtime_args.push_back(outputs[0].buffer());
-        runtime_args.push_back(outputs[1].buffer());
-        runtime_args.push_back(local_valid);
-        runtime_args.push_back(absolute_start);
         const uint32_t core_tiles = base_tiles + (i < extra_tiles ? 1 : 0);
-        runtime_args.push_back(core_tiles);
-        runtime_args.push_back(first_tile);
-        descriptor.emplace_runtime_args(cores[i], runtime_args);
+        descriptor.emplace_runtime_args(
+            cores[i],
+            StateRuntimeArgs{
+                .kv = args.kv.buffer(),
+                .gate = args.gate.buffer(),
+                .bias = args.position_bias.buffer(),
+                .base_kv = args.base_kv_state.buffer(),
+                .base_score = args.base_score_state.buffer(),
+                .output_kv = outputs[0].buffer(),
+                .output_score = outputs[1].buffer(),
+                .local_valid = local_valid,
+                .absolute_start = absolute_start,
+                .state_tiles = core_tiles,
+                .first_state_tile = first_tile,
+            }
+                .to_list());
         first_tile += core_tiles;
     }
     return descriptor;
@@ -228,27 +342,31 @@ ProgramDescriptor CsaCompressionProgramFactory::create_descriptor(
         const CoreCoord& core = cores[i];
         const uint32_t core_tiles = base_tiles + (i < extra_tiles ? 1 : 0);
 
-        KernelDescriptor::RTArgList reader_runtime_args;
-        reader_runtime_args.reserve(9);
-        reader_runtime_args.push_back(args.kv.buffer());
-        reader_runtime_args.push_back(args.gate.buffer());
-        reader_runtime_args.push_back(args.position_bias.buffer());
-        reader_runtime_args.push_back(args.predecessor_kv_state.buffer());
-        reader_runtime_args.push_back(args.predecessor_score_state.buffer());
-        reader_runtime_args.push_back(core_tiles);
-        reader_runtime_args.push_back(local_valid / 4);
-        reader_runtime_args.push_back(absolute_start);
-        reader_runtime_args.push_back(first_tile);
-        reader.emplace_runtime_args(core, reader_runtime_args);
+        reader.emplace_runtime_args(
+            core,
+            ReaderRuntimeArgs{
+                .kv = args.kv.buffer(),
+                .gate = args.gate.buffer(),
+                .bias = args.position_bias.buffer(),
+                .predecessor_kv = args.predecessor_kv_state.buffer(),
+                .predecessor_score = args.predecessor_score_state.buffer(),
+                .output_tiles = core_tiles,
+                .complete_windows = local_valid / 4,
+                .absolute_start = absolute_start,
+                .first_output_tile = first_tile,
+            }
+                .to_list());
 
-        compute.emplace_runtime_args(core, {core_tiles});
+        compute.emplace_runtime_args(core, ComputeRuntimeArgs{.output_tiles = core_tiles}.to_list());
 
-        KernelDescriptor::RTArgList writer_runtime_args;
-        writer_runtime_args.reserve(3);
-        writer_runtime_args.push_back(outputs[0].buffer());
-        writer_runtime_args.push_back(core_tiles);
-        writer_runtime_args.push_back(first_tile);
-        writer.emplace_runtime_args(core, writer_runtime_args);
+        writer.emplace_runtime_args(
+            core,
+            WriterRuntimeArgs{
+                .output = outputs[0].buffer(),
+                .output_tiles = core_tiles,
+                .first_output_tile = first_tile,
+            }
+                .to_list());
 
         first_tile += core_tiles;
     }
