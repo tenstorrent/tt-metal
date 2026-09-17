@@ -1375,3 +1375,38 @@ def test_clamped_silu_glu_limit_guard(device, expect_error, limit):
     # At limit <= 0 the gate half is the constant silu(limit).
     with expect_error(RuntimeError, "limit must be positive"):
         ttnn.clamped_silu_glu(gate, gate, limit)
+
+
+@pytest.mark.parametrize("input_shapes", ((torch.Size([1, 1, 32, 32])),))
+@pytest.mark.parametrize("weight", [0.25, [0.25]], ids=["scalar", "array_of_one"])
+@pytest.mark.parametrize(
+    "requested_memcfg, expected_memcfg",
+    (
+        (ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
+        (None, ttnn.L1_MEMORY_CONFIG),
+    ),
+    ids=["explicit_DRAM", "unset_follows_input"],
+)
+def test_prelu_scalar_honours_memory_config(input_shapes, device, weight, requested_memcfg, expected_memcfg):
+    """The scalar prelu overloads must return in the requested memory config.
+
+    Both dropped it: `output_mem_config` was commented out in the signature and
+    `prelu_sfpu` was called without it. The tensor-tensor overload directly below them
+    already threaded it, so only these two diverged.
+
+    The input is placed in L1 with DRAM requested; with matching configs the inherited
+    and requested values coincide and the defect is invisible. The unset case pins the
+    existing default, which follows the input.
+    """
+    _, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
+    input_tensor = ttnn.to_memory_config(input_tensor, ttnn.L1_MEMORY_CONFIG)
+
+    output = (
+        ttnn.prelu(input_tensor, weight)
+        if requested_memcfg is None
+        else ttnn.prelu(input_tensor, weight, memory_config=requested_memcfg)
+    )
+
+    assert (
+        output.memory_config() == expected_memcfg
+    ), f"weight {weight}, requested {requested_memcfg}: expected {expected_memcfg} but landed in {output.memory_config()}"
