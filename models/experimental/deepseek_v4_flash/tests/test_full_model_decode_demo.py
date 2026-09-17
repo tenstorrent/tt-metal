@@ -43,6 +43,7 @@ from __future__ import annotations
 import contextlib
 import math
 import os
+import signal
 from pathlib import Path
 
 import pytest
@@ -340,6 +341,41 @@ def _build_and_prefill(
     }
 
 
+class _InterruptFlag:
+    """Record SIGINT instead of raising it, for the duration of the generation loop.
+
+    The default handler raises ``KeyboardInterrupt`` at the first bytecode after the
+    signal arrives. For a Ctrl-C during a decode step that bytecode is on the return
+    path of the blocking D2H socket read: the step's output has already been taken off
+    the socket by then, but the loop's ``read`` counter has not advanced, so the unwind
+    at the end of the test would ask the socket for one output more than any trace will
+    send and park in ``read_decoded_output`` forever -- with the sockets in a byte state
+    a further Ctrl-C cannot break (that read spins in C).
+
+    Recording the signal lets the step finish (packet, output and both counters), and
+    the loop raises ``KeyboardInterrupt`` itself at the top of the next iteration, where
+    the counters and the socket agree. ``retire_replay`` runs before :meth:`restore`, so
+    the unwind itself cannot be cut in half either; the posted window bounds it.
+    """
+
+    def __init__(self) -> None:
+        self.hit = False
+        self._previous = None
+        self._installed = False
+
+    def install(self) -> None:
+        self._previous = signal.signal(signal.SIGINT, self._record)
+        self._installed = True
+
+    def restore(self) -> None:
+        if self._installed:
+            self._installed = False
+            signal.signal(signal.SIGINT, self._previous)
+
+    def _record(self, signum, frame) -> None:
+        self.hit = True
+
+
 @pytest.mark.skipif(not _checkpoint_available(), reason=f"V4-Flash checkpoint not found under {_DEFAULT_MODEL_DIR}")
 @pytest.mark.timeout(14400)  # heavy: bf4 conversion of every expert + many decode steps
 @torch.no_grad()
@@ -392,19 +428,73 @@ def test_full_model_decode_demo(mesh_device, reset_seeds, text: str, tp_size: in
             # tables are device tensors the traces read, so rewriting them from the
             # replay thread while earlier steps are in flight would race.
             model.ensure_session_capacity(gen_positions[-1])
-            # Issue every generation execute_trace on the replay thread before any H2D
-            # packet, so the device is already waiting on recv when we start feeding.
-            model.replay_traced_ahead(gen_positions)
-        consumed = 0
+
+        # Traces are posted in a bounded window rather than for the whole generation
+        # (the CLI's ``_DECODE_REPLAY_AHEAD``). A posted ``execute_trace`` has to be
+        # handed one H2D packet and have its full output read off the D2H socket before
+        # the pipeline can unwind, so the window is also the most an interrupt, an EOS
+        # or an error can leave to drain. Posting every position up front would make
+        # Ctrl-C retire the whole rest of the reply instead of returning.
+        replay_ahead = 32
+        posted = 0  # gen_positions handed to replay_traced_ahead
+        fed = 0  # packets written to the H2D socket
+        read = 0  # outputs read back off the D2H socket
+
+        def refill_replay(step: int) -> None:
+            """Keep one window of traces posted: the current step and the ones after."""
+            nonlocal posted
+            if not traced:
+                return
+            want = min(len(gen_positions), step - 1 + replay_ahead)
+            if want > posted:
+                model.replay_traced_ahead(gen_positions[posted:want])
+                posted = want
+
+        def retire_replay() -> None:
+            """Feed and read every posted-but-unretired step, one step in flight.
+
+            ``read`` counts outputs already taken off the D2H socket and ``fed`` the
+            packets already pushed, so a step interrupted between its write and its read
+            is neither re-fed nor skipped. Interleaving the two matters: the D2H FIFO is
+            one page deep, so feeding the whole window before reading any of it would
+            park the sender kernel and wedge the queue.
+            """
+            nonlocal fed, read
+            if not traced:
+                return
+            dummy = next_id if next_id is not None else 0
+            for i in range(read, posted):
+                if i >= fed:
+                    model.write_step_packet(dummy, gen_positions[i])
+                    fed += 1
+                model.read_decoded_output()
+                read += 1
+
+        # Ctrl-C is recorded rather than raised while this loop runs (see
+        # ``_InterruptFlag``): raised on the return path of the blocking D2H read it
+        # would leave ``read`` one step behind the socket, and the retire below would
+        # then block forever asking for an output no trace will send.
+        interrupt = _InterruptFlag()
+        interrupt.install()
         try:
             for step, pos in enumerate(gen_positions, start=1):
+                if interrupt.hit:
+                    # Safe point: the step before this one is written, read and counted,
+                    # so the socket and the counters agree for the retire below.
+                    logger.info("interrupted; unwinding the posted replays")
+                    raise KeyboardInterrupt
                 if next_id == eos_id:
                     logger.info("hit EOS; stopping")
                     break
+                # Top the window up before feeding, so the device is already parked on
+                # in-trace recv for this step and the next ones.
+                refill_replay(step)
                 t0 = time.perf_counter()
                 if traced:
                     model.write_step_packet(next_id, pos)
+                    fed += 1
                     logits = model.read_decoded_output().reshape(1, -1).float()
+                    read += 1
                 else:
                     hidden = model.decode(next_id, pos, rope)  # [1, 1, D]
                     with _region("LM_HEAD"):
@@ -414,7 +504,6 @@ def test_full_model_decode_demo(mesh_device, reset_seeds, text: str, tp_size: in
                 next_id = int(logits[0].argmax().item())
                 decode_time += time.perf_counter() - t0
                 decode_tokens += 1
-                consumed += 1
                 generated.append(next_id)
                 logger.info(f"step {step:3d} (pos {pos:4d}): token id {next_id} {tokenizer.decode([next_id])!r}")
 
@@ -427,15 +516,15 @@ def test_full_model_decode_demo(mesh_device, reset_seeds, text: str, tp_size: in
                     decode_tokens = 0
                     decode_time = 0.0
         finally:
-            # Traced generation queued every position up front. An early EOS (or an
-            # error) leaves execute_trace parked on in-trace recv; dummy-feed the
-            # leftovers so the socket FIFO and replay thread can unwind. Discard the
-            # logits -- they are not part of the reply.
-            if traced:
-                dummy = next_id if next_id is not None else 0
-                for drain_pos in gen_positions[consumed:]:
-                    model.write_step_packet(dummy, drain_pos)
-                    model.read_decoded_output()
+            # Retire before restoring the handler, so the unwind cannot be cut in half
+            # by a second Ctrl-C. An early EOS (or an error) leaves the posted
+            # execute_traces parked on in-trace recv; dummy-feed and read exactly those
+            # so the sockets and the replay thread can unwind. Discard the logits --
+            # they are not part of the reply.
+            try:
+                retire_replay()
+            finally:
+                interrupt.restore()
 
     if decode_tokens:
         logger.info(
