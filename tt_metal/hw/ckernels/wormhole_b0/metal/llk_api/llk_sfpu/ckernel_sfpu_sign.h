@@ -29,7 +29,8 @@ inline void calculate_sign(const std::uint32_t /*exponent_size_8*/) {
         // before, sends -0 to -1). Only the zero case is left for a branch, so the
         // v_elseif and its predicate-complement disappear.
         sfpi::vFloat res = sfpi::copysgn(sfpi::vFloat(1.0f), v);
-        v_if(_sfpu_is_fp16_zero_(v)) { res = 0.0f; }
+        v_if(sfpi::is_nan(v)) { res = v; }
+        v_elseif(_sfpu_is_fp16_zero_(v)) { res = 0.0f; }
         v_endif;
         sfpi::dst_reg[0] = res;
         sfpi::dst_reg++;

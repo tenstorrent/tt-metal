@@ -26,7 +26,8 @@ inline void calculate_sign(const uint /*exponent_size_8*/) {
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat v = sfpi::dst_reg[0];
         sfpi::vFloat res = 1.0f;
-        v_if(v < 0.0F) { res = -1.0f; }
+        v_if(sfpi::is_nan(v)) { res = v; }
+        v_elseif(v < 0.0F) { res = -1.0f; }
         v_elseif(_sfpu_is_fp16_zero_(v)) { res = 0.0f; }
         v_endif;
         sfpi::dst_reg[0] = res;
