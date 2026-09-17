@@ -36,7 +36,7 @@ on:
         type: string
         default: "all"
       mlperf-read-only:
-        description: "Mount /mnt/MLPerf as read-only, and keep HF offline so only cached weights are used. Set to false to mount :rw and let HF populate missing weights (target model or speculative drafter) on first use."
+        description: "Mount /mnt/MLPerf as read-only (set to false to allow tt_cache write-through during first-use)"
         required: false
         type: boolean
         default: true
@@ -142,21 +142,7 @@ jobs:
         PYTHONPATH: ${{ inputs.vllm-source == 'fork' && '/work:/work/vllm' || '/work:/work/vllm-tt-plugin/src' }}
         LD_LIBRARY_PATH: /work/build/lib
         LOGURU_LEVEL: INFO
-        # HF goes online exactly when the weights cache is WRITABLE, so a first
-        # run populates it and later runs read it:
-        #   * per-runner BH modes (local-disk, lfc) mount :rw always;
-        #   * shared NFS modes (cloud-mlperf, yyz4-mnt-models) mount :ro unless
-        #     the operator unticks mlperf-read-only, which makes them :rw.
-        # Offline is not a preference, it is what a :ro mount forces: HF writes
-        # metadata (refs/main, .no_exist markers) on every HEAD call even when the
-        # model is already cached, and that fails with
-        # `OSError [Errno 30] Read-only file system`. Since the mount expression
-        # below already honours mlperf-read-only, this honours it too -- otherwise
-        # unticking the box gives a writable share that nothing is allowed to fill.
-        # Weights resolve identically for the target model and the speculative
-        # drafters, both via HF_HUB_CACHE.
-        HF_HUB_OFFLINE: ${{ (matrix.test-group['weights-cache-mode'] == 'local-disk' || matrix.test-group['weights-cache-mode'] == 'lfc' || !inputs.mlperf-read-only) && '0' || '1' }}
-        HF_TOKEN: ${{ secrets.HUGGINGFACE_TOKEN }}
+        HF_HUB_OFFLINE: 1
         HF_HUB_CACHE: /mnt/MLPerf/huggingface/hub
         TT_CACHE_HOME: /mnt/MLPerf/huggingface/tt_cache
         FILE_SERVER_PID: "./server.pid"
@@ -394,20 +380,6 @@ jobs:
               fi
               ;;
           esac
-
-          # Per-entry environment, space-separated KEY=VALUE pairs. Exported after
-          # the per-model case block so an entry can override it. Needed because
-          # this pipeline launches server_example_tt.py directly and never reads a
-          # model spec, so a leg whose serving class is selected by environment
-          # (TT_MODEL_CLASS_OVERRIDES) has no other way to say so.
-          if [ -n "${{ matrix.test-group.extra-env }}" ]; then
-            for _kv in ${{ matrix.test-group.extra-env }}; do
-              case "$_kv" in
-                *=*) export "$_kv"; echo "extra-env: ${_kv%%=*}" ;;
-                *) echo "extra-env: ignoring malformed entry '$_kv'" ;;
-              esac
-            done
-          fi
 
           # Build the VLLM server arguments array
           declare -a VLLM_SERVER_ARGS
