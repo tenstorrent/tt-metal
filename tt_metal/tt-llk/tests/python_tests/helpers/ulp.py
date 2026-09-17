@@ -3,9 +3,12 @@
 
 """Integer ULP distance: the metric an SFPU accuracy assertion can be written against.
 
-Host-only — no device, no kernel, no ``ttnn``. Nothing here is wired to a verdict yet:
-this is the metric on its own, so that a ``passed_test(max_ulp=...)`` gate and a per-op
-budget can be added on top of something already pinned by host tests.
+Host-only — no device, no kernel, no ``ttnn``. ``passed_test(max_ulp=...)`` is the gate
+built on it (``utils.py`` imports :func:`ulp_elementwise_valid`, :func:`ulp_dtype`,
+:func:`has_ulp_gate`, :func:`ulp_verdict_message` and
+:func:`warn_if_threshold_unmeaningful` from here), and the per-op budget registry sits on
+top of that. The metric stays separable from the verdict so each layer is pinned by its
+own host tests.
 
 Why an *integer* distance and not the fractional ``|err| / ulp(golden)`` that
 ``accuracy_metrics.compute_pointwise_metrics`` already reports: ``ulp(golden)`` is not the
@@ -74,9 +77,12 @@ from .logger import logger
 
 # The float formats with a per-element ULP worth counting. The block floats are absent on
 # purpose: their spacing is set by an exponent shared across 16 elements, so a per-element
-# step count against the bfloat16 view of the block is not a property of the element. They
-# keep the lattice compares already in ``utils.py``, which are the stronger, block-aware
-# criterion. Integer formats are absent because "correct" there is bit equality.
+# step count against the bfloat16 view of the block is not a property of the element.
+# ``Bfp4_b``, ``Bfp2_b`` and the MX formats keep the lattice compares already in
+# ``utils.py``, which are the stronger, block-aware criterion for them; ``Bfp8_b`` is the
+# one exception and is gated in a proxy space -- see ``_ULP_PROXY_DTYPES``, which is also
+# where the price of doing so is written down. Integer formats are absent because
+# "correct" there is bit equality.
 #: The float formats with a native per-element ULP. :func:`has_ulp_gate` is the question
 #: callers should ask, since it also covers the proxy table below; this tuple is only the
 #: native half and is not the set to test membership against.
@@ -87,21 +93,36 @@ ULP_FORMATS: Tuple[DataFormat, ...] = (
 )
 
 # Formats with no float dtype of their own that are still gated in a *proxy* format's ULP
-# space. Bfp8_b carries 7 magnitude bits per element, the same mantissa width as bfloat16,
-# so one step of the bf16 lattice is one step of the Bfp8_b lattice wherever the shared
-# block exponent is the one bf16 would have used. This is ttnn's choice — its
-# ``assert_with_ulp`` maps ``bfloat8_b`` to ``bfloat16`` — and it costs nothing here
-# because ``passed_test`` has already cast a Bfp8_b tensor to bfloat16 before it compares.
+# space. This is ttnn's choice — its ``assert_with_ulp`` maps ``bfloat8_b`` to
+# ``bfloat16`` — and it costs nothing here because ``passed_test`` has already cast a
+# Bfp8_b tensor to bfloat16 before it compares.
 #
-# The caveat to budget for: where a block spans a wide magnitude range, its small elements
-# are quantized by the block exponent far more coarsely than bf16 would quantize them, and
-# a bf16 step count reads that legal quantization as a multi-step error. Those are the
-# small-magnitude lanes, so ``near_zero_atol`` is what absorbs them; a Bfp8_b budget
-# without that floor has to be loose enough to cover the widest block in the stimulus.
+# **A Bfp8_b budget is denominated in bf16 steps, and one Bfp8_b step is two of them.**
+# Bfp8_b's 7 magnitude bits *include* an explicit leading 1, so it has 6 fractional bits
+# against bfloat16's 7: ``pack.float_to_bfp8_block`` drops the bf16 mantissa LSB
+# (``binary_str[9:-1]``, then prepends ``"1"``), and ``_bfp_block_aware_compare`` agrees,
+# sizing one step as ``2**(e - (mantissa_bits - 1))``. Measured: two bf16 steps up from
+# 1.0 is the first to change the encoded mantissa (64 -> 65). The trap is that
+# ``_ULP_DTYPES[bfloat16].mantissa_bits = 7`` counts *stored* bits with an implicit
+# leading 1 while ``_bfp_block_aware_compare(mantissa_bits=7)`` counts *total magnitude*
+# bits. So ``max_ulp=N`` buys N/2 Bfp8_b steps, and an odd budget buys the same as the
+# even one below it.
 #
-# Bfp4_b (3 magnitude bits) and Bfp2_b (1) are deliberately absent: their lattices are so
-# much coarser than bf16's that a bf16 step count would read every legal quantization as a
-# 16- or 64-step error. They keep ``_bfp_block_aware_compare``.
+# The second thing to know is that this gate does **not** forgive block quantization.
+# Where a block spans a wide magnitude range its small elements are quantized by the
+# shared exponent far more coarsely than bf16 would quantize them -- one Bfp8_b step on a
+# lane at 0.06 inside a block with amax 2.77 is 69 bf16 steps -- and the budget charges
+# the kernel for all of it. ``near_zero_atol`` cannot absorb that either, because its band
+# is a fraction of the *tensor* maximum and such a lane is only small relative to its own
+# block. A Bfp8_b budget is therefore only usable on a domain where the block
+# quantization is exact (integer-valued results inside one binade, say); anywhere else the
+# op belongs on the tolerance arm's lattice compare. Charging for it is the deliberate
+# choice: the alternative, ORing the lattice verdict in, would mean ``max_ulp`` was not
+# the enforced maximum for this format.
+#
+# Bfp4_b (3 magnitude bits, so 2 fractional) and Bfp2_b (1, so 0) are deliberately absent:
+# their lattices are so much coarser than bf16's that a bf16 step count would read every
+# legal quantization as a 32- or 128-step error. They keep ``_bfp_block_aware_compare``.
 _ULP_PROXY_DTYPES: Dict[DataFormat, torch.dtype] = {
     DataFormat.Bfp8_b: torch.bfloat16,
 }
@@ -372,7 +393,7 @@ def ulp_elementwise_valid(
     *,
     near_zero_atol: Optional[float] = None,
     near_zero_fraction: float = NEAR_ZERO_FRACTION,
-    flush_subnormals: bool = True,
+    flush_subnormals: Optional[bool] = None,
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Per-element ULP verdict, shaped like the mask ``passed_test`` already prints.
 
@@ -387,8 +408,23 @@ def ulp_elementwise_valid(
     tolerance gate this replaces already rejects it. Both-NaN lanes are valid, which is
     the rule this harness has always used.
 
-    "Near zero" means ``|golden| < near_zero_fraction * max|finite golden|`` (every lane,
-    if the golden is all zeros). The floor is deliberately *not* applied at every
+    "Near zero" is bounded two ways, and a lane has to satisfy both:
+
+    * ``|golden| < near_zero_fraction * max|finite golden|`` — scale-relative, ttnn's
+      ``measure_ulp_with_near_zero_atol`` rule, so the band follows the stimulus.
+    * ``|golden| <= near_zero_atol / near_zero_fraction`` — absolute, so one large golden
+      cannot widen the band across the tile. The relative bound alone is unbounded in
+      absolute terms: with fp32, ``max_ulp=1``, ``near_zero_atol=1e-6`` and a golden
+      spanning [0, 1000], the cut lands at 10.0 and ``golden=1.0`` vs ``1.0000008`` is
+      rescued at 7 steps against a 1-step budget. Tightening the atol does not close it,
+      because the step count the atol admits grows as ``1/|golden|`` below the cut, so any
+      atol loose enough to do its job at the cancellation lanes also rescues mid-band
+      ones. The absolute cut is the magnitude at which the forgiven error is exactly
+      ``near_zero_fraction`` of the reference: above it the relative error is under 1% and
+      the reference has not collapsed, so the budget owns the lane.
+
+    (If the golden is all zeros, every lane is near zero by the relative rule and the
+    absolute one still applies.) The floor is deliberately *not* applied at every
     magnitude: an absolute tolerance at large magnitude is precisely the format- and
     magnitude-blind gate a step count is meant to replace. It is here for the lanes where
     the reference crosses zero — ``log`` near 1, ``expm1`` near 0, ``tanhshrink``, ``sin``
@@ -408,6 +444,10 @@ def ulp_elementwise_valid(
     rescued = torch.zeros_like(valid)
 
     if near_zero_atol is not None:
+        # The absolute half of the band: the magnitude at which near_zero_atol is exactly
+        # near_zero_fraction of the reference. Above it the forgiven error is under 1% of
+        # the golden, so the reference has not collapsed and the step budget owns the lane.
+        absolute_cut = near_zero_atol / near_zero_fraction
         finite_golden = golden[torch.isfinite(golden)]
         if finite_golden.numel() == 0:
             near_zero = torch.zeros_like(valid)
@@ -418,6 +458,7 @@ def ulp_elementwise_valid(
                 if dynamic_range == 0.0
                 else golden.abs() < near_zero_fraction * dynamic_range
             )
+            near_zero = near_zero & (golden.abs() <= absolute_cut)
         # In float32 so a bf16 comparison does not round the error into or out of budget.
         absolute_error = (result.to(torch.float32) - golden.to(torch.float32)).abs()
         rescued = near_zero & (absolute_error <= near_zero_atol) & ~in_budget
@@ -712,13 +753,19 @@ def within_ulp(
     fmt: Optional[DataFormat] = None,
     flush_subnormals: Optional[bool] = None,
     mask: Optional[torch.Tensor] = None,
+    near_zero_atol: Optional[float] = None,
+    near_zero_fraction: float = NEAR_ZERO_FRACTION,
 ) -> Tuple[bool, str]:
     """The whole verdict: non-finite positions agree, and every finite lane is in budget.
 
-    The scalar form of the gate's verdict, for callers outside ``passed_test`` — it
-    routes through the same :func:`ulp_elementwise_valid` the gate uses, so the two cannot
-    drift into disagreeing about the same tensor. *mask* selects the lanes under
-    judgement; pass one to exclude lanes an op's own edge rules have already settled.
+    The scalar form of the gate's verdict, for callers outside ``passed_test`` — it routes
+    through the same :func:`ulp_elementwise_valid` the gate uses, and forwards every knob
+    that changes that verdict (*flush_subnormals*, *near_zero_atol*,
+    *near_zero_fraction*), so the two cannot drift into disagreeing about the same tensor.
+    A passthrough rather than a shorter signature on purpose: without *near_zero_atol*
+    there are gate verdicts this function could not reproduce at any argument.
+    *mask* selects the lanes under judgement; pass one to exclude lanes an op's own edge
+    rules have already settled.
 
     *max_ulp* is keyword-only for the same reason the gate spells it out: it is the one
     real magic number in the signature, and ``within_ulp(golden, result, 0)`` does not say
@@ -769,7 +816,12 @@ def within_ulp(
         )
     selected = torch.ones_like(golden, dtype=torch.bool) if mask is None else mask
     is_valid, distance, rescued = ulp_elementwise_valid(
-        golden, result, max_ulp, flush_subnormals=flush_subnormals
+        golden,
+        result,
+        max_ulp,
+        near_zero_atol=near_zero_atol,
+        near_zero_fraction=near_zero_fraction,
+        flush_subnormals=flush_subnormals,
     )
     # Rank only the lanes actually under judgement, excluding any the near-zero floor
     # accepted -- those hold the biggest step counts by construction.

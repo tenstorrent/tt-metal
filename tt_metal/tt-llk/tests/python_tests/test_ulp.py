@@ -33,6 +33,7 @@ import pytest
 import torch
 from helpers.accuracy_metrics import local_ulp
 from helpers.format_config import DataFormat
+from helpers.pack import float_to_bfp8_block
 from helpers.ulp import (
     _MIN_LANES_FOR_P95,
     _MIN_LANES_FOR_P99,
@@ -573,10 +574,11 @@ def test_ulp_dtype_maps_the_float_formats(fmt, expected):
     ],
 )
 def test_ulp_dtype_rejects_formats_without_a_per_element_ulp(fmt):
-    """Rejected, not silently redirected: Bfp4_b's 3 magnitude bits and Bfp2_b's 1 are so
-    much coarser than bf16 that a bf16 step count would read every legal quantization as a
-    16- or 64-step error, and ``Tf32`` is held in an fp32 container whose lattice is not
-    its own. A caller must not be able to think it has a gate it does not have."""
+    """Rejected, not silently redirected: Bfp4_b's 3 magnitude bits leave 2 fractional and
+    Bfp2_b's 1 leaves 0, against bfloat16's 7, so a bf16 step count would read every legal
+    quantization as a 32- or 128-step error. ``Tf32`` is held in an fp32 container whose
+    lattice is not its own. A caller must not be able to think it has a gate it does not
+    have."""
     with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
         ValueError, match="no per-element ULP"
     ):
@@ -584,11 +586,25 @@ def test_ulp_dtype_rejects_formats_without_a_per_element_ulp(fmt):
 
 
 def test_bfp8_b_is_measured_in_bf16_space():
-    """Bfp8_b's 7 magnitude bits are bfloat16's mantissa width, so one bf16 step is one
-    Bfp8_b step wherever the block exponent is the one bf16 would have used. ttnn makes
-    the same choice, and ``passed_test`` has already cast the tensor to bfloat16."""
+    """Bfp8_b is close enough to bfloat16 to be gated in its step space -- ttnn makes the
+    same choice, and ``passed_test`` has already cast the tensor to bfloat16 -- but not
+    equal to it: its 7 magnitude bits *include* an explicit leading 1, so it has 6
+    fractional bits against bfloat16's 7 and one Bfp8_b step is two bf16 steps. A budget
+    denominated in bf16 steps therefore buys half as many format steps, which is the thing
+    an enrolling caller has to know."""
     assert DataFormat.Bfp8_b not in ULP_FORMATS
     assert ulp_dtype(DataFormat.Bfp8_b) == torch.bfloat16
+
+    # Two bf16 steps up from 1.0 is the first to change the encoded Bfp8_b mantissa.
+    block = [1.0] * 16
+    _, baseline = float_to_bfp8_block(block)
+    encoded = []
+    for steps in range(3):
+        block[0] = float(_step_up(1.0, torch.bfloat16, steps)[0])
+        _, mantissas = float_to_bfp8_block(block)
+        encoded.append(mantissas[0])
+    assert encoded[0] == encoded[1] == baseline[0]
+    assert encoded[2] == baseline[0] + 1
 
 
 @pytest.mark.parametrize("dtype", FLOAT_DTYPES, ids=str)
@@ -926,8 +942,10 @@ def test_the_finfo_max_fixup_carries_its_own_weight(dtype):
 def test_within_ulp_refuses_a_format_with_no_per_element_ulp(fmt):
     """``fmt`` is not only a label. ``format_dict`` collapses every block float onto
     ``torch.bfloat16`` and ``Tf32`` onto ``torch.float32``, so the dtype check inside
-    ``ulp_distance`` cannot tell them apart -- a verdict labelled ``Bfp8_b`` would come
-    back measured in bfloat16 steps, the measurement ``ulp_dtype`` exists to refuse."""
+    ``ulp_distance`` cannot tell them apart -- a verdict labelled ``Bfp2_b`` would come
+    back measured in bfloat16 steps, the measurement ``ulp_dtype`` exists to refuse.
+    ``Bfp8_b`` is the one block float that is *not* on this list: it is gated in bf16 step
+    space on purpose, which the test fifteen lines down pins."""
     values = torch.ones(4, dtype=torch.bfloat16)
     with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
         ValueError, match="no per-element ULP"
@@ -1000,6 +1018,7 @@ def test_the_reported_step_above_a_power_of_two_is_unchanged():
     ok, message = within_ulp(golden, result, max_ulp=0, fmt=DataFormat.Float16_b)
     assert not ok
     assert f"{ABOVE_ONE:.6e}" in message
+
 
 def test_within_ulp_accepts_bfp8_b_in_its_proxy_space():
     """``Bfp8_b`` is gated in bfloat16 step space, so unlike the coarser block floats it
@@ -1177,6 +1196,84 @@ def test_the_disagreement_count_covers_every_bad_lane():
     result = torch.tensor([1.0, 2.0, nan, 1.0], dtype=torch.float32)
     summary = nonfinite_disagreement_summary(golden, result, DataFormat.Float32)
     assert "@ [0]" in summary and "2 such lane(s)" in summary
+
+
+def test_within_ulp_reproduces_every_gate_verdict_including_the_floor():
+    """Verdict parity, not just message parity. Without a ``near_zero_atol`` passthrough
+    there were gate verdicts ``within_ulp`` could not reach at any argument: the same
+    tensor and budget that the floor flips to a pass had no corresponding call here."""
+    golden = torch.linspace(1.0, 100.0, 64, dtype=torch.float32)
+    golden[-1] = 1e-8
+    result = golden.clone()
+    result[-1] = 2e-8
+
+    assert not within_ulp(golden, result, 2, fmt=DataFormat.Float32)[0]
+    ok, _ = within_ulp(golden, result, 2, fmt=DataFormat.Float32, near_zero_atol=1e-7)
+    assert ok
+    # Same verdict the gate reaches, for the same reason.
+    is_valid, _, rescued = ulp_elementwise_valid(golden, result, 2, near_zero_atol=1e-7)
+    assert bool(torch.all(is_valid)) and bool(rescued[-1])
+
+
+@pytest.mark.parametrize("dtype", FLOAT_DTYPES, ids=str)
+def test_the_gate_resolves_the_flush_default_per_dtype_like_the_metric(dtype):
+    """``ulp_elementwise_valid`` used to hardcode ``flush_subnormals=True``, which
+    overrode the per-dtype default for every caller including ``passed_test``. For fp16,
+    which keeps its subnormals in this harness, that collapsed up to 1023 representable
+    steps of error near zero onto 0 and a 0-step budget accepted it."""
+    assert flushes_subnormals(dtype) is (dtype is not torch.float16)
+    # Two distinct values inside *this* dtype's subnormal band: the smallest subnormal and
+    # the largest one, which are 2**mantissa_bits - 1 representable steps apart.
+    smallest = float(torch.finfo(dtype).tiny) * 2.0 ** -MANTISSA_BITS[dtype]
+    band_steps = (1 << MANTISSA_BITS[dtype]) - 1
+    golden = _t([smallest], dtype)
+    result = _t([band_steps * smallest], dtype)
+    assert float(golden) != 0.0 and float(result) != float(golden)
+
+    is_valid, distance, _ = ulp_elementwise_valid(golden, result, 0)
+    if dtype is torch.float16:
+        assert int(distance[0]) == band_steps - 1
+        assert not bool(is_valid[0])
+    else:
+        # bf16 and fp32 flush their band, so both sides really are zero to this harness.
+        assert int(distance[0]) == 0
+        assert bool(is_valid[0])
+
+    # The old blanket behaviour stays reachable for a caller that knows the Dest flushed.
+    forced, _, _ = ulp_elementwise_valid(golden, result, 0, flush_subnormals=True)
+    assert bool(forced[0])
+
+
+def test_the_near_zero_band_is_bounded_absolutely_as_well_as_relatively():
+    """The relative band alone is unbounded in absolute terms, so one large golden widens
+    it across the tile and mid-range lanes get the magnitude-blind gate a step count
+    exists to replace. With fp32, ``max_ulp=1`` and ``near_zero_atol=1e-6`` over a golden
+    spanning [0, 1000] the relative cut lands at 10.0, and ``1.0`` vs ``1.0000008`` --
+    7 representable steps -- was rescued against a 1-step budget.
+
+    The absolute cut is ``near_zero_atol / near_zero_fraction``, the magnitude at which the
+    forgiven error is exactly ``near_zero_fraction`` of the reference. Above it the
+    relative error is under 1% and the reference has not collapsed."""
+    near_zero_atol = 1e-6
+    golden = torch.tensor([1000.0, 1.0, 1e-9], dtype=torch.float32)
+    result = golden.clone()
+    result[1] = 1.0000008  # 7 fp32 steps, inside the relative cut of 10.0
+    result[2] = 1e-9 + 5e-7  # a genuine cancellation lane, inside the atol
+
+    assert int(ulp_distance(golden, result)[1]) > 1
+    assert 1.0 < NEAR_ZERO_FRACTION * 1000.0  # the relative rule alone would rescue it
+    assert 1.0 > near_zero_atol / NEAR_ZERO_FRACTION  # the absolute rule refuses it
+
+    is_valid, _, rescued = ulp_elementwise_valid(
+        golden, result, 1, near_zero_atol=near_zero_atol
+    )
+    assert is_valid.tolist() == [True, False, True]
+    assert rescued.tolist() == [False, False, True]
+
+    # Tightening the atol cannot substitute for the bound: the step count it admits grows
+    # as 1/|golden| below the cut, so any atol loose enough for the cancellation lane is
+    # loose enough for the mid-band one under the relative rule alone.
+    assert not ulp_elementwise_valid(golden, result, 1, near_zero_atol=1e-9)[0][2]
 
 
 def test_within_ulp_and_the_gate_describe_a_verdict_the_same_way():

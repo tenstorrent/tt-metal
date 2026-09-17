@@ -625,6 +625,15 @@ def passed_test(
     crosses zero; see :func:`helpers.ulp.ulp_elementwise_valid`. It does nothing on its
     own and is rejected without *max_ulp*.
 
+    *max_ulp* is the enforced maximum for every format it accepts, with nothing ORed in
+    beside it. For ``Bfp8_b`` that has a price worth knowing before enrolling an op: the
+    budget is denominated in bf16 steps (two of them to one Bfp8_b step), and it charges
+    for the block quantization the format is entitled to, which *near_zero_atol* cannot
+    absorb because its band is relative to the tensor rather than to each block. A Bfp8_b
+    budget is therefore only usable where that quantization is exact; otherwise the op
+    belongs on the tolerance arm, whose lattice compare is block-aware. See the
+    ``_ULP_PROXY_DTYPES`` comment in :mod:`helpers.ulp`.
+
     ``max_ulp=None`` is bit-for-bit the previous behaviour.
     """
 
@@ -705,18 +714,16 @@ def passed_test(
         is_valid, ulp_distances, ulp_rescued = ulp_elementwise_valid(
             golden_tensor, res_tensor, max_ulp, near_zero_atol=near_zero_atol
         )
-        if output_data_format == DataFormat.Bfp8_b and not torch.all(is_valid):
-            # A bf16 step count is block-blind, so on its own it charges the kernel for
-            # legal quantization: one step of the Bfp8_b lattice is
-            # 2**(floor(log2 amax) - floor(log2 x) + 1) bf16 steps, which for a block with
-            # amax 2.77 makes a lane at 0.06 about 64 perfectly legal steps. near_zero_atol
-            # cannot absorb that, because its band is 1% of the *tensor* maximum and the
-            # lane is only small relative to its own block. So the budget arm ORs in the
-            # same lattice compare the tolerance arm does: the step budget gates the SFPU's
-            # own error, and the lattice accepts quantization the format is entitled to.
-            is_valid = is_valid | _bfp_block_aware_compare(
-                golden_tensor, res_tensor, mantissa_bits=7, max_ulp_diff=1
-            )
+        # No lattice arm here on purpose, unlike the Bfp8_b tolerance branch below. ORing
+        # the block-aware compare in would mean max_ulp was not the enforced maximum for
+        # Bfp8_b: a lane many bf16 steps out would pass a max_ulp=0 budget on the lattice's
+        # say-so, and the reported worst lane would be one the verdict had already
+        # accepted. So a Bfp8_b budget charges the kernel for block quantization too --
+        # one Bfp8_b step on a lane at 0.06 inside a block with amax 2.77 is 69 bf16 steps
+        # -- which makes it usable only on domains where that quantization is exact. See
+        # the _ULP_PROXY_DTYPES comment in helpers.ulp for what a Bfp8_b budget buys and
+        # why the alternative was worse; ops whose Bfp8_b error is quantization-dominated
+        # belong on the tolerance arm below.
     elif output_data_format == DataFormat.Bfp8_b:
         # Bfp8_b shares one exponent across 16 elements, so when a block spans a wide
         # magnitude range the small elements quantize toward zero and a flat atol reads
@@ -788,8 +795,11 @@ def passed_test(
 
     if ulp_distances is not None:
         # Ahead of the tile dump below, so the worst lane and what a step is worth there
-        # are the first thing in the log rather than the last. Logged on a pass too: it
-        # turns every enrolled test into an accuracy datapoint for free.
+        # are the first thing in the log rather than the last. Logged on a pass too, which
+        # turns every enrolled test into an accuracy datapoint -- but at debug level, and
+        # CI exports LOGURU_LEVEL=WARNING (setup-and-test.yml), so collecting those
+        # datapoints needs --logging-level=DEBUG. On a normal CI run no sink accepts the
+        # pass line and the summary below is built and dropped.
         # Exclude the lanes the near-zero floor accepted: they hold the largest step
         # counts in the tensor by construction, so ranking every lane names a lane that
         # passed and leaves the one that failed out of the message entirely.
