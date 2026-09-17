@@ -98,34 +98,8 @@ MGD="${MGD_DIR}/${MODEL}_${CONFIG}_mgd.textproto"
 if [ ! -f "${MGD}" ] && [ "${CONFIG}" = sc2 ]; then
   MGD="${TT_METAL_HOME}/models/demos/common/prefill/runners/topology_configuration/pipeline_prefill_2galaxy_connected_mesh_graph_descriptor.textproto"
 fi
-# Asset paths come from the manifest + the model adapter, never from this script: the preflight has to
-# probe exactly what the ranks will open, and a path restated here would drift from the adapter that owns
-# it. Prompt trace and drafter golden MUST come from the same tap (dflash_27_context_kv_55k's metadata
-# records tap_source=vllm-kimi-k27-codedebug-56320) -- a golden paired with a different prompt yields a
-# plausible-looking PCC in the 0.2-0.6 range rather than an error, so the adapter holds both.
-#
-# Resolved AND probed on the workers, for two independent reasons. The ttnn wheel is installed per-node
-# over MPI, so the launcher has no bindings: importing the adapter stack there dies on numpy before it can
-# read a path. And every /mnt/models asset is consumed on a worker -- ranks load the checkpoints, the
-# producer reads the golden -- while the orchestrator need not mount it at all, so probing locally reports
-# a fully staged cluster as empty. Only MGD is ours to check here; it ships in the checkout.
-# One pass over all workers, since staging is per host: a leg can be one sync away on one and several on
-# another, and each gap found alone costs a whole reservation to find the next.
-PROBE=$("${MPIRUN}" --host "${HOSTS}" --pernode --bind-to none --allow-run-as-root \
-  -x PATH -x LD_LIBRARY_PATH \
-  bash -lc "cd '${TT_METAL_HOME}'; \
-    export PYTHONPATH='${TT_METAL_HOME}'; \
-    exec python3 models/demos/common/prefill/runners/ci/resolve_dflash_assets.py \
-      --manifest '${MANIFEST}' --format probe" 2>&1) || {
-  printf 'could not resolve dflash assets for %s on a worker:\n%s\n' "${MODEL}" "${PROBE}" >&2
-  exit 2
-}
-MISSING=""
-[ -f "${MGD}" ] || MISSING="  mesh-graph descriptor: ${MGD}"$'\n'
-WORKER_MISSING=$(printf '%s\n' "${PROBE}" | sed -n 's/^MISSING /  /p' | sort -u)
-[ -z "${WORKER_MISSING}" ] || MISSING="${MISSING}${WORKER_MISSING}"$'\n'
-if [ -n "${MISSING}" ]; then
-  printf 'missing inputs for %s/%s:\n%s' "${MODEL}" "${CONFIG}" "${MISSING}" >&2
+if [ ! -f "${MGD}" ]; then
+  echo "missing mesh-graph descriptor for ${MODEL}/${CONFIG}: ${MGD}" >&2
   exit 2
 fi
 
