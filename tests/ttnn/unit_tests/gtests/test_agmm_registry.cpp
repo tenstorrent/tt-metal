@@ -32,15 +32,15 @@ registry::RegistryRequestFacts facts_from_key(const registry::compact::KeyDescri
 }
 
 TEST(AgmmRegistry, CohortsDoNotCrossDeviceCounts) {
-    EXPECT_TRUE(registry::cohorts_for_device_count(8).empty());
+    EXPECT_EQ(registry::cohorts_for_device_count(8).size(), 4U);
     EXPECT_EQ(registry::cohorts_for_device_count(32).size(), 2U);
     EXPECT_TRUE(registry::cohorts_for_device_count(1).empty());
     EXPECT_TRUE(registry::cohorts_for_device_count(16).empty());
 }
 
-TEST(AgmmRegistry, EveryBh32EntryRoundTripsAndMaterializes) {
+void expect_entries_round_trip(std::span<const registry::compact::CohortDescriptor> cohorts, std::size_t expected) {
     std::size_t entry_count = 0;
-    for (const auto& cohort : registry::generated::bh32_cohorts()) {
+    for (const auto& cohort : cohorts) {
         for (const auto& entry : cohort.entries) {
             ++entry_count;
             EXPECT_EQ(entry.key.device, cohort.device);
@@ -48,7 +48,12 @@ TEST(AgmmRegistry, EveryBh32EntryRoundTripsAndMaterializes) {
             EXPECT_TRUE(registry::materialize_recipe(entry).has_value());
         }
     }
-    EXPECT_EQ(entry_count, 48U);
+    EXPECT_EQ(entry_count, expected);
+}
+
+TEST(AgmmRegistry, EveryEntryRoundTripsAndMaterializes) {
+    expect_entries_round_trip(registry::generated::bh8_cohorts(), 36U);
+    expect_entries_round_trip(registry::generated::bh32_cohorts(), 104U);
 }
 
 TEST(AgmmRegistry, LiveGridIsCheckedAsCapabilityNotIdentity) {
