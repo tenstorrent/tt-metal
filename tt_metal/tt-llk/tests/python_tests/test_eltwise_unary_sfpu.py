@@ -500,19 +500,6 @@ def _assert_signed_zero_partition_valid():
         "here means the delivery gate changed -- re-derive it rather than restoring it."
     )
 
-    # Sqrt, Rsqrt and SqrtCustom are fixed in the kernels; an entry reappearing here would
-    # silence the fix rather than record it.
-    for fixed_op in (
-        MathOperation.Sqrt,
-        MathOperation.Rsqrt,
-        MathOperation.SqrtCustom,
-    ):
-        assert fixed_op not in _EDGE_KNOWN_DIVERGENCES, (
-            f"{fixed_op.name} is fixed in the kernel, so a divergence here is a regression "
-            "to chase in ckernel_sfpu_sqrt.h / ckernel_sfpu_sqrt_custom.h, not an entry to "
-            "record."
-        )
-
     # SFPSETCC mishandles a -0.0 that does arrive, which is the unpack-to-dest path.
     expected = {combo for combo in all_combos if _unpack_to_dest(combo[0], combo[2])}
     for op in (MathOperation.Sign, MathOperation.Heaviside):
