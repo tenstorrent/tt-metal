@@ -25,8 +25,8 @@ namespace ckernel::sfpu {
 // NaN + correction stays NaN whatever the correction makes of the NaN difference.
 sfpi_inline sfpi::vFloat _sfpu_logaddexp_max_(const sfpi::vFloat& a, const sfpi::vFloat& b) {
     sfpi::vFloat result = sfpi::max(a, b);
-    v_if(sfpi::exexp(a) == 128 && sfpi::exman(a) != 0) { result = a; }
-    v_elseif(sfpi::exexp(b) == 128 && sfpi::exman(b) != 0) { result = b; }
+    v_if(sfpi::is_nan(a)) { result = a; }
+    v_elseif(sfpi::is_nan(b)) { result = b; }
     v_endif;
     return result;
 }
