@@ -22,11 +22,11 @@ Category 1: basic_binary_arithmetic + corresponding inplace op
     3. ttnn.multiply         - Multiplication
     4. ttnn.divide           - Division
     5. ttnn.add_              - Addition inplace
-    6. ttnn.sub_/tttnn.rsub_  - Subtraction inplace
+    6. ttnn.sub_              - Subtraction inplace
     7. ttnn.multiply_         - Multiplication inplace
     8. ttnn.divide_           - Division inplace
-    9. ttnn.rsub              - Subtraction
-    9. ttnn.rsub_             - Subtraction inplace
+    9. ttnn.rsub              - Subtraction (b - a)
+   10. ttnn.rsub_             - Subtraction inplace (b - a)
 """
 
 
@@ -46,7 +46,7 @@ def test_addlike_ops(device, ttnn_op, fast_and_approximate_mode, ulp_threshold):
     """
     input_a, input_b = _pairwise_inputs(include_zero=True)
 
-    is_inplace = True if ttnn_op in [ttnn.add_, ttnn.sub_, ttnn.rsub_, ttnn.mul_, ttnn.divide_] else False
+    is_inplace = True if ttnn_op in [ttnn.add_, ttnn.sub_, ttnn.rsub_] else False
     result = None
 
     tt_a = to_tt_tensor(input_a, device)
