@@ -69,6 +69,8 @@ No finite test suite guarantees every future request or deployment. These gates 
 
 ## 3. Required test map
 
+These are coverage areas, not prescribed test functions or 14 separate device runs. Existing model tests help identify use cases and failure modes. We choose the simplest reliable Llama tests, combine overlapping checks and reuse accepted evidence when it still applies. One well-designed run can cover several IDs. Model-specific reference cases that do not apply to Llama need an explanation, not a copied test.
+
 Each ID links to its detailed checks. Live badges show the recorded status. A partial badge is not a pass for the whole row.
 
 | ID | Test | What must be true | Status |
