@@ -3,7 +3,7 @@ from typing import NamedTuple, Optional
 import ttnn
 import torch
 
-from .common import DeepSeekV4Module, _profile, _region
+from .common import DeepSeekV4Module, _profile
 from .decode_prefetch import (
     HC_FN_GCB,
     HC_FN_GCB_PAGES,
@@ -899,50 +899,23 @@ class DeepSeekV4SparseMoeBlock(DeepSeekV4Module):
         self.gate.prefetch_weights()
         self.shared_experts.prefetch_weights()
 
-    def forward(self, hidden: ttnn.Tensor, input_ids: Optional[torch.Tensor] = None) -> ttnn.Tensor:
-        """``hidden`` ``[B, S, 1, H]`` -> ``[B, S, 1, H]``. ``input_ids`` is required
-        only for hash-routed layers (frozen ``tid2eid`` selection)."""
-        b, s, _, h = hidden.shape
-        x_flat = ttnn.reshape(hidden, [1, 1, b * s, h])
-        _profile(self.device)
-
-        with _region("MOE_ROUTER"):
-            # Either router hands over the same (scores, selected ids) pair; they differ only
-            # in how the ids are chosen (learned topk vs frozen table lookup).
-            routing = self.gate(x_flat, input_ids) if self.is_hash else self.gate(x_flat)
-        _profile(self.device)
-
-        with _region("MOE_EXPERTS"):
-            routed = self.experts(x_flat, routing)  # [1, 1, T, H]
-        _profile(self.device)
-
-        with _region("MOE_SHARED"):
-            shared = self.shared_experts(x_flat)  # [1, 1, T, H]
-            if self.packed_weights is not None:
-                shared = ttnn.to_memory_config(shared, routed.memory_config())
-
-        _profile(self.device)
-
-        # Both halves are I-sliced under TP, so their H-partials add first and one
-        # all-reduce recovers the full residual (Megatron MLP TP).
-        combined = ttnn.add(routed, shared)
-        if self.tp_size > 1:
-            combined = _tp_all_reduce(combined, self.device)
-        return ttnn.reshape(combined, [b, s, 1, h])
-
     def decode_static(self, hidden: ttnn.Tensor, hash_token: ttnn.Tensor | None = None) -> ttnn.Tensor:
-        """Trace-safe single-token-per-user MoE. ``hidden`` ``[B, 1, 1, H]`` -> same.
+        """Trace-safe token-batched MoE. ``hidden`` ``[B, 1, 1, H]`` -> same.
+
+        The one entry point for this block (decode *and* prefill): the model prefill
+        replays the decoder layer's decode path one token at a time.
+
+        The ``B`` token rows are flattened onto the token axis, which is the layout the
+        router and the expert compute already work in -- so the shared expert and the gate
+        see one wider matmul while the routed experts, which each row sends somewhere
+        different, stay one op per row. A prefill caller therefore hands over
+        ``[T, 1, 1, H]`` (one row per token, in order) and reshapes back.
 
         Routing stays entirely on device: the learned top-k router is already
         host-sync-free, and hash layers gather their selected expert ids on device from
         the persistent ``hash_token`` ``[1,B]`` device token ids (see
         :meth:`DeepSeekV4HashRouter.forward_static`). The routed FFN runs through the
-        no-host-readback fused-experts decode path.
-
-        The batch's users are flattened onto the token axis, which is the layout the
-        router and the expert compute already work in -- so the shared expert and the
-        gate see one wider matmul while the routed experts, which each user sends
-        somewhere different, stay one op per user.
+        no-host-readback fused-experts path.
         """
         b, h = hidden.shape[0], hidden.shape[-1]
         x_flat = ttnn.reshape(hidden, [1, 1, b, h])

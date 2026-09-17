@@ -67,13 +67,17 @@
 //   29: index_is_bf16  (1 = ids arrive as bf16 values, 0 = raw uint16)
 //   30: scaling_bits   (routed_scaling_factor, as fp32 bits)
 //   31: eps_bits       (routing_eps, as fp32 bits)
-//   32: score_pages    (E/32 tile pages in the score row)
+//   32: score_pages    (TILE: E/32 tile pages; ROW_MAJOR: one stick page)
 //   33: score_page_bytes   34: score_page_stride
-//   35: score_l1_offset    (where the score tiles land in cb_routing)
+//   35: score_l1_offset    (where the score tiles/stick land in cb_routing)
 //   36: scratch_l1_offset  (where the bitmap + rank + id cache live in cb_routing)
 //   37: bitmap_bytes       (bitmap size, i.e. the rank table's offset past it)
 //   38: rank_bytes         (rank table size, i.e. the id cache's offset past it)
-//   39+: TensorAccessorArgs(routing), TensorAccessorArgs(scores), TensorAccessorArgs(gate_up),
+//   39-48: routing-scalar tile geometry / cores / reduce
+//   49: scores_is_rm (1 = ROW_MAJOR decode stick, linear e*2; 0 = TILE 32x32 faces)
+//   50: split_col  (first act tile of each expert that hub1 owns; == i_tiles when there is one hub)
+//   51: num_hubs   (1, or 2 for the two-hub gather/broadcast)
+//   52+: TensorAccessorArgs(routing), TensorAccessorArgs(scores), TensorAccessorArgs(gate_up),
 //        TensorAccessorArgs(down)
 //   then: gate_up base addresses (one per expert), then down base addresses (one per expert)
 //
@@ -84,6 +88,11 @@
 //   5: num_dests       (number of receiver cores = total cores - 1)
 //   6: core_index      (this core's flat grid index, x*8 + y)
 //   7: score base address
+//   8: group_mcast_start_x   9: group_mcast_start_y
+//   10: group_mcast_end_x    11: group_mcast_end_y
+//   12: group_num_dests
+//   13: hub0_noc_x   14: hub0_noc_y   (this core's group's two gather/broadcast hubs, ascending
+//   15: hub1_noc_x   16: hub1_noc_y    rectangle corners; hub0 is this core on the sender path)
 
 namespace {
 
@@ -169,8 +178,13 @@ void kernel_main() {
     constexpr uint32_t num_expert_groups = get_compile_time_arg_val(46);
     constexpr uint32_t sem_reduce_id = get_compile_time_arg_val(47);
     constexpr uint32_t cb_reduce_id = get_compile_time_arg_val(48);
+    constexpr bool scores_is_rm = get_compile_time_arg_val(49) == 1;
+    // Two-hub gather/broadcast geometry (see `hub_gather_broadcast_block`): the sender core {0,0}
+    // is always hub0 of its group.
+    constexpr uint32_t split_col = get_compile_time_arg_val(50);
+    constexpr uint32_t num_hubs = get_compile_time_arg_val(51);
 
-    constexpr auto routing_args = TensorAccessorArgs<49>();
+    constexpr auto routing_args = TensorAccessorArgs<52>();
     constexpr auto score_args = TensorAccessorArgs<routing_args.next_compile_time_args_offset()>();
     constexpr auto gate_up_args = TensorAccessorArgs<score_args.next_compile_time_args_offset()>();
     constexpr auto down_args = TensorAccessorArgs<gate_up_args.next_compile_time_args_offset()>();
@@ -192,8 +206,16 @@ void kernel_main() {
     const uint32_t group_mcast_end_x = get_arg_val<uint32_t>(10);
     const uint32_t group_mcast_end_y = get_arg_val<uint32_t>(11);
     const uint32_t group_num_dests = get_arg_val<uint32_t>(12);
+    const uint32_t hub0_noc_x = get_arg_val<uint32_t>(13);
+    const uint32_t hub0_noc_y = get_arg_val<uint32_t>(14);
+    const uint32_t hub1_noc_x = get_arg_val<uint32_t>(15);
+    const uint32_t hub1_noc_y = get_arg_val<uint32_t>(16);
 
-    // Pin the expert-id sender to NoC 0; the input broadcaster on {1,0} uses NoC 1.
+    // {0,0} is hub0 of its group (and the only core that also carries the routing computation).
+    const ActGatherConfig gather{/*role=*/1u, hub0_noc_x, hub0_noc_y, hub1_noc_x, hub1_noc_y, split_col, num_hubs};
+
+    // Pin the expert-id sender to NoC 0; the input broadcaster on {1,0} uses NoC 1. Hub1 of every
+    // group runs its reader on NoC 1 so the two hubs' activation multicasts never share a NoC.
     Noc noc(0);
     const auto routing = TensorAccessor(routing_args, routing_addr);
 
@@ -205,7 +227,7 @@ void kernel_main() {
     // alignment of the DRAM page it comes from.
     cb_routing.reserve_back(1);
     // One TILE page of ids (B <= 32 rows and top_k <= 16 columns both fit a single 32x32 tile),
-    // then the score row's E/32 tile pages after it.
+    // then the score row (TILE pages or a ROW_MAJOR stick) after it.
     noc.async_read(routing, cb_routing, routing_page_bytes, {.page_id = 0}, {.offset_bytes = 0});
     const auto scores = TensorAccessor(score_args, score_addr);
     for (uint32_t p = 0; p < score_pages; ++p) {
@@ -319,8 +341,14 @@ void kernel_main() {
                 sel[j] = 0.0f;
                 continue;
             }
-            // Expert e's score sits in tile e/32 of the score row, column e%32 of token row b.
-            const uint32_t off = score_l1_offset + ((e >> 5) * score_page_stride) + tile_elem_offset(b, e & 31u);
+            // TILE: expert e sits in tile e/32 of the score row, column e%32 of token row b
+            // (16x16 faces). ROW_MAJOR decode is a linear [1, E] stick, so score[e] is at e*2.
+            uint32_t off;
+            if constexpr (scores_is_rm) {
+                off = score_l1_offset + (b * score_page_stride) + (e * 2u);
+            } else {
+                off = score_l1_offset + ((e >> 5) * score_page_stride) + tile_elem_offset(b, e & 31u);
+            }
             sel[j] = bf16_to_f32(rw[off >> 1]);
             sum += sel[j];
         }
@@ -408,9 +436,6 @@ void kernel_main() {
         experts_block,
         gate_up_reserve_tiles,
         down_reserve_tiles,
-        // The leader gathers into its own L1, so it never sends itself a slot-free ack.
-        /*leader_noc_x=*/0,
-        /*leader_noc_y=*/0,
         rscalar_tile_h,
         rscalar_face_r_dim,
         rscalar_num_face_rows,
@@ -419,7 +444,7 @@ void kernel_main() {
         shards_per_core,
         i_shards_per_core,
         num_expert_groups,
-        /*is_group_leader=*/true,
+        gather,
         sem_reduce_id,
         cb_reduce_id);
 }

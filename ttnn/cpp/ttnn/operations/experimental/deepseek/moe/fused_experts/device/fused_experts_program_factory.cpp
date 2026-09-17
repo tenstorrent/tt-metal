@@ -60,7 +60,7 @@ uint32_t align_up_32(uint32_t x) { return (x + 31u) & ~31u; }
 //
 // Pipeline (per block of experts: two phases with one synchronization between):
 //   - {0,0} (NoC 0) reads the routing ids and scores, computes/broadcasts the selected ("hit")
-//     expert ids (ascending) and their per-token weights, and acts as the activation-gather leader.
+//     expert ids (ascending) and their per-token weights, and is hub0 of the activation gather.
 //   - {1,0} (NoC 1) reads the activation tile row and broadcasts it to every
 //     core's L1 (cb_input).
 //   - PHASE 1 -- gate_up + SwiGLU for the block's experts: each SwiGLU core fetches its
@@ -68,17 +68,24 @@ uint32_t align_up_32(uint32_t x) { return (x + 31u) & ~31u; }
 //     [gate | up] block) and produces its slice of each expert's activation act[B, I]. The I
 //     dim is spread over all 64 cores (one tile each at I == 2048), so every core's NoC port
 //     contributes to this DRAM-bound phase. Each core's writer scatters the block's expert j act
-//     tiles to {0,0}'s cb_act slot at tile offset (j*i_tiles + idx*swiglu_tiles_per_core).
-//   - SYNC -- gather + broadcast: once {0,0} has the block's chunks from every SwiGLU core
-//     (num_producers per expert, via sem_gather), it multicasts the whole block of activations
-//     back to every core in one shot (sem_bcast, whose value is the number of blocks broadcast
-//     so far). Within a block cb_act is never reused, so no per-expert back-pressure is needed;
-//     between blocks it is double-buffered, and the leader reserves the next slot before
-//     broadcasting -- so a core that has received block j's broadcast knows the leader's slot for
-//     block j+1 is free and may scatter into it. Symmetrically, a producer's scatter for block j+1
-//     proves its own compute is past block j, which is what makes the leader's multicast into every
-//     core's slot safe. Non-producer cores (only when I < 32*64) have no scatter to prove that, so
-//     they bump sem_gather once per block instead.
+//     tiles to the cb_act slot of the hub that owns them (I below `split_col` -> hub0, at or above
+//     it -> hub1) at tile offset (j*i_tiles + idx*swiglu_tiles_per_core).
+//   - SYNC -- gather + broadcast across TWO hubs (`two_hub_gather`; the single-hub pipeline is the
+//     same code with `split_col == i_tiles` and `num_hubs == 1`): once a hub has the block's chunks
+//     for its half from every SwiGLU core (num_producers per expert, via sem_gather), it multicasts
+//     its half back to every core -- hub0 on NoC 0 and hub1 on NoC 1, because two multicast senders
+//     into the same rectangle on one NoC circular-wait on overlapping path reservations. Every core
+//     waits for one increment from each hub (sem_bcast, a cumulative count of hub broadcasts) and
+//     only then publishes the slot: both halves have to have landed. Within a block cb_act is never
+//     reused, so no per-expert back-pressure is needed; between blocks it is double-buffered, and
+//     each hub reserves the next slot before broadcasting -- so a core that has received block j's
+//     broadcasts knows the hubs' slots for block j+1 are free and may scatter into them.
+//     Symmetrically, a producer's scatter for block j+1 proves its own compute is past block j,
+//     which is what makes the hubs' multicasts into every core's slot safe; each bump is delivered
+//     to BOTH hubs, so each hub can trust every core, not just the cores it gathers from.
+//     Non-producer cores (only when I < 32*64) have no scatter to prove that, so they bump
+//     sem_gather once per block instead. A hub that owns no I slice (hub1 at a small TP I) does the
+//     same, to the peer hub.
 //   - PHASE 2 -- DOWN matmul for the block's experts: each of the 64 cores fetches its [I, H/64]
 //     down shard per expert (one NoC read) and multiplies it by that expert's activation to
 //     produce its 2-tile slice of the output row[B, H]. The compute kernel scales each
@@ -172,12 +179,14 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
 
     // Token-row tile shape. Every CB whose tiles hold "one tile row of B tokens" -- cb_input,
     // cb_out, cb_mm, cb_act, cb_rscalar, cb_down_out, cb_acc, cb_wtmp -- and the DRAM output
-    // tensor use this tile. Weights (gate_up, down) and routing (indices/scores/bcast) stay at
-    // 32x32: they don't carry per-token rows and their kernel-side layout math is bound to
-    // 16x16 faces. Width must be 32 (kernels index tile columns as 32-wide); height can be any
-    // supported tiny value (1, 2, 4, 8, 16, 32). Bfp8_b at tiny heights is now valid tt-llk
-    // support, so cb_act / cb_out keep the Bfp8_b format their L1 budget was sized for.
-    const auto& input_tile = input_tensor.tensor_spec().tile();
+    // tensor use this tile. Weights (gate_up, down) and routing ids stay at 32x32: they don't
+    // carry per-token rows and their kernel-side layout math is bound to 16x16 faces. Scores may
+    // be TILE 32x32 or a ROW_MAJOR decode stick (indexed linearly). Width must be 32 (kernels
+    // index tile columns as 32-wide); height can be any supported tiny value (1, 2, 4, 8, 16,
+    // 32). ROW_MAJOR decode (B==1) is forced to 1x32 so the RM stick is loaded as packed 1x16
+    // faces without a tilize. Bfp8_b at tiny heights is now valid tt-llk support, so cb_act /
+    // cb_out keep the Bfp8_b format their L1 budget was sized for.
+    const auto input_tile = fused_experts_compute_tile(input_tensor);
     const uint32_t input_tile_h = input_tile.get_height();
     const uint32_t input_tile_hw = input_tile.get_tile_hw();
     // Tiny-tile face layout: face_r_dim = min(tile_h, 16), num_face_rows = 1 for tile_h <= 16
@@ -203,6 +212,49 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
         i_tiles,
         parallel_experts ? cores_per_expert * i_shards_per_core : num_producers,
         swiglu_tiles_per_core);
+
+    // Split the SwiGLU I dim across the two gather/broadcast hubs. Every SwiGLU core owns
+    // `producer_cols` I-tiles, so halving the producer set splits the I dim exactly on a producer
+    // boundary -- no producer ever straddles the two hubs, and the hub choice is a fixed per-core
+    // property. Fewer than two producers cannot be split, so that (and a caller asking for a single
+    // hub) falls back to one hub owning the whole I dim.
+    const uint32_t producer_cols = parallel_experts ? (i_tiles / cores_per_expert) : swiglu_tiles_per_core;
+    const bool split_hubs = operation_attributes.two_hub_gather && num_producers >= 2u;
+    const uint32_t hub0_producers = split_hubs ? num_producers / 2u : num_producers;
+    const uint32_t num_hubs = split_hubs ? 2u : 1u;
+    // hub0 owns I-tiles [0, split_col) of every expert; hub1 owns [split_col, i_tiles). With one hub
+    // split_col == i_tiles, so every producer's chunk still lands on hub0.
+    const uint32_t split_col = split_hubs ? hub0_producers * producer_cols : i_tiles;
+    TT_FATAL(
+        split_col > 0u && split_col <= i_tiles,
+        "fused_experts: activation I split ({}) must be in (0, {}]",
+        split_col,
+        i_tiles);
+
+    // Two-hub gather/broadcast: a block's activations are gathered onto, and multicast from, the
+    // two opposite corners of the multicast rectangle -- hub0 (low I columns) and hub1 (high I
+    // columns). hub1's reader is compiled onto NoC 1 so the two concurrent multicasts never share a
+    // NoC (two multicast senders into one rectangle on one NoC circular-wait on overlapping path
+    // reservations -- the reason matmul_decode's two-hub gather splits its senders across the NOCs).
+    // On the 6-expert path the rectangle is each expert group's 2x8 column pair, so every group has
+    // its own hub pair; on the 64-core path there is a single rectangle, the whole grid.
+    //
+    // A group's hub0 is always a hub (it is the only gather target when there is no split); hub1 is
+    // only a hub when the I dim is actually split, otherwise it is an ordinary receiver and stays on
+    // NOC 0 with its writer on NOC 1, exactly as before.
+    auto is_hub1 = [&](const CoreCoord& c) {
+        return parallel_experts ? (c.x % 2u == 1u && c.y == GRID_Y - 1u) : (c.x == GRID_X - 1u && c.y == GRID_Y - 1u);
+    };
+    auto is_hub0 = [&](const CoreCoord& c) {
+        return parallel_experts ? (c.x % 2u == 0u && c.y == 0u) : (c.x == 0u && c.y == 0u);
+    };
+    auto is_active_hub1 = [&](const CoreCoord& c) { return split_hubs && is_hub1(c); };
+    auto hub_role_of = [&](const CoreCoord& c) -> uint32_t {
+        if (is_active_hub1(c)) {
+            return 2u;
+        }
+        return is_hub0(c) ? 1u : 0u;
+    };
     // Each core's weight slice is its gate tiles + paired up tiles per k-row.
     const uint32_t weight_slice_tiles = k_tiles * (2u * swiglu_tiles_per_core);
     // Double-buffer the weight slice so the reader can hold one expert's slice ready in L1
@@ -239,9 +291,9 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
     // DRAM page it comes from.
     const uint32_t routing_page_bytes = static_cast<uint32_t>(routing_buffer->page_size());
     const uint32_t routing_row_stride = static_cast<uint32_t>(routing_buffer->aligned_page_size());
-    // The score row lives in its own tile row of E/32 pages, read whole and then indexed in L1 (the
-    // kernel needs at most top_k scattered elements per token, but reading tiles keeps every NoC
-    // transfer page-aligned).
+    // The score row lives in its own pages (TILE: E/32 tiles of the padded tile-row; ROW_MAJOR
+    // decode: one stick of E bf16), read whole and then indexed in L1 (the kernel needs at most
+    // top_k scattered elements per token, but reading pages keeps every NoC transfer page-aligned).
     const uint32_t score_page_bytes = static_cast<uint32_t>(score_buffer->page_size());
     const uint32_t score_page_stride = static_cast<uint32_t>(score_buffer->aligned_page_size());
     const uint32_t score_pages = static_cast<uint32_t>(score_buffer->num_pages());
@@ -255,14 +307,30 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
     // bit patterns, hit-major then token row), broadcast to every core in one multicast.
     const uint32_t bcast_page_bytes = (num_weights + num_active * batch) * out_elem_bytes;
 
-    // Activation is TILE layout [1,1,B,H] with B <= 32 -> Kt == k_tiles tiles (one tile-row).
-    const uint32_t input_page_size = static_cast<uint32_t>(input_buffer->page_size());
-    const uint32_t input_num_pages = static_cast<uint32_t>(input_buffer->num_pages());
+    // Activation tiles: one 32-wide compute tile per K-slice. TILE tensors already page that
+    // way (page == tile). ROW_MAJOR decode is a stick of H bf16; each 32-wide chunk is a 1x32
+    // tile, so a source page may hold several compute tiles (the full stick, or a width shard).
+    const uint32_t input_df_tile_bytes = input_tile.get_tile_size(input_df);
+    const uint32_t src_page_bytes = static_cast<uint32_t>(input_buffer->page_size());
+    TT_FATAL(
+        src_page_bytes >= input_df_tile_bytes && src_page_bytes % input_df_tile_bytes == 0,
+        "fused_experts: input page size {} must be a multiple of the {}-byte compute tile",
+        src_page_bytes,
+        input_df_tile_bytes);
+    const uint32_t src_tiles_per_page = src_page_bytes / input_df_tile_bytes;
+    const uint32_t input_page_size = input_df_tile_bytes;
+    const uint32_t input_num_pages = k_tiles;
 
-    // Output is TILE [1, B, H] bf16 (the per-token routing-weighted sum of every active expert's
-    // down matmul): each core writes its 2 output tiles (its 64-column H slice) of the single tile
-    // row, which covers all B tokens.
-    const uint32_t out_tile_bytes = static_cast<uint32_t>(out_buffer->page_size());
+    // Output compute tiles match the input tile. TILE DRAM pages are one tile; ROW_MAJOR pages
+    // may pack several 1x32 faces (a shard stick or the full H row).
+    const uint32_t out_tile_bytes = input_tile.get_tile_size(out_df);
+    const uint32_t dst_page_bytes = static_cast<uint32_t>(out_buffer->page_size());
+    TT_FATAL(
+        dst_page_bytes >= out_tile_bytes && dst_page_bytes % out_tile_bytes == 0,
+        "fused_experts: output page size {} must be a multiple of the {}-byte compute tile",
+        dst_page_bytes,
+        out_tile_bytes);
+    const uint32_t dst_tiles_per_page = dst_page_bytes / out_tile_bytes;
 
     // The gathered activation is stored as Bfp8_b (not bf16) to keep the resident
     // [num_active, I] block -- the dominant L1 consumer -- within the L1 budget. The SwiGLU
@@ -414,13 +482,37 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
         CoreRange{{2, 0}, {GRID_X - 1, 0}},
         CoreRange{{0, 1}, {GRID_X - 1, GRID_Y - 1}},
     }};
-    // Writers on the DM processor not used by each core's reader: {1,0}'s reader is
-    // NoC 1, so its writer is NoC 0; everyone else's reader is NoC 0, writer NoC 1.
-    const CoreRangeSet writer_noc1_cores{std::vector<CoreRange>{
-        CoreRange{sender, sender},
-        CoreRange{{2, 0}, {GRID_X - 1, 0}},
-        CoreRange{{0, 1}, {GRID_X - 1, GRID_Y - 1}},
-    }};
+
+    // Collect the grid cores satisfying `want` as row-wise contiguous runs, so the kernel
+    // descriptors stay a handful of ranges rather than one per core.
+    auto cores_where = [&](auto&& want) {
+        std::vector<CoreRange> ranges;
+        for (uint32_t y = 0; y < GRID_Y; ++y) {
+            uint32_t run_start = GRID_X;
+            for (uint32_t x = 0; x <= GRID_X; ++x) {
+                const bool in = x < GRID_X && want(CoreCoord{x, y});
+                if (in && run_start == GRID_X) {
+                    run_start = x;
+                } else if (!in && run_start != GRID_X) {
+                    ranges.emplace_back(CoreCoord{run_start, y}, CoreCoord{x - 1, y});
+                    run_start = GRID_X;
+                }
+            }
+        }
+        return CoreRangeSet(ranges);
+    };
+    // The receiver reader splits by NOC: hub1 (when the I dim is split) runs on NoC 1 so its
+    // activation multicast does not share a NoC with hub0's; every other receiver stays on NoC 0.
+    const CoreRangeSet receiver_noc0_cores =
+        cores_where([&](const CoreCoord& c) { return receiver_cores.contains(c) && !is_active_hub1(c); });
+    const CoreRangeSet receiver_hub1_cores =
+        cores_where([&](const CoreCoord& c) { return receiver_cores.contains(c) && is_active_hub1(c); });
+    // A core's writer takes the DM processor its reader does not use, on the NoC its reader does not
+    // use: {1,0}'s reader is NoC 1 (writer NoC 0), hub1's reader is NoC 1 (writer NoC 0, with the
+    // writer moving to RISCV_1), and every other core's reader is NoC 0 (writer NoC 1).
+    const CoreRangeSet writer_hub1_cores = receiver_hub1_cores;
+    const CoreRangeSet writer_noc1_cores =
+        cores_where([&](const CoreCoord& c) { return !(c == input_sender) && !is_active_hub1(c); });
     const CoreRangeSet writer_noc0_cores{CoreRange{input_sender, input_sender}};
 
     ProgramDescriptor desc;
@@ -711,10 +803,11 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
         }
     };
 
-    // Core {0,0} NoC coordinates (virtual; usable on either NoC) — the gather scatter target
-    // and the home of the down-phase semaphores.
-    const uint32_t leader_noc_x = corner_a.x;
-    const uint32_t leader_noc_y = corner_a.y;
+    // Hub0 of the 64-core path (== the 6-expert path's group 0): the low-I gather scatter target for
+    // core {1,0}, and the home of the down-phase semaphores. Core {0,0}'s own hub0 comes from the
+    // multicast rectangle's corners (`group0_rect`), the same as every other core's.
+    const uint32_t hub0_noc_x = corner_a.x;
+    const uint32_t hub0_noc_y = corner_a.y;
 
     // ---- Expert-id sender kernel on {0,0} (NoC 0). ----
     std::vector<uint32_t> sender_ct_args = {
@@ -769,6 +862,10 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
         num_expert_groups,
         sem_reduce_id,
         cb_reduce,
+        tensor_args.routing_scores.layout() == Layout::ROW_MAJOR ? 1u : 0u,
+        // Two-hub gather/broadcast geometry (see fetch_gate_up.h).
+        split_col,
+        num_hubs,
     };
     TensorAccessorArgs(*routing_buffer).append_to(sender_ct_args);
     TensorAccessorArgs(*score_buffer).append_to(sender_ct_args);
@@ -801,7 +898,14 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
          group0_rect[1],
          group0_rect[2],
          group0_rect[3],
-         group0_rect[4]});
+         group0_rect[4],
+         // hub0 / hub1 of this sender's group (the rectangle's ascending corners). {0,0} is always
+         // hub0, and both hubs' coordinates are passed explicitly so a NoC-1 kernel does not have to
+         // un-swap the rectangle bounds.
+         group0_rect[0],
+         group0_rect[1],
+         group0_rect[2],
+         group0_rect[3]});
     desc.kernels.push_back(std::move(sender_desc));
 
     // ---- Input-broadcaster kernel on {1,0} (NoC 1). ----
@@ -843,6 +947,10 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
         num_expert_groups,
         sem_reduce_id,
         cb_reduce,
+        src_tiles_per_page,
+        // Two-hub gather/broadcast geometry (see fetch_gate_up.h).
+        split_col,
+        num_hubs,
     };
     TensorAccessorArgs(*input_buffer).append_to(input_ct_args);
     TensorAccessorArgs(*gate_up0_buffer).append_to(input_ct_args);
@@ -869,8 +977,11 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
          mcast_start_y,
          num_dests,
          core_index_for(input_sender),
-         leader_noc_x,
-         leader_noc_y});
+         hub0_noc_x,
+         hub0_noc_y,
+         // hub1 of this core's group: the rectangle's far corner (hub0 is leader_noc above).
+         group0_rect[2],
+         group0_rect[3]});
     desc.kernels.push_back(std::move(input_sender_desc));
 
     // ---- Receiver reader kernel on the other 62 cores (NoC 0). ----
@@ -910,42 +1021,58 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
         num_expert_groups,
         sem_reduce_id,
         cb_reduce,
+        // Two-hub gather/broadcast geometry (see fetch_gate_up.h).
+        split_col,
+        num_hubs,
     };
     TensorAccessorArgs(*gate_up0_buffer).append_to(receiver_ct_args);
     TensorAccessorArgs(*down0_buffer).append_to(receiver_ct_args);
     append_addrs_ct(receiver_ct_args);
 
-    KernelDescriptor receiver_desc;
-    receiver_desc.kernel_source = std::string(kKernelDir) + "/dataflow/wait_expert_ids.cpp";
-    receiver_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    receiver_desc.core_ranges = receiver_cores;
-    receiver_desc.compile_time_args = receiver_ct_args;
-    receiver_desc.config = DataMovementConfigDescriptor{
-        .processor = DataMovementProcessor::RISCV_0,
-        .noc = NOC::NOC_0,
-    };
-    for (const auto& cr : receiver_cores.ranges()) {
-        for (const auto& core : cr) {
-            const uint32_t idx = core_index_for(core);
-            const uint32_t g = parallel_experts ? idx / cores_per_expert : 0u;
-            const uint32_t local = parallel_experts ? idx % cores_per_expert : idx;
-            const auto g_rect = group_rect(g);
-            const auto g_leader = group_leader_noc(g);
-            receiver_desc.runtime_args.emplace_back(
-                core,
-                KernelDescriptor::CoreRuntimeArgs{
-                    idx,
-                    g_leader.first,
-                    g_leader.second,
-                    g_rect[0],
-                    g_rect[1],
-                    g_rect[2],
-                    g_rect[3],
-                    g_rect[4],
-                    (parallel_experts && local == 0) ? 1u : 0u});
+    // The receiver reader comes in two NOC flavours. Hub1 runs on NOC 1 -- that is what keeps the
+    // two hubs' activation multicasts on separate NoCs -- and every other core stays on NOC 0. On a
+    // core, the writer is always the other DM processor on the other NoC, so hub1's writer moves to
+    // NOC 0 (see the writer groups below).
+    auto build_receiver = [&](const CoreRangeSet& cores, NOC noc) {
+        KernelDescriptor d;
+        d.kernel_source = std::string(kKernelDir) + "/dataflow/wait_expert_ids.cpp";
+        d.source_type = KernelDescriptor::SourceType::FILE_PATH;
+        d.core_ranges = cores;
+        d.compile_time_args = receiver_ct_args;
+        d.config = DataMovementConfigDescriptor{
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = noc,
+        };
+        for (const auto& cr : cores.ranges()) {
+            for (const auto& core : cr) {
+                const uint32_t idx = core_index_for(core);
+                const uint32_t g = parallel_experts ? idx / cores_per_expert : 0u;
+                const auto g_rect = group_rect(g);
+                const auto g_leader = group_leader_noc(g);
+                d.runtime_args.emplace_back(
+                    core,
+                    KernelDescriptor::CoreRuntimeArgs{
+                        idx,
+                        // hub0 (== this group's leader) and hub1 (== the rectangle's far corner).
+                        g_leader.first,
+                        g_leader.second,
+                        g_rect[0],
+                        g_rect[1],
+                        g_rect[2],
+                        g_rect[3],
+                        g_rect[4],
+                        hub_role_of(core),
+                        g_rect[2],
+                        g_rect[3]});
+            }
         }
+        desc.kernels.push_back(std::move(d));
+    };
+    // Receivers minus hub1 (which, when active, is its own NOC-1 kernel instance).
+    build_receiver(receiver_noc0_cores, NOC::NOC_0);
+    if (!receiver_hub1_cores.empty()) {
+        build_receiver(receiver_hub1_cores, NOC::NOC_1);
     }
-    desc.kernels.push_back(std::move(receiver_desc));
 
     // ---- Compute (gate_up matmul) kernel on all 64 cores. ----
     std::vector<uint32_t> compute_ct_args = {
@@ -1008,6 +1135,10 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
         num_expert_groups,
         cb_reduce,
         sem_reduce_id,
+        dst_tiles_per_page,
+        // Two-hub gather/broadcast geometry: which hub each producer's I chunk belongs to.
+        split_col,
+        num_hubs,
     };
     TensorAccessorArgs(*out_buffer).append_to(writer_ct_args);
 
@@ -1022,12 +1153,11 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
             for (const auto& core : cr) {
                 const uint32_t idx = core_index_for(core);
                 const uint32_t g = parallel_experts ? idx / cores_per_expert : 0u;
-                const uint32_t local = parallel_experts ? idx % cores_per_expert : idx;
+                const auto g_rect = group_rect(g);
                 const auto g_leader = group_leader_noc(g);
                 // Group-0 counterpart: same local index in columns 0-1 (or {0,0} on the 64-core path).
                 const CoreCoord reduce_logical{parallel_experts ? (core.x % 2) : 0u, parallel_experts ? core.y : 0u};
                 const auto reduce_noc = device->worker_core_from_logical_core(reduce_logical);
-                (void)local;
                 writer_desc.emplace_runtime_args(
                     core,
                     {out_buffer,
@@ -1035,11 +1165,19 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
                      g_leader.first,
                      g_leader.second,
                      static_cast<uint32_t>(reduce_noc.x),
-                     static_cast<uint32_t>(reduce_noc.y)});
+                     static_cast<uint32_t>(reduce_noc.y),
+                     // hub1 of this core's group: the rectangle's far corner.
+                     g_rect[2],
+                     g_rect[3]});
             }
         }
         desc.kernels.push_back(std::move(writer_desc));
     };
+    // The writer always takes the other DM processor on the other NoC, so hub1 -- whose reader is on
+    // NOC 1 -- is the one core set whose writer runs on NOC 0 and keeps RISCV_1.
+    if (!writer_hub1_cores.empty()) {
+        make_writer(writer_hub1_cores, DataMovementProcessor::RISCV_1, NOC::NOC_0);
+    }
     make_writer(writer_noc1_cores, DataMovementProcessor::RISCV_1, NOC::NOC_1);
     make_writer(writer_noc0_cores, DataMovementProcessor::RISCV_0, NOC::NOC_0);
 

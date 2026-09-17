@@ -529,6 +529,16 @@ class DeepSeekV4Model(DeepSeekV4Module):
         self.kv_caches: list[_StaticLayerCache] = []
         # Paged multi-session decode (traced path; see :meth:`prepare_static_decode`).
         self._paged: Optional[PagedKVManager] = None
+        # Traced-decode replay state. :meth:`prepare_static_decode` fills in the buffers
+        # and re-arms capture, but the thread handle and its queue are owned here: the
+        # callers register :meth:`shutdown` on an exit stack as soon as the model is
+        # built, so it has to be callable on a model that never prepared a traced decode
+        # (the eager path) or that failed part-way through preparing one. Creating them
+        # in ``prepare_static_decode`` instead made the unwind itself raise
+        # ``AttributeError``, masking whatever error was being unwound.
+        self._traced_captured = False
+        self._replay_queue: queue.Queue = queue.Queue()
+        self._replay_thread: Optional[threading.Thread] = None
         # H2D socket carrying the per-step input packet into the traced decode, and the
         # D2H socket carrying the step output back out (both allocated by
         # :meth:`prepare_static_decode`).
@@ -2178,9 +2188,10 @@ class DeepSeekV4Model(DeepSeekV4Module):
         # Where the global-last layer (num_layers-1) landed: its trace produces the final
         # head output, which it streams to the host over the D2H socket below.
         self._output_sm_index = self.pipeline_submesh_ids.index(ids[self.num_layers - 1])
+        # Re-arm capture. The replay queue/thread are owned by ``__init__`` and stay
+        # there, so unwinding a model whose prepare never finished (or never started)
+        # can still stop a replay thread through :meth:`shutdown`.
         self._traced_captured = False
-        self._replay_queue: queue.Queue = queue.Queue()
-        self._replay_thread: Optional[threading.Thread] = None
 
         # The step output's return path. The page size is only known once the trace
         # builds the output tensor, so it is set on first use (see
@@ -2753,6 +2764,8 @@ class DeepSeekV4Model(DeepSeekV4Module):
         :meth:`activate_session`), and its blocks are grown here as the compressor
         windows close.
         """
+        if not getattr(self, "submeshes_io", None):
+            raise RuntimeError("call prepare_static_decode() before decode_traced()")
         if self._paged is not None:
             self.ensure_session_capacity(pos)
         # Capture first: the compile runs inside consume a packet each, so pushing this
