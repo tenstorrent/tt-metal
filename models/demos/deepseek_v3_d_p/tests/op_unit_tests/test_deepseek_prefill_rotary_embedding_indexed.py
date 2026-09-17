@@ -31,6 +31,86 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 ROPE_HEAD_DIM = 64
 
 
+@pytest.mark.parametrize("mesh_device", [(1, 4), (2, 2)], indirect=True)
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 2 * 1024 * 1024}], indirect=True)
+@pytest.mark.parametrize("sp_axis", [0, 1])
+def test_rotary_embedding_indexed_sequence_subshards(mesh_device, sp_axis, expect_error):
+    """Early TP partition must commute with RoPE, including rotated starts and metadata replay.
+
+    Cos/sin retain the original SP slabs. Compare against full-slab RoPE then partition, and retain
+    one captured metadata program while changing chunk starts. Both mesh-axis orientations are used.
+    """
+    tp_axis = 1 - sp_axis
+    sp, tp = mesh_device.shape[sp_axis], mesh_device.shape[tp_axis]
+    chunk_local = 128 * tp
+    chunk_global = chunk_local * sp
+    cos, sin = _make_cos_sin(4 * chunk_global, ROPE_HEAD_DIM)
+    dims = [None, None]
+    dims[sp_axis] = 2
+    mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=dims)
+
+    def upload(tensor, mesh_mapper=mapper):
+        return ttnn.from_torch(
+            tensor, device=mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=mesh_mapper
+        )
+
+    cos_tt = upload(block_cyclic_reorder(cos, chunk_local, sp, seq_dim=2))
+    sin_tt = upload(block_cyclic_reorder(sin, chunk_local, sp, seq_dim=2))
+    trans_tt = upload(get_rot_transformation_mat(), ttnn.ReplicateTensorToMesh(mesh_device))
+    torch.manual_seed(42)
+    full_q = upload(torch.randn(1, 8, chunk_global, ROPE_HEAD_DIM, dtype=torch.bfloat16))
+    local_q = ttnn.mesh_partition(full_q, dim=2, cluster_axis=tp_axis)
+    metadata = ttnn.from_torch(
+        torch.zeros((1, 1, 1, 1), dtype=torch.int64),
+        device=mesh_device,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    rope = ttnn.experimental.deepseek_prefill.rotary_embedding_indexed
+
+    def local_rope(start):
+        return rope(local_q, cos_tt, sin_tt, trans_tt, start, sp_axis, seq_subshard_axis=tp_axis)
+
+    with expect_error(RuntimeError, "different mesh axis"):
+        rope(local_q, cos_tt, sin_tt, trans_tt, 0, sp_axis, seq_subshard_axis=sp_axis)
+
+    # Warm the exact metadata program before capturing. The captured output owns its allocation
+    # through all replays; only the metadata value changes in place.
+    warm = local_rope(metadata)
+    ttnn.synchronize_device(mesh_device)
+    ttnn.deallocate(warm)
+    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    traced_out = local_rope(metadata)
+    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+    composer = ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape)
+    entries = None
+    try:
+        # Include a TP window crossing a block-cyclic slab boundary at a rotated chunk start.
+        for start in (0, chunk_global, chunk_local + 32, 2 * chunk_global + chunk_local - 32):
+            full_out = rope(full_q, cos_tt, sin_tt, trans_tt, start, sp_axis)
+            expected = ttnn.mesh_partition(full_out, dim=2, cluster_axis=tp_axis)
+            scalar_out = local_rope(start)
+            host_start = ttnn.from_torch(
+                torch.tensor([start], dtype=torch.int64).reshape(1, 1, 1, 1),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+            )
+            ttnn.copy_host_to_device_tensor(host_start, metadata)
+            ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=True)
+            reference = ttnn.to_torch(expected, mesh_composer=composer)
+            assert torch.equal(reference, ttnn.to_torch(scalar_out, mesh_composer=composer))
+            assert torch.equal(reference, ttnn.to_torch(traced_out, mesh_composer=composer))
+            if entries is None:
+                entries = mesh_device.num_program_cache_entries()
+            assert mesh_device.num_program_cache_entries() == entries
+            for tensor in (full_out, expected, scalar_out):
+                ttnn.deallocate(tensor)
+    finally:
+        ttnn.release_trace(mesh_device, trace_id)
+        ttnn.deallocate(traced_out)
+
+
 def _make_cos_sin(max_seq, head_dim):
     """Meta-style cos/sin [1, 1, max_seq, head_dim] = [c0,c0,c1,c1,...] -- same layout as
     get_cos_sin_matrix, so rotate_half(meta_style=True) is the matching reference."""

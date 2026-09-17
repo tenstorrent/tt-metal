@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import os
 from itertools import chain, product
 
 import pytest
@@ -158,58 +159,57 @@ FORMATS_BFP4_B = [
     ]
 ]
 
-# Ops whose `#pragma GCC unroll X` loops miscompile to invalid assembly under coverage
-# instrumentation, so they are skipped only when WITH_COVERAGE is set:
-#   https://github.com/tenstorrent/tt-metal/issues/33268
-#   https://github.com/tenstorrent/tt-llk/issues/883
-# Covers ops from both sweep profiles.
-COVERAGE_COMPILE_SKIP_OPS = [
-    MathOperation.Acosh,
-    MathOperation.Log,
-    MathOperation.Log1p,
-    MathOperation.Reciprocal,
-    MathOperation.Sin,
-    MathOperation.Sqrt,
-    MathOperation.Rsqrt,
-    MathOperation.Square,
-    MathOperation.Celu,
-    MathOperation.Silu,
-    MathOperation.Neg,
-    MathOperation.Exp2,
-    MathOperation.Hardsigmoid,
-    MathOperation.Threshold,
-    MathOperation.ReluMax,
-    MathOperation.ReluMin,
-    MathOperation.Tanh,
-    MathOperation.Gelu,
-    MathOperation.GeluDerivative,
-    MathOperation.LogWithBase,
-    MathOperation.GeluAppx,
-]
+
+# Ops whose coverage build returns wrong results, per arch, so they are skipped only when
+# WITH_COVERAGE is set. Membership is measured, never inferred: run the op under
+# `--coverage` on the arch in question before adding it here.
+#
+# Reciprocal on Blackhole is the only entry the sweep has. 46 of its 153 Blackhole
+# variants come back with alternate elements stale while its sfp* instruction stream
+# stays byte-identical to the non-coverage build, which is what makes it a timing fault
+# rather than a codegen one. Two things are needed to reproduce it, and neither predicts
+# it on its own:
+#
+#   - It needs the SFPLOADMACRO path: `--coverage --disable-sfploadmacro` passes 153/153.
+#     But emitting SFPLOADMACRO does not imply failing. Counting the mnemonic in the
+#     coverage-built math.elf of a Wormhole sweep that passes 6377/6377: Exp at
+#     ApproximationMode.Yes has 16 (the sweeps below hardcode CLAMP_NEGATIVE(True), which
+#     selects the macro branch), Signbit has 8, and the int max/min ops in _INT_UNARY_OPS
+#     have 8. So the macro is the mechanism, not the criterion.
+#   - It is Blackhole-only. calculate_reciprocal reaches the hand-written macro sequences
+#     only on Blackhole; Wormhole takes the pure sfpi Newton path and emits no
+#     SFPLOADMACRO at all -- 0 in every built math.elf, in the same audit that finds 8
+#     for Signbit. Its 168 Wormhole variants give 162 passed / 6 xfailed under coverage,
+#     the same split the non-coverage build gives, so keying on the arch keeps them in
+#     the coverage lane.
+#
+#   https://github.com/tenstorrent/tt-metal/issues/56751
+COVERAGE_MISMATCH_SKIP_OPS = {
+    ChipArchitecture.BLACKHOLE: [MathOperation.Reciprocal],
+}
 
 
 def _skip_coverage_unsupported(mathop):
     """Coverage-build exclusions, shared by every sweep that drives the unary ops.
 
-    The exclusions are properties of the op under coverage instrumentation rather than of
-    any one sweep's envelope, so every sweep that compiles these kernels needs this guard.
+    The exclusions are per-op, so this stays a helper called from every unary sweep even
+    where the sweep's current op pool cannot select an excluded one: a pool that later
+    gains one is then covered without touching the sweep. That has already been needed
+    once, when ReluMin joined _INT_UNARY_OPS.
     """
     if not TestConfig.WITH_COVERAGE:
         return
 
-    # Coverage runs skip the broad profile wholesale; only the standard profile runs.
-    if mathop in BROAD_SWEEP_OPS:
-        pytest.skip(
-            reason="Broad-profile ops are not run under coverage: "
-            "https://github.com/tenstorrent/tt-llk/issues/1435"
-        )
+    # Every entry in the table is mediated by SFPLOADMACRO, and -DDISABLE_SFPLOADMACRO
+    # compiles the non-macro path instead -- the build the exclusion is not about. Revisit
+    # this early return if an entry that is not macro-mediated is ever added.
+    if os.environ.get("TT_METAL_DISABLE_SFPLOADMACRO") == "1":
+        return
 
-    if mathop in COVERAGE_COMPILE_SKIP_OPS:
+    if mathop in COVERAGE_MISMATCH_SKIP_OPS.get(TestConfig.CHIP_ARCH, ()):
         pytest.skip(
-            reason="`#pragma GCC unroll X` loops in these ops compile to invalid "
-            "assembly under coverage instrumentation: "
-            "https://github.com/tenstorrent/tt-metal/issues/33268 , "
-            "https://github.com/tenstorrent/tt-llk/issues/883"
+            reason="wrong results under coverage instrumentation: "
+            "https://github.com/tenstorrent/tt-metal/issues/56751"
         )
 
 
@@ -873,10 +873,11 @@ def test_eltwise_unary_sfpu_int(
     dest_acc: DestAccumulation,
     input_dimensions: list[int],
 ):
-    # ReluMin is in both BROAD_SWEEP_OPS and COVERAGE_COMPILE_SKIP_OPS, so this sweep needs
-    # the same coverage guard the float ones use. It was unreachable before ReluMin joined
-    # _INT_UNARY_OPS -- no integer-only op is in either list -- but without it the coverage
-    # job compiles the relu_min kernel and fails at build time instead of skipping.
+    # No op in _INT_UNARY_OPS is excluded under coverage on any arch, so this call skips
+    # nothing today -- including the int max/min ops, which emit SFPLOADMACRO and pass.
+    # It stays because the exclusion table is per-op: the last time this sweep's pool
+    # changed -- ReluMin joining _INT_UNARY_OPS -- it needed the guard, and the coverage
+    # job built a kernel it should not have.
     _skip_coverage_unsupported(mathop)
 
     int_format = (
@@ -1189,8 +1190,9 @@ def test_eltwise_unary_sfpu_threshold(
     dest_acc: DestAccumulation,
     input_dimensions: list[int],
 ):
-    # ReluMin/ReluMax are COVERAGE_COMPILE_SKIP_OPS members, so this sweep needs the guard
-    # too now that _THRESHOLD_OPS carries them.
+    # As in test_eltwise_unary_sfpu_int: nothing in _THRESHOLD_OPS is excluded under
+    # coverage today, and the call stays so that a change to the pool cannot silently
+    # bypass the exclusion table.
     _skip_coverage_unsupported(mathop)
     _skip_bh_unless_fp32(formats, dest_acc)
 

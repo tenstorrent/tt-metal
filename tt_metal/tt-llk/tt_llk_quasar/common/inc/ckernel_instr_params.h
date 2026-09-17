@@ -589,6 +589,14 @@ struct p_sfpnonlinear
     constexpr static std::uint32_t TANH_MODE  = 0x5;
 };
 
+struct p_sfpgt
+{
+    constexpr static std::uint32_t IMM12_INT32 = 0x0;
+    constexpr static std::uint32_t IMM12_FP32  = 0x1;
+
+    constexpr static std::uint32_t MOD1_SET_CC = 0x1;
+};
+
 // SFPSWAP instruction modes (mode-to-int mapping matches the Blackhole reference).
 struct p_sfpswap
 {

@@ -17,6 +17,22 @@ using namespace tt::tt_metal;
 
 namespace ttnn::prim {
 
+namespace {
+// True when the op can use a factory that aliases a shard directly as a circular buffer.
+// Those factories require L1; any DRAM-sharded input or output must use the generic factory.
+bool uses_zero_copy_sharded_factory(const std::vector<Tensor>& input_tensors, const MemoryConfig& output_mem_config) {
+    if (!input_tensors[0].is_sharded()) {
+        return false;
+    }
+    for (const auto& input_tensor : input_tensors) {
+        if (input_tensor.buffer()->buffer_type() == BufferType::DRAM) {
+            return false;
+        }
+    }
+    return !(output_mem_config.is_sharded() && output_mem_config.buffer_type() == BufferType::DRAM);
+}
+}  // namespace
+
 ConcatDeviceOperation::program_factory_t ConcatDeviceOperation::select_program_factory(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     if (tensor_args.input_tensors.empty()) {
@@ -24,11 +40,13 @@ ConcatDeviceOperation::program_factory_t ConcatDeviceOperation::select_program_f
     }
 
     const auto& input_tensors = tensor_args.input_tensors;
+    const bool input_is_sharded = input_tensors[0].is_sharded();
 
-    if (const bool input_is_sharded = input_tensors[0].is_sharded(); !input_is_sharded) {
+    if (!uses_zero_copy_sharded_factory(input_tensors, args.output_mem_config)) {
         // The launch infra allocates the output tensor before factory selection, so the
         // allocator's free window already accounts for it.
-        if (can_use_tiled_unaligned_concat(
+        if (!input_is_sharded &&
+            can_use_tiled_unaligned_concat(
                 input_tensors, args.dim, args.groups, args.output_mem_config, /*output_already_allocated=*/true)) {
             return ConcatTiledUnalignedProgramFactory{};
         }
@@ -150,7 +168,12 @@ void ConcatDeviceOperation::validate_on_program_cache_miss(
             "row-major then retilizing. This may have adverse performance impacts.",
             args.dim);
     }
-    if (shard_first) {
+    // The output-shard-matching and dim-compatibility constraints below are requirements of
+    // the dedicated zero-copy sharded factories (each hardcodes a specific shard-vs-dim
+    // relationship). They don't apply when DRAM sharding routes concat through the generic,
+    // TensorAccessor-based factory instead, which can write any requested output_mem_config
+    // (sharded or not, any dim) directly.
+    if (shard_first && uses_zero_copy_sharded_factory(input_tensors, args.output_mem_config)) {
         const auto memory_layout = first_input.memory_config().memory_layout();
         TT_FATAL(
             args.output_mem_config.memory_layout() == memory_layout,
@@ -190,6 +213,14 @@ void ConcatDeviceOperation::validate_on_program_cache_miss(
                 first_input.shard_spec().value().grid.ranges().size() == 1,
                 "Block-sharded concat requires a single contiguous rectangular CoreRange.");
         }
+    } else if (shard_first) {
+        // Grouped concat is implemented only by the zero-copy sharded factories; the generic
+        // factory ignores `groups` and would silently produce a plain concat instead.
+        TT_FATAL(
+            args.groups == 1,
+            "Groups > 1 is not supported for DRAM-sharded concat (groups={} was provided). "
+            "Move the inputs and output to L1 sharding, or unshard them first.",
+            args.groups);
     }
 }
 
@@ -243,7 +274,8 @@ namespace {
 using namespace tt::constants;
 
 // Calculate maximum tensors per concat based on runtime args limit
-uint32_t calculate_max_tensors_per_concat(const std::vector<Tensor>& input_tensors) {
+uint32_t calculate_max_tensors_per_concat(
+    const std::vector<Tensor>& input_tensors, const MemoryConfig& output_mem_config) {
     // Runtime args are limited by available L1 kernel config memory.
     // The general limit is 341 uint32_t args (from kernel_types.hpp:max_runtime_args),
     // but concat kernels are compiled with NUM_RUNTIME_ARGS=256.
@@ -281,7 +313,10 @@ uint32_t calculate_max_tensors_per_concat(const std::vector<Tensor>& input_tenso
     // It DOES depend on:
     //   - Memory layout (sharded vs interleaved - different kernels)
 
-    const bool is_sharded = input_tensors[0].is_sharded();
+    // Sharding alone isn't enough: a DRAM-sharded concat is dispatched to the generic
+    // (interleaved) kernel, so it is bound by that kernel's argument budget, not the
+    // sharded kernels'.
+    const bool is_sharded = ttnn::prim::uses_zero_copy_sharded_factory(input_tensors, output_mem_config);
 
     if (is_sharded) {
         const auto memory_layout = input_tensors[0].memory_config().memory_layout();
@@ -341,7 +376,7 @@ Tensor concat_impl(
     // Handle large number of tensors by splitting into batches
     // calculate_max_tensors_per_concat returns the maximum safe value (47 for interleaved)
     // We batch when we have MORE than the safe limit, using batches of exactly the safe limit
-    const uint32_t max_tensors_per_concat = calculate_max_tensors_per_concat(input_tensors);
+    const uint32_t max_tensors_per_concat = calculate_max_tensors_per_concat(input_tensors, output_mem_config);
     if (input_tensors.size() > max_tensors_per_concat) {
         TT_FATAL(
             !(input_tensors[0].is_sharded() &&
@@ -388,10 +423,53 @@ Tensor concat_impl(
     uint32_t normalized_dim = input_tensors[0].logical_shape().get_normalized_index(dim);
 
     if (input_tensors[0].is_sharded()) {
-        if (output_mem_config.is_sharded()) {
+        // DRAM sharding on either side disqualifies the zero-copy shard-as-CB factories
+        // (circular buffers require L1), so select_program_factory routes those through the
+        // generic TensorAccessor-based factory instead.
+        const bool routes_to_generic_factory =
+            !ttnn::prim::uses_zero_copy_sharded_factory(input_tensors, output_mem_config);
+        // Rejected here and not only in validate_on_program_cache_miss: the ROW_MAJOR fallback
+        // below unshards before re-entering, so by the time the device op validates, the inputs
+        // are interleaved and its sharded-path groups check is unreachable.
+        TT_FATAL(
+            !routes_to_generic_factory || groups == 1,
+            "Groups > 1 is not supported for DRAM-sharded concat (groups={} was provided). "
+            "Move the inputs and output to L1 sharding, or unshard them first.",
+            groups);
+        // The generic factory reads and writes whole rows per page in ROW_MAJOR. Interleaved
+        // and height-sharded RM buffers page that way too, but width-, block- and ND-sharded
+        // ones page by shard width, so neither side can be handed to it directly.
+        const bool rm_pages_are_full_rows =
+            input_tensors[0].layout() != Layout::ROW_MAJOR ||
+            (input_tensors[0].memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED &&
+             (!output_mem_config.is_sharded() ||
+              output_mem_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED));
+        if (routes_to_generic_factory && !rm_pages_are_full_rows) {
+            // Unshard to interleaved and re-enter: the interleaved path below already knows how
+            // to stage a width/block-sharded RM output through an interleaved result. This costs
+            // an extra round-trip through DRAM per input, and is the expected cost of the only
+            // page layout the generic factory can consume -- not a regression.
+            log_debug(
+                tt::LogOp,
+                "ttnn.concat: {} ROW_MAJOR inputs page by shard width, which the generic factory "
+                "cannot read directly; unsharding to interleaved first.",
+                input_tensors[0].memory_config().memory_layout());
+            auto interleaved_config = MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM);
+            std::vector<Tensor> interleaved_inputs;
+            interleaved_inputs.reserve(input_tensors.size());
+            for (const auto& input_tensor : input_tensors) {
+                interleaved_inputs.push_back(ttnn::to_memory_config(input_tensor, interleaved_config, std::nullopt));
+            }
+            return concat_impl(interleaved_inputs, dim, groups, output_mem_config, sub_core_grids);
+        }
+        if (output_mem_config.is_sharded() || routes_to_generic_factory) {
+            // Sharded->sharded always goes straight through the device op, and so can a
+            // DRAM-sharded input with an interleaved output: the generic factory addresses
+            // the requested output_mem_config directly, so it needs neither the L1 staging
+            // shard nor the dim-compatibility restriction the L1 path below relies on.
             return ttnn::prim::concat(input_tensors, dim, groups, output_mem_config);
         }
-        // Sharded inputs with interleaved output:
+        // Sharded inputs (L1) with interleaved output:
         // Do sharded concat with a computed sharded output config, then convert to interleaved.
         // Only valid when sharding type is compatible with the concat dimension:
         //   width concat (dim=-1) → HEIGHT_SHARDED or BLOCK_SHARDED
