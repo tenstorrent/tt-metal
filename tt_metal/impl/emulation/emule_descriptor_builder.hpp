@@ -17,8 +17,9 @@ class Program;
 
 namespace tt_emule {
 
-// Device-scoped, program-invariant: arch / SoC geometry / bank maps / HAL addrs.
-SocView build_soc_view(tt::tt_metal::IDevice* device);
+// Device-scoped SoC geometry / bank maps / HAL addrs. The fabric routing identity (mesh/chip id
+// + ROUTING_TABLE addr) is per program-context, so the program is passed to read it.
+SocView build_soc_view(tt::tt_metal::IDevice* device, tt::tt_metal::Program& program);
 
 // Per-program: config, kernels, kernel groups, per-core CB/DFB/semaphore setup.
 EmuleProgramDescriptor build_emule_descriptor(tt::tt_metal::Program& program, tt::tt_metal::IDevice* device);

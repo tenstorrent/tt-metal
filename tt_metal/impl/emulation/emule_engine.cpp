@@ -69,12 +69,9 @@
 #error "TT_EMULE_CXX_STANDARD must be defined by CMake"
 #endif
 
-#include "impl/kernels/kernel.hpp"
 #include "jit_build/jit_build_settings.hpp"
 #include "impl/program/program_impl.hpp"
 #include "jit_build/jit_build_utils.hpp"  // format_named_ct_arg_map (shared with the silicon JIT path)
-#include "impl/buffers/circular_buffer.hpp"
-#include "impl/buffers/semaphore.hpp"
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/face_geometry.hpp>  // FaceGeometry (per-CB unpack override)
 #include <tt-metalium/program.hpp>
@@ -83,12 +80,10 @@
 
 #include "impl/context/metal_context.hpp"
 #include "hostdevcommon/fabric_common.h"  // routing_l1_info_t — identity field layout
-#include "llrt/metal_soc_descriptor.hpp"
 #include "umd/device/chip/sw_emule_chip.hpp"
 #include "umd/device/chip_helpers/simulation_sysmem_manager.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>  // fabric route table (multi-chip dst resolve)
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>   // FabricNodeId, MeshId, FabricConfig
-#include <tt-metalium/experimental/fabric/fabric.hpp>         // is_2d_fabric_config
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>     // RoutingDirection
 #include "tt_emule/chip_store.hpp"
 #include "tt_emule/device.hpp"
@@ -99,7 +94,6 @@
 #include "tt_emule/tile_counter.hpp"
 #include "jit_hw/internal/emule_thread_ctx.h"
 #include "emule_fiber_scheduler.hpp"
-#include "impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 
 #include <tt-logger/tt-logger.hpp>
 #include "tt_metal/common/stable_hash.hpp"
@@ -110,15 +104,6 @@
 #ifndef TT_EMULE_INCLUDE_DIR
 #error "TT_EMULE_INCLUDE_DIR must be defined by CMake (path to tt-emule's include/)"
 #endif
-
-////////////////////////////////////////////////////////////
-// Blaze-only experimental named args
-// Removal is tracked by issue #50953
-namespace tt::tt_metal::experimental::blaze {
-bool emit_named_args_header(
-    const std::string& dir, const NamedCTArgNamespaces& ct_namespaces, const NamedRuntimeArgNamespaces& rt_namespaces);
-}  // namespace tt::tt_metal::experimental::blaze
-////////////////////////////////////////////////////////////
 
 // ---------------------------------------------------------------------------
 // Thread-local context for JIT kernels.
@@ -177,24 +162,6 @@ thread_local const char* __emule_kernel_name = nullptr;
 
 thread_local uint32_t __emule_logical_x = 0;
 thread_local uint32_t __emule_logical_y = 0;
-////////////////////////////////////////////////////////////
-// Blaze-only experimental firmware-global shim
-// Removal is tracked by issue #50953
-// Silicon-named per-core LOGICAL coords (firmware globals `my_logical_x_/y_`,
-// mirroring hw/firmware/src/tt-1xx/brisc.cc; declared extern by
-// blaze/kernels/kernel_utils.hpp). Defined here so compute (TRISC) kernels that
-// reference them link; restored per fiber swap-in by the scheduler's
-// install_fiber. The dataflow (NCRISC/BRISC) senders that must read a CORRECT
-// per-fiber value instead resolve `my_logical_x_/y_` through the
-// dataflow_utils.hpp shadow's per-fiber accessor (__emule_self->core->logical_*),
-// so this definition is only a link/fallback anchor on other RISCs.
-// These MUST stay at global scope with these exact unmangled names (NOT inside a
-// namespace): under emule there is no firmware, and JIT'd kernels are x86-compiled
-// and resolve these symbols against libtt_metal via dlopen(-rdynamic) — any
-// mangling/rename breaks that lookup.
-thread_local uint8_t my_logical_x_ = 0;
-thread_local uint8_t my_logical_y_ = 0;
-////////////////////////////////////////////////////////////
 
 namespace tt::tt_metal::emule {
 namespace engine {
@@ -450,11 +417,11 @@ static void launch_cores(
             std::unique_ptr<ThreadCommonCtx> ctx = ki.is_tensix
                                                        ? std::unique_ptr<ThreadCommonCtx>(new ComputeThreadCtx())
                                                        : std::unique_ptr<ThreadCommonCtx>(new DatamovementThreadCtx());
-            ctx->rt_args = (ki.rta_offset_in_kc != kRtaCrtaNoArgsSentinel)
+            ctx->rt_args = (ki.rta_offset_in_kc != tt_emule::kRtaCrtaNoArgsSentinel)
                                ? reinterpret_cast<uint32_t*>(core->l1_ptr(ki.kernel_config_base + ki.rta_offset_in_kc))
                                : nullptr;
             ctx->common_rt_args =
-                (ki.crta_offset_in_kc != kRtaCrtaNoArgsSentinel)
+                (ki.crta_offset_in_kc != tt_emule::kRtaCrtaNoArgsSentinel)
                     ? reinterpret_cast<uint32_t*>(core->l1_ptr(ki.kernel_config_base + ki.crta_offset_in_kc))
                     : nullptr;
             // Bounds so out-of-range per-core/common arg reads return 0 (silicon zero-pads
@@ -609,7 +576,7 @@ static std::shared_ptr<ResolvedProgram> prepare_program(IDevice* device, Program
     tt_emule::Core* dram_core = nullptr;
     uint32_t num_dram_channels = 0;
     uint32_t num_l1_banks = 0;
-    const auto emule_soc = tt_emule::build_soc_view(device);
+    const auto emule_soc = tt_emule::build_soc_view(device, program);
     populate_bank_mapping(sw_emu, emule_soc, dram_core, num_dram_channels, num_l1_banks);
     const auto emule_desc = tt_emule::build_emule_descriptor(program, device);
 
@@ -622,8 +589,7 @@ static std::shared_ptr<ResolvedProgram> prepare_program(IDevice* device, Program
     uint32_t tensix_pct_index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
     uint32_t kernel_config_base =
         static_cast<uint32_t>(hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::KERNEL_CONFIG));
-    const auto& prog_config = impl.get_program_config(tensix_pct_index);
-    uint32_t emule_sem_base = kernel_config_base + prog_config.sem_offset;
+    uint32_t emule_sem_base = kernel_config_base + emule_desc.config.sem_offset[tensix_pct_index];
 
     std::map<CoreCoord, std::vector<PendingKernelInfo>> pending_core_kernels;
     std::map<std::string, DeferredCompile> deferred_compiles;
@@ -707,7 +673,7 @@ static void dispatch_to_device(
     tt_emule::Core* dram_core = nullptr;
     uint32_t num_dram_channels = 0;
     uint32_t num_l1_banks = 0;
-    const auto emule_soc = tt_emule::build_soc_view(device);
+    const auto emule_soc = tt_emule::build_soc_view(device, program);
     const auto emule_desc = tt_emule::build_emule_descriptor(program, device);
     populate_bank_mapping(sw_emu, emule_soc, dram_core, num_dram_channels, num_l1_banks);
 

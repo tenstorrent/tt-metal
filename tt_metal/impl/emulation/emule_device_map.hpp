@@ -42,8 +42,7 @@ namespace tt::tt_metal::emule {
 
 // Populate the DRAM/L1 bank arrays above from the marshaller's SocView (built by
 // tt_emule::build_soc_view), so a kernel's interleaved-address bank index resolves to the
-// worker/DRAM core the host wrote. A runtime diff-guard asserts SocView == the direct
-// metal_SocDescriptor/allocator reads this used to do.
+// worker/DRAM core the host wrote.
 void populate_bank_mapping(
     tt::umd::SWEmuleChip* sw_emu,
     const tt_emule::SocView& soc,
