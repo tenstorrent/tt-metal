@@ -48,12 +48,23 @@ at the noise floor on L23. The r=0.971 correlation is a load effect, not slot po
 
 ## Expert popularity is stable across chunks
 
-20 chunks of 5,120 tokens, same request. Per-expert counts correlate r = 0.918–0.988 between any two
-chunks; the 10 busiest experts overlap 7.3–9.2 out of 10. Each layer's imbalance stays in a narrow
-band (L18 2.92–3.64, L23 1.17–1.77) and the ordering between layers never inverts.
+The run requests 20 chunks of 5,120 tokens, but the golden trace holds 56,320 = exactly 11 x 5,120,
+and `_load_token_pool` TILES a short pool (`pool * -(-num_tokens // len(pool))`). Chunks 11-19 therefore
+replay chunks 0-8's token ids. Only chunks 0-10 are distinct text, and the figures below use those.
 
-A static placement is therefore worth attempting. Caveat: all 20 chunks come from ONE document, so
-this shows stability across different text within a prompt, not across unrelated prompts.
+Per-expert counts correlate r = 0.926–0.990 between any two distinct chunks; the 10 busiest experts
+overlap 7.7–9.3 out of 10. Each layer's imbalance stays in a narrow band (L18 2.92–3.64, L23
+1.17–1.77) and the ordering between layers never inverts. Over all 20 chunks the correlation is
+slightly LOWER (0.918–0.988), not higher, which is the tell that the tiled chunks are not duplicates
+in routing terms.
+
+They are not, because routing depends on position as well as token: chunk 11 replays chunk 0's exact
+token ids at a different KV offset and only 21.2% (L18) / 20.0% (L23) of the per-token selections
+match, while per-expert counts still correlate 0.848 / 0.905. Aggregate popularity survives an almost
+total change of individual selections, which points at the gate weights rather than the token stream.
+
+A static placement is therefore worth attempting. Caveat: all chunks come from ONE document, so this
+shows stability across different text within a prompt, not across unrelated prompts.
 
 ## Reproducibility
 
