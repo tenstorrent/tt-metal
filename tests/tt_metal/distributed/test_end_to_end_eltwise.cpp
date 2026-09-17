@@ -307,7 +307,7 @@ TEST_F(MeshEndToEnd2x4Tests, CompileOnlyCompilesWithoutDispatch) {
         rtoptions.set_compile_only(true);
         EnqueueMeshWorkload(cq, compile_only_workload, false /* blocking */);
         // Join the deferred kernel builds before anything can consume the compiled programs.
-        WaitForPendingCompiles(mesh_device_->impl().get_context_id());
+        WaitForPendingCompiles(*mesh_device_);
         rtoptions.set_compile_only(false);  // leave compile-only before any device read
     }
 

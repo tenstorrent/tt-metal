@@ -28,6 +28,10 @@ void WaitForPendingCompiles(ContextId context_id) {
     tt::tt_metal::wait_for_pending_kernel_builds(context_id);
 }
 
+void WaitForPendingCompiles(const MeshDevice& mesh_device) {
+    WaitForPendingCompiles(mesh_device.impl().get_context_id());
+}
+
 void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload, bool blocking) {
     // Short-circuit for inactive MeshDevices (no-op)
     if (mesh_cq.device()->get_view().get_devices().empty()) {
