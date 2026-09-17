@@ -28,7 +28,7 @@ std::uint32_t math_sync_tile_dst_index = 0;
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
-    const auto tensor_shape = ckernel::make_tensor_shape(params.TEST_FACE_R_DIM, FACE_C_DIM, params.num_faces_r_dim_A, params.num_faces_c_dim_A);
+    const auto tensor_shape = TENSOR_SHAPE_FROM_PARAMS(params);
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
@@ -98,7 +98,7 @@ using namespace ckernel;
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
-    const auto tensor_shape = ckernel::make_tensor_shape(params.TEST_FACE_R_DIM, FACE_C_DIM, params.num_faces_r_dim_A, params.num_faces_c_dim_A);
+    const auto tensor_shape = TENSOR_SHAPE_FROM_PARAMS(params);
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
@@ -184,7 +184,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
-    const auto tensor_shape = ckernel::make_tensor_shape(params.TEST_FACE_R_DIM, FACE_C_DIM, params.num_faces_r_dim_A, params.num_faces_c_dim_A);
+    const auto tensor_shape = TENSOR_SHAPE_FROM_PARAMS(params);
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
