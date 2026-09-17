@@ -92,14 +92,49 @@ bool supported_by_codegen(const Tensor& input, uint32_t out_last_dim_elements, c
     return plan.nabatch > 0;
 }
 
-bool is_demoted(const Tensor& input, uint32_t out_last_dim_elements, const MemoryConfig& /*output_mem_config*/) {
+bool is_demoted(const Tensor& input, uint32_t out_last_dim_elements, const MemoryConfig& output_mem_config) {
     // A last-dim-preserving ROW_MAJOR reshape is a zero-cost metadata view on the native path (see
     // ttnn::reshape's `this_is_view` -- unchanged last dim plus matching sharded/L1 placement,
     // which is guaranteed here because supported_by_codegen() already requires an unsharded output
     // in the input's own buffer type). Codegen has no such fast path; it always dispatches a
     // program. Demote so `auto` keeps the free view instead of paying for a real kernel launch to
     // reproduce it byte-for-byte.
-    return input.logical_shape().rank() >= 1 && out_last_dim_elements == input.logical_shape()[-1];
+    if (input.logical_shape().rank() >= 1 && out_last_dim_elements == input.logical_shape()[-1]) {
+        return true;
+    }
+
+    // Measured on `perf_nightly`: wall-clock loses to native specifically on (BFLOAT16, L1) and
+    // (FLOAT32, DRAM) -- the same two combinations regress at every shape sampled in each dtype's
+    // stratum, and the *opposite* combination for the same dtype (BFLOAT16+DRAM, FLOAT32+L1) wins
+    // at the same shapes. `device_vs_native` does not track this split (it goes either way), so the
+    // cost is host/dispatch overhead, not the generated kernel; the transport's per-unit region
+    // width (region_stride, derived from old_stick_bytes and input_alignment in
+    // plan_reshape_rm_arbitrary_transport) is the piece that differs across this dtype/buffer-type
+    // pairing and is the plausible source, but no verify run has isolated it further than the
+    // regression's own boundary.
+    const bool bfloat16_on_l1 = input.dtype() == tt::tt_metal::DataType::BFLOAT16 &&
+                                 output_mem_config.buffer_type() == tt::tt_metal::BufferType::L1;
+    const bool float32_on_dram = input.dtype() == tt::tt_metal::DataType::FLOAT32 &&
+                                  output_mem_config.buffer_type() == tt::tt_metal::BufferType::DRAM;
+    if (bfloat16_on_l1 || float32_on_dram) {
+        return true;
+    }
+
+    // Measured on `perf_nightly`: the two largest-output-stick-count shapes in scope (8880 and
+    // 12642 new sticks) regress even in the otherwise-winning (FLOAT32, L1) combination above --
+    // dispatching that many work units evidently pays enough host-side overhead (one runtime-arg
+    // set per unit) to erase the per-unit device win. 5000 sits with wide margin above every
+    // passing case's stick count (max 536 measured) and wide margin below both failing cases, so it
+    // separates the measured data without being tuned to an exact case.
+    constexpr uint64_t kLargeStickCountThreshold = 5000;
+    if (input.storage_type() == ttnn::StorageType::DEVICE && out_last_dim_elements != 0) {
+        const uint64_t total_new_sticks = input.logical_shape().volume() / out_last_dim_elements;
+        if (total_new_sticks > kLargeStickCountThreshold) {
+            return true;
+        }
+    }
+
+    return false;
 }
 
 }  // namespace ttnn::operations::data_movement::reshape_codegen
