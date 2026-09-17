@@ -137,7 +137,7 @@ a vector of 32 32-bit values. Users should be aware that vector length
 may change with future architectures.
 
 Floating point operations are not IEEE conformant, due to hardware
-restictions. The following does not claim to be a complete list of
+restrictions. The following does not claim to be a complete list of
 differences.
 
   * ``-0.0`` and ``+0.0`` are different.
@@ -153,7 +153,8 @@ Comparison behavior is described in more detail below.
 User Visible Constants
 ^^^^^^^^^^^^^^^^^^^^^^
 
-Constant registers are implemented as objects which can be referenced wherever a vector can be used. On Wormhole and Blackhole the following variables are defined:
+Constant registers are implemented as objects which can be referenced
+wherever a vector can be used. The following variables are defined:
 
   * ``vConstTileId``, counts by two through the vector elements: [0, 2, 4..62]
   * ``vConstFloatPrgm0``, ``vConstIntPrgm0``
