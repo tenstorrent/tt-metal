@@ -4,9 +4,9 @@
 
 // Unified matmul compute kernel: C = A x B for one cluster, as a classic blocked GEMM.
 //
-// GEMM view, all sizes in 32x32 tiles: C[M x N] = A[M x K] x B[K x N]. The unit of work is one C subblock
-// (per_core_M x per_core_N tiles) of one batch; this cluster owns a contiguous run of them and this kernel
-// does not care which. For every work item it accumulates over K, K_iteration_tiles per iteration: the
+// GEMM view, all sizes in 32x32 tiles: C[M x N] = A[M x K] x B[K x N]. A C subblock is per_core_M x
+// per_core_N tiles of C; this cluster produces num_subblocks of them and this kernel does not care where
+// in C they sit. For every subblock it accumulates over K, K_iteration_tiles per iteration: the
 // reader delivers one A slice ([per_core_M][K_iteration_tiles] tiles) and one B slice
 // ([K_iteration_tiles][per_core_N] tiles) per iteration, and the MATH engine multiplies them dst_M_tiles x
 // dst_N_tiles C tiles at a time, which is what DST holds.
@@ -16,8 +16,8 @@
 // packer adds DST onto the partials already in L1 instead, so only the last iteration reloads. The last K
 // iteration packs the finished C tiles into the C_subblock ring for the writer.
 //
-// Loop order matches the reader and the writer: work item, K iteration, then the DST-sized groups of C
-// tiles in row-major order over the C subblock. Runtime args: num_work_items. Compile-time args:
+// Loop order matches the reader and the writer: subblock, K iteration, then the DST-sized groups of C
+// tiles in row-major order over the subblock. Runtime args: num_subblocks. Compile-time args:
 // K_iteration_tiles, num_K_iterations, per_core_M, per_core_N, dst_M_tiles, dst_N_tiles.
 // Defines: FP32_DEST_ACC_EN, PACKER_L1_ACC.
 
@@ -48,7 +48,7 @@ FORCE_INLINE void reload_partials_into_dst(
 }
 
 void kernel_main() {
-    const uint32_t num_work_items = get_arg(args::num_work_items);
+    const uint32_t num_subblocks = get_arg(args::num_subblocks);
 
     constexpr uint32_t K_iteration_tiles = get_arg(args::K_iteration_tiles);
     constexpr uint32_t num_K_iterations = get_arg(args::num_K_iterations);
@@ -72,10 +72,10 @@ void kernel_main() {
     compute_kernel_hw_startup<SrcOrder::Reverse>(dfb::A_slice, dfb::B_slice, dfb::C_partials);
     matmul_block_init(dfb::A_slice, dfb::B_slice, /*transpose=*/0, dst_N_tiles, dst_M_tiles, K_iteration_tiles);
 
-    for (uint32_t work_item = 0; work_item < num_work_items; ++work_item) {
+    for (uint32_t subblock = 0; subblock < num_subblocks; ++subblock) {
         {
-            if (work_item > 0) {
-                // The previous item's last K iteration left the packer on C_subblock's format. (The unpacker needs
+            if (subblock > 0) {
+                // The previous subblock's last K iteration left the packer on C_subblock's format. (The unpacker needs
                 // no fix-up: reload_partials_into_dst already restores SrcA to B's format.)
                 pack_reconfig_data_format(dfb::C_partials);
             }
