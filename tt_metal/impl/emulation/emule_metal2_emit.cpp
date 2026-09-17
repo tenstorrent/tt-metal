@@ -5,52 +5,7 @@
 
 #include <algorithm>  // std::sort
 
-#include <tt_stl/assert.hpp>  // TT_FATAL
-
 namespace tt::tt_metal::emule {
-
-Metal2BindingsSnapshot build_metal2_snapshot(const tt::tt_metal::Kernel& kernel) {
-    Metal2BindingsSnapshot s;
-    s.is_metal2 = kernel.is_metal2_kernel();
-    s.runtime_arg_names = kernel.get_runtime_arg_names();
-    s.common_runtime_arg_names = kernel.get_common_runtime_arg_names();
-    kernel.process_dataflow_buffer_binding_handles(
-        [&s](const std::string& name, uint16_t id, bool is_relay, uint8_t prefetcher_pipe_id) {
-            s.dfb_accessors[name] = id;
-            s.dfb_accessor_is_relay[name] = is_relay;
-            s.dfb_accessor_prefetcher_pipe_id[name] = prefetcher_pipe_id;
-        });
-    kernel.process_semaphore_binding_handles(
-        [&s](const std::string& name, uint16_t id, SemScope scope, uint32_t total_binder_harts) {
-            s.sem_accessors[name] = {id, scope, total_binder_harts};
-        });
-    kernel.process_tensor_binding_handles(
-        // Match the genfiles.cpp pattern: drop num_runtime_field_crta_words. Emule's
-        // snapshot doesn't yet model per-binding runtime CRTA words, and the
-        // downstream `named_crta_words` math in emit_metal2_namespaces still assumes
-        // 1 word per binding — so a dynamic-shape kernel would silently get its
-        // CRTAs decoded at the wrong offsets. Static-shape kernels pass
-        // num_rt_words == 0 and are unaffected. Fail loudly on dynamic-shape until
-        // snapshot + cache key + get_common_vararg offset math are wired up to
-        // consume the per-binding count.
-        [&s](const std::string& name, uint32_t cta_off, uint32_t addr_crta_off, uint32_t num_rt_words) {
-            TT_FATAL(
-                num_rt_words == 0,
-                "Emule does not yet support dynamic-shape Metal 2.0 tensor bindings "
-                "(binding '{}' has num_runtime_field_crta_words={}). Wire the per-"
-                "binding word count through Metal2BindingsSnapshot::TaEntry, the "
-                "cache key, and emit_metal2_namespaces' get_common_vararg base "
-                "before enabling this path.",
-                name,
-                num_rt_words);
-            s.ta_accessors.push_back({name, cta_off, addr_crta_off});
-        });
-    kernel.process_scratchpad_binding_handles(
-        [&s](const std::string& name, uint32_t size_bytes, uint32_t addr_crta_word) {
-            s.scratch_accessors.push_back({name, size_bytes, addr_crta_word});
-        });
-    return s;
-}
 
 Metal2BindingsSnapshot snapshot_from_bindings(const tt_emule::Bindings& b) {
     Metal2BindingsSnapshot s;
