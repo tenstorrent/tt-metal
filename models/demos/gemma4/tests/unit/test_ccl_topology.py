@@ -3,6 +3,7 @@
 
 """Host-only tests for Gemma4 CCL topology / async / packet / L1 env knobs."""
 
+import json
 import math
 from pathlib import Path
 
@@ -31,12 +32,21 @@ def test_ccl_topology_env_override(monkeypatch, env, expected):
     assert default_ccl_topology() == expected
 
 
+class _FakeGrid:
+    def __init__(self, x, y):
+        self.x, self.y = x, y
+
+
 class _FakeMesh:
-    def __init__(self, n):
+    def __init__(self, n, grid=(8, 8)):
         self._n = n
+        self._grid = grid
 
     def get_num_devices(self):
         return self._n
+
+    def compute_with_storage_grid_size(self):
+        return _FakeGrid(*self._grid)
 
 
 def test_ccl_topology_linear_on_4_device_mesh(monkeypatch):
@@ -54,10 +64,52 @@ def test_ccl_topology_ring_on_bh_8_device_mesh(monkeypatch):
 
 
 def test_ccl_topology_linear_on_wh_8_device_mesh(monkeypatch):
-    """WH T3K 1x8: keep Linear — Ring regresses 26B-A4B full-model PCC < 0.76."""
+    """WH T3K 1x8 MoE (26B-A4B): keep Linear — Ring regresses full-model PCC < 0.76.
+
+    ``is_moe`` defaults True so a caller that forgets the flag cannot put 26B
+    on Ring. Dense 12B/31B pass ``is_moe=False`` (see create_tt_model).
+    """
     monkeypatch.delenv("GEMMA4_CCL_TOPOLOGY", raising=False)
     monkeypatch.setattr("models.demos.gemma4.tt.ccl.is_blackhole", lambda: False)
     assert default_ccl_topology(_FakeMesh(8)) == ttnn.Topology.Linear
+    assert default_ccl_topology(_FakeMesh(8), is_moe=True) == ttnn.Topology.Linear
+
+
+def test_ccl_topology_ring_on_wh_8_dense(monkeypatch):
+    """WH T3K 1x8 dense (12B/31B): Ring. BH 8-device is Ring regardless of MoE."""
+    monkeypatch.delenv("GEMMA4_CCL_TOPOLOGY", raising=False)
+    monkeypatch.setattr("models.demos.gemma4.tt.ccl.is_blackhole", lambda: False)
+    assert default_ccl_topology(_FakeMesh(8), is_moe=False) == ttnn.Topology.Ring
+    # N150 / N300 dense stay Linear (device count < 8).
+    assert default_ccl_topology(_FakeMesh(1), is_moe=False) == ttnn.Topology.Linear
+    assert default_ccl_topology(_FakeMesh(2), is_moe=False) == ttnn.Topology.Linear
+    monkeypatch.setattr("models.demos.gemma4.tt.ccl.is_blackhole", lambda: True)
+    assert default_ccl_topology(_FakeMesh(8), is_moe=True) == ttnn.Topology.Ring
+    assert default_ccl_topology(_FakeMesh(4), is_moe=False) == ttnn.Topology.Linear
+
+
+def test_bundled_configs_wh_t3k_topology_follows_moe(monkeypatch):
+    """create_tt_model passes enable_moe_block into CCLManager; pin the pairing."""
+    monkeypatch.delenv("GEMMA4_CCL_TOPOLOGY", raising=False)
+    monkeypatch.setattr("models.demos.gemma4.tt.ccl.is_blackhole", lambda: False)
+    root = Path(__file__).resolve().parents[2] / "configs"
+    expected = {
+        "gemma-4-12B-it": (False, ttnn.Topology.Ring),
+        "gemma-4-31B-it": (False, ttnn.Topology.Ring),
+        "gemma-4-26B-A4B-it": (True, ttnn.Topology.Linear),
+        "gemma-4-E2B-it": (False, ttnn.Topology.Ring),
+        "gemma-4-E4B-it": (False, ttnn.Topology.Ring),
+    }
+    t3k = _FakeMesh(8)
+    for name, (want_moe, want_topo) in expected.items():
+        cfg = json.loads((root / name / "config.json").read_text())
+        text = cfg.get("text_config", cfg)
+        is_moe = bool(text.get("enable_moe_block", False))
+        assert is_moe is want_moe, name
+        assert default_ccl_topology(t3k, is_moe=is_moe) == want_topo, name
+        # Smaller WH meshes must not pick up the T3K Ring default.
+        assert default_ccl_topology(_FakeMesh(1), is_moe=is_moe) == ttnn.Topology.Linear, name
+        assert default_ccl_topology(_FakeMesh(2), is_moe=is_moe) == ttnn.Topology.Linear, name
 
 
 def test_ccl_topology_env_override_beats_device_count(monkeypatch):
@@ -232,3 +284,91 @@ def test_weight_cache_path_ro_mount_falls_back_writable(tmp_path, monkeypatch):
     assert "gemma4_tt_cache" in p4.parts
     # Sanity: helper used by resolve path.
     assert mc._ensure_cache_dir(ro_root / "nested").is_dir()
+
+
+def test_wh_t3k_decode_gate_only_full_unharvested_t3k(monkeypatch):
+    """12B/31B swept decode configs must not fire on BH, N150, or harvested WH."""
+    from models.demos.gemma4.tt.dram_sharded import wh_t3k_decode_enabled, wh_t3k_decode_progcfg
+
+    monkeypatch.delenv("GEMMA4_WH_T3K_DECODE_MM", raising=False)
+    monkeypatch.setattr("models.demos.gemma4.tt.dram_sharded.is_blackhole", lambda: False)
+    assert wh_t3k_decode_enabled(_FakeMesh(8, (8, 8))) is True
+    assert wh_t3k_decode_progcfg(_FakeMesh(8), 3840, 1024) is not None
+    assert wh_t3k_decode_progcfg(_FakeMesh(8), 5376, 2048) is not None
+
+    monkeypatch.setattr("models.demos.gemma4.tt.dram_sharded.is_blackhole", lambda: True)
+    assert wh_t3k_decode_enabled(_FakeMesh(8, (8, 8))) is False
+    assert wh_t3k_decode_progcfg(_FakeMesh(8), 3840, 1024) is None
+
+    monkeypatch.setattr("models.demos.gemma4.tt.dram_sharded.is_blackhole", lambda: False)
+    assert wh_t3k_decode_enabled(_FakeMesh(1, (8, 8))) is False  # N150
+    assert wh_t3k_decode_enabled(_FakeMesh(2, (8, 8))) is False  # N300
+    assert wh_t3k_decode_enabled(_FakeMesh(4, (8, 8))) is False
+    assert wh_t3k_decode_enabled(_FakeMesh(8, (8, 7))) is False  # x2-harvested
+    monkeypatch.setenv("GEMMA4_WH_T3K_DECODE_MM", "0")
+    assert wh_t3k_decode_enabled(_FakeMesh(8, (8, 8))) is False
+
+
+def _dense_decode_kn(
+    hidden, heads, kv_heads, head_dim, intermediate, tp, *, global_hd=None, global_kv=None, kv_replicated=False
+):
+    """Per-device (k, n) for the six decode matmuls (qkv / o_proj × slide|global, gate_up, down)."""
+    hd = head_dim
+    q_per = (heads // tp) * hd
+    kv_per = hd if kv_replicated else (kv_heads // tp) * hd
+    qkv = (hidden, q_per + 2 * kv_per)
+    o_proj = (q_per, hidden)
+    gate_up = (hidden, 2 * (intermediate // tp))
+    down = (intermediate // tp, hidden)
+    shapes = {"qkv_slide": qkv, "o_proj_slide": o_proj, "gate_up": gate_up, "down": down}
+    if global_hd is not None:
+        gq = (heads // tp) * global_hd
+        # Fewer KV heads than TP (12B global nkv=1 at TP=8) are replicated.
+        if kv_replicated or global_kv is None or global_kv < tp:
+            gkv = global_hd
+        else:
+            gkv = (global_kv // tp) * global_hd
+        shapes["qkv_global"] = (hidden, gq + 2 * gkv)
+        shapes["o_proj_global"] = (gq, hidden)
+    return shapes
+
+
+def test_wh_t3k_decode_table_hits_only_12b_31b_tp8():
+    """E2B / E4B / 26B-A4B (k,n) at TP 1/2/4/8 must miss the T3K table; 12B/31B TP=8 hit."""
+    from models.demos.gemma4.tt.dram_sharded import _WH_T3K_DECODE_1D
+
+    keys = set(_WH_T3K_DECODE_1D)
+
+    def all_kn(hidden, heads, kv_heads, head_dim, intermediate, **g):
+        out = []
+        for tp in (1, 2, 4, 8):
+            if heads % tp:
+                continue
+            out.extend(_dense_decode_kn(hidden, heads, kv_heads, head_dim, intermediate, tp, **g).values())
+        return out
+
+    other = []
+    other += all_kn(1536, 8, 1, 256, 6144, global_hd=512, global_kv=1, kv_replicated=True)  # E2B
+    other += all_kn(2560, 8, 2, 256, 10240, global_hd=512, global_kv=1)  # E4B
+    other += all_kn(2816, 16, 8, 256, 2112, global_hd=512, global_kv=2)  # 26B-A4B
+    assert not (set(other) & keys), f"non-12B/31B shapes hit T3K table: {set(other) & keys}"
+
+    # 12B TP=8: the six swept shapes. 31B: only sliding qkv was a table win.
+    s12 = _dense_decode_kn(3840, 16, 8, 256, 15360, 8, global_hd=512, global_kv=1)
+    assert s12["qkv_slide"] == (3840, 1024)
+    assert s12["qkv_global"] == (3840, 2048)
+    assert s12["gate_up"] == (3840, 3840)
+    assert s12["down"] == (1920, 3840)
+    assert s12["o_proj_slide"] == (512, 3840)
+    assert s12["o_proj_global"] == (1024, 3840)
+    assert set(s12.values()) <= keys
+
+    s31 = _dense_decode_kn(5376, 32, 16, 256, 21504, 8, global_hd=512, global_kv=4)
+    assert s31["qkv_slide"] == (5376, 2048)
+    assert s31["qkv_slide"] in keys
+    # 31B MLP / o_proj / qkv-global were swept; auto won — must stay absent.
+    assert s31["gate_up"] not in keys
+    assert s31["down"] not in keys
+    assert s31["o_proj_slide"] not in keys
+    assert s31["o_proj_global"] not in keys
+    assert s31["qkv_global"] not in keys

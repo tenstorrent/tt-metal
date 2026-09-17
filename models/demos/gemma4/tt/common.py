@@ -91,7 +91,13 @@ def create_tt_model(
         # num_links=None -> arch default (2 on Blackhole) so the per-layer TP
         # all-reduces (the dominant ~31% of prefill device time) use full
         # inter-device bandwidth.
-        ccl_manager = CCLManager(mesh_device)
+        # is_moe must follow the checkpoint: the CCLManager default is True
+        # and would force Linear on Wormhole T3K even for dense 12B/31B.
+        # 26B-A4B stays Linear — Ring drops its full-model PCC below 0.76.
+        ccl_manager = CCLManager(
+            mesh_device,
+            is_moe=bool(getattr(model_args, "enable_moe_block", False)),
+        )
     else:
         ccl_manager = None
 

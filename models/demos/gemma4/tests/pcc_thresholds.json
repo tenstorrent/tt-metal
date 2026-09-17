@@ -67,7 +67,9 @@
       "test_full_model[blackhole-1x8]": 0.97,
       "test_full_model_decode[blackhole-1x8]": 0.97,
       "_comment_wormhole_gate": "12B had no wormhole_b0 full_model gate, so WH runs fell through to get_pcc_threshold's 0.99 unmeasured default and reported red at every value. Gated at 0.98 -- the same number Gemma4-31B already uses for test_full_model[wormhole_b0-1x8] -- rather than a 12B-specific value.",
-      "test_full_model[wormhole_b0-1x8]": 0.98
+      "test_full_model[wormhole_b0-1x8]": 0.98,
+      "_comment_wormhole_decode": "WH T3K dense models use Ring CCL (create_tt_model used to default is_moe=True and force Linear). Ring changes reduction order; 12B decode measured 0.9884 with matching argmax. Gate below measured so the 0.99 default does not fail a real-weight local run. Prefill full_model stayed 0.997.",
+      "test_full_model_decode[wormhole_b0-1x8]": 0.985
     },
     "1x4": {
       "test_attention_prefill[blackhole-seq1024-global-1x4]": 0.98,
