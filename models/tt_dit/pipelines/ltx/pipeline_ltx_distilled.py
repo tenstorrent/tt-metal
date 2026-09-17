@@ -660,7 +660,11 @@ class LTXDistilledPipeline(LTXPipeline):
         x = ttnn.reshape(x, (1, 1, latent_frames * 2 * s1_h * 2 * s1_w, C))
         x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
         x = ttnn.typecast(x, ttnn.float32)
-        return ttnn.multiply(ttnn.subtract(x, mean_t), ttnn.reciprocal(std_t))  # re-normalize, fp32
+        # Re-normalize with a true division. Multiplying by the reciprocal is off by up to one fp32 ulp from the
+        # host path's (x - mean) / std on a quarter of the elements; enough of those flip a bf16 rounding in the
+        # stage-2 noise mix that the 3-step distilled denoise produced a visibly different (though equally valid)
+        # sample, 36 dB PSNR_Y against the host path. With the division the ring run is bit-identical to it.
+        return ttnn.divide(ttnn.subtract(x, mean_t), std_t)
 
     def _noise_video_latent_device(
         self, tokens_replicated: ttnn.Tensor, video_N_real: int, video_N: int, sigma: float, seed: int, sp_axis: int
