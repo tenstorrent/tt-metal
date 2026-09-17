@@ -13,17 +13,23 @@
 
 namespace ttnn::experimental::prim {
 
+struct DrainCoreMapping {
+    std::vector<ttnn::CoreCoord> logical_core_candidates;
+    std::vector<ttnn::CoreCoord> virtual_cores;
+};
+
+DrainCoreMapping gather_drain_virtual_cores(
+    const Tensor& input_tensor, const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id);
+
 struct AllToAllAsyncGenericParams {
     const uint32_t in_dim;
     const uint32_t out_dim;
-    const uint32_t num_links;
+    const std::optional<uint32_t> num_links;
     const uint32_t num_devices;
     const tt::tt_metal::MemoryConfig output_mem_config;
     const ttnn::ccl::Topology topology;
     const std::optional<tt::tt_metal::SubDeviceId> sub_device_id;
     const std::optional<uint32_t> cluster_axis;
-    const tt::tt_fabric::Topology axis_topology;
-    const bool axis_is_straight;
     const std::vector<tt::tt_metal::CoreCoord> drain_logical_core_candidates;
     const std::vector<tt::tt_metal::CoreCoord> drain_virtual_cores;
 };
