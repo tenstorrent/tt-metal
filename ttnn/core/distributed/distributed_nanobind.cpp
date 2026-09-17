@@ -1215,8 +1215,6 @@ void py_module(nb::module_& mod) {
             auto* ptr = const_cast<std::byte*>(reinterpret_cast<const std::byte*>(data.c_str()));
             const auto size = data.size();
             {
-                // Keep the Python bytes argument alive, but release the GIL while
-                // MPI blocks so another Python thread can use this rank's host relay.
                 nb::gil_scoped_release release;
                 ctx->send(ttsl::Span<std::byte>(ptr, size), Rank(dest), Tag(tag));
             }
