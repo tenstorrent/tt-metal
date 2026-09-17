@@ -29,10 +29,9 @@ void bind_qkv_causal_conv1d_silu(nb::module_& mod) {
             input (ttnn.Tensor): Current tokens ``[1, T, Q+K+V]``. Must be an
                 interleaved ROW_MAJOR BFLOAT16 device tensor.
             history (ttnn.Tensor): Interleaved ROW_MAJOR BFLOAT16 history.
-                With wrap_row=0 its shape is ``[1,3,Q+K+V]``. A nonzero wrap_row
-                requires ``[1,6,Q+K+V]`` even when this device's indicator is zero.
-                Rows 0:3 seed the physical head; rows 3:6 seed the physical tail
-                at an enabled wrap. The caller retains a three-row stream carry.
+                Shape ``[1,3,Q+K+V]``. SP calls supply the predecessor's three-row
+                history separately. The kernel derives when each history is needed
+                from actual_start and its mesh coordinate.
             tap0, tap1, tap2, tap3 (ttnn.Tensor): Per-channel convolution taps.
                 Each must have logical volume ``Q+K+V`` and be an interleaved
                 TILE-layout BFLOAT16 device tensor.
@@ -47,14 +46,11 @@ void bind_qkv_causal_conv1d_silu(nb::module_& mod) {
                 and update its contents before replay of a captured trace.
             sequence_parallel_axis (int, optional): Mesh axis partitioning the
                 sequence. Native mesh coordinates supply each device's rank.
+            predecessor_carry (ttnn.Tensor, optional): Three-row history from the
+                preceding rank, matching history. Required exactly when actual_start
+                is supplied; rejected without it.
             program_config (QkvCausalConv1dSiluProgramConfig): Required program tuning;
                 ``channel_chunk_size`` is expressed in logical channels.
-            wrap_row (int, optional): Tile-aligned row strictly inside T, or
-                zero to disable wrapping. Defaults to zero.
-            wrap_indicator (ttnn.Tensor, optional): Interleaved TILE FLOAT32
-                device tensor whose first scalar controls the local wrap.
-                Nonzero enables wrap_row; zero ignores the second history plane.
-                Without an indicator, a nonzero wrap_row applies unconditionally.
             memory_config (ttnn.MemoryConfig, optional): Interleaved output memory
                 configuration. Defaults to DRAM.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional):
@@ -81,8 +77,7 @@ void bind_qkv_causal_conv1d_silu(nb::module_& mod) {
         nb::arg("v_width"),
         nb::kw_only(),
         nb::arg("program_config").noconvert(),
-        nb::arg("wrap_row") = 0,
-        nb::arg("wrap_indicator") = nb::none(),
+
         nb::arg("memory_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("actual_start") = nb::none(),

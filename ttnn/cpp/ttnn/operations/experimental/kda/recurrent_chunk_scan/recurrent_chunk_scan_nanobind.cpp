@@ -43,16 +43,11 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
                 and update its contents before replay of a captured trace.
             sequence_parallel_axis (int, optional): Mesh axis partitioning the
                 sequence. Native mesh coordinates supply each device's rank.
-            tail_state (ttnn.Tensor, optional): Carry to reload at ``wrap_chunk``,
-                ``[B*H, K, V]`` in FLOAT32. Required when ``wrap_chunk`` is nonzero
-                and ignored otherwise.
-            wrap_indicator (ttnn.Tensor, optional): Per-device scalar tensor;
-                only a device whose local value is nonzero reloads at
-                ``wrap_chunk``. When absent, a nonzero wrap applies to the device.
+            tail_state (ttnn.Tensor, optional): FLOAT32 carry ``[B*H,K,V]``
+                to reload at the locally derived split. Required with actual_start;
+                rejected without it. No input tensor is modified.
             groups_per_head (int, optional): Groups folded into the leading
                 dimension. Defaults to 1.
-            wrap_chunk (int, optional): Local chunk at which the causal stream
-                restarts from ``tail_state``, 0 meaning it never does. Defaults to 0.
             memory_config (ttnn.MemoryConfig, optional): Interleaved output memory
                 configuration. Defaults to DRAM.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional):
@@ -80,9 +75,9 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
         nb::arg("initial_state").noconvert(),
         nb::kw_only(),
         nb::arg("tail_state") = nb::none(),
-        nb::arg("wrap_indicator") = nb::none(),
+
         nb::arg("groups_per_head") = 1,
-        nb::arg("wrap_chunk") = 0,
+
         nb::arg("memory_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("actual_start") = nb::none(),
@@ -129,21 +124,15 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
                 sequence. Native mesh coordinates supply each device's rank.
             groups_per_head (int, optional): Groups folded into the leading
                 dimension. Defaults to 1.
-            wrap_indicator (ttnn.Tensor, optional): Required device-local scalar
-                in segmented mode. Ordinary summaries reject wrap controls.
-            wrap_chunk (int, optional): Strictly interior boundary in the local
-                ``G*N`` chunks. Required and nonzero in segmented mode.
-            emit_tail_summaries (bool, optional): Return an additional ``(A,B)``
-                pair for the post-wrap part of every folded group. Defaults to false.
             memory_config (ttnn.MemoryConfig, optional): Output memory configuration.
                 Defaults to DRAM.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional):
                 Compute-kernel configuration.
 
         Returns:
-            tuple[ttnn.Tensor, ...]: New FLOAT32 TILE-layout tensors
-                ``A[B*H*G,K,K]`` and ``B[B*H*G,K,V]``. Segmented mode additionally
-                returns ``tail_A`` and ``tail_B`` with the same shapes.
+            tuple[ttnn.Tensor, ...]: Without actual_start, two FLOAT32 TILE tensors
+                ``A[B*H*G,K,K]`` and ``B[B*H*G,K,V]``. With actual_start, four
+                BFLOAT16 tensors: head A/B followed by tail A/B, with the same shapes.
 
         Note:
             With ``actual_start``, summaries are packed directly to BFLOAT16 for
@@ -165,10 +154,9 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
         nb::arg("final_decay").noconvert(),
         nb::arg("t_inv").noconvert(),
         nb::kw_only(),
-        nb::arg("wrap_indicator") = nb::none(),
-        nb::arg("wrap_chunk") = 0,
+
         nb::arg("groups_per_head") = 1,
-        nb::arg("emit_tail_summaries") = false,
+
         nb::arg("memory_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("actual_start") = nb::none(),

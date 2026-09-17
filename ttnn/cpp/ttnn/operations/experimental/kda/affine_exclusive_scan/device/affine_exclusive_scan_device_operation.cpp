@@ -86,11 +86,7 @@ void AffineExclusiveScanOperation::validate_on_program_cache_miss(
     TT_FATAL(
         state_shape[0] == attrs.batch_heads && state_shape[1] == attrs.key_dim && state_shape[2] == attrs.value_dim,
         "affine_exclusive_scan: initial_state shape must be [batch_heads, K, V]");
-    TT_FATAL(
-        attrs.segmented == (in.tail_a.has_value() && in.tail_b.has_value() && in.tail_state.has_value() &&
-                            (in.wrap_indicator.has_value() || in.actual_start.has_value())),
-        "affine_exclusive_scan: segmented inputs must be provided together");
-    if (attrs.segmented) {
+    if (in.actual_start.has_value()) {
         for (const auto& [tensor, name] :
              {std::pair{&*in.tail_a, "tail_a"},
               std::pair{&*in.tail_b, "tail_b"},
@@ -102,23 +98,12 @@ void AffineExclusiveScanOperation::validate_on_program_cache_miss(
         kda_factory_detail::check_matching_dtype(in.a, *in.tail_a, operation_name, "a and tail_a");
         kda_factory_detail::check_matching_dtype(in.b, *in.tail_b, operation_name, "b and tail_b");
         kda_factory_detail::check_dtype(*in.tail_state, tt::tt_metal::DataType::FLOAT32, operation_name, "tail_state");
-        if (in.wrap_indicator) {
-            kda_factory_detail::check_dtype(
-                *in.wrap_indicator, tt::tt_metal::DataType::FLOAT32, operation_name, "wrap_indicator");
-            kda_factory_detail::check_allocated_device_tensor(*in.wrap_indicator, operation_name, "wrap_indicator");
-        }
+
         TT_FATAL(in.tail_a->logical_shape() == a_shape, "affine_exclusive_scan: tail_a shape must match a");
         TT_FATAL(in.tail_b->logical_shape() == b_shape, "affine_exclusive_scan: tail_b shape must match b");
         TT_FATAL(
             in.tail_state->logical_shape() == state_shape,
             "affine_exclusive_scan: tail_state shape must match initial_state");
-        TT_FATAL(
-            !in.wrap_indicator || in.wrap_indicator->logical_volume() >= 1,
-            "affine_exclusive_scan: wrap_indicator must contain at least one scalar");
-        TT_FATAL(attrs.wrap_group < attrs.groups_per_head, "affine_exclusive_scan: wrap_group is out of range");
-        TT_FATAL(
-            in.actual_start.has_value() || attrs.wrap_group + static_cast<uint32_t>(attrs.split_in_group) > 0,
-            "affine_exclusive_scan: first tail group must follow at least one head group");
     }
 
     constexpr uint32_t max_coordinate_table_workers = 128;
@@ -153,7 +138,7 @@ AffineExclusiveScanOperation::create_op_performance_model(
 
     const double key_dim = attrs.key_dim;
     const double value_dim = attrs.value_dim;
-    const double reset_transitions = attrs.segmented ? attrs.batch_heads : 0.0;
+    const double reset_transitions = in.actual_start.has_value() ? attrs.batch_heads : 0.0;
     const double transitions =
         static_cast<double>(attrs.batch_heads) * (attrs.groups_per_head - 1.0) + reset_transitions;
     const KdaFpuWork work{
@@ -161,7 +146,7 @@ AffineExclusiveScanOperation::create_op_performance_model(
         .fpu_add_ops = transitions * key_dim * value_dim,
     };
     std::vector<const Tensor*> inputs = {&in.a, &in.b, &in.initial_state};
-    if (attrs.segmented) {
+    if (in.actual_start.has_value()) {
         inputs.insert(inputs.end(), {&*in.tail_a, &*in.tail_b, &*in.tail_state});
     }
     return make_profiler_model(work, inputs, outputs, attrs.compute_kernel_config.math_fidelity);
@@ -175,9 +160,6 @@ Tensor affine_exclusive_scan(
     const std::optional<Tensor>& tail_a,
     const std::optional<Tensor>& tail_b,
     const std::optional<Tensor>& tail_state,
-    const std::optional<Tensor>& wrap_indicator,
-    uint32_t wrap_group,
-    bool split_in_group,
     const tt::tt_metal::MemoryConfig& mem,
     const DeviceComputeKernelConfig& cfg,
     const std::optional<Tensor>& actual_start,
@@ -194,25 +176,16 @@ Tensor affine_exclusive_scan(
         "affine_exclusive_scan: inputs must be rank 3");
     TT_FATAL(shape[0] > 0, "affine_exclusive_scan: leading dimension must be positive");
     TT_FATAL(shape[0] % groups == 0, "affine_exclusive_scan: leading dimension must be divisible by groups_per_head");
-    const bool segmented =
-        tail_a.has_value() || tail_b.has_value() || tail_state.has_value() || wrap_indicator.has_value();
     TT_FATAL(
-        !segmented || (tail_a.has_value() && tail_b.has_value() && tail_state.has_value() &&
-                       (wrap_indicator.has_value() || actual_start.has_value())),
-        "affine_exclusive_scan: tail_a, tail_b, tail_state, and wrap_indicator must be provided together");
-    TT_FATAL(!segmented || wrap_group < groups, "affine_exclusive_scan: wrap_group must be less than groups_per_head");
-    TT_FATAL(
-        !segmented || actual_start.has_value() || wrap_group + static_cast<uint32_t>(split_in_group) > 0,
-        "affine_exclusive_scan: the first tail group must follow at least one head group");
+        actual_start.has_value() == tail_a.has_value() && actual_start.has_value() == tail_b.has_value() &&
+            actual_start.has_value() == tail_state.has_value(),
+        "affine_exclusive_scan: actual_start, tail_a, tail_b, and tail_state must be provided together");
     auto outputs = ::ttnn::device_operation::launch<AffineExclusiveScanOperation>(
         AffineExclusiveScanParams{
             .batch_heads = static_cast<uint32_t>(shape[0]) / groups,
             .groups_per_head = groups,
             .key_dim = static_cast<uint32_t>(shape[1]),
             .value_dim = static_cast<uint32_t>(b.logical_shape()[2]),
-            .wrap_group = wrap_group,
-            .split_in_group = split_in_group,
-            .segmented = segmented,
             .sequence_parallel_axis = sequence_parallel_axis,
             .local_rows = local_rows,
             .output_mem_config = mem,
@@ -224,7 +197,6 @@ Tensor affine_exclusive_scan(
             .tail_a = tail_a,
             .tail_b = tail_b,
             .tail_state = tail_state,
-            .wrap_indicator = wrap_indicator,
             .actual_start = actual_start});
     return outputs[0];
 }

@@ -23,11 +23,6 @@ struct RecurrentChunkScanParams {
     uint32_t value_dim;
     // Groups folded into batch_heads; 1 means ungrouped.
     uint32_t groups_per_head;
-    // Local chunk at which the causal stream restarts; 0 means no wrap.
-    uint32_t wrap_chunk;
-    // SUMMARY mode may additionally publish one tail transform per folded
-    // group. The ordinary two-output contract stays unchanged when false.
-    bool emit_tail_summaries;
     RecurrentChunkScanMode mode;
     uint32_t sequence_parallel_axis;
     tt::tt_metal::MemoryConfig output_mem_config;
@@ -43,13 +38,9 @@ struct RecurrentChunkScanInputs {
     Tensor final_decay;
     Tensor t_inv;
     std::optional<Tensor> initial_state;
-    // Seed for the post-wrap loop on the boundary chip: the prefix's final carry,
-    // already replicated across SP. Absent when there is no wrap.
+    // Seed for the post-wrap loop on the first rank: the prefix's final carry,
+    // already replicated across SP. Required for SP recurrence.
     std::optional<Tensor> tail_state;
-    // Per-device scalar: nonzero only on the rank whose local sequence wraps.
-    // Its value is data, not an operation attribute, so one mesh program can
-    // make a device-local summary limit or recurrent reseed decision.
-    std::optional<Tensor> wrap_indicator;
     std::optional<Tensor> actual_start;
 };
 
