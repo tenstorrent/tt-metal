@@ -13,7 +13,6 @@
 #include <unordered_map>
 #include <vector>
 
-#include "impl/kernels/kernel.hpp"
 #include "emule_metal2_emit.hpp"
 #include "emule_program_descriptor.hpp"  // tt_emule::SourceRef, Named{Ct,Rt}Namespaces
 
