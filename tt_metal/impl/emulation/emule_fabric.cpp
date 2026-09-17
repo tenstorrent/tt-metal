@@ -15,6 +15,7 @@
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include "impl/context/metal_context.hpp"
+#include "llrt/tt_cluster.hpp"  // Cluster (complete type for get_cluster() member access)
 #include "umd/device/chip/sw_emule_chip.hpp"
 #include "tt_emule/chip_store.hpp"
 #include "tt_emule/device.hpp"

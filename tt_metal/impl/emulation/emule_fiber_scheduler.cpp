@@ -5,6 +5,7 @@
 #include "emule_fiber_scheduler.hpp"
 
 #include "tt_emule/cb_sync_state.hpp"  // tt_emule::CBSyncState (sizeof, for the dump)
+#include "emule_noc_bridge.hpp"        // my_x/my_y, my_logical_x_/y_ (silicon-named per-core identity)
 
 #include <ucontext.h>
 #include <sys/mman.h>
@@ -33,15 +34,9 @@
 #include <unordered_map>
 #include <vector>
 
-// Silicon-named per-RISC globals (read by unmodified upstream); defined in
-// emulated_program_runner.cpp. The scheduler restores them on every swap-in
-// since one worker hosts many fibers. See tt-emule docs/fiber-engine.md.
-extern thread_local uint8_t my_x[2];
-extern thread_local uint8_t my_y[2];
-// Blaze-only experimental firmware-global shim (issue #50953) — global-scope,
-// unmangled names required by dlopen(-rdynamic) JIT-kernel symbol resolution.
-extern thread_local uint8_t my_logical_x_;
-extern thread_local uint8_t my_logical_y_;
+// The scheduler restores the silicon-named per-core identity globals (my_x/my_y, my_logical_x_/y_,
+// declared in emule_noc_bridge.hpp) on every swap-in, since one worker hosts many fibers.
+// See docs/fiber-engine.md.
 
 namespace tt::tt_metal::emule_fiber {
 

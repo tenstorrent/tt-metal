@@ -21,7 +21,6 @@
 // tt_emule::DFBSyncState in dfb_sync_state.hpp): it carries the RAW config; the
 // engine derives page_mask, capacity, the atomics, and the tile/face precedence.
 
-#include <array>
 #include <cstdint>
 #include <map>
 #include <string>
@@ -32,9 +31,17 @@ namespace tt_emule {
 
 // ── mirrored enums (kept in lockstep with tt-metal; the marshaller static_casts) ──
 enum class AccessPattern : uint8_t { STRIDED = 0, ALL = 1 };  // DataflowBufferConfig::cap
-enum class SemScope : uint8_t { CORE = 0 /* … mirror tt_metal SemScope … */ };
+enum class SemScope : uint8_t {
+    LOCAL_NONATOMIC = 0,
+    DM_LOCAL_CACHED = 1,
+    EXTERNAL = 2
+};  // mirrors jit_build_settings.hpp
 
 using KernelHandle = uint32_t;
+
+// Mirrors RTA_CRTA_NO_ARGS_SENTINEL (hw/inc/hostdev/rta_constants.h): no (c)rta on a RISC.
+// The default for CoreKernel::{rta,crta}_offset below and the runtime KernelInfo/PendingKernelInfo.
+constexpr uint16_t kRtaCrtaNoArgsSentinel = 0xFFFF;
 
 // ─────────────────────────────── SocView (once per device) ───────────────────────────────
 struct DramView {  // one per metal_SocDescriptor DRAM view
@@ -48,24 +55,18 @@ struct L1Bank {
     uint32_t logical_x = 0, logical_y = 0;  // allocator->get_logical_core_from_bank_id(b)
     uint32_t noc_xy = 0;                    // IDevice::virtual_core_from_logical_core(logical, WORKER)
 };
-struct PctInfo {                           // per programmable-core-type (HAL)
-    uint32_t core_type = 0;                // hal.get_programmable_core_type(pct)
-    uint32_t kernel_config_addr = 0;       // hal.get_dev_addr(pct, KERNEL_CONFIG)
-    uint32_t kernel_config_size = 0;       // hal.get_dev_size(pct, KERNEL_CONFIG)
-    uint32_t default_unreserved_addr = 0;  // hal.get_dev_addr(pct, DEFAULT_UNRESERVED)  (TENSIX dynamic window)
-    uint32_t routing_table_addr = 0;       // hal.get_dev_addr(pct, ROUTING_TABLE)
+struct PctInfo {                      // per programmable-core-type (HAL)
+    uint32_t core_type = 0;           // hal.get_programmable_core_type(pct)
+    uint32_t routing_table_addr = 0;  // hal.get_dev_addr(pct, ROUTING_TABLE)  (TENSIX; program context)
 };
 struct SocView {
     uint32_t arch = 0;                              // Cluster::arch()  -> ARCH_{WORMHOLE,BLACKHOLE,QUASAR}
-    uint32_t fabric_config = 0;                     // MetalContext::get_fabric_config()
     bool fabric_2d = false;                         // is_2d_fabric_config(...)
     std::vector<DramView> dram_views;               // size == get_num_dram_views()
     std::vector<L1Bank> l1_banks;                   // size == allocator->get_num_banks(L1)
-    uint32_t worker_grid_x = 0, worker_grid_y = 0;  // compute_with_storage_grid_size()
-    std::array<uint32_t, 64> worker_col_to_virt{};  // logical col -> virtual x
-    std::array<uint32_t, 64> worker_row_to_virt{};  // logical row -> virtual y
     uint32_t dram_alignment = 0, l1_alignment = 0;  // hal::get_{dram,l1}_alignment()
     uint32_t arch_num_circular_buffers = 0;         // hal.get_arch_num_circular_buffers()
+    uint32_t num_semaphores = 0;                    // NUM_SEMAPHORES (per-core semaphore L1 region count)
     bool has_tile_counter_registers = false;        // hal.has_tile_counter_registers()  (Quasar)
     std::vector<PctInfo> pcts;                      // size == hal.get_programmable_core_type_count()
     uint32_t mesh_id = 0, chip_id = 0;              // ControlPlane::get_fabric_node_id_from_physical_chip_id()
@@ -98,7 +99,7 @@ struct DfbBinding {
 struct SemBinding {
     std::string name;
     uint16_t sem_id = 0;
-    SemScope scope = SemScope::CORE;
+    SemScope scope = SemScope::LOCAL_NONATOMIC;
     uint32_t total_binder_harts = 0;
 };
 struct TensorBinding {
@@ -156,7 +157,7 @@ struct KernelDescriptor {
 struct CoreKernel {
     KernelHandle kernel = 0;
     uint32_t kernel_config_base = 0;                     // KG launch_msg kernel_config()[pct]
-    uint16_t rta_offset = 0xFFFF, crta_offset = 0xFFFF;  // KG rta_offset[processor_index] (0xFFFF = no args)
+    uint16_t rta_offset = kRtaCrtaNoArgsSentinel, crta_offset = kRtaCrtaNoArgsSentinel;  // KG rta_offset[proc_idx]
     std::vector<uint32_t> unique_rt_args;                // Kernel::runtime_args(core)  (empty => common only)
 };
 
@@ -208,22 +209,6 @@ struct SemaphoreDescriptor {
     // per-core coverage lives in CoreDescriptor.semaphore_ids (from initialized_on_logical_core(core)).
 };
 
-// ─────────────────────────────── Kernel groups & launch offsets ───────────────────────────────
-// The one hard read: kernel_config_base[pct] and per-processor rta_offset/crta_offset come
-// from the firmware launch_msg.view().kernel_config() layout — no plain accessor
-// (emulated_program_runner.cpp:2051-2055). The marshaller reads launch_msg directly (it is
-// in-tree, has access). A cleaner accessor is a later concern, not a boundary this POD forces.
-struct ProcLaunchOffset {
-    uint32_t processor_index = 0, rta_offset = 0, crta_offset = 0;
-};
-struct KernelGroupDescriptor {
-    uint32_t pct = 0;                            // programmable-core-type index
-    uint32_t kernel_config_base = 0;             // kc.kernel_config_base()[pct]
-    std::vector<ProcLaunchOffset> proc_offsets;  // kc.rta_offset()[processor_index]
-    std::vector<KernelHandle> kernel_ids;        // KernelGroup::kernel_ids
-    std::vector<CoreRange4> core_ranges;         // KernelGroup::core_ranges
-};
-
 // Per logical core: which CBs/DFBs/semaphores/kernels are live there.
 struct CoreDescriptor {
     uint32_t logical_x = 0, logical_y = 0;
@@ -234,16 +219,14 @@ struct CoreDescriptor {
 };
 
 // ─────────────────────────────── Top level ───────────────────────────────
-struct ProgramConfig {                   // ProgramImpl-level
-    uint64_t program_id = 0;             // get_id()
-    uint32_t context_id = 0;             // get_context_id()
-    std::vector<uint32_t> config_sizes;  // get_program_config_sizes()          (per pct)
-    std::vector<uint32_t> sem_offset;    // get_program_config(pct).sem_offset  (per pct)
+struct ProgramConfig {                 // ProgramImpl-level
+    uint64_t program_id = 0;           // get_id()
+    uint32_t context_id = 0;           // get_context_id()
+    std::vector<uint32_t> sem_offset;  // get_program_config(pct).sem_offset  (per pct)
 };
 
 struct EmuleProgramDescriptor {
     ProgramConfig config;
-    std::vector<KernelGroupDescriptor> kernel_groups;
     std::unordered_map<KernelHandle, KernelDescriptor> kernels;  // union of get_kernels(pct)
     std::vector<KernelHandle> kernel_order;  // get_kernels(pct) order across pcts (collect_kernels drives on it)
     std::vector<CoreDescriptor> cores;                           // logical_cores()

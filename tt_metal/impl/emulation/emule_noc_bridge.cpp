@@ -27,6 +27,11 @@ extern "C" [[noreturn]] void __emule_asan_panic(const char* fmt, ...);
 // read by __emule_multicast_write.
 thread_local uint8_t my_x[NUM_NOCS] = {};
 thread_local uint8_t my_y[NUM_NOCS] = {};
+// Silicon-named per-core LOGICAL coords: a link/fallback anchor (dataflow RISCs resolve the correct
+// per-fiber value via __emule_self->core->logical_*). MUST stay global-scope + unmangled so
+// dlopen(-rdynamic) JIT kernels resolve them against libtt_metal.
+thread_local uint8_t my_logical_x_ = 0;
+thread_local uint8_t my_logical_y_ = 0;
 
 // ===== bridge bodies (verbatim from emulated_program_runner.cpp) =====
 extern "C" uint8_t* __emule_dram_ptr(uint64_t offset) {
