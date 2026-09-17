@@ -2749,7 +2749,11 @@ class UnarySFPUGolden:
 
         match (dst_format, data_format):
             # in the following cases, nans are preserved
+            # The two identity pairs take the packer's identity path, which performs no
+            # conversion; the 32-bit pairs have nothing to narrow.
             case (DataFormat.Float16, DataFormat.Float16):
+                pass
+            case (DataFormat.Float16_b, DataFormat.Float16_b):
                 pass
             case (DataFormat.Float32, DataFormat.Float16):
                 pass
@@ -3195,7 +3199,7 @@ class UnarySFPUGolden:
             .reshape(32, 32)
         )
         tile = self.ops[operation](tile)
-        if tile.is_floating_point() and not nan_survives_to_l1(
+        if tile.is_floating_point() and not pack_keeps_nan(
             input_format, input_format, self.dest_acc
         ):
             # A narrowing store turns a NaN into an infinity of its sign, as in the
