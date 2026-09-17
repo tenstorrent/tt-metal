@@ -233,6 +233,9 @@ private:
     void log_tile_fit(
         const Device& d, const std::vector<TileObs>& obs, const std::vector<double>& x, const TileUnknowns& u) const;
     void stop_links(tt::Cluster& cluster);
+    // The two resident kernels of a link, compiled before either launches; false with the link skipped if one does
+    // not compile.
+    bool launch_link_ends(const CaptureContext::Link& L, uint32_t link_l1, ResidentSync& out);
 
     const ContextId context_id_;
     const EthL1 eth_l1_;
