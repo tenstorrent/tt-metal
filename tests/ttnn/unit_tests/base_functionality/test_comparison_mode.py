@@ -14,8 +14,8 @@ from models.common.utility_functions import torch_random
 
 
 def _compare_torch_tensors(golden, output, *, fail_on_bad_comparison=True):
-    ttnn.decorators.set_tensor_id(golden, force=True)
-    ttnn.decorators.set_tensor_id(output, force=True)
+    ttnn.decorators.set_tensor_id(ttnn.decorators.get_all_tensors(golden), force=True)
+    ttnn.decorators.set_tensor_id(ttnn.decorators.get_all_tensors(output), force=True)
     return ttnn.decorators.compare_tensors_using_pcc(
         "ttnn.test_operation",
         golden,
@@ -264,7 +264,7 @@ def test_moreh_adam_golden_skips_param_and_compares_optimizer_state():
 
     comparison_records = _compare_torch_tensors(
         golden,
-        [torch.full((2,), 100.0), golden[1].clone(), golden[2].clone()],
+        [torch.full((2,), 100.0), golden[1].clone(), golden[2].clone(), None],
     )
 
     comparison_config = golden[0]._ttnn_comparison_config
@@ -652,17 +652,20 @@ def test_quantize_goldens_support_scalar_and_per_channel_args():
     assert torch.equal(requantized, expected)
 
 
-def test_nonzero_golden_packs_count_and_flat_indices_with_masks():
-    input_tensor = torch.tensor([[0.0, 5.0], [0.0, 7.0]])
+def test_nonzero_golden_packs_count_and_flat_indices_with_masks(expect_error):
+    input_tensor = torch.tensor([[[[0.0, 5.0], [0.0, 7.0]]]])
+    golden_function = ttnn.get_golden_function(ttnn.nonzero)
 
-    count, indices = ttnn.get_golden_function(ttnn.nonzero)(input_tensor)
+    count, indices = golden_function(input_tensor)
 
     assert count.shape == (1, 1, 1, 8)
     assert count[0, 0, 0, 0] == 2
     assert count._ttnn_comparison_config.mask.sum() == 1
     assert indices.shape == (1, 1, 1, 16)
-    assert torch.equal(indices[0, 0, 0, :4], torch.tensor([0, 1, 1, 1]))
-    assert indices._ttnn_comparison_config.mask.sum() == 4
+    assert torch.equal(indices[0, 0, 0, :8], torch.tensor([0, 0, 0, 1, 0, 0, 1, 1]))
+    assert indices._ttnn_comparison_config.mask.sum() == 8
+    with expect_error(ValueError, "requires rank-4 input"):
+        golden_function(torch.ones(2, 2))
 
 
 def test_sparse_matmul_golden_zeros_out_inactive_sparse_groups():
@@ -677,7 +680,7 @@ def test_sparse_matmul_golden_zeros_out_inactive_sparse_groups():
 
 
 def test_conv1d_golden_matches_torch_and_return_contracts():
-    input_tensor = torch.arange(8, dtype=torch.float32).reshape(1, 1, 4, 2)
+    input_tensor = torch.arange(4, dtype=torch.float32).reshape(1, 1, 2, 2)
     weight_tensor = torch.randn(3, 2, 2)
     golden_function = ttnn.get_golden_function(ttnn.conv1d)
     call_kwargs = dict(

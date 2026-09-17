@@ -166,10 +166,10 @@ def _golden_function_sparse_matmul(
         expanded_output = dense * mask.unsqueeze(-1).unsqueeze(-1).to(dense.dtype)
     else:
         # Dense-A/sparse-B mode forms every pair from A's batch dims and B's sparse-group dims.
-        m, k, n = a.shape[-2], a.shape[-1], b.shape[-1]
+        k = a.shape[-1]
         a_batch, b_batch = a.shape[:-2], b.shape[:-2]
-        a_exp = a.reshape(*a_batch, *([1] * len(b_batch)), m, k)
-        b_exp = b.reshape(*([1] * len(a_batch)), *b_batch, k, n)
+        a_exp = a.reshape(*a_batch, *([1] * len(b_batch)), a.shape[-2], k)
+        b_exp = b.reshape(*([1] * len(a_batch)), *b_batch, k, b.shape[-1])
         dense = torch.matmul(a_exp, b_exp.to(a.dtype))
         mask = (sparsity != 0).reshape(*a_batch, *b_batch)
         expanded_output = dense * mask.unsqueeze(-1).unsqueeze(-1).to(dense.dtype)

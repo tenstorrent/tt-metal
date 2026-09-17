@@ -303,7 +303,9 @@ def _sdpa_decode_reference(
             window_start = max(0, position - int(sliding_window_size) + 1)
             position_mask[batch_index, :, :, :window_start] = float("-inf")
     if attn_mask is not None:
-        position_mask = position_mask + attn_mask
+        # TTNN decode masks are [batch_or_1, 1, heads, sequence], while torch SDPA expects
+        # [batch_or_1, heads, 1, sequence].
+        position_mask = position_mask + attn_mask.permute(0, 2, 1, 3)
 
     output = _sdpa_reference(
         query,

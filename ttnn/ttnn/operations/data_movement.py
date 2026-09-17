@@ -605,6 +605,9 @@ def _golden_function_nonzero(input_tensor, *_, **__):
     # The op returns (count, indices): count is [1, 1, 1, 8] with the non-zero count at [0, 0, 0, 0],
     # indices is [1, 1, 1, volume * 4] holding one flat (b, n, h, c) 4-tuple per non-zero element.
     # Both outputs are padded to a data-independent upper bound, so only the leading valid region is compared.
+    if input_tensor.ndim != 4:
+        raise ValueError(f"ttnn.nonzero golden requires rank-4 input, got rank {input_tensor.ndim}")
+
     coordinates = torch.nonzero(input_tensor, as_tuple=False)
     num_nonzero = coordinates.shape[0]
 

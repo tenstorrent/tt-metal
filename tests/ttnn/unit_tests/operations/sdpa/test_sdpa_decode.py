@@ -32,6 +32,16 @@ def reset_seeds():
     yield
 
 
+def _reference_sdpa_decode(q, k, v, mask):
+    query = q.permute(1, 2, 0, 3)
+    repeats = query.shape[1] // k.shape[1]
+    key = k.repeat_interleave(repeats, dim=1)
+    value = v.repeat_interleave(repeats, dim=1)
+    return torch.nn.functional.scaled_dot_product_attention(
+        query, key, value, attn_mask=mask.permute(0, 2, 1, 3)
+    ).permute(2, 0, 1, 3)
+
+
 def test_sdpa_decode_golden_preserves_layout_and_batch_positions():
     q = torch.randn(1, 2, 2, 4)
     k = torch.randn(2, 1, 5, 4)
@@ -70,6 +80,44 @@ def test_sdpa_decode_golden_supports_mixed_query_and_cache_dtypes():
     logits[..., 2:] = float("-inf")
     expected = torch.matmul(torch.softmax(logits, dim=-1), value).to(q.dtype).permute(2, 0, 1, 3)
 
+    torch.testing.assert_close(actual, expected)
+
+
+@pytest.mark.parametrize("mask_batch", [1, 2], ids=["broadcast_batch", "full_batch"])
+def test_sdpa_decode_golden_converts_device_mask_layout(mask_batch):
+    q = torch.randn(1, 2, 2, 4)
+    k = torch.randn(2, 1, 5, 4)
+    v = torch.randn(2, 1, 5, 4)
+    mask = torch.zeros(mask_batch, 1, 2, 5)
+    mask[:, :, 0, 3:] = float("-inf")
+    mask[:, :, 1, :2] = float("-inf")
+    golden_function = ttnn.get_golden_function(ttnn.transformer.scaled_dot_product_attention_decode)
+
+    actual = golden_function(q, k, v, is_causal=False, attn_mask=mask)
+
+    expected = _reference_sdpa_decode(q, k, v, mask)
+
+    assert actual.shape == q.shape
+    torch.testing.assert_close(actual, expected)
+
+
+def test_paged_sdpa_decode_golden_forwards_device_layout_mask():
+    q = torch.randn(1, 2, 2, 4)
+    paged_k = torch.randn(4, 1, 2, 4)
+    paged_v = torch.randn(4, 1, 2, 4)
+    page_table = torch.tensor([[0, 1], [2, 3]], dtype=torch.int32)
+    mask = torch.zeros(1, 1, 2, 4)
+    mask[:, :, 0, 2:] = float("-inf")
+    mask[:, :, 1, :2] = float("-inf")
+    golden_function = ttnn.get_golden_function(ttnn.transformer.paged_scaled_dot_product_attention_decode)
+
+    actual = golden_function(q, paged_k, paged_v, page_table, is_causal=False, attn_mask=mask)
+
+    key = paged_k[page_table.long()].permute(0, 2, 1, 3, 4).reshape(2, 1, 4, 4)
+    value = paged_v[page_table.long()].permute(0, 2, 1, 3, 4).reshape(2, 1, 4, 4)
+    expected = _reference_sdpa_decode(q, key, value, mask)
+
+    assert actual.shape == q.shape
     torch.testing.assert_close(actual, expected)
 
 
