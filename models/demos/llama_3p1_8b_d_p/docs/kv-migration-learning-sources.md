@@ -93,7 +93,7 @@ The future Llama runtime must wait for relevant device work before publishing ea
 | Claim | File and anchor |
 |---|---|
 | `migration` uses vendored legacy layer | `engine/src/kv_manager_clients/migration_kv_manager_client.cpp:16-19,154-163` at `9a8c531` |
-| Current main links legacy adapter | `engine/CMakeLists.txt:26-27,55` at `9a8c531` |
+| Reviewed revision links legacy adapter | `engine/CMakeLists.txt:26-27,55` at `9a8c531` |
 | Proposed `kvm` uses `EngineAdapter` | `engine/src/kv_manager_clients/kvm_client.cpp:15-18,63-87` at `7ee35d8` |
 | Proposed native registry key is `kvm` | `engine/src/kv_manager_clients/kvm_client.cpp:578` at `7ee35d8` |
 | Proposed build links `kvm::engine_adapter` | `engine/CMakeLists.txt:41-43,77-90` at `7ee35d8` |
@@ -200,11 +200,11 @@ These results were published through tt-metal revision `4cf42fb`.
 - Task 031 recorded `actual/verified = 0` and closed cleanly at 11:29:34.830.
 - The candidate uses selected packed-cache gather, reorder, explicit masking, and supported stock FP32 SDPA.
 - Production acceptance, reuse, cache immutability, and validation tests remain pending.
-- Task 032 raw synthetic hash characterization completed against the original limits.
+- Tasks 032 through 041 are historical attention evidence. Task 032 recorded misses against the original limits.
 - BF16 source hashes pass 3 of 10 cases. BF8_B source hashes pass 3 of 10 cases.
 - BF8_B exact-cache hashes pass 7 of 10 cases.
 - Worst cache-relative NL2 is about 9.3% at `[224,257)` for both cache dtypes.
-- Raw cancellation-heavy hash accuracy remains unresolved. Diagnosis continues.
+- The original raw hash misses remain historical characterization evidence. No ongoing investigation is claimed.
 - Task 033 stock causal control recorded `actual = 0`, `verified = 0`, and one passing test.
 - All 2,800 Task 033 metric scalars were finite. The device closed cleanly at 11:46:34.296 UTC.
 - Explicit-local-mask and stock-standard-causal paths share the same worst chip 8, row 256.
@@ -270,7 +270,7 @@ These results were published through tt-metal revision `4cf42fb`.
 - Devices closed cleanly at 13:19:12.853 UTC.
 - Attempt 041 supplies final Task 6 acceptance evidence.
 - Original periodic-hash source failures remain characterization evidence.
-- The exact internal numerical cause remains unresolved.
+- The historical evidence did not identify the exact internal numerical cause.
 - Attempt 035 evidence: `evidence/task-6-attention/attempt-035-remaining-permanent-suite/root-verification.txt`.
 - Attempt 037 evidence: `evidence/task-6-attention/attempt-037-pulse-stock-control/root-verification.txt`.
 - Attempt 038 evidence: `evidence/task-6-attention/attempt-038-pulse-k512-contrast/root-verification.txt`.
@@ -279,9 +279,9 @@ These results were published through tt-metal revision `4cf42fb`.
 - Attempt 041 log: `evidence/task-6-attention/attempt-041-final-full-suite/device.log`.
 - Task 7 prepared three decoder files under `tmp/decoder-preparation`.
 - Root copied those exact three files into the canonical tree.
-- The launch contract is open. Device validation is starting.
-- The order is `residual001`, `smoke002`, `full003`, then `Watcher004`.
-- No decoder device result exists yet.
+- At that preparation snapshot, the launch contract was open and device validation had not started.
+- The planned order was `residual001`, `smoke002`, `full003`, then `Watcher004`.
+- Later decoder evidence accepted revision `b18a9763` with the passing `full007` suite and `normal010` recovery smoke.
 - Host decoder parity has maximum absolute difference 1.1920928955078125e-07.
 - This host result validates oracle construction. It does not measure device accuracy.
 - Decoder BF16 output gates are PCC 0.999 and NL2 0.025.
@@ -293,7 +293,7 @@ These results were published through tt-metal revision `4cf42fb`.
 - No threshold was relaxed.
 - Attempt 041 supplies final Task 6 acceptance evidence.
 
-Production K512 passes the final Task 6 suite. Decoder and full-model gates remain open.
+Production K512 and the decoder device suite pass. The documented 2K full-prefill contracts also pass. Raw accumulated-FP32 misses remain characterized.
 
 ### Completed common runtime evidence
 
@@ -304,10 +304,9 @@ Production K512 passes the final Task 6 suite. Decoder and full-model gates rema
 
 ### Not yet proven
 
-- Complete Llama decoder blocks
-- Full Llama prefill model
-- Llama runner registration and device completion waits
-- Llama prefill and SC4 address tables
+- Independent golden acceptance beyond the documented 2K prefill contracts
+- A live 128K device run
+- Decode-side migration and two-slot SC4 cache placement
 - Native client integration in the deployed engine build
 - Real cross-endpoint native KVM movement for Llama
 - Five-Galaxy semantic equivalence
@@ -341,3 +340,24 @@ The automated scan checks sentence length heuristically. It excludes tables, cod
 The manual review checks active voice, stable terminology, one topic per paragraph, and defined project terms.
 
 The scan does not prove formal ASD-STE100 certification.
+
+## Current status and device identifiers — 2026-09-17T18:12:00+00:00
+
+This update supersedes earlier implementation-status lists above. Historical diagnostic evidence remains valid for its stated scope.
+
+- Full-model 2K contracts: e9227f5 and 33846d2. Raw accumulated-FP32 misses remain characterized.
+- Performance through 64K: 4714492b08e31c5cb0835f92dd754c319e5ab244.
+- Live prefill address oracle: c03764692a128557c5736ac95e4640bf56caae17.
+- Shared-runtime live 2K readiness and table checks: 8d051437.
+- Historical startup failure: `evidence/task-10-native-migration/startup-coownership-launch-002/run/source/manager.log`.
+- Recovery completed on all 32 chips, and a fresh health check passed.
+- Corrected IDs let the native manager open 32-device DMK and Mooncake. Startup then stopped on the etcd 3.3.25 v3 API HTTP 404. Native cleanup completed without a reset.
+- Current startup evidence: `evidence/task-10-native-migration/startup-coownership-launch-003/run/source/manager.log`, `run/source/etcd.log` and `recovery-no-reset-001/native-stop-proof.json`.
+- Corrected native startup and native transfer remain pending.
+- Native source: worktrees/migration-native-build-preparation-001/source/kv_manager/src/config/config.cpp:118–132,320–343 accepts uint32 numeric IDs.
+- Native source: src/main.cpp:15 loads configuration before KvManager construction at line25.
+- Native source: device_io/src/dmk_link.cpp:20–28 separates numeric deviceId and64-bit asicUniqueId.
+- Metal source: models/demos/common/prefill/runners/migration.py:248–256,355–359 exports mesh/fabric/ASIC columns.
+- Metal source: tt_metal/distributed/mesh_device.cpp:880–885 gets numeric IDs from device->id().
+- The 128K host table result is `status/migration-capacity/native-source-128k.result.json`: 4,194,304 entries, zero mismatches, 90,150,024 bytes and no device open.
+- Current work is prefill-only. It excludes decode-side migration and SC4 tests. Native cross-endpoint movement remains unproven.

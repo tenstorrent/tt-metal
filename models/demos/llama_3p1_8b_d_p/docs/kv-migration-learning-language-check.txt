@@ -1,9 +1,11 @@
 ASD-STE100 screening artifact
-Source: notes/kv-migration-learning.md
+Source: kv-migration-learning.md
 Descriptive sentences above 25 words: 0
 Numbered procedural steps above 20 words: 0
 HTML parse: PASS
-Internal link targets missing: []
+Internal anchor targets missing: []
+Duplicate HTML ids: []
+Missing publication-local files: []
 Inline SVG pairs: 3 3
 Expandable detail pairs: 24 24
 Source manifest links: 2
@@ -12,29 +14,19 @@ External script tags: False
 External stylesheet tags: False
 
 Manual term review: PASS
-- Prefill chunk means 1,024-token source work unit.
+- Prefill chunk means a 1,024-token source work unit.
 - KV transfer chunk means one 32-token K or V head page.
 - Physical tile means 32 by 32 values.
 - PCC, NL2, pre-O, and post-O have compact definitions.
-- Config identity and physical placement have separate definitions.
-- Native KVM and legacy migration client are distinct.
-- Source and destination slot numbers are example assignments.
-- The guide labels destination slot 1 placement as unimplemented.
-- Historical failures and test-only prototype passes are separate.
-- Passing real-weight gates and unresolved raw hash checks are separate.
-- Stock causal parity bounds one row without claiming a complete cause.
-- Production-to-stock parity and independent model correctness are separate.
-- The mixed-precision terms have explicit tensor and operation scopes.
-- Historical K128 pulse failures and final K512 passes are separate.
-- Final Task 6 acceptance and pending decoder validation are separate.
-- Attempt 037 K128 parity and its failing source gate are separate.
-- Attempts 038 and 041 identify the accepted K512 scope.
-- The bounded host rounding replay is labeled negative, not causal.
-- The exact internal numerical cause remains unresolved.
-- Host oracle parity and device accuracy are separate.
-- Canonical decoder preparation and pending device results are separate.
-- The pulse rounding baseline is not described as a mathematical ceiling.
-- The guide records final Task 6 acceptance evidence.
-- Current, proposed, tested, failed, and pending claims are labeled.
+- The three device identifiers are separate and tied to their APIs.
+- The 128K host-only result is separate from a device run.
+- The 2K accepted contracts are separate from raw FP32 misses.
+- Shared-runtime live 2K readiness and table checks pass at 8d051437.
+- Tasks 032 through 041 are historical attention evidence.
+- Original attention misses remain historical characterization evidence.
+- The legacy migration-client claim is pinned to reviewed revision 9a8c531.
+- Native cross-endpoint transfer remains pending.
+- Current migration work is prefill-only.
+- Decode-side migration and SC4 are outside the current scope.
 
 Limitation: This scan is a heuristic. It is not formal ASD-STE100 certification.

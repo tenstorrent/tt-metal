@@ -13,15 +13,47 @@ It centers on the native `tt-d-gen` KV Manager, called native KVM in this guide.
 
 The target uses five Blackhole Galaxies. One Galaxy runs prefill. Four Galaxies form one SC4 decode system.
 
-The model is Llama 3.1 8B Instruct. The target deployment has two request slots and 2,048 total token positions.
+The model is Llama 3.1 8B Instruct. The first test fixture has two request slots and 2,048 total token positions. Later tests use 4K, 8K, 16K, 32K, 64K and 128K positions.
 
 This page separates verified code, completed tests, proposed wiring, and required integration tests.
 
-The prototype evidence does not change production model code. It does not accept Task 6.
+A component test proves that component only. It does not prove full-model accuracy or a working migration path.
 
 Stock parity compares implementations on identical inputs. It does not replace an independent Hugging Face oracle.
 
 Open the [sources and evidence manifest](kv-migration-learning-sources.md) or the [review report](kv-migration-learning-report.md).
+
+[Current implementation status](#current-implementation-status)
+
+## Current implementation status
+
+Updated 17 September 2026, 18:12 UTC.
+
+- The full 32-layer 2K prefill passed the documented local-layer and final-output contracts for both cache types.
+- Some raw comparisons against accumulated FP32 intermediates still exceed their limits.
+- Full-model execution and performance are published for 4K, 8K, 16K, 32K and 64K. The 128K device run is pending.
+- The live 2K source table and all 65,536 physical pages passed independent address checks. Local packed-byte copy also passed.
+- Native adapter, client, source, bridge and startup host suites pass their recorded CPU cases. Mock peers do not prove native device transfer.
+- Native startup seeded 576 nonzero cache pages and passed exact compute on all 32 chips.
+- A first manager launch used 64-bit ASIC identities in an unsigned 32-bit device-ID setting. Parsing failed before manager construction.
+- Recovery completed on all 32 chips, and a fresh health check passed.
+- Corrected IDs let the native manager open 32-device DMK and Mooncake. Startup then stopped because etcd 3.3.25 returned HTTP 404 for its v3 API. Native cleanup completed without a reset. Startup acceptance and transfer remain pending.
+- Current work is prefill-only. It excludes decode-side migration and SC4 tests.
+- The five-Galaxy path below explains the target system. It does not claim that the complete system passed.
+
+Use the [migration test plan and completion criteria](migration-prefill-tests.md) for current test status and evidence.
+
+### Use the native setup path
+
+The source runner can write its table and local device map to files. Set `PREFILL_MIGRATION_EXPORT_TO_FILE=1` for this path. Supply these files to the native KV Manager.
+
+A build that contains native client revision `7ee35d8` can select the engine client with `kv_manager=kvm`. This source check does not establish the current merge status.
+
+`PREFILL_ENABLE_MIGRATION` alone selects the legacy queue handshake. Do not use that handshake as evidence that the native path works.
+
+The prepared runtime waits for each full chunk to finish on the device. It then sends 32 layer-completion acknowledgements in order.
+
+This first design favors clear completion rules over compute-transfer overlap. Four live 2K chunks produced 128 post-synchronization acknowledgements. Native transfer remains pending.
 
 ## Read the status labels first
 
@@ -238,6 +270,26 @@ The mover does not calculate Llama strides. Table producers own all layout arith
 
 This separation permits different source and destination layouts. It also makes wrong tables a high-risk failure source.
 
+### Keep the three device identifiers separate
+
+One chip can have three identifiers. Each identifier has a different purpose.
+
+| Identifier | Purpose | Source |
+|---|---|---|
+| Numeric UMD device ID | Select the chip that native device I/O opens. | The live mesh or the native cluster device list. |
+| Fabric node ID | Select a logical node in a fabric mesh. | The mesh and its fabric map. |
+| ASIC unique ID | Identify the physical chip. | The hardware identity map. |
+
+The native setting `KV_MANAGER_DEVICE_IDS` accepts unsigned 32-bit device IDs. It does not accept 64-bit ASIC identities.
+
+The exported text map contains three columns: mesh ID, fabric chip ID, and ASIC unique ID. Its third column is not a UMD device ID.
+
+Do not replace the third column with the second column by assumption. Obtain numeric IDs from the live device API. Check that they select the same ASICs.
+
+In the startup test, a wrong ASIC value exceeded the 32-bit limit. Configuration parsing failed before the manager constructed its device I/O.
+
+A correct address table cannot correct a wrong device-selection setting. Test both contracts.
+
 ### Required Llama table contract
 
 The planned Llama tables use 16 named configs. Names and IDs must match on both endpoints.
@@ -248,7 +300,7 @@ Every config describes two slots, 32 layers, 2,048 positions, 32-token pages, an
 
 The prefill table must follow the SP4 and TP8 source packing. The decode table must follow the SC4 cache packing.
 
-The Llama-specific table exporters and cross-layout migration test remain proposed.
+The 2K prefill exporter and independent address checks have passed. Native transfer remains pending. Decode-side validation is outside current work.
 
 Do not publish a concrete NoC address until both table builders exist and a lookup test verifies the address.
 
@@ -333,9 +385,9 @@ The landing report is the destination engine's admission signal. A command submi
 
 Pinned tt-d-gen main `10b66f8` contains native KVM and `EngineAdapter`.
 
-Current inspected main `9a8c531` also contains the native manager and adapter.
+Reviewed tt-d-gen revision `9a8c531` contains the native manager and adapter.
 
-Current main registers `MigrationKvManagerClient` under `migration`. That client uses the vendored legacy migration layer.
+At reviewed tt-d-gen revision `9a8c531`, `MigrationKvManagerClient` is registered under `migration`. That client uses the vendored legacy migration layer.
 
 PR head `7ee35d8` adds `KvmClient`. It registers the native client under `kvm` and links `kvm::engine_adapter`.
 
@@ -410,6 +462,16 @@ They do not equal network traffic. Retries, headers, credits, and transport beha
 A 2,048-token prompt does not migrate all 64 pages under the current tail-replay rule.
 
 Its reusable cap is 2,016 tokens, or 63 pages. The last prompt block remains for decode-side replay.
+
+### Native 128K table check
+
+The host table test passed at 131,072 positions. It checked all 4,194,304 entries for 16 configurations and two slots. No entry differed after export and import. The file has 90,150,024 bytes, or 85.97 MiB. The test did not open a device.
+
+The native manager keeps one full table copy for each configuration. For this source layout, the entries alone use 1 GiB across 16 copies. Startup needs more memory for parsing and indexes. Measure manager startup separately. This host test does not prove live 128K migration.
+
+The native engine keeps a nonempty prompt tail for decode. For prompt length P and block size B, the reusable prefix is floor((P - 1) / B) * B. A full-capacity byte test checks transport only. Generation uses at most C - 64 prompt tokens and 64 output tokens within capacity C.
+
+See status/migration-capacity/MIGRATION_STATUS.md for source references and test limits.
 
 ## Read numerical test results
 
@@ -493,7 +555,7 @@ Attempt 031 recorded `actual/verified = 0`. It closed cleanly at 11:29:34.830.
 
 No threshold was relaxed.
 
-Task 032 completed the raw synthetic hash characterization. The candidate still misses the original hash limits.
+Tasks 032 through 041 below are historical attention evidence. Task 032 recorded misses against the original synthetic hash limits.
 
 BF16 source hashes pass 3 of 10 cases. BF8_B source hashes pass 3 of 10 cases.
 
@@ -501,7 +563,7 @@ BF8_B exact-cache hashes pass 7 of 10 cases.
 
 The worst cache-relative NL2 is about 9.3% for interval `[224,257)` in both cache dtypes.
 
-These cancellation-heavy synthetic checks remain unresolved. Diagnosis continues.
+These original misses remain historical characterization evidence. No ongoing investigation is claimed.
 
 Task 033 compared the explicit local mask with stock standard FP32 causal attention.
 
@@ -659,19 +721,19 @@ This result supplies final Task 6 acceptance evidence.
 
 The original periodic-hash source failures remain characterization evidence.
 
-The bounded host replay remains a negative result. The exact internal numerical cause remains unresolved.
+The bounded host replay was a negative result. It did not identify the exact internal numerical cause.
 
-### Isolated decoder preparation
+### Historical isolated decoder preparation
 
 Task 7 prepared a decoder layer and two test files.
 
 Root copied the exact three prepared files into the canonical tree.
 
-The launch contract is open. Device validation is starting.
+At this preparation snapshot, the launch contract was open and device validation had not started.
 
-The planned order is `residual001`, `smoke002`, `full003`, then `Watcher004`.
+The planned order was `residual001`, `smoke002`, `full003`, then `Watcher004`.
 
-No decoder device result exists yet.
+No decoder device result existed at this historical preparation snapshot.
 
 Host checks passed. The independent host decoder comparison has maximum absolute difference `1.1920928955078125e-07`.
 
@@ -683,11 +745,11 @@ The BF8_B complete-output gates are PCC 0.999 and NL2 0.05.
 
 Prepared tests also cover K/V values, branch isolation, cache preservation, validation, reuse, and memory stability.
 
-The isolated Task 7 preparation is complete. Decoder device validation is starting, with no result yet.
+This preparation record predates the accepted decoder device results; see the current implementation status above.
 
 No active allocation is implied. This guide ran no device commands.
 
-Decoder device validation, full model, runtime wiring, table publication, and migration remain pending.
+At that preparation stage, decoder device validation, full-model validation, runtime wiring, table publication and migration were pending.
 
 ## Required test plan for the worked example
 
@@ -770,11 +832,11 @@ Block-aligned migration keeps the final prompt block on decode. This makes the f
 
 ## Limitations and subtle risks
 
-The production K512 path passes the final Task 6 suite. Decoder and full-model validation remain pending.
+Production K512 attention and the decoder device suite pass. Decoder revision `b18a9763` and direct 32-layer 2K prefill are accepted. Shared-runtime live 2K readiness and table checks pass at `8d051437`. Full-model code and validation are published in `e9227f5`; the roadmap is in `33846d2`. Native cross-endpoint transfer remains pending.
 
-Task 032 raw synthetic hash accuracy remains unresolved. Diagnosis continues.
+Tasks 032 through 041 are historical attention evidence. The original Task 032 misses remain recorded, with no ongoing investigation claim.
 
-Task 033 explains one mask question only. It does not close the broader raw hash diagnosis.
+Historical Task 033 answered one mask question only. It did not explain every original raw hash miss.
 
 Task 034 proves production-to-stock parity on the 20 original cases. It does not prove independent float-source accuracy.
 
@@ -784,13 +846,13 @@ Task 036 fails its last K128 pulse. Task 037 matches K128 stock exactly, but its
 
 Task 038 passes the direct K512 pulse check. Task 041 passes the final K512 suite.
 
-Decoder host parity does not prove decoder device accuracy. Device validation is starting, with no result yet.
+Decoder acceptance includes the passing full007 device suite and normal010 recovery smoke with clean shutdown. Watcher setup and teardown failures remain a documented environment exception; no Watcher-clean result is claimed.
 
 The old ring attention path remains historical failure evidence. The accepted production path uses K512 stock SDPA.
 
-The current Llama runtime and table exporters are incomplete. Native cross-endpoint migration is therefore unproven.
+The prepared runtime, table export and migration-readback paths have host coverage, including 29 passing second-slice tests. Native cross-endpoint device byte-copy and end-to-end generation remain unproven.
 
-The current main serving client named `migration` uses the legacy migration layer. Its name does not imply native KVM.
+At reviewed tt-d-gen revision `9a8c531`, the serving client named `migration` uses the legacy migration layer. Its name does not imply native KVM.
 
 The native manager accepts layout tables as truth. A consistent wrong table can move bytes without an obvious transport error.
 
@@ -866,7 +928,7 @@ The 2,048-position limit includes prompt and generated tokens. Admission must re
 
 This guide follows selected ASD-STE100 Issue 9 writing rules. It uses short sentences, active voice, and defined technical terms.
 
-The review uses the official [ASD-STE100 site](https://www.asd-ste100.org/), [Issue 9 PDF](https://www.asd-ste100.org/assets/files/ASD-STE100_ISSUE9.pdf), and [official explanation](https://www.asd-ste100.org/about_STE.html).
+The review uses the official [ASD-STE100 site](https://www.asd-ste100.org/) and [Issue 9 PDF](https://www.asd-ste100.org/assets/files/ASD-STE100_ISSUE9.pdf). It also uses the [official explanation](https://www.asd-ste100.org/about_STE.html).
 
 The automated sentence scan is only a screening tool. It does not certify formal ASD-STE100 compliance.
 

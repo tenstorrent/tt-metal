@@ -5,20 +5,40 @@
 
 ## Result
 
-The live guide includes final K512 Task 6 evidence and completed isolated decoder preparation.
+The guide includes accepted K512 attention, decoder evidence, documented 2K full-prefill contracts, performance through 64K, and the prefill-only native migration boundary.
 
-Created files:
+Created publication candidates:
 
-- `status/attention-diagnostic.html`
-- `status/kv-migration-learning.html`
-- `status/kv-migration-learning-sources.md`
-- `status/kv-migration-learning-report.md`
-- `notes/kv-migration-learning.md`
-- `notes/kv-migration-learning-sources.md`
-- `evidence/kv-migration-learning/language-check.txt`
-- `notes/kv-migration-learning-report.md`
+- `kv-migration-learning.md`
+- `kv-migration-learning-sources.md`
+- `kv-migration-learning.html`
+- `kv-migration-learning-report.md`
+- `kv-migration-learning-language-check.txt`
 
 No production code, dashboard, index, commit, remote, or branch changed.
+
+
+## Current publication status
+
+The documented 2K local-layer and final-output contracts pass for both cache types.
+
+Shared-runtime live 2K readiness and table checks pass at `8d051437`.
+
+Raw accumulated-FP32 comparisons still include misses. The guide preserves them as characterization evidence.
+
+Full-model execution and performance are published through 64K. The 128K device run is pending.
+
+The 128K host-only native table test passes 4,194,304 entries with zero mismatches. It does not open a device or prove manager startup.
+
+The independent 2K address oracle checks all 65,536 physical pages. Local packed-byte copy also passes.
+
+The first native startup attempt seeded 576 nonzero pages and passed exact compute on 32 chips. Its manager configuration then used 64-bit ASIC identities where unsigned 32-bit device IDs were required.
+
+That parsing failure occurred before manager construction. Recovery completed on all 32 chips, and a fresh health check passed.
+
+Corrected IDs let the native manager open 32-device DMK and Mooncake. Startup then stopped on the etcd 3.3.25 v3 API HTTP 404. Native cleanup completed without a reset. Startup acceptance and cross-endpoint transfer remain pending.
+
+Current migration work is prefill-only. Decode-side migration and SC4 tests are outside this scope.
 
 ## Guide contents
 
@@ -72,7 +92,7 @@ All 1,760 per-chip scalar metrics are finite. Exact cache invariants pass on all
 
 Task 034 passed stock parity. Independent gates were still open at that stage.
 
-Task 032 raw characterization completed. The candidate still misses original synthetic hash limits.
+Historical Task 032 recorded misses against the original synthetic hash limits.
 
 Worst cache-relative NL2 is about 9.3% at `[224,257)` for both cache dtypes.
 
@@ -134,19 +154,19 @@ Devices close cleanly at 13:19:12.853 UTC.
 
 The final suite supplies Task 6 acceptance evidence.
 
-Original periodic-hash source failures remain characterization evidence. The exact internal cause remains unresolved.
+Original periodic-hash source failures remain historical characterization evidence. The exact internal cause was not identified.
 
 Task 7 isolated preparation is complete. Root copied the exact three files into the canonical tree.
 
-The launch contract is open. Device validation is starting in this order: `residual001`, `smoke002`, `full003`, then `Watcher004`.
+At that preparation snapshot, the launch contract was open. The planned order was `residual001`, `smoke002`, `full003`, then `Watcher004`.
 
-No decoder device result exists yet.
+Later evidence accepted decoder revision `b18a9763`. The `full007` suite and `normal010` recovery smoke passed.
 
 Host decoder parity is 1.1920928955078125e-07 maximum absolute difference.
 
 The guide labels this as host oracle parity, not device accuracy.
 
-Current main's `MigrationKvManagerClient` uses the vendored legacy migration layer.
+At reviewed tt-d-gen revision `9a8c531`, `MigrationKvManagerClient` uses the vendored legacy migration layer.
 
 PR head `7ee35d8` adds the native `KvmClient` and registry key `kvm` through `EngineAdapter`.
 
@@ -198,7 +218,7 @@ svg 3 3
 
 ### Language screening
 
-The full command output is in `evidence/kv-migration-learning/language-check.txt`.
+The full command output is in `kv-migration-learning-language-check.txt`.
 
 Output:
 
@@ -236,18 +256,17 @@ Output:
 Command:
 
 ```bash
-wc -l -c notes/kv-migration-learning.md status/kv-migration-learning.html notes/kv-migration-learning-sources.md
+wc -l -c kv-migration-learning.md kv-migration-learning.html kv-migration-learning-sources.md
 ```
 
-Output before final transfer:
+Output:
 
 ```text
-804 39954 notes/kv-migration-learning.md
-577 61805 status/kv-migration-learning.html
-307 20702 notes/kv-migration-learning-sources.md
+  935  48382 kv-migration-learning.md
+  684  71714 kv-migration-learning.html
+  363  25506 kv-migration-learning-sources.md
+ 1982 145602 total
 ```
-
-The final Markdown and HTML sizes appear in the transfer evidence.
 
 ## Evidence boundaries
 
@@ -257,17 +276,17 @@ Completed module results came from the task's recorded tt-metal evidence through
 
 The native manager source defines completion ordering. This work did not prove that ordering on five Galaxies.
 
-The Llama-specific prefill and decode table exporters remain pending.
+The Llama prefill exporter and independent address oracle pass at 2K. Decode-side table validation remains pending.
 
 The pinned Llama decode entry has no `kv_migration_spec` hook.
 
 No verified two-slot decode stride or destination NoC address exists yet.
 
-Production K512 passes the final Task 6 suite. Decoder and full-model validation remain pending.
+Production K512 attention and the decoder device suite pass. The documented 2K full-prefill contracts also pass.
 
-The old ring path still fails. Raw synthetic hash accuracy remains unresolved.
+The old ring path and original raw synthetic hash misses remain historical evidence. No ongoing investigation is claimed.
 
-Task 033 does not explain all raw hash failures. Attention remained unaccepted at that stage.
+Historical Task 033 did not explain every original raw hash miss. Attention remained unaccepted at that stage.
 
 Task 034 proves stock parity on identical inputs. It does not replace independent float-source or model gates.
 
@@ -279,9 +298,9 @@ Task 038 passes the direct K512 pulse contrast. Task 041 passes the final K512 s
 
 Original periodic-hash limitations remain characterization evidence.
 
-Decoder device validation is starting. No result exists yet.
+Decoder revision `b18a9763`, the `full007` suite and the `normal010` recovery smoke are accepted evidence.
 
-The Llama full model, runtime integration, native cross-endpoint movement, and semantic decode comparison remain pending.
+Native cross-endpoint movement, decode-side migration, SC4 placement and five-Galaxy semantic comparison remain pending.
 
 Chrome was unavailable in the documentation agent environment. Static HTML parsing and structure checks passed.
 
@@ -302,7 +321,7 @@ The parent reviewer must perform the final visual review before linking the page
 - The manifest includes direct pinned links for request planning, barriers, the PR client, and Blaze layout sources.
 - The evidence now includes verified Task 030 and Task 031 prototype results.
 - Historical ring failures remain separate from the passing test-only candidate.
-- Task 032 keeps unresolved raw synthetic hash accuracy visible.
+- Tasks 032 through 041 remain labeled as historical attention evidence, with the original misses retained.
 - Task 033 records the narrow stock-causal parity result without claiming a complete cause.
 - Task 034 records all 20 passing production-to-stock parity cases.
 - The guide now explains mixed precision and reference-scale effects on NL2.
@@ -310,7 +329,10 @@ The parent reviewer must perform the final visual review before linking the page
 - Pulse conditioning is labeled a baseline, not a ceiling or full explanation.
 - Attempts 036 and 037 preserve the historical K128 source PCC failure.
 - Attempts 038 and 041 record the passing K512 path.
-- Decoder preparation is canonical, while device validation has no result yet.
+- Decoder preparation is historical; later `full007` and `normal010` device evidence is accepted.
+- Current migration work is prefill-only; native transfer, decode-side migration and SC4 validation remain pending.
+- The three device-ID namespaces are separate and tied to their actual APIs.
+- The 128K table-size claims are limited to the pinned host-only export/import result.
 
 ## Final hashes
 
@@ -320,4 +342,4 @@ The report cannot embed its own stable hash because that value would change the 
 
 ## Root review
 
-Root checked the pinned request-planning, tail-replay, device-barrier, device-session and drain-completion source paths. Browser review verified the page layout and found one clipped timeline label, now corrected. Root required explicit failing Task6 evidence and separation from published module results. Native Llama migration remains an integration gate.
+Root checked the pinned request-planning, tail-replay, device-barrier, device-session and drain-completion source paths. Browser review verified the page layout and found one clipped timeline label, now corrected. Root required explicit failing Task6 evidence and separation from published module results. Native cross-endpoint Llama migration remains an integration gate.

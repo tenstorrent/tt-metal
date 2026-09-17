@@ -12,8 +12,9 @@ a{color:#8fdcff} code{background:#071923;border:1px solid #244858;border-radius:
 .layout{display:grid;grid-template-columns:290px minmax(0,1fr);max-width:1500px;margin:auto} aside{height:100vh;position:sticky;top:0;padding:24px 20px;border-right:1px solid var(--line);background:#081722ee;overflow:auto} aside h2{font-size:1rem;margin:0 0 12px;color:var(--teal)} aside a{display:block;text-decoration:none;color:var(--muted);padding:5px 8px;border-left:2px solid transparent} aside a:hover{color:white;border-left-color:var(--teal)} .nav-1{font-weight:750} .nav-2{font-size:.86rem} main{max-width:1060px;padding:38px 52px 100px} h1{font-size:clamp(2.1rem,5vw,4.4rem);line-height:1.02;letter-spacing:-.04em;margin:0 0 1.2rem;background:linear-gradient(100deg,#fff,#73e8db 55%,#79adff);-webkit-background-clip:text;color:transparent} h2{margin-top:3.4rem;padding-top:1rem;border-top:1px solid var(--line);font-size:1.8rem} h3{margin-top:2rem;color:#b4e8ff} p{max-width:82ch} blockquote{border-left:4px solid var(--gold);background:#162534;padding:12px 18px;margin:1.2rem 0;color:#ffe7ad} details{margin:1rem 0;border:1px solid var(--line);border-radius:12px;background:#0a1b26} summary{cursor:pointer;padding:12px 16px;color:#b4e8ff;font-weight:750;font-size:1.06rem} .detail-body{padding:0 16px 12px} .table-wrap{overflow:auto;border:1px solid var(--line);border-radius:12px;margin:1.2rem 0} table{border-collapse:collapse;width:100%;background:#0b1d29} th{text-align:left;background:#153343;color:#d8fbf5} th,td{padding:10px 12px;border-bottom:1px solid var(--line);vertical-align:top} tr:last-child td{border-bottom:0} li{margin:.25rem 0} .diagram{margin:2.4rem 0;padding:12px;background:linear-gradient(145deg,#0d2431,#0a1924);border:1px solid var(--line);border-radius:16px;box-shadow:0 14px 35px #0006} .diagram svg{width:100%;height:auto} figcaption{color:var(--muted);padding:8px 10px 2px} svg text{fill:var(--text);font:700 18px system-ui} svg .small{font-size:14px;fill:var(--muted);font-weight:500} svg .label,svg .tick{font-size:13px;fill:#c7dce0;font-weight:600} svg .box{stroke-width:2} svg .front{fill:#182e3a;stroke:#6d98aa} svg .prefill{fill:#123a38;stroke:var(--teal)} svg .kvm{fill:#25304c;stroke:var(--blue)} svg .decode{fill:#3b3020;stroke:var(--gold)} svg .flow{stroke:var(--teal);stroke-width:4;fill:none;marker-end:url(#arrow)} svg .return{stroke:var(--gold);stroke-width:3;fill:none;marker-end:url(#arrow)} svg .axis,svg .lane line{stroke:#537080;stroke-width:2} svg .phase{stroke-width:2} svg .a{fill:#123a38;stroke:var(--teal)} svg .b{fill:#3b3020;stroke:var(--gold)} svg .c{fill:#25304c;stroke:var(--blue)} svg .move{stroke:var(--teal);stroke-width:5} svg .replay{stroke:var(--gold);stroke-width:5} svg .seq{stroke:var(--blue);stroke-width:3;marker-end:url(#arrow)} svg .lane line{stroke-dasharray:5 6} svg .ready{fill:#123a38;stroke:var(--ok)} .toolbar{display:flex;gap:8px;flex-wrap:wrap;margin:16px 0} button{border:1px solid var(--line);color:var(--text);background:#102733;padding:7px 11px;border-radius:8px;cursor:pointer} .scope{border:1px solid #6b5a31;background:#2b2519;padding:14px 18px;border-radius:12px;color:#ffe8b1} .toplink{display:none;position:fixed;right:20px;bottom:20px;background:#173c48;padding:8px 12px;border-radius:20px;text-decoration:none}
 @media(max-width:900px){.layout{display:block}aside{position:relative;height:auto;border-right:0;border-bottom:1px solid var(--line);max-height:290px}main{padding:30px 20px 80px}.toplink{display:block}}
 @media print{aside,.toolbar,.toplink{display:none}.layout{display:block}main{max-width:none;padding:0}body{background:white;color:#111}a{color:#145}code,pre,table{color:#111;background:#f5f5f5}h1{color:#111}}
-</style></head><body><div class="layout"><aside><h2>Guide navigation</h2><a class="nav-1" href="#llama-3-1-8b-prefill-and-native-kv-migration">Llama 3.1 8B prefill and native KV migration</a>
+</style></head><body><nav style="padding:16px 24px"><a href="migration-prefill-tests.md">Current prefill-only migration test plan and completion criteria</a></nav><div class="layout"><aside><h2>Guide navigation</h2><a class="nav-1" href="#llama-3-1-8b-prefill-and-native-kv-migration">Llama 3.1 8B prefill and native KV migration</a>
 <a class="nav-2" href="#purpose">Purpose</a>
+<a class="nav-2" href="#current-implementation-status">Current implementation status</a>
 <a class="nav-2" href="#read-the-status-labels-first">Read the status labels first</a>
 <a class="nav-2" href="#system-map">System map</a>
 <a class="nav-2" href="#worked-example-1-033-prompt-tokens-and-16-output-tokens">Worked example: 1,033 prompt tokens and 16 output tokens</a>
@@ -33,17 +34,41 @@ a{color:#8fdcff} code{background:#071923;border:1px solid #244858;border-radius:
 <a class="nav-2" href="#debugging-checklist">Debugging checklist</a>
 <a class="nav-2" href="#questions-and-exercises">Questions and exercises</a>
 <a class="nav-2" href="#glossary">Glossary</a>
-<a class="nav-2" href="#language-and-review-method">Language and review method</a></aside><main><div class="scope"><strong>Production K512 attention passed the final Task 6 suite.</strong> All 32 real-weight and token-stream cases pass unchanged gates. Full-model native migration across five Galaxies remains pending.</div><div class="toolbar"><button onclick="document.querySelectorAll('details').forEach(x=>x.open=true)">Expand details</button><button onclick="window.print()">Print guide</button></div><h1 id="llama-3-1-8b-prefill-and-native-kv-migration">Llama 3.1 8B prefill and native KV migration</h1>
+<a class="nav-2" href="#language-and-review-method">Language and review method</a></aside><main><div class="scope"><strong>Direct 2K prefill passed in both cache types.</strong> Six canonical cases and all 39,168 local layer/cache checks passed. Full-model execution and performance are published through 64K. The 128K device run and native transfer remain pending. Current migration work is prefill-only.</div><div class="toolbar"><button onclick="document.querySelectorAll('details').forEach(x=>x.open=true)">Expand details</button><button onclick="window.print()">Print guide</button></div><h1 id="llama-3-1-8b-prefill-and-native-kv-migration">Llama 3.1 8B prefill and native KV migration</h1>
 <h2 id="purpose">Purpose</h2>
 <p>This guide explains one disaggregated Llama 3.1 8B request from input text to streamed output.</p>
 <blockquote><strong>Production K512 attention passed the final Task 6 suite.</strong> All 32 real-weight and token-stream cases pass unchanged gates.</blockquote>
 <p>It centers on the native <code>tt-d-gen</code> KV Manager, called native KVM in this guide.</p>
 <p>The target uses five Blackhole Galaxies. One Galaxy runs prefill. Four Galaxies form one SC4 decode system.</p>
-<p>The model is Llama 3.1 8B Instruct. The target deployment has two request slots and 2,048 total token positions.</p>
+<p>The model is Llama 3.1 8B Instruct. The first test fixture has two request slots and 2,048 total token positions. Later tests use 4K, 8K, 16K, 32K, 64K and 128K positions.</p>
 <p>This page separates verified code, completed tests, proposed wiring, and required integration tests.</p>
-<p>The prototype evidence does not change production model code. It does not accept Task 6.</p>
+<p>A component test proves that component only. It does not prove full-model accuracy or a working migration path.</p>
 <p>Stock parity compares implementations on identical inputs. It does not replace an independent Hugging Face oracle.</p>
 <p>Open the <a href="kv-migration-learning-sources.md">sources and evidence manifest</a> or the <a href="kv-migration-learning-report.md">review report</a>.</p>
+<section id="current-implementation-status">
+<h2>Current implementation status</h2>
+<p>Updated 17 September 2026, 18:12 UTC.</p>
+<ul>
+<li>The full 32-layer 2K prefill passed the documented local-layer and final-output contracts for both cache types.</li>
+<li>Some raw comparisons against accumulated FP32 intermediates still exceed their limits.</li>
+<li>Full-model execution and performance are published for 4K, 8K, 16K, 32K and 64K. The 128K device run is pending.</li>
+<li>The live 2K source table and all 65,536 physical pages passed independent address checks. Local packed-byte copy also passed.</li>
+<li>Native adapter, client, source, bridge and startup host suites pass their recorded CPU cases. Mock peers do not prove native device transfer.</li>
+<li>Native startup seeded 576 nonzero cache pages and passed exact compute on all 32 chips.</li>
+<li>A first manager launch used 64-bit ASIC identities in an unsigned 32-bit device-ID setting. Parsing failed before manager construction.</li>
+<li>Recovery completed on all 32 chips, and a fresh health check passed.</li>
+<li>Corrected IDs let the native manager open 32-device DMK and Mooncake. Startup then stopped because etcd 3.3.25 returned HTTP 404 for its v3 API. Native cleanup completed without a reset. Startup acceptance and transfer remain pending.</li>
+<li>Current work is prefill-only. It excludes decode-side migration and SC4 tests.</li>
+<li>The five-Galaxy path below explains the target system. It does not claim that the complete system passed.</li>
+</ul>
+<p>Use the <a href="migration-prefill-tests.md">live migration test guide</a> for current test status and evidence.</p>
+<h3>Use the native setup path</h3>
+<p>The source runner can write its table and local device map to files. Set <code>PREFILL_MIGRATION_EXPORT_TO_FILE=1</code> for this path. Supply these files to the native KV Manager.</p>
+<p>A build that contains native client revision <code>7ee35d8</code> can select the engine client with <code>kv_manager=kvm</code>. This source check does not establish the current merge status.</p>
+<p><code>PREFILL_ENABLE_MIGRATION</code> alone selects the legacy queue handshake. Do not use that handshake as evidence that the native path works.</p>
+<p>The prepared runtime waits for each full chunk to finish on the device. It then sends 32 layer-completion acknowledgements in order.</p>
+<p>This first design favors clear completion rules over compute-transfer overlap. Four live 2K chunks produced 128 post-synchronization acknowledgements. Native transfer remains pending.</p>
+</section>
 <h2 id="read-the-status-labels-first">Read the status labels first</h2>
 <div class="table-wrap"><table>
 <tr><th>Label</th><th>Meaning</th></tr>
@@ -187,12 +212,47 @@ a{color:#8fdcff} code{background:#071923;border:1px solid #244858;border-radius:
 <p>Each lookup returns a device group, encoded DRAM address, byte size, and 32-token position bounds.</p>
 <p>The mover does not calculate Llama strides. Table producers own all layout arithmetic.</p>
 <p>This separation permits different source and destination layouts. It also makes wrong tables a high-risk failure source.</p>
+<section id="device-identifiers">
+<h3>Keep the three device identifiers separate</h3>
+<p>One chip can have three identifiers. Each identifier has a different purpose.</p>
+<table>
+<thead>
+<tr>
+  <th>Identifier</th>
+  <th>Purpose</th>
+  <th>Source</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td>Numeric UMD device ID</td>
+  <td>Select the chip that native device I/O opens.</td>
+  <td>The live mesh or the native cluster device list.</td>
+</tr>
+<tr>
+  <td>Fabric node ID</td>
+  <td>Select a logical node in a fabric mesh.</td>
+  <td>The mesh and its fabric map.</td>
+</tr>
+<tr>
+  <td>ASIC unique ID</td>
+  <td>Identify the physical chip.</td>
+  <td>The hardware identity map.</td>
+</tr>
+</tbody>
+</table>
+<p>The native setting <code>KV_MANAGER_DEVICE_IDS</code> accepts unsigned 32-bit device IDs. It does not accept 64-bit ASIC identities.</p>
+<p>The exported text map contains three columns: mesh ID, fabric chip ID, and ASIC unique ID. Its third column is not a UMD device ID.</p>
+<p>Do not replace the third column with the second column by assumption. Obtain numeric IDs from the live device API. Check that they select the same ASICs.</p>
+<p>In the startup test, a wrong ASIC value exceeded the 32-bit limit. Configuration parsing failed before the manager constructed its device I/O.</p>
+<p>A correct address table cannot correct a wrong device-selection setting. Test both contracts.</p>
+</section>
 <details><summary id="required-llama-table-contract">Required Llama table contract</summary><div class="detail-body">
 <p>The planned Llama tables use 16 named configs. Names and IDs must match on both endpoints.</p>
 <p>The planned order is K heads 0 through 7, followed by V heads 0 through 7.</p>
 <p>Every config describes two slots, 32 layers, 2,048 positions, 32-token pages, and 4,352-byte BF8_B pages.</p>
 <p>The prefill table must follow the SP4 and TP8 source packing. The decode table must follow the SC4 cache packing.</p>
-<p>The Llama-specific table exporters and cross-layout migration test remain proposed.</p>
+<p>The 2K prefill exporter and independent address checks have passed. Native transfer remains pending. Decode-side validation is outside current work.</p>
 <p>Do not publish a concrete NoC address until both table builders exist and a lookup test verifies the address.</p>
 </div></details><h2 id="source-to-destination-layout-map">Source-to-destination layout map</h2>
 <p>Source and destination tables share each config identity. They do not share physical placement.</p>
@@ -261,8 +321,8 @@ a{color:#8fdcff} code{background:#071923;border:1px solid #244858;border-radius:
 <p>The landing report is the destination engine's admission signal. A command submission or source ACK is insufficient.</p>
 <details><summary id="current-implementation-boundary">Current implementation boundary</summary><div class="detail-body">
 <p>Pinned tt-d-gen main <code>10b66f8</code> contains native KVM and <code>EngineAdapter</code>.</p>
-<p>Current inspected main <code>9a8c531</code> also contains the native manager and adapter.</p>
-<p>Current main registers <code>MigrationKvManagerClient</code> under <code>migration</code>. That client uses the vendored legacy migration layer.</p>
+<p>Reviewed tt-d-gen revision <code>9a8c531</code> contains the native manager and adapter.</p>
+<p>At reviewed tt-d-gen revision <code>9a8c531</code>, <code>MigrationKvManagerClient</code> is registered under <code>migration</code>. That client uses the vendored legacy migration layer.</p>
 <p>PR head <code>7ee35d8</code> adds <code>KvmClient</code>. It registers the native client under <code>kvm</code> and links <code>kvm::engine_adapter</code>.</p>
 <p>The present PR state was not available through authenticated API access during this review.</p>
 <p>Do not infer merge state from these revisions. Use the deployed build's registry and CMake output.</p>
@@ -300,6 +360,13 @@ a{color:#8fdcff} code{background:#071923;border:1px solid #244858;border-radius:
 <p>They do not equal network traffic. Retries, headers, credits, and transport behavior can change network bytes.</p>
 <p>A 2,048-token prompt does not migrate all 64 pages under the current tail-replay rule.</p>
 <p>Its reusable cap is 2,016 tokens, or 63 pages. The last prompt block remains for decode-side replay.</p>
+<section id="native-long-context-table-status">
+<h3>Native 128K table check</h3>
+<p>The host table test passed at 131,072 positions. It checked all 4,194,304 entries for 16 configurations and two slots. No entry differed after export and import. The file has 90,150,024 bytes, or 85.97 MiB. The test did not open a device.</p>
+<p>The native manager currently keeps one full table copy for each configuration. For this source layout, the entries alone use 1 GiB across 16 copies. Startup needs more memory for parsing and indexes. Measure manager startup separately. The host table test does not prove that live 128K migration works.</p>
+<p>The native engine keeps a nonempty prompt tail for decode. For prompt length P and block size B, the reusable prefix is floor((P − 1) / B) × B. A full-capacity byte test checks transport only. A generation test uses at most C − 64 prompt tokens and 64 output tokens within capacity C.</p>
+<p>The source audit is recorded in <code>status/migration-capacity/MIGRATION_STATUS.md</code>. The measured table result is recorded in <code>status/migration-capacity/native-source-128k.result.json</code>.</p>
+</section>
 <h2 id="read-numerical-test-results">Read numerical test results</h2>
 <p>PCC compares correlation between actual and reference values. A high PCC can hide scale error.</p>
 <p>NL2 is <code>norm(actual - reference) / norm(reference)</code>. Lower values indicate smaller relative error.</p>
@@ -359,11 +426,11 @@ a{color:#8fdcff} code{background:#071923;border:1px solid #244858;border-radius:
 <p>Exact cache gather, order, masks, and padded-zero checks passed on all 32 chips.</p>
 <p>Attempt 031 recorded <code>actual/verified = 0</code>. It closed cleanly at 11:29:34.830.</p>
 <p>No threshold was relaxed.</p>
-<p>Task 032 completed the raw synthetic hash characterization. The candidate still misses the original hash limits.</p>
+<p>Tasks 032 through 041 below are historical attention evidence. Task 032 recorded misses against the original synthetic hash limits.</p>
 <p>BF16 source hashes pass 3 of 10 cases. BF8_B source hashes pass 3 of 10 cases.</p>
 <p>BF8_B exact-cache hashes pass 7 of 10 cases.</p>
 <p>The worst cache-relative NL2 is about 9.3% for interval <code>[224,257)</code> in both cache dtypes.</p>
-<p>These cancellation-heavy synthetic checks remain unresolved. Diagnosis continues.</p>
+<p>These original misses remain historical characterization evidence. No ongoing investigation is claimed.</p>
 <p>Task 033 compared the explicit local mask with stock standard FP32 causal attention.</p>
 <p>Both paths have the same worst result on chip 8, row 256.</p>
 <div class="table-wrap"><table>
@@ -457,21 +524,21 @@ a{color:#8fdcff} code{background:#071923;border:1px solid #244858;border-radius:
 <p>Devices closed cleanly at 13:19:12.853 UTC.</p>
 <p>This result supplies final Task 6 acceptance evidence.</p>
 <p>The original periodic-hash source failures remain characterization evidence.</p>
-<p>The bounded host replay remains a negative result. The exact internal numerical cause remains unresolved.</p>
-</div></details><details><summary id="isolated-decoder-preparation">Isolated decoder preparation</summary><div class="detail-body">
+<p>The bounded host replay was a negative result. It did not identify the exact internal numerical cause.</p>
+</div></details><details><summary id="isolated-decoder-preparation">Historical isolated decoder preparation</summary><div class="detail-body">
 <p>Task 7 prepared a decoder layer and two test files.</p>
 <p>Root copied the exact three prepared files into the canonical tree.</p>
-<p>The launch contract is open. Device validation is starting.</p>
-<p>The planned order is <code>residual001</code>, <code>smoke002</code>, <code>full003</code>, then <code>Watcher004</code>.</p>
-<p>No decoder device result exists yet.</p>
+<p>At this preparation snapshot, the launch contract was open and device validation had not started.</p>
+<p>The planned order was <code>residual001</code>, <code>smoke002</code>, <code>full003</code>, then <code>Watcher004</code>.</p>
+<p>No decoder device result existed at this historical preparation snapshot.</p>
 <p>Host checks passed. The independent host decoder comparison has maximum absolute difference <code>1.1920928955078125e-07</code>.</p>
 <p>This value proves host oracle parity only. It is not a device-accuracy result.</p>
 <p>The frozen complete-output gates are PCC 0.999 and NL2 0.025 for BF16 cache.</p>
 <p>The BF8_B complete-output gates are PCC 0.999 and NL2 0.05.</p>
 <p>Prepared tests also cover K/V values, branch isolation, cache preservation, validation, reuse, and memory stability.</p>
-<p>The isolated Task 7 preparation is complete. Decoder device validation is starting, with no result yet.</p>
+<p>This preparation record predates the accepted decoder device results; see the current implementation status above.</p>
 <p>No active allocation is implied. This guide ran no device commands.</p>
-<p>Decoder device validation, full model, runtime wiring, table publication, and migration remain pending.</p>
+<p>At that preparation stage, decoder device validation, full-model validation, runtime wiring, table publication and migration were pending.</p>
 </div></details><h2 id="required-test-plan-for-the-worked-example">Required test plan for the worked example</h2>
 <details><summary id="gate-1-device-free-request-plan">Gate 1: device-free request plan</summary><div class="detail-body">
 <ol>
@@ -538,17 +605,17 @@ a{color:#8fdcff} code{background:#071923;border:1px solid #244858;border-radius:
 <p>GQA reduces transfer payload because eight K/V heads serve 32 query heads.</p>
 <p>Block-aligned migration keeps the final prompt block on decode. This makes the first-token rule explicit.</p>
 <h2 id="limitations-and-subtle-risks">Limitations and subtle risks</h2>
-<p>The production K512 path passes the final Task 6 suite. Decoder and full-model validation remain pending.</p>
-<p>Task 032 raw synthetic hash accuracy remains unresolved. Diagnosis continues.</p>
-<p>Task 033 explains one mask question only. It does not close the broader raw hash diagnosis.</p>
+<p>Attention, the decoder and direct 32-layer 2K prefill are accepted. Shared-runtime live 2K readiness and table checks pass at <code>8d051437</code>. The full-model implementation and report are published in <code>e9227f5</code>; the roadmap is in <code>33846d2</code>. The tests preserve raw accumulated differences as historical characterization. Native cross-endpoint transfer remains pending.</p>
+<p>Tasks 032 through 041 are historical attention evidence. The original Task 032 misses remain recorded, with no ongoing investigation claim.</p>
+<p>Historical Task 033 answered one mask question only. It did not explain every original raw hash miss.</p>
 <p>Task 034 proves production-to-stock parity on the 20 original cases. It does not prove independent float-source accuracy.</p>
 <p>Task 035 passes model-value gates, but its K128 pulse PCC fails.</p>
 <p>Task 036 fails its last K128 pulse. Task 037 matches K128 stock exactly, but its source gate fails.</p>
 <p>Task 038 passes the direct K512 pulse check. Task 041 passes the final K512 suite.</p>
-<p>Decoder host parity does not prove decoder device accuracy. Device validation is starting, with no result yet.</p>
+<p>Decoder acceptance includes the passing full007 device suite and normal010 recovery smoke with clean shutdown. Watcher setup and teardown failures remain a documented environment exception; no Watcher-clean result is claimed.</p>
 <p>The old ring attention path remains historical failure evidence. The accepted production path uses K512 stock SDPA.</p>
-<p>The current Llama runtime and table exporters are incomplete. Native cross-endpoint migration is therefore unproven.</p>
-<p>The current main serving client named <code>migration</code> uses the legacy migration layer. Its name does not imply native KVM.</p>
+<p>The prepared runtime, table export and migration-readback paths have host coverage, including 29 passing second-slice tests. Native cross-endpoint device byte-copy and end-to-end generation remain unproven.</p>
+<p>At reviewed tt-d-gen revision <code>9a8c531</code>, the serving client named <code>migration</code> uses the legacy migration layer. Its name does not imply native KVM.</p>
 <p>The native manager accepts layout tables as truth. A consistent wrong table can move bytes without an obvious transport error.</p>
 <p>Layer-ready acknowledgement requires a real device completion wait. A host enqueue is not sufficient.</p>
 <p>KVM command success is only one part of destination admission. The engine also needs the landing rendezvous record.</p>
