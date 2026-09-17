@@ -468,54 +468,39 @@ _EDGE_DIVERGENCE_REASON = {
 }
 
 
-def _unpack_to_dest(input_format: DataFormat, dest_acc: DestAccumulation) -> bool:
-    """Mirror of the unpack_to_dest expression eltwise_unary_sfpu passes to TestConfig.
-
-    Kept as one expression rather than two literals so the claim below is checked against
-    the driver's actual routing, not against a copy of it that can drift.
-    """
-    return input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
-
-
 def _assert_signed_zero_partition_valid():
-    """The signed-zero ops must partition on unpack_to_dest, exactly.
+    """Sign's and Heaviside's xfails must match the pipelines that deliver a real -0.0.
 
-    The scoping recorded against Sign and Heaviside is an inference from which combinations
-    diverge, and a comment is prose that no run checks. Asserting the shape instead makes
-    editing the table without revisiting the explanation fail at collection -- which matters
-    while #55306 is in flight against these same two entries, because they are applied as
-    xfail(strict=False), so a bad hand-edit XPASSes quietly rather than failing.
+    Both diverge only because SFPSETCC mishandles a -0.0 that actually arrives, so their
+    recorded combinations have to be exactly the ones negative_zero_delivered() admits --
+    the same predicate the sweep uses to decide whether to send the probe at all. If that
+    measurement is ever revised, this fails at collection instead of leaving two tables
+    disagreeing, which matters because the entries are applied as xfail(strict=False) and
+    would otherwise XPASS quietly.
+
+    Ops absent from the table are skipped: #55306 fixes both and deletes their entries.
     """
     all_combos = [
         (fmt.input_format, fmt.output_format, dest_acc)
         for fmt in input_output_formats([DataFormat.Float16_b, DataFormat.Float32])
         for dest_acc in (DestAccumulation.No, DestAccumulation.Yes)
     ]
+    expected = {
+        combo for combo in all_combos if negative_zero_delivered(combo[0], combo[2])
+    }
 
-    # Signbit used to hold the other side of this partition: six xfails recording that the -0.0
-    # probe never arrived on the datacopy path. negative_zero_delivered() now keeps the probe
-    # off those pipelines, so an entry here would be a non-strict xfail that can never fire.
-    assert MathOperation.Signbit not in _EDGE_KNOWN_DIVERGENCES, (
-        "Signbit's divergences were a stimulus limitation, not a kernel defect. An entry "
-        "here means the delivery gate changed -- re-derive it rather than restoring it."
-    )
-
-    # SFPSETCC mishandles a -0.0 that does arrive, which is the unpack-to-dest path.
-    expected = {combo for combo in all_combos if _unpack_to_dest(combo[0], combo[2])}
     for op in (MathOperation.Sign, MathOperation.Heaviside):
-        recorded = set(_EDGE_KNOWN_DIVERGENCES.get(op, ()))
+        if op not in _EDGE_KNOWN_DIVERGENCES:
+            continue
+        recorded = set(_EDGE_KNOWN_DIVERGENCES[op])
         assert recorded == expected, (
-            f"{op.name}'s recorded divergences no longer match the unpack_to_dest "
-            f"partition.\n"
+            f"{op.name}'s recorded divergences no longer match the pipelines "
+            f"negative_zero_delivered() admits.\n"
             f"  missing: {sorted(str(c) for c in expected - recorded)}\n"
             f"  extra:   {sorted(str(c) for c in recorded - expected)}\n"
-            "The comment above rests on this partition -- if the measurement really "
-            "moved, re-derive the explanation rather than only editing the table."
+            "The reason string rests on that partition -- if the delivery measurement "
+            "really moved, re-derive the explanation rather than only editing the table."
         )
-
-    assert set(_EDGE_KNOWN_DIVERGENCES[MathOperation.Sign]) == set(
-        _EDGE_KNOWN_DIVERGENCES[MathOperation.Heaviside]
-    ), "Sign and Heaviside share one SFPSETCC cause, so their sets must stay identical"
 
 
 _assert_signed_zero_partition_valid()
