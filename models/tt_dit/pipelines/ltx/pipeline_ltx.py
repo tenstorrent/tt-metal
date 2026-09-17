@@ -948,10 +948,14 @@ class LTXPipeline:
 
         for i, m in enumerate(models):
             m._coresident_peers = [*models[:i], *models[i + 1 :], self.vae_decoder, self.vae_encoder]
+        # The upsampler (120 MB/chip on the 2x4) stays resident across the decode: only the 22B DiT
+        # contends with the 1080p VAE peak, and evicting the upsampler cost a 1.5 s reload per gen
+        # before stage 2 (0.3 s with the host weight cache). Keeping it resident also keeps the traced
+        # stage transition's baked weight addresses valid.
         if self.vae_decoder is not None:
-            self.vae_decoder._coresident_peers = [*models, self.upsampler, self.vae_encoder]
+            self.vae_decoder._coresident_peers = [*models, self.vae_encoder]
         if self.upsampler is not None:
-            self.upsampler._coresident_peers = [self.vae_decoder, self.vae_encoder]
+            self.upsampler._coresident_peers = [self.vae_encoder]
         if self.vae_encoder is not None:
             self.vae_encoder._coresident_peers = [*models, self.vae_decoder, self.upsampler]
 
