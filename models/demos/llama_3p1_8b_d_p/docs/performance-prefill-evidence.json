@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "scope": "saved2k_and_verified4k_eager_performance_no_golden_accuracy_claim",
+  "scope": "saved2k_verified4k_and8k_eager_performance_no_golden_accuracy_claim",
   "measurements": [
     {
       "context_length": 2048,
@@ -1493,10 +1493,1412 @@
           "title": "Great Expectations"
         }
       ]
+    },
+    {
+      "context_length": 8192,
+      "attempt": "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-runs-006/8k-b09-001/attempts/attempt-002-bfp8-8k",
+      "report": {
+        "path": "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-runs-006/8k-b09-001/attempts/attempt-002-bfp8-8k/captures-8192/report.json",
+        "sha256": "014be819d4f653e28ec69b479f655e66100658e068fff000d923409c76f5306e"
+      },
+      "report_status": "performance_complete_no_accuracy_claim",
+      "report_accuracy_status": "No golden accuracy claim; book continuation predictions are observations only",
+      "verification": {
+        "path": "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-runs-006/8k-b09-001/attempts/attempt-002-bfp8-8k/verification.json",
+        "sha256": "8c49040a3838306e955bb9223020af4e2153e950e88902949a6ef5bd4d03f365"
+      },
+      "verification_fields": {
+        "verified_exit": 0,
+        "actual_exit": 0,
+        "dispatch_exit": 0,
+        "reasons": [],
+        "full_model_accepted": false,
+        "execution_verified": true,
+        "scope": "error-free full32 prefill and performance; book next-token observations only; no golden accuracy acceptance",
+        "ended_utc": "2026-09-17T08:06:52.438670+00:00"
+      },
+      "source_head": "3e3f90e1d0bc5d978dd721d66f87e2601ff730fb",
+      "source_repository": "/data/divanovic/llama31-8b-disagg/repos/tt-metal",
+      "source_pin_count": 14522,
+      "source_map": {
+        "path": "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-runs-006/8k-b09-001/attempts/attempt-002-bfp8-8k/source-hashes.json",
+        "sha256": "33738df25eab9b4c4be0dd4918f18b32e420b39b16ecc3a6a0df688895e7afd8"
+      },
+      "source_manifest_sha256": "33738df25eab9b4c4be0dd4918f18b32e420b39b16ecc3a6a0df688895e7afd8",
+      "before_node_after_equal": true,
+      "source_heads_equal": true,
+      "selected_source_sha256": {
+        "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-launch-006/launch.py": "146a638cd143b2d524e05b4c6920d0da41c4e78400244ff0049a28a1f420b09e",
+        "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-preparation-006/long_context_performance_helpers.py": "d6a96c40f5d4ea53675ed80584d0695597b77fc5e444ccbc4972caf146b9154a",
+        "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-preparation-006/test_long_context_performance.py": "cf518f6617e09a7317a7d4ab0745591bcabb049d81741a7389573647604b31c0",
+        "/data/divanovic/llama31-8b-disagg/repos/tt-metal/models/demos/llama_3p1_8b_d_p/tt/__init__.py": "5dce07d5450b8b62d8e38ca9845d7abdabd7107e59cf000967393ac0cb074f76",
+        "/data/divanovic/llama31-8b-disagg/repos/tt-metal/models/demos/llama_3p1_8b_d_p/tt/attention.py": "776a46d34b1c10ea3b9dc772ea9f7b8b3b606af7d2d907e5e249f7e8edccd45f",
+        "/data/divanovic/llama31-8b-disagg/repos/tt-metal/models/demos/llama_3p1_8b_d_p/tt/config.py": "3c6a067625d38d9bf043028fc7d33b2591a9b980f50c980f3b2f7b50da7be979",
+        "/data/divanovic/llama31-8b-disagg/repos/tt-metal/models/demos/llama_3p1_8b_d_p/tt/decoder.py": "df0b04fb7d0d47929d7a0ffdd7d55a7cd72229e49342ea3d99bf0f4b7421186f",
+        "/data/divanovic/llama31-8b-disagg/repos/tt-metal/models/demos/llama_3p1_8b_d_p/tt/input.py": "f3cf1c295097e09978c13bebde970b33d67a5127d800f5f28b3505f15f9eedf6",
+        "/data/divanovic/llama31-8b-disagg/repos/tt-metal/models/demos/llama_3p1_8b_d_p/tt/kv_cache.py": "5ebd451510be99ad333fc1f17835334c8fb2129df7a181274996a6aa2b790757",
+        "/data/divanovic/llama31-8b-disagg/repos/tt-metal/models/demos/llama_3p1_8b_d_p/tt/mlp.py": "acc1eaecafdcf1f23393a628d4af1ed5da0c2a39447f4a1123cfafef39ba236e",
+        "/data/divanovic/llama31-8b-disagg/repos/tt-metal/models/demos/llama_3p1_8b_d_p/tt/model.py": "84853c75742290abde0a284175ef883aaa189622a29929571def2c32bb8aa830",
+        "/data/divanovic/llama31-8b-disagg/repos/tt-metal/models/demos/llama_3p1_8b_d_p/tt/model_config.py": "8ff96daea641929f86e27ce8a32f7fb7b62e1ef90f9c15ce2b456c64257b15cb",
+        "/data/divanovic/llama31-8b-disagg/repos/tt-metal/models/demos/llama_3p1_8b_d_p/tt/prefill_geometry.py": "984c4f6aa53895c0601ab9a58b2123bbc8fd20cce100200dfaa10be82734bf71",
+        "/data/divanovic/llama31-8b-disagg/repos/tt-metal/models/demos/llama_3p1_8b_d_p/tt/qkv.py": "cce1242a47f086faae7db51369c231b9ea80c97742a1e9c1b5e90adf40d99d82",
+        "/data/divanovic/llama31-8b-disagg/repos/tt-metal/models/demos/llama_3p1_8b_d_p/tt/rms_norm.py": "23f70af620f4c684e393ee55470c606711e161f0e33b6b0a531111eda77df2d9",
+        "/data/divanovic/llama31-8b-disagg/repos/tt-metal/models/demos/llama_3p1_8b_d_p/tt/rope.py": "7e8402b816e28187b3cbdfea81223309f3bad79b30ec4ebdb3e922bf73022a37",
+        "/data/divanovic/llama31-8b-disagg/repos/tt-metal/models/demos/llama_3p1_8b_d_p/tt/runners/__init__.py": "5dce07d5450b8b62d8e38ca9845d7abdabd7107e59cf000967393ac0cb074f76",
+        "/data/divanovic/llama31-8b-disagg/repos/tt-metal/models/demos/llama_3p1_8b_d_p/tt/runners/adapters/__init__.py": "5dce07d5450b8b62d8e38ca9845d7abdabd7107e59cf000967393ac0cb074f76",
+        "/data/divanovic/llama31-8b-disagg/repos/tt-metal/models/demos/llama_3p1_8b_d_p/tt/runners/adapters/llama_3p1_8b.py": "26405d8170f947baa8daf32d7026183454b570e9f69209adef19bdd4550f3fc2",
+        "/data/divanovic/llama31-8b-disagg/repos/tt-metal/models/demos/llama_3p1_8b_d_p/tt/weights.py": "027b05e465e10fb5491a1ead4608e6fb1c5e6cd84da214da8ff79e5918db88df",
+        "/data/divanovic/llama31-8b-disagg/repos/tt-metal/ttnn/cpp/ttnn/operations/experimental/quasar/transformer/sdpa/device/kernels/compute/compute_common.hpp": "a08c8861617c6275272a8e39443c586fb91d4ba1fb444054970da9f25e52d3c9",
+        "/data/divanovic/llama31-8b-disagg/repos/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp": "c67e91ad533a1a0ebca805a7e4df4fdd6d3d8f1760291d70c17276f3c6b2e0ec"
+      },
+      "controller_sha256": "146a638cd143b2d524e05b4c6920d0da41c4e78400244ff0049a28a1f420b09e",
+      "invocation": {
+        "path": "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-runs-006/8k-b09-001/attempts/attempt-002-bfp8-8k/invocation.json",
+        "sha256": "0cc46432fc41bad18ab20cb2b708f538862ace5b0c126ad880ff0513a0029110"
+      },
+      "pytest_command": [
+        "timeout",
+        "--signal=TERM",
+        "--kill-after=60",
+        "900",
+        "/data/divanovic/llama31-8b-disagg/runtime/python_env/bin/python",
+        "-B",
+        "-m",
+        "pytest",
+        "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-preparation-006/test_long_context_performance.py::test_full_prefill_long_context_performance[blackhole-mesh_device0-device_params0]",
+        "--rootdir=.",
+        "-c",
+        "/dev/null",
+        "-p",
+        "conftest",
+        "-p",
+        "performance_pytest_plugin",
+        "-vv",
+        "-s",
+        "--junitxml=/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-runs-006/8k-b09-001/attempts/attempt-002-bfp8-8k/pytest.xml"
+      ],
+      "junit": {
+        "path": "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-runs-006/8k-b09-001/attempts/attempt-002-bfp8-8k/pytest.xml",
+        "sha256": "a9c0fd2584cf40cb31e7fc88d04bccf69708abb3e5a97af19c52bb2728ce624f"
+      },
+      "junit_case": "test_full_prefill_long_context_performance[blackhole-mesh_device0-device_params0]",
+      "node": "bh-glx-120-b09u02",
+      "job_id": "107973",
+      "measured_requests": 6,
+      "measured_chunks": 48,
+      "complete_requests": 8,
+      "complete_output_checks": 2048,
+      "summary": [
+        {
+          "slot": 0,
+          "measured_requests": 3,
+          "prompt_wall_seconds": {
+            "count": 3,
+            "minimum": 2.8657750010024756,
+            "median": 2.8707263369869906,
+            "maximum": 2.892967323976336,
+            "samples": [
+              2.8657750010024756,
+              2.8707263369869906,
+              2.892967323976336
+            ]
+          },
+          "forward_wall_seconds": {
+            "count": 3,
+            "minimum": 2.8553817039646674,
+            "median": 2.8624485010222998,
+            "maximum": 2.8846431779675186,
+            "samples": [
+              2.8553817039646674,
+              2.8624485010222998,
+              2.8846431779675186
+            ]
+          },
+          "tokens_per_second_per_user": {
+            "count": 3,
+            "minimum": 2831.694617532088,
+            "median": 2853.6332058032476,
+            "maximum": 2858.563563829805,
+            "samples": [
+              2858.563563829805,
+              2853.6332058032476,
+              2831.694617532088
+            ]
+          },
+          "chunks": [
+            {
+              "start": 0,
+              "end": 1024,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.361114561004797,
+                "median": 0.3671995420008898,
+                "maximum": 0.36898593400837854,
+                "samples": [
+                  0.361114561004797,
+                  0.36898593400837854,
+                  0.3671995420008898
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.3598300849844236,
+                "median": 0.3661633479932789,
+                "maximum": 0.3677835210110061,
+                "samples": [
+                  0.3598300849844236,
+                  0.3677835210110061,
+                  0.3661633479932789
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.0010361940076109022,
+                "median": 0.0012024129973724484,
+                "maximum": 0.001284476020373404,
+                "samples": [
+                  0.001284476020373404,
+                  0.0012024129973724484,
+                  0.0010361940076109022
+                ]
+              }
+            },
+            {
+              "start": 1024,
+              "end": 2048,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.3580125790031161,
+                "median": 0.3584217799943872,
+                "maximum": 0.3610522130038589,
+                "samples": [
+                  0.3580125790031161,
+                  0.3584217799943872,
+                  0.3610522130038589
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.3567754639952909,
+                "median": 0.3574389060086105,
+                "maximum": 0.36002184700919315,
+                "samples": [
+                  0.3567754639952909,
+                  0.3574389060086105,
+                  0.36002184700919315
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.0009828739857766777,
+                "median": 0.0010303659946657717,
+                "maximum": 0.0012371150078251958,
+                "samples": [
+                  0.0012371150078251958,
+                  0.0009828739857766777,
+                  0.0010303659946657717
+                ]
+              }
+            },
+            {
+              "start": 2048,
+              "end": 3072,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.35812649701256305,
+                "median": 0.35816321399761364,
+                "maximum": 0.359547656000359,
+                "samples": [
+                  0.35816321399761364,
+                  0.35812649701256305,
+                  0.359547656000359
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.357129473995883,
+                "median": 0.3571830020227935,
+                "maximum": 0.3585056629963219,
+                "samples": [
+                  0.357129473995883,
+                  0.3571830020227935,
+                  0.3585056629963219
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.0009434949897695333,
+                "median": 0.0010337400017306209,
+                "maximum": 0.0010419930040370673,
+                "samples": [
+                  0.0010337400017306209,
+                  0.0009434949897695333,
+                  0.0010419930040370673
+                ]
+              }
+            },
+            {
+              "start": 3072,
+              "end": 4096,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.35816223098663613,
+                "median": 0.3586572159838397,
+                "maximum": 0.35956175698083825,
+                "samples": [
+                  0.3586572159838397,
+                  0.35816223098663613,
+                  0.35956175698083825
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.3571863069955725,
+                "median": 0.3576526189863216,
+                "maximum": 0.35858375998213887,
+                "samples": [
+                  0.3576526189863216,
+                  0.3571863069955725,
+                  0.35858375998213887
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.0009759239910636097,
+                "median": 0.000977996998699382,
+                "maximum": 0.0010045969975180924,
+                "samples": [
+                  0.0010045969975180924,
+                  0.0009759239910636097,
+                  0.000977996998699382
+                ]
+              }
+            },
+            {
+              "start": 4096,
+              "end": 5120,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.35930367300170474,
+                "median": 0.36027717500110157,
+                "maximum": 0.36507750998134725,
+                "samples": [
+                  0.36027717500110157,
+                  0.35930367300170474,
+                  0.36507750998134725
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.3583133569918573,
+                "median": 0.359282222983893,
+                "maximum": 0.36406661398359574,
+                "samples": [
+                  0.359282222983893,
+                  0.3583133569918573,
+                  0.36406661398359574
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.0009903160098474473,
+                "median": 0.0009949520172085613,
+                "maximum": 0.0010108959977515042,
+                "samples": [
+                  0.0009949520172085613,
+                  0.0009903160098474473,
+                  0.0010108959977515042
+                ]
+              }
+            },
+            {
+              "start": 5120,
+              "end": 6144,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.3593362109968439,
+                "median": 0.35972191201290116,
+                "maximum": 0.3632038790092338,
+                "samples": [
+                  0.35972191201290116,
+                  0.3593362109968439,
+                  0.3632038790092338
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.3583967419981491,
+                "median": 0.35868348501389846,
+                "maximum": 0.36220501200295985,
+                "samples": [
+                  0.35868348501389846,
+                  0.3583967419981491,
+                  0.36220501200295985
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.0009394689986947924,
+                "median": 0.0009988670062739402,
+                "maximum": 0.001038426999002695,
+                "samples": [
+                  0.001038426999002695,
+                  0.0009394689986947924,
+                  0.0009988670062739402
+                ]
+              }
+            },
+            {
+              "start": 6144,
+              "end": 7168,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.3599780739750713,
+                "median": 0.36123904699343257,
+                "maximum": 0.36542935701436363,
+                "samples": [
+                  0.36123904699343257,
+                  0.3599780739750713,
+                  0.36542935701436363
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.3584637650055811,
+                "median": 0.3586905129777733,
+                "maximum": 0.36425403400789946,
+                "samples": [
+                  0.3584637650055811,
+                  0.3586905129777733,
+                  0.36425403400789946
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.0011753230064641684,
+                "median": 0.0012875609972979873,
+                "maximum": 0.0027752819878514856,
+                "samples": [
+                  0.0027752819878514856,
+                  0.0012875609972979873,
+                  0.0011753230064641684
+                ]
+              }
+            },
+            {
+              "start": 7168,
+              "end": 8192,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.3483879510022234,
+                "median": 0.3485640980070457,
+                "maximum": 0.35187297500669956,
+                "samples": [
+                  0.3485640980070457,
+                  0.3483879510022234,
+                  0.35187297500669956
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.34745615301653743,
+                "median": 0.3475645889993757,
+                "maximum": 0.3508428999921307,
+                "samples": [
+                  0.3475645889993757,
+                  0.34745615301653743,
+                  0.3508428999921307
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.0009317979856859893,
+                "median": 0.0009995090076699853,
+                "maximum": 0.0010300750145688653,
+                "samples": [
+                  0.0009995090076699853,
+                  0.0009317979856859893,
+                  0.0010300750145688653
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "slot": 1,
+          "measured_requests": 3,
+          "prompt_wall_seconds": {
+            "count": 3,
+            "minimum": 2.8822930039896164,
+            "median": 2.882602189987665,
+            "maximum": 2.883411432005232,
+            "samples": [
+              2.8822930039896164,
+              2.883411432005232,
+              2.882602189987665
+            ]
+          },
+          "forward_wall_seconds": {
+            "count": 3,
+            "minimum": 2.8740735369792674,
+            "median": 2.8742833329888526,
+            "maximum": 2.8754819099849556,
+            "samples": [
+              2.8740735369792674,
+              2.8754819099849556,
+              2.8742833329888526
+            ]
+          },
+          "tokens_per_second_per_user": {
+            "count": 3,
+            "minimum": 2841.0791152003503,
+            "median": 2841.8767003139806,
+            "maximum": 2842.181550821095,
+            "samples": [
+              2842.181550821095,
+              2841.0791152003503,
+              2841.8767003139806
+            ]
+          },
+          "chunks": [
+            {
+              "start": 0,
+              "end": 1024,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.3617979949922301,
+                "median": 0.3628895979782101,
+                "maximum": 0.37447267200332135,
+                "samples": [
+                  0.3617979949922301,
+                  0.37447267200332135,
+                  0.3628895979782101
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.3606990370026324,
+                "median": 0.3617884359846357,
+                "maximum": 0.3734408240125049,
+                "samples": [
+                  0.3606990370026324,
+                  0.3734408240125049,
+                  0.3617884359846357
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.001031847990816459,
+                "median": 0.001098957989597693,
+                "maximum": 0.001101161993574351,
+                "samples": [
+                  0.001098957989597693,
+                  0.001031847990816459,
+                  0.001101161993574351
+                ]
+              }
+            },
+            {
+              "start": 1024,
+              "end": 2048,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.359382882976206,
+                "median": 0.3603385539900046,
+                "maximum": 0.360605743015185,
+                "samples": [
+                  0.359382882976206,
+                  0.3603385539900046,
+                  0.360605743015185
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.35835084499558434,
+                "median": 0.3594026799837593,
+                "maximum": 0.35962626300170086,
+                "samples": [
+                  0.35835084499558434,
+                  0.3594026799837593,
+                  0.35962626300170086
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.0009358740062452853,
+                "median": 0.0009794800134841353,
+                "maximum": 0.0010320379806216806,
+                "samples": [
+                  0.0010320379806216806,
+                  0.0009358740062452853,
+                  0.0009794800134841353
+                ]
+              }
+            },
+            {
+              "start": 2048,
+              "end": 3072,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.3601211070199497,
+                "median": 0.3622423459892161,
+                "maximum": 0.3630182449996937,
+                "samples": [
+                  0.3630182449996937,
+                  0.3601211070199497,
+                  0.3622423459892161
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.3591258740052581,
+                "median": 0.36120305699296296,
+                "maximum": 0.3620133379881736,
+                "samples": [
+                  0.3620133379881736,
+                  0.3591258740052581,
+                  0.36120305699296296
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.000995233014691621,
+                "median": 0.0010049070115201175,
+                "maximum": 0.0010392889962531626,
+                "samples": [
+                  0.0010049070115201175,
+                  0.000995233014691621,
+                  0.0010392889962531626
+                ]
+              }
+            },
+            {
+              "start": 3072,
+              "end": 4096,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.3593622920161579,
+                "median": 0.3607550779997837,
+                "maximum": 0.36140441900352016,
+                "samples": [
+                  0.3593622920161579,
+                  0.3607550779997837,
+                  0.36140441900352016
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.35842119000153616,
+                "median": 0.3597681380051654,
+                "maximum": 0.36036236700601876,
+                "samples": [
+                  0.35842119000153616,
+                  0.3597681380051654,
+                  0.36036236700601876
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.0009411020146217197,
+                "median": 0.0009869399946182966,
+                "maximum": 0.001042051997501403,
+                "samples": [
+                  0.0009411020146217197,
+                  0.0009869399946182966,
+                  0.001042051997501403
+                ]
+              }
+            },
+            {
+              "start": 4096,
+              "end": 5120,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.3587265360110905,
+                "median": 0.36128855097922496,
+                "maximum": 0.3631155960028991,
+                "samples": [
+                  0.36128855097922496,
+                  0.3587265360110905,
+                  0.3631155960028991
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.35770137899089605,
+                "median": 0.3602575249969959,
+                "maximum": 0.36208808500668965,
+                "samples": [
+                  0.3602575249969959,
+                  0.35770137899089605,
+                  0.36208808500668965
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.001025157020194456,
+                "median": 0.0010275109962094575,
+                "maximum": 0.001031025982229039,
+                "samples": [
+                  0.001031025982229039,
+                  0.001025157020194456,
+                  0.0010275109962094575
+                ]
+              }
+            },
+            {
+              "start": 5120,
+              "end": 6144,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.35847528898739256,
+                "median": 0.36052941798698157,
+                "maximum": 0.3655269169830717,
+                "samples": [
+                  0.3655269169830717,
+                  0.35847528898739256,
+                  0.36052941798698157
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.3574939669924788,
+                "median": 0.3595032489974983,
+                "maximum": 0.36450625699944794,
+                "samples": [
+                  0.36450625699944794,
+                  0.3574939669924788,
+                  0.3595032489974983
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.000981321994913742,
+                "median": 0.0010206599836237729,
+                "maximum": 0.001026168989483267,
+                "samples": [
+                  0.0010206599836237729,
+                  0.000981321994913742,
+                  0.001026168989483267
+                ]
+              }
+            },
+            {
+              "start": 6144,
+              "end": 7168,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.36032712701126,
+                "median": 0.3614830669830553,
+                "maximum": 0.3621430819912348,
+                "samples": [
+                  0.3621430819912348,
+                  0.36032712701126,
+                  0.3614830669830553
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.3593457349925302,
+                "median": 0.36045559600461274,
+                "maximum": 0.3611312239954714,
+                "samples": [
+                  0.3611312239954714,
+                  0.3593457349925302,
+                  0.36045559600461274
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.0009813920187298208,
+                "median": 0.001011857995763421,
+                "maximum": 0.0010274709784425795,
+                "samples": [
+                  0.001011857995763421,
+                  0.0009813920187298208,
+                  0.0010274709784425795
+                ]
+              }
+            },
+            {
+              "start": 7168,
+              "end": 8192,
+              "prompt_chunk_wall_seconds": {
+                "count": 3,
+                "minimum": 0.34975091699743643,
+                "median": 0.3501709639967885,
+                "maximum": 0.3503072560124565,
+                "samples": [
+                  0.34975091699743643,
+                  0.3501709639967885,
+                  0.3503072560124565
+                ]
+              },
+              "forward_wall_seconds": {
+                "count": 3,
+                "minimum": 0.34869412099942565,
+                "median": 0.34920331300236285,
+                "maximum": 0.34925627999473363,
+                "samples": [
+                  0.34869412099942565,
+                  0.34920331300236285,
+                  0.34925627999473363
+                ]
+              },
+              "upload_and_sync_wall_seconds": {
+                "count": 3,
+                "minimum": 0.0009676509944256395,
+                "median": 0.00105097601772286,
+                "maximum": 0.0010567959980107844,
+                "samples": [
+                  0.0010567959980107844,
+                  0.0009676509944256395,
+                  0.00105097601772286
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "setup": {
+        "fixture_and_tokenizer_load_wall_seconds": 2.0401250690047164,
+        "model_and_cache_load_wall_seconds": 64.61955612001475
+      },
+      "warmups": [
+        {
+          "slot": 0,
+          "phase": "warmup",
+          "prompt_wall_seconds": 146.34674957298557,
+          "forward_wall_seconds": 146.3325166029972,
+          "programs_before": 10,
+          "programs_after": 170
+        },
+        {
+          "slot": 1,
+          "phase": "warmup",
+          "prompt_wall_seconds": 2.852746570977615,
+          "forward_wall_seconds": 2.8447652110480703,
+          "programs_before": 170,
+          "programs_after": 170
+        }
+      ],
+      "readback_hash_wall_seconds": [
+        {
+          "slot": 0,
+          "phase": "warmup",
+          "repetition": 0,
+          "seconds": 4.811447644024156
+        },
+        {
+          "slot": 1,
+          "phase": "warmup",
+          "repetition": 0,
+          "seconds": 4.841754941997351
+        },
+        {
+          "slot": 0,
+          "phase": "measured",
+          "repetition": 0,
+          "seconds": 4.864237795001827
+        },
+        {
+          "slot": 1,
+          "phase": "measured",
+          "repetition": 0,
+          "seconds": 4.874832708010217
+        },
+        {
+          "slot": 0,
+          "phase": "measured",
+          "repetition": 1,
+          "seconds": 4.849731033988064
+        },
+        {
+          "slot": 1,
+          "phase": "measured",
+          "repetition": 1,
+          "seconds": 4.719541740982095
+        },
+        {
+          "slot": 0,
+          "phase": "measured",
+          "repetition": 2,
+          "seconds": 4.846744062000653
+        },
+        {
+          "slot": 1,
+          "phase": "measured",
+          "repetition": 2,
+          "seconds": 4.844982245005667
+        }
+      ],
+      "independent_verification": {
+        "path": "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-publication-preparation-002/independent-verification.json",
+        "sha256": "2b39a112dbf9f5c150e829d268a2b1fad862d36260eae1388781dd9c8c2408b4"
+      },
+      "root_verification": {
+        "path": "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-runs-006/8k-b09-001/attempts/attempt-002-bfp8-8k/root-verification.json",
+        "sha256": "998a26c4e8ef7f3ecac8f90a700f115bad26c6686330c7b11ab26881fea580f9"
+      },
+      "root_verification_fields": {
+        "root_verified": true,
+        "execution_verified": true,
+        "actual_exit": 0,
+        "dispatch_exit": 0,
+        "verified_exit": 0,
+        "scope": "full32 8K book execution and warmed eager performance only; no golden or migration claim",
+        "source_pin_count": 14522,
+        "report_sha256": "014be819d4f653e28ec69b479f655e66100658e068fff000d923409c76f5306e",
+        "controller_result_sha256": "8c49040a3838306e955bb9223020af4e2153e950e88902949a6ef5bd4d03f365",
+        "source_pins_sha256": "33738df25eab9b4c4be0dd4918f18b32e420b39b16ecc3a6a0df688895e7afd8",
+        "verified_utc": "2026-09-17T08:09:48.503479+00:00",
+        "verification": {
+          "verified_exit": 0,
+          "actual_exit": 0,
+          "dispatch_exit": 0,
+          "reasons": [],
+          "full_model_accepted": false,
+          "execution_verified": true,
+          "scope": "error-free full32 prefill and performance; book next-token observations only; no golden accuracy acceptance"
+        }
+      },
+      "book_fixture": {
+        "manifest_path": "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/book-fixture-tokenizer-001/manifest.json",
+        "manifest_sha256": "69cd38111c60d5e0f1691d7eb2ffc99d2cefc7097b39b8ffbac61ef028491c43"
+      },
+      "book_observations": [
+        {
+          "argmax_token_id": 539,
+          "top5": [
+            {
+              "token_id": 539,
+              "piece": " not",
+              "logit": 20.375,
+              "probability": 0.8143859975897205
+            },
+            {
+              "token_id": 682,
+              "piece": " all",
+              "logit": 17.75,
+              "probability": 0.058993923797495844
+            },
+            {
+              "token_id": 721,
+              "piece": " _",
+              "logit": 17.25,
+              "probability": 0.035781623519931985
+            },
+            {
+              "token_id": 1461,
+              "piece": " him",
+              "logit": 17.125,
+              "probability": 0.03157717192578808
+            },
+            {
+              "token_id": 1520,
+              "piece": " help",
+              "logit": 16.25,
+              "probability": 0.013163323664719515
+            }
+          ],
+          "expected_next_token_rank": 1,
+          "expected_next_token_probability": 0.8143859975897205,
+          "final_logits_float32_sha256": "691224733f64f52307195c773c3802c34a6f89ca00b92a2a25d100ee91e108d1",
+          "slot": 0,
+          "phase": "warmup",
+          "repetition": 0,
+          "final_prompt_position": 8191,
+          "chunk_start": 7168,
+          "sp": 3,
+          "local_row": 255,
+          "tp_order": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7
+          ],
+          "vocab_size": 128256,
+          "scope": "book_continuation_observation_no_semantic_threshold",
+          "book_id": "1342",
+          "title": "Pride and Prejudice",
+          "expected_next_token_id": 539,
+          "expected_next_token": " not",
+          "expected_next_word": "not",
+          "trailing_prompt_excerpt": "do.\u201d \u201cBut if a woman is partial to a man, and does",
+          "actual_following_excerpt": "not endeavor to conceal it, he must find it out.\u201d \u201cPerhaps he"
+        },
+        {
+          "argmax_token_id": 6548,
+          "top5": [
+            {
+              "token_id": 6548,
+              "piece": " eyes",
+              "logit": 22.375,
+              "probability": 0.6399685085762222
+            },
+            {
+              "token_id": 3663,
+              "piece": " face",
+              "logit": 21.125,
+              "probability": 0.18335404754654938
+            },
+            {
+              "token_id": 1633,
+              "piece": " very",
+              "logit": 21.0,
+              "probability": 0.16180937903617845
+            },
+            {
+              "token_id": 319,
+              "piece": "\r\n",
+              "logit": 18.0,
+              "probability": 0.008056014616635828
+            },
+            {
+              "token_id": 7693,
+              "piece": " feet",
+              "logit": 17.5,
+              "probability": 0.004886219860082746
+            }
+          ],
+          "expected_next_token_rank": 2,
+          "expected_next_token_probability": 0.18335404754654938,
+          "final_logits_float32_sha256": "4e65eeb53ff296b0af227badd4bf122de58df36f2a99b4173ae6d46a49f73564",
+          "slot": 1,
+          "phase": "warmup",
+          "repetition": 0,
+          "final_prompt_position": 8191,
+          "chunk_start": 7168,
+          "sp": 3,
+          "local_row": 255,
+          "tp_order": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7
+          ],
+          "vocab_size": 128256,
+          "scope": "book_continuation_observation_no_semantic_threshold",
+          "book_id": "1400",
+          "title": "Great Expectations",
+          "expected_next_token_id": 3663,
+          "expected_next_token": " face",
+          "expected_next_word": "face",
+          "trailing_prompt_excerpt": "be sure. I half expected to see him drop down before my",
+          "actual_following_excerpt": "face and die of deadly cold. His eyes looked so awfully hungry"
+        },
+        {
+          "argmax_token_id": 539,
+          "top5": [
+            {
+              "token_id": 539,
+              "piece": " not",
+              "logit": 20.375,
+              "probability": 0.8143859975897205
+            },
+            {
+              "token_id": 682,
+              "piece": " all",
+              "logit": 17.75,
+              "probability": 0.058993923797495844
+            },
+            {
+              "token_id": 721,
+              "piece": " _",
+              "logit": 17.25,
+              "probability": 0.035781623519931985
+            },
+            {
+              "token_id": 1461,
+              "piece": " him",
+              "logit": 17.125,
+              "probability": 0.03157717192578808
+            },
+            {
+              "token_id": 1520,
+              "piece": " help",
+              "logit": 16.25,
+              "probability": 0.013163323664719515
+            }
+          ],
+          "expected_next_token_rank": 1,
+          "expected_next_token_probability": 0.8143859975897205,
+          "final_logits_float32_sha256": "691224733f64f52307195c773c3802c34a6f89ca00b92a2a25d100ee91e108d1",
+          "slot": 0,
+          "phase": "measured",
+          "repetition": 0,
+          "final_prompt_position": 8191,
+          "chunk_start": 7168,
+          "sp": 3,
+          "local_row": 255,
+          "tp_order": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7
+          ],
+          "vocab_size": 128256,
+          "scope": "book_continuation_observation_no_semantic_threshold",
+          "book_id": "1342",
+          "title": "Pride and Prejudice",
+          "expected_next_token_id": 539,
+          "expected_next_token": " not",
+          "expected_next_word": "not",
+          "trailing_prompt_excerpt": "do.\u201d \u201cBut if a woman is partial to a man, and does",
+          "actual_following_excerpt": "not endeavor to conceal it, he must find it out.\u201d \u201cPerhaps he"
+        },
+        {
+          "argmax_token_id": 6548,
+          "top5": [
+            {
+              "token_id": 6548,
+              "piece": " eyes",
+              "logit": 22.375,
+              "probability": 0.6399685085762222
+            },
+            {
+              "token_id": 3663,
+              "piece": " face",
+              "logit": 21.125,
+              "probability": 0.18335404754654938
+            },
+            {
+              "token_id": 1633,
+              "piece": " very",
+              "logit": 21.0,
+              "probability": 0.16180937903617845
+            },
+            {
+              "token_id": 319,
+              "piece": "\r\n",
+              "logit": 18.0,
+              "probability": 0.008056014616635828
+            },
+            {
+              "token_id": 7693,
+              "piece": " feet",
+              "logit": 17.5,
+              "probability": 0.004886219860082746
+            }
+          ],
+          "expected_next_token_rank": 2,
+          "expected_next_token_probability": 0.18335404754654938,
+          "final_logits_float32_sha256": "4e65eeb53ff296b0af227badd4bf122de58df36f2a99b4173ae6d46a49f73564",
+          "slot": 1,
+          "phase": "measured",
+          "repetition": 0,
+          "final_prompt_position": 8191,
+          "chunk_start": 7168,
+          "sp": 3,
+          "local_row": 255,
+          "tp_order": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7
+          ],
+          "vocab_size": 128256,
+          "scope": "book_continuation_observation_no_semantic_threshold",
+          "book_id": "1400",
+          "title": "Great Expectations",
+          "expected_next_token_id": 3663,
+          "expected_next_token": " face",
+          "expected_next_word": "face",
+          "trailing_prompt_excerpt": "be sure. I half expected to see him drop down before my",
+          "actual_following_excerpt": "face and die of deadly cold. His eyes looked so awfully hungry"
+        },
+        {
+          "argmax_token_id": 539,
+          "top5": [
+            {
+              "token_id": 539,
+              "piece": " not",
+              "logit": 20.375,
+              "probability": 0.8143859975897205
+            },
+            {
+              "token_id": 682,
+              "piece": " all",
+              "logit": 17.75,
+              "probability": 0.058993923797495844
+            },
+            {
+              "token_id": 721,
+              "piece": " _",
+              "logit": 17.25,
+              "probability": 0.035781623519931985
+            },
+            {
+              "token_id": 1461,
+              "piece": " him",
+              "logit": 17.125,
+              "probability": 0.03157717192578808
+            },
+            {
+              "token_id": 1520,
+              "piece": " help",
+              "logit": 16.25,
+              "probability": 0.013163323664719515
+            }
+          ],
+          "expected_next_token_rank": 1,
+          "expected_next_token_probability": 0.8143859975897205,
+          "final_logits_float32_sha256": "691224733f64f52307195c773c3802c34a6f89ca00b92a2a25d100ee91e108d1",
+          "slot": 0,
+          "phase": "measured",
+          "repetition": 1,
+          "final_prompt_position": 8191,
+          "chunk_start": 7168,
+          "sp": 3,
+          "local_row": 255,
+          "tp_order": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7
+          ],
+          "vocab_size": 128256,
+          "scope": "book_continuation_observation_no_semantic_threshold",
+          "book_id": "1342",
+          "title": "Pride and Prejudice",
+          "expected_next_token_id": 539,
+          "expected_next_token": " not",
+          "expected_next_word": "not",
+          "trailing_prompt_excerpt": "do.\u201d \u201cBut if a woman is partial to a man, and does",
+          "actual_following_excerpt": "not endeavor to conceal it, he must find it out.\u201d \u201cPerhaps he"
+        },
+        {
+          "argmax_token_id": 6548,
+          "top5": [
+            {
+              "token_id": 6548,
+              "piece": " eyes",
+              "logit": 22.375,
+              "probability": 0.6399685085762222
+            },
+            {
+              "token_id": 3663,
+              "piece": " face",
+              "logit": 21.125,
+              "probability": 0.18335404754654938
+            },
+            {
+              "token_id": 1633,
+              "piece": " very",
+              "logit": 21.0,
+              "probability": 0.16180937903617845
+            },
+            {
+              "token_id": 319,
+              "piece": "\r\n",
+              "logit": 18.0,
+              "probability": 0.008056014616635828
+            },
+            {
+              "token_id": 7693,
+              "piece": " feet",
+              "logit": 17.5,
+              "probability": 0.004886219860082746
+            }
+          ],
+          "expected_next_token_rank": 2,
+          "expected_next_token_probability": 0.18335404754654938,
+          "final_logits_float32_sha256": "4e65eeb53ff296b0af227badd4bf122de58df36f2a99b4173ae6d46a49f73564",
+          "slot": 1,
+          "phase": "measured",
+          "repetition": 1,
+          "final_prompt_position": 8191,
+          "chunk_start": 7168,
+          "sp": 3,
+          "local_row": 255,
+          "tp_order": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7
+          ],
+          "vocab_size": 128256,
+          "scope": "book_continuation_observation_no_semantic_threshold",
+          "book_id": "1400",
+          "title": "Great Expectations",
+          "expected_next_token_id": 3663,
+          "expected_next_token": " face",
+          "expected_next_word": "face",
+          "trailing_prompt_excerpt": "be sure. I half expected to see him drop down before my",
+          "actual_following_excerpt": "face and die of deadly cold. His eyes looked so awfully hungry"
+        },
+        {
+          "argmax_token_id": 539,
+          "top5": [
+            {
+              "token_id": 539,
+              "piece": " not",
+              "logit": 20.375,
+              "probability": 0.8143859975897205
+            },
+            {
+              "token_id": 682,
+              "piece": " all",
+              "logit": 17.75,
+              "probability": 0.058993923797495844
+            },
+            {
+              "token_id": 721,
+              "piece": " _",
+              "logit": 17.25,
+              "probability": 0.035781623519931985
+            },
+            {
+              "token_id": 1461,
+              "piece": " him",
+              "logit": 17.125,
+              "probability": 0.03157717192578808
+            },
+            {
+              "token_id": 1520,
+              "piece": " help",
+              "logit": 16.25,
+              "probability": 0.013163323664719515
+            }
+          ],
+          "expected_next_token_rank": 1,
+          "expected_next_token_probability": 0.8143859975897205,
+          "final_logits_float32_sha256": "691224733f64f52307195c773c3802c34a6f89ca00b92a2a25d100ee91e108d1",
+          "slot": 0,
+          "phase": "measured",
+          "repetition": 2,
+          "final_prompt_position": 8191,
+          "chunk_start": 7168,
+          "sp": 3,
+          "local_row": 255,
+          "tp_order": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7
+          ],
+          "vocab_size": 128256,
+          "scope": "book_continuation_observation_no_semantic_threshold",
+          "book_id": "1342",
+          "title": "Pride and Prejudice",
+          "expected_next_token_id": 539,
+          "expected_next_token": " not",
+          "expected_next_word": "not",
+          "trailing_prompt_excerpt": "do.\u201d \u201cBut if a woman is partial to a man, and does",
+          "actual_following_excerpt": "not endeavor to conceal it, he must find it out.\u201d \u201cPerhaps he"
+        },
+        {
+          "argmax_token_id": 6548,
+          "top5": [
+            {
+              "token_id": 6548,
+              "piece": " eyes",
+              "logit": 22.375,
+              "probability": 0.6399685085762222
+            },
+            {
+              "token_id": 3663,
+              "piece": " face",
+              "logit": 21.125,
+              "probability": 0.18335404754654938
+            },
+            {
+              "token_id": 1633,
+              "piece": " very",
+              "logit": 21.0,
+              "probability": 0.16180937903617845
+            },
+            {
+              "token_id": 319,
+              "piece": "\r\n",
+              "logit": 18.0,
+              "probability": 0.008056014616635828
+            },
+            {
+              "token_id": 7693,
+              "piece": " feet",
+              "logit": 17.5,
+              "probability": 0.004886219860082746
+            }
+          ],
+          "expected_next_token_rank": 2,
+          "expected_next_token_probability": 0.18335404754654938,
+          "final_logits_float32_sha256": "4e65eeb53ff296b0af227badd4bf122de58df36f2a99b4173ae6d46a49f73564",
+          "slot": 1,
+          "phase": "measured",
+          "repetition": 2,
+          "final_prompt_position": 8191,
+          "chunk_start": 7168,
+          "sp": 3,
+          "local_row": 255,
+          "tp_order": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7
+          ],
+          "vocab_size": 128256,
+          "scope": "book_continuation_observation_no_semantic_threshold",
+          "book_id": "1400",
+          "title": "Great Expectations",
+          "expected_next_token_id": 3663,
+          "expected_next_token": " face",
+          "expected_next_word": "face",
+          "trailing_prompt_excerpt": "be sure. I half expected to see him drop down before my",
+          "actual_following_excerpt": "face and die of deadly cold. His eyes looked so awfully hungry"
+        }
+      ],
+      "prompt_identity": [
+        {
+          "slot": 0,
+          "tokens": 8192,
+          "token_ids_sha256": "849aabe76d8b7b7230f34a88b4c4417df1a6d239979a03c5d82fd65fecfc5a82",
+          "book_id": "1342",
+          "title": "Pride and Prejudice"
+        },
+        {
+          "slot": 1,
+          "tokens": 8192,
+          "token_ids_sha256": "9445fa318055b9bcb4283a1ca6ba2b67e925e306e3ef953722b5cd9cb709172b",
+          "book_id": "1400",
+          "title": "Great Expectations"
+        }
+      ]
     }
   ],
   "pending_contexts": [
-    8192,
     16384,
     32768,
     65536,
@@ -1518,6 +2920,16 @@
     "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-launch-003/attempts/attempt-002-bfp8-4k/node-source-hashes.json": "529b3ec00436750a9565db2a1fb81f83b14560918d8ed4680a091f76ab8849ad",
     "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-launch-003/attempts/attempt-002-bfp8-4k/post-source-hashes.json": "529b3ec00436750a9565db2a1fb81f83b14560918d8ed4680a091f76ab8849ad",
     "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-launch-003/attempts/attempt-002-bfp8-4k/pytest-command.json": "a284b3c83355e03ad98bf2a73f320ee0943af412380c1d6a83c9da2ddb2968de",
-    "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-launch-003/attempts/attempt-002-bfp8-4k/root-verification.json": "cb52ab68a8559fcdc9f05e519363e8ec3c2d0b4ca191e8775bb33dd79f757045"
+    "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-launch-003/attempts/attempt-002-bfp8-4k/root-verification.json": "cb52ab68a8559fcdc9f05e519363e8ec3c2d0b4ca191e8775bb33dd79f757045",
+    "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-runs-006/8k-b09-001/attempts/attempt-002-bfp8-8k/captures-8192/report.json": "014be819d4f653e28ec69b479f655e66100658e068fff000d923409c76f5306e",
+    "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-runs-006/8k-b09-001/attempts/attempt-002-bfp8-8k/verification.json": "8c49040a3838306e955bb9223020af4e2153e950e88902949a6ef5bd4d03f365",
+    "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-runs-006/8k-b09-001/attempts/attempt-002-bfp8-8k/invocation.json": "0cc46432fc41bad18ab20cb2b708f538862ace5b0c126ad880ff0513a0029110",
+    "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-runs-006/8k-b09-001/attempts/attempt-002-bfp8-8k/source-hashes.json": "33738df25eab9b4c4be0dd4918f18b32e420b39b16ecc3a6a0df688895e7afd8",
+    "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-runs-006/8k-b09-001/attempts/attempt-002-bfp8-8k/node-source-hashes.json": "33738df25eab9b4c4be0dd4918f18b32e420b39b16ecc3a6a0df688895e7afd8",
+    "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-runs-006/8k-b09-001/attempts/attempt-002-bfp8-8k/post-source-hashes.json": "33738df25eab9b4c4be0dd4918f18b32e420b39b16ecc3a6a0df688895e7afd8",
+    "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-runs-006/8k-b09-001/attempts/attempt-002-bfp8-8k/pytest-command.json": "d154719375b4972a40796ba8f5e46f1c3ce3b302a7f3e8b54b6ea03e18623beb",
+    "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-publication-preparation-002/independent-verification.json": "2b39a112dbf9f5c150e829d268a2b1fad862d36260eae1388781dd9c8c2408b4",
+    "/data/divanovic/llama31-8b-disagg/evidence/task-9-long-context/performance-runs-006/8k-b09-001/attempts/attempt-002-bfp8-8k/root-verification.json": "998a26c4e8ef7f3ecac8f90a700f115bad26c6686330c7b11ab26881fea580f9",
+    "/data/divanovic/llama31-8b-disagg/repos/tt-metal/models/demos/llama_3p1_8b_d_p/docs/performance-prefill-evidence.json": "906c8e09262281c27597a9e561c5dff25c490869e71a9e9a0fa2fef2b2d76a87"
   }
 }
