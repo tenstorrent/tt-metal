@@ -19,7 +19,10 @@
 #include "impl/kernels/kernel.hpp"
 #include "impl/program/program_impl.hpp"
 #include "llrt/metal_soc_descriptor.hpp"
-#include "emule_device_map.hpp"  // NOC_NODE_ID_BITS
+#include "emule_device_map.hpp"              // NOC_NODE_ID_BITS
+#include "emule_kernel_defines.hpp"          // compute_proc_ids_and_thread_count, ProcIdList
+#include "jit_build/jit_build_settings.hpp"  // NamedCTArgNamespaces, NamedRuntimeArgNamespaces
+#include <tt-metalium/kernel_types.hpp>      // DataMovementConfig/ComputeConfig, DataMovementProcessor
 
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/face_geometry.hpp>
@@ -133,8 +136,67 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
             kd.programmable_core_type = static_cast<uint32_t>(k.get_kernel_programmable_core_type());
             kd.processor_class = static_cast<uint32_t>(k.get_kernel_processor_class());
             kd.processor_type = static_cast<uint32_t>(k.get_kernel_processor_type(0));
-            // TODO(stage2): source, include_paths, named CT/RT namespaces, defines, is_compute,
-            // dm_processor / Quasar proc_ids / num_threads, per-core unique RTA, Metal-2.0 bindings.
+
+            // source (raw KernelSource; path resolution stays in the consumer)
+            const auto& ksrc = k.kernel_source();
+            kd.source.is_file = (ksrc.source_type_ == KernelSource::FILE_PATH);
+            kd.source.path = ksrc.path_;
+            kd.source.inline_src = ksrc.source_;
+            k.process_include_paths([&kd](const std::string& p) { kd.include_paths.push_back(p); });
+            k.process_named_ct_arg_namespaces([&kd](const NamedCTArgNamespaces& ns) {
+                for (const auto& [name, entries] : ns) {
+                    kd.named_ct_arg_namespaces[name] = entries;
+                }
+            });
+            k.process_named_runtime_args([&kd](const NamedRuntimeArgNamespaces& ns) {
+                for (const auto& [name, entries] : ns) {
+                    auto& out = kd.named_runtime_arg_namespaces[name];
+                    for (const auto& e : entries) {
+                        out.push_back(NamedRtEntry{e.field, e.index, e.length, static_cast<uint32_t>(e.dispatch)});
+                    }
+                }
+            });
+            k.process_defines([&kd](const std::string& dk, const std::string& dv) { kd.defines[dk] = dv; });
+            kd.is_compute = (k.get_kernel_processor_class() == HalProcessorClassType::COMPUTE);
+            {
+                const auto cfg = k.config();
+                if (const auto* dc = std::get_if<DataMovementConfig>(&cfg)) {
+                    kd.dm_processor = static_cast<uint32_t>(dc->processor);
+                }
+                if (const auto* cc = std::get_if<ComputeConfig>(&cfg)) {
+                    kd.fp32_dest_acc_en = cc->fp32_dest_acc_en;
+                    kd.dst_full_sync_en = cc->dst_full_sync_en;
+                }
+            }
+            {
+                auto* qdm = dynamic_cast<experimental::quasar::QuasarDataMovementKernel*>(&k);
+                auto* qck = dynamic_cast<experimental::quasar::QuasarComputeKernel*>(&k);
+                tt::tt_metal::emule::ProcIdList procs =
+                    tt::tt_metal::emule::compute_proc_ids_and_thread_count(k, qdm, qck);
+                kd.proc_ids.assign(procs.proc_ids.begin(), procs.proc_ids.end());
+                kd.num_threads = procs.num_threads;
+            }
+            // Metal 2.0 binding handles (mirror build_metal2_snapshot).
+            kd.bindings.is_metal2 = k.is_metal2_kernel();
+            kd.bindings.rta_names = k.get_runtime_arg_names();
+            kd.bindings.crta_names = k.get_common_runtime_arg_names();
+            k.process_dataflow_buffer_binding_handles(
+                [&kd](const std::string& name, uint16_t id, bool is_relay, uint8_t pipe) {
+                    kd.bindings.dfb.push_back(DfbBinding{name, id, is_relay, pipe});
+                });
+            k.process_semaphore_binding_handles(
+                [&kd](const std::string& name, uint16_t id, auto scope, uint32_t harts) {
+                    kd.bindings.sem.push_back(
+                        SemBinding{name, id, static_cast<tt_emule::SemScope>(static_cast<uint8_t>(scope)), harts});
+                });
+            k.process_tensor_binding_handles(
+                [&kd](const std::string& name, uint32_t cta_off, uint32_t addr_crta_off, uint32_t /*num_rt*/) {
+                    kd.bindings.tensor.push_back(TensorBinding{name, cta_off, addr_crta_off});
+                });
+            k.process_scratchpad_binding_handles(
+                [&kd](const std::string& name, uint32_t size_bytes, uint32_t addr_crta_word) {
+                    kd.bindings.scratch.push_back(ScratchBinding{name, size_bytes, addr_crta_word});
+                });
             pd.kernels.emplace(kd.id, std::move(kd));
         }
 
