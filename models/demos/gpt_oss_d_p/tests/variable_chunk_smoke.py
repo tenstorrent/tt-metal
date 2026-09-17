@@ -10,7 +10,6 @@ Env: HF_MODEL, GPT_OSS_WEIGHTS_FROM_CACHE=1, EXPERT_DTYPE=bf8, PREFILL_NUM_LAYER
 """
 
 import os
-import resource
 import statistics
 import sys
 import time
@@ -24,20 +23,8 @@ SMALL = int(os.getenv("VARCHUNK_SMALL", "1024"))
 LARGE = int(os.getenv("VARCHUNK_LARGE", "8192"))
 
 
-def _raise_nproc_limit():
-    """Raise RLIMIT_NPROC to the hard limit so the cold JIT kernel build (a burst of g++/collect2
-    procs) doesn't fail with posix_spawn "Operation not permitted". Same as the galaxy PCC harness."""
-    soft, hard = resource.getrlimit(resource.RLIMIT_NPROC)
-    if soft != resource.RLIM_INFINITY and (hard == resource.RLIM_INFINITY or soft < hard):
-        try:
-            resource.setrlimit(resource.RLIMIT_NPROC, (hard, hard))
-            print(f"[varchunk] raised RLIMIT_NPROC soft {soft} -> {hard}", flush=True)
-        except (ValueError, OSError) as e:
-            print(f"[varchunk] WARNING: could not raise RLIMIT_NPROC (soft={soft}): {e}", file=sys.stderr)
-
-
 def main():
-    _raise_nproc_limit()
+    raise_nproc_limit("varchunk")
     if ttnn.get_num_devices() < GALAXY_NUM_DEVICES:
         print(f"[varchunk] SKIP: needs galaxy ({GALAXY_NUM_DEVICES}); have {ttnn.get_num_devices()}", flush=True)
         return 0

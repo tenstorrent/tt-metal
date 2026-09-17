@@ -2,15 +2,18 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """GPT-OSS REAL-WEIGHTS chunked-prefill zone profiler: per-zone device time for a sliding and a full
-attention layer. Mirrors ``minimax_m3/tests/perf/profile_prefill.py``.
+attention layer. Sibling of ``minimax_m3/tests/perf/profile_prefill.py``; the zone tooling itself is
+shared (models/demos/common/prefill/profiling).
 
 Measures ONE chunk attending an already-populated KV cache — the "8k attended to 24k" case.
 Structure (mirrors galaxy_prefill_kv_pcc.py's LAST CHUNK measurement):
 
-  1. build the real 36-layer model (SP=4 x TP=8 + EP=32) from real weights or the tilized cache
+  1. build the real model (SP=4 x TP=8 + EP=32) from real weights or the tilized cache
   2. runtime.compile()          -> WARMUP: JIT-compiles every op, populates the program cache
-  3. pre-fill chunks 0..n-2     -> fills the cache to PROFILE_CACHE tokens (NOT profiled)
-  4. profile the FINAL chunk    -> zones on, one signposted region per zone, per-layer profiler reads
+  3. pre-fill chunks 0..n-2     -> fills the cache to PROFILE_CACHE tokens (NOT profiled; the device
+                                   profiler is drained after every layer and every chunk)
+  4. profile the FINAL chunk    -> zones on, one signposted region per zone, NO profiler reads inside
+                                   the chunk; one flush after its closing marker
 
 Only step 4 is inside the zone markers, so the report is exactly "one 8k chunk against an N-token
 cache". GPT-OSS alternates sliding-window (even) and full-causal (odd) attention layers, so ANY two
@@ -18,11 +21,12 @@ consecutive layers cover both classes; the report separates them by the layer ta
 
 PROFILE_CACHE=0 profiles the ONE-SHOT path instead: a single chunk with no cache, which takes the
 all-gather + SDPA + reduce-scatter fallback rather than the cache-backed ring SDPA. Profiling both
-tells you what the chunked ring path costs relative to one-shot (the #52000 "~16x slower" issue).
+tells you what the chunked ring path costs relative to one-shot — the genuine ~2x warm overhead that
+#52000 tracks (its original ~16x was a first-compile artifact).
 
 What you get per zone: summed DEVICE KERNEL DURATION [ns] per device (with the across-device skew),
-op count, bytes moved (from the CSV's input/output shapes + dtypes) and the implied GB/s. Parse with
-    python3 models/demos/gpt_oss_d_p/tests/perf/parse_zone_perf.py <ops_perf_results_*.csv>
+op count, bytes moved (from the CSV's input/output shapes + dtypes) and the implied GB/s. Render with
+    python3 models/demos/gpt_oss_d_p/tests/perf/visualize_zones.py <ops_perf_results_*.csv>
 
 Zone list — both classes share it (only the attention core differs): input_norm, attn/{qkv_proj,
 split_heads,rope,kv_write,ring_joint_sdpa | ag_qkv,sdpa,sdpa_reduce_scatter,concat_heads,o_proj,
@@ -40,7 +44,9 @@ Env:
   PROFILE_CACHE       tokens already in the cache before the profiled chunk; rounded
                       DOWN to a multiple of PROFILE_CHUNK. 0 = one-shot path         [default 24576]
   PROFILE_NUM_LAYERS  build/run only the first N layers (>=2 covers both classes)   [default: all 36]
-  PROFILE_READ_EVERY  call ttnn.ReadDeviceProfiler every N layers (<1000 ops/read!)   [default 1]
+  PROFILE_READ_EVERY  drain the device profiler every N layers outside the chunk       [default 1]
+  PROFILE_READ_IN_CHUNK "1" -> also drain per layer INSIDE the profiled chunk. Perturbs the inter-op
+                      gaps; use it to check whether drains change the CCL device times     [default 0]
   PROFILE_SKIP_PREFIX "1" -> skip the prefix fill and attend a ZEROED cache. Shapes (and op costs)
                       are identical but MoE routing is not representative — bring-up only  [default 0]
   PREFILL_TOPOLOGY    "ring" (default; torus descriptor + FABRIC_1D_RING) or "linear"
@@ -48,9 +54,9 @@ Env:
   KV_CACHE_DTYPE      KV-cache storage dtype: "bf8" or "bf16"                         [default bf8]
   GPT_OSS_WEIGHTS_FROM_CACHE  "1" -> empty state_dict, load tilized weights from the TTNN cache
   HF_MODEL            real gpt-oss-120b weights dir (read by ModelArgs)
-  GPTOSS_PROFILE_ZONES  set to 1 by this script before the model is imported
+  GPTOSS_PROFILE_ZONES / TT_METAL_DEVICE_PROFILER  set to 1 by main() before the model is imported
 
-Prefer the wrapper, which handles the venv, tt-smi -glx_reset, trace synthesis and logging:
+Prefer the wrapper, which handles the venv, results folders and logging:
 
   ./models/demos/gpt_oss_d_p/scripts/run_prefill_profile.sh
   CACHE=24576 ./models/demos/gpt_oss_d_p/scripts/run_prefill_profile.sh
@@ -59,8 +65,9 @@ Manual equivalent:
   cd $TT_METAL_HOME && source python_env/bin/activate && export PYTHONPATH=$TT_METAL_HOME
   export HF_MODEL=/path/to/gpt-oss-120b
   export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto
+  export TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=20000   # the profiled chunk must fit the device buffer
   PROFILE_CACHE=24576 PREFILL_TRACE_DIR=<golden> \
-    python3 -m tracy -v -r -p models/demos/gpt_oss_d_p/tests/perf/profile_prefill.py
+    python3 -m tracy -v -r -p --check-exit-code models/demos/gpt_oss_d_p/tests/perf/profile_prefill.py
 
 Add --collect-noc-traces to the tracy invocation for measured DRAM BW UTIL (%) / NOC UTIL (%) per op
 (requires tt-npe installed); the parser picks those columns up automatically when present.
@@ -71,44 +78,19 @@ Smoke test without a device (chunk math + token tiling only, no model build):
 
 import json
 import os
-import resource
 import sys
 import time
 from pathlib import Path
 
-# Zones are read at import time by utils/profiler_utils, and the model modules import it, so the flag
-# must be set before anything under models.demos.gpt_oss_d_p.tt is imported.
-os.environ.setdefault("GPTOSS_PROFILE_ZONES", "1")
-# The programmatic per-program perf API (ttnn.get_latest_programs_perf_data) needs these; harmless when
-# unused, and they make mid-run ReadDeviceProfiler calls actually flush.
-os.environ.setdefault("TT_METAL_DEVICE_PROFILER", "1")
+from loguru import logger
 
-from loguru import logger  # noqa: E402
+import ttnn
+from models.demos.common.prefill.runners.runner_utils import raise_nproc_limit
+from models.demos.gpt_oss_d_p.tests.galaxy_prefill_kv_pcc import COLS, ROWS, chunk_alignment
 
-import ttnn  # noqa: E402
-
-ROWS, COLS = 4, 8  # SP=4 (rows), TP=8 (cols), EP=32 on the Blackhole galaxy
-
-
-def _raise_nproc_limit():
-    """tt-metal JIT-compiles device kernels in parallel and each `g++ -flto=auto` fans out to
-    `make -j<nproc>`; a low RLIMIT_NPROC makes clone3 fail mid-build ("posix_spawn: Operation not
-    permitted"). Raise the soft limit to the hard limit. Copied from galaxy_prefill_kv_pcc.py."""
-    soft, hard = resource.getrlimit(resource.RLIMIT_NPROC)
-    if soft != resource.RLIM_INFINITY and (hard == resource.RLIM_INFINITY or soft < hard):
-        try:
-            resource.setrlimit(resource.RLIMIT_NPROC, (hard, hard))
-            print(f"[zone-prof] raised RLIMIT_NPROC soft {soft} -> {hard}")
-        except (ValueError, OSError) as e:
-            print(f"[zone-prof] WARNING: could not raise RLIMIT_NPROC (soft={soft}): {e}", file=sys.stderr)
-
-
-# chunk/sp feeds the MoE routing setup, which shard-splits it across 64 Tensix cores
-# (tt_moe_routing_setup asserts seq_len_per_chip % num_cores == 0), and build_indexed_rope needs
-# chunk % (TILE_SIZE * sp) == 0. Both are satisfied by 64 * sp = 256-token alignment (sp=4).
-# Same math as galaxy_prefill_kv_pcc.plan().
-MOE_ROUTING_NUM_CORES = 64
-CHUNK_ALIGN = MOE_ROUTING_NUM_CORES * ROWS  # 256
+# chunk/sp feeds the MoE routing setup (64 Tensix cores) and build_indexed_rope (TILE_SIZE * sp); both
+# are satisfied by chunk_alignment(sp) = 256 tokens at sp=4. Same math as galaxy_prefill_kv_pcc.plan().
+CHUNK_ALIGN = chunk_alignment(ROWS)
 
 
 def load_tokens(n: int):
@@ -121,7 +103,7 @@ def load_tokens(n: int):
     if not trace_dir:
         raise SystemExit(
             "ERROR: set PREFILL_TRACE_DIR to a golden trace dir (a metadata.json with token_ids).\n"
-            "       Use models/demos/gpt_oss_d_p/scripts/run_prefill_profile.sh, which synthesizes one."
+            "       Use models/demos/gpt_oss_d_p/scripts/run_prefill_profile.sh, which points it at one."
         )
     src = json.load(open(Path(trace_dir) / "metadata.json"))["token_ids"]
     assert src, f"source trace {trace_dir} has no tokens"
@@ -140,7 +122,7 @@ def plan(chunk: int, cache: int):
     """
     assert chunk % CHUNK_ALIGN == 0, (
         f"chunk ({chunk}) must be a multiple of {CHUNK_ALIGN} "
-        f"(MoE routing needs chunk/sp % {MOE_ROUTING_NUM_CORES} == 0 at sp={ROWS})"
+        f"(MoE routing needs chunk/sp to split across its cores at sp={ROWS})"
     )
     n_prefix = cache // chunk
     cache_aligned = n_prefix * chunk
@@ -215,11 +197,19 @@ def cache_traffic_note(hf_config, num_layers, cache, chunk, kv_bytes_per_elem):
 
 
 def main():
-    _raise_nproc_limit()
+    # The zone flag is read when utils/profiler_utils is imported, and the model modules import it —
+    # so it goes on before anything under models.demos.gpt_oss_d_p.tt is imported (all of those imports
+    # are inside functions below). The device-profiler flag makes mid-run ReadDeviceProfiler calls
+    # actually flush. Both live HERE, not at module import: importing this module (the unit tests do,
+    # for plan()) must not arm the profiler for the rest of the process.
+    os.environ.setdefault("GPTOSS_PROFILE_ZONES", "1")
+    os.environ.setdefault("TT_METAL_DEVICE_PROFILER", "1")
+    raise_nproc_limit("zone-prof")
 
     chunk = int(os.getenv("PROFILE_CHUNK", "8192"))
     cache_req = int(os.getenv("PROFILE_CACHE", "24576"))
     read_every = int(os.getenv("PROFILE_READ_EVERY", "1"))
+    read_in_chunk = os.getenv("PROFILE_READ_IN_CHUNK", "0") == "1"
     num_layers_override = os.getenv("PROFILE_NUM_LAYERS")
     linear = os.getenv("PREFILL_TOPOLOGY", "ring") == "linear"
 
@@ -250,33 +240,39 @@ def main():
         if cache > 0:
             cache_traffic_note(hf_config, num_layers, cache, chunk, kv_b)
 
-        # Per-layer ReadDeviceProfiler for the UN-profiled phases only (warmup + prefix). The device
-        # profiler buffer must be drained or it overflows and the next phase's data is dropped — but a
-        # drain is a blocking device sync + PCIe pull, and it lands in the trace as a multi-second
-        # OP TO OP LATENCY on the next op. Draining inside the profiled chunk therefore destroys the
-        # one measurement that explains where wall-clock goes (kernel time is unaffected, the gaps are
-        # not). So: drain freely before the chunk, go silent during it, flush once after.
+        # The device profiler buffer holds TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT programs per device
+        # (default 1000) and drops everything past that, so it must be drained regularly — but a drain
+        # is a blocking device sync + PCIe pull that lands in the trace as a multi-second OP TO OP
+        # LATENCY on the next op. Draining inside the profiled chunk therefore destroys the one
+        # measurement that explains where wall-clock goes (kernel time is unaffected, the gaps are
+        # not). So: drain freely before the chunk (after compile, after every prefix layer via the
+        # runtime's layer-completion sink, and after every prefix chunk), go silent during it, flush
+        # once after. That means the profiled chunk's ops must all fit in the buffer at once
+        # (num_layers x ~45 ops): size it with TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT.
         #
-        # That means the profiled chunk's ops must all fit in the buffer at once
-        # (num_layers x ~45 ops). Size it with TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT — the default is
-        # only 1000 (tt_metal/impl/profiler/profiler_state_manager.cpp).
-        read_in_chunk = os.getenv("PROFILE_READ_IN_CHUNK", "0") == "1"
+        # PROFILE_READ_IN_CHUNK=1 drains per layer inside the chunk too — an experiment, not a mode: a
+        # drain is mesh-wide, so on a ring it can change what a CCL's device time includes (waiting for
+        # peers). Comparing its totals against a silent run measures that effect.
         state = {"reads": 0, "in_chunk": False}
 
-        def on_layer_complete(layer_idx):
+        def drain():
+            read_profiler(mesh)
+            state["reads"] += 1
+
+        def layer_sink(global_layer_idx, request_id):
             if state["in_chunk"] and not read_in_chunk:
                 return
-            if read_every > 0 and (layer_idx + 1) % read_every == 0:
-                read_profiler(mesh)
-                state["reads"] += 1
-
-        runtime._on_layer_complete = on_layer_complete
+            if read_every > 0 and (global_layer_idx + 1) % read_every == 0:
+                drain()
 
         # --- 1. WARMUP: JIT-compiles every op and populates the program cache. Its ops land in the CSV
-        # too, but outside the `profiled_chunk` zone, so the parser drops them.
+        # too, but outside the `profiled_chunk` zone, so the parser drops them. The sink can only be
+        # registered after compile(), so the warmup itself is covered by the drain right after it.
         print(f"[zone-prof] warmup / compile ({num_layers}L, SP={ROWS} x TP={COLS} + EP=32) ...", flush=True)
         t0 = time.perf_counter()
         runtime.compile()
+        drain()
+        runtime.set_layer_completion_sink(layer_sink)
         print(f"[zone-prof] warmup done in {(time.perf_counter() - t0):.1f}s", flush=True)
 
         tokens = load_tokens(total)
@@ -287,7 +283,8 @@ def main():
             runtime.prefill_chunk(inp, slot_id=0, actual_start=a, actual_end=a + chunk)
 
         # --- 2. fill the cache to `cache` tokens. Not inside the `profiled_chunk` zone, so these ops are
-        # excluded from the report; synced before the profiled chunk so it pays for no leftover barrier.
+        # excluded from the report; synced and drained before the profiled chunk so it pays for no
+        # leftover barrier and starts with an empty profiler buffer.
         skip_prefix = os.getenv("PROFILE_SKIP_PREFIX") == "1"
         if skip_prefix and n_chunks > 1:
             # FAST/APPROXIMATE: run the profiled chunk at actual_start=`cache` against a still-ZEROED
@@ -304,7 +301,8 @@ def main():
             t0 = time.perf_counter()
             for c in range(n_chunks - 1):
                 prefill_chunk(c)
-            ttnn.synchronize_device(mesh)
+                ttnn.synchronize_device(mesh)
+                drain()
             print(f"[zone-prof] prefix filled in {(time.perf_counter() - t0):.1f}s", flush=True)
 
         # --- 3. the profiled chunk, bracketed by the `profiled_chunk` zone. Everything the parser
@@ -327,16 +325,16 @@ def main():
             ttnn.synchronize_device(mesh)
         wall = time.perf_counter() - t0
         state["in_chunk"] = False
-        read_profiler(mesh)  # single flush of the whole profiled chunk
         chunk_reads = state["reads"] - prefix_reads
+        drain()  # single flush of the whole profiled chunk, after its closing marker
 
         print(
             f"\n[zone-prof] PROFILED CHUNK: {chunk} tok @ {cache} cache, {num_layers} layers\n"
             f"  wall-clock: {wall * 1e3:.1f} ms  ({chunk_reads} profiler reads inside the chunk, "
             f"{prefix_reads} before it)\n"
-            f"  device-kernel time per zone: parse the ops CSV with\n"
-            f"    python3 models/demos/gpt_oss_d_p/tests/perf/parse_zone_perf.py "
-            f"<generated/profiler/reports/*/ops_perf_results_*.csv> --html zones.html",
+            f"  device-kernel time per zone: render the ops CSV with\n"
+            f"    python3 models/demos/gpt_oss_d_p/tests/perf/visualize_zones.py "
+            f"<generated/profiler/reports/*/ops_perf_results_*.csv>",
             flush=True,
         )
         print("[zone-prof] DONE", flush=True)

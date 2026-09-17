@@ -1,65 +1,53 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Device-free tests for the GPT-OSS zone profiler's contracts.
+"""Device-free tests for the GPT-OSS side of the zone profiler.
 
-Everything here runs on host: the pieces that can silently produce a *wrong report* rather than an
-error are the ones worth pinning. Mirrors ``minimax_m3/tests/perf/test_zone_profiler.py``.
+The mechanism (zone gating, signpost wire format, attribution, truncation detection, leaf detection,
+per-layer aggregation) is tested once in models/demos/common/prefill/tests/test_zone_profiling.py. What
+is pinned here is the GPT-OSS contract with it: the layer tag tt/layer.py emits, which zones count as
+communication / memory, the env-var names the wrapper script exports, and the harness's chunk plan.
 
     pytest models/demos/gpt_oss_d_p/tests/perf/test_zone_profiler.py
 """
 
+import importlib
 import os
-import sys
+from pathlib import Path
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import pytest
 
-import parse_zone_perf as P  # noqa: E402
-import visualize_zones as V  # noqa: E402
+from models.demos.common.prefill.profiling import parse_zone_perf as P
+from models.demos.gpt_oss_d_p.utils.profiler_utils import SPEC
+
+SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "run_prefill_profile.sh"
 
 
-class TestLeafDetection:
-    """A zone is a parent only when a descendant is present in THIS capture.
+class TestSpec:
+    def test_layer_classes_match_the_layer_tags(self):
+        # tt/layer.py: f"layer{layer_idx:02d}_{'sliding' if self.self_attn.is_sliding else 'full'}"
+        assert SPEC.class_keys == ("sliding", "full")
+        assert P.layer_class(f"{SPEC.root_zone}/layer00_sliding/attn/qkv_proj") == ("sliding", "attn/qkv_proj", 0)
+        assert P.layer_class(f"{SPEC.root_zone}/layer07_full/mlp/combine") == ("full", "mlp/combine", 7)
+        assert P.layer_class(f"{SPEC.root_zone}/layer11_full") == ("full", "", 11)
+        assert P.relative_path(f"{SPEC.root_zone}/layer04_sliding/attn/sdpa") == "sliding:attn/sdpa"
 
-    Whether a zone is a parent depends on the capture's LEVEL (suppressed children make it a leaf),
-    so the exclusion set must be computed from the capture, never from a static list — a static list
-    silently drops leaf time from the totals.
-    """
+    def test_full_model_is_36_layers_half_each(self):
+        assert SPEC.full_model_layers == 36
+        assert [c.full_model_count for c in SPEC.layer_classes] == [18, 18]
 
-    LEVEL2 = {
-        "(layer total)",
-        "attn",
-        "mlp",
-        "attn/ring_joint_sdpa",
-        "attn/kv_write",
-        "mlp/experts_mm",
-        "mlp/dispatch",
-    }
-    LEVEL3 = LEVEL2 | {"attn/qkv_proj", "attn/rope", "mlp/routing_setup"}
-
-    def test_zone_without_captured_children_is_a_leaf(self):
-        assert "attn/ring_joint_sdpa" not in V.parent_rels(self.LEVEL2)
-        assert "mlp/dispatch" not in V.parent_rels(self.LEVEL3)
-
-    def test_real_parents_are_always_excluded(self):
-        for level in (self.LEVEL2, self.LEVEL3):
-            parents = V.parent_rels(level)
-            assert {"attn", "mlp", "(layer total)"} <= parents
-
-    def test_leaves_and_parents_partition_the_zones(self):
-        # Nothing may be both, and nothing may be neither — otherwise time is double-counted or lost.
-        for level in (self.LEVEL2, self.LEVEL3):
-            parents = V.parent_rels(level)
-            leaves = level - parents
-            assert parents | leaves == level
-            assert not (parents & leaves)
+    def test_wrapper_script_exports_the_spec_env_vars(self):
+        text = SCRIPT.read_text()
+        assert f"export {SPEC.zones_env}=1" in text
+        assert SPEC.level_env in text
 
 
 class TestCategorization:
-    """cat() drives the compute/comm/memory split — the headline number of the report."""
+    """SPEC.cat() drives the compute/comm/memory split — the headline number of the report."""
 
-    def test_collectives_are_comm(self):
-        for rel in (
+    @pytest.mark.parametrize(
+        "rel",
+        [
             "attn/ag_qkv",
             "attn/sdpa_reduce_scatter",
             "attn/ccl_out_allreduce",
@@ -69,118 +57,51 @@ class TestCategorization:
             "mlp/combine",
             "mlp/moe_reduce",
             "mlp/pre_dispatch_allgather",
-        ):
-            assert V.cat(rel) == "comm", rel
+        ],
+    )
+    def test_collectives_are_comm(self, rel):
+        assert SPEC.cat(rel) == "comm"
 
-    def test_kv_cache_traffic_is_memory(self):
-        assert V.cat("attn/kv_write") == "memory"
+    @pytest.mark.parametrize("rel", ["attn/kv_write", "defrag_move"])
+    def test_cache_traffic_is_memory(self, rel):
+        assert SPEC.cat(rel) == "memory"
 
     def test_ring_sdpa_is_compute(self):
         # The cache-backed ring SDPA fuses its SP ring CCL with the attention compute in one device
-        # op, so it is reported as compute (its comm share is not separable) — see visualize_zones.py.
-        assert V.cat("attn/ring_joint_sdpa") == "compute"
+        # op, so it is reported as compute (its comm share is not separable) — see profiler_utils.py.
+        assert SPEC.cat("attn/ring_joint_sdpa") == "compute"
 
-    def test_matmuls_are_compute(self):
-        for rel in ("attn/qkv_proj", "attn/sdpa", "attn/o_proj", "mlp/experts_mm", "mlp/router_topk"):
-            assert V.cat(rel) == "compute", rel
-
-
-class TestLayerClassParsing:
-    """The layerNN_{sliding|full} tag is the contract between layer.py and the parser's aggregation."""
-
-    def test_sliding_layer(self):
-        assert P.layer_class(f"{P.ROOT_ZONE}/layer00_sliding/attn/qkv_proj") == ("sliding", "attn/qkv_proj", 0)
-
-    def test_full_layer(self):
-        assert P.layer_class(f"{P.ROOT_ZONE}/layer07_full/mlp/combine") == ("full", "mlp/combine", 7)
-
-    def test_layer_total(self):
-        assert P.layer_class(f"{P.ROOT_ZONE}/layer11_full") == ("full", "", 11)
-
-    def test_non_layer_zone(self):
-        assert P.layer_class("profiled_chunk") is None
-
-    def test_relative_path_collapses_layer_index(self):
-        assert P.relative_path("profiled_chunk/layer04_sliding/attn/sdpa") == "sliding:attn/sdpa"
-        assert P.relative_path("profiled_chunk/layer05_full") == "full:(layer total)"
+    @pytest.mark.parametrize(
+        "rel", ["attn/qkv_proj", "attn/sdpa", "attn/o_proj", "mlp/experts_mm", "mlp/router_topk", f"mlp/{P.SELF}"]
+    )
+    def test_matmuls_and_glue_are_compute(self, rel):
+        assert SPEC.cat(rel) == "compute"
 
 
-class TestZoneAccumulator:
-    """Attribution: ops belong to the innermost open zone and every enclosing one, and only the
-    profiled chunk is reported."""
+class TestHarness:
+    """profile_prefill.py: importing it must have no side effects, and its chunk plan sizes the KV
+    cache the profiled chunk attends — a wrong plan profiles the wrong case."""
 
     @staticmethod
-    def _sig(name):
-        return {"OP CODE": name, "OP TYPE": "signpost"}
+    def _harness():
+        return importlib.import_module("models.demos.gpt_oss_d_p.tests.perf.profile_prefill")
 
-    @staticmethod
-    def _op(ns, dev=0):
-        return {
-            "OP CODE": "Matmul",
-            "OP TYPE": P.DEVICE_OP_TYPE,
-            "DEVICE ID": dev,
-            P.DURATION_COL: ns,
-        }
-
-    def _feed(self, rows):
-        acc = P.ZoneAccumulator()
-        for r in rows:
-            acc.feed(r, {})
-        return acc
-
-    def test_ops_outside_the_root_zone_are_ignored(self):
-        # Warmup and cache-prefix ops share the CSV with the profiled chunk; they must not be counted.
-        acc = self._feed([self._op(1_000_000)])
-        assert acc.rows_in_root == 0
-
-    def test_op_is_charged_to_every_enclosing_zone(self):
-        acc = self._feed(
-            [
-                self._sig(f"{P.ZONE_START} {P.ROOT_ZONE}"),
-                self._sig(f"{P.ZONE_START} layer03_full"),
-                self._sig(f"{P.ZONE_START} attn"),
-                self._op(2_000_000),
-                self._sig(f"{P.ZONE_END} attn"),
-                self._sig(f"{P.ZONE_END} layer03_full"),
-                self._sig(f"{P.ZONE_END} {P.ROOT_ZONE}"),
-            ]
-        )
-        for path in (P.ROOT_ZONE, f"{P.ROOT_ZONE}/layer03_full", f"{P.ROOT_ZONE}/layer03_full/attn"):
-            assert acc.stats[(path, 0)]["ns"] == 2_000_000, path
-
-    def test_unmatched_end_marker_is_counted_not_fatal(self):
-        # A truncated capture must degrade, not crash: the report says so instead of dying.
-        acc = self._feed([self._sig(f"{P.ZONE_END} never_opened")])
-        assert acc.unmatched_ends == 1
-
-    def test_non_device_ops_are_flagged_as_host_work(self):
-        acc = self._feed(
-            [
-                self._sig(f"{P.ZONE_START} {P.ROOT_ZONE}"),
-                {"OP CODE": "Fallback", "OP TYPE": "python_fallback", "DEVICE ID": 0, P.DURATION_COL: None},
-                self._sig(f"{P.ZONE_END} {P.ROOT_ZONE}"),
-            ]
-        )
-        assert acc.host_ops, "a CPU fallback inside the forward must be reported"
-
-
-class TestChunkPlan:
-    """plan() sizes the KV cache the profiled chunk attends; a wrong plan profiles the wrong case."""
-
-    def _plan(self, chunk, cache):
-        import profile_prefill as H
-
-        return H.plan(chunk, cache)
+    def test_import_does_not_arm_the_profiler(self, monkeypatch):
+        # The env flags belong to main(): a test that imports the harness must not turn on zones and
+        # the device profiler for every later test in the same pytest session.
+        monkeypatch.delenv("GPTOSS_PROFILE_ZONES", raising=False)
+        monkeypatch.delenv("TT_METAL_DEVICE_PROFILER", raising=False)
+        importlib.reload(self._harness())
+        assert "GPTOSS_PROFILE_ZONES" not in os.environ
+        assert "TT_METAL_DEVICE_PROFILER" not in os.environ
 
     def test_cache_rounds_down_to_whole_chunks(self):
-        n_chunks, cache, total = self._plan(8192, 25000)
-        assert (n_chunks, cache, total) == (4, 24576, 32768)
+        assert self._harness().plan(8192, 25000) == (4, 24576, 32768)
 
     def test_zero_cache_is_one_shot(self):
-        n_chunks, cache, total = self._plan(8192, 0)
-        assert (n_chunks, cache, total) == (1, 0, 8192)
+        assert self._harness().plan(8192, 0) == (1, 0, 8192)
 
     def test_misaligned_chunk_is_rejected(self, expect_error):
-        # chunk/sp must split across the 64 MoE routing cores (see galaxy_prefill_kv_pcc.plan).
+        # chunk/sp must split across the 64 MoE routing cores (galaxy_prefill_kv_pcc.chunk_alignment).
         with expect_error(AssertionError, "must be a multiple"):
-            self._plan(8000, 0)
+            self._harness().plan(8000, 0)

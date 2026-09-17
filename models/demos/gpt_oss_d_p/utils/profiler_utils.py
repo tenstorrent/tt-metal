@@ -1,140 +1,76 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Zone markers for GPT-OSS prefill profiling (Tracy). Mirrors ``minimax_m3/utils/profiler_utils.py``.
+"""GPT-OSS zone profiling: the model's ZoneSpec and its ``zone`` / ``read_profiler``.
 
-A "zone" is a named region of the forward pass. Every zone emits a pair of Tracy
-signposts around the ops it contains::
+The mechanism lives in models/demos/common/prefill/profiling (shared with MiniMax-M3); this module only
+says what is GPT-OSS-specific — the signpost prefix, the env vars, the two layer classes and which
+zones are communication vs KV-cache memory — and re-exports the API the model code uses::
 
-    GPTOSS_ZONE_START <name>   ... the zone's ttnn ops ...   GPTOSS_ZONE_END <name>
-
-Signposts land in the tracy ops CSV as rows with ``OP TYPE == "signpost"`` and
-``OP CODE == "<prefix> <name>"``, interleaved with the op rows in host-enqueue
-order. Because a zone's ops are exactly the ops enqueued between its two
-signposts, summing ``DEVICE KERNEL DURATION [ns]`` between the markers gives that
-zone's device time — regardless of when the device actually ran them. This is the
-same mechanism deepseek_v3_d_p uses (``forward_layer_{i}_start`` in
-``tt/tt_prefill_transformer.py``, ``MLA_START``/``MLA_END`` in ``tt/mla/mla.py``),
-just with a nested zone hierarchy instead of two flat regions.
-
-A matching Tracy *host* zone is emitted too, so the regions also show up as
-nested zones on the host timeline in the Tracy GUI / WASM viewer.
-
-Everything here is OFF by default: unless ``GPTOSS_PROFILE_ZONES=1`` is set, ``zone()``
-returns a shared no-op context manager and nothing is emitted. With the flag set,
-zones at or below ``GPTOSS_PROFILE_LEVEL`` become real. Signposts are host-only
-messages (no device op, no sync), so an enabled zone does not perturb device
-timings.
-
-Usage::
-
-    from models.demos.gpt_oss_d_p.utils.profiler_utils import zone
+    from models.demos.gpt_oss_d_p.utils.profiler_utils import COARSE, FINE, zone
 
     with zone("ring_joint_sdpa"):
         out = dense_sp_attention(...)
 
-Profiler reads: the device profiler buffer holds ~1000 ops per device, and one GPT-OSS
-prefill chunk enqueues far more than that (~40-50 ops per layer x 36 layers), so
-``read_profiler()`` MUST be called periodically or device data is silently
-dropped. ``tests/perf/profile_prefill.py`` wires it to the model's
-``on_layer_complete`` seam.
-
-See models/demos/gpt_oss_d_p/tests/perf/README_profiling.md.
+Off by default: ``GPTOSS_PROFILE_ZONES=1`` arms the zones, ``GPTOSS_PROFILE_LEVEL=1|2|3`` picks the detail
+(read once, when this module is imported, so the harness sets them before importing the model). See
+tests/perf/README_profiling.md.
 """
 
 from __future__ import annotations
 
-import contextlib
-import os
+from models.demos.common.prefill.profiling.spec import LayerClass, ZoneSpec
+from models.demos.common.prefill.profiling.zones import COARSE, FINE, MEDIUM, ZoneProfiler
 
-import ttnn
-
-
-def _signpost(header: str) -> None:
-    """Emit a Tracy signpost, byte-identical to `tracy.signpost(header)` minus its loguru line.
-
-    `tracy.signpost` logs every call at INFO. A 36-layer chunk opens ~15 zones per layer, so going
-    through it would print hundreds of lines per chunk and burn real time in log formatting. The wire
-    format is the contract with tools/tracy/process_ops_logs.py: the backticks are the message CSV's
-    quotechar and "TT_SIGNPOST: " is what marks the row as a signpost, whose remainder becomes the
-    CSV's OP CODE.
-    """
-    try:
-        ttnn.tracy_message(f"`TT_SIGNPOST: {header}`")
-    except Exception:  # tracy disabled in this build — zones become inert
-        pass
-
-
-ZONE_START_PREFIX = "GPTOSS_ZONE_START"
-ZONE_END_PREFIX = "GPTOSS_ZONE_END"
-
-# Zone detail levels. A zone is emitted only when its level <= GPTOSS_PROFILE_LEVEL, so one set of
-# call sites serves every depth of investigation:
+# GPT-OSS-120B: 36 layers alternating sliding-window (even) / full-causal (odd) attention, 18 of each;
+# the MLP is MoE on every layer, so the attention class is the only thing distinguishing layers
+# (tt/layer.py tags each layer zone `layerNN_{sliding|full}`).
 #
-#   1 COARSE  per layer: attn vs mlp. ~3 zones/layer — start here, it answers "which block".
-#   2 MEDIUM  + every block that costs real time: sdpa, the CCLs, and the MoE stages
-#             (dispatch / experts_mm / combine / moe_reduce). ~15 zones/layer. The default.
-#   3 FINE    + norms, residuals, rope, head splits, kv_write. ~25 zones/layer.
-#
-# Levels are not just presentation: each zone is two Tracy signposts, and Tracy caps a trace at 32K
-# source locations, so a coarse level also buys headroom on long captures.
-COARSE, MEDIUM, FINE = 1, 2, 3
+# ring_joint_sdpa is deliberately NOT a comm key. The cache-backed ring SDPA fuses the SP ring-rotation
+# CCL with the attention compute in one device op, so its comm share cannot be split out; it is reported
+# as compute. The one-shot path's ag_qkv / sdpa_reduce_scatter ARE separate ops, which is what makes the
+# CACHE=0 capture the comm/compute reference point for attention.
+SPEC = ZoneSpec(
+    model_name="GPT-OSS",
+    signpost_prefix="GPTOSS_ZONE",
+    env_prefix="GPTOSS_PROFILE",
+    host_zone_scope="gpt_oss_d_p",
+    layer_classes=(
+        LayerClass("sliding", "Sliding-attention layer", 18),
+        LayerClass("full", "Full-attention layer", 18),
+    ),
+    comm_keys=(
+        "ccl_out_allreduce",
+        "ccl_out_allgather",
+        "ag_qkv",
+        "sdpa_reduce_scatter",
+        "tp_allgather",
+        "dispatch",
+        "combine",
+        "moe_reduce",
+        "pre_dispatch_allgather",
+    ),
+    mem_keys=("kv_write", "defrag_move"),
+)
 
-# Read once at import: the harness sets these before the model is built.
-ZONES_ENABLED = os.getenv("GPTOSS_PROFILE_ZONES", "0") == "1"
-LEVEL = int(os.getenv("GPTOSS_PROFILE_LEVEL", str(MEDIUM)))
+PROFILER = ZoneProfiler(SPEC)
+zone = PROFILER.zone
+read_profiler = PROFILER.read_profiler
+ZONES_ENABLED = PROFILER.enabled
+LEVEL = PROFILER.level
+ZONE_START_PREFIX = SPEC.zone_start
+ZONE_END_PREFIX = SPEC.zone_end
 
-# Reused singleton for the disabled path — nullcontext carries no per-use state, so one
-# instance is safe to enter/exit repeatedly (and re-entrantly).
-_NULL_ZONE = contextlib.nullcontext()
-
-# Host-side Tracy zones are cosmetic (the signposts are what the parser reads). Kept behind
-# their own flag so a build without the bindings can still produce a zone CSV.
-_HOST_ZONES = os.getenv("GPTOSS_PROFILE_HOST_ZONES", "1") == "1"
-
-
-@contextlib.contextmanager
-def _zone(name: str):
-    _signpost(f"{ZONE_START_PREFIX} {name}")
-    if _HOST_ZONES:
-        try:
-            ttnn.start_tracy_zone("gpt_oss_d_p", name, 0)
-        except Exception:  # bindings absent / tracy disabled in this build
-            pass
-    try:
-        yield
-    finally:
-        if _HOST_ZONES:
-            try:
-                ttnn.stop_tracy_zone(name)
-            except Exception:
-                pass
-        _signpost(f"{ZONE_END_PREFIX} {name}")
-
-
-def zone(name: str, level: int = MEDIUM):
-    """Context manager marking ``name`` as a profiling zone.
-
-    No-op unless GPTOSS_PROFILE_ZONES=1 and ``level <= GPTOSS_PROFILE_LEVEL`` (see COARSE/MEDIUM/FINE
-    above). Suppressing a zone does not lose its ops: they are charged to the nearest enclosing zone
-    that is still open, so a coarse run still accounts for 100% of the time, just in fewer buckets.
-
-    Zones nest by call site — the parser builds the full path from the nesting, so names here are
-    local (``"dispatch"``, not ``"mlp/dispatch"``). The same name is entered once per layer and the
-    parser accumulates across layers.
-    """
-    if not ZONES_ENABLED or level > LEVEL:
-        return _NULL_ZONE
-    return _zone(name)
-
-
-def read_profiler(mesh_device) -> None:
-    """Flush the device profiler buffers to host. No-op unless GPTOSS_PROFILE_ZONES=1.
-
-    Required every <1000 ops per device (see the module docstring). Blocking: it reads the
-    device-side profiler buffers, so it inflates host wall-clock. Device kernel durations are
-    unaffected — measure wall-clock in a separate, unprofiled run.
-    """
-    if not ZONES_ENABLED:
-        return
-    ttnn.ReadDeviceProfiler(mesh_device)
+__all__ = [
+    "COARSE",
+    "MEDIUM",
+    "FINE",
+    "LEVEL",
+    "PROFILER",
+    "SPEC",
+    "ZONES_ENABLED",
+    "ZONE_END_PREFIX",
+    "ZONE_START_PREFIX",
+    "read_profiler",
+    "zone",
+]
