@@ -2015,7 +2015,7 @@ class ttMLA:
         q: ttnn.Tensor,
         kvpe: MlaKvCache,
         indices: ttnn.Tensor,
-        block_cyclic_chunk_local: Optional[int] = None,
+        block_cyclic_chunk_local: int,
         cache_batch_idx: Optional[int] = None,
     ) -> ttnn.Tensor:
         """Absorbed MQA over the top-k selected latents (FlashMLA sparse contract: no causal mask —
@@ -2031,7 +2031,7 @@ class ttMLA:
         block_cyclic_chunk_local: when set, ``kvpe`` is the KVPE cache in its native BLOCK-CYCLIC SP layout
         (not natural order) and ``indices`` are natural positions; sparse_sdpa remaps each index to its
         physical page in-kernel (invP) over the SP mesh axis, so the host reorder is eliminated. It is the
-        per-shard chunk length (chunk_size_global / sp). None → natural-order kvpe (single-shot path).
+        per-shard chunk length (chunk_size_global / sp).
 
         cache_batch_idx: when set, ``kvpe`` is the whole multi-user physical cache [B, 1, T, row_width] (B =
         num_users*num_layers user-major slots) and this selects the slot to attend — the op offsets its
@@ -2094,9 +2094,9 @@ class ttMLA:
             kv_format=kvpe.format.sparse_sdpa_format,
             scale=self.scale,
             k_chunk_size=k_chunk,
-            block_cyclic_sp_axis=self.sp_axis if block_cyclic_chunk_local is not None else None,
+            block_cyclic_sp_axis=self.sp_axis,
             block_cyclic_chunk_local=block_cyclic_chunk_local,
-            block_cyclic_cache_tp_sharded=block_cyclic_chunk_local is not None,
+            block_cyclic_cache_tp_sharded=True,
             cache_batch_idx=cache_batch_idx,
         )
         ttnn.deallocate(q_rm)
