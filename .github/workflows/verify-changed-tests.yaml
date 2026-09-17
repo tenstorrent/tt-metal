@@ -274,6 +274,10 @@ jobs:
         GTEST_TOTAL_SHARDS: ${{ matrix.leg.gtest_shard_total || 1 }}
         GTEST_SHARD_INDEX: ${{ matrix.leg.gtest_shard_index || 0 }}
         HF_HUB_OFFLINE: ${{ (matrix.leg['weights-cache-mode'] == 'local-disk' || matrix.leg['weights-cache-mode'] == 'lfc') && '0' || '1' }}
+        # The three models impls (e2e, unit, device perf) pair HF_HUB_OFFLINE with this
+        # cache path; without it an offline leg whose cmd does not export HF_HOME looks
+        # in ~/.cache and fails with "couldn't find them in the cached files".
+        HF_HUB_CACHE: /mnt/MLPerf/huggingface/hub
         # The tracy paths the three profiler impls set. Empty on every other leg,
         # which the consuming scripts treat as unset (they test with -z).
         PROFILER_SCRIPTS_ROOT: ${{ matrix.leg.gate_profile == 'profiler' && '/work/tools/tracy' || '' }}
