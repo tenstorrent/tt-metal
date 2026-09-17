@@ -309,7 +309,7 @@ inline __attribute__((always_inline)) void feed(Model& m, uint64_t r, uint64_t w
 // NoCs swap request and response hop counts, so their average carries no hop term, and the same read of this core's
 // own register measures this end of the path. What a one-way read cannot split, the far end, stays in the reading
 // and is the host's to bound; no number is assumed for it here.
-constexpr uint32_t kTileReps = 8;
+constexpr uint32_t kTileReps = 32;
 constexpr uint32_t kTileWallLo = 0xFFB121F0u;      // RISCV_DEBUG_REG_WALL_CLOCK_L, latches the high word
 constexpr uint32_t kTileWallHiLive = 0xFFB121F4u;  // RISCV_DEBUG_REG_WALL_CLOCK_1, the live high word
 
@@ -317,41 +317,62 @@ inline uint32_t tile_coord(uint32_t xy) {
     return static_cast<uint32_t>(get_noc_addr(xy & 0xFFFFu, xy >> 16, 0) >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK;
 }
 
-// Lands 4 B of `addr` on tile `coord` at the scratch word congruent to it and returns once the response is in;
-// the caller reads the word after its second wall-clock sample, so the bracket closes on the response itself.
-inline volatile tt_l1_ptr uint32_t* tile_fetch(uint32_t noc, uint32_t coord, uint32_t addr) {
+// A 4 B read of `addr` on tile `coord`, landing at the scratch word congruent to it: programmed first, then sent
+// and waited for as one step, so a bracket around the send alone holds the packet's flight and the two NIUs'
+// handling and none of the programming.
+inline volatile tt_l1_ptr uint32_t* tile_arm(uint32_t noc, uint32_t coord, uint32_t addr, uint32_t bytes) {
     const uint32_t dst = kScratchAddr + (addr & 0x3Fu);
     NOC_CMD_BUF_WRITE_REG(noc, NCRISC_RD_CMD_BUF, NOC_RET_ADDR_LO, dst);
     NOC_CMD_BUF_WRITE_REG(noc, NCRISC_RD_CMD_BUF, NOC_TARG_ADDR_LO, addr);
     NOC_CMD_BUF_WRITE_REG(noc, NCRISC_RD_CMD_BUF, NOC_TARG_ADDR_MID, 0);
     NOC_CMD_BUF_WRITE_REG(noc, NCRISC_RD_CMD_BUF, NOC_TARG_ADDR_COORDINATE, coord);
-    NOC_CMD_BUF_WRITE_REG(noc, NCRISC_RD_CMD_BUF, NOC_AT_LEN_BE, 4);
+    NOC_CMD_BUF_WRITE_REG(noc, NCRISC_RD_CMD_BUF, NOC_AT_LEN_BE, bytes);
+    return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst);
+}
+
+inline void tile_send_wait(uint32_t noc) {
     NOC_CMD_BUF_WRITE_REG(noc, NCRISC_RD_CMD_BUF, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
     noc_reads_num_issued[noc] += 1;
     while (!ncrisc_noc_reads_flushed(noc)) {
     }
-    return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst);
 }
 
 inline uint32_t tile_read(uint32_t noc, uint32_t coord, uint32_t addr) {
-    volatile tt_l1_ptr uint32_t* land = tile_fetch(noc, coord, addr);
+    volatile tt_l1_ptr uint32_t* land = tile_arm(noc, coord, addr, 4);
+    tile_send_wait(noc);
     invalidate_l1_cache();
     return *land;
 }
 
 // Median over kTileReps of 2 * (tile wall - bracket midpoint) on one NoC, in wall ticks; `rtt` gets the median
-// round trip. Upper medians, as the calibration used.
+// round trip. Upper medians, as the calibration used. The request is programmed once and re-sent per rep (the NIU
+// clears only NOC_CMD_CTRL on acceptance), and the bracket holds nothing but the send store and the poll: every
+// instruction inside it is time the bound has to allow the far end. The poll watches the word land in L1, which
+// is closer than the NIU's response counter; the sentinel is the previous reading with its top bit flipped, a value
+// the next reading can only take after advancing exactly 2^31 ticks, so a halted or slow clock cannot make it spin.
 // The low words differ by the eth-minus-tensix offset modulo 2^32, anywhere in [-2^31, 2^31), so the doubled and
 // summed quarter ticks need 64 bits: in 32 they wrap for 3/4 of the offsets and the table lands 2^30 ticks off.
 __attribute__((noinline, cold)) int64_t tile_bracket(uint32_t noc, uint32_t coord, int32_t& rtt) {
+    uint32_t prev = tile_read(noc, coord, kTileWallLo);  // also leaves the request programmed
+    volatile tt_l1_ptr uint32_t* const land =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kScratchAddr + (kTileWallLo & 0x3Fu));
+    volatile uint32_t* const ctrl = reinterpret_cast<volatile uint32_t*>(
+        (NCRISC_RD_CMD_BUF << NOC_CMD_BUF_OFFSET_BIT) + (noc << NOC_INSTANCE_OFFSET_BIT) + NOC_CMD_CTRL);
+    volatile uint32_t* const wall = reinterpret_cast<volatile uint32_t*>(eth_ptp::kWallClockLo);
     int64_t d[kTileReps];
     int32_t r[kTileReps];
     for (uint32_t i = 0; i < kTileReps; i++) {
-        const uint32_t w0 = eth_ptp::rd(eth_ptp::kWallClockLo);
-        volatile tt_l1_ptr uint32_t* land = tile_fetch(noc, coord, kTileWallLo);
-        const uint32_t w1 = eth_ptp::rd(eth_ptp::kWallClockLo);
-        invalidate_l1_cache();
+        noc_reads_num_issued[noc] += 1;
+        const uint32_t sentinel = prev ^ 0x80000000u;
+        *land = sentinel;
+        const uint32_t w0 = *wall;
+        *ctrl = NOC_CTRL_SEND_REQ;
+        do {
+            invalidate_l1_cache();
+        } while (*land == sentinel);
+        const uint32_t w1 = *wall;
         const uint32_t v = *land;
+        prev = v;
         const int32_t ri = static_cast<int32_t>(w1 - w0);
         const int64_t di = 2 * static_cast<int64_t>(static_cast<int32_t>(v - w0)) - ri;
         uint32_t j = i;
@@ -369,29 +390,31 @@ __attribute__((noinline, cold)) int64_t tile_bracket(uint32_t noc, uint32_t coor
     return d[kTileReps / 2];
 }
 
-// Both NoCs: quarter ticks of (tile wall - this core's wall) plus the path bias; `rtt` is NoC 0's round trip.
-__attribute__((noinline, cold)) int64_t tile_q(uint32_t coord, int32_t& rtt) {
-    int32_t r1;
-    return tile_bracket(0, coord, rtt) + tile_bracket(1, coord, r1);
-}
-
 inline int64_t round_q(int64_t q) { return (q + 2) >> 2; }
 
 // Fills the host's tile table: per tile, this core's wall tick minus the tile's as a 64-bit integer whose low word
-// is the bracket result and whose high word comes from the tile's live high word read on both sides of its low word
-// (retaken across a wrap) against this core's own, and the read's round trip.
+// is the two NoCs' bracket result and whose high word comes from the tile's live high word read on both sides of
+// its low word (retaken across a wrap) against this core's own; each NoC's round trip; and the NoC 0 minus NoC 1
+// reading, the path split the host checks against the torus routes.
 __attribute__((noinline, cold)) void measure_tiles() {
     volatile tt_l1_ptr uint32_t* tab = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kTileTableAddr);
     invalidate_l1_cache();
     const uint32_t n = tab[kp::ETH_TILE_N];
-    int32_t loop_rtt;
-    const int64_t loop_q = tile_q(tile_coord(kMyXy), loop_rtt);
-    tab[kp::ETH_TILE_LOOP_RTT] = static_cast<uint32_t>(loop_rtt);
+    const uint32_t me = tile_coord(kMyXy);
+    int32_t loop_r0, loop_r1;
+    const int64_t loop_q0 = tile_bracket(0, me, loop_r0);
+    const int64_t loop_q1 = tile_bracket(1, me, loop_r1);
+    const int64_t loop_q = loop_q0 + loop_q1;
+    tab[kp::ETH_TILE_LOOP_RTT] = static_cast<uint32_t>(loop_r0);
     tab[kp::ETH_TILE_LOOP_BIAS] = static_cast<uint32_t>(loop_q);
+    tab[kp::ETH_TILE_LOOP_RTT1] = static_cast<uint32_t>(loop_r1);
+    tab[kp::ETH_TILE_LOOP_DDIFF] = static_cast<uint32_t>(static_cast<int32_t>(loop_q0 - loop_q1));
     for (uint32_t i = 0; i < n; i++) {
         const uint32_t coord = tile_coord(tab[kp::ETH_TILE_XY_0 + i]);
-        int32_t rtt;
-        const int64_t fine = -round_q(tile_q(coord, rtt) - loop_q);
+        int32_t r0, r1;
+        const int64_t q0 = tile_bracket(0, coord, r0);
+        const int64_t q1 = tile_bracket(1, coord, r1);
+        const int64_t fine = -round_q(q0 + q1 - loop_q);
         uint32_t hi_a, lo, hi_b;
         do {
             hi_a = tile_read(0, coord, kTileWallHiLive);
@@ -403,9 +426,12 @@ __attribute__((noinline, cold)) void measure_tiles() {
         const int64_t coarse = static_cast<int64_t>((static_cast<uint64_t>(my_hi) << 32) | my_lo) -
                                static_cast<int64_t>((static_cast<uint64_t>(hi_a) << 32) | lo);
         const int64_t full = coarse + static_cast<int32_t>(static_cast<uint32_t>(fine) - static_cast<uint32_t>(coarse));
-        tab[kp::eth_tile_out_word(n, i)] = static_cast<uint32_t>(static_cast<uint64_t>(full));
-        tab[kp::eth_tile_out_word(n, i) + 1] = static_cast<uint32_t>(static_cast<uint64_t>(full) >> 32);
-        tab[kp::eth_tile_out_word(n, i) + 2] = static_cast<uint32_t>(rtt);
+        const uint32_t w = kp::eth_tile_out_word(n, i);
+        tab[w] = static_cast<uint32_t>(static_cast<uint64_t>(full));
+        tab[w + 1] = static_cast<uint32_t>(static_cast<uint64_t>(full) >> 32);
+        tab[w + 2] = static_cast<uint32_t>(r0);
+        tab[w + 3] = static_cast<uint32_t>(r1);
+        tab[w + 4] = static_cast<uint32_t>(static_cast<int32_t>(q0 - q1));
     }
     tab[kp::ETH_TILE_READY] = kp::kEthTileReadyWord | n;
 }
@@ -590,8 +616,8 @@ void kernel_main() {
         linked_l1[i] = get_arg_val<uint32_t>(2 + 2 * i);
     }
 
-    measure_tiles();
     if constexpr (kMeasureOnly != 0) {
+        measure_tiles();
         return;
     }
 

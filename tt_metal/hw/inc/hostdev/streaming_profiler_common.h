@@ -103,17 +103,22 @@ static constexpr std::uint32_t kRelayCtrlWordStride = 64;
 // Idle-eth tile table: the host lists tiles, an idle-eth core writes each one's wall-clock reading.
 //   [ETH_TILE_N]          tile count, host-written
 //   [ETH_TILE_READY]      kEthTileReadyWord | count once every tile is written
-//   [ETH_TILE_LOOP_RTT]   the core's loopback read: round trip (wall ticks) and reading (quarter ticks)
-//   [ETH_TILE_LOOP_BIAS]
+//   [ETH_TILE_LOOP_RTT]   the core's loopback read on NoC 0: round trip (wall ticks) and both NoCs' summed
+//   [ETH_TILE_LOOP_BIAS]  readings (quarter ticks); then its NoC 1 round trip and the NoC 0 minus NoC 1 reading
+//   [ETH_TILE_LOOP_RTT1]  (half ticks)
+//   [ETH_TILE_LOOP_DDIFF]
 //   [ETH_TILE_XY_0 ..)    y << 16 | x per tile, host-written; then per tile an int64, the core's wall tick minus the
-//                         tile's as the bracket read it, and the read's round trip in wall ticks
+//                         tile's as the brackets read it, the NoC 0 and NoC 1 round trips in wall ticks, and the
+//                         NoC 0 minus NoC 1 reading in half ticks
 enum EthTileTable : std::uint32_t {
     ETH_TILE_N = 0,
     ETH_TILE_READY = 1,
     ETH_TILE_LOOP_RTT = 2,
     ETH_TILE_LOOP_BIAS = 3,
+    ETH_TILE_LOOP_RTT1 = 4,
+    ETH_TILE_LOOP_DDIFF = 5,
     ETH_TILE_XY_0 = 8,
-    ETH_TILE_OUT_WORDS = 3,
+    ETH_TILE_OUT_WORDS = 5,
 };
 static constexpr std::uint32_t kEthTileReadyWord = 0x71B1E000u;
 constexpr std::uint32_t eth_tile_out_word(std::uint32_t n_tiles, std::uint32_t tile) {

@@ -100,11 +100,13 @@ private:
         CoreCoord logical, virt, phys;
         std::unique_ptr<Program> program;
         uint32_t sock_idx = 0;  // index into out.sockets, after the relays
-        // A second idle eth core that reads the Tensix tiles in this pusher's own column at boot: the pusher reaches
-        // those over a one-ring path whose split differs from every other tile's; the helper, in another column,
-        // reaches them over two rings like the rest, and every eth tile's wall clock is the same clock.
-        bool has_helper = false;
-        CoreCoord helper_logical, helper_virt;
+        // The chip's other idle eth cores: at boot each reads every Tensix tile and every other idle eth tile, so a
+        // tile's offset is solved from several sources over different routes, and the sources' mutual reads tie
+        // them together.
+        struct Helper {
+            CoreCoord logical, virt, phys;
+        };
+        std::vector<Helper> helpers;
         // The chip's active eth cores this pusher drains (their rings are NoC-read, their heads written back):
         // they run the fabric router and can spend no cycles on egress, so the idle sibling carries them.
         struct Linked {
@@ -122,6 +124,10 @@ private:
         Relay relays[kMaxRelays];
         uint32_t n_relays = 0;
         std::vector<EthPusher> eth;  // idle-eth clock pushers, one socket each
+        // The tile offsets the capture runs with (pusher wall minus tile wall, Tensix tiles first) and when they
+        // were solved, for the re-read at capture end.
+        std::vector<double> tile_solution;
+        std::chrono::steady_clock::time_point tile_solved_at{};
 
         DeviceCtx();
         ~DeviceCtx();
@@ -160,7 +166,9 @@ private:
         uint32_t k);
     void write_eth_ctrl_word(const DeviceCtx& ctx, const CoreCoord& virt, uint32_t index, uint32_t value);
     // The per-tile wall-clock offsets the pusher measured before its heartbeat started, into the capture context.
-    void read_tile_offsets(DeviceCtx& ctx);
+    std::vector<double> solve_tiles(const DeviceCtx& ctx, const char* when);
+    void measure_tile_offsets(DeviceCtx& ctx);
+    void recheck_tile_offsets(const DeviceCtx& ctx);
     // One-shot device<->device link sync at boot: the eth sync kernels on every connected active-eth pair of local
     // devices, whose SYNC-ZONE zones the idle pushers then drain. Only when fabric is DISABLED: after fabric init
     // those cores hold live routers, and a launch onto one would write a launch message into a router.
