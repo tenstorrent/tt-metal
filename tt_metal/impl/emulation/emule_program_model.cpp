@@ -98,8 +98,17 @@ void collect_kernels(
             // so root-rooted includes resolve at compile time; silicon's build wires
             // these through the compiler include dirs, so mirror that here.
             std::string kernel_extra_inc = extra_inc;
-            kernel->process_include_paths(
-                [&kernel_extra_inc](const std::string& p) { kernel_extra_inc += " -I\"" + p + "\""; });
+            for (const auto& p : kd.include_paths) {
+                kernel_extra_inc += " -I\"" + p + "\"";
+            }
+            {  // STAGE 2b diff-guard: include roots vs Kernel::process_include_paths
+                std::string _priv_inc = extra_inc;
+                kernel->process_include_paths([&_priv_inc](const std::string& p) { _priv_inc += " -I\"" + p + "\""; });
+                TT_FATAL(
+                    kernel_extra_inc == _priv_inc,
+                    "emule descriptor diff-guard: include_paths mismatch (kernel {})",
+                    static_cast<uint32_t>(kernel_id));
+            }
 
             std::vector<uint32_t> compile_args = kd.compile_time_args;
             std::unordered_map<std::string, uint32_t> named_compile_args = kd.named_compile_time_args;
@@ -199,7 +208,11 @@ void collect_kernels(
                 static_cast<uint32_t>(kernel_id));
             auto* qdm = dynamic_cast<experimental::quasar::QuasarDataMovementKernel*>(kernel.get());
             auto* qck = dynamic_cast<experimental::quasar::QuasarComputeKernel*>(kernel.get());
-            bool is_quasar_compute = is_tensix && (qck != nullptr);
+            bool is_quasar_compute = kd.is_quasar_compute;
+            TT_FATAL(
+                is_quasar_compute == (is_tensix && (qck != nullptr)),
+                "emule descriptor diff-guard: is_quasar_compute mismatch (kernel {})",
+                static_cast<uint32_t>(kernel_id));
 
             // Issue tenstorrent/tt-emule#24: emule runs all three TRISC code paths
             // in a single unified compute thread (no separate UNPACK/MATH/PACK
@@ -398,7 +411,14 @@ void collect_kernels(
                 }
             }
 
-            ProcIdList procs = compute_proc_ids_and_thread_count(*kernel, qdm, qck);
+            {  // STAGE 2b diff-guard: proc ids + thread count vs compute_proc_ids_and_thread_count
+                ProcIdList _procs = compute_proc_ids_and_thread_count(*kernel, qdm, qck);
+                std::vector<uint32_t> _pp(_procs.proc_ids.begin(), _procs.proc_ids.end());
+                TT_FATAL(
+                    _pp == kd.proc_ids && _procs.num_threads == kd.num_threads,
+                    "emule descriptor diff-guard: proc ids / thread count mismatch (kernel {})",
+                    static_cast<uint32_t>(kernel_id));
+            }
 
             const uint32_t processor_index = hal.get_processor_index(
                 kernel->get_kernel_programmable_core_type(),
@@ -482,14 +502,14 @@ void collect_kernels(
                         }
 
                         uint8_t tidx = 0;
-                        for (uint8_t proc_id : procs.proc_ids) {
+                        for (uint32_t proc_id_u : kd.proc_ids) {
                             pending_core_kernels[logical_core].push_back(PendingKernelInfo{
                                 variant_cache_keys,
                                 run_all_variants,
-                                proc_id,
+                                static_cast<uint8_t>(proc_id_u),
                                 tidx++,
                                 is_tensix,
-                                procs.num_threads,
+                                kd.num_threads,
                                 kernel_config_base,
                                 rta_off,
                                 crta_off,

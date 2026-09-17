@@ -136,6 +136,7 @@ struct KernelDescriptor {
     uint32_t processor_class = 0;                                       // get_kernel_processor_class()
     uint32_t processor_type = 0;                                        // get_kernel_processor_type(0)
     bool is_compute = false;                                            // processor_class == COMPUTE
+    bool is_quasar_compute = false;  // is_compute && dynamic_cast<QuasarComputeKernel>
     uint32_t dm_processor = 0;  // DataMovementKernel::config().processor (RISCV_0/1->BRISC/NCRISC)
     bool has_compute_config = false;                          // config() held a ComputeConfig
     bool fp32_dest_acc_en = false, dst_full_sync_en = false;  // ComputeKernel::config()
