@@ -245,7 +245,17 @@ Tensor clamp(
     // tensor-bounds path is three device kernels instead of seven (issue #49996).
     Tensor lo = ttnn::minimum(min.value(), max.value(), std::nullopt, output_memory_config);
     Tensor a_max = ttnn::minimum(input_a, max.value(), std::nullopt, output_memory_config);
-    return ttnn::maximum(a_max, lo, std::nullopt, output_memory_config, output_tensor);
+    Tensor clamped = ttnn::maximum(a_max, lo, std::nullopt, output_memory_config);
+    // torch.clamp returns NaN for a NaN input whatever the bounds are. min and max are a single
+    // SFPSWAP, which is a permutation, so the two cannot both return NaN: minimum drops it
+    // (issue #51470). The first minimum above therefore replaces a NaN input with max, and the
+    // maximum that follows never sees it. Restore it here. The guard comes off if minimum is
+    // ever made to propagate NaN.
+    // The NaN comes from input_a rather than a scalar: a scalar NaN goes through the immediate
+    // path and comes back as inf, and taking it from the input also keeps the sign and payload
+    // the caller passed in.
+    return ttnn::where(
+        ttnn::isnan(input_a, output_memory_config), input_a, clamped, output_memory_config, output_tensor);
 }
 
 // Gated Linear Unit activation: matmul(split[0],sigmoid(split[1]))
