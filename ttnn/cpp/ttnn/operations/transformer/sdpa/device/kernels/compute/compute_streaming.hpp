@@ -2376,8 +2376,11 @@ void sdpa_ring_v2(
     // Tile offset of this call's Q chunk within cb_q_in (head-serial passes; 0 otherwise).
     const uint32_t q_base_tiles = 0,
     const uint32_t* streamed_source_ids = nullptr,
-    const bool pack_source_tails = false) {
+    const uint32_t packed_group_tiles = 0) {
     init_sdpa_streaming_semaphores();
+    const bool pack_source_tails = packed_group_tiles != 0;
+    const PackedKVGroupPlan packed_kv{
+        local_padded_Nt, pack_source_tails ? packed_group_tiles / local_padded_Nt : 1, Sk_chunk_t};
 
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
     constexpr bool has_sliding_window = sliding_window_size > 0;
@@ -2565,8 +2568,9 @@ void sdpa_ring_v2(
         }
         // Per-Q pre-scan: count K chunks that will actually be processed.
         // Placed after balanced-skip guards so skipped Q chunks don't pay for the scan.
-        uint32_t per_q_valid_kv = has_sliding_window ? sliding_q_plan.total_k_chunk_count : 0;
-        for (uint32_t k = 0; !has_sliding_window && k < num_kv_chunks; ++k) {
+        uint32_t per_q_valid_kv =
+            pack_source_tails ? packed_kv.chunk_count() : (has_sliding_window ? sliding_q_plan.total_k_chunk_count : 0);
+        for (uint32_t k = 0; !pack_source_tails && !has_sliding_window && k < num_kv_chunks; ++k) {
             const uint32_t source_ring_id =
                 streamed_source_ids
                     ? streamed_source_ids[pack_source_tails ? k * Sk_chunk_t / local_padded_Nt : k / num_local_k_chunks]
@@ -2617,7 +2621,7 @@ void sdpa_ring_v2(
                                                 ? k_chunk % num_local_k_chunks
                                                 : (has_sliding_window ? sliding_k_chunk.source_k_chunk : k_chunk);
             const bool kv_chunk_is_joint = !streamed_source_ids && !has_sliding_window && k_chunk >= num_local_k_chunks;
-            if (try_skip_oob_kv(source_ring_id, source_k_chunk, kv_chunk_is_joint)) {
+            if (!pack_source_tails && try_skip_oob_kv(source_ring_id, source_k_chunk, kv_chunk_is_joint)) {
                 // Sliding plans are clipped to logical_n before chunking. Treat a future mismatch
                 // as a device failure rather than leaving the writer waiting for a missing signal.
                 ASSERT(!has_sliding_window);
@@ -2699,9 +2703,9 @@ void sdpa_ring_v2(
             // Tile-level matmul skip for global_n, local_n, or joint_n padding.
             // Runtime reduce narrows to active_Sk; matmul/sub_exp/V also need narrowing.
             // Also select pre-computed subblock width for this chunk's mask type.
-            uint32_t active_Sk_param = Sk_chunk_t;
-            uint32_t chunk_sbw = full_sbw;
-            bool narrowed_by_mask = false;
+            uint32_t active_Sk_param = pack_source_tails ? packed_kv.valid_tiles(k_chunk) : Sk_chunk_t;
+            uint32_t chunk_sbw = pack_source_tails ? largest_factor_le(active_Sk_param, qkt_subblock_w) : full_sbw;
+            bool narrowed_by_mask = pack_source_tails;
             if constexpr (global_n_mask_enabled) {
                 if (is_global_n_mask_chunk) {
                     active_Sk_param = Sk_chunk_t - lw_mask.global_n_padded_tiles;
@@ -2824,12 +2828,11 @@ void sdpa_ring_v2(
 
             uint32_t packed_k_global_tiles[Sk_chunk_t];
             if (pack_source_tails) {
-                for (uint32_t col = 0; col < Sk_chunk_t; ++col) {
+                for (uint32_t col = 0; col < active_Sk_param; ++col) {
                     const uint32_t stream_tile = k_chunk * Sk_chunk_t + col;
                     const uint32_t source = streamed_source_ids[stream_tile / local_padded_Nt];
-                    const uint32_t local_tile = stream_tile % local_padded_Nt;
-                    packed_k_global_tiles[col] = (local_tile / kv_rank_stride_Nt) * chunk_size_t +
-                                                 source * kv_rank_stride_Nt + local_tile % kv_rank_stride_Nt;
+                    packed_k_global_tiles[col] =
+                        packed_kv.global_tile(stream_tile, source, kv_rank_stride_Nt, chunk_size_t);
                 }
             }
 

@@ -12,6 +12,51 @@
 
 #include <cstdint>
 
+// A packed attention pass concatenates equally sized physical KV sources. All sizes
+// are in tiles; the final chunk may be partial, but retains the full CB stride.
+struct PackedKVGroupPlan {
+    uint32_t source_tiles;
+    uint32_t source_count;
+    uint32_t chunk_tiles;
+
+    constexpr uint32_t tile_count() const { return source_tiles * source_count; }
+    constexpr uint32_t chunk_count() const { return tile_count() / chunk_tiles + (tile_count() % chunk_tiles != 0); }
+    constexpr uint32_t valid_tiles(uint32_t chunk) const {
+        const uint32_t start = chunk * chunk_tiles;
+        if (start >= tile_count()) {
+            return 0;
+        }
+        const uint32_t remaining = tile_count() - start;
+        return remaining < chunk_tiles ? remaining : chunk_tiles;
+    }
+    constexpr uint32_t source_index(uint32_t stream_tile) const { return stream_tile / source_tiles; }
+    constexpr uint32_t source_offset(uint32_t stream_tile) const { return stream_tile % source_tiles; }
+    constexpr uint32_t last_source(uint32_t chunk) const {
+        return source_index(chunk * chunk_tiles + valid_tiles(chunk) - 1);
+    }
+    constexpr uint32_t segment_tiles(uint32_t chunk, uint32_t destination_offset) const {
+        const uint32_t remaining = valid_tiles(chunk) - destination_offset;
+        const uint32_t source_remaining = source_tiles - source_offset(chunk * chunk_tiles + destination_offset);
+        return remaining < source_remaining ? remaining : source_remaining;
+    }
+    constexpr uint32_t global_tile(
+        uint32_t stream_tile, uint32_t source_id, uint32_t region_tiles, uint32_t global_chunk_tiles) const {
+        const uint32_t local = source_offset(stream_tile);
+        return (local / region_tiles) * global_chunk_tiles + source_id * region_tiles + local % region_tiles;
+    }
+};
+
+// Runtime logical length can change on program-cache reuse. Do not apply a plan
+// for a full cache to a padded/partially active cache using the same program.
+constexpr uint32_t packed_kv_source_group_size(
+    uint32_t configured, uint32_t ring_size, uint32_t source_tiles, uint32_t logical_tiles, uint32_t active_mask) {
+    if (ring_size == 0 || ring_size > 32 || source_tiles == 0 || configured <= 1 || ring_size % configured != 0) {
+        return 1;
+    }
+    const uint32_t all_sources = ~uint32_t{0} >> (32 - ring_size);
+    return logical_tiles == source_tiles * ring_size && active_mask == all_sources ? configured : 1;
+}
+
 struct KVPadRotationContext {
     // Maps the fixed-size Q slab used by KV-pad rotation back to absolute sequence tiles.
     // Current Q rows can straddle a chunk-group boundary, so they are represented as

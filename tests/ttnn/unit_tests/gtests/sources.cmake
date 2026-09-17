@@ -5,6 +5,7 @@ set(UNIT_TESTS_TTNN_SMOKE_SOURCES
     test_reflect.cpp
     test_to_and_from_json.cpp
     test_sliding_window_infra.cpp
+    test_ring_mla_packing_plan.cpp
     test_async_runtime.cpp
     conv/test_conv2d.cpp
     test_multi_cq_multi_dev.cpp

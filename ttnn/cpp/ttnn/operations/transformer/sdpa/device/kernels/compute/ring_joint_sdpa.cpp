@@ -256,18 +256,16 @@ void kernel_main() {
             kv_pad_q_valid_tile_count}};
     // The first active iter starts with fresh accumulators; restoring would read stale staging.
     bool seen_active_iter = false;
-    // DIAGNOSTIC: 6400-token full-mesh fixture only; four physical sources per attention pass.
-    constexpr uint32_t source_group_size = ring_size == 8 ? 4 : 1;
-    constexpr bool stream_sources = source_group_size > 1;
-    // DIAGNOSTIC: packed source tails for the fully valid 6400-token fixture.
-    constexpr bool pack_source_tails = stream_sources && kv_local_padded_Nt == 25 && Sk_chunk_t == 20 &&
-                                       kv_region_Nt == 5 && kt_inplace_v && chunked_enabled && !has_joint_k &&
-                                       logical_nt_compile == kv_local_padded_Nt * ring_size &&
-                                       !kv_pad_rotation_enabled && !has_sliding_window;
-    constexpr uint32_t sdpa_ring_iterations = has_sliding_window ? 1 : ring_size / source_group_size;
+    // Preserve Q's SP traversal while streaming the finer-grained KV shards through each pass.
+    const uint32_t source_group_size = packed_kv_source_group_size(
+        GROUPED_KV_SOURCE_COUNT, ring_size, kv_local_padded_Nt, logical_nt, active_ring_iter_mask);
+    const bool stream_sources = source_group_size > 1;
+    const bool pack_source_tails = stream_sources;
+    const PackedKVGroupPlan packed_kv{kv_local_padded_Nt, source_group_size, Sk_chunk_t};
+    const uint32_t sdpa_ring_iterations = has_sliding_window ? 1 : ring_size / source_group_size;
     for (uint32_t ring_iter = 0; ring_iter < sdpa_ring_iterations; ++ring_iter) {
-        uint32_t streamed_source_ids[source_group_size];
-        if constexpr (stream_sources) {
+        uint32_t streamed_source_ids[GROUPED_KV_SOURCE_COUNT];
+        if (stream_sources) {
             for (uint32_t s = 0; s < source_group_size; ++s) {
                 streamed_source_ids[s] =
                     ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
@@ -284,7 +282,7 @@ void kernel_main() {
                       fused_op_indexer.get_next_ring_id_and_sync(), mesh_rows, mesh_cols, snake_orientation);
         // Host precomputes which ring iterations have useful SDPA work; sync/ring-id sequencing
         // still advances above so compute stays aligned with reader, writer, and all-gather.
-        if (!has_sliding_window && ((active_ring_iter_mask >> ring_iter) & 1u) == 0) {
+        if (!stream_sources && !has_sliding_window && ((active_ring_iter_mask >> ring_iter) & 1u) == 0) {
             continue;
         }
         // Sharded joint: one L/P shard per ring iteration — process joint K/V on every iteration.
@@ -292,7 +290,7 @@ void kernel_main() {
         const bool do_joint_kv = has_gathered_joint_k ? true : (ring_id == ring_size - 1);
         const uint32_t num_kv_chunks =
             pack_source_tails
-                ? kv_local_padded_Nt * source_group_size / Sk_chunk_t
+                ? packed_kv.chunk_count()
                 : (do_joint_kv ? num_local_k_chunks + num_joint_k_chunks : num_local_k_chunks) * source_group_size;
         const bool is_first_active_iter = !seen_active_iter;
         seen_active_iter = true;
@@ -490,7 +488,7 @@ void kernel_main() {
                 logical_lt,
                 0,
                 stream_sources ? streamed_source_ids : nullptr,
-                pack_source_tails);
+                pack_source_tails ? packed_kv.tile_count() : 0);
         } else {
             assert_kv_pad_rotation_streaming_only<kv_pad_rotation_enabled>();
             // This path's single chunked slab param drives BOTH the Q mapping (which strides by the Q

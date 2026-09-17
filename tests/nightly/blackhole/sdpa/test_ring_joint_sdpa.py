@@ -6045,11 +6045,15 @@ def test_ring_joint_attention_minimax3_gqa_chunked_perf_impl(model_name, qk_conf
     [ttnn.FabricConfig.FABRIC_2D_TORUS_XY, ttnn.FabricConfig.FABRIC_2D],
     ids=["torus_xy", "fabric_2d"],
 )
-@pytest.mark.parametrize("cache_chunks", [8], ids=["depth8"])
+@pytest.mark.parametrize("cache_chunks", [5, 8], ids=["depth5_tail", "depth8"])
 # Against the 2-tile cache region: 1 tile stays inside it, 4 tiles cross one boundary, 8 tiles cross
-# three. The diagonal stamp takes a jump per boundary, so a K chunk may span any number of regions.
-@pytest.mark.parametrize("k_chunk", [32, 128, 256], ids=["k32", "k128", "k256"])
-def test_ring_mla_full_mesh_tp_striped_kv_accuracy(fabric_config, cache_chunks, k_chunk):
+# three. K=352 also exceeds the entire depth-five local cache (320 rows).
+# The diagonal stamp takes a jump per boundary, so a K chunk may span any number of regions.
+@pytest.mark.parametrize(
+    "k_chunk", [32, 128, 256, 352, 640, 1280, 2048], ids=["k32", "k128", "k256", "k352", "k640", "k1280", "k2048"]
+)
+@pytest.mark.parametrize("q_chunk", [32, 64], ids=["inplace_v", "materialized_v"])
+def test_ring_mla_full_mesh_tp_striped_kv_accuracy(fabric_config, cache_chunks, k_chunk, q_chunk):
     """A TP-deduped KV cache: striped over every device while Q stays sharded over SP alone.
 
     kv_stripe_split = kv_shards / q_shards = tp, so tp ring shards share each Q rank. The cache is
@@ -6060,9 +6064,7 @@ def test_ring_mla_full_mesh_tp_striped_kv_accuracy(fabric_config, cache_chunks, 
     Q is the FINAL chunk of the prefix, which is where the plain chunked path puts it
     (q_start = logical_nt - q_local*q_ring_size), so no kv-pad rotation is needed.
     """
-    if not MESH_CONFIG.is_galaxy:
-        pytest.skip("TP-striped KV accuracy needs the 8x4 Galaxy (sp=8, tp=4)")
-    mesh_config = MESH_CONFIG
+    mesh_config = replace(MESH_CONFIG, sp_size=2, tp_size=4) if MESH_CONFIG.num_devices == 8 else MESH_CONFIG
     sp, tp = mesh_config.sp_size, mesh_config.tp_size
     if sp < 2 or tp < 2:
         pytest.skip(f"needs a non-degenerate 2D mesh, got {mesh_config}")
@@ -6124,7 +6126,7 @@ def test_ring_mla_full_mesh_tp_striped_kv_accuracy(fabric_config, cache_chunks, 
 
         program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=runtime.sdpa_compute_grid,
-            q_chunk_size=32,
+            q_chunk_size=q_chunk,
             k_chunk_size=k_chunk,
             exp_approx_mode=False,
         )

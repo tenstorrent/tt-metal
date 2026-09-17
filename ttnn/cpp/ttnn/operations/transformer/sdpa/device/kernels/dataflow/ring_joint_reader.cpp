@@ -695,18 +695,17 @@ void kernel_main() {
             fused_op_receiver.get_next_ring_id_and_consume_one_signal();
         }
     }
-    // DIAGNOSTIC: 6400-token full-mesh fixture only; four physical sources per attention pass.
-    constexpr uint32_t source_group_size = ring_size == 8 ? 4 : 1;
-    constexpr bool stream_sources = source_group_size > 1;
-    // DIAGNOSTIC: packed source tails for the fully valid 6400-token fixture.
-    constexpr bool pack_source_tails = stream_sources && kv_local_padded_Nt == 25 && Sk_chunk_t == 20 &&
-                                       kv_region_Nt == 5 && kt_inplace_v && chunked_enabled && !has_joint_k &&
-                                       logical_nt_compile == kv_local_padded_Nt * ring_size &&
-                                       !kv_pad_rotation_enabled && !has_sliding_window;
-    constexpr uint32_t sdpa_ring_iterations = has_sliding_window ? 1 : ring_size / source_group_size;
+    // Preserve Q's SP traversal while streaming the finer-grained KV shards through each pass.
+    const uint32_t source_group_size = packed_kv_source_group_size(
+        GROUPED_KV_SOURCE_COUNT, ring_size, kv_local_padded_Nt, logical_nt, active_ring_iter_mask);
+    const bool stream_sources = source_group_size > 1;
+    const bool pack_source_tails = stream_sources;
+    const PackedKVGroupPlan packed_kv{kv_local_padded_Nt, source_group_size, Sk_chunk_t};
+    const uint32_t sdpa_ring_iterations = has_sliding_window ? 1 : ring_size / source_group_size;
     for (uint32_t ring_iter = 0; ring_iter < sdpa_ring_iterations; ++ring_iter) {
         const auto group_start_seq = fused_op_receiver.seq;
-        const bool ring_iter_is_active = has_sliding_window || ((active_ring_iter_mask >> ring_iter) & 1u) != 0;
+        const bool ring_iter_is_active =
+            stream_sources || has_sliding_window || ((active_ring_iter_mask >> ring_iter) & 1u) != 0;
         // Sliding already advanced/synchronized the sequencer above and uses a synthetic local
         // iteration whose K loop decodes the real source ring ID for each chunk.
         uint32_t sync_transport_rank = ring_index;
@@ -745,8 +744,7 @@ void kernel_main() {
         }
 
         uint32_t KV_chunks_processed_in_iter = 0;
-        uint32_t iter_num_kv_chunks =
-            pack_source_tails ? kv_local_padded_Nt * source_group_size / Sk_chunk_t : num_kv_chunks * source_group_size;
+        uint32_t iter_num_kv_chunks = pack_source_tails ? packed_kv.chunk_count() : num_kv_chunks * source_group_size;
 
         // In causal balanced case processing KV received from other devices:
         //
@@ -781,11 +779,11 @@ void kernel_main() {
         uint32_t gqa_group_q_iter = 0;
 
         for (uint32_t q_iter = 0; q_iter < loop_q_count; ++q_iter) {
-            if constexpr (stream_sources) {
+            if (stream_sources) {
                 fused_op_receiver.seq = group_start_seq;
             }
             uint32_t streamed_source_id = ring_id;
-            uint32_t packed_source_ids[source_group_size];
+            uint32_t packed_source_ids[GROUPED_KV_SOURCE_COUNT];
             uint32_t packed_sources_ready = 0;
             // Check if this is a real iteration or only padded chain/mcast synchronization.
             const bool is_padded_iter = (q_iter >= q_per_core);
@@ -889,15 +887,15 @@ void kernel_main() {
             // (q_per_core > 1) -> deadlock. Reads Q exactly once per q_iter, so no extra work.
             bool first_k_for_q = true;
             for (uint32_t k_chunk = 0; k_chunk < q_k_loop_count; ++k_chunk) {
-                if constexpr (pack_source_tails) {
-                    const uint32_t last_source = ((k_chunk + 1) * Sk_chunk_t - 1) / kv_local_padded_Nt;
+                if (pack_source_tails) {
+                    const uint32_t last_source = packed_kv.last_source(k_chunk);
                     while (packed_sources_ready <= last_source) {
                         packed_source_ids[packed_sources_ready++] =
                             ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
                                 fused_op_receiver.get_next_ring_id_and_sync(), mesh_rows, mesh_cols, snake_orientation);
                     }
                     streamed_source_id = packed_source_ids[k_chunk * Sk_chunk_t / kv_local_padded_Nt];
-                } else if constexpr (stream_sources) {
+                } else if (stream_sources) {
                     if (k_chunk % num_local_k_chunks == 0) {
                         streamed_source_id =
                             ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
@@ -918,12 +916,13 @@ void kernel_main() {
                  */
                 const bool kv_chunk_is_joint = !has_sliding_window && has_joint_k && k_chunk >= num_local_k_chunks;
                 const bool kv_chunk_is_beyond_logical_n =
-                    !kv_chunk_is_joint && !kv_chunk_starts_before_logical_end<
-                                              kv_pad_rotation_enabled,
-                                              chunked_enabled,
-                                              kv_local_padded_Nt,
-                                              chunk_size_t,
-                                              kv_region_Nt>(source_ring_id, source_k_chunk * Sk_chunk_t, logical_nt);
+                    !pack_source_tails && !kv_chunk_is_joint &&
+                    !kv_chunk_starts_before_logical_end<
+                        kv_pad_rotation_enabled,
+                        chunked_enabled,
+                        kv_local_padded_Nt,
+                        chunk_size_t,
+                        kv_region_Nt>(source_ring_id, source_k_chunk * Sk_chunk_t, logical_nt);
 
                 // Sharded joint: this ring iteration serves shard `ring_id`, whose global joint tile
                 // range starts at ring_id * Lt_local. A joint K chunk whose global start tile is
@@ -1029,14 +1028,14 @@ void kernel_main() {
                         received_k_from_chain = true;
                     }
                 }
-                if constexpr (pack_source_tails) {
+                if (pack_source_tails) {
                     if (!received_k_from_chain) {
                         // Assemble source segments into one full-stride transposed K chunk.
-                        for (uint32_t dst_row = 0; dst_row < Sk_chunk_t;) {
+                        for (uint32_t dst_row = 0; dst_row < packed_kv.valid_tiles(k_chunk);) {
                             const uint32_t stream_row = k_chunk * Sk_chunk_t + dst_row;
                             const uint32_t source = packed_source_ids[stream_row / kv_local_padded_Nt];
                             const uint32_t local_row = stream_row % kv_local_padded_Nt;
-                            const uint32_t rows = std::min(Sk_chunk_t - dst_row, kv_local_padded_Nt - local_row);
+                            const uint32_t rows = packed_kv.segment_tiles(k_chunk, dst_row);
                             const bool local = source == ring_index;
                             const uint32_t source_row = local ? local_row : source * kv_local_padded_Nt + local_row;
                             const uint32_t source_end = local ? kv_local_padded_Nt : (source + 1) * kv_local_padded_Nt;
