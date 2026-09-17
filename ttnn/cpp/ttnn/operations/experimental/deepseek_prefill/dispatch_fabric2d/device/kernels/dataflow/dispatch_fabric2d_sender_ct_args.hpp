@@ -19,7 +19,6 @@ struct SenderCtArgs {
         kNumL1Slots,
         kTokenSizeBytes,
         kForwardingMetadataSize,
-        kMetadataPageBytes,
         kPeerChipId,
         kPeerMeshId,
         kRingAddr,
@@ -41,9 +40,6 @@ struct SenderCtArgs {
     uint32_t num_l1_slots;
     uint32_t token_size_bytes;
     uint32_t forwarding_metadata_size;
-    // Dispatch lands each token in TWO tensors at one page index, so the final hop is two writes and the
-    // sender needs the metadata page size as well as the token's.
-    uint32_t metadata_page_bytes;
     uint32_t peer_chip_id;
     uint32_t peer_mesh_id;
     uint32_t ring_addr;
@@ -68,7 +64,6 @@ struct SenderCtArgs {
     // mesh is decided before any kernel is built.
     SenderCtArgs(
         uint32_t token_bytes,
-        uint32_t metadata_bytes,
         const op::StreamPlacement& self,
         const op::StreamPlacement& downstream,
         const op::L1Layout& l1,
@@ -77,7 +72,6 @@ struct SenderCtArgs {
         num_l1_slots(NUM_L1_SLOTS),
         token_size_bytes(token_bytes),
         forwarding_metadata_size(FORWARDING_METADATA_SIZE),
-        metadata_page_bytes(metadata_bytes),
         peer_chip_id(static_cast<uint32_t>(self.downstream_node.chip_id)),
         peer_mesh_id(*self.downstream_node.mesh_id),
         ring_addr(l1.ring),
@@ -100,7 +94,6 @@ struct SenderCtArgs {
         w[kNumL1Slots] = num_l1_slots;
         w[kTokenSizeBytes] = token_size_bytes;
         w[kForwardingMetadataSize] = forwarding_metadata_size;
-        w[kMetadataPageBytes] = metadata_page_bytes;
         w[kPeerChipId] = peer_chip_id;
         w[kPeerMeshId] = peer_mesh_id;
         w[kRingAddr] = ring_addr;
@@ -126,7 +119,6 @@ struct SenderCtArgs {
         num_l1_slots(get_compile_time_arg_val(kNumL1Slots)),
         token_size_bytes(get_compile_time_arg_val(kTokenSizeBytes)),
         forwarding_metadata_size(get_compile_time_arg_val(kForwardingMetadataSize)),
-        metadata_page_bytes(get_compile_time_arg_val(kMetadataPageBytes)),
         peer_chip_id(get_compile_time_arg_val(kPeerChipId)),
         peer_mesh_id(get_compile_time_arg_val(kPeerMeshId)),
         ring_addr(get_compile_time_arg_val(kRingAddr)),

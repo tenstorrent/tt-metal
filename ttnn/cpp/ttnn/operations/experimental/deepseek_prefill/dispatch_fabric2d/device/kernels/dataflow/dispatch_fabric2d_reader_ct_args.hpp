@@ -42,7 +42,6 @@ struct ReaderCtArgs {
         kNumL1Slots,
         kBatch,
         kTokenSizeBytes,
-        kMetadataPageBytes,
         kForwardingMetadataSize,
         kSeqLen,
         kTopK,
@@ -87,7 +86,6 @@ struct ReaderCtArgs {
     uint32_t num_l1_slots;
     uint32_t batch;
     uint32_t token_size_bytes;
-    uint32_t metadata_page_bytes;
     uint32_t forwarding_metadata_size;
     uint32_t seq_len;
     uint32_t topk;
@@ -132,7 +130,6 @@ struct ReaderCtArgs {
     ReaderCtArgs(
         const op::DispatchFabric2dParams& args,
         uint32_t token_bytes,
-        uint32_t metadata_bytes,
         uint32_t linearized,
         uint32_t row,
         uint32_t chip_id,
@@ -144,7 +141,6 @@ struct ReaderCtArgs {
         num_l1_slots(NUM_L1_SLOTS),
         batch(BATCH),
         token_size_bytes(token_bytes),
-        metadata_page_bytes(metadata_bytes),
         forwarding_metadata_size(FORWARDING_METADATA_SIZE),
         seq_len(args.seq_len_per_chip),
         topk(args.num_experts_per_tok),
@@ -191,7 +187,6 @@ struct ReaderCtArgs {
         w[kNumL1Slots] = num_l1_slots;
         w[kBatch] = batch;
         w[kTokenSizeBytes] = token_size_bytes;
-        w[kMetadataPageBytes] = metadata_page_bytes;
         w[kForwardingMetadataSize] = forwarding_metadata_size;
         w[kSeqLen] = seq_len;
         w[kTopK] = topk;
@@ -251,7 +246,6 @@ struct ReaderCtArgs {
         num_l1_slots(get_compile_time_arg_val(kNumL1Slots)),
         batch(get_compile_time_arg_val(kBatch)),
         token_size_bytes(get_compile_time_arg_val(kTokenSizeBytes)),
-        metadata_page_bytes(get_compile_time_arg_val(kMetadataPageBytes)),
         forwarding_metadata_size(get_compile_time_arg_val(kForwardingMetadataSize)),
         seq_len(get_compile_time_arg_val(kSeqLen)),
         topk(get_compile_time_arg_val(kTopK)),
