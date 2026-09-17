@@ -143,35 +143,20 @@ public:
     }
 };
 
-// Device<->device sync from the PP_CLOCK samples the idle-eth pushers carry, and the correction it publishes.
-//
-// LOCAL points feed one LocalClockModel per device. LINK samples (the boot-time eth sync rounds: sender round start
-// and end, receiver arrival) are paired by round and solved refclk against refclk, so DVFS on either wall clock
-// cannot enter the link solve. From those the consumer publishes, per chip, a time-indexed correction to the baked
-// host anchor every Record carries (PlacementMap; Record::host_time composes it):
-//
-//   root chip r:      host(T) = H_r + (R_r(T) - R_r(A_r)) * P_r         (static host anchor o applied-AICLK term)
-//   non-root chip c:  host(T) = H_r + (link(R_c(T)) - R_r(A_r)) * P_r   (the same, on the root's timeline)
-//
-// where R_x(T) inverts the constant-rate run holding wall tick T, A_x/H_x are the chip's boot anchor (tick, host ns),
-// P_x its refclk period taken as k_mean/hz so it is consistent with that anchor, and link() maps c's refclk onto r's by
-// the solved offset and rate about the burst midpoint. Published incrementally for live sinks, finally at capture end.
-// Driven from the Service's sync thread, which decodes the eth pushers' streams and hands it every clock sample in
-// order; a capture is on_attach, the samples, on_capture_end. The unit test drives it the same way.
-class SyncEngine {
-public:
-    void on_attach(const CaptureContext& ctx);
-    void on_clock(const ClockSample& s);
-    void on_capture_end(const CaptureContext& ctx);
-    // The placement map the service places records with: this engine writes its chip series, the host probe its
-    // host series.
-    PlacementMap& map() { return map_; }
-    const PlacementMap& map() const { return map_; }
-    // The series on_capture_end computed for a plotting sink (each chip's AICLK, the sync error per link), once.
-    std::vector<SyncPlot> take_plots() { return std::exchange(plots_, {}); }
+constexpr double kNsPerRefclk = 1e9 / kernel_profiler::kEthRefclkHz;
 
-private:
-    PlacementMap map_;
+// A device's refclk onto the root chip's: root_refclk = scale * dev_refclk + shift.
+struct RootXf {
+    double scale = 1.0, shift = 0.0;
+    bool ok = false;
+};
+
+// The eth links' rounds and what they solve to. Each link's two ends stamp their frames with the 1588 hardware and
+// report a round's stamp averages as PP_CLOCK link samples; the solver pairs the two ends' samples by round number,
+// fits each link's offset and rate over a window of rounds in the refclk domain (so DVFS on either wall clock cannot
+// enter), combines a chip pair's parallel links, and composes every chip onto the root along the solved tree.
+class LinkSolver {
+public:
     // One end's stamp of a round: the reading, in the link's stamp units of the refclk domain.
     struct Stamp {
         uint64_t units = 0;
@@ -184,13 +169,6 @@ private:
         Stamp t0, t1, t1b, t2;
         bool complete() const { return t0.have && t2.have && t1.have && t1b.have; }
     };
-    // A link's rounds: the complete ones in the order they completed, the rest waiting for their
-    // other end. A round whose other end never reports (no ring room there, a lapped consumer) is evicted once
-    // kPendingMax newer rounds are waiting; nothing behind it shifts.
-    struct LinkRounds {
-        std::vector<Round> rounds;
-        std::map<uint32_t, Round> pending;
-    };
     // A solved link: receiver refclk = sender refclk + offset_refclk + rate * (sender refclk - mid_refclk).
     struct LinkSolution {
         bool ok = false;
@@ -201,6 +179,30 @@ private:
         double residual_rms_ns = 0.0;
         size_t rounds = 0, kept = 0, path_dropped = 0;
     };
+    // A hardware round whose one-way delay inside the stamps sits this far from the window's median had a frame
+    // delayed on one leg, and its offset is off by that same amount; the delay itself holds to 0.5 ns.
+    static constexpr double kPathDevNs = 2.0;
+
+    // Starts over on a capture's links; `ctx` must outlive the solver's use of it.
+    void reset(const CaptureContext& ctx);
+    // A link stamp: paired into its round, and once the round is complete the link is re-solved if its window is due.
+    void on_stamp(const ClockSample& s);
+    // Every link solved over whatever its window holds.
+    void solve_final();
+    const std::vector<LinkSolution>& solutions() const { return solved_; }
+    // The complete rounds of link li in the order they completed, and how many wait for their other end.
+    const std::vector<Round>& rounds(size_t li) const { return rounds_[li].rounds; }
+    size_t pending(size_t li) const { return rounds_[li].pending.size(); }
+    // Moves whenever a solution is accepted.
+    uint64_t generation() const { return gen_; }
+    // Samples ignored: an unknown kind, a core on no link, or a role that end does not stamp.
+    uint64_t dropped() const { return dropped_; }
+    // How many solved links share link li's chip pair.
+    size_t pair_size(size_t li) const;
+    // The tree over the pair solutions: every chip reachable from `root` onto its refclk. `used` marks the links
+    // whose pair the tree took and that are that pair's only member: a loop through such a link closes to zero by
+    // construction.
+    std::map<uint32_t, RootXf> root_transforms(uint32_t root, std::vector<bool>* used) const;
 
     // A round in the refclk domain: each end's midpoint; the sender's round trip, the receiver's turnaround and the
     // one-way delay inside the stamps, in ns.
@@ -215,51 +217,60 @@ private:
     }
     static double path_ns(const Round& r) { return 0.5 * (rtt_ns(r) - turn_ns(r)); }
     static double path_median(const std::vector<Round>& rounds, size_t begin, size_t n);
-    // The fleet timeline's root: the chip the host probe reads, fixed for the capture.
-    uint32_t root_dev() const { return ctx_.root_dev; }
-    void try_solve_links(bool final);
+
+private:
+    // A link's rounds: the complete ones in the order they completed, the rest waiting for their other end. A round
+    // whose other end never reports (no ring room there, a lapped consumer) is evicted once kPendingMax newer rounds
+    // are waiting; nothing behind it shifts.
+    struct LinkRounds {
+        std::vector<Round> rounds;
+        std::map<uint32_t, Round> pending;
+    };
     // One round in the refclk domain: the sender's midpoint and the receiver's minus it.
     struct RoundPoint {
         double mid_refclk, off_refclk;
     };
+    void try_solve_links(bool final);
     // Whether the solution was accepted into `out`.
     bool solve_link(const CaptureContext::Link& L, std::vector<RoundPoint> pts, LinkSolution& out) const;
-    // A device's refclk onto the root's: root_refclk = scale * dev_refclk + shift.
-    struct RootXf {
-        double scale = 1.0, shift = 0.0;
-        bool ok = false;
-    };
     // One solution per chip pair: a pair's solved links combined by precision-weighted means of their rates and of
     // their offsets at a common midpoint, so parallel links average their path asymmetries. `members` gets the
     // links behind each.
     std::vector<LinkSolution> pair_solutions(std::vector<std::vector<size_t>>* members) const;
-    // How many solved links share link li's chip pair.
-    size_t pair_size(size_t li) const;
-    // The tree over the pair solutions. `used` marks the links whose pair the tree took and that are that pair's
-    // only member: a loop through such a link closes to zero by construction.
-    std::map<uint32_t, RootXf> root_transforms(uint32_t root, std::vector<bool>* used) const;
-    void publish_all();
-    void log_summary() const;
-    void publish_error_plots();
-    // Each chip's AICLK in GHz, a point at either end of every segment of its clock model.
-    void publish_clock_plots();
-    // The receiver's stamp and the sender's round midpoint placed on the root's refclk as the sink places records
-    // from each chip's eth core, and their difference in ns; tsc_a is the sender's host placement, the plots'
-    // abscissa. False when a chip has no fitted run or no node to place a stamp with.
-    struct RoundTerms {
-        double wall_a = 0, wall_b = 0, root_a = 0, root_b = 0;
-    };
-    bool round_error(
-        const CaptureContext::Link& L, const Round& r, int64_t& tsc_a, double& err, RoundTerms* terms = nullptr) const;
+
+    const CaptureContext* ctx_ = nullptr;
+    std::vector<LinkRounds> rounds_;  // per ctx_->links index
+    // (device index, decoder core index) -> the link the core stamps for, and whether as its sender.
+    std::map<std::pair<uint32_t, uint32_t>, std::pair<size_t, bool>> side_of_;
+    std::vector<LinkSolution> solved_;  // per ctx_->links index
+    uint64_t gen_ = 0;
+    uint64_t dropped_ = 0;
+    // Refclk ticks per stamp unit: the kernels report a round's stamp averages in kLinkSyncStampUnitsPerNs per ns.
+    static constexpr double kRefclkPerStampUnit = 1.0 / (kernel_profiler::kLinkSyncStampUnitsPerNs * kNsPerRefclk);
+    // The link solve's window in the sender chip's refclk, re-solved every half window. Two chips' crystals hold a
+    // line to ~0.4 ns over 250 ms and their rate moves a few ppb from one such window to the next (measured on the
+    // 8-chip runs), so a fit extrapolated half a window past its end stays within ~0.4 ns rms and doubles that at
+    // 500 ms. The rounds inside the window only average the fit's own noise, ~0.1 ns at 100 Hz.
+    static constexpr double kLinkWindowTicks = 12'500'000.0;  // 250 ms
+    static constexpr double kFirstSolveTicks = 10'000'000.0;  // 200 ms of rounds before the first live solution
+    static constexpr size_t kMinSolveRounds = 8;
+    static constexpr size_t kPendingMax = 4096;
+};
+
+// Each chip's published placement series: its clock model's segments and its root transform turned into the
+// PlacementMap's nodes. Nodes are frozen once published (consumers have placed records against them), so a publish
+// only appends beyond them: a node where the map bends (a segment boundary, the first sample) and the open
+// segment's frontier when it has left the frozen tangent.
+class SeriesPublisher {
+public:
     // A placement node: at eth wall tick H the chip sits at root refclk tick `root`; r is the chip's own refclk it
     // was placed at, tangent the run's rate on the root (root refclk ticks per wall tick), the map past the newest
     // node.
     struct Node {
         double H, root, r, tangent;
     };
-    // One published series of a chip. Its nodes are frozen (consumers have placed records against them), so a
-    // publish only appends beyond them; `cover_H` is how far the newest node's tangent has been confirmed by the
-    // fit, `knots` how many run boundaries have their nodes, `last_r` the refclk of the newest node or cover.
+    // One chip's series. `cover_H` is how far the newest node's tangent has been confirmed by the fit, `knots` how
+    // many run boundaries have their nodes, `last_r` the refclk of the newest node or cover.
     struct Series {
         std::vector<Node> nodes;
         size_t knots = 0;
@@ -269,11 +280,22 @@ private:
         size_t dropped = 0;   // nodes refused: behind the frozen series, or not a correction below one ns per ns
         size_t extended = 0;  // frontier samples that only advanced the cover
     };
-    std::map<uint32_t, Series> published_;
-    // The composed root transforms as of the newest accepted link solution.
-    std::map<uint32_t, RootXf> to_root_;
-    uint64_t solve_gen_ = 0;
-    uint64_t to_root_gen_ = ~0ull;
+
+    explicit SeriesPublisher(PlacementMap& map) : map_(map) {}
+    void reset() { series_.clear(); }
+    // Publishes one chip's series from its fit and root transform as they stand; true when the chip's cover moved.
+    bool publish(uint32_t dev, uint32_t chip, const LocalClockModel& fit, const RootXf& xf);
+    // A chip's series, null before its first publish.
+    const Series* series(uint32_t dev) const {
+        const auto it = series_.find(dev);
+        return it == series_.end() ? nullptr : &it->second;
+    }
+    bool has_nodes(uint32_t dev) const {
+        const Series* s = series(dev);
+        return s != nullptr && !s->nodes.empty();
+    }
+
+private:
     // The nodes a chip's fit yields beyond a series: those at run boundaries, and the open run's frontier.
     struct Fresh {
         std::vector<Node> knots;
@@ -281,41 +303,71 @@ private:
         size_t knots_after = 0;  // run boundaries consumed once the knots are placed
     };
     Fresh fresh_nodes(const Series& s, const LocalClockModel& fit, const RootXf& xf) const;
-    // Publishes one chip's series from its fit as it stands; true when the chip's cover moved.
-    bool publish_dev(uint32_t dev);
     // Appends the knots and, if the frontier left the newest tangent by more than kFreezeNs, freezes the tangent where
     // it stood and appends the frontier; otherwise advances the cover. True when the cover moved.
     bool advance(Series& s, uint32_t chip, Fresh fresh);
     void freeze_append(Series& s, uint32_t chip, const Node& n);
     void push_node(Series& s, uint32_t chip, const Node& n);
-    CaptureContext ctx_;
-    std::map<uint32_t, LocalClockModel> local_;  // device index -> local fit
-    std::vector<LinkRounds> links_;              // per ctx_.links index
-    // (device index, decoder core index) -> the link the core stamps for, and whether as its sender.
-    std::map<std::pair<uint32_t, uint32_t>, std::pair<size_t, bool>> side_of_;
-    std::vector<LinkSolution> solved_;  // per ctx_.links index
-    uint64_t dropped_kind_ = 0;
-    std::vector<SyncPlot> plots_;
-    static constexpr double kNsPerRefclk = 1e9 / kernel_profiler::kEthRefclkHz;
-    // Refclk ticks per stamp unit: the kernels report a round's stamp averages in kLinkSyncStampUnitsPerNs per ns.
-    static constexpr double kRefclkPerStampUnit = 1.0 / (kernel_profiler::kLinkSyncStampUnitsPerNs * kNsPerRefclk);
-    // A hardware round whose one-way delay inside the stamps sits this far from the window's median had a frame
-    // delayed on one leg, and its offset is off by that same amount; the delay itself holds to 0.5 ns.
-    static constexpr double kPathDevNs = 2.0;
+
+    PlacementMap& map_;
+    std::map<uint32_t, Series> series_;  // device index -> series
     // A frontier within this much of the newest tangent extends the cover instead of freezing a node; the published
     // map then sits within it of the fit's own estimate. A mature run's estimate moves ~0.02 ns per keepalive sample,
     // so it adds a node every few hundred ms; a young run adds one per burst sample for its first ms.
     static constexpr double kFreezeNs = 0.25;
-    // The refclk span the tangent is measured over along a run's exact line; any span gives the same slope.
-    static constexpr double kTangentTicks = 50000.0;
-    // The link solve's window in the sender chip's refclk, re-solved every half window. Two chips' crystals hold a
-    // line to ~0.4 ns over 250 ms and their rate moves a few ppb from one such window to the next (measured on the
-    // 8-chip runs), so a fit extrapolated half a window past its end stays within ~0.4 ns rms and doubles that at
-    // 500 ms. The rounds inside the window only average the fit's own noise, ~0.1 ns at 100 Hz.
-    static constexpr double kLinkWindowTicks = 12'500'000.0;  // 250 ms
-    static constexpr double kFirstSolveTicks = 10'000'000.0;  // 200 ms of rounds before the first live solution
-    static constexpr size_t kMinSolveRounds = 8;
-    static constexpr size_t kPendingMax = 4096;
+};
+
+// Device<->device sync from the PP_CLOCK samples the idle-eth pushers carry, and the correction it publishes.
+//
+// LOCAL points feed one LocalClockModel per device. LINK samples feed the LinkSolver, refclk against refclk, so DVFS
+// on either wall clock cannot enter the link solve. From those the SeriesPublisher publishes, per chip, a placement
+// series in the PlacementMap every record is placed through: the chip's eth wall tick onto the root chip's refclk,
+// which the host probe's series takes onto the host. Published incrementally for live sinks, finally at capture end.
+// Driven from the Service's sync thread, which decodes the eth pushers' streams and hands it every clock sample in
+// order; a capture is on_attach, the samples, on_capture_end. The unit test drives it the same way.
+class SyncEngine {
+public:
+    SyncEngine() : series_(map_) {}
+    void on_attach(const CaptureContext& ctx);
+    void on_clock(const ClockSample& s);
+    void on_capture_end(const CaptureContext& ctx);
+    // The placement map the service places records with: this engine writes its chip series, the host probe its
+    // host series.
+    PlacementMap& map() { return map_; }
+    const PlacementMap& map() const { return map_; }
+    // The series on_capture_end computed for a plotting sink (each chip's AICLK, the sync error per link), once.
+    std::vector<SyncPlot> take_plots() { return std::exchange(plots_, {}); }
+
+private:
+    using Round = LinkSolver::Round;
+    // The fleet timeline's root: the chip the host probe reads, fixed for the capture.
+    uint32_t root_dev() const { return ctx_.root_dev; }
+    // Publishes one chip's series from its fit as it stands; true when the chip's cover moved.
+    bool publish_dev(uint32_t dev);
+    void publish_all();
+    // The capture-end report: every link's solution and the loop closures, each chip's clock model; the sync error
+    // per round and each chip's AICLK as plots.
+    void log_summary() const;
+    void publish_error_plots();
+    void publish_clock_plots();
+    // The receiver's stamp and the sender's round midpoint placed on the root's refclk as the sink places records
+    // from each chip's eth core, and their difference in ns; tsc_a is the sender's host placement, the plots'
+    // abscissa. False when a chip has no fitted run or no node to place a stamp with.
+    struct RoundTerms {
+        double wall_a = 0, wall_b = 0, root_a = 0, root_b = 0;
+    };
+    bool round_error(
+        const CaptureContext::Link& L, const Round& r, int64_t& tsc_a, double& err, RoundTerms* terms = nullptr) const;
+
+    PlacementMap map_;
+    CaptureContext ctx_;
+    std::map<uint32_t, LocalClockModel> local_;  // device index -> local fit
+    LinkSolver links_;
+    SeriesPublisher series_;
+    // The composed root transforms as of the newest accepted link solution.
+    std::map<uint32_t, RootXf> to_root_;
+    uint64_t to_root_gen_ = ~0ull;
+    std::vector<SyncPlot> plots_;
 };
 
 }  // namespace tt::tt_metal::streaming_profiler

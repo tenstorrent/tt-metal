@@ -25,18 +25,10 @@ namespace tt::tt_metal::streaming_profiler {
 void SyncEngine::on_attach(const CaptureContext& ctx) {
     ctx_ = ctx;
     local_.clear();
-    links_.assign(ctx.links.size(), LinkRounds{});
-    side_of_.clear();
-    for (size_t li = 0; li < ctx.links.size(); li++) {
-        const CaptureContext::Link& L = ctx.links[li];
-        side_of_[{L.dev_a, L.core_a}] = {li, true};
-        side_of_[{L.dev_b, L.core_b}] = {li, false};
-    }
-    solved_.assign(ctx.links.size(), LinkSolution{});
-    dropped_kind_ = 0;
-    published_.clear();
+    links_.reset(ctx_);
+    series_.reset();
     to_root_gen_ = ~0ull;
-    solve_gen_ = 0;
+    plots_.clear();
     // A chip the capture cannot place -- no eth tracker, or no link path to the root -- is finished at once, so no
     // consumer waits for it.
     std::vector<bool> reach(ctx.devices.size(), false);
@@ -60,25 +52,42 @@ void SyncEngine::on_attach(const CaptureContext& ctx) {
             map_.finish(d.chip_id);
         }
     }
-    plots_.clear();
 }
 
 void SyncEngine::on_clock(const ClockSample& s) {
-    if (s.kind == PP_CLOCK_LOCAL_REFCLK) {
-        LocalClockModel& l = local_[s.dev];
-        if (s.role == PP_CLOCK_LOCAL_RAW) {
-            l.add_raw();
-            return;
-        }
-        l.add_point(s.value, s.ts, s.round & 0xFFu, s.round >> 8, s.role == PP_CLOCK_LOCAL_CLOSE);
-        if (publish_dev(s.dev)) {
-            service().wake_consumers();
-        }
+    if (s.kind != PP_CLOCK_LOCAL_REFCLK) {
+        links_.on_stamp(s);
         return;
     }
+    LocalClockModel& l = local_[s.dev];
+    if (s.role == PP_CLOCK_LOCAL_RAW) {
+        l.add_raw();
+        return;
+    }
+    l.add_point(s.value, s.ts, s.round & 0xFFu, s.round >> 8, s.role == PP_CLOCK_LOCAL_CLOSE);
+    if (publish_dev(s.dev)) {
+        service().wake_consumers();
+    }
+}
+
+void LinkSolver::reset(const CaptureContext& ctx) {
+    ctx_ = &ctx;
+    rounds_.assign(ctx.links.size(), LinkRounds{});
+    side_of_.clear();
+    for (size_t li = 0; li < ctx.links.size(); li++) {
+        const CaptureContext::Link& L = ctx.links[li];
+        side_of_[{L.dev_a, L.core_a}] = {li, true};
+        side_of_[{L.dev_b, L.core_b}] = {li, false};
+    }
+    solved_.assign(ctx.links.size(), LinkSolution{});
+    gen_ = 0;
+    dropped_ = 0;
+}
+
+void LinkSolver::on_stamp(const ClockSample& s) {
     const auto side = side_of_.find({s.dev, s.lane / profiler::kSpscNRiscDecode});
     if (s.kind != PP_CLOCK_LINK_PTP || side == side_of_.end()) {
-        dropped_kind_++;
+        dropped_++;
         return;
     }
     const auto [li, sender] = side->second;
@@ -89,10 +98,10 @@ void SyncEngine::on_clock(const ClockSample& s) {
         slot = s.role == PP_CLOCK_ROLE_T1 ? &Round::t1 : s.role == PP_CLOCK_ROLE_T1B ? &Round::t1b : nullptr;
     }
     if (slot == nullptr) {
-        dropped_kind_++;
+        dropped_++;
         return;
     }
-    LinkRounds& lr = links_[li];
+    LinkRounds& lr = rounds_[li];
     Round& r = lr.pending[s.round];
     r.id = s.round;
     r.*slot = Stamp{.units = s.value, .have = true};
@@ -106,11 +115,13 @@ void SyncEngine::on_clock(const ClockSample& s) {
     }
 }
 
-void SyncEngine::try_solve_links(bool final) {
-    for (size_t li = 0; li < ctx_.links.size(); li++) {
+void LinkSolver::solve_final() { try_solve_links(/*final=*/true); }
+
+void LinkSolver::try_solve_links(bool final) {
+    for (size_t li = 0; li < ctx_->links.size(); li++) {
         LinkSolution& out = solved_[li];
-        const CaptureContext::Link& L = ctx_.links[li];
-        const std::vector<Round>& rounds = links_[li].rounds;
+        const CaptureContext::Link& L = ctx_->links[li];
+        const std::vector<Round>& rounds = rounds_[li].rounds;
         const size_t n = rounds.size();
         if (final) {
             log_info(
@@ -127,7 +138,7 @@ void SyncEngine::try_solve_links(bool final) {
                 L.eth_b.y,
                 L.core_b,
                 rounds.size(),
-                links_[li].pending.size());
+                rounds_[li].pending.size());
         }
         if (n == 0) {
             continue;
@@ -164,7 +175,7 @@ void SyncEngine::try_solve_links(bool final) {
         }
         if (solve_link(L, std::move(pts), out)) {
             out.rounds = w;
-            solve_gen_++;
+            gen_++;
             log_info(
                 tt::LogMetal,
                 "[streaming profiler] d2d sync link chip {} -> chip {}: solved at round {} over {} ({} kept): offset "
@@ -182,15 +193,15 @@ void SyncEngine::try_solve_links(bool final) {
     }
 }
 
-double SyncEngine::mid_a_refclk(const Round& r) {
+double LinkSolver::mid_a_refclk(const Round& r) {
     return 0.5 * (static_cast<double>(r.t0.units) + static_cast<double>(r.t2.units)) * kRefclkPerStampUnit;
 }
 
-double SyncEngine::mid_b_refclk(const Round& r) {
+double LinkSolver::mid_b_refclk(const Round& r) {
     return 0.5 * (static_cast<double>(r.t1.units) + static_cast<double>(r.t1b.units)) * kRefclkPerStampUnit;
 }
 
-double SyncEngine::path_median(const std::vector<Round>& rounds, size_t begin, size_t n) {
+double LinkSolver::path_median(const std::vector<Round>& rounds, size_t begin, size_t n) {
     if (n <= begin) {
         return std::numeric_limits<double>::quiet_NaN();
     }
@@ -210,7 +221,7 @@ double SyncEngine::path_median(const std::vector<Round>& rounds, size_t begin, s
 // relaxation over the links (few devices, so O(links^2) is nothing) fills them from the root outward; a device
 // no path reaches keeps its own anchor and the local term alone. `used`, when given, marks the links the tree
 // took; the others close loops and their disagreement with the tree is path asymmetry (see log_summary).
-std::vector<SyncEngine::LinkSolution> SyncEngine::pair_solutions(std::vector<std::vector<size_t>>* members) const {
+std::vector<LinkSolver::LinkSolution> LinkSolver::pair_solutions(std::vector<std::vector<size_t>>* members) const {
     std::vector<LinkSolution> out;
     std::vector<std::vector<size_t>> groups;
     for (size_t li = 0; li < solved_.size(); li++) {
@@ -268,7 +279,7 @@ std::vector<SyncEngine::LinkSolution> SyncEngine::pair_solutions(std::vector<std
     return out;
 }
 
-size_t SyncEngine::pair_size(size_t li) const {
+size_t LinkSolver::pair_size(size_t li) const {
     size_t n = 0;
     for (const LinkSolution& s : solved_) {
         n += s.ok && s.dev_snd == solved_[li].dev_snd && s.dev_rcv == solved_[li].dev_rcv;
@@ -276,7 +287,7 @@ size_t SyncEngine::pair_size(size_t li) const {
     return n;
 }
 
-std::map<uint32_t, SyncEngine::RootXf> SyncEngine::root_transforms(uint32_t root, std::vector<bool>* used) const {
+std::map<uint32_t, RootXf> LinkSolver::root_transforms(uint32_t root, std::vector<bool>* used) const {
     std::map<uint32_t, RootXf> to_root;
     to_root[root] = RootXf{1.0, 0.0, true};
     if (used != nullptr) {
@@ -320,7 +331,8 @@ std::map<uint32_t, SyncEngine::RootXf> SyncEngine::root_transforms(uint32_t root
     return to_root;
 }
 
-SyncEngine::Fresh SyncEngine::fresh_nodes(const Series& s, const LocalClockModel& fit, const RootXf& xf) const {
+SeriesPublisher::Fresh SeriesPublisher::fresh_nodes(
+    const Series& s, const LocalClockModel& fit, const RootXf& xf) const {
     const std::vector<LocalClockModel::Run>& runs = fit.runs;
     // A node places one instant of a run on the root: its eth wall tick (the key every record of the chip is looked
     // up by, worker lanes through their tile offset) and the root's refclk at that instant, via the chip's refclk
@@ -403,7 +415,7 @@ SyncEngine::Fresh SyncEngine::fresh_nodes(const Series& s, const LocalClockModel
     return out;
 }
 
-void SyncEngine::push_node(Series& s, uint32_t chip, const Node& n) {
+void SeriesPublisher::push_node(Series& s, uint32_t chip, const Node& n) {
     const int64_t wall = static_cast<int64_t>(std::llround(n.H));
     if (!s.nodes.empty() && wall <= static_cast<int64_t>(std::llround(s.nodes.back().H))) {
         return;  // within the tick of the last node: the placement cannot differ measurably there
@@ -420,7 +432,7 @@ void SyncEngine::push_node(Series& s, uint32_t chip, const Node& n) {
 // at most on a frontier, a few ns at a knot). Shifting fresh nodes to meet the frozen tail and fading that shift over
 // a quarter second is worse: every discrepancy at a join becomes a level the map carries for 250 ms, 30-60 ns during
 // DVFS dithering at 1 ms.
-void SyncEngine::freeze_append(Series& s, uint32_t chip, const Node& n) {
+void SeriesPublisher::freeze_append(Series& s, uint32_t chip, const Node& n) {
     const double frontier_H = std::max(s.nodes.empty() ? -1.0 : s.nodes.back().H, s.cover_H);
     if (n.H >= frontier_H && n.H < frontier_H + 1.0) {
         return;  // the series' end re-derived, or a knot within the tick of it: the same node
@@ -448,7 +460,7 @@ void SyncEngine::freeze_append(Series& s, uint32_t chip, const Node& n) {
     push_node(s, chip, n);
 }
 
-bool SyncEngine::advance(Series& s, uint32_t chip, Fresh fresh) {
+bool SeriesPublisher::advance(Series& s, uint32_t chip, Fresh fresh) {
     const double cover_before = s.cover_H;
     for (const Node& k : fresh.knots) {
         freeze_append(s, chip, k);
@@ -473,6 +485,11 @@ bool SyncEngine::advance(Series& s, uint32_t chip, Fresh fresh) {
     return s.cover_H > cover_before;
 }
 
+bool SeriesPublisher::publish(uint32_t dev, uint32_t chip, const LocalClockModel& fit, const RootXf& xf) {
+    Series& s = series_[dev];
+    return advance(s, chip, fresh_nodes(s, fit, xf));
+}
+
 bool SyncEngine::publish_dev(uint32_t dev) {
     const auto st = local_.find(dev);
     if (st == local_.end() || st->second.runs.empty() || dev >= ctx_.devices.size()) {
@@ -482,9 +499,9 @@ bool SyncEngine::publish_dev(uint32_t dev) {
     if (map_.host_published() == 0) {
         return false;
     }
-    if (to_root_gen_ != solve_gen_) {
-        to_root_ = root_transforms(root_dev(), nullptr);
-        to_root_gen_ = solve_gen_;
+    if (to_root_gen_ != links_.generation()) {
+        to_root_ = links_.root_transforms(root_dev(), nullptr);
+        to_root_gen_ = links_.generation();
     }
     // The series starts only once the chip is on the root's tree (the root is there from the start): its first node
     // fixes the placement every later node joins.
@@ -492,8 +509,7 @@ bool SyncEngine::publish_dev(uint32_t dev) {
     if (xf == to_root_.end() || !xf->second.ok) {
         return false;
     }
-    Series& series = published_[dev];
-    return advance(series, ctx_.devices[dev].chip_id, fresh_nodes(series, st->second, xf->second));
+    return series_.publish(dev, ctx_.devices[dev].chip_id, st->second, xf->second);
 }
 
 void SyncEngine::publish_all() {
@@ -549,19 +565,20 @@ void SyncEngine::log_summary() const {
             smax * to_ghz,
             anchor_ghz,
             mean > 0.0 ? (smax - smin) / mean * 1e6 : 0.0,
-            published_.contains(dev) ? published_.at(dev).nodes.size() : 0,
-            published_.contains(dev) ? published_.at(dev).extended : 0);
-        if (const auto pit = published_.find(dev); pit != published_.end() && pit->second.dropped != 0) {
+            series_.series(dev) != nullptr ? series_.series(dev)->nodes.size() : 0,
+            series_.series(dev) != nullptr ? series_.series(dev)->extended : 0);
+        if (const auto* ps = series_.series(dev); ps != nullptr && ps->dropped != 0) {
             log_warning(
                 tt::LogMetal,
                 "[streaming profiler] d2d sync chip {}: {} correction nodes refused (non-finite, or moving faster "
                 "than host time)",
                 chip,
-                pit->second.dropped);
+                ps->dropped);
         }
     }
-    for (size_t li = 0; li < solved_.size() && li < ctx_.links.size(); li++) {
-        const LinkSolution& s = solved_[li];
+    const std::vector<LinkSolver::LinkSolution>& solved = links_.solutions();
+    for (size_t li = 0; li < solved.size() && li < ctx_.links.size(); li++) {
+        const LinkSolver::LinkSolution& s = solved[li];
         const CaptureContext::Link& L = ctx_.links[li];
         if (!s.ok) {
             log_warning(
@@ -599,9 +616,9 @@ void SyncEngine::log_summary() const {
     // handle on asymmetry without an external reference.
     if (!local_.empty()) {
         std::vector<bool> used;
-        const std::map<uint32_t, RootXf> to_root = root_transforms(root_dev(), &used);
-        for (size_t li = 0; li < solved_.size() && li < ctx_.links.size(); li++) {
-            const LinkSolution& s = solved_[li];
+        const std::map<uint32_t, RootXf> to_root = links_.root_transforms(root_dev(), &used);
+        for (size_t li = 0; li < solved.size() && li < ctx_.links.size(); li++) {
+            const LinkSolver::LinkSolution& s = solved[li];
             if (!s.ok || used[li]) {
                 continue;
             }
@@ -613,7 +630,7 @@ void SyncEngine::log_summary() const {
             const double direct = (1.0 + s.rate) * s.mid_refclk + (s.offset_refclk - s.rate * s.mid_refclk);
             const double via_tree =
                 (S->second.scale * s.mid_refclk + S->second.shift - R->second.shift) / R->second.scale;
-            if (pair_size(li) > 1) {
+            if (links_.pair_size(li) > 1) {
                 log_info(
                     tt::LogMetal,
                     "[streaming profiler] d2d sync link chip {} eth({},{}) -> chip {}: {:+.1f} ns off its pair's mean "
@@ -635,19 +652,19 @@ void SyncEngine::log_summary() const {
             }
         }
     }
-    if (dropped_kind_ != 0) {
+    if (links_.dropped() != 0) {
         log_warning(
             tt::LogMetal,
             "[streaming profiler] d2d sync: {} PP_CLOCK samples ignored (unknown kind, a core on no link, or a role "
             "that end does not stamp)",
-            dropped_kind_);
+            links_.dropped());
     }
 }
 
 // The link solve: receiver refclk = sender refclk + offset + rate * (sender refclk - mean midpoint), a straight line
 // through the rounds' (midpoint, receiver minus midpoint) points with two passes of 3-sigma trimming. A solution
 // that is not finite, beyond 100 ppm or a millisecond of residual is refused and the previous one stands.
-bool SyncEngine::solve_link(const CaptureContext::Link& L, std::vector<RoundPoint> pts, LinkSolution& out) const {
+bool LinkSolver::solve_link(const CaptureContext::Link& L, std::vector<RoundPoint> pts, LinkSolution& out) const {
     if (pts.size() < 4) {
         return false;
     }
@@ -738,12 +755,11 @@ bool SyncEngine::round_error(
     if (la == local_.cend() || lb == local_.cend()) {
         return false;
     }
-    const auto pa = published_.find(L.dev_a), pb = published_.find(L.dev_b);
-    if (pa == published_.end() || pb == published_.end() || pa->second.nodes.empty() || pb->second.nodes.empty()) {
+    if (!series_.has_nodes(L.dev_a) || !series_.has_nodes(L.dev_b)) {
         return false;
     }
-    const double wa = la->second.wall_at(mid_a_refclk(r));
-    const double wb = lb->second.wall_at(mid_b_refclk(r));
+    const double wa = la->second.wall_at(LinkSolver::mid_a_refclk(r));
+    const double wb = lb->second.wall_at(LinkSolver::mid_b_refclk(r));
     if (wa <= 0.0 || wb <= 0.0) {
         return false;
     }
@@ -767,7 +783,7 @@ bool SyncEngine::round_error(
 void SyncEngine::publish_error_plots() {
     for (size_t li = 0; li < ctx_.links.size(); li++) {
         const CaptureContext::Link& L = ctx_.links[li];
-        const std::vector<Round>& rounds = links_[li].rounds;
+        const std::vector<Round>& rounds = links_.rounds(li);
         if (rounds.empty()) {
             continue;
         }
@@ -778,7 +794,7 @@ void SyncEngine::publish_error_plots() {
         // on either sender stamp shows here, one on the receiver does not).
         std::vector<SyncPlotPoint> pts;
         std::vector<double> resid, rtt, raw_x, raw_y, turn, path;
-        const double path_med = path_median(rounds, 0, n);
+        const double path_med = LinkSolver::path_median(rounds, 0, n);
         size_t off_path = 0;
         std::vector<RoundTerms> terms;
         pts.reserve(n);
@@ -786,7 +802,7 @@ void SyncEngine::publish_error_plots() {
         terms.reserve(n);
         long double se = 0, ss = 0;
         for (const Round& r : rounds) {
-            if (std::abs(path_ns(r) - path_med) > kPathDevNs) {
+            if (std::abs(LinkSolver::path_ns(r) - path_med) > LinkSolver::kPathDevNs) {
                 off_path++;
                 continue;
             }
@@ -800,10 +816,10 @@ void SyncEngine::publish_error_plots() {
             terms.push_back(t);
             se += e;
             ss += static_cast<long double>(e) * e;
-            raw_x.push_back(mid_a_refclk(r));
-            raw_y.push_back(mid_b_refclk(r) - raw_x.back());
-            rtt.push_back(rtt_ns(r));
-            path.push_back(path_ns(r));
+            raw_x.push_back(LinkSolver::mid_a_refclk(r));
+            raw_y.push_back(LinkSolver::mid_b_refclk(r) - raw_x.back());
+            rtt.push_back(LinkSolver::rtt_ns(r));
+            path.push_back(LinkSolver::path_ns(r));
             turn.push_back(rtt.back() - 2.0 * path.back());
         }
         if (pts.empty()) {
@@ -886,16 +902,18 @@ void SyncEngine::publish_error_plots() {
         // trip.
         std::vector<double> node_a_us(pts.size(), -1.0), node_b_us(pts.size(), -1.0);
         for (const auto& [dev, out] : {std::pair{L.dev_a, &node_a_us}, std::pair{L.dev_b, &node_b_us}}) {
-            const auto pb = published_.find(dev);
-            if (pb == published_.end()) {
+            const SeriesPublisher::Series* ps = series_.series(dev);
+            if (ps == nullptr) {
                 continue;
             }
-            const std::vector<Node>& nodes = pb->second.nodes;
+            const std::vector<SeriesPublisher::Node>& nodes = ps->nodes;
             const double ghz = std::max(ctx_.devices[dev].clock.frequency_ghz, 0.1);
             for (size_t i = 0; i < pts.size(); i++) {
                 const double wall = dev == L.dev_a ? terms[i].wall_a : terms[i].wall_b;
-                const auto up = std::lower_bound(
-                    nodes.begin(), nodes.end(), wall, [](const Node& nd, double h) { return nd.H < h; });
+                const auto up =
+                    std::lower_bound(nodes.begin(), nodes.end(), wall, [](const SeriesPublisher::Node& nd, double h) {
+                        return nd.H < h;
+                    });
                 for (const auto* nd :
                      {up != nodes.end() ? &*up : nullptr, up != nodes.begin() ? &*(up - 1) : nullptr}) {
                     if (nd == nullptr) {
@@ -981,8 +999,7 @@ void SyncEngine::publish_error_plots() {
 
 void SyncEngine::publish_clock_plots() {
     for (const auto& [dev, fit] : local_) {
-        const auto ps = published_.find(dev);
-        if (ps == published_.end() || ps->second.nodes.empty() || dev >= ctx_.devices.size()) {
+        if (!series_.has_nodes(dev) || dev >= ctx_.devices.size()) {
             continue;
         }
         const uint32_t chip = ctx_.devices[dev].chip_id;
@@ -1005,15 +1022,13 @@ void SyncEngine::publish_clock_plots() {
 
 void SyncEngine::on_capture_end(const CaptureContext& ctx) {
     (void)ctx;
-    try_solve_links(/*final=*/true);
+    links_.solve_final();
     publish_all();
     publish_error_plots();
     publish_clock_plots();
     log_summary();
     // The published corrections stay for the sinks that write at process end; the next attach starts fresh.
     local_.clear();
-    links_.clear();
-    dropped_kind_ = 0;
 }
 
 }  // namespace tt::tt_metal::streaming_profiler
