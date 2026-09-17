@@ -168,7 +168,6 @@ if(TT_METAL_USE_EMULE)
     list(
         APPEND
         IMPL_SRC
-        ${CMAKE_CURRENT_SOURCE_DIR}/emulation/emulated_program_runner.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/emulation/emule_descriptor_builder.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/emulation/host_sanitizers.cpp
     )
