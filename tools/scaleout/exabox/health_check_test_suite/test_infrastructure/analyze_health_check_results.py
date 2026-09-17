@@ -32,7 +32,7 @@ import re
 import sys
 from datetime import datetime, timezone
 
-from utils.report import is_reset_op_check
+from utils.report import is_reset_op_check, phase_gates
 
 SCHEMA_VERSION = 1
 
@@ -320,6 +320,7 @@ def machine_meta(report, hostname, job_id, jira_ticket, ts, versions=None, run_i
 
 
 def checks_rows(report: dict, meta: dict):
+    non_gating = {pname for pname, ph in report.get("phases", {}).items() if not phase_gates(ph)}
     rows = []
     for pname, _ps, c in iter_checks(report):
         name = c.get("name", "")
@@ -352,7 +353,9 @@ def checks_rows(report: dict, meta: dict):
                 "is_fail": int(st == "FAIL"),
                 "is_skip": int(st == "SKIP"),
                 "is_covered": int(st in COVERED and executed == 1),
-                "acknowledged": int(name in ACKNOWLEDGED_CHECKS or excluded or is_reset_op_check(name)),
+                "acknowledged": int(
+                    name in ACKNOWLEDGED_CHECKS or excluded or is_reset_op_check(name) or pname in non_gating
+                ),
                 "testcases_passed": tp,
                 "testcases_failed": tf,
                 "executed": executed,

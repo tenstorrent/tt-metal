@@ -232,26 +232,54 @@ unused one) and an undescribed trained link is recorded without alerting rather
 than reported as a surprise — otherwise every one of the ~36 cabled links inside
 the chassis would be a finding on every run.
 
-### Failure modes are SKIP or WARN, never a silent PASS
+### Statuses: PASS or SKIP by default — never WARN, and not yet FAIL
 
-Same discipline as the triage phase, for the same reason.
+The tool is still being validated against the fleet, so by default the phase
+reports only two things:
 
-- Tier doesn't ask, package not installed, ingest module missing → **SKIP with
-  the reason**. A check that silently disappears reads as coverage we had.
-- Timed out, wrote no dump, or the dump would not parse → **WARN**: lost
-  coverage, not a statement about the hardware.
-- Findings from the dump → recorded as-is, except that **FAIL is held at WARN
-  unless `--qsfp-gating` is passed**, matching `--triage-gating` while
-  the tool beds in.
+- **SKIP** — no reading was taken: the tier doesn't ask for one, the package
+  isn't installed, the ingest module is missing, the collect timed out, or the
+  dump would not parse. Always with the reason attached, on the same reasoning
+  as the triage phase: a check that silently disappears reads as coverage we had.
+- **PASS** — a reading was taken. Whatever the dump found is recorded in the
+  check's `details` and `data`, annotated `[advisory: FAIL recorded as PASS,
+  --qsfp-gating off]` or `[advisory: WARN recorded as PASS]` so a PASS above a
+  detail line that sounds like a problem doesn't read as a contradiction.
 
-One subtlety worth knowing: `collect` exits non-zero *only* when nothing at all
-could be collected. A descriptor it could not open, a BMC that would not answer
-and a cage sweep that fell over are all recorded in the dump as findings and
-still exit 0. So the phase judges on the dump, not the exit code — a readable
-dump after a non-zero exit is still read, and a clean exit with no dump is still
-a failure to collect. The collector's own `FINDINGS` list is surfaced as
-`qsfp_findings`, which is what stops a clean exit code reading as a clean
-run.
+Nothing is lost by this — the finding, its offending port paths and its full
+`data` all reach the JSON report and the CSVs exactly as the ingest produced
+them. Only the status is held, and only because a tool nobody has yet confirmed
+is right should not be the thing an operator's eye is drawn to when triaging a
+rack. A held FAIL goes straight to PASS rather than sliding down through WARN,
+since the phase has undertaken not to raise one.
+
+**The ingest module is not subject to this policy.** Run standalone against a
+stored dump it reports WARN and FAIL normally, so reviewing a dump by hand shows
+the real assessment. The policy is applied on ingest by `normalize_qsfp_check()`,
+which is the only place that knows it is feeding a fleet verdict.
+
+### Turning the findings on
+
+`--qsfp-gating` changes this completely and in one step: findings report at their
+real severity and the phase gates the run like any other — `overall_status`, the
+exit code, `has_actionable_failure()`, the JIRA ticket and the Slurm
+reboot-and-requeue all respond to a QSFP FAIL. `Phase.gates` in the JSON records
+which mode a run was in, and `report.py` plus the CSV analyzer both read that one
+flag rather than each keeping a list of which phases count. A phase with no
+`gates` key gates, so every other phase and every report written before the flag
+existed is unaffected.
+
+Turning it on is the decision to make once there is enough fleet history to say
+the findings are right — which is why the phase records them from the first run
+either way. In `checks.csv` a non-gating phase's rows carry `acknowledged=1`,
+keeping them out of `top_fail_category` and `checks_warn_actionable` while
+leaving the raw counts intact.
+
+Before enabling it, note that `qsfp_link_training` currently counts every
+in-service port, including cage-attached ports with no module plugged in, which
+never train. On a partly cabled machine that is a large FAIL that says nothing:
+one measured Galaxy reported 256/320 trained, where all 64 "down" ports were
+empty cages. That check wants tightening first.
 
 The dump lands in `<output_dir>/logs/qsfp_dump_<host>.jsonl` (~3.4 MB with
 cages) alongside `qsfp.txt` and `qsfp.log`, so
@@ -279,7 +307,7 @@ kills the process group and takes the report with it — so raise it when runnin
 | `--skip-qsfp-tests` | off | Skip the QSFP tests entirely. Named for the phase, not the collector's own `--skip-qsfp`, which drops the cage sweep but still collects ETH. |
 | `--qsfp-tool-path PATH` | `tt-bh-glx-cluster-debug` on PATH | Override the collector binary. A path that doesn't resolve is reported as its own SKIP rather than silently ignored. |
 | `--qsfp-descriptor PATH` | — | `factory_system_descriptor.textproto`, which gives the cage-attached links an expected partner. Without it only the soldered internal links are compared against a topology. |
-| `--qsfp-gating` | off | Let QSFP test FAILs gate the run. Off holds them at WARN; findings are recorded either way. |
+| `--qsfp-gating` | off | Report QSFP findings at their real severity and let them gate the run. Off records every finding in `details`/`data` but holds the status at PASS. |
 | `--input-snapshot PATH` | — | Use a stored snapshot instead of calling tt-smi |
 | `--tt-smi-path PATH` | `/opt/tt_metal_infra/.../tt-smi` else `tt-smi` on PATH | Override tt-smi binary or repo path |
 | `--tt-metal-path PATH` | `$TT_METAL_HOME` | tt-metal repo root (must contain the deployment-test binary under `build_Release/`) |
@@ -356,12 +384,14 @@ while `eth_links_up` reads the `ETH_LIVE_STATUS` telemetry from the snapshot.
 ### QSFP tests (medium / deploy, when the package is installed)
 
 Derived from the ETH dump; see [the phase section](#qsfp-tests-phase) above
-for how they get here and why FAILs are advisory by default. Checks marked
+for how they get here. **The status column below is what the ingest assesses.**
+Without `--qsfp-gating` the phase records every one of them as PASS, keeping the
+finding in `details` and `data`. Checks marked
 JSON-only are store-only forensics kept out of the console summary.
 
 | Check | Rule | On fail |
 |---|---|---|
-| `qsfp_collect` | The collect run itself | **WARN** on timeout, no dump, or an unreadable one. **SKIP** when the tier doesn't ask, the package isn't installed, or the ingest module is missing. |
+| `qsfp_collect` | The collect run itself | **SKIP** on timeout, no dump, an unreadable one, or when the tier doesn't ask, the package isn't installed or the ingest module is missing — all of them mean no reading was taken. |
 | `qsfp_inventory` | 4 UBBs, 32 ASICs, 14 ETH ports per ASIC. Reaches the chips over the collector's own PCI enumeration and BMC reads rather than tt-smi, so it deliberately overlaps `pcie_enum_count` — two paths agreeing is worth more than either alone, and the collector records a *reason* per absent slot. | **FAIL** on a short count or an absent slot. **WARN** on unparseable dump lines. |
 | `qsfp_board_rev` | All UBBs report one `BOARD_REV`, and all 8 ASICs of each agree on `board_id`. The revision selects the internal topology table, so a bad read invalidates the partner checks below too, not just this one. | **FAIL** on mixed revisions or intra-UBB disagreement |
 | `qsfp_board_rev_agrees` | The dump's revision against the snapshot phase's `detected_board_rev` — two reads of one register down independent paths | **FAIL** on disagreement. **SKIP** when either side didn't determine one. |

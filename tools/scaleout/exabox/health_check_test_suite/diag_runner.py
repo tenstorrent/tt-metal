@@ -334,6 +334,13 @@ class Phase:
     duration_s: float = 0.0
     checks: list[Check] = field(default_factory=list)
     error: str = ""
+    # False → the phase's findings are recorded at their real status but do not
+    # reach the run's verdict: not the exit code, not the JIRA gate, not the CSV
+    # rollup. For a tool still being validated against the fleet, which has to
+    # report honestly without being able to take nodes out of service. The flag
+    # travels in the JSON so the consumers downstream apply one decision rather
+    # than each keeping its own list of which phases count.
+    gates: bool = True
 
     def add(self, c: Check) -> None:
         self.checks.append(c)
@@ -1727,7 +1734,14 @@ def default_triage_dir() -> Path:
     return Path(raw) if raw else default_tt_metal_path() / TRIAGE_SUBDIR
 
 
-def normalize_external_check(payload: dict, gating: bool, prefix: str, gating_flag: str) -> Check:
+def normalize_external_check(
+    payload: dict,
+    *,
+    prefix: str,
+    hold_fail_at: str | None = None,
+    hold_warn_at: str | None = None,
+    gating_flag: str = "",
+) -> Check:
     """Turn one entry of an external tool's JSON into a Check, defensively.
 
     Shared by every phase that ingests findings produced outside this file — the
@@ -1735,8 +1749,8 @@ def normalize_external_check(payload: dict, gating: bool, prefix: str, gating_fl
     (see ``kmd_triage/triage_json.sh``) and the defences below are properties of
     ingesting *any* of it, not of either producer.
 
-    Three normalizations matter, all because the report is consumed by code that
-    doesn't know these phases exist:
+    Two normalizations are unconditional, both because the report is consumed by
+    code that doesn't know these phases exist:
 
     * Names get a per-phase prefix. CHECK_CATEGORY, EXCLUDED_CHECKS,
       ACKNOWLEDGED_CHECKS and _find_check() in the analyzer are all keyed on the
@@ -1745,9 +1759,14 @@ def normalize_external_check(payload: dict, gating: bool, prefix: str, gating_fl
     * An unrecognised status becomes WARN. Anything outside PASS/WARN/FAIL/SKIP
       falls through the analyzer's SEVERITY map to UNKNOWN and won't validate
       against the CheckStatus enum, so a typo would land as a junk CSV row.
-    * A FAIL is held at WARN unless the phase was told to let this tool gate the
-      run, with the reason written into the details so a reader is not left
-      wondering why a FAIL reads as a WARN.
+
+    ``hold_fail_at`` and ``hold_warn_at`` are how a phase says how much authority
+    its tool has yet earned: each names the status to record that finding as, or
+    is None to leave it alone. They are applied to the tool's own verdict and
+    never to each other's output, so holding a FAIL at PASS is one step and not
+    a FAIL quietly sliding down through WARN. Both annotate the details with
+    what was done, because a status that reads lower than the finding beneath it
+    sounds is otherwise indistinguishable from a bug.
 
     An `ip` outside IP_ORDER is folded to "other" for the same reason:
     print_phase_summary() iterates IP_ORDER, so an unrecognised group would
@@ -1766,9 +1785,14 @@ def normalize_external_check(payload: dict, gating: bool, prefix: str, gating_fl
     if status not in _TRIAGE_STATUSES:
         details = f"[unrecognised status {payload.get('status')!r}] {details}".rstrip()
         status = WARN
-    elif status == FAIL and not gating:
-        details = f"[advisory: FAIL held at WARN, {gating_flag} off] {details}".rstrip()
-        status = WARN
+    # On the tool's own verdict, so the two are alternatives rather than a chain.
+    if status == FAIL and hold_fail_at:
+        flag = f", {gating_flag} off" if gating_flag else ""
+        details = f"[advisory: FAIL recorded as {hold_fail_at}{flag}] {details}".rstrip()
+        status = hold_fail_at
+    elif status == WARN and hold_warn_at:
+        details = f"[advisory: WARN recorded as {hold_warn_at}] {details}".rstrip()
+        status = hold_warn_at
     data = payload.get("data")
     ip = str(payload.get("ip") or "other")
     return Check(
@@ -1783,7 +1807,34 @@ def normalize_external_check(payload: dict, gating: bool, prefix: str, gating_fl
 
 def normalize_triage_check(payload: dict, gating: bool) -> Check:
     """One triage-script finding as a Check. See normalize_external_check."""
-    return normalize_external_check(payload, gating, prefix="triage_", gating_flag="--triage-gating")
+    return normalize_external_check(
+        payload,
+        prefix="triage_",
+        hold_fail_at=None if gating else WARN,
+        gating_flag="--triage-gating",
+    )
+
+
+def normalize_qsfp_check(payload: dict, gating: bool) -> Check:
+    """One QSFP-test finding as a Check. See normalize_external_check.
+
+    The phase reports PASS, FAIL or SKIP and never WARN, and until
+    ``--qsfp-gating`` says otherwise it does not report FAIL either: the tool is
+    still being validated against the fleet, and a finding it is not yet trusted
+    to have got right should not be the thing an operator's eye is drawn to.
+    Everything it found is still on the record — the details line is the tool's
+    own, the ``data`` is untouched, and the annotation says what was held — so
+    the fleet data needed to decide whether to turn gating on is collected
+    either way. It is one step, FAIL straight to PASS, so nothing lands on the
+    WARN this phase has undertaken not to raise.
+    """
+    return normalize_external_check(
+        payload,
+        prefix="qsfp_",
+        hold_fail_at=None if gating else PASS,
+        hold_warn_at=PASS,
+        gating_flag="--qsfp-gating",
+    )
 
 
 def run_triage(
@@ -2015,9 +2066,8 @@ def qsfp_rev_crosscheck(checks: list[Check], detected_rev: str | None, gating: b
 
     The one finding in this phase that this file derives rather than reads out
     of the dump, since only the runner knows both halves. It still goes out
-    through normalize_external_check so it obeys --qsfp-gating like
-    every other check here: a phase where one FAIL gates the run and the rest do
-    not would be impossible to reason about from the report alone.
+    through the same normalizer as everything else here, so one check cannot
+    end up carrying a status the rest of the phase would not have been given.
     """
     found = next((c for c in checks if c.name == QSFP_REV_CHECK), None)
     dump_rev = (found.data or {}).get("rev") if found else None
@@ -2046,7 +2096,7 @@ def qsfp_rev_crosscheck(checks: list[Check], detected_rev: str | None, gating: b
             "data": {"tt_smi_rev": detected_rev, "dump_rev": dump_rev, "expected_dump_rev": expected},
             "ip": "board",
         }
-    return normalize_external_check(payload, gating, prefix="qsfp_", gating_flag="--qsfp-gating")
+    return normalize_qsfp_check(payload, gating)
 
 
 def run_qsfp_tests(
@@ -2054,7 +2104,7 @@ def run_qsfp_tests(
     phase: Phase,
     dry_run: bool,
     logs_dir: Path,
-    gating: bool,
+    gating: bool = False,
     binary_override: str | None = None,
     descriptor: Path | None = None,
     reason: str | None = None,
@@ -2071,13 +2121,23 @@ def run_qsfp_tests(
     comparison rather than an inference. Its cage and module records are also
     the only inventory of what is physically plugged in.
 
-    Every way of not having it — tier doesn't ask, package not installed, the
-    module that reads the dump missing — is a SKIP carrying its reason, on the
-    same reasoning as the triage phase: a check that silently vanishes reads as
-    coverage we had. Tooling breakage (timeout, an unreadable dump) is a WARN,
-    because it says nothing about the hardware. Findings about the hardware come
-    from the dump, and are held at WARN unless ``--qsfp-gating`` was
-    passed.
+    By default the phase reports only **SKIP** and **PASS**, because the tool is
+    still being validated against the fleet:
+
+    * **SKIP** — no reading was taken. The tier doesn't ask for one, the package
+      isn't installed, the module that reads the dump is missing, the collect
+      timed out, or the dump would not parse. Always with the reason attached,
+      on the same reasoning as the triage phase: a check that silently vanishes
+      reads as coverage we had.
+    * **PASS** — a reading was taken. Whatever the dump found is in the check's
+      details and data, annotated with what was held, but it is not yet allowed
+      to draw the eye of someone triaging a rack.
+
+    ``--qsfp-gating`` is the one switch that changes this, and it changes it
+    completely: findings then report at their real severity and the phase gates
+    the run like any other. Turning it on is the decision to be made once there
+    is enough fleet data to say the findings are right, which is why the phase
+    collects that data from the first run either way.
     """
     if not TIER_QSFP_TESTS.get(tier, False):
         phase.add(
@@ -2181,11 +2241,7 @@ def run_qsfp_tests(
         try:
             records, malformed = ingest.load_dump(dump_path)
             payload = ingest.build_report(records, malformed)
-            checks = [
-                normalize_external_check(c, gating, prefix="qsfp_", gating_flag="--qsfp-gating")
-                for c in payload.get("checks", [])
-                if isinstance(c, dict)
-            ]
+            checks = [normalize_qsfp_check(c, gating) for c in payload.get("checks", []) if isinstance(c, dict)]
             if not checks:
                 problem = "the dump yielded no usable checks"
         except (OSError, ValueError) as e:
@@ -2200,10 +2256,10 @@ def run_qsfp_tests(
                 log(f"  could not write {text_path}: {e!r}")
 
     if timed_out:
-        status = WARN
+        status = SKIP
         details = f"timed out after {QSFP_TIMEOUT_S}s; no findings collected"
     elif problem:
-        status = WARN
+        status = SKIP
         # Why it produced nothing is the only useful thing left to report, and
         # it is almost always the tool's first line of stderr.
         first = next((ln.strip() for ln in err.splitlines() if ln.strip()), "")
@@ -2564,7 +2620,10 @@ def run_diag(
     # tool has no SIGBUS handler, so a concurrent reset would kill it outright
     # rather than being reported. Reading the links after that reset is also the
     # reading that matters — it is the state the machine is being left in.
-    qsfp_phase = Phase(name="qsfp_tests")
+    # The tool is still being validated against the fleet, so its findings are
+    # recorded at their real severity but do not vote: --qsfp-gating is what
+    # lets them, once the fleet data says they can be trusted.
+    qsfp_phase = Phase(name="qsfp_tests", gates=qsfp_gating)
     t0 = time.time()
     if skip_qsfp_tests:
         qsfp_phase.add(Check(name="qsfp_collect", status=SKIP, details="--skip-qsfp-tests", ip="other"))
@@ -2584,7 +2643,7 @@ def run_diag(
             # Same rule as triage: a crash in an optional phase is lost
             # coverage, not a hardware finding, and must not take the run down.
             qsfp_phase.error = repr(e)
-            qsfp_phase.add(Check(name="qsfp_collect", status=WARN, details=repr(e), ip="other"))
+            qsfp_phase.add(Check(name="qsfp_collect", status=SKIP, details=repr(e), ip="other"))
     qsfp_phase.duration_s = time.time() - t0
     qsfp_phase.rollup()
     report["phases"]["qsfp_tests"] = asdict(qsfp_phase)
@@ -2593,7 +2652,11 @@ def run_diag(
     ended = datetime.now(timezone.utc)
     report["ended_utc"] = ended.isoformat()
     report["total_duration_s"] = (ended - started).total_seconds()
-    statuses = [p["status"] for p in report["phases"].values()]
+    # Only phases that gate reach the verdict. A non-gating phase still rolls up
+    # and still prints, so its findings are as visible as anyone else's — it
+    # simply has no vote, which is the one honest way to carry a tool whose
+    # findings are worth recording before they are worth acting on.
+    statuses = [p["status"] for p in report["phases"].values() if p.get("gates", True)]
     if FAIL in statuses:
         report["overall_status"] = FAIL
     elif WARN in statuses:
@@ -2612,17 +2675,23 @@ def run_diag(
     print("  " + "─" * 70)
     print(f"  OVERALL        {report['overall_status']}")
     # Per-phase rollup. For non-PASS phases, list the offending checks (ip:name=status).
+    # A phase that does not gate says so on its own line: otherwise a reader
+    # seeing a FAIL here above an OVERALL that is not FAIL would reasonably
+    # conclude the report had contradicted itself.
     for phase_name, p in report["phases"].items():
         status = p["status"]
+        # Only worth saying when there is something for it to explain: a passing
+        # phase that does not gate looks no different from one that does.
+        note = "" if p.get("gates", True) or status == PASS else "  (does not gate)"
         if status == PASS:
             print(f"    {phase_name:14} {status}")
             continue
         bad = [c for c in p["checks"] if c["status"] in (WARN, FAIL)]
         if bad:
             items = ", ".join(f"{c.get('ip','other')}:{c['name']}={c['status']}" for c in bad)
-            print(f"    {phase_name:14} {status} — {items}")
+            print(f"    {phase_name:14} {status}{note} — {items}")
         else:
-            print(f"    {phase_name:14} {status}")
+            print(f"    {phase_name:14} {status}{note}")
 
     return (0 if report["overall_status"] != FAIL else 1), report
 

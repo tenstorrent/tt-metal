@@ -53,7 +53,9 @@ Forwarded options (see diag_runner.py --help for details):
   --skip-qsfp-tests      Skip the QSFP tests. Named for the phase, not the collector's own
                          --skip-qsfp, which drops the cage sweep but still collects ETH
   --qsfp-tool-path PATH  Override the tt-bh-glx-cluster-debug binary
-  --qsfp-gating          Let QSFP test FAILs gate the run (default: held at WARN)
+  --qsfp-gating          Report QSFP findings at their real severity and let them gate
+                         the run. Off by default while the tool is validated: findings
+                         are recorded in full but every check reports PASS
   --qsfp-descriptor PATH Optional. factory_system_descriptor.textproto, which adds an expected
                          partner for the cage-attached links. Without one the 104 soldered
                          internal links are still checked against the collector's built-in
