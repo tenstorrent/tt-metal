@@ -283,21 +283,6 @@ inline uint32_t begin_worker_completion_round(launch_msg_t* launch_message, bool
     overlay::fds_signalling::worker_clear_done();
     return go_message_index + 1;
 }
-
-inline void wait_for_tile_noc_traffic() {
-    for (uint32_t noc = 0; noc < NUM_NOCS; ++noc) {
-        WAYPOINT("FNW");
-        while (NOC_STATUS_READ_REG(noc, NIU_MST_NONPOSTED_WR_REQ_SENT) !=
-                   NOC_STATUS_READ_REG(noc, NIU_MST_WR_ACK_RECEIVED) ||
-               NOC_STATUS_READ_REG(noc, NIU_MST_RD_REQ_SENT) != NOC_STATUS_READ_REG(noc, NIU_MST_RD_RESP_RECEIVED) ||
-               NOC_STATUS_READ_REG(noc, NIU_MST_NONPOSTED_ATOMIC_SENT) !=
-                   NOC_STATUS_READ_REG(noc, NIU_MST_ATOMIC_RESP_RECEIVED) ||
-               NOC_STATUS_READ_REG(noc, NIU_MST_POSTED_WR_REQ_STARTED) !=
-                   NOC_STATUS_READ_REG(noc, NIU_MST_POSTED_WR_REQ_SENT)) {
-        }
-        WAYPOINT("FND");
-    }
-}
 #endif
 
 // Publishes RUN_MSG_DONE and tells the dispatcher. worker_completion_group is the FDS group for this
@@ -306,8 +291,6 @@ inline void signal_dispatch_core_done(uint32_t go_message_index, uint32_t worker
     if (worker_completion_group != 0) {
 #ifdef FDS_SIGNALLING
         DPRINT("DM0-FW: completion FDS\n");
-        // FDS does not share the NOC's ordering, so all tile traffic must leave the NIU before completion.
-        wait_for_tile_noc_traffic();
         mailboxes->go_messages[go_message_index].signal = RUN_MSG_DONE;
         overlay::fds_signalling::worker_signal_done(worker_completion_group);
 #endif
