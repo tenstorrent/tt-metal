@@ -138,6 +138,7 @@ enum class EnvVarID {
     TT_METAL_DEVICE_PROFILER_DISPATCH,             // Enable dispatch core profiling
     TT_METAL_PROFILER_SYNC,                        // Enable synchronous profiling
     TT_METAL_DEVICE_PROFILER_NOC_EVENTS,           // Enable NoC events profiling
+    TT_METAL_DEVICE_PROFILER_SYNC_EVENTS,          // Enable sync events profiling
     TT_METAL_DEVICE_PROFILER_NOC_EVENTS_RPT_PATH,  // NoC events report path
     TT_METAL_PROFILE_PERF_COUNTERS,                // Enable Performance Counter profiling
     TT_METAL_MEM_PROFILER,                         // Enable memory/buffer profiling
@@ -994,6 +995,21 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
                 this->streaming_profiler_enabled = true;
             }
 #endif
+            break;
+
+        // TT_METAL_DEVICE_PROFILER_SYNC_EVENTS
+        // Compiles the synchronization-event instrumentation into every kernel
+        // (-DPROFILE_SYNC_EVENTS): a zone around every blocking CB/semaphore primitive plus a point
+        // marker for every releasing signal, which is what the critical-path tool pairs across cores.
+        // See tools/profiler/synchronization_event_profiler.hpp.
+        //
+        // Streaming only, and NOT implied by TT_METAL_STREAMING_PROFILER: it multiplies marker volume
+        // by the number of sync primitives a kernel executes, so it is opt-in on top. Ignored without
+        // TT_METAL_STREAMING_PROFILER, since the gate in that header also requires PROFILE_STREAMING.
+        // Default: false
+        // Usage: export TT_METAL_STREAMING_PROFILER=1 TT_METAL_DEVICE_PROFILER_SYNC_EVENTS=1
+        case EnvVarID::TT_METAL_DEVICE_PROFILER_SYNC_EVENTS:
+            this->profiler_sync_events_enabled = is_env_enabled(value);
             break;
 
         // TT_METAL_STREAMING_PROFILER_TRACY
