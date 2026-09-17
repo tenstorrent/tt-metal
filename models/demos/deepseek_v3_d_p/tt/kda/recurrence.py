@@ -498,10 +498,7 @@ def _scan_sp_grouped_chunks(
         cluster_axis=sequence_parallel_axis,
         memory_config=KDA_OUTPUT_MEMORY_CONFIG,
     )
-    gathered = ttnn.reshape(gathered, (-1, geometry.batch_heads, geometry.key_dim, geometry.value_dim))
-    prefix = ttnn.reshape(tail_state, (1, geometry.batch_heads, geometry.key_dim, geometry.value_dim))
-    candidates = ttnn.concat([gathered, prefix], dim=0, memory_config=KDA_DISTRIBUTED_WORKING_MEMORY_CONFIG)
-    final = selections.select_final_state(candidates)
+    final = selections.select_final_state(gathered, tail_state)
     return _ScanResult(output, ttnn.reshape(final, (geometry.batch_heads, geometry.key_dim, geometry.value_dim)))
 
 

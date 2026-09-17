@@ -5,6 +5,7 @@
 from dataclasses import dataclass
 
 import ttnn
+from models.demos.deepseek_v3_d_p.tt.kda.config import KDA_DISTRIBUTED_WORKING_MEMORY_CONFIG
 
 _layout = ttnn._ttnn.operations.experimental.kda._selection_layout
 
@@ -51,8 +52,14 @@ class ChronologicalSelections:
         """This device's initial recurrent state from chronological entry states."""
         return self._select_block(chronological_entries, _layout.LOCAL_ENTRY_STATE, memory_config=memory_config)
 
-    def select_final_state(self, candidates: ttnn.Tensor) -> ttnn.Tensor:
-        """Replacement recurrent state from device finals followed by the prefix state."""
+    def select_final_state(self, device_finals: ttnn.Tensor, prefix_state: ttnn.Tensor) -> ttnn.Tensor:
+        """Replacement recurrent state, shaped [1, batch_heads, key_dim, value_dim]."""
+        batch_heads, key_dim, value_dim = prefix_state.shape
+        device_finals = ttnn.reshape(device_finals, (-1, batch_heads, key_dim, value_dim))
+        prefix_state = ttnn.reshape(prefix_state, (1, batch_heads, key_dim, value_dim))
+        candidates = ttnn.concat(
+            [device_finals, prefix_state], dim=0, memory_config=KDA_DISTRIBUTED_WORKING_MEMORY_CONFIG
+        )
         return self._select_block(candidates, _layout.FINAL_STATE)
 
     def _indices(self, record_index: int, count: int) -> ttnn.Tensor:
