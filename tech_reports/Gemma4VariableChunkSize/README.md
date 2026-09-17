@@ -19,10 +19,12 @@ that no single prefill chunk width is good at both ends of the ISL range.
 
 2. **Gemma4 CP prefill is not chunk-width invariant, and that predates this work.** The same
    prompt through **one sliding layer** over an **empty** KV history gives **PCC 0.871** between
-   chunk 8192 and chunk 32768. One layer cannot amplify anything. Until that is fixed, changing
-   chunk width changes the model's output — which blocks per-request bucketing **and equally
-   invalidates the already-published 8192 -> 32768 throughput recommendation**, since nothing
-   had checked whether that change is numerically neutral.
+   chunk 8192 and chunk 32768. One layer cannot amplify anything. The `ring_joint` op is **not**
+   the culprit — it matches torch at every width on both SP4 and SP8 (§4) — so a correct kernel is
+   being driven differently by the model. Until that is fixed, changing chunk width changes the
+   model's output, which blocks per-request bucketing **and equally invalidates the
+   already-published 8192 -> 32768 throughput recommendation**, since nothing had checked whether
+   that change is numerically neutral.
 
 The mechanism in (1) is sound and separately validated (padding is bit-exact, replay is exact,
 the negative control fires). The blocker is underneath it, in the attention op.
@@ -131,13 +133,31 @@ chunk width.
 * **Which width is correct is unknown.** There is no absolute reference on this path — the CPU
   reference was deleted, and the model here has no final norm or LM head, so there are no logits.
 
-### Next step, and it is cheap
+### The op is not at fault — measured
 
-The op-level suite `tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py` **does** check against
-torch. Run its sliding cases at the two Gemma geometries — `chunk_size_local` 1024 (= chunk 8192
-at CP8) and 4096 (= chunk 32768 at CP8) — on the SP8 linear-fabric config the model actually uses.
-Whichever fails against torch is the wrong one. If both pass at op level, the difference is in how
-the model drives the op (program config, halo sizing, `logical_n`) rather than in the op.
+`ring_joint` sliding SDPA was checked against **torch** at every width involved, on both ring
+sizes, using the in-tree harnesses. All pass, and the PCCs are flat in the width:
+
+| ring | geometry | vs torch |
+|---|---|---:|
+| SP4 | local slab 1024 (= chunk 8192 at CP8) | 0.99972 / 0.99973 |
+| SP4 | local slab 2048 | 0.99972 / 0.99973 |
+| SP4 | local slab 4096 (= chunk 32768 at CP8) | 0.99973 / 0.99973 |
+| **SP8, linear fabric** (what the model runs) | **global chunk 8192** | **0.99961** |
+| **SP8, linear fabric** | **global chunk 32768** | **0.99963** |
+
+Note the SP4 cases alone would not have settled it — the model is CP8 — so the SP8 pair is the
+one that matters. There is no in-tree coverage at slab 4096 / global 32768; those rows were run
+for this report.
+
+**So a torch-correct op is being driven differently at the two widths.** The fault is in the model
+layer, not the kernel. The next step is to bisect inside one `sliding_attention` layer: capture the
+post-RoPE Q handed to `ring_joint` and the tensor it returns, at both widths, and find which is the
+first to disagree. If Q already differs it is RoPE or the projections; if only the SDPA output
+differs it is the arguments the model passes (program config, halo sizing, `logical_n`, the
+persistent buffer). An eager (untraced) attempt at this segfaulted while cloning intermediates and
+was not pursued — it needs a gentler capture than `ttnn.clone` on a tensor the layer later
+deallocates.
 
 ---
 
