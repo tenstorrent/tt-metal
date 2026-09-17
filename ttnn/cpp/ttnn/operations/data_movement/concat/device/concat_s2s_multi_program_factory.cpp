@@ -92,11 +92,10 @@ tt::tt_metal::ProgramDescriptor ConcatS2SMultiProgramFactory::create_descriptor(
     // Input CBs
     //
     // For height concat the write offset carries only this input's *prefix within one leading
-    // block* -- block b of input i starts b * output_block_stride further on, and the kernel adds
-    // that term. Advancing by the whole shard here, as this did before #55342, is what laid the
-    // result out as [all of input 0; all of input 1; ...] instead of interleaving per leading
-    // index. At one block the two are the same expression, so width concat and the rank-4
-    // (1, 1, H, W) case are unchanged.
+    // block*: block b of input i starts b * output_block_stride further on, and the kernel adds
+    // that term. Advancing by the whole shard instead lays the result out as
+    // [all of input 0; all of input 1; ...] rather than interleaving per leading index (#55342).
+    // At one block the two are the same expression, which is why width concat is unaffected.
     uint32_t curr_input_write_offset = 0;
     for (uint32_t input_id = 0; input_id < num_input_tensors; input_id++) {
         const auto shard_spec = input_tensors[input_id].shard_spec().value();
@@ -162,9 +161,9 @@ tt::tt_metal::ProgramDescriptor ConcatS2SMultiProgramFactory::create_descriptor(
         num_blocks,
         output.padded_shape());
     // The write offsets above were accumulated in units of each input's own pages-per-stick, but
-    // they index the output shard, so for height concat the two have to agree. They do -- the
-    // inputs differ only in the concat dim, which is not the width -- and the old code relied on
-    // the same identity. Checked rather than assumed: a mismatch would skew every row silently.
+    // they index the output shard, so for height concat the two have to agree. They do: the inputs
+    // differ only in the concat dim, which is not the width. Checked rather than assumed, because
+    // a mismatch would skew every row silently.
     if (height_concat) {
         for (uint32_t input_id = 0; input_id < num_input_tensors; input_id++) {
             TT_FATAL(
@@ -178,6 +177,22 @@ tt::tt_metal::ProgramDescriptor ConcatS2SMultiProgramFactory::create_descriptor(
     }
     // Rows one leading index contributes to the output shard, in bytes.
     const uint32_t output_block_stride = output_stride * (output_num_sticks / num_blocks);
+    // Ties that back to the offsets accumulated above. curr_input_write_offset ended at
+    // sum(input_block_strides) -- the bytes one leading index actually fills -- and the kernel
+    // then steps output_block_stride to reach the next. If the output shard were taller than the
+    // inputs' combined per-block rows, the blocks would be spaced further apart than they were
+    // filled and every block after the first would leave unwritten rows inside the tensor's real
+    // height, read back as garbage rather than as a failure.
+    if (height_concat) {
+        TT_FATAL(
+            curr_input_write_offset == output_block_stride,
+            "Height concat: inputs fill {} bytes per leading index but the output shard spaces "
+            "them {} apart ({} rows over {} indices), which would leave gaps inside the tensor.",
+            curr_input_write_offset,
+            output_block_stride,
+            output_num_sticks,
+            num_blocks);
+    }
 
     const KernelDescriptor::CompileTimeArgs compile_time_args = {
         cb_dst_id, page_size, output_stride, num_input_tensors, num_blocks, output_block_stride};

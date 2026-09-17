@@ -329,14 +329,27 @@ uint32_t calculate_max_tensors_per_concat(
             return block_sharded_max;
         }
 
-        // Other sharded layouts (height/width) use different kernels with different arg patterns
+        // Other sharded layouts (height/width) go to ConcatS2SMultiProgramFactory:
+        //   Compile-time: cb_dst_id, page_size, output_stride, num_input_tensors, num_blocks,
+        //                 output_block_stride                                         = 6
+        //   Runtime per input, per RISC: pages_per_stick, num_sticks, write_offset,
+        //                 read_offset, block_stride                                   = 5N
+        // Total 6 + 5N against the 256 the concat kernels are built with. num_blocks and
+        // block_stride are the two the height-concat interleaving fix added (#55342).
         constexpr uint32_t effective_args_limit = 256;
-        constexpr uint32_t base_args = 4;
-        constexpr uint32_t args_per_tensor = 4;
+        constexpr uint32_t base_args = 6;
+        constexpr uint32_t args_per_tensor = 5;
 
         uint32_t theoretical_max = (effective_args_limit - base_args) / args_per_tensor;
         uint32_t safe_max = static_cast<uint32_t>(theoretical_max * 0.9);
 
+        // Not the binding limit in practice: that factory aliases each input shard as a circular
+        // buffer, indices 0..N-1 with the output at 16, so it asserts above 16 inputs long before
+        // the arg budget runs out. Capping this at 16 to make it batch instead does not help --
+        // the batching path below hands every batch the *final* output_mem_config, whose shard
+        // height is sized for all N inputs, so a 16-input batch is asked for an N-input shard and
+        // fails in TensorSpec. That is why the block-sharded path rejects batching outright. Left
+        // as the arg model it claims to be; the 16-input ceiling reports itself clearly.
         log_debug(
             tt::LogOp, "ttnn.concat: Sharded concat - theoretical_max = {}, safe_max = {}", theoretical_max, safe_max);
 
