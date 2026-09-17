@@ -65,6 +65,7 @@ def create_sample_img_metas(batch_size: int, dataset_config=DEFAULT_DATASET_CONF
     "config_name, bev_size, num_layers, batch_size, expected_pcc, expected_abs_error, expected_rel_error, expected_high_error_ratio",
     [
         ("nuscenes_base", (100, 100), 6, 1, 0.997, 0.05, 0.8, 0.5),  # NuScenes base model
+        ("nuscenes_base", (100, 100), 1, 1, 0.997, 0.05, 0.8, 0.5),  # NuScenes base, single layer
         ("nuscenes_tiny", (100, 100), 3, 2, 0.996, 0.05, 0.8, 0.5),  # NuScenes tiny model, bs>1 grid widening
         ("carla_tiny", (100, 100), 3, 1, 0.995, 0.05, 0.8, 0.5),  # CARLA tiny model
         # Off: (arch, camera rig) corners the three above already cover.
