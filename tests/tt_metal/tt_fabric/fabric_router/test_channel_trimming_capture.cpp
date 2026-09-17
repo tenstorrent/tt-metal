@@ -1659,12 +1659,91 @@ TEST(ChannelTrimmingFastPath, UsesSharedSpeedyEligibilityPredicate) {
     EXPECT_TRUE(vc0_speedy_path_enabled(1, false, info));
     EXPECT_FALSE(vc0_speedy_path_enabled(1, true, info));
 
+    // A worker-only row on a deadlock-avoidance direction is speedy only once the link has
+    // dropped deadlock avoidance (terminal_or_source_only agreed with the peer).
     info.worker_only_nonforwarding = true;
+    EXPECT_FALSE(vc0_speedy_path_enabled(4, true, info));
+    EXPECT_TRUE(vc0_speedy_path_enabled(4, false, info));
+    info.terminal_or_source_only = true;
     EXPECT_TRUE(vc0_speedy_path_enabled(4, true, info));
 
     info.worker_only_nonforwarding = false;
     info.enable_terminal_speedy_rx = true;
     EXPECT_TRUE(vc0_speedy_path_enabled(4, true, info));
+    info.terminal_or_source_only = false;
+    EXPECT_FALSE(vc0_speedy_path_enabled(4, true, info));
+}
+
+namespace {
+Vc0TrimFastPathInfo fast_path_info_for_row(
+    uint16_t vc0_sender_mask, bool rx0_forwarded, uint16_t forwarded_to_vc0 = 0) {
+    ChannelTrimmingOverrides entry{};
+    entry.sender_channel_used_bitfield_by_vc = vc0_sender_mask;
+    entry.receiver_channel_data_forwarded_bitfield_by_vc = rx0_forwarded ? 0x1 : 0x0;
+    entry.sender_channel_forwarded_to_bitfield_by_vc[0] = forwarded_to_vc0;
+    auto info = try_derive_vc0_trim_fast_path_info(entry, 4, ChannelTrimmingGlobalOverrides{});
+    EXPECT_TRUE(info.has_value());
+    return info.value_or(Vc0TrimFastPathInfo{});
+}
+}  // namespace
+
+TEST(ChannelTrimmingFastPath, LinkSymmetryKeepsDeadlockAvoidanceDropOnlyWhenBothEndsAgree) {
+    // source (worker-only) <-> terminal: neither end forwards, both may drop deadlock avoidance
+    auto source = fast_path_info_for_row(0x1, false);
+    auto terminal = fast_path_info_for_row(0x0, true);
+    apply_vc0_trim_fast_path_link_symmetry(source, terminal);
+    EXPECT_TRUE(source.terminal_or_source_only);
+    EXPECT_TRUE(source.worker_only_nonforwarding);
+
+    // terminal <-> forwarder (channels 0 and 3 used): the forwarder keeps first-level ack, so
+    // the terminal must keep it too
+    auto terminal_facing_forwarder = fast_path_info_for_row(0x0, true);
+    auto forwarder = fast_path_info_for_row(0x9, false);
+    apply_vc0_trim_fast_path_link_symmetry(terminal_facing_forwarder, forwarder);
+    EXPECT_FALSE(terminal_facing_forwarder.terminal_or_source_only);
+
+    // source <-> receiver whose row forwards on (forwarded_to != 0)
+    auto source_facing_forwarding_rx = fast_path_info_for_row(0x1, false);
+    auto forwarding_rx = fast_path_info_for_row(0x0, true, 0x8);
+    apply_vc0_trim_fast_path_link_symmetry(source_facing_forwarding_rx, forwarding_rx);
+    EXPECT_FALSE(source_facing_forwarding_rx.terminal_or_source_only);
+    EXPECT_FALSE(vc0_speedy_path_enabled(4, true, source_facing_forwarding_rx));
+    EXPECT_TRUE(vc0_speedy_path_enabled(4, false, source_facing_forwarding_rx));
+
+    // unresolved peer: keep the untrimmed protocol, a sender-only row may still run speedy
+    // where the direction has no deadlock avoidance
+    auto unresolved = fast_path_info_for_row(0x1, false);
+    apply_vc0_trim_fast_path_link_symmetry(unresolved, std::nullopt);
+    EXPECT_FALSE(unresolved.terminal_or_source_only);
+    EXPECT_TRUE(unresolved.worker_only_nonforwarding);
+    EXPECT_FALSE(vc0_speedy_path_enabled(4, true, unresolved));
+    EXPECT_TRUE(vc0_speedy_path_enabled(4, false, unresolved));
+}
+
+TEST(ChannelTrimmingFastPath, LinkSymmetryAllowsSpeedyReceiverOnlyAgainstWorkerOnlyPeer) {
+    // worker-only with rx traffic <-> worker-only: both speedy
+    auto a = fast_path_info_for_row(0x1, true);
+    auto b = fast_path_info_for_row(0x1, true);
+    apply_vc0_trim_fast_path_link_symmetry(a, b);
+    EXPECT_TRUE(a.worker_only_nonforwarding);
+    EXPECT_TRUE(a.terminal_or_source_only);
+
+    // worker-only with rx traffic <-> forwarder: the speedy receiver credits channel 0 only
+    auto c = fast_path_info_for_row(0x1, true);
+    auto forwarder = fast_path_info_for_row(0x9, false);
+    apply_vc0_trim_fast_path_link_symmetry(c, forwarder);
+    EXPECT_FALSE(c.worker_only_nonforwarding);
+
+    // worker-only with rx traffic, peer unknown: no speedy receiver
+    auto d = fast_path_info_for_row(0x1, true);
+    apply_vc0_trim_fast_path_link_symmetry(d, std::nullopt);
+    EXPECT_FALSE(d.worker_only_nonforwarding);
+
+    // idle rows agree with each other and keep the drop
+    auto idle_a = fast_path_info_for_row(0x0, false);
+    auto idle_b = fast_path_info_for_row(0x0, false);
+    apply_vc0_trim_fast_path_link_symmetry(idle_a, idle_b);
+    EXPECT_TRUE(idle_a.terminal_or_source_only);
 }
 
 // Test: Parse a global override YAML with force_enable_all for VC1

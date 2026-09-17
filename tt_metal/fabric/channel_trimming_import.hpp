@@ -28,6 +28,10 @@ struct Vc0TrimFastPathInfo {
     bool worker_only_nonforwarding = false;
     bool terminal_only_nonforwarding = false;
     bool enable_terminal_speedy_rx = false;
+    // Raw VC0 usage of this router's own row, kept so the link peer can check what it will
+    // receive from us: which sender channels ever transmitted, and whether receiver 0 saw traffic.
+    uint16_t vc0_sender_used_mask = 0;
+    bool vc0_receiver_observed_traffic = false;
     std::optional<uint16_t> local_sender_max_packet_size_bytes;
     std::optional<uint16_t> peer_sender_max_packet_size_bytes;
 };
@@ -99,6 +103,16 @@ std::optional<Vc0TrimFastPathInfo> try_derive_vc0_trim_fast_path_info(
 // Whether VC0 can use the speedy path after trimming has been resolved.
 bool vc0_speedy_path_enabled(
     std::size_t actual_sender_channels_vc0, bool deadlock_avoidance_enabled, const Vc0TrimFastPathInfo& info);
+
+// Deadlock avoidance / first-level ack and the speedy receiver are link protocols: a sender with
+// first-level ack returns credits upstream only on acks, and a receiver without it never sends
+// them, so both ends of a cable must decide alike. Trimming derives these from each router's own
+// row; this keeps the protocol-dropping choices only when the peer's row agrees. An unresolved
+// peer (another rank's mesh, or no row) keeps deadlock avoidance / first-level ack and never runs
+// the speedy receiver. A sender-only row may still run the speedy sender where the direction has
+// no deadlock avoidance: it writes src_ch_id, so a normal receiver credits it correctly.
+void apply_vc0_trim_fast_path_link_symmetry(
+    Vc0TrimFastPathInfo& local_info, const std::optional<Vc0TrimFastPathInfo>& peer_info);
 
 // Propagate sender packet-size metadata across a physical link. Terminal speedy RX
 // remains a 2D-only optimization and additionally requires a matching worker-only peer.

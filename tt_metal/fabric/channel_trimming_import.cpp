@@ -79,6 +79,8 @@ std::optional<Vc0TrimFastPathInfo> try_derive_vc0_trim_fast_path_info_impl(
     info.terminal_only_nonforwarding =
         vc0_sender_idle && vc0_receiver_observed_traffic && !vc0_has_downstream_router_forwarding;
     info.terminal_or_source_only = (vc0_sender_idle || vc0_worker_only) && vc0_has_no_downstream_forwarding;
+    info.vc0_sender_used_mask = vc0_sender_mask;
+    info.vc0_receiver_observed_traffic = vc0_receiver_observed_traffic;
 
     uint16_t max_packet_size_bytes = 0;
     for (std::size_t channel = 0; channel < packet_size_scan_width; ++channel) {
@@ -170,8 +172,25 @@ std::optional<Vc0TrimFastPathInfo> try_derive_vc0_trim_fast_path_info(
 
 bool vc0_speedy_path_enabled(
     std::size_t actual_sender_channels_vc0, bool deadlock_avoidance_enabled, const Vc0TrimFastPathInfo& info) {
-    return (actual_sender_channels_vc0 == 1 && !deadlock_avoidance_enabled) || info.worker_only_nonforwarding ||
-           info.enable_terminal_speedy_rx;
+    // The speedy path has no first-level ack, so it is only usable where deadlock avoidance is
+    // off: either the direction never had it, or this link dropped it (terminal_or_source_only).
+    const bool deadlock_avoidance_off = !deadlock_avoidance_enabled || info.terminal_or_source_only;
+    return (actual_sender_channels_vc0 == 1 && !deadlock_avoidance_enabled) ||
+           ((info.worker_only_nonforwarding || info.enable_terminal_speedy_rx) && deadlock_avoidance_off);
+}
+
+void apply_vc0_trim_fast_path_link_symmetry(
+    Vc0TrimFastPathInfo& local_info, const std::optional<Vc0TrimFastPathInfo>& peer_info) {
+    const bool peer_known = peer_info.has_value();
+    // Dropping deadlock avoidance / first-level ack needs both ends to have nothing to forward.
+    local_info.terminal_or_source_only =
+        local_info.terminal_or_source_only && peer_known && peer_info->terminal_or_source_only;
+    // The speedy receiver returns every credit to sender channel 0, so it can only face a peer
+    // that transmits from channel 0 alone. A router whose receiver 0 is idle never runs it.
+    const bool peer_sends_from_worker_channel_only = peer_known && (peer_info->vc0_sender_used_mask & ~0x1u) == 0;
+    if (local_info.vc0_receiver_observed_traffic && !peer_sends_from_worker_channel_only) {
+        local_info.worker_only_nonforwarding = false;
+    }
 }
 
 void apply_vc0_trim_fast_path_peer_info(
