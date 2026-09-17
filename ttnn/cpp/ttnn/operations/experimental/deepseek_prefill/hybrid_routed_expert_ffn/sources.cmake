@@ -6,8 +6,6 @@
 set(TTNN_OP_EXPERIMENTAL_DEEPSEEK_PREFILL_HYBRID_ROUTED_EXPERT_FFN_API_HEADERS
     hybrid_routed_expert_ffn.hpp
     device/hybrid_routed_expert_ffn_types.hpp
-    device/moe_fused_swiglu_types.hpp
-    device/unified_routed_expert_ffn_types.hpp
 )
 
 set(TTNN_OP_EXPERIMENTAL_DEEPSEEK_PREFILL_HYBRID_ROUTED_EXPERT_FFN_SRCS
