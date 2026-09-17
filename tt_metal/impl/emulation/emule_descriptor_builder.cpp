@@ -121,6 +121,10 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
     pd.config.context_id = static_cast<uint32_t>(impl.get_context_id().get());
     pd.config.config_sizes = impl.get_program_config_sizes();
 
+    // Per (logical core) -> the kernels placed there with resolved launch offsets + unique RTA;
+    // stitched into each CoreDescriptor below. Keyed by (logical_x, logical_y).
+    std::map<std::pair<uint32_t, uint32_t>, std::vector<CoreKernel>> core_kernels;
+
     const uint32_t pct_count = hw.get_programmable_core_type_count();
     for (uint32_t pct = 0; pct < pct_count; ++pct) {
         pd.config.sem_offset.push_back(impl.get_program_config(pct).sem_offset);
@@ -209,6 +213,13 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
                 [&kd](const std::string& name, uint32_t size_bytes, uint32_t addr_crta_word) {
                     kd.bindings.scratch.push_back(ScratchBinding{name, size_bytes, addr_crta_word});
                 });
+            for (const auto& r : k.core_range_set().ranges()) {
+                kd.core_ranges.push_back(
+                    {static_cast<uint32_t>(r.start_coord.x),
+                     static_cast<uint32_t>(r.start_coord.y),
+                     static_cast<uint32_t>(r.end_coord.x),
+                     static_cast<uint32_t>(r.end_coord.y)});
+            }
             pd.kernels.emplace(kd.id, std::move(kd));
         }
 
@@ -226,9 +237,65 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
                      static_cast<uint32_t>(r.end_coord.x),
                      static_cast<uint32_t>(r.end_coord.y)});
             }
-            // TODO(stage2): kernel_config_base[pct] + per-processor rta/crta offsets via
-            // kg->launch_msg.view().kernel_config() (collect_kernels 2051-2055).
+            // KernelGroupDescriptor.kernel_config_base/proc_offsets are resolved per (kernel, core)
+            // into CoreKernel below (the firmware launch_msg read), so collect_kernels needs no KG access.
             pd.kernel_groups.push_back(std::move(g));
+        }
+
+        // Resolve each (kernel, core) launch offset + unique RTA — the KernelGroup launch_msg read,
+        // done here so collect_kernels needs no firmware/KG access. Mirrors collect_kernels' core loop:
+        // key by (kernel, core) because a kernel on cores across KGs has distinct launch layouts.
+        std::map<std::pair<uint32_t, std::pair<uint32_t, uint32_t>>, KernelGroup*> k2kg;
+        for (const auto& kg : impl.get_kernel_groups(pct)) {
+            if (!kg) {
+                continue;
+            }
+            for (const auto& cr : kg->core_ranges.ranges()) {
+                for (auto x = cr.start_coord.x; x <= cr.end_coord.x; ++x) {
+                    for (auto y = cr.start_coord.y; y <= cr.end_coord.y; ++y) {
+                        for (auto kid : kg->kernel_ids) {
+                            k2kg.emplace(
+                                std::make_pair(
+                                    static_cast<uint32_t>(kid),
+                                    std::make_pair(static_cast<uint32_t>(x), static_cast<uint32_t>(y))),
+                                kg.get());
+                        }
+                    }
+                }
+            }
+        }
+        for (auto& [kernel_id, kptr] : impl.get_kernels(pct)) {
+            if (!kptr) {
+                continue;
+            }
+            Kernel& k = *kptr;
+            const uint32_t processor_index = hw.get_processor_index(
+                k.get_kernel_programmable_core_type(), k.get_kernel_processor_class(), k.get_kernel_processor_type(0));
+            for (const auto& cr : k.core_range_set().ranges()) {
+                for (auto x = cr.start_coord.x; x <= cr.end_coord.x; ++x) {
+                    for (auto y = cr.start_coord.y; y <= cr.end_coord.y; ++y) {
+                        CoreKernel ck;
+                        ck.kernel = static_cast<uint32_t>(kernel_id);
+                        auto it = k2kg.find(std::make_pair(
+                            static_cast<uint32_t>(kernel_id),
+                            std::make_pair(static_cast<uint32_t>(x), static_cast<uint32_t>(y))));
+                        if (it != k2kg.end()) {
+                            auto kc = it->second->launch_msg.view().kernel_config();
+                            ck.kernel_config_base = static_cast<uint32_t>(kc.kernel_config_base()[pct]);
+                            auto rta = kc.rta_offset()[processor_index];
+                            ck.rta_offset = rta.rta_offset();
+                            ck.crta_offset = rta.crta_offset();
+                        }
+                        const tt::tt_metal::CoreCoord lc(x, y);
+                        if (k.cores_with_runtime_args().count(lc) != 0) {
+                            const auto& ra = k.runtime_args(lc);
+                            ck.unique_rt_args.assign(ra.begin(), ra.end());
+                        }
+                        core_kernels[std::make_pair(static_cast<uint32_t>(x), static_cast<uint32_t>(y))].push_back(
+                            std::move(ck));
+                    }
+                }
+            }
         }
     }
 
@@ -307,6 +374,11 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
                 if (sem.initialized_on_logical_core(core)) {
                     cs.semaphore_ids.push_back(sem.id());
                 }
+            }
+            auto ck_it =
+                core_kernels.find(std::make_pair(static_cast<uint32_t>(core.x), static_cast<uint32_t>(core.y)));
+            if (ck_it != core_kernels.end()) {
+                cs.kernels = std::move(ck_it->second);
             }
             pd.cores.push_back(std::move(cs));
         }

@@ -119,6 +119,10 @@ struct Bindings {
     std::vector<ScratchBinding> scratch;
 };
 
+struct CoreRange4 {
+    uint32_t sx = 0, sy = 0, ex = 0, ey = 0;
+};  // an inclusive logical core-range box (KernelGroup / kernel core_range_set)
+
 struct KernelDescriptor {
     KernelHandle id = 0;
     SourceRef source;                                                   // kernel_source()
@@ -139,13 +143,17 @@ struct KernelDescriptor {
     uint32_t num_threads = 1;                   // Quasar get_dm/compute_processors, else single
     std::vector<uint32_t> common_runtime_args;  // common_runtime_args()  (program-wide)
     Bindings bindings;                          // build_metal2_snapshot()
-    // core_range_set + per-core unique runtime args are per-core -> CoreKernel below.
+    std::vector<CoreRange4> core_ranges;        // core_range_set().ranges()  (per-core placement bound)
+    // Per-core launch offsets + unique runtime args live in CoreKernel below.
 };
 
-// Per (kernel, logical-core): the unique runtime-arg values on this core.
+// Per (kernel, logical-core): the launch offsets + unique runtime-arg values on this core.
+// The marshaller resolves the KernelGroup launch_msg here so the consumer needs no KG/firmware read.
 struct CoreKernel {
     KernelHandle kernel = 0;
-    std::vector<uint32_t> unique_rt_args;  // Kernel::runtime_args(core)  (empty => use common_runtime_args)
+    uint32_t kernel_config_base = 0;                     // KG launch_msg kernel_config()[pct]
+    uint16_t rta_offset = 0xFFFF, crta_offset = 0xFFFF;  // KG rta_offset[processor_index] (0xFFFF = no args)
+    std::vector<uint32_t> unique_rt_args;                // Kernel::runtime_args(core)  (empty => common only)
 };
 
 // ─────────────────────────────── Circular buffers ───────────────────────────────
@@ -204,9 +212,6 @@ struct SemaphoreDescriptor {
 struct ProcLaunchOffset {
     uint32_t processor_index = 0, rta_offset = 0, crta_offset = 0;
 };
-struct CoreRange4 {
-    uint32_t sx = 0, sy = 0, ex = 0, ey = 0;
-};  // KernelGroup::core_ranges.ranges()
 struct KernelGroupDescriptor {
     uint32_t pct = 0;                            // programmable-core-type index
     uint32_t kernel_config_base = 0;             // kc.kernel_config_base()[pct]
