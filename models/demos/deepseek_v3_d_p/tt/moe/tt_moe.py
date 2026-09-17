@@ -209,6 +209,7 @@ class TtMoe(LightweightModule):
         routed_expert_weights_dtype=DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE,
         routed_expert_activation=ttnn.RoutedExpertActivation.Silu,
         routed_expert_hybrid_token_threshold=None,
+        routed_expert_fuse_hybrid_dispatch=None,
         shared_expert_activations_dtype=ttnn.bfloat16,
         shared_expert_weights_dtype=ttnn.bfloat8_b,
         shared_expert_activation: str = ACTIVATION_SILU,
@@ -307,6 +308,14 @@ class TtMoe(LightweightModule):
                 host sync. The crossover is per model and per shape, not a constant -- measure
                 before choosing T: the two ops' per-shape device times are gated by
                 test_moe_fused_swiglu_perf.py and test_single_routed_expert_perf.py.
+            routed_expert_fuse_hybrid_dispatch: run that split as ONE dispatch instead of two.
+                Needs a threshold to have anything to fuse. Same implementations, same bands,
+                same grid -- both compiled into one program per RISC-V and run as ordered
+                passes, which is what lets the layer be overlapped with combine. Not free:
+                ~7 us per dispatch, and the device must be opened with worker_l1_size <=
+                1444864 for the union program's config to fit the kernel-config ring. Left as
+                None it follows TT_ROUTED_EXPERT_FUSE_DISPATCH, so a caller that does not
+                thread it can still run the layer both ways.
         """
         super().__init__()
         self.mesh_device = mesh_device
@@ -528,6 +537,7 @@ class TtMoe(LightweightModule):
             cache_name_prefix=f"layer_{layer_idx}.routed_expert",
             activation=routed_expert_activation,
             hybrid_token_threshold=routed_expert_hybrid_token_threshold,
+            fuse_hybrid_dispatch=routed_expert_fuse_hybrid_dispatch,
         )
 
         # Initialize shared expert (col axis: axis 1)
