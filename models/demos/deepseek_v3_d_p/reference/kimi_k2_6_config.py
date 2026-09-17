@@ -23,6 +23,10 @@ class KimiK26Config:
     # chunk while the fused op's rises with the count. 320 is a 2.9% tie, 384 goes to the composite
     # by 8.0%, and the composite holds the band outright from there -- 11% at 640, 22% at 768.
     ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD = 320
+    # Run that split as ONE dispatch rather than two, so the layer can be overlapped with
+    # combine. Costs ~7 us per dispatch: the union program's kernel config fits the
+    # kernel-config ring once but not twice, so each launch waits on the previous one's workers.
+    ROUTED_EXPERT_FUSE_HYBRID_DISPATCH = True
     INTERMEDIATE_SIZE = 18432  # Dense FFN hidden dimension
 
     # MoE configuration
