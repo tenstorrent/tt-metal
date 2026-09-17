@@ -172,11 +172,8 @@ if(TT_METAL_USE_EMULE)
         ${CMAKE_CURRENT_SOURCE_DIR}/emulation/emule_multi_rank_runtime.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/emulation/emulated_program_runner.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/emulation/emule_descriptor_builder.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/emulation/emule_diagnostics.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/emulation/emule_tile_geometry.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/emulation/emule_metal2_emit.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/emulation/emule_device_map.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/emulation/emule_noc_bridge.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/emulation/emule_fabric.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/emulation/emule_kernel_defines.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/emulation/emule_jit.cpp
