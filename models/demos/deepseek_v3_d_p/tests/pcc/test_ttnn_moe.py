@@ -139,6 +139,7 @@ def run_model(
     gate_up_scale=1.0,
     score_func=None,
     skip_upstream_reference=False,
+    routed_expert_config=None,
 ):
     """TtMoe PCC body — shared by every per-model test in this file.
 
@@ -252,6 +253,7 @@ def run_model(
         logger.info(f"LatentMoE: routed side at {routed_emb} (emb_dim={emb_dim}), shared inter={shared_hidden}")
 
     bias_free_router = not getattr(variant.model_config, "ROUTER_HAS_CORRECTION_BIAS", True)
+    dispatch_config = variant.model_config if routed_expert_config is None else routed_expert_config
     weights_type = ("realistic" if run_pcc_check else "dummy") + ("_bias0" if bias_free_router else "")
     # Scaled gate/up is a different weight set at identical shapes, so it needs its own cohort.
     if gate_up_scale != 1.0:
@@ -532,14 +534,15 @@ def run_model(
         routed_expert_activations_dtype=ttnn.bfloat8_b,
         routed_expert_weights_dtype=ttnn.bfloat4_b,
         routed_expert_activation=routed_activation,
-        # Straight off the variant's own dimension-constants class, which is where TtPrefillBlock
-        # takes it too, so every variant this file can run is graded on the dispatch it ships -- the
-        # fused-only sentinel for K2.7, 1792 for GLM 5.1/5.2, absent (single-op) everywhere else,
-        # K3 included: its crossover is measured but parked until the split is enabled for it.
-        routed_expert_hybrid_token_threshold=getattr(
-            variant.model_config, "ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD", None
-        ),
-        routed_expert_fuse_hybrid_dispatch=getattr(variant.model_config, "ROUTED_EXPERT_FUSE_HYBRID_DISPATCH", None),
+        # Straight off the dimension-constants class the MoE dims come from, which is where
+        # TtPrefillBlock takes it too, so every case this file runs is graded on the dispatch its
+        # model ships -- the fused-only sentinel for K2.7, absent (single-op) everywhere else, K3
+        # included: its crossover is measured but parked until the split is enabled for it.
+        # `routed_expert_config` exists because a case may borrow another variant's adapter for the
+        # upstream reference while running a different model's MoE; the dispatch has to follow the
+        # dims, not the adapter.
+        routed_expert_hybrid_token_threshold=getattr(dispatch_config, "ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD", None),
+        routed_expert_fuse_hybrid_dispatch=getattr(dispatch_config, "ROUTED_EXPERT_FUSE_HYBRID_DISPATCH", None),
         shared_expert_activations_dtype=ttnn.bfloat16,
         shared_expert_weights_dtype=ttnn.bfloat8_b,
         shared_expert_activation=shared_activation,
@@ -1060,6 +1063,9 @@ def test_glm_moe(
         request,
         is_balanced=is_balanced,
         padded_percent=padded_percent,
+        # The variant is ds-ref for the upstream reference; the MoE dims, and so the dispatch, are
+        # GLM's.
+        routed_expert_config=GLM52Config,
     )
 
 
