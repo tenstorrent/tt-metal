@@ -556,20 +556,22 @@ void sub_exp_block_bcast_cols(
         }
         configure_single_tile_pack(reduce_cb);
         {
-            uint32_t dst_index = 0;
+            // A fresh row sum starts with a plain write of the first column and accumulates the rest, so
+            // pack the first columns of every row, then the rest, toggling L1 accumulate twice, not per row.
+            const uint32_t first_acc_col = global_col_base == 0 ? 1 : 0;
+            if (global_col_base == 0) {
+                PACK((llk_pack_reconfig_l1_acc(0)));
+#pragma GCC unroll 1
+                for (uint32_t i = 0; i < tiles_per_row; i++) {
+                    pack_tile<true>(i * tiles_per_column, reduce_cb, max_row_base + i);
+                }
+            }
+            PACK((llk_pack_reconfig_l1_acc(1)));
 #pragma GCC unroll 1
             for (uint32_t i = 0; i < tiles_per_row; i++) {
-                if (global_col_base > 0) {
-                    PACK((llk_pack_reconfig_l1_acc(1)));
-                } else {
-                    PACK((llk_pack_reconfig_l1_acc(0)));
-                }
 #pragma GCC unroll 1
-                for (uint32_t j = 0; j < tiles_per_column; ++j) {
-                    pack_tile<true>(dst_index++, reduce_cb, max_row_base + i);  // HOT: softmax exp, keep inline
-                    if (global_col_base == 0 && j == 0) {
-                        PACK((llk_pack_reconfig_l1_acc(1)));
-                    }
+                for (uint32_t j = first_acc_col; j < tiles_per_column; ++j) {
+                    pack_tile<true>(i * tiles_per_column + j, reduce_cb, max_row_base + i);  // HOT: softmax exp
                 }
             }
         }
@@ -1351,7 +1353,11 @@ static void sdpa_inner_loop_step(
         kt_index_offset = 0;
 
         sdpa_maybe_pack_reconfig_data_format<cb_normalized_out, cb_qkt_im>();
-        sdpa_maybe_reconfig_data_format<cb_qkt_im, cb_kt_in, cb_identity_scale_in, cb_q_in>();
+        // Later q subblocks run sub_exp first and switch to the Q/K formats after it, so only the first
+        // subblock needs the switch here. The init stays: the reduce's SFPU ops overwrite the replay buffer.
+        if (q_subblock == 0) {
+            sdpa_maybe_reconfig_data_format<cb_qkt_im, cb_kt_in, cb_identity_scale_in, cb_q_in>();
+        }
         mm_no_mop_init_short(cb_q_in, cb_kt_in, true, actual_sbw, qkt_subblock_h, in0_block_w);
         // Configure pack once before the kt loop for cb_qkt_im. Both sub_exp
         // and blocked_matmul_and_pack skip their internal configure (same cb+width).
@@ -1395,7 +1401,9 @@ static void sdpa_inner_loop_step(
         for (uint32_t kt_subblock = 0; kt_subblock < kt_num_full_subblocks; ++kt_subblock) {
             if (q_subblock > 0) {
                 uint32_t prev_q_subblock = q_subblock - 1;
-                sdpa_maybe_reconfig_data_format<cb_kt_in, cb_qkt_im, cb_q_in, cb_exp_max_diff>();
+                if (kt_subblock > 0) {
+                    sdpa_maybe_reconfig_data_format<cb_kt_in, cb_qkt_im, cb_q_in, cb_exp_max_diff>();
+                }
                 sub_exp_block_bcast_cols<
                     profiling_enabled,
                     scale_fp32,
