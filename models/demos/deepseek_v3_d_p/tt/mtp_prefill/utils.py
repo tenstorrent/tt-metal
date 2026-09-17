@@ -37,37 +37,22 @@ MTP_TENSOR_SUFFIXES = {
 def eh_proj_to_tt_layout(eh_proj_weight: torch.Tensor, tp: int) -> torch.Tensor:
     """Transpose ``eh_proj`` to ttnn ``[in, out]`` order and permute its rows for TP sharding.
 
-    ``enorm`` and ``hnorm`` each emit the chip's own contiguous slice of the *global* hidden, so on
-    chip ``c`` the concatenated activation covers global input columns::
-
-        {c*H/tp .. (c+1)*H/tp}   union   {H + c*H/tp .. H + (c+1)*H/tp}
-
-    That is NOT the contiguous ``[c*2H/tp, (c+1)*2H/tp)`` block a plain ``dims=(None, -2)``
-    mesh-mapper split hands chip ``c``. Sharding the transposed weight naively yields a tensor of
-    exactly the right shape holding exactly the wrong rows — no error, just wrong numbers. This
-    reorders the rows chip-major up front so the standard mapper lands correctly.
-
-    Args:
-        eh_proj_weight: HF layout ``[H, 2H]`` (out, in).
-        tp: tensor-parallel width (mesh columns), must divide ``H``.
-
-    Returns:
-        ``[2H, H]`` (in, out), rows ordered so block ``c`` is ``[c's enorm rows ; c's hnorm rows]``.
+    Each norm emits the chip's own slice of the global hidden, so the concatenated activation covers two
+    disjoint column ranges; reordering rows chip-major lets the standard mesh mapper land correctly.
     """
     h_out, w_in = eh_proj_weight.shape
     assert w_in == 2 * h_out, f"eh_proj must be [H, 2H], got {tuple(eh_proj_weight.shape)}"
     assert tp >= 1 and h_out % tp == 0, f"tp={tp} must divide hidden={h_out}"
 
-    w_t = eh_proj_weight.t().contiguous()  # [2H, H] — rows 0..H-1 = enorm half, H..2H-1 = hnorm half
+    w_t = eh_proj_weight.t().contiguous()  # [2H, H] -- rows 0..H-1 = enorm half, H..2H-1 = hnorm half
     return w_t.view(2, tp, h_out // tp, h_out).transpose(0, 1).contiguous().reshape(2 * h_out, h_out)
 
 
 def eh_proj_expected_chip_shard(eh_proj_weight: torch.Tensor, tp: int, chip: int) -> torch.Tensor:
     """The ``[2H/tp, H]`` block chip ``chip`` must hold, derived straight from the HF layout.
 
-    Independent of :func:`eh_proj_to_tt_layout` on purpose — it slices the original ``[H, 2H]``
-    weight by the column ranges the two norms actually produce, so comparing the two is a real
-    cross-check rather than a restatement of the same expression.
+    Written independently of :func:`eh_proj_to_tt_layout` so that comparing the two is a real
+    cross-check rather than a restatement.
     """
     h_out, w_in = eh_proj_weight.shape
     assert w_in == 2 * h_out, f"eh_proj must be [H, 2H], got {tuple(eh_proj_weight.shape)}"
@@ -95,7 +80,7 @@ def _resolve_weight_map(path: str) -> tuple[dict[str, str], bool]:
 def mtp_layer_idx_from_config(path: str) -> int:
     """The layer index the MTP weights live on: ``num_hidden_layers`` (78 for GLM-5.2).
 
-    Reads ``config.json`` directly rather than via ``AutoConfig`` — ``glm_moe_dsa`` is not
+    Reads ``config.json`` directly rather than via ``AutoConfig`` -- ``glm_moe_dsa`` is not
     AutoConfig-loadable (see ``runners/adapters/glm_5_2.py::load_hf_config``).
     """
     with open(os.path.join(path, "config.json")) as f:
@@ -104,18 +89,10 @@ def mtp_layer_idx_from_config(path: str) -> int:
 
 
 def load_mtp_state_dict(path: str, *, layer_idx: int | None = None) -> dict[str, torch.Tensor]:
-    """Load exactly the four MTP tensors from a GLM-5.2 HF checkpoint directory.
+    """Load the four MTP tensors from a GLM-5.2 HF checkpoint directory.
 
-    Reads only the shard(s) that actually hold them (the GLM-5.2 checkout is 141 shards / ~641 GiB),
-    on the ``dflash_prefill/utils.py::load_drafter_state_dict`` pattern.
-
-    Args:
-        path: checkpoint directory (``$GLM52_HF_MODEL``, default
-            ``/mnt/models/deepseek-prefill-cache/GLM-5.2-FP8``).
-        layer_idx: the MTP layer. Defaults to ``num_hidden_layers`` from ``config.json``.
-
-    Returns:
-        ``{"eh_proj", "enorm", "hnorm", "shared_head_norm"}`` -> torch tensors, HF layout.
+    Opens only the shards that hold them. Returns ``{"eh_proj", "enorm", "hnorm", "shared_head_norm"}``
+    in HF layout.
     """
     from safetensors import safe_open
 
@@ -161,41 +138,16 @@ def load_mtp_state_dict(path: str, *, layer_idx: int | None = None) -> dict[str,
 def mtp_indexer_types(config, mtp_layer_idx: int | None = None) -> list:
     """``config.indexer_types`` extended so the MTP layer owns an index-cache slot.
 
-    GLM-5.2's map has ``num_hidden_layers`` (78) entries, covering layers 0..77 only, while the MTP
-    layer sits at 78 and carries **real indexer weights** (layer 77 carries none). Two consumers read
-    past the end and disagree about what they find:
-
-    * :func:`~models.demos.deepseek_v3_d_p.tt.mla.indexer.indexer_layer_is_reused` and
-      :func:`~models.demos.deepseek_v3_d_p.tt.mla.indexer.full_indexer_rank` both guard on
-      ``layer_idx < len(types)`` and fail *open*, so layer 78 is treated as ``full`` with rank 21 —
-      the right answers, but by an out-of-range fallback rather than a declaration.
-    * ``TtIndexer``'s compacted cache accounting is **not** right: with a 78-entry map,
-      ``num_full_indexer_layers`` is 21 and the layer's own rank is also 21, i.e. slot 21 of 21
-      (one past the end). Declaring the layer explicitly makes it slot 21 of 22. The pipeline-stage
-      form is worse — ``first_layer_idx=78, layer_num=1`` yields slot 0 of **0** slots — and becomes
-      slot 0 of 1.
-
-    Verified: extending the map changes no slot for layers 0..77. See issue #53533.
-
-    Args:
-        config: a GLM HF-attribute config carrying ``indexer_types``.
-        mtp_layer_idx: the MTP layer. Defaults to ``config.num_hidden_layers`` (78), falling back to
-            ``len(config.indexer_types)``. Deriving it from the layer count rather than the current
-            map length is what makes this idempotent — defaulting to the length would append a fresh
-            entry on every call.
-
-    Returns:
-        A NEW list, ``mtp_layer_idx + 1`` entries long, with ``"full"`` at ``mtp_layer_idx``.
-        Returns a copy unchanged when the map already covers the layer.
+    GLM-5.2's map covers the trunk layers only, which leaves the MTP layer's indexer cache one slot
+    short. Returns a new list, unchanged when the map already reaches the layer, and moves no trunk slot.
     """
     types = list(getattr(config, "indexer_types", None) or [])
     assert types, "config has no indexer_types (GLM-5.1 and dense variants: every layer is full, nothing to extend)"
     if mtp_layer_idx is None:
         mtp_layer_idx = int(getattr(config, "num_hidden_layers", None) or len(types))
     while len(types) <= mtp_layer_idx:
-        # "full": the MTP layer ships its own indexer weights, so it computes its own top-k rather
-        # than reusing a trunk layer's. `index_share_for_mtp_iteration` is about sharing ACROSS MTP
-        # levels, not with the trunk.
+        # "full": the MTP layer has its own indexer weights, so it computes its own top-k. Sharing
+        # is across MTP levels, not with the trunk.
         types.append("full")
     return types
 

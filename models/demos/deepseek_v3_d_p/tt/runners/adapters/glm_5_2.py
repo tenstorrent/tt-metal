@@ -46,8 +46,8 @@ class GLM52Adapter(MLAPrefillAdapter):
     routing_use_l1_small_for_semaphores = True
     supports_tp_shard_kv = True  # allocate_kv_cache below honors params.tp_shard_kv
 
-    # GLM-5.2 is the only model here that carries MTP weights (layer 78's eh_proj + norms), so it is
-    # the only one PREFILL_MTP_LEVELS may be set for. Issue #53533.
+    # GLM-5.2 is the only model here that carries MTP weights, so it is the only one
+    # PREFILL_MTP_LEVELS may be set for.
     supports_mtp = True
 
     def load_hf_config(self):
@@ -87,12 +87,8 @@ class GLM52Adapter(MLAPrefillAdapter):
         # KV dedup: seq_len/(sp*tp) rows per device instead of seq_len/sp. Both caches must use the same
         # tp_axis as the write op and the migration table.
         kv_tp_axis = params.tp_axis if params.tp_shard_kv else None
-        # MTP (#53533) adds K KV slots per user on the rank that runs the levels — level k writes
-        # slot num_layers + k — and one indexer slot for the shared MTP layer. Both are LAST-RANK
-        # only: the predictor is built there, so no other rank's cache changes shape. The extra
-        # indexer slot has to be declared on hf_config BEFORE full_indexer_rank is consulted, and it
-        # is idempotent, so calling it here as well as in the runtime removes the ordering
-        # dependency between build_runtime and allocate_kv_cache rather than relying on it.
+        # MTP adds K KV slots per user plus one indexer slot for the shared MTP layer, on the rank
+        # that runs the levels. Declaring the indexer slot is idempotent and must precede its read.
         mtp_levels = params.mtp_levels if params.is_last_rank else 0
         if mtp_levels:
             enable_mtp_indexer_slot(hf_config)

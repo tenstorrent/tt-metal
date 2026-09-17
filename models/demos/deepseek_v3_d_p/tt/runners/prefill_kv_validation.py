@@ -96,9 +96,8 @@ def index_golden_present(trace_dir, layer_idx: int | None = None) -> bool:
     empty ``torch.cat([])`` the loader would hit. Lives next to the loader so the ``dsa/indexer_k_layer_*``
     layout stays encoded in exactly one place.
 
-    ``layer_idx`` narrows the question to one layer. "Some layer" and "this layer" differ wherever a
-    trace holds only part of the model: an MTP tail trace carries its own indexer key and no trunk one,
-    and the trunk trace is the reverse."""
+    ``layer_idx`` narrows the question to one layer, which matters wherever a trace holds only part of
+    the model -- an MTP tail trace carries its own indexer key and no trunk one."""
     from pathlib import Path
 
     dsa_dir = Path(trace_dir) / "dsa"
@@ -109,12 +108,9 @@ def index_golden_present(trace_dir, layer_idx: int | None = None) -> bool:
 def kv_golden_present(trace_dir, layer_idx: int) -> bool:
     """True when ``trace_dir`` carries the ``kv_post_transform`` golden for ``layer_idx``.
 
-    Presence test for exactly what ``_load_golden_kv_post`` reads, in both layouts it supports (the
-    single ``kv_cache/layer_N.safetensors`` and the sharded ``kv_cache/layer_N/rows_*.safetensors``).
-    Callers use it to SKIP a comparison instead of failing inside the loader on a trace that simply
-    does not carry that layer -- the MTP levels (#53533) are the live case: they write KVPE layers
-    ``num_layers + k``, which no GLM-5.2 trace dumped so far contains. Lives next to the loader so the
-    ``kv_cache/layer_*`` layout stays encoded in exactly one place."""
+    Presence test for exactly what ``_load_golden_kv_post`` reads, in both layouts it supports, so a
+    caller can skip a comparison rather than fail inside the loader on a layer the trace lacks.
+    """
     from pathlib import Path
 
     base = Path(trace_dir) / "kv_cache"
@@ -127,22 +123,9 @@ def kv_golden_present(trace_dir, layer_idx: int) -> bool:
 def _rebase_index_k_rope(golden_ik: "torch.Tensor", hf_config) -> "torch.Tensor":
     """A half-split-roped indexer-key golden re-based onto the device's interleaved rope pairing.
 
-    NOT a column permutation. GLM-5.2 is rope-ASYMMETRIC: MLA ropes k_pe half-split (pairs (j, j+32))
-    while the DSA indexer ropes its key interleaved (pairs (2j, 2j+1)) per ``indexer_rope_interleave``,
-    so HF's uniform ``rotate_half`` gets MLA right and the indexer wrong in the same forward pass. The
-    two sides rotated DIFFERENT scalar pairs of the same ``wk`` output, so the stored values genuinely
-    differ and no reindexing reconciles them -- measured, the best signed permutation reaches +0.72
-    where this transform reaches 0.985. Un-rope at the half-split pairing, re-pair interleaved, re-rope.
-
-    The perfect shuffle m -> 2m mod (rope_dim-1) is the fault's SIGNATURE, not its cure: it is the map
-    under which the two conventions applied the SAME frequency to a given column, which is exactly why
-    cross-correlating in the roped domain manufactures a convincing signed permutation out of the
-    shared cos/sin carrier. Diagnose a rope fault in the un-roped basis only.
-
-    Rope is the FIRST ``qk_rope_head_dim`` columns of the index key (``TtIndexer._bc_rope_pe``) --
-    opposite of MLA's nope-then-pe -- and the tail is returned untouched. cos/sin come from the same
-    ``get_cos_sin_matrix`` the device's indexer rope is built from (the indexer reuses ttMLA's table
-    verbatim), so this cannot drift from the device by construction."""
+    GLM-5.2 is rope-asymmetric: MLA ropes k_pe half-split while the DSA indexer ropes interleaved, so
+    a uniformly-roped trace has to be un-roped, re-paired and re-roped -- not column-permuted.
+    """
     from models.demos.deepseek_v3_d_p.tt.mla.rope import get_cos_sin_matrix
 
     rope_dim = hf_config.qk_rope_head_dim
@@ -169,9 +152,8 @@ def _rebase_index_k_rope(golden_ik: "torch.Tensor", hf_config) -> "torch.Tensor"
     pre = pe * cos_hs - rot_half_split(pe) * sin_hs  # scalars recovered, in wk output order
     fixed = pre * cos_il + rot_interleaved(pre) * sin_il  # re-roped on the device's pairing
 
-    # Both steps rotate the whole rope half, so its per-row norm is invariant. A mis-signed sin, a
-    # table built at the wrong width, or a positions/rows misalignment breaks this and nothing else
-    # downstream would separate it from the model simply being wrong.
+    # Both steps rotate the whole rope half, so its per-row norm is invariant. A mis-signed sin or a
+    # table at the wrong width breaks this, and nothing downstream would separate it from bad math.
     before, after = pe.norm(dim=-1), fixed.norm(dim=-1)
     assert torch.allclose(
         before, after, rtol=1e-4, atol=1e-4
@@ -184,13 +166,8 @@ def _load_golden_index_k(
 ) -> "torch.Tensor":
     """[total_len, index_head_dim] golden indexer key for one layer, from the vLLM trace's row-sharded
     dsa/indexer_k_layer_N/rows_<start>_<end>.safetensors shards (concatenated by start row). Mirrors
-    _load_golden_kv_post but reads the dsa/ subdir and the indexer_k_layer_N key.
-
-    ``rope_layout`` names the pairing the TRACE stored -- the golden's own property, like
-    PREFILL_MTP_GOLDEN_PE_LAYOUT, not an action. ``interleaved`` is the device's and the default, so a
-    trace from a stack sharing the convention loads verbatim; ``half_split`` is re-based here, on load,
-    which is a re-rope and not a reindex -- see _rebase_index_k_rope. ``hf_config`` defaults to the
-    PREFILL_MODEL adapter's."""
+    _load_golden_kv_post but reads the dsa/ subdir and the indexer_k_layer_N key. ``rope_layout`` is
+    the pairing the TRACE stored; ``interleaved`` is the device's own, ``half_split`` is re-based."""
     from pathlib import Path
 
     from safetensors import safe_open

@@ -9,9 +9,6 @@ remains here is the one piece of model-specific glue the runtime needs:
 ``prepare_prefill_input_tensor`` (the SP-sharded chunk input), which backs
 ``TtPrefillRuntime.make_chunk_input``, plus the MTP lookahead upload built on top of it.
 
-The union geometry those MTP ids feed lives one layer down in
-``models.demos.deepseek_v3_d_p.tt.mtp_prefill.device_windows``; what is here is only the upload.
-
 KV-cache PCC validation + golden loaders live in
 ``models.demos.deepseek_v3_d_p.tt.runners.prefill_kv_validation``; the host-pull KV
 diagnostics used only by tests live in ``tests/test_runner_utils.py``.
@@ -33,14 +30,8 @@ def prepare_prefill_input_tensor(
 ) -> ttnn.Tensor:
     """Shard and upload one chunk's token IDs as a prefill input tensor.
 
-    Produces an SP-sharded uint32 ROW_MAJOR DRAM tensor of shape
-    ``[sp_factor, 1, len(token_ids) // sp_factor]`` -- the format
-    ``TtPrefillTransformer.forward`` expects, and the same one
-    ``prefill_producer._h2d_rows`` builds for the H2D socket.
-
-    MTP's lookahead ids are NOT folded in here; they ride their own tensor
-    (:func:`prepare_prefill_mtp_tokens`), so an MTP run and a plain run upload identical trunk
-    chunks.
+    An SP-sharded uint32 ROW_MAJOR DRAM tensor, ``[sp_factor, 1, len(token_ids) // sp_factor]``. MTP's
+    lookahead ids ride their own tensor, so an MTP run uploads an identical trunk chunk.
     """
     isl_per_chip = len(token_ids) // sp_factor
     assert (
@@ -68,14 +59,8 @@ def prepare_prefill_mtp_tokens(
 ) -> ttnn.Tensor:
     """Upload the MTP lookahead ids: the ``num_mtp_tokens`` ids that follow each chip's trunk shard.
 
-    ``token_ids`` is this chunk's ``C`` tokens followed by the next ``num_mtp_tokens`` from the stream
-    (``C + num_mtp_tokens`` in all), and chip ``c`` gets ``token_ids[(c+1)*L : (c+1)*L + num_mtp_tokens]``.
-    Concatenated onto that chip's trunk row it forms the contiguous ``token_ids[c*L : c*L+L+num_mtp_tokens]``,
-    so MTP level ``k`` reads the same local slice ``[k, k+L)`` on every chip.
-
-    Only the LAST chip's row reaches past the chunk; the other ``sp-1`` take theirs from inside it.
-    Block-cyclic only: under ``is_balanced`` the row -> position map is a permutation, so "the next
-    ids after this row" is not a contiguous slice of the stream.
+    Chip ``c`` takes the ids immediately past its own shard, so concatenated onto its trunk row every
+    MTP level reads the same local slice. Block-cyclic layouts only.
     """
     assert num_mtp_tokens > 0, f"num_mtp_tokens must be positive, got {num_mtp_tokens}"
     isl_per_chip = (len(token_ids) - num_mtp_tokens) // sp_factor
@@ -116,30 +101,11 @@ def build_position_zero_mask(
 ) -> ttnn.Tensor:
     """Multiplicative mask that zeroes the embedding at ABSOLUTE position 0, for every MTP level.
 
-    vLLM zeroes it on every level (``torch.where(positions.unsqueeze(-1) == 0, 0, inputs_embeds)``
-    in ``deepseek_mtp.py``), not just level 1, and ``fused_mtp_reference`` mirrors that.
-
-    It cannot be done from the token side: zeroing a token *id* gives ``embed(0)``, not ``0``. And it
-    cannot be done inside ``TtFusedMTP``, because under SP the row index is not the absolute
-    position -- only the caller knows which row is position 0.
-
-    The mask is built by pushing a position indicator through the SAME sharding path the tokens
-    take, rather than asserting that position 0 lands on chip 0 row 0. It does land there under both
-    layouts today (``create_balanced_chunk_order`` starts at chunk 0), but deriving it costs one
-    host reshape and stops that from being a silent assumption.
-
-    Only the chunk with ``actual_start == 0`` needs this; every later chunk's rows are all past
-    position 0.
-
-    Args:
-        chunk_size: ``C``, the padded chunk length (NOT the per-chip length).
-        emb_dim_per_chip: ``H / tp``. Materialized at full width so the multiply is plain
-            elementwise -- a width-1 broadcast in TILE_LAYOUT is the kind of thing that works until
-            it does not, and the full mask is 1.875 MiB/chip at L=640, H/tp=1536, built once.
+    It cannot be done from the token side (zeroing an id gives ``embed(0)``, not ``0``) nor inside the
+    module, since under SP only the caller knows which row is position 0. First chunk only.
     """
-    # Right padding only: row 0 of the chunk is absolute position 0 exactly when the chunk's real
-    # tokens start at row 0. TtPrefillTransformer asserts padding_side == "right" before MTP runs,
-    # so this is a restatement of that contract at the place it is actually relied on.
+    # Right padding only: row 0 is absolute position 0 exactly when the chunk's real tokens start at
+    # row 0, which TtPrefillTransformer asserts before MTP runs.
     assert chunk_size % sp_factor == 0, f"chunk {chunk_size} not divisible by sp_factor {sp_factor}"
     isl_per_chip = chunk_size // sp_factor
     keep = torch.ones(chunk_size, dtype=torch.float32)
@@ -172,22 +138,8 @@ def mtp_generation_union_rows(
 ) -> list:
     """Where global position ``actual_end + level`` sits in each chip's union, or None.
 
-    THE geometry of last-chunk generation, stated once and shared by both mask builders below.
-
-    Chip ``c``'s union covers global positions ``[chunk_start + c*L, chunk_start + c*L + U)`` with
-    ``L = chunk_size / sp`` and ``U = L + num_mtp_tokens``. So the row holding position ``p`` is
-    ``u = p - chunk_start - c*L``, present iff ``0 <= u < U``. Adjacent chips' unions OVERLAP by
-    ``num_mtp_tokens`` rows (that overlap is what makes every level's window the same local slice), so two
-    chips can hold the same position -- both entries are returned and both get patched, which is what
-    keeps the windows consistent across the seam.
-
-    Level ``k``'s window at trunk row ``r`` reads global ``chunk_start + c*L + r + k + 1``; the last
-    real row is ``actual_end - 1``, so level ``k`` reads ``actual_end + k`` there. Writing the
-    generated embedding at that ONE global position therefore feeds every level that needs it, with
-    no per-level splice.
-
-    Block-cyclic only: under ``is_balanced`` the row -> position map is a permutation and a chip's
-    union is not a contiguous position range at all.
+    The geometry of last-chunk generation, stated once for both mask builders below. Adjacent chips'
+    unions overlap, so a position can land on two chips and both get patched. Block-cyclic only.
     """
     assert num_mtp_tokens > 0, f"num_mtp_tokens must be positive, got {num_mtp_tokens}"
     assert chunk_size % sp_factor == 0, f"chunk {chunk_size} not divisible by sp_factor {sp_factor}"
@@ -221,18 +173,8 @@ def build_mtp_generation_keep_mask(
 ) -> ttnn.Tensor:
     """``[sp, 1, U, H/tp]`` of ones, zero on every row generation will write.
 
-    Applied to the union ONCE before the FIRST generated level, so each level's patch is a plain add
-    onto a cleared row rather than a read-modify-write. What it clears is the pad the producer wrote
-    at every position at or past the request's real end (``runner_utils.MTP_PAD_TOKEN_ID``).
-
-    ``levels`` is the GENERATED range, not ``range(K)``. Passing the levels whose token the socket
-    actually delivered would zero the embedding of a real id that nothing writes back -- no selector
-    targets a provided level. That is the whole reason this argument is a range and not a count.
-
-    Clearing all of the generated positions up front, rather than one per level, costs nothing: at
-    level ``k`` the rows that read a not-yet-generated position are pad rows either way.
-
-    Full width, like :func:`build_position_zero_mask`, so the multiply is plain elementwise.
+    Applied once before the first generated level, so each level's patch is an add onto a cleared row.
+    ``levels`` is the GENERATED range: clearing a provided level's row would lose a real embedding.
     """
     isl_per_chip = chunk_size // sp_factor
     union_len = isl_per_chip + num_mtp_tokens
@@ -270,19 +212,9 @@ def build_mtp_generation_select(
     source_row: int,
     dtype: ttnn.DataType = ttnn.bfloat16,
 ) -> ttnn.Tensor:
-    """``[sp, 1, U, 32*sp]`` one-hot selector: ``select @ gathered`` is the generated embedding,
-    broadcast to exactly the union rows that hold global position ``actual_end + level``.
-
-    ``gathered`` is the SP-all-gathered ``[1, 1, 32*sp, H/tp]`` block of the level's LM-head tile
-    embeddings, so ``source_row = device_id * 32 + token_offset`` picks the one row that is the
-    generated token (``TtLMHead.forward`` returns that pair). A chip that does not hold the position
-    gets an all-zero row block and adds nothing.
-
-    A matmul rather than a scatter because there is no device-side scatter that takes a runtime row
-    index, and because one-hot bf16 is bit-exact: ``1.0 * x == x``, so the patched row equals the
-    embedding row it came from with no PCC blur. The contracted dim is ``32*sp`` -- tile-aligned by
-    construction, no padding subtleties.
-    """
+    """``[sp, 1, U, 32*sp]`` one-hot selector: ``select @ gathered`` broadcasts the generated embedding
+    onto exactly the union rows holding global position ``actual_end + level``. A matmul rather than a
+    scatter because no device scatter takes a runtime row index, and one-hot bf16 is bit-exact."""
     isl_per_chip = chunk_size // sp_factor
     union_len = isl_per_chip + num_mtp_tokens
     width = ttnn.TILE_SIZE * sp_factor

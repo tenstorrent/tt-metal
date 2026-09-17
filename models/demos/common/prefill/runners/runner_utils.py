@@ -57,12 +57,10 @@ def open_mesh_device(
 
 
 H2D_PAGE_ALIGNMENT_BYTES = 64
-"""PCIe alignment the H2D socket requires of its per-chip page size (``H2DSocket::set_page_size``:
-``page_size % pcie_alignment_ == 0``, tt_metal/distributed/h2d_socket.cpp:799).
+"""PCIe alignment the H2D socket requires of its per-chip page size (see h2d_socket.cpp).
 
-Hardcoded because ttnn exposes ``get_dram_alignment`` / ``get_l1_alignment`` to python but not the
-HOST/PCIe one. 64 is Blackhole's ``PCIE_ALIGNMENT``; Wormhole's is 32, so 64 satisfies both -- this
-only ever rounds a row UP, and the extra ids are never read.
+Hardcoded because ttnn exposes the DRAM and L1 alignments to python but not the PCIe one. 64 is
+Blackhole's; Wormhole's is 32, so 64 satisfies both, and it only ever rounds a row up.
 """
 
 _H2D_ID_BYTES = 4  # uint32 token ids
@@ -71,82 +69,34 @@ _H2D_ID_BYTES = 4  # uint32 token ids
 def h2d_row_len(chunk_size: int, sp_factor: int) -> int:
     """Per-chip TRUNK row length: this chip's ``chunk_size // sp_factor`` shard of the chunk.
 
-    Deliberately NOT rounded to the PCIe page -- every caller gets exactly the width it always got,
-    and a ``chunk_size / sp_factor`` that is not already page-aligned is a pre-existing condition of
-    that configuration. MTP widens the SOCKET row past this (:func:`mtp_union_rows`) but not this
-    number: it is where the runner cuts the arriving row, so an MTP run and a plain run hand the
-    model byte-identical trunk ids.
+    MTP widens the socket row past this (:func:`mtp_union_rows`) but not this number -- it is where the
+    runner cuts the arriving row, so an MTP run hands the model byte-identical trunk ids.
     """
     assert chunk_size % sp_factor == 0, f"chunk_size={chunk_size} must be divisible by sp_factor={sp_factor}"
     return chunk_size // sp_factor
 
 
-# ---------------------------------------------------------------------------
-# MTP transport (GLM-5.2, issue #53533)
-# ---------------------------------------------------------------------------
+# --- MTP transport ---
 
 TILE_HEIGHT = 32
 
 MTP_PAD_TOKEN_ID = 0xFFFFFFFF
-"""Id written into any slot with no token behind it: a lookahead position past the request's real
-end, the ``[K, num_mtp_tokens)`` alignment filler of a lookahead row, and the tail of a final
-partial chunk.
-
-THE sentinel every side of the transport agrees on -- the inference server writes it, the runner
-scans for it to decide how many levels have their token provided, and the tests build to it. Before
-this existed the producer padded with 1, the tests with 0 and the runtime warmup with 0, none of
-which could be told apart from a real token.
-
-One value for all three uses is unambiguous because the scan only ever reads slots ``[0, K)``, where
-alignment filler cannot appear -- so inside that window the sentinel can only mean end-of-request.
-
-``max uint32``, deliberately: it is outside every vocabulary (GLM-5.2's is 154880), so no prompt can
-contain it and a scan can never mistake content for padding. The price is that it MUST NOT reach
-``ttnn.embedding`` -- it would index the table out of bounds. ``TtParallelEmbedding.forward`` clamps
-every id it gathers, which is what makes that safe on the trunk as well as the lookahead.
+"""The id every side of the transport writes into a slot with no token behind it: past the request's
+end, a lookahead row's alignment filler, or a final partial chunk's tail. ``max uint32`` so no prompt
+can contain it, which is also why ``TtParallelEmbedding.forward`` clamps before it gathers.
 """
 
 MTP_TOKEN_ALIGN = TILE_HEIGHT
-"""Granularity of the MTP token block, in ids. Three constraints meet here, and 32 is the smallest
-number satisfying all of them:
-
-* the H2D socket's page must be ``H2D_PAGE_ALIGNMENT_BYTES``-aligned, so ``L + num_mtp_tokens`` is a
-  multiple of 16 ids (16 * 4 B = 64 B);
-* the runner cuts the arriving row at ``L`` into the trunk ids and the MTP ids, and both cuts must
-  land on a page boundary too;
-* the first rank embeds the two halves separately and stacks them, and a TILE row-concat needs BOTH
-  operands to be a whole number of 32-row tiles -- so ``num_mtp_tokens`` itself must be tile-aligned,
-  not just the sum.
-
-With the production ``L = 640``: the trunk is 40 pages / 20 tiles, the MTP block is 2 pages / 1 tile,
-the socket row is 672 ids = 42 pages, and the union embedding is 21 tiles. No pad anywhere.
-
-That third constraint is what one widened row alone would not have given: 644 ids satisfies the page
-rules once rounded but leaves a 4-row MTP block that cannot be tile-concatenated onto the trunk
-embedding without a pad. Rounding the block to a tile is what lets the union be built as two
-gathers stacked rather than one gather over a re-joined id row -- see
-:meth:`~models.demos.deepseek_v3_d_p.tt.mtp_prefill.device_windows.MTPUnionEmbedding.from_ids`.
+"""Granularity of the MTP token block, in ids. 32 is the smallest value satisfying all three
+constraints at once: the socket page alignment, the runner's cut of the arriving row into its trunk
+and MTP halves, and the TILE row-concat the first rank stacks the union embedding with.
 """
 
 
 def num_mtp_tokens(mtp_levels: int) -> int:
     """MTP lookahead ids the H2D row carries past this chip's trunk shard: ``mtp_levels`` rounded up
-    to ``MTP_TOKEN_ALIGN``. 0 when MTP is off.
-
-    THE number every side of the MTP transport builds to -- the row width, the H2D socket's spec, the
-    runner's cut point, the union embedding's height and the D2D activation's height. It is the row's
-    WIDTH, not its real-id count: the inference server fills slots ``[0, mtp_levels)`` with
-    ``stream[(c+1)*L : (c+1)*L + mtp_levels]`` and pads the rest to this alignment
-    (:data:`MTP_PAD_TOKEN_ID`).
-
-    Those K are what the levels need. ``chunk_row ++ mtp_row`` is contiguous over them, so MTP level
-    ``k``'s window is the SAME local slice ``[k, k+L)`` on every chip -- one uniform slice, no
-    cross-chip rotation -- and the deepest window ends at slot ``K-1``. Slots ``[K, num_mtp_tokens)``
-    are read by nothing.
-
-    Note they are PER CHIP: only the last chip's ids reach into the next chunk, the other ``sp-1``
-    take theirs from inside this one. That is what makes the windows uniform.
-    """
+    to ``MTP_TOKEN_ALIGN``, or 0 with MTP off. The one number every side of the transport builds to --
+    row width, socket spec, cut point, union height. Per chip, which is what keeps the windows uniform."""
     assert mtp_levels >= 0, f"mtp_levels must be non-negative, got {mtp_levels}"
     if not mtp_levels:
         return 0
@@ -154,12 +104,8 @@ def num_mtp_tokens(mtp_levels: int) -> int:
 
 
 def mtp_union_rows(chunk_size: int, sp_factor: int, mtp_levels: int) -> int:
-    """Rows of ONE chip's union embedding: its ``L`` chunk rows plus the ``num_mtp_tokens`` lookahead
-    rows.
-
-    Level ``k`` (1..K) reads rows ``[k, k+L)`` of it, so the deepest level touches row ``K + L - 1``
-    and the rest of the lookahead is transport padding no level reads.
-    """
+    """Rows of one chip's union embedding: its ``L`` chunk rows plus the ``num_mtp_tokens`` lookahead
+    rows. Level ``k`` reads rows ``[k, k+L)``, so the rest of the lookahead is transport padding."""
     rows = h2d_row_len(chunk_size, sp_factor) + num_mtp_tokens(mtp_levels)
     assert rows % TILE_HEIGHT == 0, (
         f"union embedding is {rows} rows, not a whole number of {TILE_HEIGHT}-row tiles; "
@@ -168,9 +114,7 @@ def mtp_union_rows(chunk_size: int, sp_factor: int, mtp_levels: int) -> int:
     return rows
 
 
-# ---------------------------------------------------------------------------
-# H2D token sockets
-# ---------------------------------------------------------------------------
+# --- H2D token sockets ---
 
 
 def make_token_spec(mesh_shape: tuple, row_len: int) -> ttnn.TensorSpec:
@@ -187,11 +131,8 @@ def make_token_spec(mesh_shape: tuple, row_len: int) -> ttnn.TensorSpec:
 def make_h2d_spec(mesh_shape: tuple, chunk_size: int, mtp_levels: int = 0) -> ttnn.TensorSpec:
     """Per-push spec of THE H2D token socket -- there is exactly one, MTP or not.
 
-    Plain: ``chunk_size // sp`` ids per chip. MTP: those plus ``num_mtp_tokens(mtp_levels)``
-    lookahead slots -- contiguous with the trunk over the first ``mtp_levels`` of them,
-    ``stream[c*L : c*L + L + mtp_levels]``, then alignment filler no level reads.
-    The runner cuts the row back at ``L`` on arrival (``prefill_runner._socket_next``), and hands the model the same
-    ``[1, 1, chunk_size // sp]`` trunk it gets with MTP off.
+    Plain: ``chunk_size // sp`` ids per chip. MTP: those plus ``num_mtp_tokens`` lookahead slots, which
+    the runner cuts back off on arrival before handing the model the same trunk row it always got.
     """
     if mtp_levels:
         return make_token_spec(mesh_shape, mtp_union_rows(chunk_size, mesh_shape[0], mtp_levels))
@@ -234,18 +175,13 @@ def build_h2d_service(
     return service
 
 
-# ---------------------------------------------------------------------------
-# D2D pipeline activation
-# ---------------------------------------------------------------------------
+# --- D2D pipeline activation ---
 
 
 def activation_global_spec(rows: int, hidden_size: int) -> ttnn.TensorSpec:
     """Global spec of the inter-rank activation carried over the D2D pipeline socket:
-    ``[1, 1, rows, hidden_size]`` bf16 TILE DRAM. The caller's mesh mapper shards it (rows across SP,
-    emb across TP) to match the embedding output layout the downstream model consumes.
-
-    Size it with :func:`d2d_activation_rows` and :func:`d2d_activation_width`, never with
-    ``chunk_size`` directly -- MTP makes the two differ."""
+    ``[1, 1, rows, hidden_size]`` bf16 TILE DRAM. Size it with :func:`d2d_activation_rows` and
+    :func:`d2d_activation_width`, never with ``chunk_size`` directly -- MTP makes the two differ."""
     return ttnn.TensorSpec(
         shape=ttnn.Shape([1, 1, rows, hidden_size]),
         dtype=ttnn.bfloat16,
@@ -257,13 +193,8 @@ def activation_global_spec(rows: int, hidden_size: int) -> ttnn.TensorSpec:
 def d2d_activation_rows(chunk_size: int, *, sp_factor: int, mtp_levels: int = 0) -> int:
     """GLOBAL row count of the D2D pipeline activation for this configuration.
 
-    Plain prefill and DFlash ship one row per token: ``chunk_size``. MTP stacks the chunk's union
-    EMBEDDING under the hidden, so each chip sends its ``L`` hidden rows followed by its
-    ``L + num_mtp_tokens`` embedding rows. Both are multiples of 32, so the receiver's split is a
-    tile-aligned row slice.
-
-    Sending the embedding rather than the ids is what lets the LAST rank run its levels without an
-    embedding table: it slices windows out of what arrived instead of gathering them itself.
+    Plain prefill and DFlash ship one row per token; MTP stacks the chunk's union embedding under the
+    hidden, which is what lets the last rank run its levels with no embedding table of its own.
     """
     if not mtp_levels:
         return chunk_size
@@ -323,21 +254,11 @@ def _snap_counts_to_starts(counts, valid_starts, num_layers):
 def compute_layer_split(
     num_layers: int, num_ranks: int, valid_starts=None, mtp_levels: int = 0
 ) -> list[tuple[int, int]]:
-    """Contiguous (first_layer_idx, count) per rank. PREFILL_PP_LAYER_COUNTS, a
-    comma-separated count list summing to num_layers, overrides the default even
-    split (remainder handed to the earlier ranks).
+    """Contiguous ``(first_layer_idx, count)`` per rank, across the trunk plus the MTP tail.
 
-    ``valid_starts`` (from the adapter's ``layer_split_boundaries``): layer indices at which a rank may
-    begin. None => unconstrained. When set, the default even split is auto-snapped onto valid
-    boundaries, and any split (explicit or snapped) whose rank starts fall off them is rejected early.
-
-    ``mtp_levels`` (K): the LAST rank also runs K MTP levels after its trunk layers, so an even split
-    of the trunk alone leaves it K blocks late with every other rank idle behind it. Balance
-    num_layers + K layer-EQUIVALENTS and hand the tail back its K: GLM-5.2 on 4 ranks goes 18/20/20/20
-    to trunk 22/20/20/16 (equivalents 22/20/20/20), the #53533 re-split; K=0 is identical to the old
-    split. One level == one layer is a MODEL, not a measurement -- a level is a full MoE block plus
-    eh_proj and two norms, so it under-counts slightly; PREFILL_PP_LAYER_COUNTS (TRUNK counts only)
-    stays the hand-tuning escape hatch."""
+    Balances ``num_layers + mtp_levels`` layer-equivalents and snaps rank starts onto
+    ``valid_starts``. ``PREFILL_PP_LAYER_COUNTS`` (trunk counts only) overrides it outright.
+    """
     override = os.environ.get("PREFILL_PP_LAYER_COUNTS")
     if override:
         counts = [int(x) for x in override.split(",")]

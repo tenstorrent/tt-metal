@@ -86,9 +86,7 @@ class PrefillRunParams:
     # derives it from the model capability (supports_dflash) + PREFILL_DFLASH + a drafter checkpoint.
     dflash_enabled: bool = False
     # Number of GLM-5.2 MTP levels (K) to build KV for after the trunk's last layer; 0 = MTP off.
-    # Same opt-in shape as dflash_enabled: the runner derives it from the model capability
-    # (supports_mtp) + PREFILL_MTP_LEVELS. K > 0 widens the H2D chunk to chunk_size + K tokens
-    # (MTP level k needs the window shifted k tokens right) and adds K KV-cache slots per user.
+    # K > 0 widens the H2D chunk by K tokens and adds K KV-cache slots per user.
     mtp_levels: int = 0
 
     @property

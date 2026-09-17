@@ -47,19 +47,8 @@ from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCache, MlaKvC
 def rank_loads_embedding(is_first_rank: bool, is_last_rank: bool, mtp_levels: int) -> bool:
     """Does this rank load the token-embedding table?
 
-    The first rank embeds the trunk's prompt. A last rank running MTP needs the SAME table for the
-    final chunk's generated tokens: the LM head hands it a token id that exists nowhere until the
-    level before it has run, so no upstream rank could have embedded it and no socket could have
-    carried it (see ``mtp_generate_embedding``). Its shifted WINDOWS arrive pre-gathered in the D2D
-    union and cost nothing here -- it is generation alone that needs the table, 453.75 MiB/chip at
-    GLM-5.2's 154880-entry vocab.
-
-    Single source of truth, because the question is asked twice from different vantage points: the
-    constructor asks it with the predictor OBJECT in hand, while ``check_cache_complete`` is a
-    staticmethod that runs BEFORE the object exists and has to predict the same answer from raw
-    config. When those two drifted, ``check_cache_complete`` stopped looking for the embedding at
-    all on a non-first tail rank -- latent today, since the builder writes the table unconditionally
-    into a rank-shared cache dir, but it would call a cache that lacks it complete.
+    The first rank embeds the prompt; a last rank running MTP needs the same table for the final
+    chunk's generated tokens. Asked from two places, so the rule lives here rather than twice.
     """
     return bool(is_first_rank or (mtp_levels and is_last_rank))
 
@@ -116,9 +105,8 @@ class TtPrefillTransformer(LightweightModule):
                 so existing callers are unaffected, but MUST be passed for a LatentMoE model
                 (Kimi-K3): without it the block check cannot know to look for the
                 latent-projection cache files and reports a cache missing them as complete.
-            mtp_levels: K, the MTP levels this model runs (0 = none). A last rank running MTP
-                loads the embedding table too, so the check has to look for it there -- pass the
-                config value and let rank_loads_embedding() decide; the rank flags are already args.
+            mtp_levels: K, the MTP levels this model runs (0 = none). A last rank running MTP loads
+                the embedding table too, so pass the config value and let rank_loads_embedding() decide.
 
         Returns:
             True if all expected cache files exist, False otherwise
@@ -234,8 +222,7 @@ class TtPrefillTransformer(LightweightModule):
         num_mtp_levels = 0 if mtp_predictor is None else int(mtp_predictor.num_levels)
 
         # --- Embedding ---
-        # rank_loads_embedding() owns the rule; check_cache_complete() asks it the same question
-        # before this object exists, so the cache check and this build cannot disagree.
+        # rank_loads_embedding() owns the rule, so the cache check and this build cannot disagree.
         self.embed = (
             TtParallelEmbedding(
                 mesh_device=mesh_device,
@@ -250,19 +237,14 @@ class TtPrefillTransformer(LightweightModule):
             else None
         )
 
-        # The KV-cache slot stride, in slots per user. Normally the rank's layer count, but MTP
-        # writes K MORE slots per user -- level k lands at num_layers + k -- so the cache is
-        # num_layers + K deep and EVERY block, trunk and MTP alike, must stride by that same
-        # number. Striding the trunk by num_layers while the cache is deeper puts user 1's layer 0
-        # on top of user 0's MTP slots: silent corruption, invisible at num_users == 1, which is
-        # exactly the configuration MTP is being brought up in.
+        # The KV-cache slot stride, in slots per user: MTP writes K more slots per user, so the cache
+        # is num_layers + K deep and every block, trunk and MTP alike, must stride by that number.
         self.num_kvpe_cache_layers = num_layers + num_mtp_levels
 
         # --- Transformer layers ---
         # layer_idx is the GLOBAL index (drives weight cache keys + dense/MoE selection);
-        # cache_layer_idx in forward is the LOCAL slot. layer_num is the per-user slot stride
-        # (the block's flat KV slot is cache_user_id * layer_num + cache_layer_idx), so it matches
-        # the cache's actual depth, not this rank's layer count. first_layer_idx additionally tells the
+        # cache_layer_idx in forward is the LOCAL slot, and layer_num is the per-user slot stride,
+        # which matches the cache's depth rather than this rank's layer count. first_layer_idx tells the
         # sparse indexer which stage it is, so its (separately numbered) key cache is rank-local too.
         # With kv_only_last_layer, the last block is built kv_only=True (only attn_norm + the KV
         # branch of MLA).
@@ -381,11 +363,8 @@ class TtPrefillTransformer(LightweightModule):
         self.num_links = num_links
         self.sp_topology = sp_topology
 
-        # --- MTP (GLM-5.2, issue #53533) -----------------------------------------------------
-        # Injected rather than built here: the predictor owns MTP weights and a full GLM decoder
-        # block, and the transformer has no business loading either. What the transformer
-        # contributes is the three things only it holds at once -- the embedding table, model.norm,
-        # and the LM head -- which is exactly what the token->embedding boundary needs.
+        # MTP is injected rather than built here: the transformer contributes only the embedding
+        # table, model.norm and the LM head.
         self.mtp_predictor = mtp_predictor
         self.num_mtp_levels = num_mtp_levels
         self._mtp_pos0_mask = None
@@ -515,26 +494,14 @@ class TtPrefillTransformer(LightweightModule):
                         pad-zero, but with a device sync first. Wire one or the other, never both.
             on_layer_hidden: optional tap fired at the END of each block with (GLOBAL layer index, block
                         output activation). Read-only — see tt_prefill_block.forward.
-            mtp_union: GLM-5.2 MTP (#53533) — an `MTPUnionEmbedding` holding this chunk's
-                        `L + num_mtp_tokens` embedded rows per chip, from which each level slices its
-                        own window on device. This is what prefill runs on: the ids come off the H2D
-                        socket, are embedded on the first rank and reach this rank inside the
-                        activation. None disables MTP for this chunk. Requires an mtp_predictor; the K
-                        levels run after the trunk tail, off model.norm's output.
-            provided_levels: how many of the K MTP levels already have their lookahead token in the
-                        ids that arrived. Levels `[provided_levels, K)` have none at `actual_end + k`
-                        and generate one on device instead — argmax of that level's own LM head,
-                        embedded straight back into the union. `K` = fully interior chunk, `0` = no
-                        successor at all. Derived by the runner from the pad sentinel, never declared.
-            on_mtp_complete: tap fired once with (MTPPredictorOutput, generated_tokens). A tap rather
-                        than an extra return value, so the trunk's return arity is unchanged whether or
-                        not MTP ran — the same reason on_layer_complete is a callback.
+            mtp_union: an `MTPUnionEmbedding` holding this chunk's embedded trunk and lookahead rows
+                        per chip, out of which each MTP level slices its own window. None disables MTP.
+            provided_levels: how many leading MTP levels already have their lookahead token in the ids
+                        that arrived; the levels above that generate one on device. Set by the runner.
+            on_mtp_complete: tap fired once with (MTPPredictorOutput, generated_tokens), so the trunk's
+                        return arity is the same whether or not MTP ran.
             input_is_embedded: the first rank's `token_ids` is ALREADY the embedding, so skip the
-                        gather. The device MTP path sets it: that rank embeds the chunk's ids and the
-                        lookahead ids into one union, and the union's trunk block is bit-identical to
-                        what this embed would produce — so gathering again would re-read the same
-                        rows. An explicit flag, not inferred from `mtp_union`, because a first rank
-                        with no predictor is passed `mtp_union=None` (tt_prefill_runtime).
+                        gather. Set by the device MTP path, which embeds the trunk rows itself.
 
         Returns:
             On a non-last rank: the hidden-state activation tensor to hand to the next
@@ -556,9 +523,8 @@ class TtPrefillTransformer(LightweightModule):
             "d2h_service and would silently drop on_layer_complete"
         )
 
-        # Check the MTP contract HERE, before the trunk runs. The source is not consumed until the
-        # very end of this forward, so a mis-wired call otherwise costs a whole trunk chunk -- one
-        # that has already written KV -- before it raises. Pure host checks; they cost nothing.
+        # Checked before the trunk runs: the source is not consumed until the end of this forward, so
+        # a mis-wired call would otherwise cost a whole trunk chunk that has already written KV.
         if mtp_union is not None:
             assert self.mtp_predictor is not None, "MTP input passed but this transformer has no mtp_predictor"
             assert mtp_union.num_levels == self.num_mtp_levels, (
@@ -591,9 +557,8 @@ class TtPrefillTransformer(LightweightModule):
                 ttnn.synchronize_device(self.mesh_device)
                 intermediates["embed"] = self._to_host(h)
         else:
-            # Already [1, 1, seq_per_chip, emb_dim/tp]: the upstream rank's hidden-state activation,
-            # or -- on a first rank with input_is_embedded -- this chunk's own embedding. Either way
-            # there is nothing to gather.
+            # Already the activation: the upstream rank's hidden state, or this chunk's own embedding
+            # on a first rank with input_is_embedded. Nothing to gather either way.
             h = token_ids
 
         # GLM-5.2 reuse: hold the most recent "full" layer's top-k indices and inject them into the
@@ -693,19 +658,16 @@ class TtPrefillTransformer(LightweightModule):
         if return_intermediates:
             intermediates["first_token"] = sweep_results
 
-        # --- MTP levels (GLM-5.2, #53533) ---------------------------------------------------
-        # After the trunk tail, so the trunk path is byte-identical when MTP is off. `h` is h^0
-        # (post-model.norm) and is still live: neither the LM head nor _sample frees it.
+        # MTP runs after the trunk tail, so the trunk path is unchanged when MTP is off. `h` is h^0
+        # and is still live: neither the LM head nor _sample frees it.
         if mtp_union is not None:
             assert actual_start is not None, (
                 "MTP needs actual_start on the host to know whether this chunk contains absolute "
                 "position 0, where vLLM zeroes the embedding on every level; the on-device metadata "
                 "path keeps actual_start on device and cannot answer that here"
             )
-            # d2h_service / metadata_msg / on_layer_complete / on_layer_hidden are deliberately NOT
-            # forwarded: the layer-ack protocol counts TRUNK layers, so K extra acks would be K
-            # records the producer never asked for, and on_layer_hidden's index would collide with
-            # the trunk's. MTP's product is the KV it writes, not an ack.
+            # The ack and layer-tap kwargs are deliberately not forwarded: the layer-ack protocol
+            # counts trunk layers, and MTP's product is the KV it writes, not an ack.
             mtp_out, mtp_generated = self.run_mtp(
                 h,
                 kvpe_cache,
@@ -759,10 +721,6 @@ class TtPrefillTransformer(LightweightModule):
 
         return logits_host, first_token_logits
 
-    # ----------------------------------------------------------------------------------------------
-    # MTP (GLM-5.2, issue #53533)
-    # ----------------------------------------------------------------------------------------------
-
     def _mtp_position_zero_mask(self) -> ttnn.Tensor:
         """Cached per-chip ``[1, 1, L, H/tp]`` mask zeroing ABSOLUTE position 0. Built once, reused."""
         if self._mtp_pos0_mask is None:
@@ -778,12 +736,9 @@ class TtPrefillTransformer(LightweightModule):
         return self._mtp_pos0_mask
 
     def mtp_embed_ids(self, tt_ids: ttnn.Tensor) -> ttnn.Tensor:
-        """Gather ``[sp, 1, N]`` uint32 ids into ``[1, 1, N, H/tp]`` bf16 TILE. Does NOT consume
-        ``tt_ids``, and does NOT mask position 0 -- masking is per WINDOW, and the runner path gathers
-        the union's blocks (``MTPUnionEmbedding.from_ids``), which span more rows than any window.
-        Public because that is the one thing the runner needs off this object: with the same weights
-        and the same ids it produces exactly what ``forward``'s first-rank embed does, which is what
-        lets that gather double as the model's input (``input_is_embedded``)."""
+        """Gather ``[sp, 1, N]`` uint32 ids into ``[1, 1, N, H/tp]`` bf16 TILE. Does not consume
+        ``tt_ids`` and does not mask position 0 -- masking is per window, so the caller applies it.
+        Public because the runner needs the same gather ``forward``'s first-rank embed performs."""
         return ttnn.unsqueeze_to_4D(self.embed(tt_ids))
 
     def _mtp_mask_position_zero(self, emb: ttnn.Tensor, zero_position_0: bool) -> ttnn.Tensor:
@@ -798,26 +753,14 @@ class TtPrefillTransformer(LightweightModule):
         return masked
 
     def mtp_generate_embedding(self, h_normed: ttnn.Tensor, actual_isl: int) -> ttnn.Tensor:
-        """``H^k -> [1, 1, 32*sp, H/tp]``: the greedy next token at the last real row, embedded, and
-        SP-broadcast so every chip can read it.
-
-        ``TtLMHead.forward`` narrows to the one 32-row tile containing the target row before the
-        vocab matmul, so the whole chain is 32 rows wide: one tile-sized head call, one ``argmax``,
-        one 32-id embedding gather, one 32-row all-gather (plus one vocab-dim gather when the head is
-        column-parallel, as GLM 5.2's is). It is SP-FRACTURED -- only the chip the
-        target row lives on computes the real logits -- so the gather is what makes the result
-        available to the chips whose union holds the position being written; the caller's one-hot
-        selector picks row ``device_id*32 + token_offset`` out of it and ignores the rest.
-
-        Greedy (argmax), not :meth:`_sample`: the MTP chain is a draft, the reference is argmax, and
-        sampling here would make level ``k+1``'s input depend on the trunk's temperature.
-        """
+        """``H^k -> [1, 1, 32*sp, H/tp]``: the greedy next token at the last real row, embedded and
+        SP-broadcast so every chip can read it. The whole chain is one 32-row tile wide, and greedy
+        rather than sampled because the MTP chain is a draft whose reference is argmax."""
         assert self.lm_head is not None, "MTP generation needs the LM head (last rank, build_tail)"
         logits, _ = self.lm_head(h_normed, actual_isl - 1)  # [1, 1, 32, vocab] (vocab/tp if column)
         if self.lm_head.is_column_parallel and self.tp_factor > 1:
-            # argmax needs the whole vocab on one chip -- a column-parallel head leaves vocab/tp per
-            # chip, which argmaxes to a per-shard id. Gather on the vocab dim in TP-device order,
-            # the same order `TtLMHead.logit_to_host` concatenates the shards in on host.
+            # argmax needs the whole vocab on one chip; a column-parallel head leaves vocab/tp per chip.
+            # Gather on the vocab dim in TP-device order, the order logit_to_host concatenates them in.
             full = ttnn.all_gather(
                 logits,
                 dim=-1,
@@ -843,18 +786,8 @@ class TtPrefillTransformer(LightweightModule):
         self, union, actual_isl: int, actual_start: int, actual_end: int, *, provided_levels: int = 0
     ):
         """The :class:`MTPDeviceGeneration` for levels ``[provided_levels, K)``: one keep mask and one
-        one-hot selector per GENERATED level.
-
-        All of it is host-known before any level runs. The generated token always comes off the same
-        row -- the last real one -- so ``(device_id, token_offset)`` is the same at every level, and
-        the only thing that changes with ``k`` is WHERE the result is written: global position
-        ``actual_end + k``.
-
-        The level range is load-bearing in the keep mask. A level whose token the socket DELIVERED
-        already has the right embedding sitting in the union; clearing its row would destroy it and
-        nothing would write it back, because no selector targets a provided level. ``selects`` is
-        indexed by absolute level and holds ``None`` below ``provided_levels``.
-        """
+        one-hot selector per generated level, all of it host-known before any level runs. A level below
+        ``provided_levels`` gets no selector and stays out of the mask, keeping what the socket sent."""
         assert not self.is_balanced, (
             "MTP device generation is block-cyclic only: under is_balanced a chip's union is not a "
             "contiguous position range, so 'the rows holding position actual_end + k' is not one row "
@@ -899,23 +832,8 @@ class TtPrefillTransformer(LightweightModule):
     ):
         """Run the K MTP levels off ``h^0``. Returns ``(MTPPredictorOutput, generated_tokens)``.
 
-        Args:
-            h_normed: ``h^0`` -- the trunk output AFTER ``model.norm``.
-            union: ``MTPUnionEmbedding`` — this chunk's ``L + num_mtp_tokens`` embedded rows per chip,
-                each level's window being a row slice of that one already-gathered tensor.
-                ``generated_tokens`` comes back empty even on the last chunk: the ids are argmaxed,
-                embedded and consumed on device.
-            actual_isl: this chunk's real-token count -- both the LM-head row and where the last
-                chunk's generation slots start.
-            zero_position_0: True only on the chunk containing absolute position 0.
-            provided_levels: how many leading levels already have their token in the union as it
-                arrived. Only levels ``[provided_levels, K)`` generate; the rest slice what the socket
-                delivered. ``K`` skips generation entirely, ``0`` generates every level.
-            fwd_kwargs: passed to every level's block. The KV-cache slot is NOT among them -- the
-                predictor owns ``cache_layer_idx``, writing level ``k`` (0-based) to
-                ``first_cache_slot + k``, so the caller's cache must have ``num_layers + K`` slots
-                per user and every block in the model must have been built with the same
-                ``layer_num``, since the flat slot is ``cache_user_id * layer_num + cache_layer_idx``.
+        Only levels ``[provided_levels, K)`` generate their lookahead token on device; the rest slice
+        the union. ``fwd_kwargs`` reaches every level's block, minus the predictor-owned cache slot.
         """
         assert self.mtp_predictor is not None, "run_mtp called on a transformer built without an mtp_predictor"
         assert union is not None, "run_mtp needs this chunk's MTPUnionEmbedding"
@@ -937,10 +855,8 @@ class TtPrefillTransformer(LightweightModule):
             generation=generation,
             provided_levels=provided_levels,
         )
-        # Forwarded here rather than by the caller: `actual_isl` is a named parameter of this
-        # method AND something every level's block needs, so a caller that passed both would hit
-        # "got multiple values for argument 'actual_isl'". It cannot already be in fwd_kwargs --
-        # a keyword of that name binds to the parameter above, never to **fwd_kwargs.
+        # Forwarded here rather than by the caller: `actual_isl` is both a named parameter of this
+        # method and something every level's block needs, so passing both would be a duplicate kwarg.
         fwd_kwargs["actual_isl"] = actual_isl
         try:
             out = self.mtp_predictor.forward(source, h_normed, rope_tensors, kvpe_cache, **fwd_kwargs)

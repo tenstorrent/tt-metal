@@ -30,15 +30,11 @@ NUM_LAYERS = int(os.environ.get("PREFILL_NUM_LAYERS", "2"))
 # 56320 rows (= 11 x CHUNK_SIZE). The adapter's own prefill_trace_default omits dsa/, which would leave
 # the merged table's index config with no golden to PCC against.
 GLM52_TRACE = "/mnt/models/deepseek-prefill-cache/glm-traces/vllm-glm52-indexer-kcache-55k"
-# The MTP levels' golden is a SECOND trace: it carries kv_cache/layer_{78..84} and no trunk layer,
-# while GLM52_TRACE carries the trunk and nothing past it, so one trace_dir cannot serve both. Its
-# prompt is GLM52_TRACE's 56320 ids plus 8 lookahead ids, so the two agree on every row a chunk of
-# this scenario prefills. Its rope columns are half-split like the trunk's despite the HF dump
-# declaring `kv_rope_layout: as_computed` -- see _mtp_golden_source.
+# The MTP levels' golden is a SECOND trace: it carries the layers past the trunk and nothing before
+# them, while GLM52_TRACE carries the trunk, so one trace_dir cannot serve both.
 GLM52_MTP_TRACE = os.environ.get("GLM52_MTP_TRACE", "/mnt/models/deepseek-prefill-cache/glm-traces/mtp-glm52-55k")
-# GLM-5.2 pretrained checkpoint + the MTP weight cache tree (layer 78 block + the fused MTP weights),
-# for the MTP4 scenario. The MTP weights are keyed on layer 78, which the trunk cache does not carry,
-# so they live in their own tree with the same <variant>_<arch>_<N>dev/<sp>x<tp> leaf.
+# GLM-5.2 pretrained checkpoint plus the MTP weight cache tree. The MTP weights are keyed on the layer
+# past the trunk, which the trunk cache does not carry, so they live in their own tree.
 GLM52_HF_MODEL = os.environ.get("GLM52_HF_MODEL", "/mnt/models/deepseek-prefill-cache/GLM-5.2-FP8")
 GLM52_MTP_TTNN_CACHE = os.environ.get(
     "TT_GLM52_MTP_TTNN_CACHE", "/mnt/models/deepseek-prefill-cache/glm52_mtp_ttnn_cache"
@@ -193,26 +189,8 @@ SCENARIOS = {
         "producer_timeout_s": 7200,
         "producer": {"PREFILL_PRODUCER_CHUNKS": "11", "PREFILL_PRODUCER_MAX_REQUESTS": "1"},
     },
-    # 6) GLM-5.2 with MTP4 (#53533): scenario 4 plus four Multi-Token-Prediction levels after the
-    #    trunk's last layer. What this exercises that scenario 4 does not, end to end through the
-    #    real serving path:
-    #      * the H2D socket carries CHUNK_SIZE + num_mtp_tokens(K) ids per chunk -- K real lookahead
-    #        ids then alignment pad, the inference server's own shape -- in rows that OVERLAP by K, so
-    #        MTP level k's window is the same local slice on every SP chip (no cross-chip rotation);
-    #      * the runner slices the trunk's own CHUNK_SIZE tokens back out ON DEVICE and the trunk
-    #        forward is bit-identical to scenario 4's -- which is exactly what the 78-layer KVPE +
-    #        21-rank index PCC below re-proves;
-    #      * the last rank embeds each level's window on device and runs the four levels, writing
-    #        KVPE slots 78..81 and sharing one indexer slot (index_share_for_mtp_iteration).
-    #
-    #    Each level's KVPE is PCC'd against GLM52_MTP_TRACE and joins the same PREFILL_STANDALONE_
-    #    CHUNKED_PCC gate as the trunk's -- an MTP level is a layer of this same model cache. It is a
-    #    chained measurement: level 1 consumes the trunk's own post-norm hidden, so the trunk floor is
-    #    inside every level's number. What only a serving run can gate is the pair of things the PCC
-    #    cannot see: every level's slot was written, and no two levels share one.
-    #
-    #    Needs the MTP weight cache (layer 78 + the fused MTP weights); the runner will NOT build it
-    #    inside the serving process. Populate it with tests/mtp_prefill/test_mtp_transformer_chunks.py.
+    # 6) GLM-5.2 with MTP4: scenario 4 plus four prediction levels after the trunk's last layer, each
+    #    writing its own KVPE slot. Needs the MTP weight cache; the runner will not build it in-process.
     "glm52_mtp4": {
         "users": 1,
         "layers": 78,
@@ -237,17 +215,7 @@ SCENARIOS = {
 }
 
 # 7. GLM-5.2 MTP7 -- the other shipping level count, derived from scenario 6 so the two cannot drift.
-#
-#    Nothing about the TRANSPORT differs: num_mtp_tokens rounds both 4 and 7 up to the same 32-id
-#    socket row, so the H2D page, the producer's overlapping rows and the union's height are
-#    byte-identical to MTP4's. What differs is what the last rank does with them -- 7 levels replayed
-#    off one weight module, into KVPE slots 78..84 instead of 78..81, still sharing ONE indexer slot
-#    (index_share_for_mtp_iteration).
-#
-#    So this scenario is not a second transport test. It is there for the two things only a serving
-#    run shows, at the level count the numerics tests cannot reach cheaply: that all 7 slots were
-#    written, and that no two levels share one. Same weight cache as MTP4 -- the module is replayed,
-#    not duplicated, so there is nothing extra to build.
+#    Same transport and the same weight cache; only the number of levels the last rank runs differs.
 SCENARIOS["glm52_mtp7"] = copy.deepcopy(SCENARIOS["glm52_mtp4"])
 SCENARIOS["glm52_mtp7"]["env"]["PREFILL_MTP_LEVELS"] = "7"
 # 3 more blocks per chunk on the last rank and 3 more KVPE layers to read back than MTP4.

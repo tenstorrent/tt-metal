@@ -2,47 +2,10 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""On-device MTP shift-windows for the prefill runner (GLM-5.2, issue #53533).
+"""On-device MTP shift windows for the prefill runner.
 
-Level ``k`` needs the token at position ``p + k`` on the row whose hidden sits at ``p``, for every
-row of the chunk. On the host that is a list slice, uploaded per level. Prefill's tokens never touch
-host memory -- they arrive over the H2D socket -- so this module builds every window on device
-instead: same ``(k, H^k) -> embedding`` contract ``TtMTPPredictor.forward`` consumes, no host round
-trip anywhere in it.
-
-Two things make that possible.
-
-**1. The MTP ids ride the trunk's own H2D row.** One socket delivers chip ``c`` its ``L`` trunk ids
-followed by ``num_mtp_tokens`` lookahead slots -- contiguous with the trunk over the first ``K`` of
-them, ``[c*L, c*L + L + K)``, then alignment filler -- and the runner cuts the row at ``L`` into the
-``[1, 1, L]`` trunk the model has always been handed and the ``num_mtp_tokens`` ids that follow it. Because a chip's
-lookahead is the ids immediately past its OWN shard, MTP level ``k`` -- which wants position ``p + k``
-on the row whose hidden sits at ``p`` -- reads the SAME local slice ``[k, k+L)`` on every chip. No SP
-ring-shift, no cross-chip rotation. See ``runner_utils.MTP_TOKEN_ALIGN`` for why that count is a
-whole tile.
-
-**2. What crosses the D2D socket is the union EMBEDDING, not the ids.** The first rank gathers the
-two id tensors separately -- out of the table it already loads -- and ships both stacked under the
-hidden. The trunk gather is not extra work: its result IS this chunk's model input, so the whole
-union costs ``L + num_mtp_tokens`` gathered rows, not ``L`` for the model and another
-``L + num_mtp_tokens`` for
-MTP. Downstream ranks slice their windows out of what arrived, so the
-LAST rank runs its levels with no embedding table at all (453.75 MiB/chip at GLM-5.2's 154880-entry
-vocab). ``slice(embed(ids)) == embed(slice(ids))`` row-for-row, so the two paths agree bit-exactly by
-construction rather than by measurement -- which is why the ids no longer need a codec to survive a
-bf16 wire.
-
-**3. The last chunk GENERATES the ids the prompt does not have, on device.** Past a request's real
-length the stream has no more tokens, so level ``k``'s window at the last real row has nothing to
-read. Reading ``H^k`` back to host -- LM head, argmax, feed the id back in -- is a host round trip
-per level, exactly what this path exists to avoid. Here the same chain runs on
-device: ``argmax(lm_head(H^k))`` -> ``embed`` -> SP ``all_gather`` -> a one-hot matmul that writes
-the result into the union at global position ``actual_end + k`` (:class:`MTPDeviceGeneration`).
-Writing it at that ONE position is the whole simplification: every level's window slice then picks
-it up by itself. ``generated_tokens`` still comes back empty -- the ids never leave the device.
-
-Only the FINAL chunk of a request does any of this; an interior chunk's windows are pure prompt
-slices, and the producer says which is which in the 4th PrefillMetadata word.
+Prefill's tokens never reach host memory, so every level's ``(k, H^k) -> embedding`` window is built
+on device: a row slice of the embedded union, plus generated ids on a request's final chunk.
 """
 
 from __future__ import annotations
@@ -55,22 +18,10 @@ __all__ = ["MTPUnionEmbedding", "MTPDeviceEmbedSource", "MTPDeviceGeneration"]
 
 
 class MTPUnionEmbedding:
-    """One chunk's MTP source rows: the ``L + num_mtp_tokens`` embeddings covering this chip's trunk
-    positions and the ``num_mtp_tokens`` positions that follow them.
+    """One chunk's MTP source rows: this chip's trunk embeddings and the lookahead rows after them.
 
-    Held as an ordered list of row BLOCKS rather than one tensor, because the two ranks that build it
-    hold it differently and neither should pay a copy to look like the other:
-
-    * :meth:`from_ids` -- the FIRST rank, holding the trunk and MTP id tensors the H2D row was
-      cut into. It gathers each separately, so the blocks are ``[trunk, mtp]`` and
-      :attr:`trunk`, which is this chunk's model input, is the leading block at no cost.
-    * :meth:`from_embedding` -- any downstream rank, holding the contiguous union that arrived packed
-      under the hidden on the D2D socket. One block.
-
-    :meth:`window` is the only thing that needs the rows contiguous, and it joins them once
-    (:meth:`_row_major`). A rank that runs no level -- the first rank of a pipeline, every
-    intermediate rank -- therefore never joins them at all: it stacks :attr:`parts` straight into the
-    D2D activation, which writes the same bytes a joined union would have.
+    Held as an ordered list of row blocks, because the first rank gathers trunk and lookahead
+    separately while a downstream rank receives one contiguous tensor. Only :meth:`window` joins them.
     """
 
     def __init__(self, parts: list, *, num_levels: int, window_len: int):
@@ -80,10 +31,8 @@ class MTPUnionEmbedding:
         self._parts: list = list(parts)
         assert self._parts, "a union needs at least one row block"
         self._rows: Optional[ttnn.Tensor] = None
-        # Set by clear_rows/add_patch: the union AFTER generation patches, as one tensor. Kept beside
-        # _parts rather than replacing them because a middle rank re-packs the blocks it received --
-        # and because .trunk, which is this chunk's model input, must keep pointing at the embedding
-        # the trunk actually ran on.
+        # The union after generation patches, as one tensor. Kept beside _parts so a middle rank can
+        # still re-pack the blocks it received, and so .trunk keeps pointing at what the model ran on.
         self._patched: Optional[ttnn.Tensor] = None
         rows = sum(int(p.shape[-2]) for p in self._parts)
         assert rows >= self.window_len + self.num_levels, (
@@ -97,15 +46,8 @@ class MTPUnionEmbedding:
     ) -> "MTPUnionEmbedding":
         """Gather the union from the two id tensors the H2D row was cut into. Neither is consumed.
 
-        TWO gathers, deliberately, rather than one over a rejoined id row. The trunk gather is not
-        extra work -- its result IS the model's input for this chunk (:attr:`trunk`), the tensor the
-        first rank would gather inside ``forward`` anyway. Rejoining the ids first would make the
-        union one gather and then force a SECOND, identical gather of the same ``L`` rows for the
-        model: 640 redundant rows per chip per chunk at the production shape.
-
-        ``embed_fn`` is the trunk's own embedding gather: ``[sp, 1, N]`` uint32 ids ->
-        ``[1, 1, N, H/tp]`` bf16 TILE, UNMASKED. Position-0 masking belongs to the caller
-        (:class:`MTPDeviceEmbedSource`), which applies it per window.
+        Two gathers rather than one over a rejoined id row: the trunk gather's result is this chunk's
+        model input anyway. ``embed_fn`` returns unmasked rows; position-0 masking is the caller's.
         """
         window_len = int(chunk_ids.shape[-1])
         return cls(
@@ -133,14 +75,10 @@ class MTPUnionEmbedding:
 
     @property
     def trunk(self) -> ttnn.Tensor:
-        """This chunk's trunk embedding -- the first ``window_len`` rows, as its own tensor.
+        """This chunk's trunk embedding -- the leading ``window_len`` rows, as its own tensor.
 
-        The model input on the first rank. Owned HERE, because the D2D pack re-reads it after
-        ``forward`` returns; the caller must not free it, :meth:`deallocate` does.
-
-        Defined only on a :meth:`from_ids` union, where the trunk is a block in its own right. A
-        received union is one contiguous tensor whose leading rows are not separable without a copy,
-        so this asserts rather than quietly hand back all ``L + num_mtp_tokens`` of them.
+        The model input on the first rank, owned here because the D2D pack re-reads it after
+        ``forward`` returns. Asserts on a received union, whose leading rows need a copy to separate.
         """
         assert self._parts, "union embedding already deallocated"
         rows = int(self._parts[0].shape[-2])
@@ -215,14 +153,10 @@ class MTPUnionEmbedding:
             self._rows = None
 
     def _row_major(self) -> ttnn.Tensor:
-        """ROW_MAJOR copy of the JOINED union, materialized once and reused until it is invalidated.
+        """ROW_MAJOR copy of the joined union, materialized once and reused until invalidated.
 
-        A window starts at row ``k`` for ``k`` in 1..K, which is never a multiple of 32, and
-        ``ttnn.slice`` on TILE_LAYOUT only cuts on tile boundaries -- so the rows must be untilized,
-        and joined first when they arrived as separate blocks. Kept alive beside the blocks rather
-        than replacing them, because a middle rank re-packs the tiled ones -- 2 MiB/chip at the
-        production shape, on a rank that just gave back 453.75. Generation invalidates it once per
-        level (:meth:`_apply`), so the last chunk untilizes ``K`` times instead of once.
+        A window starts at row ``k``, never a tile boundary, and ``ttnn.slice`` only cuts tiles, so
+        the rows have to be untilized. Generation invalidates this once per level.
         """
         if self._rows is None:
             joined, temp = self._current()
@@ -233,21 +167,10 @@ class MTPUnionEmbedding:
 
 
 class MTPDeviceGeneration:
-    """Everything the LAST chunk needs to fill the positions the prompt does not reach.
+    """Everything the last chunk needs to fill the positions the prompt does not reach.
 
-    Built once per chunk by the caller (it owns the mesh geometry and the LM head) and handed to
-    :class:`MTPDeviceEmbedSource`, which drives it level by level.
-
-    Args:
-        keep_mask: ``[sp, 1, U, H/tp]`` ones, zero on every row generation will write. Applied to
-            the union once, before level 0.
-        selects: one-hot ``[sp, 1, U, 32*sp]`` selectors indexed by ABSOLUTE level, ``selects[k]``
-            placing level ``k``'s token at global position ``actual_end + k``, and ``None`` for a
-            level whose token the socket already delivered. All of them are host-known up front: the
-            source row is the LM head's ``(device_id, token_offset)`` for ``actual_isl - 1``, which
-            is the same row at every level.
-        embed_fn: ``H^k -> [1, 1, 32*sp, H/tp]`` -- lm_head, argmax, embed, SP all-gather. The
-            gathered block is what ``selects[k]`` indexes into.
+    ``keep_mask`` zeroes the rows generation will write, ``selects[k]`` places level ``k``'s token at
+    global position ``actual_end + k``, and ``embed_fn`` is the lm_head/argmax/embed/gather chain.
     """
 
     def __init__(self, keep_mask: ttnn.Tensor, selects: list, embed_fn):
@@ -268,18 +191,8 @@ class MTPDeviceGeneration:
 class MTPDeviceEmbedSource:
     """``TtMTPPredictor.forward``'s ``embeds`` callable, sourced entirely on device.
 
-    Levels below ``provided_levels`` ignore ``H^k`` entirely -- their window is a row slice of the
-    union the socket delivered. At and above it, the device generation chain runs on ``H^k`` and
-    patches the union before slicing, so level ``k``'s last real row reads the token level ``k`` just
-    generated and the earlier rows read whatever put them there: the socket, or an earlier level.
-
-    ``provided_levels == num_levels`` is a fully interior chunk and needs no ``generation`` at all;
-    ``0`` is a chunk with no successor, where every level generates. Anything between is a request
-    that ends fewer than K tokens after this chunk -- a case the retired ``is_last_chunk`` bool could
-    not express.
-
-    ``generated_tokens`` is empty either way: the ids are argmaxed, embedded and consumed on device
-    and never come back to host. Nothing on the runner path reads them.
+    Levels below ``provided_levels`` slice the union the socket delivered; at and above it the
+    generation chain runs on ``H^k`` and patches the union first. The ids never come back to host.
     """
 
     def __init__(
@@ -312,16 +225,13 @@ class MTPDeviceEmbedSource:
     def __call__(self, k: int, prev_normed):
         assert 0 <= k < self.num_levels, f"level {k} out of range [0, {self.num_levels})"
         if self.generation is not None and k >= self.provided_levels:
-            # Strict level order over the GENERATED range, once each. The patches are INCREMENTAL:
-            # level k's window reads positions actual_end+k-j for j in 0..k, so every earlier level's
-            # token must already be in the union -- delivered by the socket below provided_levels,
-            # patched here at or above it.
+            # Strict level order, once each: the patches are incremental, so every earlier level's
+            # token must already be in the union before this one slices its window.
             assert k == self._next_level, f"generation must run levels in order; expected {self._next_level}, got {k}"
             self._next_level += 1
             if k == self.provided_levels:
-                # Once, before the FIRST generated level -- not before level 0. The mask clears only
-                # the rows generation will write; a provided level's row already holds the embedding
-                # of the id the socket delivered, and clearing it would lose it for good.
+                # Once, before the first generated level. A provided level's row already holds the
+                # embedding of the id the socket delivered, and clearing it would lose it.
                 self.union.clear_rows(self.generation.keep_mask)
             gathered = self.generation.embed_fn(prev_normed)
             self.union.add_patch(self.generation.selects[k], gathered)

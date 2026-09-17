@@ -237,12 +237,8 @@ class TtParallelEmbedding(LightweightModule):
 
         logger.debug(f"Forward: token_ids shape={token_ids.shape}")
 
-        # An id slot with no token behind it carries runner_utils.MTP_PAD_TOKEN_ID (max uint32):
-        # the inference server's alignment filler in an MTP lookahead row, its end-of-request slots,
-        # and the tail of a final partial chunk. Being outside every vocabulary is the point -- a
-        # scan can never mistake it for content -- but it must not reach the gather, which would
-        # index the table out of bounds. Clamp here: this is the one point every id path in the model
-        # passes through (trunk, MTP lookahead, generated), and it is identity on every real id.
+        # An id slot with no token behind it carries runner_utils.MTP_PAD_TOKEN_ID, which is outside
+        # every vocabulary and so must be clamped before the gather indexes the table out of bounds.
         safe_ids = ttnn.minimum(token_ids, self.vocab_size - 1)
         embeddings = ttnn.embedding(
             safe_ids,

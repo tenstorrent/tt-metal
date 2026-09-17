@@ -97,11 +97,8 @@ assert not TP_SHARD_KV or ADAPTER.supports_tp_shard_kv, (
     f"PREFILL_TP_SHARD_KV=1 is not supported by model {ADAPTER.name!r}: its allocate_kv_cache does not pass "
     f"params.tp_shard_kv to the cache allocators, so writes would be TP-sharded into TP-replicated caches."
 )
-# Number of MTP levels to run after the trunk's last layer (0 = off). Two gates: the model declares the
-# capability (ADAPTER.supports_mtp — only GLM 5.2) and the run asks for a level count. K > 0 widens the
-# ONE H2D row by num_mtp_tokens(K) lookahead ids (level k reads the window shifted k tokens right), adds
-# K KV-cache slots per user, and stacks the union embedding under the hidden on the D2D activation
-# (see runner_utils.d2d_activation_rows).
+# Number of MTP levels to run after the trunk's last layer (0 = off). Gated on both the model declaring
+# the capability and the run asking for a count; K > 0 widens the H2D row and adds K KV slots per user.
 MTP_LEVELS = int(os.environ.get("PREFILL_MTP_LEVELS", 0)) if ADAPTER.supports_mtp else 0
 assert MTP_LEVELS >= 0, f"PREFILL_MTP_LEVELS must be >= 0, got {MTP_LEVELS}"
 NUM_MTP_TOKENS = num_mtp_tokens(MTP_LEVELS)
@@ -113,26 +110,20 @@ _MTP_PAD_AS_INT32 = MTP_PAD_TOKEN_ID - (1 << 32)
 """The pad sentinel as ttnn.to_torch hands it back: the words are written uint32 and read int32, so
 0xFFFFFFFF arrives as -1. Precomputed so the scan is a plain integer compare."""
 CHUNK_METADATA_SIZE_BYTES = METADATA_SIZE_BYTES
-"""PrefillMetadata carried with each chunk: 3 words, with MTP on or off.
+"""PrefillMetadata carried with each chunk: 3 words, MTP or not.
 
-Used by the H2D socket and, on the first rank, by the D2H layer-ack -- whose record IS this chunk's
-metadata tensor (see prefill_chunk's `metadata_msg`). The rank-to-rank hop is wider under MTP; see
-D2D_METADATA_SIZE_BYTES."""
+Used by the H2D socket and, on the first rank, by the D2H layer-ack. The rank-to-rank hop is wider
+under MTP; see D2D_METADATA_SIZE_BYTES."""
 
 D2D_METADATA_SIZE_BYTES = METADATA_SIZE_BYTES + (4 if MTP_LEVELS else 0)
-"""PrefillMetadata on the INTERNAL rank-to-rank hop: the 3 chunk words plus, under MTP, the
-`provided_levels` count rank 0 derived from the pad sentinel. `run_mtp` executes on the LAST rank,
-which receives the union embedding and never the ids, so it cannot run the scan itself; rank 0 runs
-it once and the answer rides this hop. Nothing about it reaches the inference server."""
+"""PrefillMetadata on the internal rank-to-rank hop: the 3 chunk words plus, under MTP, the
+`provided_levels` count. The levels run on the LAST rank, which sees the union embedding and never
+the ids, so rank 0 scans for the pad sentinel once and the answer rides this hop."""
 SYNC_PER_CHUNK = os.environ.get("PREFILL_SYNC_PER_CHUNK", "0") == "1"
 TIMING_DIR = os.environ.get("PREFILL_TIMING_DIR", "")
 _L1_SMALL_SIZE = ADAPTER.l1_small_size
-# The MTP tail adds CCL calls the trunk never makes -- the last chunk generates its lookahead ids on
-# device, which is an LM-head gather (when the head is column-parallel, as GLM 5.2's is) plus an SP
-# gather of the embedding, once per level. Their global semaphores land in L1_SMALL, and GLM's 1152 B
-# is already fully committed (routing 512 B + sparse-MLA 256 B + the trunk's own collectives): the
-# allocator reports `free: 0 B` on a 16 B/bank request. 512 B is 32 more semaphore slots, well over
-# the 2 x MTP_LEVELS this path needs, and it is only carved out when MTP is on.
+# The MTP tail adds CCL calls the trunk never makes -- an LM-head gather and an SP gather per level --
+# whose global semaphores land in L1_SMALL, and GLM's default allocation is already fully committed.
 if MTP_LEVELS:
     _L1_SMALL_SIZE += 512
 USE_TRACE = os.environ.get("PREFILL_USE_TRACE", "0") == "1"
@@ -164,7 +155,7 @@ assert not (MTP_LEVELS and USE_TRACE), (
     "PREFILL_MTP_LEVELS>0 is incompatible with PREFILL_USE_TRACE=1: the MTP levels are not "
     "trace-captured. Run MTP with PREFILL_USE_TRACE=0."
 )
-# One tap, one packed D2D payload, one set of extra KV slots — running both at once has never been
+# One tap, one packed D2D payload, one set of extra KV slots -- running both at once has never been
 # defined, so reject it here rather than let two features fight over the same activation width.
 assert not (MTP_LEVELS and DFLASH_ENABLED), "PREFILL_MTP_LEVELS>0 and PREFILL_DFLASH=1 are mutually exclusive"
 # MTP needs the trunk's real hidden out of the last layer to seed level 1, which kv-only skips.
@@ -234,22 +225,8 @@ def _decode_metadata(metadata_msg: ttnn.Tensor) -> dict:
 def mtp_provided_levels(mtp_tokens, meta: dict) -> int:
     """How many of the K MTP levels already have their token, off the ids themselves.
 
-    Level ``k`` needs the token at global position ``actual_end + k``. This returns the count ``j`` of
-    leading levels whose token the producer actually sent; levels ``j..K-1`` must generate theirs from
-    ``lm_head(H^k)`` on device. ``j == K`` is the old interior chunk, ``j == 0`` the old last chunk,
-    and ``0 < j < K`` is the case the retired `is_last` bool could not express -- a request that ends
-    fewer than K tokens after this chunk.
-
-    Two cases, and only one of them touches the device:
-
-    * ``actual_end < actual_start + CHUNK_SIZE`` -- a partial chunk, which is NECESSARILY the last one
-      (the producer sets ``actual_end = min(actual_start + CHUNK_SIZE, actual_isl)``). Everything past
-      ``actual_end`` is therefore padding, so ``j = 0`` by arithmetic, with no readback at all.
-    * a full chunk -- positions ``actual_end + k`` are exactly the first K ids of the LAST chip's
-      lookahead block, because that block starts at ``chunk_start + sp*L == actual_end``. Read those K
-      ids back and count the leading non-sentinel ones.
-
-    The readback is K uint32s from one device, at a sync point ``_decode_metadata`` already pays.
+    The levels above the returned count must generate theirs on device. A partial chunk answers 0 by
+    arithmetic; a full chunk reads the last chip's lookahead block back and counts the real ids.
     """
     if not MTP_LEVELS:
         return 0
@@ -257,8 +234,7 @@ def mtp_provided_levels(mtp_tokens, meta: dict) -> int:
         return 0
     assert mtp_tokens is not None, "MTP is on but no lookahead tensor arrived with this chunk"
     # The LAST device, not device[sp-1]: the mesh enumerates row-major over (sp, tp) and the tensor is
-    # sharded on the SP axis and replicated across TP, so the final entry is SP shard sp-1 whatever tp
-    # is. That is the chip whose lookahead block starts at actual_end.
+    # SP-sharded and TP-replicated, so the final entry is the chip whose lookahead starts at actual_end.
     last_chip = ttnn.get_device_tensors(mtp_tokens)[-1]
     ids = ttnn.to_torch(last_chip).view(torch.int32).flatten()
     assert ids.numel() >= MTP_LEVELS, f"lookahead row is {ids.numel()} ids, need at least {MTP_LEVELS}"
@@ -282,16 +258,8 @@ def _is_shutdown_sentinel(meta: dict) -> bool:
 
 def _socket_next(h2d_service, n_mtp: int = 0) -> tuple:
     """Block on the next producer push and hand back what it carried: (tt_ids, tt_mtp_tokens_or_None,
-    meta, tt_metadata) -- see _decode_metadata. Used only by the unbounded request loop
-    (rank 0 input). The device metadata tensor is returned rather than discarded so it can be
-    propagated into the model's per-layer ack send.
-
-    ONE socket, ONE op call, THREE tensors. The op splits each arriving row as it copies it out of
-    the socket's backing buffer, so ``tt_ids`` is the same ``[1, 1, L]`` uint32 tensor an MTP-off run
-    delivers -- byte for byte -- and ``tt_mtp_tokens`` is the ``[1, 1, n_mtp]`` lookahead tail that
-    level k's window reads past this chip's trunk shard. With ``n_mtp == 0`` the op emits no second
-    tensor at all and this is exactly the pre-MTP call.
-    """
+    meta, tt_metadata). One socket, one op call, three tensors -- the op splits each arriving row as
+    it copies it out, so with MTP off this is byte for byte the pre-MTP call."""
     outs = ttnn.experimental.deepseek_prefill.inbound_socket_service_sync(
         h2d_service, metadata_size_bytes=CHUNK_METADATA_SIZE_BYTES, overhang_size_bytes=n_mtp * TOKEN_ID_BYTES
     )
@@ -365,9 +333,8 @@ def _d2d_send(
         backing = outbound.get_backing_tensor()
         words = [meta["slot_id"], meta["actual_start"], meta["actual_end"]]
         if MTP_LEVELS:
-            # The DERIVED count, not a producer flag: run_mtp executes on the LAST rank, which sees
-            # only the union embedding and never the ids, so rank 0 scans once and the answer rides
-            # this hop.
+            # The DERIVED count, not a producer flag: run_mtp executes on the last rank, which sees only
+            # the union embedding, so rank 0 scans the ids once and the answer rides this hop.
             words.append(int(meta["provided_levels"]))
         md_tensor = ttnn.from_torch(
             torch.tensor(words, dtype=torch.int32).reshape(1, 1, 1, -1),
@@ -473,9 +440,8 @@ def _compute_and_send(
         _record_chunk_timing(rank, c, t_start, compute_ms)
     if not runtime.config.is_last_rank:
         forward_md = None
-        # Reuse forwards the tensor that ARRIVED. On the first rank under MTP that is the 3-word H2D
-        # block, one word short of D2D_METADATA_SIZE_BYTES -- rebuild there so provided_levels rides
-        # the hop. Downstream ranks already hold the wider D2D block, so reuse stays correct.
+        # Reuse forwards the tensor that ARRIVED. On the first rank under MTP that is the narrower H2D
+        # block, so rebuild it there; downstream ranks already hold the wider D2D block.
         if runtime.config.use_trace and not (MTP_LEVELS and runtime.config.is_first_rank):
             persistent_md = getattr(runtime, "trace_metadata_msg", None)
             forward_md = persistent_md if persistent_md is not None else metadata_msg
@@ -621,9 +587,8 @@ def _assert_ranks_agree_on_config(rank: int, num_ranks: int) -> None:
         "max_seq_len": MAX_SEQ_LEN,
         "num_users": NUM_USERS,
         "mesh_shape": GLOBAL_MESH_SHAPE,
-        # Sets the H2D row length, the D2D activation width, and the pipeline layer split on every
-        # rank; a mismatch would be a socket-spec mismatch at rendezvous (or two ranks disagreeing on
-        # who owns which layer), which is far harder to read than this named failure.
+        # Sets the H2D row length, the D2D activation width and the pipeline layer split on every rank,
+        # so a mismatch would otherwise surface as a socket-spec failure at rendezvous.
         "mtp_levels": MTP_LEVELS,
         "PREFILL_MIGRATION_EXPORT_TO_FILE": migration_file_export_enabled(),
     }
@@ -687,10 +652,8 @@ def main() -> None:
         gate_mode_name=_gate_mode_name,
         kv_only_last_layer=is_last_rank and KV_ONLY_LAST_LAYER,
         dflash_enabled=DFLASH_ENABLED,
-        # NOT gated on is_last_rank either: every rank must know K to size its D2D sockets (the token
-        # ids ride the activation the whole way down the pipeline), and the runtime/adapter narrow it
-        # to the last rank for the parts that really are last-rank-only (the predictor, the K extra
-        # KV slots, the MTP indexer slot).
+        # Not gated on is_last_rank: every rank needs K to size its D2D sockets, and the runtime narrows
+        # it to the last rank for the parts that really are last-rank-only.
         mtp_levels=MTP_LEVELS,
         weight_cache_path=ADAPTER.weight_cache_path(GLOBAL_MESH_SHAPE),
         tp_shard_kv=TP_SHARD_KV,

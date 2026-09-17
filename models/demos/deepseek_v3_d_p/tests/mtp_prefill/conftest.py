@@ -4,12 +4,8 @@
 
 """Fixtures for the GLM-5.2 MTP prefill tests.
 
-Weight axis follows ``tests/dflash_prefill/conftest.py``: an INDIRECT ``use_pretrained`` fixture so
-the axis shows up in each test's own params, with the resource fixtures hanging off it.
-
-There is no HF reference *model* to build here (contrast ``_load_hf_drafter``) — GLM-5.2 ships MTP
-weights with no MTP code — so the ground truth is the composed CPU reference in
-``reference/glm_5_2/mtp.py``. See issue #53533.
+Weight axis follows ``tests/dflash_prefill/conftest.py``: an indirect ``use_pretrained`` fixture with
+the resource fixtures hanging off it. The ground truth is the CPU reference in reference/glm_5_2.
 """
 
 from __future__ import annotations
@@ -41,9 +37,8 @@ def glm52_checkpoint_path() -> str | None:
 def random_mtp_state_dict(cfg: MTPConfig, seed: int = 42) -> dict:
     """Seeded random MTP weights, same conventions as the GLM block test's helpers.
 
-    Norm gains ``randn*0.1 + 1`` (``_glm_norm_weight``) and the projection scaled by ``1/sqrt(fan_in)``
-    (``_glm_random_*_weights``). ``eh_proj`` is generated in **HF layout** ``[H, 2H]``, un-transposed,
-    exactly as the checkpoint stores it, so the random and pretrained legs feed the module identically.
+    ``eh_proj`` is generated in HF layout ``[H, 2H]``, un-transposed, exactly as the checkpoint
+    stores it, so the random and pretrained legs feed the module identically.
     """
     g = torch.Generator().manual_seed(seed)
     h = cfg.hidden_size
@@ -62,7 +57,7 @@ def random_mtp_state_dict(cfg: MTPConfig, seed: int = 42) -> dict:
 @pytest.fixture
 def use_pretrained(request) -> bool:
     """Weight axis: ``random`` = seeded weights, no checkpoint; ``pretrained`` = the real GLM-5.2 MTP
-    tensors. INDIRECT — every test using the fixtures below MUST parametrize it:
+    tensors. INDIRECT -- every test using the fixtures below MUST parametrize it:
     ``@pytest.mark.parametrize("use_pretrained", [False, True], ids=["random", "pretrained"], indirect=True)``.
     """
     return request.param
@@ -85,7 +80,7 @@ def mtp_state_dict(use_pretrained, mtp_cfg) -> dict:
     """The four MTP tensors in HF layout, fed identically to the device module and the CPU reference.
 
     Pretrained loads only the shards that hold them (four tensors out of 141 shards), so this leg is
-    cheap — it does not touch the layer's MLA or its 256 fp8 experts.
+    cheap -- it does not touch the layer's MLA or its 256 fp8 experts.
     """
     if not use_pretrained:
         return random_mtp_state_dict(mtp_cfg)
@@ -102,14 +97,8 @@ _PROJ = ("gate_proj", "up_proj", "down_proj")
 def glm_layer_state_dict(config, model_dir: str, layer_idx: int, num_routed_experts: int) -> dict:
     """One GLM decoder layer's real weights, in ``TtPrefillBlock``'s state_dict format.
 
-    Layer 78 -- the MTP layer -- is a *full* GLM block: MLA carrying its own indexer weights, both
-    RMSNorm gains, and a 256-expert MoE. The experts and the MLA projections are fp8 with a
-    per-128x128-block scale; the device's weight cache stores them dequantized, so the block scale
-    is undone here. One set of bf16 tensors then feeds both the device and the CPU reference, which
-    is what makes their PCC a statement about the ops rather than about two different weight loads.
-
-    ~19 GiB resident for the experts alone. ``dict.pop`` frees each fp8 tensor as it is converted,
-    so the peak is the bf16 result plus one shard, not both formats at full size.
+    The experts and the MLA projections are fp8 with a per-block scale, undone here so one set of
+    bf16 tensors feeds both the device and the CPU reference. ~19 GiB resident for the experts.
     """
     model_dir = str(model_dir)
     prefix = f"model.layers.{layer_idx}."
@@ -152,8 +141,7 @@ def mtp_layer_state_dict(use_pretrained, mtp_cfg, config_only) -> dict:
     """The MTP layer's own DECODER-block weights: MLA + indexer, both norms, the 256-expert MoE.
 
     The other, much larger half of ``mtp_state_dict``, which is only the four MTP-specific tensors.
-    Loading it is what lets a test be pretrained on both sides of the MTP boundary; it is ~19 GiB
-    and several minutes of fp8 dequant, so only a test that needs the real layer should ask for it.
+    Minutes of fp8 dequant, so only a test that needs the real layer should ask for it.
     """
     if not use_pretrained:
         pytest.skip("the MTP layer's real decoder weights exist only in the checkpoint")

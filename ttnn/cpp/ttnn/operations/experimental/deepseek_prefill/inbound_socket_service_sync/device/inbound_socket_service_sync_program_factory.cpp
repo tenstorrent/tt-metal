@@ -83,10 +83,8 @@ ProgramDescriptor InboundSocketServiceSyncProgramFactory::create_descriptor(
     };
     TensorAccessorArgs(*backing_buffer).append_to(ct_args);
     TensorAccessorArgs(*tokens_buffer).append_to(ct_args);
-    // The overhang accessor block is ALWAYS appended -- standing in with the tokens buffer when the
-    // split is off -- so the metadata block's compile-time offset stays a fixed expression in the
-    // kernel instead of a conditional one. An unused duplicate block costs a few CT args; getting a
-    // conditional constexpr offset wrong compiles cleanly and reads the wrong tensor.
+    // The overhang accessor block is ALWAYS appended, standing in with the tokens buffer when the split
+    // is off, so the metadata block's compile-time offset in the kernel stays a fixed expression.
     TensorAccessorArgs(*(has_overhang ? overhang_buffer : tokens_buffer)).append_to(ct_args);
     if (has_metadata) {
         TensorAccessorArgs(*metadata_buffer).append_to(ct_args);

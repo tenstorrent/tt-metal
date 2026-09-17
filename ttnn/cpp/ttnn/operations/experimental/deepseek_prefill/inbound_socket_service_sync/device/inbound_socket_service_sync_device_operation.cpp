@@ -45,9 +45,8 @@ void InboundSocketServiceSyncOperation::validate_on_program_cache_miss(
             "overhang is the TAIL of each page, not the whole page",
             args.overhang_size_bytes,
             args.page_size);
-        // The split is expressed on the LAST dim of the backing spec, so it is only equivalent to a byte
-        // split of each page when a page IS one row. That is what the H2D service does (it sets
-        // max_socket_page_size_bytes to the per-chip row width), but nothing in the op enforces it, so say so.
+        // The split is expressed on the LAST dim of the backing spec, so it is a byte split of each page
+        // only when a page IS one row -- which is how the H2D service configures it, but is not enforced.
         const uint32_t elem_size = backing.element_size();
         const auto& logical = backing.tensor_spec().logical_shape();
         TT_FATAL(
@@ -86,9 +85,8 @@ InboundSocketServiceSyncOperation::spec_return_value_t InboundSocketServiceSyncO
         // tokens: identical per-shard spec to the backing tensor.
         specs.push_back(backing_spec);
     } else {
-        // tokens + overhang: the backing spec with its last dim cut in two. Same dtype, layout and
-        // memory config, so each half is byte-for-byte the corresponding slice of what the plain path
-        // would have returned.
+        // tokens + overhang: the backing spec with its last dim cut in two, same dtype and memory config,
+        // so each half is byte-for-byte the corresponding slice of what the unsplit path returns.
         const uint32_t overhang_elems = args.overhang_size_bytes / tensor_args.backing.element_size();
         auto trunk_shape = backing_spec.logical_shape();
         auto overhang_shape = backing_spec.logical_shape();

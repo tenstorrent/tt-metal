@@ -2,15 +2,10 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Config for one GLM-5.2 MTP (Multi-Token-Prediction) module.
+"""Config for one GLM-5.2 MTP module.
 
-Values come from the GLM-5.2 HF checkout's ``config.json`` (architecture ``GlmMoeDsaForCausalLM``,
-model_type ``glm_moe_dsa``). Read directly as JSON rather than through ``AutoConfig``:
-``glm_moe_dsa`` is not AutoConfig-loadable on the transformers versions on this box, which is why
-``runners/adapters/glm_5_2.py`` also hand-rolls its config load.
-
-Deliberately small. It carries only what the MTP module itself needs; the decoder layer inside the
-module is configured by the ordinary GLM config/model_config pair, unchanged. See issue #53533.
+Values are read straight out of the HF checkout's config.json: glm_moe_dsa is not AutoConfig-loadable
+on the transformers versions here, which is why the GLM-5.2 runner adapter also loads it by hand.
 """
 
 from __future__ import annotations
@@ -24,24 +19,8 @@ from dataclasses import dataclass
 class MTPConfig:
     """Geometry and layout for MTP prefill.
 
-    Attributes:
-        hidden_size: model hidden dim (6144). ``eh_proj`` is ``[hidden_size, 2 * hidden_size]``.
-        rms_norm_eps: epsilon for ``enorm`` / ``hnorm`` / ``shared_head.norm``.
-        mtp_layer_idx: layer index the MTP weights live on. GLM-5.2 stores them at
-            ``model.layers.78.*``, i.e. one past the last trunk layer (``num_hidden_layers`` is 78,
-            layers 0..77). Verified against the checkpoint index, not assumed.
-        num_weight_modules: how many distinct sets of MTP *weights* the checkpoint carries, from
-            ``num_nextn_predict_layers``. For GLM-5.2 this is **1**, and it is a trap: it does NOT
-            mean one prediction level. See :attr:`num_levels`.
-        num_levels: how many prediction levels to *run*. This is a serving choice, not a checkpoint
-            fact — GLM-5.2 ships one weight module and MTP4 runs it at four levels (the
-            DeepSeek-V3 paper scheme: K levels at ONE position, K KV caches, one shared weight
-            module; not EAGLE-style autoregressive drafting). Stage 1 runs 1.
-        index_share_for_mtp_iteration: from ``config.json``; True for GLM-5.2. The MTP layer's
-            lightning-indexer top-k is computed once and reused across MTP levels rather than
-            recomputed per level. A no-op at ``num_levels == 1``; load-bearing from level 2 on.
-        first_k_dense_replace: dense-layer count (3). ``mtp_layer_idx >= first_k_dense_replace``, so
-            the MTP layer is MoE — layer 78 really does carry 256 routed experts in fp8.
+    ``num_weight_modules`` comes from the checkpoint and counts weight modules, not prediction levels;
+    ``num_levels`` is the serving choice of how many levels to run over those weights.
     """
 
     hidden_size: int = 6144
@@ -59,7 +38,7 @@ class MTPConfig:
 
     @property
     def is_moe_layer(self) -> bool:
-        """Whether the MTP layer is an MoE layer — the same test ``TtPrefillBlock`` applies."""
+        """Whether the MTP layer is an MoE layer -- the same test ``TtPrefillBlock`` applies."""
         return self.mtp_layer_idx >= self.first_k_dense_replace
 
     @property
@@ -67,20 +46,12 @@ class MTPConfig:
         """Width of the concatenated ``[enorm(embed), hnorm(hidden)]`` activation (12288)."""
         return 2 * self.hidden_size
 
-    def shares_weights_across_levels(self) -> bool:
-        """True when fewer weight modules than levels, i.e. one module is replayed per level."""
-        return self.num_weight_modules < self.num_levels
-
     @classmethod
     def from_hf_config(cls, c, *, num_levels: int | None = None) -> "MTPConfig":
-        """Build from an already-loaded HF config (attribute object or plain dict).
+        """Build from an already-loaded HF config, either a mapping or an attribute object.
 
-        Args:
-            c: the GLM-5.2 config, as either a mapping or an attribute-style object
-                (``glm_5_2_hf_config()`` returns a ``SimpleNamespace``).
-            num_levels: prediction levels to run. Defaults to 1 — deliberately NOT
-                ``num_nextn_predict_layers``, which counts weight modules and would silently pin
-                MTP4 to one level.
+        ``num_levels`` defaults to 1 rather than to ``num_nextn_predict_layers``, which counts weight
+        modules.
         """
         get = c.get if isinstance(c, dict) else (lambda k, d=None: getattr(c, k, d))
         d = cls()
@@ -99,11 +70,10 @@ class MTPConfig:
 
     @classmethod
     def from_pretrained(cls, path: str, *, num_levels: int | None = None) -> "MTPConfig":
-        """Build from a HF checkpoint directory (``$GLM52_HF_MODEL``) and verify the weights exist.
+        """Build from a HF checkpoint directory and confirm the MTP weights are really there.
 
-        ``mtp_layer_idx`` is derived as ``num_hidden_layers``, then checked against the checkpoint's
-        own tensor index — a checkout with no MTP weights fails here with a readable message rather
-        than at the first mesh-mapper call.
+        ``mtp_layer_idx`` is derived from the layer count, then checked against the checkpoint's tensor
+        index, so a checkout without MTP weights fails here with a readable message.
         """
         with open(os.path.join(path, "config.json")) as f:
             cfg = json.load(f)

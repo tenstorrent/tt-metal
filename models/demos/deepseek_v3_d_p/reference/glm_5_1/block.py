@@ -68,23 +68,18 @@ def glm_decoder_layer_reference(
         moe_weights: MoE-layer weights {"gate_weights","routed_expert_weights","shared_expert_weights"}.
             Exactly one must be given. The MoE uses GLM's own routing config (GLM51Config: 256 routed
             experts, single-group top-k n_group=topk_group=1, top-8, route_scale=2.5) — not DeepSeek's.
-        indexer_topk: override the indexer's top-k selection with indices computed by another layer,
-            the CPU dual of ttMLA's ``indexer_indices``. GLM-5.2's ``index_share_for_mtp_iteration``
-            and its ``indexer_types`` "shared" layers both need it; see ``SparseMLAReference.forward``.
-        return_indexer_topk: also return this layer's top-k [1, seq, index_topk], so a caller running
-            a stack can feed it to the sharing layers that follow.
+        indexer_topk: attend through another layer's top-k instead of this layer's, the CPU dual of
+            ttMLA's ``indexer_indices``. Needed by GLM-5.2's shared and MTP-iteration index reuse.
+        return_indexer_topk: also return this layer's top-k [1, seq, index_topk], for a caller
+            running a stack that has to feed the sharing layers behind it.
         mla_ref: a caller-owned ``SparseMLAReference`` to attend through instead of a fresh one.
-            Required for chunked prefill: the KV/index caches and the fill watermark live on the
-            instance, so a layer that is called once per chunk must be handed the SAME object every
-            time or each chunk attends only over itself. ``None`` builds a fresh single-shot
-            instance, which is what an unchunked caller wants.
-        actual_start / actual_end: this call's cache write window, forwarded to
-            ``SparseMLAReference.forward``. The defaults (0 / ``start + seq``) reproduce a
+            Required for chunked prefill -- the caches and the fill watermark live on the instance.
+        actual_start / actual_end: this call's cache write window. The defaults reproduce a
             single-shot pass exactly, so existing callers are unaffected.
 
     Returns:
-        (output [1, seq, hidden], kvpe_cache) — kvpe in the device layout for KVPE-PCC checks; with
-        ``return_indexer_topk`` a third element, the layer's top-k indices.
+        (output [1, seq, hidden], kvpe_cache) in the device layout; with ``return_indexer_topk``
+        a third element, the layer's top-k indices.
     """
     if (ffn_weights is None) == (moe_weights is None):
         raise ValueError("provide exactly one of ffn_weights (dense) or moe_weights (MoE)")

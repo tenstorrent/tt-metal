@@ -191,10 +191,8 @@ class SparseMLAReference:
             ), f"injected top-k {tuple(self._inject_topk.shape)} != computed {tuple(topk.shape)}"
             topk = self._inject_topk
             self._last_topk, self._last_logits = topk, logits
-            # A forward hook that returns non-None REPLACES the module's output, so the override
-            # reaches sparse attention without MLACPU or the indexer knowing anything about it. The
-            # indexer still runs (and still fills its own k_cache) — only its selection is discarded,
-            # which is what the device does too when ttMLA short-circuits on injected indices.
+            # A forward hook returning non-None replaces the module's output, so the override
+            # reaches sparse attention without MLACPU or the indexer knowing about it.
             return topk, logits
         self._last_topk, self._last_logits = topk, logits
 
@@ -213,13 +211,8 @@ class SparseMLAReference:
         KV/index caches are exposed via the properties below. Chunked prefill = call this in a loop with
         increasing ``actual_start`` (the same pattern as the device chunked test).
 
-        ``indexer_topk`` overrides the indexer's selection with indices computed elsewhere — the CPU
-        dual of ttMLA's ``indexer_indices`` argument, which short-circuits the device indexer the same
-        way. It exists for GLM-5.2 cross-layer index reuse (``index_share_for_mtp_iteration``): the
-        sharing layers must attend to the SHARING layer's keys, and a reference that recomputed its
-        own top-k would disagree with the device on every row where top-k is selective (``seq_len >
-        index_topk``) for reasons that have nothing to do with the layer under test. Default None
-        leaves the indexer in charge, exactly as before.
+        ``indexer_topk`` overrides the indexer's selection with indices computed elsewhere, the CPU
+        dual of ttMLA's ``indexer_indices``. It exists for GLM-5.2 cross-layer index reuse.
         """
         x = hidden_states.to(torch.bfloat16)
         seqlen = x.shape[-2]

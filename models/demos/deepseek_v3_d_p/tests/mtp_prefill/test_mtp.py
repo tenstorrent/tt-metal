@@ -2,29 +2,10 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""PCC tests for GLM-5.2 MTP (issue #53533), single galaxy.
+"""PCC tests for GLM-5.2 MTP, single galaxy.
 
-Four tests, most-local first, so a failure localises itself:
-
-1. ``test_fused_mtp_pcc`` — ``TtFusedMTP`` vs ``fused_mtp_reference``. The only new math in the
-   feature, on both random and real weights. It opens with a host-side check of the ``eh_proj`` TP
-   shard permutation, which fails per chip before any device op — end-to-end PCC alone would say
-   that something is wrong but not which chip.
-2. ``test_mtp_module_pcc`` — the whole ``TtMTPModule`` (fused projection + layer 78 + ``shared_head.norm``)
-   vs ``glm_mtp_module_reference``. Its ``index_kv_cache`` sizing is what covers the MTP layer's
-   ``indexer_types`` slot; see the comment at that call.
-
-3. ``test_mtp_predictor_pcc`` — ``TtMTPPredictor`` at K = 1 and K = 4 vs
-   ``glm_mtp_predictor_reference``. Adds what a single level cannot cover: the K-level recurrence,
-   and **per-slot KV cache** comparison. The KV check is not optional here — a level that wrote the
-   wrong slot still produces the right *output* (single-shot prefill reads back only what that same
-   call just wrote), so nothing else catches a slot collision.
-4. ``test_mtp_predictor_index_share`` — that ``index_share`` reaches the hardware, by object
-   identity on the returned top-k rather than by a diluted numerical differential. Needs no CPU
-   reference, so it costs device time only.
-
-Structure follows ``tests/dflash_prefill/test_dflash.py``; the GLM device plumbing (rope, KV caches,
-sharding, thresholds) follows ``tests/test_prefill_block.py::test_glm_prefill_block``.
+Four tests, most-local first: the fused projection alone, one whole MTP module, K levels over that
+module with per-slot KV comparison, and that index sharing reaches the hardware.
 """
 
 from __future__ import annotations
@@ -58,12 +39,11 @@ from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
 from tests.ttnn.utils_for_testing import assert_with_pcc, comp_pcc
 
-# Two distributed RMSNorms and one matmul — the same op class as tests/pcc/test_rmsnorm.py and
+# Two distributed RMSNorms and one matmul -- the same op class as tests/pcc/test_rmsnorm.py and
 # test_ffn.py, so it earns their threshold rather than a block-level one.
 FUSED_MTP_PCC = 0.999
-# The MTP layer is an ordinary GLM MoE decoder block, so it earns the GLM block threshold measured in
-# tests/test_prefill_block.py:729 (GLM_BLOCK_OUTPUT_PCC), not DeepSeek's PrefillBlockThresholds and
-# not the ~0.93 whole-model KV floor.
+# The MTP layer is an ordinary GLM MoE decoder block, so it earns the GLM block threshold from
+# tests/test_prefill_block.py, not DeepSeek's PrefillBlockThresholds or the whole-model KV floor.
 MTP_MODULE_OUTPUT_PCC = 0.98
 # The KVPE cache is written by the same ttMLA op whatever the model variant, so it earns the value
 # tests/test_prefill_block.py:74 measured for it (PrefillBlockThresholds.kvpe_kv / kvpe_pe).
@@ -75,15 +55,8 @@ SP_AXIS, TP_AXIS = 0, 1
 def _accumulated_pcc(base: float, upstream_levels: int) -> float:
     """``base``'s own PCC budget plus one block's worth of drift per upstream MTP level.
 
-    MTP is a recurrence: level k's hidden input is level k-1's output, so device/reference
-    disagreement is inherited, not reset. The rate is one ``MTP_MODULE_OUTPUT_PCC`` deficit per
-    level, which at S = 5120 is ~2% of rows (PCC ~= 1 - wrong_rows/seq_len, and the known mechanism
-    is the MoE gate picking a different top-8 for a few rows on synthetic input, which is row-local).
-
-    This is a stated *model*, not a measurement — it is what makes a first bring-up run informative
-    instead of red for a threshold reason. Every level's actual PCC is logged; replace this with the
-    measured curve once there is one. ``upstream_levels = 0`` reproduces the Stage-1 thresholds
-    exactly, so level 1 stays a true regression gate on ``test_mtp_module_pcc``.
+    MTP is a recurrence, so device/reference disagreement is inherited rather than reset. A stated
+    model, not a measurement; every level's actual PCC is logged.
     """
     return 1.0 - ((1.0 - base) + upstream_levels * (1.0 - MTP_MODULE_OUTPUT_PCC))
 
@@ -147,7 +120,7 @@ def _glm_norm_weight(hidden, seed):
 
 
 def _glm_random_moe_weights(hidden, moe_intermediate, n_routed, seed):
-    """Mirrors tests/test_prefill_block.py:756 — see :func:`_glm_norm_weight` for why it is copied."""
+    """Mirrors tests/test_prefill_block.py:756 -- see :func:`_glm_norm_weight` for why it is copied."""
     g = torch.Generator().manual_seed(seed)
     hs, ds = hidden**-0.5, moe_intermediate**-0.5
 
@@ -168,10 +141,8 @@ def _glm_random_moe_weights(hidden, moe_intermediate, n_routed, seed):
 def _mtp_level_inputs(num_levels: int, seq_len: int, hidden: int, seed: int = 7):
     """``(embeds, h0)`` for a K-level predictor: K shifted-token embeddings and the trunk hidden.
 
-    Distinct seeds per level, so a loop that reused one embedding, or chained the wrong tensor,
-    cannot pass by symmetry. Position 0 is zeroed on EVERY level's embedding — vLLM zeroes at
-    position 0 for all k, not just k = 1 — via :func:`_mtp_inputs`, whose docstring says why the
-    caller owns it.
+    Distinct seeds per level, so a loop that reused one embedding or chained the wrong tensor cannot
+    pass by symmetry. Position 0 is zeroed on every level's embedding.
     """
     embeds = [_mtp_inputs(seq_len, hidden, seed=seed + k)[0] for k in range(num_levels)]
     _, h0 = _mtp_inputs(seq_len, hidden, seed=seed)
@@ -181,14 +152,8 @@ def _mtp_level_inputs(num_levels: int, seq_len: int, hidden: int, seed: int = 7)
 def _glm52_config_for_mtp(config_only, seq_len: int, layer_idx: int):
     """A GLM-5.2 config with the MTP layer's indexer slot declared, safe to mutate.
 
-    copy.copy, not the shared object: config_only is lru_cached, and enable_mtp_indexer_slot rebinds
-    indexer_types — a 79-entry map left behind would follow every other GLM-5.2 test in the session.
-
-    Declaring the slot is not optional setup: GLM-5.2's indexer_types covers layers 0..77 only, so
-    without it the MTP layer's compacted index-cache slot is 21 of 21 — one past the end — and the
-    index_kv_cache sized below is a slot short. mtp_indexer_types' docstring in
-    tt/mtp_prefill/utils.py has the detail, including why indexer_layer_is_reused/full_indexer_rank
-    look correct regardless.
+    ``copy.copy`` because ``config_only`` is lru_cached. Declaring the slot is not optional setup:
+    GLM-5.2's own map stops at the trunk, so without it the MTP layer's slot is one past the end.
     """
     config = copy.copy(config_only)
     config.max_seq_len = seq_len
@@ -197,7 +162,7 @@ def _glm52_config_for_mtp(config_only, seq_len: int, layer_idx: int):
 
 
 def _glm_layer_weights(variant, config):
-    """Random layer-78 weights — MLA + indexer, both layernorms, and the 256-expert MoE.
+    """Random layer-78 weights -- MLA + indexer, both layernorms, and the 256-expert MoE.
 
     One set drives the device and the CPU reference alike, and (for the predictor) every level: MTP
     is K activations over ONE weight module.
@@ -233,10 +198,8 @@ def _mtp_device_caches(config, mesh_device, seq_len: int, num_cache_slots: int):
     rope_tensors = RotarySetup(config, mesh_device, sp_axis=SP_AXIS, is_balanced=False).get_rope_tensors_indexed(
         cache_seq_len_global=seq_len, chunk_size_global=seq_len
     )
-    # Strided by the compacted full-indexer count. With the MTP layer declared this is 22, and the
-    # module writes slot 21; without the declaration it would be 21 and the write would run off the
-    # end. ONE slot covers the whole MTP stack however many levels it has: TtIndexer._cache_slot
-    # derives the slot from the block's static layer_idx, not from cache_layer_idx.
+    # Strided by the compacted full-indexer count, which the declared MTP slot is what makes big
+    # enough. One slot covers the whole MTP stack: a block's slot comes from its static layer_idx.
     index_kv_cache = init_kvpe_cache(
         kvpe_cache_head_dim=config.index_head_dim,
         mesh_device=mesh_device,
@@ -250,9 +213,7 @@ def _mtp_device_caches(config, mesh_device, seq_len: int, num_cache_slots: int):
     return kvpe_cache, rope_tensors, index_kv_cache
 
 
-# ---------------------------------------------------------------------------
-# Device: the fused projection alone
-# ---------------------------------------------------------------------------
+# --- Device: the fused projection alone ---
 
 
 @pytest.mark.parametrize(
@@ -262,22 +223,17 @@ def _mtp_device_caches(config, mesh_device, seq_len: int, num_cache_slots: int):
 @pytest.mark.parametrize("use_pretrained", [False, True], ids=["random", "pretrained"], indirect=True)
 @pytest.mark.timeout(0)
 def test_fused_mtp_pcc(mesh_device, device_params, num_links, seq_len, use_pretrained, mtp_cfg, mtp_state_dict):
-    """``TtFusedMTP`` vs ``fused_mtp_reference`` — the only new math in the feature.
+    """``TtFusedMTP`` vs ``fused_mtp_reference`` -- the only new math in the feature.
 
-    Runs on real weights too: unlike the full module this touches no MoE gate, so the pretrained leg
-    is meaningful (see ``test_mtp_module_pcc``'s docstring for why the module test cannot).
-    Uses no DSA op, so it is not Blackhole-gated.
+    Runs on real weights too: unlike the full module this touches no MoE gate. Uses no DSA op, so it
+    is not Blackhole-gated.
     """
     topology = per_axis_topology(device_params["fabric_config"])
     hidden = mtp_cfg.hidden_size
     embed, hid = _mtp_inputs(seq_len, hidden)
 
-    # The eh_proj TP shard, checked on the host before any device op. enorm/hnorm each emit the chip's
-    # own slice of the *global* hidden, so chip c's concatenated activation covers two disjoint global
-    # column ranges — not the contiguous block a plain dims=(None, -2) mapper hands it. Getting that
-    # wrong yields a tensor of exactly the right shape holding exactly the wrong rows: no error, and a
-    # collapsed PCC below that names no chip. eh_proj_expected_chip_shard slices the original [H, 2H]
-    # weight rather than restating the permutation, so this is a cross-check, not a tautology.
+    # The eh_proj TP shard, checked on the host before any device op: each chip's concatenated
+    # activation covers two disjoint global column ranges, which a plain mapper would not give it.
     tp = mesh_device.shape[TP_AXIS]
     permuted = eh_proj_to_tt_layout(mtp_state_dict["eh_proj"], tp)
     block = permuted.shape[0] // tp
@@ -311,9 +267,7 @@ def test_fused_mtp_pcc(mesh_device, device_params, num_links, seq_len, use_pretr
     ttnn.synchronize_device(mesh_device)
 
 
-# ---------------------------------------------------------------------------
-# Device: the whole module
-# ---------------------------------------------------------------------------
+# --- Device: the whole module ---
 
 
 @pytest.mark.parametrize(
@@ -335,18 +289,10 @@ def test_mtp_module_pcc(
     mtp_cfg,
     mtp_state_dict,
 ):
-    """``TtMTPModule`` (fused projection + layer 78 + ``shared_head.norm``) vs the composed CPU reference.
+    """``TtMTPModule`` (fused projection + the MTP layer + ``shared_head.norm``) vs the reference.
 
-    **Random weights only, deliberately.** Layer 78 is a 256-expert MoE layer, and
-    ``test_glm_prefill_block`` measured that a trained GLM gate driven by a synthetic input picks
-    different top-8 experts on device than on CPU, collapsing isolated-block PCC to ~0.1 while the
-    same layer scores ~0.995 in context. That is a real-weight-gate x synthetic-input artifact, not
-    an op or weight bug, and it applies verbatim here — an MTP module's input is
-    ``eh_proj(cat[...])`` of two random tensors. Real-weight coverage of the MTP-specific math is
-    ``test_fused_mtp_pcc[pretrained]``; real-weight MoE coverage lives in the transformer tests.
-
-    There is no separate KVPE-cache assertion: in single-shot prefill sparse SDPA reads the cache
-    this same block just wrote, so a corrupted KV shows up in the block output compared here.
+    Random weights only: a trained GLM gate driven by synthetic input picks different experts on
+    device than on CPU. Real-weight coverage of the MTP math is ``test_fused_mtp_pcc[pretrained]``.
     """
     topology = per_axis_topology(device_params["fabric_config"])
     mesh_shape = list(mesh_device.shape)
@@ -415,18 +361,14 @@ def test_mtp_module_pcc(
     ttnn.synchronize_device(mesh_device)
 
 
-# ---------------------------------------------------------------------------
-# Device: K levels over one module
-# ---------------------------------------------------------------------------
+# --- Device: K levels over one module ---
 
 
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links", _MESH_PARAMS, indirect=["mesh_device", "device_params"]
 )
-# K = 1 is the regression leg and the debugging configuration; 4 and 7 are the two that ship. One
-# shared weight module is replayed at every level, so a higher K costs levels and KV slots, not
-# weights -- and num_mtp_tokens rounds both 4 and 7 to the same 32-id socket row, so nothing about
-# the transport changes between them (see test_mtp_transformer_chunks.MTP_LEVEL_AXIS).
+# K = 1 is the regression leg; 4 and 7 are the two that ship. One shared weight module is replayed
+# at every level, so a higher K costs levels and KV slots, not weights.
 @pytest.mark.parametrize("num_levels", [1, 4, 7], ids=["levels1", "levels4", "levels7"])
 @pytest.mark.parametrize("seq_len", [5120], ids=["seq5120"])
 @pytest.mark.parametrize("variant", ["glm_5_2"], indirect=True, ids=["glm52"])
@@ -447,28 +389,8 @@ def test_mtp_predictor_pcc(
 ):
     """``TtMTPPredictor`` at K = 1 and K = 4 vs ``glm_mtp_predictor_reference``, single galaxy.
 
-    Two legs, both cheap to justify:
-
-    * **K = 1** is the regression gate. It runs the predictor over the exact path
-      ``test_mtp_module_pcc`` already validated, so if it moves, the loop broke something rather than
-      the recurrence being hard.
-    * **K = 4** is the shipping config (#53533) and the only leg that can expose a slot-mapping bug.
-
-    Random weights only, for the reason ``test_mtp_module_pcc``'s docstring gives: a trained GLM gate
-    on synthetic input picks different top-8 experts on device than on CPU.
-
-    **The KV assertions are the point of this test.** Every other comparison here is a deeper version
-    of one the module test already makes, but a level that wrote the wrong KV slot still produces the
-    right *output*: in single-shot prefill each level writes the full row range of its slot and reads
-    that same slot back inside the same call, so a collision is invisible everywhere except in the
-    cache itself. ``num_kvpe_cache_layers=num_levels`` plus ``layer_num=num_levels`` makes slot k-1
-    land at batch index k-1 (``cache_batch_idx = cache_user_id * layer_num + cache_layer_idx`` with
-    ``cache_user_id = 0``), which is the layout ``glm_mtp_predictor_reference`` stacks to match.
-
-    Index sharing is on (GLM-5.2's ``index_share_for_mtp_iteration``) and the reference is told so:
-    at seq 5120 with ``index_topk`` 2048 the top-k is selective on ~60% of rows, so a reference that
-    recomputed per level would disagree on most of the sequence for a reason that is not a bug. That
-    the flag reaches the hardware at all is ``test_mtp_predictor_index_share``'s job.
+    The per-slot KV assertions are the point: a level that wrote the wrong slot still produces the
+    right output single-shot, so nothing else catches a collision. Random weights, index sharing on.
     """
     topology = per_axis_topology(device_params["fabric_config"])
     mesh_shape = list(mesh_device.shape)
@@ -585,22 +507,10 @@ def test_mtp_predictor_index_share(
     mtp_cfg,
     mtp_state_dict,
 ):
-    """``index_share`` reaches the hardware — checked by object identity, not by a PCC differential.
+    """``index_share`` reaches the hardware -- checked by object identity, not by a PCC differential.
 
-    ttMLA short-circuits on injected indices (``indices = indexer_indices if indexer_indices is not
-    None else self._indexer.forward(...)``) and returns that same object, so with sharing on level
-    2's returned top-k **is** level 1's tensor and with it off the two are distinct. That is exact:
-    it cannot flake, and it costs no CPU reference.
-
-    A numerical share/no-share differential was the obvious alternative and is a bad test here. The
-    block output is ``x + mla_out + ffn_out`` with an identical residual ``x`` in both runs, so even
-    a materially different top-k is diluted by the residual and the MoE path; the gap would land at
-    some unknown PCC that any threshold either sleeps through or flakes on. The level-2 PCC is still
-    logged below — as an observation of how much sharing changes, with no assertion on it.
-
-    Two levels are enough: sharing is a level-1-to-everyone-else relation, and level 2 is the first
-    consumer. One predictor is built and run twice, since ``index_share`` is pure runtime policy —
-    nothing about the built block depends on it.
+    With sharing on, level 2's returned top-k IS level 1's tensor, which is exact and cannot flake.
+    A numerical differential would be diluted by the residual and land at an unknown PCC.
     """
     topology = per_axis_topology(device_params["fabric_config"])
     layer_idx = mtp_cfg.mtp_layer_idx
