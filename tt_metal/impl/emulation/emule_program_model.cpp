@@ -9,7 +9,6 @@
 
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/hal.hpp>
-#include "jit_build/jit_build_settings.hpp"
 #include <tt-logger/tt-logger.hpp>
 
 namespace tt::tt_metal::emule {
@@ -57,17 +56,11 @@ void collect_kernels(
         ////////////////////////////////////////////////////////////
         // Blaze-only experimental named args
         // Removal is tracked by issue #50953
-        NamedCTArgNamespaces named_ct_arg_namespaces = kd.named_ct_arg_namespaces;
-        // NamedRuntimeArgEntry is a private type (DeferredCompile holds it), so rebuild it
-        // from the POD NamedRtEntry (field/index/length/dispatch flattened by the marshaller).
-        NamedRuntimeArgNamespaces named_runtime_arg_namespaces;
-        for (const auto& [ns, entries] : kd.named_runtime_arg_namespaces) {
-            auto& out = named_runtime_arg_namespaces[ns];
-            for (const auto& e : entries) {
-                out.push_back(
-                    NamedRuntimeArgEntry{e.field, e.index, e.length, static_cast<RuntimeArgDispatch>(e.dispatch)});
-            }
-        }
+        // DeferredCompile carries these as POD (tt_emule::Named{Ct,Rt}Namespaces); the POD->private
+        // NamedRuntimeArgNamespaces conversion happens in jit_compile_kernel, keeping this module free
+        // of jit_build_settings.hpp.
+        const tt_emule::NamedCtNamespaces& named_ct_arg_namespaces = kd.named_ct_arg_namespaces;
+        const tt_emule::NamedRtNamespaces& named_runtime_arg_namespaces = kd.named_runtime_arg_namespaces;
         ////////////////////////////////////////////////////////////
         // Locate this kernel's first-core CoreDescriptor for the CB/DFB geometry tables
         // (first_core = start of the kernel's first core range, matching build_kernel_defines).

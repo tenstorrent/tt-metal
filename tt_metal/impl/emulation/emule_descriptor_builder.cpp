@@ -12,6 +12,9 @@
 
 #include "emule_descriptor_builder.hpp"
 
+#include <set>
+#include <type_traits>
+
 #include "impl/buffers/circular_buffer.hpp"
 #include "impl/buffers/semaphore.hpp"
 #include "impl/context/metal_context.hpp"
@@ -20,7 +23,6 @@
 #include "impl/program/program_impl.hpp"
 #include "llrt/metal_soc_descriptor.hpp"
 #include "emule_device_map.hpp"              // NOC_NODE_ID_BITS
-#include "emule_kernel_defines.hpp"          // compute_proc_ids_and_thread_count, ProcIdList
 #include "emule_tile_geometry.hpp"           // resolve_tile_geometry, ResolvedTileGeometry
 #include "jit_build/jit_build_settings.hpp"  // NamedCTArgNamespaces, NamedRuntimeArgNamespaces
 #include <tt-metalium/kernel_types.hpp>      // DataMovementConfig/ComputeConfig, DataMovementProcessor
@@ -38,6 +40,47 @@
 namespace tt_emule {
 
 using namespace tt::tt_metal;
+
+namespace {
+
+// Per-kernel thread count and the processor ids each thread runs as:
+// - QuasarDataMovementKernel: one thread per DM processor (0..7).
+// - QuasarComputeKernel: one thread per NEO engine (0..3), each running 4 TRISCs.
+// - Other kernels: single thread at the kernel's processor type.
+struct ProcIdList {
+    std::vector<uint8_t> proc_ids;
+    uint32_t num_threads;
+};
+ProcIdList compute_proc_ids_and_thread_count(
+    Kernel& kernel,
+    experimental::quasar::QuasarDataMovementKernel* qdm,
+    experimental::quasar::QuasarComputeKernel* qck) {
+    ProcIdList out{};
+    out.num_threads = 1;
+    if (qdm && !qdm->get_dm_processors().empty()) {
+        for (const auto& proc : qdm->get_dm_processors()) {
+            out.proc_ids.push_back(
+                static_cast<uint8_t>(static_cast<std::underlying_type_t<std::remove_cvref_t<decltype(proc)>>>(proc)));
+        }
+        out.num_threads = static_cast<uint32_t>(qdm->get_dm_processors().size());
+    } else if (qck) {
+        std::set<uint8_t> neo_ids_seen;
+        for (const auto& proc : qck->get_compute_processors()) {
+            uint8_t neo_id = static_cast<uint8_t>(
+                static_cast<std::underlying_type_t<std::remove_cvref_t<decltype(proc)>>>(proc) /
+                experimental::quasar::QUASAR_NUM_COMPUTE_PROCESSORS_PER_TENSIX_ENGINE);
+            if (neo_ids_seen.insert(neo_id).second) {
+                out.proc_ids.push_back(neo_id);
+            }
+        }
+        out.num_threads = static_cast<uint32_t>(neo_ids_seen.size());
+    } else {
+        out.proc_ids.push_back(static_cast<uint8_t>(kernel.get_kernel_processor_type(0)));
+    }
+    return out;
+}
+
+}  // namespace
 
 // ── SocView: mirrors populate_bank_mapping (1184-1284) + build_worker_coord_maps
 //    (1289-1319) + the HAL/arch reads scattered in build_kernel_defines / setup_core_state.
@@ -196,8 +239,7 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
             {
                 auto* qdm = dynamic_cast<experimental::quasar::QuasarDataMovementKernel*>(&k);
                 auto* qck = dynamic_cast<experimental::quasar::QuasarComputeKernel*>(&k);
-                tt::tt_metal::emule::ProcIdList procs =
-                    tt::tt_metal::emule::compute_proc_ids_and_thread_count(k, qdm, qck);
+                ProcIdList procs = compute_proc_ids_and_thread_count(k, qdm, qck);
                 kd.proc_ids.assign(procs.proc_ids.begin(), procs.proc_ids.end());
                 kd.num_threads = procs.num_threads;
                 kd.is_quasar_compute = kd.is_compute && (qck != nullptr);
