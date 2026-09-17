@@ -82,11 +82,12 @@ struct FinishWorkSplit {
     uint32_t row_tiles_per_batch = 0;  // logits R_p / 32
     uint32_t k_tiles = 0;              // div_up(k_rounded, 32)
     uint32_t k_rounded = 0;
-    uint32_t total_units = 0;  // total_tile_rows * k_tiles * 2 (two face-pair halves per tile)
+    uint32_t units_per_tile = 2;  // 2 face-pair halves, or 4 single faces when units are scarce
+    uint32_t total_units = 0;     // total_tile_rows * k_tiles * units_per_tile
     bool index_is_u32 = false;
 };
 
-FinishWorkSplit compute_work_split(const Tensor& input, const Tensor& indices) {
+FinishWorkSplit compute_work_split(const Tensor& input, const Tensor& indices, uint32_t num_cores) {
     FinishWorkSplit split;
     const auto& padded = input.padded_shape();
     split.width_tiles = padded[-1] / TILE_WIDTH;
@@ -94,7 +95,12 @@ FinishWorkSplit compute_work_split(const Tensor& input, const Tensor& indices) {
     split.row_tiles_per_batch = padded[-2] / TILE_HEIGHT;
     split.k_rounded = indices.logical_shape()[-1];
     split.k_tiles = tt::div_up(split.k_rounded, TILE_WIDTH);
-    split.total_units = split.total_tile_rows * split.k_tiles * 2;
+    // A core's time is the gather latency of one unit, so when the half tile units would leave the
+    // grid mostly idle, hand out single faces instead and halve that latency. Past half the grid the
+    // extra cores contend for the same DRAM banks and the halving is lost.
+    const uint32_t half_units = split.total_tile_rows * split.k_tiles * 2;
+    split.units_per_tile = 4 * half_units <= num_cores ? 4 : 2;
+    split.total_units = split.total_tile_rows * split.k_tiles * split.units_per_tile;
     split.index_is_u32 = padded[-1] > std::numeric_limits<uint16_t>::max();
     return split;
 }
@@ -110,8 +116,8 @@ void set_runtime_args(
     const Tensor& indices,
     const Tensor& values_out,
     const Tensor& indices_out) {
-    const auto split = compute_work_split(input, indices);
     const auto grid = input.device()->compute_with_storage_grid_size();
+    const auto split = compute_work_split(input, indices, grid.x * grid.y);
     const auto unit_split = ttnn::split_blocks_for_tilize(CoreCoord(grid.x, grid.y), split.total_units);
 
     const uint32_t logical_rows = input.logical_shape()[-2];
@@ -165,8 +171,8 @@ TopkRouteFinishProgramFactory::cached_program_t TopkRouteFinishProgramFactory::c
 
     auto program = tt::tt_metal::CreateProgram();
 
-    const auto split = compute_work_split(input, indices);
     const auto grid = input.device()->compute_with_storage_grid_size();
+    const auto split = compute_work_split(input, indices, grid.x * grid.y);
     const auto unit_split = ttnn::split_blocks_for_tilize(CoreCoord(grid.x, grid.y), split.total_units);
     const auto& all_cores = unit_split.all_cores;
 
@@ -216,7 +222,8 @@ TopkRouteFinishProgramFactory::cached_program_t TopkRouteFinishProgramFactory::c
         reader_bounce_cb_index,
         values_cb_index,
         indices_cb_index,
-        split.index_is_u32 ? 1u : 0u};
+        split.index_is_u32 ? 1u : 0u,
+        split.units_per_tile};
     tt::tt_metal::TensorAccessorArgs(*input.buffer()).append_to(reader_compile_args);
     tt::tt_metal::TensorAccessorArgs(*indices.buffer()).append_to(reader_compile_args);
     auto reader_kernel = tt::tt_metal::CreateKernel(
@@ -234,7 +241,8 @@ TopkRouteFinishProgramFactory::cached_program_t TopkRouteFinishProgramFactory::c
         writer_bounce_cb_index,
         value_half_bytes,
         idx_half_bytes,
-        split.index_is_u32 ? 1u : 0u};
+        split.index_is_u32 ? 1u : 0u,
+        split.units_per_tile};
     tt::tt_metal::TensorAccessorArgs(*values_out.buffer()).append_to(writer_compile_args);
     tt::tt_metal::TensorAccessorArgs(*indices_out.buffer()).append_to(writer_compile_args);
     tt::tt_metal::TensorAccessorArgs(*input.buffer()).append_to(writer_compile_args);
