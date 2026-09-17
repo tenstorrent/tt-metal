@@ -44,9 +44,6 @@ public:
         bool settled() const { return n >= kSettledCount; }
         double wall_of_refclk(double r) const { return w_last + slope() * (r - r_last); }
         double refclk_of_wall(double w) const { return r_last + (w - w_last) / slope(); }
-        // A sample is the wall tick of one refclk update, caught to within a cycle; the intercept is their mean.
-        double residual_ticks() const { return 1.0; }
-        double se_ticks(double) const { return n > 0 ? residual_ticks() / std::sqrt(static_cast<double>(n)) : 0.0; }
     };
 
     std::vector<Run> runs;  // in time order, disjoint in refclk
@@ -211,15 +208,11 @@ private:
     };
     // Whether the solution was accepted into `out`.
     bool solve_link(const CaptureContext::Link& L, std::vector<RoundPoint> pts, LinkSolution& out) const;
-    // A device's refclk onto the root's: root_refclk = scale * dev_refclk + shift; prec_ns the precision of the
-    // solutions composed along the way.
+    // A device's refclk onto the root's: root_refclk = scale * dev_refclk + shift.
     struct RootXf {
-        double scale = 1.0, shift = 0.0, prec_ns = 0.0;
+        double scale = 1.0, shift = 0.0;
         bool ok = false;
     };
-    // The largest disagreement of a solved link with the tree's composition around its loop: the fleet's path
-    // asymmetry as far as its loops reveal it.
-    double max_closure_ns() const;
     // One solution per chip pair: a pair's solved links combined by precision-weighted means of their rates and of
     // their offsets at a common midpoint, so parallel links average their path asymmetries. `members` gets the
     // links behind each.
@@ -246,10 +239,9 @@ private:
         RoundTerms* terms = nullptr) const;
     // A placement node: at eth wall tick H the chip sits at root refclk tick `root`; r is the chip's own refclk it
     // was placed at, tangent the run's rate on the root (root refclk ticks per wall tick), the map past the newest
-    // node, and sigma the standard deviation of `root` in ns (the run's line at r and the link solutions the chip
-    // reaches the root through).
+    // node.
     struct Node {
-        double H, root, r, tangent, sigma;
+        double H, root, r, tangent;
     };
     // One published series of a chip. Its nodes are frozen (consumers have placed records against them), so a
     // publish only appends beyond them; `cover_H` is how far the newest node's tangent has been confirmed by the
@@ -259,8 +251,6 @@ private:
         // The root refclk at wall tick H as the published series places it: between its nodes, along the first's
         // tangent before them, along the last's beyond. NaN with no node.
         double root_at(double H) const;
-        // The larger sigma of the nodes bracketing H.
-        double sigma_at(double H) const;
         size_t knots = 0;
         double last_r = -1.0;
         double cover_H = -1.0;

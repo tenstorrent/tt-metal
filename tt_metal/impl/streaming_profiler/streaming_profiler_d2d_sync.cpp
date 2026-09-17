@@ -189,7 +189,6 @@ void D2dSyncConsumer::try_solve_links(bool final) {
         if (solve_link(L, std::move(pts), out)) {
             out.rounds = w;
             solve_gen_++;
-            map_.set_asymmetry_ns(max_closure_ns());
             log_info(
                 tt::LogMetal,
                 "[streaming profiler] d2d sync link chip {} -> chip {}: solved at round {} over {} ({} kept): offset "
@@ -307,7 +306,7 @@ size_t D2dSyncConsumer::pair_size(size_t li) const {
 std::map<uint32_t, D2dSyncConsumer::RootXf> D2dSyncConsumer::root_transforms(
     uint32_t root, std::vector<bool>* used) const {
     std::map<uint32_t, RootXf> to_root;
-    to_root[root] = RootXf{1.0, 0.0, 0.0, true};
+    to_root[root] = RootXf{1.0, 0.0, true};
     if (used != nullptr) {
         used->assign(solved_.size(), false);
     }
@@ -327,18 +326,15 @@ std::map<uint32_t, D2dSyncConsumer::RootXf> D2dSyncConsumer::root_transforms(
             const auto ss = to_root.find(s.dev_snd);
             const bool r_ok = rs != to_root.end() && rs->second.ok;
             const bool s_ok = ss != to_root.end() && ss->second.ok;
-            const auto along = [&](const RootXf& from) {
-                return std::sqrt(from.prec_ns * from.prec_ns + s.precision_ns * s.precision_ns);
-            };
             if (s_ok && !r_ok) {
                 // root = A_s * sender + B_s, and sender = (receiver - o) / m.
                 const RootXf& S = ss->second;
-                to_root[s.dev_rcv] = RootXf{S.scale / m, S.shift - S.scale * o / m, along(S), true};
+                to_root[s.dev_rcv] = RootXf{S.scale / m, S.shift - S.scale * o / m, true};
                 progress = true;
             } else if (r_ok && !s_ok) {
                 // root = A_r * receiver + B_r, and receiver = m * sender + o.
                 const RootXf& R = rs->second;
-                to_root[s.dev_snd] = RootXf{R.scale * m, R.scale * o + R.shift, along(R), true};
+                to_root[s.dev_snd] = RootXf{R.scale * m, R.scale * o + R.shift, true};
                 progress = true;
             } else {
                 continue;
@@ -350,30 +346,6 @@ std::map<uint32_t, D2dSyncConsumer::RootXf> D2dSyncConsumer::root_transforms(
         }
     }
     return to_root;
-}
-
-double D2dSyncConsumer::max_closure_ns() const {
-    if (local_.empty()) {
-        return 0.0;
-    }
-    std::vector<bool> used;
-    const std::map<uint32_t, RootXf> to_root = root_transforms(root_dev(), &used);
-    double worst = 0.0;
-    for (size_t li = 0; li < solved_.size(); li++) {
-        const LinkSolution& s = solved_[li];
-        if (!s.ok || used[li]) {
-            continue;
-        }
-        const auto S = to_root.find(s.dev_snd);
-        const auto R = to_root.find(s.dev_rcv);
-        if (S == to_root.end() || R == to_root.end() || !S->second.ok || !R->second.ok) {
-            continue;
-        }
-        const double direct = (1.0 + s.rate) * s.mid + (s.offset_ticks - s.rate * s.mid);
-        const double via_tree = (S->second.scale * s.mid + S->second.shift - R->second.shift) / R->second.scale;
-        worst = std::max(worst, std::abs(via_tree - direct) * 20.0);
-    }
-    return worst;
 }
 
 double D2dSyncConsumer::Series::root_at(double H) const {
@@ -389,16 +361,6 @@ double D2dSyncConsumer::Series::root_at(double H) const {
         return a.root + a.tangent * (H - a.H);
     }
     return a.root + (it->root - a.root) * (H - a.H) / (it->H - a.H);
-}
-
-double D2dSyncConsumer::Series::sigma_at(double H) const {
-    if (nodes.empty()) {
-        return std::numeric_limits<double>::infinity();
-    }
-    auto it = std::upper_bound(nodes.begin(), nodes.end(), H, [](double h, const Node& n) { return h < n.H; });
-    const Node& b = it == nodes.end() ? nodes.back() : *it;
-    const Node& a = it == nodes.begin() ? *it : *(it - 1);
-    return std::max(a.sigma, b.sigma) + (it == nodes.end() ? kFreezeNs : 0.0);
 }
 
 double D2dSyncConsumer::tsc_at(double root) const {
@@ -430,9 +392,6 @@ D2dSyncConsumer::Fresh D2dSyncConsumer::fresh_nodes(const Series& s, const Local
         const double T = run.wall_of_refclk(r);
         const double root = xf.scale * r + xf.shift;
         const double tangent = xf.scale / run.slope();
-        const double wall_ghz = run.slope() * LocalClockModel::kRefclkHz * 1e-9;
-        const double se_ns = wall_ghz > 0.0 ? run.se_ticks(r) / wall_ghz : 0.0;
-        const double sigma = std::sqrt(se_ns * se_ns + xf.prec_ns * xf.prec_ns);
         if (!(tangent > 0.0 && tangent < 1.0)) {
             log_warning(
                 tt::LogMetal,
@@ -445,7 +404,7 @@ D2dSyncConsumer::Fresh D2dSyncConsumer::fresh_nodes(const Series& s, const Local
                 run.k8,
                 xf.scale);
         }
-        return Node{T, root, r, tangent, sigma};
+        return Node{T, root, r, tangent};
     };
     // Nodes only where the map bends: at the first sample, at each run boundary (the transition, placed where the
     // two exact lines meet, or two nodes a stride apart bridging the intercept step when the slopes agree), and the
@@ -515,8 +474,7 @@ void D2dSyncConsumer::push_node(Series& s, uint32_t chip, const Node& n) {
     s.cover_H = n.H;
     s.cover_r = n.r;
     s.last_r = std::max(s.last_r, n.r);
-    map_.append(
-        chip, SyncNode{.at = wall, .value = n.root, .tangent = n.tangent, .sigma_ns = static_cast<float>(n.sigma)});
+    map_.append(chip, SyncNode{.at = wall, .value = n.root, .tangent = n.tangent});
 }
 
 // Frozen nodes never move (consumers have placed records against them), so a publish can only add beyond them, at
@@ -542,10 +500,7 @@ void D2dSyncConsumer::freeze_append(Series& s, uint32_t chip, const Node& n) {
     // The tangent's confirmed stretch becomes a node first, so nothing placed on it changes.
     if (!s.nodes.empty() && s.cover_H > s.nodes.back().H + 0.5) {
         const Node& last = s.nodes.back();
-        push_node(
-            s,
-            chip,
-            Node{s.cover_H, last.root + last.tangent * (s.cover_H - last.H), s.cover_r, last.tangent, last.sigma});
+        push_node(s, chip, Node{s.cover_H, last.root + last.tangent * (s.cover_H - last.H), s.cover_r, last.tangent});
     }
     if (!std::isfinite(n.H) || !std::isfinite(n.root) || !std::isfinite(n.tangent) ||
         !(n.tangent > 0.0 && n.tangent < 1.0)) {

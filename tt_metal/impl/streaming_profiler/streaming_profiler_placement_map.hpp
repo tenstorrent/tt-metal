@@ -16,14 +16,12 @@
 namespace tt::tt_metal::streaming_profiler {
 
 // One frozen node of a placement series: at `at` the placement is `value`, linear to the next node, and past the
-// newest node along `tangent` (d value / d at) as far as the series' cover reaches. sigma_ns is the standard
-// deviation of `value` at the node, in ns.
+// newest node along `tangent` (d value / d at) as far as the series' cover reaches.
 template <typename Key>
 struct PlacementNode {
     Key at{};
     double value = 0.0;
     double tangent = 0.0;
-    float sigma_ns = 0.0f;
 };
 // A chip's series: its eth wall tick -> the root chip's refclk tick, from the link solutions and the local fits alone,
 // so two chips' records at one instant differ by nothing the host contributes. Worker lanes reach the eth wall
@@ -57,7 +55,6 @@ public:
     // Nodes a series keeps (32 MB at most); the oldest go as newer ones arrive. Nodes come per local clock step and
     // per host burst, so this spans hours of a capture and any consumer's lag behind the sync.
     static constexpr uint32_t kSeriesNodes = 1u << 20;
-    static constexpr double kSigmas = 3.0;
 
     PlacementMap();
     ~PlacementMap();
@@ -73,18 +70,11 @@ public:
     // Empties a chip's series for a new capture.
     void clear(uint32_t chip_id);
     void append_host(HostNode node);
-    void extend_host(double cover_root);
-    // The largest loop closure the link solutions have shown, the part of a placement's error the loops can see
-    // but no link's stamps can.
-    void set_asymmetry_ns(double ns) noexcept;
 
     // The root refclk tick of a chip's eth wall tick; 0 before the chip's first node.
     double lookup_root(uint32_t chip_id, int64_t wall) const noexcept;
     // The host TSC tick of a chip's eth wall tick; 0 before the chip's first node or the host's.
     int64_t lookup_tsc(uint32_t chip_id, int64_t wall) const noexcept;
-    // The uncertainty of that placement against other chips' records: kSigmas standard deviations of its segment's
-    // nodes plus the fleet's path asymmetry; INT64_MAX before the chip's first node.
-    int64_t lookup_error_ns(uint32_t chip_id, int64_t wall) const noexcept;
     // Wall tick `wall` of chip `chip_id` on host_clock (tenths of a ns of the TSC): the chip series and the host
     // series composed into one line per segment pair, one multiply-add per record while a batch stays inside it. 0
     // when nothing places the tick yet.

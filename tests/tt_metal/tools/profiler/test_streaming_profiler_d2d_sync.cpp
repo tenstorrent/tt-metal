@@ -14,8 +14,8 @@
 //   (b) chip 0 after its switch: the run boundary must be placed where the two lines meet;
 //   (c) chip 1 (one hop): only the 0-1 link places it;
 //   (d) chip 2 (two hops): only 0-1 composed with 1-2 places it, refclk offset and all.
-// The root-refclk placement (the d2d level, which the host series never enters), the steady_clock view
-// (tsc_to_mono_ns through a known segment) and the published bound are checked alongside.
+// The root-refclk placement (the d2d level, which the host series never enters) and the steady_clock view
+// (tsc_to_mono_ns through a known segment) are checked alongside.
 //
 // Chip 1 is a receiver (of 0-1) AND a sender (of 1-2), on two DIFFERENT eth cores -- exactly as real hardware, where
 // each link owns its own eth core -- so its two stamp streams stay separate.
@@ -44,16 +44,6 @@ static void check_near(const char* what, double got, double want, double tol) {
         std::printf("ok   %s: err %.3f ns (tol %.1f)\n", what, got - want, tol);
     }
 }
-static void check_bound(const char* what, double err, int64_t bound) {
-    if (bound == INT64_MAX || std::fabs(err) > static_cast<double>(bound)) {
-        std::printf(
-            "FAIL %s: error %.3f ns outside the published bound %lld ns\n", what, err, static_cast<long long>(bound));
-        g_fail++;
-    } else {
-        std::printf("ok   %s: bound %lld ns covers %.3f\n", what, static_cast<long long>(bound), err);
-    }
-}
-
 constexpr double kRefHz = 50e6;
 constexpr double kF0 = 1.35e9;           // AICLK at boot on every chip
 constexpr double kSlow = 26.875 / 27.0;  // chip 0's AICLK after its DVFS switch: one 1/8 step of the PLL multiple
@@ -121,7 +111,7 @@ int main() {
     // out along a tangent.
     for (double tau : {0.0, 0.6}) {
         sync.map().append_host(
-            HostNode{.at = refclk(0, tau), .value = tsc(tau), .tangent = kTicksPerNs * 1e9 / kRefHz, .sigma_ns = 5.0f});
+            HostNode{.at = refclk(0, tau), .value = tsc(tau), .tangent = kTicksPerNs * 1e9 / kRefHz});
     }
     SteadySegment seg;
     seg.tsc0 = static_cast<int64_t>(kTsc0);
@@ -252,11 +242,6 @@ int main() {
         for (double tau : {0.050, 0.500, 0.950}) {
             std::snprintf(what, sizeof what, "steady chip%d tau=%.3f", c, tau);
             check_near(what, steady_ns(c, tau), host_ns(tau), 6.0);
-            std::snprintf(what, sizeof what, "bound chip%d tau=%.3f", c, tau);
-            check_bound(
-                what,
-                placed_ns(c, tau),
-                sync.map().lookup_error_ns(static_cast<uint32_t>(c), std::llround(wall(c, tau))));
         }
     }
     // The composed placement the service stamps records with must be the two-level lookup, everywhere: across chip

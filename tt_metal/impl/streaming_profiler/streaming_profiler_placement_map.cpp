@@ -96,10 +96,7 @@ struct Cursor {
     Key origin{};
     double value = 0.0;
     double slope = 0.0;
-    float sigma = 0.0f;  // of the segment's value: its nodes' largest, plus the freeze margin on the open tangent
 };
-// The margin a frontier may sit from the frozen tangent before a node is frozen (D2dSyncConsumer::kFreezeNs).
-constexpr float kOpenMarginNs = 0.25f;
 template <typename Key>
 inline double on_line(const Cursor<Key>& c, Key t) noexcept {
     return c.value + c.slope * static_cast<double>(t - c.origin);
@@ -116,7 +113,7 @@ bool refill(const Log<Key>& log, Cursor<Key>& c, Key t, double& value) noexcept 
         const uint64_t f = log.nodes.first();
         const uint64_t n = log.nodes.count();
         if (n == f) {
-            c = Cursor<Key>{.gen = gen, .sigma = std::numeric_limits<float>::infinity()};
+            c = Cursor<Key>{.gen = gen};
             return false;
         }
         Node a{}, b{};
@@ -135,26 +132,19 @@ bool refill(const Log<Key>& log, Cursor<Key>& c, Key t, double& value) noexcept 
             continue;
         }
         if (lo == f) {
-            c = Cursor<Key>{gen, key_min<Key>(), a.at, a.at, a.value, a.tangent, a.sigma_ns};
+            c = Cursor<Key>{gen, key_min<Key>(), a.at, a.at, a.value, a.tangent};
         } else if (lo < n) {
             if (!log.nodes.read(lo, b)) {
                 continue;
             }
-            c = Cursor<Key>{
-                gen,
-                a.at,
-                b.at,
-                a.at,
-                a.value,
-                (b.value - a.value) / static_cast<double>(b.at - a.at),
-                std::max(a.sigma_ns, b.sigma_ns)};
+            c = Cursor<Key>{gen, a.at, b.at, a.at, a.value, (b.value - a.value) / static_cast<double>(b.at - a.at)};
         } else if (t <= cover) {
-            c = Cursor<Key>{gen, a.at, cover, a.at, a.value, a.tangent, a.sigma_ns + kOpenMarginNs};
+            c = Cursor<Key>{gen, a.at, cover, a.at, a.value, a.tangent};
         } else {
             // Past the cover: a batch the service released before the sync covered it (counted and reported as a
             // fault). The newest tangent carries on; holding still here would collapse every such record onto one
             // instant. Not cached, the cover moves.
-            c = Cursor<Key>{.gen = gen, .sigma = a.sigma_ns + kOpenMarginNs};
+            c = Cursor<Key>{.gen = gen};
             value = a.value + a.tangent * static_cast<double>(t - a.at);
             return true;
         }
@@ -216,7 +206,6 @@ struct PlacementMap::Impl {
     std::array<Log<int64_t>, kMaxChips> chips;
     Log<double> host;
     alignas(64) std::atomic<uint64_t> cover_generation{0};
-    std::atomic<double> asymmetry_ns{0.0};
 };
 
 PlacementMap::PlacementMap() : impl_(std::make_unique<Impl>()) {}
@@ -262,10 +251,6 @@ void PlacementMap::append_host(HostNode node) {
         node.tangent);
     impl_->host.append(kHostSeries, node);
 }
-
-void PlacementMap::extend_host(double cover_root) { impl_->host.extend(cover_root); }
-
-void PlacementMap::set_asymmetry_ns(double ns) noexcept { impl_->asymmetry_ns.store(ns, std::memory_order_relaxed); }
 
 int64_t PlacementMap::cover_ticks(uint32_t chip_id) const noexcept {
     if (chip_id >= kMaxChips) {
@@ -354,19 +339,6 @@ int64_t PlacementMap::place_host(uint32_t chip_id, int64_t wall) const noexcept 
         k.b = std::min(cc.b, static_cast<int64_t>(std::floor(wb)));
     }
     return std::llround(k.value);
-}
-
-int64_t PlacementMap::lookup_error_ns(uint32_t chip_id, int64_t wall) const noexcept {
-    double root = 0.0;
-    if (chip_id >= kMaxChips) {
-        return std::numeric_limits<int64_t>::max();
-    }
-    Cursor<int64_t>& c = view_of(impl_.get()).chip[chip_id];
-    if (!place(impl_->chips[chip_id], c, wall, root)) {
-        return std::numeric_limits<int64_t>::max();
-    }
-    const double e = kSigmas * static_cast<double>(c.sigma) + impl_->asymmetry_ns.load(std::memory_order_relaxed);
-    return static_cast<int64_t>(std::ceil(e));
 }
 
 void SteadyView::set(const SteadySegment& segment) noexcept {

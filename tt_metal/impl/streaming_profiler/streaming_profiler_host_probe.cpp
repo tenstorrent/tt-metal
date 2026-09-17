@@ -302,11 +302,7 @@ void HostProbe::run() {
         // A node per burst: the line as it stands, at the burst's own instant. Records placed between two
         // bursts run on the newer node's tangent; those placed later interpolate between the nodes.
         if (l.ok && l.bursts >= 3) {
-            map_.append_host(HostNode{
-                .at = p.refclk,
-                .value = l.tsc_of(p.refclk),
-                .tangent = l.b,
-                .sigma_ns = static_cast<float>(l.sigma_ns)});
+            map_.append_host(HostNode{.at = p.refclk, .value = l.tsc_of(p.refclk), .tangent = l.b});
         }
     };
     while (!stop_.load(std::memory_order_acquire)) {
