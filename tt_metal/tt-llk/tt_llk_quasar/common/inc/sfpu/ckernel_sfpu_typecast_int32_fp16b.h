@@ -12,10 +12,14 @@ namespace ckernel
 namespace sfpu
 {
 // Calculates Typecast for number of rows of output SFPU ops (Quasar = 2 rows)
+//
+// Unpack-to-Dest copies Int32 L1 bits as two's-complement (see _mul_int32_). Cast mode 0
+// (int32 → fp32 RNE) reads sign-magnitude, so convert 2SC → SM before the cast. An Int32
+// source also forces 32-bit Dest; name INT32 / FP16B explicitly instead of sfpmem::DEFAULT.
 inline void _calculate_typecast_int32_to_fp16b_rows()
 {
-    TTI_SFPLOAD(p_sfpu::LREG0, p_sfpu::sfpmem::INT32, ADDR_MOD_7, 0, 0); // load from dest into lreg[0], uses ADDR_MOD_7 (set to all zeroes)
-    // TTI_SFPCAST(p_sfpu::LREG0, p_sfpu::LREG2, 3); //convert from 2s complement to sign+magnitude
+    TTI_SFPLOAD(p_sfpu::LREG0, p_sfpu::sfpmem::INT32, ADDR_MOD_7, 0, 0);              // load from dest into lreg[0], uses ADDR_MOD_7 (set to all zeroes)
+    TTI_SFPCAST(p_sfpu::LREG0, p_sfpu::LREG0, p_sfpu::sfp_sfpcast_mod::TWO_SC_TO_SM); // 2's complement → sign-magnitude
 
     TTI_SFPCAST(p_sfpu::LREG0, p_sfpu::LREG1, 0); // convert from int32 sign+mag to fp32 using rnd nearest even
     TTI_SFP_STOCH_RND(
