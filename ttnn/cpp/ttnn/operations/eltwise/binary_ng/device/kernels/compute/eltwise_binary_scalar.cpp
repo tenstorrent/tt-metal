@@ -29,18 +29,18 @@ void kernel_main() {
     // c_0/c_1 because the host already swapped the activation lists before emitting the defines.
     // Swapping them here as well would apply each activation to the wrong operand.
 #if SCALAR_IS_LHS
-    constexpr auto cb_op_a_id = cb_post_rhs_id;
-    constexpr auto cb_op_b_id = cb_post_lhs_id;
-#else
-    constexpr auto cb_op_a_id = cb_post_lhs_id;
-    constexpr auto cb_op_b_id = cb_post_rhs_id;
-#endif
-    // PREPROCESS must restore the same SrcA format that startup and the FPU use.
     static_assert(
-        cb_op_a_id == BINARY_FPU_SRCA_FORMAT_CB,
+        cb_post_rhs_id == BINARY_FPU_SRCA_FORMAT_CB,
         "binary_ng: FPU SrcA startup operand disagrees with the preprocessing restore reference");
-    CircularBuffer cb_op_a(cb_op_a_id);
-    CircularBuffer cb_op_b(cb_op_b_id);
+    CircularBuffer& cb_op_a = cb_post_rhs;
+    CircularBuffer& cb_op_b = cb_post_lhs;
+#else
+    static_assert(
+        cb_post_lhs_id == BINARY_FPU_SRCA_FORMAT_CB,
+        "binary_ng: FPU SrcA startup operand disagrees with the preprocessing restore reference");
+    CircularBuffer& cb_op_a = cb_post_lhs;
+    CircularBuffer& cb_op_b = cb_post_rhs;
+#endif
 
     compute_kernel_hw_startup(cb_op_a.get_cb_id(), cb_op_b.get_cb_id(), cb_out.get_cb_id());
 #ifdef PACK_RELU
