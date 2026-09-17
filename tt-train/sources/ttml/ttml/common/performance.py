@@ -24,9 +24,12 @@ import ttml
 
 def get_device_peak_tflops_bf16() -> float:
     """Per-device theoretical BF16 TFLOPS. Whole-mesh peak = this × num_devices."""
-    device = ttml.autograd.AutoContext.get_instance().get_device()
-    grid = device.compute_with_storage_grid_size()
-    num_cores = grid.x * grid.y
+    ctx = ttml.autograd.AutoContext.get_instance()
+    device = ctx.get_device()
+    # Count the chip's whole grid: with a CCL sub-device the device reports only the compute
+    # rectangle, but the reserved cores are still part of the machine's peak.
+    gx, gy = ctx.full_compute_grid_size()
+    num_cores = gx * gy
     # Per-core BF16 TFLOPS for each supported TT architecture.
     if is_wormhole_b0(device):
         per_core = 1.0

@@ -13,6 +13,7 @@
 #include "core/distributed/socket_manager.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "tt-metalium/experimental/fabric/fabric.hpp"
+#include "ttnn/core.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 #include "ttnn/operations/ccl/mesh_partition/mesh_partition.hpp"
@@ -83,7 +84,28 @@ ttnn::ccl::Topology get_topology(const std::optional<uint32_t>& cluster_axis) {
 
 }  // namespace
 
-ttnn::Tensor all_gather(const ttnn::Tensor& tensor, const int dim, const std::optional<uint32_t> cluster_axis) {
+namespace {
+
+// A collective runs on the sub-device that belongs to the command queue it is issued on: the CCL
+// sub-device for the second queue, the compute sub-device (the default) for the first. Two queues
+// launching programs on the same sub-device interleave on the same cores and corrupt each other, so
+// a tensor-parallel collective issued from the compute queue must stay with the compute around it.
+bool on_ccl_queue() {
+    return *ttnn::core::get_current_command_queue_id_for_thread() != 0U;
+}
+
+std::optional<tt::tt_metal::SubDeviceId> collective_sub_device_id() {
+    auto& ctx = ttml::autograd::ctx();
+    return on_ccl_queue() ? ctx.ccl_sub_device_id() : std::nullopt;
+}
+
+}  // namespace
+
+ttnn::Tensor all_gather(
+    const ttnn::Tensor& tensor,
+    const int dim,
+    const std::optional<uint32_t> cluster_axis,
+    const std::optional<ttnn::Tensor>& persistent_output) {
     auto* mesh_device = &ttml::autograd::ctx().get_device();
     auto num_devices = mesh_device->num_devices();
     if (num_devices == 1U) {
@@ -97,18 +119,27 @@ ttnn::Tensor all_gather(const ttnn::Tensor& tensor, const int dim, const std::op
 
     // Use cluster_axis overload for 2D mesh
     // Note: Pass topology (not hardcoded Ring) - Ring only works with proper TORUS fabric config
-    return ttnn::experimental::all_gather_async(
+    auto ag_result = ttnn::experimental::all_gather_async(
         tensor,
-        /* persistent_output_buffer */ std::nullopt,
+        persistent_output,
         dim,
         ccl_resources.get_all_gather_semaphore(),
         num_links,
         /* memory_config */ std::nullopt,
         topology,
-        /* subdevice_id */ std::nullopt,
+        /* subdevice_id */ collective_sub_device_id(),
         cluster_axis,
         /* use_optimal_ccl_for_llama */ false,
         /* barrier_semaphore */ ccl_resources.get_barrier_semaphore());
+    // A caller that hands over a persistent output relies on the result landing there (it may already be
+    // referenced elsewhere, and on the CCL queue a fresh buffer could alias memory compute is using).
+    TT_FATAL(
+        !persistent_output.has_value() || &ag_result.mesh_buffer() == &persistent_output->mesh_buffer(),
+        "all_gather did not write into the persistent output for shape {} dim {}: the op took a path that "
+        "allocates its own result (typically the composite fallback for a shard that is not tile-aligned)",
+        tensor.logical_shape(),
+        dim);
+    return ag_result;
 }
 
 ttnn::Tensor all_reduce(const ttnn::Tensor& tensor, const std::optional<uint32_t> cluster_axis) {
@@ -163,6 +194,17 @@ ttnn::Tensor all_reduce(const ttnn::Tensor& tensor, const std::optional<uint32_t
     }
 }
 
+namespace {
+
+// A shard of `dim_size` split `axis_size` ways is a whole number of 32-element tiles. Only then does
+// reduce_scatter_minimal_async take its direct kernel path; the composite fallback ignores persistent
+// buffers.
+bool shard_is_tile_aligned(uint32_t dim_size, uint32_t axis_size) {
+    return axis_size > 0 && dim_size % axis_size == 0 && (dim_size / axis_size) % 32 == 0;
+}
+
+}  // namespace
+
 ttnn::Tensor reduce_scatter(const ttnn::Tensor& tensor, const int dim, const std::optional<uint32_t> cluster_axis) {
     auto& ccl_resources = ttml::autograd::ctx().get_ccl_resources();
     auto& mesh_device = ttml::autograd::ctx().get_device();
@@ -171,10 +213,40 @@ ttnn::Tensor reduce_scatter(const ttnn::Tensor& tensor, const int dim, const std
     // Determine topology based on cluster axis configuration (Ring if torus, Linear otherwise)
     auto topology = get_topology(cluster_axis);
 
+    // Reuse the op's staging buffers (see CCLResources) and hand it a freshly allocated output, so the
+    // only per-call allocation is the result the caller keeps. The contiguous ring path is the only one
+    // with a persistent staging layout; every other configuration lets the op allocate as before --
+    // except on the CCL queue, where the op's own temporaries would be freed by the host while compute
+    // on the other queue can be handed their addresses.
+    std::optional<std::vector<ttnn::Tensor>> persistent_buffers;
+    const auto& mesh_shape = mesh_device.shape();
+    const uint32_t axis_size = cluster_axis.has_value() ? mesh_shape[*cluster_axis] : mesh_device.num_devices();
+    const auto logical_shape = tensor.logical_shape();
+    const int normalized_dim = dim < 0 ? static_cast<int>(logical_shape.rank()) + dim : dim;
+    if (topology == ttnn::ccl::Topology::Ring && axis_size > 2 && normalized_dim > 0 &&
+        tensor.layout() == ttnn::Layout::TILE && shard_is_tile_aligned(logical_shape[normalized_dim], axis_size)) {
+        const auto& staging =
+            ccl_resources.get_reduce_scatter_staging_buffers(tensor, normalized_dim, cluster_axis, topology);
+        if (staging.size() == 2) {
+            auto output_shape = logical_shape;
+            output_shape[normalized_dim] /= axis_size;
+            auto output =
+                ttnn::empty(output_shape, tensor.dtype(), tensor.layout(), &mesh_device, tensor.memory_config());
+            persistent_buffers = std::vector<ttnn::Tensor>{staging[0], output, staging[1]};
+        }
+    }
+    TT_FATAL(
+        persistent_buffers.has_value() || !on_ccl_queue(),
+        "reduce_scatter on the CCL queue needs persistent staging buffers (ring topology, more than two devices, "
+        "tile-aligned shard on a dim > 0); shape {} dim {} over {} devices has none",
+        logical_shape,
+        normalized_dim,
+        axis_size);
+
     // Note: Pass topology (not hardcoded Ring) - Ring only works with proper TORUS fabric config
     return ttnn::experimental::reduce_scatter_minimal_async(
         tensor,
-        /* persistent_output_buffers */ std::nullopt,
+        persistent_buffers,
         dim,
         ccl_resources.get_reduce_scatter_semaphores(),
         ccl_resources.get_barrier_semaphore(),
@@ -182,7 +254,7 @@ ttnn::Tensor reduce_scatter(const ttnn::Tensor& tensor, const int dim, const std
         /* memory_config */ std::nullopt,
         /* intermediate_memory_config */ std::nullopt,
         topology,
-        /* subdevice_id */ std::nullopt,
+        /* subdevice_id */ collective_sub_device_id(),
         /* cluster_axis */ cluster_axis);
 }
 

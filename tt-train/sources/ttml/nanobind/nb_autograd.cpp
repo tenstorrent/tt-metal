@@ -76,6 +76,10 @@ void py_module(nb::module_& m) {
         py_tensor.def("set_value", &Tensor::set_value, nb::arg("value"), "Set underlying tensor");
         py_tensor.def("set_grad", &Tensor::set_grad, nb::arg("grad"), "Set gradient");
         py_tensor.def(
+            "reset_grad",
+            [](Tensor& self) { self.set_grad(ttnn::Tensor()); },
+            "Drop the gradient so is_grad_initialized() is False and the next add_grad starts afresh");
+        py_tensor.def(
             "set_grad_from_tensor",
             [](Tensor& self, const TensorPtr& grad_tensor) { self.set_grad(grad_tensor->get_value()); },
             nb::arg("grad_tensor"),
@@ -245,8 +249,43 @@ void py_module(nb::module_& m) {
         py_auto_context.def("set_gradient_mode", &AutoContext::set_gradient_mode, nb::arg("mode"), "Set gradient mode");
         py_auto_context.def("get_gradient_mode", &AutoContext::get_gradient_mode, "Get gradient mode");
         py_auto_context.def(
+            "enable_ccl_sub_device",
+            &AutoContext::enable_ccl_sub_device,
+            nb::arg("num_columns"),
+            nb::arg("num_rows"),
+            "Split each chip's Tensix grid into a compute sub-device (id 0) and a CCL sub-device (id 1, the "
+            "rightmost `num_columns` columns or the bottom `num_rows` rows; exactly one of them non-zero) so "
+            "collectives issued on the second command queue overlap compute. The CCL kernels need 8/12/20 cores "
+            "for 1/2/4 workers per link: on a 12x10 grid a column gets 1 worker (2.3x slower all-gather), a row "
+            "2, two columns 4 (full speed). Requires the device opened with two command queues.");
+        py_auto_context.def(
+            "has_ccl_sub_device", &AutoContext::has_ccl_sub_device, "True once enable_ccl_sub_device() ran.");
+        py_auto_context.def(
+            "ccl_sub_device_index",
+            [](const AutoContext& ctx) -> std::optional<int> {
+                auto id = ctx.ccl_sub_device_id();
+                return id.has_value() ? std::optional<int>(static_cast<int>(**id)) : std::nullopt;
+            },
+            "Index of the CCL sub-device (for ttnn.SubDeviceId), or None.");
+        py_auto_context.def(
+            "compute_sub_device_index",
+            [](const AutoContext& ctx) -> int { return static_cast<int>(*ctx.compute_sub_device_id()); },
+            "Index of the compute sub-device (0).");
+        py_auto_context.def(
+            "full_compute_grid_size",
+            [](AutoContext& ctx) -> nb::tuple {
+                auto g = ctx.full_compute_grid_size();
+                return nb::make_tuple(static_cast<int>(g.x), static_cast<int>(g.y));
+            },
+            "(x, y) compute grid of the whole chip, ignoring any CCL sub-device (for peak-FLOPS accounting).");
+        py_auto_context.def(
+            "is_backward_in_progress",
+            &AutoContext::is_backward_in_progress,
+            "True while Tensor.backward() is running its node loop (including nested backward calls made by "
+            "gradient-checkpointing recompute). Lets module hooks tell a recompute-forward from a regular forward.");
+        py_auto_context.def(
             "open_device",
-            [](AutoContext& self, nb::object mesh_shape_obj, nb::object device_ids_obj) {
+            [](AutoContext& self, nb::object mesh_shape_obj, nb::object device_ids_obj, size_t num_command_queues) {
                 tt::tt_metal::distributed::MeshShape mesh_shape(1, 1);
 
                 if (!mesh_shape_obj.is_none()) {
@@ -266,11 +305,14 @@ void py_module(nb::module_& m) {
                     device_ids = nb::cast<std::vector<int>>(device_ids_obj);
                 }
 
-                self.open_device(mesh_shape, device_ids);
+                self.open_device(mesh_shape, device_ids, num_command_queues);
             },
             nb::arg("mesh_shape") = nb::none(),
             nb::arg("device_ids") = nb::none(),
-            "Open a mesh device");
+            nb::arg("num_command_queues") = 1,
+            "Open a mesh device (num_command_queues: 1, or 2 to give collectives their own hardware queue)");
+        py_auto_context.def(
+            "num_command_queues", &AutoContext::num_command_queues, "Number of hardware command queues opened.");
         py_auto_context.def("close_device", &AutoContext::close_device, "Close mesh device");
         py_auto_context.def("get_device", &AutoContext::get_device, nb::rv_policy::reference, "Get mesh device");
         // TODO: argv's char** not supported
