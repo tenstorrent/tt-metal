@@ -21,43 +21,26 @@
 //      compute API, both halves -- lands on the wrapper.
 //
 // A header already parsed when the rename lands keeps the inline version, because an unqualified
-// call to a non-dependent name is bound where it is written. Hence the staging below: the packer
-// helper's defining header is pulled in and renamed BEFORE the CB header, which is what drags in
-// the pack lib that calls it.
+// call to a non-dependent name is bound where it is written. That is what fixes the order of the
+// blocks below: each helper is pulled in and renamed before the header that drags in the layer
+// calling it, which is why the pack side stages cpack_common -> pack lib -> metal API -> CB.
 //
 // Each wrapper lives in its original's namespace and differs only in name, so both spellings at
 // the call sites keep working -- the qualified `ckernel::packer::f(x)` and the unqualified `f(x)`
 // found from inside that namespace.
 //
-// What must NOT be listed here: anything whose Tensix instruction needs a literal operand
-// (the `TTI_` forms), because only inlining constant-folds those, and anything whose body is a
-// single instruction, where a call costs more than it saves.
+// Three rules on what may be added here, each of which cost text or time when violated:
+//   * nothing on the MATH core. The op runs at its FPU rate, so trisc1 is the critical path and a
+//     call there is paid per tile -- out-of-lining its dst-address helper measured 1.27-1.40x.
+//   * nothing whose Tensix instruction needs a literal operand (the `TTI_` forms), because only
+//     inlining constant-folds those.
+//   * nothing whose body is comparable to its own argument setup. A helper taking several
+//     arguments to do a handful of instructions gets BIGGER out-of-line, not smaller.
 
 #pragma once
 
-// Which groups to out-of-line. Each trades text for a call on a per-tile path, so they are
-// separable: the op takes the cheapest set that gets the config under the ring.
-#ifndef HYB_LLK_UNPACK_CB
-#define HYB_LLK_UNPACK_CB 1
-#endif
-#ifndef HYB_LLK_MATH_DST
-#define HYB_LLK_MATH_DST 0
-#endif
-#ifndef HYB_LLK_PACK_DEST
-#define HYB_LLK_PACK_DEST 1
-#endif
-#ifndef HYB_LLK_PACK_CB
-#define HYB_LLK_PACK_CB 1
-#endif
-#ifndef HYB_LLK_PACK_EXTRA
-#define HYB_LLK_PACK_EXTRA 1
-#endif
-#ifndef HYB_LLK_UNPACK_EXTRA
-#define HYB_LLK_UNPACK_EXTRA 0
-#endif
-
-// Compiles to nothing off the TRISC triple. The dataflow processors run their own kernels and
-// never see these helpers.
+// Compiles to nothing off the TRISC triple. The dataflow processors reach their circular buffers
+// through the API that hybrid_dataflow_cb_shims.hpp intercepts instead.
 #if defined(COMPILE_FOR_TRISC)
 
 // noclone as well as noinline: under -flto, IPA constant propagation will otherwise clone a
@@ -65,7 +48,23 @@
 #define HYB_LLK_SHIM __attribute__((noinline, noclone))
 
 // ---------------------------------------------------------------- UNPACK (TRISC0)
-#if COMPILE_FOR_TRISC == 0 && HYB_LLK_UNPACK_CB
+#if COMPILE_FOR_TRISC == 0
+
+// Before the CB header below, which drags in the metal unpack API that calls this one.
+#include "llk_unpack_common.h"
+
+template <bool is_fp32_dest_acc_en, p_dim_stride_target dim_stride_target, bool skip_int8 = false>
+HYB_LLK_SHIM void hyb_llk_unpack_reconfig_data_format_srca_impl_(
+    const std::uint32_t unpack_src_format,
+    const std::uint32_t unpack_dst_format,
+    const std::uint32_t tile_size,
+    const std::uint32_t unpack_face_r_dim = FACE_R_DIM,
+    const std::uint32_t unpack_num_faces = 4) {
+    _llk_unpack_reconfig_data_format_srca_impl_<is_fp32_dest_acc_en, dim_stride_target, skip_int8>(
+        unpack_src_format, unpack_dst_format, tile_size, unpack_face_r_dim, unpack_num_faces);
+}
+
+#define _llk_unpack_reconfig_data_format_srca_impl_ hyb_llk_unpack_reconfig_data_format_srca_impl_
 
 #include "llk_io_unpack.h"
 
@@ -79,70 +78,26 @@ HYB_LLK_SHIM inline void hyb_llk_pop_tiles(
 #define llk_wait_tiles hyb_llk_wait_tiles
 #define llk_pop_tiles hyb_llk_pop_tiles
 
-#endif  // COMPILE_FOR_TRISC == 0 && HYB_LLK_UNPACK_CB
-
-#if COMPILE_FOR_TRISC == 0 && HYB_LLK_UNPACK_EXTRA
-
-#include "cunpack_common.h"
-
-namespace ckernel::unpacker {
-HYB_LLK_SHIM inline void hyb_switch_config_context(std::uint32_t& unp_cfg_context) {
-    switch_config_context(unp_cfg_context);
-}
-}  // namespace ckernel::unpacker
-
-#define switch_config_context hyb_switch_config_context
-
-#endif  // COMPILE_FOR_TRISC == 0 && HYB_LLK_UNPACK_EXTRA
-
-// ---------------------------------------------------------------- MATH (TRISC1)
-#if COMPILE_FOR_TRISC == 1 && HYB_LLK_MATH_DST
-
-#include "cmath_common.h"
-
-namespace ckernel::math {
-template <DstTileShape tile_shape, UnpackDestination unpack_destination>
-HYB_LLK_SHIM inline void hyb_set_dst_write_addr(std::uint32_t tile_index) {
-    set_dst_write_addr<tile_shape, unpack_destination>(tile_index);
-}
-}  // namespace ckernel::math
-
-#define set_dst_write_addr hyb_set_dst_write_addr
-
-#endif  // COMPILE_FOR_TRISC == 1 && HYB_LLK_MATH_DST
+#endif  // COMPILE_FOR_TRISC == 0
 
 // ---------------------------------------------------------------- PACK (TRISC2)
 #if COMPILE_FOR_TRISC == 2
 
-#if HYB_LLK_PACK_DEST || HYB_LLK_PACK_EXTRA
-
 // Ahead of every header below, each of which drags in a layer of the pack lib that calls into
-// this one. The staging runs definition-first, outward: cpack_common, then the pack lib, then
-// its metal API, then the CB header.
+// this one.
 #include "cpack_common.h"
 
 namespace ckernel::packer {
-#if HYB_LLK_PACK_DEST
 HYB_LLK_SHIM inline void hyb_program_packer_destination(std::uint32_t addr) { program_packer_destination(addr); }
-#endif
-#if HYB_LLK_PACK_EXTRA
+
 template <DstSync Dst>
 HYB_LLK_SHIM inline void hyb_select_packer_dest_registers() {
     select_packer_dest_registers<Dst>();
 }
-#endif
 }  // namespace ckernel::packer
 
-#if HYB_LLK_PACK_DEST
 #define program_packer_destination hyb_program_packer_destination
-#endif
-#if HYB_LLK_PACK_EXTRA
 #define select_packer_dest_registers hyb_select_packer_dest_registers
-#endif
-
-#endif  // HYB_LLK_PACK_DEST || HYB_LLK_PACK_EXTRA
-
-#if HYB_LLK_PACK_EXTRA
 
 #include "llk_pack_common.h"
 
@@ -161,10 +116,6 @@ HYB_LLK_SHIM inline std::uint32_t hyb_get_output_tile_address(std::uint8_t outpu
 }
 
 #define get_output_tile_address hyb_get_output_tile_address
-
-#endif  // HYB_LLK_PACK_EXTRA
-
-#if HYB_LLK_PACK_CB
 
 #include "llk_io_pack.h"
 
@@ -186,8 +137,6 @@ HYB_LLK_SHIM inline void hyb_llk_push_tiles(const std::int32_t operand, const st
 #define llk_wait_for_free_tiles hyb_llk_wait_for_free_tiles
 #define llk_push_to_brisc hyb_llk_push_to_brisc
 #define llk_push_tiles hyb_llk_push_tiles
-
-#endif  // HYB_LLK_PACK_CB
 
 #endif  // COMPILE_FOR_TRISC == 2
 
