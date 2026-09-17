@@ -13,10 +13,9 @@
 #include <unordered_map>
 #include <vector>
 
-#include "jit_build/jit_build_settings.hpp"
 #include "impl/kernels/kernel.hpp"
 #include "emule_metal2_emit.hpp"
-#include "emule_program_descriptor.hpp"  // tt_emule::SourceRef
+#include "emule_program_descriptor.hpp"  // tt_emule::SourceRef, Named{Ct,Rt}Namespaces
 
 namespace tt::tt_metal::emule {
 
@@ -30,8 +29,8 @@ struct DeferredCompile {
     ////////////////////////////////////////////////////////////
     // Blaze-only experimental named args
     // Removal is tracked by issue #50953
-    NamedCTArgNamespaces named_ct_arg_namespaces;
-    NamedRuntimeArgNamespaces named_runtime_arg_namespaces;
+    tt_emule::NamedCtNamespaces named_ct_arg_namespaces;
+    tt_emule::NamedRtNamespaces named_runtime_arg_namespaces;
     ////////////////////////////////////////////////////////////
     std::map<std::string, std::string> defines;
     std::string extra_inc;
