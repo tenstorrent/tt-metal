@@ -3027,6 +3027,7 @@ def run_ring_mla_sdpa_chunked_kv_actual_isl_reuse_max_case(
     pcc_threshold=CHUNKED_PREFILL_PCC_THRESHOLD,
     rmse_threshold=DEFAULT_RMSE_THRESHOLD,
     full_mesh=False,
+    local_heads=4,
 ):
     sp_size = mesh_config.num_devices if full_mesh else mesh_config.sp_size
     if sp_size < 2:
@@ -3040,7 +3041,6 @@ def run_ring_mla_sdpa_chunked_kv_actual_isl_reuse_max_case(
     ), f"kv_cache_batch_idx {kv_cache_batch_idx} must be in [0, {cache_batch})"
 
     b = BATCH_SIZE
-    local_heads = 4
     nhq = local_heads if full_mesh else local_heads * mesh_config.tp_size
     nhk = 1
     d_q = 64
@@ -6044,6 +6044,84 @@ def test_ring_joint_attention_minimax3_gqa_chunked_accuracy():
     )
 
 
+@pytest.mark.timeout(600)
+def test_ring_joint_attention_minimax3_gqa_rotated_q_accuracy():
+    """Validate rotated Q scheduling for GQA against the CPU reference."""
+    # q32 gives 16 heads * (640 / 32) = 320 work units, leaving remainder chunks
+    # on both 100 and 110 cores. This exercises GQA rotated-Q handoffs; the
+    # existing q128 case has only 80 units and cannot activate rotation there.
+    run_ring_joint_sdpa_chunked(
+        MESH_CONFIG,
+        MINIMAX3_GQA_CHUNKED_MODEL_CONFIGS["minimax3_55k"],
+        chunk_size=MINIMAX3_GQA_CHUNKED_ACCURACY_CHUNK_SIZE,
+        total_seq=MINIMAX3_GQA_CHUNKED_ACCURACY_TOTAL_SEQ,
+        qk_configs=[(32, 512)],
+        persistent_buffer_mode="reuse_max",
+    )
+
+
+@pytest.mark.timeout(1200)
+@pytest.mark.parametrize("q_chunk_size,k_chunk_size", [(32, 640), (64, 448)], ids=["q32", "q64_pack_unpack"])
+def test_ring_mla_rotated_q_accuracy_and_determinism(q_chunk_size, k_chunk_size):
+    """Exercise shared-K rotation, accumulator handoffs, and cached replay against a CPU reference.
+
+    q64/k448 pins the PACK-to-UNPACK race: QK uses one tile row per subblock while
+    the V matmul reads two. On Galaxy, eight active ring iterations reuse all three
+    handoff semaphore slots; QuietBox covers the same path with four iterations.
+    """
+    chunk_size = 640 * MESH_CONFIG.sp_size
+    model = RING_MLA_CHUNKED_MODEL_CONFIGS["kimi_k3"]
+    runtime = open_ring_joint_sdpa_runtime(MESH_CONFIG, reserve_llk_kernel_config=False)
+    runtime.mesh_device.enable_program_cache()
+    try:
+        for num_iterations in (1, 3):
+            run_ring_joint_sdpa_chunked(
+                MESH_CONFIG,
+                model,
+                chunk_size=chunk_size,
+                total_seq=3 * chunk_size,
+                qk_configs=[(q_chunk_size, k_chunk_size)],
+                persistent_buffer_mode="reuse_max",
+                use_ring_mla=True,
+                num_iterations=num_iterations,
+                runtime=runtime,
+                reserve_llk_kernel_config=False,
+            )
+    finally:
+        close_ring_joint_sdpa_runtime(runtime, clear_program_cache=True)
+
+
+@pytest.mark.timeout(600)
+@pytest.mark.parametrize("all_rows_have_remainder", [False, True], ids=["even", "all_rows_have_remainder"])
+def test_ring_mla_nonmoving_q_split_accuracy(all_rows_have_remainder):
+    """Non-moving schedules retain static allocation, including single-Q L1 persistence."""
+    chunk_size = 64 * MESH_CONFIG.sp_size
+    local_heads = 2 * MESH_CONFIG.sdpa_cores - 1 if all_rows_have_remainder else MESH_CONFIG.sdpa_cores
+    model = replace(RING_MLA_CHUNKED_MODEL_CONFIGS["kimi_k3"], nhq=local_heads)
+    run_ring_joint_sdpa_chunked(
+        MESH_CONFIG,
+        model,
+        chunk_size=chunk_size,
+        total_seq=3 * chunk_size,
+        qk_configs=[(64, 448)],
+        persistent_buffer_mode="reuse_max",
+        use_ring_mla=True,
+        reserve_llk_kernel_config=False,
+    )
+
+
+@pytest.mark.timeout(600)
+def test_ring_mla_rotated_q_partial_mask_cache_reuse():
+    """Rotate 128 Q chunks over 100/110 cores while KV padding changes the active mask.
+
+    The helper checks numerical output, bit-exact replay, and an unchanged program-cache
+    entry count as the prefix grows from a partial ring to all active iterations.
+    """
+    run_ring_mla_sdpa_chunked_kv_actual_isl_reuse_max_case(
+        MESH_CONFIG, chunk_size_local=256, local_heads=16, num_chunks=5, num_iterations=3
+    )
+
+
 def test_ring_joint_attention_minimax3_gqa_full_causal_attention_sink_accuracy_and_determinism():
     """Balanced M3 full-causal GQA consumes sinks without the sliding-window specialization."""
     model = replace(MODEL_CONFIGS["minimax3_gqa_smoke"], name="minimax3_gqa_full_causal_sink", seq_len=512)
@@ -6526,19 +6604,15 @@ def test_ring_mla_create_chunked_perf_table(model_name, q_chunk_size, k_chunk_si
 if MESH_CONFIG.is_galaxy:
     RING_MLA_CHUNKED_PERF_CHECK_CONFIGS = [
         # (model_name, q_chunk_size, k_chunk_size, ring_size, expected_util)
-        # 8-device ring (Galaxy, sp=8 tp=4, 100 SDPA cores)
+        # 8-device ring (Galaxy, sp=8 tp=4)
         ("kimi50k", 32, 640, 8, 68.5),
-        # Kimi-K3: same chunk and tuned q32/k640, H_loc 24 vs 16. Measured 2026-08-05 on
-        # bh_sc1_high_power -- 9.680 ms vs kimi50k's 5.722, i.e. 1.69x time for 1.5x ideal work.
-        ("kimi_k3", 32, 640, 8, 61.03),
+        ("kimi_k3", 32, 640, 8, 68.04),
     ]
 else:
     RING_MLA_CHUNKED_PERF_CHECK_CONFIGS = [
         # (model_name, q_chunk_size, k_chunk_size, ring_size, expected_util)
         # 4-device ring (QuietBox, 100 SDPA cores)
         ("kimi50k", 32, 640, 4, 66.05),
-        # Kimi-K3, measured 2026-08-05 on bh_quietbox_2 (run 31003064713): 4.845 ms. Inert until
-        # #52190 ungates this test here; kimi50k read 65.89 vs its committed 66.05 in the same run.
         ("kimi_k3", 32, 640, 4, 67.07),
     ]
 
@@ -6682,6 +6756,61 @@ def test_ring_joint_attention_minimax3_gqa_chunked_perf_check(
     logger.info(
         f"Minimax3 GQA chunked final-chunk perf check {config_id}: "
         f"duration={duration_ns/1e6:.3f} ms, math_util={utilization:.2f}% "
+        f"(expected {expected_util:.2f}%, band [{lower:.2f}, {upper:.2f}]), "
+        f"profiler_records={len(perf_records)}"
+    )
+
+    assert lower <= utilization <= upper, (
+        f"Math utilization {utilization:.2f}% outside band [{lower:.2f}, {upper:.2f}] "
+        f"(expected {expected_util:.2f}%, margin +/- {RING_JOINT_PERF_MARGIN*100:.1f}%)"
+    )
+
+
+@pytest.mark.timeout(600)
+@skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
+@skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
+def test_ring_joint_attention_minimax3_gqa_rotated_q_perf():
+    """Guard the GQA rotated-Q speedup for Minimax3 q32/k512 on QuietBox.
+
+    The matching accuracy test checks the same Q/K chunk sizes. Here the final
+    chunk uses the existing Minimax3 perf check's oversized reusable KV cache.
+    """
+    if MESH_CONFIG.is_galaxy or MESH_CONFIG.sp_size != 4 or MESH_CONFIG.sdpa_cores != 100:
+        pytest.skip("GQA rotated-Q performance threshold is calibrated for QuietBox ring-4 with 100 SDPA cores")
+
+    expected_util = 32.43
+    model = MINIMAX3_GQA_CHUNKED_MODEL_CONFIGS["minimax3_55k"]
+    chunk_size = CHUNKED_PREFILL_CHUNK_SIZE
+    perf_chunk = CHUNKED_PREFILL_N_CHUNKS - 1
+    runtime = open_ring_joint_sdpa_runtime(MESH_CONFIG)
+    try:
+        with mock.patch.dict(os.environ, {CHUNKED_PREFILL_CHUNK_ID_ENV: str(perf_chunk)}):
+            duration_ns, perf_records = profile_ring_joint_runtime_duration_ns(
+                runtime.mesh_device,
+                lambda: run_ring_joint_sdpa_chunked(
+                    MESH_CONFIG,
+                    model,
+                    chunk_size=chunk_size,
+                    qk_configs=[(32, 512)],
+                    persistent_buffer_mode="reuse_max",
+                    do_check=False,
+                    reuse_kv_buffer=True,
+                    runtime=runtime,
+                ),
+            )
+        assert len(perf_records) == runtime.mesh_device.get_num_devices(), "Incomplete per-device profiler records"
+    finally:
+        close_ring_joint_sdpa_runtime(runtime)
+
+    utilization, _ = compute_chunked_prefill_perf_check_utilization(
+        MESH_CONFIG, model, chunk_size, perf_chunk, duration_ns, MESH_CONFIG.sdpa_cores
+    )
+    lower = expected_util * (1 - RING_JOINT_PERF_MARGIN)
+    upper = expected_util * (1 + RING_JOINT_PERF_MARGIN)
+    logger.info(
+        f"Minimax3 GQA rotated-Q perf q32-k512: "
+        f"ring={MESH_CONFIG.sp_size}, sdpa_cores={MESH_CONFIG.sdpa_cores}, "
+        f"duration={duration_ns / 1e6:.3f} ms, math_util={utilization:.2f}% "
         f"(expected {expected_util:.2f}%, band [{lower:.2f}, {upper:.2f}]), "
         f"profiler_records={len(perf_records)}"
     )
