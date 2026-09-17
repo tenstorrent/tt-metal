@@ -179,8 +179,21 @@ on `16x9_10s` should surface a hang within roughly 20-40 minutes if the old rate
 
 ## Open questions
 
-- Does the hang survive the fix? **Status at commit time: 4 clean iterations (392 denoise steps, zero hangs), P(that | the old rate still held) = 0.13.** The threshold was fixed before the runs started: p<0.05 at 6 iterations, p~0.002 at 12. Not yet conclusive at this count -- finish the soak before calling the hang fixed. The gate fix stands on its own regardless, being a correctness and perf fix independent of the hang.
-- If it does: FSDP's ~200-250 extra SP-axis ring all-gathers per step rotate a **2-deep**
+- Does the hang survive the fix? **No recurrence.** 980 denoise steps across 10 standalone
+  runs, then a full 18/18 sweep (1764 more steps, 3 h 14 m, zero failures) — 2744 steps total,
+  no hang, no SIGBUS, no MM/RS warning. Under the pre-fix rate (2 hangs / 390 steps at
+  M >= 9184) that is p ~ 2e-04 -- computed over the **1666** of those steps that were at
+  M >= 9184, since that is the only range the pre-fix rate was ever measured in; pooling all
+  2744 would overstate it. Both cases that originally hung
+  (`9x16_10s`, `16x9_15s`) now pass, in the sweep and standalone.
+  **The honest caveat:** the pre-fix rate is estimated from only 2 events, so its confidence
+  interval is wide and this is strong evidence rather than proof of a negative. What raises it
+  above a bare p-value is that the mechanism was independently confirmed (the fused op really
+  was configured with 1 RS worker per link on this grid) and removing it made the model
+  *faster* -- so the change removed a real defect, not just perturbed the timing.
+
+- If it ever recurs, the next suspect: FSDP's ~200-250 extra SP-axis ring all-gathers per step
+  rotate a **2-deep**
   ping-pong semaphore pool (`parallel/manager.py:311-314`) with `barrier_semaphore=None` on the
   persistent path (`manager.py:872`), sharing the SP axis with the ring-SDPA K/V gathers.
   `manager.py:53-56` already documents a related desync-or-hang hazard. That is suspect #2.

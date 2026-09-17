@@ -1,12 +1,13 @@
 # MiniMax-H3 t2va on Wormhole Galaxy (4x8, 32 chips) — perf sweep
 
-Measured 2026-09-16 on `tt-metal` @ `3a016b74847` + uncommitted Wormhole bringup changes.
+Re-measured 2026-09-17 on `tt-metal` @ `eab3dfbd599` (Wormhole bringup + the fused MM/RS
+gate fix). Supersedes the 2026-09-16 run at `3a016b74847`, which stalled at 13/18.
 Mesh param `MESH_4X8_RING_WH` (`4x8nl4`), TP=4 axis 0 / SP=8 axis 1, Ring, 4 links.
 50 scheduler steps => 49 forwards. `RUN_VBENCH=0` (CLIP still gated).
 
 Raw logs are **not** committed (too large to be useful in-tree); they were kept at
 `~/h3_wormhole_results/*.log.gz` on the run host, with `parse.py` there to regenerate
-these tables from any of them.
+these tables from any of them. Current run: `sweep_fixed.log.gz`.
 
 ## Command
 
@@ -31,8 +32,13 @@ DiT FSDP is the fix for the memory limits. Without it only 5 s fits; with it 10 
 7.85x reduction (SP=8 sharding), costs 5-11% denoise time, **bit-identical output**
 (CLIP equal to 2 dp on all six 5 s cases).
 
-Sweep outcome: **6/18 passed without FSDP, 13/18 measured with it.**
-The remaining 5 are blocked by an intermittent device hang, *not* by memory.
+Sweep outcome: **18/18 passed** (3 h 14 m, zero failures). The previous run reached 13/18
+before an intermittent device hang blocked the rest; that hang was root-caused to the fused
+MM/RS gate (open issue 2) and the 5 blocked points now all pass.
+
+Removing the accidental fused ff2 path also made every case **2.0-4.0% faster (mean 3.0%)**.
+Per-forward, old -> new: 5 s 2839 -> 2754 (21:9), 1477 -> 1417 (1:1); 10 s 6588 -> 6422 (16:9);
+15 s 12700 -> 12447 (21:9). The six cases that never completed before are new measurements.
 
 ## Timings — FSDP ON (seconds unless noted)
 
@@ -40,31 +46,34 @@ The remaining 5 are blocked by an intermittent device hang, *not* by memory.
 
 | aspect | canvas | MPix | cold | warm | enc | denoise | vae | audio | ms/fwd | realtime | CLIP |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| 21:9 | 1536x672 | 1.03 | 173.7 | 151.2 | 3.4 | 139.1 | 5.8 | 2.8 | 2839 | 29.3x | 36.20 |
-| 16:9 | 1344x768 | 1.03 | 164.4 | 150.1 | 3.5 | 138.7 | 4.9 | 3.0 | 2832 | 29.1x | 37.36 |
-| 9:16 | 768x1344 | 1.03 | 164.4 | 151.0 | 3.5 | 138.7 | 5.5 | 3.2 | 2831 | 29.2x | 36.50 |
-| 4:3  | 1024x768 | 0.79 | 122.4 | 108.2 | 3.4 |  97.9 | 3.6 | 3.3 | 1998 | 20.9x | 37.34 |
-| 3:4  | 768x1024 | 0.79 | 122.4 | 108.7 | 3.5 |  98.1 | 3.8 | 3.4 | 2002 | 21.0x | 36.63 |
-| 1:1  |  768x768 | 0.59 |  95.7 |  81.3 | 3.5 |  72.4 | 2.9 | 2.6 | 1477 | 15.7x | 36.33 |
+| 21:9 | 1536x672 | 1.03 | 160.9 | 146.6 | 3.5 | 134.9 | 5.8 | 2.4 | 2754 | 28.4x | 35.95 |
+| 16:9 | 1344x768 | 1.03 | 161.3 | 147.6 | 3.4 | 135.3 | 5.1 | 3.7 | 2761 | 28.6x | 37.42 |
+| 9:16 | 768x1344 | 1.03 | 161.0 | 146.7 | 3.4 | 134.4 | 5.7 | 3.1 | 2744 | 28.4x | 37.02 |
+| 4:3 | 1024x768 | 0.79 | 120.4 | 104.9 | 3.4 | 94.0 | 3.7 | 3.8 | 1919 | 20.3x | 37.26 |
+| 3:4 | 768x1024 | 0.79 | 118.7 | 105.3 | 3.5 | 94.2 | 4.0 | 3.5 | 1922 | 20.4x | 36.54 |
+| 1:1 | 768x768 | 0.59 | 92.7 | 79.3 | 3.5 | 69.4 | 3.0 | 3.4 | 1417 | 15.3x | 36.32 |
 
-### 10 s / 243 frames (all six FAILED without FSDP)
+### 10 s / 243 frames
 
-| aspect | canvas | cold | warm | enc | denoise | vae | audio | ms/fwd | realtime |
-|---|---|---|---|---|---|---|---|---|---|
-| 21:9 | 1536x672 | 356.7 | 340.2 | 3.5 | 322.6 | 9.8 | 4.4 | 6583 | 33.6x |
-| 16:9 | 1344x768 | 353.3 | 340.3 | 3.5 | 322.8 |10.0 | 4.1 | 6589 | 33.6x |
-| 4:3  | 1024x768 | 258.6 | 245.9 | 3.5 | 232.3 | 7.0 | 3.1 | 4741 | 24.3x |
-| 3:4  | 768x1024 | 259.5 | 247.4 | 3.5 | 232.8 | 7.0 | 4.1 | 4752 | 24.4x |
-| 1:1  |  768x768 | 175.4 | 161.3 | 3.2 | 150.1 | 5.2 | 2.8 | 3064 | 15.9x |
-| 9:16 | 768x1344 | 353.1 | — | — | — | — | — | — | **HUNG** (timed pass) |
+| aspect | canvas | cold | warm | enc | denoise | vae | audio | ms/fwd | realtime | CLIP |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 21:9 | 1536x672 | 349.0 | 332.8 | 3.5 | 314.2 | 11.6 | 3.5 | 6413 | 32.9x | 33.84 |
+| 16:9 | 1344x768 | 344.6 | 333.4 | 3.5 | 314.7 | 11.0 | 4.4 | 6422 | 32.9x | 36.92 |
+| 9:16 | 768x1344 | 344.7 | 332.8 | 3.5 | 315.0 | 10.6 | 3.8 | 6428 | 32.9x | 36.40 |
+| 4:3 | 1024x768 | 255.7 | 240.5 | 3.5 | 226.3 | 7.5 | 3.2 | 4618 | 23.8x | 37.09 |
+| 3:4 | 768x1024 | 252.6 | 241.3 | 3.5 | 226.5 | 7.4 | 3.8 | 4623 | 23.8x | 36.89 |
+| 1:1 | 768x768 | 173.8 | 159.2 | 3.5 | 146.4 | 5.8 | 3.6 | 2988 | 15.7x | 37.54 |
 
 ### 15 s / 362 frames
 
-| aspect | canvas | cold | warm | enc | denoise | vae | audio | ms/fwd | realtime |
-|---|---|---|---|---|---|---|---|---|---|
-| 21:9 | 1536x672 | 842.4 | 644.6 | 3.5 | 622.3 |15.3 | 3.6 |12700 | 42.7x |
-| 16:9 | 1344x768 | — | — | — | — | — | — | — | **HUNG** (warmup) |
-| 4:3 / 3:4 / 1:1 / 9:16 | | | | | | | | | not run |
+| aspect | canvas | cold | warm | enc | denoise | vae | audio | ms/fwd | realtime | CLIP |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 21:9 | 1536x672 | 648.5 | 633.2 | 3.4 | 609.9 | 16.0 | 3.9 | 12447 | 42.0x | 35.27 |
+| 16:9 | 1344x768 | 644.3 | 633.1 | 3.5 | 609.3 | 15.8 | 4.6 | 12435 | 42.0x | 36.31 |
+| 9:16 | 768x1344 | 645.7 | 633.8 | 3.5 | 610.7 | 15.2 | 4.3 | 12464 | 42.0x | 35.50 |
+| 4:3 | 1024x768 | 457.3 | 434.6 | 3.3 | 416.0 | 10.9 | 4.3 | 8491 | 28.8x | 36.01 |
+| 3:4 | 768x1024 | 447.6 | 434.9 | 3.3 | 416.6 | 11.2 | 3.8 | 8501 | 28.8x | 36.40 |
+| 1:1 | 768x768 | 281.8 | 266.6 | 3.5 | 251.2 | 8.5 | 3.6 | 5126 | 17.7x | 38.26 |
 
 ## Timings — FSDP OFF (baseline, for the 5 s comparison)
 
@@ -83,38 +92,47 @@ the **timed** pass. All six 15 s OOMed in warmup.
 
 ## Scaling notes
 
-- Denoise is 86-91% of warm time and tracks **pixel area**, not aspect: the three
-  1.03 MPix 5 s canvases agree within 0.5 s regardless of orientation.
-- ms/forward vs area at 5 s: 1477 (0.59) / 2000 (0.79) / 2834 (1.03) — near-linear.
-- Duration scales **superlinearly**: 16:9 denoise 138.7 (5 s) -> 322.8 (10 s) -> ~n/a,
-  and 21:9 139.1 -> 322.6 -> 622.3. Roughly 2.3x per 1.5x frames (attention).
+- Denoise is 87-96% of warm time and tracks **pixel area**, not aspect: the three
+  1.03 MPix 5 s canvases agree within 0.9 s regardless of orientation (134.4/134.9/135.3),
+  and the same holds at 15 s (609.3/609.9/610.7).
+- ms/forward vs area at 5 s: 1417 (0.59) / 1920 (0.79) / 2753 (1.03) — near-linear.
+- Duration scales **superlinearly**, now measurable across all three durations:
+  16:9 denoise 135.3 (5 s) -> 314.7 (10 s) -> 609.3 (15 s); 21:9 134.9 -> 314.2 -> 609.9.
+  That is 2.33x for the first 1.96x in frames and 1.94x for the next 1.49x — the
+  superlinearity is real but milder than the earlier two-point estimate suggested.
+- Realtime factor improves with duration (28.4x at 5 s -> 42.0x at 15 s for 1.03 MPix):
+  the fixed ~3.5 s encoder and the cold-start step amortise over more frames.
 - Encoder is a flat ~3.5 s everywhere (same prompt, cached weights).
 - The 4:3/10s audio-decode outlier of 192.6 s in the non-FSDP run dropped to 3.1 s
   with FSDP — it was memory pressure, not the conv1d MAC fallback.
 
 ## Open issues
 
-1. **Intermittent mid-denoise device hang** — was the blocker, unrelated to memory.
-   Counting the per-layer `No fused MM/RS` warnings in the two hang logs located the
-   stalls exactly: hang 1 in step i=23, hang 2 in step i=22, both blocked in the
-   readback at `pipeline_minimax_h3.py:2002` — the same line as the earlier
-   `Fatal Python error: Bus error` crashes. The ~13 s offset the earlier writeup
-   leaned on turned out to be an arithmetic coincidence of the 2:1 per-step rates.
-   Prime suspect and now fixed: issue 2 below. Full forensics, the evidence-preserving
-   run recipe and the remaining open questions: see **`MiniMaxH3_wormhole_hang.md`**.
+1. **Intermittent mid-denoise device hang** — *root-caused and fixed; 18/18 now pass.*
+   Counting the per-layer `No fused MM/RS` warnings in the two hang logs (50 fire per
+   denoise step, so they act as a free per-layer profiler) located both stalls exactly:
+   hang 1 in step i=23, hang 2 in step i=22, both blocked in the readback at
+   `pipeline_minimax_h3.py:2002` — the same line as the earlier `Fatal Python error:
+   Bus error` crashes. The ~13 s offset the earlier writeup leaned on turned out to be
+   an arithmetic coincidence of the 2:1 per-step rates. Cause was issue 2 below.
+   Evidence: 18/18 in this sweep, plus 9 standalone runs (~833 denoise steps) beforehand,
+   all clean. Caveat: the pre-fix rate rests on only 2 hang events, so this is strong
+   evidence rather than proof. Forensics and the evidence-preserving run recipe:
+   see **`MiniMaxH3_wormhole_hang.md`**.
 
 2. **Wormhole took the fused MM/RS path by accident** — *fixed*. `has_mmrs_config`
    gated the fused ff2 matmul+reduce-scatter on `(k, n, m % 32)` alone, but both ways
    of resolving a real blocking are Blackhole-only (`_SWEPT_BLOCKINGS` is keyed to a
    12x10 grid, the v2.3 rule engine is `is_blackhole()`-gated). So every Wormhole ff2
    landed on `default_fused_mmrs_config` — 56 of 72 cores at subblock 1x1, and a
-   derived reduce-scatter worker count of **1 per link** — which is the case the gate's
-   own comment exists to prevent. The gate now takes the device core grid and asks
-   `resolves_fused_mmrs_config` whether a measured or rule-derived blocking exists;
-   Wormhole falls back to the ordinary matmul + `reduce_scatter_minimal_async`.
-   Measured on `1x1_5s`: **1477 -> 1408 ms/fwd (4.7% faster)**, CLIP 36.32 vs 36.33.
-   **The tables above still include the unoptimized path**, so every denoise number
-   here is pessimistic by a few percent; re-sweep to restate them.
+   derived reduce-scatter worker count of **1 per link**, with the credit-based L1
+   handoff active — which is the case the gate's own comment exists to prevent. The
+   gate now takes the device core grid and asks `resolves_fused_mmrs_config` whether a
+   measured or rule-derived blocking exists; Wormhole falls back to the ordinary matmul
+   + `reduce_scatter_minimal_async`. Worth **2.0-4.0% (mean 3.0%)** across the sweep,
+   and the tables above are measured with it. Note the unfused path is *not*
+   bit-identical: the different reduction order moves CLIP by up to 0.6 in both
+   directions, inside run-to-run noise and far above the 33.0 bar.
 
 3. **Cache key omits device params** — `cache.load_model` keys on parallel config,
    mesh shape, dtype and FSDP, but not `l1_small_size`/device params. A cache
