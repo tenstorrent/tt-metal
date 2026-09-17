@@ -8,8 +8,9 @@ GeLU: ``ttnn.GeluVariant.Accurate`` (exact SFPU path). Prefer this over
 gives higher PCC on device.
 
 SDPA fidelity lives in ``prefill_sdpa_compute_kernel_config`` /
-``decode_sdpa_compute_kernel_config`` below — both HiFi4, both without fp32
-dest-acc. Linear matmul fidelity overrides are intentionally omitted: HiFi4+fp32
+``decode_sdpa_compute_kernel_config`` below — both HiFi4. Prefill keeps fp32
+dest-acc (it restores the softmax-reduce accumulation #47311 removed); decode
+must not have it, as it collapses batch-1 decode PCC. Linear matmul fidelity overrides are intentionally omitted: HiFi4+fp32
 on MLP/QKV/O caused unicode garbage on LB 12B decode.
 """
 

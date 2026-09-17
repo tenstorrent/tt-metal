@@ -117,9 +117,8 @@ def hoist_prefill_matmul_in0_if_needed(tensor, program_config=None):
     return activation, activation
 
 
-def o_proj_input_memcfg(sdpa_out, hidden_size: int, default_memcfg=None):
+def o_proj_input_memcfg(sdpa_out, default_memcfg=None):
     """Destination for prefill ``concat_heads`` when it feeds the o_proj matmul."""
-    del hidden_size
     shape = [int(sdpa_out.shape[i]) for i in range(len(sdpa_out.shape))]
     if len(shape) < 3:
         return default_memcfg

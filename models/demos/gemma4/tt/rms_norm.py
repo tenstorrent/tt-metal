@@ -70,27 +70,9 @@ def width_shard_input_memcfg(mesh_device, dim, height):
     return spec[0] if spec else None
 
 
-def decode_width_shard_spec(mesh_device, dim):
-    """Build the shared decode RMSNorm L1 layout and program config."""
-    spec = width_shard_spec(mesh_device, dim, ttnn.TILE_SIZE)
-    if spec is None:
-        return None
-    memcfg, program_config = spec
-    tiles = dim // ttnn.TILE_SIZE
-    grid = mesh_device.compute_with_storage_grid_size()
-    num_cores = None
-    for gy in range(1, grid.y + 1):
-        for gx in range(1, grid.x + 1):
-            n = gx * gy
-            if tiles % n == 0 and (num_cores is None or n > num_cores):
-                num_cores = n
-    return (memcfg, program_config, num_cores)
-
-
 def decode_width_shard_memcfg(mesh_device, dim):
-    """Return only the shared decode RMSNorm input memory config."""
-    spec = decode_width_shard_spec(mesh_device, dim)
-    return spec[0] if spec else None
+    """Shared decode RMSNorm input memory config (one tile tall), or None."""
+    return width_shard_input_memcfg(mesh_device, dim, ttnn.TILE_SIZE)
 
 
 class RMSNorm(nn.Module):

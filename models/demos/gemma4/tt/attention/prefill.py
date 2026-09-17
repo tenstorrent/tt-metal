@@ -840,7 +840,7 @@ def _prefill_forward_single(
     elif keep_kv:
         kept_kv = (tt_k, tt_v)
 
-    concat_mc = o_proj_input_memcfg(tt_sdpa, config.hidden_size, default_memcfg=act_mc)
+    concat_mc = o_proj_input_memcfg(tt_sdpa, default_memcfg=act_mc)
     tt_out = concat_heads(tt_sdpa, is_decode_mode=False, memory_config=concat_mc)
     # o_proj + allreduce need DRAM activations (CCL / matmul CB pressure).
     if act_mc == ttnn.L1_MEMORY_CONFIG:
@@ -1131,7 +1131,7 @@ def prefill_forward(
     elif keep_kv:
         kept_kv = (tt_k, tt_v)
 
-    concat_mc = o_proj_input_memcfg(tt_sdpa, config.hidden_size, default_memcfg=act_mc)
+    concat_mc = o_proj_input_memcfg(tt_sdpa, default_memcfg=act_mc)
     tt_out = concat_heads(tt_sdpa, is_decode_mode=False, memory_config=concat_mc)
     if act_mc == ttnn.L1_MEMORY_CONFIG:
         tt_out_l1 = tt_out
