@@ -82,7 +82,7 @@ struct SourceRef {  // Kernel::kernel_source()
 struct NamedRtEntry {  // NamedRuntimeArgEntry (jit_build_settings.hpp)
     std::string field;
     uint32_t index = 0, length = 0;
-    bool dispatch = false;
+    uint32_t dispatch = 0;  // RuntimeArgDispatch enum value (kept numeric for cache-key parity)
 };
 using NamedCtNamespaces =
     std::map<std::string, std::vector<std::pair<std::string, uint32_t>>>;    // process_named_ct_arg_namespaces
