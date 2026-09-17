@@ -17,7 +17,10 @@ from ....pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large 
     StableDiffusion3Pipeline,
     StableDiffusion3PipelineConfig,
 )
-from ....utils.test import line_params_req_exact_devices
+from ....utils.test import line_params_req_exact_devices, ring_params_req_exact_devices
+
+_line_device_params = {**line_params_req_exact_devices, "l1_small_size": 32768, "trace_region_size": 50000000}
+_ring_device_params = {**ring_params_req_exact_devices, "l1_small_size": 32768, "trace_region_size": 50000000}
 
 
 @pytest.mark.parametrize(
@@ -31,12 +34,12 @@ from ....utils.test import line_params_req_exact_devices
     ],
 )
 @pytest.mark.parametrize(
-    "mesh_device, cfg, sp, tp, topology, num_links",
+    "mesh_device, cfg, sp, tp, topology, num_links, device_params",
     [
-        [(1, 4), (1, 0), (1, 0), (4, 1), ttnn.Topology.Linear, 2],
-        [(2, 4), (2, 1), (2, 0), (2, 1), ttnn.Topology.Linear, 1],
-        [(2, 4), (2, 0), (1, 0), (4, 1), ttnn.Topology.Linear, 1],
-        [(4, 8), (2, 1), (4, 0), (4, 1), ttnn.Topology.Linear, 4],
+        [(1, 4), (1, 0), (1, 0), (4, 1), ttnn.Topology.Ring, 2, _ring_device_params],
+        [(2, 4), (2, 1), (2, 0), (2, 1), ttnn.Topology.Linear, 1, _line_device_params],
+        [(2, 4), (2, 0), (1, 0), (4, 1), ttnn.Topology.Linear, 1, _line_device_params],
+        [(4, 8), (2, 1), (4, 0), (4, 1), ttnn.Topology.Linear, 4, _line_device_params],
     ],
     ids=[
         "1x4cfg0sp0tp1",
@@ -44,13 +47,7 @@ from ....utils.test import line_params_req_exact_devices
         "2x4cfg0sp0tp1",
         "4x8cfg1sp0tp1",
     ],
-    indirect=["mesh_device"],
-)
-@pytest.mark.parametrize(
-    "device_params",
-    [{**line_params_req_exact_devices, "l1_small_size": 32768, "trace_region_size": 50000000}],
-    ids=["line"],
-    indirect=True,
+    indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("traced", [True, False], ids=["yes_traced", "no_traced"])
 def test_sd35_pipeline(
