@@ -8,6 +8,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <utility>
 #include <vector>
 
 namespace tt::tt_metal::internal {
@@ -102,32 +103,25 @@ struct DramBankInfo {
 std::vector<DramBankInfo> get_dram_bank_table(std::uint32_t device_id);
 
 /**
- * @brief Translates a logical core coordinate to the corresponding translated (virtual) NOC coordinate.
+ * @brief Convert TRANSLATED coordinates to NOC0/PHYSICAL coordinates.
  *
- * LOGICAL coordinates are the user-facing contiguous grid starting at (0,0).
- * TRANSLATED (virtual) coordinates are what the NoC APIs use (they hide harvested cores).
- *
- * @param device_id Logical chip id (matches @c IDevice::id()).
- * @param x Logical x coordinate.
- * @param y Logical y coordinate.
- * @param core_type The type of core ("WORKER", "ETH", "DRAM", etc.).
- * @return A pair of (translated_x, translated_y) coordinates.
- */
-std::pair<std::uint32_t, std::uint32_t> translate_core_coord(
-    std::uint32_t device_id, std::uint32_t x, std::uint32_t y, const std::string& core_type);
-
-/**
- * @brief Translates a translated (virtual) NOC coordinate to physical NOC0 coordinate.
- *
- * TRANSLATED coordinates are what the NoC APIs use.
- * PHYSICAL/NOC0 coordinates are actual hardware coordinates on the die.
- *
- * @param device_id Logical chip id (matches @c IDevice::id()).
- * @param x Translated x coordinate.
- * @param y Translated y coordinate.
- * @return A pair of (physical_x, physical_y) coordinates.
+ * @param device_id Logical chip id.
+ * @param x TRANSLATED x coordinate.
+ * @param y TRANSLATED y coordinate.
+ * @return (physical_x, physical_y) in NOC0 coordinate system.
  */
 std::pair<std::uint32_t, std::uint32_t> translated_to_physical(
+    std::uint32_t device_id, std::uint32_t x, std::uint32_t y);
+
+/**
+ * @brief Convert TRANSLATED coordinates to LOGICAL coordinates.
+ *
+ * @param device_id Logical chip id.
+ * @param x TRANSLATED x coordinate.
+ * @param y TRANSLATED y coordinate.
+ * @return (logical_x, logical_y) in the program's grid coordinate system.
+ */
+std::pair<std::uint32_t, std::uint32_t> translated_to_logical(
     std::uint32_t device_id, std::uint32_t x, std::uint32_t y);
 
 }  // namespace tt::tt_metal::internal
