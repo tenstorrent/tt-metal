@@ -176,7 +176,7 @@ jobs:
 
       # Hang report the triage hook wrote. Must precede the cleanup that removes it.
       - name: ⬆️ Upload hang report
-        uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        uses: ./.github/actions/upload-artifact-with-job-uuid
         timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:
