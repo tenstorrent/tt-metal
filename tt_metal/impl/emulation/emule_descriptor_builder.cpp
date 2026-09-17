@@ -118,7 +118,7 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
 
     EmuleProgramDescriptor pd;
     pd.config.program_id = static_cast<uint64_t>(impl.get_id());
-    // TODO(stage2): context_id (ContextId strong type — extract when setup_core_state consumes it).
+    pd.config.context_id = static_cast<uint32_t>(impl.get_context_id().get());
     pd.config.config_sizes = impl.get_program_config_sizes();
 
     const uint32_t pct_count = hw.get_programmable_core_type_count();
