@@ -31,6 +31,7 @@
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tile.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>  // is_2d_fabric_config
+#include <tt_stl/assert.hpp>                           // TT_FATAL
 
 namespace tt_emule {
 
@@ -190,7 +191,16 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
                         SemBinding{name, id, static_cast<tt_emule::SemScope>(static_cast<uint8_t>(scope)), harts});
                 });
             k.process_tensor_binding_handles(
-                [&kd](const std::string& name, uint32_t cta_off, uint32_t addr_crta_off, uint32_t /*num_rt*/) {
+                [&kd](const std::string& name, uint32_t cta_off, uint32_t addr_crta_off, uint32_t num_rt) {
+                    // Emule doesn't yet model per-binding runtime CRTA words; the downstream
+                    // get_common_vararg base math assumes 1 word/binding. Fail loudly on the
+                    // dynamic-shape case here (the sole binding reader) rather than in a consumer.
+                    TT_FATAL(
+                        num_rt == 0,
+                        "Emule does not yet support dynamic-shape Metal 2.0 tensor bindings "
+                        "(binding '{}' has num_runtime_field_crta_words={}).",
+                        name,
+                        num_rt);
                     kd.bindings.tensor.push_back(TensorBinding{name, cta_off, addr_crta_off});
                 });
             k.process_scratchpad_binding_handles(
