@@ -809,6 +809,15 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
             pad2_num_links = 1;
             num_links = (max_total - 2) / 2;
         }
+        log_warning(
+            tt::LogOp,
+            "neighbor_pad_halo: Capped np_num_links from {} to {} and np_pad2_num_links from {} to {} "
+            "to fit device compute grid height {}",
+            op.np_num_links,
+            num_links,
+            op.np_pad2_num_links,
+            pad2_num_links,
+            compute_grid_size.y);
     }
 
     uint32_t num_h_fabric_cores = num_links * 2;

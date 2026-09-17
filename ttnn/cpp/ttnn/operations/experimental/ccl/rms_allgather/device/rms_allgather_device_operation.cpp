@@ -42,6 +42,12 @@ void RMSAllGatherDeviceOperation::validate_on_program_cache_miss(
             expected_stats_dtype);
     }
 
+    TT_FATAL(
+        args.num_links == 1,
+        "fused_rms_minimal: only num_links=1 is supported (got {}). The fused all-gather runs on a single worker "
+        "core and opens one fabric connection; a larger value would inflate the semaphore target without adding "
+        "senders.",
+        args.num_links);
     TT_FATAL(a.padded_shape().rank() == 4, "Input shape must be rank 4");
     TT_FATAL(
         a.logical_shape()[0] == 1 && a.logical_shape()[1] == 1 && a.logical_shape()[2] <= 32 &&

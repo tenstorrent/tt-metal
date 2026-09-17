@@ -38,6 +38,8 @@ void bind_all_gather(nb::module_& mod) {
     const auto* doc = R"doc(
         Performs an all-gather collective operation that gathers data from all devices into a new output tensor, concatenated along the specified :attr:`dim`. If the :attr:`input_tensor` has unaligned row-major pages or padded tiles on the gather :attr:`dim`, a slower composite all-gather implementation is used.
 
+        The number of fabric links is chosen automatically from the links available along the gather axis. On a 2D mesh gathered along both axes (no :attr:`cluster_axis`), the multicast implementation uses the smaller of the two per-axis link counts on both axes.
+
         Args:
             input_tensor (ttnn.Tensor): Input tensor to be gathered.
             dim (int): Dimension along which to concatenate.

@@ -128,7 +128,9 @@ void bind_all_gather_minimal_matmul_async(nb::module_& mod) {
             barrier_semaphore needs to be used.
 
         num_links : int
-            Number of links to use for the all-gather operation. Defaults to `1`.
+            Number of links to use for the all-gather operation. Defaults to `1`. Not free to choose: the in0 sender
+            axis of the matmul core grid must form exactly ``num_links`` groups of ``num_workers_per_link`` cores,
+            so ``num_links == ceil(in0_axis_size / num_workers_per_link)``.
 
         cluster_axis : Optional[int], default: None
             Provided a MeshTensor, the axis corresponding to MeshDevice to perform the line-all-gather operation on.

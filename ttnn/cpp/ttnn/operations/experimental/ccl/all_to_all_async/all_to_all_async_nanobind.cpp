@@ -39,7 +39,8 @@ void bind_all_to_all_async(nb::module_& mod) {
             multi_device_global_semaphore (GlobalSemaphore): Semaphore for synchronizing between devices.
 
         Keyword Args:
-            num_links (int, optional): Number of fabric links to use for communication. Defaults to 1.
+            num_links (int, optional): Number of fabric links to use for communication. Must be 1; this op does not
+                partition work across links yet, and other values raise an error. Defaults to 1.
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for buffers.
             topology (ttnn.Topology, optional): Network topology to use. Currently only Ring topology
                 is supported. Defaults to ttnn.Topology.Ring.

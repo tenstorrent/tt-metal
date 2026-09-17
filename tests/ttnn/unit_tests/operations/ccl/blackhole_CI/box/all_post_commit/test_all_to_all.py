@@ -357,3 +357,30 @@ def test_all_to_all(
         trace_mode=enable_trace,
         reuse_inputs=reuse_inputs,
     )
+
+
+@skip_for_wormhole_b0()
+@skip_for_n_or_less_dev(2)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True)
+def test_all_to_all_rejects_multi_link(bh_1d_mesh_device, function_level_defaults, expect_error):
+    """all_to_all_async does not partition work across fabric links yet, so num_links > 1 must fail
+    loudly instead of hanging (#41207)."""
+    num_devices = bh_1d_mesh_device.shape[0]
+    topology = ttnn.Topology.Ring
+    validate_test(num_devices, topology, bh_1d_mesh_device.shape, 0)
+    with expect_error(RuntimeError, "only num_links=1 is supported"):
+        run_all_to_all_impl(
+            bh_1d_mesh_device,
+            num_devices,
+            [1, 1, 44544, 3072 * 3],
+            2,
+            3,
+            2,
+            ttnn.bfloat16,
+            ttnn.TILE_LAYOUT,
+            topology=topology,
+            num_iters=1,
+            mem_config=ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
+            do_check=False,
+            trace_mode=False,
+        )

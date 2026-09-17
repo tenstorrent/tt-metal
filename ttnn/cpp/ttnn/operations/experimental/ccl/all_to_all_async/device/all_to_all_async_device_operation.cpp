@@ -126,9 +126,12 @@ void AllToAllAsyncDeviceOperation::validate_on_program_cache_miss(
         output_shape,
         expected_shape);
 
+    // Multi-link is not implemented: the program factory hands every link's sender the same full shard and the
+    // same receiver set, so a second link would duplicate traffic and the receivers' packet accounting would
+    // never complete (observed as a hang). Tracked in #41207.
     TT_FATAL(
         operation_attributes.num_links == 1,
-        "AllToAllAsync: num_links must be 1, but is {}",
+        "AllToAllAsync: only num_links=1 is supported (got {}); the work is not partitioned across links yet",
         operation_attributes.num_links);
 }
 

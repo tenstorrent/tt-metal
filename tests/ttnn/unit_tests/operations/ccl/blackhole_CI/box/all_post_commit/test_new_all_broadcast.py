@@ -246,6 +246,8 @@ def run_all_broadcast_impl(
     "num_devices, num_links, output_shape, layout, input_dtype",
     [
         (2, 1, [1, 1, 1, 32, 1024], ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (2, 2, [1, 1, 1, 32, 1024], ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (2, None, [1, 1, 1, 32, 1024], ttnn.TILE_LAYOUT, ttnn.bfloat16),  # default: every available link
     ],
 )
 @pytest.mark.parametrize(
