@@ -1,14 +1,14 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 //
-// Marshaller: flatten a tt-metal Program/IDevice into the public POD. Reads mirror
-// the runner's existing extraction (emulated_program_runner.cpp) 1:1 so the POD
-// carries exactly what silicon feeds. STAGE 1: fields whose reads are simple getters
-// are populated; callback-driven / firmware-layout fields (source, include paths,
-// named-arg namespaces, defines, Metal-2.0 bindings, Quasar procs, KernelGroup
-// launch offsets, DFB finalize offset, DRAM logical channel, fabric node id) are
-// left default with TODO(stage2) — the descriptor is built-and-discarded this stage,
-// so this preserves behavior; consumers and the remaining fields land in Stage 2.
+// Marshaller: flatten a tt-metal Program/IDevice into the public POD. This is the ONLY
+// place that reads private tt-metal types (ProgramImpl, Kernel, CircularBufferImpl, DFB,
+// metal_SocDescriptor, HAL); the interpretation modules consume the POD alone. Reads mirror
+// silicon's extraction 1:1 so the POD carries exactly what silicon feeds. The kernel pipeline
+// (program_model / kernel_defines / metal2_emit / device_map) consumes this live. Fields still
+// left default with TODO(stage2) — DFB finalize offset, DRAM logical channel, fabric node id,
+// PctInfo dev addrs, mesh/chip id — are the ones only the not-yet-converted prepare_program
+// consumers (cb_dfb_setup / build_core_map / setup_core_state) will need.
 
 #include "emule_descriptor_builder.hpp"
 
