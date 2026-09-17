@@ -64,6 +64,9 @@ class AllocatorImpl;
 class ThreadPool;
 struct TraceDescriptor;
 class DriscL1Arena;
+namespace streaming_profiler {
+class Receiver;
+}
 
 namespace distributed {
 
@@ -166,6 +169,10 @@ private:
     // before the rest of the mesh shutdown so its receiver thread observes a live device.
     std::unique_ptr<RealtimeProfilerManager> realtime_profiler_;
 
+    // Constructed by init_streaming_profiler() when TT_METAL_STREAMING_PROFILER is set; torn down in
+    // close_impl().
+    std::unique_ptr<streaming_profiler::Receiver> streaming_profiler_;
+
     // DRISC L1 arena for DRAM-sender GlobalCircularBuffer pages_sent allocations.
     // Constructed eagerly in initialize_impl() when the HAL exposes programmable
     // DRAM cores; torn down in close_impl(). Held as a shared_ptr so
@@ -196,6 +203,7 @@ private:
     // Throws if the tracker is null (e.g., on remote-only MeshDevices).
     void validate_sub_device_manager_tracker() const;
     std::vector<AllocatorImpl*> trace_allocators() const;
+    std::vector<AllocatorImpl*> trace_allocators(SubDeviceManagerId manager_id) const;
     // Resolves the mesh-wide device properties that are fixed once the devices are open. Called
     // during initialization and again after a reshape swaps the view.
     void establish_device_property_caches();
@@ -242,9 +250,9 @@ public:
 
     // Unsafe allocation tracking
     std::unordered_map<size_t, std::string> get_unsafe_tracked_ids(const MeshTraceId& trace_id) const;
+    std::unordered_map<size_t, std::string> get_unsafe_tracked_ids(
+        SubDeviceManagerId manager_id, const MeshTraceId& trace_id) const;
     void remove_unsafe_tracked_id(size_t buffer_unique_id);
-    static std::vector<size_t> drain_pending_traceback_ids();
-    static std::vector<size_t> drain_retired_traceback_ids();
     void push_corruptible_allocation_scope();
     void pop_corruptible_allocation_scope();
 
@@ -328,6 +336,7 @@ public:
         ttsl::Span<const std::uint32_t> l1_bank_remap = {},
         bool minimal = false);
     void init_realtime_profiler_socket(const std::shared_ptr<MeshDevice>& mesh_device);
+    void init_streaming_profiler(const std::shared_ptr<MeshDevice>& mesh_device);
     void trigger_realtime_profiler_sync_check();
     RealtimeProfilerManager* get_realtime_profiler() const;
 

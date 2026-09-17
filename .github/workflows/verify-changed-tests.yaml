@@ -87,11 +87,18 @@ env:
   # hits runtime_unit_tests.yaml and fabric_perf_tests.yaml. Everything else is
   # derived from the leg itself -- sim_* SKUs run under ttsim, and a pytest cmd
   # needs the wheel.
+  #
+  # blackhole_e2e_tests.yaml is on the list despite not being named *_profiler_tests:
+  # its LoudBox perf legs call run_device_perf, which shells out to `python3 -m tracy`.
+  # Without a profiler build the gate dispatches them and they fail on "Tracy tools
+  # not found" -- a gate artefact, not a test failure. blackhole-e2e-tests.yaml itself
+  # builds with `tracy: true` for the same reason.
   TRACY_BUILD_YAMLS: >-
     galaxy_profiler_tests.yaml
     single_card_profiler_tests.yaml
     t3k_profiler_tests.yaml
     runtime_perf_profiler_tests.yaml
+    blackhole_e2e_tests.yaml
 
 jobs:
   scope:
