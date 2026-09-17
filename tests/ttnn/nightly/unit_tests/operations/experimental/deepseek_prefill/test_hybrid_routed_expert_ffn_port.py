@@ -25,7 +25,6 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import TtRoutedExpert
 from tests.ttnn.utils_for_testing import comp_pcc
 from tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill import ci_pruning
 
-# The hybrid op is not wired into any model yet; nothing in CI should collect it.
 pytestmark = pytest.mark.uncollect_if(pred=ci_pruning.no_production_counterpart)
 
 _ALLOCATED_TOKENS = 5120
@@ -507,3 +506,82 @@ def test_merged_op_barrier_soak(device):
         )
         if (i + 1) % 10 == 0:
             logger.info(f"barrier soak: {i + 1}/{_SOAK_DISPATCHES} iterations")
+
+
+# Every model that turns the split on runs 256 routed experts over 8 chips.
+_MODEL_EXPERTS_PER_CHIP = 32
+# The threshold those models carry, so both halves are configured and placed.
+_MODEL_THRESHOLD = 320
+
+
+@pytest.mark.skipif(not is_blackhole(), reason="the routed expert is Blackhole-only")
+def test_union_config_fits_the_default_ring(device):
+    """The union program's kernel config has to fit the ring a device gets by default.
+
+    Sized at a model's expert count, not at one expert, because the two are not the same program:
+    the reader carries three per-expert weight addresses in its runtime args and the writer a
+    fourth, so the config grows about 2 KB between a single-expert case and a real 32-expert
+    layer, against a ring that does not move. Every other case in this file runs four experts and
+    would pass a budget the models fail.
+
+    One weight tensor is shared by all 32 experts on purpose -- this grades the program's size,
+    not its output, and 32 distinct copies of the real shape cost gigabytes of host memory.
+    """
+    emb_dim, hidden_dim = DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE
+    torch.manual_seed(42)
+
+    shared = {
+        "gate_proj": torch.randn(hidden_dim, emb_dim, dtype=torch.float32) * 0.02,
+        "up_proj": torch.randn(hidden_dim, emb_dim, dtype=torch.float32) * 0.02,
+        "down_proj": torch.randn(emb_dim, hidden_dim, dtype=torch.float32) * 0.02,
+    }
+    # Straddles the threshold so neither half is optimised away.
+    counts = [32] * 24 + [512] * 8
+    offsets, running = [], 0
+    for c in counts:
+        offsets.append(running)
+        running += c
+    assert running <= _ALLOCATED_TOKENS
+
+    torch_input = torch.randn(_ALLOCATED_TOKENS, emb_dim, dtype=torch.float32)
+    x = ttnn.from_torch(
+        torch_input,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        dtype=ttnn.bfloat16,
+    )
+    module = TtRoutedExpert(
+        mesh_device=device,
+        experts_per_chip=_MODEL_EXPERTS_PER_CHIP,
+        global_expert_idx_table=_idx_tensor(device, list(range(_MODEL_EXPERTS_PER_CHIP))),
+        emb_dim=emb_dim,
+        hidden_dim=hidden_dim,
+        max_tokens=_ALLOCATED_TOKENS,
+        torch_weights=[shared] * _MODEL_EXPERTS_PER_CHIP,
+        activation=ttnn.RoutedExpertActivation.Silu,
+        hybrid_token_threshold=_MODEL_THRESHOLD,
+    )
+
+    try:
+        ttnn.experimental.deepseek_prefill.hybrid_routed_expert_moe(
+            x,
+            _idx_tensor(device, offsets),
+            _idx_tensor(device, counts),
+            _idx_tensor(device, list(range(_MODEL_EXPERTS_PER_CHIP))),
+            module.gate_projs,
+            module.up_projs,
+            module.down_projs,
+            max_dispatched_tokens_per_expert=_ALLOCATED_TOKENS,
+            hybrid_token_threshold=_MODEL_THRESHOLD,
+            compute_kernel_config=module.compute_kernel_config,
+            activation=ttnn.RoutedExpertActivation.Silu,
+        )
+    except RuntimeError as exc:
+        if "kernel config buffer" not in str(exc):
+            raise
+        pytest.fail(
+            "the union program no longer fits the default kernel-config ring, so the op is broken "
+            "on every model that enables it. Recover the bytes in kernel text -- see the rules in "
+            f"hybrid_llk_shims.hpp for what may be out-of-lined.\n{exc}"
+        )
