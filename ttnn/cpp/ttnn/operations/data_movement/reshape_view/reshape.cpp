@@ -17,6 +17,8 @@
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
+#include "ttnn/operations/data_movement/reshape_on_device/codegen/reshape_codegen_device_operation.hpp"
+#include "ttnn/operations/data_movement/reshape_on_device/codegen/reshape_codegen_supported.hpp"
 #include "ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
 #include "ttnn/operations/data_movement/sharded/sharded_to_interleaved/sharded_to_interleaved.hpp"
 #include "ttnn/operations/data_movement/sharded/interleaved_to_sharded/interleaved_to_sharded.hpp"
@@ -30,6 +32,7 @@
 
 #include "reshape.hpp"
 #include "reshape_common.hpp"
+#include "reshape_force.hpp"
 #include "device/reshape_device_operation.hpp"
 
 namespace ttnn::operations::data_movement {
@@ -556,10 +559,12 @@ ttnn::Tensor reshape_tiled(
     return PerformView(output_tensor_3d, logical_shape, compute_padded_shape(logical_shape));
 }
 
-}  // namespace ttnn::operations::data_movement
+namespace detail {
 
-// Free function implementations
-ttnn::Tensor ttnn::reshape(
+// The existing composite/native implementation, unconditionally. Callers that have already been
+// routed here call this directly rather than re-entering ttnn::reshape, so a call routed to native
+// cannot be routed a second time and land on codegen partway through.
+ttnn::Tensor reshape_native(
     const ttnn::Tensor& tensor,
     const ttnn::Shape& logical_input_shape,
     const ttnn::Shape& padded_input_shape,
@@ -661,6 +666,112 @@ ttnn::Tensor ttnn::reshape(
         explicit_memory_config,
         skip_padding_fill,
         pad_value_explicit);
+}
+
+// Whether the codegen path can serve this call: ROW_MAJOR-only transport, unsharded and matching
+// the input's buffer type (checked again inside supported_by_codegen()), and a natural (unpadded)
+// output shape -- the codegen prim's TensorSpec is built from `output_shape` alone (see
+// ReshapeCodegenDeviceOperation::compute_output_specs), so it cannot serve an explicit over-padded
+// ROW_MAJOR request; that case is native-only (see the builder's own
+// "native codegen cannot allocate an over-padded ROW_MAJOR" guard, which this mirrors).
+// `sub_core_grid` is a placement/execution control the codegen program factory does not honor (it
+// always dispatches over the full `compute_with_storage_grid_size()`), so a caller that pins one
+// must not be silently rerouted onto the whole grid.
+bool codegen_can_serve_reshape(
+    const ttnn::Tensor& tensor,
+    const ttnn::Shape& logical_shape,
+    const ttnn::Shape& padded_shape,
+    const MemoryConfig& output_mem_config,
+    const std::optional<CoreRangeSet>& sub_core_grid) {
+    if (sub_core_grid.has_value()) {
+        return false;
+    }
+    // supported_by_codegen() answers "yes" for a host tensor (there is nothing device-side to
+    // bound against yet); routing must not follow that answer to a prim that requires a device
+    // buffer.
+    if (!is_device_tensor(tensor)) {
+        return false;
+    }
+    if (tensor.layout() != ttnn::ROW_MAJOR_LAYOUT) {
+        return false;
+    }
+    if (padded_shape != logical_shape) {
+        return false;
+    }
+    const uint32_t out_last_dim_elements = logical_shape.rank() >= 1 ? logical_shape[-1] : 1;
+    return ttnn::operations::data_movement::reshape_codegen::supported_by_codegen(
+        tensor, out_last_dim_elements, output_mem_config);
+}
+
+// The existing composite/native implementation, unconditionally.
+ttnn::Tensor reshape_force_native(
+    const ttnn::Tensor& tensor,
+    const ttnn::Shape& logical_input_shape,
+    const ttnn::Shape& padded_input_shape,
+    const std::optional<MemoryConfig>& memory_config) {
+    return reshape_native(
+        tensor,
+        logical_input_shape,
+        padded_input_shape,
+        memory_config,
+        /*pad_value=*/std::nullopt,
+        TileReshapeMapMode::CACHE,
+        /*sub_core_grid=*/std::nullopt,
+        /*skip_padding_fill=*/false);
+}
+
+// The generated implementation, unconditionally. TT_FATALs outside the codegen support scope
+// rather than falling back, so a comparison against native cannot silently end up measuring native
+// twice. is_demoted() is never consulted here -- a demoted-but-correct case must still be
+// reachable through this entry.
+ttnn::Tensor reshape_force_codegen(
+    const ttnn::Tensor& tensor,
+    const ttnn::Shape& logical_input_shape,
+    const ttnn::Shape& padded_input_shape,
+    const std::optional<MemoryConfig>& memory_config) {
+    const auto [logical_shape, padded_shape] =
+        operations::data_movement::shape_corrector(tensor, logical_input_shape, padded_input_shape);
+    const MemoryConfig output_mem_config = memory_config.value_or(tensor.memory_config());
+    TT_FATAL(
+        codegen_can_serve_reshape(tensor, logical_shape, padded_shape, output_mem_config, /*sub_core_grid=*/std::nullopt),
+        "reshape_force_codegen invoked for a case the codegen path does not support (requires an "
+        "unsharded ROW_MAJOR input and output sharing the input's buffer type, a natural (unpadded) "
+        "output shape, no sub_core_grid, and a scalar dtype that fits the transport's L1 staging "
+        "plan). This entry never falls back to native, because a forced leg that quietly served "
+        "native would make any comparison against native vacuous. Use ttnn::reshape if you want the "
+        "case routed.");
+    return ttnn::prim::reshape_codegen(tensor, ttnn::prim::ReshapeCodegenParams{logical_shape, output_mem_config});
+}
+
+}  // namespace detail
+
+}  // namespace ttnn::operations::data_movement
+
+// Free function implementations
+ttnn::Tensor ttnn::reshape(
+    const ttnn::Tensor& tensor,
+    const ttnn::Shape& logical_input_shape,
+    const ttnn::Shape& padded_input_shape,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<PadValue>& pad_value,
+    const TileReshapeMapMode reshape_map_mode,
+    const std::optional<CoreRangeSet>& sub_core_grid,
+    const bool skip_padding_fill) {
+    namespace detail_ns = operations::data_movement::detail;
+    namespace reshape_codegen = operations::data_movement::reshape_codegen;
+
+    const auto [logical_shape, padded_shape] =
+        operations::data_movement::shape_corrector(tensor, logical_input_shape, padded_input_shape);
+    const MemoryConfig output_mem_config = memory_config.value_or(tensor.memory_config());
+
+    if (detail_ns::codegen_can_serve_reshape(tensor, logical_shape, padded_shape, output_mem_config, sub_core_grid) &&
+        !reshape_codegen::is_demoted(tensor, logical_shape.rank() >= 1 ? logical_shape[-1] : 1, output_mem_config)) {
+        return ttnn::prim::reshape_codegen(tensor, ttnn::prim::ReshapeCodegenParams{logical_shape, output_mem_config});
+    }
+
+    return detail_ns::reshape_native(
+        tensor, logical_input_shape, padded_input_shape, memory_config, pad_value, reshape_map_mode, sub_core_grid,
+        skip_padding_fill);
 }
 
 ttnn::Tensor ttnn::reshape(

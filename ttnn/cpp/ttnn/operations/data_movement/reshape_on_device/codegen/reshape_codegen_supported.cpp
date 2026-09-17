@@ -92,10 +92,14 @@ bool supported_by_codegen(const Tensor& input, uint32_t out_last_dim_elements, c
     return plan.nabatch > 0;
 }
 
-bool is_demoted(const Tensor& /*input*/, uint32_t /*out_last_dim_elements*/, const MemoryConfig& /*output_mem_config*/) {
-    // No shape is perf-demoted yet; this is the routing extension point once a measured
-    // device-time regression is found.
-    return false;
+bool is_demoted(const Tensor& input, uint32_t out_last_dim_elements, const MemoryConfig& /*output_mem_config*/) {
+    // A last-dim-preserving ROW_MAJOR reshape is a zero-cost metadata view on the native path (see
+    // ttnn::reshape's `this_is_view` -- unchanged last dim plus matching sharded/L1 placement,
+    // which is guaranteed here because supported_by_codegen() already requires an unsharded output
+    // in the input's own buffer type). Codegen has no such fast path; it always dispatches a
+    // program. Demote so `auto` keeps the free view instead of paying for a real kernel launch to
+    // reproduce it byte-for-byte.
+    return input.logical_shape().rank() >= 1 && out_last_dim_elements == input.logical_shape()[-1];
 }
 
 }  // namespace ttnn::operations::data_movement::reshape_codegen
