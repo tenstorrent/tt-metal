@@ -682,6 +682,7 @@
     uv pip install -r models/demos/gemma4/requirements.txt
     export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=google/gemma-4-12B-it TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google--gemma-4-12B-it
     pytest -s --timeout 1500 models/demos/gemma4/demo/text_demo.py::test_demo
+    GEMMA_RMS_TRACE=1 pytest -s --timeout 1800 models/demos/gemma4/tests/unit/test_model.py::test_full_model
     pytest -s --timeout 900 \
       models/demos/gemma4/tests/unit/test_lm_head.py \
       models/demos/gemma4/tests/unit/test_packed_verify.py \
