@@ -1583,9 +1583,32 @@ def test_the_integer_format_list_comes_from_the_enum_not_from_format_dict():
     """``format_dict`` omits ``Bfp8`` and both ``MxFp4_2x`` variants and gives the
     ``MxInt*`` formats a bfloat16 proxy, so deriving the integer set through it would
     silently miss a format added without an entry — or given a float proxy.
-    ``DataFormat.is_integer()`` is the authority, and this pins the two agreeing today so
-    a divergence is a test failure rather than a quiet coverage hole."""
-    assert set(INTEGER_FORMATS) == {f for f in DataFormat if f.is_integer()}
-    assert (
-        INTEGER_FORMATS
-    ), "the derivation has gone empty; every test using it is vacuous"
+    ``DataFormat.is_integer()`` is the authority.
+
+    Pinned as the explicit six rather than against ``{f for f in DataFormat if
+    f.is_integer()}``, which is ``INTEGER_FORMATS``' own defining expression over the same
+    live enum and so cannot fail under any change to either. The motivating gap is
+    asserted directly below it: every integer format happens to be in ``format_dict``
+    today, so a ``format_dict``-derived list yields the identical set and a comparison
+    between the two would stay green as well."""
+    assert set(INTEGER_FORMATS) == {
+        DataFormat.Int32,
+        DataFormat.Int16,
+        DataFormat.Int8,
+        DataFormat.UInt32,
+        DataFormat.UInt16,
+        DataFormat.UInt8,
+    }
+
+    # The reason for not deriving through format_dict, stated as the gap it leaves.
+    from helpers.llk_params import format_dict
+
+    missing_from_format_dict = {f for f in DataFormat if f not in format_dict}
+    assert {
+        DataFormat.Bfp8,
+        DataFormat.MxFp4_2x_A,
+        DataFormat.MxFp4_2x_B,
+    } <= missing_from_format_dict, sorted(f.name for f in missing_from_format_dict)
+    # And the proxied ones, which format_dict maps onto a *float* dtype.
+    for fmt in (DataFormat.MxInt8, DataFormat.MxInt4, DataFormat.MxInt2):
+        assert format_dict[fmt] is torch.bfloat16

@@ -21,16 +21,17 @@ from helpers.llk_params import (
     ApproximationMode,
     DestAccumulation,
     MathOperation,
+    MathOpType,
 )
 from helpers.sfpu_accuracy_budget import (
     _SFPU_ACCURACY_BUDGET,
     BFP8_B_EXACT_INTEGER_DOMAIN,
     DEFAULT,
-    METRIC_TOLERANCE,
-    METRIC_ULP,
+    MEASURED_ARCH,
     TOLERANCE_CONTRACT,
     AccuracyContract,
     BudgetKey,
+    Metric,
     accuracy_contract,
     enrolled_ops,
     resolve_contract,
@@ -39,6 +40,7 @@ from helpers.sfpu_accuracy_budget import (
 from helpers.sfpu_domains import for_op
 from helpers.tile_constants import DEFAULT_TILE_C_DIM, DEFAULT_TILE_R_DIM
 from helpers.ulp import (
+    _ULP_PROXY_DTYPES,
     INTEGER_FORMATS,
     MAX_MEANINGFUL_ULP,
     ULP_FORMATS,
@@ -46,6 +48,34 @@ from helpers.ulp import (
     ulp_dtype,
 )
 from helpers.utils import passed_test
+
+
+def _integer_only_ops() -> set:
+    """Every SFPU op whose operands and result are integers, from canonical sources.
+
+    Three of them, because the harness has no single classification that covers all:
+
+    * ``MathOpType.SFPU_BINARY_INT`` — the typed integer binaries (``SfpuGtInt`` and its
+      siblings).
+    * ``test_eltwise_unary_sfpu._INT_UNARY_OPS`` — the driver list for the integer unary
+      kernels, which is the canonical statement of which unaries take the integer path.
+      ``ReluMin`` is removed again: it is the one entry there that is not integer-only,
+      and ``sfpu_operations.h`` picks its ``vInt`` branch only on ``math_format ==
+      Int32``.
+    * ``SfpuGcd`` — typed ``SFPU_BINARY`` rather than ``SFPU_BINARY_INT``, so neither
+      source above catches it, and its operands are integers.
+    """
+    from test_eltwise_unary_sfpu import _INT_UNARY_OPS
+
+    typed_binaries = {
+        op
+        for op in MathOperation
+        if op.value.operation_type is MathOpType.SFPU_BINARY_INT
+    }
+    return (typed_binaries | set(_INT_UNARY_OPS) | {MathOperation.SfpuGcd}) - {
+        MathOperation.ReluMin
+    }
+
 
 BLOCK_FORMATS_WITHOUT_ULP = [
     DataFormat.Bfp4_b,
@@ -64,7 +94,7 @@ def test_a_ulp_contract_needs_a_budget():
     with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
         ValueError, match="needs max_ulp"
     ):
-        AccuracyContract(metric=METRIC_ULP)
+        AccuracyContract(metric=Metric.ULP)
 
 
 def test_a_ulp_contract_rejects_a_tolerance():
@@ -80,7 +110,7 @@ def test_a_tolerance_contract_rejects_a_budget():
     with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
         ValueError, match="belong to the ulp metric"
     ):
-        AccuracyContract(metric=METRIC_TOLERANCE, max_ulp=1)
+        AccuracyContract(metric=Metric.TOLERANCE, max_ulp=1)
 
 
 def test_a_negative_budget_is_rejected():
@@ -90,11 +120,12 @@ def test_a_negative_budget_is_rejected():
         AccuracyContract(max_ulp=-1)
 
 
-def test_an_unknown_metric_is_rejected():
-    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
-        ValueError, match="unknown accuracy metric"
-    ):
-        AccuracyContract(metric="pcc", max_ulp=1)
+def test_the_metric_is_a_closed_set():
+    """Replaces a test for a rejected unknown metric: ``Metric`` is an enum, so an
+    unknown value is unrepresentable rather than caught by a hand-rolled check."""
+    assert set(Metric) == {Metric.ULP, Metric.TOLERANCE}
+    assert AccuracyContract(max_ulp=1).metric is Metric.ULP
+    assert TOLERANCE_CONTRACT.metric is Metric.TOLERANCE
 
 
 @pytest.mark.parametrize(
@@ -109,7 +140,7 @@ def test_an_unknown_metric_is_rejected():
             {"max_ulp": 3, "near_zero_atol": 1e-7},
         ),
         (
-            AccuracyContract(metric=METRIC_TOLERANCE, atol=0.13, rtol=0.05),
+            AccuracyContract(metric=Metric.TOLERANCE, atol=0.13, rtol=0.05),
             {"custom_atol": 0.13, "custom_rtol": 0.05},
         ),
         (TOLERANCE_CONTRACT, {"custom_atol": None, "custom_rtol": None}),
@@ -126,7 +157,7 @@ def test_every_contract_is_accepted_by_passed_test():
     for contract in (
         AccuracyContract(max_ulp=1),
         AccuracyContract(max_ulp=1, near_zero_atol=1e-7),
-        AccuracyContract(metric=METRIC_TOLERANCE, atol=0.13, rtol=0.05),
+        AccuracyContract(metric=Metric.TOLERANCE, atol=0.13, rtol=0.05),
         TOLERANCE_CONTRACT,
     ):
         assert passed_test(
@@ -278,7 +309,7 @@ def test_an_unenrolled_op_keeps_todays_gate():
     assert MathOperation.Exp not in enrolled_ops()
     for fmt in ULP_FORMATS:
         assert (
-            accuracy_contract(MathOperation.Exp, output_format=fmt)
+            accuracy_contract(MathOperation.Exp, output_format=fmt, arch=MEASURED_ARCH)
             is TOLERANCE_CONTRACT
         )
 
@@ -291,7 +322,89 @@ def test_an_enrolled_op_keeps_todays_gate_on_a_format_without_a_per_element_ulp(
     """
     assert not has_ulp_gate(fmt)
     assert MathOperation.Abs in enrolled_ops()
-    assert accuracy_contract(MathOperation.Abs, output_format=fmt) is TOLERANCE_CONTRACT
+    assert (
+        accuracy_contract(MathOperation.Abs, output_format=fmt, arch=MEASURED_ARCH)
+        is TOLERANCE_CONTRACT
+    )
+
+
+@pytest.mark.parametrize(
+    "arch", [a for a in ChipArchitecture if a != MEASURED_ARCH], ids=lambda a: a.name
+)
+@pytest.mark.parametrize(
+    "op", [MathOperation.SigmoidAppx, MathOperation.GeluAppx], ids=lambda o: o.name
+)
+def test_a_declared_tolerance_survives_an_unswept_architecture(op, arch):
+    """The arch gate exists to stop *WH-measured step budgets* binding elsewhere. It must
+    not take a declared tolerance with it.
+
+    These two carry ``atol=0.13`` because a coarse 3-segment LUT peaks near its knees --
+    the number they had as ``CUSTOM_TOLERANCES``, which applied on every architecture.
+    Returning the tolerance contract before the registry lookup dropped them back to the
+    default ``atol=0.05`` on Blackhole and Quasar, which is the gate that number exists to
+    widen. Resolving first and downgrading only a ULP contract is what keeps both true.
+    """
+    contract = accuracy_contract(
+        op,
+        output_format=DataFormat.Float16_b,
+        approx_mode=ApproximationMode.Yes,
+        dest_acc=DestAccumulation.No,
+        arch=arch,
+    )
+    assert contract.metric is Metric.TOLERANCE
+    assert contract.atol == 0.13 and contract.rtol == 0.05
+
+
+@pytest.mark.parametrize(
+    "arch", [a for a in ChipArchitecture if a != MEASURED_ARCH], ids=lambda a: a.name
+)
+def test_a_step_budget_does_not_bind_on_an_unswept_architecture(arch):
+    """The other half: every number in the table was measured on Wormhole with no
+    headroom, so a ULP contract must not survive the trip."""
+    on_wh = accuracy_contract(
+        MathOperation.Abs, output_format=DataFormat.Float32, arch=MEASURED_ARCH
+    )
+    assert on_wh.metric is Metric.ULP and on_wh.max_ulp == 0
+    assert (
+        accuracy_contract(
+            MathOperation.Abs, output_format=DataFormat.Float32, arch=arch
+        )
+        is TOLERANCE_CONTRACT
+    )
+
+
+def test_arch_must_be_passed_explicitly():
+    """``arch`` is the one dimension where the numbers do not transfer, so unlike the
+    other three it cannot be left unset and quietly resolved against the Wormhole table.
+    A second enroller that forgets the keyword fails at the call."""
+    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+        TypeError, match="arch"
+    ):
+        accuracy_contract(MathOperation.Abs, output_format=DataFormat.Float32)
+
+
+def test_a_variant_specific_tolerance_needs_no_driver_override():
+    """Why removing ``custom_atol``/``custom_rtol`` from the driver loses nothing: a
+    tolerance narrower than the op's default is expressible as a more specific
+    :class:`BudgetKey`, so it does not have to move the op's other variants.
+
+    The registry is the single source of truth for a number; the alternative is the
+    per-test magic number this whole mechanism removes.
+    """
+    table = {
+        DEFAULT: AccuracyContract(metric=Metric.TOLERANCE, atol=0.13, rtol=0.05),
+        BudgetKey(output_format=DataFormat.Float32): AccuracyContract(
+            metric=Metric.TOLERANCE, atol=0.001, rtol=0.001
+        ),
+    }
+    narrow = resolve_contract(
+        table, label="probe", output_format=DataFormat.Float32, arch=MEASURED_ARCH
+    )
+    assert narrow.atol == 0.001
+    broad = resolve_contract(
+        table, label="probe", output_format=DataFormat.Float16_b, arch=MEASURED_ARCH
+    )
+    assert broad.atol == 0.13
 
 
 def test_every_enrolled_op_resolves_to_something_usable_on_a_float_format():
@@ -304,8 +417,8 @@ def test_every_enrolled_op_resolves_to_something_usable_on_a_float_format():
                 dest_acc=DestAccumulation.No,
                 arch=ChipArchitecture.WORMHOLE,
             )
-            assert contract.metric in (METRIC_ULP, METRIC_TOLERANCE)
-            if contract.metric == METRIC_ULP:
+            assert contract.metric in (Metric.ULP, Metric.TOLERANCE)
+            if contract.metric == Metric.ULP:
                 assert contract.max_ulp is not None and contract.max_ulp >= 0
 
 
@@ -323,7 +436,11 @@ def test_enrolled_ops_is_sorted_and_stable():
 # budget gets quietly ruined: raising it until a failure goes away.
 # ─────────────────────────────────────────────────────────────────────────────
 
-ULP_CAPABLE_FORMATS = list(ULP_FORMATS) + [DataFormat.Bfp8_b]
+# Derived the same way validate_registry() derives it, not hardcoded: add a second entry
+# to _ULP_PROXY_DTYPES and has_ulp_gate() starts accepting that format and the validator
+# picks it up, but a literal list here would not -- and then every guard in this file
+# quietly stops covering it, which is where a too-wide budget would hide.
+ULP_CAPABLE_FORMATS = list(ULP_FORMATS) + list(_ULP_PROXY_DTYPES)
 
 #: Every op whose result is exact by construction — sign-bit manipulation, a copy, or an
 #: integer-valued result. None of these can legitimately need a wide budget, so a large
@@ -349,7 +466,9 @@ def _every_variant(op):
     for fmt in ULP_CAPABLE_FORMATS:
         for approx_mode in list(ApproximationMode) + [None]:
             for dest_acc in list(DestAccumulation) + [None]:
-                for arch in list(ChipArchitecture) + [None]:
+                for (
+                    arch
+                ) in ChipArchitecture:  # arch is required; None is unrepresentable
                     yield fmt, accuracy_contract(
                         op,
                         output_format=fmt,
@@ -365,7 +484,7 @@ def test_an_exact_op_never_carries_a_wide_budget(op):
     pack path; more than that is not the op, and a budget hiding it defeats the point of
     having these enrolled as the canaries."""
     for fmt, contract in _every_variant(op):
-        if contract.metric == METRIC_ULP:
+        if contract.metric == Metric.ULP:
             assert contract.max_ulp <= 1, (
                 f"{op.name} on {fmt.name} carries max_ulp={contract.max_ulp}. These "
                 "ops are exact by construction; a budget this wide means the number was "
@@ -383,7 +502,7 @@ def test_no_budget_exceeds_its_formats_meaningful_ceiling():
     """
     for op in enrolled_ops():
         for fmt, contract in _every_variant(op):
-            if contract.metric != METRIC_ULP:
+            if contract.metric != Metric.ULP:
                 continue
             ceiling = MAX_MEANINGFUL_ULP[ulp_dtype(fmt)]
             assert contract.max_ulp <= ceiling, (
@@ -407,7 +526,7 @@ def test_the_integer_valued_ops_are_the_only_ones_enrolled_on_bfp8_b():
         op
         for op in enrolled_ops()
         for fmt, contract in _every_variant(op)
-        if fmt is DataFormat.Bfp8_b and contract.metric == METRIC_ULP
+        if fmt is DataFormat.Bfp8_b and contract.metric == Metric.ULP
     }
     assert enrolled_on_bfp8 == {
         MathOperation.Floor,
@@ -448,8 +567,8 @@ def test_the_integer_short_circuit_holds_for_every_op(fmt):
     green. ``test_no_table_entry_can_gate_an_integer_format`` is what guards the table.
     """
     for op in MathOperation:
-        contract = accuracy_contract(op, output_format=fmt)
-        assert contract.metric == METRIC_TOLERANCE, (
+        contract = accuracy_contract(op, output_format=fmt, arch=MEASURED_ARCH)
+        assert contract.metric == Metric.TOLERANCE, (
             f"{op.name} resolves to a {contract.metric} contract on {fmt.name}. ULP is "
             "not a gate for an integer format; it wants bit equality."
         )
@@ -462,7 +581,7 @@ def test_no_table_entry_can_gate_an_integer_format():
     ``Int32``/``Int16``/``Int8``/``Shift``/``Bitwise``."""
     for op, table in _SFPU_ACCURACY_BUDGET.items():
         for key, contract in table.items():
-            if contract.metric != METRIC_ULP:
+            if contract.metric != Metric.ULP:
                 continue
             fmt = key.output_format
             assert fmt is None or not fmt.is_integer(), (
@@ -474,14 +593,29 @@ def test_no_table_entry_can_gate_an_integer_format():
 def test_the_integer_ops_are_not_enrolled():
     """No integer-only SFPU op carries a contract. If one is added it belongs on the
     tolerance metric — or on an exact-equality gate, which this harness does not have
-    yet — not on a step count."""
-    enrolled = {op.name for op in enrolled_ops()}
-    integer_ops = {
-        op.name
-        for op in MathOperation
-        if any(
-            token in op.name for token in ("Int32", "Int16", "Int8", "Shift", "Bitwise")
-        )
-    }
-    assert integer_ops, "no integer MathOperations found; the derivation has broken"
-    assert not (enrolled & integer_ops), sorted(enrolled & integer_ops)
+    yet — not on a step count.
+
+    Derived from the canonical classification and driver sets rather than from name
+    tokens. A token list over ``Int32``/``Int16``/``Int8``/``Shift``/``Bitwise`` misses
+    ``UnaryMaxUint32``/``UnaryMinUint32`` (``Uint32`` does not contain ``Int32``), every
+    ``SFPU_BINARY_INT`` member such as ``SfpuGtInt``, and ``SfpuGcd`` — so enrolling one
+    of those left this green, and under a ``DEFAULT`` key
+    ``test_no_table_entry_can_gate_an_integer_format`` cannot see it either
+    (``key.output_format`` is ``None``) and neither can the short-circuit test.
+    """
+    integer_ops = _integer_only_ops()
+    # Pin the ops a name-token derivation used to miss, so this set cannot silently
+    # narrow back to one.
+    for op in (
+        MathOperation.UnaryMaxUint32,
+        MathOperation.UnaryMinUint32,
+        MathOperation.SfpuGtInt,
+        MathOperation.SfpuGcd,
+        MathOperation.LeftShift,
+    ):
+        assert op in integer_ops, f"{op.name} dropped out of the integer-op derivation"
+
+    enrolled = set(enrolled_ops())
+    assert not (enrolled & integer_ops), sorted(
+        op.name for op in enrolled & integer_ops
+    )
