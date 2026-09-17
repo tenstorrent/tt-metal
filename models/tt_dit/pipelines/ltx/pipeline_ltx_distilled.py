@@ -897,6 +897,7 @@ class LTXDistilledPipeline(LTXPipeline):
         profile_drain: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         B = 1
+        _t_init = time.perf_counter()
         latent_frames, latent_h, latent_w = latent_grid(num_frames, height, width)
         hw = latent_h * latent_w
         # THREE lengths that COINCIDE for base/i2v/keyframe but SPLIT for reference:
@@ -1098,6 +1099,7 @@ class LTXDistilledPipeline(LTXPipeline):
             )
             tt_i2v_mask, tt_i2v_clean = state.tt_i2v_mask, state.tt_i2v_clean
 
+        logger.info(f"  denoise init (latent/prompt/mask uploads): {(time.perf_counter() - _t_init) * 1000:.0f} ms")
         for step_idx in range(num_steps):
             _t_step = time.perf_counter()
             sigma = sigmas[step_idx].item()
@@ -1352,11 +1354,14 @@ class LTXDistilledPipeline(LTXPipeline):
         video_N = self._sp_pad_len(video_N_real)
         sp_axis = self.parallel_config.sequence_parallel.mesh_axis
         B, C = 1, self.in_channels
+        _t0 = time.perf_counter()
         torch.manual_seed(seed)
         noise = torch.randn((B, video_N_real, C), dtype=torch.bfloat16)  # identical draws to the host path
         noise_p = torch.zeros(1, B, video_N, C, dtype=torch.float32)
         noise_p[0, :, :video_N_real, :] = noise.float()
+        _t1 = time.perf_counter()
         io["noise"].update(noise_p, True, mesh_axes=[None, None, sp_axis, None], device=self.mesh_device)
+        _t2 = time.perf_counter()
         out = self._stage_transition(
             tokens=tokens,
             noise=io["noise"].value,
@@ -1374,6 +1379,11 @@ class LTXDistilledPipeline(LTXPipeline):
         )
         if traced and io["weights"] is None:
             io["weights"] = self._upsampler_weight_addresses()
+        # Where the transition's wall time goes: host draw, host tilize + upload, device replay (enqueue).
+        logger.info(
+            f"  stage transition: draw {(_t1 - _t0) * 1000:.0f} ms, upload {(_t2 - _t1) * 1000:.0f} ms, "
+            f"replay {(time.perf_counter() - _t2) * 1000:.0f} ms"
+        )
         return out
 
     def generate(
