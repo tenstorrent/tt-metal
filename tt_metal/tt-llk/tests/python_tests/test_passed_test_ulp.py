@@ -19,7 +19,7 @@ import torch
 from helpers.format_config import DataFormat
 from helpers.tile_constants import DEFAULT_TILE_C_DIM, DEFAULT_TILE_R_DIM
 from helpers.ulp import ulp_distance
-from helpers.utils import calculate_pcc, passed_test
+from helpers.utils import PCC_SIGNAL_FLOOR, calculate_pcc, passed_test
 
 TILE_SIZE = DEFAULT_TILE_R_DIM * DEFAULT_TILE_C_DIM
 
@@ -166,13 +166,27 @@ def test_the_budget_catches_what_pcc_waves_through():
 
 
 def test_pcc_is_not_consulted_under_a_budget():
-    """A result inside the budget passes even where PCC would not be computed at all —
-    the all-but-zero golden that trips ``PCC_SIGNAL_FLOOR`` — so the budget is the whole
-    verdict rather than one of three."""
+    """The budget is the whole verdict, not one of three: a result every lane of which is
+    inside a loose budget passes even though PCC is far under ``target_pcc``.
+
+    An all-but-zero golden cannot pin this. ``1e-8`` is below ``PCC_SIGNAL_FLOOR``, so the
+    pre-existing floor guard further down ``passed_test`` returns the same verdict on the
+    same value and the new early return is never what made the test pass. This golden is
+    well above the floor, and half the tile is shifted a whole binade -- 128 bf16 steps,
+    inside ``max_ulp=128`` and nowhere near a 0.99 correlation."""
     fmt = DataFormat.Float16_b
-    golden = _tile(1e-8, fmt)
-    assert passed_test(golden, golden.clone(), fmt, max_ulp=0)
-    assert not passed_test(golden, _step(golden, 2), fmt, max_ulp=1, print_errors=False)
+    golden = torch.linspace(1.0, 512.0, TILE_SIZE, dtype=torch.float32).to(
+        TORCH_DTYPE[fmt]
+    )
+    result = golden.clone()
+    result[: TILE_SIZE // 2] = golden[: TILE_SIZE // 2] * 2.0
+
+    assert float(golden.abs().max()) > PCC_SIGNAL_FLOOR
+    assert calculate_pcc(result, golden) < 0.99, "PCC must be the thing being skipped"
+    assert not passed_test(golden, result, fmt)  # the tolerance+PCC gate rejects it
+    assert passed_test(golden, result, fmt, max_ulp=128)
+    # And the budget is still a real bound one step below what the shift costs.
+    assert not passed_test(golden, result, fmt, max_ulp=127, print_errors=False)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -249,13 +263,30 @@ def test_a_failure_at_the_top_of_the_range_does_not_log_an_infinite_step(capture
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def test_bfp8_b_is_gated_in_bf16_step_space():
-    """The budget gates the SFPU's own error; the block lattice accepts quantization.
+def test_a_fp16_budget_sees_the_subnormal_band_it_used_to_flush():
+    """``ulp_elementwise_valid`` hardcoded ``flush_subnormals=True``, so the gate overrode
+    the per-dtype default the metric deliberately sets to ``False`` for fp16.
 
-    A constant tile cannot exercise this — every lane is its own block maximum, so one
-    bf16 step is also one lattice step and the lattice arm accepts anything the budget
-    would. The tile below spans a wide magnitude range inside each 16-element block, which
-    is the case where the two criteria actually differ.
+    fp16 keeps its subnormals in this harness -- ``golden_generators._FTZ_THRESHOLD`` is
+    ``2**-24`` there, the smallest fp16 *subnormal* -- so an fp16 golden legitimately
+    carries the whole band. Collapsing it let the gate accept up to 1023 representable
+    steps of error near zero under a 0-step budget.
+    """
+    fmt = DataFormat.Float16
+    smallest = 2.0**-24
+    golden = _tile(smallest, fmt)
+    result = _tile(1023 * smallest, fmt)
+    assert float(golden[0]) != 0.0 and float(result[0]) != 0.0
+
+    assert int(ulp_distance(golden, result).max()) == 1022
+    assert not passed_test(golden, result, fmt, max_ulp=0, print_errors=False)
+    assert not passed_test(golden, result, fmt, max_ulp=1021, print_errors=False)
+    assert passed_test(golden, result, fmt, max_ulp=1022)
+
+
+def test_bfp8_b_is_gated_in_bf16_step_space():
+    """Bfp8_b has no float dtype of its own, so the budget is counted in bfloat16 steps
+    against the tensor ``passed_test`` has already cast. Nothing is ORed in beside it.
     """
     fmt = DataFormat.Bfp8_b
     golden = torch.zeros(TILE_SIZE, dtype=torch.bfloat16)
@@ -267,19 +298,38 @@ def test_bfp8_b_is_gated_in_bf16_step_space():
 
     assert passed_test(golden, golden.clone(), fmt, max_ulp=0)
 
-    # A lane wrong by far more than either criterion allows must still fail.
+    # A lane wrong by far more than the budget allows must still fail.
     broken = golden.clone()
     broken[1] = 8.0
     assert not passed_test(golden, broken, fmt, max_ulp=1, print_errors=False)
 
 
-def test_a_bfp8_b_budget_does_not_charge_for_legal_block_quantization():
-    """A bf16 step count is block-blind: one step of the Bfp8_b lattice is
-    ``2**(floor(log2 amax) - floor(log2 x) + 1)`` bf16 steps, so a lane small relative to
-    its block is many bf16 steps away while being perfectly legal. ``near_zero_atol``
-    cannot absorb it — its band is 1% of the *tensor* maximum, and such a lane is only
-    small relative to its own block — so the budget arm ORs in the same lattice compare
-    the tolerance arm uses.
+def test_one_bfp8_b_step_is_two_bf16_steps():
+    """Bfp8_b's 7 magnitude bits *include* an explicit leading 1, so it has 6 fractional
+    bits against bfloat16's 7. A budget denominated in bf16 steps therefore buys half as
+    many format steps, and an odd budget buys the same as the even one below it."""
+    fmt = DataFormat.Bfp8_b
+    golden = _tile(1.0, fmt)  # a constant tile: every lane is its own block maximum
+    one_bfp8_step = _step(golden, 2)
+
+    assert int(ulp_distance(golden, one_bfp8_step).max()) == 2
+    assert passed_test(golden, one_bfp8_step, fmt, max_ulp=2)
+    assert not passed_test(golden, one_bfp8_step, fmt, max_ulp=1, print_errors=False)
+
+
+def test_a_bfp8_b_budget_does_charge_for_legal_block_quantization():
+    """The price of the proxy gate, and the reason a Bfp8_b budget is only usable where
+    the block quantization is exact.
+
+    One step of the Bfp8_b lattice is ``2**(floor(log2 amax) - floor(log2 x) + 1)`` bf16
+    steps, so a lane small relative to its block is many bf16 steps from the golden while
+    being perfectly legal -- 69 steps for a lane at 0.06 inside a block with amax 2.77.
+    The budget charges for all of it. ORing the block-aware lattice compare in would have
+    hidden that, at the cost of ``max_ulp`` no longer being the enforced maximum for this
+    format: a lane 69 steps out would pass a ``max_ulp=0`` budget on the lattice's say-so,
+    and the reported worst lane would be one the verdict had already accepted.
+    ``near_zero_atol`` cannot absorb it either -- its band is relative to the *tensor*
+    maximum, and such a lane is only small relative to its own block.
     """
     fmt = DataFormat.Bfp8_b
     golden = torch.zeros(TILE_SIZE, dtype=torch.bfloat16)
@@ -287,11 +337,32 @@ def test_a_bfp8_b_budget_does_not_charge_for_legal_block_quantization():
     for offset in range(1, 16):
         golden[offset::16] = 0.06
 
-    # One lattice step on a small lane inside a wide block, which is ~64 bf16 steps.
     quantized = golden.clone()
     quantized[1::16] = float(torch.tensor(0.06 + 2.0 ** (1 - 6), dtype=torch.bfloat16))
-    assert int(ulp_distance(golden, quantized).max()) > 1
-    assert passed_test(golden, quantized, fmt, max_ulp=1)
+    assert int(ulp_distance(golden, quantized).max()) == 69
+
+    assert not passed_test(golden, quantized, fmt, max_ulp=1, print_errors=False)
+    assert not passed_test(golden, quantized, fmt, max_ulp=68, print_errors=False)
+    assert passed_test(golden, quantized, fmt, max_ulp=69)
+    # The tolerance arm is where such an op belongs: its lattice compare is block-aware.
+    assert passed_test(golden, quantized, fmt)
+
+
+def test_a_bfp8_b_budget_is_exact_where_the_block_quantization_is(captured_logs):
+    """The enrollable case, and the one the per-op budget registry uses: integer-valued
+    results inside a single binade quantize exactly, so a 0-step budget is legitimate.
+
+    Also the case the removed lattice OR used to blur -- with nothing ORed in, the
+    reported worst lane is a lane the verdict actually judged.
+    """
+    fmt = DataFormat.Bfp8_b
+    golden = torch.zeros(TILE_SIZE, dtype=torch.bfloat16)
+    for offset in range(16):
+        golden[offset::16] = float(64 + offset)  # 64..79, one binade, integer-valued
+
+    assert passed_test(golden, golden.clone(), fmt, max_ulp=0)
+    assert not passed_test(golden, _step(golden, 2), fmt, max_ulp=1, print_errors=False)
+    assert "max 2 ULP @ [0] (budget 1)" in "\n".join(captured_logs)
 
 
 @pytest.mark.parametrize(
@@ -412,9 +483,25 @@ def test_a_silenced_failure_does_not_append_to_the_persistent_error_log(captured
 
 
 def test_a_reported_failure_still_logs_at_error_level(captured_logs):
+    """``captured_logs`` is a TRACE sink, so a substring check against it cannot tell
+    ``logger.error`` from the ``logger.debug`` fallback -- swap the call and it still
+    passes. An ERROR-level sink is what pins the positive direction of the
+    ``print_errors and not _RECORD_TEST_ORDER`` guard, mirroring
+    ``test_a_silenced_failure_does_not_append_to_the_persistent_error_log``."""
+    from loguru import logger as loguru_logger
+
     fmt = DataFormat.Float16_b
     golden = _tile(1.0, fmt)
-    assert not passed_test(golden, _step(golden, 9), fmt, max_ulp=1, print_errors=True)
+    errors = []
+    sink = loguru_logger.add(errors.append, level="ERROR", format="{message}")
+    try:
+        assert not passed_test(
+            golden, _step(golden, 9), fmt, max_ulp=1, print_errors=True
+        )
+    finally:
+        loguru_logger.remove(sink)
+
+    assert any("ULP budget exceeded" in record for record in errors), errors
     assert "ULP budget exceeded" in "\n".join(captured_logs)
 
 
@@ -448,7 +535,13 @@ def test_a_budget_alongside_multiple_l1_passes_raises():
     with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
         ValueError, match="L1_to_L1_iterations"
     ):
-        passed_test(golden, golden.clone(), DataFormat.Float16_b, 2, max_ulp=1)
+        passed_test(
+            golden,
+            golden.clone(),
+            DataFormat.Float16_b,
+            2,  # L1_to_L1_iterations, positional on purpose -- see the docstring
+            max_ulp=1,
+        )
 
 
 def test_an_empty_tensor_is_not_reported_as_a_pass():

@@ -28,7 +28,11 @@ def local_ulp(golden: np.ndarray, out_fmt: DataFormat) -> np.ndarray:
     # the docstring claim that the two share one nextafter definition fails at the top of
     # the range.
     largest = float(torch.finfo(torch_dtype).max)
-    at_max = np.abs(golden) == largest
+    # From the converted tensor, not the float64 input: abs_g is the value whose spacing
+    # is being measured, and a golden that *rounds* to the format maximum is at the top of
+    # the range even though the input is not equal to it. An fp16 65503 rounds to 65504,
+    # which the float64 compare misses, leaving the upward nextafter gap at infinity.
+    at_max = (abs_g == largest).numpy()
     if at_max.any():
         top = torch.tensor(largest, dtype=torch_dtype)
         below = torch.nextafter(top, torch.tensor(0.0, dtype=torch_dtype))
