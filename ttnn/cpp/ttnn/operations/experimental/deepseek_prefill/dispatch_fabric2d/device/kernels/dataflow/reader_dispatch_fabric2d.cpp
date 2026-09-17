@@ -726,7 +726,8 @@ void own_phase(
 // Pages this stream relays: read out of its own forwarding region and pushed one hop further, or
 // delivered if the chip across the cable is where they were going.
 template <typename FwdAcc>
-void relay_phase(const Control& c, Ring& ring, const FwdAcc& fwd_acc, uint32_t my_region, uint32_t nbr_row) {
+uint32_t relay_phase(const Control& c, Ring& ring, const FwdAcc& fwd_acc, uint32_t my_region, uint32_t nbr_row) {
+    uint32_t consumed = 0;  // pages taken out of this stream's region, which is what end_stream gives back
     // Arrivals, in the order upstream wrote them. A page here is bound for the chip across the cable or
     // further; the first case is a final write, the second goes into that chip's region at the position
     // the outgoing list gives it.
@@ -743,6 +744,7 @@ void relay_phase(const Control& c, Ring& ring, const FwdAcc& fwd_acc, uint32_t m
         for (uint32_t j = 0; j < ct.experts_per_chip; j++) {
             const uint32_t e = c.chip_experts[dst_row * ct.experts_per_chip + j];
             const uint32_t len = chunk_len(c, origin, e, idx, cnt);
+            consumed += len;
             const uint32_t in_base = c.in_start[d * ct.experts_per_chip + j];
             const uint32_t out_base = continues ? c.out_start[this_out_d * ct.experts_per_chip + j] : 0;
             volatile tt_l1_ptr uint32_t* arrived = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ct.fwd_sem_addr);
@@ -799,6 +801,7 @@ void relay_phase(const Control& c, Ring& ring, const FwdAcc& fwd_acc, uint32_t m
             }
         }
     }
+    return consumed;
 }
 
 template <typename InAcc, typename OutAcc, typename MetaAcc>
@@ -956,7 +959,7 @@ void mc_own_phase(
 // and that is the point of the mode rather than a rounding artefact. Both sides derive their own,
 // order is preserved, and a page carries its own destinations, so a dense region still lines up.
 template <typename OutAcc, typename MetaAcc, typename FwdAcc>
-void mc_relay_phase(
+uint32_t mc_relay_phase(
     const Control& c,
     Ring& ring,
     const OutAcc& out_acc,
@@ -966,12 +969,14 @@ void mc_relay_phase(
     uint32_t dir_idx,
     uint32_t link,
     int32_t travel) {
+    uint32_t consumed = 0;  // pages taken out of this stream's region, which end_stream gives back
     const uint32_t m = ct.extent / 2u;
     volatile tt_l1_ptr uint32_t* arrived = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ct.fwd_sem_addr);
 
     for (uint32_t j = 1; j <= m; j++) {
         const uint32_t origin = mc_row_back(j, travel);
         const uint32_t len = mc_chunk_len(c, origin, dir_idx, mc_region_hop(j), link);
+        consumed += len;
         // A page is forwarded only if something is left beyond the NEXT chip, so the count is the read
         // count one hop further on -- which is exactly what that chip sizes its own chunk at. Nothing
         // travels past half the ring, so this telescopes to zero at the last two chunks.
@@ -1066,6 +1071,7 @@ void mc_relay_phase(
         }
         ASSERT(q == fwd_len);
     }
+    return consumed;
 }
 
 }  // namespace
@@ -1104,6 +1110,7 @@ void kernel_main() {
     }
 
     Ring ring;
+    uint32_t consumed = 0;  // pages this stream took out of its forwarding region
     if (ct.fanout) {
         // Clockwise is direction 0 on both sides -- mc_dir_of resolves a tie at exactly half the ring
         // the same way the reach table was built. Differ in one place and the lengths silently
@@ -1124,7 +1131,7 @@ void kernel_main() {
         }
         {
             DeviceZoneScopedN("dspf2d_mc_relay");
-            mc_relay_phase(c, ring, out_acc, meta_acc, fwd_acc, my_region, dir_idx, link, travel);
+            consumed = mc_relay_phase(c, ring, out_acc, meta_acc, fwd_acc, my_region, dir_idx, link, travel);
             ring.flush_publish();
         }
         // Last, as on the unicast path: these pages never leave the chip, so anything ahead of them in
@@ -1148,7 +1155,7 @@ void kernel_main() {
         }
         {
             DeviceZoneScopedN("dspf2d_relay");
-            relay_phase(c, ring, fwd_acc, my_region, nbr_row);
+            consumed = relay_phase(c, ring, fwd_acc, my_region, nbr_row);
             ring.flush_publish();
         }
         {
@@ -1165,7 +1172,18 @@ void kernel_main() {
         ring.flush_publish();
 
         noc_async_atomic_barrier();
-        noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ct.fwd_sem_addr), 0);
+        // Give back exactly what was taken, rather than zeroing. The upstream chip owns this counter's
+        // increments and is under no obligation to have stopped: it may already be a launch ahead and
+        // bumping for the next one. A zero throws those away and its relay then waits for pages that,
+        // as far as the counter is concerned, never arrived -- which is a ring-wide hang rather than
+        // wrong data. Subtracting leaves an early bump standing, and it is already the right base for
+        // the next launch, whose positions start at zero again.
+        //
+        // The NoC has only an atomic add, so a subtract is the two's complement; `noc_semaphore.h`
+        // does the same where it decrements. Both counts are bounded by the region, so the unsigned
+        // wrap is exact.
+        noc_semaphore_inc(get_noc_addr(ct.fwd_sem_addr), (uint32_t)(0u - consumed));
+        noc_async_atomic_barrier();
         if constexpr (ct.untilize_stripes > 0) {
             // Safe here and only here: the wait above this launch's first token read proved all
             // untilize_stripes increments had arrived, so no writer is still bumping this counter.
