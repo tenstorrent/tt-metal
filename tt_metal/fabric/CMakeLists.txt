@@ -1,9 +1,10 @@
 include(sources.cmake)
 
-# Deterministic SAT engine: vendored kissat_extras (incremental Kissat fork), which will replace CaDiCaL's
-# role in the min-host solver. See tt_metal/fabric/KISSAT_SWAP_PLAN.md for the design/decision. Gated so it
-# can be toggled off during rollout; kept alongside CaDiCaL until the engine swap lands.
-option(TT_METAL_FABRIC_KISSAT "Build and link the vendored kissat SAT engine into fabric" ON)
+# Deterministic SAT engine: kissat_extras (incremental Kissat fork), which will replace CaDiCaL's role in the
+# min-host solver. Source is fetched via CPM (not checked in) and built by ../third_party/kissat/CMakeLists.txt.
+# See tt_metal/fabric/KISSAT_SWAP_PLAN.md for the design/decision. Gated so it can be toggled off during
+# rollout; kept alongside CaDiCaL until the engine swap lands.
+option(TT_METAL_FABRIC_KISSAT "Build and link the kissat SAT engine into fabric" ON)
 if(TT_METAL_FABRIC_KISSAT)
     add_subdirectory(../third_party/kissat ${CMAKE_CURRENT_BINARY_DIR}/kissat)
 endif()
@@ -102,8 +103,8 @@ target_link_libraries(
         # path is deleted (see tt_metal/fabric/KISSAT_SWAP_PLAN.md §4/§7). Kept as the fallback engine
         # (TT_TOPO_SAT_ENGINE=cadical) during rollout.
         cadical::cadical
-        # Deterministic SAT engine: vendored kissat_extras (see KISSAT_SWAP_PLAN.md). Linked when
-        # TT_METAL_FABRIC_KISSAT is ON (default); harmless when the engine code isn't wired yet.
+        # Deterministic SAT engine: kissat_extras, fetched via CPM (see KISSAT_SWAP_PLAN.md). Linked when
+        # TT_METAL_FABRIC_KISSAT is ON (default).
         $<$<BOOL:${TT_METAL_FABRIC_KISSAT}>:kissat>
 )
 
