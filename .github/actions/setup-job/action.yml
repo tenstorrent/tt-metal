@@ -157,22 +157,25 @@ runs:
       working-directory: ${{ inputs.path }}
       run: |
         echo "Enabling detection of timeout on fast dispatch and automatically call tt-triage"
-        TT_TRIAGE_DUMP_RISC_DEBUG_SIGNALS_PATH=/work/generated/debug_bus_signal_groups.json
-        TT_TRIAGE_OUTPUT_PATH=/work/generated/triage_output.txt
-        TT_TRIAGE_LLM_OUTPUT_PATH=/work/generated/triage_llm_output.txt
-        TT_TRIAGE_SQLITE_OUTPUT_PATH=/work/generated/triage_sqlite_output.sqlite
+        TT_TRIAGE_DIR=/work/generated/triage
+        TT_TRIAGE_DUMP_RISC_DEBUG_SIGNALS_PATH=$TT_TRIAGE_DIR/debug_bus_signal_groups.json
+        TT_TRIAGE_OUTPUT_PATH=$TT_TRIAGE_DIR/triage_output.txt
+        TT_TRIAGE_LLM_OUTPUT_PATH=$TT_TRIAGE_DIR/triage_llm_output.txt
+        TT_TRIAGE_SQLITE_OUTPUT_PATH=$TT_TRIAGE_DIR/triage_sqlite_output.sqlite
+        TT_TRIAGE_SUMMARY_PATH=$TT_TRIAGE_DIR/triage_summary.txt
         # /work when the environment came from an image: the workspace checkout is
         # then sparse and carries no tools/ directory.
         SRC_ROOT=$([ "${{ inputs.env-from-image }}" = "true" ] && echo /work || pwd)
         HANG_REPORT="/opt/venv/bin/python3 $SRC_ROOT/.github/scripts/utils/hang_report.py"
-        TRIAGE="/opt/venv/bin/python3 $SRC_ROOT/tools/tt-triage.py --disable-progress --path=$TT_TRIAGE_DUMP_RISC_DEBUG_SIGNALS_PATH --triage-summary-path=generated/triage_summary.txt --llm-output-path=$TT_TRIAGE_LLM_OUTPUT_PATH --sqlite-output-path=$TT_TRIAGE_SQLITE_OUTPUT_PATH"
+        TRIAGE="/opt/venv/bin/python3 $SRC_ROOT/tools/tt-triage.py --disable-progress --path=$TT_TRIAGE_DUMP_RISC_DEBUG_SIGNALS_PATH --triage-summary-path=$TT_TRIAGE_SUMMARY_PATH --llm-output-path=$TT_TRIAGE_LLM_OUTPUT_PATH --sqlite-output-path=$TT_TRIAGE_SQLITE_OUTPUT_PATH"
         # Only run triage on the first hang of a job: the device isn't reset between
         # tests, so subsequent tests and hangs are on a poisoned device and produce unreliable triage.
         TRIAGE_SENTINEL=generated/.tt_triage_already_ran
-        echo "TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE=mkdir -p generated; if [ -e $TRIAGE_SENTINEL ]; then echo 'Triage already ran in this job; skipping — device is not reset between tests, so subsequent triage is unreliable' >&2; else touch $TRIAGE_SENTINEL; $HANG_REPORT; $TRIAGE 2>&1 | tee $TT_TRIAGE_OUTPUT_PATH 1>&2; $HANG_REPORT --update; fi" >> $GITHUB_ENV
+        echo "TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE=mkdir -p generated $TT_TRIAGE_DIR; if [ -e $TRIAGE_SENTINEL ]; then echo 'Triage already ran in this job; skipping — device is not reset between tests, so subsequent triage is unreliable' >&2; else touch $TRIAGE_SENTINEL; $HANG_REPORT; $TRIAGE 2>&1 | tee $TT_TRIAGE_OUTPUT_PATH 1>&2; $HANG_REPORT --update --summary-path=$TT_TRIAGE_SUMMARY_PATH; fi" >> $GITHUB_ENV
         echo "TT_METAL_OPERATION_TIMEOUT_SECONDS=${{ inputs.hang-detection-timeout }}" >> $GITHUB_ENV
         echo "TT_TRIAGE_ENABLE_AGGREGATED_CALLSTACKS=1" >> $GITHUB_ENV
         echo "TT_RUN_DISABLED_TRIAGE_SCRIPTS_IN_CI=1" >> $GITHUB_ENV
+        echo "TT_TRIAGE_DIR=$TT_TRIAGE_DIR" >> $GITHUB_ENV
         echo "TT_TRIAGE_DUMP_RISC_DEBUG_SIGNALS_PATH=$TT_TRIAGE_DUMP_RISC_DEBUG_SIGNALS_PATH" >> $GITHUB_ENV
         echo "TT_TRIAGE_LLM_OUTPUT_PATH=$TT_TRIAGE_LLM_OUTPUT_PATH" >> $GITHUB_ENV
         echo "TT_TRIAGE_SQLITE_OUTPUT_PATH=$TT_TRIAGE_SQLITE_OUTPUT_PATH" >> $GITHUB_ENV

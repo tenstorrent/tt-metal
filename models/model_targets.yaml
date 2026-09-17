@@ -1632,8 +1632,12 @@ targets:
 
   # ResNet-50 is tier 1, so unlike the tier-3 models migrated alongside it, it is not
   # exempt from targets. The values below are measured, not placeholders:
-  #   wh_n150        batch 16   top1 75.375   fps 28.43   (run 31590127406)
-  #   wh_llmbox_perf batch 128  top1 75.456   fps 29.05   (run 31606078371)
+  #   wh_n150        batch 16   top1 75.375   fps 35.61   (run 35174410535, 2026-09-17)
+  #   wh_llmbox_perf batch 128  top1 75.456   fps 33.65   (run 35174410535, 2026-09-17)
+  # fps is dominated by the iteration-0 JIT kernel compile (~95 % of the measured time).
+  # #56218 (precompiled standard-library headers for every JIT kernel compile) cut that
+  # compile from 52.8 s to 42.0 s on wh_n150 and from 47.5 s to 43.8 s on wh_llmbox_perf,
+  # so the pre-#56218 targets (28.43 / 29.05) now fail the +15 % upper bound.
   #
   # Only the two e2e SKUs are listed -- validate_perf_targets.py's
   # _collect_active_test_combos walks models_e2e_tests.yaml alone, so unit and device-perf
@@ -1653,7 +1657,7 @@ targets:
             seq_len: null
             status: active
             perf:
-              fps: 28.43
+              fps: 35.61
               fps_tolerance: 0.15
             accuracy:
               top1: 75.375
@@ -1666,7 +1670,7 @@ targets:
             seq_len: null
             status: active
             perf:
-              fps: 29.05
+              fps: 33.65
               fps_tolerance: 0.15
             accuracy:
               top1: 75.456
