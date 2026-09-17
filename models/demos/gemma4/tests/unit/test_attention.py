@@ -816,6 +816,7 @@ def test_short_first_chunk_stashes_padded_sliding_tail(mesh_device, reset_seeds,
         paged_attention_config=paged_attention_config,
         cache_dtype=ttnn.bfloat16,
     )
+    attn_dtype = _attn_weight_dtype(mesh_device)
     tt_attn = Gemma4Attention(
         mesh_device=mesh_device,
         config=config,
@@ -824,6 +825,7 @@ def test_short_first_chunk_stashes_padded_sliding_tail(mesh_device, reset_seeds,
         mesh_config=mesh_config,
         program_config=None,
         layer_idx=layer_idx,
+        weight_dtype=attn_dtype,
     )
     tt_attn.kv_cache = kv_cache
     page_table = torch.arange(max_num_blocks, dtype=torch.int32).reshape(1, -1)
@@ -897,7 +899,7 @@ def test_short_first_chunk_stashes_padded_sliding_tail(mesh_device, reset_seeds,
         mesh_config=mesh_config,
         program_config=None,
         layer_idx=layer_idx,
-        weight_dtype=_attn_weight_dtype(mesh_device),
+        weight_dtype=attn_dtype,
     )
     tt_ref.kv_cache = kv_ref
     out_full = tt_ref(
