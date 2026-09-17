@@ -101,10 +101,10 @@ int main() {
         d.has_eth_tracker = true;
         ctx.devices.push_back(d);
     }
-    ctx.links.push_back(
-        CaptureContext::Link{.dev_a = 0, .dev_b = 1, .chip_a = 0, .chip_b = 1, .eth_a = e0, .eth_b = e0});
-    ctx.links.push_back(
-        CaptureContext::Link{.dev_a = 1, .dev_b = 2, .chip_a = 1, .chip_b = 2, .eth_a = e1, .eth_b = e0});
+    ctx.links.push_back(CaptureContext::Link{
+        .dev_a = 0, .dev_b = 1, .chip_a = 0, .chip_b = 1, .core_a = 0, .core_b = 0, .eth_a = e0, .eth_b = e0});
+    ctx.links.push_back(CaptureContext::Link{
+        .dev_a = 1, .dev_b = 2, .chip_a = 1, .chip_b = 2, .core_a = 1, .core_b = 0, .eth_a = e1, .eth_b = e0});
     ctx.root_dev = 0;
     D2dSyncConsumer sync;
     // The host series as the probe would write it: exact nodes at two bursts, so the checks cross a node and run

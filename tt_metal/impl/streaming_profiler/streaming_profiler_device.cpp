@@ -327,6 +327,9 @@ bool Devices::boot_device(
         .eth = ctx.idle_eth,
         .frequency_ghz = ctx.out.ctx.clock.frequency_ghz};
     sd.tensix.assign(ctx.producers.begin(), ctx.producers.begin() + ctx.n_workers);
+    if (ctx.pusher) {
+        sd.linked.assign(ctx.producers.begin() + ctx.n_workers + 1, ctx.producers.end());
+    }
     const uint32_t si = sync_->add_device(std::move(sd));
     // The tile clocks are measured now, with nothing else of ours on the NoC: the relays and pushers launch after.
     ctx.out.ctx.tile_offset.assign(ctx.out.ctx.core_xy.size(), 0);

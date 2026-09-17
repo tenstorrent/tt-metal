@@ -54,11 +54,13 @@ struct CaptureContext {
         std::vector<int64_t> tile_offset;
     };
     std::vector<Device> devices;
-    // A boot-time eth link sync: the sender on device index dev_a at logical eth core eth_a, the receiver on dev_b
-    // at eth_b. The d2d-sync consumer pairs the two ends' PP_CLOCK(LINK) samples by round.
+    // A link of the sync: the sender on device index dev_a, the receiver on dev_b, each end's eth core as the decoder
+    // numbers it (core_a, core_b) and as it is placed (eth_a, eth_b). The sync engine pairs the two ends' PP_CLOCK
+    // link samples by round.
     struct Link {
         uint32_t dev_a = 0, dev_b = 0;
         uint32_t chip_a = 0, chip_b = 0;
+        uint32_t core_a = 0, core_b = 0;
         CoreCoord eth_a, eth_b;
     };
     std::vector<Link> links;

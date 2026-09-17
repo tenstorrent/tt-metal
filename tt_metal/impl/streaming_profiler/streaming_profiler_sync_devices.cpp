@@ -435,17 +435,44 @@ void SyncDevices::plan_links() {
         return;
     }
     auto& cluster = mc.get_cluster();
+    // An end's core as the decoder numbers it: the roster is the workers, the pusher, then its linked cores.
+    const auto core_of = [&](size_t di, const CoreCoord& eth) -> int64_t {
+        const Device& d = devices_[di].d;
+        for (size_t i = 0; i < d.linked.size(); i++) {
+            if (d.linked[i].logical == eth) {
+                return static_cast<int64_t>(d.tensix.size() + 1 + i);
+            }
+        }
+        return -1;
+    };
     for (size_t a = 0; a < devices_.size(); a++) {
         const uint32_t chip_a = devices_[a].d.chip_id;
         for (size_t b = a + 1; b < devices_.size(); b++) {
             const uint32_t chip_b = devices_[b].d.chip_id;
             for (const link_sync::Link& link : link_sync::links_between(cluster, chip_a, chip_b)) {
                 const bool flip = link.chip_a != chip_a;  // the lower chip sends
+                const size_t dev_a = flip ? b : a, dev_b = flip ? a : b;
+                const int64_t core_a = core_of(dev_a, link.eth_a), core_b = core_of(dev_b, link.eth_b);
+                if (core_a < 0 || core_b < 0) {
+                    log_info(
+                        tt::LogMetal,
+                        "[streaming profiler] link sync {} eth({},{}) -> {} eth({},{}): an end is outside the pusher's "
+                        "roster (a dispatch tunnel's core), link not used",
+                        link.chip_a,
+                        link.eth_a.x,
+                        link.eth_a.y,
+                        link.chip_b,
+                        link.eth_b.x,
+                        link.eth_b.y);
+                    continue;
+                }
                 links_.push_back(CaptureContext::Link{
-                    .dev_a = static_cast<uint32_t>(flip ? b : a),
-                    .dev_b = static_cast<uint32_t>(flip ? a : b),
+                    .dev_a = static_cast<uint32_t>(dev_a),
+                    .dev_b = static_cast<uint32_t>(dev_b),
                     .chip_a = link.chip_a,
                     .chip_b = link.chip_b,
+                    .core_a = static_cast<uint32_t>(core_a),
+                    .core_b = static_cast<uint32_t>(core_b),
                     .eth_a = link.eth_a,
                     .eth_b = link.eth_b});
             }

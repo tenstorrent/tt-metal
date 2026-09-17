@@ -186,7 +186,6 @@ private:
         size_t rounds = 0, kept = 0, path_dropped = 0;
     };
 
-    int64_t core_index(uint32_t dev, const CoreCoord& eth) const;
     // A round in the refclk domain: each end's midpoint; the sender's round trip, the receiver's turnaround and the
     // one-way delay inside the stamps, in ns.
     static double mid_a(const Round& r);

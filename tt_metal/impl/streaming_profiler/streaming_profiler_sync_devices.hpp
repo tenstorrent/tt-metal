@@ -63,6 +63,7 @@ public:
         std::vector<CoreCoords> tensix;  // the compute grid in core index order
         std::vector<CoreCoords>
             eth;  // the idle eth cores, the pusher first: the origin the tile offsets are solved against
+        std::vector<CoreCoords> linked;  // the active eth cores the pusher drains, in their roster order
         double frequency_ghz = 0.0;
     };
 

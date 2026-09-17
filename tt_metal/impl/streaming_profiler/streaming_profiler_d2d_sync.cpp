@@ -28,12 +28,8 @@ void D2dSyncConsumer::on_attach(const CaptureContext& ctx) {
     side_of_.clear();
     for (size_t li = 0; li < ctx.links.size(); li++) {
         const CaptureContext::Link& L = ctx.links[li];
-        if (const int64_t c = core_index(L.dev_a, L.eth_a); c >= 0) {
-            side_of_[{L.dev_a, static_cast<uint32_t>(c)}] = {li, true};
-        }
-        if (const int64_t c = core_index(L.dev_b, L.eth_b); c >= 0) {
-            side_of_[{L.dev_b, static_cast<uint32_t>(c)}] = {li, false};
-        }
+        side_of_[{L.dev_a, L.core_a}] = {li, true};
+        side_of_[{L.dev_b, L.core_b}] = {li, false};
     }
     solved_.assign(ctx.links.size(), LinkSolution{});
     dropped_kind_ = 0;
@@ -109,31 +105,10 @@ void D2dSyncConsumer::on_clock(const ClockSample& s) {
     }
 }
 
-// Only the trailing eth cores are searched: eth and worker logical coordinates overlap ((0,7) is both a worker and
-// an eth core), and the decoder indexes a pushed eth frame by its core's own position in the roster.
-int64_t D2dSyncConsumer::core_index(uint32_t dev, const CoreCoord& eth) const {
-    if (dev >= ctx_.devices.size()) {
-        return -1;
-    }
-    const CaptureContext::Device& d = ctx_.devices[dev];
-    const size_t n_cores = d.lanes.size() / profiler::kSpscNRiscDecode;
-    for (size_t ci = n_cores >= d.n_eth_cores ? n_cores - d.n_eth_cores : 0; ci < n_cores; ci++) {
-        if (d.lanes[ci * profiler::kSpscNRiscDecode].logical == eth) {
-            return static_cast<int64_t>(ci);
-        }
-    }
-    return -1;
-}
-
 void D2dSyncConsumer::try_solve_links(bool final) {
     for (size_t li = 0; li < ctx_.links.size(); li++) {
         LinkSolution& out = solved_[li];
         const CaptureContext::Link& L = ctx_.links[li];
-        const int64_t ca = core_index(L.dev_a, L.eth_a);
-        const int64_t cb = core_index(L.dev_b, L.eth_b);
-        if (ca < 0 || cb < 0) {
-            continue;
-        }
         const std::vector<Round>& rounds = links_[li].rounds;
         const size_t n = rounds.size();
         if (final) {
@@ -145,11 +120,11 @@ void D2dSyncConsumer::try_solve_links(bool final) {
                 L.dev_a,
                 L.eth_a.x,
                 L.eth_a.y,
-                ca,
+                L.core_a,
                 L.dev_b,
                 L.eth_b.x,
                 L.eth_b.y,
-                cb,
+                L.core_b,
                 rounds.size(),
                 links_[li].pending.size());
         }
