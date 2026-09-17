@@ -153,9 +153,11 @@ extern "C" std::uint32_t _start1() {
     do_thread_crt1(__ldm_tdata_init);
     // .tbss has been zeroed: cache this thread's hw index.
     internal_::init_hw_thread_idx();
-    // DEVICE_PRINT and WAYPOINT index their per-thread slots via get_hw_thread_idx(), so they have to
-    // come after the cache is filled.
-    DEVICE_PRINT("hartid: {}\n", hartid);
+    // WAYPOINT indexes its per-thread slot via get_hw_thread_idx(), so it has to come after the
+    // cache is filled. The same applies to any DEVICE_PRINT added here -- but note that the compute
+    // firmware deliberately makes no DEVICE_PRINT calls: a single formatted call pulls the print
+    // ring and formatting machinery (~1.3 KB) into every TRISC firmware, and pack does not fit in
+    // MEM_TRISC_FIRMWARE_SIZE with it. Print from kernels instead.
     WAYPOINT("I");
 
     while ((*GET_MAILBOX_ADDRESS_DEV(fw_shared_globals_ready))[MaxDMProcessorsPerCoreType + trisc_id] !=
@@ -172,7 +174,6 @@ extern "C" std::uint32_t _start1() {
     setup_isr_csrs();
     enable_cc_stack();
     DeviceProfilerInit();
-    DPRINT("TRISC-FW: initialized\n");
     while (1) {
         WAYPOINT("W");
         while (*trisc_run != RUN_SYNC_MSG_GO) {
@@ -255,10 +256,8 @@ extern "C" std::uint32_t _start1() {
 #endif
 
             // Signal completion
-            DPRINT("SIGNALING COMPLETION {:x}\n", (std::uint32_t)*trisc_run);
             tensix_sync();
         }
         *trisc_run = RUN_SYNC_MSG_DONE;
-        DPRINT("COMPLETION SIGNED OFF {:x}\n", (std::uint32_t)*trisc_run);
     }
 }
