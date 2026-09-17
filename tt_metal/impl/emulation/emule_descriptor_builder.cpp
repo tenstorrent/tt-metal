@@ -4,11 +4,11 @@
 // Marshaller: flatten a tt-metal Program/IDevice into the public POD. This is the ONLY
 // place that reads private tt-metal types (ProgramImpl, Kernel, CircularBufferImpl, DFB,
 // metal_SocDescriptor, HAL); the interpretation modules consume the POD alone. Reads mirror
-// silicon's extraction 1:1 so the POD carries exactly what silicon feeds. The kernel pipeline
-// (program_model / kernel_defines / metal2_emit / device_map) consumes this live. Fields still
-// left default with TODO(stage2) — DFB finalize offset, DRAM logical channel, fabric node id,
-// PctInfo dev addrs, mesh/chip id — are the ones only the not-yet-converted prepare_program
-// consumers (cb_dfb_setup / build_core_map / setup_core_state) will need.
+// silicon's extraction 1:1 so the POD carries exactly what silicon feeds. Every consumer
+// (program_model / kernel_defines / metal2_emit / device_map / cb_dfb_setup) reads this POD.
+// The only fields still left default with TODO(stage2) are the PctInfo kernel_config addr/size
+// and default-unreserved addr — no current consumer needs them (their dev-addr/size reads are
+// per-pct conditional; add them behind a guarded read when one does).
 
 #include "emule_descriptor_builder.hpp"
 
@@ -61,7 +61,6 @@ SocView build_soc_view(IDevice* device) {
         dv.noc_xy[0] = (static_cast<uint32_t>(dc0.y) << NOC_NODE_ID_BITS) | static_cast<uint32_t>(dc0.x);
         dv.noc_xy[1] = (static_cast<uint32_t>(dc1.y) << NOC_NODE_ID_BITS) | static_cast<uint32_t>(dc1.x);
         dv.address_offset = static_cast<uint32_t>(msoc.get_address_offset(static_cast<int>(view)));
-        // TODO(stage2): logical_channel via umd translate_coord_to (build_core_map 2303-2323).
         v.dram_views.push_back(dv);
     }
 
