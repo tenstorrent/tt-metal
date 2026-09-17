@@ -61,18 +61,18 @@ and a warm length bucket, at **0.6 to 0.7x real time**. `\ref PATH | TRANSCRIPT`
 voice, `\similarity` reports how close each utterance is to the reference clip, `\seed N`
 changes the sampler, `\quit` leaves.
 
-`--ref-text` is not optional, and it is the thing most likely to be got wrong. This model
-clones in context: the prompt carries the clip's transcript beside its codes, so the model is
-told what the clip said as well as how it sounded. Three to ten seconds of clean speech works
-well, and the transcript has to cover the whole clip.
+`--ref-text` is required, and it is the easiest thing to get wrong. This model clones in
+context: the prompt carries the clip's transcript beside its codes, so the model reads what
+the clip said as well as hearing how it sounded. Give it three to ten seconds of clean
+speech, and make the transcript cover the whole clip.
 
 Either demo takes `--speaker ryan` instead of `--ref` to use one of the nine CustomVoice
 voices, and `--ckpt` to point at a checkpoint directory.
 
 ## Voice cloning
 
-Every block is in, and cloning is what joins them. Give it a reference clip and its
-transcript and it speaks new text in that voice:
+Cloning joins all ten blocks. Hand it a reference clip and that clip's transcript, and it
+speaks new text in the same voice:
 
 ```python
 from models.demos.audio.qwen3_tts import audio
@@ -90,18 +90,18 @@ than rebuild it. This is a **Base checkpoint** path: Base carries the speaker en
 empty `spk_id`, CustomVoice the nine speakers and no encoder, so cloning and named speakers
 are mutually exclusive releases.
 
-The prompt is `generate_icl_prompt` with `non_streaming_mode=True`, and it was checked
-against upstream's own assembly, captured at the talker's door under transformers 4.57.3:
-**max absolute difference 0.0** across all 72 positions, and again at 71 positions with the
-language tag off. Two things about it are worth knowing:
+The prompt is `generate_icl_prompt` with `non_streaming_mode=True`. Capturing upstream's
+own assembly at the talker's door under transformers 4.57.3 and diffing the two gives **max
+absolute difference 0.0** across all 72 positions, and 71 positions with the language tag
+off. Two details govern how it behaves:
 
   * The text track carries the reference transcript **before** the text to speak, so the
-    model is shown what the clip said as well as how it sounded. The codec track then
+    model reads what the clip said as well as hearing how it sounded. The codec track then
     carries the clip itself, one summed 16-codebook embedding per frame.
-  * The reference frames are decoded together with the generated ones and cut off the front
-    of the waveform afterwards. The codec decoder is causal, so the first generated frames
-    read the reference as context; decoding them alone gives a different and worse onset.
-    Each frame is exactly 1920 samples, so the cut is exact.
+  * The codec decodes the reference frames alongside the generated ones, and the pipeline
+    cuts them off the front of the waveform afterwards. That decoder is causal, so the first
+    generated frames read the reference as context; decode them alone and the onset comes
+    out different and worse. Each frame is 1920 samples, so the cut lands exactly.
 
 Measured on one P300 chip, cloning a 6.72 s reference clip that CustomVoice had just
 spoken, then saying 9.28 s of new text:
@@ -113,13 +113,12 @@ spoken, then saying 9.28 s of new text:
 | codec decoder, 200 frames (the reference rides along) | 4.6 s |
 | **total** | **16.8 s, 1.81x real time** |
 
-A long reference makes the codec stage longer, since its frames are decoded with the
-generated ones and then cut. Both encoders are a one-off: hold the `CloneReference` and a
-second utterance in the same voice skips them.
+A long reference lengthens the codec stage, since the decoder sees its frames too. Both
+encoders run once: keep the `CloneReference` and you skip them on the next utterance in that
+voice.
 
-Whether the voice actually carried over is a question the speaker encoder can answer.
-Cosine between the reference clip's vector and the clone's: **0.9948**, against 0.8230 for
-an unrelated voice.
+The speaker encoder answers whether the voice carried over. Cosine between the reference
+clip's vector and the clone's: **0.9948**, against 0.8230 for an unrelated voice.
 
 Streaming text input is the one regime still missing. With `non_streaming_mode=False`
 upstream sums the two tracks position by position and feeds whatever text is left over
@@ -139,18 +138,18 @@ A CustomVoice utterance, 86 text tokens, on one P300 chip:
 44 ms per frame, of which the talker's 28-layer step is 13 and the predictor's 15 steps are
 30. Both run from captured traces over a KV cache; the uncached talker step cost 2471 ms.
 
-Those numbers are one cold utterance. In a process that speaks more than one, the second
-onward reach **0.6 to 0.7x real time**, because the codec's length bucketing means it stops
-recompiling: measured 22.3 s on the first utterance and 0.3 s on the next four.
+Those numbers cover one cold utterance. Keep the process alive and later utterances reach
+**0.6 to 0.7x real time**, because length bucketing stops the codec recompiling: 22.3 s on
+the first utterance, 0.3 s on each of the next four.
 
-**Length bucketing is not only a speed fix.** Every distinct frame count compiles its own
-convolution programs, and tt-metal holds each program's L1_SMALL scratch until the device
-closes, about 24 KB a length. Three utterances of different lengths filled the 64 KB region
+**Length bucketing also keeps the card from running out of L1_SMALL.** Every distinct frame
+count compiles its own convolution programs, and tt-metal holds each program's L1_SMALL
+scratch until the device closes, about 24 KB a length. Three utterances of different lengths filled the 64 KB region,
 and the next block that wanted scratch could not allocate: the interactive demo died on its
-third line. Rounding the decode up to a multiple of 32 frames keeps the program count flat.
-The padding frames are thrown away, and `test_bucketing_does_not_change_the_samples_it_keeps`
-measures what that costs: PCC 0.9999 against an exact decode, which is inside what bf16
-already costs.
+third line. Rounding the decode up to a multiple of 32 frames holds the program count flat.
+The decoder throws the padding frames away, and
+`test_bucketing_does_not_change_the_samples_it_keeps` measures what that costs: PCC 0.9999
+against an exact decode, inside what bf16 costs already.
 
 ## Sampling
 
