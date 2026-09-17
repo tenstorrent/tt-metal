@@ -2,50 +2,49 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// PrefetcherPipe sender kernel
+// PrefetcherPipe sender kernel: push `num_entries` dense entries from a host-populated L1 staging
+// area using one of the sender write primitives.
 //
-// Compile-time parameters (via kernel compile_args):
-//   [0] prefetcher_pipe_id      - runtime-assigned slot (CreatePrefetcherPipe prefetcher_pipe_id on host)
-//   [1] entry_size         - bytes per entry (must be L1_ALIGNMENT multiple)
-//   [2] num_entries        - number of entries to push per receiver
-//   [3] write_primitive    - 0=write_broadcast, 1=write_strided,
+// Bindings:
+//   pipe::out              — KernelSpec::PrefetcherPipeBinding accessor (program slot id baked in)
+// Args (named CTAs):
+//   args::entry_size       - bytes per entry (must be L1_ALIGNMENT multiple)
+//   args::num_entries      - number of entries to push per receiver
+//   args::write_primitive  - 0=write_broadcast, 1=write_strided,
 //                            2=write_to_receiver(r)+push_back (1:1 uses r=0),
 //                            3=write_to_receiver+push_back_to_receiver (per-receiver credit),
 //                            4=decoupled: reserve(n) + write_broadcast(n) + flush + push_back(n),
 //                            5=per-receiver credit interleaved across receivers (entry-major)
-//   [4] data_pattern       - 0=multicast counter layout, 1=strided per-receiver layout,
+//   args::data_pattern     - 0=multicast counter layout, 1=strided per-receiver layout,
 //                            2=per-receiver constant layout (see prefetcher_pipe_test_utils.hpp)
-//   [5] do_barrier         - 1 to call barrier() after pushing all entries
+//   args::do_barrier       - 1 to call barrier() after pushing all entries
+// Args (named RTAs):
+//   args::staging_addr     - sender-local L1 scratch region pre-populated by the host
 //
-// Runtime args:
-//   [0] l1_staging_addr    - sender-local L1 scratch region pre-populated by the host
+// Quasar multi-DM: launched with num_threads > 1 every hart runs this body; the pipe APIs
+// partition receivers by hart (Flow C), so the same loop is correct for any thread count.
 
 #include "api/dataflow/prefetcher_pipe.h"
 #include "api/dataflow/noc.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    constexpr uint8_t prefetcher_pipe_id = get_compile_time_arg_val(0);
-    constexpr uint32_t entry_size = get_compile_time_arg_val(1);
-    constexpr uint32_t num_entries = get_compile_time_arg_val(2);
-    constexpr uint32_t write_primitive = get_compile_time_arg_val(3);
-    constexpr uint32_t data_pattern = get_compile_time_arg_val(4);
-    constexpr uint32_t do_barrier = get_compile_time_arg_val(5);
+    constexpr uint32_t entry_size = get_arg(args::entry_size);
+    constexpr uint32_t num_entries = get_arg(args::num_entries);
+    constexpr uint32_t write_primitive = get_arg(args::write_primitive);
+    constexpr uint32_t data_pattern = get_arg(args::data_pattern);
+    constexpr uint32_t do_barrier = get_arg(args::do_barrier);
 
     // Must match SenderDataPattern in prefetcher_pipe_test_utils.hpp.
     constexpr uint32_t pattern_multicast_counter = 0;
     constexpr uint32_t pattern_strided_per_receiver = 1;
     constexpr uint32_t pattern_per_receiver_constant = 2;
 
-    const uint32_t staging_base = get_arg_val<uint32_t>(0);
+    const uint32_t staging_base = get_arg(args::staging_addr);
     const CoreLocalMem<uint8_t> staging(staging_base);
 
     Noc noc;
-    // Spot-check: log first byte of each entry (host pre-populated staging)
-    DPRINT("l1_staging_addr: 0x{:x}\n", staging_base);
-
-    experimental::PrefetcherPipe gdfb(prefetcher_pipe_id);
-
-    DPRINT("Running write_primitive: {}\n", write_primitive);
+    experimental::PrefetcherPipe gdfb(pipe::out);
 
     static_assert(
         write_primitive != 0 || data_pattern == pattern_multicast_counter,
@@ -67,15 +66,10 @@ void kernel_main() {
 
     if constexpr (write_primitive == 0) {
         for (uint32_t i = 0; i < num_entries; ++i) {
-            DPRINT("Reserving back for broadcast\n");
             gdfb.reserve_back(1);
-            DPRINT("Done reserve back for broadcast to {}\n", staging_base + i * entry_size);
             gdfb.write_broadcast(noc, staging, 1, {.offset_bytes = i * entry_size});
-            DPRINT("Done write broadcast\n");
             gdfb.flush_writes(noc);
-            DPRINT("Done posted write flush\n");
             gdfb.push_back(1, noc);
-            DPRINT("Done push back\n");
         }
     } else if constexpr (write_primitive == 1) {
         const uint32_t num_recv = gdfb.num_receivers();

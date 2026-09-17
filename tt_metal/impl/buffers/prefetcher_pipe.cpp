@@ -13,7 +13,6 @@
 #include "impl/allocator/allocator.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/context/context_types.hpp"
-#include "impl/program/program_impl.hpp"
 #include "tt_metal/api/tt-metalium/hal_types.hpp"
 #include <tt_align.hpp>
 #include <algorithm>
@@ -24,8 +23,8 @@
 #include <memory>
 #include <span>
 #include <type_traits>
+#include <unordered_set>
 #include <utility>
-#include <variant>
 #include <vector>
 
 #include "hostdev/remote_dfb_config_layout.h"
@@ -527,25 +526,6 @@ PrefetcherPipeSpace CreatePrefetcherPipeSpace(
     return PrefetcherPipeSpace(std::make_shared<PrefetcherPipeSpaceImpl>(device, config));
 }
 
-PrefetcherPipe CreatePrefetcherPipe(
-    distributed::MeshDevice* device,
-    CoreCoord sender_core,
-    const CoreRangeSet& receiver_cores,
-    uint32_t ring_size,
-    BufferType buffer_type) {
-    // A private single-pipe space; the pipe keeps it alive.
-    auto space = CreatePrefetcherPipeSpace(
-        device,
-        PrefetcherPipeSpaceConfig{
-            .sender_cores = CoreRangeSet(CoreRange(sender_core)),
-            .receiver_domain = receiver_cores,
-            .ring_size = ring_size,
-            .max_receivers_per_pipe = std::max(1u, receiver_cores.num_cores()),
-            .buffer_type = buffer_type,
-        });
-    return space.create_pipe(sender_core, receiver_cores);
-}
-
 void set_dram_sender_cores(PrefetcherPipeSpace& space, std::span<const CoreCoord> dram_senders) {
     TT_FATAL(
         space.num_dram_senders() > 0,
@@ -568,73 +548,6 @@ PrefetcherPipe create_dram_sender_pipe(
     TT_THROW(
         "create_dram_sender_pipe: DRAM-sender PrefetcherPipes are not implemented yet (DRISC L1 for the sender ring / "
         "config page is blocked on tt-metal#55285)");
-}
-
-uint8_t AttachPrefetcherPipe(
-    Program& program,
-    PrefetcherPipe& prefetcher_pipe,
-    const CoreRangeSet& cores,
-    uint32_t entry_size,
-    uint32_t num_pipe_consumer_threads) {
-    return program.impl().add_prefetcher_pipe_attachment(
-        prefetcher_pipe.impl(), cores, entry_size, num_pipe_consumer_threads);
-}
-
-uint32_t CreatePrefetcherPipeRelayDataflowBuffer(
-    Program& program,
-    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& receiver_core_spec,
-    const dfb::DataflowBufferConfig& config,
-    uint8_t prefetcher_pipe_id) {
-    PrefetcherPipeImpl& pipe = program.impl().get_prefetcher_pipe_attachment(prefetcher_pipe_id);
-
-    CoreRangeSet receiver_cores;
-    if (std::holds_alternative<CoreCoord>(receiver_core_spec)) {
-        receiver_cores = CoreRangeSet({CoreRange(std::get<CoreCoord>(receiver_core_spec))});
-    } else if (std::holds_alternative<CoreRange>(receiver_core_spec)) {
-        receiver_cores = CoreRangeSet({std::get<CoreRange>(receiver_core_spec)});
-    } else {
-        receiver_cores = std::get<CoreRangeSet>(receiver_core_spec);
-    }
-
-    TT_FATAL(
-        pipe.receiver_cores().contains(receiver_cores),
-        "CreatePrefetcherPipeRelayDataflowBuffer: relay cores {} must be a subset of receiver cores {}",
-        receiver_cores.str(),
-        pipe.receiver_cores().str());
-    TT_FATAL(
-        config.num_producers <= pipe.credit_lane_capacity(),
-        "CreatePrefetcherPipeRelayDataflowBuffer: num_producers {} exceeds PrefetcherPipe credit lane "
-        "capacity {} (Quasar sizes the config page for PREFETCHER_PIPE_MAX_CREDIT_LANES at space create)",
-        config.num_producers,
-        pipe.credit_lane_capacity());
-    TT_FATAL(config.entry_size > 0, "CreatePrefetcherPipeRelayDataflowBuffer: entry_size must be > 0");
-    TT_FATAL(
-        pipe.ring_size() % config.entry_size == 0,
-        "CreatePrefetcherPipeRelayDataflowBuffer: entry size {} must divide PrefetcherPipe ring size {}",
-        config.entry_size,
-        pipe.ring_size());
-    TT_FATAL(
-        config.num_entries == pipe.ring_size() / config.entry_size,
-        "CreatePrefetcherPipeRelayDataflowBuffer: depth {} must equal ring_size/entry_size ({})",
-        config.num_entries,
-        pipe.ring_size() / config.entry_size);
-
-    // The relay lives on receiver cores this program attached (the slot's receivers).
-    const auto& slot = program.impl().get_prefetcher_pipe_slot(prefetcher_pipe_id);
-    TT_FATAL(
-        slot.receiver_cores.intersection(receiver_cores).num_cores() == receiver_cores.num_cores(),
-        "CreatePrefetcherPipeRelayDataflowBuffer: relay cores {} must be receiver cores attached to slot {} ({})",
-        receiver_cores.str(),
-        prefetcher_pipe_id,
-        slot.receiver_cores.str());
-
-    auto relay_config = config;
-    relay_config.borrows_memory = true;
-    relay_config.is_relay = true;
-    const uint32_t relay_dfb_id = dfb::CreateDataflowBuffer(program, receiver_cores, relay_config);
-    // register_prefetcher_pipe_relay_dfb programs active credit lanes from num_producers.
-    program.impl().register_prefetcher_pipe_relay_dfb(prefetcher_pipe_id, relay_dfb_id);
-    return relay_dfb_id;
 }
 
 }  // namespace tt::tt_metal::experimental

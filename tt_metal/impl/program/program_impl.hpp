@@ -12,9 +12,9 @@
 #include "tt-metalium/circular_buffer_config.hpp"
 #include <tt_stl/assert.hpp>
 #include "tt-metalium/core_coord.hpp"
-#include "tt-metalium/hal_types.hpp"       // HalProgrammableCoreType
-#include "tt-metalium/kernel_types.hpp"    // KernelHandle
-#include "tt-metalium/program.hpp"         // KernelGroup
+#include "tt-metalium/hal_types.hpp"     // HalProgrammableCoreType
+#include "tt-metalium/kernel_types.hpp"  // KernelHandle
+#include "tt-metalium/program.hpp"       // KernelGroup
 #include "tt-metalium/mesh_workload.hpp"
 #include "hostdev/remote_dfb_constants.h"  // REMOTE_DFB_OFFSET_NONE
 #include "program_device_map.hpp"          // ProgramTransferInfo
@@ -375,9 +375,9 @@ public:
         CoreRangeSet receiver_cores;  // subset of `cores` where this slot's kernel is a pipe receiver
         uint32_t ring_size = 0;
         uint32_t entry_size = 0;
-        // Receiver-side credit lanes P this program declares for the slot (AttachPrefetcherPipe
-        // num_pipe_consumer_threads / relay num_producers / Metal 2.0 receiver kernel num_threads).
-        // 1 on sender-only slots; the bound pipe's live value is what dispatch packs.
+        // Receiver-side credit lanes P this program declares for the slot (the receiver kernel's
+        // num_threads, which a relay DFB's num_producers must equal). 1 on sender-only slots; the
+        // bound pipe's live value is what dispatch packs.
         uint32_t num_credit_lanes = 1;
         std::optional<uint32_t> relay_dfb_host_id;
     };
@@ -431,17 +431,7 @@ public:
     void bind_prefetcher_pipe_to_slot(
         uint8_t prefetcher_pipe_id, const CoreRangeSet& cores, experimental::PrefetcherPipeImpl& prefetcher_pipe);
 
-    // Legacy one-shot: reserve + bind on `cores` from the pipe's own geometry.
-    uint8_t add_prefetcher_pipe_attachment(
-        experimental::PrefetcherPipeImpl& prefetcher_pipe,
-        const CoreRangeSet& cores,
-        uint32_t entry_size,
-        uint32_t num_pipe_consumer_threads = 1);
-
-    // The single pipe bound to a slot by add_prefetcher_pipe_attachment (legacy path only; a
-    // Metal 2.0 slot may bind one pipe per node and has no single attachment).
-    experimental::PrefetcherPipeImpl& get_prefetcher_pipe_attachment(uint8_t prefetcher_pipe_id);
-    const experimental::PrefetcherPipeImpl& get_prefetcher_pipe_attachment(uint8_t prefetcher_pipe_id) const;
+    // The slot whose relay DFB is `relay_dfb_host_id`, if that DFB relays a pipe.
     std::optional<uint8_t> get_prefetcher_pipe_id_for_relay(uint32_t relay_dfb_host_id) const;
 
     // Finalize-time check for `kernel_group`: on every receiver core of a PrefetcherPipe slot,
@@ -693,8 +683,6 @@ private:
     std::unordered_map<CoreCoord, std::vector<PrefetcherPipeParticipant>> per_core_prefetcher_pipes_;
     // Slot geometry, indexed by prefetcher_pipe_id.
     std::vector<PrefetcherPipeSlot> prefetcher_pipe_slots_;
-    // Legacy AttachPrefetcherPipe: the one pipe bound to a slot (Metal 2.0 slots are absent here).
-    std::unordered_map<uint8_t, experimental::PrefetcherPipeImpl*> prefetcher_pipe_attachments_;
     // Metal 2.0: PrefetcherPipeParameter name -> placement + bound pipe.
     std::unordered_map<std::string, PrefetcherPipeParameterBinding> prefetcher_pipe_parameters_;
     tt::tt_metal::experimental::dfb::detail::TileCounterAllocator tile_counter_allocator_;

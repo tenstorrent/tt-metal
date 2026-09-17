@@ -17,8 +17,6 @@
 
 namespace tt::tt_metal {
 
-class Program;
-
 namespace distributed {
 class MeshDevice;
 }  // namespace distributed
@@ -199,41 +197,11 @@ private:
  */
 PrefetcherPipeSpace CreatePrefetcherPipeSpace(distributed::MeshDevice* device, const PrefetcherPipeSpaceConfig& config);
 
-/**
- * @brief Transitional: a pipe on a private single-pipe space (`sender_cores = {sender}`,
- * `receiver_domain = receivers`, `max_receivers_per_pipe = receivers.num_cores()`).
- *
- * Kept only while the pre-space test suite migrates to PrefetcherPipeSpace + Metal 2.0; it is
- * removed together with AttachPrefetcherPipe.
- */
-PrefetcherPipe CreatePrefetcherPipe(
-    distributed::MeshDevice* device,
-    CoreCoord sender_core,
-    const CoreRangeSet& receiver_cores,
-    uint32_t ring_size,
-    BufferType buffer_type = BufferType::L1);
-
-/**
- * @brief Attach a PrefetcherPipe to `program` on the given cores (non-owning).
- *
- * `cores` must be a non-empty role-complete subset of the PrefetcherPipe's mapping
- * cores: the sender role is this pipe's one sender, while the receiver role contains
- * every receiver. This prevents one PrefetcherPipe role from being split across Programs.
- * Returns an independent prefetcher_pipe_id in [0, 255).
- *
- * Transitional: replaced by ProgramSpec::prefetcher_pipe_parameters +
- * ProgramRunArgs::prefetcher_pipe_args (see metal2_host_api/prefetcher_pipe_parameter.hpp).
- *
- * @param entry_size Dense entry size for this Program execution epoch.
- * @param num_pipe_consumer_threads Active credit lanes when attaching receivers
- *        (default 1). Ignored for sender-only Attach (must be 1).
- */
-uint8_t AttachPrefetcherPipe(
-    Program& program,
-    PrefetcherPipe& prefetcher_pipe,
-    const CoreRangeSet& cores,
-    uint32_t entry_size,
-    uint32_t num_pipe_consumer_threads = 1);
+// A Program uses a pipe through the Metal 2.0 host API only: declare a PrefetcherPipeParameter
+// with the pipe's geometry in the ProgramSpec, bind it from data-movement kernels via
+// KernelSpec::prefetcher_pipe_bindings (optionally aliasing its ring with a relay DFB through
+// DataflowBufferSpec::prefetcher_pipe_relays), then supply the PrefetcherPipe object in
+// ProgramRunArgs::prefetcher_pipe_args. See metal2_host_api/prefetcher_pipe_parameter.hpp.
 
 }  // namespace experimental
 }  // namespace tt::tt_metal
