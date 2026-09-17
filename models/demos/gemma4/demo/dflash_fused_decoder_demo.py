@@ -254,6 +254,11 @@ def test_demo_dflash_fused_decoder(mesh_device, device_params, reset_seeds):
         mesh_config=model0.mesh_config,
         ccl_manager=model0.ccl_manager,
         tensor_cache_path=None,
+        # This demo knows its target ISL bucket upfront (MAX_SEQ_LEN); let the
+        # drafter shrink its default block_size once that estimate already
+        # exceeds its own sliding_window -- see recommended_dflash_block_size.
+        # GEMMA4_DFLASH_BLOCK, if set, still overrides this unconditionally.
+        ctx_len_hint=MAX_SEQ_LEN,
     )
 
     # Chat/instruct-formatted prompt: what the dFlash drafter was validated
