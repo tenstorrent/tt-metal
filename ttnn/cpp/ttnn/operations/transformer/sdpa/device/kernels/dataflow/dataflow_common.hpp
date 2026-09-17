@@ -1488,15 +1488,22 @@ __attribute__((noinline)) void fetch_block(
     const uint32_t dst_addr,
     const uint32_t tile_bytes,
     const bool transpose,
-    const uint32_t barrier_threshold = 0) {
+    const uint32_t barrier_threshold = 0,
+    const bool zero_pad = true) {
     Noc noc;
     const uint32_t src_rows = src_slice.get_d2_size();
     const uint32_t src_cols = src_slice.get_d3_size();
     const uint32_t outer_ptr_stride = transpose ? tile_bytes : src_cols * tile_bytes;
     const uint32_t inner_ptr_stride = transpose ? tile_bytes * src_rows : tile_bytes;
 
+    // Keep the original physical strides even when only the valid prefix is read.
+    // Opting out of padding requires the caller to prove no consumer reads the tail.
+    Slice read_slice = src_slice;
+    if (!zero_pad) {
+        read_slice.d2_end = std::max(read_slice.d2_start, std::min(read_slice.d2_end, end_seq_tile));
+    }
     cat_addr_generator.issue_reads(
-        src_slice, end_seq_tile, dst_cb_id, dst_addr, outer_ptr_stride, inner_ptr_stride, barrier_threshold);
+        read_slice, end_seq_tile, dst_cb_id, dst_addr, outer_ptr_stride, inner_ptr_stride, barrier_threshold);
     // issue_reads internally emits noc.async_read (NOC) AND zero_fill_block → async_write_zeros
     // (iDMA on Quasar). NOC reads and async_write_zeros use the same completion path on WH/BH
     // but different paths on Quasar. Issue both — second is a no-op on WH/BH.

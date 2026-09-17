@@ -1000,6 +1000,14 @@ void kernel_main() {
                 if (!received_k_from_chain) {
                     // Injector or non-participant: read K from DRAM. Dispatch directly so
                     // local and gathered tensors may use different accessor types.
+                    // In-place MLA uses streaming compute: local_n_mask narrows Q@K and
+                    // QK@V to the valid tiles of each source tail. With a fully valid cache,
+                    // no global padding, rotation, joint segment, or sliding plan can change
+                    // that boundary. The full CB stride/forwarding size stays unchanged, but
+                    // its unused tail need not be initialized. Other paths retain zero-fill.
+                    const bool skip_k_tail_zero_fill = kt_inplace_v && chunked_enabled && !has_joint_k &&
+                                                       !has_sliding_window && !kv_pad_rotation_enabled &&
+                                                       logical_nt == kv_local_padded_Nt * ring_size;
                     const auto fetch_k = [&](const auto& k_gen) {
                         fetch_block(
                             k_gen,
@@ -1008,7 +1016,9 @@ void kernel_main() {
                             cb_k_in,
                             cb_k_start_address,
                             k_tile_bytes,
-                            true /*transpose*/);
+                            true /*transpose*/,
+                            0 /*barrier_threshold*/,
+                            !skip_k_tail_zero_fill);
                     };
                     fetch_k_from_source<has_joint_k, has_gathered_joint_k, joint_tensor_args_offset>(
                         kv_chunk_is_joint,
