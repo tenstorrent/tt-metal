@@ -510,7 +510,7 @@ void TensorPrefetcherManager::allocate_sockets() {
 }
 
 void TensorPrefetcherManager::build_and_launch_programs(
-    uint32_t stage_ring_base, uint32_t stage_ring_size, const MpfeWeights& mpfe_weights) {
+    uint32_t stage_ring_base, uint32_t stage_ring_size, const MpfePolicy& mpfe_policy) {
     // Sockets must already be allocated so each kernel can be given its
     // socket_config_addr as a runtime arg.
     TT_FATAL(sockets_.size() == devices_.size() * num_senders_, "sockets must be allocated before programs");
@@ -556,8 +556,10 @@ void TensorPrefetcherManager::build_and_launch_programs(
                 cq_signal_l1_addr_,
                 cq_signal_slot_stride_,
                 sender_sync_semaphore_id,
-                is_coordinator ? mpfe_weights.free_sender : mpfe_weights.noc1_sender,
-                mpfe_weights.ordinary,
+                is_coordinator ? mpfe_policy.idle.free_sender : mpfe_policy.idle.noc1_sender,
+                is_coordinator ? mpfe_policy.active.free_sender : mpfe_policy.active.noc1_sender,
+                mpfe_policy.idle.ordinary,
+                mpfe_policy.active.ordinary,
             };
 
             KernelHandle kernel_id = CreateKernel(
@@ -583,19 +585,33 @@ void TensorPrefetcherManager::build_and_launch_programs(
 void TensorPrefetcherManager::start(const experimental::TensorPrefetcherConfig& config) {
     auto lock = lock_api_function_();
     TT_FATAL(!active_, "A Tensor prefetcher is already active on this mesh device. Call StopTensorPrefetcher first.");
-    const MpfeWeights mpfe_weights{
+    const MpfeWeights active_mpfe_weights{
         .free_sender = config.free_sender_mpfe_weight.value_or(kDefaultFreeSenderMpfeWeight),
         .noc1_sender = config.noc1_sender_mpfe_weight.value_or(kDefaultNoc1SenderMpfeWeight),
         .ordinary = config.ordinary_mpfe_weight.value_or(kDefaultOrdinaryMpfeWeight),
     };
+    const MpfePolicy mpfe_policy{
+        .idle =
+            {
+                .free_sender = config.idle_free_sender_mpfe_weight.value_or(active_mpfe_weights.free_sender),
+                .noc1_sender = config.idle_noc1_sender_mpfe_weight.value_or(active_mpfe_weights.noc1_sender),
+                .ordinary = config.idle_ordinary_mpfe_weight.value_or(active_mpfe_weights.ordinary),
+            },
+        .active = active_mpfe_weights,
+    };
     TT_FATAL(
-        mpfe_weights.free_sender <= kMaxMpfeWeight && mpfe_weights.noc1_sender <= kMaxMpfeWeight &&
-            mpfe_weights.ordinary <= kMaxMpfeWeight,
-        "Tensor prefetcher MPFE weights must be in [0, {}], got {}/{}/{}",
+        mpfe_policy.idle.free_sender <= kMaxMpfeWeight && mpfe_policy.idle.noc1_sender <= kMaxMpfeWeight &&
+            mpfe_policy.idle.ordinary <= kMaxMpfeWeight && mpfe_policy.active.free_sender <= kMaxMpfeWeight &&
+            mpfe_policy.active.noc1_sender <= kMaxMpfeWeight &&
+            mpfe_policy.active.ordinary <= kMaxMpfeWeight,
+        "Tensor prefetcher MPFE weights must be in [0, {}], got idle {}/{}/{} active {}/{}/{}",
         kMaxMpfeWeight,
-        mpfe_weights.free_sender,
-        mpfe_weights.noc1_sender,
-        mpfe_weights.ordinary);
+        mpfe_policy.idle.free_sender,
+        mpfe_policy.idle.noc1_sender,
+        mpfe_policy.idle.ordinary,
+        mpfe_policy.active.free_sender,
+        mpfe_policy.active.noc1_sender,
+        mpfe_policy.active.ordinary);
 
     const auto& hal = MetalContext::instance(mesh_device_->impl().get_context_id()).hal();
     TT_FATAL(
@@ -674,7 +690,7 @@ void TensorPrefetcherManager::start(const experimental::TensorPrefetcherConfig& 
     stage_third_ = stage_ring_size_ / 3;
 
     allocate_sockets();
-    build_and_launch_programs(stage_ring_base_, stage_ring_size_, mpfe_weights);
+    build_and_launch_programs(stage_ring_base_, stage_ring_size_, mpfe_policy);
 
     // Launch programs (non-blocking — kernels park on the socket immediately).
     for (uint32_t d = 0; d < devices_.size(); ++d) {

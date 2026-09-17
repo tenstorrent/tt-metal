@@ -34,12 +34,17 @@ namespace experimental {
 
 class GlobalCircularBuffer;
 
-// MPFE weight overrides are fixed for the lifetime of the prefetcher and must be in [0, 7].
-// std::nullopt selects the default.
+// Active MPFE weight overrides must be in [0, 7]; std::nullopt selects the default
+// 0/1/5 policy. Idle overrides inherit their corresponding resolved active weight
+// when omitted, preserving a static policy by default. Supplying a different idle
+// weight makes that port switch around each PREFETCH request.
 struct TensorPrefetcherConfig {
     std::optional<uint32_t> free_sender_mpfe_weight = std::nullopt;
     std::optional<uint32_t> noc1_sender_mpfe_weight = std::nullopt;
     std::optional<uint32_t> ordinary_mpfe_weight = std::nullopt;
+    std::optional<uint32_t> idle_free_sender_mpfe_weight = std::nullopt;
+    std::optional<uint32_t> idle_noc1_sender_mpfe_weight = std::nullopt;
+    std::optional<uint32_t> idle_ordinary_mpfe_weight = std::nullopt;
 };
 
 // Returns true if the Tensor prefetcher is supported on `mesh_device`, i.e.
@@ -100,13 +105,15 @@ struct TensorPrefetcherInput {
 // block on every request), so a single prefetcher can serve GCBs with
 // different num_receivers values.
 //
-// `config` selects the MPFE arbitration weights used until StopTensorPrefetcher.
+// `config` selects the active and idle MPFE arbitration weights. The prefetcher
+// starts idle, switches to active while processing each request, and restores idle
+// after the request. StopTensorPrefetcher always restores hardware-default 0/0/0.
 //
 // Preconditions (TT_FATAL):
 //   - No other prefetcher is currently active on this mesh device.
 //   - DRAM programmable cores are available on this mesh (Blackhole with firmware
 //     >= 19.12.0.0).
-//   - Every provided MPFE weight override is in [0, 7].
+//   - Every provided active or idle MPFE weight override is in [0, 7].
 void StartTensorPrefetcher(distributed::MeshDevice& mesh_device, const TensorPrefetcherConfig& config);
 
 // Queue one prefetch request. Non-blocking.

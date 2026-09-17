@@ -224,8 +224,10 @@ void kernel_main() {
     constexpr uint32_t cq_signal_l1_base = get_compile_time_arg_val(4);
     constexpr uint32_t cq_signal_slot_stride = get_compile_time_arg_val(5);
     constexpr uint32_t sender_sync_semaphore_id = get_compile_time_arg_val(6);
-    constexpr uint32_t own_mpfe_weight = get_compile_time_arg_val(7);
-    constexpr uint32_t ordinary_mpfe_weight = get_compile_time_arg_val(8);
+    constexpr uint32_t own_idle_mpfe_weight = get_compile_time_arg_val(7);
+    constexpr uint32_t own_active_mpfe_weight = get_compile_time_arg_val(8);
+    constexpr uint32_t ordinary_idle_mpfe_weight = get_compile_time_arg_val(9);
+    constexpr uint32_t ordinary_active_mpfe_weight = get_compile_time_arg_val(10);
     constexpr uint32_t ring_half = stage_ring_size / 2;
     constexpr uint32_t stage_slot_a = stage_ring_base;
     constexpr uint32_t stage_slot_b = stage_ring_base + ring_half;
@@ -254,10 +256,10 @@ void kernel_main() {
     set_receiver_socket_page_size(socket, socket_page_size);
 
     experimental::drisc_set_stream_mode();
-    // Hold the selected weights for the lifetime of the Tensor Prefetcher. Each
-    // sender owns its MPFE slot; the ordinary-operation slot is shared.
-    gddr_mc_write_mpfe_weight(ordinary_operation_mpfe_port, ordinary_mpfe_weight);
-    gddr_mc_write_mpfe_weight(own_mpfe_port, own_mpfe_weight);
+    // Each sender owns its MPFE slot; the ordinary-operation slot is shared.
+    // Static policies compile out the request-boundary register writes below.
+    gddr_mc_write_mpfe_weight(ordinary_operation_mpfe_port, ordinary_idle_mpfe_weight);
+    gddr_mc_write_mpfe_weight(own_mpfe_port, own_idle_mpfe_weight);
 
     const uint32_t sender_sync_semaphore_addr = get_semaphore<ProgrammableCoreType::DRAM>(sender_sync_semaphore_id);
     volatile tt_l1_ptr uint32_t* sender_sync_semaphore =
@@ -329,6 +331,12 @@ void kernel_main() {
         }
         // DRAM_PREFETCHER_CMD_PREFETCH
         const bool synchronize_sender = req->prefetch.synchronize_sender != 0;
+        if constexpr (ordinary_idle_mpfe_weight != ordinary_active_mpfe_weight) {
+            gddr_mc_write_mpfe_weight(ordinary_operation_mpfe_port, ordinary_active_mpfe_weight);
+        }
+        if constexpr (own_idle_mpfe_weight != own_active_mpfe_weight) {
+            gddr_mc_write_mpfe_weight(own_mpfe_port, own_active_mpfe_weight);
+        }
 
         const uint32_t req_num_entries = req->prefetch.num_entries;
         const uint32_t gcb_state_addr = req->prefetch.gcb_state_addr;
@@ -839,6 +847,9 @@ void kernel_main() {
         // resumes at the right ring offset.
         store_sender_state(state, iface);
 
+        if constexpr (own_idle_mpfe_weight != own_active_mpfe_weight) {
+            gddr_mc_write_mpfe_weight(own_mpfe_port, own_idle_mpfe_weight);
+        }
         if (synchronize_sender) {
             // Keep dual senders for this bank at the same request boundary. A
             // sender that runs ahead cannot complete the layer by itself, but it
@@ -846,6 +857,9 @@ void kernel_main() {
             // banks skip this handshake because their peer remains parked.
             if (is_coordinator) {
                 noc_semaphore_wait(sender_sync_semaphore, handshake_target);
+                if constexpr (ordinary_idle_mpfe_weight != ordinary_active_mpfe_weight) {
+                    gddr_mc_write_mpfe_weight(ordinary_operation_mpfe_port, ordinary_idle_mpfe_weight);
+                }
                 noc_semaphore_inc(peer_sender_sync_semaphore, 1);
                 noc_async_atomic_barrier();
             } else {
@@ -854,6 +868,10 @@ void kernel_main() {
                 noc_semaphore_wait(sender_sync_semaphore, handshake_target);
             }
             ++handshake_target;
+        } else if constexpr (ordinary_idle_mpfe_weight != ordinary_active_mpfe_weight) {
+            // No peer sender received this request, so this sender exclusively owns
+            // the active interval for the bank's shared ordinary-operation slot.
+            gddr_mc_write_mpfe_weight(ordinary_operation_mpfe_port, ordinary_idle_mpfe_weight);
         }
 
         socket_pop_pages(socket, 1);

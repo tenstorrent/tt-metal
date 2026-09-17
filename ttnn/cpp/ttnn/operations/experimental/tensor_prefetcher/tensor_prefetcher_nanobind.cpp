@@ -51,9 +51,12 @@ void bind_tensor_prefetcher(nb::module_& mod) {
                 free_sender_mpfe_weight (Optional[int]): MPFE weight override for the coordinator sender.
                 noc1_sender_mpfe_weight (Optional[int]): MPFE weight override for the NOC1 sender.
                 ordinary_mpfe_weight (Optional[int]): MPFE weight override for ordinary-operation traffic.
+                idle_free_sender_mpfe_weight (Optional[int]): Coordinator weight while no request is active.
+                idle_noc1_sender_mpfe_weight (Optional[int]): NOC1-sender weight while no request is active.
+                idle_ordinary_mpfe_weight (Optional[int]): Ordinary-traffic weight while no request is active.
 
-            MPFE weight overrides must be in [0, 7] and remain fixed until the prefetcher is stopped.
-            None selects the default.
+            MPFE weight overrides must be in [0, 7]. Active values default to 0/1/5.
+            An omitted idle value inherits its active value, selecting static behavior.
 
             Two sender kernels are provisioned per DRAM bank. Each queued GCB selects one
             or both senders per bank; unused senders remain parked on their sockets.
@@ -63,7 +66,10 @@ void bind_tensor_prefetcher(nb::module_& mod) {
         nb::kw_only(),
         nb::arg("free_sender_mpfe_weight") = nb::none(),
         nb::arg("noc1_sender_mpfe_weight") = nb::none(),
-        nb::arg("ordinary_mpfe_weight") = nb::none());
+        nb::arg("ordinary_mpfe_weight") = nb::none(),
+        nb::arg("idle_free_sender_mpfe_weight") = nb::none(),
+        nb::arg("idle_noc1_sender_mpfe_weight") = nb::none(),
+        nb::arg("idle_ordinary_mpfe_weight") = nb::none());
 
     ttnn::bind_function<"queue_tensor_prefetcher_request", "ttnn.experimental.">(
         mod,

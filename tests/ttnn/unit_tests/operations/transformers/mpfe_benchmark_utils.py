@@ -18,15 +18,20 @@ _PREFIX = "TT_METAL_BENCHMARK_TENSOR_PREFETCHER_"
 class MpfeBenchmarkWeights:
     name: str
     weights: tuple[Optional[int], Optional[int], Optional[int]]
+    idle_weights: tuple[Optional[int], Optional[int], Optional[int]]
 
     def start_kwargs(self) -> dict[str, int]:
         free_sender, noc1_sender, ordinary = self.weights
+        idle_free_sender, idle_noc1_sender, idle_ordinary = self.idle_weights
         return {
             name: weight
             for name, weight in (
                 ("free_sender_mpfe_weight", free_sender),
                 ("noc1_sender_mpfe_weight", noc1_sender),
                 ("ordinary_mpfe_weight", ordinary),
+                ("idle_free_sender_mpfe_weight", idle_free_sender),
+                ("idle_noc1_sender_mpfe_weight", idle_noc1_sender),
+                ("idle_ordinary_mpfe_weight", idle_ordinary),
             )
             if weight is not None
         }
@@ -46,13 +51,20 @@ def resolve_mpfe_benchmark_weights() -> MpfeBenchmarkWeights:
         _weight("NOC1_SENDER_WEIGHT"),
         _weight("ORDINARY_WEIGHT"),
     )
-    if all(weight is None for weight in weights):
+    idle_weights = (
+        _weight("IDLE_FREE_SENDER_WEIGHT"),
+        _weight("IDLE_NOC1_SENDER_WEIGHT"),
+        _weight("IDLE_ORDINARY_WEIGHT"),
+    )
+    if all(weight is None for weight in weights) and all(weight is None for weight in idle_weights):
         name = "default"
-    elif all(weight is not None for weight in weights):
+    elif all(weight is None for weight in idle_weights) and all(weight is not None for weight in weights):
         name = f"static-{''.join(str(weight) for weight in weights)}"
     else:
-        name = f"override-{''.join('-' if weight is None else str(weight) for weight in weights)}"
-    return MpfeBenchmarkWeights(name=name, weights=weights)
+        active_label = "".join("-" if weight is None else str(weight) for weight in weights)
+        idle_label = "".join("-" if weight is None else str(weight) for weight in idle_weights)
+        name = f"dynamic-{idle_label}-to-{active_label}"
+    return MpfeBenchmarkWeights(name=name, weights=weights, idle_weights=idle_weights)
 
 
 def append_benchmark_jsonl(result: dict[str, Any]) -> None:
