@@ -188,12 +188,16 @@ def decode_forward(
         if not is_kv_shared:
             tt_k = apply_rope(tt_k, cos_cache, sin_cache, token_index=token_index)
 
-    # SDPA decode requires interleaved Q in DRAM.
+    # SDPA decode accepts HEIGHT_SHARDED L1 Q or DRAM interleaved Q. Interleaved
+    # L1 Q is illegal (``Q tensor buffer type must be DRAM when not sharded``).
+    # T3K dense decode reshardes Q so SDPA can emit concat-heads layout and skip
+    # the SDPA→I2S hop. Other meshes leave Q in DRAM interleaved (the path they
+    # already used after the RMSNorm unshard).
     if l1_act:
-        q_l1 = tt_q
-        tt_q = ttnn.to_memory_config(q_l1, ttnn.DRAM_MEMORY_CONFIG)
-        if tt_q is not q_l1:
-            q_l1.deallocate(True)
+        q_src = tt_q
+        tt_q = ttnn.to_memory_config(q_src, q_sharded_mem)
+        if tt_q is not q_src:
+            q_src.deallocate(True)
 
     # 5. KV cache update — skip for KV-shared layers (source layer already updated the cache)
     # Use position_idx_cache (int32) for cache ops when position_idx is uint32 (embedding lookup format)
@@ -328,6 +332,7 @@ def decode_forward(
         exp_approx_mode=False,
     )
 
+    sdpa_out_mem = q_sharded_mem if l1_act else ttnn.DRAM_MEMORY_CONFIG
     if page_table is not None:
         sdpa_num_local_kv_heads = 1 if weights.kv_replicated else config.num_key_value_heads // tp
         tt_sdpa = ttnn.transformer.paged_scaled_dot_product_attention_decode(
@@ -338,7 +343,7 @@ def decode_forward(
             page_table_tensor=page_table,
             scale=1.0,
             sliding_window_size=sliding_window,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=sdpa_out_mem,
             program_config=sdpa_program_config,
             # Tell SDPA the layer's view of the cache when the buffer was allocated
             # for a different layer type under HMA cross-group sharing — same
@@ -358,7 +363,7 @@ def decode_forward(
             cur_pos_tensor=cache_pos,
             scale=1.0,
             sliding_window_size=sliding_window,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=sdpa_out_mem,
             program_config=sdpa_program_config,
             compute_kernel_config=decode_sdpa_compute_kernel_config(tt_q.device()),
         )

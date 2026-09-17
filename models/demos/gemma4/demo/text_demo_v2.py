@@ -208,11 +208,10 @@ def _device_params():
       ``GEMMA4_FABRIC=ring`` → ``FABRIC_1D_RING`` (default ``1d``; ring
         regressed TTFT ~28.8s→~30.9s on 31B/P150x8 — leave off).
       ``GEMMA4_CCL_PACKET_BYTES`` → FabricRouterConfig max payload.
-        Demo on Wormhole keeps Fabric's 4352 B default (ETH heartbeat). On
-        Blackhole, matching page width (3840/5376) was slower than 4352
-        (12B/P150x8 4k: TTFT 544→462 ms). Unit tests on Wormhole use 6144 B
-        so 2048 B pages pack 3-wide. Set ``0`` / ``none`` / ``default`` for
-        Fabric's default.
+        Wormhole 1x8 (T3K) defaults to 6144 B so 2048 B CCL pages pack 3-wide
+        (12B Decode(wall) 36.97→36.60 ms, 31B 48.27→47.63 ms, batch-1).
+        N150 / N300 / Blackhole keep Fabric 4352 B. Set ``0`` / ``none`` /
+        ``default`` to restore Fabric's default on T3K too.
     ``l1_small_size`` is set so all_gather semaphores land in L1_SMALL (avoids
     fragmenting the main L1 pool).
     """
@@ -236,12 +235,14 @@ def _device_params():
     default_trace_region = 256_000_000 if is_blackhole() else 90_000_000
     params["trace_region_size"] = int(os.environ.get("GEMMA4_TRACE_REGION_SIZE", default_trace_region))
 
-    # Wormhole keeps Fabric's default packet payload in the *demo*. Unit tests
-    # apply ``default_ccl_packet_bytes`` (6144 B) so 2048 B CCL pages pack 3-wide.
-    # A non-default payload is Fabric-wide; ETH-heartbeat wedges on this box
-    # sit in the fabric, so the demo does not follow the unit-test override.
-    # ``GEMMA4_CCL_PACKET_BYTES`` still pins a value explicitly on either arch.
-    if is_blackhole() or os.environ.get("GEMMA4_CCL_PACKET_BYTES") is not None:
+    # Wormhole 1x8 (T3K) uses the unit-test 6144 B payload. A narrower 3840 B
+    # override once hung the 12B vocab all-gather; 6144 B did not wedge ETH on
+    # this box. Other WH meshes stay on Fabric 4352 B. Blackhole stays 4352
+    # (page-matched payloads were slower on P150x8). ``GEMMA4_CCL_PACKET_BYTES``
+    # still pins a value on either arch; ``0`` restores Fabric's default.
+    mesh = _mesh_device_param()
+    wh_t3k = not is_blackhole() and int(mesh[0]) * int(mesh[1]) == 8
+    if is_blackhole() or os.environ.get("GEMMA4_CCL_PACKET_BYTES") is not None or wh_t3k:
         router = fabric_router_config_from_env()
         if router is not None:
             params["fabric_router_config"] = router

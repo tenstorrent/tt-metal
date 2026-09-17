@@ -18,6 +18,7 @@ Handles:
 import os
 
 import ttnn
+from models.common.utility_functions import is_blackhole
 from models.demos.gemma4.tt.ccl import ccl_allreduce
 from models.demos.gemma4.tt.dram_sharded import (
     TILE_SIZE,
@@ -181,9 +182,9 @@ def split_qkv_heads_decode(xqkv_fused, config, is_global: bool, tp: int = 1, kv_
     # reader kernel: with DRAM input the kernel zeros odd-indexed Q rows due
     # to a NoC DRAM-read alignment-match violation (see tt-metal #16667). Move
     # the fused QKV from DRAM to L1 before the split — the L1 path uses a
-    # different code path that's not affected. No-op on Wormhole (correctness
-    # preserved; small extra L1 copy in exchange for arch-portable behavior).
-    if xqkv_fused.memory_config().buffer_type == ttnn.BufferType.DRAM:
+    # different code path that's not affected. Wormhole is already correct on
+    # DRAM, so skip the extra copy there.
+    if is_blackhole() and xqkv_fused.memory_config().buffer_type == ttnn.BufferType.DRAM:
         xqkv_fused = ttnn.to_memory_config(xqkv_fused, ttnn.L1_MEMORY_CONFIG)
     return ttnn.experimental.nlp_create_qkv_heads_decode(
         xqkv_fused,
@@ -664,10 +665,14 @@ def concat_heads(
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
             use_height_and_width_as_shard_shape=True,
         )
-        tensor_sh = ttnn.to_memory_config(tensor, shard_cfg)
+        if tensor.is_sharded() and tensor.memory_config().memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
+            tensor_sh = tensor
+        else:
+            tensor_sh = ttnn.to_memory_config(tensor, shard_cfg)
         # Output is [1, 1, B(padded to 32), num_heads*head_dim] width-sharded.
         out = ttnn.experimental.nlp_concat_heads_decode(tensor_sh, num_heads=num_heads)
-        tensor_sh.deallocate(True)
+        if tensor_sh is not tensor:
+            tensor_sh.deallocate(True)
         out_sh = out
         out = ttnn.sharded_to_interleaved(out_sh, memory_config or ttnn.DRAM_MEMORY_CONFIG)
         out_sh.deallocate(True)

@@ -136,6 +136,48 @@ def test_default_ccl_packet_bytes_wormhole_packs_2048_tiles(monkeypatch):
     assert default_ccl_packet_bytes() is None
 
 
+def test_demo_device_params_packet_bytes_only_wh_t3k(monkeypatch):
+    """Demo 6144 B payload is T3K-only; N150 and GEMMA4_CCL_PACKET_BYTES=0 stay off."""
+    from models.demos.gemma4.demo.text_demo_v2 import _device_params
+
+    monkeypatch.delenv("GEMMA4_CCL_PACKET_BYTES", raising=False)
+    monkeypatch.setattr("models.demos.gemma4.demo.text_demo_v2.is_blackhole", lambda: False)
+    monkeypatch.setattr("models.demos.gemma4.tt.ccl.is_blackhole", lambda: False)
+
+    monkeypatch.setenv("MESH_DEVICE", "T3K")
+    router = _device_params().get("fabric_router_config")
+    assert router is not None
+    assert router.max_packet_payload_size_bytes == 6144
+
+    monkeypatch.setenv("MESH_DEVICE", "N150")
+    assert "fabric_router_config" not in _device_params()
+    monkeypatch.setenv("MESH_DEVICE", "N300")
+    assert "fabric_router_config" not in _device_params()
+    monkeypatch.setenv("MESH_DEVICE", "TG")
+    assert "fabric_router_config" not in _device_params()
+
+    monkeypatch.setenv("MESH_DEVICE", "T3K")
+    monkeypatch.setattr("models.demos.gemma4.demo.text_demo_v2.is_blackhole", lambda: True)
+    monkeypatch.setattr("models.demos.gemma4.tt.ccl.is_blackhole", lambda: True)
+    assert "fabric_router_config" not in _device_params()
+
+    monkeypatch.setattr("models.demos.gemma4.demo.text_demo_v2.is_blackhole", lambda: False)
+    monkeypatch.setattr("models.demos.gemma4.tt.ccl.is_blackhole", lambda: False)
+    monkeypatch.setenv("GEMMA4_CCL_PACKET_BYTES", "0")
+    assert "fabric_router_config" not in _device_params()
+
+
+def test_split_qkv_decode_dram_copy_is_blackhole_only():
+    """Wormhole skips the BH #16667 DRAM→L1 copy before create-heads."""
+    import inspect
+
+    from models.demos.gemma4.tt.attention.operations import split_qkv_heads_decode
+
+    src = inspect.getsource(split_qkv_heads_decode)
+    assert "is_blackhole()" in src
+    assert "BufferType.DRAM" in src
+
+
 def test_prefill_l1_act_env(monkeypatch):
     monkeypatch.delenv("GEMMA4_PREFILL_L1_ACT", raising=False)
     assert prefill_short_lived_memcfg() == ttnn.DRAM_MEMORY_CONFIG
