@@ -184,6 +184,3 @@ in the release can be accounted for.
 - Update Quasar program versions in documentation ([PR 53195](https://github.com/tenstorrent/tt-metal/pull/53195))
 - add quasar to llk ttsim weekly workflow ([PR 53674](https://github.com/tenstorrent/tt-metal/pull/53674))
 - fix quasar compile tests action ([PR 55073](https://github.com/tenstorrent/tt-metal/pull/55073))
-
-
-
