@@ -47,41 +47,56 @@ def test_allowed_mask_is_respected(tmp_path):
     assert ha.one_thread_per_core(sysfs, allowed={9}) is None
 
 
+def _reset(monkeypatch):
+    monkeypatch.setattr(ha, "_applied", None)
+    monkeypatch.setattr(ha, "_full", None)
+
+
 def test_pin_env_disable(monkeypatch):
     monkeypatch.setenv("LTX_PIN_CORES", "0")
-    monkeypatch.setattr(ha, "_applied", None)
+    _reset(monkeypatch)
     assert ha.pin_one_thread_per_core("test") is None
 
 
-def test_pin_is_idempotent_and_only_narrows(monkeypatch, tmp_path):
+def test_pin_narrows_only_full_mask_threads(monkeypatch, tmp_path):
     if not hasattr(os, "sched_getaffinity"):
         return  # non-Linux host: nothing to pin
     monkeypatch.delenv("LTX_PIN_CORES", raising=False)
-    monkeypatch.setattr(ha, "_applied", None)
+    _reset(monkeypatch)
     sysfs = _fake_sysfs(tmp_path, {c: f"{c % 4},{c % 4 + 4}" for c in range(8)})
-    calls = []
     monkeypatch.setattr(ha, "_SYSFS_CPU", sysfs)
-    monkeypatch.setattr(ha, "_thread_ids", lambda: [100, 101, 102])  # main + two device threads
-    monkeypatch.setattr(ha.os, "sched_getaffinity", lambda pid: {0, 1, 2, 3, 4, 5, 6, 7})
+    full = {0, 1, 2, 3, 4, 5, 6, 7}
+    masks = {
+        100: set(full),
+        101: {6},
+        102: set(full),
+        103: {0, 1, 2, 3},
+    }  # 101: tt-metal's own pin; 103: already narrowed
+    monkeypatch.setattr(ha, "_thread_ids", lambda: sorted(masks))
+    monkeypatch.setattr(ha.os, "sched_getaffinity", lambda tid: set(masks[tid]) if tid else set(full))
+    calls = []
     monkeypatch.setattr(ha.os, "sched_setaffinity", lambda tid, cpus: calls.append((tid, sorted(cpus))))
+    monkeypatch.setattr(ha, "_cap_torch_threads", lambda n: calls.append(("torch", n)))
     assert ha.pin_one_thread_per_core("test") == [0, 1, 2, 3]
-    # every existing thread gets the mask, not just the caller
-    assert calls == [(100, [0, 1, 2, 3]), (101, [0, 1, 2, 3]), (102, [0, 1, 2, 3])]
-    # second call: no new sched_setaffinity, same answer
+    assert calls == [(100, [0, 1, 2, 3]), (102, [0, 1, 2, 3]), ("torch", 4)]
+    # a thread born later with the full mask gets narrowed on the next call; the pinned one is still left alone
+    masks[100] = {0, 1, 2, 3}
+    masks[102] = {0, 1, 2, 3}
+    masks[104] = set(full)
     assert ha.pin_one_thread_per_core("test") == [0, 1, 2, 3]
-    assert len(calls) == 3
+    assert calls[-1] == (104, [0, 1, 2, 3])
 
 
 def test_pin_is_noop_when_mask_already_one_per_core(monkeypatch, tmp_path):
     if not hasattr(os, "sched_getaffinity"):
         return
     monkeypatch.delenv("LTX_PIN_CORES", raising=False)
-    monkeypatch.setattr(ha, "_applied", None)
+    _reset(monkeypatch)
     sysfs = _fake_sysfs(tmp_path, {c: f"{c % 4},{c % 4 + 4}" for c in range(8)})
-    calls = []
     monkeypatch.setattr(ha, "_SYSFS_CPU", sysfs)
     monkeypatch.setattr(ha, "_thread_ids", lambda: [100])
-    monkeypatch.setattr(ha.os, "sched_getaffinity", lambda pid: {0, 1, 2, 3})
+    monkeypatch.setattr(ha.os, "sched_getaffinity", lambda tid: {0, 1, 2, 3})
+    calls = []
     monkeypatch.setattr(ha.os, "sched_setaffinity", lambda tid, cpus: calls.append((tid, sorted(cpus))))
     assert ha.pin_one_thread_per_core("test") is None
     assert calls == []
