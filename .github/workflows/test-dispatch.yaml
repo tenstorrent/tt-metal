@@ -95,13 +95,14 @@ jobs:
         LD_LIBRARY_PATH: /work/build/lib
         GTEST_OUTPUT: xml:/work/generated/test_reports/
         TT_METAL_HOME: /work
-        # Hugging Face: models that resolve a checkpoint through huggingface_hub need a writable
-        # HF_HOME, because /mnt/MLPerf below is mounted read-only and the hub writes metadata
-        # (refs/main, .no_exist markers) even on a cache hit -- otherwise Errno 30. Only the
-        # (read-only) blob cache comes from the mount. HF_HUB_OFFLINE is deliberately left unset,
-        # which means online, so a cold cache can still resolve.
+        # BRANCH-LOCAL: cache on container-local disk, NOT the shared share. The other Galaxy tests
+        # point HF_HUB_CACHE at /mnt/MLPerf/huggingface/hub and run HF_HUB_OFFLINE=1 against weights
+        # staged there out of band, but briaai/FIBO is not staged and cannot be: the host mounts
+        # that Weka filesystem read-only (`wekafs (ro,relatime,...)`), so no CI job can populate it
+        # whatever the docker bind flag says. Until infra stages FIBO, each run re-downloads 25.6 GB
+        # to ephemeral local disk. HF_HUB_OFFLINE stays unset (i.e. online) so that can happen.
         HF_HOME: /tmp/hf
-        HF_HUB_CACHE: /mnt/MLPerf/huggingface/hub
+        HF_HUB_CACHE: /tmp/hf/hub
         HF_TOKEN: ${{ secrets.HUGGINGFACE_TOKEN }}
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
