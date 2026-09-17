@@ -72,7 +72,7 @@
       uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/pcc/test_moe_gate_prefill2d.py -k "torus-xy-8x4"
     '
-  test_type: moe_gate
+  test_type: ci_probe_disabled
   test_tags: [moe, gate]
   test_group: module
   skus:
@@ -98,7 +98,7 @@
       uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill -k "k2_7 and torus-xy-8x4 and ((maxedge-1u and cpu and no_determinism) or (plain-5k and func and with_determinism and scalar))" -vvv --tb=short
     '
-  test_type: mla_chunked
+  test_type: ci_probe_disabled
   test_tags: [kimi_k2_7, mla, determinism]
   test_group: module
   skus:
@@ -120,7 +120,7 @@
       export OMP_NUM_THREADS=$(nproc)
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_kimi_moe -k "torus-xy-8x4 and kimi-5k-pcc" -vvv --tb=short
     '
-  test_type: kimi_moe
+  test_type: ci_probe_disabled
   test_tags: [kimi_k2_7, moe]
   test_group: module
   skus:
@@ -168,7 +168,7 @@
       export OMP_NUM_THREADS=$(nproc)
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_kimi_prefill_block -k "torus-xy-8x4 and perf-random-5k and with_determinism and iter2 and not iter25 and not iter2000 and moe_gate_device and not pretrained" -vvv --tb=short --timeout=1800
     '
-  test_type: prefill_block_determinism
+  test_type: ci_probe_disabled
   test_tags: [kimi_k2_7, block, determinism]
   test_group: module
   skus:
@@ -193,7 +193,7 @@
       export OMP_NUM_THREADS=$(nproc)
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer.py::test_kimi_prefill_transformer -k "torus-xy-8x4 and 5_layers and e384_device and 5k and not 25k and iter2 and not iter25 and not iter2000 and smoke and with_determinism and non_balanced and right_pad and json_prompts and pretrained" -vvv --tb=short --timeout=3600
     '
-  test_type: prefill_transformer_determinism
+  test_type: ci_probe_disabled
   test_tags: [kimi_k2_7, transformer, determinism]
   test_group: module
   skus:
@@ -252,7 +252,7 @@
       export OMP_NUM_THREADS=$(nproc)
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_kimi_prefill_transformer_chunked_padded -k "kimi_k2_7 and torus-xy-8x4 and L61 and mid15k and traced" -vvv --tb=short
     '
-  test_type: kimi_chunked_padded
+  test_type: ci_probe_disabled
   test_tags: [kimi_k2_7, transformer]
   test_group: module
   skus:
@@ -332,7 +332,7 @@
       export OMP_NUM_THREADS=$(nproc)
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_kimi_prefill_transformer_chunked_perf -k "kimi_k2_7 and torus-xy-8x4 and L61 and preload0 and chunks_eleven and ten_iters and traced" -xvs
     '
-  test_type: kimi_chunked
+  test_type: ci_probe_disabled
   test_tags: [kimi_k2_7, transformer]
   test_group: module
   skus:
@@ -367,7 +367,7 @@
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_kv_cache_table.py::test_dflash_kv_cache_mock -k "seq5k and 1user and 2layers" -vvv --tb=short
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_kv_cache_table.py::test_mistral4_kv_cache_table -vvv --tb=short
     '
-  test_type: kv_cache_table
+  test_type: ci_probe_disabled
   test_tags: [kimi_k2_7, glm_5_2, mistral4, kv_cache]
   test_group: module
   skus:
@@ -393,7 +393,7 @@
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/dflash_prefill/test_dflash.py::test_dflash_pcc -k "torus-xy-8x4 and pretrained and ctx5k-1chunk" -vvv --tb=short --timeout=1200
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/dflash_prefill/test_dflash.py::test_dflash_multiturn_pcc -k "torus-xy-8x4 and pretrained and (aligned_min or midchip_straddle or lastchip or rot_partial)" -vvv --tb=short
     '
-  test_type: kimi_dflash
+  test_type: ci_probe_disabled
   test_tags: [kimi_k2_7, dflash]
   test_group: module
   skus:
@@ -452,7 +452,7 @@
       export OMP_NUM_THREADS=$(nproc)
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/kda/layer/test_acceptance.py::test_synthetic_kimi_k3_accuracy_and_determinism -k "SP8xTP4" -vvv --tb=short
     '
-  test_type: k3_kda
+  test_type: ci_probe_disabled
   test_tags: [kimi_k3, kda, determinism]
   test_group: module
   skus:
@@ -475,7 +475,7 @@
       uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill -k "k3 and torus-xy-8x4 and scalar and ((maxedge-1u and cpu and no_determinism) or (plain-5k and func and with_determinism))" -vvv --tb=short
     '
-  test_type: k3_mla
+  test_type: ci_probe_disabled
   test_tags: [kimi_k3, mla, determinism]
   test_group: module
   skus:
@@ -499,7 +499,7 @@
       uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill -k "k3 and production-50k+5k and trace and torus-xy-8x4 and scalar and no_determinism" -vvv --tb=short
     '
-  test_type: k3_mla_trace
+  test_type: ci_probe_disabled
   test_tags: [kimi_k3, mla]
   test_group: module
   skus:
@@ -524,7 +524,7 @@
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/kda/perf/test_layer_perf.py::test_synthetic_kimi_k3_perf -k "SP8xTP4" -vvv --tb=short
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_perf_check -k "k3 and torus-xy-8x4" -vvv --tb=short
     '
-  test_type: k3_mla_perf
+  test_type: ci_probe_disabled
   test_tags: [kimi_k3, kda, mla, k3_kda_perf]
   test_group: module
   skus:
@@ -546,7 +546,7 @@
       export OMP_NUM_THREADS=$(nproc)
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_kimi_k3_moe -k "torus-xy-8x4 and kimi_k3-5k-pcc" -vvv --tb=short
     '
-  test_type: kimi_k3_moe
+  test_type: ci_probe_disabled
   test_tags: [kimi_k3, moe]
   test_group: module
   skus:
@@ -576,7 +576,7 @@
       export OMP_NUM_THREADS=$(nproc)
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla.py -k "glm_5_2 and shape-8x4" -vvv --tb=short
     '
-  test_type: dsa_mla_glm
+  test_type: ci_probe_disabled
   test_tags: [glm_5_2, mla, determinism]
   test_group: module
   skus:
@@ -599,7 +599,7 @@
       export OMP_NUM_THREADS=$(nproc)
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_glm_moe -k "torus-xy-8x4" -vvv --tb=short
     '
-  test_type: glm_moe
+  test_type: ci_probe_disabled
   test_tags: [glm_5_2, moe]
   test_group: module
   skus:
@@ -629,7 +629,7 @@
       export OMP_NUM_THREADS=$(nproc)
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_glm_prefill_block -k "seq5120 and torus-xy-8x4 and glm52" -vvv --tb=short --timeout=600
     '
-  test_type: glm_prefill_block
+  test_type: ci_probe_disabled
   test_tags: [glm_5_2, block]
   test_group: module
   skus:
@@ -659,7 +659,7 @@
       # also asserts per-layer PCC (impossible under capture); the traced arm is its own job below.
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_glm_prefill_transformer_chunked -k "glm52 and torus-xy-8x4 and L78 and warm_cache and sp_only and notrace" -xvs
     '
-  test_type: glm_chunked_accuracy
+  test_type: ci_probe_disabled
   test_tags: [glm_5_2, transformer]
   test_group: module
   skus:
@@ -691,7 +691,7 @@
       export OMP_NUM_THREADS=$(nproc)
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_glm_prefill_transformer_chunked -k "glm52 and torus-xy-8x4 and L78 and warm_cache and sp_only and traced" -xvs
     '
-  test_type: glm_chunked_accuracy
+  test_type: ci_probe_disabled
   test_tags: [glm_5_2, transformer]
   test_group: module
   skus:
@@ -718,7 +718,7 @@
       export OMP_NUM_THREADS=$(nproc)
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_glm_prefill_transformer_chunked_no_pcc -k "glm52 and torus-xy-8x4 and L78 and preload0 and chunks_eleven and ten_iters and sp_only and notrace" -xvs
     '
-  test_type: glm_chunked
+  test_type: ci_probe_disabled
   test_tags: [glm_5_2, transformer]
   test_group: module
   skus:
@@ -772,7 +772,7 @@
       export OMP_NUM_THREADS=$(nproc)
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_hca.py::test_hca_chunked_prefill_mesh -k "flash and chunk5120-varying and torus-xy-8x4" -vvv --tb=short
     '
-  test_type: hca_chunked
+  test_type: ci_probe_disabled
   test_tags: [dsv4_flash, hca]
   test_group: module
   skus:
@@ -794,7 +794,7 @@
       export OMP_NUM_THREADS=$(nproc)
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/perf/test_ttnn_hca_perf.py -k "flash and torus-xy-8x4" -vvv --tb=short
     '
-  test_type: hca_perf
+  test_type: ci_probe_disabled
   test_tags: [dsv4_flash, hca]
   test_group: module
   skus:
@@ -816,7 +816,7 @@
       export OMP_NUM_THREADS=$(nproc)
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_swa.py::test_swa_long_prefill_mesh -k "flash and mixed5120 and torus-xy-8x4" -vvv --tb=short
     '
-  test_type: swa_mixed
+  test_type: ci_probe_disabled
   test_tags: [dsv4_flash, swa]
   test_group: module
   skus:
@@ -836,7 +836,7 @@
       export OMP_NUM_THREADS=$(nproc)
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/perf/test_ttnn_swa_perf.py -k "flash and torus-xy-8x4" -vvv --tb=short
     '
-  test_type: swa_perf
+  test_type: ci_probe_disabled
   test_tags: [dsv4_flash, swa]
   test_group: module
   skus:
@@ -871,7 +871,7 @@
     mpirun --pernode --tag-output bash -lc '
       python3 models/demos/minimax_m3/tests/galaxy_prefill_kv_pcc.py
     '
-  test_type: minimax_prefill_kv_pcc
+  test_type: ci_probe_disabled
   test_tags: [minimax_m3, transformer, kv_cache]
   test_group: module
   skus:
@@ -910,7 +910,7 @@
     mpirun --bind-to none --pernode --tag-output bash -lc '
       python3 models/demos/minimax_m3/tests/galaxy_prefill_kv_pcc.py
     '
-  test_type: minimax_prefill_perf
+  test_type: ci_probe_disabled
   test_tags: [minimax_m3, transformer]
   test_group: module
   skus:
@@ -949,7 +949,7 @@
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/torch/test_mistral_small_4_mla_reference.py -vvv --tb=short
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_llama4_scale_cache.py -vvv --tb=short
     '
-  test_type: mistral4_mla
+  test_type: ci_probe_disabled
   test_tags: [mistral4, mla]
   test_group: module
   skus:
@@ -980,7 +980,7 @@
       export OMP_NUM_THREADS=$(nproc)
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill -k "mistral4 and cpu and scalar and no_determinism and torus-xy-8x4" -vvv --tb=short
     '
-  test_type: mistral4_mla_chunked
+  test_type: ci_probe_disabled
   test_tags: [mistral4, mla]
   test_group: module
   skus:
@@ -1006,7 +1006,7 @@
       export OMP_NUM_THREADS=$(nproc)
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_mistral4_prefill_block -k "pcc-prompt_5k and no_determinism and iter1" -vvv --tb=short
     '
-  test_type: mistral4_prefill_block
+  test_type: ci_probe_disabled
   test_tags: [mistral4, block]
   test_group: module
   skus:
@@ -1030,7 +1030,7 @@
       export OMP_NUM_THREADS=$(nproc)
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_mistral4_moe -k "fabric2d-8x4 and (mistral4-5k-pcc or mistral4-25k-pcc)" -vvv --tb=short
     '
-  test_type: mistral4_moe
+  test_type: ci_probe_disabled
   test_tags: [mistral4, moe]
   test_group: module
   skus:
@@ -1055,7 +1055,7 @@
       export OMP_NUM_THREADS=$(nproc)
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer.py::test_mistral4_prefill_transformer -k "36_layers and 5k and pcc and random and not json" -vvv --tb=short
     '
-  test_type: mistral4_prefill_transformer
+  test_type: ci_probe_disabled
   test_tags: [mistral4, transformer]
   test_group: module
   skus:
@@ -1091,7 +1091,7 @@
       export OMP_NUM_THREADS=$(nproc)
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_mistral4_prefill_transformer_chunked_padded -k "mistral4 and torus-xy-8x4 and L36 and full55k and notrace" -vvv --tb=short
     '
-  test_type: mistral4_chunked_padded
+  test_type: ci_probe_disabled
   test_tags: [mistral4, transformer]
   test_group: module
   skus:
@@ -1125,7 +1125,7 @@
       export OMP_NUM_THREADS=$(nproc)
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_mistral4_prefill_transformer_chunked_padded -k "mistral4 and torus-xy-8x4 and L36 and full55k and traced" -vvv --tb=short
     '
-  test_type: mistral4_chunked_padded
+  test_type: ci_probe_disabled
   test_tags: [mistral4, transformer]
   test_group: module
   skus:
@@ -1173,7 +1173,7 @@
     mpirun --pernode --tag-output bash -lc '
       python3 models/demos/gpt_oss_d_p/tests/galaxy_prefill_kv_pcc.py
     '
-  test_type: gpt_oss_prefill_kv_pcc
+  test_type: ci_probe_disabled
   test_group: module
   skus:
     bh_sc1:
@@ -1206,7 +1206,7 @@
     mpirun --pernode --tag-output bash -lc '
       python3 models/demos/gpt_oss_d_p/tests/galaxy_prefill_kv_pcc.py
     '
-  test_type: gpt_oss_prefill_kv_pcc_1k
+  test_type: ci_probe_disabled
   test_group: module
   skus:
     bh_sc1:
@@ -1237,7 +1237,7 @@
     mpirun --pernode --tag-output bash -lc '
       python3 models/demos/gpt_oss_d_p/tests/variable_chunk_smoke.py
     '
-  test_type: gpt_oss_varchunk_smoke
+  test_type: ci_probe_disabled
   test_group: module
   skus:
     bh_sc1:
@@ -1296,7 +1296,7 @@
     fi
     cd "${TT_METAL_HOME}"
     exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm52
-  test_type: prefill_runner_kv_pcc
+  test_type: ci_probe_disabled
   test_tags: [glm_5_2, runner, kv_cache]
   test_group: disagg_prefill
   skus:
@@ -1345,7 +1345,7 @@
     fi
     cd "${TT_METAL_HOME}"
     exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm52 sc1
-  test_type: prefill_runner_kv_pcc
+  test_type: ci_probe_disabled
   test_tags: [glm_5_2, runner, kv_cache]
   test_group: disagg_prefill
   skus:
@@ -1379,7 +1379,7 @@
       python3 -m pytest tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_mla_chunked_determinism -k "kimi_k3" -svv || rc=1
       exit $rc
     '
-  test_type: ring_joint_sdpa_perf
+  test_type: ci_probe_disabled
   test_tags: [kimi_k2_7, kimi_k3, sdpa, mla, determinism]
   test_group: sdpa_perf
   skus:
@@ -1418,7 +1418,7 @@
       python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py::test_high_bw_all_gather_galaxy_ci_perf_traced -q || rc=1
       exit $rc
     '
-  test_type: high_bw_all_gather_perf
+  test_type: ci_probe_disabled
   test_tags: [ccl]
   test_group: sdpa_perf
   skus:
