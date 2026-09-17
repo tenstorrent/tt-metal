@@ -851,7 +851,7 @@ def test_ds_prefill_block_chunked_padded(
 
 
 # ---------------------------------------------------------------------------
-# Kimi K2.6 variants
+# Kimi K2.7 variants
 # ---------------------------------------------------------------------------
 # Same chunked-prefill machinery as the DeepSeek tests, with the kimi_k2_7 variant: the host gate
 # (GateComputeMode.HOST_ALL — Kimi has a single expert group and is validated only with the host
