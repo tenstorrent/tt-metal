@@ -726,6 +726,7 @@ TEST_F(PrefetcherPipeSpecTestQuasar, CPU_MultiPipeRelayProducerBindsSubsetFails)
 // Slot reservation (MakeProgramFromSpec) and pipe binding (SetProgramRunArgs)
 // ============================================================================
 
+// One pipe carved from a space sized exactly for it. The pipe keeps the space alive.
 PrefetcherPipe MakePipeFor(distributed::MeshDevice& device, const PrefetcherPipeParameter& param) {
     const CoreRangeSet receivers = std::visit(
         [](const auto& nodes) -> CoreRangeSet {
@@ -736,7 +737,15 @@ PrefetcherPipe MakePipeFor(distributed::MeshDevice& device, const PrefetcherPipe
             }
         },
         param.receivers);
-    return CreatePrefetcherPipe(&device, param.sender, receivers, param.ring_size);
+    PrefetcherPipeSpace space = CreatePrefetcherPipeSpace(
+        &device,
+        PrefetcherPipeSpaceConfig{
+            .sender_cores = CoreRangeSet(CoreRange(param.sender)),
+            .receiver_domain = receivers,
+            .ring_size = param.ring_size,
+            .max_receivers_per_pipe = receivers.num_cores(),
+        });
+    return space.create_pipe(param.sender, receivers);
 }
 
 // The participant record for `prefetcher_pipe_id` on `core`, or nullptr when the core has no slot.

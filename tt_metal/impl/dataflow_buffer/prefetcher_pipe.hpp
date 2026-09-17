@@ -6,20 +6,17 @@
 
 #include <cstdint>
 #include <memory>
+#include <span>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
-#include "impl/dataflow_buffer/dataflow_buffer.hpp"
-
-#include <variant>
 
 namespace tt::tt_metal {
-
-class Program;
 
 namespace distributed {
 class MeshDevice;
@@ -163,23 +160,6 @@ private:
     uint32_t active_credit_lanes_ = 1;
     std::unordered_map<CoreCoord, std::vector<uint32_t>> config_pages_;
 };
-
-/**
- * @brief Create and register the local DFB used to relay a PrefetcherPipe to TRISC.
- *
- * Transitional (legacy Program path): replaced by DataflowBufferSpec::prefetcher_pipe_relays.
- *
- * The local DFB borrows the PrefetcherPipe data ring. `prefetcher_pipe_id` must already be
- * Attached on `receiver_core_spec`. Relay entry_size / depth must match this Attach's
- * dense entry_size and `ring_size / entry_size`.
- *
- * @return Program-unique host DFB id (distinct from `prefetcher_pipe_id`).
- */
-uint32_t CreatePrefetcherPipeRelayDataflowBuffer(
-    Program& program,
-    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& receiver_core_spec,
-    const dfb::DataflowBufferConfig& config,
-    uint8_t prefetcher_pipe_id);
 
 }  // namespace experimental
 }  // namespace tt::tt_metal

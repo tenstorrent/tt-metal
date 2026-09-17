@@ -68,7 +68,7 @@ namespace experimental {
 // PrefetcherPipe: device-side kernel class for a cross-program durable remote DFB.
 // Config pages + credits persist across programs; ctor loads word[4]
 // (PREFETCHER_PIPE_CFG_FIFO_PTR_CHECKPOINT — durable sender wr / receiver rd cursor).
-// If this Attach's dense entry_size differs from word[5] (applied_entry_size), ctor
+// If this program's dense entry_size differs from word[5] (applied_entry_size), ctor
 // resizes with NOC pad credits. Same-epoch relaunch skips that so
 // a producer can keep filling free space while outstanding credits wait for a consumer.
 // commit() / dtor store ptr back when the epoch (word[2] fifo_start, word[5]
@@ -128,19 +128,19 @@ namespace experimental {
 //
 //  Mid-flight resize (sender):
 //    set_entry_size(E2);           // snap forward + publish pad credits; no drain
-//    // then continue with E2-sized pushes, or signal host to Attach a new consumer
+//    // then continue with E2-sized pushes, or signal host to launch a new consumer Program
 //
 // ═══════════════════════════════════════════════════════════════════════
 //  RECEIVER FLOW
 // ═══════════════════════════════════════════════════════════════════════
 //
-//  Multi-DM receiver: Quasar lane credits. Active lane count P is programmed at
-//  consumer bind — AttachPrefetcherPipe(..., num_pipe_consumer_threads=P) and/or relay
-//  num_producers (config word[9]). Layout reserves PREFETCHER_PIPE_MAX_CREDIT_LANES
-//  slots per receiver. Hart tid owns lane tid; wait_front(n)/pop_front(n) are n owned
-//  strides (entries tid, tid+P, …). Sender stripes pages_sent to lane (entry_idx % P).
-//  With P=1, behavior matches the legacy single (sent,acked) pair. Kernel
-//  num_threads_per_cluster must equal P (P=1 + multi-DM pipe consumers is invalid).
+//  Multi-DM receiver: Quasar lane credits. Active lane count P is the receiver
+//  KernelSpec's num_threads (a relay DFB's num_producers must equal it); it reaches the
+//  device in the program's kernel-config slot. The persistent page reserves
+//  PREFETCHER_PIPE_MAX_CREDIT_LANES slots per receiver. Hart tid owns lane tid;
+//  wait_front(n)/pop_front(n) are n owned strides (entries tid, tid+P, …). Sender
+//  stripes pages_sent to lane (entry_idx % P). With P=1, behavior matches a single
+//  (sent,acked) pair.
 //
 //  Standard receiver (DM consumes data):
 //    wait_front(n);
@@ -161,11 +161,12 @@ namespace experimental {
 //  relay producers (num_producers may be >1); TRISC/DM consumers use the normal
 //  local DFB API (num_consumers / cap).
 //
-//  Host: AttachPrefetcherPipe(..., receivers) then CreatePrefetcherPipeRelayDataflowBuffer.
+//  Host: a DataflowBufferSpec with prefetcher_pipe_relays naming the pipe(s), produced by
+//  the receiver DM kernel that binds those pipes and consumed by the compute kernel.
 //  DM deliberately receives no relay binding token and must use bind_relay().
 //
 //  DM (receiver kernel) — single producer:
-//    PrefetcherPipe pipe(id);
+//    PrefetcherPipe pipe(pipe::in);
 //    auto relay = pipe.bind_relay();
 //    while (has_more) {
 //        relay.reserve_back(n);
@@ -181,9 +182,9 @@ namespace experimental {
 //    pipe.pop_front(n);
 //
 //  Compute kernel (reads relay DFB, no PrefetcherPipe or NOC knowledge):
-//    DataflowBuffer relay(RelayDFBBindingToken{relay_id, prefetcher_pipe_id});
-//    // or dfb::relay from kernel_bindings_generated.h — construction snaps the
-//    // borrowed iface to the durable checkpoint (O(1) launch-msg slot lookup)
+//    DataflowBuffer relay(dfb::relay);  // RelayDFBBindingToken from kernel_bindings_generated.h
+//    // construction snaps the borrowed iface to the durable checkpoint (O(1) launch-msg
+//    // slot lookup)
 //    relay.wait_front(n);
 //    // consume ...
 //    relay.pop_front(n);
@@ -227,10 +228,10 @@ public:
         const bool is_sender = static_cast<bool>(load_prefetcher_pipe_config_word(l1_config, REMOTE_DFB_CFG_IS_SENDER));
         const uint32_t applied_entry_size =
             load_prefetcher_pipe_config_word(l1_config, PREFETCHER_PIPE_CFG_APPLIED_ENTRY_SIZE);
-        // Same-epoch relaunch: setup already restored the checkpoint + this Attach's
+        // Same-epoch relaunch: setup already restored the checkpoint + this program's
         // entry size. Skip resize so a producer can relaunch and keep
         // filling free space while outstanding credits wait for an offline consumer.
-        // A changed Attach size snaps this endpoint and publishes/consumes pad credits;
+        // A changed entry size snaps this endpoint and publishes/consumes pad credits;
         // it does not drain payload already in flight at the peer's old entry size.
         // Multi-DM: only tid 0 mutates shared config; others re-setup after the barrier.
         // Drop any cached copy of this core's credit words before anyone touches them, so a
@@ -779,7 +780,8 @@ public:
         DataflowBuffer& dfb_;
     };
 
-    // Open the relay declared by CreatePrefetcherPipeRelayDataflowBuffer. Constructs the
+    // Open the relay DFB the host registered for this slot (DataflowBufferSpec::
+    // prefetcher_pipe_relays). Constructs the
     // local DataflowBuffer (Quasar: dfb_ensure_ready), then snaps TC/CB slots to the
     // current receiver cursor/page size (TRISC is aligned separately in
     // DataflowBuffer(RelayDFBBindingToken)). A later set_receiver_entry_size() refreshes
