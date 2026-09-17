@@ -184,6 +184,7 @@ static void init_core_semaphores(
 static std::vector<DFBAllocInfo> allocate_dfbs_on_core(
     tt_emule::Core* core,
     const CoreCoord& logical_core,
+    const tt_emule::SocView& soc,
     const std::vector<tt_emule::DfbDescriptor>& dfbs,
     const std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>>& dfb_impls) {
     core->reset_dfb_sync();
@@ -226,7 +227,7 @@ static std::vector<DFBAllocInfo> allocate_dfbs_on_core(
     // Tile counters are Quasar hardware. On WH/BH a DFB is the CB the kernel-side
     // DataflowBuffer wraps, so init_cb_sync below is its whole sync state.
     // See tt-emule docs/DFB_EMULATION.md §1.
-    const bool tc_backed = MetalContext::instance().hal().has_tile_counter_registers();
+    const bool tc_backed = soc.has_tile_counter_registers;
     // DFB fallback path: start the bump allocator at 0.  When Quasar bring-up needs
     // to protect MEM_ZEROS from bump-allocator overlap, dispatch its per-arch
     // MEM_ZEROS_BASE here.
@@ -283,7 +284,7 @@ static std::vector<DFBAllocInfo> allocate_dfbs_on_core(
             "NUM_CIRCULAR_BUFFERS ({}).",
             device_slot,
             EMULE_NUM_CBS,
-            MetalContext::instance().hal().get_arch_num_circular_buffers());
+            soc.arch_num_circular_buffers);
         core->init_cb_sync(
             static_cast<uint8_t>(device_slot),
             base,
@@ -365,6 +366,14 @@ void setup_core_state(
             static_cast<uint16_t>(*fabric_node.mesh_id),
             my_device_id,
             static_cast<uint16_t>(fabric_node.chip_id));
+        TT_FATAL(
+            soc.has_tile_counter_registers == metal_ctx.hal().has_tile_counter_registers() &&
+                soc.arch_num_circular_buffers == metal_ctx.hal().get_arch_num_circular_buffers(),
+            "descriptor HAL scalar mismatch (tc {} vs {}, num_cbs {} vs {})",
+            soc.has_tile_counter_registers,
+            metal_ctx.hal().has_tile_counter_registers(),
+            soc.arch_num_circular_buffers,
+            metal_ctx.hal().get_arch_num_circular_buffers());
     }
     for (auto& [logical_core, ki_list] : core_kernels) {
         if (!sw_emu) {
@@ -400,8 +409,8 @@ void setup_core_state(
         auto dfb_impls = impl.dataflow_buffers_on_core(logical_core);
         // Quasar-only. Null on WH/BH keeps the cb_api CB->DFB bridge short-circuited, and stops
         // a slot legal up to get_arch_num_circular_buffers() indexing the MAX_DFBS-sized array.
-        bool has_tc_dfbs = !cd->dfbs.empty() && MetalContext::instance().hal().has_tile_counter_registers();
-        std::vector<DFBAllocInfo> dfb_allocs = allocate_dfbs_on_core(core, logical_core, cd->dfbs, dfb_impls);
+        bool has_tc_dfbs = !cd->dfbs.empty() && soc.has_tile_counter_registers;
+        std::vector<DFBAllocInfo> dfb_allocs = allocate_dfbs_on_core(core, logical_core, soc, cd->dfbs, dfb_impls);
 
         uint32_t sem_region_size = tt::tt_metal::NUM_SEMAPHORES * EMULE_SEM_ALIGN;
         core_setups.push_back(
