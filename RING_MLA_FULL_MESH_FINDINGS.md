@@ -188,6 +188,29 @@ No effect anywhere -- the largest move is 0.69%, inside the 2-3% within-arm spre
 failure, so the doubled CB fits. Consistent with experiment 5: the gather already runs about 13x
 ahead of consumption, so reading further ahead cannot help. The constant is left at 4.
 
+### 7. Where the time actually is: per-core zones
+
+Device profiler (`TT_METAL_DEVICE_PROFILER=1`) on the 32-ring at k=640, 12 chunks. Kernel spans per
+core on one chip, one dispatch:
+
+| cores | count | mean kernel span |
+| --- | ---: | ---: |
+| compute (have TRISC) | 110 | 9,032,756 cyc = 6.69 ms |
+| dataflow-only, the CCL workers at (15,2)-(15,5) | 4 | 1,472,327 cyc = 1.09 ms |
+
+**Compute keeps running 5.790 ms after the last CCL core finishes.** The gather is done in 1.09 ms and
+attention runs for another 5.79 ms with all data already resident, so compute is the tail and never
+waits on an arrival. This is direct per-core evidence for what experiment 5 inferred, and it settles
+the question: the residual is in the compute kernel, not the all-gather.
+
+That also explains why experiment 6 found nothing, and why an all-gather lookahead would have found
+nothing either. Both target a component that finishes in the first sixth of the op.
+
+With unit count and K math identical between the two rings at 96 units, the compute-side variable
+that remains is per-ring-iteration work: 32 iterations against the 8-ring's 8, at roughly 33.6 us of
+extra cost each. The inner zones that would name it (`MaybeDeviceZoneScopedN`, gated on the
+`profiling_enabled` template parameter, currently passed `false`) are compiled out.
+
 ## Conclusions
 
 **Padding does not add time; it wastes time already being spent.** At k=640 the 32-ring processes
@@ -230,11 +253,14 @@ ring_mla (`/*partial_readiness_enabled=*/false` in `ring_joint_sdpa_program_fact
 consumer waits for a whole shard rather than a half. That favours the 8-ring, whose shards are 4x
 larger, so it is unlikely to be the residual -- but it is unbuilt.
 
-**What would settle it.** The realtime profiler reports one duration per program, and a fused op is
-one program spanning CCL and compute cores, so it cannot show where inside the op the time goes.
-Kernel-zone profiling (Tracy device profiler) timestamps zones per core and would show directly
-whether compute cores stall on `out_ready_sem`, stall on CB credits, or are simply busy. That
-distinction decides whether an all-gather change is the right target at all.
+**Where it is not.** Experiment 7 rules out the all-gather: its cores finish in 1.09 ms and compute
+runs 5.79 ms longer with every shard already resident. No stall on `out_ready_sem`, no CB credit
+starvation, nothing an all-gather change could reach.
+
+**Where it is.** Inside the compute kernel, in whatever it repeats per ring iteration -- 32 of them
+against the 8-ring's 8. Naming it means recompiling the SDPA compute kernel with
+`profiling_enabled = true` so the existing zones emit, then comparing zone totals between the two
+ring widths. That is now a targeted question rather than a search.
 
 **What a fix would be worth, if the residual turns out to be recoverable.** At 96 units the 32-ring
 would land at 5.7625 + (96-88) x 5.26 us = **5.805 ms, +0.043 ms** over no dedup, beating the shipped
