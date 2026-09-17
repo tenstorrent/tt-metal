@@ -79,11 +79,13 @@ void kernel_main() {
             if (packet_page_idx >= curr_pages_per_packet) {
                 // op owns the coalescing (page->packet, packet_idx); the helper owns the fabric write.
                 writer.write_page(packet_base_addr, packet_idx, dst_buffer);
-                // Preserves upstream #50813: drain the payload out of packet_base_addr before the
+                // Preserves upstream #50813: the payload must have left packet_base_addr before the
                 // next tt_memmove reuses the single-slot packet_cb. write_page() issues a
-                // flush+NON-blocking send, so the source read is still in flight on return; the
-                // helper's explicit mid-stream drain() is the documented spelling for this.
-                stream.drain();
+                // flush+NON-blocking send, so the source read is still in flight on return.
+                // flush() == noc_async_writes_flushed, exactly what the pre-migration
+                // perform_payload_send<blocking, flush> did per packet; drain() (write + atomic
+                // BARRIER, i.e. wait for destination acks) here cost ~9% per packet on BH.
+                stream.flush();
 
                 // reset counters
                 packet_page_idx = 0;

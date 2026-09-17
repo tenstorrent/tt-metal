@@ -456,6 +456,11 @@ public:
     /// noc_async_atomic_barrier). Optional — close() drains automatically; call this only for an
     /// explicit mid-stream flush before more issues.
     FORCE_INLINE void drain();
+    /// Lighter than drain(): wait only until this core's outstanding NoC writes have LEFT the
+    /// initiator (noc_async_writes_flushed), i.e. their L1 source may be reused. Does NOT wait for
+    /// the destination acks — use this mid-stream to recycle a payload staging slot; use drain()
+    /// only when a later local action must observe the writes complete.
+    FORCE_INLINE void flush();
     /// Drain, then close the connection. Idempotent — safe to call explicitly and again from the
     /// destructor (the RAII backstop).
     FORCE_INLINE void close();

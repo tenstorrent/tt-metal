@@ -382,6 +382,11 @@ FORCE_INLINE void FabricStream<ConnT>::drain() {
 }
 
 template <typename ConnT>
+FORCE_INLINE void FabricStream<ConnT>::flush() {
+    noc_async_writes_flushed();
+}
+
+template <typename ConnT>
 FORCE_INLINE void FabricStream<ConnT>::close() {
     if (!closed_) {
         closed_ = true;
