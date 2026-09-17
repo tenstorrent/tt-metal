@@ -10,6 +10,7 @@ import torch
 from diffusers.models.autoencoders.autoencoder_kl import AutoencoderKL
 
 import ttnn
+from models.common.utility_functions import is_blackhole
 
 from ...layers.conv2d import Conv2d
 from ...layers.linear import ColParallelLinear, Linear
@@ -60,13 +61,19 @@ class ResnetBlock(Module):
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             core_grid=norm_core_grid,
         )
+        # Shard whichever of in/out channels is smaller to minimize communication (all_gather on
+        # out_mesh_axis moves in_channels bytes; reduce_scatter on in_mesh_axis moves out_channels
+        # bytes). Ties (conv2, always in==out) fall to in_mesh_axis, matching vae.py's VaeConv2d.
+        conv1_out_is_greater = out_channels > in_channels
+        mesh_axis = parallel_config.tensor_parallel.mesh_axis
         self.conv1 = Conv2d(
             in_channels,
             out_channels,
             kernel_size=(3, 3),
             padding=(1, 1),
             mesh_device=mesh_device,
-            out_mesh_axis=parallel_config.tensor_parallel.mesh_axis,
+            in_mesh_axis=mesh_axis if not conv1_out_is_greater else None,
+            out_mesh_axis=mesh_axis if conv1_out_is_greater else None,
             ccl_manager=ccl_manager,
             use_barrier=False,
         )
@@ -76,7 +83,7 @@ class ResnetBlock(Module):
             kernel_size=(3, 3),
             padding=(1, 1),
             mesh_device=mesh_device,
-            out_mesh_axis=parallel_config.tensor_parallel.mesh_axis,
+            in_mesh_axis=mesh_axis,
             ccl_manager=ccl_manager,
             use_barrier=False,
         )
@@ -87,7 +94,8 @@ class ResnetBlock(Module):
                 kernel_size=(1, 1),
                 padding=(0, 0),
                 mesh_device=mesh_device,
-                out_mesh_axis=parallel_config.tensor_parallel.mesh_axis,
+                in_mesh_axis=mesh_axis if not conv1_out_is_greater else None,
+                out_mesh_axis=mesh_axis if conv1_out_is_greater else None,
                 ccl_manager=ccl_manager,
                 use_barrier=False,
             )
@@ -119,7 +127,7 @@ class ResnetBlock(Module):
         return resnet_block
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        residual = ttnn.clone(x)
+        residual = x
         x = self.norm1(x)
         x = ttnn.silu(x)
         x = self.conv1(x)
@@ -231,6 +239,11 @@ class UpDecoderBlock2D(Module):
 
 # TODO: Add support for coll and row parallel linear. Fuse qkv computation
 class Attention(Module):
+    # SDPA chunk sizes keyed by (is_blackhole, tp_factor). Empty by default; callers populate
+    # per-config tuning. Falls back to default_sdpa_chunk_size, matching vae.py's VaeAttention.
+    sdpa_chunk_size_map: dict[tuple, tuple[int, int]] = {}
+    default_sdpa_chunk_size: tuple[int, int] = (128, 128)
+
     def __init__(
         self,
         *,
@@ -239,6 +252,7 @@ class Attention(Module):
         num_heads: int,
         norm_num_groups: int,
         mesh_device: ttnn.MeshDevice,
+        norm_core_grid: ttnn.CoreGrid | None = None,
         parallel_config: VAEParallelConfig,
         ccl_manager: CCLManager,
     ) -> None:
@@ -270,16 +284,44 @@ class Attention(Module):
             eps=1e-6,
             mesh_device=mesh_device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
+            core_grid=norm_core_grid,
+        )
+
+        tp_factor = parallel_config.tensor_parallel.factor
+        resolved_q_chunk, resolved_k_chunk = self.sdpa_chunk_size_map.get(
+            (is_blackhole(), tp_factor),
+            self.default_sdpa_chunk_size,
+        )
+        grid_size = mesh_device.compute_with_storage_grid_size()
+        self._sdpa_program_config = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=grid_size,
+            q_chunk_size=resolved_q_chunk,
+            k_chunk_size=resolved_k_chunk,
+            exp_approx_mode=False,
+        )
+        self._sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+        )
+        self._mm_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=True,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
         )
 
     @classmethod
-    def from_torch(cls, torch_ref, mesh_device=None, parallel_config=None, ccl_manager=None):
+    def from_torch(cls, torch_ref, mesh_device=None, norm_core_grid=None, parallel_config=None, ccl_manager=None):
         layer = cls(
             query_dim=torch_ref.query_dim,
             head_dim=torch_ref.head_dim,
             num_heads=torch_ref.num_heads,
             norm_num_groups=torch_ref.norm_num_groups,
             mesh_device=mesh_device,
+            norm_core_grid=norm_core_grid,
             parallel_config=parallel_config,
             ccl_manager=ccl_manager,
         )
@@ -319,11 +361,18 @@ class Attention(Module):
         k = self.reorder_for_attention(k, b, self.num_heads, head_dim)
         v = self.reorder_for_attention(v, b, self.num_heads, head_dim)
 
-        x = ttnn.transformer.scaled_dot_product_attention(q, k, v, is_causal=False)
+        x = ttnn.transformer.scaled_dot_product_attention(
+            q,
+            k,
+            v,
+            is_causal=False,
+            program_config=self._sdpa_program_config,
+            compute_kernel_config=self._sdpa_compute_kernel_config,
+        )
         x = ttnn.reshape(ttnn.permute(x, (0, 2, 1, 3)), (b, h, w, inner_dim))
 
         for to_out in self.to_out:
-            x = to_out(x)
+            x = to_out(x, compute_kernel_config=self._mm_compute_kernel_config)
 
         x = x + residual
 
@@ -339,6 +388,7 @@ class UnetMidBlock2D(Module):
         resnet_groups: int,
         attention_head_dim: int,
         mesh_device: ttnn.MeshDevice,
+        norm_core_grid: ttnn.CoreGrid | None = None,
         parallel_config: VAEParallelConfig,
         ccl_manager: CCLManager,
     ) -> None:
@@ -352,6 +402,7 @@ class UnetMidBlock2D(Module):
                     num_heads=in_channels // attention_head_dim,
                     norm_num_groups=resnet_groups,
                     mesh_device=mesh_device,
+                    norm_core_grid=norm_core_grid,
                     parallel_config=parallel_config,
                     ccl_manager=ccl_manager,
                 )
@@ -364,6 +415,7 @@ class UnetMidBlock2D(Module):
                 num_groups=resnet_groups,
                 eps=1e-6,
                 mesh_device=mesh_device,
+                norm_core_grid=norm_core_grid,
                 parallel_config=parallel_config,
                 ccl_manager=ccl_manager,
             )
@@ -371,12 +423,13 @@ class UnetMidBlock2D(Module):
         )
 
     @classmethod
-    def from_torch(cls, torch_ref, mesh_device=None, parallel_config=None, ccl_manager=None):
+    def from_torch(cls, torch_ref, mesh_device=None, norm_core_grid=None, parallel_config=None, ccl_manager=None):
         layer = cls(
             in_channels=torch_ref.in_channels,
             resnet_groups=torch_ref.resnet_groups,
             attention_head_dim=torch_ref.attention_head_dim,
             mesh_device=mesh_device,
+            norm_core_grid=norm_core_grid,
             parallel_config=parallel_config,
             ccl_manager=ccl_manager,
         )
@@ -416,6 +469,14 @@ class VAEDecoder(Module):
         """
         super().__init__()
 
+        # NOTE: tried overriding GroupNorm's default 8x8 core grid to the full 11x10 Blackhole
+        # grid here; group_norm's valid grid is shape-dependent (virtual-row/col constraints
+        # tied to Ht/W/num_groups per call site) and 11x10 is invalid for at least one of the
+        # VAE's many differently-shaped GroupNorm calls (TT_THROW confirmed on real hardware:
+        # "largest valid grid that fits is (x=8,y=8)" for one call). Leaving core_grid=None
+        # (the existing per-class default) until a proper per-shape grid sweep is done.
+        norm_core_grid = None
+
         self.conv_in = Conv2d(
             in_channels,
             block_out_channels[-1],
@@ -431,6 +492,7 @@ class VAEDecoder(Module):
             attention_head_dim=block_out_channels[-1],
             resnet_groups=norm_num_groups,
             mesh_device=mesh_device,
+            norm_core_grid=norm_core_grid,
             parallel_config=parallel_config,
             ccl_manager=ccl_manager,
         )
@@ -448,6 +510,7 @@ class VAEDecoder(Module):
                 add_upsample=not is_final_block,
                 resnet_groups=norm_num_groups,
                 mesh_device=mesh_device,
+                norm_core_grid=norm_core_grid,
                 parallel_config=parallel_config,
                 ccl_manager=ccl_manager,
             )
@@ -461,6 +524,7 @@ class VAEDecoder(Module):
             eps=1e-6,
             mesh_device=mesh_device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
+            core_grid=norm_core_grid,
         )
 
         self.conv_out = Conv2d(
