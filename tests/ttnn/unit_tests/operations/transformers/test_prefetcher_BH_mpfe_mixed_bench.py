@@ -95,6 +95,7 @@ def _ff1_program_config(ring_cols: int, ring_rows: int, n_padded: int, ring_size
         hop_cores=ttnn.CoreRangeSet([]),
         num_global_cb_receivers=_RECEIVERS_PER_BANK,
         untilize_out=False,
+        stream_in1=True,
     )
 
 
@@ -176,17 +177,14 @@ def test_mpfe_mixed_llama8b_ff1_sdpa(device):
         for bank in range(num_dram_banks)
     ]
     ff1_program_config = _ff1_program_config(ring_cols, ring_rows, n_padded, ring_size)
-    block_size_bytes = int(k_padded * (n_padded // ring_size) * _BF8_BYTES_PER_ELEMENT)
     in1_page_bytes = (
         (k_padded // ring_size // ttnn.TILE_SIZE)
         * (n_padded // ring_size // ttnn.TILE_SIZE)
         * 1088
     )
-    max_gcb_bytes = 65000 * 16
-    gcb_size = block_size_bytes
-    if gcb_size // 16 >= 65535:
-        gcb_size = (max_gcb_bytes // in1_page_bytes) * in1_page_bytes
-    assert gcb_size >= in1_page_bytes
+    window_blocks = int(os.environ.get("BENCH_GCB_WINDOW_BLOCKS", "4"))
+    assert 2 <= window_blocks <= ring_size
+    gcb_size = window_blocks * in1_page_bytes
     gcb = ttnn.experimental.create_global_circular_buffer_for_matmul_1d(
         device,
         [ff1_program_config],
@@ -285,6 +283,7 @@ def test_mpfe_mixed_llama8b_ff1_sdpa(device):
     block_count = ttnn.experimental.tensor_prefetcher_block_count_for_matmul_1d(
         ff1_program_config, tt_weight, gcb
     )
+    rotation = list(range(block_count))
     policy = resolve_mpfe_benchmark_weights()
     trace_id = None
     prefetcher_started = False
@@ -295,7 +294,7 @@ def test_mpfe_mixed_llama8b_ff1_sdpa(device):
         # One model-shaped warmup also validates that both cached programs consume
         # exactly one balanced prefetch request before trace capture.
         ttnn.experimental.queue_tensor_prefetcher_request(
-            device, [(tt_weight, block_count)], global_cb=gcb
+            device, [(tt_weight, block_count, rotation)], global_cb=gcb
         )
         sdpa_warmup = run_sdpa()
         ff1_warmup = run_ff1()
@@ -321,7 +320,7 @@ def test_mpfe_mixed_llama8b_ff1_sdpa(device):
         try:
             ttnn.experimental.queue_tensor_prefetcher_request(
                 device,
-                [(tt_weight, block_count)],
+                [(tt_weight, block_count, rotation)],
                 global_cb=gcb,
                 capture_into_trace=True,
             )
@@ -364,6 +363,7 @@ def test_mpfe_mixed_llama8b_ff1_sdpa(device):
             "num_dram_banks": num_dram_banks,
             "ring_size": ring_size,
             "dual_senders": True,
+            "gcb_window_blocks": window_blocks,
             "sdpa_context": context,
             "trace_repeats": trace_repeats,
             "elapsed_ms": elapsed * 1e3,

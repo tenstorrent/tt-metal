@@ -117,6 +117,7 @@ class MixedRunner:
         self.contexts = parse_contexts()
         self.iterations = env_int("MPFE_MIXED_ITERATIONS", 5)
         self.trace_repeats = env_int("BENCH_TRACE_REPEATS", 20)
+        self.gcb_window_blocks = env_int("BENCH_GCB_WINDOW_BLOCKS", 4, minimum=2)
         self.seed = env_int("MPFE_RANDOM_SEED", 0x4D495845, minimum=0)
         self.manifest = {
             "schema_version": 1,
@@ -128,6 +129,7 @@ class MixedRunner:
             "contexts": list(self.contexts),
             "iterations": self.iterations,
             "trace_repeats": self.trace_repeats,
+            "gcb_window_blocks": self.gcb_window_blocks,
             "random_seed": self.seed,
             "policies": [
                 {
@@ -163,7 +165,11 @@ class MixedRunner:
     def _validate_loaded_record(self, record: dict) -> None:
         if record.get("benchmark") != "mpfe_mixed_llama8b_ff1_sdpa":
             raise RuntimeError(f"{self.results_path} contains a record for a different benchmark")
-        if record.get("trace_repeats") != self.trace_repeats or record.get("sdpa_context") not in self.contexts:
+        if (
+            record.get("trace_repeats") != self.trace_repeats
+            or record.get("gcb_window_blocks") != self.gcb_window_blocks
+            or record.get("sdpa_context") not in self.contexts
+        ):
             raise RuntimeError(f"{self.results_path} contains a record incompatible with its manifest")
         policy = next((policy for policy in POLICIES if policy.label == record.get("run_label")), None)
         expected_idle = policy.idle if policy is not None and policy.idle is not None else policy.active if policy else None
@@ -203,6 +209,7 @@ class MixedRunner:
                 + (f":{environment['PYTHONPATH']}" if environment.get("PYTHONPATH") else ""),
                 "BENCH_SDPA_CONTEXT": str(context),
                 "BENCH_TRACE_REPEATS": str(self.trace_repeats),
+                "BENCH_GCB_WINDOW_BLOCKS": str(self.gcb_window_blocks),
                 "TT_METAL_BENCHMARK_RESULT_JSONL": str(self.temp_result_path),
                 "TT_METAL_BENCHMARK_RUN_LABEL": policy.label,
                 "TT_METAL_BENCHMARK_SUITE_ITERATION": str(iteration),

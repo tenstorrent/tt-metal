@@ -129,7 +129,9 @@ tests/scripts/single_card/run_bh_tensor_prefetcher_mpfe_mixed.py
 It compares static `000`, synchronized static `015`, and dynamic
 `000` to `015` across contexts 512, 1024, 2048, and 4096. Configure it with
 `MPFE_MIXED_CONTEXTS`, `MPFE_MIXED_ITERATIONS`, `BENCH_TRACE_REPEATS`,
-`MPFE_RANDOM_SEED`, and `OUTPUT_DIR`. Results include raw JSONL,
+`BENCH_GCB_WINDOW_BLOCKS` (default 4), `MPFE_RANDOM_SEED`, and `OUTPUT_DIR`.
+The FF1 matmul streams from this shallow GCB window so production-sized weights
+also fit the harvested-device L1 page limit. Results include raw JSONL,
 `summary.csv`, `paired-comparisons.csv`, the exact manifest, and pytest logs.
 The dynamic-minus-static-015 comparison isolates idle restoration because both
 use the same active weights and sender rendezvous.
