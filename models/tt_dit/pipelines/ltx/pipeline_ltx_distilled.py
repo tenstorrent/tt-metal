@@ -705,7 +705,11 @@ class LTXDistilledPipeline(LTXPipeline):
 
         latent_h, latent_w = height // SPATIAL_COMPRESSION, width // SPATIAL_COMPRESSION
         # LTX_YUV_EXPORT routes the mp4 path through the on-device YUV 4:2:0 fast gather
-        yuv_export = output_path is not None and os.environ.get("LTX_YUV_EXPORT", "0") != "0"
+        # Default: convert RGB -> yuv420p uint8 on device and hand libx264 native frames. The mp4 is yuv420p
+        # either way, so fidelity is unchanged; what moves is ~1.8 GB of bf16 planes per 6 s clip that no
+        # longer cross PCIe (yuv420p is 1.5 B/px vs 6 B/px) and the host-side float->uint8 conversion.
+        # LTX_YUV_EXPORT=0 restores the float readback + host conversion.
+        yuv_export = output_path is not None and os.environ.get("LTX_YUV_EXPORT", "1") != "0"
         # export_video_audio needs float [-1,1]; the frame-return path uses the requested output_type.
         decode_type = ("yuv" if yuv_export else "float") if output_path is not None else output_type
         t0 = time.time()
