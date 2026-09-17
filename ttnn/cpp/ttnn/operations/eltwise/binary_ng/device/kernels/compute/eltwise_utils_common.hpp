@@ -54,6 +54,9 @@
 // An absent c_5 has Invalid (0xff) format. Otherwise it must be interchangeable
 // with c_0 for reconfiguration, including the geometry programmed on restoration.
 // This checks descriptor equivalence, not the current hardware SrcA state.
+// Only RHS preprocessing without LHS activation restores through the c_0 alias:
+// LHS activation selects c_3 instead, and without either activation no helper runs.
+// SFPU loop restoration uses the actual post-LHS buffer, not this alias.
 static_assert(
     unpack_src_format[5] == 0xff ||
         (unpack_src_format[0] == unpack_src_format[5] && unpack_dst_format[0] == unpack_dst_format[5] &&

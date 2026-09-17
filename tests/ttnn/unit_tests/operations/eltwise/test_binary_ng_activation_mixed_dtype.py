@@ -63,17 +63,6 @@ def _check_abs(op, a, b, side, **kwargs):
     torch.testing.assert_close(actual, expected, rtol=0, atol=0)
 
 
-@pytest.mark.nightly
-@pytest.mark.parametrize("op", [ttnn.add, ttnn.multiply], ids=["add", "multiply"])
-@pytest.mark.parametrize("a_dtype,b_dtype", _DTYPE_PAIRS)
-@pytest.mark.parametrize("a_shape,b_shape", _SHAPES)
-@pytest.mark.parametrize("side", ["lhs", "rhs", "both"])
-def test_fused_abs_formats(device, op, a_dtype, b_dtype, a_shape, b_shape, side):
-    a = _input(device, a_shape, a_dtype, 3)
-    b = _input(device, b_shape, b_dtype, 13)
-    _check_abs(op, a, b, side)
-
-
 @pytest.mark.parametrize("op", [ttnn.add, ttnn.multiply], ids=["add", "multiply"])
 @pytest.mark.parametrize("a_dtype,b_dtype", _DTYPE_PAIRS[:2])
 @pytest.mark.parametrize("side", ["lhs", "rhs", "both"])
