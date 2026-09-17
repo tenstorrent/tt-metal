@@ -30,7 +30,7 @@
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt_stl/assert.hpp>
-#include "moe_fused_swiglu_geometry.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/moe_fused_swiglu/device/moe_fused_swiglu_geometry.hpp"
 #include <initializer_list>
 #include <map>
 #include <tuple>
@@ -77,7 +77,10 @@ void validate_aux_shape(const Tensor& tensor, const char* name) {
 
 using namespace tt::tt_metal;
 using tt::DataFormat;
-namespace geo = geometry;
+// The fused half's geometry is used as it ships, not copied: this op carries a modified BODY of
+// that implementation, but its blocking maths is the same maths, and a second copy is a second
+// thing to keep in step with upstream.
+namespace geo = ::ttnn::operations::experimental::deepseek_prefill::moe_fused_swiglu::geometry;
 
 bool stage_profile_enabled() {
     const char* value = std::getenv("MOE_FUSED_SWIGLU_STAGE_PROFILE");
@@ -1170,7 +1173,12 @@ constexpr uint32_t TILE = tt::constants::TILE_HEIGHT;
 // both. Blackhole has 64 slots, so 25 + 20 fit side by side.
 //
 // Nothing downstream hardcodes these: every kernel takes its CB ids as compile-time args.
-constexpr uint32_t CB_BASE = fused::geometry::CB_COUNT;
+// One past the fused half's highest circular-buffer index, so the unified half's block starts
+// clear of it: both halves run on the same cores, and a shared cb_interface slot would have one
+// half reading the other's buffer. Lives here rather than with the fused geometry because it is
+// a property of the UNION, not of that op -- it must track upstream's highest index.
+constexpr uint32_t CB_BASE =
+    ::ttnn::operations::experimental::deepseek_prefill::moe_fused_swiglu::geometry::CB_DOWN_BIAS + 1;
 constexpr uint32_t CB_IN0_X = CB_BASE + 0;
 constexpr uint32_t CB_IN1_GATE = CB_BASE + 16;
 constexpr uint32_t CB_IN1_UP = CB_BASE + 2;

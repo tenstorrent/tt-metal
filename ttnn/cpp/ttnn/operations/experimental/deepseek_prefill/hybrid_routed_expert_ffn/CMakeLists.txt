@@ -44,6 +44,8 @@ target_link_libraries(
     ttnn_op_experimental_deepseek_prefill_hybrid_routed_expert_ffn
     PRIVATE
         TT::Metalium
+        # The fused half's blocking geometry is used as it ships rather than copied.
+        TTNN::Ops::Experimental::DeepSeekPrefill::MoeFusedSwiGlu
     PUBLIC
         TTNN::Core
 )
