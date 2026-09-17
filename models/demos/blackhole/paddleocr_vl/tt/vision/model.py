@@ -31,9 +31,10 @@ from models.tt_transformers.tt.common import get_rot_transformation_mat
 from ..weight_mapping import PATCH_EMBED_BIAS, PATCH_EMBED_WEIGHT, POS_EMBED
 from .functional import preprocess
 
-# Padded patch counts the tower will compile for. Every bucket is a multiple of
-# 128 (VisionAttention asserts it) and, above 2048, of MAX_QKV_MM_SEQ_LEN. The
-# largest image the processor can emit is 5120 patches, which 6144 covers.
+# Padded patch counts the tower will compile for. Every bucket is a multiple
+# of 128, 1024 and (above 2048) MAX_QKV_MM_SEQ_LEN. 6144 is the measured
+# resolution ceiling (1204224 px); see commit history for the CER data and
+# why higher needs tiling the page rather than a bigger single image.
 VISION_BUCKETS = (1024, 2048, 4096, 6144)
 
 # One representative grid per bucket, used to compile each program set during
@@ -49,7 +50,8 @@ def bucket_for(n_patches: int) -> int:
             return b
     raise ValueError(
         f"{n_patches} patches exceeds the largest bucket {VISION_BUCKETS[-1]}; "
-        "the image processor should have clamped this to 5120 (1280 merged tokens). "
+        f"the image processor should have clamped this to {VISION_BUCKETS[-1]} "
+        f"({VISION_BUCKETS[-1] // 4} merged tokens, {VISION_BUCKETS[-1] * 196} pixels). "
         "Check max_pixels in mm_processor_kwargs."
     )
 
