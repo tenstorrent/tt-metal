@@ -16,8 +16,9 @@ from tests.ttnn.utils_for_testing import (
     generate_all_bfloat16_bitpatterns,
 )
 
-# Largest |x| the kernel evaluates; beyond it, i0 returns +inf. The bound is the
-# point where FP32 exp() saturates -- see ckernel_sfpu_i0.h for the full rationale.
+# Largest |x| the kernel evaluates; beyond it, i0 returns +inf. The bound is Q's
+# fitted boundary, which is stricter than FP32 exp()'s own saturation point of
+# 88.7228 -- see ckernel_sfpu_i0.h for the full rationale.
 I0_MAX_INPUT = 88.5
 
 # Worst-case ULP error measured on silicon over the kernel's full input domain,
@@ -88,7 +89,9 @@ def test_i0_range(device, shapes, layout):
     # scale and offset (PCC(y, a*y + b) = 1), and its sum is dominated by the largest
     # values, so an error near x = 0 would be invisible next to i0(10) ~ 2.8e3.
     assert_allclose(torch_output_tensor, output_tensor, rtol=1e-5, atol=1e-6)
-    assert_with_ulp(torch_output_tensor, output_tensor, _MAX_ULP[ttnn.float32])
+    assert_with_ulp(
+        expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=_MAX_ULP[ttnn.float32]
+    )
 
 
 @pytest.mark.parametrize("shapes", [[1, 1, 32, 32], [4, 7, 21, 133]])
@@ -107,7 +110,9 @@ def test_i0_zero(device, shapes, dtype):
 
     output_tensor = _run_i0(device, torch_input_tensor_a, dtype)
 
-    assert_with_ulp(torch_output_tensor.to(output_tensor.dtype), output_tensor, 1)
+    assert_with_ulp(
+        expected_result=torch_output_tensor.to(output_tensor.dtype), actual_result=output_tensor, ulp_threshold=1
+    )
     assert_equal(torch.ones(shapes, dtype=output_tensor.dtype), output_tensor)
 
 
@@ -129,7 +134,9 @@ def test_i0_ood(device, shapes):
 
     output_tensor = _run_i0(device, torch_input_tensor_a, ttnn.float32)
 
-    assert_with_ulp(torch_output_tensor, output_tensor, _MAX_ULP[ttnn.float32])
+    assert_with_ulp(
+        expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=_MAX_ULP[ttnn.float32]
+    )
 
 
 @pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16])
@@ -163,9 +170,9 @@ def test_i0_all_bfloat16_bitpatterns(device, dtype):
     torch_output_tensor = flush_subnormal_values_to_zero(torch.special.i0(x_torch))
 
     assert_with_ulp(
-        torch_output_tensor.to(output_tensor.dtype),
-        output_tensor,
-        _MAX_ULP[dtype],
+        expected_result=torch_output_tensor.to(output_tensor.dtype),
+        actual_result=output_tensor,
+        ulp_threshold=_MAX_ULP[dtype],
         allow_nonfinite=True,
     )
 
@@ -216,7 +223,9 @@ def test_i0_overflow(device, dtype):
 
     expected_finite = torch.special.i0(_quantise(torch.tensor(finite + [-v for v in finite]), dtype))
     assert torch.isfinite(got_finite).all(), f"|x| <= {I0_MAX_INPUT} must stay finite, got {got_finite.tolist()}"
-    assert_with_ulp(expected_finite.to(got_finite.dtype), got_finite, _MAX_ULP[dtype])
+    assert_with_ulp(
+        expected_result=expected_finite.to(got_finite.dtype), actual_result=got_finite, ulp_threshold=_MAX_ULP[dtype]
+    )
 
     got_overflow = got_overflow.float()
     assert torch.isinf(got_overflow).all(), f"|x| > {I0_MAX_INPUT} must be inf, got {got_overflow.tolist()}"
@@ -271,4 +280,4 @@ def test_i0_mixed_dtype_output(device):
     result = ttnn.to_torch(output_tensor)
 
     assert result.dtype == torch.float32
-    assert_with_ulp(torch_output, result, _MAX_ULP[ttnn.float32])
+    assert_with_ulp(expected_result=torch_output, actual_result=result, ulp_threshold=_MAX_ULP[ttnn.float32])
