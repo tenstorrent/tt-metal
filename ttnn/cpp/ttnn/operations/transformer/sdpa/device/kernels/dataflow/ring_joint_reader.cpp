@@ -9,6 +9,7 @@
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "dataflow_common.hpp"
+#include "tools/profiler/kernel_profiler.hpp"
 #include "chunked_prefill_utils.hpp"
 #include "ring_joint_kv_pad_derivation.hpp"
 #include "metadata_scalar_read.hpp"
@@ -703,11 +704,16 @@ void kernel_main() {
         const bool ring_iter_is_active = has_sliding_window || ((active_ring_iter_mask >> ring_iter) & 1u) != 0;
         // Sliding already advanced/synchronized the sequencer above and uses a synthetic local
         // iteration whose K loop decodes the real source ring ID for each chunk.
+        uint32_t sync_transport_rank = ring_index;
+        if constexpr (!has_sliding_window) {
+            DeviceZoneScopedN("RING_SEM_WAIT");
+            sync_transport_rank = fused_op_receiver.get_next_ring_id_and_sync();
+        }
         const uint32_t ring_id =
             has_sliding_window
                 ? ring_index
                 : ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
-                      fused_op_receiver.get_next_ring_id_and_sync(), mesh_rows, mesh_cols, snake_orientation);
+                      sync_transport_rank, mesh_rows, mesh_cols, snake_orientation);
         // Host precomputes which ring iterations have useful SDPA work; sync/ring-id sequencing
         // still advances above so reader stays aligned with compute, writer, and all-gather.
         if (!ring_iter_is_active) {

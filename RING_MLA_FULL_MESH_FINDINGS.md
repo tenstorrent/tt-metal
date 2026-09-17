@@ -211,6 +211,40 @@ that remains is per-ring-iteration work: 32 iterations against the 8-ring's 8, a
 extra cost each. The inner zones that would name it (`MaybeDeviceZoneScopedN`, gated on the
 `profiling_enabled` template parameter, currently passed `false`) are compiled out.
 
+### 8. Do arrivals block compute? No
+
+A `RING_SEM_WAIT` zone around `fused_op_receiver.get_next_ring_id_and_sync()` in `ring_joint_reader.cpp`
+measures exactly the wait for each shard's readiness signal. 32-ring, k=640, 12 chunks, per compute
+core, totalled over all 32 ring iterations:
+
+| dispatch | mean wait per core | worst core |
+| --- | ---: | ---: |
+| steady state, 8 dispatches | 66-93 us | 86-114 us |
+
+Against a ~7 ms op that is about 1%. Compute is not blocked on arrivals at any point.
+
+This also disposes of a tempting coincidence. Compute runs 5.790 ms after the CCL cores finish, and
+the sp_only op takes 5.761 ms, which looks like the gather being serialized in front of an otherwise
+unchanged attention. It is not: with only 80 us of measured waiting there is no room for a 1.12 ms
+stall. The two numbers land 0.5% apart by chance.
+
+### 9. Which part of compute? Not yet answerable
+
+Enabling the compute kernel's inner zones (`profiling_enabled = true`) and comparing one core between
+ring widths gives one usable number and one dead end:
+
+    TRISC-KERNEL   8-ring 6255.3 us   32-ring 6922.0 us   +666.7 us
+
+which confirms the gap is inside the compute kernel's TRISC span, consistent with the op-level delta.
+The inner zones cannot localize it: `Q@KT MM+Pack` records 20 zones, `Softmax` 6, `Reduce max` 5, for
+an op running 96 K units, and the captured zones total ~45 us out of a 6900 us kernel. The per-core L1
+zone buffer fills early and drops the rest, so the apparent near-zero delta across inner zones is an
+artifact of truncation, not a result. Zone instrumentation itself is nearly free here -- the op moved
+6.2748 -> 6.2808 and 7.0805 -> 7.0855 ms -- so the limit is buffer capacity, not overhead.
+
+Localizing within a ring iteration needs zone counts that fit the buffer: a couple of zones per ring
+iteration (32 of them) rather than several per K chunk (hundreds).
+
 ## Conclusions
 
 **Padding does not add time; it wastes time already being spent.** At k=640 the 32-ring processes
@@ -257,10 +291,13 @@ larger, so it is unlikely to be the residual -- but it is unbuilt.
 runs 5.79 ms longer with every shard already resident. No stall on `out_ready_sem`, no CB credit
 starvation, nothing an all-gather change could reach.
 
-**Where it is.** Inside the compute kernel, in whatever it repeats per ring iteration -- 32 of them
-against the 8-ring's 8. Naming it means recompiling the SDPA compute kernel with
-`profiling_enabled = true` so the existing zones emit, then comparing zone totals between the two
-ring widths. That is now a targeted question rather than a search.
+**Where it is.** Inside the compute kernel's TRISC span (experiment 9), in whatever it repeats per
+ring iteration -- 32 against the 8-ring's 8, about 48 us each, with unit count and K math identical.
+Not arrivals (experiment 8), not the gather (experiment 7), not per-unit compute.
+
+**What is still unknown** is which part of a ring iteration. The existing inner zones are per K chunk
+and overflow the profiler's per-core buffer; a pair of zones per ring iteration would fit and would
+separate the scalar setup from the streaming compute call.
 
 **What a fix would be worth, if the residual turns out to be recoverable.** At 96 units the 32-ring
 would land at 5.7625 + (96-88) x 5.26 us = **5.805 ms, +0.043 ms** over no dedup, beating the shipped
