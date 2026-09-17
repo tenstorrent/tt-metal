@@ -26,9 +26,19 @@ Environment:
     TT_DS_CAPTURED_LAYER      an integer: replay one captured MoE layer's real routing instead of the
                               synthetic draw.
     TT_DS_CAPTURED_PATH       where that capture lives; defaults to the golden prefill cache.
+    TT_DS_SKIP_PRODUCTION     1 drops the production phase and its warm-up; with TT_DS_SKIP_REACH=1 the
+                              capture is the two fabric2d transports alone, a bisection cell.
+    TT_DS_SKIP_REACH          1 drops the moe_fanout_reach phase the same way.
+    TT_DS_SKIP_UNICAST        1 drops the store-and-forward phase; TT_DS_SKIP_MULTICAST=1 the fan-out
+                              one. For probes the op refuses under one transport (SKIP_INDEX_BUILD is
+                              unicast only). The four skips accept 0 or 1 and refuse anything else.
+    DSPF2D_PROBES             read by the op: comma-separated probe names for a bottleneck bisection.
+                              The op's program factory lists them and says which leave the output
+                              correct (variants) and which do not (stubs).
+    DSPF2D_FWD_BUMP_EVERY     read by the op: the sender's bump cadence, n >= 1. Output stays correct.
 
-These are read by this worker directly, so a harness that launches it has to pass them through its
-own `env=` parameter rather than prefixing them onto the command.
+All of these are read in this worker's process, some by the op, so a harness that launches it has to
+pass them through its own `env=` parameter rather than prefixing them onto the command.
 """
 
 import os
@@ -258,17 +268,36 @@ def test_dispatch_fabric2d_perf_worker(mesh_device, device_params, num_links, se
     # fabric before it retires; starting dispatch_fabric2d underneath that traffic hangs a relay
     # waiting on pages that never arrive. It takes a heavy routing draw to show up -- uniform and hot
     # pass, hottest deadlocks -- which is exactly the shape of a bug that survives a perf harness.
-    production.forward(tt_x_prod, tt_weights, tt_idx_u16, tt_offs_own, tt_table)
-    ttnn.synchronize_device(mesh_device)
-    fabric2d(False)
-    fabric2d(True)
-    reach()
+    # A bisection cell wants only the two fabric2d transports; the other two phases would double
+    # its device time for numbers it does not read. Skipping production also removes the one launch
+    # the sync below exists for.
+    def skip_flag(name):
+        value = os.environ.get(name, "0")
+        assert value in ("0", "1"), f"{name}={value!r}: only 0 or 1; anything else would silently run the phase"
+        return value == "1"
+
+    skip_production = skip_flag("TT_DS_SKIP_PRODUCTION")
+    skip_reach = skip_flag("TT_DS_SKIP_REACH")
+    # A probe without a multicast stand-in is refused by the op under fanout, so a cell can drop
+    # either transport rather than the whole worker.
+    skip_unicast = skip_flag("TT_DS_SKIP_UNICAST")
+    skip_multicast = skip_flag("TT_DS_SKIP_MULTICAST")
+    if not skip_production:
+        production.forward(tt_x_prod, tt_weights, tt_idx_u16, tt_offs_own, tt_table)
+        ttnn.synchronize_device(mesh_device)
+    if not skip_unicast:
+        fabric2d(False)
+    if not skip_multicast:
+        fabric2d(True)
+    if not skip_reach:
+        reach()
     ttnn.synchronize_device(mesh_device)
 
-    signpost("dispatch_baseline")
-    for _ in range(ITERATIONS):
-        production.forward(tt_x_prod, tt_weights, tt_idx_u16, tt_offs_own, tt_table)
-    ttnn.synchronize_device(mesh_device)
+    if not skip_production:
+        signpost("dispatch_baseline")
+        for _ in range(ITERATIONS):
+            production.forward(tt_x_prod, tt_weights, tt_idx_u16, tt_offs_own, tt_table)
+        ttnn.synchronize_device(mesh_device)
 
     # Two transports, one routing draw, one board state. Store-and-forward moves the same bytes the
     # production op does, so it is expected at parity; multicast is where the link bytes come out.
@@ -280,22 +309,25 @@ def test_dispatch_fabric2d_perf_worker(mesh_device, device_params, num_links, se
     # `test_dispatch_fabric2d_region_reuse_under_skew` reproduces the corruption that follows, so an
     # unsynchronised loop here would measure a configuration the op cannot yet be run in. The arrival
     # counter's own cross-launch race is fixed and is not what this guards.
-    signpost("dispatch_fabric2d")
-    for _ in range(ITERATIONS):
-        fabric2d(False)
+    if not skip_unicast:
+        signpost("dispatch_fabric2d")
+        for _ in range(ITERATIONS):
+            fabric2d(False)
+            ttnn.synchronize_device(mesh_device)
         ttnn.synchronize_device(mesh_device)
-    ttnn.synchronize_device(mesh_device)
 
-    signpost("dispatch_fabric2d_multicast")
-    for _ in range(ITERATIONS):
-        fabric2d(True)
+    if not skip_multicast:
+        signpost("dispatch_fabric2d_multicast")
+        for _ in range(ITERATIONS):
+            fabric2d(True)
+            ttnn.synchronize_device(mesh_device)
         ttnn.synchronize_device(mesh_device)
-    ttnn.synchronize_device(mesh_device)
 
     # What multicast costs before it saves anything: the table the phase above was handed, produced on
     # device instead of on host. It touches no fabric, so it needs no sync against what came before.
-    signpost("moe_fanout_reach")
-    for _ in range(ITERATIONS):
-        reach()
-    ttnn.synchronize_device(mesh_device)
+    if not skip_reach:
+        signpost("moe_fanout_reach")
+        for _ in range(ITERATIONS):
+            reach()
+        ttnn.synchronize_device(mesh_device)
     signpost("done")
