@@ -242,6 +242,7 @@ PrefetcherPipeImpl::PrefetcherPipeImpl(
     const CoreRangeSet& receiver_cores,
     uint32_t ring_size,
     uint32_t initial_entry_size,
+    uint32_t recv_index_base,
     BufferType buffer_type,
     DramSenderTag) :
     device_(mesh_device),
@@ -253,7 +254,8 @@ PrefetcherPipeImpl::PrefetcherPipeImpl(
     all_cores_(receiver_cores),
     ring_size_(ring_size),
     sender_core_type_(SenderCoreType::Dram),
-    initial_entry_size_(initial_entry_size) {
+    initial_entry_size_(initial_entry_size),
+    recv_index_base_(recv_index_base) {
     TT_FATAL(mesh_device != nullptr, "DRAM-sender PrefetcherPipe requires a non-null MeshDevice");
     const auto& hal = MetalContext::instance(mesh_device->impl().get_context_id()).hal();
     TT_FATAL(
@@ -761,6 +763,7 @@ std::shared_ptr<PrefetcherPipe> PrefetcherPipeDramSenderInternals::make_dram_sen
     const CoreRangeSet& receiver_cores,
     uint32_t ring_size,
     uint32_t initial_entry_size,
+    uint32_t recv_index_base,
     BufferType buffer_type) {
     // `new` rather than make_unique: only this friend may name the private constructor.
     std::unique_ptr<PrefetcherPipeImpl> impl(new PrefetcherPipeImpl(
@@ -769,6 +772,7 @@ std::shared_ptr<PrefetcherPipe> PrefetcherPipeDramSenderInternals::make_dram_sen
         receiver_cores,
         ring_size,
         initial_entry_size,
+        recv_index_base,
         buffer_type,
         PrefetcherPipeImpl::DramSenderTag{}));
     // shared_ptr rather than a value: PrefetcherPipe is not copyable, and callers hold a list of

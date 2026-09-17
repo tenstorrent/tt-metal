@@ -53,14 +53,21 @@ std::vector<std::shared_ptr<PrefetcherPipe>> CreatePrefetcherPipesForTensorPrefe
         support_multi_receiver_shards ? DramSenderSplit::OnePerBank : DramSenderSplit::TwoPerBank);
     validate_dram_senders_across_mesh(&mesh_device, mapping);
 
+    // Each sender's bank-local slab base, taken from the mapping while the whole bank's receiver
+    // split is still in one place. Handing it to the pipe is what frees the queue path from
+    // re-deriving it from list position.
+    const auto bases = recv_index_bases_per_sender(mapping);
+
     // One pipe per sender, in mapping order: build_dram_sender_mapping emits a bank's senders
-    // adjacently, in role order, and keeps the banks in input order. That is the order the returned
-    // list must keep, since it is what the queue path accumulates bank-local slab bases in.
+    // adjacently, in role order, and keeps the banks in input order. The returned list keeps that
+    // order as a convention consumers can rely on for pairing pipes with banks; it no longer
+    // carries slab numbering, which each pipe now holds itself.
     std::vector<std::shared_ptr<PrefetcherPipe>> pipes;
     pipes.reserve(mapping.size());
-    for (const auto& [sender_logical, receivers] : mapping) {
+    for (size_t s = 0; s < mapping.size(); ++s) {
+        const auto& [sender_logical, receivers] = mapping[s];
         pipes.push_back(prefetcher_pipe_dram_sender::PrefetcherPipeDramSenderInternals::make_dram_sender(
-            &mesh_device, sender_logical, receivers, entry_size * num_entries, entry_size, buffer_type));
+            &mesh_device, sender_logical, receivers, entry_size * num_entries, entry_size, bases[s], buffer_type));
     }
     return pipes;
 }

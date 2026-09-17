@@ -43,7 +43,8 @@ std::vector<std::pair<CoreCoord, CoreRangeSet>> build_dram_sender_mapping(
         TT_FATAL(
             seen_banks.insert(bank_id).second,
             "DRAM bank {} appears more than once in bank_to_receivers; each bank must be listed exactly once "
-            "(the per-bank recv_index_base / slab assignment assumes one contiguous group of senders per bank).",
+            "(the slab bases this mapping is read for reset per contiguous run of one bank's senders, so a bank "
+            "split across two runs would be numbered from 0 twice).",
             bank_id);
 
         if (!dual_senders_per_bank) {

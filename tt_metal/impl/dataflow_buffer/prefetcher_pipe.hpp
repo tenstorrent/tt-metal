@@ -103,6 +103,13 @@ public:
     // pipe, which is sized in bytes and resizes normally.
     uint32_t initial_entry_size() const { return initial_entry_size_; }
 
+    // Bank-local slab index of this DRAM sender's first receiver: local receiver r of this pipe
+    // owns slab recv_index_base() + r of its bank. 0 for the only (or leading) pipe of a bank, and
+    // for a worker-sender pipe. Host-side bookkeeping only -- CreatePrefetcherPipesForTensorPrefetcher
+    // sets it from the mapping it built, and the Tensor prefetcher stamps it into the request pages
+    // it routes here, so a caller may hand the factory's pipes on in any order or subset.
+    uint32_t recv_index_base() const { return recv_index_base_; }
+
 private:
     // Tag selecting the DRAM-sender constructor. Private so the only way in is
     // CreatePrefetcherPipesForTensorPrefetcher, which owns the bank -> sender-core mapping.
@@ -133,6 +140,7 @@ private:
         const CoreRangeSet& receiver_cores,
         uint32_t ring_size,
         uint32_t initial_entry_size,
+        uint32_t recv_index_base,
         BufferType buffer_type,
         DramSenderTag);
 
@@ -178,6 +186,9 @@ private:
     // constructors that spell them live in the .cpp.
     SenderCoreType sender_core_type_{};
     uint32_t initial_entry_size_ = 0;
+    // See recv_index_base(). Never written to the device from here: the request pages the Tensor
+    // prefetcher builds carry it, and nothing in the pipe's own config page depends on it.
+    uint32_t recv_index_base_ = 0;
     // This pipe's sender config page in the DRISC L1 arena, reserved on its sender core alone so
     // sibling pipes on other banks can hold the same offset. Null for a worker-sender pipe.
     std::shared_ptr<DriscL1Allocation> drisc_config_page_alloc_;

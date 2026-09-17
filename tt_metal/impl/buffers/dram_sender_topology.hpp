@@ -42,7 +42,9 @@ enum class DramSenderSplit : uint8_t { OnePerBank, TwoPerBank };
 // order is preserved (receiver-table order == bank-local slab order, the recv-contig contract);
 // the second sender's slabs start where the first sender's receivers end (tracked host-side via
 // recv_index_base, whose per-bank reset assumes a bank's senders are contiguous in this mapping --
-// hence the no-duplicate-bank guard).
+// hence the no-duplicate-bank guard). Each transport reads the bases off this mapping once, when
+// it builds its senders, so the resulting order is a convention of what the factory returns and
+// not something a later caller has to reproduce.
 std::vector<std::pair<CoreCoord, CoreRangeSet>> build_dram_sender_mapping(
     distributed::MeshDevice* mesh_device,
     const std::vector<std::pair<uint32_t, CoreRangeSet>>& bank_to_receivers,
@@ -57,8 +59,10 @@ void validate_dram_senders_across_mesh(
 
 // Per-sender bank-local recv_index_base. Senders are ordered [bank b s0, bank b s1, bank b+1 s0,
 // ...] (sender_logical.x == bank_id); recv_index_base resets to 0 on a bank change and accumulates
-// within a bank (dual senders share a bank). Returns one value per sender in mapping order. Single
-// source for the request-header stamping and for a consumer's own slab accounting.
+// within a bank (dual senders share a bank). Returns one value per sender in mapping order. Called
+// once per target, where the mapping is built: a GCB derives its bases from its own immutable
+// mapping, and CreatePrefetcherPipesForTensorPrefetcher hands each pipe the base it keeps. Single
+// source for those and for a consumer's own slab accounting.
 std::vector<uint32_t> recv_index_bases_per_sender(const std::vector<std::pair<CoreCoord, CoreRangeSet>>& mapping);
 
 // Write `bytes` into DRAM-logical sender core `sender_logical`'s own L1 on `device`, at DRISC-L1
