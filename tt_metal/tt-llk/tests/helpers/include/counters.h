@@ -457,10 +457,12 @@ constexpr bool is_single_thread_runtype(PerfRunType run_type)
            run_type == PerfRunType::SFPU_ISOLATE;
 }
 
-// MATH and PACK_ISOLATE freeze on the measured thread; the rest need every thread stopped first.
+// A single thread run type freezes on its own measured thread. Holding the peers in an exit barrier instead
+// makes them poll for the whole measured window of the thread still working, which cost UNPACK_ISOLATE up to
+// 147 cycles on matmul. A span needs every thread stopped before the read, so those keep the barrier.
 constexpr bool exit_barrier_for(PerfRunType run_type)
 {
-    return !is_single_thread_runtype(run_type) || run_type == PerfRunType::UNPACK_ISOLATE;
+    return !is_single_thread_runtype(run_type);
 }
 
 constexpr bool is_measured_thread(PerfRunType run_type)
@@ -500,8 +502,7 @@ struct perf_counter_scoped
         ckernel::fence_compiler();
         const std::uint32_t zid = zone_id;
         static_assert(
-            exit_barrier_for(RUN_TYPE) || RUN_TYPE == PerfRunType::MATH_ISOLATE || RUN_TYPE == PerfRunType::PACK_ISOLATE ||
-                RUN_TYPE == PerfRunType::SFPU_ISOLATE,
+            exit_barrier_for(RUN_TYPE) || is_single_thread_runtype(RUN_TYPE),
             "a run type that skips the exit barrier needs a measured thread in is_measured_thread() to freeze the counters");
         if constexpr (!exit_barrier_for(RUN_TYPE))
         {
