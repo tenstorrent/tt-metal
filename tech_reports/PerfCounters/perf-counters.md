@@ -16,7 +16,7 @@ The counters are built from a reusable RTL module (`tt_perf_cnt`) that provides 
 
 1. **Kernel starts**: TRISC1 calls `start_perf_counter()` which writes the start bit to all enabled counter banks. All counters begin accumulating from zero.
 
-2. **Kernel runs**: While the kernel executes, each counter increments every cycle its input signal is high. All counters within a bank run simultaneously — there is no multiplexing during measurement.
+2. **Kernel runs**: While the kernel executes, each counter increments every cycle its input signal is high. All counters within a bank run simultaneously — there is no multiplexing during measurement. The signals are Tensix engine signals: a RISC-V loop that polls a register, such as `cb_wait_front` spinning on a circular buffer's tiles-received count, issues no Tensix instruction and moves no counter (see Hardware Limitations).
 
 3. **Kernel ends**: TRISC1 calls `stop_perf_counter()` which freezes all counters. The counter values remain latched in the debug registers.
 
@@ -232,7 +232,7 @@ Thread N Stall Rate = THREAD_STALLS_N / ref_cnt * 100
 Thread mapping: Thread 0 = unpack, Thread 1 = math, Thread 2 = pack.
 
 - **High value (>30%)**: Thread is frequently stalled. For Thread 0 this usually means waiting for data (NOC, semaphore). For Thread 1, waiting for math hardware. For Thread 2, waiting for pack hardware.
-- **Low value (<5%)**: Thread rarely stalls. Expected for compute-bound ops on the math thread.
+- **Low value (<5%)**: Thread rarely stalls. Expected for compute-bound ops on the math thread. A low value does not rule out a data wait: time the unpack thread spends in `cb_wait_front` is a RISC-V poll and is not counted here.
 
 **Use case:** First-order indicator of where time is being lost. The stall breakdown metrics (below) identify the specific stall reason.
 
@@ -277,7 +277,7 @@ SrcB Valid Wait = WAITING_FOR_SRCB_VALID / ref_cnt * 100
 ```
 
 - **High value (>5%)**: Math is waiting for unpacker to provide data. Data starvation.
-- **Low value (~0%)**: Data is ready when math needs it.
+- **Low value (~0%)**: Data is ready when math needs it, or the unpack thread is still waiting in `cb_wait_front` and has not issued the unpack yet. A kernel starved by DRAM reads reports 0 here.
 
 **Use case:** Detects data starvation from the unpacker side.
 
@@ -342,7 +342,7 @@ Semaphore Zero Wait TN = WAITING_FOR_NONZERO_SEM_N / ref_cnt * 100
 Semaphore Full Wait TN = WAITING_FOR_NONFULL_SEM_N / ref_cnt * 100
 ```
 
-- **Semaphore Zero Wait high (>10%)**: Thread is waiting for a producer to signal (semaphore is 0). Common for tilize (7%) where unpack waits for data.
+- **Semaphore Zero Wait high (>10%)**: Thread is waiting for a producer to signal (semaphore is 0). Common for tilize (7%) where unpack waits for data. Only Tensix semaphore instructions count; the circular buffer wait in `cb_wait_front` is a RISC-V poll and does not appear here.
 - **Semaphore Full Wait high (>5%)**: Thread is waiting for a consumer to drain (semaphore is at max). Indicates backpressure from downstream.
 - **Both low (~0%)**: Good producer-consumer balance.
 
@@ -1100,3 +1100,11 @@ Because the software must toggle bit [16] and re-read to get both `req` and `gra
 Verified against the `wormhole_rtl` and `blackhole_rtl` branches. Every counter exposed via the `hw_counters.h` arrays is driven by a real RTL signal — signals that are hardwired to a constant, or whose grant/req line is an alias of another counter we already expose, are omitted from the arrays entirely. No post-hoc filtering is applied; every emitted counter is reported as-is.
 
 Some counters will still be 0 for a given workload, for example `WAITING_FOR_SFPU_IDLE_{0,2}` never fires because only the math thread waits for SFPU. Those are workload-dependent zeros rather than dead counters. The fidelity counters were a different case: they were tied off in hardware on both architectures and have been removed.
+
+### Waits the counters cannot see
+
+The counters measure Tensix engine signals. `cb_wait_front` and `cb_reserve_back` are RISC-V loops that poll the circular buffer's tiles-received and tiles-acked counts, and a NOC read barrier is a RISC-V poll on the NOC status registers. While a thread spins in one of these, no Tensix instruction is issued, so `THREAD_STALLS_N`, `WAITING_FOR_SRCA_VALID`, `WAITING_FOR_SRCB_VALID` and the semaphore waits all stay where they were. A kernel that waits on DRAM for most of its runtime can therefore report a stall rate near zero.
+
+Measured on a Blackhole causal SDPA prefill: the unpack thread spent 38 percent of the kernel in `cb_wait_front` on the K and V buffers, while `WAITING_FOR_SRCA_VALID` and `WAITING_FOR_SRCB_VALID` read 0 and `WAITING_FOR_NONZERO_SEM_0` read 1.4 percent of the window. The same holds for `L1_*_NOC_RING*_INCOMING`, which counts NoC writes into L1 and stays at 0 when every core reads its data from DRAM itself.
+
+When the question is whether a kernel is memory bound, put a `DeviceZoneScopedN` around the wait or read the RISC-V cycle counter; the stall metrics on their own cannot answer it.
