@@ -54,7 +54,7 @@ _TIMING_BASES = (
 _TIMING_COLUMNS = [
     Column(stat_column(base, kind), "float64", True, "timing")
     for base in _TIMING_BASES
-    for kind in (MEAN, STD)
+    for kind in (MEAN, STD, "min")
 ]
 
 
@@ -169,7 +169,12 @@ DROPPED_COLUMNS = {
     metric_column(run_type, base)
     for run_type in RUN_TYPE_NAMES
     for metric in METRIC_BASES
-    for base in (metric, stat_column(metric, MEAN), stat_column(metric, STD))
+    for base in (
+        metric,
+        stat_column(metric, MEAN),
+        stat_column(metric, STD),
+        stat_column(metric, "min"),
+    )
 }
 
 # Row identity: one test config in one run. The sweep-parameter columns (which
