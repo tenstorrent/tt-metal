@@ -34,7 +34,7 @@ struct Recipe {
 // Exact, allocation-free construction and lookup. In a live request the
 // device grid is the available grid; in an emitted entry it is the minimum
 // grid on which that recipe was certified. Unsupported device counts and the
-// currently empty BH8 cohort return no recipe.
+// unsupported device counts return no recipe.
 std::optional<compact::KeyDescriptor> build_registry_key(const RegistryRequestFacts& facts) noexcept;
 std::span<const compact::CohortDescriptor> cohorts_for_device_count(std::uint16_t device_count) noexcept;
 const compact::EntryDescriptor* lookup(const compact::KeyDescriptor& key) noexcept;
