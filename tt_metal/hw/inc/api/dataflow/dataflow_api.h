@@ -206,6 +206,7 @@ void cb_push_back(const int32_t operand, const int32_t num_pages) {
     uint32_t num_words = num_pages * get_local_cb_interface(operand).fifo_page_size;
 
     volatile tt_reg_ptr uint32_t* pages_received_ptr = get_cb_tiles_received_ptr(operand);
+    SYNC_SIGNAL("SYNC-CB-PUSH", operand);
     pages_received_ptr[0] += num_pages;
 
     get_local_cb_interface(operand).fifo_wr_ptr += num_words;
@@ -217,7 +218,6 @@ void cb_push_back(const int32_t operand, const int32_t num_pages) {
         // TODO: change this to fifo_wr_ptr
         get_local_cb_interface(operand).fifo_wr_ptr -= get_local_cb_interface(operand).fifo_size;
     }
-    SYNC_SIGNAL("SYNC-CB-PUSH", operand);
 }
 
 // clang-format off
@@ -256,6 +256,7 @@ void cb_push_back(const int32_t operand, const int32_t num_pages) {
 FORCE_INLINE
 void cb_pop_front(int32_t operand, int32_t num_pages) {
     volatile tt_reg_ptr uint32_t* pages_acked_ptr = get_cb_tiles_acked_ptr(operand);
+    SYNC_SIGNAL("SYNC-CB-POP", operand);
     pages_acked_ptr[0] += num_pages;
 
     uint32_t num_words = num_pages * get_local_cb_interface(operand).fifo_page_size;
@@ -269,7 +270,6 @@ void cb_pop_front(int32_t operand, int32_t num_pages) {
         // TODO: change this to fifo_wr_ptr
         get_local_cb_interface(operand).fifo_rd_ptr -= get_local_cb_interface(operand).fifo_size;
     }
-    SYNC_SIGNAL("SYNC-CB-POP", operand);
 }
 
 #ifdef DATA_FORMATS_DEFINED
