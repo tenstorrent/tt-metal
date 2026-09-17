@@ -61,13 +61,15 @@ def test_pin_is_idempotent_and_only_narrows(monkeypatch, tmp_path):
     sysfs = _fake_sysfs(tmp_path, {c: f"{c % 4},{c % 4 + 4}" for c in range(8)})
     calls = []
     monkeypatch.setattr(ha, "_SYSFS_CPU", sysfs)
+    monkeypatch.setattr(ha, "_thread_ids", lambda: [100, 101, 102])  # main + two device threads
     monkeypatch.setattr(ha.os, "sched_getaffinity", lambda pid: {0, 1, 2, 3, 4, 5, 6, 7})
-    monkeypatch.setattr(ha.os, "sched_setaffinity", lambda pid, cpus: calls.append(sorted(cpus)))
+    monkeypatch.setattr(ha.os, "sched_setaffinity", lambda tid, cpus: calls.append((tid, sorted(cpus))))
     assert ha.pin_one_thread_per_core("test") == [0, 1, 2, 3]
-    assert calls == [[0, 1, 2, 3]]
+    # every existing thread gets the mask, not just the caller
+    assert calls == [(100, [0, 1, 2, 3]), (101, [0, 1, 2, 3]), (102, [0, 1, 2, 3])]
     # second call: no new sched_setaffinity, same answer
     assert ha.pin_one_thread_per_core("test") == [0, 1, 2, 3]
-    assert calls == [[0, 1, 2, 3]]
+    assert len(calls) == 3
 
 
 def test_pin_is_noop_when_mask_already_one_per_core(monkeypatch, tmp_path):
@@ -78,7 +80,8 @@ def test_pin_is_noop_when_mask_already_one_per_core(monkeypatch, tmp_path):
     sysfs = _fake_sysfs(tmp_path, {c: f"{c % 4},{c % 4 + 4}" for c in range(8)})
     calls = []
     monkeypatch.setattr(ha, "_SYSFS_CPU", sysfs)
+    monkeypatch.setattr(ha, "_thread_ids", lambda: [100])
     monkeypatch.setattr(ha.os, "sched_getaffinity", lambda pid: {0, 1, 2, 3})
-    monkeypatch.setattr(ha.os, "sched_setaffinity", lambda pid, cpus: calls.append(sorted(cpus)))
+    monkeypatch.setattr(ha.os, "sched_setaffinity", lambda tid, cpus: calls.append((tid, sorted(cpus))))
     assert ha.pin_one_thread_per_core("test") is None
     assert calls == []

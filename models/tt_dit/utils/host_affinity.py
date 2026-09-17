@@ -90,14 +90,31 @@ def pin_one_thread_per_core(reason: str = "LTX pipeline") -> list[int] | None:
     chosen = one_thread_per_core(allowed=current)
     if chosen is None or set(chosen) == current:
         return None
-    try:
-        os.sched_setaffinity(0, set(chosen))
-    except OSError as e:
-        logger.warning(f"host affinity: could not pin ({e}); leaving the mask alone")
+    # Affinity is per thread on Linux, and the device's dispatch and reader threads already exist by the
+    # time a pipeline is built (the mesh is opened first), so pin every thread of the process, not just
+    # the caller; threads created later inherit their creator's mask.
+    pinned, failed = 0, 0
+    for tid in _thread_ids():
+        try:
+            os.sched_setaffinity(tid, set(chosen))
+            pinned += 1
+        except OSError:
+            failed += 1  # a thread that exited between listing and pinning
+    if pinned == 0:
+        logger.warning("host affinity: could not pin any thread; leaving the mask alone")
         return None
     _applied = set(chosen)
     logger.info(
-        f"host affinity: {reason} pinned to one hardware thread per core: {len(chosen)} of {len(current)} CPUs "
-        f"(LTX_PIN_CORES=0 disables)"
+        f"host affinity: {reason} pinned to one hardware thread per core: {len(chosen)} of {len(current)} CPUs, "
+        f"{pinned} threads (LTX_PIN_CORES=0 disables)"
     )
     return sorted(_applied)
+
+
+def _thread_ids() -> list[int]:
+    """All thread ids of this process (``/proc/self/task``), the calling thread first; falls back to just 0."""
+    try:
+        tids = sorted(int(t) for t in os.listdir("/proc/self/task"))
+    except OSError:
+        return [0]
+    return tids or [0]
