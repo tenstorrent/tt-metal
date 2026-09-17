@@ -484,6 +484,11 @@ class TtPrefillBlock(LightweightModule):
             # Absent on the models whose routed-expert shape never favours the composite, so
             # they keep the single-op path rather than paying a second dispatch for nothing.
             routed_expert_hybrid_token_threshold=getattr(model_cfg, "ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD", None),
+            # Opt-in per model, and only meaningful alongside the threshold above. The union
+            # program needs the device opened with worker_l1_size <= 1444864 to fit the
+            # kernel-config ring, which is a decision for whoever opens the device rather than
+            # for this block -- so a config that sets this has to be run that way.
+            routed_expert_fuse_hybrid_dispatch=getattr(model_cfg, "ROUTED_EXPERT_FUSE_HYBRID_DISPATCH", None),
             shared_hidden_dim=getattr(model_cfg, "SHARED_EXPERT_INTERMEDIATE_SIZE", None),
             latent_weights=state_dict.get("latent_weights"),  # None if cache exists
             latent_use_norm=getattr(model_cfg, "LATENT_MOE_USE_NORM", True),
