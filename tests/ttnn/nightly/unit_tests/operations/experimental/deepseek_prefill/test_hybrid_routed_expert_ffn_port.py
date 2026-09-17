@@ -123,7 +123,7 @@ def run_port_equivalence(
         activation=activation,
     )
 
-    def run(op, tt_input):
+    def run(op, tt_input, **extra):
         # A TILE input is written in place and handed straight back, so each op needs its own
         # copy or the second one grades against the first one's output.
         x = tt_input if x_row_major else ttnn.clone(tt_input)
@@ -141,6 +141,7 @@ def run_port_equivalence(
             gate_biases=tt_expert.gate_biases,
             up_biases=tt_expert.up_biases,
             down_biases=tt_expert.down_biases,
+            **extra,
         )
         return ttnn.to_torch(out, mesh_composer=ttnn.ConcatMeshToTensor(device, dim=0))
 
@@ -151,7 +152,9 @@ def run_port_equivalence(
     for attempt in range(2):
         tt_input = make_x()
         reference = run(ttnn.experimental.deepseek_prefill.unified_routed_expert_moe, tt_input)
-        ported = run(ttnn.experimental.deepseek_prefill.hybrid_unified_routed_expert_moe, tt_input)
+        # Threshold 0 leaves every expert on the unified half and runs no fused pass, so this is
+        # the carried copy on its own -- the configuration the port has to match bit-for-bit.
+        ported = run(ttnn.experimental.deepseek_prefill.hybrid_routed_expert_moe, tt_input, hybrid_token_threshold=0)
 
         # Only the rows the ops actually write are defined; the padding rows of a freshly
         # allocated output are whatever the allocator left there.
