@@ -468,6 +468,72 @@ _EDGE_DIVERGENCE_REASON = {
 }
 
 
+def _unpack_to_dest(input_format: DataFormat, dest_acc: DestAccumulation) -> bool:
+    """Mirror of the unpack_to_dest expression eltwise_unary_sfpu passes to TestConfig.
+
+    Kept as one expression rather than two literals so the claim below is checked against
+    the driver's actual routing, not against a copy of it that can drift.
+    """
+    return input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
+
+
+def _assert_signed_zero_partition_valid():
+    """The signed-zero ops must partition on unpack_to_dest, exactly.
+
+    The scoping recorded against Sign and Heaviside is an inference from which combinations
+    diverge, and a comment is prose that no run checks. Asserting the shape instead makes
+    editing the table without revisiting the explanation fail at collection -- which matters
+    while #55306 is in flight against these same two entries, because they are applied as
+    xfail(strict=False), so a bad hand-edit XPASSes quietly rather than failing.
+    """
+    all_combos = [
+        (fmt.input_format, fmt.output_format, dest_acc)
+        for fmt in input_output_formats([DataFormat.Float16_b, DataFormat.Float32])
+        for dest_acc in (DestAccumulation.No, DestAccumulation.Yes)
+    ]
+
+    # Signbit used to hold the other side of this partition: six xfails recording that the -0.0
+    # probe never arrived on the datacopy path. negative_zero_delivered() now keeps the probe
+    # off those pipelines, so an entry here would be a non-strict xfail that can never fire.
+    assert MathOperation.Signbit not in _EDGE_KNOWN_DIVERGENCES, (
+        "Signbit's divergences were a stimulus limitation, not a kernel defect. An entry "
+        "here means the delivery gate changed -- re-derive it rather than restoring it."
+    )
+
+    # Sqrt, Rsqrt and SqrtCustom are fixed in the kernels; an entry reappearing here would
+    # silence the fix rather than record it.
+    for fixed_op in (
+        MathOperation.Sqrt,
+        MathOperation.Rsqrt,
+        MathOperation.SqrtCustom,
+    ):
+        assert fixed_op not in _EDGE_KNOWN_DIVERGENCES, (
+            f"{fixed_op.name} is fixed in the kernel, so a divergence here is a regression "
+            "to chase in ckernel_sfpu_sqrt.h / ckernel_sfpu_sqrt_custom.h, not an entry to "
+            "record."
+        )
+
+    # SFPSETCC mishandles a -0.0 that does arrive, which is the unpack-to-dest path.
+    expected = {combo for combo in all_combos if _unpack_to_dest(combo[0], combo[2])}
+    for op in (MathOperation.Sign, MathOperation.Heaviside):
+        recorded = set(_EDGE_KNOWN_DIVERGENCES.get(op, ()))
+        assert recorded == expected, (
+            f"{op.name}'s recorded divergences no longer match the unpack_to_dest "
+            f"partition.\n"
+            f"  missing: {sorted(str(c) for c in expected - recorded)}\n"
+            f"  extra:   {sorted(str(c) for c in recorded - expected)}\n"
+            "The comment above rests on this partition -- if the measurement really "
+            "moved, re-derive the explanation rather than only editing the table."
+        )
+
+    assert set(_EDGE_KNOWN_DIVERGENCES[MathOperation.Sign]) == set(
+        _EDGE_KNOWN_DIVERGENCES[MathOperation.Heaviside]
+    ), "Sign and Heaviside share one SFPSETCC cause, so their sets must stay identical"
+
+
+_assert_signed_zero_partition_valid()
+
+
 @pytest.mark.nightly
 @parametrize(
     formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32]),
@@ -538,26 +604,23 @@ def test_eltwise_unary_sfpu_edges(
     )
 
 
-# sqrt_custom(+/-inf): strict assertions on two named values, outside the edge sweep, and the
-# only coverage on Quasar, whose kernel still guards only val != 0.0f. Float32 -> Float32 at
-# dest_acc=Yes, because a 16-bit output narrows NaN to inf and could not show a regression.
+# sqrt_custom(+/-inf): strict assertions on two named values, outside the edge sweep because
+# the sweep cannot distinguish the two NaNs it would have to. Float32 -> Float32 at dest_acc=Yes,
+# because a 16-bit output narrows NaN to inf and could not show a regression.
+#
+# Wormhole and Blackhole only, and no Quasar expectation is recorded here: this test cannot run
+# there at all. The driver it builds pulls in llk_sfpu/ckernel_sfpu_mask.h, which has no Quasar
+# copy, and nothing collects it either -- it sits outside python_tests/quasar/, carries no
+# `quasar` marker, and is nightly, each of which the Quasar and ttsim runners exclude.
+#
+# The -inf half pins the NEGATIVE_INFINITY_SAFE instantiation, which calculate_sqrt_custom opts
+# into and nothing in production does. erfinv, asin and acos take the default and still get
+# -inf; that is deliberate and unreachable for them, and priced in ckernel_sfpu_sqrt_custom.h.
 @pytest.mark.nightly
 def test_sqrt_custom_infinity_regression(request):
     formats = InputOutputFormat(DataFormat.Float32, DataFormat.Float32)
     dest_acc = DestAccumulation.Yes
     input_dimensions = [32, 32]
-
-    # Quasar still carries the pre-fix kernel (its ckernel_sfpu_sqrt_custom.h guards only
-    # val != 0.0f), so it is expected to fail here rather than silently not being covered.
-    # Non-strict: fixing Quasar should XPASS and prompt removing this, not error.
-    if TestConfig.CHIP_ARCH == ChipArchitecture.QUASAR:
-        request.node.add_marker(
-            pytest.mark.xfail(
-                reason="Quasar's sfpu_sqrt_custom has not had the non-finite guard applied; "
-                "sqrt_custom(+inf) is still NaN there. See tt-metal issue #52930.",
-                strict=False,
-            )
-        )
 
     # If this ever goes False the pipeline stopped delivering +inf and the assertion below
     # would pass vacuously -- fail loudly instead of quietly testing nothing.
@@ -731,6 +794,11 @@ def test_reciprocal_compat_negative_zero_regression():
 # apart, and because the sweep runs ApproximationMode.No while _calculate_sqrt_body_ has a
 # second copy of these guards under APPROXIMATE. Float32 -> Float32 at dest_acc=Yes is the only
 # pipeline that delivers a real -0.0 and returns 32 bits intact.
+#
+# FastMode.No on both, and deliberately so rather than a gap: every edge arm in
+# _calculate_sqrt_body_ is gated on !FAST_APPROX, as the negative clamp alone was before this
+# fix, so sqrt_tile<true>/rsqrt_tile<true> have no signed-zero result to pin. That is the
+# kernel's standing trade, not a regression, and it is what the comment there records.
 @pytest.mark.nightly
 @pytest.mark.parametrize(
     "approx_mode",
