@@ -151,6 +151,9 @@ SCENARIOS = {
         "env": {
             "PREFILL_MODEL": "glm_5_2",
             "PREFILL_TRACE_DIR": GLM52_TRACE,
+            # GLM-5.2's calibrated KVPE floor. The 0.88 default is above what this model reaches
+            # (~0.857 min per-layer), so it has to be set explicitly here.
+            "PREFILL_STANDALONE_CHUNKED_PCC": "0.85",
         },
         # 78 layers of GLM-5.2 weights + kernel JIT, then a two-config PCC sweep of ~174k sequential
         # read_dram_umd block reads (78 x 1760 for KVPE + 21 x 1760 for the index cache). Both phases
