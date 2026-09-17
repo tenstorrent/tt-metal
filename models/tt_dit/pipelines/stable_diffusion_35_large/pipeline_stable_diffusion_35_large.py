@@ -93,7 +93,7 @@ class StableDiffusion3PipelineConfig:
         cls,
         *,
         mesh_shape: ttnn.MeshShape,
-        topology: ttnn.Topology = ttnn.Topology.Linear,
+        topology: ttnn.Topology | None = None,
         num_links: int | None = None,
         dit_parallel_config: DiTParallelConfig | None = None,
         encoder_parallel_config: EncoderParallelConfig | None = None,
@@ -107,11 +107,14 @@ class StableDiffusion3PipelineConfig:
     ) -> StableDiffusion3PipelineConfig:
         preset = _PRESETS.get(tuple(mesh_shape), {})
 
-        # A preset may pin its own topology (the 1x4 row needs Ring). An explicit
-        # caller argument still wins; this only replaces the Linear default for
-        # callers that pass nothing, such as create_pipeline().
-        if topology == ttnn.Topology.Linear and "topology" in preset:
-            topology = preset["topology"]
+        # A preset may pin its own topology (the 1x4 row needs Ring). `topology`
+        # defaults to None rather than Linear so that "caller said nothing" is
+        # distinguishable from "caller explicitly asked for Linear" -- with a
+        # Linear default those two cases are identical and an explicit Linear
+        # would be silently overridden to Ring. Precedence: caller argument,
+        # then preset, then Linear.
+        if topology is None:
+            topology = preset.get("topology", ttnn.Topology.Linear)
 
         if dit_parallel_config is None:
             dit_parallel_config = DiTParallelConfig.from_tuples(cfg=preset["cfg"], sp=preset["sp"], tp=preset["tp"])
