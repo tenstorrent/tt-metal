@@ -49,26 +49,18 @@ struct AluPassResult {
     uint32_t instret;
 };
 
-// Mirrors run_kernel() in quasar_examples/quasar_idma/test_idma_example.cpp: DataMovementGen2Config
-// on Quasar, CreateReaderGen1DataMovementConfig elsewhere, so the same kernel source and launch path
-// runs unmodified on both arches.
+// config_1xx from the reader factory is ignored on Quasar, so one config runs on both arches.
 void run_kernel(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t result_addr, uint32_t load_src_addr) {
     const experimental::KernelSpecName DM_KERNEL{"alu_loop_ipc"};
     const experimental::NodeCoord node{0, 0};
-
-    const auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-    experimental::DataMovementHardwareConfig dm_hw_config = experimental::DataMovementGen2Config{};
-    if (arch != tt::ARCH::QUASAR) {
-        dm_hw_config = experimental::CreateReaderGen1DataMovementConfig();
-    }
 
     experimental::KernelSpec dm_kernel_spec{
         .unique_id = DM_KERNEL,
         .source = kAluLoopIpc,
         .num_threads = 1,
         .compile_time_args = {{"result_addr", result_addr}, {"load_src_addr", load_src_addr}},
-        .hw_config = dm_hw_config,
+        .hw_config = experimental::CreateReaderDataMovementConfig(),
     };
 
     experimental::WorkUnitSpec main_wu{

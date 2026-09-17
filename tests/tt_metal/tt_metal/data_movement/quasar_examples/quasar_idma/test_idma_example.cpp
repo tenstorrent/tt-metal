@@ -44,21 +44,21 @@ void run_kernel(
     const experimental::KernelSpecName DM_KERNEL{"idma"};
     const experimental::NodeCoord node{0, 0};
 
-    // DataMovementGen2Config is Quasar-only -- ValidateProgramSpec hard-fails on Gen1 (WH/BH) with
-    // "targets Gen1 but its DataMovementHardwareConfig holds a DataMovementGen2Config". Select per arch so
-    // arch-generic kernels (e.g. clock_calibration_example.cpp) can run on both.
-    const auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-    experimental::DataMovementHardwareConfig dm_hw_config = experimental::DataMovementGen2Config{};
-    if (arch != tt::ARCH::QUASAR) {
-        dm_hw_config = experimental::CreateReaderGen1DataMovementConfig();
-    }
+    // // DataMovementGen2Config is Quasar-only -- ValidateProgramSpec hard-fails on Gen1 (WH/BH) with
+    // // "targets Gen1 but its DataMovementHardwareConfig holds a DataMovementGen2Config". Select per arch so
+    // // arch-generic kernels (e.g. clock_calibration_example.cpp) can run on both.
+    // const auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+    // experimental::DataMovementHardwareConfig dm_hw_config = experimental::DataMovementGen2Config{};
+    // if (arch != tt::ARCH::QUASAR) {
+    //     dm_hw_config = experimental::CreateReaderGen1DataMovementConfig();
+    // }
 
     experimental::KernelSpec dm_kernel_spec{
         .unique_id = DM_KERNEL,
         .source = kernel_path,
         .num_threads = 1,
         .compile_time_args = std::move(compile_time_args),
-        .hw_config = dm_hw_config,
+        .hw_config = experimental::DataMovementHardwareConfig{},
     };
 
     experimental::WorkUnitSpec main_wu{
