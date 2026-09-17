@@ -24,6 +24,7 @@
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <algorithm>
+#include <cstdio>
 #include <bit>
 #include <cstdlib>
 #include <map>
@@ -292,6 +293,8 @@ tt::tt_metal::ProgramDescriptor build_vsa_sdpa_stream_descriptor(
         // 20/10 do not fit next to the block's live L1 buffers.
         rmax = 18;
         stream_depth = 10;
+        // (v2 keeps 18/10 here: with 10 rows the sequence is streamed three times and only pass 0 overlaps the
+        // gather -- measured 33 ms vs 24 at 15 s; the worker pool is then 10 slots, TT_VSA_RMAX/DEPTH to tune)
     }
     if (attrs.distributed) {
         // 2 x 4 owned (double-buffered slice) + 12 gather slots; the 5 fewer resident rows pay for the
@@ -312,7 +315,7 @@ tt::tt_metal::ProgramDescriptor build_vsa_sdpa_stream_descriptor(
     // TT_VSA_V2=1: the decoupled design as a whole -- pure-streaming leader whose unused compute buffers become extra
     // stream slots (address-carrying log entries), free-slot workers, k-th-slowest gate with DRAM fallback, fetch
     // lag 8, rows balanced to +-1 over the workers.
-    const bool v2 = [] {
+    const bool v2 = attrs.v2 || [] {
         const char* e = std::getenv("TT_VSA_V2");
         return e != nullptr && e[0] == '1';
     }();
@@ -321,23 +324,31 @@ tt::tt_metal::ProgramDescriptor build_vsa_sdpa_stream_descriptor(
         return e != nullptr && e[0] == '1';
     }();
     // TT_VSA_HPG=<n>: heads per leader (needs v2: the leader computes nothing and streams the heads interleaved)
-    const uint32_t hpg = [] {
+    uint32_t hpg = [&] {
         const char* e = std::getenv("TT_VSA_HPG");
-        return (e != nullptr && e[0] != '\0') ? static_cast<uint32_t>(std::max(1, std::atoi(e))) : 1u;
+        return (e != nullptr && e[0] != '\0') ? static_cast<uint32_t>(std::max(1, std::atoi(e)))
+                                              : std::max<uint32_t>(1, attrs.heads_per_group);
     }();
-    TT_FATAL(hpg == 1 || v2, "TT_VSA_HPG > 1 needs TT_VSA_V2=1");
-    TT_FATAL(!(hpg > 1 && ring_mode), "TT_VSA_HPG > 1 is not implemented for vsa_ring_sdpa");
-    TT_FATAL(!(decouple && ring_mode), "TT_VSA_DECOUPLE is not implemented for vsa_ring_sdpa yet");
+    TT_FATAL(hpg == 1 || v2, "vsa_sdpa: heads_per_group > 1 needs the v2 design");
+    // Ring mode v2: the leader streams each landed shard in a blocked-stride order (runs of R blocks from S equal
+    // segments of the shard, interleaved) so per-window demand is smooth across the workers, as the bstride stream
+    // order does standalone. TT_VSA_RING_ORDER=R.S overrides (1.1 = ascending).
+    uint32_t ring_bs_r = v2 ? 4u : 1u, ring_bs_s = v2 ? 8u : 1u;
+    if (const char* e = std::getenv("TT_VSA_RING_ORDER"); e != nullptr && e[0] != '\0') {
+        if (std::sscanf(e, "%u.%u", &ring_bs_r, &ring_bs_s) != 2 || ring_bs_r == 0 || ring_bs_s == 0) {
+            TT_THROW("TT_VSA_RING_ORDER must be R.S (got \"{}\")", e);
+        }
+    }
+    TT_FATAL(
+        !(decouple && attrs.distributed), "vsa_sdpa: the decoupled design does not apply to the distributed kernel");
     // TT_VSA_FREE_SLOTS=1: workers pull into any free slot and run up to 8 windows ahead of their compute (the
     // two-half design refilled a half only after the compute returned the previous window's credits)
     const bool free_slots = v2 || [] {
         const char* e = std::getenv("TT_VSA_FREE_SLOTS");
         return e != nullptr && e[0] == '1';
     }();
-    TT_FATAL(!(v2 && (ring_mode || attrs.distributed)), "TT_VSA_V2: streaming single-device kernel only for now");
-    TT_FATAL(
-        !(free_slots && (ring_mode || attrs.distributed)),
-        "TT_VSA_FREE_SLOTS: streaming single-device kernel only for now");
+    TT_FATAL(!(v2 && attrs.distributed), "vsa_sdpa: v2 does not apply to the distributed kernel");
+    TT_FATAL(!(free_slots && attrs.distributed), "vsa_sdpa: free slots do not apply to the distributed kernel");
     // arrival-log ring: must exceed the slot ring + sentinel slack; a whole pass when decoupled
     const uint32_t log_depth = decouple ? n_kv_blocks + 1 : stream_depth + 8;
     const bool dist = attrs.distributed;
@@ -375,6 +386,15 @@ tt::tt_metal::ProgramDescriptor build_vsa_sdpa_stream_descriptor(
     }
     const uint32_t num_cores = grid.x * grid.y;
     TT_FATAL(num_cores >= 2 * H, "vsa_sdpa streaming needs >= 2 cores per head (H {}, cores {})", H, num_cores);
+    if (hpg > 1) {
+        // every worker of a multi-head group needs a row; small shapes fall back to one head per group
+        const uint32_t n_groups = (H + hpg - 1) / hpg;
+        const uint32_t cpg = num_cores / n_groups;
+        const uint32_t wph = cpg >= 1 + hpg ? (cpg - 1) / hpg : 0u;
+        if (wph == 0 || n_q_tiles < wph) {
+            hpg = 1;
+        }
+    }
     const uint32_t gy0 = ring_mode ? ring->sender_rows : 0u;  // first VSA row (the senders' rows come first)
     const auto lcore = [&](uint32_t i) { return tt::tt_metal::CoreCoord{i % grid.x, gy0 + i / grid.x}; };
     auto core_grid = tt::tt_metal::CoreRangeSet(tt::tt_metal::CoreRange({0, gy0}, {grid.x - 1, gy0 + grid.y - 1}));
@@ -482,6 +502,19 @@ tt::tt_metal::ProgramDescriptor build_vsa_sdpa_stream_descriptor(
         }
     }
     TT_FATAL(leader_depth <= kMaxLeaderSlots, "vsa_sdpa v2: leader depth {} exceeds the kernel table", leader_depth);
+    {
+        // the leader prefetches fetch_lag blocks: it must never outrun slot recycling (2 * lag <= its ring depth)
+        uint32_t fetch_lag = v2 ? 8u : 4u;
+        if (const char* e = std::getenv("TT_VSA_FETCH_LAG"); e != nullptr && e[0] != '\0') {
+            fetch_lag = static_cast<uint32_t>(std::atoi(e));
+        }
+        TT_FATAL(
+            2 * fetch_lag <= leader_depth,
+            "vsa_sdpa: fetch lag {} needs a leader ring of >= {} slots (have {})",
+            fetch_lag,
+            2 * fetch_lag,
+            leader_depth);
+    }
 
     // ---- compile-time args ----
     std::vector<uint32_t> reader_ct = {
@@ -607,7 +640,7 @@ tt::tt_metal::ProgramDescriptor build_vsa_sdpa_stream_descriptor(
     if (v2 && std::getenv("TT_VSA_FETCH_LAG") == nullptr) {
         probe_defines["VSA_FETCH_LAG"] = "8";  // the deep leader ring hides the DRAM latency with 8 blocks in flight
     }
-    if (const char* e = std::getenv("TT_VSA_MCAST_LOG"); e != nullptr && e[0] == '1') {
+    if (attrs.mcast_log || (std::getenv("TT_VSA_MCAST_LOG") != nullptr && std::getenv("TT_VSA_MCAST_LOG")[0] == '1')) {
         probe_defines["VSA_MCAST_LOG"] = "1";  // leader publishes log entries by multicast strips (not unicasts)
     }
     if (const char* e = std::getenv("TT_VSA_DEC_MARGIN"); e != nullptr && e[0] != '\0') {
@@ -657,7 +690,11 @@ tt::tt_metal::ProgramDescriptor build_vsa_sdpa_stream_descriptor(
         }
         if (const char* e = std::getenv("TT_VSA_RING_RUN"); e != nullptr && e[0] != '\0') {
             probe_defines["VSA_RING_RUN"] = e;  // tuning: consecutive blocks per (shard, worker quarter) turn
+        } else if (v2) {
+            probe_defines["VSA_RING_RUN"] = "4";  // v2: short runs interleave the landing quarters (smooth demand)
         }
+        probe_defines["VSA_RING_BS_R"] = std::to_string(ring_bs_r);  // in-shard blocked-stride order (per-shard gate)
+        probe_defines["VSA_RING_BS_S"] = std::to_string(ring_bs_s);
         if (const char* e = std::getenv("TT_VSA_RING_GATE_OPEN"); e != nullptr && e[0] == '1') {
             probe_defines["VSA_RING_GATE_OPEN"] = "1";  // timing probe: no gate (compute under the gather's contention)
         }
@@ -1220,7 +1257,9 @@ tt::tt_metal::ProgramDescriptor build_vsa_sdpa_stream_descriptor(
             compute_desc.emplace_runtime_args(core, compute_rt);
             continue;
         }
-        const uint32_t n_active = active_workers(sched.n_workers, n_q_tiles);
+        // multi-head groups: every head has n_q_tiles rows for its workers_per_head workers (the fallback above
+        // guarantees n_q_tiles >= workers_per_head), so the group's worker count is not capped by one head's rows
+        const uint32_t n_active = hpg > 1 ? sched.n_workers : active_workers(sched.n_workers, n_q_tiles);
         const bool is_idle = !sched.is_leader && sched.worker_index >= n_active;
 
         const tt::tt_metal::CoreCoord leader_logical = lcore(sched.group_first);

@@ -50,6 +50,10 @@ ttnn::Tensor vsa_sdpa(
     uint32_t coarse_real_per_shard = 0,
     bool distributed = false,
     std::vector<uint32_t> dense_row_hint = {},
-    std::optional<ttnn::Tensor> stream_order = std::nullopt);
+    std::optional<ttnn::Tensor> stream_order = std::nullopt,
+    // decoupled streaming design (v2), heads per leader, multicast log: see VsaSdpaParams
+    bool v2 = false,
+    uint32_t heads_per_group = 1,
+    bool mcast_log = false);
 
 }  // namespace ttnn::transformer

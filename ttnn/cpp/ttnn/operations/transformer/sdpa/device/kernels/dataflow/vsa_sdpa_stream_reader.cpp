@@ -40,9 +40,6 @@
 #if defined(VSA_RDR_TIMERS) && !defined(VSA_TICK)
 #define VSA_TICK() (*reinterpret_cast<volatile uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L))
 #endif
-#if defined(VSA_DECOUPLE) && defined(VSA_RING)
-#error "VSA_DECOUPLE is not implemented for the ring reader yet"
-#endif
 #ifdef VSA_RING
 #ifdef VSA_RING_DPRINT
 #include "api/debug/dprint.h"
@@ -390,6 +387,73 @@ void kernel_main() {
         experimental::CB(cb_bitmap).get_write_ptr());
 #endif
 
+#ifdef VSA_RING
+    // Ring mode (vsa_ring_sdpa), both roles: K/V arrive shard by shard over the SP ring into the gathered buffers;
+    // the own shard is read from the local tensors. All are plain head-split [1, H, T, d]; the op's gather forwards
+    // every slice TOKEN-MAJOR (per tile row: K of every head, then V of every head), so every head's blocks land
+    // progressively and pass 0 can gate per block (RingGate). The per-device constants are COMMON runtime args
+    // (identical on every core; addresses re-applied on program-cache hits): kRingCommonArg* in the descriptor header.
+    constexpr auto gv_args = TensorAccessorArgs<
+        counts_args.next_compile_time_args_offset(),
+        counts_args.next_common_runtime_args_offset()>();
+    constexpr uint32_t ring_crt = gv_args.next_common_runtime_args_offset();
+    const uint32_t gv_addr = get_common_arg_val<uint32_t>(ring_crt + 12);          // gathered V buffer
+    const uint32_t ring_index = get_common_arg_val<uint32_t>(ring_crt + 1);        // this device's SP shard
+    const uint32_t blocks_per_shard = get_common_arg_val<uint32_t>(ring_crt + 2);  // T_local / block_size
+    const uint32_t kv_wt = get_common_arg_val<uint32_t>(ring_crt + 3);             // tiles per sequence row (2*H*DHt)
+    const uint32_t dht = get_common_arg_val<uint32_t>(ring_crt + 4);               // d / 32
+    const uint32_t n_heads = get_common_arg_val<uint32_t>(ring_crt + 5);           // H
+    const uint32_t skt = get_common_arg_val<uint32_t>(ring_crt + 6);               // block_size / 32
+    const uint32_t poll_tpp = get_common_arg_val<uint32_t>(ring_crt + 7);          // tiles per fabric packet
+    const uint32_t poll_cps = get_common_arg_val<uint32_t>(ring_crt + 8);          // packets per count step
+    const uint32_t poll_G = get_common_arg_val<uint32_t>(ring_crt + 9);            // workers per direction
+    const uint32_t ht_local = get_common_arg_val<uint32_t>(ring_crt + 13);         // tile rows per shard
+    const uint32_t ht_total = get_common_arg_val<uint32_t>(ring_crt + 14);         // tile rows gathered
+    const uint32_t poll_table = ring_crt + 16;
+    // RingSDPAOpReceiver args (9 words) follow the poll table; re-parsed per pass through a copy of this index.
+    const uint32_t ring_rt_argi = ring_crt + 16 + 6 * poll_G;
+    const auto gv = TensorAccessor(gv_args, gv_addr);
+    (void)kv_wt;
+    (void)n_heads;
+    (void)skt;
+    (void)poll_tpp;
+    (void)poll_cps;
+    (void)poll_table;
+    (void)ring_rt_argi;
+#endif
+    // Where block `b` of absolute head `habs` lives in DRAM: the page of its first V tile and (ring mode) whether it
+    // is in the gathered buffer or the local shard tensor.
+    struct VPage {
+        uint32_t page0;
+        bool gathered;
+    };
+    const auto v_page = [&](uint32_t habs, uint32_t b) -> VPage {
+#ifdef VSA_RING
+        if (b / blocks_per_shard == ring_index) {
+            return {habs * ht_local * dht + (b - ring_index * blocks_per_shard) * v_tiles_per_block, false};
+        }
+        return {habs * ht_total * dht + b * v_tiles_per_block, true};
+#else
+        return {habs * v_head_stride + b * v_tiles_per_block, false};
+#endif
+    };
+    const auto v_tile_noc_addr = [&](const VPage& p, uint32_t i) -> uint64_t {
+#ifdef VSA_RING
+        if (p.gathered) {
+            return gv.get_noc_addr(p.page0 + i);
+        }
+#endif
+        return v.get_noc_addr(p.page0 + i);
+    };
+    // block b of head habs into the L1 address `dst` (worker DRAM fallback / repair); untagged reads
+    const auto read_v_block_to = [&](uint32_t habs, uint32_t b, uint32_t dst) {
+        const VPage p = v_page(habs, b);
+        for (uint32_t i = 0; i < v_tiles_per_block; ++i) {
+            noc_async_read(v_tile_noc_addr(p, i), dst + i * v_tile_bytes, v_tile_bytes, noc.get_noc_id());
+        }
+    };
+    (void)read_v_block_to;
+
 #ifdef VSA_IS_LEADER
     if (is_leader) {
         // ---------------- LEADER ----------------
@@ -428,37 +492,34 @@ void kernel_main() {
         const uint32_t wcoord_argi = argi;
         argi += 2 * n_workers;
 #ifdef VSA_RING
-        // Ring mode (vsa_ring_sdpa): K/V arrive shard by shard over the SP ring into the gathered buffers; the own
-        // shard is read from the local tensors. All are plain head-split [1, H, T, d]; the op's gather forwards
-        // every slice TOKEN-MAJOR (per tile row: K of every head, then V of every head), so every head's blocks land
-        // progressively and pass 0 can gate per block (RingGate) instead of per shard. The per-device constants are
-        // COMMON runtime args (identical on every core; the addresses are re-applied on program-cache hits): see
-        // kRingCommonArg* in vsa_sdpa_stream_descriptor.hpp.
-        constexpr auto gv_args = TensorAccessorArgs<
-            counts_args.next_compile_time_args_offset(),
-            counts_args.next_common_runtime_args_offset()>();
-        constexpr uint32_t ring_crt = gv_args.next_common_runtime_args_offset();
-        const uint32_t gv_addr = get_common_arg_val<uint32_t>(ring_crt + 12);          // gathered V buffer
-        const uint32_t ring_index = get_common_arg_val<uint32_t>(ring_crt + 1);        // this device's SP shard
-        const uint32_t blocks_per_shard = get_common_arg_val<uint32_t>(ring_crt + 2);  // T_local / block_size
-        const uint32_t kv_wt = get_common_arg_val<uint32_t>(ring_crt + 3);  // tiles per sequence row (2*H*DHt)
-        const uint32_t dht = get_common_arg_val<uint32_t>(ring_crt + 4);               // d / 32
-        const uint32_t n_heads = get_common_arg_val<uint32_t>(ring_crt + 5);           // H
-        const uint32_t skt = get_common_arg_val<uint32_t>(ring_crt + 6);               // block_size / 32
-        const uint32_t poll_tpp = get_common_arg_val<uint32_t>(ring_crt + 7);          // tiles per fabric packet
-        const uint32_t poll_cps = get_common_arg_val<uint32_t>(ring_crt + 8);          // packets per count step
-        const uint32_t poll_G = get_common_arg_val<uint32_t>(ring_crt + 9);            // workers per direction
-        const uint32_t ht_local = get_common_arg_val<uint32_t>(ring_crt + 13);         // tile rows per shard
-        const uint32_t ht_total = get_common_arg_val<uint32_t>(ring_crt + 14);         // tile rows gathered
-        const uint32_t poll_table = ring_crt + 16;
-        // RingSDPAOpReceiver args (9 words) follow the poll table; re-parsed per pass through a copy of this index.
-        const uint32_t ring_rt_argi = ring_crt + 16 + 6 * poll_G;
-        const auto gv = TensorAccessor(gv_args, gv_addr);
-        const uint32_t k_col0 = head * dht;                   // this head's K position in a sequence row (gate)
-        const uint32_t v_col0 = (n_heads + head) * dht;       // and V position
-        const uint32_t v_local_base = head * ht_local * dht;  // V of this head: local tensor (head-split layout)
-        const uint32_t v_gath_base = head * ht_total * dht;   // and gathered buffer
+        // the group's heads' K and V positions in a token-major sequence row (RingGate per head)
+        const auto k_col0_of = [&](uint32_t h) { return (head0 + h) * dht; };
+        const auto v_col0_of = [&](uint32_t h) { return (n_heads + head0 + h) * dht; };
         const uint32_t ring_size = get_common_arg_val<uint32_t>(ring_rt_argi);
+#ifndef VSA_RING_BS_R
+#define VSA_RING_BS_R 1
+#define VSA_RING_BS_S 1
+#endif
+        // Stream the blocks [0, bps) of a landed shard in a blocked-stride order: the shard in S equal segments,
+        // runs of R consecutive blocks taken from each segment in turn (R.S = 1.1: ascending). Closed form, so the
+        // order is a pure function of the shape (deterministic); every block is visited exactly once.
+        const auto stream_shard_bstride = [&](uint32_t shard_base, uint32_t bps, auto&& emit) {
+            constexpr uint32_t R = VSA_RING_BS_R, S = VSA_RING_BS_S;
+            const uint32_t seg_len = (bps + S - 1) / S;
+            const uint32_t n_runs = (seg_len + R - 1) / R;
+            for (uint32_t run = 0; run < n_runs; ++run) {
+                for (uint32_t seg = 0; seg < S; ++seg) {
+                    for (uint32_t j = 0; j < R; ++j) {
+                        const uint32_t off = run * R + j;
+                        const uint32_t bl = seg * seg_len + off;
+                        if (off >= seg_len || bl >= bps) {
+                            continue;
+                        }
+                        emit(shard_base + bl);
+                    }
+                }
+            }
+        };
         RingGate ring_gate;
         ring_gate.init(
             poll_table,
@@ -497,7 +558,6 @@ void kernel_main() {
             strip_base[st] =
                 get_noc_multicast_addr(strip_sx[st], strip_sy[st], strip_ex[st], strip_ey[st], 0, noc.get_noc_id());
         }
-        const uint32_t v_base = head * v_head_stride;
         volatile tt_l1_ptr uint32_t* log_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(log_l1);
         // Slot table: ring slot -> L1 addresses of its K and V blocks. Slots [0, stream_depth) are the stream CBs
         // (the layout every worker shares); the extra slots of a pure-streaming leader are carved from the CBs its
@@ -785,7 +845,10 @@ void kernel_main() {
         constexpr uint32_t kFetchLag = vsa_dec::kFetchLag;  // blocks in flight (<= 8: one trid per block in flight)
         static_assert(kFetchLag >= 2 && kFetchLag <= 8 && kFetchLag % 2 == 0, "fetch lag: even, 2..8");
         constexpr uint32_t kNoBlock = 0xFFFFFFFEu;
-        static_assert(kFetchLag * 2 <= stream_depth, "prefetch must not outrun slot recycling");
+        // prefetch must not outrun slot recycling: 2 * kFetchLag <= the leader ring depth (runtime: carved slots)
+        if (2 * kFetchLag > ldepth) {
+            vsa_trap_bad_progress();
+        }
         // Workers zero their log rings, then post a READY flag into their ackbox flag word (and
         // keep re-posting it until their first entry arrives). Publishing before every ring is
         // zeroed would race the zeroing. The flag words were zeroed above; a flag that landed
@@ -920,33 +983,16 @@ void kernel_main() {
                 const uint32_t slot = fetched % ldepth;
                 const uint32_t dst = slot_v[slot];
                 experimental::set_read_trid(noc, (fetched % 8) + 1);
-#ifdef VSA_RING
-                // head-split layout: a block's Skt x DHt V tiles are contiguous pages of this head; the own shard is
-                // read from the local tensor (local block id), every other shard from the gathered buffer (global id)
-                if (bs[j] / blocks_per_shard == ring_index) {
-                    const uint32_t v_tile0 = v_local_base + (bs[j] - ring_index * blocks_per_shard) * v_tiles_per_block;
-                    for (uint32_t i = 0; i < v_tiles_per_block; ++i) {
-                        noc_async_read(
-                            v.get_noc_addr(v_tile0 + i), dst + i * v_tile_bytes, v_tile_bytes, noc.get_noc_id());
-                    }
-                } else {
-                    const uint32_t v_tile0 = v_gath_base + bs[j] * v_tiles_per_block;
-                    for (uint32_t i = 0; i < v_tiles_per_block; ++i) {
-                        noc_async_read(
-                            gv.get_noc_addr(v_tile0 + i), dst + i * v_tile_bytes, v_tile_bytes, noc.get_noc_id());
-                    }
-                }
-#else
-                const uint32_t v_tile0 = v_base + (bs[j] >> 16) * v_head_stride + (bs[j] & 0xFFFFu) * v_tiles_per_block;
-#if defined(VSA_PROBE) && VSA_PROBE == 12
+                // bs[j] = block | head_sel << 16; the block's V pages (ring: local shard tensor or gathered buffer)
+                const VPage vp = v_page(head0 + (bs[j] >> 16), bs[j] & 0xFFFFu);
+#if defined(VSA_PROBE) && VSA_PROBE == 12 && !defined(VSA_RING)
                 // layout probe: the whole block as ONE contiguous read from the first tile's bank address (the
                 // bytes are the wrong tiles -- timing of a block-contiguous 16 KB page layout only)
-                noc_async_read(v.get_noc_addr(v_tile0), dst, v_block_bytes, noc.get_noc_id());
+                noc_async_read(v_tile_noc_addr(vp, 0), dst, v_block_bytes, noc.get_noc_id());
 #else
                 for (uint32_t i = 0; i < v_tiles_per_block; ++i) {
-                    noc_async_read(v.get_noc_addr(v_tile0 + i), dst + i * v_tile_bytes, v_tile_bytes, noc.get_noc_id());
+                    noc_async_read(v_tile_noc_addr(vp, i), dst + i * v_tile_bytes, v_tile_bytes, noc.get_noc_id());
                 }
-#endif
 #endif
                 experimental::set_read_trid(noc, 0);
                 pend_b[fetched % kFetchLag] = bs[j];
@@ -1048,10 +1094,11 @@ void kernel_main() {
                     });
                     (void)d0;
                     (void)v0;
-                    const uint32_t b0 = sigma * blocks_per_shard;
-                    for (uint32_t b = b0; b < b0 + blocks_per_shard; ++b) {
-                        stream_block(b);
-                    }
+                    stream_shard_bstride(sigma * blocks_per_shard, blocks_per_shard, [&](uint32_t b) {
+                        for (uint32_t h = 0; h < n_group_heads; ++h) {
+                            stream_block(b | (h << 16));
+                        }
+                    });
                     ++step;
                 }
                 // block ranges per all-gather worker (by the worker carrying the block's first tile row); the
@@ -1078,10 +1125,11 @@ void kernel_main() {
                         sigma = rx.seq.get_next_ring_id([](uint32_t, uint32_t) {});
                     }
                     ++step;
-                    const uint32_t b0 = sigma * blocks_per_shard;
-                    for (uint32_t b = b0; b < b0 + blocks_per_shard; ++b) {
-                        stream_block(b);
-                    }
+                    stream_shard_bstride(sigma * blocks_per_shard, blocks_per_shard, [&](uint32_t b) {
+                        for (uint32_t h = 0; h < n_group_heads; ++h) {
+                            stream_block(b | (h << 16));
+                        }
+                    });
                 }
             }
 #else
@@ -1136,8 +1184,10 @@ void kernel_main() {
                                     }
                                     more = true;
                                     ring_gate.begin_shard(ag_dir[x], slice_k[x], sem_id[x], sem_val[x]);
-                                    ring_gate.wait_block(bl, skt, dht, k_col0, v_col0);
-                                    stream_block(sig[x] * blocks_per_shard + bl);
+                                    for (uint32_t h = 0; h < n_group_heads; ++h) {
+                                        ring_gate.wait_block(bl, skt, dht, k_col0_of(h), v_col0_of(h));
+                                        stream_block((sig[x] * blocks_per_shard + bl) | (h << 16));
+                                    }
                                 }
                             }
                         }
@@ -1287,16 +1337,8 @@ void kernel_main() {
     };
 
     const uint32_t v_l1_base = v_cb.get_write_ptr();
-    const uint32_t v_base_w = head * v_head_stride;
     const auto read_v_from_dram = [&](uint32_t b, uint32_t slot) {
-        for (uint32_t i = 0; i < v_tiles_per_block; ++i) {
-            noc.async_read(
-                v,
-                v_cb,
-                v_tile_bytes,
-                {.page_id = v_base_w + b * v_tiles_per_block + i},
-                {.offset_bytes = (slot * v_tiles_per_block + i) * v_tile_bytes});
-        }
+        read_v_block_to(head, b, v_l1_base + slot * v_tiles_per_block * v_tile_bytes);
     };
 
     // Window records: rec indices are monotonic (rec % kMaxWin addresses the arrays); [chead, ehead) emitted and
@@ -1799,8 +1841,6 @@ void kernel_main() {
     // Per-half V-pull trid groups (half h -> trids 4h+1 .. 4h+4): a half's landing is checked
     // with four non-blocking outstanding-count reads instead of a blocking drain.
     const uint32_t v_l1_base = v_cb.get_write_ptr();
-    const uint32_t v_base_w = head * v_head_stride;  // this head's V pages (DRAM fallback of the decoupled protocol)
-    (void)v_base_w;
     // per-half record of the open window's pulls: {arrival, slot, block, from DRAM} (validated at emission)
     struct WPull {
         uint32_t n, slot, b, dram;
@@ -1811,14 +1851,7 @@ void kernel_main() {
     (void)n_dram_fix;
     (void)n_pulls;
     const auto read_v_from_dram = [&](uint32_t b, uint32_t slot) {
-        for (uint32_t i = 0; i < v_tiles_per_block; ++i) {
-            noc.async_read(
-                v,
-                v_cb,
-                v_tile_bytes,
-                {.page_id = v_base_w + b * v_tiles_per_block + i},
-                {.offset_bytes = (slot * v_tiles_per_block + i) * v_tile_bytes});
-        }
+        read_v_block_to(head, b, v_l1_base + slot * v_tiles_per_block * v_tile_bytes);
     };
     const auto issue_pull =
         [&](uint32_t half, uint32_t idx, uint32_t leader_v_addr, uint32_t slot, bool from_dram, uint32_t b) {

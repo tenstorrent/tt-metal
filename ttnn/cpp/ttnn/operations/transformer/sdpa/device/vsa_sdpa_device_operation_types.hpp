@@ -45,6 +45,13 @@ struct VsaSdpaParams {
     // q-tile rows that MAY be dense (a superset over the mesh's shards) so the dealing can weight them.
     bool distributed = false;
     std::vector<uint32_t> dense_row_hint;
+    // Decoupled streaming design (VSA_STREAM_DESIGN.md section 15): pure-streaming leader whose idle compute buffers
+    // become extra stream slots, k-th-slowest slot gate with DRAM fallback, free-slot workers, cost-balanced rows.
+    // heads_per_group > 1: one leader streams that many heads interleaved (7 groups x 17 cores for 14 heads on 120).
+    // mcast_log: the leader publishes its arrival log by multicast strips. Pair with a bstride stream order.
+    bool v2 = false;
+    uint32_t heads_per_group = 1;
+    bool mcast_log = false;
     DeviceComputeKernelConfig compute_kernel_config;
 };
 

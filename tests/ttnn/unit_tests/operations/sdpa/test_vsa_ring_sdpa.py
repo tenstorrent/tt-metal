@@ -156,6 +156,10 @@ def _run(
             topology=ttnn.Topology.Ring,
             gather=os.environ.get("VSA_RING_GATHER", "ring_attention"),
             num_workers_per_link=int(os.environ.get("VSA_RING_WORKERS", "2")),
+            # VSA_RING_V2=1: the decoupled design (two heads per leader, multicast log) through the op's parameters
+            v2=os.environ.get("VSA_RING_V2", "0") == "1",
+            heads_per_group=2 if os.environ.get("VSA_RING_V2", "0") == "1" else 1,
+            mcast_log=os.environ.get("VSA_RING_V2", "0") == "1",
             **common,
         )
 

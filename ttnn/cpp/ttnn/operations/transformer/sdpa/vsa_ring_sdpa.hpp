@@ -55,6 +55,10 @@ ttnn::Tensor vsa_ring_sdpa(
     std::optional<ttnn::Tensor> dense_row_mask = std::nullopt,
     uint32_t coarse_slots_shift = 0,
     uint32_t coarse_real_per_shard = 0,
-    std::vector<uint32_t> dense_row_hint = {});
+    std::vector<uint32_t> dense_row_hint = {},
+    // decoupled streaming design (v2), heads per leader, multicast log: see VsaSdpaParams
+    bool v2 = false,
+    uint32_t heads_per_group = 1,
+    bool mcast_log = false);
 
 }  // namespace ttnn::transformer

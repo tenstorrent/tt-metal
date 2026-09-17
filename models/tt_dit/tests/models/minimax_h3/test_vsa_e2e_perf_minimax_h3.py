@@ -30,6 +30,8 @@ def test_t2va_15s_768p_e2e_perf(mesh_device, reset_seeds):
 
     order = os.environ.get("VSA_E2E_STREAM_ORDER")  # e.g. identity | bstride4.16 (default: the config default)
     vsa_kw = {"stream_order": order} if order else {}
+    if os.environ.get("VSA_E2E_V2") == "1":  # the decoupled streaming design (two heads per leader, multicast log)
+        vsa_kw.update(v2=True, heads_per_group=2, mcast_log=True)
     if mode == "ring":  # vsa_ring_sdpa: the K/V all-gather fused into the fine stage
         vsa_kw["ring"] = True
     vsa_config = MiniMaxH3VSAConfig(sparsity=0.9, **vsa_kw) if mode in ("vsa", "ring") else None

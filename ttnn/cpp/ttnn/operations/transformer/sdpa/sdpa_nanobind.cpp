@@ -524,7 +524,10 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("coarse_real_per_shard") = 0,
         nb::arg("distributed") = false,
         nb::arg("dense_row_hint") = std::vector<uint32_t>{},
-        nb::arg("stream_order") = nb::none());
+        nb::arg("stream_order") = nb::none(),
+        nb::arg("v2") = false,
+        nb::arg("heads_per_group") = 1,
+        nb::arg("mcast_log") = false);
 
     ttnn::bind_function<"vsa_ring_sdpa", "ttnn.transformer.">(
         mod,
@@ -586,7 +589,10 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("dense_row_mask") = nb::none(),
         nb::arg("coarse_slots_shift") = 0,
         nb::arg("coarse_real_per_shard") = 0,
-        nb::arg("dense_row_hint") = std::vector<uint32_t>{});
+        nb::arg("dense_row_hint") = std::vector<uint32_t>{},
+        nb::arg("v2") = false,
+        nb::arg("heads_per_group") = 1,
+        nb::arg("mcast_log") = false);
 
     const auto* const chunked_doc =
         R"doc(

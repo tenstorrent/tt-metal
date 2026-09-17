@@ -185,6 +185,9 @@ ttsl::hash::hash_t VsaSdpaOperation::compute_program_hash(const VsaSdpaParams& a
         attrs.coarse_real_per_shard,
         attrs.distributed,
         attrs.dense_row_hint,
+        attrs.v2,
+        attrs.heads_per_group,
+        attrs.mcast_log,
         t.dense_row_mask.has_value(),
         t.stream_order.has_value(),
         attrs.compute_kernel_config,
@@ -289,7 +292,10 @@ Tensor vsa_sdpa(
     uint32_t coarse_real_per_shard,
     bool distributed,
     std::vector<uint32_t> dense_row_hint,
-    std::optional<Tensor> stream_order) {
+    std::optional<Tensor> stream_order,
+    bool v2,
+    uint32_t heads_per_group,
+    bool mcast_log) {
     using OperationType = ttnn::prim::VsaSdpaOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
@@ -303,6 +309,9 @@ Tensor vsa_sdpa(
             .coarse_real_per_shard = coarse_real_per_shard,
             .distributed = distributed,
             .dense_row_hint = std::move(dense_row_hint),
+            .v2 = v2,
+            .heads_per_group = heads_per_group,
+            .mcast_log = mcast_log,
             .compute_kernel_config = compute_kernel_config,
         },
         OperationType::tensor_args_t{

@@ -637,6 +637,9 @@ class MiniMaxH3Attention(Module):
                     coarse_slots_shift=self.vsa_stage.coarse_slots_shift,
                     coarse_real_per_shard=self.vsa_stage.geometry.tiles_per_shard,
                     dense_row_hint=self.vsa_stage.dense_row_hint,
+                    v2=self.vsa_config.v2,
+                    heads_per_group=self.vsa_config.heads_per_group,
+                    mcast_log=self.vsa_config.mcast_log,
                 )
                 ttnn.deallocate(vsa_indices)
                 k_gathered = v_gathered = None
@@ -662,6 +665,9 @@ class MiniMaxH3Attention(Module):
                     k_chunk_blocks=self.vsa_config.k_chunk_blocks,
                     streaming=self.vsa_config.streaming,
                     distributed=self.vsa_config.distributed,
+                    v2=self.vsa_config.v2,
+                    heads_per_group=self.vsa_config.heads_per_group,
+                    mcast_log=self.vsa_config.mcast_log,
                     **(
                         dict(
                             list_len=self.vsa_stage.k,

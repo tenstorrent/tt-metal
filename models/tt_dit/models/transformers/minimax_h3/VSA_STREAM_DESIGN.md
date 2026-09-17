@@ -819,3 +819,20 @@ that is ~27% of the block. (Four of the five e2e attempts died at device init or
 another user was on the machine; the galaxy needed `tt-smi -glx_reset` each time.) Gates after the changes: 22
 streaming unit cases, determinism, trace cache-hit loops (6), ring medium (2) all pass; the default path's log entry
 now carries K/V addresses and the kreq layout changed, everything else is behind the TT_VSA_* knobs.
+
+**Config plumbing and the ring port (2026-09-17).** `VsaSdpaParams` (and so `vsa_sdpa` / `vsa_ring_sdpa`, Python and
+`MiniMaxH3VSAConfig`) carry `v2`, `heads_per_group`, `mcast_log`; the TT_VSA_* env knobs remain as overrides for
+triage. The parameter path is bit-exact with the env path. Pair `v2=True, heads_per_group=2, mcast_log=True` with
+`stream_order="bstride4.16"`: v2 without a smooth order is SLOWER than the old kernel (identity: 19.9 vs 17.1 ms
+standalone with 4 dense rows), because the median-worker gate and the DRAM fallback lose to bursts that the old
+leader-as-worker serialization happened to pace.
+`vsa_ring_sdpa` accepts the same parameters: ring constants are now visible to both roles (DRAM fallback reads the
+own shard from the local tensor and other shards from the gathered buffer), the leader interleaves the group's heads
+in the ring-arrival order and gates each head's tiles, and a closed-form in-shard blocked-stride order
+(`TT_VSA_RING_ORDER=R.S`, default 4.8 for v2) plus short landing runs smooth demand within a shard. Correct and
+deterministic (ring medium / odd-block cases, both gathers), but NOT faster: 15 s ring v2 24.1 ms (fused gather) /
+27.1 (stock) vs baseline 20.2 / 22.7; e2e ring v2 22.0 s vs 20.9 (8 steps, before the in-shard order); row/slot
+splits 10/18 (33), 14/14 (28.8), 16/12 (27.6) all worse than 18/10. The ring order is shard-major by construction,
+so no in-shard permutation reproduces the whole-sequence stride that carries v2 standalone; passes 1+ could use a
+global bstride order (not built). Ring v2 stays opt-in; the ring default remains the old leader-as-worker kernel.
+Small shapes fall back to one head per group automatically.

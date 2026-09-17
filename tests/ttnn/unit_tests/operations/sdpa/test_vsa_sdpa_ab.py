@@ -25,6 +25,8 @@ def test_vsa_sdpa_ab(device):
     )
     q, k, v, idx, counts, _ = make_inputs(device, **spec)
     kw = dict(streaming=True, dense_row_hint=list(range(spec["dense_rows"])))
+    if os.environ.get("VSA_AB_V2") == "1":  # the decoupled design through the op's parameters (not the env knobs)
+        kw.update(v2=True, heads_per_group=int(os.environ.get("VSA_AB_HPG", "2")), mcast_log=True)
     order = os.environ.get("VSA_ORDER")
     if order and order != "identity":
         perm = bstride_order(counts.shape[-1], order).reshape(1, 1, 1, -1)

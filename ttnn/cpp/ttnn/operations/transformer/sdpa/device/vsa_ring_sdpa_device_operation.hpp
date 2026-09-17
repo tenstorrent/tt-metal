@@ -60,6 +60,9 @@ Tensor vsa_ring_sdpa(
     ttnn::ccl::Topology topology,
     VsaRingGather gather,
     uint32_t num_workers_per_link,
-    std::optional<tt::tt_metal::SubDeviceId> subdevice_id);
+    std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
+    bool v2 = false,
+    uint32_t heads_per_group = 1,
+    bool mcast_log = false);
 
 }  // namespace ttnn::prim

@@ -84,6 +84,20 @@ void kernel_main() {
     constexpr uint32_t k_block_bytes = k_tiles_per_block * k_tile_bytes;
 
     Noc noc;
+#ifdef VSA_RING
+    // Ring mode, both roles: own-shard blocks come from the local K tensor, remote shards from the gathered K buffer
+    // (both head-split [1, H, T, d]); ring constants are COMMON runtime args (vsa_sdpa_stream_descriptor.hpp).
+    constexpr auto gk_args =
+        TensorAccessorArgs<q_args.next_compile_time_args_offset(), q_args.next_common_runtime_args_offset()>();
+    constexpr uint32_t ring_crt = gk_args.next_common_runtime_args_offset();
+    const uint32_t gk_addr = get_common_arg_val<uint32_t>(ring_crt + 0);
+    const uint32_t ring_index = get_common_arg_val<uint32_t>(ring_crt + 1);
+    const uint32_t blocks_per_shard = get_common_arg_val<uint32_t>(ring_crt + 2);
+    const uint32_t dht = get_common_arg_val<uint32_t>(ring_crt + 4);
+    const uint32_t ht_local = get_common_arg_val<uint32_t>(ring_crt + 13);
+    const uint32_t ht_total = get_common_arg_val<uint32_t>(ring_crt + 14);
+    const auto gk = TensorAccessor(gk_args, gk_addr);
+#endif
     vsa_sum::Service sums{cb_shdr, cb_stiles, cb_sumback, get_write_ptr(cb_sacc), R_MAX, Sqt};
 #define VSA_SERVE() sums.serve()
 #if defined(VSA_NO_SUMS)
@@ -95,6 +109,31 @@ void kernel_main() {
     const auto out = TensorAccessor(out_args, out_addr);
     const auto k = TensorAccessor(k_args, k_addr);
     const auto q = TensorAccessor(q_args, q_addr);
+    // block b of absolute head habs: its first K page (ring: local shard tensor or gathered buffer) + tile NoC address
+    struct KPage {
+        uint32_t page0;
+        bool gathered;
+    };
+    const auto k_page = [&](uint32_t habs, uint32_t b) -> KPage {
+#ifdef VSA_RING
+        if (b / blocks_per_shard == ring_index) {
+            return {habs * ht_local * dht + (b - ring_index * blocks_per_shard) * k_tiles_per_block, false};
+        }
+        return {habs * ht_total * dht + b * k_tiles_per_block, true};
+#else
+        return {habs * k_head_stride + b * k_tiles_per_block, false};
+#endif
+    };
+    const auto k_tile_noc_addr = [&](const KPage& p, uint32_t i) -> uint64_t {
+#ifdef VSA_RING
+        if (p.gathered) {
+            return gk.get_noc_addr(p.page0 + i);
+        }
+#endif
+        return k.get_noc_addr(p.page0 + i);
+    };
+    (void)k_page;
+    (void)k_tile_noc_addr;
 
 #ifdef VSA_IS_LEADER
     if (is_leader) {
@@ -109,25 +148,6 @@ void kernel_main() {
         static_assert(kAckLag + 1 <= 8, "K blocks in flight need one trid each");
 #if defined(VSA_PROBE) && VSA_PROBE == 7
         return;  // probe 7: no K fetches, no acks (the reader skips its kack waits too)
-#endif
-        const uint32_t k_base = head * k_head_stride;
-#ifdef VSA_RING
-        // Ring mode: own-shard blocks come from the local K tensor, remote shards from the gathered K buffer (both
-        // head-split [1, H, T, d]; see the reader's leader for the protocol). Ring constants are COMMON runtime args
-        // after the accessor common args (vsa_sdpa_stream_descriptor.hpp kRingCommonArg*).
-        constexpr auto gk_args =
-            TensorAccessorArgs<q_args.next_compile_time_args_offset(), q_args.next_common_runtime_args_offset()>();
-        constexpr uint32_t ring_crt = gk_args.next_common_runtime_args_offset();
-        const uint32_t gk_addr = get_common_arg_val<uint32_t>(ring_crt + 0);
-        const uint32_t ring_index = get_common_arg_val<uint32_t>(ring_crt + 1);
-        const uint32_t blocks_per_shard = get_common_arg_val<uint32_t>(ring_crt + 2);
-        const uint32_t dht = get_common_arg_val<uint32_t>(ring_crt + 4);
-        const uint32_t ht_local = get_common_arg_val<uint32_t>(ring_crt + 13);
-        const uint32_t ht_total = get_common_arg_val<uint32_t>(ring_crt + 14);
-        const auto gk = TensorAccessor(gk_args, gk_addr);
-        const uint32_t k_local_base = head * ht_local * dht;  // K of this head: local tensor
-        const uint32_t k_gath_base = head * ht_total * dht;   // and gathered buffer
-        (void)k_base;
 #endif
         // slot -> K address, the same table as the reader leader's: slots [0, stream_depth) in the stream CB, the
         // rest carved from the given regions as {K block, V block} pairs in order (the V block size equals K's here)
@@ -162,37 +182,17 @@ void kernel_main() {
             ++nacked;
         };
         constexpr uint32_t kNoBlock = 0xFFFFFFFEu;
-        const auto fetch_one = [&](uint32_t block_id, uint32_t slot) {
+        const auto fetch_one = [&](uint32_t block_id, uint32_t slot) {  // block_id = block | head_sel << 16
             experimental::set_read_trid(noc, (nfetch % 8) + 1);
             const uint32_t dst = slot_k[slot];
-#ifdef VSA_RING
-            // head-split layout: a block's K tiles are contiguous pages of this head; own shard from the local
-            // tensor (local block id), every other shard from the gathered buffer (global block id)
-            if (block_id / blocks_per_shard == ring_index) {
-                const uint32_t k_tile0 = k_local_base + (block_id - ring_index * blocks_per_shard) * k_tiles_per_block;
-                for (uint32_t i = 0; i < k_tiles_per_block; ++i) {
-                    noc_async_read(k.get_noc_addr(k_tile0 + i), dst + i * k_tile_bytes, k_tile_bytes, noc.get_noc_id());
-                }
-            } else {
-                const uint32_t k_tile0 = k_gath_base + block_id * k_tiles_per_block;
-                for (uint32_t i = 0; i < k_tiles_per_block; ++i) {
-                    noc_async_read(
-                        gk.get_noc_addr(k_tile0 + i), dst + i * k_tile_bytes, k_tile_bytes, noc.get_noc_id());
-                }
-            }
-#else
-            // block_id: block | head_sel << 16 (the leader interleaves the group's heads)
-            const uint32_t k_tile0 =
-                (head0 + (block_id >> 16)) * k_head_stride + (block_id & 0xFFFFu) * k_tiles_per_block;
-            (void)k_base;
-#if defined(VSA_PROBE) && VSA_PROBE == 12
+            const KPage kp = k_page(head0 + (block_id >> 16), block_id & 0xFFFFu);
+#if defined(VSA_PROBE) && VSA_PROBE == 12 && !defined(VSA_RING)
             // layout probe: one contiguous read per block (wrong bytes; see the reader's leader)
-            noc_async_read(k.get_noc_addr(k_tile0), dst, k_block_bytes, noc.get_noc_id());
+            noc_async_read(k_tile_noc_addr(kp, 0), dst, k_block_bytes, noc.get_noc_id());
 #else
             for (uint32_t i = 0; i < k_tiles_per_block; ++i) {
-                noc_async_read(k.get_noc_addr(k_tile0 + i), dst + i * k_tile_bytes, k_tile_bytes, noc.get_noc_id());
+                noc_async_read(k_tile_noc_addr(kp, i), dst + i * k_tile_bytes, k_tile_bytes, noc.get_noc_id());
             }
-#endif
 #endif
             experimental::set_read_trid(noc, 0);
             ++nfetch;
@@ -293,7 +293,6 @@ void kernel_main() {
     }
 
     const uint32_t k_l1_base = k_cb.get_write_ptr();
-    const uint32_t k_base_w = head * k_head_stride;  // this head's K pages (DRAM fallback of the decoupled protocol)
 
     uint32_t drained = 0;
     uint32_t pass_base = 0;
@@ -330,14 +329,11 @@ void kernel_main() {
                    dec.log_l1 + (dec.log_of_arrival(n) % log_depth) * vsa_dec::kEntryWords * 4) &
                0xFFFFu;  // block | head_sel << 16
     };
-    const auto read_k_from_dram = [&](uint32_t b, uint32_t slot) {
+    const auto read_k_from_dram = [&](uint32_t b, uint32_t slot) {  // DRAM fallback / repair (decoupled protocol)
+        const KPage kp = k_page(head, b);
+        const uint32_t dst = k_l1_base + slot * k_tiles_per_block * k_tile_bytes;
         for (uint32_t i = 0; i < k_tiles_per_block; ++i) {
-            noc.async_read(
-                k,
-                k_cb,
-                k_tile_bytes,
-                {.page_id = k_base_w + b * k_tiles_per_block + i},
-                {.offset_bytes = (slot * k_tiles_per_block + i) * k_tile_bytes});
+            noc_async_read(k_tile_noc_addr(kp, i), dst + i * k_tile_bytes, k_tile_bytes, noc.get_noc_id());
         }
     };
     const auto khalf_landed = [&](uint32_t h) {

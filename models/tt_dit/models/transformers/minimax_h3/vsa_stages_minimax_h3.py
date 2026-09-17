@@ -72,6 +72,12 @@ class MiniMaxH3VSAConfig:
     ring: bool = False  # fuse the K/V ring all-gather into the fine stage (vsa_ring_sdpa); env VSA_RING=1/0 overrides
     ring_gather: str = "ring_attention"  # vsa_ring_sdpa's gather: "ring_attention" (stock helper) | "fused_kv"
     ring_workers_per_link: int = 2  # fused_kv only: gather workers per direction per link
+    # Decoupled streaming design (VSA_STREAM_DESIGN.md section 15): pure-streaming leader with its idle compute
+    # buffers as extra stream slots, k-th-slowest slot gate with DRAM fallback, free-slot workers, cost-balanced
+    # rows. heads_per_group=2 puts two heads on one leader (16 workers). Pair with stream_order="bstride4.16".
+    v2: bool = False
+    heads_per_group: int = 1
+    mcast_log: bool = False  # the leader publishes its arrival log by multicast strips
 
 
 def compute_topk(sparsity: float, num_candidates: int) -> int:

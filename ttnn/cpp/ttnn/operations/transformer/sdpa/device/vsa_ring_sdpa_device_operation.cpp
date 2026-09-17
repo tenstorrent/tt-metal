@@ -189,6 +189,9 @@ ttsl::hash::hash_t VsaRingSdpaOperation::compute_program_hash(
         a.coarse_slots_shift,
         a.coarse_real_per_shard,
         a.dense_row_hint,
+        a.v2,
+        a.heads_per_group,
+        a.mcast_log,
         t.vsa.dense_row_mask.has_value(),
         a.compute_kernel_config,
         attrs.ag,
@@ -227,7 +230,10 @@ Tensor vsa_ring_sdpa(
     ttnn::ccl::Topology topology,
     VsaRingGather gather,
     uint32_t num_workers_per_link,
-    std::optional<tt::tt_metal::SubDeviceId> subdevice_id) {
+    std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
+    bool v2,
+    uint32_t heads_per_group,
+    bool mcast_log) {
     using OperationType = VsaRingSdpaOperation;
 
     const auto& mesh_view = mesh_device.get_view();
@@ -245,6 +251,9 @@ Tensor vsa_ring_sdpa(
         .coarse_real_per_shard = coarse_real_per_shard,
         .distributed = false,
         .dense_row_hint = std::move(dense_row_hint),
+        .v2 = v2,
+        .heads_per_group = heads_per_group,
+        .mcast_log = mcast_log,
         .compute_kernel_config = compute_kernel_config,
     };
     ttnn::experimental::prim::RingAttentionAllGatherAsyncParams ag{

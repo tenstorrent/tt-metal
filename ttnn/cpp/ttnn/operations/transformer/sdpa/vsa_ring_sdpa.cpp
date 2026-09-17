@@ -36,7 +36,10 @@ ttnn::Tensor vsa_ring_sdpa(
     std::optional<ttnn::Tensor> dense_row_mask,
     uint32_t coarse_slots_shift,
     uint32_t coarse_real_per_shard,
-    std::vector<uint32_t> dense_row_hint) {
+    std::vector<uint32_t> dense_row_hint,
+    bool v2,
+    uint32_t heads_per_group,
+    bool mcast_log) {
     ttnn::prim::VsaRingGather gather_mode;
     if (gather == "ring_attention") {
         gather_mode = ttnn::prim::VsaRingGather::RingAttention;
@@ -79,7 +82,10 @@ ttnn::Tensor vsa_ring_sdpa(
         topology,
         gather_mode,
         num_workers_per_link,
-        subdevice_id);
+        subdevice_id,
+        v2,
+        heads_per_group,
+        mcast_log);
 }
 
 }  // namespace ttnn::transformer
