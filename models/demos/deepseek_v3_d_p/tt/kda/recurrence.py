@@ -201,7 +201,7 @@ def _summarize_chunk_groups(
 def _effective_summary_group_chunks(
     num_chunks: int,
     configured_group_chunks: int,
-    max_groups: int | None = None,
+    max_groups: int,
 ) -> int:
     """Return a group size that divides the chunk count and fits the worker budget.
 
@@ -217,7 +217,7 @@ def _effective_summary_group_chunks(
         if num_chunks % group_chunks == 0:
             preferred = group_chunks
             break
-    if max_groups is None or max_groups < 1 or num_chunks // preferred <= max_groups:
+    if num_chunks // preferred <= max_groups:
         return preferred
     for group_chunks in range(preferred + 1, num_chunks + 1):
         if num_chunks % group_chunks == 0 and num_chunks // group_chunks <= max_groups:
