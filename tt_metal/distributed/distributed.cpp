@@ -23,9 +23,9 @@
 
 namespace tt::tt_metal::distributed {
 
-void WaitForPendingCompiles() {
+void WaitForPendingCompiles(ContextId context_id) {
     // Join the kernel builds deferred by compile-only mode (see ProgramImpl::compile()).
-    tt::tt_metal::wait_for_pending_kernel_builds();
+    tt::tt_metal::wait_for_pending_kernel_builds(context_id);
 }
 
 void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload, bool blocking) {

@@ -1013,7 +1013,7 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
     log_trace(tt::LogMetal, "Closing mesh device {}", this->id());
 
     try {
-        tt::tt_metal::distributed::WaitForPendingCompiles();
+        tt::tt_metal::distributed::WaitForPendingCompiles(this->get_context_id());
     } catch (const std::exception& e) {
         log_warning(tt::LogMetal, "Compile-only: a pending kernel compile failed during device close: {}", e.what());
     }
@@ -1201,13 +1201,13 @@ void MeshDeviceImpl::clear_program_cache() {
     log_info(tt::LogMetal, "Clearing program cache on MeshDevice {}", this->id());
     // Compile-only async compiles hold raw pointers to the MeshWorkloads,
     // join them before the entries are freed.
-    tt::tt_metal::distributed::WaitForPendingCompiles();
+    tt::tt_metal::distributed::WaitForPendingCompiles(this->get_context_id());
     program_cache_->clear();
 }
 
 void MeshDeviceImpl::disable_and_clear_program_cache() {
     log_info(tt::LogMetal, "Disabling and clearing program cache on MeshDevice {}", this->id());
-    tt::tt_metal::distributed::WaitForPendingCompiles();
+    tt::tt_metal::distributed::WaitForPendingCompiles(this->get_context_id());
     if (program_cache_->is_enabled()) {
         program_cache_->disable();
     }

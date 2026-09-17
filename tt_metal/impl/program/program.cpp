@@ -2836,7 +2836,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch, boo
         if (defer_kernel_builds) {
             return;  // still compile-only: nothing will consume the in-memory binaries
         }
-        wait_for_pending_kernel_builds();  // the deferred builds may still be writing these ELFs
+        wait_for_pending_kernel_builds(device_context_id);  // the deferred builds may still be writing these ELFs
         const std::string binary_root = build_env.build_env.get_out_kernel_root_path();
         for (auto& kernels : kernels_) {
             for (auto& [id, kernel] : kernels) {
@@ -2987,18 +2987,21 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch, boo
             for (auto& [id, kernel] : kernels) {
                 validate_kernel_placement(force_slow_dispatch, kernel, device->build_id());
                 auto [build_options, kernel_hash] = prep_kernel(kernel);
-                launch_pending_build_step([program_id = get_id(),
-                                           kernel,
-                                           device,
-                                           ctx_id,
-                                           build_options = std::move(build_options),
-                                           kernel_hash]() mutable {
-                    const auto& deferred_build_env =
-                        BuildEnvManager::get_instance(ctx_id).get_device_build_env(device->build_id());
-                    const std::string binary_root =
-                        ensure_kernel_binaries(kernel, device, build_options, deferred_build_env, kernel_hash);
-                    Inspector::program_kernel_compile_finished(program_id, device, kernel, build_options, binary_root);
-                });
+                launch_pending_build_step(
+                    ctx_id,
+                    [program_id = get_id(),
+                     kernel,
+                     device,
+                     ctx_id,
+                     build_options = std::move(build_options),
+                     kernel_hash]() mutable {
+                        const auto& deferred_build_env =
+                            BuildEnvManager::get_instance(ctx_id).get_device_build_env(device->build_id());
+                        const std::string binary_root =
+                            ensure_kernel_binaries(kernel, device, build_options, deferred_build_env, kernel_hash);
+                        Inspector::program_kernel_compile_finished(
+                            program_id, device, kernel, build_options, binary_root);
+                    });
             }
         }
     } else {

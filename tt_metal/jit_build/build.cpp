@@ -1255,26 +1255,40 @@ void jit_build_cache_clear() {
 }
 
 namespace {
-// Process-global set of deferred kernel-build futures (compile-only mode). See build.hpp.
-std::mutex g_pending_kernel_builds_mutex;
-std::vector<std::shared_future<void>> g_pending_kernel_builds;
+struct PendingKernelBuilds {
+    std::mutex mutex;
+    std::vector<std::shared_future<void>> futures;
+};
+std::array<PendingKernelBuilds, MAX_CONTEXT_COUNT> g_pending_kernel_builds;
+
+PendingKernelBuilds& pending_kernel_builds_for(ContextId context_id) {
+    const int slot = context_id.get();
+    TT_FATAL(
+        slot >= 0 && static_cast<size_t>(slot) < MAX_CONTEXT_COUNT,
+        "Pending kernel builds: context_id {} out of range [0, {})",
+        slot,
+        MAX_CONTEXT_COUNT);
+    return g_pending_kernel_builds[slot];
+}
 }  // namespace
 
-void add_pending_kernel_build(std::shared_future<void> build_future) {
-    std::lock_guard<std::mutex> lock(g_pending_kernel_builds_mutex);
-    g_pending_kernel_builds.push_back(std::move(build_future));
+void add_pending_kernel_build(ContextId context_id, std::shared_future<void> build_future) {
+    auto& pending = pending_kernel_builds_for(context_id);
+    std::lock_guard<std::mutex> lock(pending.mutex);
+    pending.futures.push_back(std::move(build_future));
 }
 
-void launch_pending_build_step(const std::function<void()>& build_func) {
-    add_pending_kernel_build(detail::async(build_func));
+void launch_pending_build_step(ContextId context_id, const std::function<void()>& build_func) {
+    add_pending_kernel_build(context_id, detail::async(build_func));
 }
 
-void wait_for_pending_kernel_builds() {
-    // Swap the set out under the lock, then join outside it.
+void wait_for_pending_kernel_builds(ContextId context_id) {
+    // Swap this context's set out under its lock, then join outside it.
     std::vector<std::shared_future<void>> pending;
     {
-        std::lock_guard<std::mutex> lock(g_pending_kernel_builds_mutex);
-        pending.swap(g_pending_kernel_builds);
+        auto& slot = pending_kernel_builds_for(context_id);
+        std::lock_guard<std::mutex> lock(slot.mutex);
+        pending.swap(slot.futures);
     }
     // Join all before returning even if one throws; rethrow the first error.
     std::exception_ptr first_error;
