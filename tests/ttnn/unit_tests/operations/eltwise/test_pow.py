@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import struct
 import torch
 import pytest
 import ttnn
@@ -249,7 +250,7 @@ def test_special_input_fp32(device):
 
 
 @pytest.mark.parametrize("dtype", ["float32", "bfloat16"])
-def test_pow_zero_base_special_cases(device, dtype):
+def test_pow_rpow_zero_base_special_cases(device, dtype):
     # Needs its own inputs: the shared generators strip ±0 before any caller sees them.
     # Asserts exact equality, not allclose — a regressed 2**(-127p) is ~7.7e-20 at p=0.5,
     # well inside any absolute tolerance this file uses elsewhere.
@@ -264,6 +265,13 @@ def test_pow_zero_base_special_cases(device, dtype):
         else:
             # bf16 dest reads back as inf rather than the NaN the kernel writes
             # (tenstorrent/tt-llk#675), so only non-finiteness is assertable here.
+            assert (~torch.isfinite(out)).all()
+
+    def assert_zero_power_negative_binary(out):
+        if dtype == "float32":
+            # Torch gives +inf for pow(0, y < 0).
+            assert torch.isinf(out).all() and (out > 0).all()
+        else:
             assert (~torch.isfinite(out)).all()
 
     for exponent in positive_exponents:
@@ -312,8 +320,93 @@ def test_pow_zero_base_special_cases(device, dtype):
     )
     binary_neg = ttnn.to_torch(ttnn.pow(tt_zeros, tt_neg_exp))
     binary_neg_zero = ttnn.to_torch(ttnn.pow(tt_neg_zero, tt_neg_exp))
-    assert_zero_power_undefined(binary_neg)
-    assert_zero_power_undefined(binary_neg_zero)
+    # Deliberately disagrees with the scalar-exponent assertion above: unary pow(0, -1.5)
+    # still returns NaN while the binary form now returns +inf, so the same math answers
+    # differently depending on how the exponent is passed. Torch gives +inf for both, so
+    # unary is the wrong one. Fixing it needs the exponent threaded into
+    # power_tile_init(), which takes no arguments today, so this is deferred rather than
+    # intended. See tenstorrent/tt-metal#53922.
+    assert_zero_power_negative_binary(binary_neg)
+    assert_zero_power_negative_binary(binary_neg_zero)
+
+    rpow_neg = ttnn.to_torch(ttnn.rpow(tt_neg_exp, 0.0))
+    assert_zero_power_negative_binary(rpow_neg)
+
+    rpow_pos_zero_exp = ttnn.to_torch(ttnn.rpow(tt_zeros, 0.0))
+    rpow_neg_zero_exp = ttnn.to_torch(ttnn.rpow(tt_neg_zero, 0.0))
+    assert torch.equal(rpow_pos_zero_exp, torch.ones_like(rpow_pos_zero_exp)), "pow(+0.0, +0.0) should be 1"
+    if dtype == "float32":
+        assert torch.equal(rpow_neg_zero_exp, torch.ones_like(rpow_neg_zero_exp)), "pow(+0.0, -0.0) should be 1"
+    else:
+        assert (~torch.isfinite(rpow_neg_zero_exp)).all(), "pow(+0.0, -0.0) is NaN on bf16"
+
+
+def _bits(v):
+    return struct.unpack("<I", struct.pack("<f", float(v)))[0]
+
+
+def pow_result_matches(got, want):
+    if want != want:
+        return got != got
+    if want == 0.0 and got == 0.0:
+        return _bits(got) == _bits(want)
+    return got == want
+
+
+ZERO_BASE_EXPONENTS = [
+    -3.0,
+    -2.0,
+    -1.5,
+    -1.0,
+    -0.5,
+    -0.1,
+    -0.0,
+    0.0,
+    0.1,
+    0.5,
+    1.0,
+    1.5,
+    2.0,
+    3.0,
+    float("inf"),
+    float("-inf"),
+    float("nan"),
+    -float("nan"),
+    torch.finfo(torch.float32).tiny,
+    -torch.finfo(torch.float32).tiny,
+]
+
+
+@pytest.mark.parametrize("base", [0.0, -0.0])
+def test_binary_pow_fp32_base_zero(base, device):
+    torch_input_tensor_a = torch.full((len(ZERO_BASE_EXPONENTS),), base, dtype=torch.float32)
+    input_tensor_a = ttnn.from_torch(
+        torch_input_tensor_a,
+        dtype=ttnn.float32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    torch_input_tensor_b = torch.tensor(ZERO_BASE_EXPONENTS, dtype=torch.float32)
+    input_tensor_b = ttnn.from_torch(
+        torch_input_tensor_b,
+        dtype=ttnn.float32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    golden_function = ttnn.get_golden_function(ttnn.pow)
+    torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b)
+
+    output_tensor = ttnn.pow(input_tensor_a, input_tensor_b)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    for exponent, got, want in zip(ZERO_BASE_EXPONENTS, output_tensor.flatten(), torch_output_tensor.flatten()):
+        assert pow_result_matches(
+            got.item(), want.item()
+        ), f"pow({base}, {exponent}): got {got.item()}, expected {want.item()}"
 
 
 @pytest.mark.parametrize("dtype", ["float32", "bfloat16"])
