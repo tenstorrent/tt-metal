@@ -45,7 +45,12 @@ inline constexpr uint32_t round_up(uint32_t a, uint32_t b) {
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 void recip_tile_first_column(uint32_t idst) {
     SFPU_UNARY_CALL(
-        DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_recip_first_column, (is_fp32_dest_acc_en), idst, VectorMode::C);
+        DST_SYNC_MODE,
+        is_fp32_dest_acc_en,
+        calculate_sdpa_fw_recip_first_column,
+        (is_fp32_dest_acc_en),
+        idst,
+        VectorMode::C);
 }
 #endif  // TRISC_MATH
 
