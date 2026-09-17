@@ -16,6 +16,8 @@ namespace ttnn::experimental::prim {
 
 struct CompressorStateSelectParams {
     uint32_t cluster_axis;
+    bool propagate_trailing;
+    uint32_t last_active_rank;
 };
 
 struct CompressorStateSelectInputs {
@@ -49,4 +51,6 @@ struct CompressorStateSelectDeviceOperation {
 
 namespace ttnn::prim {
 Tensor compressor_state_select(const Tensor& gathered_state, const Tensor& initial_state, uint32_t cluster_axis);
+Tensor compressor_state_propagate_select(
+    const Tensor& gathered_state, const Tensor& local_state, uint32_t cluster_axis, uint32_t last_active_rank);
 }  // namespace ttnn::prim

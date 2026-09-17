@@ -20,6 +20,11 @@ void CompressorStateSelectDeviceOperation::validate_on_program_cache_miss(
     const auto mesh_shape = args.gathered_state.device()->shape();
     TT_FATAL(mesh_shape.dims() == 2, "compressor_state_select requires a 2D mesh");
     TT_FATAL(
+        !params.propagate_trailing || params.last_active_rank < mesh_shape[params.cluster_axis],
+        "last_active_rank {} must be smaller than cluster-axis size {}",
+        params.last_active_rank,
+        mesh_shape[params.cluster_axis]);
+    TT_FATAL(
         args.gathered_state.logical_shape()[-2] ==
             args.initial_state.logical_shape()[-2] * mesh_shape[params.cluster_axis],
         "gathered state must contain one state per rank on cluster_axis");
@@ -49,7 +54,17 @@ namespace ttnn::prim {
 
 Tensor compressor_state_select(const Tensor& gathered_state, const Tensor& initial_state, uint32_t cluster_axis) {
     using Op = ttnn::experimental::prim::CompressorStateSelectDeviceOperation;
-    return ttnn::device_operation::launch<Op>({cluster_axis}, {gathered_state, initial_state});
+    return ttnn::device_operation::launch<Op>(
+        {.cluster_axis = cluster_axis, .propagate_trailing = false, .last_active_rank = 0},
+        {gathered_state, initial_state});
+}
+
+Tensor compressor_state_propagate_select(
+    const Tensor& gathered_state, const Tensor& local_state, uint32_t cluster_axis, uint32_t last_active_rank) {
+    using Op = ttnn::experimental::prim::CompressorStateSelectDeviceOperation;
+    return ttnn::device_operation::launch<Op>(
+        {.cluster_axis = cluster_axis, .propagate_trailing = true, .last_active_rank = last_active_rank},
+        {gathered_state, local_state});
 }
 
 }  // namespace ttnn::prim

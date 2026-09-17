@@ -3,6 +3,8 @@
 
 #include "compressor_state_select.hpp"
 
+#include <algorithm>
+
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -29,6 +31,9 @@ ProgramDescriptor CompressorStateSelectProgramFactory::create_descriptor(
     TT_FATAL(mesh_dispatch_coordinate.has_value(), "compressor_state_select requires a mesh coordinate");
     const uint32_t rank = (*mesh_dispatch_coordinate)[params.cluster_axis];
     const uint32_t output_tiles = args.initial_state.padded_shape().volume() / (32 * 32);
+    const bool use_initial = !params.propagate_trailing && rank == 0;
+    const uint32_t source_rank =
+        params.propagate_trailing ? std::min(rank, params.last_active_rank) : (rank == 0 ? 0 : rank - 1);
 
     std::vector<uint32_t> compile_args;
     TensorAccessorArgs(args.gathered_state.buffer()).append_to(compile_args);
@@ -50,8 +55,8 @@ ProgramDescriptor CompressorStateSelectProgramFactory::create_descriptor(
     runtime_args.push_back(args.initial_state.buffer());
     runtime_args.push_back(output.buffer());
     runtime_args.push_back(output_tiles);
-    runtime_args.push_back(rank);
-    runtime_args.push_back(rank == 0 ? 0 : (rank - 1) * output_tiles);
+    runtime_args.push_back(static_cast<uint32_t>(use_initial));
+    runtime_args.push_back(source_rank * output_tiles);
     kernel.emplace_runtime_args(kCore, runtime_args);
 
     ProgramDescriptor desc;

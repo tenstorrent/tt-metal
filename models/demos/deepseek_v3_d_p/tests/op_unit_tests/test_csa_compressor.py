@@ -12,6 +12,7 @@ from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     fabric2d_device_params,
     fabric_1d_plain_device_params,
     fabric_disabled_device_params,
+    torus_y_device_params,
 )
 from models.demos.deepseek_v3_d_p.tt.mla.compressor import (
     CSA_STATE_ROWS,
@@ -148,14 +149,31 @@ def _torch_csa_compressor(
     )
 
 
-def _make_inputs(sp_factor, local_seq_len, remainder, first_token_position, head_dim, empty_ranks=0):
+def _make_inputs(
+    sp_factor,
+    local_seq_len,
+    remainder,
+    first_token_position,
+    head_dim,
+    empty_ranks=0,
+    last_active_tokens=None,
+):
     """``empty_ranks`` trailing SP ranks are left with no valid tokens at all, which is what a chunk
     shorter than its padded slab does to the tail of the mesh. Those ranks must still emit a state -- the
-    exchange chains it along the axis, so the last rank's state is the one the next chunk starts from
-    whether or not it saw a token."""
+    compressor propagates the last active rank's post-compression state through them, so the last rank's
+    state is the one the next chunk starts from whether or not it saw a token.
+
+    ``last_active_tokens`` makes the last active rank shorter than one full local slab. Values below the
+    eight-token state cycle prove propagation uses that rank's outgoing state, including the predecessor
+    rows it retained, rather than its independently prepared local state."""
     torch.manual_seed(42)
     padded_seq_len = local_seq_len * sp_factor
-    seq_len_actual = local_seq_len * (sp_factor - empty_ranks) - _COMPRESS_RATE + remainder
+    if last_active_tokens is None:
+        seq_len_actual = local_seq_len * (sp_factor - empty_ranks) - _COMPRESS_RATE + remainder
+    else:
+        assert 0 < last_active_tokens <= local_seq_len
+        assert 0 < empty_ranks < sp_factor
+        seq_len_actual = local_seq_len * (sp_factor - empty_ranks - 1) + last_active_tokens
     kv = torch.randn(_BATCH, 1, padded_seq_len, 2 * head_dim, dtype=torch.bfloat16)
     gate = torch.randn_like(kv)
     position_bias = torch.randn(1, 1, _COMPRESS_RATE, 2 * head_dim, dtype=torch.bfloat16)
@@ -175,11 +193,25 @@ def _make_inputs(sp_factor, local_seq_len, remainder, first_token_position, head
     return kv, gate, position_bias, initial_kv_state, initial_score_state, seq_len_actual, expected
 
 
-def _run_csa_compressor(mesh_device, local_seq_len, remainder, first_token_position, head_dim, empty_ranks=0):
+def _run_csa_compressor(
+    mesh_device,
+    local_seq_len,
+    remainder,
+    first_token_position,
+    head_dim,
+    empty_ranks=0,
+    last_active_tokens=None,
+):
     mesh_shape = tuple(mesh_device.shape)
     sp_factor, tp_factor = mesh_shape
     kv, gate, bias, initial_kv, initial_score, seq_len_actual, expected = _make_inputs(
-        sp_factor, local_seq_len, remainder, first_token_position, head_dim, empty_ranks
+        sp_factor,
+        local_seq_len,
+        remainder,
+        first_token_position,
+        head_dim,
+        empty_ranks,
+        last_active_tokens,
     )
     sp_mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=(2, None))
     replicated_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
@@ -302,10 +334,43 @@ def test_csa_compressor_mesh_variants(mesh_device, device_params, local_seq_len,
 )
 def test_csa_compressor_mesh_empty_tail(mesh_device, device_params, remainder, first_token_position):
     """A chunk whose real length stops short of the padded slab leaves the trailing SP ranks with no
-    valid tokens. Chunked prefill hits this whenever a non-final chunk is narrower than chunk_tokens, and
-    the state those ranks emit is what the NEXT chunk starts from, so it has to be their predecessor's
-    rather than the base state they were handed."""
+    valid tokens. Ragged final chunks hit this before decode handoff, and the state those ranks emit is
+    also what a later continuation would start from, so it has to be their predecessor's rather than the
+    base state they were handed."""
     _run_csa_compressor(mesh_device, _LOCAL_SEQ_LEN, remainder, first_token_position, _HEAD_DIM, empty_ranks=1)
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params",
+    [
+        pytest.param(
+            (4, 1),
+            fabric_1d_plain_device_params(),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 1), topology="mesh-4x1"),
+            id="fabric1d-4x1",
+        ),
+        pytest.param(
+            (4, 1),
+            torus_y_device_params(),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 1), topology="ring"),
+            id="fabric2d-4x1",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+def test_csa_compressor_mesh_multiple_empty_ranks(mesh_device, device_params):
+    """The last active rank has only three tokens and two ranks follow it empty. Its outgoing state is
+    therefore a blend of its predecessor and those three tokens, and both empty ranks must receive that
+    exact post-compression state on both communication implementations."""
+    _run_csa_compressor(
+        mesh_device,
+        local_seq_len=16,
+        remainder=3,
+        first_token_position=_COMPRESS_RATE,
+        head_dim=_HEAD_DIM,
+        empty_ranks=2,
+        last_active_tokens=3,
+    )
 
 
 # Every (sp, tp) the V4 tests and the demo run at. tp < compress_rate is the interesting half: that is

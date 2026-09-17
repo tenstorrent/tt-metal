@@ -131,4 +131,56 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> compressor_state_exchange(
     return {predecessor_kv, predecessor_score};
 }
 
+ttnn::Tensor propagate_compressor_state(
+    const ttnn::Tensor& local_state,
+    uint32_t seq_len_actual,
+    uint32_t local_seq_len,
+    uint32_t cluster_axis,
+    ::ttnn::ccl::Topology topology) {
+    validate_state(local_state, "local_state");
+    const auto mesh_shape = local_state.device()->shape();
+    TT_FATAL(mesh_shape.dims() == 2, "propagate_compressor_state requires a 2D mesh, got {}", mesh_shape);
+    TT_FATAL(cluster_axis < 2, "cluster_axis must be 0 or 1, got {}", cluster_axis);
+    TT_FATAL(local_seq_len > 0, "local_seq_len must be positive");
+    const uint32_t sp_factor = mesh_shape[cluster_axis];
+    TT_FATAL(
+        seq_len_actual > 0 && seq_len_actual <= local_seq_len * sp_factor,
+        "seq_len_actual {} must be in [1, {}]",
+        seq_len_actual,
+        local_seq_len * sp_factor);
+
+    const uint32_t last_active_rank = (seq_len_actual - 1) / local_seq_len;
+    if (last_active_rank + 1 == sp_factor) {
+        return local_state;
+    }
+
+    if (tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig())) {
+        auto gathered_state = ttnn::all_gather(local_state, /*dim=*/2, cluster_axis, local_state.memory_config());
+        return ttnn::prim::compressor_state_propagate_select(
+            gathered_state, local_state, cluster_axis, last_active_rank);
+    }
+
+    auto output = ttnn::clone(
+        local_state,
+        /*dtype=*/std::nullopt,
+        /*memory_config=*/std::nullopt,
+        /*compute_kernel_config=*/std::nullopt);
+    const uint32_t lanes = mesh_shape[1 - cluster_axis];
+    for (uint32_t receiver_rank = last_active_rank + 1; receiver_rank < sp_factor; ++receiver_rank) {
+        for (uint32_t lane = 0; lane < lanes; ++lane) {
+            const std::array<uint32_t, 2> sender = cluster_axis == 0 ? std::array<uint32_t, 2>{last_active_rank, lane}
+                                                                     : std::array<uint32_t, 2>{lane, last_active_rank};
+            const std::array<uint32_t, 2> receiver = cluster_axis == 0 ? std::array<uint32_t, 2>{receiver_rank, lane}
+                                                                       : std::array<uint32_t, 2>{lane, receiver_rank};
+            output = ttnn::point_to_point(
+                local_state,
+                ttnn::MeshCoordinate{receiver[0], receiver[1]},
+                ttnn::MeshCoordinate{sender[0], sender[1]},
+                topology,
+                output);
+        }
+    }
+    return output;
+}
+
 }  // namespace ttnn::operations::experimental::deepseek_prefill::compressor_state_exchange
