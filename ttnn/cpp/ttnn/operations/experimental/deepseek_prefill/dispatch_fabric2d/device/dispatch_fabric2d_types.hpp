@@ -32,6 +32,9 @@ struct DispatchFabric2dParams {
     // pages itself rather than forwarding. See the nanobind docstring. Both modes are kept so they
     // can be measured against each other in one build.
     bool fanout = false;
+    // Whether a padding_config was supplied. The kernel reads it under a compile-time branch, so two
+    // callers differing only in this need different programs.
+    bool has_padding_config = false;
     tt::tt_fabric::Topology topology = tt::tt_fabric::Topology::Mesh;
     tt::tt_metal::MemoryConfig output_mem_config{
         tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};
@@ -56,6 +59,12 @@ struct DispatchFabric2dInputs {
     // that way is at least `hop` hops off. Per-expert counts are marginals and cannot express it, so
     // without this a relay could not size a multicast chunk it neither wrote nor receives.
     std::optional<ttnn::Tensor> fanout_reach;
+    // [real_token_count, pad_side] -- the same two words production `dispatch` takes. Right padding
+    // (pad_side 0) bounds the routing pass at real_token_count; any other side is ignored, matching
+    // production, because only right padding keeps the real tokens at the low indices the allocator
+    // walks first. Supplying it asserts that padded tokens are sentinel-marked and resolve to no
+    // expert, which is the same contract production relies on.
+    std::optional<ttnn::Tensor> padding_config;
 };
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::dispatch_fabric2d
