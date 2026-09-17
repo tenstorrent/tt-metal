@@ -122,7 +122,17 @@ grid_88_configs = {
     # the ~0.3% run-to-run spread, so it is not worth an entry. Both differ at 5 s and 10 s: the
     # winners move with M on this grid, which is why these are keyed per-M rather than added to the
     # (K, N)-keyed model table.
-    (13632, 5376, 7168): (8, 7, 10, (2, 2)),  # ff1, 15665.5 us
+    #
+    # M is 13664, NOT the 13632 the sweep harness reports. `test_performance_minimax_h3.py::_packed_sizes`
+    # counts audio latents once where the pipeline packs `latents * MINIMAX_H3_AUDIO_CHANNELS` rows
+    # (`packing.py:261`) and assumes a 512-token prompt against the gate's 39; the two errors partially
+    # cancel onto 13632, which the pipeline never produces. Keyed on 13632 the entry simply never fired.
+    # See `MiniMaxH3_rows_per_device_mismatch.md`.
+    #
+    # 13664 is not fragile: the packed length is padded to `sp_factor * TILE` = 256 rows, so at 15 s /
+    # 16:9 every prompt from 1 to 250 tokens lands on 109312 padded -> 13664 rows/device. The media rows
+    # (109062) are prompt-independent. A prompt over 250 tokens moves to the next bucket and misses again.
+    (13664, 5376, 7168): (8, 7, 10, (2, 2)),  # ff1, 15665.5 us (measured at M=13632, same M_per_core=54)
 }
 
 
@@ -135,7 +145,10 @@ grid_89_configs = {
     # subblock (2, 2). Swept with `sweep_mm_block_sizes.py` (use case `ff2`, 314 combos):
     # 7040.1 -> 6761.3 us, 4.0%. Keyed per-M deliberately -- 5 s picks (6, 8, 12) and 10 s
     # (10, 8, 4), and using one duration's winner at another is a regression.
-    (13632, 3584, 5376): (8, 7, 10, (2, 2)),  # ff2, 6761.3 us
+    #
+    # M is 13664, not the harness's 13632 -- see the note in `grid_88_configs` above and
+    # `MiniMaxH3_rows_per_device_mismatch.md`.
+    (13664, 3584, 5376): (8, 7, 10, (2, 2)),  # ff2, 6761.3 us (measured at M=13632, same M_per_core=54)
     (32, 2432, 3648): (2, 4, 8),
     (1024, 2432, 1920): (4, 4, 8),
     (352, 2432, 1920): (2, 4, 4),

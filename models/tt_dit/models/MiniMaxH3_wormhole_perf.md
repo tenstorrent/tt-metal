@@ -405,11 +405,21 @@ all closed.
    logs it on every run (`packed sequence ... rows/device`). The constants trace to
    `test_performance_minimax_h3.py::_packed_sizes`, which counts audio latents once where the
    pipeline packs two rows per latent (`packing.py:261`) and assumes a 512-token prompt where
-   the gate runs 39. The lookups are exact-key, so the `9e97f1541bc` ff1/ff2 entries are never
-   selected and the 5 s `measured_sdpa_chunk_sizes` entry never applies. Deliberately left
-   unfixed pending a decision on the text budget — see
-   **`MiniMaxH3_rows_per_device_mismatch.md`** for the evidence, propagation history, proposed
-   fix and a 30 s host-only check.
+   the gate runs 39. The lookups are exact-key, so nothing hit.
+
+   *Partially fixed.* The two `matmul.py` ff1/ff2 entries are re-keyed 13632 -> **13664**, the
+   value the pipeline actually runs, so the pipeline now selects them (verified through the real
+   resolvers: at 13664 both hit; the "No known best blocking" warnings are gone). 13664 is a
+   robust key rather than a second brittle literal — the packed length pads to `sp_factor * TILE`
+   = 256 rows, and the 15 s / 16:9 media rows (109062) are prompt-independent, so **every prompt
+   from 1 to 250 tokens** lands on 13664. `M_per_core` is 54 at both 13632 and 13664, so the
+   blocking measured at the harness shape is valid at the pipeline shape without a re-sweep.
+
+   *Still open:* `_packed_sizes` itself is unfixed, so the sweep harness and block perf test still
+   run 13632 and now take the fallbacks. Aligning them needs the text-budget decision (512 vs the
+   gate's 39), and `measured_sdpa_chunk_sizes` is still keyed on values nothing produces — harmless
+   at 10 s/15 s where the measured value equals the fallback, a real loss at 5 s. See
+   **`MiniMaxH3_rows_per_device_mismatch.md`**.
 
 ## VBench (16:9/5s, verified passing)
 
