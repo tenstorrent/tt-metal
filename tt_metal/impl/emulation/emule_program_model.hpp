@@ -15,9 +15,6 @@
 #include <tt-metalium/core_coord.hpp>
 #include "emule_jit.hpp"  // DeferredCompile
 
-namespace tt::tt_metal::detail {
-class ProgramImpl;
-}
 namespace tt_emule {
 struct EmuleProgramDescriptor;
 struct SocView;
@@ -46,9 +43,9 @@ struct PendingKernelInfo {
     uint32_t num_unique_rt_args = 0;  // size of the per-core (rta) region; see KernelInfo
 };
 
-// Definition in emule_program_model.cpp.
+// Definition in emule_program_model.cpp. Reads only the descriptor + SocView (no private
+// tt-metal Program/Kernel); the marshaller (build_emule_descriptor) is the sole private reader.
 void collect_kernels(
-    detail::ProgramImpl& impl,
     uint32_t num_dram_channels,
     uint32_t num_l1_banks,
     const std::string& worker_col_map_str,
