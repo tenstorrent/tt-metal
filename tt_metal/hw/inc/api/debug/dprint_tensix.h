@@ -229,62 +229,49 @@ inline void dprint_tensix_dest_reg_row_int8(uint32_t data_format, uint16_t row) 
 
 #if !defined(ENV_LLK_INFRA)
 #ifdef ARCH_QUASAR
-// Prints up to num_rows rows (default: the whole 64-row tile) of DEST tile tile_id as raw packed hex
-// words -- Quasar device_print has no typed-array support. The data format is passed explicitly (it is
-// not read back from config); PR1 supports Float32 and Float16_b. The unpack<->math mailbox rendezvous
-// (dbg_thread_halt; pack deferred) brackets the read so it is safe to call mid-pipeline -- a live
-// unbracketed read desyncs the unpack tile counter (TILE_COUNTERS fault).
-inline void dprint_tensix_dest_reg(DataFormat data_format, int tile_id = 0, uint32_t num_rows = NUM_ROWS_PER_TILE) {
+// The shared typed-array print path renders 16-bit datums with the host's make_float(), which expects
+// Tensix DEST field order -- [sign][mantissa][exponent] -- the raw layout the debug-bus read returns on
+// the other architectures. Quasar's memory-mapped DEST window hands back standard IEEE order instead,
+// so the two fields have to be swapped back for the rendered text to agree. Float32 needs no swap: the
+// host bit-casts those words straight to float.
+inline uint32_t dest_order_from_ieee_float16_b(uint32_t ieee) {
+    return (ieee & 0x8000u) | ((ieee & 0x7Fu) << 8) | ((ieee >> 7) & 0xFFu);
+}
+
+// Prints the contents of tile tile_id within the destination register, row by row, in the same typed
+// array form the other architectures emit -- the host print parser decodes it, so the rendered text is
+// identical everywhere. The DEST data format is passed in rather than recovered from config, because
+// the RISCV_DEBUG_REG_* config-read wrappers are not wired up on Quasar. PR1 supports Float32 and
+// Float16_b.
+//
+// The unpack<->math mailbox rendezvous (dbg_thread_halt; pack is not a participant yet) brackets the
+// read so it is safe to call mid-pipeline: a live unbracketed read desyncs the unpack tile counter
+// (TILE_COUNTERS fault).
+inline void dprint_tensix_dest_reg(DataFormat data_format, int tile_id = 0) {
     UNPACK(ckernel::dbg_thread_halt<ckernel::UnpackThreadId>());
     MATH(ckernel::dbg_thread_halt<ckernel::MathThreadId>());
     MATH({
-        // Program Math's section for MMIO DEST reads (ends with tensix_sync, committing the copied tile).
+        // Program Math's section for MMIO DEST reads; tensix_sync first commits the copied tile.
         ckernel::configure_dest_access<ckernel::MathThreadId>(data_format, /*enable_swizzle=*/true);
         ckernel::tensix_sync();
 
         DPRINT("Tile ID = {}\n", tile_id);
-        const uint32_t row0 = tile_id * NUM_ROWS_PER_TILE;
-        const uint32_t nrows = num_rows < NUM_ROWS_PER_TILE ? num_rows : NUM_ROWS_PER_TILE;
-        for (uint32_t r = 0; r < nrows; ++r) {
-            const uint32_t row = row0 + r;
+        uint32_t row = tile_id * NUM_ROWS_PER_TILE;
+        for (uint32_t i = 0; i < NUM_ROWS_PER_TILE; ++i, ++row) {
             if (data_format == DataFormat::Float32) {
-                uint32_t rd[16];
-                ckernel::dbg_read_dest_row_32b(row, rd);
-                DPRINT(
-                    "DEST row {}: {:08x} {:08x} {:08x} {:08x} {:08x} {:08x} {:08x} {:08x}\n",
-                    row,
-                    rd[0],
-                    rd[1],
-                    rd[2],
-                    rd[3],
-                    rd[4],
-                    rd[5],
-                    rd[6],
-                    rd[7]);
-                DPRINT(
-                    "           {:08x} {:08x} {:08x} {:08x} {:08x} {:08x} {:08x} {:08x}\n",
-                    rd[8],
-                    rd[9],
-                    rd[10],
-                    rd[11],
-                    rd[12],
-                    rd[13],
-                    rd[14],
-                    rd[15]);
+                constexpr int ARRAY_LEN = 16;
+                uint32_t rd_data[ARRAY_LEN];
+                ckernel::dbg_read_dest_row_32b(row, rd_data);
+                dprint_array_with_data_type<ARRAY_LEN>((uint32_t)DataFormat::Float32, rd_data);
             } else {
-                uint32_t rd[8];
-                ckernel::dbg_read_dest_row_16b(row, rd);
-                DPRINT(
-                    "DEST row {}: {:08x} {:08x} {:08x} {:08x} {:08x} {:08x} {:08x} {:08x}\n",
-                    row,
-                    rd[0],
-                    rd[1],
-                    rd[2],
-                    rd[3],
-                    rd[4],
-                    rd[5],
-                    rd[6],
-                    rd[7]);
+                constexpr int ARRAY_LEN = 8;
+                uint32_t rd_data[ARRAY_LEN];
+                ckernel::dbg_read_dest_row_16b(row, rd_data);
+                for (int w = 0; w < ARRAY_LEN; ++w) {
+                    rd_data[w] = dest_order_from_ieee_float16_b(rd_data[w] & 0xFFFFu) |
+                                 (dest_order_from_ieee_float16_b(rd_data[w] >> 16) << 16);
+                }
+                dprint_array_with_data_type<ARRAY_LEN>((uint32_t)data_format, rd_data);
             }
         }
     })
