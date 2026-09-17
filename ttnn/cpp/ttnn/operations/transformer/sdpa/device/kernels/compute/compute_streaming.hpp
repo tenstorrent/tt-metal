@@ -997,7 +997,8 @@ static void apply_lightweight_mask_streaming(
     uint32_t straddle_col = 0,
     uint32_t straddle_jump = 0,
     uint32_t straddle_period = 0,
-    const KVPadRotationContext& kv_pad_rotation = {}) {
+    const KVPadRotationContext& kv_pad_rotation = {},
+    const uint32_t* packed_k_global_tiles = nullptr) {
     // This constrains the inner lightweight-mask path, not the kernel-level causal flag.
     // Chunked prefill re-enables this path when calling sdpa_inner_loop_step.
     static_assert(!kv_pad_rotation_enabled || is_causal_sdpa, "KV-pad rotation mask is causal-only");
@@ -1058,6 +1059,24 @@ static void apply_lightweight_mask_streaming(
                         const int32_t k_pos = static_cast<int32_t>(k_pos_u32);
                         l1_acc_causal_col_mask(
                             mask_cb, out_cb, row_offset, col, q_pos, k_pos, neginf_idx, primary_diag_idx);
+                    }
+                } else if (packed_k_global_tiles != nullptr) {
+                    // Each run is contiguous in sequence space, even across packed source boundaries.
+                    if (apply_causal) {
+                        for (uint32_t rs = 0; rs < mask_cols;) {
+                            uint32_t re = rs + 1;
+                            while (re < mask_cols && packed_k_global_tiles[re] == packed_k_global_tiles[re - 1] + 1) {
+                                ++re;
+                            }
+                            const int32_t diag_col = q_pos - static_cast<int32_t>(packed_k_global_tiles[rs]);
+                            if (diag_col < 0) {
+                                stamper.neginf_range(rs, re);
+                            } else if (static_cast<uint32_t>(diag_col) < re - rs) {
+                                stamper.stamp_tile_at(static_cast<int32_t>(rs) + diag_col, primary_diag_idx);
+                                stamper.neginf_range(rs + static_cast<uint32_t>(diag_col) + 1, re);
+                            }
+                            rs = re;
+                        }
                     }
                 } else if (straddle_col == 0) {
                     // Fast path: K coords contiguous across cols.
@@ -1296,7 +1315,8 @@ static void sdpa_inner_loop_step(
     const KVPadRotationContext& kv_pad_rotation = {},
     // Tile offset of this call's Q chunk from the front of cb_q_in. Non-zero only for head-serial
     // ring passes, where cb_q_in holds one resident Q chunk per pass and is popped once at the end.
-    const uint32_t q_base_tiles = 0) {
+    const uint32_t q_base_tiles = 0,
+    const uint32_t* packed_k_global_tiles = nullptr) {
     // Callers guarantee active_Sk is evenly divisible by actual_sbw (via largest_factor_le).
     const uint32_t kt_num_full_subblocks = active_Sk / actual_sbw;
     constexpr uint32_t dst_size = compute_kernel_lib::DEST_AUTO_LIMIT;
@@ -1478,7 +1498,8 @@ static void sdpa_inner_loop_step(
                     mask_straddle_col,
                     mask_straddle_jump,
                     mask_straddle_period,
-                    kv_pad_rotation);
+                    kv_pad_rotation,
+                    packed_k_global_tiles);
                 end_mask_l1_accumulate();
             }
         }
@@ -2354,7 +2375,8 @@ void sdpa_ring_v2(
     const uint32_t logical_lt = 0,
     // Tile offset of this call's Q chunk within cb_q_in (head-serial passes; 0 otherwise).
     const uint32_t q_base_tiles = 0,
-    const uint32_t* streamed_source_ids = nullptr) {
+    const uint32_t* streamed_source_ids = nullptr,
+    const bool pack_source_tails = false) {
     init_sdpa_streaming_semaphores();
 
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
@@ -2545,7 +2567,10 @@ void sdpa_ring_v2(
         // Placed after balanced-skip guards so skipped Q chunks don't pay for the scan.
         uint32_t per_q_valid_kv = has_sliding_window ? sliding_q_plan.total_k_chunk_count : 0;
         for (uint32_t k = 0; !has_sliding_window && k < num_kv_chunks; ++k) {
-            const uint32_t source_ring_id = streamed_source_ids ? streamed_source_ids[k / num_local_k_chunks] : ring_id;
+            const uint32_t source_ring_id =
+                streamed_source_ids
+                    ? streamed_source_ids[pack_source_tails ? k * Sk_chunk_t / local_padded_Nt : k / num_local_k_chunks]
+                    : ring_id;
             const uint32_t source_k_chunk = streamed_source_ids ? k % num_local_k_chunks : k;
             const bool is_joint = !streamed_source_ids && k >= num_local_k_chunks;
             if (try_skip_oob_kv(source_ring_id, source_k_chunk, is_joint)) {
@@ -2583,9 +2608,11 @@ void sdpa_ring_v2(
         const uint32_t q_k_loop_count = has_sliding_window ? per_q_valid_kv : num_kv_chunks;
         for (uint32_t k_chunk = 0; k_chunk < q_k_loop_count; ++k_chunk) {
             const auto sliding_k_chunk = sliding_q_plan.k_chunk_at(k_chunk);
-            const uint32_t source_ring_id = streamed_source_ids
-                                                ? streamed_source_ids[k_chunk / num_local_k_chunks]
-                                                : (has_sliding_window ? sliding_k_chunk.source_ring_id : ring_id);
+            const uint32_t source_ring_id =
+                streamed_source_ids
+                    ? streamed_source_ids
+                          [pack_source_tails ? k_chunk * Sk_chunk_t / local_padded_Nt : k_chunk / num_local_k_chunks]
+                    : (has_sliding_window ? sliding_k_chunk.source_ring_id : ring_id);
             const uint32_t source_k_chunk = streamed_source_ids
                                                 ? k_chunk % num_local_k_chunks
                                                 : (has_sliding_window ? sliding_k_chunk.source_k_chunk : k_chunk);
@@ -2622,7 +2649,8 @@ void sdpa_ring_v2(
                 is_global_n_mask_chunk = ring_iter_needs_global_n_mask && source_k_chunk == global_n_mask_chunk_id;
             }
             if constexpr (local_n_mask_enabled) {
-                is_local_n_mask_chunk = local_n_needs_masking && source_k_chunk == local_n_mask_chunk_id;
+                is_local_n_mask_chunk =
+                    !pack_source_tails && local_n_needs_masking && source_k_chunk == local_n_mask_chunk_id;
             }
             if constexpr (joint_n_mask_enabled) {
                 is_joint_n_mask_chunk = ring_iter_needs_joint_n_mask && kv_chunk_is_joint &&
@@ -2794,6 +2822,17 @@ void sdpa_ring_v2(
             step_kv_pad_rotation.ring_id = source_ring_id;
             step_kv_pad_rotation.logical_tile_count = logical_nt;
 
+            uint32_t packed_k_global_tiles[Sk_chunk_t];
+            if (pack_source_tails) {
+                for (uint32_t col = 0; col < Sk_chunk_t; ++col) {
+                    const uint32_t stream_tile = k_chunk * Sk_chunk_t + col;
+                    const uint32_t source = streamed_source_ids[stream_tile / local_padded_Nt];
+                    const uint32_t local_tile = stream_tile % local_padded_Nt;
+                    packed_k_global_tiles[col] = (local_tile / kv_rank_stride_Nt) * chunk_size_t +
+                                                 source * kv_rank_stride_Nt + local_tile % kv_rank_stride_Nt;
+                }
+            }
+
             sdpa_inner_loop_step<
                 false,  // profiling_enabled
                 Sq_chunk_t,
@@ -2855,7 +2894,8 @@ void sdpa_ring_v2(
                 step_straddle_jump,
                 step_straddle_period,
                 step_kv_pad_rotation,
-                q_base_tiles);
+                q_base_tiles,
+                pack_source_tails ? packed_k_global_tiles : nullptr);
 
             // Post-iteration cleanup: pop previous values and swap aliases
             // prev.out and cb_exp_max_diff are already popped row-by-row inside salad_correct_row.

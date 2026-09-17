@@ -259,6 +259,11 @@ void kernel_main() {
     // DIAGNOSTIC: 6400-token full-mesh fixture only; four physical sources per attention pass.
     constexpr uint32_t source_group_size = ring_size == 8 ? 4 : 1;
     constexpr bool stream_sources = source_group_size > 1;
+    // DIAGNOSTIC: packed source tails for the fully valid 6400-token fixture.
+    constexpr bool pack_source_tails = stream_sources && kv_local_padded_Nt == 25 && Sk_chunk_t == 20 &&
+                                       kv_region_Nt == 5 && kt_inplace_v && chunked_enabled && !has_joint_k &&
+                                       logical_nt_compile == kv_local_padded_Nt * ring_size &&
+                                       !kv_pad_rotation_enabled && !has_sliding_window;
     constexpr uint32_t sdpa_ring_iterations = has_sliding_window ? 1 : ring_size / source_group_size;
     for (uint32_t ring_iter = 0; ring_iter < sdpa_ring_iterations; ++ring_iter) {
         uint32_t streamed_source_ids[source_group_size];
@@ -286,7 +291,9 @@ void kernel_main() {
         // Replicated joint: All data already present process joint when ring_id == ring_size-1
         const bool do_joint_kv = has_gathered_joint_k ? true : (ring_id == ring_size - 1);
         const uint32_t num_kv_chunks =
-            (do_joint_kv ? num_local_k_chunks + num_joint_k_chunks : num_local_k_chunks) * source_group_size;
+            pack_source_tails
+                ? kv_local_padded_Nt * source_group_size / Sk_chunk_t
+                : (do_joint_kv ? num_local_k_chunks + num_joint_k_chunks : num_local_k_chunks) * source_group_size;
         const bool is_first_active_iter = !seen_active_iter;
         seen_active_iter = true;
 
@@ -482,7 +489,8 @@ void kernel_main() {
                 is_first_active_iter,
                 logical_lt,
                 0,
-                stream_sources ? streamed_source_ids : nullptr);
+                stream_sources ? streamed_source_ids : nullptr,
+                pack_source_tails);
         } else {
             assert_kv_pad_rotation_streaming_only<kv_pad_rotation_enabled>();
             // This path's single chunked slab param drives BOTH the Q mapping (which strides by the Q
