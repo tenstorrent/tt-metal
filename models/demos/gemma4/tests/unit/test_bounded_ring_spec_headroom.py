@@ -43,8 +43,7 @@ def test_an_exact_window_ring_evicts_from_the_first_candidate():
 
 
 def test_the_reserved_ring_evicts_nothing(monkeypatch):
-    monkeypatch.delenv(SPEC_RING_HEADROOM_ENV, raising=False)
-    gv._reserve_spec_ring_headroom(WINDOW, 6, "test")
+    monkeypatch.setenv(SPEC_RING_HEADROOM_ENV, str(WINDOW // 64))
     ring = bounded_ring_modulo(WINDOW)
     assert ring == 2 * WINDOW
     assert _evicted_in_window(131072, WINDOW, ring, 6) == []
@@ -52,8 +51,7 @@ def test_the_reserved_ring_evicts_nothing(monkeypatch):
 
 def test_every_candidate_query_keeps_its_full_window(monkeypatch):
     """Victor's check: each candidate query's visible positions, not just the first."""
-    monkeypatch.delenv(SPEC_RING_HEADROOM_ENV, raising=False)
-    gv._reserve_spec_ring_headroom(WINDOW, 6, "test")
+    monkeypatch.setenv(SPEC_RING_HEADROOM_ENV, str(WINDOW // 64))
     ring = bounded_ring_modulo(WINDOW)
     base = 131072
     for q in range(0, 6 + 1):  # query at each candidate position
@@ -67,7 +65,19 @@ def test_every_candidate_query_keeps_its_full_window(monkeypatch):
             assert (base + j) % ring not in slots or slots[(base + j) % ring] == base + j
 
 
-def test_the_reservation_leaves_an_operator_value_alone(monkeypatch):
+def test_the_headroom_is_opt_in_and_warns_when_absent(monkeypatch, caplog):
+    """It must NOT reserve silently: doubling the ring doubles the bounded pool
+    for every sliding layer (50 on 31B) and OOMs the shipped P150x8 config
+    during KV allocation. So it warns, names the knob, and leaves the ring
+    alone -- wrong tokens are worse than a warning, and a server that cannot
+    boot is worse than both."""
+    monkeypatch.delenv(SPEC_RING_HEADROOM_ENV, raising=False)
+    gv._reserve_spec_ring_headroom(WINDOW, 6, "test")
+    assert SPEC_RING_HEADROOM_ENV not in os.environ
+    assert bounded_ring_modulo(WINDOW) == WINDOW
+
+
+def test_an_operator_value_is_left_alone(monkeypatch):
     monkeypatch.setenv(SPEC_RING_HEADROOM_ENV, "48")
     gv._reserve_spec_ring_headroom(WINDOW, 6, "test")
     assert os.environ[SPEC_RING_HEADROOM_ENV] == "48"
@@ -75,8 +85,7 @@ def test_the_reservation_leaves_an_operator_value_alone(monkeypatch):
 
 def test_the_ring_stays_a_power_of_two(monkeypatch):
     """Chunk starts must be multiples of both the ring and SDPA's q_chunk_size."""
-    monkeypatch.delenv(SPEC_RING_HEADROOM_ENV, raising=False)
-    gv._reserve_spec_ring_headroom(WINDOW, 6, "test")
+    monkeypatch.setenv(SPEC_RING_HEADROOM_ENV, str(WINDOW // 64))
     ring = bounded_ring_modulo(WINDOW)
     assert ring & (ring - 1) == 0
 
@@ -96,5 +105,6 @@ def test_the_pool_is_allocated_from_the_ring_not_the_window(monkeypatch):
     m.model_args = [SimpleNamespace(max_batch_size=32)]
     monkeypatch.setattr(gv.Gemma4DFlashForCausalLM, "_text_config", lambda self: SimpleNamespace(sliding_window=WINDOW))
     window_blocks = (WINDOW // 64) * 32
-    gv._reserve_spec_ring_headroom(WINDOW, 6, "test")
-    assert m._bounded_sliding_physical_blocks(64) == window_blocks * 2
+    assert m._bounded_sliding_physical_blocks(64) == window_blocks, "exact ring by default"
+    monkeypatch.setenv(SPEC_RING_HEADROOM_ENV, str(WINDOW // 64))
+    assert m._bounded_sliding_physical_blocks(64) == window_blocks * 2, "follows the ring"

@@ -2246,6 +2246,22 @@ def _assistant_default_snapshot(hf_model):
     return hit if hit else cand
 
 
+def _spec_first_slot(empty_slots):
+    """The state slot a B=1 speculative session belongs to, or None.
+
+    The runner passes ``empty_slots`` to prefill and later calls
+    ``release_request(slot)`` with the SAME slot, so this is what lets the
+    model tell its own request's release from another's. None when the runner
+    supplied nothing, which is the pre-existing single-session case.
+    """
+    if not empty_slots:
+        return None
+    try:
+        return int(list(empty_slots)[0])
+    except (TypeError, ValueError):
+        return None
+
+
 def _reserve_spec_ring_headroom(sliding_window, verify_width, where):
     """Reserve bounded-ring headroom for speculative candidate writes.
 
@@ -2276,12 +2292,26 @@ def _reserve_spec_ring_headroom(sliding_window, verify_width, where):
         return
     if os.environ.get(SPEC_RING_HEADROOM_ENV):
         return
+    # NOT reserved automatically. The ring must stay a power of two, so the
+    # smallest legal headroom DOUBLES it, and the bounded pool is sized
+    # (ring/block)*max_batch for EVERY sliding layer -- 50 of them on 31B. That
+    # doubling OOMs the shipped P150x8 config during KV allocation, so it
+    # cannot be switched on by default; fitting it needs the full-attention
+    # pool (GEMMA4_MAX_TOKENS_ALL_USERS) reduced to pay for it.
+    #
+    # Warn instead of proceeding silently: on an exact-window ring a packed
+    # verify writes candidates at p+1..p+K into slots still holding live
+    # window positions, so drafts corrupt from the first token at K>1
+    # (tt-metal#56048 review 3). Loud, with the knob named, beats wrong tokens.
     blocks = window // _RING_HEADROOM_BLOCK
-    os.environ[SPEC_RING_HEADROOM_ENV] = str(blocks)
-    logger.info(
-        f"{where}: reserved {blocks} bounded-ring headroom blocks "
-        f"(ring {window} -> {window * 2}) so verify candidates at p+1..p+{verify_width} "
-        "do not evict in-window history"
+    logger.warning(
+        f"{where}: bounded sliding with an EXACT-window ring ({window}) and "
+        f"speculation (verify width {verify_width}). A packed verify writes "
+        f"candidates at p+1..p+{verify_width} into slots that still hold live "
+        f"window positions, which corrupts drafts at width > 1. Set "
+        f"{SPEC_RING_HEADROOM_ENV}={blocks} to double the ring, and lower "
+        "GEMMA4_MAX_TOKENS_ALL_USERS to pay for it -- the bounded pool is "
+        "sized per sliding layer and doubling it OOMs the default config."
     )
 
 
@@ -2796,6 +2826,10 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
         n = int(prompt_lens[0]) if prompt_lens is not None else int(tokens.shape[1])
         self._spec_pending = (taps, n)
         self._spec_pending_owner = self._spec_pt_identity(kwargs.get("page_table"))
+        # The runner releases by STATE SLOT, not by page table, so record the
+        # slot too: release_request(row) has to tell "my request finished" from
+        # "some other request finished" (see release_request).
+        self._spec_owner_slot = _spec_first_slot(kwargs.get("empty_slots"))
         self._spec_active = False
         return out
 
@@ -3237,11 +3271,20 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
 
     # -- plugin lifecycle hooks (block-output contract) -----------------------
     def release_request(self, row: int) -> None:
-        """Request finished (B=1 -> row ignored). KEEP the cached fused decoder
+        """Request finished. KEEP the cached fused decoder
         alive so the next request in the same packed-verify width bucket reuses
         it -- no ~2.6 s re-capture, no per-request buffer churn. The decoder is
         released on a bucket change (_spec_bootstrap) or at capture teardown
         (release_persistent_capture)."""
+        owner_slot = getattr(self, "_spec_owner_slot", None)
+        if owner_slot is not None and row is not None and int(row) != int(owner_slot):
+            # ANOTHER request's slot. Adaptive serving admits several live
+            # requests while this adapter keeps one session, so a release must
+            # not tear down a session a DIFFERENT live request owns: that
+            # request would then decode one baseline token against the full
+            # block the scheduler reserved for it, and the scheduler rejects
+            # the width.
+            return
         it = getattr(self, "_spec_iters", 0)
         if it:
             tk = getattr(self, "_spec_tokens", 0)
@@ -3255,6 +3298,7 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
         # SCOPED must die here: a carry left behind is emitted as the next
         # request's first tokens.
         self._spec_carry = []
+        self._spec_owner_slot = None
 
     def release_persistent_capture(self) -> None:
         self._spec_pending = None
@@ -3921,6 +3965,7 @@ class Gemma4MTPForCausalLM(Gemma4ForCausalLM):
         prompt_lens = kwargs.get("prompt_lens")
         n = int(prompt_lens[0]) if prompt_lens is not None else int(tokens.shape[1])
         self._spec_pending = n
+        self._spec_owner_slot = _spec_first_slot(kwargs.get("empty_slots"))
         # Record WHICH request these pending taps belong to. At max_num_seqs>1
         # several prefills can land before the next solo decode step, and the
         # session slot is global: without this the decode would bootstrap from
@@ -4260,7 +4305,17 @@ class Gemma4MTPForCausalLM(Gemma4ForCausalLM):
 
     # -- plugin lifecycle hooks (block-output contract) -----------------------
     def release_request(self, row: int) -> None:
+        owner_slot = getattr(self, "_spec_owner_slot", None)
+        if owner_slot is not None and row is not None and int(row) != int(owner_slot):
+            # ANOTHER request's slot: adaptive serving admits several live
+            # requests while this adapter keeps one session, so releasing here
+            # would strand a live owner on baseline width (see the dFlash twin).
+            return
+        self._spec_owner_slot = None
         self._spec_release_session()
 
     def release_persistent_capture(self) -> None:
+        # NOT force: the warm branch keeps the warmup-captured widths on
+        # purpose, because warmup is over and nothing could recapture them.
+        self._spec_owner_slot = None
         self._spec_release_session()

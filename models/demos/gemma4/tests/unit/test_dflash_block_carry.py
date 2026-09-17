@@ -195,3 +195,53 @@ def test_emitted_width_is_always_the_block_width(monkeypatch, width):
     m = _model(monkeypatch, [[21, 22, 23]] * 128, block=width)
     out = _run(m)
     assert out.shape == (1, width)
+
+
+def test_releasing_another_request_preserves_the_owner_session(monkeypatch):
+    """Adaptive serving admits several live requests; this adapter keeps one
+    session. Aborting A must not tear down a session B owns.
+
+    The sequence that broke: A and B prefill separately, the client aborts A,
+    the runner calls release_request(A_slot), and release_request cleared the
+    GLOBAL session -- B's. B then decoded one baseline token against the full
+    block the scheduler had reserved for it, and the scheduler rejected the
+    width.
+    """
+    m = _model(monkeypatch, [[21, 22]] * 8, block=8)
+    m._spec_owner_slot = 3  # B owns the session, parked at state slot 3
+    m._spec_active = True
+    m._spec_pending = ("taps", 10)
+
+    DF.release_request(m, 1)  # A finishes at a different slot
+
+    assert m._spec_active is True, "B's live session must survive A's release"
+    assert m._spec_pending == ("taps", 10)
+    assert m._spec_owner_slot == 3
+
+
+def test_releasing_the_owner_still_tears_the_session_down(monkeypatch):
+    m = _model(monkeypatch, [[21, 22]] * 8, block=8, carry=[77])
+    m._spec_owner_slot = 3
+    m._spec_active = True
+    m._spec_pending = ("taps", 10)
+
+    DF.release_request(m, 3)
+
+    assert m._spec_active is False
+    assert m._spec_pending is None
+    assert m._spec_carry == []
+    assert m._spec_owner_slot is None
+
+
+def test_an_unknown_owner_slot_keeps_the_old_unconditional_behaviour(monkeypatch):
+    """The runner may supply no empty_slots; that is the pre-existing
+    single-session case and must not start leaking sessions."""
+    m = _model(monkeypatch, [[21, 22]] * 8, block=8, carry=[77])
+    m._spec_owner_slot = None
+    m._spec_active = True
+    m._spec_pending = ("taps", 10)
+
+    DF.release_request(m, 7)
+
+    assert m._spec_active is False
+    assert m._spec_carry == []
