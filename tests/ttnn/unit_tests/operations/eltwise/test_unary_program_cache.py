@@ -190,6 +190,37 @@ def test_unary_cache_miss_different_tiles(device):
     assert device.cache_entries_counter.total == 2
 
 
+def test_unary_cache_miss_different_output_tiles(device):
+    """Preallocated outputs identical in dtype and memory config, differing only in their Tile dims,
+    with the input held identical -> separate cache entries."""
+    device.cache_entries_counter.reset()
+    shape = [1, 1, 64, 64]
+
+    for output_tile in [[32, 32], [16, 32]]:
+        torch.manual_seed(0)
+        torch_a = torch.rand(shape, dtype=torch.bfloat16) + 0.1
+        tt_a = ttnn.from_torch(
+            torch_a,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            tile=ttnn.Tile([32, 32]),
+        )
+        tt_out = ttnn.from_torch(
+            torch.zeros(shape, dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            tile=ttnn.Tile(output_tile),
+        )
+        with device.cache_entries_counter.measure():
+            ttnn.relu(tt_a, output_tensor=tt_out)
+
+    assert device.cache_entries_counter.total == 2
+
+
 def test_unary_cache_miss_different_sub_core_grids(device):
     """Different sub_core_grids -> different cache entries.
     sub_core_grids is part of UnaryParams (hashed via args) and also hashed explicitly.

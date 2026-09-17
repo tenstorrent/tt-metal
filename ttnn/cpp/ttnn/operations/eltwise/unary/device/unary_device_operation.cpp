@@ -295,6 +295,12 @@ ttsl::hash::hash_t UnaryDeviceOperation::compute_program_hash(
     // requires tensor_layout to be exactly equal and no relaxation flag reaches inside it, so any
     // component left out here is a cache collision that fails validation on hit instead of
     // rebuilding. Shape is not a part of tensor_layout, so omitting it below still works.
+    //
+    // The output needs its own term rather than riding on the input's. A preallocated output carries a
+    // caller-chosen spec that compute_output_specs returns verbatim, and the only cross-check against
+    // the input is its Layout enum -- so its tile and alignment are otherwise unconstrained. The work
+    // split is derived from the OUTPUT tile (unary_program_factory.cpp), so a collision on that slot
+    // mis-sizes the split as well as failing the binding.
 
     // TODO: For ROW_MAJOR, page size depends on width. Hashing padded_shape ensures
     // different widths get separate cache entries. Consider hashing only the last
@@ -303,13 +309,18 @@ ttsl::hash::hash_t UnaryDeviceOperation::compute_program_hash(
         return operation::hash_operation<UnaryDeviceOperation>(
             attributes,
             input_tensor.tensor_spec().tensor_layout(),
+            output_spec.tensor_layout(),
             input_tensor.padded_shape(),
             src_shard_vol,
             dst_shard_vol);
     }
 
     return operation::hash_operation<UnaryDeviceOperation>(
-        attributes, input_tensor.tensor_spec().tensor_layout(), src_shard_vol, dst_shard_vol);
+        attributes,
+        input_tensor.tensor_spec().tensor_layout(),
+        output_spec.tensor_layout(),
+        src_shard_vol,
+        dst_shard_vol);
 }
 
 bool UnaryDeviceOperation::skip_launch(
