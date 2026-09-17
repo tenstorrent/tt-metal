@@ -398,8 +398,8 @@ def test_prefill_wrapper_validation_replay_and_resources(mesh_device, expect_err
         invalid = [
             ({"slot_idx": 2}, "slot_idx 2 out of range"),
             ({"actual_start": 1}, "aligned to 32 tokens"),
-            ({"actual_end": 2049}, "actual_end <= 2048"),
-            ({"actual_end": 0}, "actual_end <= 2048"),
+            ({"actual_end": 2049}, "actual range must stay within max_seq_len=2048"),
+            ({"actual_end": 0}, "actual range must stay within max_seq_len=2048"),
             ({"actual_end": 1025}, "at most 1024 valid tokens"),
             ({"layer_observer": 1}, "must be callable"),
             ({"skip_lm_head": 1}, "must be a bool"),

@@ -53,8 +53,8 @@ class RuntimeCapacityTests(unittest.TestCase):
                     seen["allocation"] = (num_users, num_layers, max_seq_len, cache_dtype)
                     return SimpleNamespace(num_users=num_users, num_layers=num_layers, max_seq_len=max_seq_len, sp=4)
 
-                def model(mesh, checkpoint, *, num_layers, enable_lm_head, cache_dtype, max_seq_len):
-                    seen["model"] = (num_layers, enable_lm_head, cache_dtype, max_seq_len)
+                def model(mesh, checkpoint, *, num_layers, enable_lm_head, cache_dtype, max_seq_len, num_users):
+                    seen["model"] = (num_layers, enable_lm_head, cache_dtype, max_seq_len, num_users)
                     return SimpleNamespace(
                         num_layers=num_layers,
                         max_seq_len=max_seq_len,
@@ -112,7 +112,9 @@ class RuntimeCapacityTests(unittest.TestCase):
                         self.assertEqual(forward[2]["slot_idx"], slot)
                     self.assertEqual(runtime.build_kv_chunk_table(cache, "table.pb"), "table.pb")
                 self.assertEqual(seen["allocation"], (2, 32, capacity, dtype))
-                self.assertEqual(seen["model"], (32, False, dtype, capacity))
+                # The model must be built for the same slot count the cache was allocated for: the two
+                # disagreeing would put attention's slot bound out of step with the cache it reads.
+                self.assertEqual(seen["model"], (32, False, dtype, capacity, 2))
                 self.assertEqual(seen["uploads"], [(list(range(32)), capacity - 32, capacity, capacity)])
                 self.assertEqual(seen["table"].max_seq_len, capacity)
                 self.assertNotEqual(
@@ -133,7 +135,10 @@ class RuntimeCapacityTests(unittest.TestCase):
             dict(max_seq_len=132096),
             dict(max_seq_len=True),
             dict(chunk_size=512),
-            dict(num_users=1),
+            # Slot counts are free above zero now, so only a non-positive or non-int count is malformed.
+            dict(num_users=0),
+            dict(num_users=-1),
+            dict(num_users=2.0),
             dict(use_trace=True),
             dict(tp_shard_kv=True),
             dict(dflash_enabled=True),
