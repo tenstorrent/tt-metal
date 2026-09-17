@@ -230,17 +230,21 @@ pool/upsample ratios are integer (§3.4).
 
 ### Stage summary
 
-| Stage | Scope | TTNN conv ops added | Tests | Commit |
-|---|---|---|---|---|
-| 0 | Architecture audit, reference model confirmed | 0 | — | — |
-| 1 | PyTorch wrapper + BN-fold primitives + BasicBlock PCC | 0 | 14/14 | `857671c0aa` |
-| 2 | All 32 ResNet-34 BasicBlock conv layers on TTNN | +70 | 15/15 | `a72716b165` |
-| 3 | FPN 3 conv layers on TTNN (`TtnnFPN`) | +3 | 18/18 | `edd70f9e9f` |
-| 3.1 | Review fixes: 2-ch DDIM noise (upstream match), FPN bilinear upsample on TTNN, `ttnn.grid_sample` validated, conv-weight caching | +0 conv (+2 upsample) | 24/24 | `4b07970` |
-| 3.4 | Perception head on TTNN (`_bev_downscale`, `_status_encoding`, `bev_proj`, 3-layer `_tf_decoder`) | +1 conv | — | `ca36c5b0` |
-| 3.5 | DDIM denoiser on TTNN (plan_anchor_encoder, time_mlp, grid-sample cross-attn, 2× MHA, FFN, norms, FiLM, task heads) | — | — | `ca36c5b0` |
-| 3.6 | Backbone completion: ResNet stems ×2 + GPT cross-modal fusion ×4 on TTNN (`build_stage3_6`) | +grid/pool/upsample | — | `30cca82a69` |
-| 3.7 | Agent head MLPs on TTNN (`build_stage3_7`) — **every weight op now on TTNN** | — | — | `30cca82a69` |
+| Stage | Scope | TTNN conv ops added | Tests then |
+|---|---|---|---|
+| 0 | Architecture audit, reference model confirmed | 0 | — |
+| 1 | PyTorch wrapper + BN-fold primitives + BasicBlock PCC | 0 | 14/14 |
+| 2 | All 32 ResNet-34 BasicBlock conv layers on TTNN | +70 | 15/15 |
+| 3 | FPN 3 conv layers on TTNN (`TtnnFPN`) | +3 | 18/18 |
+| 3.1 | Review fixes: 2-ch DDIM noise (upstream match), FPN bilinear upsample on TTNN, `ttnn.grid_sample` validated, conv-weight caching | +0 conv (+2 upsample) | 24/24 |
+| 3.4 | Perception head on TTNN (`_bev_downscale`, `_status_encoding`, `bev_proj`, 3-layer `_tf_decoder`) | +1 conv | — |
+| 3.5 | DDIM denoiser on TTNN (plan_anchor_encoder, time_mlp, grid-sample cross-attn, 2× MHA, FFN, norms, FiLM, task heads) | — | — |
+| 3.6 | Backbone completion: ResNet stems ×2 + GPT cross-modal fusion ×4 on TTNN (`build_stage3_6`) | +grid/pool/upsample | — |
+| 3.7 | Agent head MLPs on TTNN (`build_stage3_7`) — **every weight op now on TTNN** | — | — |
+
+"Tests then" is the count when that stage was written, kept as history — see the
+current total below. The per-stage commit SHAs this table used to carry were dropped:
+the branch is rebased for review, so they stop resolving.
 
 **Current total: 49 tests — 26 require a device, 23 are CPU-only.** Read the
 split before quoting the number: the 26 device-requiring cases are the TTNN
@@ -300,7 +304,8 @@ head + DDIM decoder on-device as well. `compile()` / `execute_compiled()` then
 capture **two** TTNN traces — the backbone `[stage→fusion]×4` loop and the
 perception forward — and replay each as a single command: traced-vs-eager
 trajectory PCC 1.0, with the backbone loop **1.76×** faster and the **full forward
-~1.58×** (batch=1, production resolution). Only the DDIM head + FPN/agent-head tail
+~1.6×** (batch=1, production resolution; independent runs span 1.58–1.88× — see
+[`PERFORMANCE.md`](PERFORMANCE.md) §1.1). Only the DDIM head + FPN/agent-head tail
 still run eager: the DDIM head interleaves host control-flow (`scheduler.step` /
 `gen_sineembed` / `argmax`) between its device ops, so a monolithic trace can't
 cross it — tracing it was measured marginal (~1%) and not adopted.
