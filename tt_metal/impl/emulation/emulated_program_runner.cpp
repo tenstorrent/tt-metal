@@ -64,6 +64,7 @@
 #include "impl/buffers/circular_buffer.hpp"
 #include "impl/buffers/semaphore.hpp"
 #include <tt-metalium/device.hpp>
+#include <tt-metalium/face_geometry.hpp>  // FaceGeometry (per-CB unpack override)
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/hal_types.hpp>
@@ -1166,7 +1167,14 @@ static std::function<void()> jit_compile_kernel(
 
     // 10. Clean up temp directory (wrapper.cpp etc.) — always safe since .so is
     // either in the disk cache dir or mmap'd into memory from the temp dir.
-    std::filesystem::remove_all(dir);
+    // TT_EMULE_KEEP_JIT_SRC keeps patched_kernel.cpp / wrapper.cpp for inspection: the
+    // documented first step when a kernel fails to JIT-compile. log_info, not fprintf —
+    // stderr from this path is not visible in a test run.
+    if (std::getenv("TT_EMULE_KEEP_JIT_SRC")) {
+        log_info(tt::LogMetal, "TT_EMULE_KEEP_JIT_SRC: kept JIT src dir {}", dir);
+    } else {
+        std::filesystem::remove_all(dir);
+    }
 
     // 11. Wrap in shared_ptr for lifetime management (dlclose on destruction).
     auto shared_handle = std::shared_ptr<void>(handle, [](void* h) { dlclose(h); });
@@ -1397,6 +1405,59 @@ static std::string resolve_emule_kernel_source_shadow(const std::string& src_pat
 
 // Build the full defines map for a kernel: subclass-derived + arch + emulator
 // constants (banking, alignments, worker maps, sem base, CB tile sizes).
+namespace {
+
+// Mirrors the per-CB descriptor rule in jit_build/jit_build_options.cpp: silicon bakes this
+// geometry into chlkc_descriptors.h, so the emulated kernel has to be handed the same answer.
+struct ResolvedTileGeometry {
+    Tile tile;  // effective tile: an explicit FaceGeometry substitutes its own
+    uint32_t num_faces = tt::constants::TILE_HW / tt::constants::FACE_HW;
+    uint32_t face_r_dim = tt::constants::FACE_HEIGHT;
+    uint32_t partial_face = 0;
+    uint32_t narrow_tile = 0;
+};
+
+bool is_supported_tile_shape(uint32_t tile_height, uint32_t tile_width) {
+    if (tile_width != tt::constants::FACE_WIDTH && tile_width != tt::constants::TILE_WIDTH) {
+        return false;
+    }
+    return tile_height == 1 || tile_height == 2 || tile_height == 4 || tile_height == 8 ||
+           tile_height == tt::constants::FACE_HEIGHT || tile_height == tt::constants::TILE_HEIGHT;
+}
+
+std::optional<Tile> tile_from_unpack_face_geometry(const FaceGeometry& face_geometry) {
+    const uint32_t tile_height =
+        face_geometry.face_r_dim *
+        (face_geometry.num_faces > 2 ? tt::constants::TILE_HEIGHT / tt::constants::FACE_HEIGHT : 1);
+    const uint32_t tile_width = face_geometry.num_faces == 1 ? tt::constants::FACE_WIDTH : tt::constants::TILE_WIDTH;
+    if (!is_supported_tile_shape(tile_height, tile_width)) {
+        return std::nullopt;
+    }
+    return Tile({tile_height, tile_width});
+}
+
+// Precedence: an explicit unpack FaceGeometry wins over the CB's Tile, which wins over the
+// full-tile default.
+ResolvedTileGeometry resolve_tile_geometry(
+    const std::optional<Tile>& tile, const std::optional<FaceGeometry>& unpack_face_geometry) {
+    const Tile default_tile;
+    const Tile& requested_tile = tile.value_or(default_tile);
+    const std::optional<Tile> face_geometry_tile =
+        unpack_face_geometry.has_value() ? tile_from_unpack_face_geometry(*unpack_face_geometry) : std::nullopt;
+    const Tile& effective_tile = face_geometry_tile.value_or(requested_tile);
+    return ResolvedTileGeometry{
+        .tile = effective_tile,
+        .num_faces =
+            unpack_face_geometry.has_value() ? unpack_face_geometry->num_faces : requested_tile.get_num_faces(),
+        .face_r_dim =
+            unpack_face_geometry.has_value() ? unpack_face_geometry->face_r_dim : requested_tile.get_face_shape()[0],
+        .partial_face = effective_tile.get_partial_face(),
+        .narrow_tile = effective_tile.get_narrow_tile(),
+    };
+}
+
+}  // namespace
+
 static std::map<std::string, std::string> build_kernel_defines(
     Kernel& kernel,
     detail::ProgramImpl& impl,
@@ -1530,10 +1591,18 @@ static std::map<std::string, std::string> build_kernel_defines(
         uint8_t cb_formats[EMULE_NUM_CBS];
         uint32_t tile_r_dim[EMULE_NUM_CBS];
         uint32_t tile_c_dim[EMULE_NUM_CBS];
+        uint32_t face_r_dim[EMULE_NUM_CBS];
+        uint32_t num_faces[EMULE_NUM_CBS];
+        uint32_t partial_face[EMULE_NUM_CBS];
+        uint32_t narrow_tile[EMULE_NUM_CBS];
         for (uint32_t i = 0; i < EMULE_NUM_CBS; i++) {
             cb_formats[i] = static_cast<uint8_t>(tt::DataFormat::Invalid);
             tile_r_dim[i] = tt::constants::TILE_HEIGHT;
             tile_c_dim[i] = tt::constants::TILE_WIDTH;
+            face_r_dim[i] = tt::constants::FACE_HEIGHT;
+            num_faces[i] = tt::constants::TILE_HW / tt::constants::FACE_HW;
+            partial_face[i] = 0;
+            narrow_tile[i] = 0;
         }
         for (auto& cb_impl : cb_impls) {
             for (uint8_t idx : cb_impl->local_buffer_indices()) {
@@ -1543,15 +1612,18 @@ static std::map<std::string, std::string> build_kernel_defines(
                     "at the arch's NUM_CIRCULAR_BUFFERS.",
                     idx,
                     EMULE_NUM_CBS);
-                // Calculate tile size from the CB's data format.
-                const auto& tile = cb_impl->tile(idx);
-                tile_sizes[idx] = tile.has_value() ? tile->get_tile_size(cb_impl->data_format(idx))
-                                                   : Tile().get_tile_size(cb_impl->data_format(idx));
+                // Same resolution silicon's JIT descriptor build uses, so the emulated
+                // kernel sees the geometry a real kernel binary would be compiled against.
+                const ResolvedTileGeometry geom =
+                    resolve_tile_geometry(cb_impl->tile(idx), cb_impl->unpack_face_geometry(idx));
+                tile_sizes[idx] = geom.tile.get_tile_size(cb_impl->data_format(idx));
                 cb_formats[idx] = static_cast<uint8_t>(cb_impl->data_format(idx));
-                if (tile.has_value()) {
-                    tile_r_dim[idx] = tile->get_height();
-                    tile_c_dim[idx] = tile->get_width();
-                }
+                tile_r_dim[idx] = geom.tile.get_height();
+                tile_c_dim[idx] = geom.tile.get_width();
+                face_r_dim[idx] = geom.face_r_dim;
+                num_faces[idx] = geom.num_faces;
+                partial_face[idx] = geom.partial_face;
+                narrow_tile[idx] = geom.narrow_tile;
             }
         }
         // A DFB carries the same entry metadata at the same device slot, so it feeds the same
@@ -1573,31 +1645,45 @@ static std::map<std::string, std::string> build_kernel_defines(
             if (dfb_cfg.data_format == tt::DataFormat::Invalid) {
                 continue;
             }
-            tile_sizes[slot] = dfb_cfg.tile.has_value() ? dfb_cfg.tile->get_tile_size(dfb_cfg.data_format)
-                                                        : Tile().get_tile_size(dfb_cfg.data_format);
+            const ResolvedTileGeometry dfb_geom = resolve_tile_geometry(dfb_cfg.tile, dfb_cfg.unpack_face_geometry);
+            tile_sizes[slot] = dfb_geom.tile.get_tile_size(dfb_cfg.data_format);
             cb_formats[slot] = static_cast<uint8_t>(dfb_cfg.data_format);
-            if (dfb_cfg.tile.has_value()) {
-                tile_r_dim[slot] = dfb_cfg.tile->get_height();
-                tile_c_dim[slot] = dfb_cfg.tile->get_width();
-            }
+            tile_r_dim[slot] = dfb_geom.tile.get_height();
+            tile_c_dim[slot] = dfb_geom.tile.get_width();
+            face_r_dim[slot] = dfb_geom.face_r_dim;
+            num_faces[slot] = dfb_geom.num_faces;
+            partial_face[slot] = dfb_geom.partial_face;
+            narrow_tile[slot] = dfb_geom.narrow_tile;
         }
-        std::ostringstream ts, df, tr, tc;
+        std::ostringstream ts, df, tr, tc, fr, nf, pf, nt;
         for (uint32_t i = 0; i < EMULE_NUM_CBS; i++) {
             if (i) {
                 ts << ',';
                 df << ',';
                 tr << ',';
                 tc << ',';
+                fr << ',';
+                nf << ',';
+                pf << ',';
+                nt << ',';
             }
             ts << tile_sizes[i];
             df << static_cast<uint32_t>(cb_formats[i]);
             tr << tile_r_dim[i];
             tc << tile_c_dim[i];
+            fr << face_r_dim[i];
+            nf << num_faces[i];
+            pf << partial_face[i];
+            nt << narrow_tile[i];
         }
         defines["EMULE_TILE_SIZES"] = ts.str();
         defines["EMULE_CB_DATA_FORMATS"] = df.str();
         defines["EMULE_TILE_R_DIM"] = tr.str();
         defines["EMULE_TILE_C_DIM"] = tc.str();
+        defines["EMULE_TILE_FACE_R_DIM"] = fr.str();
+        defines["EMULE_TILE_NUM_FACES"] = nf.str();
+        defines["EMULE_TILE_PARTIAL_FACE"] = pf.str();
+        defines["EMULE_TILE_NARROW_TILE"] = nt.str();
     }
 
     // Thread the compute kernel's resolved fp32_dest_acc_en / dst_full_sync_en
@@ -2521,7 +2607,7 @@ static std::unordered_map<uint32_t, std::vector<ConnRoute>> g_conn_route;
 // payloads to the wrong chip. Per-worker keying also removes the cross-thread append race, since one
 // worker's connections are recorded by one thread in order.
 static std::unordered_map<uint64_t, std::vector<ConnRoute>> g_worker_conns;
-// Physical ring adjacency. Multi-rank seeding fills edges whose far endpoint is owned by another rank.
+// Collective edges must not be mixed across axes. Multi-rank seeding includes peer-owned edges.
 static std::unordered_map<uint32_t, std::set<uint32_t>> g_ring_adj;
 // Per-op reset flag: cleared at each new op's first connection-record so a later op's different line
 // orientation can't corrupt the src-keyed, direction-deduped table. See tt-emule docs/fabric-ccl-emulation.md.
@@ -2590,7 +2676,7 @@ extern "C" void __emule_fabric_record_conn(uint32_t src, uint32_t wx, uint32_t w
     // connection is per-hop, so for CCL that destination IS the adjacent chip and the two agree —
     // but a MeshSocket opens one connection straight to a peer that may be several hops away along
     // a line (1D requires only same row/column, not adjacency). Recording that distant chip as a
-    // ring neighbor inserts a phantom edge into the persistent g_ring_adj, whose degree then
+    // ring neighbor inserts a phantom edge into g_ring_adj, whose degree then
     // exceeds 2 and makes walk_ring TT_FATAL with "ambiguous ring continuation". Resolve the true
     // immediate neighbor from (src, dir) instead; when the destination really is adjacent this is
     // identity, so CCL topology is unchanged.
@@ -2604,6 +2690,9 @@ extern "C" void __emule_fabric_record_conn(uint32_t src, uint32_t wx, uint32_t w
     }
     std::lock_guard<std::mutex> lk(g_conn_route_mu);
     if (g_conn_route_dirty.exchange(false)) {
+        // A new collective must not inherit ring edges from an earlier operation's axis.
+        g_ring_adj.clear();
+        g_ring_adj_seeded = false;
         g_conn_route.clear();
         g_worker_conns.clear();
         g_worker_dir.clear();
@@ -2612,7 +2701,7 @@ extern "C" void __emule_fabric_record_conn(uint32_t src, uint32_t wx, uint32_t w
     // Record the connection-owner core's (the mux core, on the MUX path) direction, keyed by its LOGICAL
     // coords — before the per-direction dedup below, which is for the src-keyed g_conn_route only.
     g_mux_dir[__emule_worker_key(src, wx, wy)] = dir;
-    // Accumulate the undirected ring edge (persistent; unaffected by the per-op reset above).
+    // Peer-owned edges are needed even when this rank opens no connection to them.
     __emule_seed_global_ring_adj();  // multi-rank only; adds the edges this rank never opens
     g_ring_adj[src].insert(neighbor);
     g_ring_adj[neighbor].insert(src);
@@ -3284,16 +3373,9 @@ static void init_core_cb_sync(
             uint32_t page_size = cb_impl->page_size(idx);
             uint32_t num_pages = (page_size > 0) ? cb_impl->num_pages(idx) : 0;
             uint8_t* base = (page_size > 0) ? core->l1_ptr(cb_addr) : nullptr;
-            // Carry the faced-tile geometry silicon's pack/unpack init reads off the
-            // CB when the config sets it, else the full-tile default (16/4).
-            uint32_t cb_face_r_dim = 16, cb_num_faces = 4;
-            const auto& cb_fg = cb_impl->unpack_face_geometry(idx);
-            if (cb_fg.has_value()) {
-                cb_face_r_dim = cb_fg->face_r_dim;
-                cb_num_faces = cb_fg->num_faces;
-            }
-            core->init_cb_sync(
-                idx, base, page_size, num_pages, cb_impl->globally_allocated(), cb_face_r_dim, cb_num_faces);
+            // Face geometry is a compile-time descriptor on silicon and reaches the
+            // kernel as a JIT define, not through this runtime CB state.
+            core->init_cb_sync(idx, base, page_size, num_pages, cb_impl->globally_allocated());
             configured[idx] = true;
             log_debug(
                 tt::LogMetal,
@@ -3418,20 +3500,12 @@ static std::vector<DFBAllocInfo> allocate_dfbs_on_core(
             device_slot,
             EMULE_NUM_CBS,
             MetalContext::instance().hal().get_arch_num_circular_buffers());
-        // Same faced-tile geometry carry as the CB pass above, else full-tile 16/4.
-        uint32_t dfb_face_r_dim = 16, dfb_num_faces = 4;
-        if (cfg.unpack_face_geometry.has_value()) {
-            dfb_face_r_dim = cfg.unpack_face_geometry->face_r_dim;
-            dfb_num_faces = cfg.unpack_face_geometry->num_faces;
-        }
         core->init_cb_sync(
             static_cast<uint8_t>(device_slot),
             base,
             cfg.entry_size,
             cfg.num_entries,
-            /*globally_allocated=*/false,
-            dfb_face_r_dim,
-            dfb_num_faces);
+            /*globally_allocated=*/false);
 
         // STRIDED gets M TCs, ALL DM-DM gets P*C, spaced by MAX_TC_SLOTS_PER_DFB so DFBs cannot
         // collide. DFBSyncState belongs to the same model, so it is populated here too.

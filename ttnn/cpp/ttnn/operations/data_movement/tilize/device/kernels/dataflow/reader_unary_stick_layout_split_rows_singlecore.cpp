@@ -8,25 +8,22 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    // Constexpr
-    constexpr uint32_t dfb_id_in0 = tt::CBIndex::c_0;
-    constexpr uint32_t tile_height = get_compile_time_arg_val(1);
+    // tile_height is a compile-time arg (it sizes the stick_ids array below).
+    constexpr uint32_t tile_height = get_arg(args::tile_height);
 
-    const uint32_t src_addr = get_arg_val<uint32_t>(0);
-    const uint32_t num_sticks = get_arg_val<uint32_t>(1);
-    const uint32_t num_tiles_per_block = get_arg_val<uint32_t>(3);
-    const uint32_t block_width_size = get_arg_val<uint32_t>(4);
-    const uint32_t num_full_blocks_in_row = get_arg_val<uint32_t>(5);
-    const uint32_t start_stick_id = get_arg_val<uint32_t>(8);
+    const uint32_t num_sticks = get_arg(args::num_sticks);
+    const uint32_t num_tiles_per_block = get_arg(args::num_tiles_per_block);
+    const uint32_t block_width_size = get_arg(args::block_width_size);
+    const uint32_t num_full_blocks_in_row = get_arg(args::num_full_blocks_in_row);
+    const uint32_t start_stick_id = get_arg(args::start_stick_id);
 
-    constexpr auto src_tensor_args = TensorAccessorArgs<2>();
-
-    const auto s = TensorAccessor(src_tensor_args, src_addr);
+    const auto s = TensorAccessor(tensor::src);
 
     Noc noc;
-    DataflowBuffer dfb_in0(dfb_id_in0);
+    DataflowBuffer dfb_in0(dfb::in);
 
     uint32_t stick_ids[tile_height];
     uint32_t stick_offset = 0;
