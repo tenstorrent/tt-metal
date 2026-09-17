@@ -649,10 +649,10 @@ void py_module(nb::module_& mod) {
         Placement-first program config (Quasar-native matmul, stage A).
 
         GEMM vocabulary, all sizes in 32x32 tiles: C[M x N] = A[M x K] x B[K x N]. Name the cores and
-        the C subblock (per_core_M x per_core_N tiles) each core produces; the factory tiles C into
-        ceil(M_tiles / per_core_M) x ceil(N_tiles / per_core_N) blocks, makes one work item per
-        (batch, C subblock) and hands the items to the cores in enumeration order (a core may own a run of
-        items; surplus cores idle). Edge blocks are clipped on read and write, so any M / N works. Every
+        the C subblock (per_core_M x per_core_N tiles) each core produces; the factory walks C in
+        subblocks (across N, then down M, then the next batch) and hands that walk to the cores in
+        enumeration order as contiguous runs (a core may produce several; surplus cores idle). Edge
+        subblocks are clipped on read and write, so any M / N works. Every
         operand is addressed through the tensor accessor, so interleaved, L1-sharded and DRAM-sharded
         inputs and outputs all take the same kernels. The 1D, 2D and DRAM-sharded strategies are
         particular choices of (cores, per_core_M, per_core_N).
