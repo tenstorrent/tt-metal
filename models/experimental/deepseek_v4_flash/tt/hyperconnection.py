@@ -375,11 +375,16 @@ class DeepSeekV4HyperHead(DeepSeekV4Module):
             tile=SINGLE_USER_TILE,
             memory_config=with_tile_height(flat.memory_config(), t, tile_height=1),
         )
-        mixes = self.fn(flat)  # [1,1,T,N_padded]
+        mixes = self.fn(flat)  # [1,1,T,N_padded] as 1x32 TILE WIDTH_SHARDED
+        # binary_ng builds PageConfig(TILE) with the default 32x32 tile, so a (1, 32)
+        # shard is rejected. Match HyperConnection: retile to 32x32 before eltwise.
+        mixes = ttnn.tilize(
+            mixes,
+            tile=FULL_TILE,
+            memory_config=with_tile_height(mixes.memory_config(), t, tile_height=ttnn.TILE_SIZE),
+        )
         # N is padded to a tile for the decode matmul; keep only the H mix weights.
         mixes = ttnn.reshape(mixes, [1, 1, t, hc], mixes.padded_shape, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        if mixes.layout != ttnn.TILE_LAYOUT:
-            mixes = ttnn.to_layout(mixes, ttnn.TILE_LAYOUT)
         pre = ttnn.add(ttnn.sigmoid(ttnn.add(ttnn.multiply(mixes, self.scale), self.base)), self.eps)
         _profile(self.device)
         hs = ttnn.reshape(hidden_streams, [1, t, hc, d])
