@@ -18,6 +18,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <hostdevcommon/common_values.hpp>
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -152,6 +153,9 @@ ProgramDescriptor JointSDPADeviceOperation::JointSDPAProgramFactory::create_desc
             : true;
 
     auto core_grid = CoreRangeSet(CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1}));
+    constexpr uint32_t sender_semaphore_id = 0;
+    constexpr uint32_t receiver_semaphore_id = 1;
+    constexpr uint32_t valid_semaphore_id = 2;
     uint32_t num_cores = grid_size.x * grid_size.y;
 
     TT_FATAL(
@@ -279,6 +283,9 @@ ProgramDescriptor JointSDPADeviceOperation::JointSDPAProgramFactory::create_desc
         padded_Lqt,
         padded_Lkt,
         num_cores,
+        sender_semaphore_id,
+        receiver_semaphore_id,
+        valid_semaphore_id,
     };
     TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(input_tensor_k.buffer()).append_to(reader_compile_time_args);
@@ -360,6 +367,14 @@ ProgramDescriptor JointSDPADeviceOperation::JointSDPAProgramFactory::create_desc
     // ---- Circular buffers ----
 
     ProgramDescriptor desc;
+
+    // The cores of one (batch, head) group read identical K and V, so they form a unicast chain: the first
+    // core streams from DRAM and every core hands each chunk to the next while the next still has q chunks.
+    for (const auto& [id, initial] : std::initializer_list<std::pair<uint32_t, uint32_t>>{
+             {sender_semaphore_id, INVALID}, {receiver_semaphore_id, INVALID}, {valid_semaphore_id, VALID}}) {
+        desc.semaphores.push_back(SemaphoreDescriptor{
+            .id = id, .core_type = tt::CoreType::WORKER, .core_ranges = core_grid, .initial_value = initial});
+    }
 
     tt::DataFormat q_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_q.dtype());
     tt::DataFormat k_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_k.dtype());
@@ -627,6 +642,23 @@ ProgramDescriptor JointSDPADeviceOperation::JointSDPAProgramFactory::create_desc
         log_debug(tt::LogOp, "local_q_start: {}", local_q_start);
         log_debug(tt::LogOp, "local_q_end: {}", local_q_end);
 
+        auto q_count_of = [&](uint32_t c) {
+            const uint32_t start = std::min((c % q_parallel_factor) * q_per_core, q_num_chunks);
+            return std::min(start + q_per_core, q_num_chunks) - start;
+        };
+        // a core is in a chain when its group is a real (batch, head) and it has q chunks
+        auto active = [&](uint32_t c) {
+            return c < num_cores && (c / q_parallel_factor) / nh_parallel_factor < B && q_count_of(c) > 0;
+        };
+        const uint32_t chain_pos = i % q_parallel_factor;
+        const bool participates = q_parallel_factor > 1 && active(i);
+        const bool is_injector = chain_pos == 0;
+        const bool has_next = participates && chain_pos + 1 < q_parallel_factor && active(i + 1);
+        const uint32_t prev_i = is_injector ? i : i - 1;
+        const uint32_t next_i = has_next ? i + 1 : i;
+        const auto prev_phys = device->worker_core_from_logical_core({prev_i % grid_size.x, prev_i / grid_size.x});
+        const auto next_phys = device->worker_core_from_logical_core({next_i % grid_size.x, next_i / grid_size.x});
+
         reader_desc.emplace_runtime_args(
             core,
             {q_buf,
@@ -640,7 +672,15 @@ ProgramDescriptor JointSDPADeviceOperation::JointSDPAProgramFactory::create_desc
              local_nh_start,
              local_nh_end,
              local_q_start,
-             local_q_end});
+             local_q_end,
+             static_cast<uint32_t>(participates),
+             static_cast<uint32_t>(is_injector),
+             static_cast<uint32_t>(!has_next),
+             static_cast<uint32_t>(prev_phys.x),
+             static_cast<uint32_t>(prev_phys.y),
+             static_cast<uint32_t>(next_phys.x),
+             static_cast<uint32_t>(next_phys.y),
+             has_next ? q_count_of(i + 1) : 0u});
 
         // Writer args
         writer_desc.emplace_runtime_args(
