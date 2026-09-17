@@ -34,6 +34,7 @@ from models.demos.gemma4.tt.dram_sharded import (
     should_prefill_long_2d,
     single_tile_matmul_ckc,
     wh_t3k_decode_progcfg,
+    wh_t3k_dense_decode_enabled,
 )
 from models.demos.gemma4.utils.general_utils import get_cache_file_name
 
@@ -42,6 +43,12 @@ from models.demos.gemma4.utils.general_utils import get_cache_file_name
 # interleaved one, so there is no memory cost. Set GEMMA4_MLP_DRAM_SHARD=0 to
 # fall back to plain interleaved matmuls.
 _DRAM_SHARD_MLP = os.environ.get("GEMMA4_MLP_DRAM_SHARD", "1") != "0"
+
+# ``ttnn.gelu(variant=Accurate)`` lowers to exactly this op chain (see
+# ``gelu`` in ttnn/cpp/ttnn/operations/eltwise/unary/unary.cpp), so running it
+# as the GeGLU multiply's input-A activation is the same SFPU work with one
+# fewer device op. Measured bit-identical at the decode GeGLU shape.
+_GELU_ACCURATE_ACT = ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU, 0.0)
 
 
 def resolve_shared_mlp_intermediate_size(hf_config, state_dict=None, layer_idx=None) -> int:
@@ -160,6 +167,7 @@ class SharedMLP:
         # for MoE; dense 12B/31B retain the sharded opt.
         is_moe = bool(getattr(hf_config, "enable_moe_block", False))
         dram_shard = _DRAM_SHARD_MLP and tp > 1 and not is_moe
+        self._fuse_geglu = wh_t3k_dense_decode_enabled(mesh_device, is_moe=is_moe)
 
         if dram_shard and can_dram_shard(self.hidden_size, gu_n, dtype=dtype):
             self.gate_up_proj = DramShardedLinear(
@@ -379,8 +387,15 @@ class SharedMLP:
 
         # Prefer Accurate over FastLut/Tanh for device PCC (see compute_config): the Tanh variant
         # dropped the E4B full-model PCC from 0.9846 to 0.9578 (gate 0.96) on bh_quietbox_2.
-        gate = ttnn.gelu(gate, variant=gelu_variant(), memory_config=geglu_memory_config)
-        hidden = ttnn.mul(gate, up, memory_config=geglu_memory_config)
+        # T3K dense decode folds that same Accurate GeLU into the multiply, which
+        # is one device op rather than two; every other mesh keeps the pair.
+        if self._fuse_geglu and matmul_rows(gate) <= TILE_SIZE:
+            hidden = ttnn.mul(
+                gate, up, input_tensor_a_activations=[_GELU_ACCURATE_ACT], memory_config=geglu_memory_config
+            )
+        else:
+            gate = ttnn.gelu(gate, variant=gelu_variant(), memory_config=geglu_memory_config)
+            hidden = ttnn.mul(gate, up, memory_config=geglu_memory_config)
         gate.deallocate(True)
         up.deallocate(True)
 

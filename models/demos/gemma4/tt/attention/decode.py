@@ -137,8 +137,20 @@ def decode_forward(
 
     # 3. Per-head norms (unshard for rms_norm, restore sharded for RoPE)
     q_sharded_mem = tt_q.memory_config()
+    # rms_norm rejects a HEIGHT_SHARDED *input*, but it will write a
+    # HEIGHT_SHARDED *output*, and the fused decode RoPE preserves that spec
+    # exactly. On T3K dense decode, aim the norms straight at the layout the KV
+    # write and SDPA already require: the reshards below then short-circuit
+    # (``ttnn.to_memory_config`` returns its input when the configs match)
+    # instead of running one InterleavedToSharded per Q/K/V. Layout only --
+    # measured bit-identical against the interleaved-then-reshard form.
+    # batch>1 is excluded because its per-user RoPE fallback broadcasts cos/sin
+    # over the shard grid rather than using the fused single-position op.
+    norm_memcfg = q_sharded_mem if (l1_act and tt_q.shape[1] == 1) else None
     tt_q = ttnn.to_memory_config(tt_q, qkv_interleaved)
-    tt_q = apply_per_head_norm(tt_q, weights.q_norm_weight, config.rms_norm_eps, with_scale=True)
+    tt_q = apply_per_head_norm(
+        tt_q, weights.q_norm_weight, config.rms_norm_eps, with_scale=True, memory_config=norm_memcfg
+    )
 
     if is_kv_shared:
         # KV-shared layer: discard own K/V, use source layer's KV cache directly
@@ -148,8 +160,10 @@ def decode_forward(
         tt_k = ttnn.to_memory_config(tt_k, qkv_interleaved)
         tt_v = ttnn.to_memory_config(tt_v, qkv_interleaved)
         # Do not K→V clone (resync): that produced unicode garbage on LB 12B.
-        tt_k = apply_per_head_norm(tt_k, weights.k_norm_weight, config.rms_norm_eps, with_scale=True)
-        tt_v = apply_per_head_norm(tt_v, None, config.rms_norm_eps, with_scale=False)
+        tt_k = apply_per_head_norm(
+            tt_k, weights.k_norm_weight, config.rms_norm_eps, with_scale=True, memory_config=norm_memcfg
+        )
+        tt_v = apply_per_head_norm(tt_v, None, config.rms_norm_eps, with_scale=False, memory_config=norm_memcfg)
 
     # 4. RoPE — use on-device embedding lookup for trace compatibility
     # use_embedding_rope: cos/sin are per-position [1,1,batch_pad,head_dim] tensors.
@@ -200,12 +214,15 @@ def decode_forward(
     # L1 Q is illegal (``Q tensor buffer type must be DRAM when not sharded``).
     # T3K dense decode reshardes Q so SDPA can emit concat-heads layout and skip
     # the SDPA→I2S hop. Other meshes leave Q in DRAM interleaved (the path they
-    # already used after the RMSNorm unshard).
-    if l1_act:
+    # already used after the RMSNorm unshard). Batch 1 already landed here via
+    # ``norm_memcfg``, so the config test skips the reshard rather than paying it
+    # twice; it must be a config test, not a ``tt_q is q_src`` identity test,
+    # because a same-config ``to_memory_config`` hands back a *new* wrapper
+    # around the same buffer and the deallocate below would free it.
+    if l1_act and tt_q.memory_config() != q_sharded_mem:
         q_src = tt_q
         tt_q = ttnn.to_memory_config(q_src, q_sharded_mem)
-        if tt_q is not q_src:
-            q_src.deallocate(True)
+        q_src.deallocate(True)
 
     # 5. KV cache update — skip for KV-shared layers (source layer already updated the cache)
     # Use position_idx_cache (int32) for cache ops when position_idx is uint32 (embedding lookup format)

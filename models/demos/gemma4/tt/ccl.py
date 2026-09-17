@@ -7,6 +7,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import is_blackhole
+from models.demos.gemma4.tt.dram_sharded import wh_t3k_decode_enabled
 
 # CCL all_gather allocates barrier semaphores in L1_SMALL when this is > 0
 # (see all_gather_multicast_factory.cpp). Demo and unit meshes must open with
@@ -113,31 +114,36 @@ def _physical_tile_padded_height(tensor) -> int:
     return ((height + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
 
 
-# Buffers per channel for the sync reduce-scatter half.
-_CCL_SYNC_RS_BUFFERS = 4
-
 _PREFILL_RS_TALL_HEIGHT = 2048
 
+# (num_workers_per_link, chunks_per_sync, num_buffers_per_channel) for the sync
+# reduce-scatter half. See ``ccl_sync_rs_tuning``.
+_RS_TUNING_DEFAULT = (1, 1, 4)
+_RS_TUNING_PREFILL_TALL = (2, 2, 4)
+_RS_TUNING_WH_T3K_DECODE = (4, 2, 8)
 
-def ccl_sync_rs_workers(padded_height: int | None = None) -> int:
-    """Workers per link for the sync reduce-scatter half.
 
-    Decode / short prefill stay latency-bound at ``w=1``. Tall prefill
-    (``h >= 2048``) is bandwidth-bound and wants ``w=2``.
+def ccl_sync_rs_tuning(padded_height: int | None = None, mesh_device=None, is_moe: bool = True):
+    """``(num_workers_per_link, chunks_per_sync, num_buffers_per_channel)`` for
+    the sync reduce-scatter half.
+
+    Tall prefill (``h >= 2048``) is bandwidth-bound and takes the wider arm.
+    Everything else is latency-bound and ships the default, except a one-tile
+    (decode-height) all-reduce for a dense model on a Wormhole T3K, which was
+    swept on a real T3K: the 12B hidden=3840 TP=8 reduce_scatter + all_gather
+    pair runs 66.6 us at ``(4, 2, 8)`` against 67.9 us at the default, and every
+    ``w=4`` arm beat every ``w<4`` arm.
+
+    The T3K arm is gated the same way as the rest of this branch's T3K work
+    (``wh_t3k_decode_enabled``: Wormhole, 8 devices, unharvested 8x8 grid) plus
+    dense-only, so N150/N300, Blackhole and 26B-A4B keep the default exactly.
+    ``test_full_model_decode`` PCC is bit-identical across the two arms.
     """
     if padded_height is not None and int(padded_height) >= _PREFILL_RS_TALL_HEIGHT:
-        return 2
-    return 1
-
-
-def ccl_sync_rs_chunks(padded_height: int | None = None) -> int:
-    """Chunks per sync for the sync reduce-scatter half.
-
-    Decode / short prefill stay at ``c=1``; tall prefill uses ``c=2``.
-    """
-    if padded_height is not None and int(padded_height) >= _PREFILL_RS_TALL_HEIGHT:
-        return 2
-    return 1
+        return _RS_TUNING_PREFILL_TALL
+    if padded_height == ttnn.TILE_SIZE and not is_moe and wh_t3k_decode_enabled(mesh_device):
+        return _RS_TUNING_WH_T3K_DECODE
+    return _RS_TUNING_DEFAULT
 
 
 # 31B JSON Linear pin is a 128k-decode numerics fix (Ring loops). Apply it only
@@ -239,6 +245,7 @@ class CCLManager:
         self.mesh_device = mesh_device
         self.num_links = num_links
         self.topology = topology
+        self.is_moe = bool(is_moe)
         self.num_devices = mesh_device.get_num_devices()
         topo_name = "Ring" if topology == ttnn.Topology.Ring else "Linear"
         logger.info(
@@ -440,6 +447,9 @@ def ccl_allreduce(tensor, mesh_config, ccl_manager, memory_config=None):
             scattered.deallocate(True)
         return gathered
 
+    rs_workers, rs_chunks, rs_buffers = ccl_sync_rs_tuning(
+        padded_height, ccl_manager.mesh_device, is_moe=ccl_manager.is_moe
+    )
     scattered = ttnn.reduce_scatter(
         tensor,
         dim=3,
@@ -447,9 +457,9 @@ def ccl_allreduce(tensor, mesh_config, ccl_manager, memory_config=None):
         num_links=ccl_manager.num_links,
         topology=topology,
         memory_config=memory_config,
-        num_workers_per_link=ccl_sync_rs_workers(padded_height),
-        chunks_per_sync=ccl_sync_rs_chunks(padded_height),
-        num_buffers_per_channel=_CCL_SYNC_RS_BUFFERS,
+        num_workers_per_link=rs_workers,
+        chunks_per_sync=rs_chunks,
+        num_buffers_per_channel=rs_buffers,
     )
     tensor.deallocate(True)
     result = ttnn.all_gather(
