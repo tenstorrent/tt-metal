@@ -749,3 +749,43 @@ def test_all_to_all_bank_owned_falls_back_on_restricted_subdevice(mesh_device):
         cluster_axis=1,
         worker_core_range=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 5))}),
     )
+
+
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}], indirect=True)
+@pytest.mark.parametrize("topology", [None, ttnn.Topology.Linear, ttnn.Topology.Ring])
+def test_all_to_all_cached_discovery(mesh_device, topology, expect_error):
+    """Auto/explicit links stay distinct and reuse routes with fresh input/output buffers."""
+    mesh_device.enable_program_cache()
+    inputs, outputs = [], []  # Keep allocations alive so cache hits cannot reuse their addresses.
+    entries_before = None
+    for iteration, num_links in enumerate([None, 1, 2, None, 1, 2]):
+        host_input = torch.randn(1, 4, 256, 32, dtype=torch.bfloat16)
+        inputs.append(
+            ttnn.from_torch(
+                host_input,
+                device=mesh_device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(2, 4), dims=(None, 2)),
+            )
+        )
+        if entries_before is None:
+            entries_before = mesh_device.num_program_cache_entries()
+        outputs.append(
+            ttnn.experimental.all_to_all_async_generic(
+                inputs[-1], in_dim=2, out_dim=1, num_links=num_links, topology=topology, cluster_axis=1
+            )
+        )
+        result = ttnn.to_torch(
+            outputs[-1], mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=(2, 4), dims=(0, 1))
+        )
+        assert torch.equal(result, host_input.repeat(2, 1, 1, 1))
+        assert mesh_device.num_program_cache_entries() == entries_before + min(iteration + 1, 3)
+
+    for invalid_links, message in [(0, "at least one fabric link"), (100, "usable links")]:
+        with expect_error(RuntimeError, message):
+            ttnn.experimental.all_to_all_async_generic(
+                inputs[-1], in_dim=2, out_dim=1, num_links=invalid_links, topology=topology, cluster_axis=1
+            )

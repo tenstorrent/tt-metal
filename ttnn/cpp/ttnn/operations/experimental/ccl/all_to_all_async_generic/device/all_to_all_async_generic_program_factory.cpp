@@ -68,6 +68,7 @@ struct AllToAllStreamSchedule {
 
 AllToAllStreamSchedule build_stream_schedule(
     const AllToAllAsyncGenericParams& operation_attributes,
+    uint32_t num_links,
     const Tensor& input_tensor,
     const MeshCoordinate& mesh_coordinate,
     const tt::tt_fabric::FabricNodeId& sender_device_fabric_node_id,
@@ -96,10 +97,10 @@ AllToAllStreamSchedule build_stream_schedule(
         .completion_flags = std::vector<std::vector<std::vector<uint32_t>>>(num_senders_per_link),
     };
     for (size_t stream = 0; stream < num_senders_per_link; ++stream) {
-        schedule.block_starts[stream].resize(operation_attributes.num_links);
-        schedule.block_ends[stream].resize(operation_attributes.num_links);
-        schedule.block_strides[stream].resize(operation_attributes.num_links);
-        schedule.completion_flags[stream].resize(operation_attributes.num_links);
+        schedule.block_starts[stream].resize(num_links);
+        schedule.block_ends[stream].resize(num_links);
+        schedule.block_strides[stream].resize(num_links);
+        schedule.completion_flags[stream].resize(num_links);
     }
 
     auto* device = input_tensor.device();
@@ -176,7 +177,7 @@ AllToAllStreamSchedule build_stream_schedule(
 
     std::vector<std::vector<uint32_t>> bank_indices(num_senders_per_link);
     if (use_bank_owned_schedule) {
-        const uint32_t max_banks_per_link = banks_owned_by_link(num_dram_banks, operation_attributes.num_links, 0);
+        const uint32_t max_banks_per_link = banks_owned_by_link(num_dram_banks, num_links, 0);
         if (is_ring && use_direction_owned_schedule) {
             // A TP4 Ring has only one or two remote destinations per direction. Assigning a whole destination to one
             // worker would leave most mux clients idle, so stripe each destination's DRAM banks across all workers in
@@ -244,21 +245,20 @@ AllToAllStreamSchedule build_stream_schedule(
         }
     }
 
-    for (uint32_t link = 0; link < operation_attributes.num_links; ++link) {
+    for (uint32_t link = 0; link < num_links; ++link) {
         uint32_t current_start_block = link * blocks_per_core;
         uint32_t current_end_block = (link + 1) * blocks_per_core;
-        if (link == operation_attributes.num_links - 1) {
+        if (link == num_links - 1) {
             current_end_block = num_blocks;
         }
         for (size_t stream = 0; stream < num_senders_per_link; ++stream) {
             for (size_t schedule_index = 0; schedule_index < schedule.device_offsets[stream].size(); ++schedule_index) {
                 if (use_bank_owned_schedule) {
                     const uint32_t bank_in_link = bank_indices[stream][schedule_index];
-                    const uint32_t bank_start = bank_in_link * operation_attributes.num_links + link;
+                    const uint32_t bank_start = bank_in_link * num_links + link;
                     // The final bank phase can be absent on some links when bank count is not divisible by link
                     // count. Keep the common stream schedule and represent that link's missing bank as empty work.
-                    const bool link_owns_bank =
-                        bank_in_link < banks_owned_by_link(num_dram_banks, operation_attributes.num_links, link);
+                    const bool link_owns_bank = bank_in_link < banks_owned_by_link(num_dram_banks, num_links, link);
                     schedule.block_starts[stream][link].push_back(link_owns_bank ? bank_start : num_blocks);
                     schedule.block_ends[stream][link].push_back(num_blocks);
                 } else {
@@ -277,7 +277,7 @@ AllToAllStreamSchedule build_stream_schedule(
     // Each device must send the same number of completion signals that its transpose peer schedule sends back;
     // the final barrier relies on this symmetric per-pair completion-count invariant.
     for (size_t stream = 0; stream < num_senders_per_link; ++stream) {
-        for (uint32_t link = 0; link < operation_attributes.num_links; ++link) {
+        for (uint32_t link = 0; link < num_links; ++link) {
             std::unordered_set<int32_t> completed_offsets;
             bool has_next_nonempty_offset = false;
             int32_t next_nonempty_offset = 0;
@@ -318,13 +318,58 @@ AllToAllAsyncGenericProgram::cached_mesh_workload_t AllToAllAsyncGenericProgram:
     const auto available_cores = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, subdevice);
     auto subdevices = {subdevice};
 
+    // Resolve local topology and links once per cache miss. Routes and schedules are baked into
+    // the workload and reused until its cache entry is cleared. The distributed drain-core
+    // exchange stays in the launch path so ranks with asymmetric caches still enter it together.
+    const auto& args = operation_attributes;
+    const auto& input = tensor_args.input_tensor;
+    const auto discovered_num_links =
+        static_cast<uint32_t>(ttnn::operations::ccl::common::get_num_links(*mesh_device, args.cluster_axis));
+    TT_FATAL(
+        !args.num_links.has_value() || *args.num_links <= discovered_num_links,
+        "all_to_all_async requested {} links, but only {} usable links were discovered",
+        args.num_links.value_or(0),
+        discovered_num_links);
+    const uint32_t num_links = args.num_links.value_or(discovered_num_links);
+    TT_FATAL(num_links > 0, "all_to_all_async requires at least one fabric link");
+    TT_FATAL(
+        available_cores.num_cores() >= num_links,
+        "All-to-all requires at least one worker per link: requested {} links, but subdevice has {} workers",
+        num_links,
+        available_cores.num_cores());
+    const auto fabric_config = tt::tt_fabric::GetFabricConfig();
+    const uint32_t axis = args.cluster_axis.value_or(0);
+    const ResolvedRouting routing{
+        .num_links = num_links,
+        .topology = ttnn::ccl::convert_2d_to_1d_topology(
+            ttnn::ccl::get_usable_topology(input, args.topology, args.cluster_axis)),
+        .axis_topology = ttnn::ccl::get_axis_topology(input, fabric_config, axis),
+        .axis_is_straight =
+            !tt::tt_fabric::is_2d_fabric_config(fabric_config) || ttnn::ccl::is_axis_straight(*mesh_device, axis)};
+
+    auto drain_mapping = args.drain_virtual_cores.empty() && tt::tt_fabric::is_2d_fabric_config(fabric_config)
+                             ? gather_drain_virtual_cores(input, args.sub_device_id)
+                             : DrainCoreMapping{args.drain_logical_core_candidates, args.drain_virtual_cores};
+    const AllToAllAsyncGenericParams resolved_attributes{
+        args.in_dim,
+        args.out_dim,
+        args.num_links,
+        args.num_devices,
+        args.output_mem_config,
+        args.topology,
+        args.sub_device_id,
+        args.cluster_axis,
+        std::move(drain_mapping.logical_core_candidates),
+        std::move(drain_mapping.virtual_cores)};
+
     auto init_barrier_semaphore = ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0);
     auto final_barrier_semaphore = ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0);
     tt::tt_metal::distributed::Synchronize(*mesh_device, std::nullopt, subdevices);
 
     for (const auto& coord : tensor_coords.coords()) {
         auto cached_program = create_at(
-            operation_attributes,
+            resolved_attributes,
+            routing,
             coord,
             tensor_args,
             tensor_return_value,
@@ -340,6 +385,7 @@ AllToAllAsyncGenericProgram::cached_mesh_workload_t AllToAllAsyncGenericProgram:
 ttnn::device_operation::CachedProgram<AllToAllAsyncGenericProgram::shared_variables_t>
 AllToAllAsyncGenericProgram::create_at(
     const AllToAllAsyncGenericParams& operation_attributes,
+    const ResolvedRouting& routing,
     const ttnn::MeshCoordinate& mesh_coordinate,
     const AllToAllAsyncGenericInputs& tensor_args,
     Tensor& tensor_return_value,
@@ -356,13 +402,11 @@ AllToAllAsyncGenericProgram::create_at(
     const bool is_fabric_2d = tt::tt_fabric::is_2d_fabric_config(fabric_config);
     // FABRIC_2D_TORUS_X/Y wraps only one mesh axis even though get_fabric_topology() reports Torus for both.
     // Resolve wrapping for the collective's axis so a Ring on the other axis cannot open a nonexistent hop.
-    const bool fabric_has_wrap_links = operation_attributes.axis_topology == tt::tt_fabric::Topology::Ring;
-    const bool operation_uses_wrap_links =
-        operation_attributes.topology == ttnn::ccl::Topology::Ring && fabric_has_wrap_links;
-    const auto effective_topology =
-        operation_attributes.topology == ttnn::ccl::Topology::Ring && !operation_uses_wrap_links
-            ? ttnn::ccl::Topology::Linear
-            : operation_attributes.topology;
+    const bool fabric_has_wrap_links = routing.axis_topology == tt::tt_fabric::Topology::Ring;
+    const bool operation_uses_wrap_links = routing.topology == ttnn::ccl::Topology::Ring && fabric_has_wrap_links;
+    const auto effective_topology = routing.topology == ttnn::ccl::Topology::Ring && !operation_uses_wrap_links
+                                        ? ttnn::ccl::Topology::Linear
+                                        : routing.topology;
     const auto connection_topology =
         operation_uses_wrap_links ? tt::tt_fabric::Topology::Ring : tt::tt_fabric::Topology::Linear;
     const std::optional<MeshCoordinate> forward_coord = ttnn::ccl::get_physical_neighbor_from_physical_coord(
@@ -530,8 +574,8 @@ AllToAllAsyncGenericProgram::create_at(
     constexpr uint32_t ring_min_packets_per_lane = 4;
     const uint32_t min_packets_per_lane = is_ring ? ring_min_packets_per_lane : linear_min_packets_per_lane;
     const uint64_t packets_per_lane =
-        tensor_return_value.buffer()->num_pages() / (static_cast<uint64_t>(operation_attributes.num_links) *
-                                                     max_useful_workers_per_direction * number_pages_per_packet);
+        tensor_return_value.buffer()->num_pages() /
+        (static_cast<uint64_t>(routing.num_links) * max_useful_workers_per_direction * number_pages_per_packet);
     // The thresholds apply to two direction groups. Folded axes can require three or four physical egresses, each with
     // its own workers and mux, so scale the startup cost proportionally.
     const bool parallel_workers_are_worthwhile =
@@ -541,7 +585,7 @@ AllToAllAsyncGenericProgram::create_at(
         // Qualify the preferred three-worker schedule before adapting to core capacity. Two workers are a
         // restricted-subdevice fallback for large messages, not a lower size tier.
         for (uint32_t candidate = max_useful_workers_per_direction; candidate > 0; --candidate) {
-            if (direction_schedule_cores_per_link(candidate, num_direction_groups) * operation_attributes.num_links <=
+            if (direction_schedule_cores_per_link(candidate, num_direction_groups) * routing.num_links <=
                 available_worker_cores) {
                 workers_per_direction = candidate;
                 break;
@@ -561,27 +605,26 @@ AllToAllAsyncGenericProgram::create_at(
         direction_schedule_cores_per_link(workers_per_direction, num_direction_groups);
     const size_t num_senders_per_link = use_direction_owned_schedule
                                             ? direction_senders_per_link
-                                            : (available_worker_cores >= 2 * operation_attributes.num_links ? 2 : 1);
+                                            : (available_worker_cores >= 2 * routing.num_links ? 2 : 1);
     const uint32_t total_cores_per_link =
         use_direction_owned_schedule ? direction_total_cores_per_link : num_senders_per_link;
     const auto [all_worker_core_range, all_worker_cores] = ttnn::ccl::choose_worker_cores(
-        operation_attributes.num_links, total_cores_per_link, device, operation_attributes.sub_device_id);
+        routing.num_links, total_cores_per_link, device, operation_attributes.sub_device_id);
     (void)all_worker_core_range;
     TT_FATAL(
-        all_worker_cores.size() == static_cast<size_t>(operation_attributes.num_links) * total_cores_per_link,
+        all_worker_cores.size() == static_cast<size_t>(routing.num_links) * total_cores_per_link,
         "All-to-all needs {} worker cores ({} links x {} cores/link), but only {} were selected",
-        operation_attributes.num_links * total_cores_per_link,
-        operation_attributes.num_links,
+        routing.num_links * total_cores_per_link,
+        routing.num_links,
         total_cores_per_link,
         all_worker_cores.size());
 
     std::vector<CoreCoord> sender_worker_cores;
-    sender_worker_cores.reserve(operation_attributes.num_links * num_senders_per_link);
+    sender_worker_cores.reserve(routing.num_links * num_senders_per_link);
     std::vector<std::vector<CoreCoord>> mux_cores(
-        use_worker_mux ? operation_attributes.num_links : 0,
-        std::vector<CoreCoord>(use_worker_mux ? num_direction_groups : 0));
+        use_worker_mux ? routing.num_links : 0, std::vector<CoreCoord>(use_worker_mux ? num_direction_groups : 0));
     std::set<CoreRange> sender_worker_core_set;
-    for (uint32_t link = 0; link < operation_attributes.num_links; ++link) {
+    for (uint32_t link = 0; link < routing.num_links; ++link) {
         const uint32_t link_base = link * total_cores_per_link;
         if (use_worker_mux) {
             for (uint32_t direction_group = 0; direction_group < num_direction_groups; ++direction_group) {
@@ -631,7 +674,7 @@ AllToAllAsyncGenericProgram::create_at(
             .set_page_size(reserved_packet_header_CB_index, packet_header_size_bytes);
     CreateCircularBuffer(program, sender_worker_core_range, cb_reserved_packet_header_config);
 
-    const uint32_t num_cores_per_blocks = operation_attributes.num_links;
+    const uint32_t num_cores_per_blocks = routing.num_links;
     const uint32_t blocks_per_core = num_blocks / num_cores_per_blocks;
     const size_t local_sender_stream = num_senders_per_link - 1;
 
@@ -663,6 +706,7 @@ AllToAllAsyncGenericProgram::create_at(
 
     const auto stream_schedule = build_stream_schedule(
         operation_attributes,
+        routing.num_links,
         tensor_args.input_tensor,
         mesh_coordinate,
         sender_device_fabric_node_id,
@@ -791,7 +835,7 @@ AllToAllAsyncGenericProgram::create_at(
     };
 
     if (use_worker_mux) {
-        for (uint32_t link = 0; link < operation_attributes.num_links; ++link) {
+        for (uint32_t link = 0; link < routing.num_links; ++link) {
             for (uint32_t direction_group = 0; direction_group < num_direction_groups; ++direction_group) {
                 const uint32_t representative_stream = direction_group * workers_per_direction;
                 if (sender_stream_direction_masks[representative_stream] == 0) {
@@ -872,7 +916,7 @@ AllToAllAsyncGenericProgram::create_at(
             target_coord);
         return operation_attributes.drain_virtual_cores[target_index];
     };
-    bool use_multicast_initialization = is_fabric_2d && operation_attributes.axis_is_straight;
+    bool use_multicast_initialization = is_fabric_2d && routing.axis_is_straight;
     if (use_multicast_initialization) {
         // Multicast is valid only on a physically straight axis and when every destination maps the drain semaphore
         // to the same harvested worker. Bent axes and heterogeneous harvesting use destination-specific unicasts.
@@ -926,6 +970,17 @@ AllToAllAsyncGenericProgram::create_at(
             sender_writer_kernel_config));
     }
 
+    tt::tt_metal::SetCommonRuntimeArgs(
+        program, sender_reader_kernel_id, {tensor_args.input_tensor.buffer()->address()});
+    for (const auto kernel_id : sender_writer_kernel_ids) {
+        tt::tt_metal::SetCommonRuntimeArgs(
+            program,
+            kernel_id,
+            {tensor_return_value.buffer()->address(),
+             init_barrier_semaphore.address(),
+             final_barrier_semaphore.address()});
+    }
+
     CoreRange sender_box = sender_worker_core_range.bounding_box();
     // Swap start and end coord
     // MeshDevice translates through a representative chip, which is insufficient when Galaxy chips have different
@@ -943,7 +998,6 @@ AllToAllAsyncGenericProgram::create_at(
         const uint32_t link = core_id / num_senders_per_link;
         const auto& stream_device_offsets = device_offsets[sender_stream];
         std::vector<uint32_t> sender_reader_rt_args = {
-            tensor_args.input_tensor.buffer()->address(),
             stream_device_offsets.size(),
         };
         for (uint32_t i = 0; i < stream_device_offsets.size(); ++i) {
@@ -955,9 +1009,6 @@ AllToAllAsyncGenericProgram::create_at(
         tt::tt_metal::SetRuntimeArgs(program, sender_reader_kernel_id, {core}, sender_reader_rt_args);
 
         std::vector<uint32_t> sender_writer_rt_args = {
-            tensor_return_value.buffer()->address(),
-            init_barrier_semaphore.address(),
-            final_barrier_semaphore.address(),
             sender_stream,
             link,
             mcast_dest_noc_start_x,
@@ -1085,8 +1136,6 @@ AllToAllAsyncGenericProgram::create_at(
         std::move(program),
         {.sender_reader_kernel_id = sender_reader_kernel_id,
          .sender_writer_kernel_ids = std::move(sender_writer_kernel_ids),
-         .sender_worker_cores = sender_worker_cores,
-         .num_senders_per_link = num_senders_per_link,
          .init_barrier_semaphore = init_barrier_semaphore,
          .final_barrier_semaphore = final_barrier_semaphore}};
 }
@@ -1096,6 +1145,8 @@ void AllToAllAsyncGenericProgram::override_runtime_arguments(
     const AllToAllAsyncGenericParams& /*operation_attributes*/,
     const AllToAllAsyncGenericInputs& tensor_args,
     Tensor& tensor_return_value) {
+    const auto input_address = tensor_args.input_tensor.buffer()->address();
+    const auto output_address = tensor_return_value.buffer()->address();
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
         const auto& coord = coordinate_range.start_coord();
         TT_FATAL(
@@ -1105,18 +1156,10 @@ void AllToAllAsyncGenericProgram::override_runtime_arguments(
             coordinate_range.end_coord());
         auto& shared_variables = cached_workload.shared_variables.at(coordinate_range);
 
-        auto& sender_reader_runtime_args = GetRuntimeArgs(program, shared_variables.sender_reader_kernel_id);
-        for (size_t core_id = 0; core_id < shared_variables.sender_worker_cores.size(); ++core_id) {
-            const auto& core = shared_variables.sender_worker_cores[core_id];
-            const auto writer_kernel_id =
-                shared_variables.sender_writer_kernel_ids[core_id % shared_variables.num_senders_per_link];
-            auto& sender_writer_runtime_args = GetRuntimeArgs(program, writer_kernel_id);
-            auto& worker_sender_reader_runtime_args = sender_reader_runtime_args[core.x][core.y];
-            auto& worker_sender_writer_runtime_args = sender_writer_runtime_args[core.x][core.y];
-            worker_sender_reader_runtime_args[0] = tensor_args.input_tensor.buffer()->address();
-            worker_sender_writer_runtime_args[0] = tensor_return_value.buffer()->address();
-            worker_sender_writer_runtime_args[1] = shared_variables.init_barrier_semaphore.address();
-            worker_sender_writer_runtime_args[2] = shared_variables.final_barrier_semaphore.address();
+        GetCommonRuntimeArgs(program, shared_variables.sender_reader_kernel_id)[0] = input_address;
+        // The barriers belong to this cached workload and were installed when it was created.
+        for (const auto kernel_id : shared_variables.sender_writer_kernel_ids) {
+            GetCommonRuntimeArgs(program, kernel_id)[0] = output_address;
         }
     }
 }
