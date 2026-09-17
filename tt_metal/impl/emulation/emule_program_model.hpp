@@ -18,6 +18,9 @@
 namespace tt::tt_metal::detail {
 class ProgramImpl;
 }
+namespace tt_emule {
+struct EmuleProgramDescriptor;
+}
 
 namespace tt::tt_metal::emule {
 
@@ -54,6 +57,7 @@ void collect_kernels(
     std::map<CoreCoord, std::vector<PendingKernelInfo>>& pending_core_kernels,
     std::map<std::string, DeferredCompile>& deferred_compiles,
     std::unordered_map<std::string, std::function<void()>>& resolved_fns,
-    std::vector<std::string>& inline_src_temps);
+    std::vector<std::string>& inline_src_temps,
+    const tt_emule::EmuleProgramDescriptor& desc);
 
 }  // namespace tt::tt_metal::emule

@@ -611,6 +611,7 @@ static std::shared_ptr<ResolvedProgram> prepare_program(IDevice* device, Program
     uint32_t num_l1_banks = 0;
     const auto emule_soc = tt_emule::build_soc_view(device);
     populate_bank_mapping(sw_emu, device, device_id, emule_soc, dram_core, num_dram_channels, num_l1_banks);
+    const auto emule_desc = tt_emule::build_emule_descriptor(program, device);
 
     std::string worker_col_map_str, worker_row_map_str;
     build_worker_coord_maps(device, worker_col_map_str, worker_row_map_str);
@@ -639,7 +640,8 @@ static std::shared_ptr<ResolvedProgram> prepare_program(IDevice* device, Program
         pending_core_kernels,
         deferred_compiles,
         resolved_fns,
-        inline_src_temps);
+        inline_src_temps,
+        emule_desc);
     jit_compile_pending(deferred_compiles, resolved_fns, inline_src_temps);
 
     ResolvedProgram resolved;
