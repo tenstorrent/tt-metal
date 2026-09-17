@@ -704,6 +704,48 @@ def test_dispatch_fabric2d_tile_refusals(mesh_device, device_params, num_links):
     ],
     indirect=["mesh_device", "device_params"],
 )
+@pytest.mark.parametrize("fanout", [False, True], ids=lambda f: "multicast" if f else "unicast")
+@pytest.mark.timeout(600)
+def test_dispatch_fabric2d_back_to_back(mesh_device, device_params, num_links, fanout):
+    """Launches with NOTHING between them, which is the only way the arrival counter's reset is tested.
+
+    Every other test reads its outputs before launching again, and that read is a host synchronisation
+    -- so the launches never overlap and the reset is never contended. Here four launches are queued
+    and only then read, which lets a chip that finishes early start sending into a neighbour still
+    retiring the previous one. That is exactly the skew a traced replay has, since a trace carries no
+    host syncs at all.
+
+    The failure this guards is a hang, not wrong data: an increment that lands while the downstream is
+    clearing the counter used to be thrown away, and its relay then waited for pages the counter said
+    had never arrived. The launches alternate between two draws so a counter left standing HIGH is
+    caught too -- a relay reading before arrival would hand back the other draw's pages, which a
+    single repeated draw could not tell apart.
+    """
+    cfg = extract_mesh_config(mesh_device)
+    a = _Fixture(mesh_device, cfg.dispatch_group_size, cfg.num_dispatch_groups, seed=31)
+    b = _Fixture(mesh_device, cfg.dispatch_group_size, cfg.num_dispatch_groups, seed=32)
+    order = [a, b, a, b]
+
+    # Queued together, read afterwards. Nothing here waits on the device.
+    results = [fx.run(cfg.sp_axis, num_links, fanout=fanout) for fx in order]
+    for i, (fx, (payload, metadata)) in enumerate(zip(order, results)):
+        fx.check(payload, metadata, f"launch {i} of four with no host sync between them")
+    logger.info(f"back-to-back: 4 unsynchronised launches byte-exact ({'multicast' if fanout else 'unicast'})")
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links",
+    [
+        pytest.param(
+            (8, 4),
+            torus_xy_device_params(),
+            2,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="torus-xy-8x4-2link",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
 @pytest.mark.timeout(600)
 def test_dispatch_fabric2d_padding_config(mesh_device, device_params, num_links):
     """A padding_config shortens the routing pass without changing a single page.
@@ -782,6 +824,75 @@ def _outgoing_chunks(stream, my_row, extent, num_links):
         for d in range(m, 1, -1)
     ]
     return out + [c for c in _forwarding_chunks(stream, my_row, extent, num_links) if c[1] != nbr]
+
+
+def _replay_arrival_counter(per_launch, overlaps, give_back):
+    """The arrival counter over a run of launches, as the 32-bit word it is: one adder, one subtractor.
+
+    Timeline per launch, in the order the hardware runs it: upstream sends whatever of this launch it
+    has not already sent, the reader waits for the counter to reach the page count its chunk lists
+    predict, upstream runs ahead and announces `early` pages of the NEXT launch, and only then does
+    this reader reset. `give_back(counter, consumed)` is the reset rule under test.
+
+    Raises when a launch cannot complete: the reader is waiting for a count upstream has nothing left
+    to reach. That is the hang, written as arithmetic.
+    """
+    counter, carried, out = 0, 0, []
+    for early in overlaps:
+        counter = (counter + per_launch - carried) & 0xFFFFFFFF  # the rest of this launch
+        if counter < per_launch:
+            raise AssertionError(
+                f"stranded: the reader needs the counter to reach {per_launch}, upstream has nothing "
+                f"left to send, and it stopped at {counter}"
+            )
+        counter = (counter + early) & 0xFFFFFFFF  # upstream runs ahead into the next launch
+        counter = give_back(counter, per_launch)  # end of stream
+        carried, _ = early, out.append(counter)
+    return out
+
+
+@pytest.mark.parametrize("extent", [4, 6, 8, 12], ids=lambda e: f"extent{e}")
+@pytest.mark.parametrize("num_links", [1, 2], ids=lambda n: f"{n}link")
+def test_dispatch_fabric2d_arrival_counter_survives_an_overlap(extent, num_links):
+    """The end-of-stream reset holds when the upstream chip is already a launch ahead.
+
+    Nothing keeps ring neighbours in lockstep, so a chip that finishes early starts announcing the next
+    launch's pages into a neighbour that is still retiring this one. Zeroing the counter there throws
+    those announcements away and the neighbour then waits for pages that, as far as it can tell, never
+    arrived -- a ring-wide hang. Giving back exactly what was consumed leaves them standing, and they
+    are already the right base for the next launch.
+
+    Proved here rather than on device because the failure is a deadlock: reproducing it costs a board
+    whose ethernet links do not retrain afterwards. The arithmetic is the whole mechanism, and it is
+    checked over every overlap a launch can have, including the two that bracket it -- none, and a
+    launch entirely announced in advance.
+
+    What this does NOT prove is that a chip's announcements equal what its neighbour consumes; that is
+    `test_dispatch_fabric2d_chunk_agreement`, which checks it position by position over the same space.
+    """
+    subtract = lambda counter, consumed: (counter - consumed) & 0xFFFFFFFF
+    zero = lambda counter, consumed: 0
+
+    # A stream's pages per launch, from the region layout rather than a round number: the largest is
+    # what a real run puts through one region, and 0 is a stream with nothing to relay.
+    m = extent // 2
+    per_pair = 16 * min(4, extent)
+    totals = {0, 1, m, (m * (m - 1) // 2) * max(1, per_pair // num_links)}
+
+    for per_launch in sorted(totals):
+        for early in range(per_launch + 1):
+            # Eight launches, so an error that accumulates a page at a time is caught as well as one
+            # that strands immediately. At rest the counter holds exactly what was announced early.
+            after = _replay_arrival_counter(per_launch, [early] * 8, subtract)
+            assert after == [early] * 8, (
+                f"extent={extent} links={num_links} pages={per_launch} overlap={early}: the counter "
+                f"should come to rest holding exactly the pages announced early, got {after}"
+            )
+
+        # The rule this replaced. One page announced early is enough to strand the launch after it.
+        if per_launch > 0:
+            with pytest.raises(AssertionError, match="stranded"):
+                _replay_arrival_counter(per_launch, [1, 0], zero)
 
 
 @pytest.mark.parametrize("extent", [4, 6, 8, 12], ids=lambda e: f"extent{e}")
