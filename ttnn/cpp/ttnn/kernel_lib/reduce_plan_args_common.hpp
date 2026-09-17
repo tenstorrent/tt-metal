@@ -98,7 +98,6 @@ inline constexpr std::uint32_t tile_count_mask = 0xFF;
 enum class AuxiliaryTileWord : std::uint32_t {
     Configuration,
     ValueBits,
-    RuntimeExtentArg,
     Count,
 };
 

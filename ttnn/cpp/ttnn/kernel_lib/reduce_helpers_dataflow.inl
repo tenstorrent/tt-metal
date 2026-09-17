@@ -150,16 +150,7 @@ FORCE_INLINE void prepare_tile() {
         "reduction auxiliary tiles only support Float16_b and Float32 formats");
     constexpr uint32_t face_rows = tile_r_dim / tt::constants::FACE_HEIGHT;
     constexpr uint32_t faces_per_row = tile_c_dim / tt::constants::FACE_WIDTH;
-    const uint32_t valid_elements = []() {
-        if constexpr (Tile::has_runtime_extent) {
-            const uint32_t extent = get_arg_val<uint32_t>(Tile::runtime_extent_arg);
-            ASSERT(extent > 0);
-            const uint32_t remainder = extent % Tile::num_valid_elements;
-            return remainder == 0 ? Tile::num_valid_elements : remainder;
-        } else {
-            return Tile::num_valid_elements;
-        }
-    }();
+    constexpr uint32_t valid_elements = Tile::num_valid_elements;
 
     if constexpr (tile_type == ttnn::kernel_lib::ReduceAuxiliaryTileType::FirstRow) {
         static_assert(
@@ -182,9 +173,9 @@ FORCE_INLINE void prepare_tile() {
 
     // Native reduction reads only the first row of each face in a full scaler.
     // Those rows are overwritten below; the remaining lanes need no initialization.
-    // Partial and runtime masks still need zeroes in every inactive lane.
-    constexpr bool full_scaler = tile_type == ttnn::kernel_lib::ReduceAuxiliaryTileType::FirstRow &&
-                                 !Tile::has_runtime_extent && Tile::num_valid_elements == tile_c_dim;
+    // Partial masks still need zeroes in every inactive lane.
+    constexpr bool full_scaler =
+        tile_type == ttnn::kernel_lib::ReduceAuxiliaryTileType::FirstRow && Tile::num_valid_elements == tile_c_dim;
     if constexpr (!full_scaler) {
         Noc noc;
         noc.async_write_zeros(dfb, get_tile_size(cb_id));

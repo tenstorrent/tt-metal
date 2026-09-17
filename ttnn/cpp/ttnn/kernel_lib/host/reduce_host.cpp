@@ -45,6 +45,14 @@ std::uint32_t div_up_u32(std::uint32_t value, std::uint32_t divisor) {
     return value / divisor + (value % divisor != 0);
 }
 
+ReduceValidShape valid_shape(const ReduceBlockSpec& block) {
+    return block.tail ? block.tail->shape : ReduceValidShape{block.logical_h, block.logical_w, block.batches};
+}
+
+bool has_output_mask(const ReducePlan& plan) {
+    return plan.tail && (plan.reduce_dim == ReduceOpDim::W ? plan.logical_h % 32 : plan.logical_w % 32) != 0;
+}
+
 void validate_block(
     const ReduceBlockSpec& block, ReduceOpDim dim, const std::optional<std::size_t>& max_input_cb_bytes) {
     TT_FATAL(
@@ -59,6 +67,11 @@ void validate_block(
     const auto tile_h = block.input_tile.get_height();
     const auto tile_w = block.input_tile.get_width();
     if (block.tail) {
+        const auto& shape = block.tail->shape;
+        TT_FATAL(
+            shape.height > 0 && shape.height <= block.logical_h && shape.width > 0 && shape.width <= block.logical_w &&
+                shape.batches > 0 && shape.batches <= block.batches,
+            "Reduce planner: exact tail shape must be nonzero and within the local block");
         TT_FATAL(
             block.input_layout == Layout::TILE && block.output_layout == Layout::TILE && dim != ReduceOpDim::HW,
             "Reduce planner: runtime tail shapes require a tiled W or H reduction");
@@ -70,8 +83,7 @@ void validate_block(
         // and collision with the serialized "no runtime argument" sentinel.
         constexpr auto max_offset = reduce_plan_args::no_runtime_arg - 3U;
         TT_FATAL(
-            block.tail->compute_runtime_arg_offset <= max_offset &&
-                block.tail->auxiliary_runtime_arg_offset <= max_offset,
+            block.tail->compute_runtime_arg_offset <= max_offset,
             "Reduce planner: tail-shape runtime argument offsets overflow the argument record");
     }
     const auto ht = div_up_u32(block.padded_h, tile_h);
@@ -102,8 +114,12 @@ void validate_block(
         "Reduce planner: local reduction extent {} exceeds resident input capacity {}",
         input_extent,
         block.resident_input_tiles.value_or(0));
+    const auto shape = valid_shape(block);
     const auto output_tiles = checked_mul_u32(
-        dim == ReduceOpDim::W ? ht : (dim == ReduceOpDim::H ? wt : 1U), block.batches, "local output tiles");
+        dim == ReduceOpDim::W ? (block.tail ? div_up_u32(shape.height, tile_h) : ht)
+                              : (dim == ReduceOpDim::H ? (block.tail ? div_up_u32(shape.width, tile_w) : wt) : 1U),
+        shape.batches,
+        "local output tiles");
     TT_FATAL(
         !block.resident_output_tiles || *block.resident_output_tiles >= output_tiles,
         "Reduce planner: local reduction produces {} tiles but resident output capacity is {}",
@@ -114,16 +130,18 @@ void validate_block(
 bool same_output_description(const ReduceCallConfig& lhs, const ReduceCallConfig& rhs) {
     const auto& a = lhs.block;
     const auto& b = rhs.block;
-    if (lhs.reduce_dim != rhs.reduce_dim || a.batches != b.batches || a.output_dtype != b.output_dtype ||
+    const auto a_shape = valid_shape(a);
+    const auto b_shape = valid_shape(b);
+    if (lhs.reduce_dim != rhs.reduce_dim || a_shape.batches != b_shape.batches || a.output_dtype != b.output_dtype ||
         a.output_layout != b.output_layout || a.output_tile != b.output_tile ||
         a.resident_output_tiles != b.resident_output_tiles) {
         return false;
     }
     if (lhs.reduce_dim == ReduceOpDim::W) {
-        return a.logical_h == b.logical_h && a.padded_h == b.padded_h;
+        return a_shape.height == b_shape.height && a.padded_h == b.padded_h;
     }
     if (lhs.reduce_dim == ReduceOpDim::H) {
-        return a.logical_w == b.logical_w && a.padded_w == b.padded_w;
+        return a_shape.width == b_shape.width && a.padded_w == b.padded_w;
     }
     return true;
 }
@@ -297,9 +315,10 @@ std::uint32_t add_threshold(ReduceOpDim dim) { return dim == ReduceOpDim::W ? 4U
 // Reduction-axis tile count as the two planning paths derive it, without planning. The sequence
 // planner sums this across accumulated calls to test the additive threshold once for the sequence.
 std::uint32_t threshold_axis_tiles_of(const ReduceBlockSpec& block, ReduceOpDim dim) {
-    const auto height = block.input_layout == Layout::ROW_MAJOR ? block.logical_h : block.padded_h;
+    const auto shape = valid_shape(block);
+    const auto height = block.tail || block.input_layout == Layout::ROW_MAJOR ? shape.height : block.padded_h;
     const auto ht = div_up_u32(height, block.input_tile.get_height());
-    const auto wt = div_up_u32(block.padded_w, block.input_tile.get_width());
+    const auto wt = div_up_u32(block.tail ? shape.width : block.padded_w, block.input_tile.get_width());
     if (dim == ReduceOpDim::W) {
         return wt;
     }
@@ -315,7 +334,7 @@ void configure_scalar_and_aux(
     ReduceOpDim dim,
     std::uint32_t tile_h,
     std::uint32_t tile_w,
-    float scalar,
+    std::optional<float> scalar,
     std::uint32_t logical_reduce_elements,
     std::uint32_t partial_elements,
     bool has_partial,
@@ -325,18 +344,20 @@ void configure_scalar_and_aux(
     plan.auxiliary_tiles.clear();
     plan.partial_mode = compute_kernel_lib::ReducePartialMode::None;
 
+    const bool automatic_average = math == ReduceOpMath::AVG && !scalar.has_value();
+    const float scale = scalar.value_or(automatic_average ? 1.0F / logical_reduce_elements : 1.0F);
     if (uses_sfpu) {
         // SFPU folds never read the scaler. Legacy callers retain a placeholder;
         // callers supporting empty recipes need no auxiliary allocation.
         plan.reduce_factor = 1;
-        plan.post_scale = scalar;
+        plan.post_scale = scale;
         if (!allow_empty_auxiliary) {
             plan.auxiliary_tiles.push_back(
                 {.value = 1.0F, .type = ReduceAuxiliaryTileType::FirstRow, .num_valid_elements = tile_w});
         }
     } else if (plan.algorithm == ReduceAlgorithm::AccumulateViaAdd) {
-        plan.reduce_factor = math == ReduceOpMath::AVG ? logical_reduce_elements : 1U;
-        plan.post_scale = math == ReduceOpMath::AVG ? scalar * logical_reduce_elements : scalar;
+        plan.reduce_factor = automatic_average ? logical_reduce_elements : 1U;
+        plan.post_scale = scalar.value_or(1.0F);
         if (has_partial) {
             plan.auxiliary_tiles.push_back(
                 {.value = 1.0F,
@@ -350,10 +371,10 @@ void configure_scalar_and_aux(
         }
     } else {
         TT_FATAL(
-            dim != ReduceOpDim::HW || scalar >= 0.0F,
+            dim != ReduceOpDim::HW || scale >= 0.0F,
             "Reduce planner: ReduceTile HW reduction cannot represent negative scalar {}",
-            scalar);
-        const float reader_scaler = dim == ReduceOpDim::HW ? std::sqrt(scalar) : scalar;
+            scale);
+        const float reader_scaler = dim == ReduceOpDim::HW ? std::sqrt(scale) : scale;
         plan.post_scale = 1.0F;
         plan.reduce_factor = 1;
         plan.auxiliary_tiles.push_back(
@@ -368,19 +389,14 @@ void configure_scalar_and_aux(
         }
     }
     plan.partial_reduce_axis_elements = has_partial ? partial_elements : 0U;
-    if (plan.tail) {
-        // Even an aligned maximum block can have a partial runtime edge. Keep
-        // the edge recipe active for aligned tails too: the generated mask then
-        // covers the whole last tile, so its location never depends on parity.
-        auto& edge = plan.auxiliary_tiles.back();
-        edge.runtime_extent_arg = plan.tail->auxiliary_runtime_arg_offset + (dim == ReduceOpDim::W ? 1U : 0U);
-        edge.num_valid_elements = dim == ReduceOpDim::W ? tile_w : tile_h;
+    const auto output_partial_elements = dim == ReduceOpDim::W ? plan.logical_h % tile_h : plan.logical_w % tile_w;
+    if (plan.tail && output_partial_elements != 0) {
+        // Tail extents are known now. Allocate an output mask only when needed,
+        // with its final lane count serialized alongside the reduction masks.
         plan.auxiliary_tiles.push_back(
             {.value = 1.0F,
              .type = dim == ReduceOpDim::W ? ReduceAuxiliaryTileType::FirstColumn : ReduceAuxiliaryTileType::FirstRow,
-             .num_valid_elements = dim == ReduceOpDim::W ? tile_h : tile_w,
-             .runtime_extent_arg = plan.tail->auxiliary_runtime_arg_offset + (dim == ReduceOpDim::W ? 0U : 1U)});
-        plan.partial_reduce_axis_elements = 0;  // Determined from the runtime shape.
+             .num_valid_elements = output_partial_elements});
     }
 }
 
@@ -388,7 +404,7 @@ ReducePlan make_tiled_plan(
     const ReduceBlockSpec& block,
     ReduceOpMath math,
     ReduceOpDim dim,
-    float scalar,
+    std::optional<float> scalar,
     ReduceFp32Mode fp32_mode,
     const ReduceHardwareConfig& hardware,
     std::optional<std::size_t> max_input_cb_bytes,
@@ -396,15 +412,17 @@ ReducePlan make_tiled_plan(
     std::optional<std::uint32_t> threshold_axis_tiles) {
     ReducePlan plan;
     plan.path = ReducePath::Tiled;
+    plan.reduce_dim = dim;
     plan.tail = block.tail;
-    plan.logical_h = block.logical_h;
-    plan.logical_w = block.logical_w;
+    const auto shape = valid_shape(block);
+    plan.logical_h = shape.height;
+    plan.logical_w = shape.width;
 
     const auto tile = block.input_tile;
     const std::uint32_t tile_h = tile.get_height();
     const std::uint32_t tile_w = tile.get_width();
-    const std::uint32_t logical_h = block.logical_h;
-    const std::uint32_t logical_w = block.logical_w;
+    const std::uint32_t logical_h = shape.height;
+    const std::uint32_t logical_w = shape.width;
     const std::uint32_t padded_h = block.padded_h;
     const std::uint32_t padded_w = block.padded_w;
     TT_FATAL(
@@ -412,12 +430,14 @@ ReducePlan make_tiled_plan(
         "Reduce planner: tensor height and width must be non-zero");
     plan.Ht = div_up_u32(padded_h, tile_h);
     plan.Wt = div_up_u32(padded_w, tile_w);
-    plan.batches = block.batches;
+    plan.batches = shape.batches;
     plan.input_row_stride_tiles = block.input_row_stride_tiles;
 
+    const auto work_ht = block.tail ? div_up_u32(logical_h, tile_h) : plan.Ht;
+    const auto work_wt = block.tail ? div_up_u32(logical_w, tile_w) : plan.Wt;
     const std::uint32_t reduced_tiles =
-        dim == ReduceOpDim::W ? plan.Wt
-                              : (dim == ReduceOpDim::H ? plan.Ht : checked_mul_u32(plan.Ht, plan.Wt, "HW tile count"));
+        dim == ReduceOpDim::W ? work_wt
+                              : (dim == ReduceOpDim::H ? work_ht : checked_mul_u32(work_ht, work_wt, "HW tile count"));
     const std::uint32_t logical_reduce_elements =
         dim == ReduceOpDim::W
             ? logical_w
@@ -425,23 +445,22 @@ ReducePlan make_tiled_plan(
                                      : checked_mul_u32(logical_h, logical_w, "logical HW reduction volume"));
     const std::uint32_t partial_elements =
         dim == ReduceOpDim::W ? logical_w % tile_w : (dim == ReduceOpDim::H ? logical_h % tile_h : 0U);
-    const bool has_axis_partial = partial_elements != 0 || block.tail.has_value();
+    const bool has_axis_partial = partial_elements != 0;
     const bool uses_sfpu = requires_sfpu(block.input_dtype, fp32_mode);
     // The SFPU implementations do not consume scaler tiles. A ReduceTile plan
     // may use either GMPOOL or SFPU, depending on its dtype and accuracy mode.
     TT_FATAL(
-        !uses_sfpu || !has_axis_partial,
+        !uses_sfpu || (!has_axis_partial && !block.tail),
         "Reduce planner: SFPU reductions cannot mask a partial reduction axis or a runtime tail shape; "
         "identity-pad the input and describe a static padded reduction view");
     const bool scalar_has_2d_partial = dim == ReduceOpDim::HW && ((logical_h % tile_h) || (logical_w % tile_w));
 
-    const auto automatic_algorithm = add_is_legal(block, math, dim, fp32_mode, hardware, scalar_has_2d_partial) &&
-                                             threshold_axis_tiles.value_or(reduced_tiles) >= add_threshold(dim)
+    const bool add_legal = add_is_legal(block, math, dim, fp32_mode, hardware, scalar_has_2d_partial);
+    const auto automatic_algorithm = add_legal && threshold_axis_tiles.value_or(reduced_tiles) >= add_threshold(dim)
                                          ? ReduceAlgorithm::AccumulateViaAdd
                                          : ReduceAlgorithm::ReduceTile;
     TT_FATAL(
-        !forced_algorithm.has_value() || *forced_algorithm != ReduceAlgorithm::AccumulateViaAdd ||
-            automatic_algorithm == ReduceAlgorithm::AccumulateViaAdd,
+        !forced_algorithm.has_value() || *forced_algorithm != ReduceAlgorithm::AccumulateViaAdd || add_legal,
         "Reduce planner: AccumulateViaAdd was forced for an unsupported tiled reduction");
     plan.algorithm = forced_algorithm.value_or(automatic_algorithm);
     configure_scalar_and_aux(
@@ -470,8 +489,9 @@ ReducePlan make_tiled_plan(
         plan.input_policy = ReduceInputPolicy::NoWaitNoPop;
         plan.chunk = {
             .reduce_axis_tiles = reduced_tiles,
-            .output_tiles =
-                dim == ReduceOpDim::H ? std::min(plan.Wt, destination_tiles(hardware) - (block.tail ? 1U : 0U)) : 1U,
+            .output_tiles = dim == ReduceOpDim::H
+                                ? std::min(work_wt, destination_tiles(hardware) - (has_output_mask(plan) ? 1U : 0U))
+                                : 1U,
             .buffers = 0};
         const auto pages = *block.resident_input_tiles;
         add_requirement(
@@ -497,14 +517,14 @@ ReducePlan make_tiled_plan(
         const auto input_budget = available_for_input(hardware, fixed_owned_bytes, max_input_cb_bytes);
         std::uint32_t output_group = 1;
         if (dim == ReduceOpDim::H) {
-            const uint32_t output_slots = destination_tiles(hardware) - (uses_sfpu || block.tail ? 1U : 0U);
+            const uint32_t output_slots = destination_tiles(hardware) - (uses_sfpu || has_output_mask(plan) ? 1U : 0U);
             TT_FATAL(output_slots > 0, "Reduce planner: H reduction has no DEST output slots");
-            output_group = std::min(plan.Wt, output_slots);
+            output_group = std::min(work_wt, output_slots);
         }
         choose_tiled_chunk(plan, dim, reduced_tiles, output_group, input_tile_bytes, input_budget);
         if (block.tail) {
-            // Runtime extents cannot determine FIFO wrap boundaries. The reader
-            // and compute exchange fixed packets; unused tail pages are skipped.
+            // Reader and compute exchange the planned fixed packets; unused
+            // pages in the final packet are skipped.
             plan.input_policy = ReduceInputPolicy::ChunkedWaitChunkedPop;
         }
 
@@ -611,7 +631,7 @@ ReducePlan make_row_major_plan(
     const ReduceBlockSpec& block,
     ReduceOpMath math,
     ReduceOpDim dim,
-    float scalar,
+    std::optional<float> scalar,
     ReduceFp32Mode fp32_mode,
     const ReduceHardwareConfig& hardware,
     std::optional<std::size_t> max_input_cb_bytes,
@@ -815,19 +835,9 @@ ReducePlan make_row_major_plan(
 
 }  // namespace
 
-std::vector<std::uint32_t> ReducePlan::get_runtime_shape_args(const ReduceValidShape& shape) const {
+std::vector<std::uint32_t> ReducePlan::get_runtime_shape_args() const {
     TT_FATAL(tail.has_value(), "Reduce planner: a static core does not take runtime shape arguments");
-    TT_FATAL(
-        shape.height > 0 && shape.height <= logical_h && shape.width > 0 && shape.width <= logical_w &&
-            shape.batches > 0 && shape.batches <= batches,
-        "Reduce planner: runtime valid shape ({}, {}, {}) must be nonzero and within ({}, {}, {})",
-        shape.height,
-        shape.width,
-        shape.batches,
-        logical_h,
-        logical_w,
-        batches);
-    return {shape.height, shape.width, shape.batches};
+    return {logical_h, logical_w, batches};
 }
 
 const ReduceCbRequirement* ReducePlan::find_cb(ReduceCbRole role) const {
@@ -863,7 +873,7 @@ ReducePlan make_reduce_plan_impl(
     const ReduceBlockSpec& block,
     tt::tt_metal::ReduceOpMath reduce_math,
     tt::tt_metal::ReduceOpDim reduce_dim,
-    float scalar,
+    std::optional<float> scalar,
     ReduceFp32Mode fp32_mode,
     const ReduceHardwareConfig& hardware,
     std::optional<std::size_t> max_input_cb_bytes,
@@ -925,7 +935,7 @@ ReducePlan make_reduce_plan(
     const ReduceBlockSpec& block,
     tt::tt_metal::ReduceOpMath reduce_math,
     tt::tt_metal::ReduceOpDim reduce_dim,
-    float scalar,
+    std::optional<float> scalar,
     ReduceFp32Mode fp32_mode,
     const ReduceHardwareConfig& hardware,
     std::optional<std::size_t> max_input_cb_bytes) {
@@ -981,8 +991,8 @@ bool zero_pair_avoids_an_odd_fold(const ReducePlan& plan, ReduceOpDim dim, bool 
 }
 
 bool try_enable_zero_pair(ReducePlan& plan, const ReduceHardwareConfig& hardware, const ReduceBlockSpec& block) {
-    // Tail parity is a runtime property. The ordinary reload works for either
-    // parity and leaves the last auxiliary tile reserved for the output mask.
+    // Keep the ordinary reload for tail calls, leaving the last auxiliary tile
+    // available for the optional output mask.
     if (plan.tail) {
         return false;
     }
@@ -1038,7 +1048,6 @@ bool try_enable_zero_pair(ReducePlan& plan, const ReduceHardwareConfig& hardware
 
 bool same_auxiliary_tile(const ReduceAuxiliaryTileSpec& lhs, const ReduceAuxiliaryTileSpec& rhs) {
     return lhs.type == rhs.type && lhs.num_valid_elements == rhs.num_valid_elements &&
-           lhs.runtime_extent_arg == rhs.runtime_extent_arg &&
            std::bit_cast<std::uint32_t>(lhs.value) == std::bit_cast<std::uint32_t>(rhs.value);
 }
 
@@ -1139,8 +1148,8 @@ ReduceSequencePlan make_reduce_sequence_plan(
                     config.fp32_mode == first_config.fp32_mode,
                 "Reduce sequence planner: accumulated calls must use the same math, dimension, and fp32 mode");
             TT_FATAL(
-                config.scalar == first_config.scalar || config.reduce_math == ReduceOpMath::AVG,
-                "Reduce sequence planner: non-AVG accumulated calls must use the same scalar");
+                config.scalar == first_config.scalar,
+                "Reduce sequence planner: accumulated calls must all omit scalar or supply the same explicit scalar");
         }
 
         plans.push_back(make_reduce_plan_impl(
@@ -1190,10 +1199,10 @@ ReduceSequencePlan make_reduce_sequence_plan(
 
     const auto output_count = [](const ReducePlan& plan, ReduceOpDim dim) -> std::uint64_t {
         if (dim == ReduceOpDim::W) {
-            return static_cast<std::uint64_t>(plan.Ht) * plan.batches;
+            return static_cast<std::uint64_t>(plan.tail ? div_up_u32(plan.logical_h, 32) : plan.Ht) * plan.batches;
         }
         if (dim == ReduceOpDim::H) {
-            return static_cast<std::uint64_t>(plan.Wt) * plan.batches;
+            return static_cast<std::uint64_t>(plan.tail ? div_up_u32(plan.logical_w, 32) : plan.Wt) * plan.batches;
         }
         return plan.batches;
     };
@@ -1204,20 +1213,15 @@ ReduceSequencePlan make_reduce_sequence_plan(
             "Reduce sequence planner: every accumulated call must produce the same number of output tiles");
     }
 
-    // AVG is normalized once over the union of all reduced tensors. Config.scalar may include an additional
-    // caller multiplier; scalar * local_element_count must agree across calls, then the planner transfers that
-    // multiplier to the grand-total normalization.
-    if (accumulates && first_config.reduce_math == ReduceOpMath::AVG) {
-        TT_FATAL(
-            std::none_of(plans.begin(), plans.end(), [](const auto& plan) { return plan.tail.has_value(); }),
-            "Reduce planner: accumulated runtime-tail AVG needs a runtime union divisor; use SUM with explicit "
-            "normalization after the final call");
+    // Only omitted AVG scalars derive normalization from the combined valid extent.
+    // Explicit scalars have already been lowered unchanged into each plan.
+    if (accumulates && first_config.reduce_math == ReduceOpMath::AVG && !first_config.scalar.has_value()) {
         std::uint64_t grand_reduce_elements = 0;
-        float common_post_multiplier = 0.0F;
         for (std::size_t i = 0; i < reductions.size(); ++i) {
             const auto& config = reductions[i].second;
-            const std::uint64_t height = config.block.logical_h;
-            const std::uint64_t width = config.block.logical_w;
+            const auto shape = valid_shape(config.block);
+            const std::uint64_t height = shape.height;
+            const std::uint64_t width = shape.width;
             const std::uint64_t local_reduce_elements =
                 config.reduce_dim == ReduceOpDim::W ? width
                                                     : (config.reduce_dim == ReduceOpDim::H ? height : height * width);
@@ -1226,32 +1230,22 @@ ReduceSequencePlan make_reduce_sequence_plan(
                     grand_reduce_elements <= std::numeric_limits<std::uint32_t>::max() - local_reduce_elements,
                 "Reduce sequence planner: grand AVG reduction factor exceeds uint32_t");
             grand_reduce_elements += local_reduce_elements;
-
-            const float post_multiplier = config.scalar * static_cast<float>(local_reduce_elements);
-            if (i == 0) {
-                common_post_multiplier = post_multiplier;
-            } else {
-                const float tolerance =
-                    1.0e-5F * std::max({1.0F, std::abs(common_post_multiplier), std::abs(post_multiplier)});
-                TT_FATAL(
-                    std::abs(post_multiplier - common_post_multiplier) <= tolerance,
-                    "Reduce sequence planner: AVG calls must describe the same post-reduction multiplier");
-            }
         }
 
         const auto grand_factor = static_cast<std::uint32_t>(grand_reduce_elements);
-        const float grand_scalar = common_post_multiplier / static_cast<float>(grand_factor);
+        const float grand_scalar = 1.0F / static_cast<float>(grand_factor);
         for (auto& plan : plans) {
             if (plan.algorithm == ReduceAlgorithm::AccumulateViaAdd) {
                 plan.reduce_factor = grand_factor;
-                plan.post_scale = common_post_multiplier;
+                plan.post_scale = 1.0F;
             } else {
                 const float reader_scaler =
                     first_config.reduce_dim == ReduceOpDim::HW ? std::sqrt(grand_scalar) : grand_scalar;
                 plan.reduce_factor = 1;
                 plan.post_scale = 1.0F;
-                for (auto& tile : plan.auxiliary_tiles) {
-                    tile.value = reader_scaler;
+                const auto scaler_tiles = plan.auxiliary_tiles.size() - (has_output_mask(plan) ? 1U : 0U);
+                for (std::size_t i = 0; i < scaler_tiles; ++i) {
+                    plan.auxiliary_tiles[i].value = reader_scaler;
                 }
             }
         }
@@ -1278,8 +1272,8 @@ ReduceSequencePlan make_reduce_sequence_plan(
     for (const auto& plan : plans) {
         auxiliary_tile_offsets.push_back(append_auxiliary_recipe(sequence.auxiliary.tiles, plan.auxiliary_tiles));
     }
-    // The whole aggregate recipe is resident while each call runs. Distinct
-    // runtime shape sources may prevent tiles from being shared across calls.
+    // The whole aggregate recipe is resident while each call runs. Identical
+    // constant recipes can be shared even when calls have different runtime offsets.
     const auto aggregate_aux_bytes = expected_aux ? sequence.auxiliary.tiles.size() * expected_aux->page_size : 0U;
     for (const auto& plan : plans) {
         const auto* call_aux = plan.find_cb(ReduceCbRole::Auxiliary);
@@ -1506,7 +1500,7 @@ ReduceCallArgs::ReduceCallArgs(const ReduceCallPlan& call) {
                       (input->data_format == tt::DataFormat::Float32 && plan.fp32_mode == ReduceFp32Mode::Accurate));
         TT_FATAL(
             (plan.algorithm == ReduceAlgorithm::AccumulateViaAdd || sfpu) &&
-                plan.partial_mode == compute_kernel_lib::ReducePartialMode::None && !plan.tail &&
+                plan.partial_mode == compute_kernel_lib::ReducePartialMode::None && !has_output_mask(plan) &&
                 plan.reload_mode != compute_kernel_lib::AccumulateReloadMode::CopySeedZeroPair,
             "Reduce plan args: this reduction requires auxiliary tiles");
         TT_FATAL(call.auxiliary_tile_offset == 0, "Reduce plan args: an empty auxiliary slice must have offset zero");
@@ -1557,7 +1551,6 @@ ReduceAuxiliaryArgs::ReduceAuxiliaryArgs(const ReduceAuxiliaryPlan& auxiliary) {
     for (const auto& tile : auxiliary.tiles) {
         compile_time_args_.push_back(encode_auxiliary_tile_configuration(tile));
         compile_time_args_.push_back(std::bit_cast<std::uint32_t>(tile.value));
-        compile_time_args_.push_back(tile.runtime_extent_arg.value_or(reduce_plan_args::no_runtime_arg));
     }
 }
 

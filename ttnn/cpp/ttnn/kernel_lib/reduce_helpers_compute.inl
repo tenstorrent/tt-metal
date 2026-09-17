@@ -1142,10 +1142,6 @@ ALWI void reduce(
             ASSERT(accumulate.reload != AccumulateReloadMode::CopySeedZeroPair);
         }
     }
-    static_assert(
-        reduce_type != PoolType::AVG || !(algorithm == ReduceAlgorithm::AccumulateViaAdd || is_sfpu) ||
-            reduce_factor != 1,
-        "PoolType::AVG requires reduce_factor != 1 on AccumulateViaAdd and SFPU reduce paths");
     if constexpr (algorithm == ReduceAlgorithm::AccumulateViaAdd) {
         static_assert(
             reduce_type == PoolType::SUM || reduce_type == PoolType::AVG,
@@ -1758,16 +1754,20 @@ ALWI void reduce(PostReduceOp post_reduce_op) {
         valid_h = get_arg_val<uint32_t>(Call::tail_runtime_arg_offset);
         valid_w = get_arg_val<uint32_t>(Call::tail_runtime_arg_offset + 1);
         const uint32_t batches = get_arg_val<uint32_t>(Call::tail_runtime_arg_offset + 2);
-        ASSERT(valid_h > 0 && valid_h <= Call::logical_h);
-        ASSERT(valid_w > 0 && valid_w <= Call::logical_w);
-        ASSERT(batches > 0 && batches <= Call::batches);
+        // Runtime arguments only transport the exact shape used by the host
+        // to plan scalers, masks, chunks and cross-call normalization.
+        ASSERT(valid_h == Call::logical_h);
+        ASSERT(valid_w == Call::logical_w);
+        ASSERT(batches == Call::batches);
         shape = ReduceInputBlockShape::of((valid_h + 31) / 32, (valid_w + 31) / 32, batches);
         if constexpr (!should_pop(Call::input_policy)) {
             constexpr uint32_t row_pitch = Call::row_stride == 0 ? Call::columns : Call::row_stride;
             layout = ReduceInputMemoryLayout::with_strides(row_pitch, Call::rows * row_pitch);
         }
-        // The final recipe tile masks lanes on the non-reduced edge. Reserve one
-        // DEST slot for it; the planner has already limited H output groups.
+    }
+    if constexpr (Call::has_output_mask) {
+        // The final recipe tile masks the known non-reduced edge. The planner
+        // reserves a DEST slot only when this mask is needed.
         DataflowBuffer(Call::auxiliary_cb_id).wait_front(Call::auxiliary_tile_offset + Call::auxiliary_tile_count);
     }
 
@@ -1776,21 +1776,10 @@ ALWI void reduce(PostReduceOp post_reduce_op) {
             constexpr DataFormat input_format = static_cast<DataFormat>(unpack_src_format[Call::input_cb_id]);
             detail::reduce_post_mul_tile<input_format>(dst_index, Call::post_scale_bits);
         }
-        if constexpr (Call::is_tail && Call::reduce_type == PoolType::AVG) {
-            // Preserve the caller's multiplier while replacing the nominal local
-            // AVG denominator with the runtime reduced extent. SUM scalars stay
-            // caller-owned, including global normalization in fused operations.
-            const float correction = Call::reduce_dim == ReduceDim::REDUCE_ROW
-                                         ? static_cast<float>(Call::logical_w) / valid_w
-                                         : static_cast<float>(Call::logical_h) / valid_h;
-            constexpr DataFormat input_format = static_cast<DataFormat>(unpack_src_format[Call::input_cb_id]);
-            detail::reduce_post_mul_tile<input_format>(dst_index, __builtin_bit_cast(uint32_t, correction));
-        }
         post_reduce_op(dst_index);
-        if constexpr (Call::is_tail) {
+        if constexpr (Call::has_output_mask) {
             const uint32_t outputs_per_batch = Call::reduce_dim == ReduceDim::REDUCE_ROW ? shape.rows : shape.cols;
-            const uint32_t valid_lanes = Call::reduce_dim == ReduceDim::REDUCE_ROW ? valid_h % 32 : valid_w % 32;
-            if (++output_index % outputs_per_batch == 0 && valid_lanes != 0) {
+            if (++output_index % outputs_per_batch == 0) {
                 constexpr uint32_t mask_dst = DEST_AUTO_LIMIT - 1;
                 constexpr uint32_t mask_tile = Call::auxiliary_tile_offset + Call::auxiliary_tile_count - 1;
                 constexpr DataFormat dst_format = DST_ACCUM_MODE ? DataFormat::Float32 : DataFormat::Float16_b;

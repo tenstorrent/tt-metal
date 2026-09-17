@@ -251,12 +251,6 @@ def _logical_input_shape(dim, Ht, Wt, NC, partial_elems):
     return (NC, height, width)
 
 
-def _mean_n(dim, Ht, Wt, partial_elems):
-    if partial_elems:
-        return (reduced_count(dim, Ht, Wt) - 1) * TILE + partial_elems
-    return elements_reduced(dim, Ht, Wt)
-
-
 def _hardware(input_tensor, fp32_dest):
     return _PLANNER.ReduceHardwareConfig(
         arch=input_tensor.device().arch(),
@@ -434,8 +428,6 @@ def create_program_descriptor(
         raise ValueError("reconfiguration policy is selected by the host planner")
 
     fp32_dest = accum == "fp32"
-    local_elements = _mean_n(dim, Ht, Wt, partial_elems)
-    scalar = 1.0 / local_elements
     sequence = _make_sequence_plan(
         input_tensor,
         output_tensor,
@@ -446,7 +438,7 @@ def create_program_descriptor(
         fp32_dest=fp32_dest,
         input_cb_ids=[CB_IN],
         reduce_math=_PLANNER.ReduceMath.AVG,
-        scalar=scalar,
+        scalar=None,
         partial_elems=partial_elems,
         policy=policy,
         row_stride=row_stride,
@@ -512,9 +504,8 @@ def create_accumulate_program_descriptor(
         raise ValueError("acc_unpack_to_dest requires accum='fp32'")
 
     fp32_dest = accum == "fp32"
-    local_elements = _mean_n(dim, Ht, Wt, partial_elems)
     reduce_math = _PLANNER.ReduceMath.AVG if mean else _PLANNER.ReduceMath.SUM
-    scalar = 1.0 / local_elements if mean else 1.0
+    scalar = None if mean else 1.0
     input_cb_ids = _input_cb_ids(num_chunks)
     sequence = _make_sequence_plan(
         input_tensor,

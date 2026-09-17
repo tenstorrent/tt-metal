@@ -107,12 +107,31 @@ needs no scaler, mask or zero tile, the planner returns an empty recipe and no
 CB and its producer kernel when the entire sequence has no auxiliary tiles.
 
 The option defaults to `False` for existing factories that assume an auxiliary
-CB is always present. Required native scalers, partial masks and runtime-tail
+CB is always present. Required native scalers, partial masks and planned tail
 masks remain in the plan with either setting. A later call may introduce an
 accumulation zero tile even when the first call needs no auxiliaries; allocation
 must therefore follow the complete aggregate recipe.
 For uniform allocations across full and tail cores, take the maximum across
 their plans as well; full cores may have empty recipes while tails need masks.
+
+Tail shapes must be supplied to `ReduceTailConfig.shape` as a `ReduceValidShape`
+before calling the planner. The planner validates that exact shape against the
+enclosing `ReduceBlockSpec`, then uses it for algorithm selection, chunk sizes,
+automatic AVG normalization and auxiliary tile extents. Aligned edges need no mask.
+`ReducePlan.get_runtime_shape_args()` returns the already-planned shape for the
+tail compute kernel; changing it requires replanning. Auxiliary kernels need no
+runtime shape: their tile patterns, values and valid extents are all compile-time.
+
+`ReduceCallConfig.scalar` is optional (`None` in Python, `std::nullopt` in C++).
+For AVG, omitting it divides by the exact valid reduction extent, including the
+combined valid extent of accumulated calls. Other operations default to unit
+scaling. Supplying a scalar uses it unchanged: AVG then computes
+`scalar * sum(valid inputs)`, with no additional geometry-based normalization.
+For example, `scalar=1/global_size` gives each core its contribution to a global
+average; the factory arranges the final cross-core sum. Zero and one are explicit
+scales, not requests for automatic normalization. All calls in one accumulated
+sequence must either omit the scalar or supply the same explicit value. Shapes
+always determine masks, regardless of the scalar setting.
 
 Empty calls serialize `NO_CB_ID` and an auxiliary count/offset of zero. An empty
 dataflow descriptor still occupies one header word, so following descriptors

@@ -201,7 +201,7 @@ TEST(ReduceHostPlanner, EmptyAuxiliaryOptionPreservesRequiredScalersAndTailMasks
     ASSERT_EQ(partial.auxiliary_tiles.size(), 1U);
     EXPECT_ANY_THROW(ReduceCallArgs(partial, {0, no_cb_id, 16}));
     block.logical_w = 256;
-    block.tail = ReduceTailConfig{};
+    block.tail = ReduceTailConfig{{17, 255, 1}};
     const auto tail = make_reduce_plan(block, ReduceOpMath::SUM, ReduceOpDim::W, 1.0F, ReduceFp32Mode::Fast, hardware);
     ASSERT_EQ(tail.auxiliary_tiles.size(), 2U);
     EXPECT_EQ(tail.total_owned_l1_bytes, 2U * tt::tile_size(tt::DataFormat::Float16_b));
@@ -262,76 +262,256 @@ TEST(ReduceHostPlanner, DenseEmptyAuxiliaryBudgetAddsZeroOnlyForStagedChunks) {
     EXPECT_LE(chunked.total_owned_l1_bytes, hardware.available_l1_bytes);
 }
 
-TEST(ReduceHostPlanner, TailPlanningReservesRuntimeEdgesForAlignedBlocks) {
+TEST(ReduceHostPlanner, TailPlanningResolvesExactScalersAndMasks) {
     using namespace tt::tt_metal;
     using namespace ttnn::kernel_lib::host;
     namespace args = ttnn::kernel_lib::reduce_plan_args;
     const ReduceHardwareConfig hardware{
         .arch = tt::ARCH::WORMHOLE_B0, .fp32_dest_acc_en = true, .available_l1_bytes = 1U << 20};
     for (const auto dim : {ReduceOpDim::W, ReduceOpDim::H}) {
-        for (const auto math : {ReduceOpMath::SUM, ReduceOpMath::MAX}) {
+        for (const auto algorithm :
+             {compute_kernel_lib::ReduceAlgorithm::ReduceTile, compute_kernel_lib::ReduceAlgorithm::AccumulateViaAdd}) {
             auto block = ReduceBlockSpec::tiled(256, 256, DataType::BFLOAT16, DataType::FLOAT32, 2);
             block.resident_input_tiles = 128;
             block.resident_output_tiles = 16;
-            const auto full = make_reduce_plan(block, math, dim, 1.0F, ReduceFp32Mode::Fast, hardware);
-            block.tail = ReduceTailConfig{.compute_runtime_arg_offset = 5, .auxiliary_runtime_arg_offset = 9};
-            const auto tail = make_reduce_plan(block, math, dim, 1.0F, ReduceFp32Mode::Fast, hardware);
-            const bool add = tail.algorithm == compute_kernel_lib::ReduceAlgorithm::AccumulateViaAdd;
-            EXPECT_EQ(full.partial_mode, compute_kernel_lib::ReducePartialMode::None);
-            EXPECT_EQ(
-                tail.partial_mode,
-                add ? compute_kernel_lib::ReducePartialMode::Mask : compute_kernel_lib::ReducePartialMode::Scaler);
+            const ReduceValidShape shape =
+                dim == ReduceOpDim::W ? ReduceValidShape{65, 135, 1} : ReduceValidShape{135, 65, 1};
+            block.tail = ReduceTailConfig{shape, 5};
+            const ReduceCallConfig config{block, ReduceOpMath::AVG, dim, std::nullopt, ReduceFp32Mode::Fast};
+            const auto sequence = make_reduce_sequence_plan({{0, config}}, {1, 2, 16}, hardware, algorithm);
+            const auto& tail = sequence.calls[0].plan;
+            const bool add = algorithm == compute_kernel_lib::ReduceAlgorithm::AccumulateViaAdd;
             ASSERT_EQ(tail.auxiliary_tiles.size(), add ? 2U : 3U);
             EXPECT_EQ(tail.find_cb(ReduceCbRole::Auxiliary)->page_count, tail.auxiliary_tiles.size());
-            EXPECT_EQ(
-                tail.total_owned_l1_bytes - full.total_owned_l1_bytes,
-                (tail.auxiliary_tiles.size() - full.auxiliary_tiles.size()) * tt::tile_size(tt::DataFormat::Float16_b));
-            const auto& edge = tail.auxiliary_tiles[add ? 0 : 1];
-            EXPECT_EQ(edge.num_valid_elements, 32U);
-            EXPECT_EQ(edge.runtime_extent_arg, dim == ReduceOpDim::W ? 10U : 9U);
-            EXPECT_EQ(tail.auxiliary_tiles.back().runtime_extent_arg, dim == ReduceOpDim::W ? 9U : 10U);
-            if (dim == ReduceOpDim::H) {
-                EXPECT_EQ(tail.chunk.output_tiles, 3U);  // One slot reserved for the output mask.
+            EXPECT_EQ(tail.partial_reduce_axis_elements, 7U);
+            EXPECT_EQ(tail.auxiliary_tiles[add ? 0 : 1].num_valid_elements, 7U);
+            EXPECT_EQ(tail.auxiliary_tiles.back().num_valid_elements, 1U);
+            EXPECT_FLOAT_EQ(tail.auxiliary_tiles.back().value, 1.0F);
+            EXPECT_EQ(tail.chunk.reduce_axis_tiles, 5U);
+            EXPECT_EQ(tail.reduce_factor, add ? 135U : 1U);
+            EXPECT_NEAR(tail.post_scale, 1.0F, 1e-6F);
+            if (!add) {
+                EXPECT_FLOAT_EQ(tail.auxiliary_tiles[0].value, 1.0F / 135);
+                EXPECT_FLOAT_EQ(tail.auxiliary_tiles[1].value, 1.0F / 135);
             }
-            const auto words = ReduceCallArgs(tail, {.input_cb_id = 0, .auxiliary_cb_id = 1, .output_cb_id = 16})
-                                   .get_compile_time_args();
+            const auto words = ReduceCallArgs(tail, {0, 1, 16}).get_compile_time_args();
             EXPECT_EQ(words[static_cast<uint32_t>(args::CallWord::TailRuntimeArgOffset)], 5U);
-            EXPECT_EQ(words[static_cast<uint32_t>(args::CallWord::LogicalHeight)], 256U);
-            EXPECT_EQ(words[static_cast<uint32_t>(args::CallWord::LogicalWidth)], 256U);
-            EXPECT_EQ(tail.get_runtime_shape_args({63, 135, 1}), (std::vector<uint32_t>{63, 135, 1}));
-            EXPECT_ANY_THROW(full.get_runtime_shape_args({63, 135, 1}));
-            EXPECT_ANY_THROW(tail.get_runtime_shape_args({0, 135, 1}));
-            EXPECT_ANY_THROW(tail.get_runtime_shape_args({257, 135, 1}));
-            EXPECT_ANY_THROW(tail.get_runtime_shape_args({63, 257, 1}));
-            EXPECT_ANY_THROW(tail.get_runtime_shape_args({63, 135, 3}));
+            EXPECT_EQ(words[static_cast<uint32_t>(args::CallWord::LogicalHeight)], shape.height);
+            EXPECT_EQ(words[static_cast<uint32_t>(args::CallWord::LogicalWidth)], shape.width);
+            EXPECT_EQ(words[static_cast<uint32_t>(args::CallWord::Batches)], shape.batches);
+            EXPECT_EQ(tail.get_runtime_shape_args(), (std::vector<uint32_t>{shape.height, shape.width, shape.batches}));
+            EXPECT_EQ(sequence.get_auxiliary_compile_time_args().size(), 1U + 2U * tail.auxiliary_tiles.size());
         }
     }
 }
 
-TEST(ReduceHostPlanner, RuntimeAuxiliaryRecipesDistinguishShapeSources) {
+TEST(ReduceHostPlanner, AlignedTailNeedsNoEdgeMasks) {
     using namespace tt::tt_metal;
     using namespace ttnn::kernel_lib::host;
-    namespace args = ttnn::kernel_lib::reduce_plan_args;
     const ReduceHardwareConfig hardware{
+        .arch = tt::ARCH::WORMHOLE_B0, .fp32_dest_acc_en = true, .available_l1_bytes = 1U << 20};
+    auto block = ReduceBlockSpec::tiled(256, 256, DataType::BFLOAT16, DataType::FLOAT32, 2);
+    block.resident_input_tiles = 128;
+    block.resident_output_tiles = 16;
+    block.allow_empty_auxiliary = true;
+    block.tail = ReduceTailConfig{{64, 128, 1}};
+    const auto native =
+        make_reduce_plan(block, ReduceOpMath::MAX, ReduceOpDim::W, 1.0F, ReduceFp32Mode::Fast, hardware);
+    ASSERT_EQ(native.auxiliary_tiles.size(), 1U);
+    EXPECT_EQ(native.partial_mode, compute_kernel_lib::ReducePartialMode::None);
+    const auto add = make_reduce_plan(block, ReduceOpMath::AVG, ReduceOpDim::W, ReduceFp32Mode::Fast, hardware);
+    EXPECT_EQ(add.algorithm, compute_kernel_lib::ReduceAlgorithm::AccumulateViaAdd);
+    EXPECT_EQ(add.reduce_factor, 128U);
+    EXPECT_TRUE(add.auxiliary_tiles.empty());
+    EXPECT_EQ(add.total_owned_l1_bytes, 0U);
+    EXPECT_NO_THROW(ReduceCallArgs(add, {0, no_cb_id, 16}));
+    // Algorithm selection uses the exact tail's work, not its enclosing allocation.
+    block.tail = ReduceTailConfig{{32, 32, 1}};
+    const auto small = make_reduce_plan(block, ReduceOpMath::SUM, ReduceOpDim::W, 1.0F, ReduceFp32Mode::Fast, hardware);
+    EXPECT_EQ(small.algorithm, compute_kernel_lib::ReduceAlgorithm::ReduceTile);
+    EXPECT_EQ(small.chunk.reduce_axis_tiles, 1U);
+}
+
+TEST(ReduceHostPlanner, ExplicitAverageScalarBypassesGeometry) {
+    using namespace tt::tt_metal;
+    using namespace ttnn::kernel_lib::host;
+    const ReduceHardwareConfig hardware{
+        .arch = tt::ARCH::WORMHOLE_B0, .fp32_dest_acc_en = true, .available_l1_bytes = 1U << 20};
+    for (const auto dim : {ReduceOpDim::W, ReduceOpDim::H}) {
+        for (const auto algorithm :
+             {compute_kernel_lib::ReduceAlgorithm::ReduceTile, compute_kernel_lib::ReduceAlgorithm::AccumulateViaAdd}) {
+            auto block = ReduceBlockSpec::tiled(
+                dim == ReduceOpDim::W ? 65 : 256,
+                dim == ReduceOpDim::W ? 256 : 65,
+                DataType::BFLOAT16,
+                DataType::FLOAT32,
+                2);
+            block.resident_input_tiles = 48;
+            block.resident_output_tiles = 6;
+            for (const auto extent : {1U, 41U, 47U, 135U, 256U}) {
+                for (const float scalar : {0.0F, 1.0F, 1.0F / 1024, -0.5F}) {
+                    const ReduceCallConfig full{block, ReduceOpMath::AVG, dim, scalar, ReduceFp32Mode::Fast};
+                    auto tail = full;
+                    tail.block.tail = ReduceTailConfig{
+                        dim == ReduceOpDim::W ? ReduceValidShape{65, extent, 2} : ReduceValidShape{extent, 65, 2}};
+                    for (const bool accumulate : {false, true}) {
+                        const std::vector<ReduceCbConfig> calls =
+                            accumulate ? std::vector<ReduceCbConfig>{{0, full}, {3, tail}}
+                                       : std::vector<ReduceCbConfig>{{0, tail}};
+                        const auto sequence = make_reduce_sequence_plan(calls, {1, 2, 16}, hardware, algorithm);
+                        for (const auto& call : sequence.calls) {
+                            EXPECT_EQ(call.plan.reduce_factor, 1U);
+                            if (algorithm == compute_kernel_lib::ReduceAlgorithm::AccumulateViaAdd) {
+                                EXPECT_EQ(
+                                    std::bit_cast<uint32_t>(call.plan.post_scale), std::bit_cast<uint32_t>(scalar));
+                            } else {
+                                const auto scalers = call.plan.auxiliary_tiles.size() - (call.plan.tail ? 1U : 0U);
+                                for (std::size_t i = 0; i < scalers; ++i) {
+                                    EXPECT_EQ(
+                                        std::bit_cast<uint32_t>(call.plan.auxiliary_tiles[i].value),
+                                        std::bit_cast<uint32_t>(scalar));
+                                }
+                            }
+                        }
+                        EXPECT_FLOAT_EQ(sequence.calls.back().plan.auxiliary_tiles.back().value, 1.0F);
+                    }
+                }
+            }
+        }
+    }
+}
+
+TEST(ReduceHostPlanner, OmittedScalarUsesValidGeometryOnlyForAverage) {
+    using namespace tt::tt_metal;
+    using namespace ttnn::kernel_lib::host;
+    const ReduceHardwareConfig hardware{
+        .arch = tt::ARCH::WORMHOLE_B0, .fp32_dest_acc_en = true, .available_l1_bytes = 1U << 20};
+    const auto block = ReduceBlockSpec::tiled(64, 128, DataType::BFLOAT16, DataType::FLOAT32, 3);
+    for (const auto dim : {ReduceOpDim::W, ReduceOpDim::H, ReduceOpDim::HW}) {
+        const uint32_t extent = dim == ReduceOpDim::W ? 128 : (dim == ReduceOpDim::H ? 64 : 64 * 128);
+        for (const auto math : {ReduceOpMath::AVG, ReduceOpMath::SUM, ReduceOpMath::MAX}) {
+            const ReduceCallConfig config{
+                .block = block, .reduce_math = math, .reduce_dim = dim, .fp32_mode = ReduceFp32Mode::Fast};
+            EXPECT_FALSE(config.scalar.has_value());
+            const auto plan = make_reduce_plan(block, math, dim, ReduceFp32Mode::Fast, hardware);
+            if (plan.algorithm == compute_kernel_lib::ReduceAlgorithm::AccumulateViaAdd) {
+                EXPECT_EQ(plan.reduce_factor, math == ReduceOpMath::AVG ? extent : 1U);
+                EXPECT_FLOAT_EQ(plan.post_scale, 1.0F);
+            } else {
+                const float scale = math == ReduceOpMath::AVG ? 1.0F / extent : 1.0F;
+                EXPECT_FLOAT_EQ(plan.auxiliary_tiles[0].value, dim == ReduceOpDim::HW ? std::sqrt(scale) : scale);
+            }
+        }
+    }
+}
+
+TEST(ReduceHostPlanner, AccumulatedScalarSettingsMustAgree) {
+    using namespace tt::tt_metal;
+    using namespace ttnn::kernel_lib::host;
+    const ReduceHardwareConfig hardware{
+        .arch = tt::ARCH::WORMHOLE_B0, .fp32_dest_acc_en = true, .available_l1_bytes = 1U << 20};
+    const ReduceCallConfig full{
+        ReduceBlockSpec::tiled(32, 256, DataType::BFLOAT16, DataType::FLOAT32),
+        ReduceOpMath::AVG,
+        ReduceOpDim::W,
+        std::nullopt,
+        ReduceFp32Mode::Fast};
+    auto partial = full;
+    partial.block = ReduceBlockSpec::tiled(32, 135, DataType::BFLOAT16, DataType::FLOAT32);
+    const auto automatic = make_reduce_sequence_plan({{0, full}, {3, partial}}, {1, 2, 16}, hardware);
+    EXPECT_EQ(automatic.calls.back().plan.reduce_factor, 256U + 135U);
+    partial.scalar = 1.0F / 1024;
+    EXPECT_ANY_THROW(make_reduce_sequence_plan({{0, full}, {3, partial}}, {1, 2, 16}, hardware));
+    auto explicit_full = full;
+    explicit_full.scalar = partial.scalar;
+    const auto explicit_plan = make_reduce_sequence_plan({{0, explicit_full}, {3, partial}}, {1, 2, 16}, hardware);
+    EXPECT_EQ(explicit_plan.calls.back().plan.reduce_factor, 1U);
+    EXPECT_FLOAT_EQ(explicit_plan.calls.back().plan.post_scale, 1.0F / 1024);
+    partial.scalar = 1.0F / 512;
+    EXPECT_ANY_THROW(make_reduce_sequence_plan({{0, explicit_full}, {3, partial}}, {1, 2, 16}, hardware));
+}
+
+TEST(ReduceHostPlanner, TailShapesAreValidatedBeforePlanning) {
+    using namespace tt::tt_metal;
+    using namespace ttnn::kernel_lib::host;
+    const ReduceHardwareConfig hardware{
+        .arch = tt::ARCH::WORMHOLE_B0, .fp32_dest_acc_en = true, .available_l1_bytes = 1U << 20};
+    auto block = ReduceBlockSpec::tiled(256, 256, DataType::BFLOAT16, DataType::FLOAT32, 2);
+    const auto full = make_reduce_plan(block, ReduceOpMath::SUM, ReduceOpDim::W, 1.0F, ReduceFp32Mode::Fast, hardware);
+    EXPECT_ANY_THROW(full.get_runtime_shape_args());
+    for (const auto shape :
+         {ReduceValidShape{0, 135, 1},
+          ReduceValidShape{257, 135, 1},
+          ReduceValidShape{63, 257, 1},
+          ReduceValidShape{63, 135, 3},
+          ReduceValidShape{63, 135, 0}}) {
+        block.tail = ReduceTailConfig{shape};
+        EXPECT_ANY_THROW(
+            make_reduce_plan(block, ReduceOpMath::SUM, ReduceOpDim::W, 1.0F, ReduceFp32Mode::Fast, hardware));
+    }
+    block.tail = ReduceTailConfig{{63, 135, 1}, std::numeric_limits<uint32_t>::max()};
+    EXPECT_ANY_THROW(make_reduce_plan(block, ReduceOpMath::SUM, ReduceOpDim::W, 1.0F, ReduceFp32Mode::Fast, hardware));
+}
+
+TEST(ReduceHostPlanner, TailAuxiliaryRecipesShareOnlyIdenticalPlannedMasks) {
+    using namespace tt::tt_metal;
+    using namespace ttnn::kernel_lib::host;
+    ReduceHardwareConfig hardware{
         .arch = tt::ARCH::WORMHOLE_B0, .fp32_dest_acc_en = true, .available_l1_bytes = 1U << 20};
     auto block = ReduceBlockSpec::tiled(96, 256, DataType::BFLOAT16, DataType::FLOAT32);
     block.resident_input_tiles = 24;
     block.resident_output_tiles = 3;
-    block.tail = ReduceTailConfig{2, 4};
+    block.tail = ReduceTailConfig{{65, 231, 1}, 2};
     const ReduceCallConfig first{block, ReduceOpMath::SUM, ReduceOpDim::W, 1.0F, ReduceFp32Mode::Fast};
     auto second = first;
-    second.block.tail = ReduceTailConfig{5, 7};
+    second.block.tail = ReduceTailConfig{{65, 233, 1}, 5};
     const auto distinct = make_reduce_sequence_plan({{0, first}, {3, second}}, {1, 2, 16}, hardware);
-    const auto shared = make_reduce_sequence_plan({{0, first}, {3, first}}, {1, 2, 16}, hardware);
     EXPECT_EQ(distinct.auxiliary.tiles.size(), 4U);
     EXPECT_NE(distinct.calls[0].auxiliary_tile_offset, distinct.calls[1].auxiliary_tile_offset);
+    second.block.tail->shape.width = 231;
+    const auto shared = make_reduce_sequence_plan({{0, first}, {3, second}}, {1, 2, 16}, hardware);
     EXPECT_EQ(shared.auxiliary.tiles.size(), 2U);
     EXPECT_EQ(shared.calls[0].auxiliary_tile_offset, shared.calls[1].auxiliary_tile_offset);
-    const auto serialized = distinct.get_auxiliary_compile_time_args();
-    for (uint32_t i = 0; i < distinct.auxiliary.tiles.size(); ++i) {
-        const auto offset = args::auxiliary_tile_word_offset(
-            args::auxiliary_header_word_count, i, args::AuxiliaryTileWord::RuntimeExtentArg);
-        EXPECT_EQ(serialized[offset], distinct.auxiliary.tiles[i].runtime_extent_arg);
+    hardware.available_l1_bytes = 3U * 2048;
+    EXPECT_NO_THROW(make_reduce_sequence_plan({{0, first}, {3, second}}, {1, 2, 16}, hardware));
+    second.block.tail->shape.width = 233;
+    EXPECT_ANY_THROW(make_reduce_sequence_plan({{0, first}, {3, second}}, {1, 2, 16}, hardware));
+}
+
+TEST(ReduceHostPlanner, FullAndTailAverageUsesTheirCombinedValidExtent) {
+    using namespace tt::tt_metal;
+    using namespace ttnn::kernel_lib::host;
+    const ReduceHardwareConfig hardware{
+        .arch = tt::ARCH::WORMHOLE_B0, .fp32_dest_acc_en = true, .available_l1_bytes = 1U << 20};
+    for (const auto dim : {ReduceOpDim::W, ReduceOpDim::H}) {
+        for (const auto algorithm :
+             {compute_kernel_lib::ReduceAlgorithm::ReduceTile, compute_kernel_lib::ReduceAlgorithm::AccumulateViaAdd}) {
+            auto block = ReduceBlockSpec::tiled(
+                dim == ReduceOpDim::W ? 65 : 256,
+                dim == ReduceOpDim::W ? 256 : 65,
+                DataType::BFLOAT16,
+                DataType::FLOAT32,
+                2);
+            block.resident_input_tiles = 48;
+            block.resident_output_tiles = 6;
+            const ReduceCallConfig full{block, ReduceOpMath::AVG, dim, std::nullopt, ReduceFp32Mode::Fast};
+            auto tail = full;
+            tail.block.tail =
+                ReduceTailConfig{dim == ReduceOpDim::W ? ReduceValidShape{65, 135, 2} : ReduceValidShape{135, 65, 2}};
+            const auto sequence = make_reduce_sequence_plan({{0, full}, {3, tail}}, {1, 2, 16}, hardware, algorithm);
+            for (const auto& call : sequence.calls) {
+                if (algorithm == compute_kernel_lib::ReduceAlgorithm::AccumulateViaAdd) {
+                    EXPECT_EQ(call.plan.reduce_factor, 256U + 135U);
+                    EXPECT_FLOAT_EQ(call.plan.post_scale, 1.0F);
+                } else {
+                    EXPECT_FLOAT_EQ(call.plan.auxiliary_tiles[0].value, 1.0F / (256 + 135));
+                }
+            }
+            const auto& tail_plan = sequence.calls.back().plan;
+            EXPECT_EQ(tail_plan.partial_reduce_axis_elements, 7U);
+            EXPECT_FLOAT_EQ(tail_plan.auxiliary_tiles.back().value, 1.0F);
+            EXPECT_EQ(tail_plan.auxiliary_tiles.back().num_valid_elements, 1U);
+        }
     }
 }
 
@@ -345,7 +525,7 @@ TEST(ReduceHostPlanner, TailAuxiliaryTilesParticipateInL1Budget) {
     block.resident_output_tiles = 2;
     const auto full = make_reduce_plan(block, ReduceOpMath::MAX, ReduceOpDim::W, 1.0F, ReduceFp32Mode::Fast, hardware);
     hardware.available_l1_bytes = full.total_owned_l1_bytes;
-    block.tail = ReduceTailConfig{};
+    block.tail = ReduceTailConfig{{63, 63, 1}};
     EXPECT_ANY_THROW(make_reduce_plan(block, ReduceOpMath::MAX, ReduceOpDim::W, 1.0F, ReduceFp32Mode::Fast, hardware));
     hardware.available_l1_bytes *= 3;
     EXPECT_NO_THROW(make_reduce_plan(block, ReduceOpMath::MAX, ReduceOpDim::W, 1.0F, ReduceFp32Mode::Fast, hardware));
@@ -357,7 +537,7 @@ TEST(ReduceHostPlanner, TailPlanningRejectsUnsupportedMaskBackends) {
     const ReduceHardwareConfig hardware{
         .arch = tt::ARCH::WORMHOLE_B0, .fp32_dest_acc_en = true, .available_l1_bytes = 1U << 20};
     auto block = ReduceBlockSpec::tiled(64, 64, DataType::BFLOAT16, DataType::BFLOAT16);
-    block.tail = ReduceTailConfig{};
+    block.tail = ReduceTailConfig{{63, 63, 1}};
     EXPECT_ANY_THROW(make_reduce_plan(block, ReduceOpMath::SUM, ReduceOpDim::HW, 1.0F, ReduceFp32Mode::Fast, hardware));
     block.input_dtype = DataType::FLOAT32;
     EXPECT_ANY_THROW(
@@ -376,7 +556,7 @@ TEST(ReduceHostPlanner, TailStreamsUseFixedPacketsWithinTheirBudget) {
         .arch = tt::ARCH::WORMHOLE_B0, .fp32_dest_acc_en = true, .available_l1_bytes = 1U << 20};
     for (const auto dim : {ReduceOpDim::W, ReduceOpDim::H}) {
         auto block = ReduceBlockSpec::tiled(256, 256, DataType::BFLOAT16, DataType::FLOAT32, 2);
-        block.tail = ReduceTailConfig{};
+        block.tail = ReduceTailConfig{{135, 135, 2}};
         block.resident_output_tiles = 16;
         for (const auto cap : {4U * 2048, 12U * 2048, 256U * 2048}) {
             const auto plan =
@@ -384,7 +564,6 @@ TEST(ReduceHostPlanner, TailStreamsUseFixedPacketsWithinTheirBudget) {
             EXPECT_EQ(plan.input_policy, compute_kernel_lib::ReduceInputPolicy::ChunkedWaitChunkedPop);
             EXPECT_LE(plan.find_cb(ReduceCbRole::Input)->total_size_bytes, cap);
             EXPECT_EQ(plan.find_cb(ReduceCbRole::Input)->page_count, plan.chunk.input_tiles() * plan.chunk.buffers);
-            EXPECT_EQ(plan.find_cb(ReduceCbRole::Auxiliary)->page_count, plan.auxiliary_tiles.size());
         }
     }
 }
@@ -395,7 +574,7 @@ TEST(ReduceHostPlanner, TailFallbackRebudgetsTheLargerNativeRecipe) {
     const ReduceHardwareConfig hardware{
         .arch = tt::ARCH::WORMHOLE_B0, .fp32_dest_acc_en = true, .available_l1_bytes = 4U * 2048};
     auto block = ReduceBlockSpec::tiled(32, 256, DataType::BFLOAT16, DataType::FLOAT32);
-    block.tail = ReduceTailConfig{};
+    block.tail = ReduceTailConfig{{17, 255, 1}};
     block.resident_output_tiles = 1;
     const auto plan = make_reduce_plan(block, ReduceOpMath::SUM, ReduceOpDim::W, 1.0F, ReduceFp32Mode::Fast, hardware);
     EXPECT_EQ(plan.algorithm, compute_kernel_lib::ReduceAlgorithm::ReduceTile);
@@ -403,24 +582,6 @@ TEST(ReduceHostPlanner, TailFallbackRebudgetsTheLargerNativeRecipe) {
     EXPECT_EQ(plan.find_cb(ReduceCbRole::Input)->page_count, 1U);
     EXPECT_EQ(plan.chunk.buffers, 1U);
     EXPECT_EQ(plan.total_owned_l1_bytes, hardware.available_l1_bytes);
-}
-
-TEST(ReduceHostPlanner, TailSequenceBudgetsDistinctRuntimeMasks) {
-    using namespace tt::tt_metal;
-    using namespace ttnn::kernel_lib::host;
-    ReduceHardwareConfig hardware{
-        .arch = tt::ARCH::WORMHOLE_B0, .fp32_dest_acc_en = true, .available_l1_bytes = 3U * 2048};
-    auto block = ReduceBlockSpec::tiled(32, 256, DataType::BFLOAT16, DataType::FLOAT32);
-    block.tail = ReduceTailConfig{};
-    block.resident_input_tiles = 8;
-    block.resident_output_tiles = 1;
-    const ReduceCallConfig first{block, ReduceOpMath::SUM, ReduceOpDim::W, 1.0F, ReduceFp32Mode::Fast};
-    auto second = first;
-    second.block.tail = ReduceTailConfig{3, 3};
-    EXPECT_NO_THROW(make_reduce_sequence_plan({{0, first}, {3, first}}, {1, 2, 16}, hardware));
-    EXPECT_ANY_THROW(make_reduce_sequence_plan({{0, first}, {3, second}}, {1, 2, 16}, hardware));
-    hardware.available_l1_bytes = 4U * 2048;
-    EXPECT_NO_THROW(make_reduce_sequence_plan({{0, first}, {3, second}}, {1, 2, 16}, hardware));
 }
 
 TEST(ReduceHostPlanner, PartialMaxUsesExistingScalerRecipe) {

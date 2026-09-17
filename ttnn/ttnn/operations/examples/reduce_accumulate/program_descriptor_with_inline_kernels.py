@@ -301,7 +301,6 @@ def create_program_descriptor(
                         "col": planner.ReduceDimension.COLUMN,
                         "scalar": planner.ReduceDimension.SCALAR,
                     }[dim],
-                    scalar=1.0 / elements_reduced(dim, num_tiles),
                     fp32_mode=planner.ReduceFp32Mode.FAST,
                     max_input_cb_bytes=num_tiles * ttnn.tile_size(input_tensor.dtype),
                 ),

@@ -7,15 +7,15 @@
 
 // The test stores padded stream packets in resident CB 3. Copy them through the
 // planner-sized input FIFO, exercising real producer/consumer synchronization
-// and repeated wraparound. Both the packet count and masks use the runtime shape.
+// and repeated wraparound. Both packet counts and masks use the exact planned shape.
 void kernel_main() {
     using Auxiliary = ttnn::kernel_lib::ReduceAuxiliaryArgs<1>;
     using Call = ttnn::kernel_lib::ReduceCallArgs<Auxiliary::next_compile_time_args_offset()>;
     static_assert(Call::is_tail);
     dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<Auxiliary>();
-    const uint32_t rows = (get_arg_val<uint32_t>(Call::tail_runtime_arg_offset) + 31) / 32;
-    const uint32_t columns = (get_arg_val<uint32_t>(Call::tail_runtime_arg_offset + 1) + 31) / 32;
-    const uint32_t batches = get_arg_val<uint32_t>(Call::tail_runtime_arg_offset + 2);
+    constexpr uint32_t rows = (Call::logical_h + 31) / 32;
+    constexpr uint32_t columns = (Call::logical_w + 31) / 32;
+    constexpr uint32_t batches = Call::batches;
     constexpr uint32_t axis_chunk = Call::reduce_axis_chunk_tiles;
     constexpr uint32_t output_chunk = Call::output_chunk_tiles;
     constexpr uint32_t packet_tiles = axis_chunk * output_chunk;

@@ -144,8 +144,7 @@ void bind_reduce_planner(nb::module_& mod) {
             nb::arg("num_valid_elements"))
         .def_ro("value", &host::ReduceAuxiliaryTileSpec::value)
         .def_ro("type", &host::ReduceAuxiliaryTileSpec::type)
-        .def_ro("num_valid_elements", &host::ReduceAuxiliaryTileSpec::num_valid_elements)
-        .def_ro("runtime_extent_arg", &host::ReduceAuxiliaryTileSpec::runtime_extent_arg);
+        .def_ro("num_valid_elements", &host::ReduceAuxiliaryTileSpec::num_valid_elements);
 
     nb::class_<host::ReduceAuxiliaryPlan>(planner, "ReduceAuxiliaryPlan")
         .def(nb::init<uint32_t, std::vector<host::ReduceAuxiliaryTileSpec>>(), nb::arg("cb_id"), nb::arg("tiles"))
@@ -182,13 +181,6 @@ void bind_reduce_planner(nb::module_& mod) {
         .def_ro("dst_datum_size", &host::DenseRowMajorPlan::dst_datum_size)
         .def_ro("staging_buffers", &host::DenseRowMajorPlan::staging_buffers);
 
-    nb::class_<host::ReduceTailConfig>(planner, "ReduceTailConfig")
-        .def(
-            nb::init<std::uint32_t, std::uint32_t>(),
-            nb::arg("compute_runtime_arg_offset") = 0,
-            nb::arg("auxiliary_runtime_arg_offset") = 0)
-        .def_rw("compute_runtime_arg_offset", &host::ReduceTailConfig::compute_runtime_arg_offset)
-        .def_rw("auxiliary_runtime_arg_offset", &host::ReduceTailConfig::auxiliary_runtime_arg_offset);
     nb::class_<host::ReduceValidShape>(planner, "ReduceValidShape")
         .def(
             nb::init<std::uint32_t, std::uint32_t, std::uint32_t>(),
@@ -198,6 +190,13 @@ void bind_reduce_planner(nb::module_& mod) {
         .def_rw("height", &host::ReduceValidShape::height)
         .def_rw("width", &host::ReduceValidShape::width)
         .def_rw("batches", &host::ReduceValidShape::batches);
+    nb::class_<host::ReduceTailConfig>(planner, "ReduceTailConfig")
+        .def(
+            nb::init<host::ReduceValidShape, std::uint32_t>(),
+            nb::arg("shape"),
+            nb::arg("compute_runtime_arg_offset") = 0)
+        .def_ro("shape", &host::ReduceTailConfig::shape)
+        .def_ro("compute_runtime_arg_offset", &host::ReduceTailConfig::compute_runtime_arg_offset);
 
     auto py_plan = nb::class_<host::ReducePlan>(planner, "ReducePlan");
     py_plan.def_ro("path", &host::ReducePlan::path)
@@ -216,7 +215,7 @@ void bind_reduce_planner(nb::module_& mod) {
         .def_ro("tail", &host::ReducePlan::tail)
         .def_ro("logical_h", &host::ReducePlan::logical_h)
         .def_ro("logical_w", &host::ReducePlan::logical_w)
-        .def("get_runtime_shape_args", &host::ReducePlan::get_runtime_shape_args, nb::arg("shape"))
+        .def("get_runtime_shape_args", &host::ReducePlan::get_runtime_shape_args)
         .def_ro("input_row_stride_tiles", &host::ReducePlan::input_row_stride_tiles)
         .def_ro("reduce_factor", &host::ReducePlan::reduce_factor)
         .def_ro("post_scale", &host::ReducePlan::post_scale)
@@ -330,7 +329,7 @@ void bind_reduce_planner(nb::module_& mod) {
                host::ReduceBlockSpec block,
                tt::tt_metal::ReduceOpMath reduce_math,
                tt::tt_metal::ReduceOpDim reduce_dim,
-               float scalar,
+               std::optional<float> scalar,
                ReduceFp32Mode fp32_mode,
                std::optional<std::size_t> max_input_cb_bytes) {
                 new (self) host::ReduceCallConfig{
@@ -339,8 +338,8 @@ void bind_reduce_planner(nb::module_& mod) {
             nb::arg("block"),
             nb::arg("reduce_math"),
             nb::arg("reduce_dim"),
-            nb::arg("scalar"),
-            nb::arg("fp32_mode"),
+            nb::arg("scalar") = nb::none(),
+            nb::arg("fp32_mode") = ReduceFp32Mode::Fast,
             nb::arg("max_input_cb_bytes") = nb::none())
         .def_rw("block", &host::ReduceCallConfig::block)
         .def_rw("reduce_math", &host::ReduceCallConfig::reduce_math)
@@ -420,7 +419,7 @@ void bind_reduce_planner(nb::module_& mod) {
             const host::ReduceBlockSpec&,
             tt::tt_metal::ReduceOpMath,
             tt::tt_metal::ReduceOpDim,
-            float,
+            std::optional<float>,
             ReduceFp32Mode,
             const host::ReduceHardwareConfig&,
             std::optional<std::size_t>>(&host::make_reduce_plan),
@@ -431,7 +430,23 @@ void bind_reduce_planner(nb::module_& mod) {
         nb::arg("fp32_mode"),
         nb::arg("hardware"),
         nb::arg("max_input_cb_bytes") = nb::none(),
-        "Plan one reduction without executing it.");
+        "Plan one reduction. An explicit scalar overrides normalization; None derives AVG scaling from geometry.");
+    planner.def(
+        "make_reduce_plan",
+        nb::overload_cast<
+            const host::ReduceBlockSpec&,
+            tt::tt_metal::ReduceOpMath,
+            tt::tt_metal::ReduceOpDim,
+            ReduceFp32Mode,
+            const host::ReduceHardwareConfig&,
+            std::optional<std::size_t>>(&host::make_reduce_plan),
+        nb::arg("block"),
+        nb::arg("reduce_math"),
+        nb::arg("reduce_dim"),
+        nb::arg("fp32_mode"),
+        nb::arg("hardware"),
+        nb::arg("max_input_cb_bytes") = nb::none(),
+        "Plan one reduction with geometry-derived AVG normalization, or unit scaling for other operations.");
     planner.def(
         "make_reduce_sequence_plan",
         nb::overload_cast<

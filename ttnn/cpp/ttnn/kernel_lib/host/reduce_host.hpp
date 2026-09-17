@@ -51,19 +51,19 @@ inline constexpr std::uint32_t no_cb_id = reduce_plan_args::no_cb_id;
 using ReducePath = ttnn::kernel_lib::ReducePath;
 using ReduceAuxiliaryTileType = ttnn::kernel_lib::ReduceAuxiliaryTileType;
 
-// Only kernels assigned to tail cores use these runtime arguments. Offsets are
-// word offsets in the compute and auxiliary-producing kernels, respectively.
-struct ReduceTailConfig {
-    std::uint32_t compute_runtime_arg_offset = 0;
-    std::uint32_t auxiliary_runtime_arg_offset = 0;
-};
-
 // Valid elements in one local block. The leading dimensions are flattened into
 // batches, just as in ReduceBlockSpec. Empty cores should not issue a reduction.
 struct ReduceValidShape {
     std::uint32_t height;
     std::uint32_t width;
     std::uint32_t batches = 1;
+};
+
+// The exact tail shape is required during planning. Compute may receive that
+// same shape in runtime arguments; auxiliary tiles are entirely compile-time.
+struct ReduceTailConfig {
+    ReduceValidShape shape;
+    std::uint32_t compute_runtime_arg_offset = 0;
 };
 
 enum class ReduceCbRole : std::uint8_t {
@@ -110,16 +110,11 @@ struct ReduceCbRequirement {
 };
 
 // One concrete tile for the dataflow-side auxiliary recipe. The planner has
-// already resolved why the tile is needed. A tail edge optionally takes its
-// valid extent from a runtime shape rather than a constant.
+// already resolved its value, pattern and exact valid extent, including tails.
 struct ReduceAuxiliaryTileSpec {
     float value = 0.0F;
     ReduceAuxiliaryTileType type = ReduceAuxiliaryTileType::Zero;
     std::uint32_t num_valid_elements = 0;
-    // When present, read this element extent from the auxiliary kernel's runtime
-    // arguments. num_valid_elements is the tile extent; use the last tile's
-    // remainder, or the whole extent when the runtime dimension is aligned.
-    std::optional<std::uint32_t> runtime_extent_arg;
 };
 
 // The one shared auxiliary CB recipe for a complete planning unit. It carries
@@ -186,9 +181,9 @@ struct ReducePlan {
     std::size_t total_owned_l1_bytes = 0;
 
     const ReduceCbRequirement* find_cb(ReduceCbRole role) const;
-    // Append these three words at the offsets in tail, on tail cores only.
-    // Validates the shape against the planned local bounds before serialization.
-    std::vector<std::uint32_t> get_runtime_shape_args(const ReduceValidShape& shape) const;
+    // Serialize the already-planned [height, width, batches] for tail cores.
+    // Changing a tail shape requires a new plan and compile-time arguments.
+    std::vector<std::uint32_t> get_runtime_shape_args() const;
 };
 
 // The block consumed by one reduce invocation on one core. Shapes are in elements;
@@ -213,10 +208,12 @@ struct ReduceBlockSpec {
     // Absent: the planner sizes the corresponding FIFO/staging allocation.
     std::optional<std::uint32_t> resident_input_tiles;
     std::optional<std::uint32_t> resident_output_tiles;
-    // Absent: entirely static shape. Present: logical extents are upper bounds;
-    // this kernel reads [height, width, batches] at the configured runtime offset.
-    // Resident inputs retain the planned row and batch pitches. FIFO producers
-    // stream valid work in fixed-size packets of chunk.input_tiles() pages,
+    // Absent: reduce the whole logical block. Present: shape gives the exact
+    // valid tail within this block, known before planning. Normalization and
+    // auxiliary tiles use that shape. Compute receives the same shape at the
+    // configured runtime offset. Resident inputs retain this block's row and
+    // batch pitches. FIFO producers stream valid work in fixed-size packets of
+    // chunk.input_tiles() pages,
     // padding the final axis/output group so each packet fits the CB ring.
     std::optional<ReduceTailConfig> tail;
 
@@ -242,7 +239,10 @@ struct ReduceCallConfig {
     ReduceBlockSpec block;
     tt::tt_metal::ReduceOpMath reduce_math;
     tt::tt_metal::ReduceOpDim reduce_dim;
-    float scalar;
+    // Explicit: use this scale unchanged; AVG computes scalar * sum(valid inputs).
+    // Absent: AVG uses 1 / the valid reduction extent (the combined extent for
+    // accumulated calls); other operations use 1. Geometry still determines masks.
+    std::optional<float> scalar = std::nullopt;
     ReduceFp32Mode fp32_mode;
     std::optional<std::size_t> max_input_cb_bytes = std::nullopt;
 };
@@ -332,20 +332,32 @@ private:
 // a tile-aligned reduction axis: callers with partial inputs must identity-pad
 // that axis and describe the padded view. Dense row-major staging already pads
 // its input to the reduction identity before tilizing.
+// scalar follows ReduceCallConfig: an explicit scale overrides AVG normalization.
 ReducePlan make_reduce_plan(
     const ReduceBlockSpec& block,
     tt::tt_metal::ReduceOpMath reduce_math,
     tt::tt_metal::ReduceOpDim reduce_dim,
-    float scalar,
+    std::optional<float> scalar,
     ReduceFp32Mode fp32_mode,
     const ReduceHardwareConfig& hardware,
     std::optional<std::size_t> max_input_cb_bytes = std::nullopt);
+
+inline ReducePlan make_reduce_plan(
+    const ReduceBlockSpec& block,
+    tt::tt_metal::ReduceOpMath reduce_math,
+    tt::tt_metal::ReduceOpDim reduce_dim,
+    ReduceFp32Mode fp32_mode,
+    const ReduceHardwareConfig& hardware,
+    std::optional<std::size_t> max_input_cb_bytes = std::nullopt) {
+    return make_reduce_plan(block, reduce_math, reduce_dim, std::nullopt, fp32_mode, hardware, max_input_cb_bytes);
+}
 
 // Plan a kernel-ordered sequence of reductions whose results are accumulated
 // together. The returned call vector has exactly the same order and length as
 // `reductions`; callers decide when to issue each reduce() call. Input CB IDs
 // need not be unique. An explicit algorithm retains the corresponding
 // accumulation order when a fused operation requires it for numerical accuracy.
+// All calls must either omit scalar or supply the same explicit scalar.
 ReduceSequencePlan make_reduce_sequence_plan(
     const std::vector<ReduceCbConfig>& reductions,
     const ReduceSequenceCbIds& cb_ids,
