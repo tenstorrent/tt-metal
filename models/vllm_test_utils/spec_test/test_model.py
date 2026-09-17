@@ -113,6 +113,12 @@ class DummySpecDecodeModel(DummyNoOpModel):
             hardest. ``0`` accepts none, which is the measurement mode.
     """
 
+    # The explicit decode-input update contract, version 1: this model honors
+    # the four commands independently rather than inferring what to reload
+    # from the shapes it was handed. ``supports_async_decode`` below is only
+    # readable by the plugin for an adapter that declares this.
+    decode_input_update_contract = 1
+
     model_capabilities = {
         **DummyNoOpModel.model_capabilities,
         # The master gate. Everything below it is read only when a launch
@@ -142,14 +148,12 @@ class DummySpecDecodeModel(DummyNoOpModel):
         # is computed from the ``tokens``, ``start_pos`` and
         # ``accepted_counts`` of the step being served.
         #
-        # Note what this does not declare: ``supports_async_decode``, which the
-        # plugin reads first and whose absence makes it disable asynchronous
-        # scheduling for this model. That one requires a split submission and
-        # readback (``read_decode_output``) and resident forward inputs, which
-        # this model does not implement. So a server launch of this model still
-        # decodes synchronously, and this declaration is what the plugin's own
-        # asynchronous speculative tests assert against.
         "supports_async_spec_decode": True,
+        # And the ordinary half, which the plugin reads first: absent, it
+        # disables asynchronous scheduling for the model whatever else is
+        # declared. Backed by ``decode_forward``'s split submission, by
+        # ``read_decode_output``, and by the resident forward inputs below.
+        "supports_async_decode": True,
         # Left at 1 by omission. Any value above 1 selects the block-output
         # rail, which owns the committed width per step and cannot be combined
         # with speculation.
@@ -172,6 +176,19 @@ class DummySpecDecodeModel(DummyNoOpModel):
         # verify, which is also the state a propose arriving before any verify
         # would be caught by.
         self._verify_hidden = None
+        # The resident forward inputs, which back
+        # ``supports_async_decode``: a step submitted before the previous
+        # step's token came back cannot have been handed that token on the
+        # host, so the model holds it. None until the first step reloads.
+        self._resident_tokens = None
+        self._resident_positions = None
+        self._resident_page_table = None
+        # Counters, so a test can assert the commands arrived and the position
+        # advanced once per forward rather than infer either from an output.
+        self._position_advances = 0
+        self._readbacks = 0
+        self._sampling_param_uploads = 0
+        self._sampling_state_resets = 0
         logger.info(
             f"DummySpecDecodeModel: target={self.target} accept_depth="
             f"{'all' if self.accept_depth is None else self.accept_depth} "
@@ -272,14 +289,20 @@ class DummySpecDecodeModel(DummyNoOpModel):
         Verify is not a separate entry point: the runner passes the same
         ``tokens`` and ``start_pos`` a plain decode gets, ``1+K`` wide, plus
         ``num_valid_drafts``, ``accepted_counts`` and ``spec_mode``. Their
-        absence is what makes a step an ordinary decode, and then the base
-        class answers.
+        absence is what makes a step an ordinary decode, and then the resident
+        path below answers.
+
+        ``read_from_device=False`` submits and returns a handle the runner
+        reads later through ``read_decode_output``. There is no device here, so
+        the answer is computed now and held; what is split is the interface,
+        which is what lets a server run this model with asynchronous
+        scheduling at all. Ordering tests belong in the plugin's host suite,
+        where a completion event can be held open; a model with no device
+        cannot hold one honestly.
         """
         spec_mode = kwargs.get("spec_mode")
         if spec_mode is None:
-            if self.target == TARGET_FIXED:
-                return self._plain_fixed(*args, **kwargs)
-            return super().decode_forward(*args, **kwargs)
+            return self._plain_decode(*args, **kwargs)
 
         from vllm_tt_plugin.spec_decode import ACCEPT_MODE_ARGMAX_IDS, VerifyOutput, check_spec_side_tensors
 
@@ -438,13 +461,43 @@ class DummySpecDecodeModel(DummyNoOpModel):
         live = int((committed_positions[:, 0] >= 0).sum())
         return torch.full((rows,), num_drafts if live == 1 else 0, dtype=torch.int32)
 
-    def _plain_fixed(self, *args, **kwargs):
-        """An ordinary decode under the ``fixed`` target.
+    def _plain_decode(self, *args, **kwargs):
+        """An ordinary decode, from whichever inputs the commands make current.
 
-        The base class answers a decode with zero logits, whose argmax is token
-        0 at every step, so an unspeculated run of it emits one token forever
-        and cannot be compared with anything. This follows the same rule the
-        verify follows, which is what makes the two arms comparable.
+        The four update commands decide what this step reads. ``reload_inputs``
+        copies the host's token, position and page table into the resident
+        buffers; ``reload_page_table`` copies the page table alone; neither
+        means the host's copies are stale by design and the resident ones are
+        what this step decodes from. That is the whole content of
+        ``supports_async_decode`` for a model with no device: a step that was
+        submitted before the previous step's token came back cannot have been
+        given that token on the host, so the model has to hold it.
+
+        The token this step chooses is written back into the resident buffer,
+        which is the persistent token feedback the contract asks for, and the
+        resident position advances exactly once per forward.
+        """
+        tokens, positions = self._resident_decode_inputs(*args, **kwargs)
+        rows = tokens.shape[0]
+        if self.target != TARGET_FIXED:
+            # The measurement target: the base class answers with zero logits,
+            # and the resident bookkeeping above is what makes the answer
+            # available asynchronously.
+            answer = super().decode_forward(*args, **kwargs)
+            self._advance_resident(self._first_column(answer, rows, kwargs))
+            return answer
+        answer = self._fixed_plain_answer(tokens, positions, rows, kwargs)
+        self._advance_resident(self._first_column(answer, rows, kwargs))
+        return answer
+
+    def _resident_decode_inputs(self, *args, **kwargs):
+        """Apply this step's update commands and return what it decodes from.
+
+        The commands are commands, not hints: a version-1 adapter must honor
+        each independently and refuse a combination it cannot serve rather
+        than guessing. ``reload_inputs`` already covers page tables, so the
+        legal forward-input modes are everything, page tables only, and
+        nothing.
         """
         tokens = kwargs.get("tokens")
         if tokens is None and args:
@@ -452,7 +505,89 @@ class DummySpecDecodeModel(DummyNoOpModel):
         positions = kwargs.get("start_pos")
         if positions is None and len(args) > 1:
             positions = args[1]
-        rows = tokens.shape[0]
+        reload_inputs = bool(kwargs.get("reload_inputs", True))
+        reload_page_table = bool(kwargs.get("reload_page_table", False))
+        reset_sampling_state = bool(kwargs.get("reset_sampling_state", False))
+        if reload_inputs and reload_page_table:
+            raise ValueError(
+                "DummySpecDecodeModel was told to reload every forward input "
+                "and, separately, only the page table; reload_inputs already "
+                "covers page tables, so the two are not a legal combination"
+            )
+        if reset_sampling_state and not reload_inputs:
+            raise ValueError(
+                "DummySpecDecodeModel was told to rebuild its sampling state "
+                "without reloading forward inputs; a sampler aligns its seed "
+                "counters from host positions, which are only authoritative "
+                "on a step that reloads them"
+            )
+        if kwargs.get("reload_sampling_params"):
+            # Nothing to upload: this model samples by arithmetic and holds no
+            # temperature, top-k or seed state. Recorded so a test can see the
+            # command arrived rather than infer it from behaviour.
+            self._sampling_param_uploads += 1
+        if reset_sampling_state:
+            self._sampling_state_resets += 1
+        if reload_inputs:
+            self._resident_tokens = tokens.clone()
+            self._resident_positions = positions.clone()
+            self._resident_page_table = kwargs.get("page_table")
+        elif reload_page_table:
+            self._resident_page_table = kwargs.get("page_table")
+        if self._resident_tokens is None:
+            raise ValueError(
+                "DummySpecDecodeModel was asked to decode from resident "
+                "inputs before any step reloaded them; the first decode of a "
+                "chain reloads, and every reset starts a new chain"
+            )
+        return self._resident_tokens, self._resident_positions
+
+    def _first_column(self, answer, rows, kwargs):
+        """The token this step chose, whichever way it was asked to answer."""
+        if kwargs.get("sampling_params") is not None:
+            return answer.reshape(rows)[:rows].to(torch.int64)
+        return answer.reshape(rows, 1, -1).argmax(dim=-1).reshape(rows).to(torch.int64)
+
+    def _advance_resident(self, chosen):
+        """Feed the chosen token back and advance the position once.
+
+        This is what a resident decode means: the next step's input is what
+        this step produced, held here rather than sent down from the host,
+        because the host does not have it yet when that step is submitted.
+        """
+        rows = int(self._resident_tokens.shape[0])
+        self._resident_tokens = chosen.reshape(rows, *([1] * (self._resident_tokens.dim() - 1))).to(
+            self._resident_tokens.dtype
+        )
+        self._resident_positions = self._resident_positions + 1
+        self._position_advances += 1
+
+    def read_decode_output(self, tt_out, async_read: bool = False):
+        """Read back a submitted decode.
+
+        Split from submission, which is the first thing
+        ``supports_async_decode`` asks for, and the reason a server can run
+        this model with asynchronous scheduling. It samples nothing, advances
+        no position and mutates no decode state: the answer was produced by
+        the forward and is handed over unchanged.
+
+        No completion events, because there is no device to signal one. The
+        plugin's ``finalize_decode`` waits on each event it is given and an
+        empty list is therefore already complete, which is the truthful
+        description of a model whose forward runs on the host.
+        """
+        del async_read
+        self._readbacks += 1
+        return tt_out, []
+
+    def _fixed_plain_answer(self, tokens, positions, rows, kwargs):
+        """An ordinary decode under the ``fixed`` target.
+
+        The base class answers a decode with zero logits, whose argmax is token
+        0 at every step, so an unspeculated run of it emits one token forever
+        and cannot be compared with anything. This follows the same rule the
+        verify follows, which is what makes the two arms comparable.
+        """
         choice = self._fixed_choice(tokens.reshape(rows, -1)[:, :1], positions.reshape(rows, -1)[:, :1])
         if kwargs.get("sampling_params") is not None:
             # Device sampling asks for ids rather than logits.

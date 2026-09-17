@@ -627,3 +627,196 @@ def test_an_unknown_draft_policy_is_refused(monkeypatch, expect_error):
 
     with expect_error(ValueError, "TT_SPEC_DRAFT_POLICY"):
         DummySpecDecodeModel(mesh_device=None, max_batch_size=8, vocab_size=VOCAB)
+
+
+# The resident forward inputs behind `supports_async_decode`. A step submitted
+# before the previous step's token came back cannot have been handed that token
+# on the host, so the model holds it; these tests drive the commands that say
+# when the host's copy is authoritative and when it is stale.
+
+
+def _decode(model, tokens, positions, **commands):
+    call = {
+        "tokens": tokens,
+        "start_pos": positions,
+        "page_table": commands.pop("page_table", None),
+        "reload_inputs": True,
+        "reload_page_table": False,
+        "reload_sampling_params": False,
+        "reset_sampling_state": False,
+    }
+    call.update(commands)
+    return model.decode_forward(**call)
+
+
+def _ids(answer, rows):
+    return answer.reshape(rows, 1, -1).argmax(dim=-1).reshape(rows).tolist()
+
+
+def test_a_reloading_step_decodes_from_the_host_inputs(monkeypatch):
+    """`reload_inputs` makes the host's token and position authoritative."""
+    model = _fixed_model(monkeypatch)
+    tokens = torch.tensor([[100]], dtype=torch.int32)
+    positions = torch.tensor([5], dtype=torch.int32)
+
+    answer = _decode(model, tokens, positions)
+
+    assert _ids(answer, 1) == [int(model._fixed_choice(tokens, positions.reshape(1, 1))[0, 0])]
+
+
+def test_a_resident_step_ignores_the_host_inputs(monkeypatch):
+    """The contract's host-input authority rule, which is the whole point.
+
+    With `reload_inputs` false the host's copies are stale by design: the token
+    this step decodes from is the one the previous step chose, which the host
+    had not seen when this step was submitted. A model reading the host's
+    tokens there would decode from a token one step behind and nothing would
+    report it.
+    """
+    model = _fixed_model(monkeypatch)
+    first = _decode(model, torch.tensor([[100]], dtype=torch.int32), torch.tensor([5], dtype=torch.int32))
+    chosen = _ids(first, 1)[0]
+
+    # Deliberately wrong host inputs: a model honoring the command never reads
+    # them, and one that reads them answers for token 999 at position 0.
+    answer = _decode(
+        model,
+        torch.tensor([[999]], dtype=torch.int32),
+        torch.tensor([0], dtype=torch.int32),
+        reload_inputs=False,
+    )
+
+    expected = int(model._fixed_choice(torch.tensor([[chosen]]), torch.tensor([[6]]))[0, 0])
+    assert _ids(answer, 1) == [expected]
+
+
+def test_each_forward_advances_the_resident_position_once(monkeypatch):
+    """Once per forward, and not once per readback.
+
+    The position is what the next step decodes at, so a double advance skips a
+    position and a missing one repeats it, and neither shows up in a single
+    step's output.
+    """
+    model = _fixed_model(monkeypatch)
+    _decode(model, torch.tensor([[100]], dtype=torch.int32), torch.tensor([5], dtype=torch.int32))
+    assert model._position_advances == 1
+    assert int(model._resident_positions[0]) == 6
+
+    out = _decode(
+        model,
+        torch.tensor([[0]], dtype=torch.int32),
+        torch.tensor([0], dtype=torch.int32),
+        reload_inputs=False,
+    )
+    model.read_decode_output(out, async_read=True)
+    model.read_decode_output(out, async_read=True)
+
+    assert model._position_advances == 2
+    assert int(model._resident_positions[0]) == 7
+
+
+def test_the_readback_is_split_from_the_submission(monkeypatch):
+    """What `supports_async_decode` asks for first, and all it asks here.
+
+    The readback hands over what the forward produced, samples nothing and
+    advances nothing. It returns no completion events: there is no device to
+    signal one, and the plugin treats an empty list as already complete, which
+    is the truthful description of a forward that ran on the host.
+    """
+    model = _fixed_model(monkeypatch)
+    submitted = _decode(
+        model,
+        torch.tensor([[100]], dtype=torch.int32),
+        torch.tensor([5], dtype=torch.int32),
+        read_from_device=False,
+    )
+    advances = model._position_advances
+
+    read, events = model.read_decode_output(submitted, async_read=True)
+
+    assert events == []
+    assert torch.equal(read, submitted)
+    assert model._position_advances == advances
+
+
+def test_a_page_table_only_refresh_leaves_the_tokens_resident(monkeypatch):
+    """The middle mode: new page tables, same resident token and position."""
+    model = _fixed_model(monkeypatch)
+    _decode(
+        model,
+        torch.tensor([[100]], dtype=torch.int32),
+        torch.tensor([5], dtype=torch.int32),
+        page_table=torch.tensor([[0]], dtype=torch.int32),
+    )
+    resident = model._resident_tokens.clone()
+
+    _decode(
+        model,
+        torch.tensor([[999]], dtype=torch.int32),
+        torch.tensor([0], dtype=torch.int32),
+        reload_inputs=False,
+        reload_page_table=True,
+        page_table=torch.tensor([[7]], dtype=torch.int32),
+    )
+
+    assert int(model._resident_page_table[0, 0]) == 7
+    # The token this step decoded from was the previous step's choice, not the
+    # host's 999, and the page-table refresh did not disturb it.
+    assert not torch.equal(model._resident_tokens, torch.tensor([[999]], dtype=torch.int32))
+    assert not torch.equal(model._resident_tokens, resident)
+
+
+def test_reloading_everything_and_the_page_table_alone_is_refused(monkeypatch, expect_error):
+    """Commands, not hints: an illegal combination raises rather than guessing."""
+    model = _fixed_model(monkeypatch)
+
+    with expect_error(ValueError, "not a legal combination"):
+        _decode(
+            model,
+            torch.tensor([[100]], dtype=torch.int32),
+            torch.tensor([5], dtype=torch.int32),
+            reload_page_table=True,
+        )
+
+
+def test_resetting_sampling_state_without_reloading_inputs_is_refused(monkeypatch, expect_error):
+    """A sampler aligns its seed counters from authoritative host positions."""
+    model = _fixed_model(monkeypatch)
+
+    with expect_error(ValueError, "only authoritative"):
+        _decode(
+            model,
+            torch.tensor([[100]], dtype=torch.int32),
+            torch.tensor([5], dtype=torch.int32),
+            reload_inputs=False,
+            reset_sampling_state=True,
+        )
+
+
+def test_decoding_from_resident_inputs_before_any_reload_is_refused(monkeypatch, expect_error):
+    """The first decode of a chain reloads; nothing else can be resident yet."""
+    model = _fixed_model(monkeypatch)
+
+    with expect_error(ValueError, "before any step reloaded them"):
+        _decode(
+            model,
+            torch.tensor([[100]], dtype=torch.int32),
+            torch.tensor([5], dtype=torch.int32),
+            reload_inputs=False,
+        )
+
+
+def test_the_sampling_commands_are_recorded_when_they_arrive(monkeypatch):
+    """Nothing to upload here, and the command still has to be honored."""
+    model = _fixed_model(monkeypatch)
+
+    _decode(
+        model,
+        torch.tensor([[100]], dtype=torch.int32),
+        torch.tensor([5], dtype=torch.int32),
+        reload_sampling_params=True,
+        reset_sampling_state=True,
+    )
+
+    assert model._sampling_param_uploads == 1
+    assert model._sampling_state_resets == 1
