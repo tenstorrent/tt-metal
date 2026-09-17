@@ -587,6 +587,7 @@ def test_every_enrolled_op_resolves_to_the_budget_it_declares_on_float32():
             assert contract.metric is Metric.ULP, op.name
             assert contract.max_ulp == expected, op.name
 
+
 def test_every_enrolled_op_resolves_to_something_usable_on_a_float_format():
     """Through ``_every_variant``, not a hand-rolled loop with ``input_format`` unset.
 

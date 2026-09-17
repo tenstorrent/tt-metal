@@ -575,25 +575,43 @@ def measure_cell(
     # shrinks -- dropping lanes can only lower the max error, which lowers the atol, which
     # lowers the cut -- so this terminates, and the iteration cap is belt and braces.
     absolute_error = (hardware.to(torch.float64) - golden.to(torch.float64)).abs()
-    finite_golden = golden[torch.isfinite(golden)]
-    dynamic_range = float(finite_golden.abs().max()) if finite_golden.numel() else 0.0
+    # In float32, the way the gate compares them (helpers.ulp hoists the same value):
+    # both cuts are Python floats, so comparing against a 16-bit `golden.abs()` would
+    # promote them onto that lattice and round each edge, and the emitter has to model the
+    # split the gate performs rather than a neighbouring one.
+    magnitude = golden.abs().to(torch.float32)
+    finite_golden = magnitude[torch.isfinite(golden)]
+    dynamic_range = float(finite_golden.max()) if finite_golden.numel() else 0.0
     if dynamic_range > 0:
-        within_relative = golden.abs() < near_zero_fraction * dynamic_range
+        within_relative = magnitude < near_zero_fraction * dynamic_range
     else:
         within_relative = torch.ones_like(measurable)
 
     near_zero = within_relative
-    for _ in range(64):
+    # Until the mask stabilises, not for a fixed number of rounds. The set shrinks
+    # monotonically -- dropping lanes can only lower the max error, which lowers the atol,
+    # which lowers the cut, and `narrowed` is always a subset of the current mask -- so it
+    # reaches a fixed point in at most one round per lane. A 64-round cap was wrong for a
+    # cell with more than 64 progressively shrinking error levels, where the mask can lose
+    # a single lane per round: exiting at the cap left the emitted budget derived from a
+    # split the gate would not reproduce, which is exactly the contract-fails-on-its-own-
+    # rows defect this modelling exists to prevent.
+    for _ in range(int(golden.numel()) + 1):
         selected = measurable & near_zero
         if not bool(selected.any()):
             break
         atol = float(absolute_error[selected].max()) * headroom
         if atol <= 0:
             break
-        narrowed = within_relative & (golden.abs() <= atol / near_zero_fraction)
+        narrowed = within_relative & (magnitude <= atol / near_zero_fraction)
         if bool(torch.equal(narrowed, near_zero)):
             break
         near_zero = narrowed
+    else:  # pragma: no cover - the monotone shrink makes this unreachable
+        raise AssertionError(
+            "near-zero split did not converge in one round per lane; the mask is not "
+            "shrinking monotonically, which breaks the termination argument above"
+        )
 
     bulk = measurable & ~near_zero
     edge = measurable & near_zero
@@ -787,7 +805,13 @@ class EmittedKey:
             f"near_zero_atol={self.near_zero_atol!r})"
         )
 
-    def comment(self, arch: str, stamp: str, percentile: float) -> str:
+    def comment(
+        self,
+        arch: str,
+        stamp: str,
+        percentile: float,
+        headroom: float = DEFAULT_HEADROOM,
+    ) -> str:
         points = sum(c.points for c in self.cells)
         floored = self.near_zero_atol is not None
         worst = max((c.max_ulp if floored else c.all_max_ulp) for c in self.cells)
@@ -833,14 +857,30 @@ class EmittedKey:
                     f"({points} pts, {stamp})"
                 )
             # Report against the bound that actually rejected it: the point past which a
-            # budget stops being tighter than the tolerance it replaces.
+            # budget stops being tighter than the tolerance it replaces -- and against the
+            # *value* that crossed it, which is the headroom-adjusted budget rather than
+            # the measured maximum printed above. The two differ whenever the percentile
+            # term wins, so attributing the refusal to `worst` produced lines that were
+            # numerically false: Exp read "max 393216 ULP ... past the 419430-step point".
             worst_format = max(
                 (c.output_format for c in self.cells),
                 key=lambda f: MAX_MEANINGFUL_ULP[ulp_dtype(f)],
             )
+            rejected = max(
+                (
+                    c._budget(
+                        c.max_ulp if floored else c.all_max_ulp,
+                        c.percentile_ulp if floored else c.all_percentile_ulp,
+                        headroom,
+                    )
+                    for c in self.cells
+                ),
+                default=worst,
+            )
             notes.append(
-                f"past the {usable_budget_ceiling(worst_format):.0f}-step point where a "
-                "budget stops being tighter than the tolerance it replaces, so tolerance"
+                f"budget would be {rejected}, past the "
+                f"{usable_budget_ceiling(worst_format):.0f}-step point where a budget "
+                "stops being tighter than the tolerance it replaces, so tolerance"
             )
         if self.budget == MIN_MEASURED_BUDGET and worst == 0:
             notes.append(
@@ -983,15 +1023,21 @@ def render(
 
     lines: List[str] = []
     for op in sorted(by_op, key=lambda o: o.name):
-        lines.append(f"    MathOperation.{op.name}: {{")
+        # budget_table(), not a dict literal: BudgetKey is frozen, so two identical keys
+        # in a literal are equal and Python silently keeps the later contract -- which
+        # left validate_registry() looking at an already-deduplicated table and the
+        # tie-raise in resolve_contract unable to fire. The emitter cannot currently
+        # produce a duplicate, since _collapse groups by key, but a hand-edit of generated
+        # text can, and that is the edit this whole file exists to make safe.
+        lines.append(f"    MathOperation.{op.name}: budget_table(")
         per_input = by_op[op]
         for input_format in FORMAT_ORDER:
             if input_format not in per_input:
                 continue
             for key in _collapse(per_input[input_format], headroom, input_format):
-                lines.append(f"    {key.comment(arch, stamp, percentile)}")
-                lines.append(f"        {key.key_source()}: {key.contract_source()},")
-        lines.append("    },")
+                lines.append(f"    {key.comment(arch, stamp, percentile, headroom)}")
+                lines.append(f"        ({key.key_source()}, {key.contract_source()}),")
+        lines.append("    ),")
     return "\n".join(lines)
 
 
@@ -1128,7 +1174,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     skipped = render_skipped(measurements)
     if skipped:
         print("#")
-        print("# Cells with a non-finite disagreement, deliberately given no budget:")
+        print("# Cells deliberately given no budget; each line says why:")
         for line in skipped:
             print(line)
     print()

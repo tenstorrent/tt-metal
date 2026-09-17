@@ -45,6 +45,7 @@ from helpers.sfpu_accuracy_budget import (
     AccuracyContract,
     BudgetKey,
     Metric,
+    budget_table,
 )
 from helpers.ulp import MAX_MEANINGFUL_ULP, ulp_dtype
 
@@ -708,9 +709,14 @@ def test_render_output_parses_as_python_and_rebuilds_the_contracts():
         "AccuracyContract": AccuracyContract,
         "DEFAULT": DEFAULT,
         "Metric": Metric,
+        # The emitter calls budget_table() rather than writing a dict literal, so the
+        # generated entries get the duplicate-key refusal too. Evaluating the real one
+        # here means this test would fail if the emitter ever produced a repeat.
+        "budget_table": budget_table,
     }
     table = eval("{" + text + "}", namespace)  # noqa: S307 - generated, not user input
     assert MathOperation.Tanh in table
+    assert "budget_table(" in text, "generated tables must go through the guard"
     for key, contract in table[MathOperation.Tanh].items():
         assert isinstance(key, BudgetKey)
         assert isinstance(contract, AccuracyContract)
