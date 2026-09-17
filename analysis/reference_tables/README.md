@@ -9,7 +9,7 @@ produced it.
 | File | Rows | What it holds |
 |---|---|---|
 | `targets_table.csv` | 142 | Every device wall of the campaign: configuration, measured cycles and microseconds, core count, the run tag it came from. The widest table, and the one to diff a rerun against. |
-| `refit_r2_walls.csv` | 110 | The same walls priced by the model, with signed error per wall and the fit / prediction / hold-out set each belongs to. Includes the 2026-09-16 MLA decode slice and cores-per-group sweeps. |
+| `refit_r2_walls.csv` | 115 | The same walls priced by the model, with signed error per wall and the fit / prediction / hold-out set each belongs to. Includes the 2026-09-16 MLA decode slice and cores-per-group sweeps, the MLA prefill head-count pair and the three smaller-grid walls. |
 | `floor_verification_configs.csv` | 20 | Perf counter readings (FPU, SFPU, MATH) per configuration on the unmodified kernel, per-core mean and wall-setting core. |
 | `model_components_grid1.csv` | 14 | Measured wall against the model's named wall terms, per configuration. |
 | `topk_counters.csv` | 1485 | Perf counter busy fractions per top-k cell and counter (10 cells, 155 counters), each divided by its own reference count on the same core. Reduced by `analysis/topk_counters_reduce.py`, which also recovers the cells from the run host ID order because a multipass capture emits no ops report. |

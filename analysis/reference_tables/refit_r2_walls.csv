@@ -1,4 +1,4 @@
-# PROVENANCE: every wall of the 2026-09-12 campaign plus the 2026-09-16 R1h MLA decode slice sweep and R1i cores-per-group sweep (p100a, fw 19.9.0, tt-metal 72620d5 kernels; R1e rows on the fresh build f3fbc8984f0, R1h rows on the harness build 5728c5a9b6d, R1i rows on 0394f41ee7f) priced by ttsim/perf/roofline_sdpa.py of branch mvlahovic/roofline_model_sdpa; measured = zones-off device wall (mean of invocations 1 and 2) or DEVICE KERNEL DURATION median for decode; model/refit_r2_fit.py
+# PROVENANCE: every wall of the 2026-09-12 campaign plus the 2026-09-16 sweeps R1h (MLA decode slices), R1i (cores per group), R1J2 (MLA prefill head count) and GRIDR (smaller grids) (p100a, fw 19.9.0, tt-metal 72620d5 kernels; R1e rows on the fresh build f3fbc8984f0, R1h rows on the harness build 5728c5a9b6d) priced by ttsim/perf/roofline_sdpa.py of branch mvlahovic/roofline_model_sdpa; measured = zones-off device wall (mean of invocations 1 and 2) or DEVICE KERNEL DURATION median for decode; model/refit_r2_fit.py
 kind,label,regime,block,set,measured_cycles,model_cycles,err_pct,steps_wall_core,flags
 prefill,causal q128 k128 (anchor),causal,T2.1,fit,2562642,2562633,-0.0,165.0,
 prefill,causal q128 k256,causal,T2.1,pred,2596634.5,2640200,1.68,85.0,
@@ -23,7 +23,7 @@ prefill,causal S1024,causal,T2.3,pred,258568,252465,-2.36,18.0,
 prefill,causal S16384,causal,T2.3,pred,38629694,38453830,-0.46,2451.0,
 prefill,windowed S8192 W1024,windowed,T2.3,fit,1411340,1345595,-4.66,90.0,regime_windowed;stream_residual_fit
 prefill,chunked start4096 Sq2048,chunked,T2.3,fit,2026025,2053983,1.38,162.0,regime_chunked;stream_residual_fit
-prefill,MLA nh16 S2048,mla,T2.3,fit,9574958,9407062,-1.75,85.0,stream_residual_fit
+prefill,MLA nh16 S2048,mla,T2.3,fit,9574958,9591457,0.17,85.0,stream_residual_fit
 prefill,cross 2048/8192,cross,T2.3,pred,1649702,1711700,3.76,192.0,regime_cross
 prefill,masked S8192 d0.25,masked,T2.3,pred,7717703,7748948,0.4,640.0,regime_masked;wall_only_fit
 prefill,causal S2048,causal,R1a,pred,754364,755090,0.1,51.0,
@@ -40,9 +40,14 @@ prefill,masked S8192 d0.5,masked,R1a,fit,7725170,7748948,0.31,640.0,regime_maske
 prefill,chunked start2048 Sq2048,chunked,R1a,fit,1241686,1243679,0.16,98.0,regime_chunked;stream_residual_fit
 prefill,chunked start4096 Sq1024,chunked,R1a,fit,686071,659998,-3.8,73.0,regime_chunked;stream_residual_fit
 prefill,chunked start8192 Sq2048,chunked,R1a,fit,3593322,3674592,2.26,290.0,regime_chunked;stream_residual_fit
-prefill,MLA nh16 S1024,mla,R1a,fit,2640221,2821624,6.87,27.0,stream_residual_fit
-prefill,MLA nh16 S4096,mla,R1a,fit,37137796,36358531,-2.1,330.0,stream_residual_fit
-prefill,MLA nh32 S2048,mla,R1a,fit,19315356,18731558,-3.02,170.0,stream_residual_fit
+prefill,MLA nh16 S1024,mla,R1a,fit,2640221,2757247,4.43,27.0,stream_residual_fit
+prefill,MLA nh16 S4096,mla,R1a,fit,37137796,36620199,-1.39,330.0,stream_residual_fit
+prefill,MLA nh32 S2048,mla,R1a,fit,19315356,18866357,-2.32,170.0,stream_residual_fit
+prefill,MLA nh48 S2048,mla,R1J2,fit,28633519,27358867,-4.45,238.0,stream_residual_fit
+prefill,MLA nh64 S2048,mla,R1J2,fit,38149720,36907888,-3.26,323.0,stream_residual_fit
+prefill,causal 48 cores,causal,GRIDR,fit,3216878,3242812,0.81,363.0,off_calibration_cores
+prefill,causal 32 cores,causal,GRIDR,fit,4665358,4665381,0.0,528.0,off_calibration_cores
+prefill,causal 16 cores,causal,GRIDR,fit,9321734,9321729,-0.0,1056.0,off_calibration_cores
 prefill,sparse T8192 TOPK1024,sparse,R1a,fit,8603386,8603761,0.0,152,regime_sparse;wall_only_fit
 prefill,sparse T8192 TOPK2048,sparse,R1a,fit,16081570,16127532,0.29,304,regime_sparse;wall_only_fit
 prefill,sparse T16384 TOPK2048,sparse,R1a,fit,16172522,16127532,-0.28,304,regime_sparse;wall_only_fit
