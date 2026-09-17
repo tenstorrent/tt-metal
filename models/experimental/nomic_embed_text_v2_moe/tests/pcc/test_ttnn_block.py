@@ -59,16 +59,27 @@ def build(device, config, tt_config, state_dict, layer, moe):
     return reference, TtNomicBertBlock(device, config, tt_config, state_dict, prefix, moe=moe)
 
 
-def routing_agreement(config, reference, tt_block, x, x_tt, moe):
-    """(B, S) bool mask of tokens both sides routed alike, or all True on a dense layer."""
+def routing_agreement(config, reference, tt_block, x, x_tt, moe, rot_mats, attn_mask=None, ref_mask=None):
+    """(B, S) bool mask of tokens both sides routed alike, or all True on a dense layer.
+
+    The router is probed on the tensor the MoE actually receives, which is norm1(attn(x) + x) and
+    not the block input: routing on the block input describes a decision the model never makes,
+    and a mask built from it would let genuine reroutes into the PCC comparison while excluding
+    tokens that never moved. Both sides are stepped through their own first half to get there.
+    """
     batch, seqlen, _ = x.shape
     if not moe:
         return torch.ones(batch, seqlen, dtype=torch.bool)
 
-    _, _, indices = tt_block.mlp.router.select(flatten_tokens(x_tt))
+    tt_attn = tt_block.attn(x_tt, rot_mats, attn_mask)
+    tt_hidden = tt_block._norm(tt_attn, x_tt, tt_block.norm1_weight, tt_block.norm1_bias)
+    _, _, indices = tt_block.mlp.router.select(flatten_tokens(tt_hidden))
     selected = ttnn.to_torch(indices).long().reshape(batch * seqlen, config.moe_top_k)
+
     with torch.no_grad():
-        _, _, ref_indices = reference.mlp.router(x)
+        ref_hidden = reference.norm1(reference.attn(x, attention_mask=ref_mask) + x)
+        _, _, ref_indices = reference.mlp.router(ref_hidden)
+
     agreeing = torch.tensor(
         [set(selected[token].tolist()) == set(ref_indices[token].tolist()) for token in range(batch * seqlen)]
     )
@@ -83,12 +94,14 @@ def test_block(device, config, tt_config, state_dict, layer, moe, batch, seqlen)
     x = hidden_states(batch, seqlen, config.hidden_size)
     x_tt = to_device(to_block_layout(x), device)
 
-    out = tt_block(x_tt, rotary_tables(device, config, seqlen))
+    rot_mats = rotary_tables(device, config, seqlen)
+
+    out = tt_block(x_tt, rot_mats)
 
     with torch.no_grad():
         ref = reference(x, attention_mask=None)
     got = from_block_layout(out)
-    agreeing = routing_agreement(config, reference, tt_block, x, x_tt, moe)
+    agreeing = routing_agreement(config, reference, tt_block, x, x_tt, moe, rot_mats)
 
     assert tuple(out.shape) == (batch, 1, seqlen, config.hidden_size)
     assert_with_pcc(ref[agreeing], got[agreeing], MODULE_PCC)
@@ -104,16 +117,18 @@ def test_block_with_ragged_padding(device, config, tt_config, state_dict, layer,
     x = hidden_states(batch, seqlen, config.hidden_size)
     x_tt = to_device(to_block_layout(x), device)
 
-    out = tt_block(
-        x_tt,
-        rotary_tables(device, config, seqlen),
-        additive_attention_mask(mask, device),
-    )
+    rot_mats = rotary_tables(device, config, seqlen)
+    attn_mask = additive_attention_mask(mask, device)
+    ref_mask = build_extended_attention_mask(mask, torch.float32)
+
+    out = tt_block(x_tt, rot_mats, attn_mask)
 
     with torch.no_grad():
-        ref = reference(x, attention_mask=build_extended_attention_mask(mask, torch.float32))
+        ref = reference(x, attention_mask=ref_mask)
     got = from_block_layout(out)
-    kept = routing_agreement(config, reference, tt_block, x, x_tt, moe)[:, :keep]
+    kept = routing_agreement(
+        config, reference, tt_block, x, x_tt, moe, rot_mats, attn_mask=attn_mask, ref_mask=ref_mask
+    )[:, :keep]
 
     assert torch.isfinite(got).all(), "dtype-min in the mask saturated somewhere"
     assert_with_pcc(ref[:, :keep][kept], got[:, :keep][kept], MODULE_PCC)
@@ -158,7 +173,7 @@ def test_dropping_a_residual_is_decorrelated(device, config, tt_config, state_di
 
     with torch.no_grad():
         ref = reference(x, attention_mask=None)
-    agreeing = routing_agreement(config, reference, tt_block, x, x_tt, moe)
+    agreeing = routing_agreement(config, reference, tt_block, x, x_tt, moe, rot_mats)
 
     correct = from_block_layout(tt_block(x_tt, rot_mats))
 

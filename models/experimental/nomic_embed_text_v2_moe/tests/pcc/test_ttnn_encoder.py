@@ -54,9 +54,11 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 
 pytestmark = [run_for_blackhole(), pytest.mark.use_module_device, pytest.mark.needs_weights]
 
-# All-token PCC over the full stack. Measured 0.9937 to 0.9983 in domain; the gate keeps the
-# plan's margin because the statistic moves with how many tokens happened to reroute.
-MODULE_PCC = 0.98
+# All-token PCC over the full stack. Measured 0.99366 to 0.99834 in domain over six seeds at each
+# of 2x128 and 2x512, so this holds the standard 0.99 module line with about 0.37% to spare. The
+# statistic still moves with how many tokens happened to reroute, which is why the pooled cosine
+# below is the tighter gate rather than this one.
+MODULE_PCC = 0.99
 
 # The pooled, normalized embedding: what the model emits, and the tight gate. Measured 0.99950 to
 # 0.99978 across draws and both sequence lengths.
@@ -65,13 +67,16 @@ POOLED_COSINE = 0.999
 # Minimum per-layer PCC across the ladder. Measured 0.9937 to 0.9981.
 LADDER_PCC = 0.99
 
-# Routing disagreement on the first MoE layer, which sees activations that have not yet diverged.
-# This is gate 5 applied in situ; measured 0.000 to 0.008.
-FIRST_MOE_DISAGREEMENT = 0.01
+# Routing disagreement on the first MoE layer. Higher than gate 5's own bound on purpose: gate 5
+# feeds both routers identical inputs, while here each side routes on its own activations, which
+# have already been through the embeddings, emb_ln, block 0 and this block's attention and norm.
+# Roughly 1% to 2% of tokens sit within the softmax's 1.4e-3 error of a tie, so that is the rate
+# a diverged input produces. Measured 0.0000 to 0.0195 over four seeds at each of 2x128 and 2x512.
+FIRST_MOE_DISAGREEMENT = 0.03
 
-# Deeper MoE layers, where the port's own divergence has had layers to accumulate and a token
-# already rerouted once is effectively routed independently. Measured up to 0.051.
-DEEP_MOE_DISAGREEMENT = 0.06
+# Deeper MoE layers, where the divergence has had layers to accumulate and a token already
+# rerouted once routes from different activations from then on. Measured 0.0273 to 0.0781.
+DEEP_MOE_DISAGREEMENT = 0.12
 
 STACK_SHAPES = [(2, 128), (2, 512)]
 
@@ -185,12 +190,16 @@ def test_routing_agreement_holds_at_depth(device, config, reference_model, refer
     is counted rather than inferred. Each layer is measured on the TTNN activations that actually
     reach it, which is where a flip would first appear.
 
-    The first MoE layer is held to gate 5's own bound, since its input has not diverged yet.
-    Deeper layers are allowed more: a token rerouted once is routed from different activations
-    from then on, so the rate compounds with depth (measured 0.000 to 0.008 at layer 1, up to
-    0.051 at layer 11). That compounding is the router's documented near-tie rate accumulating,
-    not a second defect: roughly 1% to 2% of tokens sit within the softmax's own 1.4e-3 error of
-    a tie at every layer.
+    The router is probed on norm1(attn(x) + x), the tensor the MoE actually receives. Probing the
+    block input instead reports decisions the model never makes and reads about half as high,
+    which is what this test originally did.
+
+    Both bounds are looser than gate 5's, and for a reason that is not slack: gate 5 feeds both
+    routers identical inputs, while here each side routes on its own activations. Roughly 1% to
+    2% of tokens sit within the softmax's own 1.4e-3 error of a tie, so a diverged input reroutes
+    about that many, and the rate compounds with depth because a token rerouted once routes from
+    different activations from then on. Measured 0.0000 to 0.0195 on the first MoE layer and
+    0.0273 to 0.0781 at worst, over four seeds at each of 2x128 and 2x512.
     """
     tokens = batch * seqlen
     x = encoder_input(reference_model, config, batch, seqlen)
@@ -209,10 +218,17 @@ def test_routing_agreement_holds_at_depth(device, config, reference_model, refer
     reference_input = x
     for idx, layer in enumerate(tt_encoder.layers):
         if config.is_moe_layer(idx):
-            _, _, indices = layer.mlp.router.select(flatten_tokens(tensor))
+            # The router is probed on norm1(attn(x) + x), the tensor the MoE receives, not on the
+            # block input: the block input is one sub-block short of where routing happens, so
+            # measuring there would report decisions the model never makes.
+            tt_attn = layer.attn(tensor, rot_mats)
+            tt_hidden = layer._norm(tt_attn, tensor, layer.norm1_weight, layer.norm1_bias)
+            _, _, indices = layer.mlp.router.select(flatten_tokens(tt_hidden))
             selected = ttnn.to_torch(indices).long().reshape(tokens, config.moe_top_k)
             with torch.no_grad():
-                _, _, ref_indices = reference.layers[idx].mlp.router(reference_input)
+                block = reference.layers[idx]
+                ref_hidden = block.norm1(block.attn(reference_input, attention_mask=None) + reference_input)
+                _, _, ref_indices = block.mlp.router(ref_hidden)
             disagreeing = sum(
                 set(selected[token].tolist()) != set(ref_indices[token].tolist()) for token in range(tokens)
             )

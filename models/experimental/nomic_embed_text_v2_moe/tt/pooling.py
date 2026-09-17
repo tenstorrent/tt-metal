@@ -22,8 +22,16 @@ import ttnn
 # Matches reference/postprocessing.mean_pool's own clamp on the keep count.
 MASK_SUM_FLOOR = 1e-9
 
+# Matches reference/postprocessing.L2_EPS, which reaches F.normalize as its eps. Applied to the
+# sum of squares rather than to the norm, since that is what rsqrt consumes, so it is squared.
+L2_EPS = 1e-12
 
-def mean_pool(hidden_states: ttnn.Tensor, mask_weights: ttnn.Tensor) -> ttnn.Tensor:
+# Only ttnn.sum among the operators here accepts a compute_kernel_config; ttnn.multiply,
+# ttnn.divide, ttnn.rsqrt and ttnn.clamp take none, so the port's HiFi4 plus fp32-accumulation
+# setting is applied to the two reduces and is simply not expressible on the rest.
+
+
+def mean_pool(hidden_states: ttnn.Tensor, mask_weights: ttnn.Tensor, compute_kernel_config=None) -> ttnn.Tensor:
     """Average each text's token vectors, ignoring padding.
 
     Mask-weighted rather than a plain mean over S, and not the CLS token: the checkpoint's
@@ -35,6 +43,7 @@ def mean_pool(hidden_states: ttnn.Tensor, mask_weights: ttnn.Tensor) -> ttnn.Ten
         hidden_states: (B, 1, S, H) encoder output.
         mask_weights: (B, 1, S, 1) from tt.common.pooling_mask, 1.0 at real tokens and 0.0 at
             padding. Its trailing singleton broadcasts over the hidden axis.
+        compute_kernel_config: The port's device compute kernel config, applied to the two sums.
 
     Returns:
         ttnn.Tensor: (B, 1, 1, H), one vector per text. Not unit norm.
@@ -44,8 +53,11 @@ def mean_pool(hidden_states: ttnn.Tensor, mask_weights: ttnn.Tensor) -> ttnn.Ten
     # of zero, and dividing by it returns inf across all 768 features rather than raising, so the
     # row would leave here looking like data. Such a row cannot come from the tokenizer, which
     # always emits bos, but mean_pool takes any mask its caller builds.
-    kept = ttnn.clamp(ttnn.sum(mask_weights, dim=2, keepdim=True), min=MASK_SUM_FLOOR)
-    pooled = ttnn.divide(ttnn.sum(weighted, dim=2, keepdim=True), kept)
+    kept = ttnn.clamp(
+        ttnn.sum(mask_weights, dim=2, keepdim=True, compute_kernel_config=compute_kernel_config),
+        min=MASK_SUM_FLOOR,
+    )
+    pooled = ttnn.divide(ttnn.sum(weighted, dim=2, keepdim=True, compute_kernel_config=compute_kernel_config), kept)
     ttnn.deallocate(weighted)
     ttnn.deallocate(kept)
     return pooled
@@ -78,19 +90,29 @@ def matryoshka_truncate(embeddings: ttnn.Tensor, dim: Optional[int]) -> ttnn.Ten
     return ttnn.slice(embeddings, [0, 0, 0, 0], [embeddings.shape[0], 1, 1, dim])
 
 
-def l2_normalize(embeddings: ttnn.Tensor) -> ttnn.Tensor:
+def l2_normalize(embeddings: ttnn.Tensor, compute_kernel_config=None) -> ttnn.Tensor:
     """Scale each row to unit norm, so a dot product of two rows is their cosine similarity.
 
-    rsqrt of the sum of squares rather than a divide by a sqrt: one fewer op and no reciprocal
-    of a value that could round to zero at bfloat16.
+    rsqrt of the sum of squares rather than a divide by a sqrt: one fewer op, and no reciprocal
+    of a value that could round to zero in bfloat16.
+
+    The sum of squares is floored first. Without it a zero row gives rsqrt(0) = inf and then
+    0 * inf = NaN, which would undo mean_pool's own MASK_SUM_FLOOR one operator later: a fully
+    padded row pools to zeros and must stay zeros rather than turning into NaN here. The
+    reference gets this from F.normalize's eps.
 
     Args:
         embeddings: (B, 1, 1, dim) pooled, optionally truncated embeddings.
+        compute_kernel_config: The port's device compute kernel config, applied to the sum.
 
     Returns:
-        ttnn.Tensor: (B, 1, 1, dim) with unit norm along the feature axis.
+        ttnn.Tensor: (B, 1, 1, dim) with unit norm along the feature axis, or zeros for a row
+        that arrived as zeros.
     """
     squared = ttnn.multiply(embeddings, embeddings)
-    scale = ttnn.rsqrt(ttnn.sum(squared, dim=-1, keepdim=True))
+    sum_of_squares = ttnn.sum(squared, dim=-1, keepdim=True, compute_kernel_config=compute_kernel_config)
     ttnn.deallocate(squared)
+
+    scale = ttnn.rsqrt(ttnn.clamp(sum_of_squares, min=L2_EPS * L2_EPS))
+    ttnn.deallocate(sum_of_squares)
     return ttnn.multiply(embeddings, scale)
