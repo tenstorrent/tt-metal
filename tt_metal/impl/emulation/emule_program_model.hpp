@@ -1,9 +1,9 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
-// collect_kernels — per-programmable-core-type kernel-group iteration that builds the JIT
-// variant set. Produces PendingKernelInfo (consumed by the engine's launch path) and
-// DeferredCompile tasks (emule_jit). See docs.
+// collect_kernels — walks the descriptor's kernels and builds the JIT variant set. Produces
+// PendingKernelInfo (consumed by the engine's launch path) and DeferredCompile tasks (emule_jit).
+// Reads only EmuleProgramDescriptor + SocView — no private tt-metal Program/Kernel. See docs.
 
 #include <cstdint>
 #include <functional>
