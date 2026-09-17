@@ -26,8 +26,12 @@ ALWI void rsqrt_tile_init() { MATH(SFPU_UNARY_INIT_FN(rsqrt, sfpu::rsqrt_init, (
  * tile in DST register at index idst. The DST register buffer must be in
  * acquired state via *acquire_dst* call. This call is blocking and is only
  * available on the compute engine.
- * The optional fast mode is selected with RsqrtMode::Fast; RsqrtMode::Default preserves
- * the kernel's normal approximation behavior. Legacy Boolean template arguments are not accepted.
+ * On Wormhole and Blackhole, RsqrtMode::Default returns NaN for negative inputs.
+ * RsqrtMode::Fast skips that negative-input check, leaving results for negative inputs
+ * unspecified. It does not change approximation precision for nonnegative inputs:
+ * both modes use the kernel's APPROX setting to select the approximation.
+ * RsqrtMode::Fast is not supported on Quasar and is rejected at compile time.
+ * Legacy Boolean template arguments are not accepted.
  *
  * Return value: None
  *
