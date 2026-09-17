@@ -806,3 +806,60 @@ def _torch_tensor_op(op):
         ttnn.multiply: lambda t, s: t * s,
         ttnn.div: lambda t, s: t / s,
     }[op]
+
+
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 1000000}], indirect=True)
+@pytest.mark.parametrize("traced", [False, True])
+@pytest.mark.parametrize("scalar_rhs", [False, True])
+def test_ng_streamed_runtime_args_work_noop_transitions(device, isolate_program_cache, traced, scalar_rhs):
+    """Changing work extent must overwrite reused scratch lists, including work-to-noop transitions."""
+    live = []
+    entries = None
+    for iteration, side in enumerate((32, 320, 64, 32)):
+        host = torch.full((1, 1, side, side), iteration + 1, dtype=torch.bfloat16)
+        a = ttnn.from_torch(host, layout=ttnn.TILE_LAYOUT, device=device)
+        b = iteration + 2 if scalar_rhs else ttnn.from_torch(host, layout=ttnn.TILE_LAYOUT, device=device)
+        expected = host + (iteration + 2 if scalar_rhs else host)
+        out = ttnn.add(a, b)
+        trace_id = None
+        if traced:
+            ttnn.synchronize_device(device)
+            trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+            out = ttnn.add(a, b)
+            ttnn.end_trace_capture(device, trace_id, cq_id=0)
+            ttnn.execute_trace(device, trace_id, cq_id=0, blocking=True)
+        live.append((a, b, out))
+        assert torch.equal(ttnn.to_torch(out), expected)
+        if entries is None:
+            entries = device.num_program_cache_entries()
+        else:
+            assert device.num_program_cache_entries() == entries
+        if trace_id is not None:
+            ttnn.release_trace(device, trace_id)
+
+
+def test_ng_sharded_cache_with_split_worker_grid(device, isolate_program_cache):
+    # A single shard rectangle spans both worker ranges; neither range alone
+    # describes the complete worker grid used by the runtime-argument iterator.
+    workers = ttnn.CoreRangeSet(
+        [
+            ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1)),
+            ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 1)),
+        ]
+    )
+    shards = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))])
+    memory = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(shards, [32, 32], ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    retained = []
+    for scalar in (2, 3, 1):
+        host = torch.arange(1, 5, dtype=torch.bfloat16).repeat_interleave(32).reshape(1, 1, 128, 1)
+        host = host.expand(1, 1, 128, 32).contiguous()
+        tensor = ttnn.from_torch(host, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory)
+        with device.cache_entries_counter.measure():
+            output = ttnn.multiply(tensor, scalar, sub_core_grids=workers)
+        retained.append((tensor, output))
+        assert torch.equal(ttnn.to_torch(output), host * scalar)
+    assert device.cache_entries_counter.total == 1
