@@ -154,15 +154,22 @@ async def run_gpqa(client, output_dir, task, cases):
     }
 
 
-async def run_performance(client, output_dir):
+def performance_shapes(server_capacity, input_lengths):
+    return [(length, batch) for length in input_lengths for batch in (1, 32) if batch <= server_capacity]
+
+
+async def run_performance(client, output_dir, server_capacity, input_lengths):
     from transformers import AutoTokenizer
 
     tokenizer = AutoTokenizer.from_pretrained(MODEL, revision=MODEL_REVISION, local_files_only=True)
     passage = "The scientific method tests explanations against observations. Describe an experiment and its controls. "
     source = tokenizer.encode(passage, add_special_tokens=False)
-    rows, summaries = [], []
-    for length, batch in ((128, 1), (128, 32), (1024, 1), (1024, 32)):
+    rows, summaries, inputs = [], [], []
+    for length, batch in performance_shapes(server_capacity, input_lengths):
         prompt = [tokenizer.bos_token_id] + (source * (length // len(source) + 1))[: length - 1]
+        prompt_sha256 = hashlib.sha256(json.dumps(prompt).encode()).hexdigest()
+        inputs.append({"input_tokens": length, "concurrency": batch, "prompt": prompt, "sha256": prompt_sha256})
+        (output_dir / "performance-inputs.json").write_text(json.dumps(inputs, indent=2) + "\n")
         payload = {
             "prompt": prompt,
             "max_tokens": 128,
@@ -180,11 +187,22 @@ async def run_performance(client, output_dir):
             for result in results:
                 if result["usage"]["prompt_tokens"] != length or result["usage"]["completion_tokens"] != 128:
                     raise AssertionError(f"Fixed-length benchmark returned unexpected token counts: {result['usage']}")
-                case_rows.append({"input_tokens": length, "batch": batch, "repeat": repeat, **result})
+                case_rows.append(
+                    {
+                        "server_capacity": server_capacity,
+                        "input_tokens": length,
+                        "batch": batch,
+                        "prompt_sha256": prompt_sha256,
+                        "repeat": repeat,
+                        **result,
+                    }
+                )
         elapsed, end = time.perf_counter() - tick, utc_now()
         rows.extend(case_rows)
         summaries.append(
             {
+                "server_capacity": server_capacity,
+                "prompt_sha256": prompt_sha256,
                 "input_tokens": length,
                 "output_tokens": 128,
                 "concurrency": batch,
@@ -206,11 +224,16 @@ async def main(args):
     (args.output_dir / "inputs.jsonl").write_text(inputs)
     protocol = {
         "model": MODEL,
+        "server_capacity": args.server_capacity,
         "checkpoint_revision": MODEL_REVISION,
         "dataset_revision": DATASET_REVISION,
         "harness_revision": HARNESS_REVISION,
         "selection": "first 10 Diamond rows, choice shuffle seed 42",
-        "scope": "10/198 CI subset; 32768-token output budget bounds weekly runtime",
+        "scope": (
+            "fixed-length performance only"
+            if args.mode == "performance"
+            else "10/198 CI subset; 32768-token output budget bounds weekly runtime"
+        ),
         "gpqa": {
             "temperature": 1.0,
             "top_p": 0.95,
@@ -222,7 +245,10 @@ async def main(args):
             "accuracy_threshold": GPQA_THRESHOLD,
         },
         "performance": {
-            "shapes": [[128, 128, 1], [128, 128, 32], [1024, 128, 1], [1024, 128, 32]],
+            "shapes": [
+                [length, 128, batch]
+                for length, batch in performance_shapes(args.server_capacity, args.performance_input_lengths)
+            ],
             "warmup": "one burst per shape",
             "repeats": 2,
             "temperature": 0,
@@ -240,7 +266,9 @@ async def main(args):
             summary["gpqa_result"] = await run_gpqa(client, args.output_dir, task, cases)
             (args.output_dir / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
         if args.mode != "gpqa":
-            summary["performance_results"] = await run_performance(client, args.output_dir)
+            summary["performance_results"] = await run_performance(
+                client, args.output_dir, args.server_capacity, args.performance_input_lengths
+            )
     (args.output_dir / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
     if "gpqa_result" in summary and not summary["gpqa_result"]["passed"]:
         raise AssertionError(f"GPQA CI accuracy below {GPQA_THRESHOLD}: {summary['gpqa_result']['accuracy']}")
@@ -251,5 +279,16 @@ if __name__ == "__main__":
     parser.add_argument("--base-url", default="http://127.0.0.1:8000")
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--mode", choices=("gpqa", "performance", "all"), default="all")
+    parser.add_argument(
+        "--server-capacity",
+        type=int,
+        choices=(1, 32),
+        default=32,
+        help="The server max-num-seqs setting; capacity 1 selects only serial performance shapes.",
+    )
+    parser.add_argument("--performance-input-lengths", type=int, nargs="+", choices=(128, 1024), default=(128, 1024))
     parser.add_argument("--prepare-only", action="store_true")
-    asyncio.run(main(parser.parse_args()))
+    args = parser.parse_args()
+    if args.server_capacity == 1 and args.mode != "performance":
+        parser.error("The 10-question concurrent GPQA protocol requires --server-capacity 32")
+    asyncio.run(main(args))

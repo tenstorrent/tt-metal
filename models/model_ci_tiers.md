@@ -263,9 +263,11 @@ branch or tag. Both manual and scheduled runs default to `main`. A selection wit
 Saturday schedule becomes active after the workflow is merged to the default branch.
 
 Gemma4 31B QB2 uses Tier 3. Its weekly command runs two real-weight decoder comparisons (full and sliding
-attention), seven client/adapter checks, five representative API checks,
+attention), eight client/adapter checks, five representative API checks,
 **10 of 198 GPQA Diamond questions**
-(seed 42, 32768 output tokens), and a fixed-length performance sweep. The subset
+(seed 42, 32768 output tokens), and fixed-length 128-input/128-output performance on separate
+one-slot and 32-slot servers. The default benchmark also offers 1024-token inputs; weekly CI selects
+the shorter shapes to fit the existing timeout. Performance records label server capacity independently of request concurrency. The subset
 and smaller output budget bound CI runtime; they do not reproduce the separately
 reported full-dataset benchmark. The command saves actual request counts, raw
 responses, scoring inputs and timing definitions.

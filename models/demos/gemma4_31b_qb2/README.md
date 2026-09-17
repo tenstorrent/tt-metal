@@ -46,15 +46,26 @@ python -m pytest models/demos/gemma4_31b_qb2/tests/test_decoder.py --timeout 600
 
 The weekly Tier 3 QB2 entry in [`agentic_research_model_tests.yaml`](../../../tests/pipeline_reorg/agentic_research_model_tests.yaml) contains the complete installation, server, API-test, evaluation, reporting, and cleanup commands. It runs **only the first 10 of 198 GPQA Diamond questions**, with one seed and a 32,768-token output budget, to bound weekly runtime. The accuracy gate is 80%. This subset is a regression check; use a full-dataset run for published model-quality comparisons.
 
-Weekly correctness coverage selects the two 1,025-token decoder cases (full and sliding attention, batch 2), all seven client/adapter checks, and five API checks for device sampling/page growth, request isolation, host sampling, mixed penalties and logprobs. The broader decoder matrix and all 37 API checks remain available for model/plugin changes and release validation; their existing publication results are retained.
+Weekly correctness coverage selects the two 1,025-token decoder cases (full and sliding attention, batch 2), all eight client/adapter checks, and five API checks for device sampling/page growth, request isolation, host sampling, mixed penalties and logprobs. The broader decoder matrix and all 37 API checks remain available for model/plugin changes and release validation; their existing publication results are retained.
 
 The scorer uses Gemma4 chat formatting with thinking enabled, temperature 1, top-p 0.95, top-k 20, and seed 42. It scores final answers from the same streamed responses that it times. Inputs, choice permutations, dataset and harness revisions, outputs, usage counts, and timings are saved with the result.
 
-Performance coverage uses 128- and 1,024-token inputs, 128-token outputs, and concurrency 1 and 32. Each shape has one warmup burst and two measured bursts, greedy sampling, and ignored EOS. Client TTFT includes queueing. Per-user decode throughput excludes the first token; aggregate throughput divides all generated tokens by elapsed burst time. These serving measurements differ from kernel-only or native-demo timings.
+Weekly performance coverage uses **128-token inputs and outputs only**, to fit both server configurations alongside GPQA in the existing timeout. It starts a dedicated **one-slot server** (`--max-num-seqs 1`) at concurrency 1, then a **32-slot server** at concurrency 1 and 32. Server capacity and active concurrency are recorded separately in raw results and CI benchmark metadata. Each of these three shapes has one warmup burst and two measured bursts, greedy sampling, and ignored EOS; total coverage is 68 measured requests plus 34 warmups. The benchmark's default full sweep also includes 1,024-token inputs; weekly CI explicitly selects `--performance-input-lengths 128`.
+
+Client TTFT includes queueing. Per-user decode throughput excludes the first token; aggregate throughput divides all generated tokens by elapsed burst time. These serving measurements differ from kernel-only or native-demo timings.
 
 ## Measured serving
 
-Measured on 16 September 2026 with one QB2, the same checkpoint revision, the same plugin, and identical tokenized prompts. Both servers allow 32 requests. Each row uses one warmup burst and two measured bursts, with 128 output tokens and ignored EOS. Values are **this implementation / existing Gemma4 implementation**.
+A dedicated **single-user server** (`--max-num-seqs 1`, concurrency 1) measured the following on 17 September 2026 with the maintained source and one four-chip QB2. Each shape used one warmup and two measured requests, greedy sampling, 128 output tokens and ignored EOS. Use the launch command above with `--max-num-seqs 1` to select this configuration.
+
+| Input tokens | Output tokens | TTFT (ms) | Decode tokens/s/user | Aggregate output tokens/s |
+|---:|---:|---:|---:|---:|
+| 128 | 128 | 70.9 | **40.37** | 39.79 |
+| 1024 | 128 | 142.0 | **38.65** | 37.33 |
+
+Weekly CI measures the 128-token row on a one-slot server and the two 128-token shapes below on a 32-slot server. The full sweep also measures 1,024-token inputs. A one-slot trace and a single active request on a 32-slot server have different costs; server capacity is part of the benchmark configuration.
+
+The existing-implementation comparison was measured on 16 September 2026 with one QB2, the same checkpoint revision, the same plugin, and identical tokenized prompts. Both servers allow 32 requests. Each row uses one warmup burst and two measured bursts, with 128 output tokens and ignored EOS. Values are **this implementation / existing Gemma4 implementation**.
 
 | Input tokens | Concurrency | TTFT (ms) | Decode tokens/s/user | Aggregate output tokens/s |
 |---:|---:|---:|---:|---:|
@@ -67,4 +78,4 @@ This compares each implementation’s serving configuration. The existing family
 
 The selected experiment source scored **167/198 (84.34%) on full GPQA Diamond**, compared with the [recorded HF/vLLM reference of 83.33%](https://github.com/tenstorrent/tt-inference-server/issues/4176#issuecomment-4715337652). The reference checkpoint revision was not recorded. The maintained source subsequently scored **9/10 on the 10/198 CI subset**, with the weekly protocol above; this is a separate regression result.
 
-The original full validation recipe took **20m23s**, including installation, 15 model tests, 37 API tests, GPQA, performance and cleanup. Weekly CI selects the smaller correctness suite above, targets under 15 minutes, and has an 18-minute timeout. Together with Llama’s 12-minute allowance, the shared QB2 budget is 30 minutes. The [model PR](https://github.com/tenstorrent/tt-metal/pull/56765) and [companion plugin PR](https://github.com/tenstorrent/vllm-tt-plugin/pull/132) track validation and merge order.
+The original full validation recipe took **20m23s**, including installation, 15 model tests, 37 API tests, GPQA, performance and cleanup. The weekly command, including both server starts, passed in **17m19s** with the smaller correctness suite and three short performance shapes above. Its timeout remains 18 minutes. Together with Llama’s 12-minute allowance, the shared QB2 budget is 30 minutes. The [model PR](https://github.com/tenstorrent/tt-metal/pull/56765) and [companion plugin PR](https://github.com/tenstorrent/vllm-tt-plugin/pull/132) track validation and merge order.

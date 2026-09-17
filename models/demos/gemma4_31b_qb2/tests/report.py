@@ -14,7 +14,10 @@ def report(summary):
     runs = []
     if "gpqa_result" in summary:
         runs.append((summary["gpqa_result"], "GPQA Diamond, first 10/198", True))
-    runs.extend((row, "Fixed-length text serving", False) for row in summary.get("performance_results", []))
+    runs.extend(
+        (row, f"Fixed-length text serving, server capacity {summary['server_capacity']}", False)
+        for row in summary.get("performance_results", [])
+    )
     for row, dataset, accuracy in runs:
         profiler = BenchmarkProfiler()
         for phase in ("run", "inference", "inference_prefill", "inference_decode"):
@@ -49,6 +52,8 @@ def report(summary):
             precision="BF4 projections; BF8 KV; BF16 residuals",
             config_params={
                 "checkpoint_revision": summary["checkpoint_revision"],
+                "server_capacity": summary["server_capacity"],
+                "prompt_sha256": row.get("prompt_sha256"),
                 "input_sha256": summary["input_sha256"],
                 "requests": row["requests"],
                 "scope": summary["scope"] if accuracy else "warmed, greedy, ignored EOS",
