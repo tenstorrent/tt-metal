@@ -700,7 +700,10 @@ void kernel_main() {
         GROUPED_KV_SOURCE_COUNT, ring_size, kv_local_padded_Nt, logical_nt, active_ring_iter_mask);
     const bool stream_sources = source_group_size > 1;
     const bool pack_source_tails = stream_sources;
-    const PackedKVGroupPlan packed_kv{kv_local_padded_Nt, source_group_size, Sk_chunk_t};
+    // Bound the plan by the live region; kv_local_padded_Nt stays the physical per-source stride.
+    const uint32_t packed_live_tiles_per_source = packed_kv_live_tiles_per_source(logical_nt, ring_size);
+    const PackedKVGroupPlan packed_kv{
+        source_group_size > 1 ? packed_live_tiles_per_source : kv_local_padded_Nt, source_group_size, Sk_chunk_t};
     const uint32_t sdpa_ring_iterations = has_sliding_window ? 1 : ring_size / source_group_size;
     for (uint32_t ring_iter = 0; ring_iter < sdpa_ring_iterations; ++ring_iter) {
         const auto group_start_seq = fused_op_receiver.seq;
@@ -894,7 +897,7 @@ void kernel_main() {
                             ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
                                 fused_op_receiver.get_next_ring_id_and_sync(), mesh_rows, mesh_cols, snake_orientation);
                     }
-                    streamed_source_id = packed_source_ids[k_chunk * Sk_chunk_t / kv_local_padded_Nt];
+                    streamed_source_id = packed_source_ids[packed_kv.source_index(k_chunk * Sk_chunk_t)];
                 } else if (stream_sources) {
                     if (k_chunk % num_local_k_chunks == 0) {
                         streamed_source_id =
@@ -1033,8 +1036,8 @@ void kernel_main() {
                         // Assemble source segments into one full-stride transposed K chunk.
                         for (uint32_t dst_row = 0; dst_row < packed_kv.valid_tiles(k_chunk);) {
                             const uint32_t stream_row = k_chunk * Sk_chunk_t + dst_row;
-                            const uint32_t source = packed_source_ids[stream_row / kv_local_padded_Nt];
-                            const uint32_t local_row = stream_row % kv_local_padded_Nt;
+                            const uint32_t source = packed_source_ids[packed_kv.source_index(stream_row)];
+                            const uint32_t local_row = packed_kv.source_offset(stream_row);
                             const uint32_t rows = packed_kv.segment_tiles(k_chunk, dst_row);
                             const bool local = source == ring_index;
                             const uint32_t source_row = local ? local_row : source * kv_local_padded_Nt + local_row;

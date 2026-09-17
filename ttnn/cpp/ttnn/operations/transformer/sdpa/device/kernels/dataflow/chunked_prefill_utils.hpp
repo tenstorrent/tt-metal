@@ -102,7 +102,18 @@ constexpr uint32_t packed_kv_source_group_size(
         return 1;
     }
     const uint32_t all_sources = ~uint32_t{0} >> (32 - ring_size);
-    return logical_tiles == source_tiles * ring_size && active_mask == all_sources ? configured : 1;
+    if (active_mask != all_sources || logical_tiles == 0 || logical_tiles % ring_size != 0) {
+        return 1;
+    }
+    // The plan is bounded by the live region, not the allocation, so an over-allocated cache still
+    // groups. Block-cyclic placement keeps each source's live tiles in its leading positions.
+    return logical_tiles <= source_tiles * ring_size ? configured : 1;
+}
+
+// Live tiles held by one KV source. Block-cyclic placement makes these the source's leading tiles,
+// so a plan built on this value addresses exactly the live region.
+constexpr uint32_t packed_kv_live_tiles_per_source(uint32_t logical_tiles, uint32_t ring_size) {
+    return ring_size != 0 ? logical_tiles / ring_size : 0;
 }
 
 struct KVPadRotationContext {

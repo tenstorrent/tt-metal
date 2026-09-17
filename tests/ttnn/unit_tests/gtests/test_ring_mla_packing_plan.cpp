@@ -90,3 +90,24 @@ TEST(RingMLAPackingPlan, UsesRuntimeLengthAndActivityOnProgramReuse) {
     EXPECT_EQ(packed_kv_source_group_size(3, 8, 25, 200, 0xff), 1u);
     EXPECT_EQ(packed_kv_source_group_size(4, 8, 0, 0, 0xff), 1u);
 }
+
+TEST(RingMLAPackingPlan, GroupsWhenCacheIsOverAllocated) {
+    // 102-chunk allocation (510 tiles per source) with 1 chunk live: 160 logical tiles over a
+    // 32-ring. The cache is far from full, but the live region still splits evenly per source.
+    EXPECT_EQ(packed_kv_source_group_size(4, 32, 510, 160, 0xffffffff), 4u);
+    EXPECT_EQ(packed_kv_live_tiles_per_source(160, 32), 5u);
+
+    // A live region that does not divide across the ring cannot be packed uniformly.
+    EXPECT_EQ(packed_kv_source_group_size(4, 32, 510, 161, 0xffffffff), 1u);
+    // Live must still fit inside the allocation.
+    EXPECT_EQ(packed_kv_source_group_size(4, 32, 510, 510u * 32 + 32, 0xffffffff), 1u);
+    EXPECT_EQ(packed_kv_source_group_size(4, 32, 510, 0, 0xffffffff), 1u);
+
+    // The plan spans only the live region, so an over-allocated cache costs no extra K chunks.
+    const PackedKVGroupPlan live{packed_kv_live_tiles_per_source(160, 32), 4, 20};
+    EXPECT_EQ(live.tile_count(), 20u);
+    EXPECT_EQ(live.chunk_count(), 1u);
+    EXPECT_EQ(live.source_index(0), 0u);
+    EXPECT_EQ(live.source_index(5), 1u);
+    EXPECT_EQ(live.source_offset(6), 1u);
+}

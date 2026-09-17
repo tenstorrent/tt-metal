@@ -617,7 +617,10 @@ void kernel_main() {
     const uint32_t source_group_size = packed_kv_source_group_size(
         GROUPED_KV_SOURCE_COUNT, ring_size, kv_local_padded_Nt, logical_nt, active_ring_iter_mask);
     const bool stream_sources = source_group_size > 1;
-    const PackedKVGroupPlan packed_kv{kv_local_padded_Nt, source_group_size, Sk_chunk_t};
+    // Bound the plan by the live region so the chunk count matches reader and compute.
+    const uint32_t packed_live_tiles_per_source = packed_kv_live_tiles_per_source(logical_nt, ring_size);
+    const PackedKVGroupPlan packed_kv{
+        source_group_size > 1 ? packed_live_tiles_per_source : kv_local_padded_Nt, source_group_size, Sk_chunk_t};
     const uint32_t sdpa_ring_iterations = has_sliding_window ? 1 : ring_size / source_group_size;
     for (uint32_t ring_iter = 0; ring_iter < sdpa_ring_iterations; ++ring_iter) {
         uint32_t streamed_first_source = ring_index;

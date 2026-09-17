@@ -2377,11 +2377,15 @@ void sdpa_ring_v2(
     // Tile offset of this call's Q chunk within cb_q_in (head-serial passes; 0 otherwise).
     const uint32_t q_base_tiles = 0,
     const uint32_t* streamed_source_ids = nullptr,
-    const uint32_t packed_group_tiles = 0) {
+    const uint32_t packed_group_tiles = 0,
+    // Live tiles per source. Passed in because it is the plan's extent, which the allocation no
+    // longer equals once the cache is over-allocated.
+    const uint32_t packed_source_tiles = 0) {
     init_sdpa_streaming_semaphores();
     const bool pack_source_tails = packed_group_tiles != 0;
+    const uint32_t packed_plan_tiles = packed_source_tiles != 0 ? packed_source_tiles : local_padded_Nt;
     const PackedKVGroupPlan packed_kv{
-        local_padded_Nt, pack_source_tails ? packed_group_tiles / local_padded_Nt : 1, Sk_chunk_t};
+        packed_plan_tiles, pack_source_tails ? packed_group_tiles / packed_plan_tiles : 1, Sk_chunk_t};
 
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
     constexpr bool has_sliding_window = sliding_window_size > 0;
@@ -2574,7 +2578,8 @@ void sdpa_ring_v2(
         for (uint32_t k = 0; !pack_source_tails && !has_sliding_window && k < num_kv_chunks; ++k) {
             const uint32_t source_ring_id =
                 streamed_source_ids
-                    ? streamed_source_ids[pack_source_tails ? k * Sk_chunk_t / local_padded_Nt : k / num_local_k_chunks]
+                    ? streamed_source_ids
+                          [pack_source_tails ? packed_kv.source_index(k * Sk_chunk_t) : k / num_local_k_chunks]
                     : ring_id;
             const uint32_t source_k_chunk = streamed_source_ids ? k % num_local_k_chunks : k;
             const bool is_joint = !streamed_source_ids && k >= num_local_k_chunks;
@@ -2613,11 +2618,11 @@ void sdpa_ring_v2(
         const uint32_t q_k_loop_count = has_sliding_window ? per_q_valid_kv : num_kv_chunks;
         for (uint32_t k_chunk = 0; k_chunk < q_k_loop_count; ++k_chunk) {
             const auto sliding_k_chunk = sliding_q_plan.k_chunk_at(k_chunk);
-            const uint32_t source_ring_id =
-                streamed_source_ids
-                    ? streamed_source_ids
-                          [pack_source_tails ? k_chunk * Sk_chunk_t / local_padded_Nt : k_chunk / num_local_k_chunks]
-                    : (has_sliding_window ? sliding_k_chunk.source_ring_id : ring_id);
+            const uint32_t source_ring_id = streamed_source_ids
+                                                ? streamed_source_ids
+                                                      [pack_source_tails ? packed_kv.source_index(k_chunk * Sk_chunk_t)
+                                                                         : k_chunk / num_local_k_chunks]
+                                                : (has_sliding_window ? sliding_k_chunk.source_ring_id : ring_id);
             const uint32_t source_k_chunk = streamed_source_ids
                                                 ? k_chunk % num_local_k_chunks
                                                 : (has_sliding_window ? sliding_k_chunk.source_k_chunk : k_chunk);

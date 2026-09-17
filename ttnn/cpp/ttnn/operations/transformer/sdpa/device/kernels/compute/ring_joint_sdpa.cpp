@@ -261,7 +261,10 @@ void kernel_main() {
         GROUPED_KV_SOURCE_COUNT, ring_size, kv_local_padded_Nt, logical_nt, active_ring_iter_mask);
     const bool stream_sources = source_group_size > 1;
     const bool pack_source_tails = stream_sources;
-    const PackedKVGroupPlan packed_kv{kv_local_padded_Nt, source_group_size, Sk_chunk_t};
+    // Bound the plan by the live region; kv_local_padded_Nt stays the physical per-source stride.
+    const uint32_t packed_live_tiles_per_source = packed_kv_live_tiles_per_source(logical_nt, ring_size);
+    const PackedKVGroupPlan packed_kv{
+        source_group_size > 1 ? packed_live_tiles_per_source : kv_local_padded_Nt, source_group_size, Sk_chunk_t};
     const uint32_t sdpa_ring_iterations = has_sliding_window ? 1 : ring_size / source_group_size;
     for (uint32_t ring_iter = 0; ring_iter < sdpa_ring_iterations; ++ring_iter) {
         uint32_t streamed_source_ids[GROUPED_KV_SOURCE_COUNT];
@@ -488,7 +491,8 @@ void kernel_main() {
                 logical_lt,
                 0,
                 stream_sources ? streamed_source_ids : nullptr,
-                pack_source_tails ? packed_kv.tile_count() : 0);
+                pack_source_tails ? packed_kv.tile_count() : 0,
+                pack_source_tails ? packed_kv.source_tiles : 0);
         } else {
             assert_kv_pad_rotation_streaming_only<kv_pad_rotation_enabled>();
             // This path's single chunked slab param drives BOTH the Q mapping (which strides by the Q
