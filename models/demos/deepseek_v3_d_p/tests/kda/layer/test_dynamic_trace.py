@@ -14,7 +14,7 @@ from models.demos.deepseek_v3_d_p.tests.kda.layer.test_offset import (
     _reference_case,
     _to_sp_input,
 )
-from models.demos.deepseek_v3_d_p.tt.kda.device_chronology import start_tensor
+from models.demos.deepseek_v3_d_p.tests.kda.utils import make_actual_start
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_bit_identical
 
 
@@ -31,7 +31,7 @@ def test_changing_offset_single_capture(mesh_device, sp_axis, tp_axis, device_pa
     local_rows = 2560
     config, weights, hidden, expected_output, expected_state = _reference_case(p * local_rows)
     layer = _build_layer(mesh_device, config, weights, sp_axis, tp_axis, summary_group_chunks=20)
-    metadata = start_tensor(mesh_device, 0)
+    metadata = make_actual_start(mesh_device, 0)
     hidden_tt = _to_sp_input(hidden, mesh_device, sp_axis)
     initial = layer.allocate_state(batch_size=1)
     trace = None
@@ -56,7 +56,7 @@ def test_changing_offset_single_capture(mesh_device, sp_axis, tp_axis, device_pa
             source = _to_sp_input(hidden[:, permutation, :], mesh_device, sp_axis)
             ttnn.copy(source, hidden_tt)
             ttnn.deallocate(source)
-            source = start_tensor(mesh_device, start)
+            source = make_actual_start(mesh_device, start)
             ttnn.copy(source, metadata)
             ttnn.deallocate(source)
             ttnn.execute_trace(mesh_device, trace, cq_id=0, blocking=True)
@@ -96,7 +96,7 @@ def test_changing_offset_single_capture(mesh_device, sp_axis, tp_axis, device_pa
             source = _to_sp_input(hidden[:, permutation, :], mesh_device, sp_axis)
             ttnn.copy(source, hidden_tt)
             ttnn.deallocate(source)
-            source = start_tensor(mesh_device, start)
+            source = make_actual_start(mesh_device, start)
             ttnn.copy(source, metadata)
             ttnn.deallocate(source)
             ttnn.execute_trace(mesh_device, trace, cq_id=0, blocking=True)

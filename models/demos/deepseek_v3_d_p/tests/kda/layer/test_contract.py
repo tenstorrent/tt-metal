@@ -12,6 +12,7 @@ from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.reference.kda import kda_forward_reference
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     collect_mesh_accuracy_and_determinism_results,
+    make_actual_start,
     make_small_kda_test_config,
     random_weights,
 )
@@ -34,7 +35,7 @@ def _hidden_to_device(hidden: torch.Tensor, device: ttnn.Device) -> ttnn.Tensor:
 
 def _forward(layer: ttKDA, hidden: torch.Tensor, state: KdaState) -> tuple[ttnn.Tensor, KdaState]:
     with ttnn.manage_config("throw_exception_on_fallback", True):
-        return layer.forward(_hidden_to_device(hidden, layer.device), state)
+        return layer.forward(_hidden_to_device(hidden, layer.device), state, make_actual_start(layer.device))
 
 
 def _assert_state_metadata(state: KdaState, config) -> None:
@@ -65,7 +66,7 @@ def test_layer_matches_reference_and_is_deterministic(device: ttnn.Device) -> No
 
     def run() -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
         with ttnn.manage_config("throw_exception_on_fallback", True):
-            output, state = layer.forward(hidden_tt, layer.allocate_state())
+            output, state = layer.forward(hidden_tt, layer.allocate_state(), make_actual_start(layer.device))
         return output, state.recurrent, state.convolution
 
     (output_tt, recurrent_tt, convolution_tt), mismatch_markers = collect_mesh_accuracy_and_determinism_results(run)
@@ -257,13 +258,17 @@ def test_layer_rejects_invalid_forward(case: str, device: ttnn.Device, expect_er
 
     hidden = torch.randn(*hidden_shape, generator=torch.Generator().manual_seed(45), dtype=torch.bfloat16)
     with expect_error(ValueError, error):
-        layer.forward(_hidden_to_device(hidden, device), state, actual_start=32 if case == "split_sequence" else 0)
+        layer.forward(
+            _hidden_to_device(hidden, device),
+            state,
+            actual_start=make_actual_start(layer.device, 32 if case == "split_sequence" else 0),
+        )
 
 
 @pytest.mark.parametrize("actual_start", [-32, 16, 1000])
-def test_layer_rejects_invalid_actual_start(device: ttnn.Device, actual_start: int, expect_error) -> None:
+def test_layer_rejects_non_tensor_actual_start(device: ttnn.Device, actual_start: int, expect_error) -> None:
     config = make_small_kda_test_config()
     layer = ttKDA(device, config, random_weights(config))
     hidden = _hidden_to_device(torch.zeros(1, 32, config.hidden_size, dtype=torch.bfloat16), device)
-    with expect_error(ValueError, "actual_start must be a non-negative multiple of 32"):
+    with expect_error(TypeError, "actual_start must be a device UINT32 scalar"):
         layer.forward(hidden, layer.allocate_state(), actual_start=actual_start)

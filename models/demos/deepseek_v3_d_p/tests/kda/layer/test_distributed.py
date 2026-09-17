@@ -13,6 +13,7 @@ from models.demos.deepseek_v3_d_p.reference.kda import kda_forward_reference
 from models.demos.deepseek_v3_d_p.reference.kda.config import KDAConfig
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     collect_mesh_accuracy_and_determinism_results,
+    make_actual_start,
     random_weights,
     reconstruct_convolution_at_sp_rank,
     reconstruct_sp_tp_tensor,
@@ -90,7 +91,7 @@ def test_sp_group_divisor_fallback_matches_reference(
     initial_state = layer.allocate_state(batch_size=1)
     hidden_tt = _to_sp_input(hidden, mesh_device, sp_axis)
     with ttnn.manage_config("throw_exception_on_fallback", True):
-        output_tt, state = layer.forward(hidden_tt, initial_state)
+        output_tt, state = layer.forward(hidden_tt, initial_state, make_actual_start(layer.device))
     assert len(output_tt.shape) == 3
 
     actual_output = reconstruct_sp_tp_tensor(
@@ -182,7 +183,9 @@ def test_sp_segmented_prefill_matches_one_shot(
 
     one_shot_input_state = layer.allocate_state(batch_size=1)
     with ttnn.manage_config("throw_exception_on_fallback", True):
-        one_shot_tt, one_shot_state = layer.forward(_to_sp_input(hidden, mesh_device, sp_axis), one_shot_input_state)
+        one_shot_tt, one_shot_state = layer.forward(
+            _to_sp_input(hidden, mesh_device, sp_axis), one_shot_input_state, make_actual_start(layer.device)
+        )
     one_shot = reconstruct_sp_tp_tensor(
         one_shot_tt,
         mesh_device,
@@ -211,7 +214,9 @@ def test_sp_segmented_prefill_matches_one_shot(
         for split in splits:
             stop = start + split
             output_tt, chunked_state = layer.forward(
-                _to_sp_input(hidden[:, start:stop], mesh_device, sp_axis), chunked_state
+                _to_sp_input(hidden[:, start:stop], mesh_device, sp_axis),
+                chunked_state,
+                make_actual_start(layer.device),
             )
             outputs.append(
                 reconstruct_sp_tp_tensor(
@@ -293,7 +298,7 @@ def test_sp_minimal_group_matches_reference_and_is_deterministic(
     def run() -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
         state = layer.allocate_state(batch_size=1)
         with ttnn.manage_config("throw_exception_on_fallback", True):
-            output_tt, state = layer.forward(hidden_tt, state)
+            output_tt, state = layer.forward(hidden_tt, state, make_actual_start(layer.device))
         return output_tt, state.recurrent, state.convolution
 
     (output_tt, recurrent_tt, convolution_tt), mismatch_markers = collect_mesh_accuracy_and_determinism_results(run)

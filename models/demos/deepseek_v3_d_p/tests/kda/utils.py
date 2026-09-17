@@ -415,3 +415,14 @@ def random_weights(config: KDAConfig) -> dict[str, torch.Tensor]:
         weights["g_a_proj.weight"] = normal(value_rank, hidden)
         weights["g_b_proj.weight"] = normal(config.num_heads * value_rank, value_rank)
     return weights
+
+
+def make_actual_start(device: ttnn.MeshDevice, actual_start: int = 0) -> ttnn.Tensor:
+    """Allocate caller-owned start metadata before any trace capture."""
+    return ttnn.from_torch(
+        torch.tensor([actual_start], dtype=torch.int64),
+        device=device,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+    )

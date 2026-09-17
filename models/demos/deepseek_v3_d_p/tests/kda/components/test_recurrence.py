@@ -14,11 +14,12 @@ from models.demos.deepseek_v3_d_p.reference.kda.ops import kda_recurrent_referen
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     collect_mesh_accuracy_and_determinism_results,
     compare_cpu_device,
+    make_actual_start,
     reconstruct_state_at_sp_rank,
 )
 from models.demos.deepseek_v3_d_p.tt.kda import recurrence
 from models.demos.deepseek_v3_d_p.tt.kda.config import KDARecurrenceProgramConfig
-from models.demos.deepseek_v3_d_p.tt.kda.device_chronology import DeviceChronology, rank_tensor, start_tensor
+from models.demos.deepseek_v3_d_p.tt.kda.device_chronology import DeviceChronology, rank_tensor
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
     assert_accurate,
     assert_bit_identical,
@@ -286,7 +287,7 @@ def _distributed_recurrence_case(
     sp_size = tuple(mesh_device.shape)[sp_axis]
     topology = DeviceChronology(
         ttnn.experimental.kda.chronological_topology(
-            start_tensor(mesh_device, 0),
+            make_actual_start(mesh_device, 0),
             rank_tensor(mesh_device, sp_axis),
             sp_size,
             sequence // sp_size,
@@ -408,7 +409,7 @@ def test_distributed_prefix_preserves_noncommuting_order_and_tp_lines(
         sequence_parallel_axis=0,
         chronology=DeviceChronology(
             ttnn.experimental.kda.chronological_topology(
-                start_tensor(mesh_device, order[0] * 32), rank_tensor(mesh_device, 0), 2, 32, 1, 32, 32
+                make_actual_start(mesh_device, order[0] * 32), rank_tensor(mesh_device, 0), 2, 32, 1, 32, 32
             ),
             2,
         ),

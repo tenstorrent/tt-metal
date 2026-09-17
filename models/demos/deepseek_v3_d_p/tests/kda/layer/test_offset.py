@@ -22,6 +22,7 @@ from models.demos.deepseek_v3_d_p.reference.kda import kda_forward_reference
 from models.demos.deepseek_v3_d_p.reference.kda.config import KDAConfig
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     collect_mesh_accuracy_and_determinism_results,
+    make_actual_start,
     random_weights,
     reconstruct_convolution_at_sp_rank,
     reconstruct_sp_tp_tensor,
@@ -135,7 +136,9 @@ def test_multi_group_split_matches_natural_order(mesh_device: ttnn.MeshDevice, a
     permutation = _mla_row_permutation(actual_start, 2, local_rows)
     hidden_tt = _to_sp_input(hidden[:, permutation, :], mesh_device, sp_axis)
     with ttnn.manage_config("throw_exception_on_fallback", True):
-        output_tt, state = layer.forward(hidden_tt, layer.allocate_state(batch_size=1), actual_start)
+        output_tt, state = layer.forward(
+            hidden_tt, layer.allocate_state(batch_size=1), make_actual_start(layer.device, actual_start)
+        )
     _assert_matches_reference(
         output_tt=output_tt,
         state=state,
@@ -168,7 +171,9 @@ def test_every_aligned_multi_group_offset_matches_natural_order(mesh_device: ttn
         state = None
         try:
             with ttnn.manage_config("throw_exception_on_fallback", True):
-                output_tt, state = layer.forward(hidden_tt, initial_state, actual_start)
+                output_tt, state = layer.forward(
+                    hidden_tt, initial_state, make_actual_start(layer.device, actual_start)
+                )
             _assert_matches_reference(
                 output_tt=output_tt,
                 state=state,
@@ -212,7 +217,9 @@ def test_representative_sp4_multi_group_offsets_match_natural_order(mesh_device:
         state = None
         try:
             with ttnn.manage_config("throw_exception_on_fallback", True):
-                output_tt, state = layer.forward(hidden_tt, initial_state, actual_start)
+                output_tt, state = layer.forward(
+                    hidden_tt, initial_state, make_actual_start(layer.device, actual_start)
+                )
             _assert_matches_reference(
                 output_tt=output_tt,
                 state=state,
@@ -313,7 +320,9 @@ def test_device_boundary_offsets_match_natural_order(
         permutation = _mla_row_permutation(actual_start, sp_size, local_rows)
         hidden_tt = _to_sp_input(hidden[:, permutation, :], mesh_device, sp_axis)
         with ttnn.manage_config("throw_exception_on_fallback", True):
-            output_tt, state = layer.forward(hidden_tt, layer.allocate_state(batch_size=1), actual_start)
+            output_tt, state = layer.forward(
+                hidden_tt, layer.allocate_state(batch_size=1), make_actual_start(layer.device, actual_start)
+            )
         _assert_matches_reference(
             output_tt=output_tt,
             state=state,
@@ -342,11 +351,11 @@ def test_zero_offset_is_deterministic_and_matches_reference(
     layer = _build_layer(mesh_device, config, weights, sp_axis, tensor_parallel_axis)
     hidden_tt = _to_sp_input(hidden, mesh_device, sp_axis)
 
-    starts = iter(((), (0,), (0,)))
+    actual_start_tt = make_actual_start(mesh_device)
 
     def run():
         with ttnn.manage_config("throw_exception_on_fallback", True):
-            output_tt, state = layer.forward(hidden_tt, layer.allocate_state(batch_size=1), *next(starts))
+            output_tt, state = layer.forward(hidden_tt, layer.allocate_state(batch_size=1), actual_start_tt)
         return output_tt, state.recurrent, state.convolution
 
     (output_tt, recurrent_tt, convolution_tt), mismatch_markers = collect_mesh_accuracy_and_determinism_results(run)
@@ -401,7 +410,9 @@ def test_split_offsets_match_natural_order(
         permutation = _mla_row_permutation(actual_start, sp_size, local_rows)
         hidden_tt = _to_sp_input(hidden[:, permutation, :], mesh_device, sp_axis)
         with ttnn.manage_config("throw_exception_on_fallback", True):
-            output_tt, state = layer.forward(hidden_tt, layer.allocate_state(batch_size=1), actual_start)
+            output_tt, state = layer.forward(
+                hidden_tt, layer.allocate_state(batch_size=1), make_actual_start(layer.device, actual_start)
+            )
         _assert_matches_reference(
             output_tt=output_tt,
             state=state,
@@ -434,7 +445,9 @@ def test_worst_case_split_offset_is_deterministic(
 
     def run():
         with ttnn.manage_config("throw_exception_on_fallback", True):
-            output_tt, state = layer.forward(hidden_tt, layer.allocate_state(batch_size=1), actual_start)
+            output_tt, state = layer.forward(
+                hidden_tt, layer.allocate_state(batch_size=1), make_actual_start(layer.device, actual_start)
+            )
         return output_tt, state.recurrent, state.convolution
 
     _, mismatch_markers = collect_mesh_accuracy_and_determinism_results(run)
@@ -454,19 +467,20 @@ def test_worst_case_split_trace_replay_is_bit_identical(mesh_device: ttnn.MeshDe
     hidden_tt = _to_sp_input(hidden[:, permutation, :], mesh_device, sp_axis)
 
     input_state = layer.allocate_state(batch_size=1)
+    actual_start_tt = make_actual_start(mesh_device, actual_start)
     trace_id = None
     capturing = False
     output_tt = state = None
     try:
         for _ in range(2):
-            warm_output, warm_state = layer.forward(hidden_tt, input_state, actual_start)
+            warm_output, warm_state = layer.forward(hidden_tt, input_state, actual_start_tt)
             ttnn.synchronize_device(mesh_device)
             ttnn.deallocate(warm_output)
             ttnn.deallocate(warm_state.recurrent)
             ttnn.deallocate(warm_state.convolution)
         trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
         capturing = True
-        output_tt, state = layer.forward(hidden_tt, input_state, actual_start)
+        output_tt, state = layer.forward(hidden_tt, input_state, actual_start_tt)
         ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
         capturing = False
         first = None
@@ -536,7 +550,7 @@ def test_split_offset_continuation_preserves_nonzero_caller_carries(mesh_device:
         output = None
         try:
             with ttnn.manage_config("throw_exception_on_fallback", True):
-                output, state = layer.forward(input_tt, previous, actual_start)
+                output, state = layer.forward(input_tt, previous, make_actual_start(layer.device, actual_start))
             _assert_matches_reference(
                 output_tt=output,
                 state=state,

@@ -25,16 +25,6 @@ def rank_tensor(device: ttnn.MeshDevice, axis: int) -> ttnn.Tensor:
     )
 
 
-def start_tensor(device: ttnn.MeshDevice, start: int) -> ttnn.Tensor:
-    return ttnn.from_torch(
-        torch.tensor([start], dtype=torch.int64),
-        device=device,
-        dtype=ttnn.uint32,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(device),
-    )
-
-
 @dataclass(frozen=True)
 class DeviceChronology:
     controls: ttnn.Tensor

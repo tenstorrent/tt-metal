@@ -18,6 +18,7 @@ from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric_1d_device_
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     check_kimi_k3_accuracy,
     collect_mesh_accuracy_and_determinism_results,
+    make_actual_start,
     make_kimi_k3_device_case,
     make_kimi_k3_test_case,
     make_synthetic_kimi_k3_test_case,
@@ -72,7 +73,7 @@ def test_synthetic_kimi_k3_accuracy_and_determinism(
     def run() -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
         initial_state = layer.allocate_state(batch_size=1)
         with ttnn.manage_config("throw_exception_on_fallback", True):
-            output, state = layer.forward(hidden_tt, initial_state)
+            output, state = layer.forward(hidden_tt, initial_state, make_actual_start(layer.device))
         return output, state.recurrent, state.convolution
 
     (output, recurrent, convolution), mismatch_markers = collect_mesh_accuracy_and_determinism_results(run)
@@ -152,7 +153,7 @@ def test_kimi_k3_layer_1_real_weights_accuracy(
     )
     state = layer.allocate_state(batch_size=1)
     with ttnn.manage_config("throw_exception_on_fallback", True):
-        output, state = layer.forward(hidden_tt, state)
+        output, state = layer.forward(hidden_tt, state, make_actual_start(layer.device))
     ttnn.synchronize_device(mesh_device)
 
     mesh_shape = tuple(mesh_device.shape)
@@ -215,7 +216,7 @@ def test_synthetic_kimi_k3_offset_acceptance(
         started = time.perf_counter()
         try:
             with ttnn.manage_config("throw_exception_on_fallback", True):
-                output, state = layer.forward(hidden, initial, actual_start)
+                output, state = layer.forward(hidden, initial, make_actual_start(layer.device, actual_start))
             _assert_matches_reference(
                 output_tt=output,
                 state=state,

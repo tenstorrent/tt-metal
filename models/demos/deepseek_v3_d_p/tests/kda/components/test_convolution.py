@@ -13,8 +13,9 @@ import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric_1d_device_params
 from models.demos.deepseek_v3_d_p.tests.kda.chronology_oracle import _chronological_topology
+from models.demos.deepseek_v3_d_p.tests.kda.utils import make_actual_start
 from models.demos.deepseek_v3_d_p.tt.kda.convolution import exchange_convolution_carry
-from models.demos.deepseek_v3_d_p.tt.kda.device_chronology import DeviceChronology, rank_tensor, start_tensor
+from models.demos.deepseek_v3_d_p.tt.kda.device_chronology import DeviceChronology, rank_tensor
 
 pytestmark = [run_for_blackhole()]
 
@@ -108,7 +109,7 @@ def test_exchange_convolution_carry_preserves_causal_carries(
                 end_row = (final_rank + 1) * local_rows
                 expected_final = qkv[:, end_row - 3 : end_row]
 
-                metadata = start_tensor(mesh_device, boundary * local_rows + tail_rows)
+                metadata = make_actual_start(mesh_device, boundary * local_rows + tail_rows)
                 ranks = rank_tensor(mesh_device, axis)
                 controls = ttnn.experimental.kda.chronological_topology(metadata, ranks, sp, local_rows, 1, 32, 32)
                 chronology = DeviceChronology(controls, sp)
