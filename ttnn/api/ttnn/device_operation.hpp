@@ -74,7 +74,10 @@ auto compute_program_hash(
     const typename device_operation_t::tensor_args_t& tensor_args) {
     if constexpr (DeviceOperationWithCustomProgramCacheConcept<device_operation_t>) {
         ZoneScopedN("Compute custom program hash");
-        return device_operation_t::compute_program_hash(operation_attributes, tensor_args);
+        // Fold type_hash so distinct ops cannot alias on a custom-hash collision
+        return ttsl::hash::hash_objects_with_default_seed(
+            ttsl::hash::type_hash<device_operation_t>,
+            device_operation_t::compute_program_hash(operation_attributes, tensor_args));
     } else {
         ZoneScopedN("Compute default program hash");
         return ttsl::hash::hash_objects_with_default_seed(
@@ -385,7 +388,8 @@ template <DeviceOperationConcept mesh_device_operation_t>
     tt::tt_metal::program_cache::detail::ProgramCache& program_cache,
     const ProgramCacheKey& program_key) {
     auto op_name = get_operation_name<mesh_device_operation_t>(operation_attributes);
-    std::string alloc_ctx = "program_cache: " + std::string(op_name);
+    std::string alloc_ctx =
+        std::string(tt::tt_metal::kProgramCacheAllocationContextPrefix) + " " + std::string(op_name);
     for (const auto& [name, value] : ttsl::reflection::get_attributes(operation_attributes)) {
         alloc_ctx += " " + std::string(name) + "=" + value.to_string();
     }

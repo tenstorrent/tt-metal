@@ -417,6 +417,8 @@ void Hal::initialize_bh(
             ((addr >= NOC0_REGS_START_ADDR) && (addr < NOC0_REGS_START_ADDR + 0x1000)) ||
             ((addr >= NOC1_REGS_START_ADDR) && (addr < NOC1_REGS_START_ADDR + 0x1000)) ||
             (addr == RISCV_DEBUG_REG_SOFT_RESET_0) ||
+            (addr == RISCV_DEBUG_REG_WALL_CLOCK_L ||
+             addr == RISCV_DEBUG_REG_WALL_CLOCK_H) ||                // read by the streaming profiler's clock sync
             (addr == IERISC_RESET_PC ||
              addr == SUBORDINATE_IERISC_RESET_PC) ||                // used to program start addr for eth FW
             (addr == DRISC_RESET_PC) ||                             // used to program start addr for DRAM FW

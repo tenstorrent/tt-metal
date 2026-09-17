@@ -436,6 +436,16 @@ def test_id_disambiguates_same_name(repo: Repo):
     assert code == 0
     assert payload["expected_leg_count"] == 1
     assert payload["run_legs"][0]["sku"] == "bh_p150"
+    assert payload["run_legs"][0]["id"] == "unit-shared-bh"
+
+
+def test_duplicate_name_without_ids_still_fails_closed(repo: Repo):
+    """Yamls that declare no id keep keying on name alone, so the guard still bites."""
+    duplicated = BASE_GALAXY_YAML + BASE_GALAXY_YAML
+    repo.write("tests/pipeline_reorg/sample_galaxy_tests.yaml", duplicated)
+    code, _, stderr = repo.scope()
+    assert code == 1
+    assert "share the key" in stderr
 
 
 def test_entry_without_skus_fails_closed(repo: Repo):
@@ -542,6 +552,41 @@ def test_filter_keeps_only_the_touched_legs(repo: Repo):
     assert code == 0, stderr
     assert len(payload["legs"]) == 2
     assert {r["sku"] for r in payload["legs"]} == {"wh_n150_civ2", "wh_n300_civ2"}
+
+
+def test_filter_matches_same_name_rows_by_id(repo: Repo):
+    """Two entries sharing a name and a SKU resolve to their own rows, not a collision."""
+    same_sku = textwrap.dedent(
+        """\
+        - name: shared name
+          id: shared-one
+          cmd: ./build/test/s --one
+          skus:
+            bh_p150:
+              timeout: 5
+          team: llk
+          owner_id: U008
+
+        - name: shared name
+          id: shared-two
+          cmd: ./build/test/s --two
+          skus:
+            bh_p150:
+              timeout: 5
+          team: llk
+          owner_id: U008
+        """
+    )
+    repo.write("tests/pipeline_reorg/sample_unit_tests.yaml", same_sku)
+    repo.commit_base()
+    repo.write("tests/pipeline_reorg/sample_unit_tests.yaml", same_sku.replace("--two", "--two --extra"))
+    rows = [
+        matrix_row("shared name [bh_p150]", "bh_p150", id="shared-one"),
+        matrix_row("shared name [bh_p150]", "bh_p150", id="shared-two"),
+    ]
+    code, payload, stderr = run_with_matrices(repo, {"sample_unit_tests": rows})
+    assert code == 0, stderr
+    assert [row["id"] for row in payload["legs"]] == ["shared-two"]
 
 
 def test_filter_fails_when_a_leg_has_no_matrix_row(repo: Repo):
