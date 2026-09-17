@@ -19,13 +19,13 @@
 
 #include <fmt/format.h>
 
-#include <chrono>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <limits>
 #include <string>
+#include <string_view>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/distributed.hpp>
 #include <ttnn/operations/eltwise/binary/binary.hpp>
 #include <vector>
 
@@ -37,7 +37,6 @@
 #include "metal/ops/swiglu_packed_fw/swiglu_packed_fw.hpp"
 #include "test_utils/random_data.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
-#include "utils/memory_utils.hpp"
 
 namespace {
 
@@ -47,29 +46,26 @@ constexpr uint32_t kNumMeasure = 20U;
 // The op sees only batch*sequence flattened.
 // `inner` is the intermediate width I; the packed tensor is 2I wide.
 struct Case {
-    std::string name;
+    std::string_view name;
     uint32_t rows;
     uint32_t inner;
 
-    uint32_t tile_rows() const {
+    constexpr uint32_t tile_rows() const {
         return rows / tt::constants::TILE_HEIGHT;
     }
 };
 
-const std::vector<Case>& all_cases() {
-    static const std::vector<Case> cases = {
-        // Three intermediate widths spanning what ttml's Llama presets use.
-        {.name = "i1024_1k_rows", .rows = 1024U, .inner = 1024U},
-        {.name = "i1024_4k_rows", .rows = 4096U, .inner = 1024U},
-        {.name = "i5632_1k_rows", .rows = 1024U, .inner = 5632U},
-        {.name = "i5632_4k_rows", .rows = 4096U, .inner = 5632U},
-        {.name = "i14336_1k_rows", .rows = 1024U, .inner = 14336U},
-        {.name = "i14336_4k_rows", .rows = 4096U, .inner = 14336U},
-        // Same number of tiles as i14336_1k_rows, arranged differently.
-        {.name = "i3584_4k_rows", .rows = 4096U, .inner = 3584U},
-    };
-    return cases;
-}
+constexpr std::array<Case, 7> kCases{{
+    // Three intermediate widths spanning what ttml's Llama presets use.
+    {.name = "i1024_1k_rows", .rows = 1024U, .inner = 1024U},
+    {.name = "i1024_4k_rows", .rows = 4096U, .inner = 1024U},
+    {.name = "i5632_1k_rows", .rows = 1024U, .inner = 5632U},
+    {.name = "i5632_4k_rows", .rows = 4096U, .inner = 5632U},
+    {.name = "i14336_1k_rows", .rows = 1024U, .inner = 14336U},
+    {.name = "i14336_4k_rows", .rows = 4096U, .inner = 14336U},
+    // Same number of tiles as i14336_1k_rows, arranged differently.
+    {.name = "i3584_4k_rows", .rows = 4096U, .inner = 3584U},
+}};
 
 struct ArmResult {
     std::string name;
@@ -160,39 +156,14 @@ std::pair<ttnn::Tensor, ttnn::Tensor> slice_halves(const ttnn::Tensor& packed) {
     return {ttnn::slice(packed, gate_start, gate_end, step), ttnn::slice(packed, up_start, up_end, step)};
 }
 
-template <typename Fn>
-double time_avg_us(ttnn::distributed::MeshDevice* device, Fn&& fn) {
-    for (uint32_t i = 0; i < kNumWarmup; ++i) {
-        fn();
-    }
-    tt::tt_metal::distributed::Synchronize(*device, std::nullopt);
-    const auto t0 = std::chrono::high_resolution_clock::now();
-    for (uint32_t i = 0; i < kNumMeasure; ++i) {
-        fn();
-    }
-    tt::tt_metal::distributed::Synchronize(*device, std::nullopt);
-    const auto t1 = std::chrono::high_resolution_clock::now();
-    return std::chrono::duration<double, std::micro>(t1 - t0).count() / static_cast<double>(kNumMeasure);
-}
-
-template <typename Fn>
-size_t capture_dram_peak(const std::string& name, Fn&& fn) {
-    ttml::utils::MemoryUsageTracker::clear();
-    const auto guard = ttml::utils::MemoryUsageTracker::begin_capture();
-    (void)guard;
-    fn();
-    ttml::utils::MemoryUsageTracker::end_capture(name);
-    return static_cast<size_t>(std::max(0LL, ttml::utils::MemoryUsageTracker::get_dram_usage(name).peak));
-}
-
 template <typename FwFn, typename BwFn>
 ArmResult run_arm(const std::string& name, ttnn::distributed::MeshDevice* device, FwFn&& fw, BwFn&& bw) {
     ArmResult r;
     r.name = name;
-    r.forward_us = time_avg_us(device, fw);
-    r.backward_us = time_avg_us(device, bw);
-    r.forward_dram_peak = capture_dram_peak(name + "_fw", fw);
-    r.backward_dram_peak = capture_dram_peak(name + "_bw", bw);
+    r.forward_us = ttml::benchmark_utils::time_device_avg_us(*device, kNumWarmup, kNumMeasure, fw);
+    r.backward_us = ttml::benchmark_utils::time_device_avg_us(*device, kNumWarmup, kNumMeasure, bw);
+    r.forward_dram_peak = ttml::benchmark_utils::capture_dram_peak(name + "_fw", fw);
+    r.backward_dram_peak = ttml::benchmark_utils::capture_dram_peak(name + "_bw", bw);
     return r;
 }
 
@@ -284,8 +255,8 @@ void print_case_table(const Case& c, const CaseResult& result) {
     const auto& baseline = result.arms.front();
 
     fmt::print(
-        "\nCase: {}   rows={} ({} tile-rows)   I={}   packed={}\n"
-        "  max abs diff vs reference: fw {:g}, bw {:g}\n",
+        "\n#### `{}` — {} rows ({} tile-rows), I = {}, packed = {}\n\n"
+        "max abs diff vs reference: fw {:g}, bw {:g}\n\n",
         c.name,
         c.rows,
         c.tile_rows(),
@@ -294,12 +265,11 @@ void print_case_table(const Case& c, const CaseResult& result) {
         result.max_abs_diff.forward,
         result.max_abs_diff.backward);
     fmt::print(
-        "+------------+-----------+-----------+-----------+-----------+-------------+-------------+\n"
-        "| Arm        | Fwd µs    | Fwd %     | Bwd µs    | Bwd %     | Fwd DRAM KB | Bwd DRAM KB |\n"
-        "+------------+-----------+-----------+-----------+-----------+-------------+-------------+\n");
+        "| Arm        | Fwd host µs/launch | Fwd %   | Bwd host µs/launch | Bwd %   | Fwd DRAM KB | Bwd DRAM KB |\n"
+        "|:-----------|-------------------:|--------:|-------------------:|--------:|------------:|------------:|\n");
     for (const auto& r : result.arms) {
         fmt::print(
-            "| {:<10} | {:>9.1f} | {:>+9.2f} | {:>9.1f} | {:>+9.2f} | {:>11.1f} | {:>11.1f} |\n",
+            "| {:<10} | {:>18.1f} | {:>+7.2f} | {:>18.1f} | {:>+7.2f} | {:>11.1f} | {:>11.1f} |\n",
             r.name,
             r.forward_us,
             ttml::benchmark_utils::relative_change_pct(r.forward_us, baseline.forward_us),
@@ -308,7 +278,6 @@ void print_case_table(const Case& c, const CaseResult& result) {
             static_cast<double>(r.forward_dram_peak) / 1024.0,
             static_cast<double>(r.backward_dram_peak) / 1024.0);
     }
-    fmt::print("+------------+-----------+-----------+-----------+-----------+-------------+-------------+\n");
 }
 
 }  // namespace
@@ -318,14 +287,15 @@ int main() {
         const tt::tt_metal::distributed::MeshShape mesh(1, 1);
         ttml::autograd::ctx().open_device(mesh);
 
-        fmt::print("Packed-SwiGLU op-level benchmark (separate-tensor composite baseline vs packed)\n");
+        fmt::print("Packed-SwiGLU op-level benchmark (separate-tensor composite baseline vs packed)\n\n");
         fmt::print(
-            "warmup={} measure={}; Fwd %/Bwd % are each direction against the composite arm.\n",
+            "warmup={} measure={}; µs are host time per launch; Fwd %/Bwd % are each direction against the composite "
+            "arm.\n",
             kNumWarmup,
             kNumMeasure);
         fmt::print("DRAM columns are the peak of one captured invocation of that direction.\n");
 
-        for (const auto& c : all_cases()) {
+        for (const auto& c : kCases) {
             print_case_table(c, run_case(c));
         }
 
