@@ -777,7 +777,7 @@ def test_create_gate_indices_tensor_sram_encoding_4x2(bh_2d_mesh_device):
     indirect=True,
 )
 @pytest.mark.requires_num_devices(NUM_DEVICES)
-def test_create_gate_indices_tensor_sram_validation_4x2(bh_2d_mesh_device):
+def test_create_gate_indices_tensor_sram_validation_4x2(bh_2d_mesh_device, expect_error):
     """create_gate_indices_tensor rejects malformed sram_expert_ids before any device upload."""
     _skip_unless_4x2_mesh(bh_2d_mesh_device)
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
@@ -785,9 +785,9 @@ def test_create_gate_indices_tensor_sram_validation_4x2(bh_2d_mesh_device):
     sender_grid = ttnn.CoreRangeSet([ttnn.CoreRange(sender_core, sender_core)])
     mesh_mapper = ttnn.ReplicateTensorToMesh(submesh)
 
-    with pytest.raises(AssertionError, match="out-of-range"):
+    with expect_error(AssertionError, "out-of-range"):
         create_gate_indices_tensor(submesh, sender_grid, sram_expert_ids=[256], mesh_mapper=mesh_mapper)
-    with pytest.raises(AssertionError, match="duplicates"):
+    with expect_error(AssertionError, "duplicates"):
         create_gate_indices_tensor(submesh, sender_grid, sram_expert_ids=[5, 5], mesh_mapper=mesh_mapper)
 
 
@@ -1623,7 +1623,7 @@ def test_prepare_moe_routed_experts_bspm_output_types_4x2(bh_2d_mesh_device, tmp
     indirect=True,
 )
 @pytest.mark.requires_num_devices(NUM_DEVICES)
-def test_prepare_routed_expert_weights_bspm_missing_raises_4x2(bh_2d_mesh_device, tmp_path):
+def test_prepare_routed_expert_weights_bspm_missing_raises_4x2(bh_2d_mesh_device, tmp_path, expect_error):
     """bspm_dir set + .bspm file missing raises FileNotFoundError — silent BFP4 fallback was removed
     so a typo'd --bspm-dir argument can't quietly degrade to a different (BFP4-only) model.
 
@@ -1634,7 +1634,7 @@ def test_prepare_routed_expert_weights_bspm_missing_raises_4x2(bh_2d_mesh_device
     state = _layer_state_dict(0, is_moe=True, seed=43)
 
     # tmp_path is empty — no precision_map_B_3.5.bspm file exists for layer 0
-    with pytest.raises(FileNotFoundError, match="BSPM file required"):
+    with expect_error(FileNotFoundError, "BSPM file required"):
         prepare_routed_expert_weights(
             submesh,
             state,
