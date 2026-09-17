@@ -14,9 +14,10 @@ asymmetric**. For an interior tile the corner region is `b*L + (1-b)*(a*A + (1-a
 O(1) error over roughly a ninth of every frame, which surfaces as visible seams. So this mirrors the
 reference order exactly, tile by tile, rather than reformulating it.
 
-The blend runs in **float32** on device even though the decoder emits bfloat16, because the host path
-it replaces blends in float32 (`.float()` before `stitch_tiles`). Keeping the same precision is what
-lets the existing PCC and roundtrip-PSNR gates carry over unchanged.
+The blend runs in whatever dtype its tiles carry. float32 is what the host path it replaces used
+(`.float()` before `stitch_tiles`), which is how the existing PCC and roundtrip-PSNR gates carried
+over unchanged. bfloat16 is what the decoder actually emits and halves the bytes the blend moves;
+both are gated in `test_stitch_device_minimax_h3.py`.
 """
 
 from __future__ import annotations
@@ -37,20 +38,25 @@ class DeviceTileStitcher:
     of 32 -- and `ttnn.slice` drops to untilize -> row-major -> retilize for exactly that case. The
     trims then hand `ttnn.concat` extents of 80 and 176, which is tile padding on the concat dim and
     triggers the same fallback again. `binary_ng` takes ROW_MAJOR operands and keeps the layout on
-    output, so the arithmetic is unaffected and the blend stays float32.
+    output, so the arithmetic is unaffected.
+
+    The ramp is built in its tiles' own dtype. bfloat16 tiles meeting a float32 ramp is what produced
+    garbage-scale output on this ttnn, so the two are never allowed to disagree.
     """
 
     def __init__(self, mesh_device: ttnn.MeshDevice) -> None:
         self.mesh_device = mesh_device
         self._ramps: dict[tuple, tuple[ttnn.Tensor, ttnn.Tensor]] = {}
 
-    def _ramp_pair(self, shape: tuple[int, ...], extent: int, dim: int) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+    def _ramp_pair(
+        self, shape: tuple[int, ...], extent: int, dim: int, dtype: ttnn.DataType
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """`(weight_a, weight_b)` broadcast to `shape`, where `weight_a = 1 - i/extent` along `dim`.
 
         Materialized at full tile shape rather than relying on ttnn broadcast semantics: a few MB,
         built once, and it removes any question of which operand broadcasts.
         """
-        key = (shape, extent, dim)
+        key = (shape, extent, dim, dtype)
         if key not in self._ramps:
             positions = torch.arange(extent, dtype=torch.float32)
             view = [1] * len(shape)
@@ -60,7 +66,7 @@ class DeviceTileStitcher:
             weight_a = (1 - positions / extent).view(view).expand(slab).contiguous()
             weight_b = (positions / extent).view(view).expand(slab).contiguous()
             self._ramps[key] = tuple(
-                ttnn.from_torch(w, dtype=ttnn.float32, device=self.mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT)
+                ttnn.from_torch(w, dtype=dtype, device=self.mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT)
                 for w in (weight_a, weight_b)
             )
         return self._ramps[key]
@@ -86,7 +92,7 @@ class DeviceTileStitcher:
 
         tail_a = self._slice(a, axis, a.shape[axis] - blend_extent, a.shape[axis])
         head_b = self._slice(b, axis, 0, blend_extent)
-        weight_a, weight_b = self._ramp_pair(tuple(head_b.shape), blend_extent, axis)
+        weight_a, weight_b = self._ramp_pair(tuple(head_b.shape), blend_extent, axis, head_b.dtype)
         blended = ttnn.add(ttnn.multiply(tail_a, weight_a), ttnn.multiply(head_b, weight_b))
 
         if blend_extent == b.shape[axis]:

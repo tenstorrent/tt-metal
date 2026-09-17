@@ -374,6 +374,7 @@ class MiniMaxH3Vae:
         readback_uint8: bool = False,
         waves_per_device: int = 1,
         stitch_exchange: str = "gather",
+        blend_dtype: str = "fp32",
     ) -> None:
         if task not in ("t2va", "ref2va"):
             raise ValueError(f"task must be 't2va' (also serves fl2va) or 'ref2va', got {task!r}")
@@ -406,6 +407,10 @@ class MiniMaxH3Vae:
         # instead; the trims and canvas placement move to a host that only slices and concatenates
         # (float reads fp32 tiles, yuv420 converts per tile and crops the planar atlas on host).
         self.stitch_exchange = stitch_exchange
+        if blend_dtype not in ("fp32", "bf16"):
+            raise ValueError(f"blend_dtype must be 'fp32' or 'bf16', got {blend_dtype!r}")
+        self.blend_dtype = blend_dtype
+        self._blend_dtype = ttnn.float32 if blend_dtype == "fp32" else ttnn.bfloat16
         # `(mean, std)` of the ImageNet normalization the decoder's pixels are still in. Set it and
         # the de-normalization is folded into `proj_out`, so `decode` emits `[-1, 1]` pixels and the
         # caller keeps no copy of the constants. Left unset the decoder emits reference-space values,
@@ -1087,12 +1092,15 @@ class MiniMaxH3Vae:
                 profile["decoder"] += elapsed
                 profile["device"] += elapsed
                 mark = time.perf_counter()
-            # fp32 before anything downstream touches the tiles: the mixed bf16-tile x fp32-ramp
-            # ROW_MAJOR blend in `DeviceTileStitcher` mis-executes on current ttnn (garbage-scale
-            # output; the seam gate only covers fp32 tiles, which is exactly the path this keeps us
-            # on). The cast lands here, while `decoded` is still TILE, so it costs no extra layout
-            # conversion -- the price is fp32 through unpatchify and the gathers (2x bytes).
-            decoded = ttnn.typecast(decoded, ttnn.float32)
+            # The blend's dtype is settled here, while `decoded` is still TILE and the cast costs no
+            # layout conversion. fp32 is the default: it is what the host path the device stitch
+            # replaced used, and what the seam gate covered. The garbage-scale output that first
+            # forced this cast came from bf16 tiles meeting an fp32 ramp, which can no longer happen
+            # -- the stitcher builds its ramp in its tiles' dtype -- so bf16 is a choice now rather
+            # than a hazard, and it keeps the precision the decoder emits while halving the bytes
+            # through unpatchify, both gathers and the blend.
+            if self._blend_dtype == ttnn.float32:
+                decoded = ttnn.typecast(decoded, ttnn.float32)
             # Row-major from here to the DMA. `unpatchify_device`'s rank-8 intermediate has trailing dims
             # of 16, which a tiled reshape pads to 32x32 -- a 4x blowup for a view -- and the stitch's
             # slices and concats land off tile boundaries on this grid's overlaps. One conversion here
