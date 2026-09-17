@@ -407,6 +407,78 @@ it is not on the path to a faster 15 s, since q=128 was slower than q=192 in eve
 | 8 | FSDP layout conversions | not started | **TODO** — tilize/untilize go 0.13 -> 3.13 ms under FSDP, a 23x blowup and a quarter of the whole FSDP cost spent on format round-trips rather than communication. Cheapest apparent win in the breakdown |
 | 9 | Ring SDPA kernel utilization | not started | **TODO** — 48.8% FPU / 35.6% math at the shipped chunk size, shown to be inherent to the kernel at this shape rather than a chunk-size miss. Work is in the kernel |
 | 10 | `dit_fsdp: True` in `_PRESETS_WH` | not started | **TODO** — decision, not a measurement; costs 5.7% of the block, buys the headroom a 12 GB part needs |
+| 13 | TP/SP axes and factors at 15 s / 16:9 (`test_parallel_sweep_minimax_h3.py`) | **done** | Only three configurations exist on this mesh and the shipped TP4/SP8 is the fastest: TP8/SP4 is **+4.1%** ms/fwd (untuned blockings), TP1/SP32 **hangs deterministically** in its first forward. See the section below |
+
+## TP/SP parallel-configuration sweep — 15 s / 16:9
+
+Measured 2026-09-17 on this host at `bc1d99d05f6` plus the `matmul.py` change listed at the end
+(landed on top of `2a47fd04fc6`), with `models/tt_dit/tests/models/minimax_h3/test_parallel_sweep_minimax_h3.py` (new). Driver,
+logs, `results.jsonl`, the strided frame dumps and `compare.py` are in `~/h3_parallel_sweep/` on the
+run host. `MINIMAX_H3_DIT_FSDP=1`, Ring, 4 links, seed 0, the fox prompt, **10 scheduler steps**
+(9 forwards): ms/forward is flat across steps, so 10 steps gives the ranking at a fifth of the wall
+clock. The 10-step ms/fwd runs ~3% above the 50-step figure (fixed per-request work amortised over
+9 forwards instead of 49); every row here is at 10 steps, so the comparison is like for like.
+
+### What can be configured at all
+
+The system mesh is 8x4. Probing every 32-device shape with `FABRIC_1D_RING` at the 4 KB payload:
+8x4, 4x8, 1x32 and 32x1 open and ring-all-gather on both axes; **2x16 and 16x2 are rejected** by
+`system_mesh.cpp:224`. And 4x8 is exactly the transpose of 8x4 -- row *r* of the 4x8 device-id grid
+is column *r* of the 8x4 grid -- so `4x8 tp0/sp1` and `8x4 tp1/sp0` are the same physical rings.
+TP=16 is out regardless (56 heads). That leaves three distinct configurations, not a sweep space:
+
+| config | mesh | TP axis | SP axis | rows/device | padded_len |
+|---|---|---|---|---|---|
+| `4x8_tp0_sp1` | 4x8 | 0 (TP=4) | 1 (SP=8) | 13664 | 109312 |
+| `4x8_tp1_sp0` | 4x8 | 1 (TP=8) | 0 (SP=4) | 27296 | 109184 |
+| `1x32_tp0_sp1` | 1x32 | 0 (TP=1) | 1 (SP=32) | 3424 | 109568 |
+
+### Results
+
+| config | TP/SP | enc | denoise | vae | audio | total | ms/fwd | vs shipped | video PCC vs shipped | audio PCC |
+|---|---|---|---|---|---|---|---|---|---|---|
+| `4x8_tp0_sp1` (shipped) | 4/8 | 3.5 | 111.4 | 14.4 | 4.1 | 133.4 | **12382** | -- | 1.0 | 1.0 |
+| `4x8_tp1_sp0` | 8/4 | 4.1 | 116.0 | 14.4 | 3.4 | 137.9 | 12890 | **+4.1%** | 0.907 | 0.972 |
+| `1x32_tp0_sp1` | 1/32 | -- | **hang** | -- | -- | -- | -- | -- | -- | -- |
+
+**The shipped TP4/SP8 stays.** Neither alternative is a speedup, and one does not run.
+
+**TP8/SP4 (+4.1%)** runs on the generic matmul blockings: none of its four AGMM shapes
+(`(5376, 2688)` qkv, `(7168, 672)` to_out, `(5376, 3584)` ff1 at M=27296, plus the refiner's) has a
+swept entry. The shipped config's tuned entries are worth 0.58% (experiment 6), so even a generous
+allowance for tuning TP8's shapes leaves it ~3.5% behind, and the halved SP ring buys nothing the
+doubled TP ring does not cost: per layer each device now receives ~257 MB per AGMM all-gather (was
+110 MB) against ~294 MB of KV around the ring (was 685 MB). Its output is the same video -- same
+fox, scene and motion, small pose/detail drift (mean |diff| 12-19 of 255 per frame, growing with
+frame index) -- which is what a changed bf16 reduction order looks like after 9 sampling steps;
+`compare_tp4_vs_tp8.png` in the results dir shows four frame pairs. Not a correctness problem.
+
+**TP1/SP32 hangs, deterministically.** Two attempts, the second on a freshly reset board with
+kernels coming from the cache (zero `BuildKernels` lines), both stall in the *first* forward:
+the last log line is the generic-blocking warning for `proj_in` `(107872, 96, 5376)`, then nothing.
+Fingerprint identical to `MiniMaxH3_wormhole_hang.md`: 180-365% CPU with CPU-time far past
+elapsed, all ~448 threads in `futex_wait_queue`, `pytest --timeout` does not fire, board needs
+`tt-smi -r all` afterwards (which warns that Galaxy CPLD FW < 1.16 should use `-glx_reset`, but did
+work here). Not root-caused; TP=1 is also the configuration with the least to gain (each device
+holds all 56 heads, so the KV ring moves 4x the bytes of TP4, and FSDP gathers full 5376-wide
+weights over a 32-ring), so it was not pursued further. Evidence in `1x32_tp0_sp1_s10.HANG.txt`.
+
+### Code changes this needed
+
+* `models/tt_dit/utils/matmul.py`, `_ring_safe_k_block` in `get_agmm_config`'s generic fallback.
+  `all_gather_minimal_matmul_async` on Ring asserts `K_tiles_per_device % K_block == 0` (its
+  bidirectional half-block scheme has no tail block; Linear does). At TP=8 a 5376-wide input is 21
+  K tiles per device and the generic `(8, 8, 8)` threw on the refiner's first matmul, 20 minutes
+  into a weight load. The fallback now drops K_block to the largest divisor (7 here) and warns
+  once per shape; swept table entries and caller-supplied `default_block_size` are untouched, so
+  the shipped TP=4 configs are bit-for-bit what they were.
+* `test_parallel_sweep_minimax_h3.py`: the harness. Env knobs `H3_SWEEP_STEPS`, `H3_SWEEP_ASPECT`,
+  `H3_SWEEP_DURATION_S`, `H3_SWEEP_OUT`. Writes one JSON line per run plus every 6th frame and the
+  audio, so configurations can be PCC'd against each other.
+
+Two harness lessons, both cost time: run each configuration in its own pytest process behind a
+shell `timeout` (the hang wedges the process, not just the test), and do not gate a queued run on
+`pgrep -f <driver name>` -- the waiting shell's own command line matches, and it waits forever.
 
 ## Open issues
 
