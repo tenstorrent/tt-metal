@@ -113,9 +113,6 @@ void kernel_main() {
     const DataflowBuffer dfb_x(dfb_x_id);
 #endif
 #else
-    // Under RMSNORM without a fused pre-add, the `#ifndef RMSNORM` block below (the only place
-    // this branch's dfb_x_id is otherwise read) is compiled out, so dfb_x_id is set but never used.
-    constexpr auto dfb_x_id [[maybe_unused]] = dfb_in_id;
     DataflowBuffer& dfb_x = dfb_in;
 #endif
 
