@@ -32,7 +32,6 @@ ttnn::device_operation::MeshWorkloadArtifacts AffineExclusiveScanProgramFactory:
     const auto& tail_a = in.tail_a.has_value() ? in.tail_a->mesh_tensor() : a;
     const auto& tail_b = in.tail_b.has_value() ? in.tail_b->mesh_tensor() : b;
     const auto& tail_state = in.tail_state.has_value() ? in.tail_state->mesh_tensor() : initial_state;
-    const auto& wrap_indicator = in.wrap_indicator.has_value() ? in.wrap_indicator->mesh_tensor() : a;
     const auto& output = outputs[0].mesh_tensor();
     const auto& device = a.device();
     const auto arch = device.arch();
@@ -43,9 +42,6 @@ ttnn::device_operation::MeshWorkloadArtifacts AffineExclusiveScanProgramFactory:
     const uint32_t group_heads = attrs.batch_heads * groups_per_head;
     const uint32_t key_matrix_tiles = key_tiles * key_tiles;
     const uint32_t state_matrix_tiles = key_tiles * value_tiles;
-    const uint32_t reset_group = attrs.segmented && !in.actual_start.has_value()
-                                     ? attrs.wrap_group + static_cast<uint32_t>(attrs.split_in_group) - 1
-                                     : 0;
 
     const auto grid = device.compute_with_storage_grid_size();
     auto distribution = kda_factory_detail::distribute_prep(grid, group_heads, group_heads);
@@ -66,7 +62,6 @@ ttnn::device_operation::MeshWorkloadArtifacts AffineExclusiveScanProgramFactory:
     const tt::tt_metal::experimental::DFBSpecName tail_affine_dfb_name{"tail_affine"};
     const tt::tt_metal::experimental::DFBSpecName tail_state_dfb_name{"tail_state"};
     const tt::tt_metal::experimental::DFBSpecName reset_b_dfb_name{"reset_b"};
-    const tt::tt_metal::experimental::ScratchpadSpecName wrap_control_scratch_name{"wrap_control"};
 
     const tt::tt_metal::experimental::SemaphoreSpecName ready_semaphore_name{"ready"};
     const tt::tt_metal::experimental::SemaphoreSpecName arrival_semaphore_name{"arrival"};
@@ -79,7 +74,6 @@ ttnn::device_operation::MeshWorkloadArtifacts AffineExclusiveScanProgramFactory:
     const tt::tt_metal::experimental::TensorParamName tail_a_tensor_name{"tail_a"};
     const tt::tt_metal::experimental::TensorParamName tail_b_tensor_name{"tail_b"};
     const tt::tt_metal::experimental::TensorParamName tail_state_tensor_name{"tail_state"};
-    const tt::tt_metal::experimental::TensorParamName wrap_indicator_tensor_name{"wrap_indicator"};
 
     auto make_dfb = [](const tt::tt_metal::experimental::DFBSpecName& name, uint32_t tiles, tt::DataFormat format) {
         return tt::tt_metal::experimental::DataflowBufferSpec{
@@ -90,8 +84,8 @@ ttnn::device_operation::MeshWorkloadArtifacts AffineExclusiveScanProgramFactory:
         };
     };
     const auto summary_format = tt::tt_metal::datatype_to_dataformat_converter(in.a.dtype());
-    const uint32_t segmented_affine_tiles = attrs.segmented ? key_matrix_tiles + state_matrix_tiles : 1;
-    const uint32_t segmented_state_tiles = attrs.segmented ? state_matrix_tiles : 1;
+    const uint32_t segmented_affine_tiles = in.actual_start.has_value() ? key_matrix_tiles + state_matrix_tiles : 1;
+    const uint32_t segmented_state_tiles = in.actual_start.has_value() ? state_matrix_tiles : 1;
     tt::tt_metal::experimental::Group<tt::tt_metal::experimental::DataflowBufferSpec> dataflow_buffers = {
         make_dfb(initial_a_dfb_name, key_matrix_tiles, summary_format),
         make_dfb(initial_b_dfb_name, state_matrix_tiles, summary_format),
@@ -157,7 +151,6 @@ ttnn::device_operation::MeshWorkloadArtifacts AffineExclusiveScanProgramFactory:
                 tt::tt_metal::experimental::SemaphoreBinding{arrival_semaphore_name, "arrival"},
                 tt::tt_metal::experimental::SemaphoreBinding{release_semaphore_name, "release"},
             },
-        .scratchpad_bindings = {{wrap_control_scratch_name, "wrap_control"}},
         .tensor_bindings =
             {
                 tt::tt_metal::experimental::TensorBinding{a_tensor_name, "a"},
@@ -167,15 +160,9 @@ ttnn::device_operation::MeshWorkloadArtifacts AffineExclusiveScanProgramFactory:
                 tt::tt_metal::experimental::TensorBinding{tail_a_tensor_name, "tail_a"},
                 tt::tt_metal::experimental::TensorBinding{tail_b_tensor_name, "tail_b"},
                 tt::tt_metal::experimental::TensorBinding{tail_state_tensor_name, "tail_state"},
-                tt::tt_metal::experimental::TensorBinding{wrap_indicator_tensor_name, "wrap_indicator"},
             },
         .compile_time_args =
-            {{"Kt", key_tiles},
-             {"Vt", value_tiles},
-             {"BH", attrs.batch_heads},
-             {"G", groups_per_head},
-             {"segmented", static_cast<uint32_t>(attrs.segmented)},
-             {"reset_group", reset_group}},
+            {{"Kt", key_tiles}, {"Vt", value_tiles}, {"BH", attrs.batch_heads}, {"G", groups_per_head}},
         .runtime_arg_schema = {.runtime_arg_names = {"worker_index", "group"}},
         .hw_config = ttnn::create_reader_datamovement_config(arch),
         .advanced_options = {.num_common_runtime_varargs = 2 * group_heads},
@@ -231,12 +218,7 @@ ttnn::device_operation::MeshWorkloadArtifacts AffineExclusiveScanProgramFactory:
                 tt::tt_metal::experimental::ProducerOf(reset_b_dfb_name, "reset_b"),
                 tt::tt_metal::experimental::ConsumerOf(reset_b_dfb_name, "reset_b"),
             },
-        .compile_time_args =
-            {{"Kt", key_tiles},
-             {"Vt", value_tiles},
-             {"G", groups_per_head},
-             {"segmented", static_cast<uint32_t>(attrs.segmented)},
-             {"reset_group", reset_group}},
+        .compile_time_args = {{"Kt", key_tiles}, {"Vt", value_tiles}, {"G", groups_per_head}},
         .runtime_arg_schema = {.runtime_arg_names = {"group"}},
         .hw_config = std::move(compute_hardware_config),
     };
@@ -269,7 +251,6 @@ ttnn::device_operation::MeshWorkloadArtifacts AffineExclusiveScanProgramFactory:
                 tt::tt_metal::experimental::SemaphoreSpec{.unique_id = arrival_semaphore_name, .target_nodes = cores},
                 tt::tt_metal::experimental::SemaphoreSpec{.unique_id = release_semaphore_name, .target_nodes = cores},
             },
-        .scratchpads = {{.unique_id = wrap_control_scratch_name, .size_per_node = sizeof(uint32_t)}},
         .tensor_parameters =
             {
                 tt::tt_metal::experimental::TensorParameter{.unique_id = a_tensor_name, .spec = a.tensor_spec()},
@@ -284,8 +265,6 @@ ttnn::device_operation::MeshWorkloadArtifacts AffineExclusiveScanProgramFactory:
                     .unique_id = tail_b_tensor_name, .spec = tail_b.tensor_spec()},
                 tt::tt_metal::experimental::TensorParameter{
                     .unique_id = tail_state_tensor_name, .spec = tail_state.tensor_spec()},
-                tt::tt_metal::experimental::TensorParameter{
-                    .unique_id = wrap_indicator_tensor_name, .spec = wrap_indicator.tensor_spec()},
             },
         .work_units =
             {
@@ -307,7 +286,6 @@ ttnn::device_operation::MeshWorkloadArtifacts AffineExclusiveScanProgramFactory:
         {tail_a_tensor_name, tail_a},
         {tail_b_tensor_name, tail_b},
         {tail_state_tensor_name, tail_state},
-        {wrap_indicator_tensor_name, wrap_indicator},
     };
 
     kda_factory_detail::bind_chronology(program_spec, program_run_args, in.actual_start, in.a, false);

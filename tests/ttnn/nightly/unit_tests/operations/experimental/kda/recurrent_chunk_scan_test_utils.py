@@ -118,10 +118,7 @@ def run_recurrent(
     protocol: Sequence[ttnn.Tensor],
     state: ttnn.Tensor,
     *,
-    tail_state: ttnn.Tensor | None = None,
-    wrap_indicator: ttnn.Tensor | None = None,
     groups_per_head: int = 1,
-    wrap_chunk: int = 0,
     memory_config: ttnn.MemoryConfig | None = None,
     compute_kernel_config: ttnn.DeviceComputeKernelConfig | None = None,
 ) -> list[ttnn.Tensor]:
@@ -129,10 +126,7 @@ def run_recurrent(
         return ttnn.experimental.kda.recurrent_chunk_scan(
             *protocol,
             state,
-            tail_state=tail_state,
-            wrap_indicator=wrap_indicator,
             groups_per_head=groups_per_head,
-            wrap_chunk=wrap_chunk,
             memory_config=memory_config,
             compute_kernel_config=compute_kernel_config,
         )
@@ -141,10 +135,7 @@ def run_recurrent(
 def run_summary(
     protocol: Sequence[ttnn.Tensor],
     *,
-    wrap_indicator: ttnn.Tensor | None = None,
-    wrap_chunk: int = 0,
     groups_per_head: int = 1,
-    emit_tail_summaries: bool = False,
     memory_config: ttnn.MemoryConfig | None = None,
     compute_kernel_config: ttnn.DeviceComputeKernelConfig | None = None,
 ) -> list[ttnn.Tensor]:
@@ -152,9 +143,6 @@ def run_summary(
         return ttnn.experimental.kda.summarize_chunk_recurrence(
             *protocol,
             groups_per_head=groups_per_head,
-            wrap_indicator=wrap_indicator,
-            wrap_chunk=wrap_chunk,
-            emit_tail_summaries=emit_tail_summaries,
             memory_config=memory_config,
             compute_kernel_config=compute_kernel_config,
         )

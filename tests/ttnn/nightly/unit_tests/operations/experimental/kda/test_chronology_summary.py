@@ -41,7 +41,6 @@ def test_chronology_summaries_single_capture(mesh_device: ttnn.MeshDevice, group
         return ttnn.experimental.kda.summarize_chunk_recurrence(
             *inputs,
             groups_per_head=groups,
-            emit_tail_summaries=True,
             actual_start=actual_start,
             sequence_parallel_axis=0,
         )

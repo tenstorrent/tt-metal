@@ -56,14 +56,6 @@ void RecurrentChunkScanOperation::validate_on_program_cache_miss(
     check_protocol_tensor(in.k_dec_t, "k_dec_t", true, operation_name);
     check_protocol_tensor(in.final_decay, "final_decay", true, operation_name);
     check_protocol_tensor(in.t_inv, "t_inv", false, operation_name);
-    if (in.wrap_indicator.has_value()) {
-        check_protocol_tensor(*in.wrap_indicator, "wrap_indicator", false, operation_name);
-        check_same_device(in.v_beta, *in.wrap_indicator, operation_name, "wrap_indicator");
-        TT_FATAL(
-            in.wrap_indicator->logical_volume() >= 1,
-            "{}: wrap_indicator must contain at least one scalar",
-            operation_name);
-    }
 
     for (const auto& [tensor, name] : std::array{
              std::pair{&in.kd, "kd"},
@@ -87,12 +79,6 @@ void RecurrentChunkScanOperation::validate_on_program_cache_miss(
         operation_name,
         attrs.groups_per_head,
         attrs.batch_heads);
-    TT_FATAL(
-        attrs.wrap_chunk < attrs.groups_per_head * attrs.num_chunks,
-        "{}: wrap_chunk {} must be inside the local chunk count {}",
-        operation_name,
-        attrs.wrap_chunk,
-        attrs.groups_per_head * attrs.num_chunks);
     TT_FATAL(
         attrs.key_dim > 0 && attrs.value_dim > 0 && attrs.key_dim % tt::constants::TILE_WIDTH == 0 &&
             attrs.value_dim % tt::constants::TILE_WIDTH == 0,
@@ -125,27 +111,14 @@ void RecurrentChunkScanOperation::validate_on_program_cache_miss(
             check_same_device(in.v_beta, *in.tail_state, operation_name, "tail_state");
             check_shape(*in.tail_state, Shape({BH / attrs.groups_per_head, K, V}), "tail_state", operation_name);
         }
-        TT_FATAL(attrs.wrap_chunk == 0 || in.tail_state.has_value(), "{}: a wrap requires tail_state", operation_name);
+        TT_FATAL(
+            in.actual_start.has_value() == in.tail_state.has_value(),
+            "{}: actual_start and tail_state must be provided together",
+            operation_name);
     } else {
         TT_FATAL(!in.initial_state.has_value(), "{}: initial_state is not accepted", operation_name);
         TT_FATAL(K == V, "{}: K must equal V", operation_name);
-        TT_FATAL(
-            attrs.emit_tail_summaries || (!in.wrap_indicator.has_value() && attrs.wrap_chunk == 0),
-            "{}: ordinary summaries do not accept wrap controls; use emit_tail_summaries",
-            operation_name);
-        TT_FATAL(
-            !attrs.emit_tail_summaries || in.wrap_indicator.has_value() || in.actual_start.has_value(),
-            "{}: tail summaries require a device-local wrap_indicator",
-            operation_name);
-        TT_FATAL(
-            !attrs.emit_tail_summaries || attrs.wrap_chunk > 0 || in.actual_start.has_value(),
-            "{}: tail summaries require a nonzero wrap_chunk",
-            operation_name);
     }
-    TT_FATAL(
-        attrs.mode == RecurrentChunkScanMode::SUMMARY || !attrs.emit_tail_summaries,
-        "{}: emit_tail_summaries is valid only in SUMMARY mode",
-        operation_name);
 }
 
 RecurrentChunkScanOperation::spec_return_value_t RecurrentChunkScanOperation::compute_output_specs(
@@ -164,7 +137,7 @@ RecurrentChunkScanOperation::spec_return_value_t RecurrentChunkScanOperation::co
     spec_return_value_t specs = {
         TensorSpec(first_shape, output_layout),
         TensorSpec(Shape({attrs.batch_heads, attrs.key_dim, attrs.value_dim}), state_layout)};
-    if (summary && attrs.emit_tail_summaries) {
+    if (summary && in.actual_start.has_value()) {
         specs.push_back(TensorSpec(first_shape, output_layout));
         specs.push_back(TensorSpec(Shape({attrs.batch_heads, attrs.key_dim, attrs.value_dim}), state_layout));
     }
@@ -198,7 +171,7 @@ RecurrentChunkScanOperation::create_op_performance_model(
             .fpu_add_ops = instances * (2.0 * chunk * value_dim + key_dim * value_dim),
         };
     } else {
-        const double segmented_heads = attrs.emit_tail_summaries ? batch_heads / attrs.groups_per_head : 0.0;
+        const double segmented_heads = in.actual_start.has_value() ? batch_heads / attrs.groups_per_head : 0.0;
         work = {
             .fpu_matrix_flops = instances * (8.0 * chunk * key_dim * value_dim + 4.0 * chunk * chunk * value_dim),
             .fpu_multiply_ops = instances * 2.0 * key_dim * value_dim + segmented_heads * 2.0 * key_dim * value_dim,
@@ -214,9 +187,7 @@ RecurrentChunkScanOperation::create_op_performance_model(
     if (in.tail_state) {
         inputs.push_back(&*in.tail_state);
     }
-    if (in.wrap_indicator) {
-        inputs.push_back(&*in.wrap_indicator);
-    }
+
     return make_profiler_model(work, inputs, outputs, attrs.compute_kernel_config.math_fidelity);
 }
 
@@ -230,11 +201,8 @@ std::vector<Tensor> recurrent_chunk_scan(
     const Tensor& t_inv,
     const std::optional<Tensor>& initial_state,
     const std::optional<Tensor>& tail_state,
-    const std::optional<Tensor>& wrap_indicator,
     RecurrentChunkScanMode mode,
     uint32_t groups_per_head,
-    uint32_t wrap_chunk,
-    bool emit_tail_summaries,
     const MemoryConfig& output_mem_config,
     const DeviceComputeKernelConfig& compute_kernel_config,
     const std::optional<Tensor>& actual_start,
@@ -251,8 +219,6 @@ std::vector<Tensor> recurrent_chunk_scan(
             .key_dim = key_shape[3],
             .value_dim = value_shape[3],
             .groups_per_head = groups_per_head,
-            .wrap_chunk = wrap_chunk,
-            .emit_tail_summaries = emit_tail_summaries,
             .mode = mode,
             .sequence_parallel_axis = sequence_parallel_axis,
             .output_mem_config = output_mem_config,
@@ -267,7 +233,6 @@ std::vector<Tensor> recurrent_chunk_scan(
             .t_inv = t_inv,
             .initial_state = initial_state,
             .tail_state = tail_state,
-            .wrap_indicator = wrap_indicator,
             .actual_start = actual_start});
 }
 

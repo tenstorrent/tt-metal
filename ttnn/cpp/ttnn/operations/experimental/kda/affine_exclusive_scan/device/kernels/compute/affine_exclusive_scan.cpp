@@ -170,7 +170,7 @@ FORCE_INLINE void copy(DataflowBuffer& in, DataflowBuffer& out, uint32_t tiles) 
     out.push_back(tiles);
 }
 
-template <uint32_t Kt, uint32_t Vt, uint32_t G, uint32_t segmented, uint32_t reset_group, uint32_t dynamic_chronology>
+template <uint32_t Kt, uint32_t Vt, uint32_t G, uint32_t dynamic_chronology>
 TT_KERNEL void compute(uint32_t group) {
     constexpr uint32_t affine_a_tiles = Kt * Kt;
     constexpr uint32_t affine_b_tiles = Kt * Vt;
@@ -192,35 +192,30 @@ TT_KERNEL void compute(uint32_t group) {
         DataflowBuffer control(dfb::chronology_compute);
         topology = kda_chronology::receive(control);
     }
-    const uint32_t effective_reset_group = dynamic_chronology ? topology.reset_group(G) : reset_group;
+    const uint32_t reset_group = dynamic_chronology ? topology.reset_group(G) : G;
     compute_kernel_hw_startup<SrcOrder::Reverse>(dfb::initial_a, dfb::initial_b, dfb::to_remote_a);
     initial_a.wait_front(affine_a_tiles);
-    const bool reset_worker = segmented && group == effective_reset_group;
+    const bool reset_worker = dynamic_chronology && group == reset_group;
     if (!reset_worker) {
         initial_b.wait_front(affine_b_tiles);
     }
-    if constexpr (segmented) {
-        if (group == effective_reset_group) {
-            const bool aligned_reset = dynamic_chronology && topology.split_in_group(G) == 0;
-            tail_state.wait_front(affine_b_tiles);
-            if (aligned_reset) {
-                copy(tail_state, reset_b, affine_b_tiles);
-            } else {
-                tail_affine.wait_front(affine_a_tiles + affine_b_tiles);
-                matmul_add_affine_b<Kt, Kt, Vt>(tail_affine, tail_state, reset_b);
-            }
-            reset_b.wait_front(affine_b_tiles);
-            copy(initial_a, to_remote_a, affine_a_tiles);
-            copy(reset_b, to_remote_b, affine_b_tiles);
-            reset_b.pop_front(affine_b_tiles);
-            if (!aligned_reset) {
-                tail_affine.pop_front(affine_a_tiles + affine_b_tiles);
-            }
-            tail_state.pop_front(affine_b_tiles);
+    if (reset_worker) {
+        const bool aligned_reset = topology.split_in_group(G) == 0;
+        tail_state.wait_front(affine_b_tiles);
+        if (aligned_reset) {
+            copy(tail_state, reset_b, affine_b_tiles);
         } else {
-            copy(initial_a, to_remote_a, affine_a_tiles);
-            copy(initial_b, to_remote_b, affine_b_tiles);
+            tail_affine.wait_front(affine_a_tiles + affine_b_tiles);
+            matmul_add_affine_b<Kt, Kt, Vt>(tail_affine, tail_state, reset_b);
         }
+        reset_b.wait_front(affine_b_tiles);
+        copy(initial_a, to_remote_a, affine_a_tiles);
+        copy(reset_b, to_remote_b, affine_b_tiles);
+        reset_b.pop_front(affine_b_tiles);
+        if (!aligned_reset) {
+            tail_affine.pop_front(affine_a_tiles + affine_b_tiles);
+        }
+        tail_state.pop_front(affine_b_tiles);
     } else {
         copy(initial_a, to_remote_a, affine_a_tiles);
         copy(initial_b, to_remote_b, affine_b_tiles);

@@ -51,13 +51,10 @@ void bind_affine_exclusive_scan(nb::module_& mod) {
                 positive/32-aligned when actual_start is supplied. Summary tensor
                 shapes do not encode this sequence length.
             tail_a, tail_b (ttnn.Tensor, optional): Tail-segment affine summaries.
-                When supplied with ``tail_state`` and ``wrap_indicator``, the scan
-                switches to the tail chain at the local wrap without a second scan.
-            tail_state (ttnn.Tensor, optional): Tail-chain seed ``[B*H, K, V]``.
-            wrap_indicator (ttnn.Tensor, optional): Per-device scalar; nonzero only
-                on the device containing the wrap.
-            wrap_group (int): Group containing the wrap.
-            split_in_group (bool): Whether the wrap straddles ``wrap_group``.
+                Required together with tail_state and actual_start. The kernel
+                derives the local split and chooses the live head/tail transforms.
+            tail_state (ttnn.Tensor, optional): FLOAT32 tail seed ``[B*H,K,V]``.
+                Tail payloads are rejected without actual_start.
             memory_config (ttnn.MemoryConfig, optional): Interleaved output memory
                 configuration. Defaults to DRAM.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional):
@@ -82,9 +79,7 @@ void bind_affine_exclusive_scan(nb::module_& mod) {
         nb::arg("tail_a") = nb::none(),
         nb::arg("tail_b") = nb::none(),
         nb::arg("tail_state") = nb::none(),
-        nb::arg("wrap_indicator") = nb::none(),
-        nb::arg("wrap_group") = 0,
-        nb::arg("split_in_group") = false,
+
         nb::arg("memory_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("actual_start") = nb::none(),

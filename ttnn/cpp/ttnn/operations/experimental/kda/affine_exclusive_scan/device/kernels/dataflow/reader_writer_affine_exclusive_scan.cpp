@@ -11,7 +11,6 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/noc_semaphore.h"
-#include "api/scratchpad.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
 
@@ -44,22 +43,6 @@ FORCE_INLINE void issue_packed_affine_read(
                 {.page_id = worker_index * Kt * Kt + row * Kt + column},
                 {.offset_bytes = (row * (Kt + Vt) + column) * tile_bytes});
         }
-        for (uint32_t column = 0; column < Vt; ++column) {
-            noc.async_read(
-                b_accessor,
-                buffer,
-                tile_bytes,
-                {.page_id = worker_index * Kt * Vt + row * Vt + column},
-                {.offset_bytes = (row * (Kt + Vt) + Kt + column) * tile_bytes});
-        }
-    }
-}
-
-template <uint32_t Kt, uint32_t Vt, typename BAccessor>
-FORCE_INLINE void issue_packed_b_read(
-    Noc& noc, const BAccessor& b_accessor, DataflowBuffer& buffer, uint32_t worker_index) {
-    const uint32_t tile_bytes = buffer.get_entry_size();
-    for (uint32_t row = 0; row < Kt; ++row) {
         for (uint32_t column = 0; column < Vt; ++column) {
             noc.async_read(
                 b_accessor,
@@ -159,8 +142,6 @@ template <
     uint32_t Vt,
     uint32_t BH,
     uint32_t G,
-    uint32_t segmented,
-    uint32_t reset_group,
     uint32_t dynamic_chronology,
     uint32_t sp_rank,
     uint32_t sp_size,
@@ -178,7 +159,6 @@ TT_KERNEL void dataflow(uint32_t worker_index, uint32_t group) {
     const auto tail_a_accessor = TensorAccessor(tensor::tail_a);
     const auto tail_b_accessor = TensorAccessor(tensor::tail_b);
     const auto tail_state_accessor = TensorAccessor(tensor::tail_state);
-    const auto wrap_indicator_accessor = TensorAccessor(tensor::wrap_indicator);
     DataflowBuffer initial_a(dfb::initial_a);
     DataflowBuffer initial_b(dfb::initial_b);
     DataflowBuffer local_a(dfb::local_a);
@@ -190,7 +170,6 @@ TT_KERNEL void dataflow(uint32_t worker_index, uint32_t group) {
     DataflowBuffer final(dfb::final);
     DataflowBuffer tail_affine(dfb::tail_affine);
     DataflowBuffer tail_state(dfb::tail_state);
-    Scratchpad<volatile uint32_t> wrap_control(scratch::wrap_control);
     Noc noc;
     Semaphore ready(sem::ready);
     Semaphore arrival(sem::arrival);
@@ -208,59 +187,33 @@ TT_KERNEL void dataflow(uint32_t worker_index, uint32_t group) {
         kda_chronology::store(words, topology);
         control.push_back(1);
     }
-    const uint32_t effective_reset_group = dynamic_chronology ? topology.reset_group(G) : reset_group;
+    const uint32_t reset_group = dynamic_chronology ? topology.reset_group(G) : G;
     const bool aligned_reset = dynamic_chronology && topology.local_split && topology.split_in_group(G) == 0;
-    bool device_wrap = false;
-    if constexpr (dynamic_chronology) {
-        device_wrap = topology.local_split;
-    } else if constexpr (segmented) {
-        noc.async_read(
-            wrap_indicator_accessor,
-            CoreLocalMem<uint32_t>(wrap_control.get_base_address()),
-            sizeof(uint32_t),
-            {.page_id = 0},
-            {});
-        noc.async_read_barrier();
-        device_wrap = wrap_control[0] != 0;
-    }
 
     initial_a.reserve_back(affine_a_tiles);
-    const bool reset_worker = segmented && group == effective_reset_group;
+    const bool reset_worker = dynamic_chronology && group == reset_group;
     if (!reset_worker) {
         initial_b.reserve_back(affine_b_tiles);
     }
     initial_state.reserve_back(affine_b_tiles);
-    if constexpr (segmented) {
-        if (device_wrap && group == effective_reset_group) {
-            noc.async_write_zeros(initial_a, affine_a_tiles * initial_a.get_entry_size());
-        } else if (device_wrap && group > effective_reset_group) {
-            issue_tensor_block_read(noc, tail_a_accessor, initial_a, worker_index * affine_a_tiles, affine_a_tiles);
-            issue_tensor_block_read(noc, tail_b_accessor, initial_b, worker_index * affine_b_tiles, affine_b_tiles);
-        } else {
-            issue_tensor_block_read(noc, a_accessor, initial_a, worker_index * affine_a_tiles, affine_a_tiles);
-            if (!reset_worker) {
-                issue_tensor_block_read(noc, b_accessor, initial_b, worker_index * affine_b_tiles, affine_b_tiles);
-            }
-        }
-        if (group == effective_reset_group) {
-            if (!aligned_reset) {
-                tail_affine.reserve_back(affine_a_tiles + affine_b_tiles);
-                if (device_wrap) {
-                    issue_packed_affine_read<Kt, Vt>(noc, tail_a_accessor, tail_b_accessor, tail_affine, worker_index);
-                } else {
-                    noc.async_write_zeros(
-                        tail_affine, (affine_a_tiles + affine_b_tiles) * tail_affine.get_entry_size());
-                    issue_packed_b_read<Kt, Vt>(noc, b_accessor, tail_affine, worker_index);
-                }
-            }
-            tail_state.reserve_back(affine_b_tiles);
-            issue_tensor_block_read(
-                noc, tail_state_accessor, tail_state, (worker_index / G) * affine_b_tiles, affine_b_tiles);
-            noc.write_zeros_l1_barrier();
-        }
+    if (reset_worker) {
+        noc.async_write_zeros(initial_a, affine_a_tiles * initial_a.get_entry_size());
+    } else if (group > reset_group) {
+        issue_tensor_block_read(noc, tail_a_accessor, initial_a, worker_index * affine_a_tiles, affine_a_tiles);
+        issue_tensor_block_read(noc, tail_b_accessor, initial_b, worker_index * affine_b_tiles, affine_b_tiles);
     } else {
         issue_tensor_block_read(noc, a_accessor, initial_a, worker_index * affine_a_tiles, affine_a_tiles);
         issue_tensor_block_read(noc, b_accessor, initial_b, worker_index * affine_b_tiles, affine_b_tiles);
+    }
+    if (reset_worker) {
+        if (!aligned_reset) {
+            tail_affine.reserve_back(affine_a_tiles + affine_b_tiles);
+            issue_packed_affine_read<Kt, Vt>(noc, tail_a_accessor, tail_b_accessor, tail_affine, worker_index);
+        }
+        tail_state.reserve_back(affine_b_tiles);
+        issue_tensor_block_read(
+            noc, tail_state_accessor, tail_state, (worker_index / G) * affine_b_tiles, affine_b_tiles);
+        noc.write_zeros_l1_barrier();
     }
     issue_tensor_block_read(
         noc, initial_state_accessor, initial_state, (worker_index / G) * affine_b_tiles, affine_b_tiles);
@@ -270,8 +223,8 @@ TT_KERNEL void dataflow(uint32_t worker_index, uint32_t group) {
         initial_b.push_back(affine_b_tiles);
     }
     initial_state.push_back(affine_b_tiles);
-    if constexpr (segmented) {
-        if (group == effective_reset_group) {
+    if constexpr (dynamic_chronology) {
+        if (group == reset_group) {
             if (!aligned_reset) {
                 tail_affine.push_back(affine_a_tiles + affine_b_tiles);
             }

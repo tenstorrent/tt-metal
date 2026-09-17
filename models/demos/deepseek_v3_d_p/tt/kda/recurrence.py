@@ -449,7 +449,6 @@ def _scan_sp_grouped_chunks(
     parts = ttnn.experimental.kda.summarize_chunk_recurrence(
         *grouped.as_kernel_args(),
         groups_per_head=groups,
-        emit_tail_summaries=True,
         actual_start=actual_start,
         sequence_parallel_axis=sequence_parallel_axis,
         memory_config=memory,

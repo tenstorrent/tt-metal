@@ -74,7 +74,6 @@ ttnn::device_operation::MeshWorkloadArtifacts QkvCausalConv1dSiluProgramFactory:
     const tt::tt_metal::experimental::TensorParamName q_tensor_name{"q"};
     const tt::tt_metal::experimental::TensorParamName k_tensor_name{"k"};
     const tt::tt_metal::experimental::TensorParamName v_tensor_name{"v"};
-    const tt::tt_metal::experimental::TensorParamName wrap_indicator_tensor_name{"wrap_indicator"};
 
     const auto input_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
     const uint32_t tile_size = tt::tile_size(input_data_format);
@@ -120,20 +119,10 @@ ttnn::device_operation::MeshWorkloadArtifacts QkvCausalConv1dSiluProgramFactory:
         .compile_time_args =
             {{"block_ct", block_ct},
              {"num_blocks", num_blocks},
-             {"has_wrap_indicator", static_cast<uint32_t>(in.wrap_indicator.has_value())},
              {"dynamic_chronology", static_cast<uint32_t>(in.actual_start.has_value())}},
-        .runtime_arg_schema = {.runtime_arg_names = {"wi_start", "wi_count", "wrap_row"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"wi_start", "wi_count"}},
         .hw_config = ttnn::create_reader_datamovement_config(arch),
     };
-    if (in.wrap_indicator.has_value()) {
-        reader.tensor_bindings.push_back(
-            tt::tt_metal::experimental::TensorBinding{wrap_indicator_tensor_name, "wrap_indicator"});
-    } else {
-        // if constexpr discards the read, but the kernel argument name is still
-        // parsed while generating bindings.
-        reader.tensor_bindings.push_back(
-            tt::tt_metal::experimental::TensorBinding{input_tensor_name, "wrap_indicator"});
-    }
 
     const tt::tt_metal::experimental::TensorParamName actual_start_name{"actual_start"};
     const tt::tt_metal::experimental::TensorParamName predecessor_name{"predecessor_carry"};
@@ -193,9 +182,7 @@ ttnn::device_operation::MeshWorkloadArtifacts QkvCausalConv1dSiluProgramFactory:
     for (uint32_t i = 0; i < dist.cores.size(); ++i) {
         const auto& core = dist.cores[i];
         tt::tt_metal::experimental::AddRuntimeArgsForNode(
-            reader_run_args.runtime_arg_values,
-            core,
-            {{"wi_start", dist.wi_start[i]}, {"wi_count", dist.wi_count[i]}, {"wrap_row", attrs.wrap_row}});
+            reader_run_args.runtime_arg_values, core, {{"wi_start", dist.wi_start[i]}, {"wi_count", dist.wi_count[i]}});
         tt::tt_metal::experimental::AddRuntimeArgsForNode(
             writer_run_args.runtime_arg_values, core, {{"wi_start", dist.wi_start[i]}, {"wi_count", dist.wi_count[i]}});
         tt::tt_metal::experimental::AddRuntimeArgsForNode(
@@ -213,10 +200,6 @@ ttnn::device_operation::MeshWorkloadArtifacts QkvCausalConv1dSiluProgramFactory:
         tt::tt_metal::experimental::TensorParameter{.unique_id = k_tensor_name, .spec = k.tensor_spec()},
         tt::tt_metal::experimental::TensorParameter{.unique_id = v_tensor_name, .spec = v.tensor_spec()},
     };
-    if (in.wrap_indicator.has_value()) {
-        tensor_parameters.push_back(tt::tt_metal::experimental::TensorParameter{
-            .unique_id = wrap_indicator_tensor_name, .spec = in.wrap_indicator->mesh_tensor().tensor_spec()});
-    }
 
     if (in.actual_start) {
         tensor_parameters.push_back(
@@ -258,9 +241,6 @@ ttnn::device_operation::MeshWorkloadArtifacts QkvCausalConv1dSiluProgramFactory:
         {k_tensor_name, k},
         {v_tensor_name, v},
     };
-    if (in.wrap_indicator.has_value()) {
-        run_args.tensor_args.emplace(wrap_indicator_tensor_name, in.wrap_indicator->mesh_tensor());
-    }
 
     if (in.actual_start) {
         run_args.tensor_args.emplace(actual_start_name, in.actual_start->mesh_tensor());

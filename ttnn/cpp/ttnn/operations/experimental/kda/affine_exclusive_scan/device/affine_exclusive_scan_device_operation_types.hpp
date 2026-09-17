@@ -17,9 +17,7 @@ struct AffineExclusiveScanParams {
     uint32_t groups_per_head;
     uint32_t key_dim;
     uint32_t value_dim;
-    uint32_t wrap_group;
-    bool split_in_group;
-    bool segmented;
+
     uint32_t sequence_parallel_axis;
     uint32_t local_rows;
     tt::tt_metal::MemoryConfig output_mem_config;
@@ -33,7 +31,7 @@ struct AffineExclusiveScanInputs {
     std::optional<Tensor> tail_a;
     std::optional<Tensor> tail_b;
     std::optional<Tensor> tail_state;
-    std::optional<Tensor> wrap_indicator;
+
     std::optional<Tensor> actual_start;
 };
 
