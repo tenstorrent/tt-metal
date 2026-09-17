@@ -339,12 +339,31 @@ class _Fixture:
     # emb_dim 512 is 16 tiles wide, so the untilizer packs TWO column blocks per stripe. At 256 it is
     # exactly one, and a block's L1 column offset -- the thing block_ct_dim exists to make legal --
     # would never be anything but zero.
-    def __init__(self, mesh_device, H, G, seq_len_per_chip=128, emb_dim=512, num_routed_experts=256, topk=8, seed=11):
+    def __init__(
+        self,
+        mesh_device,
+        H,
+        G,
+        seq_len_per_chip=128,
+        emb_dim=512,
+        num_routed_experts=256,
+        topk=8,
+        seed=11,
+        capacity_div=1,
+        reach_from_op=False,
+        cluster_axis=0,
+    ):
         self.mesh_device = mesh_device
         self.seq_len_per_chip, self.emb_dim, self.H, self.G = seq_len_per_chip, emb_dim, H, G
         self.num_routed_experts, self.topk = num_routed_experts, topk
         self.experts_per_chip = num_routed_experts // G // H
-        self.capacity = H * seq_len_per_chip * topk  # roomy: nothing is dropped
+        # A divisor of 1 is roomy: nothing is dropped. Anything larger puts capacity below the
+        # per-expert load, which is the only regime where a drop moves a token's farthest hop.
+        self.capacity = max(1, H * seq_len_per_chip * topk // capacity_div)
+        # Where the reach table comes from: the torch reference, or `moe_fanout_reach` on device. The
+        # second is the production path -- nothing else in the tree produces this table -- and the two
+        # have to agree word for word, since a reach table that overstates strands the axis.
+        self.reach_from_op, self.cluster_axis = reach_from_op, cluster_axis
         torch.manual_seed(seed)
         self.table = _expert_dispatch_table(num_routed_experts, H, G)
         experts_per_group = num_routed_experts // G
@@ -399,13 +418,42 @@ class _Fixture:
         self.tt_offs = self._shard(offs, (None, 0), ttnn.int32)
         self.tt_counts = self._shard(counts[:, 0:1, :], (None, 0), ttnn.int32)
         self.tt_region = self._shard(region[:, 0:1, :], (None, 0), ttnn.int32)
-        self.tt_reach = self._shard(
-            _mc_reach(self.indices, self.table, offs, self.capacity, G, H, self.seq_len_per_chip, self.topk).to(
+        self.reach = (
+            self._reach_from_op(offs)
+            if self.reach_from_op
+            else _mc_reach(self.indices, self.table, offs, self.capacity, G, H, self.seq_len_per_chip, self.topk).to(
                 torch.int32
-            ),
-            (None, 0),
-            ttnn.int32,
+            )
         )
+        self.tt_reach = self._shard(self.reach, (None, 0), ttnn.int32)
+
+    def _reach_from_op(self, offs):
+        """Every chip's reach row from `moe_fanout_reach`, gathered into the table the transport takes.
+
+        The transport needs every origin's row on every chip, because a relay sizes a chunk it neither
+        wrote nor receives; the op produces only the row of the chip it ran on. Production closes that
+        with an all-gather along the dispatch axis. Here the gather is done on host, which is the same
+        bytes and keeps the test's failure mode readable -- a mismatch points at this op rather than at
+        a CCL in between.
+        """
+        G, H = self.G, self.H
+        rows = ttnn.experimental.deepseek_prefill.moe_fanout_reach(
+            self.tt_idx,
+            self.tt_table,
+            self._shard(offs, (1, 0), ttnn.int32),
+            num_routed_experts=self.num_routed_experts,
+            num_experts_per_tok=self.topk,
+            dispatch_group_size=H,
+            max_dispatch_buffer_token_size=self.capacity,
+            cluster_axis=self.cluster_axis,
+        )
+        hops = H // 2 + 2
+        per_device = ttnn.get_device_tensors(rows)
+        table = torch.zeros(G, H, 2, hops, dtype=torch.int32)
+        for dev in range(H * G):
+            r, g = dev // G, dev % G
+            table[g, r] = ttnn.to_torch(per_device[dev]).to(torch.int32).reshape(2, hops)
+        return table
 
     def padding_config(self, real_tokens, pad_side=0):
         """The [real_token_count, pad_side] tensor `dispatch` takes, replicated to every device."""
@@ -591,6 +639,70 @@ def test_dispatch_fabric2d_subdevice(mesh_device, device_params, num_links):
         message = str(refusal.value)
         assert f"outside the {streams + 2} cores" in message, message
         assert re.search(r"eth core is \d+-0,", message), message
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links",
+    [
+        pytest.param(
+            (8, 4),
+            torus_xy_device_params(),
+            2,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="torus-xy-8x4-2link",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("capacity_div", [1, 64], ids=lambda d: "roomy" if d == 1 else "tight")
+@pytest.mark.parametrize(
+    "input_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT], ids=lambda ly: "tile" if ly == ttnn.TILE_LAYOUT else "rm"
+)
+@pytest.mark.timeout(600)
+def test_dispatch_fabric2d_multicast_reach_from_op(mesh_device, device_params, num_links, capacity_div, input_layout):
+    """The multicast transport driven by `moe_fanout_reach`, not by the torch table beside it.
+
+    Everywhere else the reach table is synthesised on host, which proves the transport and nothing about
+    where the table comes from in production. Here it comes off the device, from the same indices and
+    the same offsets the transport is handed, and the gate is the same byte-exact comparison against
+    `dispatch`.
+
+    Both directions of the check matter. The table has to equal the torch one word for word -- reach is
+    the one control tensor whose error mode is a stranded axis rather than a wrong page, so "close" is
+    not a state it can be in. And the transport then has to place the same bytes with it, which is what
+    says the op's output is usable rather than merely correct in isolation.
+    """
+    cfg = extract_mesh_config(mesh_device)
+    fx = _Fixture(
+        mesh_device,
+        cfg.dispatch_group_size,
+        cfg.num_dispatch_groups,
+        capacity_div=capacity_div,
+        reach_from_op=True,
+        cluster_axis=cfg.sp_axis,
+    )
+    want = _mc_reach(fx.indices, fx.table, fx.offs, fx.capacity, fx.G, fx.H, fx.seq_len_per_chip, fx.topk)
+    assert torch.equal(fx.reach.to(torch.int64), want), (
+        f"moe_fanout_reach disagrees with the torch reference: "
+        f"{(fx.reach.to(torch.int64) != want).sum().item()} of {want.numel()} entries differ"
+    )
+    if capacity_div > 1:
+        # Without this the tight case would be indistinguishable from the roomy one, and the drop rule
+        # -- the reason this table cannot be derived before the offsets exist -- would go untested here.
+        roomy = _mc_reach(
+            fx.indices,
+            fx.table,
+            fx.offs,
+            fx.H * fx.seq_len_per_chip * fx.topk,
+            fx.G,
+            fx.H,
+            fx.seq_len_per_chip,
+            fx.topk,
+        )
+        assert not torch.equal(roomy, want), "the tight capacity dropped nothing that moved a farthest hop"
+
+    payload, metadata = fx.run(cfg.sp_axis, num_links, layout=input_layout, fanout=True)
+    fx.check(payload, metadata, f"multicast on moe_fanout_reach's table, capacity {fx.capacity}")
 
 
 @pytest.mark.parametrize(
