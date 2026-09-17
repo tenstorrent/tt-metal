@@ -9,6 +9,7 @@
 #pragma once
 
 #include <cstdint>
+#include <type_traits>
 
 #include "internal/ethernet/eth_ptp.hpp"
 #if defined(PROFILE_KERNEL) && defined(PROFILE_STREAMING)
@@ -338,9 +339,9 @@ struct SenderLink {
     bool emit = false, ok = false;
 
     bool open() { return sess.begin(); }
-    void start(uint32_t l1, uint32_t pace_ticks, uint32_t diag) {
+    void start(uint32_t l1, uint32_t ctl, uint32_t pace_ticks) {
         slot_base = l1;
-        diag_addr = diag;
+        diag_addr = ctl;
         burst_ticks = pace_ticks / kBurstsPerRound;
         for (uint32_t j = 0; j < kBurstFrames; j++) {
             volatile eth_channel_sync_t* s = slot(slot_base, j);
@@ -460,9 +461,10 @@ struct ReceiverLink {
     HwRound rnd;
 
     bool open() { return sess.begin(); }
-    void start(uint32_t l1, uint32_t diag) {
+    // The receiver follows the sender's cadence; pace_ticks is the sender's and is not used here.
+    void start(uint32_t l1, uint32_t ctl, uint32_t = 0) {
         slot_base = l1;
-        diag_addr = diag;
+        diag_addr = ctl;
         for (uint32_t j = 0; j < kBurstFrames; j++) {
             volatile eth_channel_sync_t* s = slot(slot_base, j);
             s->bytes_sent = 0;
@@ -581,5 +583,9 @@ private:
         return i != kBurstFrames - 1;
     }
 };
+
+// The end a core runs, chosen by role, with the one start(l1, ctl, pace_ticks) of both.
+template <bool Sender, bool DataCache>
+using LinkEnd = std::conditional_t<Sender, SenderLink<DataCache>, ReceiverLink<DataCache>>;
 
 }  // namespace tt::tt_metal::eth_ptp

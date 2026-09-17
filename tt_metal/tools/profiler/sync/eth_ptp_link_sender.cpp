@@ -24,7 +24,7 @@ void kernel_main() {
     g_link.open();
     eth_send_bytes(kHandshake, kHandshake, 16);
     eth_wait_for_receiver_done();
-    g_link.start(link_l1, pace_ticks, ctl);
+    g_link.start(link_l1, ctl, pace_ticks);
     volatile tt_l1_ptr uint32_t* c = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ctl);
     while (*c != eth_ptp::kCtlStop) {
         g_link.step();

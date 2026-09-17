@@ -38,7 +38,6 @@
 #endif
 
 #include <array>
-#include <type_traits>
 
 #if defined(PROFILE_STREAMING)
 #include "tools/profiler/sync/eth_ptp_link.hpp"
@@ -48,19 +47,7 @@
 // its stamps go out through this core's profiler ring, which the idle eth core's pusher drains.
 namespace link_sync {
 constexpr bool kActive = MY_ERISC_ID == 0 && link_sync_role != 0;
-using End = std::conditional_t<
-    link_sync_role == 1,
-    tt::tt_metal::eth_ptp::SenderLink<ENABLE_RISC_CPU_DATA_CACHE>,
-    tt::tt_metal::eth_ptp::ReceiverLink<ENABLE_RISC_CPU_DATA_CACHE>>;
-static End g_end;
-template <typename E>
-FORCE_INLINE void start_end(E& end) {
-    if constexpr (std::is_same_v<E, tt::tt_metal::eth_ptp::SenderLink<ENABLE_RISC_CPU_DATA_CACHE>>) {
-        end.start(link_sync_addr, link_sync_pace, link_sync_addr + tt::tt_metal::eth_ptp::kCtlOffset);
-    } else {
-        end.start(link_sync_addr, link_sync_addr + tt::tt_metal::eth_ptp::kCtlOffset);
-    }
-}
+static tt::tt_metal::eth_ptp::LinkEnd<link_sync_role == 1, ENABLE_RISC_CPU_DATA_CACHE> g_end;
 FORCE_INLINE void open() {
     if constexpr (kActive) {
         g_end.open();
@@ -68,7 +55,7 @@ FORCE_INLINE void open() {
 }
 FORCE_INLINE void start() {
     if constexpr (kActive) {
-        start_end(g_end);
+        g_end.start(link_sync_addr, link_sync_addr + tt::tt_metal::eth_ptp::kCtlOffset, link_sync_pace);
     }
 }
 FORCE_INLINE void step() {
