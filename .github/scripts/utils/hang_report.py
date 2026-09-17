@@ -125,7 +125,12 @@ def main() -> None:
     parser.add_argument(
         "--update",
         action="store_true",
-        help=f"Read triage summary from {TRIAGE_SUMMARY_PATH} and overwrite the report.",
+        help="Read the triage summary and overwrite the report.",
+    )
+    parser.add_argument(
+        "--summary-path",
+        default=TRIAGE_SUMMARY_PATH,
+        help=f"Triage summary --update reads (default: {TRIAGE_SUMMARY_PATH}).",
     )
     parser.add_argument(
         "--test-id",
@@ -140,8 +145,8 @@ def main() -> None:
     args = parser.parse_args()
 
     summary = ""
-    if args.update and os.path.isfile(TRIAGE_SUMMARY_PATH):
-        with open(TRIAGE_SUMMARY_PATH) as f:
+    if args.update and os.path.isfile(args.summary_path):
+        with open(args.summary_path) as f:
             summary = f.read()
 
     write_hang_junit_xml(summary, test_id=args.test_id, report_dir=args.report_dir)
