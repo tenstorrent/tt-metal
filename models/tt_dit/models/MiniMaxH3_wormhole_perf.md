@@ -416,7 +416,10 @@ all scale with it, against K/V's two buffers on Sk. That is why `(512, 256)` is 
 k**, which also halves the ring K-loop iterations — the property that made k=512 beat k=256.
 
 That prediction was **wrong**, and the widened sweep closes the question. q in {192, 256} x k in
-{512, 640, 768, 1024} (q=128 excluded, see below):
+{512, 640, 768, 1024} (q=128 excluded: it hung the op twice on 2026-09-17 on another Wormhole galaxy
+at seq_local 13632 / k=512, did not reproduce on `UF-EV-B12-GWH02` the same day -- 6/6 completed on
+the same code, under the profiler and the watcher, at 13632 and 13664 -- and is slower than q=192 at
+every feasible k regardless):
 
 | rank | q_chunk | k_chunk | duration | iters/core | FPU util | math util |
 |---|---|---|---|---|---|---|
@@ -454,20 +457,6 @@ expensive as Sk, which is why `(512, 256)` fails while `(256, 512)` fits at the 
 consistent with `is_causal=False`. Observed: `(6,24)` 1,602,880 B; `(8,20)` 1,639,744 B; `(8,24)`
 1,836,352 B; `(6,32)` 1,963,328 B. Reusable for any future chunk question on this part.
 
-### q_chunk=128 hangs the op
-
-`q=128` is excluded from the list because it **hangs**, twice, at seq_local 13632 with k=512 — the
-second time on a board freshly recovered with `tt-smi -glx_reset` and verified to open and map the
-fabric, so this is not board degradation. Signature: ~6 cores spinning on the dispatch poll with
-flat RSS, no I/O, no compilation; recovery needs another `glx_reset`.
-
-Nothing static rules it out. Unlike the exp path, `use_streaming_compute` in
-`ring_joint_sdpa_program_factory.cpp:1340` is just `!fp32_dest_acc_en` and does not depend on
-`Sq_chunk_t`. But the same factory documents a sibling failure at lines 1388-1397, where Phase-2
-reserves the full `Sq_chunk_t*vDHt` output in a single `reserve_back` and "blocks forever (deadlock
-seen at q_chunk=256 causal)". Same family, different trigger. Worth a bug report with this repro;
-it is not on the path to a faster 15 s, since q=128 was slower than q=192 in every feasible k.
-
 ## Perf experiments
 
 | # | experiment | status | result |
@@ -475,7 +464,7 @@ it is not on the path to a faster 15 s, since q=128 was slower than q=192 in eve
 | 1 | Matmul blockings, all 4 shapes x 3 durations, 8x8/8x9 grids | **done** | 3.5% of matmul time at 15 s; ff1 and ff2 landed, 0.5% of a forward |
 | 2 | Fused MM/RS at 8x5/8x6/8x7 matmul grids | **done** | All worse than unfused; stays disabled |
 | 3 | SDPA chunk sizes, q in {256,384,512} x k in {256,512} | **done** | Shipped `(256, 512)` already optimal; larger q L1-infeasible |
-| 3b | `q_chunk=128` | **done** | Reproducibly hangs the op (2x, clean board). Not a perf path — q=128 was slower than q=192 at every feasible k — but worth reporting |
+| 3b | `q_chunk=128` | **done** | Not a perf path: slower than q=192 at every feasible k. Hang history in one line under *SDPA chunk sizes*. |
 | 4 | SDPA chunk sizes, small-q / large-k (q<=256, k>=512) | **done** | Hypothesis disproved. `(192, 640)` is feasible — the first k>512 point on this shape — but 13% slower than the shipped `(256, 512)`; larger q is more per-core efficient and shrinking q raises iters/core. Chunk tuning at 15 s is exhausted. L1 envelope calibrated as a by-product |
 | 5 | Re-profile the block with landed configs | blocked | **TODO** — needs the pinned `diffusers` fork; not installed here |
 | 6 | Pipeline re-run: warm total, denoise, ms/fwd, CLIP | **done** | Same-host A/B: **-69.9 ms/fwd, -0.58%**, exactly the isolated-sweep prediction. CLIP **35.88** (min 34.69, bar 33.0) on the later run |
