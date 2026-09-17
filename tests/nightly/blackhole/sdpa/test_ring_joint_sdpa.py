@@ -6053,7 +6053,10 @@ def test_ring_joint_attention_minimax3_gqa_chunked_perf_impl(model_name, qk_conf
     "k_chunk", [32, 128, 256, 352, 640, 1280, 2048], ids=["k32", "k128", "k256", "k352", "k640", "k1280", "k2048"]
 )
 @pytest.mark.parametrize("q_chunk", [32, 64], ids=["inplace_v", "materialized_v"])
-def test_ring_mla_full_mesh_tp_striped_kv_accuracy(fabric_config, cache_chunks, k_chunk, q_chunk):
+# kv_actual_isl activates KV-pad rotation. Q is the final chunk of an exactly-sized cache, so the
+# rotation is the identity and the output is not permuted -- the reference below still applies.
+@pytest.mark.parametrize("pad_rotation", [False, True], ids=["no_rotation", "pad_rotation"])
+def test_ring_mla_full_mesh_tp_striped_kv_accuracy(fabric_config, cache_chunks, k_chunk, q_chunk, pad_rotation):
     """A TP-deduped KV cache: striped over every device while Q stays sharded over SP alone.
 
     kv_stripe_split = kv_shards / q_shards = tp, so tp ring shards share each Q rank. The cache is
@@ -6083,6 +6086,8 @@ def test_ring_mla_full_mesh_tp_striped_kv_accuracy(fabric_config, cache_chunks, 
         kv_local = cache_chunks * region  # cache rows per device, across every chunk
         logical_n = cache_chunks * chunk_global
         assert q_local < kv_local, f"striping needs the chunked path: q_local={q_local} kv_local={kv_local}"
+        if pad_rotation and kv_local % q_local != 0:
+            pytest.skip(f"kv-pad rotation needs whole Q slabs: kv_local={kv_local} q_local={q_local}")
 
         b, nhq, nhk, d_q, d_k, d_v = 1, 4, 1, 64, 64, 32
         torch.manual_seed(2026)
@@ -6130,12 +6135,14 @@ def test_ring_mla_full_mesh_tp_striped_kv_accuracy(fabric_config, cache_chunks, 
             k_chunk_size=k_chunk,
             exp_approx_mode=False,
         )
+        rotation_kwargs = {"kv_actual_isl": logical_n - chunk_global} if pad_rotation else {}
         tt_out, _ = ttnn.transformer.ring_mla(
             tt_q,
             tt_kv,
             persistent_output_buffer_kv=gathered_kv,
             head_dim_v=d_v,
             logical_n=logical_n,
+            **rotation_kwargs,
             program_config=program_config,
             compute_kernel_config=runtime.compute_kernel_config,
             dim=2,

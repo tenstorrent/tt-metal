@@ -1025,7 +1025,9 @@ static void apply_lightweight_mask_streaming(
                 const uint32_t q_tile = q_subblock * sbh + row;
                 const uint32_t q_pos_u32 =
                     q_global_tile_for_mask_row<kv_pad_rotation_enabled>(q_tile, q_start_tile, kv_pad_rotation);
-                const uint32_t mask_cols = kv_pad_rotation_enabled ? num_cols : active_Sk;
+                // A packed chunk spans several sources, so its columns are bounded by the plan's
+                // valid tiles rather than the rotation path's full-width slab.
+                const uint32_t mask_cols = (kv_pad_rotation_enabled && packed_k_runs == nullptr) ? num_cols : active_Sk;
                 if constexpr (kv_pad_rotation_enabled) {
                     if (q_pos_u32 == KV_PAD_ROTATION_INVALID_TILE) {
                         l1_acc_neginf_cols(mask_cb, out_cb, row_offset, 0, mask_cols, neginf_idx);
@@ -1043,7 +1045,25 @@ static void apply_lightweight_mask_streaming(
                     }
                 }
 
-                if constexpr (kv_pad_rotation_enabled) {
+                // A packed chunk draws columns from several sources, so its per-run global K
+                // coordinates replace the rotation context's single k_local_start_tile.
+                if (packed_k_runs != nullptr) {
+                    // The packed plan already splits columns into contiguous sequence intervals.
+                    if (apply_causal) {
+                        uint32_t rs = 0;
+                        for (uint32_t run = 0; run < packed_k_run_count; ++run) {
+                            const uint32_t re = packed_k_runs[run].column_end;
+                            const int32_t diag_col = q_pos - static_cast<int32_t>(packed_k_runs[run].global_start_tile);
+                            if (diag_col < 0) {
+                                stamper.neginf_range(rs, re);
+                            } else if (static_cast<uint32_t>(diag_col) < re - rs) {
+                                stamper.stamp_tile_at(static_cast<int32_t>(rs) + diag_col, primary_diag_idx);
+                                stamper.neginf_range(rs + static_cast<uint32_t>(diag_col) + 1, re);
+                            }
+                            rs = re;
+                        }
+                    }
+                } else if constexpr (kv_pad_rotation_enabled) {
                     for (uint32_t col = 0; col < mask_cols; col++) {
                         const uint32_t local_k_tile = kv_pad_rotation.k_local_start_tile + col;
                         if (local_k_tile >= kv_pad_kv_local_padded_Nt) {
@@ -1060,22 +1080,6 @@ static void apply_lightweight_mask_streaming(
                         const int32_t k_pos = static_cast<int32_t>(k_pos_u32);
                         l1_acc_causal_col_mask(
                             mask_cb, out_cb, row_offset, col, q_pos, k_pos, neginf_idx, primary_diag_idx);
-                    }
-                } else if (packed_k_runs != nullptr) {
-                    // The packed plan already splits columns into contiguous sequence intervals.
-                    if (apply_causal) {
-                        uint32_t rs = 0;
-                        for (uint32_t run = 0; run < packed_k_run_count; ++run) {
-                            const uint32_t re = packed_k_runs[run].column_end;
-                            const int32_t diag_col = q_pos - static_cast<int32_t>(packed_k_runs[run].global_start_tile);
-                            if (diag_col < 0) {
-                                stamper.neginf_range(rs, re);
-                            } else if (static_cast<uint32_t>(diag_col) < re - rs) {
-                                stamper.stamp_tile_at(static_cast<int32_t>(rs) + diag_col, primary_diag_idx);
-                                stamper.neginf_range(rs + static_cast<uint32_t>(diag_col) + 1, re);
-                            }
-                            rs = re;
-                        }
                     }
                 } else if (straddle_col == 0) {
                     // Fast path: K coords contiguous across cols.
@@ -2838,7 +2842,21 @@ void sdpa_ring_v2(
                     ? packed_kv.mask_runs(k_chunk, streamed_source_ids, kv_rank_stride_Nt, chunk_size_t, packed_k_runs)
                     : 0;
             if (pack_source_tails && step_apply_causal) {
-                step_apply_causal = packed_kv_runs_need_causal_mask(packed_k_runs, packed_k_run_count, q_start_tile);
+                // Rotation makes Q's absolute position piecewise, so compare the runs against this
+                // chunk's lowest real Q tile rather than its slab-relative start.
+                uint32_t causal_q_ref = q_start_tile;
+                if constexpr (kv_pad_rotation_enabled) {
+                    causal_q_ref = KV_PAD_ROTATION_INVALID_TILE;
+                    for (uint32_t mask_row = 0; mask_row < Sq_chunk_t; ++mask_row) {
+                        const uint32_t q_abs =
+                            q_global_tile_for_mask_row<true>(mask_row, q_start_tile, step_kv_pad_rotation);
+                        if (q_abs != KV_PAD_ROTATION_INVALID_TILE && q_abs < causal_q_ref) {
+                            causal_q_ref = q_abs;
+                        }
+                    }
+                }
+                step_apply_causal = causal_q_ref == KV_PAD_ROTATION_INVALID_TILE ||
+                                    packed_kv_runs_need_causal_mask(packed_k_runs, packed_k_run_count, causal_q_ref);
             }
 
             sdpa_inner_loop_step<

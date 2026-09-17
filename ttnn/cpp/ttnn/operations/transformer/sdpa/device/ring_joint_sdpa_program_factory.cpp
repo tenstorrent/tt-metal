@@ -1817,8 +1817,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // Group physical KV shards by the KV/Q shard ratio, independently of mesh size
     // and sequence length. Other attention modes retain their established traversal.
     const bool group_kv_sources = use_streaming_compute && kt_inplace_v && kernel_chunked && rank_mapping.full_mesh &&
-                                  args.kv_stripe_split > 1 && L == 0 && !has_sliding_window &&
-                                  !kv_pad_rotation_enabled && !slot_from_metadata && !args.is_balanced;
+                                  args.kv_stripe_split > 1 && L == 0 && !has_sliding_window && !slot_from_metadata &&
+                                  !args.is_balanced;
     defines["GROUPED_KV_SOURCE_COUNT"] = std::to_string(group_kv_sources ? args.kv_stripe_split : 1);
 
     // NOTE: CreateKernel calls are deferred until after chain construction so that
