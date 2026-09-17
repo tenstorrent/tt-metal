@@ -91,9 +91,9 @@ struct MatmulMultiCoreProgramConfig {
 // GEMM vocabulary, all sizes in 32x32 tiles: C[M x N] = A[M x K] x B[K x N]. The caller describes the
 // work directly instead of picking a 1D / 2D / DRAM-sharded strategy:
 //   - `cores`                    the clusters that take part;
-//   - `per_core_M` / `per_core_N` the C block (in tiles) each cluster produces in one go.
+//   - `per_core_M` / `per_core_N` the C subblock (in tiles) each cluster produces in one go.
 // The factory tiles C into ceil(M_tiles / per_core_M) x ceil(N_tiles / per_core_N) blocks, numbers them
-// row-major, makes one work item per (batch, C block) and hands the items to `cores` in enumeration order
+// row-major, makes one work item per (batch, C subblock) and hands the items to `cores` in enumeration order
 // (x fastest when `row_major_cores`, y fastest otherwise). A core gets a contiguous run of items; when
 // there are fewer items than cores the trailing cores idle, when there are more each core loops over its
 // run. Blocks on the right / bottom edge are computed at full size and clipped on read and write, so any
@@ -104,18 +104,18 @@ struct MatmulMultiCoreProgramConfig {
 //
 // Stage A limits: one NEO, one reader and one writer per cluster; no data sharing between clusters;
 // no bias (the op applies it as a separate add), no fused activation, no untilize, 32x32 tiles only,
-// sharded output needs batch 1 and exactly one C block per core.
+// sharded output needs batch 1 and exactly one C subblock per core.
 struct MatmulUnifiedProgramConfig {
     CoreRangeSet cores;
     std::size_t per_core_M{};
     std::size_t per_core_N{};
-    // K tiles accumulated per step (one A panel + one B panel in L1 at a time); must divide K_tiles.
+    // K tiles accumulated per K iteration (one A slice + one B slice in L1 at a time); must divide K_tiles.
     // 0 = auto: the largest divisor of K_tiles <= 8 whose rings fit L1.
-    std::size_t K_step_tiles = 0;
-    // DST subblock in tiles; must divide per_core_M / per_core_N and hold <= 8 tiles (4 with fp32
-    // accumulation). 0 for both = auto.
-    std::size_t subblock_M_tiles = 0;
-    std::size_t subblock_N_tiles = 0;
+    std::size_t K_iteration_tiles = 0;
+    // C tiles accumulated in DST at once; must divide per_core_M / per_core_N and hold <= 8 tiles (4 with
+    // fp32 accumulation). 0 for both = auto.
+    std::size_t dst_M_tiles = 0;
+    std::size_t dst_N_tiles = 0;
     bool row_major_cores = true;
 };
 
