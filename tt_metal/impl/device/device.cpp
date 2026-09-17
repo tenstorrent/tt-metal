@@ -821,7 +821,7 @@ CoreCoord Device::worker_core_from_logical_core(const CoreCoord& logical_core) c
 
 CoreCoord Device::logical_core_from_worker_core(const CoreCoord& virtual_coord) const {
     const auto& soc_desc = MetalEnvAccessor(*env_).impl().get_cluster().get_soc_desc(this->id_);
-    tt::umd::CoreCoord coord{{virtual_coord.x, virtual_coord.y}, CoreType::WORKER, tt::CoordSystem::TRANSLATED};
+    tt::umd::CoreCoord coord{{virtual_coord.x, virtual_coord.y}, tt::CoreType::TENSIX, tt::CoordSystem::TRANSLATED};
     auto logical = soc_desc.translate_coord_to(coord, tt::CoordSystem::LOGICAL);
     return CoreCoord{logical.x, logical.y};
 }
