@@ -52,6 +52,10 @@ constexpr std::uint32_t perf_counters_sync_ctrl_addr(std::uint32_t zone)
     return perf_counters_zone_data_addr(zone) + PERF_COUNTERS_ZONE_DATA_BYTES;
 }
 
+// +4 of zone 0's sync block: the zone that is frozen and still waiting for its readout, stored as zone + 1 so
+// that 0 means none. Written by the thread that freezes, read by the thread that reads (see freeze_zone).
+constexpr std::uint32_t PERF_COUNTERS_PENDING_ZONE_ADDR = perf_counters_sync_ctrl_addr(0) + 4;
+
 constexpr std::uint32_t PERF_COUNTERS_ENABLED_FLAG_ADDR = PERF_COUNTERS_ZONES_BASE + PERF_COUNTERS_MAX_ZONES * PERF_COUNTERS_ZONE_SIZE;
 constexpr std::uint32_t PERF_COUNTERS_BANK_MASK_ADDR    = PERF_COUNTERS_ENABLED_FLAG_ADDR + 4;
 constexpr std::uint32_t PERF_COUNTERS_VALID_COUNT_ADDR  = PERF_COUNTERS_BANK_MASK_ADDR + 4;
@@ -339,10 +343,29 @@ constexpr std::uint32_t zone_name_hash(const char* s)
 #endif
 } // namespace detail
 
+// INIT and TILE_LOOP, the two zones every perf kernel opens in this order, have fixed ids (the host maps ZONE_0
+// and ZONE_1 to those names by index). Resolving them at compile time keeps the id an immediate instead of a
+// value kept live across the measured loop, which by itself moved the math_matmul block loop by one reload per
+// iteration. Any other zone name is allocated at run time from the slots after them.
+constexpr std::uint32_t ZONE_ID_INIT       = 0;
+constexpr std::uint32_t ZONE_ID_TILE_LOOP  = 1;
+constexpr std::uint32_t FIRST_DYNAMIC_ZONE = 2;
+
+constexpr std::uint32_t fixed_zone_id(std::uint32_t hash_val)
+{
+    return hash_val == detail::zone_name_hash("INIT")        ? ZONE_ID_INIT
+           : hash_val == detail::zone_name_hash("TILE_LOOP") ? ZONE_ID_TILE_LOOP
+                                                             : PERF_COUNTERS_MAX_ZONES;
+}
+
 __attribute__((always_inline)) inline std::uint32_t get_zone_id(std::uint32_t hash_val)
 {
-    std::uint32_t n = detail::next_zone_id;
-    for (std::uint32_t i = 0; i < n; ++i)
+    if (fixed_zone_id(hash_val) < PERF_COUNTERS_MAX_ZONES) // a constant for the two fixed names
+    {
+        return fixed_zone_id(hash_val);
+    }
+    std::uint32_t n = detail::next_zone_id < FIRST_DYNAMIC_ZONE ? FIRST_DYNAMIC_ZONE : detail::next_zone_id;
+    for (std::uint32_t i = FIRST_DYNAMIC_ZONE; i < n; ++i)
     {
         if (detail::zone_hashes[i] == hash_val)
         {
@@ -381,7 +404,7 @@ inline __attribute__((always_inline)) void arm_all_counters()
     ckernel::fence_compiler();
 }
 
-inline __attribute__((always_inline)) void freeze_and_read_all_counters(std::uint32_t zone_id)
+inline __attribute__((always_inline)) void freeze_all_counters()
 {
     ckernel::fence_compiler();
     llk::perf::stop_all();
@@ -397,7 +420,22 @@ inline __attribute__((always_inline)) void freeze_and_read_all_counters(std::uin
     llk::perf::write(llk::perf::bank_regs(Bank::L1).control, llk::perf::STOP);
 #endif
     llk::perf::write(llk::perf::bank_regs(Bank::TDMA_PACK).control, llk::perf::STOP);
+    ckernel::fence_compiler();
+}
 
+// The readout is a register hungry block. Inlined into the measured thread between its INIT and TILE_LOOP it
+// changes the register allocation of the measured loop itself: math_matmul MATH_ISOLATE spilled LOOP_FACTOR
+// and NUM_BLOCKS and reloaded them every iteration, one cycle per loop level (2048 to 5118 cycles), and the
+// unpack loop moved the other way by one reload, and reading the last zone after the loop on the measured
+// thread brought one reload back. So in the single thread run types the measured thread only freezes and
+// leaves the zone id behind (freeze_zone): the action thread of the next entry rendezvous reads it back before
+// it arms, and for the last zone an idle peer polls for it after its own run_kernel (read_last_zone). The span
+// run types keep reading at the exit rendezvous, on the action thread, whose loops compile identically with or
+// without the readout. No rendezvous is added: a release token can be taken by a thread that already sits at
+// the next rendezvous, which hung Quasar when one was.
+inline __attribute__((always_inline)) void read_all_counters(std::uint32_t zone_id)
+{
+    ckernel::fence_compiler();
     std::uint32_t cycles_base              = PERF_COUNTERS_ZONES_BASE + zone_id * PERF_COUNTERS_ZONE_SIZE;
     volatile std::uint32_t* bank_cycles    = reinterpret_cast<volatile std::uint32_t*>(cycles_base);
     volatile std::uint32_t* counter_counts = bank_cycles + PERF_COUNTERS_BANK_CYCLES_WORDS;
@@ -449,6 +487,27 @@ inline __attribute__((always_inline)) void freeze_and_read_all_counters(std::uin
 
     std::uint32_t sync_addr                               = perf_counters_sync_ctrl_addr(zone_id);
     *reinterpret_cast<volatile std::uint32_t*>(sync_addr) = SYNC_ZONE_COMPLETE;
+    ckernel::fence_compiler();
+}
+
+inline __attribute__((always_inline)) void freeze_zone(std::uint32_t zone_id)
+{
+    freeze_all_counters();
+    volatile std::uint32_t* pending = reinterpret_cast<volatile std::uint32_t*>(PERF_COUNTERS_PENDING_ZONE_ADDR);
+    *pending                        = zone_id + 1;
+    (void)*pending; // landed in L1 before this thread arrives at the rendezvous the reader waits in
+}
+
+// Only ever called by the action thread inside a rendezvous, so every thread is past the frozen zone.
+inline __attribute__((always_inline)) void read_pending_zone()
+{
+    volatile std::uint32_t* pending = reinterpret_cast<volatile std::uint32_t*>(PERF_COUNTERS_PENDING_ZONE_ADDR);
+    const std::uint32_t zone        = *pending;
+    if (zone != 0)
+    {
+        *pending = 0;
+        read_all_counters(zone - 1);
+    }
 }
 
 constexpr bool is_single_thread_runtype(PerfRunType run_type)
@@ -480,6 +539,51 @@ constexpr bool is_measured_thread(PerfRunType run_type)
 #endif
 }
 
+// The idle peer that reads the last zone of a single thread run type: pack, unless pack is the one measured.
+constexpr bool is_reader_thread(PerfRunType run_type)
+{
+    if (!is_single_thread_runtype(run_type))
+    {
+        return false;
+    }
+#if defined(LLK_TRISC_PACK)
+    return run_type != PerfRunType::PACK_ISOLATE;
+#elif defined(LLK_TRISC_UNPACK)
+    return run_type == PerfRunType::PACK_ISOLATE;
+#else
+    return false;
+#endif
+}
+
+// One L1 word read every few thousand cycles is nothing next to the traffic of the measured loop, and a bound
+// keeps a kernel without a frozen zone from waiting forever (about 50 ms at 1.35 GHz).
+constexpr std::uint32_t READER_POLL_LIMIT   = 1u << 15;
+constexpr std::uint32_t READER_POLL_BACKOFF = 2048;
+
+namespace detail
+{
+// Set by the first zone object of a kernel whose run type makes this thread the reader; trisc.cpp has no run
+// type of its own (kernels without zones compile it too), so it asks at run time.
+static bool reader_here;
+} // namespace detail
+
+// After run_kernel, on the reader thread: the measured thread freezes its last zone whenever its loop ends and
+// leaves the id behind, so wait for it here and read it back.
+inline void read_last_zone()
+{
+    if (detail::reader_here)
+    {
+        volatile std::uint32_t* pending = reinterpret_cast<volatile std::uint32_t*>(PERF_COUNTERS_PENDING_ZONE_ADDR);
+        for (std::uint32_t polls = 0; *pending == 0 && polls < READER_POLL_LIMIT; ++polls)
+        {
+            for (volatile std::uint32_t i = 0; i < READER_POLL_BACKOFF; ++i)
+            {
+            }
+        }
+        read_pending_zone();
+    }
+}
+
 template <PerfRunType RUN_TYPE>
 struct perf_counter_scoped
 {
@@ -493,7 +597,17 @@ struct perf_counter_scoped
     inline __attribute__((always_inline)) explicit perf_counter_scoped(std::uint32_t zid) : zone_id(zid)
     {
         ckernel::fence_compiler();
-        llk_barrier::rendezvous(llk_barrier::is_action_thread(), [] { arm_all_counters(); });
+        if constexpr (is_reader_thread(RUN_TYPE))
+        {
+            detail::reader_here = true;
+        }
+        llk_barrier::rendezvous(
+            llk_barrier::is_action_thread(),
+            []
+            {
+                read_pending_zone();
+                arm_all_counters();
+            });
         ckernel::fence_compiler();
     }
 
@@ -508,17 +622,30 @@ struct perf_counter_scoped
         {
             if constexpr (is_measured_thread(RUN_TYPE))
             {
-                freeze_and_read_all_counters(zid);
+                freeze_zone(zid);
             }
         }
         else
         {
-            llk_barrier::rendezvous(llk_barrier::is_action_thread(), [zid] { freeze_and_read_all_counters(zid); });
+            llk_barrier::rendezvous(
+                llk_barrier::is_action_thread(),
+                [zid]
+                {
+                    freeze_all_counters();
+                    read_all_counters(zid);
+                });
         }
         ckernel::fence_compiler();
     }
 };
 #endif // LLK_PROFILER
+
+#if !defined(LLK_PROFILER)
+// Without the profiler there are no zones, so there is nothing to read after run_kernel.
+inline void read_last_zone()
+{
+}
+#endif
 
 } // namespace llk_perf
 
@@ -547,6 +674,10 @@ inline void configure_and_arm()
 }
 
 inline void configure_and_arm_from_brisc()
+{
+}
+
+inline void read_last_zone()
 {
 }
 } // namespace llk_perf

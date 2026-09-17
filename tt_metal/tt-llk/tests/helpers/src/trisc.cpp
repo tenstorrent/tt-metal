@@ -105,6 +105,8 @@ int main(void)
         ckernel::tensix_sync();
     }
 
+    llk_perf::read_last_zone();
+
     *mailbox = ckernel::KERNEL_COMPLETE;
 }
 
