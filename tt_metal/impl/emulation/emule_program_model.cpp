@@ -28,7 +28,9 @@ void collect_kernels(
     std::map<CoreCoord, std::vector<PendingKernelInfo>>& pending_core_kernels,
     std::map<std::string, DeferredCompile>& deferred_compiles,
     std::unordered_map<std::string, std::function<void()>>& resolved_fns,
-    std::vector<std::string>& inline_src_temps) {
+    std::vector<std::string>& inline_src_temps,
+    const tt_emule::EmuleProgramDescriptor& desc) {
+    (void)desc;  // STAGE 2b: threaded in; consumers land in the next sub-steps.
     static const char* trisc_define_names[] = {"TRISC_UNPACK", "TRISC_MATH", "TRISC_PACK", "TRISC_ISOLATE_SFPU"};
 
     const auto& hal = MetalContext::instance().hal();
