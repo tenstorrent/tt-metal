@@ -126,9 +126,10 @@ def load_model(
     if create_cache:
         logger.info(f"Writing cache to '{cache_dir}'.")
         tt_model.save(cache_dir)
-        # Only a cache that reads back exactly is marked complete. Without this a handful of flipped
-        # bytes on the way to disk is reused on every later run, and nothing downstream can tell a
-        # damaged weight from a real one.
+        # Opt-in (TT_DIT_CACHE_VERIFY=1): only a cache that reads back exactly is marked complete.
+        # Without this a handful of flipped bytes on the way to disk is reused on every later run,
+        # and nothing downstream can tell a damaged weight from a real one. Off by default because
+        # it re-reads the whole cache once at creation.
         if _verify_env_enabled() and not verify_saved_model(tt_model, cache_dir):
             logger.error(f"cache at '{cache_dir}' did not verify; leaving it unmarked so it is rebuilt next time.")
             return
@@ -173,7 +174,7 @@ def verify_saved_model(tt_model: Module, cache_dir: str | Path, /, *, prefix: st
 
 
 def _verify_env_enabled() -> bool:
-    return os.environ.get("TT_DIT_CACHE_VERIFY", "1") not in ("0", "", "false", "False")
+    return os.environ.get("TT_DIT_CACHE_VERIFY", "0") in ("1", "true", "True")
 
 
 def model_cache_dir(

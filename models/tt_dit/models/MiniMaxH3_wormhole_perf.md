@@ -218,7 +218,7 @@ measurement of the change. Total compute moved just 0.7 s because VAE decode var
 the two runs, which the DiT blockings cannot touch; ms/fwd is the metric that isolates them.
 
 CLIP was not computed on the two A/B runs. The fourth row is the same code run later with a rebuilt
-weight cache (`cache.load_model` now verifies what it writes -- see Code changes) and carries the
+weight cache (verified with `TT_DIT_CACHE_VERIFY=1` -- see Code changes) and carries the
 CLIP: **35.88** against the other host's 36.31 at baseline. Its 12230 ms/fwd is 2.0% off the A/B pair
 taken four hours earlier across two board resets; the pair was back-to-back and differs by 0.58%, so it
 remains the measurement of the blockings and the 2% is run-to-run / board-state spread. **Block
@@ -418,9 +418,9 @@ all closed.
    broken device config is silently reused forever. This cost a long debugging detour: a
    cache built during a run with `l1_small_size=0` produced text embeddings with
    `absmax=2.5e30` and a coherent video of the wrong subject (CLIP 13.12 instead of 37.36).
-   `cache.load_model` now reloads every tensor it wrote and compares it shard-by-shard with the
-   resident weights before `cache_dict.json` is created (`TT_DIT_CACHE_VERIFY=0` opts out); a
-   mismatch leaves the cache unmarked so it is rebuilt next run. A cache-key term for device params
+   With `TT_DIT_CACHE_VERIFY=1`, `cache.load_model` reloads every tensor it wrote and compares it
+   shard-by-shard with the resident weights before `cache_dict.json` is created; a mismatch leaves
+   the cache unmarked so it is rebuilt next run. Opt-in: it re-reads the cache once at creation. A cache-key term for device params
    is still worth having.
 
 2. **`sweep_mm_block_sizes.py` cannot complete on a Wormhole Galaxy at its default flush
@@ -485,7 +485,7 @@ All committed on `jameslee/bringup_h3_wh_galaxy`; nothing here needs local patch
 | `c0af23ba607` | Documents the rows/device mismatch: tables keyed on 13632, pipeline runs 13664 |
 | `664578b377e` | Point fix: ff1/ff2 re-keyed 13632 -> 13664 |
 | `a07012d7d8a` | Structural fix: `_packed_sizes` audio/text bug, `packing.py` helpers routed through the pipeline, `M_per_core` matching in `get_matmul_config`/`get_agmm_config`, every M literal re-keyed. Live-confirmed; blockings PCC-validated |
-| `b0f4071ee12` + follow-up | `cache.verify_saved_model` + `TT_DIT_CACHE_VERIFY`: a written cache is reloaded and compared shard-by-shard before it is marked complete. First 15 s / 16:9 run on this host with CLIP: 35.88 |
+| `b0f4071ee12` + follow-ups | `cache.verify_saved_model`, opt-in via `TT_DIT_CACHE_VERIFY=1`: a written cache is reloaded and compared shard-by-shard before it is marked complete. First 15 s / 16:9 run on this host with CLIP: 35.88 |
 
 `dit_fsdp` defaults **off**, overridable with `MINIMAX_H3_DIT_FSDP`. Given these results,
 `dit_fsdp: True` belongs in `_PRESETS_WH` (12 GB/chip needs the headroom far more than it needs
