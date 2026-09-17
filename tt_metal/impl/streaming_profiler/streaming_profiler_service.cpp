@@ -15,7 +15,6 @@
 #include <utility>
 
 #include <tracy/Tracy.hpp>
-#include <x86intrin.h>
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt_stl/indestructible.hpp>
@@ -157,11 +156,7 @@ struct Service::Consumer {
     std::atomic<uint64_t> dropped{0};
     std::atomic<uint64_t> unplaced{0};       // batches delivered before the sync covered them
     std::atomic<uint64_t> unplaced_full{0};  // of those, delivered to make arena room
-    std::atomic<int64_t> unplaced_first_ns{0}, unplaced_last_ns{0}, unplaced_age_ns{0};
-    std::atomic<int64_t> park_wait_ns{0};  // the longest any batch waited for its cover
-    int64_t started_ns = 0;
-    // Consumer-thread only: what a capture cost this consumer, in TSC cycles, reported when its producer detaches.
-    uint64_t batches = 0, records = 0, cb_cycles = 0, decode_cycles = 0;
+    std::atomic<int64_t> unplaced_age_ns{0};  // the furthest such a batch was behind its cover
 };
 
 Service::Service() : sync_(std::make_shared<D2dSyncConsumer>()) { init_site_registry(); }
@@ -290,17 +285,15 @@ void Service::warn_missed(const Consumer& c) {
         log_warning(
             tt::LogMetal,
             "[streaming profiler] consumer \"{}\" received {} batches before the d2d sync covered their records ({} "
-            "past the {} s park limit, {} to make arena room), the oldest {:.1f} ms behind its cover, between {:.1f} s "
-            "and {:.1f} s after the consumer started: the sync engine ran behind them (a fault); those records were "
-            "placed on its last tangent",
+            "past the {} s park limit, {} to make arena room), the furthest {:.1f} ms behind its cover: the sync "
+            "engine "
+            "ran behind them (a fault); those records were placed on its last tangent",
             c.name,
             unplaced,
             unplaced - full,
             kMaxParkNs / 1e9,
             full,
-            c.unplaced_age_ns.load(std::memory_order_relaxed) / 1e6,
-            (c.unplaced_first_ns.load(std::memory_order_relaxed) - c.started_ns) / 1e9,
-            (c.unplaced_last_ns.load(std::memory_order_relaxed) - c.started_ns) / 1e9);
+            c.unplaced_age_ns.load(std::memory_order_relaxed) / 1e6);
     }
 }
 
@@ -343,13 +336,10 @@ void Service::register_builtin_consumers(const tt::llrt::RunTimeOptions& rtoptio
 
 void Service::consumer_thread(Consumer& c) {
     const PlacementMap& map = sync_->map();
-    c.started_ns = now_ns();
     const std::string name = "sp-con:" + c.name;
     tracy::SetThreadName(name.c_str());
     set_os_thread_name(name);
     t_in_consumer = true;
-    const uint64_t tsc_epoch = __rdtsc();
-    const int64_t tsc_epoch_ns = now_ns();
     std::vector<std::unique_ptr<Attached>> attached;
     Arena zones_arena(kZonesArenaBytes), events_arena(kEventsArenaBytes), data_arena(kDataArenaBytes);
     std::deque<Parked> parked;  // every undelivered or unreleased batch, in decode order
@@ -428,22 +418,14 @@ void Service::consumer_thread(Consumer& c) {
             api::TimestampedData::iterator(reinterpret_cast<const std::byte*>(pk.data) + pk.n.data_bytes));
         b.dropped_ = pk.dropped;
         b.stall_count_ = pk.stalls;
-        const uint64_t t0 = __rdtsc();
         try {
             c.cb(b, pk.a->capture);
         } catch (const std::exception& ex) {
             log_warning(tt::LogMetal, "[streaming profiler] consumer \"{}\" threw: {}", c.name, ex.what());
         }
-        c.cb_cycles += __rdtsc() - t0;
-        c.batches++;
-        c.records += size_t{pk.n.zones} + pk.n.events;
         pk.delivered = true;
     };
-    auto note_unplaced = [&](int64_t at, int64_t age) {
-        if (c.unplaced_first_ns.load(std::memory_order_relaxed) == 0) {
-            c.unplaced_first_ns.store(at, std::memory_order_relaxed);
-        }
-        c.unplaced_last_ns.store(at, std::memory_order_relaxed);
+    auto note_unplaced = [&](int64_t age) {
         c.unplaced_age_ns.store(
             std::max(c.unplaced_age_ns.load(std::memory_order_relaxed), age), std::memory_order_relaxed);
     };
@@ -484,16 +466,8 @@ void Service::consumer_thread(Consumer& c) {
                                 break;
                             }
                             c.unplaced.fetch_add(1, std::memory_order_relaxed);
-                            note_unplaced(now, now - pk.parked_at_ns);
+                            note_unplaced(now - pk.parked_at_ns);
                         }
-                    }
-                    if (pk.parked_at_ns != 0) {
-                        if (now == 0) {
-                            now = now_ns();
-                        }
-                        c.park_wait_ns.store(
-                            std::max(c.park_wait_ns.load(std::memory_order_relaxed), now - pk.parked_at_ns),
-                            std::memory_order_relaxed);
                     }
                     deliver(pk);
                     s.pending.pop_front();
@@ -526,8 +500,7 @@ void Service::consumer_thread(Consumer& c) {
                     if (c.hooks.waits_for_sync && pk.n.newest_ticks > map.cover_ticks(s.chip)) {
                         c.unplaced.fetch_add(1, std::memory_order_relaxed);
                         c.unplaced_full.fetch_add(1, std::memory_order_relaxed);
-                        const int64_t at = now_ns();
-                        note_unplaced(at, pk.parked_at_ns != 0 ? at - pk.parked_at_ns : 0);
+                        note_unplaced(pk.parked_at_ns != 0 ? now_ns() - pk.parked_at_ns : 0);
                     }
                     deliver(pk);
                     s.pending.pop_front();
@@ -554,7 +527,6 @@ void Service::consumer_thread(Consumer& c) {
         }
         s.cursor = w.cursor;
         s.dropped += w.dropped;
-        const uint64_t t0 = __rdtsc();
         size_t words = 0;
         for (uint32_t i = 0; i < w.frames; i++) {
             words += frame_words[i];
@@ -594,7 +566,6 @@ void Service::consumer_thread(Consumer& c) {
             .parked_at_ns = c.hooks.waits_for_sync ? now_ns() : 0});
         s.pending.push_back(&parked.back());
         s.stalls_reported = s.dec.stall_zones;
-        c.decode_cycles += __rdtsc() - t0;
         return true;
     };
     // One batch per stream per pass, so no stream's ring laps while an earlier one is drained to empty.
@@ -628,21 +599,6 @@ void Service::consumer_thread(Consumer& c) {
         }
         if (c.hooks.on_capture_end) {
             c.hooks.on_capture_end(p->capture_context());
-        }
-        if (c.records != 0) {
-            const double ns_per_cycle =
-                static_cast<double>(now_ns() - tsc_epoch_ns) / static_cast<double>(__rdtsc() - tsc_epoch);
-            log_info(
-                tt::LogMetal,
-                "[streaming profiler] consumer \"{}\": {} batches, {} zones and events; per record {:.2f} ns decoding "
-                "and parking, {:.2f} ns in the callback; a batch waited up to {:.1f} ms for the sync cover",
-                c.name,
-                c.batches,
-                c.records,
-                static_cast<double>(c.decode_cycles) * ns_per_cycle / static_cast<double>(c.records),
-                static_cast<double>(c.cb_cycles) * ns_per_cycle / static_cast<double>(c.records),
-                c.park_wait_ns.load(std::memory_order_relaxed) / 1e6);
-            c.batches = c.records = c.cb_cycles = c.decode_cycles = 0;
         }
         for (size_t i = 0; i < a.streams.size(); i++) {
             c.dropped.fetch_add(a.streams[i]->dropped, std::memory_order_relaxed);
