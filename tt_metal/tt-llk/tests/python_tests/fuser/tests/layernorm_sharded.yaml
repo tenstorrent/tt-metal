@@ -18,13 +18,15 @@ operands:
   - name: "scaler"
     dims: [32, 1024]
     format: "Float16_b"
-    const_value: 0.0009765625
+    range:
+      include: [0.0009765625]
 
   # eps — small constant for numerical stability
   - name: "eps"
     dims: [32, 1024]
     format: "Float16_b"
-    const_value: 0.001
+    range:
+      include: [0.001]
 
   # gamma — per-column scale
   - name: "gamma"

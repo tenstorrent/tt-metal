@@ -102,6 +102,46 @@ def integer_face_bounds_or_constant(
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+def resolve_intervals(
+    included: List[Tuple[float, float]],
+    excluded: Optional[List[Tuple[float, float]]] = None,
+) -> List[Tuple[float, float]]:
+    if not included:
+        raise ValueError("included intervals must be non-empty")
+
+    def _normalize(intervals):
+        normalized = []
+        for low, high in sorted(intervals):
+            if low > high:
+                raise ValueError(
+                    f"interval lower bound {low} exceeds upper bound {high}"
+                )
+            if normalized and low <= normalized[-1][1]:
+                normalized[-1] = (normalized[-1][0], max(normalized[-1][1], high))
+            else:
+                normalized.append((low, high))
+        return normalized
+
+    remaining = _normalize(included)
+    for excluded_low, excluded_high in _normalize(excluded or []):
+        next_remaining = []
+        for low, high in remaining:
+            if excluded_high < low or excluded_low > high:
+                next_remaining.append((low, high))
+                continue
+            if excluded_low > low:
+                next_remaining.append((low, excluded_low))
+            if excluded_high < high:
+                next_remaining.append((excluded_high, high))
+        remaining = next_remaining
+
+    if not remaining:
+        raise ValueError(
+            f"excluded intervals {excluded or []} remove all included intervals {included}"
+        )
+    return remaining
+
+
 def _in_intervals(
     values: torch.Tensor, intervals: List[Tuple[float, float]]
 ) -> torch.Tensor:
