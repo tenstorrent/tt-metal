@@ -99,6 +99,7 @@ if [[ -r /etc/os-release ]]; then
     case $sfpi_dist in
 	debian) sfpi_pkg=deb;;
 	fedora) sfpi_pkg=rpm;;
+	gentoo) sfpi_pkg=gentoo;;
     esac
 fi
 sfpi_arch=$(uname -m)
@@ -179,11 +180,79 @@ dupstderr () {
 dupstderr <<EOF
 Building SFPI $sfpi_version
 Working Directory: $src
+EOF
+
+check_missing_deps () {
+    local missing=()
+    case $sfpi_dist in
+	gentoo)
+	    # Check one or more atoms; succeed if any is installed.
+	    # Used for packages that may sit in different categories across
+	    # Gentoo versions (e.g. sys-devel -> dev-build migrations).
+	    gentoo_has_any() {
+		local atom
+		for atom in "$@"; do
+		    portageq has_version / "$atom" 2>/dev/null && return 0
+		done
+		return 1
+	    }
+	    # List of (install-hint . atoms...) pairs encoded as parallel arrays.
+	    local hints=()
+	    local checks=()
+	    # hint is the atom shown in the error message; checks are what we probe.
+	    add_check() { hints+=("$1"); shift; checks+=("$*"); }
+	    add_check sys-devel/gcc       sys-devel/gcc
+	    add_check dev-build/autoconf  dev-build/autoconf sys-devel/autoconf
+	    add_check dev-build/automake  dev-build/automake sys-devel/automake
+	    add_check sys-devel/bison     sys-devel/bison
+	    add_check dev-util/dejagnu    dev-util/dejagnu
+	    add_check dev-tcltk/expect    dev-tcltk/expect
+	    add_check sys-devel/flex      sys-devel/flex
+	    add_check sys-apps/gawk       sys-apps/gawk
+	    add_check dev-util/patchutils dev-util/patchutils
+	    add_check dev-lang/python     dev-lang/python
+	    add_check dev-libs/expat      dev-libs/expat
+	    add_check dev-libs/gmp        dev-libs/gmp
+	    add_check dev-libs/mpc        dev-libs/mpc
+	    add_check dev-libs/mpfr       dev-libs/mpfr
+	    add_check sys-apps/texinfo    sys-apps/texinfo
+	    local i
+	    for i in "${!hints[@]}"; do
+		# shellcheck disable=SC2086
+		gentoo_has_any ${checks[$i]} || missing+=("${hints[$i]}")
+	    done
+	    if [[ ${#missing[@]} -gt 0 ]]; then
+		echo "Missing Gentoo packages; install with: emerge ${missing[*]}" >&2
+	    fi
+	    ;;
+	debian)
+	    local pkgs=(gcc g++ libexpat1-dev libgmp-dev libmpc-dev libmpfr-dev
+		autoconf automake bison expect flex gawk patchutils python3 texinfo)
+	    for pkg in "${pkgs[@]}"; do
+		dpkg-query -W -f='${Status}' "$pkg" 2>/dev/null | grep -q 'install ok installed' || missing+=("$pkg")
+	    done
+	    if [[ ${#missing[@]} -gt 0 ]]; then
+		echo "Missing Debian packages; install with: apt-get install ${missing[*]}" >&2
+	    fi
+	    ;;
+	fedora)
+	    local pkgs=(gcc gcc-c++ expat-devel gmp-devel libmpc-devel mpfr-devel
+		autoconf automake bison expect flex gawk patchutils python3 texinfo)
+	    for pkg in "${pkgs[@]}"; do
+		rpm -q "$pkg" &>/dev/null || missing+=("$pkg")
+	    done
+	    if [[ ${#missing[@]} -gt 0 ]]; then
+		echo "Missing Fedora packages; install with: dnf install ${missing[*]}" >&2
+	    fi
+	    ;;
+	*)
+	    cat >&2 <<WARN
 
 Install (or otherwise provide) the following components:
 Common names: autoconf automake bison expect flex gawk patchutils python3 texinfo
 Debian names: gcc g++ libexpat1-dev libgmp-dev libmpc-dev libmpfr-dev
 Fedora names: gcc gcc-c++ expat-devel gmp-devel libmpc-devel mpfr-devel
+Gentoo names: sys-devel/gcc dev-build/autoconf dev-build/automake sys-devel/bison dev-util/dejagnu dev-tcltk/expect sys-devel/flex sys-apps/gawk dev-util/patchutils dev-lang/python dev-libs/expat dev-libs/gmp dev-libs/mpc dev-libs/mpfr sys-apps/texinfo
 
 This script cannot install them as it knows neither your system's
 packaging system, nor how it might have named them. You will have to
@@ -191,10 +260,17 @@ research that from the above clues. If required components are missing
 the build will fail, sometimes with a clueful message. Please report
 any additional packages or issues you encounter by filing an issue at
 https://github.com/tenstorrent/tt-metal/issues
-EOF
+WARN
+	    ;;
+    esac
+    return ${#missing[@]}
+}
+
+deps_missing=0
+check_missing_deps || deps_missing=$?
 
 if ! [[ -d .git ]]; then
-    if [[ -t 0 ]]; then
+    if [[ -t 0 && $deps_missing -gt 0 ]]; then
 	echo >&2
 	read -p "Confirm you have read and understood the above:" yes
 	if ! [[ $yes =~ ^[Yy] ]]; then
@@ -215,8 +291,20 @@ echo "Fetching sfpi $sfpi_version ..." | dupstderr
  git submodule update --depth 1 --init --recursive)
 
 echo | dupstderr
+echo "Applying local patches ..." | dupstderr
+patches_dir=$(dirname $(realpath $0))/patches
+for p in "$patches_dir"/*.patch; do
+    [[ -f $p ]] || continue
+    (set -x; git -C gcc apply --check "$p" 2>/dev/null && git -C gcc apply "$p") \
+        || echo "Patch already applied or not applicable: $p" >&2
+done
+
+echo | dupstderr
 echo "Building ..." | dupstderr
 (set -x; rm -rf build)
+# GCC 16+ defaults to C++20 where u8"" literals become char8_t[], breaking
+# libcody's S2C helper which expects char[]. Opt back out to pre-C++20 behaviour.
+export CXXFLAGS="${CXXFLAGS:+$CXXFLAGS }-fno-char8_t"
 (set -x; scripts/build.sh --test-tt 2>&1)
 
 echo | dupstderr
