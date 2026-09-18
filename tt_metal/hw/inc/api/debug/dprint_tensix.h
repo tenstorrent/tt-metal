@@ -244,34 +244,47 @@ inline uint32_t dest_order_from_ieee_float16_b(uint32_t ieee) {
 // the RISCV_DEBUG_REG_* config-read wrappers are not wired up on Quasar. PR1 supports Float32 and
 // Float16_b.
 //
-// The unpack<->math mailbox rendezvous (dbg_thread_halt; pack is not a participant yet) brackets the
-// read so it is safe to call mid-pipeline: a live unbracketed read desyncs the unpack tile counter
-// (TILE_COUNTERS fault).
+// Call this only between tile_regs_acquire() and tile_regs_commit(). The unpack<->math mailbox
+// rendezvous (dbg_thread_halt) quiesces unpack for the duration of the read, so an in-flight unpack
+// cannot desync the tile counter underneath it (TILE_COUNTERS fault). Pack is not a participant in
+// that rendezvous, so keeping pack off DEST is the caller's responsibility, and the acquire-to-commit
+// window is what provides it: math owns DEST there and pack is still waiting on it. Called outside
+// that window, this races an in-flight pack.
 inline void dprint_tensix_dest_reg(DataFormat data_format, int tile_id = 0) {
     UNPACK(ckernel::dbg_thread_halt<ckernel::UnpackThreadId>());
     MATH(ckernel::dbg_thread_halt<ckernel::MathThreadId>());
     MATH({
-        // Program Math's section for MMIO DEST reads; tensix_sync first commits the copied tile.
-        ckernel::configure_dest_access<ckernel::MathThreadId>(data_format, /*enable_swizzle=*/true);
-        ckernel::tensix_sync();
+        // Reading DEST at the wrong element width yields plausible-looking garbage rather than an
+        // obvious failure, so refuse formats this path has not been validated against. Note the
+        // rendezvous is still entered and left symmetrically -- returning early here would strand
+        // unpack in dbg_thread_halt.
+        if (data_format != DataFormat::Float32 && data_format != DataFormat::Float16_b) {
+            DPRINT(
+                "dprint_tensix_dest_reg: unsupported data format {}, expected Float32 or Float16_b\n",
+                (uint32_t)data_format);
+        } else {
+            // Program Math's section for MMIO DEST reads; tensix_sync first commits the copied tile.
+            ckernel::configure_dest_access<ckernel::MathThreadId>(data_format, /*enable_swizzle=*/true);
+            ckernel::tensix_sync();
 
-        DPRINT("Tile ID = {}\n", tile_id);
-        uint32_t row = tile_id * NUM_ROWS_PER_TILE;
-        for (uint32_t i = 0; i < NUM_ROWS_PER_TILE; ++i, ++row) {
-            if (data_format == DataFormat::Float32) {
-                constexpr int ARRAY_LEN = 16;
-                uint32_t rd_data[ARRAY_LEN];
-                ckernel::dbg_read_dest_row_32b(row, rd_data);
-                dprint_array_with_data_type<ARRAY_LEN>((uint32_t)DataFormat::Float32, rd_data);
-            } else {
-                constexpr int ARRAY_LEN = 8;
-                uint32_t rd_data[ARRAY_LEN];
-                ckernel::dbg_read_dest_row_16b(row, rd_data);
-                for (int w = 0; w < ARRAY_LEN; ++w) {
-                    rd_data[w] = dest_order_from_ieee_float16_b(rd_data[w] & 0xFFFFu) |
-                                 (dest_order_from_ieee_float16_b(rd_data[w] >> 16) << 16);
+            DPRINT("Tile ID = {}\n", tile_id);
+            uint32_t row = tile_id * NUM_ROWS_PER_TILE;
+            for (uint32_t i = 0; i < NUM_ROWS_PER_TILE; ++i, ++row) {
+                if (data_format == DataFormat::Float32) {
+                    constexpr int ARRAY_LEN = 16;
+                    uint32_t rd_data[ARRAY_LEN];
+                    ckernel::dbg_read_dest_row_32b(row, rd_data);
+                    dprint_array_with_data_type<ARRAY_LEN>((uint32_t)DataFormat::Float32, rd_data);
+                } else {
+                    constexpr int ARRAY_LEN = 8;
+                    uint32_t rd_data[ARRAY_LEN];
+                    ckernel::dbg_read_dest_row_16b(row, rd_data);
+                    for (int w = 0; w < ARRAY_LEN; ++w) {
+                        rd_data[w] = dest_order_from_ieee_float16_b(rd_data[w] & 0xFFFFu) |
+                                     (dest_order_from_ieee_float16_b(rd_data[w] >> 16) << 16);
+                    }
+                    dprint_array_with_data_type<ARRAY_LEN>((uint32_t)data_format, rd_data);
                 }
-                dprint_array_with_data_type<ARRAY_LEN>((uint32_t)data_format, rd_data);
             }
         }
     })

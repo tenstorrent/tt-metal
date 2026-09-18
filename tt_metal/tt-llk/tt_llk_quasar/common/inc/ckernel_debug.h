@@ -13,9 +13,19 @@
 // DEST-register debug helpers for Quasar.
 //
 // dbg_thread_halt / dbg_thread_unhalt: an inter-thread mailbox rendezvous (ported from Blackhole) that
-// quiesces the unpack thread around a math-side DEST read, making the read safe mid-pipeline. Pack is
-// deferred -- only the unpack<->math rendezvous is implemented (dbg_thread_halt<Math> reads DEST while
-// dbg_thread_halt<Unpack> is stalled). It uses the Tensix mailboxes, not the debug bus.
+// quiesces the unpack thread around a math-side DEST read. Pack is deferred -- only the unpack<->math
+// rendezvous is implemented (dbg_thread_halt<Math> reads DEST while dbg_thread_halt<Unpack> is
+// stalled). It uses the Tensix mailboxes, not the debug bus.
+//
+// Blackhole's dbg_thread_halt<Math> also drains pack, by spinning until semaphore::MATH_PACK reads 0.
+// This port deliberately does not, and neither that spin nor an equivalent assert would be correct
+// here: MATH_PACK is a counting semaphore that _llk_math_pack_sync_init_ seeds with a maximum of 1
+// under DstSync::SyncFull but 2 under DstSync::SyncHalf, and _llk_math_wait_for_dest_available_ is a
+// SEMWAIT on STALL_ON_MAX, so it releases math as soon as the count drops below that maximum. Under
+// SyncHalf a count of 1 is therefore legal on entry here, with the previously committed tile still
+// packing out of the other bank. Keeping pack off the bank being read is instead the caller's
+// responsibility, discharged by reading inside the tile_regs_acquire() ... tile_regs_commit() window
+// -- see dprint_tensix_dest_reg in api/debug/dprint_tensix.h.
 //
 // dbg_read_dest_row_*: read one DEST row through the RISC memory-mapped window at RISCV_DEST_START_ADDR.
 // The caller must program the reading RISC's section via configure_dest_access() (see ckernel_dest.h)
