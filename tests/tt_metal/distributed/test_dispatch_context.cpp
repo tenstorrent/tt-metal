@@ -46,9 +46,10 @@ protected:
     void TearDown() override { experimental::DispatchContext::get().reset(); }
 };
 
-// conditions for using fd manual switching
 namespace {
 
+// Why a guard test cannot run here, or nullopt if it can: manual FD switching needs Slow Dispatch,
+// real hardware, and a Galaxy or Blackhole cluster.
 std::optional<std::string> fd_preflight_skip_reason() {
     const auto& context = MetalContext::instance();
     if (context.rtoptions().get_fast_dispatch()) {
@@ -85,7 +86,8 @@ bool has_expected_dispatch_column(const MeshDevice& mesh) {
     return grid.x > 12 && grid.y > 1;
 }
 
-// tries to call initialize_fast_dispatch(mesh) inside a try/catch
+// Runs the default preflight and returns the refusal text, or an empty string if the session was
+// allowed (in which case it is torn down again).
 std::string capture_default_fd_refusal(MeshDevice* mesh) {
     try {
         experimental::DispatchContext::get().initialize_fast_dispatch(mesh);
@@ -123,8 +125,7 @@ BufferShardingArgs one_page_per_core_sharding_args(const CoreRangeSet& shard_gri
 }
 
 // Window ends for CQ0 exactly as the guard derives them from the live DispatchMemMap. Never hardcode
-// these: the base moved 0x1B380 -> 0x1B400 -> 0x1B440 across recent pins and the build measured on
-// Sep 16 sits at 0x1B400 / 0x7CFC0 / 0x15CFC0 / 0xA4000.
+// these: the allocator base and the window ends have moved across recent pins.
 struct FdWindowEnds {
     DeviceAddr prefetch_write_only;  // (12,0): command-data queue + pinned-write scratch
     DeviceAddr prefetch_full;        // (12,0): plus the ring buffer used by reads and program launches
@@ -446,9 +447,9 @@ TEST_F(DispatchContextFixture, RefusesPersistentArenaResidentL1InsideDispatchFoo
 }
 
 // WHAT: a plain (interleaved) L1 buffer allocated top-down, so it sits at the top of L1, above the window.
-// WHY:  the guard must stay quiet when nothing is in the way. NOTE: this encodes the ADDRESS-CHECK
-//       policy. An interleaved buffer has a page on every core including (12,0)/(12,1), so the
-//       buffer-walk design would refuse it. Kept out of the sweep's suite gate for that reason.
+// WHY:  the guard must stay quiet when nothing is in the way. An interleaved buffer has a page on
+//       every core including (12,0)/(12,1), so this also pins down the policy: data on a dispatch
+//       core is a conflict only when it is inside the firmware window, not at any address.
 // EXPECT: not refused.
 TEST_F(DispatchContextFixture, AllowsResidentL1AboveDispatchFootprint) {
     if (auto reason = fd_preflight_skip_reason(); reason.has_value()) {
@@ -476,31 +477,35 @@ TEST_F(DispatchContextFixture, AllowsResidentL1AboveDispatchFootprint) {
 // the memory map gives us. Anything a test puts there before the session gets overwritten. The
 // guard's job is to raise BEFORE the session if something is in the way, and to stay quiet otherwise.
 //
-// Two ways to write that guard are on the table:
-//   - address check (what is built today): asks the allocator "what is the lowest address in use on
-//     this core?" and raises if it is inside the window.
-//   - buffer walk (the alternative): looks at every allocated buffer and raises if one has a shard
-//     on (12,0) or (12,1), at any address.
-// Most tests must pass under BOTH. Where a test can only pass under one, its comment says so.
+// The guard answers two questions for each dispatch core, in this order:
+//   1. Which allocated buffers actually have data on this core? Decided from each buffer's shard
+//      grid (or distribution spec; interleaved means every core), never from the shared free list,
+//      because a lockstep buffer reserves its address range on every bank while its bytes live only
+//      on its own grid.
+//   2. Of those, is any placed below the window end? Only then is it a conflict.
+// Two simpler rules were rejected, and several tests exist to tell them apart from this one:
+//   - a free-list-only address check does step 2 without step 1 (false alarms for lockstep buffers
+//     sharded elsewhere: AllowsLockstepResidentWithNoDataOnDispatchCores).
+//   - a core-ownership check does step 1 without step 2 (refuses residents parked safely above the
+//     window: InterleavedL1ResidentAtTopIsAllowed, AllowsResidentL1AboveDispatchFootprint).
 //
 // Many tests use the same two steps:
 //   1. ground truth: force the session with allow_destructive=true, push traffic through it, read the
 //      planted data back. This shows what the firmware REALLY did, independent of the guard.
 //   2. verdict: run the session with default options and check whether the guard raised.
 //
-// Every test has exactly one fixed expectation. Nothing is reinterpreted based on which guard is
-// compiled in.
+// Every test has exactly one fixed expectation. Nothing is reinterpreted per guard variant or per
+// allocator mode.
 // ---------------------------------------------------------------------------------------------------
 
 // WHAT: put a tensor on cores (0,0)-(1,1), far from the dispatch cores, but at the very bottom of L1
 //       (bottom_up = true). Lockstep allocation books that address range on EVERY core, including
 //       (12,0)/(12,1), even though the data is only on the four corner cores.
-// WHY:  this is where the two guard designs disagree. The address check sees "something in use at the
-//       bottom of (12,1)" and raises: a false alarm, no data is there. The buffer walk sees the shard
-//       grid, finds no dispatch core in it, and lets the session through.
+// WHY:  this is the lockstep false positive. A free-list-only check sees "something in use at the
+//       bottom of (12,1)" and raises: a false alarm, no data is there. The guard reads the shard
+//       grid instead, finds no dispatch core in it, and lets the session through.
 // EXPECT: not refused. Step 1 proves the tensor survives a forced session. Step 2 requires no raise.
-//       With the address check built (today) this test FAILS at the last EXPECT and prints the
-//       refusal. With the buffer walk it passes. Same result with HYBRID on or off.
+//       Same result with HYBRID on or off.
 TEST_F(DispatchContextFixture, AllowsLockstepResidentWithNoDataOnDispatchCores) {
     if (auto reason = fd_preflight_skip_reason(); reason.has_value()) {
         GTEST_SKIP() << *reason;
@@ -524,8 +529,8 @@ TEST_F(DispatchContextFixture, AllowsLockstepResidentWithNoDataOnDispatchCores) 
     ASSERT_NE(resident, nullptr);
 
     // The mechanism under test, stated as an assertion: bank (12,1) reports this buffer's address
-    // as its lowest occupied address even though the buffer has no shard on (12,1). This is what
-    // the address-window predicate reads, and why it cannot tell reservation from data.
+    // as its lowest occupied address even though the buffer has no shard on (12,1). The free list
+    // cannot tell reservation from data, which is why the guard consults the buffer's grid.
     {
         const auto& mesh_allocator = *mesh->allocator_impl();
         const uint32_t bank = mesh_allocator.get_bank_ids_from_logical_core(BufferType::L1, CoreCoord(12, 1)).at(0);
@@ -540,7 +545,7 @@ TEST_F(DispatchContextFixture, AllowsLockstepResidentWithNoDataOnDispatchCores) 
     EnqueueWriteMeshBuffer(mesh->mesh_command_queue(), resident, src);
     Finish(mesh->mesh_command_queue());
 
-    // 1. Ground truth, independent of which predicate is compiled in: force the session, push DRAM
+    // 1. Ground truth, independent of the guard: force the session, push DRAM
     //    traffic through the dispatch cores (the canary's blast radius grows under traffic), tear
     //    down, and read the resident back on every device. It must be untouched.
     constexpr uint32_t traffic_pages = 512;  // 2 MB per device, enough to cycle the command-data queue
@@ -571,15 +576,15 @@ TEST_F(DispatchContextFixture, AllowsLockstepResidentWithNoDataOnDispatchCores) 
 }
 
 // ---------------------------------------------------------------------------------------------------
-// The tests from here down were added after the guard scope audit (Sep 16). Reading guide: see the
-// block above AllowsLockstepResidentWithNoDataOnDispatchCores.
+// The tests from here down cover the guard's ledger coverage, its mesh-tree walk, and its known
+// limits. Reading guide: see the block above AllowsLockstepResidentWithNoDataOnDispatchCores.
 // ---------------------------------------------------------------------------------------------------
 
 // WHAT: put a per-core tensor on the REST of the dispatch column, (12,2) down to (12,9) including the
 //       sender core, at the bottom of L1. Nothing on (12,0) or (12,1).
 // WHY:  the question "if I put stuff on cores other than the two fast dispatch needs, does the guard
-//       stay quiet?" Per-core allocation books L1 only on those cores, so both guard designs see an
-//       empty (12,0)/(12,1) and must allow.
+//       stay quiet?" Per-core allocation books L1 only on those cores, so the guard sees an empty
+//       (12,0)/(12,1) and must allow.
 // EXPECT: not refused, and the tensor is intact after a forced session with traffic. Needs HYBRID=1
 //       because per-core allocation does not exist without it.
 TEST_F(DispatchContextFixture, PerCoreResidentOnColumn12NonDispatchCoresIsAllowed) {
@@ -608,10 +613,10 @@ TEST_F(DispatchContextFixture, PerCoreResidentOnColumn12NonDispatchCoresIsAllowe
 }
 
 // WHAT: same cores, (12,2)-(12,9), but a normal lockstep tensor placed at the TOP of L1 (the default).
-// WHY:  lockstep books the address on every core, but the top of L1 is above the window, so even the
-//       address check has nothing to complain about; the buffer walk sees no dispatch core in the grid.
-// EXPECT: not refused, tensor intact. Passes under both designs, HYBRID on or off. (The same tensor at
-//       the BOTTOM of L1 is the disagreement case, AllowsLockstepResidentWithNoDataOnDispatchCores.)
+// WHY:  lockstep books the address on every core, but the grid has no dispatch core in it and the top
+//       of L1 is above the window anyway, so the guard has nothing to complain about on either count.
+// EXPECT: not refused, tensor intact, HYBRID on or off. (The same tensor at the BOTTOM of L1 is the
+//       lockstep false-positive case, AllowsLockstepResidentWithNoDataOnDispatchCores.)
 TEST_F(DispatchContextFixture, LockstepResidentOnColumn12NonDispatchCoresAtTopIsAllowed) {
     if (auto reason = fd_preflight_skip_reason(); reason.has_value()) {
         GTEST_SKIP() << *reason;
@@ -821,9 +826,9 @@ TEST_F(DispatchContextFixture, ResidentOnNestedSubmeshRefused) {
 
 // WHAT: an arena region on the PREFETCH core (12,0), booked in the CHIP's allocator rather than the
 //       mesh's. (The existing arena test covers the mesh allocator and the dispatcher core (12,1).)
-// WHY:  arena regions are not Buffer objects. A buffer-walk implementation that forgets to also read the
-//       arena would let this through. Checks the role and chip in the message, not the ledger wording,
-//       so the test is fair to both designs.
+// WHY:  arena regions are not Buffer objects, so a walk of get_allocated_buffers() alone would let this
+//       through; the guard must read the arena as well. Checks the role and chip in the message, not
+//       the ledger wording.
 // EXPECT: refused with a [prefetch] line for chip 0 and no [dispatch] line.
 TEST_F(DispatchContextFixture, ChipArenaResidentOnPrefetchCoreRefused) {
     if (auto reason = fd_preflight_skip_reason(); reason.has_value()) {
@@ -850,9 +855,8 @@ TEST_F(DispatchContextFixture, ChipArenaResidentOnPrefetchCoreRefused) {
 // WHAT: a tensor sharded the "ND" way (BufferDistributionSpec) with one page on (12,0) and one on
 //       (12,1), at the bottom of L1.
 // WHY:  ND-sharded buffers have no classic shard spec; their core list lives in
-//       buffer_distribution_spec(). A buffer walk that only looks at shard_spec() would miss this
-//       shape (or crash on it). The address check does not care how the buffer is described. Both
-//       designs must refuse.
+//       buffer_distribution_spec(). A walk that only looks at shard_spec() would miss this shape
+//       (or crash on it), so the guard must attribute cores from the distribution spec too.
 // EXPECT: refused. Then a forced session must actually overwrite the page on (12,1), proving the
 //       refusal protected real data. Written and read back raw, so the ND read path is not involved.
 TEST_F(DispatchContextFixture, NdShardedResidentWithDataOnDispatchCoresRefused) {
@@ -897,7 +901,7 @@ TEST_F(DispatchContextFixture, NdShardedResidentWithDataOnDispatchCoresRefused) 
 
 // WHAT: an INTERLEAVED L1 buffer (no shard spec, no distribution spec) allocated bottom-up, so its
 //       pages sit at the allocator base on every bank, including both dispatch cores.
-// WHY:  the buffer walk attributes an interleaved buffer to every core (one page per bank). It must be
+// WHY:  the guard attributes an interleaved buffer to every core (one page per bank). It must be
 //       refused on both dispatch cores and reported as kind "interleaved". This is the one placement
 //       the grid test cannot narrow, and the message says so.
 // EXPECT: refused, with a [prefetch] and a [dispatch] line naming an "interleaved allocation".
@@ -928,7 +932,7 @@ TEST_F(DispatchContextFixture, InterleavedL1ResidentAtBaseRefused) {
 
 // WHAT: the same interleaved L1 buffer allocated top-down (the default), so its pages sit at the top of
 //       every bank, far above the firmware footprint.
-// WHY:  the buffer walk keeps the address window: data on the dispatch core is only a conflict when it
+// WHY:  the guard keeps the address window: data on the dispatch core is only a conflict when it
 //       is inside the footprint. A pure core-ownership check would refuse this; the hybrid must not.
 // EXPECT: not refused, and the buffer is intact after a forced session with traffic.
 TEST_F(DispatchContextFixture, InterleavedL1ResidentAtTopIsAllowed) {
@@ -973,8 +977,7 @@ TEST_F(DispatchContextFixture, InterleavedL1ResidentAtTopIsAllowed) {
 //       assuming (12,0)/(12,1). ArenaResidentOnColumn12NonDispatchCoresIsAllowed shows the same cores
 //       are fine with one queue.
 // EXPECT: refused, naming (12,2) [prefetch] and (12,3) [dispatch]. Skips if a two-queue slow-dispatch
-//       mesh cannot be opened here; that has never been tried on silicon before this test.
-// TODO: this test can probably get removed, I think there's always only 1 queue
+//       mesh cannot be opened here.
 TEST_F(DispatchContextFixture, TwoCqSessionChecksSecondDispatchPair) {
     if (auto reason = fd_preflight_skip_reason(); reason.has_value()) {
         GTEST_SKIP() << *reason;
@@ -1006,8 +1009,8 @@ TEST_F(DispatchContextFixture, TwoCqSessionChecksSecondDispatchPair) {
 // WHAT: two ways to put bytes in L1 WITHOUT telling the allocator: (a) a buffer created at a fixed
 //       address, (b) a raw write (WriteToDeviceL1). Do both on the dispatch cores, plus the raw write on
 //       (12,5) as a control. Then run the session with default options.
-// WHY:  this is the honest limit of any allocator-based guard, whichever design: it can only see what
-//       went through the allocator. Blaze does neither of these today, but both exist in tt-metal.
+// WHY:  this is the honest limit of any allocator-based guard: it can only see what went through the
+//       allocator. Blaze does neither of these today, but both exist in tt-metal.
 //       Writing the limit down as a test means we notice if it ever changes.
 // EXPECT: NOT refused (the guard is blind), the bytes inside the window on (12,0)/(12,1) are destroyed,
 //       (12,5) is untouched, and nothing above the guard's window ends was written. The test prints the
@@ -1105,10 +1108,10 @@ TEST_F(DispatchContextFixture, LedgerGuardIsBlindToFixedAddressAndRawWrites) {
 
 // WHAT: a tensor WITH data on (12,0)/(12,1), but at the top of L1, above the window. Force the session
 //       and check it survives.
-// WHY:  this is the fact the design choice hinges on. The address check allows this tensor (DSv3/K2.6
-//       weights and the blaze canary's 46-row victim live here, measured intact on Sep 16); the buffer
-//       walk would refuse it as a matter of policy. The verdict is not asserted here, only the physical
-//       fact, so the test holds under either design.
+// WHY:  this is the fact the address window rests on: data on a dispatch core ABOVE the window is not
+//       touched by the firmware, so refusing it would be a false alarm. The blaze canary's victim sits
+//       here, and DSv3/K2.6 per-core weights on (12,0)-(12,7) are expected to. Only the physical fact
+//       is asserted; the verdict for this placement is AllowsResidentL1AboveDispatchFootprint.
 // EXPECT: intact after a forced session with traffic.
 TEST_F(DispatchContextFixture, ResidentAboveWindowOnDispatchCoresSurvivesForcedSession) {
     if (auto reason = fd_preflight_skip_reason(); reason.has_value()) {
@@ -1135,9 +1138,9 @@ TEST_F(DispatchContextFixture, ResidentAboveWindowOnDispatchCoresSurvivesForcedS
 //       band: above the part that host->device writes use, below the top of the part that only reads
 //       and program launches use.
 // WHY:  blaze passes write_only=True and relies on that band never being written during an upload.
-//       Two checks: (1) with the default write_only=false the tensor is inside the full window and both
-//       designs must refuse; (2) a forced write-only session with traffic must leave it intact. The
-//       write_only=true VERDICT (address check allows, buffer walk refuses) is on purpose not tested.
+//       Two checks: (1) with the default write_only=false the tensor is inside the full window and
+//       must be refused; (2) a forced write-only session with traffic must leave it intact, which is
+//       what makes the narrowed write-only window honest.
 // EXPECT: refused with default options ([prefetch] only); intact after the forced write-only session.
 //       Needs HYBRID=1.
 TEST_F(DispatchContextFixture, WriteOnlySessionLeavesPrefetchRingbufferBandIntact) {
@@ -1209,12 +1212,11 @@ TEST_F(DispatchContextFixture, WriteOnlySessionLeavesPrefetchRingbufferBandIntac
 
 // WHAT: open a single chip as a "unit mesh" (what ttnn.CreateDevice does) and start a session from it,
 //       with nothing planted.
-// WHY:  measured on Sep 16 (fd_guard_run_20260916_024735/08_service_core_regression.log): today the
-//       guard throws "SubDeviceManagerTracker is not initialized" here, which broke three upstream
-//       ServiceCore tests. The parent mesh that create_unit_meshes builds is never initialized, so it
-//       has no allocator; the guard must skip it instead of asking it questions, while still walking
-//       its initialized unit submeshes.
-// EXPECT: no exception. This test FAILS until that one-line guard fix lands.
+// WHY:  regression. An earlier version of the guard threw "SubDeviceManagerTracker is not initialized"
+//       here and broke three upstream ServiceCore tests. The parent mesh that create_unit_meshes builds
+//       is never initialized, so it has no allocator; the guard must skip it instead of asking it
+//       questions, while still walking its initialized unit submeshes.
+// EXPECT: no exception.
 TEST_F(DispatchContextFixture, UnitMeshSessionDoesNotThrowTrackerError) {
     if (auto reason = fd_preflight_skip_reason(); reason.has_value()) {
         GTEST_SKIP() << *reason;
