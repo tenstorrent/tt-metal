@@ -281,6 +281,38 @@ def test_binary_sub_device_id_and_sub_core_grids_mutual_exclusion(device, expect
 
 
 # ---------------------------------------------------------------------------
+# Inplace binary ops with sub_device_id
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize("op_fn", [ttnn.add_, ttnn.multiply_])
+@skip_for_slow_dispatch()
+def test_binary_inplace_with_sub_device_id(device, op_fn):
+    """Inplace binary op runs correctly on a specific sub-device."""
+    torch.manual_seed(0)
+    shape = [1, 1, 64, 64]
+
+    sub_device_manager = setup_sub_device(device)
+    try:
+        torch_a = torch.randn(shape, dtype=torch.bfloat16)
+        torch_b = torch.randn(shape, dtype=torch.bfloat16)
+
+        tt_a = ttnn.from_torch(torch_a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        tt_b = ttnn.from_torch(torch_b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+        op_fn(tt_a, tt_b, sub_device_id=ttnn.SubDeviceId(0))
+        result_torch = ttnn.to_torch(tt_a)
+
+        if op_fn == ttnn.add_:
+            expected = torch_a + torch_b
+        elif op_fn == ttnn.multiply_:
+            expected = torch_a * torch_b
+
+        passing = torch.allclose(expected, result_torch, atol=0.1, rtol=0.01)
+        assert passing, f"Inplace op with sub_device_id failed"
+    finally:
+        teardown_sub_device(device, sub_device_manager)
+
+
+# ---------------------------------------------------------------------------
 # NEW: Different dtypes with sub_device_id
 # ---------------------------------------------------------------------------
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
