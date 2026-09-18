@@ -3,15 +3,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Single-shot TtPrefillBlock tests: norm -> MLA -> residual -> norm -> MoE/FFN -> residual.
+Test for TtPrefillBlock — verifies composition of norm → MLA → residual → norm → FFN/MoE → residual.
 
-- Mistral Small 4 (test_mistral4_prefill_block): reference is a real forward over layers 0..layer_idx
-  when a checkpoint is available, otherwise a randomly-initialized HF layer.
-- GLM-5.2 (test_glm_prefill_block): kept here (single-shot, CPU-composed reference against random or
-  cache-loaded pretrained weights) because the chunked teacher-forced twin
-  (test_prefill_block_chunked.py::test_glm_prefill_block_indexer_teacher_forced) has an unresolved
-  indexer-K PCC gap; blaze runs this single-shot until that is fixed.
-- DeepSeek and Kimi live in test_prefill_block_chunked.py.
+Validates output shapes and PCC against torch reference.
+
+Reference: when a pretrained checkpoint is available the layer's input/output come from a real
+forward over layers 0..layer_idx (as in test_prefill_transformer); otherwise it falls back to a
+randomly-initialized HF reference layer so the test still runs without weights.
 """
 
 import json
@@ -57,10 +55,10 @@ from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
     reference_kvpe_for_layer,
     tokenize_prompt_to_isl,
 )
-from models.tt_transformers.tt.load_checkpoints import load_hf_state_dict_filtered
-from tests.ttnn.utils_for_testing import assert_with_pcc, comp_pcc
 
 _PROMPT_PATHS = {"prompt_5k": PROMPT_5K_PATH}
+from models.tt_transformers.tt.load_checkpoints import load_hf_state_dict_filtered
+from tests.ttnn.utils_for_testing import assert_with_pcc, comp_pcc
 
 
 @dataclass(frozen=True)
@@ -112,6 +110,14 @@ def run_model(
     # The routing family this row drives must match the one the adapter declares; crossing
     # families applies a different affinity function with no error (see the assert).
     assert_gate_mode_matches_adapter(variant, gate_fallback_mode)
+    # Kimi and Mistral parametrize no `balanced` entry (only non_balanced), so applying this skip
+    # would zero out their CI coverage for this test -- which is exactly what happened to Mistral
+    # until this exemption was added: the leg reported 36 skipped, 0 passed, and read as green.
+    # Neither can add one today: RotarySetup asserts indexed rotated rope is incompatible with
+    # is_balanced (rope.py). Remove an entry once its variant gains a balanced row.
+    if (is_ci_env or is_ci_v2_env) and not is_balanced and variant.name not in ("kimi_k2_7", "mistral_small_4"):
+        pytest.skip("Skip non_balanced variant in CI — runnable locally for non_balanced-mode validation")
+
     # host_gate_all is a local testing aid for sub-256-expert configs (e.g. the 4x4 sub-torus,
     # where the device grouped-gate's hard 256-expert requirement forces the host gate). It is not CI
     # coverage; the real device gate already covers the 256-expert meshes that run in CI.
@@ -541,14 +547,22 @@ def run_model(
         logger.info(f"  {key}: {profiler.get(key) * 1000:.2f} ms")
 
 
-# No "dense" row: text_config.first_k_dense_replace = 0, so all 36 layers are MoE.
+# ---------------------------------------------------------------------------
+# Mistral Small 4 block test
+# ---------------------------------------------------------------------------
+# Two rows differ from the Kimi test above, both forced by the config rather than chosen:
 #
-# GPT_DEVICE, not DEVICE_FP32: moe_grouped_topk.cpp's parse_score_func accepts only sigmoid and
-# sqrtsoftplus, so the sigmoid device gate cannot express Mistral's softmax -> top-4 -> renormalize
-# router. DEVICE_FP32 here would apply a sigmoid affinity and silently produce wrong routing weights.
+#   * NO "dense" row. text_config.first_k_dense_replace = 0, so all 36 layers are MoE and a dense
+#     block is a configuration this model never has. Kimi/DeepSeek run ("dense", None) because their
+#     first 1 / 3 layers really are dense.
+#   * GPT_DEVICE, not DEVICE_FP32. moe_grouped_topk.cpp's parse_score_func accepts only sigmoid and
+#     sqrtsoftplus, so the sigmoid device gate cannot express Mistral's softmax -> top-4 ->
+#     renormalize router. Running DEVICE_FP32 here would apply a sigmoid affinity and silently
+#     produce wrong routing weights -- no crash, and invisible to an MLA-only test.
 #
-# The pretrained row needs the checkpoint and a TTNN weight cache staged; without the cache it rebuilds
-# in-job. Check `passed` vs `skipped`, since a skip reads as success.
+# The adapter now carries supports_pretrained=True, so the pretrained row RUNS rather than skipping --
+# matching the deepseek/kimi siblings. It needs the checkpoint and a TTNN weight cache staged; without
+# the cache it rebuilds in-job. Check `passed` vs `skipped`, since a skip reads as success.
 @pytest.mark.parametrize(
     "input_source, pcc_validation, isl_total, dispatch_buffer_capacity_factor",
     [
@@ -630,6 +644,7 @@ def test_mistral4_prefill_block(
     )
 
 
+# ---------------------------------------------------------------------------
 # GLM-5.1 block test
 # ---------------------------------------------------------------------------
 # Every GLM layer runs sparse DSA (lightning-indexer top-2048 + sparse SDPA); "dense"/"moe" here refers
