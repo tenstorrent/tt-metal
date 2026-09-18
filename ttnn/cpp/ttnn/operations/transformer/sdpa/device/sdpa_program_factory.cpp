@@ -231,6 +231,11 @@ uint32_t kv_chain_mode_for(
     if (!is_causal) {
         return 1;
     }
+    // Past four q tiles per chunk the lock step forwarding costs more than the DRAM reads it saves (measured
+    // at q256 k128 on Blackhole), so the causal chains stay off there.
+    if (Sq_chunk_t > 4) {
+        return 0;
+    }
     return causal_pairs && causal_pairs_uniform(q_num_chunks, Sq_chunk_t, Sk_chunk_t, Skt) ? 2 : 0;
 }
 
