@@ -235,6 +235,15 @@ class Gemma4Model:
     # NOTE: This is a runtime capability (depends on mesh shape / per-device vocab).
     # It is set during __init__ after the sampling module is constructed.
     _supports_on_device_sampling = False
+    # Caller-gated: skip the 262k-wide vocab all-gather on the last-token PREFILL
+    # slice when the generator is about to device-sample TP-sharded logits and
+    # throw most of that gather away. Set per prefill call by
+    # Gemma4Generator._set_prefill_sharded_logits -- True only when that call
+    # will device-sample, so a host-sampling call (the warmup pass) still
+    # gathers the full vocab. Kept on the model rather than threaded through the
+    # shared tt_transformers signature so the opt-in stays inside
+    # models/demos/gemma4.
+    _prefill_allow_sharded_logits = False
     # On-device greedy at B=sampling_max (#48037, mirrors qwen3_vl / qwen25_vl):
     # Gemma4 only captures the sampling *trace* at sampling_max (B=32). Replaying
     # that trace freezes ``all_gather_async`` semaphores from capture time, so the
@@ -815,6 +824,7 @@ class Gemma4Model:
         chunk_page_table=None,
         valid_seq_lens=None,
         keep_sharded_for_sampling=False,
+        allow_sharded_prefill_logits=None,
     ):
         """
         Forward pass through decoder layers + final norm + lm_head + softcapping.
@@ -828,6 +838,12 @@ class Gemma4Model:
         ``keep_sharded_for_sampling``: when True (decode + on-device sampling),
         leave lm_head logits TP-sharded. Host sampling / full-vocab reads must
         leave this False so decode all-gathers the 262k vocab.
+
+        ``allow_sharded_prefill_logits``: the same opt-in for the last-token
+        PREFILL slice, which is what skips the 262k-wide gather there. ``None``
+        (the default) takes ``_prefill_allow_sharded_logits``, which
+        Gemma4Generator scopes to a single call, so host-sample warmup still
+        gathers.
 
         Args:
             hidden_states: [1, 1, seq_len, hidden_size] on device (post-embedding)
@@ -1112,10 +1128,16 @@ class Gemma4Model:
                 (1, 1, tile_start + 32, hidden_states.shape[-1]),
             )
 
+        allow_sharded_prefill = (
+            self._prefill_allow_sharded_logits if allow_sharded_prefill_logits is None else allow_sharded_prefill_logits
+        )
         logits = self._apply_lm_head(
             hidden_states,
             is_decode=is_decode,
-            keep_sharded_for_sampling=bool(keep_sharded_for_sampling and is_decode),
+            # Prefill may also keep its logits TP-sharded when the caller opted
+            # in -- that is what skips the 262k vocab all-gather on the
+            # last-token slice.
+            keep_sharded_for_sampling=bool((keep_sharded_for_sampling and is_decode) or allow_sharded_prefill),
         )
         if not is_decode:
             # After lm_head only — mid-forward / pre-lm_head flush corrupts token-0 on TP.
@@ -1848,7 +1870,7 @@ class Gemma4Model:
             self._g4_retired_dev_tensors = lst
         lst.append(t)
 
-    def process_logits_after_prefill_trace(self, hidden_states, last_token_idx):
+    def process_logits_after_prefill_trace(self, hidden_states, last_token_idx, allow_sharded=None):
         """Deferred lm_head for traced prefill.
 
         The trace returns post-norm hidden states ``[1,1,seq,hidden]`` when
@@ -1896,7 +1918,8 @@ class Gemma4Model:
         if batched and hidden_states is not sliced:
             hidden_states.deallocate(True)
         if sliced.shape[-1] == self.hidden_size:
-            logits = self._apply_lm_head(sliced, is_decode=False)
+            keep_sharded = self._prefill_allow_sharded_logits if allow_sharded is None else allow_sharded
+            logits = self._apply_lm_head(sliced, is_decode=False, keep_sharded_for_sampling=bool(keep_sharded))
             if batched and logits is not sliced:
                 sliced.deallocate(True)
         else:
