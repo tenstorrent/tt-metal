@@ -38,22 +38,21 @@ void kernel_main() {
         dfb_out0.wait_front(single_block_size * has_rows);
         std::uint32_t l1_read_addr = dfb_out0.get_read_ptr();
 
-        for (std::uint32_t k = start_row_id; k < start_row_id + num_rows; k++) {
-            std::uint32_t total_size = start_column_id + width_size;
-            std::uint32_t write_size = width_size;
+        // The work split runs over the input padded width.
+        if (start_column_id < unpadded_X_size) {
+            const std::uint32_t total_size = start_column_id + width_size;
+            const std::uint32_t write_size =
+                (total_size > unpadded_X_size) ? (unpadded_X_size - start_column_id) : width_size;
 
-            if (total_size > unpadded_X_size) {
-                std::uint32_t padded_size = total_size - unpadded_X_size;
-                write_size -= padded_size;
+            for (std::uint32_t k = start_row_id; k < start_row_id + num_rows; k++) {
+                CoreLocalMem<std::uint32_t> src(l1_read_addr);
+                noc.async_write(
+                    src, s, write_size, {.offset_bytes = 0}, {.page_id = size_2d + k, .offset_bytes = start_column_id});
+
+                noc.async_write_barrier();
+
+                l1_read_addr += width_size;
             }
-
-            CoreLocalMem<std::uint32_t> src(l1_read_addr);
-            noc.async_write(
-                src, s, write_size, {.offset_bytes = 0}, {.page_id = size_2d + k, .offset_bytes = start_column_id});
-
-            noc.async_write_barrier();
-
-            l1_read_addr += width_size;
         }
 
         dfb_out0.pop_front(single_block_size * has_rows);
