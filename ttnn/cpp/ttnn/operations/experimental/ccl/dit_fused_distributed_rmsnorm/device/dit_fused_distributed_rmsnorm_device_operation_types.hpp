@@ -32,6 +32,7 @@ struct DitFusedDistributedRmsnormParams {
     // (token, head) instead of the full row. When true, AG is skipped
     // entirely — each head is assumed local to chip.
     bool per_head_norm;
+    bool preserve_rope_rounding;
 
     // Selects RMSNorm (sum-of-squares) vs Welford LayerNorm (mean/variance).
     // Defaults to RMS so all existing call sites are unchanged.
@@ -64,10 +65,12 @@ struct DitFusedDistributedRmsnormParams {
         std::vector<GlobalSemaphore> multi_device_global_semaphore,
         std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
         DeviceComputeKernelConfig compute_kernel_config,
-        DitFusedNormType norm_type = DitFusedNormType::RMS) :
+        DitFusedNormType norm_type = DitFusedNormType::RMS,
+        bool preserve_rope_rounding = false) :
         epsilon(epsilon),
         num_heads_per_device(num_heads_per_device),
         per_head_norm(per_head_norm),
+        preserve_rope_rounding(preserve_rope_rounding),
         norm_type(norm_type),
         dtype(dtype),
         output_mem_config(std::move(output_mem_config)),
@@ -82,10 +85,11 @@ struct DitFusedDistributedRmsnormParams {
     auto attributes() const {
         using ttsl::reflection::Attribute;
         std::vector<std::tuple<std::string, Attribute>> attrs;
-        attrs.reserve(11);
+        attrs.reserve(12);
         attrs.emplace_back("epsilon", epsilon);
         attrs.emplace_back("num_heads_per_device", num_heads_per_device);
         attrs.emplace_back("per_head_norm", per_head_norm);
+        attrs.emplace_back("preserve_rope_rounding", preserve_rope_rounding);
         attrs.emplace_back("norm_type", static_cast<uint8_t>(norm_type));
         attrs.emplace_back("dtype", dtype);
         attrs.emplace_back("output_mem_config", output_mem_config);

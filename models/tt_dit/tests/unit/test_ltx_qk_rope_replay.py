@@ -7,7 +7,8 @@
 CPU: python -m models.tt_dit.tests.unit.test_ltx_qk_rope_replay --prepare DIR
 Broker: C01_ABA_SHAPE=tp4_v_selfattn_qk_s1 C01_ABA_MODE=base
         C01_ABA_FIXTURES=DIR C01_ABA_RESULTS=RESULTS pytest <this-file> -s
-Repeat with MODE=fused; CPU: --verify RESULTS --fixtures DIR --shape SHAPE.
+Repeat with MODE=fused or preserve; CPU: --verify RESULTS --fixtures DIR
+--shape SHAPE --variant fused|preserve. Preserve must also equal baseline exactly.
 Collection only emits C01_ABA_CORRECTNESS_PENDING. No timing is collected.
 """
 
@@ -76,7 +77,7 @@ def test_ltx_qk_rope_replay(mesh_device):
     from models.tt_dit.utils.tensor import bf16_tensor
 
     shape, mode = os.environ["C01_ABA_SHAPE"], os.environ["C01_ABA_MODE"]
-    assert shape in SHAPES and mode in {"base", "fused"}
+    assert shape in SHAPES and mode in {"base", "fused", "preserve"}
     cfg = next(c for c in _make_cfgs(LTX, 4) if c.cid == shape)
     assert (cfg.rows, cfg.dim, cfg.head_dim) == SHAPES[shape], "production shape table changed"
     fixture_path = Path(os.environ["C01_ABA_FIXTURES"]) / f"{shape}.pt"
@@ -113,8 +114,15 @@ def test_ltx_qk_rope_replay(mesh_device):
 
     def run():
         args = {"num_heads_per_device": cfg.heads, "dynamic_weight": weight}
-        if mode == "fused":
-            return norm(inputs["x"], **args, rope_cos=inputs["cos"], rope_sin=inputs["sin"], trans_mat=transform)
+        if mode != "base":
+            return norm(
+                inputs["x"],
+                **args,
+                rope_cos=inputs["cos"],
+                rope_sin=inputs["sin"],
+                trans_mat=transform,
+                preserve_rope_rounding=mode == "preserve",
+            )
         normalized = norm(inputs["x"], **args)
         return ttnn.experimental.rotary_embedding_llama(
             normalized, inputs["cos"], inputs["sin"], transform, compute_kernel_config=rope_config
@@ -150,7 +158,17 @@ def test_ltx_qk_rope_replay(mesh_device):
         "mode": mode,
         "fixture_sha256": _file_hash(fixture_path),
         "commit": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
-        "source_sha256": {str(p): _file_hash(Path(p)) for p in (__file__, "models/tt_dit/layers/normalization.py")},
+        "source_sha256": {
+            str(p): _file_hash(Path(p))
+            for p in (
+                __file__,
+                "models/tt_dit/layers/normalization.py",
+                "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/"
+                "dit_fused_distributed_rmsnorm_program_factory.cpp",
+                "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/"
+                "kernels/compute/dit_rmsnorm_fused_compute.cpp",
+            )
+        },
         "mesh_shape": list(mesh_device.shape),
         "arch": str(mesh_device.arch()),
         "eager_hashes": eager_hashes,
@@ -161,13 +179,14 @@ def test_ltx_qk_rope_replay(mesh_device):
     print(f"C01_ABA_CORRECTNESS_PENDING {result_path}; verify both routes off-device")
 
 
-def _verify(result_dir, fixture_dir, shape):
-    report_path = result_dir / f"{shape}-verified.json"
+def _verify(result_dir, fixture_dir, shape, variant="fused"):
+    suffix = "" if variant == "fused" else f"-{variant}"
+    report_path = result_dir / f"{shape}{suffix}-verified.json"
     report_path.unlink(missing_ok=True)
     fixture_path = fixture_dir / f"{shape}.pt"
     fixture = torch.load(fixture_path, map_location="cpu", weights_only=True)
-    reports = {}
-    for mode in ("base", "fused"):
+    reports, saved_outputs = {}, {}
+    for mode in ("base", variant):
         path = result_dir / f"{shape}-{mode}.pt"
         result = torch.load(path, map_location="cpu", weights_only=True)
         assert result["shape"] == shape and result["mode"] == mode
@@ -183,7 +202,19 @@ def _verify(result_dir, fixture_dir, shape):
         ]
         assert all(m["pcc"] >= 0.999 and m["relative_rmse"] <= 0.02 for m in metrics), metrics
         reports[mode] = {"commit": result["commit"], "result_sha256": _file_hash(path), "metrics": metrics}
-    report = {"shape": shape, "quality_pass": True, "fixture_sha256": _file_hash(fixture_path), "routes": reports}
+        saved_outputs[mode] = result["saved_outputs"]
+    if variant == "preserve":
+        assert all(
+            torch.equal(base, preserve) for base, preserve in zip(saved_outputs["base"], saved_outputs["preserve"])
+        ), "BF16 boundary-preserving route differs from baseline; diagnose before quality/performance claims"
+    report = {
+        "shape": shape,
+        "variant": variant,
+        "quality_pass": True,
+        "exact_baseline_parity": variant == "preserve",
+        "fixture_sha256": _file_hash(fixture_path),
+        "routes": reports,
+    }
     report_path.write_text(json.dumps(report, indent=2) + "\n")
     print("C01_ABA_CORRECTNESS_PASS " + json.dumps(report))
 
@@ -195,10 +226,11 @@ if __name__ == "__main__":
     action.add_argument("--verify", type=Path)
     parser.add_argument("--fixtures", type=Path)
     parser.add_argument("--shape", choices=list(SHAPES))
+    parser.add_argument("--variant", choices=("fused", "preserve"), default="fused")
     args = parser.parse_args()
     if args.prepare:
         _prepare(args.prepare)
     else:
         if not (args.fixtures and args.shape):
             parser.error("--verify requires --fixtures and --shape")
-        _verify(args.verify, args.fixtures, args.shape)
+        _verify(args.verify, args.fixtures, args.shape, args.variant)

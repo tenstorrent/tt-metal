@@ -44,7 +44,8 @@ void bind_dit_fused_distributed_rmsnorm(nb::module_& mod) {
         nb::arg("num_preferred_links") = nb::none(),
         nb::arg("subdevice_id") = nb::none(),
         nb::arg("memory_config") = nb::none(),
-        nb::arg("compute_kernel_config") = nb::none());
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("preserve_rope_rounding") = false);
 
     ttnn::bind_function<"dit_fused_distributed_layernorm", "ttnn.experimental.">(
         mod,

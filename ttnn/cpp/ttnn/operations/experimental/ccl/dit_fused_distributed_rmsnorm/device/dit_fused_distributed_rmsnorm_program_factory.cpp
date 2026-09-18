@@ -261,7 +261,8 @@ bool post_rotated_overflows_l1(
     uint32_t output_tile_bytes,
     uint32_t rope_cb_tiles,
     uint32_t rope_tile_bytes,
-    bool has_weight) {
+    bool has_weight,
+    uint32_t extra_resident_bytes = 0u) {
     const uint32_t padded = ((num_tile_cols + block_size - 1u) / block_size) * block_size;
     uint64_t total = static_cast<uint64_t>(num_tile_cols) * input_tile_bytes;     // input_cb (chunk=1)
     total += 2ull * padded * intermediate_tile_bytes;                             // intermediate + rotated (whole row)
@@ -270,7 +271,7 @@ bool post_rotated_overflows_l1(
     total += 2ull * rope_cb_tiles * rope_tile_bytes;                              // streamed cos + sin
     constexpr uint64_t kPostFixedOverheadBytes = 491520ull;  // stats/packed-AG/pre-interm/scalars/trans/headers
     constexpr uint64_t kFuseTriggerBytes = 1400000ull;       // margin below the ~1.43 MB L1 cap
-    return total + kPostFixedOverheadBytes > kFuseTriggerBytes;
+    return total + kPostFixedOverheadBytes + extra_resident_bytes > kFuseTriggerBytes;
 }
 uint32_t pick_num_workers_tp_gt_1(uint32_t num_tile_rows, uint32_t cap) {
     if (num_tile_rows < kMuxRowsThreshold) {
@@ -594,6 +595,14 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
     // decision (below) and the CB allocation (further down).
     const tt::DataFormat intermediate_format = fp32_dest_acc_en ? fp32_format : bf16_format;
     const uint32_t intermediate_tile_size = tt::tile_size(intermediate_format);
+    // A BF16 normalized row + BF16 rotated row replace the old FP32 rotated
+    // row at identical cost. Only the two block-local products add resident L1.
+    const uint32_t rope_rounding_extra_bytes = args.preserve_rope_rounding ? 2u * block_size * bf16_tile_size : 0u;
+    if (args.preserve_rope_rounding) {
+        TT_FATAL(
+            fp32_dest_acc_en && math_fidelity == MathFidelity::HiFi4 && !math_approx_mode && !packer_l1_acc,
+            "preserve_rope_rounding requires the LTX HiFi4/FP32/non-approximate/non-packer-acc norm config");
+    }
 
     // Welford reciprocal LUT (LayerNorm only): a caller-provided fp32 [.., reduce_width]
     // DRAM tensor of [1/1..1/reduce_width]. The reader NoC-reads it once into a CB so the
@@ -636,7 +645,7 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
         has_weight,
         weight_tile_sz,
         args.per_head_norm,
-        (use_recip_lut ? recip_lut_bytes : 0u) + welford_zero_bytes);
+        (use_recip_lut ? recip_lut_bytes : 0u) + welford_zero_bytes + rope_rounding_extra_bytes);
     // Block-major POST: even input-streaming leaves intermediate/rotated/output
     // whole-row, which overflows L1 on wide low-TP shards. When so, shrink those
     // CBs to block-local + run the fused per-block POST. Margin below l1_size_per_core
@@ -665,7 +674,7 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
         l1_cap_bytes -= recip_lut_bytes;
     }
     // welford_zero_cb is resident for LN regardless of layout; reserve it from the cap too.
-    l1_cap_bytes -= welford_zero_bytes;
+    l1_cap_bytes -= welford_zero_bytes + rope_rounding_extra_bytes;
     // weight/bias CB tile counts — MUST match the create_cb sizing below. All modes hold ONE
     // row (num_tile_cols): broadcast resident, per-token / per-batch streamed per row.
     const uint32_t weight_cb_tiles_est = has_weight ? num_tile_cols : 0u;
@@ -822,6 +831,9 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
     // copy_tile is an unpredicated L1->DST read, so it resets every token lane — unlike
     // welford_init's SFPLOADI clear, which a prior row's combine can leave CC-predicated (ISSUE 3A).
     constexpr uint32_t welford_zero_cb_id = tt::CBIndex::c_21;
+    constexpr uint32_t rope_normalized_cb_id = tt::CBIndex::c_22;
+    constexpr uint32_t rope_cos_product_cb_id = tt::CBIndex::c_23;
+    constexpr uint32_t rope_sin_product_cb_id = tt::CBIndex::c_24;
 
     // Double-buffer input_cb: reader can fill chunk N+1 while compute is in
     // chunk N's post phase. The cumulative wait_front in compute pairs
@@ -958,7 +970,8 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
                                             output_tile_size,
                                             rope_resident_tiles,
                                             rope_tile_size,
-                                            has_weight);
+                                            has_weight,
+                                            rope_rounding_extra_bytes);
         // Stream per-head cos/sin (cap the CB at a few block_size groups, compute pops
         // per block) ONLY in the block-major path — that's where we need the L1 back.
         // The resident path keeps the WHOLE-ROW cos/sin so it isn't slowed (a shrunk
@@ -975,6 +988,11 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
         create_cb(rope_cos_cb_id, program, worker_core_set, fp32_tile_size, 1, fp32_format);
         create_cb(rope_sin_cb_id, program, worker_core_set, fp32_tile_size, 1, fp32_format);
     }
+
+    TT_FATAL(
+        !args.preserve_rope_rounding ||
+            (!streaming_low_l1 && !block_major_post && !fuse_mm_rope && num_tile_cols % block_size == 0),
+        "preserve_rope_rounding currently requires the resident divisible-width LTX layout");
 
     // intermediate_cb and rotated_input_cb are compute-only (producer and
     // consumer are the same TRISC pipeline within the post phase). The post phase
@@ -1010,7 +1028,17 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
     // resident sub-phase-major path (everything else) keeps the whole-row buffer.
     const uint32_t rotated_cb_tiles = fuse_mm_rope ? (2u * block_size) : intermediate_cb_tiles;
     create_cb(
-        rotated_input_cb_id, program, worker_core_set, intermediate_tile_size, rotated_cb_tiles, intermediate_format);
+        rotated_input_cb_id,
+        program,
+        worker_core_set,
+        args.preserve_rope_rounding ? bf16_tile_size : intermediate_tile_size,
+        rotated_cb_tiles,
+        args.preserve_rope_rounding ? bf16_format : intermediate_format);
+    if (args.preserve_rope_rounding) {
+        create_cb(rope_normalized_cb_id, program, worker_core_set, bf16_tile_size, intermediate_cb_tiles, bf16_format);
+        create_cb(rope_cos_product_cb_id, program, worker_core_set, bf16_tile_size, block_size, bf16_format);
+        create_cb(rope_sin_product_cb_id, program, worker_core_set, bf16_tile_size, block_size, bf16_format);
+    }
     // output_cb sized to 2 full padded rows so the writer can deep-drain a
     // whole row under ONE noc.async_writes_flushed() (instead of flushing every
     // block_size=2 tiles) while compute produces the next row. The shallow
@@ -1324,16 +1352,22 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
         static_cast<uint32_t>(per_batch_weight),
         static_cast<uint32_t>(per_batch_bias),
         rows_per_batch_tiles,
+        // CT44-47: preserve the standalone BF16 norm/RoPE pack boundaries.
+        static_cast<uint32_t>(args.preserve_rope_rounding),
+        rope_normalized_cb_id,
+        rope_cos_product_cb_id,
+        rope_sin_product_cb_id,
     };
 
     // fp32 dest accumulation is REQUIRED, unconditionally — not just for fp32
-    // input. It is what keeps every internal CB (stats, reduce, intermediate,
-    // rotated) at fp32 (intermediate_format above) and the reduce/eps/rsqrt
+    // input. It keeps stats, reduce and normalization intermediate CBs at fp32
+    // (the preserving RoPE variant explicitly rounds only the standalone-op
+    // boundaries to BF16) and the reduce/eps/rsqrt
     // accumulating in fp32 DST. Without it the intermediates silently drop to
     // bf16 (8 mantissa bits) and the sum(x**2) / normalize lose precision (worse
     // for bf16 input than fp32 input, since the unpacker also downcasts through
-    // SrcA to TF32). The op's invariant is "inputs/outputs may be bf16 or fp32,
-    // internals are always fp32", so we enforce it here regardless of input dtype.
+    // SrcA to TF32). Statistics and normalization must accumulate in FP32 even
+    // when selected post-normalization pack boundaries reproduce BF16 ops.
     // (Note: the FPU eltwise path — mul_tiles/add_tiles — still truncates its
     // operands to TF32 ~10 mantissa bits; that floor is inherent to SrcA/SrcB and
     // is NOT lifted by fp32_dest_acc_en or UnpackToDestFp32.)

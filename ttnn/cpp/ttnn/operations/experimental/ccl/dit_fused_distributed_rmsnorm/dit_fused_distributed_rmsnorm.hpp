@@ -45,7 +45,9 @@ ttnn::Tensor dit_fused_distributed_rmsnorm(
     std::optional<size_t> num_preferred_links = std::nullopt,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id = std::nullopt,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
-    const std::optional<const DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
+    const std::optional<const DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
+    // Preserve the standalone BF16 norm/RoPE pack boundaries on the supported LTX path.
+    bool preserve_rope_rounding = false);
 
 // Fused distributed Welford LayerNorm for DiT attention: (x - mean) * rsqrt(var + eps)
 // with optional weight/bias, over the same fabric-all-gather device op as RMSNorm.

@@ -151,6 +151,26 @@ void DitFusedDistributedRmsnormDeviceOperation::validate_on_program_cache_miss(
         !rope_present || rope_complete,
         "RoPE requires transformation_mat, rope_cos, and rope_sin all to be provided together");
 
+    if (args.preserve_rope_rounding) {
+        TT_FATAL(
+            args.norm_type == DitFusedNormType::RMS && !args.per_head_norm && batch == 1 && args.ring_size == 4 &&
+                args.num_heads_per_device == 8 && (shape[3] == 512 || shape[3] == 1024),
+            "preserve_rope_rounding currently supports B1 LTX TP4 whole-row RMSNorm (8 local heads, width512/1024)");
+        TT_FATAL(
+            weight.has_value() && !bias.has_value() && weight->logical_shape()[-2] == 1 &&
+                weight->logical_volume() == shape[3],
+            "preserve_rope_rounding requires broadcast learned weight and no bias");
+        TT_FATAL(rope_complete, "preserve_rope_rounding requires complete per-head RoPE tensors");
+        TT_FATAL(
+            input.dtype() == DataType::BFLOAT16 && weight->dtype() == DataType::BFLOAT16 &&
+                rope_cos->dtype() == DataType::BFLOAT16 && rope_sin->dtype() == DataType::BFLOAT16 &&
+                trans_mat->dtype() == DataType::BFLOAT16 && args.dtype.value_or(input.dtype()) == DataType::BFLOAT16,
+            "preserve_rope_rounding requires BF16 input, weight, RoPE, transformation and output");
+        TT_FATAL(
+            rope_cos->logical_shape().rank() == 4 && rope_cos->logical_shape()[1] == args.num_heads_per_device,
+            "preserve_rope_rounding requires per-head RoPE");
+    }
+
     // RoPE cos/sin shape: [B, num_heads_dim, N, head_dim] where num_heads_dim is
     // either 1 (broadcast across heads — same cos/sin for every head) or
     // num_heads_per_device (per-head cos/sin). Both rope_cos and rope_sin must
@@ -344,6 +364,7 @@ ttsl::hash::hash_t DitFusedDistributedRmsnormDeviceOperation::compute_program_ha
         args.epsilon,
         args.num_heads_per_device,
         args.per_head_norm,
+        args.preserve_rope_rounding,
         args.dtype,
         args.output_mem_config,
         args.cluster_axis,
@@ -381,7 +402,8 @@ Tensor dit_fused_distributed_rmsnorm(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<const DeviceComputeKernelConfig>& compute_kernel_config,
     ttnn::experimental::DitFusedNormType norm_type,
-    const std::optional<const Tensor>& reciprocals) {
+    const std::optional<const Tensor>& reciprocals,
+    bool preserve_rope_rounding) {
     using OperationType = ttnn::experimental::prim::DitFusedDistributedRmsnormDeviceOperation;
 
     auto arch = is_device_tensor(input_tensor) ? input_tensor.device()->arch() : ttnn::GetDefaultDevice()->arch();
@@ -415,7 +437,8 @@ Tensor dit_fused_distributed_rmsnorm(
         multi_device_global_semaphore,
         subdevice_id,
         kernel_config_val,
-        norm_type);
+        norm_type,
+        preserve_rope_rounding);
 
     auto tensor_args = OperationType::tensor_args_t{
         .input = input_tensor,

@@ -138,10 +138,19 @@ void kernel_main() {
     constexpr uint32_t stats_reduce_src_cb =
         (packed_ag_enabled != 0) ? stats_transposed_gathered_cb : stats_gathered_cb;
 
+    constexpr bool preserve_rope_rounding = get_compile_time_arg_val(44);
+    constexpr uint32_t rope_normalized_cb = get_compile_time_arg_val(45);
+    constexpr uint32_t rope_cos_product_cb = get_compile_time_arg_val(46);
+    constexpr uint32_t rope_sin_product_cb = get_compile_time_arg_val(47);
+    constexpr uint32_t rope_input_cb = preserve_rope_rounding ? rope_normalized_cb : intermediate_cb;
+    static_assert(
+        !preserve_rope_rounding || (fuse_rope && has_weight && !has_bias && !per_head_norm && per_head_rope &&
+                                    !streaming_low_l1 && !block_major_post && !fuse_mm_rope && !per_token_weight));
+
     const uint32_t num_tile_rows = get_arg_val<uint32_t>(0);
 
-    compute_kernel_hw_startup<SrcOrder::Reverse>(intermediate_cb, transformation_mat_cb, rotated_input_cb);
-    matmul_init(intermediate_cb, transformation_mat_cb);
+    compute_kernel_hw_startup<SrcOrder::Reverse>(rope_input_cb, transformation_mat_cb, rotated_input_cb);
+    matmul_init(rope_input_cb, transformation_mat_cb);
     compute_kernel_hw_startup(input_cb, input_cb, input_cb);
 
     CircularBuffer cb_input(input_cb);
@@ -160,6 +169,9 @@ void kernel_main() {
     CircularBuffer cb_rope_cos(rope_cos_cb);
     CircularBuffer cb_rope_sin(rope_sin_cb);
     CircularBuffer cb_rotated_input(rotated_input_cb);
+    CircularBuffer cb_rope_input(rope_input_cb);
+    CircularBuffer cb_rope_cos_product(rope_cos_product_cb);
+    CircularBuffer cb_rope_sin_product(rope_sin_product_cb);
     CircularBuffer cb_stats_transposed_local(stats_transposed_local_cb);
     CircularBuffer cb_stats_transposed_gathered(stats_transposed_gathered_cb);
     // Aliases the packed-AG or the plain gathered CB, per stats_reduce_src_cb above.
@@ -176,7 +188,8 @@ void kernel_main() {
     constexpr uint32_t mul_rms_result_cb = (fuse_rope || has_weight) ? intermediate_cb : output_cb;
     // has_bias implies has_weight (enforced in validate). Weight output stays
     // in intermediate when bias or rope follows.
-    constexpr uint32_t mul_weight_result_cb = (fuse_rope || has_bias) ? intermediate_cb : output_cb;
+    constexpr uint32_t mul_weight_result_cb =
+        preserve_rope_rounding ? rope_normalized_cb : ((fuse_rope || has_bias) ? intermediate_cb : output_cb);
     constexpr uint32_t add_bias_result_cb = fuse_rope ? intermediate_cb : output_cb;
 
     CircularBuffer cb_mul_rms_result(mul_rms_result_cb);
@@ -1058,6 +1071,91 @@ void kernel_main() {
                             cb_rotated_input.pop_front(block_size);
                             cb_rope_cos.pop_front(tiles_in_block);
                             cb_rope_sin.pop_front(tiles_in_block);
+                        }
+                    } else if constexpr (preserve_rope_rounding) {
+                        // Match standalone rotary_embedding_llama's four BF16 pack
+                        // boundaries: weighted norm (already packed to c22), rotation,
+                        // sin product and cos product. Stats/x*rms remain FP32.
+                        reconfig_data_format(transformation_mat_cb, rope_input_cb);
+                        pack_reconfig_data_format(rotated_input_cb);
+                        matmul_init(rope_input_cb, transformation_mat_cb);
+                        for (uint32_t col = 0; col < num_tile_cols; col += block_size) {
+                            cb_rope_input.wait_front(col + block_size);
+                            cb_rotated_input.reserve_back(block_size);
+                            tile_regs_acquire();
+                            for (uint32_t i = 0; i < block_size; ++i) {
+                                matmul_tiles(rope_input_cb, transformation_mat_cb, col + i, 0, i);
+                            }
+                            tile_regs_commit();
+                            tile_regs_wait();
+                            for (uint32_t i = 0; i < block_size; ++i) {
+                                pack_tile(i, rotated_input_cb);
+                            }
+                            tile_regs_release();
+                            cb_rotated_input.push_back(block_size);
+                        }
+                        for (uint32_t col = 0; col < num_tile_cols; col += block_size) {
+                            cb_rope_input.wait_front(block_size);
+                            cb_rotated_input.wait_front(block_size);
+                            cb_rope_cos.wait_front(block_size);
+                            cb_rope_sin.wait_front(block_size);
+
+                            reconfig_data_format(rotated_input_cb, rope_sin_cb);
+                            pack_reconfig_data_format(rope_sin_product_cb);
+                            mul_init(rotated_input_cb, rope_sin_cb);
+                            cb_rope_sin_product.reserve_back(block_size);
+                            tile_regs_acquire();
+                            for (uint32_t i = 0; i < block_size; ++i) {
+                                mul_tiles(rotated_input_cb, rope_sin_cb, i, i, i);
+                            }
+                            tile_regs_commit();
+                            tile_regs_wait();
+                            for (uint32_t i = 0; i < block_size; ++i) {
+                                pack_tile(i, rope_sin_product_cb);
+                            }
+                            tile_regs_release();
+                            cb_rope_sin_product.push_back(block_size);
+                            cb_rotated_input.pop_front(block_size);
+
+                            reconfig_data_format(rope_input_cb, rope_cos_cb);
+                            pack_reconfig_data_format(rope_cos_product_cb);
+                            mul_init(rope_input_cb, rope_cos_cb);
+                            cb_rope_cos_product.reserve_back(block_size);
+                            tile_regs_acquire();
+                            for (uint32_t i = 0; i < block_size; ++i) {
+                                mul_tiles(rope_input_cb, rope_cos_cb, i, i, i);
+                            }
+                            tile_regs_commit();
+                            tile_regs_wait();
+                            for (uint32_t i = 0; i < block_size; ++i) {
+                                pack_tile(i, rope_cos_product_cb);
+                            }
+                            tile_regs_release();
+                            cb_rope_cos_product.push_back(block_size);
+                            // Both rotation and cos have consumed the normalized row.
+                            cb_rope_input.pop_front(block_size);
+                            cb_rope_cos.pop_front(block_size);
+                            cb_rope_sin.pop_front(block_size);
+
+                            cb_rope_cos_product.wait_front(block_size);
+                            cb_rope_sin_product.wait_front(block_size);
+                            reconfig_data_format(rope_cos_product_cb, rope_sin_product_cb);
+                            pack_reconfig_data_format(output_cb);
+                            add_init(rope_cos_product_cb, rope_sin_product_cb);
+                            cb_output.reserve_back(block_size);
+                            tile_regs_acquire();
+                            for (uint32_t i = 0; i < block_size; ++i) {
+                                add_tiles(rope_cos_product_cb, rope_sin_product_cb, i, i, i);
+                            }
+                            tile_regs_commit();
+                            tile_regs_wait();
+                            for (uint32_t i = 0; i < block_size; ++i) {
+                                pack_tile(i, output_cb);
+                            }
+                            tile_regs_release();
+                            cb_output.push_back(block_size);
+                            cb_rope_cos_product.pop_front(block_size);
+                            cb_rope_sin_product.pop_front(block_size);
                         }
                     } else {
                         {

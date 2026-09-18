@@ -519,7 +519,7 @@ def test_ltx_qk_rope_bench(mesh_device):
     """One production QK shape/route per process; synchronized trace timing.
 
     C01_SHAPE selects tp4_v_selfattn_qk_s1, tp4_v_selfattn_qk_s2 or
-    tp4_a_selfattn_qk. QK_ROPE_MODE selects base or fused. Run separate
+    tp4_a_selfattn_qk. QK_ROPE_MODE selects base, fused or preserve. Run separate
     processes in AB/BA order; no performance threshold is asserted here.
     C01_PROFILE=1 captures just one warmed trace replay, with profiler drains,
     for external Tracy/counter analysis instead of the timing batches.
@@ -532,7 +532,7 @@ def test_ltx_qk_rope_bench(mesh_device):
     mode = _os.environ["QK_ROPE_MODE"]
     allowed = {"tp4_v_selfattn_qk_s1", "tp4_v_selfattn_qk_s2", "tp4_a_selfattn_qk"}
     assert shape in allowed, f"unsupported C01_SHAPE={shape!r}"
-    assert mode in {"base", "fused"}, f"unsupported QK_ROPE_MODE={mode!r}"
+    assert mode in {"base", "fused", "preserve"}, f"unsupported QK_ROPE_MODE={mode!r}"
     cfg = next(c for c in _make_cfgs(LTX, 4) if c.cid == shape)
     inp = _build(mesh_device, cfg, 0)
     ref = _torch_ref(cfg)
@@ -555,8 +555,15 @@ def test_ltx_qk_rope_bench(mesh_device):
 
     def run():
         args = dict(num_heads_per_device=cfg.heads, dynamic_weight=inp["weight"])
-        if mode == "fused":
-            return norm(inp["x"], **args, rope_cos=inp["cos"], rope_sin=inp["sin"], trans_mat=inp["trans"])
+        if mode != "base":
+            return norm(
+                inp["x"],
+                **args,
+                rope_cos=inp["cos"],
+                rope_sin=inp["sin"],
+                trans_mat=inp["trans"],
+                preserve_rope_rounding=mode == "preserve",
+            )
         normalized = norm(inp["x"], **args)
         return ttnn.experimental.rotary_embedding_llama(
             normalized, inp["cos"], inp["sin"], inp["trans"], compute_kernel_config=rope_config
