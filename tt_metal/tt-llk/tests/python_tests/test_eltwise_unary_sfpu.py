@@ -422,15 +422,18 @@ _EDGE_SWEEP_OPS = sorted(
     sfpu_unary_ops() - set(_UNARY_OPS_NOT_SWEPT), key=lambda o: o.name
 )
 
-# Three of the six recorded divergences are fixed in the kernels: Sqrt and Rsqrt on -0.0, and
-# SqrtCustom on -inf. The other three stay recorded as non-strict xfails in the table below --
-# Reciprocal on 1/NaN, Sign and Heaviside on -0.0 -- each with its reason in
-# _EDGE_DIVERGENCE_REASON. Wormhole and Blackhole only; Quasar carries its own kernels, and a
-# failure there is a divergence to fix at the kernel rather than record here.
+# What the cat-A/cat-D probes found on Wormhole, recorded as non-strict xfails so each case
+# still executes and reports XPASS if the behaviour changes.
+#
+# Five of the six recorded divergences are fixed in the kernels: Sign and Heaviside on -0.0 in
+# #55306, and Sqrt, Rsqrt and SqrtCustom here. Only Reciprocal on 1/NaN is left, with its
+# reason in _EDGE_DIVERGENCE_REASON. Wormhole and Blackhole only; Quasar carries its own
+# kernels, and a failure there is a divergence to fix at the kernel rather than record here.
 #
 # This sweep does not settle the signed-zero results: passed_test() treats -0.0 and +0.0 as
 # equal, and it runs ApproximationMode.No only. test_sqrt_family_negative_zero_regression
 # reads the raw 32-bit result on both approximation modes instead.
+#
 # Reciprocal is derived rather than listed: it diverges on exactly the combinations that
 # deliver the NaN probe, so the set stays right if the format axis changes.
 _EDGE_KNOWN_DIVERGENCES = {
@@ -440,27 +443,9 @@ _EDGE_KNOWN_DIVERGENCES = {
         for dest_acc in (DestAccumulation.No, DestAccumulation.Yes)
         if specials_safe(fmt.input_format, fmt.output_format, dest_acc)
     ),
-    # Sign and Heaviside are listed: both are fixed in #55306, on Wormhole and Blackhole. The
-    # combinations are the unpack-to-dest ones, the only pipelines that deliver a real -0.0.
-    MathOperation.Sign: (
-        (DataFormat.Float32, DataFormat.Float16_b, DestAccumulation.Yes),
-        (DataFormat.Float32, DataFormat.Float32, DestAccumulation.Yes),
-    ),
-    MathOperation.Heaviside: (
-        (DataFormat.Float32, DataFormat.Float16_b, DestAccumulation.Yes),
-        (DataFormat.Float32, DataFormat.Float32, DestAccumulation.Yes),
-    ),
 }
 
-# Ops whose -0.0 probe is sent regardless of the specials gate, so their xfails must not be
-# conditioned on it the way Reciprocal's NaN probe is. Neither op is in SPECIALS_READY_OPS.
-_SIGNED_ZERO_DIVERGENCES = frozenset({MathOperation.Sign, MathOperation.Heaviside})
-
 _EDGE_DIVERGENCE_REASON = {
-    MathOperation.Sign: "sign(-0.0) returns -1; torch and IEEE give 0. Scoped to the "
-    "unpack-to-dest combinations, the only ones that deliver a real -0.0. Fixed in #55306.",
-    MathOperation.Heaviside: "heaviside(-0.0) returns 0; the golden gives the supplied value. "
-    "Same cause and scoping as Sign. Fixed in #55306.",
     MathOperation.Reciprocal: "1/NaN returns +0; IEEE, torch and the golden all give NaN. "
     "Every other special agrees, so this is the NaN probe alone, and it diverges on every "
     "combination that delivers one. Not prescribed by the ISA, and a guard costs the op "
@@ -469,38 +454,40 @@ _EDGE_DIVERGENCE_REASON = {
 
 
 def _assert_signed_zero_partition_valid():
-    """Sign's and Heaviside's xfails must match the pipelines that deliver a real -0.0.
+    """None of the signed-zero ops may carry edge divergences any more.
 
-    Both diverge only because SFPSETCC mishandles a -0.0 that actually arrives, so their
-    recorded combinations have to be exactly the ones negative_zero_delivered() admits --
-    the same predicate the sweep uses to decide whether to send the probe at all. If that
-    measurement is ever revised, this fails at collection instead of leaving two tables
-    disagreeing, which matters because the entries are applied as xfail(strict=False) and
-    would otherwise XPASS quietly.
-
-    Ops absent from the table are skipped: #55306 fixes both and deletes their entries.
+    Sign and Heaviside held the two unpack_to_dest combinations and Signbit the complementary
+    six, and the partition between them was the evidence that -0.0 reaches the LREG on exactly
+    those two. Sqrt and Rsqrt held the same two. All of it is gone, for the different reasons
+    recorded below. Asserting their absence at collection keeps a table edit from skipping the
+    reasoning: an entry here would be a non-strict xfail that XPASSes every run.
     """
-    all_combos = [
-        (fmt.input_format, fmt.output_format, dest_acc)
-        for fmt in input_output_formats([DataFormat.Float16_b, DataFormat.Float32])
-        for dest_acc in (DestAccumulation.No, DestAccumulation.Yes)
-    ]
-    expected = {
-        combo for combo in all_combos if negative_zero_delivered(combo[0], combo[2])
+    fixed_or_not_delivered = {
+        MathOperation.Sign: (
+            "sign(-0.0) returns 0 now. calculate_sign takes its zero arm on sfpi::abs(v), "
+            "which puts -0.0 inside the documented SFPSETCC contract, so this was fixed rather than "
+            "reclassified -- an entry here means the kernel regressed."
+        ),
+        MathOperation.Heaviside: (
+            "heaviside(-0.0) returns the scalar now. Same sfpi::abs(v) guard and the same "
+            "SFPSETCC reasoning as Sign."
+        ),
+        MathOperation.Signbit: (
+            "Signbit's divergences were a stimulus limitation, not a kernel defect. An entry "
+            "here means the delivery gate changed -- re-derive it rather than restoring it."
+        ),
+        MathOperation.Sqrt: (
+            "sqrt(-0.0) returns -0.0 now, from the zero-magnitude arm in ckernel_sfpu_sqrt.h; "
+            "an entry here means that arm regressed. test_sqrt_family_negative_zero_regression "
+            "is what actually pins the sign, since this sweep cannot tell the two zeros apart."
+        ),
+        MathOperation.Rsqrt: (
+            "rsqrt(-0.0) returns -inf now. Same arm and the same regression test as Sqrt."
+        ),
     }
 
-    for op in (MathOperation.Sign, MathOperation.Heaviside):
-        if op not in _EDGE_KNOWN_DIVERGENCES:
-            continue
-        recorded = set(_EDGE_KNOWN_DIVERGENCES[op])
-        assert recorded == expected, (
-            f"{op.name}'s recorded divergences no longer match the pipelines "
-            f"negative_zero_delivered() admits.\n"
-            f"  missing: {sorted(str(c) for c in expected - recorded)}\n"
-            f"  extra:   {sorted(str(c) for c in recorded - expected)}\n"
-            "The reason string rests on that partition -- if the delivery measurement "
-            "really moved, re-derive the explanation rather than only editing the table."
-        )
+    for op, why in fixed_or_not_delivered.items():
+        assert op not in _EDGE_KNOWN_DIVERGENCES, why
 
 
 _assert_signed_zero_partition_valid()
@@ -535,12 +522,13 @@ def test_eltwise_unary_sfpu_edges(
 
     specials = _gate_unspecified_nan_sign(mathop, formats, dest_acc, specials)
 
-    # Marked after the gate: where the gate has taken the cat-B probe away it is not sent, so
-    # the entry would be a non-strict xfail that XPASSes every run.
+    # Marked after the gate: the one recorded divergence left is Reciprocal's on the NaN
+    # probe, so where the gate has taken cat B away the probe is not sent and the entry
+    # would be a non-strict xfail that XPASSes every run.
     diverges_here = (formats.input_format, formats.output_format, dest_acc) in (
         _EDGE_KNOWN_DIVERGENCES.get(mathop, ())
     )
-    if diverges_here and (specials or mathop in _SIGNED_ZERO_DIVERGENCES):
+    if diverges_here and specials:
         request.node.add_marker(
             pytest.mark.xfail(reason=_EDGE_DIVERGENCE_REASON[mathop], strict=False)
         )
