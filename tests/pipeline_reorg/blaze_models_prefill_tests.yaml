@@ -1363,8 +1363,9 @@
   test_group: disagg_prefill
   skus:
     bh_sc4:
-      # 13 min in CI on a reserved quad; the margin is for four ranks pulling one NFS-mounted TTNN cache.
-      timeout: 45
+      # 36 min warm. Sized off a cold host instead: the TTNN weight cache is NFS-mounted and the four
+      # ranks pull it concurrently, which stretches model construction ~6x.
+      timeout: 60
       tier: 1
       release_ready: true
   owner_id: U09LK84G4TF # Nikola Milicevic
@@ -1430,7 +1431,9 @@
   test_group: disagg_prefill
   skus:
     bh_sc1:
-      timeout: 45
+      # 25-50 min warm. Sized off a cold host instead: one rank builds all 61 layers out of the
+      # NFS-mounted TTNN weight cache, which runs ~16 s/layer warm and ~100 s/layer cold.
+      timeout: 120
   owner_id: U09LK84G4TF # Nikola Milicevic
   team: shield
   budget_type: demo
