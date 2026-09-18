@@ -232,95 +232,67 @@ MappingConstraints<TargetNode, GlobalNode>::MappingConstraints(
 }
 
 template <typename TargetNode, typename GlobalNode>
+bool MappingConstraints<TargetNode, GlobalNode>::commit_trial(MappingConstraints&& trial) {
+    trial.set_quiet_mode(quiet_mode_);
+    if (!trial.validate()) {
+        return false;
+    }
+    *this = std::move(trial);
+    return true;
+}
+
+template <typename TargetNode, typename GlobalNode>
 bool MappingConstraints<TargetNode, GlobalNode>::add_required_constraint(
     TargetNode target_node, GlobalNode global_node) {
-    // Save current state before modifying (for rollback if validation fails)
-    std::map<TargetNode, std::optional<std::set<GlobalNode>>> saved_state;
-    auto it = valid_mappings_.find(target_node);
-    saved_state[target_node] =
-        (it == valid_mappings_.end()) ? std::nullopt : std::make_optional(it->second);
-
-    // If this global node is already reserved, add target_node to the reserved set
-    auto reserved_it = reserved_global_nodes_.find(global_node);
-    if (reserved_it != reserved_global_nodes_.end()) {
+    MappingConstraints trial = *this;
+    auto reserved_it = trial.reserved_global_nodes_.find(global_node);
+    if (reserved_it != trial.reserved_global_nodes_.end()) {
         reserved_it->second.insert(target_node);
     }
-
-    // Intersect valid_mappings_[target] with {global_node}
-    if (valid_mappings_[target_node].empty()) {
-        // First constraint: initialize with this single node
-        valid_mappings_[target_node].insert(global_node);
+    if (trial.valid_mappings_[target_node].empty()) {
+        trial.valid_mappings_[target_node].insert(global_node);
     } else {
-        // Intersect with existing constraints
-        std::set<GlobalNode> singleton{global_node};
-        valid_mappings_[target_node] = intersect_sets(valid_mappings_[target_node], singleton);
+        trial.valid_mappings_[target_node] =
+            intersect_sets(trial.valid_mappings_[target_node], std::set<GlobalNode>{global_node});
     }
-
-    // Validate automatically and return false if invalid (will restore saved_state on failure)
-    return validate(&saved_state);
+    return commit_trial(std::move(trial));
 }
 
 template <typename TargetNode, typename GlobalNode>
 bool MappingConstraints<TargetNode, GlobalNode>::add_required_constraint(
     TargetNode target_node, const std::set<GlobalNode>& global_nodes) {
-    // Save current state before modifying (for rollback if validation fails)
-    std::map<TargetNode, std::optional<std::set<GlobalNode>>> saved_state;
-    auto it = valid_mappings_.find(target_node);
-    saved_state[target_node] =
-        (it == valid_mappings_.end()) ? std::nullopt : std::make_optional(it->second);
-
-    // If any of these global nodes are already reserved, add target_node to the reserved set
+    MappingConstraints trial = *this;
     for (const auto& global_node : global_nodes) {
-        auto reserved_it = reserved_global_nodes_.find(global_node);
-        if (reserved_it != reserved_global_nodes_.end()) {
+        auto reserved_it = trial.reserved_global_nodes_.find(global_node);
+        if (reserved_it != trial.reserved_global_nodes_.end()) {
             reserved_it->second.insert(target_node);
         }
     }
-
-    // Intersect valid_mappings_[target] with global_nodes
-    if (valid_mappings_[target_node].empty()) {
-        // First constraint: initialize with the provided set of nodes
-        valid_mappings_[target_node] = global_nodes;
+    if (trial.valid_mappings_[target_node].empty()) {
+        trial.valid_mappings_[target_node] = global_nodes;
     } else {
-        // Intersect with existing constraints
-        valid_mappings_[target_node] = intersect_sets(valid_mappings_[target_node], global_nodes);
+        trial.valid_mappings_[target_node] = intersect_sets(trial.valid_mappings_[target_node], global_nodes);
     }
-
-    // Validate automatically and return false if invalid (will restore saved_state on failure)
-    return validate(&saved_state);
+    return commit_trial(std::move(trial));
 }
 
 template <typename TargetNode, typename GlobalNode>
 bool MappingConstraints<TargetNode, GlobalNode>::add_required_constraint(
     const std::set<TargetNode>& target_nodes, GlobalNode global_node) {
-    // Save current state before modifying (for rollback if validation fails)
-    std::map<TargetNode, std::optional<std::set<GlobalNode>>> saved_state;
-    for (const auto& target_node : target_nodes) {
-        auto it = valid_mappings_.find(target_node);
-        saved_state[target_node] =
-            (it == valid_mappings_.end()) ? std::nullopt : std::make_optional(it->second);
-    }
-
-    // If this global node is already reserved, add all target_nodes to the reserved set
-    auto reserved_it = reserved_global_nodes_.find(global_node);
-    if (reserved_it != reserved_global_nodes_.end()) {
+    MappingConstraints trial = *this;
+    auto reserved_it = trial.reserved_global_nodes_.find(global_node);
+    if (reserved_it != trial.reserved_global_nodes_.end()) {
         reserved_it->second.insert(target_nodes.begin(), target_nodes.end());
     }
-
-    // For each target node, intersect valid_mappings_[target] with {global_node}
     for (const auto& target_node : target_nodes) {
-        if (valid_mappings_[target_node].empty()) {
-            // First constraint: initialize with this single node
-            valid_mappings_[target_node].insert(global_node);
+        if (trial.valid_mappings_[target_node].empty()) {
+            trial.valid_mappings_[target_node].insert(global_node);
         } else {
-            // Intersect with existing constraints
-            std::set<GlobalNode> singleton{global_node};
-            valid_mappings_[target_node] = intersect_sets(valid_mappings_[target_node], singleton);
+            trial.valid_mappings_[target_node] =
+                intersect_sets(trial.valid_mappings_[target_node], std::set<GlobalNode>{global_node});
         }
     }
-
-    // Validate automatically and return false if invalid (will restore saved_state on failure)
-    return validate(&saved_state);
+    return commit_trial(std::move(trial));
 }
 
 template <typename TargetNode, typename GlobalNode>
@@ -333,25 +305,15 @@ bool MappingConstraints<TargetNode, GlobalNode>::add_required_constraint(
         return false;
     }
 
-    // Save current state before modifying (for rollback if validation fails)
-    std::map<TargetNode, std::optional<std::set<GlobalNode>>> saved_state;
+    MappingConstraints trial = *this;
     for (const auto& target_node : target_nodes) {
-        auto it = valid_mappings_.find(target_node);
-        saved_state[target_node] =
-            (it == valid_mappings_.end()) ? std::nullopt : std::make_optional(it->second);
-    }
-
-    // Each target in the group may map only to globals in global_nodes (intersect with existing).
-    for (const auto& target_node : target_nodes) {
-        if (valid_mappings_[target_node].empty()) {
-            valid_mappings_[target_node] = global_nodes;
+        if (trial.valid_mappings_[target_node].empty()) {
+            trial.valid_mappings_[target_node] = global_nodes;
         } else {
-            valid_mappings_[target_node] = intersect_sets(valid_mappings_[target_node], global_nodes);
+            trial.valid_mappings_[target_node] = intersect_sets(trial.valid_mappings_[target_node], global_nodes);
         }
     }
-
-    // Validate automatically and return false if invalid (will restore saved_state on failure)
-    return validate(&saved_state);
+    return commit_trial(std::move(trial));
 }
 
 template <typename TargetNode, typename GlobalNode>
@@ -915,66 +877,45 @@ const std::set<std::pair<TargetNode, GlobalNode>>& MappingConstraints<TargetNode
 template <typename TargetNode, typename GlobalNode>
 bool MappingConstraints<TargetNode, GlobalNode>::add_forbidden_constraint(
     TargetNode target_node, GlobalNode global_node) {
-    auto it = valid_mappings_.find(target_node);
-    if (it == valid_mappings_.end()) {
-        forbidden_pairs_.insert({target_node, global_node});
-        if (!validate()) {
-            forbidden_pairs_.erase({target_node, global_node});
-            return false;
-        }
-        return true;
+    MappingConstraints trial = *this;
+    auto it = trial.valid_mappings_.find(target_node);
+    if (it == trial.valid_mappings_.end()) {
+        trial.forbidden_pairs_.insert({target_node, global_node});
+    } else {
+        it->second.erase(global_node);
     }
-
-    std::map<TargetNode, std::optional<std::set<GlobalNode>>> saved_state{
-        {target_node, std::make_optional(it->second)}};
-    it->second.erase(global_node);
-    return validate(&saved_state);
+    return commit_trial(std::move(trial));
 }
 
 template <typename TargetNode, typename GlobalNode>
 bool MappingConstraints<TargetNode, GlobalNode>::add_forbidden_constraint(
     TargetNode target_node, const std::set<GlobalNode>& global_nodes) {
-    auto it = valid_mappings_.find(target_node);
-    if (it == valid_mappings_.end()) {
+    MappingConstraints trial = *this;
+    auto it = trial.valid_mappings_.find(target_node);
+    if (it == trial.valid_mappings_.end()) {
         for (const auto& global_node : global_nodes) {
-            forbidden_pairs_.insert({target_node, global_node});
+            trial.forbidden_pairs_.insert({target_node, global_node});
         }
-        if (!validate()) {
-            for (const auto& global_node : global_nodes) {
-                forbidden_pairs_.erase({target_node, global_node});
-            }
-            return false;
+    } else {
+        for (const auto& global_node : global_nodes) {
+            it->second.erase(global_node);
         }
-        return true;
     }
-
-    std::map<TargetNode, std::optional<std::set<GlobalNode>>> saved_state{
-        {target_node, std::make_optional(it->second)}};
-    for (const auto& global_node : global_nodes) {
-        it->second.erase(global_node);
-    }
-    return validate(&saved_state);
+    return commit_trial(std::move(trial));
 }
 
 template <typename TargetNode, typename GlobalNode>
 bool MappingConstraints<TargetNode, GlobalNode>::add_forbidden_constraint(
     const std::set<TargetNode>& target_nodes, GlobalNode global_node) {
-    std::map<TargetNode, std::optional<std::set<GlobalNode>>> saved_state;
+    MappingConstraints trial = *this;
     for (const auto& target_node : target_nodes) {
-        forbidden_pairs_.insert({target_node, global_node});
-        auto it = valid_mappings_.find(target_node);
-        if (it != valid_mappings_.end()) {
-            saved_state[target_node] = std::make_optional(it->second);
+        trial.forbidden_pairs_.insert({target_node, global_node});
+        auto it = trial.valid_mappings_.find(target_node);
+        if (it != trial.valid_mappings_.end()) {
             it->second.erase(global_node);
         }
     }
-    const bool ok = validate(saved_state.empty() ? nullptr : &saved_state);
-    if (!ok) {
-        for (const auto& target_node : target_nodes) {
-            forbidden_pairs_.erase({target_node, global_node});
-        }
-    }
-    return ok;
+    return commit_trial(std::move(trial));
 }
 
 template <typename TargetNode, typename GlobalNode>
@@ -990,31 +931,17 @@ bool MappingConstraints<TargetNode, GlobalNode>::add_forbidden_constraint(
         return false;
     }
 
-    std::vector<std::pair<TargetNode, GlobalNode>> pairs;
+    MappingConstraints trial = *this;
     for (const auto& t : target_nodes) {
         for (const auto& g : global_nodes) {
-            pairs.emplace_back(t, g);
-        }
-    }
-
-    std::map<TargetNode, std::optional<std::set<GlobalNode>>> saved_state;
-    for (const auto& [t, g] : pairs) {
-        forbidden_pairs_.insert({t, g});
-        auto it = valid_mappings_.find(t);
-        if (it != valid_mappings_.end()) {
-            if (saved_state.find(t) == saved_state.end()) {
-                saved_state[t] = std::make_optional(it->second);
+            trial.forbidden_pairs_.insert({t, g});
+            auto it = trial.valid_mappings_.find(t);
+            if (it != trial.valid_mappings_.end()) {
+                it->second.erase(g);
             }
-            it->second.erase(g);
         }
     }
-    const bool ok = validate(saved_state.empty() ? nullptr : &saved_state);
-    if (!ok) {
-        for (const auto& [t, g] : pairs) {
-            forbidden_pairs_.erase({t, g});
-        }
-    }
-    return ok;
+    return commit_trial(std::move(trial));
 }
 
 template <typename TargetNode, typename GlobalNode>
@@ -1228,16 +1155,15 @@ MappingResult<TargetNode, GlobalNode> solve_topology_mapping(
     bool quiet_mode,
     TopologyMappingSolverEngine solver_engine) {
     constraints.set_quiet_mode(quiet_mode);
-    TopologyMappingEnumerationSession<TargetNode, GlobalNode> session;
-    return session.next(
+    TopologyMappingEnumerationSession<TargetNode, GlobalNode> session(
         target_graph,
         global_graph,
         constraints,
-        /*excluded_mappings=*/{},
         connection_validation_mode,
         quiet_mode,
         solver_engine,
         /*unique_shapes=*/false);
+    return session.next();
 }
 
 // ============================================================================
@@ -1260,26 +1186,22 @@ std::vector<MappingResult<TargetNode, GlobalNode>> solve_topology_mapping_n(
 
     constraints.set_quiet_mode(quiet_mode);
 
-    TopologyMappingEnumerationSession<TargetNode, GlobalNode> session;
+    TopologyMappingEnumerationSession<TargetNode, GlobalNode> session(
+        target_graph,
+        global_graph,
+        constraints,
+        connection_validation_mode,
+        quiet_mode,
+        solver_engine,
+        unique_shapes);
     std::vector<MappingResult<TargetNode, GlobalNode>> results;
     results.reserve(max_solutions);
-    std::vector<std::map<TargetNode, GlobalNode>> excluded;
-    excluded.reserve(max_solutions);
 
     for (size_t i = 0; i < max_solutions; ++i) {
-        auto result = session.next(
-            target_graph,
-            global_graph,
-            constraints,
-            excluded,
-            connection_validation_mode,
-            quiet_mode,
-            solver_engine,
-            unique_shapes);
+        auto result = session.next();
         if (!result.success) {
             break;
         }
-        excluded.push_back(result.target_to_global);
         results.push_back(std::move(result));
     }
 
@@ -1324,36 +1246,189 @@ std::vector<MappingResult<TargetNode, GlobalNode>> solve_topology_mapping_all(
 
 template <typename TargetNode, typename GlobalNode>
 void TopologyMappingEnumerationSession<TargetNode, GlobalNode>::reset() noexcept {
+    // Engine first: DFS holds pointers into graph_data_ / constraint_data_.
+    search_engine_.reset();
+    graph_data_.reset();
+    constraint_data_.reset();
     ready_ = false;
     quiet_ = false;
     unique_shapes_ = false;
     use_sat_ = false;
-    sat_exclusions_encoded_ = 0;
     sat_solve_calls_ = 0;
     sat_hard_constraint_encode_calls_ = 0;
     snap_target_ = {};
     snap_global_ = {};
+    snap_constraints_ = {};
     engine_ = TopologyMappingSolverEngine::Auto;
     mode_ = ConnectionValidationMode::RELAXED;
-    // Drop the engine before graph/constraint snapshots; DFS holds pointers into them.
-    search_engine_.reset();
-    graph_data_.reset();
-    constraint_data_.reset();
+    start_error_.clear();
 }
 
 template <typename TargetNode, typename GlobalNode>
-TopologyMappingEnumerationSession<TargetNode, GlobalNode>::~TopologyMappingEnumerationSession() = default;
-
-template <typename TargetNode, typename GlobalNode>
-MappingResult<TargetNode, GlobalNode> TopologyMappingEnumerationSession<TargetNode, GlobalNode>::next(
+TopologyMappingEnumerationSession<TargetNode, GlobalNode>::TopologyMappingEnumerationSession(
     const AdjacencyGraph<TargetNode>& target_graph,
     const AdjacencyGraph<GlobalNode>& global_graph,
     const MappingConstraints<TargetNode, GlobalNode>& constraints,
-    const std::vector<std::map<TargetNode, GlobalNode>>& excluded_mappings,
     ConnectionValidationMode connection_validation_mode,
     bool quiet_mode,
     TopologyMappingSolverEngine solver_engine,
     bool unique_shapes) {
+    using namespace tt::tt_fabric::detail;
+    snap_target_ = target_graph;
+    snap_global_ = global_graph;
+    snap_constraints_ = constraints;
+    snap_constraints_.set_quiet_mode(quiet_mode);
+    engine_ = solver_engine;
+    mode_ = connection_validation_mode;
+    unique_shapes_ = unique_shapes;
+    quiet_ = quiet_mode;
+    graph_data_.emplace(target_graph, global_graph);
+    constraint_data_.emplace(snap_constraints_, *graph_data_);
+    use_sat_ = topology_mapping_should_use_sat_engine(solver_engine, graph_data_->n_target, graph_data_->n_global);
+    search_engine_ = make_topology_search_engine<TargetNode, GlobalNode>(use_sat_);
+    if (!search_engine_->start(*graph_data_, *constraint_data_, mode_, unique_shapes_, {}, quiet_)) {
+        start_error_ = search_engine_->get_state().error_message.empty()
+                           ? "TopologyMappingEnumerationSession: engine start failed"
+                           : search_engine_->get_state().error_message;
+        sat_hard_constraint_encode_calls_ += search_engine_->get_state().sat_hard_constraint_encode_calls;
+        ready_ = false;
+        return;
+    }
+    sat_hard_constraint_encode_calls_ += search_engine_->get_state().sat_hard_constraint_encode_calls;
+    ready_ = true;
+}
+
+template <typename TargetNode, typename GlobalNode>
+TopologyMappingEnumerationSession<TargetNode, GlobalNode>::~TopologyMappingEnumerationSession() {
+    reset();
+}
+
+template <typename TargetNode, typename GlobalNode>
+void TopologyMappingEnumerationSession<TargetNode, GlobalNode>::set_quiet_mode(bool quiet_mode) {
+    quiet_ = quiet_mode;
+    snap_constraints_.set_quiet_mode(quiet_mode);
+}
+
+template <typename TargetNode, typename GlobalNode>
+bool TopologyMappingEnumerationSession<TargetNode, GlobalNode>::refresh_constraints() {
+    if (!graph_data_ || !constraint_data_ || !search_engine_) {
+        return false;
+    }
+    *constraint_data_ = detail::ConstraintIndexData<TargetNode, GlobalNode>(snap_constraints_, *graph_data_);
+    return search_engine_->refresh_constraints();
+}
+
+template <typename TargetNode, typename GlobalNode>
+bool TopologyMappingEnumerationSession<TargetNode, GlobalNode>::add_forbidden_constraint(
+    TargetNode target, GlobalNode global) {
+    if (!ready_) {
+        return false;
+    }
+    if (!snap_constraints_.add_forbidden_constraint(target, global)) {
+        return false;
+    }
+    return refresh_constraints();
+}
+
+template <typename TargetNode, typename GlobalNode>
+bool TopologyMappingEnumerationSession<TargetNode, GlobalNode>::add_forbidden_constraint(
+    TargetNode target, const std::set<GlobalNode>& globals) {
+    if (!ready_) {
+        return false;
+    }
+    if (!snap_constraints_.add_forbidden_constraint(target, globals)) {
+        return false;
+    }
+    return refresh_constraints();
+}
+
+template <typename TargetNode, typename GlobalNode>
+bool TopologyMappingEnumerationSession<TargetNode, GlobalNode>::add_forbidden_constraint(
+    const std::set<TargetNode>& targets, GlobalNode global) {
+    if (!ready_) {
+        return false;
+    }
+    if (!snap_constraints_.add_forbidden_constraint(targets, global)) {
+        return false;
+    }
+    return refresh_constraints();
+}
+
+template <typename TargetNode, typename GlobalNode>
+bool TopologyMappingEnumerationSession<TargetNode, GlobalNode>::add_forbidden_constraint(
+    const std::set<TargetNode>& targets, const std::set<GlobalNode>& globals) {
+    if (!ready_) {
+        return false;
+    }
+    if (!snap_constraints_.add_forbidden_constraint(targets, globals)) {
+        return false;
+    }
+    return refresh_constraints();
+}
+
+template <typename TargetNode, typename GlobalNode>
+bool TopologyMappingEnumerationSession<TargetNode, GlobalNode>::add_required_constraint(
+    TargetNode target, GlobalNode global) {
+    if (!ready_) {
+        return false;
+    }
+    if (!snap_constraints_.add_required_constraint(target, global)) {
+        return false;
+    }
+    return refresh_constraints();
+}
+
+template <typename TargetNode, typename GlobalNode>
+bool TopologyMappingEnumerationSession<TargetNode, GlobalNode>::add_required_constraint(
+    TargetNode target, const std::set<GlobalNode>& globals) {
+    if (!ready_) {
+        return false;
+    }
+    if (!snap_constraints_.add_required_constraint(target, globals)) {
+        return false;
+    }
+    return refresh_constraints();
+}
+
+template <typename TargetNode, typename GlobalNode>
+bool TopologyMappingEnumerationSession<TargetNode, GlobalNode>::exclude_mapping(
+    const std::map<TargetNode, GlobalNode>& mapping) {
+    if (!ready_ || !search_engine_ || !graph_data_) {
+        return false;
+    }
+    return search_engine_->block(to_index_mapping(mapping));
+}
+
+template <typename TargetNode, typename GlobalNode>
+bool TopologyMappingEnumerationSession<TargetNode, GlobalNode>::exclude_mappings(
+    const std::vector<std::map<TargetNode, GlobalNode>>& additional_excluded) {
+    if (!ready_) {
+        return false;
+    }
+    for (const auto& mapping : additional_excluded) {
+        if (!exclude_mapping(mapping)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+template <typename TargetNode, typename GlobalNode>
+std::vector<int> TopologyMappingEnumerationSession<TargetNode, GlobalNode>::to_index_mapping(
+    const std::map<TargetNode, GlobalNode>& node_map) const {
+    std::vector<int> idx_map(graph_data_->n_target, -1);
+    for (const auto& [target_node, global_node] : node_map) {
+        auto ti = graph_data_->target_to_idx.find(target_node);
+        auto gi = graph_data_->global_to_idx.find(global_node);
+        if (ti != graph_data_->target_to_idx.end() && gi != graph_data_->global_to_idx.end()) {
+            idx_map[ti->second] = static_cast<int>(gi->second);
+        }
+    }
+    return idx_map;
+}
+
+template <typename TargetNode, typename GlobalNode>
+MappingResult<TargetNode, GlobalNode> TopologyMappingEnumerationSession<TargetNode, GlobalNode>::next() {
     using namespace tt::tt_fabric::detail;
     const auto next_start = std::chrono::steady_clock::now();
     auto stamp_elapsed = [&](MappingResult<TargetNode, GlobalNode> result) {
@@ -1368,89 +1443,24 @@ MappingResult<TargetNode, GlobalNode> TopologyMappingEnumerationSession<TargetNo
         result.stats.sat_hard_constraint_encode_calls = sat_hard_constraint_encode_calls_;
         return result;
     };
-    constraints.set_quiet_mode(quiet_mode);
 
-    const bool context_match =
-        ready_ && snap_target_.get_adjacency_map() == target_graph.get_adjacency_map() &&
-        snap_global_.get_adjacency_map() == global_graph.get_adjacency_map() && engine_ == solver_engine &&
-        mode_ == connection_validation_mode && unique_shapes_ == unique_shapes;
-
-    bool need_start = false;
-    if (!context_match) {
-        reset();
-        snap_target_ = target_graph;
-        snap_global_ = global_graph;
-        engine_ = solver_engine;
-        mode_ = connection_validation_mode;
-        unique_shapes_ = unique_shapes;
-        quiet_ = quiet_mode;
-        graph_data_.emplace(target_graph, global_graph);
-        constraint_data_.emplace(constraints, *graph_data_);
-        use_sat_ = topology_mapping_should_use_sat_engine(solver_engine, graph_data_->n_target, graph_data_->n_global);
-        ready_ = true;
-        search_engine_ = make_topology_search_engine<TargetNode, GlobalNode>(use_sat_);
-        need_start = true;
-    } else {
-        quiet_ = quiet_mode;
-        // Engine start() already snapshotted constraints; do not replace constraint_data_ while live.
-    }
-
-    auto to_index_mapping = [&](const std::map<TargetNode, GlobalNode>& node_map) -> std::vector<int> {
-        std::vector<int> idx_map(graph_data_->n_target, -1);
-        for (const auto& [target_node, global_node] : node_map) {
-            auto ti = graph_data_->target_to_idx.find(target_node);
-            auto gi = graph_data_->global_to_idx.find(global_node);
-            if (ti != graph_data_->target_to_idx.end() && gi != graph_data_->global_to_idx.end()) {
-                idx_map[ti->second] = static_cast<int>(gi->second);
-            }
-        }
-        return idx_map;
-    };
-
-    std::vector<std::vector<int>> excluded_idx;
-    excluded_idx.reserve(excluded_mappings.size());
-    for (const auto& em : excluded_mappings) {
-        excluded_idx.push_back(to_index_mapping(em));
+    if (!ready_ || !search_engine_ || !graph_data_ || !constraint_data_) {
+        MappingResult<TargetNode, GlobalNode> failure;
+        failure.success = false;
+        failure.error_message = start_error_.empty()
+                                    ? "TopologyMappingEnumerationSession: session not started"
+                                    : start_error_;
+        return stamp_elapsed(std::move(failure));
     }
 
     auto& engine = *search_engine_;
-    // start() on a new engine, or again on the same engine if the caller shortened
-    // excluded_mappings (blocking clauses cannot be removed).
-    if (need_start || excluded_idx.size() < sat_exclusions_encoded_) {
-        if (!engine.start(
-                *graph_data_,
-                *constraint_data_,
-                connection_validation_mode,
-                unique_shapes,
-                {},
-                quiet_mode)) {
-            MappingResult<TargetNode, GlobalNode> failure;
-            failure.success = false;
-            failure.error_message = engine.get_state().error_message.empty()
-                                        ? "TopologyMappingEnumerationSession: engine start failed"
-                                        : engine.get_state().error_message;
-            return stamp_elapsed(std::move(failure));
-        }
-        sat_hard_constraint_encode_calls_ += engine.get_state().sat_hard_constraint_encode_calls;
-        sat_exclusions_encoded_ = 0;
-    }
-    while (sat_exclusions_encoded_ < excluded_idx.size()) {
-        if (!engine.block(excluded_idx[sat_exclusions_encoded_])) {
-            MappingResult<TargetNode, GlobalNode> failure;
-            failure.success = false;
-            failure.error_message =
-                "TopologyMappingEnumerationSession: failed to append blocking clause for excluded mapping";
-            return stamp_elapsed(std::move(failure));
-        }
-        ++sat_exclusions_encoded_;
-    }
-
     std::vector<int> raw;
     if (!engine.next(raw)) {
         MappingResult<TargetNode, GlobalNode> failure;
         failure.success = false;
         failure.error_message =
             "TopologyMappingEnumerationSession: no new mapping found (all solutions exhausted or excluded)";
+        sat_solve_calls_ = engine.get_state().sat_solve_calls;
         return stamp_elapsed(std::move(failure));
     }
     sat_solve_calls_ = engine.get_state().sat_solve_calls;
@@ -1458,7 +1468,7 @@ MappingResult<TargetNode, GlobalNode> TopologyMappingEnumerationSession<TargetNo
     dummy_state.sat_solve_calls = sat_solve_calls_;
     dummy_state.sat_hard_constraint_encode_calls = sat_hard_constraint_encode_calls_;
     return stamp_elapsed(MappingValidator<TargetNode, GlobalNode>::build_result(
-        raw, *graph_data_, *constraint_data_, dummy_state, connection_validation_mode, quiet_mode));
+        raw, *graph_data_, *constraint_data_, dummy_state, mode_, quiet_));
 }
 
 template <typename TargetNode, typename GlobalNode>
@@ -3371,6 +3381,11 @@ bool DFSSearchEngine<TargetNode, GlobalNode>::block(const std::vector<int>& mapp
 }
 
 template <typename TargetNode, typename GlobalNode>
+bool DFSSearchEngine<TargetNode, GlobalNode>::refresh_constraints() {
+    return started_ && constraint_data_ != nullptr;
+}
+
+template <typename TargetNode, typename GlobalNode>
 bool DFSSearchEngine<TargetNode, GlobalNode>::next(std::vector<int>& mapping_out) {
     mapping_out.clear();
     if (!started_ || graph_data_ == nullptr || constraint_data_ == nullptr) {
@@ -3972,6 +3987,7 @@ bool SatSearchEngine<TargetNode, GlobalNode>::start(
     empty_mapping_yielded_ = false;
     empty_blocked_ = false;
     backend_.reset();
+    constraint_data_ = &constraint_data;
     n_target_ = graph_data.n_target;
     n_global_ = graph_data.n_global;
     max_same_rank_groups_used_ = constraint_data.max_same_rank_groups_used;
@@ -4055,6 +4071,17 @@ bool SatSearchEngine<TargetNode, GlobalNode>::block(const std::vector<int>& mapp
         return true;
     }
     return backend_.block(mapping);
+}
+
+template <typename TargetNode, typename GlobalNode>
+bool SatSearchEngine<TargetNode, GlobalNode>::refresh_constraints() {
+    if (!started_ || constraint_data_ == nullptr) {
+        return false;
+    }
+    if (empty_problem_) {
+        return true;
+    }
+    return backend_.refresh_constraints(TopologySatConstraintView(*constraint_data_));
 }
 
 template <typename TargetNode, typename GlobalNode>

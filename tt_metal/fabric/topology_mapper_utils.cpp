@@ -2331,27 +2331,40 @@ std::optional<TopologyMappingResult> MultiMeshSolutionEnumerator::next() {
         // host-group cap means the cap is infeasible for this instance -> drop the cap, enable SOFT
         // minimize_same_rank_groups_used, and restart the session. Later exhaustion with emitted_ > 0 is
         // genuine "no more capped solutions" and must not start emitting over-cap placements.
-        MappingResult<MeshId, MeshId> placement = session_.next(
-            mesh_logical_graph,
-            mesh_physical_graph,
-            inter_mesh_constraints_,
-            excluded_,
-            inter_mesh_validation_mode_,
-            /*quiet_mode=*/true,
-            TopologyMappingSolverEngine::Auto,
-            unique_shapes_);
+        //
+        // TODO(host-cap-no-reencode): this session restart re-encodes the whole CNF. Once the HARD cap is
+        // encoded guarded-by-assumption (see TODO in topology_solver_sat.cpp), an infeasible cap can be
+        // backed out by retracting the assumption on the SAME session -- no restart, learned clauses kept.
+        auto make_session = [&]() {
+            return std::make_unique<TopologyMappingEnumerationSession<MeshId, MeshId>>(
+                mesh_logical_graph,
+                mesh_physical_graph,
+                inter_mesh_constraints_,
+                inter_mesh_validation_mode_,
+                /*quiet_mode=*/true,
+                TopologyMappingSolverEngine::Sat,
+                unique_shapes_);
+        };
+        if (session_ == nullptr) {
+            session_ = make_session();
+        }
+        MappingResult<MeshId, MeshId> placement = session_->next();
         if (!placement.success) {
             if (!host_cap_relaxed_ && emitted_ == 0 && inter_mesh_constraints_.max_same_rank_groups_used() > 0) {
                 log_warning(
                     tt::LogFabric,
                     "Multi-solution enumeration: hard host-group cap (k={}) infeasible for this instance with zero "
                     "capped solutions ({}); dropping the cap and falling back to SOFT minimize, then "
-                    "restarting the session -- returned placements may occupy more than k host groups",
+                    "constructing a new session -- returned placements may occupy more than k host groups",
                     inter_mesh_constraints_.max_same_rank_groups_used(),
                     placement.error_message);
                 inter_mesh_constraints_.set_max_same_rank_groups_used(0);
                 inter_mesh_constraints_.set_minimize_same_rank_groups_used(true);  // SOFT
-                session_ = {};
+                session_ = make_session();
+                if (session_ == nullptr || !session_->started()) {
+                    return std::nullopt;
+                }
+                (void)session_->exclude_mappings(excluded_);
                 host_cap_relaxed_ = true;
                 continue;
             }
@@ -2420,12 +2433,8 @@ std::optional<TopologyMappingResult> MultiMeshSolutionEnumerator::next() {
             fabric_node_id_to_mesh_rank_,
             &intra_failing_pair);
         if (!full.success) {
-            // Mirror the single-solve retry loop (map_multi_mesh_to_physical): a failed intra-mesh completion is an
-            // orientation problem, not proof the footprint is unusable. Forbid the exact (logical -> physical) pair
-            // that could not complete -- via the same handle_forbidden_constraint used by the single solve -- and
-            // re-encode the session so the next warm solve returns a different orientation, instead of only
-            // shape-blocking the whole placement (which, under unique_shapes, strands every orientation sharing this
-            // footprint -- a full-coverage ring has exactly one).
+            // A failed intra-mesh completion is an orientation problem, not proof the footprint is unusable.
+            // Forbid the exact (logical -> physical) pair on the live session and warm-solve again.
             if (intra_failing_pair.has_value()) {
                 std::vector<MeshId> logical_meshes(
                     mesh_logical_graph.get_nodes().begin(), mesh_logical_graph.get_nodes().end());
@@ -2454,31 +2463,8 @@ std::optional<TopologyMappingResult> MultiMeshSolutionEnumerator::next() {
                     intra_failing_pair->second.get(),
                     can_retry,
                     intra_failed_mesh_pairs_.size() + current_attempt_failed_pairs.size());
-                // The forbidden constraint already makes every mapping that assigns this pair unreachable, so a
-                // blocking clause for such an excluded mapping is redundant -- and cannot be encoded at all once
-                // the pair has left the target's allowed domain, which would fail the whole re-encode.
-                if (can_retry) {
-                    const MeshId forbidden_logical = intra_failing_pair->first;
-                    const MeshId forbidden_physical = intra_failing_pair->second;
-                    const std::size_t removed = std::erase_if(excluded_, [&](const std::map<MeshId, MeshId>& mapping) {
-                        auto it = mapping.find(forbidden_logical);
-                        return it != mapping.end() && it->second == forbidden_physical;
-                    });
-                    log_debug(
-                        tt::LogFabric,
-                        "DIAG multi-solution: dropped {} redundant excluded mapping(s) containing forbidden pair "
-                        "{} -> {}; {} exclusion(s) remain",
-                        removed,
-                        forbidden_logical.get(),
-                        forbidden_physical.get(),
-                        excluded_.size());
-                }
-                // Re-encode with the new forbidden constraint; excluded_ is re-applied so already-returned
-                // placements cannot re-emerge. The forbidden pair makes the just-tried orientation unreachable.
-                session_ = {};
-                if (!can_retry) {
-                    // add_forbidden_constraint over-constrained this logical mesh: no remaining physical
-                    // target, so SAT would keep re-emitting a pairing that cannot complete.
+                if (!can_retry || session_ == nullptr ||
+                    !session_->add_forbidden_constraint(intra_failing_pair->first, intra_failing_pair->second)) {
                     return std::nullopt;
                 }
                 continue;

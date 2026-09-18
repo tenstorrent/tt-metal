@@ -194,6 +194,28 @@ int effective_torus_variant_priority(const GroupingInfo& grouping) {
     return 0;
 }
 
+// TEMPORARY(2x2-4x1-cross): true iff one of {MGD mesh, grouping} is a 2x2 and the other a 4x1 (by
+// non-trivial declared dims). A [2,2] ring and a [4,1] ring are the same 4-cycle, so the matcher would
+// otherwise swap them; a 4x1 strip for a [2,2] mesh straddles the tray boundary (TestGalaxyLayoutCheck).
+// TODO(2x2-4x1-cross): remove once shape/topology disambiguation is stable.
+bool is_2x2_4x1_cross(const std::optional<MgdDeviceTopology>& device_topo, const GroupingInfo& grouping) {
+    auto shape = [](const std::vector<int32_t>& dims) {
+        std::vector<int32_t> v;
+        for (int32_t d : dims) {
+            if (d > 1) {
+                v.push_back(d);
+            }
+        }
+        std::sort(v.begin(), v.end());
+        return v;
+    };
+    const std::vector<int32_t> mgd = device_topo ? shape(device_topo->dims) : std::vector<int32_t>{};
+    const std::vector<int32_t> grp = shape(grouping.flattened_node_grid_dims);
+    const std::vector<int32_t> s2x2 = {2, 2};
+    const std::vector<int32_t> s4x1 = {4};
+    return (mgd == s2x2 && grp == s4x1) || (mgd == s4x1 && grp == s2x2);
+}
+
 std::optional<MgdDeviceTopology> get_mgd_instance_device_topology(
     const MeshGraphDescriptor& mesh_graph_descriptor, const std::string& instance_name) {
     const auto& instance_ids = mesh_graph_descriptor.instances_by_name(instance_name);
@@ -1312,7 +1334,7 @@ bool add_pgd_to_psd_constraints(
 // unique_ptr (or in an object that is itself never moved) when it lives in a container.
 struct GroupingVariantEnumeration {
     const GroupingInfo* variant = nullptr;  // the grouping being enumerated
-    TopologyMappingEnumerationSession<LogicalChipId, AsicID> session;
+    std::unique_ptr<TopologyMappingEnumerationSession<LogicalChipId, AsicID>> session;
     MappingConstraints<LogicalChipId, AsicID> constraints;  // trait / host-alignment, encoded once
     std::vector<std::map<LogicalChipId, AsicID>> excluded;  // mappings already returned
     std::size_t solves = 0;
@@ -1356,8 +1378,8 @@ std::vector<MappingResult<LogicalChipId, AsicID>> enumerate_distinct_placements_
         if (state.variant == nullptr) {
             state.variant = &grouping_info;
         }
-        // Encode the grouping's trait / host-alignment constraints once; the session snapshots them on its
-        // first next() and must not see them change afterward. This is the "host match" phase.
+        // Encode the grouping's trait / host-alignment constraints once; the session constructor snapshots them.
+        // This is the "host match" phase.
         const auto host_match_start = std::chrono::steady_clock::now();
         const bool encoded =
             add_pgd_to_psd_constraints(grouping_info, physical_graph, physical_system_descriptor, constraints, nullptr);
@@ -1371,6 +1393,19 @@ std::vector<MappingResult<LogicalChipId, AsicID>> enumerate_distinct_placements_
             state.exhausted = true;
             return {};
         }
+        state.session = std::make_unique<TopologyMappingEnumerationSession<LogicalChipId, AsicID>>(
+            grouping_info.adjacency_graph,
+            physical_graph,
+            constraints,
+            validation_mode,
+            /*quiet_mode=*/true,
+            TopologyMappingSolverEngine::Auto,
+            unique_shapes);
+        if (state.session == nullptr || !state.session->started()) {
+            log_debug(tt::LogFabric, "DIAG enumerate '{}': SESSION-CONSTRUCT-FAILED", grouping_info.name);
+            state.exhausted = true;
+            return {};
+        }
         state.started = true;
     }
     if (max_solutions == 0 || max_solutions > kTopologyMappingEnumerateSolutionsHardCap) {
@@ -1380,15 +1415,7 @@ std::vector<MappingResult<LogicalChipId, AsicID>> enumerate_distinct_placements_
     const auto solve_start = std::chrono::steady_clock::now();
     std::vector<MappingResult<LogicalChipId, AsicID>> mappings;
     for (size_t i = 0; i < max_solutions; ++i) {
-        MappingResult<LogicalChipId, AsicID> mapping = state.session.next(
-            grouping_info.adjacency_graph,
-            physical_graph,
-            constraints,
-            state.excluded,
-            validation_mode,
-            /*quiet_mode=*/true,
-            TopologyMappingSolverEngine::Auto,
-            unique_shapes);
+        MappingResult<LogicalChipId, AsicID> mapping = state.session->next();
         ++state.solves;
         if (!mapping.success) {
             if (i == 0) {
@@ -1836,6 +1863,14 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
                         continue;
                     }
 
+                    // TEMPORARY(2x2-4x1-cross): a [2,2] ring and a [4,1] ring are the same 4-cycle, so the
+                    // matcher can swap one for the other -- a 4x1 strip for a [2,2] mesh straddles the tray
+                    // boundary and breaks the 2x2 tray-locality invariant (TestGalaxyLayoutCheck). Forbid the
+                    // cross both ways. TODO(2x2-4x1-cross): remove once shape/topology disambiguation is stable.
+                    if (is_2x2_4x1_cross(device_topo, grouping_info)) {
+                        continue;
+                    }
+
                     auto mapping_result = solve_topology_mapping<LogicalChipId, GroupingChipId>(
                         mgd_grouping_info.adjacency_graph,
                         grouping_info.adjacency_graph,
@@ -1895,6 +1930,34 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
                 // The MGD fallback is the same check, but it is not a PGD match, so it runs once
                 // after this loop rather than once per candidate.
                 if (physical_system_descriptor != nullptr) {
+                    // The gate must validate under the same channel policy the actual solver
+                    // (map_multi_mesh_to_physical) uses per mesh -- see the is_intra_mesh_policy_relaxed()
+                    // gate there. Hardcoding STRICT here over-rejects a RELAXED mesh whose seams (e.g. the
+                    // cross-host seams of a host-split mesh) intentionally carry fewer channels than the
+                    // grouping's internal edges. NOTE: for a channel count of 1 the two modes encode
+                    // identically (the STRICT channel check is guarded by required_channels > 1), so this
+                    // only changes behaviour for meshes that declare count > 1 with a RELAXED policy.
+                    // instance_name is a mesh *definition* name (e.g. "M0"), so it may resolve to several
+                    // instance mesh ids when the definition is instantiated more than once. Every instance of
+                    // one definition reads the same MeshDescriptor, so they must all carry the same policy;
+                    // a disagreement means the lookups have been corrupted, which we fail loudly on.
+                    // Defaults to STRICT (relaxed = false) when the definition has no mesh instances.
+                    bool instance_relaxed = false;
+                    const auto instance_mesh_ids =
+                        get_mesh_ids_for_mgd_instance_name(mesh_graph_descriptor, instance_name);
+                    if (!instance_mesh_ids.empty()) {
+                        instance_relaxed =
+                            mesh_graph_descriptor.is_intra_mesh_policy_relaxed(MeshId{*instance_mesh_ids.begin()});
+                        for (uint32_t mesh_id : instance_mesh_ids) {
+                            TT_FATAL(
+                                mesh_graph_descriptor.is_intra_mesh_policy_relaxed(MeshId{mesh_id}) == instance_relaxed,
+                                "Internal error: mesh definition '{}' has instances with disagreeing intra-mesh "
+                                "channel policies; all instances of one definition must share a single policy",
+                                instance_name);
+                        }
+                    }
+                    const ConnectionValidationMode gate_validation_mode =
+                        instance_relaxed ? ConnectionValidationMode::RELAXED : ConnectionValidationMode::STRICT;
                     for (const auto& match : best_matches_topology) {
                         const GroupingInfo committed_candidate = make_committed_grouping(match);
                         MappingConstraints<LogicalChipId, tt::tt_metal::AsicID> solve_constraints;
@@ -1903,7 +1966,8 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
                             *psd_physical_graph,
                             *physical_system_descriptor,
                             /*max_solutions=*/1,
-                            solve_constraints);
+                            solve_constraints,
+                            gate_validation_mode);
                         if (!placements.empty()) {
                             best_matches_psd_placed.push_back(match);
                         } else {
@@ -3574,6 +3638,10 @@ struct MasterSatSession {
     std::size_t seam_indicator_count = 0;
     // I_{edge,k}: chosen seats meet with >= k fabric links (for assume() / future preference; hard seams separate).
     std::map<std::pair<GlobalMeshId, GlobalMeshId>, std::map<std::size_t, int>> seam_indicator_lit;
+    // "Fill every used host" packing preference. When non-zero, assuming it enforces that every occupied PSD
+    // host is fully covered (all_or_nothing occupancy). Guarded, so the solve loop assumes it and drops it
+    // (re-solves without) when a perfect pack is infeasible -- the pack is a preference, never a hard failure.
+    int pack_active_lit = 0;
     bool encoded = false;
 
     void reset_for_encode() {
@@ -3585,6 +3653,7 @@ struct MasterSatSession {
         clauses_count = 0;
         seam_indicator_count = 0;
         seam_indicator_lit.clear();
+        pack_active_lit = 0;
         encoded = false;
     }
 
@@ -3730,7 +3799,8 @@ bool encode_master_problem(
     std::size_t pools_generation,
     const std::map<std::pair<GlobalMeshId, GlobalMeshId>, std::size_t>& mesh_edges,
     AdjacencyMatrixCache& adjacency_cache,
-    bool relaxed_tier) {
+    bool relaxed_tier,
+    const std::vector<std::vector<uint32_t>>& host_dense_chips) {
     const std::size_t asic_count = pools.empty() ? 0 : pools.begin()->second.asic_count();
     session.seat_lit_by_dense_asic.assign(asic_count, {});
 
@@ -3793,6 +3863,35 @@ bool encode_master_problem(
             ++session.clauses_count;
         }
     }
+
+    // (4) "Fill every used host" packing preference. For each PSD host, the seats covering each of its chips
+    // form an all-or-nothing occupancy group: if the host is used at all, every chip it holds must be covered
+    // by some mesh. That forces the placement to consolidate onto whole hosts (and, for exact fits like a
+    // 256-chip / 8-host pipeline, minimizes the host count for free) rather than fragmenting across many
+    // partly-used hosts. It is only meaningful with more than one host, and is guarded by pack_active so the
+    // solve loop assumes it and simply drops it (re-solves without) when a perfect pack is infeasible.
+    session.pack_active_lit = 0;
+    if (host_dense_chips.size() > 1) {
+        std::vector<std::vector<std::vector<int>>> host_groups;
+        host_groups.reserve(host_dense_chips.size());
+        for (const std::vector<uint32_t>& chips : host_dense_chips) {
+            std::vector<std::vector<int>> members;
+            members.reserve(chips.size());
+            for (const uint32_t dense : chips) {
+                if (dense < session.seat_lit_by_dense_asic.size()) {
+                    members.push_back(session.seat_lit_by_dense_asic[dense]);
+                }
+            }
+            host_groups.push_back(std::move(members));
+        }
+        const int pack_active = session.solver.declare_one_more_variable();
+        ++session.vars_count;
+        std::vector<int> host_occ;
+        tt::tt_fabric::detail::topology_sat_build_occupancy_indicators(
+            session.solver, host_groups, /*all_or_nothing=*/true, host_occ, /*extra_lit=*/-pack_active);
+        session.pack_active_lit = pack_active;
+    }
+
     return append_master_seam_threshold_indicators(session, mesh_edges, adjacency_cache, pools, pools_generation);
 }
 
@@ -3871,6 +3970,29 @@ std::vector<AssignedMeshes> start_sat_placement(
         }
     }
     const auto mesh_edges = collect_mesh_edges(mesh_level_graph);
+
+    // Per-PSD-host dense ASIC indices for the master's "fill every used host" packing (encode step (4)).
+    // Uses the same dense numbering the pools use (DenseAsicIndex over physical_graph), so the indices line
+    // up with seat_lit_by_dense_asic. Stable across attempts, so it is built once here. Left empty (packing
+    // off, encode step (4) skipped) when TT_METAL_SAT_HOST_PACK is set to 0/false/no.
+    std::vector<std::vector<uint32_t>> host_dense_chips;
+    const char* host_pack_env = std::getenv("TT_METAL_SAT_HOST_PACK");
+    const bool host_packing_enabled =
+        host_pack_env == nullptr || !(std::string(host_pack_env) == "0" || std::string(host_pack_env) == "false" ||
+                                      std::string(host_pack_env) == "no");
+    if (host_packing_enabled) {
+        const DenseAsicIndex host_asic_index(physical_graph);
+        for (const std::set<AsicID>& host_asics : collect_psd_host_groups(physical_graph, physical_system_descriptor)) {
+            std::vector<uint32_t> dense;
+            dense.reserve(host_asics.size());
+            for (const AsicID& asic : host_asics) {
+                dense.push_back(static_cast<uint32_t>(host_asic_index.dense(asic)));
+            }
+            if (!dense.empty()) {
+                host_dense_chips.push_back(std::move(dense));
+            }
+        }
+    }
 
     auto grow_all = [&](std::size_t batch_per_variant) {
         const auto start = std::chrono::steady_clock::now();
@@ -3975,7 +4097,14 @@ std::vector<AssignedMeshes> start_sat_placement(
             MasterSatSession session;
             session.reset_for_encode();
             const bool encoded = encode_master_problem(
-                session, global_mesh_groupings, pools, pools_generation, mesh_edges, adjacency_cache, relaxed_tier);
+                session,
+                global_mesh_groupings,
+                pools,
+                pools_generation,
+                mesh_edges,
+                adjacency_cache,
+                relaxed_tier,
+                host_dense_chips);
             session.encoded = encoded;
             const auto encode_end = std::chrono::steady_clock::now();
             if (stats != nullptr) {
@@ -3994,8 +4123,29 @@ std::vector<AssignedMeshes> start_sat_placement(
                 break;  // growing is the only thing that can help; skip the relaxed re-encode
             }
             const bool budgeted = !relaxed_tier && relaxed_inter_mesh_policy && kStrictTierConflictBudget > 0;
-            const int verdict = budgeted ? session.solver.solve_limited(kStrictTierConflictBudget)
-                                         : session.solve_with_assumptions({}, /*conflict_limit=*/0);
+            const int conflict_limit = budgeted ? kStrictTierConflictBudget : 0;
+            // Base-first: solve WITHOUT the host-packing preference. During the growth phase (base UNSAT)
+            // this is one solve per tier -- the packing preference must not add a wasted solve while the
+            // candidate pool is still too small to seat every mesh at all. Only once the base problem is
+            // satisfiable do we try to also fully-pack it; if that packed solve is UNSAT the pack is simply
+            // dropped (a preference, not a requirement) and the base model is restored. The chosen
+            // pack_assumption is reused for the enumeration below so alternatives keep the same packing.
+            std::vector<int> pack_assumption;
+            int verdict = session.solve_with_assumptions({}, conflict_limit);
+            if (verdict == TopologySatSolver::kSat && session.pack_active_lit != 0) {
+                const int pack_verdict = session.solve_with_assumptions({session.pack_active_lit}, conflict_limit);
+                if (pack_verdict == TopologySatSolver::kSat) {
+                    pack_assumption.push_back(session.pack_active_lit);  // solver model is now the packed one
+                } else {
+                    // No fully-packed placement -> restore a base (unpacked) model for decode/enumeration.
+                    verdict = session.solve_with_assumptions({}, conflict_limit);
+                    log_info(
+                        tt::LogFabric,
+                        "SAT joint placement: attempt {} ({} seams): no fully-packed placement; relaxed host packing",
+                        attempts,
+                        relaxed_tier ? "relaxed" : "strict");
+                }
+            }
             const auto solve_end = std::chrono::steady_clock::now();
             if (stats != nullptr) {
                 stats->master_solve_elapsed +=
@@ -4030,9 +4180,10 @@ std::vector<AssignedMeshes> start_sat_placement(
                 solutions.push_back(decode_master_model(session, global_mesh_groupings, pools));
                 while (solutions.size() < solution_cap) {
                     session.block_last_model();
-                    const int next_verdict = relaxed_tier ? session.solve_with_assumptions({}, /*conflict_limit=*/0)
-                                             : budgeted   ? session.solver.solve_limited(kStrictTierConflictBudget)
-                                                          : session.solve_with_assumptions({}, /*conflict_limit=*/0);
+                    // Reuse the packing decision from the first solve: if the winning model was fully packed,
+                    // keep every enumerated alternative packed too (pack_assumption still holds it); if we
+                    // relaxed, pack_assumption is empty and enumeration stays relaxed.
+                    const int next_verdict = session.solve_with_assumptions(pack_assumption, conflict_limit);
                     if (next_verdict != TopologySatSolver::kSat) {
                         break;
                     }
