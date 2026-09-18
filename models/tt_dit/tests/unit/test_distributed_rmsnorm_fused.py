@@ -565,6 +565,8 @@ def test_ltx_qk_rope_bench(mesh_device):
     # Two forwards bind both ping-pong semaphore/stats-buffer sets. Keep both
     # captured outputs alive for every replay and for the final correctness read.
     warm_outputs = [run(), run()]
+    if _os.environ.get("TT_METAL_KERNEL_CAPTURE_ONLY") == "1":
+        pytest.skip("kernel recipe capture only; no correctness or timing result")
     ttnn.synchronize_device(mesh_device)
     eager = [_gather(out, 0) for out in warm_outputs]
     trace = ttnn.begin_trace_capture(mesh_device, cq_id=0)
