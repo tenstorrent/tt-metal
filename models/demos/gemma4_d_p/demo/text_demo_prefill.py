@@ -45,7 +45,7 @@ def _load_full_weights():
     return os.environ.get("GEMMA4_PREFILL_LOAD_FULL_WEIGHTS", "0").lower() in ("1", "true", "yes")
 
 
-# ── Weight loading from the tensor cache ──────────────────────────────────────
+# ── Mesh configuration ───────────────────────────────────────────────────────
 
 
 def _mesh_config(mesh_device):
@@ -119,10 +119,8 @@ def _cp_gather_torch(tensor, mesh_config):
     per CP row and concatenate along the sequence. Device tensors come back in the
     mesh's row-major order; the CP axis determines the stride between ranks.
 
-    Falls back to device 0 alone when CP is off, matching ``_first_device_torch``.
+    Falls back to device 0 alone when CP is off.
     """
-    mesh_device = mesh_config.device
-
     shards = ttnn.get_device_tensors(tensor)
     cp = mesh_config.cp_degree if mesh_config is not None else 1
     if cp <= 1:
@@ -179,21 +177,11 @@ def _build_prefill_model(mesh_config, model_path, chunk_size, context_len=None):
 # ── Traced long-context chunked prefill (production shape) ────────────────────
 
 
-@torch.no_grad()
-@parametrize_mesh_with_fabric([(8, 4), (4, 8)], device_params_extra={"trace_region_size": TRACE_REGION_SIZE})
-@pytest.mark.parametrize("token_source", ["text"], ids=lambda t: t)
-@pytest.mark.parametrize("chunk_size", PREFILL_CHUNK_SIZES, ids=lambda c: f"chunk{c}")
-@pytest.mark.parametrize("context_len", [32768, 65536, 131072, 262144], ids=lambda c: f"ctx_{c // 1024}k")
-@pytest.mark.parametrize("readback_all", [True, False], ids=["readback_all", "readback_final"])
-def test_prefill_long_context_traced(
-    mesh_device, context_len, chunk_size, readback_all, token_source, reset_seeds, request
-):
-    """Measure all prefill chunks using one replayed ring-attention trace."""
-
-    mesh_config = _mesh_config(mesh_device)
+def _validate_prefill_shape(mesh_config, context_len, chunk_size):
+    """Skip unsupported context/chunk combinations before loading the model."""
     cp = mesh_config.cp_degree
     if cp <= 1:
-        pytest.skip(f"targets CP>1; mesh {tuple(mesh_device.shape)} gives CP={cp}")
+        pytest.skip(f"targets CP>1; mesh {tuple(mesh_config.device.shape)} gives CP={cp}")
     if chunk_size < GEMMA4_SLIDING_WINDOW_TOKENS * cp:
         pytest.skip(
             f"chunk={chunk_size} gives a {chunk_size // cp}-token Q slab at CP={cp}, under the "
@@ -203,17 +191,12 @@ def test_prefill_long_context_traced(
     if context_len % chunk_size != 0:
         pytest.skip(f"context_len={context_len} is not a whole number of {chunk_size}-token chunks")
 
-    model_path = _model_path()
+
+def _run_traced_prefill(model, mesh_config, tokens_all, chunk_size, readback_all, *, report_performance=True):
+    """Populate model caches by replaying one trace over the supplied input chunks."""
+    mesh_device = mesh_config.device
+    context_len = tokens_all.shape[-1]
     n_chunks = context_len // chunk_size
-    model_args, model, kv_cache = _build_prefill_model(
-        mesh_config=mesh_config,
-        model_path=model_path,
-        chunk_size=chunk_size,
-        context_len=context_len,
-    )
-
-    tokens_all = _get_prefill_tokens(model_path, context_len, model_args.vocab_size, token_source)
-
     host_input_tokens = ttnn.from_torch(
         tokens_all[:, :chunk_size].contiguous(),
         device=None,
@@ -317,14 +300,18 @@ def test_prefill_long_context_traced(
                 assert torch.isfinite(hidden).all(), f"chunk {chunk_idx} produced non-finite output"
                 readback_s += time.time() - t_rb
             # Report per-chunk latency and cumulative device and wall time.
-            logger.info(
-                f"[traced_perf] chunk {chunk_idx + 1}/{n_chunks} [{chunk_start}, {chunk_start + chunk_size}) "
-                f"device={per_chunk[-1] * 1000:.1f}ms ({chunk_size / per_chunk[-1]:.0f} tok/s) | "
-                f"total device={sum(per_chunk):.1f}s wall={time.time() - t_run:.1f}s"
-            )
+            if report_performance:
+                logger.info(
+                    f"[traced_perf] chunk {chunk_idx + 1}/{n_chunks} [{chunk_start}, {chunk_start + chunk_size}) "
+                    f"device={per_chunk[-1] * 1000:.1f}ms ({chunk_size / per_chunk[-1]:.0f} tok/s) | "
+                    f"total device={sum(per_chunk):.1f}s wall={time.time() - t_run:.1f}s"
+                )
         total_s = time.time() - t_run
     finally:
         ttnn.release_trace(mesh_device, tid_ring)
+
+    if not report_performance:
+        return
 
     device_s = sum(per_chunk)
     # Three different numbers, because conflating them understates the model by ~2x.
@@ -352,6 +339,27 @@ def test_prefill_long_context_traced(
         f"[traced_perf] ring-depth cost: first={per_chunk[0] * 1000:.1f}ms -> last={per_chunk[-1] * 1000:.1f}ms "
         f"= {per_chunk[-1] / per_chunk[0]:.2f}x over {len(per_chunk) - 1} extra chunks of history"
     )
+
+
+@torch.no_grad()
+@parametrize_mesh_with_fabric([(8, 4), (4, 8)], device_params_extra={"trace_region_size": TRACE_REGION_SIZE})
+@pytest.mark.parametrize("token_source", ["text"], ids=lambda t: t)
+@pytest.mark.parametrize("chunk_size", PREFILL_CHUNK_SIZES, ids=lambda c: f"chunk{c}")
+@pytest.mark.parametrize("context_len", [32768, 65536, 131072, 262144], ids=lambda c: f"ctx_{c // 1024}k")
+@pytest.mark.parametrize("readback_all", [True, False], ids=["readback_all", "readback_final"])
+def test_prefill_long_context_traced(mesh_device, context_len, chunk_size, readback_all, token_source, reset_seeds):
+    """Measure prefill performance over all chunks using one replayed ring-attention trace."""
+    mesh_config = _mesh_config(mesh_device)
+    _validate_prefill_shape(mesh_config, context_len, chunk_size)
+    model_path = _model_path()
+    model_args, model, _kv_cache = _build_prefill_model(
+        mesh_config=mesh_config,
+        model_path=model_path,
+        chunk_size=chunk_size,
+        context_len=context_len,
+    )
+    tokens_all = _get_prefill_tokens(model_path, context_len, model_args.vocab_size, token_source)
+    _run_traced_prefill(model, mesh_config, tokens_all, chunk_size, readback_all)
 
 
 # ── Per-layer prefill timing ────────────────────────────────────────────────
