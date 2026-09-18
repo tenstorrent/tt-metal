@@ -108,6 +108,7 @@ extern "C" uint32_t _start1() {
         do_crt1(__ldm_data_start);
         // Must precede the ready flag below, which releases the other pushers.
         WATCHER_RING_BUFFER_INIT();
+        zero_semaphore_regions();
         (*GET_MAILBOX_ADDRESS_DEV(fw_shared_globals_ready))[hartid] = SHARED_GLOBALS_READY_GO;
     }
     extern uint32_t __ldm_tdata_init[];
