@@ -38,7 +38,16 @@ PYTEST_RUN_EXTRA="-q --override-ini=log_cli=false"
 pytest $PYTEST_COMPILE_EXTRA "${SPEED_OF_LIGHT_ARGS[@]}" --compile-producer -n 10 -m "perf and not accuracy" --timeout=60 \
   --splits "$N_GROUPS" --group "$GROUP" \
   --junitxml="pytest-report-blackhole-${GROUP}-compile.xml" .
-pytest $PYTEST_RUN_EXTRA "${SPEED_OF_LIGHT_ARGS[@]}" --compile-consumer -n 15 -x -m "perf and not accuracy" --timeout=60 \
+# EXPERIMENT (not for merge): measure with ONE xdist worker, so exactly one Tensix is
+# active at a time. The full test set is kept, so neighbouring modules still run on
+# this board and still precede matmul on the same core -- sequential state carry-over
+# is preserved (indeed concentrated), while concurrent cross-core interference is
+# removed. Isolates parallelism from pollution.
+#
+# Affordable because compilation dominates: measured on run 35284908486, per shard the
+# producer pass takes ~113 min and the consumer pass ~3 min at -n 15, i.e. ~97% of wall
+# time is compilation. The producer stays at -n 10.
+pytest $PYTEST_RUN_EXTRA "${SPEED_OF_LIGHT_ARGS[@]}" --compile-consumer -n 1 -x -m "perf and not accuracy" --timeout=60 \
   --splits "$N_GROUPS" --group "$GROUP" \
   --junitxml="pytest-report-blackhole-${GROUP}-run.xml" .
 junitparser merge pytest-report-blackhole-${GROUP}-compile.xml pytest-report-blackhole-${GROUP}-run.xml pytest-report-blackhole-${GROUP}.xml

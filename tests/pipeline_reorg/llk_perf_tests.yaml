@@ -73,7 +73,7 @@
     ./tests/run_llk_perf_blackhole.sh {split_group} 5
   skus:
     bh_p150b_civ2:
-      timeout: 150
+      timeout: 230
   owner_id: U09UC143684 # Nemanja Divnic
 
 - name: llk_perf_blackhole group 2/5
@@ -84,7 +84,7 @@
     ./tests/run_llk_perf_blackhole.sh {split_group} 5
   skus:
     bh_p150b_civ2:
-      timeout: 150
+      timeout: 230
   owner_id: U09UC143684 # Nemanja Divnic
 
 - name: llk_perf_blackhole group 3/5
@@ -95,7 +95,7 @@
     ./tests/run_llk_perf_blackhole.sh {split_group} 5
   skus:
     bh_p150b_civ2:
-      timeout: 150
+      timeout: 230
   owner_id: U09UC143684 # Nemanja Divnic
 
 - name: llk_perf_blackhole group 4/5
@@ -106,7 +106,7 @@
     ./tests/run_llk_perf_blackhole.sh {split_group} 5
   skus:
     bh_p150b_civ2:
-      timeout: 150
+      timeout: 230
   owner_id: U09UC143684 # Nemanja Divnic
 
 - name: llk_perf_blackhole group 5/5
@@ -117,5 +117,5 @@
     ./tests/run_llk_perf_blackhole.sh {split_group} 5
   skus:
     bh_p150b_civ2:
-      timeout: 150
+      timeout: 230
   owner_id: U09UC143684 # Nemanja Divnic
