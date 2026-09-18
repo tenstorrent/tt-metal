@@ -1237,7 +1237,7 @@ Tensor bias_gelu(
             {},
             /*fast_and_approximate_mode*/ std::nullopt,
             resolved_sub_core_grids),
-        true,
+        false,
         memory_config,
         gelu_output,
         resolved_sub_core_grids);
