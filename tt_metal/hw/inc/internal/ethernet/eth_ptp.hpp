@@ -324,39 +324,27 @@ __attribute__((noinline, cold)) inline bool ptp_timer_start(uint32_t pti, uint32
 
 // The once-per-session routines are cold: in a kernel built -O3 (the fabric router) they would otherwise unroll into
 // a couple of KB of a 26 KB kernel budget shared with the router, for code that runs once.
-// PTP64NS minus the CFR count in ns. The two counters advance on the same 50 MHz edge, so the difference is one
-// constant, a multiple of the tick, for as long as the timer runs; but a single pair of reads puts the register latency
-// between them (a tick or more) into it, and a stall between the two reads puts in several -- measured once at kernel
-// start, that sat in every stamp of one side for the whole run as an 80 ns link bias that came and went between
-// launches. Each pair is read in both orders so the skew cancels in the sum, the median over pairs discards a stalled
-// one, and the result is rounded to the tick.
+// PTP64NS minus the CFR count in ns, as the ERISC sees the two registers: the count moves in four-tick steps and
+// PTP64NS on its own step, so one pair of reads sits anywhere from zero to a few ticks above the constant depending on
+// where the reads fell in the registers' update cycles, and a median of a few pairs rounded to the tick landed on
+// either side of a boundary from one launch to the next (a 20 ns bias on every stamp of that end, hence its cable, in
+// about one launch in eight; a read at the count's update alone was worse, 80 ns). The mean over many pairs at
+// pseudo-random phases, read in both orders so the read latency cancels, is the constant plus the same phase term on
+// every end, to well under a nanosecond; it is not rounded, and the term cancels between the two ends of a link.
 __attribute__((noinline, cold)) inline int64_t ptp_offset_ns() {
-    constexpr int kPairs = 16;
-    constexpr uint32_t kTick = kNsPerRefclkTick;
-    static_assert(kTick == 20);
-    int64_t sum2[kPairs];
-    for (int i = 0; i < kPairs; i++) {
+    constexpr uint32_t kPairs = 2048;
+    int64_t sum = 0;
+    uint32_t walk = rd(kWallClockLo) | 1u;
+    for (uint32_t i = 0; i < kPairs; i++) {
+        phase_walk(walk);
         const uint64_t c1 = read_cfr();
         const uint64_t n1 = read_ptp64ns();
+        phase_walk(walk);
         const uint64_t n2 = read_ptp64ns();
         const uint64_t c2 = read_cfr();
-        const int64_t k1 = static_cast<int64_t>(n1 - ((c1 << 4) + (c1 << 2)));
-        const int64_t k2 = static_cast<int64_t>(n2 - ((c2 << 4) + (c2 << 2)));
-        int64_t v = k1 + k2;
-        int j = i;
-        for (; j > 0 && sum2[j - 1] > v; j--) {
-            sum2[j] = sum2[j - 1];
-        }
-        sum2[j] = v;
+        sum += static_cast<int64_t>(n1 - ((c1 << 4) + (c1 << 2))) + static_cast<int64_t>(n2 - ((c2 << 4) + (c2 << 2)));
     }
-    const int64_t k = (sum2[kPairs / 2 - 1] + sum2[kPairs / 2]) >> 2;
-    // Rounded to the tick in 32-bit arithmetic (2^32 = 16 mod 20): a 64-bit division here is the largest routine
-    // in an otherwise small kernel.
-    const bool neg = k < 0;
-    const uint64_t a = neg ? static_cast<uint64_t>(-k) : static_cast<uint64_t>(k);
-    const uint32_t r = ((static_cast<uint32_t>(a >> 32) % kTick) * 16u + static_cast<uint32_t>(a) % kTick) % kTick;
-    const uint64_t rounded = a - r + (r >= kTick / 2 ? kTick : 0u);
-    return neg ? -static_cast<int64_t>(rounded) : static_cast<int64_t>(rounded);
+    return sum / static_cast<int64_t>(2 * kPairs);
 }
 
 // One end's use of the tile's 1588 hardware: frames sent on queue Txq carry kStampFrameDa through header row

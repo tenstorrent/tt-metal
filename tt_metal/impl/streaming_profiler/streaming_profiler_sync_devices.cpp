@@ -890,7 +890,8 @@ void SyncDevices::launch_links() {
 namespace {
 
 // What each end leaves past its control word (eth_ptp::StopDiag): rounds, the timer word (0 no hardware path, 1 ran,
-// 2 never acknowledged its rate, in which case that end emitted no hardware stamps), wall cycles inside bursts, wall
+// 2 never acknowledged its rate, in which case that end emitted no hardware stamps; the session's PTP offset in the
+// bits above, a tick multiple), wall cycles inside bursts, wall
 // cycles and refclk ticks of the run, the longest burst in wall cycles, then rounds dropped, bursts with a hand-off
 // beyond the frames, bursts whose frames did not all hand off or stamp in time, rounds with the ingress count off,
 // and waits for a frame or echo given up.
@@ -925,6 +926,14 @@ void log_link_diag(uint32_t chip_a, uint32_t chip_b, const StopDiag& da, const S
         da.longest_us(),
         db.hold_pct(),
         db.longest_us());
+    log_info(
+        tt::LogMetal,
+        "[streaming profiler] link sync chip {} -> chip {}: PTP offsets (PTP64NS minus 20 x CFR, low 32 bits) sender "
+        "{} ns, receiver {} ns",
+        chip_a,
+        chip_b,
+        static_cast<int32_t>(da.timer & ~3u),
+        static_cast<int32_t>(db.timer & ~3u));
     for (const auto& [chip, name, d] : {std::tuple{chip_a, "sender", &da}, std::tuple{chip_b, "receiver", &db}}) {
         if (d->drop[0] != 0 || d->drop[1] != 0 || d->drop[4] != 0) {
             log_info(
@@ -940,7 +949,7 @@ void log_link_diag(uint32_t chip_a, uint32_t chip_b, const StopDiag& da, const S
                 d->drop[3],
                 d->drop[4]);
         }
-        if (d->timer == 2) {
+        if ((d->timer & 3u) == 2) {
             log_warning(
                 tt::LogMetal,
                 "[streaming profiler] link sync chip {}: the 1588 timer never acknowledged its rate; this end sent no "

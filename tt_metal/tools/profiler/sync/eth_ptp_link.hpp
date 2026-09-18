@@ -437,7 +437,8 @@ private:
     // reads the current figures.
     void write_diag() {
         const Instant now = read_instant();
-        diag.timer = sess.timer_ok ? 1u : 2u;
+        // The session's PTP offset rides in the timer word: a tick multiple, so its low two bits are free.
+        diag.timer = (sess.timer_ok ? 1u : 2u) | (static_cast<uint32_t>(sess.ptp_offset_ns) & ~3u);
         diag.span_wall = now.wall() - start_at.wall();
         diag.span_refclk = now.refclk - start_at.refclk;
         diag.write(diag_addr);
@@ -573,7 +574,8 @@ struct ReceiverLink {
 private:
     void write_diag() {
         const Instant now = read_instant();
-        diag.timer = sess.timer_ok ? 1u : 2u;
+        // The session's PTP offset rides in the timer word: a tick multiple, so its low two bits are free.
+        diag.timer = (sess.timer_ok ? 1u : 2u) | (static_cast<uint32_t>(sess.ptp_offset_ns) & ~3u);
         diag.span_wall = now.wall() - start_at.wall();
         diag.span_refclk = now.refclk - start_at.refclk;
         diag.write(diag_addr);

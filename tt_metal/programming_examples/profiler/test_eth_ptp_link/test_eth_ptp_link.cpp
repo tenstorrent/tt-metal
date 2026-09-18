@@ -356,13 +356,15 @@ int main(int argc, char** argv) {
         for (const Diag* d : {&da, &db}) {
             drops += d->drop[0];
         }
-        const bool ok = stopped_a && stopped_b && da.timer == 1 && db.timer == 1 && complete_frac >= 0.95 && fit.ok &&
-                        noise <= 1.0 && window_med <= 1.5 && drops <= std::max<uint32_t>(2, issued / 50);
+        // The timer word's low two bits are the status; the bits above carry the end's PTP offset (eth_ptp_link.hpp).
+        const bool ok = stopped_a && stopped_b && (da.timer & 3u) == 1 && (db.timer & 3u) == 1 &&
+                        complete_frac >= 0.95 && fit.ok && noise <= 1.0 && window_med <= 1.5 &&
+                        drops <= std::max<uint32_t>(2, issued / 50);
         all_ok = all_ok && ok;
         std::printf(
             "[eth_ptp_link] chip %u eth(%zu,%zu) -> chip %u eth(%zu,%zu): %s\n"
             "  rounds: %u issued, %zu complete at both ends, %zu inside the path band, %zu fitted; timer words "
-            "%u/%u%s\n"
+            "%u/%u, PTP offsets %d/%d ns%s\n"
             "  drops: sender rounds %u, hand-off past the frames %u, unstamped bursts %u, ingress count off %u, waits "
             "given up %u; receiver %u/%u/%u/%u/%u\n"
             "  inside the stamps: one way %.1f ns (p10 %.1f, p90 %.1f), turnaround %.1f ns (p10 %.1f, p90 %.1f), "
@@ -382,8 +384,10 @@ int main(int argc, char** argv) {
             complete.size(),
             x.size(),
             fit.kept,
-            da.timer,
-            db.timer,
+            da.timer & 3u,
+            db.timer & 3u,
+            static_cast<int32_t>(da.timer & ~3u),
+            static_cast<int32_t>(db.timer & ~3u),
             stopped_a && stopped_b ? "" : " (an end did not confirm its stop)",
             da.drop[0],
             da.drop[1],
