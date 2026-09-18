@@ -487,7 +487,8 @@ TEST_F(DispatchContextFixture, AllowsResidentL1AboveDispatchFootprint) {
 //   - a free-list-only address check does step 2 without step 1 (false alarms for lockstep buffers
 //     sharded elsewhere: AllowsLockstepResidentWithNoDataOnDispatchCores).
 //   - a core-ownership check does step 1 without step 2 (refuses residents parked safely above the
-//     window: InterleavedL1ResidentAtTopIsAllowed, AllowsResidentL1AboveDispatchFootprint).
+//     window: InterleavedL1ResidentAtTopIsAllowed, AllowsResidentL1AboveDispatchFootprint,
+//     PerCoreResidentAboveWindowOnDispatchCoresIsAllowed).
 //
 // Many tests use the same two steps:
 //   1. ground truth: force the session with allow_destructive=true, push traffic through it, read the
@@ -1106,13 +1107,12 @@ TEST_F(DispatchContextFixture, LedgerGuardIsBlindToFixedAddressAndRawWrites) {
     }
 }
 
-// WHAT: a tensor WITH data on (12,0)/(12,1), but at the top of L1, above the window. Force the session
-//       and check it survives.
+// WHAT: a lockstep tensor WITH data on (12,0)/(12,1), but at the top of L1, above the window. Force the
+//       session and check it survives, then ask the guard.
 // WHY:  this is the fact the address window rests on: data on a dispatch core ABOVE the window is not
 //       touched by the firmware, so refusing it would be a false alarm. The blaze canary's victim sits
-//       here, and DSv3/K2.6 per-core weights on (12,0)-(12,7) are expected to. Only the physical fact
-//       is asserted; the verdict for this placement is AllowsResidentL1AboveDispatchFootprint.
-// EXPECT: intact after a forced session with traffic.
+//       here. (The per-core twin, the DSv3/K2.6 shape, is PerCoreResidentAboveWindowOnDispatchCoresIsAllowed.)
+// EXPECT: intact after a forced session with traffic, and a default session is not refused.
 TEST_F(DispatchContextFixture, ResidentAboveWindowOnDispatchCoresSurvivesForcedSession) {
     if (auto reason = fd_preflight_skip_reason(); reason.has_value()) {
         GTEST_SKIP() << *reason;
@@ -1132,17 +1132,68 @@ TEST_F(DispatchContextFixture, ResidentAboveWindowOnDispatchCoresSurvivesForcedS
 
     run_forced_session_with_traffic(mesh.get(), /*write_only=*/false);
     expect_resident_intact(mesh.get(), resident, "resident above the window on (12,0)/(12,1)");
+
+    const std::string error = capture_default_fd_refusal(mesh.get());
+    EXPECT_TRUE(error.empty()) << "refused a lockstep resident above the window on (12,0)/(12,1):\n" << error;
+}
+
+// WHAT: a PER-CORE tensor on (12,0)/(12,1) at the top of L1, above the window. Start a default session.
+// WHY:  this is the DSv3/K2.6 shape: per-core gate_mm weights whose grid covers (12,0)-(12,7) are
+//       resident while the provider opens a second session for the hot/cold experts. A core-ownership
+//       rule would refuse every one of those sessions; the guard must allow them because nothing on
+//       those cores lies below the window. Needs HYBRID=1.
+// EXPECT: not refused, and the tensor is intact after a forced session with traffic.
+TEST_F(DispatchContextFixture, PerCoreResidentAboveWindowOnDispatchCoresIsAllowed) {
+    if (auto reason = fd_preflight_skip_reason(); reason.has_value()) {
+        GTEST_SKIP() << *reason;
+    }
+    if (!MetalContext::instance().rtoptions().get_allocator_mode_hybrid()) {
+        GTEST_SKIP() << "Per-core L1 allocation requires TT_METAL_ALLOCATOR_MODE_HYBRID=1.";
+    }
+
+    const MeshShape system_shape = MetalContext::instance().get_system_mesh().shape();
+    auto mesh = MeshDevice::create(MeshDeviceConfig(system_shape));
+    if (!has_expected_dispatch_column(*mesh)) {
+        GTEST_SKIP() << "This test expects Blackhole dispatch cores (12,0) and (12,1).";
+    }
+
+    const FdWindowEnds ends = fd_window_ends_cq0();
+    const CoreRangeSet dispatch_cores(CoreRange({12, 0}, {12, 1}));
+    auto resident =
+        plant_one_page_per_core(mesh.get(), dispatch_cores, /*bottom_up=*/false, /*per_core=*/true, 0x20190700);
+
+    // Premise: on each dispatch core the resident is the lowest occupied L1 and it lies above that core's
+    // window end. Per-core placement is recorded in the chip allocator, one list per bank.
+    {
+        const auto& chip_allocator = *mesh->get_devices()[0]->allocator_impl();
+        auto check_above_window = [&](const CoreCoord& core, DeviceAddr window_end) {
+            const uint32_t bank = chip_allocator.get_bank_ids_from_logical_core(BufferType::L1, core).at(0);
+            const auto lowest = chip_allocator.get_lowest_occupied_l1_address(bank);
+            ASSERT_TRUE(lowest.has_value()) << "no per-core allocation recorded on (" << core.x << "," << core.y << ")";
+            ASSERT_GE(*lowest, window_end) << "top-down placement landed inside the window on (" << core.x << ","
+                                           << core.y << "); L1 is not empty enough for this test";
+        };
+        check_above_window(CoreCoord(12, 0), ends.prefetch_full);
+        check_above_window(CoreCoord(12, 1), ends.dispatch);
+    }
+
+    const std::string error = capture_default_fd_refusal(mesh.get());
+    EXPECT_TRUE(error.empty()) << "refused a per-core resident above the window on (12,0)/(12,1):\n" << error;
+
+    run_forced_session_with_traffic(mesh.get(), /*write_only=*/false);
+    expect_resident_intact(mesh.get(), resident, "per-core resident above the window on (12,0)/(12,1)");
 }
 
 // WHAT: a per-core tensor on (12,0) whose lowest byte sits just inside the prefetcher's ring-buffer
 //       band: above the part that host->device writes use, below the top of the part that only reads
 //       and program launches use.
 // WHY:  blaze passes write_only=True and relies on that band never being written during an upload.
-//       Two checks: (1) with the default write_only=false the tensor is inside the full window and
-//       must be refused; (2) a forced write-only session with traffic must leave it intact, which is
-//       what makes the narrowed write-only window honest.
-// EXPECT: refused with default options ([prefetch] only); intact after the forced write-only session.
-//       Needs HYBRID=1.
+//       Three checks: (1) with the default write_only=false the tensor is inside the full window and
+//       must be refused; (2) with write_only=true it is above the narrowed window and must be allowed,
+//       which is the knob's whole purpose; (3) a forced write-only session with traffic must leave it
+//       intact, which is what makes the narrowed window honest.
+// EXPECT: refused with default options ([prefetch] only); allowed with write_only=true; intact after
+//       the forced write-only session. Needs HYBRID=1.
 TEST_F(DispatchContextFixture, WriteOnlySessionLeavesPrefetchRingbufferBandIntact) {
     if (auto reason = fd_preflight_skip_reason(); reason.has_value()) {
         GTEST_SKIP() << *reason;
@@ -1200,7 +1251,23 @@ TEST_F(DispatchContextFixture, WriteOnlySessionLeavesPrefetchRingbufferBandIntac
     EXPECT_NE(error.find("[prefetch]"), std::string::npos) << error;
     EXPECT_EQ(error.find("[dispatch]"), std::string::npos) << "nothing was planted on (12,1):\n" << error;
 
-    // (2) Ground truth: write-only traffic does not reach the band.
+    // (2) Write-only session, default policy: the band lies above the narrowed prefetch window, so the
+    //     same resident must be allowed.
+    {
+        experimental::FastDispatchSetupOptions write_only_session{.write_only = true};
+        std::string write_only_error;
+        try {
+            experimental::DispatchContext::get().initialize_fast_dispatch(mesh.get(), write_only_session);
+        } catch (const std::runtime_error& exception) {
+            write_only_error = exception.what();
+        }
+        ASSERT_TRUE(write_only_error.empty())
+            << "write_only=true refused a resident that sits above the write-only window:\n"
+            << write_only_error;
+        experimental::DispatchContext::get().terminate_fast_dispatch(mesh.get());
+    }
+
+    // (3) Ground truth: write-only traffic does not reach the band.
     run_forced_session_with_traffic(mesh.get(), /*write_only=*/true);
     for (const auto& coord : MeshCoordinateRange(mesh->shape())) {
         std::vector<uint32_t> dst;
