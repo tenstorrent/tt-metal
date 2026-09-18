@@ -480,7 +480,11 @@
 #define MEM_CCE_SRAM_LOCAL_BASE 0x0
 #define MEM_CCE_L1_BASE 0x0
 #define MEM_CCE_L1_SIZE (4 * 1024 * 1024)
-#define MEM_CCE_RESERVED_SIZE 64
+#define MEM_CCE_RESERVED_SIZE 128
+// Cached soft semaphore serializing CCE watcher ring-buffer writers. Give it a dedicated cache
+// line: the ring head and entries are updated through the uncached alias, and a cached writeback
+// must not overwrite neighboring host-visible state.
+#define MEM_CCE_WATCHER_RING_BUFFER_LOCK 64
 #define MEM_CCE_MAILBOX_BASE MEM_CCE_RESERVED_SIZE
 // Must hold mailboxes_t as instantiated for CCE (COMPILE_FOR_DRISC, PROCESSOR_COUNT == 8):
 // profiler_msg_t.buffer[8], DevicePrintBuffer<1632, 8>, and watcher already sized to
