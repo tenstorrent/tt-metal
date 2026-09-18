@@ -186,3 +186,23 @@ TEST(GenericOpHash, ComputeProcessorChangesHash) {
         std::hash<ProgramDescriptor>{}(ProgramDescriptor{.kernels = {trisc0}}),
         std::hash<ProgramDescriptor>{}(ProgramDescriptor{.kernels = {trisc1}}));
 }
+
+TEST(GenericOpHash, RuntimeArgumentOwnershipChangesHash) {
+    using namespace tt::tt_metal;
+    KernelDescriptor kernel{
+        .kernel_source = "tests/tt_metal/tt_metal/test_kernels/compute/blank.cpp",
+        .core_ranges = CoreRangeSet(CoreRange(CoreCoord{0, 0})),
+        .config = ComputeConfigDescriptor{.processor = 0},
+    };
+    ProgramDescriptor descriptor{.kernels = {kernel, kernel}};
+    std::get<ComputeConfigDescriptor>(descriptor.kernels[1].config).processor = 1;
+    const auto independent = ttnn::operations::generic::compute_program_descriptor_hash(descriptor);
+    descriptor.kernels[1].runtime_args_owner = 0;
+    EXPECT_NE(independent, ttnn::operations::generic::compute_program_descriptor_hash(descriptor));
+    const auto shared = ttnn::operations::generic::compute_program_descriptor_hash(descriptor);
+    descriptor.kernels[0].runtime_args = {{CoreCoord{0, 0}, {10}}};
+    const auto with_payload = ttnn::operations::generic::compute_program_descriptor_hash(descriptor);
+    EXPECT_NE(shared, with_payload);
+    descriptor.kernels[0].runtime_args[0].second[0] = 20;
+    EXPECT_EQ(with_payload, ttnn::operations::generic::compute_program_descriptor_hash(descriptor));
+}

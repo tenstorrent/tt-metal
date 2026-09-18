@@ -108,8 +108,12 @@ ProgramDescriptor merge_program_descriptors(const std::vector<ProgramDescriptor>
         const auto& other = descriptors[i];
 
         // Merge kernels
-        for (const auto& kernel : other.kernels) {
-            result.kernels.push_back(kernel);
+        const auto kernel_offset = result.kernels.size();
+        for (auto kernel : other.kernels) {
+            if (kernel.runtime_args_owner) {
+                *kernel.runtime_args_owner += kernel_offset;
+            }
+            result.kernels.push_back(std::move(kernel));
         }
 
         // Merge semaphores
@@ -145,6 +149,8 @@ static inline ttsl::hash::hash_t hash_kernel_descriptor(const KernelDescriptor& 
         kernel.compiler_include_paths,
         kernel.common_runtime_args.size(),
         kernel.runtime_args.size(),
+        kernel.runtime_args_owner.has_value(),
+        kernel.runtime_args_owner.value_or(0),
         // Blaze-only experimental named args (issue #50953): hash compile-time names/values
         // and the runtime-arg schema. Runtime values do not affect the JIT build.
         experimental::blaze::hash_named_args_schema(kernel.blaze_named_args),
@@ -193,6 +199,9 @@ static inline ttsl::hash::hash_t hash_semaphore_descriptor(const SemaphoreDescri
 void apply_descriptor_runtime_args(Program& program, const ProgramDescriptor& desc) {
     for (uint32_t k = 0; k < desc.kernels.size(); ++k) {
         const auto& kernel = desc.kernels[k];
+        if (kernel.runtime_args_owner) {
+            continue;
+        }
         for (const auto& [core, args] : kernel.runtime_args) {
             auto& prog_args = GetRuntimeArgs(program, k, core);
             for (uint32_t i = 0; i < static_cast<uint32_t>(args.size()); ++i) {

@@ -849,6 +849,10 @@ void py_module_types(nb::module_& mod) {
             "common_runtime_args",
             &tt::tt_metal::KernelDescriptor::common_runtime_args,
             "Common runtime arguments shared across all cores")
+        .def_rw(
+            "runtime_args_owner",
+            &tt::tt_metal::KernelDescriptor::runtime_args_owner,
+            "Index of an earlier physical TRISC0 descriptor supplying this TRISC1/2 kernel's runtime arguments")
         ////////////////////////////////////////////////////////////
         // Blaze-only experimental named args
         // Removal is tracked by issue #50953

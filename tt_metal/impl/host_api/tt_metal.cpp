@@ -1321,6 +1321,9 @@ void WriteRuntimeArgsToDevice(IDevice* device, Program& program, bool force_slow
                         auto physical_core = device->virtual_core_from_logical_core(logical_core, core_type);
                         for (auto kernel_id : kg->kernel_ids) {
                             const auto& kernel = program.impl().get_kernel(kernel_id);
+                            if (kernel->runtime_args_owner()) {
+                                continue;
+                            }
                             const auto& rt_args = kernel->runtime_args(logical_core);
 
                             // RTA/CRTA offsets are the same for all binaries of the kernel, pick any binary.

@@ -177,7 +177,9 @@ public:
 
     const CoreRangeSet& core_range_set() const { return core_range_set_; }
 
-    const std::set<CoreCoord>& cores_with_runtime_args() const { return core_with_runtime_args_; }
+    const std::set<CoreCoord>& cores_with_runtime_args() const {
+        return runtime_args_owner_ ? runtime_args_owner_->cores_with_runtime_args() : core_with_runtime_args_;
+    }
 
     const std::map<std::string, std::string>& defines() const { return defines_; }
 
@@ -220,12 +222,16 @@ public:
     std::vector<std::vector<std::vector<uint32_t>>>& runtime_args();
     std::vector<std::vector<RuntimeArgsData>>& runtime_args_data();
     void set_runtime_args_count(CoreRangeSet& core_ranges, uint32_t count);
+    void share_runtime_args_with(std::shared_ptr<Kernel> owner);
+    const std::shared_ptr<Kernel>& runtime_args_owner() const { return runtime_args_owner_; }
 
     // Note: When watcher assert is enabled, vector is stored as [count | args...]
     std::vector<uint32_t>& common_runtime_args();
     RuntimeArgsData& common_runtime_args_data();
     void set_common_runtime_args_count(uint32_t count);
-    uint32_t get_common_runtime_args_count() const { return this->common_runtime_args_count_; }
+    uint32_t get_common_runtime_args_count() const {
+        return runtime_args_owner_ ? runtime_args_owner_->get_common_runtime_args_count() : common_runtime_args_count_;
+    }
 
     virtual bool configure(
         IDevice* device, const CoreCoord& logical_core, uint32_t base_address, const uint32_t offsets[]) const = 0;
@@ -379,6 +385,7 @@ protected:
     std::vector<TensorBindingSequenceHandle> tensor_binding_sequences_;
     // Metal 2.0: number of user CTA-vararg words at the start of compile_time_args_.
     uint32_t compile_time_vararg_count_{0};
+    std::shared_ptr<Kernel> runtime_args_owner_;
     std::vector<std::vector<std::vector<uint32_t>>> core_to_runtime_args_;
     std::vector<std::vector<RuntimeArgsData>> core_to_runtime_args_data_;
     uint32_t common_runtime_args_count_{0};

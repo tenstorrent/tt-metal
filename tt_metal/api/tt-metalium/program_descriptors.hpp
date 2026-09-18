@@ -171,6 +171,10 @@ struct KernelDescriptor {
     BufferBindings buffer_bindings;
     CommonBufferBindings common_buffer_bindings;
 
+    // Physical TRISC1/2 may borrow an earlier TRISC0 descriptor's runtime arguments
+    // and named runtime schema on the same cores. Borrowers supply no runtime payload.
+    std::optional<uint32_t> runtime_args_owner = std::nullopt;
+
     // Builder for dynamically-constructed runtime arg lists.  Buffer* entries
     // auto-register as buffer bindings; uint32_t entries embed their value.
     // The variant type is hidden — callers push typed values directly.

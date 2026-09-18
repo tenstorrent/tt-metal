@@ -515,6 +515,18 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
             }
             SetCommonRuntimeArgs(*this, kernel_handle, kernel_descriptor.common_runtime_args);
         }
+        if (kernel_descriptor.runtime_args_owner) {
+            const auto& named = kernel_descriptor.blaze_named_args;
+            TT_FATAL(
+                *kernel_descriptor.runtime_args_owner < kernel_handle && kernel_descriptor.runtime_args.empty() &&
+                    kernel_descriptor.common_runtime_args.empty() && named.named_common_runtime_args.empty() &&
+                    named.named_per_core_runtime_args.empty() && named.named_common_runtime_arg_arrays.empty() &&
+                    named.named_per_core_runtime_arg_arrays.empty() && kernel_descriptor.buffer_bindings.empty() &&
+                    kernel_descriptor.common_buffer_bindings.empty(),
+                "A runtime argument borrower must name an earlier owner and supply no runtime payload or bindings");
+            internal_->get_kernel(kernel_handle)
+                ->share_runtime_args_with(internal_->get_kernel(*kernel_descriptor.runtime_args_owner));
+        }
     }
 }
 

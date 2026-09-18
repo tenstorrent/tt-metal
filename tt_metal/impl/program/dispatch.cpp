@@ -177,12 +177,15 @@ uint32_t configure_rta_offsets_for_kernel_groups(
             }
         }
         uint32_t offset = 0;
+        std::unordered_map<const Kernel*, uint32_t> owner_offsets;
         kg->rta_sizes.resize(kg->kernel_ids.size());
         for (uint32_t idx = 0; idx < kg->kernel_ids.size(); idx++) {
             const auto& kernel = kernels.at(kg->kernel_ids[idx]);
-            kg->rta_sizes[idx] = max_rtas[idx] * sizeof(uint32_t);
-            uint32_t rta_offset = base_offset + offset;
-            offset += max_rtas[idx] * sizeof(uint32_t);
+            const auto& owner = kernel->runtime_args_owner();
+            kg->rta_sizes[idx] = owner ? 0 : max_rtas[idx] * sizeof(uint32_t);
+            uint32_t rta_offset = owner ? owner_offsets.at(owner.get()) : base_offset + offset;
+            owner_offsets.emplace(kernel.get(), rta_offset);
+            offset += kg->rta_sizes[idx];
             kernel->set_runtime_args_count(kg->core_ranges, max_rtas[idx]);
             // Per-kernel check: Only set actual offset if this kernel has RTAs
             if (max_rtas[idx] > 0) {
@@ -223,11 +226,15 @@ uint32_t configure_crta_offsets_for_kernel_groups(
         }
 
         uint32_t offset = 0;
+        std::unordered_map<const Kernel*, uint32_t> owner_offsets;
         kg->crta_offsets.resize(kg->kernel_ids.size());
         kg->crta_sizes.resize(kg->kernel_ids.size());
         for (uint32_t idx = 0; idx < kg->kernel_ids.size(); idx++) {
-            uint32_t size = crtas[idx] * sizeof(uint32_t);
-            kg->crta_offsets[idx] = crta_base_offset + offset;
+            const auto& kernel = kernels.at(kg->kernel_ids[idx]);
+            const auto& owner = kernel->runtime_args_owner();
+            uint32_t size = owner ? 0 : crtas[idx] * sizeof(uint32_t);
+            kg->crta_offsets[idx] = owner ? owner_offsets.at(owner.get()) : crta_base_offset + offset;
+            owner_offsets.emplace(kernel.get(), kg->crta_offsets[idx]);
             kg->crta_sizes[idx] = size;
             offset += size;
             offset = tt::align(offset, l1_alignment);
@@ -245,7 +252,7 @@ uint32_t configure_crta_offsets_for_kernel_groups(
         for (uint32_t idx = 0; idx < kg->kernel_ids.size(); idx++) {
             const auto& kernel = kernels.at(kg->kernel_ids[idx]);
             // Per-kernel check: Only set actual offset if this kernel has CRTAs
-            if (kg->crta_sizes[idx] > 0) {
+            if (!kernel->common_runtime_args().empty()) {
                 TT_FATAL(
                     kg->crta_offsets[idx] <= std::numeric_limits<uint16_t>::max(),
                     "CRTA offset {} overflows uint16_t",
@@ -1130,7 +1137,7 @@ BatchedTransfers assemble_runtime_args_commands(
         for (uint32_t idx = 0; idx < kg->kernel_ids.size(); idx++) {
             auto device_local_kernel_handle = get_device_local_kernel_handle(kg->kernel_ids[idx]);
             auto kernel = program.get_kernel(device_local_kernel_handle);
-            if (kernel->common_runtime_args().empty()) {
+            if (kernel->runtime_args_owner() || kernel->common_runtime_args().empty()) {
                 continue;
             }
             const uint32_t crta_offset = kg->crta_offsets[idx];
@@ -1189,7 +1196,7 @@ BatchedTransfers assemble_runtime_args_commands(
                             for (uint32_t idx = 0; idx < kg->kernel_ids.size(); idx++) {
                                 auto device_local_kernel_handle = get_device_local_kernel_handle(kg->kernel_ids[idx]);
                                 auto kernel = program.get_kernel(device_local_kernel_handle);
-                                if (!kernel->cores_with_runtime_args().empty()) {
+                                if (!kernel->runtime_args_owner() && !kernel->cores_with_runtime_args().empty()) {
                                     const auto& runtime_args_data = kernel->runtime_args(core_coord);
                                     unique_rt_args_data.back().emplace_back(
                                         RtaDataPair(kernel->runtime_args_data(core_coord), runtime_args_data));
