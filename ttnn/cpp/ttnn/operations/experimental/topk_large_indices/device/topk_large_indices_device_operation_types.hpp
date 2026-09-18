@@ -47,6 +47,13 @@ struct tensor_args_t {
     // Optional 1-element UINT32 row-major DRAM tensor used for trace-safe valid lengths.
     std::optional<Tensor> valid_length_tensor{std::nullopt};
     bool has_valid_length_metadata() const { return valid_length_tensor.has_value(); }
+    // Optional 1-element UINT32 row-major DRAM tensor holding the REAL token end. Without it the derived
+    // search length is valid_length_tensor[0] + valid_length_offset, i.e. the end of the PADDED window, so
+    // a partial chunk ranks columns the request never wrote. Supply it and the search length is capped at
+    // ceil32(valid_end), matching the score op's own cap -- pass BOTH ops the same bound or they drift: a
+    // looser score with a tighter top-k drops real keys, the reverse ranks a stale tail.
+    std::optional<Tensor> valid_end_tensor{std::nullopt};
+    bool has_valid_end_metadata() const { return valid_end_tensor.has_value(); }
 };
 
 using tensor_return_value_t = Tensor;

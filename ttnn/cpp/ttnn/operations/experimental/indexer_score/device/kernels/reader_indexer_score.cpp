@@ -120,6 +120,14 @@ constexpr uint32_t cb_meta_slot = get_compile_time_arg_val(slot_ct_base + 3);   
 // same way the AG reader bounds the identical word. Shape-derived, hence already hashed.
 constexpr uint32_t slot_cache_extent = get_compile_time_arg_val(slot_ct_base + 4);
 constexpr auto slot_meta_args = TensorAccessorArgs<slot_ct_base + 5>();
+// Real-token end (actual_end), same fixed-width discipline again: both factories always push
+// flag + rt base + a placeholder accessor, so these indices are valid unconditionally. When present the
+// derived kv_len below is capped at ceil32(valid_end), which is exactly the scalar path's
+// min(end_pos, ceil32(actual_end)); absent, the bound stays the padded-window end.
+constexpr uint32_t vend_ct_base = slot_meta_args.next_compile_time_args_offset();
+constexpr bool valid_end_from_metadata = get_compile_time_arg_val(vend_ct_base) != 0;
+constexpr uint32_t vend_rt_base = get_compile_time_arg_val(vend_ct_base + 1);
+constexpr auto vend_args = TensorAccessorArgs<vend_ct_base + 2>();
 
 // Thin alias over the shared block-cyclic invP map (tt::block_cyclic, block_cyclic_remap.hpp): identity for
 // contiguous K, invP for the per-SP-shard block-cyclic layout. One name shared between the non-fused reader and
@@ -798,7 +806,23 @@ void kernel_main() {
             get_common_arg_val<uint32_t>(meta_rt_base + 2),  // tp_index
             meta_Sq);
         // Derive kv_len from the same position used for causal geometry.
-        const uint32_t derived_kv_len_tiles = chunk_start_idx / 32 + chunk_global_tiles;
+        uint32_t derived_kv_len_tiles = chunk_start_idx / 32 + chunk_global_tiles;
+        // Cap at the REAL token end when the host supplied it. Uncapped, this is the padded-window end, so
+        // on a partial chunk the score covers columns this request never wrote: harmless for real query
+        // rows (those keys sit at s > t and the causal edge masks them) but NOT for pad rows, whose top-k
+        // then differs from the scalar path's. Reading actual_end here reproduces the scalar bound exactly,
+        // and narrows the scored extent at the same time. ceil to the 32-row write grid, matching
+        // write_k's clamp and the scalar path's own rounding.
+        if constexpr (valid_end_from_metadata) {
+            // derived_l1 is reused as the NoC landing slot: chunk_start_idx has already been consumed into
+            // a local above, and the four mailbox words are not written until below, so the page is free.
+            const uint32_t valid_end = trace_metadata::read_metadata_scalar_u32(
+                noc, vend_args, get_common_arg_val<uint32_t>(vend_rt_base), derived_l1);
+            const uint32_t valid_end_tiles = (valid_end + 31) / 32;
+            if (valid_end_tiles < derived_kv_len_tiles) {
+                derived_kv_len_tiles = valid_end_tiles;
+            }
+        }
         kv_len_tiles = derived_kv_len_tiles < k_len_tiles ? derived_kv_len_tiles : k_len_tiles;
 
         const IndexerScoreMetadataBounds bounds{

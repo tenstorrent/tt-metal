@@ -309,6 +309,9 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
     reader_ct.push_back(0u);
     reader_ct.insert(reader_ct.end(), 3, 0u);
     tt::tt_metal::TensorAccessorArgs(*q.buffer()).append_to(reader_ct);
+    reader_ct.push_back(0u);
+    reader_ct.push_back(0u);
+    tt::tt_metal::TensorAccessorArgs(*q.buffer()).append_to(reader_ct);
 
     std::vector<uint32_t> writer_ct = common_ct;
     writer_ct.push_back(0u);                             // fused_ring off

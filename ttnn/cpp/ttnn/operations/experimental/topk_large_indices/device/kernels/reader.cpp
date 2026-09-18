@@ -31,6 +31,10 @@ void kernel_main() {
     constexpr uint32_t meta_cb = get_compile_time_arg_val(metadata_args_base + 1);
     constexpr uint32_t meta_offset = get_compile_time_arg_val(metadata_args_base + 2);
     constexpr auto meta_args = TensorAccessorArgs<metadata_args_base + 3>();
+    // Real-token-end block, appended after the accessor above so those offsets are untouched.
+    constexpr uint32_t vend_args_base = meta_args.next_compile_time_args_offset();
+    constexpr bool valid_end_from_metadata = get_compile_time_arg_val(vend_args_base) != 0;
+    constexpr auto vend_args = TensorAccessorArgs<vend_args_base + 1>();
 
     const auto input = TensorAccessor(input_args, src_addr, input_page_bytes);
     const uint32_t input_width = input_page_bytes / element_bytes;
@@ -53,6 +57,17 @@ void kernel_main() {
                                     (metadata_length != 0 || meta_offset != 0);
         ASSERT(metadata_valid);
         search_len = metadata_valid ? metadata_length + meta_offset : input_width;
+        if constexpr (valid_end_from_metadata) {
+            // Same scratch page as the read above: the helper invalidates the L1 line before loading, which
+            // is exactly what it documents for a reused address.
+            const uint32_t valid_end =
+                trace_metadata::read_metadata_scalar_u32(
+                    noc, vend_args, get_common_arg_val<uint32_t>(topk_common_args::valid_end_address), scratch);
+            const uint32_t capped = ((valid_end + 31) / 32) * 32;
+            if (capped < search_len) {
+                search_len = capped;
+            }
+        }
         bounds = calculate_topk_bounds(search_len, llk_k);
         CoreLocalMem<TopkMetadataBounds> mailbox(scratch);
         mailbox->num_chunks = bounds.num_chunks;
