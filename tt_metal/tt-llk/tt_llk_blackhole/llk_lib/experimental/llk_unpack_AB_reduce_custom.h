@@ -38,6 +38,11 @@ inline void _llk_unpack_AB_reduce_block_max_row_mop_config_()
 {
     // Constraint on the outerloop and innerloop dim
     static_assert(block_ct_dim < 128, "block_ct_dim must be less than 128");
+    // respect_trigger halves the MOP and runs it twice, so it publishes 2 * (block_ct_dim / 2) tiles;
+    // the math side consumes block_ct_dim.
+    static_assert(
+        !respect_trigger || (block_ct_dim % 2 == 0),
+        "respect_trigger requires an even block_ct_dim so the split unpack MOP publishes every tile the math side consumes");
     // Single UNPACR because TTI_SETADCXX for UNP_A is 1023, increment Z counter to point to the next tile, set dvalid each time
     static constexpr std::uint32_t unpack_srca_op =
         TT_OP_UNPACR(SrcA, 0b00000001 /* Z_ch0_inc and Z_ch1_inc */, 0, 0, 0, 1, 1 /* Set Dvalid */, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
