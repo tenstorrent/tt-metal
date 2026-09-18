@@ -74,95 +74,101 @@ struct Borrowable {
     bool C = false;
 };
 
-uint64_t size_rings(
-    UnifiedMatmulPlan& plan,
+// Everything about the rings that follows from one candidate K chunk. Pure: the plan is only read, so the
+// K chunk search can size several candidates and the plan is written exactly once with the winner.
+struct RingSizes {
+    uint32_t K_chunk_tiles = 0;
+    uint32_t num_K_chunks = 0;
+    bool packer_l1_acc_en = false;
+    tt::DataFormat C_partials_format{};
+    uint32_t A_slot_bytes = 0;
+    uint32_t B_slot_bytes = 0;
+    uint32_t C_slot_bytes = 0;
+    uint32_t C_partials_slot_bytes = 0;
+    uint32_t A_slice_ring_slots = 0;
+    uint32_t B_slice_ring_slots = 0;
+    uint32_t MN_chunk_ring_slots = 0;
+    uint32_t C_partials_ring_slots = 0;
+    bool alias_C_partials_onto_MN_chunk = false;
+    bool borrow_A = false;
+    bool borrow_B = false;
+    bool borrow_C = false;
+    uint64_t l1_bytes = 0;
+
+    bool fits(uint64_t l1_budget) const {
+        const uint64_t rings[] = {
+            (uint64_t)A_slice_ring_slots * A_slot_bytes,
+            (uint64_t)B_slice_ring_slots * B_slot_bytes,
+            (uint64_t)MN_chunk_ring_slots * C_slot_bytes,
+            (uint64_t)C_partials_ring_slots * C_partials_slot_bytes};
+        for (uint64_t ring_bytes : rings) {
+            if (ring_bytes > MAX_DFB_RING_BYTES) {
+                return false;
+            }
+        }
+        return l1_bytes <= l1_budget;
+    }
+};
+
+RingSizes size_rings(
+    const UnifiedMatmulPlan& plan,
     uint32_t K_chunk_tiles,
     bool fp32_dest_acc_en,
     bool packer_l1_acc,
     const Borrowable& borrowable) {
-    plan.K_chunk_tiles = K_chunk_tiles;
-    plan.num_K_chunks = plan.K_tiles / K_chunk_tiles;
+    RingSizes r;
+    r.K_chunk_tiles = K_chunk_tiles;
+    r.num_K_chunks = plan.K_tiles / K_chunk_tiles;
 
     // The packer accumulates partials in L1 only when there are enough K chunks for the reconfig overhead
-    // to pay off (the last step spills and reloads either way, so more than two).
-    plan.packer_l1_acc_en = packer_l1_acc && plan.num_K_chunks > 2;
-    plan.C_partials_format = plan.packer_l1_acc_en
-                                 ? (fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b)
-                                 : (fp32_dest_acc_en ? tt::DataFormat::Float32 : plan.C_format);
+    // to pay off (the last K chunk spills and reloads either way, so more than two).
+    r.packer_l1_acc_en = packer_l1_acc && r.num_K_chunks > 2;
+    r.C_partials_format = r.packer_l1_acc_en ? (fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b)
+                                             : (fp32_dest_acc_en ? tt::DataFormat::Float32 : plan.C_format);
+    r.C_slot_bytes = tt::tile_size(plan.C_format);
+    r.C_partials_slot_bytes = tt::tile_size(r.C_partials_format);
 
-    // Interleaved tiles live in DRAM at the DRAM-aligned stride and the reader copies at that stride;
-    // a no-op for every 32x32 format.
-    const uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
-    plan.A_slot_bytes = tt::align(tt::tile_size(plan.A_format), dram_alignment);
-    plan.B_slot_bytes = tt::align(tt::tile_size(plan.B_format), dram_alignment);
-    plan.C_slot_bytes = tt::tile_size(plan.C_format);
-    plan.C_partials_slot_bytes = tt::tile_size(plan.C_partials_format);
-
-    const uint32_t A_slice_tiles = plan.MN_chunk_M_tiles * K_chunk_tiles;
-    const uint32_t B_slice_tiles = K_chunk_tiles * plan.MN_chunk_N_tiles;
     const uint32_t MN_chunk_tiles = plan.MN_chunk_M_tiles * plan.MN_chunk_N_tiles;
-    // Double-buffer the slices whenever more than one slice passes through the ring.
-    const bool more_than_one_slice = (uint64_t)plan.batch_size * plan.max_MN_chunks_per_core * plan.num_K_chunks > 1;
+    r.MN_chunk_ring_slots = MN_chunk_tiles;
+    r.C_partials_ring_slots = MN_chunk_tiles;
+
+    // Copied operands: interleaved tiles live in DRAM at the DRAM-aligned stride and the reader copies at that
+    // stride (a no-op for every 32x32 format); double-buffer whenever more than one slice passes through.
+    // Borrowed operands: the ring is the resident shard itself, natural tile stride, one slot per shard tile.
+    // A can only be borrowed when the single K chunk covers all of K; a shard too large for a TRISC ring
+    // takes the copy path.
+    const uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
+    const bool more_than_one_slice = (uint64_t)plan.batch_size * plan.max_MN_chunks_per_core * r.num_K_chunks > 1;
     const uint32_t slice_ring_depth = more_than_one_slice ? 2 : 1;
-    plan.A_slice_ring_slots = A_slice_tiles * slice_ring_depth;
-    plan.B_slice_ring_slots = B_slice_tiles * slice_ring_depth;
-    plan.MN_chunk_ring_slots = MN_chunk_tiles;
-    plan.C_partials_ring_slots = MN_chunk_tiles;
+    r.borrow_A = borrowable.A && r.num_K_chunks == 1 &&
+                 (uint64_t)plan.MN_chunk_M_tiles * plan.K_tiles * tt::tile_size(plan.A_format) <= MAX_DFB_RING_BYTES;
+    r.borrow_B = borrowable.B &&
+                 (uint64_t)plan.K_tiles * plan.MN_chunk_N_tiles * tt::tile_size(plan.B_format) <= MAX_DFB_RING_BYTES;
+    r.borrow_C = borrowable.C;
+    r.A_slot_bytes =
+        r.borrow_A ? tt::tile_size(plan.A_format) : tt::align(tt::tile_size(plan.A_format), dram_alignment);
+    r.B_slot_bytes =
+        r.borrow_B ? tt::tile_size(plan.B_format) : tt::align(tt::tile_size(plan.B_format), dram_alignment);
+    r.A_slice_ring_slots =
+        r.borrow_A ? plan.MN_chunk_M_tiles * plan.K_tiles : plan.MN_chunk_M_tiles * K_chunk_tiles * slice_ring_depth;
+    r.B_slice_ring_slots =
+        r.borrow_B ? plan.K_tiles * plan.MN_chunk_N_tiles : K_chunk_tiles * plan.MN_chunk_N_tiles * slice_ring_depth;
 
-    // Aliasing C_partials onto MN_chunk when a core produces more than one MN chunk (counting batches) is a race: the
-    // writer may still be draining MN chunk i from MN_chunk while the compute packs MN chunk i+1's first partials into
-    // the same bytes. Alias only when the partials can never be live while MN_chunk holds unread data: a single MN
-    // chunk per core, or no partials at all (one K chunk).
-    const bool partials_ever_written = plan.num_K_chunks > 1;
+    // Aliasing C_partials onto MN_chunk when a core produces more than one MN chunk (counting batches) is a
+    // race: the writer may still be draining chunk i from MN_chunk while the compute packs chunk i+1's first
+    // partials into the same bytes. Alias only when the partials can never be live while MN_chunk holds
+    // unread data: a single chunk per core, or no partials at all (one K chunk).
+    const bool partials_ever_written = r.num_K_chunks > 1;
     const bool one_MN_chunk_per_core = plan.batch_size == 1 && plan.max_MN_chunks_per_core == 1;
-    plan.alias_C_partials_onto_MN_chunk =
-        (plan.C_partials_format == plan.C_format) && (!partials_ever_written || one_MN_chunk_per_core);
+    r.alias_C_partials_onto_MN_chunk =
+        (r.C_partials_format == plan.C_format) && (!partials_ever_written || one_MN_chunk_per_core);
 
-    // Borrowed rings are the shards themselves: natural tile stride, one slot per shard tile, no L1 cost.
-    // A can only be borrowed when the single K chunk covers all of K. A shard too large for a TRISC ring
-    // falls back to the copy path.
-    plan.borrow_A = borrowable.A && plan.num_K_chunks == 1;
-    plan.borrow_B = borrowable.B;
-    plan.borrow_C = borrowable.C;
-    if (plan.borrow_A) {
-        plan.A_slot_bytes = tt::tile_size(plan.A_format);
-        plan.A_slice_ring_slots = plan.MN_chunk_M_tiles * plan.K_tiles;
-        plan.borrow_A = (uint64_t)plan.A_slice_ring_slots * plan.A_slot_bytes <= MAX_DFB_RING_BYTES;
-    }
-    if (plan.borrow_B) {
-        plan.B_slot_bytes = tt::tile_size(plan.B_format);
-        plan.B_slice_ring_slots = plan.K_tiles * plan.MN_chunk_N_tiles;
-        plan.borrow_B = (uint64_t)plan.B_slice_ring_slots * plan.B_slot_bytes <= MAX_DFB_RING_BYTES;
-    }
-    if (!plan.borrow_A) {
-        plan.A_slot_bytes = tt::align(tt::tile_size(plan.A_format), dram_alignment);
-        plan.A_slice_ring_slots = A_slice_tiles * slice_ring_depth;
-    }
-    if (!plan.borrow_B) {
-        plan.B_slot_bytes = tt::align(tt::tile_size(plan.B_format), dram_alignment);
-        plan.B_slice_ring_slots = B_slice_tiles * slice_ring_depth;
-    }
-
-    plan.l1_bytes =
-        (plan.borrow_A ? 0 : (uint64_t)plan.A_slice_ring_slots * plan.A_slot_bytes) +
-        (plan.borrow_B ? 0 : (uint64_t)plan.B_slice_ring_slots * plan.B_slot_bytes) +
-        (plan.borrow_C ? 0 : (uint64_t)plan.MN_chunk_ring_slots * plan.C_slot_bytes) +
-        (plan.alias_C_partials_onto_MN_chunk ? 0 : (uint64_t)plan.C_partials_ring_slots * plan.C_partials_slot_bytes);
-    return plan.l1_bytes;
-}
-
-bool rings_fit(const UnifiedMatmulPlan& plan, uint64_t l1_budget) {
-    const uint64_t rings[] = {
-        (uint64_t)plan.A_slice_ring_slots * plan.A_slot_bytes,
-        (uint64_t)plan.B_slice_ring_slots * plan.B_slot_bytes,
-        (uint64_t)plan.MN_chunk_ring_slots * plan.C_slot_bytes,
-        (uint64_t)plan.C_partials_ring_slots * plan.C_partials_slot_bytes};
-    for (uint64_t ring_bytes : rings) {
-        if (ring_bytes > MAX_DFB_RING_BYTES) {
-            return false;
-        }
-    }
-    return plan.l1_bytes <= l1_budget;
+    // Borrowed rings are the tensors' own memory and cost nothing here.
+    r.l1_bytes = (r.borrow_A ? 0 : (uint64_t)r.A_slice_ring_slots * r.A_slot_bytes) +
+                 (r.borrow_B ? 0 : (uint64_t)r.B_slice_ring_slots * r.B_slot_bytes) +
+                 (r.borrow_C ? 0 : (uint64_t)r.MN_chunk_ring_slots * r.C_slot_bytes) +
+                 (r.alias_C_partials_onto_MN_chunk ? 0 : (uint64_t)r.C_partials_ring_slots * r.C_partials_slot_bytes);
+    return r;
 }
 
 }  // namespace CMAKE_UNIQUE_NAMESPACE
@@ -182,7 +188,8 @@ UnifiedMatmulPlan plan_unified_matmul(
     const ttnn::Tensor& A,
     const ttnn::Tensor& B,
     const operations::experimental::quasar::matmul::MatmulUnifiedProgramConfig& config,
-    const MatmulParams& attributes) {
+    const MatmulParams& attributes,
+    const std::optional<ttnn::Tensor>& output) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     UnifiedMatmulPlan plan{};
 
@@ -334,44 +341,47 @@ UnifiedMatmulPlan plan_unified_matmul(
     borrowable.B = one_MN_chunk_per_core_no_batch && MN_chunks_down_M == 1 &&
                    shard_matches(B, plan.K_tiles, plan.MN_chunk_N_tiles);
     // C: packed straight into the shard when subblock-major pack order equals the shard's row-major order.
-    borrowable.C = attributes.output_mem_config.is_sharded() &&
-                   attributes.output_mem_config.buffer_type() == tt::tt_metal::BufferType::L1 &&
-                   one_MN_chunk_per_core_no_batch && plan.subblock_N_tiles == plan.MN_chunk_N_tiles;
+    // A caller-provided output must really be laid out as the plan assumes; one the op allocates from this plan
+    // is, by construction.
+    const bool C_shard_matches = output.has_value()
+                                     ? shard_matches(output.value(), plan.MN_chunk_M_tiles, plan.MN_chunk_N_tiles)
+                                     : (attributes.output_mem_config.is_sharded() &&
+                                        attributes.output_mem_config.buffer_type() == tt::tt_metal::BufferType::L1);
+    borrowable.C = C_shard_matches && one_MN_chunk_per_core_no_batch && plan.subblock_N_tiles == plan.MN_chunk_N_tiles;
 
     // ---- Formats, K chunk and ring sizing ----
     plan.A_format = tt::tt_metal::datatype_to_dataformat_converter(A.dtype());
     plan.B_format = tt::tt_metal::datatype_to_dataformat_converter(B.dtype());
     plan.C_format = tt::tt_metal::datatype_to_dataformat_converter(attributes.output_dtype.value());
     const uint64_t l1_budget = l1_budget_bytes(A.device());
+    std::optional<RingSizes> chosen;
     if (config.K_chunk_tiles == 0) {
-        uint32_t chosen = 0;
         // A resident A shard is only borrowable with a single K chunk, so try that first (main pins
         // in0_block_w == K for height-sharded in0 for the same reason).
         if (borrowable.A) {
-            size_rings(plan, plan.K_tiles, fp32_dest_acc_en, packer_l1_acc, borrowable);
-            if (plan.borrow_A && rings_fit(plan, l1_budget)) {
-                chosen = plan.K_tiles;
+            const RingSizes candidate = size_rings(plan, plan.K_tiles, fp32_dest_acc_en, packer_l1_acc, borrowable);
+            if (candidate.borrow_A && candidate.fits(l1_budget)) {
+                chosen = candidate;
             }
         }
         // Otherwise the largest divisor of K_tiles (capped) whose rings fit; 1 is the floor and must fit.
         for (uint32_t K_chunk_tiles = std::min<uint32_t>(plan.K_tiles, MAX_AUTO_K_CHUNK_TILES);
-             chosen == 0 && K_chunk_tiles >= 1;
+             !chosen.has_value() && K_chunk_tiles >= 1;
              --K_chunk_tiles) {
             if (plan.K_tiles % K_chunk_tiles != 0) {
                 continue;
             }
-            size_rings(plan, K_chunk_tiles, fp32_dest_acc_en, packer_l1_acc, borrowable);
-            if (rings_fit(plan, l1_budget)) {
-                chosen = K_chunk_tiles;
+            const RingSizes candidate = size_rings(plan, K_chunk_tiles, fp32_dest_acc_en, packer_l1_acc, borrowable);
+            if (candidate.fits(l1_budget)) {
+                chosen = candidate;
             }
         }
         TT_FATAL(
-            chosen > 0,
+            chosen.has_value(),
             "MatmulUnifiedProgramConfig: a {}x{}-tile MN chunk does not fit L1 even with K_chunk_tiles=1 "
-            "(needs {} B, budget {} B, max ring {} B); shrink MN_chunk_M_tiles / MN_chunk_N_tiles",
+            "(budget {} B, max ring {} B); shrink MN_chunk_M_tiles / MN_chunk_N_tiles",
             plan.MN_chunk_M_tiles,
             plan.MN_chunk_N_tiles,
-            plan.l1_bytes,
             l1_budget,
             MAX_DFB_RING_BYTES);
     } else {
@@ -380,22 +390,40 @@ UnifiedMatmulPlan plan_unified_matmul(
             "K_chunk_tiles ({}) must divide K_tiles ({})",
             config.K_chunk_tiles,
             plan.K_tiles);
-        size_rings(plan, config.K_chunk_tiles, fp32_dest_acc_en, packer_l1_acc, borrowable);
+        chosen = size_rings(plan, config.K_chunk_tiles, fp32_dest_acc_en, packer_l1_acc, borrowable);
         TT_FATAL(
-            rings_fit(plan, l1_budget),
+            chosen->fits(l1_budget),
             "MatmulUnifiedProgramConfig: rings for a {}x{}-tile MN chunk with K_chunk_tiles={} do not fit "
             "(needs {} B, budget {} B, max ring {} B: A slice {} B, B slice {} B, MN chunk {} B, C partials {} B)",
             plan.MN_chunk_M_tiles,
             plan.MN_chunk_N_tiles,
-            plan.K_chunk_tiles,
-            plan.l1_bytes,
+            chosen->K_chunk_tiles,
+            chosen->l1_bytes,
             l1_budget,
             MAX_DFB_RING_BYTES,
-            (uint64_t)plan.A_slice_ring_slots * plan.A_slot_bytes,
-            (uint64_t)plan.B_slice_ring_slots * plan.B_slot_bytes,
-            (uint64_t)plan.MN_chunk_ring_slots * plan.C_slot_bytes,
-            (uint64_t)plan.C_partials_ring_slots * plan.C_partials_slot_bytes);
+            (uint64_t)chosen->A_slice_ring_slots * chosen->A_slot_bytes,
+            (uint64_t)chosen->B_slice_ring_slots * chosen->B_slot_bytes,
+            (uint64_t)chosen->MN_chunk_ring_slots * chosen->C_slot_bytes,
+            (uint64_t)chosen->C_partials_ring_slots * chosen->C_partials_slot_bytes);
     }
+    // The plan takes the winning candidate exactly once; nothing downstream adjusts it.
+    plan.K_chunk_tiles = chosen->K_chunk_tiles;
+    plan.num_K_chunks = chosen->num_K_chunks;
+    plan.packer_l1_acc_en = chosen->packer_l1_acc_en;
+    plan.C_partials_format = chosen->C_partials_format;
+    plan.A_slot_bytes = chosen->A_slot_bytes;
+    plan.B_slot_bytes = chosen->B_slot_bytes;
+    plan.C_slot_bytes = chosen->C_slot_bytes;
+    plan.C_partials_slot_bytes = chosen->C_partials_slot_bytes;
+    plan.A_slice_ring_slots = chosen->A_slice_ring_slots;
+    plan.B_slice_ring_slots = chosen->B_slice_ring_slots;
+    plan.MN_chunk_ring_slots = chosen->MN_chunk_ring_slots;
+    plan.C_partials_ring_slots = chosen->C_partials_ring_slots;
+    plan.alias_C_partials_onto_MN_chunk = chosen->alias_C_partials_onto_MN_chunk;
+    plan.borrow_A = chosen->borrow_A;
+    plan.borrow_B = chosen->borrow_B;
+    plan.borrow_C = chosen->borrow_C;
+    plan.l1_bytes = chosen->l1_bytes;
 
     // ---- Sharded output: one MN chunk per core, batch 1, and a grid the accessor maps the same way ----
     if (attributes.output_mem_config.is_sharded()) {
@@ -447,7 +475,8 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
     const tt::tt_metal::MeshTensor& C = tensor_return_value.at(0).mesh_tensor();
     tt::tt_metal::IDevice* device = &A.mutable_device();
 
-    const UnifiedMatmulPlan plan = plan_unified_matmul(A_tensor, B_tensor, config, operation_attributes);
+    const UnifiedMatmulPlan plan =
+        plan_unified_matmul(A_tensor, B_tensor, config, operation_attributes, tensor_return_value.at(0));
 
     // ---- Tensor parameters: the kernels' tensor accessors are generated from these specs ----
     Group<TensorParameter> tensor_parameters = {
@@ -458,29 +487,19 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
 
     // ---- Dataflow-buffer rings ----
     const tt::tt_metal::Tile C_tile = C.tensor_spec().tile();
-    // The C tensor handed in may be a caller-provided output whose shard grid differs from the plan's; only
-    // pack in place when it really is laid out as the plan assumed.
-    const bool borrow_C = plan.borrow_C && C.is_sharded() &&
-                          C.memory_config().buffer_type() == tt::tt_metal::BufferType::L1 &&
-                          corerange_to_cores(
-                              C.shard_spec().value().grid,
-                              std::nullopt,
-                              C.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR) == plan.cores &&
-                          C.shard_spec().value().shape[0] == plan.MN_chunk_M_tiles * TILE_HEIGHT &&
-                          C.shard_spec().value().shape[1] == plan.MN_chunk_N_tiles * TILE_WIDTH;
     log_debug(
         tt::LogOp,
         "MatmulUnifiedProgramConfig: borrow A={} B={} C={} (MN chunk {}x{}, subblock {}x{}, K chunk {} of {} tiles)",
         plan.borrow_A,
         plan.borrow_B,
-        borrow_C,
+        plan.borrow_C,
         plan.MN_chunk_M_tiles,
         plan.MN_chunk_N_tiles,
         plan.subblock_M_tiles,
         plan.subblock_N_tiles,
         plan.K_chunk_tiles,
         plan.K_tiles);
-    if (C.is_sharded() && !borrow_C) {
+    if (C.is_sharded() && !plan.borrow_C) {
         log_warning(
             tt::LogOp,
             "MatmulUnifiedProgramConfig: sharded C is copied by the writer instead of packed in place. Packing in "
@@ -520,7 +539,7 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
             .data_format_metadata = plan.C_format,
             .tile_format_metadata = C_tile,
         };
-        if (borrow_C) {
+        if (plan.borrow_C) {
             MN_chunk_dfb.borrowed_from = C_TENSOR;  // finished tiles are packed straight into the C shard
         }
         DataflowBufferSpec C_partials_dfb{
@@ -533,7 +552,7 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
         if (plan.alias_C_partials_onto_MN_chunk) {
             MN_chunk_dfb.advanced_options.alias_with = {C_PARTIALS_DFB};
             C_partials_dfb.advanced_options.alias_with = {MN_CHUNK_DFB};
-            if (borrow_C) {
+            if (plan.borrow_C) {
                 C_partials_dfb.borrowed_from = C_TENSOR;  // partials accumulate in the shard too
             }
         }
@@ -545,18 +564,10 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
 
     // ---- Reader ----
     const uint32_t A_last_K_tile_valid_columns = A.logical_shape()[-1] % TILE_WIDTH;
-    std::map<std::string, std::string> reader_defines_map;
-    if (plan.borrow_A) {
-        reader_defines_map["A_BORROWED"] = "1";
-    }
-    if (plan.borrow_B) {
-        reader_defines_map["B_BORROWED"] = "1";
-    }
-    KernelSpec::CompilerOptions::Defines reader_defines(reader_defines_map);
     KernelSpec reader{
         .unique_id = READER_KERNEL,
         .source = std::filesystem::path(std::string(KERNEL_DIR) + "dataflow/unified_matmul_reader.cpp"),
-        .compiler_options = {.defines = reader_defines},
+        .compiler_options = {},
         .dfb_bindings = {ProducerOf(A_SLICE_DFB, "A_slice"), ProducerOf(B_SLICE_DFB, "B_slice")},
         .tensor_bindings =
             {
@@ -575,6 +586,8 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
                 {"K_chunk_tiles", plan.K_chunk_tiles},
                 {"num_K_chunks", plan.num_K_chunks},
                 {"A_last_K_tile_valid_columns", A_last_K_tile_valid_columns},
+                {"A_borrowed", plan.borrow_A ? 1u : 0u},
+                {"B_borrowed", plan.borrow_B ? 1u : 0u},
             },
         .runtime_arg_schema =
             {.runtime_arg_names = {"first_MN_chunk_M_tile", "first_MN_chunk_N_tile", "num_MN_chunks"}},
@@ -583,15 +596,10 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
     };
 
     // ---- Writer ----
-    std::map<std::string, std::string> writer_defines_map;
-    if (borrow_C) {
-        writer_defines_map["C_BORROWED"] = "1";
-    }
-    KernelSpec::CompilerOptions::Defines writer_defines(writer_defines_map);
     KernelSpec writer{
         .unique_id = WRITER_KERNEL,
         .source = std::filesystem::path(std::string(KERNEL_DIR) + "dataflow/unified_matmul_writer.cpp"),
-        .compiler_options = {.defines = writer_defines},
+        .compiler_options = {},
         .dfb_bindings = {ConsumerOf(MN_CHUNK_DFB, "MN_chunk")},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = C_TENSOR, .accessor_name = "C"}},
         .compile_time_args =
@@ -603,6 +611,7 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
                 {"MN_chunk_N_tiles", plan.MN_chunk_N_tiles},
                 {"subblock_M_tiles", plan.subblock_M_tiles},
                 {"subblock_N_tiles", plan.subblock_N_tiles},
+                {"C_borrowed", plan.borrow_C ? 1u : 0u},
             },
         .runtime_arg_schema =
             {.runtime_arg_names = {"first_MN_chunk_M_tile", "first_MN_chunk_N_tile", "num_MN_chunks"}},

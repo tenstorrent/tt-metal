@@ -1117,6 +1117,7 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
         [input_tensor_a,
          input_tensor_b,
          optional_bias,
+         &optional_output_tensors,
          a_shape_padded,
          b_shape_padded,
          in0_tile,
@@ -1845,7 +1846,12 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
                 TT_FATAL(
                     !optional_bias.has_value(),
                     "MatmulUnifiedProgramConfig does not fuse bias; ttnn::matmul applies it as a separate add");
-                (void)plan_unified_matmul(input_tensor_a, input_tensor_b, program_config, attributes);
+                (void)plan_unified_matmul(
+                    input_tensor_a,
+                    input_tensor_b,
+                    program_config,
+                    attributes,
+                    optional_output_tensors.empty() ? std::nullopt : optional_output_tensors.at(0));
             } else {
                 TT_FATAL(
                     input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
@@ -2182,8 +2188,9 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
                     // One MN chunk of C per core; the shard grid is the active cores in assignment order, so
                     // the accessor's shard -> core mapping is the factory's MN chunk -> core mapping and every
                     // core writes its own shard.
+                    // Reached only when no output tensor was supplied, so C is allocated from this plan.
                     const UnifiedMatmulPlan plan =
-                        plan_unified_matmul(input_tensor_a, input_tensor_b, program_config, attributes);
+                        plan_unified_matmul(input_tensor_a, input_tensor_b, program_config, attributes, std::nullopt);
                     const CoreRangeSet grid(ttsl::Span<const CoreCoord>(plan.cores));
                     const ShardOrientation orientation =
                         plan.row_major_cores ? ShardOrientation::ROW_MAJOR : ShardOrientation::COL_MAJOR;

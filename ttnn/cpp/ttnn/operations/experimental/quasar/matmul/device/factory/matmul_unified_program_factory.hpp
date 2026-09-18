@@ -89,11 +89,14 @@ struct UnifiedMatmulPlan {
     tt::tt_metal::TensorMemoryLayout sharded_output_layout() const;
 };
 
+// `output` is the C tensor when the caller supplied one (or the op already created it); it decides whether
+// C can be packed in place. Without it the op allocates C from the plan, which matches by construction.
 UnifiedMatmulPlan plan_unified_matmul(
     const ttnn::Tensor& input_tensor_a,
     const ttnn::Tensor& input_tensor_b,
     const operations::experimental::quasar::matmul::MatmulUnifiedProgramConfig& config,
-    const MatmulParams& attributes);
+    const MatmulParams& attributes,
+    const std::optional<ttnn::Tensor>& output);
 
 struct MatmulUnifiedProgramFactory {
     static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
