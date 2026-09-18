@@ -110,6 +110,26 @@ def _apply_ftz(result: torch.Tensor, data_format: DataFormat) -> torch.Tensor:
     ).to(result.dtype)
 
 
+def _flush_product_underflow(t1, t2, result, exponent_bias):
+    """Zero the products the FPU lane drops before it renormalises them.
+
+    The lane adds the two Src exponents and rebiases into Dest's range; a term
+    whose exponent is at or below zero there is flushed whole. That decision is
+    taken before the mantissa product can carry into the next binade, so it is
+    one binade coarser than "the result is subnormal in Dest".
+    """
+    a = t1.to(torch.float32).abs()
+    b = t2.to(torch.float32).abs()
+    live = (a > 0) & (b > 0)
+    ones = torch.ones_like(a)
+    exp_sum = torch.floor(torch.log2(torch.where(live, a, ones))) + torch.floor(
+        torch.log2(torch.where(live, b, ones))
+    )
+    return torch.where(
+        live & (exp_sum + exponent_bias <= 0), torch.zeros_like(result), result
+    )
+
+
 def _flush_subnormals_of_dtype(result: torch.Tensor) -> torch.Tensor:
     """Flush values that are subnormal in *result*'s own floating-point dtype to zero.
 
@@ -1636,7 +1656,11 @@ class BroadcastGolden:
         if broadcast_type not in self.broadcast_handlers:
             raise ValueError(f"Unsupported broadcast type: {broadcast_type}")
 
-        torch_format = format_dict[data_format]
+        # Hold the operand in its own format, not the output's. The hardware unpacks src_B from
+        # its L1 encoding and broadcasts that, so quantizing to the output format here rounds the
+        # value before any of it is picked: a Float16 operand into a bfloat16-backed output --
+        # every MX format among them -- loses three mantissa bits it never loses on the device.
+        torch_format = format_dict[input_format or data_format]
 
         # Convert input to tensor
         if isinstance(operand, torch.Tensor):
@@ -3422,7 +3446,14 @@ class EltwiseBinaryGolden(FidelityMasking):
     _UNSET = object()
 
     def _compute_eltwise(
-        self, op, t1, t2, math_format_for_fidelity, math_fidelity, keep_float32=False
+        self,
+        op,
+        t1,
+        t2,
+        math_format_for_fidelity,
+        math_fidelity,
+        keep_float32=False,
+        exponent_bias=127,
     ):
         """Compute a single eltwise operation with fidelity masking.
 
@@ -3458,6 +3489,9 @@ class EltwiseBinaryGolden(FidelityMasking):
                     result += phase_result
         else:
             result = self.ops[op](t1, t2)
+
+        if op == MathOperation.Elwmul:
+            result = _flush_product_underflow(t1, t2, result, exponent_bias)
 
         return result
 
@@ -3610,6 +3644,7 @@ class EltwiseBinaryGolden(FidelityMasking):
                         math_format_for_fidelity,
                         math_fidelity,
                         keep_float32=True,
+                        exponent_bias=15 if hw_dest_dtype is torch.float16 else 127,
                     )
                     if block_acc is None:
                         block_acc = tile_result_f32.to(hw_dest_dtype)
@@ -3628,6 +3663,7 @@ class EltwiseBinaryGolden(FidelityMasking):
                 t2,
                 math_format_for_fidelity,
                 math_fidelity,
+                exponent_bias=15 if hw_dest_dtype is torch.float16 else 127,
             )
 
         # Quantize output to match what hardware packs back into L1.
@@ -5069,10 +5105,16 @@ class SdpaSfpuGolden:
 class SdpaCorrectionGolden:
     """Golden for calculate_fused_max_sub_exp_add_tile in ckernel_sfpu_sdpa.h."""
 
-    def __call__(self, tiles, scale: float):
-        prev_max, worker_max, cur_max_seed, prev_sum, worker_sum = (
-            t.to(torch.float32) for t in tiles
-        )
+    def __call__(self, tiles, scale: float, reuse_cur_max_tile: bool = False):
+        if reuse_cur_max_tile:
+            prev_max, worker_max, worker_sum, prev_sum = (
+                t.to(torch.float32) for t in tiles
+            )
+            cur_max_seed = worker_sum
+        else:
+            prev_max, worker_max, cur_max_seed, prev_sum, worker_sum = (
+                t.to(torch.float32) for t in tiles
+            )
 
         cur_max = torch.maximum(prev_max, worker_max)
         exp_prev = torch.exp(scale * (prev_max - cur_max))
@@ -5090,6 +5132,9 @@ class SdpaCorrectionGolden:
 
         cols = torch.tensor(SdpaSfpuGolden.TRANSFORMED_COLS, dtype=torch.long)
         seeds = [prev_max, worker_max, cur_max_seed, prev_sum, worker_sum]
+        if reuse_cur_max_tile:
+            seeds = seeds[:4]
+            computed = computed[:4]
         out = []
         for seed, value in zip(seeds, computed):
             tile = seed.clone()

@@ -167,7 +167,8 @@ Tensor argmax(
     bool keepdim,
     const std::optional<CoreRangeSet>& sub_core_grids,
     const std::optional<MemoryConfig>& memory_config,
-    std::optional<Tensor> optional_output_tensor) {
+    std::optional<Tensor> optional_output_tensor,
+    std::optional<bool> enable_secondary_dm) {
     auto output_memory_config = memory_config.value_or(input_tensor.memory_config());
 
     TT_FATAL(is_device_tensor(input_tensor), "Input tensor must be on device");
@@ -193,6 +194,15 @@ Tensor argmax(
                 "argmax: Dimension out of range for scalar tensor (expected 0 or -1, but got {})",
                 dim.value());
         }
+    }
+
+    // Only the ROW_MAJOR multicore factory reads this, so anywhere else it would be a silent no-op.
+    if (enable_secondary_dm.has_value()) {
+        const int32_t r = static_cast<int32_t>(rank);
+        const bool last_dim = !dim.has_value() || (dim.value() < 0 ? dim.value() + r : dim.value()) == r - 1;
+        TT_FATAL(
+            input_tensor.layout() == Layout::ROW_MAJOR && last_dim,
+            "enable_secondary_dm applies only to ROW_MAJOR argmax over the last dim (or dim=None)");
     }
 
     if (input_tensor.logical_volume() == 0) [[unlikely]] {
@@ -254,7 +264,8 @@ Tensor argmax(
             keepdim,
             sub_core_grids,
             output_memory_config,
-            std::move(optional_output_tensor));
+            std::move(optional_output_tensor),
+            enable_secondary_dm);
     }
 
     return prim::argmax(
@@ -264,7 +275,8 @@ Tensor argmax(
         keepdim,
         sub_core_grids,
         output_memory_config,
-        std::move(optional_output_tensor));
+        std::move(optional_output_tensor),
+        enable_secondary_dm);
 }
 
 }  // namespace ttnn
