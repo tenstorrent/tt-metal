@@ -407,6 +407,11 @@ def generate_ring_joint_perf_model_configs(
         # q=128 excluded: hung twice on 2026-09-17 on one Wormhole galaxy (seq_local 13632, k=512), did not
         # reproduce on another the same day (6/6), and is slower than q=192 at every feasible k regardless.
         ("minimax_h3_15s_768p", 13664, [192, 256], [512, 640, 768, 1024]),
+        # The 15 s shard as a 4x32 quad (SP=32) would carry it: 13664 / 4 = 3416 -> 3424 rows/device.
+        # This is the shard the exp ring joint SDPA measured its Blackhole speedup on, and the one
+        # it can hold in L1 on a Wormhole galaxy (q=512/k=128 at 2 passes; q=256/k=256 at 4), so it
+        # is the normal-op baseline for the exp-vs-normal A/B. The list brackets both exp points.
+        ("minimax_h3_15s_768p_sim32", 3424, [160, 256, 512], [128, 256, 512]),
     ):
         perf_configs[_name] = ModelConfig(
             name=_name,

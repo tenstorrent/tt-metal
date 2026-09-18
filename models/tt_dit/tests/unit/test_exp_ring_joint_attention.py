@@ -9,6 +9,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import is_blackhole
 from models.tt_dit.tests.unit.test_ring_joint_attention import create_ring_joint_sdpa_submesh, logical_length_tensor
 from models.tt_dit.utils.padding import get_padded_vision_seq_len
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
@@ -41,14 +42,24 @@ def run_exp_ring_joint_sdpa(
     skip_check,
     pcc_threshold,
     max_mse=None,
-    num_workers_per_link=5,
+    num_workers_per_link=None,
     num_buffers_per_channel=32,
 ):
     full_compute_grid = submesh.compute_with_storage_grid_size()
     # The op reserves the last column for the fabric MUX (sdpa_grid.x = x - 1) and needs one Q
-    # chunk per SDPA column, so size the grid from the chunk count.
+    # chunk per SDPA column, so size the grid from the chunk count. Rows are split into equal
+    # backward/forward MUX-client halves, so the row count must be even: Blackhole's 10 rows are,
+    # Wormhole's 9 rows drop to 8.
     local_padded_N = padded_seq_len // tuple(submesh.shape)[rp_axis]
-    sdpa_compute_grid = (math.ceil(local_padded_N / q_chunk_size) + 1, full_compute_grid.y)
+    sdpa_rows = full_compute_grid.y - (full_compute_grid.y % 2)
+    # A head's Q chunks must fill whole rows (num_q_chunks % columns == 0); more chunks than columns
+    # run as head-segments (segs_per_head = chunks / columns). Take the widest column count that
+    # fits the device and divides the chunk count.
+    num_q_chunks = math.ceil(local_padded_N / q_chunk_size)
+    sdpa_cols = max(c for c in range(min(num_q_chunks, full_compute_grid.x - 1), 0, -1) if num_q_chunks % c == 0)
+    sdpa_compute_grid = (sdpa_cols + 1, sdpa_rows)
+    if num_workers_per_link is None:
+        num_workers_per_link = sdpa_rows // 2  # one MUX client per SDPA row per direction
 
     # Basic CCL setup
     ccl_sub_device_crs = ttnn.CoreRangeSet(
@@ -311,7 +322,7 @@ def run_test_exp_ring_joint_sdpa(
     dtype,
     pcc_threshold=0.994,
     max_mse=None,
-    num_workers_per_link=5,
+    num_workers_per_link=None,
     num_buffers_per_channel=48,
 ):
     b, nh, base_seq_len, joint_seq_len, d = model_input_shape
@@ -356,6 +367,10 @@ def run_test_exp_ring_joint_sdpa(
     )
 
 
+_BH_GLX_ONLY = pytest.mark.skipif(not is_blackhole(), reason="Blackhole Galaxy shape")
+_WH_GLX_ONLY = pytest.mark.skipif(is_blackhole(), reason="Wormhole Galaxy shape")
+
+
 @pytest.mark.parametrize(
     "device_params, all_gather_topology",
     [
@@ -364,7 +379,9 @@ def run_test_exp_ring_joint_sdpa(
                 "worker_l1_size": 1344544,
                 "trace_region_size": 1000000,
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-                "fabric_router_config": create_fabric_router_config(8192),
+                # Wormhole's fabric caps packets at 7616 B (erisc_datamover_builder.hpp); the H3
+                # Wormhole mesh runs the 4 KB router payload, so match it. Blackhole keeps 8 KB.
+                "fabric_router_config": create_fabric_router_config(8192 if is_blackhole() else 4096),
             },
             ttnn.Topology.Ring,
         ),
@@ -375,20 +392,20 @@ def run_test_exp_ring_joint_sdpa(
 @pytest.mark.parametrize(
     "mesh_device, num_links, nh, base_seq_len, rp_axis, rp_factor, up_axis, up_factor, q_chunk_size, k_chunk_size, pad_to",
     [
-        ((4, 32), 2, 40, 75600, 1, 32, 0, 4, 224, 512, None),
+        pytest.param((4, 32), 2, 40, 75600, 1, 32, 0, 4, 224, 512, None, id="4x32", marks=_BH_GLX_ONLY),
         # Head-serial passes: nh/up_factor heads land on each device and the op walks
         # ceil(heads_per_device / grid_rows) of them per core row as serial passes. With 10 grid
         # rows, 40 heads -> 10 per device -> 1 pass; 80 heads -> 20 per device -> 2 passes.
-        ((4, 32), 2, 80, 75600, 1, 32, 0, 4, 224, 512, None),
+        pytest.param((4, 32), 2, 80, 75600, 1, 32, 0, 4, 224, 512, None, id="4x32_2pass", marks=_BH_GLX_ONLY),
         # Minimal spillover: 44 heads -> 11 per device -> row 0 runs 2 passes (heads 0 and 10),
         # rows 1-9 run 1 pass (heads 1-9) on the same P=2 build. Isolates the multi-pass row.
-        ((4, 32), 2, 44, 75600, 1, 32, 0, 4, 224, 512, None),
+        pytest.param((4, 32), 2, 44, 75600, 1, 32, 0, 4, 224, 512, None, id="4x32_1spill", marks=_BH_GLX_ONLY),
         # H3 15s: 108544 = 106 * 1024 -> 3392 local tiles -> q=320 (11 columns), k=384. Resident Q
         # does not fit L1 at P=2, so this is the one config that exercises the factory's streamed-Q
         # fallback (stream_q). 56 heads -> 14/device: rows 0-3 run 2 passes, rows 4-9 run 1.
-        ((4, 32), 2, 56, 108544, 1, 32, 0, 4, 320, 384, None),
-        ((4, 32), 2, 56, 109150, 1, 32, 0, 4, 352, 256, 118784),
-        ((4, 8), 2, 40, 18944, 1, 8, 0, 4, 224, 512, None),
+        pytest.param((4, 32), 2, 56, 108544, 1, 32, 0, 4, 320, 384, None, id="4x32_2pass_streamq", marks=_BH_GLX_ONLY),
+        pytest.param((4, 32), 2, 56, 109150, 1, 32, 0, 4, 352, 256, 118784, id="4x32_padshard_15s", marks=_BH_GLX_ONLY),
+        pytest.param((4, 8), 2, 40, 18944, 1, 8, 0, 4, 224, 512, None, id="4x8", marks=_BH_GLX_ONLY),
         # Whole-chunk skip: the pad tail on the LAST ring device covers an entire K chunk, so the
         # "KV chunk beyond logical_n" skip fires and one ring iteration processes fewer chunks than
         # the rest (here 1 instead of 2). Mirrors the fl2va 4x32 pipeline hang geometry
@@ -396,15 +413,23 @@ def run_test_exp_ring_joint_sdpa(
         # chunk) scaled to sp=8: padded 8,192 -> logical_nt 240, last shard chunks at tile 224
         # (processed) and 240 (skipped). pad_to overrides get_padded_vision_seq_len because its
         # 32*sp alignment cannot produce a >= one-chunk tail at sp=8.
-        ((4, 8), 2, 56, 7680, 1, 8, 0, 4, 96, 512, 8192),
-        ((1, 4), 2, 10, 8960, 1, 4, 0, 1, 224, 512, None),
+        pytest.param((4, 8), 2, 56, 7680, 1, 8, 0, 4, 96, 512, 8192, id="4x8_chunkskip", marks=_BH_GLX_ONLY),
+        pytest.param((1, 4), 2, 10, 8960, 1, 4, 0, 1, 224, 512, None, id="1x4", marks=_BH_GLX_ONLY),
+        # Wormhole 4x8 Galaxy, H3 at the SP=32-equivalent shard [1, 14, 3424, 128] (what the exp op
+        # measured 21% on Blackhole with): 7 SDPA columns x 8 rows. 3424 rows -> q=512 fills 7 columns;
+        # 14 heads on 8 rows -> 2 passes; the L1 budget then only admits k=128 with streamed Q
+        # (`_exp_sdpa_l1_bytes` in attention_minimax_h3.py).
+        pytest.param((4, 8), 2, 56, 27392, 1, 8, 0, 4, 512, 128, None, id="4x8_wh_h3_sim32", marks=_WH_GLX_ONLY),
+        # Same shard on all 4 links of the Wormhole row: 4 MUX-client columns, 8 MUX kernels.
+        pytest.param((4, 8), 4, 56, 27392, 1, 8, 0, 4, 512, 128, None, id="4x8_wh_h3_sim32_nl4", marks=_WH_GLX_ONLY),
+        # Same shard at 14 columns of q=256 -> segs=2, 4 passes (needs kMaxPasses >= 4), k=256 streamed Q.
+        pytest.param((4, 8), 2, 56, 27392, 1, 8, 0, 4, 256, 256, None, id="4x8_wh_h3_sim32_p4", marks=_WH_GLX_ONLY),
     ],
-    ids=["4x32", "4x32_2pass", "4x32_1spill", "4x32_2pass_streamq", "4x32_padshard_15s", "4x8", "4x8_chunkskip", "1x4"],
     indirect=["mesh_device"],
 )
 @pytest.mark.skipif(
-    ttnn.cluster.get_cluster_type() != ttnn.cluster.ClusterType.BLACKHOLE_GALAXY,
-    reason="test_ring_joint_sdpa_dit_bh_glx requires a Blackhole Galaxy cluster",
+    ttnn.cluster.get_cluster_type() not in (ttnn.cluster.ClusterType.BLACKHOLE_GALAXY, ttnn.cluster.ClusterType.GALAXY),
+    reason="exp ring joint SDPA DiT cases need a 32-chip Galaxy (Blackhole or Wormhole)",
 )
 def test_exp_ring_joint_sdpa_dit_bh_glx_custom(
     mesh_device,

@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import math
+import os
 
 import torch
 
@@ -189,15 +190,25 @@ class MiniMaxH3Attention(Module):
         # balances 14 local heads over 10 rows: segs=1 gives 2 passes of 10-tile chunks with 6 rows
         # idle on the second pass, while segs=2 gives 3 passes of 5-tile chunks on every core --
         # 15 Q tile-rows per core instead of 20 on the bottleneck cores.
-        self.exp_ring_max_passes = 3  # kMaxPasses in exp_ring_joint_sdpa_program_factory.cpp
-        self.exp_ring_num_passes = math.ceil(self.n_local_heads / full_grid.y)
+        # The exp op splits its SDPA rows into equal backward/forward MUX-client halves, so the row
+        # count must be even (`exp_ring_joint_sdpa_program_factory.cpp`: "SDPA grid rows must be even").
+        # Blackhole's 10-row grid is; Wormhole's 9-row grid gives up its last row (7x8 = 56 SDPA cores).
+        self.exp_ring_rows = full_grid.y - (full_grid.y % 2)
+        # kMaxPasses in exp_ring_joint_sdpa_program_factory.cpp; overridable for builds that raise it.
+        self.exp_ring_max_passes = int(os.environ.get("MINIMAX_H3_EXP_RING_MAX_PASSES", "3"))
+        self.exp_ring_num_passes = math.ceil(self.n_local_heads / self.exp_ring_rows)
         self.exp_ring_max_k_chunk = 512  # largest k worth trying; `_exp_sdpa_l1_bytes` picks down from here
+        # One fabric-MUX client column per link. The op ships with 2 (Blackhole H3); the Wormhole row has 4.
+        self.exp_ring_num_links = int(os.environ.get("MINIMAX_H3_EXP_RING_NUM_LINKS", "2"))
+        # Enable: MINIMAX_H3_EXP_RING_SDPA=1/0 forces the exp op on/off; unset keeps the shipped rule, which
+        # keys on the Blackhole 4x32 quad (`sequence_parallel.factor == 32` is a proxy for that shard).
+        exp_ring_env = os.environ.get("MINIMAX_H3_EXP_RING_SDPA")
+        if exp_ring_env is None:
+            exp_ring_wanted = is_blackhole() and tp_factor == 4 and parallel_config.sequence_parallel.factor == 32
+        else:
+            exp_ring_wanted = exp_ring_env == "1"
         self.use_exp_ring_sdpa = (
-            self.use_ring
-            and is_blackhole()
-            and tp_factor == 4
-            and parallel_config.sequence_parallel.factor == 32
-            and self.exp_ring_num_passes <= self.exp_ring_max_passes
+            self.use_ring and exp_ring_wanted and self.exp_ring_num_passes <= self.exp_ring_max_passes
         )
         self._exp_sdpa_program_configs: dict[int, ttnn.SDPAProgramConfig | None] = {}
 
@@ -414,7 +425,7 @@ class MiniMaxH3Attention(Module):
         is the tie-break (fewer per-chunk overheads), then wider grids.
         """
         tile = ttnn.TILE_SIZE
-        rows = self.full_grid.y
+        rows = self.exp_ring_rows
         best = None
         for cols in range(self.full_grid.x - 1, 1, -1):
             for segs in (1, 2, 3):
@@ -440,7 +451,7 @@ class MiniMaxH3Attention(Module):
             return None
         _, cols, q_chunk, k_chunk = best
         return ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=ttnn.CoreCoord(cols + 1, self.full_grid.y),
+            compute_with_storage_grid_size=ttnn.CoreCoord(cols + 1, self.exp_ring_rows),
             q_chunk_size=q_chunk,
             k_chunk_size=k_chunk,
             exp_approx_mode=False,  # NOTE: False is more correct
@@ -555,13 +566,15 @@ class MiniMaxH3Attention(Module):
                 program_config=exp_program_config,
                 compute_kernel_config=self.sdpa_compute_kernel_config,
                 dim=2,
-                multi_device_global_semaphore=self.ccl_manager.get_exp_ring_ping_pong_semaphore(self.sp_mesh_axis),
-                num_links=self.ccl_manager.num_links,
+                multi_device_global_semaphore=self.ccl_manager.get_exp_ring_ping_pong_semaphore(self.sp_mesh_axis)[
+                    : self.exp_ring_num_links
+                ],
+                num_links=self.exp_ring_num_links,
                 cluster_axis=self.sp_mesh_axis,
                 mesh_device=self.mesh_device,
                 topology=self.ccl_manager.topology,
                 subdevice_id=self.ccl_manager.ccl_sub_device_id,
-                num_workers_per_link=5,
+                num_workers_per_link=self.exp_ring_rows // 2,
                 num_buffers_per_channel=32,
             )
         elif self.use_ring:
