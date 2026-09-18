@@ -433,7 +433,7 @@ def test_bias_is_applied_as_separate_add(device):
                 ttnn.BufferType.L1,
                 _shard(_rect(0, 0, 0, 0), [2 * TILE, 4 * TILE]),
             ),
-            "exactly one C block per core",
+            "exactly one C chunk per core",
         ),
     ],
     ids=[

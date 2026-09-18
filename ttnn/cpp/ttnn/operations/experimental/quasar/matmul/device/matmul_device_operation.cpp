@@ -440,13 +440,13 @@ void validate_matmul_work_distribution_and_gather_ring_topology(
                     const uint32_t num_blocks_total = num_blocks_y * num_blocks_x;
                     TT_FATAL(
                         num_blocks_total <= num_cores,
-                        "Number of C blocks exceeds number of cores: {} C blocks > {} cores",
+                        "Number of C chunks exceeds number of cores: {} C chunks > {} cores",
                         num_blocks_total,
                         num_cores);
                     if (program_config.mcast_in0) {
                         TT_FATAL(
                             num_blocks_y == 1,
-                            "mcast_in0 requires M ({}) to fit within a single per_core_M C block ({}), got "
+                            "mcast_in0 requires M ({}) to fit within a single per_core_M C chunk ({}), got "
                             "num_blocks_y={}",
                             Mt,
                             per_core_M,
@@ -472,14 +472,14 @@ void validate_matmul_work_distribution_and_gather_ring_topology(
                 }
                 TT_FATAL(
                     num_blocks_x <= grid.x,
-                    "Num output C blocks along x ({}) must be smaller than or equal to the number of columns in "
+                    "Num output C chunks along x ({}) must be smaller than or equal to the number of columns in "
                     "compute "
                     "grid ({})!",
                     num_blocks_x,
                     grid.x);
                 TT_FATAL(
                     num_blocks_y <= grid.y,
-                    "Num output C blocks along y ({}) must be smaller than or equal to the number of rows in compute "
+                    "Num output C chunks along y ({}) must be smaller than or equal to the number of rows in compute "
                     "grid ({})!",
                     num_blocks_y,
                     grid.y);
@@ -2101,7 +2101,7 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
                     uint32_t num_blocks_y = ((M - 1) / per_core_M) + 1;
                     uint32_t num_blocks_x = ((N - 1) / per_core_N) + 1;
                     // The output CB is globally allocated against the output tensor on the factory's
-                    // work grid {start_core, start_core + num_C_blocks - 1}, so the output shard grid
+                    // work grid {start_core, start_core + num_C_chunks - 1}, so the output shard grid
                     // computed here must match it exactly. Mirror the factory's start_core derivation
                     // (allowed_worker_cores is the single source of truth for core placement) rather
                     // than trusting a user-supplied output shard grid, which need not agree.
@@ -2179,8 +2179,8 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
                 } else if constexpr (std::is_same_v<
                                          ProgramConfigType,
                                          operations::experimental::quasar::matmul::MatmulUnifiedProgramConfig>) {
-                    // One C block of C per core; the shard grid is the active cores in assignment order, so
-                    // the accessor's shard -> core mapping is the factory's C block -> core mapping and every
+                    // One C chunk of C per core; the shard grid is the active cores in assignment order, so
+                    // the accessor's shard -> core mapping is the factory's C chunk -> core mapping and every
                     // core writes its own shard.
                     const UnifiedMatmulPlan plan =
                         plan_unified_matmul(input_tensor_a, input_tensor_b, program_config, attributes);

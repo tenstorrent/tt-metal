@@ -91,19 +91,19 @@ struct MatmulMultiCoreProgramConfig {
 // GEMM vocabulary, all sizes in 32x32 tiles: C[M x N] = A[M x K] x B[K x N]. The caller describes the
 // work directly instead of picking a 1D / 2D / DRAM-sharded strategy:
 //   - `cores`                    the clusters that take part;
-//   - `per_core_M_tiles` / `per_core_N_tiles` the C block of C (in tiles) each cluster produces in one go.
-// The factory walks C in C blocks (across N, then down M, then the next batch) and hands that walk to
+//   - `per_core_M_tiles` / `per_core_N_tiles` the C chunk of C (in tiles) each cluster produces in one go.
+// The factory walks C in C chunks (across N, then down M, then the next batch) and hands that walk to
 // `cores` in enumeration order (x fastest when `row_major_cores`, y fastest otherwise) as contiguous
-// runs; when there are fewer C blocks than cores the trailing cores idle, when there are more each core
+// runs; when there are fewer C chunks than cores the trailing cores idle, when there are more each core
 // produces several. Blocks on the right / bottom edge are computed at full size and clipped on read
 // and write, so any M / N works. Every operand is addressed by tile index through the tensor accessor, so interleaved,
 // L1-sharded and DRAM-sharded tensors all take the same kernels. The legacy strategies are particular
 // choices of (cores, per_core_M_tiles, per_core_N_tiles): e.g. a 1D "mcast_in0" matmul is per_core_M_tiles = M_tiles on
-// a row of cores, a 2D matmul is a rectangle of cores with per_core_M_tiles x per_core_N_tiles C blocks.
+// a row of cores, a 2D matmul is a rectangle of cores with per_core_M_tiles x per_core_N_tiles C chunks.
 //
 // Stage A limits: one NEO, one reader and one writer per cluster; no data sharing between clusters;
 // no bias (the op applies it as a separate add), no fused activation, no untilize, 32x32 tiles only,
-// sharded output needs batch 1 and exactly one C block per core.
+// sharded output needs batch 1 and exactly one C chunk per core.
 struct MatmulUnifiedProgramConfig {
     CoreRangeSet cores;
     std::size_t per_core_M_tiles{};
@@ -111,7 +111,7 @@ struct MatmulUnifiedProgramConfig {
     // K tiles accumulated per K iteration (one A slice + one B slice in L1 at a time); must divide K_tiles.
     // 0 = auto: the largest divisor of K_tiles <= 8 whose rings fit L1.
     std::size_t K_iteration_tiles = 0;
-    // Subblock: the C block's tiles accumulated in DST at once; must divide per_core_M_tiles / per_core_N_tiles and
+    // Subblock: the C chunk's tiles accumulated in DST at once; must divide per_core_M_tiles / per_core_N_tiles and
     // hold
     // <= 8 tiles (4 with fp32 accumulation). 0 for both = auto.
     std::size_t subblock_M_tiles = 0;
