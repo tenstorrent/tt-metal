@@ -231,6 +231,9 @@ void device_module(nb::module_& m_device) {
         .def(nb::self == nb::self)
         .def(nb::self != nb::self);
 
+    auto pySubDeviceManagerId = static_cast<nb::class_<SubDeviceManagerId>>(m_device.attr("SubDeviceManagerId"));
+    pySubDeviceManagerId.def(nb::self == nb::self).def(nb::self != nb::self);
+
     m_device.def(
         "create_dispatch_core_config",
         [](std::optional<tt::tt_metal::DispatchCoreType> type,

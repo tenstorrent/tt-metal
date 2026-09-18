@@ -285,6 +285,17 @@ void py_module(nb::module_& mod) {
     auto nb_mesh_device = static_cast<nb::class_<MeshDevice>>(mod.attr("MeshDevice"));
     nb_mesh_device.def("get_num_devices", &MeshDevice::num_devices)
         .def("id", &MeshDevice::id)
+        .def("is_initialized", &MeshDevice::is_initialized, "Whether the mesh device is initialized and open.")
+        .def("num_hw_cqs", &MeshDevice::num_hw_cqs, "Number of hardware command queues on the mesh device.")
+        .def(
+            "get_sub_device_ids",
+            &MeshDevice::get_sub_device_ids,
+            nb::rv_policy::copy,
+            "Return all sub-device IDs in the active manager, independently of the stall group.")
+        .def(
+            "get_active_sub_device_manager_id",
+            &MeshDevice::get_active_sub_device_manager_id,
+            "Return the active sub-device manager identity.")
         .def("get_device_ids", &MeshDevice::get_device_ids)
         .def(
             "get_device_id",
