@@ -52,24 +52,23 @@ public:
     }
 };
 
-template <typename T>
-FORCE_INLINE void process_data(DataflowBuffer cb, uint32_t value, int32_t num_of_elems) {
+// T is the element type written; DFB is deduced from the buffer argument. DataflowBuffer is a class
+// template on Quasar, so the former explicit uint16_t specialization (which cannot be spelled for a
+// deduced DFB) is folded into the if constexpr below with identical behaviour.
+template <typename T, typename DFB>
+FORCE_INLINE void process_data(DFB cb, uint32_t value, int32_t num_of_elems) {
     T* ptr = reinterpret_cast<T*>(cb.get_write_ptr());
     for (int j = 0; j < num_of_elems; j++) {
-        ptr[j] = static_cast<T>(value);
+        if constexpr (std::is_same_v<T, uint16_t>) {
+            ptr[j] = static_cast<uint16_t>(value >> 16);
+        } else {
+            ptr[j] = static_cast<T>(value);
+        }
     }
 }
 
-template <>
-FORCE_INLINE void process_data<uint16_t>(DataflowBuffer cb, uint32_t value, int32_t num_of_elems) {
-    uint16_t* ptr = reinterpret_cast<uint16_t*>(cb.get_write_ptr());
-    for (int j = 0; j < num_of_elems; j++) {
-        ptr[j] = static_cast<uint16_t>(value >> 16);
-    }
-}
-
-template <typename T = uint16_t>
-FORCE_INLINE void generate_bcast_scaler(DataflowBuffer cb_scaler, uint32_t scaler) {
+template <typename T = uint16_t, typename DFB>
+FORCE_INLINE void generate_bcast_scaler(DFB cb_scaler, uint32_t scaler) {
     union {
         float f;
         uint32_t u;
@@ -95,7 +94,8 @@ FORCE_INLINE void generate_bcast_scaler(DataflowBuffer cb_scaler, uint32_t scale
     cb_scaler.push_back(1);
 }
 
-FORCE_INLINE void fill_cb_with_value(DataflowBuffer cb, uint32_t value, int32_t num_of_elems = 1024) {
+template <typename DFB>
+FORCE_INLINE void fill_cb_with_value(DFB cb, uint32_t value, int32_t num_of_elems = 1024) {
     cb.reserve_back(1);
     const DataFormat data_format = cb.get_dataformat();
     switch ((uint)data_format & 0x1F) {
@@ -179,8 +179,8 @@ FORCE_INLINE void fill_subtile_mask_w(
     }
 }
 
-template <typename T = uint16_t>
-FORCE_INLINE void generate_mask_h(DataflowBuffer cb_mask, uint32_t mask_h) {
+template <typename T = uint16_t, typename DFB>
+FORCE_INLINE void generate_mask_h(DFB cb_mask, uint32_t mask_h) {
     Scalar one = {};
     Scalar zero = {};
 
@@ -219,8 +219,8 @@ FORCE_INLINE void generate_mask_h(DataflowBuffer cb_mask, uint32_t mask_h) {
     cb_mask.push_back(1);
 }
 
-template <typename T = uint16_t>
-FORCE_INLINE void generate_mask_w(DataflowBuffer cb_mask, uint32_t mask_w) {
+template <typename T = uint16_t, typename DFB>
+FORCE_INLINE void generate_mask_w(DFB cb_mask, uint32_t mask_w) {
     Scalar one = {};
     Scalar zero = {};
 
@@ -259,8 +259,9 @@ FORCE_INLINE void generate_mask_w(DataflowBuffer cb_mask, uint32_t mask_w) {
     cb_mask.push_back(1);
 }
 
+template <typename DFB>
 FORCE_INLINE void generate_mask_h_w(
-    DataflowBuffer cb_mask_h_w, uint32_t mask_h, uint32_t mask_w, uint32_t single_tile_size = 2048) {
+    DFB cb_mask_h_w, uint32_t mask_h, uint32_t mask_w, uint32_t single_tile_size = 2048) {
     Scalar one = {};
     Scalar zero = {};
 
@@ -393,7 +394,8 @@ FORCE_INLINE void generate_mask_h_w(
     cb_mask_h_w.push_back(2);
 }
 
-FORCE_INLINE void generate_mask_h_w_if_needed(DataflowBuffer cb_mask_h_w, uint32_t origin_h, uint32_t origin_w) {
+template <typename DFB>
+FORCE_INLINE void generate_mask_h_w_if_needed(DFB cb_mask_h_w, uint32_t origin_h, uint32_t origin_w) {
     constexpr uint32_t TILE_H = 32;
     constexpr uint32_t TILE_W = 32;
 
@@ -470,8 +472,8 @@ FORCE_INLINE void mask_tile_if_need(uint32_t l1_addr, uint32_t origin_h, uint32_
     }
 }
 
-FORCE_INLINE void generate_mask_tiles(
-    DataflowBuffer cb_mask, uint32_t mask_h, uint32_t mask_w, uint32_t single_tile_size = 2048) {
+template <typename DFB>
+FORCE_INLINE void generate_mask_tiles(DFB cb_mask, uint32_t mask_h, uint32_t mask_w, uint32_t single_tile_size = 2048) {
     constexpr uint32_t num_mask_tiles = 3;
     Scalar one = {};
     Scalar zero = {};
@@ -662,9 +664,9 @@ void get_noc_offset(uint32_t h, uint32_t w, uint32_t element_size, uint32_t& noc
 }
 
 // It reads values from one tile.
-template <typename AddrGen>
+template <typename AddrGen, typename DFB>
 void read_tile(
-    DataflowBuffer cb,
+    DFB cb,
     AddrGen addrgen,
     uint32_t noc_id,
     uint32_t size = 0,
@@ -691,9 +693,9 @@ void read_tile(
     }
 }
 
-template <typename AddrGen>
+template <typename AddrGen, typename DFB>
 void read_value(
-    DataflowBuffer cb,
+    DFB cb,
     AddrGen addrgen,
     uint32_t noc_id,
     uint32_t tilized_idx = 0,
@@ -735,10 +737,10 @@ void read_value(
  * | do_push_back                 | Whether to push the data back to the CB | bool             | true or false                  | False    |
  */
 // clang-format on
-template <typename AddrGen>
+template <typename AddrGen, typename DFB, typename DFBScratch>
 void read_line(
-    DataflowBuffer cb,
-    DataflowBuffer cb_scratch,
+    DFB cb,
+    DFBScratch cb_scratch,
     AddrGen addrgen,
     uint32_t num_tiles,
     bool do_reserve = true,

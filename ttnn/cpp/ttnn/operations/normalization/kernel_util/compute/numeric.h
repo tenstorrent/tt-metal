@@ -14,6 +14,7 @@
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "api/dataflow/dfb_access.h"
 #include "ttnn/operations/normalization/kernel_util/compute/policies.h"
 #include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
 #include "ttnn/operations/normalization/kernel_util/generic/bit.h"
@@ -54,23 +55,26 @@ template <
     ReduceDim reduce_dim,
     bool FLOAT32_REDUCTION,
     typename input_policy,
+    typename DFBIn,
+    typename DFBScalar,
+    typename DFBOut,
     typename... AdditionalCBs>
 inline void accumulate_compute_loop(
-    DataflowBuffer& dfb_in,
-    DataflowBuffer& dfb_scalar,
-    DataflowBuffer& dfb_out,
+    DFBIn& dfb_in,
+    DFBScalar& dfb_scalar,
+    DFBOut& dfb_out,
     uint32_t num_tiles,
     uint32_t block_size,
     bool last_tile_partial,
     AdditionalCBs&... dfb_additional) {
     static_assert(
-        (std::conjunction_v<std::is_same<std::remove_reference_t<AdditionalCBs>, DataflowBuffer>...>),
+        (is_dataflow_buffer_v<std::remove_cv_t<std::remove_reference_t<AdditionalCBs>>> && ...),
         "All additional CBs must be DataflowBuffer&");
 
     constexpr bool pop_input = input_policy::pop;
     constexpr bool sync_full_block = input_policy::sync_full_block;
 
-    auto accumulate_cb = [dfb_scalar, block_size, dfb_out, num_tiles, last_tile_partial](DataflowBuffer& dfb) {
+    auto accumulate_cb = [dfb_scalar, block_size, dfb_out, num_tiles, last_tile_partial](auto& dfb) {
         constexpr bool swap_operands = (reduce_dim == ReduceDim::REDUCE_ROW) && (reduce_type != PoolType::MAX);
         if constexpr (swap_operands) {
             reconfig_data_format(dfb_scalar.get_id(), dfb.get_id());
@@ -96,14 +100,11 @@ inline void accumulate_compute_loop(
     // Accumulate the input CB
     accumulate_cb(dfb_in);
 
-    // Accumulate any additional CBs
+    // Accumulate any additional CBs, in argument order. (A fold over the pack rather than an
+    // array of pointers: on Quasar the additional CBs may be different DataflowBuffer specializations.)
     constexpr uint32_t num_additional_dfbs = sizeof...(dfb_additional);
     if constexpr (num_additional_dfbs > 0) {
-        DataflowBuffer* additional_dfbs_array[num_additional_dfbs] = {(&dfb_additional)...};
-
-        for (uint32_t i = 0; i < num_additional_dfbs; i++) {
-            accumulate_cb(*additional_dfbs_array[i]);
-        }
+        (accumulate_cb(dfb_additional), ...);
     }
 
     reduce_uninit();
@@ -131,7 +132,7 @@ inline void accumulate_compute_loop(
  * @tparam input_policy The policy for how to handle the input CB
  * @tparam wait_at_end_policy The policy for whether to wait at the end of the function
  * @tparam Epilogue The type of the epilogue functor
- * @tparam AdditionalCBs The types of the additional input CBs (must be uint32_t)
+ * @tparam AdditionalCBs The types of the additional input CBs (must be DataflowBuffer)
  *
  * @note dst0 is used to accumulate the sum, so it
  * will be overwritten here @anchor dst0_overwritten
@@ -152,11 +153,14 @@ template <
     typename input_policy = policies::PartialBlockWithoutPopPolicy,
     policies::WaitAtEndPolicy wait_at_end_policy = policies::WaitAtEndPolicy::WAIT,
     typename Epilogue = decltype(detail::no_op),
+    typename DFBIn,
+    typename DFBScalar,
+    typename DFBOut,
     typename... AdditionalCBs>
 inline void row_wise_accumulate_with_epilogue(
-    DataflowBuffer& dfb_in,
-    DataflowBuffer& dfb_scalar,
-    DataflowBuffer& dfb_out,
+    DFBIn& dfb_in,
+    DFBScalar& dfb_scalar,
+    DFBOut& dfb_out,
     uint32_t num_tiles,
     uint32_t block_size,
     uint32_t N,
@@ -218,11 +222,14 @@ template <
     ReduceDim reduce_dim,
     bool FLOAT32_REDUCTION,
     typename input_policy = policies::PartialBlockWithoutPopPolicy,
-    policies::WaitAtEndPolicy wait_at_end_policy = policies::WaitAtEndPolicy::WAIT>
+    policies::WaitAtEndPolicy wait_at_end_policy = policies::WaitAtEndPolicy::WAIT,
+    typename DFBIn,
+    typename DFBScalar,
+    typename DFBOut>
 inline void row_wise_mean(
-    DataflowBuffer& dfb_in,
-    DataflowBuffer& dfb_scalar,
-    DataflowBuffer& dfb_out,
+    DFBIn& dfb_in,
+    DFBScalar& dfb_scalar,
+    DFBOut& dfb_out,
     uint32_t N,
     uint32_t num_tiles,
     uint32_t block_size,
@@ -258,12 +265,16 @@ template <
     ReduceDim reduce_dim,
     bool FLOAT32_REDUCTION,
     typename input_policy = policies::PartialBlockWithoutPopPolicy,
-    policies::WaitAtEndPolicy wait_at_end_policy = policies::WaitAtEndPolicy::WAIT>
+    policies::WaitAtEndPolicy wait_at_end_policy = policies::WaitAtEndPolicy::WAIT,
+    typename DFBIn0,
+    typename DFBIn1,
+    typename DFBScalar,
+    typename DFBOut>
 inline void row_wise_mean_with_pre_add(
-    DataflowBuffer& dfb_in0,
-    DataflowBuffer& dfb_in1,
-    DataflowBuffer& dfb_scalar,
-    DataflowBuffer& dfb_out,
+    DFBIn0& dfb_in0,
+    DFBIn1& dfb_in1,
+    DFBScalar& dfb_scalar,
+    DFBOut& dfb_out,
     uint32_t N,
     uint32_t num_tiles,
     uint32_t block_size,
