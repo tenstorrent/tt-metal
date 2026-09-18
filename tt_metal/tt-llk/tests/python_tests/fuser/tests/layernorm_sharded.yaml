@@ -60,7 +60,10 @@ operations:
         in1: scaler
         loop: local_reduce
     pack:
-      - {output: ex_partial, block_size: [32, 32], loop: local_stats}
+      - output: ex_partial
+        packer: Packer
+        block_size: [32, 32]
+        loop: local_stats
 
   # Four width-shard contributions per row, using cinv=1/4.
   - math:
@@ -75,7 +78,10 @@ operations:
         in1: scaler_global
         loop: global_reduce
     pack:
-      - {output: ex_global, block_size: [32, 32], loop: global_stats}
+      - output: ex_global
+        packer: Packer
+        block_size: [32, 32]
+        loop: global_stats
 
   - math:
       - type: Fpu
@@ -88,7 +94,10 @@ operations:
         in1: ex_global
         loop: column_broadcast
     pack:
-      - {output: xmm, block_size: [32, 32], loop: subblock}
+      - output: xmm
+        packer: Packer
+        block_size: [32, 32]
+        loop: subblock
 
   - math:
       - type: Fpu
@@ -100,7 +109,10 @@ operations:
         in1: xmm
         loop: subblock
     pack:
-      - {output: xmm2, block_size: [32, 32], loop: subblock}
+      - output: xmm2
+        packer: Packer
+        block_size: [32, 32]
+        loop: subblock
 
   - math:
       - type: Fpu
@@ -114,7 +126,10 @@ operations:
         in1: scaler
         loop: local_reduce
     pack:
-      - {output: var_partial, block_size: [32, 32], loop: local_stats}
+      - output: var_partial
+        packer: Packer
+        block_size: [32, 32]
+        loop: local_stats
 
   - math:
       - type: Fpu
@@ -128,7 +143,10 @@ operations:
         in1: scaler_global
         loop: global_reduce
     pack:
-      - {output: var_global, block_size: [32, 32], loop: global_stats}
+      - output: var_global
+        packer: Packer
+        block_size: [32, 32]
+        loop: global_stats
 
   - math:
       - type: Fpu
@@ -146,7 +164,10 @@ operations:
         block_size: [32, 32]
         loop: {dest: [0]}
     pack:
-      - {output: ex2pe, block_size: [32, 32], loop: global_stats}
+      - output: ex2pe
+        packer: Packer
+        block_size: [32, 32]
+        loop: global_stats
 
   - math:
       - type: Fpu
@@ -159,4 +180,7 @@ operations:
         in1: ex2pe
         loop: column_broadcast
     pack:
-      - {output: output, block_size: [32, 32], loop: subblock}
+      - output: output
+        packer: Packer
+        block_size: [32, 32]
+        loop: subblock

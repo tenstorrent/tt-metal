@@ -2,7 +2,11 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from helpers.golden_generators import ReduceGolden, get_golden_generator
+from helpers.golden_generators import (
+    ReduceGapoolGolden,
+    ReduceGolden,
+    get_golden_generator,
+)
 from helpers.llk_params import ReduceDimension, ReducePool
 from helpers.tilize_untilize import tilize_block, untilize_block
 
@@ -16,35 +20,47 @@ def reduce_tile(tensor_a, tensor_b, config, operation, node, block_max=False):
     num_faces = tile_shape.total_num_faces()
     reduce_dim = ReduceDimension.Row if block_max else node.fpu.reduce_dim
     pool_type = ReducePool.Max if block_max else node.fpu.reduce_pool
-    reduce = get_golden_generator(ReduceGolden)
+    src_a = tilize_block(
+        tensor_a,
+        tile_dims,
+        output_format,
+        num_faces,
+        tile_dimensions=tile_dims,
+    ).flatten()
 
-    def reduce_one(tensor):
-        result = reduce(
-            tilize_block(
-                tensor,
-                tile_dims,
-                output_format,
-                num_faces,
-                tile_dimensions=tile_dims,
-            ).flatten(),
+    if pool_type == ReducePool.Max:
+        result = get_golden_generator(ReduceGolden)(
+            src_a,
             reduce_dim,
             pool_type,
             output_format,
             tile_cnt=1,
             tile_shape=tile_shape,
         )
-        return untilize_block(
-            result.flatten(),
-            output_format,
-            tile_dims,
-            tile_dimensions=tile_dims,
-            num_faces=num_faces,
-        ).flatten()
-
-    src_reduced = reduce_one(tensor_a)
-    if pool_type == ReducePool.Average:
-        span = tile_dims[1] if reduce_dim == ReduceDimension.Row else tile_dims[0]
-        result = src_reduced * span * tensor_b.flatten()[0].item()
     else:
-        result = src_reduced
-    return result.reshape(tile_dims).to(src_reduced.dtype)
+        src_b = tilize_block(
+            tensor_b,
+            tile_dims,
+            output_format,
+            num_faces,
+            tile_dimensions=tile_dims,
+        ).flatten()
+        result = get_golden_generator(ReduceGapoolGolden)(
+            src_a,
+            src_b,
+            output_format,
+            reduce_dim,
+            math_fidelity=node.math_fidelity,
+            tile_cnt=1,
+            tile_shape=tile_shape,
+            input_format=node.src_a.data_format,
+            dest_acc=config.dest_acc,
+        )
+
+    return untilize_block(
+        result.flatten(),
+        output_format,
+        tile_dims,
+        tile_dimensions=tile_dims,
+        num_faces=num_faces,
+    ).reshape(tile_dims)

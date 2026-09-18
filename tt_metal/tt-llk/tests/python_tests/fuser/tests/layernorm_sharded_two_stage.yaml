@@ -60,7 +60,10 @@ operations:
         in1: scaler
         loop: local_reduce
     pack:
-      - {output: ex_partial, block_size: [32, 32], loop: tiles}
+      - output: ex_partial
+        packer: Packer
+        block_size: [32, 32]
+        loop: tiles
 
   - math:
       - type: Fpu
@@ -74,7 +77,10 @@ operations:
         in1: scaler_first
         loop: first_stage
     pack:
-      - {output: ex_first, block_size: [32, 32], loop: global_stats}
+      - output: ex_first
+        packer: Packer
+        block_size: [32, 32]
+        loop: global_stats
 
   - math:
       - type: Fpu
@@ -98,7 +104,10 @@ operations:
         in1: scaler_global
         loop: global_stats
     pack:
-      - {output: ex_global, block_size: [32, 32], loop: global_stats}
+      - output: ex_global
+        packer: Packer
+        block_size: [32, 32]
+        loop: global_stats
 
   - math:
       - type: Fpu
@@ -111,7 +120,10 @@ operations:
         in1: ex_global
         loop: column_broadcast
     pack:
-      - {output: xmm, block_size: [32, 32], loop: tiles}
+      - output: xmm
+        packer: Packer
+        block_size: [32, 32]
+        loop: tiles
 
   - math:
       - type: Fpu
@@ -123,7 +135,10 @@ operations:
         in1: xmm
         loop: tiles
     pack:
-      - {output: xmm2, block_size: [32, 32], loop: tiles}
+      - output: xmm2
+        packer: Packer
+        block_size: [32, 32]
+        loop: tiles
 
   - math:
       - type: Fpu
@@ -137,7 +152,10 @@ operations:
         in1: scaler
         loop: local_reduce
     pack:
-      - {output: var_partial, block_size: [32, 32], loop: tiles}
+      - output: var_partial
+        packer: Packer
+        block_size: [32, 32]
+        loop: tiles
 
   - math:
       - type: Fpu
@@ -151,7 +169,10 @@ operations:
         in1: scaler_first
         loop: first_stage
     pack:
-      - {output: var_first, block_size: [32, 32], loop: global_stats}
+      - output: var_first
+        packer: Packer
+        block_size: [32, 32]
+        loop: global_stats
 
   - math:
       - type: Fpu
@@ -175,7 +196,10 @@ operations:
         in1: scaler_global
         loop: global_stats
     pack:
-      - {output: var_global, block_size: [32, 32], loop: global_stats}
+      - output: var_global
+        packer: Packer
+        block_size: [32, 32]
+        loop: global_stats
 
   - math:
       - type: Fpu
@@ -193,7 +217,10 @@ operations:
         block_size: [32, 32]
         loop: {dest: [0]}
     pack:
-      - {output: ex2pe, block_size: [32, 32], loop: global_stats}
+      - output: ex2pe
+        packer: Packer
+        block_size: [32, 32]
+        loop: global_stats
 
   - math:
       - type: Fpu
@@ -206,4 +233,7 @@ operations:
         in1: ex2pe
         loop: column_broadcast
     pack:
-      - {output: output, block_size: [32, 32], loop: tiles}
+      - output: output
+        packer: Packer
+        block_size: [32, 32]
+        loop: tiles

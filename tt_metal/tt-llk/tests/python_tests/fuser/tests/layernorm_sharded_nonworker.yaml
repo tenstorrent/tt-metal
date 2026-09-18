@@ -53,7 +53,10 @@ operations:
         in1: residual
         loop: subblock
     pack:
-      - {output: input_sum, block_size: [32, 32], loop: subblock}
+      - output: input_sum
+        packer: Packer
+        block_size: [32, 32]
+        loop: subblock
 
   - math:
       - type: Fpu
@@ -67,7 +70,10 @@ operations:
         in1: scaler
         loop: local_reduce
     pack:
-      - {output: ex_partial, block_size: [32, 32], loop: local_stats}
+      - output: ex_partial
+        packer: Packer
+        block_size: [32, 32]
+        loop: local_stats
 
   - math:
       - type: Fpu
@@ -80,7 +86,10 @@ operations:
         in1: ex_global
         loop: column_broadcast
     pack:
-      - {output: xmm, block_size: [32, 32], loop: subblock}
+      - output: xmm
+        packer: Packer
+        block_size: [32, 32]
+        loop: subblock
 
   - math:
       - type: Fpu
@@ -92,7 +101,10 @@ operations:
         in1: xmm
         loop: subblock
     pack:
-      - {output: xmm2, block_size: [32, 32], loop: subblock}
+      - output: xmm2
+        packer: Packer
+        block_size: [32, 32]
+        loop: subblock
 
   - math:
       - type: Fpu
@@ -106,7 +118,10 @@ operations:
         in1: scaler
         loop: local_reduce
     pack:
-      - {output: var_partial, block_size: [32, 32], loop: local_stats}
+      - output: var_partial
+        packer: Packer
+        block_size: [32, 32]
+        loop: local_stats
 
   - math:
       - type: Fpu
@@ -119,7 +134,10 @@ operations:
         in1: inv_std_global
         loop: column_broadcast
     pack:
-      - {output: normalized, block_size: [32, 32], loop: subblock}
+      - output: normalized
+        packer: Packer
+        block_size: [32, 32]
+        loop: subblock
 
   - math:
       - type: Fpu
@@ -132,7 +150,10 @@ operations:
         in1: gamma
         loop: row_broadcast
     pack:
-      - {output: gamma_out, block_size: [32, 32], loop: subblock}
+      - output: gamma_out
+        packer: Packer
+        block_size: [32, 32]
+        loop: subblock
 
   - math:
       - type: Fpu
@@ -145,4 +166,7 @@ operations:
         in1: beta
         loop: row_broadcast
     pack:
-      - {output: output, block_size: [32, 32], loop: subblock}
+      - output: output
+        packer: Packer
+        block_size: [32, 32]
+        loop: subblock

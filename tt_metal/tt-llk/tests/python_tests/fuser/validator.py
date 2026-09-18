@@ -567,7 +567,7 @@ class PackSchema(BaseModel):
 
     type: Literal["Pack"] = "Pack"
     output: str = Field(..., min_length=1)
-    packer: str = "Packer"
+    packer: str
     pack_relu: PackerReluType = PackerReluType.NoRelu
     relu_threshold: float = 0.0
     pack_l1_accumulation: L1Accumulation = L1Accumulation.No
