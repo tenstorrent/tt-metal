@@ -4,6 +4,9 @@
 
 #pragma once
 
+#include <functional>
+#include <numeric>
+
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
 
@@ -43,13 +46,11 @@ constexpr bool is_height_concat(uint32_t rank, uint32_t dim) { return rank >= 2 
 // All inputs agree on this value: they differ only in the concat dim, which is not a leading dim.
 inline uint32_t num_leading_blocks(const Tensor& tensor) {
     const auto& padded_shape = tensor.padded_shape();
-    const uint32_t rank = padded_shape.rank();
-    uint32_t blocks = 1;
-    // Phrased as i + 2 < rank so rank < 2 cannot wrap the unsigned bound.
-    for (uint32_t i = 0; i + 2 < rank; i++) {
-        blocks *= padded_shape[i];
+    // Guarded so cend() - 2 cannot walk past the front; rank 2 gives an empty range and 1.
+    if (padded_shape.rank() < 2) {
+        return 1;
     }
-    return blocks;
+    return std::accumulate(padded_shape.cbegin(), padded_shape.cend() - 2, 1u, std::multiplies<uint32_t>{});
 }
 
 }  // namespace ttnn::prim
