@@ -101,8 +101,8 @@ private:
         DeviceCtx& ctx,
         const distributed::MeshCoordinate& coord);
     void enumerate_worker_grid(const std::shared_ptr<distributed::MeshDevice>& mesh_device, DeviceCtx& ctx);
-    // Relay count, each relay's DRAM view and core, then every relay's NIU into stream mode. False: no relay can
-    // run on this device.
+    // Relay count, each relay's DRAM view and core, and a check that firmware left that core's NIUs in stream
+    // mode. False: no relay can run on this device.
     bool choose_relay_cores(const std::shared_ptr<distributed::MeshDevice>& mesh_device, DeviceCtx& ctx);
     void reserve_spool();
     // Configures the relay's TLB window, builds its socket, launches it and confirms its heartbeat. False means

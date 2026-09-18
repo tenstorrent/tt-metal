@@ -241,7 +241,6 @@ set(JITAPI_FILES
     tools/profiler/noc_debugging_profiler.hpp
     tools/profiler/noc_debugging_metadata.hpp
     tools/profiler/cpp_device_analyses.json
-    tools/profiler/kernels/drisc_niu_mode.cpp
     tools/profiler/kernels/streaming_profiler_relay.cpp
     impl/dispatch/kernels/cq_dispatch.cpp
     impl/dispatch/kernels/cq_dispatch_subordinate.cpp
