@@ -226,6 +226,7 @@ set(HW_JIT_API_HEADERS
     inc/hostdev/remote_dfb_config_layout.h
     inc/hostdev/streaming_profiler_common.h
     inc/hostdev/rta_constants.h
+    inc/hostdev/runtime_reload_abi.h
     inc/hostdev/socket.h
     inc/internal/hw_thread.h
     inc/internal/atomic_rwptr.h
@@ -239,6 +240,7 @@ set(HW_JIT_API_HEADERS
     inc/internal/mod_div_lib.h
     inc/internal/pch.h
     inc/internal/risc_attribs.h
+    inc/internal/runtime_reload.h
     inc/internal/template_string.h
     inc/internal/tensix_functions.h
     inc/internal/vptr_uint.h

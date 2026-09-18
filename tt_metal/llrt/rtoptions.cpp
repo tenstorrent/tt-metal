@@ -257,7 +257,7 @@ enum class EnvVarID {
     // JIT BUILD CONFIGURATION
     // ========================================
     TT_METAL_DISABLE_PRECOMPILED_FW,  // Disable use of pre-compiled firmware
-    TT_METAL_FW_SRC_BRISC,            // BRISC firmware variant to JIT-build instead of the in-tree one
+    TT_METAL_FW_SRC_BRISC,            // BRISC firmware feature variant to JIT-build
     TT_METAL_BACKEND_DUMP_RUN_CMD,    // Dump JIT build commands to stdout
 
     // ========================================
@@ -1879,8 +1879,8 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         case EnvVarID::TT_METAL_DISABLE_PRECOMPILED_FW: this->set_disable_precompiled_fw(is_env_enabled(value)); break;
 
         // TT_METAL_FW_SRC_BRISC
-        // Select a supported BRISC firmware variant instead of
-        // tt_metal/hw/firmware/src/tt-1xx/brisc.cc. A non-empty value also disables the precompiled firmware.
+        // Select a feature variant of the in-tree BRISC firmware.
+        // A non-empty value also disables the precompiled firmware.
         // Default: unset
         // Usage: export TT_METAL_FW_SRC_BRISC=blaze
         case EnvVarID::TT_METAL_FW_SRC_BRISC: {

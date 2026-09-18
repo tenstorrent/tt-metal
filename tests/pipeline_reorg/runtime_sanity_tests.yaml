@@ -41,7 +41,12 @@
 
 # --- Device: init, cluster API, mock API (excluding NIGHTLY) ---
 - name: runtime_sanity_device
-  cmd: ./build/test/tt_metal/unit_tests_device --gtest_filter='*:-*NIGHTLY*'
+  cmd: |
+    ./build/test/tt_metal/unit_tests_device --gtest_filter='*:-*NIGHTLY*'
+    TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_FW_SRC_BRISC=blaze \
+      TT_METAL_ENABLE_L1_DATA_CACHE_CORES=all TT_METAL_ENABLE_L1_DATA_CACHE_RISCVS=BR \
+      ./build/test/tt_metal/unit_tests_device \
+      --gtest_filter="*RuntimeReloadFirmware*:MeshDeviceFixture.TensixConfigureProgramWithoutLaunchInstallsButDoesNotRun"
   skus:
     wh_n150_civ2:
       timeout: 3

@@ -684,6 +684,9 @@ public:
             compile_hash_str += "_";
             compile_hash_str += get_feature_hash_string((llrt::RunTimeDebugFeatures)i);
         }
+        if (get_brisc_firmware_variant() == BriscFirmwareVariant::Blaze) {
+            compile_hash_str += "_blaze_runtime_reload";
+        }
         return compile_hash_str;
     }
 

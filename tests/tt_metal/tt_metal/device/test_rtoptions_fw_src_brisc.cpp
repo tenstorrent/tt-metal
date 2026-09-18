@@ -2,17 +2,20 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// TT_METAL_FW_SRC_BRISC selects a supported BRISC firmware variant to JIT-build instead of the
-// in-tree one. Only the JIT build can use it, so a non-empty value also disables the precompiled
-// firmware: the two switches cannot disagree, and a caller does not have to remember a second variable.
+// TT_METAL_FW_SRC_BRISC selects a feature variant of the in-tree BRISC firmware. Only the JIT build can use it, so a
+// non-empty value also disables the precompiled firmware: the two switches cannot disagree, and a caller does not have
+// to remember a second variable.
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cstdlib>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include "llrt/rtoptions.hpp"
+#include "llrt/hal.hpp"
 
 namespace {
 
@@ -73,4 +76,40 @@ TEST(RunTimeOptionsFirmwareSource, CPU_ArbitrarySourcePathIsRejected) {
 TEST(RunTimeOptionsFirmwareSource, CPU_UnsupportedTtLangVariantIsRejected) {
     ScopedEnv src("TT_METAL_FW_SRC_BRISC", "ttlang");
     EXPECT_ANY_THROW(tt::llrt::RunTimeOptions{});
+}
+
+TEST(RunTimeOptionsFirmwareSource, CPU_BlazeVariantHasASeparateCompileHash) {
+    ScopedEnv src("TT_METAL_FW_SRC_BRISC", std::nullopt);
+    tt::llrt::RunTimeOptions stock;
+    ScopedEnv blaze_src("TT_METAL_FW_SRC_BRISC", "blaze");
+    tt::llrt::RunTimeOptions blaze;
+    EXPECT_NE(stock.get_compile_hash_string(), blaze.get_compile_hash_string());
+}
+
+TEST(RunTimeOptionsFirmwareSource, CPU_BlazeDefineOnlyAppliesToBriscFirmware) {
+    using namespace tt::tt_metal;
+    ScopedEnv src("TT_METAL_FW_SRC_BRISC", std::nullopt);
+    tt::llrt::RunTimeOptions stock;
+    ScopedEnv blaze_src("TT_METAL_FW_SRC_BRISC", "blaze");
+    tt::llrt::RunTimeOptions blaze;
+    for (const auto arch : {tt::ARCH::WORMHOLE_B0, tt::ARCH::BLACKHOLE}) {
+        const Hal hal(arch, false, false, 0, false);
+        const auto& query = hal.get_jit_build_query();
+        for (const auto* opts : {&stock, &blaze}) {
+            for (bool is_fw : {false, true}) {
+                for (uint32_t processor = 0; processor < 2; ++processor) {
+                    const HalJitBuildQueryInterface::Params params{
+                        is_fw, HalProgrammableCoreType::TENSIX, HalProcessorClassType::DM, processor, *opts};
+                    const auto defines = query.defines(params);
+                    const bool enabled =
+                        std::find(defines.begin(), defines.end(), "BLAZE_RUNTIME_RELOAD") != defines.end();
+                    EXPECT_EQ(enabled, opts == &blaze && is_fw && processor == 0);
+                    if (is_fw && processor == 0) {
+                        EXPECT_EQ(
+                            query.srcs(params), std::vector<std::string>{"tt_metal/hw/firmware/src/tt-1xx/brisc.cc"});
+                    }
+                }
+            }
+        }
+    }
 }
