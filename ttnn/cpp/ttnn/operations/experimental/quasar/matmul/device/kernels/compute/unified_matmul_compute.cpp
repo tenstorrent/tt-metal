@@ -4,22 +4,23 @@
 
 // Unified matmul compute kernel: C = A x B for one cluster, as a classic blocked GEMM.
 //
-// GEMM view, all sizes in 32x32 tiles: C[M x N] = A[M x K] x B[K x N]. A block is per_core_M_tiles x per_core_N_tiles
-// tiles of C; this cluster produces num_blocks of them and this kernel does not care where in C they sit.
-// For every block it accumulates over K, K_iteration_tiles per iteration: the reader delivers one A slice
-// ([per_core_M_tiles][K_iteration_tiles] tiles) and one B slice ([K_iteration_tiles][per_core_N_tiles] tiles) per
-// iteration, and the MATH engine multiplies them one subblock (subblock_M_tiles x subblock_N_tiles C tiles,
-// the amount DST holds) at a time.
+// GEMM view, all sizes in 32x32 tiles: C[M x N] = A[M x K] x B[K x N]. A C block is per_core_M_tiles x
+// per_core_N_tiles tiles of C; this cluster produces num_C_blocks of them for every batch, and this kernel
+// does not care where in C they sit. For every C block it accumulates over K, K_iteration_tiles per
+// iteration: the reader delivers one A slice ([per_core_M_tiles][K_iteration_tiles] tiles) and one B slice
+// ([K_iteration_tiles][per_core_N_tiles] tiles) per iteration, and the MATH engine multiplies them one
+// subblock (subblock_M_tiles x subblock_N_tiles C tiles, the amount DST holds) at a time.
 //
 // Between K iterations the running sums have to leave DST. Default: they are packed into the C_partials
 // ring and copied back into DST at the start of the next iteration (spill / reload). With PACKER_L1_ACC the
 // packer adds DST onto the partials already in L1 instead, so only the last iteration reloads. The last K
 // iteration packs the finished subblocks into the C_block ring for the writer.
 //
-// Loop order matches the reader and the writer: block, K iteration, then subblocks (m_tile, n_tile) row-major over
-// the block, then k_tile within the iteration. Runtime args: num_blocks. Compile-time args: K_iteration_tiles,
-// num_K_iterations, per_core_M_tiles, per_core_N_tiles, subblock_M_tiles, subblock_N_tiles.
-// Defines: FP32_DEST_ACC_EN, PACKER_L1_ACC.
+// Loop order matches the reader and the writer: C block, batch, K iteration, subblocks (m_tile, n_tile)
+// row-major over the C block, k_tile within the iteration. All trip counts are compile-time, so the normal
+// case of one C block per core (and batch 1) has no loop overhead. Compile-time args: batch_size,
+// num_C_blocks, K_iteration_tiles, num_K_iterations, per_core_M_tiles, per_core_N_tiles, subblock_M_tiles,
+// subblock_N_tiles. Defines: FP32_DEST_ACC_EN, PACKER_L1_ACC.
 
 #include <cstdint>
 
@@ -43,14 +44,14 @@ FORCE_INLINE void reload_partials_into_dst(
     copy_block(dfb::C_partials, /*start_in_tile_index=*/0, /*start_dst_tile_index=*/0, subblock_tiles);
     C_partials.pop_front(subblock_tiles);
     reconfig_data_format_srca(dfb::C_partials, dfb::B_slice);
-    // matmul_block_init(A, B, transpose, ct_dim = N tiles, rt_dim = M tiles, kt_dim = K tiles)
+    // Metalium API: matmul_block_init(A, B, transpose, ct_dim = N tiles, rt_dim = M tiles, kt_dim = K tiles).
     matmul_block_init(
         dfb::A_slice, dfb::B_slice, /*transpose=*/0, subblock_N_tiles, subblock_M_tiles, K_iteration_tiles);
 }
 
 void kernel_main() {
-    const uint32_t num_blocks = get_arg(args::num_blocks);
-
+    constexpr uint32_t batch_size = get_arg(args::batch_size);
+    constexpr uint32_t num_C_blocks = get_arg(args::num_C_blocks);  // this core's C blocks per batch
     constexpr uint32_t K_iteration_tiles = get_arg(args::K_iteration_tiles);
     constexpr uint32_t num_K_iterations = get_arg(args::num_K_iterations);
     constexpr uint32_t per_core_M_tiles = get_arg(args::per_core_M_tiles);
@@ -74,11 +75,11 @@ void kernel_main() {
     matmul_block_init(
         dfb::A_slice, dfb::B_slice, /*transpose=*/0, subblock_N_tiles, subblock_M_tiles, K_iteration_tiles);
 
-    for (uint32_t block = 0; block < num_blocks; ++block) {
-        {
-            if (block > 0) {
-                // The previous block's last K iteration left the packer on C_block's format. (The unpacker needs
-                // no fix-up: reload_partials_into_dst already restores SrcA to B's format.)
+    for (uint32_t C_block_index = 0; C_block_index < num_C_blocks; ++C_block_index) {
+        for (uint32_t batch = 0; batch < batch_size; ++batch) {
+            if (C_block_index > 0 || batch > 0) {
+                // The previous C block's last K iteration left the packer on C_block's format. (The unpacker
+                // needs no fix-up: reload_partials_into_dst already restores SrcA to B's format.)
                 pack_reconfig_data_format(dfb::C_partials);
             }
             bool reload_partials = false;
@@ -89,8 +90,8 @@ void kernel_main() {
                 B_slice.wait_front(B_slice_tiles);
 
                 // Slice layouts: A is [per_core_M_tiles][K_iteration_tiles] row-major, B is
-                // [K_iteration_tiles][per_core_N_tiles]. Walk the block in subblocks: (m_tile, n_tile) is the
-                // subblock's first tile within the block.
+                // [K_iteration_tiles][per_core_N_tiles]. Walk the C block in subblocks: (m_tile, n_tile) is the
+                // subblock's first tile within the C block.
                 for (uint32_t m_tile = 0; m_tile < per_core_M_tiles; m_tile += subblock_M_tiles) {
                     const uint32_t A_subblock_first_tile = m_tile * K_iteration_tiles;  // A slice tile (m_tile, 0)
                     for (uint32_t n_tile = 0; n_tile < per_core_N_tiles; n_tile += subblock_N_tiles) {
@@ -101,12 +102,12 @@ void kernel_main() {
                                 subblock_tiles, subblock_M_tiles, subblock_N_tiles, K_iteration_tiles);
                         }
 
-                        // Accumulate this subblock over the K iteration, one K tile per matmul_block call: each call
-                        // multiplies A's subblock_M_tiles-tall column of tiles at k_tile by B's subblock_N_tiles-wide
-                        // row of tiles at k_tile and adds the subblock_M_tiles x subblock_N_tiles products onto DST
-                        // tiles 0..subblock_tiles-1. The LLK has no multi-K-tile call: kt_dim is only the row
-                        // stride of the A slice ([per_core_M_tiles][K_iteration_tiles] tiles), so the k loop lives
-                        // here.
+                        // Accumulate this subblock over the K iteration, one K tile per matmul_block call: each
+                        // call multiplies A's subblock_M_tiles-tall column of tiles at k_tile by B's
+                        // subblock_N_tiles-wide row of tiles at k_tile and adds the subblock_M_tiles x
+                        // subblock_N_tiles products onto DST tiles 0..subblock_tiles-1. The LLK has no
+                        // multi-K-tile call: kt_dim is only the row stride of the A slice
+                        // ([per_core_M_tiles][K_iteration_tiles] tiles), so the k loop lives here.
                         uint32_t A_tile = A_subblock_first_tile;
                         uint32_t B_tile = B_subblock_first_tile;
                         for (uint32_t k_tile = 0; k_tile < K_iteration_tiles; ++k_tile) {
@@ -158,8 +159,8 @@ void kernel_main() {
 #ifdef PACKER_L1_ACC
                 // The packer accumulated in place, so the entries pushed this iteration carry nothing new:
                 // pop them without reading (the ring holds exactly one C block, so the next iteration lands
-                // on the same L1 addresses). The second-to-last iteration's entries stay: the last one reloads them.
-                // dummy_unpack orders the pop after the wait on Quasar; it is a no-op elsewhere.
+                // on the same L1 addresses). The second-to-last iteration's entries stay: the last one reloads
+                // them. dummy_unpack orders the pop after the wait on Quasar; it is a no-op elsewhere.
                 if (K_iteration + 2 < num_K_iterations) {
                     for (uint32_t popped = 0; popped < C_block_tiles; popped += subblock_tiles) {
                         C_partials.wait_front(subblock_tiles);
