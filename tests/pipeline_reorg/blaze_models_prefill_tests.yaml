@@ -166,7 +166,7 @@
     mpirun --bind-to none --pernode --tag-output bash -lc '
       set -e
       export OMP_NUM_THREADS=$(nproc)
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_kimi_prefill_block -k "torus-xy-8x4 and perf-random-5k and with_determinism and iter2 and not iter25 and not iter2000 and moe_gate_device and not pretrained" -vvv --tb=short --timeout=1800
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_kimi_prefill_block -k "torus-xy-8x4 and perf-random-5k and with_determinism and iter2 and not iter25 and not iter2000 and moe_gate_device_fp32 and not pretrained" -vvv --tb=short --timeout=900
     '
   test_type: prefill_block_determinism
   test_tags: [kimi_k2_7, block, determinism]
@@ -292,7 +292,7 @@
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_kimi_prefill_transformer_chunked_perf -k "kimi_k2_7 and torus-xy-8x4 and L61 and preload0 and chunks_eleven and ten_iters and notrace" -xvs
     '
   test_type: kimi_chunked
-  test_tags: [kimi_k2_7, transformer]
+  test_tags: [kimi_k2_7, transformer, kimi_chunked_untraced_perf]
   test_group: module
   skus:
     bh_sc1_high_power:
@@ -653,11 +653,7 @@
     export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/glm-traces/vllm-glm52-indexer-kcache-55k
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
-      # BOTH axes pinned. main added tp_shard_kv (sp_only|tp_sharded) and this branch added use_trace
-      # (notrace|traced); a selector naming only one matches two cases and silently doubles the job.
-      # sp_only matches main's scope -- tp_sharded has no CI job on either side. notrace is the arm that
-      # also asserts per-layer PCC (impossible under capture); the traced arm is its own job below.
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_glm_prefill_transformer_chunked -k "glm52 and torus-xy-8x4 and L78 and warm_cache and sp_only and notrace" -xvs
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_glm_prefill_transformer_chunked -k "glm52 and torus-xy-8x4 and L78 and warm_cache and notrace" -xvs
     '
   test_type: glm_chunked_accuracy
   test_tags: [glm_5_2, transformer]
@@ -689,7 +685,7 @@
     export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/glm-traces/vllm-glm52-indexer-kcache-55k
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_glm_prefill_transformer_chunked -k "glm52 and torus-xy-8x4 and L78 and warm_cache and sp_only and traced" -xvs
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_glm_prefill_transformer_chunked -k "glm52 and torus-xy-8x4 and L78 and warm_cache and traced" -xvs
     '
   test_type: glm_chunked_accuracy
   test_tags: [glm_5_2, transformer]
@@ -716,10 +712,10 @@
     export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/glm-traces/vllm-glm52-indexer-kcache-55k
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_glm_prefill_transformer_chunked_no_pcc -k "glm52 and torus-xy-8x4 and L78 and preload0 and chunks_eleven and ten_iters and sp_only and notrace" -xvs
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_glm_prefill_transformer_chunked_no_pcc -k "glm52 and torus-xy-8x4 and L78 and preload0 and chunks_eleven and ten_iters and notrace" -xvs
     '
   test_type: glm_chunked
-  test_tags: [glm_5_2, transformer]
+  test_tags: [glm_5_2, transformer, glm_chunked_untraced_perf]
   test_group: module
   skus:
     bh_sc1_high_power:
@@ -746,7 +742,7 @@
     export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/glm-traces/vllm-glm52-indexer-kcache-55k
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_glm_prefill_transformer_chunked_no_pcc -k "glm52 and torus-xy-8x4 and L78 and preload0 and chunks_eleven and ten_iters and sp_only and traced" -xvs
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_glm_prefill_transformer_chunked_no_pcc -k "glm52 and torus-xy-8x4 and L78 and preload0 and chunks_eleven and ten_iters and traced" -xvs
     '
   test_type: glm_chunked
   test_tags: [glm_5_2, transformer]
@@ -848,6 +844,39 @@
   sp_config: sc1
 
 
+# ===== Gemma4-31B D_P =================================================================================
+
+# Sanity gate for the standalone disaggregated-prefill implementation: the
+# canonical production shape (traced, 256k context, 8k chunk, 8x4 = CP8/TP4)
+# exercised end to end on real text. Golden GPU-trace comparisons are staged
+# separately on /mnt/models; this leg only checks the path runs.
+- name: "(Gemma4-31B-it) D_P prefill sanity 256k@8k"
+  fabric_profile: 1d
+  cmd: |
+    export HF_HUB_OFFLINE=1
+    export HF_HOME=/mnt/models/huggingface
+    export HF_MODEL=google/gemma-4-31B-it
+    export TT_CACHE_PATH=/mnt/models/huggingface/tt_cache/gemma4_d_p/google--gemma-4-31B-it
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      set -e
+      export OMP_NUM_THREADS=$(nproc)
+      python3 -m pytest models/demos/gemma4_d_p/tests/test_sanity_glx.py \
+        -vv --tb=short --timeout=1800
+    '
+  test_type: gemma4_d_p
+  test_tags: [gemma4_d_p, transformer]
+  test_group: module
+  budget_type: demo
+  skus:
+    bh_sc1:
+      timeout: 30
+      tier: 1
+      release_ready: false
+  owner_id: U078RU2KP9Q # Muhammad Asif Manzoor
+  team: models
+  sp_config: sc1
+
+
 # ===== MiniMax-M3-428B =================================================================================
 
 # MiniMax-M3 full-model real-weights prefill + per-layer KV PCC (standalone harness, not pytest).
@@ -933,6 +962,9 @@
 # they cost no second runner acquisition: the mesh is already open for the MLA rows.
 # The tests/torch/ file is host-only, and that directory has no CI home for any model. It is three
 # fast tests against an already-warm interpreter, so it rides along instead of staying ungated.
+# test_llama4_scale_cache.py is host-only for the same reason: it stubs the mesh device and asserts
+# the shared query-scale dict reaches every layer. 2.6 s measured, so it rides along here too rather
+# than acquiring a runner of its own.
 - name: "Mistral-Small-4-119B MLA accuracy 5k, 25k + llama4 query scale"
   cmd: |
     export MISTRAL4_HF_MODEL=/mnt/models/blaze/mistralai/Mistral-Small-4-119B-2603
@@ -944,21 +976,24 @@
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mistral_small4_mla -vvv --tb=short
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py -k "llama4" -vvv --tb=short
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/torch/test_mistral_small_4_mla_reference.py -vvv --tb=short
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_llama4_scale_cache.py -vvv --tb=short
     '
   test_type: mistral4_mla
   test_tags: [mistral4, mla]
   test_group: module
   skus:
     bh_sc1:
-      # 4.9 min measured on CI run 33558247799 for all three pytest invocations; 20 is ~4.0x.
+      # 4.9 min measured on CI run 33558247799 for the first three pytest invocations; 20 is ~4.0x
+      # after #56135 doubled every blaze prefill timeout for #56046 (weight build degrades with depth).
+      # The fourth (test_llama4_scale_cache) is host-only and adds 2.6 s, inside that headroom.
       # Was briefly 18, sized from 12.0 min measured on a galaxy box -- the same work runs ~2.4x
       # slower there than on CI, so local numbers oversize CI timeouts badly. Size from CI runs.
       # `set -e` above is load-bearing: without it only the LAST pytest's status reaches the runner,
-      # so a failure in either of the first two would report as a pass.
+      # so a failure in any of the earlier ones would report as a pass.
       timeout: 20
       tier: 2
       release_ready: false
-  owner_id: U08GEEEEC75 # ssalice
+  owner_id: U0AQ3FGS9MG # Alina Khan
   team: models
   budget_type: demo
   sp_config: sc1
@@ -985,7 +1020,7 @@
       timeout: 44
       tier: 2
       release_ready: false
-  owner_id: U08GEEEEC75 # ssalice
+  owner_id: U0AQ3FGS9MG # Alina Khan
   team: models
   budget_type: demo
   sp_config: sc1
@@ -1012,7 +1047,7 @@
       timeout: 40
       tier: 2
       release_ready: false
-  owner_id: U08GEEEEC75 # ssalice
+  owner_id: U0AQ3FGS9MG # Alina Khan
   team: models
   budget_type: demo
   sp_config: sc1
@@ -1033,7 +1068,7 @@
       timeout: 20
       tier: 2
       release_ready: false
-  owner_id: U08GEEEEC75 # ssalice
+  owner_id: U0AQ3FGS9MG # Alina Khan
   team: models
   budget_type: demo
   sp_config: sc1
@@ -1060,7 +1095,7 @@
       timeout: 28
       tier: 2
       release_ready: false
-  owner_id: U08GEEEEC75 # ssalice
+  owner_id: U0AQ3FGS9MG # Alina Khan
   team: models
   budget_type: demo
   sp_config: sc1
@@ -1096,7 +1131,7 @@
       timeout: 52
       tier: 2
       release_ready: false
-  owner_id: U08GEEEEC75 # ssalice
+  owner_id: U0AQ3FGS9MG # Alina Khan
   team: models
   budget_type: demo
   sp_config: sc1
@@ -1128,7 +1163,7 @@
       timeout: 20
       tier: 2
       release_ready: false
-  owner_id: U08GEEEEC75 # ssalice
+  owner_id: U0AQ3FGS9MG # Alina Khan
   team: models
   budget_type: demo
   sp_config: sc1

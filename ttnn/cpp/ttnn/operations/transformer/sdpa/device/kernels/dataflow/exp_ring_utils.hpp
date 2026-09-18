@@ -61,11 +61,14 @@ struct RingIdSequencer {
  *
  * @param seq               Sequencer state (copied — original is not modified)
  * @param local_padded_Nt   Per-device padded sequence length in tiles
- * @param global_n_tile_id  Logical (unpadded) sequence length in tiles (logical_n / TILE_HEIGHT)
+ * @param logical_nt        Logical (unpadded) sequence length in tiles (div_up(logical_n, TILE_HEIGHT))
  * @param L                 Joint sequence length in elements (0 if no joint attention)
+ *
+ * Mirrors the per-chunk skip (kv_global_start_tile >= logical_nt): active <=> >=1 real KV chunk.
+ * div_up, not floor — floor marks a shard starting exactly on the boundary active with zero chunks.
  */
 inline uint32_t find_last_active_ring_iter(
-    RingIdSequencer seq, uint32_t local_padded_Nt, uint32_t global_n_tile_id, uint32_t L) {
+    RingIdSequencer seq, uint32_t local_padded_Nt, uint32_t logical_nt, uint32_t L) {
     uint32_t last_active = 0;
     auto no_sync = [](uint32_t, uint32_t) {};
 
@@ -73,7 +76,7 @@ inline uint32_t find_last_active_ring_iter(
         uint32_t ring_id = seq.get_next_ring_id(no_sync);
         bool does_joint = (ring_id == seq.ring_size - 1);
         uint32_t kv_start = ring_id * local_padded_Nt;
-        bool does_work = (kv_start <= global_n_tile_id) || (does_joint && L != 0);
+        bool does_work = (kv_start < logical_nt) || (does_joint && L != 0);
         if (does_work) {
             last_active = t;
         }

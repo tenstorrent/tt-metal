@@ -58,12 +58,8 @@ class Gemma4Precision:
         return f"Gemma4Precision({self._overrides!r})"
 
     @classmethod
-    def load(cls, model_path, mesh_shape):
-        """Resolve overrides for the given (model, mesh).
-
-        model_path: full path to the HF checkpoint; we key on the basename.
-        mesh_shape: (rows, cols) tuple, formatted as "RxC" for the JSON key.
-        """
+    def load(cls, model_path):
+        """Resolve module precision overrides using the model path basename."""
         try:
             with open(_PATH) as f:
                 table = json.load(f)
@@ -73,7 +69,6 @@ class Gemma4Precision:
             raise ValueError(f"Invalid JSON in precision configuration {_PATH}: {exc}") from exc
 
         model_key = os.path.basename(str(model_path).rstrip("/"))
-        mesh_key = f"{mesh_shape[0]}x{mesh_shape[1]}"
         model_entry = table.get(model_key)
         if not model_entry:
             raise ValueError(
@@ -81,19 +76,13 @@ class Gemma4Precision:
                 f"expected one of {sorted(table)}"
             )
 
-        raw = model_entry.get(mesh_key)
-        if not raw:
-            raise ValueError(
-                f"No precision configuration for model {model_key!r}, mesh {mesh_key!r} in {_PATH}; "
-                f"expected one of {sorted(model_entry)}"
-            )
         resolved = {}
-        for k, v in raw.items():
+        for k, v in model_entry.items():
             if k not in KNOWN_MODULES:
                 continue  # ignore unknown / future keys silently
             if v not in _DTYPE_BY_NAME:
                 raise ValueError(
-                    f"precision_overrides.json[{model_key}][{mesh_key}][{k}]={v!r} — "
+                    f"precision_overrides.json[{model_key}][{k}]={v!r} — "
                     f"unknown dtype; expected one of {sorted(_DTYPE_BY_NAME)}"
                 )
             resolved[k] = _DTYPE_BY_NAME[v]
