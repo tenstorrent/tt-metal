@@ -4,10 +4,10 @@
 
 // Unified matmul compute kernel: C = A x B for one cluster, as a classic blocked GEMM.
 //
-// GEMM view, all sizes in 32x32 tiles: C[M x N] = A[M x K] x B[K x N]. A block is per_core_M x per_core_N
+// GEMM view, all sizes in 32x32 tiles: C[M x N] = A[M x K] x B[K x N]. A block is per_core_M_tiles x per_core_N_tiles
 // tiles of C; this cluster produces num_blocks of them and this kernel does not care where in C they sit.
 // For every block it accumulates over K, K_iteration_tiles per iteration: the reader delivers one A slice
-// ([per_core_M][K_iteration_tiles] tiles) and one B slice ([K_iteration_tiles][per_core_N] tiles) per
+// ([per_core_M_tiles][K_iteration_tiles] tiles) and one B slice ([K_iteration_tiles][per_core_N_tiles] tiles) per
 // iteration, and the MATH engine multiplies them one subblock (subblock_M_tiles x subblock_N_tiles C tiles,
 // the amount DST holds) at a time.
 //
@@ -16,9 +16,9 @@
 // packer adds DST onto the partials already in L1 instead, so only the last iteration reloads. The last K
 // iteration packs the finished subblocks into the C_block ring for the writer.
 //
-// Loop order matches the reader and the writer: block, K iteration, then subblocks (m, n) row-major over
-// the block, then k within the iteration. Runtime args: num_blocks. Compile-time args: K_iteration_tiles,
-// num_K_iterations, per_core_M, per_core_N, subblock_M_tiles, subblock_N_tiles.
+// Loop order matches the reader and the writer: block, K iteration, then subblocks (m_tile, n_tile) row-major over
+// the block, then k_tile within the iteration. Runtime args: num_blocks. Compile-time args: K_iteration_tiles,
+// num_K_iterations, per_core_M_tiles, per_core_N_tiles, subblock_M_tiles, subblock_N_tiles.
 // Defines: FP32_DEST_ACC_EN, PACKER_L1_ACC.
 
 #include <cstdint>
@@ -53,14 +53,14 @@ void kernel_main() {
 
     constexpr uint32_t K_iteration_tiles = get_arg(args::K_iteration_tiles);
     constexpr uint32_t num_K_iterations = get_arg(args::num_K_iterations);
-    constexpr uint32_t per_core_M = get_arg(args::per_core_M);
-    constexpr uint32_t per_core_N = get_arg(args::per_core_N);
+    constexpr uint32_t per_core_M_tiles = get_arg(args::per_core_M_tiles);
+    constexpr uint32_t per_core_N_tiles = get_arg(args::per_core_N_tiles);
     constexpr uint32_t subblock_M_tiles = get_arg(args::subblock_M_tiles);
     constexpr uint32_t subblock_N_tiles = get_arg(args::subblock_N_tiles);
 
-    constexpr uint32_t A_slice_tiles = per_core_M * K_iteration_tiles;
-    constexpr uint32_t B_slice_tiles = K_iteration_tiles * per_core_N;
-    constexpr uint32_t C_block_tiles = per_core_M * per_core_N;
+    constexpr uint32_t A_slice_tiles = per_core_M_tiles * K_iteration_tiles;
+    constexpr uint32_t B_slice_tiles = K_iteration_tiles * per_core_N_tiles;
+    constexpr uint32_t C_block_tiles = per_core_M_tiles * per_core_N_tiles;
     constexpr uint32_t subblock_tiles = subblock_M_tiles * subblock_N_tiles;  // what DST holds
     // Partial sums exist only when K is split into more than one iteration.
     constexpr bool accumulate_across_K_iterations = num_K_iterations > 1;
@@ -88,24 +88,28 @@ void kernel_main() {
                 A_slice.wait_front(A_slice_tiles);
                 B_slice.wait_front(B_slice_tiles);
 
-                // Slice layouts: A is [per_core_M][K_iteration_tiles] row-major, B is [K_iteration_tiles][per_core_N].
-                // Walk the block in subblocks: (m, n) is the subblock's first tile within the block.
-                for (uint32_t m = 0; m < per_core_M; m += subblock_M_tiles) {
-                    const uint32_t A_subblock_first_tile = m * K_iteration_tiles;  // A slice tile (m, 0)
-                    for (uint32_t n = 0; n < per_core_N; n += subblock_N_tiles) {
-                        const uint32_t B_subblock_first_tile = n;  // B slice tile (0, n)
+                // Slice layouts: A is [per_core_M_tiles][K_iteration_tiles] row-major, B is
+                // [K_iteration_tiles][per_core_N_tiles]. Walk the block in subblocks: (m_tile, n_tile) is the
+                // subblock's first tile within the block.
+                for (uint32_t m_tile = 0; m_tile < per_core_M_tiles; m_tile += subblock_M_tiles) {
+                    const uint32_t A_subblock_first_tile = m_tile * K_iteration_tiles;  // A slice tile (m_tile, 0)
+                    for (uint32_t n_tile = 0; n_tile < per_core_N_tiles; n_tile += subblock_N_tiles) {
+                        const uint32_t B_subblock_first_tile = n_tile;  // B slice tile (0, n_tile)
                         tile_regs_acquire();
                         if (reload_partials) {
                             reload_partials_into_dst(
                                 subblock_tiles, subblock_M_tiles, subblock_N_tiles, K_iteration_tiles);
                         }
 
-                        // Accumulate this subblock over the K iteration, one K tile per matmul_block call. The
-                        // call multiplies subblock_M_tiles rows of the A slice (row stride K_iteration_tiles) by one
-                        // row of the B slice (subblock_N_tiles wide) into DST tiles 0..subblock_tiles-1.
+                        // Accumulate this subblock over the K iteration, one K tile per matmul_block call: each call
+                        // multiplies A's subblock_M_tiles-tall column of tiles at k_tile by B's subblock_N_tiles-wide
+                        // row of tiles at k_tile and adds the subblock_M_tiles x subblock_N_tiles products onto DST
+                        // tiles 0..subblock_tiles-1. The LLK has no multi-K-tile call: kt_dim is only the row
+                        // stride of the A slice ([per_core_M_tiles][K_iteration_tiles] tiles), so the k loop lives
+                        // here.
                         uint32_t A_tile = A_subblock_first_tile;
                         uint32_t B_tile = B_subblock_first_tile;
-                        for (uint32_t k = 0; k < K_iteration_tiles; ++k) {
+                        for (uint32_t k_tile = 0; k_tile < K_iteration_tiles; ++k_tile) {
                             matmul_block(
                                 dfb::A_slice,
                                 dfb::B_slice,
@@ -116,8 +120,8 @@ void kernel_main() {
                                 subblock_N_tiles,
                                 subblock_M_tiles,
                                 K_iteration_tiles);
-                            A_tile += 1;           // next K tile along the A slice row
-                            B_tile += per_core_N;  // next K row of the B slice
+                            A_tile += 1;                 // next K tile along the A slice row
+                            B_tile += per_core_N_tiles;  // next K row of the B slice
                         }
                         tile_regs_commit();
 
