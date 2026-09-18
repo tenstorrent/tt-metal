@@ -255,6 +255,7 @@ TEST_F(SplitGalaxyMeshDeviceFixture, SocketSubContextValidation) {
         tt_metal::distributed::MeshCoreCoord(MeshCoordinate(3, 3), tt_metal::CoreCoord(0, 0)));
 
     auto socket_mem_config = tt_metal::distributed::SocketMemoryConfig(tt_metal::BufferType::L1, 1024);
+    socket_mem_config.per_core_allocation = true;
 
     if (parent_context->rank() == Rank{0}) {
         auto sub_context = parent_context->create_sub_context(handshake_ranks);
@@ -264,9 +265,12 @@ TEST_F(SplitGalaxyMeshDeviceFixture, SocketSubContextValidation) {
             {socket_connection}, socket_mem_config, MeshId{0}, MeshId{1}, sub_context);
         tt_metal::distributed::SocketConfig socket_config_2(
             {invalid_socket_connection}, socket_mem_config, Rank{0}, Rank{1}, sub_context);
+        tt_metal::distributed::SocketConfig socket_config_3(
+            {invalid_socket_connection}, socket_mem_config, MeshId{0}, MeshId{1}, sub_context);
         auto send_socket_0 = tt_metal::distributed::MeshSocket(mesh_device_, socket_config_0);
         auto send_socket_1 = tt_metal::distributed::MeshSocket(mesh_device_, socket_config_1);
         EXPECT_THROW(tt_metal::distributed::MeshSocket(mesh_device_, socket_config_2), std::exception);
+        EXPECT_THROW(tt_metal::distributed::MeshSocket(mesh_device_, socket_config_3), std::exception);
     } else if (parent_context->rank() == Rank{2}) {
         auto sub_context = parent_context->create_sub_context(handshake_ranks);
         tt_metal::distributed::SocketConfig socket_config_0(
@@ -275,9 +279,12 @@ TEST_F(SplitGalaxyMeshDeviceFixture, SocketSubContextValidation) {
             {socket_connection}, socket_mem_config, MeshId{0}, MeshId{1}, sub_context);
         tt_metal::distributed::SocketConfig socket_config_2(
             {invalid_socket_connection}, socket_mem_config, Rank{0}, Rank{1}, sub_context);
+        tt_metal::distributed::SocketConfig socket_config_3(
+            {invalid_socket_connection}, socket_mem_config, MeshId{0}, MeshId{1}, sub_context);
         auto recv_socket_0 = tt_metal::distributed::MeshSocket(mesh_device_, socket_config_0);
         auto recv_socket_1 = tt_metal::distributed::MeshSocket(mesh_device_, socket_config_1);
         EXPECT_THROW(tt_metal::distributed::MeshSocket(mesh_device_, socket_config_2), std::exception);
+        EXPECT_THROW(tt_metal::distributed::MeshSocket(mesh_device_, socket_config_3), std::exception);
     }
     parent_context->barrier();
 }
@@ -295,6 +302,9 @@ TEST_F(SplitGalaxyMeshDeviceFixture, RankBasedSocketCreation) {
     auto recv_rank_1 = Rank{3};
 
     auto socket_mem_config = tt_metal::distributed::SocketMemoryConfig(tt_metal::BufferType::L1, socket_fifo_size);
+    socket_mem_config.per_core_allocation = true;
+    // Rank-addressed sockets use canonical logical mesh coordinates. Ranks 0/2 own (0, 0);
+    // ranks 1/3 own (3, 3) on this 4x4 split-host mesh.
     auto socket_connection_0 = tt_metal::distributed::SocketConnection(
         tt_metal::distributed::MeshCoreCoord(MeshCoordinate(0, 0), tt_metal::CoreCoord(0, 0)),
         tt_metal::distributed::MeshCoreCoord(MeshCoordinate(0, 0), tt_metal::CoreCoord(0, 0)));
