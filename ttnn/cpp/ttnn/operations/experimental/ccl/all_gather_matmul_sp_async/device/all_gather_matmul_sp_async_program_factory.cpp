@@ -49,6 +49,7 @@ AllGatherMatmulSpAsyncMeshWorkloadFactory::cached_program_t AllGatherMatmulSpAsy
                                                   : sp_ag_schedule(ag.topology, T, ring_index, B);
     matmul_fused_op_signaler->init_sp_schedule(
         pack_sp_schedule(schedule), static_cast<uint32_t>(input.buffer()->address()));
+    matmul_fused_op_signaler->sp_in1_resident = args.in1_resident;
 
     auto matmul_cached_program = ttnn::prim::matmul_multi_core_reuse_mcast_2d_optimized_helper(
         program,
@@ -98,7 +99,8 @@ AllGatherMatmulSpAsyncMeshWorkloadFactory::cached_program_t AllGatherMatmulSpAsy
         ag.num_buffers_per_channel,
         args.all_gather_core_grid_offset,
         /*reverse_order=*/false,
-        /*sub_core_grid=*/std::nullopt);
+        /*sub_core_grid=*/std::nullopt,
+        /*fused_op_signal_on_receive=*/args.ag_signal_on_receive);
 
     return cached_program_t(
         {std::move(program),

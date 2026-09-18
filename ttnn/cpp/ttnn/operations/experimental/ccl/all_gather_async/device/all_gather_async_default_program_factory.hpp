@@ -73,7 +73,11 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
     std::optional<uint32_t> num_buffers_per_channel,
     CoreCoord core_grid_offset,
     bool reverse_order,
-    const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt);
+    const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt,
+    // Fused-op signalling only (fused_op_signaler set): signal a forwarded slice as soon as it has landed instead of
+    // after it has been forwarded (AG_FUSED_SIGNAL_ON_RECEIVE in minimal_default_reader.cpp). Consumers that read the
+    // gathered tensor (all_gather_matmul_sp_async) want this; the default keeps the historical timing.
+    bool fused_op_signal_on_receive = false);
 
 // Runtime argument override function
 void all_gather_async_minimal_default_helper_override_runtime_arguments(

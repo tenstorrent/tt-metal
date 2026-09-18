@@ -270,6 +270,7 @@ ttsl::hash::hash_t MatmulReduceScatterSpAsyncDeviceOperation::compute_program_ha
         args.matmul_params,
         args.ccl_core_rows,
         args.debug_serialize_reduce_scatter,
+        args.in1_resident,
         tensor_args.input,
         tensor_args.weight);
 }
@@ -296,7 +297,8 @@ std::vector<Tensor> matmul_reduce_scatter_sp_async(
     const std::optional<ttnn::DeviceComputeKernelConfig>& reduce_scatter_compute_kernel_config,
     const std::optional<const operations::matmul::MatmulProgramConfig>& program_config,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
-    const bool debug_serialize_reduce_scatter) {
+    const bool debug_serialize_reduce_scatter,
+    const bool in1_resident) {
     using OperationType = ttnn::experimental::prim::MatmulReduceScatterSpAsyncDeviceOperation;
 
     const MemoryConfig out_mem_config = memory_config.value_or(input_tensor.memory_config());
@@ -346,6 +348,7 @@ std::vector<Tensor> matmul_reduce_scatter_sp_async(
         .matmul_params = std::move(matmul_params),
         .ccl_core_rows = ccl_core_rows,
         .debug_serialize_reduce_scatter = debug_serialize_reduce_scatter,
+        .in1_resident = in1_resident,
     };
     auto tensor_args = OperationType::tensor_args_t{.input = input_tensor, .weight = weight_tensor};
 

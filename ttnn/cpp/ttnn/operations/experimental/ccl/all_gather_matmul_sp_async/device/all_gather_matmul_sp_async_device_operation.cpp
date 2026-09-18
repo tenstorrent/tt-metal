@@ -198,6 +198,8 @@ ttsl::hash::hash_t AllGatherMatmulSpAsyncDeviceOperation::compute_program_hash(
         args.all_gather_core_grid_offset,
         args.matmul_grid,
         args.debug_serialize_ag,
+        args.ag_signal_on_receive,
+        args.in1_resident,
         subdevice_core_range_set,
         tensor_args.input,
         tensor_args.weight,
@@ -225,7 +227,9 @@ ttnn::experimental::prim::AllGatherMatmulSpAsyncDeviceOperation::tensor_return_v
     const DeviceComputeKernelConfig& compute_kernel_config,
     const std::optional<const operations::matmul::MatmulProgramConfig>& program_config,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
-    const bool debug_serialize_ag) {
+    const bool debug_serialize_ag,
+    const bool ag_signal_on_receive,
+    const bool in1_resident) {
     using OperationType = ttnn::experimental::prim::AllGatherMatmulSpAsyncDeviceOperation;
     auto* mesh_device = input.device();
     TT_FATAL(mesh_device != nullptr, "all_gather_matmul_sp_async: input must be on a mesh device");
@@ -304,6 +308,8 @@ ttnn::experimental::prim::AllGatherMatmulSpAsyncDeviceOperation::tensor_return_v
         all_gather_core_grid_offset,
         matmul_grid,
         debug_serialize_ag,
+        ag_signal_on_receive,
+        in1_resident,
     };
     auto tensor_args = OperationType::tensor_args_t{.input = input, .weight = weight, .bias = bias};
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);

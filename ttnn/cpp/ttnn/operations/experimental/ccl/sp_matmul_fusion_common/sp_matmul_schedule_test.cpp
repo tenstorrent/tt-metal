@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdlib>
+#include <cstring>
 #include "ttnn/operations/experimental/ccl/sp_matmul_fusion_common/sp_matmul_schedule_test.hpp"
 
 #include <algorithm>
@@ -26,10 +28,13 @@ struct SpMatmulScheduleTestParams {
     ttnn::prim::MatmulParams matmul_struct;
     std::vector<uint32_t> schedule_words;
     bool ag_mode = false;
+    // As in the fused ops: resident in1 slab when it fits (env TT_SP_IN1_STREAM=1 disables).
+    bool in1_resident = true;
 
-    static constexpr auto attribute_names = std::forward_as_tuple("matmul_struct", "schedule_words", "ag_mode");
+    static constexpr auto attribute_names =
+        std::forward_as_tuple("matmul_struct", "schedule_words", "ag_mode", "in1_resident");
     auto attribute_values() const {
-        return std::forward_as_tuple(this->matmul_struct, this->schedule_words, this->ag_mode);
+        return std::forward_as_tuple(this->matmul_struct, this->schedule_words, this->ag_mode, this->in1_resident);
     }
 };
 
@@ -82,6 +87,7 @@ private:
             matmul_fused_op_signaler = MatmulFusedOpSignaler(MatmulFusedOpSignalerType::SP_ALL_GATHER);
             matmul_fused_op_signaler->init_sp_schedule(
                 args.schedule_words, static_cast<uint32_t>(tensor_args.input.buffer()->address()));
+            matmul_fused_op_signaler->sp_in1_resident = args.in1_resident;
         } else {
             // The SP_REDUCE_SCATTER path does a per-sub-batch all-core barrier + semaphore increment on the RS
             // receiver cores. Without a CCL, aim it at one dummy core outside the matmul grid (nobody waits on it).
@@ -111,6 +117,7 @@ private:
                 rs_signaler.fused_op_receiver_signal_semaphores,
                 rs_signaler.fused_op_signaler_mode);
             matmul_fused_op_signaler->init_sp_schedule(args.schedule_words);
+            matmul_fused_op_signaler->sp_in1_resident = args.in1_resident;
         }
 
         auto matmul_cached_program = ttnn::prim::matmul_multi_core_reuse_mcast_2d_optimized_helper(
@@ -231,7 +238,12 @@ struct SpMatmulScheduleTestDeviceOperation {
     static ttsl::hash::hash_t compute_program_hash(
         const operation_attributes_t& args, const tensor_args_t& tensor_args) {
         return tt::tt_metal::operation::hash_operation<SpMatmulScheduleTestDeviceOperation>(
-            args.matmul_struct, args.schedule_words, args.ag_mode, tensor_args.input, tensor_args.weight);
+            args.matmul_struct,
+            args.schedule_words,
+            args.ag_mode,
+            args.in1_resident,
+            tensor_args.input,
+            tensor_args.weight);
     }
 };
 
@@ -263,9 +275,12 @@ Tensor sp_matmul_schedule_test(
     }
     params.transpose_b = transpose_b;
     auto matmul_struct = ttnn::prim::create_matmul_attributes(in0_view, in1, params, {});
+    const char* in1_stream_env = std::getenv("TT_SP_IN1_STREAM");
+    const bool in1_resident =
+        !(in1_stream_env != nullptr && std::strcmp(in1_stream_env, "0") != 0 && std::strcmp(in1_stream_env, "") != 0);
 
     return ttnn::device_operation::launch<OperationType>(
-        OperationType::operation_attributes_t{std::move(matmul_struct), schedule_words, ag_mode},
+        OperationType::operation_attributes_t{std::move(matmul_struct), schedule_words, ag_mode, in1_resident},
         OperationType::tensor_args_t{.input = in0_view, .weight = in1});
 }
 

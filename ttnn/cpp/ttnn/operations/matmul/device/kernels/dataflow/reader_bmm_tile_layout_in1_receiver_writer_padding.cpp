@@ -129,6 +129,13 @@ void kernel_main() {
                 for (uint32_t block = 0; block < num_blocks_inner_dim; ++block) {
                     // Operand 1
                     dfb_in1.reserve_back(in1_block_num_tiles);
+#ifdef SP_IN1_RESIDENT
+                    // Resident slab (see the in1 sender): after the first pass the pages are already here.
+                    if (b != 0 || bh != 0) {
+                        dfb_in1.push_back(in1_block_num_tiles);
+                        continue;
+                    }
+#endif  // SP_IN1_RESIDENT
 
                     // Set in1 semaphore value to INVALID
                     receiver_sem.set(INVALID);

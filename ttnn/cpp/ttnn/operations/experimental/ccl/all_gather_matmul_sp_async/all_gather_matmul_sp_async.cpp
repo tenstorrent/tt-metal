@@ -50,6 +50,15 @@ std::vector<Tensor> all_gather_matmul_sp_async(
     const char* serialize_env = std::getenv("TT_SP_AG_MM_SERIALIZE");
     const bool debug_serialize_ag =
         serialize_env != nullptr && std::strcmp(serialize_env, "0") != 0 && std::strcmp(serialize_env, "") != 0;
+    // Perf-decomposition knob: TT_SP_AG_SIGNAL_LATE=1 restores the historical fused-AG signal timing (a forwarded
+    // slice is signalled after it has been forwarded, one slice-time after it landed).
+    const char* signal_late_env = std::getenv("TT_SP_AG_SIGNAL_LATE");
+    const bool ag_signal_on_receive =
+        !(signal_late_env != nullptr && std::strcmp(signal_late_env, "0") != 0 && std::strcmp(signal_late_env, "") != 0);
+    // Perf-decomposition knob: TT_SP_IN1_STREAM=1 streams the weight per sub-batch instead of keeping it resident.
+    const char* in1_stream_env = std::getenv("TT_SP_IN1_STREAM");
+    const bool in1_resident =
+        !(in1_stream_env != nullptr && std::strcmp(in1_stream_env, "0") != 0 && std::strcmp(in1_stream_env, "") != 0);
 
     // Matmul numerics: ttnn::matmul's defaults (HiFi2, no approx, fp32 accumulation only for fp32 outputs, L1
     // accumulation otherwise). Passing a program config to create_matmul_attributes would drop the fidelity to
@@ -81,7 +90,9 @@ std::vector<Tensor> all_gather_matmul_sp_async(
         matmul_compute_kernel_config,
         program_config,
         sub_device_id,
-        debug_serialize_ag);
+        debug_serialize_ag,
+        ag_signal_on_receive,
+        in1_resident);
 }
 
 std::vector<std::vector<uint32_t>> all_gather_matmul_sp_ag_schedule(

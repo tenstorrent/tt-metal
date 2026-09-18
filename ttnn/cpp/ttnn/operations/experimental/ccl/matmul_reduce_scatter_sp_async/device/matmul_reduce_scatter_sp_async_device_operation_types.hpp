@@ -32,6 +32,9 @@ struct MatmulReduceScatterSpAsyncParams {
     uint32_t ccl_core_rows = 2;
     // Measurement knob: make every reduce-scatter wait resolve only after the last matmul sub-batch (no overlap).
     bool debug_serialize_reduce_scatter = false;
+    // Keep each core's in1 (weight) slab resident in L1 across the sub-batches when it fits (MatmulFusedOpSignaler::
+    // sp_in1_resident); env TT_SP_IN1_STREAM=1 disables it for perf decomposition.
+    bool in1_resident = true;
 
     // Reflection (logging / graph reports). The nested ReduceScatterMinimalAsyncParams is deliberately not listed:
     // it is both an aggregate and carries its own attribute_names, which makes tt_stl's to_json ambiguous.
@@ -44,7 +47,8 @@ struct MatmulReduceScatterSpAsyncParams {
         "num_workers_per_link",
         "matmul_params",
         "ccl_core_rows",
-        "debug_serialize_reduce_scatter");
+        "debug_serialize_reduce_scatter",
+        "in1_resident");
     auto attribute_values() const {
         return std::forward_as_tuple(
             this->reduce_scatter_params.dim,
@@ -55,7 +59,8 @@ struct MatmulReduceScatterSpAsyncParams {
             this->reduce_scatter_params.num_workers_per_link,
             this->matmul_params,
             this->ccl_core_rows,
-            this->debug_serialize_reduce_scatter);
+            this->debug_serialize_reduce_scatter,
+            this->in1_resident);
     }
 };
 

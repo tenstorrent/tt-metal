@@ -41,8 +41,11 @@ struct SpSubBatch {
 Tensor sub_batched_view(const Tensor& t, uint32_t num_slices);
 
 // Derived 2D-mcast program config for one sub-batched matmul (no tuning table): fuse_batch=false,
-// per_core_M = ceil(Mt_slice / grid.y), per_core_N = ceil(Nt / grid.x), in0_block_w = largest divisor of Kt that is
-// <= 4, out blocks shrunk (largest area first) until the CBs fit L1, subblocks from get_matmul_subblock_params.
+// per_core_M = ceil(Mt_slice / grid.y), in0_block_w = largest divisor of Kt that is <= 4, out blocks shrunk (largest
+// area first) until the CBs fit L1, subblocks from get_matmul_subblock_params. per_core_N is the candidate in
+// [ceil(Nt / grid.x), 2 * ceil(Nt / grid.x)] with the lowest per_core_N * (sb_h + sb_w) / (sb_h * sb_w): a prime
+// ceil(Nt / grid.x) (19 for gate_up, 11 for N=4096 on 12 columns) would force a 2x1 subblock, one column more of
+// per-core width buys a 2x4 (bf16) / 2x2 (fp32 acc) subblock at ~5% more tiles on the busiest core.
 // `in0_view` is the [B*T,1,S/T,K] view produced by sub_batched_view (Mt is taken from ONE sub-batch).
 operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig sp_matmul_program_config(
     const Tensor& in0_view,

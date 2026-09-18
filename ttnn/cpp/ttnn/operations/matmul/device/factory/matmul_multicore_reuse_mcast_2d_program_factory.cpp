@@ -1727,6 +1727,40 @@ create_program_mcast_in0_in1(
     uint32_t in3_CB_tiles = in3_block_tiles;  // No double buffer
     uint32_t in3_CB_size = in3_CB_tiles * bias_aligned_tile_size;
 
+    // Sequence-parallel fusion, in1 residency (SP_IN1_RESIDENT): with fuse_batch=false every sub-batch re-streams the
+    // same per-core in1 slab (num_blocks x in1 block) from DRAM through the in1 sender's CB and multicast. When the
+    // whole slab fits the in1 CB next to the other CBs, size the CB to the slab: the first pass fills it, later
+    // sub-batches (and out_num_blocks_y > 1 h-blocks) only re-publish the resident pages (no read, no multicast, no
+    // sender/receiver handshake). The compute kernel is untouched: its per-block wait/pop cycles through the CB.
+    bool sp_in1_resident = false;
+    if (fuse_op && fused_op_signaler->has_sp_schedule() && fused_op_signaler->sp_in1_resident && !in1_is_sharded &&
+        bcast_batch && out_num_blocks_x == 1 && B * out_num_blocks_y > 1) {
+        const uint64_t in1_slab_size = static_cast<uint64_t>(num_blocks) * in1_block_tiles * in1_aligned_tile_size;
+        const bool separate_out_interm = do_not_inplace_interm0_out_CB ||
+                                         (interm0_data_format != output_data_format) ||
+                                         (untilize_out && (out_block_w / out_subblock_w > 1));
+        const uint64_t other_cbs = static_cast<uint64_t>(in0_CB_size) + in2_CB_size + in3_CB_size + out_CB_size +
+                                   (separate_out_interm ? interm0_CB_size : 0);
+        const auto lowest_l1 = device->lowest_occupied_compute_l1_address();
+        const uint64_t max_l1 = (lowest_l1.has_value() ? lowest_l1.value() : device->l1_size_per_core()) -
+                                device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+        constexpr uint64_t kL1Slack = 32 * 1024;  // semaphores, sparsity/l1-array CBs, alignment padding
+        sp_in1_resident = other_cbs + in1_slab_size + kL1Slack <= max_l1;
+        log_debug(
+            tt::LogOp,
+            "SP in1 residency: slab {} B ({} blocks x {} tiles) + other CBs {} B vs L1 {} B -> {}",
+            in1_slab_size,
+            num_blocks,
+            in1_block_tiles,
+            other_cbs,
+            max_l1,
+            sp_in1_resident ? "resident" : "streamed");
+        if (sp_in1_resident) {
+            in1_CB_tiles = num_blocks * in1_block_tiles;
+            in1_CB_size = in1_CB_tiles * in1_aligned_tile_size;
+        }
+    }
+
     uint32_t start_core_x = sub_device_start_core.x;
     uint32_t start_core_y = sub_device_start_core.y;
 
@@ -2209,6 +2243,11 @@ create_program_mcast_in0_in1(
         mm_kernel_in1_receiver_writer_other_noc_setup_defines["SP_SLICE_SCHEDULE"] = "1";
         if (fused_op_signaler->is_sp_all_gather()) {
             mm_kernel_in0_sender_interleaved_defines["SP_AG_WAIT"] = "1";
+        }
+        if (sp_in1_resident) {
+            mm_kernel_in1_sender_writer_defines["SP_IN1_RESIDENT"] = "1";
+            mm_kernel_in1_receiver_writer_defines["SP_IN1_RESIDENT"] = "1";
+            mm_kernel_in1_receiver_writer_other_noc_setup_defines["SP_IN1_RESIDENT"] = "1";
         }
     }
 

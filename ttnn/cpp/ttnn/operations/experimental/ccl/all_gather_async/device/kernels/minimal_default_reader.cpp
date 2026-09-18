@@ -237,6 +237,28 @@ void kernel_main() {
         bool is_split_forwarded_slice = split_forwarding_enabled && is_last_forwarded_slice;
 
         if (should_forward) {
+#ifdef AG_FUSED_SIGNAL_ON_RECEIVE
+            // A fused consumer (the SP matmul) only needs this slice to have LANDED in the output tensor, not to have
+            // been forwarded. The forward loop below interleaves the chunk semaphore waits with CB pushes that block
+            // while the writer is still draining the previous slice, so the end-of-slice signal would fire one full
+            // slice-time after the data arrived. Wait for all of this slice's chunk semaphores up front and signal
+            // now; the forward loop then only re-checks semaphores that are already satisfied.
+            if constexpr (fuse_op) {
+                const uint32_t slice_tiles = input_tile_id_end - input_tile_id_start;
+                const uint32_t slice_chunks =
+                    (slice_tiles + num_tiles_to_write_per_packet - 1) / num_tiles_to_write_per_packet;
+                const uint32_t slice_sems = (slice_chunks + chunks_per_sync - 1) / chunks_per_sync;
+                noc_semaphore_wait_min(
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem),
+                    sem_target + slice_sems * input_batch_head_count);
+                if (direction == 1 && slices_received == 0) {
+                    Semaphore<> self_write_done_sem(self_write_done_sem_id);
+                    self_write_done_sem.wait_min(1);
+                    self_write_done_sem.set(0);
+                }
+                op_signaler.synchronize_workers_and_signal_op(actual_sender_chip_id);
+            }
+#endif  // AG_FUSED_SIGNAL_ON_RECEIVE
             // read the next slice out of memory, and put it in CB for writer to forward
             uint32_t output_tile_id_start = 0;
             uint32_t slice_Wt = input_tensor_Wt;
@@ -387,6 +409,11 @@ void kernel_main() {
 
         slices_received++;
         if constexpr (fuse_op) {
+#ifdef AG_FUSED_SIGNAL_ON_RECEIVE
+            if (should_forward) {
+                continue;  // already signalled before forwarding (see above)
+            }
+#endif  // AG_FUSED_SIGNAL_ON_RECEIVE
             // Signal matmul to go
             if (direction == 1 && slices_received == 1) {
                 Semaphore<> self_write_done_sem(self_write_done_sem_id);

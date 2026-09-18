@@ -4,6 +4,9 @@
 
 #include "ttnn/operations/experimental/ccl/matmul_reduce_scatter_sp_async/matmul_reduce_scatter_sp_async.hpp"
 
+#include <cstdlib>
+#include <cstring>
+
 #include <tt-metalium/math.hpp>
 
 #include "ttnn/operations/ccl/ccl_common.hpp"
@@ -61,6 +64,10 @@ Tensor matmul_reduce_scatter_sp_async(
     const auto reduce_scatter_compute_kernel_config =
         ttnn::ccl::resolve_fp32_acc_compute_kernel_config(std::nullopt, output_dtype);
 
+    // Perf-decomposition knob: TT_SP_IN1_STREAM=1 streams the weight per sub-batch instead of keeping it resident.
+    const char* in1_stream_env = std::getenv("TT_SP_IN1_STREAM");
+    const bool in1_resident =
+        !(in1_stream_env != nullptr && std::strcmp(in1_stream_env, "0") != 0 && std::strcmp(in1_stream_env, "") != 0);
     auto outputs = ttnn::prim::matmul_reduce_scatter_sp_async(
         input,
         weight,
@@ -79,7 +86,8 @@ Tensor matmul_reduce_scatter_sp_async(
         reduce_scatter_compute_kernel_config,
         program_config,
         sub_device_id,
-        debug_serialize_reduce_scatter);
+        debug_serialize_reduce_scatter,
+        in1_resident);
     // Dropping the vector releases the mm partial and the RS intermediates; only the RS output is returned.
     return outputs.at(prim::kRsOutputIdx);
 }

@@ -263,6 +263,7 @@ MatmulReduceScatterSpAsyncProgramFactory::cached_program_t MatmulReduceScatterSp
         reduce_scatter_fused_op_signaler->fused_op_receiver_signal_semaphores,
         reduce_scatter_fused_op_signaler->fused_op_signaler_mode);
     matmul_fused_op_signaler->init_sp_schedule(ttnn::experimental::ccl::pack_sp_schedule(schedule));
+    matmul_fused_op_signaler->sp_in1_resident = args.in1_resident;
 
     const ttnn::prim::MatmulParams mm_params = resolve_sp_matmul_params(args, tensor_args);
     const Tensor in0_view = ttnn::experimental::ccl::sub_batched_view(input, T);

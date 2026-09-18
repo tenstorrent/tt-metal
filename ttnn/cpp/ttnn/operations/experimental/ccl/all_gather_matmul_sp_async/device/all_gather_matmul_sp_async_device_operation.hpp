@@ -59,6 +59,8 @@ ttnn::experimental::prim::AllGatherMatmulSpAsyncDeviceOperation::tensor_return_v
     const DeviceComputeKernelConfig& compute_kernel_config,
     const std::optional<const operations::matmul::MatmulProgramConfig>& program_config,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
-    bool debug_serialize_ag = false);
+    bool debug_serialize_ag = false,
+    bool ag_signal_on_receive = true,
+    bool in1_resident = true);
 
 }  // namespace ttnn::prim

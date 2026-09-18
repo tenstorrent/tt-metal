@@ -230,7 +230,8 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
     std::optional<uint32_t> num_buffers_per_channel,
     const CoreCoord core_grid_offset,
     const bool reverse_order,
-    const std::optional<CoreRangeSet>& sub_core_grid) {
+    const std::optional<CoreRangeSet>& sub_core_grid,
+    const bool fused_op_signal_on_receive) {
     // Tensor Info
     const auto input_tensor_num_pages = input_tensor.buffer()->num_pages();
     const auto& input_tensor_shape = input_tensor.padded_shape();
@@ -452,6 +453,9 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
     }
     if (num_mux_cores_per_direction_per_link) {
         writer_compute_defines["USE_WORKER_MUX"] = "1";
+    }
+    if (fuse_op && fused_op_signal_on_receive) {
+        reader_compute_defines["AG_FUSED_SIGNAL_ON_RECEIVE"] = "1";
     }
 
     // KERNEL CREATION

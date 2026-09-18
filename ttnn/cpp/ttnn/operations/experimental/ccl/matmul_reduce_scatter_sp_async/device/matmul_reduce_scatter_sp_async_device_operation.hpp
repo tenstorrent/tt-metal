@@ -62,6 +62,7 @@ std::vector<Tensor> matmul_reduce_scatter_sp_async(
     const std::optional<ttnn::DeviceComputeKernelConfig>& reduce_scatter_compute_kernel_config,
     const std::optional<const operations::matmul::MatmulProgramConfig>& program_config,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
-    bool debug_serialize_reduce_scatter = false);
+    bool debug_serialize_reduce_scatter = false,
+    bool in1_resident = true);
 
 }  // namespace ttnn::prim

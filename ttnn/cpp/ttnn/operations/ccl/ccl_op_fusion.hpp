@@ -179,6 +179,11 @@ struct MatmulFusedOpSignaler {
     std::vector<uint32_t> sp_schedule_words;
     // SP_ALL_GATHER: address of the original (sharded) all-gather input read for is_local iterations.
     uint32_t sp_in0_alt_addr = 0;
+    // SP types: ask the 2D-mcast factory to keep each core's whole in1 (weight) slab resident in the in1 CB and read /
+    // multicast it only once instead of once per sub-batch (SP_IN1_RESIDENT). The factory honours it only when the
+    // slab fits L1 next to the other CBs (interleaved in1, bcast_batch, one out block along N); the weight is the
+    // same for every sub-batch (bcast_batch), so the schedule order does not matter.
+    bool sp_in1_resident = false;
 
     bool initialized_all_gather = false;
     bool initialized_reduce_scatter = false;

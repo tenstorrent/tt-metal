@@ -349,6 +349,15 @@ void kernel_main() {
 #endif  // IN1_DRAM_WIDTH_SHARDED
 
                     for (uint32_t block = 0; block < num_blocks_inner_dim; ++block) {
+#ifdef SP_IN1_RESIDENT
+                        // The in1 CB holds the whole per-core slab (factory-sized): after the first pass over K the
+                        // pages are still there, so only re-publish them (the receivers do the same; no handshake).
+                        if (b != 0 || bh != 0) {
+                            dfb_in1.reserve_back(in1_block_num_tiles);
+                            dfb_in1.push_back(in1_block_num_tiles);
+                            continue;
+                        }
+#endif  // SP_IN1_RESIDENT
                         if constexpr (fuse_op_all_gather) {
                             fused_op_receiver.update_current_block_start_tile_id(
                                 block, in1_tensor_current_inner_dim_block_start_tile_id, in1_batch_tile_id);

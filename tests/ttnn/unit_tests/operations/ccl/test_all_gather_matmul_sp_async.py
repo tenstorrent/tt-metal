@@ -54,8 +54,28 @@ CASES = [
     ("llama8b_gate_up", 1, 512, 4096, 7168, True),
     # Llama-8B TP4 row-parallel dgrad: grad [1,1,512,4096] -> [1,1,2048,4096] @ W[4096,1024]  (no transpose)
     ("llama8b_dgrad_row", 1, 512, 4096, 1024, False),
+    # The same three shapes with 5 samples per device ([5,1,512,4096] -> gathered [5,1,2048,4096]): 20 sub-batches.
+    ("llama8b_qkv_b5", 5, 512, 4096, 1536, True),
+    ("llama8b_gate_up_b5", 5, 512, 4096, 7168, True),
+    ("llama8b_dgrad_row_b5", 5, 512, 4096, 1024, False),
+    # Llama-8B TP4 row-parallel (w2) dgrad: grad [B,1,512,4096] -> [B,1,2048,4096] @ W2[4096,3584] (no transpose):
+    # the largest all-gather+matmul of the backward pass (weight slab 2.5 MB/core: not L1-resident).
+    ("llama8b_dgrad_row_w2", 1, 512, 4096, 3584, False),
+    ("llama8b_dgrad_row_w2_b5", 5, 512, 4096, 3584, False),
 ]
-PERF_CASES = {"llama8b_qkv", "llama8b_gate_up", "llama8b_dgrad_row"}
+PERF_CASES = {
+    "llama8b_qkv",
+    "llama8b_gate_up",
+    "llama8b_dgrad_row",
+    "llama8b_qkv_b5",
+    "llama8b_gate_up_b5",
+    "llama8b_dgrad_row_b5",
+    "llama8b_dgrad_row_w2",
+    "llama8b_dgrad_row_w2_b5",
+}
+# B=5 correctness is checked on the shapes whose fp32 host reference is affordable (gate_up_b5 / dgrad_row_w2_b5 would
+# need > 1 TFLOP CPU matmuls and > 1 GB reference tensors); perf/decomp cover all of them.
+CHECK_SKIP_CASES = {"llama8b_gate_up_b5", "llama8b_dgrad_row_w2_b5"}
 
 
 @pytest.fixture
@@ -114,6 +134,15 @@ def _timed(mesh_device, fn):
     dt = (time.perf_counter() - t0) / (PERF_ITERS * PERF_REPS) * 1e6
     ttnn.release_trace(mesh_device, tid)
     return dt
+
+
+def _bf16_ulp_stats(a, ref):
+    """max and p99.9 of |a - ref| in units of the bf16 ulp AT THE RMS MAGNITUDE of ref (ulp = 2^(floor(log2 rms) - 7)):
+    an "ulp at scale" error, so near-zero outputs do not dominate as they would with a per-element ulp."""
+    rms = ref.float().pow(2).mean().sqrt().clamp_min(1e-30)
+    ulp = torch.exp2(torch.floor(torch.log2(rms)) - 7)
+    err = ((a - ref).abs() / ulp).flatten()
+    return err.max().item(), torch.quantile(err[:: max(1, err.numel() // 1_000_000)], 0.999).item()
 
 
 def _identity_schedule_words(n):
@@ -286,17 +315,30 @@ def test_ag_schedule_ring_and_line():
 @pytest.mark.parametrize("mesh_device", [MESH_SHAPE], indirect=True)
 @pytest.mark.parametrize("case", CASES, ids=[c[0] for c in CASES])
 @pytest.mark.parametrize("num_links", [1, 2], ids=["links1", "links2"])
-@pytest.mark.parametrize("mode", ["check", "perf", "decomp"])
+@pytest.mark.parametrize("mode", ["check", "perf", "decomp", "perf2"])
 @pytest.mark.parametrize("ckc_name", ["bf16acc", "fp32acc"])
-def test_all_gather_matmul_sp_async(sp_topology, mesh_device, device_params, case, num_links, mode, ckc_name):
+@pytest.mark.parametrize("payload", ["bf16", "bfp8"])
+def test_all_gather_matmul_sp_async(
+    sp_topology, mesh_device, device_params, case, num_links, mode, ckc_name, payload
+):
+    """perf2: one traced timing set per (shape, compute config, payload dtype) at the given link count:
+    fused | unfused (all_gather + linear) | linear alone on the gathered tensor | sub-batched matmul alone (same
+    kernels as the fused op, identity schedule) | all_gather alone -- plus, for the B=1 Llama shapes, the numerics of
+    the fused output against the fp32 reference and (payload=bfp8) against the bf16-payload fused output.
+    payload=bfp8 typecasts the activation to bfloat8_b before the gather (timed as part of the op): the gathered copy
+    kept for wgrad is then bfp8; the matmul output stays bf16."""
     topology = sp_topology
     name, B, S, K, N, transpose_b = case
     T = MESH_SHAPE[1]
-    if mode in ("perf", "decomp") and name not in PERF_CASES:
+    if mode in ("perf", "decomp", "perf2") and name not in PERF_CASES:
         pytest.skip("perf/decomp modes only for the Llama shapes")
+    if mode == "check" and name in CHECK_SKIP_CASES:
+        pytest.skip("check mode skipped for this B=5 shape (host fp32 reference too large); see CHECK_SKIP_CASES")
     if mode == "decomp" and num_links != 2:
         pytest.skip("decomposition at 2 links only")
-    if ckc_name == "fp32acc" and (mode != "check" or name not in FP32ACC_CASES):
+    if payload == "bfp8" and mode != "perf2":
+        pytest.skip("bfp8 payload is evaluated in perf2 mode only")
+    if ckc_name == "fp32acc" and mode not in ("perf2",) and (mode != "check" or name not in FP32ACC_CASES):
         pytest.skip("fp32 accumulation is checked on the Llama column-parallel shape and one B=2 case")
     torch.manual_seed(0)
 
@@ -361,6 +403,92 @@ def test_all_gather_matmul_sp_async(sp_topology, mesh_device, device_params, cas
 
     label = f"[{'ring' if topology == ttnn.Topology.Ring else 'line'}] {name} B={B} S_local={S} K={K} N_local={N} links={num_links} transpose_b={transpose_b} {ckc_name}"
 
+    def gathered_to_torch(t):
+        # replicated [B,1,S*T,K] per device -> [T,B,1,S*T,K]
+        return ttnn.to_torch(t, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0)).view(T, B, 1, S * T, K)
+
+    def mm_to_torch(t):
+        # per-device [B,1,S*T,N_local] -> [B,1,S*T,N*T] in ring-index order
+        return ttnn.to_torch(t, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=3))
+
+    if mode == "perf2":
+        payload_dtype = ttnn.bfloat8_b if payload == "bfp8" else ttnn.bfloat16
+
+        def x_payload():
+            return ttnn.typecast(x, payload_dtype) if payload == "bfp8" else x
+
+        def fused_p():
+            return ttnn.experimental.all_gather_matmul_sp_async(
+                x_payload(),
+                w,
+                CLUSTER_AXIS,
+                ag_sems,
+                barrier_semaphore=barrier,
+                transpose_b=transpose_b,
+                num_links=num_links,
+                topology=topology,
+                dtype=ttnn.bfloat16,
+                compute_kernel_config=ckc,
+            )
+
+        def ag_p():
+            return ttnn.experimental.all_gather_async(
+                x_payload(), 2, CLUSTER_AXIS, mesh_device, topology, ag_sems, barrier_semaphore=barrier, num_links=num_links
+            )
+
+        def unfused_p():
+            g = ag_p()
+            return g, ttnn.linear(g, w, transpose_b=transpose_b, dtype=ttnn.bfloat16, compute_kernel_config=ckc)
+
+        g_full = ag_p()
+        ttnn.synchronize_device(mesh_device)
+        gv = ttnn.experimental.sp_sub_batched_view(g_full, T)
+        pc = ttnn.experimental.sp_matmul_program_config(gv, w, ttnn.CoreCoord(grid.x, grid.y - 2), transpose_b, ckc)
+        identity = _identity_schedule_words(B * T)
+        t = {
+            "fused": _timed(mesh_device, fused_p),
+            "unfused": _timed(mesh_device, unfused_p),
+            "linear": _timed(
+                mesh_device,
+                lambda: ttnn.linear(g_full, w, transpose_b=transpose_b, dtype=ttnn.bfloat16, compute_kernel_config=ckc),
+            ),
+            "mm_sp": _timed(
+                mesh_device,
+                lambda: ttnn.experimental.sp_matmul_schedule_test(
+                    gv, w, identity, transpose_b, pc, compute_kernel_config=ckc, ag_mode=True
+                ),
+            ),
+            "ag": _timed(mesh_device, ag_p),
+        }
+        num = ""
+        if B == 1:
+            g_f, mm_f = fused_p()
+            ttnn.synchronize_device(mesh_device)
+            f = mm_to_torch(mm_f).float()
+            _, pcc_ref = comp_pcc(ref_mm, f, 0.9999)
+            ulp_max, ulp_p999 = _bf16_ulp_stats(f, ref_mm)
+            num = f" | NUMERICS vs fp32 ref: {pcc_ref} max|d|={(f - ref_mm).abs().max().item():.4g} ulp(max/p99.9)={ulp_max:.1f}/{ulp_p999:.2f}"
+            if payload == "bfp8":
+                _, mm_b = fused()  # bf16 payload, same config
+                ttnn.synchronize_device(mesh_device)
+                fb = mm_to_torch(mm_b).float()
+                _, pcc_b = comp_pcc(fb, f, 0.9999)
+                ulp_max_b, ulp_p999_b = _bf16_ulp_stats(f, fb)
+                gx = gathered_to_torch(g_f)[0].float()
+                ulp_max_g, ulp_p999_g = _bf16_ulp_stats(gx, x_full.float())
+                num += (
+                    f" | bfp8-vs-bf16 fused: {pcc_b} max|d|={(f - fb).abs().max().item():.4g} "
+                    f"ulp(max/p99.9)={ulp_max_b:.1f}/{ulp_p999_b:.2f} | gathered bfp8 vs bf16 input ulp(max/p99.9)={ulp_max_g:.1f}/{ulp_p999_g:.2f}"
+                )
+        msg = (
+            f"PERF2 {label} payload={payload} pc(per_core_N={pc.per_core_N} sub={pc.out_subblock_h}x{pc.out_subblock_w}): "
+            f"fused {t['fused']:.1f} | unfused {t['unfused']:.1f} ({t['unfused'] / t['fused']:.2f}x) | linear {t['linear']:.1f} "
+            f"| mm_sp_alone {t['mm_sp']:.1f} | ag_alone {t['ag']:.1f} | exposed_ag {t['fused'] - t['mm_sp']:.1f}{num}"
+        )
+        logger.info(msg)
+        print(msg, flush=True)
+        return
+
     if mode == "perf":
         t_fused = _timed(mesh_device, fused)
         t_unfused = _timed(mesh_device, unfused)
@@ -375,14 +503,6 @@ def test_all_gather_matmul_sp_async(sp_topology, mesh_device, device_params, cas
     if mode == "decomp":
         _decomposition(mesh_device, topology, label, x, w, T, B, S, K, N, transpose_b, num_links, ckc, ag_sems, barrier)
         return
-
-    def gathered_to_torch(t):
-        # replicated [B,1,S*T,K] per device -> [T,B,1,S*T,K]
-        return ttnn.to_torch(t, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0)).view(T, B, 1, S * T, K)
-
-    def mm_to_torch(t):
-        # per-device [B,1,S*T,N_local] -> [B,1,S*T,N*T] in ring-index order
-        return ttnn.to_torch(t, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=3))
 
     # --- correctness, program cache, trace ---------------------------------------------------------------------
     n0 = mesh_device.num_program_cache_entries()

@@ -34,16 +34,31 @@ struct AllGatherMatmulSpAsyncParams {
     // Debug (env TT_SP_AG_MM_SERIALIZE=1): matmul waits for the whole all-gather before its first slice, i.e. no
     // overlap. For perf decomposition only.
     bool debug_serialize_ag = false;
+    // The all-gather reader signals a forwarded slice when it has landed (true, default) rather than after it has
+    // been forwarded one hop further (the historical fused-AG timing, one slice-time later; env
+    // TT_SP_AG_SIGNAL_LATE=1 selects it for perf decomposition).
+    bool ag_signal_on_receive = true;
+    // Keep each core's in1 (weight) slab resident in L1 across the sub-batches when it fits (MatmulFusedOpSignaler::
+    // sp_in1_resident); env TT_SP_IN1_STREAM=1 disables it for perf decomposition.
+    bool in1_resident = true;
 
     static constexpr auto attribute_names = std::forward_as_tuple(
-        "matmul", "ccl_core_rows", "all_gather_core_grid_offset", "matmul_grid", "debug_serialize_ag");
+        "matmul",
+        "ccl_core_rows",
+        "all_gather_core_grid_offset",
+        "matmul_grid",
+        "debug_serialize_ag",
+        "ag_signal_on_receive",
+        "in1_resident");
     auto attribute_values() const {
         return std::forward_as_tuple(
             this->matmul,
             this->ccl_core_rows,
             this->all_gather_core_grid_offset,
             this->matmul_grid,
-            this->debug_serialize_ag);
+            this->debug_serialize_ag,
+            this->ag_signal_on_receive,
+            this->in1_resident);
     }
 };
 

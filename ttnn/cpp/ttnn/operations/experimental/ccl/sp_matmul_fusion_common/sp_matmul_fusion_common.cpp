@@ -6,6 +6,8 @@
 
 #include <algorithm>
 #include <map>
+#include <optional>
+#include <utility>
 #include <tuple>
 
 #include "ttnn/operations/ccl/ccl_common.hpp"
@@ -72,7 +74,7 @@ operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig sp_matmul_program
         transpose_b);
 
     const uint32_t per_core_M = static_cast<uint32_t>((Mt + grid.y - 1) / grid.y);
-    const uint32_t per_core_N = std::max<uint32_t>(1, static_cast<uint32_t>((Nt + grid.x - 1) / grid.x));
+    const uint32_t min_per_core_N = std::max<uint32_t>(1, static_cast<uint32_t>((Nt + grid.x - 1) / grid.x));
     uint32_t in0_block_w = 4;
     while (Kt % in0_block_w != 0) {
         in0_block_w -= 1;
@@ -88,18 +90,20 @@ operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig sp_matmul_program
                    m, n, in0_block_w, in0_view, in1, /*transpose_a=*/false, transpose_b, interm_tile_size, 0) <
                max_l1_space;
     };
-    uint32_t out_block_h = per_core_M;
-    uint32_t out_block_w = per_core_N;
-    if (!fits(out_block_h, out_block_w)) {
+    // Largest out block of a (per_core_M x per_core_N) core block that fits L1 (nullopt: none does).
+    auto largest_fitting_out_block = [&](uint32_t pcm, uint32_t pcn) -> std::optional<std::pair<uint32_t, uint32_t>> {
+        if (fits(pcm, pcn)) {
+            return std::make_pair(pcm, pcn);
+        }
         std::vector<uint32_t> m_factors;
         std::vector<uint32_t> n_factors;
-        for (uint32_t f = per_core_M; f >= 1; --f) {
-            if (per_core_M % f == 0) {
+        for (uint32_t f = pcm; f >= 1; --f) {
+            if (pcm % f == 0) {
                 m_factors.push_back(f);
             }
         }
-        for (uint32_t f = per_core_N; f >= 1; --f) {
-            if (per_core_N % f == 0) {
+        for (uint32_t f = pcn; f >= 1; --f) {
+            if (pcn % f == 0) {
                 n_factors.push_back(f);
             }
         }
@@ -120,27 +124,84 @@ operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig sp_matmul_program
                 }
             }
         }
-        bool found = false;
         for (auto it = by_area.rbegin(); it != by_area.rend(); ++it) {
             auto [m, n] = it->second;
             if (fits(m, n)) {
-                out_block_h = m;
-                out_block_w = n;
-                found = true;
-                break;
+                return std::make_pair(m, n);
             }
         }
-        TT_FATAL(
-            found,
-            "sp_matmul_program_config: no out block of per_core_M={} x per_core_N={} (in0_block_w={}) fits L1 ({} B)",
-            per_core_M,
-            per_core_N,
-            in0_block_w,
-            max_l1_space);
-    }
+        return std::nullopt;
+    };
 
-    auto [out_subblock_h, out_subblock_w] =
-        bmm_op_utils::get_matmul_subblock_params(out_block_h, out_block_w, false, false, fp32_dest_acc_en);
+    // per_core_N: the smallest value ceil(Nt / grid.x) leaves the subblock shape to chance (a prime per_core_N, e.g.
+    // 19 for gate_up and 11 for N=4096 on 12 columns, forces a 2x1 subblock: one in1 tile unpacked per two output
+    // tiles). Widening the per-core N slightly (fewer columns busy, the last one partially filled) buys a wide
+    // subblock. Pick the candidate that minimises the per-core cost model
+    //     per_core_N * (subblock_h + subblock_w) / (subblock_h * subblock_w),
+    // i.e. the tiles the busiest core has to produce weighted by the in0+in1 tiles unpacked per output tile; ties go
+    // to the smaller per_core_N. Candidates: [ceil(Nt/grid.x), 2*ceil(Nt/grid.x)] capped at Nt.
+    struct Candidate {
+        uint32_t per_core_N = 0;
+        uint32_t out_block_h = 0;
+        uint32_t out_block_w = 0;
+        uint32_t out_subblock_h = 0;
+        uint32_t out_subblock_w = 0;
+        float cost = 0.f;
+    };
+    // The widening only pays when the per-core in1 slab (Kt x per_core_N tiles) is L1-resident (the 2D-mcast
+    // factory's SP_IN1_RESIDENT decision, estimated here the same way: slab + the other CBs + slack <= L1). A
+    // streamed slab makes the sub-batched matmul DRAM-bound on the in1 re-read (gate_up: 57 MB per sub-batch), where
+    // a wider column only adds work to the busiest core (measured +6% for gate_up at per_core_N 19 -> 20).
+    const uint32_t in1_tile_size = tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(in1.dtype()));
+    auto slab_resident = [&](uint32_t pcn, uint32_t obh, uint32_t obw) {
+        constexpr uint64_t kL1Slack = 32 * 1024;
+        const uint64_t slab = static_cast<uint64_t>(Kt) * pcn * in1_tile_size;
+        const uint64_t streamed_in1_cb = static_cast<uint64_t>(2) * in0_block_w * obw * in1_tile_size;
+        const uint64_t others = utilities::get_estimated_size_of_cbs(
+            obh, obw, in0_block_w, in0_view, in1, /*transpose_a=*/false, transpose_b, interm_tile_size, 0);
+        return others - std::min(others, streamed_in1_cb) + slab + kL1Slack <= max_l1_space;
+    };
+    std::optional<Candidate> best;
+    uint32_t max_per_core_N = min_per_core_N;
+    if (const auto ob0 = largest_fitting_out_block(per_core_M, min_per_core_N);
+        ob0.has_value() && slab_resident(min_per_core_N, ob0->first, ob0->second)) {
+        max_per_core_N = std::min<uint32_t>(Nt, 2 * min_per_core_N);
+    }
+    for (uint32_t pcn = min_per_core_N; pcn <= max_per_core_N; ++pcn) {
+        const auto ob = largest_fitting_out_block(per_core_M, pcn);
+        if (!ob.has_value()) {
+            continue;
+        }
+        if (pcn != min_per_core_N && !slab_resident(pcn, ob->first, ob->second)) {
+            continue;
+        }
+        auto [obh, obw] = ob.value();
+        auto [sbh, sbw] = bmm_op_utils::get_matmul_subblock_params(obh, obw, false, false, fp32_dest_acc_en);
+        const float cost = static_cast<float>(pcn) * static_cast<float>(sbh + sbw) / static_cast<float>(sbh * sbw);
+        if (!best.has_value() || cost < best->cost) {
+            best = Candidate{
+                .per_core_N = pcn,
+                .out_block_h = obh,
+                .out_block_w = obw,
+                .out_subblock_h = sbh,
+                .out_subblock_w = sbw,
+                .cost = cost};
+        }
+    }
+    TT_FATAL(
+        best.has_value(),
+        "sp_matmul_program_config: no out block of per_core_M={} x per_core_N in [{}, {}] (in0_block_w={}) fits L1 "
+        "({} B)",
+        per_core_M,
+        min_per_core_N,
+        max_per_core_N,
+        in0_block_w,
+        max_l1_space);
+    const uint32_t per_core_N = best->per_core_N;
+    const uint32_t out_block_h = best->out_block_h;
+    const uint32_t out_block_w = best->out_block_w;
+    const uint32_t out_subblock_h = best->out_subblock_h;
+    const uint32_t out_subblock_w = best->out_subblock_w;
 
     MatmulMultiCoreReuseMultiCastProgramConfig config{
         .compute_with_storage_grid_size = grid,
