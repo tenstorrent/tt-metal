@@ -7,6 +7,8 @@ fits every group), per-pass workload replay and the device log merge. tracy/__ma
 
 import math
 import os
+import subprocess
+import sys
 from pathlib import Path
 from shutil import copyfile
 
@@ -77,16 +79,22 @@ def perf_counter_groups_to_bitfield(groups):
 
 
 def detect_device_arch():
-    """The device architecture name in lower case, from the environment or by opening device 0; None if unknown."""
+    """The device architecture name in lower case, from the environment or from ttnn in a child process; None if
+    unknown. A child process on purpose: this runs in the capture process, and a ttnn import that touches the
+    device there keeps the device handle until the capture process exits, so the workload it then launches
+    blocks in its own open_device."""
     declared = next((os.environ.get(v) for v in ARCH_ENV_VARS if os.environ.get(v)), None)
     if declared is None:
         try:
-            import ttnn
-
-            device = ttnn.open_device(device_id=0)
-            declared = str(device.arch()).split(".")[-1]
-            ttnn.close_device(device)
-        except Exception:
+            probe = subprocess.run(
+                [sys.executable, "-c", "import ttnn; print(ttnn.get_arch_name())"],
+                capture_output=True,
+                text=True,
+                timeout=300,
+                check=True,
+            )
+            declared = probe.stdout.strip().splitlines()[-1]
+        except (subprocess.SubprocessError, OSError, IndexError):
             logger.debug("Failed to detect device arch via ttnn")
     return declared.strip().lower() if declared is not None else None
 
