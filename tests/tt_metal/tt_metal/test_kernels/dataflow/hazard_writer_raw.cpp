@@ -16,6 +16,15 @@
 #include "c_tensix_core.h"
 
 void kernel_main() {
+    // THROWAWAY (query-side POC): hand-emit an OPAQUE .tt.BUF_RW record -- this kernel uses the raw C NoC
+    // path with no binding, so its access is un-analyzable and a detector must KEEP the barrier. The emit
+    // side will produce this automatically from the raw NoC free-functions. SHT_NOTE, non-alloc.
+    __asm__ volatile(
+        ".pushsection .tt.BUF_RW,\"\",@note\n\t"
+        ".4byte 0xffffffff\n\t"  // OPAQUE sentinel slot (kBufRwOpaqueSlot)
+        ".4byte 0\n\t"           // kind OPAQUE
+        ".popsection");
+
     const uint32_t dst_addr = get_arg(args::dst_addr);  // plain address, NOT a tensor binding
     const uint32_t pattern = get_arg(args::pattern);
     const uint32_t stall_cycles = get_arg(args::stall);
