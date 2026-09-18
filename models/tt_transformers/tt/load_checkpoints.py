@@ -464,7 +464,7 @@ def convert_hf_qkv_to_meta_format(loaded_weights, head_dim):
             n_heads = tensor.shape[0] // head_dim
             converted_weights[key] = reverse_permute(tensor, n_heads, tensor.shape[0], 1).squeeze(-1)
         elif "q_norm.weight" in key or "k_norm.weight" in key:
-            converted_weights[key] = reverse_permute_1d(tensor)
+            converted_weights[key] = reverse_permute_1d_per_head(tensor, head_dim)
         else:
             # Keep all other weights unchanged
             converted_weights[key] = tensor
@@ -881,7 +881,7 @@ def convert_meta_qkv_to_hf_format(loaded_weights, head_dim):
             n_heads = tensor.shape[0] // head_dim
             converted_weights[key] = permute(tensor.unsqueeze(-1), n_heads, tensor.shape[0], 1).squeeze(-1)
         elif "q_norm.weight" in key or "k_norm.weight" in key:
-            converted_weights[key] = permute_1d(tensor)
+            converted_weights[key] = permute_1d_per_head(tensor, head_dim)
         else:
             # Keep all other weights unchanged
             converted_weights[key] = tensor
@@ -905,6 +905,26 @@ def reverse_permute_1d(tensor):
     imags = tensor[..., dim // 2 :]
     interleaved = torch.stack((reals, imags), dim=-1).flatten(start_dim=len(shape) - 1)
     return interleaved
+
+
+def reverse_permute_1d_per_head(tensor, head_dim):
+    """``reverse_permute_1d`` for QK-norm gammas. Per-head gammas (Qwen-3 style, ``head_dim`` wide) are one
+    rope-paired vector; full-width gammas (OLMo-2/3, ``n_heads * head_dim`` wide, applied before the head
+    split) must be permuted head by head, because ``reverse_permute`` reorders wq/wk rows within each head."""
+    dim = tensor.shape[-1]
+    if dim <= head_dim:
+        return reverse_permute_1d(tensor)
+    assert dim % head_dim == 0, (dim, head_dim)
+    return reverse_permute_1d(tensor.reshape(*tensor.shape[:-1], dim // head_dim, head_dim)).reshape(tensor.shape)
+
+
+def permute_1d_per_head(tensor, head_dim):
+    """Inverse of ``reverse_permute_1d_per_head`` (Meta -> HF)."""
+    dim = tensor.shape[-1]
+    if dim <= head_dim:
+        return permute_1d(tensor)
+    assert dim % head_dim == 0, (dim, head_dim)
+    return permute_1d(tensor.reshape(*tensor.shape[:-1], dim // head_dim, head_dim)).reshape(tensor.shape)
 
 
 def permute_1d(tensor):
