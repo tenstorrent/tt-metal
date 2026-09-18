@@ -638,7 +638,6 @@ def _write_packed_kv_sequential(
     k_mem, v_mem = _packed_kv_user_mem(q_sharded_mem)
     if not use_fused:
         v_mem = k_mem
-    nkv, hd = nkv_local, head_dim
     owns_pack = kv_write_pack is None
     if owns_pack:
         pt_b = ttnn.slice(page_table, [0, 0], [1, page_table.shape[1]])
@@ -646,8 +645,8 @@ def _write_packed_kv_sequential(
     else:
         pt_b, pos_bs = kv_write_pack
     for p in range(P):
-        kb = ttnn.slice(k_src, [0, p, 0, 0], [1, p + 1, nkv, hd])
-        vb = ttnn.slice(v_src, [0, p, 0, 0], [1, p + 1, nkv, hd])
+        kb = ttnn.slice(k_src, [0, p, 0, 0], [1, p + 1, nkv_local, head_dim])
+        vb = ttnn.slice(v_src, [0, p, 0, 0], [1, p + 1, nkv_local, head_dim])
         kb = ttnn.to_memory_config(kb, k_mem)
         vb = ttnn.to_memory_config(vb, v_mem)
         pos_b = ttnn.slice(pos_cache, [p], [p + 1]) if pos_bs is None else pos_bs[p]
@@ -930,10 +929,9 @@ def packed_decode_forward(
         "no",
         "off",
     )
-    batch_sdpa = batch_sdpa_env and B == 1 and position_idx_cache is not None
-    if batch_sdpa_env and B == 1 and position_idx_cache is None:
-        raise ValueError("batch-SDPA packed verify requires position_idx_cache")
-    if batch_sdpa:
+    if batch_sdpa_env and B == 1:
+        if position_idx_cache is None:
+            raise ValueError("batch-SDPA packed verify requires position_idx_cache")
         tt_q_decode = ttnn.transpose(tt_q, 1, 2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(tt_q)
         device_grid = mesh_device.compute_with_storage_grid_size()
