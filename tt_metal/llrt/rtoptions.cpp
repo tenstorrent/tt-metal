@@ -138,6 +138,7 @@ enum class EnvVarID {
     TT_METAL_DEVICE_PROFILER_DISPATCH,             // Enable dispatch core profiling
     TT_METAL_PROFILER_SYNC,                        // Enable synchronous profiling
     TT_METAL_DEVICE_PROFILER_NOC_EVENTS,           // Enable NoC events profiling
+    TT_METAL_DEVICE_PROFILER_SYNC_EVENTS,          // Enable sync events profiling
     TT_METAL_DEVICE_PROFILER_NOC_EVENTS_RPT_PATH,  // NoC events report path
     TT_METAL_PROFILE_PERF_COUNTERS,                // Enable Performance Counter profiling
     TT_METAL_MEM_PROFILER,                         // Enable memory/buffer profiling
@@ -992,6 +993,15 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
                 this->streaming_profiler_enabled = true;
             }
 #endif
+            break;
+
+        // TT_METAL_DEVICE_PROFILER_SYNC_EVENTS
+        // Enables profiling for synchronization events (cb reserve/wait/push/pop, semaphore set/wait).
+        // Requires TT_METAL_STREAMING_PROFILER to be enabled as well.
+        // Default: false
+        // Usage: export TT_METAL_DEVICE_PROFILER_SYNC_EVENTS=1
+        case EnvVarID::TT_METAL_DEVICE_PROFILER_SYNC_EVENTS:
+            this->profiler_sync_events_enabled = is_env_enabled(value);
             break;
 
         // TT_METAL_STREAMING_PROFILER_TRACY

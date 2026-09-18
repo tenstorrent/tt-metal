@@ -1393,6 +1393,11 @@ CoreCoord MeshDeviceImpl::worker_core_from_logical_core(const CoreCoord& logical
         return device->worker_core_from_logical_core(logical_core);
     });
 }
+CoreCoord MeshDeviceImpl::logical_core_from_worker_core(const CoreCoord& virtual_coord) const {
+    return validate_and_get_reference_value(this->get_devices(), [virtual_coord](const auto* device) {
+        return device->logical_core_from_worker_core(virtual_coord);
+    });
+}
 CoreCoord MeshDeviceImpl::logical_core_from_ethernet_core(const CoreCoord& ethernet_core) const {
     return validate_and_get_reference_value(this->get_devices(), [ethernet_core](const auto* device) {
         return device->logical_core_from_ethernet_core(ethernet_core);
@@ -2026,6 +2031,9 @@ CoreCoord MeshDevice::virtual_core_from_logical_core(const CoreCoord& logical_co
 }
 CoreCoord MeshDevice::worker_core_from_logical_core(const CoreCoord& logical_core) const {
     return pimpl_->worker_core_from_logical_core(logical_core);
+}
+CoreCoord MeshDevice::logical_core_from_worker_core(const CoreCoord& virtual_coord) const {
+    return pimpl_->logical_core_from_worker_core(virtual_coord);
 }
 CoreCoord MeshDevice::ethernet_core_from_logical_core(const CoreCoord& logical_core) const {
     return pimpl_->ethernet_core_from_logical_core(logical_core);
