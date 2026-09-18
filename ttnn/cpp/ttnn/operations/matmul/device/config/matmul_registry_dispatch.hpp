@@ -8,6 +8,10 @@
 
 namespace ttnn::operations::matmul::registry {
 
+// Rank-2 measurements also apply when extra leading dimensions are all unit
+// dimensions because they describe the same matrix workload.
+bool has_only_unit_front_dimensions(const ttnn::Shape& shape) noexcept;
+
 // Observe and resolve one public matmul-family call. On a selected hit, the
 // complete registry-owned parameter object replaces `parameters` atomically.
 // Every observation, inspection, or materialization failure leaves it

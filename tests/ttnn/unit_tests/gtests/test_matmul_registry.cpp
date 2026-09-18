@@ -13,6 +13,7 @@
 #include <umd/device/types/arch.hpp>
 
 #include "ttnn/operations/matmul/device/config/matmul_config_registry.hpp"
+#include "ttnn/operations/matmul/device/config/matmul_registry_dispatch.hpp"
 
 namespace ttnn::operations::matmul::registry {
 namespace {
@@ -148,6 +149,12 @@ compact::ProgramConfigDescriptor multicast_2d_program() {
         .fuse_batch = true,
         .mcast_in0 = false,
         .transpose_mcast = false};
+}
+
+TEST(MatmulConfigRegistry, RankTwoKeysAcceptOnlyUnitFrontDimensions) {
+    EXPECT_TRUE(has_only_unit_front_dimensions(ttnn::Shape(ttnn::Array2D{64, 128})));
+    EXPECT_TRUE(has_only_unit_front_dimensions(ttnn::Shape(ttnn::Array4D{1, 1, 64, 128})));
+    EXPECT_FALSE(has_only_unit_front_dimensions(ttnn::Shape(ttnn::Array4D{1, 2, 64, 128})));
 }
 
 compact::ProgramConfigExactEntry exact_entry(

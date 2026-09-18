@@ -11,7 +11,7 @@
 
 namespace ttnn::experimental::all_gather_minimal_matmul_registry::generated {
 
-inline constexpr compact::DeviceDescriptor kBh8Cohort0Device{
+inline constexpr compact::DeviceDescriptor kBlackhole8DeviceCohort0Device{
     .architecture = 3u,
     .device_count = 8u,
     .mesh_rows = 1u,
@@ -20,7 +20,7 @@ inline constexpr compact::DeviceDescriptor kBh8Cohort0Device{
     .compute_grid_y = 8u,
 };
 
-inline constexpr std::array<compact::EntryDescriptor, 9> kBh8Cohort0Entries{{
+inline constexpr std::array<compact::EntryDescriptor, 9> kBlackhole8DeviceCohort0Entries{{
     compact::EntryDescriptor{
         .key = compact::KeyDescriptor{
             .schema_version = 1u,
@@ -212,9 +212,9 @@ inline constexpr std::array<compact::EntryDescriptor, 9> kBh8Cohort0Entries{{
     }
 }};
 
-static_assert(compact::validate_entries(kBh8Cohort0Device, kBh8Cohort0Entries));
+static_assert(compact::validate_entries(kBlackhole8DeviceCohort0Device, kBlackhole8DeviceCohort0Entries));
 
-inline constexpr compact::DeviceDescriptor kBh8Cohort1Device{
+inline constexpr compact::DeviceDescriptor kBlackhole8DeviceCohort1Device{
     .architecture = 3u,
     .device_count = 8u,
     .mesh_rows = 1u,
@@ -223,7 +223,7 @@ inline constexpr compact::DeviceDescriptor kBh8Cohort1Device{
     .compute_grid_y = 9u,
 };
 
-inline constexpr std::array<compact::EntryDescriptor, 9> kBh8Cohort1Entries{{
+inline constexpr std::array<compact::EntryDescriptor, 9> kBlackhole8DeviceCohort1Entries{{
     compact::EntryDescriptor{
         .key = compact::KeyDescriptor{
             .schema_version = 1u,
@@ -415,9 +415,9 @@ inline constexpr std::array<compact::EntryDescriptor, 9> kBh8Cohort1Entries{{
     }
 }};
 
-static_assert(compact::validate_entries(kBh8Cohort1Device, kBh8Cohort1Entries));
+static_assert(compact::validate_entries(kBlackhole8DeviceCohort1Device, kBlackhole8DeviceCohort1Entries));
 
-inline constexpr compact::DeviceDescriptor kBh8Cohort2Device{
+inline constexpr compact::DeviceDescriptor kBlackhole8DeviceCohort2Device{
     .architecture = 3u,
     .device_count = 8u,
     .mesh_rows = 4u,
@@ -426,7 +426,7 @@ inline constexpr compact::DeviceDescriptor kBh8Cohort2Device{
     .compute_grid_y = 8u,
 };
 
-inline constexpr std::array<compact::EntryDescriptor, 9> kBh8Cohort2Entries{{
+inline constexpr std::array<compact::EntryDescriptor, 9> kBlackhole8DeviceCohort2Entries{{
     compact::EntryDescriptor{
         .key = compact::KeyDescriptor{
             .schema_version = 1u,
@@ -618,9 +618,9 @@ inline constexpr std::array<compact::EntryDescriptor, 9> kBh8Cohort2Entries{{
     }
 }};
 
-static_assert(compact::validate_entries(kBh8Cohort2Device, kBh8Cohort2Entries));
+static_assert(compact::validate_entries(kBlackhole8DeviceCohort2Device, kBlackhole8DeviceCohort2Entries));
 
-inline constexpr compact::DeviceDescriptor kBh8Cohort3Device{
+inline constexpr compact::DeviceDescriptor kBlackhole8DeviceCohort3Device{
     .architecture = 3u,
     .device_count = 8u,
     .mesh_rows = 4u,
@@ -629,7 +629,7 @@ inline constexpr compact::DeviceDescriptor kBh8Cohort3Device{
     .compute_grid_y = 9u,
 };
 
-inline constexpr std::array<compact::EntryDescriptor, 9> kBh8Cohort3Entries{{
+inline constexpr std::array<compact::EntryDescriptor, 9> kBlackhole8DeviceCohort3Entries{{
     compact::EntryDescriptor{
         .key = compact::KeyDescriptor{
             .schema_version = 1u,
@@ -821,16 +821,16 @@ inline constexpr std::array<compact::EntryDescriptor, 9> kBh8Cohort3Entries{{
     }
 }};
 
-static_assert(compact::validate_entries(kBh8Cohort3Device, kBh8Cohort3Entries));
+static_assert(compact::validate_entries(kBlackhole8DeviceCohort3Device, kBlackhole8DeviceCohort3Entries));
 
-inline constexpr std::array<compact::CohortDescriptor, 4> kBh8Cohorts{{
-    compact::CohortDescriptor{kBh8Cohort0Device, kBh8Cohort0Entries},
-    compact::CohortDescriptor{kBh8Cohort1Device, kBh8Cohort1Entries},
-    compact::CohortDescriptor{kBh8Cohort2Device, kBh8Cohort2Entries},
-    compact::CohortDescriptor{kBh8Cohort3Device, kBh8Cohort3Entries}
+inline constexpr std::array<compact::CohortDescriptor, 4> kBlackhole8DeviceCohorts{{
+    compact::CohortDescriptor{kBlackhole8DeviceCohort0Device, kBlackhole8DeviceCohort0Entries},
+    compact::CohortDescriptor{kBlackhole8DeviceCohort1Device, kBlackhole8DeviceCohort1Entries},
+    compact::CohortDescriptor{kBlackhole8DeviceCohort2Device, kBlackhole8DeviceCohort2Entries},
+    compact::CohortDescriptor{kBlackhole8DeviceCohort3Device, kBlackhole8DeviceCohort3Entries}
 }};
 
-inline constexpr compact::DeviceDescriptor kBh32Cohort0Device{
+inline constexpr compact::DeviceDescriptor kBlackhole32DeviceCohort0Device{
     .architecture = 3u,
     .device_count = 32u,
     .mesh_rows = 4u,
@@ -839,7 +839,7 @@ inline constexpr compact::DeviceDescriptor kBh32Cohort0Device{
     .compute_grid_y = 9u,
 };
 
-inline constexpr std::array<compact::EntryDescriptor, 8> kBh32Cohort0Entries{{
+inline constexpr std::array<compact::EntryDescriptor, 8> kBlackhole32DeviceCohort0Entries{{
     compact::EntryDescriptor{
         .key = compact::KeyDescriptor{
             .schema_version = 1u,
@@ -1010,9 +1010,9 @@ inline constexpr std::array<compact::EntryDescriptor, 8> kBh32Cohort0Entries{{
     }
 }};
 
-static_assert(compact::validate_entries(kBh32Cohort0Device, kBh32Cohort0Entries));
+static_assert(compact::validate_entries(kBlackhole32DeviceCohort0Device, kBlackhole32DeviceCohort0Entries));
 
-inline constexpr compact::DeviceDescriptor kBh32Cohort1Device{
+inline constexpr compact::DeviceDescriptor kBlackhole32DeviceCohort1Device{
     .architecture = 3u,
     .device_count = 32u,
     .mesh_rows = 8u,
@@ -1021,7 +1021,7 @@ inline constexpr compact::DeviceDescriptor kBh32Cohort1Device{
     .compute_grid_y = 9u,
 };
 
-inline constexpr std::array<compact::EntryDescriptor, 96> kBh32Cohort1Entries{{
+inline constexpr std::array<compact::EntryDescriptor, 96> kBlackhole32DeviceCohort1Entries{{
     compact::EntryDescriptor{
         .key = compact::KeyDescriptor{
             .schema_version = 1u,
@@ -3040,14 +3040,14 @@ inline constexpr std::array<compact::EntryDescriptor, 96> kBh32Cohort1Entries{{
     }
 }};
 
-static_assert(compact::validate_entries(kBh32Cohort1Device, kBh32Cohort1Entries));
+static_assert(compact::validate_entries(kBlackhole32DeviceCohort1Device, kBlackhole32DeviceCohort1Entries));
 
-inline constexpr std::array<compact::CohortDescriptor, 2> kBh32Cohorts{{
-    compact::CohortDescriptor{kBh32Cohort0Device, kBh32Cohort0Entries},
-    compact::CohortDescriptor{kBh32Cohort1Device, kBh32Cohort1Entries}
+inline constexpr std::array<compact::CohortDescriptor, 2> kBlackhole32DeviceCohorts{{
+    compact::CohortDescriptor{kBlackhole32DeviceCohort0Device, kBlackhole32DeviceCohort0Entries},
+    compact::CohortDescriptor{kBlackhole32DeviceCohort1Device, kBlackhole32DeviceCohort1Entries}
 }};
 
-inline constexpr std::span<const compact::CohortDescriptor> bh8_cohorts() noexcept { return kBh8Cohorts; }
-inline constexpr std::span<const compact::CohortDescriptor> bh32_cohorts() noexcept { return kBh32Cohorts; }
+inline constexpr std::span<const compact::CohortDescriptor> blackhole_8_device_cohorts() noexcept { return kBlackhole8DeviceCohorts; }
+inline constexpr std::span<const compact::CohortDescriptor> blackhole_32_device_cohorts() noexcept { return kBlackhole32DeviceCohorts; }
 
 }  // namespace ttnn::experimental::all_gather_minimal_matmul_registry::generated

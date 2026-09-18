@@ -52,12 +52,12 @@ void expect_entries_round_trip(std::span<const registry::compact::CohortDescript
 }
 
 TEST(AgmmRegistry, EveryEntryRoundTripsAndMaterializes) {
-    expect_entries_round_trip(registry::generated::bh8_cohorts(), 36U);
-    expect_entries_round_trip(registry::generated::bh32_cohorts(), 104U);
+    expect_entries_round_trip(registry::generated::blackhole_8_device_cohorts(), 36U);
+    expect_entries_round_trip(registry::generated::blackhole_32_device_cohorts(), 104U);
 }
 
 TEST(AgmmRegistry, LiveGridIsCheckedAsCapabilityNotIdentity) {
-    const auto& cohort = registry::generated::bh32_cohorts().front();
+    const auto& cohort = registry::generated::blackhole_32_device_cohorts().front();
     auto live_key = cohort.entries.front().key;
     live_key.device.compute_grid_x += 1;
     live_key.device.compute_grid_y += 1;
@@ -68,7 +68,7 @@ TEST(AgmmRegistry, LiveGridIsCheckedAsCapabilityNotIdentity) {
 }
 
 TEST(AgmmRegistry, SelectionUsesTheSharedMatmulMode) {
-    const auto& entry = registry::generated::bh32_cohorts().front().entries.front();
+    const auto& entry = registry::generated::blackhole_32_device_cohorts().front().entries.front();
     auto facts = facts_from_key(entry.key);
     EXPECT_FALSE(registry::select_recipe(ttnn::MatmulRegistryMode::Off, facts).has_value());
     EXPECT_FALSE(registry::select_recipe(ttnn::MatmulRegistryMode::Shadow, facts).has_value());
@@ -82,7 +82,7 @@ TEST(AgmmRegistry, SelectionUsesTheSharedMatmulMode) {
 TEST(AgmmRegistry, StrictOnRejectsAMissAndAcceptsAnExactHit) {
     FallbackStateReset reset;
     ttnn::CONFIG.set<"throw_exception_on_fallback">(true);
-    const auto& key = registry::generated::bh32_cohorts().front().entries.front().key;
+    const auto& key = registry::generated::blackhole_32_device_cohorts().front().entries.front().key;
     auto facts = facts_from_key(key);
 
     EXPECT_TRUE(registry::select_recipe(ttnn::MatmulRegistryMode::On, facts).has_value());

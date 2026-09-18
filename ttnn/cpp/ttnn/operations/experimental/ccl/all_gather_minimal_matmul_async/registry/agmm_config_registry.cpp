@@ -160,10 +160,10 @@ std::optional<compact::KeyDescriptor> build_registry_key(const RegistryRequestFa
 
 std::span<const compact::CohortDescriptor> cohorts_for_device_count(const std::uint16_t device_count) noexcept {
     if (device_count == 8) {
-        return generated::bh8_cohorts();
+        return generated::blackhole_8_device_cohorts();
     }
     if (device_count == 32) {
-        return generated::bh32_cohorts();
+        return generated::blackhole_32_device_cohorts();
     }
     return {};
 }

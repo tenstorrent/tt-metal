@@ -6,6 +6,7 @@
 
 #include <array>
 #include <bit>
+#include <cstddef>
 #include <utility>
 
 #include <tt-metalium/experimental/inspector.hpp>
@@ -13,6 +14,18 @@
 #include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
 
 namespace ttnn::operations::matmul::registry {
+
+bool has_only_unit_front_dimensions(const ttnn::Shape& shape) noexcept {
+    if (shape.rank() < 2) {
+        return false;
+    }
+    for (std::size_t index = 0; index + 2 < shape.rank(); ++index) {
+        if (shape[index] != 1) {
+            return false;
+        }
+    }
+    return true;
+}
 
 RegistryRequestInspection inspect_registry_request(
     const ttnn::Tensor& input_tensor_a,
@@ -68,7 +81,8 @@ RegistryRequestInspection inspect_registry_request(
     // matmul families (for example AGMM) own separate exact tables keyed by
     // their collective topology; a mesh-wide tensor must never consume this
     // single-device evidence merely because each local launch is legal.
-    if (input_tensor_a.logical_shape().rank() != 2 || input_tensor_b.logical_shape().rank() != 2 ||
+    if (!has_only_unit_front_dimensions(input_tensor_a.logical_shape()) ||
+        !has_only_unit_front_dimensions(input_tensor_b.logical_shape()) ||
         device_a == nullptr || device_a != device_b || device_a->num_devices() != 1) {
         return inspection;
     }

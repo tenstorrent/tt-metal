@@ -24,10 +24,12 @@ an unsupported call, or a table miss.
 
 ## Current coverage
 
-The dense table currently covers exact Blackhole, single-device, rank-2,
-interleaved calls. Explicit program configs and core grids, sharded tensors,
+The dense table currently covers exact Blackhole, single-device, interleaved
+calls with rank at least two and only unit dimensions before the final matrix
+dimensions. Explicit program configs and core grids, sharded tensors,
 mesh-wide tensors, and trace capture are not covered. The AGMM table currently
-contains 32-chip entries. In `on` mode, an exact AGMM entry supersedes caller
+contains 36 eight-device entries and 104 thirty-two-device entries. In `on`
+mode, an exact AGMM entry supersedes caller
 program and compute-kernel configs; a miss keeps them unchanged. This makes the
 same model command a valid `off`/`on` comparison without model-specific logic.
 
