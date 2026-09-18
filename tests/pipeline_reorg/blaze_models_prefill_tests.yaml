@@ -874,6 +874,27 @@
       release_ready: false
   owner_id: U078RU2KP9Q # Muhammad Asif Manzoor
   team: models
+
+
+- name: "(DeepSeek-V4) teacher-forced block chunked 55k@5k"
+  fabric_profile: torus_xy
+  cmd: |
+
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      export OMP_NUM_THREADS=$(nproc)
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/v4/test_block_chunked.py -k "(pro and L3-hca-topk) or (flash and L1-swa-hash)" -vvv --tb=short
+    '
+  test_type: v4_block_chunked
+  test_tags: [block_chunked_v4]
+  test_group: module
+  skus:
+    bh_sc1:
+      timeout: 12
+      tier: 2
+      release_ready: false
+  owner_id: U08SXRPCTJ5  # Janko Mitrovic
+  team: models
+  budget_type: demo
   sp_config: sc1
 
 

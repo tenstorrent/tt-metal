@@ -65,6 +65,12 @@ class DeepSeekV4ProConfig:
     # Compressed attention config
     COMPRESS_RATES = {"compressed_sparse_attention": 4, "heavily_compressed_attention": 128}
     COMPRESS_ROPE_THETA = 160000.0
+    # YaRN scaling, as stated in config.json rope_scaling. It reaches the compressed branches only:
+    # DeepseekV4Config folds these into rope_parameters["compress"] and leaves the sliding rope plain.
+    ROPE_SCALING_FACTOR = 16
+    ROPE_SCALING_ORIGINAL_MAX_POSITION_EMBEDDINGS = 65536
+    ROPE_SCALING_BETA_FAST = 32
+    ROPE_SCALING_BETA_SLOW = 1
     HC_MULT = 4
     HC_SINKHORN_ITERS = 20
     HC_EPS = 1.0e-6

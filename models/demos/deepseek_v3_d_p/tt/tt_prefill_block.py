@@ -503,6 +503,8 @@ class TtPrefillBlock(LightweightModule):
             # Only DeepSeek-V4 names one; None keeps the gate config's sigmoid default.
             gate_score_func=getattr(model_cfg, "SCORE_FUNC", None),
             gate_weights=state_dict.get("gate_weights"),  # None if cache exists
+            # DeepSeek-V4 hash layers route via a frozen tid2eid[input_ids] table; None elsewhere.
+            gate_hash_table=state_dict.get("hash_table"),
             gate_fallback_mode=gate_fallback_mode,
             n_expert_groups=model_cfg.NUM_EXPERT_GROUPS,
             n_limited_groups=model_cfg.NUM_LIMITED_GROUPS,
