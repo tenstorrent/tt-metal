@@ -238,9 +238,10 @@ void AllGatherMatmulAsyncMeshWorkloadFactory::override_runtime_arguments(
                 [&](const ttnn::prim::MatmulMultiCoreReuseMcast2DProgramFactory::shared_variables_t&
                         mm_shared_variables) {
                     std::vector<Tensor> matmul_output_tensors = {tensor_return_value[1]};
-                    ttnn::prim::matmul_multi_core_reuse_mcast_2d_override_runtime_arguments_helper(
+                    ttnn::prim::MatmulMultiCoreReuseMcast2DProgramFactory::override_runtime_arguments(
                         program,
                         mm_shared_variables,
+                        operation_attributes.matmul,
                         {{tensor_return_value[0], tensor_args.weight_tensor},
                          {tensor_args.bias},
                          {tensor_return_value[1]}},
