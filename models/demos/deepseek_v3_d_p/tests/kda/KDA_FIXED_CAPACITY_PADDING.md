@@ -1,5 +1,12 @@
 # Fixed-5120 KDA padding experiment
 
+> Historical measurements from 2026-09-17, before the rebase onto PR head
+> `bbb915fa5c3`. They do not establish performance of the rebased implementation.
+> For reproduction, use the original revisions recorded below and the harness
+> at pre-rebase tip `924c1b79ecb`, preserved on
+> `backup/kda_pad_before_pr56632_rebase_20260918`.
+> Current integration evidence is in [the rebase report](KDA_PADDING_REBASE.md).
+
 **Recurrence is faster than the unpadded 5120-token PR baseline at every tested
 padding value.** At 20%, 50%, and 80% padding, measured recurrence savings are
 8.44%, 17.62%, and 22.72%. Whole-layer differences are smaller and noisier.

@@ -1,5 +1,12 @@
 # Early-exit cost attribution against PR #56632
 
+> Historical measurements from 2026-09-17, before the rebase onto PR head
+> `bbb915fa5c3`. They do not establish performance of the rebased implementation.
+> For reproduction, use the original revisions recorded below and the harness
+> at pre-rebase tip `924c1b79ecb`, preserved on
+> `backup/kda_pad_before_pr56632_rebase_20260918`.
+> Current integration evidence is in [the rebase report](KDA_PADDING_REBASE.md).
+
 **Comparison scope:** this report compares a padded 5120-token prototype with
 the PR physically cropped to the valid length. It explains a loss of efficiency
 relative to trimming, not a slowdown against the PR's unpadded 5120-token run.

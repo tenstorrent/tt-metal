@@ -376,8 +376,11 @@ ttnn::device_operation::MeshWorkloadArtifacts PrepareChunkRecurrenceProgramFacto
     kda_factory_detail::bind_chronology(spec, run_args, in.actual_start, reader, compute);
     kda_factory_detail::bind_actual_end(spec, run_args, in.actual_end, in.actual_start, reader);
     const m2::DFBSpecName writer_chronology{"chronology_writer"};
-    spec.dataflow_buffers.push_back({.unique_id = writer_chronology, .entry_size = 32, .num_entries = 1,
-        .data_format_metadata = tt::DataFormat::UInt32});
+    spec.dataflow_buffers.push_back(
+        {.unique_id = writer_chronology,
+         .entry_size = 32,
+         .num_entries = 1,
+         .data_format_metadata = tt::DataFormat::UInt32});
     reader.dfb_bindings.push_back(m2::ProducerOf(writer_chronology, "chronology_writer"));
     writer.dfb_bindings.push_back(m2::ConsumerOf(writer_chronology, "chronology_writer"));
     spec.kernels = {std::move(reader), std::move(writer), std::move(compute)};
@@ -386,7 +389,8 @@ ttnn::device_operation::MeshWorkloadArtifacts PrepareChunkRecurrenceProgramFacto
         tensor_coords,
         device,
         attrs.sequence_parallel_axis,
-        attrs.num_chunks * 32, READER);
+        attrs.num_chunks * 32,
+        READER);
 }
 
 }  // namespace ttnn::experimental::prim

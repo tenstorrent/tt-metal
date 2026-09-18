@@ -102,7 +102,8 @@ template <
     uint32_t Vt_full,
     uint32_t summary,
     uint32_t groups_per_head,
-    uint32_t has_actual_end, uint32_t sp_rank,
+    uint32_t has_actual_end,
+    uint32_t sp_rank,
     uint32_t sp_size,
     uint32_t local_rows>
 TT_KERNEL void reader(uint32_t head, uint32_t value_block, uint32_t num_chunks) {

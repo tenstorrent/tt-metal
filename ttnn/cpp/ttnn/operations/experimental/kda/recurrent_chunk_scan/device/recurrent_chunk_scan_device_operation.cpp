@@ -233,7 +233,8 @@ std::vector<Tensor> recurrent_chunk_scan(
             .t_inv = t_inv,
             .group_entry_states = group_entry_states,
             .tail_entry_states = tail_entry_states,
-            .actual_start = actual_start, .actual_end = actual_end});
+            .actual_start = actual_start,
+            .actual_end = actual_end});
 }
 
 }  // namespace ttnn::experimental::prim

@@ -195,7 +195,9 @@ TT_KERNEL void compute(uint32_t group) {
         topology = kda_chronology::receive(chronology);
     }
     const uint32_t active = topology.active_groups(G);
-    if (group >= active) { return; }
+    if (group >= active) {
+        return;
+    }
     const uint32_t reset_group = topology.reset_group(G);
     initial_a.wait_front(affine_a_tiles);
     const bool reset_worker = group == reset_group;
