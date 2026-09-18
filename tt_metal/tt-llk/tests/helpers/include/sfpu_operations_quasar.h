@@ -24,6 +24,7 @@
 #include "llk_sfpu/ckernel_sfpu_negative.h"
 #include "llk_sfpu/ckernel_sfpu_recip.h"
 #include "llk_sfpu/ckernel_sfpu_relu.h"
+#include "llk_sfpu/ckernel_sfpu_rounding_ops.h"
 #include "llk_sfpu/ckernel_sfpu_rsqrt.h"
 #include "llk_sfpu/ckernel_sfpu_softplus.h"
 #include "llk_sfpu/ckernel_sfpu_square.h"
@@ -44,12 +45,12 @@
 // 2. Add the enumerator to ckernel::BinaryOp (tt_llk_quasar/common/inc/ckernel_defs.h) if it is not there.
 // 3. Add the `if constexpr` branch in call_binary_sfpu_operation_quasar()
 //    (and init_binary_sfpu_operation_quasar() if it needs an init step).
+#include "llk_sfpu/ckernel_sfpu_add.h"            // calculate_add_int (int add)
 #include "llk_sfpu/ckernel_sfpu_atan2.h"          // calculate_sfpu_atan2 / calculate_sfpu_atan2_init (float atan2)
 #include "llk_sfpu/ckernel_sfpu_binary.h"         // calculate_sfpu_binary / sfpu_binary_init (float mul/div)
 #include "llk_sfpu/ckernel_sfpu_binary_max_min.h" // calculate_binary_max_min / _init_binary_max_min_
 #include "llk_sfpu/ckernel_sfpu_quant.h"          // quant_family / quant_family_init (quant/requant/dequant)
 #include "llk_sfpu/llk_math_eltwise_binary_sfpu_macros.h"
-#include "sfpu/ckernel_sfpu_add.h"         // _add_int_ (int add)
 #include "sfpu/ckernel_sfpu_binary_comp.h" // calculate_binary_comp_int32 (int gt/lt/le/ge)
 #include "sfpu/ckernel_sfpu_mul_int32.h"   // _mul_int32_ (int mul)
 
@@ -361,6 +362,26 @@ void call_unary_sfpu_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_f
         // boundary, so it runs once per tile (RC_custom), not once per face.
         SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_cumsum, (APPROX, ITERATIONS), dst_index, VectorMode::RC_custom, first);
     }
+    else if constexpr (OPERATION == SfpuType::floor)
+    {
+        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, _calculate_floor_, (APPROX, ITERATIONS), dst_index, VectorMode::RC);
+    }
+    else if constexpr (OPERATION == SfpuType::ceil)
+    {
+        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, _calculate_ceil_, (APPROX, ITERATIONS), dst_index, VectorMode::RC);
+    }
+    else if constexpr (OPERATION == SfpuType::trunc)
+    {
+        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, _calculate_trunc_, (APPROX, ITERATIONS), dst_index, VectorMode::RC);
+    }
+    else if constexpr (OPERATION == SfpuType::frac)
+    {
+        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, _calculate_frac_, (APPROX, ITERATIONS), dst_index, VectorMode::RC);
+    }
+    else if constexpr (OPERATION == SfpuType::round)
+    {
+        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, _calculate_round_, (APPROX, ITERATIONS), dst_index, VectorMode::RC, 0 /* decimals */);
+    }
     else
     {
         static_assert(unhandled_op<OPERATION>, "call_unary_sfpu_operation_quasar: unhandled Quasar unary SFPU operation");
@@ -478,7 +499,14 @@ void call_binary_sfpu_operation_quasar(std::uint32_t src0_tile, std::uint32_t sr
         if (math_format == DataFormat::Int32)
         {
             SFPU_BINARY_CALL(
-                DST_SYNC, is_fp32_dest_acc_en, _add_int_, (false, ITERATIONS, DataFormat::Int32, 0, false), src0_tile, src1_tile, dst_tile, VectorMode::RC);
+                DST_SYNC,
+                is_fp32_dest_acc_en,
+                calculate_add_int,
+                (false, ITERATIONS, DataFormat::Int32, 0, false),
+                src0_tile,
+                src1_tile,
+                dst_tile,
+                VectorMode::RC);
         }
         else
         {

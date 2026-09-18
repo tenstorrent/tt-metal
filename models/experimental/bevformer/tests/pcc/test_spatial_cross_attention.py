@@ -33,25 +33,29 @@ ENABLE_LOGGING = True
 # Default Test Configuration
 PRINT_DETAILED_COMPARISON_FLAG = False
 
-# Maximum relative error allowed for any query row
-MAX_QUERY_ROW_REL_ERROR = 0.3
+# Empirical threshold for gather-scatter row-routing regressions that global PCC can dilute; not an accuracy tolerance.
+MAX_REBATCH_ROW_REL_ERROR = 0.3
+
+# Module-scoped device: opens once per file instead of once per test case.
+pytestmark = pytest.mark.use_module_device({"l1_small_size": 10 * 1024})
 
 
 @pytest.mark.parametrize(
     "config_name, batch_size, bev_h, bev_w, expected_pcc, expected_abs_error, expected_rel_error, expected_high_error_ratio, blank_cams, valid_per_pair",
     [
         ("nuscenes_tiny", 1, 30, 30, 0.997, 0.06, 0.5, 0.5, (), None),  # NuScenes tiny model - 30x30 BEV grid
-        ("nuscenes_base", 1, 50, 50, 0.999, 0.04, 1.3, 0.5, (), None),  # NuScenes base model - 50x50 BEV grid
         ("nuscenes_base", 1, 100, 100, 0.999, 0.04, 1.3, 0.5, (), None),  # NuScenes base model - 100x100 BEV grid
         ("nuscenes_base", 1, 200, 200, 0.998, 0.04, 1.3, 0.5, (), None),  # NuScenes base model - 200x200 BEV grid
+        # CARLA's rig projects symmetrically, NuScenes' does not, so max_len spreads
+        # across cameras differently and pads the rebatch differently.
         ("carla_base", 1, 100, 100, 0.998, 0.04, 1.3, 0.5, (), None),  # CARLA base model
         ("nuscenes_base", 2, 30, 30, 0.998, 0.04, 1.3, 0.5, ((2, 1),), None),  # bs=2, blind cam in one item
-        # Disabled to keep the CI job inside its timeout budget; TODO re-enable once the layer is faster.
-        # ("nuscenes_base", 1, 30, 30, 0.998, 0.04, 1.3, 0.5, "all", None),  # max_len == 0: residual-only return
-        # ("nuscenes_base", 1, 30, 30, 0.998, 0.04, 1.3, 0.5, ((2, 0),), 32),  # max_len == rebatch_len: no padding
+        ("nuscenes_base", 1, 30, 30, 0.998, 0.04, 1.3, 0.5, "all", None),  # max_len == 0: residual-only return
+        ("nuscenes_base", 1, 30, 30, 0.998, 0.04, 1.3, 0.5, ((2, 0),), 32),  # max_len == rebatch_len: no padding
+        # Off: a grid size between the 30x30 and 100x100 cases, no distinct path.
+        # ("nuscenes_base", 1, 50, 50, 0.999, 0.04, 1.3, 0.5, (), None),  # NuScenes base model - 50x50 BEV grid
     ],
 )
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 10 * 1024}], indirect=True)
 @pytest.mark.parametrize("seed", [0])
 def test_spatial_cross_attention_forward(
     device,
@@ -144,9 +148,6 @@ def test_spatial_cross_attention_forward(
         reference_points_cam, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
     )
     tt_bev_mask = ttnn.from_torch(bev_mask, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-    tt_level_start_index = ttnn.from_torch(
-        level_start_index, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
-    )
 
     # --------------------------------------------------------------------------- #
     # Models Init                                                                 #
@@ -186,6 +187,7 @@ def test_spatial_cross_attention_forward(
             "num_points": num_points,
             "num_heads": num_heads,
         },
+        spatial_shapes=spatial_shapes,
     )
 
     # --------------------------------------------------------------------------- #
@@ -210,8 +212,6 @@ def test_spatial_cross_attention_forward(
         bev_mask=tt_bev_mask,
         key=tt_camera_features,
         value=tt_camera_features,
-        spatial_shapes=spatial_shapes,
-        level_start_index=tt_level_start_index,
     )
 
     tt_model_output = ttnn.to_torch(tt_model_output, dtype=torch.float32)
@@ -281,9 +281,9 @@ def test_spatial_cross_attention_forward(
     row_norm = ref_model_output.flatten(0, -2).norm(dim=-1)
     row_rel_error = row_error / row_norm.clamp(min=1e-6)
     worst_row = int(row_rel_error.argmax())
-    assert row_rel_error[worst_row] <= MAX_QUERY_ROW_REL_ERROR, (
+    assert row_rel_error[worst_row] <= MAX_REBATCH_ROW_REL_ERROR, (
         f"Query row {worst_row % num_queries} of batch item {worst_row // num_queries} has relative "
-        f"error {row_rel_error[worst_row]:.4f} > {MAX_QUERY_ROW_REL_ERROR} "
+        f"error {row_rel_error[worst_row]:.4f} > {MAX_REBATCH_ROW_REL_ERROR} "
         f"(row norm {row_norm[worst_row]:.4f}); mean over rows is {row_rel_error.mean():.4f}."
     )
 

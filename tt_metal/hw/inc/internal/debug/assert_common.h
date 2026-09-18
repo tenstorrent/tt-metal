@@ -13,7 +13,7 @@
 
 #if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_ASSERT) && !defined(FORCE_WATCHER_OFF)
 
-// Defined in api/debug/assert.h, after risc_common.h provides flush_l2_cache_range and related symbols.
+// Defined in api/debug/assert.h.
 inline void assert_and_hang(uint32_t line_num, debug_assert_type_t assert_type = DebugAssertTripped);
 
 #define ASSERT(condition, ...) (void(not(condition) ? assert_and_hang(__LINE__, ##__VA_ARGS__), 0 : 0))

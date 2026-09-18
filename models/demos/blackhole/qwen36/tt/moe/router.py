@@ -28,18 +28,16 @@ class Qwen36Router:
         # HF mlp.gate.weight is [E, H] (nn.Linear out,in). Transpose to [1,1,H,E] for
         # ttnn.linear (in,out) and replicate on every device (router is tiny +
         # accuracy-sensitive, kept at bf16).
-        proj_weight = None
-        if state_dict:
-            proj_weight = state_dict["weight"].to(torch.bfloat16).transpose(-2, -1).unsqueeze(0).unsqueeze(0)
-
+        # The cast + transpose run as the as_tensor preprocess, i.e. on a tensor-cache miss only.
         self.proj_weight = ttnn.as_tensor(
-            proj_weight,
+            state_dict["weight"] if state_dict else None,
             device=mesh_device,
             dtype=dtype,
             layout=ttnn.TILE_LAYOUT,
             mesh_mapper=replicate_mapper,
             cache_file_name=(str(tensor_cache_path / "moe.router.weight") if tensor_cache_path else None),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            preprocess=lambda t: t.to(torch.bfloat16).transpose(-2, -1).unsqueeze(0).unsqueeze(0),
         )
         self.compute_kernel_config = tpc.COMPUTE_HIFI2  # fp32 accumulate (see module docstring)
 
