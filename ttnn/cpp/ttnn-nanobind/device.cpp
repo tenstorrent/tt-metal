@@ -460,14 +460,31 @@ void device_module(nb::module_& m_device) {
             >>> ttnn.device.ClearKernelCache()
     )doc");
     m_device.def(
-        "initialize_fast_dispatch",
-        [](MeshDevice* device) { tt::tt_metal::experimental::DispatchContext::get().initialize_fast_dispatch(device); },
+        "get_dispatch_core_axis",
+        [](MeshDevice* device) {
+            return tt::tt_metal::experimental::DispatchContext::get().get_dispatch_core_axis(device);
+        },
         nb::arg("device").noconvert(),
+        "Return the row/column axis used by the device's live dispatch-core configuration.");
+    m_device.def(
+        "initialize_fast_dispatch",
+        [](MeshDevice* device, bool allow_destructive, bool write_only) {
+            tt::tt_metal::experimental::FastDispatchSetupOptions options;
+            options.allow_destructive = allow_destructive;
+            options.write_only = write_only;
+            tt::tt_metal::experimental::DispatchContext::get().initialize_fast_dispatch(device, options);
+        },
+        nb::arg("device").noconvert(),
+        nb::arg("allow_destructive") = false,
+        nb::arg("write_only") = false,
         R"doc(
         Dynamically enable Fast Dispatch on a MeshDevice that was opened in Slow Dispatch mode.
 
         Args:
             device (ttnn.Device): The mesh device to enable Fast Dispatch on.
+            allow_destructive (bool): Warn and proceed if resident L1 on a dispatch core will be overwritten.
+            write_only (bool): The session will issue only host-to-device writes, narrowing the prefetcher check
+                to the command-data and scratch-staging buffers.
     )doc");
     m_device.def(
         "terminate_fast_dispatch",
