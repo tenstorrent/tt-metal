@@ -746,6 +746,9 @@ relay binds.
    (1.1 ms bound, 7% util), aggregate DRAM bandwidth (0.78 ms bound), LoFi (halves the roofline, a quality
    decision), the grid (the mux row is the 8x8 vs 8x9 cost and is fixed by the op).
 
+Continued in **`MiniMaxH3_wormhole_agmm_ff1_handoff.md`**: the SwiGLU attribution (silu is 2.16 of the 2.2 ms), the
+bf16-grade silu result and its mesh hang, per-lever change recipes and tooling.
+
 Housekeeping from this pass: `sweep_mm_block_sizes.py` gained `MM_SWEEP_FP32_DEST_ACC=0`; its L1 pre-filter
 still over-estimates the AGMM footprint (fixing it would admit the K>=14 combos, which measured slower
 anyway). The kernel zones used in experiments 5 and 6 were temporary and are not in the tree.
