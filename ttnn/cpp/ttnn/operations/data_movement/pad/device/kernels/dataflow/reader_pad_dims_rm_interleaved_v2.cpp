@@ -150,15 +150,20 @@ void kernel_main() {
                     read_input_stick_into_l1(noc, s, i_page, temp_addr, num_input_pages_in_row, stick_size_bytes);
                     noc.async_read_barrier();
 #if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
-                    // Quasar DM reverse hazard: the NoC just wrote pad_align to TL1, but the CPU memmove
-                    // below reads it through L1D/L2. Invalidate the staged range so the memmove sees the
-                    // NoC data (this is a raw memmove, so #51763's copy_via_memmove fix does not cover it).
-                    invalidate_l2_cache_range(
-                        static_cast<uintptr_t>(pad_align.get_base_address()), static_cast<size_t>(stick_size_bytes));
+                    // Quasar DM reverse hazard: the NoC just wrote pad_align to TL1, but a CPU read goes
+                    // through the private L1 D$ and L2. invalidate_l2_cache_range only reaches L2 and
+                    // invalidate_l1_cache() is a no-op here, so a stale D$ line could survive. Read the
+                    // staged stick through the uncached L1 alias (base + MEM_L1_UNCACHED_BASE), which
+                    // bypasses both caches -- what DataflowBuffer::get_read_ptr() did for this path before
+                    // the conversion, and what #55990 / common.hpp (#51763) do.
+                    const uintptr_t pad_align_src =
+                        static_cast<uintptr_t>(pad_align.get_base_address()) + MEM_L1_UNCACHED_BASE;
+#else
+                    const uintptr_t pad_align_src = static_cast<uintptr_t>(pad_align.get_base_address());
 #endif
                     memmove(
                         (void*)(l1_write_addr + stick_size_padded_front),
-                        (void*)(pad_align.get_base_address()),
+                        (void*)(pad_align_src),
                         (size_t)(stick_size_bytes));
                 } else if constexpr (unaligned) {
                     uint32_t temp_addr = pad_align.get_base_address();
