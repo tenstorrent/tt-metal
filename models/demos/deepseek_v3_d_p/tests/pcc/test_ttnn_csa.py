@@ -8,24 +8,23 @@ reference modeling_deepseek_v4.py.
 
 Every test drives a public forward -- no TtCSA private method is called directly:
   - TtCSA.forward, single-shot     1 per-chip prompt length
-  - TtCSA.forward, chunked         TtCSAState across chunks, 3 scenarios
+  - TtCSA.forward, chunked         3 compact scenarios plus one production 8x4 anchor
 
 Both run on both V4 variants, flash and pro.
 
-Every test here runs in the regime where the indexer can reach EVERY entry the cache holds, so it
-drops nothing and its selection reduces to plain causality. That is deliberate: outside it the two
-indexers rank near-tied bf16 scores differently, they select different entries, and the block's output
-legitimately differs from the reference's by more than numerics -- there is nothing for PCC to say. What
-the top-k itself does is covered by tests/pcc/test_ttnn_csa_indexer.py, on its own overlap metric.
+Every variant keeps its production ``index_topk``. The index list is checked with the same set-recall
+principle as the prefill MoE gate: BF16 can swap near-tied candidates at the top-k boundary without
+materially changing attention, so exact index equality is the wrong contract. Geometry remains exact:
+the test separately rejects duplicates, out-of-range or future compressed IDs, missing sliding keys,
+and non-contiguous sentinel tails.
 
-Inside that regime the index list is not just comparable but fully determined, so the chunked test also
-checks it exactly (_audit_index_list) alongside the compressed cache. Those two plus the output PCC
-say WHICH stage a regression is in, which one number over the block cannot.
+The golden attention gathers only the selected compressed and sliding keys. This is mathematically the
+same attention as the reference's dense block-bias path, but avoids materializing an
+``[heads, query, full_kv]`` score tensor for the production-length case.
 
-The mesh list, the chunk-PCC reporter and the reference sliding mask come from test_ttnn_hca.py and
-mesh_configs.py rather than being restated here: CSA and HCA run the same attention body
-(v4_attention_base.py) and the same chunked-vs-unchunked comparison, so those three are identical
-between them by construction, not by coincidence.
+The mesh list and chunk-PCC reporter come from test_ttnn_hca.py and mesh_configs.py rather than being
+restated here: CSA and HCA run the same attention body (v4_attention_base.py) and the same
+chunked-vs-unchunked comparison, so those pieces are identical by construction, not by coincidence.
 """
 
 import pytest
@@ -36,11 +35,14 @@ from tracy import signpost
 import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4.configuration_deepseek_v4 import DeepseekV4Config
-from models.demos.deepseek_v3_d_p.reference.deepseek_v4.modeling_deepseek_v4 import DeepseekV4Attention
+from models.demos.deepseek_v3_d_p.reference.deepseek_v4.modeling_deepseek_v4 import (
+    DeepseekV4Attention,
+    apply_rotary_pos_emb,
+)
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_flash_config import DeepSeekV4FlashConfig
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_pro_config import DeepSeekV4ProConfig
 from models.demos.deepseek_v3_d_p.tests.pcc.mesh_configs import V4_MESH_CONFIGS
-from models.demos.deepseek_v3_d_p.tests.pcc.test_ttnn_hca import _report_chunk_pccs, _sliding_mask
+from models.demos.deepseek_v3_d_p.tests.pcc.test_ttnn_hca import _report_chunk_pccs
 from models.demos.deepseek_v3_d_p.tt.mla.compressed_sparse_attention import TtCSA
 from models.demos.deepseek_v3_d_p.tt.mla.compressor import TtCSACompressor
 from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -54,12 +56,16 @@ _LOCAL_SHAPES = [640]
 # The stored entries, checked after every chunk of a chunked run. They are written once and never
 # recomputed, so this holds no matter how deep the run goes.
 _CACHE_PCC = 0.998
-# sparse_sdpa's "no key here" id, as the index list carries it. _audit_index_list leans on it being the
-# largest uint32, so a sort pushes it past every real row id.
+# Same recall floor as the BF16 on-device prefill MoE gate.
+_INDEX_RECALL = 0.95
+# Bound both the reference indexer's [query, heads, compressed] temporary and attention's selected-KV
+# contraction independently of total prompt length.
+_GOLDEN_QUERY_CHUNK = 64
+# sparse_sdpa's "no key here" id, as the index list carries it.
 _SENTINEL = 0xFFFFFFFF
 
 
-def _config(model_config, num_hidden_layers=1, min_index_topk=0):
+def _config(model_config, num_hidden_layers=1):
     """Reference config from one variant's dimension constants, with layer 0 forced to CSA.
 
     Everything that differs between the variants is passed explicitly, including the indexer fields:
@@ -67,10 +73,8 @@ def _config(model_config, num_hidden_layers=1, min_index_topk=0):
     build Pro widths with Flash's indexer, and the reference would agree with it -- PCC would pass on
     the wrong model.
 
-    ``min_index_topk`` raises the top-k capacity to whatever keeps a run inside the reach-every-entry
-    regime. It is a floor rather than an override, so a variant's real value still stands wherever it
-    already reaches every entry -- which on the smaller meshes, where the run writes fewer entries than
-    the stock capacity, it does."""
+    ``index_topk`` is the production value. Raising it to make the index list deterministic would turn
+    CSA back into dense causal attention and leave the sparse selection path untested."""
     m = model_config
     cfg = DeepseekV4Config(
         hidden_size=m.EMB_SIZE,
@@ -86,7 +90,7 @@ def _config(model_config, num_hidden_layers=1, min_index_topk=0):
         rms_norm_eps=m.RMS_NORM_EPS,
         index_n_heads=m.INDEX_N_HEADS,
         index_head_dim=m.INDEX_HEAD_DIM,
-        index_topk=max(m.INDEX_TOPK, -(-min_index_topk // 16) * 16),
+        index_topk=m.INDEX_TOPK,
         sliding_window=m.SLIDING_WINDOW,
     )
     cfg._attn_implementation = "eager"  # V4 is eager-only: the sdpa interface silently drops the sinks
@@ -112,20 +116,23 @@ def _reference(config):
 
 # (id, dimension constants, per-chunk floor, single-shot floor).
 #
-# PCC decays with depth: every chunk inherits the previous one's error through the compressed cache, the
-# overlap state, the indexer's own key cache and the carry, and the softmax widens as the cache fills.
-# Pro decays faster, since 128 heads and a 7168-wide hidden make every bf16 reduction longer -- the same
-# split HCA shows.
+# PCC decays with depth: every chunk inherits the previous one's error through the compressed cache,
+# overlap state, indexer's key cache and carry. With production top-k, BF16 can also swap near-tied
+# candidates at the selection boundary; recall judges that selection directly, while the chunked output
+# floor allows its small downstream effect. Pro already needs the lower floor because its wider
+# reductions accumulate more BF16 error.
 _VARIANTS = [
-    ("flash", DeepSeekV4FlashConfig, 0.997, 0.998),
+    ("flash", DeepSeekV4FlashConfig, 0.995, 0.998),
     ("pro", DeepSeekV4ProConfig, 0.994, 0.997),
 ]
 _MODEL_CONFIGS_CHUNKED = [pytest.param(cfg, chunked, id=name) for name, cfg, chunked, _ in _VARIANTS]
 _MODEL_CONFIGS_FORWARD = [pytest.param(cfg, fwd, id=name) for name, cfg, _, fwd in _VARIANTS]
 
 
-# (chunk_size, real lengths). 1024 is slab-aligned on every mesh in V4_MESH_CONFIGS, including the 8x4
-# one, whose indexer wants a whole tile of the slab per chip.
+# Compact scenarios remain available on every mesh for local regression runs. The production anchor is
+# 8x4-only and is the sole chunked scenario retained in CI: this avoids multiplying its 13k-token CPU
+# golden over the smaller BH E2E meshes while still exercising the real 5120-token serving width.
+_PRODUCTION_SCENARIO = "3chunk-production"
 _CHUNKED_SCENARIOS = [
     ("2chunk-full", 1024, [1024, 1024]),
     ("2chunk-ragged", 1024, [1024, 600]),  # a ragged FINAL chunk, the only place one is allowed
@@ -133,33 +140,127 @@ _CHUNKED_SCENARIOS = [
     # one) nor the last. It is the only place a full carry, the identity permutation and a mid-sequence
     # compressed append all run at once.
     ("3chunk-ragged", 1024, [1024, 1024, 600]),
+    (_PRODUCTION_SCENARIO, 5120, [5120, 5120, 3000]),
 ]
 
 
+def _ci_unsupported_param_combos_csa(**params):
+    production = params["name"] == _PRODUCTION_SCENARIO
+    if production and tuple(params["mesh_device"]) != (8, 4):
+        return True
+    if params["is_ci_env"] or params["is_ci_v2_env"]:
+        return not production
+    return False
+
+
+def _ci_unsupported_param_combos_csa_forward(**params):
+    return params["is_ci_env"] or params["is_ci_v2_env"]
+
+
 def _golden(ref, hidden, config):
-    """One unchunked reference pass over the whole prompt."""
+    """One unchunked reference pass, with index scoring and attention evaluated in bounded chunks."""
     batch, total = hidden.shape[0], hidden.shape[1]
     position_ids = torch.arange(total).unsqueeze(0).expand(batch, -1)
+    indexer = ref.compressor.indexer
+    indexer_forward = indexer.forward
+
     with torch.no_grad():
         cos, sin = ref.compressor.rotary_emb(hidden, position_ids=position_ids, layer_type="compress")
-        mask = _sliding_mask(position_ids[0], position_ids[0], config.sliding_window)
-        mask = mask.view(1, 1, total, total).expand(batch, 1, total, total)
-        out, _ = ref(hidden, {"compress": (cos, sin)}, position_ids, mask, past_key_values=None)
-    return out
+        q_residual = ref.q_a_norm(ref.q_a_proj(hidden))
+        kv = ref.kv_norm(ref.kv_proj(hidden)).view(batch, total, 1, config.head_dim).transpose(1, 2)
+        kv = apply_rotary_pos_emb(kv, cos, sin)
+        reference_topk = _golden_topk(indexer, hidden, q_residual, position_ids)
+
+        # The outer compressor's entries do not depend on the indexer's result. Inject the already
+        # computed IDs so it builds its block bias without scoring the full prompt a second time.
+        indexer.forward = lambda *args, **kwargs: reference_topk
+        try:
+            compressed_kv, _ = ref.compressor(hidden, q_residual, position_ids, past_key_values=None, layer_idx=0)
+        finally:
+            indexer.forward = indexer_forward
+
+        raw = kv[:, 0]
+        compressed = compressed_kv[:, 0]
+        output_chunks = []
+        offsets = torch.arange(1 - config.sliding_window, 1)
+
+        for start in range(0, total, _GOLDEN_QUERY_CHUNK):
+            stop = min(start + _GOLDEN_QUERY_CHUNK, total)
+            query_positions = position_ids[:, start:stop]
+            query_len = stop - start
+
+            q = ref.q_b_proj(q_residual[:, start:stop])
+            q = q.view(batch, query_len, config.num_attention_heads, config.head_dim).transpose(1, 2)
+            q = ref.q_b_norm(q)
+            q = apply_rotary_pos_emb(q, cos[:, start:stop], sin[:, start:stop])
+
+            sliding_ids = query_positions.unsqueeze(-1) + offsets
+            sliding_valid = sliding_ids >= 0
+            sliding_ids = sliding_ids.clamp(min=0)
+            batch_ids = torch.arange(batch).view(batch, 1, 1)
+            sliding_kv = raw[batch_ids, sliding_ids]
+
+            compressed_ids = reference_topk[:, start:stop]
+            compressed_valid = compressed_ids >= 0
+            compressed_kv_selected = compressed[batch_ids, compressed_ids.clamp(min=0)]
+
+            selected_kv = torch.cat([sliding_kv, compressed_kv_selected], dim=2)
+            selected_valid = torch.cat([sliding_valid, compressed_valid], dim=2)
+            scores = torch.einsum("bhtd,btkd->bhtk", q, selected_kv) * ref.scaling
+            scores = scores.masked_fill(~selected_valid.unsqueeze(1), float("-inf"))
+            sinks = ref.sinks.view(1, -1, 1, 1).expand(batch, -1, query_len, 1)
+            combined = torch.cat([scores, sinks], dim=-1)
+            combined = combined - combined.max(dim=-1, keepdim=True).values
+            probabilities = torch.softmax(combined, dim=-1)[..., :-1]
+            attn = torch.einsum("bhtk,btkd->bhtd", probabilities, selected_kv)
+            attn = apply_rotary_pos_emb(attn, cos[:, start:stop], -sin[:, start:stop]).transpose(1, 2)
+            grouped = attn.reshape(batch, query_len, config.o_groups, -1)
+            output_chunks.append(ref.o_b_proj(ref.o_a_proj(grouped).flatten(2)))
+
+    return torch.cat(output_chunks, dim=1), reference_topk, compressed_kv
 
 
-def _assert_reaches_every_entry(tt_model, entries_written):
-    """The precondition every test here rests on: the indexer's fixed top-k capacity covers every entry
-    the run will put in the cache, so it drops none of them and the mask is plain causality.
+def _golden_topk(indexer, hidden, q_residual, position_ids):
+    """Reference indexer with query scoring chunked to bound its ``[S, heads, S/4]`` intermediate."""
+    batch, total, _ = hidden.shape
+    ratio = indexer.compress_rate
+    n_windows = total // ratio
+    kv = indexer.kv_proj(hidden[:, : n_windows * ratio]).view(batch, n_windows, ratio, -1)
+    gate = indexer.gate_proj(hidden[:, : n_windows * ratio]).view(batch, n_windows, ratio, -1)
+    gate = gate + indexer.position_bias
 
-    Counted on PADDED slabs, not real tokens: the indexer scores whole slabs, so a ragged chunk still
-    contributes entries it could pick."""
-    capacity = tt_model.indexer.index_topk_capacity
-    assert capacity >= entries_written, (
-        f"the indexer can only pick {capacity} of the {entries_written} entries this run writes, so the "
-        f"mask depends on how near-tied scores rank and the reference is not a golden; shorten the run "
-        f"or raise index_topk"
+    overlap_kv = kv.new_zeros((batch, n_windows, 2 * ratio, indexer.head_dim))
+    overlap_gate = gate.new_full((batch, n_windows, 2 * ratio, indexer.head_dim), float("-inf"))
+    overlap_kv[:, :, ratio:] = kv[..., indexer.head_dim :]
+    overlap_gate[:, :, ratio:] = gate[..., indexer.head_dim :]
+    if n_windows > 1:
+        overlap_kv[:, 1:, :ratio] = kv[:, :-1, :, : indexer.head_dim]
+        overlap_gate[:, 1:, :ratio] = gate[:, :-1, :, : indexer.head_dim]
+    compressed = indexer.kv_norm(
+        (overlap_kv * overlap_gate.softmax(dim=2, dtype=torch.float32).to(overlap_kv.dtype)).sum(dim=2)
     )
+    key_positions = torch.arange(n_windows).unsqueeze(0).expand(batch, -1) * ratio
+    key_cos, key_sin = indexer.rotary_emb(compressed, position_ids=key_positions, layer_type=indexer.rope_layer_type)
+    compressed = apply_rotary_pos_emb(compressed.unsqueeze(1), key_cos, key_sin).squeeze(1)
+
+    top_k = min(indexer.index_topk, n_windows)
+    entry_ids = torch.arange(n_windows)
+    chunks = []
+    for start in range(0, total, _GOLDEN_QUERY_CHUNK):
+        stop = min(start + _GOLDEN_QUERY_CHUNK, total)
+        chunk_positions = position_ids[:, start:stop]
+        query_cos, query_sin = indexer.rotary_emb(
+            hidden[:, start:stop], position_ids=chunk_positions, layer_type=indexer.rope_layer_type
+        )
+        q = indexer.q_b_proj(q_residual[:, start:stop])
+        q = q.view(batch, stop - start, indexer.num_heads, indexer.head_dim).transpose(1, 2)
+        q = apply_rotary_pos_emb(q, query_cos, query_sin).transpose(1, 2)
+        scores = indexer.scorer(q, compressed, hidden[:, start:stop])
+        causal_threshold = (chunk_positions + 1) // ratio
+        scores = scores.masked_fill(entry_ids.view(1, 1, -1) >= causal_threshold.unsqueeze(-1), float("-inf"))
+        indices = scores.topk(top_k, dim=-1).indices
+        chunks.append(torch.where(indices < causal_threshold.unsqueeze(-1), indices, -1))
+    return torch.cat(chunks, dim=1)
 
 
 def _upload(mesh_device, chunk):
@@ -183,17 +284,19 @@ def _download(mesh_device, tensor):
     )  # sp -> seq (dim2), tp -> hidden (dim3)
 
 
-def _audit_index_list(mesh_device, tt_model, *, first_chunk, kv_actual, valid, capacity, sliding, compress_rate):
-    """Assert the index list names EXACTLY the keys the reference attends over, for every real query row.
-
-    A golden only inside this file's reach-every-entry regime (see ``_assert_reaches_every_entry``);
-    outside it the indexer legitimately drops entries and there is nothing to compare against. Inside
-    it the list is fully determined by the geometry, which lets this separate four failure modes that a
-    single output PCC cannot tell apart: ids the run LOST, ids it repeated (``sparse_sdpa`` would count
-    the key twice), ids past what was written, and sentinels that are not a contiguous tail -- the
-    reader stops at the first sentinel, so a hole silently truncates the row.
-
-    Padded query rows are skipped: they rank whatever the indexer gives them and nothing reads them."""
+def _validate_index_list(
+    mesh_device,
+    tt_model,
+    reference_topk,
+    *,
+    first_chunk,
+    kv_actual,
+    valid,
+    capacity,
+    sliding,
+    compress_rate,
+):
+    """Validate sparse-SDPA geometry exactly and indexer membership by average recall."""
     index = tt_model.index_list(first_chunk=first_chunk)
     ids = ttnn.to_torch(  # sp -> rows (dim2), tp -> dim1 and replicated, so one replica is the answer
         index,
@@ -201,44 +304,33 @@ def _audit_index_list(mesh_device, tt_model, *, first_chunk, kv_actual, valid, c
     )
     ttnn.deallocate(index)
     ids = ids[0, 0, :valid].to(torch.int64) & 0xFFFFFFFF  # a -1 readback is the uint32 sentinel
-    width = ids.shape[1]
-
-    # What each row should hold. ``entries`` is the reference's own causal threshold, (p + 1) // rate on
-    # the GLOBAL position; ``window`` is the sliding keys that exist, which is short only near the start
-    # of the sequence. The sliding ids are affine in the CHUNK-LOCAL row -- see index_tables.
-    row = torch.arange(valid).view(valid, 1)
-    entries = (kv_actual + row + 1) // compress_rate
-    window = (kv_actual + row + 1).clamp(max=sliding)
-    col = torch.arange(width).view(1, width)
-    golden = torch.where(
-        col < entries,
-        col,
-        torch.where(
-            col < entries + window,
-            capacity + sliding + row - window + 1 + (col - entries),
-            torch.full_like(col, _SENTINEL),
-        ),
-    )
-
-    # Sorted, because the row's order is the indexer's business and only the set is a contract. Both
-    # sides pad with the sentinel, which sorts last, so equality covers the counts too.
     real = ids != _SENTINEL
-    got = ids.sort(-1).values
     truncated = ((~real[:, :-1]) & real[:, 1:]).any(-1)  # a real id after a sentinel
+    got = ids.sort(-1).values
     duplicated = ((got[:, :-1] == got[:, 1:]) & (got[:, :-1] != _SENTINEL)).any(-1)
-    mismatched = (got != golden).any(-1)
+    assert not truncated.any(), f"{int(truncated.sum())} index rows have a sentinel before a real ID"
+    assert not duplicated.any(), f"{int(duplicated.sum())} index rows repeat a key"
 
-    if not (truncated.any() or duplicated.any() or mismatched.any()):
-        return
-    bad = int((mismatched | truncated | duplicated).nonzero()[0])
-    want, have = set(golden[bad].tolist()) - {_SENTINEL}, set(got[bad].tolist()) - {_SENTINEL}
-    raise AssertionError(
-        f"index list is wrong at kv_actual={kv_actual}: {int(mismatched.sum())} of {valid} rows name the "
-        f"wrong key set, {int(duplicated.sum())} repeat a key, {int(truncated.sum())} have a sentinel "
-        f"before a real id. First bad row is {bad} (global position {kv_actual + bad}, expecting "
-        f"{int(entries[bad])} entries + {int(window[bad])} sliding): missing {sorted(want - have)}, "
-        f"unexpected {sorted(have - want)}"
-    )
+    recalls = []
+    reference_topk = reference_topk[:, kv_actual : kv_actual + valid][0]
+    for row_idx, (row_ids, row_reference) in enumerate(zip(ids, reference_topk)):
+        global_position = kv_actual + row_idx
+        compressed_set = set(row_ids[row_ids < capacity].tolist())
+        reference_set = set(row_reference[row_reference >= 0].tolist())
+        causal_entries = (global_position + 1) // compress_rate
+        assert len(compressed_set) == len(reference_set)
+        assert all(entry < causal_entries for entry in compressed_set)
+
+        window = min(global_position + 1, sliding)
+        expected_sliding = set(range(capacity + sliding + row_idx - window + 1, capacity + sliding + row_idx + 1))
+        actual_sliding = set(row_ids[(row_ids >= capacity) & (row_ids != _SENTINEL)].tolist())
+        assert actual_sliding == expected_sliding
+        if reference_set:
+            recalls.append(len(compressed_set & reference_set) / len(reference_set))
+
+    recall = sum(recalls) / len(recalls) if recalls else 1.0
+    logger.info(f"  iter at kv_actual={kv_actual}: indexer top-k recall {recall:.6f}")
+    assert recall >= _INDEX_RECALL, f"indexer top-k recall {recall:.6f} is below {_INDEX_RECALL}"
 
 
 def _read_entries(mesh_device, state):
@@ -253,6 +345,7 @@ def _read_entries(mesh_device, state):
     return table[:, :, : state.entry_count]
 
 
+@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos_csa_forward)
 @pytest.mark.parametrize("local_seq_len", _LOCAL_SHAPES, ids=[f"local{s}" for s in _LOCAL_SHAPES])
 @pytest.mark.parametrize(
     "mesh_device, device_params, topology",
@@ -269,13 +362,11 @@ def test_csa_forward_mesh(mesh_device, device_params, topology, local_seq_len, m
     sp_factor, tp_factor = mesh_device.shape[0], mesh_device.shape[1]
     compress_rate = model_config.COMPRESS_RATES["compressed_sparse_attention"]
     seq_len = local_seq_len * sp_factor
-    # Scaling the prompt with the mesh outruns a variant's stock index_topk on the wider ones, so ask
-    # for a capacity that covers every entry this run writes.
-    config = _config(model_config, min_index_topk=seq_len // compress_rate)
+    config = _config(model_config)
 
     ref = _reference(config)
     hidden = torch.randn(batch, seq_len, config.hidden_size)
-    out_ref = _golden(ref, hidden, config)
+    out_ref, reference_topk, _ = _golden(ref, hidden, config)
 
     tt_model = TtCSA.from_reference(
         mesh_device, ref, config, sp_axis=0, tp_axis=1, topology=topology, weight_cache_path=tmp_path
@@ -284,12 +375,23 @@ def test_csa_forward_mesh(mesh_device, device_params, topology, local_seq_len, m
     logger.debug(f"mesh={tuple(mesh_device.shape)} S_real={seq_len_actual} S_pad={hidden_padded.shape[1]}")
 
     state = tt_model.alloc_state(hidden_padded.shape[1])  # a one-chunk prefill still owns its state
-    _assert_reaches_every_entry(tt_model, hidden_padded.shape[1] // compress_rate)
 
     signpost("CSA_START")
     out_tt = tt_model(_upload(mesh_device, hidden_padded), seq_len_actual=seq_len_actual, state=state)
     signpost("CSA_END")
     out = _download(mesh_device, out_tt)[:, :seq_len_actual]  # drop the padded tail
+    capacity = state.joint_kv.shape[2] - config.sliding_window - hidden_padded.shape[1]
+    _validate_index_list(
+        mesh_device,
+        tt_model,
+        reference_topk,
+        first_chunk=True,
+        kv_actual=0,
+        valid=seq_len_actual,
+        capacity=capacity,
+        sliding=config.sliding_window,
+        compress_rate=compress_rate,
+    )
 
     assert out.shape == out_ref.shape, f"shape mismatch: tt {tuple(out.shape)} vs ref {tuple(out_ref.shape)}"
     pcc_passed, pcc_message = assert_with_pcc(out_ref.to(torch.float32), out.to(torch.float32), pcc=forward_pcc)
@@ -297,6 +399,7 @@ def test_csa_forward_mesh(mesh_device, device_params, topology, local_seq_len, m
     assert pcc_passed, f"CSA mesh block PCC test failed: {pcc_message}"
 
 
+@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos_csa)
 @pytest.mark.parametrize("name, chunk_size, iters_valid", _CHUNKED_SCENARIOS, ids=[n for n, _, _ in _CHUNKED_SCENARIOS])
 @pytest.mark.parametrize(
     "mesh_device, device_params, topology",
@@ -325,30 +428,17 @@ def test_csa_chunked_prefill_mesh(
 
     batch = 1
     compress_rate = model_config.COMPRESS_RATES["compressed_sparse_attention"]
-    # The indexer scores whole slabs, so what it has to be able to reach is every entry the padded
-    # chunks produce, not just the real ones.
-    config = _config(model_config, min_index_topk=len(iters_valid) * chunk_size // compress_rate)
+    config = _config(model_config)
     total = sum(iters_valid)
 
     ref = _reference(config)
     hidden = torch.randn(batch, total, config.hidden_size)
-    out_ref = _golden(ref, hidden, config)
-
-    # The whole prompt's compressed entries, computed once so each chunk can be checked against the
-    # prefix it should have produced. The reference is unchunked here for the same reason the output
-    # reference is: the chunked path has to reproduce plain compression, not agree with a reference that
-    # shares its chunking.
-    position_ids = torch.arange(total).unsqueeze(0).expand(batch, -1)
-    with torch.no_grad():
-        ref_entries, _ = ref.compressor(
-            hidden, torch.zeros(batch, total, config.q_lora_rank), position_ids, past_key_values=None, layer_idx=0
-        )
+    out_ref, reference_topk, ref_entries = _golden(ref, hidden, config)
 
     tt_model = TtCSA.from_reference(
         mesh_device, ref, config, sp_axis=0, tp_axis=1, topology=topology, weight_cache_path=tmp_path
     )
     state = tt_model.alloc_state(total, chunk_tokens=chunk_size)
-    _assert_reaches_every_entry(tt_model, len(iters_valid) * chunk_size // compress_rate)
     logger.debug(f"mesh={tuple(mesh_device.shape)} scenario={name} chunk={chunk_size} iters={iters_valid}")
 
     # The joint table is [compressed | carry | this chunk], so what the other two regions leave is the
@@ -380,11 +470,10 @@ def test_csa_chunked_prefill_mesh(
         cache_log(f"  iter {it} (entries={state.entry_count}): compressed cache PCC {cache_pcc:.6f}")
         cache_pccs.append((it, kv_actual, state.entry_count, cache_pcc))
 
-        # Asserted rather than collected: unlike a PCC this is exact, so a failure is a bug and not a
-        # number to weigh against the other chunks.
-        _audit_index_list(
+        _validate_index_list(
             mesh_device,
             tt_model,
+            reference_topk,
             first_chunk=it == 0,
             kv_actual=kv_actual,
             valid=valid,
