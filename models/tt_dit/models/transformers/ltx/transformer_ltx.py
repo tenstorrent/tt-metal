@@ -59,7 +59,7 @@ def _norm_adaln(norm, x, shift, scale_p1, *, fuse: bool):
     their existing path until separately validated; scale_p1 already includes +1.
     """
     scalar_shape = (1, 1, 1, x.shape[-1])
-    if fuse and tuple(x.shape[:2]) == (1, 1) and tuple(shift.shape) == tuple(scale_p1.shape) == scalar_shape:
+    if fuse and tuple(x.shape)[:2] == (1, 1) and tuple(shift.shape) == tuple(scale_p1.shape) == scalar_shape:
         return norm(x, dynamic_weight=scale_p1, dynamic_bias=shift)
     return ttnn.addcmul(shift, norm(x), scale_p1)
 
