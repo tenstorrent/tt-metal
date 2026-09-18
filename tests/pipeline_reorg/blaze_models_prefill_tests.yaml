@@ -889,7 +889,7 @@
   test_group: module
   skus:
     bh_sc1:
-      timeout: 20
+      timeout: 12
       tier: 2
       release_ready: false
   owner_id: U08SXRPCTJ5  # Janko Mitrovic

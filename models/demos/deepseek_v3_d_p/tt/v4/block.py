@@ -29,6 +29,10 @@ _ATTENTION = {
     "heavily_compressed_attention": TtHCA,
 }
 
+# The only gate modes that read the hash table; the rest route by top-k and ignore it, which on a
+# hash layer means picking other experts entirely.
+_HASH_GATE_MODES = (GateComputeMode.HASH_HOST, GateComputeMode.HASH_DEVICE)
+
 _SUBLAYER_DTYPE = ttnn.bfloat16
 
 
@@ -75,7 +79,7 @@ class TtV4Block(LightweightModule):
         tp_axis: int = 1,
         max_seq_len: Optional[int] = None,
         dispatch_buffer_capacity_factor: int = 2,
-        gate_fallback_mode: GateComputeMode = GateComputeMode.HOST_ALL,
+        gate_fallback_mode: Optional[GateComputeMode] = None,
         routed_expert_activations_dtype=ttnn.bfloat8_b,
         routed_expert_weights_dtype=DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE,
         shared_expert_activations_dtype=ttnn.bfloat16,
@@ -103,7 +107,15 @@ class TtV4Block(LightweightModule):
 
         attn_kind = config.layer_types[layer_idx]
         assert attn_kind in _ATTENTION, f"layer {layer_idx} wants attention {attn_kind!r}, have {tuple(_ATTENTION)}"
-        logger.info(f"Building TtV4Block layer_idx={layer_idx} ({attn_kind}, {config.mlp_layer_types[layer_idx]})")
+
+        mlp_kind = config.mlp_layer_types[layer_idx]
+        hash_layer = mlp_kind == "hash_moe"
+        if gate_fallback_mode is None:
+            gate_fallback_mode = GateComputeMode.HASH_DEVICE if hash_layer else GateComputeMode.DEVICE_FP32
+        hash_mode = gate_fallback_mode in _HASH_GATE_MODES
+        assert hash_layer == hash_mode, f"layer {layer_idx} is {mlp_kind}, which {gate_fallback_mode} cannot route"
+
+        logger.info(f"Building TtV4Block layer_idx={layer_idx} ({attn_kind}, {mlp_kind})")
 
         self.attn_norm = TtDistributedRmsNorm(
             mesh_device=mesh_device,
@@ -195,6 +207,7 @@ class TtV4Block(LightweightModule):
         Each norm sits inside its site's sublayer, not before it: the hyper-connection collapses its
         streams first, and the norm belongs on what comes out of that collapse.
         """
+        assert padding_side == "right", f"V4 attention is right-padded by construction, got {padding_side!r}"
 
         def _attn(h):
             normed = self.attn_norm(h)
