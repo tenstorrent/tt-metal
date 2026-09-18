@@ -33,7 +33,7 @@ from tracy import signpost
 import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.blackhole.qwen36.tt.model import Qwen36Model
-from models.demos.utils.llm_demo_utils import create_benchmark_data
+from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_accuracy
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.generator import Generator
 from models.tt_transformers.tt.model_config import determine_device_name
@@ -368,6 +368,110 @@ def test_demo_text(
     _assert_results(perf, actual_len, len(generated))
 
 
+@run_for_blackhole()
+@pytest.mark.parametrize("mesh_device", [_MESH_SHAPE], indirect=True)
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
+@pytest.mark.parametrize("max_generated_tokens", [512], ids=["accuracy_512"])
+def test_demo_text_accuracy(mesh_device, max_generated_tokens, monkeypatch):
+    """Top-1 / top-5 token accuracy against the committed HF reference (teacher forcing).
+
+    The perf cases (``traced_*``) and ``determinism_128`` compare the model against itself; this
+    one is the only case that compares it against HF, and it is what the ``accuracy`` block of
+    ``models/model_targets.yaml`` gates on.
+    """
+    from transformers import AutoTokenizer
+
+    # The scorer and the threshold resolver are shared with tt_transformers' token-matching demo
+    # (same .refpt convention, same centralized targets); imported here so collecting this module
+    # does not pull in that demo.
+    from models.tt_transformers.demo.simple_text_demo import TokenAccuracy, get_accuracy_thresholds
+
+    device = mesh_device
+    device.enable_program_cache()
+
+    # Scoring a sampled token against a greedy reference is meaningless, so clear the sampling
+    # knobs the generation path honors: an exported QWEN35_TEMP would otherwise make this gate
+    # stochastic with nothing in the log to say so.
+    for var in ("QWEN35_TEMP", "QWEN35_REP_PENALTY", "QWEN35_NO_REPEAT_NGRAM", "QWEN35_TOP_K", "QWEN35_TOP_P"):
+        monkeypatch.delenv(var, raising=False)
+
+    # The reference lives on the checkpoint's model_name, which needs the model; size the KV cache
+    # for a full prefill chunk instead, so the budget does not depend on the reference length.
+    num_blocks = _blocks_for(PREFILL_CHUNK, max_generated_tokens)
+    max_seq_len = num_blocks * BLOCK_SIZE
+
+    t0 = time.time()
+    model = Qwen36Model.from_pretrained(device, max_batch_size=1, max_seq_len=max_seq_len)
+    logger.info(f"Model load: {time.time() - t0:.1f}s")
+    tokenizer = AutoTokenizer.from_pretrained(model.args.CKPT_DIR, trust_remote_code=True)
+
+    # TokenAccuracy prefills the first half of the reference and scores the second half; a missing
+    # .refpt is its own assert, so the gate cannot silently skip.
+    token_acc = TokenAccuracy(model.args.model_name)
+    token_ids = token_acc.input_prompt.reshape(1, -1)
+    prompt_len = token_ids.shape[1]
+    max_generated_tokens = min(max_generated_tokens, len(token_acc.reference_tokens))
+    assert (
+        prompt_len + max_generated_tokens <= max_seq_len
+    ), f"reference needs {prompt_len} + {max_generated_tokens} tokens, block budget is {max_seq_len}"
+    logger.info(f"Teacher-forcing {max_generated_tokens} tokens after a {prompt_len}-token prefill")
+
+    if model.num_devices > 1:
+        _, perf = _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_blocks, token_acc)
+        profiler = perf["profiler"]
+    else:
+        # Single device (the 9B dev checkpoint) has no phase profiler, so it reports no benchmark
+        # JSON; the CI legs that feed the dashboard are all TP. No _warmup_prefill: the reference
+        # prompt is always < PREFILL_CHUNK, so the masked-bucket path compiles in capture — the
+        # same condition under which test_demo_text skips it.
+        _run_traced_generation(model, tokenizer, device, token_ids, max_generated_tokens, num_blocks, token_acc)
+        profiler = None
+
+    top1, top5 = (100 * value for value in token_acc.compute_accuracy())
+    logger.info(f"Top-1 token accuracy: {top1:.2f}%  Top-5 token accuracy: {top5:.2f}%")
+
+    if profiler is not None:
+        _save_accuracy_benchmark(profiler, model, top1, top5, prompt_len, max_generated_tokens)
+
+    # get_accuracy_thresholds resolves the centralized targets and raises when none match, so a
+    # renamed checkpoint or a relabelled SKU fails here instead of leaving the gate a no-op. It
+    # returns the targets minus half a point, since they are integers rounded off a measured run.
+    min_top1, min_top5 = get_accuracy_thresholds(model.args, seq_len=prompt_len)
+    verify_accuracy(
+        measurements={"top1_token_accuracy": top1, "top5_token_accuracy": top5},
+        expected_accuracy_metrics={"top1": min_top1, "top5": min_top5},
+    )
+    # verify_accuracy only warns; gate on it here so a regression fails the case outside CI too.
+    assert top1 >= min_top1, f"top-1 token accuracy {top1:.2f}% below target {min_top1}%"
+    assert top5 >= min_top5, f"top-5 token accuracy {top5:.2f}% below target {min_top5}%"
+
+
+def _save_accuracy_benchmark(profiler, model, top1, top5, prompt_len, num_generated):
+    """Emit the CI benchmark JSON for an accuracy run (no-op outside CI).
+
+    ``create_benchmark_data`` requires the perf keys to be present but nothing reads them on an
+    accuracy run: ``validate_perf_targets._is_accuracy_run`` classifies a run by the top1/top5
+    measurement names below (the JSON's run_type is not read) and then skips the perf block. A
+    teacher-forced run's throughput is an artifact anyway — the fed token is not the model's own —
+    so the keys are zero rather than a number that invites comparison.
+    """
+    measurements = {"prefill_t/s": 0.0, "prefill_time_to_token": 0.0, "decode_t/s": 0.0, "decode_t/s/u": 0.0}
+    benchmark_data = create_benchmark_data(profiler, measurements, {"inference_prefill": 0, "inference_decode": 1}, {})
+    for name, value in (("top1_token_accuracy", top1), ("top5_token_accuracy", top5)):
+        benchmark_data.add_measurement(profiler, 0, "inference_decode", name, value)
+    benchmark_data.save_partial_run_json(
+        profiler,
+        run_type="demo_accuracy",
+        ml_model_name=model.args.base_model_name,
+        ml_model_type="llm",
+        device_name=determine_device_name(model.mesh_device),
+        num_layers=model.args.n_layers,
+        batch_size=1,
+        input_sequence_length=prompt_len,
+        output_sequence_length=num_generated,
+    )
+
+
 def _should_use_chunked_trace(model):
     """True when chunk-outer prefill trace is used (GDN chunk-seq always on)."""
     return any(
@@ -377,8 +481,13 @@ def _should_use_chunked_trace(model):
     )
 
 
-def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_blocks):
-    """TP generation: traced chunk-outer prefill + paged decode. Returns (tokens, perf_dict)."""
+def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_blocks, token_acc=None):
+    """TP generation: traced chunk-outer prefill + paged decode. Returns (tokens, perf_dict).
+
+    ``token_acc`` (a ``tt_transformers`` ``TokenAccuracy``) switches the loop to teacher forcing:
+    every step still records the model's own prediction, but the REFERENCE token is fed back, so
+    one wrong token cannot derail the rest of the run.
+    """
     vocab = model.args.vocab_size
     T = token_ids.shape[1]
 
@@ -447,6 +556,7 @@ def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_bl
     lt = ttnn.to_torch(logits_dev, mesh_composer=ttnn.ConcatMeshToTensor(model.mesh_device, dim=0))
     nxt = _pick(lt.reshape(-1, vocab)[0])
     generated.append(nxt)
+    fed = int(token_acc.collect_predicted_tokens(nxt)) if token_acc else nxt
     profiler.end("inference_prefill")
     ttft = time.time() - t0
 
@@ -559,7 +669,7 @@ def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_bl
 
     # Persistent decode input buffers
     dev = model.prepare_inputs_decode(
-        torch.tensor([[nxt]], dtype=torch.int32),
+        torch.tensor([[fed]], dtype=torch.int32),
         torch.tensor([T], dtype=torch.int32),
         page_table=page_table,
     )
@@ -615,7 +725,7 @@ def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_bl
         # not just the device compute — so the reported tok/s is real end-to-end throughput.
         t_step = time.time()
         t0 = time.time()
-        _update(nxt, pos)
+        _update(fed, pos)
         t1 = time.time()
         if eager:
             tt_logits = _decode_fwd()
@@ -646,6 +756,7 @@ def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_bl
             _phase_times["readback"].append(t3 - t2)
         decode_times.append(time.time() - t_step)
         generated.append(nxt)
+        fed = int(token_acc.collect_predicted_tokens(nxt)) if token_acc else nxt
         pos += 1
     if _DEBUG_TIMING:
         for k, vs in _phase_times.items():
@@ -932,8 +1043,10 @@ def _run_tp_generation_batched(model, tokenizer, token_ids, max_generated_tokens
     }
 
 
-def _run_traced_generation(model, tokenizer, device, token_ids, max_generated_tokens, num_blocks):
-    """Traced prefill + paged decode. Returns (generated_tokens, perf_dict)."""
+def _run_traced_generation(model, tokenizer, device, token_ids, max_generated_tokens, num_blocks, token_acc=None):
+    """Traced prefill + paged decode. Returns (generated_tokens, perf_dict).
+
+    ``token_acc`` switches the loop to teacher forcing (see ``_run_tp_generation``)."""
     T = token_ids.shape[1]
 
     # Paged KV cache + DeltaNet state
@@ -983,6 +1096,7 @@ def _run_traced_generation(model, tokenizer, device, token_ids, max_generated_to
     prime_decode_trace(gen, model, torch.tensor([[next_token]], dtype=torch.long), torch.tensor([T]), page_table)
 
     generated = [next_token]
+    fed = int(token_acc.collect_predicted_tokens(next_token)) if token_acc else next_token
     decode_times = []
     current_pos = T
 
@@ -991,7 +1105,7 @@ def _run_traced_generation(model, tokenizer, device, token_ids, max_generated_to
         # Timing includes forward + sampling
         t_step = time.time()
         out = gen.decode_forward(
-            torch.tensor([[next_token]], dtype=torch.long),
+            torch.tensor([[fed]], dtype=torch.long),
             torch.tensor([current_pos]),
             page_table=page_table,
             kv_cache=None,
@@ -1004,9 +1118,11 @@ def _run_traced_generation(model, tokenizer, device, token_ids, max_generated_to
 
         assert not torch.isnan(dl).any(), f"NaN in traced decode at step {i}"
         generated.append(next_token)
+        fed = int(token_acc.collect_predicted_tokens(next_token)) if token_acc else next_token
         current_pos += 1
 
-        if next_token == tokenizer.eos_token_id:
+        # Teacher forcing scores a fixed span of reference positions, so it never stops early.
+        if token_acc is None and next_token == tokenizer.eos_token_id:
             break
 
     avg_decode = sum(decode_times) / len(decode_times) if decode_times else float("inf")
