@@ -19,9 +19,11 @@
 //                 [wait_cq.cq_index] reaches wait_cq.cq_wait_value (wrap-safe).
 //
 // Request pages are per-sender: the host serializes one page per DRAM sender core. The
-// pages share identical header/entry/geometry bytes, but each carries only that sender's
-// slice of the per-receiver streaming rotation table (see below), so worker_loop sends
-// sender s's page to that sender's socket rather than broadcasting one page to all.
+// entry and geometry bytes are identical across senders, but the header carries that
+// sender's target state address, every layout slot carries that sender's bank-local slab
+// base, and a streaming page carries only that sender's slice of the per-receiver rotation
+// table (see below) -- so worker_loop sends sender s's page to that sender's socket rather
+// than broadcasting one page to all.
 //
 // For a PREFETCH page the payload region (kRequestPageBytes) has two halves that grow
 // toward each other:
@@ -30,29 +32,29 @@
 //    ^offset 0, entries grow forward                          ^layout slots grow backward
 //                                                               from kRequestPageBytes
 //
-// - Entries (one per prefetched tensor) carry the tensor's bank-local address plus an
-//   index into the layout table. Entry k lives at byte offset
+// - Entries (one per prefetched tensor) carry the tensor's bank-local address plus the byte
+//   offset of its layout slot from the page start. Entry k lives at byte offset
 //   sizeof(TensorPrefetcherRequestHeader) + k * sizeof(TensorPrefetcherEntry).
 // - The layout table deduplicates the address-independent geometry: tensors that share a
 //   shape/dtype/ring topology — and, for streaming, the same per-receiver rotation slice —
 //   share one layout slot. A layout slot is sizeof(TensorPrefetcherTensorLayout) bytes of
 //   geometry immediately followed by this sender's per-receiver streaming rotation table
-//   (num_receivers uint32s; zeroed and ignored for batched tensors). Each slot is therefore
-//   layout_stride = sizeof(TensorPrefetcherTensorLayout) + num_receivers * sizeof(uint32_t)
-//   bytes. num_receivers is constant within a page (one GCB per request), so the stride is
-//   uniform: layout slot i starts at kRequestPageBytes - (i + 1) * layout_stride, with the
-//   geometry at the slot start and the rotation table at slot_start +
-//   sizeof(TensorPrefetcherTensorLayout) (layout slot 0 is flush against the end of the
-//   payload). The kernel reconstructs num_receivers (and thus the stride) from the GCB
-//   sender state block.
+//   (num_receivers uint32s; zeroed and ignored for batched tensors), so its useful length is
+//   sizeof(TensorPrefetcherTensorLayout) + num_receivers * sizeof(uint32_t). The host packs
+//   the slots at one uniform stride sized for the largest receiver count over the request's
+//   senders, which is what lets a single template page serve every sender: layout slot i
+//   starts at kRequestPageBytes - (i + 1) * layout_stride, with the geometry at the slot start
+//   and the rotation table at slot_start + sizeof(TensorPrefetcherTensorLayout) (layout slot 0
+//   is flush against the end of the payload). That stride is host-only packing bookkeeping —
+//   the kernel never reconstructs it, because each entry names its slot by byte offset.
 //
 // The kernel walks header.prefetch.num_entries entries in order; for each it reads the
 // address from the entry and the geometry from the referenced layout, then runs the
 // per-tensor chunk loop.
 //
 // When one Queue call has more tensors than fit in a single page, the host emits
-// multiple PREFETCH pages (each an independent request); the per-GCB fifo_wr_ptr persists
-// in the sender state block across requests, so the page split is invisible to the receiver.
+// multiple PREFETCH pages (each an independent request); the target's per-sender write cursor
+// persists across requests, so the page split is invisible to the receiver.
 
 #pragma once
 
@@ -110,14 +112,32 @@ struct TensorPrefetcherTensorLayout {
     // appended rotation bytes extend each layout slot's stride and are deduped together with
     // the geometry, so tensors that differ only in rotation get distinct slots.
     uint32_t streaming = 0;
+    // Bank-local slab index of this sender's first receiver, so a bank's two senders can split its
+    // receiver set: local receiver r reads slab recv_index_base + r. 0 for a single sender.
+    // Receiver-contiguous only. The one per-sender field in this struct: the template page holds 0
+    // and each sender's copy is patched in every slot, the way the rotation table is. It is
+    // therefore excluded from layout dedup by construction — dedup compares the template geometry,
+    // where this is always 0.
+    uint32_t recv_index_base = 0;
 } __attribute__((packed));
 
-// One prefetched tensor: its bank-local address plus an index into the page's layout
-// table. The kernel resolves the layout via layout_index (see header comment for the
-// offset formula).
+// Delivery transport for a request, carried in the page header. Per-request rather than per-tensor
+// because a page names exactly one target (target_state_addr), so every tensor in it is delivered
+// the same way. It selects how the kernel interprets target_state_addr: a DramSenderStateBlock for
+// a GlobalCircularBuffer, a PrefetcherPipe sender config page for a pipe.
+enum TensorPrefetcherTransport : uint8_t {
+    TENSOR_PREFETCHER_TRANSPORT_GLOBAL_CB = 0,
+    TENSOR_PREFETCHER_TRANSPORT_PREFETCHER_PIPE = 1,
+};
+
+// One prefetched tensor: its bank-local address plus the position of its layout slot. The kernel
+// resolves the layout as page start + layout_offset, so it needs to know nothing about how the
+// host packed the slots.
 struct TensorPrefetcherEntry {
     uint32_t bank_local_base = 0;  // GDDR offset where this tensor starts in the bank
-    uint32_t layout_index = 0;     // index into the page's TensorPrefetcherTensorLayout table
+    // Byte offset from the page start of this tensor's TensorPrefetcherTensorLayout; its
+    // per-receiver rotation table follows the struct.
+    uint32_t layout_offset = 0;
 } __attribute__((packed));
 
 // One-byte command id at the front of every request page.
@@ -131,14 +151,31 @@ struct TensorPrefetcherBaseCmd {
     TensorPrefetcherCmdId cmd_id;  // 1 byte
 } __attribute__((packed));
 
-// PREFETCH payload. The leading pad keeps the 32-bit fields 4-byte aligned past the
-// one-byte base (mirrors the pad fields in cq_commands.hpp commands); the resulting
-// 12-byte header then keeps the entry table 4-byte aligned.
+// PREFETCH payload. Field order and widths keep every field naturally aligned past the one-byte
+// base (u16 at offsets 2 and 4, u32 at offset 8, mirroring the pad fields in cq_commands.hpp
+// commands); the resulting 12-byte header then keeps the entry table 4-byte aligned.
+//
+// The header carries only what holds for the whole request: how many entries and layout slots
+// follow, and which target endpoint they are delivered to. Nothing here describes how the host
+// packed the page — entries name their slots by byte offset — and nothing here is per-tensor.
+// Carrying the target address per request rather than reading it from the target's DRISC L1 state
+// keeps a page self-describing for both transports.
 struct TensorPrefetcherPrefetchCmd {
-    uint8_t pad1;
-    uint16_t num_entries;     // number of valid TensorPrefetcherEntry entries
-    uint32_t num_layouts;     // number of valid TensorPrefetcherTensorLayout table entries
-    uint32_t gcb_state_addr;  // DRISC L1 base of the target GCB's sender state block
+    // Fits in the byte that pads cmd_id out to the 16-bit fields, so the header stays 12 bytes and
+    // the entry table that follows stays 4-byte aligned.
+    TensorPrefetcherTransport transport;
+    uint16_t num_entries;  // number of valid TensorPrefetcherEntry entries
+    // Number of valid TensorPrefetcherTensorLayout table entries. uint16 is ample: the table is
+    // bounded by kRequestPageBytes / layout_stride, well under 300 even at the smallest stride.
+    uint16_t num_layouts;
+    // Reserved. Holds target_state_addr at offset 8, which keeps the header 12 bytes (see the
+    // static_assert below) and the entry table 4-byte aligned. Zeroed by the host.
+    uint16_t pad1;
+    // DRISC L1 base of this sender's target state, whose meaning follows the `transport` above: a
+    // DramSenderStateBlock for TENSOR_PREFETCHER_TRANSPORT_GLOBAL_CB, or a PrefetcherPipe sender
+    // config page for TENSOR_PREFETCHER_TRANSPORT_PREFETCHER_PIPE. One address per request, so all
+    // tensors in a request target the same object.
+    uint32_t target_state_addr;
 } __attribute__((packed));
 
 // WAIT_CQ payload.

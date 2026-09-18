@@ -17,6 +17,8 @@
 
 namespace ttnn::operations::experimental::test {
 
+namespace metal_exp = tt::tt_metal::experimental;
+
 namespace {
 constexpr uint32_t kRemoteCBId = 31;
 }  // namespace
@@ -26,8 +28,18 @@ void DramPrefetcherConsumerDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(attrs.mesh_device != nullptr, "mesh_device required");
     TT_FATAL(attrs.num_iters > 0, "num_iters must be > 0");
     TT_FATAL(attrs.page_size_bytes > 0, "page_size_bytes must be > 0");
-    TT_FATAL(attrs.global_cb.has_value(), "global_cb required");
-    TT_FATAL(attrs.global_cb->receiver_cores().num_cores() > 0, "GCB has no receiver cores");
+    TT_FATAL(
+        attrs.global_cb.has_value() != !attrs.prefetcher_pipes.empty(),
+        "Supply exactly one delivery target: global_cb={} prefetcher_pipes={} pipes",
+        attrs.global_cb.has_value(),
+        attrs.prefetcher_pipes.size());
+    if (attrs.global_cb.has_value()) {
+        TT_FATAL(attrs.global_cb->receiver_cores().num_cores() > 0, "GCB has no receiver cores");
+    } else {
+        TT_FATAL(
+            metal_exp::prefetcher_pipe_receiver_cores(attrs.prefetcher_pipes).num_cores() > 0,
+            "The PrefetcherPipes have no receiver cores");
+    }
 }
 
 void DramPrefetcherConsumerDeviceOperation::validate_on_program_cache_hit(
@@ -45,13 +57,16 @@ DramPrefetcherConsumerDeviceOperation::create_output_tensors(const operation_att
 
 ttsl::hash::hash_t DramPrefetcherConsumerDeviceOperation::compute_program_hash(
     const operation_attributes_t& attrs, const tensor_args_t& /*tensor_args*/) {
-    // GlobalCircularBuffer isn't reflection-hashable; hash its identity via config_address
-    // (unique per GCB instance on this device) along with the other attrs.
+    // Hash the identity of whichever target is set: the program bakes in a target's config and ring
+    // addresses, so a same-geometry replacement must miss this cache. A pipe reflects its own
+    // identity, so the pipe list hashes as the pipes themselves; the unset target contributes an
+    // empty list, which is what keeps the two transports from colliding.
     return ttsl::hash::hash_objects_with_default_seed(
         ttsl::hash::type_hash<DramPrefetcherConsumerDeviceOperation>,
         attrs.num_iters,
         attrs.page_size_bytes,
-        static_cast<uint64_t>(attrs.global_cb->config_address()));
+        attrs.global_cb.has_value() ? static_cast<uint64_t>(attrs.global_cb->config_address()) : 0ull,
+        attrs.prefetcher_pipes);
 }
 
 ttnn::device_operation::CachedProgram<DramPrefetcherConsumerDeviceOperation::ProgramFactory::shared_variables_t>
@@ -63,6 +78,36 @@ DramPrefetcherConsumerDeviceOperation::ProgramFactory::create_at(
     using namespace tt::tt_metal;
 
     Program program = CreateProgram();
+
+    if (!operation_attributes.prefetcher_pipes.empty()) {
+        const auto& pipes = operation_attributes.prefetcher_pipes;
+        const CoreRangeSet receiver_cores = metal_exp::prefetcher_pipe_receiver_cores(pipes);
+
+        // No receiver-side CB: a PrefetcherPipe consumer Attaches instead, at the entry size the
+        // sender is pushing, and reads through the device-side class. The attach ids are positioned
+        // alongside the pipes, so a pipe's id shares its index with that pipe.
+        const std::vector<uint8_t> pipe_ids =
+            metal_exp::AttachPrefetcherPipes(program, pipes, operation_attributes.page_size_bytes);
+
+        const std::vector<uint32_t> compile_args = {operation_attributes.num_iters};
+        KernelHandle kernel_id = CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/misc/prefetcher_pipe_bench_discard_receiver.cpp",
+            receiver_cores,
+            DataMovementConfig{
+                .processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0, .compile_args = compile_args});
+
+        // One kernel serves the receivers of every pipe, so which pipe a core belongs to is a
+        // runtime arg rather than a compile-time one.
+        for (uint32_t p = 0; p < pipes.size(); ++p) {
+            for (const CoreCoord& core : corerange_to_cores(pipes[p]->receiver_cores())) {
+                SetRuntimeArgs(program, kernel_id, core, std::vector<uint32_t>{pipe_ids[p]});
+            }
+        }
+
+        return {std::move(program), shared_variables_t{}};
+    }
+
     const auto& global_cb = operation_attributes.global_cb.value();
     const CoreRangeSet receiver_cores = global_cb.receiver_cores();
 
@@ -104,6 +149,22 @@ void test_dram_prefetcher_consumer(
         .num_iters = num_iters,
         .page_size_bytes = page_size_bytes,
         .global_cb = global_cb,
+        .mesh_device = mesh_device,
+    };
+    OperationType::tensor_args_t tensor_args{};
+    ttnn::device_operation::launch<OperationType>(attrs, tensor_args);
+}
+
+void test_tensor_prefetcher_pipe_consumer(
+    tt::tt_metal::distributed::MeshDevice* mesh_device,
+    uint32_t num_iters,
+    uint32_t page_size_bytes,
+    const std::vector<std::shared_ptr<tt::tt_metal::experimental::PrefetcherPipe>>& prefetcher_pipes) {
+    using OperationType = DramPrefetcherConsumerDeviceOperation;
+    OperationType::operation_attributes_t attrs{
+        .num_iters = num_iters,
+        .page_size_bytes = page_size_bytes,
+        .prefetcher_pipes = prefetcher_pipes,
         .mesh_device = mesh_device,
     };
     OperationType::tensor_args_t tensor_args{};
