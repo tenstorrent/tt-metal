@@ -588,7 +588,8 @@ def get_matmul_config(M, K, N, core_grid, default_block_size=None, use_heuristic
     grid_x = getattr(core_grid, "x", None)
     grid_y = getattr(core_grid, "y", None)
     grid_dict = _grid_config_lookup.get((grid_x, grid_y))
-    if grid_dict is not None:
+    # SD35_MM_DEFAULT_BLOCKING=1 ignores the swept tables (before/after comparisons).
+    if grid_dict is not None and os.environ.get("SD35_MM_DEFAULT_BLOCKING", "0") != "1":
         config_tuple = grid_dict.get((M, K, N))
 
     # Unpack: 3-tuple (M_block_size, K_block_size, N_block_size) or

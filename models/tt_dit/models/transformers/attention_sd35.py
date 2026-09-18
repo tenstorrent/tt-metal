@@ -180,7 +180,10 @@ class SD35JointAttention(Module):
         full_grid = self.mesh_device.compute_with_storage_grid_size()
         # The reserved row is for the ring SDPA's CCL workers; without sequence parallelism the
         # joint SDPA can use the full grid (12% faster on the tp4 column, 1396 vs 1584 us per call).
-        if self.parallel_config.sequence_parallel.factor > 1:
+        # SD35_SDPA_LEGACY=1 reproduces the pre-optimization SDPA config (reserved row, 256/512
+        # chunks) for before/after comparisons.
+        sdpa_legacy = os.environ.get("SD35_SDPA_LEGACY", "0") == "1"
+        if self.parallel_config.sequence_parallel.factor > 1 or sdpa_legacy:
             self.sdpa_worker_grid = (full_grid.x, full_grid.y - 1)
         else:
             self.sdpa_worker_grid = (full_grid.x, full_grid.y)
@@ -192,6 +195,8 @@ class SD35JointAttention(Module):
             ),
             self.default_sdpa_chunk_size,
         )
+        if sdpa_legacy:
+            ring_sdpa_chunk_size = (256, 512)
         self.sdpa_program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=self.sdpa_worker_grid,
             q_chunk_size=ring_sdpa_chunk_size[0],
