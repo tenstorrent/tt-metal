@@ -227,7 +227,7 @@
       timeout: 40
   team: ttnn
   budget_type: sanity
-  owner_id: U08JFM3CFA4 # Gongyu Wang
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
 
 - name: "ttnn sdpa group"
   cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/sdpa -xv -m "not disable_fast_runtime_mode"'
@@ -283,7 +283,7 @@
   budget_type: sanity
   owner_id: U084B1CES7M # Borys Bradel
 
-- name: "ttnn llk helper library tests"
+- name: "kernel lib tests"
   # The device-perf tests in this directory shell out to `python3 -m tracy`, which needs a
   # Tracy-enabled build; this job runs from the wheel, so they fail on a missing profiler
   # rather than on anything they measure. The nightly entry in ops_unit_tests.yaml drops the
@@ -326,7 +326,7 @@
 
 - name: "trace allocation tracker"
   cmd: |
-    pytest --timeout 300 tests/ttnn/unit_tests/test_trace_allocation_config.py -xv
+    pytest --timeout 300 tests/ttnn/unit_tests/test_trace_allocation_tracker_config.py -xv
     TT_METAL_TRACE_ALLOC_TRACKING=1 pytest --timeout 300 tests/ttnn/unit_tests/base_functionality/test_single_device_trace.py -k 'trace_allocation_tracking' -xv
     TT_METAL_TRACE_ALLOC_TRACKING=1 TT_METAL_TRACE_ALLOC_TRACEBACKS=1 pytest --timeout 300 tests/ttnn/unit_tests/base_functionality/test_single_device_trace.py -k 'trace_allocation_tracking_acknowledgments_and_lifetime' -xv
   skus:
@@ -336,4 +336,4 @@
       timeout: 15
   team: ttnn
   budget_type: sanity
-  owner_id: U076Z1JJUQZ # Artem Yerofieiev
+  owner_id: U091SNDA4TS # Tomasz Cheda

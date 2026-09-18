@@ -7,7 +7,9 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstdlib>
+#include <initializer_list>
 #include <map>
+#include <tuple>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -68,12 +70,26 @@ constexpr uint32_t CB_X_RM = tt::CBIndex::c_16;
 constexpr uint32_t CB_GATE_BIAS = tt::CBIndex::c_17;
 constexpr uint32_t CB_UP_BIAS = tt::CBIndex::c_18;
 constexpr uint32_t CB_DOWN_BIAS = tt::CBIndex::c_19;
+
+// Tile columns per DRAM ND shard of a weight tensor, or 0 when it is not ND-sharded (the
+// interleaved default). The kernels take this as a compile-time arg and coalesce a shard row into
+// one NoC transaction; see kernels/weight_runs.hpp. A shard whose width is not a whole number of
+// tiles reports 0, so an unusable spec degrades to the per-tile read instead of misaddressing.
+uint32_t nd_shard_n_tiles(const ttnn::Tensor& w) {
+    const auto& mem = w.memory_config();
+    if (mem.buffer_type() != tt::tt_metal::BufferType::DRAM || !mem.created_with_nd_shard_spec()) {
+        return 0;
+    }
+    const auto& spec = mem.nd_shard_spec();
+    if (!spec.has_value() || spec->shard_shape.rank() < 2 || spec->shard_shape[-1] % TILE != 0) {
+        return 0;
+    }
+    return static_cast<uint32_t>(spec->shard_shape[-1]) / TILE;
+}
 }  // namespace
 
 UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnProgramFactory::create(
-    const UnifiedRoutedExpertFfnParams& op,
-    const UnifiedRoutedExpertFfnInputs& t,
-    Tensor& tensor_return_value) {
+    const UnifiedRoutedExpertFfnParams& op, const UnifiedRoutedExpertFfnInputs& t, Tensor& tensor_return_value) {
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     // All local experts share one shape/dtype (validated), so the program is
@@ -87,10 +103,10 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     // This expert's M (not x's allocated M): x may be a shared buffer wider
     // than one expert's region. K still comes from x's last dim (emb).
     const uint32_t M_tiles_full = op.m_tiles;
-    const uint32_t K_gate_tiles = x_shape[-1] / TILE;            // = N_gate K = emb / TILE
-    const uint32_t N_gate_tiles_full = gate_shape[-1] / TILE;    // = hidden / TILE
-    const uint32_t K_down_tiles = down_shape[-2] / TILE;         // = hidden / TILE
-    const uint32_t N_down_tiles_full = down_shape[-1] / TILE;    // = emb / TILE
+    const uint32_t K_gate_tiles = x_shape[-1] / TILE;          // = N_gate K = emb / TILE
+    const uint32_t N_gate_tiles_full = gate_shape[-1] / TILE;  // = hidden / TILE
+    const uint32_t K_down_tiles = down_shape[-2] / TILE;       // = hidden / TILE
+    const uint32_t N_down_tiles_full = down_shape[-1] / TILE;  // = emb / TILE
 
     // Blackhole compute grid is 13x10 worker cores; we use the bottom-left
     // 11x8 = 88 to leave headroom for dispatch and to give per_core_M /
@@ -191,6 +207,31 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     const uint32_t N_gate_tiles_padded = per_core_N_gu * GRID_X;
     const uint32_t K_down_tiles_padded = N_gate_tiles_padded;  // down K = gate N
 
+    // DRAM ND-sharded weights (opt-in; 0 = the DRAM-interleaved default). The shard width must be
+    // exactly a core's N slice, because that is what makes the slice ONE shard and therefore one
+    // contiguous NoC transaction per K-row instead of per_core_N of them. A wider or narrower
+    // shard would still read correctly through the run loop but would split or straddle the slice,
+    // losing the point, so it fails host-side instead. gate and up are pinned equal: the reader
+    // and the writer read them through a single shared compile-time width.
+    const uint32_t gate_shard_w = nd_shard_n_tiles(t.gate_projs[0]);
+    const uint32_t up_shard_w = nd_shard_n_tiles(t.up_projs[0]);
+    const uint32_t d_shard_w = nd_shard_n_tiles(t.down_projs[0]);
+    TT_FATAL(
+        gate_shard_w == up_shard_w,
+        "gate_proj and up_proj must share a weight layout: ND shard widths {} and {} tiles",
+        gate_shard_w,
+        up_shard_w);
+    const uint32_t gu_shard_w = gate_shard_w;
+    for (const auto& [name, shard_w, per_core_n] : std::initializer_list<std::tuple<const char*, uint32_t, uint32_t>>{
+             {"gate_proj/up_proj", gu_shard_w, per_core_N_gu}, {"down_proj", d_shard_w, per_core_N_d}}) {
+        TT_FATAL(
+            shard_w == 0 || shard_w == per_core_n,
+            "{}: DRAM ND shard width must be per_core_N ({} tiles) so a K-row slice is one shard, got {}",
+            name,
+            per_core_n,
+            shard_w);
+    }
+
     (void)K_down_tiles;  // actual K_down; used by reader for OOB; suppress unused warning here
 
     // down-matmul K-block width (= gate N per-core slice). Independent of the
@@ -231,7 +272,37 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
             break;
         }
     }
+    // A subblock narrower than 3 tiles is where the matmul stops being math-bound and the
+    // operand unpack starts to dominate: measured on 7168x2048, forcing the down subblock from
+    // 1x7 to 1x3 costs 1% but 1x1 costs 28% of total op time. per_core_N_d = 11 (prime, from
+    // ceil(112/11) on the 11-wide grid) is the shape that lands there, and no divisor can save
+    // it -- so below the cliff, give up the exact tiling and take a RAGGED last subblock
+    // instead. Shapes whose divisor rule already clears 3 keep their exact tiling untouched.
+    if (d_sub_w < 3) {
+        d_sub_w = std::min<uint32_t>(DST_CAPACITY, per_core_N_d);
+    }
     const uint32_t d_out_subblock_w = d_sub_w;
+    // Ceil, not exact: the last subblock may be narrower (d_out_subblock_w_tail). Equal to the
+    // exact division whenever the width divides, which is every shape but the ragged one.
+    const uint32_t d_in1_num_subblocks = (per_core_N_d + d_out_subblock_w - 1) / d_out_subblock_w;
+    const uint32_t d_out_subblock_w_tail = per_core_N_d - (d_in1_num_subblocks - 1) * d_out_subblock_w;
+    const bool d_subblocks_exact = (d_out_subblock_w_tail == d_out_subblock_w);
+
+    // Output CB: writer drains one subblock at a time. 2-subblock staging
+    // pipelines compute/writer one-ahead and is safe under the tightest L1
+    // budget (the 256-expert / 32-per-chip case the unfused path is run on).
+    constexpr uint32_t cb_out_stage_count = 2u;
+    // A CB wraps only when a push lands EXACTLY on fifo_limit (adaptive_chunk.hpp). On a ragged
+    // subblock grid the pushes alternate width and tail, so a ring sized in SUBBLOCKS is never hit
+    // exactly and the write pointer walks off into neighbouring L1. Size the ragged case in whole
+    // output ROWS -- the row period per_core_N_d is what the push sequence repeats on. Exact grids
+    // keep the original subblock sizing.
+    //
+    // Sized here, ahead of the L1 fitter, because cb_footprint_bytes must budget the ring that is
+    // actually allocated: the ragged row-sized ring is ceil(per_core_N_d / d_out_subblock_w) times
+    // the exact-grid one (22 tiles vs 16 on the 11-column grid).
+    const uint32_t cb_out_tiles =
+        d_out_subblock_h * (d_subblocks_exact ? d_out_subblock_w : per_core_N_d) * cb_out_stage_count;
 
     // -------------------------- data formats / tile sizes -----------------
     const tt::DataFormat x_df = tt::tt_metal::datatype_to_dataformat_converter(t.x.dtype());
@@ -285,16 +356,16 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         if (op.x_is_row_major) {
             total += static_cast<uint64_t>(M * w_gu * 2) * partials_gu_tile_size;  // cb_x_rm (bf16 staging)
         }
-        total += static_cast<uint64_t>(w_gu * per_core_N_gu * 2) * gate_tile_size;                // cb_in1_gate
-        total += static_cast<uint64_t>(w_gu * per_core_N_gu * 2) * up_tile_size;                  // cb_in1_up
-        total += static_cast<uint64_t>(in0_block_w_d * per_core_N_d * 2) * down_tile_size;        // cb_in1_down
-        total += static_cast<uint64_t>(M * per_core_N_gu) * intermed_tile_size;                   // cb_gate_intermed
-        total += static_cast<uint64_t>(M * per_core_N_gu) * intermed_tile_size;                   // cb_activated
-        total += static_cast<uint64_t>(M * per_core_N_gu) * partials_gu_tile_size;                // cb_mm_partials_gu
-        total += static_cast<uint64_t>(M * per_core_N_gu) * partials_gu_tile_size;                // cb_mm_partials_up
-        total += static_cast<uint64_t>(M * per_core_N_d) * partials_d_tile_size;                  // cb_mm_partials_d
-        total += static_cast<uint64_t>(d_out_subblock_h * d_out_subblock_w * 2) * out_tile_size;  // cb_out
-        total += static_cast<uint64_t>(M * in0_block_w_d * 2) * intermed_tile_size;               // cb_in0_down_full
+        total += static_cast<uint64_t>(w_gu * per_core_N_gu * 2) * gate_tile_size;          // cb_in1_gate
+        total += static_cast<uint64_t>(w_gu * per_core_N_gu * 2) * up_tile_size;            // cb_in1_up
+        total += static_cast<uint64_t>(in0_block_w_d * per_core_N_d * 2) * down_tile_size;  // cb_in1_down
+        total += static_cast<uint64_t>(M * per_core_N_gu) * intermed_tile_size;             // cb_gate_intermed
+        total += static_cast<uint64_t>(M * per_core_N_gu) * intermed_tile_size;             // cb_activated
+        total += static_cast<uint64_t>(M * per_core_N_gu) * partials_gu_tile_size;          // cb_mm_partials_gu
+        total += static_cast<uint64_t>(M * per_core_N_gu) * partials_gu_tile_size;          // cb_mm_partials_up
+        total += static_cast<uint64_t>(M * per_core_N_d) * partials_d_tile_size;            // cb_mm_partials_d
+        total += static_cast<uint64_t>(cb_out_tiles) * out_tile_size;                       // cb_out
+        total += static_cast<uint64_t>(M * in0_block_w_d * 2) * intermed_tile_size;         // cb_in0_down_full
         // Bias CBs (FUSE_BIAS): single-buffered, per_core_N_gu (gate/up) + per_core_N_d
         // (down) tiles. Keep in sync with the CB allocations in the "Bias CBs" section.
         total += static_cast<uint64_t>(2 * per_core_N_gu + per_core_N_d) * bias_ts;
@@ -409,7 +480,6 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     const uint32_t gu_out_block_num_tiles = per_core_M * per_core_N_gu;
 
     const uint32_t d_in0_num_subblocks = per_core_M / d_out_subblock_h;
-    const uint32_t d_in1_num_subblocks = per_core_N_d / d_out_subblock_w;
     const uint32_t d_in0_block_num_tiles = per_core_M * in0_block_w_d;
     const uint32_t d_in0_subblock_num_tiles = d_out_subblock_h * in0_block_w_d;
     const uint32_t d_in1_block_num_tiles = in0_block_w_d * per_core_N_d;
@@ -594,14 +664,10 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         partials_d_df,
         /*tiles=*/d_out_block_num_tiles,
         partials_d_tile_size);
-    // Output CB: writer drains one subblock at a time. 2-subblock staging
-    // pipelines compute/writer one-ahead and is safe under the tightest L1
-    // budget (the 256-expert / 32-per-chip case the unfused path is run on).
-    constexpr uint32_t cb_out_stage_count = 2u;
     make_cb(
         CB_OUT,
         out_df,
-        /*tiles=*/d_out_subblock_h * d_out_subblock_w * cb_out_stage_count,
+        /*tiles=*/cb_out_tiles,
         out_tile_size);
     // cb_in0_down_full: reader pushes per_core_M × in0_block_w_d tiles of activated
     // once per down K-block. Single-buffered to save L1.
@@ -612,6 +678,45 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         intermed_df,
         /*tiles=*/d_in0_block_num_tiles * 2,
         intermed_tile_size);
+
+    // cb_push_back/cb_pop_front wrap the FIFO pointer only when it lands EXACTLY on
+    // fifo_limit; a ring that is not a whole number of the granule its kernels move
+    // leaves the pointer mid-ring forever and the next push walks into the neighbouring
+    // CB's L1. The granule is the FINEST push/pop any kernel issues on that CB, which is
+    // not always the block: the ragged down grid repeats on a whole output row, and the
+    // runtime per_core_M splits the x and intermediate blocks into strip-sized pieces.
+    // Checked here because the kernels cannot -- ASSERT is a no-op in Release.
+    const auto check_ring = [](const char* cb_name, uint32_t ring_tiles, uint32_t granule_tiles) {
+        TT_FATAL(
+            granule_tiles > 0 && ring_tiles % granule_tiles == 0,
+            "unified_routed_expert_ffn: {} ring ({} tiles) is not a whole number of the {}-tile "
+            "granule its kernels push; the FIFO pointer would never land on fifo_limit",
+            cb_name,
+            ring_tiles,
+            granule_tiles);
+    };
+    // x and its row-major staging move one in0_block_w_gu-wide tile-row strip at a time
+    // (the tilize helper pushes per strip; the per_core_M remainder is a pointer-only pad).
+    check_ring("cb_in0_x", gu_in0_block_num_tiles * (op.x_is_row_major ? 1u : 2u), in0_block_w_gu);
+    if (op.x_is_row_major) {
+        check_ring("cb_x_rm", gu_in0_block_num_tiles * 2, in0_block_w_gu);
+    }
+    // gate/up intermediates and their accumulators move one gate/up subblock at a time.
+    check_ring("cb_gate_intermed", gu_out_block_num_tiles, gu_out_subblock_h * gu_out_subblock_w);
+    check_ring("cb_partials_gu", gu_out_block_num_tiles, gu_out_subblock_h * gu_out_subblock_w);
+    check_ring("cb_partials_up", gu_out_block_num_tiles, gu_out_subblock_h * gu_out_subblock_w);
+    // The reader drains cb_activated one down K-block at a time; in0_block_w_d ==
+    // per_core_N_gu makes that granule the whole block, which this pins.
+    check_ring("cb_activated", gu_out_block_num_tiles, per_core_M * in0_block_w_d);
+    // Down partials and the output ring repeat on a whole output row when the N-subblock
+    // grid is ragged, and on a single subblock when it is exact.
+    const uint32_t d_row_granule = d_out_subblock_h * (d_subblocks_exact ? d_out_subblock_w : per_core_N_d);
+    check_ring("cb_mm_partials_d", d_out_block_num_tiles, d_row_granule);
+    check_ring("cb_out", cb_out_tiles, d_row_granule);
+    check_ring("cb_in0_down_full", d_in0_block_num_tiles * 2, d_in0_block_num_tiles);
+    check_ring("cb_in1_gate", gu_in1_block_num_tiles * 2, gu_in1_block_num_tiles);
+    check_ring("cb_in1_up", gu_in1_block_num_tiles * 2, gu_in1_block_num_tiles);
+    check_ring("cb_in1_down", d_in1_block_num_tiles * 2, d_in1_block_num_tiles);
 
     // Scratch CBs for the device-side count lookup. The reader does a single
     // noc_async_read_page(page=0, ...) of each tensor and then indexes
@@ -738,14 +843,18 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         tt::datum_size(tt::DataFormat::Float16_b),
         // DOWN_SPLIT: K-rows of each down block this RISC keeps; the writer reads the
         // rest on NoC 1. Equals in0_block_w_d when the split is off.
-        down_split_k,                             // 30
+        down_split_k,  // 30
         // IN1_WRITER_MCAST: 1 => the writer runs the gate/up multicast on NoC 1.
         static_cast<uint32_t>(kWriterMcastsIn1),  // 31
         // Active-token band. Experts outside it are dropped like a zero count, so a
         // hybrid dispatch can hand this op one load regime and moe_fused_swiglu the other
         // over the SAME counts vector. Wide open by default.
-        op.min_active_tokens,                     // 32
-        op.max_active_tokens,                     // 33
+        op.min_active_tokens,  // 32
+        op.max_active_tokens,  // 33
+        // DRAM ND shard width in tiles per weight stream, 0 when interleaved. Drives the
+        // kernels' read coalescing only — both layouts run the same code path.
+        gu_shard_w,  // 34
+        d_shard_w,   // 35
     };
     tt::tt_metal::TensorAccessorArgs(x_buffer).append_to(reader_ct_args);
     tt::tt_metal::TensorAccessorArgs(gate_buffer).append_to(reader_ct_args);
@@ -826,8 +935,15 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         CB_IN1_GATE,                              // 26
         static_cast<uint32_t>(kWriterMcastsIn1),  // 27 writer_mcasts_in1
         // Active-token band, after the DOWN_SPLIT block rather than at 20/21.
-        op.min_active_tokens,                     // 28
-        op.max_active_tokens,                     // 29
+        op.min_active_tokens,  // 28
+        op.max_active_tokens,  // 29
+        // DRAM ND shard widths, matching the reader's args 34/35.
+        gu_shard_w,  // 30
+        d_shard_w,   // 31
+        // Width of the LAST down N-subblock; equals d_out_subblock_w unless the subblock grid
+        // is ragged (see the program factory). The drain must not wait on tiles the compute
+        // kernel never packs.
+        d_out_subblock_w_tail,  // 32
     };
     // Accessor compile-arg stream order MUST match the writer kernel:
     // out, then start, then up (UP_SPLIT).
@@ -881,6 +997,7 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         // down out subblock
         d_out_subblock_h,
         d_out_subblock_w,
+        d_out_subblock_w_tail,
         d_out_block_num_tiles,
         // chunk loop control
         num_chunks,
@@ -941,6 +1058,10 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     } else if (op.activation == RoutedExpertActivation::SituGlu) {
         // SiTU-GLU (Kimi K3), with beta_gate=4.0 / beta_up=25.0 baked into the kernel.
         compute_defines["SITU_GLU"] = "1";
+    } else if (op.activation == RoutedExpertActivation::ClampedSiluGlu) {
+        // Clamped SiLU-GLU (DeepSeek V4), with limit=10.0 (ClampedSiluGluConfigDsV4) baked
+        // into the kernel.
+        compute_defines["CLAMPED_SILU_GLU"] = "1";
     }
     if (fuse_bias) {
         // FUSE_BIAS: add gate/up bias (broadcast across rows) before the fused binary

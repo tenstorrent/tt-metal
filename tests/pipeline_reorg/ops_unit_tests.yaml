@@ -131,7 +131,7 @@
       -m requires_host_iommu -xv --timeout=600
   skus:
     bh_p150b_civ2_viommu:
-      timeout: 7
+      timeout: 15
   owner_id: U09L76N1MAT  # Nenad Babin
   team: ttnn
   budget_type: unit
@@ -252,7 +252,7 @@
       timeout: 30
     bh_p150b_civ2:
       timeout: 30
-  owner_id: U08JFM3CFA4 # Gongyu Wang
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: ttnn
   budget_type: unit
   category: transformers

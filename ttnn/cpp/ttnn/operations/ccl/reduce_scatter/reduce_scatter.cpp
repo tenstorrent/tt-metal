@@ -85,6 +85,17 @@ bool use_direct_reduce_scatter(
     if (!ttnn::experimental::reduce_scatter_minimal_direct_is_applicable(input_tensor, dim, cluster_axis)) {
         return false;
     }
+    // Several rings running concurrently (a cluster_axis on a 2-D mesh with more than one device on the
+    // other axis) are not validated for the direct op: its Galaxy coverage is axis 0 on an (8,1) submesh.
+    // Auto-dispatching the DeepSeek-V3 TG MoE decode block's axis-1 reduce-scatter (8 rings of 4 on the
+    // 8x4 mesh) there hangs in the writer's start barrier on 12 devices in every run (#54864). Keep such
+    // callers on the ring op; explicit reduce_scatter_minimal_direct calls are unaffected.
+    if (cluster_axis.has_value()) {
+        const auto mesh_shape = input_tensor.device()->shape();
+        if (mesh_shape.dims() == 2 && mesh_shape[1 - cluster_axis.value()] > 1) {
+            return false;
+        }
+    }
     // Size gate: physical per-device input bytes, so block-float dtypes are counted as they actually
     // land in DRAM rather than by logical element count.
     const auto* buffer = input_tensor.buffer();

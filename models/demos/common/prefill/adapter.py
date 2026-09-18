@@ -16,7 +16,7 @@ Two layers:
     the model registry (``get_adapter`` / ``ADAPTER_PATHS``). Both are common.
   * A concrete adapter per model, living in that model's own package. The
     DeepSeek-V3 family ships a shared ``MLAPrefillAdapter`` base (MLA attention +
-    MoE) with thin ``DeepSeekV3Adapter`` / ``KimiK26Adapter`` subclasses; a
+    MoE) with thin ``DeepSeekV3Adapter`` / ``KimiK27Adapter`` subclasses; a
     different architecture subclasses ``PrefillModelAdapter`` directly with its own
     KV layout. See ``docs/ADDING_A_PREFILL_MODEL.md``.
 
@@ -69,9 +69,6 @@ class PrefillRunParams:
     weight_cache_path: Optional[Path]
     sp_axis: int = 0
     tp_axis: int = 1
-    # KV dedup (PREFILL_TP_SHARD_KV): shard the KV/index caches across TP too, so each of the sp*tp devices
-    # holds a distinct 1/(sp*tp) slice instead of tp copies. Storage only; sparse (DSA) path only.
-    tp_shard_kv: bool = False
     # Explicit semantic cache format selected by model/module configuration. Scaled FP8 is a packed
     # mixed-format row, so it must not be represented or inferred as a bare tensor dtype.
     sparse_kv_cache_format: Optional[object] = None
@@ -128,9 +125,6 @@ class PrefillModelAdapter(ABC):
     # Route the MoE routing all-gather's global semaphores to L1_SMALL instead of
     # pinning the main-L1 floor. Requires l1_small_size > 0.
     routing_use_l1_small_for_semaphores: bool = False
-    # Opting in promises that ``allocate_kv_cache`` passes ``params.tp_shard_kv`` to every cache allocator;
-    # otherwise writes go TP-sharded into TP-replicated caches. The runner asserts on this.
-    supports_tp_shard_kv: bool = False
     # Emb-axis sharding of the cross-rank D2D hidden state (seq is always SP-sharded). True (default):
     # emb TP-sharded, [Shard(2), Shard(3)]. False: emb replicated across TP, [Shard(2), Replicate()].
     # Must match the layout the model's decoder layer consumes/produces.
@@ -294,8 +288,7 @@ ADAPTER_PATHS = {
     # GLM-5.1: sparse-attention (DSA) variant with a full prefill serving runtime (adapters/glm_5_1.py).
     "glm_5_1": "models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_1:GLM51Adapter",
     "glm_5_2": "models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_2:GLM52Adapter",
-    "kimi_k2_6": "models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k2_6:KimiK26Adapter",
-    # Kimi-K2.7: same architecture as K2.6, new checkpoint (adapters/kimi_k2_7.py).
+    # Kimi-K2.7-Code: DeepSeek-V3 architecture (MLA + MoE), single expert group (adapters/kimi_k2_7.py).
     "kimi_k2_7": "models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k2_7:KimiK27Adapter",
     # Mistral-Small-4-119B: dense MLA + MoE; config hand-built (transformers 5.x rope_parameters).
     "mistral_small_4": "models.demos.deepseek_v3_d_p.tt.runners.adapters.mistral_small_4:MistralSmall4Adapter",

@@ -85,6 +85,32 @@ def test_nlp_cqkv_interleaved_addr_change_on_hit(device, isolate_program_cache, 
     assert device.num_program_cache_entries() == 1
 
 
+@pytest.mark.parametrize("batch, seq_len", [(1, 32), (2, 64)])
+@pytest.mark.parametrize("head_dim", [64, 128])
+def test_nlp_cqkv_q_only_head_parallel_cache_hit(device, isolate_program_cache, batch, seq_len, head_dim):
+    """Distribute Q-only work unevenly across cores and reuse the program with new buffers."""
+    grid = device.compute_with_storage_grid_size()
+    num_cores = grid.x * grid.y
+    sequence_blocks = batch * seq_len // 32
+    if sequence_blocks >= num_cores:
+        pytest.skip("Head parallelism requires idle cores in the sequence-only split")
+    num_q_heads, num_kv_heads = num_cores + 1, 0
+    dtype, mem_config = ttnn.bfloat16, ttnn.DRAM_MEMORY_CONFIG
+
+    A1, in1 = _make_interleaved_input(device, batch, seq_len, head_dim, num_q_heads, num_kv_heads, dtype, mem_config, 1)
+    outs1 = _run_interleaved(in1, num_q_heads, num_kv_heads, False, mem_config)
+    # Q-only calls have no K/V outputs; use the shared reference and checker for Q.
+    _check(outs1[:1], _refs_interleaved(A1, batch, seq_len, head_dim, num_q_heads, num_kv_heads, False)[:1], 1.0)
+
+    A2, in2 = _make_interleaved_input(device, batch, seq_len, head_dim, num_q_heads, num_kv_heads, dtype, mem_config, 2)
+    assert in1.buffer_address() != in2.buffer_address(), "inputs must land at different addresses to exercise the hit"
+    outs2 = _run_interleaved(in2, num_q_heads, num_kv_heads, False, mem_config)
+    _check(outs2[:1], _refs_interleaved(A2, batch, seq_len, head_dim, num_q_heads, num_kv_heads, False)[:1], 1.0)
+    assert outs1[0].buffer_address() != outs2[0].buffer_address(), "Q outputs must land at different addresses"
+
+    assert device.num_program_cache_entries() == 1
+
+
 def test_nlp_cqkv_interleaved_shape_change(device, isolate_program_cache):
     """Different input shape (seq_len) -> distinct entries (input TensorSpec is hashed)."""
     head_dim, num_q_heads, num_kv_heads = 64, 8, 2

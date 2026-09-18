@@ -357,6 +357,60 @@ struct OperationFpuMatmul : Operation<Exu::Fpu, Hoistable::Yes>
         RtDim>;
 };
 
+// ---------------------------------
+// OPERATION - FPU ELTWISE BINARY
+// ---------------------------------
+
+struct OperationFpuEltwiseBinary : Operation<Exu::Fpu, Hoistable::Yes>
+{
+    template <typename T>
+    using Field = StateField<OperationFpuEltwiseBinary, T>;
+
+    struct EltwiseBinaryType : Field<std::uint32_t>
+    {
+    };
+
+    struct BroadcastType : Field<std::uint32_t>
+    {
+    };
+
+    struct MathFidelity : Field<std::uint32_t>
+    {
+    };
+
+    struct ReuseDest : Field<std::uint32_t>
+    {
+    };
+
+    struct AccToDest : Field<std::uint32_t>
+    {
+    };
+
+    struct FaceHeight : Field<std::uint32_t>
+    {
+    };
+
+    struct NumFaces : Field<std::uint32_t>
+    {
+    };
+
+    struct NumFacesCDim : Field<std::uint32_t>
+    {
+    };
+
+    using Struct = StateStruct<
+        OperationFpuEltwiseBinary,
+        /* Fields */
+        EltwiseBinaryType,
+        BroadcastType,
+        MathFidelity,
+        ReuseDest,
+        AccToDest,
+        FaceHeight,
+        NumFaces,
+        NumFacesCDim>;
+};
+
 // ----------------------------------------
 // OPERATION - FPU ELTWISE UNARY DATACOPY
 // ----------------------------------------
@@ -479,7 +533,7 @@ struct OperationPackFastTilizeWh : Operation<Exu::Pack, Hoistable::No>
 
 using UnpackOperations = OperationList<OperationUnpackUnary, OperationUnpackBinary, OperationUnpackMatmul, OperationUnpackTilize, OperationUnpackFastTilizeWh>;
 
-using FpuOperations = OperationList<OperationFpuMatmul, OperationFpuEltwiseUnaryDatacopy, OperationFpuFastTilizeWh>;
+using FpuOperations = OperationList<OperationFpuMatmul, OperationFpuEltwiseUnaryDatacopy, OperationFpuEltwiseBinary, OperationFpuFastTilizeWh>;
 
 using SfpuOperations = OperationList<>;
 

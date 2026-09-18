@@ -60,6 +60,8 @@ env:
   #                                  cmd as an artifact-name component.
   #   llk_ttsim_weekly.yaml          its impl appends --architecture, derived per leg
   #                                  from ttsim_lib, so no static cmd is complete.
+  #   llk_ttnop_tests.yaml           runs only through its specialized manual/weekly
+  #                                  workflow, which supplies TTNOP setup and recovery.
   #
   # This is not an exemption: the legs still block the PR until an owner approves.
   UNSUPPORTED_YAMLS: >-
@@ -67,6 +69,7 @@ env:
     ttnn_sweep_tests.yaml
     single_card_profiler_tests.yaml
     llk_ttsim_weekly.yaml
+    llk_ttnop_tests.yaml
 
   # Yamls under tests/pipeline_reorg/ that legitimately hold no test matrix, so the
   # gate has nothing to prove for them. ttsim-skip-list.yaml is a per-arch mapping of
@@ -84,11 +87,18 @@ env:
   # hits runtime_unit_tests.yaml and fabric_perf_tests.yaml. Everything else is
   # derived from the leg itself -- sim_* SKUs run under ttsim, and a pytest cmd
   # needs the wheel.
+  #
+  # blackhole_e2e_tests.yaml is on the list despite not being named *_profiler_tests:
+  # its LoudBox perf legs call run_device_perf, which shells out to `python3 -m tracy`.
+  # Without a profiler build the gate dispatches them and they fail on "Tracy tools
+  # not found" -- a gate artefact, not a test failure. blackhole-e2e-tests.yaml itself
+  # builds with `tracy: true` for the same reason.
   TRACY_BUILD_YAMLS: >-
     galaxy_profiler_tests.yaml
     single_card_profiler_tests.yaml
     t3k_profiler_tests.yaml
     runtime_perf_profiler_tests.yaml
+    blackhole_e2e_tests.yaml
 
 jobs:
   scope:
@@ -214,10 +224,16 @@ jobs:
     # fetch-ttsim is a prerequisite even for hardware legs: every fetch the run needs
     # completes before any test starts.
     needs: [scope, build-default, build-profiler, fetch-ttsim]
+    # An empty matrix vector is a workflow-level error in Actions, not a skipped
+    # job: the run is marked failed with nothing red inside it. scope returns an
+    # empty matrix on every no_op PR -- i.e. most of them -- so guard it here the
+    # same way fetch-ttsim guards sim-libs above.
     if: >-
       ${{ !cancelled()
           && !contains(needs.*.result, 'failure')
-          && github.event_name == 'pull_request'}}
+          && github.event_name == 'pull_request'
+          && needs.scope.outputs.matrix != '[]'
+          && needs.scope.outputs.matrix != ''}}
     strategy:
       fail-fast: false
       matrix:

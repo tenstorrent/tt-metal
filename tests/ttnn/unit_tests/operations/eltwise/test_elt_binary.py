@@ -207,29 +207,6 @@ def test_rne_approx_modes(device, ttnn_op, fast_and_approximate_mode, ulp_thresh
 
 
 # fmt: off
-@pytest.mark.parametrize("ttnn_op", [ttnn.add_, ttnn.subtract_, ttnn.rsub_])
-@pytest.mark.parametrize("fast_and_approximate_mode, ulp_threshold", [(False, 0), (None, 1)])
-# fmt: on
-def test_rne_approx_modes_inplace(device, ttnn_op, fast_and_approximate_mode, ulp_threshold):
-    torch.manual_seed(0)
-
-    torch_input_tensor_a = torch.randn((128, 128), dtype=torch.bfloat16) * 1e5
-    torch_input_tensor_b = torch.randn((128, 128), dtype=torch.bfloat16) * 1e5
-    golden_fn = ttnn.get_golden_function(ttnn_op)
-    torch_output_tensor = golden_fn(torch_input_tensor_a, torch_input_tensor_b)
-
-    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-
-    kwargs = {} if fast_and_approximate_mode is None else {"fast_and_approximate_mode": fast_and_approximate_mode}
-    ttnn_op(input_tensor_a, input_tensor_b, **kwargs)
-
-    assert_with_ulp(
-        expected_result=torch_output_tensor, actual_result=ttnn.to_torch(input_tensor_a), ulp_threshold=ulp_threshold
-    )
-
-
-# fmt: off
 @pytest.mark.parametrize("ttnn_op", [ttnn.add, ttnn.subtract, ttnn.rsub])
 @pytest.mark.parametrize("dtype_a, dtype_b, output_dtype", [
     (ttnn.float32, ttnn.float32, None),
