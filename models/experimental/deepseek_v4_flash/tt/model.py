@@ -32,7 +32,6 @@ from .decoder_layer import DeepSeekV4DecoderLayer
 from .embedding import DeepSeekV4Embedding
 from .hyperconnection import DeepSeekV4HyperHead
 from .layers import DeepSeekV4RMSNorm
-from .l1_weights import build_l1_weight_tensor, placement_weights_from_decoder_layer
 from .moe import DeepSeekV4HashRouter, DeepSeekV4PreloadedExperts
 from .quant import dequantize_weight
 from .system_config import SystemConfig, load_system_config, set_active_system_config
@@ -93,28 +92,6 @@ def plan_layer_placement(num_layers: int, num_devices: int, group_size: int) -> 
         count = base + (1 if gi < extra else 0)
         ids.extend(gi * g + (j % g) for j in range(count))
     return ids
-
-
-def _sliding_causal_mask(seq_len: int, sliding_window: int, dtype: torch.dtype = torch.float32) -> torch.Tensor:
-    """Additive ``[1, 1, S, S]`` sliding-window causal mask (0 keep / ``_MASK_NEG``)."""
-    i = torch.arange(seq_len).view(seq_len, 1)
-    j = torch.arange(seq_len).view(1, seq_len)
-    keep = (j <= i) & (i - j < sliding_window)
-    mask = torch.zeros(seq_len, seq_len, dtype=dtype).masked_fill(~keep, _MASK_NEG)
-    return mask.view(1, 1, seq_len, seq_len)
-
-
-def _block_bias(seq_len: int, n_windows: int, compress_rate: int, dtype: torch.dtype = torch.float32) -> torch.Tensor:
-    """Additive ``[1, 1, S, n_windows]`` causal block bias over compressed windows.
-
-    Query ``t`` may attend compressed entry ``w`` iff ``w < (t + 1) // compress_rate``
-    — the degenerate CSA/HCA top-k for ``seq_len <= index_topk * compress_rate``.
-    """
-    position_ids = torch.arange(seq_len).unsqueeze(0)
-    entry = torch.arange(n_windows).view(1, 1, 1, n_windows)
-    threshold = ((position_ids + 1) // compress_rate).view(1, 1, seq_len, 1)
-    bias = torch.zeros(1, 1, seq_len, n_windows, dtype=dtype)
-    return bias.masked_fill(entry >= threshold, _MASK_NEG)
 
 
 def _window_indices(compress_rate: int, pos: int) -> tuple[int, int]:
@@ -232,7 +209,6 @@ class DeepSeekV4Model(DeepSeekV4Module):
         use_submeshes: bool = False,
         require_cache: bool = False,
         pipeline_group_size: Optional[int] = None,
-        use_prefetcher: Optional[bool] = None,
         num_prefetch_pages: Optional[int] = None,
         system_config: Optional[SystemConfig] = None,
         tp_size: int = 1,
@@ -251,9 +227,8 @@ class DeepSeekV4Model(DeepSeekV4Module):
         locally-computed RoPE rotate matrix have no tile cache by design and are
         always materialised, so they are exempt.
 
-        ``use_prefetcher`` puts the attention projections (with their compressor) and the MoE
-        shared expert on DRISC-prefetched weights instead of a DRAM->L1 copy per call; it
-        defaults to whether the device supports it. Decode must then run inside
+        The attention projections (with their compressor) and the MoE shared expert run on
+        DRISC-prefetched weights instead of a DRAM->L1 copy per call, so decode must run inside
         :meth:`prefetcher_session`. One GCB is built per device and shared by every prefetched
         weight on it (see :func:`make_decode_prefetch_buffers`), so the cost is 288 KB of L1 per
         receiver core for the whole model rather than per layer.
@@ -288,25 +263,14 @@ class DeepSeekV4Model(DeepSeekV4Module):
         self.tp_size = tp_size
         if system_config is None:
             system_config = load_system_config(mesh_device=full_device).log()
-        # 8-chip and 32-chip TP4 share the same full-width q_a/kv replicas.
-        if tp_size == 4:
-            system_config = system_config.with_overrides(
-                attention={
-                    "qkv_tp_strategy": "replicated",
-                    "keep_qa_kv_weights_in_l1": False,
-                }
-            )
         self.system_config = system_config
         set_active_system_config(system_config)
 
         self.weight_dtype = weight_dtype if weight_dtype is not None else system_config.decode.ttnn_weight_dtype
         weight_dtype = self.weight_dtype
-        if use_prefetcher is None:
-            use_prefetcher = system_config.prefetcher.resolve_enabled(full_device)
-        self.use_prefetcher = use_prefetcher
-        self.use_packed_l1_weights = system_config.decode.resolve_packed_l1_weights(use_prefetcher) and tp_size == 1
-        if self.use_packed_l1_weights and weight_dtype != ttnn.bfloat4_b:
-            raise ValueError("packed L1 decoder weights require weight_dtype=ttnn.bfloat4_b")
+        # The DRISC weight prefetcher is always on: every decode projection streams its
+        # weights through a shared GCB rather than copying DRAM -> L1 per call.
+        self.use_prefetcher = True
         if num_prefetch_pages is None:
             num_prefetch_pages = system_config.prefetcher.num_prefetch_pages
         self._prefetch_buffers_by_device: dict[int, dict] = {}
@@ -320,7 +284,6 @@ class DeepSeekV4Model(DeepSeekV4Module):
                 )
             cache = cache.require(True)
         self.cache = cache
-        self.require_cache = require_cache
 
         self.use_submeshes = use_submeshes
         self.mesh_devices = full_device.get_num_devices()
@@ -347,7 +310,6 @@ class DeepSeekV4Model(DeepSeekV4Module):
         self.num_layers = n
         if pipeline_group_size is None:
             pipeline_group_size = max(0, system_config.pipeline.group_size)
-        self.pipeline_group_size = pipeline_group_size
         if use_submeshes:
             self.layer_submesh_ids = plan_layer_placement(self.num_layers, self.num_submeshes, pipeline_group_size)
         else:
@@ -435,38 +397,6 @@ class DeepSeekV4Model(DeepSeekV4Module):
             li: self._build_layer_weights(li, config.layer_types[li], config.mlp_layer_types[li] == "hash_moe")
             for li in range(n)
         }
-        packed_by_layer = {}
-        if self.use_packed_l1_weights:
-            groups: dict[int, list[int]] = {}
-            for li in range(n):
-                device_id = self._submesh_id_for_layer(li) if self.use_submeshes else 0
-                groups.setdefault(device_id, []).append(li)
-            for device_id, indices in groups.items():
-                if len(indices) > 2:
-                    raise ValueError(
-                        f"packed Galaxy32 placement supports at most two decoder layers per chip; "
-                        f"device {device_id} owns layers {indices}"
-                    )
-                current_device = self.submeshes[device_id] if self.use_submeshes else full_device
-                layer_types = tuple(config.layer_types[li] for li in indices)
-                cache_name = "packed_decoder_layers_" + "_".join(f"{li}_{config.layer_types[li]}" for li in indices)
-                cache_file = cache.file(cache_name)
-                if cache.hit(cache_name, ttnn.bfloat4_b):
-                    bundle = build_l1_weight_tensor(
-                        None, current_device, layer_types=layer_types, cache_file_name=cache_file
-                    )
-                else:
-                    if cache.require_cache:
-                        raise RuntimeError(f"weight cache miss for packed decoder tensor {cache_file!r}")
-                    host_weights = [
-                        placement_weights_from_decoder_layer(layer_weights[li], config.layer_types[li])
-                        for li in indices
-                    ]
-                    bundle = build_l1_weight_tensor(
-                        host_weights, current_device, layer_types=layer_types, cache_file_name=cache_file
-                    )
-                for slot, li in enumerate(indices):
-                    packed_by_layer[li] = (bundle, slot)
         for li in range(n):
             if self.use_submeshes:
                 layer_device_id = self._submesh_id_for_layer(li)
@@ -475,20 +405,12 @@ class DeepSeekV4Model(DeepSeekV4Module):
             else:
                 current_device = self.device
             self.layer_devices.append(current_device)
-            layer_type = config.layer_types[li]
             is_hash = config.mlp_layer_types[li] == "hash_moe"
             layer_cache = cache.sub(f"layers.{li}")
             weights = layer_weights[li]
-            packed_entry = packed_by_layer.get(li)
-            packed_bundle = None
-            if packed_entry is not None:
-                (packed_tensor, packed_layout), packed_slot = packed_entry
-                packed_bundle = (packed_tensor, packed_layout, packed_slot)
             prefetch_buffers = self._prefetch_buffers_for(current_device, weight_dtype, num_prefetch_pages)
             gate = (
-                self._hash_gate(li, packed_bundle, prefetch_buffers=prefetch_buffers, weight_dtype=weight_dtype)
-                if is_hash
-                else None
+                self._hash_gate(li, prefetch_buffers=prefetch_buffers, weight_dtype=weight_dtype) if is_hash else None
             )
             experts = DeepSeekV4PreloadedExperts(
                 config,
@@ -510,7 +432,6 @@ class DeepSeekV4Model(DeepSeekV4Module):
                     weight_dtype=weight_dtype,
                     use_prefetcher=self.use_prefetcher,
                     prefetch_buffers=prefetch_buffers,
-                    packed_weights=packed_entry,
                     tp_size=tp_size,
                 )
             )
@@ -547,7 +468,6 @@ class DeepSeekV4Model(DeepSeekV4Module):
         self._out_plan: Optional[tuple[int, int]] = None  # (rows, cols) of one output
         self._out_torch_dtype: Optional[torch.dtype] = None
         self._paged_groups: dict[str, PagedGroup] = {}
-        self._external_pools: Optional[dict[int, ttnn.Tensor]] = None
         # The sessions occupying the batch slots, slot order (``None`` where a session
         # was closed without another taking its place). One entry unless
         # :meth:`prepare_static_decode` was given ``batch > 1``.
@@ -793,7 +713,6 @@ class DeepSeekV4Model(DeepSeekV4Module):
                     weight_dtype=self.weight_dtype,
                     use_prefetcher=False,
                     prefetch_buffers=None,
-                    packed_weights=None,
                     tp_size=self.tp_size,
                 )
             )
@@ -944,7 +863,7 @@ class DeepSeekV4Model(DeepSeekV4Module):
                 return li
         return None
 
-    def _prefetch_buffers_for(self, device, weight_dtype, num_prefetch_pages) -> Optional[dict]:
+    def _prefetch_buffers_for(self, device, weight_dtype, num_prefetch_pages) -> dict:
         """The GCB for ``device``, built on first use and reused after.
 
         One buffer per device, not per layer or per weight: a GCB is a permanent L1 allocation,
@@ -953,8 +872,6 @@ class DeepSeekV4Model(DeepSeekV4Module):
         and exhaust L1 -- and long before that, the DRISC senders' state zone, which holds only
         about six GCBs per device however small they are.
         """
-        if not self.use_prefetcher:
-            return None
         key = id(device)
         if key not in self._prefetch_buffers_by_device:
             self._prefetch_buffers_by_device[key] = (
@@ -967,10 +884,9 @@ class DeepSeekV4Model(DeepSeekV4Module):
     def prefetcher_session(self):
         """Run the DRISC senders for the duration of a decode run.
 
-        Required around every :meth:`decode` when the model was built with
-        ``use_prefetcher``; a no-op otherwise, so callers can wrap unconditionally. One
-        session should span a whole generation rather than a single step, because starting
-        and stopping the senders is not free and the GCB ring state carries across steps.
+        Required around every :meth:`decode`. One session should span a whole generation
+        rather than a single step, because starting and stopping the senders is not free and
+        the GCB ring state carries across steps.
 
         Opened on every device holding prefetch buffers, which under ``use_submeshes`` is one
         per submesh. Entry fences against the weight uploads already on the command queue
@@ -987,9 +903,6 @@ class DeepSeekV4Model(DeepSeekV4Module):
         running, so the device must be closed or reset before another session is opened -- which
         is fine, because this path only runs when the caller is already unwinding.
         """
-        if not self.use_prefetcher:
-            yield
-            return
         devices = [device for device, _ in self._prefetch_buffers_by_device.values()]
         for device in devices:
             ttnn.experimental.start_tensor_prefetcher(device)
@@ -1018,9 +931,7 @@ class DeepSeekV4Model(DeepSeekV4Module):
 
         return provider
 
-    def _hash_gate(
-        self, layer_idx: int, packed_weights=None, prefetch_buffers=None, weight_dtype=None
-    ) -> DeepSeekV4HashRouter:
+    def _hash_gate(self, layer_idx: int, prefetch_buffers=None, weight_dtype=None) -> DeepSeekV4HashRouter:
         weights = {
             "gate.weight": self._thunk(f"layers.{layer_idx}.mlp.gate.weight"),
             "gate.tid2eid": self.loader.get_tensor(f"layers.{layer_idx}.mlp.gate.tid2eid").long(),
@@ -1033,7 +944,6 @@ class DeepSeekV4Model(DeepSeekV4Module):
             self.config,
             weights,
             this_device,
-            packed_weights=packed_weights,
             use_prefetcher=self.use_prefetcher,
             prefetch_buffers=prefetch_buffers,
             weight_dtype=weight_dtype if weight_dtype is not None else ttnn.bfloat16,
@@ -1213,25 +1123,6 @@ class DeepSeekV4Model(DeepSeekV4Module):
         """Is this model set up for paged (multi-session) traced decode?"""
         return self._paged is not None
 
-    @property
-    def decode_batch(self) -> int:
-        """Users a traced step decodes at once (1 unless ``prepare_static_decode``
-        was given a larger ``batch``)."""
-        return self._decode_batch
-
-    @property
-    def active_session(self) -> Optional[int]:
-        """The resident session, for the single-user case. ``None`` if none is
-        active; see :attr:`resident_sessions` when the batch holds several."""
-        if len(self._resident) > 1:
-            raise RuntimeError(f"{len(self._resident)} sessions are resident; use resident_sessions")
-        return self._resident[0] if self._resident else None
-
-    @property
-    def resident_sessions(self) -> list[int]:
-        """The sessions occupying the batch slots, in slot order."""
-        return list(self._resident)
-
     def _require_paged(self) -> PagedKVManager:
         if self._paged is None:
             raise RuntimeError("call prepare_static_decode(..., num_sessions=N) for paged multi-session decode")
@@ -1300,8 +1191,8 @@ class DeepSeekV4Model(DeepSeekV4Module):
         """Seat ``sids`` in the batch slots the next steps decode, in slot order.
 
         Points every page table's row ``u`` at ``sids[u]``'s blocks and swaps their
-        compressor window state into the rows the traces address. Exactly
-        :attr:`decode_batch` sessions are required: a captured trace decodes all of its
+        compressor window state into the rows the traces address. Exactly as many
+        sessions as the captured batch decodes are required: a trace decodes all of its
         slots unconditionally, so an empty slot would still write KV somewhere, and the
         only somewhere it could write is another session's blocks.
 
@@ -1815,37 +1706,12 @@ class DeepSeekV4Model(DeepSeekV4Module):
             batch=self._decode_batch,
         )
 
-    def _external_pool_blocks(self, pools: dict[int, ttnn.Tensor]) -> dict[str, int]:
-        """Validate caller-owned pools against this model's geometry and read the pool
-        size of each group off them."""
-        blocks: dict[str, int] = {}
-        for li in range(self.num_layers):
-            if li not in pools:
-                raise ValueError(f"no external block pool for layer {li}")
-            group = self._paged_groups[self.config.layer_types[li]]
-            shape = list(pools[li].shape)
-            want = [1, group.block_size, self.config.head_dim]
-            if shape[1:] != want:
-                raise ValueError(
-                    f"layer {li} ({group.layer_type}) pool has block shape {shape[1:]}, expected {want} "
-                    f"for a {group.block_size}-row block"
-                )
-            seen = blocks.setdefault(group.layer_type, shape[0])
-            if seen != shape[0]:
-                raise ValueError(
-                    f"every pool of group {group.layer_type} must have the same block count, "
-                    f"got {seen} and {shape[0]}"
-                )
-        return blocks
-
     def _build_block_pool(self, li: int, device: ttnn.MeshDevice) -> ttnn.Tensor:
         """One layer's KV block pool ``[num_blocks, 1, block_size, Dh]`` (all-zero).
 
         Block ``0`` is the shared zero block every unmapped page-table entry points at,
         so it must stay zero -- :class:`PagedKVManager` never hands it out.
         """
-        if self._external_pools is not None:
-            return self._external_pools[li]
         group = self._paged_groups[self.config.layer_types[li]]
         num_blocks = self._paged.pools[group.layer_type].num_blocks
         return ttnn.from_torch(
@@ -1917,8 +1783,6 @@ class DeepSeekV4Model(DeepSeekV4Module):
         num_sessions: int = 0,
         total_tokens: int | None = None,
         block_size: int = 32,
-        tokens_per_block: int | None = None,
-        pools: dict[int, ttnn.Tensor] | None = None,
         batch: int = 1,
     ) -> None:
         """Allocate the traced-decode state (the prompt is prefilled by replaying
@@ -1941,12 +1805,8 @@ class DeepSeekV4Model(DeepSeekV4Module):
         before any trace exists, because allocating on a device that holds a trace is
         unsafe; :meth:`open_session` then only claims a slot.
 
-        Block geometry comes from either ``block_size`` (the same row count for every
-        layer type) or ``tokens_per_block`` (row counts scaled by compress rate, so a
-        block spans the same context everywhere -- see :func:`.paged_cache.build_groups`).
-        ``pools`` supplies externally allocated block pools keyed by layer index, for a
-        caller that owns the KV memory (the vLLM wrapper, whose pool size the serving
-        stack decides); their block count then replaces the internal pool plan.
+        Block geometry comes from ``block_size``: the same row count for every layer
+        type (see :func:`.paged_cache.build_groups`).
 
         ``batch`` > 1 decodes that many users per step, one per slot: the packet carries
         a token each, every cache and page table gains a leading user dimension, and a
@@ -1965,21 +1825,15 @@ class DeepSeekV4Model(DeepSeekV4Module):
         cfg = self.config
         for cr in {cfg.compress_rates[t] for t in cfg.layer_types[: self.num_layers] if t != "sliding_attention"}:
             assert max_seq % cr == 0, f"max_seq ({max_seq}) must be a multiple of compress_rate {cr}"
-        self._external_pools = pools
         if num_sessions > 0:
             self._paged_groups = build_groups(
                 cfg.layer_types[: self.num_layers],
                 cfg.compress_rates,
                 self.sliding_window,
                 max_seq,
-                block_size=None if tokens_per_block else block_size,
-                tokens_per_block=tokens_per_block,
+                block_size=block_size,
             )
-            pool_blocks = (
-                self._external_pool_blocks(pools)
-                if pools is not None
-                else plan_pool_blocks(self._paged_groups, num_sessions, total_tokens or max_seq)
-            )
+            pool_blocks = plan_pool_blocks(self._paged_groups, num_sessions, total_tokens or max_seq)
             self._paged = PagedKVManager(self._paged_groups, pool_blocks)
             logger.info(
                 "paged decode: "
@@ -1999,7 +1853,6 @@ class DeepSeekV4Model(DeepSeekV4Module):
                         for name, g in self._paged_groups.items()
                     )
                 )
-        self._traced_rope = rope
         self._lm_head_traced = lm_head
         self._decode_max_seq = max_seq
         self._pool_crs = self._compress_rates_for(cfg.layer_types[: self.num_layers])
@@ -2038,7 +1891,6 @@ class DeepSeekV4Model(DeepSeekV4Module):
         self._pkt_int_prefix = 3 * batch  # [tokens | pos_sliding | pos_compress]
         self._pkt_page_bytes = math.ceil(self._pkt_int_prefix * 4 / alignment) * alignment
         self._pkt_w = self._pkt_page_bytes // 4
-        self._pkt_rd = rd
 
         # --- On-device RoPE generation constants ------------------------------- #
         # RoPE is ``cos/sin(pos * inv_freq) * attention_scaling`` with ``inv_freq`` /
@@ -2855,19 +2707,3 @@ class DeepSeekV4Model(DeepSeekV4Module):
         """
         for pos in positions:
             self.replay_traced(int(pos))
-
-    def decode_sampled_burst(self, first_token_id: int, start_pos: int, n_steps: int) -> list[int]:
-        """Unsupported while the per-step packet arrives over the H2D socket.
-
-        The in-trace ``recv_async_h2d`` at the head of every submesh-0 trace overwrites
-        idx 0 of the fused ``pkt`` buffer with the host packet. An on-device sampled
-        token written into that slot would never reach ``embed_tokens``.
-
-        To restore bursts, keep host-fed positions on the socket and read the token
-        from a separate device-written buffer.
-        """
-        raise NotImplementedError(
-            "on-device sampled bursts are incompatible with the in-trace H2D packet "
-            "receive (the socket packet overwrites the device-sampled token slot); "
-            "use decode_traced() with host-side sampling"
-        )
