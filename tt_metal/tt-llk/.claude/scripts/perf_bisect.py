@@ -124,6 +124,7 @@ PYTEST_INI = "tt_metal/tt-llk/tests/python_tests/pytest.ini"
 PERF_CORE = "tt_metal/tt-llk/tests/python_tests/helpers/perf/core.py"
 PROFILER = "tt_metal/tt-llk/tests/python_tests/helpers/profiler.py"
 WIDE_SCHEMA = "tt_metal/tt-llk/tests/python_tests/helpers/perf/wide_schema.py"
+LLK_PLUGIN = "tt_metal/tt-llk/tests/python_tests/helpers/llk_pytest_plugin.py"
 
 
 def patch_maxschedchunk(body, value):
@@ -134,6 +135,34 @@ def patch_maxschedchunk(body, value):
     if not n:
         raise RuntimeError("no --maxschedchunk in pytest.ini to patch")
     return new
+
+
+def patch_stable_groups(sha, count, env):
+    """Group every test by a stable hash of its node id, for --dist loadgroup."""
+    body = git("show", f"{sha}:{LLK_PLUGIN}")
+    old = "def pytest_collection_modifyitems(config, items):"
+    if old not in body:
+        raise RuntimeError("llk_pytest_plugin: collection hook not found")
+    body = body.replace(
+        old,
+        'def _stable_xdist_groups(config, items):\n    """Assign every test to a group from a stable hash of its node id.\n\n    With --dist loadgroup, a group is scheduled as a unit, so every test in it\n    has the same predecessors in every run. crc32 rather than hash(): each xdist\n    worker is its own process and Python randomises str hashing per process, so\n    hash() would give the workers different assignments and no determinism at\n    all. The count matches the worker count, so each worker takes exactly one\n    group and its sequence is fixed end to end.\n    """\n    import zlib\n\n    count = int(os.environ.get("PERF_STABLE_GROUPS", "0"))\n    if count <= 0:\n        return\n    for item in items:\n        bucket = zlib.crc32(item.nodeid.encode()) % count\n        item.add_marker(pytest.mark.xdist_group(f"perfgrp{bucket}"))\n\n\ndef pytest_collection_modifyitems(config, items):',
+        1,
+    )
+    blob = subprocess.run(
+        ["git", "hash-object", "-w", "--stdin"],
+        input=body,
+        text=True,
+        capture_output=True,
+        check=True,
+    ).stdout.strip()
+    mode = git("ls-tree", sha, "--", LLK_PLUGIN).split()[0]
+    subprocess.run(
+        ["git", "update-index", "--cacheinfo", f"{mode},{blob},{LLK_PLUGIN}"],
+        env=env,
+        check=True,
+        capture_output=True,
+    )
+    return f"stable_groups={count}"
 
 
 def patch_run_count(sha, count, env):
@@ -243,6 +272,7 @@ def patch_runner(
     slice_group=1,
     run_count=None,
     dist=None,
+    stable_groups=None,
 ):
     """Reshape one perf runner script for a controlled experiment.
 
@@ -254,6 +284,12 @@ def patch_runner(
     """
     import re
 
+    if stable_groups is not None:
+        body = body.replace(
+            "mkdir -p perf_data",
+            f"export PERF_STABLE_GROUPS={stable_groups}\nmkdir -p perf_data",
+            1,
+        )
     if dist is not None:
         # LoadScheduling hands the next chunk to whoever is free, so the partition
         # moves with worker timing. A scope-based mode assigns whole files, and
@@ -310,6 +346,9 @@ def force_non_sol(
     subprocess.run(["git", "read-tree", sha], env=env, check=True, capture_output=True)
 
     how = {}
+    stable_groups = runner_opts.get("stable_groups") if runner_opts else None
+    if stable_groups:
+        how["stable_groups"] = patch_stable_groups(sha, stable_groups, env)
     if run_count is None and runner_opts:
         run_count = runner_opts.get("run_count")
     if run_count is not None:
@@ -414,6 +453,7 @@ def runner_opts_of(args):
         "split_into": getattr(args, "split_into", None),
         "run_count": getattr(args, "run_count", None),
         "dist": getattr(args, "dist", None),
+        "stable_groups": getattr(args, "stable_groups", None),
     }
     if not any(v is not None for v in opts.values()):
         return None
@@ -437,6 +477,7 @@ def variant_key(sha, args):
         ("slice_group", "g"),
         ("run_count", "rc"),
         ("dist", "d"),
+        ("stable_groups", "sg"),
         ("test_filter", "k"),
     ):
         v = getattr(args, name, None)
@@ -469,6 +510,7 @@ def push_branch(
             ("g", "slice_group"),
             ("rc", "run_count"),
             ("d", "dist"),
+            ("sg", "stable_groups"),
         ):
             if runner_opts.get(key) is not None:
                 suffix += f"-{tag}{runner_opts[key]}"
@@ -879,6 +921,11 @@ def main(argv=None):
         type=int,
         help="replace the shard split; group 1 runs that slice and every other "
         "group exits, so one card runs one sequence",
+    )
+    ap.add_argument(
+        "--stable-groups",
+        type=int,
+        help="assign every test to one of N groups by a stable hash of its node id, for use with --dist loadgroup. Set N to the worker count: each worker then takes exactly one group, so its sequence is fixed in every run, and the hash keeps the groups balanced where loadfile cannot",
     )
     ap.add_argument(
         "--dist",
