@@ -12,7 +12,6 @@ Unlike TtSharedExpert, this module:
 - Each device holds weights for `experts_per_chip` local experts
 """
 
-import os
 from pathlib import Path
 from typing import Optional
 
@@ -329,7 +328,6 @@ class TtRoutedExpert(LightweightModule):
         *,
         activation: "ttnn.RoutedExpertActivation",
         hybrid_token_threshold: Optional[int] = None,
-        fuse_hybrid_dispatch: Optional[bool] = None,
     ):
         """
         Initialize TtRoutedExpert module.
@@ -409,23 +407,6 @@ class TtRoutedExpert(LightweightModule):
                     "expert on the composite."
                 )
         self.hybrid_token_threshold = hybrid_token_threshold
-
-        # Run the hybrid split as ONE dispatch instead of two. Same two implementations, same
-        # bands, same grid -- they are compiled into one program per RISC-V and run as ordered
-        # passes, which is what lets the layer be overlapped with combine. Costs ~7 us per
-        # dispatch (the union program's config fits the kernel-config ring once but not twice, so
-        # each launch waits for the previous one's workers), flat in the expert count.
-        #
-        # Runs at the device's default worker_l1_size; the op rejects an arena larger than the
-        # default, which would take those bytes off the ring. Off by default because the extra
-        # per-dispatch cost only pays for itself where the combine overlap is actually wired up.
-        # Left unset, TT_ROUTED_EXPERT_FUSE_DISPATCH=1 decides, so a model that does not thread the
-        # flag through its own config can still be run both ways for comparison.
-        if fuse_hybrid_dispatch is None:
-            fuse_hybrid_dispatch = os.environ.get("TT_ROUTED_EXPERT_FUSE_DISPATCH", "0") == "1"
-        if fuse_hybrid_dispatch and hybrid_token_threshold is None:
-            raise ValueError("fuse_hybrid_dispatch needs a hybrid_token_threshold: there is nothing to fuse")
-        self.fuse_hybrid_dispatch = fuse_hybrid_dispatch
 
         # Every non-SiLU activation lives in the fused Blackhole kernel only; the Wormhole
         # fallback in forward() calls routed_expert_ffn, which has no activation parameter and
@@ -641,27 +622,6 @@ class TtRoutedExpert(LightweightModule):
             # read rather than depending on the two bands' regions never overlapping. ROW_MAJOR x
             # already gets a fresh output from the op, and a composite-only forward has no second
             # reader, so neither pays for the copy.
-            if self.fuse_hybrid_dispatch and not fused_only:
-                signpost(header="HybridRoutedExpertMoe")
-                expert_outputs = ttnn.experimental.deepseek_prefill.hybrid_routed_expert_moe(
-                    dispatched_buffer,
-                    expert_region_offsets,
-                    expert_token_counts,
-                    self.global_expert_idx_table,
-                    self.gate_projs,
-                    self.up_projs,
-                    self.down_projs,
-                    max_dispatched_tokens_per_expert=self.max_tokens,
-                    hybrid_token_threshold=threshold,
-                    compute_kernel_config=self.compute_kernel_config,
-                    activation=self.activation,
-                    gate_biases=self.gate_biases,
-                    up_biases=self.up_biases,
-                    down_biases=self.down_biases,
-                )
-                logger.debug(f"Final expert_outputs shape: {expert_outputs.shape}")
-                return expert_outputs
-
             composite_input = dispatched_buffer
             if threshold is not None and not fused_only and dispatched_buffer.layout == ttnn.TILE_LAYOUT:
                 composite_input = ttnn.clone(dispatched_buffer)
