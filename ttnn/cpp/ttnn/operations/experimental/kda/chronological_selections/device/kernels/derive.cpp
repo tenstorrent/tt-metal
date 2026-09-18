@@ -7,7 +7,7 @@
 #include "api/core_local_mem.h"
 #include "api/scratchpad.h"
 #include "api/tensor/noc_traits.h"
-#include "ttnn/cpp/ttnn/operations/experimental/kda/chronological_selections/chronology.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/kda/chronological_selections/device/kernels/chronology.hpp"
 using namespace kda_chronology;
 template <uint32_t sp_rank, uint32_t sp_size, uint32_t local_rows, uint32_t BH, uint32_t K, uint32_t V>
 TT_KERNEL void derive() {

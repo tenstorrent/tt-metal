@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "chronological_selections_device_operation.hpp"
-#include "../chronology.hpp"
+#include "kernels/chronology.hpp"
 #include "ttnn/operations/experimental/kda/factory/kda_factory_utils.hpp"
 namespace ttnn::experimental::prim {
 ChronologicalSelectionsOperation::program_factory_t ChronologicalSelectionsOperation::select_program_factory(
