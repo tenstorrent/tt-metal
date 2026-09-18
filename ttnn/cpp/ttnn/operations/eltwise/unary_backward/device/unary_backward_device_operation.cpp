@@ -48,7 +48,9 @@ void validate_operand(std::string_view op_name, const Tensor& tensor, std::strin
         op_name,
         name);
 
-    TT_FATAL(!tensor.is_sharded(), "{} operation does not support a sharded {}.", op_name, name);
+    // Interleaved-only: see the sharded fallback in the composite layer, which keeps sharded
+    // callers on the op composition that supports them rather than failing here.
+    TT_FATAL(!tensor.is_sharded(), "{} operation does not support sharding, but {} is sharded.", op_name, name);
 
     // The factory sizes its circular buffers with tt::tile_size and splits work by
     // physical_volume() / TILE_HW, and neither the layout nor the tile is in
@@ -90,6 +92,16 @@ void UnaryBackwardDeviceOperation::validate_on_program_cache_miss(
 
     validate_operand(op_name, input, "the input tensor");
     validate_operand(op_name, grad_output, "the grad_output tensor");
+
+    // Both operands must live on the same device. Nothing above catches this: each is checked
+    // only for DEVICE storage. The launch framework picks the mesh device from the first
+    // reflected tensor (grad_output) while create_output_tensors and the factory use
+    // input.device(), so a cross-device pair would bind buffers from one device into a program
+    // dispatched on another instead of reporting the caller's error.
+    TT_FATAL(
+        grad_output.device() == input.device(),
+        "{} operation requires grad_output and input to be on the same device.",
+        op_name);
 
     auto output_memory_config = args.output_memory_config;
     auto output_dtype = args.output_dtype == DataType::INVALID ? input.dtype() : args.output_dtype;

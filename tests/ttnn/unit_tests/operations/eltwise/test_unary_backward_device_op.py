@@ -226,6 +226,45 @@ def test_sigmoid_bw_program_cache_distinguishes_dtypes(device):
     )
 
 
+@pytest.mark.parametrize("shard_inputs", [True, False], ids=["sharded_inputs", "sharded_output_request"])
+def test_sigmoid_bw_sharded_keeps_working(shard_inputs, device):
+    """Sharded calls must keep working. The fused device operation is interleaved-only, so the
+    composite layer routes sharded operands -- or a request for a sharded output -- to the op
+    composition that supports them. Without that fallback, a previously valid sharded call
+    raises, since the shared validation rejects sharded tensors."""
+    torch.manual_seed(0)
+    shape = (1, 1, 256, 32)
+    torch_input = torch.randn(shape, dtype=torch.float32)
+    torch_grad = torch.randn(shape, dtype=torch.float32)
+
+    shard_memory_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 7))}),
+            [32, 32],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+    operand_memory_config = shard_memory_config if shard_inputs else ttnn.DRAM_MEMORY_CONFIG
+
+    input_tensor = ttnn.from_torch(
+        torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=operand_memory_config
+    )
+    grad_tensor = ttnn.from_torch(
+        torch_grad, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=operand_memory_config
+    )
+
+    output = ttnn.sigmoid_bw(grad_tensor, input_tensor, memory_config=shard_memory_config)[0]
+
+    assert (
+        output.memory_config().memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+    ), f"expected a height-sharded result, got {output.memory_config().memory_layout}"
+    # Looser than the fused path's bar: this is the composite, which rounds each intermediate
+    # back to bfloat16 in L1, so (1 - s) loses precision the fused kernel keeps in float32 DEST.
+    assert_with_pcc(_torch_sigmoid_bw(torch_grad, torch_input), ttnn.to_torch(output), 0.999)
+
+
 def test_sigmoid_bw_rejects_row_major(device, expect_error):
     """The shared validation guards the cache-key holes the factory has: layout reaches the
     kernels as a compile-time page size, so a ROW_MAJOR operand must be rejected outright."""
