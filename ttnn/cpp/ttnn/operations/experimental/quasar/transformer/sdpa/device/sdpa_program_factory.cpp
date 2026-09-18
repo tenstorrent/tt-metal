@@ -362,6 +362,11 @@ ttnn::device_operation::ProgramArtifacts SDPAOperation::SDPAProgramFactory::crea
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
 
+    // Quasar cannot do 32-bit-DEST block reduce_max (used in the softmax), so force bf16 DEST there.
+    if (device->arch() == tt::ARCH::QUASAR) {
+        fp32_dest_acc_en = false;
+    }
+
     bool use_attention_sink = attention_sink.has_value();
 
     CoreCoord grid_size = program_config.has_value() ? program_config->compute_with_storage_grid_size
@@ -409,7 +414,10 @@ ttnn::device_operation::ProgramArtifacts SDPAOperation::SDPAProgramFactory::crea
     auto [qk_out_subblock_h, qk_out_subblock_w] =
         detail::determine_largest_subblock_size(Sq_chunk_t, Sk_chunk_t, dst_size);
 
-    const bool use_streaming_compute = can_use_streaming_compute(fp32_dest_acc_en);
+    // The streaming compute path uses LLK primitives not available on Quasar; it is neither built nor
+    // selected there (compute kernel guards the include under #ifndef ARCH_QUASAR). Force the standard path.
+    const bool use_streaming_compute =
+        can_use_streaming_compute(fp32_dest_acc_en) && device->arch() != tt::ARCH::QUASAR;
 
     const bool has_sliding_window = sliding_window_size.value_or(0) != 0;
     // A user-provided dense mask on the streaming path takes its own per-chunk apply
@@ -687,6 +695,27 @@ ttnn::device_operation::ProgramArtifacts SDPAOperation::SDPAProgramFactory::crea
         DataflowBufferSpec{
             .unique_id = OUT, .entry_size = out_tile_size, .num_entries = out0_t, .data_format_metadata = out_df},
     };
+    // The non-streaming STANDARD path (no attention sink) merges the running-sum ping-pong (SUM_A/
+    // SUM_B) into a single 2-deep DFB bound to SUM_A (depth 2*statistics_tiles): the kernel keeps prev
+    // at the ring front [0,statistics_tiles) and appends cur behind it, reading both from that
+    // contiguous layout (fma_block_merged_sum) and re-basing the running sum to the front. SUM_B is
+    // dropped, reclaiming one self-loop counter. (Since the native SrcA-transpose QK^T removed the kt
+    // DFB, the op now fits Quasar's 8-DFB budget without this merge too; the merge is kept as-is.)
+    // Merging sum (not max) avoids the
+    // reduce_c prev==out in-place hazard. This runs on WH too so WH exercises the same merged code
+    // path. The streaming path and the attention-sink block keep two separate sum DFBs. See
+    // compute_common.hpp sdpa_inner_loop (merged_sum).
+    const bool merge_sum = !use_streaming_compute && !use_attention_sink;
+    if (merge_sum) {
+        for (auto& dfb : dfbs) {
+            if (dfb.unique_id == SUM_A) {
+                // 3-deep: prev [0,statistics_tiles), cur [statistics_tiles,2*), and the running-sum
+                // region [2*,3*) that fma_block_merged_sum reserves before re-basing to the front.
+                dfb.num_entries = 3 * statistics_tiles;
+            }
+        }
+        std::erase_if(dfbs, [&](const DataflowBufferSpec& dfb) { return dfb.unique_id == SUM_B; });
+    }
     if (needs_mask_cb) {
         // Lightweight mask: Float16_b palette; legacy: full Sq×Sk matrix in mask_df.
         const tt::DataFormat actual_mask_df = lightweight_mask ? tt::DataFormat::Float16_b : mask_df;
@@ -1629,13 +1658,20 @@ ttnn::device_operation::ProgramArtifacts SDPAOperation::SDPAProgramFactory::crea
         DFBBinding{.dfb_spec_name = MAX_B, .accessor_name = "max_B", .endpoint_type = DFBEndpointType::CONSUMER},
         DFBBinding{.dfb_spec_name = SUM_A, .accessor_name = "sum_A", .endpoint_type = DFBEndpointType::PRODUCER},
         DFBBinding{.dfb_spec_name = SUM_A, .accessor_name = "sum_A", .endpoint_type = DFBEndpointType::CONSUMER},
-        DFBBinding{.dfb_spec_name = SUM_B, .accessor_name = "sum_B", .endpoint_type = DFBEndpointType::PRODUCER},
-        DFBBinding{.dfb_spec_name = SUM_B, .accessor_name = "sum_B", .endpoint_type = DFBEndpointType::CONSUMER},
         DFBBinding{
             .dfb_spec_name = EXP_MAX_DIFF, .accessor_name = "exp_max_diff", .endpoint_type = DFBEndpointType::PRODUCER},
         DFBBinding{
             .dfb_spec_name = EXP_MAX_DIFF, .accessor_name = "exp_max_diff", .endpoint_type = DFBEndpointType::CONSUMER},
     };
+    if (!merge_sum) {
+        // Streaming and the attention-sink path keep two separate sum ping-pong DFBs. When merged,
+        // SUM_B is dropped (see the dfbs SUM_B erase above) and the kernel aliases dfb::sum_B onto
+        // dfb::sum_A.
+        compute_dfbs.push_back(
+            DFBBinding{.dfb_spec_name = SUM_B, .accessor_name = "sum_B", .endpoint_type = DFBEndpointType::PRODUCER});
+        compute_dfbs.push_back(
+            DFBBinding{.dfb_spec_name = SUM_B, .accessor_name = "sum_B", .endpoint_type = DFBEndpointType::CONSUMER});
+    }
     KernelSpec::CompilerOptions::Defines compute_defines = base_defines;
     if (needs_mask_cb) {
         compute_dfbs.push_back(DFBBinding{
@@ -1677,6 +1713,12 @@ ttnn::device_operation::ProgramArtifacts SDPAOperation::SDPAProgramFactory::crea
     }
 
     auto compute_hw = ttnn::to_compute_hardware_config(device->arch(), compute_kernel_config);
+    // to_compute_hardware_config bakes enable_32_bit_dest from the ORIGINAL config; Quasar cannot do
+    // 32-bit-DEST block reduce_max (softmax), so force it off here too (mirrors fp32_dest_acc_en above,
+    // which the JIT reads via this config, not the local).
+    if (device->arch() == tt::ARCH::QUASAR) {
+        enable_32_bit_dest(compute_hw) = false;
+    }
     if (fp32_dest_acc_en) {
         // qk_im / sum_A / sum_B are Float32 when enable_32_bit_dest is on; the validator requires an
         // explicit unpack_modes entry for each Float32 DFB the compute consumes. Legacy defaulted to
@@ -1688,13 +1730,18 @@ ttnn::device_operation::ProgramArtifacts SDPAOperation::SDPAProgramFactory::crea
         auto& dfb_unpack_modes = unpack_modes(compute_hw);
         dfb_unpack_modes.insert({QK_IM, tt::tt_metal::UnpackMode::UnpackToSrc});
         dfb_unpack_modes.insert({SUM_A, tt::tt_metal::UnpackMode::UnpackToSrc});
-        dfb_unpack_modes.insert({SUM_B, tt::tt_metal::UnpackMode::UnpackToSrc});
+        if (!merge_sum) {
+            // SUM_B is dropped when the running-sum ping-pong is merged into SUM_A; no unpack mode for it.
+            dfb_unpack_modes.insert({SUM_B, tt::tt_metal::UnpackMode::UnpackToSrc});
+        }
     }
 
     KernelSpec compute{
         .unique_id = COMPUTE,
         .source = "ttnn/cpp/ttnn/operations/experimental/quasar/transformer/sdpa/device/kernels/compute/sdpa.cpp",
-        .compiler_options = {.defines = compute_defines, .opt_level = KernelBuildOptLevel::O3},
+        .compiler_options =
+            {.defines = compute_defines,
+             .opt_level = KernelBuildOptLevel::O3},  // Quasar no longer needs the Os bring-up workaround
         .dfb_bindings = compute_dfbs,
         .compile_time_args = compute_cta,
         .runtime_arg_schema =
