@@ -216,13 +216,26 @@ def _torch_routed_experts(
 
 
 def _dense_from_sparse_routing(routing, cfg: types.SimpleNamespace) -> torch.Tensor:
-    """Widen a router's ``(scores, indices)`` pair into the dense ``[T, E]`` weight row.
+    """Widen a router's ``(scores, ranking-or-indices)`` decision into the dense ``[T, E]`` row.
 
     The renormalize-and-scale tail this applies is the one ``fused_experts`` runs on device
-    from the same two tensors, so the reference below and the op start from equal routing.
+    from the same tensors, so the reference below and the op start from equal routing.
+
+    The learned router hands over the *ranking* row (``scores + e_score_correction_bias``)
+    and the op picks the winners on device, so they are recovered here with the op's own
+    tie-break: the k largest scores, a tie going to the lower expert id. ``torch.topk``
+    does not promise which of several equal scores it returns, so a stable descending
+    argsort is used instead -- for equal scores it keeps the original (ascending id) order,
+    so its first k are the k the kernel keeps. The hash router still hands over explicit
+    ``indices``, which are read as-is.
     """
     scores = ttnn.to_torch(routing.scores).float().reshape(-1, cfg.num_local_experts)
-    ids = ttnn.to_torch(routing.indices).long().reshape(-1, cfg.num_experts_per_tok)
+    if routing.ranking is not None:
+        ranking = ttnn.to_torch(routing.ranking).float().reshape(-1, cfg.num_local_experts)
+        k = cfg.num_experts_per_tok
+        ids = torch.argsort(ranking, dim=-1, descending=True, stable=True)[..., :k]
+    else:
+        ids = ttnn.to_torch(routing.indices).long().reshape(-1, cfg.num_experts_per_tok)
     selected = torch.gather(scores, -1, ids)
     weights = cfg.routed_scaling_factor * selected / (selected.sum(dim=-1, keepdim=True) + 1.0e-20)
     dense = torch.zeros_like(scores)
