@@ -14,8 +14,9 @@ from contextlib import contextmanager
 import pytest
 import torch
 from helpers.format_config import DataFormat
+from helpers.llk_params import format_dict
 from helpers.tile_constants import DEFAULT_TILE_C_DIM, DEFAULT_TILE_R_DIM
-from helpers.ulp import ulp_distance
+from helpers.ulp import INTEGER_FORMATS, ulp_distance
 from helpers.utils import PCC_SIGNAL_FLOOR, calculate_pcc, passed_test
 
 TILE_SIZE = DEFAULT_TILE_R_DIM * DEFAULT_TILE_C_DIM
@@ -527,3 +528,17 @@ def test_the_displaced_figure_is_not_rounded_to_read_as_equal(captured_logs):
     logged = "\n".join(captured_logs)
     assert "max_ulp=26 is looser" in logged and "~25.6 steps" in logged
     assert "~26 steps" not in logged
+
+
+# ── Integers are not ULP territory ──────────────────────────────────────────
+
+
+@pytest.mark.parametrize("fmt", INTEGER_FORMATS, ids=lambda f: f.name)
+def test_a_budget_on_an_integer_format_raises(fmt):
+    """ULP is not a weaker gate for an integer format, it is a meaningless one: the
+    values are exact and the only sensible verdict is bit equality."""
+    golden = torch.ones(TILE_SIZE, dtype=format_dict[fmt])
+    with _refuses("no per-element ULP"):
+        passed_test(golden, golden.clone(), fmt, max_ulp=0)
+    # ...and refusing the budget must not have broken the ordinary path.
+    assert passed_test(golden, golden.clone(), fmt)

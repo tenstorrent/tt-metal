@@ -85,6 +85,15 @@ _ULP_PROXY_DTYPES: Dict[DataFormat, torch.dtype] = {
 #: same 1%: scale-relative and deliberately not tuned per op.
 NEAR_ZERO_FRACTION = 1e-2
 
+#: Every integer ``DataFormat``, from the enum's own predicate rather than from
+#: ``format_dict``, which omits ``Bfp8`` and the ``MxFp4_2x_*`` pair entirely. Note the
+#: predicate is ``False`` for ``MxInt8``/``MxInt4``/``MxInt2`` -- those are classified by
+#: ``is_mx_int_format()`` and are refused by :func:`has_ulp_gate` anyway, being in neither
+#: table above.
+INTEGER_FORMATS: Tuple[DataFormat, ...] = tuple(
+    fmt for fmt in DataFormat if fmt.is_integer()
+)
+
 #: Returned for any lane where either side is NaN. Never compare it against a budget
 #: directly -- ``-1 <= max_ulp`` holds for every budget. Use :func:`within_ulp`.
 UNMEASURABLE = -1
@@ -184,7 +193,8 @@ def has_ulp_gate(fmt: DataFormat) -> bool:
 
     What :func:`ulp_dtype` answers by raising, for callers that fall back rather than
     fail -- and the question to ask instead of testing :data:`ULP_FORMATS` membership,
-    which misses the proxy formats.
+    which misses the proxy formats. The budget registry uses it to keep an enrolled op on
+    the tolerance metric for the formats whose spacing comes from a block exponent.
     """
     try:
         ulp_dtype(fmt)

@@ -103,7 +103,9 @@ _FACES_PER_TILE = 4
 _ELEMENTS_PER_TILE = DEFAULT_TILE_R_DIM * DEFAULT_TILE_C_DIM
 
 
-# Per-op (atol, rtol) overrides, mirroring CUSTOM_TOLERANCES in test_eltwise_unary_sfpu.py.
+# Per-op (atol, rtol) overrides. The unary side's CUSTOM_TOLERANCES is gone: those numbers
+# moved next to their ops in helpers/sfpu_accuracy_budget.py, which the unary driver reads
+# through accuracy_contract(). This table is the binary equivalent, not yet migrated.
 # `None` keeps the format default. Only two ops belong here: their error is a property of the
 # op's own composition rather than of the stimuli, so it grows with the operands however the
 # domain is drawn. pow's error is relative and roughly flat; xlogy's is absolute and linear in

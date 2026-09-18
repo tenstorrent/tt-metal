@@ -25,12 +25,14 @@ from helpers.ulp import (
     _MIN_LANES_FOR_P95,
     _MIN_LANES_FOR_P99,
     _ULP_DTYPES,
+    INTEGER_FORMATS,
     MAX_MEANINGFUL_ULP,
     NEAR_ZERO_FRACTION,
     ULP_FORMATS,
     UNMEASURABLE,
     _value_order_index,
     flushes_subnormals,
+    has_ulp_gate,
     local_step,
     nonfinite_disagreement_summary,
     nonfinite_mismatches,
@@ -1140,3 +1142,65 @@ def test_the_sweep_metric_matches_local_step_at_the_top_of_the_range(dtype):
     swept = float(local_ulp(np.array([largest]), fmt)[0])
     assert math.isfinite(swept)
     assert swept == pytest.approx(local_step(largest, dtype))
+
+
+# ── Integers are not ULP territory ──────────────────────────────────────────
+#
+# A step count says "how many representable values apart". For an integer format that is
+# always the arithmetic difference, the values are exact, and the only sensible verdict is
+# bit equality -- so ULP is meaningless there, not merely weaker, and every entry point
+# must refuse rather than compute something plausible.
+
+#: The torch dtypes an integer format lands in, including the containers the float bit
+#: arithmetic borrows: ``torch.int16`` is how a bfloat16's bits are read.
+TORCH_INT_DTYPES = (
+    torch.int8,
+    torch.uint8,
+    torch.int16,
+    torch.int32,
+    torch.int64,
+    torch.bool,
+)
+
+
+@pytest.mark.parametrize("fmt", INTEGER_FORMATS, ids=lambda f: f.name)
+def test_no_integer_format_is_ulp_gateable(fmt):
+    assert not has_ulp_gate(fmt) and fmt not in ULP_FORMATS
+    with _refuses("no per-element ULP"):
+        ulp_dtype(fmt)
+
+
+@pytest.mark.parametrize("dtype", TORCH_INT_DTYPES, ids=str)
+def test_the_metric_refuses_every_integer_tensor_dtype(dtype):
+    """Including the bit containers: reading a bfloat16 through ``torch.int16`` must not
+    make an int16 *tensor* measurable."""
+    values = torch.ones(4, dtype=dtype)
+    with _refuses("unsupported dtype"):
+        ulp_distance(values, values.clone())
+    assert dtype not in _ULP_DTYPES  # keyed on the float dtypes only
+
+
+def test_the_integer_format_list_comes_from_the_enum_not_from_format_dict():
+    """``format_dict`` omits ``Bfp8`` and both ``MxFp4_2x`` variants and gives the
+    ``MxInt*`` formats a bfloat16 proxy, so deriving the integer set through it would
+    silently miss a format added without an entry, or given a float proxy.
+
+    Pinned as the explicit six rather than against ``is_integer()``, which is
+    ``INTEGER_FORMATS``' own defining expression and so cannot fail. The gap that
+    motivates it is asserted directly: every integer format is in ``format_dict`` today,
+    so a ``format_dict``-derived list would yield the same set and stay green too.
+    """
+    from helpers.llk_params import format_dict
+
+    assert set(INTEGER_FORMATS) == {
+        DataFormat.Int32,
+        DataFormat.Int16,
+        DataFormat.Int8,
+        DataFormat.UInt32,
+        DataFormat.UInt16,
+        DataFormat.UInt8,
+    }
+    missing = {f for f in DataFormat if f not in format_dict}
+    assert {DataFormat.Bfp8, DataFormat.MxFp4_2x_A, DataFormat.MxFp4_2x_B} <= missing
+    for fmt in (DataFormat.MxInt8, DataFormat.MxInt4, DataFormat.MxInt2):
+        assert format_dict[fmt] is torch.bfloat16  # a float proxy, not an integer one
