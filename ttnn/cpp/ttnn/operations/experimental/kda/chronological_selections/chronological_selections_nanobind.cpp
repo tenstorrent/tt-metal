@@ -3,7 +3,7 @@
 
 #include "chronological_selections_nanobind.hpp"
 #include "chronological_selections.hpp"
-#include "chronology.hpp"
+#include "device/kernels/chronology.hpp"
 #include "ttnn-nanobind/bind_function.hpp"
 namespace ttnn::operations::experimental::kda::chronological_selections::detail {
 void bind_chronological_selections(nb::module_& mod) {

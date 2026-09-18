@@ -16,7 +16,11 @@ set_target_properties(
             api
 )
 
-file(GLOB_RECURSE kernels device/kernels/*.cpp)
+file(
+    GLOB_RECURSE kernels
+    device/kernels/*.cpp
+    device/kernels/*.hpp
+)
 
 target_sources(
     ttnn_op_experimental_kda_chronological_selections
@@ -24,13 +28,13 @@ target_sources(
         FILE_SET api
         TYPE HEADERS
         BASE_DIRS ${FixmeOpAPIDir}
-        FILES ${TTNN_OP_EXPERIMENTAL_KDA_CHRONOLOGICAL_TOPOLOGY_API_HEADERS}
+        FILES ${TTNN_OP_EXPERIMENTAL_KDA_CHRONOLOGICAL_SELECTIONS_API_HEADERS}
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES ${kernels}
     PRIVATE
-        ${TTNN_OP_EXPERIMENTAL_KDA_CHRONOLOGICAL_TOPOLOGY_SRCS}
+        ${TTNN_OP_EXPERIMENTAL_KDA_CHRONOLOGICAL_SELECTIONS_SRCS}
 )
 
 target_link_libraries(
@@ -55,5 +59,5 @@ install(
 install(TARGETS ttnn_op_experimental_kda_chronological_selections FILE_SET api COMPONENT ttnn-dev LIBRARY COMPONENT tar)
 
 if(TARGET ttnn)
-    target_sources(ttnn PRIVATE ${TTNN_OP_EXPERIMENTAL_KDA_CHRONOLOGICAL_TOPOLOGY_NANOBIND_SRCS})
+    target_sources(ttnn PRIVATE ${TTNN_OP_EXPERIMENTAL_KDA_CHRONOLOGICAL_SELECTIONS_NANOBIND_SRCS})
 endif()
