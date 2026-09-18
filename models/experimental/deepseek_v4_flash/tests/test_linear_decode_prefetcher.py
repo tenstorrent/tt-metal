@@ -92,7 +92,7 @@ def test_linear_decode_prefetcher_shared_global_cb_uniform_slabs(device, hoist):
     for spec in specs:
         pt_x = torch.randn((m, k), dtype=torch.bfloat16)
         pt_w = torch.randn((n, k), dtype=torch.bfloat16)
-        layer = LinearDecode(pt_w, device, use_prefetcher=True, global_cb=global_cb, **spec)
+        layer = LinearDecode(pt_w, device, use_prefetcher=True, use_rm_hs=False, global_cb=global_cb, **spec)
         cases.append((layer, _activation(device, pt_x), _reference(pt_x, pt_w)))
 
     with tensor_prefetcher_session(device):
@@ -127,7 +127,13 @@ def test_linear_decode_prefetcher_shared_global_cb_mixed_slab_sizes(device):
         pt_x = torch.randn((m, k), dtype=torch.bfloat16)
         pt_w = torch.randn((n, k), dtype=torch.bfloat16)
         layer = LinearDecode(
-            pt_w, device, use_prefetcher=True, global_cb=global_cb, global_cb_page_bytes=page_bytes, **spec
+            pt_w,
+            device,
+            use_prefetcher=True,
+            use_rm_hs=False,
+            global_cb=global_cb,
+            global_cb_page_bytes=page_bytes,
+            **spec,
         )
         cases.append((layer, _activation(device, pt_x), _reference(pt_x, pt_w)))
     # The point of the shapes is that they disagree, so a page has to be smaller than a slab.
@@ -220,6 +226,7 @@ def test_linear_decode_prefetcher_partial_width_sharded(device, m, k, n, k_block
         k_blocks=k_blocks,
         n_blocks=n_blocks,
         use_prefetcher=True,
+        use_rm_hs=False,
     )
     x = _activation(device, pt_x)
 
@@ -250,8 +257,8 @@ def test_linear_decode_prefetcher_matches_l1_path(device, partial_width_sharded)
     pt_x = torch.randn((m, k), dtype=torch.bfloat16)
     pt_w = torch.randn((n, k), dtype=torch.bfloat16)
 
-    prefetched = LinearDecode(pt_w, device, K=k, N=n, use_prefetcher=True, **blocks)
-    baseline = LinearDecode(pt_w, device, K=k, N=n, **blocks)
+    prefetched = LinearDecode(pt_w, device, K=k, N=n, use_prefetcher=True, use_rm_hs=False, **blocks)
+    baseline = LinearDecode(pt_w, device, K=k, N=n, use_rm_hs=False, **blocks)
 
     with tensor_prefetcher_session(device):
         ttnn.experimental.wait_for_cq_on_tensor_prefetcher(device, cq_id=0)
@@ -278,12 +285,12 @@ def test_linear_decode_prefetcher_repeated_invocations(device):
 
     cases = [
         (
-            LinearDecode(pt_w0, device, K=k, N=n, use_prefetcher=True),
+            LinearDecode(pt_w0, device, K=k, N=n, use_prefetcher=True, use_rm_hs=False),
             _activation(device, pt_x0),
             _reference(pt_x0, pt_w0),
         ),
         (
-            LinearDecode(pt_w1, device, K=k, N=n, use_prefetcher=True),
+            LinearDecode(pt_w1, device, K=k, N=n, use_prefetcher=True, use_rm_hs=False),
             _activation(device, pt_x1),
             _reference(pt_x1, pt_w1),
         ),
@@ -311,4 +318,4 @@ def test_linear_decode_prefetcher_rejects_slabs_not_divisible_across_banks(devic
     pt_w = torch.zeros((n, k), dtype=torch.bfloat16)
 
     with expect_error(ValueError, "DRAM banks"):
-        LinearDecode(pt_w, device, K=k, N=n, use_prefetcher=True)
+        LinearDecode(pt_w, device, K=k, N=n, use_prefetcher=True, use_rm_hs=False)
