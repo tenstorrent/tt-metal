@@ -34,7 +34,7 @@ inline void _llk_pack_mop_config_(const std::uint8_t buf_desc_id, const std::uin
     std::uint32_t pack_instrn;
     pack_instrn = TT_OP_PACR0_TILE_INC(1 /*Dst_Tile_Idx_Inc*/, 0 /*Src_Tile_Idx_Inc*/, buf_desc_id, 0 /*ClrDatValid*/);
 
-    const std::uint32_t src_tile_idx_inc  = tensor_shape.total_num_faces() < NUM_FACES ? quasar_tiny_face_stride(tensor_shape) : 1;
+    const std::uint32_t src_tile_idx_inc  = tensor_shape.total_num_faces() < NUM_FACES ? tiny_face_stride(tensor_shape) : 1;
     const std::uint32_t incr_to_next_face = TT_OP_INC_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_pacr::PACK0, src_tile_idx_inc);
 
     ckernel_template temp(MOP_OUTER_LOOP, MOP_INNER_LOOP, pack_instrn, incr_to_next_face);
@@ -81,7 +81,7 @@ inline void _llk_pack_(const std::uint32_t start_math_dest_tile_idx, const std::
         // For face_r_dim >= 8, dest is dense with tiles. For face_r_dim < 8, dest is sparse and tiles are placed every 8 rows.
         // HW defined tiny-tile is registered with 1 face. To map to SW defined tile with different faces, the indices must be multiplied to get the correct
         // offset.
-        math_dest_tile_idx *= tensor_shape.total_num_faces() * quasar_tiny_face_stride(tensor_shape);
+        math_dest_tile_idx *= tensor_shape.total_num_faces() * tiny_face_stride(tensor_shape);
         l1_tile_idx *= tensor_shape.total_num_faces();
     }
 

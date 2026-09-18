@@ -27,8 +27,10 @@ inline void _llk_unpack_binary_operands_mop_config_(
     const std::uint32_t num_faces = tensor_shape.total_num_faces();
     if (num_faces != NUM_FACES && num_faces != 1)
     {
-        // A tiny face is one HW tile. Match the sparse eight-row face slots used by math and pack.
-        const std::uint32_t dest_tile_idx_inc = quasar_tiny_face_stride(tensor_shape);
+        // construct_buf_desc maps two-face SW tiles to one-face HW tiles (z_dim=1);
+        // the descriptor cannot encode z_dim=2. Unpack each face separately.
+        // L1 faces are contiguous; register-file faces use the padded FPU-row stride.
+        const std::uint32_t dest_tile_idx_inc = tiny_face_stride(tensor_shape);
 
         const std::uint32_t MOP_INNER_LOOP = num_faces - 1;
         ckernel_template temp(
@@ -79,7 +81,9 @@ inline void _llk_unpack_binary_operands_mop_config_(
  * @param tensor_shape: Shape shared by both operands.
  * @note On the math thread, pair with @ref _llk_math_eltwise_binary_init_ (T1); on the pack thread, pair with @ref _llk_pack_init_ (T2).
  * @note @ref _llk_unpack_binary_operands_ is the matching execute call on this thread.
- * @note Use full-height faces for four-face tiles, matching the math and pack layout.
+ * @note Buffer descriptors must match construct_buf_desc(tensor_shape): x_dim=16, y_dim=face_r_dim,
+ *       z_dim=1 for one/two-face software tiles or z_dim=4 for full 32x32 tiles.
+ *       Four-face tiles require 16-row faces, as required by validate_buffer_desc.
  */
 inline void _llk_unpack_binary_operands_init_(
     const std::uint32_t buf_desc_id_0, const std::uint32_t buf_desc_id_1, const TensorShape& tensor_shape, const std::uint32_t num_tiles = NUM_TILES)
