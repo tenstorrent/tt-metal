@@ -148,17 +148,5 @@ inline constexpr uint32_t pack_tile_geometry(uint32_t dfb) {
 }
 #endif
 
-#if defined(__EMULE_JIT_MODE) && defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD && \
-    !defined(TT_U_HAVE_PACK_TILE_GEOMETRY)
-// Fused TRISC executes all three roles in one TU, so the unpack/pack thread split does
-// not exist and both geometry sides are available. The JIT carries one geometry table
-// per CB (pack shares unpack's), which is what the pack-side word reads. Without this,
-// pack_geometry_to is a no-op and the packer keeps the init's geometry for the whole
-// body -- a 4-face configuration silently drops face 1 of every row-form store.
-#define TT_U_HAVE_PACK_TILE_GEOMETRY 1
-
-inline constexpr uint32_t pack_tile_geometry(uint32_t dfb) { return unpack_tile_geometry(dfb); }
-#endif
-
 }  // namespace unified
 }  // namespace tt
