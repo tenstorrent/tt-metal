@@ -718,6 +718,7 @@ constexpr bool sfpu_reduce_format_supported(DataFormat format) {
  *  - Column reduction (REDUCE_COL) is supported for all pool types; row reduction (REDUCE_ROW) is supported for SUM, MAX and MIN only.
  *  - REDUCE_COL operates on a single tile only (ct_dim = 1, rt_dim = 1).
  *  - REDUCE_ROW supports multiple tiles: ct_dim and rt_dim specify the tile block dimensions to reduce over.
+ *  - Int32 SUM and AVG accumulate modulo 2^32: a sum that leaves the Int32 range wraps silently.
  *
  * | Argument        | Description                                                                     | Type      | Valid Range
  * |-----------------|---------------------------------------------------------------------------------|-----------|-------------------------------------------------------

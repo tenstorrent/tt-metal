@@ -38,14 +38,9 @@
 #include "test_golden_impls.hpp"
 #include "tt_metal/test_utils/packing.hpp"
 
-// Metal-layer coverage for the Quasar SFPU reduce, driven through the public Compute API rather
-// than the LLK directly. The LLK sweep in tt-llk covers the kernel itself; this covers the layer
-// above -- that a normal metal program can reach the op and gets the right answer back.
-//
-// The kernel writes only the axis it collapses and leaves the rest of the tile holding fold
-// leftovers, so the comparison reads just that axis, which is what a reduce's consumers read:
-//   * REDUCE_COL folds each tile's 32 rows onto its row 0; tiles reduce independently.
-//   * REDUCE_ROW folds a tile row's columns onto column 0 of that row, spanning every tile in it.
+// Metal-layer coverage for the Quasar SFPU reduce through the public Compute API; the tt-llk sweep
+// covers the kernel itself. Only the reduced axis is compared (row 0 per tile for REDUCE_COL,
+// column 0 per row for REDUCE_ROW): the kernel leaves fold leftovers in the rest of the tile.
 
 namespace tt::tt_metal {
 
@@ -106,12 +101,8 @@ std::string pool_name(ReducePool pool) {
 
 bool is_int_format(tt::DataFormat format) { return format == tt::DataFormat::Int32; }
 
-// How the operand reaches Dest, which is what decides whether a multi-tile block can be staged.
-//
-// UnpackToSrc goes through SrcA and the math-side datacopy, whose per-tile loop advances the Dest
-// index, so copy_block gives each tile its own Dest tile. UnpackToDest skips that loop
-// (llk_math_eltwise_unary_datacopy_block: "math is a sync-only forwarder") and every tile lands on
-// Dest tile 0, overwriting the last. Int32 must unpack to Dest, so Int32 cannot use a multi-tile block.
+// Int32 must unpack straight to Dest, and that path lands every tile of a block on Dest tile 0
+// (see copy_block in sfpu_reduce_quasar.cpp), so Int32 stays single-tile; floats go via SrcA.
 tt::tt_metal::UnpackMode unpack_mode_for(tt::DataFormat format) {
     return is_int_format(format) ? tt::tt_metal::UnpackMode::UnpackToDest : tt::tt_metal::UnpackMode::UnpackToSrc;
 }
@@ -451,8 +442,8 @@ void run_single_core_sfpu_reduce(
 
     Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
 
-    const std::vector<double> input = generate_stimulus(
-        config, rows, cols, static_cast<std::uint32_t>(std::chrono::system_clock::now().time_since_epoch().count()));
+    const auto seed = static_cast<std::uint32_t>(std::chrono::system_clock::now().time_since_epoch().count());
+    const std::vector<double> input = generate_stimulus(config, rows, cols, seed);
 
     const ::unit_tests::compute::GoldenConfig golden_config{
         .num_tiles_r_dim = static_cast<int>(config.num_blocks * config.block_rt_dim),
@@ -505,14 +496,15 @@ void run_single_core_sfpu_reduce(
 
     log_info(
         tt::LogTest,
-        "sfpu_reduce {} {} ct_dim={} rt_dim={} blocks={} format={} dest={}-bit",
+        "sfpu_reduce {} {} ct_dim={} rt_dim={} blocks={} format={} dest={}-bit seed={}",
         config.axis == ReduceAxis::Row ? "row" : "column",
         pool_name(config.pool),
         config.block_ct_dim,
         config.block_rt_dim,
         config.num_blocks,
         format_define(config.format),
-        (config.wide_dest || needs_fp32_dest_acc(config.format)) ? 32 : 16);
+        (config.wide_dest || needs_fp32_dest_acc(config.format)) ? 32 : 16,
+        seed);
 
     ASSERT_EQ(golden.size(), device.size());
 
@@ -523,7 +515,7 @@ void run_single_core_sfpu_reduce(
         const double diff = std::abs(golden[i] - device[i]);
         const bool ok = diff <= atol + rtol * std::abs(golden[i]);
         ASSERT_TRUE(ok) << fmt::format(
-            "mismatch at {}: golden={} device={} (atol={} rtol={})", i, golden[i], device[i], atol, rtol);
+            "mismatch at {}: golden={} device={} (atol={} rtol={} seed={})", i, golden[i], device[i], atol, rtol, seed);
     }
 }
 
@@ -531,12 +523,8 @@ void run_single_core_sfpu_reduce(
 
 using namespace unit_tests::compute::sfpu_reduce;
 
-// Column reduce: every pool, including the integer AVG that divides by 32 with a shift.
-//
-// Width is swept with num_blocks rather than block_ct_dim, i.e. one tile resident at a time. A
-// column never leaves its tile, so this covers the same arithmetic; holding a multi-tile block in
-// Dest and reducing each tile in place is a separate path that does not work from here yet (see
-// TensixComputeSfpuReduceRow).
+// Column reduce: every pool. Width is swept two ways: num_blocks streams tiles through Dest one at
+// a time, and block_ct_dim = 2 holds a two-tile block in Dest and reduces each tile in place.
 TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixComputeSfpuReduceColumn) {
     for (auto format : {tt::DataFormat::Float16_b, tt::DataFormat::Float16, tt::DataFormat::Float32}) {
         for (auto pool : {ReducePool::Sum, ReducePool::Avg, ReducePool::Max, ReducePool::Min}) {
@@ -570,9 +558,8 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixComputeSfpuReduceColumn) {
     }
 }
 
-// Row reduce: SUM, MAX and MIN. AVG is excluded because sfpu_reduce's static_assert allows
-// REDUCE_ROW only for those three, for every format which takes a float row AVG and makes
-// only the integer one column-only.
+// Row reduce: SUM, MAX and MIN. sfpu_reduce's static_assert rejects AVG on REDUCE_ROW for every
+// format.
 TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixComputeSfpuReduceRow) {
     struct BlockShape {
         std::uint32_t ct;

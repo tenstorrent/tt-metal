@@ -141,7 +141,8 @@ def get_format_input_bounds(formats: InputOutputFormat) -> list[tuple[int, int]]
     range is what confirms the hardware ordering.
 
     Float16 gets a tighter magnitude: the widest block folds 256 terms into one element, which at
-    +/-1000 would overflow its 65504 ceiling. The other formats have headroom.
+    +/-1000 would overflow its 65504 ceiling. The other formats have headroom; Int32 SUM wraps
+    modulo 2^32 on device, and 256 terms of +/-1000 stay far inside that.
     """
     limit = 100 if formats.input_format == DataFormat.Float16 else 1000
     return [(-limit, limit), (0, limit), (-limit, 0)]

@@ -112,6 +112,9 @@ constexpr bool is_supported_reduce_format(DataFormat format) {
  * @tparam SRC: LREG holding the incoming value; clobbered
  * @note MAX/MIN end in an SFPNOP: SFPSWAP takes 2 cycles and the next instruction must not read
  *       its result (SFPSWAP -> SFPSTORE auto-stall bug).
+ * @note SFPSWAP does not swap when either operand is NaN, and treats -0 and +0 as equal. A NaN or a
+ *       zero's sign therefore survives a reduce only from the position that starts the fold chain
+ *       (row 0 of a column, column 0 of a row) and is dropped elsewhere. NaN input is unspecified.
  */
 template <PoolType POOL_TYPE, bool IS_INT, std::uint32_t DST, std::uint32_t SRC>
 inline void reduce_combine() {
@@ -141,10 +144,10 @@ inline void reduce_combine() {
 /**
  * @brief Divide LREG0 by the 32-row column extent for an integer AVG, in place.
  *
- * A right shift by 5 divides by 32 - but rounds the wrong way. On a negative two's-complement
- * value both a logical shift and Quasar's arithmetic shift round toward negative infinity, while
- * the golden and Blackhole truncate toward zero (-33/32 is -1, not -2). So shift the magnitude and
- * put the sign back afterwards.
+ * A right shift by 5 divides by 32, but not for a negative two's-complement value: a logical shift
+ * pulls zeros into the sign bit and yields a large positive value, and an arithmetic shift rounds
+ * toward negative infinity, while the golden and Blackhole truncate toward zero (-33/32 is -1, not
+ * -2). So shift the magnitude and put the sign back afterwards.
  *
  * @note Clobbers LREG1 and reads LREG0. Call only once the column tree has collapsed into LREG0,
  *       where LREG1-7 are dead.
@@ -392,14 +395,13 @@ inline void reduce_row_load_reciprocal(const std::uint32_t num_cols) {
 // ============================================================================
 
 /**
- * @brief Prepare the math thread's SFPU state for a run of reduce calls.
+ * @brief Check a reduce configuration at compile time.
  *
- * Only one thing to do: zero the RWC counters. The reduce addresses Dest with immediates measured
- * from the base @ref _llk_math_eltwise_sfpu_start_ programs, so they must start from zero.
- *
- * The rest - SFPU config register, ADDR_MOD_7 - is already set up by
- * @ref _llk_math_eltwise_sfpu_init_, and no reduce path claims a programmable constant register or
- * a replay slot, so this cannot disturb a neighbouring op's setup.
+ * Nothing is programmed here. The SFPU config register, ADDR_MOD_7 and the RWC counters are all
+ * set up by @ref _llk_math_eltwise_sfpu_init_, and the reduce addresses Dest with immediates
+ * measured from the section base @ref _llk_math_eltwise_sfpu_start_ writes. No reduce path claims
+ * a programmable constant register or a replay slot, so this cannot disturb a neighbouring op's
+ * setup.
  *
  * The reverse is not guaranteed. The folds read LCONST_0 / LCONST_1 (LREG9/10) at their reset
  * defaults, and SFPCONFIG can overwrite those - gelu_init in approximate mode does - while
@@ -427,8 +429,6 @@ inline void init_reduce([[maybe_unused]] const std::uint32_t block_ct_dim = 1) {
     static_assert(
         !reduce_is_32_bit_format<FORMAT>() || IS_FP32_DEST_ACC_EN,
         "a 32-bit reduce format requires a 32-bit Dest (IS_FP32_DEST_ACC_EN)");
-
-    math::_reset_counters_<p_setrwc::SET_ABD_F>();
 }
 
 /**
@@ -449,6 +449,8 @@ inline void init_reduce([[maybe_unused]] const std::uint32_t block_ct_dim = 1) {
  * @param block_rt_dim: Tile rows in the block (REDUCE_ROW only)
  * @note Run under VectorMode::RC_custom. This kernel walks Dest itself instead of being invoked
  *       once per face, and REDUCE_ROW deliberately reaches past the tile the caller based it on.
+ * @note Int32 SUM and AVG accumulate modulo 2^32: SFPIADD keeps the low 32 bits, so a sum that
+ *       leaves the Int32 range wraps silently.
  * @note Call @ref init_reduce before this.
  */
 template <
@@ -469,7 +471,8 @@ inline void calculate_reduce(
         "a 32-bit reduce format requires a 32-bit Dest (IS_FP32_DEST_ACC_EN)");
     // A column AVG always divides by 32, which an integer can do with a shift
     // (@ref reduce_int_average_col). A row AVG divides by the runtime column count - rarely a power
-    // of two, and only the float reciprocal-multiply divides it exactly. So integer AVG is column-only.
+    // of two, which only the float reciprocal-multiply handles, to within fp32 rounding of 1/num_cols.
+    // So integer AVG is column-only.
     static_assert(
         !(REDUCE_DIM == ReduceDim::REDUCE_ROW && POOL_TYPE == PoolType::AVG && reduce_is_int_format<FORMAT>()),
         "Integer row AVG is not supported: the row divisor is a runtime column count. Integer AVG is "

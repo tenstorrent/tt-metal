@@ -25,13 +25,14 @@ from quasar.test_sfpu_reduce_quasar import (
 
 
 def perf_input_dimensions(formats):
-    """Dest-full tall and wide blocks for this format's Dest width, plus the 2x2 square.
+    """Dest-full tall and wide blocks for this format's Dest width, the 2x2 square and one tile.
 
     generate_perf_input_dimensions() gives (max_tiles, 1) and (1, max_tiles) in tiles: 8 at
     16-bit, 4 at 32-bit, the same ceiling the functional sweep uses per format. The square is the
     one extra row-axis case: both factors of row_base = rt * block_ct_dim * REDUCE_TILE_STRIDE
-    exceed one there. The column axis reduces tile by tile, so its rows across these shapes are
-    knowingly duplicates.
+    exceed one there. The single tile is the like-for-like point against Blackhole, whose
+    perf_sfpu_reduce runs only a 32x32 Float32 ReduceRow Max. The column axis reduces tile by tile,
+    so its rows across these shapes are knowingly duplicates.
     """
     dest_acc = (
         DestAccumulation.Yes
@@ -39,7 +40,8 @@ def perf_input_dimensions(formats):
         else DestAccumulation.No
     )
     return generate_perf_input_dimensions(dest_acc, DestSync.Half) + [
-        [2 * TILE_DIM, 2 * TILE_DIM]
+        [2 * TILE_DIM, 2 * TILE_DIM],
+        [TILE_DIM, TILE_DIM],
     ]
 
 
