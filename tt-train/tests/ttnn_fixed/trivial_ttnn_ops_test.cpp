@@ -20,6 +20,7 @@
 #include "core/compute_kernel_config.hpp"
 #include "core/device.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "metal/ops/gumbel_sample/device/gumbel_sample_program_factory.hpp"
 #include "metal/ops/gumbel_sample/gumbel_sample_constants.hpp"
 #include "test_utils/random_data.hpp"
 #include "ttnn/operations/normalization/softmax/softmax.hpp"
@@ -1426,12 +1427,10 @@ TEST(GumbelSfpuHostTest, TestGumbelApproxLogInvariants) {
     EXPECT_LE(approx_neg_log<float>(raw_inner), 13.9F);
 
     const float lower = 0x1p-32F;  // kGumbelUniformLowerBound
-    float scale = u_raw_max - lower;
-    uint32_t scale_bits = std::bit_cast<uint32_t>(scale);
-    if (lower + scale > u_raw_max && scale_bits != 0U) {
-        --scale_bits;
-        scale = std::bit_cast<float>(scale_bits);
-    }
+    // The factory's own one-ULP closed-interval guard, not a re-implementation of it: u_top is
+    // whatever compute_rand_scale_bits actually hands the kernel as the attainable top of range.
+    const float scale =
+        std::bit_cast<float>(ttml::metal::ops::gumbel_sample::device::compute_rand_scale_bits(lower, u_raw_max));
     const float u_top = lower + scale;
     const float top_inner = approx_neg_log<float>(u_top);
     ASSERT_GT(top_inner, 0.0F);

@@ -4,12 +4,25 @@
 
 #pragma once
 
+#include <bit>
+#include <cstdint>
 #include <vector>
 
 #include "gumbel_sample_device_operation_types.hpp"
 #include "metal/ttnn_all_includes.hpp"
 
 namespace ttml::metal::ops::gumbel_sample::device {
+
+// `rand_tile` is documented as inclusive of `from + scale`. Shrink the scale by one ULP if rounding
+// would push the top of the range past the intended upper bound.
+inline uint32_t compute_rand_scale_bits(float lower, float upper) {
+    float scale = upper - lower;
+    uint32_t scale_bits = std::bit_cast<uint32_t>(scale);
+    if (lower + scale > upper && scale_bits != 0U) {
+        --scale_bits;
+    }
+    return scale_bits;
+}
 
 struct GumbelSampleSharedVariables {
     tt::tt_metal::KernelHandle reader_kernel_id{};

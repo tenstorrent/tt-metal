@@ -74,9 +74,9 @@ static_assert(kReaderLogicalTokensIdx == kReaderPositionsBufferIdx + 1U);
 static_assert(kReaderMaskStrideIdx == kReaderLogicalTokensIdx + 1U);
 static_assert(kWriterLogicalTokensIdx == kWriterPositionsBufferIdx + kWriterMergeRoutingArgs + 1U);
 
-// Per-entry token positions live in a small device TENSOR, not in runtime args. Each core stages the
-// whole local list into L1 once at kernel start (slots are indexed by absolute entry id, so the full
-// list keeps the addressing uniform even though only local entries are consumed).
+// Per-entry token positions live in a small device TENSOR, not in runtime args. Each core stages
+// into L1, once at kernel start, only the entry WINDOW its contiguous tile run touches (see
+// PositionWindow in dataflow_utils.hpp; the CB sizing note below derives the window bound).
 constexpr auto kReaderPositionsCbIndex = tt::CBIndex::c_5;
 constexpr auto kWriterPositionsCbIndex = tt::CBIndex::c_6;
 
@@ -96,26 +96,13 @@ constexpr auto kWriterPositionsCbIndex = tt::CBIndex::c_6;
 constexpr float kGumbelUniformLowerBound = 0x1p-32F;
 const float kGumbelUniformUpperBound = ttnn::operations::uniform::largest_supported_float32_below(1.0F);
 
-// `rand_tile` is documented as inclusive of `from + scale`. Shrink the scale by one ULP if rounding
-// would push the top of the range past the intended upper bound. This mirrors the guard in the
-// uniform op's DEVICE kernel (compute_uniform.cpp) -- there is no host-side header that ships it,
-// and this op cannot reuse the kernel's copy because its compute kernel takes `from` and `scale`
-// as runtime args (the scale must be computed here, on the host) rather than the two endpoints.
-uint32_t compute_rand_scale_bits(float lower, float upper) {
-    float scale = upper - lower;
-    uint32_t scale_bits = std::bit_cast<uint32_t>(scale);
-    if (lower + scale > upper && scale_bits != 0U) {
-        --scale_bits;
-    }
-    return scale_bits;
-}
-
 // Derived once per process, consumed by the cache-miss build. Deliberately NOT re-derived (or even
 // re-patched) on cache hits: the bounds are process constants, and a second derivation site is a
 // divergence trap -- a drift between the two would manifest only on cache hits, which single-shape
 // unit tests never exercise.
 const uint32_t kRandFromBits = std::bit_cast<uint32_t>(kGumbelUniformLowerBound);
-const uint32_t kRandScaleBits = compute_rand_scale_bits(kGumbelUniformLowerBound, kGumbelUniformUpperBound);
+const uint32_t kRandScaleBits = ttml::metal::ops::gumbel_sample::device::compute_rand_scale_bits(
+    kGumbelUniformLowerBound, kGumbelUniformUpperBound);
 
 // Linear index of this device among the SEEDED (data-parallel) mesh axes only. Devices that differ
 // solely on a replicated axis get the same index -- and therefore the same RNG stream -- which is
@@ -273,6 +260,35 @@ std::vector<GumbelCoreWork> core_layout(const GumbelSampleLayout& layout) {
 // on a non-seeded axis) intentionally draw identical noise.
 uint32_t rand_stream_id(const GumbelSampleLayout& layout, uint32_t device_index, uint32_t start_tile) {
     return device_index * layout.total_tiles + start_tile;
+}
+
+// Runtime-arg values the cache-miss build and the cache-hit patch must derive IDENTICALLY
+struct DerivedRuntimeArgs {
+    uint32_t inv_temperature_bits{};
+    uint32_t positions_address{};
+    uint32_t mask_entry_stride{};
+};
+
+DerivedRuntimeArgs derive_runtime_args(const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    DerivedRuntimeArgs derived{};
+    // Guard the reciprocal: only computed when the noisy kernel will read it. uses_gumbel_noise
+    // guarantees the reciprocal is FINITE here (that is the predicate's whole point) and matches
+    // the program hash, so a cached program is never patched with the other variant's args; greedy
+    // gets a zero because an inf sitting in a runtime arg is a trap for anyone who later makes it
+    // read it.
+    derived.inv_temperature_bits =
+        uses_gumbel_noise(args.temperature) ? std::bit_cast<uint32_t>(1.0F / args.temperature) : 0U;
+    // Zero when absent: the slot exists in BOTH modes so the cache-hit patch can write it
+    // unconditionally, exactly as it does for Ht.
+    derived.positions_address = tensor_args.positions.has_value() ? tensor_args.positions->buffer()->address() : 0U;
+    // Wt read straight off the logits shape (== layout.Wt) rather than from the layout, per the
+    // no-layout rule above. Re-derived per dispatch because one cached program serves both mask
+    // shapes (shared [1,1,1,V] <-> per-row [B,1,1,V]).
+    derived.mask_entry_stride =
+        (tensor_args.logits_mask.has_value() && tensor_args.logits_mask->logical_shape()[0] > 1U)
+            ? (tensor_args.logits.padded_shape()[-1] / tt::constants::TILE_WIDTH)
+            : 0U;
+    return derived;
 }
 
 tt::tt_metal::Program build_program(
@@ -487,15 +503,7 @@ tt::tt_metal::Program build_program(
     // -------------------------------------------------------------------------
     // Runtime args
     // -------------------------------------------------------------------------
-    // Guard the reciprocal: only computed when the noisy kernel will read it. uses_gumbel_noise
-    // guarantees the reciprocal is FINITE here (that is the predicate's whole point); greedy gets a
-    // zero because an inf sitting in a runtime arg is a trap for anyone who later makes it read it.
-    const uint32_t inv_temperature_bits = do_gumbel_noise ? std::bit_cast<uint32_t>(1.0F / args.temperature) : 0U;
-
-    // Zero when absent: the slot exists in BOTH modes so override_runtime_arguments can patch it
-    // unconditionally, exactly as it does for Ht.
-    const uint32_t positions_address = layout.position_aware ? tensor_args.positions->buffer()->address() : 0U;
-    const uint32_t mask_entry_stride = (has_mask && tensor_args.logits_mask->logical_shape()[0] > 1U) ? layout.Wt : 0U;
+    const auto [inv_temperature_bits, positions_address, mask_entry_stride] = derive_runtime_args(args, tensor_args);
 
     shared_vars.core_info.reserve(layout.num_cores);
     for (const auto& [core, core_index, num_tiles, start_tile, in_group_1] : work) {
@@ -597,25 +605,16 @@ void GumbelSampleProgramFactory::override_runtime_arguments(
     const uint32_t logits_address = logits.buffer()->address();
     const uint32_t mask_address = has_mask ? tensor_args.logits_mask->buffer()->address() : 0U;
     const uint32_t output_address = tensor_return_value.buffer()->address();
-    const uint32_t positions_address =
-        tensor_args.positions.has_value() ? tensor_args.positions->buffer()->address() : 0U;
-    // Wt derived from the logits shape, same as Ht above -- this function deliberately avoids
-    // recomputing the full layout on cache hits.
-    const uint32_t mask_entry_stride =
-        (tensor_args.logits_mask.has_value() && tensor_args.logits_mask->logical_shape()[0] > 1U)
-            ? (logits.padded_shape()[-1] / tt::constants::TILE_WIDTH)
-            : 0U;
 
     // seed and temperature are runtime-only (deliberately excluded from the program hash so that
     // changing either reuses the cached program), so they must be re-applied on every cache hit
-    // alongside the buffer addresses. The guard is uses_gumbel_noise, matching build_program and
-    // the hash: it keeps the reciprocal finite, and a temperature whose kernel selection CHANGED
-    // (crossing zero or the reciprocal-overflow floor) hashes to a different program anyway, so a
-    // cached program is never patched with the wrong variant's args. The rand from/scale bits are
-    // process constants baked at build time (kRandFromBits/kRandScaleBits) and are not re-patched.
-    const uint32_t inv_temperature_bits = uses_gumbel_noise(operation_attributes.temperature)
-                                              ? std::bit_cast<uint32_t>(1.0F / operation_attributes.temperature)
-                                              : 0U;
+    // alongside the buffer addresses -- from the SAME derivation build_program used (see
+    // derive_runtime_args). A temperature whose kernel selection CHANGED (crossing zero or the
+    // reciprocal-overflow floor) hashes to a different program anyway, so a cached program is never
+    // patched with the wrong variant's args. The rand from/scale bits are process constants baked
+    // at build time (kRandFromBits/kRandScaleBits) and are not re-patched.
+    const auto [inv_temperature_bits, positions_address, mask_entry_stride] =
+        derive_runtime_args(operation_attributes, tensor_args);
 
     for (auto& [coord_range, program] : cached_workload.workload.get_programs()) {
         auto& vars = cached_workload.shared_variables.at(coord_range);
