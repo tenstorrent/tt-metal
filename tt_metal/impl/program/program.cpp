@@ -420,6 +420,56 @@ DeviceAddr detail::ProgramImpl::reserve_program_local_l1(const IDevice* device, 
     return arena.high_water_mark(cores);
 }
 
+namespace {
+
+bool cb_formats_are_compatible(const CBDescriptor::FormatDescriptors& lhs, const CBDescriptor::FormatDescriptors& rhs) {
+    if (lhs.size() != rhs.size()) {
+        return false;
+    }
+    return std::ranges::all_of(lhs, [&](const CBFormatDescriptor& format) {
+        const auto match = std::ranges::find_if(
+            rhs, [&](const CBFormatDescriptor& candidate) { return candidate.buffer_index == format.buffer_index; });
+        return match != rhs.end() && *match == format;
+    });
+}
+
+void validate_uniform_address_groups(const ProgramDescriptor::CBDescriptors& descriptors) {
+    std::unordered_map<uint32_t, std::vector<const CBDescriptor*>> groups;
+    for (const CBDescriptor& descriptor : descriptors) {
+        if (descriptor.uniform_address_group != 0) {
+            groups[descriptor.uniform_address_group].push_back(&descriptor);
+        }
+    }
+    for (const auto& [group_id, members] : groups) {
+        TT_FATAL(members.size() > 1, "Uniform-address CB group {} must contain at least two descriptors", group_id);
+        const CBDescriptor& reference = *members.front();
+        for (const CBDescriptor* member : members) {
+            TT_FATAL(
+                member->buffer == nullptr && member->tensor == nullptr && member->global_circular_buffer == nullptr &&
+                    member->remote_format_descriptors.empty(),
+                "Uniform-address CB group {} supports only static local-L1 descriptors",
+                group_id);
+            TT_FATAL(
+                cb_formats_are_compatible(reference.format_descriptors, member->format_descriptors),
+                "Uniform-address CB group {} contains incompatible local CB formats",
+                group_id);
+            for (const CBDescriptor* other : members) {
+                if (member == other) {
+                    break;
+                }
+                TT_FATAL(
+                    !member->core_ranges.intersects(other->core_ranges),
+                    "Uniform-address CB group {} has overlapping core ranges {} and {}",
+                    group_id,
+                    member->core_ranges.str(),
+                    other->core_ranges.str());
+            }
+        }
+    }
+}
+
+}  // namespace
+
 Program::Program() : internal_(std::make_shared<detail::ProgramImpl>()) {
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
     LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureProgramConstructor, *this);
@@ -433,6 +483,9 @@ Program::Program(std::shared_ptr<detail::ProgramImpl> impl) : internal_(std::mov
 Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shared<detail::ProgramImpl>()) {
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
     LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureProgramConstructor, *this);
+    validate_uniform_address_groups(descriptor.cbs);
+    internal_->set_has_uniform_address_groups(
+        std::ranges::any_of(descriptor.cbs, [](const CBDescriptor& cb) { return cb.uniform_address_group != 0; }));
     for (const auto& cb_descriptor : descriptor.cbs) {
         internal_->add_circular_buffer_(std::make_shared<CircularBufferImpl>(cb_descriptor));
     }
@@ -2014,6 +2067,7 @@ void detail::ProgramImpl::allocate_circular_buffers(const IDevice* device) {
             candidate = next_candidate;
         }
     };
+    std::unordered_set<uint32_t> allocated_address_groups;
     for (const auto& circular_buffer : this->circular_buffers_) {
         if (circular_buffer->globally_allocated()) {
             // Track globally allocated CBs too (they use L1 memory allocated via the allocator)
@@ -2024,6 +2078,62 @@ void detail::ProgramImpl::allocate_circular_buffers(const IDevice* device) {
                     circular_buffer->size(),
                     circular_buffer->globally_allocated(),
                     dev);
+            }
+            continue;
+        }
+
+        const uint32_t address_group = circular_buffer->uniform_address_group();
+        if (address_group != 0) {
+            if (!allocated_address_groups.insert(address_group).second) {
+                continue;
+            }
+
+            std::vector<std::shared_ptr<CircularBufferImpl>> members;
+            for (const auto& candidate : this->circular_buffers_) {
+                if (!candidate->globally_allocated() && candidate->uniform_address_group() == address_group) {
+                    members.push_back(candidate);
+                }
+            }
+            TT_FATAL(
+                members.size() > 1, "Static CB address group {} must contain at least two descriptors", address_group);
+            for (size_t member_index = 0; member_index < members.size(); ++member_index) {
+                for (size_t other_index = member_index + 1; other_index < members.size(); ++other_index) {
+                    TT_FATAL(
+                        !members[member_index]->core_ranges().intersects(members[other_index]->core_ranges()),
+                        "Static CB address group {} has overlapping core ranges {} and {}",
+                        address_group,
+                        members[member_index]->core_ranges().str(),
+                        members[other_index]->core_ranges().str());
+                }
+            }
+
+            std::unordered_map<CircularBufferAllocator*, uint64_t> size_by_allocator;
+            for (const auto& member : members) {
+                for (CircularBufferAllocator& allocator : this->cb_allocators_) {
+                    if (member->core_ranges().intersects(allocator.core_range)) {
+                        // Allocators are keyed by the rectangular ranges used by
+                        // every CB in the program.  Such a range may intersect
+                        // multiple disjoint members of this address group.  It
+                        // represents one allocation cursor, so reserve it once
+                        // using the largest capacity required by any member it
+                        // intersects.
+                        size_by_allocator[&allocator] =
+                            std::max<uint64_t>(size_by_allocator[&allocator], member->size());
+                    }
+                }
+            }
+            const uint64_t group_addr = first_common_fit(size_by_allocator);
+
+            for (const auto& [allocator, size] : size_by_allocator) {
+                const uint64_t allocator_base = reserve_program_local_l1(device, CoreRangeSet(allocator->core_range));
+                allocator->mark_address(group_addr, size, allocator_base);
+            }
+            for (const auto& member : members) {
+                for (const IDevice* dev : devices_to_track) {
+                    tt::tt_metal::GraphTracker::instance().track_allocate_cb(
+                        member->core_ranges(), group_addr, member->size(), member->globally_allocated(), dev);
+                }
+                member->set_locally_allocated_address(group_addr);
             }
             continue;
         }

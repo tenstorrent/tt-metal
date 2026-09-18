@@ -65,6 +65,8 @@ struct CBFormatDescriptor {
     uint32_t page_size = 0;
     std::optional<TileDescriptor> tile;
     std::optional<FaceGeometry> face_geometry;
+
+    bool operator==(const CBFormatDescriptor& other) const = default;
 };
 
 struct CBDescriptor {
@@ -74,6 +76,10 @@ struct CBDescriptor {
     CoreRangeSet core_ranges;
     FormatDescriptors format_descriptors;
     FormatDescriptors remote_format_descriptors;
+    // Static CB descriptors in one nonzero group are allocated at one uniform
+    // L1 base address. Their core ranges must be disjoint, but their capacities
+    // may differ so each core reserves only the storage it needs.
+    uint32_t uniform_address_group = 0;
 
     // TODO: Investigate avoiding storing pointers here
     Buffer* buffer = nullptr;

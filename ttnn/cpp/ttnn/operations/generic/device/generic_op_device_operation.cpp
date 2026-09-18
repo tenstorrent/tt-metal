@@ -8,6 +8,7 @@
 
 #include <tt_stl/reflection.hpp>
 #include <unordered_set>
+#include "tt_metal/impl/program/program_options.hpp"
 
 namespace ttnn::operations::generic {
 
@@ -47,7 +48,11 @@ tensor_return_value_t GenericOpDeviceOperation::create_output_tensors(
 
 ttsl::hash::hash_t compute_program_descriptor_hash(const tt::tt_metal::ProgramDescriptor& program_descriptor) {
     if (program_descriptor.custom_program_hash) {
-        return *program_descriptor.custom_program_hash;
+        auto hash = *program_descriptor.custom_program_hash;
+        if (tt::tt_metal::detail::per_core_program_size_enabled()) {
+            ttsl::hash::hash_combine(hash, true);
+        }
+        return hash;
     }
 
     auto hash_kernel = [&](const KernelDescriptor& kernel) -> size_t {
@@ -73,11 +78,12 @@ ttsl::hash::hash_t compute_program_descriptor_hash(const tt::tt_metal::ProgramDe
             format_descriptor.buffer_index,
             format_descriptor.data_format,
             format_descriptor.page_size,
-            format_descriptor.tile);
+            format_descriptor.tile,
+            format_descriptor.face_geometry);
     };
 
     auto hash_circular_buffer = [&](const CBDescriptor& cb) -> size_t {
-        size_t hash = cb.total_size;
+        size_t hash = ttsl::hash::hash_objects_with_default_seed(cb.total_size, cb.uniform_address_group);
         for (const auto& core_range : cb.core_ranges.ranges()) {
             ttsl::hash::hash_combine(hash, core_range);
         }
@@ -108,6 +114,9 @@ ttsl::hash::hash_t compute_program_descriptor_hash(const tt::tt_metal::ProgramDe
     }
     for (const auto& semaphore : program_descriptor.semaphores) {
         ttsl::hash::hash_combine(hash, hash_semaphore(semaphore));
+    }
+    if (tt::tt_metal::detail::per_core_program_size_enabled()) {
+        ttsl::hash::hash_combine(hash, true);
     }
     return hash;
 }

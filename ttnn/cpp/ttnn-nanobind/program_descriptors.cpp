@@ -431,6 +431,10 @@ void py_module_types(nb::module_& mod) {
             &tt::tt_metal::CBDescriptor::remote_format_descriptors,
             "Remote format descriptors for GlobalCircularBuffer CBs")
         .def_rw(
+            "uniform_address_group",
+            &tt::tt_metal::CBDescriptor::uniform_address_group,
+            "Nonzero group whose static CB descriptors share one uniform L1 base address")
+        .def_rw(
             "address_offset",
             &tt::tt_metal::CBDescriptor::address_offset,
             "Byte offset from buffer base address for CB placement (default 0)")

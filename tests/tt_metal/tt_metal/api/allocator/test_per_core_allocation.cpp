@@ -5,10 +5,12 @@
 // Integration tests for per-core L1 allocation via experimental::per_core_allocation.
 // These tests require a real device (slow dispatch).
 
+#include <algorithm>
 #include <cstdlib>
 #include <cstring>
 #include <numeric>
 #include <optional>
+#include <ranges>
 #include <string>
 #include <utility>
 #include <vector>
@@ -23,9 +25,12 @@
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include "tests/tt_metal/tt_metal/common/device_fixture.hpp"
+#include "impl/allocator/allocator.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/dataflow_buffer/prefetcher_pipe.hpp"
+#include "impl/program/program_impl.hpp"
 #include "tt_metal/distributed/hd_socket_descriptor.hpp"
 #include "tt_metal/hw/inc/hostdev/socket.h"
 #include "tt_metal/llrt/tt_cluster.hpp"
@@ -39,6 +44,7 @@ protected:
     void SetUp() override {
         // Enable HYBRID allocator mode before device creation.
         setenv("TT_METAL_ALLOCATOR_MODE_HYBRID", "1", /*overwrite=*/1);
+        setenv("TT_METAL_PER_CORE_PROGRAM_SIZE", "1", /*overwrite=*/1);
 
         if (!this->validate_dispatch_mode()) {
             GTEST_SKIP();
@@ -61,12 +67,125 @@ protected:
     void TearDown() override {
         MeshDeviceSingleCardBufferFixture::TearDown();
         unsetenv("TT_METAL_ALLOCATOR_MODE_HYBRID");
+        unsetenv("TT_METAL_PER_CORE_PROGRAM_SIZE");
     }
 };
 
 // Use 1024-byte page size to be safely above all alignment requirements
 // (FreeListOpt internally uses DRAM alignment which may be larger than L1 alignment)
 static constexpr DeviceAddr PAGE_SIZE = 1024;
+
+TEST_F(PerCoreAllocationTest, MultipleProgramReservationsMerge) {
+    auto* device = this->devices_[0]->get_devices()[0];
+    auto* allocator = device->allocator_impl();
+    const DeviceAddr program_base =
+        MetalContext::instance().hal().get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::KERNEL_CONFIG);
+    const CoreCoord core(0, 0);
+
+    std::shared_ptr<PerCoreProgramL1Reservation> first;
+    std::shared_ptr<PerCoreProgramL1Reservation> equal;
+    std::shared_ptr<PerCoreProgramL1Reservation> smaller;
+    std::shared_ptr<PerCoreProgramL1Reservation> larger;
+    EXPECT_NO_THROW(first = allocator->reserve_per_core_program({{core, program_base + PAGE_SIZE}}, program_base));
+    EXPECT_NO_THROW(equal = allocator->reserve_per_core_program({{core, program_base + PAGE_SIZE}}, program_base));
+    EXPECT_NO_THROW(
+        smaller = allocator->reserve_per_core_program({{core, program_base + PAGE_SIZE / 2}}, program_base));
+    EXPECT_NO_THROW(larger = allocator->reserve_per_core_program({{core, program_base + 2 * PAGE_SIZE}}, program_base));
+    using AllocatorID = BankManager::AllocatorDependencies::AllocatorID;
+    const auto bank_id = allocator->get_bank_ids_from_logical_core(BufferType::L1, core).front();
+    auto has_program_extent = [&](DeviceAddr end) {
+        const auto ranges = allocator->get_l1_allocated_ranges(AllocatorID{bank_id + 1});
+        return std::ranges::find(ranges, std::pair{program_base, end}) != ranges.end();
+    };
+    EXPECT_TRUE(has_program_extent(program_base + 2 * PAGE_SIZE));
+
+    // Releasing in descending extent order recomputes and shrinks the live
+    // envelope; the final release removes the program reservation entirely.
+    EXPECT_NO_THROW(larger.reset());
+    EXPECT_TRUE(has_program_extent(program_base + PAGE_SIZE));
+    EXPECT_NO_THROW(equal.reset());
+    EXPECT_NO_THROW(first.reset());
+    EXPECT_TRUE(has_program_extent(program_base + PAGE_SIZE / 2));
+    EXPECT_NO_THROW(smaller.reset());
+    EXPECT_FALSE(has_program_extent(program_base + PAGE_SIZE / 2));
+}
+
+TEST_F(PerCoreAllocationTest, UniformAddressGroupUsesCommonBaseAndVariableCapacity) {
+    auto* device = this->devices_[0]->get_devices()[0];
+    const CoreCoord core0(0, 0);
+    const CoreCoord core1(1, 0);
+    auto make_cb = [](CoreCoord core, uint32_t total_size, uint8_t buffer_index, uint32_t group) {
+        return CBDescriptor{
+            .total_size = total_size,
+            .core_ranges = CoreRangeSet(CoreRange(core)),
+            .format_descriptors =
+                {{.buffer_index = buffer_index, .data_format = tt::DataFormat::Float16_b, .page_size = PAGE_SIZE}},
+            .uniform_address_group = group,
+        };
+    };
+    ProgramDescriptor descriptor{
+        .cbs = {
+            make_cb(core0, PAGE_SIZE, 0, 1),
+            make_cb(core1, 2 * PAGE_SIZE, 0, 1),
+            CBDescriptor{
+                .total_size = PAGE_SIZE,
+                .core_ranges = CoreRangeSet(CoreRange(core0, core1)),
+                .format_descriptors =
+                    {{.buffer_index = 1, .data_format = tt::DataFormat::Float16_b, .page_size = PAGE_SIZE}},
+            },
+        }};
+    Program program(descriptor);
+    program.impl().allocate_circular_buffers(device);
+
+    const auto circular_buffers = program.impl().circular_buffers();
+    ASSERT_EQ(circular_buffers.size(), 3);
+    EXPECT_EQ(circular_buffers[0]->address(), circular_buffers[1]->address());
+    EXPECT_GE(circular_buffers[2]->address(), circular_buffers[0]->address() + 2 * PAGE_SIZE);
+}
+
+TEST_F(PerCoreAllocationTest, UniformAddressGroupCoexistsWithMultiDeviceLockstepBuffers) {
+    if (this->devices_.size() < 2) {
+        GTEST_SKIP() << "Need at least two devices";
+    }
+    const CoreRange cores(CoreCoord(0, 0), CoreCoord(1, 0));
+    const ShardSpecBuffer shard_spec(
+        CoreRangeSet(cores),
+        std::array<uint32_t, 2>{32, 32},
+        ShardOrientation::ROW_MAJOR,
+        std::array<uint32_t, 2>{32, 32},
+        std::array<uint32_t, 2>{2, 1});
+    const auto lockstep_args = BufferShardingArgs(shard_spec, TensorMemoryLayout::HEIGHT_SHARDED);
+    std::vector<std::shared_ptr<Buffer>> lockstep_buffers;
+    for (size_t device_index = 0; device_index < 2; ++device_index) {
+        auto* device = this->devices_[device_index]->get_devices()[0];
+        lockstep_buffers.push_back(Buffer::create(device, 2 * PAGE_SIZE, PAGE_SIZE, BufferType::L1, lockstep_args));
+    }
+    ASSERT_EQ(lockstep_buffers[0]->address(), lockstep_buffers[1]->address());
+
+    ProgramDescriptor descriptor{
+        .cbs = {
+            CBDescriptor{
+                .total_size = PAGE_SIZE,
+                .core_ranges = CoreRangeSet(CoreRange(CoreCoord(0, 0))),
+                .format_descriptors =
+                    {{.buffer_index = 0, .data_format = tt::DataFormat::Float16_b, .page_size = PAGE_SIZE}},
+                .uniform_address_group = 1,
+            },
+            CBDescriptor{
+                .total_size = 2 * PAGE_SIZE,
+                .core_ranges = CoreRangeSet(CoreRange(CoreCoord(1, 0))),
+                .format_descriptors =
+                    {{.buffer_index = 0, .data_format = tt::DataFormat::Float16_b, .page_size = PAGE_SIZE}},
+                .uniform_address_group = 1,
+            },
+        }};
+    Program program(descriptor);
+    for (size_t device_index = 0; device_index < 2; ++device_index) {
+        auto* device = this->devices_[device_index]->get_devices()[0];
+        program.impl().allocate_circular_buffers(device);
+        EXPECT_NO_THROW(program.impl().validate_circular_buffer_region(device));
+    }
+}
 
 TEST_F(PerCoreAllocationTest, BasicPerCoreAllocation) {
     auto* device = this->devices_[0]->get_devices()[0];
@@ -147,8 +266,8 @@ TEST_F(PerCoreAllocationTest, PerCoreSkipsPersistentL1OnSameCore) {
     auto* mesh_device = this->devices_[0].get();
     const CoreCoord sender(0, 0);
     const CoreCoord receiver(1, 0);
-    auto pipe = experimental::CreatePrefetcherPipe(
-        mesh_device, sender, CoreRangeSet(CoreRange(receiver)), /*ring_size=*/1024);
+    auto pipe =
+        experimental::CreatePrefetcherPipe(mesh_device, sender, CoreRangeSet(CoreRange(receiver)), /*ring_size=*/1024);
 
     const CoreRangeSet pipe_cores = CoreRangeSet(CoreRange(sender, receiver));
     ShardSpecBuffer shard_spec(pipe_cores, {32, 32}, ShardOrientation::ROW_MAJOR, {32, 32}, {2, 1});
