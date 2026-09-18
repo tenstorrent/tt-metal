@@ -820,3 +820,76 @@ def test_the_sampling_commands_are_recorded_when_they_arrive(monkeypatch):
 
     assert model._sampling_param_uploads == 1
     assert model._sampling_state_resets == 1
+
+
+# The `fixed` target's prefill, which follows the same rule as its decode. A
+# resumed request replays its history through a prefill, so a prefill outside
+# the rule puts a token in the middle of a response that the rule cannot
+# explain, and the output stops being a property of the rule.
+
+
+def test_the_fixed_prefill_follows_the_same_rule_as_the_decode(monkeypatch):
+    """The token a prefill chooses is the rule applied to the prompt tail."""
+    model = _fixed_model(monkeypatch)
+    prompt = torch.tensor([[11, 12, 13, 14]], dtype=torch.int32)
+
+    logits = model.prefill_forward(
+        tokens=prompt, prompt_lens=torch.tensor([4]), start_pos=torch.tensor([0])
+    )
+
+    chosen = int(logits.reshape(1, -1).argmax(dim=-1))
+    assert chosen == int(model._fixed_choice(torch.tensor([[14]]), torch.tensor([[3]]))[0, 0])
+
+
+def test_the_fixed_prefill_reads_each_row_s_own_length(monkeypatch):
+    """Rows are padded to the longest prompt, and each has its own tail.
+
+    A prefill that read a fixed column would answer for padding on a shorter
+    row, which is what a resumed request looks like beside a fresh one.
+    """
+    model = _fixed_model(monkeypatch)
+    tokens = torch.tensor([[11, 12, 13, 14], [21, 22, 0, 0]], dtype=torch.int32)
+
+    logits = model.prefill_forward(
+        tokens=tokens,
+        prompt_lens=torch.tensor([4, 2]),
+        start_pos=torch.tensor([0, 0]),
+    )
+
+    chosen = logits.reshape(2, -1).argmax(dim=-1)
+    assert int(chosen[0]) == int(model._fixed_choice(torch.tensor([[14]]), torch.tensor([[3]]))[0, 0])
+    assert int(chosen[1]) == int(model._fixed_choice(torch.tensor([[22]]), torch.tensor([[1]]))[0, 0])
+
+
+def test_the_fixed_prefill_answers_ids_when_the_device_samples(monkeypatch):
+    """Device sampling asks for the chosen id rather than logits."""
+    model = _fixed_model(monkeypatch)
+    prompt = torch.tensor([[11, 12, 13, 14]], dtype=torch.int32)
+
+    ids = model.prefill_forward(
+        tokens=prompt,
+        prompt_lens=torch.tensor([4]),
+        start_pos=torch.tensor([0]),
+        sampling_params=object(),
+    )
+
+    assert ids.tolist() == [
+        int(model._fixed_choice(torch.tensor([[14]]), torch.tensor([[3]]))[0, 0])
+    ]
+
+
+def test_the_depth_target_prefill_is_untouched(monkeypatch):
+    """The measurement target keeps the base class's answer.
+
+    Its whole output is a function of what was drafted, and the acceptance
+    accounting the device suite does with it counts from a prefill that commits
+    token 0. Changing that would move every expectation built on it.
+    """
+    model = _model(monkeypatch)
+    prompt = torch.tensor([[11, 12, 13, 14]], dtype=torch.int32)
+
+    logits = model.prefill_forward(
+        tokens=prompt, prompt_lens=torch.tensor([4]), start_pos=torch.tensor([0])
+    )
+
+    assert int(logits.reshape(1, -1).argmax(dim=-1)) == 0

@@ -461,6 +461,43 @@ class DummySpecDecodeModel(DummyNoOpModel):
         live = int((committed_positions[:, 0] >= 0).sum())
         return torch.full((rows,), num_drafts if live == 1 else 0, dtype=torch.int32)
 
+    def prefill_forward(self, *args, **kwargs):
+        """One prefill, following the same rule the verify follows.
+
+        Only under ``fixed``, and it matters most where a prefill is not the
+        first thing a request does. A preempted request resumes with a prefill
+        that replays its saved history, and a wholesale prefix-cache reset
+        makes every running request do that. The base class answers a prefill
+        with zero logits whatever the history was, so under that answer a
+        resumed request emits a 0 in the middle of its output and the whole
+        point of this target is lost: its output is meant to be a property of
+        the rule, not of how many times the request was replayed.
+
+        The rule reads the token and its position, and a prefill's are the
+        last prompt token of each row and that token's position. ``prompt_lens``
+        gives each row's length, which is where the padded ``tokens`` row ends.
+        """
+        if self.target != TARGET_FIXED:
+            return super().prefill_forward(*args, **kwargs)
+        tokens = kwargs.get("tokens")
+        if tokens is None and args:
+            tokens = args[0]
+        prompt_lens = kwargs.get("prompt_lens")
+        rows = int(tokens.shape[0])
+        lengths = (
+            torch.as_tensor(prompt_lens, dtype=torch.int64).reshape(-1)
+            if prompt_lens is not None
+            else torch.full((rows,), int(tokens.shape[1]), dtype=torch.int64)
+        )
+        last_index = (lengths[:rows] - 1).clamp(min=0)
+        last_token = tokens.to(torch.int64).gather(1, last_index.unsqueeze(1))
+        choice = self._fixed_choice(last_token, last_index.unsqueeze(1))
+        if kwargs.get("sampling_params") is not None:
+            return choice.reshape(rows).to(torch.int64)
+        logits = torch.zeros(rows, 1, self.vocab_size, dtype=torch.float32)
+        logits.scatter_(2, choice.to(torch.int64).unsqueeze(2), 1.0)
+        return logits
+
     def _plain_decode(self, *args, **kwargs):
         """An ordinary decode, from whichever inputs the commands make current.
 
