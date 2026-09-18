@@ -68,9 +68,9 @@ std::vector<uint32_t> ring_chip_ids(ttnn::MeshDevice* mesh, const ttnn::MeshCoor
 // routing index it builds from them. Sized for the worst case, which is every token routed to experts
 // this chip actually sends.
 //
-// The block sizes live in the kernel interface, because the kernel's carve reads the same list. This
-// used to be an independent sum here, and twice it fell behind the carve -- overrunning the control
-// region into the global semaphores, with a green build both times.
+// The block sizes live in the kernel interface, because the kernel's carve reads the same list. A
+// second, independent sum here would drift from that carve, and an undersized reservation overruns
+// the control region into the global semaphores.
 dspf2d::ControlGeometry control_geometry(const DispatchFabric2dParams& args, uint32_t extent) {
     return dspf2d::ControlGeometry{
         .seq_len = args.seq_len_per_chip,
@@ -80,13 +80,11 @@ dspf2d::ControlGeometry control_geometry(const DispatchFabric2dParams& args, uin
         .num_routed_experts = args.num_routed_experts,
         .experts_per_chip = args.experts_per_chip,
         .topk = args.num_experts_per_tok,
-        .num_relay = relay_chunks_per_stream(extent),
-        .fanout = args.fanout ? 1u : 0u};
+        .num_relay = relay_chunks_per_stream(extent)};
 }
 
 L1Layout compute_l1_layout(
     ttnn::MeshDevice* mesh, uint32_t token_bytes, const dspf2d::ControlGeometry& g, uint32_t sem_floor) {
-    const bool fanout = g.fanout != 0u;
     const uint32_t control_bytes = dspf2d::control_region_bytes(g);
     const uint32_t base =
         static_cast<uint32_t>(mesh->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1));
@@ -95,20 +93,12 @@ L1Layout compute_l1_layout(
     l.drain_sink = base + DRAIN_SINK_OFF;
     l.ring = base + RING_OFF;
     l.pkt_hdr_ring = l.ring + dspf2d::NUM_L1_SLOTS * (token_bytes + dspf2d::FORWARDING_METADATA_SIZE);
-    // The same expression the sender indexes the pool with; the reason they must agree is stated there.
-    const uint32_t hdr_ring_bytes = dspf2d::headers_per_slot(fanout) * dspf2d::NUM_L1_SLOTS *
-                                    static_cast<uint32_t>(tt::tt_fabric::get_tt_fabric_packet_header_size_bytes());
-    // Both RISCs address these, so they cannot live in the reader's control carve. Sized to nothing
-    // under unicast so its layout is untouched.
-    l.mc_delivery = (l.pkt_hdr_ring + hdr_ring_bytes + 63u) & ~63u;
-    const uint32_t delivery_bytes =
-        fanout ? dspf2d::NUM_L1_SLOTS * dspf2d::FO_MAX_DESTS * static_cast<uint32_t>(sizeof(dspf2d::FanoutDelivery))
-               : 0u;
-    l.mc_meta = (l.mc_delivery + delivery_bytes + 63u) & ~63u;
-    const uint32_t meta_bytes = fanout ? dspf2d::NUM_L1_SLOTS * dspf2d::FO_MAX_DESTS * dspf2d::MC_META_SLOT_BYTES : 0u;
+    // One header per slot, the same stride the sender indexes the pool with.
+    const uint32_t hdr_ring_bytes =
+        dspf2d::NUM_L1_SLOTS * static_cast<uint32_t>(tt::tt_fabric::get_tt_fabric_packet_header_size_bytes());
     // 64-byte aligned: a DRAM read needs a 64-byte-aligned L1 destination on Blackhole, and the control
     // region is read straight out of DRAM.
-    l.control = (l.mc_meta + meta_bytes + 63u) & ~63u;
+    l.control = (l.pkt_hdr_ring + hdr_ring_bytes + 63u) & ~63u;
     const uint32_t end = l.control + control_bytes;
     // Naming every driver rather than one: the ring scales with the token page, while the control
     // region's blocks divide between those that scale with the sequence and those that scale with the
@@ -198,21 +188,6 @@ OwnedScratch allocate_scratch(ttnn::MeshDevice* mesh, uint32_t num_pages, uint32
     return scratch;
 }
 
-// Pages one stream may put through its slice of the forwarding region.
-//
-// Fan-out puts at most one page per token per direction through a region rather than one per
-// (token, expert) pair per destination, so its bound is a different expression, not a scaling of the
-// other. Loose by a whole chunk under the terminal rule, since the last of a stream's m chunks is
-// identically empty -- deliberately not tightened: this bound is the only thing standing between a
-// stream and its neighbour's slice of a shared tensor, and the kernel's own check of it is an ASSERT
-// that is compiled out on this hardware.
-uint32_t fwd_pages_for(const DispatchFabric2dParams& args, uint32_t extent) {
-    return args.fanout
-               ? mc_fwd_pages_per_stream(extent, args.num_links, args.seq_len_per_chip)
-               : fwd_pages_per_stream(
-                     extent, args.num_links, args.seq_len_per_chip, args.num_experts_per_tok, args.experts_per_chip);
-}
-
 }  // namespace
 
 tt::tt_metal::WorkloadDescriptor DispatchFabric2dProgramFactory::create_workload_descriptor(
@@ -254,9 +229,11 @@ tt::tt_metal::WorkloadDescriptor DispatchFabric2dProgramFactory::create_workload
     validate_chunk_agreement(extent, args.num_links);
     const auto placement = decide_placement(mesh, args.axis, args.num_links, args.worker_core_range_set);
     const auto sems = allocate_ring_semaphores(mesh, args.worker_core_range_set);
-    // One page per token passing through a chip, and the page is token + routing tail so a single
-    // fabric write lands both.
-    const uint32_t fwd_pages = fwd_pages_for(args, extent);
+    // Bounded per (origin, destination) pair: one origin owes one destination chip up to
+    // min(topk, experts_per_chip) pages per token. A page is token + routing tail, so a single fabric
+    // write lands both.
+    const uint32_t fwd_pages = fwd_pages_per_stream(
+        extent, args.num_links, args.seq_len_per_chip, args.num_experts_per_tok, args.experts_per_chip);
     const OwnedScratch fwd = allocate_scratch(
         mesh, fwd_pages * stream_count(args.num_links), token_bytes + dspf2d::FORWARDING_METADATA_SIZE, "forwarding");
     // Only under TILE: where a tiled input's tokens end up, one row-major page each, so the stream
@@ -290,12 +267,9 @@ tt::tt_metal::WorkloadDescriptor DispatchFabric2dProgramFactory::create_workload
     dram[dspf2d::ReaderRtArg::kOutPayloadAddr] = tensor_return_value[0].buffer();
     dram[dspf2d::ReaderRtArg::kOutMetaAddr] = tensor_return_value[1].buffer();
     dram[dspf2d::ReaderRtArg::kFwdAddr] = fwd.buffer;
-    // Always bound. Non-fanout mode has no reach table, and leaving the slot null would mean a
-    // different runtime-arg layout per mode -- the host/kernel drift that is the hardest class of bug
-    // here. The stand-in is never read: the reader only touches it under the fanout compile-time arg.
-    dram[dspf2d::ReaderRtArg::kFanoutReachAddr] = tensor_args.fanout_reach.has_value()
-                                                      ? tensor_args.fanout_reach->buffer()
-                                                      : tensor_args.expert_offsets_tensor.buffer();
+    // Always bound. With no padding_config the slot would otherwise be null, which would mean a
+    // different runtime-arg layout per caller -- the host/kernel drift that is the hardest class of
+    // bug here. The stand-in is never read: the reader only touches it under its compile-time arg.
     dram[dspf2d::ReaderRtArg::kPaddingConfigAddr] = tensor_args.padding_config.has_value()
                                                         ? tensor_args.padding_config->buffer()
                                                         : tensor_args.expert_offsets_tensor.buffer();
@@ -346,8 +320,7 @@ tt::tt_metal::WorkloadDescriptor DispatchFabric2dProgramFactory::create_workload
                 "sender_dispatch_fabric2d.cpp";
             snd.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
             snd.core_ranges = CoreRangeSet(CoreRange(self.worker_logical));
-            snd.compile_time_args =
-                dspf2d::SenderCtArgs(token_bytes, self, downstream, l1, plan, args.fanout).to_ct_word_arr();
+            snd.compile_time_args = dspf2d::SenderCtArgs(token_bytes, self, downstream, l1, plan).to_ct_word_arr();
             snd.config = tt::tt_metal::DataMovementConfigDescriptor{
                 .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
                 // NOC_1 routes -Y first, so a worker one row from its eth core reaches it in a single hop.
@@ -394,7 +367,6 @@ tt::tt_metal::WorkloadDescriptor DispatchFabric2dProgramFactory::create_workload
                                         token_bytes,
                                         linearized,
                                         row,
-                                        static_cast<uint32_t>(mesh->get_fabric_node_id(coord).chip_id),
                                         static_cast<uint32_t>(self.downstream_node.chip_id),
                                         l1,
                                         plan,

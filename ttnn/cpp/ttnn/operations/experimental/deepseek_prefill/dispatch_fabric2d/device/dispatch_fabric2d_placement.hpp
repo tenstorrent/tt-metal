@@ -37,8 +37,8 @@ using MeshPlacement = std::map<ttnn::MeshCoordinate, StreamPlacements>;
 // Placement for every chip and every stream on the mesh. Decided for the whole mesh at once because a
 // sender's arguments name the worker serving the same stream on the downstream chip.
 //
-// `universe` is every core the op may occupy -- the caller's sub-device, or the first row of the
-// compute grid when there is none. A stream lands on the worker nearest its eth core, and that core
+// `universe` is every core the op may occupy -- the caller's sub-device, or the whole compute grid
+// when no sub-device manager is loaded. A stream lands on the worker nearest its eth core, and that core
 // must be a MEMBER of the universe or the op refuses; only the collision walk searches the universe.
 // The cores no stream takes are spare -- the untilizer pool is drawn from them by the untilize module
 // -- and anything outside the universe belongs to whatever else shares the chip.
