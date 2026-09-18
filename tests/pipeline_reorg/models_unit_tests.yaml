@@ -898,7 +898,8 @@
     pytest --timeout 900 models/demos/audio/qwen3_tts/tests/pcc/test_codec_encoder_pcc.py
     # The cached, traced decode paths against the uncached graphs above them.
     pytest --timeout 900 models/demos/audio/qwen3_tts/tests/pcc/test_decode_pcc.py
-    # Voice cloning: both encoders, the ICL prompt and the clone decode loop. Base only,
+    # Voice cloning, both modes: the two encoders, the in-context prompt and the decode
+    # loop, then the voice-alone prompt that uses the speaker encoder by itself. Base only,
     # so it runs on the ambient checkpoint.
     pytest --timeout 1200 models/demos/audio/qwen3_tts/tests/pcc/test_clone_pcc.py
     # The pipeline tests need the CustomVoice checkpoint, a second 4.3 GB download on

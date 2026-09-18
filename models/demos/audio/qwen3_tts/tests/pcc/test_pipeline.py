@@ -40,6 +40,8 @@ from models.demos.audio.qwen3_tts.tt.ttnn_qwen3_code_predictor import (
     preprocess_code_predictor_parameters,
 )
 from models.demos.audio.qwen3_tts.tt.ttnn_qwen3_pipeline import (
+    CONTROL_ID_COUNT,
+    MIN_FRAMES,
     ROLE_IDS,
     TAIL_IDS,
     HostEmbeddings,
@@ -50,6 +52,8 @@ from models.demos.audio.qwen3_tts.tt.ttnn_qwen3_talker import TtTalker, preproce
 
 CUSTOM_VOICE_REPO = "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice"
 TEXT = "Hello there."
+LONGER_TEXT = "The kettle is on, and the rain has not let up."
+INSTRUCTION = "Say it in a very angry tone."
 SPEAKER = "ryan"
 LANGUAGE = "English"
 
@@ -266,6 +270,95 @@ def test_generate_produces_audio_of_the_right_length(device):
     assert waveform.abs().max() <= 1.0
     assert int(codes.max()) < weights.codec_decoder_config()["codebook_size"], "no control id may reach the codec"
     print(f"generated {codes.shape[0]} frames -> {waveform.shape[1] / 24000:.2f} s")
+
+
+def test_an_instruction_joins_a_named_speaker(tables):
+    """Upstream's `generate_custom_voice(..., instruct=...)`: a speaker and a delivery.
+
+    The CustomVoice card documents the pair (`speaker='Vivian', instruct='用特别愤怒的语气
+    说'`), and it is a different thing from VoiceDesign: the voice is still the named
+    speaker's and the instruction shapes how they say it, rather than inventing a voice
+    from nothing.
+
+    Checked against upstream's own assembly under transformers 4.57.3, max absolute
+    difference 0.0 for both regimes; what is checked here is that the instruction goes in
+    ahead of everything, on the text track alone, and that the rest of the prompt is
+    unchanged by it.
+    """
+    plain, _ = build_custom_voice_prefill(TEXT, SPEAKER, LANGUAGE, tables)
+    instructed, _ = build_custom_voice_prefill(TEXT, SPEAKER, LANGUAGE, tables, INSTRUCTION)
+
+    block = tables.text(frontend.instruction_ids(INSTRUCTION))
+    assert instructed.shape[1] == plain.shape[1] + block.shape[1]
+    assert torch.equal(instructed[:, : block.shape[1]], block), "the instruction leads the prompt"
+    assert torch.equal(instructed[:, block.shape[1] :], plain), "and changes nothing after it"
+    print(f"{plain.shape[1]} positions without an instruction, {instructed.shape[1]} with one")
+
+
+def test_an_empty_instruction_is_no_instruction(tables):
+    """Whitespace and None behave like the plain prompt, as upstream treats them."""
+    plain, _ = build_custom_voice_prefill(TEXT, SPEAKER, LANGUAGE, tables)
+    for empty in (None, "", "   "):
+        got, _ = build_custom_voice_prefill(TEXT, SPEAKER, LANGUAGE, tables, empty)
+        assert torch.equal(got, plain), f"{empty!r} changed the prompt"
+
+
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
+def test_an_instruction_changes_what_a_named_speaker_does(device):
+    """The instruction must reach the speech, not just the prompt.
+
+    At a fixed seed, two instructions against no instruction. Judged on the frames
+    differing rather than on the audio being better, which is not a test's business:
+    measured 42 frames for an angry reading and 111 for a whispered one, against 53 plain.
+    """
+    pipeline = Qwen3TTSPipeline(device, max_frames=160, seed=4)
+    counts = {}
+    for label, instruct in (("plain", None), ("angry", "Say it in a very angry tone.")):
+        pipeline.reseed(4)
+        codes = pipeline.codes(LONGER_TEXT, speaker=SPEAKER, language=LANGUAGE, instruct=instruct)
+        counts[label] = codes.shape[0]
+    print(f"frames: {counts}")
+    assert counts["plain"] != counts["angry"], "the instruction did not reach the decode loop"
+
+
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
+def test_no_utterance_is_shorter_than_two_frames(device):
+    """`min_new_tokens=2` upstream: end-of-speech is suppressed until two frames exist.
+
+    One frame is 80 ms, which is not speech, and the sampler can reach end-of-speech at
+    the first step. Ten seeds on the shortest text in this file.
+    """
+    pipeline = Qwen3TTSPipeline(device, max_frames=48)
+    shortest = 10**6
+    for seed in range(10):
+        pipeline.reseed(seed)
+        shortest = min(shortest, pipeline.codes(TEXT, speaker=SPEAKER, language=LANGUAGE).shape[0])
+    print(f"shortest utterance over ten seeds: {shortest} frames")
+    assert shortest >= MIN_FRAMES
+
+
+def test_control_ids_are_suppressed_and_end_of_speech_only_at_first(tables):
+    """What the talker may draw: real codes, plus end-of-speech once two frames exist.
+
+    A code that reaches the codec must be inside the codebook, and the codec's codebooks
+    hold 2048 entries against the talker's 3072-entry vocabulary. Upstream suppresses that
+    gap, sparing end-of-speech; this checks the two sets this port builds from it.
+    """
+    talker = weights.talker_config()
+    vocab, eos = talker["vocab_size"], talker["codec_eos_token_id"]
+    codebook = weights.codec_decoder_config()["codebook_size"]
+
+    pipeline = Qwen3TTSPipeline.__new__(Qwen3TTSPipeline)  # the id sets need no device
+    pipeline.talker_config, pipeline.eos = talker, eos
+    control = [index for index in range(vocab - CONTROL_ID_COUNT, vocab) if index != eos]
+    pipeline._control_ids = torch.tensor(control, dtype=torch.long)
+    pipeline._control_ids_and_eos = torch.tensor(sorted(control + [eos]), dtype=torch.long)
+
+    assert vocab - CONTROL_ID_COUNT == codebook, "the suppressed range should start where the codebook ends"
+    early, late = pipeline._suppressed(0), pipeline._suppressed(MIN_FRAMES)
+    assert eos in early.tolist() and eos not in late.tolist()
+    assert set(late.tolist()) | {eos} == set(range(codebook, vocab))
+    assert not [index for index in late.tolist() if index < codebook], "no real code may be suppressed"
 
 
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)

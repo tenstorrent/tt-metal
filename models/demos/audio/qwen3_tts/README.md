@@ -25,7 +25,9 @@ Bring-up in progress. This directory holds what is finished, and nothing that is
 | 9 | Codec encoder, waveform → codes | device | **done**, latents PCC 0.9999 |
 | 10 | Voice clone: reference clip → prompt → speech | host + device | **done**, prompt bit-exact |
 | 11 | VoiceDesign: a voice described in a sentence | host + device | **done**, prompt bit-exact |
-| 12 | Streaming text input, all three voice modes | host + device | **done**, prompt bit-exact |
+| 12 | Streaming text input, all voice modes | host + device | **done**, prompt bit-exact |
+| 13 | Instruction with a named speaker | host + device | **done**, prompt bit-exact |
+| 14 | Cloning from the voice alone (`x_vector_only`) | host + device | **done**, prompt bit-exact |
 
 The speaker encoder reads a reference clip and emits one 2048-wide vector, which occupies a
 single position of the talker's prompt. Its width matches the talker's hidden size, so
@@ -70,7 +72,10 @@ speech, and make the transcript cover the whole clip.
 
 Either demo takes `--instruct "A calm older man speaking slowly, with a slight rasp."`
 instead of `--ref`, which designs a voice from the description rather than a recording, or
-`--speaker ryan` to use one of the nine CustomVoice voices. `--ckpt` points at a checkpoint
+`--speaker ryan` to use one of the nine CustomVoice voices. `--instruct` also combines with
+`--speaker`, where it directs that speaker instead of inventing a voice, and with
+`--x-vector`. `--x-vector` clones from the clip's voice alone and needs no `--ref-text`,
+which is the flag to reach for when the transcript is unknown. `--ckpt` points at a checkpoint
 directory, which you need for the first two, since each way of choosing a voice lives in a
 different release.
 
@@ -157,6 +162,46 @@ Whether the instruction reaches the voice is measurable two ways. At a fixed see
 it moves 382 of 384 codes. And the Base checkpoint's speaker encoder puts two designs of the
 same sentence at cosine **0.8923**, against 0.99 for one speaker and 0.82 for an unrelated
 pair, so the description carries most of the way.
+
+## The five ways to choose a voice
+
+Upstream builds five shapes of prompt, and each works in either text regime. All five are
+here:
+
+| how the voice is chosen | prompt | release | entry point |
+|---|---|---|---|
+| a named speaker | `n_text + 11` positions | CustomVoice | `generate(text, speaker=...)` |
+| a named speaker, directed | plus the instruction's tokens | CustomVoice | `generate(..., instruct=...)` |
+| described in words | plus the instruction's tokens, no speaker position | VoiceDesign | `generate_design(text, instruction)` |
+| a clip's voice alone | `n_text + 11`, the clip's length irrelevant | Base | `generate_clone(..., x_vector_only=True)` |
+| a clip, in context | plus one position per reference frame | Base | `generate_clone(text, reference)` |
+
+**Directing a named speaker** is upstream's `generate_custom_voice(..., instruct=...)`, which
+the CustomVoice card documents with an example. It differs from VoiceDesign in what stays
+fixed: the voice is the speaker's and the instruction shapes the delivery, rather than the
+instruction inventing a voice. At one seed, "Say it in a very angry tone." took a line from
+53 frames to 42 and "Whisper it, slowly and gently." took it to 111.
+
+**Cloning from the voice alone** is upstream's `x_vector_only_mode`. Only the speaker
+encoder runs, so there is no transcript to supply and no codes to carry, and the prompt is
+the named-speaker one with a measured voice in the speaker position. Measured against
+in-context cloning on a 7.28 s clip:
+
+| | in context | voice alone |
+|---|---|---|
+| prompt | 132 positions | 23 |
+| reference, once per clip | 4.39 s, both encoders | 3.38 s, speaker encoder only |
+| codec decode | the clip's frames ride along | only what was generated |
+| speaker similarity | 0.9940 | 0.9925 |
+
+That last row flatters the voice-alone mode by construction: the metric is the speaker
+encoder's cosine and this mode hands the model the very vector it is computed from. In
+context carries the clip itself, which is detail the encoder does not necessarily measure.
+Choose by ear. What is not in doubt is that a transcript is usually unavailable, which is
+the mode's real argument, and that its prompt does not grow with the clip.
+
+An instruction combines with every mode except in-context cloning, where upstream's prompt
+leaves no room for one.
 
 ## Streaming text input
 
@@ -324,6 +369,14 @@ processor order (repetition penalty, then temperature, then top_k and top_p) and
 pipeline reads the settings out of `generation_config.json`.
 
 Pass `seed` to `Qwen3TTSPipeline` for a reproducible run.
+
+Two rules constrain the draw, both upstream's and neither in `generation_config.json`.
+**Control ids never leave the talker**: its vocabulary is 3072 and the codec's codebooks
+hold 2048, and upstream suppresses that gap except for end-of-speech, so a code reaching
+the codec is always a real code. Measured before this port had it: 1.4e-09 of the
+probability mass on average and never once inside the top 50 over 84 positions, so it
+closes a case nobody had hit rather than changing any draw. **And end-of-speech waits for
+two frames**, upstream's `min_new_tokens=2`, since one frame is 80 ms and not speech.
 
 ## Hardware
 

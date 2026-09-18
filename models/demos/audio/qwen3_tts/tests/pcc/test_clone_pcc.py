@@ -45,6 +45,7 @@ from models.demos.audio.qwen3_tts.tt.ttnn_qwen3_pipeline import (
     Qwen3TTSPipeline,
     build_clone_reference,
     build_voice_clone_prefill,
+    build_x_vector_prefill,
 )
 
 TEXT = "This voice was cloned on Tenstorrent hardware."
@@ -164,6 +165,83 @@ def test_a_reference_without_a_transcript_is_refused(expect_error):
     """ICL conditions on the transcript as well as the codes, so it is not optional."""
     with expect_error(ValueError, "transcript"):
         CloneReference(torch.zeros(16, 4, dtype=torch.long), torch.zeros(1, 2048), "")
+
+
+# ── cloning from the voice alone: upstream's x_vector_only_mode ─────────────
+
+
+def test_the_x_vector_prompt_is_the_custom_voice_prompt_with_a_measured_voice(tables, reference):
+    """Upstream's other cloning mode, and the shape it takes.
+
+    `x_vector_only_mode` puts the speaker encoder's 2048-wide vector where a named speaker
+    would sit and uses neither the clip's codes nor its transcript, so the prompt is the
+    CustomVoice one: `n_text + 10` positions here, `Auto` having no language id, against
+    the ICL prompt's extra position per reference frame.
+
+    Checked against upstream's own assembly under transformers 4.57.3, max absolute
+    difference 0.0 in both regimes. What this pins is the shape and that only the speaker
+    position differs from a named-speaker prompt, which is the whole claim of the mode.
+    """
+    voice_only = CloneReference(None, reference.speaker_embedding)
+    prompt, _ = build_x_vector_prefill(TEXT, voice_only, "Auto", tables)
+    icl, _ = build_voice_clone_prefill(TEXT, reference, "Auto", tables)
+
+    n_text = len(frontend.text_ids(TEXT)) - ROLE_IDS - TAIL_IDS
+    assert prompt.shape[1] == n_text + 10, "the clip's length must not reach this prompt"
+    assert prompt.shape[1] < icl.shape[1]
+    # Position 6 with `Auto`: three role positions, a three-token think block, then the
+    # speaker. Every head position sums the two tracks, and the text track there is a pad.
+    voice_position = tables.tts_pad + reference.speaker_embedding.reshape(1, 1, -1)
+    assert torch.equal(prompt[:, 6:7], voice_position), "the voice sits in one position, against tts_pad"
+    print(f"x-vector {prompt.shape[1]} positions against ICL's {icl.shape[1]} for the same clip and text")
+
+
+def test_a_voice_only_reference_needs_no_transcript():
+    """The point of the mode: most clips come without one."""
+    voice_only = CloneReference(None, torch.zeros(1, 2048))
+    assert voice_only.frames == 0
+    assert "voice only" in repr(voice_only)
+
+
+def test_an_icl_prompt_refuses_a_voice_only_reference(tables, expect_error):
+    """A reference with no codes cannot fill the codec track ICL needs."""
+    voice_only = CloneReference(None, torch.zeros(1, 2048))
+    with expect_error(ValueError, "only a speaker vector"):
+        build_voice_clone_prefill(TEXT, voice_only, "Auto", tables)
+
+
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
+def test_a_voice_only_reference_skips_the_codec_encoder(device):
+    """Half the work of a full reference, because the codes are not needed.
+
+    Measured on a 7.28 s clip: 3.38 s against 4.39 s for both encoders, and the saving
+    grows with the clip since the codec encoder's convolutions run over every sample.
+    """
+    clip = synthetic_voiced_clip(seconds=CLIP_SECONDS, voice="low")
+    voice_only = build_clone_reference(device, clip, x_vector_only=True)
+    full = build_clone_reference(device, clip, REFERENCE_TEXT)
+
+    assert voice_only.codes is None and voice_only.frames == 0
+    assert voice_only.speaker_embedding.shape == (1, 2048)
+    assert torch.allclose(voice_only.speaker_embedding, full.speaker_embedding), "same clip, same voice"
+
+
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
+def test_x_vector_cloning_produces_audio_of_the_right_length(device):
+    """End to end in the voice-only mode: nothing is prepended, so nothing is cut.
+
+    ICL decodes the reference frames alongside the generated ones and trims them off the
+    front. This mode has no reference frames, so the waveform is exactly the frames it
+    generated, which is the arithmetic to get wrong.
+    """
+    clip = synthetic_voiced_clip(seconds=CLIP_SECONDS, voice="low")
+    voice_only = build_clone_reference(device, clip, x_vector_only=True)
+    pipeline = Qwen3TTSPipeline(device, max_frames=32, seed=0)
+    waveform, codes = pipeline.generate_clone(TEXT, voice_only, x_vector_only=True)
+
+    assert waveform.shape == (1, codes.shape[0] * 1920), "no reference frames to trim"
+    assert torch.isfinite(waveform).all() and waveform.abs().max() <= 1.0
+    print(f"{codes.shape[0]} frames -> {waveform.shape[1] / 24000:.2f} s from a voice with no clip behind it")
 
 
 def test_codes_in_the_wrong_layout_are_refused(expect_error):

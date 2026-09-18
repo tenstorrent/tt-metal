@@ -103,3 +103,44 @@ def test_the_penalty_is_applied_before_the_temperature():
     }
     # 4.0 / 1.05 = 3.81 < 3.9, so id 1 must win.
     assert picks == {1}
+
+
+# ── suppression ─────────────────────────────────────────────────────────────
+
+
+def test_suppressed_ids_are_never_drawn(logits):
+    """Upstream's `suppress_tokens`: the ids it lists cannot come back, however likely."""
+    forbidden = torch.topk(logits, 8).indices.tolist()
+    draws = {
+        sampling.sample(
+            logits, temperature=1.0, top_k=0, suppress=forbidden, generator=torch.Generator().manual_seed(seed)
+        )
+        for seed in range(200)
+    }
+    assert not draws & set(forbidden), "a suppressed id was drawn"
+    assert len(draws) > 1, "the test needs a distribution, not a single spike"
+
+
+def test_suppression_happens_before_the_top_k_floor(logits):
+    """Order matters: suppressed ids must not occupy places in the top k.
+
+    `transformers` puts `SuppressTokensLogitsProcessor` ahead of the warpers, so a
+    suppressed id is at `-inf` before top-k counts anything. Suppressing the whole top 8
+    and asking for k=4 must therefore leave the 9th to 12th most likely ids, not nothing.
+    """
+    ordered = torch.topk(logits, 12).indices.tolist()
+    survivors = set(ordered[8:12])
+    draws = {
+        sampling.sample(
+            logits, temperature=1.0, top_k=4, suppress=ordered[:8], generator=torch.Generator().manual_seed(seed)
+        )
+        for seed in range(200)
+    }
+    assert draws <= survivors, f"drew outside the surviving top-k: {sorted(draws - survivors)}"
+
+
+def test_an_empty_suppression_list_changes_nothing(logits):
+    """The default path must be untouched, since every existing measurement assumes it."""
+    seeded = lambda **kwargs: sampling.sample(logits, generator=torch.Generator().manual_seed(3), **kwargs)
+    assert seeded() == seeded(suppress=())
+    assert seeded() == seeded(suppress=[])

@@ -95,7 +95,9 @@ def report_timings(timings, elapsed, duration, reference=None):
         f"({timings['frames']} frames at {timings['ms_per_frame']:.0f} ms each)"
     )
     codec_frames = timings.get("codec_frames", timings["frames"])
-    trailer = ", the reference rides along and is cut" if reference is not None else ""
+    # Only in-context cloning puts the clip's frames through the decoder; cloning from the
+    # voice alone has none to send, so the count matching `frames` is the tell.
+    trailer = ", the reference rides along and is cut" if codec_frames > timings["frames"] else ""
     print(f"  codec decoder    {timings['codec_s']:8.2f} s   ({codec_frames} frames{trailer})")
     # Audio over wall clock, so above 1 is faster than real time. Printed this way round
     # because the other one reads like a speedup when it is the opposite.
@@ -130,6 +132,7 @@ def run(
     ckpt=None,
     similarity=True,
     streaming=False,
+    x_vector=False,
 ):
     """Speak `text` in the `ref` clip's voice, as a named `speaker`, or as `instruct` describes.
 
@@ -142,14 +145,28 @@ def run(
 
     if ckpt:
         os.environ["QWEN3_TTS_CKPT"] = os.path.abspath(ckpt)
-    chosen = [name for name, value in (("--ref", ref), ("--speaker", speaker), ("--instruct", instruct)) if value]
-    if len(chosen) != 1:
+    # Where the voice comes from: a clip, a named speaker, or a description. Exactly one,
+    # since they all occupy the same prompt position. `--instruct` is the odd one: alone it
+    # designs a voice, with `--speaker` it directs one, and with `--x-vector` it directs a
+    # cloned one. Only in-context cloning cannot take it, because upstream's ICL prompt has
+    # nowhere to put it.
+    voices = [name for name, value in (("--ref", ref), ("--speaker", speaker)) if value]
+    if len(voices) > 1:
+        raise ValueError(f"pass one of --ref or --speaker, not both: got {', '.join(voices)}")
+    if not voices and not instruct:
+        raise ValueError("pass --ref (clone a clip), --speaker (a built-in voice) or --instruct (describe a voice)")
+    if ref and instruct and not x_vector:
         raise ValueError(
-            "pass exactly one of --ref (clone a clip), --speaker (a built-in voice) or "
-            f"--instruct (describe a voice); got {', '.join(chosen) or 'none'}"
+            "--instruct with --ref needs --x-vector: in-context cloning fills the prompt with "
+            "the clip's own codes and upstream leaves no room for an instruction there"
         )
-    if ref and not str(ref_text or "").strip():
-        raise ValueError("--ref-text is required with --ref: this model clones in context, see the module docstring")
+    if x_vector and not ref:
+        raise ValueError("--x-vector describes how to use --ref, so it needs one")
+    if ref and not x_vector and not str(ref_text or "").strip():
+        raise ValueError(
+            "--ref-text is required with --ref: this model clones in context, see the module "
+            "docstring. Or pass --x-vector to clone from the voice alone, which needs no transcript"
+        )
 
     from models.demos.audio.qwen3_tts import audio as host_audio
     from models.demos.audio.qwen3_tts.tt.ttnn_qwen3_pipeline import Qwen3TTSPipeline, build_clone_reference
@@ -159,7 +176,8 @@ def run(
     if ref:
         clip = host_audio.read_clip(ref)
         seconds = clip.shape[0] / 24000
-        print(f"Reference: {ref}  ({seconds:.1f} s, transcript {ref_text!r})")
+        how = "voice only" if x_vector else f"transcript {ref_text!r}"
+        print(f"Reference: {ref}  ({seconds:.1f} s, {how})")
         if seconds > 15:
             print(f"  note: {seconds:.0f} s is longer than this model needs. 3 to 10 s is the useful range,")
             print("        and every reference frame costs a prompt position and codec time.")
@@ -170,10 +188,12 @@ def run(
         started = time.time()
         if ref:
             print(bar)
-            print("Reading the voice (codec encoder + speaker encoder, once per clip) ...")
+            encoders = "speaker encoder" if x_vector else "codec encoder + speaker encoder"
+            print(f"Reading the voice ({encoders}, once per clip) ...")
             print(bar)
-            reference = build_clone_reference(device, clip, ref_text)
-            print(f"  {reference.frames} reference frames in {time.time() - started:.1f} s")
+            reference = build_clone_reference(device, clip, ref_text, x_vector_only=x_vector)
+            read = f"{reference.frames} reference frames" if reference.frames else "the voice, no codes"
+            print(f"  {read} in {time.time() - started:.1f} s")
 
         loaded = time.time()
         pipeline = Qwen3TTSPipeline(device, max_frames=max_frames, seed=seed)
@@ -186,11 +206,15 @@ def run(
         print("  the first utterance compiles its kernels; later ones in the same process do not")
         started = time.time()
         if ref:
-            waveform, codes = pipeline.generate_clone(text, reference, language=tag, streaming=streaming)
-        elif instruct:
-            waveform, codes = pipeline.generate_design(text, instruct, language=tag, streaming=streaming)
+            waveform, codes = pipeline.generate_clone(
+                text, reference, language=tag, streaming=streaming, x_vector_only=x_vector, instruct=instruct
+            )
+        elif speaker:
+            waveform, codes = pipeline.generate(
+                text, speaker=speaker, language=tag, streaming=streaming, instruct=instruct
+            )
         else:
-            waveform, codes = pipeline.generate(text, speaker=speaker, language=tag, streaming=streaming)
+            waveform, codes = pipeline.generate_design(text, instruct, language=tag, streaming=streaming)
         elapsed = time.time() - started
 
         spoken = waveform.reshape(-1)
@@ -246,6 +270,11 @@ def main():
     parser.add_argument("--speaker", help="A built-in CustomVoice speaker instead of a clone (e.g. ryan)")
     parser.add_argument("--instruct", help="Describe the voice in words instead (VoiceDesign checkpoint)")
     parser.add_argument(
+        "--x-vector",
+        action="store_true",
+        help="Clone from the voice alone, no transcript needed (upstream's x_vector_only_mode)",
+    )
+    parser.add_argument(
         "--streaming",
         action="store_true",
         help="Stream the text in a token per frame instead of putting it all in the prompt",
@@ -267,6 +296,7 @@ def main():
         speaker=args.speaker,
         instruct=args.instruct,
         streaming=args.streaming,
+        x_vector=args.x_vector,
         out=args.out,
         seed=args.seed,
         language=args.language,

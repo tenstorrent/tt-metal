@@ -117,6 +117,15 @@ DEFAULT_MAX_FRAMES = 400
 # embedding the model already sees at every codec-track position, rather than zeros.
 PROMPT_BUCKET = 32
 
+# How many of the talker's top ids are control tokens rather than codes: upstream suppresses
+# `vocab_size - 1024` upward, sparing end-of-speech. The codec's codebooks hold 2048 entries
+# and the talker's vocabulary is 3072, so this is exactly the gap between them.
+CONTROL_ID_COUNT = 1024
+
+# Frames an utterance must reach before end-of-speech is allowed, upstream's
+# `min_new_tokens=2`. One frame is 80 ms.
+MIN_FRAMES = 2
+
 
 class Stopwatch:
     """Wall clock split across the blocks of one utterance.
@@ -205,34 +214,46 @@ class CloneReference:
     memory instead of transposing it, which would scramble a voice silently.
     """
 
-    def __init__(self, codes, speaker_embedding, text):
-        if not str(text or "").strip():
+    def __init__(self, codes, speaker_embedding, text=None):
+        # A reference with codes is for in-context cloning, and that prompt carries the
+        # transcript beside them, so it is not optional there. A reference with no codes is
+        # the `x_vector_only` kind, which carries the voice and nothing else to describe.
+        if codes is not None and not str(text or "").strip():
             raise ValueError("a clone reference needs the clip's transcript; upstream calls this ICL mode")
 
-        groups = checkpoint.talker_config()["code_predictor_config"]["num_code_groups"]
-        codes = torch.as_tensor(codes, dtype=torch.long)
-        if codes.dim() != 2 or codes.shape[0] != groups:
-            raise ValueError(f"codes must be [{groups}, frames], got {tuple(codes.shape)}")
+        if codes is not None:
+            groups = checkpoint.talker_config()["code_predictor_config"]["num_code_groups"]
+            codes = torch.as_tensor(codes, dtype=torch.long)
+            if codes.dim() != 2 or codes.shape[0] != groups:
+                raise ValueError(f"codes must be [{groups}, frames], got {tuple(codes.shape)}")
 
-        self.codes = codes
+        self.codes = codes  # None for a reference built with `x_vector_only`
         self.speaker_embedding = torch.as_tensor(speaker_embedding, dtype=torch.float32).reshape(1, -1)
         self.text = text
 
     @property
     def frames(self):
-        return self.codes.shape[1]
+        """Reference frames, or 0 for a reference that carries only the voice."""
+        return 0 if self.codes is None else self.codes.shape[1]
 
     def __repr__(self):
+        if self.codes is None:
+            return "CloneReference(voice only, no codes)"
         return f"CloneReference({self.frames} frames, {self.frames / 12.5:.2f} s, text={self.text!r})"
 
 
-def build_clone_reference(device, audio, text, sample_rate=None):
-    """A reference clip -> `CloneReference`, running both encoders once on device.
+def build_clone_reference(device, audio, text=None, sample_rate=None, x_vector_only=False):
+    """A reference clip -> `CloneReference`, running the encoders it needs on device.
 
     The codec encoder turns the clip into codes and the speaker encoder turns it into one
-    2048-wide vector; the prompt carries the first on its codec track and the second in a
-    single position. Both sets of weights are loaded here and dropped on return, so a
+    2048-wide vector; the ICL prompt carries the first on its codec track and the second
+    in a single position. Both sets of weights are loaded here and dropped on return, so a
     server that clones one voice many times should keep the result, not call this again.
+
+    `x_vector_only=True` builds a reference for the mode of the same name: the codec
+    encoder is skipped along with the codes it produces, and `text` is not needed, because
+    that prompt carries neither. It is the cheaper half of the work, and the mode to use
+    when a clip's transcript is unknown.
 
     **Call this before a pipeline captures its traces**, or release them first: this is
     eager device work, and eager work beside a live trace hangs the card.
@@ -241,11 +262,18 @@ def build_clone_reference(device, audio, text, sample_rate=None):
     expected = checkpoint.codec_config()["input_sample_rate"]
     if sample_rate is not None and int(sample_rate) != expected:
         raise ValueError(f"a reference clip must be {expected} Hz audio, got {sample_rate}")
+    if not x_vector_only and not str(text or "").strip():
+        raise ValueError(
+            "in-context cloning needs the clip's transcript, since the prompt carries it "
+            "beside the codes; pass x_vector_only=True to clone from the voice alone"
+        )
+
+    embedding = run_speaker_encoder(device, host_audio.speaker_mel(audio))
+    if x_vector_only:
+        return CloneReference(None, embedding, text)
 
     encoder = TtCodecEncoder(device, preprocess_codec_encoder_parameters(device))
-    codes = encoder.encode(audio)[0]
-    embedding = run_speaker_encoder(device, host_audio.speaker_mel(audio))
-    return CloneReference(codes, embedding, text)
+    return CloneReference(encoder.encode(audio)[0], embedding, text)
 
 
 def resolve_language(language, speaker=None):
@@ -421,7 +449,39 @@ class StreamingText:
         return self.closed and not self.ids and not self.embeddings and self.sent_eos
 
 
-def build_streaming_prefill(text, speaker, language, tables=None):
+def speaker_row(speaker, tables):
+    """A named speaker's codec-table row, or a clear refusal.
+
+    The nine CustomVoice speakers are codec-vocabulary ids, so a speaker is one table row
+    and occupies one prompt position. Base and VoiceDesign leave `spk_id` empty.
+    """
+    speakers = checkpoint.talker_config()["spk_id"]
+    if not speakers:
+        raise ValueError("this checkpoint defines no speakers; CustomVoice needs the CustomVoice weights")
+    key = str(speaker).strip().lower()
+    if key not in speakers:
+        raise ValueError(f"unknown speaker {speaker!r}; this checkpoint offers {', '.join(sorted(speakers))}")
+    return key, tables.codec([speakers[key]])
+
+
+def instruction_block(instruction, tables):
+    """An instruction as prompt positions, or nothing.
+
+    `<|im_start|>user\n{instruction}<|im_end|>\n` on the text track with nothing opposite
+    it, ahead of everything else. Upstream disables instructions on the 0.6B checkpoints
+    (`if self.model.tts_model_size in "0b6"` drops them), where it drops them silently;
+    this refuses instead, on the same reasoning as the VoiceDesign guard: speaking in a
+    voice the instruction had no part in choosing is worse than saying so.
+    """
+    if not str(instruction or "").strip():
+        return []
+    size = str(checkpoint.model_config().get("tts_model_size", ""))
+    if size.startswith("0b6"):
+        raise ValueError(f"the {size} checkpoints do not take an instruction; upstream disables it for them")
+    return [tables.text(frontend.instruction_ids(instruction))]
+
+
+def build_streaming_prefill(text, speaker, language, tables=None, instruction=None):
     """The dual-track prompt for streaming text input: ten positions, whatever the text.
 
     Returns (embeddings [1, 10, 2048], `StreamingText`). The head is the same nine
@@ -433,41 +493,83 @@ def build_streaming_prefill(text, speaker, language, tables=None):
     `text` is a string, or an iterable of pieces. See `StreamingText`.
     """
     tables = tables or HostEmbeddings()
-    talker_config = checkpoint.talker_config()
-    speakers = talker_config["spk_id"]
-    if not speakers:
-        raise ValueError("this checkpoint defines no speakers; CustomVoice needs the CustomVoice weights")
-    key = str(speaker).strip().lower()
-    if key not in speakers:
-        raise ValueError(f"unknown speaker {speaker!r}; this checkpoint offers {', '.join(sorted(speakers))}")
-
+    key, speaker_embed = speaker_row(speaker, tables)
     feed = StreamingText(tables, text)
-    head, codec_bos = _prompt_head(
-        tables, frontend.role_ids(), resolve_language(language, key), tables.codec([speakers[key]])
-    )
-    return torch.cat([head, feed.first() + codec_bos], dim=1), feed
+    head, codec_bos = _prompt_head(tables, frontend.role_ids(), resolve_language(language, key), speaker_embed)
+    parts = instruction_block(instruction, tables) + [head, feed.first() + codec_bos]
+    return torch.cat(parts, dim=1), feed
 
 
-def build_custom_voice_prefill(text, speaker, language, tables=None):
+def build_custom_voice_prefill(text, speaker, language, tables=None, instruction=None):
     """The dual-track prompt for CustomVoice, non-streaming.
 
-    Returns (embeddings [1, P, 2048], prompt_ids) where P is `n_text + 11`.
+    Returns (embeddings [1, P, 2048], prompt_ids) where P is `n_text + 11`, plus one
+    position per instruction token when there is an instruction.
+
+    `instruction` is upstream's `generate_custom_voice(..., instruct=...)`: a named speaker
+    and a description of how to say it, which the CustomVoice card documents together
+    (`speaker='Vivian', instruct='用特别愤怒的语气说'`). The instruction reads the same way it
+    does on VoiceDesign, as a user turn ahead of the prompt; what differs is that a speaker
+    still occupies its position, so the voice is the speaker's and the instruction shapes
+    the delivery rather than inventing the voice.
     """
     tables = tables or HostEmbeddings()
-    talker_config = checkpoint.talker_config()
-    speakers = talker_config["spk_id"]
-    if not speakers:
-        raise ValueError("this checkpoint defines no speakers; CustomVoice needs the CustomVoice weights")
-    key = str(speaker).strip().lower()
-    if key not in speakers:
-        raise ValueError(f"unknown speaker {speaker!r}; this checkpoint offers {', '.join(sorted(speakers))}")
+    key, speaker_embed = speaker_row(speaker, tables)
 
     prompt_ids = frontend.text_ids(text)
     text_ids = prompt_ids[ROLE_IDS:-TAIL_IDS]
+    head, codec_bos = _prompt_head(tables, prompt_ids[:ROLE_IDS], resolve_language(language, key), speaker_embed)
+    parts = instruction_block(instruction, tables) + [head, _prompt_body(tables, text_ids, codec_bos)]
+    return torch.cat(parts, dim=1), prompt_ids
+
+
+def build_x_vector_prefill(text, reference, language="Auto", tables=None, instruction=None):
+    """The clone prompt that carries only the voice, not the clip: `x_vector_only_mode`.
+
+    Upstream's other cloning mode. The speaker encoder's 2048-wide vector goes in the
+    speaker position and the reference's codes and transcript are not used at all, so the
+    prompt is CustomVoice-shaped with a measured voice where a named speaker would sit.
+
+    What that trades, measured on a 7.28 s clip and a nine-word line:
+
+    | | ICL | x-vector only |
+    |---|---|---|
+    | prompt | 132 positions | 23 |
+    | reference, once per clip | 4.39 s, both encoders | 3.38 s, speaker encoder alone |
+    | codec decode | the clip's frames ride along | only what was generated |
+    | speaker similarity | 0.9940 | 0.9925 |
+
+    Read that last row carefully. The metric is the speaker encoder's own cosine, and this
+    mode hands the model exactly the vector the metric is computed from, so it flatters
+    this mode by construction. ICL carries the clip itself, which is timbre and prosody the
+    encoder does not necessarily measure. Judge between them by ear, not by that number.
+
+    What is not in doubt: this mode needs no transcript, which is the usual state of a
+    clip, and its prompt does not grow with the clip's length.
+
+    Returns (embeddings [1, P, 2048], prompt_ids).
+    """
+    tables = tables or HostEmbeddings()
+    prompt_ids = frontend.text_ids(text)
+    text_ids = prompt_ids[ROLE_IDS:-TAIL_IDS]
     head, codec_bos = _prompt_head(
-        tables, prompt_ids[:ROLE_IDS], resolve_language(language, key), tables.codec([speakers[key]])
+        tables, prompt_ids[:ROLE_IDS], resolve_language(language), reference.speaker_embedding
     )
-    return torch.cat([head, _prompt_body(tables, text_ids, codec_bos)], dim=1), prompt_ids
+    parts = instruction_block(instruction, tables) + [head, _prompt_body(tables, text_ids, codec_bos)]
+    return torch.cat(parts, dim=1), prompt_ids
+
+
+def build_streaming_x_vector_prefill(text, reference, language="Auto", tables=None, instruction=None):
+    """`build_x_vector_prefill` with the text on the per-frame schedule.
+
+    Ten positions and a `StreamingText`, like `build_streaming_prefill`, since without the
+    clip on the codec track there is nothing for the text track to be summed against.
+    """
+    tables = tables or HostEmbeddings()
+    feed = StreamingText(tables, text)
+    head, codec_bos = _prompt_head(tables, frontend.role_ids(), resolve_language(language), reference.speaker_embedding)
+    parts = instruction_block(instruction, tables) + [head, feed.first() + codec_bos]
+    return torch.cat(parts, dim=1), feed
 
 
 def is_voice_design_checkpoint():
@@ -512,10 +614,7 @@ def build_voice_design_prefill(text, instruction, language="Auto", tables=None):
     prompt_ids = frontend.text_ids(text)
     text_ids = prompt_ids[ROLE_IDS:-TAIL_IDS]
     head, codec_bos = _prompt_head(tables, prompt_ids[:ROLE_IDS], resolve_language(language), None)
-
-    parts = [head, _prompt_body(tables, text_ids, codec_bos)]
-    if str(instruction or "").strip():
-        parts.insert(0, tables.text(frontend.instruction_ids(instruction)))
+    parts = instruction_block(instruction, tables) + [head, _prompt_body(tables, text_ids, codec_bos)]
     return torch.cat(parts, dim=1), prompt_ids
 
 
@@ -539,10 +638,7 @@ def build_streaming_design_prefill(text, instruction, language="Auto", tables=No
     tables = tables or HostEmbeddings()
     feed = StreamingText(tables, text)
     head, codec_bos = _prompt_head(tables, frontend.role_ids(), resolve_language(language), None)
-
-    parts = [head, feed.first() + codec_bos]
-    if str(instruction or "").strip():
-        parts.insert(0, tables.text(frontend.instruction_ids(instruction)))
+    parts = instruction_block(instruction, tables) + [head, feed.first() + codec_bos]
     return torch.cat(parts, dim=1), feed
 
 
@@ -566,6 +662,11 @@ def build_streaming_clone_prefill(text, reference, language="Auto", tables=None)
     Returns (embeddings [1, 9 + max(T_text, T_codec), 2048], `StreamingText`), where the
     feed is already positioned at whatever the prompt did not consume.
     """
+    if reference.codes is None:
+        raise ValueError(
+            "this reference carries only a speaker vector; pass x_vector_only=True to clone "
+            "from it, or rebuild it without x_vector_only for in-context cloning"
+        )
     tables = tables or HostEmbeddings()
     feed = StreamingText(tables, text)
     reference_ids = frontend.reference_text_ids(reference.text)[ROLE_IDS:-REFERENCE_TAIL_IDS]
@@ -615,6 +716,11 @@ def build_voice_clone_prefill(text, reference, language="Auto", tables=None):
     `build_streaming_clone_prefill` is the other regime, which sums the two tracks instead
     of placing one after the other.
     """
+    if reference.codes is None:
+        raise ValueError(
+            "this reference carries only a speaker vector; pass x_vector_only=True to clone "
+            "from it, or rebuild it without x_vector_only for in-context cloning"
+        )
     tables = tables or HostEmbeddings()
     talker_config = checkpoint.talker_config()
 
@@ -672,6 +778,13 @@ class Qwen3TTSPipeline:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
+        # Ids the talker may never emit as a code, and the same set plus end-of-speech for
+        # the first frames. Built once: they depend only on the checkpoint.
+        vocab = self.talker_config["vocab_size"]
+        control = [index for index in range(vocab - CONTROL_ID_COUNT, vocab) if index != self.eos]
+        self._control_ids = torch.tensor(control, dtype=torch.long)
+        self._control_ids_and_eos = torch.tensor(sorted(control + [self.eos]), dtype=torch.long)
+
         self.generation = checkpoint.generation_config()
         self.generator = None if seed is None else torch.Generator().manual_seed(seed)
         # Filled in by every generate, so a caller can see where the time went. The first
@@ -692,11 +805,32 @@ class Qwen3TTSPipeline:
         self.talker.capture()
         self.predictor.capture()
 
-    def _pick(self, logits, seen=(), penalty=1.0):
+    def _suppressed(self, emitted):
+        """Codebook-0 ids this step may not draw.
+
+        Two rules, both upstream's. **Control ids never leave the talker**: it suppresses
+        its top 1024 ids, everything from `vocab_size - 1024` up, sparing only
+        end-of-speech, so a code that reaches the codec is always a real code. Measured
+        exposure before this existed: 1.4e-09 of the probability mass on average and never
+        once inside the top 50 over 84 positions, so this changes no draw anyone has seen.
+        It closes the case where one does.
+
+        And **end-of-speech is off the table until `MIN_FRAMES` frames exist**, which is
+        `min_new_tokens=2` in upstream's talker arguments. A run that stops at its first
+        step produces an utterance of one frame, 80 ms, which is not speech.
+        """
+        if emitted >= MIN_FRAMES:
+            return self._control_ids
+        return self._control_ids_and_eos
+
+    def _pick(self, logits, seen=(), penalty=1.0, emitted=MIN_FRAMES):
         """One id from a row of logits: the checkpoint's sampler, or argmax if told to."""
         row = logits.detach().float().reshape(-1)
+        suppress = self._suppressed(emitted)
         if not self.generation.get("do_sample", True):
-            return int(row.argmax())
+            masked = row.clone()
+            masked[suppress] = -float("inf")
+            return int(masked.argmax())
         return sampling.sample(
             row,
             seen=seen,
@@ -705,6 +839,7 @@ class Qwen3TTSPipeline:
             top_p=self.generation.get("top_p", 1.0),
             penalty=penalty,
             generator=self.generator,
+            suppress=suppress,
         )
 
     def _inner_pick(self):
@@ -816,7 +951,7 @@ class Qwen3TTSPipeline:
             row = ttnn.to_torch(logits).float().reshape(-1)
             ttnn.deallocate(logits)  # released before the next trace runs, or it aliases trace memory
             watch.split("codec_head")
-            first = self._pick(row, seen=seen, penalty=penalty)
+            first = self._pick(row, seen=seen, penalty=penalty, emitted=len(frames))
             watch.split("sample")
             if first == self.eos:
                 break
@@ -845,7 +980,16 @@ class Qwen3TTSPipeline:
             raise RuntimeError("the talker emitted end-of-speech before any frame")
         return torch.tensor(frames, dtype=torch.long)
 
-    def codes(self, text, speaker="ryan", language="English", max_frames=None, on_frame=None, streaming=False):
+    def codes(
+        self,
+        text,
+        speaker="ryan",
+        language="English",
+        max_frames=None,
+        on_frame=None,
+        streaming=False,
+        instruct=None,
+    ):
         """The frames for `text` without decoding them, [frames, 16].
 
         `generate` is this plus the codec. Separate because the codec is the one block that
@@ -855,12 +999,22 @@ class Qwen3TTSPipeline:
         """
         limit = min(max_frames or self.max_frames, self.max_frames)
         if streaming:
-            embeddings, feed = build_streaming_prefill(text, speaker, language, self.tables)
+            embeddings, feed = build_streaming_prefill(text, speaker, language, self.tables, instruct)
         else:
-            embeddings, feed = build_custom_voice_prefill(text, speaker, language, self.tables)[0], None
+            embeddings = build_custom_voice_prefill(text, speaker, language, self.tables, instruct)[0]
+            feed = None
         return self._decode_frames(embeddings, limit, on_frame, feed=feed)
 
-    def generate(self, text, speaker="ryan", language="English", max_frames=None, on_frame=None, streaming=False):
+    def generate(
+        self,
+        text,
+        speaker="ryan",
+        language="English",
+        max_frames=None,
+        on_frame=None,
+        streaming=False,
+        instruct=None,
+    ):
         """text -> (waveform [1, N] at 24 kHz, codes [frames, 16]).
 
         Sampled with the checkpoint's own settings. Pass `seed` to the constructor for a
@@ -869,8 +1023,13 @@ class Qwen3TTSPipeline:
         `streaming=True` switches to the other regime this model was trained in: the prompt
         carries one text token and the rest arrives a token per frame, so `text` may be an
         iterable of pieces rather than a string. `StreamingText` has the schedule.
+
+        `instruct` describes how the speaker should say it, as upstream's
+        `generate_custom_voice(..., instruct=...)` does: the voice stays the named
+        speaker's and the instruction shapes the delivery. `generate_design` is the other
+        way round, a voice with no speaker behind it.
         """
-        codes = self.codes(text, speaker, language, max_frames, on_frame, streaming)
+        codes = self.codes(text, speaker, language, max_frames, on_frame, streaming, instruct)
         waveform = self._decode_waveform(codes.t().unsqueeze(0)).reshape(1, -1)
         return waveform, codes
 
@@ -897,7 +1056,17 @@ class Qwen3TTSPipeline:
         waveform = self._decode_waveform(codes.t().unsqueeze(0)).reshape(1, -1)
         return waveform, codes
 
-    def generate_clone(self, text, reference, language="Auto", max_frames=None, on_frame=None, streaming=False):
+    def generate_clone(
+        self,
+        text,
+        reference,
+        language="Auto",
+        max_frames=None,
+        on_frame=None,
+        streaming=False,
+        x_vector_only=False,
+        instruct=None,
+    ):
         """text spoken in a reference clip's voice -> (waveform [1, N], codes [frames, 16]).
 
         `reference` comes from `build_clone_reference`, which needs the **Base** checkpoint:
@@ -913,13 +1082,30 @@ class Qwen3TTSPipeline:
         `build_streaming_clone_prefill` explains. It shortens the prompt and it does not
         make the clip optional: the prompt still swallows as much text as the clip has
         frames before it can close.
+
+        `x_vector_only=True` is upstream's other cloning mode: the speaker vector goes in
+        and the clip's codes and transcript stay out, so the reference needs no transcript
+        and the prompt is CustomVoice-shaped. It carries less of the voice than ICL does;
+        `build_x_vector_prefill` has the trade. An `instruct` is accepted in that mode,
+        since the prompt has room for one.
         """
         limit = min(max_frames or self.max_frames, self.max_frames)
-        if streaming:
+        if x_vector_only and streaming:
+            embeddings, feed = build_streaming_x_vector_prefill(text, reference, language, self.tables, instruct)
+        elif x_vector_only:
+            embeddings = build_x_vector_prefill(text, reference, language, self.tables, instruct)[0]
+            feed = None
+        elif streaming:
             embeddings, feed = build_streaming_clone_prefill(text, reference, language, self.tables)
         else:
-            embeddings, feed = build_voice_clone_prefill(text, reference, language, self.tables)[0], None
+            embeddings = build_voice_clone_prefill(text, reference, language, self.tables)[0]
+            feed = None
         codes = self._decode_frames(embeddings, limit, on_frame, feed=feed)
+
+        if x_vector_only:
+            # No reference frames in the prompt, so none to decode alongside and none to cut.
+            waveform = self._decode_waveform(codes.t().unsqueeze(0)).reshape(1, -1)
+            return waveform, codes
 
         together = torch.cat([reference.codes.t(), codes], dim=0)
         waveform = self._decode_waveform(together.t().unsqueeze(0)).reshape(1, -1)

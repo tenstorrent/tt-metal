@@ -45,14 +45,17 @@ OUTPUT_DIR = "outputs"
 DEFAULT_SEED = 42
 
 
-def _read_reference(device, pipeline, path, transcript):
+def _read_reference(device, pipeline, path, transcript, x_vector=False):
     """Build a `CloneReference`, releasing the traces first so eager work is safe."""
     from models.demos.audio.qwen3_tts import audio as host_audio
     from models.demos.audio.qwen3_tts.tt.ttnn_qwen3_pipeline import build_clone_reference
 
     transcript = str(transcript or "").strip()
-    if not transcript:
-        raise ValueError("a clone needs the clip's transcript: \\ref PATH | what the clip says")
+    if not transcript and not x_vector:
+        raise ValueError(
+            "in-context cloning needs the clip's transcript: \\ref PATH | what the clip says. "
+            "Start the server with --x-vector to clone from the voice alone instead"
+        )
 
     clip = host_audio.read_clip(path)
     if pipeline is not None:
@@ -70,6 +73,11 @@ def main():
     parser.add_argument("--speaker", help="A built-in CustomVoice speaker instead of a clone (e.g. ryan)")
     parser.add_argument("--instruct", help="Describe the voice in words instead (VoiceDesign checkpoint)")
     parser.add_argument(
+        "--x-vector",
+        action="store_true",
+        help="Clone from the voice alone, no transcript needed (upstream's x_vector_only_mode)",
+    )
+    parser.add_argument(
         "--streaming",
         action="store_true",
         help="Stream the text in a token per frame instead of putting it all in the prompt",
@@ -83,14 +91,17 @@ def main():
 
     if args.ckpt:
         os.environ["QWEN3_TTS_CKPT"] = os.path.abspath(args.ckpt)
-    chosen = [n for n, v in (("--ref", args.ref), ("--speaker", args.speaker), ("--instruct", args.instruct)) if v]
-    if len(chosen) != 1:
-        parser.error(
-            "pass exactly one of --ref (clone a clip), --speaker (a built-in voice) or "
-            f"--instruct (describe a voice); got {', '.join(chosen) or 'none'}"
-        )
-    if args.ref and not str(args.ref_text or "").strip():
-        parser.error("--ref-text is required with --ref: this model clones in context")
+    voices = [name for name, value in (("--ref", args.ref), ("--speaker", args.speaker)) if value]
+    if len(voices) > 1:
+        parser.error(f"pass one of --ref or --speaker, not both: got {', '.join(voices)}")
+    if not voices and not args.instruct:
+        parser.error("pass --ref (clone a clip), --speaker (a built-in voice) or --instruct (describe a voice)")
+    if args.ref and args.instruct and not args.x_vector:
+        parser.error("--instruct with --ref needs --x-vector: in-context cloning leaves no room for one")
+    if args.x_vector and not args.ref:
+        parser.error("--x-vector describes how to use --ref, so it needs one")
+    if args.ref and not args.x_vector and not str(args.ref_text or "").strip():
+        parser.error("--ref-text is required with --ref, or pass --x-vector to clone from the voice alone")
 
     os.makedirs(args.output_dir, exist_ok=True)
     try:
@@ -118,7 +129,7 @@ def main():
         print("Loading. The first utterance also compiles its kernels; later ones do not.")
         print(bar)
         if args.ref:
-            clip, reference = _read_reference(device, None, args.ref, args.ref_text)
+            clip, reference = _read_reference(device, None, args.ref, args.ref_text, args.x_vector)
         elif instruct:
             print(f"  VOICE:  {instruct!r}")
         started = time.time()
@@ -173,8 +184,12 @@ def main():
                 elif command == "\\ref":
                     path, _, transcript = argument.partition("|")
                     try:
-                        clip, reference = _read_reference(device, pipeline, path.strip(), transcript.strip())
-                        speaker = instruct = None
+                        clip, reference = _read_reference(
+                            device, pipeline, path.strip(), transcript.strip(), args.x_vector
+                        )
+                        speaker = None
+                        if not args.x_vector:
+                            instruct = None  # in-context cloning has nowhere to put one
                     except Exception as error:
                         print(f"  ERROR: {error}")
                 else:
@@ -187,15 +202,26 @@ def main():
                 started = time.time()
                 if reference is not None:
                     waveform, codes = pipeline.generate_clone(
-                        line, reference, language=language or "Auto", streaming=args.streaming
+                        line,
+                        reference,
+                        language=language or "Auto",
+                        streaming=args.streaming,
+                        x_vector_only=args.x_vector,
+                        instruct=instruct if args.x_vector else None,
                     )
-                elif instruct:
-                    waveform, codes = pipeline.generate_design(
-                        line, instruct, language=language or "Auto", streaming=args.streaming
+                elif speaker:
+                    waveform, codes = pipeline.generate(
+                        line,
+                        speaker=speaker,
+                        language=language or "English",
+                        streaming=args.streaming,
+                        instruct=instruct,
                     )
                 else:
-                    waveform, codes = pipeline.generate(
-                        line, speaker=speaker, language=language or "English", streaming=args.streaming
+                    # Nothing else is reachable: the flags and the REPL both require one of
+                    # a reference, a speaker or an instruction before a line is spoken.
+                    waveform, codes = pipeline.generate_design(
+                        line, instruct, language=language or "Auto", streaming=args.streaming
                     )
                 elapsed = time.time() - started
 

@@ -38,13 +38,21 @@ def apply_repetition_penalty(logits, seen, penalty):
     return logits
 
 
-def sample(logits, seen=(), temperature=0.9, top_k=50, top_p=1.0, penalty=1.0, generator=None):
+def sample(logits, seen=(), temperature=0.9, top_k=50, top_p=1.0, penalty=1.0, generator=None, suppress=()):
     """One id from a single row of logits, matching `transformers`' processor order.
 
     `seen` are the ids the penalty applies to, which for the talker is every codebook 0
     code it has emitted so far. Pass `generator` to make a run reproducible.
+
+    `suppress` are ids this draw may not return, as `-inf` before anything else looks at
+    the row. Ahead of the penalty and the top-k floor because that is where
+    `SuppressTokensLogitsProcessor` sits in `transformers`, and the order matters: a
+    suppressed id at `-inf` cannot take one of the k places, whereas dropping it afterwards
+    would leave k-1.
     """
     logits = logits.detach().float().reshape(-1).clone()
+    if len(suppress):
+        logits[torch.as_tensor(suppress, dtype=torch.long)] = -float("inf")
     logits = apply_repetition_penalty(logits, seen, penalty)
 
     if temperature and temperature != 1.0:
