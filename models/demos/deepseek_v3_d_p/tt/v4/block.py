@@ -222,7 +222,10 @@ class TtV4Block(LightweightModule):
                 ttnn.squeeze(normed, dim=0),
                 actual_isl=actual_isl,
                 padding_side=padding_side,
-                actual_start=actual_start or 0,
+                # The MoE reads a non-zero actual_start as "your rows are rotated across the SP
+                # axis", which is ttMLA's layout, not ours: this block uploads the sequence as a
+                # plain contiguous shard, so the sequential row counts are the correct ones.
+                actual_start=0,
                 input_ids=input_ids,
             )
             ttnn.deallocate(normed)
