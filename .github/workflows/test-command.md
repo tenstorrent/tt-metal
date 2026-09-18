@@ -518,14 +518,16 @@ The defaults are usually *maximal*, and that is where the waste is. Recurring sh
   pipelines, both defaulting to `all`. If the change touches one model, name it. SKU
   values carry a human-readable suffix — use the option string exactly as written
   (e.g. `wh_n150 (N150)`, `bh_p150 (P150)`).
-- **Suite and board toggles: `run-<something>` booleans that default to `true`.** Three
-  pipelines bundle independent suites this way, and taking the defaults runs all of them:
+- **Suite and board toggles: `run-<something>` booleans.** Four pipelines bundle
+  independent suites this way. Every toggle below defaults to `true`, except where the
+  table says otherwise, so taking the defaults runs all of them:
 
-  | Pipeline | Toggles (all default `true`) |
+  | Pipeline | Toggles |
   |---|---|
   | `sanity-tests` | `run-ttnn-sanity-tests`, `run-ops-sanity-tests`, `run-fabric-sanity-tests`, `run-t3000-sanity-tests`, `run-umd-sanity-tests`, `run-ttsim-sanity-tests`, `run-blackhole-multi-card-sanity-tests`, `run-models-sanity-tests` |
   | `single-card-profiler-tests` | `run-n150-profiler`, `run-n300-profiler`, `run-blackhole-profiler` |
   | `pipeline-select-profiler` | `run-n150-profiler`, `run-n300-profiler`, `run-blackhole-profiler`, `run-t3k-profiler` |
+  | `t3000-tests` | `run-unit-tests`, `run-integration-tests`, and `run-e2e-tests` which defaults to **`false`** — the e2e suite costs about 195 of the 279 machine-minutes of a full run, so pass `run-e2e-tests: true` only when the change touches CCL, fabric or dispatch |
 
   The names say what each covers, so map them the same way you mapped paths to pipelines:
   a single-device `ttnn` op change reaches `run-ttnn-sanity-tests` and `run-ops-sanity-tests`

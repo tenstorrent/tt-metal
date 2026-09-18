@@ -3,6 +3,11 @@ name: "T3K tests"
 on:
   workflow_dispatch:
     inputs:
+      # These 3 inputs shape a dispatch only. A scheduled run ignores them and
+      # covers every suite. run-e2e-tests defaults to false because the e2e suite
+      # is 195 of the 279 machine-minutes of a full run, and 1 leg of it,
+      # t3k_fabric_stability_tests, holds a box for about 97 minutes. A dispatcher
+      # who wants e2e asks for it; the nightly run covers it either way.
       run-unit-tests:
         required: false
         type: boolean
@@ -16,8 +21,8 @@ on:
       run-e2e-tests:
         required: false
         type: boolean
-        default: true
-        description: "Run the T3K e2e tests"
+        default: false
+        description: "Run the T3K e2e tests (about 195 machine-minutes; off by default on a dispatch)"
       # The values below are the model-name fields in the tests YAMLs the impls
       # read. A value that matches no model-name filters the matrix down to the
       # entries that carry no model-name, which reads as a pass.
