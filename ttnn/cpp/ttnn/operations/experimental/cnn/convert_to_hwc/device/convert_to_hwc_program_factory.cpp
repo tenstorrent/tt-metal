@@ -221,7 +221,6 @@ ConvertToHwcConfig ConvertToHwcConfig::create_from_tensors(const Tensor& input, 
 
     // DRAM/L1 configuration
     config.is_input_in_dram = input.buffer()->core_type() == tt::CoreType::DRAM;
-    config.remote_address = input.buffer()->address();
     config.remote_buffer_type = input.buffer()->buffer_type();
     config.remote_core_type = input.buffer()->core_type();
 
@@ -401,9 +400,11 @@ void set_runtime_arguments(
     const std::vector<std::vector<uint32_t>>& per_core_serialized_transfers,
     tt::tt_metal::KernelHandle writer_kernel_id0,
     tt::tt_metal::KernelHandle writer_kernel_id1,
-    uint32_t remote_address,
     tt::tt_metal::CBHandle cb_in,
     tt::tt_metal::CBHandle cb_out) {
+    // Use the live input address so a program-cache hit picks up a reallocated DRAM tensor
+    const uint32_t remote_address = input_tensor.buffer()->address();
+
     // Set per-core runtime arguments for writer kernels
     for (uint32_t core_idx = 0; core_idx < output_cores.size(); core_idx++) {
         std::vector<uint32_t> runtime_args_0 = {remote_address};
@@ -545,7 +546,6 @@ ConvertToHWCProgramFactory::cached_program_t ConvertToHWCProgramFactory::create(
         per_core_serialized_transfers,
         writer_kernel_id0,
         writer_kernel_id1,
-        config.remote_address,
         cb_handles.cb_in,
         cb_handles.cb_out);
 
@@ -557,8 +557,7 @@ ConvertToHWCProgramFactory::cached_program_t ConvertToHWCProgramFactory::create(
         .output_cores = config.output_cores,
         .per_core_serialized_transfers = per_core_serialized_transfers,
         .writer_kernel_id0 = writer_kernel_id0,
-        .writer_kernel_id1 = writer_kernel_id1,
-        .remote_address = config.remote_address};
+        .writer_kernel_id1 = writer_kernel_id1};
 
     return {std::move(program), std::move(shared_variables)};
 }
@@ -582,7 +581,6 @@ void ConvertToHWCProgramFactory::override_runtime_arguments(
         shared_vars.per_core_serialized_transfers,
         shared_vars.writer_kernel_id0,
         shared_vars.writer_kernel_id1,
-        shared_vars.remote_address,
         shared_vars.cb_in,
         shared_vars.cb_out);
 }
