@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "rotary_embedding_llama_multi_core_program_factory.hpp"
+#include <set>
 #include "rotary_embedding_llama_metal2_common.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
@@ -302,11 +303,30 @@ ttnn::device_operation::ProgramArtifacts RotaryEmbeddingLlamaMultiCore::create_p
         }
     }
 
+    // Keep the legacy partition and each active core's exact runtime ranges.
+    // Only omit nodes whose batch/sequence loops are empty. In particular this
+    // preserves zero-filling of rows beyond rotary_Ht on a nonempty assignment.
+    std::set<CoreRange> active_ranges;
+    if (operation_attributes.active_cores_only) {
+        for (uint32_t i = 0; i < cores.size(); ++i) {
+            const auto& a = per_core_args[i];
+            if (a.start_batch < a.end_batch && a.start_seq < a.end_seq) {
+                active_ranges.emplace(cores[i], cores[i]);
+            }
+        }
+        TT_FATAL(!active_ranges.empty(), "active_cores_only requires a nonempty RoPE assignment");
+    }
+    const Nodes target_nodes =
+        operation_attributes.active_cores_only ? Nodes{CoreRangeSet(active_ranges)} : Nodes{all_cores};
+
     KernelRunArgs reader_run{.kernel = READER};
     KernelRunArgs writer_run{.kernel = WRITER};
     KernelRunArgs compute_run{.kernel = COMPUTE};
     for (uint32_t i = 0; i < cores.size(); ++i) {
         const auto& a = per_core_args[i];
+        if (operation_attributes.active_cores_only && (a.start_batch >= a.end_batch || a.start_seq >= a.end_seq)) {
+            continue;
+        }
         const NodeCoord node = cores[i];
         AddRuntimeArgsForNode(
             reader_run.runtime_arg_values,
@@ -348,7 +368,8 @@ ttnn::device_operation::ProgramArtifacts RotaryEmbeddingLlamaMultiCore::create_p
              out_dfb,
              zero_dfb},
         .tensor_parameters = {input_param, cos_param, sin_param, trans_mat_param, output_param},
-        .work_units = {WorkUnitSpec{.name = "main", .kernels = {READER, WRITER, COMPUTE}, .target_nodes = all_cores}}};
+        .work_units = {
+            WorkUnitSpec{.name = "main", .kernels = {READER, WRITER, COMPUTE}, .target_nodes = target_nodes}}};
 
     ProgramRunArgs run_args;
     run_args.kernel_run_args = {reader_run, writer_run, compute_run};

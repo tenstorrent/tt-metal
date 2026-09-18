@@ -13,6 +13,8 @@ struct RotaryEmbeddingLlamaParams {
     bool is_decode_mode{};
     tt::tt_metal::MemoryConfig output_mem_config;
     ttnn::DeviceComputeKernelConfig compute_kernel_config;
+    // Operation attribute participates in the default program-cache hash.
+    bool active_cores_only = false;
 };
 
 struct RotaryEmbeddingLlamaInputs {

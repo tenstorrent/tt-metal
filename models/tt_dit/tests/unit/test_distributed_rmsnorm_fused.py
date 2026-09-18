@@ -532,7 +532,7 @@ def test_ltx_qk_rope_bench(mesh_device):
     mode = _os.environ["QK_ROPE_MODE"]
     allowed = {"tp4_v_selfattn_qk_s1", "tp4_v_selfattn_qk_s2", "tp4_a_selfattn_qk"}
     assert shape in allowed, f"unsupported C01_SHAPE={shape!r}"
-    assert mode in {"base", "fused", "preserve"}, f"unsupported QK_ROPE_MODE={mode!r}"
+    assert mode in {"base", "fused", "preserve", "active"}, f"unsupported QK_ROPE_MODE={mode!r}"
     cfg = next(c for c in _make_cfgs(LTX, 4) if c.cid == shape)
     inp = _build(mesh_device, cfg, 0)
     ref = _torch_ref(cfg)
@@ -555,7 +555,7 @@ def test_ltx_qk_rope_bench(mesh_device):
 
     def run():
         args = dict(num_heads_per_device=cfg.heads, dynamic_weight=inp["weight"])
-        if mode != "base":
+        if mode in {"fused", "preserve"}:
             return norm(
                 inp["x"],
                 **args,
@@ -566,7 +566,12 @@ def test_ltx_qk_rope_bench(mesh_device):
             )
         normalized = norm(inp["x"], **args)
         return ttnn.experimental.rotary_embedding_llama(
-            normalized, inp["cos"], inp["sin"], inp["trans"], compute_kernel_config=rope_config
+            normalized,
+            inp["cos"],
+            inp["sin"],
+            inp["trans"],
+            compute_kernel_config=rope_config,
+            **({"active_cores_only": True} if mode == "active" else {}),
         )
 
     # Two forwards bind both ping-pong semaphore/stats-buffer sets. Keep both

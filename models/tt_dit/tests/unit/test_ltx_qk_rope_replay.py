@@ -7,8 +7,8 @@
 CPU: python -m models.tt_dit.tests.unit.test_ltx_qk_rope_replay --prepare DIR
 Broker: C01_ABA_SHAPE=tp4_v_selfattn_qk_s1 C01_ABA_MODE=base
         C01_ABA_FIXTURES=DIR C01_ABA_RESULTS=RESULTS pytest <this-file> -s
-Repeat with MODE=fused or preserve; CPU: --verify RESULTS --fixtures DIR
---shape SHAPE --variant fused|preserve. Preserve must also equal baseline exactly.
+Repeat with MODE=fused, preserve, or active; CPU: --verify RESULTS --fixtures DIR
+--shape SHAPE --variant fused|preserve|active. Preserve and active require exact baseline parity.
 Collection only emits C01_ABA_CORRECTNESS_PENDING. No timing is collected.
 """
 
@@ -77,7 +77,7 @@ def test_ltx_qk_rope_replay(mesh_device):
     from models.tt_dit.utils.tensor import bf16_tensor
 
     shape, mode = os.environ["C01_ABA_SHAPE"], os.environ["C01_ABA_MODE"]
-    assert shape in SHAPES and mode in {"base", "fused", "preserve"}
+    assert shape in SHAPES and mode in {"base", "fused", "preserve", "active"}
     cfg = next(c for c in _make_cfgs(LTX, 4) if c.cid == shape)
     assert (cfg.rows, cfg.dim, cfg.head_dim) == SHAPES[shape], "production shape table changed"
     fixture_path = Path(os.environ["C01_ABA_FIXTURES"]) / f"{shape}.pt"
@@ -114,7 +114,7 @@ def test_ltx_qk_rope_replay(mesh_device):
 
     def run():
         args = {"num_heads_per_device": cfg.heads, "dynamic_weight": weight}
-        if mode != "base":
+        if mode in {"fused", "preserve"}:
             return norm(
                 inputs["x"],
                 **args,
@@ -125,7 +125,12 @@ def test_ltx_qk_rope_replay(mesh_device):
             )
         normalized = norm(inputs["x"], **args)
         return ttnn.experimental.rotary_embedding_llama(
-            normalized, inputs["cos"], inputs["sin"], transform, compute_kernel_config=rope_config
+            normalized,
+            inputs["cos"],
+            inputs["sin"],
+            transform,
+            compute_kernel_config=rope_config,
+            **({"active_cores_only": True} if mode == "active" else {}),
         )
 
     def read(output):
@@ -203,15 +208,15 @@ def _verify(result_dir, fixture_dir, shape, variant="fused"):
         assert all(m["pcc"] >= 0.999 and m["relative_rmse"] <= 0.02 for m in metrics), metrics
         reports[mode] = {"commit": result["commit"], "result_sha256": _file_hash(path), "metrics": metrics}
         saved_outputs[mode] = result["saved_outputs"]
-    if variant == "preserve":
+    if variant in {"preserve", "active"}:
         assert all(
-            torch.equal(base, preserve) for base, preserve in zip(saved_outputs["base"], saved_outputs["preserve"])
-        ), "BF16 boundary-preserving route differs from baseline; diagnose before quality/performance claims"
+            torch.equal(base, preserve) for base, preserve in zip(saved_outputs["base"], saved_outputs[variant])
+        ), f"{variant} route differs from baseline; diagnose before quality/performance claims"
     report = {
         "shape": shape,
         "variant": variant,
         "quality_pass": True,
-        "exact_baseline_parity": variant == "preserve",
+        "exact_baseline_parity": variant in {"preserve", "active"},
         "fixture_sha256": _file_hash(fixture_path),
         "routes": reports,
     }
@@ -226,7 +231,7 @@ if __name__ == "__main__":
     action.add_argument("--verify", type=Path)
     parser.add_argument("--fixtures", type=Path)
     parser.add_argument("--shape", choices=list(SHAPES))
-    parser.add_argument("--variant", choices=("fused", "preserve"), default="fused")
+    parser.add_argument("--variant", choices=("fused", "preserve", "active"), default="fused")
     args = parser.parse_args()
     if args.prepare:
         _prepare(args.prepare)

@@ -152,6 +152,7 @@ class LTXAttention(Module):
         # Cross-attention may gather K across SP before rotating it, so it keeps
         # the separate rotation until that layout is validated independently.
         self.fuse_qk_rope = os.environ.get("LTX_FUSE_QK_ROPE", "0") in ("1", "true", "True")
+        self.rope_active_cores_only = os.environ.get("LTX_ROPE_ACTIVE_CORES_ONLY", "0") == "1"
         self.preserve_qk_rope_rounding = os.environ.get("LTX_FUSE_QK_ROPE_PRESERVE_BF16", "0") in ("1", "true", "True")
         self.query_input_dim = query_input_dim or dim
         self.output_dim = output_dim or dim
@@ -836,11 +837,32 @@ class LTXAttention(Module):
         if rope_cos is not None and not fuse_qk_rope:
             _k_cos = _k_cos_pe
             _k_sin = k_rope_sin if k_rope_sin is not None else rope_sin
+            active_core_args = (
+                {"active_cores_only": True}
+                if self.rope_active_cores_only
+                and q_BHNE.shape[0] == 1
+                and k_BHNE.shape[0] == 1
+                and all(
+                    t is not None and t.memory_config().memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED
+                    for t in (q_BHNE, k_BHNE, rope_cos, rope_sin, _k_cos, _k_sin, trans_mat)
+                )
+                else {}
+            )
             q_BHNE = ttnn.experimental.rotary_embedding_llama(
-                q_BHNE, rope_cos, rope_sin, trans_mat, compute_kernel_config=self.rope_compute_kernel_config
+                q_BHNE,
+                rope_cos,
+                rope_sin,
+                trans_mat,
+                compute_kernel_config=self.rope_compute_kernel_config,
+                **active_core_args,
             )
             k_BHNE = ttnn.experimental.rotary_embedding_llama(
-                k_BHNE, _k_cos, _k_sin, trans_mat, compute_kernel_config=self.rope_compute_kernel_config
+                k_BHNE,
+                _k_cos,
+                _k_sin,
+                trans_mat,
+                compute_kernel_config=self.rope_compute_kernel_config,
+                **active_core_args,
             )
 
         # SDPA input quant, applied after RoPE so the rotation still runs at full precision. On the
