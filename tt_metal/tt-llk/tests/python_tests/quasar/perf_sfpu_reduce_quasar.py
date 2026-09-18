@@ -7,29 +7,41 @@ from helpers.golden_generators import TILE_DIM
 from helpers.llk_params import (
     PERF_LOOP_FACTOR_QUASAR,
     PERF_RUN_TYPES_QUASAR,
+    DestAccumulation,
+    DestSync,
+    ImpliedMathFormat,
     ReducePool,
 )
-from helpers.param_config import parametrize
+from helpers.param_config import generate_perf_input_dimensions, parametrize
 from quasar.test_sfpu_reduce_quasar import (
-    MAX_TILES,
     get_supported_reduce_axes,
 )
 from quasar.test_sfpu_reduce_quasar import (
     test_sfpu_reduce_quasar as run_sfpu_reduce_quasar,
 )
 
-# Three 4-tile shapes, in elements. Four is what Dest holds at 32-bit and what the functional sweep
-# caps at, since a row reduce needs its whole block resident. Not generate_perf_input_dimensions():
-# that sizes to the 16-bit capacity of 8 tiles, which the functional generator never emits.
-#
-# Square earns its place on the row axis - it is the only 4-tile shape where both factors of
-# row_base = rt * block_ct_dim * REDUCE_TILE_STRIDE exceed one. The column axis times the same on
-# all three, since it reduces tile by tile, so those rows are knowingly duplicates.
-PERF_INPUT_DIMENSIONS_REDUCE = [
-    [MAX_TILES * TILE_DIM, TILE_DIM],  # tall:   4 x 1 tiles
-    [TILE_DIM, MAX_TILES * TILE_DIM],  # wide:   1 x 4 tiles
-    [2 * TILE_DIM, 2 * TILE_DIM],  # square: 2 x 2 tiles
-]
+# The kernel is written for 32x32 tiles only, so the functional sweep has no tile-size axis and
+# select_perf_tile_sizes() would return just (32, 32); there is nothing to sweep there.
+
+
+def perf_input_dimensions(formats):
+    """Dest-full tall and wide blocks for this format's Dest width, plus the 2x2 square.
+
+    generate_perf_input_dimensions() gives (max_tiles, 1) and (1, max_tiles) in tiles: 8 at
+    16-bit, 4 at 32-bit, the same ceiling the functional sweep uses per format. The square is the
+    one extra row-axis case: both factors of row_base = rt * block_ct_dim * REDUCE_TILE_STRIDE
+    exceed one there. The column axis reduces tile by tile, so its rows across these shapes are
+    knowingly duplicates.
+    """
+    dest_acc = (
+        DestAccumulation.Yes
+        if formats.input_format.is_32_bit()
+        else DestAccumulation.No
+    )
+    return generate_perf_input_dimensions(dest_acc, DestSync.Half) + [
+        [2 * TILE_DIM, 2 * TILE_DIM]
+    ]
+
 
 # One format per instruction path that costs something different:
 #   Float32    - float fold, 32-bit Dest
@@ -57,7 +69,8 @@ PERF_INPUT_BOUNDS = (-100, 100)
     reduce_pool=PERF_POOLS,
     formats=PERF_FORMATS,
     mathop=get_supported_reduce_axes,
-    dimension_combinations=PERF_INPUT_DIMENSIONS_REDUCE,
+    dimension_combinations=perf_input_dimensions,
+    implied_math_format=[ImpliedMathFormat.Yes],
     run_types=PERF_RUN_TYPES_QUASAR,
     loop_factor=[PERF_LOOP_FACTOR_QUASAR],
     is_perf=[True],
@@ -68,6 +81,7 @@ def test_perf_sfpu_reduce_quasar(
     formats,
     mathop,
     dimension_combinations,
+    implied_math_format,
     run_types,
     loop_factor,
     is_perf,
@@ -84,6 +98,7 @@ def test_perf_sfpu_reduce_quasar(
         PERF_INPUT_BOUNDS,
         dimension_combinations,
         TILE_DIM,
+        implied_math_format,
         run_types=run_types,
         loop_factor=loop_factor,
         is_perf=is_perf,

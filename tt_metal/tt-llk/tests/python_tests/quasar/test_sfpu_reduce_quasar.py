@@ -13,6 +13,7 @@ from helpers.golden_generators import (
 )
 from helpers.llk_params import (
     DestAccumulation,
+    ImpliedMathFormat,
     MathOperation,
     PerfRunType,
     ReducePool,
@@ -38,9 +39,8 @@ from helpers.test_variant_parameters import (
 from helpers.tilize_untilize import tilize_block, untilize_block
 from helpers.utils import passed_test
 
-# A row reduce needs its whole block in Dest at once. Dest holds 4 tiles at 32-bit and 8 at
-# 16-bit, so the narrower limit bounds the suite for every format.
-MAX_TILES = 4
+MAX_TILES_16_BIT = 8
+MAX_TILES_32_BIT = 4
 
 REDUCE_POOLS = [ReducePool.Sum, ReducePool.Average, ReducePool.Max, ReducePool.Min]
 
@@ -67,12 +67,24 @@ _FLOAT_FORMAT_EPS = {
     DataFormat.Float32: 2.0**-24,
 }
 
-DIMENSION_COMBINATIONS = [
-    [m, n]
-    for m in range(TILE_DIM, MAX_TILES * TILE_DIM + 1, TILE_DIM)
-    for n in range(TILE_DIM, MAX_TILES * TILE_DIM + 1, TILE_DIM)
-    if (m // TILE_DIM) * (n // TILE_DIM) <= MAX_TILES
-]
+IMPLIED_MATH_FORMATS = [ImpliedMathFormat.No, ImpliedMathFormat.Yes]
+
+
+def get_max_tiles(formats: InputOutputFormat) -> int:
+    """Tiles a half-sync Dest holds at this format's width - the row reduce's block ceiling."""
+    return MAX_TILES_32_BIT if formats.input_format.is_32_bit() else MAX_TILES_16_BIT
+
+
+def get_dimension_combinations(formats: InputOutputFormat) -> list[list[int]]:
+    """Every tile grid that fits Dest at this format's width, in elements."""
+    max_tiles = get_max_tiles(formats)
+    return [
+        [m, n]
+        for m in range(TILE_DIM, max_tiles * TILE_DIM + 1, TILE_DIM)
+        for n in range(TILE_DIM, max_tiles * TILE_DIM + 1, TILE_DIM)
+        if (m // TILE_DIM) * (n // TILE_DIM) <= max_tiles
+    ]
+
 
 # Pad sentinels for the sub-tile column reduce, and the extremes the Int32 guard injects. From
 # torch.iinfo so the limits are named rather than hex literals.
@@ -110,7 +122,7 @@ def get_format_input_bounds(formats: InputOutputFormat) -> list[tuple[int, int]]
     imm12 bit 0), and both-negative pairs are the case where getting that wrong shows up, so this
     range is what confirms the hardware ordering.
 
-    Float16 gets a tighter magnitude: the widest block folds 128 terms into one element, which at
+    Float16 gets a tighter magnitude: the widest block folds 256 terms into one element, which at
     +/-1000 would overflow its 65504 ceiling. The other formats have headroom.
     """
     limit = 100 if formats.input_format == DataFormat.Float16 else 1000
@@ -215,6 +227,7 @@ def _reduce_test_config_kwargs(
     src_B,
     dest_acc,
     loop_factor=1,
+    implied_math_format=ImpliedMathFormat.No,
 ):
     """Kernel configuration shared by the sweep and the Int32 range-end guard."""
     return {
@@ -223,7 +236,7 @@ def _reduce_test_config_kwargs(
         "templates": [
             MATH_OP(mathop=mathop, pool_type=reduce_pool),
             generate_input_dim(input_dimensions, input_dimensions),
-            IMPLIED_MATH_FORMAT(),
+            IMPLIED_MATH_FORMAT(implied_math_format),
             # SFPU-only op: operands reach Dest through unpack-to-dest, with no FPU
             # datacopy staging them via SrcA.
             UNPACKER_ENGINE_SEL(UnpackerEngine.UnpDest),
@@ -262,8 +275,9 @@ def _reduce_test_config_kwargs(
     formats=REDUCE_FORMATS,
     mathop=get_supported_reduce_axes,
     input_bounds=get_format_input_bounds,
-    dimension_combinations=DIMENSION_COMBINATIONS,
+    dimension_combinations=get_dimension_combinations,
     reduced_extent=get_reduce_extents,
+    implied_math_format=IMPLIED_MATH_FORMATS,
 )
 def test_sfpu_reduce_quasar(
     formats,
@@ -272,6 +286,7 @@ def test_sfpu_reduce_quasar(
     input_bounds,
     dimension_combinations,
     reduced_extent,
+    implied_math_format,
     *,
     run_types=(PerfRunType.L1_TO_L1,),
     loop_factor=1,
@@ -373,6 +388,7 @@ def test_sfpu_reduce_quasar(
             src_B,
             dest_acc,
             loop_factor,
+            implied_math_format,
         ),
     )
 
