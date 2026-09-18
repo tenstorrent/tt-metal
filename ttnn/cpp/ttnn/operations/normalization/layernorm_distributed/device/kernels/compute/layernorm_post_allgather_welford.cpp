@@ -150,8 +150,8 @@ void kernel_main() {
         tile_regs_acquire();
         tile_regs_wait();
         add_tiles(dfb::stats_reduced, dfb::eps, 1, 0, 0);
-        rsqrt_tile_init<true>();
-        rsqrt_tile<true>(0);
+        rsqrt_tile_init();
+        rsqrt_tile(0);
         pack_tile(0, dfb::recip_sqrt_var);
         tile_regs_commit();
         tile_regs_release();

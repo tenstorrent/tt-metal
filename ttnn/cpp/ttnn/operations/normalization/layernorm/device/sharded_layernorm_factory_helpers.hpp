@@ -304,7 +304,6 @@ struct SpecConfig {
     uint32_t tile_width = 32;
     bool fp32_dest_acc_en = false;
     bool legacy_reduction = false;
-    bool legacy_rsqrt = false;
     float eps = 0.0f;
     uint32_t per_core_recip_lut_size = 0;
 

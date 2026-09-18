@@ -349,8 +349,14 @@ void kernel_main() {
             compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
             compute_kernel_lib::NoAccumulation{},
             [](std::uint32_t) {
-                recip_tile_init();
-                recip_tile(0);
+                // Preserve the FP32 row sum's precision in its reciprocal, independently of exp approximation.
+                if constexpr (DST_ACCUM_MODE) {
+                    recip_tile_init<ReciprocalDestAcc::FP32, ReciprocalApproxMode::Precise>();
+                    recip_tile<ReciprocalDestAcc::FP32, ReciprocalApproxMode::Precise>(0);
+                } else {
+                    recip_tile_init();
+                    recip_tile(0);
+                }
             });
 
         dfb_recipsumexps_obj.wait_front(1);  // will reuse Wt times for bcast

@@ -42,7 +42,6 @@ void kernel_main() {
     constexpr uint32_t do_gamma = get_compile_time_arg_val(3);
     constexpr uint32_t do_beta = get_compile_time_arg_val(4);
     constexpr bool FLOAT32_DTYPE = get_compile_time_arg_val(5) == 1;
-    constexpr bool LEGACY_RSQRT = get_compile_time_arg_val(7) == 1;
 
     constexpr uint32_t onetile = 1;
 
@@ -109,8 +108,8 @@ void kernel_main() {
         add_init(cb_var_idx, cb_eps_idx);
         ACQ();
         add_tiles(cb_var_idx, cb_eps_idx, 0, 0, 0);
-        rsqrt_tile_init<LEGACY_RSQRT>();
-        rsqrt_tile<LEGACY_RSQRT>(0);
+        rsqrt_tile_init();
+        rsqrt_tile(0);
         pack_tile(0, cb_recip_sqrt_var_idx);
         REL();
         cb_recip_sqrt_var.push_back(1);

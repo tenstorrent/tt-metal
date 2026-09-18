@@ -110,7 +110,6 @@ void kernel_main() {
     constexpr auto stats_tiles_cols = get_arg(args::stats_tiles_cols);
     constexpr bool FLOAT32_DTYPE = get_arg(args::fp32_dtype) == 1;
     constexpr bool FLOAT32_REDUCTION = get_arg(args::float32_reduction) == 1;
-    constexpr bool LEGACY_RSQRT = get_arg(args::legacy_rsqrt) == 1;
     constexpr auto dfb_length = get_arg(args::dfb_length);
 
     constexpr uint32_t onetile = 1;
@@ -220,8 +219,8 @@ void kernel_main() {
 
         tile_regs_acquire();
         add_tiles(dfb::var, dfb::eps, 0, 0, 0);
-        rsqrt_tile_init<LEGACY_RSQRT>();
-        rsqrt_tile<LEGACY_RSQRT>(0);
+        rsqrt_tile_init();
+        rsqrt_tile(0);
         tile_regs_commit();
 
         dfb_var.pop_front(1);
