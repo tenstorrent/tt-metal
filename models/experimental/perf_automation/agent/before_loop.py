@@ -84,7 +84,6 @@ DEFAULT_CACHE = PKG_ROOT / ".cache" / "playbook_index.json"
 FIXTURES = PKG_ROOT / "tests" / "fixtures"
 
 METRIC_UNITS = {"device_ms": "ms", "wall_ms": "ms", "fps": "fps", "throughput_tok_s": "tok/s"}
-N_STAGES = 10
 
 
 _SHAPE_CONFIG_CRASH_RE = re.compile(
@@ -141,7 +140,12 @@ class _Stages:
         self._n += 1
         self._name = name
         self._t0 = time.monotonic()
-        print(f"  Step {self._n}/{N_STAGES}  {detail or name}", file=sys.stderr, flush=True)
+        # NO DENOMINATOR: this used to print "Step N/10", but which stages actually run varies by
+        # run shape (existing vs. freshly-graduated demo, baseline reused vs. measured), so a fixed
+        # total drifts the moment a stage is added or a branch taken differently -- a real run of an
+        # existing demo hits 11 stages, not 10, printing "Step 11/10" every time. An ordinal that is
+        # always true beats a total that is sometimes wrong.
+        print(f"  Step {self._n} — {detail or name}", file=sys.stderr, flush=True)
         self._event("start", detail)
 
     def done(self, detail: str = "") -> None:
@@ -808,7 +812,11 @@ def before_loop(
                 stages._event("note", msg)
                 case = corrected
     _warnings = pathmap.get("warnings", [])
-    _verbose = bool(os.environ.get("TT_HW_PLANNER_VERBOSE"))
+    # bool(os.environ.get(...)) was the bug: cli.py's own os.environ.setdefault("TT_HW_PLANNER_VERBOSE",
+    # "0") sets the STRING "0" as the default, and bool("0") is True in Python -- so this collapsing
+    # gate was always open regardless of the flag's intent, and the 4 caveats printed in full on every
+    # run. Same idiom this file already uses correctly for TT_PERF_MODULE_LEVEL two functions up.
+    _verbose = os.environ.get("TT_HW_PLANNER_VERBOSE", "") not in ("", "0", "false", "False")
     if _warnings and _verbose:
         for w in _warnings:
             print(f"      note - {w.get('code')}: {w.get('detail')}", file=sys.stderr, flush=True)
