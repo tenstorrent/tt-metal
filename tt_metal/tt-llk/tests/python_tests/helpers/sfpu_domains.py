@@ -2075,8 +2075,10 @@ def nan_survives_to_l1(
 
     Keyed on (dst_format, output) so it mirrors UnarySFPUGolden's own preservation rule rather
     than restating its result: the golden keeps a NaN for {(Float16, Float16),
-    (Float32, Float16), (Float32, Float32)} and routes everything else through
-    convert_nan_to_inf, which rewrites exponent and mantissa and leaves the sign bit alone. So
+    (Float16_b, Float16_b), (Float32, Float16), (Float32, Float32)} and routes everything else
+    through convert_nan_to_inf, which rewrites exponent and mantissa and leaves the sign bit
+    alone. The two identity pairs are there because the packer takes its identity path for a
+    16-bit float format packed to itself, which performs no conversion at all. So
     wherever this is False, a NaN arrives at the comparator as +/-inf and its sign is suddenly
     load-bearing. The hardware does the same on both arches: a narrowing store converts a NaN
     to an infinity.
@@ -2100,7 +2102,12 @@ def nan_survives_to_l1(
         dst_format = DataFormat.Float16_b
 
     return (dst_format, output_format) in {
+        # Identity packs. set_packer_config selects the packer's identity path when the pack
+        # source and destination are the same 16-bit float format and neither leg is 32-bit,
+        # so no conversion runs and the NaN is carried through unchanged.
         (DataFormat.Float16, DataFormat.Float16),
+        (DataFormat.Float16_b, DataFormat.Float16_b),
+        # Widening or equal 32-bit packs, where the conversion has nothing to narrow.
         (DataFormat.Float32, DataFormat.Float16),
         (DataFormat.Float32, DataFormat.Float32),
     }

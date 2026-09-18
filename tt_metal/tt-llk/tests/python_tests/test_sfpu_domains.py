@@ -138,22 +138,26 @@ _EDGE_SWEEP_CELLS = [
 ]
 
 
-def test_nan_survives_only_into_a_32_bit_dest_and_a_32_bit_pack():
-    """Both legs have to stay 32-bit, and on this matrix exactly one cell manages it.
+def test_nan_survives_an_identity_pack_or_a_32_bit_pipeline():
+    """A NaN reaches L1 intact either because nothing converts it, or because nothing narrows it.
 
-    Pinned because the gate's whole scope follows from it: five of the six triples
-    specials_safe() accepts narrow a NaN somewhere, and those five are precisely where a
-    generated NaN's sign becomes an observable +/-inf.
+    Pinned because the gate's whole scope follows from it: the remaining three of the six
+    triples specials_safe() accepts narrow a NaN somewhere, and those three are precisely where
+    a generated NaN's sign becomes an observable +/-inf.
     """
     carrying = [c for c in _EDGE_SWEEP_CELLS if specials_safe(*c)]
     assert len(carrying) == 6, "specials_safe's verdict on this matrix moved"
 
     survives = [c for c in carrying if nan_survives_to_l1(*c)]
     assert survives == [
-        (DataFormat.Float32, DataFormat.Float32, DestAccumulation.Yes)
+        (DataFormat.Float16_b, DataFormat.Float16_b, DestAccumulation.No),
+        (DataFormat.Float32, DataFormat.Float16_b, DestAccumulation.No),
+        (DataFormat.Float32, DataFormat.Float32, DestAccumulation.Yes),
     ], (
-        "Float32->Float32 at dest_acc=Yes is the only cell on this matrix that carries a "
-        f"NaN to L1 as a NaN; got {[(i.name, o.name, str(d)) for i, o, d in survives]}. "
+        "Three cells on this matrix carry a NaN to L1 as a NaN. Two of them are identity packs, "
+        "since a Float16_b output at dest_acc=No makes the Dest Float16_b whichever format the "
+        "input had, and the third is Float32->Float32 at dest_acc=Yes, where nothing narrows; "
+        f"got {[(i.name, o.name, str(d)) for i, o, d in survives]}. "
         "If this moved, the Wormhole NaN-sign skip's scope moved with it."
     )
 
@@ -243,6 +247,7 @@ def test_binary_golden_dest_format_matches_the_domains_rule():
         dst = BinarySFPUGolden._dest_format(input_format, output_format, dest_acc)
         preserves = (dst, output_format) in {
             (DataFormat.Float16, DataFormat.Float16),
+            (DataFormat.Float16_b, DataFormat.Float16_b),
             (DataFormat.Float32, DataFormat.Float16),
             (DataFormat.Float32, DataFormat.Float32),
         }

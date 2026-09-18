@@ -2397,9 +2397,6 @@ def test_unary_root_ops_ttnn(input_shapes, torch_dtype, ttnn_dtype, ttnn_op, fas
 @pytest.mark.parametrize("rounding_mode", [None, "trunc", "floor"])
 def test_unary_rdiv_inf_nan_check(param, rounding_mode, device):
     dtype = torch.bfloat16
-    if dtype == torch.bfloat16 and param == 0.0:
-        pytest.xfail("NaN is packed as inf for ttnn.bfloat16")
-
     in_data = torch.zeros(torch.Size([1, 1, 32, 32]), dtype=dtype)
     input_tensor = ttnn.from_torch(
         in_data,
@@ -2413,7 +2410,8 @@ def test_unary_rdiv_inf_nan_check(param, rounding_mode, device):
     golden_function = ttnn.get_golden_function(ttnn.rdiv)
     golden_tensor = golden_function(in_data, param, rounding_mode=rounding_mode)
 
-    assert torch.equal(golden_tensor, ttnn.to_torch(output_tensor))
+    # rdiv(0, 0) is NaN for every rounding mode, and torch.equal compares NaN as unequal.
+    torch.testing.assert_close(ttnn.to_torch(output_tensor), golden_tensor, rtol=0, atol=0, equal_nan=True)
 
 
 @pytest.mark.parametrize(
