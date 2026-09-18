@@ -20,9 +20,9 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
     "image_resolution, input_shape, pcc",
     [
         # 1024x1024 image resolution
-        ((1024, 1024), (1, 4, 128, 128), 0.93),
+        ((1024, 1024), (1, 4, 128, 128), 0.954),
         # 512x512 image resolution
-        ((512, 512), (1, 4, 64, 64), 0.95),
+        ((512, 512), (1, 4, 64, 64), 0.963),
     ],
 )
 def test_vae_decoder(

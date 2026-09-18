@@ -73,6 +73,15 @@ class VAEModelOptimisations(ModelOptimisations1024x1024):
             "negative_mask": False,
         }
 
+        groupnorm_compute_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
+        for groupnorm_config in self.groupnorm_configs.values():
+            groupnorm_config["op_config"]["compute_kernel_config"] = groupnorm_compute_config
+
     def get_matmul_config(self, matmul_path):
         return None
 
