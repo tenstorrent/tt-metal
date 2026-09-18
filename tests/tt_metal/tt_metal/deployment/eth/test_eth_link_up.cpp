@@ -19,9 +19,7 @@ using namespace std;
 using namespace tt;
 using namespace tt::test_utils;
 
-template <typename FIXTURE>
 static bool run_test(
-    FIXTURE* fixture,
     const std::shared_ptr<distributed::MeshDevice>& send_mesh_device,
     const std::shared_ptr<distributed::MeshDevice>& recv_mesh_device,
     const CoreCoord& send_core,
@@ -93,7 +91,7 @@ static bool run_test(
             .expected_count = transfer_count,
         },
     };
-    wait_to_finish_eth_timeout_cores(fixture, cores, programs);
+    wait_to_finish_eth_timeout_cores(cores, programs);
 
     bool pass = true;
     pass &= data_check(recv_device, recv_core, recv_l1_address, inputs);
@@ -146,7 +144,7 @@ TEST_F(MeshDispatchFixture, TensixDeploymentEthernet00LinkUp) {
 
                     log_info(tt::LogTest, "    running on {}", processor);
                     bool passed =
-                        run_test(this, sender_mesh_device, receiver_mesh_device, sender_core, receiver_core, processor);
+                        run_test(sender_mesh_device, receiver_mesh_device, sender_core, receiver_core, processor);
                     if (!passed) {
                         errors.emplace_back(
                             sender_device->id(), receiver_device->id(), sender_core, receiver_core, processor);

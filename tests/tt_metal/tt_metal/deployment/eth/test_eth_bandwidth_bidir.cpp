@@ -20,9 +20,7 @@ using namespace std;
 using namespace tt;
 using namespace tt::test_utils;
 
-template <typename FIXTURE>
 static bool run_test_bandwidth_bidir(
-    FIXTURE* fixture,
     const std::shared_ptr<distributed::MeshDevice>& send_mesh_device,
     const std::shared_ptr<distributed::MeshDevice>& recv_mesh_device,
     const CoreCoord& send_core,
@@ -101,7 +99,7 @@ static bool run_test_bandwidth_bidir(
             .expected_count = transfer_count,
         },
     };
-    wait_to_finish_eth_timeout_cores(fixture, cores, programs);
+    wait_to_finish_eth_timeout_cores(cores, programs);
 
     double threshold = get_eth_bw() * 0.7;
 
@@ -162,7 +160,7 @@ TEST_F(MeshDispatchFixture, TensixDeploymentEthernet02BandwidthBidir) {
 
                     log_info(tt::LogTest, "    running on {}", processor);
                     bool passed = run_test_bandwidth_bidir(
-                        this, sender_mesh_device, receiver_mesh_device, sender_core, receiver_core, processor, inputs);
+                        sender_mesh_device, receiver_mesh_device, sender_core, receiver_core, processor, inputs);
                     if (!passed) {
                         errors.emplace_back(
                             sender_device->id(), receiver_device->id(), sender_core, receiver_core, processor);
