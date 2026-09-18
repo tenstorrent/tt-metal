@@ -39,6 +39,36 @@ layers, real checkpoint, bfloat8_b caches, under Slurm jobs 109855, 109875, 1099
 The slot count is inverse-linear in capacity, as the divisor says: 4x the context buys a quarter of
 the slots, and 1681/420 is 4.00.
 
+### The 2K to 32K sweep
+
+Every count below was allocated by `num_users="max"` and then used, under Slurm job 110427: a whole
+prompt to capacity prefilled into the top slot, followed by a second prompt in slot 0 while the top
+slot stayed full. One model build per capacity, weights resident before the count is taken.
+
+| Capacity | Slot cost per chip | Slots | Free left | Prefilled to capacity in |
+| ---: | ---: | ---: | ---: | --- |
+| 2,048 | 4.2 MiB | 6,727 | 1.18 GiB | slot 6,726 |
+| 4,096 | 8.5 MiB | 3,363 | 1.19 GiB | slot 3,362 |
+| 8,192 | 17.0 MiB | 1,681 | 1.19 GiB | slot 1,680 |
+| 16,384 | 34.0 MiB | 840 | 1.20 GiB | slot 839 |
+| 32,768 | 68.0 MiB | 420 | 1.18 GiB | slot 419 |
+
+The count halves for every doubling of capacity, to the slot: 6727, 3363, 1681, 840, 420. The same
+divisor gives 105 slots at 131,072, which this sweep did not run. What the count is *not* is a
+serving claim: it is how many slots fit in DRAM, and prefill fills one at a time.
+
+Startup does not vary with the count. Allocation took 157-160 s at every capacity, because what it
+zeroes is the same ~28 GiB per chip either way.
+
+Chunk times inside this probe are cold-path: it visits each chunk index once, so every chunk pays a
+program build. The warm behaviour is the table below.
+
+The arithmetic and the allocation are covered by `test_kv_cache.py`, which checks the divisor is
+exact and that `num_users="max"` allocates what it promises and can be written across its range.
+The rows above additionally prefilled each count through the real model, which is an acceptance
+probe rather than a committed test: rerun it by building the model at a capacity, allocating with
+`num_users="max"`, and prefilling a whole prompt into `num_users - 1`.
+
 ## Slots are free at run time
 
 They cost DRAM and nothing else, which is worth stating with evidence because a packed batch
