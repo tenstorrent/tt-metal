@@ -18,12 +18,12 @@ from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric_1d_device_
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     check_kimi_k3_accuracy,
     collect_mesh_accuracy_and_determinism_results,
-    make_actual_start,
     make_kimi_k3_device_case,
     make_kimi_k3_test_case,
     make_synthetic_kimi_k3_test_case,
 )
 from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState
+from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import make_actual_start
 
 pytestmark = [run_for_blackhole(), pytest.mark.timeout(900)]
 

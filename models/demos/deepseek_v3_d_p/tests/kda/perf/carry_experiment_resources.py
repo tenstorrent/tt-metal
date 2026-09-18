@@ -11,9 +11,10 @@ from pathlib import Path
 from typing import Any
 
 import ttnn
-from models.demos.deepseek_v3_d_p.tests.kda.utils import _deallocate_state, make_actual_start
+from models.demos.deepseek_v3_d_p.tests.kda.utils import _deallocate_state
 from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState, ttKDA
 from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
+from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import make_actual_start
 
 
 def capture_resources(run: Callable, mesh_device: ttnn.MeshDevice, label: str):

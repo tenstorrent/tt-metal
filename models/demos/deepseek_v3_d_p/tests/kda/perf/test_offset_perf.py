@@ -25,11 +25,8 @@ from models.demos.deepseek_v3_d_p.tests.kda.utils import _deallocate_state
 _SEQUENCE = 5120
 _REPETITIONS = 10
 _TIMING_SAMPLES = 5
-from models.demos.deepseek_v3_d_p.tests.kda.utils import (
-    make_actual_start,
-    make_kimi_k3_device_case,
-    make_synthetic_kimi_k3_test_case,
-)
+from models.demos.deepseek_v3_d_p.tests.kda.utils import make_kimi_k3_device_case, make_synthetic_kimi_k3_test_case
+from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import make_actual_start
 
 pytestmark = [pytest.mark.timeout(3600)]
 
