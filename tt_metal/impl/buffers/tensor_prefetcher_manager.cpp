@@ -34,6 +34,7 @@
 #include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/experimental/global_circular_buffer.hpp>
 #include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt_stl/assert.hpp>
 
 #include "impl/context/metal_context.hpp"
@@ -617,6 +618,16 @@ void TensorPrefetcherManager::start() {
             mpfe_policy.active.ordinary <= kMaxMpfeWeight,
         "Tensor prefetcher MPFE weights must be in [0, {}]",
         kMaxMpfeWeight);
+    log_info(
+        tt::LogMetal,
+        "[mpfe_model_benchmark] idle={}/{}/{} active={}/{}/{} sync={}",
+        mpfe_policy.idle.free_sender,
+        mpfe_policy.idle.noc1_sender,
+        mpfe_policy.idle.ordinary,
+        mpfe_policy.active.free_sender,
+        mpfe_policy.active.noc1_sender,
+        mpfe_policy.active.ordinary,
+        mpfe_policy.synchronize_senders);
 
     const auto& hal = MetalContext::instance(mesh_device_->impl().get_context_id()).hal();
     TT_FATAL(

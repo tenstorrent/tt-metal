@@ -29,6 +29,7 @@ ENV_SUFFIXES = (
 METRIC_RE = re.compile(
     r"Average speed: ([0-9.]+)ms @ ([0-9.]+) tok/s/user \(([0-9.]+) tok/s throughput\)"
 )
+POLICY_RE = re.compile(r"\[mpfe_model_benchmark\] idle=(\d)/(\d)/(\d) active=(\d)/(\d)/(\d) sync=(true|false|0|1)")
 
 DEFAULT_WEIGHTS = ((0, 0, 0), (0, 0, 5), (0, 1, 5), (0, 3, 7), (0, 7, 7))
 MODES = ("static", "static+sync", "dynamic", "dynamic+sync")
@@ -142,9 +143,38 @@ def run_case(case: Case, output_dir: Path) -> dict:
         stderr=subprocess.STDOUT,
         check=False,
     )
-    log_path.write_text(completed.stdout, encoding="utf-8")
+    log_path.write_text(
+        json.dumps(
+            {
+                "label": case.label,
+                "command": command,
+                "weights": case.weights,
+                "mode": case.mode,
+            },
+            sort_keys=True,
+        )
+        + "\n"
+        + completed.stdout,
+        encoding="utf-8",
+    )
     if completed.returncode != 0:
         raise RuntimeError(f"{case.label} failed; see {log_path}")
+
+    policy_markers = POLICY_RE.findall(completed.stdout)
+    if len(policy_markers) != 1:
+        raise RuntimeError(
+            f"{case.label} emitted {len(policy_markers)} MPFE policy markers; rebuild the host library and see {log_path}"
+        )
+    marker = policy_markers[0]
+    observed_idle = tuple(int(value) for value in marker[:3])
+    observed_active = tuple(int(value) for value in marker[3:6])
+    observed_sync = marker[6] in ("true", "1")
+    expected_idle = (0, 0, 0) if case.mode.startswith("dynamic") else case.weights
+    expected_sync = "+sync" in case.mode
+    if (observed_idle, observed_active, observed_sync) != (expected_idle, case.weights, expected_sync):
+        raise RuntimeError(
+            f"{case.label} applied idle={observed_idle} active={observed_active} sync={observed_sync}; see {log_path}"
+        )
 
     metrics = METRIC_RE.findall(completed.stdout)
     if len(metrics) != 1:
@@ -155,6 +185,8 @@ def run_case(case: Case, output_dir: Path) -> dict:
         "workload": case.workload,
         "mode": case.mode,
         "weights": list(case.weights),
+        "idle_weights": list(expected_idle),
+        "synchronize_senders": expected_sync,
         "iteration": case.iteration,
         "decode_latency_ms": latency_ms,
         "decode_tok_s_user": tok_s_user,
