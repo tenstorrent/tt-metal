@@ -931,34 +931,33 @@ enum CQNocSend {
     CQ_NOC_SEND = 1,
 };
 
-// The remembered halves of each command buffer's destination and source.
-// "base" is the coordinate half: a full address with a zero offset, or for
-// multicast a rectangle descriptor with a zero offset. "local" is the offset
-// half. The hardware receives base | local.
-inline uint64_t noc_v3_cq_dest_base[NOC_V3_STATE_CMD_BUFS] = {};
-inline uint64_t noc_v3_cq_dest_local[NOC_V3_STATE_CMD_BUFS] = {};
-inline uint64_t noc_v3_cq_src_base[NOC_V3_STATE_CMD_BUFS] = {};
-inline uint64_t noc_v3_cq_src_local[NOC_V3_STATE_CMD_BUFS] = {};
-// Set by the write init call from its multicast flag. When true, the
-// destination halves form a multicast rectangle that is resolved through the
-// map when the transfer is issued.
-inline bool noc_v3_cq_dest_mcast[NOC_V3_STATE_CMD_BUFS] = {};
-// The value the last CQ_NOC_INLINE_FLAG_VAL call set per command buffer. Inline
-// data travels with the inline-issue instruction, not through a register, so a
-// send without that flag issues this value again.
-inline uint32_t noc_v3_cq_inline_write_state_val[NOC_V3_STATE_CMD_BUFS] = {};
+// The remembered state of one command buffer
+struct alignas(64) NocV3CqState {
+    // The two halves of the destination and of the source. "base" is the
+    // coordinate half: a full address with a zero offset, or for multicast a
+    // rectangle descriptor with a zero offset. "local" is the offset half. The
+    // hardware receives base | local.
+    uint64_t dest_base;
+    uint64_t dest_local;
+    uint64_t src_base;
+    uint64_t src_local;
+    // The value the last CQ_NOC_INLINE_FLAG_VAL call set. Inline data travels
+    // with the inline-issue instruction, not through a register, so a send
+    // without that flag issues this value again.
+    uint32_t inline_val;
+    // Set by the write init call from its multicast flag. When true, the
+    // destination halves form a multicast rectangle that is resolved through
+    // the map when the transfer is issued.
+    bool dest_mcast;
+};
+inline NocV3CqState noc_v3_cq_state[NOC_V3_STATE_CMD_BUFS] = {};
 
-// These arrays are kernel globals in L1, and the DM kernel runtime zeroes only
-// its local-memory bss, so they start with whatever the previous kernel left
+// This state is a kernel global in L1, and the DM kernel runtime zeroes only
+// its local-memory bss, so it starts with whatever the previous kernel left
 // behind. Every CQ kernel calls this once at entry.
 inline __attribute__((always_inline)) void noc_v3_cq_state_reset() {
     for (uint32_t i = 0; i < NOC_V3_STATE_CMD_BUFS; ++i) {
-        noc_v3_cq_dest_base[i] = 0;
-        noc_v3_cq_dest_local[i] = 0;
-        noc_v3_cq_src_base[i] = 0;
-        noc_v3_cq_src_local[i] = 0;
-        noc_v3_cq_dest_mcast[i] = false;
-        noc_v3_cq_inline_write_state_val[i] = 0;
+        noc_v3_cq_state[i] = {};
     }
 }
 
@@ -1006,8 +1005,8 @@ inline __attribute__((always_inline)) uint64_t noc_v3_cq_packed_mcast_base(uint3
 // tile's address goes to DEST_ADDR and the rectangle extents to DEST_COORD.
 template <uint32_t cmd_buf, enum CQNocFlags flags, bool check_count = true>
 inline __attribute__((always_inline)) void noc_v3_cq_program_dest(uint32_t size, uint32_t ndests) {
-    if (noc_v3_cq_dest_mcast[cmd_buf]) {
-        const uint64_t descriptor = noc_v3_cq_dest_base[cmd_buf] | noc_v3_cq_dest_local[cmd_buf];
+    if (noc_v3_cq_state[cmd_buf].dest_mcast) {
+        const uint64_t descriptor = noc_v3_cq_state[cmd_buf].dest_base | noc_v3_cq_state[cmd_buf].dest_local;
         const noc_att::NocMulticastAddress target =
             noc_att::resolve_worker_multicast<ACTIVE_ATT_MAP>(descriptor, size != 0 ? size : 1);
         if (target.rectangle_count == 0) {
@@ -1026,7 +1025,7 @@ inline __attribute__((always_inline)) void noc_v3_cq_program_dest(uint32_t size,
         __builtin_riscv_ttrocc_cmdbuf_wr_reg(
             cmd_buf,
             TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_ADDR_REG_OFFSET / 8,
-            noc_v3_cq_dest_base[cmd_buf] | noc_v3_cq_dest_local[cmd_buf]);
+            noc_v3_cq_state[cmd_buf].dest_base | noc_v3_cq_state[cmd_buf].dest_local);
     }
 }
 
@@ -1054,16 +1053,16 @@ inline __attribute__((always_inline)) void noc_read_with_state(
     static_assert(noc_mode != DM_DYNAMIC_NOC, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
 
     if constexpr (flags & CQ_NOC_FLAG_SRC) {
-        noc_v3_cq_src_local[cmd_buf] = noc_v3_cq_local_of(src_addr);
+        noc_v3_cq_state[cmd_buf].src_local = noc_v3_cq_local_of(src_addr);
     }
     if constexpr (flags & CQ_NOC_FLAG_NOC) {
-        noc_v3_cq_src_base[cmd_buf] = noc_v3_state_base_of(src_addr);
+        noc_v3_cq_state[cmd_buf].src_base = noc_v3_state_base_of(src_addr);
     }
     if constexpr (flags & (CQ_NOC_FLAG_SRC | CQ_NOC_FLAG_NOC)) {
         __builtin_riscv_ttrocc_cmdbuf_wr_reg(
             cmd_buf,
             TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_ADDR_REG_OFFSET / 8,
-            noc_v3_cq_src_base[cmd_buf] | noc_v3_cq_src_local[cmd_buf]);
+            noc_v3_cq_state[cmd_buf].src_base | noc_v3_cq_state[cmd_buf].src_local);
     }
     if constexpr (flags & CQ_NOC_FLAG_DST) {
         __builtin_riscv_ttrocc_cmdbuf_wr_reg(
@@ -1095,16 +1094,16 @@ inline __attribute__((always_inline)) void noc_read_with_state(
     static_assert(noc_mode != DM_DYNAMIC_NOC, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
 
     if constexpr (flags & CQ_NOC_FLAG_SRC) {
-        noc_v3_cq_src_local[cmd_buf] = src_addr;
+        noc_v3_cq_state[cmd_buf].src_local = src_addr;
     }
     if constexpr (flags & CQ_NOC_FLAG_NOC) {
-        noc_v3_cq_src_base[cmd_buf] = noc_v3_cq_packed_base(src_noc_addr);
+        noc_v3_cq_state[cmd_buf].src_base = noc_v3_cq_packed_base(src_noc_addr);
     }
     if constexpr (flags & (CQ_NOC_FLAG_SRC | CQ_NOC_FLAG_NOC)) {
         __builtin_riscv_ttrocc_cmdbuf_wr_reg(
             cmd_buf,
             TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_ADDR_REG_OFFSET / 8,
-            noc_v3_cq_src_base[cmd_buf] | noc_v3_cq_src_local[cmd_buf]);
+            noc_v3_cq_state[cmd_buf].src_base | noc_v3_cq_state[cmd_buf].src_local);
     }
     if constexpr (flags & CQ_NOC_FLAG_DST) {
         __builtin_riscv_ttrocc_cmdbuf_wr_reg(
@@ -1137,7 +1136,7 @@ inline __attribute__((always_inline)) void noc_write_init_state(uint32_t noc, ui
         TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_RESP_VC_REG_OFFSET / 8,
         (cmd_flags & CQ_NOC_CMD_FLAG_MCAST) ? NOC_OVERLAY_MCAST_RESP_VC : NOC_OVERLAY_WR_RESP_VC);
     // Remember whether this command buffer's destination is a multicast rectangle.
-    noc_v3_cq_dest_mcast[cmd_buf] = (cmd_flags & CQ_NOC_CMD_FLAG_MCAST) != 0;
+    noc_v3_cq_state[cmd_buf].dest_mcast = (cmd_flags & CQ_NOC_CMD_FLAG_MCAST) != 0;
 }
 
 template <
@@ -1157,12 +1156,14 @@ inline __attribute__((always_inline)) void noc_write_with_state(
             cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_ADDR_REG_OFFSET / 8, noc_v3_local_operand(src_addr));
     }
     if constexpr (flags & CQ_NOC_FLAG_NOC) {
-        noc_v3_cq_dest_base[cmd_buf] =
-            noc_v3_cq_dest_mcast[cmd_buf] ? (dst_addr & ~NOC_V3_CQ_MCAST_LOCAL_MASK) : noc_v3_state_base_of(dst_addr);
+        noc_v3_cq_state[cmd_buf].dest_base = noc_v3_cq_state[cmd_buf].dest_mcast
+                                                 ? (dst_addr & ~NOC_V3_CQ_MCAST_LOCAL_MASK)
+                                                 : noc_v3_state_base_of(dst_addr);
     }
     if constexpr (flags & CQ_NOC_FLAG_DST) {
-        noc_v3_cq_dest_local[cmd_buf] =
-            noc_v3_cq_dest_mcast[cmd_buf] ? (dst_addr & NOC_V3_CQ_MCAST_LOCAL_MASK) : noc_v3_cq_local_of(dst_addr);
+        noc_v3_cq_state[cmd_buf].dest_local = noc_v3_cq_state[cmd_buf].dest_mcast
+                                                  ? (dst_addr & NOC_V3_CQ_MCAST_LOCAL_MASK)
+                                                  : noc_v3_cq_local_of(dst_addr);
     }
     if constexpr (flags & (CQ_NOC_FLAG_NOC | CQ_NOC_FLAG_DST)) {
         noc_v3_cq_program_dest<cmd_buf, flags, send == CQ_NOC_SEND>(size, ndests);
@@ -1206,15 +1207,16 @@ inline __attribute__((always_inline)) void noc_wwrite_with_state(
             cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_ADDR_REG_OFFSET / 8, noc_v3_local_operand(src_addr));
     }
     if constexpr (flags & CQ_NOC_FLAG_NOC) {
-        noc_v3_cq_dest_base[cmd_buf] = noc_v3_cq_dest_mcast[cmd_buf] ? noc_v3_cq_packed_mcast_base(dst_noc_addr)
-                                                                     : noc_v3_cq_packed_base(dst_noc_addr);
+        noc_v3_cq_state[cmd_buf].dest_base = noc_v3_cq_state[cmd_buf].dest_mcast
+                                                 ? noc_v3_cq_packed_mcast_base(dst_noc_addr)
+                                                 : noc_v3_cq_packed_base(dst_noc_addr);
     }
     if constexpr (flags & CQ_NOC_FLAG_DST) {
-        if (noc_v3_cq_dest_mcast[cmd_buf]) {
+        if (noc_v3_cq_state[cmd_buf].dest_mcast) {
             ASSERT(dst_addr < noc_att::DESCRIPTOR_LOCAL_LIMIT);
-            noc_v3_cq_dest_local[cmd_buf] = dst_addr & NOC_V3_CQ_MCAST_LOCAL_MASK;
+            noc_v3_cq_state[cmd_buf].dest_local = dst_addr & NOC_V3_CQ_MCAST_LOCAL_MASK;
         } else {
-            noc_v3_cq_dest_local[cmd_buf] = dst_addr;
+            noc_v3_cq_state[cmd_buf].dest_local = dst_addr;
         }
     }
     if constexpr (flags & (CQ_NOC_FLAG_NOC | CQ_NOC_FLAG_DST)) {
@@ -1267,7 +1269,7 @@ inline __attribute__((always_inline)) void noc_inline_dw_write_init_state(uint32
         __builtin_riscv_ttrocc_cmdbuf_wr_reg(
             cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_LEN_BYTES_REG_OFFSET / 8, sizeof(uint32_t));
     }
-    noc_v3_cq_dest_mcast[cmd_buf] = false;
+    noc_v3_cq_state[cmd_buf].dest_mcast = false;
 }
 
 template <
@@ -1281,16 +1283,16 @@ inline __attribute__((always_inline)) void noc_inline_dw_write_with_state(
     (void)noc;
 
     if constexpr (flags & CQ_NOC_INLINE_FLAG_VAL) {
-        noc_v3_cq_inline_write_state_val[cmd_buf] = val;
+        noc_v3_cq_state[cmd_buf].inline_val = val;
     }
     if constexpr (flags & CQ_NOC_FLAG_NOC) {
-        noc_v3_cq_dest_base[cmd_buf] = noc_v3_state_base_of(dst_addr);
+        noc_v3_cq_state[cmd_buf].dest_base = noc_v3_state_base_of(dst_addr);
     }
     if constexpr (flags & CQ_NOC_FLAG_DST) {
-        noc_v3_cq_dest_local[cmd_buf] = noc_v3_cq_local_of(dst_addr);
+        noc_v3_cq_state[cmd_buf].dest_local = noc_v3_cq_local_of(dst_addr);
     }
     if constexpr (flags & (CQ_NOC_FLAG_NOC | CQ_NOC_FLAG_DST)) {
-        const uint64_t operand = noc_v3_cq_dest_base[cmd_buf] | noc_v3_cq_dest_local[cmd_buf];
+        const uint64_t operand = noc_v3_cq_state[cmd_buf].dest_base | noc_v3_cq_state[cmd_buf].dest_local;
         if constexpr (cmd_buf == 2) {
             __builtin_riscv_ttrocc_scmdbuf_wr_reg(
                 TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_ADDR_REG_OFFSET / 8, operand);
@@ -1303,7 +1305,7 @@ inline __attribute__((always_inline)) void noc_inline_dw_write_with_state(
         ASSERT(be == 0xF);
     }
     if constexpr (send) {
-        const uint32_t data = (flags & CQ_NOC_INLINE_FLAG_VAL) ? val : noc_v3_cq_inline_write_state_val[cmd_buf];
+        const uint32_t data = (flags & CQ_NOC_INLINE_FLAG_VAL) ? val : noc_v3_cq_state[cmd_buf].inline_val;
         if constexpr (cmd_buf == 2) {
             __builtin_riscv_ttrocc_scmdbuf_issue_inline_trans(data);
         } else {
