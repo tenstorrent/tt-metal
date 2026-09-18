@@ -1052,13 +1052,6 @@ def test_moe_fused_with_reduce(
       - "rigged_groups1": load only 32 experts (group 0); rig routing within group 0.
       - "full_groups":    load all 256 experts; rig routing across groups 0/2/5/7.
     """
-    num_devices = TestConfig.NUM_DEVICES_4x2
-    if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < num_devices:
-        pytest.skip(
-            f"Test requires {num_devices} devices, mesh has "
-            f"{bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1]}"
-        )
-
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
     logger.info(f"Created submesh with shape: {submesh.shape}")
 

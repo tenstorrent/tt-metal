@@ -238,10 +238,6 @@ def test_pre_sdpa(
     if num_devices == 1:
         skip_ccl = True
 
-    # Validate mesh size
-    if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < num_devices:
-        pytest.skip("Test requires more devices than are available on this platform")
-
     # Create submesh used by the test
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((mesh_rows, mesh_cols)))
 

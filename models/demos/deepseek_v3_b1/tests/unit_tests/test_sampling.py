@@ -309,9 +309,6 @@ def test_sampling_argmax_mesh(bh_2d_mesh_device, final_mesh_coord, seed, final_c
     - per-device local 101-core argmax, then mesh x-axis first reduction.
     """
     mesh_rows, mesh_cols = 4, 2
-    num_devices = mesh_rows * mesh_cols
-    if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < num_devices:
-        pytest.skip("Test requires more devices than are available on this platform")
 
     mesh_device = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((mesh_rows, mesh_cols)))
 
@@ -325,7 +322,6 @@ def test_sampling_argmax_mesh(bh_2d_mesh_device, final_mesh_coord, seed, final_c
     logger.debug(f"Final mesh coord: {final_mesh_coord}")
     logger.debug(f"Active cores: {active_cores}")
 
-    num_devices = _mesh_num_devices(mesh_device)
     num_cores = len(active_cores)
     scores_shape_per_device = (1, 160 * num_cores)
     input_shard_shape = (1, 160)
@@ -339,16 +335,16 @@ def test_sampling_argmax_mesh(bh_2d_mesh_device, final_mesh_coord, seed, final_c
     )
     torch.manual_seed(seed)
 
-    torch_scores_all = torch.randn((num_devices, *scores_shape_per_device), dtype=torch.bfloat16)
+    torch_scores_all = torch.randn((NUM_DEVICES, *scores_shape_per_device), dtype=torch.bfloat16)
     if forced_winner_device_idx is not None:
-        assert 0 <= forced_winner_device_idx < num_devices, "forced_winner_device_idx out of range"
+        assert 0 <= forced_winner_device_idx < NUM_DEVICES, "forced_winner_device_idx out of range"
         winner_local_idx = (seed * 9973 + final_core_idx) % scores_shape_per_device[1]
         # Overwrite (not add) to deterministically create a unique global winner.
         torch_scores_all[forced_winner_device_idx, 0, winner_local_idx] = torch.tensor(10.0, dtype=torch.bfloat16)
         logger.info(f"Forced winner on device {forced_winner_device_idx}, local index {winner_local_idx}")
 
-    torch_indices_all = torch.arange(num_devices * scores_shape_per_device[1], dtype=torch.int32).reshape(
-        num_devices, *scores_shape_per_device
+    torch_indices_all = torch.arange(NUM_DEVICES * scores_shape_per_device[1], dtype=torch.int32).reshape(
+        NUM_DEVICES, *scores_shape_per_device
     )
     torch_expected_idx, _ = SamplingOp.golden(
         torch_scores_all.reshape(1, -1), torch_indices_all.reshape(1, -1), k=1, p=1.0
@@ -399,7 +395,7 @@ def test_sampling_argmax_mesh(bh_2d_mesh_device, final_mesh_coord, seed, final_c
         mesh_mapper=mesh_mapper,
     )
     ttnn_output_index = ttnn.from_torch(
-        torch.zeros((num_devices, *output_shape_per_device), dtype=torch.uint32),
+        torch.zeros((NUM_DEVICES, *output_shape_per_device), dtype=torch.uint32),
         dtype=ttnn.uint32,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=mesh_device,
@@ -407,7 +403,7 @@ def test_sampling_argmax_mesh(bh_2d_mesh_device, final_mesh_coord, seed, final_c
         mesh_mapper=mesh_mapper,
     )
     ttnn_scores_scratch = ttnn.from_torch(
-        torch.zeros((num_devices, *scores_scratch_shape), dtype=torch.uint32),
+        torch.zeros((NUM_DEVICES, *scores_scratch_shape), dtype=torch.uint32),
         dtype=ttnn.uint32,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=mesh_device,
@@ -415,7 +411,7 @@ def test_sampling_argmax_mesh(bh_2d_mesh_device, final_mesh_coord, seed, final_c
         mesh_mapper=mesh_mapper,
     )
     ttnn_indices_scratch = ttnn.from_torch(
-        torch.zeros((num_devices, *indices_scratch_shape), dtype=torch.uint32),
+        torch.zeros((NUM_DEVICES, *indices_scratch_shape), dtype=torch.uint32),
         dtype=ttnn.uint32,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=mesh_device,

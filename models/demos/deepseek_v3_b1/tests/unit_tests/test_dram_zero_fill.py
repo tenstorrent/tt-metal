@@ -91,9 +91,6 @@ def test_dram_zero_fill(bh_2d_mesh_device, num_users: int, max_seq_len: int, k_c
     if is_slow_dispatch() and (num_users > 1 or max_seq_len > 1024 * 32):
         pytest.skip("Host readback (ttnn.to_torch) for this shape is too slow in slow dispatch mode")
 
-    if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < NUM_DEVICES:
-        pytest.skip(f"Test requires {NUM_DEVICES} devices (4x2 mesh)")
-
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
     mesh_rows = submesh.shape[0]
     mesh_cols = submesh.shape[1]

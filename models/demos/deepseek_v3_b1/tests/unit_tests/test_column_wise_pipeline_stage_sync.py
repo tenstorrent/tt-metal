@@ -24,7 +24,6 @@ NUM_DEVICES = 8
 @pytest.mark.parametrize("exit_device_core_coord", [ttnn.CoreCoord(1, 1), ttnn.CoreCoord(12, 9)])
 @pytest.mark.parametrize("run_exit_device_logic_on_ncrisc", [True, False])
 @pytest.mark.parametrize("num_iterations", [50])
-@pytest.mark.parametrize("num_devices", [NUM_DEVICES])
 @pytest.mark.parametrize(
     "device_params",
     [({"fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_X})],
@@ -40,13 +39,9 @@ def test_column_wise_pipeline_stage_sync_2d(
     exit_device_core_coord,
     run_exit_device_logic_on_ncrisc,
     num_iterations,
-    num_devices,
 ):
     """Test pipeline_stage_sync with 2D fabric."""
     # Validate mesh size
-    if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < num_devices:
-        pytest.skip("Test requires more devices than are available on this platform")
-
     submesh_device = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
 
     logger.info(f"=== Testing column_wise_pipeline_stage_sync (num_iterations={num_iterations}) ===")

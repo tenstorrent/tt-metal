@@ -229,9 +229,6 @@ def test_ccl_all_reduce(
     if is_slow_dispatch():
         pytest.skip("CCL all-reduce trace test needs fast dispatch")
 
-    if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < num_devices:
-        pytest.skip("Test requires more devices than are available on this platform")
-
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
 
     inputs = build_all_reduce_test_inputs(
@@ -343,9 +340,6 @@ def test_ccl_all_reduce_chunk_and_link_matrix(
     chunk_num_tiles,
     fuse_residual_add,
 ):
-    if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < num_devices:
-        pytest.skip("Test requires more devices than are available on this platform")
-
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
     inputs = build_all_reduce_test_inputs(
         mesh_device=submesh,
