@@ -74,6 +74,7 @@ class MultichipDecoder(OptimizedDecoder):
             num_links=2,
             ring=True,
             packed_mlp=True,
+            packed_decode_conv=True,
             persistent_ccl=True,
             direct_allreduce=True,
             # Public TILE [B,1,H] expands to B*32 rows. Keep these batched

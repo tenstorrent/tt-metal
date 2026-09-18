@@ -16,6 +16,7 @@ and their helpers contain only TTNN device operations and shape orchestration.
 from dataclasses import dataclass
 
 import ttnn
+from models.autoports.qwen_qwen3_8_27b.tt.decode_conv import packed_decode_conv
 from models.common.lightweightmodule import LightweightModule
 
 # Measured Blackhole 11x10 / eight-bank policy. Overrides are full experiment policies.
@@ -835,20 +836,23 @@ class OptimizedDecoder(LightweightModule):
         padded_t = (t + 31) // 32 * 32
         padded_qkv = qkv if padded_t == t else ttnn.pad(qkv, [(0, 0), (0, padded_t - t), (0, 0)], 0.0)
         row_qkv = ttnn.to_layout(padded_qkv, ttnn.ROW_MAJOR_LAYOUT)
-        chunks = []
-        for user in range(b):
-            chunks.append(
-                ttnn.experimental.kda.qkv_causal_conv1d_silu(
-                    row_qkv[user : user + 1],
-                    state.conv[user : user + 1],
-                    *self.conv_taps,
-                    h * d,
-                    h * d,
-                    hv * d,
-                    program_config=ttnn.QkvCausalConv1dSiluProgramConfig(channel_chunk_size=256),
+        if t == 1 and b >= 8 and b % 8 == 0 and self.policy.get("packed_decode_conv", False):
+            q, k, v = packed_decode_conv(row_qkv, state.conv, self.conv_taps, (h * d, h * d, hv * d))
+        else:
+            chunks = []
+            for user in range(b):
+                chunks.append(
+                    ttnn.experimental.kda.qkv_causal_conv1d_silu(
+                        row_qkv[user : user + 1],
+                        state.conv[user : user + 1],
+                        *self.conv_taps,
+                        h * d,
+                        h * d,
+                        hv * d,
+                        program_config=ttnn.QkvCausalConv1dSiluProgramConfig(channel_chunk_size=256),
+                    )
                 )
-            )
-        q, k, v = [parts[0] if b == 1 else ttnn.concat(parts, dim=0) for parts in zip(*chunks)]
+            q, k, v = [parts[0] if b == 1 else ttnn.concat(parts, dim=0) for parts in zip(*chunks)]
         history_tail = (
             row_qkv[:, t - 3 : t, :] if t >= 3 else ttnn.concat([state.conv[:, t:, :], row_qkv[:, :t, :]], dim=1)
         )
