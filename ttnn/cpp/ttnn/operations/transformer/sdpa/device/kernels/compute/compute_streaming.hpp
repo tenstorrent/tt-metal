@@ -170,13 +170,12 @@ struct RingStreamingMaskCtx {
 
 // Sentinel for "no CB" — beyond the valid 0-31 range.
 constexpr uint32_t INVALID_CB = 32;
-// BH benefits from blocked pack at width 4; WH keeps the threshold at 8 because
-// width-4 blocked-pack reconfiguration costs more than it saves there.
-#ifdef ARCH_BLACKHOLE
+// Blocked pack from width 4 on both architectures. Wormhole used to keep the threshold at 8
+// (width-4 blocked-pack reconfiguration was measured to cost more than it saved), but on the
+// MiniMax-H3 ring shapes (q256 / k512, 4-wide subblocks) every subblock then took the per-tile
+// path; width 4 measured 1.3% faster on the exp ring op and 0.7% on the normal ring op at 15 s
+// on the Wormhole galaxy (MiniMaxH3_wormhole_perf.md, "Inner loop").
 constexpr uint32_t MIN_BLOCKED_PACK_TILES = 4;
-#else
-constexpr uint32_t MIN_BLOCKED_PACK_TILES = 8;
-#endif
 ALWI bool should_use_blocked_pack_width(uint32_t pack_width) { return pack_width >= MIN_BLOCKED_PACK_TILES; }
 
 template <uint32_t old_cb, uint32_t new_cb>
@@ -2801,7 +2800,11 @@ void sdpa_ring_v2(
             step_kv_pad_rotation.logical_tile_count = logical_nt;
 
             sdpa_inner_loop_step<
+#ifdef SDPA_PROFILE_INNER
+                true,  // profiling_enabled: per-phase device zones (TT_EXP_SDPA_PROFILE_INNER)
+#else
                 false,  // profiling_enabled
+#endif
                 Sq_chunk_t,
                 Sk_chunk_t,
                 Skt,

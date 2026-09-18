@@ -618,6 +618,52 @@ to about 4 and take the traffic off the critical path even on 2 links. Reproduce
 `TT_EXP_SDPA_MUX_BOTTOM_ROW=1 TT_EXP_SDPA_Q_GROUPS=1 … [wormhole_b0-4x8_wh_h3_15s_seq{,_nl4}-ring]`
 under `--profile`; the q128 / q192 / q448 rows are the `4x8_wh_h3_15s_q{128,192,448}_nl4` cases.
 
+### Inner loop: where a 66 µs step goes, and three experiments (2026-09-18, branch `jameslee/exp_ring_sdpa_wh`)
+
+Both ring ops run `sdpa_inner_loop_step` (`compute_streaming.hpp`) once per (Q chunk, K chunk):
+at q256 / k512 that is 2912 steps per core per call at 15 s, 66 µs each (192 ms). The kernel
+already carries per-phase device zones behind a `profiling_enabled` template flag; the new env knob
+`TT_EXP_SDPA_PROFILE_INNER=1` (exp op) compiles them in. The L1 profiler buffer holds ~125 zones per
+RISC per launch, so the log covers the first step and a half of each core, which is what the table
+uses (`tools/sdpa_phase_zones.py` on the report's `profile_log_device.csv`). Step 0 on the math
+thread includes a 15 µs wait for the first K chunk; the steady-state step is ~66 µs.
+
+Per step, one core (device 0, core (1,1)), pack-4 build:
+
+| thread | matmul zones (QK + PV) | softmax zones | outside all leaf zones |
+|---|---|---|---|
+| unpack (TRISC_0) | 16.6 + 21.1 µs | SUB 8.7, reduce 3.1 | 17.7 µs |
+| math (TRISC_1) | 34.3 (19 steady) + 21.2 µs | SUB 10.1, init 1.9, reduce 0.8 | 10.9 µs |
+| pack (TRISC_2) | 22.2 + 2.2 µs | EXP 14.4, PACK SUB_EXP 14.0, reduce 1.7 | 24.9 µs |
+
+Reading. The pure FPU work is 1024 tile-matmuls per step (QK 8x16x4, PV 8x4x16) at 32 cycles each
+for HiFi2 = 33 µs, i.e. **50% of the step**, which is the 48% "FPU util" the roofline reported.
+Inside their zones the matmul blocks run at ~80% of that rate. The other half of the step is the
+softmax and the thread handshakes: on the pack thread the exp (SFPU, `exp_packthread_tile`) and the
+in-place pack plus the row-sum accumulate pack (every probability tile is packed twice, the second
+time with packer L1-accumulate into the row-sum tile) cost 28 µs per step; on the math thread the
+broadcast subtract of the row max is 10 µs (128 tiles at ~80 cycles) and 11 µs sit between zones in
+`tile_regs_acquire`/`wait` handshakes and CB waits. Nothing waits on DRAM or the fabric after the
+first chunk: memory and fabric are off the critical path, the core is bound by its own non-matmul
+work. That is also what the chunk sweep said (time follows steps, not FLOPs).
+
+Experiments, exp op on 64 cores at 15 s (196.2 ms base), max over 32 devices:
+
+| change | per call | verdict |
+|---|---|---|
+| A. `MIN_BLOCKED_PACK_TILES` 8 -> 4 on Wormhole (one pack per 4-wide subblock row instead of 4) | **193.7 ms** | kept; normal op 192.9 -> **191.6 ms** on the same change (`create_perf_table[minimax_h3_15s_768p_pad14336]`) |
+| B. full-sync 16-tile DST (`dst_full_sync_en`, now forwarded by the exp factory; test knob `TT_EXP_SDPA_TEST_DST_FULL_SYNC=1`) | 262.8 ms | rejected: the half-sync ping-pong that overlaps math and pack is worth far more than larger subblocks |
+| C. approximate SFPU exp (`TT_EXP_SDPA_TEST_EXP_APPROX=1`, on top of A) | 192.7 ms | 0.5%; PCC 0.99972 unchanged at 4096 rows; the model keeps exact exp |
+| D. `--profiler-capture-perf-counters=fpu,pack,unpack` (via `SAFE_PYTEST_TRACY_OPTS`) | no data | Tracy's multi-pass counter capture deadlocks on this box: the inner `python -m tracy` waits on a UMD chip lock its parent holds (21 min, killed) |
+
+What is left in the inner loop, by size: the double pack of the probabilities (14 µs on the pack
+thread; computing the row sum with the FPU reduce instead of the packer accumulate would trade
+pack time for math time, and math has ~11 µs of handshake slack), the SFPU exp (14 µs; approx mode
+proved it is not SFPU-op bound, so the cost is the pack-thread scheduling around it), and the
+broadcast subtract (10 µs on math; a fused "exp(x - m)" on the SFPU would remove it, the current
+custom LLK ignores its fidelity parameter so LoFi does not help). Each is a kernel change of a day
+or more and applies to both ring ops.
+
 ## TP/SP parallel-configuration sweep — 15 s / 16:9
 
 Measured 2026-09-17 on this host at `bc1d99d05f6` plus the `matmul.py` change listed at the end
