@@ -1,11 +1,24 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
+#if __riscv_xtttensixbh || __clang__
+#if __clang__
+// User is likely using static analysis tool.  Provide a declaration.
+extern "C" void __builtin_rvtt_ttinsn(unsigned long volatile *, unsigned) __attribute__((nothrow));
+#endif
+#define TT_INSN(ENCODING)  __builtin_rvtt_ttinsn(::ckernel::instrn_buffer, (ENCODING))
+#define TTI_INSN(ENCODING) __builtin_rvtt_ttinsn(nullptr, (ENCODING))
+#else
+// tt-llk test startup code appears to use these macros without
+// enabling tensix.  That seems wrong, but let's not break it further.
+// See #57571 device_setup in tt_metal/tt-llk/tests/helpers/include/boot.h
 #define TTI_INSN(ENCODING)    void(({ __asm__ __volatile__(".ttinsn %0" : : "n"((ENCODING))); }))
 #define TT_INSN(ENCODING)     void(::ckernel::instrn_buffer[0] = (ENCODING))
+#endif
+
 #define TT_OP(opcode, params) ((opcode << 24) + params)
 
 #define TT_OP_ADDDMAREG(OpBisConst, ResultRegIndex, OpBRegIndex, OpARegIndex) \
