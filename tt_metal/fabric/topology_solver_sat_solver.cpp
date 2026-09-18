@@ -44,6 +44,9 @@ struct SatEngine {
     virtual int64_t irredundant_clauses() const = 0;
     virtual int64_t redundant_clauses() const = 0;
     virtual void print_statistics() = 0;
+    // Protect a variable from bounded-variable-elimination so a later (post-solve) blocking clause over it
+    // stays sound. No-op for engines that preserve reusable variables implicitly.
+    virtual void protect_variable(int var) = 0;
 };
 
 // ── CaDiCaL engine (deterministic default; formerly the only engine) ─────────────────────────────────────
@@ -99,6 +102,11 @@ struct CadicalSatEngine final : SatEngine {
     int64_t irredundant_clauses() const override { return solver.irredundant(); }
     int64_t redundant_clauses() const override { return solver.redundant(); }
     void print_statistics() override { solver.statistics(); }
+    void protect_variable(int /*var*/) override {
+        // No-op: CaDiCaL preserves variables reachable from incrementally-added clauses implicitly (its
+        // restore machinery re-introduces eliminated variables when a later clause references them), so
+        // blocking clauses added between solves stay sound without explicit protection.
+    }
 };
 
 #ifdef TT_METAL_FABRIC_KISSAT
@@ -164,6 +172,14 @@ struct KissatSatEngine final : SatEngine {
     int64_t irredundant_clauses() const override { return 0; }
     int64_t redundant_clauses() const override { return 0; }
     void print_statistics() override { kissat_print_statistics(solver); }
+    void protect_variable(int var) override {
+        // Keep this variable out of bounded-variable-elimination so a blocking clause added over it after an
+        // earlier solve() remains sound and efficient (KISSAT_SWAP_PLAN.md §3.5). kissat_extras exposes this
+        // explicitly; the assignment variables enumeration blocks over are protected before the first solve.
+        if (var > 0) {
+            kissat_protect(solver, var);
+        }
+    }
 };
 #endif  // TT_METAL_FABRIC_KISSAT
 
@@ -208,6 +224,8 @@ int TopologySatSolver::declare_one_more_variable() {
     impl_->engine->reserve(next_var_);
     return next_var_;
 }
+
+void TopologySatSolver::protect_variable(int var) { impl_->engine->protect_variable(var); }
 
 void TopologySatSolver::add(int lit) { impl_->engine->add(lit); }
 
