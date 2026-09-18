@@ -60,3 +60,56 @@ def test_incomplete_or_bad_quality_cannot_pass(gate, failure, expect_error):
 def test_invalid_scores_fail(score, expect_error):
     with expect_error(AssertionError, "VBench quality gate failed"):
         assert_scores({"quality": score}, {"quality": 0.8})
+
+
+@pytest.fixture
+def model_cache(tmp_path, monkeypatch):
+    from models.tt_dit.utils.vbench_bundle import DINO_REPO, WEIGHTS
+
+    cache = tmp_path / "cache"
+    for relative in (*WEIGHTS, f"{DINO_REPO}/hubconf.py"):
+        path = cache / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(relative.encode())
+    (cache / "unrelated-model").write_bytes(b"do not export")
+    monkeypatch.setenv("VBENCH_CACHE_DIR", str(cache))
+    monkeypatch.setenv("TORCH_HOME", str(tmp_path / "torch"))
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    return cache
+
+
+def test_stage_only_required_weights_and_verify_checksums(model_cache, tmp_path, expect_error):
+    from models.tt_dit.utils.vbench_bundle import WEIGHTS, stage_models, verify_models
+
+    bundle = tmp_path / "bundle"
+    assets = stage_models(bundle / "models")
+    assert len(assets) == 6
+    assert "unrelated-model" not in assets
+    assert verify_models(bundle, assets) == (bundle / "models").resolve()
+    (bundle / "models" / WEIGHTS[0]).write_bytes(b"corrupted")
+    with expect_error(ValueError, "checksum mismatch"):
+        verify_models(bundle, assets)
+
+
+def test_missing_weight_fails_export(model_cache, tmp_path, expect_error):
+    from models.tt_dit.utils.vbench_bundle import WEIGHTS, stage_models
+
+    (model_cache / WEIGHTS[1]).unlink()
+    with expect_error(FileNotFoundError, "Missing staged VBench asset"):
+        stage_models(tmp_path / "bundle/models")
+
+
+def test_existing_clip_and_torch_caches_are_supported(model_cache, tmp_path):
+    from models.tt_dit.utils.vbench_bundle import DINO_REPO, WEIGHTS, stage_models, verify_models
+
+    alternatives = {
+        WEIGHTS[0]: tmp_path / "home/.cache/clip/ViT-B-32.pt",
+        WEIGHTS[4]: tmp_path / "torch/hub/checkpoints/dino_vitbase16_pretrain.pth",
+        DINO_REPO: tmp_path / "torch/hub/facebookresearch_dino_main",
+    }
+    for relative, path in alternatives.items():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        (model_cache / relative).rename(path)
+    bundle = tmp_path / "bundle"
+    assets = stage_models(bundle / "models")
+    verify_models(bundle, assets)

@@ -43,6 +43,7 @@ def score_vbench(
     prompt: str | None = None,
     dimensions: list[str],
     device: str = "cpu",
+    local: bool = False,
 ) -> dict[str, float]:
     try:
         from vbench import VBench
@@ -72,6 +73,7 @@ def score_vbench(
             dimension_list=dimension_list,
             prompt_list=prompt_list,
             mode="custom_input",
+            local=local,
         )
 
         results_path = os.path.join(tmp_dir, f"{name}_eval_results.json")

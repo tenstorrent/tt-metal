@@ -1717,7 +1717,7 @@
     export HF_HOME=/mnt/models/huggingface
     export TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit" VBENCH_CACHE_DIR=/mnt/models/vbench TORCH_HOME=/mnt/models/vbench/torch_hub
     # Export every full-resolution seed for the required CPU VBench jobs in
-    # models-e2e-tests-multihost-impl.yaml. CLIP remains in this device leg.
+    # the postprocess commands below. CLIP remains in this device leg.
     export RUN_VBENCH=1 VBENCH_SEEDS=5
     export VBENCH_EXPORT_DIR="${PIPELINE_DIR:?CI staging directory required}/vbench"
     export TT_MESH_ID=0
@@ -1726,6 +1726,17 @@
     export TT_MESH_GRAPH_DESC_PATH="${TT_METAL_HOME}/models/tt_dit/tests/models/ltx/scaleout_configs/single_galaxy/mesh_graph_descriptor.textproto"
     mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" \
       python3 -m pytest --timeout 2100 models/tt_dit/tests/models/ltx/test_pipeline_ltx_distilled.py::test_pipeline_distilled -k "4x8sp1tp0nl2_ring_is_fsdp0"
+  postprocess:
+    shards: 5
+    runs_on: tt-ubuntu-2204-xlarge-stable
+    timeout: 180
+    cmd: |
+      uv pip install --no-deps -r models/tt_dit/utils/vbench-requirements.txt
+      python3 -m models.tt_dit.utils.vbench_bundle score --bundle "$POSTPROCESS_INPUT/vbench" \
+        --index "$POSTPROCESS_SHARD" --output "$POSTPROCESS_OUTPUT/score_${POSTPROCESS_SHARD}.json"
+    aggregate_cmd: |
+      python3 -m models.tt_dit.utils.vbench_bundle aggregate \
+        --bundle "$POSTPROCESS_INPUT/vbench" --results "$POSTPROCESS_OUTPUT"
   model: ltx-2.3-fast-t2v
   model_family: LTX
   skus:
