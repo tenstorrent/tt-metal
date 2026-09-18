@@ -47,6 +47,9 @@ const KernelSpecName ACCUM_COMPUTE_G2{"compute_g2"};
 const DFBSpecName ACCUM_SRC{"src"};
 const DFBSpecName ACCUM_DST{"dst"};
 const DFBSpecName ACCUM_ACC{"acc"};
+// COMP holds the Kahan compensation term for floating-point cumsum: the same single-entry
+// produce-then-consume shape as ACC, present only when COMPENSATED_SUM is defined for the kernel.
+const DFBSpecName ACCUM_COMP{"comp"};
 
 const TensorParamName ACCUM_INPUT{"input"};
 const TensorParamName ACCUM_OUTPUT{"output"};
@@ -120,6 +123,15 @@ ttnn::device_operation::ProgramArtifacts AccumulationProgramFactory::create_prog
     constexpr uint32_t acc_tiles = 1;
     constexpr uint32_t out_tiles = 4;
 
+    // fp32 cumsum runs a compensated (Kahan) accumulation. The plain sequential fp32 sum has error
+    // growing as ~T^1.5 along the scan (#55542): 2949x torch's on a 72k-element signal, with no
+    // length at which it stops. Compensation pins it to O(1) ULP of the result. Integer accumulation
+    // is exact already, cumprod has no additive error to compensate, and bf16 keeps the single-op
+    // path: its output rounding dominates any accumulation error and bf16 cumsum already matches
+    // torch (the compensated path costs ~2x on long thin bf16 scans for no accuracy gain).
+    const bool compensated_sum =
+        operation_attributes.op == AccumulationOp::CUMSUM && dst_cb_data_format == DataFormat::Float32;
+
     auto acc_dataformat = datatype_to_dataformat_converter(output_tensor.dtype());
     if (!is_integer_format(acc_dataformat)) {
         acc_dataformat = DataFormat::Float32;
@@ -144,6 +156,9 @@ ttnn::device_operation::ProgramArtifacts AccumulationProgramFactory::create_prog
     // produced into, never consumed, so it needs no entry.
     ComputeUnpackModes unpack_modes;
     unpack_modes[ACCUM_ACC] = UnpackMode::UnpackToDest;
+    if (compensated_sum) {
+        unpack_modes[ACCUM_COMP] = UnpackMode::UnpackToDest;  // read back at full 32-bit like ACC
+    }
     if (input_dataformat != DataFormat::Float16_b) {
         unpack_modes[ACCUM_SRC] = UnpackMode::UnpackToDest;
     }
@@ -164,6 +179,9 @@ ttnn::device_operation::ProgramArtifacts AccumulationProgramFactory::create_prog
         defines_kernel_args["BINARY_OP"] =
             operation_attributes.op == AccumulationOp::CUMSUM ? "add_binary_tile" : "mul_binary_tile";
         defines_kernel_args["FILL_TILE"] = "fill_tile_bitcast";
+    }
+    if (compensated_sum) {
+        defines_kernel_args["COMPENSATED_SUM"] = "1";
     }
 
     float default_acc_value = 0.f;
@@ -235,6 +253,42 @@ ttnn::device_operation::ProgramArtifacts AccumulationProgramFactory::create_prog
 
     const KernelSpec::CompilerOptions::Defines compute_defines(defines_kernel_args);
 
+    Group<DFBBinding> compute_bindings{
+        DFBBinding{
+            .dfb_spec_name = ACCUM_SRC,
+            .accessor_name = "in",
+            .endpoint_type = DFBEndpointType::CONSUMER,
+        },
+        DFBBinding{
+            .dfb_spec_name = ACCUM_DST,
+            .accessor_name = "out",
+            .endpoint_type = DFBEndpointType::PRODUCER,
+        },
+        // Both ends of the accumulator FIFO belong to this one kernel.
+        DFBBinding{
+            .dfb_spec_name = ACCUM_ACC,
+            .accessor_name = "acc",
+            .endpoint_type = DFBEndpointType::PRODUCER,
+        },
+        DFBBinding{
+            .dfb_spec_name = ACCUM_ACC,
+            .accessor_name = "acc",
+            .endpoint_type = DFBEndpointType::CONSUMER,
+        }};
+    if (compensated_sum) {
+        // ...and likewise both ends of the compensation FIFO.
+        compute_bindings.push_back(DFBBinding{
+            .dfb_spec_name = ACCUM_COMP,
+            .accessor_name = "comp",
+            .endpoint_type = DFBEndpointType::PRODUCER,
+        });
+        compute_bindings.push_back(DFBBinding{
+            .dfb_spec_name = ACCUM_COMP,
+            .accessor_name = "comp",
+            .endpoint_type = DFBEndpointType::CONSUMER,
+        });
+    }
+
     auto make_compute = [&](const KernelSpecName& unique_id) {
         return KernelSpec{
             .unique_id = unique_id,
@@ -242,28 +296,7 @@ ttnn::device_operation::ProgramArtifacts AccumulationProgramFactory::create_prog
             // O3 is the optimization level a compute kernel is built at; the CompilerOptions
             // default (O2) is the data-movement level, so compute kernels state it explicitly.
             .compiler_options = {.defines = compute_defines, .opt_level = KernelBuildOptLevel::O3},
-            .dfb_bindings =
-                {DFBBinding{
-                     .dfb_spec_name = ACCUM_SRC,
-                     .accessor_name = "in",
-                     .endpoint_type = DFBEndpointType::CONSUMER,
-                 },
-                 DFBBinding{
-                     .dfb_spec_name = ACCUM_DST,
-                     .accessor_name = "out",
-                     .endpoint_type = DFBEndpointType::PRODUCER,
-                 },
-                 // Both ends of the accumulator FIFO belong to this one kernel.
-                 DFBBinding{
-                     .dfb_spec_name = ACCUM_ACC,
-                     .accessor_name = "acc",
-                     .endpoint_type = DFBEndpointType::PRODUCER,
-                 },
-                 DFBBinding{
-                     .dfb_spec_name = ACCUM_ACC,
-                     .accessor_name = "acc",
-                     .endpoint_type = DFBEndpointType::CONSUMER,
-                 }},
+            .dfb_bindings = compute_bindings,
             .compile_time_args = {{"default_acc_value", std::bit_cast<uint32_t>(default_acc_value)}},
             .runtime_arg_schema = {.runtime_arg_names = {"num_rows", "tiles_per_row"}},
             .hw_config = ComputeHardwareConfig{compute_config},
@@ -350,13 +383,18 @@ ttnn::device_operation::ProgramArtifacts AccumulationProgramFactory::create_prog
         });
     }
 
+    Group<DataflowBufferSpec> dataflow_buffers{
+        make_dfb(ACCUM_SRC, input_dataformat, in_tiles),
+        make_dfb(ACCUM_DST, output_dataformat, out_tiles),
+        make_dfb(ACCUM_ACC, acc_dataformat, acc_tiles)};
+    if (compensated_sum) {
+        dataflow_buffers.push_back(make_dfb(ACCUM_COMP, acc_dataformat, acc_tiles));
+    }
+
     ProgramSpec spec{
         .name = "accumulation",
         .kernels = std::move(kernels),
-        .dataflow_buffers =
-            {make_dfb(ACCUM_SRC, input_dataformat, in_tiles),
-             make_dfb(ACCUM_DST, output_dataformat, out_tiles),
-             make_dfb(ACCUM_ACC, acc_dataformat, acc_tiles)},
+        .dataflow_buffers = std::move(dataflow_buffers),
         .tensor_parameters =
             {TensorParameter{.unique_id = ACCUM_INPUT, .spec = input_tensor.tensor_spec()},
              TensorParameter{.unique_id = ACCUM_OUTPUT, .spec = output_tensor.tensor_spec()}},
