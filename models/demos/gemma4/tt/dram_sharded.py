@@ -367,6 +367,42 @@ def is_t3k_dense_target(mesh_device, config) -> bool:
     return (grid.x, grid.y) == (8, 8)
 
 
+def single_tile_matmul_ckc(m, dest_acc):
+    """Fidelity/accumulation for the m<=32 matmuls every tuned config declines.
+
+    ``in_prefill_l1_matmul_band`` opens above one tile, so at m <= 32 -- a short
+    prompt's whole prefill, a last-token slice, or any decode step -- every
+    builder above returns None and the call site would otherwise fall through to
+    ttnn.linear's own default, which here is HiFi2 with fp32_dest_acc_en off.
+
+    That default is not a safe place to sit. Measured on a real WH T3K at
+    Gemma4-31B long-context-128k, classified on the generated text:
+
+        HiFi3 + fp32 dest-acc     repetition loop
+        HiFi3, no fp32 dest-acc   clean
+        HiFi2, no fp32 dest-acc   repetition loop  <- ttnn's default
+
+    The effect is not monotonic in precision, so this is specifically
+    "HiFi3 without fp32 dest-acc" rather than "31B wants less precision".
+    HiFi4 is not an option at all: HiFi4 together with fp32 dest-accumulation
+    trips Wormhole hardware bug #38306.
+
+    The accumulator is per model because the two variants want opposite things.
+    Along K = 3840..15360 the destination register rounds every partial sum to
+    bf16 unless fp32 dest-acc is on, which is what carries 12B; 31B is the one
+    that loops with it. Callers pass the variant's policy, resolved once at
+    weight-load time by ``default_single_tile_dest_acc``.
+    """
+    if int(m) > TILE_SIZE:
+        return None
+    return ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi3,
+        math_approx_mode=False,
+        fp32_dest_acc_en=bool(dest_acc),
+        packer_l1_acc=not bool(dest_acc),
+    )
+
+
 def matmul_rows(x):
     """Row count a matmul sees: the product of every leading dim, not shape[-2].
 
