@@ -29,9 +29,9 @@ class TtPrefillRuntimeConfig:
             integer(name, getattr(self, name), 1)
         if self.use_trace:
             raise NotImplementedError("Llama runtime uses eager execution")
-        PrefillGeometry(self.max_seq_len)
-        if self.chunk_size != CHUNK_SIZE or self.num_users != 2:
-            raise ValueError("Llama runtime requires chunk_size=1024 and num_users=2")
+        PrefillGeometry(self.max_seq_len, self.num_users)
+        if self.chunk_size != CHUNK_SIZE:
+            raise ValueError("Llama runtime requires chunk_size=1024")
         if (self.num_layers, self.first_layer_idx, self.is_first_rank, self.is_last_rank, self.mesh_shape) != (
             32,
             0,
@@ -48,7 +48,7 @@ class TtPrefillRuntime:
             raise ValueError("model layer count differs from runtime configuration")
         if model.max_seq_len != config.max_seq_len:
             raise ValueError("model capacity differs from runtime configuration")
-        self.geometry = PrefillGeometry(config.max_seq_len)
+        self.geometry = PrefillGeometry(config.max_seq_len, config.num_users)
         self.mesh_device = mesh_device
         self.config = config
         self.model = model
@@ -245,6 +245,7 @@ def build_runtime(mesh_device, *, params, checkpoint_path):
         enable_lm_head=False,
         cache_dtype=ttnn.bfloat8_b,
         max_seq_len=config.max_seq_len,
+        num_users=config.num_users,
     )
     return TtPrefillRuntime(
         mesh_device,

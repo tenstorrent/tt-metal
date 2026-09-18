@@ -10,7 +10,7 @@ from models.demos.llama_3p1_8b_d_p.tt.attention import FullCausalAttention, _val
 from models.demos.llama_3p1_8b_d_p.tt.config import MeshConfig
 from models.demos.llama_3p1_8b_d_p.tt.decoder import DecoderLayer
 from models.demos.llama_3p1_8b_d_p.tt.input import validate_chunk_range
-from models.demos.llama_3p1_8b_d_p.tt.prefill_geometry import DEFAULT_MAX_SEQ_LEN, PrefillGeometry
+from models.demos.llama_3p1_8b_d_p.tt.prefill_geometry import DEFAULT_MAX_SEQ_LEN, DEFAULT_NUM_USERS, PrefillGeometry
 from models.demos.llama_3p1_8b_d_p.tt.rms_norm import RMSNorm
 from models.demos.llama_3p1_8b_d_p.tt.rope import build_indexed_rope, build_transformation_mat
 from models.demos.llama_3p1_8b_d_p.tt.weights import CheckpointWeights
@@ -155,14 +155,16 @@ class PrefillModel:
         cache_dtype=ttnn.bfloat8_b,
         enable_lm_head=True,
         max_seq_len=DEFAULT_MAX_SEQ_LEN,
+        num_users=DEFAULT_NUM_USERS,
     ):
         if type(num_layers) is not int or not 1 <= num_layers <= 32:
             raise ValueError("num_layers must be an integer in [1,32]")
         if type(enable_lm_head) is not bool:
             raise TypeError("enable_lm_head must be a bool")
         self.mesh_device = mesh_device
-        self.geometry = PrefillGeometry(max_seq_len)
+        self.geometry = PrefillGeometry(max_seq_len, num_users)
         self.max_seq_len = self.geometry.max_seq_len
+        self.num_users = self.geometry.num_users
         self.mesh_config = MeshConfig((4, 8), 8)
         _validate_mesh(mesh_device, self.mesh_config, "PrefillModel")
         weights = CheckpointWeights(checkpoint_path, max_seq_len=self.max_seq_len)
@@ -176,7 +178,11 @@ class PrefillModel:
         self.closed = False
         try:
             self.attention = FullCausalAttention(
-                mesh_device, self.mesh_config, cache_dtype=cache_dtype, max_seq_len=self.max_seq_len
+                mesh_device,
+                self.mesh_config,
+                cache_dtype=cache_dtype,
+                max_seq_len=self.max_seq_len,
+                num_users=self.num_users,
             )
             self.rope_tables = tuple(build_indexed_rope(mesh_device, max_seq_len=self.max_seq_len, chunk_size=1024))
             self.transformation_mat = build_transformation_mat(mesh_device)

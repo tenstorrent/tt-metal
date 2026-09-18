@@ -79,7 +79,8 @@ class AdapterTests(unittest.TestCase):
         adapter = self.adapter()
         for overrides in (
             dict(max_seq_len=132096),
-            dict(num_users=1),
+            # Any positive slot count is supported now, so only a non-positive one is unsupported.
+            dict(num_users=0),
             dict(use_trace=True),
             dict(first_layer_idx=1),
             dict(sp_axis=1, tp_axis=0),
