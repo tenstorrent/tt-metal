@@ -751,9 +751,6 @@ void JitBuildState::compile_one(const string& out_dir, const JitBuildSettings* s
 
     // Add the machine-local PCH here so exported recipes remain portable.
     // Exclude build-map dump flags from the PCH profile.
-    // Rooted at the cache root rather than under the build key: the artifact is keyed on the
-    // compiler, optimization level, cflags and umbrella text, none of which the build key adds
-    // to. Nesting it per build key duplicated ~29 MB of identical .gch per key.
     const std::string pch = tt::jit_build::ensure_pch(
         env_.gpp_,
         recipe.compiler_opt_level,
