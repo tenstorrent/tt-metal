@@ -17,6 +17,11 @@ from ..layers.module import Module
 
 ALIGNMENT = 32
 
+# Shapes are static per model, so the same conv3d blocking fallback fires identically on every
+# call (e.g. once per denoising step). Track which (blocking_key) signatures have already been
+# warned about so the log carries the information once instead of hundreds of identical repeats.
+_warned_conv3d_signatures = set()
+
 
 def aligned_channels(channels, unit: int = ALIGNMENT):
     """Round ``channels`` up to a multiple of ``unit`` (default TILE_WIDTH).
@@ -646,16 +651,20 @@ def get_conv3d_config(
         fallback = _DEFAULT_BLOCKINGS.get(channel_key)
         if fallback is not None:
             C_in_block, C_out_block, T_out_block, H_out_block, W_out_block = fallback
-            logger.warning(
-                f"conv3d blocking [fallback] {blocking_key} -> channel_key={channel_key} -> "
-                f"Cin={C_in_block} Cout={C_out_block} T={T_out_block} H={H_out_block} W={W_out_block}"
-            )
+            if blocking_key not in _warned_conv3d_signatures:
+                logger.warning(
+                    f"conv3d blocking [fallback] {blocking_key} -> channel_key={channel_key} -> "
+                    f"Cin={C_in_block} Cout={C_out_block} T={T_out_block} H={H_out_block} W={W_out_block}"
+                )
+                _warned_conv3d_signatures.add(blocking_key)
         else:
             C_in_block, C_out_block, T_out_block, H_out_block, W_out_block = in_channels, 32, 1, 1, 1
-            logger.warning(
-                f"conv3d blocking [NONE] {blocking_key} -> no match in any table, using hardcoded default: "
-                f"Cin={C_in_block} Cout={C_out_block} T={T_out_block} H={H_out_block} W={W_out_block}"
-            )
+            if blocking_key not in _warned_conv3d_signatures:
+                logger.warning(
+                    f"conv3d blocking [NONE] {blocking_key} -> no match in any table, using hardcoded default: "
+                    f"Cin={C_in_block} Cout={C_out_block} T={T_out_block} H={H_out_block} W={W_out_block}"
+                )
+                _warned_conv3d_signatures.add(blocking_key)
 
     return ttnn.Conv3dConfig(
         weights_dtype=weights_dtype,
