@@ -174,11 +174,19 @@ static void RunTest(
                 log_info(LogTest, "Skipping: DRAM programmable cores not available on this architecture.");
                 GTEST_SKIP();
             }
-            // Subchannel 0 is the syseng-owned NOC0 DRAM endpoint (no DRISC firmware); use subchannel 1.
-            logical_core = {0, 1};
+            // Blackhole subchannel 0 is syseng-owned and has no DRISC firmware. Mimir exposes one
+            // CCE per logical DRAM channel, with no subchannel dimension.
+            logical_core = is_quasar ? CoreCoord{0, 0} : CoreCoord{0, 1};
             virtual_core = device->virtual_core_from_logical_core(logical_core, CoreType::DRAM);
-            assert_kernel = CreateKernel(program, kernel, logical_core, DramConfig{.noc = tt_metal::NOC::NOC_0});
-            risc = "drisc";
+            assert_kernel = CreateKernel(
+                program,
+                kernel,
+                logical_core,
+                DramConfig{
+                    .processor = static_cast<DataMovementProcessor>(processor.processor_type),
+                    .noc = tt_metal::NOC::NOC_0});
+            // watcher_device_reader::get_riscv_name labels CCE harts drisc0..drisc7; Blackhole stays "drisc".
+            risc = is_quasar ? fmt::format("drisc{}", processor.processor_type) : "drisc";
             break;
         }
         case HalProgrammableCoreType::DISPATCH: {
@@ -470,7 +478,14 @@ INSTANTIATE_TEST_SUITE_P(
         WatcherTestParams{"Trisc3", {TENSIX, COMPUTE, 3}},  // Trisc3 only Runs on Quasar
         WatcherTestParams{"Erisc", {ACTIVE_ETH, DM, 0}},
         WatcherTestParams{"IErisc", {IDLE_ETH, DM, 0}},
-        WatcherTestParams{"Drisc", {DRAM, DM, 0}},
+        WatcherTestParams{"Drisc0", {DRAM, DM, 0}},
+        WatcherTestParams{"Drisc1", {DRAM, DM, 1}},
+        WatcherTestParams{"Drisc2", {DRAM, DM, 2}},
+        WatcherTestParams{"Drisc3", {DRAM, DM, 3}},
+        WatcherTestParams{"Drisc4", {DRAM, DM, 4}},
+        WatcherTestParams{"Drisc5", {DRAM, DM, 5}},
+        WatcherTestParams{"Drisc6", {DRAM, DM, 6}},
+        WatcherTestParams{"Drisc7", {DRAM, DM, 7}},
         WatcherTestParams{"DispatchDM2", {DISPATCH, DM, 2}}),
     [](const ::testing::TestParamInfo<WatcherTestParams>& info) { return info.param.test_name; });
 
@@ -529,7 +544,7 @@ INSTANTIATE_TEST_SUITE_P(
             "Trisc3", {TENSIX, COMPUTE, 3}, dev_msgs::DebugAssertRtaOutOfBounds},  // Trisc3 only Runs on Quasar
         WatcherTestParams{"Erisc", {ACTIVE_ETH, DM, 0}, dev_msgs::DebugAssertNCriscNOCNonpostedAtomicsFlushedTripped},
         WatcherTestParams{"IErisc", {IDLE_ETH, DM, 0}, dev_msgs::DebugAssertNCriscNOCReadsFlushedTripped},
-        WatcherTestParams{"Drisc", {DRAM, DM, 0}, dev_msgs::DebugAssertTripped},
+        WatcherTestParams{"Drisc0", {DRAM, DM, 0}, dev_msgs::DebugAssertTripped},
         WatcherTestParams{"DispatchDM2", {DISPATCH, DM, 2}, dev_msgs::DebugAssertTripped}),
     [](const ::testing::TestParamInfo<WatcherTestParams>& info) { return info.param.test_name; });
 

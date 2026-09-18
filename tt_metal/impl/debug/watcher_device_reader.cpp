@@ -80,13 +80,19 @@ const char* get_riscv_name(const Hal& hal, HalProgrammableCoreType core_type, ui
             return names[processor_index];
         }
         case HalProgrammableCoreType::DRAM: {
-            static const char* const names[] = {"drisc"};
+            auto num_processors = hal.get_num_risc_processors(core_type);
             TT_FATAL(
-                processor_index < 1,
-                "Watcher data corrupted, unexpected processor index {} on core {}",
+                processor_index < num_processors,
+                "Watcher data corrupted, unexpected processor index {} on core {} (max {})",
                 processor_index,
-                core_type);
-            return names[processor_index];
+                core_type,
+                num_processors - 1);
+            if (hal.get_arch() == tt::ARCH::QUASAR) {
+                static const char* const names[] = {
+                    "drisc0", "drisc1", "drisc2", "drisc3", "drisc4", "drisc5", "drisc6", "drisc7"};
+                return names[processor_index];
+            }
+            return "drisc";
         }
         case HalProgrammableCoreType::DISPATCH: {
             auto num_processors = hal.get_num_risc_processors(core_type);
@@ -594,10 +600,10 @@ WatcherDeviceReader::Core WatcherDeviceReader::Core::Create(
     reader.env.get_cluster().read_core(
         l1_read_buf.data(), l1_read_buf.size(), {static_cast<size_t>(reader.device_id), virtual_coord}, mailbox_addr);
 
-    // Quasar's MPSC head lives in a semaphore register rather than the mailbox. Read it here with the
-    // rest of the snapshot.
+    // Quasar Tensix/dispatch MPSC heads live in a semaphore register rather than the mailbox. CCE
+    // harts share a coherent data cache and atomically update the head in their mailbox instead.
     uint32_t sem_head = 0;
-    if (hal.get_arch() == tt::ARCH::QUASAR) {
+    if (hal.get_arch() == tt::ARCH::QUASAR && programmable_core_type != HalProgrammableCoreType::DRAM) {
         reader.env.get_cluster().read_core(
             &sem_head,
             sizeof(sem_head),
@@ -945,8 +951,11 @@ void WatcherDeviceReader::Core::DumpMpscRingBuffer(bool to_stdout) const {
 
     uint32_t capacity = hal.get_ring_buffer_capacity();
     uint32_t mask = capacity - 1;  // capacity is a power of two
-    // Quasar keeps head in a semaphore register, snapshotted alongside the mailbox.
-    uint32_t head = (hal.get_arch() == tt::ARCH::QUASAR) ? sem_head_ : rb->head;
+    // Quasar Tensix/dispatch keep the head in a semaphore register. CCE and Blackhole keep it in
+    // the mailbox.
+    uint32_t head = (hal.get_arch() == tt::ARCH::QUASAR && programmable_core_type_ != HalProgrammableCoreType::DRAM)
+                        ? sem_head_
+                        : rb->head;
 
     // Scan every slot rather than min(head, capacity): the semaphore is 16-bit, so head wraps and
     // cannot bound the live entries.

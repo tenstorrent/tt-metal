@@ -46,8 +46,8 @@ using debug_mpsc_ring_buf_view_t = debug_mpsc_ring_buf_msg_quasar_t;
 // Device-side constants (debug_ring_buf_size is in core_config.h for codegen)
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
 
-// TODO: re-verify on Quasar ERISC/DRISC once runtime support for those cores lands -
-// they may need to fall back to SPSC.
+// TODO: re-verify on Quasar ERISC once runtime support for those cores lands. CCE DRISC uses a
+// cached soft semaphore to serialize its DM-only writers.
 #if defined(ARCH_QUASAR) || defined(ARCH_BLACKHOLE)
 #define DEBUG_RING_BUFFER_MPSC 1
 #endif

@@ -206,8 +206,7 @@ void SubDeviceManager::validate_sub_devices() const {
         sub_devices_.size(),
         DispatchSettings::DISPATCH_MESSAGE_ENTRIES);
     // Validate sub device cores fit inside the device grid
-    const auto& compute_grid_size = device_->compute_with_storage_grid_size();
-    CoreRange device_worker_cores = CoreRange({0, 0}, {compute_grid_size.x - 1, compute_grid_size.y - 1});
+    const CoreRangeSet device_worker_cores = grid_to_corerangeset(device_->compute_with_storage_grid_size());
 
     for (uint8_t sub_device_id = 0; sub_device_id < this->num_sub_devices(); ++sub_device_id) {
         const auto& sub_device = this->sub_device(SubDeviceId(sub_device_id));
@@ -377,8 +376,7 @@ void SubDeviceManager::populate_noc_data() {
             DispatchSettings::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES);
     }
 
-    const auto& compute_grid_size = device_->compute_with_storage_grid_size();
-    CoreRange device_worker_cores = CoreRange({0, 0}, {compute_grid_size.x - 1, compute_grid_size.y - 1});
+    const CoreRangeSet all_core_set = grid_to_corerangeset(device_->compute_with_storage_grid_size());
 
     std::vector<std::pair<CoreRangeSet, uint32_t>> core_go_message_mapping;
     CoreRangeSet used_cores;
@@ -388,7 +386,6 @@ void SubDeviceManager::populate_noc_data() {
         used_cores = used_cores.merge(tensix_cores);
         core_go_message_mapping_.emplace_back(tensix_cores, i);
     }
-    CoreRangeSet all_core_set{device_worker_cores};
     CoreRangeSet unused_cores = all_core_set.subtract(used_cores);
     if (!unused_cores.empty()) {
         constexpr uint32_t unused_go_message_index = dev_msgs::go_message_num_entries - 1;

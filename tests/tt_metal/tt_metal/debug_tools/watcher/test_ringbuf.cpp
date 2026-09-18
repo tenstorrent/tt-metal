@@ -170,14 +170,18 @@ void RunTest(
                 log_info(LogTest, "Skipping: DRAM programmable cores not available on this architecture.");
                 GTEST_SKIP();
             }
-            // Subchannel 0 is the syseng-owned NOC0 DRAM endpoint (no DRISC firmware); use subchannel 1.
-            logical_core = CoreCoord{0, 1};
+            // Blackhole subchannel 0 is syseng-owned and has no DRISC firmware. Mimir exposes one
+            // CCE per logical DRAM channel, with no subchannel dimension.
+            logical_core = is_quasar ? CoreCoord{0, 0} : CoreCoord{0, 1};
             virtual_core = device->virtual_core_from_logical_core(logical_core, CoreType::DRAM);
             CreateKernel(
                 program,
                 kernel_legacy,
                 logical_core,
-                DramConfig{.noc = tt_metal::NOC::NOC_0, .compile_args = {num_pushes}});
+                DramConfig{
+                    .processor = static_cast<DataMovementProcessor>(processor.processor_type),
+                    .noc = tt_metal::NOC::NOC_0,
+                    .compile_args = {num_pushes}});
             break;
         }
         case HalProgrammableCoreType::DISPATCH: {
@@ -203,6 +207,62 @@ void RunTest(
         hal.get_processor_index(processor.core_type, processor.processor_class, processor.processor_type);
     EXPECT_TRUE(FileContainsAllStringsInOrder(
         fixture->log_file_name, get_expected_single_processor(hal, processor.core_type, thread_idx, num_pushes)));
+}
+
+void RunCceMultiWriterTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    if (!hal.has_programmable_core_type(HalProgrammableCoreType::DRAM) || mesh_device->arch() != tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "CCE multi-writer ringbuf requires Quasar DRAM/CCE cores";
+    }
+    const uint32_t num_harts = hal.get_num_risc_processors(HalProgrammableCoreType::DRAM);
+    if (num_harts < 2) {
+        GTEST_SKIP() << "CCE multi-writer ringbuf requires more than one DRAM processor";
+    }
+
+    distributed::MeshWorkload workload;
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+    Program program = Program();
+    auto* device = mesh_device->get_devices()[0];
+    const CoreCoord logical_core{0, 0};
+    const CoreCoord virtual_core = device->virtual_core_from_logical_core(logical_core, CoreType::DRAM);
+    constexpr const char* kernel_legacy = "tests/tt_metal/tt_metal/test_kernels/misc/watcher_ringbuf.cpp";
+
+    for (uint32_t hart = 0; hart < num_harts; hart++) {
+        CreateKernel(
+            program,
+            kernel_legacy,
+            logical_core,
+            DramConfig{
+                .processor = static_cast<DataMovementProcessor>(hart),
+                .noc = tt_metal::NOC::NOC_0,
+                .compile_args = {NUM_PUSHES_MULTI}});
+    }
+
+    log_info(
+        LogTest,
+        "Running CCE multi-writer test on device {} core {}[{}] ({} harts)...",
+        device->id(),
+        logical_core,
+        virtual_core,
+        num_harts);
+    workload.add_program(device_range, std::move(program));
+    fixture->RunProgram(mesh_device, workload, true);
+
+    // Every (hart, seq) pair must appear. 8 harts x 5 pushes fits in the 128-entry MPSC buffer, so
+    // a missing tag is a lost write rather than eviction. Order is not asserted: the lock serializes
+    // claims, not completion order.
+    std::vector<std::string> expected = {"debug_ring_buffer="};
+    auto dram_name = [&hal](uint32_t hw_id) {
+        return hal.get_processor_class_name(HalProgrammableCoreType::DRAM, hw_id, false);
+    };
+    for (uint32_t hart = 0; hart < num_harts; hart++) {
+        for (uint32_t seq = 0; seq < NUM_PUSHES_MULTI; seq++) {
+            expected.push_back(fmt::format("[{}]0x{:08x}", dram_name(hart), (hart << 16) | seq));
+        }
+    }
+    log_info(tt::LogTest, "Checking file: {}", fixture->log_file_name);
+    EXPECT_TRUE(FileContainsAllStrings(fixture->log_file_name, expected));
 }
 
 void RunMultiWriterTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
@@ -341,7 +401,14 @@ INSTANTIATE_TEST_SUITE_P(
         RingBufferTestParams{"Trisc3", {TENSIX, COMPUTE, 3}},  // Quasar only
         RingBufferTestParams{"Erisc", {ACTIVE_ETH, DM, 0}},
         RingBufferTestParams{"IErisc", {IDLE_ETH, DM, 0}},
-        RingBufferTestParams{"Drisc", {DRAM, DM, 0}}),
+        RingBufferTestParams{"Drisc0", {DRAM, DM, 0}},
+        RingBufferTestParams{"Drisc1", {DRAM, DM, 1}},
+        RingBufferTestParams{"Drisc2", {DRAM, DM, 2}},
+        RingBufferTestParams{"Drisc3", {DRAM, DM, 3}},
+        RingBufferTestParams{"Drisc4", {DRAM, DM, 4}},
+        RingBufferTestParams{"Drisc5", {DRAM, DM, 5}},
+        RingBufferTestParams{"Drisc6", {DRAM, DM, 6}},
+        RingBufferTestParams{"Drisc7", {DRAM, DM, 7}}),
     [](const ::testing::TestParamInfo<RingBufferTestParams>& info) { return info.param.test_name; });
 
 // Every writer on the core pushes from one program: 22 on Quasar (6 DMs + 16 TRISCs), 5 on
@@ -352,7 +419,26 @@ TEST_F(MeshWatcherFixture, TestWatcherRingBufferMpscMultiWriter) {
         GTEST_SKIP() << "Multi-writer test requires the MPSC ring buffer";
     }
     for (auto& mesh_device : this->devices_) {
+        const auto grid = mesh_device->compute_with_storage_grid_size();
+        if (grid.x == 0 || grid.y == 0) {
+            GTEST_SKIP() << "Tensix multi-writer ringbuf requires a non-empty compute grid";
+        }
         this->RunTestOnDevice(RunMultiWriterTest, mesh_device);
+    }
+}
+
+// All CCE harts push concurrently through the cached atomic lock. Sequential Drisc0..Drisc7
+// cases never contend that lock.
+TEST_F(MeshWatcherFixture, TestWatcherRingBufferCceMultiWriter) {
+    const auto& hal = MetalContext::instance().hal();
+    if (!this->IsSlowDispatch()) {
+        GTEST_SKIP() << "DRAM/CCE ringbuf requires Slow Dispatch";
+    }
+    if (!hal.has_programmable_core_type(HalProgrammableCoreType::DRAM)) {
+        GTEST_SKIP() << "CCE multi-writer ringbuf requires DRAM programmable cores";
+    }
+    for (auto& mesh_device : this->devices_) {
+        this->RunTestOnDevice(RunCceMultiWriterTest, mesh_device);
     }
 }
 

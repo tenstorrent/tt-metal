@@ -23,6 +23,7 @@
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include "impl/context/metal_context.hpp"
+#include <tt-metalium/hal_types.hpp>
 #include <umd/device/types/arch.hpp>
 #include "impl/kernels/kernel.hpp"
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
@@ -338,6 +339,66 @@ void RunEthTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::
         }
     }
 }
+
+void RunCceTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+    const auto& hal = MetalContext::instance().hal();
+    if (!fixture->IsSlowDispatch()) {
+        GTEST_SKIP() << "CCE waypoints require Slow Dispatch";
+    }
+    if (!hal.has_programmable_core_type(HalProgrammableCoreType::DRAM) || mesh_device->arch() != tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "CCE waypoints require Quasar DRAM/CCE cores";
+    }
+
+    auto* device = mesh_device->get_devices()[0];
+    const CoreCoord logical_core{0, 0};
+    const CoreCoord virtual_core = device->virtual_core_from_logical_core(logical_core, CoreType::DRAM);
+    // Host writes over AXI; the hart must read the uncached alias of the same SRAM offset.
+    const uint32_t sync_dev_addr = hal.get_dev_size(HalProgrammableCoreType::DRAM, HalL1MemAddrType::BASE) +
+                                   hal.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
+    const uint64_t sync_noc_addr = hal.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
+
+    std::vector<uint32_t> zero_data = {0};
+    MetalContext::instance().get_cluster().write_core(device->id(), virtual_core, zero_data, sync_noc_addr);
+
+    Program program = CreateProgram();
+    auto kid = CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/misc/watcher_waypoints.cpp",
+        logical_core,
+        DramConfig{.noc = NOC::NOC_0});
+    SetCommonRuntimeArgs(program, kid, std::vector<uint32_t>{sync_dev_addr});
+
+    distributed::MeshWorkload workload;
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    workload.add_program(distributed::MeshCoordinateRange(zero_coord, zero_coord), std::move(program));
+    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
+
+    const std::string poll = fmt::format("dram core(x={:2},y={:2})*: {}", logical_core.x, logical_core.y, waypoint);
+    constexpr int timeout_ms = 30000;
+    auto start = std::chrono::steady_clock::now();
+    while (!FileContainsAllStrings(fixture->log_file_name, {poll})) {
+        auto elapsed =
+            std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
+        ASSERT_LT(elapsed, timeout_ms) << "Timed out waiting for watcher to log CCE waypoints";
+        std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+    }
+
+    std::vector<uint32_t> release_data = {1};
+    MetalContext::instance().get_cluster().write_core(device->id(), virtual_core, release_data, sync_noc_addr);
+    distributed::Finish(mesh_device->mesh_command_queue());
+
+    const std::string expected = fmt::format(
+        "Device {} dram core(x={:2},y={:2}) virtual(x={:2},y={:2}): {}*rmsg:*",
+        device->id(),
+        logical_core.x,
+        logical_core.y,
+        virtual_core.x,
+        virtual_core.y,
+        waypoint);
+    EXPECT_TRUE(FileContainsAllStringsInOrder(fixture->log_file_name, {expected}))
+        << "Missing waypoint log for dram core (" << logical_core.x << "," << logical_core.y << ")\n"
+        << "Expected: " << expected;
+}
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
@@ -350,5 +411,11 @@ TEST_F(MeshWatcherFixture, TestWatcherWaypoints) {
 TEST_F(MeshWatcherFixture, TestWatcherWaypointsEth) {
     for (auto& mesh_device : this->devices_) {
         this->RunTestOnDevice(CMAKE_UNIQUE_NAMESPACE::RunEthTest, mesh_device);
+    }
+}
+
+TEST_F(MeshWatcherFixture, TestWatcherWaypointsCce) {
+    for (auto& mesh_device : this->devices_) {
+        this->RunTestOnDevice(CMAKE_UNIQUE_NAMESPACE::RunCceTest, mesh_device);
     }
 }

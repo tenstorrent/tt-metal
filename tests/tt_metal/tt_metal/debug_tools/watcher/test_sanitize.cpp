@@ -27,6 +27,7 @@
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
+#include "impl/kernels/kernel.hpp"
 #include "debug_tools_fixture.hpp"
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/hal.hpp>
@@ -1129,4 +1130,67 @@ TEST_F(MeshWatcherFixture, QuasarTestWatcherSanitizeMultiDMRace) {
                 true /*multi_dm_race*/);
         },
         this->devices_[0]);
+}
+
+void RunCceSanitizeL1Overflow(
+    MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+    const auto& hal = MetalContext::instance().hal();
+    if (tt::tt_metal::MetalContext::instance().rtoptions().watcher_noc_sanitize_disabled()) {
+        GTEST_SKIP();
+    }
+    if (!fixture->IsSlowDispatch()) {
+        GTEST_SKIP() << "CCE sanitize requires Slow Dispatch";
+    }
+    if (!hal.has_programmable_core_type(HalProgrammableCoreType::DRAM) || mesh_device->arch() != tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "CCE sanitize requires Quasar DRAM/CCE cores";
+    }
+
+    distributed::MeshWorkload workload;
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+    Program program = Program();
+    auto* device = mesh_device->get_devices()[0];
+    const CoreCoord logical_core{0, 0};
+    const CoreCoord virtual_core = device->virtual_core_from_logical_core(logical_core, CoreType::DRAM);
+    constexpr uint32_t overflow_addr = 0xDDDDDDDD;
+
+    CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/misc/cce_watcher_sanitize_l1.cpp",
+        logical_core,
+        DramConfig{.noc = tt_metal::NOC::NOC_0, .compile_args = {overflow_addr}});
+    workload.add_program(device_range, std::move(program));
+
+    try {
+        fixture->RunProgram(mesh_device, workload);
+    } catch (std::runtime_error& e) {
+        log_info(LogTest, "Caught exception (one is expected in this test)");
+        const std::string error = std::string(e.what());
+        EXPECT_TRUE(
+            error.find("Aborting wait due to watcher error") != std::string::npos ||
+            error.find("overflowed L1") != std::string::npos)
+            << error;
+    }
+
+    const std::string expected = fmt::format(
+        "Device {} dram core(x={:2},y={:2}) virtual(x={:2},y={:2}): drisc0 core overflowed L1 with access to {:#x} "
+        "of length {} (read or write past the end of local memory).",
+        device->id(),
+        logical_core.x,
+        logical_core.y,
+        virtual_core.x,
+        virtual_core.y,
+        overflow_addr,
+        sizeof(std::uint32_t));
+    log_info(LogTest, "Expected error: {}", expected);
+    std::string exception;
+    do {
+        exception = MetalContext::instance().watcher_server()->exception_message();
+    } while (exception.empty());
+    log_info(LogTest, "Reported error: {}", exception);
+    EXPECT_EQ(exception, expected);
+}
+
+TEST_F(MeshWatcherFixture, CceTestWatcherSanitizeL1Overflow) {
+    this->RunTestOnDevice(RunCceSanitizeL1Overflow, this->devices_[0]);
 }

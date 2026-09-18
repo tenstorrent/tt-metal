@@ -286,14 +286,27 @@ inline uint16_t debug_valid_drisc_addr(uint64_t addr, uint64_t len, bool write) 
     if (addr + len <= addr) {
         return DebugSanitizeNocAddrZeroLength;
     }
+#if defined(ARCH_QUASAR)
+    // CCE SRAM is the same size as worker L1 and aliases the same way, so a local buffer may sit in
+    // either view. Kernels reach the mailbox through the uncached alias, so the mailbox check needs
+    // the view-relative offset rather than the raw address.
+    if (!debug_l1_access_within_single_view(addr, len)) {
+        return DebugSanitizeNocAddrOverflow;
+    }
+    const uint64_t local_addr = (addr >= MEM_L1_UNCACHED_BASE) ? (addr - MEM_L1_UNCACHED_BASE) : addr;
+    constexpr uint64_t mailbox_end = MEM_CCE_MAILBOX_END;
+#else
     if (addr < MEM_DRISC_L1_BASE) {
         return DebugSanitizeNocAddrUnderflow;
     }
     if (addr + len > MEM_DRISC_L1_BASE + MEM_DRISC_L1_SIZE) {
         return DebugSanitizeNocAddrOverflow;
     }
+    const uint64_t local_addr = addr;
+    constexpr uint64_t mailbox_end = MEM_DRISC_MAILBOX_END;
+#endif
 #if !defined(DISPATCH_KERNEL) || (DISPATCH_KERNEL == 0)
-    if (write && (addr < MEM_DRISC_MAILBOX_END)) {
+    if (write && (local_addr < mailbox_end)) {
         return DebugSanitizeNocAddrMailbox;
     }
 #endif
@@ -658,12 +671,14 @@ void debug_sanitize_l1_access(uint64_t addr, uint32_t len) {
     bool illegal = (addr + len <= addr);  // zero length / wraparound
 #if defined(COMPILE_FOR_ERISC)
     illegal = illegal || (addr + len > MEM_ETH_SIZE);
+#elif defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+    // Ahead of the DRISC case: CCE is a DM-class core, so it is built with COMPILE_FOR_DM and its
+    // SRAM aliases like worker L1. Access must lie wholly within the cached view or the uncached
+    // alias (not straddle the seam). Report the raw address (not a normalized one) so errors
+    // reflect what the kernel used.
+    illegal = illegal || !debug_l1_access_within_single_view(addr, len);
 #elif defined(COMPILE_FOR_DRISC)
     illegal = illegal || (addr + len > MEM_DRISC_L1_SIZE);
-#elif defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
-    // Access must lie wholly within the cached view or the uncached alias (not straddle the seam).
-    // Report the raw address (not a normalized one) so errors reflect what the kernel used.
-    illegal = illegal || !debug_l1_access_within_single_view(addr, len);
 #else
     illegal = illegal || (addr + len > MEM_L1_SIZE);
 #endif
