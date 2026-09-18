@@ -78,12 +78,14 @@ supported_formats = [
         BroadcastType.Scalar,
     ],
     dest_acc=[DestAccumulation.Yes, DestAccumulation.No],
+    acc_to_dest=[False, True],
 )
 def test_unpack_bcast(
     tile_dimensions,
     formats,
     broadcast_type,
     dest_acc,
+    acc_to_dest,
 ):
     # --- Skips -----------------------------------------------------------
 
@@ -93,6 +95,25 @@ def test_unpack_bcast(
         DataFormat.UInt32,
     ):
         pytest.skip("32-bit formats require dest accumulation")
+
+    if acc_to_dest and broadcast_type == BroadcastType.None_:
+        pytest.skip(
+            "acc_to_dest without broadcast is plain datacopy coverage, owned by test_unpack_A.py"
+        )
+
+    if acc_to_dest and formats.input_format in (
+        DataFormat.Float32,
+        DataFormat.Int32,
+        DataFormat.UInt32,
+    ):
+        pytest.skip(
+            "32-bit formats broadcast through unpack-to-dest, which is mutually exclusive with acc_to_dest"
+        )
+
+    if acc_to_dest and formats.input_format == DataFormat.UInt16:
+        pytest.skip(
+            "UInt16 broadcast runs on MOVB2D (ELWADD reinterprets its bit patterns as floats), and MOVB2D cannot accumulate"
+        )
 
     if (
         dest_acc == DestAccumulation.Yes
@@ -156,6 +177,12 @@ def test_unpack_bcast(
             tile_cnt=tile_cnt_A,
             face_r_dim=face_r_dim,
         )
+        if acc_to_dest:
+            # The kernel primes DEST with one plain broadcast copy and then accumulates the same
+            # broadcast on top, so DEST holds 2 * bcast(src_A). Doubling is exact in every DEST
+            # float type (the exponent increments, the mantissa is untouched), so this stays a
+            # bit-exact golden. A dropped accumulate bit lands on 1 * bcast(src_A) and fails here.
+            golden_tensor = golden_tensor * 2
     else:
         golden_tensor = src_A.to(format_dict[formats.output_format])
 
@@ -175,7 +202,7 @@ def test_unpack_bcast(
         templates=[
             STOCHASTIC_ROUNDING(StochasticRounding.No),
             BROADCAST_TYPE(broadcast_type),
-            ACC_TO_DEST(False),
+            ACC_TO_DEST(acc_to_dest),
             REUSE_DEST_TYPE(EltwiseBinaryReuseDestType.NONE),
             PARTIAL_FACE(
                 partial_a=False,

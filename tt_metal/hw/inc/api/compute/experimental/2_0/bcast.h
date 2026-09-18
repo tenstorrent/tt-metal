@@ -50,66 +50,92 @@ constexpr DataCopyType unary_bcast_dcopy() {
 /**
  * Paired init for unary_bcast. Configures the unpack + math pipeline for the given broadcast mode and
  * operand Format; call before unary_bcast. compute_kernel_hw_startup must already have run.
+ * acc_to_dest adds to initialized DST; use the same flag in init and execute. UInt16 and 32-bit formats are unsupported.
  *
  * | Param Type | Name      | Description                                                  | Type          | Valid Range           | Required |
  * |------------|-----------|--------------------------------------------------------------|---------------|-----------------------|----------|
  * | Template   | bcast_type| Broadcast mode (NONE pass-through / ROW / COL / SCALAR)       | BroadcastType | N/A                   | True     |
  * | Template   | is_fp32_dest_acc_en | fp32 dest-accumulate mode                            | bool          | N/A                   | False    |
+ * | Template   | acc_to_dest | Add the broadcast to existing DST (default false) | bool | false / true | False |
  * | Template   | Format    | Buffer L1 data format (deduced from the LLKOperand argument)  | DataFormat    | N/A                   | True     |
  * | Template   | Shape     | Tile geometry (deduced from the LLKOperand argument)         | TensorShape   | N/A                   | True     |
  * | Function   | src       | The source L1 operand (format + shape; address unused here)  | LLKOperand    | N/A                   | True     |
  */
 // clang-format on
-template <BroadcastType bcast_type, bool is_fp32_dest_acc_en = DST_ACCUM_MODE, DataFormat Format, TensorShape Shape>
+template <
+    BroadcastType bcast_type,
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
+    bool acc_to_dest = false,
+    DataFormat Format,
+    TensorShape Shape>
 ALWI void unary_bcast_init(LLKOperand<Format, Shape> /*src*/) {
     static_assert(
         is_legal_tile_shape(Shape),
         "unary_bcast_init: illegal tile shape (face_r_dim must be 1/2/4/8/16, total faces 1/2/4).");
     // 32-bit register formats use the unpack-to-dest A2D path (SrcB is only 19 bits wide); folds to a constant.
     constexpr bool enable_unpack_to_dest = is_unpack_to_dest<Format, is_fp32_dest_acc_en>();
+    static_assert(
+        !acc_to_dest || bcast_type != BroadcastType::NONE, "Accumulation requires ROW, COL, or SCALAR broadcast");
+    static_assert(
+        !acc_to_dest || !enable_unpack_to_dest, "Unary broadcast accumulation does not support 32-bit formats");
+    static_assert(!acc_to_dest || Format != DataFormat::UInt16, "Unary broadcast accumulation does not support UInt16");
     constexpr DataCopyType dcopy = detail::unary_bcast_dcopy<bcast_type, Format, is_fp32_dest_acc_en>();
     UNPACK((llk_unpack_A_init<
             LLKOperand<Format, Shape>::descriptor,
             is_fp32_dest_acc_en,
             bcast_type,
-            false /*acc_to_dest*/,
+            acc_to_dest,
             EltwiseBinaryReuseDestType::NONE,
             enable_unpack_to_dest>()));
     MATH((llk_math_eltwise_unary_datacopy_init<
           LLKOperand<Format, Shape>::descriptor,
           dcopy,
           is_fp32_dest_acc_en,
-          bcast_type>()));
+          bcast_type,
+          false /*is_int_fpu_en*/,
+          PackMode::Default,
+          acc_to_dest>()));
 }
 
 // clang-format off
 /**
  * Id-free unary broadcast. Unpacks one tile from the L1 region described by the LLKOperand (applying the
  * broadcast mode) and datacopies it into DST[dst_tile_index]. The DST register must be in the acquired
- * state. Blocking; compute-engine only. Pair with unary_bcast_init.
+ * state. Blocking; compute-engine only. Pair with unary_bcast_init. acc_to_dest adds to the existing DST tile.
  *
  * | Param Type | Name           | Description                                                 | Type          | Valid Range | Required |
  * |------------|----------------|-------------------------------------------------------------|---------------|-------------|----------|
  * | Template   | bcast_type     | Broadcast mode (NONE pass-through / ROW / COL / SCALAR)      | BroadcastType | N/A         | True     |
  * | Template   | is_fp32_dest_acc_en | fp32 dest-accumulate mode                               | bool          | N/A         | False    |
+ * | Template   | acc_to_dest | Add the broadcast to existing DST (default false) | bool | false / true | False |
  * | Template   | Format         | Buffer L1 data format (deduced from the LLKOperand argument) | DataFormat    | N/A         | True     |
  * | Template   | Shape          | Tile geometry (deduced from the LLKOperand argument)        | TensorShape   | N/A         | True     |
  * | Function   | src            | The source L1 operand (format + shape + address)            | LLKOperand    | N/A         | True     |
  * | Function   | dst_tile_index | Tile index in the DST register for the result               | uint32_t      | 0 to 15     | True     |
  */
 // clang-format on
-template <BroadcastType bcast_type, bool is_fp32_dest_acc_en = DST_ACCUM_MODE, DataFormat Format, TensorShape Shape>
+template <
+    BroadcastType bcast_type,
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
+    bool acc_to_dest = false,
+    DataFormat Format,
+    TensorShape Shape>
 ALWI void unary_bcast(LLKOperand<Format, Shape> src, std::uint32_t dst_tile_index) {
     static_assert(
         is_legal_tile_shape(Shape),
         "unary_bcast: illegal tile shape (face_r_dim must be 1/2/4/8/16, total faces 1/2/4).");
     constexpr bool enable_unpack_to_dest = is_unpack_to_dest<Format, is_fp32_dest_acc_en>();
+    static_assert(
+        !acc_to_dest || bcast_type != BroadcastType::NONE, "Accumulation requires ROW, COL, or SCALAR broadcast");
+    static_assert(
+        !acc_to_dest || !enable_unpack_to_dest, "Unary broadcast accumulation does not support 32-bit formats");
+    static_assert(!acc_to_dest || Format != DataFormat::UInt16, "Unary broadcast accumulation does not support UInt16");
     constexpr DataCopyType dcopy = detail::unary_bcast_dcopy<bcast_type, Format, is_fp32_dest_acc_en>();
     UNPACK((llk_unpack_A<
             LLKOperand<Format, Shape>::descriptor,
             is_fp32_dest_acc_en,
             bcast_type,
-            false /*acc_to_dest*/,
+            acc_to_dest,
             EltwiseBinaryReuseDestType::NONE,
             enable_unpack_to_dest>(src.l1_address)));
     MATH((llk_math_eltwise_unary_datacopy<
