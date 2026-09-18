@@ -370,3 +370,230 @@ SfpuXlogy:
   - {out: Float32, metric: tolerance, atol: 0.14}    # 0.116 measured, ~20% margin
   - {out: Float16_b, metric: tolerance, atol: 0.6}
   - {out: Float16, metric: tolerance, atol: 0.12}    # 0.0989 measured
+
+# ── Exact and predicate unary ops ───────────────────────────────────────────
+#
+# Measured on Wormhole 2026-09-18 over the standard unary sweep with --ulp-report.
+# These ops are exactly rounded by construction -- a predicate writing 1.0/0.0, a
+# constant fill, a clamp, or a subtraction the hardware does in one step -- so the
+# budget is 0 and any drift at all is a regression.
+#
+# Every row names an output format that was actually measured. Nothing is enrolled on
+# Bfp8_b: its shared block exponent quantises a small element in a wide block to zero,
+# which costs thousands of steps for reasons that have nothing to do with the kernel
+# (ReluMax reports 15488 there on the stimuli where ReluMin reports 3). An unlisted
+# format falls through to the tolerance metric, which is what Bfp8_b and Bfp4_b want.
+
+Fill:  # 0 ULP, 115 variants / 2.09M lanes, 2026-09-18
+  - {out: Float32, max_ulp: 0}
+  - {out: Float16_b, max_ulp: 0}
+  - {out: Float16, max_ulp: 0}
+
+Threshold:  # 0 ULP, 116 variants / 2.10M lanes, 2026-09-18
+  - {out: Float32, max_ulp: 0}
+  - {out: Float16_b, max_ulp: 0}
+  - {out: Float16, max_ulp: 0}
+
+# The five is_* predicates write 1.0/0.0, so an exact result is the only correct one.
+# Measured on Float32 and Float16_b only, which is all the isinf_isnan sweep drives:
+# the bf16-input dest_acc=Yes path cannot answer is_nan/is_neg_inf/is_inf at all, since
+# it delivers both NaN and -inf to the LREG as +inf.
+Isfinite:  # 0 ULP, 8 variants / 32768 lanes, 2026-09-18
+  - {out: Float32, max_ulp: 0}
+  - {out: Float16_b, max_ulp: 0}
+Isinf:  # 0 ULP, 6 variants / 24576 lanes, 2026-09-18
+  - {out: Float32, max_ulp: 0}
+  - {out: Float16_b, max_ulp: 0}
+Isnan:  # 0 ULP, 6 variants / 24576 lanes, 2026-09-18
+  - {out: Float32, max_ulp: 0}
+  - {out: Float16_b, max_ulp: 0}
+Isneginf:  # 0 ULP, 6 variants / 24576 lanes, 2026-09-18
+  - {out: Float32, max_ulp: 0}
+  - {out: Float16_b, max_ulp: 0}
+Isposinf:  # 0 ULP, 8 variants / 32768 lanes, 2026-09-18
+  - {out: Float32, max_ulp: 0}
+  - {out: Float16_b, max_ulp: 0}
+
+LogicalNot:  # 0 ULP, 8 variants / 32768 lanes, 2026-09-18
+  - {out: Float32, max_ulp: 0}
+  - {out: Float16_b, max_ulp: 0}
+Signbit:  # 0 ULP, 16 variants / 65536 lanes, 2026-09-18
+  - {out: Float32, max_ulp: 0}
+  - {out: Float16_b, max_ulp: 0}
+UnaryEq:  # 0 ULP, 8 variants / 32768 lanes, 2026-09-18
+  - {out: Float32, max_ulp: 0}
+  - {out: Float16_b, max_ulp: 0}
+UnaryNe:  # 0 ULP, 8 variants / 32768 lanes, 2026-09-18
+  - {out: Float32, max_ulp: 0}
+  - {out: Float16_b, max_ulp: 0}
+
+# Relu/Frac follow the Abs/Neg shape: exact on Float32, one step of output rounding on
+# the 16-bit formats.
+ReluMax:
+  - {out: Float32, max_ulp: 0}    # 0 ULP, 40 variants / 623k lanes, 2026-09-18
+  - {out: Float16_b, max_ulp: 1}  # 1 ULP, 48 variants / 770k lanes, 2026-09-18
+  - {out: Float16, max_ulp: 1}    # 1 ULP, 40 variants / 737k lanes, 2026-09-18
+ReluMin:
+  - {out: Float32, max_ulp: 0}    # 0 ULP, 40 variants / 623k lanes, 2026-09-18
+  - {out: Float16_b, max_ulp: 1}  # 1 ULP, 48 variants / 770k lanes, 2026-09-18
+  - {out: Float16, max_ulp: 1}    # 1 ULP, 40 variants / 737k lanes, 2026-09-18
+
+# frac(x) = x - floor(x) cancels near an integer, and the smaller the result the more of
+# the output mantissa the remaining error occupies. Float16 keeps 10 of those bits where
+# Float16_b keeps 7, and at 384 measured steps a budget would be looser than the
+# tolerance it replaces (the usable ceiling there is 51), so fp16 stays on tolerance.
+Frac:
+  - {out: Float32, max_ulp: 0}    # 0 ULP, 36 variants / 606k lanes, 2026-09-18
+  - {out: Float16_b, max_ulp: 1}  # 1 ULP, 44 variants / 754k lanes, 2026-09-18
+  - {out: Float16, metric: tolerance}  # max 384 ULP, 40 variants / 737k lanes, past the 51-step ceiling
+
+# Sign and Heaviside are exact on every lane except -0.0, and there they diverge by
+# hardware design, not drift: WH SFPSETCC compares bit patterns, so -0.0 reads as
+# negative. sign(-0.0) returns -1 where IEEE gives 0, and heaviside(-0.0) returns 0
+# where -0.0 == 0 makes it 0.5. One such lane costs ~1.05e9 steps on Float32, so a
+# 0-ULP budget would fail a test that is behaving as specified. Recorded here as
+# tolerance on purpose -- do not "close the gap" by enrolling them.
+Sign:
+  - {metric: tolerance}       # exact except -0.0; max 1056964609 ULP Float32, 16129 Float16_b, 2026-09-18
+Heaviside:
+  - {metric: tolerance}       # exact except -0.0; max 1048576001 ULP Float32, 16001 Float16_b, 2026-09-18
+
+# ── Binary and ternary SFPU, and the remaining unary approximations ─────────
+#
+# Measured on Wormhole 2026-09-18 with --ulp-report over each driver's own sweep.
+# Budget = 1.25x the measured worst lane, as everywhere else in this file. A budget is
+# only written where it is *tighter* than the tolerance it replaces: the usable ceiling
+# is 419430 steps on Float32, 51 on Float16 and 6 on Float16_b, and an op past it is
+# recorded as tolerance with its measurement so nobody re-derives it.
+#
+# Bfp8_b is never enrolled here. Its shared block exponent quantises a small element in
+# a wide block to zero, which costs ~15k steps on ops that cannot be wrong; that is the
+# block, not the kernel. Unlisted formats fall through to the tolerance metric.
+
+# -- Unary approximations that stay on tolerance -----------------------------
+# Both are past the ceiling on every float column, by three orders of magnitude on
+# Float32. They are approximations, and the tolerance is the tighter bound.
+GeluTanh:
+  - {metric: tolerance}  # max 868220929 ULP Float32 / 13249 Float16_b / 1003 Float16 / 15616 Bfp8_b, 2026-09-18
+Tanhshrink:
+  - {metric: tolerance}  # max 841656935 ULP Float32 / 12844 Float16_b / 1024 Float16 / 15486 Bfp8_b, 2026-09-18
+
+# Same ~7-mantissa-bit shape as Acosh: 65536 steps on Float32, one step on bf16.
+ReciprocalCompat:
+  - {out: Float32, max_ulp: 81920}   # max 65536 ULP, 8 variants / 32768 lanes, 2026-09-18
+  - {out: Float16_b, max_ulp: 1}     # max 1 ULP, 8 variants / 32768 lanes, 2026-09-18
+SqrtCustom:
+  - {out: Float32, max_ulp: 81920}   # max 65536 ULP, 5 variants / 20480 lanes, 2026-09-18
+  - {out: Float16_b, max_ulp: 1}     # max 1 ULP, 5 variants / 20480 lanes, 2026-09-18
+
+# -- Binary comparison predicates: exact by construction ---------------------
+# Each writes 1.0/0.0, so 0 is the only correct answer. 0 ULP over 147k-246k lanes each.
+SfpuElwEq:
+  - {out: Float32, max_ulp: 0}
+  - {out: Float16_b, max_ulp: 0}
+  - {out: Float16, max_ulp: 0}
+SfpuElwNe:
+  - {out: Float32, max_ulp: 0}
+  - {out: Float16_b, max_ulp: 0}
+  - {out: Float16, max_ulp: 0}
+SfpuElwGt:
+  - {out: Float32, max_ulp: 0}
+  - {out: Float16_b, max_ulp: 0}
+  - {out: Float16, max_ulp: 0}
+SfpuElwGe:
+  - {out: Float32, max_ulp: 0}
+  - {out: Float16_b, max_ulp: 0}
+  - {out: Float16, max_ulp: 0}
+SfpuElwLt:
+  - {out: Float32, max_ulp: 0}
+  - {out: Float16_b, max_ulp: 0}
+  - {out: Float16, max_ulp: 0}
+SfpuElwLe:
+  - {out: Float32, max_ulp: 0}
+  - {out: Float16_b, max_ulp: 0}
+  - {out: Float16, max_ulp: 0}
+
+# isclose and mask are also 1.0/0.0 (mask passes the operand through or zeroes it).
+SfpuIsclose:
+  - {out: Float32, max_ulp: 0}       # 0 ULP, 3 variants / 81920 lanes, 2026-09-18
+  - {out: Float16_b, max_ulp: 0}     # 0 ULP, 3 variants / 81920 lanes, 2026-09-18
+SfpuMask:
+  - {out: Float32, max_ulp: 0}       # 0 ULP, 3 variants / 6144 lanes, 2026-09-18
+  - {out: Float16_b, max_ulp: 0}     # 0 ULP, 3 variants / 6144 lanes, 2026-09-18
+
+# -- Binary selection and arithmetic -----------------------------------------
+# max/min select an operand, so Float32 is exact and the 16-bit columns cost one step of
+# output rounding. Bfp8_b measured 17 steps and is left on tolerance with the rest.
+SfpuBinaryMax:
+  - {out: Float32, max_ulp: 0}       # 0 ULP, 11 variants / 306k lanes, 2026-09-18
+  - {out: Float16_b, max_ulp: 1}     # 1 ULP, 11 variants / 311k lanes, 2026-09-18
+  - {out: Float16, max_ulp: 1}       # 1 ULP, 7 variants / 213k lanes, 2026-09-18
+SfpuBinaryMin:
+  - {out: Float32, max_ulp: 0}       # 0 ULP, 11 variants / 309k lanes, 2026-09-18
+  - {out: Float16_b, max_ulp: 1}     # 1 ULP, 11 variants / 311k lanes, 2026-09-18
+  - {out: Float16, max_ulp: 1}       # 1 ULP, 7 variants / 213k lanes, 2026-09-18
+
+SfpuAddTopRow:
+  - {out: Float32, max_ulp: 0}       # 0 ULP, 1 variant / 2048 lanes -- the whole sweep, 2026-09-18
+
+# add/sub/rsub are single IEEE operations: one step on bf16, and the Float32 65536 is the
+# usual output-rounding figure. fp16 needs 140 steps on sub/rsub, past its 51 ceiling.
+SfpuElwadd:
+  - {out: Float32, max_ulp: 81920}   # max 65536 ULP, 30 variants / 831k lanes, 2026-09-18
+  - {out: Float16_b, max_ulp: 1}     # max 1 ULP, 32 variants / 840k lanes, 2026-09-18
+  - {out: Float16, max_ulp: 1}       # max 1 ULP, 26 variants / 676k lanes, 2026-09-18
+SfpuElwsub:
+  - {out: Float32, max_ulp: 81920}   # max 65536 ULP, 30 variants / 831k lanes, 2026-09-18
+  - {out: Float16_b, max_ulp: 1}     # max 1 ULP, 32 variants / 840k lanes, 2026-09-18
+  - {out: Float16, metric: tolerance}  # max 140 ULP, 26 variants, past the 51-step ceiling
+SfpuElwrsub:
+  - {out: Float32, max_ulp: 81920}   # max 65536 ULP, 28 variants / 829k lanes, 2026-09-18
+  - {out: Float16_b, max_ulp: 1}     # max 1 ULP, 28 variants / 836k lanes, 2026-09-18
+  - {out: Float16, metric: tolerance}  # max 140 ULP, 22 variants, past the 51-step ceiling
+
+# Division is driven by two sweeps: the shared binary sweep, where it is exact on both
+# float columns, and test_eltwise_binary_sfpu_div, whose own stimuli are what set these
+# numbers. The budget has to cover the harder of the two -- an earlier pass measured only
+# the shared sweep and enrolled 0, which the dedicated sweep then failed on hardware.
+SfpuElwdiv:
+  - {out: Float32, max_ulp: 40960}   # max 32768 ULP on the div sweep (0 on the shared one), 14 variants, 2026-09-18
+  - {out: Float16_b, max_ulp: 1}     # max 1 ULP on the div sweep (0 on the shared one), 14 variants, 2026-09-18
+  - {out: Float16, metric: tolerance}  # max 305 ULP, 5 variants, past the 51-step ceiling
+
+# Multiplication is the one arithmetic op past the ceiling everywhere: its Float32 worst
+# lane is 9.4e8 steps against a p99 of 65536, the near-zero spread a product produces.
+SfpuElwmul:
+  - {metric: tolerance}  # max 936116225 ULP Float32 / 14285 Float16_b / 816 Float16 / 15553 Bfp8_b, 2026-09-18
+
+SfpuAtan2:
+  - {out: Float32, max_ulp: 81920}   # max 65536 ULP, 9 variants / 246k lanes, 2026-09-18
+  - {out: Float16_b, max_ulp: 1}     # max 1 ULP, 9 variants / 246k lanes, 2026-09-18
+SfpuLogsigmoid:
+  - {out: Float32, max_ulp: 163840}  # max 131072 ULP, 3 variants / 81920 lanes, 2026-09-18
+  - {out: Float16_b, max_ulp: 2}     # max 2 ULP, 3 variants / 81920 lanes, 2026-09-18
+
+# fmod and remainder share an implementation and measure identically.
+SfpuBinaryFmod:
+  - {out: Float32, max_ulp: 40960}   # max 32768 ULP, 19 variants / 491k lanes, 2026-09-18
+  - {out: Float16_b, max_ulp: 1}     # max 1 ULP, 19 variants / 541k lanes, 2026-09-18
+  - {out: Float16, metric: tolerance}  # max 442 ULP, 7 variants, past the 51-step ceiling
+SfpuBinaryRemainder:
+  - {out: Float32, max_ulp: 40960}   # max 32768 ULP, 19 variants / 491k lanes, 2026-09-18
+  - {out: Float16_b, max_ulp: 1}     # max 1 ULP, 19 variants / 541k lanes, 2026-09-18
+  - {out: Float16, metric: tolerance}  # max 442 ULP, 7 variants, past the 51-step ceiling
+
+# -- Ternary -----------------------------------------------------------------
+# The ternary sweep is small, so each figure below covers every variant that exists for
+# that format rather than a sample of a larger space; the counts say how many that is.
+SfpuAddcmul:
+  - {out: Float32, max_ulp: 120}     # max 96 ULP, 1 variant / 4096 lanes, 2026-09-18
+  - {out: Float16_b, max_ulp: 1}     # max 1 ULP, 2 variants / 8192 lanes, 2026-09-18
+SfpuAddcdiv:
+  - {out: Float32, max_ulp: 1600}    # max 1280 ULP, 2 variants / 8192 lanes, 2026-09-18
+  - {out: Float16_b, max_ulp: 1}     # max 1 ULP, 4 variants / 16384 lanes, 2026-09-18
+SfpuLerp:
+  - {out: Float32, max_ulp: 3840}    # max 3072 ULP, 2 variants / 8192 lanes, 2026-09-18
+  - {out: Float16_b, max_ulp: 1}     # max 1 ULP, 4 variants / 16384 lanes, 2026-09-18
+SfpuSnakeBeta:
+  - {out: Float32, max_ulp: 5}       # max 4 ULP, 2 variants / 8192 lanes, 2026-09-18
+  - {out: Float16_b, max_ulp: 1}     # max 1 ULP, 4 variants / 16384 lanes, 2026-09-18
