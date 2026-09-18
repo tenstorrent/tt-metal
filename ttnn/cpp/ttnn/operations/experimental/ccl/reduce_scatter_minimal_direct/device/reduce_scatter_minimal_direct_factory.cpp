@@ -510,6 +510,34 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
     const bool uses_backward = std::any_of(dests.begin(), dests.end(), [](const Dest& d) { return d.conn == 1; });
     const uint32_t num_connections = uses_backward ? 2u : 1u;
 
+    // Start-barrier multicast ranges, derived from the same destination split so they cannot drift from
+    // it: nearest-direction routing gives each direction a set of hops that is contiguous from 1, so a
+    // direction's range is just its destination count, and the two together cover every peer exactly once.
+    uint32_t mcast_range[2] = {0u, 0u};
+    uint32_t max_hops[2] = {0u, 0u};
+    for (const auto& d : dests) {
+        ++mcast_range[d.conn];
+        max_hops[d.conn] = std::max(max_hops[d.conn], d.hops);
+    }
+    // 1D only: on 2D the barrier sends one unicast per peer (reusing the data path's per-destination
+    // routes), so it needs no contiguous hop ranges -- and the direction fix-up above can legitimately
+    // split the destinations in a way these would reject.
+    if (!::tt::tt_fabric::is_2d_fabric_config(operation_attributes.fabric_config)) {
+        for (uint32_t c = 0; c < 2; ++c) {
+            TT_FATAL(
+                mcast_range[c] == max_hops[c],
+                "start-barrier multicast assumes direction {}'s destinations are hops 1..{} with no gaps, but the "
+                "{} destinations routed that way reach out to {} hops",
+                c,
+                mcast_range[c],
+                mcast_range[c],
+                max_hops[c]);
+        }
+        TT_FATAL(
+            mcast_range[1] == 0 || num_connections == 2,
+            "start barrier would multicast backward on a connection that was never opened");
+    }
+
     // --- Runtime args ---
     const auto sender_fabric_node_id = mesh_device->get_fabric_node_id(sender_device_coord);
     const auto& reader_gen_sem = sems[SemaphoreIndex::reader_gen(num_devices)];
@@ -570,7 +598,9 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
             (uint32_t)peer_core.x,
             (uint32_t)peer_core.y,
             num_connections,
-            init_sync_sem.address()};  // same address on every peer's mirror core
+            init_sync_sem.address(),  // same address on every peer's mirror core
+            mcast_range[0],
+            mcast_range[1]};
         for (const auto& d : dests) {
             writer_rt.push_back(d.conn);
         }
