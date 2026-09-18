@@ -179,6 +179,9 @@ constexpr uint32_t downstream_noc_xy = uint32_t(NOC_XY_ENCODING(DOWNSTREAM_NOC_X
 constexpr uint32_t dispatch_s_noc_xy =
     uint32_t(NOC_XY_ENCODING(DOWNSTREAM_SUBORDINATE_NOC_X, DOWNSTREAM_SUBORDINATE_NOC_Y));
 #if !defined(IS_CQ_DRAM_BACKED) || IS_CQ_DRAM_BACKED == 0
+#if defined(NOC_ATT_ENABLED)
+#error "ATT fast dispatch requires DRAM-backed command queues: no ATT window maps host memory"
+#endif
 constexpr uint64_t pcie_noc_xy =
     uint64_t(NOC_XY_PCIE_ENCODING(NOC_X_PHYS_COORD(PCIE_NOC_X), NOC_Y_PHYS_COORD(PCIE_NOC_Y)));
 #endif
@@ -3146,6 +3149,9 @@ void kernel_main_hd() {
 }
 
 void kernel_main() {
+#if defined(NOC_ATT_ENABLED)
+    noc_v3_cq_state_reset();
+#endif
     set_l1_data_cache<true>();
 #if defined(FABRIC_RELAY)
     DPRINT("prefetcher_{}{}: start (fabric relay. 2d = {})\n", is_h_variant, is_d_variant, is_2d_fabric);

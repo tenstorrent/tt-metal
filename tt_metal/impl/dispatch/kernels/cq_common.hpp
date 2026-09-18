@@ -104,6 +104,18 @@ FORCE_INLINE volatile uint32_t* worker_completion_sem_addr(
 
 constexpr bool use_fabric(uint64_t fabric_router_xy) { return fabric_router_xy != 0; }
 
+// Compose a multicast destination from a host-packed NOC_MULTICAST_ENCODING
+// rectangle and a local offset. On XY backends this is the ordinary packed
+// composition. Under ATT a packed rectangle must not go through
+// get_noc_addr_helper.
+FORCE_INLINE uint64_t cq_mcast_noc_addr(uint32_t packed_rect, uint64_t offset) {
+#if defined(NOC_ATT_ENABLED)
+    return noc_v3_cq_packed_mcast_base(packed_rect) | (offset & NOC_V3_CQ_MCAST_LOCAL_MASK);
+#else
+    return get_noc_addr_helper(packed_rect, offset);
+#endif
+}
+
 template <
     enum CQNocFlags flags,
     enum CQNocWait wait = CQ_NOC_WAIT,
