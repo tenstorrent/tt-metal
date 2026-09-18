@@ -112,7 +112,8 @@ inline DeviceCausalGeometry device_causal_geometry(
     const bool has_bc = args.block_cyclic.has_value();
     const bool rotation_exact = rotation_exact_sp_geometry(args);
     const uint32_t sp = has_bc ? args.block_cyclic->sp : 1u;
-    const uint32_t chunk_local = has_bc ? args.block_cyclic->chunk_local : 0u;
+    // Stored block-cyclic geometry is in compressed K rows; causal ownership remains in query-token units.
+    const uint32_t chunk_local = has_bc ? args.block_cyclic->chunk_local * args.key_compression_ratio : 0u;
     TT_FATAL(
         !(has_bc && rotation_exact) || device_index < sp,
         "indexer_score: device_index {} out of range for block-cyclic sp={} (check seq_shard_axes[0] vs "

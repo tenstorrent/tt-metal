@@ -42,9 +42,14 @@ void bind_indexer_score(nb::module_& mod) {
                 pre-folded).
             chunk_start_idx: absolute global position of rank 0's query row 0
                 (rank 0 = lowest seq_shard_axes[0] (SP) coord; causality: key t
-                visible to query s iff t <= chunk_start + s). OMIT on a mesh ->
-                deduced as T - sp_ring*Sq (sp_ring = mesh extent along the SP axis,
+                visible to query s iff t < floor((chunk_start + s + 1) /
+                key_compression_ratio)). OMIT on a mesh -> deduced from compressed K
+                as T*key_compression_ratio - sp_ring*Sq (sp_ring = mesh extent along the SP axis,
                 whole mesh if unset). Single device: set to history + rank*Sq per rank.
+            key_compression_ratio: query tokens represented by one K-cache row. 1
+                (default) preserves legacy behavior; 4 enables compressed-key DSA.
+                K sequence/output/kv_len are compressed rows, while query and
+                chunk_start_idx geometry remain token units.
             program_config: work-unit knobs (q_chunk_size, k_chunk_size,
                 head_group_size; elements, tile-aligned). Defaults always fit
                 L1; raise head_group_size (0 = all resident) for performance.
@@ -85,7 +90,8 @@ void bind_indexer_score(nb::module_& mod) {
                 mask/pool stay exact. Unset (or sp==1) = contiguous K (no remap). Pair
                 with block_cyclic_chunk_local. Interface matches ttnn.transformer.sparse_sdpa.
             block_cyclic_chunk_local: optional int, REQUIRED with block_cyclic_sp_axis.
-                The per-shard chunk length (chunk_size_global / sp). Cross-checked
+                The per-shard chunk length in QUERY-TOKEN rows (chunk_size_global / sp);
+                the physical K chunk is this value / key_compression_ratio. Cross-checked
                 against q: must equal q_isl (Sq, seq sharded only on the SP axis) or
                 tp*q_isl (tp = mesh_size/sp). The tp*q_isl case with tp>1 (seq sharded
                 across BOTH axes) has two forms: seq_shard_axes=[] uses flat row-major
@@ -105,6 +111,7 @@ void bind_indexer_score(nb::module_& mod) {
         nb::arg("weights"),
         nb::kw_only(),
         nb::arg("chunk_start_idx") = std::nullopt,
+        nb::arg("key_compression_ratio") = 1,
         nb::arg("program_config") = IndexerScoreProgramConfig{},
         nb::arg("compute_kernel_config") = std::nullopt,
         nb::arg("cache_batch_idx") = std::nullopt,
@@ -238,6 +245,9 @@ void bind_indexer_score(nb::module_& mod) {
             ag_sub_device_id: optional ttnn.SubDeviceId scoping the AG worker cores (kept disjoint from the
                 compute grid so transport and compute cores do not collide)
             chunk_start_idx: optional int, rank 0's global query start; see indexer_score_dsa
+            key_compression_ratio: 1 (default) for legacy DSA, or 4 for compressed keys.
+                Query/chunk geometry is in token units; k, k_local, output width, and
+                kv_len are compressed-key rows.
             program_config: IndexerScoreProgramConfig work-unit knobs; see indexer_score_dsa.
                 head_group_size must be 0 (all Hi resident) or Hi -- head streaming is not supported here
             compute_kernel_config: optional DeviceComputeKernelConfig (only math_fidelity honored)
@@ -253,7 +263,8 @@ void bind_indexer_score(nb::module_& mod) {
             block_cyclic_sp_axis: optional int, mesh axis the cache was striped over; MUST equal cluster_axis;
                 see indexer_score_dsa. Must be unset in complete-mesh mode because all devices are SP ranks.
             block_cyclic_chunk_local: optional int, per-shard chunk length. Axis mode requires it together with
-                block_cyclic_sp_axis. In complete-mesh mode pass this argument alone; SP is the complete mesh
+                block_cyclic_sp_axis. It is expressed in query-token rows (physical K chunk is divided by
+                key_compression_ratio). In complete-mesh mode pass this argument alone; SP is the complete mesh
                 size and the value must equal q's local sequence length Sq. Leaving it unset selects contiguous
                 K placement.
             block_cyclic_cache_tp_sharded: optional bool (default False). KV dedup: the K cache is striped
@@ -276,6 +287,7 @@ void bind_indexer_score(nb::module_& mod) {
         nb::arg("num_links") = 1,
         nb::arg("ag_sub_device_id") = nb::none(),
         nb::arg("chunk_start_idx") = nb::none(),
+        nb::arg("key_compression_ratio") = 1,
         nb::arg("program_config") = IndexerScoreProgramConfig{},
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("cache_batch_idx") = nb::none(),
