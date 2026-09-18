@@ -1115,9 +1115,13 @@ class PrismaticForConditionalGeneration(PrismaticPreTrainedModel):
                 "if you urgently need support for latest TIMM versions."
             )
 
-        if (transformers.__version__ != "4.40.1") or (tokenizers.__version__ != "0.19.1"):
+        transformers_expected_version = "4.57.6"
+        tokenizers_expected_version = "0.23.1"
+        if (transformers.__version__ != transformers_expected_version) or (
+            tokenizers.__version__ != tokenizers_expected_version
+        ):
             logger.warning(
-                f"Expected `transformers==4.40.1` and `tokenizers==0.19.1` but got "
+                f"Expected `transformers=={transformers_expected_version}` and `tokenizers=={tokenizers_expected_version}` but got "
                 f"`transformers=={transformers.__version__}` and `tokenizers=={tokenizers.__version__}`; "
                 f"there might be inference-time regressions due to dependency changes. If in doubt, please"
                 f"use the above versions."

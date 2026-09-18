@@ -64,8 +64,10 @@ Per-op timings were collected using `tools/tracy/profile_this.py` and uploaded a
 
 This demo requires [HuggingFace `transformers`](https://github.com/huggingface/transformers) for modeling and [IBM `tsfm`](https://github.com/IBM/tsfm) for data pre-processing.
 
+**Note** consider uplifting to `tsfm` v0.3.3, which supports python>=3.9 and uses newer transformers 4.56.0
+
 ```bash
-git clone https://github.com/IBM/tsfm.git
+git clone https://github.com/IBM/tsfm.git --branch v0.2.28
 cd tsfm
 python -m pip install .
 ```
