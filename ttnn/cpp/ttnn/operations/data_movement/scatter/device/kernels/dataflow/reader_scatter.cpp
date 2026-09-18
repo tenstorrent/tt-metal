@@ -13,9 +13,9 @@
 namespace {
 
 // copies source stick to destination stick (first phase of scatter)
-template <typename number_type>
+template <typename number_type, typename InputDFB, typename OutputDFB>
 FORCE_INLINE void copy_input_to_output(
-    const DataflowBuffer& input_dfb, const DataflowBuffer& output_dfb, const uint32_t& input_chunk_size) {
+    const InputDFB& input_dfb, const OutputDFB& output_dfb, const uint32_t& input_chunk_size) {
     const uint32_t input_l1_read_addr = input_dfb.get_read_ptr();
     const uint32_t output_l1_write_addr = output_dfb.get_write_ptr();
     volatile tt_l1_ptr number_type* input_l1_read_ptr =
@@ -53,12 +53,18 @@ FORCE_INLINE number_type perform_reduction(
 }
 
 // performs scatter on data loaded to dfb with load_to_dfb
-template <typename number_type, typename index_type>
+template <
+    typename number_type,
+    typename index_type,
+    typename InputDFB,
+    typename IndexDFB,
+    typename SourceDFB,
+    typename OutputDFB>
 FORCE_INLINE void scatter_along_chunk(
-    const DataflowBuffer& input_dfb,
-    const DataflowBuffer& index_dfb,
-    const DataflowBuffer& source_dfb,
-    const DataflowBuffer& output_dfb,
+    const InputDFB& input_dfb,
+    const IndexDFB& index_dfb,
+    const SourceDFB& source_dfb,
+    const OutputDFB& output_dfb,
     const uint32_t& input_stick_size,
     const uint32_t& input_offset,
     const uint32_t& input_chunk_size,

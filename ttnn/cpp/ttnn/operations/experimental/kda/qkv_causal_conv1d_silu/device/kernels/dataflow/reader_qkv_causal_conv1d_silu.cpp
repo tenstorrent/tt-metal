@@ -12,10 +12,16 @@
 
 constexpr uint32_t tap_count = 4;
 
-template <uint32_t block_ct, typename Tap0Accessor, typename Tap1Accessor, typename Tap2Accessor, typename Tap3Accessor>
+template <
+    uint32_t block_ct,
+    typename Tap0Accessor,
+    typename Tap1Accessor,
+    typename Tap2Accessor,
+    typename Tap3Accessor,
+    typename WeightsDFB>
 FORCE_INLINE void load_weight_block(
     Noc& noc,
-    DataflowBuffer& weights,
+    WeightsDFB& weights,
     const Tap0Accessor& tap0,
     const Tap1Accessor& tap1,
     const Tap2Accessor& tap2,

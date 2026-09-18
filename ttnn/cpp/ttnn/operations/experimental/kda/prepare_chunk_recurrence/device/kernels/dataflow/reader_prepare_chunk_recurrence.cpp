@@ -13,8 +13,8 @@
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
 
-inline void fill_constant_tiles(
-    DataflowBuffer& eye, DataflowBuffer& tril, DataflowBuffer& ones, DataflowBuffer& block_masks) {
+template <typename EyeDFB, typename TrilDFB, typename OnesDFB, typename MasksDFB>
+inline void fill_constant_tiles(EyeDFB& eye, TrilDFB& tril, OnesDFB& ones, MasksDFB& block_masks) {
     constexpr uint32_t fp32_one_bits = __builtin_bit_cast(uint32_t, 1.0F);
     constexpr uint32_t tile_height = tt::constants::TILE_HEIGHT;
     constexpr uint32_t tile_width = tt::constants::TILE_WIDTH;
@@ -160,7 +160,7 @@ TT_KERNEL void reader(uint32_t work_item_start, uint32_t work_item_count, uint32
         writer_control.push_back(1);
     }
 
-    auto enqueue_contiguous_read = [&](const auto& accessor, DataflowBuffer& buffer, uint32_t base, uint32_t tiles) {
+    auto enqueue_contiguous_read = [&](const auto& accessor, auto& buffer, uint32_t base, uint32_t tiles) {
         buffer.reserve_back(tiles);
         for (uint32_t tile = 0; tile < tiles; ++tile) {
             noc.async_read(
@@ -174,7 +174,7 @@ TT_KERNEL void reader(uint32_t work_item_start, uint32_t work_item_count, uint32
     fill_constant_tiles(eye, tril, ones, block_masks);
 
     auto enqueue_head_chunk_read =
-        [&](const auto& accessor, DataflowBuffer& buffer, uint32_t head_chunk_index, uint32_t width_tiles) {
+        [&](const auto& accessor, auto& buffer, uint32_t head_chunk_index, uint32_t width_tiles) {
             const uint32_t head = head_chunk_index / num_chunks;
             const uint32_t chunk = head_chunk_index % num_chunks;
             const uint32_t row_stride = num_heads * width_tiles;

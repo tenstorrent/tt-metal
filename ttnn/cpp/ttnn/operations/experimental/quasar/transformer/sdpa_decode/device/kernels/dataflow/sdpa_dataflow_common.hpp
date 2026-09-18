@@ -101,10 +101,10 @@ volatile tt_l1_ptr uint32_t* read_page_table_for_batch(
 // above it takes no TensorAccessorArgs / address / page-size-for-the-accessor triple — the binding token
 // supplies the layout and aligned page size — so page_table_stick_size here is only the read size. The
 // caller owns the DFB's reserve_back / push_back (matching the legacy contract, where this helper only reads).
-template <typename PageTableReaderType>
+template <typename DFB, typename PageTableReaderType>
 volatile tt_l1_ptr uint32_t* read_page_table_for_batch(
     Noc noc,
-    DataflowBuffer& page_table_dfb,
+    DFB& page_table_dfb,
     uint32_t batch_idx,
     const PageTableReaderType& page_table_reader,
     uint32_t page_table_stick_size) {

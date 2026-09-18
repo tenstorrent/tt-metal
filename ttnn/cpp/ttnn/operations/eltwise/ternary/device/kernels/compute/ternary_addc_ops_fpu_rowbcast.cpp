@@ -32,19 +32,19 @@ void kernel_main() {
 
 // Effective CBs chosen at compile-time depending on broadcast flags
 #if BCAST_A
-    DataflowBuffer& dfb_eff_a = dfb_llk_a;
+    auto& dfb_eff_a = dfb_llk_a;
 #else
-    DataflowBuffer& dfb_eff_a = dfb_in0;
+    auto& dfb_eff_a = dfb_in0;
 #endif
 #if BCAST_B
-    DataflowBuffer& dfb_eff_b = dfb_llk_b;
+    auto& dfb_eff_b = dfb_llk_b;
 #else
-    DataflowBuffer& dfb_eff_b = dfb_in1;
+    auto& dfb_eff_b = dfb_in1;
 #endif
 #if BCAST_C
-    DataflowBuffer& dfb_eff_c = dfb_llk_c;
+    auto& dfb_eff_c = dfb_llk_c;
 #else
-    DataflowBuffer& dfb_eff_c = dfb_in2;
+    auto& dfb_eff_c = dfb_in2;
 #endif
 
     // Initialize binary unit for B*C path; output packer initialized with dfb_out

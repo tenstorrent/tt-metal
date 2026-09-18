@@ -42,11 +42,12 @@
 // srcB (cfg92) tile descriptor: must match in1 for the mul, and is repopulated from DST for the
 // dest-reuse add. We force srcB back to in1's format every iteration so block-float weights are
 // decoded correctly.
+template <typename DFB_IN0, typename DFB_IN1, typename DFB_SCRATCH, typename DFB_OUT>
 inline void mul_and_accumulate_block(
-    DataflowBuffer in0_cb,
-    DataflowBuffer in1_cb,
-    DataflowBuffer scratch_cb,
-    DataflowBuffer out_cb,
+    DFB_IN0 in0_cb,
+    DFB_IN1 in1_cb,
+    DFB_SCRATCH scratch_cb,
+    DFB_OUT out_cb,
     uint32_t block_num_tiles,
     uint32_t idx,
     uint32_t num_taps) {
@@ -54,9 +55,17 @@ inline void mul_and_accumulate_block(
     const uint32_t in1_cb_id = in1_cb.get_id();
     const uint32_t scratch_cb_id = scratch_cb.get_id();
     // Last tap writes the finished output to out_cb; earlier taps write the partial to scratch_cb.
+    // scratch_cb and out_cb may be different DataflowBuffer specializations (Quasar), so the pack
+    // target is selected around the use rather than through a common-typed alias.
     const bool is_last_tap = (idx + 1 == num_taps);
-    DataflowBuffer dst_cb = is_last_tap ? out_cb : scratch_cb;
-    const uint32_t dst_cb_id = dst_cb.get_id();
+    auto pack_dst_tile = [&](auto& dst_cb) {
+        const uint32_t dst_cb_id = dst_cb.get_id();
+        dst_cb.reserve_back(1);
+        tile_regs_wait();
+        pack_tile(0, dst_cb_id);
+        dst_cb.push_back(1);
+        tile_regs_release();
+    };
 
     for (uint32_t i = 0; i < block_num_tiles; i++) {
         in1_cb.wait_front(1);
@@ -83,19 +92,25 @@ inline void mul_and_accumulate_block(
         tile_regs_commit();
 
         // scratch_cb and out_cb share the output data format, so packing to either needs no pack reconfig.
-        dst_cb.reserve_back(1);
-        tile_regs_wait();
-        pack_tile(0, dst_cb_id);
-        dst_cb.push_back(1);
-        tile_regs_release();
+        if (is_last_tap) {
+            pack_dst_tile(out_cb);
+        } else {
+            pack_dst_tile(scratch_cb);
+        }
 
         in0_cb.pop_front(1);
         in1_cb.pop_front(1);
     }
 }
 
-template <uint32_t in0_block_w, uint32_t kernel_width, uint32_t block_num_tiles>
-inline void mul_and_accumulate_coalesced_block(DataflowBuffer in0_cb, DataflowBuffer in1_cb, DataflowBuffer out_cb) {
+template <
+    uint32_t in0_block_w,
+    uint32_t kernel_width,
+    uint32_t block_num_tiles,
+    typename DFB_IN0,
+    typename DFB_IN1,
+    typename DFB_OUT>
+inline void mul_and_accumulate_coalesced_block(DFB_IN0 in0_cb, DFB_IN1 in1_cb, DFB_OUT out_cb) {
     static_assert(kernel_width > 1);
     static_assert(in0_block_w % kernel_width == 0);
     static_assert(block_num_tiles % in0_block_w == 0);
