@@ -497,9 +497,8 @@ uint32_t EthernetKernel::get_kernel_processor_type(int index) const {
 }
 
 uint32_t DramKernel::get_kernel_processor_type(int index) const {
-    TT_ASSERT(index == 0, "index out of bounds");
-    // DRAM cores have a single DM0 processor.
-    return 0;
+    TT_ASSERT(0 <= index && index < expected_num_binaries(), "index out of bounds");
+    return enchantum::to_underlying(this->config_.processor);
 }
 
 uint32_t ComputeKernel::get_kernel_processor_type(int index) const {
@@ -515,7 +514,10 @@ std::string DataMovementKernel::config_hash() const {
         enchantum::to_string(this->config_.noc_mode));
 }
 
-std::string DramKernel::config_hash() const { return fmt::format("dram_{}", enchantum::to_string(this->config_.noc)); }
+std::string DramKernel::config_hash() const {
+    return fmt::format(
+        "dram_{}_{}", enchantum::to_string(this->config_.processor), enchantum::to_string(this->config_.noc));
+}
 
 // Add "eth_" to the hash to differentiate between erisc and brisc.
 std::string EthernetKernel::config_hash() const {
@@ -977,9 +979,10 @@ void DramKernel::generate_binaries(IDevice* device, JitBuildOptions& /*build_opt
                                   .hal()
                                   .get_programmable_core_type_index(this->get_kernel_programmable_core_type());
     uint32_t dm_class_idx = enchantum::to_underlying(HalProcessorClassType::DM);
+    int riscv_id = static_cast<std::underlying_type_t<DataMovementProcessor>>(this->config_.processor);
     jit_build(
         BuildEnvManager::get_instance(extract_context_id(device))
-            .get_kernel_build_state(device->build_id(), dram_core_type, dm_class_idx, 0),
+            .get_kernel_build_state(device->build_id(), dram_core_type, dm_class_idx, riscv_id),
         this);
 }
 
@@ -1043,17 +1046,18 @@ void DramKernel::read_binaries(IDevice* device, const std::string& binary_root) 
                                   .hal()
                                   .get_programmable_core_type_index(this->get_kernel_programmable_core_type());
     constexpr auto k_DmClassIndex = enchantum::to_underlying(HalProcessorClassType::DM);
+    int riscv_id = static_cast<std::underlying_type_t<DataMovementProcessor>>(this->config_.processor);
     auto load_type = MetalContext::instance(this->get_context_id())
                          .hal()
-                         .get_jit_build_config(dram_core_type, k_DmClassIndex, 0)
+                         .get_jit_build_config(dram_core_type, k_DmClassIndex, riscv_id)
                          .memory_load;
     const auto binary_path =
         BuildEnvManager::get_instance(extract_context_id(device))
             .get_kernel_binary_path(
-                device->build_id(), dram_core_type, k_DmClassIndex, 0, binary_root, this->kernel_full_name_);
+                device->build_id(), dram_core_type, k_DmClassIndex, riscv_id, binary_root, this->kernel_full_name_);
     const ll_api::memory& binary_mem = llrt::get_risc_binary(binary_path, load_type);
     binaries.push_back(&binary_mem);
-    log_debug(LogLoader, "DRISC=0, name={}, size={} (bytes)", this->name(), binary_mem.get_packed_size());
+    log_debug(LogLoader, "DRISC={}, name={}, size={} (bytes)", riscv_id, this->name(), binary_mem.get_packed_size());
     this->set_binaries(
         BuildEnvManager::get_instance(extract_context_id(device)).get_device_build_env(device->build_id()).build_key(),
         std::move(binaries));
@@ -1194,7 +1198,9 @@ bool DramKernel::configure(
 
     const auto dram_core_index = hal.get_programmable_core_type_index(this->get_kernel_programmable_core_type());
     uint32_t dm_class_idx = enchantum::to_underlying(HalProcessorClassType::DM);
-    tt::llrt::test_load_write_read_risc_binary(env, binary_mem, device_id, dram_core, dram_core_index, dm_class_idx, 0);
+    int riscv_id = enchantum::to_underlying(this->config_.processor);
+    tt::llrt::test_load_write_read_risc_binary(
+        env, binary_mem, device_id, dram_core, dram_core_index, dm_class_idx, riscv_id);
 
     return true;
 }

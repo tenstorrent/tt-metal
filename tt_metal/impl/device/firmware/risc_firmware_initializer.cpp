@@ -1313,7 +1313,7 @@ void RiscFirmwareInitializer::initialize_firmware(
                 tt_cxy_pair(device_id, virtual_core), dram_core_reset_riscs(cluster_.arch()));
             if (not rtoptions_.get_skip_loading_fw()) {
                 for (uint32_t processor_class = 0; processor_class < processor_class_count; processor_class++) {
-                    auto num_build_states = hal_.get_processor_types_count(core_type_idx, processor_class);
+                    auto num_build_states = hal_.get_processor_class_num_fw_binaries(core_type_idx, processor_class);
                     for (uint32_t drisc_id = 0; drisc_id < num_build_states; drisc_id++) {
                         auto fw_path = BuildEnvManager::get_instance(ctx_id).get_firmware_binary_path(
                             device_id, core_type_idx, processor_class, drisc_id);

@@ -116,11 +116,13 @@ public:
                 flags += fmt::format("-Wl,--defsym=__local_base={} ", cce_tls);
                 flags += fmt::format("-Wl,--defsym=__local_stride={} ", MEM_CCE_LOCAL_SIZE);
             } else {
-                const DeviceAddr cce_kn_text = MEM_CCE_SRAM_LOCAL_BASE + MEM_CCE_KERNEL_BASE;
+                const DeviceAddr cce_kn_text =
+                    MEM_CCE_SRAM_LOCAL_BASE + MEM_CCE_KERNEL_BASE + params.processor_id * MEM_CCE_KERNEL_SIZE;
                 flags += fmt::format("-Wl,--defsym=__kn_text={} ", cce_kn_text);
                 flags += fmt::format("-Wl,--defsym=__text_size={} ", MEM_CCE_KERNEL_SIZE);
                 flags += fmt::format("-Wl,--defsym=__fw_data={} ", cce_data);
-                flags += fmt::format("-Wl,--defsym=__kn_data={} ", cce_data + MEM_CCE_GLOBAL_SIZE);
+                flags += fmt::format(
+                    "-Wl,--defsym=__kn_data={} ", cce_data + MEM_CCE_GLOBAL_SIZE * (1 + params.processor_id));
                 flags += fmt::format("-Wl,--defsym=__data_size={} ", MEM_CCE_GLOBAL_SIZE);
                 flags += fmt::format("-Wl,--defsym=__fw_tls={} ", cce_tls);
                 flags += fmt::format("-Wl,--defsym=__tls_size={} ", MEM_CCE_LOCAL_SIZE);
