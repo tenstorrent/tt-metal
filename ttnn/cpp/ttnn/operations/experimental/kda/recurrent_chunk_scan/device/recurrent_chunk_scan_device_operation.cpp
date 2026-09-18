@@ -190,7 +190,12 @@ RecurrentChunkScanOperation::create_op_performance_model(
         inputs.push_back(&*in.tail_state);
     }
 
-    return make_profiler_model(work, inputs, outputs, attrs.compute_kernel_config.math_fidelity);
+    // Ordinary summaries allocate the same four-tensor result as dynamic
+    // summaries, but only the head pair is written.
+    const auto written_outputs = attrs.mode == RecurrentChunkScanMode::SUMMARY && !in.actual_start.has_value()
+                                     ? std::vector<Tensor>{outputs[0], outputs[1]}
+                                     : outputs;
+    return make_profiler_model(work, inputs, written_outputs, attrs.compute_kernel_config.math_fidelity);
 }
 
 std::vector<Tensor> recurrent_chunk_scan(
