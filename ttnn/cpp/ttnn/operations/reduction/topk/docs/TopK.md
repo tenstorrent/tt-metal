@@ -270,16 +270,22 @@ The strategy consists of two phases:
      - Iteration n: Compare with distance 2^n → groups of 64*(2^(n+1)) elements
    - **Result Extraction**: Extract top Kt tiles (ceil(K/32)) containing locally optimal TopK elements
 
-3. **Communication**:
-   - Each local core sends its Kt tiles of locally optimal results to the final core
-   - Uses semaphore-synchronized NoC transfers for efficient L1-to-L1 communication
-   - Writer kernel manages data transmission to prevent buffer overflow
+3. **Tree Merge and Communication**:
+   - `log2(num_local_cores)` rounds: in round r, core i with `i % 2^(r+1) == 0` receives the Kt tiles of
+     core `i + 2^r` into a landing slot next to its own Kt tiles and keeps the top Kt of the pair with one
+     bitonic merge step (`process_iteration` on a 2×Kt row); the kept sequence's sort direction alternates so
+     that the partners of the next round form a bitonic sequence
+   - Each round is flow controlled by two semaphores: the parent grants a credit once its landing slot is
+     free, the child signals data once its NoC write is drained
+   - The surviving core(s) send their Kt tiles to the final core with the semaphore-synchronized NoC
+     transfer; with the tree run to the root only core 0 sends and the final core is a pass through
 
 #### Phase 2: Global Aggregation (Final Core) - `topk_final.cpp`
 
 1. **Data Gathering**:
-   - Final core receives Kt tiles from each of the local cores
-   - Total aggregated data: `Wt_final = num_local_cores × Kt` tiles
+   - Final core receives Kt tiles from each tree survivor
+   - Total aggregated data: `Wt_final = (num_local_cores >> tree_rounds) × Kt` tiles (`Kt` when the tree runs
+     to the root)
    - Data represents candidate TopK elements from all width chunks
 
 2. **Global Bitonic Merge**:
@@ -297,8 +303,10 @@ The strategy consists of two phases:
 - **index_cb_index**: Input indices (double-buffered)
 - **input_transposed_cb_index**: Transposed values staging buffer (Wt_local tiles)
 - **index_transposed_cb_index**: Transposed indices staging buffer (Wt_local tiles)
-- **values_cb_index**: Local TopK values output (Kt tiles for transmission to final core)
-- **output_ind_cb_index**: Local TopK indices output (Kt tiles for transmission to final core)
+- **values_cb_index**: Local TopK values output (Kt tiles for transmission to the parent or final core)
+- **output_ind_cb_index**: Local TopK indices output (Kt tiles for transmission to the parent or final core)
+- **landing_values_cb_index / landing_indices_cb_index**: Tree-merge landing slot ([own Kt | partner Kt] tiles, filled by the writer and the partner core's NoC write)
+- **merge_values_cb_index / merge_indices_cb_index**: Tree-merge in-place workspace (2×Kt tiles)
 
 #### Circular Buffers (Final Core):
 
