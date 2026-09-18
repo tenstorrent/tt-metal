@@ -5867,11 +5867,6 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t matmul_multi_core_
         sub_device_start_core);
 }
 
-// Left on ProgramSpecFactoryConcept rather than the custom concept: every write the legacy
-// override_runtime_arguments made was a tensor address, and the framework refreshes exactly the
-// tensor bindings on a cache hit. The void-returning method below is therefore not translated --
-// it stays as it is, because the MeshWorkload sibling factory and all_gather_matmul_async call it
-// directly with state create_program_artifacts does not produce.
 void MatmulMultiCoreReuseMcast1DProgramFactory::override_runtime_arguments(
     tt::tt_metal::Program& program,
     const shared_variables_t& shared_variables,
