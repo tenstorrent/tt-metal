@@ -8,14 +8,15 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/math.hpp"         // Exp
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/misc.hpp"         // Negative
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/activations.hpp"  // Logsigmoid
+#include "experimental/kernel_args.h"
 
 namespace ckl = compute_kernel_lib;
 
 void kernel_main() {
-    uint32_t num_tiles = get_arg_val<uint32_t>(0);
+    uint32_t num_tiles = get_arg(args::num_tiles);
 
-    constexpr auto dfb_input_id = tt::CBIndex::c_0;
-    constexpr auto dfb_output_id = tt::CBIndex::c_2;
+    constexpr auto dfb_input_id = dfb::input;
+    constexpr auto dfb_output_id = dfb::output;
 
     compute_kernel_hw_startup(dfb_input_id, dfb_output_id);
 

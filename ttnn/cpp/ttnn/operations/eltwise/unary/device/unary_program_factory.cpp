@@ -6,12 +6,14 @@
 
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_utils.hpp"
-#include "ttnn/operations/cb_utils.hpp"
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include <algorithm>
+#include <fmt/format.h>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/work_split.hpp>
 
 namespace {
@@ -72,7 +74,7 @@ bool pack_first_op_scalars(
     return false;
 }
 
-bool needs_tmp0_cb(UnaryOpType t) { return t == UnaryOpType::LOGIT; }
+bool needs_tmp0_dfb(UnaryOpType t) { return t == UnaryOpType::LOGIT; }
 
 uint32_t get_shards_per_width(const ShardSpec& shard_spec, TensorMemoryLayout memory_layout) {
     auto num_cores = shard_spec.grid.num_cores();
@@ -94,20 +96,33 @@ uint32_t get_shards_per_width(const ShardSpec& shard_spec, TensorMemoryLayout me
 namespace ttnn::operations::unary {
 
 using namespace utils;
+using namespace tt::tt_metal::experimental;
 
 namespace {
 
-// Per-core runtime-arg values, in the slot order create_descriptor writes them.
+// Program-scope resource names. Declared once and referenced at every use site, because both
+// create_program_artifacts and override_runtime_arguments name the same kernels and tensor
+// parameters and a divergence between them is a silent mis-binding.
+const KernelSpecName kReaderKernel{"reader"};
+const KernelSpecName kWriterKernel{"writer"};
+const KernelSpecName kComputeKernel{"compute"};
+const DFBSpecName kSrcDfb{"src"};
+const DFBSpecName kTmp0Dfb{"tmp0"};
+const DFBSpecName kDstDfb{"dst"};
+const TensorParamName kSrcTensor{"src"};
+const TensorParamName kDstTensor{"dst"};
+
+// Per-core runtime-arg values, in the slot order create_program_artifacts writes them.
 struct CoreRtArgs {
     tt::tt_metal::CoreCoord core;
-    bool noop = false;  // outside both work groups: create_descriptor zero-fills its args
+    bool noop = false;  // outside both work groups: create_program_artifacts zero-fills its args
     uint32_t in_units = 0;
     uint32_t out_units = 0;
     uint32_t start_id = 0;
     uint32_t compute_units = 0;
 };
 
-// Core-invariant ROW_MAJOR-interleaved chunk constants, reader/writer slots 3-7. All shape-derived,
+// Core-invariant ROW_MAJOR-interleaved chunk constants, reader/writer args 3-7. All shape-derived,
 // and ROW_MAJOR hashes padded_shape, so a cache hit never has to re-apply them.
 struct RmChunkConstants {
     uint32_t chunks_per_row = 1;
@@ -119,9 +134,9 @@ struct RmChunkConstants {
     uint32_t total_rows = 0;
 };
 
-// Enumerates the per-core work split for the current tensors. create_descriptor and
+// Enumerates the per-core work split for the current tensors. create_program_artifacts and
 // override_runtime_arguments both go through this, so a cache-hit patch cannot drift from the layout
-// the miss path built. Cheap next to create_descriptor (no kernel sources, CBs, or descriptor
+// the miss path built. Cheap next to create_program_artifacts (no kernel sources, DFBs, or spec
 // allocation) but deliberately not O(1): the TILE-layout hash omits shape, so the split really does
 // change between hits on the same cached program.
 template <typename Fn>
@@ -332,9 +347,68 @@ void enumerate_core_rt_args(
     }
 }
 
+// Fills the three kernels' per-node runtime-arg tables for the current tensors. Shared by
+// create_program_artifacts and override_runtime_arguments for the same reason
+// enumerate_core_rt_args is: the cache-hit values and the cache-miss values must be derived by
+// one piece of code, or they can drift.
+//
+// Every argument the schema declares is written for every node -- active cores with their values,
+// cores outside the work set with zeros. That is what keeps a core the split flips between active
+// and no-op from retaining stale args, which is why the no-op branch writes zeros explicitly
+// rather than being skipped.
+void build_kernel_run_args(
+    const UnaryDeviceOperation::operation_attributes_t& operation_attributes,
+    const UnaryDeviceOperation::tensor_args_t& tensor_args,
+    const Tensor& output,
+    bool has_sharding,
+    bool rm_interleaved,
+    uint32_t packed_scalar1,
+    uint32_t packed_scalar2,
+    KernelRunArgs& reader_run_args,
+    KernelRunArgs& writer_run_args,
+    KernelRunArgs& compute_run_args) {
+    enumerate_core_rt_args(
+        operation_attributes, tensor_args, output, [&](const CoreRtArgs& w, const RmChunkConstants& kc) {
+            // A no-op core leaves every CoreRtArgs count at its zero default, so the unit and
+            // start-id writes below already carry the zero-fill for it.
+            AddRuntimeArgsForNode(
+                reader_run_args.runtime_arg_values, w.core, {{"num_pages", w.in_units}, {"start_id", w.start_id}});
+            AddRuntimeArgsForNode(
+                writer_run_args.runtime_arg_values, w.core, {{"num_pages", w.out_units}, {"start_id", w.start_id}});
+            if (!has_sharding) {
+                // The chunk constants are read only under RM_INTERLEAVED. The interleaved schema
+                // carries them in both layouts and zero-fills the TILE case, so the arg set a core
+                // holds never depends on which branch last wrote it.
+                const bool rm = rm_interleaved && !w.noop;
+                AddRuntimeArgsForNode(
+                    reader_run_args.runtime_arg_values,
+                    w.core,
+                    {{"chunks_per_row", rm ? kc.chunks_per_row : 0u},
+                     {"chunk_size", rm ? kc.input_chunk_size : 0u},
+                     {"last_chunk_size", rm ? kc.input_last_chunk_size : 0u},
+                     {"rows_per_tile", rm ? kc.rows_per_tile : 0u},
+                     {"total_rows", rm ? kc.total_rows : 0u}});
+                AddRuntimeArgsForNode(
+                    writer_run_args.runtime_arg_values,
+                    w.core,
+                    {{"chunks_per_row", rm ? kc.chunks_per_row : 0u},
+                     {"chunk_size", rm ? kc.output_chunk_size : 0u},
+                     {"last_chunk_size", rm ? kc.output_last_chunk_size : 0u},
+                     {"rows_per_tile", rm ? kc.rows_per_tile : 0u},
+                     {"total_rows", rm ? kc.total_rows : 0u}});
+            }
+            AddRuntimeArgsForNode(
+                compute_run_args.runtime_arg_values,
+                w.core,
+                {{"num_tiles", w.compute_units},
+                 {"packed_scalar1", w.noop ? 0u : packed_scalar1},
+                 {"packed_scalar2", w.noop ? 0u : packed_scalar2}});
+        });
+}
+
 }  // namespace
 
-tt::tt_metal::ProgramDescriptor UnaryDeviceOperation::ProgramFactory::create_descriptor(
+ttnn::device_operation::ProgramArtifacts UnaryDeviceOperation::ProgramFactory::create_program_artifacts(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
@@ -348,28 +422,23 @@ tt::tt_metal::ProgramDescriptor UnaryDeviceOperation::ProgramFactory::create_des
     uint32_t packed_scalar1 = 0;
     uint32_t packed_scalar2 = 0;
 
-    ProgramDescriptor desc;
-
     const bool is_row_major = input.layout() == Layout::ROW_MAJOR;
 
-    DataFormat cb_data_format = datatype_to_dataformat_converter(input.dtype());
-    uint32_t single_tile_size = tile_size(cb_data_format);
-    DataFormat cb_data_format_output = datatype_to_dataformat_converter(output.dtype());
-    uint32_t single_tile_size_output = tile_size(cb_data_format_output);
-
-    Buffer* src_buffer = input.buffer();
-    Buffer* dst_buffer = output.buffer();
+    DataFormat dfb_data_format = datatype_to_dataformat_converter(input.dtype());
+    uint32_t single_tile_size = tile_size(dfb_data_format);
+    DataFormat dfb_data_format_output = datatype_to_dataformat_converter(output.dtype());
+    uint32_t single_tile_size_output = tile_size(dfb_data_format_output);
 
     const auto shard_specs = get_shard_specs(input.tensor_spec(), output.tensor_spec());
     const bool has_sharding = shard_specs.has_value();
     const bool src_sharded = has_sharding && input.is_sharded();
     const bool dst_sharded = has_sharding && output.is_sharded();
 
-    // For ROW_MAJOR interleaved: use tile_size CB pages and group/chunk rows.
-    // For sharded ROW_MAJOR or TILE layout: CB page is always tile_size.
+    // For ROW_MAJOR interleaved: use tile_size DFB entries and group/chunk rows.
+    // For sharded ROW_MAJOR or TILE layout: DFB entry is always tile_size.
     const bool rm_interleaved = is_row_major && !has_sharding;
-    const uint32_t input_cb_page_size = single_tile_size;
-    const uint32_t output_cb_page_size = single_tile_size_output;
+    const uint32_t input_dfb_entry_size = single_tile_size;
+    const uint32_t output_dfb_entry_size = single_tile_size_output;
 
     auto shard_pages = [](const tt::tt_metal::ShardSpec& spec, const Tensor& t, bool rm) -> uint32_t {
         if (rm) {
@@ -378,7 +447,7 @@ tt::tt_metal::ProgramDescriptor UnaryDeviceOperation::ProgramFactory::create_des
             uint32_t shard_bytes = spec.shape[0] * spec.shape[1] * datum_size(df);
             TT_ASSERT(
                 shard_bytes % ts == 0,
-                "ROW_MAJOR shard size in bytes ({}) must be a multiple of CB page size ({})",
+                "ROW_MAJOR shard size in bytes ({}) must be a multiple of DFB entry size ({})",
                 shard_bytes,
                 ts);
             return shard_bytes / ts;
@@ -393,15 +462,7 @@ tt::tt_metal::ProgramDescriptor UnaryDeviceOperation::ProgramFactory::create_des
                     : std::nullopt;
 
     const auto& all_device_cores = operation_attributes.worker_grid;
-
-    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
-        NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
-    const uint32_t src0_cb_index = CBIndex::c_0;
-    const uint32_t tmp0_cb_index = CBIndex::c_1;
-    if (operation_attributes.preserve_fp32_precision) {
-        unpack_to_dest_mode[src0_cb_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
-        unpack_to_dest_mode[tmp0_cb_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
-    }
+    const auto* device = input.device();
 
     const bool math_approx_mode = false;
     std::map<std::string, std::string> unary_defines = get_block_defines(ops_chain, "0", "0", input.dtype());
@@ -409,260 +470,302 @@ tt::tt_metal::ProgramDescriptor UnaryDeviceOperation::ProgramFactory::create_des
     const bool logit_clamp_enabled =
         CMAKE_UNIQUE_NAMESPACE::pack_first_op_scalars(ops_chain[0], input.dtype(), packed_scalar1, packed_scalar2);
 
-    const std::string compute_path = fmt::format(
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/{}",
-        get_compute_kernel_path(ops_chain[0].type(), input.dtype()));
+    const bool has_tmp0_dfb = CMAKE_UNIQUE_NAMESPACE::needs_tmp0_dfb(ops_chain[0].type());
 
-    DataFormat cb_data_format_for_input =
-        (ops_chain[0].type() == unary::UnaryOpType::BITCAST) ? cb_data_format_output : cb_data_format;
+    // eltwise_sfpu.cpp is lent to three external program factories that are still on the legacy
+    // host API, so this port binds a Metal 2.0 fork of it that lives beside the original instead of
+    // converting the original in place. Every other compute kernel here is unary-exclusive and was
+    // converted where it sits.
+    std::string_view compute_kernel_file = get_compute_kernel_path(ops_chain[0].type(), input.dtype());
+    if (compute_kernel_file == "eltwise_sfpu.cpp") {
+        compute_kernel_file = "eltwise_sfpu_metal2.cpp";
+    }
+    const std::string compute_path =
+        fmt::format("ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/{}", compute_kernel_file);
 
-    // --- Circular Buffers ---
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = input_cb_page_size * src_num_tiles_per_shard.value_or(2),
-        .core_ranges = all_device_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(src0_cb_index),
-            .data_format = cb_data_format_for_input,
-            .page_size = input_cb_page_size,
-        }}},
-        .buffer = src_sharded ? src_buffer : nullptr,
+    DataFormat dfb_data_format_for_input =
+        (ops_chain[0].type() == unary::UnaryOpType::BITCAST) ? dfb_data_format_output : dfb_data_format;
+
+    // --- Dataflow Buffers ---
+    // tile_format_metadata is deliberately left unset on all three, matching the legacy CBs, which
+    // set no tile either. Entry sizes come from tile_size(DataFormat), which assumes a 32x32 tile.
+    Group<DataflowBufferSpec> dataflow_buffers;
+    dataflow_buffers.push_back(DataflowBufferSpec{
+        .unique_id = kSrcDfb,
+        .entry_size = input_dfb_entry_size,
+        .num_entries = src_num_tiles_per_shard.value_or(2),
+        .data_format_metadata = dfb_data_format_for_input,
+        // Under sharding the input DFB is a view onto the input tensor's own L1 shard, so the
+        // reader only handshakes and the accessor is compiled out of the kernel entirely.
+        .borrowed_from = src_sharded ? std::optional<TensorParamName>(kSrcTensor) : std::nullopt,
     });
 
-    if (CMAKE_UNIQUE_NAMESPACE::needs_tmp0_cb(ops_chain[0].type())) {
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = input_cb_page_size * 2,
-            .core_ranges = all_device_cores,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(tmp0_cb_index),
-                .data_format = cb_data_format,
-                .page_size = input_cb_page_size,
-            }}},
+    if (has_tmp0_dfb) {
+        dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = kTmp0Dfb,
+            .entry_size = input_dfb_entry_size,
+            .num_entries = 2,
+            .data_format_metadata = dfb_data_format,
         });
     }
 
-    const uint32_t output_cb_index = CBIndex::c_2;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = output_cb_page_size * dst_num_tiles_per_shard.value_or(2),
-        .core_ranges = all_device_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(output_cb_index),
-            .data_format = cb_data_format_output,
-            .page_size = output_cb_page_size,
-        }}},
-        .buffer = dst_sharded ? dst_buffer : nullptr,
+    dataflow_buffers.push_back(DataflowBufferSpec{
+        .unique_id = kDstDfb,
+        .entry_size = output_dfb_entry_size,
+        .num_entries = dst_num_tiles_per_shard.value_or(2),
+        .data_format_metadata = dfb_data_format_output,
+        .borrowed_from = dst_sharded ? std::optional<TensorParamName>(kDstTensor) : std::nullopt,
     });
 
+    // --- Tensor parameters ---
+    // Both slots carry the relaxation the op's cache key requires: the TILE-layout key omits shape
+    // and rank entirely, so one cache entry legitimately serves many shapes and the first hit at a
+    // new shape would otherwise fail the strict TensorSpec match. match_page_size and
+    // match_padded_shape_only are deliberately not set.
+    constexpr TensorSpecRelaxations kDynamicShape{
+        .dynamic_tensor_shape = true,
+        .relax_logical_rank = true,
+    };
+    Group<TensorParameter> tensor_parameters = {
+        TensorParameter{
+            .unique_id = kSrcTensor,
+            .spec = input.tensor_spec(),
+            .relaxations = kDynamicShape,
+        },
+        TensorParameter{
+            .unique_id = kDstTensor,
+            .spec = output.tensor_spec(),
+            .relaxations = kDynamicShape,
+        },
+    };
+
+    // --- Runtime-arg schema ---
+    // Mirrors the legacy per-core slot count exactly, minus the buffer-address slot that became a
+    // tensor binding: three slots when sharded, eight otherwise. The five chunk args are read only
+    // under RM_INTERLEAVED but are declared in both interleaved layouts, as the legacy uniform
+    // eight-slot layout did.
+    Group<std::string> data_movement_arg_names = {"num_pages", "start_id"};
+    if (!has_sharding) {
+        data_movement_arg_names.insert(
+            data_movement_arg_names.end(),
+            {"chunks_per_row", "chunk_size", "last_chunk_size", "rows_per_tile", "total_rows"});
+    }
+
     // --- Reader Kernel ---
-    std::map<std::string, std::string> reader_defines;
+    KernelSpec::CompilerOptions::Defines reader_defines;
     reader_defines["SRC_SHARDED"] = src_sharded ? "1" : "0";
     reader_defines["RM_INTERLEAVED"] = rm_interleaved ? "1" : "0";
 
-    std::vector<uint32_t> reader_compile_time_args;
-    std::vector<uint32_t> reader_common_runtime_args;
-    TensorAccessorArgs(*src_buffer, tensor_accessor::ArgConfig::RuntimeTensorShape)
-        .append_to(reader_compile_time_args, reader_common_runtime_args);
-
-    KernelDescriptor reader_desc;
-    reader_desc.kernel_source = "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary.cpp";
-    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_desc.core_ranges = all_device_cores;
-    reader_desc.compile_time_args = reader_compile_time_args;
-    reader_desc.defines = {reader_defines.begin(), reader_defines.end()};
-    reader_desc.config = ReaderConfigDescriptor{};
-    reader_desc.common_runtime_args = reader_common_runtime_args;
+    const KernelSpec reader{
+        .unique_id = kReaderKernel,
+        .source = "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary.cpp",
+        .compiler_options = {.defines = std::move(reader_defines)},
+        .dfb_bindings = {DFBBinding{
+            .dfb_spec_name = kSrcDfb,
+            .accessor_name = "src",
+            .endpoint_type = DFBEndpointType::PRODUCER,
+        }},
+        .tensor_bindings = {TensorBinding{
+            .tensor_parameter_name = kSrcTensor,
+            .accessor_name = "src",
+        }},
+        .runtime_arg_schema = {.runtime_arg_names = data_movement_arg_names},
+        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+    };
 
     // --- Writer Kernel ---
-    std::map<std::string, std::string> writer_defines;
+    KernelSpec::CompilerOptions::Defines writer_defines;
     writer_defines["DST_SHARDED"] = dst_sharded ? "1" : "0";
     writer_defines["RM_INTERLEAVED"] = rm_interleaved ? "1" : "0";
 
-    std::vector<uint32_t> writer_compile_time_args;
-    std::vector<uint32_t> writer_common_runtime_args;
-    TensorAccessorArgs(*dst_buffer, tensor_accessor::ArgConfig::RuntimeTensorShape)
-        .append_to(writer_compile_time_args, writer_common_runtime_args);
-
-    KernelDescriptor writer_desc;
-    writer_desc.kernel_source = "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary.cpp";
-    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    writer_desc.core_ranges = all_device_cores;
-    writer_desc.compile_time_args = writer_compile_time_args;
-    writer_desc.defines = {writer_defines.begin(), writer_defines.end()};
-    writer_desc.config = WriterConfigDescriptor{};
-    writer_desc.common_runtime_args = writer_common_runtime_args;
+    const KernelSpec writer{
+        .unique_id = kWriterKernel,
+        .source = "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary.cpp",
+        .compiler_options = {.defines = std::move(writer_defines)},
+        .dfb_bindings = {DFBBinding{
+            .dfb_spec_name = kDstDfb,
+            .accessor_name = "dst",
+            .endpoint_type = DFBEndpointType::CONSUMER,
+        }},
+        .tensor_bindings = {TensorBinding{
+            .tensor_parameter_name = kDstTensor,
+            .accessor_name = "dst",
+        }},
+        .runtime_arg_schema = {.runtime_arg_names = data_movement_arg_names},
+        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+    };
 
     // --- Compute Kernel ---
-    KernelDescriptor compute_desc;
-    compute_desc.kernel_source = compute_path;
-    compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    compute_desc.core_ranges = all_device_cores;
+    KernelSpec::CompileTimeArgs compute_compile_time_args;
     if (ops_chain[0].type() == UnaryOpType::HARDSWISH) {
-        compute_desc.compile_time_args = {
-            static_cast<uint32_t>(unary_defines.contains("INP_FLOAT32")),
-            static_cast<uint32_t>(unary_defines.contains("INP_INT32") || unary_defines.contains("INP_UINT32")),
-        };
+        compute_compile_time_args["is_float32"] = static_cast<uint32_t>(unary_defines.contains("INP_FLOAT32"));
+        compute_compile_time_args["is_int"] =
+            static_cast<uint32_t>(unary_defines.contains("INP_INT32") || unary_defines.contains("INP_UINT32"));
     } else if (ops_chain[0].type() == UnaryOpType::LOGIT) {
-        compute_desc.compile_time_args = {static_cast<uint32_t>(logit_clamp_enabled)};
+        compute_compile_time_args["do_clamp"] = static_cast<uint32_t>(logit_clamp_enabled);
     }
-    compute_desc.compile_time_args.push_back(static_cast<uint32_t>(cb_data_format));
-    compute_desc.defines = {unary_defines.begin(), unary_defines.end()};
-    compute_desc.config = ComputeConfigDescriptor{
-        .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
-        .fp32_dest_acc_en = operation_attributes.fp32_dest_acc_en,
-        .unpack_to_dest_mode = {unpack_to_dest_mode.begin(), unpack_to_dest_mode.end()},
-        .bfp8_pack_precise = operation_attributes.bfp8_pack_precise,
-        .math_approx_mode = math_approx_mode,
+    // Carried over from the legacy compile-time-arg list, where it was appended for every op type.
+    // No compute kernel in this op reads it.
+    compute_compile_time_args["data_format"] = static_cast<uint32_t>(dfb_data_format);
+
+    // Legacy filled a buffer-index-keyed vector with UnpackToDestMode::Default and set the input
+    // and tmp0 slots to UnpackToDestFp32 under preserve_fp32_precision. Rekeyed to DFB names, that
+    // is UnpackToDest on exactly those two, and UnpackToSrc (the lowering of Default) otherwise.
+    //
+    // The entry is written out even where it is UnpackToSrc, rather than omitted: Metal 2.0
+    // *requires* an explicit choice for a consumed Float32 DFB when the Dest register is 32 bits
+    // wide, and that combination is reachable with a legacy Default (a BITCAST to FLOAT32 from a
+    // non-FLOAT32 input sets fp32_dest_acc_en without setting preserve_fp32_precision). Writing
+    // every consumed DFB's mode is behaviour-identical and removes the case analysis.
+    //
+    // tmp0's entry is gated on the DFB existing, because an entry naming a DFB the kernel does not
+    // bind is rejected. Legacy set that slot unconditionally, where it was simply ignored.
+    const UnpackMode consumed_unpack_mode =
+        operation_attributes.preserve_fp32_precision ? UnpackMode::UnpackToDest : UnpackMode::UnpackToSrc;
+    ComputeUnpackModes compute_unpack_modes;
+    compute_unpack_modes.emplace(kSrcDfb, consumed_unpack_mode);
+    if (has_tmp0_dfb) {
+        compute_unpack_modes.emplace(kTmp0Dfb, consumed_unpack_mode);
+    }
+
+    // The legacy ComputeConfigDescriptor's values, carried across one for one:
+    //   math_fidelity=HiFi4 -> fpu_math_fidelity; math_approx_mode=false -> sfpu_precision_mode;
+    //   fp32_dest_acc_en -> enable_32_bit_dest; bfp8_pack_precise -> bfp_pack_precision_mode.
+    // dst_full_sync_en was left at its legacy default of false, which is double_buffer_dest = true
+    // and already the Metal 2.0 default, so it needs no explicit setting.
+    const ComputeGen1Config compute_gen1_config{
+        .fpu_math_fidelity = MathFidelity::HiFi4,
+        .sfpu_precision_mode = math_approx_mode ? Precision::Approximate : Precision::Precise,
+        .bfp_pack_precision_mode = operation_attributes.bfp8_pack_precise ? Precision::Precise : Precision::Approximate,
+        .enable_32_bit_dest = operation_attributes.fp32_dest_acc_en,
+        .unpack_modes = std::move(compute_unpack_modes),
+    };
+
+    // tmp0 is touched by logit_kernel.cpp alone -- it packs into the buffer and copies back out of
+    // it one tile at a time -- so the one compute kernel is bound as both its producer and its
+    // consumer.
+    Group<DFBBinding> compute_dfb_bindings = {
+        DFBBinding{
+            .dfb_spec_name = kSrcDfb,
+            .accessor_name = "input",
+            .endpoint_type = DFBEndpointType::CONSUMER,
+        },
+        DFBBinding{
+            .dfb_spec_name = kDstDfb,
+            .accessor_name = "output",
+            .endpoint_type = DFBEndpointType::PRODUCER,
+        },
+    };
+    if (has_tmp0_dfb) {
+        compute_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = kTmp0Dfb,
+            .accessor_name = "tmp0",
+            .endpoint_type = DFBEndpointType::PRODUCER,
+        });
+        compute_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = kTmp0Dfb,
+            .accessor_name = "tmp0",
+            .endpoint_type = DFBEndpointType::CONSUMER,
+        });
+    }
+
+    // O3 is explicit because the legacy compute config defaulted there while Metal 2.0's
+    // kernel-type-agnostic CompilerOptions defaults to O2; leaving it unset would quietly drop a
+    // level on both the compile and the link.
+    const KernelSpec compute{
+        .unique_id = kComputeKernel,
+        .source = compute_path,
+        .compiler_options =
+            {.defines = KernelSpec::CompilerOptions::Defines(unary_defines), .opt_level = KernelBuildOptLevel::O3},
+        .dfb_bindings = std::move(compute_dfb_bindings),
+        .compile_time_args = std::move(compute_compile_time_args),
+        .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "packed_scalar1", "packed_scalar2"}},
+        .hw_config = ComputeHardwareConfig{compute_gen1_config},
     };
 
     // --- Per-core runtime args ---
     // Work split + per-core values come from enumerate_core_rt_args, shared with
     // override_runtime_arguments so the cache-hit patch and the miss path cannot disagree.
-    // Sharded readers/writers take {buffer, units, start_id}; interleaved add the five chunk fields.
-    constexpr uint32_t kShardedDataMovementArgs = 3, kInterleavedDataMovementArgs = 8, kComputeArgs = 3;
-    enumerate_core_rt_args(
-        operation_attributes, tensor_args, output, [&](const CoreRtArgs& w, const RmChunkConstants& kc) {
-            if (w.noop) {
-                const uint32_t n = has_sharding ? kShardedDataMovementArgs : kInterleavedDataMovementArgs;
-                reader_desc.runtime_args.emplace_back(w.core, KernelDescriptor::CoreRuntimeArgs(n, 0));
-                writer_desc.runtime_args.emplace_back(w.core, KernelDescriptor::CoreRuntimeArgs(n, 0));
-                compute_desc.runtime_args.emplace_back(w.core, KernelDescriptor::CoreRuntimeArgs(kComputeArgs, 0));
-                return;
-            }
-            if (has_sharding) {
-                reader_desc.emplace_runtime_args(w.core, {input.buffer(), w.in_units, w.start_id});
-                writer_desc.emplace_runtime_args(w.core, {output.buffer(), w.out_units, w.start_id});
-            } else if (rm_interleaved) {
-                reader_desc.emplace_runtime_args(
-                    w.core,
-                    {input.buffer(),
-                     w.in_units,
-                     w.start_id,
-                     kc.chunks_per_row,
-                     kc.input_chunk_size,
-                     kc.input_last_chunk_size,
-                     kc.rows_per_tile,
-                     kc.total_rows});
-                writer_desc.emplace_runtime_args(
-                    w.core,
-                    {output.buffer(),
-                     w.out_units,
-                     w.start_id,
-                     kc.chunks_per_row,
-                     kc.output_chunk_size,
-                     kc.output_last_chunk_size,
-                     kc.rows_per_tile,
-                     kc.total_rows});
-            } else {
-                reader_desc.emplace_runtime_args(w.core, {input.buffer(), w.in_units, w.start_id, 0u, 0u, 0u, 0u, 0u});
-                writer_desc.emplace_runtime_args(
-                    w.core, {output.buffer(), w.out_units, w.start_id, 0u, 0u, 0u, 0u, 0u});
-            }
-            compute_desc.runtime_args.emplace_back(
-                w.core, KernelDescriptor::CoreRuntimeArgs{w.compute_units, packed_scalar1, packed_scalar2});
-        });
+    KernelRunArgs reader_run_args{.kernel = kReaderKernel};
+    KernelRunArgs writer_run_args{.kernel = kWriterKernel};
+    KernelRunArgs compute_run_args{.kernel = kComputeKernel};
+    build_kernel_run_args(
+        operation_attributes,
+        tensor_args,
+        output,
+        has_sharding,
+        rm_interleaved,
+        packed_scalar1,
+        packed_scalar2,
+        reader_run_args,
+        writer_run_args,
+        compute_run_args);
 
-    desc.kernels.push_back(std::move(reader_desc));
-    desc.kernels.push_back(std::move(writer_desc));
-    desc.kernels.push_back(std::move(compute_desc));
+    ProgramSpec spec{
+        .name = "unary",
+        .kernels = {reader, writer, compute},
+        .dataflow_buffers = std::move(dataflow_buffers),
+        .tensor_parameters = std::move(tensor_parameters),
+        .work_units = {WorkUnitSpec{
+            .name = "unary",
+            .kernels = {kReaderKernel, kWriterKernel, kComputeKernel},
+            .target_nodes = all_device_cores,
+        }},
+    };
 
-    return desc;
+    ProgramRunArgs run_args;
+    run_args.kernel_run_args = {std::move(reader_run_args), std::move(writer_run_args), std::move(compute_run_args)};
+    run_args.tensor_args = {{kSrcTensor, input.mesh_tensor()}, {kDstTensor, output.mesh_tensor()}};
+
+    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
-void UnaryDeviceOperation::ProgramFactory::override_runtime_arguments(
-    tt::tt_metal::Program& program,
+tt::tt_metal::experimental::ProgramRunArgs UnaryDeviceOperation::ProgramFactory::override_runtime_arguments(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output,
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
     using namespace tt::tt_metal;
-    // The TILE-layout hash omits shape, so the work split, start ids and accessor shape args all vary
-    // between hits: re-apply exactly those, through the same enumeration create_descriptor uses.
+    // The TILE-layout hash omits shape, so the work split and start ids all vary between hits:
+    // re-apply exactly those, through the same enumeration create_program_artifacts uses. The
+    // accessor shape args the legacy override also had to rebuild are now carried by the tensor
+    // bindings below, which the framework derives from them.
     const auto& input = tensor_args.input;
     const auto shard_specs = get_shard_specs(input.tensor_spec(), output.tensor_spec());
-    const bool src_sharded = shard_specs.has_value() && input.is_sharded();
-    const bool dst_sharded = shard_specs.has_value() && output.is_sharded();
-
-    constexpr uint32_t kReaderKernelIdx = 0, kWriterKernelIdx = 1, kComputeKernelIdx = 2;
-    const uint32_t src_addr = input.buffer()->address();
-    const uint32_t dst_addr = output.buffer()->address();
     const bool has_sharding = shard_specs.has_value();
     const bool rm_interleaved = input.layout() == Layout::ROW_MAJOR && !has_sharding;
 
-    // A changed split can flip a core between noop and active, so write every slot create_descriptor
-    // writes rather than only the ones that usually move -- otherwise a flipped core keeps stale args.
+    // A changed split can flip a core between noop and active, so write every arg
+    // create_program_artifacts writes rather than only the ones that usually move -- otherwise a
+    // flipped core keeps stale args.
     uint32_t packed_scalar1 = 0, packed_scalar2 = 0;
     CMAKE_UNIQUE_NAMESPACE::pack_first_op_scalars(
         operation_attributes.op_chain[0], input.dtype(), packed_scalar1, packed_scalar2);
 
-    enumerate_core_rt_args(
-        operation_attributes, tensor_args, output, [&](const CoreRtArgs& w, const RmChunkConstants& kc) {
-            auto& r = GetRuntimeArgs(program, kReaderKernelIdx, w.core);
-            auto& wr = GetRuntimeArgs(program, kWriterKernelIdx, w.core);
-            auto& c = GetRuntimeArgs(program, kComputeKernelIdx, w.core);
-            if (w.noop) {
-                for (uint32_t i = 0; i < r.size(); ++i) {
-                    r[i] = 0;
-                }
-                for (uint32_t i = 0; i < wr.size(); ++i) {
-                    wr[i] = 0;
-                }
-                for (uint32_t i = 0; i < c.size(); ++i) {
-                    c[i] = 0;
-                }
-                return;
-            }
-            r[0] = src_addr;
-            r[1] = w.in_units;
-            r[2] = w.start_id;
-            wr[0] = dst_addr;
-            wr[1] = w.out_units;
-            wr[2] = w.start_id;
-            if (!has_sharding) {
-                const std::array<uint32_t, 5> rtail{
-                    kc.chunks_per_row, kc.input_chunk_size, kc.input_last_chunk_size, kc.rows_per_tile, kc.total_rows};
-                const std::array<uint32_t, 5> wtail{
-                    kc.chunks_per_row,
-                    kc.output_chunk_size,
-                    kc.output_last_chunk_size,
-                    kc.rows_per_tile,
-                    kc.total_rows};
-                for (uint32_t i = 0; i < rtail.size(); ++i) {
-                    r[3 + i] = rm_interleaved ? rtail[i] : 0u;
-                    wr[3 + i] = rm_interleaved ? wtail[i] : 0u;
-                }
-            }
-            c[0] = w.compute_units;
-            c[1] = packed_scalar1;
-            c[2] = packed_scalar2;
-        });
+    KernelRunArgs reader_run_args{.kernel = kReaderKernel};
+    KernelRunArgs writer_run_args{.kernel = kWriterKernel};
+    KernelRunArgs compute_run_args{.kernel = kComputeKernel};
+    build_kernel_run_args(
+        operation_attributes,
+        tensor_args,
+        output,
+        has_sharding,
+        rm_interleaved,
+        packed_scalar1,
+        packed_scalar2,
+        reader_run_args,
+        writer_run_args,
+        compute_run_args);
 
-    // The accessor's common args carry the tensor shape (ArgConfig::RuntimeTensorShape), which moves
-    // with the (unhashed) shape; rebuild just those two small vectors, not the descriptor.
-    std::vector<uint32_t> ct_args, common_args;
-    TensorAccessorArgs(*input.buffer(), tensor_accessor::ArgConfig::RuntimeTensorShape).append_to(ct_args, common_args);
-    auto& reader_common = GetCommonRuntimeArgs(program, kReaderKernelIdx);
-    for (uint32_t i = 0; i < common_args.size() && i < reader_common.size(); ++i) {
-        reader_common[i] = common_args[i];
-    }
-    ct_args.clear();
-    common_args.clear();
-    TensorAccessorArgs(*output.buffer(), tensor_accessor::ArgConfig::RuntimeTensorShape)
-        .append_to(ct_args, common_args);
-    auto& writer_common = GetCommonRuntimeArgs(program, kWriterKernelIdx);
-    for (uint32_t i = 0; i < common_args.size() && i < writer_common.size(); ++i) {
-        writer_common[i] = common_args[i];
-    }
+    ProgramRunArgs run_args;
+    run_args.kernel_run_args = {std::move(reader_run_args), std::move(writer_run_args), std::move(compute_run_args)};
+    // On this factory concept the framework refreshes nothing on the op's behalf, so both tensor
+    // bindings are rebuilt on every dispatch. That is what the legacy override did too: it wrote
+    // both buffer addresses into their arg slots and re-pointed both tensor-backed circular
+    // buffers. An omitted binding would stay frozen at the cache-miss address.
+    run_args.tensor_args = {{kSrcTensor, input.mesh_tensor()}, {kDstTensor, output.mesh_tensor()}};
 
-    // Sharded CBs are tensor-backed. CBs are matched positionally by apply_descriptor_runtime_args, so
-    // mirror create_descriptor's order (src0, optional tmp0, output); a null buffer entry is skipped.
-    if (src_sharded || dst_sharded) {
-        ProgramDescriptor cb_addr_only;
-        cb_addr_only.cbs.push_back(CBDescriptor{.buffer = src_sharded ? input.buffer() : nullptr});
-        if (CMAKE_UNIQUE_NAMESPACE::needs_tmp0_cb(operation_attributes.op_chain[0].type())) {
-            cb_addr_only.cbs.push_back(CBDescriptor{});
-        }
-        cb_addr_only.cbs.push_back(CBDescriptor{.buffer = dst_sharded ? output.buffer() : nullptr});
-        apply_descriptor_runtime_args(program, cb_addr_only);  // override-rebuild-ok: cb-addr-only
-    }
+    return run_args;
 }
 
 }  // namespace ttnn::operations::unary
