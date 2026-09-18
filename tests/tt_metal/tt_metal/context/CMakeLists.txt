@@ -13,6 +13,13 @@ target_include_directories(
         ${PROJECT_SOURCE_DIR}/tests/tt_metal/tt_metal/common
         ${CMAKE_CURRENT_SOURCE_DIR}
 )
+if(TT_UMD_BUILD_GRENDEL_JTAG)
+    target_include_directories(
+        unit_tests_context_smoke
+        PRIVATE
+            ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/internal/tt-2xx/quasar
+    )
+endif()
 target_link_libraries(
     unit_tests_context_smoke
     PRIVATE
