@@ -162,6 +162,10 @@ def test_collect_gemma_native_gqa(mesh_device, heads, mask_mode):
             compute_kernel_config=compute,
         )
 
+    if os.environ.get("TT_METAL_KERNEL_CAPTURE_ONLY") == "1":
+        capture_outputs = [forward(False), forward(True)]
+        pytest.skip("kernel recipe capture only; no correctness or timing result")
+
     traces, outputs = {}, {}
     result = {
         "case": name,
