@@ -294,17 +294,18 @@ class FullCausalAttention:
             input_batch_index=batch_index,
             gathered_dim_size=self.max_seq_len,
         )
-        blocks = [
-            ttnn.slice(
-                gathered,
-                [0, 0, block * _LOCAL_SEQUENCE, 0],
-                [1, 1, (block + 1) * _LOCAL_SEQUENCE, _HEAD_DIM],
-            )
-            for block in range(_SP * (self.max_seq_len // _GLOBAL_CHUNK))
-        ]
-        natural = ttnn.concat([blocks[index] for index in self.geometry.gather_block_order], dim=2)
-        for block in blocks:
-            block.deallocate(True)
+        if self.max_seq_len == _GLOBAL_CHUNK:
+            # With one chunk, rank order is chronological. Return an owning copy
+            # so caller deallocation cannot free the persistent gather buffer.
+            natural = ttnn.clone(gathered)
+        else:
+            # Gather stores [SP rank, chunk, 256-token stripe, head dimension].
+            # Swapping batch axes restores chronological stripes without changing tiles.
+            rank_major = ttnn.reshape(gathered, [_SP, self.max_seq_len // _GLOBAL_CHUNK, _LOCAL_SEQUENCE, _HEAD_DIM])
+            chunk_major = ttnn.transpose(rank_major, 0, 1)
+            natural = ttnn.reshape(chunk_major, [1, 1, self.max_seq_len, _HEAD_DIM])
+            # Reshapes borrow storage. Let local handles release normally: rank_major
+            # aliases the persistent gather, and natural owns chunk_major's allocation.
         if logical_n < self.max_seq_len:
             prefix = ttnn.slice(natural, [0, 0, 0, 0], [1, 1, logical_n, _HEAD_DIM])
             natural.deallocate(True)
