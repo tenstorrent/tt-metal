@@ -102,6 +102,43 @@ def test_pin_is_noop_when_mask_already_one_per_core(monkeypatch, tmp_path):
     assert calls == []
 
 
+def test_pin_caps_torch_when_mask_already_narrow(monkeypatch, tmp_path):
+    """The re-execed process already has the one-per-core mask; the pin must still cap torch to it (the
+    test conftest sizes torch from os.cpu_count(), i.e. both sibling sets), and only once."""
+    if not hasattr(os, "sched_getaffinity"):
+        return
+    monkeypatch.delenv("LTX_PIN_CORES", raising=False)
+    _reset(monkeypatch)
+    sysfs = _fake_sysfs(tmp_path, {c: f"{c % 4},{c % 4 + 4}" for c in range(8)})
+    monkeypatch.setattr(ha, "_SYSFS_CPU", sysfs)
+    monkeypatch.setattr(ha, "_thread_ids", lambda: [100])
+    monkeypatch.setattr(ha.os, "sched_getaffinity", lambda tid: {0, 1, 2, 3})
+    monkeypatch.setattr(
+        ha.os, "sched_setaffinity", lambda tid, cpus: (_ for _ in ()).throw(AssertionError("no narrowing"))
+    )
+    caps = []
+    monkeypatch.setattr(ha, "_cap_torch_threads", lambda n: caps.append(n))
+    assert ha.pin_one_thread_per_core("test") is None
+    assert ha.pin_one_thread_per_core("test") is None
+    assert caps == [4]
+
+
+def test_cap_torch_threads_narrows_only_the_pool(monkeypatch):
+    import torch
+
+    before = torch.get_num_threads()
+    try:
+        ha._cap_torch_threads(1)
+        assert torch.get_num_threads() == 1
+        ha._cap_torch_threads(64)  # never raises the pool
+        assert torch.get_num_threads() == 1
+    finally:
+        try:
+            torch.set_num_threads(before)
+        except RuntimeError:
+            pass
+
+
 # --- reexec_pinned_before_torch: pure no-op-condition tests (os.execv always mocked) ---
 
 

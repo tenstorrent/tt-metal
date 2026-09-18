@@ -16,7 +16,9 @@ Two mechanisms are provided:
    process. This is a best-effort safety net: torch/OMP thread pools and tt-metal dispatch/reader
    threads are already spawned (at import and at device open) across both sibling sets before the LTX
    pipeline __init__ runs, so ``sched_setaffinity`` after the fact cannot migrate them. In-process
-   pinning measured ~6.7-7.5 s on the galaxy ring traced replay.
+   pinning measured ~6.7-7.5 s on the galaxy ring traced replay. It is called explicitly from
+   ``LTXPipeline.__init__`` (never as an import side effect) and, in an already-narrowed process, only
+   caps torch's intra-op pool to the mask.
 
 2. :func:`reexec_pinned_before_torch` sets the affinity mask and ``os.execv`` re-execs the python
    process BEFORE torch is imported. The re-execed process inherits the pinned mask from PID start, so
@@ -171,7 +173,16 @@ def pin_one_thread_per_core(reason: str = "LTX pipeline") -> list[int] | None:
     except OSError:
         return None
     chosen = _applied if _applied is not None else set(one_thread_per_core(allowed=full) or [])
-    if not chosen or chosen == full:
+    if not chosen:
+        return None
+    if chosen == full:
+        # Already one thread per core (typically: this is the process re-execed by ``reexec_pinned_before_torch``,
+        # or a launch-time taskset). Nothing to narrow, but torch may still size its pool from the host's full
+        # CPU count -- the test conftest sets it to ``os.cpu_count()`` -- which oversubscribes the narrowed
+        # mask with exactly the sibling contention the pin removes. Cap it to the mask once.
+        if _applied is None:
+            _set_applied(chosen, full)
+            _cap_torch_threads(len(chosen))
         return None
     narrowed = 0
     for tid in _thread_ids():
@@ -214,11 +225,13 @@ def _cap_torch_threads(n: int) -> None:
     """torch sizes its intra-op pool from the CPU count it saw at import; cap it to the pinned cores."""
     try:
         import torch
-
+    except ImportError:
+        return  # torch absent: nothing to cap
+    try:
         if torch.get_num_threads() > n:
             torch.set_num_threads(n)
-    except Exception:  # torch absent or pool already fixed: nothing to do
-        return
+    except RuntimeError:
+        return  # pool already fixed: torch refuses once parallel work has started
 
 
 def _thread_ids() -> list[int]:
