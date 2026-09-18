@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <variant>
 #include "ttnn/operations/data_movement/permute/device/permute_device_operation.hpp"
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/work_split.hpp>
@@ -173,11 +174,15 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreTileIn
     if (swap_hw) {
         bool fp32_dest_acc_en = cb_data_format == tt::DataFormat::Float32 || cb_data_format == tt::DataFormat::Int32 ||
                                 cb_data_format == tt::DataFormat::UInt32;
-        ComputeGen1Config compute_cfg{.enable_32_bit_dest = fp32_dest_acc_en};
+        // Quasar (Gen2) rejects a ComputeGen1Config at program build; same fields either way.
+        ComputeHardwareConfig compute_cfg =
+            input_tensor.device()->arch() == tt::ARCH::QUASAR
+                ? ComputeHardwareConfig{ComputeGen2Config{.enable_32_bit_dest = fp32_dest_acc_en}}
+                : ComputeHardwareConfig{ComputeGen1Config{.enable_32_bit_dest = fp32_dest_acc_en}};
         // Legacy set unpack_to_dest_mode[c_0] = UnpackToDestFp32 for Float32 → UnpackMode::UnpackToDest.
         // Compute consumes SRC0 (c_0); the required-entry rule fires only for Float32.
         if (cb_data_format == tt::DataFormat::Float32) {
-            compute_cfg.unpack_modes = {{SRC0, UnpackMode::UnpackToDest}};
+            std::visit([&](auto& cfg) { cfg.unpack_modes = {{SRC0, UnpackMode::UnpackToDest}}; }, compute_cfg);
         }
         kernels.push_back(KernelSpec{
             .unique_id = COMPUTE,
@@ -189,7 +194,7 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreTileIn
                  DFBBinding{
                      .dfb_spec_name = OUT16, .accessor_name = "cb_out", .endpoint_type = DFBEndpointType::PRODUCER}},
             .runtime_arg_schema = {.runtime_arg_names = {"NHtWt"}},
-            .hw_config = ComputeHardwareConfig{std::move(compute_cfg)},
+            .hw_config = std::move(compute_cfg),
         });
     }
 
@@ -476,11 +481,15 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreTileRo
     if (swap_hw) {
         bool fp32_dest_acc_en = cb_data_format == tt::DataFormat::Float32 || cb_data_format == tt::DataFormat::Int32 ||
                                 cb_data_format == tt::DataFormat::UInt32;
-        ComputeGen1Config compute_cfg{.enable_32_bit_dest = fp32_dest_acc_en};
+        // Quasar (Gen2) rejects a ComputeGen1Config at program build; same fields either way.
+        ComputeHardwareConfig compute_cfg =
+            input_tensor.device()->arch() == tt::ARCH::QUASAR
+                ? ComputeHardwareConfig{ComputeGen2Config{.enable_32_bit_dest = fp32_dest_acc_en}}
+                : ComputeHardwareConfig{ComputeGen1Config{.enable_32_bit_dest = fp32_dest_acc_en}};
         // Legacy set unpack_to_dest_mode[c_0] = UnpackToDestFp32 for Float32 → UnpackMode::UnpackToDest.
         // Compute consumes SRC0 (c_0); the required-entry rule fires only for Float32.
         if (cb_data_format == tt::DataFormat::Float32) {
-            compute_cfg.unpack_modes = {{SRC0, UnpackMode::UnpackToDest}};
+            std::visit([&](auto& cfg) { cfg.unpack_modes = {{SRC0, UnpackMode::UnpackToDest}}; }, compute_cfg);
         }
         kernels.push_back(KernelSpec{
             .unique_id = COMPUTE,
@@ -492,7 +501,7 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreTileRo
                  DFBBinding{
                      .dfb_spec_name = OUT16, .accessor_name = "cb_out", .endpoint_type = DFBEndpointType::PRODUCER}},
             .runtime_arg_schema = {.runtime_arg_names = {"NHtWt"}},
-            .hw_config = ComputeHardwareConfig{std::move(compute_cfg)},
+            .hw_config = std::move(compute_cfg),
         });
     }
 
@@ -783,7 +792,11 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreTiledG
     // ---- Compute config (Style B: build ComputeGen1Config directly, mirroring legacy) ----
     bool fp32_dest_acc_en = cb_data_format == tt::DataFormat::Float32 || cb_data_format == tt::DataFormat::Int32 ||
                             cb_data_format == tt::DataFormat::UInt32;
-    ComputeGen1Config compute_cfg{.enable_32_bit_dest = fp32_dest_acc_en};
+    // Quasar (Gen2) rejects a ComputeGen1Config at program build; same fields either way.
+    ComputeHardwareConfig compute_cfg =
+        input_tensor.device()->arch() == tt::ARCH::QUASAR
+            ? ComputeHardwareConfig{ComputeGen2Config{.enable_32_bit_dest = fp32_dest_acc_en}}
+            : ComputeHardwareConfig{ComputeGen1Config{.enable_32_bit_dest = fp32_dest_acc_en}};
     // Metal 2.0 requires an explicit unpack_modes entry for each Float32 DFB the compute kernel consumes
     // when enable_32_bit_dest = true. Compute consumes SRC_CB (via tilize) and TILIZE_CB (self-loop).
     // Keep both the tilize input (c_0 = SRC_CB) and its output (c_1 = TILIZE_CB, which feeds the transpose)
@@ -791,7 +804,7 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreTiledG
     // low mantissa bits. UnpackToDest is the Metal 2.0 equivalent of the legacy UnpackToDestFp32.
     // (Float32-only; Int32/UInt32 deferred, #49936.)
     if (cb_data_format == tt::DataFormat::Float32) {
-        compute_cfg.unpack_modes = {{SRC_CB, UnpackMode::UnpackToDest}, {TILIZE_CB, UnpackMode::UnpackToDest}};
+        std::visit([&](auto& cfg) { cfg.unpack_modes = {{SRC_CB, UnpackMode::UnpackToDest}, {TILIZE_CB, UnpackMode::UnpackToDest}}; }, compute_cfg);
     }
 
     // ---- Conditional cb_pad (legacy c_3) bindings + gating define (needs_y_padding) ----
@@ -864,7 +877,7 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreTiledG
              DFBBinding{
                  .dfb_spec_name = OUT_CB, .accessor_name = "cb_out", .endpoint_type = DFBEndpointType::PRODUCER}},
         .runtime_arg_schema = {.runtime_arg_names = {"start_block", "end_block"}},
-        .hw_config = ComputeHardwareConfig{std::move(compute_cfg)},
+        .hw_config = std::move(compute_cfg),
     };
 
     KernelSpec writer{

@@ -806,6 +806,53 @@ Tensor convert_conv_weight_tensor_to_grouped_layout(
 }
 
 /*
+Zero-pad a conv weight's INPUT-CHANNEL dim from in_channels to in_channels_padded.
+
+The activation gather is built on in_channels_padded = round_up(in_channels,
+num_cores_channels * input_channels_alignment), but the weight layout derives its K from the
+weight tensor's own Cin. They agree only when Cin is already tile-aligned. ResNet-50's stem
+(Cin=3 -> 8) is the one conv where they do not, and it fails as
+    "The width of the first tensor must be equal to the height of the second tensor.
+     Mismatch: width=416 height=147"      416 = round_up(8*49,32), 147 = 3*49
+Zeros on the padded channels contribute nothing to the convolution, so this is exact.
+
+conv_group_weight_zero_pad_helper already does precisely this copy when num_groups == 1: it
+maps [b][j][k][m] -> [b][0+j][k][m] and leaves the remainder of the output zero. Reuse it
+rather than duplicating the buffer walk.
+*/
+Tensor convert_conv_weight_tensor_pad_in_channels(
+    const Tensor& conv_weight_tensor, uint32_t in_channels_padded, DataType output_dtype) {
+    const auto& original_shape = conv_weight_tensor.logical_shape();
+    TT_FATAL(
+        in_channels_padded >= original_shape[1],
+        "in_channels_padded ({}) must be >= the weight's in_channels ({})",
+        in_channels_padded,
+        original_shape[1]);
+    ttnn::Shape output_shape{original_shape[0], in_channels_padded, original_shape[2], original_shape[3]};
+
+    const static std::
+        unordered_map<DataType, std::function<Tensor(const Tensor&, ttnn::Shape, ttnn::Shape, uint32_t, DataType)>>
+            pad_map = {
+                {DataType::INT32, &conv_group_weight_zero_pad_helper<int32_t>},
+                {DataType::FLOAT32, &conv_group_weight_zero_pad_helper<float>},
+                {DataType::BFLOAT16, &conv_group_weight_zero_pad_helper<bfloat16>},
+                {DataType::UINT16, &conv_group_weight_zero_pad_helper<uint16_t>},
+                {DataType::BFLOAT8_B, &conv_group_weight_zero_pad_helper<float>},
+                {DataType::UINT32, &conv_group_weight_zero_pad_helper<uint32_t>},
+                {DataType::BFLOAT4_B, &conv_group_weight_zero_pad_helper<uint32_t>},
+            };
+
+    return convert_tensor_to_tiled_layout_common(
+        ttnn::is_device_tensor(conv_weight_tensor) ? ttnn::operations::core::from_device(conv_weight_tensor)
+                                                   : conv_weight_tensor,
+        output_dtype,
+        pad_map,
+        original_shape,
+        output_shape,
+        /*num_groups=*/1u);
+}
+
+/*
 Helper function to aid in converting grouped weight tensor for conv_transpose2d
 This is different from conv_group_weight_zero_pad_helper because conv_transpose2d weights have shape:
 [in_channels, out_channels/groups, H, W] and we need to expand dimension 1 to out_channels
@@ -1593,6 +1640,21 @@ static ttnn::Tensor prepare_conv_weights_internal(
     if (params.enable_kernel_stride_folding) {
         weight_tensor_ = to_folded_weight_layout(weight_tensor_, params.stride);
     }
+    // Match the activation's channel padding before any layout conversion reads Cin off the
+    // weight; see convert_conv_weight_tensor_pad_in_channels for why. No-op whenever Cin is
+    // already aligned, which is every ResNet-50 conv except the stem.
+    if (params.input_parallel_config.has_value() && params.groups == 1) {
+        const uint32_t cin_now = weight_tensor_.logical_shape()[1];
+        const uint32_t cin_padded = tt::round_up(
+            cin_now,
+            get_num_cores_channels_from_parallel_config(params.input_parallel_config.value()) *
+                params.input_channels_alignment);
+        if (cin_padded > cin_now) {
+            log_debug(tt::LogOp, "Padding conv weight in_channels {} -> {}", cin_now, cin_padded);
+            weight_tensor_ =
+                convert_conv_weight_tensor_pad_in_channels(weight_tensor_, cin_padded, weight_tensor_.dtype());
+        }
+    }
     const auto& weights_shape = weight_tensor_.logical_shape();
     uint32_t out_channels = weights_shape[0];
     uint32_t in_channels = weights_shape[1];
@@ -1657,6 +1719,15 @@ static ttnn::Tensor prepare_conv_weights_internal(
     }
 
     uint32_t weight_matrix_height = in_channels * window_h * window_w;
+    // Quasar's activation gather uses round_up(in_channels_padded * kh * kw, TILE_HEIGHT) as its
+    // K, so the matmul compares that against the weight's LOGICAL K. Leaving the logical K as the
+    // unrounded product mismatches whenever the product is not tile-aligned -- which for
+    // ResNet-50 is the stem alone (Cin=3 -> padded 8, 8*49 = 392 vs the activation's 416). Every
+    // other conv has a tile-aligned product, so this is a no-op for them. The converted tensor is
+    // already this tall; only the logical view was short.
+    if (device != nullptr && device->arch() == tt::ARCH::QUASAR) {
+        weight_matrix_height = tt::round_up(weight_matrix_height, constants::TILE_HEIGHT);
+    }
     TT_FATAL(weight_tensor_.logical_shape()[2] >= weight_matrix_height, " Matrix Height Padding can't be negative");
     ttnn::Shape target_shape({1, 1, weight_matrix_height, out_channels});
     ttnn::Shape padded_target_shape({1, 1, weight_tensor_.logical_shape()[2], out_channels + out_channel_padding});
