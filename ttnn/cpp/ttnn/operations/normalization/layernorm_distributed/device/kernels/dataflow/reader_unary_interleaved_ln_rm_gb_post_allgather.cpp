@@ -63,6 +63,7 @@ void kernel_main() {
     // E(x^2) in the left most columns per tile.
     const auto stats_tile_offset = get_arg(args::stats_tile_offset);
     const auto y_offset = get_arg(args::y_offset);
+    const auto row_stride = get_arg(args::row_stride);
 
     constexpr auto blk = get_arg(args::blk);
     constexpr auto stats_tiles_cols = get_arg(args::stats_tiles_cols);
@@ -200,5 +201,7 @@ void kernel_main() {
 #endif
 #endif
         }
+        // Stride to the start of the next local row: skip the columns owned by other cores.
+        inp_tile_idx += row_stride;
     }  // ncht loop
 }

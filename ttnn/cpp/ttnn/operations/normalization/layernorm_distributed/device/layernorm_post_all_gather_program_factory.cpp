@@ -383,7 +383,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherProgramFactory::c
              {"dfb_length", cb_length},
              {"Wt", tiles_per_core_y},
              {"reduce_factor", reduce_factor}},
-        .runtime_arg_schema = {.runtime_arg_names = {"NCHt", "tile_offset", "stats_tile_offset", "eps", "y_offset"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"NCHt", "tile_offset", "stats_tile_offset", "eps", "y_offset", "row_stride"}},
         .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
     };
     if (gamma.has_value()) {
@@ -406,7 +406,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherProgramFactory::c
             .dfb_spec_name = POST_OUT, .accessor_name = "out", .endpoint_type = m2::DFBEndpointType::CONSUMER}},
         .tensor_bindings = {m2::TensorBinding{.tensor_parameter_name = POST_OUTPUT_T, .accessor_name = "dst"}},
         .compile_time_args = {{"blk", block_size}},
-        .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "tile_offset"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "tile_offset", "row_stride", "row_width"}},
         .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
     };
 
@@ -534,8 +534,9 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherProgramFactory::c
             for (uint32_t y = 0; y < cores_y; ++y) {
                 CoreCoord core = {x, y};
 
-                uint32_t tile_offset = (x * Wt) + (y * tiles_per_core_y);
-                uint32_t stats_offset = x * stats_tiles_cols;
+                uint32_t tile_offset = (x * tiles_per_core_x * Wt) + (y * tiles_per_core_y);
+                uint32_t stats_offset = x * tiles_per_core_x * stats_tiles_cols;
+                const uint32_t row_stride = Wt - tiles_per_core_y;
 
                 log_debug(
                     tt::LogOp,
@@ -550,12 +551,16 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherProgramFactory::c
                      {"tile_offset", tile_offset},
                      {"stats_tile_offset", stats_offset},
                      {"eps", eps_u},
-                     {"y_offset", y * tiles_per_core_y}});
+                     {"y_offset", y * tiles_per_core_y},
+                     {"row_stride", row_stride}});
                 m2::AddRuntimeArgsForNode(compute_run.runtime_arg_values, core, {{"NCHt", tiles_per_core_x}});
                 m2::AddRuntimeArgsForNode(
                     writer_run.runtime_arg_values,
                     core,
-                    {{"num_tiles", tiles_per_core_x * tiles_per_core_y}, {"tile_offset", tile_offset}});
+                    {{"num_tiles", tiles_per_core_x * tiles_per_core_y},
+                     {"tile_offset", tile_offset},
+                     {"row_stride", row_stride},
+                     {"row_width", tiles_per_core_y}});
             }
         }
     } else {
@@ -583,12 +588,16 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherProgramFactory::c
                  {"tile_offset", tile_offset},
                  {"stats_tile_offset", stats_offset},
                  {"eps", eps_u},
-                 {"y_offset", y_offset}});
+                 {"y_offset", y_offset},
+                 {"row_stride", 0}});
             m2::AddRuntimeArgsForNode(compute_run.runtime_arg_values, core, {{"NCHt", num_tile_rows_per_core}});
             m2::AddRuntimeArgsForNode(
                 writer_run.runtime_arg_values,
                 core,
-                {{"num_tiles", num_tile_rows_per_core * Wt}, {"tile_offset", tile_offset}});
+                {{"num_tiles", num_tile_rows_per_core * Wt},
+                 {"tile_offset", tile_offset},
+                 {"row_stride", 0},
+                 {"row_width", Wt}});
             curr_row += num_tile_rows_per_core;
         }
     }

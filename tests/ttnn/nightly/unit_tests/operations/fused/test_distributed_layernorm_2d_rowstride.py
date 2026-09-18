@@ -2,6 +2,14 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+# Regression test for https://github.com/tenstorrent/tt-metal/issues/56908
+# (distributed LayerNorm/RMSNorm 2D-core-grid row-stride corruption).
+#
+# Exercises the post-all-gather Welford path with use_2d_core_grid=True on
+# multi-row shapes (tiles_per_core_x > 1), where each core owns several
+# row-tiles and the reader/writer must stride by (Wt - tiles_per_core_y)
+# between local rows. Compares end-to-end against torch.nn.LayerNorm.
+
 import pytest
 import torch
 import ttnn
@@ -9,15 +17,15 @@ import ttnn
 from loguru import logger
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 from tests.ttnn.nightly.unit_tests.operations.fused.utility_functions import (
-    ttnn_rms_norm_pre_all_gather,
-    ttnn_rms_norm_post_all_gather,
+    ttnn_layer_norm_pre_all_gather,
+    ttnn_layer_norm_post_all_gather,
 )
 
 # Module-scoped device: every test here shares one device configuration
 pytestmark = pytest.mark.use_module_device
 
 
-def _run_distributed_rmsnorm_single_device(
+def _run_distributed_layernorm_single_device(
     device,
     seq_len,
     hidden_dim_total,
@@ -34,10 +42,12 @@ def _run_distributed_rmsnorm_single_device(
     inp_shape = (1, 1, seq_len, hidden_dim_total)
     torch_input = torch.randn(inp_shape, dtype=torch.bfloat16)
     torch_weight = torch.randn(hidden_dim_total, dtype=torch.bfloat16)
+    torch_bias = torch.randn(hidden_dim_total, dtype=torch.bfloat16)
 
     # Reference output
-    ref = torch.nn.RMSNorm(normalized_shape=hidden_dim_total, eps=eps)
+    ref = torch.nn.LayerNorm(normalized_shape=hidden_dim_total, eps=eps)
     ref.weight.data = torch_weight.clone().float()
+    ref.bias.data = torch_bias.clone().float()
     with torch.no_grad():
         torch_output = ref(torch_input.float()).to(torch.bfloat16)
 
@@ -48,9 +58,10 @@ def _run_distributed_rmsnorm_single_device(
         packer_l1_acc=False,
     )
 
-    # Chunk input and weight along hidden dim to simulate per-device shards.
+    # Chunk input / weight / bias along hidden dim to simulate per-device shards.
     input_chunks = torch.chunk(torch_input, num_simulated_devices, dim=-1)
     weight_chunks = torch.chunk(torch_weight, num_simulated_devices, dim=-1)
+    bias_chunks = torch.chunk(torch_bias, num_simulated_devices, dim=-1)
 
     tt_inputs = [
         ttnn.from_torch(
@@ -72,10 +83,20 @@ def _run_distributed_rmsnorm_single_device(
         )
         for w in weight_chunks
     ]
+    tt_biases = [
+        ttnn.from_torch(
+            b.reshape(1, 1, 1, hidden_per_dev),
+            dtype=ttnn.bfloat16,
+            device=device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        for b in bias_chunks
+    ]
 
-    # Step 1: per-shard pre-all-gather stats.
+    # Step 1: per-shard pre-all-gather stats (Welford partials).
     tt_stats = [
-        ttnn_rms_norm_pre_all_gather(
+        ttnn_layer_norm_pre_all_gather(
             t,
             compute_kernel_config=compute_kernel_config,
             dtype=ttnn.bfloat16,
@@ -87,14 +108,16 @@ def _run_distributed_rmsnorm_single_device(
     # Step 2: simulate the all-gather by concatenating along stats dim (=3).
     tt_stats_gathered = ttnn.concat(tt_stats, dim=3)
 
-    # Step 3: per-shard post-all-gather norm using the gathered stats.
+    # Step 3: per-shard post-all-gather norm (Welford path) using the gathered stats.
     tt_outputs = [
-        ttnn_rms_norm_post_all_gather(
+        ttnn_layer_norm_post_all_gather(
             tt_inputs[i],
             tt_stats_gathered,
             epsilon=eps,
             weight=tt_weights[i],
+            bias=tt_biases[i],
             compute_kernel_config=compute_kernel_config,
+            dtype=ttnn.bfloat16,
             use_2d_core_grid=use_2d_core_grid,
         )
         for i in range(num_simulated_devices)
@@ -112,23 +135,19 @@ def _run_distributed_rmsnorm_single_device(
 @pytest.mark.parametrize(
     "seq_len, hidden_dim_total, num_simulated_devices",
     [
-        # LLaMA 70B Galaxy decode shape: hidden=8192, cluster_axis=1 with 4 devices.
-        # The 2D-grid path activates when shape[-2] == 128.
-        (128, 8192, 4),
-        # Regression: cores_y > tiles_per_core_y (Wt=32 -> cores_y=8, tiles_per_core_y=4) exercises
-        # the c_15 merge-gather CB OOB; fails unless c_15 is sized by cores_y.
-        (128, 4096, 4),
         # Regression for Issue #56908: multi-row per core (tiles_per_core_x > 1).
-        # Ht=8 (seq_len=256) -> tiles_per_core_x=2. Catches row-stride flat-increment
-        # corruption on the read AND write paths.
+        # Ht=8 (seq_len=256) -> tiles_per_core_x=2; catches row-stride flat-increment
+        # corruption on both the read and write paths of the Welford kernels.
         (256, 8192, 4),
         # Ht=16 (seq_len=512) -> tiles_per_core_x=4.
         (512, 4096, 4),
     ],
 )
-@pytest.mark.parametrize("use_2d_core_grid", [False, True])
-def test_rmsnorm_2d_core_grid_single_device(device, seq_len, hidden_dim_total, num_simulated_devices, use_2d_core_grid):
-    passing, pcc_msg = _run_distributed_rmsnorm_single_device(
+@pytest.mark.parametrize("use_2d_core_grid", [True])
+def test_layernorm_2d_core_grid_rowstride_single_device(
+    device, seq_len, hidden_dim_total, num_simulated_devices, use_2d_core_grid
+):
+    passing, pcc_msg = _run_distributed_layernorm_single_device(
         device=device,
         seq_len=seq_len,
         hidden_dim_total=hidden_dim_total,

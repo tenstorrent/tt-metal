@@ -109,8 +109,8 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherWelfordProgramFac
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config);
 
-    uint32_t block_size =
-        fp32_dest_acc_en ? tt::tt_metal::find_max_divisor(Wt, 4) : tt::tt_metal::find_max_divisor(Wt, 8);
+    // Block size is derived from the per-core row width once the 2D grid is known (see below).
+    uint32_t block_size = 0;
 
     tt::DataFormat in_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     tt::DataFormat stats_data_format = tt::tt_metal::datatype_to_dataformat_converter(stats.dtype());
@@ -140,7 +140,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherWelfordProgramFac
     log_debug(tt::LogOp, "math_approx_mode: {}", math_approx_mode);
     log_debug(tt::LogOp, "fp32_dest_acc_en: {}", fp32_dest_acc_en);
 
-    uint32_t cb_length = Wt;
+    uint32_t cb_length = tiles_per_core_y;
 
     const uint32_t available_L1 =
         device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
@@ -162,7 +162,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherWelfordProgramFac
     const uint32_t out0_tiles = cb_length;
 
     TT_FATAL(
-        W <= tile_width * in0_tiles,
+        (use_2d_kernel ? tiles_per_core_y * tile_width : W) <= tile_width * in0_tiles,
         "W ({}) exceeds the maximum supported size of tile buffer ({} * {}, kernel limitation right now)",
         W,
         tile_width,
@@ -273,6 +273,10 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherWelfordProgramFac
         log_debug(tt::LogOp, "core_group_2: {}", core_group_2.str());
         log_debug(tt::LogOp, "num_tile_rows_per_core_group_2: {}", num_tile_rows_per_core_group_2);
     }
+
+    // Block size follows the per-core row width. In 1D tiles_per_core_y == Wt, matching the old behavior.
+    block_size = fp32_dest_acc_en ? tt::tt_metal::find_max_divisor(tiles_per_core_y, 4)
+                                  : tt::tt_metal::find_max_divisor(tiles_per_core_y, 8);
 
     uint32_t gamma_stick_size = 0;
     uint32_t gamma_is_row_major = 0;
@@ -386,9 +390,9 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherWelfordProgramFac
              {"gamma_is_row_major", gamma_is_row_major},
              {"beta_is_row_major", beta_is_row_major},
              {"dfb_length", cb_length},
-             {"Wt", Wt},
+             {"Wt", tiles_per_core_y},
              {"reduce_factor", reduce_factor}},
-        .runtime_arg_schema = {.runtime_arg_names = {"NCHt", "tile_offset", "stats_tile_offset", "eps", "y_offset"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"NCHt", "tile_offset", "stats_tile_offset", "eps", "y_offset", "row_stride"}},
         .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
     };
     // The shared reader always fills a reduce-scalar tile, but the Welford compute kernel derives
@@ -415,7 +419,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherWelfordProgramFac
             .dfb_spec_name = POSTWF_OUT, .accessor_name = "out", .endpoint_type = m2::DFBEndpointType::CONSUMER}},
         .tensor_bindings = {m2::TensorBinding{.tensor_parameter_name = POSTWF_OUTPUT_T, .accessor_name = "dst"}},
         .compile_time_args = {{"blk", block_size}},
-        .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "tile_offset"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "tile_offset", "row_stride", "row_width"}},
         .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
     };
 
@@ -552,8 +556,9 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherWelfordProgramFac
             for (uint32_t y = 0; y < cores_y; ++y) {
                 CoreCoord core = {x, y};
 
-                uint32_t tile_offset = (x * Wt) + (y * tiles_per_core_y);
-                uint32_t stats_offset = x * stats_tiles_cols;
+                uint32_t tile_offset = (x * tiles_per_core_x * Wt) + (y * tiles_per_core_y);
+                uint32_t stats_offset = x * tiles_per_core_x * stats_tiles_cols;
+                const uint32_t row_stride = Wt - tiles_per_core_y;
 
                 log_debug(
                     tt::LogOp,
@@ -568,12 +573,16 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherWelfordProgramFac
                      {"tile_offset", tile_offset},
                      {"stats_tile_offset", stats_offset},
                      {"eps", eps},
-                     {"y_offset", y * tiles_per_core_y}});
+                     {"y_offset", y * tiles_per_core_y},
+                     {"row_stride", row_stride}});
                 m2::AddRuntimeArgsForNode(compute_run.runtime_arg_values, core, {{"NCHt", tiles_per_core_x}});
                 m2::AddRuntimeArgsForNode(
                     writer_run.runtime_arg_values,
                     core,
-                    {{"num_tiles", tiles_per_core_x * tiles_per_core_y}, {"tile_offset", tile_offset}});
+                    {{"num_tiles", tiles_per_core_x * tiles_per_core_y},
+                     {"tile_offset", tile_offset},
+                     {"row_stride", row_stride},
+                     {"row_width", tiles_per_core_y}});
             }
         }
     } else {
@@ -601,12 +610,16 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherWelfordProgramFac
                  {"tile_offset", tile_offset},
                  {"stats_tile_offset", stats_offset},
                  {"eps", eps},
-                 {"y_offset", y_offset}});
+                 {"y_offset", y_offset},
+                 {"row_stride", 0}});
             m2::AddRuntimeArgsForNode(compute_run.runtime_arg_values, core, {{"NCHt", num_tile_rows_per_core}});
             m2::AddRuntimeArgsForNode(
                 writer_run.runtime_arg_values,
                 core,
-                {{"num_tiles", num_tile_rows_per_core * Wt}, {"tile_offset", tile_offset}});
+                {{"num_tiles", num_tile_rows_per_core * Wt},
+                 {"tile_offset", tile_offset},
+                 {"row_stride", 0},
+                 {"row_width", Wt}});
             curr_row += num_tile_rows_per_core;
         }
     }
