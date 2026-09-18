@@ -178,8 +178,11 @@ def _pad_overrun_summary(seq_len_cache, overruns):
     )
 
 
-# Per-chunk per-layer threshold; error accumulates with depth, so this matches the single-shot
-# transformer's device-gate trace bar (TRACE_PCC_THRESHOLD_DEVICE_BF16 = 0.88). Calibrate + tighten.
+# Per-chunk per-layer threshold; error accumulates with depth. Kept at 0.88 after the DEVICE ->
+# DEVICE_FP32 rename because the gate is only one of several drift sources and FP32 does not
+# meaningfully improve the depth-dominated tail: on DEVICE_FP32 the measured min per-layer PCC at
+# L61 is 0.888930 (deepseek_v3, torus-xy-8x4, chunks11, layer 60), so 0.88 stays the tightest safe
+# floor across all L61 variants (Kimi/GLM/Mistral share this constant).
 LAYER_PCC_THRESHOLD = 0.88
 # Floors for the deep KV / indexer-K cache PCC. Set at the observed L78 minimum (not below it) so a
 # future regression fails the test. KVPE nope bottoms ~0.86 (glm_5_2 @L75); indexer-K nope 0.952
@@ -218,7 +221,7 @@ KIMI_UNTRACED_BASELINE_CHUNK_TIMES_S = {
     # test_kimi_prefill_transformer_chunked_perf[...-L61-preload0-chunks_eleven-ten_iters-notrace]
     # 55k / code_debug: per-chunk medians over nine post-warmup iterations on a Galaxy with
     # TT_METAL_SHM_TRACKING_DISABLED=1 and LOGURU_LEVEL=ERROR. Tolerance is 5%.
-    (61, 11, 10): [0.710, 0.708, 0.710, 0.709, 0.711, 0.717, 0.711, 0.713, 0.725, 0.763, 0.797],
+    (61, 11, 10): [0.62842, 0.61427, 0.61065, 0.60118, 0.60427, 0.60544, 0.60353, 0.61104, 0.65888, 0.69774, 0.73711],
 }
 
 # Per-mode +/- tolerance band around each baseline chunk median (fraction). Traced replays a captured
@@ -662,7 +665,6 @@ def run_chunked_transformer_padded(
         is_balanced=False,
         gate_fallback_mode=gate_fallback_mode,
         weight_cache_path=effective_cache_path,
-        lm_head_is_column_parallel=True,
         is_chunked=True,
         slot_num=1,
         routing_use_l1_small_for_semaphores=routing_use_l1_small_for_semaphores,
@@ -708,9 +710,9 @@ def run_chunked_transformer_padded(
         )
 
         # forward (not a separate forward_chunk) drives the chunked path via actual_start/actual_end;
-        # it uses self.indexed_rope, runs the norm/lm_head/sample tail (token ignored), and with
-        # return_intermediates snapshots each layer to host as intermediates["layer_i"].
-        _, _, layer_outputs = transformer.forward(
+        # it uses self.indexed_rope, and with return_intermediates snapshots each layer to host as
+        # intermediates["layer_i"] (the last rank returns that dict; there is no norm/LM-head tail).
+        layer_outputs = transformer.forward(
             tt_tokens,
             tt_kvpe_cache,
             actual_isl=isl,
@@ -863,7 +865,6 @@ def run_chunked_transformer(
         is_balanced=False,
         gate_fallback_mode=gate_fallback_mode,
         weight_cache_path=effective_cache_path,
-        lm_head_is_column_parallel=True,
         is_chunked=True,
         slot_num=1,
         tp_shard_kv=tp_shard_kv,
@@ -979,7 +980,7 @@ def run_chunked_transformer(
         # forward (not a separate forward_chunk): full chunk, all positions real, so actual_end is
         # kv_actual + CHUNK. With return_intermediates it snapshots each layer to host as
         # intermediates["layer_i"]; forward uses self.indexed_rope.
-        _, _, layer_outputs = transformer.forward(
+        layer_outputs = transformer.forward(
             tt_tokens,
             tt_kvpe_cache,
             actual_isl=CHUNK,
@@ -1084,7 +1085,7 @@ def test_ds_prefill_transformer_chunked(
         weight_cache_path,
         num_layers,
         n_chunks,
-        GateComputeMode.DEVICE,
+        GateComputeMode.DEVICE_FP32,
         num_links,
         topology,
     )
@@ -1126,7 +1127,7 @@ def test_ds_prefill_transformer_chunked_padded(
         weight_cache_path,
         num_layers,
         splits,
-        GateComputeMode.DEVICE,
+        GateComputeMode.DEVICE_FP32,
         num_links,
         topology,
     )
@@ -1702,19 +1703,83 @@ def run_chunked_transformer_updated(
         is_balanced=False,
         gate_fallback_mode=gate_fallback_mode,
         weight_cache_path=effective_cache_path,
-        lm_head_is_column_parallel=True,
         is_chunked=True,
         slot_num=1,
         tp_shard_kv=tp_shard_kv,
-        # Strip the tail (LM head + final norm + sampling): the populated KV cache is this runner's
-        # output, so the tail is dead work that would otherwise land inside the measured per-chunk
-        # time. It is also what makes the forward DEVICE-ONLY and therefore capturable — the LM head
-        # does an all-gather + a host read, and a read inside begin_capture() is a hard TT_FATAL
-        # ("Reads are not supported during trace capture"). Set for BOTH modes, not just use_trace,
-        # so traced and untraced timings measure the same work and stay comparable.
+        # Run the last layer kv-only: the populated KV cache is this runner's output, so the last layer's
+        # Q/SDPA/output projection and FFN/MoE are dead work that would otherwise land inside the
+        # measured per-chunk time. Set for BOTH modes, not just use_trace, so traced and untraced
+        # timings measure the same work and stay comparable. (The forward is device-only regardless:
+        # there is no norm / LM-head tail with a host read anymore.)
         kv_only_last_layer=True,
         routing_use_l1_small_for_semaphores=routing_use_l1_small_for_semaphores,
     )
+
+    # Production overlap qualification asks this full-model harness to prove that the requested profile
+    # reached every eligible indexer layer. This is opt-in so ordinary model/perf sweeps keep their existing
+    # behavior, while the checked qualification driver cannot report a win from two accidentally identical
+    # serial runs (or from only a subset of the GLM-5.2 full-indexer layers).
+    expected_overlap_profile = os.environ.get("TT_PREFILL_EXPECT_SPARSE_MLA_OVERLAP_PROFILE")
+    profile_call_counts = None
+    if expected_overlap_profile is not None:
+        expected_overlap_profile = expected_overlap_profile.lower()
+        worker_grid = mesh_device.compute_with_storage_grid_size()
+        eligible_layers = [
+            layer.mla.layer_idx
+            for layer in transformer.layers
+            if layer.mla._has_indexer and not layer.mla.kv_only and not layer.mla._indexer_reuse
+        ]
+        active = [
+            (layer.mla.layer_idx, layer.mla._sparse_mla_overlap)
+            for layer in transformer.layers
+            if layer.mla._sparse_mla_overlap is not None
+        ]
+        if expected_overlap_profile in ("", "0", "off", "none"):
+            assert not active, f"expected serialized sparse MLA, but overlap is active on {[idx for idx, _ in active]}"
+            observed_profile = "off"
+            observed_topk_cores = worker_grid.x * worker_grid.y
+            observed_gather_cores = 0
+        else:
+            active_layers = [idx for idx, _ in active]
+            assert active_layers == eligible_layers, (
+                f"profile {expected_overlap_profile!r}: expected overlap on eligible layers {eligible_layers}, "
+                f"got {active_layers}"
+            )
+            assert active, f"profile {expected_overlap_profile!r} did not create overlap resources"
+            profiles = {resources.profile for _, resources in active}
+            topk_cores = {resources.topk_core_grid.num_cores() for _, resources in active}
+            gather_cores = {resources.gather_core_grid.num_cores() for _, resources in active}
+            assert profiles == {expected_overlap_profile}, profiles
+            assert topk_cores == {80}, topk_cores
+            assert gather_cores == {40}, gather_cores
+            observed_profile = next(iter(profiles))
+            observed_topk_cores = next(iter(topk_cores))
+            observed_gather_cores = next(iter(gather_cores))
+        logger.info(
+            f"SPARSE_MLA_PROFILE_ASSERT variant={variant.name} expected={observed_profile} "
+            f"active_layer_count={len(active)} "
+            f"eligible_layer_count={len(eligible_layers)} worker_grid={worker_grid.x}x{worker_grid.y} "
+            f"mesh={sp}x{tp} topk_cores={observed_topk_cores} gather_cores={observed_gather_cores}"
+        )
+
+        # Count the actually dispatched serial/overlap branches per eligible layer. Construction-time
+        # resource checks alone would miss a future runtime fallback after model initialization.
+        profile_call_counts = {layer_idx: {"serial": 0, "overlap": 0} for layer_idx in eligible_layers}
+
+        def counted_call(method, layer_idx, path):
+            def wrapped(*args, **kwargs):
+                profile_call_counts[layer_idx][path] += 1
+                return method(*args, **kwargs)
+
+            return wrapped
+
+        for layer in transformer.layers:
+            if layer.mla.layer_idx not in profile_call_counts:
+                continue
+            layer.mla._indexer.forward = counted_call(layer.mla._indexer.forward, layer.mla.layer_idx, "serial")
+            layer.mla._sparse_chunked_attn_overlapped = counted_call(
+                layer.mla._sparse_chunked_attn_overlapped, layer.mla.layer_idx, "overlap"
+            )
     ttnn.synchronize_device(mesh_device)
     gc.collect()
     profiler.end("tt_transformer_creation")
@@ -1847,8 +1912,8 @@ def run_chunked_transformer_updated(
     # use_trace: capture the chunk forward ONCE, then replay it per chunk. The per-chunk scalars
     # (slot_id / actual_start / actual_end) cannot be host arguments on a captured program, so they move
     # into 1-element uint32 DRAM tensors the metadata ops read on-device; the token input moves into a
-    # persistent buffer refreshed in place. kv_only_last_layer=True (set on the transformer above) is what makes the forward
-    # device-only and therefore capturable at all.
+    # persistent buffer refreshed in place. With return_intermediates=False the forward is device-only
+    # (no host readback), so it is capturable.
     trace_controller = None
     trace_input = None
     trace_metadata = None
@@ -1963,10 +2028,11 @@ def run_chunked_transformer_updated(
             # return_intermediates only when the caller asked for per-layer PCC: it clones every layer to
             # host, which both costs time (so the timing table stops being a perf number) and is illegal
             # under capture. Otherwise nothing is cloned. Chunked prefill is full-chunk (all positions
-            # real) so actual_end is kv_actual + CHUNK; forward uses self.indexed_rope. The small
-            # (first_token) return is discarded.
+            # real) so actual_end is kv_actual + CHUNK; forward uses self.indexed_rope. The return is the
+            # intermediates dict, or None when none were requested -- no first_token: the transformer has
+            # no norm / LM-head / sampling tail.
             reset_fused_ring_host_timing()
-            fwd_out = transformer.forward(
+            layer_outputs = transformer.forward(
                 tt_tokens,
                 tt_kvpe_cache,
                 actual_isl=CHUNK,
@@ -1980,7 +2046,6 @@ def run_chunked_transformer_updated(
             if check_layer_pcc:
                 # min over every chunk (and iteration, though accuracy callers pass num_iters=1 since
                 # each iteration replays the same chunks into the same cache region).
-                layer_outputs = fwd_out[2]
                 local_pos = chunk_local_pos[c]
                 for i in range(num_layers):
                     # kv_only_last_layer=True strips the LAST layer's output path (it writes KV and
@@ -2018,6 +2083,24 @@ def run_chunked_transformer_updated(
         if it == 0:
             reset_block_timings()
     profiler.end("tt_forward")
+
+    if profile_call_counts is not None:
+        expected_calls_per_layer = n_chunks * num_iters
+        serial_counts = [counts["serial"] for counts in profile_call_counts.values()]
+        overlap_counts = [counts["overlap"] for counts in profile_call_counts.values()]
+        if expected_overlap_profile in ("", "0", "off", "none"):
+            assert serial_counts and set(serial_counts) == {expected_calls_per_layer}, serial_counts
+            assert set(overlap_counts) == {0}, overlap_counts
+            observed_profile = "off"
+        else:
+            assert set(serial_counts) == {0}, serial_counts
+            assert overlap_counts and set(overlap_counts) == {expected_calls_per_layer}, overlap_counts
+            observed_profile = expected_overlap_profile
+        logger.info(
+            f"SPARSE_MLA_EXECUTION_ASSERT expected={observed_profile} "
+            f"eligible_layer_count={len(profile_call_counts)} calls_per_layer={expected_calls_per_layer} "
+            f"serial_calls={sum(serial_counts)} overlap_calls={sum(overlap_counts)}"
+        )
 
     profiler.end("total_test_time")
     logger.success(
@@ -2716,10 +2799,10 @@ def run_chunked_transformer_padded_trace(
         is_balanced=False,
         gate_fallback_mode=gate_fallback_mode,
         weight_cache_path=effective_cache_path,
-        lm_head_is_column_parallel=True,
         is_chunked=True,
         slot_num=1,
-        # kv_only_last_layer -> device-only forward (no host readback) so ttnn trace can capture it.
+        # kv_only_last_layer: the last layer only fills its KV cache (dead work trimmed; the KV cache is
+        # the output). The forward is device-only either way, so ttnn trace can capture it.
         kv_only_last_layer=True,
         overlap_shared_expert_with_dispatch=True,
         routing_use_l1_small_for_semaphores=routing_use_l1_small_for_semaphores,
@@ -2775,8 +2858,8 @@ def run_chunked_transformer_padded_trace(
         # Layers 0..num_layers-2 only: the transformer is built kv_only_last_layer=True, so the LAST
         # layer is kv_only (attn_norm + the KV branch) and never produces a hidden state — the loop
         # returns before snapshotting it (tt_prefill_transformer: `if self.kv_only_last_layer and
-        # i == len(self.layers)-1: return None, None, intermediates`). Its correctness is covered by
-        # the KV PCC below. The norm / LM head / logits tail is likewise not built in this config.
+        # i == len(self.layers)-1: return intermediates`). Its correctness is covered by the KV PCC
+        # below.
         emb_dim = config.hidden_size
         n_decoder_layers = num_layers - 1
         layer_min_pcc = {i: 1.0 for i in range(n_decoder_layers)}
@@ -2800,7 +2883,7 @@ def run_chunked_transformer_padded_trace(
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 mesh_mapper=sp_mapper,
             )
-            _, _, layer_outputs = transformer.forward(
+            layer_outputs = transformer.forward(
                 tt_tokens,
                 cache,
                 actual_isl=isl,

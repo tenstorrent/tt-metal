@@ -50,7 +50,9 @@ If a data provider script fails, all scripts that depend on it will also fail.
 
 A state checker script can only check state (see `check_noc_locations` for an example), or it can perform checks and return data as well (see `check_arc` for an example).
 
-To log a check failure but continue execution, use the `log_check` method. It will log failures after the script has finished executing.
+To log a check failure but continue execution, use the `log_check` method. It will log failures after the script has finished executing. `log_warning` does the same for something worth noting that is not a failure.
+
+Both come in variants that take the context the check ran against - `log_check_device` / `log_check_location` / `log_check_risc` and the matching `log_warning_*`. Pass the context as those arguments rather than formatting it into the message.
 
 If a check is critical (such as a missing ELF file), the script should raise a `TTTriageError` exception. Critical error means that script cannot advance without that check and that all dependent scripts shouldn't be executed.
 

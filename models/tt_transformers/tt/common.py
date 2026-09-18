@@ -12,7 +12,7 @@ from typing import List, Optional, Union
 import torch
 from loguru import logger
 from PIL import Image as PIL_Image
-from pydantic import AliasChoices, BaseModel, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 import ttnn
 from models.common.tensor_utils import get_rot_transformation_mat as get_rot_transformation_mat_v2
@@ -28,8 +28,7 @@ class URL(BaseModel):
 class ImageMedia(BaseModel):
     image: Union[PIL_Image.Image, URL]
 
-    class Config:
-        arbitrary_types_allowed = True
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
 
 class Role(Enum):
