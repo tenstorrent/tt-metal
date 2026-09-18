@@ -38,12 +38,11 @@ void bind_experimental_offset_cumsum_operation(nb::module_& mod) {
             Args:
                 * :attr:`input_tensor`: 1D UINT32 tensor of expert counts [n_routed_experts].
                 * :attr:`cluster_axis`: Axis along which to all_gather across devices.
-                * :attr:`num_links`: Number of links for all_gather.
+                * :attr:`num_links`: Retained for compatibility; the internal all_gather ignores it.
                 * :attr:`experts_per_chip`: Number of experts per chip (for expert region grouping).
                 * :attr:`memory_config`: Memory configuration for intermediate and output tensors.
-                * :attr:`use_l1_small_for_semaphores`: If True, route the internal all_gather's
-                  global semaphores to the reserved L1_SMALL region instead of the main L1 floor.
-                  Defaults to False.
+                * :attr:`use_l1_small_for_semaphores`: Retained for compatibility; the internal
+                  all_gather ignores it. Defaults to False.
 
         )doc",
         &offset_cumsum,
