@@ -14,6 +14,8 @@ catching them; those are the reason this exists, and if either ever starts passi
 budget the gate has stopped being stronger than what it replaced.
 """
 
+from contextlib import contextmanager
+
 import pytest
 import torch
 from helpers.format_config import DataFormat
@@ -32,14 +34,17 @@ TORCH_DTYPE = {
 }
 
 
-@pytest.fixture
-def captured_logs():
-    """Every loguru record emitted during the test, whatever level the session is at.
+@contextmanager
+def _loguru_sink():
+    """Collect every loguru record emitted in the block, whatever level the session is at.
 
     ``caplog`` is not enough here. ``helpers.logger`` bridges loguru into stdlib logging
     through a sink that carries its own level filter — INFO by default — so a debug
     message never reaches the stdlib logger ``caplog`` watches. A sink added here sees
-    everything and is removed again before the next test.
+    everything and is removed again afterwards.
+
+    One definition for both users -- the fixture below and :func:`_logs_for` -- so the
+    level and the format cannot drift apart between them.
     """
     from loguru import logger as loguru_logger
 
@@ -49,6 +54,13 @@ def captured_logs():
         yield records
     finally:
         loguru_logger.remove(sink_id)
+
+
+@pytest.fixture
+def captured_logs():
+    """Every loguru record emitted during the test. See :func:`_loguru_sink`."""
+    with _loguru_sink() as records:
+        yield records
 
 
 def _tile(value, fmt):
@@ -85,6 +97,65 @@ def test_near_zero_atol_alone_is_rejected():
         ValueError, match="does nothing on its own"
     ):
         passed_test(golden, golden.clone(), DataFormat.Float16_b, near_zero_atol=1e-6)
+
+
+def test_flush_subnormals_alone_is_rejected_too():
+    """The same guard, and the argument it was missing.
+
+    ``flush_subnormals`` is read at two sites, both inside the ``max_ulp is not None``
+    arm, and the tolerance arm is ``torch.isclose``, which has no flush concept -- so
+    ``passed_test(..., flush_subnormals=True)`` without a budget was accepted and did
+    nothing at all. Exactly the category of mistake the ``near_zero_atol`` half refuses.
+    """
+    golden = _tile(1.0, DataFormat.Float16)
+    for value in (True, False):
+        with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+            ValueError, match="does nothing on its own"
+        ):
+            passed_test(
+                golden, golden.clone(), DataFormat.Float16, flush_subnormals=value
+            )
+    # Both at once names both, and reads as a sentence.
+    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+        ValueError, match="flush_subnormals and near_zero_atol are read only"
+    ):
+        passed_test(
+            golden,
+            golden.clone(),
+            DataFormat.Float16,
+            near_zero_atol=1e-6,
+            flush_subnormals=True,
+        )
+    # ...and with a budget it is accepted, so the guard has not swallowed the feature.
+    assert passed_test(
+        golden, golden.clone(), DataFormat.Float16, max_ulp=0, flush_subnormals=True
+    )
+
+
+def test_a_negative_near_zero_atol_is_refused_rather_than_made_inert():
+    """The floor is bounded from below as well as from above.
+
+    A negative floor makes ``magnitude <= absolute_cut`` false on every lane, so the
+    floor silently does nothing -- the same inert-floor case the ``max_ulp``-less raise
+    refuses, reached by a different route. It fails closed, so nothing wrong is accepted;
+    the cost is that the cancellation lanes then fail with a large step count and nothing
+    tells an inert floor from a real regression. ``0.0`` stays legal: that is a
+    deliberate "no floor", and it matches the ``None`` default.
+    """
+    golden = _tile(1.0, DataFormat.Float16_b)
+    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+        ValueError, match="near_zero_atol must not be negative"
+    ):
+        passed_test(
+            golden,
+            golden.clone(),
+            DataFormat.Float16_b,
+            max_ulp=1,
+            near_zero_atol=-1e-6,
+        )
+    assert passed_test(
+        golden, golden.clone(), DataFormat.Float16_b, max_ulp=1, near_zero_atol=0.0
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -321,9 +392,17 @@ def test_a_bfp8_b_budget_does_charge_for_legal_block_quantization():
     """The price of the proxy gate, and the reason a Bfp8_b budget is only usable where
     the block quantization is exact.
 
-    One step of the Bfp8_b lattice is ``2**(floor(log2 amax) - floor(log2 x) + 1)`` bf16
-    steps, so a lane small relative to its block is many bf16 steps from the golden while
-    being perfectly legal -- 69 steps for a lane at 0.06 inside a block with amax 2.77.
+    A lane small relative to its block is many bf16 steps from the golden while being
+    perfectly legal: 69 steps, measured, for a lane at 0.06 inside a block with amax 2.77.
+
+    Deliberately not a closed form. ``2**(floor(log2 amax) - floor(log2 x) + 1)`` is the
+    ratio of *step sizes* -- the Bfp8_b step ``2**(e_amax - 6)` over the local bf16 step
+    ``2**(e_x - 7)`` -- and that is a count of bf16 steps only inside a single binade. The
+    ``2**-5`` increment here spans the whole ``[2**-5, 2**-4)`` binade, so 10 of the steps
+    are at ``2**-12`` spacing and 59 at ``2**-11``: 69, where the ratio says 128. As a
+    step count the closed form is an upper bound, exact only when ``x`` is its own block
+    maximum. ``ulp.py`` and ``utils.py`` both quote the measured number for the same
+    reason.
     The budget charges for all of it. ORing the block-aware lattice compare in would have
     hidden that, at the cost of ``max_ulp`` no longer being the enforced maximum for this
     format: a lane 69 steps out would pass a ``max_ulp=0`` budget on the lattice's say-so,
@@ -626,14 +705,8 @@ def test_a_floor_looser_than_the_atol_it_replaces_warns(captured_logs):
 
 def _logs_for(call):
     """Every loguru record emitted by *call*, for a test that needs two verdicts."""
-    from loguru import logger as loguru_logger
-
-    records = []
-    sink = loguru_logger.add(records.append, level="TRACE", format="{message}")
-    try:
+    with _loguru_sink() as records:
         call()
-    finally:
-        loguru_logger.remove(sink)
     return records
 
 
@@ -648,7 +721,10 @@ def test_an_empty_tensor_is_refused_before_any_verdict_is_logged(captured_logs):
         passed_test(empty, empty.clone(), DataFormat.Float16_b, max_ulp=0)
     logged = "\n".join(captured_logs)
     assert "ULP within budget" not in logged, logged[:300]
+    # Both spellings of the empty verdict: an empty tile has no unmeasurable lane either,
+    # so the message it would have emitted is now the "mask selected nothing" one.
     assert "no measurable lane" not in logged, logged[:300]
+    assert "no lane under judgement" not in logged, logged[:300]
 
 
 def test_the_displaced_figure_is_floored_so_it_cannot_read_as_equal(captured_logs):

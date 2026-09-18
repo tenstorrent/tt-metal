@@ -683,6 +683,7 @@ def ulp_verdict_message(
     max_ulp: Optional[int] = None,
     stats: Optional[Dict[str, Any]] = None,
     flush_subnormals: Optional[bool] = None,
+    rescued: Optional[torch.Tensor] = None,
 ) -> str:
     """What a gate should log: the non-finite disagreement first, then the steps.
 
@@ -698,6 +699,7 @@ def ulp_verdict_message(
         max_ulp=max_ulp,
         stats=stats,
         flush_subnormals=flush_subnormals,
+        rescued=rescued,
     )
     disagreement = nonfinite_disagreement_summary(golden, result, fmt, mask=mask)
     return steps if disagreement is None else f"{disagreement}\n  {steps}"
@@ -713,6 +715,7 @@ def ulp_failure_message(
     max_ulp: Optional[int] = None,
     stats: Optional[Dict[str, Any]] = None,
     flush_subnormals: Optional[bool] = None,
+    rescued: Optional[torch.Tensor] = None,
 ) -> str:
     """One actionable line for the worst lane, plus the distribution behind it.
 
@@ -733,12 +736,29 @@ def ulp_failure_message(
     ``flush_subnormals=True`` escape hatch and then omitted it here prints a "1 ULP = X"
     that is off by up to ``2**mantissa_bits`` from the count next to it. Pass the same
     value to both, as :func:`within_ulp` does.
+
+    *rescued* is the lane mask the near-zero floor accepted, which a ranking caller has
+    already excluded from *mask*. It is reported unconditionally when given: without it a
+    DEBUG export cannot tell a budget-carried pass from a floor-carried one, because the
+    lanes the floor rescued are precisely the ones kept out of the ranking.
     """
     if stats is None:
         stats = ulp_stats(distance, mask)
     label = fmt.name if fmt is not None else str(golden.dtype)
+    floor = "" if rescued is None else f", {int(rescued.sum())} held by the floor"
     if stats["worst_index"] is None:
-        return f"no measurable lane ({stats['unmeasurable']} unmeasurable, {label})"
+        if stats["unmeasurable"] == 0:
+            # Not the same thing as "nothing was comparable". Every lane was measurable
+            # and the mask excluded them all -- which is what a near-zero floor that
+            # rescued the whole tile looks like, and printing "no measurable lane
+            # (0 unmeasurable)" for it reads as though there was nothing to compare.
+            return (
+                f"no lane under judgement (the mask selected none of "
+                f"{distance.numel()} lanes{floor}, {label})"
+            )
+        return (
+            f"no measurable lane ({stats['unmeasurable']} unmeasurable{floor}, {label})"
+        )
 
     index = stats["worst_index"]
     golden_value = float(golden.reshape(-1)[index])
@@ -755,7 +775,7 @@ def ulp_failure_message(
         f"{golden_value!r} (1 ULP = {step:.6e}, {label})\n"
         f"  over {stats['lanes']} lanes: mean {stats['mean']:.3f}, p95 {stats['p95']:.1f}, "
         f"p99 {stats['p99']:.1f}, {100.0 * stats['exact_frac']:.1f}% exact, "
-        f"{stats['unmeasurable']} unmeasurable"
+        f"{stats['unmeasurable']} unmeasurable{floor}"
     )
 
 
@@ -868,5 +888,9 @@ def within_ulp(
         max_ulp=max_ulp,
         stats=ulp_stats(distance, ranked),
         flush_subnormals=flush_subnormals,
+        # Only when a floor was actually configured: with no floor there is nothing to
+        # distinguish, and every unfloored verdict in the suite would grow a "0 held by
+        # the floor" that says nothing.
+        rescued=None if near_zero_atol is None else rescued & selected,
     )
     return bool(torch.all(is_valid | ~selected)), message

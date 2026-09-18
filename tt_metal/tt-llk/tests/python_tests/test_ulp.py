@@ -433,13 +433,56 @@ def test_within_ulp_mask_excludes_lanes_already_settled():
 
 
 def test_within_ulp_passes_when_every_lane_is_masked_out():
+    """...and says the mask excluded them, not that there was nothing to compare.
+
+    Both lanes here are perfectly measurable. "no measurable lane (0 unmeasurable)" --
+    what this printed before -- reads as "nothing to compare" for a tile where every lane
+    was comparable and the mask took them all out, and the two have different
+    remediations. Reachable on a pass path through a near-zero floor that rescues the
+    whole tile.
+    """
     golden = torch.tensor([1.0, 1.0], dtype=torch.float32)
     result = torch.tensor([5.0, 1000.0], dtype=torch.float32)
     ok, message = within_ulp(
         golden, result, max_ulp=0, mask=torch.tensor([False, False])
     )
     assert ok
-    assert "no measurable lane" in message
+    assert "no lane under judgement" in message
+    assert "selected none of 2 lanes" in message
+    assert "no measurable lane" not in message
+
+    # ...and the other one still says what it always said.
+    nan = float("nan")
+    ok, message = within_ulp(
+        torch.tensor([nan, nan], dtype=torch.float32),
+        torch.tensor([nan, nan], dtype=torch.float32),
+        max_ulp=0,
+    )
+    assert ok
+    assert "no measurable lane (2 unmeasurable" in message
+
+
+def test_the_verdict_reports_what_the_floor_carried():
+    """A floor-carried pass and a budget-carried one are not the same result.
+
+    The rescued lanes are exactly the ones `ranked` keeps out of the summary -- they hold
+    the largest step counts by construction -- so without this a DEBUG export cannot tell
+    which of the two it is looking at. Reported whenever a floor is configured, on the
+    pass path as well, and left out entirely when there is none, so the unfloored
+    verdicts do not grow a "0 held by the floor" that says nothing.
+    """
+    golden = torch.tensor([100.0, 1e-4, 2e-4], dtype=torch.float32)
+    result = torch.tensor([100.0, 1.1e-4, 2.1e-4], dtype=torch.float32)
+
+    ok, message = within_ulp(golden, result, max_ulp=0, fmt=DataFormat.Float32)
+    assert not ok
+    assert "held by the floor" not in message
+
+    ok, message = within_ulp(
+        golden, result, max_ulp=0, fmt=DataFormat.Float32, near_zero_atol=1e-4
+    )
+    assert ok
+    assert "2 held by the floor" in message
 
 
 def test_within_ulp_reports_a_shape_mismatch_instead_of_raising():
@@ -1382,7 +1425,7 @@ def test_the_near_zero_band_is_scoped_to_the_lanes_under_judgement():
 
 
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16], ids=str)
-def test_the_near_zero_cuts_are_compared_in_float32_not_the_tensor_dtype(dtype):
+def test_the_relative_near_zero_cut_is_compared_in_float32_not_the_tensor_dtype(dtype):
     """Both cuts are Python floats, so a 16-bit ``golden.abs()`` promoted them onto the
     tensor's own lattice and rounded each edge to a representable value -- narrowing the
     relative ``<`` edge and widening the absolute ``<=`` one. A lane sitting exactly on a
@@ -1392,12 +1435,22 @@ def test_the_near_zero_cuts_are_compared_in_float32_not_the_tensor_dtype(dtype):
     Probing at plus or minus 10% of the cut cannot see this; the lane has to sit on the
     edge. So this picks a dynamic range whose 1% cut is *not* representable in *dtype*,
     puts a lane at the value that rounding would move across it, and requires the verdict
-    to match fp32's."""
-    # 1% of this is 0.13, which is not a bf16/fp16 value; the neighbours straddle it.
-    dynamic_range = 13.0
+    to match fp32's.
+
+    The cut has to round **down** for the lane to separate the two compares: nothing
+    representable lies strictly between ``cut`` and ``rounded``, so the lane collapses
+    onto ``rounded`` itself, and only ``rounded < cut`` makes the fp32 compare (in band)
+    and the narrow one (``rounded < rounded``, out of band) disagree. ``dynamic_range =
+    13.0`` satisfied that for bf16 but not for fp16, which rounds 0.13 *up* -- so the
+    fp16 parameter was green either way. 11.0 rounds down in both, and the assertion
+    below pins it rather than leaving it to be rediscovered.
+    """
+    # 1% of this is 0.11, which is not a bf16/fp16 value; the neighbours straddle it.
+    dynamic_range = 11.0
     cut = NEAR_ZERO_FRACTION * dynamic_range
     rounded = float(torch.tensor(cut, dtype=dtype))
     assert rounded != cut, "pick a cut that the dtype cannot represent"
+    assert rounded < cut, "the cut must round down, or the lane cannot separate the two"
 
     # A lane between the true cut and the rounded one: judged differently iff the compare
     # happens in the narrow dtype.
@@ -1405,6 +1458,7 @@ def test_the_near_zero_cuts_are_compared_in_float32_not_the_tensor_dtype(dtype):
     golden = torch.tensor([dynamic_range, edge], dtype=dtype)
     result = golden.clone()
     result[1] = float(_step_up(float(golden[1]), dtype, steps=4)[0])
+    assert float(golden[1]) == rounded, "the lane has to sit on the rounded edge"
 
     narrow = within_ulp(golden, result, max_ulp=0, near_zero_atol=1.0)[0]
     wide = within_ulp(
@@ -1417,3 +1471,51 @@ def test_the_near_zero_cuts_are_compared_in_float32_not_the_tensor_dtype(dtype):
         f"{dtype} disagreed with float32 for a lane on the rounded band edge "
         f"(cut {cut!r}, rounded {rounded!r}, lane {edge!r})"
     )
+
+
+@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16], ids=str)
+def test_the_absolute_near_zero_cut_is_compared_in_float32_not_the_tensor_dtype(dtype):
+    """The other half of the same rule, and the one the relative case cannot reach.
+
+    ``absolute_cut = near_zero_atol / near_zero_fraction`` bounds the band from above so
+    a floor cannot follow a wide dynamic range out to a magnitude it was never measured
+    at. Its edge is ``<=``, so rounding it *widens* the band -- the opposite direction
+    from the relative ``<`` edge, which is why it needs its own parameters: the test
+    above uses ``near_zero_atol=1.0``, whose cut is exactly 100.0 and representable in
+    both dtypes, so the ``<=`` edge was never probed.
+
+    ``near_zero_atol=0.012`` puts the cut at 1.2, which both dtypes round *up*. A lane at
+    that rounded value is inside the band for a narrow compare (``rounded <= rounded``)
+    and outside it for fp32 (``1.203125 <= 1.2`` is false), so the floor rescues it in
+    one and not the other.
+    """
+    near_zero_atol = 0.012
+    absolute_cut = near_zero_atol / NEAR_ZERO_FRACTION
+    rounded = float(torch.tensor(absolute_cut, dtype=dtype))
+    assert rounded > absolute_cut, "the cut must round up, or the <= edge does not move"
+
+    # Far enough below the relative cut (1% of 1000.0 = 10.0) that the absolute edge is
+    # the only one deciding, and 1000.0 is exact in both dtypes so it moves nothing.
+    dynamic_range = 1000.0
+    assert rounded < NEAR_ZERO_FRACTION * dynamic_range
+    golden = torch.tensor([dynamic_range, rounded], dtype=dtype)
+    result = golden.clone()
+    # One step out of budget, and well inside the floor -- so band membership alone
+    # decides the verdict.
+    result[1] = float(_step_up(rounded, dtype, steps=1)[0])
+    assert float(result[1]) - rounded <= near_zero_atol
+    assert int(ulp_distance(golden, result)[1]) == 1
+
+    narrow = within_ulp(golden, result, max_ulp=0, near_zero_atol=near_zero_atol)[0]
+    wide = within_ulp(
+        golden.to(torch.float32),
+        result.to(torch.float32),
+        max_ulp=0,
+        near_zero_atol=near_zero_atol,
+    )[0]
+    assert narrow == wide, (
+        f"{dtype} disagreed with float32 for a lane on the rounded absolute cut "
+        f"(cut {absolute_cut!r}, rounded {rounded!r})"
+    )
+    # The lane is outside the band on both sides of the comparison, so the step fails.
+    assert not wide
