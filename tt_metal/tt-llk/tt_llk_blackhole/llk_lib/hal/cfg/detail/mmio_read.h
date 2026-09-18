@@ -9,6 +9,7 @@
 #include "../access_types.h"
 #include "ckernel.h"
 #include "register_layout.h"
+#include "state_bank.h"
 
 namespace hal::cfg::detail
 {
@@ -42,6 +43,15 @@ inline __attribute__((always_inline)) std::uint32_t read_thread_word_mmio()
     ckernel::reg_write(RISCV_DEBUG_REG_TENSIX_CREG_READ, creg_addr);
     ckernel::wait(1);
     return ckernel::reg_read(RISCV_DEBUG_REG_TENSIX_CREG_RDDATA);
+}
+
+/**
+ * @brief Read one complete state-CFG word from the active bank.
+ */
+template <std::uint32_t Addr>
+inline std::uint32_t read_state_word_mmio()
+{
+    return state_cfg_bank()[Addr];
 }
 
 } // namespace hal::cfg::detail

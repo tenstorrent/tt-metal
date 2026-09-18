@@ -12,7 +12,6 @@
 
 #include "../access_types.h"
 #include "ckernel.h"
-#include "gpr_operand.h"
 #include "state_bank.h"
 #include "write_operands.h"
 
@@ -24,35 +23,60 @@ namespace hal::cfg::detail
 template <std::uint32_t Addr>
 inline constexpr bool rmwcib_is_ignored_by_hardware = (Addr == STATE_RESET_EN_ADDR32);
 
-template <std::uint32_t CfgAddr32, std::uint32_t Shamt, std::uint32_t Mask>
-inline __attribute__((always_inline)) void write_runtime_rmwcib(const std::uint32_t value)
+// Runtime values are shifted into position before emitting the selected byte lanes.
+template <std::uint32_t Addr, std::uint32_t Shamt, std::uint32_t Mask>
+inline __attribute__((always_inline)) void rmw_write_word(const std::uint32_t value)
 {
-    static_assert(!rmwcib_is_ignored_by_hardware<CfgAddr32>, "RMWCIB writes to the state-reset register are ignored by hardware; use Access::MMIO or from_gpr");
+    static_assert(!rmwcib_is_ignored_by_hardware<Addr>, "RMWCIB writes to the state-reset register are ignored by hardware; use Access::MMIO or from_gpr");
 
     const std::uint32_t write_data = value << Shamt;
 
     if constexpr ((Mask & 0x000000ffu) != 0u)
     {
-        TT_RMWCIB0((Mask >> 0) & 0xffu, (write_data >> 0) & 0xffu, CfgAddr32);
+        TT_RMWCIB0((Mask >> 0) & 0xffu, (write_data >> 0) & 0xffu, Addr);
     }
     if constexpr ((Mask & 0x0000ff00u) != 0u)
     {
-        TT_RMWCIB1((Mask >> 8) & 0xffu, (write_data >> 8) & 0xffu, CfgAddr32);
+        TT_RMWCIB1((Mask >> 8) & 0xffu, (write_data >> 8) & 0xffu, Addr);
     }
     if constexpr ((Mask & 0x00ff0000u) != 0u)
     {
-        TT_RMWCIB2((Mask >> 16) & 0xffu, (write_data >> 16) & 0xffu, CfgAddr32);
+        TT_RMWCIB2((Mask >> 16) & 0xffu, (write_data >> 16) & 0xffu, Addr);
     }
     if constexpr ((Mask & 0xff000000u) != 0u)
     {
-        TT_RMWCIB3((Mask >> 24) & 0xffu, (write_data >> 24) & 0xffu, CfgAddr32);
+        TT_RMWCIB3((Mask >> 24) & 0xffu, (write_data >> 24) & 0xffu, Addr);
+    }
+}
+
+// Compile time known data is already shifted into its destination bit positions.
+template <std::uint32_t Addr, std::uint32_t Mask, std::uint32_t Data>
+inline __attribute__((always_inline)) void rmw_write_word()
+{
+    static_assert(!rmwcib_is_ignored_by_hardware<Addr>, "RMWCIB writes to the state-reset register are ignored by hardware; use Access::MMIO or from_gpr");
+
+    if constexpr ((Mask & 0x000000ffu) != 0u)
+    {
+        TTI_RMWCIB0((Mask >> 0) & 0xffu, (Data >> 0) & 0xffu, Addr);
+    }
+    if constexpr ((Mask & 0x0000ff00u) != 0u)
+    {
+        TTI_RMWCIB1((Mask >> 8) & 0xffu, (Data >> 8) & 0xffu, Addr);
+    }
+    if constexpr ((Mask & 0x00ff0000u) != 0u)
+    {
+        TTI_RMWCIB2((Mask >> 16) & 0xffu, (Data >> 16) & 0xffu, Addr);
+    }
+    if constexpr ((Mask & 0xff000000u) != 0u)
+    {
+        TTI_RMWCIB3((Mask >> 24) & 0xffu, (Data >> 24) & 0xffu, Addr);
     }
 }
 
 // Single fields keep their value unshifted until emission; composed words use
 // Shamt == 0. This avoids extending encoded temporary lifetimes across writes.
 template <Access A, RegisterScope Scope, std::uint32_t Addr, std::uint32_t Shamt, std::uint32_t Mask>
-inline __attribute__((always_inline)) void write_runtime_word(const std::uint32_t value, volatile std::uint32_t* tt_reg_ptr cfg)
+inline __attribute__((always_inline)) void write_word(const std::uint32_t value, volatile std::uint32_t* tt_reg_ptr cfg)
 {
     static_assert(
         A == Access::MMIO || A == Access::TensixCfgUnit,
@@ -81,8 +105,34 @@ inline __attribute__((always_inline)) void write_runtime_word(const std::uint32_
     {
         // One logical word update. Only byte lanes touched by the combined
         // mask produce RMWCIB instructions.
-        write_runtime_rmwcib<Addr, Shamt, Mask>(value);
+        rmw_write_word<Addr, Shamt, Mask>(value);
     }
+}
+
+template <RegisterScope Scope, std::uint32_t Addr, std::uint32_t Mask, std::uint32_t Data>
+inline __attribute__((always_inline)) void write_word()
+{
+    if constexpr (Scope == RegisterScope::Thread)
+    {
+        TTI_SETC16(Addr, Data & 0xffffu);
+    }
+    else
+    {
+        rmw_write_word<Addr, Mask, Data>();
+    }
+}
+
+/**
+ * @brief Read-modify-write a runtime-masked field of one state-CFG word.
+ *
+ * Not atomic against the other RISCs sharing the word.
+ */
+inline void rmw_state_word_mmio(const std::uint32_t addr32, const std::uint32_t shamt, const std::uint32_t mask, const std::uint32_t value)
+{
+    volatile std::uint32_t* tt_reg_ptr cfg = state_cfg_bank();
+
+    const std::uint32_t old_value = cfg[addr32];
+    cfg[addr32]                   = (old_value & ~mask) | ((value << shamt) & mask);
 }
 
 template <const Field& F, Sec S, std::uint32_t Count, std::size_t ArrayCount>
@@ -95,36 +145,6 @@ inline __attribute__((always_inline)) void write_array_mmio(volatile std::uint32
     for (std::uint32_t i = 0; i < Count; ++i)
     {
         cfg[F.addr32(S) + i] = values[i];
-    }
-}
-
-template <RegisterScope Scope, std::uint32_t Addr, std::uint32_t Mask, std::uint32_t Data>
-inline __attribute__((always_inline)) void write_constant_word()
-{
-    if constexpr (Scope == RegisterScope::Thread)
-    {
-        TTI_SETC16(Addr, Data & 0xffffu);
-    }
-    else
-    {
-        static_assert(!rmwcib_is_ignored_by_hardware<Addr>, "RMWCIB writes to the state-reset register are ignored by hardware; use Access::MMIO or from_gpr");
-
-        if constexpr ((Mask & 0x000000ffu) != 0u)
-        {
-            TTI_RMWCIB0((Mask >> 0) & 0xffu, (Data >> 0) & 0xffu, Addr);
-        }
-        if constexpr ((Mask & 0x0000ff00u) != 0u)
-        {
-            TTI_RMWCIB1((Mask >> 8) & 0xffu, (Data >> 8) & 0xffu, Addr);
-        }
-        if constexpr ((Mask & 0x00ff0000u) != 0u)
-        {
-            TTI_RMWCIB2((Mask >> 16) & 0xffu, (Data >> 16) & 0xffu, Addr);
-        }
-        if constexpr ((Mask & 0xff000000u) != 0u)
-        {
-            TTI_RMWCIB3((Mask >> 24) & 0xffu, (Data >> 24) & 0xffu, Addr);
-        }
     }
 }
 
@@ -151,16 +171,16 @@ inline __attribute__((always_inline)) void write_assignment_group(volatile std::
     if constexpr (A == Access::TensixCfgUnit && group_is_constant)
     {
         constexpr std::uint32_t data = (0u | ... | (assignments_share_word_v<Key, Assignments> ? encode(Assignments {}) : 0u));
-        write_constant_word<Key::scope, Key::addr, mask, data>();
+        write_word<Key::scope, Key::addr, mask, data>();
     }
     else if constexpr (group_size == 1u)
     {
-        write_runtime_word<A, Key::scope, Key::addr, Key::shift, mask>(key.value, cfg);
+        write_word<A, Key::scope, Key::addr, Key::shift, mask>(key.value, cfg);
     }
     else
     {
         const std::uint32_t data = (0u | ... | (assignments_share_word_v<Key, Assignments> ? encode(assignments) : 0u));
-        write_runtime_word<A, Key::scope, Key::addr, 0, mask>(data, cfg);
+        write_word<A, Key::scope, Key::addr, 0, mask>(data, cfg);
     }
 }
 
@@ -180,9 +200,9 @@ inline __attribute__((always_inline)) void write_assignment_groups(volatile std:
     }
 }
 
-// Validate the assignments before grouping; cfg is already resolved for MMIO.
+// Validate and group assignments, resolving the active bank once per MMIO call.
 template <Access A, typename... Assignments>
-inline __attribute__((always_inline)) void write_assignments_in_bank(volatile std::uint32_t* tt_reg_ptr cfg, const Assignments&... assignments)
+inline __attribute__((always_inline)) void write_assignments(const Assignments&... assignments)
 {
     static_assert(A == Access::MMIO || A == Access::TensixCfgUnit, "field-assignment CFG writes require Access::MMIO or Access::TensixCfgUnit");
     static_assert(write_operations_disjoint<Assignments...>::value, "overlapping CFG field assignments in one physical word");
@@ -191,25 +211,18 @@ inline __attribute__((always_inline)) void write_assignments_in_bank(volatile st
         static_assert(((Assignments::scope == RegisterScope::State) && ...), "Access::MMIO cannot write thread CFG assignments");
     }
 
-    write_assignment_groups<A>(cfg, assignments...);
-}
-
-// Resolve the active bank once per MMIO call.
-template <Access A, typename... Assignments>
-inline __attribute__((always_inline)) void write_assignments(const Assignments&... assignments)
-{
     volatile std::uint32_t* tt_reg_ptr cfg = nullptr;
     if constexpr (A == Access::MMIO)
     {
         cfg = state_cfg_bank();
     }
-    write_assignments_in_bank<A>(cfg, assignments...);
+    write_assignment_groups<A>(cfg, assignments...);
 }
 
 // GPR transfers: WRCFG through the CFG unit or REG2FLOP through the scalar unit.
 
 template <Access A, const Field& F, Sec S, std::uint32_t GprIndex, GprTransferSize Size, WrcfgCompletion Completion>
-inline __attribute__((always_inline)) void write_gpr(const GprWrite<F, S, GprOperand<GprIndex, Size, Completion>>& transfer)
+inline __attribute__((always_inline)) void write_gpr(const GprWrite<F, S, GprIndex, Size, Completion>& transfer)
 {
     static_assert(
         A == Access::TensixCfgUnit || A == Access::TensixScalarUnit, "GPR-backed cfg::write requires Access::TensixCfgUnit or Access::TensixScalarUnit");
@@ -230,7 +243,7 @@ inline __attribute__((always_inline)) void write_gpr(const GprWrite<F, S, GprOpe
 
         constexpr std::uint32_t size_sel   = Size == GprTransferSize::Bits128 ? 0u : 1u;
         constexpr std::uint32_t flop_index = address - THCON_CFGREG_BASE_ADDR32;
-        if constexpr (GprIndex == DynamicGprIndex)
+        if constexpr (GprIndex == hal::detail::DynamicGprIndex)
         {
             LLK_ASSERT(transfer.source.index < 64u, "REG2FLOP GPR index must be in [0, 63]");
             if constexpr (Size == GprTransferSize::Bits128)
@@ -251,7 +264,7 @@ inline __attribute__((always_inline)) void write_gpr(const GprWrite<F, S, GprOpe
     }
     else
     {
-        if constexpr (GprIndex == DynamicGprIndex)
+        if constexpr (GprIndex == hal::detail::DynamicGprIndex)
         {
             TT_WRCFG(transfer.source.index, Size == GprTransferSize::Bits128, F.addr32(S));
         }
@@ -287,7 +300,7 @@ inline constexpr std::size_t field_assignment_run_end()
 }
 
 template <Access A, std::size_t Start, typename Tuple, std::size_t... Offsets>
-inline __attribute__((always_inline)) void write_assignment_run(const Tuple& operations, std::index_sequence<Offsets...>)
+inline __attribute__((always_inline)) void write_field_assignment_run(const Tuple& operations, std::index_sequence<Offsets...>)
 {
     write_assignments<A>(std::get<Start + Offsets>(operations)...);
 }
@@ -301,7 +314,7 @@ inline __attribute__((always_inline)) void write_operation_sequence(const Tuple&
         if constexpr (is_field_assignment_v<Operation>)
         {
             constexpr std::size_t end = field_assignment_run_end<Tuple, Index>();
-            write_assignment_run<A, Index>(operations, std::make_index_sequence<end - Index> {});
+            write_field_assignment_run<A, Index>(operations, std::make_index_sequence<end - Index> {});
             write_operation_sequence<A, end>(operations);
         }
         else
