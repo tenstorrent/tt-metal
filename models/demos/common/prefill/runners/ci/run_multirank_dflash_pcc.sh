@@ -301,4 +301,12 @@ set +e
     exec python3 -m models.demos.common.prefill.runners.prefill_producer" 2>&1 | tee "${PRODUCER_LOG}"
 PROD_RC=${PIPESTATUS[0]}
 set -e
+
+# A rank whose drafter caches are not local skips the drafter check entirely, so a zero exit code only
+# proves the verifier caches were compared. The completion line carries the drafter minimum iff it ran.
+if [ "${PROD_RC}" -eq 0 ] && ! grep -q "min_dflash_pcc=" "${PRODUCER_LOG}"; then
+  echo "no rank reported a drafter KV PCC: the dflash caches were never checked" >&2
+  exit 1
+fi
+
 exit "${PROD_RC}"
