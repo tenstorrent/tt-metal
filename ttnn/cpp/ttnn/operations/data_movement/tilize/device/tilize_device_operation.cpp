@@ -17,6 +17,7 @@
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include <tt-metalium/host_api.hpp>
+#include <mutex>
 using namespace tt::tt_metal;
 
 namespace ttnn::prim {
@@ -251,10 +252,15 @@ TilizeDeviceOperation::spec_return_value_t TilizeDeviceOperation::compute_output
         operation_attributes.output_mem_config.memory_layout() != TensorMemoryLayout::INTERLEAVED &&
         operation_attributes.output_mem_config.memory_layout() != TensorMemoryLayout::ND_SHARDED;
     if (output_is_sharded && can_use_sharded_optimized_factories(operation_attributes, tensor_args)) {
-        log_warning(
-            tt::LogOp,
-            "ttnn::tilize: Using input shard spec for output tensor because the legacy sharded optimized program "
-            "factory is being used");
+        // Once per process: compute_output_specs runs on every invocation of this op (e.g. once per
+        // decode step in a model loop), so without call_once this warning repeats hundreds of times per run.
+        static std::once_flag legacy_shard_spec_warned;
+        std::call_once(legacy_shard_spec_warned, [] {
+            log_warning(
+                tt::LogOp,
+                "ttnn::tilize: Using input shard spec for output tensor because the legacy sharded optimized program "
+                "factory is being used");
+        });
         auto mem_config = tt::tt_metal::MemoryConfig(
             input_tensor.memory_config().memory_layout(),
             operation_attributes.output_mem_config.buffer_type(),
