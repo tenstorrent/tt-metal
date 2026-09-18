@@ -22,7 +22,8 @@ import torch
 
 import ttnn
 from models.demos.gemma4.config import MeshConfig
-from models.demos.gemma4.tt.dram_sharded import DramShardedLinear, can_dram_shard
+from models.demos.gemma4.tt.dram_sharded import DramShardedLinear, can_dram_shard, is_t3k_dense_target
+from models.demos.gemma4.tt.precision import default_single_tile_dest_acc
 from models.demos.gemma4.utils.general_utils import get_cache_file_name
 
 # DRAM-width-sharded QKV / O-proj decode matmuls (same size as the interleaved
@@ -41,6 +42,13 @@ class AttentionWeights:
     k_norm_weight: ttnn.Tensor  # Replicated across devices
     is_global: bool  # Controls K=V tying and partial RoPE
     kv_replicated: bool = False  # True when KV heads are replicated (not split) across TP devices
+    # Dense 12B/31B on a Wormhole T3K: take the tuned prefill matmul path in
+    # operations.py. False everywhere else, which keeps every other SKU and
+    # variant on the plain ttnn.linear it runs today.
+    tuned_prefill: bool = False
+    # fp32 destination accumulation on the m<=32 projections; see
+    # single_tile_matmul_ckc. Per model, and only consulted on the tuned target.
+    single_tile_dest_acc: bool = True
 
 
 def load_attention_weights(
@@ -224,4 +232,6 @@ def load_attention_weights(
         k_norm_weight=k_norm_weight,
         is_global=is_global,
         kv_replicated=kv_replicated,
+        tuned_prefill=is_t3k_dense_target(mesh_device, config),
+        single_tile_dest_acc=default_single_tile_dest_acc(),
     )

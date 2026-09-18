@@ -387,7 +387,7 @@ models:
     bh_sc1: 370
     bh_sc4: 50
   unit_tier2:
-    wh_llmbox: 114
+    wh_llmbox: 132
     wh_llmbox_perf: 191
     wh_n150: 87
     wh_n300: 30
@@ -441,7 +441,7 @@ models:
   vllm:
     wh_galaxy_perf: 430
     bh_quietbox_2: 310
-    wh_llmbox: 342
+    wh_llmbox: 402
     bh_loudbox: 155  # 75 (Llama-3.1-8B dp=8) + 40 (Gemma4-12B tp=8) + 40 (Gemma4-31B tp=8)
     bh_galaxy: 65
     wh_n150: 65

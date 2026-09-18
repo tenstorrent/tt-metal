@@ -13,7 +13,9 @@ import ttnn
 from models.common.sampling import SamplingParams, slice_sampling_params
 from models.demos.gemma4.tt.async_decode import merge_async_ahead_decode_tokens
 from models.demos.gemma4.tt.common import create_tt_model
+from models.demos.gemma4.tt.dram_sharded import is_t3k_dense_target
 from models.demos.gemma4.tt.generator_trace import (
+    GEMMA4_MAX_TRACE_PREFILL_SEQ_LEN,
     apply_gemma4_prefill_trace_policy,
     chunked_prefill_trace_enabled,
     maybe_disable_pli_prefill_trace,
@@ -231,6 +233,34 @@ def _patch_model_args(
         return tokenizer.encode(prompt, add_special_tokens=True)
 
     model_args.encode_prompt = _encode_prompt
+
+
+def _gemma4_stop_tokens(tokenizer, model_path, mesh_device, model_args):
+    """Every id in the checkpoint's ``generation_config.eos_token_id``.
+
+    Gemma-4 declares three (``[1, 106, 50]`` on both 12B-it and 31B-it): <eos>
+    plus the turn terminators an instruct checkpoint actually emits.
+    ``tokenizer.eos_token_id`` is only the first, so generation ran to
+    max_generated_tokens and the tail filled with <end_of_turn> and a fresh
+    turn. Gated to the same dense 12B/31B T3K target as the tuned prefill path:
+    reading the extra ids is right everywhere, but stop behaviour shows up in
+    every demo's output, so nothing else changes here.
+    """
+    fallback = [tokenizer.eos_token_id]
+    if not is_t3k_dense_target(mesh_device, model_args):
+        return fallback
+    try:
+        from transformers import GenerationConfig
+
+        eos = GenerationConfig.from_pretrained(model_path).eos_token_id
+    except Exception as e:  # offline / no generation_config.json / unreadable
+        logger.warning("Gemma4 could not read generation_config eos_token_id ({}); using tokenizer eos", e)
+        return fallback
+    stop = [eos] if isinstance(eos, int) else list(eos or [])
+    if tokenizer.eos_token_id is not None and tokenizer.eos_token_id not in stop:
+        stop.append(tokenizer.eos_token_id)
+    logger.info("Gemma4 stop tokens: {}", stop)
+    return stop
 
 
 class ChunkedPrefillPageTableGuardMixin:
@@ -843,6 +873,11 @@ class ChunkedPrefillPageTableGuardMixin:
             and page_table is not None
             and kv_cache is not None
             and seq_len > max_chunk
+            # Whole-prompt length, not chunk length. Replaying a per-chunk trace
+            # is a pessimisation once a prompt needs many chunks -- eager beats
+            # it by more than 2x at 64k. Only a prompt just over one chunk is
+            # still worth tracing.
+            and seq_len <= GEMMA4_MAX_TRACE_PREFILL_SEQ_LEN
             and max_chunk in (128, 512, 1024, 2048, 4096)
             and not bool(getattr(self.model[model_id], "hidden_size_per_layer_input", 0))
             # Bounded final-chunk K/V must be stashed eagerly and committed only
@@ -1638,7 +1673,57 @@ class Gemma4Generator(ChunkedPrefillPageTableGuardMixin, Generator):
             self.trace_inputs_decode[key] = inputs
             self.trace_output_decode[key] = outputs
 
+    def _set_prefill_sharded_logits(self, sampling_params):
+        """Scope the sharded last-token-logits opt-in to one prefill call.
+
+        The last-token PREFILL slice may stay TP-sharded only when this call
+        will device-sample; a host-sampling call (the warmup pass) must gather
+        the full vocab or it reads garbage. Published on the model for the call
+        rather than threaded through the shared tt_transformers signature; an
+        unset flag falls back to gathering, the safe direction.
+        """
+        for model in self.model:
+            model._prefill_allow_sharded_logits = bool(
+                sampling_params is not None
+                and getattr(model, "_supports_on_device_sampling", False)
+                and getattr(model, "sampling", None) is not None
+            )
+
     def prefill_forward_text(
+        self,
+        tokens: torch.Tensor,
+        page_table=None,
+        kv_cache=None,
+        prompt_lens=None,
+        empty_slots=None,
+        enable_trace=True,
+        model_id_warmup=None,
+        sampling_params=None,
+        start_pos: list[int] = None,
+        return_hidden_states=False,
+        warmup_prefill=True,
+        **kwargs,
+    ):
+        self._set_prefill_sharded_logits(sampling_params)
+        try:
+            return self._prefill_forward_text_gemma4(
+                tokens,
+                page_table=page_table,
+                kv_cache=kv_cache,
+                prompt_lens=prompt_lens,
+                empty_slots=empty_slots,
+                enable_trace=enable_trace,
+                model_id_warmup=model_id_warmup,
+                sampling_params=sampling_params,
+                start_pos=start_pos,
+                return_hidden_states=return_hidden_states,
+                warmup_prefill=warmup_prefill,
+                **kwargs,
+            )
+        finally:
+            self._set_prefill_sharded_logits(None)
+
+    def _prefill_forward_text_gemma4(
         self,
         tokens: torch.Tensor,
         page_table=None,
@@ -1834,8 +1919,6 @@ class Gemma4Generator(ChunkedPrefillPageTableGuardMixin, Generator):
         bounded_sliding_kv_cache=False,
     ):
         tokenizer = _load_text_tokenizer(model_path)
-        if not hasattr(tokenizer, "stop_tokens"):
-            tokenizer.stop_tokens = [tokenizer.eos_token_id]
 
         model_args, model, tt_kv_cache, _ = create_tt_model(
             mesh_device=mesh_device,
@@ -1847,6 +1930,8 @@ class Gemma4Generator(ChunkedPrefillPageTableGuardMixin, Generator):
             paged_attention_config=paged_attention_config,
             bounded_sliding_kv_cache=bounded_sliding_kv_cache,
         )
+        if not hasattr(tokenizer, "stop_tokens"):
+            tokenizer.stop_tokens = _gemma4_stop_tokens(tokenizer, model_path, mesh_device, model_args)
         _patch_model_args(
             model_args,
             mesh_device=mesh_device,

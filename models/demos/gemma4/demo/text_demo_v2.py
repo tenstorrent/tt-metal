@@ -59,7 +59,10 @@ from models.demos.gemma4.demo.sampling_utils import (
     model_can_sample_on_device,
 )
 from models.demos.gemma4.tt.generator import Gemma4Generator
-from models.demos.gemma4.tt.generator_trace import resolve_gemma4_demo_long_context
+from models.demos.gemma4.tt.generator_trace import (
+    maybe_auto_enable_chunked_prefill_trace,
+    resolve_gemma4_demo_long_context,
+)
 from models.demos.utils.llm_demo_utils import create_benchmark_data
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.common import PagedAttentionConfig, preprocess_inputs_prefill
@@ -529,6 +532,17 @@ def test_demo_text(
     # Override: GEMMA4_BOUNDED_SLIDING, GEMMA4_GEN_PREFILL_CHUNK.
     lc = resolve_gemma4_demo_long_context(max_seq_len, mesh_device, model_path, paged_attention=paged_attention)
     bounded_sliding = lc["bounded_sliding"]
+    # Turn on multi-chunk prefill-trace replay for unbounded runs whose
+    # max_seq_len sits AT the trace ceiling (4096), which would otherwise
+    # prefill untraced and pay real TTFT for it. The batch-32 config sits
+    # exactly at that ceiling too, and microbatches prefill per user, so every
+    # one of its 32 users was paying a full untraced prefill.
+    maybe_auto_enable_chunked_prefill_trace(
+        batch_size=batch_size,
+        max_seq_len=max_seq_len,
+        prefill_chunk=lc["prefill_chunk"],
+        bounded_sliding=bounded_sliding,
+    )
 
     if batch_size <= 1 or configured_blocks is None:
         page_max_num_blocks = needed_blocks

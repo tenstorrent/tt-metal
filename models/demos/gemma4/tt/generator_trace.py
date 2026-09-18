@@ -92,6 +92,43 @@ def _resolve_max_trace_batched_prefill_tokens() -> int:
 GEMMA4_MAX_TRACE_BATCHED_PREFILL_TOKENS = _resolve_max_trace_batched_prefill_tokens()
 
 
+def maybe_auto_enable_chunked_prefill_trace(
+    *,
+    batch_size: int,
+    max_seq_len: int,
+    prefill_chunk: int,
+    bounded_sliding: bool,
+) -> bool:
+    """Auto-enable multi-chunk trace replay for unbounded demos at the 4k ceiling.
+
+    The demo gate reads ``max_seq_len < prefill_trace_max``, so a run sitting
+    exactly at the ceiling (4096) prefilled UNTRACED while shorter prompts were
+    traced -- the 4k bucket was the one case getting no benefit. An explicit
+    GEMMA4_CHUNKED_PREFILL_TRACE always wins; this only fills in a default.
+
+    Restricted to unbounded (bounded sliding caps the prefix at the window, so
+    replayed buckets stop matching) and capped at the ceiling. Do NOT widen that
+    cap: above it the tail prefills eagerly while the capture's buffers stay in
+    L1, and the global head_dim=512 prefill SDPA -- needing ~1.25 MB of a
+    ~1.34 MB pool -- then cannot place its CBs, dying deterministically at
+    32k/64k/128k. Batch is deliberately unrestricted: prefill is microbatched
+    and one capture is replayed across users, so trace buffers do not scale
+    with demo batch.
+    """
+    if "GEMMA4_CHUNKED_PREFILL_TRACE" in os.environ:
+        return chunked_prefill_trace_enabled()
+    trace_max = int(os.environ.get("GEMMA4_PREFILL_TRACE_MAX_SEQ", GEMMA4_MAX_TRACE_PREFILL_SEQ_LEN))
+    if not bounded_sliding and int(prefill_chunk) < max_seq_len <= trace_max:
+        os.environ["GEMMA4_CHUNKED_PREFILL_TRACE"] = "1"
+        logger.info(
+            "Auto-enabled GEMMA4_CHUNKED_PREFILL_TRACE "
+            f"(chunk={prefill_chunk} < max_seq_len={max_seq_len} <= ceiling={trace_max}, "
+            f"unbounded, batch={batch_size})"
+        )
+        return True
+    return False
+
+
 def chunked_prefill_trace_enabled() -> bool:
     """True when long-ISL *generator* multi-chunk should replay 4k prefill traces.
 

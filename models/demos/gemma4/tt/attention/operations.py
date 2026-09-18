@@ -19,7 +19,18 @@ import os
 
 import ttnn
 from models.demos.gemma4.tt.ccl import ccl_allreduce
-from models.demos.gemma4.tt.dram_sharded import DramShardedLinear
+from models.demos.gemma4.tt.dram_sharded import (
+    DramShardedLinear,
+    hoist_prefill_in0,
+    in_prefill_l1_matmul_band,
+    interleaved_prefill_config,
+    linear_l1_safe,
+    matmul_rows,
+    prefill_in0_fits_l1,
+    prefill_linear_above_cutoff,
+    should_prefill_long_2d,
+    single_tile_matmul_ckc,
+)
 
 from .weights import AttentionWeights
 
@@ -66,15 +77,75 @@ def prefill_short_lived_memcfg() -> ttnn.MemoryConfig:
     return ttnn.DRAM_MEMORY_CONFIG
 
 
+def should_hoist_prefill_in0(rows: int, k: int, program_config) -> bool:
+    """Whether a ``[rows, k]`` prefill in0 is worth moving from DRAM to L1.
+
+    Worth it when it fits the budget and either a tuned config will read it or
+    the shape sits in the band where one would.
+    """
+    if not prefill_in0_fits_l1(rows, k):
+        return False
+    return program_config is not None or in_prefill_l1_matmul_band(rows)
+
+
+def hoist_prefill_matmul_in0_if_needed(tensor, program_config=None):
+    """``hoist_prefill_in0`` keyed on this tensor's own shape and config."""
+    return hoist_prefill_in0(
+        tensor, should_hoist_prefill_in0(matmul_rows(tensor), int(tensor.shape[-1]), program_config)
+    )
+
+
+def o_proj_input_memcfg(sdpa_out, default_memcfg=None):
+    """Destination for prefill ``concat_heads`` when it feeds the o_proj matmul.
+
+    Landing the heads where o_proj wants its in0 saves the separate DRAM->L1
+    copy ``hoist_prefill_matmul_in0_if_needed`` would otherwise make.
+    """
+    shape = [int(sdpa_out.shape[i]) for i in range(len(sdpa_out.shape))]
+    if len(shape) < 3:
+        return default_memcfg
+    heads, seq, head_dim = shape[-3], shape[-2], shape[-1]
+    rows = seq
+    for dim in shape[:-3]:
+        rows *= dim
+    if should_hoist_prefill_in0(rows, heads * head_dim, None):
+        return ttnn.L1_MEMORY_CONFIG
+    return default_memcfg
+
+
 def apply_qkv_projection(hidden_states, weights: AttentionWeights, memory_config=None):
     """Fused QKV matmul (no bias for Gemma4).
 
     ``memory_config`` lets the packed-verify decode keep the projection output
     resident on L1; ``None`` keeps the op default (DRAM) for existing callers.
+
+    On the tuned-prefill target this takes a shape-gated 2D program config and
+    hoists in0 into L1 when it fits. The config band opens above one tile, so
+    decode (M<=32) resolves to ``program_config=None`` and runs the same bare
+    matmul as every other SKU.
     """
     if isinstance(weights.wqkv, DramShardedLinear):
         return weights.wqkv(hidden_states, out_memory_config=memory_config)
-    return ttnn.linear(hidden_states, weights.wqkv, memory_config=memory_config)
+    if not weights.tuned_prefill:
+        return ttnn.linear(hidden_states, weights.wqkv, memory_config=memory_config)
+
+    rows = matmul_rows(hidden_states)
+    program_config, compute_kernel_config = interleaved_prefill_config(
+        rows, int(hidden_states.shape[-1]), int(weights.wqkv.shape[-1])
+    )
+    if compute_kernel_config is None:
+        compute_kernel_config = single_tile_matmul_ckc(rows, weights.single_tile_dest_acc)
+    activation, owned_activation = hoist_prefill_matmul_in0_if_needed(hidden_states, program_config)
+    output = linear_l1_safe(
+        activation,
+        weights.wqkv,
+        program_config=program_config,
+        memory_config=memory_config,
+        compute_kernel_config=compute_kernel_config,
+    )
+    if owned_activation is not None:
+        owned_activation.deallocate(True)
+    return output
 
 
 def split_qkv_heads_decode(xqkv_fused, config, is_global: bool, tp: int = 1, kv_replicated: bool = False):
@@ -603,11 +674,27 @@ def concat_heads(
 
 
 def apply_output_projection(tensor, weights: AttentionWeights):
-    """Apply output projection (no bias for Gemma4)."""
+    """Apply output projection (no bias for Gemma4).
+
+    On the tuned-prefill target a tall activation (a 2048-row prefill chunk and
+    up) goes through the batched-reshape matmul rather than one shot, and a
+    shorter one is hoisted into L1 first. Decode is below both bounds and is
+    unchanged.
+    """
+    rows = matmul_rows(tensor)
     if isinstance(weights.o_proj, DramShardedLinear):
         out = weights.o_proj(tensor)
-    else:
+    elif not weights.tuned_prefill:
         out = ttnn.linear(tensor, weights.o_proj)
+    elif should_prefill_long_2d(rows):
+        out = prefill_linear_above_cutoff(tensor, weights.o_proj)
+    else:
+        activation, owned_activation = hoist_prefill_matmul_in0_if_needed(tensor)
+        out = ttnn.linear(
+            activation, weights.o_proj, compute_kernel_config=single_tile_matmul_ckc(rows, weights.single_tile_dest_acc)
+        )
+        if owned_activation is not None:
+            owned_activation.deallocate(True)
     tensor.deallocate(True)
     return out
 
