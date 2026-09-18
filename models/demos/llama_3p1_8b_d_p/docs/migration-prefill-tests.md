@@ -283,3 +283,7 @@ These are existing test definitions in the inspected tt-d-gen revision. Their pr
 - [Native data-plane unit tests](https://github.com/tenstorrent/tt-d-gen/blob/7ee35d8d46899f5111470ea98e5daf81bd4bb607/kv_manager/tests/unit/data_plane/data_plane_test.cpp).
 
 The status file records the last review time. The page refreshes its status badges every 15 seconds. It does not turn a preparation result into a device or native-transfer pass.
+
+## Runnable fixture publication
+
+The [migration fixture README](../tests/migration/README.md) contains the writer-boundary singleton, five-call H2D/runtime owner and paired selected-range owner commands. These retain their tested oracles and retained-owner shutdown checks. Publication packaging checks are host-only; record actual device results and binary identities separately. Current standalone prefill scope stops at64K; decode and new128K work are outside this task.

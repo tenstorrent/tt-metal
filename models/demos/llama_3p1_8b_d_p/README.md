@@ -10,9 +10,7 @@ into the model-agnostic `models/demos/common/prefill` engine. Decode runs separa
 Umbrella: [tt-blaze#4137](https://github.com/tenstorrent/tt-blaze/issues/4137) ·
 prefill: [#4138](https://github.com/tenstorrent/tt-blaze/issues/4138)
 
-Host/device RoPE, RMSNorm, MLP, QKV projection, and source-cache tests have recorded passes.
-These modules are published through commit 4cf42fb. Attention accuracy remains under investigation.
-The decoder block, full model, runtime, and migration have not passed their integration gates.
+Full32 prefill numerical validation, the shared runtime, and the first native2K prefill-to-passive transfer have recorded passes. See the [validation report](docs/validation-2k.md), [native result](docs/migration-native-2k.md), and [runnable migration fixtures](tests/migration/README.md) for exact scope, source identities and commands.
 See the [implementation and verification roadmap](ROADMAP.md) for the staged plan.
 
 The [native KV migration learning guide](docs/kv-migration-learning.md) explains the complete

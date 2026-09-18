@@ -1,0 +1,169 @@
+{
+  "schema": 1,
+  "status": "PASSED",
+  "accepted_date_utc": "2026-09-18",
+  "scope": "Native prefill selected ranges, prefill-resident continuation and drained-slot reuse at 2048-token capacity",
+  "model": "Llama-3.1-8B-Instruct",
+  "layers": 32,
+  "sp": 4,
+  "tp": 8,
+  "slots": 2,
+  "capacity_tokens": 2048,
+  "chunk_tokens": 1024,
+  "cache_dtype": "bfloat8_b",
+  "configs": 16,
+  "tokens_per_page": 32,
+  "bytes_per_page": 4352,
+  "destination": "Passive allocated cache; no decoder",
+  "source_bridge_public_revision": "6eeb1a9c4a86e4b4e1795665bd7a504b216e504f",
+  "report": {
+    "generations": 6,
+    "runtime_calls": 7,
+    "post_sync_acks": 224,
+    "native_layer_commands": 224,
+    "selected_page_visits": 24576,
+    "selected_packed_bytes": 106954752
+  },
+  "generations": [
+    {
+      "name": "A100",
+      "source_slot": 0,
+      "destination_slot": 0,
+      "prompt_tokens": 1033,
+      "begin": 0,
+      "end": 33,
+      "runtime_ranges": [
+        [
+          0,
+          1024
+        ],
+        [
+          1024,
+          1033
+        ]
+      ],
+      "reused_overlap": 0,
+      "packed_end": 64,
+      "selected_pages": 1024,
+      "selected_bytes": 4456448
+    },
+    {
+      "name": "A101",
+      "source_slot": 0,
+      "destination_slot": 0,
+      "prompt_tokens": 1033,
+      "begin": 32,
+      "end": 257,
+      "runtime_ranges": [
+        [
+          1024,
+          1033
+        ]
+      ],
+      "reused_overlap": 225,
+      "packed_end": 288,
+      "selected_pages": 4096,
+      "selected_bytes": 17825792
+    },
+    {
+      "name": "A102",
+      "source_slot": 0,
+      "destination_slot": 0,
+      "prompt_tokens": 1033,
+      "begin": 256,
+      "end": 1033,
+      "runtime_ranges": [
+        [
+          1024,
+          1033
+        ]
+      ],
+      "reused_overlap": 768,
+      "packed_end": 1056,
+      "selected_pages": 12800,
+      "selected_bytes": 55705600
+    },
+    {
+      "name": "B103",
+      "source_slot": 1,
+      "destination_slot": 1,
+      "prompt_tokens": 257,
+      "begin": 0,
+      "end": 257,
+      "runtime_ranges": [
+        [
+          0,
+          257
+        ]
+      ],
+      "reused_overlap": 0,
+      "packed_end": 288,
+      "selected_pages": 4608,
+      "selected_bytes": 20054016
+    },
+    {
+      "name": "C104",
+      "source_slot": 0,
+      "destination_slot": 1,
+      "prompt_tokens": 33,
+      "begin": 0,
+      "end": 33,
+      "runtime_ranges": [
+        [
+          0,
+          33
+        ]
+      ],
+      "reused_overlap": 0,
+      "packed_end": 64,
+      "selected_pages": 1024,
+      "selected_bytes": 4456448
+    },
+    {
+      "name": "C105",
+      "source_slot": 0,
+      "destination_slot": 1,
+      "prompt_tokens": 65,
+      "begin": 32,
+      "end": 65,
+      "runtime_ranges": [
+        [
+          32,
+          65
+        ]
+      ],
+      "reused_overlap": 0,
+      "packed_end": 96,
+      "selected_pages": 1024,
+      "selected_bytes": 4456448
+    }
+  ],
+  "checks": {
+    "exact_destination_generations": 6,
+    "source_preservation_checks": 7,
+    "all_unselected_destination_pages_checked_each_generation": true,
+    "source_pin_maps_equal": true,
+    "source_pin_count": 336,
+    "controller_exit": 0,
+    "source_dispatch_exit": 0,
+    "passive_dispatch_exit": 0,
+    "source_manager_exit": 0,
+    "passive_manager_exit": 0,
+    "source_bridge_exit": 0,
+    "passive_bridge_exit": 0,
+    "both_manager_stop_proofs_verified_before_cache_release": true,
+    "both_device_owners_closed_cleanly": true
+  },
+  "evidence_sha256": {
+    "root_acceptance": "450b86ec1b889942f2291e3a8c9eb06f2422b6da6e709a59d63413bd98203733",
+    "source_result": "805aba4e9d91506999dfb1dc3598528b2ef98934b97cb697a965ca4e792bf194",
+    "passive_result": "c603ab77d8e307389339c1202bffb313981d5c8afab3411d282dda97d0ac1cf8"
+  },
+  "limits": [
+    "No new numerical golden or PCC acceptance; use the existing 2K model report.",
+    "No decode, reverse session import or serving validation.",
+    "Logical ranges select complete 32-token packed pages. Boundary pages can include additional valid source tokens.",
+    "No cancellation, larger-capacity or performance result is claimed by this report.",
+    "The exact deployment run preceded portable fixture publication. Portability changes require their own host validation and must not be described as a device rerun."
+  ]
+}
