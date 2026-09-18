@@ -480,18 +480,24 @@ class TtQwen2LM:
         Matches upstream `Qwen2LM.inference`'s control flow: one prefill over
         `[sos, text_emb, task_id_emb, speech_emb]`, then one `decode_step` per new token,
         each fed its own previously-sampled token's embedding, until any of
-        `stop_token_ids` is sampled (at or past `min_tokens`) or `max_tokens` is reached.
-        `sampler='greedy'` is the deterministic path this package's tests use; `'ras'` is
-        real Repetition-Aware Sampling (`ras_sample_device`, on-device nucleus primary +
-        host fallback).
+        `stop_token_ids` is sampled or `max_tokens` is reached. `sampler='greedy'` is the
+        deterministic path this package's tests use; `'ras'` is real Repetition-Aware
+        Sampling (`ras_sample_device`, on-device nucleus primary + host fallback).
 
         Upstream's `inference_wrapper` checks `top_ids in self.stop_token_ids` -- three
         IDs (`eos_token`, an unnamed third one, and `fill_token`), not just `eos_token`
         alone -- so this defaults to `self.stop_token_ids` rather than a single ID.
 
-        No CosyVoice2 checkpoint exists yet (see module docstring), so `stop_token_ids`
-        has no trained meaning here -- this method exercises the real control flow and
-        cache continuity, not real generation quality.
+        `min_tokens` matches upstream's real, narrower semantics -- confirmed directly
+        against `sampling_ids`/`inference_wrapper`, fetched fresh, not assumed: it does
+        NOT gate the break condition (an earlier version of this method incorrectly
+        gated on `i >= min_tokens`, which let a real stop-token ID -- `fill_token` or the
+        unnamed one, unmasked either way -- get silently appended and embedded as if it
+        were ordinary speech content before generation was "allowed" to stop, corrupting
+        the sequence rather than ending it). The ONLY real effect of `min_tokens` upstream
+        is `sampling_ids` masking `eos_token`'s logit to `-inf` before sampling while
+        `i < min_len` -- `fill_token`/the unnamed ID are never masked at any point, and
+        the break itself is unconditional once any of the three is actually sampled.
         """
         from .sampling import greedy, ras_sampling
 
@@ -506,15 +512,19 @@ class TtQwen2LM:
 
         out: list[int] = []
         for i in range(max_tokens):
+            sampling_logits = logits
+            if i < min_tokens:
+                sampling_logits = logits.clone()
+                sampling_logits[self.eos_token] = -float("inf")
             if sampler == "greedy":
-                token = greedy(logits)
+                token = greedy(sampling_logits)
             elif sampler == "ras":
-                token = ras_sampling(logits.clone(), out, **sampling_kwargs)
+                token = ras_sampling(sampling_logits.clone(), out, **sampling_kwargs)
             elif sampler == "ras_device":
-                token = self.ras_sample_device(logits, out, **sampling_kwargs)
+                token = self.ras_sample_device(sampling_logits, out, **sampling_kwargs)
             else:
                 raise ValueError(f"unknown sampler {sampler!r}")
-            if token in stop_token_ids and i >= min_tokens:
+            if token in stop_token_ids:
                 break
             out.append(token)
             token_emb = self.embed_speech_tokens_host(torch.tensor([[token]]))

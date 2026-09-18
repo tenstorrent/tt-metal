@@ -372,3 +372,69 @@ def test_device_generate_stops_on_any_stop_token_id(device, monkeypatch, which_s
     out = tt_model.generate(text_ids, max_tokens=5, sampler="greedy")
 
     assert out == [100, 200], (which_stop, stop_id, out)
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 65536}], indirect=True)
+def test_device_generate_masks_only_eos_before_min_tokens(device, monkeypatch):
+    """Real bug, found by re-reading upstream `sampling_ids` fresh (cosyvoice/llm/llm.py):
+    `if ignore_eos: weighted_scores[self.speech_token_size] = -inf`, called with
+    `ignore_eos=True if i < min_len else False` -- ONLY `eos_token`'s logit is ever
+    masked, and only while `i < min_tokens`; `fill_token`/the unnamed stop ID are never
+    masked at any point. Checked here by spying on the exact logits `generate()` hands
+    the sampler at each step, not by inferring it from which token got picked."""
+    import models.demos.audio.cosyvoice2.tt.llm.sampling as sampling_module
+    from models.demos.audio.cosyvoice2.tt.llm.qwen2lm import TtQwen2LM
+
+    args, state_dict = _build_args_and_state_dict(device)
+    tt_model = TtQwen2LM(args, device, state_dict)
+
+    seen_logits = []
+    real_greedy = sampling_module.greedy
+
+    def spy_greedy(weighted_scores):
+        seen_logits.append(weighted_scores.clone())
+        return real_greedy(weighted_scores)
+
+    monkeypatch.setattr(sampling_module, "greedy", spy_greedy)
+
+    text_ids = torch.randint(0, args.vocab_size, (1, 4))
+    min_tokens = 3
+    tt_model.generate(text_ids, max_tokens=5, min_tokens=min_tokens, sampler="greedy", seed=0)
+
+    assert len(seen_logits) >= min_tokens + 1, "need at least one step past min_tokens to check the unmask"
+    for i, logits in enumerate(seen_logits):
+        eos_masked = logits[tt_model.eos_token].item() == -float("inf")
+        assert eos_masked == (i < min_tokens), (i, min_tokens, eos_masked)
+        assert logits[tt_model.fill_token].item() != -float("inf"), "fill_token must never be masked"
+        assert logits[tt_model.speech_token_size + 1].item() != -float("inf"), "unnamed stop id must never be masked"
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 65536}], indirect=True)
+@pytest.mark.parametrize("which_stop", [0, 1, 2])
+def test_device_generate_breaks_immediately_even_before_min_tokens(device, monkeypatch, which_stop):
+    """Real bug: upstream `inference_wrapper`'s break (`if top_ids in self.stop_token_ids:
+    break`) has NO `i >= min_len` gate -- `min_len` only ever masks `eos_token`'s logit
+    pre-sampling (see test_device_generate_masks_only_eos_before_min_tokens), it never
+    delays the break itself. A prior version of `generate()` incorrectly gated the break
+    on `i >= min_tokens`, which would silently append a real stop-token ID -- embedding it
+    via `speech_embedding.weight[stop_id]` as if it were ordinary speech content -- and
+    keep generating instead of stopping. Scripts greedy to emit a stop ID as the very
+    FIRST token with `min_tokens=10` (so the old buggy gate would have suppressed the
+    break for 10 more steps, appending 10 copies of the stop ID as fake content) and
+    checks `generate()` still halts immediately with zero output tokens."""
+    import models.demos.audio.cosyvoice2.tt.llm.sampling as sampling_module
+    from models.demos.audio.cosyvoice2.tt.llm.qwen2lm import TtQwen2LM
+
+    args, state_dict = _build_args_and_state_dict(device)
+    tt_model = TtQwen2LM(args, device, state_dict)
+    stop_id = tt_model.stop_token_ids[which_stop]
+
+    def fake_greedy(weighted_scores):
+        return stop_id
+
+    monkeypatch.setattr(sampling_module, "greedy", fake_greedy)
+
+    text_ids = torch.randint(0, args.vocab_size, (1, 4))
+    out = tt_model.generate(text_ids, max_tokens=20, min_tokens=10, sampler="greedy")
+
+    assert out == [], (which_stop, stop_id, out)
