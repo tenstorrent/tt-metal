@@ -44,6 +44,7 @@ def generate_bfloat16_bits(dtype=torch.bfloat16, include_spl_values=False):
 
 
 SMALLEST_NORMAL_BF16 = 2.0 ** (-126)
+MAX_BF16 = float(torch.finfo(torch.bfloat16).max)
 
 
 def flush_to_zero(tensor):
