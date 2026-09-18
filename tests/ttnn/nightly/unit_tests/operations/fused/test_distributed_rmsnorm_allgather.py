@@ -118,6 +118,11 @@ def _run_distributed_rmsnorm_single_device(
         # Regression: cores_y > tiles_per_core_y (Wt=32 -> cores_y=8, tiles_per_core_y=4) exercises
         # the c_15 merge-gather CB OOB; fails unless c_15 is sized by cores_y.
         (128, 4096, 4),
+        # Regression for Issue #56908: Multi-row per core (tiles_per_core_x > 1).
+        # Ht=8 (seq_len=256), cores_x=4 -> tiles_per_core_x=2. Catches row-stride flat-increment corruption.
+        (256, 8192, 4),
+        # Ht=16 (seq_len=512), cores_x=4 -> tiles_per_core_x=4.
+        (512, 4096, 4),
     ],
 )
 @pytest.mark.parametrize("use_2d_core_grid", [False, True])
