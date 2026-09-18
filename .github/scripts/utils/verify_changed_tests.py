@@ -22,9 +22,10 @@ and the queue only needs the scope to resolve.
 
 Design notes
 ------------
-Entries are keyed on (name, arch, gtest_shard_index). `name` alone is not
-unique: llk_merge_gate_tests.yaml has four "LLK FD wormhole" entries differing
-only by shard, and vllm_model_tests.yaml has entries differing only by arch.
+Entries with an `id` are keyed by it. Legacy entries without one are keyed on
+(name, arch, gtest_shard_index). `name` alone is not unique:
+llk_merge_gate_tests.yaml has four "LLK FD wormhole" entries differing only by
+shard, and vllm_model_tests.yaml has entries differing only by arch.
 
 Edits that cannot change how a test executes do not need hardware:
 
@@ -337,7 +338,11 @@ def parse_entries(text):
 
 
 def entry_key(entry):
+    entry_id = str(entry.get("id", ""))
+    if entry_id:
+        return ("id", entry_id)
     return (
+        "legacy",
         str(entry.get("name", "")),
         str(entry.get("arch", "")),
         str(entry.get("gtest_shard_index", "")),
@@ -345,7 +350,9 @@ def entry_key(entry):
 
 
 def key_str(key):
-    name, arch, shard = key
+    if key[0] == "id":
+        return f"id={key[1]}"
+    _, name, arch, shard = key
     parts = [name]
     if arch:
         parts.append(f"arch={arch}")
@@ -363,7 +370,7 @@ def index_entries(entries, path):
             raise GateError(
                 f"{path}: two entries share the key '{key_str(key)}'. "
                 "The gate cannot tell which one an edit touched -- give them "
-                "distinguishing name/arch/gtest_shard_index values."
+                "distinguishing id/name/arch/gtest_shard_index values."
             )
         index[key] = entry
     return index
@@ -472,6 +479,7 @@ def scope_file(path, base, review_only, tracy_files, non_matrix_files, unsupport
             leg = {
                 "file": path,
                 "name": entry.get("name"),
+                "id": entry.get("id"),
                 "arch": entry.get("arch"),
                 "gtest_shard_index": entry.get("gtest_shard_index"),
                 "sku": sku,
@@ -560,32 +568,50 @@ def row_key(row):
     build_test_matrix() always appends " [<concrete sku>]" to the name, and sets
     logical_sku when the concrete SKU differs from the one the yaml names. Both
     are undone here so rows line up with the legs scope produced.
+
+    Rows are keyed the same two ways entry_key() keys entries: by `id` when the
+    entry declared one, else on (name, arch, gtest_shard_index). SKU stays in
+    both shapes because one entry expands to one row per SKU.
+    build_test_matrix() copies every key off the entry, so a row carries the id
+    its entry declared and needs no further plumbing.
     """
     sku = str(row.get("sku", ""))
     name = str(row.get("name", ""))
     suffix = f" [{sku}]"
     if name.endswith(suffix):
         name = name[: -len(suffix)]
+    logical_sku = str(row.get("logical_sku") or sku)
+    entry_id = str(row.get("id", ""))
+    if entry_id:
+        return ("id", entry_id, logical_sku)
     return (
+        "legacy",
         name,
         str(row.get("arch", "")),
         str(row.get("gtest_shard_index", "")),
-        str(row.get("logical_sku") or sku),
+        logical_sku,
     )
 
 
 def leg_row_key(leg):
+    sku = str(leg.get("sku") or "")
+    entry_id = str(leg.get("id") or "")
+    if entry_id:
+        return ("id", entry_id, sku)
     shard = leg.get("gtest_shard_index")
     return (
+        "legacy",
         str(leg.get("name") or ""),
         str(leg.get("arch") or ""),
         "" if shard is None else str(shard),
-        str(leg.get("sku") or ""),
+        sku,
     )
 
 
 def describe_row(key):
-    name, arch, shard, sku = key
+    if key[0] == "id":
+        return f"id={key[1]} | sku={key[2]}"
+    _, name, arch, shard, sku = key
     parts = [name, f"sku={sku}"]
     if arch:
         parts.append(f"arch={arch}")
