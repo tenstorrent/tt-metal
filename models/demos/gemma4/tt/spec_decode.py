@@ -228,14 +228,11 @@ class SpeculativeDecoder:
         # scratch and corrupt it (manifests as a hang on a *re*-replay). seed()
         # writes into this buffer via ttnn.copy instead of cloning.
         self._anchor_buf = None
-        # Packed-query verify: all K+1 candidates in ONE batch=1 forward (one
-        # QKV/norm/RoPE over K+1 rows, one SDPA per layer) instead of K+1
-        # pseudo-users with sequential per-candidate KV writes. This is the
-        # default multi-token verify; single-token calls (seed/reseed) keep the
-        # plain batch=1 path. S_k (mask key length) is padded to this bucket so
-        # the verify trace shape stays stable as the context grows; a new trace
-        # is captured when the bucket rolls. The batch-SDPA path needs no mask
-        # and so has no bucket cliff.
+        # Packed-query verify: all K+1 candidates in ONE batch=1 forward, the
+        # default multi-token verify (seed/reseed keep the plain batch=1 path).
+        # S_k is padded to this bucket so the verify trace shape stays stable as
+        # context grows; a new trace is captured when the bucket rolls. The
+        # batch-SDPA path needs no mask, so it has no bucket cliff.
         self._pv_sk_bucket = 1024
         self._pv_ready = False
         self._pv_a_prev = -1  # last hot block index (-1 ⇒ staging unseeded)
@@ -2019,17 +2016,11 @@ class SpeculativeDecoder:
     def _hidden_row_to_device(self, row):
         """Copy verify-hidden row ``row`` into the persistent seed buffer tr["h"].
 
-        The fused graph captures one persistent tensor per verify row
-        (``tr["h_rows"]``), so this is a device-side ``ttnn.copy`` — the same
-        allocation-free idiom as the draft-trace ``h_next → h_in`` copy, and it
-        keeps the blocking host read off the replay-to-submit critical path. A
-        fresh ``ttnn.slice`` of ``vhidden`` between replays can alias trace
-        scratch on a re-replay, so only the captured slices are used.
-
-        ``ttnn.copy`` converts into the destination dtype, exactly as the host
-        path's ``from_torch(dtype=tr["h"].dtype)`` did, so a ``vhidden`` /
-        ``tr["h"]`` dtype mismatch behaves as before rather than reinterpreting
-        bits.
+        Device-side ``ttnn.copy`` from the captured per-row tensors
+        (``tr["h_rows"]``), which keeps the blocking host read off the critical
+        path; a fresh ``ttnn.slice`` of ``vhidden`` can alias trace scratch on a
+        re-replay, so only captured slices are used. ``ttnn.copy`` converts into
+        the destination dtype, matching what the host path did.
         """
         if not self._device_seed_enabled():
             return self._hidden_row_to_device_host(row)

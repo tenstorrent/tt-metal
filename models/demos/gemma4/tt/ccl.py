@@ -70,19 +70,13 @@ def _tiny_decode_fused_ar(tensor) -> bool:
 
 
 def ccl_sync_split_enabled() -> bool:
-    """Run the TP all-reduce as sync ``reduce_scatter`` + sync ``all_gather``
-    instead of the fused ``ttnn.all_reduce``. Default ON; ``GEMMA4_CCL_SPLIT=0``
-    opts back out.
+    """Run the TP all-reduce as sync ``reduce_scatter`` + ``all_gather`` instead
+    of the fused ``ttnn.all_reduce``. Default ON; ``GEMMA4_CCL_SPLIT=0`` opts out.
 
-    ``ttnn.all_reduce`` *is* those two ops -- identical to within noise and
-    ``torch.equal`` bit-identical on per-device-distinct data. But the fused op
-    exposes only {cluster_axis, memory_config, num_links, topology,
-    subdevice_id}, while the sync halves also expose ``chunks_per_sync`` /
-    ``num_workers_per_link`` / ``num_buffers_per_channel``. Splitting therefore
-    costs nothing and unlocks the knobs below.
-
-    Tall prefill may take the async path instead (``ccl_async_enabled``); this
-    flag only applies when async is off.
+    The fused op *is* those two ops (bit-identical), but exposes none of
+    ``chunks_per_sync`` / ``num_workers_per_link`` / ``num_buffers_per_channel``,
+    so splitting costs nothing and unlocks the knobs below. Only applies when
+    async is off (``ccl_async_enabled``).
     """
     return os.environ.get("GEMMA4_CCL_SPLIT", "1").lower() not in ("0", "false", "no")
 
@@ -96,15 +90,10 @@ def _ccl_rs_env_int(name: str, default: int) -> int:
 def ccl_sync_rs_workers() -> int:
     """``num_workers_per_link`` for the split all-reduce's reduce-scatter.
 
-    ``w=1, c=1`` is the swept winner at decode / short prefill, and it is
-    bit-exact -- the reduction order is unchanged, only the worker/sync
-    granularity is. Note ``w=4`` is a cliff there, not a plateau: with a single
-    link, extra workers contend. Do not raise this without re-sweeping, and do
-    not confuse it with the async path's ``GEMMA4_CCL_NUM_WORKERS`` default of 2.
-
-    The GATHER half was swept over the same knobs and is completely insensitive:
-    it runs on ONE worker core (vs the reduce-scatter's 6) and sits at the
-    ``num_links=1`` fabric floor, not core starvation. Leave it on defaults.
+    ``w=1, c=1`` is the swept winner at decode / short prefill and is bit-exact.
+    ``w=4`` is a cliff, not a plateau -- on a single link extra workers contend --
+    so do not raise it without re-sweeping. The gather half is insensitive to all
+    three knobs (one worker core, at the ``num_links=1`` fabric floor).
     """
     return _ccl_rs_env_int("GEMMA4_CCL_SYNC_RS_WORKERS", 1)
 
@@ -121,46 +110,20 @@ def ccl_sync_rs_buffers() -> int:
     return _ccl_rs_env_int("GEMMA4_CCL_SYNC_RS_BUFFERS", 4)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
 # Measured dead ends for the DECODE all-reduce (T3K, 31B, [32, 5376] x TP8).
-#
-# Decode spends ~35% of device time in 120 all-reduces (2/layer x 60), each
-# ~80 us for a 344 KB payload against a ~12 us ring wire-time floor -- i.e. it
-# is launch/sync-latency bound, not bandwidth bound. Three plausible fixes were
-# benchmarked (traced, best of 5). All three lose:
-#
-#   1. Async minimal CCL (reduce_scatter_minimal_async + all_gather_async), the
-#      variants tt_transformers uses. Sync split 82.7 us vs async 83.1 (w1c1) /
-#      85.3 (w2c1) / 79.7 (w2c2) -- inside run-to-run noise (~5%). This is why
-#      ccl_async_enabled() gates async to prefill; it is a measured choice.
-#
-#   2. Fusing the collective into its producer matmul
-#      (matmul_reduce_scatter_async, as models/demos/blackhole/qwen36 does).
-#      SLOWER at decode: MLP down_proj 160 us -> 228-231 us, attn o_proj
-#      118 us -> 151 us (0.69-0.88x). Fusion pins the matmul to a reduced core
-#      grid so the RS workers get disjoint rows, and at decode M=32 the matmul
-#      is DRAM-bound, so the lost cores cost more than the overlap saves. There
-#      is simply not enough compute in a 32-row matmul to hide a collective
-#      behind. Fusion is a prefill / large-M technique.
-#
-#   3. bfp8 CCL payload. The one that IS faster -- 82.7 -> 68.3 us (1.16x),
-#      worth 43.2 -> 41.3 ms/token end to end (+4.6% tok/s) -- and it is NOT
-#      usable: full-model PCC 0.9979 -> 0.8859 and full-model DECODE PCC
-#      0.9978 -> 0.7150 against a 0.99 gate (test_model.py, 1x8).
-#
-#      The reduce-scatter sums PARTIAL products across 8 devices, and those
-#      partials cancel: each is much larger than their sum. Quantizing before
-#      the reduction sizes the error to the large partials while the result is
-#      small, so relative error is amplified by the cancellation factor. This
-#      is why the payload is bf16 even though the weights feeding it are bfp8 --
-#      weights are never summed across devices, activations-in-flight are.
-#      Casting only for the wire does not rescue the idea either: an explicit
-#      typecast costs ~4.7 us, and cast-in + cast-out lands at 77.7 us (1.02x),
-#      giving essentially the whole win back.
-#
-# Net: the collective is at the floor of what the available ops can do at this
-# shape. Further decode gains have to come from somewhere other than the CCL.
-# ─────────────────────────────────────────────────────────────────────────────
+# It is launch/sync-latency bound, not bandwidth bound (~80 us for a 344 KB
+# payload against a ~12 us wire-time floor), and all three obvious fixes lose:
+#   1. Async minimal CCL: 83.1-85.3 us vs the sync split's 82.7 -- inside noise.
+#      This is why ccl_async_enabled() gates async to prefill.
+#   2. Fusing the collective into its producer matmul (matmul_reduce_scatter_
+#      async): 0.69-0.88x at decode. Fusion pins the matmul to a reduced core
+#      grid, and a 32-row DRAM-bound matmul has no compute to hide a collective
+#      behind. It is a prefill / large-M technique.
+#   3. bfp8 CCL payload: 1.16x faster (+4.6% tok/s) and NOT usable -- full-model
+#      decode PCC 0.9978 -> 0.7150 against a 0.99 gate. The reduce-scatter sums
+#      partials that cancel, so quantizing before the reduction amplifies the
+#      error by the cancellation factor; casting only for the wire gives the
+#      win back (1.02x). Do not retry this without re-reading the PCC number.
 
 
 def default_ccl_topology(mesh_device=None):
