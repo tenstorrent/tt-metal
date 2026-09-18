@@ -10,7 +10,6 @@ on:
   workflow_run:
     workflows:
       - "Blackhole sanity tests"
-      - "T3K tests"
       - "(Single-card) Demo tests"
       - "Nightly tt-metal L2 tests"
     types:

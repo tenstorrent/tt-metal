@@ -1,4 +1,4 @@
-name: "(End of Life - October 31) T3K dispatch tests"
+name: "(End of Life - 31 October 2026) T3K dispatch tests"
 
 on:
   workflow_dispatch:
