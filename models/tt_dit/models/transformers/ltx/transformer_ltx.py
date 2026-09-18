@@ -51,6 +51,19 @@ def _gated_residual(t: ttnn.Tensor, t1: ttnn.Tensor, t2: ttnn.Tensor) -> ttnn.Te
     return ttnn.addcmul(t, t1, t2)
 
 
+def _norm_adaln(norm, x, shift, scale_p1, *, fuse: bool):
+    """Scalar B=1 AdaLN, optionally folded into the existing RMSNorm op.
+
+    The fused op keeps its normalized intermediate in fp32, so this removes the
+    baseline bf16 boundary before addcmul. Per-token and batched modulations keep
+    their existing path until separately validated; scale_p1 already includes +1.
+    """
+    scalar_shape = (1, 1, 1, x.shape[-1])
+    if fuse and tuple(x.shape[:2]) == (1, 1) and tuple(shift.shape) == tuple(scale_p1.shape) == scalar_shape:
+        return norm(x, dynamic_weight=scale_p1, dynamic_bias=shift)
+    return ttnn.addcmul(shift, norm(x), scale_p1)
+
+
 def _tile_preserving_chunk0(x: ttnn.Tensor, n: int) -> list[ttnn.Tensor]:
     """Split ``x`` into ``n`` size-1 slices along dim 0 WITHOUT leaving TILE layout.
 
@@ -154,6 +167,9 @@ class LTXTransformerBlock(Module):
         self.mesh_device = mesh_device
         self.ccl_manager = ccl_manager
         self.parallel_config = parallel_config
+        # Construction-time opt-in: captured graphs cannot switch arithmetic
+        # routes after creation. Shared A<->V normalization stays unfused below.
+        self._fuse_norm_adaln = os.environ.get("LTX_FUSE_NORM_ADALN", "0") in ("1", "true", "True")
 
         rms_norm_kwargs = {
             "norm_eps": eps,
@@ -339,8 +355,7 @@ class LTXTransformerBlock(Module):
 
         Ring fuses ff1(AG) + ff2 + RS + addcmul; Linear needs explicit AG + plain ffn().
         """
-        normed = norm(x_1BND)
-        normed = ttnn.addcmul(shift_ff, normed, scale_ff_p1)
+        normed = _norm_adaln(norm, x_1BND, shift_ff, scale_ff_p1, fuse=self._fuse_norm_adaln)
         if self.ccl_manager.topology == ttnn.Topology.Ring:
             return ffn.forward_fused_addcmul(
                 normed,
@@ -401,8 +416,7 @@ class LTXTransformerBlock(Module):
             v_shift_ca, v_scale_ca_p1, v_gate_ca = chunks[6], chunks[7], chunks[8]
 
         # Video self-attention
-        video_normed = self.norm1(video_1BND)
-        video_normed = ttnn.addcmul(v_shift_sa, video_normed, v_scale_sa_p1)
+        video_normed = _norm_adaln(self.norm1, video_1BND, v_shift_sa, v_scale_sa_p1, fuse=self._fuse_norm_adaln)
         video_1BND = self.attn1(
             spatial_1BND=video_normed,
             N=video_N,
@@ -416,7 +430,7 @@ class LTXTransformerBlock(Module):
 
         # Video text cross-attention
         if self.cross_attention_adaln:
-            video_ca_input = ttnn.addcmul(v_shift_ca, self.norm2(video_1BND), v_scale_ca_p1)
+            video_ca_input = _norm_adaln(self.norm2, video_1BND, v_shift_ca, v_scale_ca_p1, fuse=self._fuse_norm_adaln)
             if video_prompt_temb is not None:
                 shifted_prompt_v = self.prompt_scale_shift_table.data + video_prompt_temb
                 v_kv_shift, v_kv_scale_p1 = _tile_preserving_chunk0(shifted_prompt_v, 2)
@@ -454,8 +468,7 @@ class LTXTransformerBlock(Module):
             a_shift_ca, a_scale_ca_p1, a_gate_ca = a_chunks[6], a_chunks[7], a_chunks[8]
 
         # Audio self-attention
-        audio_normed = self.audio_norm1(audio_1BND)
-        audio_normed = ttnn.addcmul(a_shift_sa, audio_normed, a_scale_sa_p1)
+        audio_normed = _norm_adaln(self.audio_norm1, audio_1BND, a_shift_sa, a_scale_sa_p1, fuse=self._fuse_norm_adaln)
         audio_1BND = self.audio_attn1(
             spatial_1BND=audio_normed,
             N=audio_N,
@@ -470,7 +483,9 @@ class LTXTransformerBlock(Module):
 
         # Audio text cross-attention
         if self.cross_attention_adaln:
-            audio_ca_input = ttnn.addcmul(a_shift_ca, self.audio_norm2(audio_1BND), a_scale_ca_p1)
+            audio_ca_input = _norm_adaln(
+                self.audio_norm2, audio_1BND, a_shift_ca, a_scale_ca_p1, fuse=self._fuse_norm_adaln
+            )
             if audio_prompt_temb is not None:
                 shifted_prompt_a = self.audio_prompt_scale_shift_table.data + audio_prompt_temb
                 a_kv_shift, a_kv_scale_p1 = ttnn.chunk(shifted_prompt_a, 2, dim=0)
