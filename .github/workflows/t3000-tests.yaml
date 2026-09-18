@@ -3,17 +3,20 @@ name: "T3K tests"
 on:
   workflow_dispatch:
     inputs:
+      # The values below are the model-name fields in the tests YAMLs the impls
+      # read. A value that matches no model-name filters the matrix down to the
+      # entries that carry no model-name, which reads as a pass.
       unit-model:
-        description: "Unit tests: select model to test"
+        description: "Unit tests: select model to test (model-name in t3k_unit_tests.yaml)"
         required: true
         default: all
         type: choice
         options:
           - all
-          - tttv2 modules
-          - qwen3_vl
+          - t3k_ttmetal_tests
+          - t3k_ttnn_tests
       integration-model:
-        description: "Integration tests: select model to test"
+        description: "Integration tests: select model to test (model-name in t3k_integration_tests.yaml)"
         required: true
         default: all
         type: choice
