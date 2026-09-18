@@ -26,8 +26,8 @@ class Sharding:
 
     @classmethod
     def from_tensor(cls, tensor: ttml.autograd.Tensor) -> Sharding:
-        """Read off the live topology; a unit mesh reads back as 1-D [Replicate], so this raises only
-        for a tensor with no topology to read, which nothing downstream can place correctly anyway."""
+        """Read off the live topology. A unit mesh reads back as 1-D ``[Replicate]``.
+        NATIVE returns the stored slot as is; the default precision would typecast and cache a copy."""
         topology = tensor.get_value(ttml.autograd.PreferredPrecision.NATIVE).tensor_topology()
         return cls(list(topology.placements()), list(topology.distribution_shape()))
 
@@ -35,8 +35,8 @@ class Sharding:
     def placements(self) -> list:
         """Per-mesh-axis ttnn placements (``PlacementShard`` / ``PlacementReplicate``).
 
-        A fully replicated tensor flattens to a single ``Replicate``, so this can be shorter
-        than the mesh rank: never index it by mesh axis.
+        A mapper-placed tensor carries one entry per mesh axis. A tensor replicated by the default
+        topology may flatten to a single ``Replicate``, so check the length before indexing by axis.
         """
         return self._placements
 
