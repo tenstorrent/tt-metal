@@ -12,10 +12,9 @@ session, 32-row blocks) so this demo shares the cache layout with the
 multi-user and serving paths. The RoPE tables are produced once for the
 maximum length; each decode step slices the single position row(s) it needs.
 
-The test has three deployment variants:
+The test has two deployment variants:
 
-* ``tp1_8chip``: eight single-chip pipeline stages on an 8-chip mesh.
-* ``tp4_8chip``: two 1x4 tensor-parallel stages on the same 8-chip mesh.
+* ``tp4_8chip``: two 1x4 tensor-parallel stages on an 8-chip mesh.
 * ``tp4_32chip``: the same two 1x4 stages on a 32-chip Galaxy (24 chips idle).
 
 Attention uses q_a/kv, replicated full-width on every rank of a
@@ -128,7 +127,6 @@ def _construct_model(
     *,
     tp_size: int = 1,
     system_config=None,
-    use_prefetcher=None,
     loader=None,
     config=None,
 ):
@@ -160,7 +158,6 @@ def _construct_model(
         max_layers=max_layers,
         use_submeshes=True,
         system_config=system_config,
-        use_prefetcher=use_prefetcher,
         tp_size=tp_size,
     )
     lm_head = Linear(
@@ -187,20 +184,17 @@ def _construct_model(
 def _assert_decode_parallelism(model: DeepSeekV4Model, tp_size: int) -> None:
     """The TP / pipeline layout both decode demos pin."""
     assert model.tp_size == tp_size
-    assert model.num_submeshes == (2 if tp_size == 4 else 8)
+    assert model.num_submeshes == 2
     assert model.pipeline_devices == model.num_submeshes * tp_size
     assert all(layer.self_attn.tp_size == tp_size for layer in model.layers)
     assert all(layer.mlp.tp_size == tp_size for layer in model.layers)
     assert all(layer.mlp.experts.tp_size == tp_size for layer in model.layers)
-    if tp_size > 1:
-        attn = model.layers[0].self_attn
-        assert attn.qkv_tp_strategy == "replicated", "TP4 keeps q_a and kv replicated"
-        assert not attn.q_a_proj.keep_weights_in_l1
-        assert not attn.kv_proj.keep_weights_in_l1
-        assert not attn.q_a_proj.partial_width_sharded
-        assert not attn.kv_proj.partial_width_sharded
-        assert attn.kv_proj.num_inputB_cores == 16
-        assert attn.q_b_proj.N == attn.num_heads * attn.head_dim // tp_size
+    attn = model.layers[0].self_attn
+    assert attn.qkv_tp_strategy == "replicated", "TP4 keeps q_a and kv replicated"
+    assert not attn.q_a_proj.partial_width_sharded
+    assert not attn.kv_proj.partial_width_sharded
+    assert attn.kv_proj.num_inputB_cores == 16
+    assert attn.q_b_proj.N == attn.num_heads * attn.head_dim // tp_size
     logger.info(
         f"parallelism: {model.num_submeshes} pipeline stages x TP{tp_size} " f"({model.pipeline_devices} chips)"
     )
@@ -279,7 +273,6 @@ def _build_and_prefill(
         prefetcher,
         tp_size=tp_size,
         system_config=system_config,
-        use_prefetcher=None,
         loader=loader,
         config=config,
     )
@@ -388,7 +381,6 @@ class _InterruptFlag:
 @pytest.mark.parametrize(
     "mesh_device,tp_size",
     [
-        pytest.param((8, 1), 1, id="tp1_8chip"),
         # TP4 opens the mesh directly in the 1x4-stage shape so no ``mesh.reshape``
         # runs — on an 8-chip P150 host, reshaping (8, 1) -> (2, 4) has been seen
         # to leave submesh 1 with a downgraded per-device compute grid, which

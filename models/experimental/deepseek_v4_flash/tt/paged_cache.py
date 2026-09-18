@@ -65,9 +65,7 @@ class PagedGroup:
 
     ``block_size`` counts *rows of the layer's KV axis*, not tokens: a compressor
     group's row is one pooled entry per ``compress_rate`` tokens, so a block of the
-    same row count spans ``compress_rate`` times more context. Sizing it as
-    ``tokens_per_block / compress_rate`` (see :func:`rows_per_block`) is what makes
-    every group consume one block per ``tokens_per_block`` tokens.
+    same row count spans ``compress_rate`` times more context.
     """
 
     layer_type: str
@@ -171,56 +169,21 @@ class PagedGroup:
         return blocks - self.ring_blocks
 
 
-def rows_per_block(tokens_per_block: int, compress_rate: int | None, sliding_window: int) -> int:
-    """Rows one block of ``tokens_per_block`` tokens of context needs for a group.
-
-    A compressor group stores one row per ``compress_rate`` tokens, so scaling the row
-    count down by the rate makes every group grow by exactly one block per
-    ``tokens_per_block`` tokens -- with rates 4 (CSA) and 128 (HCA), the HCA block is
-    1/32 the size of the CSA one. The sliding ring is bounded by the window and
-    modulo-addressed, so it takes the whole window as one block instead.
-    """
-    if compress_rate is None:
-        return min(tokens_per_block, sliding_window)
-    return tokens_per_block // compress_rate
-
-
-def min_tokens_per_block(compress_rates) -> int:
-    """Smallest context-per-block for which every group's rows-per-block is a legal
-    (tile-multiple) block: the paged ops floor a block at one tile of rows, and the
-    most-compressed group is the one that hits that floor first."""
-    rates = [int(cr) for cr in compress_rates] or [1]
-    return ttnn.TILE_SIZE * max(rates)
-
-
 def build_groups(
     layer_types,
     compress_rates: dict,
     sliding_window: int,
     max_seq: int,
-    block_size: int | None = None,
-    tokens_per_block: int | None = None,
+    block_size: int,
 ) -> dict[str, PagedGroup]:
     """One :class:`PagedGroup` per distinct layer type present in ``layer_types``.
 
-    Give either ``block_size`` (the same row count for every group, the model's own
-    layout) or ``tokens_per_block`` (per-group row counts covering the same span of
-    context, which is what lets one block index space address every layer type).
+    ``block_size`` is the row count every group uses (the model's own layout).
     """
-    if (block_size is None) == (tokens_per_block is None):
-        raise ValueError("pass exactly one of block_size (rows) or tokens_per_block (context)")
     return {
         lt: PagedGroup(
             layer_type=lt,
-            block_size=(
-                block_size
-                if block_size is not None
-                else rows_per_block(
-                    tokens_per_block,
-                    None if lt == "sliding_attention" else compress_rates[lt],
-                    sliding_window,
-                )
-            ),
+            block_size=block_size,
             sliding_window=sliding_window,
             max_seq=max_seq,
             compress_rate=None if lt == "sliding_attention" else compress_rates[lt],
@@ -351,10 +314,6 @@ class PagedKVManager:
             tail = row[g.ring_blocks :]
             self.pools[name].free([b for b in tail if b != ZERO_BLOCK])
             row[g.ring_blocks :] = [ZERO_BLOCK] * g.compressed_blocks
-
-    @property
-    def session_ids(self) -> list[int]:
-        return sorted(self._sessions)
 
     def has_session(self, sid: int) -> bool:
         return sid in self._sessions

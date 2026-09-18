@@ -18,10 +18,9 @@ from .common import (
     _MASK_NEG,
     _region,
     _trace_capture_guard,
-    set_signposts_enabled,
 )
 from .decoder_layer import DeepSeekV4DecoderLayer
-from .embedding import DeepSeekV4Embedding, DeepSeekV4Flash
+from .embedding import DeepSeekV4Embedding
 from .hyperconnection import DeepSeekV4HyperConnection, DeepSeekV4HyperHead
 from .layers import DeepSeekV4RMSNorm, Linear, to_ttnn_device
 from .model import DeepSeekV4Model
@@ -39,7 +38,6 @@ __all__ = [
     "DeepSeekV4CSACompressor",
     "DeepSeekV4DecoderLayer",
     "DeepSeekV4Embedding",
-    "DeepSeekV4Flash",
     "DeepSeekV4HCACompressor",
     "DeepSeekV4HashRouter",
     "DeepSeekV4HyperConnection",
@@ -64,6 +62,5 @@ __all__ = [
     "make_rope_table",
     "sdpa_causal_cur_pos",
     "sdpa_causal_ok",
-    "set_signposts_enabled",
     "to_ttnn_device",
 ]
