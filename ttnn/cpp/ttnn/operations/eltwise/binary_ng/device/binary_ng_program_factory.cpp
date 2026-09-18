@@ -39,6 +39,20 @@ uint32_t extract_nD_dims(const Tensor& x, const int out_rank) {
     return nD_dim;
 }
 
+// 1 when the collapsed nD volumes match; otherwise output_nd / input_nd, which is
+// the dim -6 broadcast extent because dims -7 and outward are required to match.
+uint32_t nd_broadcast_factor(const uint32_t input_nd, const uint32_t output_nd) {
+    if (input_nd == output_nd) {
+        return 1u;
+    }
+    TT_FATAL(
+        input_nd != 0 && output_nd % input_nd == 0,
+        "Collapsed nD volume {} must divide the output volume {}; only dim -6 may broadcast",
+        input_nd,
+        output_nd);
+    return output_nd / input_nd;
+}
+
 std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t> get_shape_dims(const Tensor& x) {
     const auto& shape = x.padded_shape();
     const auto& tile = x.tensor_spec().tile();
@@ -433,6 +447,8 @@ BinaryNgPerCoreArgs build_per_core_runtime_args(
     auto aND = CMAKE_UNIQUE_NAMESPACE::extract_nD_dims(a, out_rank);
     auto bND = b.has_value() ? CMAKE_UNIQUE_NAMESPACE::extract_nD_dims(*b, out_rank) : 1;
     auto cND = CMAKE_UNIQUE_NAMESPACE::extract_nD_dims(c, out_rank);
+    const auto a_nd_factor = CMAKE_UNIQUE_NAMESPACE::nd_broadcast_factor(aND, cND);
+    const auto b_nd_factor = CMAKE_UNIQUE_NAMESPACE::nd_broadcast_factor(bND, cND);
     const auto aHt_r = a.padded_shape()[-2];
     const auto aWt_r = a.padded_shape()[-1];
     const auto bHt_r = b.has_value() ? b->padded_shape()[-2] : 0;
@@ -612,7 +628,7 @@ BinaryNgPerCoreArgs build_per_core_runtime_args(
             // Noop core: zero-filled runtime args, sized to match the active kernel variant so unused
             // cores neither inflate the per-kernel max runtime-arg allocation nor change slot count when a
             // core flips between noop and work across differently-shaped cache hits.
-            const size_t reader_len = row_major_inputs ? 26 : 21;
+            const size_t reader_len = row_major_inputs ? 28 : 23;
             const size_t writer_len = row_major_inputs ? 14 : (b.has_value() ? 11 : 12);
             const size_t compute_len = (op_type == BinaryOpType::ISCLOSE) ? 5 : 4;
             reader_runtime_args.assign(reader_len, std::variant<uint32_t, Buffer*>{uint32_t{0}});
@@ -786,7 +802,9 @@ BinaryNgPerCoreArgs build_per_core_runtime_args(
                 b_alignment,
                 tiles_per_row_width,
                 reader_stride_size_bytes,
-                packed_scalar_for_reader};
+                packed_scalar_for_reader,
+                a_nd_factor,
+                b_nd_factor};
         } else {
             reader_runtime_args = {
                 a.buffer(),
@@ -810,6 +828,8 @@ BinaryNgPerCoreArgs build_per_core_runtime_args(
                 bHt * bWt * bC * (bN > 1),
                 bHt * bWt * (bC > 1),
                 b_num_tiles,
+                a_nd_factor,
+                b_nd_factor,
             };
         }
 

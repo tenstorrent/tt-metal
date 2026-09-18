@@ -8,6 +8,7 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "ttnn/operations/eltwise/binary_ng/device/kernels_ng/dataflow/nd_indexing.hpp"
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/dataflow/fill_tile_utils.hpp"
 
 void kernel_main() {
@@ -32,6 +33,8 @@ void kernel_main() {
     const uint32_t n_stride_b = get_arg_val<uint32_t>(18);
     const uint32_t c_stride_b = get_arg_val<uint32_t>(19);
     const uint32_t src_num_tiles_b = get_arg_val<uint32_t>(20);
+    const uint32_t a_nd_factor = get_arg_val<uint32_t>(21);
+    const uint32_t b_nd_factor = get_arg_val<uint32_t>(22);
 
     constexpr auto cb_id_src = tt::CBIndex::c_0;
     constexpr auto cb_id_src_b = tt::CBIndex::c_1;
@@ -80,25 +83,28 @@ void kernel_main() {
     uint32_t start_tw = offset_c % Wt;
     uint32_t end_tw = has_sharding ? start_tw + dst_shard_width : Wt;
 
+    uint32_t input_nd_a = get_input_nd_index(start_nd, a_nd_factor);
+    uint32_t input_nd_b = get_input_nd_index(start_nd, b_nd_factor);
+
     // this is the INPUT tile offset
-    uint32_t tile_offset = start_nd * nD_stride + start_d * d_stride + start_n * n_stride + start_c * c_stride;
+    uint32_t tile_offset = input_nd_a * nD_stride + start_d * d_stride + start_n * n_stride + start_c * c_stride;
 #if !SRC_BCAST
     tile_offset += start_th * Wt;
 #endif
     uint32_t next_c_shift = c_stride - HtWt;
     uint32_t next_n_shift = n_stride - c_stride * C;
     uint32_t next_d_shift = d_stride - n_stride * N;
-    uint32_t next_nd_shift = nD_stride - d_stride * D;
 
     uint32_t tile_offset_b =
-        start_nd * nD_stride_b + start_d * d_stride_b + start_n * n_stride_b + start_c * c_stride_b;
+        input_nd_b * nD_stride_b + start_d * d_stride_b + start_n * n_stride_b + start_c * c_stride_b;
 #if !SRC_BCAST_B
     tile_offset_b += start_th * Wt;
 #endif
     uint32_t next_c_shift_b = c_stride_b - HtWt;
     uint32_t next_n_shift_b = n_stride_b - c_stride_b * C;
     uint32_t next_d_shift_b = d_stride_b - n_stride_b * N;
-    uint32_t next_nd_shift_b = nD_stride_b - d_stride_b * D;
+    const uint32_t d_span = d_stride * D;
+    const uint32_t d_span_b = d_stride_b * D;
 
     uint32_t num_tiles_read = 0;
     for (uint32_t nd = start_nd; nd < cND && num_tiles_read < dst_num_tiles; ++nd, start_d = 0) {
@@ -195,10 +201,14 @@ void kernel_main() {
 #endif
         }
 #if !SRC_SHARDED
-        tile_offset += next_nd_shift;
+        const uint32_t next_input_nd_a = get_input_nd_index(nd + 1, a_nd_factor);
+        tile_offset = advance_nd_offset(tile_offset, input_nd_a, next_input_nd_a, nD_stride, d_span);
+        input_nd_a = next_input_nd_a;
 #endif
 #if !SRC_SHARDED_B
-        tile_offset_b += next_nd_shift_b;
+        const uint32_t next_input_nd_b = get_input_nd_index(nd + 1, b_nd_factor);
+        tile_offset_b = advance_nd_offset(tile_offset_b, input_nd_b, next_input_nd_b, nD_stride_b, d_span_b);
+        input_nd_b = next_input_nd_b;
 #endif
     }
 }

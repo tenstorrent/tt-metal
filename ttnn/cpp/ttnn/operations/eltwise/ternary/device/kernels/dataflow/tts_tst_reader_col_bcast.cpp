@@ -8,6 +8,7 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "ttnn/operations/eltwise/binary_ng/device/kernels_ng/dataflow/nd_indexing.hpp"
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/dataflow/fill_tile_utils.hpp"
 
 void kernel_main() {
@@ -36,6 +37,8 @@ void kernel_main() {
     const uint32_t true_num_tiles = get_arg_val<uint32_t>(19);
     const uint32_t dst_shard_width = get_arg_val<uint32_t>(25);
     const uint32_t src_num_tiles = get_arg_val<uint32_t>(26);  // moved to end
+    const uint32_t nd_broadcast_factor = get_arg_val<uint32_t>(27);
+    const uint32_t true_nd_broadcast_factor = get_arg_val<uint32_t>(28);
 
     constexpr auto predicate_cb = get_compile_time_arg_val(0);
     constexpr auto true_cb = get_compile_time_arg_val(1);
@@ -76,27 +79,30 @@ void kernel_main() {
     uint32_t start_tw = offset_c % Wt;
     uint32_t end_tw = (dst_shard_width != 0) ? (start_tw + dst_shard_width) : Wt;
 
+    uint32_t input_nd = get_input_nd_index(start_nd, nd_broadcast_factor);
+    uint32_t true_input_nd = get_input_nd_index(start_nd, true_nd_broadcast_factor);
+
     // this is the INPUT tile offset for predicate
-    uint32_t tile_offset = start_nd * nD_stride + start_d * d_stride + start_n * n_stride + start_c * c_stride;
+    uint32_t tile_offset = input_nd * nD_stride + start_d * d_stride + start_n * n_stride + start_c * c_stride;
 #if !SRC_BCAST_A
     tile_offset += start_th * Wt;
 #endif
     uint32_t next_c_shift = c_stride - HtWt;
     uint32_t next_n_shift = n_stride - c_stride * C;
     uint32_t next_d_shift = d_stride - n_stride * N;
-    uint32_t next_nd_shift = nD_stride - d_stride * D;
+    const uint32_t d_span = d_stride * D;
 
     // For true tensor (CB1) - use true tensor strides but predicate dimensions for offset
     uint32_t true_tile_offset =
-        start_nd * true_nD_stride + start_d * true_d_stride + start_n * true_n_stride + start_c * true_c_stride;
+        true_input_nd * true_nD_stride + start_d * true_d_stride + start_n * true_n_stride + start_c * true_c_stride;
 #if !SRC_BCAST_CB1
     // Use predicate dimensions for offset calculation (same as TTT)
     true_tile_offset += start_th * Wt;
 #endif
-    uint32_t true_next_c_shift = true_c_stride - HtWt;                 // Use predicate HtWt
-    uint32_t true_next_n_shift = true_n_stride - true_c_stride * C;    // Use predicate C
-    uint32_t true_next_d_shift = true_d_stride - true_n_stride * N;    // Use predicate N
-    uint32_t true_next_nd_shift = true_nD_stride - true_d_stride * D;  // Use predicate D
+    uint32_t true_next_c_shift = true_c_stride - HtWt;               // Use predicate HtWt
+    uint32_t true_next_n_shift = true_n_stride - true_c_stride * C;  // Use predicate C
+    uint32_t true_next_d_shift = true_d_stride - true_n_stride * N;  // Use predicate N
+    const uint32_t true_d_span = true_d_stride * D;                  // Use predicate D
 
     // Main loop for reading tiles
 
@@ -193,11 +199,16 @@ void kernel_main() {
             true_tile_offset += true_next_d_shift;
 #endif
         }
+        const uint32_t next_input_nd = get_input_nd_index(nd + 1, nd_broadcast_factor);
+        const uint32_t next_true_input_nd = get_input_nd_index(nd + 1, true_nd_broadcast_factor);
 #if !SRC_SHARDED_A
-        tile_offset += next_nd_shift;
+        tile_offset = advance_nd_offset(tile_offset, input_nd, next_input_nd, nD_stride, d_span);
 #endif
 #if !SRC_SHARDED_B
-        true_tile_offset += true_next_nd_shift;
+        true_tile_offset =
+            advance_nd_offset(true_tile_offset, true_input_nd, next_true_input_nd, true_nD_stride, true_d_span);
 #endif
+        input_nd = next_input_nd;
+        true_input_nd = next_true_input_nd;
     }
 }

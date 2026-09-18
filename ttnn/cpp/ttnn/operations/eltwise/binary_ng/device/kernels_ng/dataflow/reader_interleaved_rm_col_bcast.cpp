@@ -9,6 +9,7 @@
 #include "api/dataflow/circular_buffer.h"
 #include "api/tensor/noc_traits.h"
 #include "api/core_local_mem.h"
+#include "ttnn/operations/eltwise/binary_ng/device/kernels_ng/dataflow/nd_indexing.hpp"
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/dataflow/fill_tile_utils.hpp"
 
 namespace {
@@ -63,6 +64,9 @@ void kernel_main() {
     const uint32_t alignment_b = get_arg_val<uint32_t>(index++);
     const uint32_t tiles_per_row = get_arg_val<uint32_t>(index++);
     const uint32_t stride_size_bytes = get_arg_val<uint32_t>(index++);
+    index++;  // Skip packed-scalar slot shared with the scalar-op RM ABI.
+    const uint32_t a_nd_factor = get_arg_val<uint32_t>(index++);
+    const uint32_t b_nd_factor = get_arg_val<uint32_t>(index++);
 
     constexpr auto cb_id_src = tt::CBIndex::c_0;
     constexpr auto cb_id_src_b = tt::CBIndex::c_1;
@@ -124,12 +128,13 @@ void kernel_main() {
     tmp /= outD;
     uint32_t start_nd = tmp;
 
+    uint32_t input_nd_a = get_input_nd_index(start_nd, a_nd_factor);
+    uint32_t input_nd_b = get_input_nd_index(start_nd, b_nd_factor);
+    uint32_t ptr_nd_a = input_nd_a * s_nd_a;
+    uint32_t ptr_nd_b = input_nd_b * s_nd_b;
     uint32_t row_blocks_pushed = 0;
 
     for (uint32_t nd = start_nd; nd < outND && row_blocks_pushed < dst_num_tiles; ++nd, start_d = 0) {
-        const uint32_t ptr_nd_a = nd * s_nd_a;
-        const uint32_t ptr_nd_b = nd * s_nd_b;
-
         for (uint32_t d = start_d; d < outD && row_blocks_pushed < dst_num_tiles; ++d, start_n = 0) {
             const uint32_t ptr_d_a = ptr_nd_a + d * s_d_a;
             const uint32_t ptr_d_b = ptr_nd_b + d * s_d_b;
@@ -244,5 +249,11 @@ void kernel_main() {
                 }
             }
         }
+        const uint32_t next_input_nd_a = get_input_nd_index(nd + 1, a_nd_factor);
+        const uint32_t next_input_nd_b = get_input_nd_index(nd + 1, b_nd_factor);
+        ptr_nd_a = advance_nd_ptr(ptr_nd_a, input_nd_a, next_input_nd_a, s_nd_a);
+        ptr_nd_b = advance_nd_ptr(ptr_nd_b, input_nd_b, next_input_nd_b, s_nd_b);
+        input_nd_a = next_input_nd_a;
+        input_nd_b = next_input_nd_b;
     }
 }
