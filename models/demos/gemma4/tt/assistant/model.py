@@ -31,8 +31,6 @@ Constraints (first cut):
     a circular-buffer modulo (the assistant attention config doesn't carry one).
 """
 
-import os
-
 import torch
 
 import ttnn
@@ -179,18 +177,19 @@ class Gemma4AssistantModel:
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
-        preproj_bfp8 = os.environ.get("GEMMA4_PREPROJ_BFP8", "1").lower() not in ("0", "false", "no")
-        preproj_dtype = ttnn.bfloat8_b if preproj_bfp8 else dtype
-        preproj_suffix = "_bfp8" if preproj_dtype != dtype else ""
+        # The projections are read on every draft step; bfp8 halves their DRAM
+        # traffic. The cache suffix keeps a bf16-cached tensor from being reused
+        # under the narrower dtype.
+        proj_dtype = ttnn.bfloat8_b
+        proj_suffix = "_bfp8" if proj_dtype != dtype else ""
         self.pre_projection = _linear(
-            "pre_projection.weight", None, dtype_override=preproj_dtype, cache_suffix=preproj_suffix
+            "pre_projection.weight", None, dtype_override=proj_dtype, cache_suffix=proj_suffix
         )
-        postproj_bfp8 = os.environ.get("GEMMA4_POSTPROJ_BFP8", "1").lower() not in ("0", "false", "no")
-        postproj_dtype = ttnn.bfloat8_b if postproj_bfp8 else dtype
-        postproj_suffix = "_bfp8" if postproj_dtype != dtype else ""
         self.post_projection = _linear(
-            "post_projection.weight", None, dtype_override=postproj_dtype, cache_suffix=postproj_suffix
+            "post_projection.weight", None, dtype_override=proj_dtype, cache_suffix=proj_suffix
         )
+        # lm_head tied to the assistant's own embed_tokens when a separate
+        # lm_head.weight isn't stored.
         lm_key = "lm_head.weight" if "lm_head.weight" in state_dict else "model.embed_tokens.weight"
         lm_head_suffix = "_bfp8" if lm_head_dtype != dtype else ""
         self.lm_head = _linear(lm_key, col_mapper, dtype_override=lm_head_dtype, cache_suffix=lm_head_suffix)

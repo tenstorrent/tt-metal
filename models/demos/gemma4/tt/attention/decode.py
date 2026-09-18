@@ -13,9 +13,7 @@ import ttnn
 from models.demos.gemma4.tt.compute_config import sdpa_fp32_dest_acc_en, sdpa_math_fidelity
 
 from .operations import (
-    _fused_qkv_norm_supported,
     apply_allreduce,
-    apply_fused_qkv_head_norm,
     apply_output_projection,
     apply_per_head_norm,
     apply_qkv_projection,
@@ -23,7 +21,6 @@ from .operations import (
     apply_rope_decode_peruser,
     concat_heads,
     effective_block_size,
-    fused_qkv_head_norm_enabled,
     split_qkv_heads_decode,
     split_qkv_heads_prefill,
 )
@@ -100,48 +97,26 @@ def decode_forward(
     # 1. Fused QKV projection
     xqkv = apply_qkv_projection(hidden_states, weights)
 
-    # 2-3. Per-head norms + head split (optional fused QKV norm).
-    n_q_local = config.num_attention_heads // tp
-    n_kv_local = 1 if weights.kv_replicated else config.num_key_value_heads // tp
-    use_fused_norm = (
-        fused_qkv_head_norm_enabled()
-        and _fused_qkv_norm_supported(int(xqkv.shape[-2]))
-        and not is_kv_shared
-        and weights.qkv_norm_weight is not None
-        and int(xqkv.shape[-1]) == (n_q_local + 2 * n_kv_local) * config.head_dim
-    )
-    if use_fused_norm:
-        xqkv = apply_fused_qkv_head_norm(
-            xqkv,
-            weights.qkv_norm_weight,
-            config.rms_norm_eps,
-            num_rows=n_q_local + 2 * n_kv_local,
-            head_dim=config.head_dim,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-        )
-
+    # 2. Split into Q, K, V heads
     tt_q, tt_k, tt_v = split_qkv_heads_decode(
         xqkv, config, weights.is_global, tp=tp, kv_replicated=weights.kv_replicated
     )
+
+    # 3. Per-head norms (move to DRAM for rms_norm, restore sharded for RoPE)
     q_sharded_mem = tt_q.memory_config()
+    tt_q = ttnn.to_memory_config(tt_q, ttnn.DRAM_MEMORY_CONFIG)
+    tt_q = apply_per_head_norm(tt_q, weights.q_norm_weight, config.rms_norm_eps, with_scale=True)
 
-    if use_fused_norm:
-        tt_q = ttnn.to_memory_config(tt_q, ttnn.DRAM_MEMORY_CONFIG)
-        tt_k = ttnn.to_memory_config(tt_k, ttnn.DRAM_MEMORY_CONFIG)
+    if is_kv_shared:
+        # KV-shared layer: discard own K/V, use source layer's KV cache directly
+        tt_k.deallocate(True)
+        tt_v.deallocate(True)
     else:
-        tt_q = ttnn.to_memory_config(tt_q, ttnn.DRAM_MEMORY_CONFIG)
-        tt_q = apply_per_head_norm(tt_q, weights.q_norm_weight, config.rms_norm_eps, with_scale=True)
-
-        if is_kv_shared:
-            # KV-shared layer: discard own K/V, use source layer's KV cache directly
-            tt_k.deallocate(True)
-            tt_v.deallocate(True)
-        else:
-            tt_k = ttnn.to_memory_config(tt_k, ttnn.DRAM_MEMORY_CONFIG)
-            tt_v = ttnn.to_memory_config(tt_v, ttnn.DRAM_MEMORY_CONFIG)
-            # Do not K→V clone (resync): that produced unicode garbage on LB 12B.
-            tt_k = apply_per_head_norm(tt_k, weights.k_norm_weight, config.rms_norm_eps, with_scale=True)
-            tt_v = apply_per_head_norm(tt_v, None, config.rms_norm_eps, with_scale=False)
+        tt_k = ttnn.to_memory_config(tt_k, ttnn.DRAM_MEMORY_CONFIG)
+        tt_v = ttnn.to_memory_config(tt_v, ttnn.DRAM_MEMORY_CONFIG)
+        # Do not K→V clone (resync): that produced unicode garbage on LB 12B.
+        tt_k = apply_per_head_norm(tt_k, weights.k_norm_weight, config.rms_norm_eps, with_scale=True)
+        tt_v = apply_per_head_norm(tt_v, None, config.rms_norm_eps, with_scale=False)
 
     # 4. RoPE — use on-device embedding lookup for trace compatibility
     # use_embedding_rope: cos/sin are per-position [1,1,batch_pad,head_dim] tensors.
@@ -603,14 +578,6 @@ def _packed_fill_kv_loopfree_embed(cache, staging, new_seq, embed_idx, hot_pt):
     ttnn.deallocate(merged)
 
 
-def _packed_decode_qkv_enabled():
-    """Use decode QKV program config on packed M=P rows (already a tile).
-
-    Default on; ``GEMMA4_PACKED_DECODE_QKV=0`` restores the packed prefill QKV matmul.
-    """
-    return os.environ.get("GEMMA4_PACKED_DECODE_QKV", "1").lower() not in ("0", "false", "no", "off")
-
-
 def _packed_seq_kv_enabled():
     """Write P new KV rows with serialized ``paged_update_cache`` instead of
     embedding-merge + ``paged_fill_cache`` of the whole hot block. Default on;
@@ -849,14 +816,8 @@ def packed_decode_forward(
         ttnn.deallocate(tt_k)
         ttnn.deallocate(tt_v)
 
-    skip_kv_write = os.environ.get("GEMMA4_PACKED_VERIFY_SKIP_KV_WRITE", "0") == "1"
-
     # ── ⑤ KV write ─────────────────────────────────────────────────────────
-    if not is_kv_shared and skip_kv_write:
-        tt_q = ttnn.to_memory_config(tt_q, ttnn.DRAM_MEMORY_CONFIG)
-        ttnn.deallocate(tt_k)
-        ttnn.deallocate(tt_v)
-    elif not is_kv_shared and seq_kv:
+    if not is_kv_shared and seq_kv:
         tt_q = ttnn.to_memory_config(tt_q, ttnn.DRAM_MEMORY_CONFIG)
         _write_packed_kv_sequential(
             tt_k,
@@ -982,7 +943,6 @@ def packed_decode_forward(
             k_chunk_size=64,
             exp_approx_mode=False,
         )
-        sdpa_compute_kernel_config = None
         sliding_window = config.sliding_window if config.is_sliding else None
         tt_sdpa = ttnn.transformer.paged_scaled_dot_product_attention_decode(
             tt_q_decode,
@@ -994,7 +954,6 @@ def packed_decode_forward(
             sliding_window_size=sliding_window,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             program_config=sdpa_program_config,
-            compute_kernel_config=sdpa_compute_kernel_config,
             paged_cache_geometry=ttnn.PagedCacheGeometryOverride(
                 block_size=effective_block_size(k_cache_use, head_dim, nkv_local),
                 num_kv_heads=nkv_local,
