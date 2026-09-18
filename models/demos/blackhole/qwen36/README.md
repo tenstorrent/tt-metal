@@ -1,16 +1,18 @@
-# Qwen3.5 / Qwen3.6 on Blackhole
+# Qwen3.5 / Qwen3.6 / Qwen3.8 on Blackhole
 
 This directory implements Tenstorrent Blackhole inference for the hybrid
-**Gated DeltaNet + Gated Full Attention** Qwen3.5/3.6 family. A single code
-path serves four checkpoints:
+**Gated DeltaNet + Gated Full Attention** Qwen3.5/3.6/3.8 family. The same code
+path serves every checkpoint below:
 
-| Model            | `HF_MODEL`             | Mesh / `MESH_DEVICE` | Parallelism            |
-| ---------------- | ---------------------- | -------------------- | ---------------------- |
-| Qwen3.5-9B       | `Qwen/Qwen3.5-9B`      | single P150 — `P150` | single device          |
-| Qwen3.5-27B      | `Qwen/Qwen3.5-27B`     | P150x4 — `P150x4`    | 4-way tensor parallel  |
-| Qwen3.6-27B      | `Qwen/Qwen3.6-27B`     | P150x4 — `P150x4`    | 4-way tensor parallel  |
-| Qwen3.6-27B      | `Qwen/Qwen3.6-27B`     | P150x8 — `P150x8`    | 8-way tensor parallel  |
-| Qwen3.6-35B-A3B  | `Qwen/Qwen3.6-35B-A3B` | P150x4 — `P150x4`    | 4-way TP + sparse MoE  |
+| Model           | `HF_MODEL`             | Mesh / `MESH_DEVICE` | Parallelism           |
+| --------------- | ---------------------- | -------------------- | --------------------- |
+| Qwen3.5-9B      | `Qwen/Qwen3.5-9B`      | single P150 — `P150` | single device         |
+| Qwen3.5-27B     | `Qwen/Qwen3.5-27B`     | P150x4 — `P150x4`    | 4-way tensor parallel |
+| Qwen3.6-27B     | `Qwen/Qwen3.6-27B`     | P150x4 — `P150x4`    | 4-way tensor parallel |
+| Qwen3.6-27B     | `Qwen/Qwen3.6-27B`     | P150x8 — `P150x8`    | 8-way tensor parallel |
+| Qwen3.8-27B     | `Qwen/Qwen3.8-27B`     | P150x4 — `P150x4`    | 4-way tensor parallel |
+| Qwen3.8-27B     | `Qwen/Qwen3.8-27B`     | P150x8 — `P150x8`    | 8-way tensor parallel |
+| Qwen3.6-35B-A3B | `Qwen/Qwen3.6-35B-A3B` | P150x4 — `P150x4`    | 4-way TP + sparse MoE |
 
 The **35B-A3B** is the sparse Mixture-of-Experts member of the family (`qwen3_5_moe`:
 256 routed experts, top-8, plus a gated shared expert on every layer). Every layer's
@@ -20,17 +22,17 @@ dense MLP path is byte-for-byte unchanged.
 
 - The **9B** runs on a **single Blackhole P150** device. It uses the validated
   single-device forward path (no collectives).
-- The **27B** variants (both Qwen3.5-27B and Qwen3.6-27B) run on a **P150x4**
-  (a `(1, 4)` Blackhole mesh) using **4-way tensor parallelism (TP)**. The TP
-  path needs `FABRIC_1D` for the cross-device collectives (all-reduce /
+- The **27B** variants (Qwen3.5-27B, Qwen3.6-27B and Qwen3.8-27B) run on a
+  **P150x4** (a `(1, 4)` Blackhole mesh) using **4-way tensor parallelism (TP)**.
+  The TP path needs `FABRIC_1D` for the cross-device collectives (all-reduce /
   reduce-scatter) and a trace region for the captured chunk-outer prefill trace.
-- **Qwen3.6-27B additionally runs at TP=8** on a `(1, 8)` mesh (`P150x8`).
-  Because it has only **4 KV heads**, TP=8 cannot give each device its own head:
-  each head is instead **replicated across the device pair holding its GQA query
-  group** (devices 0-1 share KV head 0, 2-3 head 1, and so on), so
-  `n_local_kv_heads` is 1 at both TP=4 and TP=8 and the whole runtime KV path is
-  unchanged. See `tp_common.replicate_kv_weight` and
-  `ModelArgs.SUPPORTS_KV_REPLICATION`.
+- **Qwen3.6-27B and Qwen3.8-27B also run at TP=8** on a `(1, 8)` mesh (`P150x8`),
+  the Galaxy configuration. Because these checkpoints have only **4 KV heads**,
+  TP=8 cannot give each device its own head: each head is instead **replicated
+  across the device pair holding its GQA query group** (devices 0-1 share KV
+  head 0, 2-3 head 1, and so on), so `n_local_kv_heads` is 1 at both TP=4 and
+  TP=8 and the whole runtime KV path is unchanged. See
+  `tp_common.replicate_kv_weight` and `ModelArgs.SUPPORTS_KV_REPLICATION`.
 
 Everything model-specific (hybrid layer dispatch, DeltaNet head/conv dims,
 partial rotary factor, vocab, layer count) is read from the parsed HF config, so
@@ -53,23 +55,47 @@ everywhere and **partial** RoPE (only a fraction of each head is rotated).
 Before running **any** test, export the two environment variables that select
 the checkpoint and the device mesh.
 
-**9B (single P150):**
+**Checkpoint — Qwen3.8-27B:**
 
 ```bash
-export HF_MODEL=Qwen/Qwen3.5-9B
-export MESH_DEVICE=P150
+export HF_MODEL=Qwen/Qwen3.8-27B
 ```
 
-**27B (P150x4):**
+Then pick the mesh that matches your hardware.
+
+**QB2 or P150x4 (LB) — 4-way TP:**
 
 ```bash
-# Qwen3.6-27B
+export MESH_DEVICE=P150x4
+```
+
+**Galaxy (Glx) — 8-way TP:**
+
+```bash
+export MESH_DEVICE=P150x8
+```
+
+On Galaxy, also prefix each pytest command with `TT_VISIBLE_DEVICES` to pin the
+run to the eight devices that form the mesh:
+
+```bash
+TT_VISIBLE_DEVICES=1,2,3,4,5,6,7,8 pytest models/demos/blackhole/qwen36/demo/text_demo.py -v -s -k "traced"
+```
+
+**Other checkpoints:**
+
+```bash
+# Qwen3.6-27B — P150x4 (QB2 / LB) or P150x8 (Galaxy)
 export HF_MODEL=Qwen/Qwen3.6-27B
 export MESH_DEVICE=P150x4
 
-# …or Qwen3.5-27B
+# Qwen3.5-27B — P150x4
 export HF_MODEL=Qwen/Qwen3.5-27B
 export MESH_DEVICE=P150x4
+
+# Qwen3.5-9B — single P150
+export HF_MODEL=Qwen/Qwen3.5-9B
+export MESH_DEVICE=P150
 ```
 
 **35B-A3B (P150x4, sparse MoE):**
@@ -107,6 +133,9 @@ Two execution variants exist per ISL, identified by the test id prefix:
   vLLM serves; run these by default.
 - **`paged_*`** — non-traced paged path, useful as an eager reference/fallback.
 
+Single-user TP decode runs **MTP speculative decode by default**. Set
+`QWEN36_SPEC=0` to turn it off and fall back to plain single-token decode.
+
 Run the preferred traced cases (the env vars above must already be exported):
 
 ```bash
@@ -114,18 +143,19 @@ Run the preferred traced cases (the env vars above must already be exported):
 pytest models/demos/blackhole/qwen36/demo/text_demo.py -v -s -k "traced"
 
 # A single ISL, e.g. the short 128-token traced case
-pytest models/demos/blackhole/qwen36/demo/text_demo.py -v -s -k "traced_128"
+pytest models/demos/blackhole/qwen36/demo/text_demo.py -v -s -k "traced_128 and not traced_128k"
 
 # Medium / long traced ISLs
 pytest models/demos/blackhole/qwen36/demo/text_demo.py -v -s -k "traced_4k"
 pytest models/demos/blackhole/qwen36/demo/text_demo.py -v -s -k "traced_64k"
 ```
 
-The **same command works for 9B, 27B, and 35B-A3B** — only the exported `HF_MODEL` /
+The **same command works for every checkpoint** — only the exported `HF_MODEL` /
 `MESH_DEVICE` differ. On a single device the test takes the validated 9B path; on
-the `(1,4)` mesh it routes through the TP chunk-outer traced prefill + paged
-traced decode path automatically (the sparse MoE block is selected per layer from
-the config, transparent to the demo).
+the `(1,4)` or `(1,8)` mesh it routes through the TP chunk-outer traced prefill +
+paged traced decode path automatically (the sparse MoE block is selected per layer
+from the config, transparent to the demo). On Galaxy, prefix each command with
+`TT_VISIBLE_DEVICES=1,2,3,4,5,6,7,8`.
 
 > Long-context cases (64k+) download a public-domain corpus (Frankenstein, War
 > and Peace) on first run and cache it under `demo/sample_prompts/.context_cache`.
@@ -175,12 +205,12 @@ pytest models/demos/blackhole/qwen36/tests/test_weight_mapping.py -v -s
 > `test_prefill.py` auto-skips cases longer than `--max-prefill` (default 8192).
 > Raise it to exercise long-context prefill, e.g. `--max-prefill 131072`.
 
-### Tensor-parallel tests — **27B (P150x4)**
+### Tensor-parallel tests — **27B (P150x4 / P150x8)**
 
 The `*_tp` tests exercise the multi-device TP path and default to the 27B
-checkpoint. They must run on the `(1,4)` mesh with `FABRIC_1D` (the
-`parametrize_mesh_tp` helper wires this from `MESH_DEVICE`). PCC thresholds are in
-`tests/pcc_thresholds.json`.
+checkpoint. They must run on the `(1,4)` mesh — or the `(1,8)` Galaxy mesh — with
+`FABRIC_1D` (the `parametrize_mesh_tp` helper wires this from `MESH_DEVICE`). PCC
+thresholds are in `tests/pcc_thresholds.json`.
 
 | Test                  | Validates                                                            |
 | --------------------- | ------------------------------------------------------------------- |
@@ -191,8 +221,8 @@ checkpoint. They must run on the `(1,4)` mesh with `FABRIC_1D` (the
 | `test_model_tp.py`    | full-model TP contract: paged+traced path matches the bespoke oracle |
 | `test_generate_tp.py` | full-model bespoke `generate_tp` on a real prompt (answer oracle)   |
 
-Run the 27B TP suite (with `HF_MODEL=Qwen/Qwen3.6-27B` or `Qwen/Qwen3.5-27B`,
-`MESH_DEVICE=P150x4`):
+Run the 27B TP suite (with `HF_MODEL=Qwen/Qwen3.8-27B`, `Qwen/Qwen3.6-27B` or
+`Qwen/Qwen3.5-27B`, and `MESH_DEVICE=P150x4`):
 
 ```bash
 pytest models/demos/blackhole/qwen36/tests/test_mlp_tp.py -v -s
@@ -200,6 +230,12 @@ pytest models/demos/blackhole/qwen36/tests/test_attention_tp.py -v -s
 pytest models/demos/blackhole/qwen36/tests/test_gdn_tp.py -v -s
 pytest models/demos/blackhole/qwen36/tests/test_model_tp.py -svq
 pytest models/demos/blackhole/qwen36/tests/test_generate_tp.py -v -s
+```
+
+On Galaxy (`MESH_DEVICE=P150x8`), prefix each command with `TT_VISIBLE_DEVICES`:
+
+```bash
+TT_VISIBLE_DEVICES=1,2,3,4,5,6,7,8 pytest models/demos/blackhole/qwen36/tests/test_model_tp.py -svq
 ```
 
 > The MoE-specific tests (`test_moe_tp.py`, and the MoE path in `test_model_tp.py` /
