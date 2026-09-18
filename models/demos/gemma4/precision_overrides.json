@@ -8,9 +8,10 @@
       }
     }
   },
-  "_comment_single_tile_dest_acc": "fp32 destination accumulation on the m<=32 projections (every decode step and the last-token prefill slice). Defaults true. Gemma4-31B sets it false: with it on, WH T3K 1x8 long-context-128k stays coherent for ~55 generated tokens and then locks into a \"'s la\" repetition loop for the rest of the budget. Not monotonic in precision — dropping fidelity to HiFi2 brings the loop back too, so the working combination is specifically HiFi3 without fp32 dest-acc.",
+  "_comment_single_tile_dest_acc": "fp32 destination accumulation on the m<=32 projections (every decode step and the last-token prefill slice). Defaults true, and sits on the MODEL entry rather than a mesh entry because it is model-wide — a mesh entry replaces 'default' wholesale, so a per-mesh copy would silently revert. Gemma4-31B sets it false: with it on, WH T3K 1x8 long-context-128k stays coherent for ~55 generated tokens and then locks into a \"'s la\" repetition loop. Not monotonic in precision — HiFi2 brings the loop back too, so the working combination is specifically HiFi3 without fp32 dest-acc.",
   "gemma-4-31B-it": {
-    "default": {"shared_mlp": "bfp8", "attention": "bfp8", "single_tile_dest_acc": false}
+    "single_tile_dest_acc": false,
+    "default": {"shared_mlp": "bfp8", "attention": "bfp8"}
   },
   "gemma-4-12B-it": {
     "default": {"shared_mlp": "bfp8", "attention": "bfp8"}

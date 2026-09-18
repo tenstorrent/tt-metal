@@ -112,11 +112,21 @@ class Gemma4Precision:
                     f"unknown dtype; expected one of {sorted(_DTYPE_BY_NAME)}"
                 )
             resolved[k] = _DTYPE_BY_NAME[v]
-        dest_acc = raw.get("single_tile_dest_acc", DEFAULT_SINGLE_TILE_DEST_ACC)
+        # Read from the MODEL entry, not the mesh dict. A mesh entry replaces
+        # "default" wholesale (see the lookup above), so a per-mesh flag would
+        # silently revert to the default the moment someone adds a mesh-specific
+        # dtype block -- and this flag going quietly back to true is a 128k
+        # repetition loop on 31B. Model-wide is also what makes
+        # default_single_tile_dest_acc()'s fixed (1, 1) lookup correct.
+        if "single_tile_dest_acc" in raw:
+            raise ValueError(
+                f"precision_overrides.json[{model_key}][{mesh_key}][single_tile_dest_acc] — "
+                "this flag is model-wide; put it on the model entry, not a mesh entry"
+            )
+        dest_acc = model_entry.get("single_tile_dest_acc", DEFAULT_SINGLE_TILE_DEST_ACC)
         if not isinstance(dest_acc, bool):
             raise ValueError(
-                f"precision_overrides.json[{model_key}][{mesh_key}][single_tile_dest_acc]="
-                f"{dest_acc!r} — expected true or false"
+                f"precision_overrides.json[{model_key}][single_tile_dest_acc]=" f"{dest_acc!r} — expected true or false"
             )
         return cls(resolved, single_tile_dest_acc=dest_acc)
 
@@ -127,8 +137,9 @@ def default_single_tile_dest_acc():
     Gemma4Attention / SharedMLP are constructed straight from an HF config by
     the unit tests, so a value threaded through Gemma4Model never reaches them.
     Both resolve the policy here instead, from the same table and the same
-    checkpoint name the rest of the precision lookup uses. Mesh shape does not
-    matter: this flag is model-wide, so any mesh key resolves the same value.
+    checkpoint name the rest of the precision lookup uses. The mesh shape passed
+    here is arbitrary because ``load`` reads this flag off the model entry, which
+    no mesh-specific block can shadow.
     """
     model_path = os.environ.get("HF_MODEL")
     if not model_path:
