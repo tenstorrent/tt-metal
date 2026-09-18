@@ -85,7 +85,6 @@ void enable_program_cache(IDevice& device) { device.enable_program_cache(); }
 
 void disable_and_clear_program_cache(IDevice& device) { device.disable_and_clear_program_cache(); }
 
-void close_device(MeshDevice& device) { device.close(); }
 
 bool is_wormhole_or_blackhole(tt::ARCH arch) { return arch == tt::ARCH::WORMHOLE_B0 or arch == tt::ARCH::BLACKHOLE; }
 
@@ -95,7 +94,32 @@ void deallocate_buffers(IDevice* device) { device->allocator()->deallocate_buffe
 // Note: This functionality is planned for deprecation in the future.
 namespace {
 MeshDevice* default_device = nullptr;
+
+// The default device is a raw pointer with no ownership. If it still points at a device (or one of
+// its submeshes) when that device is closed, every later GetDefaultDevice() hands out a dangling
+// pointer: the Python binding resolves the dynamic type through the freed object's vtable and
+// segfaults once the memory is reused. Drop the default before the device goes away.
+void forget_default_device_if_closing(const MeshDevice& device) {
+    if (default_device == nullptr) {
+        return;
+    }
+    if (default_device == &device) {
+        default_device = nullptr;
+        return;
+    }
+    for (const auto& submesh : device.get_submeshes()) {
+        if (default_device == submesh.get()) {
+            default_device = nullptr;
+            return;
+        }
+    }
+}
 }  // namespace
+
+void close_device(MeshDevice& device) {
+    forget_default_device_if_closing(device);
+    device.close();
+}
 
 void SetDefaultDevice(MeshDevice* dev) { default_device = dev; }
 
