@@ -206,7 +206,7 @@ inline RingWorkMasks build_ring_work_masks_device(const RingWorkMasksParams& p) 
                     ring_id,
                     local_tile_start,
                     q_chunk_group_tile_count,
-                    q_local_padded_Nt,
+                    q_chunk_group_tile_count / ring_size,
                     kv_local_padded_Nt) < logical_nt) {
                 valid_spatial_kv_chunks++;
             }

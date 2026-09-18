@@ -1092,7 +1092,7 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
                 gather_valid_Ht.has_value() ? std::min(*gather_valid_Ht, input_tensor_Ht) * input_tensor_Wt
                                             : single_batch_head_num_pages;
             tensor_descriptor_args.push_back(valid_pages_per_batch_head);  // 6 == valid_pages_per_batch_head
-            tensor_descriptor_args.push_back(placement.link);  // 7 == worker_link
+            tensor_descriptor_args.push_back(placement.link);              // 7 == worker_link
             if (has_metadata) {
                 tensor_descriptor_args.push_back(input_tensor_shape[kBatchDimension]);  // 8 == input_cache_batch_extent
             }

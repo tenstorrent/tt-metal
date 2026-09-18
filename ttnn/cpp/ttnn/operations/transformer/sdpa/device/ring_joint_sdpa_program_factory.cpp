@@ -83,6 +83,7 @@ struct RingJointRuntimeDerivation {
     uint32_t logical_nt = 0;
     uint32_t ring_size = 0;
     uint32_t q_local_padded_Nt = 0;
+    uint32_t kv_region_Nt = 0;
     uint32_t kv_local_padded_Nt = 0;
     uint32_t q_chunk_group_tile_count = 0;
     uint32_t num_local_k_chunks = 0;
@@ -327,7 +328,7 @@ RingWorkPlan build_ring_work_plan(
                     ring_id,
                     local_tile_start,
                     derivation.q_chunk_group_tile_count,
-                    derivation.q_local_padded_Nt,
+                    derivation.kv_region_Nt,
                     derivation.kv_local_padded_Nt) < derivation.logical_nt) {
                 valid_spatial_kv_chunks++;
             }
@@ -428,7 +429,7 @@ RingWritePlan build_ring_write_plan(
     // Chunked sliding consumes the local slab followed by its cyclic
     // predecessor. Keep that dependency on direction 1 for every device,
     // independent of the dense ring's parity-based split.
-    if (args.has_sliding_window() && tensor_args.is_chunked() && !args.is_cross) {
+    if (args.has_sliding_window() && tensor_args.is_chunked(args.kv_stripe_split) && !args.is_cross) {
         plan.forward_writes_expected = 1;
         plan.backward_writes_expected = 0;
         return plan;
@@ -470,7 +471,8 @@ RingJointRuntimeDerivation build_runtime_derivation(
     derivation.ring_size = static_cast<uint32_t>(args.all_gather_operation_attributes.ring_size);
     derivation.q_local_padded_Nt = q_local_padded_N / tt::constants::TILE_HEIGHT;
     derivation.kv_local_padded_Nt = kv_local_padded_N / tt::constants::TILE_HEIGHT;
-    derivation.q_chunk_group_tile_count = derivation.q_local_padded_Nt * derivation.ring_size;
+    derivation.kv_region_Nt = derivation.q_local_padded_Nt / args.kv_stripe_split;
+    derivation.q_chunk_group_tile_count = derivation.kv_region_Nt * derivation.ring_size;
     derivation.num_local_k_chunks = tt::div_up(kv_local_padded_N, k_chunk_size);
     derivation.k_chunk_tile_count = k_chunk_size / tt::constants::TILE_HEIGHT;
     // Sharded joint: each ring iteration delivers one L/P shard, so num_joint_k_chunks counts
@@ -482,7 +484,7 @@ RingJointRuntimeDerivation build_runtime_derivation(
     derivation.logical_lt = tt::div_up(joint_input_params.logical_l, tt::constants::TILE_HEIGHT);
     // Cross is non-causal on chunked-shaped tensors, so kernels and the work planner use the
     // non-chunked path.
-    derivation.kernel_chunked = tensor_args.is_chunked() && !args.is_cross;
+    derivation.kernel_chunked = tensor_args.is_chunked(args.kv_stripe_split) && !args.is_cross;
     derivation.kv_pad_rotation_enabled = ttnn::prim::kv_pad_rotation_active(args, tensor_args);
     derivation.kernel_is_causal = args.is_causal && !derivation.kernel_chunked;
 
@@ -509,9 +511,9 @@ RingJointRuntimePlan build_runtime_plan(
         plan.kv_pad_q_mapping = build_kv_pad_q_mapping(
             kv_actual_tile_count,
             derivation.logical_nt,
-            derivation.ring_size,
+            args.q_ring_size(),
             derivation.q_local_padded_Nt,
-            ring_write_plan.tensor_rank);
+            ring_write_plan.tensor_rank / args.kv_stripe_split);
     }
 
     if (args.has_sliding_window()) {
@@ -597,7 +599,8 @@ std::optional<uint32_t> compute_gather_valid_Ht(
     }
     const uint32_t ring_size = static_cast<uint32_t>(args.all_gather_operation_attributes.ring_size);
     const uint32_t n_local_q = tensor_args.input_q.padded_shape()[2];  // per-device Q slab (chunk_local)
-    const uint32_t chunk_global = n_local_q * ring_size;
+    const uint32_t kv_region = n_local_q / args.kv_stripe_split;
+    const uint32_t chunk_global = kv_region * ring_size;
     if (tensor_args.has_metadata()) {
         // Metadata path: the all-gather reader recomputes this per dispatch from kv_actual_isl
         // (ring_attention_all_gather_reader.cpp) and CLAMPS against the value baked here, so a
@@ -611,7 +614,9 @@ std::optional<uint32_t> compute_gather_valid_Ht(
         return tensor_args.input_k.padded_shape()[2] / tt::constants::TILE_HEIGHT;
     }
     const uint32_t valid_slabs = (static_cast<uint32_t>(args.logical_n) + chunk_global - 1) / chunk_global;
-    return valid_slabs * (n_local_q / tt::constants::TILE_HEIGHT);
+    return std::min(
+        valid_slabs * (kv_region / tt::constants::TILE_HEIGHT),
+        tensor_args.input_k.padded_shape()[2] / tt::constants::TILE_HEIGHT);
 }
 
 void apply_ring_joint_scalar_runtime_args(
@@ -1053,7 +1058,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     const uint32_t circular_kv_slab_count = derived_kv_slab_count(args, tensor_args);
     const bool enable_kv_chains = !has_sliding_window;
     // The supported sliding specialization always uses a compact neighbor-halo buffer.
-    const uint32_t padded_N = has_sliding_window ? global_padded_N : gathered_padded_N;
+    const uint32_t padded_N = (has_sliding_window || args.kv_stripe_split > 1) ? global_padded_N : gathered_padded_N;
     const uint32_t kv_cache_batch_idx = args.cache_batch_idx().value_or(0);
     // L / L_local resolved once in resolve_ring_joint_input_params (full vs per-device joint seq).
     const uint32_t L = joint_input_params.L;
@@ -1082,7 +1087,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     const uint32_t logical_lt = tt::div_up(logical_l, tt::constants::TILE_HEIGHT);
     const uint32_t DHt = DH / tt::constants::TILE_WIDTH;
     const uint32_t vDHt = vDH / tt::constants::TILE_WIDTH;
-    const bool kv_pad_from_metadata = tensor_args.kv_pad_from_metadata();
+    const bool kv_pad_from_metadata = tensor_args.kv_pad_from_metadata(args.kv_stripe_split);
     const bool kv_pad_rotation_enabled = ttnn::prim::kv_pad_rotation_active(args, tensor_args);
     const RingJointRuntimePlan runtime_plan = build_runtime_plan(args, tensor_args, ring_write_plan);
     const RingJointRuntimeArgLayout runtime_arg_layout = get_runtime_arg_layout(args, tensor_args);
@@ -1099,11 +1104,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     const uint32_t Sq_chunk_t = q_chunk_size / tt::constants::TILE_HEIGHT;
     const uint32_t Sk_chunk_t = k_chunk_size / tt::constants::TILE_HEIGHT;
 
-    // Chunked-prefill balanced layout: each device holds one per-chunk K region per chunk.
-    // The region is q_local_padded_Nt tiles (Q is exactly one such region per call). The
-    // group size below is that Q-sized region across all devices.
-    // diagonal-tile CB slot is shared with is_causal — needed whenever either is on.
-    const uint32_t q_chunk_group_tile_count = q_local_padded_Nt * ring_size;
+    // Global chunk has S Q slabs and R KV regions, with R/S extra KV stripes.
+    // Kernels recover the region from this width divided by transport ring size.
+    const uint32_t q_chunk_group_tile_count = q_local_padded_Nt * args.q_ring_size();
     // kernel_chunked drives the chunked-prefill math in the kernels and the host ring-work planner.
     // Cross runs the non-causal full-prefill path on chunked-shaped tensors, so it is excluded; the
     // kernel-level is_causal flag carries the legacy local-frame causal-stamp semantics (chunked
@@ -1355,6 +1358,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
 
     // Ring-joint streaming supports single-Q-subblock shapes; only fp32 dest acc stays on the legacy path.
     const bool use_streaming_compute = !fp32_dest_acc_en;
+    TT_FATAL(
+        args.kv_stripe_split == 1 || use_streaming_compute,
+        "Split KV requires streaming compute (fp32_dest_acc_en=false)");
     TT_FATAL(
         !kv_pad_rotation_enabled || use_streaming_compute,
         "kv_actual_isl requires the ring-joint streaming compute path; the compute_common.hpp path selected by "
@@ -1827,6 +1833,13 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         static_cast<uint32_t>(has_logical_l_tensor)};
 
     std::map<std::string, std::string> defines;
+    // Group only the dense in-place latent-V split layout. Other modes retain
+    // the verified per-source schedule until their packed readers are implemented.
+    const uint32_t grouped_sources = args.kv_stripe_split > 1 && kt_inplace_v && runtime_plan.kernel_chunked &&
+                                             !args.is_balanced && !has_sliding_window && L == 0
+                                         ? args.kv_stripe_split
+                                         : 1;
+    defines["GROUPED_KV_SOURCE_COUNT"] = std::to_string(grouped_sources);
     defines["STATS_GRANULARITY"] = std::to_string(stats_granularity);
     defines["SUB_EXP_GRANULARITY"] = std::to_string(sub_exp_granularity);
     defines["MUL_BCAST_GRANULARITY"] = std::to_string(mul_bcast_granularity);
@@ -3050,8 +3063,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             compute_gather_valid_Ht(args, tensor_args),
             tensor_args.slot_id,
             tensor_args.kv_actual_isl,
-            // chunk_local_tiles: per-device Q slab in tiles, for the reader's on-device gather-extent recompute.
-            tensor_args.input_q.padded_shape()[2] / tt::constants::TILE_HEIGHT,
+            // The gather has R sources: its slab is the KV region, not the Q slab.
+            tensor_args.input_q.padded_shape()[2] / (tt::constants::TILE_HEIGHT * args.kv_stripe_split),
             // (user, layer)-major KV-cache batch factor: the all-gather reader computes the gathered slot as
             // slot_id[0] * kv_cache_num_layers + kv_cache_layer_idx. Defaults (1, 0) keep callers unaffected.
             args.kv_cache_num_layers,

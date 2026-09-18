@@ -10,6 +10,7 @@
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "dataflow_common.hpp"
+#include "ring_mla_packing_plan.hpp"
 #include "ring_joint_kv_pad_derivation.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/ring_joint_derived_slots.hpp"
 #include "metadata_scalar_read.hpp"
@@ -431,6 +432,9 @@ void kernel_main() {
     constexpr uint32_t out_subblock_h = get_compile_time_arg_val(28);
     constexpr bool chunked_enabled = get_compile_time_arg_val(29) == 1;
     constexpr uint32_t chunk_size_t = get_compile_time_arg_val(30);
+    constexpr uint32_t kv_region_Nt = chunk_size_t / ring_size;
+    constexpr uint32_t kv_stripe_split = q_local_padded_Nt / kv_region_Nt;
+    constexpr uint32_t q_ring_size = ring_size / kv_stripe_split;
     // Slots 31-33 are retained for compile-time arg index stability; live ring-work masks
     // are runtime args below.
     constexpr uint32_t active_ring_iter_mask_compile [[maybe_unused]] = get_compile_time_arg_val(31);
@@ -697,18 +701,32 @@ void kernel_main() {
 
     // Track non-skipped iters so the first active iter starts with fresh accumulators (matches compute).
     bool seen_active_iter = false;
-    constexpr uint32_t sdpa_ring_iterations = has_sliding_window ? 1 : ring_size;
+    const uint32_t source_group_size = packed_kv_source_group_size(
+        GROUPED_KV_SOURCE_COUNT, ring_size, kv_local_padded_Nt, logical_nt, active_ring_iter_mask);
+    const bool packed_sources = source_group_size > 1;
+    const PackedKVGroupPlan packed_kv{
+        packed_kv_source_tiles(kv_local_padded_Nt, logical_nt, kv_region_Nt, ring_size), source_group_size, Sk_chunk_t};
+    const uint32_t sdpa_ring_iterations = has_sliding_window ? 1 : ring_size / source_group_size;
     for (uint32_t ring_iter = 0; ring_iter < sdpa_ring_iterations; ++ring_iter) {
+        uint32_t packed_source_ids[GROUPED_KV_SOURCE_COUNT];
+        if (packed_sources) {
+            for (uint32_t source = 0; source < source_group_size; ++source) {
+                packed_source_ids[source] =
+                    ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
+                        fused_op_receiver.get_next_ring_id_and_sync(), mesh_rows, mesh_cols, snake_orientation);
+            }
+        }
         // Sliding compute consumes all local/halo source ranges in one logical pass, so the
         // writer sees exactly one final output per Q and never enters deferred staging.
         const uint32_t ring_id =
-            has_sliding_window
+            packed_sources ? packed_source_ids[0]
+            : has_sliding_window
                 ? ring_index
                 : ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
                       fused_op_receiver.get_next_ring_id_and_sync(), mesh_rows, mesh_cols, snake_orientation);
         // Host precomputes which ring iterations have useful SDPA work; sync/ring-id sequencing
         // still advances above so writer stays aligned with reader, compute, and all-gather.
-        if (!has_sliding_window && ((active_ring_iter_mask >> ring_iter) & 1u) == 0) {
+        if (!packed_sources && !has_sliding_window && ((active_ring_iter_mask >> ring_iter) & 1u) == 0) {
             continue;
         }
         // Sharded joint: one L/P shard per ring iteration — process joint K/V on every iteration.
@@ -727,7 +745,8 @@ void kernel_main() {
         // When a ring iteration has one valid K chunk, compute saves to staging on K0,
         // reserving staging CBs immediately. The deferred flush must happen before any
         // prefetch that blocks on cb_prev_out, or the writer and compute deadlock.
-        const bool single_valid_kv_chunk = ((single_valid_kv_chunk_mask >> ring_iter) & 1u) != 0;
+        const bool single_valid_kv_chunk =
+            packed_sources ? packed_kv.chunk_count() == 1 : ((single_valid_kv_chunk_mask >> ring_iter) & 1u) != 0;
 
         /**
         We have 3 possible masks
@@ -783,7 +802,8 @@ void kernel_main() {
                 const uint32_t q_chunk = decoded_q.q_chunk;
                 const auto qi = get_q_chunk_info<has_joint_q>(
                     q_chunk, nb, nq, num_local_q_chunks, Sq_chunk_t, vDHt, Lt, q_local_padded_Nt);
-                const uint32_t end_seq_tile = get_end_seq_tile<has_joint_q>(qi, ring_id, Lt, q_local_padded_Nt);
+                const uint32_t end_seq_tile =
+                    get_end_seq_tile<has_joint_q>(qi, ring_id / kv_stripe_split, Lt, q_local_padded_Nt);
 
                 if (!single_q_chunk) {
                     CircularBuffer cb_sig(cb_signal);
@@ -807,7 +827,9 @@ void kernel_main() {
             // Deferred norm: accumulates across ring iterations with exponential rescaling.
             // Single Q-chunk: accumulators persist in L1, write final output on last ring_iter.
             // Multi Q-chunk: raw accumulators round-trip through DRAM between ring iterations.
-            const bool is_last_ring_iter = is_last_active_ring_iter(active_ring_iter_mask, ring_iter);
+            const bool is_last_ring_iter =
+                (packed_sources ? ring_iter + 1 == sdpa_ring_iterations
+                                : is_last_active_ring_iter(active_ring_iter_mask, ring_iter));
             const bool single_q_chunk = (global_q_end - global_q_start == 1);
             constexpr uint32_t sum_offset = q_local_padded_Nt + Lt;
             constexpr uint32_t out_num_tiles = Sq_chunk_t * vDHt;
@@ -924,7 +946,8 @@ void kernel_main() {
 
                 const auto qi = get_q_chunk_info<has_joint_q>(
                     q_chunk, nb, nq, num_local_q_chunks, Sq_chunk_t, vDHt, Lt, q_local_padded_Nt);
-                const uint32_t end_seq_tile = get_end_seq_tile<has_joint_q>(qi, ring_id, Lt, q_local_padded_Nt);
+                const uint32_t end_seq_tile =
+                    get_end_seq_tile<has_joint_q>(qi, ring_id / kv_stripe_split, Lt, q_local_padded_Nt);
 
                 // 1. Complete restore for all Q chunks to keep the prefetch pipeline in sync.
                 // For balanced-skip non-last-ring-iter Q chunks, barrier without pushing —
@@ -1035,7 +1058,8 @@ void kernel_main() {
 
                 const auto qi = get_q_chunk_info<has_joint_q>(
                     q_chunk, nb, nq, num_local_q_chunks, Sq_chunk_t, vDHt, Lt, q_local_padded_Nt);
-                const uint32_t end_seq_tile = get_end_seq_tile<has_joint_q>(qi, ring_id, Lt, q_local_padded_Nt);
+                const uint32_t end_seq_tile =
+                    get_end_seq_tile<has_joint_q>(qi, ring_id / kv_stripe_split, Lt, q_local_padded_Nt);
 
                 // Only truly causal case appear in the iteration with local KV
                 // Other iterations will just skip the computation with subsequent KV chunks

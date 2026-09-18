@@ -3985,7 +3985,7 @@ def test_ring_mla_full_mesh_rejects_invalid_placements(expect_error):
                 use_column_major_ccl=True,
             )
 
-        with expect_error(RuntimeError, "requires Q sequence dim 2 and KV gather dim"):
+        with expect_error(RuntimeError, "requires KV sequence shards on every device"):
             invoke(tt_axis_q, tt_axis_kv, tt_persistent, Topology.Ring)
         with expect_error(RuntimeError, "persistent gathered-KV buffer to be replicated"):
             invoke(tt_q, tt_kv, tt_sharded_persistent, Topology.Ring)
