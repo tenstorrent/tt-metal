@@ -96,9 +96,19 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/profiler.hpp
     api/tt-metalium/experimental/streaming_profiler.hpp
     api/tt-metalium/experimental/program_descriptor_patching.hpp
+    api/tt-metalium/experimental/sockets/d2d_socket.hpp
+    api/tt-metalium/experimental/sockets/d2h2h2d_socket.hpp
     api/tt-metalium/experimental/sockets/d2h_socket.hpp
     api/tt-metalium/experimental/sockets/h2d_socket.hpp
     api/tt-metalium/experimental/sockets/mesh_socket.hpp
+    api/tt-metalium/experimental/sockets/internal/host_clock.hpp
+    api/tt-metalium/experimental/sockets/internal/host_deliver.hpp
+    api/tt-metalium/experimental/sockets/internal/host_region.hpp
+    api/tt-metalium/experimental/sockets/internal/host_scan.hpp
+    api/tt-metalium/experimental/sockets/internal/host_stats.hpp
+    api/tt-metalium/experimental/sockets/internal/host_transport.hpp
+    api/tt-metalium/experimental/sockets/internal/host_uva.hpp
+    api/tt-metalium/experimental/sockets/internal/host_uva_layout.hpp
     api/tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp
     api/tt-metalium/experimental/distributed_tensor/topology/distributed_tensor_configs.hpp
     api/tt-metalium/experimental/distributed_tensor/topology/tensor_topology.hpp
