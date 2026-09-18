@@ -37,11 +37,8 @@
 #include <unordered_map>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/math.hpp>
-#include "ttnn/operation.hpp"
 #include <limits>
 #include "hybrid_half_merge.hpp"
 
@@ -431,11 +428,10 @@ void append_to_descriptor(
     auto* device = tensor_arguments.activations.device();
     const uint32_t hgroups = operation_arguments.grid_x;
     const uint32_t kgroups = operation_arguments.grid_y;
-    // Rectangle-relative coordinates everywhere below; these shift them onto the grid.
-    const uint32_t OX = operation_arguments.origin_x;
+    // Rectangle-relative coordinates everywhere below; this shifts them onto the grid.
     const uint32_t OY = operation_arguments.origin_y;
     const uint32_t num_cores = hgroups * kgroups;
-    const CoreRangeSet all_cores{CoreRange({OX, OY}, {OX + hgroups - 1, OY + kgroups - 1})};
+    const CoreRangeSet all_cores{CoreRange({0, OY}, {hgroups - 1, OY + kgroups - 1})};
 
     const uint32_t emb = tensor_arguments.activations.logical_shape()[-1];
     const uint32_t hidden = tensor_arguments.w_gates[0].logical_shape()[-1];
@@ -525,7 +521,7 @@ void append_to_descriptor(
         mcast_compile_time_args(geo::SEM_X_BASE, geo::SEM_X_BASE + 1, hgroups - 1, /*handshake=*/true);
     const auto h_mcast_ct =
         mcast_compile_time_args(geo::SEM_H_BASE, geo::SEM_H_BASE + 1, num_cores - 1, /*handshake=*/true);
-    const auto h_mcast_noc1_args = mcast_rect_args(device, NOC::NOC_1, OX, OY, OX + hgroups - 1, OY + kgroups - 1);
+    const auto h_mcast_noc1_args = mcast_rect_args(device, NOC::NOC_1, 0, OY, hgroups - 1, OY + kgroups - 1);
 
     std::vector<std::array<uint32_t, 4>> h_group_rect_args(
         (kgroups + blocking.mgroup_rows - 1) / blocking.mgroup_rows, {0, 0, 0, 0});
@@ -533,12 +529,7 @@ void append_to_descriptor(
         for (uint32_t group = 0; group < h_group_rect_args.size(); ++group) {
             const uint32_t y0 = group * blocking.mgroup_rows;
             h_group_rect_args[group] = mcast_rect_args(
-                device,
-                NOC::NOC_0,
-                OX,
-                OY + y0,
-                OX + hgroups - 1,
-                OY + std::min(y0 + blocking.mgroup_rows - 1, kgroups - 1));
+                device, NOC::NOC_0, 0, OY + y0, hgroups - 1, OY + std::min(y0 + blocking.mgroup_rows - 1, kgroups - 1));
         }
     }
 
@@ -684,13 +675,12 @@ void append_to_descriptor(
 
     for (uint32_t y = 0; y < kgroups; ++y) {
         for (uint32_t x = 0; x < hgroups; ++x) {
-            const CoreCoord core{OX + x, OY + y};
+            const CoreCoord core{x, OY + y};
             const uint32_t index = y * hgroups + x;
             const uint32_t group_index = (y % blocking.mgroup_rows) * hgroups + x;
             KernelDescriptor::RTArgList reader_args;
-            const auto x_mcast_args = rotating_mcast_args(device, NOC::NOC_0, OX, OY + y, OX + hgroups - 1, OY + y);
-            const auto h_mcast_args =
-                rotating_mcast_args(device, NOC::NOC_0, OX, OY, OX + hgroups - 1, OY + kgroups - 1);
+            const auto x_mcast_args = rotating_mcast_args(device, NOC::NOC_0, 0, OY + y, hgroups - 1, OY + y);
+            const auto h_mcast_args = rotating_mcast_args(device, NOC::NOC_0, 0, OY, hgroups - 1, OY + kgroups - 1);
             reader_args.reserve(
                 17 + 2 * kgroups + x_mcast_args.size() + h_mcast_args.size() +
                 h_group_rect_args[y / blocking.mgroup_rows].size() + 2u * experts_per_chip);
@@ -712,7 +702,7 @@ void append_to_descriptor(
             reader_args.push_back(y);
             reader_args.push_back(start_tensor.buffer());
             for (uint32_t row = 0; row < kgroups; ++row) {
-                const auto [vx, vy] = virtual_core(device, OX + x, OY + row);
+                const auto [vx, vy] = virtual_core(device, x, OY + row);
                 reader_args.push_back(vx);
                 reader_args.push_back(vy);
             }
@@ -759,11 +749,11 @@ void append_to_descriptor(
             writer_args.push_back(x);
             writer_args.push_back(y);
             writer_args.push_back(x % kgroups);
-            const auto [diag_x, diag_y] = virtual_core(device, OX + y, OY + y);
+            const auto [diag_x, diag_y] = virtual_core(device, y, OY + y);
             writer_args.push_back(diag_x);
             writer_args.push_back(diag_y);
             for (uint32_t row = 0; row < kgroups; ++row) {
-                const auto [vx, vy] = virtual_core(device, OX + x, OY + row);
+                const auto [vx, vy] = virtual_core(device, x, OY + row);
                 writer_args.push_back(vx);
                 writer_args.push_back(vy);
             }
@@ -1288,7 +1278,6 @@ void append_to_descriptor(
     // simply uses fewer of the reserved tiles.
     uint32_t GRID_X = op.grid_x;
     uint32_t GRID_Y = op.grid_y;
-    const uint32_t ORIGIN_X = op.origin_x;
     const uint32_t ORIGIN_Y = op.origin_y;
     // chunk_M_tiles is the CB-sized MAXIMUM chunk (per_core_M_max = 4). The host
     // deliberately does NOT pick a chunk from M_tiles_full any more: all three
@@ -1316,11 +1305,10 @@ void append_to_descriptor(
     uint32_t in0_block_w_gu = 16;
     const auto grid_size = t.x.device()->compute_with_storage_grid_size();
     TT_FATAL(
-        grid_size.x >= ORIGIN_X + GRID_X && grid_size.y >= ORIGIN_Y + GRID_Y,
-        "unified_routed_expert_ffn: rectangle {}x{} at ({},{}) does not fit the {}x{} compute grid",
+        grid_size.x >= GRID_X && grid_size.y >= ORIGIN_Y + GRID_Y,
+        "unified_routed_expert_ffn: rectangle {}x{} at row {} does not fit the {}x{} compute grid",
         GRID_X,
         GRID_Y,
-        ORIGIN_X,
         ORIGIN_Y,
         grid_size.x,
         grid_size.y);
@@ -1630,7 +1618,7 @@ void append_to_descriptor(
     const uint32_t d_out_block_num_tiles = per_core_M * per_core_N_d;
 
     // -------------------------- compute grid ------------------------------
-    const CoreRange core_range({ORIGIN_X, ORIGIN_Y}, {ORIGIN_X + GRID_X - 1, ORIGIN_Y + GRID_Y - 1});
+    const CoreRange core_range({0, ORIGIN_Y}, {GRID_X - 1, ORIGIN_Y + GRID_Y - 1});
     const CoreRangeSet core_range_set{core_range};
 
     // Representative expert-0 buffers: one TensorAccessorArgs layout descriptor
@@ -2300,7 +2288,7 @@ void append_to_descriptor(
     cores.reserve(GRID_X * GRID_Y);
     for (uint32_t gy = 0; gy < GRID_Y; ++gy) {
         for (uint32_t gx = 0; gx < GRID_X; ++gx) {
-            cores.push_back(CoreCoord{ORIGIN_X + gx, ORIGIN_Y + gy});
+            cores.push_back(CoreCoord{gx, ORIGIN_Y + gy});
         }
     }
 
@@ -2341,16 +2329,14 @@ void append_to_descriptor(
             gy);
 
         const bool is_in1_sender = (gy == in1_sender_row);
-        const auto sender_noc =
-            device->worker_core_from_logical_core(CoreCoord{ORIGIN_X + gx, ORIGIN_Y + in1_sender_row});
+        const auto sender_noc = device->worker_core_from_logical_core(CoreCoord{gx, ORIGIN_Y + in1_sender_row});
         // The rectangle spans the WHOLE column, sender included: a multicast rectangle
         // must be contiguous and the sender is no longer on an edge row, so "everything
         // but the sender" is not expressible as one rectangle. The non-loopback
         // multicast drops the sender's own copy (it already holds the block), so
         // num_dests stays GRID_Y - 1.
-        const auto first_recv_noc = device->worker_core_from_logical_core(CoreCoord{ORIGIN_X + gx, ORIGIN_Y});
-        const auto last_recv_noc =
-            device->worker_core_from_logical_core(CoreCoord{ORIGIN_X + gx, ORIGIN_Y + GRID_Y - 1});
+        const auto first_recv_noc = device->worker_core_from_logical_core(CoreCoord{gx, ORIGIN_Y});
+        const auto last_recv_noc = device->worker_core_from_logical_core(CoreCoord{gx, ORIGIN_Y + GRID_Y - 1});
         const uint32_t in1_num_receivers = GRID_Y - 1;
         const uint32_t in1_mcast_nx_start = first_recv_noc.x;
         const uint32_t in1_mcast_ny_start = first_recv_noc.y;
@@ -2362,11 +2348,9 @@ void append_to_descriptor(
         // x (in0) multicast: per M-row, sender at in0_sender_col; the rectangle spans
         // the whole row for the same reason as the weight column above.
         const bool is_in0_sender = (gx == in0_sender_col);
-        const auto in0_sender_noc =
-            device->worker_core_from_logical_core(CoreCoord{ORIGIN_X + in0_sender_col, ORIGIN_Y + gy});
-        const auto in0_first_recv_noc = device->worker_core_from_logical_core(CoreCoord{ORIGIN_X, ORIGIN_Y + gy});
-        const auto in0_last_recv_noc =
-            device->worker_core_from_logical_core(CoreCoord{ORIGIN_X + GRID_X - 1, ORIGIN_Y + gy});
+        const auto in0_sender_noc = device->worker_core_from_logical_core(CoreCoord{in0_sender_col, ORIGIN_Y + gy});
+        const auto in0_first_recv_noc = device->worker_core_from_logical_core(CoreCoord{0, ORIGIN_Y + gy});
+        const auto in0_last_recv_noc = device->worker_core_from_logical_core(CoreCoord{GRID_X - 1, ORIGIN_Y + gy});
         const uint32_t in0_num_receivers = GRID_X - 1;
         const uint32_t in0_mcast_nx_start = in0_first_recv_noc.x;
         const uint32_t in0_mcast_ny_start = in0_first_recv_noc.y;
@@ -2429,9 +2413,8 @@ void append_to_descriptor(
         // spanning the whole worker grid; the non-loopback multicast drops the sender's
         // own copy, so num_dests is one less than the grid.
         {
-            const auto grid_first = device->worker_core_from_logical_core(CoreCoord{ORIGIN_X, ORIGIN_Y});
-            const auto grid_last =
-                device->worker_core_from_logical_core(CoreCoord{ORIGIN_X + GRID_X - 1, ORIGIN_Y + GRID_Y - 1});
+            const auto grid_first = device->worker_core_from_logical_core(CoreCoord{0, ORIGIN_Y});
+            const auto grid_last = device->worker_core_from_logical_core(CoreCoord{GRID_X - 1, ORIGIN_Y + GRID_Y - 1});
             reader_args.push_back(static_cast<uint32_t>(gx == 0 && gy == 0));  // is_counts_reader
             reader_args.push_back(static_cast<uint32_t>(grid_first.x));
             reader_args.push_back(static_cast<uint32_t>(grid_first.y));
@@ -2451,7 +2434,7 @@ void append_to_descriptor(
         // phase-4 K-block (kb=0..K_down_tiles_padded-1) to find the sender's
         // NoC addr and to build the M-row mcast rectangle.
         for (uint32_t gxi = 0; gxi < GRID_X; ++gxi) {
-            const auto noc = device->worker_core_from_logical_core(CoreCoord{ORIGIN_X + gxi, ORIGIN_Y + gy});
+            const auto noc = device->worker_core_from_logical_core(CoreCoord{gxi, ORIGIN_Y + gy});
             reader_args.push_back(static_cast<uint32_t>(noc.x));
             reader_args.push_back(static_cast<uint32_t>(noc.y));
         }
@@ -2915,13 +2898,12 @@ uint32_t arena_bytes_for(tt::tt_metal::IDevice* device) {
     return usable & ~static_cast<uint32_t>(63);
 }
 
-PassBarrierPlan barrier_plan(tt::tt_metal::IDevice* device, const HybridRoutedExpertFfnParams& op) {
-    const tt::tt_metal::CoreCoord master{0, op.origin_y};
+PassBarrierPlan barrier_plan(tt::tt_metal::IDevice* device) {
+    const tt::tt_metal::CoreCoord master{0, kOriginY};
     const auto master_noc = device->worker_core_from_logical_core(master);
-    const auto first = device->worker_core_from_logical_core(tt::tt_metal::CoreCoord{0, op.origin_y});
-    const auto last =
-        device->worker_core_from_logical_core(tt::tt_metal::CoreCoord{op.grid_x - 1, op.origin_y + op.grid_y - 1});
-    const uint32_t cores = op.grid_x * op.grid_y;
+    const auto first = device->worker_core_from_logical_core(tt::tt_metal::CoreCoord{0, kOriginY});
+    const auto last = device->worker_core_from_logical_core(tt::tt_metal::CoreCoord{kGridX - 1, kOriginY + kGridY - 1});
+    const uint32_t cores = kGridX * kGridY;
     return PassBarrierPlan{
         .master_logical = master,
         .master_noc_x = static_cast<uint32_t>(master_noc.x),
@@ -2959,10 +2941,9 @@ fused::OperationArguments fused_attributes(const HybridRoutedExpertFfnParams& op
         .experts_per_chip = op.experts_per_chip,
         .m_tiles = op.m_tiles,
         // Pass A owns the low band of token counts, on the whole rectangle.
-        .grid_x = op.grid_x,
-        .grid_y = op.grid_y,
-        .origin_x = 0,
-        .origin_y = op.origin_y,
+        .grid_x = kGridX,
+        .grid_y = kGridY,
+        .origin_y = kOriginY,
         // x is the shared dispatched buffer, so each expert's rows start at its region offset.
         .read_x_at_offset = true,
         // Pass A owns the low band: every expert at or below the threshold.
@@ -3006,10 +2987,9 @@ unified::UnifiedRoutedExpertFfnParams unified_attributes(const HybridRoutedExper
         .max_active_tokens = std::numeric_limits<uint32_t>::max(),
         // The same rectangle the fused half runs on: the two passes are ordered in time, not
         // split in space, so neither loses cores to the other.
-        .grid_x = op.grid_x,
-        .grid_y = op.grid_y,
-        .origin_x = 0,
-        .origin_y = op.origin_y,
+        .grid_x = kGridX,
+        .grid_y = kGridY,
+        .origin_y = kOriginY,
     };
 }
 
@@ -3103,7 +3083,7 @@ tt::tt_metal::ProgramDescriptor create_hybrid_program_descriptor(
         merged_kernel_sources(),
         /*run_fused_pass=*/true,
         t.l1_arena->buffer(),
-        barrier_plan(t.x.device(), op),
+        barrier_plan(t.x.device()),
         report);
 
     // The merge's own numbers, on a program-cache miss only. Every one of them is a silent-failure

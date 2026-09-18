@@ -116,7 +116,6 @@ struct UnifiedRoutedExpertFfnParams {
     // semaphore block and the pass barrier.
     uint32_t grid_x = kGridX;
     uint32_t grid_y = kGridY;
-    uint32_t origin_x = 0;
     uint32_t origin_y = 0;
 
     static constexpr auto attribute_names = std::forward_as_tuple(
@@ -129,7 +128,6 @@ struct UnifiedRoutedExpertFfnParams {
         "max_active_tokens",
         "grid_x",
         "grid_y",
-        "origin_x",
         "origin_y");
     auto attribute_values() const {
         return std::forward_as_tuple(
@@ -142,7 +140,6 @@ struct UnifiedRoutedExpertFfnParams {
             max_active_tokens,
             grid_x,
             grid_y,
-            origin_x,
             origin_y);
     }
 };
@@ -205,8 +202,7 @@ struct OperationArguments {
     uint32_t grid_y = 0;
     // Where this half's rectangle starts on the worker grid. The merged op gives BOTH halves the
     // same full rectangle and runs them one after the other, so origin_y skips the rows reserved
-    // for combine rather than separating the halves. origin_x is 0 at every call site today.
-    uint32_t origin_x = 0;
+    // for combine rather than separating the halves.
     uint32_t origin_y = 0;
     bool read_x_at_offset = false;
     // Active-token band this op owns. An expert whose count falls outside [min, max] is
@@ -231,7 +227,6 @@ struct OperationArguments {
         "m_tiles",
         "grid_x",
         "grid_y",
-        "origin_x",
         "origin_y",
         "read_x_at_offset",
         "min_active_tokens",
@@ -248,7 +243,6 @@ struct OperationArguments {
             m_tiles,
             grid_x,
             grid_y,
-            origin_x,
             origin_y,
             read_x_at_offset,
             min_active_tokens,
@@ -309,10 +303,6 @@ struct HybridRoutedExpertFfnParams {
     // so the merged binaries are the same shape either way.
     uint32_t hybrid_token_threshold = 0;
 
-    uint32_t origin_y = kOriginY;
-    uint32_t grid_x = kGridX;
-    uint32_t grid_y = kGridY;
-
     static constexpr auto attribute_names = std::forward_as_tuple(
         "m_tiles",
         "experts_per_chip",
@@ -320,10 +310,7 @@ struct HybridRoutedExpertFfnParams {
         "activation",
         "fuse_bias",
         "compute_kernel_config",
-        "hybrid_token_threshold",
-        "origin_y",
-        "grid_x",
-        "grid_y");
+        "hybrid_token_threshold");
 
     auto attribute_values() const {
         return std::forward_as_tuple(
@@ -333,10 +320,7 @@ struct HybridRoutedExpertFfnParams {
             activation,
             fuse_bias,
             compute_kernel_config,
-            hybrid_token_threshold,
-            origin_y,
-            grid_x,
-            grid_y);
+            hybrid_token_threshold);
     }
 };
 
