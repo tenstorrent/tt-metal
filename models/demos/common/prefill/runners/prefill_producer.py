@@ -502,6 +502,10 @@ def _read_slot_kv_and_check_pcc(table, device_map: dict, slot_id: int, real_len:
     golden_cap = int(os.environ.get("PREFILL_PCC_GOLDEN_LEN", "0"))
     if golden_cap:
         real_len = min(real_len, golden_cap)
+    if ADAPTER.name == "gemma4_d_p":
+        from models.demos.gemma4_d_p.tt.runners.kv_validation import read_slot_kv_and_check_pcc
+
+        return read_slot_kv_and_check_pcc(table, device_map, slot_id, real_len, trace_dir)
     if ADAPTER.name == "minimax_m3":
         return _read_slot_kv_and_check_pcc_m3(table, device_map, slot_id, real_len, trace_dir)
     if ADAPTER.name == "gpt_oss_d_p":

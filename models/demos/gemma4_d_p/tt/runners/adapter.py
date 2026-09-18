@@ -29,7 +29,6 @@ def validate_params(params):
         "sp_axis": 0,
         "tp_axis": 1,
         "use_trace": True,
-        "tp_shard_kv": False,
         "dflash_enabled": False,
     }
     for name, value in expected.items():
@@ -74,6 +73,16 @@ class Gemma4PrefillAdapter(PrefillModelAdapter):
             dtype=ttnn.bfloat16,
             mesh_shape=mesh_shape,
         )
+
+    def cache_layer_rows(self, config_id, num_layers):
+        if not 0 <= config_id < 36:
+            raise ValueError(f"Invalid Gemma4 cache config {config_id}")
+        return {layer: layer for layer in range(num_layers) if (layer % 6 == 5) == (config_id < 4)}
+
+    def cache_head_dim(self, config_id):
+        if not 0 <= config_id < 36:
+            raise ValueError(f"Invalid Gemma4 cache config {config_id}")
+        return 640 if config_id < 4 else 256
 
     def allocate_kv_cache(self, *, mesh_device, hf_config, params):
         validate_params(params)
