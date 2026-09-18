@@ -440,13 +440,13 @@ void validate_matmul_work_distribution_and_gather_ring_topology(
                     const uint32_t num_blocks_total = num_blocks_y * num_blocks_x;
                     TT_FATAL(
                         num_blocks_total <= num_cores,
-                        "Number of blocks exceeds number of cores: {} blocks > {} cores",
+                        "Number of MN chunks exceeds number of cores: {} MN chunks > {} cores",
                         num_blocks_total,
                         num_cores);
                     if (program_config.mcast_in0) {
                         TT_FATAL(
                             num_blocks_y == 1,
-                            "mcast_in0 requires M ({}) to fit within a single per_core_M block ({}), got "
+                            "mcast_in0 requires M ({}) to fit within a single per_core_M MN chunk ({}), got "
                             "num_blocks_y={}",
                             Mt,
                             per_core_M,
@@ -472,13 +472,14 @@ void validate_matmul_work_distribution_and_gather_ring_topology(
                 }
                 TT_FATAL(
                     num_blocks_x <= grid.x,
-                    "Num output blocks along x ({}) must be smaller than or equal to the number of columns in compute "
+                    "Num output MN chunks along x ({}) must be smaller than or equal to the number of columns in "
+                    "compute "
                     "grid ({})!",
                     num_blocks_x,
                     grid.x);
                 TT_FATAL(
                     num_blocks_y <= grid.y,
-                    "Num output blocks along y ({}) must be smaller than or equal to the number of rows in compute "
+                    "Num output MN chunks along y ({}) must be smaller than or equal to the number of rows in compute "
                     "grid ({})!",
                     num_blocks_y,
                     grid.y);
@@ -763,6 +764,10 @@ MatmulDeviceOperation::program_factory_t MatmulDeviceOperation::select_program_f
                                      operations::experimental::quasar::matmul::
                                          MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig>) {
                 return MatmulMultiCoreReuseBatchedHSDRAMShardedProgramFactory{};
+            } else if constexpr (std::is_same_v<
+                                     T,
+                                     operations::experimental::quasar::matmul::MatmulUnifiedProgramConfig>) {
+                return MatmulUnifiedProgramFactory{};
             } else {
                 TT_THROW("Unknown program config type");
             }
@@ -1112,6 +1117,7 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
         [input_tensor_a,
          input_tensor_b,
          optional_bias,
+         &optional_output_tensors,
          a_shape_padded,
          b_shape_padded,
          in0_tile,
@@ -1831,6 +1837,21 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
                         per_core_N,
                         program_config.out_subblock_h);
                 }
+            } else if constexpr (std::is_same_v<
+                                     ProgramConfigType,
+                                     operations::experimental::quasar::matmul::MatmulUnifiedProgramConfig>) {
+                // Any memory layout on any operand: the kernels address tiles by page id through the
+                // tensor accessor. Geometry, blocking, buffer fit and sharded-output constraints are
+                // all checked by the plan (shared with the factory and compute_output_specs).
+                TT_FATAL(
+                    !optional_bias.has_value(),
+                    "MatmulUnifiedProgramConfig does not fuse bias; ttnn::matmul applies it as a separate add");
+                (void)plan_unified_matmul(
+                    input_tensor_a,
+                    input_tensor_b,
+                    program_config,
+                    attributes,
+                    optional_output_tensors.empty() ? std::nullopt : optional_output_tensors.at(0));
             } else {
                 TT_FATAL(
                     input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
@@ -2086,7 +2107,7 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
                     uint32_t num_blocks_y = ((M - 1) / per_core_M) + 1;
                     uint32_t num_blocks_x = ((N - 1) / per_core_N) + 1;
                     // The output CB is globally allocated against the output tensor on the factory's
-                    // work grid {start_core, start_core + num_blocks - 1}, so the output shard grid
+                    // work grid {start_core, start_core + num_MN_chunks - 1}, so the output shard grid
                     // computed here must match it exactly. Mirror the factory's start_core derivation
                     // (allowed_worker_cores is the single source of truth for core placement) rather
                     // than trusting a user-supplied output shard grid, which need not agree.
@@ -2157,6 +2178,28 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
                         attributes.output_mem_config.memory_layout(),
                         attributes.output_mem_config.buffer_type(),
                         shard_spec);
+                    return {tt::tt_metal::TensorSpec(
+                        output_shape,
+                        TensorLayout(
+                            attributes.output_dtype.value(), PageConfig(output_layout, output_tile), mem_config))};
+                } else if constexpr (std::is_same_v<
+                                         ProgramConfigType,
+                                         operations::experimental::quasar::matmul::MatmulUnifiedProgramConfig>) {
+                    // One MN chunk of C per core; the shard grid is the active cores in assignment order, so
+                    // the accessor's shard -> core mapping is the factory's MN chunk -> core mapping and every
+                    // core writes its own shard.
+                    // Reached only when no output tensor was supplied, so C is allocated from this plan.
+                    const UnifiedMatmulPlan plan =
+                        plan_unified_matmul(input_tensor_a, input_tensor_b, program_config, attributes, std::nullopt);
+                    const CoreRangeSet grid(ttsl::Span<const CoreCoord>(plan.cores));
+                    const ShardOrientation orientation =
+                        plan.row_major_cores ? ShardOrientation::ROW_MAJOR : ShardOrientation::COL_MAJOR;
+                    ShardSpec shard_spec = ShardSpec{
+                        grid,
+                        {plan.MN_chunk_M_tiles * in0_tile.get_height(), plan.MN_chunk_N_tiles * in1_tile.get_width()},
+                        orientation};
+                    const tt::tt_metal::MemoryConfig mem_config(
+                        plan.sharded_output_layout(), attributes.output_mem_config.buffer_type(), shard_spec);
                     return {tt::tt_metal::TensorSpec(
                         output_shape,
                         TensorLayout(

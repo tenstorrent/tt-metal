@@ -86,13 +86,47 @@ struct MatmulMultiCoreProgramConfig {
     std::optional<CoreRangeSet> allowed_worker_cores = std::nullopt;
 };
 
+// Placement-first program config for the Quasar-native matmul (stage A of GH#41910).
+//
+// GEMM vocabulary, all sizes in 32x32 tiles: C[M x N] = A[M x K] x B[K x N]. The caller describes the
+// work directly instead of picking a 1D / 2D / DRAM-sharded strategy:
+//   - `cores`                    the clusters that take part;
+//   - `MN_chunk_M_tiles` / `MN_chunk_N_tiles` the MN chunk of C (in tiles) each cluster produces in one go.
+// The factory walks the MN chunks of one batch (across N, then down M) and hands that walk to
+// `cores` in enumeration order (x fastest when `row_major_cores`, y fastest otherwise) as contiguous
+// runs; when there are fewer MN chunks than cores the trailing cores idle, when there are more each core
+// produces several. Blocks on the right / bottom edge are computed at full size and clipped on read
+// and write, so any M / N works. Every operand is addressed by tile index through the tensor accessor, so interleaved,
+// L1-sharded and DRAM-sharded tensors all take the same kernels. The legacy strategies are particular
+// choices of (cores, MN_chunk_M_tiles, MN_chunk_N_tiles): e.g. a 1D "mcast_in0" matmul is MN_chunk_M_tiles = M_tiles on
+// a row of cores, a 2D matmul is a rectangle of cores with MN_chunk_M_tiles x MN_chunk_N_tiles MN chunks.
+//
+// Stage A limits: one NEO, one reader and one writer per cluster; no data sharing between clusters;
+// no bias (the op applies it as a separate add), no fused activation, no untilize, 32x32 tiles only,
+// sharded output needs batch 1 and exactly one MN chunk per core.
+struct MatmulUnifiedProgramConfig {
+    CoreRangeSet cores;
+    std::size_t MN_chunk_M_tiles{};
+    std::size_t MN_chunk_N_tiles{};
+    // K tiles accumulated per K chunk (one A slice + one B slice in L1 at a time); must divide K_tiles.
+    // 0 = auto: the largest divisor of K_tiles <= 8 whose rings fit L1.
+    std::size_t K_chunk_tiles = 0;
+    // Subblock: the MN chunk's tiles accumulated in DST at once; must divide MN_chunk_M_tiles / MN_chunk_N_tiles and
+    // hold
+    // <= 8 tiles (4 with fp32 accumulation). 0 for both = auto.
+    std::size_t subblock_M_tiles = 0;
+    std::size_t subblock_N_tiles = 0;
+    bool row_major_cores = true;
+};
+
 using MatmulProgramConfig = std::variant<
     MatmulMultiCoreProgramConfig,
     MatmulMultiCoreReuseProgramConfig,
     MatmulMultiCoreReuseMultiCastProgramConfig,
     MatmulMultiCoreReuseMultiCast1DProgramConfig,
     MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig,
-    MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig>;
+    MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig,
+    MatmulUnifiedProgramConfig>;
 
 // Ensures allowed_worker_cores is populated on every config variant that supports it.
 // If allowed_worker_cores is already set, it is left unchanged.  Otherwise it is
@@ -118,7 +152,7 @@ inline void normalize_program_config(MatmulProgramConfig& config, const tt::tt_m
                     c.allowed_worker_cores = make_crs(device_grid);
                 }
             }
-            // DRAM-sharded configs have no grid fields to normalize.
+            // DRAM-sharded and unified configs have no grid fields to normalize.
         },
         config);
 }
