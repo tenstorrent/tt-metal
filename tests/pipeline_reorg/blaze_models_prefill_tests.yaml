@@ -859,7 +859,7 @@
   test_group: module
   skus:
     bh_sc1:
-      timeout: 52
+      timeout: 44
       tier: 2
       release_ready: false
   owner_id: U07N3CUUN05  # Iva Potkonjak
@@ -885,7 +885,7 @@
   test_group: module
   skus:
     bh_sc1:
-      timeout: 32
+      timeout: 24
       tier: 2
       release_ready: false
   owner_id: U07N3CUUN05  # Iva Potkonjak
