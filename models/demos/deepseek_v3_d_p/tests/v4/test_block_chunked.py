@@ -125,7 +125,6 @@ def run_chunked_block_v4(mesh_device, device_params, num_links, variant, layer_i
         tt_out = block(
             tt_in,
             actual_isl=CHUNK,
-            actual_start=start,
             input_ids=trace.token_ids(CHUNK, start),
         )
         full = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=ms, dims=(2, 3)))

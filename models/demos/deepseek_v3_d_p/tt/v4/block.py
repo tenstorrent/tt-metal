@@ -145,6 +145,9 @@ class TtV4Block(LightweightModule):
             mesh_device, attn_reference, config, sp_axis=sp_axis, tp_axis=tp_axis, topology=topology
         )
         # Allocated once: the state's shape is the same for every chunk, only its contents advance.
+        # TODO once a V4 transformer owns this state instead of the block, forward() needs the chunk
+        # offset back the way TtPrefillBlock takes actual_start: a caller-owned cache does not
+        # advance itself, so the position has to come in with the chunk.
         self.attn_state = self.attn.alloc_state(max_seq_len or seq_len, chunk_tokens=seq_len)
 
         self.ffn = TtPrefillBlock._build_moe(
@@ -193,14 +196,13 @@ class TtV4Block(LightweightModule):
         x: ttnn.Tensor,
         actual_isl: Optional[int] = None,
         input_ids: Optional[torch.Tensor] = None,
-        actual_start: Optional[int] = None,
         padding_side: str = "right",
     ) -> ttnn.Tensor:
         """One chunk of packed residual streams in, the same shape out.
 
-        ``actual_isl`` is the chunk's real pre-pad length, ``actual_start`` where it begins in the
-        sequence, and ``input_ids`` the chunk's token ids, which a hash-routed layer indexes its
-        expert table with and a top-k layer ignores.
+        ``actual_isl`` is the chunk's real pre-pad length and ``input_ids`` the chunk's token ids,
+        which a hash-routed layer indexes its expert table with and a top-k layer ignores. Where the
+        chunk begins is not an argument: the attention state tracks it and advances itself.
 
         Each norm sits inside its site's sublayer, not before it: the hyper-connection collapses its
         streams first, and the norm belongs on what comes out of that collapse.
