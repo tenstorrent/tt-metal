@@ -172,6 +172,7 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/mask.h
     inc/api/compute/matmul.h
     inc/api/compute/mul_int_sfpu.h
+    inc/api/compute/nextafter.h
     inc/api/compute/pack.h
     inc/api/compute/pack_untilize.h
     inc/api/compute/quantization.h
@@ -261,6 +262,7 @@ set(HW_JIT_API_HEADERS
     inc/internal/tensor/const.h
     inc/internal/tensor/dspec.h
     inc/internal/tensor/helpers.h
+    inc/internal/tt-1xx/cache.h
     inc/internal/tt-1xx/blackhole/c_tensix_core.h
     inc/internal/tt-1xx/blackhole/cfg_defines.h
     inc/internal/tt-1xx/blackhole/core_config.h
@@ -287,6 +289,7 @@ set(HW_JIT_API_HEADERS
     inc/internal/tt-2xx/dataflow_buffer/dataflow_buffer_init.h
     inc/internal/tt-2xx/dataflow_buffer/dataflow_buffer_interface.h
     inc/internal/tt-2xx/dataflow_buffer/dataflow_buffer_isr.h
+    inc/internal/tt-2xx/quasar/cache.h
     inc/internal/tt-2xx/quasar/cfg_defines.h
     inc/internal/tt-2xx/quasar/core_config.h
     inc/internal/tt-2xx/quasar/dev_mem_map.h
@@ -308,12 +311,17 @@ set(HW_JIT_API_HEADERS
     inc/internal/tt-2xx/quasar/noc/noc.h
     inc/internal/tt-2xx/quasar/noc/noc_overlay_parameters.h
     inc/internal/tt-2xx/quasar/noc/noc_parameters.h
+    inc/internal/tt-2xx/quasar/noc/tt_tensix_noc_overlay_reg.h
     inc/internal/tt-2xx/quasar/noc_address_backend.h
     inc/internal/tt-2xx/quasar/noc_cmd_buf_common.h
     inc/internal/tt-2xx/quasar/noc_nonblocking_api.h
     inc/internal/tt-2xx/quasar/noc_nonblocking_api_v1.h
     inc/internal/tt-2xx/quasar/noc_nonblocking_api_v2.h
     inc/internal/tt-2xx/quasar/noc_nonblocking_api_v3.h
+    inc/internal/tt-2xx/quasar/overlay/meta/registers/overlay_reg.h
+    inc/internal/tt-2xx/quasar/overlay/meta/registers/overlay_reg_defines_core.h
+    inc/internal/tt-2xx/quasar/overlay/meta/registers/overlay_reg_defines_debug.h
+    inc/internal/tt-2xx/quasar/overlay/overlay_addresses.h
     inc/internal/tt-2xx/quasar/stream_interface.h
     inc/internal/tt-2xx/quasar/stream_io_map.h
     inc/internal/tt-2xx/quasar/tdma_xmov.h
