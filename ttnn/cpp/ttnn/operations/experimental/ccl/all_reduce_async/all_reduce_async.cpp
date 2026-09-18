@@ -357,7 +357,7 @@ ttnn::Tensor all_reduce_async(
         composite_common::use_composite_reduce_scatter(input_tensor, composite_dim, cluster_axis);
     if (composite_all_gather || composite_reduce_scatter || (dim != composite_dim)) {
         // All reduce = all gather + local reduce
-        log_debug(tt::LogOp, "Using composite all gather + local reduce");
+        log_info(tt::LogOp, "Using composite all gather + local reduce for all_reduce_async");
 
         // Reshape (B, C, H, W) -> (1, B, C, H, W)
         ttsl::SmallVector<uint32_t> ag_shape_vec(initial_shape.rank() + 1);
@@ -394,7 +394,7 @@ ttnn::Tensor all_reduce_async(
     }
 
     // Reduce scatter + all gather
-    log_debug(tt::LogOp, "Using reduce scatter + all gather");
+    log_info(tt::LogOp, "Using reduce scatter + all gather for all_reduce_async");
     ttnn::Tensor scattered_tensor;
     if (rs_global_semaphores.has_value() && barrier_semaphores.has_value()) {
         scattered_tensor = ttnn::experimental::reduce_scatter_minimal_async(

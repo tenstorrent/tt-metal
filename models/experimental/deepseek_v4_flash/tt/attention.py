@@ -1122,9 +1122,8 @@ def _gather_tp_width(tensor: ttnn.Tensor, device: ttnn.MeshDevice) -> ttnn.Tenso
         local,
         dim=3,
         cluster_axis=_tp_cluster_axis(device),
-        num_links=1,
+        num_links=2,
         topology=ttnn.Topology.Linear,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     ttnn.deallocate(local)
     return gathered
@@ -1758,7 +1757,7 @@ class DeepSeekV4Attention(DeepSeekV4Module):
                     output,
                     dim=3,
                     cluster_axis=_tp_cluster_axis(self.device),
-                    num_links=1,
+                    num_links=2,
                     topology=ttnn.Topology.Linear,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 )
