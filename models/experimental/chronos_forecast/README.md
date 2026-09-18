@@ -1,45 +1,55 @@
-# Chronos 2 Forecast 
+# Chronos-2 Forecast
 
-[Chronos](https://github.com/amazon-science/chronos-forecasting), Amazon's pretrained time-series forecasting models
+[Chronos](https://github.com/amazon-science/chronos-forecasting) pretrained time-series models. This tree vendors **Chronos-2** inference sources as a golden PyTorch reference for a later TTNN port.
 
 ## Directory layout
 
+```text
+chronos_forecast/
+├── common/                 submodule path helper + Chronos-1 demo config
+├── reference/
+│   ├── PROVENANCE.md       pin SHA / file mapping
+│   ├── chronos2/           verbatim Amazon Chronos-2 (config, layers, model)
+│   ├── chronos_bolt_ops.py Patch + InstanceNorm excerpt from chronos_bolt.py
+│   └── pytorch_chronos.py  Chronos-1 tokenizer wrappers (submodule)
+├── tt/                     TTNN stubs (not implemented)
+├── tests/
+│   ├── test_reference_vs_upstream.py   CPU golden vs submodule
+│   └── test_submodule_import.py
+├── demo/demo.py
+└── third_party/chronos-forecasting/    git submodule
+```
 
 ## Setup
-
-From the tt-metal repo root:
 
 ```bash
 git submodule update --init models/experimental/chronos_forecast/third_party/chronos-forecasting
 pip install -r models/experimental/chronos_forecast/requirements.txt
 ```
 
-The Amazon package is also importable without a pip install: `common/chronos_src.py` puts `third_party/chronos-forecasting/src` on `sys.path`. Optionally install it editable:
-
-```bash
-pip install -e models/experimental/chronos_forecast/third_party/chronos-forecasting
-```
+Pinned Chronos-2 copy: commit `10afa9ebe016e514f9d7dc1aa873f66af57e116b`. See [reference/PROVENANCE.md](reference/PROVENANCE.md).
 
 ## Tests
 
-CPU smoke test (no Tenstorrent device required):
+CPU, no Tenstorrent device:
 
 ```bash
+pytest models/experimental/chronos_forecast/tests/test_reference_vs_upstream.py -v
 pytest models/experimental/chronos_forecast/tests/test_submodule_import.py -v
 ```
 
-PCC tests against TTNN will live in `tests/pcc/` once the device implementation exists.
+`test_reference_vs_upstream.py` locks each Chronos-2 layer (and one `Chronos2Model.forward`) against the submodule using the dummy checkpoint at `third_party/chronos-forecasting/test/dummy-chronos2-model/`.
 
 ## Demo
 
 ```bash
-python models/experimental/chronos_forecast/demo/demo.py
+PYTHONPATH=. python models/experimental/chronos_forecast/demo/demo.py
 ```
 
-This runs the Amazon tokenizer on a synthetic series. Loading a pretrained checkpoint (for example `amazon/chronos-t5-tiny`) is not wired yet.
+Chronos-1 tokenizer smoke demo. TTNN forward is not implemented.
 
 ## References
 
-- Paper: [Chronos: Learning the Language of Time Series](https://arxiv.org/abs/2403.07815)
-- Chronos-2: [https://arxiv.org/abs/2510.15821](https://arxiv.org/abs/2510.15821)
+- Paper: [Chronos](https://arxiv.org/abs/2403.07815)
+- Chronos-2: [arXiv:2510.15821](https://arxiv.org/abs/2510.15821)
 - Upstream: [amazon-science/chronos-forecasting](https://github.com/amazon-science/chronos-forecasting)
