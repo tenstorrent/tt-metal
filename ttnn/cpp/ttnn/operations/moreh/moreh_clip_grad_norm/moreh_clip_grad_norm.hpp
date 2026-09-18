@@ -19,6 +19,11 @@ namespace ttnn {
  * The total norm is computed as:
  *   total_norm = (sum(|grad_i|^norm_type for all grads))^(1/norm_type)
  *
+ * norm_type = +inf, -inf and 0 follow torch.nn.utils.clip_grad_norm_: the per-tensor norms
+ * (max|grad_i|, min|grad_i| and the count of nonzero elements respectively) are combined with
+ * the same order, i.e. max over tensors, min over tensors, and the count of tensors with a
+ * nonzero per-tensor norm.
+ *
  * If total_norm > max_norm, each gradient is scaled by:
  *   clip_coef = max_norm / (total_norm + 1e-6)
  *
