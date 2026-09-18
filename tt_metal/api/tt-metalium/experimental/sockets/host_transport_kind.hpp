@@ -12,9 +12,8 @@ enum class TransportKind : uint8_t {
     // One-sided verbs. Saturates the link; needs a RoCE device on both hosts.
     Rdma,
     // Two-sided point-to-point through DistributedContext. Runs anywhere MPI
-    // does, including builds with no RDMA support at all. Much slower, and how
-    // much depends entirely on what the MPI build can use underneath -- see the
-    // tech report; this backend is for reach, not for speed.
+    // does, but far slower, by however much the MPI build's own transport is.
+    // For reach, not for speed; see the tech report.
     Mpi,
 };
 
