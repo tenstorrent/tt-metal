@@ -453,7 +453,7 @@ match that reality: never describe a pipeline as dispatched on a fork PR.
 |---|---|---|
 | `sanity-tests` | WH + BH + simulator | First-line signal on core `tt_metal/` or `ttnn/` changes. Bundles eight independent suites — select them, do not take the default of all eight |
 | `blackhole-e2e-tests` | Blackhole (P150/P300/BH QuietBox) | Anything under a `blackhole/` path or BH-specific HAL/SoC descriptor |
-| `galaxy-tests` | Galaxy (WH/BH) | Reachability, fabric, CCL, multi-device, large-mesh and multi-tenant isolation code paths |
+| `galaxy-tests` | Galaxy (WH/BH) | Fabric, CCL, multi-device, large-mesh and multi-tenant isolation code paths |
 | `galaxy-profiler-tests` | Galaxy | Galaxy profiler instrumentation changes |
 | `galaxy-stress-tests` | Galaxy | Stability and long-run behaviour |
 | `t3000-unit-tests`, `t3000-integration-tests`, `t3000-e2e-tests` | T3000 (8×WH) | Multi-chip work that does not need a full Galaxy |
@@ -517,7 +517,7 @@ The defaults are usually *maximal*, and that is where the waste is. Recurring sh
 
   | Pipeline | Toggles (all default `true`) |
   |---|---|
-  | `sanity-tests` | `run-ttnn-sanity-tests`, `run-ops-sanity-tests`, `run-fabric-sanity-tests`, `run-t3000-sanity-tests`, `run-umd-sanity-tests`, `run-ttsim-sanity-tests`, `run-blackhole-multi-card-sanity-tests`, `run-models-sanity-tests` |
+  | `sanity-tests` | `run-ttnn-sanity-tests`, `run-ops-sanity-tests`, `run-fabric-sanity-tests`, `run-t3000-sanity-tests`, `run-umd-sanity-tests`, `run-ttsim-sanity-tests`, `run-blackhole-multi-card-sanity-tests`, `run-models-sanity-tests` (`run-galaxy-sanity-tests` defaults `false` — it takes a Galaxy box, so opt in only when the change touches Galaxy fabric or CCL) |
   | `single-card-profiler-tests` | `run-n150-profiler`, `run-n300-profiler`, `run-blackhole-profiler` |
   | `pipeline-select-profiler` | `run-n150-profiler`, `run-n300-profiler`, `run-blackhole-profiler`, `run-t3k-profiler` |
 

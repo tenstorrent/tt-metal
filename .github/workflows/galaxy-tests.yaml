@@ -105,16 +105,6 @@ jobs:
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
 
-  galaxy-sanity-test:
-    needs: [check-harbor, build-artifact]
-    if: ${{ !cancelled() && needs.build-artifact.result == 'success' }}
-    secrets: inherit
-    uses: ./.github/workflows/galaxy-sanity-impl.yaml
-    with:
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-
   galaxy-health-test:
     needs: [check-harbor, build-artifact]
     if: ${{ !cancelled() && needs.build-artifact.result == 'success' }}

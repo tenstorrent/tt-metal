@@ -707,6 +707,11 @@ jobs:
                         "description": "Run fabric sanity tests (WH N300 + BH card smoke)",
                         "type": "boolean"
                       },
+                      "run-galaxy-sanity-tests": {
+                        "default": false,
+                        "description": "Run Galaxy sanity tests (WH Galaxy fabric CCL). The scheduled runs carry this leg; a caller must opt in.",
+                        "type": "boolean"
+                      },
                       "run-models-sanity-tests": {
                         "default": true,
                         "description": "Run model sanity tests (WH Galaxy)",
