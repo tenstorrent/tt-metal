@@ -841,6 +841,57 @@
   budget_type: demo
   sp_config: sc1
 
+- name: "(GLM-5.2-744B) chunked prefill padded accuracy 15k@5k no-trace"
+  fabric_profile: torus_xy
+  cmd: |
+    export MESH_DEVICE=TG
+    export LOGURU_LEVEL=INFO
+    export GLM52_HF_MODEL=/mnt/models/deepseek-prefill-cache/GLM-5.2-FP8
+    export TT_GLM52_PREFILL_TTNN_CACHE=/mnt/models/deepseek-prefill-cache/glm52_ttnn_cache
+    export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/glm-traces/vllm-glm52-indexer-kcache-55k
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      set -e
+      export OMP_NUM_THREADS=$(nproc)
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_glm_prefill_transformer_chunked_padded -k "glm52 and torus-xy-8x4 and L78 and mid15k and notrace" -vvv --tb=short
+    '
+  test_type: glm_chunked_padded
+  test_tags: [glm_5_2, transformer]
+  test_group: module
+  skus:
+    bh_sc1:
+      timeout: 52
+      tier: 2
+      release_ready: false
+  owner_id: U07N3CUUN05  # Iva Potkonjak
+  team: models
+  budget_type: demo
+  sp_config: sc1
+
+- name: "(GLM-5.2-744B) chunked prefill padded accuracy 15k@5k traced"
+  fabric_profile: torus_xy
+  cmd: |
+    export MESH_DEVICE=TG
+    export LOGURU_LEVEL=INFO
+    export GLM52_HF_MODEL=/mnt/models/deepseek-prefill-cache/GLM-5.2-FP8
+    export TT_GLM52_PREFILL_TTNN_CACHE=/mnt/models/deepseek-prefill-cache/glm52_ttnn_cache
+    export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/glm-traces/vllm-glm52-indexer-kcache-55k
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      set -e
+      export OMP_NUM_THREADS=$(nproc)
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_glm_prefill_transformer_chunked_padded -k "glm52 and torus-xy-8x4 and L78 and mid15k and traced" -vvv --tb=short
+    '
+  test_type: glm_chunked_padded
+  test_tags: [glm_5_2, transformer]
+  test_group: module
+  skus:
+    bh_sc1:
+      timeout: 32
+      tier: 2
+      release_ready: false
+  owner_id: U07N3CUUN05  # Iva Potkonjak
+  team: models
+  budget_type: demo
+  sp_config: sc1
 
 - name: "(GLM-5.2-744B) chunked prefill perf code_debug 55k@5k"
   fabric_profile: torus_xy
