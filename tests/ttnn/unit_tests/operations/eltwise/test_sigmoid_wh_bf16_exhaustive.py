@@ -42,11 +42,9 @@ _RESULT_TO_EGRESS = {
     "pos_inf": "pos_inf",
     "pos_zero": "pos_zero",
 }
-_ACTIONS = (
-
-)
+_ACTIONS = ()
 _DOMAIN_ACTIONS = ()
-_LATE_RAW_CLASSES = ('pos_nan',)
+_LATE_RAW_CLASSES = ("pos_nan",)
 _EXACT_CLASS_WORD = {
     "pos_inf": np.uint16(0x7F80),
     "neg_inf": np.uint16(0xFF80),
@@ -88,6 +86,7 @@ def _raw_classes(words):
     classes[(exponent == 0x7F80) & (mantissa != 0) & ~negative] = "pos_nan"
     classes[(exponent == 0x7F80) & (mantissa != 0) & negative] = "neg_nan"
     return classes
+
 
 def _reference_inputs(raw_classes, values):
     """Apply the compiler target's typed ingress before the math reference."""
@@ -168,16 +167,22 @@ def _domain_expectations(words, values):
         selected &= ~owned
         owned[selected] = True
         if kind in ("constant", "identity"):
-            result = (np.full(int(selected.sum()), np.float32(payload), dtype=np.float64)
-                      if kind == "constant" else values[selected])
+            result = (
+                np.full(int(selected.sum()), np.float32(payload), dtype=np.float64)
+                if kind == "constant"
+                else values[selected]
+            )
             encoded = _physical_words(result)
             classes = _raw_classes(encoded)
             expected[selected] = np.where(np.isin(classes, ("pos_nan", "neg_nan")), "nan", classes)
             exact[selected] = encoded
             exact_owned[selected] = ~np.isin(classes, ("pos_nan", "neg_nan"))
         else:
-            classes = (np.where(np.signbit(values[selected]), "neg_inf", "pos_inf")
-                       if kind == "signed_inf" else np.full(int(selected.sum()), payload))
+            classes = (
+                np.where(np.signbit(values[selected]), "neg_inf", "pos_inf")
+                if kind == "signed_inf"
+                else np.full(int(selected.sum()), payload)
+            )
             expected[selected] = np.asarray([_RESULT_TO_EGRESS[name] for name in classes])
     # Ordered domain actions claim lanes before explicit late raw overrides.
     # A default raw-class expectation is not itself a late terminal.
@@ -209,7 +214,6 @@ def _assert_finite_math(raw_words, result_words, reference_values):
     assert not pure_ulp.size or float(pure_ulp.max()) < 1.0
 
 
-
 @pytest.mark.skipif(
     not (is_wormhole_b0()),
     reason="compiler-generated BF16 kernel ships on Wormhole B0",
@@ -218,7 +222,9 @@ def test_sigmoid_bf16_exhaustive(device):
     input_words = torch.arange(65536, dtype=torch.int32).to(torch.uint16)
     host = input_words.view(torch.bfloat16).reshape(256, 256)
     device_input = ttnn.from_torch(host, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    result = ttnn.to_torch(ttnn.sigmoid(device_input, **{'mode': ttnn.SigmoidMode.Accurate, 'vector_mode': 4})).to(torch.bfloat16)
+    result = ttnn.to_torch(ttnn.sigmoid(device_input, **{"mode": ttnn.SigmoidMode.Accurate, "vector_mode": 4})).to(
+        torch.bfloat16
+    )
     result_words = _words(result)
 
     raw = input_words.cpu().numpy().astype(np.uint16)
