@@ -19,7 +19,7 @@ namespace ttnn::operations::experimental::deepseek_prefill::dispatch_fabric2d {
 
 namespace {
 
-// The sender reaches its eth core over NOC_1, so that is the NOC distances are minimised on.
+// The sender reaches its eth core over NOC_1, so that is the NOC whose hop distance is minimised.
 constexpr tt::tt_metal::NOC SENDER_NOC = tt::tt_metal::NOC::NOC_1;
 
 struct WorkerCandidate {

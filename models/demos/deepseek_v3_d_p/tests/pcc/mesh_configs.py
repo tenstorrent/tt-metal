@@ -5,9 +5,9 @@
 """
 Shared mesh configuration parameters for dispatch/combine PCC tests.
 
-The op_unit_tests test_prefill_dispatch.py, test_ttnn_dispatch_combine.py, and
-test_combine_subdevices.py, plus perf/test_prefill_dispatch_combine.py, import
-ALL_MESH_CONFIGS to avoid duplicating the same pytest.param entries.
+Consumers import ALL_MESH_CONFIGS to avoid duplicating the same pytest.param entries; grep for the
+name to find them. Each filters by explicit `param.id` and asserts the count it expected, so adding a
+row here expands nobody else's matrix and a stale id fails at import rather than silently.
 test_combine_subdevices.py pins the `fabric2d-mesh-4x2` ID.
 
 FabricConfig is the single source of truth. Consumers derive their cluster-axis CCL
@@ -153,6 +153,15 @@ ALL_MESH_CONFIGS = [
         reliability_mode=ttnn.FabricReliabilityMode.RELAXED_INIT,
     ),
     # Galaxy production policy: existing full 8x4 TorusXY, Ring on the exercised SP axis.
+    _mesh_param(
+        (8, 4),
+        ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
+        get_max_payload_size(),
+        1,
+        "mesh-8x4",
+        "fabric2d-torus-xy-8x4-1link",
+        reliability_mode=ttnn.FabricReliabilityMode.RELAXED_INIT,
+    ),
     _mesh_param(
         (8, 4),
         ttnn.FabricConfig.FABRIC_2D_TORUS_XY,

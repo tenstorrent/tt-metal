@@ -52,7 +52,6 @@ struct UntilizeRtArg {
         // compute kernel addresses no memory and is handed `kFirstStripe` alone, so its runtime-arg
         // list is one word long and this slot is not there to read.
         kBufferAddr,
-        kCount,
     };
 };
 

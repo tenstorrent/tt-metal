@@ -7,44 +7,47 @@
 The worker runs both ops on one set of inputs, so the CSV carries DispatchDeviceOperation and
 DispatchFabric2dDeviceOperation side by side and the ratio is free of cross-run variance.
 
-The expected values below are PLACEHOLDERS, pending numbers from hardware qualified for perf.
+The metric is device kernel duration summed over the worker's launches, which is what
+`run_model_device_perf_test_per_op` compares: `merge_device_rows` collapses the mesh's 32 rows per
+launch, so each baseline covers the worker's warm-up plus its ITERATIONS measured launches. Re-measure
+both baselines together whenever the worker's launch count changes.
 
-The metric itself is sound: device kernel duration tracks the work. Dropping seq_len_per_chip from
-640 to 64 takes both ops from ~3.18 ms to ~0.39 ms per launch, so it is measuring data movement and
-not dispatch skew or a synchronization floor. At production geometry the two ops come out at parity
-(3.18 vs 3.20 ms), which is what the analysis predicts: store-and-forward alone moves zero link
-bytes, and the win has to come from fan-out.
+At production geometry dispatch_fabric2d runs about 1.6x faster than production `dispatch`, not at
+parity: relaying through DRAM costs a store and a load per hop, but it also replaces the production
+op's multi-hop fabric routing, and the cheaper transport wins by more than the relay costs.
 
-Do not compare these against the 473k-1248k ns figures in test_dispatch_combine_perf.py. Those are
-an 8x1 LoudBox TorusY proxy replaying captured routing; this is 8x4 TORUS_XY with a uniform draw.
+Do not compare these against the figures in test_dispatch_combine_perf.py. Those are an 8x1 LoudBox
+TorusY proxy replaying captured routing; this is 8x4 TORUS_XY.
 """
 
 import pytest
 
-from models.demos.deepseek_v3_d_p.utils.perf_utils import run_model_device_perf_test_per_op
+from models.demos.deepseek_v3_d_p.utils.perf_utils import adjust_margin_for_ddr_speed, run_model_device_perf_test_per_op
 
 _WORKER = (
-    "models/demos/deepseek_v3_d_p/tests/perf/test_prefill_dispatch_fabric2d.py"
-    "::test_dispatch_fabric2d_perf_worker"
+    "models/demos/deepseek_v3_d_p/tests/perf/test_prefill_dispatch_fabric2d.py::test_dispatch_fabric2d_perf_worker"
 )
-_K_FILTER = "torus-xy-8x4-2link"
+_K_FILTER = "fabric2d-torus-xy-8x4-2link"
 
-# Unset until measured on qualified hardware. `run_model_device_perf_test_per_op` fails the test if
-# an op substring matches no row, so a typo in a key shows up as a failure rather than a silent pass.
+# Only the op this test exists for is gated. `DispatchDeviceOperation` is still in the capture -- the
+# ratio between the two is the transferable quantity and it is right there in the log -- but it is not
+# baselined here: over three back-to-back captures its summed device time moved 8.3% (13.11 / 12.85 /
+# 12.04 ms) while dispatch_fabric2d held to 0.02% (8.0966 / 8.0969 / 8.0984 ms). A margin wide enough
+# for production `dispatch` would tolerate a regression two orders of magnitude larger than this op's
+# own noise, and production already has its own gates.
+#
+# `run_model_device_perf_test_per_op` fails the test if an op substring matches no row, so a typo in a
+# key shows up as a failure rather than a silent pass.
 _EXPECTED_NS: dict[str, int] = {
-    "DispatchDeviceOperation": 0,
-    "DispatchFabric2dDeviceOperation": 0,
-    # The reach table multicast needs, produced on device. Additive: nothing else in the pipeline emits
-    # it, so this is subtracted from whatever multicast saves over store-and-forward.
-    "MoeFanoutReachDeviceOperation": 0,
+    "DispatchFabric2dDeviceOperation": 8_096_891,
 }
 
 
-@pytest.mark.parametrize("margin", [0.045])
 @pytest.mark.models_device_performance_bare_metal
-def test_device_perf_dispatch_fabric2d(margin):
-    if not all(_EXPECTED_NS.values()):
-        pytest.skip("expected_ns not yet measured on a perf-qualified machine; see module docstring")
+def test_device_perf_dispatch_fabric2d():
+    # The sibling gates' margin and DDR adjustment, so a slow-memory board loosens the same way. 3% is
+    # ~150x this op's observed run-to-run spread, so the gate catches a real regression rather than noise.
+    margin = adjust_margin_for_ddr_speed(0.03)
     run_model_device_perf_test_per_op(
         command=f"pytest {_WORKER} -k '{_K_FILTER}' --wrapper-invocation",
         expected_per_op=_EXPECTED_NS,
