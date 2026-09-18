@@ -10,10 +10,11 @@ import os
 from contextlib import ExitStack
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable, Iterator, Sequence
+from typing import Callable, Iterator, Sequence
 
 import ml_dtypes
 import numpy as np
+from safetensors import safe_open
 
 import ttnn
 import ttml
@@ -21,9 +22,6 @@ from ttml.common.utils import resolve_padded_load_shape
 
 from .. import WeightTyingType
 from . import LlamaConfig
-
-if TYPE_CHECKING:
-    from safetensors import safe_open
 
 # TTML stores a weight as 4-D (1, 1, out_features, in_features).
 ROW_DIM, COL_DIM = 2, 3
@@ -56,8 +54,6 @@ class _Checkpoint:
     Keyed by canonical name; a read comes back 2-D as ``[out, in]``."""
 
     def __init__(self, directory: str | os.PathLike) -> None:
-        from safetensors import safe_open
-
         files = sorted(Path(directory).glob("*.safetensors"))
         if not files:
             raise FileNotFoundError(f"No .safetensors files found in {Path(directory)}")
