@@ -129,7 +129,9 @@ class TestConfigUnit:
 # ==============================================================================
 
 
-@pytest.mark.parametrize("ttnn_mesh_device", [(1, 1), (1, 2), (1, 8)], ids=["1x1", "1x2", "1x8"], indirect=True)
+@pytest.mark.parametrize(
+    "ttnn_mesh_device", [(1, 1), (1, 2), (1, 4), (1, 8)], ids=["1x1", "1x2", "1x4", "1x8"], indirect=True
+)
 class TestSampling1DDevice:
     @pytest.mark.parametrize("vocab_size", [1024])
     def test_resolve_config(self, ttnn_mesh_device, vocab_size):
@@ -1498,8 +1500,8 @@ def test_sampling1d_logprobs_topk(ttnn_mesh_device):
     """enable_log_probs=True on the top-k path.
 
     The old single-token logprob path only computes on multi-device shards with
-    num_devices ∈ {8, 32} (T3K 1×8). On 1×1/1×2 the calculator returns None even when enabled.
-    On 1×8, the returned logprob must match torch.log_softmax(logits)[sampled_token] within
+    num_devices ∈ {4, 8, 32}. On 1×1/1×2 the calculator returns None even when enabled.
+    On supported meshes, the returned logprob must match torch.log_softmax(logits)[sampled_token] within
     bf16 reduction tolerance. PCC is intentionally not used here because the k=1 random-bf16 case
     is near-constant and can degenerate to zero variance on device.
     """
@@ -1519,11 +1521,11 @@ def test_sampling1d_logprobs_topk(ttnn_mesh_device):
     tokens_tt, log_probs = sampler.decode_forward(logits_tt, k=k, p=p, temp=temp, enable_log_probs=True)
 
     num_devices = max(cluster_shape)
-    if num_devices not in (8, 32):
+    if num_devices not in (4, 8, 32):
         assert log_probs is None, f"logprobs unsupported on {num_devices} devices → expected None"
         return
 
-    assert log_probs is not None, "logprobs must be computed on a 1×8 mesh when enabled"
+    assert log_probs is not None, "sampled-token logprobs must be computed on supported meshes when enabled"
 
     # output_tensor shape (1,1,1,B), replicated across devices — match test_sampling.py read path
     mesh_composer = ttnn.ConcatMeshToTensor(ttnn_mesh_device, dim=3)
@@ -1556,6 +1558,29 @@ def test_full_vocab_unprepared_controls_are_allowed_only_for_explicit_warmup():
     with pytest.raises(RuntimeError, match="requires params"):
         SamplingGenerator._full_vocab_contract(
             sampler, allow_unprepared=True)
+
+
+@pytest.mark.parametrize("num_devices", [1, 2, 4, 8, 32])
+@pytest.mark.parametrize("shards", [1, 2, 4])
+@pytest.mark.parametrize("topk", [False, True])
+def test_logprobs_capability_geometry(num_devices, shards, topk):
+    from types import SimpleNamespace
+
+    from models.common.sampling.tt_log_probs import LogProbsCalculator
+
+    calculator = SimpleNamespace(
+        mesh_device=SimpleNamespace(get_num_devices=lambda: num_devices),
+        num_devices_for_sharding=shards,
+        _use_topk_logprobs=topk,
+    )
+    expected = (num_devices in (8, 32) and shards >= 2) or (num_devices == 4 and shards == 4 and not topk)
+    assert LogProbsCalculator._is_supported(calculator) is expected
+    assert (
+        LogProbsCalculator.supports_configuration(
+            num_devices=num_devices, num_devices_for_sharding=shards, use_topk_logprobs=topk
+        )
+        is expected
+    )
 
 
 # ==============================================================================

@@ -416,14 +416,27 @@ class LogProbsCalculator:
         self.global_exp_sum = ttnn.sum(gathered_sum_exp_tensors, dim=2, keepdim=True, **self.common_args)
         ttnn.deallocate(gathered_sum_exp_tensors)
 
-    def _is_supported(self):
-        """Check if logprobs computation is supported on this device configuration."""
-        num_devices = self.mesh_device.get_num_devices()
+    @staticmethod
+    def supports_configuration(*, num_devices, num_devices_for_sharding, use_topk_logprobs=False):
+        """Query logprob support without allocating a device or calculator."""
+        if num_devices == 4:
+            # Four-way vocabulary sharding supports sampled-token logprobs.
+            # Top-K output and partially sharded four-device meshes are not
+            # covered by this capability.
+            return num_devices_for_sharding == 4 and not use_topk_logprobs
         if num_devices not in (8, 32):
             return False
-        if self.num_devices_for_sharding < 2:
+        if num_devices_for_sharding < 2:
             return False
         return True
+
+    def _is_supported(self):
+        """Use the same predicate for admission and runtime calculation."""
+        return LogProbsCalculator.supports_configuration(
+            num_devices=self.mesh_device.get_num_devices(),
+            num_devices_for_sharding=self.num_devices_for_sharding,
+            use_topk_logprobs=self._use_topk_logprobs,
+        )
 
     # -----------------------------------------------------------------------
     # Old path (backward compat for non-gpt-oss models)
