@@ -32,7 +32,7 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
                 ``[B*H*G, N, K, 1]``.
             t_inv (ttnn.Tensor): Triangular correction inverse
                 ``[B*H*G, N, 32, 32]`` in FLOAT32.
-            initial_state (ttnn.Tensor): Initial recurrent state ``[B*H*G, K, V]``
+            group_entry_states (ttnn.Tensor): Initial recurrent state ``[B*H*G, K, V]``
                 in FLOAT32, with group folded into the leading dimension.
                 Tail state is unfolded: one ``[K,V]`` matrix per ``B*H``.
 
@@ -44,7 +44,7 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
                 and update its contents before replay of a captured trace.
             sequence_parallel_axis (int, optional): Mesh axis partitioning the
                 sequence. Native mesh coordinates supply each device's rank.
-            tail_state (ttnn.Tensor): FLOAT32 carry ``[B*H,K,V]``
+            tail_entry_states (ttnn.Tensor): FLOAT32 carry ``[B*H,K,V]``
                 to reload at the locally derived split. Ignored when unsplit.
                 No input tensor is modified.
             groups_per_head (int, optional): Groups folded into the leading
@@ -60,7 +60,7 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
 
         Note:
             ``v_beta``, ``kd``, ``q_decay``, ``k_dec_t``, and ``final_decay`` may be
-            FLOAT32 or BFLOAT16. ``intra``, ``t_inv``, and ``initial_state`` must be
+            FLOAT32 or BFLOAT16. ``intra``, ``t_inv``, and ``group_entry_states`` must be
             FLOAT32. ``K`` and ``V`` must be positive and tile-aligned. All inputs
             must be interleaved TILE-layout tensors on the same device and are not
             modified.
@@ -73,10 +73,10 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
         nb::arg("k_dec_t").noconvert(),
         nb::arg("final_decay").noconvert(),
         nb::arg("t_inv").noconvert(),
-        nb::arg("initial_state").noconvert(),
+        nb::arg("group_entry_states").noconvert(),
         nb::kw_only(),
         nb::arg("actual_start").noconvert(),
-        nb::arg("tail_state").noconvert(),
+        nb::arg("tail_entry_states").noconvert(),
 
         nb::arg("groups_per_head") = 1,
 

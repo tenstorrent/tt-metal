@@ -21,11 +21,11 @@ from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
     assert_equal,
 )
 
-from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import _height_sharded_memory_config
+from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import height_sharded_memory_config
 
 pytestmark = [
     run_for_blackhole(),
-    pytest.mark.use_module_device({"l1_small_size": 24576, "trace_region_size": 2_000_000}),
+    pytest.mark.use_module_device({"l1_small_size": 24576}),
 ]
 
 
@@ -203,7 +203,7 @@ def _run(
             local_rows=32 * groups_per_head,
             tail_a=a,
             tail_b=b,
-            tail_state=initial_state,
+            tail_entry_states=initial_state,
             memory_config=memory_config,
             compute_kernel_config=compute_kernel_config,
         )
@@ -252,12 +252,10 @@ def test_affine_exclusive_scan_contract_and_trace(
     expected = _oracle(a, b, initial_state, batch_heads, groups_per_head)
     leading = batch_heads * groups_per_head
     a_memory = (
-        _height_sharded_memory_config(device, leading, key_dim, key_dim) if sharded_inputs else ttnn.DRAM_MEMORY_CONFIG
+        height_sharded_memory_config(device, leading, key_dim, key_dim) if sharded_inputs else ttnn.DRAM_MEMORY_CONFIG
     )
     b_memory = (
-        _height_sharded_memory_config(device, leading, key_dim, value_dim)
-        if sharded_inputs
-        else ttnn.DRAM_MEMORY_CONFIG
+        height_sharded_memory_config(device, leading, key_dim, value_dim) if sharded_inputs else ttnn.DRAM_MEMORY_CONFIG
     )
     output_memory = ttnn.L1_MEMORY_CONFIG if sharded_inputs else ttnn.DRAM_MEMORY_CONFIG
     a_tt = _to_device(a, device, summary_dtype, memory_config=a_memory)
@@ -315,12 +313,10 @@ def test_affine_exclusive_scan_shape_accuracy(
     expected = _oracle(a, b, initial_state, batch_heads, groups_per_head)
     leading = batch_heads * groups_per_head
     a_memory = (
-        _height_sharded_memory_config(device, leading, key_dim, key_dim) if sharded_inputs else ttnn.DRAM_MEMORY_CONFIG
+        height_sharded_memory_config(device, leading, key_dim, key_dim) if sharded_inputs else ttnn.DRAM_MEMORY_CONFIG
     )
     b_memory = (
-        _height_sharded_memory_config(device, leading, key_dim, value_dim)
-        if sharded_inputs
-        else ttnn.DRAM_MEMORY_CONFIG
+        height_sharded_memory_config(device, leading, key_dim, value_dim) if sharded_inputs else ttnn.DRAM_MEMORY_CONFIG
     )
     device_inputs = (
         _to_device(a, device, summary_dtype, memory_config=a_memory),

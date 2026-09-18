@@ -36,13 +36,10 @@ from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
     collect_accuracy_and_determinism_results,
 )
 
-from tests.ttnn.nightly.unit_tests.operations.experimental.kda.recurrent_chunk_scan_test_utils import (
-    _segmented_summary_oracle,
-)
 
 pytestmark = [
     run_for_blackhole(),
-    pytest.mark.use_module_device({"l1_small_size": 24576, "trace_region_size": 2_000_000}),
+    pytest.mark.use_module_device({"l1_small_size": 24576}),
 ]
 
 
@@ -184,15 +181,6 @@ def test_summarize_chunk_recurrence_contract_trace_and_semantics(
         shapes=((batch_heads, dim, dim), (batch_heads, dim, dim)),
     )
     assert_summary_reconstructs_state(host_inputs, ttnn.to_torch(first[0]), ttnn.to_torch(first[1]))
-
-
-@pytest.mark.parametrize("keyword", ["chunk_start", "chunk_count"])
-def test_summarize_chunk_recurrence_has_no_range_controls(
-    zero_actual_start, device: ttnn.Device, keyword: str, expect_error
-) -> None:
-    inputs = device_protocol(host_protocol(2, 4, 32, 32), device)
-    with expect_error(TypeError, "incompatible function arguments"):
-        ttnn.experimental.kda.summarize_chunk_recurrence(*inputs, actual_start=zero_actual_start, **{keyword: 1})
 
 
 def _regression_protocol(

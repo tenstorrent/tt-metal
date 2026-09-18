@@ -42,7 +42,7 @@ def test_segmented_prefill_matches_reference_and_reuses_program(
     golden_first, golden_state = kda_forward_reference(hidden[:, :32], weights, config)
     golden_second, golden_state = kda_forward_reference(hidden[:, 32:], weights, config, golden_state)
 
-    layer = ttKDA(device, config, weights)
+    layer = ttKDA(device, config, weights, active_seq_len=32)
     state = layer.allocate_state()
     actual_first, state = _forward(layer, hidden[:, :32], state)
     cache_entries_after_first = device.num_program_cache_entries()
@@ -80,7 +80,7 @@ def test_trace_replay_matches_eager_without_mutating_input_state(device: ttnn.De
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    layer = ttKDA(device, config, random_weights(config))
+    layer = ttKDA(device, config, random_weights(config), active_seq_len=32)
 
     actual_start_tt = make_actual_start(device)
     with ttnn.manage_config("throw_exception_on_fallback", True):

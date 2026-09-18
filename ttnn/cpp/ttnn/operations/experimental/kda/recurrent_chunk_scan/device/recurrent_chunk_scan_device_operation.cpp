@@ -97,21 +97,22 @@ void RecurrentChunkScanOperation::validate_on_program_cache_miss(
     check_shape(in.t_inv, Shape({BH, NC, chunk_size, chunk_size}), "t_inv", operation_name);
 
     if (attrs.mode == RecurrentChunkScanMode::RECURRENT) {
-        TT_FATAL(in.initial_state.has_value(), "{}: initial_state is required", operation_name);
-        check_protocol_tensor(*in.initial_state, "initial_state", false, operation_name);
-        check_same_device(in.v_beta, *in.initial_state, operation_name, "initial_state");
-        check_shape(*in.initial_state, Shape({BH, K, V}), "initial_state", operation_name);
+        TT_FATAL(in.group_entry_states.has_value(), "{}: group_entry_states is required", operation_name);
+        check_protocol_tensor(*in.group_entry_states, "group_entry_states", false, operation_name);
+        check_same_device(in.v_beta, *in.group_entry_states, operation_name, "group_entry_states");
+        check_shape(*in.group_entry_states, Shape({BH, K, V}), "group_entry_states", operation_name);
         // The wrap needs no extra entry slot. The head seed is this chip's own entry
         // state; the tail seed is the prefix's final carry, which every chip already
         // derives identically from the gathered summaries.
-        if (in.tail_state.has_value()) {
-            check_protocol_tensor(*in.tail_state, "tail_state", false, operation_name);
-            check_same_device(in.v_beta, *in.tail_state, operation_name, "tail_state");
-            check_shape(*in.tail_state, Shape({BH / attrs.groups_per_head, K, V}), "tail_state", operation_name);
+        if (in.tail_entry_states.has_value()) {
+            check_protocol_tensor(*in.tail_entry_states, "tail_entry_states", false, operation_name);
+            check_same_device(in.v_beta, *in.tail_entry_states, operation_name, "tail_entry_states");
+            check_shape(
+                *in.tail_entry_states, Shape({BH / attrs.groups_per_head, K, V}), "tail_entry_states", operation_name);
         }
-        TT_FATAL(in.tail_state.has_value(), "{}: tail_state is required", operation_name);
+        TT_FATAL(in.tail_entry_states.has_value(), "{}: tail_entry_states is required", operation_name);
     } else {
-        TT_FATAL(!in.initial_state.has_value(), "{}: initial_state is not accepted", operation_name);
+        TT_FATAL(!in.group_entry_states.has_value(), "{}: group_entry_states is not accepted", operation_name);
         TT_FATAL(K == V, "{}: K must equal V", operation_name);
     }
 }
@@ -178,11 +179,11 @@ RecurrentChunkScanOperation::create_op_performance_model(
     }
     std::vector<const Tensor*> inputs = {
         &in.v_beta, &in.kd, &in.q_decay, &in.intra, &in.k_dec_t, &in.final_decay, &in.t_inv};
-    if (in.initial_state) {
-        inputs.push_back(&*in.initial_state);
+    if (in.group_entry_states) {
+        inputs.push_back(&*in.group_entry_states);
     }
-    if (in.tail_state) {
-        inputs.push_back(&*in.tail_state);
+    if (in.tail_entry_states) {
+        inputs.push_back(&*in.tail_entry_states);
     }
 
     return make_profiler_model(work, inputs, outputs, attrs.compute_kernel_config.math_fidelity);
@@ -196,8 +197,8 @@ std::vector<Tensor> recurrent_chunk_scan(
     const Tensor& k_dec_t,
     const Tensor& final_decay,
     const Tensor& t_inv,
-    const std::optional<Tensor>& initial_state,
-    const std::optional<Tensor>& tail_state,
+    const std::optional<Tensor>& group_entry_states,
+    const std::optional<Tensor>& tail_entry_states,
     RecurrentChunkScanMode mode,
     uint32_t groups_per_head,
     const MemoryConfig& output_mem_config,
@@ -228,8 +229,8 @@ std::vector<Tensor> recurrent_chunk_scan(
             .k_dec_t = k_dec_t,
             .final_decay = final_decay,
             .t_inv = t_inv,
-            .initial_state = initial_state,
-            .tail_state = tail_state,
+            .group_entry_states = group_entry_states,
+            .tail_entry_states = tail_entry_states,
             .actual_start = actual_start});
 }
 

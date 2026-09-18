@@ -156,7 +156,7 @@ def test_tp_layer_with_nonsquare_state_matches_reference(mesh_device: ttnn.MeshD
     )
     golden_output, golden_state = kda_forward_reference(hidden, state_dict, config)
 
-    layer = ttKDA(mesh_device, config, state_dict, tt_ccl=TT_CCL(mesh_device))
+    layer = ttKDA(mesh_device, config, state_dict, tt_ccl=TT_CCL(mesh_device), active_seq_len=sequence)
     initial_state = layer.allocate_state(batch_size=1)
     hidden_tt = ttnn.from_torch(
         hidden,

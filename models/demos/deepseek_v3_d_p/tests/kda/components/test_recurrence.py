@@ -58,6 +58,11 @@ def _run_recurrence(
             local_scan_strategy=local_scan_strategy,
         ),
         sequence_parallel_axis=0,
+        local_rows=beta.shape[1],
+        heads=beta.shape[2],
+        key_dim=q.shape[2] // beta.shape[2],
+        value_dim=v.shape[2] // beta.shape[2],
+        batch=beta.shape[0],
     )
     actual_start = make_actual_start(device, 0)
     result = executor(q=q, k=k, v=v, gate=gate, beta=beta, initial_state=state, actual_start=actual_start)
@@ -71,9 +76,9 @@ def _run_recurrence(
         pytest.param(32, 2, 32, 32, 8, "direct", id="direct-minimal"),
         pytest.param(64, 2, 32, 128, 8, "direct", id="direct-nonsquare-state"),
         pytest.param(256, 2, 32, 32, 2, "grouped", id="grouped-minimal"),
-        pytest.param(2816, 12, 128, 128, 21, "grouped", id="grouped-divisor-fallback"),
+        pytest.param(2816, 12, 128, 128, 11, "grouped", id="grouped-non-power-of-two"),
         pytest.param(5120, 1, 128, 128, 8, "grouped", id="grouped-production-length"),
-        pytest.param(5152, 2, 32, 32, 8, "grouped", id="grouped-tail-chunk"),
+        pytest.param(5152, 2, 32, 32, 7, "grouped", id="grouped-tail-chunk"),
         pytest.param(5152, 12, 128, 128, 20, "direct", id="direct-long-sequence"),
     ],
 )
@@ -285,8 +290,12 @@ def _distributed_recurrence_case(
     )
     executor = recurrence.KDARecurrence(
         mesh_device,
-        KDARecurrenceProgramConfig(summary_group_chunks=8),
+        KDARecurrenceProgramConfig(summary_group_chunks=sequence // tuple(mesh_device.shape)[sp_axis] // 32),
         sequence_parallel_axis=sp_axis,
+        local_rows=sequence // tuple(mesh_device.shape)[sp_axis],
+        heads=heads // tuple(mesh_device.shape)[tensor_parallel_axis],
+        key_dim=dim,
+        value_dim=dim,
     )
     sp_size = tuple(mesh_device.shape)[sp_axis]
     actual_start = make_actual_start(mesh_device)
@@ -311,7 +320,7 @@ def _run_distributed_recurrence(
 ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
     q, k, v, gate, beta, initial_state = inputs
     with ttnn.manage_config("throw_exception_on_fallback", True):
-        result = executor.sequence_parallel(
+        result = executor(
             q=q,
             k=k,
             v=v,
@@ -444,16 +453,20 @@ def test_distributed_prefix_preserves_noncommuting_order_and_tp_lines(
         assert_accurate(carry[tp].unsqueeze(0), ttnn.to_torch(local_final), name=f"final rank={rank} tp={tp}")
 
 
-def test_private_recurrence_routes_have_required_sp_metadata() -> None:
-    import inspect
-    from typing import get_type_hints
-
-    assert "selections" not in inspect.signature(recurrence.KDARecurrence.__call__).parameters
-    assert "selections" not in inspect.signature(recurrence._scan_local_grouped_chunks).parameters
-    for function, parameter, expected_type in (
-        (recurrence.KDARecurrence.sequence_parallel, "selections", ChronologicalSelections),
-        (recurrence._scan_sp_grouped_chunks, "selections", ChronologicalSelections),
-        (recurrence._scan_sp_grouped_chunks, "sequence_parallel_axis", int),
-    ):
-        assert inspect.signature(function).parameters[parameter].default is inspect.Parameter.empty
-        assert get_type_hints(function)[parameter] == expected_type
+@pytest.mark.use_module_device
+@pytest.mark.parametrize("case", ["nondivisible", "capacity"])
+def test_explicit_grouping_rejects_infeasible_geometry(device, case, expect_error):
+    grid = device.compute_with_storage_grid_size()
+    heads = grid.x * grid.y + 1 if case == "capacity" else 1
+    with expect_error(ValueError, "summary owners" if case == "capacity" else "must divide"):
+        recurrence.KDARecurrence(
+            device,
+            KDARecurrenceProgramConfig(
+                local_scan_strategy="grouped", summary_group_chunks=1 if case == "capacity" else 8
+            ),
+            sequence_parallel_axis=0,
+            local_rows=640,
+            heads=heads,
+            key_dim=32,
+            value_dim=32,
+        )

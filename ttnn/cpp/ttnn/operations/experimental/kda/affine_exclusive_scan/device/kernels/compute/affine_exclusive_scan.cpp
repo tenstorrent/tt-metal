@@ -184,7 +184,7 @@ TT_KERNEL void compute(uint32_t group) {
     DataflowBuffer initial_state(dfb::initial_state);
     DataflowBuffer final(dfb::final);
     DataflowBuffer tail_affine(dfb::tail_affine);
-    DataflowBuffer tail_state(dfb::tail_state);
+    DataflowBuffer tail_entry_states(dfb::tail_entry_states);
     DataflowBuffer reset_b(dfb::reset_b);
 
     kda_chronology::Topology topology{};
@@ -201,12 +201,12 @@ TT_KERNEL void compute(uint32_t group) {
     }
     if (reset_worker) {
         const bool aligned_reset = topology.split_in_group(G) == 0;
-        tail_state.wait_front(affine_b_tiles);
+        tail_entry_states.wait_front(affine_b_tiles);
         if (aligned_reset) {
-            copy(tail_state, reset_b, affine_b_tiles);
+            copy(tail_entry_states, reset_b, affine_b_tiles);
         } else {
             tail_affine.wait_front(affine_a_tiles + affine_b_tiles);
-            matmul_add_affine_b<Kt, Kt, Vt>(tail_affine, tail_state, reset_b);
+            matmul_add_affine_b<Kt, Kt, Vt>(tail_affine, tail_entry_states, reset_b);
         }
         reset_b.wait_front(affine_b_tiles);
         copy(initial_a, to_remote_a, affine_a_tiles);
@@ -215,7 +215,7 @@ TT_KERNEL void compute(uint32_t group) {
         if (!aligned_reset) {
             tail_affine.pop_front(affine_a_tiles + affine_b_tiles);
         }
-        tail_state.pop_front(affine_b_tiles);
+        tail_entry_states.pop_front(affine_b_tiles);
     } else {
         copy(initial_a, to_remote_a, affine_a_tiles);
         copy(initial_b, to_remote_b, affine_b_tiles);

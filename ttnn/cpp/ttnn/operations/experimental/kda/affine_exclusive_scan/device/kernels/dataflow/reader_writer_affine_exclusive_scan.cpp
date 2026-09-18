@@ -150,7 +150,7 @@ TT_KERNEL void dataflow(uint32_t worker_index, uint32_t group) {
     const auto output_accessor = TensorAccessor(tensor::output);
     const auto tail_a_accessor = TensorAccessor(tensor::tail_a);
     const auto tail_b_accessor = TensorAccessor(tensor::tail_b);
-    const auto tail_state_accessor = TensorAccessor(tensor::tail_state);
+    const auto tail_entry_states_accessor = TensorAccessor(tensor::tail_entry_states);
     DataflowBuffer initial_a(dfb::initial_a);
     DataflowBuffer initial_b(dfb::initial_b);
     DataflowBuffer local_a(dfb::local_a);
@@ -161,7 +161,7 @@ TT_KERNEL void dataflow(uint32_t worker_index, uint32_t group) {
     DataflowBuffer initial_state(dfb::initial_state);
     DataflowBuffer final(dfb::final);
     DataflowBuffer tail_affine(dfb::tail_affine);
-    DataflowBuffer tail_state(dfb::tail_state);
+    DataflowBuffer tail_entry_states(dfb::tail_entry_states);
     Noc noc;
     Semaphore ready(sem::ready);
     Semaphore arrival(sem::arrival);
@@ -202,9 +202,9 @@ TT_KERNEL void dataflow(uint32_t worker_index, uint32_t group) {
             tail_affine.reserve_back(affine_a_tiles + affine_b_tiles);
             issue_packed_affine_read<Kt, Vt>(noc, tail_a_accessor, tail_b_accessor, tail_affine, worker_index);
         }
-        tail_state.reserve_back(affine_b_tiles);
+        tail_entry_states.reserve_back(affine_b_tiles);
         issue_tensor_block_read(
-            noc, tail_state_accessor, tail_state, (worker_index / G) * affine_b_tiles, affine_b_tiles);
+            noc, tail_entry_states_accessor, tail_entry_states, (worker_index / G) * affine_b_tiles, affine_b_tiles);
         noc.write_zeros_l1_barrier();
     }
     issue_tensor_block_read(
@@ -220,7 +220,7 @@ TT_KERNEL void dataflow(uint32_t worker_index, uint32_t group) {
             if (!aligned_reset) {
                 tail_affine.push_back(affine_a_tiles + affine_b_tiles);
             }
-            tail_state.push_back(affine_b_tiles);
+            tail_entry_states.push_back(affine_b_tiles);
         }
     }
 

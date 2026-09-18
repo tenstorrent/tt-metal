@@ -31,7 +31,7 @@ ttnn::device_operation::MeshWorkloadArtifacts AffineExclusiveScanProgramFactory:
     const auto& initial_state = in.initial_state.mesh_tensor();
     const auto& tail_a = in.tail_a.mesh_tensor();
     const auto& tail_b = in.tail_b.mesh_tensor();
-    const auto& tail_state = in.tail_state.mesh_tensor();
+    const auto& tail_entry_states = in.tail_entry_states.mesh_tensor();
     const auto& output = outputs[0].mesh_tensor();
     const auto& device = a.device();
     const auto arch = device.arch();
@@ -60,7 +60,7 @@ ttnn::device_operation::MeshWorkloadArtifacts AffineExclusiveScanProgramFactory:
     const tt::tt_metal::experimental::DFBSpecName initial_state_dfb_name{"initial_state"};
     const tt::tt_metal::experimental::DFBSpecName final_dfb_name{"final"};
     const tt::tt_metal::experimental::DFBSpecName tail_affine_dfb_name{"tail_affine"};
-    const tt::tt_metal::experimental::DFBSpecName tail_state_dfb_name{"tail_state"};
+    const tt::tt_metal::experimental::DFBSpecName tail_entry_states_dfb_name{"tail_entry_states"};
     const tt::tt_metal::experimental::DFBSpecName reset_b_dfb_name{"reset_b"};
 
     const tt::tt_metal::experimental::SemaphoreSpecName ready_semaphore_name{"ready"};
@@ -73,7 +73,7 @@ ttnn::device_operation::MeshWorkloadArtifacts AffineExclusiveScanProgramFactory:
     const tt::tt_metal::experimental::TensorParamName output_tensor_name{"output"};
     const tt::tt_metal::experimental::TensorParamName tail_a_tensor_name{"tail_a"};
     const tt::tt_metal::experimental::TensorParamName tail_b_tensor_name{"tail_b"};
-    const tt::tt_metal::experimental::TensorParamName tail_state_tensor_name{"tail_state"};
+    const tt::tt_metal::experimental::TensorParamName tail_entry_states_tensor_name{"tail_entry_states"};
 
     auto make_dfb = [](const tt::tt_metal::experimental::DFBSpecName& name, uint32_t tiles, tt::DataFormat format) {
         return tt::tt_metal::experimental::DataflowBufferSpec{
@@ -97,7 +97,7 @@ ttnn::device_operation::MeshWorkloadArtifacts AffineExclusiveScanProgramFactory:
         make_dfb(initial_state_dfb_name, state_matrix_tiles, tt::DataFormat::Float32),
         make_dfb(final_dfb_name, state_matrix_tiles, tt::DataFormat::Float32),
         make_dfb(tail_affine_dfb_name, segmented_affine_tiles, summary_format),
-        make_dfb(tail_state_dfb_name, segmented_state_tiles, tt::DataFormat::Float32),
+        make_dfb(tail_entry_states_dfb_name, segmented_state_tiles, tt::DataFormat::Float32),
         make_dfb(reset_b_dfb_name, segmented_state_tiles, tt::DataFormat::Float32),
     };
     // Initial inputs/state and final output are one-shot transfers. TO_REMOTE stays single-slot because dataflow
@@ -143,7 +143,7 @@ ttnn::device_operation::MeshWorkloadArtifacts AffineExclusiveScanProgramFactory:
                 tt::tt_metal::experimental::DFBBinding{
                     final_dfb_name, "final", tt::tt_metal::experimental::DFBEndpointType::CONSUMER},
                 tt::tt_metal::experimental::ProducerOf(tail_affine_dfb_name, "tail_affine"),
-                tt::tt_metal::experimental::ProducerOf(tail_state_dfb_name, "tail_state"),
+                tt::tt_metal::experimental::ProducerOf(tail_entry_states_dfb_name, "tail_entry_states"),
             },
         .semaphore_bindings =
             {
@@ -159,7 +159,7 @@ ttnn::device_operation::MeshWorkloadArtifacts AffineExclusiveScanProgramFactory:
                 tt::tt_metal::experimental::TensorBinding{output_tensor_name, "output"},
                 tt::tt_metal::experimental::TensorBinding{tail_a_tensor_name, "tail_a"},
                 tt::tt_metal::experimental::TensorBinding{tail_b_tensor_name, "tail_b"},
-                tt::tt_metal::experimental::TensorBinding{tail_state_tensor_name, "tail_state"},
+                tt::tt_metal::experimental::TensorBinding{tail_entry_states_tensor_name, "tail_entry_states"},
             },
         .compile_time_args =
             {{"Kt", key_tiles}, {"Vt", value_tiles}, {"BH", attrs.batch_heads}, {"G", groups_per_head}},
@@ -175,7 +175,7 @@ ttnn::device_operation::MeshWorkloadArtifacts AffineExclusiveScanProgramFactory:
           local_b_dfb_name,
           from_remote_affine_dfb_name,
           initial_state_dfb_name,
-          tail_state_dfb_name,
+          tail_entry_states_dfb_name,
           reset_b_dfb_name}) {
         unpack_modes[name] = tt::tt_metal::UnpackMode::UnpackToSrc;
     }
@@ -214,7 +214,7 @@ ttnn::device_operation::MeshWorkloadArtifacts AffineExclusiveScanProgramFactory:
                 tt::tt_metal::experimental::DFBBinding{
                     final_dfb_name, "final", tt::tt_metal::experimental::DFBEndpointType::PRODUCER},
                 tt::tt_metal::experimental::ConsumerOf(tail_affine_dfb_name, "tail_affine"),
-                tt::tt_metal::experimental::ConsumerOf(tail_state_dfb_name, "tail_state"),
+                tt::tt_metal::experimental::ConsumerOf(tail_entry_states_dfb_name, "tail_entry_states"),
                 tt::tt_metal::experimental::ProducerOf(reset_b_dfb_name, "reset_b"),
                 tt::tt_metal::experimental::ConsumerOf(reset_b_dfb_name, "reset_b"),
             },
@@ -263,7 +263,7 @@ ttnn::device_operation::MeshWorkloadArtifacts AffineExclusiveScanProgramFactory:
                 tt::tt_metal::experimental::TensorParameter{
                     .unique_id = tail_b_tensor_name, .spec = tail_b.tensor_spec()},
                 tt::tt_metal::experimental::TensorParameter{
-                    .unique_id = tail_state_tensor_name, .spec = tail_state.tensor_spec()},
+                    .unique_id = tail_entry_states_tensor_name, .spec = tail_entry_states.tensor_spec()},
             },
         .work_units =
             {
@@ -284,7 +284,7 @@ ttnn::device_operation::MeshWorkloadArtifacts AffineExclusiveScanProgramFactory:
         {output_tensor_name, output},
         {tail_a_tensor_name, tail_a},
         {tail_b_tensor_name, tail_b},
-        {tail_state_tensor_name, tail_state},
+        {tail_entry_states_tensor_name, tail_entry_states},
     };
 
     kda_factory_detail::bind_chronology(program_spec, program_run_args, in.actual_start, dataflow, compute);

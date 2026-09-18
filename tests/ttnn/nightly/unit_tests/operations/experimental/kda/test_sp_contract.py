@@ -22,14 +22,14 @@ from tests.ttnn.nightly.unit_tests.operations.experimental.kda.recurrent_chunk_s
     to_device,
 )
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
-    _height_sharded_memory_config,
+    height_sharded_memory_config,
 )
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
     qkv_device_inputs,
     qkv_reference,
 )
 from tests.ttnn.nightly.unit_tests.operations.experimental.kda.recurrent_chunk_scan_test_utils import (
-    _segmented_summary_oracle,
+    segmented_summary_oracle,
 )
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_accurate, assert_bit_identical
 
@@ -49,7 +49,7 @@ def test_reset_replaces_large_carry_exactly(mesh_device):
     seed = to_device(torch.full((1, 32, 32), float(2**26)), mesh_device)
     tail = to_device(torch.ones(1, 32, 32), mesh_device)
     output, final_state = ttnn.experimental.kda.recurrent_chunk_scan(
-        *inputs, seed, tail_state=tail, actual_start=make_actual_start(mesh_device, 32), sequence_parallel_axis=0
+        *inputs, seed, tail_entry_states=tail, actual_start=make_actual_start(mesh_device, 32), sequence_parallel_axis=0
     )
     for index, (y, state) in enumerate(zip(_shards(output), _shards(final_state), strict=True)):
         expected = 1.0 if _rank(index, mesh_device, 0) == 0 else float(2**26)
@@ -99,11 +99,8 @@ def test_sp_summary_prefix_and_scan(mesh_device: ttnn.MeshDevice, axis: int, gro
         actual_start = make_actual_start(mesh_device, actual_start_value)
         owned = [*inputs, head_tt, tail_tt, actual_start]
         before = [_shards(t) for t in owned]
-        # Keep preceding allocations alive until their replacements exist.
-        for tensor in previous:
-            ttnn.deallocate(tensor)
         memory = (
-            _height_sharded_memory_config(mesh_device, heads * groups, dim, dim)
+            height_sharded_memory_config(mesh_device, heads * groups, dim, dim)
             if dim == 128
             else ttnn.DRAM_MEMORY_CONFIG
         )
@@ -122,7 +119,7 @@ def test_sp_summary_prefix_and_scan(mesh_device: ttnn.MeshDevice, axis: int, gro
             groups,
             tail_a=summaries[2],
             tail_b=summaries[3],
-            tail_state=tail_tt,
+            tail_entry_states=tail_tt,
             actual_start=actual_start,
             sequence_parallel_axis=axis,
             local_rows=local_rows,
@@ -131,7 +128,7 @@ def test_sp_summary_prefix_and_scan(mesh_device: ttnn.MeshDevice, axis: int, gro
             *inputs,
             entries,
             groups_per_head=groups,
-            tail_state=tail_tt,
+            tail_entry_states=tail_tt,
             actual_start=actual_start,
             sequence_parallel_axis=axis,
         )
@@ -154,7 +151,7 @@ def test_sp_summary_prefix_and_scan(mesh_device: ttnn.MeshDevice, axis: int, gro
                 if rank == first_rank and actual_start_value % local_rows
                 else groups * chunks
             )
-            expected_parts = _segmented_summary_oracle(host, groups, chunks, split)
+            expected_parts = segmented_summary_oracle(host, groups, chunks, split)
             expected_entries, expected_output, expected_final = [], [], []
             for head in range(heads):
                 state = head_seed[head : head + 1]
@@ -201,7 +198,16 @@ def test_sp_summary_prefix_and_scan(mesh_device: ttnn.MeshDevice, axis: int, gro
                     rmse_threshold=0.04,
                 )
         _assert_immutable(owned, before)
-        previous = [*owned, *summaries, entries, output, final]
+        current = [*owned, *summaries, entries, output, final]
+        if previous:
+            for old, new in zip(previous, current, strict=True):
+                assert all(
+                    a.buffer_address() != b.buffer_address()
+                    for a, b in zip(ttnn.get_device_tensors(old), ttnn.get_device_tensors(new), strict=True)
+                ), "fresh cache bindings must use different addresses on every device"
+            for tensor in previous:
+                ttnn.deallocate(tensor)
+        previous = current
     for tensor in previous:
         ttnn.deallocate(tensor)
 
@@ -220,7 +226,7 @@ def test_sp_rectangular_recurrent_reset(mesh_device, axis, key_dim, value_dim):
         for split in (1, 2, 4):
             actual_start = make_actual_start(mesh_device, first_rank * 160 + 160 - split * 32)
             output, state = ttnn.experimental.kda.recurrent_chunk_scan(
-                *inputs, head_tt, tail_state=tail_tt, actual_start=actual_start, sequence_parallel_axis=axis
+                *inputs, head_tt, tail_entry_states=tail_tt, actual_start=actual_start, sequence_parallel_axis=axis
             )
             head_output, _ = recurrent_oracle(tuple(t[:, :split] for t in host), head_seed)
             tail_output, tail_final = recurrent_oracle(tuple(t[:, split:] for t in host), tail_seed)
@@ -254,8 +260,6 @@ def test_sp_convolution_rebinds_histories(mesh_device, axis):
         actual_start = make_actual_start(mesh_device, actual_start_value)
         owned = [input_tt, history_tt, *taps_tt, predecessor_tt, actual_start]
         before = [_shards(t) for t in owned]
-        for tensor in previous:
-            ttnn.deallocate(tensor)
         outputs = ttnn.experimental.kda.qkv_causal_conv1d_silu(
             input_tt,
             history_tt,
@@ -288,7 +292,16 @@ def test_sp_convolution_rebinds_histories(mesh_device, axis):
             for golden, actual in zip(expected, got, strict=True):
                 assert_accurate(golden, actual, name=f"SP convolution rank={rank}")
         _assert_immutable(owned, before)
-        previous = [*owned, *outputs]
+        current = [*owned, *outputs]
+        if previous:
+            for old, new in zip(previous, current, strict=True):
+                assert all(
+                    a.buffer_address() != b.buffer_address()
+                    for a, b in zip(ttnn.get_device_tensors(old), ttnn.get_device_tensors(new), strict=True)
+                ), "fresh cache bindings must use different addresses on every device"
+            for tensor in previous:
+                ttnn.deallocate(tensor)
+        previous = current
     for tensor in previous:
         ttnn.deallocate(tensor)
 
@@ -299,7 +312,7 @@ def test_sp_payload_contracts(mesh_device, expect_error):
     inputs = device_protocol(host_protocol(2, 4, 32, 32), mesh_device)
     seed = to_device(initial_state(2, 32, 32), mesh_device)
     actual_start = make_actual_start(mesh_device, 32)
-    for kwargs in ({"actual_start": actual_start}, {"tail_state": seed}):
+    for kwargs in ({"actual_start": actual_start}, {"tail_entry_states": seed}):
         with expect_error(TypeError, "incompatible function arguments"):
             ttnn.experimental.kda.recurrent_chunk_scan(*inputs, seed, **kwargs)
     a, b, tail_a, tail_b = ttnn.experimental.kda.summarize_chunk_recurrence(*inputs, actual_start=actual_start)
@@ -308,8 +321,8 @@ def test_sp_payload_contracts(mesh_device, expect_error):
         ttnn.experimental.kda.summarize_chunk_recurrence(*inputs, actual_start=None)
     with expect_error(TypeError, "incompatible function arguments"):
         ttnn.experimental.kda.reduce_affine_transforms(a, b, 1, actual_start=None, local_rows=128)
-    for missing in ("actual_start", "tail_a", "tail_b", "tail_state"):
-        kwargs = dict(actual_start=actual_start, tail_a=a, tail_b=b, tail_state=seed)
+    for missing in ("actual_start", "tail_a", "tail_b", "tail_entry_states"):
+        kwargs = dict(actual_start=actual_start, tail_a=a, tail_b=b, tail_entry_states=seed)
         del kwargs[missing]
         with expect_error(TypeError, "incompatible function arguments"):
             ttnn.experimental.kda.affine_exclusive_scan(a, b, seed, 1, local_rows=128, **kwargs)
@@ -323,7 +336,7 @@ def test_sp_payload_contracts(mesh_device, expect_error):
                 actual_start=actual_start,
                 tail_a=a,
                 tail_b=b,
-                tail_state=to_device(initial_state(1, 32, 32), mesh_device),
+                tail_entry_states=to_device(initial_state(1, 32, 32), mesh_device),
                 local_rows=local_rows,
             )
     _, (input_tt, history, taps) = qkv_device_inputs(mesh_device, widths=(32, 32, 32), sequence=64, history_rows=3)
@@ -426,7 +439,7 @@ def test_sp_affine_rectangular_live_slots(mesh_device, axis, dtype):
                 groups,
                 tail_a=tensors[2],
                 tail_b=tensors[3],
-                tail_state=tail_tt,
+                tail_entry_states=tail_tt,
                 actual_start=actual_start,
                 sequence_parallel_axis=axis,
                 local_rows=local_rows,

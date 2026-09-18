@@ -60,7 +60,7 @@ class ChronologicalTopology:
         return (chip - 1) % self.sp_size
 
 
-def _chronological_topology(actual_start: int, sp_size: int, local_rows: int) -> ChronologicalTopology:
+def chronological_topology(actual_start: int, sp_size: int, local_rows: int) -> ChronologicalTopology:
     """Derive topology from layer-validated inputs for ``actual_start`` on an SP ring.
 
     ``actual_start`` is the absolute global position of the chunk's first token.

@@ -53,7 +53,7 @@ void bind_affine_exclusive_scan(nb::module_& mod) {
             tail_a, tail_b (ttnn.Tensor): Tail-segment affine summaries.
                 The kernel
                 derives the local split and chooses the live head/tail transforms.
-            tail_state (ttnn.Tensor): FLOAT32 tail seed ``[B*H,K,V]``.
+            tail_entry_states (ttnn.Tensor): FLOAT32 tail seed ``[B*H,K,V]``.
                 Ignored when the local sequence is unsplit; may alias initial_state.
             memory_config (ttnn.MemoryConfig, optional): Interleaved output memory
                 configuration. Defaults to DRAM.
@@ -80,7 +80,7 @@ void bind_affine_exclusive_scan(nb::module_& mod) {
         nb::arg("local_rows"),
         nb::arg("tail_a").noconvert(),
         nb::arg("tail_b").noconvert(),
-        nb::arg("tail_state").noconvert(),
+        nb::arg("tail_entry_states").noconvert(),
 
         nb::arg("memory_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),

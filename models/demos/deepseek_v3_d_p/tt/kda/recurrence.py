@@ -99,28 +99,6 @@ class _RecurrenceComputeConfig:
     scan: ttnn.DeviceComputeKernelConfig
 
 
-def _recurrence_geometry(
-    q: ttnn.Tensor,
-    v: ttnn.Tensor,
-    beta: ttnn.Tensor,
-) -> _RecurrenceGeometry:
-    """Derive host-only execution metadata from layer-produced tensors."""
-    q_shape = tuple(q.shape)
-    v_shape = tuple(v.shape)
-    batch, local_rows, heads = tuple(beta.shape)
-    key_dim = q_shape[2] // heads
-    value_dim = v_shape[2] // heads
-    return _RecurrenceGeometry(
-        batch=batch,
-        local_rows=local_rows,
-        heads=heads,
-        key_dim=key_dim,
-        value_dim=value_dim,
-        chunk_size=KDA_CHUNK_SIZE,
-        num_chunks=local_rows // KDA_CHUNK_SIZE,
-    )
-
-
 def _prepare_chunk_terms(
     q: ttnn.Tensor,
     k: ttnn.Tensor,
@@ -201,37 +179,10 @@ def _summarize_chunk_groups(
     return _AffineTransform(a, b)
 
 
-def _effective_summary_group_chunks(
-    num_chunks: int,
-    configured_group_chunks: int,
-    max_groups: int,
-) -> int:
-    """Return a group size that divides the chunk count and fits the worker budget.
-
-    ``configured_group_chunks`` is a performance ceiling; ``max_groups`` is a
-    hardware limit, since every group needs its own summary owner core. A
-    local sequence with a prime chunk count has no divisor at or below the
-    ceiling other than one, and one chunk per group can demand far more owners
-    than exist. When the ceiling and
-    the budget conflict, the budget wins and the group grows past the ceiling.
-    """
-    preferred = 1
-    for group_chunks in range(min(num_chunks, configured_group_chunks), 0, -1):
-        if num_chunks % group_chunks == 0:
-            preferred = group_chunks
-            break
-    if num_chunks // preferred <= max_groups:
-        return preferred
-    for group_chunks in range(preferred + 1, num_chunks + 1):
-        if num_chunks % group_chunks == 0 and num_chunks // group_chunks <= max_groups:
-            return group_chunks
-    return num_chunks
-
-
 def _scan_chunks(
     prepared: _PreparedChunks,
-    initial_states: ttnn.Tensor,
-    tail_state: ttnn.Tensor,
+    group_entry_states: ttnn.Tensor,
+    tail_entry_states: ttnn.Tensor,
     *,
     actual_start: ttnn.Tensor,
     sequence_parallel_axis: int,
@@ -240,12 +191,12 @@ def _scan_chunks(
 ) -> RecurrenceResult:
     output, final_states = ttnn.experimental.kda.recurrent_chunk_scan(
         *prepared.as_kernel_args(),
-        initial_states,
+        group_entry_states,
         groups_per_head=groups_per_head,
         memory_config=KDA_OUTPUT_MEMORY_CONFIG,
         compute_kernel_config=compute_config,
         actual_start=actual_start,
-        tail_state=tail_state,
+        tail_entry_states=tail_entry_states,
         sequence_parallel_axis=sequence_parallel_axis,
     )
     return RecurrenceResult(output=output, final_state=final_states)
@@ -340,33 +291,6 @@ def _last_group_state(
     return ttnn.reshape(last_final_state, (geometry.batch_heads, geometry.key_dim, geometry.value_dim))
 
 
-def _prepare_grouped_chunks(
-    prepared: _PreparedChunks,
-    geometry: _RecurrenceGeometry,
-    *,
-    summary_group_chunks: int,
-) -> tuple[_PreparedChunks, int, ttnn.MemoryConfig]:
-    grid = prepared.v_beta.device().compute_with_storage_grid_size()
-    group_chunks = _effective_summary_group_chunks(
-        geometry.num_chunks,
-        summary_group_chunks,
-        max_groups=max((grid.x * grid.y) // geometry.batch_heads, 1),
-    )
-    groups_per_head = geometry.num_chunks // group_chunks
-
-    grouped = _reshape_chunks_for_groups(
-        prepared,
-        geometry,
-        group_heads=geometry.batch_heads * groups_per_head,
-        summary_group_chunks=group_chunks,
-    )
-    summary_memory_config = _group_summary_memory_config(
-        prepared.v_beta.device(), geometry.batch_heads * groups_per_head, geometry.key_dim
-    )
-
-    return grouped, groups_per_head, summary_memory_config
-
-
 def _ordinary_group_scan(
     grouped: _PreparedChunks,
     summary: _AffineTransform,
@@ -378,7 +302,7 @@ def _ordinary_group_scan(
     prefix_memory_config: ttnn.MemoryConfig,
     compute_config: _RecurrenceComputeConfig,
 ) -> RecurrenceResult:
-    entries = ttnn.experimental.kda.affine_exclusive_scan(
+    group_entry_states = ttnn.experimental.kda.affine_exclusive_scan(
         summary.a,
         summary.b,
         initial_state,
@@ -388,13 +312,13 @@ def _ordinary_group_scan(
         actual_start=actual_start,
         tail_a=summary.a,
         tail_b=summary.b,
-        tail_state=initial_state,
+        tail_entry_states=initial_state,
         local_rows=grouped.v_beta.shape[1] * grouped.v_beta.shape[2] * groups_per_head,
         sequence_parallel_axis=sequence_parallel_axis,
     )
     return _scan_chunks(
         grouped,
-        entries,
+        group_entry_states,
         initial_state,
         groups_per_head=groups_per_head,
         compute_config=compute_config.scan,
@@ -411,9 +335,13 @@ def _scan_local_grouped_chunks(
     actual_start: ttnn.Tensor,
     sequence_parallel_axis: int,
     summary_group_chunks: int,
+    groups: int,
+    memory: ttnn.MemoryConfig,
     compute_config: _RecurrenceComputeConfig,
 ) -> RecurrenceResult:
-    grouped, groups, memory = _prepare_grouped_chunks(prepared, geometry, summary_group_chunks=summary_group_chunks)
+    grouped = _reshape_chunks_for_groups(
+        prepared, geometry, group_heads=geometry.batch_heads * groups, summary_group_chunks=summary_group_chunks
+    )
     summary = _summarize_chunk_groups(
         grouped,
         groups_per_head=groups,
@@ -474,12 +402,16 @@ def _scan_sp_grouped_chunks(
     geometry: _RecurrenceGeometry,
     *,
     summary_group_chunks: int,
+    groups: int,
+    memory: ttnn.MemoryConfig,
     sequence_parallel_axis: int,
     selections: ChronologicalSelections,
     actual_start: ttnn.Tensor,
     compute_config: _RecurrenceComputeConfig,
 ) -> RecurrenceResult:
-    grouped, groups, memory = _prepare_grouped_chunks(prepared, geometry, summary_group_chunks=summary_group_chunks)
+    grouped = _reshape_chunks_for_groups(
+        prepared, geometry, group_heads=geometry.batch_heads * groups, summary_group_chunks=summary_group_chunks
+    )
     parts = ttnn.experimental.kda.summarize_chunk_recurrence(
         *grouped.as_kernel_args(),
         groups_per_head=groups,
@@ -490,7 +422,7 @@ def _scan_sp_grouped_chunks(
     )
     head_a, head_b, tail_a, tail_b = parts
     head = _AffineTransform(head_a, head_b)
-    entry, tail_state = _partition_prefix(
+    entry, tail_entry_states = _partition_prefix(
         head,
         initial_state,
         groups_per_head=groups,
@@ -500,7 +432,7 @@ def _scan_sp_grouped_chunks(
         selections=selections,
         compute_config=compute_config,
     )
-    entries = ttnn.experimental.kda.affine_exclusive_scan(
+    group_entry_states = ttnn.experimental.kda.affine_exclusive_scan(
         head_a,
         head_b,
         entry,
@@ -508,7 +440,7 @@ def _scan_sp_grouped_chunks(
         local_rows=geometry.local_rows,
         tail_a=tail_a,
         tail_b=tail_b,
-        tail_state=tail_state,
+        tail_entry_states=tail_entry_states,
         actual_start=actual_start,
         sequence_parallel_axis=sequence_parallel_axis,
         memory_config=KDA_DISTRIBUTED_PREFIX_MEMORY_CONFIG,
@@ -516,9 +448,9 @@ def _scan_sp_grouped_chunks(
     )
     output, final_states = ttnn.experimental.kda.recurrent_chunk_scan(
         *grouped.as_kernel_args(),
-        entries,
+        group_entry_states,
         groups_per_head=groups,
-        tail_state=tail_state,
+        tail_entry_states=tail_entry_states,
         actual_start=actual_start,
         sequence_parallel_axis=sequence_parallel_axis,
         memory_config=KDA_OUTPUT_MEMORY_CONFIG,
@@ -531,7 +463,7 @@ def _scan_sp_grouped_chunks(
         cluster_axis=sequence_parallel_axis,
         memory_config=KDA_OUTPUT_MEMORY_CONFIG,
     )
-    final = selections.select_final_state(gathered, tail_state)
+    final = selections.select_final_state(gathered, tail_entry_states)
     return RecurrenceResult(output, ttnn.reshape(final, (geometry.batch_heads, geometry.key_dim, geometry.value_dim)))
 
 
@@ -544,6 +476,11 @@ class KDARecurrence:
         program_config: KDARecurrenceProgramConfig,
         *,
         sequence_parallel_axis: int,
+        local_rows: int,
+        heads: int,
+        key_dim: int,
+        value_dim: int,
+        batch: int = 1,
     ) -> None:
         preparation = ttnn.init_device_compute_kernel_config(
             device.arch(),
@@ -569,11 +506,27 @@ class KDARecurrence:
             affine_prefix=affine_prefix,
             scan=scan,
         )
-        self._summary_group_chunks = program_config.summary_group_chunks
+        if local_rows <= 0 or local_rows % KDA_CHUNK_SIZE:
+            raise ValueError("recurrence local_rows must be positive and divisible by the chunk size")
+        if min(batch, heads, key_dim, value_dim) <= 0:
+            raise ValueError("recurrence dimensions must be positive")
+        self._geometry = _RecurrenceGeometry(
+            batch, local_rows, heads, key_dim, value_dim, KDA_CHUNK_SIZE, local_rows // KDA_CHUNK_SIZE
+        )
         self._sequence_parallel_axis = sequence_parallel_axis
-        self._use_grouped_scan = (
+        self._sequence_parallel = (
             isinstance(device, ttnn.MeshDevice) and tuple(device.shape)[sequence_parallel_axis] > 1
-        ) or program_config.local_scan_strategy == "grouped"
+        )
+        grouped = self._sequence_parallel or program_config.local_scan_strategy == "grouped"
+        if grouped:
+            if key_dim != value_dim:
+                raise ValueError("grouped KDA affine prefix currently requires K == V")
+            self._summary_group_chunks = program_config.summary_group_chunks
+            if self._geometry.num_chunks % self._summary_group_chunks:
+                raise ValueError("summary_group_chunks must divide the constructed local chunk count")
+            self._groups = self._geometry.num_chunks // self._summary_group_chunks
+            self._summary_memory = _group_summary_memory_config(device, batch * heads * self._groups, key_dim)
+        self._execute = self._run_sp if self._sequence_parallel else self._run_grouped if grouped else self._run_direct
 
     def _prepare(
         self,
@@ -585,7 +538,17 @@ class KDARecurrence:
         beta: ttnn.Tensor,
         initial_state: ttnn.Tensor,
     ) -> tuple[_PreparedChunks, ttnn.Tensor, _RecurrenceGeometry]:
-        geometry = _recurrence_geometry(q, v, beta)
+        geometry = self._geometry
+        if tuple(beta.shape) != (geometry.batch, geometry.local_rows, geometry.heads):
+            raise ValueError("recurrence beta shape does not match constructed geometry")
+        for name, tensor, width in (
+            ("q", q, geometry.heads * geometry.key_dim),
+            ("k", k, geometry.heads * geometry.key_dim),
+            ("v", v, geometry.heads * geometry.value_dim),
+            ("gate", gate, geometry.heads * geometry.key_dim),
+        ):
+            if tuple(tensor.shape) != (geometry.batch, geometry.local_rows, width):
+                raise ValueError(f"recurrence {name} shape does not match constructed geometry")
 
         state = ttnn.reshape(
             initial_state,
@@ -620,53 +583,65 @@ class KDARecurrence:
         gate: ttnn.Tensor,
         beta: ttnn.Tensor,
         initial_state: ttnn.Tensor,
+        selections: ChronologicalSelections | None = None,
     ) -> RecurrenceResult:
-        """Run local direct or grouped recurrence without SP routing metadata."""
+        """Execute the constructed graph using caller-owned state and chronology."""
+        if self._sequence_parallel != (selections is not None):
+            raise ValueError("chronological selections must be provided exactly for sequence-parallel recurrence")
         prepared, state, geometry = self._prepare(q=q, k=k, v=v, gate=gate, beta=beta, initial_state=initial_state)
-        scan = (
-            _scan_local_grouped_chunks(
-                prepared,
-                state,
-                geometry,
-                summary_group_chunks=self._summary_group_chunks,
-                compute_config=self._compute_config,
-                actual_start=actual_start,
-                sequence_parallel_axis=self._sequence_parallel_axis,
-            )
-            if self._use_grouped_scan
-            else _scan_chunks(
-                prepared,
-                state,
-                state,
-                compute_config=self._compute_config.scan,
-                actual_start=actual_start,
-                sequence_parallel_axis=self._sequence_parallel_axis,
-            )
-        )
-        return self._finish(scan, geometry)
+        return self._finish(self._execute(prepared, state, actual_start, selections), geometry)
 
-    def sequence_parallel(
+    def _run_direct(
         self,
-        *,
-        q: ttnn.Tensor,
-        k: ttnn.Tensor,
-        v: ttnn.Tensor,
-        gate: ttnn.Tensor,
-        beta: ttnn.Tensor,
-        initial_state: ttnn.Tensor,
-        selections: ChronologicalSelections,
+        prepared: _PreparedChunks,
+        state: ttnn.Tensor,
         actual_start: ttnn.Tensor,
+        selections: ChronologicalSelections | None,
     ) -> RecurrenceResult:
-        """Run SP recurrence from the layer's normalized chronological topology."""
-        prepared, state, geometry = self._prepare(q=q, k=k, v=v, gate=gate, beta=beta, initial_state=initial_state)
-        scan = _scan_sp_grouped_chunks(
+        return _scan_chunks(
             prepared,
             state,
-            geometry,
+            state,
+            actual_start=actual_start,
+            sequence_parallel_axis=self._sequence_parallel_axis,
+            compute_config=self._compute_config.scan,
+        )
+
+    def _run_grouped(
+        self,
+        prepared: _PreparedChunks,
+        state: ttnn.Tensor,
+        actual_start: ttnn.Tensor,
+        selections: ChronologicalSelections | None,
+    ) -> RecurrenceResult:
+        return _scan_local_grouped_chunks(
+            prepared,
+            state,
+            self._geometry,
             summary_group_chunks=self._summary_group_chunks,
+            groups=self._groups,
+            memory=self._summary_memory,
+            compute_config=self._compute_config,
+            actual_start=actual_start,
+            sequence_parallel_axis=self._sequence_parallel_axis,
+        )
+
+    def _run_sp(
+        self,
+        prepared: _PreparedChunks,
+        state: ttnn.Tensor,
+        actual_start: ttnn.Tensor,
+        selections: ChronologicalSelections | None,
+    ) -> RecurrenceResult:
+        return _scan_sp_grouped_chunks(
+            prepared,
+            state,
+            self._geometry,
+            summary_group_chunks=self._summary_group_chunks,
+            groups=self._groups,
+            memory=self._summary_memory,
+            compute_config=self._compute_config,
+            actual_start=actual_start,
             sequence_parallel_axis=self._sequence_parallel_axis,
             selections=selections,
-            actual_start=actual_start,
-            compute_config=self._compute_config,
         )
-        return self._finish(scan, geometry)

@@ -195,7 +195,7 @@ def collect_accuracy_and_determinism_results(
     return reference_outputs, reference_outputs_host, mismatch_marker_host
 
 
-def _height_sharded_memory_config(
+def height_sharded_memory_config(
     device: ttnn.Device, leading: int, matrix_height: int, matrix_width: int
 ) -> ttnn.MemoryConfig:
     cores = ttnn.num_cores_to_corerangeset(leading, device.compute_with_storage_grid_size(), row_wise=True)

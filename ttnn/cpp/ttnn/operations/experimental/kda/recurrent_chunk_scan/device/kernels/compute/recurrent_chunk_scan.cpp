@@ -370,7 +370,7 @@ FORCE_INLINE void compute_recurrent(uint32_t num_chunks, uint32_t reset_chunk) {
     DataflowBuffer state_temporary(dfb::state_temporary);
     DataflowBuffer final_state(dfb::final_state);
     DataflowBuffer scratch(dfb::scratch);
-    DataflowBuffer tail_state(dfb::tail_state);
+    DataflowBuffer tail_entry_states(dfb::tail_entry_states);
 
     constexpr uint32_t key_value_tiles = Kt * Vt;
 
@@ -383,10 +383,10 @@ FORCE_INLINE void compute_recurrent(uint32_t num_chunks, uint32_t reset_chunk) {
         DataflowBuffer* current_state = chunk == 0 ? &state : &state_ring;
         if (reset_chunk != 0 && chunk == reset_chunk) {
             state_ring.wait_front(key_value_tiles);
-            tail_state.wait_front(key_value_tiles);
-            copy<key_value_tiles, key_value_tiles>(tail_state, state_ring);
+            tail_entry_states.wait_front(key_value_tiles);
+            copy<key_value_tiles, key_value_tiles>(tail_entry_states, state_ring);
             state_ring.pop_front(key_value_tiles);
-            tail_state.pop_front(key_value_tiles);
+            tail_entry_states.pop_front(key_value_tiles);
             current_state = &state_ring;
         }
         DataflowBuffer& destination = chunk == num_chunks - 1 ? final_state : state_ring;

@@ -16,7 +16,7 @@ ttnn::Tensor affine_exclusive_scan(
     uint32_t local_rows,
     const ttnn::Tensor& tail_a,
     const ttnn::Tensor& tail_b,
-    const ttnn::Tensor& tail_state,
+    const ttnn::Tensor& tail_entry_states,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     uint32_t sequence_parallel_axis) {
@@ -44,7 +44,7 @@ ttnn::Tensor affine_exclusive_scan(
         groups_per_head,
         tail_a,
         tail_b,
-        tail_state,
+        tail_entry_states,
 
         output_memory_config,
         kernel_config,

@@ -37,10 +37,10 @@ struct RecurrentChunkScanInputs {
     Tensor k_dec_t;
     Tensor final_decay;
     Tensor t_inv;
-    std::optional<Tensor> initial_state;
+    std::optional<Tensor> group_entry_states;
     // Seed for the post-wrap loop on the first rank: the prefix's final carry,
     // already replicated across SP. Required for SP recurrence.
-    std::optional<Tensor> tail_state;
+    std::optional<Tensor> tail_entry_states;
     Tensor actual_start;
 };
 

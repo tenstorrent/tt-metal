@@ -26,9 +26,7 @@ from tests.ttnn.nightly.unit_tests.operations.experimental.kda.recurrent_chunk_s
     initial_state,
     one_core_height_sharded,
     recurrent_oracle,
-    summary_oracle,
     run_recurrent,
-    run_summary,
     to_device,
 )
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
@@ -40,7 +38,7 @@ from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
 
 pytestmark = [
     run_for_blackhole(),
-    pytest.mark.use_module_device({"l1_small_size": 24576, "trace_region_size": 2_000_000}),
+    pytest.mark.use_module_device({"l1_small_size": 24576}),
 ]
 
 
@@ -488,12 +486,12 @@ def test_recurrent_chunk_scan_rejects_host_protocol_inputs(
         run_recurrent(tuple(inputs), state, actual_start=zero_actual_start)
 
 
-def test_recurrent_chunk_scan_rejects_host_initial_state(
+def test_recurrent_chunk_scan_rejects_host_group_entry_states(
     zero_actual_start, device: ttnn.Device, expect_error: Callable
 ) -> None:
     inputs = device_protocol(host_protocol(2, 2, 32, 32), device)
     state = ttnn.from_torch(initial_state(2, 32, 32), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
-    with expect_error(RuntimeError, "initial_state must be an allocated device tensor"):
+    with expect_error(RuntimeError, "group_entry_states must be an allocated device tensor"):
         run_recurrent(inputs, state, actual_start=zero_actual_start)
 
 
@@ -510,9 +508,9 @@ def test_recurrent_chunk_scan_rejects_host_initial_state(
         ("key_alignment", "K and V must be positive and tile aligned"),
         ("value_alignment", "K and V must be positive and tile aligned"),
         ("sharded", "v_beta must use interleaved memory"),
-        ("state_dtype", "initial_state must be FLOAT32"),
-        ("state_rank", "initial_state must be rank 3"),
-        ("state_shape", "initial_state shape mismatch"),
+        ("state_dtype", "group_entry_states must be FLOAT32"),
+        ("state_rank", "group_entry_states must be rank 3"),
+        ("state_shape", "group_entry_states shape mismatch"),
         ("output_sharded", "output memory layout must be INTERLEAVED, got HEIGHT_SHARDED"),
     ],
 )
@@ -556,13 +554,13 @@ def test_recurrent_chunk_scan_rejects_invalid_inputs(
         run_recurrent(tuple(inputs), state, memory_config=memory_config, actual_start=zero_actual_start)
 
 
-def test_recurrent_chunk_scan_requires_initial_state(
+def test_recurrent_chunk_scan_requires_group_entry_states(
     zero_actual_start, device: ttnn.Device, expect_error: Callable
 ) -> None:
     inputs = device_protocol(host_protocol(2, 2, 32, 32), device)
     with expect_error(TypeError, "incompatible function arguments"):
         ttnn.experimental.kda.recurrent_chunk_scan(
-            *inputs, actual_start=zero_actual_start, tail_state=to_device(initial_state(2, 32, 32), device)
+            *inputs, actual_start=zero_actual_start, tail_entry_states=to_device(initial_state(2, 32, 32), device)
         )
 
 
@@ -576,5 +574,5 @@ def test_recurrent_chunk_scan_does_not_expose_prototype_modes(
     state = to_device(initial_state(2, 32, 32), device)
     with expect_error(TypeError, "incompatible function arguments"):
         ttnn.experimental.kda.recurrent_chunk_scan(
-            *inputs, state, actual_start=zero_actual_start, tail_state=state, **{removed_keyword: True}
+            *inputs, state, actual_start=zero_actual_start, tail_entry_states=state, **{removed_keyword: True}
         )
