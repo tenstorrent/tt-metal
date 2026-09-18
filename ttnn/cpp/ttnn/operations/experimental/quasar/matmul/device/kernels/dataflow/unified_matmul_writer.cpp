@@ -2,18 +2,18 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Unified matmul writer: stores this cluster's finished C chunks of C.
+// Unified matmul writer: stores this cluster's finished MN chunks.
 //
-// GEMM view, all sizes in 32x32 tiles: C[M x N]. A C chunk is the per_core_M_tiles x per_core_N_tiles tiles of C at
-// origin (C_chunk_M_tile, C_chunk_N_tile) in one batch. This cluster starts at (first_batch, first_C_chunk_M_tile,
-// first_C_chunk_N_tile) and writes num_C_chunks of them, stepping per_core_N_tiles tiles across N, then
-// per_core_M_tiles tiles down M, then into the next batch, exactly as the reader does.
+// GEMM view, all sizes in 32x32 tiles: C[M x N], batch_size times. An MN chunk is the MN_chunk_M_tiles x
+// MN_chunk_N_tiles tiles of C at origin (MN_chunk_M_tile, MN_chunk_N_tile). This cluster owns num_MN_chunks
+// consecutive chunks of the row-major walk over C (across N, then down M) starting at
+// (first_MN_chunk_M_tile, first_MN_chunk_N_tile), and writes them for every batch, exactly as the reader
+// walks them.
 //
-// The compute kernel packs a C chunk one subblock (subblock_M_tiles x subblock_N_tiles tiles, what DST
-// holds) at a time, subblocks in row-major order over the C chunk and tiles in row-major order within a
-// subblock. This writer mirrors that order, maps every tile back to its (m_tile, n_tile) position in C and writes it
-// by tile index through the tensor accessor. Tiles past M_tiles / N_tiles (edge C chunks) are popped but
-// not written.
+// The compute kernel packs a chunk one subblock (subblock_M_tiles x subblock_N_tiles tiles, what DST holds)
+// at a time, subblocks in row-major order over the chunk and tiles in row-major order within a subblock.
+// This writer mirrors that order, maps every tile back to its position in C and writes it by tile index
+// through the tensor accessor. Tiles past M_tiles / N_tiles (edge chunks) are popped but not written.
 
 #include <stdint.h>
 
@@ -25,15 +25,15 @@
 #include "experimental/kernel_args.h"
 
 void kernel_main() {
-    const uint32_t first_batch = get_arg(args::first_batch);
-    const uint32_t first_C_chunk_M_tile = get_arg(args::first_C_chunk_M_tile);
-    const uint32_t first_C_chunk_N_tile = get_arg(args::first_C_chunk_N_tile);
-    const uint32_t num_C_chunks = get_arg(args::num_C_chunks);
+    const uint32_t first_MN_chunk_M_tile = get_arg(args::first_MN_chunk_M_tile);
+    const uint32_t first_MN_chunk_N_tile = get_arg(args::first_MN_chunk_N_tile);
+    const uint32_t num_MN_chunks = get_arg(args::num_MN_chunks);
 
+    constexpr uint32_t batch_size = get_arg(args::batch_size);
     constexpr uint32_t M_tiles = get_arg(args::M_tiles);
     constexpr uint32_t N_tiles = get_arg(args::N_tiles);
-    constexpr uint32_t per_core_M_tiles = get_arg(args::per_core_M_tiles);
-    constexpr uint32_t per_core_N_tiles = get_arg(args::per_core_N_tiles);
+    constexpr uint32_t MN_chunk_M_tiles = get_arg(args::MN_chunk_M_tiles);
+    constexpr uint32_t MN_chunk_N_tiles = get_arg(args::MN_chunk_N_tiles);
     constexpr uint32_t subblock_M_tiles = get_arg(args::subblock_M_tiles);
     constexpr uint32_t subblock_N_tiles = get_arg(args::subblock_N_tiles);
 
@@ -42,48 +42,46 @@ void kernel_main() {
 
     const auto C = TensorAccessor(tensor::C);
     Noc noc;
-    DataflowBuffer C_chunk(dfb::C_chunk);
-    const uint32_t C_tile_bytes = C_chunk.get_entry_size();
+    DataflowBuffer MN_chunk(dfb::MN_chunk);
+    const uint32_t C_tile_bytes = MN_chunk.get_entry_size();
 
-    uint32_t batch = first_batch;
-    uint32_t C_chunk_M_tile = first_C_chunk_M_tile;  // origin of the current C chunk, in tiles
-    uint32_t C_chunk_N_tile = first_C_chunk_N_tile;
-    for (uint32_t C_chunk_index = 0; C_chunk_index < num_C_chunks; ++C_chunk_index) {
+    for (uint32_t batch = 0; batch < batch_size; ++batch) {
         const uint32_t C_batch_first_tile = batch * C_tiles_per_batch;
 
-        // Same DST-group walk as the compute kernel: (m_tile, n_tile) is the group's first tile.
-        for (uint32_t m_tile = 0; m_tile < per_core_M_tiles; m_tile += subblock_M_tiles) {
-            for (uint32_t n_tile = 0; n_tile < per_core_N_tiles; n_tile += subblock_N_tiles) {
-                C_chunk.wait_front(subblock_tiles);
-                uint32_t slot_offset = 0;
-                for (uint32_t tile_row = 0; tile_row < subblock_M_tiles; ++tile_row) {
-                    const uint32_t C_m_tile = C_chunk_M_tile + m_tile + tile_row;  // tile position in C
-                    for (uint32_t tile_column = 0; tile_column < subblock_N_tiles;
-                         ++tile_column, slot_offset += C_tile_bytes) {
-                        const uint32_t C_n_tile = C_chunk_N_tile + n_tile + tile_column;
-                        if (C_m_tile < M_tiles && C_n_tile < N_tiles) {
-                            noc.async_write(
-                                C_chunk,
-                                C,
-                                C_tile_bytes,
-                                {.offset_bytes = slot_offset},
-                                {.page_id = C_batch_first_tile + C_m_tile * N_tiles + C_n_tile});
+        uint32_t MN_chunk_M_tile = first_MN_chunk_M_tile;  // origin of the current chunk, in tiles
+        uint32_t MN_chunk_N_tile = first_MN_chunk_N_tile;
+        for (uint32_t MN_chunk_index = 0; MN_chunk_index < num_MN_chunks; ++MN_chunk_index) {
+            // Same subblock walk as the compute kernel: (m_tile, n_tile) is the subblock's first tile within
+            // the chunk.
+            for (uint32_t m_tile = 0; m_tile < MN_chunk_M_tiles; m_tile += subblock_M_tiles) {
+                for (uint32_t n_tile = 0; n_tile < MN_chunk_N_tiles; n_tile += subblock_N_tiles) {
+                    MN_chunk.wait_front(subblock_tiles);
+                    uint32_t slot_offset = 0;
+                    for (uint32_t tile_row = 0; tile_row < subblock_M_tiles; ++tile_row) {
+                        const uint32_t C_m_tile = MN_chunk_M_tile + m_tile + tile_row;  // tile position in C
+                        for (uint32_t tile_column = 0; tile_column < subblock_N_tiles;
+                             ++tile_column, slot_offset += C_tile_bytes) {
+                            const uint32_t C_n_tile = MN_chunk_N_tile + n_tile + tile_column;
+                            if (C_m_tile < M_tiles && C_n_tile < N_tiles) {
+                                noc.async_write(
+                                    MN_chunk,
+                                    C,
+                                    C_tile_bytes,
+                                    {.offset_bytes = slot_offset},
+                                    {.page_id = C_batch_first_tile + C_m_tile * N_tiles + C_n_tile});
+                            }
                         }
                     }
+                    noc.async_write_barrier();
+                    MN_chunk.pop_front(subblock_tiles);
                 }
-                noc.async_write_barrier();
-                C_chunk.pop_front(subblock_tiles);
             }
-        }
 
-        // Next C chunk: across N, then down M, then the next batch.
-        C_chunk_N_tile += per_core_N_tiles;
-        if (C_chunk_N_tile >= N_tiles) {
-            C_chunk_N_tile = 0;
-            C_chunk_M_tile += per_core_M_tiles;
-            if (C_chunk_M_tile >= M_tiles) {
-                C_chunk_M_tile = 0;
-                ++batch;
+            // Next chunk: across N, then down M.
+            MN_chunk_N_tile += MN_chunk_N_tiles;
+            if (MN_chunk_N_tile >= N_tiles) {
+                MN_chunk_N_tile = 0;
+                MN_chunk_M_tile += MN_chunk_M_tiles;
             }
         }
     }
