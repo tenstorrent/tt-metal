@@ -113,8 +113,7 @@ private:
     std::set<int> compute_device_ids(
         distributed::MeshDevice& mesh_device, const distributed::MeshCoordinateRangeSet& coordinate_range_set);
 
-    // Compute the set of MMIO chip IDs that back the requested device IDs. The cache is process-wide, so the
-    // cluster comes from the requesting mesh rather than from a context this class picks on its own.
+    // Compute the set of MMIO chip IDs that back the requested device IDs.
     std::set<int> compute_mmio_device_ids(const tt::Cluster& cluster, const std::set<int>& device_ids);
 
     // Erase the entry pointed to by `it` from both lru_entries_ and address_map_.

@@ -8,7 +8,6 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
-#include <utility>
 #include <vector>
 
 #include <tt-metalium/device_types.hpp>
@@ -199,8 +198,7 @@ private:
 
     /**
      * @brief Construct PinnedMemory by mapping existing host memory to devices
-     * @param metal_env Env owning the cluster and HAL these devices belong to. IDevice exposes no env of its own,
-     *                  so it is passed in rather than deduced from `devices`.
+     * @param metal_env Env owning the cluster and HAL these devices belong to.
      * @param devices Vector of devices to map buffers for
      * @param host_buffer Existing host memory to map (must not be null)
      * @param buffer_size Size of buffer to map
