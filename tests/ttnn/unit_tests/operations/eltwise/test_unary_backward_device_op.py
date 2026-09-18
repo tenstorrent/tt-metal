@@ -20,6 +20,18 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 def _torch_sigmoid_bw(grad, inp):
+    """Reference gradient, computed the same way ttnn's registered golden function does.
+
+    The golden function for sigmoid_bw is autograd-based, so routing sigmoid_bw through the
+    shared device operation does not change it and it needs no update. This local helper exists
+    only so a test can evaluate the reference at float32 against operands it chooses (e.g. the
+    operands as the device quantised them), which the registered golden -- taking the caller's
+    tensors as-is -- cannot do.
+
+    Note both agree on the shape contract: autograd requires the gradient to match the input
+    exactly, which is why the device operation TT_FATALs on unequal shapes rather than
+    broadcasting.
+    """
     x = inp.to(torch.float32).detach().clone().requires_grad_(True)
     torch.sigmoid(x).backward(grad.to(torch.float32))
     return x.grad
@@ -34,21 +46,27 @@ def _torch_sigmoid_bw(grad, inp):
         (2, 2, 64, 96),
     ],
 )
+# Accuracy bar per dtype. The bit-addressable floats are checked ELEMENTWISE: PCC is a
+# correlation over the whole tile, so it can mask a localized per-element error, and these
+# dtypes can resolve one. The block float types keep PCC -- they carry one shared exponent per
+# 16 values, so an individually small element legitimately flushes to zero, and an elementwise
+# bound there would be measuring the storage format rather than the kernel.
+#
+# The elementwise bars are set from measurement with headroom, not from a dtype epsilon:
+#   bfloat16  max relative error 3.89e-03  (~2^-8, i.e. rounding the result to bfloat16)
+#   float32   max relative error 3.45e-04  (the SFPU sigmoid's own accuracy, well above
+#                                           float32 eps -- a true ULP bound would not hold)
+# both steady across every shape in the matrix.
 @pytest.mark.parametrize(
-    "dtype, expected_pcc",
+    "dtype, rtol, expected_pcc",
     [
-        (ttnn.bfloat16, 0.9995),
-        (ttnn.float32, 0.9995),
-        # The block float types carry one shared exponent per 16-element block, so they need a
-        # looser bar than the bit-addressable floats: bfloat8_b keeps a 7-bit mantissa, bfloat4_b
-        # only 3. Measured PCC against torch is ~0.9999 and ~0.952 respectively, steady across
-        # every shape in the matrix, so these bars sit below that with headroom rather than being
-        # pinned to an observed value.
-        (ttnn.bfloat8_b, 0.99),
-        (ttnn.bfloat4_b, 0.93),
+        (ttnn.bfloat16, 8e-3, None),
+        (ttnn.float32, 1e-3, None),
+        (ttnn.bfloat8_b, None, 0.99),
+        (ttnn.bfloat4_b, None, 0.93),
     ],
 )
-def test_sigmoid_bw_matches_torch(shape, dtype, expected_pcc, device):
+def test_sigmoid_bw_matches_torch(shape, dtype, rtol, expected_pcc, device):
     torch.manual_seed(0)
     torch_input = torch.randn(shape, dtype=torch.float32) * 4.0
     torch_grad = torch.randn(shape, dtype=torch.float32) * 10.0
@@ -61,7 +79,14 @@ def test_sigmoid_bw_matches_torch(shape, dtype, expected_pcc, device):
     assert output.dtype == input_tensor.dtype, f"output dtype {output.dtype} != input dtype {input_tensor.dtype}"
     assert tuple(output.shape) == shape, f"output shape {tuple(output.shape)} != requested {shape}"
 
-    assert_with_pcc(_torch_sigmoid_bw(torch_grad, torch_input), ttnn.to_torch(output), expected_pcc)
+    if expected_pcc is not None:
+        assert_with_pcc(_torch_sigmoid_bw(torch_grad, torch_input), ttnn.to_torch(output), expected_pcc)
+        return
+
+    # Referenced against the operands as the device holds them, so the bar measures the kernel
+    # and not the rounding from_torch already applied to the inputs.
+    expected = _torch_sigmoid_bw(ttnn.to_torch(grad_tensor).float(), ttnn.to_torch(input_tensor).float())
+    torch.testing.assert_close(ttnn.to_torch(output).float(), expected, rtol=rtol, atol=1e-4)
 
 
 @pytest.mark.parametrize(
