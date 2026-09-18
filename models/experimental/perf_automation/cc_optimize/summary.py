@@ -1580,23 +1580,32 @@ def _stage_items_observed(stage, profile) -> int:
                 _parseable[_m] = _parseable.get(_m, 0) + _w
                 if _in_matmuls:
                     _rows[_m] = _rows.get(_m, 0) + _w
-    # A profile written before buckets carried their class states no matmul bucket at all. Falling
-    # back to the older all-parseable-ops vote keeps those profiles priced exactly as they were,
-    # rather than dropping them to "states nothing" and pricing the stage at one item.
+    # A profile written before buckets carried their class states no matmul bucket at all -- there
+    # is no `_rows` (matmul-restricted) population to weigh here, only the older undifferentiated
+    # vote. Keep pricing THOSE profiles exactly as before (see the legacy branch below) rather than
+    # applying a rule derived from a matmul/non-matmul split that profile never carried.
+    _is_legacy = not _rows
     _rows = _rows or _parseable
     if not _rows:
         return 0
-    # THE ROW COUNT MOST OF THE STAGE'S MATMULS RUN AT, not the biggest one. Ranking by FLOPs picks
-    # whichever single matmul is widest, and on a decode step that is the vocab head -- which runs at
-    # a TILE-PADDED 32 rows for a batch of 8. The stage would then have read as retiring 32 items and
-    # been labelled a request-rate stage instead of one token per user. Every other matmul in the
-    # step runs at the true row count, so the mode carries it and the padded outlier does not.
-    # TIES GO TO THE LARGER COUNT. A tie is genuinely ambiguous -- equal numbers of matmuls at two
-    # row counts -- and the two directions are not equally bad. Under-counting is the failure this
-    # whole path exists to fix: it shrinks the compute roof and reports a compute-bound stage as
-    # memory-bound, sending the reader after bandwidth. Over-counting overstates the roof, which
-    # reads as headroom rather than as the wrong wall.
-    return int(max(_rows.items(), key=lambda kv: (kv[1], kv[0]))[0])
+    if _is_legacy:
+        # NO MATMUL CLASS TO WEIGH AGAINST -- the mode over the undifferentiated vote is the same
+        # number this path has always returned, kept unchanged for back-compat with profiles
+        # written before buckets carried a class at all.
+        return int(max(_rows.items(), key=lambda kv: (kv[1], kv[0]))[0])
+    # THE ROW COUNT THAT ACCOUNTS FOR THE MOST TOTAL ARITHMETIC, not the one most matmuls run at
+    # and not simply the largest single value -- both of those fail, in opposite directions:
+    #   MODE fails on prefill: a stage with two legitimate matmul populations can have the smaller
+    #     one be more numerous (measured on voxtral_mini_3b_2507: 16 chunked matmuls at 3328 outvote
+    #     7 full-sequence ones at the true 13312, under-counting the compute roof 4x).
+    #   MAX fails on decode: a single TILE-PADDED outlier (the vocab head, 32 rows for a batch of 8,
+    #     one call) would outrank 19 real calls at 8 purely by being the largest value present.
+    # Weighting by rows x count -- the total rows actually pushed through at that shape, which is
+    # the quantity the compute-roof formula (2 x params x items) is actually about -- resolves both
+    # without special-casing either: voxtral's 13312 wins (13312x7=93184 beats 3328x16=53248) and 8
+    # still wins over the padded outlier (8x19=152 beats 32x1=32). Ties fall to the larger row
+    # count, matching the existing preference for over- over under-counting.
+    return int(max(_rows.items(), key=lambda kv: (kv[0] * kv[1], kv[0]))[0])
 
 
 def _stage_units(stage, prompt_tokens, profile=None) -> int:
