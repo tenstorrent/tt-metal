@@ -102,13 +102,16 @@ def resolve_perf_counter_groups(requested_groups, arch):
     resolved = []
     for group in requested_groups:
         g = group.lower()
+        if g == "sfpu":
+            g = "fpu"
         if g == "all":
-            resolved = ["fpu", "pack", "unpack", "instrn"] + arch_l1_groups(is_blackhole, is_quasar)
-            break
+            resolved.extend(["fpu", "pack", "unpack", "instrn"] + arch_l1_groups(is_blackhole, is_quasar))
         elif g in PERF_COUNTER_GROUP_BITS:
             resolved.append(g)
         else:
-            logger.warning(f"Unknown counter group '{group}'. Valid groups: {', '.join(PERF_COUNTER_GROUP_BITS)}, all")
+            raise ValueError(
+                f"Unknown counter group '{group}'. Valid groups: {', '.join(PERF_COUNTER_GROUP_BITS)}, sfpu, all"
+            )
     resolved = list(dict.fromkeys(resolved))
 
     if is_quasar and (set(resolved) & PERF_COUNTER_L1_GROUPS):

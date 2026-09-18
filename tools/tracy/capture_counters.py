@@ -18,13 +18,19 @@ and archives the result.
 """
 
 import argparse
+import json
 import os
 import shutil
 
 from tracy.perf_counter_sizing import (
+    bytes_per_program,
+    counters_per_zone,
+    marker_slots_per_zone,
+    normalized_counter_groups,
     recommend_program_support_count,
     single_pass_l1_headroom,
 )
+from tracy.perf_counter_multipass import schedule_perf_counter_passes
 
 
 def build_capture_plan(
@@ -40,18 +46,36 @@ def build_capture_plan(
     Returns a dict with: groups, program_support_count, l1_headroom, warnings,
     env (vars to apply to the run), and archive_dir.
     """
-    program_support_count = recommend_program_support_count(programs_per_device)
-    headroom = single_pass_l1_headroom(arch, groups)
+    groups = normalized_counter_groups(arch, groups)
+    if not groups:
+        raise ValueError("at least one counter group is required")
+    passes = []
+    for pass_groups in schedule_perf_counter_passes(groups):
+        passes.append(
+            {
+                "groups": pass_groups,
+                "counter_records_per_zone": counters_per_zone(arch, pass_groups),
+                "counter_marker_slots_per_zone": marker_slots_per_zone(arch, pass_groups),
+                "estimated_bytes_per_program_per_risc": bytes_per_program(arch, pass_groups),
+                "program_support_count": recommend_program_support_count(
+                    programs_per_device, arch=arch, groups=pass_groups
+                ),
+                "l1_headroom": single_pass_l1_headroom(arch, pass_groups),
+            }
+        )
+    program_support_count = max(p["program_support_count"] for p in passes)
+    headroom = min(p["l1_headroom"] for p in passes)
 
     warnings = []
     if headroom < 0:
         warnings.append(
-            f"requested groups need {-headroom} more L1 optional-marker slots than the "
-            f"single-pass budget; split groups across passes or markers will drop"
+            f"a scheduled pass exceeds the L1 optional-marker budget by {-headroom} slots; "
+            "BRISC must flush during readout; verify DRAM capacity and dropped-marker flags"
         )
 
     env = {
         "TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT": str(program_support_count),
+        "TT_METAL_DEVICE_ARCH": arch,
     }
     if compute_core_sample:
         env["TT_METAL_PROFILER_COMPUTE_CORE_SAMPLE"] = str(compute_core_sample)
@@ -62,6 +86,10 @@ def build_capture_plan(
 
     return {
         "groups": list(groups),
+        "passes": passes,
+        "programs_between_drains": programs_per_device,
+        "optional_marker_reserve": 16,
+        "safety": 1.2,
         "program_support_count": program_support_count,
         "l1_headroom": headroom,
         "warnings": warnings,
@@ -81,13 +109,18 @@ def _archive_artifacts(report_csv, archive_dir, plan):
         f.write(f"program_support_count: {plan['program_support_count']}\n")
         for k, v in plan["env"].items():
             f.write(f"{k}={v}\n")
+    with open(os.path.join(archive_dir, "capture_plan.json"), "w") as f:
+        json.dump(plan, f, indent=2)
+        f.write("\n")
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description="repeatable perf-counter capture")
     parser.add_argument("--test", required=True, help="pytest target to profile")
     parser.add_argument("--groups", required=True, help="comma-separated counter groups (e.g. fpu,instrn)")
-    parser.add_argument("--programs-per-device", type=int, required=True, help="distinct programs/zones per device")
+    parser.add_argument(
+        "--programs-per-device", type=int, required=True, help="maximum program invocations per device between drains"
+    )
     parser.add_argument("--arch", default=os.environ.get("ARCH_NAME", "blackhole"))
     parser.add_argument("--compute-core-sample", type=int, default=None)
     parser.add_argument("--name", default="CounterCapture")
@@ -118,7 +151,7 @@ def main(argv=None):
     run_device_profiler(
         f"pytest {args.test}",
         args.name,
-        capture_perf_counters_groups=groups,
+        capture_perf_counters_groups=plan["groups"],
         op_support_count=plan["program_support_count"],
     )
 

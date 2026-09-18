@@ -201,33 +201,23 @@ def run_device_profiler(
     op_support_count=int(PROFILER_DEFAULT_OP_SUPPORT_COUNT * 1.333),
     is_command_binary_exe=False,
 ):
-    if requires_multi_pass_profile(capture_perf_counters_groups):
-        run_multi_pass(
-            command,
-            output_logs_subdir,
-            check_test_return_code,
-            device_analysis_types,
-            python_post_process,
-            capture_perf_counters_groups,
-            sum_profiling,
-            op_support_count,
-            is_command_binary_exe,
-        )
-    else:
-        output_profiler_dir = get_profiler_folder(output_logs_subdir)
-        profiler_cmd = _build_profiler_cmd(
-            command,
-            output_profiler_dir,
-            check_test_return_code,
-            device_analysis_types,
-            python_post_process,
-            capture_perf_counters_groups,
-            sum_profiling,
-            op_support_count,
-            is_command_binary_exe,
-        )
-        logger.info(profiler_cmd)
-        subprocess.run([profiler_cmd], shell=True, check=True)
+    # The Tracy CLI owns the full architecture-aware pass plan (all L1 banks and
+    # the firmware group limit). A second legacy split here duplicated passes
+    # and made capture_counters' recorded plan differ from the executed plan.
+    output_profiler_dir = get_profiler_folder(output_logs_subdir)
+    profiler_cmd = _build_profiler_cmd(
+        command,
+        output_profiler_dir,
+        check_test_return_code,
+        device_analysis_types,
+        python_post_process,
+        capture_perf_counters_groups,
+        sum_profiling,
+        op_support_count,
+        is_command_binary_exe,
+    )
+    logger.info(profiler_cmd)
+    subprocess.run([profiler_cmd], shell=True, check=True)
 
 
 def get_samples_per_s(time_ns, num_samples):
