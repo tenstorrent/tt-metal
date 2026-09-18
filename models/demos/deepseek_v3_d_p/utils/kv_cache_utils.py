@@ -280,7 +280,7 @@ def create_kv_chunk_address_table_block_cyclic(
     stage_layout=None,
 ):
     """
-    Create and populate a KV chunk address table for disaggregation (Kimi K2.6 model - non-balanced).
+    Create and populate a KV chunk address table for disaggregation (Kimi K2.7 model - non-balanced).
 
     Builds ONE table spanning every pipeline stage's layers, following tt-blaze's layer->mesh merge:
     each rank owns a contiguous LAYER range on its full mesh, and the table places each global layer's

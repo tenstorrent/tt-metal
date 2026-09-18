@@ -12,6 +12,10 @@ namespace ckl = compute_kernel_lib;
 void kernel_main() {
     constexpr uint32_t per_core_block_cnt = get_arg(args::per_core_block_cnt);
     constexpr uint32_t per_core_block_dim = get_arg(args::per_core_block_dim);
+    // Passed explicitly rather than read off the buffers since an Int8 tensor is carried in a UInt8
+    // buffer.
+    constexpr uint32_t in_data_format = get_arg(args::in_data_format);
+    constexpr uint32_t out_data_format = get_arg(args::out_data_format);
 
     compute_kernel_hw_startup(dfb::in, dfb::out);
 
@@ -20,9 +24,8 @@ void kernel_main() {
     // that directly; the input retains its raw per-tile wait/pop lifecycle.
     constexpr auto input =
         ckl::input(dfb::in, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled);
-    ckl::typecast<
-        input,
-        ckl::output(
-            dfb::out, ckl::ReservePolicy::PerOuter, ckl::PushPolicy::PerOuter, ckl::DataFormatReconfig::Disabled)>(
+    constexpr auto output = ckl::output(
+        dfb::out, ckl::ReservePolicy::PerOuter, ckl::PushPolicy::PerOuter, ckl::DataFormatReconfig::Disabled);
+    ckl::unary<ckl::Typecast<in_data_format, out_data_format>, input, output>(
         ckl::IterationShape::grid(per_core_block_cnt, per_core_block_dim));
 }
