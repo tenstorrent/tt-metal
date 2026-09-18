@@ -1,0 +1,36 @@
+# RELAXED zero-link tolerance fixture (issue #56762): TWO quad meshes with a RELAXED inter-mesh
+# connection, run on the disconnected_sc36_quads mock -- one revC-subtorus quad from EACH of two
+# DIFFERENT systems (SC36 revC subtorus aisle D, hosts bh-glx-120-d03u*, and SC24 revC subtorus
+# virtu, hosts bg-ale22-r01..r04). Both are the SAME revision (revC subtorus) so physical grouping
+# matches BOTH quads to a mesh (a revC+revAB mix makes discovery form only one mesh); they are from
+# different systems so they share ZERO ethernet links -> two disconnected physical meshes. The
+# RELAXED inter-mesh connection therefore resolves to zero physical links; mapping and control-plane
+# init must still succeed (logical-only / host interconnect), with loud warnings.
+#
+# Each quad = 4 hosts -> device 4x32, host_topology [1,16] (16 slices), LINE/LINE (isolated quads
+# have no torus wrap). Two instances -> the mock's 8 ranks (4 per quad).
+
+mesh_descriptors {
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology { dims: [ 4, 32 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 16 ] }
+  channels { count: 2 policy: RELAXED }
+}
+
+# --- Graph: two quad meshes, one RELAXED inter-mesh connection ---------------
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+    channels { count: 2 policy: RELAXED }
+  }
+}
+
+# --- Instantiation ---------------------------------------------------------
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }

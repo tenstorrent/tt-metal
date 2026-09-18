@@ -1379,6 +1379,18 @@ MappingResult<TargetNode, GlobalNode> TopologyMappingEnumerationSession<TargetNo
         graph_data_.emplace(target_graph, global_graph);
         constraint_data_.emplace(constraints, *graph_data_);
         use_sat_ = topology_mapping_should_use_sat_engine(solver_engine, graph_data_->n_target, graph_data_->n_global);
+        // Zero-link tolerance is implemented on the SAT backend (soft target edges + realized-edge
+        // maximization); route Auto to SAT. An explicit Dfs request keeps edges hard (old behavior).
+        if (constraints.allow_unmatched_target_edges()) {
+            if (solver_engine == TopologyMappingSolverEngine::Dfs) {
+                log_warning(
+                    tt::LogFabric,
+                    "allow_unmatched_target_edges (RELAXED zero-link tolerance) requires the SAT engine; the "
+                    "explicitly requested DFS engine keeps target edges hard");
+            } else {
+                use_sat_ = true;
+            }
+        }
         ready_ = true;
         search_engine_ = make_topology_search_engine<TargetNode, GlobalNode>(use_sat_);
         need_start = true;
@@ -1995,6 +2007,7 @@ ConstraintIndexData<TargetNode, GlobalNode>::ConstraintIndexData(
 
     minimize_same_rank_groups_used = constraints.minimize_same_rank_groups_used();
     max_same_rank_groups_used = constraints.max_same_rank_groups_used();
+    allow_unmatched_target_edges = constraints.allow_unmatched_target_edges();
 }
 
 template <typename TargetNode, typename GlobalNode>
@@ -3658,6 +3671,22 @@ bool MappingValidator<TargetNode, GlobalNode>::validate_mapping(
                 neighbor_global_idx);
 
             if (!edge_exists) {
+                if (constraint_data.allow_unmatched_target_edges) {
+                    // RELAXED zero-link tolerance (issue #56762): the edge is logical-only for this
+                    // placement (data path rides the host interconnect). Warn loudly, do not fail.
+                    std::string warn_msg = fmt::format(
+                        "Relaxed mode: target graph edge from node {} to {} has NO physical link between {} and {} "
+                        "(zero-link edge; traffic must use the host interconnect).",
+                        target_node,
+                        neighbor_target,
+                        global_node,
+                        neighbor_global);
+                    log_warning(tt::LogFabric, "{}", warn_msg);
+                    if (warnings != nullptr) {
+                        warnings->push_back(warn_msg);
+                    }
+                    continue;
+                }
                 std::string error_msg = fmt::format(
                     "Mapping validation failed: target graph has edge from node {} to {}, "
                     "but global graph does not have corresponding edge from {} to {}. "

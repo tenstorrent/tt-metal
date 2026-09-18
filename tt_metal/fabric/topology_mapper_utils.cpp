@@ -2987,6 +2987,19 @@ bool add_exit_node_constraints(
             }
 
             if (effective_exit_pair_min_count == 0) {
+                if (inter_mesh_validation_mode == ::tt::tt_fabric::ConnectionValidationMode::RELAXED) {
+                    // Zero-link tolerance (issue #56762): no physical links toward the mapped
+                    // destination mesh -- the requested connection stays logical-only. Warn loudly
+                    // and skip the exit cardinality constraint instead of failing the mapping.
+                    log_warning(
+                        tt::LogFabric,
+                        "Relaxed mode: requested inter-mesh connection toward logical mesh {} has ZERO physical "
+                        "links from the mapped source mesh ({} logical channel(s) requested); the connection is "
+                        "logical-only and traffic must use the host interconnect",
+                        dst_logical_mesh.get(),
+                        num_logical_exit_nodes_assigned);
+                    continue;
+                }
                 return false;
             }
 
@@ -3293,6 +3306,13 @@ TopologyMappingResult complete_intra_mesh_for_placement(
         const auto& physical_exit_node_graph = *physical_exit_node_graph_ptr;
 
         ::tt::tt_fabric::MappingConstraints<FabricNodeId, tt::tt_metal::AsicID> intra_mesh_constraints;
+        // RELAXED zero-link tolerance (issue #56762) is INTER-MESH ONLY: intra-mesh target edges
+        // stay hard, so allow_unmatched_target_edges is deliberately left false here. A mesh's own
+        // chips must be physically connected -- a zero-link intra-mesh edge would mean an
+        // unroutable mesh interior.
+        // TODO(fabric-2.0): intra-mesh zero-link tolerance is NOT yet allowed; revisit once Fabric
+        // 2.0 lands (host-interconnect intra-mesh routing). Do not call
+        // intra_mesh_constraints.set_allow_unmatched_target_edges(true) until then.
 
         if (!config.disable_rank_bindings) {
             add_rank_binding_constraints(
@@ -3483,6 +3503,23 @@ std::optional<TopologyMappingResult> MultiMeshSolutionEnumerator::next() {
                 inter_mesh_constraints_.set_minimize_same_rank_groups_used(true);  // SOFT
                 session_ = {};
                 host_cap_relaxed_ = true;
+                continue;
+            }
+            // RELAXED zero-link fallback (issue #56762): the hard-edge solve found no placement.
+            // Retry once with inter-mesh edges SOFT: zero physical links tolerated, realized edges
+            // maximized best-effort. Kept behind exhaustion so fully-cabled systems keep the fast
+            // fully-pruned hard path (identical behavior and solve cost to before).
+            if (!zero_link_fallback_engaged_ && emitted_ == 0 &&
+                inter_mesh_validation_mode_ == ::tt::tt_fabric::ConnectionValidationMode::RELAXED) {
+                log_warning(
+                    tt::LogFabric,
+                    "Multi-mesh mapping found no placement with all inter-mesh connections realized ({}); "
+                    "retrying with RELAXED zero-link tolerance -- some requested inter-mesh connections may "
+                    "resolve to ZERO physical links (logical-only, host interconnect)",
+                    placement.error_message);
+                inter_mesh_constraints_.set_allow_unmatched_target_edges(true);
+                session_ = {};
+                zero_link_fallback_engaged_ = true;
                 continue;
             }
             log_info(
