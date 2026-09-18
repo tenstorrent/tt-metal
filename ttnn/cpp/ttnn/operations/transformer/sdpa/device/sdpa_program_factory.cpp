@@ -14,6 +14,7 @@
 #include "ttnn/operations/math.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <hostdevcommon/common_values.hpp>
+#include <algorithm>
 #include <bit>
 #include <map>
 #include <optional>
@@ -238,50 +239,42 @@ uint32_t kv_chain_mode_for(
     return causal_pairs && causal_pairs_uniform(q_num_chunks, Sq_chunk_t, Sk_chunk_t, Skt) ? 2 : 0;
 }
 
-// Causal chain of a head: the consecutive segments whose cores are still free, in ascending pair order, so the
-// lowest pairs (longest heavy prefixes) stream from DRAM and each core forwards the prefix its successor needs.
-// Chain partners exchange chunk i of their segments at the same time, so a segment a core reaches only after
-// finishing another head would hold its partner idle for that long; only a core's first segment qualifies.
-void build_causal_chain(
+// Every hop of a chain adds one chunk of latency before the pipeline flows, so long chains are cut into
+// pieces of this many cores, each with its own injector.
+constexpr std::size_t kMaxCausalChainCores = 8;
+// A head whose own segments already make a chain this long keeps it; shorter ones are pooled across the Q
+// heads that share the K/V head. Pooling only pays once a chunk has enough q tiles to hide the relay latency
+// of a longer chain (measured on Blackhole: -8 percent at four q tiles, +9 percent at one).
+constexpr std::size_t kMinOwnHeadChain = 6;
+constexpr uint32_t kMinQTilesToPool = 4;
+
+void link_causal_chain(
     const std::vector<HeadSegmentRef>& segments,
+    const std::vector<std::size_t>& order,
+    std::size_t begin,
+    std::size_t end,
     const std::vector<CoreWork>& core_work,
     std::vector<CoreChainInfo>& core_chain_info,
-    uint32_t& chains_built,
-    uint32_t& chains_skipped) {
-    auto eligible = [&](const HeadSegmentRef& seg) {
-        return !core_chain_info[seg.core_idx].participates && seg.head_work_index == 0;
-    };
-    std::size_t idx = 0;
-    while (idx < segments.size() && !eligible(segments[idx])) {
-        ++idx;
-    }
-    std::vector<std::size_t> order;
-    for (; idx < segments.size() && eligible(segments[idx]); ++idx) {
-        order.push_back(idx);
-    }
-    if (order.size() < 2) {
-        chains_skipped++;
-        return;
-    }
-    for (std::size_t pos = 0; pos < order.size(); ++pos) {
+    uint32_t heads_per_group) {
+    for (std::size_t pos = begin; pos < end; ++pos) {
         const auto& seg = segments[order[pos]];
         const auto& hw = core_work[seg.core_idx].head_work[seg.head_work_index];
         auto& chain = core_chain_info[seg.core_idx];
         chain.participates = true;
-        chain.is_injector = pos == 0;
-        chain.is_sink = pos + 1 == order.size();
+        chain.is_injector = pos == begin;
+        chain.is_sink = pos + 1 == end;
         chain.batch = hw.batch;
-        chain.head = hw.head;
+        chain.head = hw.head / heads_per_group;
         chain.q_chunk_start = hw.q_chunk_start;
         chain.q_chunk_count = hw.q_chunk_count;
-        if (pos > 0) {
+        if (pos > begin) {
             const auto& prev = segments[order[pos - 1]];
             const auto& prev_hw = core_work[prev.core_idx].head_work[prev.head_work_index];
             chain.prev_physical = core_work[prev.core_idx].physical_core;
             chain.prev_seg_global_start = prev_hw.global_start;
             chain.prev_seg_count = prev_hw.q_chunk_count;
         }
-        if (pos + 1 < order.size()) {
+        if (pos + 1 < end) {
             const auto& next = segments[order[pos + 1]];
             const auto& next_hw = core_work[next.core_idx].head_work[next.head_work_index];
             chain.next_physical = core_work[next.core_idx].physical_core;
@@ -289,7 +282,69 @@ void build_causal_chain(
             chain.next_core_q_chunks = next_hw.q_chunk_count;
         }
     }
-    chains_built++;
+}
+
+void link_causal_chain_pieces(
+    const std::vector<HeadSegmentRef>& segments,
+    const std::vector<std::size_t>& order,
+    const std::vector<CoreWork>& core_work,
+    std::vector<CoreChainInfo>& core_chain_info,
+    uint32_t heads_per_group,
+    uint32_t& chains_built,
+    uint32_t& chains_skipped) {
+    if (order.size() < 2) {
+        chains_skipped++;
+        return;
+    }
+    for (std::size_t begin = 0; begin < order.size(); begin += kMaxCausalChainCores) {
+        const std::size_t end = std::min(order.size(), begin + kMaxCausalChainCores);
+        if (end - begin < 2) {
+            break;
+        }
+        link_causal_chain(segments, order, begin, end, core_work, core_chain_info, heads_per_group);
+        chains_built++;
+    }
+}
+
+// Causal chains of a KV head: segments in ascending pair order, so the lowest pairs (longest heavy prefixes)
+// stream from DRAM and each core forwards the prefix its successor needs. Chain partners exchange chunk i of
+// their segments at the same time, so a segment a core reaches only after finishing another head would hold
+// its partner idle; only a core's first segment qualifies. The segments arrive head by head; a head with
+// enough of them chains on its own, the rest are pooled across the group by pair position.
+void build_causal_chains(
+    const std::vector<HeadSegmentRef>& segments,
+    const std::vector<CoreWork>& core_work,
+    std::vector<CoreChainInfo>& core_chain_info,
+    uint32_t q_num_chunks,
+    uint32_t heads_per_group,
+    bool pool_across_heads,
+    uint32_t& chains_built,
+    uint32_t& chains_skipped) {
+    auto head_of = [&](std::size_t idx) {
+        return core_work[segments[idx].core_idx].head_work[segments[idx].head_work_index].head;
+    };
+    auto pair_pos = [&](std::size_t idx) {
+        return core_work[segments[idx].core_idx].head_work[segments[idx].head_work_index].global_start % q_num_chunks;
+    };
+    std::vector<std::size_t> pool;
+    std::size_t idx = 0;
+    while (idx < segments.size()) {
+        const uint32_t head = head_of(idx);
+        std::vector<std::size_t> own;
+        for (; idx < segments.size() && head_of(idx) == head; ++idx) {
+            if (!core_chain_info[segments[idx].core_idx].participates && segments[idx].head_work_index == 0) {
+                own.push_back(idx);
+            }
+        }
+        if (!pool_across_heads || own.size() >= kMinOwnHeadChain) {
+            link_causal_chain_pieces(
+                segments, own, core_work, core_chain_info, heads_per_group, chains_built, chains_skipped);
+        } else {
+            pool.insert(pool.end(), own.begin(), own.end());
+        }
+    }
+    std::stable_sort(pool.begin(), pool.end(), [&](std::size_t a, std::size_t b) { return pair_pos(a) < pair_pos(b); });
+    link_causal_chain_pieces(segments, pool, core_work, core_chain_info, heads_per_group, chains_built, chains_skipped);
 }
 
 // The injector of a uniform chain is the core whose physical X is furthest from the existing injectors.
@@ -718,6 +773,8 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         Sk_chunk_t,
         Skt);
     const bool kv_chains_possible = kv_chain_mode != 0;
+    // Causal chains run along the Q heads that share one K/V head when K and V are grouped the same way.
+    const uint32_t chain_heads_per_group = (NKH == NVH && NQH % NKH == 0) ? NQH / NKH : 1;
 
     std::vector<uint32_t> reader_compile_time_args = {// interleaved accessor args
                                                       B,
@@ -773,8 +830,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     // Windowed K-range narrowing: the reader needs its own view of cu_window_seqlens and the per-device
     // Q-offset tensor to compute each Q chunk's [k_lo, k_hi) — same placeholder rule as the writer's pair.
     TensorAccessorArgs(buffer_or_null(tensor_args.cu_window_seqlens)).append_to(reader_compile_time_args);
-    TensorAccessorArgs(buffer_or_null(tensor_args.windowed_q_token_offset_tensor))
-        .append_to(reader_compile_time_args);
+    TensorAccessorArgs(buffer_or_null(tensor_args.windowed_q_token_offset_tensor)).append_to(reader_compile_time_args);
 
     // Set up semaphore IDs for KV chain forwarding (non-causal only).
     // In the descriptor pattern, semaphore IDs are explicit sequential integers
@@ -837,8 +893,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     TensorAccessorArgs(buffer_or_null(tensor_args.cu_window_seqlens)).append_to(writer_compile_time_args);
     // Then the per-device Q-offset accessor. Same chain, same placeholder rule: nullptr when the caller
     // passed the offset as a scalar (or is not windowed), in which case the writer never reads it.
-    TensorAccessorArgs(buffer_or_null(tensor_args.windowed_q_token_offset_tensor))
-        .append_to(writer_compile_time_args);
+    TensorAccessorArgs(buffer_or_null(tensor_args.windowed_q_token_offset_tensor)).append_to(writer_compile_time_args);
 
     std::vector<uint32_t> compute_compile_time_args = {
         // matmul args
@@ -1150,15 +1205,28 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         std::vector<uint32_t> injector_phys_x;
         injector_phys_x.reserve(head_segments.size());
 
+        if (is_causal) {
+            for (uint32_t group = 0; group < total_heads / chain_heads_per_group; ++group) {
+                std::vector<HeadSegmentRef> group_segments;
+                for (uint32_t h = group * chain_heads_per_group; h < (group + 1) * chain_heads_per_group; ++h) {
+                    group_segments.insert(group_segments.end(), head_segments[h].begin(), head_segments[h].end());
+                }
+                build_causal_chains(
+                    group_segments,
+                    core_work,
+                    core_chain_info,
+                    q_num_chunks,
+                    chain_heads_per_group,
+                    Sq_chunk_t >= kMinQTilesToPool,
+                    chains_built,
+                    chains_skipped);
+            }
+        }
+
         for (uint32_t head_id = 0; head_id < head_segments.size(); ++head_id) {
             auto& segments = head_segments[head_id];
-            if (segments.size() < 2) {
+            if (segments.size() < 2 || is_causal) {
                 continue;  // No chain needed for single core
-            }
-
-            if (is_causal) {
-                build_causal_chain(segments, core_work, core_chain_info, chains_built, chains_skipped);
-                continue;
             }
 
             // Find first non-conflicting single-segment core as chain start.
@@ -1625,6 +1693,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
             reader_args.push_back(chain.prev_seg_global_start);
             reader_args.push_back(chain.prev_seg_count);
             reader_args.push_back(chain.next_seg_global_start);
+            reader_args.push_back(is_causal ? chain_heads_per_group : 1u);
         }
 
         // Global-Q tail (read by kernel after chain block when non-causal, immediately when causal).
