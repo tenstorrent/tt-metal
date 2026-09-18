@@ -192,6 +192,9 @@ ttsl::hash::hash_t UnaryDeviceOperation::compute_program_hash(
         dst_shard_vol = shard_specs->output_shard_spec.numel() / out_tile_hw;
     }
 
+    const auto& alignment = input_tensor.tensor_spec().tensor_layout().get_alignment();
+    const auto tile = input_tensor.tensor_spec().tile();
+
     // TODO: For ROW_MAJOR, page size depends on width. Hashing padded_shape ensures
     // different widths get separate cache entries. Consider hashing only the last
     // dimension to allow cache reuse when only height differs
@@ -201,6 +204,8 @@ ttsl::hash::hash_t UnaryDeviceOperation::compute_program_hash(
             input_tensor.dtype(),
             input_tensor.layout(),
             input_tensor.memory_config(),
+            alignment,
+            tile,
             input_tensor.padded_shape(),
             src_shard_vol,
             dst_shard_vol);
@@ -211,6 +216,8 @@ ttsl::hash::hash_t UnaryDeviceOperation::compute_program_hash(
         input_tensor.dtype(),
         input_tensor.layout(),
         input_tensor.memory_config(),
+        alignment,
+        tile,
         src_shard_vol,
         dst_shard_vol);
 }
