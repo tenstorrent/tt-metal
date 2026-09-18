@@ -50,7 +50,12 @@ from models.demos.gemma4.demo.sampling_utils import (
     log_sampling_mode,
     model_can_sample_on_device,
 )
-from models.demos.gemma4.tests.test_factory import PREFILL_BUCKETS, parametrize_mesh_with_fabric
+from models.demos.gemma4.tests.test_factory import (
+    PREFILL_BUCKETS,
+    TestFactory,
+    parametrize_mesh_with_fabric,
+    skip_if_too_large_for_single_device,
+)
 from models.demos.gemma4.tt.common import create_tt_model
 from models.demos.gemma4.tt.generator import GEMMA4_MAX_BATCHED_PREFILL_SEQ_LEN, Gemma4Generator
 from models.demos.gemma4.tt.generator_trace import (
@@ -1436,6 +1441,11 @@ def test_demo(mesh_device, model_path, prefill_len, request):
 
     if os.environ.get("CI") == "true" and prefill_len != 128:
         pytest.skip(f"CI: only prefill_128 runs in CI; skipping prefill_{prefill_len}")
+
+    # Same single-card capacity bound the unit tests use: 12B does not fit one
+    # Wormhole card and dies in the DRAM allocator at 1x1 on a T3K.
+    tp = mesh_device.shape[1] if hasattr(mesh_device, "shape") else 1
+    skip_if_too_large_for_single_device(TestFactory.create_hf_config(), tp)
 
     prompt = load_demo_prompt(prefill_len, instruct=True)
 
