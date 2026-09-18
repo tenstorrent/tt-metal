@@ -45,7 +45,7 @@ The rest of the node id, overridable per run. These are parametrize **ids**, not
 | Env | What it sets | Default | Other values |
 |---|---|---|---|
 | `CHUNKS_ID` | chunks prefilled per iteration, 5120 tokens each | `chunks20` | `chunks1`, `chunks2`, `chunks5`, `chunks10`, `chunks_eleven` |
-| `ITERS_ID` | iterations per pytest run (the inner loop) | `iters20` | `iters1`, `two_iters`, `ten_iters`, `iters25` |
+| `ITERS_ID` | iterations per pytest run (the inner loop) | `iters20` | `iters1`, `two_iters`, `ten_iters`, `iters25`, `iters600` (soak — amortizes the ~50 min weight load over hours of forward instead of minutes) |
 | `PRELOAD_ID` | prior KV tokens faked into the cache, so the measured chunks run at that KV depth without prefilling up to it | `preload0` (empty cache) | `preload25k`, `preload50k`, `preload95k` — need a golden trace |
 | `TRACE_ID` | whether the chunk forward is captured once and replayed | `notrace` | `traced` |
 

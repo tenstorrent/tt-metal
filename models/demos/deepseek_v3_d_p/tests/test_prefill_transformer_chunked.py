@@ -2357,7 +2357,9 @@ def glm_chunked_perf_gate(variant, use_trace, num_layers, n_chunks, num_iters, p
 # kimi_chunked_perf_gate). The two bands differ by more than 3x, so no single literal serves both.
 @pytest.mark.parametrize("perf_margin", [None], ids=["margin_auto"])
 @pytest.mark.parametrize(
-    "num_iters", [1, 2, 10, 20, 25], ids=["iters1", "two_iters", "ten_iters", "iters20", "iters25"]
+    "num_iters",
+    [1, 2, 10, 20, 25, 600],
+    ids=["iters1", "two_iters", "ten_iters", "iters20", "iters25", "iters600"],
 )
 @pytest.mark.parametrize(
     "n_chunks",
@@ -2598,7 +2600,9 @@ def test_ds_prefill_transformer_chunked_no_pcc(
 # notrace/traced, not trace: "notrace" CONTAINS "trace", so `-k trace` would select both modes.
 @pytest.mark.parametrize("use_trace", [False, True], ids=["notrace", "traced"])
 @pytest.mark.parametrize(
-    "num_iters", [1, 2, 10, 20, 25], ids=["iters1", "two_iters", "ten_iters", "iters20", "iters25"]
+    "num_iters",
+    [1, 2, 10, 20, 25, 600],
+    ids=["iters1", "two_iters", "ten_iters", "iters20", "iters25", "iters600"],
 )
 @pytest.mark.parametrize(
     "n_chunks",
