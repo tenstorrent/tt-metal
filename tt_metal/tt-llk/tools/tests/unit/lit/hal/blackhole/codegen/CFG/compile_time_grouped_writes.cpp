@@ -55,7 +55,7 @@ extern "C" __attribute__((noinline, used)) void write_ordered_constant_operation
 {
     cfg::write<cfg::Access::TensixCfgUnit>(
         cfg::set<cfg::AluFormatSpecReg::SrcA_val, cfg::Sec::S0, 1>(),
-        cfg::from_gpr<cfg::Thcon[cfg::Reg3].Base_address, cfg::Sec::S0>(cfg::gpr<4, cfg::GprTransferSize::Bits32, cfg::WrcfgCompletion::Deferred>()),
+        cfg::from_gpr<cfg::Thcon[cfg::Reg3].Base_address, cfg::Sec::S0, cfg::GprTransferSize::Bits32, cfg::WrcfgCompletion::Deferred>(hal::gpr<4>()),
         cfg::from_gpr<cfg::Thcon[cfg::Reg4].Base_cntx4_address, cfg::Sec::S0>(hal::gpr<5>()),
         cfg::set<cfg::DestOffset::Enable, cfg::Sec::S0, 1>(),
         cfg::set<cfg::AluFormatSpecReg::SrcB_val, cfg::Sec::S0, 2>());
@@ -71,27 +71,15 @@ extern "C" __attribute__((noinline, used)) void write_ordered_constant_operation
 // CHECK-NEXT: ttrmwcib1 1,0,0
 // CHECK-NEXT: ret
 
-extern "C" __attribute__((noinline, used)) void write_constant_batch()
-{
-    cfg::write<cfg::Access::TensixCfgUnit>([](auto& out) { out(cfg::set<cfg::AluFormatSpecReg::SrcA_val, cfg::Sec::S0, 5>()); });
-}
-
-// CHECK-LABEL: <write_constant_batch>:
-// CHECK-NEXT: ttrmwcib0 15,5,0
-// CHECK-NEXT: ret
-
-extern "C" __attribute__((noinline, used)) void write_constant_operations_batch()
+extern "C" __attribute__((noinline, used)) void write_deferred_gpr_sequence()
 {
     cfg::write<cfg::Access::TensixCfgUnit>(
-        [](auto& out)
-        {
-            out(cfg::set<cfg::AluFormatSpecReg::SrcA_val, cfg::Sec::S0, 1>(),
-                cfg::from_gpr<cfg::Thcon[cfg::Reg3].Base_address, cfg::Sec::S0>(cfg::gpr<4, cfg::GprTransferSize::Bits32, cfg::WrcfgCompletion::Deferred>()),
-                cfg::set<cfg::DestOffset::Enable, cfg::Sec::S0, 1>());
-        });
+        cfg::set<cfg::AluFormatSpecReg::SrcA_val, cfg::Sec::S0, 1>(),
+        cfg::from_gpr<cfg::Thcon[cfg::Reg3].Base_address, cfg::Sec::S0, cfg::GprTransferSize::Bits32, cfg::WrcfgCompletion::Deferred>(hal::gpr<4>()),
+        cfg::set<cfg::DestOffset::Enable, cfg::Sec::S0, 1>());
 }
 
-// CHECK-LABEL: <write_constant_operations_batch>:
+// CHECK-LABEL: <write_deferred_gpr_sequence>:
 // CHECK-NEXT: ttrmwcib0 15,1,0
 // CHECK-NEXT: ttwrcfg 4,0,76
 // CHECK-NEXT: ttrmwcib0 1,1,5
