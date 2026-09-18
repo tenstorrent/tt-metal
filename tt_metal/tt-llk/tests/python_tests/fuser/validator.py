@@ -733,9 +733,12 @@ class OperationSchemaBase(BaseModel):
         max_out_dims = self._calculate_max_output_dimensions(operands)
 
         reduce_dim = None
+        reduce_pool = None
         for node in math_ops:
             if isinstance(node, FpuNode) and hasattr(node.fpu, "reduce_dim"):
                 reduce_dim = node.fpu.reduce_dim
+                # Block-max variants have a fixed MAX operation instead of a reduce_pool member.
+                reduce_pool = getattr(node.fpu, "reduce_pool", ReducePool.Max)
                 break
 
         kwargs = {
@@ -743,6 +746,7 @@ class OperationSchemaBase(BaseModel):
             "tile_shape": tile_shape,
             "dest_sync": self.dest_sync,
             "reduce_dim": reduce_dim,
+            "reduce_pool": reduce_pool,
         }
         kwargs.update(self._arch_kwargs())
 

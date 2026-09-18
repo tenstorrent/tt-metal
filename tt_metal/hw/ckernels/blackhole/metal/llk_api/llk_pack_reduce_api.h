@@ -11,19 +11,22 @@
  * LLK PACK REDUCE
  *************************************************************************/
 
-// Unified core (explicit face_r_dim), shared by the CB-id API and the LLKOperand API (experimental/2_0/).
-template <ReduceDim dim, PackMode pack_mode = PackMode::Default>
-inline void llk_pack_reduce_mask_config_impl(const std::uint32_t face_r_dim) {
-    _llk_pack_reduce_mask_config_<dim, pack_mode>(face_r_dim);
+// Pass the output geometry through one shared LLK mask configuration path.
+// The LLKOperand API (experimental/2_0/) supplies the same geometry from its output TensorShape.
+template <PoolType reduce_type, ReduceDim dim, PackMode pack_mode = PackMode::Default>
+inline void llk_pack_reduce_mask_config_impl(const std::uint32_t face_r_dim, const TileGeometry geometry) {
+    _llk_pack_reduce_mask_config_<reduce_type, dim, pack_mode>(face_r_dim, geometry);
 }
 
-// Use the runtime face_r_dim of the output CB. Required for narrow tiles
-// (e.g. tile_dimensions=[1,32]) where face_r_dim differs from FACE_R_DIM.
-template <ReduceDim dim, PackMode pack_mode = PackMode::Default>
+// Derive the face grid from the output CB's tile dimensions and face height.
+template <PoolType reduce_type, ReduceDim dim, PackMode pack_mode = PackMode::Default>
 inline void llk_pack_reduce_mask_config(std::uint32_t ocb) {
     SAN_HOOK(unsupported());
     const std::uint32_t output_id = get_output_id(ocb);
-    llk_pack_reduce_mask_config_impl<dim, pack_mode>(get_output_face_r_dim(output_id));
+    const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
+    const auto geometry =
+        get_tile_geometry(get_output_tile_r_dim(output_id) / face_r_dim, get_output_tile_c_dim(output_id) / FACE_C_DIM);
+    llk_pack_reduce_mask_config_impl<reduce_type, dim, pack_mode>(face_r_dim, geometry);
 }
 
 inline void llk_pack_reduce_mask_clear() {

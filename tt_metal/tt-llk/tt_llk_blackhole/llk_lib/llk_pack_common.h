@@ -179,37 +179,38 @@ inline void _llk_pack_reconfig_l1_acc_(const std::uint32_t enable)
 }
 
 /**
- * @brief Configure the packer edge-offset masks and tile-row-set mapping for a reduce output.
+ * @brief Configure the packer face, row, and edge masks for a reduce output.
  *
  * Programs PCK_EDGE_OFFSET_SEC0/SEC1 masks and TILE_ROW_SET_MAPPING_1 so that only the reduced
  * datums survive: for row reduce a single column per row, for col reduce only the first row, and for
- * scalar reduce a single datum, with per-packer selection appropriate to the reduce dimension.
+ * scalar reduce a single datum. Default tiled packing selects the row mask per face through
+ * TILE_FACE_SET_MAPPING_0; Blackhole has one packer, so the packer selectors cannot select faces.
  *
+ * @tparam reduce_type: Pool type; MAX selects negative-infinity mode, except BFP outputs retain zero fill.
  * @tparam dim: Reduction dimension, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>
  * @tparam pack_mode: Packing layout, values = <Default/Untilize>
+ * @param face_r_dim: Rows per face.
+ * @param geometry: Output face grid, independent of the height of each face.
+ * @note Untilize retains its existing row-mask configuration; face selection below is for Default only.
  * @note Pairs with @ref _llk_math_reduce_ on the math thread, whose reduced output these masks gate.
  * @note Call @ref _llk_pack_reduce_mask_clear_ to restore the default pass-through masks.
  */
-template <ReduceDim dim, PackMode pack_mode = PackMode::Default>
-inline void _llk_pack_reduce_mask_config_(const std::uint32_t face_r_dim = FACE_R_DIM)
+template <PoolType reduce_type, ReduceDim dim, PackMode pack_mode = PackMode::Default>
+inline void _llk_pack_reduce_mask_config_(const std::uint32_t face_r_dim = FACE_R_DIM, const TileGeometry geometry = TileGeometry::Faces2x2)
 {
     ckernel::packer::pck_edge_offset_u pack_edge_offset = {.val = 0};
 
-    // We initialize PCK_EDGE_OFFSET_SEC0 mask to clear out all the datums in the row
+    // PCK_EDGE_OFFSET_SEC0 masks every datum in the row with the selected fill value.
     pack_edge_offset.f.mask             = 0x0;
     std::uint32_t row_set_mapping_1     = 0;
     std::uint32_t edge_offset_sec1_mask = 0;
 
+    // The direct selector is used when face lookup is disabled (Untilize).
+    pack_edge_offset.f.tile_row_set_select_pack0 = 1;
+
     if constexpr (dim == ReduceDim::REDUCE_ROW)
     {
-        // All packers use TILE_ROW_SET_MAPPING_1 to support both narrow tiles (packers 0,1)
-        // and wide tiles (packers 0,2)
-        pack_edge_offset.f.tile_row_set_select_pack0 = 1;
-        pack_edge_offset.f.tile_row_set_select_pack1 = 1;
-        pack_edge_offset.f.tile_row_set_select_pack2 = 1;
-        pack_edge_offset.f.tile_row_set_select_pack3 = 1;
-
-        // PCK_EDGE_OFFSET_SEC1 mask will clear out all the datums in the row except the first one
+        // PCK_EDGE_OFFSET_SEC1 masks every datum in the row except the first one
         edge_offset_sec1_mask = 0x0001;
         if constexpr (pack_mode == PackMode::Untilize)
         {
@@ -226,11 +227,6 @@ inline void _llk_pack_reduce_mask_config_(const std::uint32_t face_r_dim = FACE_
         // PCK_EDGE_OFFSET_SEC1 mask will pass through all the datums in the row as they are
         edge_offset_sec1_mask = 0xffff;
 
-        // Packer 0 and 1 will use TILE_ROW_SET_MAPPING_1, while packer 2 and 3 will keep using
-        // TILE_ROW_SET_MAPPING_0 configuration which is the default one
-        pack_edge_offset.f.tile_row_set_select_pack0 = 1;
-        pack_edge_offset.f.tile_row_set_select_pack1 = 1;
-
         if constexpr (pack_mode == PackMode::Untilize)
         {
             row_set_mapping_1 = 0x00000005; // each packer packs 1x32 row
@@ -243,12 +239,8 @@ inline void _llk_pack_reduce_mask_config_(const std::uint32_t face_r_dim = FACE_
     }
     else if constexpr (dim == ReduceDim::REDUCE_SCALAR)
     {
-        // PCK_EDGE_OFFSET_SEC1 mask will clear out all the datums in the row except the first one
+        // PCK_EDGE_OFFSET_SEC1 masks every datum in the row except the first one
         edge_offset_sec1_mask = 0x0001;
-        // Packer 0  will use TILE_ROW_SET_MAPPING_1, while packers 1,2 and 3 will keep using
-        // TILE_ROW_SET_MAPPING_0 configuration which is the default one
-        pack_edge_offset.f.tile_row_set_select_pack0 = 1;
-
         // TILE_ROW_SET_MAPPING_1 configuration sets only first row to use PCK_EDGE_OFFSET_SEC1 mask
         row_set_mapping_1 = 0x00000001;
     }
@@ -270,6 +262,61 @@ inline void _llk_pack_reduce_mask_config_(const std::uint32_t face_r_dim = FACE_
     TTI_WRCFG(p_gpr_pack::TMP_LO, p_cfg::WRCFG_32b, PCK_EDGE_OFFSET_SEC1_mask_ADDR32);
     TTI_WRCFG(p_gpr_pack::TMP1, p_cfg::WRCFG_32b, TILE_ROW_SET_MAPPING_1_row_set_mapping_0_ADDR32);
 
+    if constexpr (reduce_type == PoolType::MAX)
+    {
+        // Masked infinities can overwrite the shared BFP exponent and zero the valid result.
+        const std::uint32_t output_format =
+            (cfg_read(THCON_SEC0_REG1_Out_data_format_ADDR32) & THCON_SEC0_REG1_Out_data_format_MASK) >> THCON_SEC0_REG1_Out_data_format_SHAMT;
+        cfg_reg_rmw_tensix<PCK_EDGE_MODE_mode_RMW>(!IS_BFP_FORMAT(output_format));
+    }
+
+    if constexpr (pack_mode == PackMode::Default)
+    {
+        // The constants repeat 2-bit row-table selectors across all 16 face-table entries:
+        // 0x55555555 = [1], 0x11111111 = [1,0], 0x05050505 = [1,1,0,0], 0x01010101 = [1,0,0,0].
+        // Row-table 1 applies the reduction mask; row-table 0 masks the entire face.
+        const std::uint32_t face_set_mapping = [geometry]
+        {
+            static_assert(dim == ReduceDim::REDUCE_ROW || dim == ReduceDim::REDUCE_COL || dim == ReduceDim::REDUCE_SCALAR, "Invalid reduction dimension");
+            if (geometry == TileGeometry::Faces1x1)
+            {
+                return 0x55555555;
+            }
+            else if (geometry == TileGeometry::Faces1x2)
+            {
+                return dim == ReduceDim::REDUCE_COL ? 0x55555555 : 0x11111111;
+            }
+            else if (geometry == TileGeometry::Faces2x1)
+            {
+                return dim == ReduceDim::REDUCE_ROW ? 0x55555555 : 0x11111111;
+            }
+            else
+            {
+                LLK_ASSERT(geometry == TileGeometry::Faces2x2, "Invalid tile geometry");
+                if constexpr (dim == ReduceDim::REDUCE_ROW)
+                {
+                    return 0x11111111;
+                }
+                else if constexpr (dim == ReduceDim::REDUCE_COL)
+                {
+                    return 0x05050505;
+                }
+                else
+                {
+                    return 0x01010101;
+                }
+            }
+        }();
+        TTI_WRCFG(p_gpr::ZERO, p_cfg::WRCFG_32b, TILE_ROW_SET_MAPPING_0_row_set_mapping_0_ADDR32);
+        cfg_reg_rmw_tensix<TILE_FACE_SET_MAPPING_0_face_set_mapping_0_ADDR32, 0, 0xffffffff>(face_set_mapping);
+        // Select face table 0 for packer 0 and enable the face -> row -> column-mask lookup.
+        cfg_reg_rmw_tensix<PCK_EDGE_TILE_FACE_SET_SELECT_select_ADDR32, 0, 0x1ff>(0x100);
+    }
+    else
+    {
+        cfg_reg_rmw_tensix<PCK_EDGE_TILE_FACE_SET_SELECT_enable_RMW>(0);
+    }
+
     TTI_NOP;
     TTI_NOP;
 }
@@ -277,8 +324,8 @@ inline void _llk_pack_reduce_mask_config_(const std::uint32_t face_r_dim = FACE_
 /**
  * @brief Restore the default packer edge masks and tile-row-set mapping after a reduce.
  *
- * Resets the edge-offset masks to pass-through and points all tile-row-set mappings back to
- * PCK_EDGE_OFFSET_SEC0, undoing @ref _llk_pack_reduce_mask_config_.
+ * Disables face selection, resets the edge-offset masks to pass-through, and points the active
+ * tile-row-set mappings back to PCK_EDGE_OFFSET_SEC0, undoing @ref _llk_pack_reduce_mask_config_.
  *
  * @note Pairs with @ref _llk_pack_reduce_mask_config_.
  */
@@ -297,6 +344,7 @@ inline void _llk_pack_reduce_mask_clear_()
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK);
 
     cfg_reg_rmw_tensix<PACK_COUNTERS_SEC0_pack_reads_per_xy_plane_RMW>(1);
+    cfg_reg_rmw_tensix<PCK_EDGE_TILE_FACE_SET_SELECT_enable_RMW>(0);
 
     // Clear out packer configuration for reduce
     TTI_WRCFG(p_gpr_pack::TMP0, p_cfg::WRCFG_32b, PCK_EDGE_OFFSET_SEC0_mask_ADDR32);

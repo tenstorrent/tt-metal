@@ -4441,11 +4441,38 @@ class ReduceGolden:
         # Convert back to target data format at the end (same as eltwise output path)
         return self._quantize_reduce_output(accumulated, data_format)
 
-    def _make_tile_result(self, data_format, tile_shape):
-        """Create a zero-filled tile result in a dtype wide enough to avoid integer overflow."""
+    @staticmethod
+    def padding_value(pool_type, data_format):
+        if pool_type != ReducePool.Max:
+            return 0
+        if data_format in {
+            DataFormat.Bfp8,
+            DataFormat.Bfp8_b,
+            DataFormat.Bfp4_b,
+            DataFormat.Bfp2_b,
+        }:
+            # Keep zero fill for shared-exponent formats so masked infinities
+            # cannot change the exponent used by the valid reduction result.
+            return 0
+        if data_format.is_integer():
+            # The LLK harness decodes signed integer output as sign-magnitude.
+            bits = int(data_format.byte_size * 8)
+            return (
+                (1 << bits) - 1
+                if str(data_format).startswith("U")
+                else -((1 << (bits - 1)) - 1)
+            )
+        return float("-inf")
+
+    def _make_tile_result(self, data_format, tile_shape, pool_type):
+        """Create a tile with the packer's fill value in a dtype wide enough for integer results."""
         torch_format = format_dict[data_format]
         dtype = torch.int64 if data_format.is_integer() else torch_format
-        return torch.zeros(tile_shape.total_tile_size(), dtype=dtype)
+        return torch.full(
+            (tile_shape.total_tile_size(),),
+            self.padding_value(pool_type, data_format),
+            dtype=dtype,
+        )
 
     def _process_tile(
         self, operand, reduce_dim, pool_type, data_format, tile_idx, tile_shape
@@ -4462,7 +4489,7 @@ class ReduceGolden:
         return self.dim_handlers[reduce_dim](faces, pool_type, data_format, tile_shape)
 
     def _reduce_column(self, faces, pool_type, data_format, tile_shape):
-        result = self._make_tile_result(data_format, tile_shape)
+        result = self._make_tile_result(data_format, tile_shape, pool_type)
 
         # For each column of faces, concatenate vertically and pool along rows
         for col_idx in range(tile_shape.num_faces_c_dim):
@@ -4484,7 +4511,7 @@ class ReduceGolden:
         return result
 
     def _reduce_row(self, faces, pool_type, data_format, tile_shape):
-        result = self._make_tile_result(data_format, tile_shape)
+        result = self._make_tile_result(data_format, tile_shape, pool_type)
 
         # For each row of faces, concatenate horizontally and pool along columns
         for row_idx in range(tile_shape.num_faces_r_dim):
@@ -4513,7 +4540,7 @@ class ReduceGolden:
         return result
 
     def _reduce_scalar(self, faces, pool_type, data_format, tile_shape):
-        result = self._make_tile_result(data_format, tile_shape)
+        result = self._make_tile_result(data_format, tile_shape, pool_type)
         result[0] = self._apply_pooling(faces.flatten(), pool_type, dim=0)
         return result
 
@@ -4536,7 +4563,9 @@ class ReduceBlockMaxRowGolden:
     # both cases (only the row count shrinks for tiny tiles), so the reduce span is ct_dim * 32.
     def __call__(self, operand, ct_dim, data_format, dimensions):
         operand = operand.reshape(dimensions)
-        output = torch.zeros(dimensions)
+        output = torch.full(
+            dimensions, ReduceGolden.padding_value(ReducePool.Max, data_format)
+        )
         reduce_width = min(ct_dim * 32, dimensions[1])
         for i in range(dimensions[0]):
             output[i, 0] = torch.max(operand[i, :reduce_width])
