@@ -58,8 +58,9 @@ one-directional loss.
 
 ## 3. The per-row cosine tolerance does not hold on real data
 
-`IMPLEMENTATION_PLAN.md` records a 0.01 bound on `1 - cosine` between the port's pooled
-embedding and the reference's, established by sweeping 8 seeds over 4 shapes of random ids.
+[`tests/pcc/test_ttnn_model.py`](../tests/pcc/test_ttnn_model.py) gates the port on
+`COSINE_TOLERANCE = 0.01`, a per-row bound on `1 - cosine` between the port's pooled embedding
+and the reference's, asserted on random token ids over a handful of shapes and seeds.
 
 **Every one of the 13 splits exceeds it on its worst row.** The worst overall is 1.50e-01, 15x
 the bound. The means do not: they run 8.0e-04 to 3.9e-03, inside it everywhere.
@@ -68,17 +69,18 @@ So it is a tail, not a shift, and the nDCG column shows it costs nothing: the sp
 worst tail (xquad-hi, 1.50e-01) loses 0.0011 nDCG, while the split with the largest nDCG loss
 (scifact, -0.0042) has a milder tail than four others. Rows drift without reordering results.
 
-This is what moving from 64 draws to 22562 real texts does to an extreme value, not a
-regression. A fixed per-row 0.01 assert would fail immediately on this data and should not be
-used as a merge gate. Gate on the mean or a high quantile together with the nDCG delta, and
-report the worst case rather than asserting it. This run captured only mean and max, so a
-quantile has to be measured before a number can be set.
+That test's own docstring puts `1 - cosine` at 9.1e-05 to 7.6e-03 on the inputs it uses. Those
+are tens of rows; this is 22562. Widening the sample moves the extreme, which is what happened
+here, not a regression. A fixed per-row 0.01 assert would fail immediately on this data and
+should not be used as a merge gate for it. Gate on the mean or a high quantile together with the
+nDCG delta, and report the worst case rather than asserting it. This run captured only mean and
+max, so a quantile has to be measured before a number can be set.
 
 ## 4. Short sequences are not the worst case here
 
-The same plan records short sequences as the weak case, on the argument that one rerouted token
-carries 1.4% of a 74-token pooled mean against 0.1% at 512. Aggregated by text length across all
-13 splits, real data does not order that way:
+The [README](../README.md) records short sequences as the weak case, on the argument that one
+rerouted token is a larger share of the pooled mean: 1/74 at `2x37` against 1/1024 at `2x512`.
+Aggregated by text length across all 13 splits, real data does not order that way:
 
 | tokens | n | worst 1-cos |
 |---|---|---|
@@ -92,15 +94,15 @@ carries 1.4% of a 74-token pooled mean against 0.1% at 512. Aggregated by text l
 The shortest bucket holds under 0.01 across 14138 texts, the 33-64 bucket is the worst at
 1.50e-01 across 413, and the fully packed 512-token sequences are the best behaved of all.
 
-The two measurements are not identical: the plan's figure is a per-shape pooled cosine over
-random-id draws at a fixed `B x S`, this is per-text over real inputs batched by length. But the
-recorded ordering should not be relied on for real text as written, and the fully packed case
-being cleanest suggests the tail tracks padding and batch composition rather than length.
+The two measurements are not identical: that figure is a per-shape pooled cosine over random-id
+draws at a fixed `B x S`, this is per-text over real inputs batched by length. But the recorded
+ordering should not be relied on for real text as written, and the fully packed case being
+cleanest suggests the tail tracks padding and batch composition rather than length.
 
 ## 5. Reproducing
 
-The harness for this run was a scratch script and is not in the repo, so these numbers cannot
-be regenerated from a checkout. What it did:
+These numbers come from a standalone harness rather than from the test suite, since none of them
+are asserted. The procedure:
 
 - load the configs above through `datasets`, with `{lang}-corpus`, `{lang}-queries` and
   `{lang}-qrels` for XQuAD (split `validation`) and `corpus`, `queries`, `default` for SciFact

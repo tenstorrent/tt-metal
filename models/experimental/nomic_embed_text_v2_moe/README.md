@@ -123,8 +123,8 @@ negative controls for the ways an operator can be wrong without failing.
 
 [`docs/DATASET_ACCURACY.md`](docs/DATASET_ACCURACY.md) reports retrieval accuracy against the
 reference on SciFact and XQuADRetrieval, 12 languages and 45124 encodes, where the test suite
-uses random token ids. It also records where the plan's per-row cosine bound and its
-short-sequence expectation fail to hold on real text.
+uses random token ids. It also records where the per-row cosine bound asserted by the test
+suite, and the short-sequence expectation stated below, fail to hold on real text.
 
 All three are hand-written, and every number in them was measured.
 

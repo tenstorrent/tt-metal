@@ -68,15 +68,15 @@ MODEL_PCC = 0.98
 
 # Per-row cosine between the TTNN embedding and the reference embedding, as 1 - cosine.
 #
-# The plan set this at 0.005 before it had been measured across inputs, and 0.005 does not hold:
-# swept over seeds 0..7 at 1x128, 2x64, 2x37 and 2x512, padded and not, the worst case is 7.57e-03
+# 0.005 was the first candidate, chosen before this had been measured across inputs, and it does
+# not hold: swept over seeds 0..7 at 1x128, 2x64, 2x37 and 2x512, padded and not, the worst is 7.57e-03
 # and six of those 64 draws exceed 0.005. The failure is concentrated at short sequences, and the
 # mechanism is the routing one: with 74 tokens at 2x37, one badly-rerouted token carries 1.4% of
 # the pooled mean, where at 2x512 it carries 0.1%. Measured envelope, worst per shape:
 # 2.2e-03 at 1x128, 4.1e-03 at 2x512, 7.3e-03 at 2x64, 7.6e-03 at 2x37.
 #
-# So this is 0.01, which covers the measured envelope with about 30% to spare. That is a looser
-# number than the plan's and it is recorded as such rather than quietly adopted; the alternative
+# So this is 0.01, which covers the measured envelope with about 30% to spare. That is looser
+# than the 0.005 first proposed, and it is recorded as such rather than quietly adopted; the alternative
 # is to treat the short-sequence sensitivity as a defect and spend precision on it, which is a
 # Phase 2 dtype decision. The tests below sweep seeds so this gate is exercised against the
 # distribution rather than against one lucky draw.
@@ -299,7 +299,7 @@ def test_real_short_texts(reference_model, tt_model, tokenizer):
     ids they get bad: 1 - cosine reaches 2.1e-02 at 8 random tokens. Real text of that length does
     not, because uniform draws from a 250k vocabulary are semantically meaningless and sit near a
     routing tie more often than language does. Measured over these twelve texts at 7 to 24 tokens,
-    the worst 1 - cosine is 4.0e-03, inside even the plan's original 0.005.
+    the worst 1 - cosine is 4.0e-03, inside even the 0.005 first proposed for COSINE_TOLERANCE.
 
     This matters because short queries are normal for an embedding model, so the suite should hold
     the real case tightly rather than only the synthetic one loosely.
