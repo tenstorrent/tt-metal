@@ -57,7 +57,7 @@ _FLASH_CASES = [
     pytest.param(3, "heavily_compressed_attention", "moe", id="L3-hca-topk"),
 ]
 
-_BLOCK_PCC = 0.99
+_BLOCK_PCC = 0.995
 _CACHE_PCC = 0.999
 
 

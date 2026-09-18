@@ -39,14 +39,12 @@ _COMPRESS_RATIOS = {
 # One row per (variant, floor, layer, attention, MoE) the device can build.
 # TODO add a CSA row per variant once CSA has a device implementation: layers 2, 4, 6 ... are CSA in
 # both models, so that kind is entirely ungraded today.
+# Pro's floor is the lower one: 128 heads and a 7168-wide hidden make every bf16 reduction longer.
 _CASES = [
-    pytest.param(DeepSeekV4ProConfig, 0.985, 0, "heavily_compressed_attention", "hash_moe", id="pro-L0-hca-hash"),
-    # On random weights the router's expert scores come out nearly equal, so a tiny numeric
-    # difference picks a different expert and that token's output changes completely. This row
-    # mostly measures how often that pick flips -- hence the low floor.
-    pytest.param(DeepSeekV4ProConfig, 0.955, 3, "heavily_compressed_attention", "moe", id="pro-L3-hca-topk"),
+    pytest.param(DeepSeekV4ProConfig, 0.98, 0, "heavily_compressed_attention", "hash_moe", id="pro-L0-hca-hash"),
+    pytest.param(DeepSeekV4ProConfig, 0.98, 3, "heavily_compressed_attention", "moe", id="pro-L3-hca-topk"),
     pytest.param(DeepSeekV4FlashConfig, 0.99, 0, "sliding_attention", "hash_moe", id="flash-L0-swa-hash"),
-    pytest.param(DeepSeekV4FlashConfig, 0.98, 3, "heavily_compressed_attention", "moe", id="flash-L3-hca-topk"),
+    pytest.param(DeepSeekV4FlashConfig, 0.99, 3, "heavily_compressed_attention", "moe", id="flash-L3-hca-topk"),
 ]
 _SEED = 42
 
