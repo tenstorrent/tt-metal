@@ -3713,6 +3713,10 @@ class EltwiseBinaryGolden(FidelityMasking):
         wide = self._wide_dtype(t1)
         return (t1.to(wide) * t2.to(wide)).to(t1.dtype)
 
+    def _copy_dest(self, t1, t2):
+        # Dest-to-Dest copy of the first operand; the second is unused.
+        return t1
+
     def _div(self, t1, t2):
         # Compute in float32 to match the SFPU divide path, with the final cast modelling the
         # rounding on store to Dest. IEEE 754 division already produces the special-case
@@ -3774,6 +3778,7 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
                 MathOperation.SfpuRsubInt32: self._rsub_int32,
                 MathOperation.SfpuMask: self._mask,
                 MathOperation.SfpuAtan2: self._atan2,
+                MathOperation.SfpuCopyDest: self._copy_dest,
                 MathOperation.SfpuMulInt32: self._mul_int32,
                 MathOperation.SfpuIsclose: self._isclose,
                 MathOperation.SfpuLogsigmoid: self._logsigmoid,
