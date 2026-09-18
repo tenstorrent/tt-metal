@@ -445,14 +445,24 @@ def test_metal2_scratchpads_reach_resource_usage_per_core():
 # op produces: kernel scratchpads only appear in Quasar factories today.
 
 
-def _l1_node(counter, node_type, size, **params):
-    all_params = {"size": str(size), "address": "0", "core_range_set": "{[0-0 - 0-0]}", "device_id": "0"}
+def _core_range_set(*ranges):
+    """JSON form of a CoreRangeSet as the graph processor emits it: [{start: {x, y}, end: {x, y}}, ...]."""
+    return [{"start": {"x": x0, "y": y0}, "end": {"x": x1, "y": y1}} for (x0, y0, x1, y1) in ranges]
+
+
+def _l1_node(counter, node_type, size, cores=None, **params):
+    all_params = {
+        "size": str(size),
+        "address": "0",
+        "core_range_set": _core_range_set(*(cores or [(0, 0, 0, 0)])),
+        "device_id": "0",
+    }
     all_params.update({key: str(value) for key, value in params.items()})
     return {"counter": counter, "node_type": node_type, "params": all_params, "connections": []}
 
 
-def _cb(counter, size):
-    return _l1_node(counter, "circular_buffer_allocate", size, globally_allocated=0)
+def _cb(counter, size, cores=None):
+    return _l1_node(counter, "circular_buffer_allocate", size, cores=cores, globally_allocated=0)
 
 
 def _dfb(counter, size, borrows_memory=0):
@@ -528,3 +538,18 @@ def test_extract_resource_usage_per_core_deprecated_kwarg():
     assert legacy.peak_cb == baseline.peak_cb
     assert legacy.peak_l1 == baseline.peak_l1
     assert legacy.peak_total == baseline.peak_total
+
+
+def test_peak_total_is_per_core_across_disjoint_core_sets():
+    """CBs on disjoint core sets share L1 addresses; peak_total is the busiest core, not the global sum."""
+    trace = [
+        _cb(0, 1024, cores=[(0, 0, 0, 0), (3, 0, 3, 0)]),  # cores x=0 and x=3
+        _cb(1, 2048, cores=[(1, 0, 2, 0)]),  # cores x=1..2
+        _cb(2, 512, cores=[(0, 0, 3, 0)]),  # all four cores
+    ]
+
+    usage = ttnn.graph.extract_resource_usage_per_core(trace)
+
+    # busiest core holds the 2048 CB and the shared 512 CB; the 1024 CB never shares a core with the 2048 one
+    assert usage.peak_cb == 2048 + 512
+    assert usage.peak_total == 2048 + 512

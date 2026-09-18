@@ -4,11 +4,15 @@
 
 #include "ttnn/graph/graph_trace_utils.hpp"
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdlib>  // std::strtoul
+#include <map>
 #include <string>
 
 #include <nlohmann/json.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt_stl/reflection.hpp>
 
 #include "ttnn/graph/graph_consts.hpp"
 #include "ttnn/graph/graph_processor.hpp"
@@ -306,12 +310,47 @@ uint32_t extract_peak_memory_usage(const nlohmann::json& trace) {
 }
 
 PeakMemoryUsagePerCore extract_resource_usage_per_core(const nlohmann::json& trace) {
-    size_t current_cb = 0, peak_cb = 0;
-    size_t current_l1 = 0, peak_l1 = 0;
-    // Program-scope L1 of a Metal 2.0 program, tracked per kind. Released together with the CBs.
-    size_t current_dfb = 0, peak_dfb = 0;
-    size_t current_scratchpad = 0, peak_scratchpad = 0;
-    size_t current_total = 0, peak_total = 0;
+    // Program-scope L1 (CBs, dataflow buffers, scratchpads) is placed per core: each allocation names the
+    // exact cores it occupies (core_range_set), and allocations on disjoint core sets share addresses.
+    // Summing them program-wide over-counts, so every kind is tracked per core and each peak is the
+    // busiest core's total. L1 tensor buffers are different: the L1 allocator is lockstep across all
+    // banks, so a buffer's per-bank size is reserved on every core regardless of which cores hold its
+    // shards. They are summed globally and form a base resident on every core.
+    struct ProgramL1 {
+        size_t cb = 0;
+        size_t dfb = 0;
+        size_t scratchpad = 0;
+        size_t total() const { return cb + dfb + scratchpad; }
+    };
+    std::map<tt::tt_metal::CoreCoord, ProgramL1> per_core;
+    size_t current_l1 = 0;
+
+    size_t peak_cb = 0, peak_dfb = 0, peak_scratchpad = 0, peak_l1 = 0, peak_total = 0;
+
+    auto add_program_l1 = [&](const nlohmann::json& node, size_t ProgramL1::* kind) {
+        const size_t alloc_size = json_to_int(node.at(kParams).at(kSize));
+        const auto core_range_set =
+            ttsl::json::from_json<tt::tt_metal::CoreRangeSet>(node.at(kParams).at(kCoreRangeSet));
+        for (const auto& range : core_range_set.ranges()) {
+            for (const auto& core : range) {
+                per_core[core].*kind += alloc_size;
+            }
+        }
+    };
+    auto update_peaks = [&]() {
+        size_t max_cb = 0, max_dfb = 0, max_scratchpad = 0, max_program = 0;
+        for (const auto& [core, l1] : per_core) {
+            max_cb = std::max(max_cb, l1.cb);
+            max_dfb = std::max(max_dfb, l1.dfb);
+            max_scratchpad = std::max(max_scratchpad, l1.scratchpad);
+            max_program = std::max(max_program, l1.total());
+        }
+        peak_cb = std::max(peak_cb, max_cb);
+        peak_dfb = std::max(peak_dfb, max_dfb);
+        peak_scratchpad = std::max(peak_scratchpad, max_scratchpad);
+        peak_l1 = std::max(peak_l1, current_l1);
+        peak_total = std::max(peak_total, current_l1 + max_program);
+    };
 
     size_t counter_expected = 0;
     for (const auto& node : trace) {
@@ -323,35 +362,23 @@ PeakMemoryUsagePerCore extract_resource_usage_per_core(const nlohmann::json& tra
         }
 
         if (node.at(kNodeType) == kNodeCBAllocate) {
-            bool is_globally_allocated = json_to_int(node.at(kParams).at(kGloballyAllocated)) == 1;
-            if (!is_globally_allocated) {
-                uint32_t alloc_size = json_to_int(node.at(kParams).at(kSize));
-                current_cb += alloc_size;
-                peak_cb = std::max(peak_cb, current_cb);
-                current_total += alloc_size;
-                peak_total = std::max(peak_total, current_total);
+            // A globally allocated CB is a view onto a tensor's L1, which the tensor already reports.
+            if (json_to_int(node.at(kParams).at(kGloballyAllocated)) != 1) {
+                add_program_l1(node, &ProgramL1::cb);
+                update_peaks();
             }
         } else if (node.at(kNodeType) == kNodeDataflowBufferAllocate) {
             // A borrowed buffer is a view onto a tensor's L1, which the tensor already reports.
-            bool borrows_memory = json_to_int(node.at(kParams).at(kBorrowsMemory)) == 1;
-            if (!borrows_memory) {
-                uint32_t alloc_size = json_to_int(node.at(kParams).at(kSize));
-                current_dfb += alloc_size;
-                peak_dfb = std::max(peak_dfb, current_dfb);
-                current_total += alloc_size;
-                peak_total = std::max(peak_total, current_total);
+            if (json_to_int(node.at(kParams).at(kBorrowsMemory)) != 1) {
+                add_program_l1(node, &ProgramL1::dfb);
+                update_peaks();
             }
         } else if (node.at(kNodeType) == kNodeScratchpadAllocate) {
-            uint32_t alloc_size = json_to_int(node.at(kParams).at(kSize));
-            current_scratchpad += alloc_size;
-            peak_scratchpad = std::max(peak_scratchpad, current_scratchpad);
-            current_total += alloc_size;
-            peak_total = std::max(peak_total, current_total);
+            add_program_l1(node, &ProgramL1::scratchpad);
+            update_peaks();
         } else if (node.at(kNodeType) == kNodeCBDeallocateAll) {
-            current_total -= current_cb + current_dfb + current_scratchpad;
-            current_cb = 0;
-            current_dfb = 0;
-            current_scratchpad = 0;
+            // Program-scope L1 of every kind is released together.
+            per_core.clear();
         } else if (node.at(kNodeType) == kNodeBufferAllocate || node.at(kNodeType) == kNodeBufferDeallocate) {
             if (node.at(kParams).at(kType) == "DRAM") {
                 continue;
@@ -359,12 +386,9 @@ PeakMemoryUsagePerCore extract_resource_usage_per_core(const nlohmann::json& tra
             size_t alloc_size = calculate_buffer_allocation_size(node);
             if (node.at(kNodeType) == kNodeBufferAllocate) {
                 current_l1 += alloc_size;
-                peak_l1 = std::max(peak_l1, current_l1);
-                current_total += alloc_size;
-                peak_total = std::max(peak_total, current_total);
+                update_peaks();
             } else {  // kNodeBufferDeallocate
                 current_l1 -= alloc_size;
-                current_total -= alloc_size;
             }
         }
     }
