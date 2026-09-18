@@ -1193,7 +1193,8 @@ Tensor bias_gelu(
     ttsl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
     ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
     const std::optional<CoreRangeSet>& sub_core_grids,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    const std::optional<bool>& fast_and_approximate_mode) {
     return ttnn::detail::invoke_binary_ng(
         input_tensor_a_arg,
         input_tensor_b_arg,
@@ -1204,7 +1205,7 @@ Tensor bias_gelu(
         post_activations,
         lhs_activations,
         rhs_activations,
-        /*fast_and_approximate_mode=*/std::nullopt,
+        fast_and_approximate_mode.value_or(false),
         sub_core_grids,
         sub_device_id);
 }
@@ -1219,7 +1220,8 @@ Tensor bias_gelu(
     ttsl::Span<const unary::EltwiseUnaryWithParam> /*lhs_activations*/,
     ttsl::Span<const unary::EltwiseUnaryWithParam> /*rhs_activations*/,
     const std::optional<CoreRangeSet>& sub_core_grids,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    const std::optional<bool>& fast_and_approximate_mode) {
     // Resolve sub_device_id to sub_core_grids so both add and gelu use the same core restriction
     auto resolved_sub_core_grids = sub_core_grids;
     if (sub_device_id.has_value()) {
@@ -1251,7 +1253,7 @@ Tensor bias_gelu(
             {},
             /*fast_and_approximate_mode*/ std::nullopt,
             resolved_sub_core_grids),
-        true,
+        fast_and_approximate_mode.value_or(false),
         memory_config,
         gelu_output,
         resolved_sub_core_grids);

@@ -916,6 +916,11 @@ ttnn::operations::experimental::quasar::binary_ng::BinaryNgDeviceOperation::tens
         input_tensor_b.layout(),
         output_layout};
 
+    if (binary_op_type == ttnn::operations::experimental::quasar::binary_ng::BinaryOpType::BIAS_GELU) {
+        operation_attributes.op_params = ttnn::operations::experimental::quasar::binary::BiasGeluParams{
+            .fast_and_approximate = fast_and_approximate_mode.value_or(false)};
+    }
+
     auto tensor_args = OperationType::tensor_args_t{input_tensor_a, input_tensor_b, output_tensor};
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
@@ -990,6 +995,11 @@ ttnn::operations::experimental::quasar::binary_ng::BinaryNgDeviceOperation::tens
         input_tensor_a.layout(),
         Layout::INVALID,
         output_layout};
+
+    if (binary_op_type == ttnn::operations::experimental::quasar::binary_ng::BinaryOpType::BIAS_GELU) {
+        operation_attributes.op_params = ttnn::operations::experimental::quasar::binary::BiasGeluParams{
+            .fast_and_approximate = fast_and_approximate_mode.value_or(false)};
+    }
 
     auto tensor_args = OperationType::tensor_args_t{input_tensor_a, std::nullopt, output_tensor};
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
