@@ -44,6 +44,9 @@ _PRESETS_WH: dict[tuple[int, ...], dict] = {
 
 _PRESETS_BH: dict[tuple[int, ...], dict] = {
     (1, 2): {"sp": (1, 0), "tp": (2, 1), "encoder_tp": (2, 1), "vae_tp": (2, 1), "num_links": 2},
+    # 1x4 linear Blackhole (e.g. P150X4 / a single QB2 as 4 chips). Tensor-parallel across all 4 cards;
+    # validated end-to-end (FLUX.1-schnell, 1024x1024, 4-step).
+    (1, 4): {"sp": (1, 0), "tp": (4, 1), "encoder_tp": (4, 1), "vae_tp": (4, 1), "num_links": 2},
     (2, 2): {"sp": (2, 0), "tp": (2, 1), "encoder_tp": (2, 1), "vae_tp": (2, 1), "num_links": 2},
     (2, 4): {"sp": (2, 0), "tp": (4, 1), "encoder_tp": (4, 1), "vae_tp": (4, 1), "num_links": 2},
 }
