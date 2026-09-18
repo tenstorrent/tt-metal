@@ -60,6 +60,14 @@ FORCE_INLINE void read_and_publish_value_slice(
     buffer.push_back(rows * Vt);
 }
 
+template <uint32_t Tiles>
+FORCE_INLINE void seed_zero(DataflowBuffer& state, Noc& noc) {
+    state.reserve_back(Tiles);
+    noc.async_write_zeros(state, Tiles * state.get_entry_size());
+    noc.write_zeros_l1_barrier();
+    state.push_back(Tiles);
+}
+
 template <uint32_t Kt, uint32_t Vt>
 FORCE_INLINE void seed_identity(DataflowBuffer& buffer, Noc& noc, uint32_t value_block) {
     constexpr uint32_t one_fp32 = __builtin_bit_cast(uint32_t, 1.0F);
@@ -115,7 +123,6 @@ TT_KERNEL void reader(uint32_t head, uint32_t value_block, uint32_t num_chunks) 
     DataflowBuffer k_decay_transposed(dfb::k_decay_transposed);
     DataflowBuffer final_decay(dfb::final_decay);
     DataflowBuffer tail_state(dfb::tail_state);
-    DataflowBuffer wrap_mask(dfb::wrap_mask);
     Noc noc;
 
     uint32_t reset_chunk = 0;
@@ -145,10 +152,7 @@ TT_KERNEL void reader(uint32_t head, uint32_t value_block, uint32_t num_chunks) 
     constexpr uint32_t key_value_tiles = Kt * Vt;
 
     if constexpr (summary) {
-        state.reserve_back(key_value_tiles);
-        noc.async_write_zeros(state, key_value_tiles * state.get_entry_size());
-        noc.write_zeros_l1_barrier();
-        state.push_back(key_value_tiles);
+        seed_zero<key_value_tiles>(state, noc);
         seed_identity<Kt, Vt>(summary_seed, noc, value_block);
 
     } else {
@@ -166,32 +170,14 @@ TT_KERNEL void reader(uint32_t head, uint32_t value_block, uint32_t num_chunks) 
         // whenever it is non-zero, so chunk 0 has always been consumed by now.
         if constexpr (summary && dynamic_chronology) {
             if (reset_chunk != 0 && chunk == reset_chunk) {
-                // Reset the split rank's summary before the tail fragment.
-                wrap_mask.reserve_back(1);
-                noc.async_write_zeros(wrap_mask, wrap_mask.get_entry_size());
-                noc.write_zeros_l1_barrier();
-
-                wrap_mask.push_back(1);
-                seed_identity<Kt, Vt>(tail_state, noc, value_block);
+                seed_zero<key_value_tiles>(state, noc);
+                seed_identity<Kt, Vt>(summary_seed, noc, value_block);
             }
         } else if constexpr (!summary) {
             if (reset_chunk != 0 && chunk == reset_chunk) {
-                wrap_mask.reserve_back(1);
-                noc.async_write_zeros(wrap_mask, wrap_mask.get_entry_size());
-                noc.write_zeros_l1_barrier();
-
-                {
-                    constexpr uint32_t one_fp32 = __builtin_bit_cast(uint32_t, 1.0F);
-                    auto mask_lock = wrap_mask.scoped_write_lock(1);
-                    auto mask = mask_lock.get_ptr<volatile uint32_t>();
-                    for (uint32_t word = 0; word < tt::constants::TILE_HW; ++word) {
-                        mask[word] = one_fp32;
-                    }
-                    const auto tail_state_accessor = TensorAccessor(tensor::tail_state);
-                    read_and_publish_value_slice<Vt, Vt_full>(
-                        tail_state_accessor, tail_state, noc, (head / groups_per_head) * Kt * Vt_full, Kt, value_block);
-                }
-                wrap_mask.push_back(1);
+                const auto tail_state_accessor = TensorAccessor(tensor::tail_state);
+                read_and_publish_value_slice<Vt, Vt_full>(
+                    tail_state_accessor, tail_state, noc, (head / groups_per_head) * Kt * Vt_full, Kt, value_block);
             }
         }
         if constexpr (summary) {

@@ -175,7 +175,7 @@ def test_summarize_chunk_recurrence_contract_trace_and_semantics(
         lambda: run_summary(inputs),
         expected,
         names=("affine_a", "affine_b"),
-        dtypes=(ttnn.float32, ttnn.float32),
+        dtypes=(ttnn.bfloat16, ttnn.bfloat16),
         shapes=((batch_heads, dim, dim), (batch_heads, dim, dim)),
     )
     assert_summary_reconstructs_state(host_inputs, ttnn.to_torch(first[0]), ttnn.to_torch(first[1]))
@@ -305,7 +305,9 @@ def test_summarize_chunk_recurrence_is_device_deterministic(device: ttnn.Device)
         name="summary outputs device-side exact-value determinism marker",
     )
     for name, golden, output in zip(("affine_a", "affine_b"), summary_oracle(host_inputs), outputs, strict=True):
-        assert_accurate(golden, output, name=f"deterministic summary reference {name}", pcc_threshold=0.999)
+        assert_accurate(
+            golden.float(), output.float(), name=f"deterministic summary reference {name}", pcc_threshold=0.999
+        )
     assert_summary_reconstructs_state(host_inputs, outputs[0], outputs[1])
     for output in reference:
         ttnn.deallocate(output)
@@ -487,7 +489,7 @@ def test_summarize_chunk_recurrence_height_sharded_l1_output(device: ttnn.Device
         lambda: run_summary(inputs, memory_config=output_memory),
         expected,
         names=("affine_a", "affine_b"),
-        dtypes=(ttnn.float32, ttnn.float32),
+        dtypes=(ttnn.bfloat16, ttnn.bfloat16),
         shapes=((batch_heads, dim, dim), (batch_heads, dim, dim)),
         expected_memory_config=output_memory,
     )

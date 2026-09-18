@@ -140,12 +140,18 @@ def run_summary(
     compute_kernel_config: ttnn.DeviceComputeKernelConfig | None = None,
 ) -> list[ttnn.Tensor]:
     with ttnn.manage_config("throw_exception_on_fallback", True):
-        return ttnn.experimental.kda.summarize_chunk_recurrence(
+        outputs = ttnn.experimental.kda.summarize_chunk_recurrence(
             *protocol,
             groups_per_head=groups_per_head,
             memory_config=memory_config,
             compute_kernel_config=compute_kernel_config,
         )
+
+    assert len(outputs) == 4
+    assert all(t.dtype == ttnn.bfloat16 for t in outputs)
+    for tensor in outputs[2:]:
+        ttnn.deallocate(tensor)
+    return outputs[:2]
 
 
 def assert_runtime_contract(
@@ -183,7 +189,7 @@ def assert_runtime_contract(
 
     for name, golden, first_tt, traced_tt in zip(names, expected, first, traced, strict=True):
         actual = ttnn.to_torch(first_tt)
-        assert_accurate(golden, actual, name=name, pcc_threshold=pcc_threshold)
+        assert_accurate(golden.float(), actual.float(), name=name, pcc_threshold=pcc_threshold)
         assert_bit_identical(actual, ttnn.to_torch(traced_tt), name=f"{name} trace replay")
     for index, (snapshot, tensor) in enumerate(zip(snapshots, inputs, strict=True)):
         assert_bit_identical(snapshot, ttnn.to_torch(tensor), name=f"input {index} immutability")
@@ -202,8 +208,8 @@ def assert_outputs_accurate(
 ) -> None:
     for name, golden, actual_tt in zip(names, expected, actual, strict=True):
         assert_accurate(
-            golden,
-            ttnn.to_torch(actual_tt),
+            golden.float(),
+            ttnn.to_torch(actual_tt).float(),
             name=f"{context} {name}",
             pcc_threshold=pcc_threshold,
             linf_threshold=linf_threshold,

@@ -130,14 +130,13 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
                 Compute-kernel configuration.
 
         Returns:
-            tuple[ttnn.Tensor, ...]: Without actual_start, two FLOAT32 TILE tensors
-                ``A[B*H*G,K,K]`` and ``B[B*H*G,K,V]``. With actual_start, four
-                BFLOAT16 tensors: head A/B followed by tail A/B, with the same shapes.
+            tuple[ttnn.Tensor, ...]: Four BFLOAT16 TILE tensors: head A/B followed by
+                tail A/B. A has shape ``[B*H*G,K,K]`` and B ``[B*H*G,K,V]``.
 
         Note:
-            With ``actual_start``, summaries are packed directly to BFLOAT16 for
-            KDA transport. Inactive slots are unspecified and may only be consumed
-            by reduce/scan operations using the same actual_start and partition geometry.
+            Summaries accumulate in FLOAT32 and pack directly to BFLOAT16 for transport.
+            Unsplit execution defines only the head pair. Inactive head/tail slots
+            are unspecified; consumers must use the same chronology and geometry.
             Without actual_start, all summaries remain FLOAT32.
 
             The current summary path requires ``K=V``. ``q_decay`` and ``intra`` are

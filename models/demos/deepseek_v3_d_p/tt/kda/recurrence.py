@@ -187,15 +187,15 @@ def _summarize_chunk_groups(
     compute_config: _RecurrenceComputeConfig,
 ) -> _AffineTransform:
     """Summarize whole groups, transported at the affine-prefix BF16 boundary."""
-    a, b = ttnn.experimental.kda.summarize_chunk_recurrence(
+    a, b, tail_a, tail_b = ttnn.experimental.kda.summarize_chunk_recurrence(
         *grouped.as_kernel_args(),
         groups_per_head=groups_per_head,
         memory_config=summary_memory_config,
         compute_kernel_config=compute_config.preparation,
     )
-    return _AffineTransform(
-        *(ttnn.typecast(t, KDA_AFFINE_SUMMARY_DTYPE, memory_config=summary_memory_config) for t in (a, b))
-    )
+    ttnn.deallocate(tail_a)
+    ttnn.deallocate(tail_b)
+    return _AffineTransform(a, b)
 
 
 def _effective_summary_group_chunks(
