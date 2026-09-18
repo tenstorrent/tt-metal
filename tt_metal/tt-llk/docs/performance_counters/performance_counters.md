@@ -6,6 +6,7 @@
 - Profiler zone macros: [tests/helpers/include/profiler.h](../../tests/helpers/include/profiler.h)
 - Cross-thread rendezvous: [tests/helpers/include/barrier.h](../../tests/helpers/include/barrier.h)
 - Quasar SFPU stub (fourth thread of the rendezvous): [tests/helpers/include/sfpu_stub.h](../../tests/helpers/include/sfpu_stub.h)
+- Hardware reference (inventory, registers, limitations, metric catalogue): [hardware_reference.md](hardware_reference.md)
 - Shared counter definitions (names, select tables, registers, primitives): [tools/include/perf_counters/](../../tools/include/perf_counters/)
 - Shared host package (header parsers, metric engine): [tools/python/tt_llk_perf/](../../tools/python/tt_llk_perf/)
 - Report schema (metric columns derive from the shared engine): [tests/python_tests/helpers/perf/schema.py](../../tests/python_tests/helpers/perf/schema.py)
@@ -99,6 +100,8 @@ Expands to a `perf_counter_scoped<PERF_RUN_TYPE>` RAII object; the run type is a
 
 Each zone gets its own data block in L1 (see [L1 Layout](#l1-layout-and-zone-buffers)) so multiple measurement scopes in the same kernel produce independent snapshots. The device supports `PERF_COUNTERS_MAX_ZONES = 8` zones, but the host names only two: `perf.py` hard-codes zone 0 as `INIT` and zone 1 as `TILE_LOOP`, so a third counter zone appears in the CSV as the literal `ZONE_2` and never joins the wall-clock rows. Zone names in use are `INIT`, `TILE_LOOP`, and `UNINIT` in `fast_tilize_bh` / `fast_untilize` only; `UNINIT` uses bare `ZONE_SCOPED`, so it is timing-only with no rendezvous; identical names share a zone.
 
+The counters are driven through the registers described in the [hardware reference](hardware_reference.md#hardware-register-reference). The macro path always uses mode 0. Mode 1 is unused in the LLK test suite. The `counter_sel` field is rewritten on each slot read so a single bank can multiplex multiple counters into one measurement window. The per-zone path writes `1` to arm and `2` to freeze, so each write is itself a rising edge on the opposite bit and the stop write is what re-creates the next 0→1 edge. Only BRISC's boot `arm_hardware()` writes `1` then `0`.
+
 #### The `llk_barrier::rendezvous` barrier
 
 The barrier is `llk_barrier::rendezvous` in `barrier.h`, on the `PACK_DONE` **hardware semaphore**, and both builds compile the identical one. It replaced three separate rendezvous, including `llk_profiler::sync_point`, which was an actor-release protocol on an L1 epoch word. `sync_point` was removed because that release gave the actor a head start worth about one cycle per tile on a strict producer/consumer loop, and because the no-counter build could not reach the semaphore version and silently fell back to it, so the two builds measured the same zone with different instruments.
@@ -113,7 +116,7 @@ Quasar reached that through an L1 generation barrier first, and the measurements
 
 Before any TRISC kernel runs, BRISC executes `configure_and_arm_from_brisc()` once (called from `brisc.cpp` when the WC build flag is set). Quasar has no BRISC in this harness, so the unpack TRISC calls the same `configure_and_arm()` from `trisc.cpp`, after `device_setup()` and before it clears the other TRISCs out of soft reset; the registers are reached through the NEO local window (`bank_regs(Bank)` defaults to `LOCAL_REGS_WINDOW` there) instead of the RISC-V debug block. This:
 
-- Writes the per-architecture `BUILTIN_COUNTER_CONFIG` (110 slots on WH, 101 on BH, since only one L1 mux group is emitted; 77 on Quasar, 78 with an l1_client selection) into the shared L1 config buffer at `0x169000`. That array is built at compile time from the shared select tables, see [Shared counter definitions](#shared-counter-definitions).
+- Writes the per-architecture `BUILTIN_COUNTER_CONFIG` (110 slots on WH, 101 on BH, since only one L1 mux group is emitted; 77 on Quasar, 78 with an l1_client selection) into the shared L1 config buffer at `0x169000`. That array is built at compile time from the shared select tables, see [Shared counter definitions](hardware_reference.md#where-the-definitions-live).
 - Clears every per-zone data area and sync word.
 - Clears `DBG_FEATURE_DISABLE` to `0`, see [DBG_FEATURE_DISABLE scrub](#dbg_feature_disable-scrub) below.
 - Programs each bank's reference-period and mode registers, sets `PERF_CNT_MUX_CTRL` for L1, and does an initial global arm (later overridden by the first `MEASURE_PERF_COUNTERS` zone).
@@ -129,7 +132,7 @@ After BRISC releases the TRISCs, the shared config is read-only for the rest of 
 After the kernel completes:
 
 1. The host process reads the per-zone data area back from device L1.
-2. `read_counters()` decodes each 32-bit config word (bit 31 valid, bits 7:0 bank, bits 16:8 `counter_sel`, bits 19:17 `l1_mux`), looks up the human-readable counter name (parsed at import from the same arch header by `tt_llk_perf.headers.bank_tables()`, see [Shared counter definitions](#shared-counter-definitions)), and pairs every event count with that zone's bank cycle count.
+2. `read_counters()` decodes each 32-bit config word (bit 31 valid, bits 7:0 bank, bits 16:8 `counter_sel`, bits 19:17 `l1_mux`), looks up the human-readable counter name (parsed at import from the same arch header by `tt_llk_perf.headers.bank_tables()`, see [Shared counter definitions](hardware_reference.md#where-the-definitions-live)), and pairs every event count with that zone's bank cycle count.
 3. `read_counters()` returns an in-memory long-format DataFrame with columns `zone`, `bank`, `counter_name`, `counter_id`, `cycles`, `count`, `l1_mux`. `compute_metrics()` produces its own separate rows; it does not add columns to that frame. Host-side only zone 0 and zone 1 are named (hard-coded to `INIT` and `TILE_LOOP`); further zones stay `ZONE_n` and never join the wall-clock rows.
 
 Because both wall-clock cycles (NC build, `ZONE_SCOPED` start/end timestamps from `RISCV_DEBUG_REG_WALL_CLOCK_L`) and HW counter cycles (WC build, `OUT_L`) are tagged with the same zone name, the test driver merges them by `(test_variant, zone)`.
@@ -156,7 +159,6 @@ To capture a different L1 mux group, `export LLK_PERF_L1_MUX_GROUP=<0-5>` before
 
 Quasar has no L1 counter bank. Its bank slot 3 can carry one event of the L1 client CSR instead: `export LLK_PERF_L1_CLIENT_SEL=<subport*8+event>` before the producer phase (default off; it is compiled into the four TRISC ELFs, so each selection needs its own producer run). Sub-ports are 0-3 TRISC, 4 THCON, 5-24 unpacker reads, 25-36 packer writes; events 1-7 are named by `tt_llk_perf.metrics.quasar_l1_client_label()`, event 0 is unused and THCON events 1-3 are rejected at compile time (`llk::perf::l1_client_selection_is_valid`) because they alias the TRISC port. The counter is clear-on-read and has no reference counter of its own, so it is referenced to the INSTRN bank's cycles, and its metric column is named after the selection (`l1_client_<port>_<event>_pct`, or `_ratio` for the pending-request carry; see the tech report's "L1 client events (Quasar)").
 
-
 The `--enable-perf-counters` flag triggers two things:
 
 1. Test sources are compiled with `-DPERF_COUNTERS_COMPILED` (the WC build). BRISC is compiled with the same flag so it runs `configure_and_arm_from_brisc()` once at startup.
@@ -182,54 +184,9 @@ For each test variant, the WC build emits:
 
 The NC build emits per-zone wall-clock cycle counts in the same results DataFrame so a single run with both builds (different pytest invocations) can be merged off-line to compare wall-clock cycles against counter-derived cycle counts.
 
-## Architecture Summary
+## Hardware reference
 
-| | Wormhole | Blackhole | Quasar |
-|---|---|---|---|
-| INSTRN_THREAD slots in inventory | 59 | 59 | 51 (four threads) |
-| FPU slots | 3 | 3 | 3 |
-| TDMA_UNPACK slots | 18 | 18 | 18 |
-| TDMA_PACK slots | 14 | 5 | 5 |
-| L1 mux positions (Tensix) | 2 | 6 (one group per build, `LLK_PERF_L1_MUX_GROUP` 0 to 5) | 0 (no L1 bank) |
-| L1 slots in inventory | 32 (16 × 2 mux) | 84 (16 × 5 mux + 4 on position 5) | 0; slot 3 takes one l1_client selection (`LLK_PERF_L1_CLIENT_SEL`) |
-| Total slots in `BUILTIN_COUNTER_CONFIG` (one L1 mux group) | 110 | 101 | 77 (78 with an l1_client selection) |
-| Total config words in L1 | 200 (rest are zero-padded) | 200 | 200 |
-
-**Wormhole** has `PACK_COUNT = 4` (per-engine packer busy signals are live in RTL), so `TDMA_PACK` exposes counters 11–14 for dest-read availability, 15–18 for per-engine plus aggregate packer busy, and 267–272 for per-engine dest-read grants plus `MATH_NOT_STALLED_DEST_WR_PORT` and `AVAILABLE_MATH`. The L1 mux is 1-bit wide: position 0 covers NoC Ring 0 plus L1 arbitration, position 1 covers NoC Ring 1 plus TDMA-extended signals.
-
-**Blackhole** has `PACK_COUNT = 1`; per-engine packer busy and dest-read signals for engines 1–3 are tied to constants in RTL and are omitted from the inventory. Only counters 11, 18, 267, 271, 272 remain on the `TDMA_PACK` bank. BH compensates with more L1 mux positions (4 extra) which expose additional NoC rings and miscellaneous L1 ports.
-
-**Quasar** has four TRISCs per NEO and no L1 counter bank: `INSTRN_THREAD` (51 slots, four threads: `class*4 + thread` for 0-31, per-thread stalls 32-35, fifteen thread-ORed backend stall reasons 36-50), `FPU` (3), `TDMA_UNPACK` (18) and `TDMA_PACK` (5), listed in `tools/include/perf_counters/quasar.h`. `PERF_CNT_ALL` reaches only the INSTRN and FPU banks there, so the TDMA banks are armed and frozen through their own start/stop registers (the same sequence the harness uses on every arch). The SFPU TRISC is a measured thread of its own under the `SFPU_ISOLATE` run type. The L1 client CSR described under How to Run stands in for the L1 bank.
-
-**INSTRN_THREAD bank.** Counters 0–8 and 12–23 are per-thread instruction-type availability (CFG/SYNC/THCON/MOVE/FPU/UNPACK/PACK, 3 threads each, 21 slots; the XSEARCH sels 9–11 are tied off in RTL and are not in the inventory). Counters 24–26 are per-thread total stall cycles. The stall-reason layout differs:
-
-- WH: the four shared stall reasons (SRCA/B clear/valid) are replicated per thread in HW but only the first slot of each is enumerated, at sels 27/30/33/36; per-thread stall reasons then occupy counters 39–65.
-- BH: shared stall reasons occupy single slots (27–30), per-thread stall reasons occupy 31–57.
-
-Bit-8-extended counters 256/264/272 expose `THREAD_INSTRUCTIONS_{0,1,2}` (one per per-thread instance), and 283 exposes `ANY_THREAD_STALL`.
-
-### Shared counter definitions
-
-The counter inventory is defined once, in this repository, and metal consumes it too. The headers live in `tools/include/perf_counters/` (namespace `llk::perf`, self-contained, no metal or ckernel includes):
-
-| Header | Holds |
-|---|---|
-| `types.h` | `PerfCounterType` (the counter names; the ordinal is the wire format the metal profiler tags records with, so append only), `Bank`, `Entry` |
-| `blackhole.h`, `wormhole.h`, `quasar.h` | Per-bank `{name, select}` tables (`instrn_counters`, `fpu_counters`, `unpack_counters`, `pack_counters`, `l1_<mux>_counters`), `NUM_*_COUNTERS`, `L1_MUX_MASK`, `L1_MUX_POSITIONS`. `quasar.h` has no L1 tables (`L1_MUX_POSITIONS` 0) and adds `l1_client_selection_is_valid(sel)`; its arrays carry `LLK_PERF_TABLE_SECTION`, empty unless the includer defines `LLK_PERF_TABLES_IN_TEXT` (metal's DM firmware does) |
-| `inventory.h` | Picks the arch header from `ARCH_BLACKHOLE` / `ARCH_WORMHOLE` / `ARCH_QUASAR` and exposes `table_for(bank, l1_mux)` (empty for `Bank::L1` on Quasar) |
-| `registers.h` | `BankRegs` and `bank_regs(bank)` (the three control and two readout registers of each bank), `PERF_CNT_ALL`, `PERF_CNT_MUX_CTRL`, `DBG_FEATURE_DISABLE`, the `START` / `STOP` / `SELECT_SHIFT` / `L1_MUX_SHIFT` constants. On Quasar the registers are per-window offsets: `bank_regs(bank, window)`, `perf_cnt_all(window)`, `LOCAL_REGS_WINDOW` (0x00800000, the default, a TRISC's own NEO), `neo_window(n)` (0x01800000 + n x 0x10000, the NoC view DM0 uses), `NUM_NEOS`, and the l1_client CSR pair `l1_client_regs(window)` (`ctrl` 0xA0AC, `cnt` 0xA0B0) |
-| `hw.h` | Register primitives: `configure`, `start`, `stop`, `start_all`, `stop_all`, `select` (readback poll, bounded unless the caller asks for no limit), `read_ref`, `read_count`, `read_table`, `set_l1_mux`, `clear_debug_feature_disable`; the window-taking ones default to the arch window. Quasar adds `l1_client_ctrl_word`, `l1_client_start` (route and clear), `l1_client_stop`, `l1_client_read` |
-
-The host side is the stdlib-only package `tools/python/tt_llk_perf/`: `headers.py` parses `types.h` (`counter_type_names()`, ordinal to name) and the arch tables (`bank_tables(arch)`, bank to `[CounterEntry(name, select, l1_mux)]`); `metrics.py` is the derived-metric engine (`compute_metrics(view)`, `METRIC_LABELS`).
-
-Consumers:
-
-- **This harness.** `counters.h` includes `inventory.h`, `registers.h` and `hw.h` (`-I../tools/include`) and builds `BUILTIN_COUNTER_CONFIG[]` at compile time from `table_for(...)` in the fixed bank order the readout expects (INSTRN, FPU, TDMA_UNPACK, TDMA_PACK, then the single selected L1 mux group, or on Quasar the one l1_client selection); arm, freeze and select go through the `hw.h` primitives. `counters.py` decodes config words with `bank_tables()`, `helpers/metrics.py` and `perf/schema.py` import `tt_llk_perf.metrics`. The pytest plugin puts `tools/python` on `sys.path`.
-- **Metal.** `tt_metal/tools/profiler/perf_counters.hpp` includes the same headers and adds only the profiler policy (record format, `TT_METAL_PROFILE_PERF_COUNTERS` group bits, emission); `tools/tracy/perf_counter_analysis.py` uses `counter_type_names()` and `tt_llk_perf.metrics`.
-
-Only **one** L1 mux group is emitted per build, chosen by `LLK_PERF_L1_MUX_GROUP` (default 0). There are only eight physical L1 counters and `PERF_CNT_MUX_CTRL` routes a group of eight client interfaces into them *while they count*, not when they are read, so a run observes exactly one group. The group is a compile-time constant baked into `brisc.elf`, so a sweep must recompile the producer. The readout checks the group decoded from L1 against the requested one and fails if they disagree.
-
-To add a counter: append the name to the end of `PerfCounterType` in `types.h`, add one `{PerfCounterType::NAME, select}` entry to the right bank table in the arch header and keep its `NUM_*_COUNTERS` in step. Nothing else changes: both device sides build their tables from the headers and both host sides parse them. To add a metric: one formula in `compute_metrics()` and one `METRIC_LABELS` entry in `metrics.py`, plus a row in the catalogue in `tech_reports/PerfCounters/perf-counters.md` (a unit test keeps the two in sync). The pieces the harness still mirrors by hand are its own L1 ABI: the config-word bit layout (`PERF_CFG_*`, parsed from `counters.h` by `counters.py`) and the bank-id to name mapping.
+The counter inventory per architecture, where the shared definitions live and how to add a counter, the debug registers, the L1 mux groups and the hardware limitations are in [hardware_reference.md](hardware_reference.md). On top of that the harness emits one L1 mux group per build, so `BUILTIN_COUNTER_CONFIG` holds 110 slots on Wormhole, 101 slots on Blackhole, 77 (78 with an l1_client selection) slots on Quasar, written into the 200 config words in L1 with the rest zero.
 
 ## L1 Layout and Zone Buffers
 
@@ -261,83 +218,9 @@ The layout is bounded by two `static_assert`s to stay below `0x16AFF0` (the prof
 
 The 200-word shared config is the authoritative runtime record of which counters are recorded for every zone (the host reads it back to decode). There is no per-zone configuration: every zone records the same set of counters but stores its own snapshot.
 
-## Hardware Register Reference
-
-The following addresses are used (offsets from `RISCV_DEBUG_REGS_START_ADDR = 0xFFB12000`). On Quasar the debug block is per NEO and `registers.h` adds the offsets below to a window base: `bank_regs(Bank)` defaults to the local window `LOCAL_REGS_WINDOW` (0x00800000, the `LOCAL_REGS_BASE` macro), so each NEO's TRISCs reach their own block without any rebasing in `counters.h`; `neo_window(n)` is the NoC view metal's DM0 uses. Quasar does not use `PERF_CNT_MUX_CTRL`; the L1 client CSR pair comes from `l1_client_regs()` in the same window.
-
-| Quasar register | Offset in the window | Description |
-|---|---|---|
-| `PERF_CNT_INSTRN_THREAD0..2` | 0x000, 0x004, 0x008 | Reference period, mode + counter_sel, start/stop |
-| `PERF_CNT_TDMA_UNPACK0..2` | 0x00C, 0x010, 0x014 | Same triplet |
-| `PERF_CNT_FPU0..2` | 0x018, 0x01C, 0x020 | Same triplet |
-| `PERF_CNT_ALL` | 0x024 | Global start/stop for FPU + INSTRN_THREAD |
-| `DBG_FEATURE_DISABLE` | 0x040 | Scrubbed to 0 by `configure_and_arm()` |
-| `PERF_CNT_TDMA_PACK0..2` | 0x08C, 0x090, 0x094 | Same triplet |
-| `PERF_CNT_OUT_L/H_INSTRN_THREAD` | 0x098, 0x09C | Elapsed cycles, event count |
-| `PERF_CNT_OUT_L/H_TDMA_UNPACK` | 0x0A0, 0x0A4 | Same pair |
-| `PERF_CNT_OUT_L/H_TDMA_PACK` | 0x0A8, 0x0AC | Same pair |
-| `PERF_CNT_OUT_L/H_FPU` | 0x0B0, 0x0B4 | Same pair |
-| `L1_CLIENT_GROUP_PERF_CTRL` | 0xA0AC | bit 0 enable, bits 9:4 sub-port, bits 14:12 event (`l1_client_ctrl_word(sel)`) |
-| `L1_CLIENT_GROUP_PERF_CNT` | 0xA0B0 | Clear-on-read event count |
-
-The tt-1xx map:
-
-| Register | Offset | Description |
-|----------|--------|-------------|
-| `PERF_CNT_INSTRN_THREAD0` | 0x000 | Reference period (mode 1) |
-| `PERF_CNT_INSTRN_THREAD1` | 0x004 | Mode + counter_sel |
-| `PERF_CNT_INSTRN_THREAD2` | 0x008 | Start/Stop (rising edge) |
-| `PERF_CNT_TDMA_UNPACK0..2` | 0x00C–0x014 | Same triplet |
-| `PERF_CNT_FPU0..2` | 0x018–0x020 | Same triplet |
-| `PERF_CNT_L1_0..2` | 0x030–0x038 | Same triplet |
-| `PERF_CNT_ALL` | 0x03C | Global start/stop for FPU + INSTRN_THREAD |
-| `PERF_CNT_TDMA_PACK0..2` | 0x0F0–0x0F8 | Same triplet |
-| `PERF_CNT_OUT_L_INSTRN_THREAD` | 0x100 | Elapsed cycles for bank |
-| `PERF_CNT_OUT_H_INSTRN_THREAD` | 0x104 | Event count for selected `counter_sel` |
-| `PERF_CNT_OUT_L_TDMA_UNPACK` | 0x108 | … |
-| `PERF_CNT_OUT_H_TDMA_UNPACK` | 0x10C | … |
-| `PERF_CNT_OUT_L_TDMA_PACK` | 0x110 | … |
-| `PERF_CNT_OUT_H_TDMA_PACK` | 0x114 | … |
-| `PERF_CNT_OUT_L_DBG_L1` | 0x118 | … |
-| `PERF_CNT_OUT_H_DBG_L1` | 0x11C | … |
-| `PERF_CNT_OUT_L_FPU` | 0x120 | … |
-| `PERF_CNT_OUT_H_FPU` | 0x124 | … |
-| `PERF_CNT_MUX_CTRL` | 0x218 | L1 mux selector: bit 4 on Wormhole (`L1_MUX_MASK = 0x1 << 4`), bits 6:4 on Blackhole (`0x7 << 4`) |
-
-### Mode register (`PERF_CNT_*1`)
-
-| Bits | Field | Description |
-|------|-------|-------------|
-| 7:0 | mode | 0 = continuous with cycle tracking; 1 = stop after `PERF_CNT_*0` cycles; 2 = continuous without cycle tracking |
-| 16:8 | counter_sel | Selects which counter event is routed to `OUT_H` |
-| 31:17 | reserved | unused |
-
-The macro path always uses mode 0. Mode 1 is unused in the LLK test suite. The `counter_sel` field is rewritten on each slot read so a single bank can multiplex multiple counters into one measurement window.
-
-### Start/Stop register (`PERF_CNT_*2`)
-
-Rising-edge triggered. Bit 0 = start (0→1 also clears the counter), bit 1 = stop. The per-zone path writes `1` to arm and `2` to freeze, so each write is itself a rising edge on the opposite bit and the stop write is what re-creates the next 0→1 edge. Only BRISC's boot `arm_hardware()` writes `1` then `0`.
-
-### L1 mux (`PERF_CNT_MUX_CTRL`)
-
-Each L1 mux group exposes 8 client interfaces x 2 counters (request sels 0–7 and grant sels 256–263), so 16 `counter_sel` values per group, giving the 32 (WH, 2 groups) and 84 (BH, 6 groups) inventory totals above. The mux field selects the group: bit 4 on Wormhole, bits 6:4 on Blackhole (6 of 8 encodings populated):
-
-| Mux | WH meaning | BH meaning |
-|-----|------------|------------|
-| 0 | unpacker 0, packer port 1 (+ECC), TDMA bundles 0/1, NoC Ring 0 | unpacker 0, port 1 (unpacker 1 + ECC), TDMA bundles 0/1, NoC Ring 0 |
-| 1 | TDMA packer 2, ext unpackers 1–3, NoC Ring 1 | packer interface 0 (port 8), unpacker 1 extended interfaces 1-3, NoC Ring 1 |
-| 2 | not present | unpacker 1 extended interfaces 4-7, NoC Ring 0 secondary channels |
-| 3 | not present | NoC Ring 1 secondary channels, ext packers 2–5 |
-| 4 | not present | ext packers 6-7, packer interface 1 (with the tag-search accelerator), unpacker 0 extended interfaces 1-5 |
-| 5 | not present | unpacker 0 extended interfaces 6-7 (only slots 0 and 1 are wired; slots 2-7 read 0) |
-
-The Blackhole column is taken from the A0 tapeout RTL (ws-tensix `BH_A0_RC6`, `tt_tensix.sv`) and was confirmed on silicon by reading every selector under real workloads; positions 6 and 7 have no decode case and fall back to position 0.
-
-The mux routes interfaces into the counters while they count and is written once by BRISC before arming, so the freeze path cannot re-aim it. A zone snapshot therefore contains exactly one mux position: the group that was selected while the counters ran. Sweep it by exporting `LLK_PERF_L1_MUX_GROUP` before the producer phase (it is an environment variable, not a CLI flag, and is baked in at compile time, so each value needs its own `--compile-producer`). Sweep across runs to cover the other groups.
-
 ## Derived Metrics Reference
 
-The harness computes every metric of the shared engine, [tools/python/tt_llk_perf/metrics.py](../../tools/python/tt_llk_perf/metrics.py), once per zone and run from the raw counters; `helpers/metrics.py` only adapts the counter frame to the engine's `CounterView`. The catalogue with every key, label and formula is [tech_reports/PerfCounters/perf-counters.md](../../../../tech_reports/PerfCounters/perf-counters.md); the same keys appear here as `<RUN_TYPE>_<stat>(<key>)` columns and `perf/schema.py::METRIC_BASES` mirrors them, so a metric added to the engine shows up in the report without harness changes.
+The harness computes every metric of the shared engine, [tools/python/tt_llk_perf/metrics.py](../../tools/python/tt_llk_perf/metrics.py), once per zone and run from the raw counters; `helpers/metrics.py` only adapts the counter frame to the engine's `CounterView`. The catalogue with every key, label and formula is [hardware_reference.md](hardware_reference.md#derived-metrics-reference); the same keys appear here as `<RUN_TYPE>_<stat>(<key>)` columns and `perf/schema.py::METRIC_BASES` mirrors them, so a metric added to the engine shows up in the report without harness changes.
 
 A metric whose counters this architecture does not expose, or whose counter group was not captured in the run, is empty in the CSV, never 0. Counters that exist on Wormhole only (per-engine packer busy), Blackhole only (L1 banks 2-5) or Quasar only (thread 3, the INSTISSUE class, the thread-ORed stall reasons, unpacker 2) make their metrics empty on the other chips; every L1 and NoC metric is empty on Quasar, whose only L1 measurement is the dynamic `l1_client_*` column (`helpers/metrics.py` appends it through `compute_l1_client_metrics`).
 
@@ -369,7 +252,7 @@ A metric whose counters this architecture does not expose, or whose counter grou
 - **BRISC compile flag.** When `--enable-perf-counters` is set, BRISC is rebuilt with `-DPERF_COUNTERS_COMPILED` (plus `-DLLK_PERF_L1_MUX_GROUP=<n>`; on Quasar the four TRISCs get `-DPERF_COUNTERS_COMPILED -DLLK_PERF_L1_CLIENT_SEL=<n>` instead and the unpack TRISC does the setup). Otherwise BRISC does not touch the counter HW at all, which keeps the NC build free of any counter-armed monitoring overhead.
 - **Test isolation.** As with every LLK test, counter state at kernel entry is whatever the previous test left behind. The BRISC reset path clears the shared config and zone buffers, so each test starts from a known L1 state, but HW counter registers themselves may carry residual values until the first `MEASURE_PERF_COUNTERS` rising-edge clear.
 - **NC/WC bit-identity is fragile.** The goal is that the WC counter code doesn't perturb the measured timing, which requires WC codegen to match NC outside the counter parts. `get_bank_regs` uses a `volatile` index cast specifically to stop GCC from emitting a `CSWTCH` jump table (it would shift GP-relative offsets and break that bit-identity), and `freeze_and_read_all_counters` uses `#pragma GCC unroll 0`. Measured counters are sensitive to BRISC boot *timing* at the ~0.1 % level, so avoid reshaping the BRISC boot path (e.g. the config scan) even when it looks logically equivalent.
-- **The BRISC boot arm is redundant but retained.** The RTL (see `tech_reports/PerfCounters/perf-counters.md`) confirms a rising-edge start both *clears* and starts the counters, so the per-zone `arm_all_counters` fully resets them from any prior state, so the boot-time `arm_hardware()` measures a window nobody reads. It is kept only because removing it changes boot timing (see previous point). The essential BRISC work is `configure_hardware` (period/mode) + the `DBG_FEATURE_DISABLE` scrub.
+- **The BRISC boot arm is redundant but retained.** The RTL (see [hardware_reference.md](hardware_reference.md#hardware-register-reference)) confirms a rising-edge start both *clears* and starts the counters, so the per-zone `arm_all_counters` fully resets them from any prior state, so the boot-time `arm_hardware()` measures a window nobody reads. It is kept only because removing it changes boot timing (see previous point). The essential BRISC work is `configure_hardware` (period/mode) + the `DBG_FEATURE_DISABLE` scrub.
 - **L1 layout must stay below the profiler region.** `PERF_COUNTERS_LAYOUT_END` must not overlap the profiler's lowest L1 address (`llk_profiler::EPOCH_ADDR`). Two `static_assert`s enforce this: a literal one in the always-compiled section (BRISC has no `llk_profiler` namespace) and a symbolic one in the `LLK_PROFILER` section that tracks the profiler layout automatically.
 - **Minimum window size.** Size every measured window above ~1k cycles using the test's `LOOP_FACTOR`; PR #51912 raised the suite's factors for exactly this reason. Below that, a few cycles of instrument floor read as a large percentage, and the timing `mean` is affected as well as the derived ratios. Note the report divides `TILE_LOOP` wall-clock by `loop_factor x tile_cnt` but leaves `INIT` and every counter column absolute.
 
