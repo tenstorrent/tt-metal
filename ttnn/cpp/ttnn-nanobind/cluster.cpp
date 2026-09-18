@@ -11,7 +11,6 @@
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/string.h>
-#include <nanobind/stl/tuple.h>
 #include <tt-metalium/tt_metal.hpp>
 #include <internal/cluster_noc_helpers.hpp>
 
