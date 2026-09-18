@@ -66,9 +66,6 @@ profiles:
       # and server read it from here.
       # env: DEEPSEEK_V4_TP_SIZE
       tp_size: 1
-      # Decode steps allowed in flight across batches; 0 = one per batch.
-      # env: DEEPSEEK_V4_PIPELINE_DEPTH
-      depth: 0
       # Chips of the open mesh the layer stack may span; 0 = all of them. A cap
       # leaves the rest idle, which is a win once weights are L1-resident: each
       # extra chip is one more socket hop on the critical path and holds no more
@@ -89,9 +86,6 @@ profiles:
       d2h_fifo_bytes: 4032
 
     prefetcher:
-      # null = enable wherever the device supports it.
-      # env: DEEPSEEK_V4_PREFETCHER (0/1)
-      enabled: null
       # Shared GCB ring depth in pages, i.e. how far the DRISC senders may run
       # ahead. Costs ~18 KB of L1 per receiver core per page at bf4.
       # env: DEEPSEEK_V4_PREFETCH_PAGES
@@ -133,32 +127,11 @@ profiles:
       sdpa_k_chunk_size: 32
       sdpa_max_cores_per_head_batch: 2
       sdpa_exp_approx_mode: false
-      # Keep the q_a and kv projection weights resident in L1 instead of
-      # re-copying them from DRAM per call. Note it competes with SDPA's
-      # static reduction CBs, so raising sdpa_max_cores_per_head_batch may need
-      # this off. env: DEEPSEEK_V4_KEEP_WEIGHTS_IN_L1
-      keep_qa_kv_weights_in_l1: false
-      # How q_a and kv are partitioned when tp_size > 1. Ignored at TP1.
-      #   replicated — each projection full-width on every rank
-      #   balanced   — each projection N-sharded, then all-gather
-      #   dedicated  — q_a on rank 0, kv on rank 1
-      # env: DEEPSEEK_V4_QKV_TP_STRATEGY
-      qkv_tp_strategy: replicated
 
     decode:
       # On-device weight precision for the whole stack.
       # env: DEEPSEEK_V4_WEIGHT_DTYPE
       weight_dtype: bfloat4_b
-      # Pack all non-expert decoder-layer matmul weights into one BF4,
-      # height-sharded L1 tensor per chip. env: DEEPSEEK_V4_PACKED_L1_WEIGHTS
-      packed_l1_weights: false
-      # Paged KV block size in rows; must be a multiple of the 32-row tile.
-      # env: DEEPSEEK_V4_BLOCK_SIZE
-      block_size: 32
-      # Users decoded in ONE traced step. Every shape below the input packet is
-      # parameterized by it. Raising it trades per-user latency for aggregate
-      # throughput. env: DEEPSEEK_V4_DECODE_BATCH
-      batch: 1
       # Session slots allocated at startup (cannot grow once traces exist).
       # env: DEEPSEEK_V4_NUM_USERS
       num_users: 2
@@ -202,7 +175,6 @@ profiles:
       experts_block_size: 2
 
     decode:
-      batch: 1
       num_users: 2
       max_context: 131072
       total_context: 0
@@ -244,7 +216,6 @@ profiles:
       group_size: 1
       # A deeper pipeline has more stages to keep busy, so allow more steps in
       # flight. Only affects aggregate throughput, not single-user latency.
-      depth: 4
 
     prefetcher:
       # Each chip holds far fewer layers, so its DRAM read stream per step is
@@ -268,12 +239,9 @@ profiles:
       sdpa_k_chunk_size: 32
       sdpa_max_cores_per_head_batch: 2
       sdpa_exp_approx_mode: false
-      keep_qa_kv_weights_in_l1: false
-      qkv_tp_strategy: replicated
 
     decode:
       # ~4x the aggregate DRAM, so the KV budget scales with it.
-      batch: 1
       num_users: 8
       max_context: 524288
       total_context: 4194304
@@ -319,7 +287,6 @@ profiles:
     num_devices: 0
     description: 8x P150 batched for aggregate tok/s (~4.3 tok/s/u at B=64)
     decode:
-      batch: 8
       num_users: 64
       max_context: 32768
       total_context: 2097152
@@ -329,7 +296,6 @@ profiles:
     num_devices: 0
     description: 32x Blackhole batched for aggregate tok/s
     decode:
-      batch: 8
       num_users: 256
       max_context: 32768
       total_context: 8388608

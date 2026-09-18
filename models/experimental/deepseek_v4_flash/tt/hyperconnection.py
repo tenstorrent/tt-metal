@@ -13,7 +13,6 @@ from .decode_prefetch import (
     hc_fn_page_bytes,
     hc_fn_ring_specs,
 )
-from .l1_weights import packed_weight_spec
 from .layers import Linear, LinearDecode, _rms_norm_unweighted
 from .weight_cache import WeightCache, _as_cache, _load_weight, _materialize, _memo
 
@@ -52,8 +51,6 @@ class DeepSeekV4HyperConnection(DeepSeekV4Module):
         weights: dict,
         device: ttnn.MeshDevice,
         cache: Optional[WeightCache] = None,
-        packed_weights=None,
-        packed_name: str | None = None,
         use_prefetcher: bool = False,
         prefetch_buffers: Optional[dict] = None,
         weight_dtype: ttnn.DataType = ttnn.bfloat16,
@@ -90,64 +87,46 @@ class DeepSeekV4HyperConnection(DeepSeekV4Module):
         # caller's ``prefetch_buffers`` is what makes them share: a GCB costs ~176 B of the
         # DRISC senders' 1 KB state zone, so one per hyper-connection overflows it at the
         # third layer.
-        if packed_weights is None:
-            k = hc * self.hidden
-            n = ((2 * hc + hc * hc + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+        k = hc * self.hidden
+        n = ((2 * hc + hc * hc + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
 
-            def fn_weight():
-                w = fn()[: 2 * hc + hc * hc]
-                if w.shape[0] < n:
-                    w = torch.nn.functional.pad(w, (0, 0, 0, n - w.shape[0]))
-                return w
+        def fn_weight():
+            w = fn()[: 2 * hc + hc * hc]
+            if w.shape[0] < n:
+                w = torch.nn.functional.pad(w, (0, 0, 0, n - w.shape[0]))
+            return w
 
-            prefetch = {}
-            if use_prefetcher:
-                layout = check_decode_layout(HC_FN_GCB, k, n)
-                if prefetch_buffers is None:
-                    prefetch_buffers = {}
-                prefetch = {
-                    "use_prefetcher": True,
-                    "global_cb": ensure_named_gcb(
-                        prefetch_buffers,
-                        HC_FN_GCB,
-                        device,
-                        hc_fn_ring_specs(),
-                        weight_dtype,
-                        num_pages=HC_FN_GCB_PAGES,
-                    ),
-                    "global_cb_page_bytes": hc_fn_page_bytes(weight_dtype),
-                }
-            self.fn = LinearDecode(
-                fn_weight,
-                device,
-                cache.file("fn.decode"),
-                dtype=weight_dtype,
-                K=k,
-                N=n,
-                partial_width_sharded=True,
-                k_blocks=_HC_FN_K_BLOCKS,
-                n_blocks=1,
-                tile_height=1,
-                **prefetch,
-                use_rm_hs=False,
-            )
-        else:
-            tensor, layout, slot = packed_weights
-            spec = packed_weight_spec(layout, slot, packed_name)
-            self.fn = LinearDecode(
-                lambda: fn()[: 2 * hc + hc * hc],
-                device,
-                cache.file("fn"),
-                dtype=ttnn.bfloat4_b,
-                K=spec.K,
-                N=spec.N,
-                partial_width_sharded=True,
-                k_blocks=spec.k_blocks,
-                n_blocks=spec.n_blocks,
-                packed_weight_tensor=tensor,
-                packed_weight_spec=spec,
-                use_rm_hs=False,
-            )
+        prefetch = {}
+        if use_prefetcher:
+            layout = check_decode_layout(HC_FN_GCB, k, n)
+            if prefetch_buffers is None:
+                prefetch_buffers = {}
+            prefetch = {
+                "use_prefetcher": True,
+                "global_cb": ensure_named_gcb(
+                    prefetch_buffers,
+                    HC_FN_GCB,
+                    device,
+                    hc_fn_ring_specs(),
+                    weight_dtype,
+                    num_pages=HC_FN_GCB_PAGES,
+                ),
+                "global_cb_page_bytes": hc_fn_page_bytes(weight_dtype),
+            }
+        self.fn = LinearDecode(
+            fn_weight,
+            device,
+            cache.file("fn.decode"),
+            dtype=weight_dtype,
+            K=k,
+            N=n,
+            partial_width_sharded=True,
+            k_blocks=_HC_FN_K_BLOCKS,
+            n_blocks=1,
+            tile_height=1,
+            **prefetch,
+            use_rm_hs=False,
+        )
         self.pre_b = _load_weight(
             _materialize(lambda: base()[:hc].reshape(1, 1, 1, hc), cache.file("pre_b"), ttnn.bfloat16),
             device,
@@ -171,8 +150,7 @@ class DeepSeekV4HyperConnection(DeepSeekV4Module):
 
     def prefetch_weights(self):
         """Queue the ``fn`` prefetch when that weight is streamed through a GCB."""
-        if isinstance(self.fn, LinearDecode):
-            self.fn.fetch_weights()
+        self.fn.fetch_weights()
 
     def forward(self, hidden_streams: ttnn.Tensor):
         """``hidden_streams`` ``[B, S, H, D]`` -> ``(post [B,S,H,1], comb [B,S,H,H], collapsed [B,S,1,D])``."""

@@ -17,7 +17,6 @@ from .decode_prefetch import (
     tp_gate_up_layout,
 )
 from .layers import Linear, LinearDecode, _core_grid_contains
-from .l1_weights import packed_weight_spec
 from .system_config import active_system_config
 from .weight_cache import WeightCache, _as_cache, _load_weight, _materialize, _memo
 
@@ -109,7 +108,6 @@ class DeepSeekV4MLP(DeepSeekV4Module):
         config=None,
         use_prefetcher: bool = False,
         prefetch_buffers: Optional[dict] = None,
-        packed_weights=None,
         tp_size: int = 1,
     ):
         cache = _as_cache(cache)
@@ -121,31 +119,6 @@ class DeepSeekV4MLP(DeepSeekV4Module):
         gate_up_mapper = ttnn.ShardTensorToMesh(device, dim=1) if tp_size > 1 else None
         down_mapper = ttnn.ShardTensorToMesh(device, dim=0) if tp_size > 1 else None
         tp_tag = f".tp{tp_size}" if tp_size > 1 else ""
-        if packed_weights is not None:
-            tensor, layout, slot = packed_weights
-
-            def packed_projection(name, weight_key, K, N):
-                spec = packed_weight_spec(layout, slot, name)
-                return LinearDecode(
-                    weights[weight_key],
-                    device,
-                    cache.file(weight_key.removesuffix(".weight")),
-                    dtype=ttnn.bfloat4_b,
-                    K=K,
-                    N=N,
-                    partial_width_sharded=spec.k_blocks > 1,
-                    k_blocks=spec.k_blocks,
-                    n_blocks=spec.n_blocks,
-                    packed_weight_tensor=tensor,
-                    packed_weight_spec=spec,
-                    use_rm_hs=spec.k_blocks <= 1 and name != "shared_down_proj",
-                )
-
-            hidden, inter = config.hidden_size, config.moe_intermediate_size
-            self.gate_proj = packed_projection("shared_gate_proj", f"{prefix}.gate_proj.weight", hidden, inter)
-            self.up_proj = packed_projection("shared_up_proj", f"{prefix}.up_proj.weight", hidden, inter)
-            self.down_proj = packed_projection("shared_down_proj", f"{prefix}.down_proj.weight", inter, hidden)
-            return
         if not use_prefetcher:
             self.gate_proj = Linear(
                 weights[f"{prefix}.gate_proj.weight"],
@@ -296,7 +269,6 @@ def _make_router_gate(
     device: ttnn.MeshDevice,
     cache: WeightCache,
     config,
-    packed_weights=None,
     use_prefetcher: bool = False,
     prefetch_buffers: Optional[dict] = None,
     weight_dtype: ttnn.DataType = ttnn.bfloat16,
@@ -308,24 +280,8 @@ def _make_router_gate(
     decode all-gather replica (ROW_MAJOR HEIGHT_SHARDED A) where it sits instead of
     unreplicating it through DRAM and re-sharding it -- that round trip was four extra
     device ops per step. The 8-receiver cut cannot join the shared 64-receiver ring or
-    ``HC_FN_GCB``, so it streams through :data:`ROUTER_GATE_GCB`. Packed L1 weights take
-    precedence over both.
+    ``HC_FN_GCB``, so it streams through :data:`ROUTER_GATE_GCB`.
     """
-    if packed_weights is not None:
-        tensor, layout, slot = packed_weights
-        spec = packed_weight_spec(layout, slot, "router_gate")
-        return LinearDecode(
-            weights["gate.weight"],
-            device,
-            cache.file("gate"),
-            dtype=ttnn.bfloat4_b,
-            K=spec.K,
-            N=spec.N,
-            n_blocks=spec.n_blocks,
-            packed_weight_tensor=tensor,
-            packed_weight_spec=spec,
-            use_rm_hs=spec.k_blocks <= 1,
-        )
     if not use_prefetcher:
         return Linear(weights["gate.weight"], device, cache.file("gate"))
     layout = dict(check_decode_layout("router_gate", config.hidden_size, config.num_local_experts))
@@ -351,7 +307,7 @@ def _make_router_gate(
     )
     assert gate._can_matmul_decode_rm_hs(), (
         "the router gate must run hub-mode matmul_decode so it reads the decode all-gather replica in "
-        f"place, but its layout is partial={gate.partial_width_sharded} ring_gather={gate.ring_gather}"
+        f"place, but its layout is partial={gate.partial_width_sharded}"
     )
     return gate
 
@@ -377,7 +333,6 @@ class DeepSeekV4TopKRouter(DeepSeekV4Module):
         weights: dict,
         device: ttnn.MeshDevice,
         cache: Optional[WeightCache] = None,
-        packed_weights=None,
         use_prefetcher: bool = False,
         prefetch_buffers: Optional[dict] = None,
         weight_dtype: ttnn.DataType = ttnn.bfloat16,
@@ -395,7 +350,6 @@ class DeepSeekV4TopKRouter(DeepSeekV4Module):
             device,
             cache,
             config,
-            packed_weights=packed_weights,
             use_prefetcher=use_prefetcher,
             prefetch_buffers=prefetch_buffers,
             weight_dtype=weight_dtype,
@@ -469,7 +423,6 @@ class DeepSeekV4HashRouter(DeepSeekV4Module):
         weights: dict,
         device: ttnn.MeshDevice,
         cache: Optional[WeightCache] = None,
-        packed_weights=None,
         use_prefetcher: bool = False,
         prefetch_buffers: Optional[dict] = None,
         weight_dtype: ttnn.DataType = ttnn.bfloat16,
@@ -484,7 +437,6 @@ class DeepSeekV4HashRouter(DeepSeekV4Module):
             device,
             cache,
             config,
-            packed_weights=packed_weights,
             use_prefetcher=use_prefetcher,
             prefetch_buffers=prefetch_buffers,
             weight_dtype=weight_dtype,
@@ -905,26 +857,15 @@ class DeepSeekV4PreloadedExperts(DeepSeekV4Module):
         )  # [1, 1, H]
         return ttnn.reshape(out, [1, 1, 1, self.hidden])
 
-    def _token_routing(self, routing: SparseRouting, i: int) -> SparseRouting:
-        """Token ``i``'s slice of a ``T``-token routing decision."""
-        scores = ttnn.slice(routing.scores, [0, 0, i, 0], [1, 1, i + 1, self.num_experts])
-        if routing.ranking is not None:
-            return SparseRouting(
-                scores=scores,
-                ranking=ttnn.slice(routing.ranking, [0, 0, i, 0], [1, 1, i + 1, self.num_experts]),
-            )
-        return SparseRouting(
-            scores=scores,
-            indices=ttnn.slice(routing.indices, [0, 0, i, 0], [1, 1, i + 1, self.top_k]),
-        )
-
     def forward(self, x_flat: ttnn.Tensor, routing: SparseRouting) -> ttnn.Tensor:
         """``x_flat`` ``[1,1,T,H]`` plus the router's decision; returns ``[1,1,T,H]``.
 
-        Trace-safe: nothing is read back to host. ``T`` tokens run as ``T`` single-token
-        ops rather than one wider one -- they route to different experts, so there is no
-        weight to share between them -- and ``T`` is fixed at capture time, so a captured
-        trace stays a flat op sequence. Prefill therefore goes through the same path.
+        Trace-safe: nothing is read back to host. ``T`` is the activation's *shard
+        height*, not the token axis of the gathered tensor: the decode all-gather
+        replicates one token row onto every core of the destination grid, so ``T`` is
+        1 while ``x_flat.shape[2]`` is that grid's core count. ``T`` is fixed at
+        capture time, so a captured trace stays a flat op sequence and prefill goes
+        through the same path.
         """
         mem = x_flat.memory_config()
         if (
@@ -962,12 +903,10 @@ class DeepSeekV4SparseMoeBlock(DeepSeekV4Module):
         weight_dtype: ttnn.DataType = ttnn.bfloat16,
         use_prefetcher: bool = False,
         prefetch_buffers: Optional[dict] = None,
-        packed_weights=None,
         tp_size: int = 1,
     ):
         self.device = device
         self.hidden = config.hidden_size
-        self.packed_weights = packed_weights
         self.tp_size = tp_size
         cache = _as_cache(cache)
         # ``gate`` may be injected (e.g. a :class:`DeepSeekV4HashRouter` for the
@@ -980,7 +919,6 @@ class DeepSeekV4SparseMoeBlock(DeepSeekV4Module):
                 weights,
                 device,
                 cache=cache,
-                packed_weights=packed_weights,
                 use_prefetcher=use_prefetcher,
                 prefetch_buffers=prefetch_buffers,
                 weight_dtype=weight_dtype,
@@ -1000,7 +938,6 @@ class DeepSeekV4SparseMoeBlock(DeepSeekV4Module):
             config=config,
             use_prefetcher=use_prefetcher,
             prefetch_buffers=prefetch_buffers,
-            packed_weights=packed_weights,
             tp_size=tp_size,
         )
 
@@ -1063,8 +1000,6 @@ class DeepSeekV4SparseMoeBlock(DeepSeekV4Module):
         # LinearDecode reuses it: its B grid is a subset of that rectangle.
         routed = self.experts.decode_static(x_flat, routing)  # [1, 1, B, H]
         shared = self.shared_experts(x_flat)  # [1, 1, B, H]
-        if self.packed_weights is not None:
-            shared = ttnn.to_memory_config(shared, routed.memory_config())
         combined = ttnn.add(routed, shared)
         combined = ttnn.to_memory_config(combined, ttnn.DRAM_MEMORY_CONFIG)
         if self.tp_size > 1:
