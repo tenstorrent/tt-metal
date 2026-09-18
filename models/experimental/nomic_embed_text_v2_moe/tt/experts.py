@@ -56,6 +56,15 @@ from models.experimental.nomic_embed_text_v2_moe.tt.common import pack_expert_we
 # B=7 at S=512 being the smallest case.
 MAX_TILE_ROWS_PER_CORE = 1
 
+# 110 tiles is where the boundary was measured, and it did not move with the requested core grid:
+# an explicit 8x8 passed at 110 and hung at 111, same as the full 11x10. So the limit is a
+# property of the silicon here, not of the grid, and deriving it from the core count alone would
+# raise it on a wider board rather than keep it. A 13x10 Blackhole, which this repo also targets,
+# would derive 130 rows and send a 128-tile matmul down the single-pass branch: a hung board, not
+# a failed assert. The grid still bounds it from below, since a narrower one cannot place 110
+# rows one per core, so take the smaller of the two.
+MAX_TILE_ROWS_MEASURED_SAFE = 110
+
 
 class TtNomicExperts(LightweightModule):
     """All eight experts in two packed operands, plus one bias shared across them.
@@ -77,7 +86,8 @@ class TtNomicExperts(LightweightModule):
         self.num_experts = config.num_experts
 
         grid = tt_config.core_grid
-        self.max_tokens_per_pass = grid.x * grid.y * MAX_TILE_ROWS_PER_CORE * ttnn.TILE_SIZE
+        tile_rows = min(grid.x * grid.y * MAX_TILE_ROWS_PER_CORE, MAX_TILE_ROWS_MEASURED_SAFE)
+        self.max_tokens_per_pass = tile_rows * ttnn.TILE_SIZE
 
         w1, w2 = pack_expert_weights(
             state_dict[f"{state_dict_prefix}mlp.w1"], state_dict[f"{state_dict_prefix}mlp.w2"], config
@@ -135,8 +145,8 @@ class TtNomicExperts(LightweightModule):
         """Run every expert, weight the outputs by the routing, and sum them.
 
         Tokens are processed in passes of at most max_tokens_per_pass, since beyond that the
-        broadcast-batch matmul hangs; a single pass covers everything up to B*S = 3520 on this
-        grid, which is every shape the bring-up tests use.
+        broadcast-batch matmul hangs. One pass covers B*S up to 3520 here; the chunking shapes in
+        the bring-up tests exceed that and take the multi-pass branch, which is the point of them.
 
         Args:
             x: (1, 1, T, H) flat token activations.

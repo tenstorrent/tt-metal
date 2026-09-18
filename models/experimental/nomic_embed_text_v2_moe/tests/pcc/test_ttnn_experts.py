@@ -28,7 +28,11 @@ from models.experimental.nomic_embed_text_v2_moe.tests.pcc.module_common import 
     to_block_layout,
 )
 from models.experimental.nomic_embed_text_v2_moe.tt.common import flatten_tokens, to_device
-from models.experimental.nomic_embed_text_v2_moe.tt.experts import MAX_TILE_ROWS_PER_CORE, TtNomicExperts
+from models.experimental.nomic_embed_text_v2_moe.tt.experts import (
+    MAX_TILE_ROWS_MEASURED_SAFE,
+    MAX_TILE_ROWS_PER_CORE,
+    TtNomicExperts,
+)
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 pytestmark = [run_for_blackhole(), pytest.mark.use_module_device, pytest.mark.needs_weights]
@@ -103,10 +107,15 @@ def test_the_pass_size_keeps_one_output_tile_row_per_core(device, tt_config, tt_
     see the constant in tt/experts.py for the mechanism and the measured 110/111 tile boundary.
     A regression here is a hung board rather than a failed assert, so the derivation is pinned
     directly instead of being probed.
+
+    The measured cap is pinned alongside the per-core rule because the boundary did not move with
+    the requested core grid. Asserting the core count alone would pass on this 11x10 board and
+    silently raise the limit on a wider one, which is the shape of a hang rather than a failure.
     """
     cores = tt_config.core_grid.x * tt_config.core_grid.y
 
-    assert tt_experts.max_tokens_per_pass == cores * ttnn.TILE_SIZE
+    assert tt_experts.max_tokens_per_pass == min(cores, MAX_TILE_ROWS_MEASURED_SAFE) * ttnn.TILE_SIZE
+    assert tt_experts.max_tokens_per_pass <= MAX_TILE_ROWS_MEASURED_SAFE * ttnn.TILE_SIZE
     assert MAX_TILE_ROWS_PER_CORE == 1
 
 
