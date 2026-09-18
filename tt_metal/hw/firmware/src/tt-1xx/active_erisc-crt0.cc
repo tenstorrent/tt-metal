@@ -20,6 +20,18 @@ static void return_to_base_fw();
 extern "C" void wzerorange(uint32_t* start, uint32_t* end);
 
 extern "C" [[gnu::section(".start"), gnu::optimize("Os")]] void _start(void) {
+    // Initialize the global pointer.  This core is launched by base firmware and so
+    // does not link tmu-crt0.o, which is where every other processor sets gp up.
+    // Must come first: once __global_pointer$ is defined, the linker relaxes nearby
+    // loads to gp-relative addressing, and those would read from a garbage base until
+    // gp holds its intended value.  norelax keeps this sequence itself absolute.
+    __asm__ volatile(
+        ".option push\n"
+        ".option norelax\n"
+        "la gp, __global_pointer$\n"
+        ".option pop" ::
+            : "memory");
+
     extern uint32_t __ldm_bss_start[];
     extern uint32_t __ldm_bss_end[];
     wzerorange(__ldm_bss_start, __ldm_bss_end);
