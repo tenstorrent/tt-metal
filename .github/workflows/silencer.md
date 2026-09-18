@@ -139,6 +139,7 @@ safe-outputs:
       - galaxy-health
       - t3000-tests
       - t3000-dispatch-tests
+      - t3000-profiler-tests
       - single-card-profiler-tests
       - pipeline-select-profiler
 

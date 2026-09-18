@@ -305,6 +305,7 @@ safe-outputs:
 
       - t3000-tests
       - t3000-dispatch-tests
+      - t3000-profiler-tests
 
       - single-card-profiler-tests
       - pipeline-select-profiler
@@ -461,7 +462,8 @@ match that reality: never describe a pipeline as dispatched on a fork PR.
 | `galaxy-profiler-tests` | Galaxy | Galaxy profiler instrumentation changes |
 | `galaxy-stress-tests`, `galaxy-multi-user-isolation-tests` | Galaxy | Stability, long-run, or multi-tenant isolation behaviour |
 | `t3000-tests` | T3000 (8×WH) | Multi-chip work that does not need a full Galaxy |
-| `t3000-dispatch-tests`, `single-card-profiler-tests`, `pipeline-select-profiler` | T3K / single card / selectable | `tt_metal/tools/profiler/**`, tracy, or profiling instrumentation |
+| `t3000-profiler-tests`, `single-card-profiler-tests`, `pipeline-select-profiler` | T3K / single card / selectable | `tt_metal/tools/profiler/**`, tracy, or profiling instrumentation |
+| `t3000-dispatch-tests` | T3000 (8×WH) | The T3K fast (sanity) suite, on request |
 | `models-t1-*` | Selectable SKU | Tier-1 (highest-priority) model changes under `models/` |
 | `models-t2-*`, `models-t3-*` | Selectable SKU | Tier-2/3 model changes |
 | `perf-device-models` | Single card | Device-perf regressions from op or kernel changes |
@@ -523,7 +525,6 @@ The defaults are usually *maximal*, and that is where the waste is. Recurring sh
   |---|---|
   | `sanity-tests` | `run-ttnn-sanity-tests`, `run-ops-sanity-tests`, `run-fabric-sanity-tests`, `run-t3000-sanity-tests`, `run-umd-sanity-tests`, `run-ttsim-sanity-tests`, `run-blackhole-multi-card-sanity-tests`, `run-models-sanity-tests` |
   | `single-card-profiler-tests` | `run-n150-profiler`, `run-n300-profiler`, `run-blackhole-profiler` |
-  | `t3000-dispatch-tests` | `run-fast-tests`, `run-profiler-tests` |
   | `pipeline-select-profiler` | `run-n150-profiler`, `run-n300-profiler`, `run-blackhole-profiler`, `run-t3k-profiler` |
 
   The names say what each covers, so map them the same way you mapped paths to pipelines:

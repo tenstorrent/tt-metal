@@ -1,4 +1,4 @@
-name: "(End of Life - October 31) T3K dispatch tests"
+name: "(T3K) Profiler tests"
 
 on:
   workflow_dispatch:
@@ -27,11 +27,6 @@ on:
         type: boolean
         default: false
         description: "Enable Link Time Optimization (LTO)"
-      enable-watcher:
-        required: false
-        type: boolean
-        default: false
-        description: "Enable watcher for long-running tests"
 
 jobs:
   check-harbor:
@@ -47,20 +42,18 @@ jobs:
     secrets: inherit
     with:
       harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
-      build-type: ${{ inputs.build-type || 'Release' }}
+      tracy: true
       build-inplace-wheel: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
+      build-type: ${{ inputs.build-type || 'Release' }}
       enable-lto: ${{ inputs.enable-lto || false }}
 
-  t3000-sanity-tests:
+  t3000-profiler-tests:
     needs: [check-harbor, build-artifact]
     if: ${{ !cancelled() && needs.build-artifact.result == 'success' }}
+    uses: ./.github/workflows/t3000-profiler-tests-impl.yaml
     secrets: inherit
-    uses: ./.github/workflows/t3000-sanity-tests-impl.yaml
     with:
-      enabled-skus: "wh_llmbox_civ2"
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      enable-watcher: ${{ inputs.enable-watcher || false }}
-      timeout-minutes-override: ${{ inputs.enable-watcher && 80 || 0 }}
