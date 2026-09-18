@@ -10,5 +10,6 @@ set(COMMON_SOURCES
     tt_backend_api_types.cpp
     work_split.cpp
     host_buffer.cpp
+    host_threading.cpp
     memory_pin.cpp
 )
