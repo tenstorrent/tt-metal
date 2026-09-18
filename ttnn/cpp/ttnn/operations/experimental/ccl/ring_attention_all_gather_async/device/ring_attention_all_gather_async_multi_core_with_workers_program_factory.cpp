@@ -553,8 +553,8 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         rank_mapping = {};
     }
     TT_FATAL(
-        !rank_mapping.full_mesh || topology == ttnn::ccl::Topology::Ring,
-        "full-mesh ring-attention all-gather requires Ring topology");
+        !rank_mapping.full_mesh || topology == ttnn::ccl::Topology::Ring || topology == ttnn::ccl::Topology::Linear,
+        "full-mesh ring-attention all-gather requires Ring or Linear topology");
     TT_FATAL(
         !rank_mapping.full_mesh || (rank_mapping.mesh_rows > 0 && rank_mapping.mesh_cols > 0 &&
                                     rank_mapping.mesh_rows * rank_mapping.mesh_cols == ring_size),
@@ -605,7 +605,7 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
                                         ? rank_mapping.mesh_rows
                                         : rank_mapping.mesh_cols;
         TT_FATAL(
-            lane_count % 2 == 0,
+            topology != ttnn::ccl::Topology::Ring || lane_count % 2 == 0,
             "full-mesh ring-attention snake closure requires an even lane count, got {}",
             lane_count);
 
@@ -616,16 +616,22 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
                 ttnn::ccl::snake_ring::coordinate_col(
                     transport_rank, rank_mapping.mesh_rows, rank_mapping.mesh_cols, rank_mapping.orientation));
         };
-        const auto expected_forward = coordinate_for_rank((ring_index + 1) % ring_size);
-        const auto expected_backward = coordinate_for_rank((ring_index + ring_size - 1) % ring_size);
+        const std::optional<MeshCoordinate> expected_forward =
+            topology == ttnn::ccl::Topology::Ring || ring_index + 1 < ring_size
+                ? std::optional<MeshCoordinate>(coordinate_for_rank((ring_index + 1) % ring_size))
+                : std::nullopt;
+        const std::optional<MeshCoordinate> expected_backward =
+            topology == ttnn::ccl::Topology::Ring || ring_index > 0
+                ? std::optional<MeshCoordinate>(coordinate_for_rank((ring_index + ring_size - 1) % ring_size))
+                : std::nullopt;
         TT_FATAL(
-            forward_device_coord.has_value() && *forward_device_coord == expected_forward,
+            forward_device_coord == expected_forward,
             "full-mesh ring-attention forward neighbor for transport rank {} must be {}, got {}",
             ring_index,
             expected_forward,
             forward_device_coord);
         TT_FATAL(
-            backward_device_coord.has_value() && *backward_device_coord == expected_backward,
+            backward_device_coord == expected_backward,
             "full-mesh ring-attention backward neighbor for transport rank {} must be {}, got {}",
             ring_index,
             expected_backward,
@@ -1069,7 +1075,7 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
                 gather_valid_Ht.has_value() ? std::min(*gather_valid_Ht, input_tensor_Ht) * input_tensor_Wt
                                             : single_batch_head_num_pages;
             tensor_descriptor_args.push_back(valid_pages_per_batch_head);  // 6 == valid_pages_per_batch_head
-            tensor_descriptor_args.push_back(placement.link);  // 7 == worker_link
+            tensor_descriptor_args.push_back(placement.link);              // 7 == worker_link
             if (has_metadata) {
                 tensor_descriptor_args.push_back(input_tensor_shape[kBatchDimension]);  // 8 == input_cache_batch_extent
             }

@@ -591,10 +591,11 @@ def open_ring_joint_sdpa_runtime(
     topology: Topology = None,
     reserve_llk_kernel_config: bool = True,
     full_mesh: bool = False,
+    full_mesh_fabric=None,
     num_global_semaphores: int = 3,
 ):
     if full_mesh:
-        fabric_config = ttnn.FabricConfig.FABRIC_2D_TORUS_XY
+        fabric_config = full_mesh_fabric or ttnn.FabricConfig.FABRIC_2D_TORUS_XY
         topology = Topology.Ring
     else:
         use_ring = mesh_config.sp_size > 2 if topology is None else topology == Topology.Ring
@@ -3973,7 +3974,7 @@ def test_ring_mla_full_mesh_rejects_invalid_topology_and_placements(expect_error
 
         with expect_error(RuntimeError, "requires Ring topology"):
             invoke(tt_q, tt_kv, tt_persistent, Topology.Linear)
-        with expect_error(RuntimeError, "requires Q sequence dim 2 and KV gather dim"):
+        with expect_error(RuntimeError, "requires KV sequence shards on every device"):
             invoke(tt_axis_q, tt_axis_kv, tt_persistent, Topology.Ring)
         with expect_error(RuntimeError, "persistent gathered-KV buffer to be replicated"):
             invoke(tt_q, tt_kv, tt_sharded_persistent, Topology.Ring)
