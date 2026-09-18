@@ -16,6 +16,12 @@ set_target_properties(
             api
 )
 
+file(
+    GLOB_RECURSE kernels
+    device/kernels/*.cpp
+    device/kernels/*.hpp
+)
+
 target_sources(
     ttnn_op_experimental_deepseek_prefill_zero_padded_kv_cache
     PUBLIC
@@ -23,12 +29,26 @@ target_sources(
         TYPE HEADERS
         BASE_DIRS ${FixmeOpAPIDir}
         FILES ${TTNN_OP_EXPERIMENTAL_DEEPSEEK_PREFILL_ZERO_PADDED_KV_CACHE_API_HEADERS}
+        FILE_SET kernels
+        TYPE HEADERS
+        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
+        FILES ${kernels}
     PRIVATE
         device/zero_padded_kv_cache_device_operation.cpp
         zero_padded_kv_cache.cpp
 )
 
 target_link_libraries(ttnn_op_experimental_deepseek_prefill_zero_padded_kv_cache PRIVATE TT::Metalium PUBLIC TTNN::Core)
+
+install(
+    TARGETS
+        ttnn_op_experimental_deepseek_prefill_zero_padded_kv_cache
+    FILE_SET
+    kernels
+        DESTINATION
+            ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/zero_padded_kv_cache
+        COMPONENT ttnn-runtime
+)
 
 install(TARGETS ttnn_op_experimental_deepseek_prefill_zero_padded_kv_cache LIBRARY COMPONENT tar)
 
