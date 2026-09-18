@@ -28,6 +28,22 @@
 #include "api/compute/reconfig_data_format.h"
 #include "api/dataflow/circular_buffer.h"
 
+// ============================================================================
+// Inversion pipeline selector (compile-time). MUST be kept in sync with
+// GDN_INVERSE_TRISOLVE in chunk_gated_delta_rule_program_factory.cpp, which sets
+// the format of cb_Tinv (c_13): fp32 for Horner, bf16 for triangle_solve.
+//   0 = Horner: build T_inv=(I-negN)^-1 (C-1 matmul+add steps), then apply.  [fp32, production]
+//   1 = triangle_solve SFPU LLK: L_tri=I-negN, solve per 32x32 RHS tile.     [bf16, experimental]
+// ============================================================================
+#define GDN_INVERSE_TRISOLVE 0
+// Dummy mode (only meaningful when GDN_INVERSE_TRISOLVE==1): skip the actual SFPU
+// triangle_solve_tile call and pass the RHS straight through (u=v_beta, w=k_beta*decay).
+// Measures the op's "floor" — everything except the solve — to isolate the solve's cost.
+#define GDN_TRISOLVE_DUMMY 0
+#if GDN_INVERSE_TRISOLVE
+#include "api/compute/triangle_solve.h"
+#endif
+
 namespace {
 
 constexpr uint32_t cb_q = 0, cb_k = 1, cb_v = 2, cb_g = 3, cb_beta = 4;
@@ -318,6 +334,72 @@ void kernel_main() {
         POP(cb_scr1, cc);
         POP(cb_scr2, cc);
 
+#if GDN_INVERSE_TRISOLVE
+        // ===== Pipeline B: triangle_solve SFPU LLK =====================================
+        // L_tri = I - negN is unit lower-triangular (plain, non-negated strict-lower) — solve
+        //   u = (I-negN)^-1 @ v_beta          <=>  L_tri u = v_beta
+        //   w = (I-negN)^-1 @ (k_beta*decay)  <=>  L_tri w = (k_beta*decay)
+        // one 32x32 triangle_solve per RHS tile. L_tri lives in cb_Tinv (c_13, bf16 in this mode).
+        // NOTE: numerically approximate today (bf16 solve into an fp32 kernel + fp32 dest) — perf path.
+        ew(cb_eye, cb_scr3, cb_Tinv, cc, 1);  // L_tri = eye - negN (packed bf16)
+        WAIT(cb_Tinv, cc);
+        POP(cb_scr3, cc);  // negN done
+        {
+            CircularBuffer cb_l_o(cb_Tinv);
+            cb_reserve_back(cb_u, cv);
+            triangle_solve_tile_init();
+            for (uint32_t t = 0; t < Vt; t++) {
+                tile_regs_acquire();
+                copy_tile_init(cb_vbeta);
+                copy_tile(cb_vbeta, t, 0);  // v_beta[t] -> DST[0]
+#if GDN_TRISOLVE_DUMMY
+                tile_regs_commit();
+                tile_regs_wait();
+                pack_reconfig_data_format(cb_u);
+                pack_tile(0, cb_u, t);  // dummy: pass RHS through (no solve)
+#else
+                triangle_solve_tile(cb_l_o, 0, 0, 1);
+                tile_regs_commit();
+                tile_regs_wait();
+                pack_reconfig_data_format(cb_u);
+                pack_tile(1, cb_u, t);
+#endif
+                tile_regs_release();
+            }
+            cb_push_back(cb_u, cv);
+            WAIT(cb_u, cv);
+            POP(cb_vbeta, cv);
+
+            bcast_cols_mul(cb_kbeta, cb_decay_exp, cb_scr1, Ct, Kt);  // k_beta*decay_exp -> scr1
+            WAIT(cb_scr1, ck);
+            POP(cb_kbeta, ck);
+            cb_reserve_back(cb_w, ck);
+            triangle_solve_tile_init();
+            for (uint32_t t = 0; t < Kt; t++) {
+                tile_regs_acquire();
+                copy_tile_init(cb_scr1);
+                copy_tile(cb_scr1, t, 0);  // (k_beta*decay)[t] -> DST[0]
+#if GDN_TRISOLVE_DUMMY
+                tile_regs_commit();
+                tile_regs_wait();
+                pack_reconfig_data_format(cb_w);
+                pack_tile(0, cb_w, t);  // dummy: pass RHS through (no solve)
+#else
+                triangle_solve_tile(cb_l_o, 0, 0, 1);
+                tile_regs_commit();
+                tile_regs_wait();
+                pack_reconfig_data_format(cb_w);
+                pack_tile(1, cb_w, t);
+#endif
+                tile_regs_release();
+            }
+            cb_push_back(cb_w, ck);
+            WAIT(cb_w, ck);
+            POP(cb_scr1, ck);
+        }
+        POP(cb_Tinv, cc);
+#else
+        // ===== Pipeline A: Horner (production) =========================================
         // R_1 = eye + negN  (negN in cb_scr3)
         ew(cb_eye, cb_scr3, cb_Tinv, cc, 0);
         WAIT(cb_Tinv, cc);
@@ -342,6 +424,7 @@ void kernel_main() {
         WAIT(cb_w, ck);
         POP(cb_scr1, ck);
         POP(cb_Tinv, cc);
+#endif
 
         // ---- intra = (q@k^T) * L_mask ; q_decay = q*decay_exp ; k_dec_t ----
         mm(cb_q, cb_k, cb_scr1, Ct, Kt, Ct, true);  // qk = q @ k^T
