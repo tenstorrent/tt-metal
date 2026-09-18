@@ -1742,7 +1742,8 @@ class ModelArgs:
                 k_chunk_size=k_chunk,
             )
         grid = self.mesh_device.compute_with_storage_grid_size() if self.mesh_device is not None else None
-        if is_blackhole() and grid is not None and grid.x > 8 and grid.y > 4:
+        wide_blackhole_grid = is_blackhole() and grid is not None and grid.x > 8 and grid.y > 4
+        if wide_blackhole_grid:
             # Decode Q is height sharded on the 8x4 block and the op reads batch b's Q from the b-th core of
             # sub_core_grids, so that block has to come first; the rest of the grid supplies the workers.
             return ttnn.SDPAProgramConfig(
