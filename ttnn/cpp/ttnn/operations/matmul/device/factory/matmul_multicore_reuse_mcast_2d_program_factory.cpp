@@ -28,13 +28,7 @@
 using ttnn::operations::unary::UnaryOpType;
 using ttnn::operations::unary::UnaryWithParam;
 
-using tt::tt_metal::CBDescriptor;
-using tt::tt_metal::CBFormatDescriptor;
-using tt::tt_metal::ComputeConfigDescriptor;
-using tt::tt_metal::DataMovementConfigDescriptor;
 using tt::tt_metal::KernelBuildOptLevel;
-using tt::tt_metal::KernelDescriptor;
-using tt::tt_metal::ProgramDescriptor;
 using tt::tt_metal::UnpackMode;
 using tt::tt_metal::experimental::AddRuntimeArgsForNode;
 using tt::tt_metal::experimental::AdvancedKernelRunArgs;
@@ -755,7 +749,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
     // than re-deriving the mcast geometry, record the kernel set per node here and group nodes by it
     // into WorkUnitSpecs below, so placement is the legacy placement by construction.
     std::map<std::vector<std::string>, std::vector<CoreRange>> work_unit_nodes;
-    auto place = [&](const CoreCoord& core, std::vector<KernelSpecName> kernels_here) {
+    auto place = [&](const CoreCoord& core, const std::vector<KernelSpecName>& kernels_here) {
         std::vector<std::string> key;
         key.reserve(kernels_here.size());
         for (const auto& k : kernels_here) {
@@ -1039,7 +1033,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
         if (all_cores_with_work.contains(core)) {
             kernels_here.push_back(COMPUTE);
         }
-        place(core, std::move(kernels_here));
+        place(core, kernels_here);
     }
 
     // Cores straddle different numbers of DRAM shards, so the per-core lists built above have
