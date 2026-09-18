@@ -1,5 +1,8 @@
 # Padding prototype rebased onto PR #56632
 
+> Historical first rebase. See [the f20c rebase report](KDA_PADDING_REBASE_F20C.md)
+> for current accuracy and performance measurements.
+
 ## Provenance
 
 On 2026-09-18 the padding branch was rebased from PR head
