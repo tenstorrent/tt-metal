@@ -32,6 +32,19 @@ Tensor create_device_tensor(
     tt::tt_metal::distributed::MeshDevice* mesh_device,
     std::optional<tt::tt_metal::TensorTopology> tensor_topology = std::nullopt);
 
+namespace experimental {
+
+/**
+ * Create a sharded SRAM tensor view at a byte offset within an owner tensor.
+ *
+ * The result retains the owner's MeshBuffer. The view specification must use
+ * the owner's allocation mode and a subset of its worker cores.
+ */
+Tensor create_sharded_tensor_view(
+    const Tensor& owner, const tt::tt_metal::TensorSpec& tensor_spec, tt::tt_metal::DeviceAddr shard_offset);
+
+}  // namespace experimental
+
 void copy_to_device(const Tensor& host_tensor, Tensor& device_tensor, std::optional<QueueId> cq_id = std::nullopt);
 
 void copy_to_device(

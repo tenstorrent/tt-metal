@@ -6,6 +6,10 @@
 
 #include <nanobind/nanobind.h>
 
+#include "ttnn/operations/generic/generic_op_nanobind.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
+
 #include "ttnn/operations/experimental/adaptive_pool/adaptive_pools_nanobind.hpp"
 #include "ttnn/operations/experimental/cnn/convert_to_chw/convert_to_chw_nanobind.hpp"
 #include "ttnn/operations/experimental/cnn/convert_to_hwc/convert_to_hwc_nanobind.hpp"
@@ -107,6 +111,14 @@
 namespace ttnn::operations::experimental {
 
 void py_module(nb::module_& mod) {
+    ttnn::operations::generic::bind_generic_operation_preparation(mod);
+    mod.def(
+        "create_sharded_tensor_view",
+        &ttnn::experimental::create_sharded_tensor_view,
+        nb::arg("owner"),
+        nb::arg("tensor_spec"),
+        nb::arg("shard_offset"),
+        "Create an owner-retaining sharded SRAM tensor view.");
     slice_write::bind_slice_write(mod);
     padded_slice::bind_padded_slice(mod);
 

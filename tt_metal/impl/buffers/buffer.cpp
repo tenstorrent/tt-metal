@@ -624,6 +624,83 @@ std::shared_ptr<Buffer> BufferImpl::create(
     return buffer;
 }
 
+std::shared_ptr<Buffer> BufferImpl::create(
+    IDevice* device,
+    std::unordered_map<CoreCoord, DeviceAddr> per_core_addresses,
+    DeviceAddr size,
+    DeviceAddr page_size,
+    const BufferType buffer_type,
+    const BufferShardingArgs& sharding_args,
+    const std::optional<bool> bottom_up,
+    const std::optional<SubDeviceId> sub_device_id) {
+    LIGHT_METAL_TRACE_FUNCTION_ENTRY();
+    TT_FATAL(
+        !LightMetalCaptureContext::get().is_tracing(),
+        "Buffers with explicit per-core addresses cannot be represented by Light Metal capture");
+
+    auto buffer = std::make_shared<Buffer>(BufferImpl(
+        device, size, page_size, buffer_type, sharding_args, bottom_up, sub_device_id, false /* owns data */));
+
+    TT_FATAL(
+        buffer->impl().per_core_allocation_,
+        "Explicit per-core addresses require per_core_allocation in the buffer sharding arguments");
+    TT_FATAL(buffer_type == BufferType::L1, "Explicit per-core addresses require L1 storage");
+    TT_FATAL(!per_core_addresses.empty(), "Explicit per-core addresses must not be empty");
+    TT_FATAL(buffer->has_shard_spec(), "Explicit per-core addresses require a shard spec");
+
+    const auto& shard_spec = buffer->shard_spec().tensor_shard_spec;
+    const auto cores =
+        corerange_to_cores(shard_spec.grid, std::nullopt, shard_spec.orientation == ShardOrientation::ROW_MAJOR);
+    TT_FATAL(
+        per_core_addresses.size() == cores.size(),
+        "Explicit per-core address count {} does not match shard core count {}",
+        per_core_addresses.size(),
+        cores.size());
+    for (const CoreCoord& core : cores) {
+        const auto address = per_core_addresses.find(core);
+        TT_FATAL(
+            address != per_core_addresses.end(),
+            "Explicit per-core addresses do not contain shard core ({}, {})",
+            core.x,
+            core.y);
+        TT_FATAL(
+            address->second % buffer->alignment() == 0,
+            "Explicit address {} for core ({}, {}) is not aligned to {} bytes",
+            address->second,
+            core.x,
+            core.y,
+            buffer->alignment());
+        TT_FATAL(
+            address->second <= std::numeric_limits<uint32_t>::max(),
+            "Explicit address {} for core ({}, {}) exceeds the device address range",
+            address->second,
+            core.x,
+            core.y);
+        TT_FATAL(
+            buffer->aligned_size_per_bank() <= std::numeric_limits<uint32_t>::max() - address->second,
+            "Explicit buffer interval on core ({}, {}) exceeds the device address range",
+            core.x,
+            core.y);
+    }
+
+    buffer->impl().address_ = per_core_addresses.at(cores.front());
+    buffer->impl().set_per_core_addresses(std::move(per_core_addresses));
+    buffer->impl().allocation_status_ = BufferImpl::AllocationStatus::ALLOCATED;
+
+    if (is_emule_device(device) && buffer->impl().size_ != 0) {
+        const DeviceAddr range_size = buffer->aligned_size_per_bank();
+        for (const auto& address_entry : buffer->impl().per_core_addresses_) {
+            tt::tt_metal::emule::LiveL1Ranges::add(
+                device->id(),
+                static_cast<uint32_t>(address_entry.second),
+                static_cast<uint32_t>(address_entry.second + range_size),
+                buffer->impl().unique_id_);
+        }
+    }
+
+    return buffer;
+}
+
 std::shared_ptr<Buffer> BufferImpl::view(Buffer& self, const BufferRegion& region) {
     TT_FATAL(region.offset % self.page_size() == 0, "Region offset must be a multiple of page size");
     TT_FATAL(region.size % self.page_size() == 0, "Region size must be a multiple of page size");

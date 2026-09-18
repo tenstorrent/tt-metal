@@ -25,6 +25,7 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/allocation_context.hpp>
 #include <tt-metalium/experimental/inspector.hpp>
+#include <tt-metalium/experimental/program_preparation.hpp>
 #include <internal/graph_function_abort.hpp>
 #include <type_traits>
 #include "ttnn/mesh_device_operation_adapter.hpp"
@@ -48,6 +49,11 @@ template <typename T>
 using CachedMeshWorkload = tt::tt_metal::program_cache::detail::CachedMeshWorkload<T>;
 
 namespace detail {
+
+struct ProgramPreparationResult {
+    uint32_t max_program_config_size_bytes = 0;
+    uint32_t max_kernel_binary_size_bytes = 0;
+};
 
 using ::tt::tt_metal::program_cache::detail::CachedProgramFactory;
 using ::tt::tt_metal::program_cache::detail::ProgramCacheKey;
@@ -271,6 +277,20 @@ void dispatch_to_mesh_workload_factory(const ProgramFactory& program_factory, co
         program_factory);
 }
 
+template <typename WorkloadFactory, DeviceOperationWithMeshDeviceAdapter mesh_device_operation_t>
+void apply_cached_workload_arguments(
+    typename WorkloadFactory::cached_mesh_workload_t& cached_workload,
+    const typename mesh_device_operation_t::operation_attributes_t& operation_attributes,
+    const typename mesh_device_operation_t::tensor_args_t& tensor_args,
+    typename mesh_device_operation_t::tensor_return_value_t& tensor_return_value) {
+    if constexpr (requires { &WorkloadFactory::apply_descriptor; }) {
+        WorkloadFactory::apply_descriptor(cached_workload, operation_attributes, tensor_args, tensor_return_value);
+    } else {
+        WorkloadFactory::override_runtime_arguments(
+            cached_workload, operation_attributes, tensor_args, tensor_return_value);
+    }
+}
+
 template <DeviceOperationWithMeshDeviceAdapter mesh_device_operation_t>
 void handle_mesh_adapter_cache_hit(
     const typename mesh_device_operation_t::operation_attributes_t& operation_attributes,
@@ -297,18 +317,93 @@ void handle_mesh_adapter_cache_hit(
         auto& cached_mesh_workload = cached_program_factory.cached_program.template get<cached_mesh_workload_t>();
 
         if (!graph_capture_blocks_dispatch()) {
-            if constexpr (requires { &WorkloadFactory::apply_descriptor; }) {
-                WorkloadFactory::apply_descriptor(
-                    cached_mesh_workload, operation_attributes, tensor_args, tensor_return_value);
-            } else {
-                WorkloadFactory::override_runtime_arguments(
-                    cached_mesh_workload, operation_attributes, tensor_args, tensor_return_value);
-            }
+            apply_cached_workload_arguments<WorkloadFactory, mesh_device_operation_t>(
+                cached_mesh_workload, operation_attributes, tensor_args, tensor_return_value);
         }
 
         enqueue_mesh_workload<mesh_device_operation_t>(
             operation_attributes, tensor_args, tensor_return_value, mesh_device, cached_mesh_workload.workload, true);
     });
+}
+
+inline ProgramPreparationResult summarize_prepared_workload(
+    tt::tt_metal::distributed::MeshWorkload& workload, ttnn::MeshDevice* mesh_device) {
+    auto result = tt::tt_metal::experimental::program_preparation::prepare(workload, mesh_device);
+    return {
+        .max_program_config_size_bytes = result.max_program_config_size_bytes,
+        .max_kernel_binary_size_bytes = result.max_kernel_binary_size_bytes,
+    };
+}
+
+template <DeviceOperationWithMeshDeviceAdapter mesh_device_operation_t>
+ProgramPreparationResult prepare_operation_with_adapter(
+    const typename mesh_device_operation_t::operation_attributes_t& operation_attributes,
+    const typename mesh_device_operation_t::tensor_args_t& tensor_args,
+    typename mesh_device_operation_t::tensor_return_value_t& tensor_return_value,
+    ttnn::MeshDevice* mesh_device) {
+    auto& program_cache = mesh_device->get_program_cache();
+    ProgramCacheKey program_key;
+    const bool cache_enabled = program_cache.is_enabled();
+    if (cache_enabled) {
+        program_key.hash =
+            mesh_device_operation_t::compute_mesh_workload_hash(mesh_device, operation_attributes, tensor_args);
+        program_key.canonical = mesh_device_operation_t::compute_mesh_workload_canonical_key(
+            mesh_device,
+            ttsl::get_type_name<typename mesh_device_operation_t::device_operation_t>(),
+            operation_attributes,
+            tensor_args);
+        if (program_cache.contains(program_key)) {
+            if constexpr (HasValidateOnProgramCacheHit<mesh_device_operation_t>) {
+                mesh_device_operation_t::validate_on_program_cache_hit(operation_attributes, tensor_args);
+            } else {
+                mesh_device_operation_t::validate_on_program_cache_miss(operation_attributes, tensor_args);
+            }
+            auto& cached_program_factory = program_cache.get(program_key);
+            auto program_factory = map_index_to_variant(
+                cached_program_factory.program_factory_index,
+                mesh_device_operation_t::select_program_factory(operation_attributes, tensor_args));
+            ProgramPreparationResult result;
+            dispatch_to_mesh_workload_factory<mesh_device_operation_t>(
+                program_factory, [&]<typename WorkloadFactory>() {
+                    using cached_mesh_workload_t = typename WorkloadFactory::cached_mesh_workload_t;
+                    auto& cached_workload =
+                        cached_program_factory.cached_program.template get<cached_mesh_workload_t>();
+                    if (!graph_capture_blocks_dispatch()) {
+                        apply_cached_workload_arguments<WorkloadFactory, mesh_device_operation_t>(
+                            cached_workload, operation_attributes, tensor_args, tensor_return_value);
+                    }
+                    result = summarize_prepared_workload(cached_workload.workload, mesh_device);
+                });
+            return result;
+        }
+        TT_FATAL(
+            program_cache.cache_misses_allowed(),
+            "Device operation \"{}\": program cache miss occurred, but cache misses are forbidden",
+            get_operation_name<mesh_device_operation_t>(operation_attributes));
+    }
+
+    mesh_device_operation_t::validate_on_program_cache_miss(operation_attributes, tensor_args);
+    auto program_factory = mesh_device_operation_t::select_program_factory(operation_attributes, tensor_args);
+    const auto program_factory_index = program_factory.index();
+    ProgramPreparationResult result;
+    dispatch_to_mesh_workload_factory<mesh_device_operation_t>(program_factory, [&]<typename WorkloadFactory>() {
+        ttnn::MeshCoordinateRangeSet tensor_coords;
+        if (mesh_device_operation_utils::all_tensors_have_uniform_storage(tensor_args)) {
+            tensor_coords.merge(ttnn::MeshCoordinateRange(mesh_device->shape()));
+        } else {
+            for (const auto& coordinate :
+                 mesh_device_operation_utils::extract_tensor_coordinates(tensor_args, mesh_device)) {
+                tensor_coords.merge(ttnn::MeshCoordinateRange(coordinate, coordinate));
+            }
+        }
+        auto cached_workload = create_mesh_workload_from_workload_factory<WorkloadFactory, mesh_device_operation_t>(
+            operation_attributes, tensor_coords, tensor_args, tensor_return_value);
+        result = summarize_prepared_workload(cached_workload.workload, mesh_device);
+        if (cache_enabled && !graph_capture_blocks_dispatch()) {
+            program_cache.insert(program_key, CachedProgramFactory{std::move(cached_workload), program_factory_index});
+        }
+    });
+    return result;
 }
 
 // Helper for creating and caching a mesh workload
@@ -330,50 +425,40 @@ void create_and_cache_mesh_workload(
             "Tensors that are distributed across mesh device unevenly negatively affect Op dispatch performance.");
     };
     // WorkloadFactory is unconstrained — dispatch_to_mesh_workload_factory resolves the type.
-    dispatch_to_mesh_workload_factory<mesh_device_operation_t>(
-        program_factory, [&]<typename WorkloadFactory>() {
-            using cached_mesh_workload_t = typename WorkloadFactory::cached_mesh_workload_t;
+    dispatch_to_mesh_workload_factory<mesh_device_operation_t>(program_factory, [&]<typename WorkloadFactory>() {
+        using cached_mesh_workload_t = typename WorkloadFactory::cached_mesh_workload_t;
 
-            ttnn::MeshCoordinateRangeSet tensor_coords;
-            if (mesh_device_operation_utils::all_tensors_have_uniform_storage(tensor_args)) {
-                // Fast path - a range covers the entire mesh.
-                tensor_coords.merge(ttnn::MeshCoordinateRange(mesh_device->shape()));
-            } else {
-                // Slow path - iterate over coordinates and merge them into a range set one by one.
-                log_msg_func();  // Work around for g++12 compiler bug
-                for (const auto& coord :
-                     mesh_device_operation_utils::extract_tensor_coordinates(tensor_args, mesh_device)) {
-                    tensor_coords.merge(ttnn::MeshCoordinateRange(coord, coord));
-                }
+        ttnn::MeshCoordinateRangeSet tensor_coords;
+        if (mesh_device_operation_utils::all_tensors_have_uniform_storage(tensor_args)) {
+            // Fast path - a range covers the entire mesh.
+            tensor_coords.merge(ttnn::MeshCoordinateRange(mesh_device->shape()));
+        } else {
+            // Slow path - iterate over coordinates and merge them into a range set one by one.
+            log_msg_func();  // Work around for g++12 compiler bug
+            for (const auto& coord :
+                 mesh_device_operation_utils::extract_tensor_coordinates(tensor_args, mesh_device)) {
+                tensor_coords.merge(ttnn::MeshCoordinateRange(coord, coord));
             }
-            auto cached_workload = create_mesh_workload_from_workload_factory<WorkloadFactory, mesh_device_operation_t>(
-                operation_attributes, tensor_coords, tensor_args, tensor_return_value);
+        }
+        auto cached_workload = create_mesh_workload_from_workload_factory<WorkloadFactory, mesh_device_operation_t>(
+            operation_attributes, tensor_coords, tensor_args, tensor_return_value);
 
-            // Don't cache programs during NO_DISPATCH graph capture mode because
-            // buffer addresses are invalid (address=0). Caching such programs would
-            // cause issues when later running in NORMAL mode.
-            // In NORMAL capture mode, the hook exists but is non-blocking, so caching is safe.
-            bool should_cache = program_cache.is_enabled() && !graph_capture_blocks_dispatch();
-            if (should_cache) {
-                program_cache.insert(
-                    program_key, CachedProgramFactory{std::move(cached_workload), program_factory_index});
-                auto& cached_program_factory = program_cache.get(program_key);
-                auto& workload = cached_program_factory.cached_program.template get<cached_mesh_workload_t>().workload;
-                enqueue_mesh_workload<mesh_device_operation_t>(
-                    operation_attributes,
-                    tensor_args,
-                    tensor_return_value,
-                    mesh_device,
-                    workload);
-            } else {
-                enqueue_mesh_workload<mesh_device_operation_t>(
-                    operation_attributes,
-                    tensor_args,
-                    tensor_return_value,
-                    mesh_device,
-                    cached_workload.workload);
-            }
-        });
+        // Don't cache programs during NO_DISPATCH graph capture mode because
+        // buffer addresses are invalid (address=0). Caching such programs would
+        // cause issues when later running in NORMAL mode.
+        // In NORMAL capture mode, the hook exists but is non-blocking, so caching is safe.
+        bool should_cache = program_cache.is_enabled() && !graph_capture_blocks_dispatch();
+        if (should_cache) {
+            program_cache.insert(program_key, CachedProgramFactory{std::move(cached_workload), program_factory_index});
+            auto& cached_program_factory = program_cache.get(program_key);
+            auto& workload = cached_program_factory.cached_program.template get<cached_mesh_workload_t>().workload;
+            enqueue_mesh_workload<mesh_device_operation_t>(
+                operation_attributes, tensor_args, tensor_return_value, mesh_device, workload);
+        } else {
+            enqueue_mesh_workload<mesh_device_operation_t>(
+                operation_attributes, tensor_args, tensor_return_value, mesh_device, cached_workload.workload);
+        }
+    });
 }
 
 // Keep tracker-only context construction out of launch_operation_with_adapter's
@@ -562,6 +647,54 @@ typename device_operation_t::tensor_return_value_t launch(
 
     tracked_function.end(tensor_return_value);
     return tensor_return_value;
+}
+
+/**
+ * Compile and finalize an operation without dispatching it.
+ *
+ * The returned sizes describe the largest finalized worker-core program
+ * configuration and kernel binary in the resulting mesh workload.
+ */
+template <DeviceOperationConcept device_operation_t>
+ProgramPreparationResult prepare(
+    const typename device_operation_t::operation_attributes_t& operation_attributes,
+    const typename device_operation_t::tensor_args_t& tensor_args) {
+    std::vector<std::reference_wrapper<const Tensor>> input_tensors;
+    ttsl::reflection::visit_object_of_type<Tensor>(
+        [&input_tensors](const Tensor& tensor) { input_tensors.push_back(std::cref(tensor)); }, tensor_args);
+    for (const auto& input_tensor_ref : input_tensors) {
+        const auto& input_tensor = input_tensor_ref.get();
+        TT_FATAL(is_device_tensor(input_tensor), "Device Operations expect device tensors as inputs");
+        TT_FATAL(input_tensor.is_allocated(), "Input Tensor is not allocated");
+    }
+    if constexpr (!SupportsPerCoreAllocation<device_operation_t>) {
+        const auto operation_name = detail::get_operation_name<device_operation_t>(operation_attributes);
+        for (size_t index = 0; index < input_tensors.size(); ++index) {
+            detail::validate_no_per_core_allocation(input_tensors[index].get(), operation_name, index);
+        }
+    }
+
+    auto tensor_return_value = device_operation_t::create_output_tensors(operation_attributes, tensor_args);
+    auto* mesh_device = detail::get_mesh_device<device_operation_t>(operation_attributes, tensor_args);
+    TT_FATAL(!mesh_device->get_view().get_devices().empty(), "Cannot prepare an operation for an inactive MeshDevice");
+    if (!mesh_device_operation_utils::all_tensors_have_uniform_storage(tensor_args)) {
+        tensor_return_value = mesh_device_operation_utils::filter_tensor_shards(
+            mesh_device_operation_utils::extract_tensor_coordinates(tensor_args, mesh_device), tensor_return_value);
+    }
+    if (!input_tensors.empty()) {
+        std::vector<tt::tt_metal::TensorTopology> custom_topologies;
+        if constexpr (requires {
+                          {
+                              device_operation_t::compute_output_topologies(operation_attributes, tensor_args)
+                          } -> std::same_as<std::vector<tt::tt_metal::TensorTopology>>;
+                      }) {
+            custom_topologies = device_operation_t::compute_output_topologies(operation_attributes, tensor_args);
+        }
+        mesh_device_operation_utils::update_output_tensor_topologies(
+            tensor_return_value, input_tensors, std::move(custom_topologies));
+    }
+    return detail::prepare_operation_with_adapter<MeshDeviceOperationAdapter<device_operation_t>>(
+        operation_attributes, tensor_args, tensor_return_value, mesh_device);
 }
 
 // invoke is now deprecated - use launch_on_device directly

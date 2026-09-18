@@ -520,14 +520,14 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
         .def(
             "experimental_set_per_core_allocation",
             [](MemoryConfig& self, bool enable) {
-                experimental::per_core_allocation::set_per_core_allocation(self, enable);
+                tt::tt_metal::experimental::per_core_allocation::set_per_core_allocation(self, enable);
             },
             nb::arg("enable"),
             "Enable or disable experimental per-core L1 allocation on this MemoryConfig.")
         .def(
             "experimental_set_range_lockstep_allocation",
             [](MemoryConfig& self, bool enable) {
-                experimental::range_lockstep_allocation::set_range_lockstep_allocation(self, enable);
+                tt::tt_metal::experimental::range_lockstep_allocation::set_range_lockstep_allocation(self, enable);
             },
             nb::arg("enable"),
             "Enable or disable experimental range lockstep L1 allocation on this MemoryConfig. The buffer still "

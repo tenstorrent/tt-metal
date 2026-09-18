@@ -4,6 +4,7 @@
 
 #include "generic_op.hpp"
 #include "device/generic_op_device_operation.hpp"
+#include "ttnn/device_operation.hpp"
 
 namespace ttnn {
 
@@ -24,6 +25,27 @@ Tensor generic_op(const std::vector<Tensor>& io_tensors, const tt::tt_metal::Pro
         ttnn::MeshCoordinateRange(mesh_device->shape()), program_descriptor);
 
     return generic_op(io_tensors, mesh_program_descriptor);
+}
+
+experimental::GenericOpPreparationResult experimental::prepare_generic_op(
+    const std::vector<Tensor>& io_tensors,
+    const tt::tt_metal::experimental::MeshProgramDescriptor& mesh_program_descriptor) {
+    auto result = ttnn::prim::prepare_generic_op(io_tensors, mesh_program_descriptor);
+    return {
+        .max_program_config_size_bytes = result.max_program_config_size_bytes,
+        .max_kernel_binary_size_bytes = result.max_kernel_binary_size_bytes,
+    };
+}
+
+experimental::GenericOpPreparationResult experimental::prepare_generic_op(
+    const std::vector<Tensor>& io_tensors, const tt::tt_metal::ProgramDescriptor& program_descriptor) {
+    TT_FATAL(!io_tensors.empty(), "io_tensors must not be empty");
+    auto* mesh_device = io_tensors.front().device();
+    TT_FATAL(mesh_device != nullptr, "Tensor must be on a device");
+    tt::tt_metal::experimental::MeshProgramDescriptor mesh_program_descriptor;
+    mesh_program_descriptor.mesh_programs.emplace_back(
+        ttnn::MeshCoordinateRange(mesh_device->shape()), program_descriptor);
+    return prepare_generic_op(io_tensors, mesh_program_descriptor);
 }
 
 }  // namespace ttnn

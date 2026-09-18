@@ -34,6 +34,7 @@
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/global_semaphore.hpp"
+#include "ttnn/graph/graph_processor.hpp"
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/tensor/unit_mesh/unit_mesh_utils.hpp"
 #include <ttnn/distributed/distributed_tensor.hpp>
@@ -46,6 +47,9 @@
 #include "tests/tt_metal/tt_fabric/common/fabric_fixture.hpp"
 
 namespace ttnn::operations::generic::test {
+
+static_assert(ttnn::experimental::GenericOpPreparationResult{}.max_program_config_size_bytes == 0);
+static_assert(ttnn::experimental::GenericOpPreparationResult{}.max_kernel_binary_size_bytes == 0);
 
 TEST_F(TTNNFixtureWithDevice, TestGenericOpArgmaxSingleCore) {
     uint32_t batch = 1;
@@ -136,6 +140,39 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpArgmaxSingleCore) {
         .semaphores = {},
         .cbs = {input_cb_descriptor, output_cb_descriptor},
     };
+
+    auto preparation = ttnn::experimental::prepare_generic_op(
+        std::vector<Tensor>{device_input_tensor, device_output_tensor}, program_descriptor);
+    EXPECT_GT(preparation.max_program_config_size_bytes, 0);
+    EXPECT_GT(preparation.max_kernel_binary_size_bytes, 0);
+    EXPECT_EQ(
+        ttnn::experimental::prepare_generic_op(
+            std::vector<Tensor>{device_input_tensor, device_output_tensor}, program_descriptor),
+        preparation);
+
+    const std::size_t cacheEntriesBeforeCapture = this->device_->num_program_cache_entries();
+    ProgramDescriptor uncachedProgramDescriptor = program_descriptor;
+    uncachedProgramDescriptor.custom_program_hash = 0x56820;
+    {
+        ttnn::graph::ScopedGraphCapture capture(ttnn::graph::GraphProcessor::RunMode::NO_DISPATCH);
+        EXPECT_EQ(
+            ttnn::experimental::prepare_generic_op(
+                std::vector<Tensor>{device_input_tensor, device_output_tensor}, program_descriptor),
+            preparation);
+        auto uncachedPreparation = ttnn::experimental::prepare_generic_op(
+            std::vector<Tensor>{device_input_tensor, device_output_tensor}, uncachedProgramDescriptor);
+        EXPECT_GT(uncachedPreparation.max_program_config_size_bytes, 0);
+    }
+    EXPECT_EQ(this->device_->num_program_cache_entries(), cacheEntriesBeforeCapture);
+
+    const std::size_t cache_entries_before_failure = this->device_->num_program_cache_entries();
+    ProgramDescriptor oversized_program_descriptor = program_descriptor;
+    oversized_program_descriptor.kernels.front().common_runtime_args.resize(1 << 20);
+    EXPECT_THROW(
+        ttnn::experimental::prepare_generic_op(
+            std::vector<Tensor>{device_input_tensor, device_output_tensor}, oversized_program_descriptor),
+        std::exception);
+    EXPECT_EQ(this->device_->num_program_cache_entries(), cache_entries_before_failure);
 
     ttnn::generic_op(std::vector<Tensor>{device_input_tensor, device_output_tensor}, program_descriptor);
     Tensor output_tensor = device_output_tensor.cpu();
@@ -1016,14 +1053,10 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpProgramCacheCommonRuntimeArgs) {
     Tensor device_output_tensor_2 = ttnn::create_device_tensor(device_input_tensor_2.tensor_spec(), this->device_);
 
     // Update both per-core and common runtime args with new addresses
-    program_descriptor.kernels[0].runtime_args[0].second = {
-        device_input_tensor_2.buffer()->address(), num_tiles, 0};
-    program_descriptor.kernels[0].common_runtime_args = {
-        device_input_tensor_2.buffer()->address(), num_tiles, 0};
-    program_descriptor.kernels[1].runtime_args[0].second = {
-        device_output_tensor_2.buffer()->address(), num_tiles, 0};
-    program_descriptor.kernels[1].common_runtime_args = {
-        device_output_tensor_2.buffer()->address(), num_tiles, 0};
+    program_descriptor.kernels[0].runtime_args[0].second = {device_input_tensor_2.buffer()->address(), num_tiles, 0};
+    program_descriptor.kernels[0].common_runtime_args = {device_input_tensor_2.buffer()->address(), num_tiles, 0};
+    program_descriptor.kernels[1].runtime_args[0].second = {device_output_tensor_2.buffer()->address(), num_tiles, 0};
+    program_descriptor.kernels[1].common_runtime_args = {device_output_tensor_2.buffer()->address(), num_tiles, 0};
 
     ttnn::generic_op(std::vector{device_input_tensor_2, device_output_tensor_2}, program_descriptor);
     Tensor golden_2 = ttnn::exp(device_input_tensor_2);
