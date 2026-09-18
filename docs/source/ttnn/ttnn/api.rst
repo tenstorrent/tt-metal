@@ -127,6 +127,7 @@ Tensor Creation
    ttnn.ones
    ttnn.ones_like
    ttnn.rand
+   ttnn.rand_state
    ttnn.randn
    ttnn.uniform
    ttnn.zeros
