@@ -3025,6 +3025,14 @@ class ModelArgs:
             self.pad_logits_to_power_of_2 = should_pad_sampling_logits_to_power_of_2(
                 self.base_model_name, self.padded_vocab_size, self.num_devices
             )
+            if self.base_model_name == "Llama-3.1-8B" and self.device_name == "P150x4":
+                # The padding exists to keep ttnn.topk off its single-core factory
+                # (issue #40399). This shard does not regress: isolated traced topk of
+                # 32x32064 k=32 is 173.0 us and of the padded 32x32768 is 172.6 us, while
+                # the ttnn.pad that produces the padded row costs 13.5 us per token. (The
+                # real single-core cliff is visible right next to it - the same 32064 call
+                # with stable=True takes 5273 us - so the many-core factory is being used.)
+                self.pad_logits_to_power_of_2 = False
         else:
             # Off on [1, 1]: an A/B on the multi-step split path (PR #53167)
             # measured no end-to-end decode benefit from padding the topk chunks
