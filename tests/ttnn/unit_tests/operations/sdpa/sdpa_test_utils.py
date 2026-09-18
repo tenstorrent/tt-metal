@@ -359,6 +359,7 @@ def run_test_sdpa_decode_single_iter(
     override_q_chunk_size=None,
     override_k_chunk_size=None,
     sliding_window_size=None,
+    share_cache=False,
 ):
     compute_grid_size = device.compute_with_storage_grid_size()
     if sub_core_grids is None:
@@ -404,8 +405,9 @@ def run_test_sdpa_decode_single_iter(
 
     height_sharded_memcfg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
 
-    K = fa_rand(b, nkv, s, d)
-    V = fa_rand(b, nkv, s, d)
+    kv_batch = 1 if share_cache else b
+    K = fa_rand(kv_batch, nkv, s, d)
+    V = fa_rand(kv_batch, nkv, s, d)
 
     tt_K = ttnn.as_tensor(K, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT, memory_config=dram_memcfg)
     tt_V = ttnn.as_tensor(V, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT, memory_config=dram_memcfg)
@@ -475,6 +477,7 @@ def run_test_sdpa_decode_single_iter(
                     program_config=program_config,
                     compute_kernel_config=compute_kernel_config,
                     memory_config=height_sharded_memcfg if sharded_out else dram_memcfg,
+                    share_cache=share_cache,
                 )
         else:
             with device.cache_entries_counter.measure():
@@ -488,6 +491,7 @@ def run_test_sdpa_decode_single_iter(
                     program_config=program_config,
                     compute_kernel_config=compute_kernel_config,
                     memory_config=height_sharded_memcfg if sharded_out else dram_memcfg,
+                    share_cache=share_cache,
                 )
     else:
         tt_mask = ttnn.as_tensor(
@@ -508,6 +512,7 @@ def run_test_sdpa_decode_single_iter(
                 program_config=program_config,
                 compute_kernel_config=compute_kernel_config,
                 memory_config=height_sharded_memcfg if sharded_out else dram_memcfg,
+                share_cache=share_cache,
             )
 
     tt_back_shape = list(tt_back.shape)
@@ -515,16 +520,25 @@ def run_test_sdpa_decode_single_iter(
         f"SDPA decode output logical head dim should be {nh} (unpadded), got {tt_back_shape[2]}. "
         f"SDPA decode should preserve the logical head dimension regardless of tensor layout."
     )
+    assert tt_back_shape[1] == b, (
+        f"SDPA decode output batch dim should be {b} (Q's batch), got {tt_back_shape[1]}. "
+    )
 
     tt_back = ttnn.to_torch(tt_back)
     tt_back = tt_back[:, :, :nh, :]
 
     Q_slice = Q[:, :, :nh, :].permute(1, 2, 0, 3)  # b, nh, 1, d
-    K_slice = K[:, :, :padded_layer_len, :]  # b, nkv, S, d
+    K_slice = K[:, :, :padded_layer_len, :]  # kv_batch, nkv, S, d
+    V_slice = V[:, :, :padded_layer_len, :]  # kv_batch, nkv, S, d
+
+    if share_cache:
+        # K/V were generated with batch=1; broadcast to Q's batch size for the reference
+        K_slice = K_slice.expand(b, -1, -1, -1)
+        V_slice = V_slice.expand(b, -1, -1, -1)
+
     K_slice = torch.cat(
         [K_slice[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1
     )  # b, nh, S, d
-    V_slice = V[:, :, :padded_layer_len, :]  # b, nkv, S, d
     V_slice = torch.cat(
         [V_slice[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1
     )  # b, nh, S, d
