@@ -2188,7 +2188,7 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
                         plan.row_major_cores ? ShardOrientation::ROW_MAJOR : ShardOrientation::COL_MAJOR;
                     ShardSpec shard_spec = ShardSpec{
                         grid,
-                        {plan.per_core_M * in0_tile.get_height(), plan.per_core_N * in1_tile.get_width()},
+                        {plan.per_core_M_tiles * in0_tile.get_height(), plan.per_core_N_tiles * in1_tile.get_width()},
                         orientation};
                     const tt::tt_metal::MemoryConfig mem_config(
                         plan.sharded_output_layout(), attributes.output_mem_config.buffer_type(), shard_spec);

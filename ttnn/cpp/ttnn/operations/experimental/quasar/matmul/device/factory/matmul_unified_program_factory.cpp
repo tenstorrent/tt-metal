@@ -87,9 +87,9 @@ uint64_t size_rings(UnifiedMatmulPlan& plan, uint32_t K_iteration_tiles, bool fp
     plan.C_slot_bytes = tt::tile_size(plan.C_format);
     plan.C_partials_slot_bytes = tt::tile_size(plan.C_partials_format);
 
-    const uint32_t A_slice_tiles = plan.per_core_M * K_iteration_tiles;
-    const uint32_t B_slice_tiles = K_iteration_tiles * plan.per_core_N;
-    const uint32_t C_block_tiles = plan.per_core_M * plan.per_core_N;
+    const uint32_t A_slice_tiles = plan.per_core_M_tiles * K_iteration_tiles;
+    const uint32_t B_slice_tiles = K_iteration_tiles * plan.per_core_N_tiles;
+    const uint32_t C_block_tiles = plan.per_core_M_tiles * plan.per_core_N_tiles;
     // Double-buffer the slices whenever more than one slice passes through the ring.
     const bool more_than_one_slice = (uint64_t)plan.max_blocks_per_core * plan.num_K_iterations > 1;
     const uint32_t slice_ring_depth = more_than_one_slice ? 2 : 1;
@@ -132,10 +132,10 @@ bool rings_fit(const UnifiedMatmulPlan& plan, uint64_t l1_budget) {
 }  // namespace
 
 tt::tt_metal::TensorMemoryLayout UnifiedMatmulPlan::sharded_output_layout() const {
-    if (per_core_N >= N_tiles) {  // a block spans all of N: blocks are stacked down M
+    if (per_core_N_tiles >= N_tiles) {  // a block spans all of N: blocks are stacked down M
         return tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED;
     }
-    if (per_core_M >= M_tiles) {  // a block spans all of M: blocks sit side by side across N
+    if (per_core_M_tiles >= M_tiles) {  // a block spans all of M: blocks sit side by side across N
         return tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED;
     }
     return tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED;
@@ -189,12 +189,14 @@ UnifiedMatmulPlan plan_unified_matmul(
         plan.batch_size);
 
     // ---- Block assignment ----
-    TT_FATAL(config.per_core_M > 0 && config.per_core_N > 0, "per_core_M and per_core_N must be > 0");
-    plan.per_core_M = config.per_core_M;
-    plan.per_core_N = config.per_core_N;
+    TT_FATAL(
+        config.per_core_M_tiles > 0 && config.per_core_N_tiles > 0,
+        "per_core_M_tiles and per_core_N_tiles must be > 0");
+    plan.per_core_M_tiles = config.per_core_M_tiles;
+    plan.per_core_N_tiles = config.per_core_N_tiles;
     // How many blocks the walk over C visits: across N, then down M, then the next batch.
-    const uint32_t blocks_across_N = tt::div_up(plan.N_tiles, plan.per_core_N);
-    const uint32_t blocks_down_M = tt::div_up(plan.M_tiles, plan.per_core_M);
+    const uint32_t blocks_across_N = tt::div_up(plan.N_tiles, plan.per_core_N_tiles);
+    const uint32_t blocks_down_M = tt::div_up(plan.M_tiles, plan.per_core_M_tiles);
     const uint32_t blocks_per_batch = blocks_down_M * blocks_across_N;
     plan.total_blocks = plan.batch_size * blocks_per_batch;
 
@@ -211,7 +213,7 @@ UnifiedMatmulPlan plan_unified_matmul(
     const std::vector<CoreCoord> all_cores = corerange_to_cores(config.cores, std::nullopt, config.row_major_cores);
     // Each active core takes a contiguous run of the walk, the first (total % num_active) cores one
     // block longer. A core's start is expressed in tile coordinates so the kernels only ever step by
-    // per_core_M / per_core_N.
+    // per_core_M_tiles / per_core_N_tiles.
     const uint32_t num_active = std::min<uint32_t>(all_cores.size(), plan.total_blocks);
     plan.cores.assign(all_cores.begin(), all_cores.begin() + num_active);
     const uint32_t blocks_per_core_floor = plan.total_blocks / num_active;
@@ -225,8 +227,8 @@ UnifiedMatmulPlan plan_unified_matmul(
         plan.num_blocks[core] = blocks_per_core_floor + (core < cores_with_extra_block ? 1 : 0);
         plan.first_batch[core] = next_block / blocks_per_batch;
         const uint32_t within_batch = next_block % blocks_per_batch;
-        plan.first_M_tile[core] = (within_batch / blocks_across_N) * plan.per_core_M;
-        plan.first_N_tile[core] = (within_batch % blocks_across_N) * plan.per_core_N;
+        plan.first_M_tile[core] = (within_batch / blocks_across_N) * plan.per_core_M_tiles;
+        plan.first_N_tile[core] = (within_batch % blocks_across_N) * plan.per_core_N_tiles;
         next_block += plan.num_blocks[core];
     }
     plan.max_blocks_per_core = plan.num_blocks.front();
@@ -239,7 +241,7 @@ UnifiedMatmulPlan plan_unified_matmul(
         // The chooser's (h, w) is (M tiles, N tiles) of the subblock.
         const std::tuple<uint32_t, uint32_t> subblock =
             operations::experimental::quasar::matmul::bmm_op_utils_qsr::get_matmul_subblock_params(
-                plan.per_core_M, plan.per_core_N, false, false, fp32_dest_acc_en);
+                plan.per_core_M_tiles, plan.per_core_N_tiles, false, false, fp32_dest_acc_en);
         plan.subblock_M_tiles = std::get<0>(subblock);
         plan.subblock_N_tiles = std::get<1>(subblock);
     } else {
@@ -250,12 +252,12 @@ UnifiedMatmulPlan plan_unified_matmul(
         plan.subblock_N_tiles = config.subblock_N_tiles;
     }
     TT_FATAL(
-        plan.per_core_M % plan.subblock_M_tiles == 0 && plan.per_core_N % plan.subblock_N_tiles == 0,
+        plan.per_core_M_tiles % plan.subblock_M_tiles == 0 && plan.per_core_N_tiles % plan.subblock_N_tiles == 0,
         "subblock {}x{} must divide the per-core block {}x{}",
         plan.subblock_M_tiles,
         plan.subblock_N_tiles,
-        plan.per_core_M,
-        plan.per_core_N);
+        plan.per_core_M_tiles,
+        plan.per_core_N_tiles);
     const uint32_t dst_capacity_tiles = fp32_dest_acc_en ? 4 : 8;
     TT_FATAL(
         plan.subblock_M_tiles * plan.subblock_N_tiles <= dst_capacity_tiles,
@@ -289,9 +291,9 @@ UnifiedMatmulPlan plan_unified_matmul(
         TT_FATAL(
             chosen > 0,
             "MatmulUnifiedProgramConfig: a {}x{}-tile C block does not fit L1 even with K_iteration_tiles=1 "
-            "(needs {} B, budget {} B, max ring {} B); shrink per_core_M / per_core_N",
-            plan.per_core_M,
-            plan.per_core_N,
+            "(needs {} B, budget {} B, max ring {} B); shrink per_core_M_tiles / per_core_N_tiles",
+            plan.per_core_M_tiles,
+            plan.per_core_N_tiles,
             plan.l1_bytes,
             l1_budget,
             MAX_DFB_RING_BYTES);
@@ -306,8 +308,8 @@ UnifiedMatmulPlan plan_unified_matmul(
             rings_fit(plan, l1_budget),
             "MatmulUnifiedProgramConfig: rings for a {}x{}-tile C block with K_iteration_tiles={} do not fit "
             "(needs {} B, budget {} B, max ring {} B: A slice {} B, B slice {} B, C block {} B, C partials {} B)",
-            plan.per_core_M,
-            plan.per_core_N,
+            plan.per_core_M_tiles,
+            plan.per_core_N_tiles,
             plan.K_iteration_tiles,
             plan.l1_bytes,
             l1_budget,
@@ -436,8 +438,8 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
                 {"K_tiles", plan.K_tiles},
                 {"N_tiles", plan.N_tiles},
                 {"broadcast_B_over_batch", plan.broadcast_B_over_batch ? 1u : 0u},
-                {"per_core_M", plan.per_core_M},
-                {"per_core_N", plan.per_core_N},
+                {"per_core_M_tiles", plan.per_core_M_tiles},
+                {"per_core_N_tiles", plan.per_core_N_tiles},
                 {"K_iteration_tiles", plan.K_iteration_tiles},
                 {"num_K_iterations", plan.num_K_iterations},
                 {"A_last_K_tile_valid_columns", A_last_K_tile_valid_columns},
@@ -458,8 +460,8 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
             {
                 {"M_tiles", plan.M_tiles},
                 {"N_tiles", plan.N_tiles},
-                {"per_core_M", plan.per_core_M},
-                {"per_core_N", plan.per_core_N},
+                {"per_core_M_tiles", plan.per_core_M_tiles},
+                {"per_core_N_tiles", plan.per_core_N_tiles},
                 {"subblock_M_tiles", plan.subblock_M_tiles},
                 {"subblock_N_tiles", plan.subblock_N_tiles},
             },
@@ -523,8 +525,8 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
             {
                 {"K_iteration_tiles", plan.K_iteration_tiles},
                 {"num_K_iterations", plan.num_K_iterations},
-                {"per_core_M", plan.per_core_M},
-                {"per_core_N", plan.per_core_N},
+                {"per_core_M_tiles", plan.per_core_M_tiles},
+                {"per_core_N_tiles", plan.per_core_N_tiles},
                 {"subblock_M_tiles", plan.subblock_M_tiles},
                 {"subblock_N_tiles", plan.subblock_N_tiles},
             },
