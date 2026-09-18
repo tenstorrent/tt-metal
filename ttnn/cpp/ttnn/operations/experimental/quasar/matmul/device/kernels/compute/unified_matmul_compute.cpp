@@ -48,6 +48,21 @@ FORCE_INLINE void reload_partials_into_dst(
     matmul_block_init(dfb::A_slice, dfb::B_slice, /*transpose=*/0, subblock_N_tiles, subblock_M_tiles, K_chunk_tiles);
 }
 
+#ifdef PACKER_L1_ACC
+// With packer L1 accumulation the entries pushed to C_partials during a K chunk carry nothing new: the packer
+// added DST onto the partials already in L1. Pop them without reading so the ring is empty again and the next
+// K chunk's packs land on the same L1 addresses (the ring holds exactly one MN chunk). dummy_unpack orders the
+// pop after the wait on Quasar; it is a no-op elsewhere.
+FORCE_INLINE void drain_partials(uint32_t MN_chunk_tiles, uint32_t subblock_tiles) {
+    DataflowBuffer C_partials(dfb::C_partials);
+    for (uint32_t popped = 0; popped < MN_chunk_tiles; popped += subblock_tiles) {
+        C_partials.wait_front(subblock_tiles);
+        dummy_unpack(dfb::C_partials);
+        C_partials.pop_front(subblock_tiles);
+    }
+}
+#endif
+
 void kernel_main() {
     const uint32_t num_MN_chunks = get_arg(args::num_MN_chunks);  // this core's chunks, per batch
 
@@ -81,10 +96,15 @@ void kernel_main() {
                 // needs no fix-up: reload_partials_into_dst already restores SrcA to B's format.)
                 pack_reconfig_data_format(dfb::C_partials);
             }
-            bool reload_partials = false;
-
             for (uint32_t K_chunk = 0; K_chunk < num_K_chunks; ++K_chunk) {
                 const bool last_K_chunk = K_chunk == num_K_chunks - 1;
+#ifdef PACKER_L1_ACC
+                // The packer accumulates in L1 between K chunks, so only the last one reloads the sum into DST.
+                const bool reload_partials = accumulate_across_K_chunks && last_K_chunk;
+#else
+                // Every K chunk after the first reloads what the previous one packed.
+                const bool reload_partials = K_chunk > 0;
+#endif
                 A_slice.wait_front(A_slice_tiles);
                 B_slice.wait_front(B_slice_tiles);
 
@@ -155,23 +175,10 @@ void kernel_main() {
                 }
 
 #ifdef PACKER_L1_ACC
-                // The packer accumulated in place, so the entries pushed this K chunk carry nothing new:
-                // pop them without reading (the ring holds exactly one chunk, so the next K chunk lands on
-                // the same L1 addresses). The second-to-last K chunk's entries stay: the last one reloads
-                // them. dummy_unpack orders the pop after the wait on Quasar; it is a no-op elsewhere.
-                if (K_chunk + 2 < num_K_chunks) {
-                    for (uint32_t popped = 0; popped < MN_chunk_tiles; popped += subblock_tiles) {
-                        C_partials.wait_front(subblock_tiles);
-                        dummy_unpack(dfb::C_partials);
-                        C_partials.pop_front(subblock_tiles);
-                    }
-                }
-                if (K_chunk + 2 == num_K_chunks) {
-                    reload_partials = true;
-                }
-#else
-                if constexpr (accumulate_across_K_chunks) {
-                    reload_partials = true;
+                // Keep the second-to-last K chunk's entries: the last K chunk reloads them.
+                const bool partials_are_stale = K_chunk + 2 < num_K_chunks;
+                if (partials_are_stale) {
+                    drain_partials(MN_chunk_tiles, subblock_tiles);
                 }
 #endif
 
