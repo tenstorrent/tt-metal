@@ -17,8 +17,16 @@
 #include "impl/kernels/kernel.hpp"
 #include "dispatch_test_utils.hpp"
 #include "tt_metal/tt_metal/eth/eth_test_common.hpp"
+#include <tt-metalium/experimental/metal2_host_api/kernel_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 
 namespace tt::tt_metal {
+
+// A DM-produced, Tensix-consumed DFB takes one of the 16 DM-visible tile counters on its tensix, so
+// that is the ceiling here rather than the 32 device slots Gen2 allows. It also matches the length of
+// the accessor ladders in random_program_2_0.cpp and dispatcher_kernel_size_and_runtime_2_0.cpp.
+constexpr uint32_t k_gen2_max_num_dfbs = 16;
 
 class UnitMeshRandomProgramFixture : virtual public UnitMeshCQSingleCardProgramFixture {
 protected:
@@ -84,6 +92,20 @@ protected:
         log_info(tt::LogTest, "Using seed: {}", seed);
         srand(seed);
     }
+    // Gen2 programs are built from a ProgramSpec rather than having kernels added to an existing
+    // Program, so callers that support both take the whole program from here.
+    Program create_program_with_kernel(
+        const CoreType kernel_core_type,
+        const bool simple_kernel = false,
+        KernelProperties kernel_properties = KernelProperties()) {
+        if (device_->arch() != ARCH::QUASAR) {
+            Program program = CreateProgram();
+            this->create_kernel(program, kernel_core_type, simple_kernel, kernel_properties);
+            return program;
+        }
+        return this->create_gen2_program(kernel_core_type, simple_kernel, kernel_properties);
+    }
+
     void create_kernel(
         Program& program,
         const CoreType kernel_core_type,
@@ -222,6 +244,171 @@ protected:
     }
 
 private:
+    // Gen2 equivalent of the create_kernel path below. Semaphores are declared so dispatch still has
+    // to place them, but are not value checked: Gen2 only allows a zero initial value.
+    Program create_gen2_program(
+        const CoreType kernel_core_type, const bool simple_kernel, KernelProperties kernel_properties) {
+        using namespace tt::tt_metal::experimental;
+
+        TT_FATAL(kernel_core_type == CoreType::WORKER, "Only worker cores are ported to Metal 2.0");
+        if (kernel_properties.max_num_cbs == 0) {
+            kernel_properties.max_num_cbs = max_cbs_;
+        }
+        // hal().get_arch_num_circular_buffers() reports 64 on Quasar, far more DFBs than a single
+        // node has tile counters for, so clamp both ends of the range.
+        kernel_properties.max_num_cbs = std::min(kernel_properties.max_num_cbs, k_gen2_max_num_dfbs);
+        kernel_properties.min_num_cbs = std::min(kernel_properties.min_num_cbs, kernel_properties.max_num_cbs);
+        const CoreRangeSet cores = this->get_cores(kernel_core_type);
+
+        std::vector<uint32_t> sem_ids;
+        std::vector<uint32_t> entry_sizes;
+        std::vector<uint32_t> num_entries;
+        std::vector<uint32_t> unique_rt_args;
+        std::vector<uint32_t> common_rt_args;
+        uint32_t num_unique_rt_args = 0;
+
+        if (!simple_kernel) {
+            const uint32_t num_sems =
+                this->generate_random_num(kernel_properties.min_num_sems, kernel_properties.max_num_sems);
+            for (uint32_t i = 0; i < num_sems; i++) {
+                sem_ids.push_back(i);
+            }
+
+            const uint32_t num_dfbs =
+                this->generate_random_num(kernel_properties.min_num_cbs, kernel_properties.max_num_cbs);
+            for (uint32_t i = 0; i < num_dfbs; i++) {
+                const uint32_t entry_size =
+                    this->generate_random_num(MIN_CB_PAGE_SIZE, MAX_CB_PAGE_SIZE, CIRCULAR_BUFFER_COMPUTE_WORD_SIZE);
+                const uint32_t total_size = this->generate_random_num(MIN_CB_TOTAL_SIZE, MAX_CB_TOTAL_SIZE, entry_size);
+                entry_sizes.push_back(entry_size);
+                num_entries.push_back(total_size / entry_size);
+            }
+
+            std::tie(unique_rt_args, common_rt_args) = this->generate_runtime_args(
+                sem_ids, entry_sizes, kernel_properties.min_num_rt_args, kernel_properties.max_num_rt_args);
+            num_unique_rt_args = unique_rt_args.size() - sem_ids.size() - entry_sizes.size();
+        }
+
+        const uint32_t kernel_size_bytes =
+            this->generate_random_num(kernel_properties.min_kernel_size_bytes, kernel_properties.max_kernel_size_bytes);
+        const uint32_t kernel_runtime_microseconds = this->generate_random_num(
+            kernel_properties.min_kernel_runtime_microseconds, kernel_properties.max_kernel_runtime_microseconds);
+
+        KernelSpec::CompilerOptions::Defines defines;
+        defines.emplace("KERNEL_SIZE_BYTES", std::to_string(kernel_size_bytes));
+        defines.emplace("KERNEL_RUNTIME_MICROSECONDS", std::to_string(kernel_runtime_microseconds));
+        // NUM_DFBS would collide with the firmware's dfb::NUM_DFBS constant.
+        defines.emplace("NUM_TEST_DFBS", std::to_string(entry_sizes.size()));
+        defines.emplace("NUM_TEST_SEMS", std::to_string(sem_ids.size()));
+
+        // Gen2 rejects a data-movement kernel bound as both ends of a DFB, so the kernel under test
+        // produces and a blank compute kernel consumes. Nothing is pushed through the buffers, as on
+        // Gen1; the point is that dispatch has to deliver each buffer's config for the kernel to read
+        // back. A compute endpoint requires the data format to be declared.
+        Group<DataflowBufferSpec> dataflow_buffers;
+        Group<KernelSpec::DFBBinding> producer_bindings;
+        Group<KernelSpec::DFBBinding> consumer_bindings;
+        for (uint32_t i = 0; i < entry_sizes.size(); i++) {
+            const DFBSpecName dfb_name{"dfb_" + std::to_string(i)};
+            dataflow_buffers.push_back(DataflowBufferSpec{
+                .unique_id = dfb_name,
+                .entry_size = entry_sizes[i],
+                .num_entries = num_entries[i],
+                .data_format_metadata = tt::DataFormat::Float16_b,
+            });
+            producer_bindings.push_back(KernelSpec::DFBBinding{
+                .dfb_spec_name = dfb_name,
+                .accessor_name = dfb_name.get(),
+                .endpoint_type = KernelSpec::DFBBinding::EndpointType::PRODUCER,
+            });
+            consumer_bindings.push_back(KernelSpec::DFBBinding{
+                .dfb_spec_name = dfb_name,
+                .accessor_name = dfb_name.get() + "_in",
+                .endpoint_type = KernelSpec::DFBBinding::EndpointType::CONSUMER,
+            });
+        }
+
+        Group<SemaphoreSpec> semaphores;
+        Group<KernelSpec::SemaphoreBinding> semaphore_bindings;
+        for (uint32_t sem_id : sem_ids) {
+            const SemaphoreSpecName sem_name{"sem_" + std::to_string(sem_id)};
+            semaphores.push_back(SemaphoreSpec{
+                .unique_id = sem_name,
+                .target_nodes = cores,
+            });
+            semaphore_bindings.push_back(KernelSpec::SemaphoreBinding{
+                .semaphore_spec_name = sem_name,
+                .accessor_name = sem_name.get(),
+            });
+        }
+
+        const KernelSpecName name{"dispatcher_kernel_size_and_runtime"};
+        KernelSpec kernel_spec{
+            .unique_id = name,
+            .source = std::filesystem::path{"tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/"
+                                            "dispatcher_kernel_size_and_runtime_2_0.cpp"},
+            .num_threads = 1,
+            .compiler_options = {.defines = std::move(defines)},
+            .dfb_bindings = producer_bindings,
+            .semaphore_bindings = semaphore_bindings,
+            .compile_time_args =
+                {{"num_unique_rt_args", num_unique_rt_args},
+                 {"num_common_rt_args", static_cast<uint32_t>(common_rt_args.size())},
+                 {"unique_rt_args_vals_offset", UNIQUE_RUNTIME_ARGS_VAL_OFFSET},
+                 {"common_rt_args_vals_offset", COMMON_RUNTIME_ARGS_VAL_OFFSET},
+                 {"num_sems", static_cast<uint32_t>(sem_ids.size())}},
+            // Implicit sync would take a transaction id per DFB out of a pool of 24, and nothing is
+            // ever pushed through these buffers for it to synchronize.
+            .hw_config = DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true},
+            .advanced_options =
+                KernelAdvancedOptions{
+                    .num_runtime_varargs = static_cast<uint32_t>(unique_rt_args.size()),
+                    .num_common_runtime_varargs = static_cast<uint32_t>(common_rt_args.size()),
+                },
+        };
+
+        Group<KernelSpec> kernels{kernel_spec};
+        Group<KernelSpecName> work_unit_kernels{name};
+        const KernelSpecName consumer_name{"dfb_consumer"};
+        if (!consumer_bindings.empty()) {
+            kernels.push_back(KernelSpec{
+                .unique_id = consumer_name,
+                .source = std::filesystem::path{"tests/tt_metal/tt_metal/test_kernels/compute/blank.cpp"},
+                .num_threads = 1,
+                .dfb_bindings = consumer_bindings,
+                .hw_config = ComputeHardwareConfig{ComputeGen2Config{}},
+            });
+            work_unit_kernels.push_back(consumer_name);
+        }
+
+        ProgramSpec spec{
+            .name = "random_program",
+            .kernels = kernels,
+            .dataflow_buffers = dataflow_buffers,
+            .semaphores = semaphores,
+            .work_units = {WorkUnitSpec{
+                .name = "work_unit",
+                .kernels = work_unit_kernels,
+                .target_nodes = cores,
+            }},
+        };
+        Program program = MakeProgramFromSpec(*device_, spec);
+
+        if (!unique_rt_args.empty() || !common_rt_args.empty()) {
+            ProgramRunArgs run_args;
+            ProgramRunArgs::KernelRunArgs kernel_run_args{.kernel = name};
+            for (const CoreRange& core_range : cores.ranges()) {
+                for (const CoreCoord& core_coord : core_range) {
+                    kernel_run_args.advanced_options.runtime_varargs[core_coord] = unique_rt_args;
+                }
+            }
+            kernel_run_args.advanced_options.common_runtime_varargs = common_rt_args;
+            run_args.kernel_run_args.push_back(std::move(kernel_run_args));
+            SetProgramRunArgs(program, run_args);
+        }
+        return program;
+    }
+
     KernelHandle create_kernel(
         Program& program,
         const CoreRangeSet& cores,

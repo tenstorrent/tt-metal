@@ -2,12 +2,21 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
+#include <optional>
+#include <string_view>
+
 #include <tt-logger/tt-logger.hpp>
 #include "device_fixture.hpp"
 #include "dm_common.hpp"
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/kernel_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 
 namespace tt::tt_metal {
 
@@ -39,9 +48,6 @@ struct DirectWriteConfig {
 /// @param test_config Test configuration
 /// @return Success status
 bool run_dm(distributed::MeshDevice& mesh_device, const DirectWriteConfig& test_config) {
-    // Program
-    Program program = CreateProgram();
-
     // Get Sender L1 Address info
     L1AddressInfo sender_l1_info =
         tt::tt_metal::unit_tests::dm::get_l1_address_and_size(mesh_device, test_config.sender_core_coord);
@@ -83,7 +89,7 @@ bool run_dm(distributed::MeshDevice& mesh_device, const DirectWriteConfig& test_
             {"write_val_base", test_config.write_value_base},
             {"same_dest", test_config.same_destination ? 1u : 0u},
             {"addr_stride", test_config.addr_stride},
-            {"noc_index", static_cast<uint32_t>(test_config.noc_id)},
+            {"noc_id", static_cast<uint32_t>(test_config.noc_id)},
             {"num_subordinates", test_config.num_subordinates},
             {"start_x", (uint32_t)sub_worker_start_coord.x},
             {"start_y", (uint32_t)sub_worker_start_coord.y},
@@ -126,14 +132,37 @@ bool run_dm(distributed::MeshDevice& mesh_device, const DirectWriteConfig& test_
 
     std::string sender_kernel_path = kernels_dir + sender_kernel_filename;
 
-    CreateKernel(
-        program,
-        sender_kernel_path,
-        test_config.sender_core_coord,
-        DataMovementConfig{
+    using namespace tt::tt_metal::experimental;
+
+    DataMovementHardwareConfig sender_hw_config;
+    if (mesh_device.arch() == tt::ARCH::QUASAR) {
+        sender_hw_config = DataMovementGen2Config{};
+    } else {
+        sender_hw_config = DataMovementGen1Config{
             .processor = DataMovementProcessor::RISCV_0,
             .noc = test_config.noc_id,
-            .named_compile_args = sender_compile_args});
+        };
+    }
+
+    KernelSpec sender_spec{
+        .unique_id = KernelSpecName{"sender"},
+        .source = sender_kernel_path,
+        .num_threads = 1,
+        .compile_time_args = KernelSpec::CompileTimeArgs(sender_compile_args),
+        .hw_config = sender_hw_config,
+    };
+
+    ProgramSpec spec{
+        .name = "direct_write_test",
+        .kernels = {sender_spec},
+        .work_units = {WorkUnitSpec{
+            .name = "work_unit",
+            .kernels = {sender_spec.unique_id},
+            .target_nodes = CoreRangeSet(CoreRange(test_config.sender_core_coord)),
+        }},
+    };
+
+    Program program = MakeProgramFromSpec(mesh_device, spec);
 
     // Assign unique id
     log_info(LogTest, "Running Test ID: {}, Run ID: {}", test_config.test_id, unit_tests::dm::runtime_host_id);
@@ -225,14 +254,26 @@ bool run_dm(distributed::MeshDevice& mesh_device, const DirectWriteConfig& test_
     return pass;
 }
 
+// Measured on emu-quasar-2x3_DISPATCH; the suite itself is ported to Metal 2.0 and passes on Gen1.
+constexpr std::string_view kQuasarInlineWriteBroken =
+    "Skipping on Quasar: noc_inline_dw_write does not work here - posted writes leave the destination "
+    "L1 unchanged, non-posted writes never ack and hang the write barrier - see issue #55386";
+
+std::optional<CoreCoord> select_receiver_core(const CoreCoord& grid, const CoreCoord& sender_core) {
+    if (grid.x >= 2 && sender_core != CoreCoord{1, 0}) {
+        return CoreCoord{1, 0};
+    }
+    if (grid.y >= 2 && sender_core != CoreCoord{0, 1}) {
+        return CoreCoord{0, 1};
+    }
+    return std::nullopt;
+}
+
 void performance_comparison_test(
-    distributed::MeshDevice& mesh_device,
-    uint32_t test_id,
-    CoreCoord sender_core = {0, 0},
-    CoreCoord receiver_core = {1, 1}) {
-    uint32_t max_transactions = 1024;                 // Show scaling advantage
-    vector<bool> stateful_options = {false, true};    // Non-stateful vs stateful
-    vector<bool> posted_options = {false, true};      // Non-posted vs posted
+    distributed::MeshDevice& mesh_device, uint32_t test_id, CoreCoord sender_core, CoreCoord receiver_core) {
+    uint32_t max_transactions = 1024;               // Show scaling advantage
+    vector<bool> stateful_options = {false, true};  // Non-stateful vs stateful
+    vector<bool> posted_options = {false, true};    // Non-posted vs posted
 
     for (uint32_t num_of_transactions = 1; num_of_transactions <= max_transactions; num_of_transactions *= 2) {
         for (bool posted : posted_options) {
@@ -253,10 +294,7 @@ void performance_comparison_test(
 }
 
 void address_pattern_test(
-    distributed::MeshDevice& mesh_device,
-    uint32_t test_id,
-    CoreCoord sender_core = {0, 0},
-    CoreCoord receiver_core = {1, 1}) {
+    distributed::MeshDevice& mesh_device, uint32_t test_id, CoreCoord sender_core, CoreCoord receiver_core) {
     uint32_t max_transactions = 1024;                   // Show scaling advantage
     vector<bool> destination_patterns = {true, false};  // Same vs different destinations
     vector<bool> stateful_options = {false, true};
@@ -287,14 +325,21 @@ void multicast_test(distributed::MeshDevice& mesh_device, uint32_t test_id, Core
     uint32_t max_x = compute_with_storage_grid_size.x;
     uint32_t max_y = compute_with_storage_grid_size.y;
 
+    // run_dm derives the multicast corners from the first and last receiver, so the list must hold
+    // exactly the cores in the rectangle. Offset past the sender only on axes that have room.
+    const uint32_t start_x = max_x >= 2 ? 1 : 0;
+    const uint32_t start_y = max_y >= 2 ? 1 : 0;
+
     std::vector<CoreCoord> max_rect;
-    for (uint32_t y = 1; y < max_y; y++) {
-        for (uint32_t x = 1; x < max_x; x++) {
-            CoreCoord coord{x, y};
-            if (coord != sender_core) {
-                max_rect.push_back(coord);
-            }
+    for (uint32_t y = start_y; y < max_y; y++) {
+        for (uint32_t x = start_x; x < max_x; x++) {
+            max_rect.push_back(CoreCoord{x, y});
         }
+    }
+
+    if (max_rect.empty() || std::find(max_rect.begin(), max_rect.end(), sender_core) != max_rect.end()) {
+        GTEST_SKIP() << "Skipping: multicast needs a receiver rectangle that excludes the sender at (" << sender_core.x
+                     << ", " << sender_core.y << "), but the " << max_x << "x" << max_y << " grid provides none";
     }
 
     for (bool same_dest : {true, false}) {
@@ -317,23 +362,36 @@ void multicast_test(distributed::MeshDevice& mesh_device, uint32_t test_id, Core
 
 TEST_F(UnitMeshFastDispatchFixture, TensixDirectWritePerformanceComparison) {
     if (this->device().arch() == ARCH::QUASAR) {
-        GTEST_SKIP()
-            << "Skipping on Quasar emulator: direct-write kernel executes but destination L1 remains unchanged";
+        GTEST_SKIP() << unit_tests::dm::direct_write::kQuasarInlineWriteBroken;
+    }
+    const CoreCoord sender_core = {0, 0};
+    const CoreCoord grid = this->device().compute_with_storage_grid_size();
+    const auto receiver_core = unit_tests::dm::direct_write::select_receiver_core(grid, sender_core);
+    if (!receiver_core.has_value()) {
+        GTEST_SKIP() << "Skipping: needs >= 2 cores, but the grid is " << grid.x << "x" << grid.y;
     }
     uint32_t test_id = 500;
-    unit_tests::dm::direct_write::performance_comparison_test(this->device(), test_id);
+    unit_tests::dm::direct_write::performance_comparison_test(this->device(), test_id, sender_core, *receiver_core);
 }
 
 TEST_F(UnitMeshFastDispatchFixture, TensixDirectWriteAddressPatterns) {
     if (this->device().arch() == ARCH::QUASAR) {
-        GTEST_SKIP()
-            << "Skipping on Quasar emulator: direct-write kernel executes but destination L1 remains unchanged";
+        GTEST_SKIP() << unit_tests::dm::direct_write::kQuasarInlineWriteBroken;
+    }
+    const CoreCoord sender_core = {0, 0};
+    const CoreCoord grid = this->device().compute_with_storage_grid_size();
+    const auto receiver_core = unit_tests::dm::direct_write::select_receiver_core(grid, sender_core);
+    if (!receiver_core.has_value()) {
+        GTEST_SKIP() << "Skipping: needs >= 2 cores, but the grid is " << grid.x << "x" << grid.y;
     }
     uint32_t test_id = 501;
-    unit_tests::dm::direct_write::address_pattern_test(this->device(), test_id);
+    unit_tests::dm::direct_write::address_pattern_test(this->device(), test_id, sender_core, *receiver_core);
 }
 
 TEST_F(UnitMeshFastDispatchFixture, TensixDirectWriteMulticast) {
+    if (this->device().arch() == ARCH::QUASAR) {
+        GTEST_SKIP() << unit_tests::dm::direct_write::kQuasarInlineWriteBroken;
+    }
     uint32_t test_id = 507;
     unit_tests::dm::direct_write::multicast_test(this->device(), test_id);
 }

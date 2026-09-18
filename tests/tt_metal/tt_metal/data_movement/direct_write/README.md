@@ -32,7 +32,15 @@ Each test case has multiple runs, and each run has a unique runtime host id, ass
 
 2. **Direct Write Address Pattern (ID: 501)**: Comprehensively evaluates performance across different usage patterns by testing all combinations of address patterns (same vs different destinations), value patterns (same vs different values), and API approaches (stateful vs non-stateful). The test includes proper usage of the stateful API for `same_value` scenarios where identical values are set once in `set_state` and reused across multiple writes by passing false as the template parameter.
 
-3. **Multicast Inline Direct Write (ID: 507)**: Tests multicast direct write functionality using the non-stateful NoC API to broadcast writes from a single sender core to multiple receiver cores simultaneously. The test validates different multicast rectangle configurations (1x1, 1x2, 2x2, 3x2) and address patterns (same destination vs different destinations with address stride). Each receiver core's memory is independently validated to ensure all multicast writes were delivered correctly with expected values. This test verifies the correctness and scalability of the multicast inline DW write primitive across varying numbers of subordinate cores.
+3. **Multicast Inline Direct Write (ID: 507)**: Tests multicast direct write functionality using the non-stateful NoC API to broadcast writes from a single sender core to multiple receiver cores simultaneously. The receiver set is the largest rectangle of the compute grid that excludes the sender, and the test runs it for both address patterns (same destination vs different destinations with address stride). Each receiver core's memory is independently validated to ensure all multicast writes were delivered correctly with expected values. This test verifies the correctness of the multicast inline DW write primitive over the available subordinate cores.
 
 ## Quasar Notes
-`TensixDirectWritePerformanceComparison` and `TensixDirectWriteAddressPatterns` skip at runtime on Quasar because `noc_inline_dw_write` writes do not land on the Quasar emulator (emulator limitation).
+All three tests skip at runtime on Quasar because `noc_inline_dw_write` does not work on that target. Measured on `emu-quasar-2x3_DISPATCH`:
+
+- A posted write completes, but the destination L1 word keeps its initial value (test 507 read back `0x00000000` where `0x1234000f` was expected).
+- A non-posted write never acks, so `noc_async_write_barrier` spins forever and the test hangs.
+- Writes that advance the destination address hang the same way.
+
+The root cause is not established; the dedicated issue tracks it.
+
+The suite itself is no longer the blocker. It was ported from the Metal 1.0 `DataMovementConfig` path — which `CreateKernel` rejects on Quasar — to the Metal 2.0 `KernelSpec` / `DataMovementGen2Config` path used by the `_2_0` tests in the neighbouring suites, and it passes on Gen1. Remove the skips once the NoC V2 inline-write path is fixed. Tracked by issue #55386.
