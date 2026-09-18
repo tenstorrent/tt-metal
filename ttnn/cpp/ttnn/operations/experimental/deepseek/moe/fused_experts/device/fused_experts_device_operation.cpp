@@ -76,17 +76,19 @@ void FusedExpertsDeviceOperation::validate_on_program_cache_miss(
     const uint32_t num_weights_arg = static_cast<uint32_t>(tensor_args.gate_up_weights.size());
 
     {
-        const auto& idx = tensor_args.routing_indices;
         const auto& scores = tensor_args.routing_scores;
-        TT_FATAL(idx.storage_type() == StorageType::DEVICE, "fused_experts: routing_indices must be on device");
         TT_FATAL(scores.storage_type() == StorageType::DEVICE, "fused_experts: routing_scores must be on device");
 
-        // Ids stay TILE: topk / embedding emit them that way and the kernel walks 16x16 faces to
-        // reach a token's row. Scores may be TILE (prefill) or ROW_MAJOR decode (B == 1), where
-        // LinearDecode's stick is a linear [1, E] row and is indexed as e*2 rather than tilized.
+        // Exactly one selection source: the router's ids, or the ranking score row the op top-k's
+        // itself. Both would be ambiguous (which one wins?) and neither leaves the op no way to
+        // know which experts to run.
         TT_FATAL(
-            idx.layout() == tt::tt_metal::Layout::TILE,
-            "fused_experts: routing_indices must be TILE layout (the topk index output, unmodified)");
+            tensor_args.routing_indices.has_value() != tensor_args.ranking_scores.has_value(),
+            "fused_experts: exactly one of routing_indices (the router's selected ids) or ranking_scores "
+            "(an E-wide row to top-k on device) must be provided");
+
+        // Scores may be TILE (prefill) or ROW_MAJOR decode (B == 1), where LinearDecode's stick is a
+        // linear [1, E] row and is indexed as e*2 rather than tilized.
         TT_FATAL(
             scores.layout() == tt::tt_metal::Layout::TILE || scores.layout() == tt::tt_metal::Layout::ROW_MAJOR,
             "fused_experts: routing_scores must be TILE or ROW_MAJOR, got {}",
@@ -98,41 +100,13 @@ void FusedExpertsDeviceOperation::validate_on_program_cache_miss(
                 "height {}",
                 scores.logical_shape()[-2]);
         }
-        // UINT16 is what ttnn.topk emits. BFLOAT16 is accepted because ttnn.embedding only
-        // gathers from a bfloat16 table, and that is how a table-driven router (the hash
-        // router's frozen tid2eid) hands over its ids; every expert id below 256 is exactly
-        // representable in bf16, so nothing is lost.
-        TT_FATAL(
-            idx.dtype() == tt::tt_metal::DataType::UINT16 || idx.dtype() == tt::tt_metal::DataType::BFLOAT16,
-            "fused_experts: routing_indices must be UINT16 (a topk index output) or BFLOAT16 (an "
-            "embedding gather), got {}",
-            idx.dtype());
-        TT_FATAL(
-            idx.dtype() != tt::tt_metal::DataType::BFLOAT16 || num_weights_arg <= 256,
-            "fused_experts: BFLOAT16 routing_indices need num_experts <= 256 so every id is exact "
-            "in bf16, got {}",
-            num_weights_arg);
         TT_FATAL(
             scores.dtype() == tt::tt_metal::DataType::BFLOAT16,
             "fused_experts: routing_scores must be BFLOAT16, got {}",
             scores.dtype());
-        // Unlike x_tok, routing ids are NOT sized to the input's tile: the leader kernel
-        // (compute_expert_ids.cpp) reads them byte-wise via a hand-rolled tile_elem_offset that
-        // bakes in face_r_dim == 16 and the (16x16 face, 4 faces per tile) 32x32 layout. A tiny
-        // routing-id tile would compute wrong byte offsets and read garbage silently, so require
-        // 32x32 explicitly. (Regenerating them at 32x32 costs nothing -- the tile carries at most
-        // B*top_k <= 32*16 elements either way, and cb_routing is dominated by the O(E) selection
-        // scratch, not the routing tile itself.) TILE scores use the same 32x32 face walk;
-        // ROW_MAJOR decode scores are a linear stick and skip this check.
-        TT_FATAL(
-            idx.tensor_spec().tile().get_height() == tt::constants::TILE_HEIGHT &&
-                idx.tensor_spec().tile().get_width() == tt::constants::TILE_WIDTH,
-            "fused_experts: routing_indices must use the standard {}x{} tile (leader reads them "
-            "with a 16x16-face-baked offset function); got {}x{}",
-            tt::constants::TILE_HEIGHT,
-            tt::constants::TILE_WIDTH,
-            idx.tensor_spec().tile().get_height(),
-            idx.tensor_spec().tile().get_width());
+        // The leader kernel reads TILE scores with a hand-rolled `tile_elem_offset` that bakes in
+        // face_r_dim == 16 and the (16x16 face, 4 faces per tile) 32x32 layout, so require 32x32
+        // explicitly. ROW_MAJOR decode scores are a linear stick and skip this check.
         if (scores.layout() == tt::tt_metal::Layout::TILE) {
             TT_FATAL(
                 scores.tensor_spec().tile().get_height() == tt::constants::TILE_HEIGHT &&
@@ -144,32 +118,12 @@ void FusedExpertsDeviceOperation::validate_on_program_cache_miss(
                 scores.tensor_spec().tile().get_height(),
                 scores.tensor_spec().tile().get_width());
         }
-        // Pages are read by page id, so both must be interleaved rather than sharded.
+        // Pages are read by page id, so both selection tensors must be interleaved rather than
+        // sharded.
         TT_FATAL(
-            !idx.memory_config().is_sharded() && !scores.memory_config().is_sharded(),
-            "fused_experts: routing_indices / routing_scores must be interleaved (read by page id)");
+            !scores.memory_config().is_sharded(),
+            "fused_experts: routing_scores must be interleaved (read by page id)");
 
-        TT_FATAL(
-            attributes.top_k > 0 && attributes.top_k <= num_weights_arg,
-            "fused_experts: top_k ({}) must be in [1, {}]",
-            attributes.top_k,
-            num_weights_arg);
-        // The ids sit in the first `top_k` columns of a token's row, so they must all land in the
-        // first 16-wide face of the tile -- the only face the kernel reads for them.
-        TT_FATAL(
-            attributes.top_k <= 16,
-            "fused_experts: top_k ({}) must be <= 16 (the ids must fit one 16-wide tile face)",
-            attributes.top_k);
-        TT_FATAL(
-            static_cast<uint32_t>(idx.logical_shape()[-1]) == attributes.top_k,
-            "fused_experts: routing_indices last dim ({}) must equal top_k ({})",
-            idx.logical_shape()[-1],
-            attributes.top_k);
-        TT_FATAL(
-            static_cast<uint32_t>(idx.logical_shape()[-2]) == batch,
-            "fused_experts: routing_indices must have one row per token ({}), got {}",
-            batch,
-            idx.logical_shape()[-2]);
         TT_FATAL(
             static_cast<uint32_t>(scores.logical_shape()[-1]) == num_weights_arg,
             "fused_experts: routing_scores last dim ({}) must equal the number of experts ({})",
@@ -180,6 +134,123 @@ void FusedExpertsDeviceOperation::validate_on_program_cache_miss(
             "fused_experts: routing_scores must have one row per token ({}), got {}",
             batch,
             scores.logical_shape()[-2]);
+
+        if (tensor_args.routing_indices.has_value()) {
+            const auto& idx = *tensor_args.routing_indices;
+            TT_FATAL(idx.storage_type() == StorageType::DEVICE, "fused_experts: routing_indices must be on device");
+
+            // Ids stay TILE: topk / embedding emit them that way and the kernel walks 16x16 faces to
+            // reach a token's row.
+            TT_FATAL(
+                idx.layout() == tt::tt_metal::Layout::TILE,
+                "fused_experts: routing_indices must be TILE layout (the topk index output, unmodified)");
+            // UINT16 is what ttnn.topk emits. BFLOAT16 is accepted because ttnn.embedding only
+            // gathers from a bfloat16 table, and that is how a table-driven router (the hash
+            // router's frozen tid2eid) hands over its ids; every expert id below 256 is exactly
+            // representable in bf16, so nothing is lost.
+            TT_FATAL(
+                idx.dtype() == tt::tt_metal::DataType::UINT16 || idx.dtype() == tt::tt_metal::DataType::BFLOAT16,
+                "fused_experts: routing_indices must be UINT16 (a topk index output) or BFLOAT16 (an "
+                "embedding gather), got {}",
+                idx.dtype());
+            TT_FATAL(
+                idx.dtype() != tt::tt_metal::DataType::BFLOAT16 || num_weights_arg <= 256,
+                "fused_experts: BFLOAT16 routing_indices need num_experts <= 256 so every id is exact "
+                "in bf16, got {}",
+                num_weights_arg);
+            // Unlike x_tok, routing ids are NOT sized to the input's tile: the leader kernel
+            // (compute_expert_ids.cpp) reads them byte-wise via a hand-rolled tile_elem_offset that
+            // bakes in face_r_dim == 16 and the (16x16 face, 4 faces per tile) 32x32 layout. A tiny
+            // routing-id tile would compute wrong byte offsets and read garbage silently, so require
+            // 32x32 explicitly. (Regenerating them at 32x32 costs nothing -- the tile carries at most
+            // B*top_k <= 32*16 elements either way, and cb_routing is dominated by the O(E) selection
+            // scratch, not the routing tile itself.)
+            TT_FATAL(
+                idx.tensor_spec().tile().get_height() == tt::constants::TILE_HEIGHT &&
+                    idx.tensor_spec().tile().get_width() == tt::constants::TILE_WIDTH,
+                "fused_experts: routing_indices must use the standard {}x{} tile (leader reads them "
+                "with a 16x16-face-baked offset function); got {}x{}",
+                tt::constants::TILE_HEIGHT,
+                tt::constants::TILE_WIDTH,
+                idx.tensor_spec().tile().get_height(),
+                idx.tensor_spec().tile().get_width());
+            TT_FATAL(
+                !idx.memory_config().is_sharded(),
+                "fused_experts: routing_indices must be interleaved (read by page id)");
+            // The ids sit in the first `top_k` columns of a token's row, so they must all land in the
+            // first 16-wide face of the tile -- the only face the kernel reads for them.
+            TT_FATAL(
+                attributes.top_k <= 16,
+                "fused_experts: top_k ({}) must be <= 16 (the ids must fit one 16-wide tile face)",
+                attributes.top_k);
+            TT_FATAL(
+                static_cast<uint32_t>(idx.logical_shape()[-1]) == attributes.top_k,
+                "fused_experts: routing_indices last dim ({}) must equal top_k ({})",
+                idx.logical_shape()[-1],
+                attributes.top_k);
+            TT_FATAL(
+                static_cast<uint32_t>(idx.logical_shape()[-2]) == batch,
+                "fused_experts: routing_indices must have one row per token ({}), got {}",
+                batch,
+                idx.logical_shape()[-2]);
+        } else {
+            const auto& ranking = *tensor_args.ranking_scores;
+            TT_FATAL(ranking.storage_type() == StorageType::DEVICE, "fused_experts: ranking_scores must be on device");
+            TT_FATAL(
+                ranking.layout() == tt::tt_metal::Layout::TILE || ranking.layout() == tt::tt_metal::Layout::ROW_MAJOR,
+                "fused_experts: ranking_scores must be TILE or ROW_MAJOR, got {}",
+                ranking.layout());
+            if (ranking.layout() == tt::tt_metal::Layout::ROW_MAJOR) {
+                TT_FATAL(
+                    batch == 1,
+                    "fused_experts: ROW_MAJOR ranking_scores is the decode path and requires a single token "
+                    "row, got height {}",
+                    ranking.logical_shape()[-2]);
+            }
+            TT_FATAL(
+                ranking.dtype() == tt::tt_metal::DataType::BFLOAT16,
+                "fused_experts: ranking_scores must be BFLOAT16, got {}",
+                ranking.dtype());
+            if (ranking.layout() == tt::tt_metal::Layout::TILE) {
+                TT_FATAL(
+                    ranking.tensor_spec().tile().get_height() == tt::constants::TILE_HEIGHT &&
+                        ranking.tensor_spec().tile().get_width() == tt::constants::TILE_WIDTH,
+                    "fused_experts: TILE ranking_scores must use the standard {}x{} tile (leader reads them "
+                    "with a 16x16-face-baked offset function); got {}x{}",
+                    tt::constants::TILE_HEIGHT,
+                    tt::constants::TILE_WIDTH,
+                    ranking.tensor_spec().tile().get_height(),
+                    ranking.tensor_spec().tile().get_width());
+            }
+            TT_FATAL(
+                !ranking.memory_config().is_sharded(),
+                "fused_experts: ranking_scores must be interleaved (read by page id)");
+            // The leader keeps the running top-k in its own registers/stack (one (score, id) pair per
+            // selected expert), so the ranking path is not bounded by the 16-wide tile face the id
+            // path is; 32 keeps those arrays small on the RISC-V stack.
+            TT_FATAL(
+                attributes.top_k <= 32,
+                "fused_experts: top_k ({}) must be <= 32 with ranking_scores (the leader's running top-k "
+                "lives on the RISC-V stack)",
+                attributes.top_k);
+            TT_FATAL(
+                static_cast<uint32_t>(ranking.logical_shape()[-1]) == num_weights_arg,
+                "fused_experts: ranking_scores last dim ({}) must equal the number of experts ({})",
+                ranking.logical_shape()[-1],
+                num_weights_arg);
+            TT_FATAL(
+                static_cast<uint32_t>(ranking.logical_shape()[-2]) == batch,
+                "fused_experts: ranking_scores must have one row per token ({}), got {}",
+                batch,
+                ranking.logical_shape()[-2]);
+        }
+
+        TT_FATAL(
+            attributes.top_k > 0 && attributes.top_k <= num_weights_arg,
+            "fused_experts: top_k ({}) must be in [1, {}] (with ranking_scores it must be passed "
+            "explicitly: there is no id tensor to infer it from)",
+            attributes.top_k,
+            num_weights_arg);
     }
 
     TT_FATAL(
@@ -390,8 +461,12 @@ tt::tt_metal::operation::Hash FusedExpertsDeviceOperation::compute_program_hash(
         weight_addresses.push_back(static_cast<uint32_t>(w.buffer()->address()));
     }
     // top_k / scaling / eps are compile-time args of the routing kernel, so they have to key the
-    // program alongside the weight addresses. The ids' dtype does too (it selects the decode), and
-    // it rides along in the routing_indices spec.
+    // program alongside the weight addresses. So does which selection source is in play: with
+    // `ranking_scores` the leader is compiled with a different routing body and cb_routing is laid
+    // out differently (a second score region when the ranking row is a separate tensor). That is
+    // keyed by the two optional specs plus the two explicit flags below -- the tensors alone cannot
+    // say whether the ranking row IS the score row, since two tensors with the same spec hash the
+    // same.
     // Input tile height is baked into every token-row-shaped CB's tile descriptor and into the
     // routing-scalar layout CT args, so tiny-tile programs must not alias a 32x32 program in the
     // cache. Fold the input tile's H and W explicitly (the default spec-only hash keys on tensor
@@ -413,6 +488,16 @@ tt::tt_metal::operation::Hash FusedExpertsDeviceOperation::compute_program_hash(
         tensor_args.input_tensor,
         tensor_args.routing_indices,
         tensor_args.routing_scores,
+        tensor_args.ranking_scores,
+        // Which selection source is in play, and whether the ranking row IS the score row (the
+        // aliased read). The tensor specs alone cannot express the latter: two tensors with the same
+        // shape / dtype / layout / memory config hash the same, so an aliased program and a
+        // separate-buffer program would collide even though their kernels differ -- the aliased one
+        // skips the second read and scans the score region, the other reads a region of its own, and
+        // their cb_routing layouts differ. Reusing one for the other selects on the wrong row.
+        !tensor_args.routing_indices.has_value(),
+        tensor_args.ranking_scores.has_value() &&
+            tensor_args.ranking_scores->buffer() == tensor_args.routing_scores.buffer(),
         tensor_args.gate_up_weights.front(),
         tensor_args.down_weights.front(),
         weight_addresses,
@@ -457,7 +542,6 @@ FusedExpertsDeviceOperation::tensor_return_value_t FusedExpertsDeviceOperation::
 std::tuple<FusedExpertsDeviceOperation::operation_attributes_t, FusedExpertsDeviceOperation::tensor_args_t>
 FusedExpertsDeviceOperation::invoke(
     const Tensor& input_tensor,
-    const Tensor& routing_indices,
     const Tensor& routing_scores,
     const std::vector<Tensor>& gate_up_weights,
     const std::vector<Tensor>& down_weights,
@@ -469,7 +553,9 @@ FusedExpertsDeviceOperation::invoke(
     float routing_eps,
     uint32_t experts_block_size,
     bool two_hub_gather,
-    const std::optional<MemoryConfig>& memory_config) {
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& routing_indices,
+    const std::optional<Tensor>& ranking_scores) {
     operation_attributes_t attributes{
         .num_experts = num_experts,
         .intermediate_size = intermediate_size,
@@ -478,8 +564,10 @@ FusedExpertsDeviceOperation::invoke(
         // carries the block size the kernels are actually compiled for.
         .experts_block_size = experts_block_size == 0 ? num_experts : std::min(experts_block_size, num_experts),
         // k defaults to the index tensor's width, so a caller that already shaped the router's
-        // output correctly does not have to restate it.
-        .top_k = top_k == 0 ? static_cast<uint32_t>(routing_indices.logical_shape()[-1]) : top_k,
+        // output correctly does not have to restate it. The ranking path has no id tensor to read
+        // it from, so there it must be given (validation rejects the resulting 0).
+        .top_k = top_k == 0 && routing_indices.has_value() ? static_cast<uint32_t>(routing_indices->logical_shape()[-1])
+                                                           : top_k,
         .routed_scaling_factor = routed_scaling_factor,
         .routing_eps = routing_eps,
         .two_hub_gather = two_hub_gather,
@@ -493,6 +581,7 @@ FusedExpertsDeviceOperation::invoke(
         .input_tensor = input_tensor,
         .routing_indices = routing_indices,
         .routing_scores = routing_scores,
+        .ranking_scores = ranking_scores,
         .gate_up_weights = gate_up_weights,
         .down_weights = down_weights,
     };
@@ -505,7 +594,6 @@ namespace ttnn::prim {
 ttnn::operations::experimental::deepseek::moe::fused_experts::FusedExpertsDeviceOperation::tensor_return_value_t
 fused_experts(
     const Tensor& input_tensor,
-    const Tensor& routing_indices,
     const Tensor& routing_scores,
     const std::vector<Tensor>& gate_up_weights,
     const std::vector<Tensor>& down_weights,
@@ -517,11 +605,12 @@ fused_experts(
     float routing_eps,
     uint32_t experts_block_size,
     bool two_hub_gather,
-    const std::optional<MemoryConfig>& memory_config) {
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& routing_indices,
+    const std::optional<Tensor>& ranking_scores) {
     using OperationType = ttnn::operations::experimental::deepseek::moe::fused_experts::FusedExpertsDeviceOperation;
     auto [operation_attributes, tensor_args] = OperationType::invoke(
         input_tensor,
-        routing_indices,
         routing_scores,
         gate_up_weights,
         down_weights,
@@ -533,7 +622,9 @@ fused_experts(
         routing_eps,
         experts_block_size,
         two_hub_gather,
-        memory_config);
+        memory_config,
+        routing_indices,
+        ranking_scores);
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 }  // namespace ttnn::prim

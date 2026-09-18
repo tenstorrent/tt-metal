@@ -13,20 +13,31 @@
 
 // Expert-id sender + activation-gather leader kernel (runs on core {0,0}).
 //
-// 1. Reads the routing input -- the router's k selected expert ids per token plus the score row
-//    they index -- and computes the selected ("hit") expert ids on device, compacted ascending at
-//    the front of cb_bcast and padded with the sentinel. The id list is the DEDUPLICATED UNION of
-//    the tokens' selections: an expert that several tokens picked appears exactly once and is
-//    therefore fetched exactly once by every core, with one matmul serving all of those tokens.
-//    Alongside the ids it publishes each hit's per-token routing weights -- the selected scores
-//    renormalized and scaled here rather than by the caller -- which is what keeps the tokens
-//    distinguishable after the dedup.
+// 1. Reads the routing input -- either the router's k selected expert ids per token plus the score
+//    row they index, or an E-wide ranking score row this kernel top-k's itself -- and computes the
+//    selected ("hit") expert ids on device, compacted ascending at the front of cb_bcast and padded
+//    with the sentinel. The id list is the DEDUPLICATED UNION of the tokens' selections: an expert
+//    that several tokens picked appears exactly once and is therefore fetched exactly once by every
+//    core, with one matmul serving all of those tokens. Alongside the ids it publishes each hit's
+//    per-token routing weights -- the selected scores renormalized and scaled here rather than by
+//    the caller -- which is what keeps the tokens distinguishable after the dedup.
 //
-//    The dedup and the ascending sort come out of one E-bit bitmap pass, so the whole thing is
-//    O(B x k): the caller hands over its selection untouched instead of scattering it out to E
-//    columns that this kernel would only scan straight back down to k. The ids arrive either as
-//    raw uint16 (a topk output) or as bf16 values (an embedding gather, which is how a
+//    In the ids form the dedup and the ascending sort come out of one E-bit bitmap pass, so the
+//    whole thing is O(B x k): the caller hands over its selection untouched instead of scattering it
+//    out to E columns that this kernel would only scan straight back down to k. The ids arrive
+//    either as raw uint16 (a topk output) or as bf16 values (an embedding gather, which is how a
 //    table-driven router produces them); `index_is_bf16` picks the decode.
+//
+//    In the ranking form (`rank_from_scores`) the caller hands over the score row the router would
+//    have ranked -- typically a bias-corrected copy -- and the k winners per token are found here,
+//    by a single ascending scan that keeps a k-entry sorted running top-k. The row is already fully
+//    resident in cb_routing (the weighting gathers read it anyway), so the scan adds no DRAM
+//    traffic, no extra program and no extra synchronization: it happens on the core that has to
+//    broadcast the ids regardless. Selecting on device this way saves the router a separate
+//    `ttnn.topk` launch and the DRAM round-trip of its id output. The winners are written into the
+//    same `sel_ids`/bitmap the ids form fills, so the compaction, dedup and weight passes below are
+//    shared verbatim; a top-k over a row cannot repeat an id, and cross-token duplicates are
+//    collapsed by the bitmap as usual.
 // 2. Multicasts the ids buffer to all other compute cores' L1 (cb_bcast).
 // 3. Sets + multicasts a semaphore (sem_id) to signal the other cores.
 // 4. Publishes the activation to this core's compute: either after the {1,0} broadcast, or
@@ -78,8 +89,12 @@
 //   49: scores_is_rm (1 = ROW_MAJOR decode stick, linear e*2; 0 = TILE 32x32 faces)
 //   50: split_col  (first act tile of each expert that hub1 owns; == i_tiles when there is one hub)
 //   51: num_hubs   (1, or 2 for the two-hub gather/broadcast)
-//   52+: TensorAccessorArgs(routing), TensorAccessorArgs(scores), TensorAccessorArgs(gate_up),
-//        TensorAccessorArgs(down)
+//   52: rank_from_scores (1 = derive the ids by top-k over the ranking score row)
+//   53: ranking_is_scores (1 = the ranking row IS the score row, already resident; no second read)
+//   54: rank_pages   55: rank_page_bytes   56: rank_page_stride   57: rank_l1_offset
+//   58: ranking_is_rm (1 = ROW_MAJOR decode ranking stick, linear e*2; 0 = TILE 32x32 faces)
+//   59+: TensorAccessorArgs(routing), TensorAccessorArgs(scores), TensorAccessorArgs(ranking),
+//        TensorAccessorArgs(gate_up), TensorAccessorArgs(down)
 //   then: gate_up base addresses (one per expert), then down base addresses (one per expert)
 //
 // Runtime args:
@@ -94,6 +109,7 @@
 //   12: group_num_dests
 //   13: hub0_noc_x   14: hub0_noc_y   (this core's group's two gather/broadcast hubs, ascending
 //   15: hub1_noc_x   16: hub1_noc_y    rectangle corners; hub0 is this core on the sender path)
+//   17: ranking base address (the row top-k'd when the ranking form drives the selection)
 
 namespace {
 
@@ -184,10 +200,21 @@ void kernel_main() {
     // is always hub0 of its group.
     constexpr uint32_t split_col = get_compile_time_arg_val(50);
     constexpr uint32_t num_hubs = get_compile_time_arg_val(51);
+    // On-device ranking: when `rank_from_scores` is set there is no id tile -- the ids are the top-k
+    // of the ranking score row, which lives at `rank_l1_offset` in cb_routing (the score region
+    // itself when `ranking_is_scores`, i.e. when the same tensor is ranked on and weighted with).
+    constexpr bool rank_from_scores = get_compile_time_arg_val(52) == 1;
+    constexpr bool ranking_is_scores = get_compile_time_arg_val(53) == 1;
+    constexpr uint32_t rank_pages = get_compile_time_arg_val(54);
+    constexpr uint32_t rank_page_bytes = get_compile_time_arg_val(55);
+    constexpr uint32_t rank_page_stride = get_compile_time_arg_val(56);
+    constexpr uint32_t rank_l1_offset = get_compile_time_arg_val(57);
+    constexpr bool ranking_is_rm = get_compile_time_arg_val(58) == 1;
 
-    constexpr auto routing_args = TensorAccessorArgs<52>();
+    constexpr auto routing_args = TensorAccessorArgs<59>();
     constexpr auto score_args = TensorAccessorArgs<routing_args.next_compile_time_args_offset()>();
-    constexpr auto gate_up_args = TensorAccessorArgs<score_args.next_compile_time_args_offset()>();
+    constexpr auto rank_args = TensorAccessorArgs<score_args.next_compile_time_args_offset()>();
+    constexpr auto gate_up_args = TensorAccessorArgs<rank_args.next_compile_time_args_offset()>();
     constexpr auto down_args = TensorAccessorArgs<gate_up_args.next_compile_time_args_offset()>();
     // The gate_up then down weight base addresses (one per expert) follow the accessor args
     // in the compile-time args, indexed by the runtime-selected expert id.
@@ -211,6 +238,7 @@ void kernel_main() {
     const uint32_t hub0_noc_y = get_arg_val<uint32_t>(14);
     const uint32_t hub1_noc_x = get_arg_val<uint32_t>(15);
     const uint32_t hub1_noc_y = get_arg_val<uint32_t>(16);
+    const uint32_t rank_addr = get_arg_val<uint32_t>(17);
 
     // {0,0} is hub0 of its group (and the only core that also carries the routing computation).
     const ActGatherConfig gather{/*role=*/1u, hub0_noc_x, hub0_noc_y, hub1_noc_x, hub1_noc_y, split_col, num_hubs};
@@ -219,6 +247,8 @@ void kernel_main() {
     // group runs its reader on NoC 1 so the two hubs' activation multicasts never share a NoC.
     Noc noc(0);
     const auto routing = TensorAccessor(routing_args, routing_addr);
+    (void)routing;    // compiled out of the ranking path
+    (void)rank_addr;  // unused in the ids path
 
     CircularBuffer cb_routing(cb_routing_id);
     CircularBuffer cb_bcast(cb_bcast_id);
@@ -227,9 +257,12 @@ void kernel_main() {
     // Pages are placed at the buffer's aligned page stride so each read's L1 destination shares the
     // alignment of the DRAM page it comes from.
     cb_routing.reserve_back(1);
-    // One TILE page of ids (B <= 32 rows and top_k <= 16 columns both fit a single 32x32 tile),
-    // then the score row (TILE pages or a ROW_MAJOR stick) after it.
-    noc.async_read(routing, cb_routing, routing_page_bytes, {.page_id = 0}, {.offset_bytes = 0});
+    // One TILE page of ids (B <= 32 rows and top_k <= 16 columns both fit a single 32x32 tile) when
+    // the router's ids are the selection source, then the score row (TILE pages or a ROW_MAJOR
+    // stick) after it, then, when ranking is a separate tensor, the ranking row.
+    if constexpr (!rank_from_scores) {
+        noc.async_read(routing, cb_routing, routing_page_bytes, {.page_id = 0}, {.offset_bytes = 0});
+    }
     const auto scores = TensorAccessor(score_args, score_addr);
     for (uint32_t p = 0; p < score_pages; ++p) {
         noc.async_read(
@@ -238,6 +271,20 @@ void kernel_main() {
             score_page_bytes,
             {.page_id = p},
             {.offset_bytes = score_l1_offset + p * score_page_stride});
+    }
+    // The ranking row is only fetched when it is not the score row itself: ranking and weighting on
+    // one buffer (the no-correction-bias case) reads that buffer once, through `scores`, and
+    // `rank_l1_offset == score_l1_offset`.
+    if constexpr (rank_from_scores && !ranking_is_scores) {
+        const auto rankings = TensorAccessor(rank_args, rank_addr);
+        for (uint32_t p = 0; p < rank_pages; ++p) {
+            noc.async_read(
+                rankings,
+                cb_routing,
+                rank_page_bytes,
+                {.page_id = p},
+                {.offset_bytes = rank_l1_offset + p * rank_page_stride});
+        }
     }
     noc.async_read_barrier();
 
@@ -274,33 +321,91 @@ void kernel_main() {
     for (uint32_t w = 0; w < bitmap_words; ++w) {
         bitmap[w] = 0;
     }
-    for (uint32_t b = 0; b < batch; ++b) {
-        for (uint32_t j = 0; j < top_k; ++j) {
-            const uint16_t raw = rw[tile_elem_offset(b, j) >> 1];
-            // topk hands over the id as a plain integer; an embedding gather hands over the
-            // same id as the bf16 value it had to be stored as (exact for E <= 256).
-            uint32_t e;
-            if constexpr (index_is_bf16) {
-                e = static_cast<uint32_t>(bf16_to_f32(raw));
-            } else {
-                e = raw;
+    if constexpr (rank_from_scores) {
+        // On-device top-k over the ranking row: one ascending scan per token keeping a sorted
+        // k-entry running list of (score, id). The row is already resident in cb_routing -- the
+        // weighting gathers read it anyway -- so this adds no DRAM traffic, no extra program and no
+        // extra synchronization; it runs on the core that has to broadcast the ids regardless, and
+        // in place of the id tile's decode. Selecting here is what saves the router a separate
+        // `ttnn.topk` launch and the DRAM round-trip of its id output.
+        //
+        // A score enters only if it beats the current k-th best (strict >), and an equal score goes
+        // after the ones already held, so the winner set is deterministic: of equal scores the lower
+        // expert id is kept. (topk's own tie-break is unspecified, so a caller that depends on which
+        // of several equal winners is kept should use the ids form.)
+        constexpr uint32_t sel_slots = top_k > 0u ? top_k : 1u;
+        constexpr float kNegInf = __builtin_bit_cast(float, 0xFF800000u);
+        float best_score[sel_slots];
+        uint16_t best_id[sel_slots];
+        for (uint32_t b = 0; b < batch; ++b) {
+            for (uint32_t j = 0; j < top_k; ++j) {
+                best_score[j] = kNegInf;
+                best_id[j] = 0;
             }
-            // An id past the expert count would index off the end of the bitmap and corrupt
-            // L1, so bound it here rather than trusting the producer. A repeat of an id this
-            // same token already picked is dropped too: a table-driven router can hand over
-            // one, and the reference collapses it (it scatters the selection into a one-hot
-            // mask), so counting it twice in the token's sum would not match. Both cases are
-            // parked on the sentinel, which the weight pass then skips.
-            bool drop = e >= num_weights;
-            for (uint32_t p = 0; p < j && !drop; ++p) {
-                drop = sel_ids[b * top_k + p] == e;
+            for (uint32_t e = 0; e < num_weights; ++e) {
+                // TILE: expert e sits in tile e/32 of the ranking row, column e%32 of token row b
+                // (16x16 faces). ROW_MAJOR decode is a linear [1, E] stick, so score[e] is at e*2.
+                uint32_t off;
+                if constexpr (ranking_is_rm) {
+                    off = rank_l1_offset + (b * rank_page_stride) + (e * 2u);
+                } else {
+                    off = rank_l1_offset + ((e >> 5) * rank_page_stride) + tile_elem_offset(b, e & 31u);
+                }
+                const float s = bf16_to_f32(rw[off >> 1]);
+                // The first top_k experts always fill their slots (so an all-equal or all -inf row
+                // still yields k distinct ids instead of none); after that the k-th best is the bar.
+                if (e < top_k || s > best_score[top_k - 1u]) {
+                    uint32_t p = 0;
+                    while (p + 1u < top_k && best_score[p] >= s) {
+                        ++p;
+                    }
+                    for (uint32_t j = top_k - 1u; j > p; --j) {
+                        best_score[j] = best_score[j - 1u];
+                        best_id[j] = best_id[j - 1u];
+                    }
+                    best_score[p] = s;
+                    best_id[p] = static_cast<uint16_t>(e);
+                }
             }
-            if (!drop) {
+            // The winners land in the same sel_ids/bitmap the ids form fills, so the compaction,
+            // dedup and weight passes below are shared: a top-k over one row cannot repeat an id,
+            // and duplicates ACROSS rows collapse in the bitmap sweep exactly as they do for
+            // router-supplied ids.
+            for (uint32_t j = 0; j < top_k; ++j) {
+                const uint16_t e = best_id[j];
+                sel_ids[b * top_k + j] = e;
                 bitmap[e >> 5] |= 1u << (e & 31u);
-            } else {
-                e = num_weights;
             }
-            sel_ids[b * top_k + j] = static_cast<uint16_t>(e);
+        }
+    } else {
+        for (uint32_t b = 0; b < batch; ++b) {
+            for (uint32_t j = 0; j < top_k; ++j) {
+                const uint16_t raw = rw[tile_elem_offset(b, j) >> 1];
+                // topk hands over the id as a plain integer; an embedding gather hands over the
+                // same id as the bf16 value it had to be stored as (exact for E <= 256).
+                uint32_t e;
+                if constexpr (index_is_bf16) {
+                    e = static_cast<uint32_t>(bf16_to_f32(raw));
+                } else {
+                    e = raw;
+                }
+                // An id past the expert count would index off the end of the bitmap and corrupt
+                // L1, so bound it here rather than trusting the producer. A repeat of an id this
+                // same token already picked is dropped too: a table-driven router can hand over
+                // one, and the reference collapses it (it scatters the selection into a one-hot
+                // mask), so counting it twice in the token's sum would not match. Both cases are
+                // parked on the sentinel, which the weight pass then skips.
+                bool drop = e >= num_weights;
+                for (uint32_t p = 0; p < j && !drop; ++p) {
+                    drop = sel_ids[b * top_k + p] == e;
+                }
+                if (!drop) {
+                    bitmap[e >> 5] |= 1u << (e & 31u);
+                } else {
+                    e = num_weights;
+                }
+                sel_ids[b * top_k + j] = static_cast<uint16_t>(e);
+            }
         }
     }
     // Zero the whole weight region up front: a token contributes to only its own k experts, and

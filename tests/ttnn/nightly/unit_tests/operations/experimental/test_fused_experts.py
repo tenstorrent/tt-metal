@@ -5,14 +5,24 @@
 """Unit test for ttnn.experimental.deepseek.moe.fused_experts (full preloaded-experts FFN).
 
 The op takes *all* experts' weights and the router's selection -- each token's expert ids plus the
-score row they index -- and decides which experts to run from that, deriving the per-token weights
-(the selected scores renormalized and scaled) itself. For the routing-selected ("hit") experts, in
-ascending hit-id order, it computes the gate_up matmul, the SwiGLU gate, the down matmul, *and* the
-routing-weighted accumulation into a single output tile row on device:
+score row they index, or the E-wide score row to rank on -- and decides which experts to run from
+that, deriving the per-token weights (the selected scores renormalized and scaled) itself. For the
+routing-selected ("hit") experts, in ascending hit-id order, it computes the gate_up matmul, the
+SwiGLU gate, the down matmul, *and* the routing-weighted accumulation into a single output tile row
+on device:
 
     gu     = x @ gate_up_w[hit_ids[i]]                          # [B, H] @ [H, 2I] -> [B, 2I]
     act    = silu(clamp(gu[:, :I], max=L)) * clamp(gu[:, I:], -L, L)  # -> [B, I]
     output = sum_i w[:, hit_ids[i]] * (act @ down_w[hit_ids[i]])      # -> [B, H]
+
+The selection reaches the op in one of two mutually exclusive forms:
+
+* ``routing_indices``: the router's own ``ttnn.topk`` ids, with ``routing_scores`` the score row they
+  index (the original form);
+* ``ranking_scores``: the E-wide score row the router would have ranked (typically
+  ``routing_scores + bias``), with ``top_k`` given explicitly. The op finds each token's top-k
+  itself, inside the leader kernel that already reads the whole score row -- no separate
+  ``ttnn.topk`` launch and no DRAM round-trip of its id output.
 
 B tokens (<= 32) are packed into dim -2 and processed together. The hit set is the *union* of the
 tokens' selections, so an expert several tokens picked has its weights fetched from DRAM once and its
@@ -436,6 +446,229 @@ def test_fused_experts_bf16_indices(device, hidden, intermediate, num_experts, t
         ref = ref + weights[:, e : e + 1] * (act @ down[e])
     passing, pcc_msg = comp_pcc(ref, got, pcc=0.98)
     assert passing, f"bf16-id routing vs torch golden: {pcc_msg} | {comp_allclose(ref, got)}"
+
+
+def _ranking_rows(tokens: int, num_experts: int, top_k: int, share: bool):
+    """A ``[tokens, E]`` ranking row whose top-``top_k`` winners are known exactly.
+
+    Every entry is an integer, so all values are distinct within a row and exactly representable in
+    bf16. That is what keeps the device's on-kernel top-k and the torch reference from disagreeing on
+    a tie -- and lets the test assert on the union size -- while the selected experts are lifted
+    clear of the ``0..E-1`` base values so they are unambiguously the largest.
+
+    ``share`` makes every token rank the same ``top_k`` experts (union == top_k, the weight-sharing
+    case); otherwise the tokens rotate through the expert range so the union grows with the batch,
+    which is what the kernel's dedup has to collapse.
+    """
+    ranking = torch.arange(num_experts, dtype=torch.float32).repeat(tokens, 1).clone()
+    chosen = []
+    for t in range(tokens):
+        sel = [((0 if share else t) * top_k + j) % num_experts for j in range(top_k)]
+        for j, e in enumerate(sel):
+            ranking[t, e] = num_experts + (top_k - j)
+        chosen.append(sel)
+    hit_ids = sorted({e for sel in chosen for e in sel})
+    return ranking, chosen, hit_ids
+
+
+@pytest.mark.parametrize("hidden, intermediate, num_experts, top_k", [(4096, 2048, 8, 4)])
+@pytest.mark.parametrize("batch", (1, 2, 8), ids=lambda b: f"batch{b}")
+@pytest.mark.parametrize("share_ranking", (True, False), ids=("shared_ranking", "disjoint_ranking"))
+# Ranking on one row and weighting with another is the model's bias-corrected case ("biased_ranking");
+# passing one tensor as both is the aliased read, where the row is fetched once and ranked in place.
+@pytest.mark.parametrize("rank_is_weight", (False, True), ids=("biased_ranking", "rank_is_weight"))
+# ROW_MAJOR scores are the single-token decode stick, so they only pair with batch == 1.
+@pytest.mark.parametrize("row_major_scores", (False, True), ids=("tile_scores", "rm_decode_scores"))
+def test_fused_experts_ranking_scores(
+    device, hidden, intermediate, num_experts, top_k, batch, share_ranking, rank_is_weight, row_major_scores
+):
+    """``ranking_scores``: the op finds each token's top-k itself instead of being handed ids.
+
+    The ranking row is the *bias-corrected* row the router would have ranked, while the weights come
+    from the unbiased ``routing_scores`` at the winners -- so the winners must not simply be the
+    token's largest weights, which is why the two rows are unrelated here. With
+    ``rank_is_weight`` the same tensor is passed for both, which is the aliased (read-once) path.
+
+    The golden is the op's own normalize-and-scale tail over the selected scores, with every hit
+    expert evaluated for every token and masked by that token's weight, exactly as in the ids form.
+    """
+    if row_major_scores and batch != 1:
+        pytest.skip("ROW_MAJOR scores are the single-token decode path")
+
+    torch.manual_seed(0)
+    limit = 7.0
+    tokens = batch
+    scaling = 2.5
+    eps = 1e-20
+    experts_block_size = 2
+
+    ranking, _, expected_hit_ids = _ranking_rows(tokens, num_experts, top_k, share_ranking)
+    num_active = len(expected_hit_ids)
+
+    # The unbiased scores that become the weights.
+    weight_scores = torch.rand((tokens, num_experts), dtype=torch.bfloat16).float() + 0.25
+
+    x = (torch.rand((tokens, hidden), dtype=torch.bfloat16) - 0.5).float()
+    x_tt = ttnn.from_torch(
+        x.reshape(1, 1, tokens, hidden),
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    scores_layout = ttnn.ROW_MAJOR_LAYOUT if row_major_scores else ttnn.TILE_LAYOUT
+
+    def to_scores_tt(host):
+        return ttnn.from_torch(
+            host.reshape(1, 1, tokens, num_experts),
+            dtype=ttnn.bfloat16,
+            device=device,
+            layout=scores_layout,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    rank_tt = to_scores_tt(ranking)
+    scores_tt = rank_tt if rank_is_weight else to_scores_tt(weight_scores)
+
+    # The device's own ranking drives the reference -- which of several equal scores wins is the
+    # op's business -- so the ids are read back out of the tensor the op receives. The constructed
+    # rows are tie-free, so the union is known and can be asserted rather than assumed.
+    rank_dev = ttnn.to_torch(rank_tt).float().reshape(tokens, num_experts)
+    ids = torch.topk(rank_dev, top_k, dim=-1).indices
+    assert sorted(set(ids.flatten().tolist())) == expected_hit_ids, "the ranking rows must be tie-free"
+
+    gate_up, down, gate_up_tt, down_tt = _expert_weights(device, hidden, intermediate, num_experts)
+
+    got = (
+        ttnn.to_torch(
+            ttnn.experimental.deepseek.moe.fused_experts(
+                x_tt,
+                routing_scores=scores_tt,
+                ranking_scores=rank_tt,
+                gate_up_weights=gate_up_tt,
+                down_weights=down_tt,
+                num_experts=num_active,
+                intermediate_size=intermediate,
+                swiglu_limit=limit,
+                top_k=top_k,
+                routed_scaling_factor=scaling,
+                routing_eps=eps,
+                experts_block_size=experts_block_size,
+            )
+        )
+        .float()
+        .reshape(tokens, hidden)
+    )
+
+    scores_dev = ttnn.to_torch(scores_tt).float().reshape(tokens, num_experts)
+    selected = torch.gather(scores_dev, -1, ids)
+    weights = torch.zeros((tokens, num_experts), dtype=torch.float32)
+    weights.scatter_(-1, ids, scaling * selected / (selected.sum(dim=-1, keepdim=True) + eps))
+
+    x_dev = ttnn.to_torch(x_tt).float().reshape(tokens, hidden)
+    ref = torch.zeros((tokens, hidden), dtype=torch.float32)
+    for e in expected_hit_ids:
+        act = _swiglu((x_dev @ gate_up[e]).reshape(tokens, 2 * intermediate), intermediate, limit)
+        ref = ref + weights[:, e : e + 1] * (act @ down[e])
+    passing, pcc_msg = comp_pcc(ref, got, pcc=0.98)
+    assert passing, f"ranking_scores routing vs torch golden: {pcc_msg} | {comp_allclose(ref, got)}"
+
+
+@pytest.mark.parametrize("hidden, intermediate, num_experts, top_k", [(4096, 2048, 8, 4)])
+@pytest.mark.parametrize("batch", (1, 2, 8), ids=lambda b: f"batch{b}")
+@pytest.mark.parametrize("share_ranking", (True, False), ids=("shared_ranking", "disjoint_ranking"))
+def test_fused_experts_ranking_scores_match_topk_ids(
+    device, hidden, intermediate, num_experts, top_k, batch, share_ranking
+):
+    """Ranking inside the op must land on the same experts and weights as the ids form.
+
+    Both calls are handed the same ranking row and the same unbiased score row; one is given
+    ``ttnn.topk``'s ids (the original interface) and the other ``ranking_scores`` (the op's own
+    selection). With tie-free ranking rows the two selections are identical, so the outputs have to
+    agree -- which is both the equivalence check for the new path and the backward-compatibility
+    check for the old one.
+    """
+    torch.manual_seed(0)
+    limit = 7.0
+    tokens = batch
+    scaling = 2.5
+    eps = 1e-20
+    experts_block_size = 2
+
+    ranking, _, expected_hit_ids = _ranking_rows(tokens, num_experts, top_k, share_ranking)
+    num_active = len(expected_hit_ids)
+    weight_scores = torch.rand((tokens, num_experts), dtype=torch.bfloat16).float() + 0.25
+    x = (torch.rand((tokens, hidden), dtype=torch.bfloat16) - 0.5).float()
+
+    def to_tt(host, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16):
+        return ttnn.from_torch(
+            host.reshape(1, 1, tokens, num_experts),
+            dtype=dtype,
+            device=device,
+            layout=layout,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    x_tt = ttnn.from_torch(
+        x.reshape(1, 1, tokens, hidden),
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    rank_tt = to_tt(ranking)
+    scores_tt = to_tt(weight_scores)
+    _, idx_tt = ttnn.topk(rank_tt, top_k, dim=-1)
+
+    gate_up, down, gate_up_tt, down_tt = _expert_weights(device, hidden, intermediate, num_experts)
+
+    def run(**selection):
+        return (
+            ttnn.to_torch(
+                ttnn.experimental.deepseek.moe.fused_experts(
+                    x_tt,
+                    routing_scores=scores_tt,
+                    gate_up_weights=gate_up_tt,
+                    down_weights=down_tt,
+                    num_experts=num_active,
+                    intermediate_size=intermediate,
+                    swiglu_limit=limit,
+                    top_k=top_k,
+                    routed_scaling_factor=scaling,
+                    routing_eps=eps,
+                    experts_block_size=experts_block_size,
+                    **selection,
+                )
+            )
+            .float()
+            .reshape(tokens, hidden)
+        )
+
+    got_ids = run(routing_indices=idx_tt)
+    got_ranked = run(ranking_scores=rank_tt)
+
+    passing, pcc_msg = comp_pcc(got_ids, got_ranked, pcc=0.999)
+    assert passing, f"ranking_scores and topk-ids routing disagree: {pcc_msg} | {comp_allclose(got_ids, got_ranked)}"
+
+    # Anchor both against the golden too, so a shared error cannot hide behind the comparison.
+    ids = ttnn.to_torch(idx_tt).to(torch.int64).reshape(tokens, top_k)
+    assert sorted(set(ids.flatten().tolist())) == expected_hit_ids
+    ref, hit_ids = _gather_reference(
+        ttnn.to_torch(x_tt).float().reshape(tokens, hidden),
+        ttnn.to_torch(scores_tt).float().reshape(tokens, num_experts),
+        ids,
+        gate_up,
+        down,
+        intermediate,
+        limit,
+        scaling,
+        eps,
+    )
+    assert hit_ids == expected_hit_ids
+    for name, got in (("routing_indices", got_ids), ("ranking_scores", got_ranked)):
+        passing, pcc_msg = comp_pcc(ref, got, pcc=0.98)
+        assert passing, f"{name} vs torch golden: {pcc_msg} | {comp_allclose(ref, got)}"
 
 
 def _replicated_row(device, x_row: torch.Tensor, grid: ttnn.CoreRangeSet) -> ttnn.Tensor:

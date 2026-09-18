@@ -59,8 +59,9 @@ inline uint32_t fused_experts_input_rows(const Tensor& x) {
 // Fuses the per-expert routed-FFN loop
 //   gate_up = matmul(x, gate_up_w[e]); act = swiglu(gate_up);
 //   down = matmul(act, down_w[e]); acc += down * w[:, e]
-// for all selected experts into a single device operation, where the per-token weights w are
-// derived on device from the router's (ids, scores) pair (see tensor_args_t).
+// for all selected experts into a single device operation, where the selection comes either from the
+// router's precomputed ids or from a top-k the leader kernel computes over an E-wide score row, and
+// the per-token weights w are always derived on device (see tensor_args_t).
 //
 // Uses the descriptor-based program factory API (returns a ProgramDescriptor); the framework
 // handles program construction, caching and runtime-arg patching -- no shared_variables_t or
@@ -96,7 +97,6 @@ struct FusedExpertsDeviceOperation {
 
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const Tensor& input_tensor,
-        const Tensor& routing_indices,
         const Tensor& routing_scores,
         const std::vector<Tensor>& gate_up_weights,
         const std::vector<Tensor>& down_weights,
@@ -108,7 +108,9 @@ struct FusedExpertsDeviceOperation {
         float routing_eps,
         uint32_t experts_block_size,
         bool two_hub_gather,
-        const std::optional<MemoryConfig>& memory_config);
+        const std::optional<MemoryConfig>& memory_config,
+        const std::optional<Tensor>& routing_indices,
+        const std::optional<Tensor>& ranking_scores);
 };
 
 }  // namespace ttnn::operations::experimental::deepseek::moe::fused_experts
@@ -117,7 +119,6 @@ namespace ttnn::prim {
 ttnn::operations::experimental::deepseek::moe::fused_experts::FusedExpertsDeviceOperation::tensor_return_value_t
 fused_experts(
     const Tensor& input_tensor,
-    const Tensor& routing_indices,
     const Tensor& routing_scores,
     const std::vector<Tensor>& gate_up_weights,
     const std::vector<Tensor>& down_weights,
@@ -129,5 +130,7 @@ fused_experts(
     float routing_eps = 0.0F,
     uint32_t experts_block_size = 0,
     bool two_hub_gather = true,
-    const std::optional<MemoryConfig>& memory_config = std::nullopt);
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& routing_indices = std::nullopt,
+    const std::optional<Tensor>& ranking_scores = std::nullopt);
 }  // namespace ttnn::prim

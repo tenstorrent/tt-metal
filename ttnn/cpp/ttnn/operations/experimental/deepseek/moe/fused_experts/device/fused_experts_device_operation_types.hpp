@@ -39,9 +39,11 @@ struct operation_attributes_t {
     // usable value is about half what a single block allows.
     uint32_t experts_block_size{};
 
-    // Router top-k width: how many expert ids each token row of `routing_indices` carries. The op
-    // reads exactly this many ids per token and normalizes over exactly this many scores, so it is
-    // the router's k, not a bound.
+    // Router top-k width: how many expert ids each token row of `routing_indices` carries, or, when
+    // `ranking_scores` is used, how many experts the on-device ranking selects per token. The op
+    // reads/selects exactly this many ids per token and normalizes over exactly this many scores,
+    // so it is the router's k, not a bound. It must be given explicitly (non-zero) whenever the
+    // selection comes from `ranking_scores`, since there is no id tensor to infer it from.
     uint32_t top_k{};
 
     // The per-token routing weights are the selected scores renormalized to sum to 1 and scaled:
@@ -67,12 +69,21 @@ struct operation_attributes_t {
 // B token rows are computed together, with B <= 32 so they occupy a single tile row: activations are
 // [1, 1, B, H].
 //
-// Expert selection/scaling is fully on-device (no host-side `expert_ids` / "hit" list) and stays in
-// the sparse form the router produces it: each token row carries its k selected expert ids, and the
-// op reads those experts' scores out of the E-wide score row, normalizes them per token and scales
-// them itself. That is the same information the op consumes internally -- the deduplicated id list
-// and per-token weights it publishes in cb_bcast -- so nothing has to scatter k values out to E
-// columns that would then be scanned straight back down to k.
+// Expert selection/scaling is fully on-device (no host-side `expert_ids` / "hit" list). The
+// selection itself reaches the op in one of two forms, and exactly one of them is provided:
+//
+//   * `routing_indices` -- the router's own top-k output: each token row carries its k selected
+//     expert ids (a `ttnn.topk` index output, or an `ttnn.embedding` gather from a frozen table).
+//     The op reads and dedups them. This is the original form.
+//   * `ranking_scores` -- the E-wide score row the router would have ranked (possibly a
+//     bias-corrected copy). The op finds each token's top-k itself, inside the leader kernel, and
+//     that becomes the selection. This removes the separate `ttnn.topk` launch and the DRAM
+//     round-trip of its id output, and it is the only form that can rank on scores that never
+//     leave the op.
+//
+// Either way the per-token weights come from `routing_scores` at the selected experts, normalized
+// and scaled by the op itself -- so nothing has to scatter k values out to E columns that would
+// then be scanned straight back down to k.
 struct tensor_args_t {
     // Activations, [1, 1, B, H] with B <= 32 token rows. TILE, or ROW_MAJOR when B == 1
     // (decode: loaded as 1x32 compute tiles, no tilize).
@@ -80,14 +91,23 @@ struct tensor_args_t {
 
     // Selected expert ids, [1, 1, B, top_k] TILE, in their native tile layout: either UINT16 (the
     // index output of `ttnn.topk`, consumed unmodified) or BFLOAT16 (a `ttnn.embedding` gather from
-    // a frozen id table, which is the only dtype that op gathers; exact for E <= 256).
-    Tensor routing_indices;
+    // a frozen id table, which is the only dtype that op gathers; exact for E <= 256). Empty when
+    // `ranking_scores` drives the selection instead.
+    std::optional<Tensor> routing_indices;
 
     // Per-expert scores, [1, 1, B, E] bfloat16 -- the UNBIASED router scores. TILE, or ROW_MAJOR
-    // when B == 1 (decode stick). The op gathers s[b, routing_indices[b, j]] from these, so it
-    // must be the score tensor the ids index into (the selection may have ranked by a
+    // when B == 1 (decode stick). The op gathers s[b, selected_ids[b, j]] from these, so it
+    // must be the score tensor the selection was derived from (the ranking may have used a
     // bias-corrected copy of it).
     Tensor routing_scores;
+
+    // Scores to RANK on, [1, 1, B, E] bfloat16 -- TILE, or ROW_MAJOR when B == 1. Same shape and
+    // dtype rules as `routing_scores`. When present the op selects each token's `top_k` largest
+    // entries itself (inside the leader kernel, which already reads the whole score row) instead
+    // of reading `routing_indices`; the weights still come from `routing_scores` at those ids, so
+    // "rank on the biased row, weight with the unbiased one" is one op with no host-side topk.
+    // Pass the same tensor as `routing_scores` when the two coincide (the op reads it once).
+    std::optional<Tensor> ranking_scores;
 
     // One gate_up weight tensor per expert, each [H, 2I] (matmul-ready / transposed).
     std::vector<Tensor> gate_up_weights;
