@@ -554,9 +554,9 @@ private:
         // last L1 region
         uint64_t get_cb_region_end() const { return this->l1_regions.empty() ? 0 : this->l1_regions.back().second; }
 
-        // If address is the end of the last L1 region, the last region is extended by size bytes,
-        //  otherwise address must be higher than existing regions and a new L1 region [address, size) is added
-        void mark_address(uint64_t address, uint64_t size, uint64_t base_address);
+        // Mark one local allocation. append_only preserves the legacy CB
+        // cursor behavior; grouped/per-core placement supports interval holes.
+        void mark_address(uint64_t address, uint64_t size, uint64_t base_address, bool append_only = false);
 
         // Reset when circular buffer allocation is invalidated
         void reset_available_addresses() { this->l1_regions.clear(); }
@@ -578,7 +578,7 @@ private:
     std::unordered_map<CoreCoord, std::bitset<NUM_CIRCULAR_BUFFERS>> per_core_local_cb_indices_;
     std::unordered_map<CoreCoord, std::bitset<NUM_CIRCULAR_BUFFERS>> per_core_remote_cb_indices_;
     std::unordered_map<ChipId, ProgramBinaryStatus> binaries_on_device_;
-    // Used to generate circular buffer addresses. There is one CircularBufferAllocator per unique CoreRange
+    // Used to generate circular buffer addresses. There is one CircularBufferAllocator per participating core.
     std::vector<CircularBufferAllocator> cb_allocators_;
     // Tracks which devices this program has CBs allocated on (for CB memory reporting)
     std::unordered_set<const IDevice*> cb_devices_;
