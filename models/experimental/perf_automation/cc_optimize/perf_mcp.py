@@ -6238,6 +6238,30 @@ def _token_stage_name() -> str:
     return ""
 
 
+def _measured_per_token_ms(unit: str) -> float | None:
+    """The tool's own trace+1cq per-token reading, straight from the file the RUN_REPORT already
+    reads (_FULLPIPE_BASELINE_1CQ_PATH) -- a fallback for _decode_gate's gap when the log-scanned
+    per_token_ms (tracy_tool.per_token_ms, scraped from a TRACE_PER_TOKEN_MS= sentinel) is empty.
+    That scan can NEVER succeed while profiling: PROFILING_ENV forces TT_PERF_TRACE=0 in the exact
+    pass it reads the log of, so trace_replay never runs there and the sentinel is never written --
+    for any model, not a gap specific to one. Two features that cannot both be on in the same pass.
+
+    Only valid once the caller has established `unit == "token"` (the same check _decode_gate
+    already makes before it gets this far): full_pipeline_ms is the WHOLE pipeline otherwise, which
+    would be wrong in a per-token slot for a prefill-heavy or one-shot model. Never guesses a stage
+    name to pick a narrower field instead -- the file's own declared unit is the only claim trusted.
+    Fails closed (None) on a missing/partial/unparsable file, since another process (the live run)
+    rewrites it as new baselines land.
+    """
+    if unit != "token":
+        return None
+    try:
+        v = json.loads(_FULLPIPE_BASELINE_1CQ_PATH.read_text()).get("full_pipeline_ms")
+    except Exception:  # noqa: BLE001 -- a file mid-write by another process reads as absent, not a crash
+        return None
+    return float(v) if isinstance(v, (int, float)) and v > 0 else None
+
+
 def _decode_gate(prof: dict, attempts: list) -> dict | None:
     if os.environ.get("TT_PERF_MODULE_LEVEL") == "1":
         return None
@@ -6301,7 +6325,7 @@ def _decode_gate(prof: dict, attempts: list) -> dict | None:
         if b.get("id") == "host_overhead":
             host_ms = float(b.get("device_ms") or 0.0)
             break
-    gap = max(host_ms, float(prof.get("per_token_ms") or 0.0), _MATERIAL_GAP_MS)
+    gap = max(host_ms, float(prof.get("per_token_ms") or _measured_per_token_ms(_unit) or 0.0), _MATERIAL_GAP_MS)
     _stage = _token_stage_name()
     return {
         "op": "generation_loop",

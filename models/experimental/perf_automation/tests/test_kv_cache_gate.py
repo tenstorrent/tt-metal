@@ -69,6 +69,62 @@ def test_no_gate_when_decode_is_not_recompute():
     assert perf_mcp._decode_gate(_prof(status="traced"), []) is None
 
 
+# --- _measured_per_token_ms fallback ------------------------------------------------------------
+# The bug this covers: tracy_tool.per_token_ms() scrapes a TRACE_PER_TOKEN_MS= sentinel that is
+# NEVER written while profiling (PROFILING_ENV forces TT_PERF_TRACE=0 in that same pass), for any
+# model. Without a fallback, the gap always collapsed to _MATERIAL_GAP_MS and kv-cache lost the
+# ranking to every real op's measured gap. The 1cq baseline the RUN_REPORT already reads has the
+# real number; the gate must use it instead of guessing.
+
+
+def test_measured_per_token_ms_reads_full_pipeline_ms_when_unit_is_token(tmp_path, monkeypatch):
+    p = tmp_path / "1cq.json"
+    p.write_text('{"unit": "token", "full_pipeline_ms": 394.25}')
+    monkeypatch.setattr(perf_mcp, "_FULLPIPE_BASELINE_1CQ_PATH", p)
+    assert perf_mcp._measured_per_token_ms("token") == 394.25
+
+
+def test_measured_per_token_ms_refuses_a_non_token_unit():
+    # A non-token unit means full_pipeline_ms is the WHOLE pipeline, not one token's cost -- using
+    # it here would be wrong for a prefill-heavy or one-shot model, so it must refuse outright
+    # without even reading the file.
+    assert perf_mcp._measured_per_token_ms("step") is None
+    assert perf_mcp._measured_per_token_ms("") is None
+
+
+def test_measured_per_token_ms_fails_closed_on_a_missing_file(tmp_path, monkeypatch):
+    monkeypatch.setattr(perf_mcp, "_FULLPIPE_BASELINE_1CQ_PATH", tmp_path / "does_not_exist.json")
+    assert perf_mcp._measured_per_token_ms("token") is None
+
+
+def test_measured_per_token_ms_fails_closed_on_a_partial_write(tmp_path, monkeypatch):
+    # The live run rewrites this file as new baselines land; a reader that crashes on a mid-write
+    # read would take the gate down with it.
+    p = tmp_path / "1cq.json"
+    p.write_text('{"unit": "token", "full_pipel')
+    monkeypatch.setattr(perf_mcp, "_FULLPIPE_BASELINE_1CQ_PATH", p)
+    assert perf_mcp._measured_per_token_ms("token") is None
+
+
+def test_decode_gate_gap_uses_the_1cq_fallback_when_the_log_scan_is_empty(tmp_path, monkeypatch):
+    p = tmp_path / "1cq.json"
+    p.write_text('{"unit": "token", "full_pipeline_ms": 394.25}')
+    monkeypatch.setattr(perf_mcp, "_FULLPIPE_BASELINE_1CQ_PATH", p)
+    g = perf_mcp._decode_gate(_prof(host_ms=0.0, per_token=None), [])
+    assert g is not None
+    assert g["gap_ms"] == 394.25  # not the _MATERIAL_GAP_MS floor
+
+
+def test_decode_gate_gap_stays_at_the_floor_when_the_1cq_file_is_also_missing(tmp_path, monkeypatch):
+    # PERF_MCP_LAST_HEADLINE_UNIT forces unit="token" via the SAME override _decode_gate already
+    # honours, isolating the fallback's own fail-closed behaviour from the early unit-mismatch exit.
+    monkeypatch.setenv("PERF_MCP_LAST_HEADLINE_UNIT", "token")
+    monkeypatch.setattr(perf_mcp, "_FULLPIPE_BASELINE_1CQ_PATH", tmp_path / "missing.json")
+    g = perf_mcp._decode_gate(_prof(host_ms=0.0, per_token=None), [])
+    assert g is not None
+    assert g["gap_ms"] == perf_mcp._MATERIAL_GAP_MS
+
+
 def test_host_ladder_asks_for_trace_not_structural_and_avoids_irreducible():
     host_op = {"bound_by": "host", "bucket": "host_fallback", "grid": "", "weight_dtype": ""}
     done, rung, reason = perf_mcp._op_ladder_status(host_op, "host_overhead", [])
