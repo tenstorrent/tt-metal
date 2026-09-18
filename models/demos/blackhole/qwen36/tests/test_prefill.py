@@ -67,12 +67,9 @@ def test_mask_bucket_rounding():
         assert f(length) == expected, f"_mask_bucket_for({length}) -> {f(length)}, want {expected}"
 
 
-# NOTE on reference lengths: the masked path is compared against `prefill_paged`, the
-# trusted non-traced path. `prefill_paged` itself has a PRE-EXISTING L1 circular-buffer
-# clash for real lengths in roughly (256, 512] (its GDN runs in L1 for seq_len<=512 and
-# overflows there: T=256/700 are fine, T=300/400/512 throw) — unrelated to masking. So
-# every actual_len below is one prefill_paged handles. The masked path is immune (it forces
-# the GDN to DRAM), which is also how it covers bucket 512: exercised via (256, bucket=512).
+# The exact-length reference and masked path both keep multi-token GDN activations in DRAM.
+# Include the lengths that previously collided with gated_delta_attn_seq's static L1 circular
+# buffers so this comparison also guards the eager prefill memory-planning contract.
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
 @pytest.mark.parametrize(
     "actual_len, bucket",
@@ -80,7 +77,10 @@ def test_mask_bucket_rounding():
         (50, 128),  # natural bucket
         (137, 256),  # natural, padded
         (256, 256),  # exact boundary
-        (256, 512),  # forced 512 bucket (DRAM GDN): 256 real + 256 masked pad
+        (256, 512),  # forced 512 bucket: 256 real + 256 masked pad
+        (300, 512),  # exact reference previously hit the L1 circular-buffer clash
+        (400, 512),
+        (512, 512),
         (700, 1024),  # natural, padded
         (1024, 1024),  # exact boundary
         (700, 2048),  # forced 2048 bucket: 700 real + 1348 masked pad
@@ -92,6 +92,9 @@ def test_mask_bucket_rounding():
         "len137_b256",
         "len256_b256",
         "len256_b512",
+        "len300_b512",
+        "len400_b512",
+        "len512_b512",
         "len700_b1024",
         "len1024_b1024",
         "len700_b2048",
@@ -210,8 +213,14 @@ def test_masked_bucket_after_trace_capture(device):
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
 @pytest.mark.parametrize(
     "actual_len",
-    [2098, 2748, 3548],
-    ids=["chunk1_tail50_b128", "chunk1_tail700_b1024", "chunk1_tail1500_b2048"],
+    [2098, 2337, 2546, 2748, 3548],
+    ids=[
+        "chunk1_tail50_b128",
+        "chunk1_tail289_b512",
+        "chunk1_tail498_b512",
+        "chunk1_tail700_b1024",
+        "chunk1_tail1500_b2048",
+    ],
 )
 def test_traced_chunked_tail_matches_reference(device, actual_len):
     """Long-prompt path: prefill_traced_chunked replays the parked chunk trace for the full
