@@ -81,6 +81,11 @@ public:
     void deallocate(uint64_t allocation_id);
 
     DeviceAddr high_water_mark(const CoreRangeSet& cores) const;
+    // Return the highest persistent allocation end on the selected cores, or
+    // ``empty_value`` when none of those cores has a persistent allocation.
+    // Program-local layouts use this overload after kernel extents are known:
+    // an empty persistent arena must not impose the legacy global L1 frontier.
+    DeviceAddr high_water_mark(const CoreRangeSet& cores, DeviceAddr empty_value) const;
     std::vector<std::pair<DeviceAddr, DeviceAddr>> occupied_ranges() const;
     std::vector<std::pair<DeviceAddr, DeviceAddr>> occupied_ranges(const CoreCoord& core) const;
 

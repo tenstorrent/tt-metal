@@ -15,6 +15,7 @@
 
 #include <gtest/gtest.h>
 #include <cstdint>
+#include <utility>
 #include <vector>
 
 #include <tt-metalium/buffer_types.hpp>
@@ -103,6 +104,20 @@ TEST(PerCoreAllocation, CPU_PerBankAvoidsLockstepRegion) {
     auto addr_b1 = alloc(bm, 1024, BANK1);
     EXPECT_EQ(addr_b0, 4096u);
     EXPECT_EQ(addr_b1, 4096u);
+}
+
+TEST(PerCoreAllocation, CPU_ProgramReservationCanGrowIdempotently) {
+    constexpr DeviceAddr bank_size = 1024 * 1024;
+    auto bm = make_per_core_bank_manager(bank_size, 1024, 2);
+
+    bm.expand_and_mark_allocated(BANK0, 0, bank_size, 0, 4096);
+    bm.expand_and_mark_allocated(BANK0, 0, bank_size, 0, 4096);
+    bm.expand_and_mark_allocated(BANK0, 0, bank_size, 0, 8192);
+
+    const auto state = bm.extract_state(BANK0);
+    ASSERT_EQ(state.allocated_regions.size(), 1);
+    EXPECT_EQ(state.allocated_regions[0], (std::pair<DeviceAddr, DeviceAddr>{0, 8192}));
+    EXPECT_EQ(alloc(bm, 1024, LOCKSTEP), 8192u);
 }
 
 // Deallocating per-bank regions lets lockstep reuse that space.

@@ -65,6 +65,7 @@
 #include "program_command_sequence.hpp"
 #include "program_device_map.hpp"
 #include "program_impl.hpp"
+#include "program_options.hpp"
 #include "tt-metalium/program.hpp"
 #include <tt_stl/span.hpp>
 #include <tt_stl/strong_type.hpp>
@@ -357,6 +358,10 @@ detail::ProgramImpl::ProgramImpl(ContextId context_id) :
     programmable_core_count_(MetalContext::instance(context_id).hal().get_programmable_core_type_count()),
     max_cbs_(MetalContext::instance(context_id).hal().get_arch_num_circular_buffers()),
     id(program_counter++) {
+    // Keep this allocator experiment entirely out of ProgramDescriptor and
+    // normal cache keys. Programs retain the legacy layout unless explicitly
+    // opted in before construction.
+    per_core_program_size_enabled_ = detail::per_core_program_size_enabled();
     for (uint32_t i = 0; i < programmable_core_count_; i++) {
         kernels_.push_back({});
         grid_extent_.push_back({});
@@ -379,6 +384,7 @@ detail::ProgramImpl::ProgramImpl(ContextId context_id) :
 detail::ProgramImpl::~ProgramImpl() noexcept {
     // Deallocate circular buffers and unregister from devices
     deallocate_circular_buffers();
+    per_core_program_l1_reservations_.clear();
     persistent_l1_seals_.clear();
     Inspector::program_destroyed(this);
 }
@@ -391,6 +397,25 @@ DeviceAddr detail::ProgramImpl::reserve_program_local_l1(const IDevice* device, 
             continue;
         }
         sealed_cores.emplace(core, arena.seal(CoreRangeSet(CoreRange(core))));
+    }
+    if (per_core_program_size_enabled_ && !program_end_by_core_.empty()) {
+        // The legacy arena begins at the global kernel-config frontier.  Once
+        // this program has a finalized per-core binary layout, that frontier
+        // is unnecessarily conservative on a core with no persistent arena
+        // allocations. Start immediately after the real program image there.
+        // If a persistent allocation is present, its high-water mark remains
+        // the lower bound, preserving the arena's non-overlap contract.
+        DeviceAddr base = 0;
+        for (const CoreCoord& core : corerange_to_cores(cores)) {
+            auto it = program_end_by_core_.find(core);
+            TT_FATAL(
+                it != program_end_by_core_.end(),
+                "Program-local L1 is requested on core {}, but the per-core program layout has no extent for it",
+                core);
+            const DeviceAddr program_end = static_cast<DeviceAddr>(it->second);
+            base = std::max(base, arena.high_water_mark(CoreRangeSet(CoreRange(core)), program_end));
+        }
+        return base;
     }
     return arena.high_water_mark(cores);
 }
@@ -2104,7 +2129,7 @@ void detail::ProgramImpl::validate_circular_buffer_region(const IDevice* device)
             for (const auto& core : cb_allocator.core_range) {
                 for (auto* phys_alloc : physical_allocators) {
                     auto bank_id = phys_alloc->get_bank_ids_from_logical_core(BufferType::L1, core).front();
-                    auto addr = phys_alloc->get_lowest_occupied_l1_address(bank_id);
+                    auto addr = phys_alloc->get_lowest_occupied_l1_buffer_address(bank_id);
                     if (addr.has_value()) {
                         lowest_address =
                             lowest_address.has_value() ? std::make_optional(std::min(*lowest_address, *addr)) : addr;
@@ -3176,6 +3201,11 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
 
         TT_ASSERT(state.offset == tt::align(state.offset, hal.get_alignment(HalMemType::L1)));
 
+        const bool reserve_per_core_program = std::ranges::any_of(
+            programs, [](const ProgramImpl* program) { return program->uses_per_core_program_size(); });
+        const bool use_per_core_tensix_layout =
+            reserve_per_core_program && programmable_core_type == HalProgrammableCoreType::TENSIX;
+        std::unordered_map<CoreCoord, uint32_t> program_end_by_core;
         state.offset = program_dispatch::finalize_kernel_bins(
             device,
             index,
@@ -3183,18 +3213,51 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
             kernel_groups_getter(index),
             state.offset,
             state.kernel_text_offset,
-            state.kernel_text_size);
+            state.kernel_text_size,
+            use_per_core_tensix_layout ? &program_end_by_core : nullptr);
 
         TT_ASSERT(state.offset == tt::align(state.offset, hal.get_alignment(HalMemType::L1)));
 
         size_t max_size = get_ringbuffer_size(device, programmable_core_type);
 
-        TT_FATAL(
-            state.offset <= max_size,
-            "Program size ({}) too large for kernel config buffer ({}) on {}",
-            state.offset,
-            max_size,
-            enchantum::to_string(programmable_core_type));
+        // The global ringbuffer frontier is only a conservative partition. In
+        // per-core mode the true boundary is program_end(core) followed by that
+        // core's program-local buffers; reallocation and allocator reservation
+        // below validate those regions against the real L1 allocations.
+        if (!use_per_core_tensix_layout) {
+            TT_FATAL(
+                state.offset <= max_size,
+                "Program size ({}) too large for kernel config buffer ({}) on {}",
+                state.offset,
+                max_size,
+                enchantum::to_string(programmable_core_type));
+        }
+
+        if (use_per_core_tensix_layout) {
+            TT_FATAL(
+                std::ranges::all_of(
+                    programs, [](const ProgramImpl* program) { return program->uses_per_core_program_size(); }),
+                "All programs finalized together must use the same per-core program reservation setting");
+            TT_FATAL(
+                !metal_ctx.rtoptions().get_fast_dispatch(),
+                "Per-core program reservation is supported only with slow dispatch");
+            const DeviceAddr program_base =
+                hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::KERNEL_CONFIG);
+            for (auto& [core, program_end] : program_end_by_core) {
+                program_end += program_base;
+            }
+            // Slow dispatch finalizes kernel offsets before configuring local
+            // CBs, DFBs, and scratch. Retain the exact per-core lower bound so
+            // their first (and only) allocation is stable for the lifetime of
+            // the program.
+            for (ProgramImpl* program : programs) {
+                program->program_end_by_core_ = program_end_by_core;
+            }
+            auto reservation = device->allocator_impl()->reserve_per_core_program(program_end_by_core, program_base);
+            for (ProgramImpl* program : programs) {
+                program->per_core_program_l1_reservations_.push_back(reservation);
+            }
+        }
 
         for (auto& program : programs) {
             program->set_program_offsets_and_sizes(index, state);
