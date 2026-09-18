@@ -66,6 +66,9 @@ public:
     };
 
     std::vector<Run> runs;  // in time order, disjoint in refclk
+    // Instants of the wall clock on no line (k8 0): the pusher's own samples while it acquires a slope across a
+    // glide, in refclk order. They bend the map through the seam they fall in.
+    std::vector<std::pair<double, double>> raw;  // (refclk, wall)
     uint64_t points = 0;    // points and closes received
     uint64_t transitions = 0;  // segments after the first
 
@@ -73,6 +76,12 @@ public:
     void add_point(uint64_t refclk, uint64_t wall, uint32_t k8, uint32_t n, bool close) {
         points++;
         const double r = static_cast<double>(refclk), w = static_cast<double>(wall);
+        if (k8 == 0) {
+            if (raw.empty() || r > raw.back().first) {
+                raw.emplace_back(r, w);
+            }
+            return;
+        }
         if (runs.empty() || runs.back().closed || runs.back().k8 != static_cast<double>(k8)) {
             transitions += runs.empty() ? 0 : 1;
             runs.emplace_back();
@@ -89,23 +98,45 @@ public:
         cur.n = n;
         cur.closed = close;
     }
+    // The raw instants inside a seam (r_lo, r_hi), in order.
+    std::vector<std::pair<double, double>> raw_between(double r_lo, double r_hi) const {
+        std::vector<std::pair<double, double>> out;
+        for (const auto& p : raw) {
+            if (p.first > r_lo && p.first < r_hi) {
+                out.push_back(p);
+            }
+        }
+        return out;
+    }
     // The segment holding refclk r: the last one starting at or before it (the first, for anything earlier).
     const Run& run_at(double r) const {
         auto it = std::upper_bound(runs.begin(), runs.end(), r, [](double x, const Run& a) { return x < a.r_first; });
         return it == runs.begin() ? runs.front() : *(it - 1);
     }
+    // A raw instant this far off the line a step would put it on says the seam is a ramp. The pusher's raw instants
+    // hold a chord within three ticks of every sample across the seam (its cone), so a step's two lines must do the
+    // same or the instants themselves place the seam.
+    static constexpr double kStepFitTicks = 3.0;
     // Where consecutive segments hand over: their lines' intersection, when it lies within kKnotSlackTicks of the
-    // seam. No value (parallel lines, or a crossing far from the seam): the seam is bridged from a.r_last to b.r_first.
-    static std::optional<double> knot(const Run& a, const Run& b) {
+    // seam and the two lines account for every raw instant recorded across it, i.e. the seam is a step. No value (a
+    // ramp, parallel lines, or a crossing far from the seam): the seam is bridged from a.r_last to b.r_first through
+    // its raw instants.
+    std::optional<double> knot(const Run& a, const Run& b) const {
         const double ds = a.slope() - b.slope();
         if (!(std::abs(ds) > 1e-9)) {
             return std::nullopt;
         }
         const double r_x = (b.w_last - b.slope() * b.r_last - a.w_last + a.slope() * a.r_last) / ds;
-        if (std::isfinite(r_x) && r_x >= a.r_last - kKnotSlackTicks && r_x <= b.r_first + kKnotSlackTicks) {
-            return r_x;
+        if (!(std::isfinite(r_x) && r_x >= a.r_last - kKnotSlackTicks && r_x <= b.r_first + kKnotSlackTicks)) {
+            return std::nullopt;
         }
-        return std::nullopt;
+        for (const auto& [rr, ww] : raw_between(a.r_last, b.r_first)) {
+            const Run& on = rr < r_x ? a : b;
+            if (std::abs(ww - on.wall_of_refclk(rr)) > kStepFitTicks) {
+                return std::nullopt;
+            }
+        }
+        return r_x;
     }
     // The wall instant of refclk tick r exactly as the published correction places a record there: each segment's
     // line up to its knot with the next, a straight bridge across a seam without one. 0 when no line holds r yet.
@@ -123,8 +154,32 @@ public:
                     run = &next;
                 }
             } else if (r > run->r_last && r < next.r_first && usable(*run)) {
-                const double w0 = run->wall_of_refclk(run->r_last), w1 = next.wall_of_refclk(next.r_first);
-                return w0 + (w1 - w0) * (r - run->r_last) / (next.r_first - run->r_last);
+                // A bridged seam: straight between the raw instants inside it, the two lines' ends included.
+                double r0 = run->r_last, w0 = run->wall_of_refclk(run->r_last);
+                for (const auto& [rr, ww] : raw_between(run->r_last, next.r_first)) {
+                    if (r < rr) {
+                        return w0 + (ww - w0) * (r - r0) / (rr - r0);
+                    }
+                    r0 = rr;
+                    w0 = ww;
+                }
+                const double w1 = next.wall_of_refclk(next.r_first);
+                return w0 + (w1 - w0) * (r - r0) / (next.r_first - r0);
+            }
+        } else if (
+            idx + 1 == runs.size() && run->closed && r > run->r_last && usable(*run) && !raw.empty() &&
+            raw.back().first > run->r_last) {
+            // The seam still open: through the raw instants, then along the last two.
+            double r0 = run->r_last, w0 = run->wall_of_refclk(run->r_last);
+            for (const auto& [rr, ww] : raw_between(run->r_last, std::numeric_limits<double>::infinity())) {
+                if (r < rr) {
+                    return w0 + (ww - w0) * (r - r0) / (rr - r0);
+                }
+                if (rr == raw.back().first) {
+                    return ww + (ww - w0) * (r - rr) / (rr - r0);
+                }
+                r0 = rr;
+                w0 = ww;
             }
         }
         if (run == &runs[idx] && idx > 0 && usable(runs[idx - 1])) {
@@ -351,7 +406,7 @@ public:
     explicit SeriesPublisher(ClockMap& map) : map_(map) {}
     void reset() { series_.clear(); }
     // Publishes one chip's series from its fit and root transform as they stand; true when the chip's cover moved.
-    bool publish(uint32_t dev, uint32_t chip, const LocalClockModel& fit, const RootXf& xf);
+    bool publish(uint32_t dev, uint32_t chip, const LocalClockModel& fit, const RootXf& xf, bool final = false);
     // A chip's series, null before its first publish.
     const Series* series(uint32_t dev) const {
         const auto it = series_.find(dev);
@@ -369,7 +424,7 @@ private:
         std::optional<Node> frontier;
         size_t knots_after = 0;  // run boundaries consumed once the knots are placed
     };
-    Fresh fresh_nodes(const Series& s, const LocalClockModel& fit, const RootXf& xf) const;
+    Fresh fresh_nodes(const Series& s, const LocalClockModel& fit, const RootXf& xf, bool final) const;
     // Appends the knots and, if the frontier left the newest tangent by more than kFreezeNs, freezes the tangent where
     // it stood and appends the frontier; otherwise advances the cover. True when the cover moved.
     bool advance(Series& s, uint32_t chip, Fresh fresh);
@@ -408,7 +463,7 @@ private:
     // The fleet timeline's root: the chip the host probe reads, fixed for the capture.
     uint32_t root_dev() const { return ctx_.root_dev; }
     // Publishes one chip's series from its fit as it stands; true when the chip's cover moved.
-    bool publish_dev(uint32_t dev);
+    bool publish_dev(uint32_t dev, bool final = false);
     void publish_all();
     // The capture-end report: each chip's clock model, every link's solution, the loop closures; the sync error per
     // round and each chip's AICLK as plots.

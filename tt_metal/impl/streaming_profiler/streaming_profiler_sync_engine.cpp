@@ -610,7 +610,7 @@ std::map<uint32_t, RootXf> LinkSolver::root_transforms(uint32_t root, std::vecto
 }
 
 SeriesPublisher::Fresh SeriesPublisher::fresh_nodes(
-    const Series& s, const LocalClockModel& fit, const RootXf& xf) const {
+    const Series& s, const LocalClockModel& fit, const RootXf& xf, bool final) const {
     const std::vector<LocalClockModel::Run>& runs = fit.runs;
     // A node places one instant of a run on the root: its eth wall tick (the key every record of the chip is looked
     // up by, worker lanes through their tile offset) and the root's refclk at that instant, via the chip's refclk
@@ -648,17 +648,42 @@ SeriesPublisher::Fresh SeriesPublisher::fresh_nodes(
         out.knots.push_back(node_at(runs.front(), runs.front().r_first));
         last_r = runs.front().r_first;
     }
+    // The raw instants of a seam, each a node with the chord to the next point as its tangent: the map bends through
+    // a ramp the pusher could fit no line to. Those past `last_r` only; `r_end` is the next line's first point.
+    const auto raw_nodes = [&](double r_from, double r_end, const Node& end_node) {
+        const auto pts = fit.raw_between(r_from, r_end);
+        for (size_t j = 0; j < pts.size(); j++) {
+            const auto& [rr, ww] = pts[j];
+            if (rr <= last_r) {
+                continue;
+            }
+            const double root = xf.scale * rr + xf.shift;
+            double H2, root2;
+            if (j + 1 < pts.size()) {
+                H2 = pts[j + 1].second;
+                root2 = xf.scale * pts[j + 1].first + xf.shift;
+            } else {
+                H2 = end_node.H;
+                root2 = end_node.root;
+            }
+            if (!(H2 > ww)) {
+                continue;
+            }
+            out.knots.push_back(Node{ww, root, rr, (root2 - root) / (H2 - ww)});
+            last_r = rr;
+        }
+    };
     for (size_t i = s.knots; i + 1 < runs.size(); i++) {
         const LocalClockModel::Run& a = runs[i];
         const LocalClockModel::Run& b = runs[i + 1];
-        if (i + 2 == runs.size() && !b.settled()) {
+        if (i + 2 == runs.size() && !b.settled() && !final) {
             break;
         }
         // Two lines with different slopes meet at the transition; two with the same slope (a run cut by length, or a
         // spurious split) are bridged by a node on each side of the seam. Past the knot the records lie on b, so the
         // knot leaves on b's tangent. The a-side node of a bridge is dropped when the frontier already passed it: a's
         // newest sample was handed to b after the tangent was frozen on it, and the frozen tangent's end is that node.
-        if (const auto r_x = LocalClockModel::knot(a, b)) {
+        if (const auto r_x = fit.knot(a, b); r_x && *r_x > last_r) {
             if (*r_x < s.cover_r) {
                 log_warning(
                     tt::LogMetal,
@@ -673,14 +698,22 @@ SeriesPublisher::Fresh SeriesPublisher::fresh_nodes(
             out.knots.push_back(k);
             last_r = *r_x;
         } else {
-            if (a.r_last >= s.cover_r) {
+            if (a.r_last >= s.cover_r && a.r_last > last_r) {
                 out.knots.push_back(node_at(a, a.r_last));
+                last_r = a.r_last;
             }
-            out.knots.push_back(node_at(b, b.r_first));
-            last_r = b.r_first;
+            const Node end = node_at(b, std::max(b.r_first, last_r));
+            raw_nodes(a.r_last, b.r_first, end);
+            if (end.r > last_r) {
+                out.knots.push_back(end);
+                last_r = end.r;
+            }
         }
         out.knots_after = i + 1;
     }
+    // An open seam (the last line closed, the next not yet locked) places nothing: whether it is a step, placed by
+    // its knot, or a ramp, bent through its raw instants, is known only once the next line is in, and until then the
+    // records inside it wait on the cover.
     // The open segment's line reaches to its newest point, which the pusher places behind its newest sample by more
     // than the time it takes to confirm a step, so no node freezes past a transition. A closed segment gets no
     // frontier: its close is the last sample still within the step threshold of its line, a few microseconds past
@@ -689,6 +722,24 @@ SeriesPublisher::Fresh SeriesPublisher::fresh_nodes(
     if (!open.closed && open.settled() && open.slope() > 0.0 && open.r_last > last_r &&
         out.knots_after + 1 == runs.size()) {
         out.frontier = node_at(open, open.r_last);
+    }
+    // The capture ended inside a transition: the raw instants past the close are the last the wall clock is known
+    // at, and the series bends through them to the newest one.
+    if (final && open.closed && out.knots_after + 1 == runs.size()) {
+        const auto pts = fit.raw_between(open.r_last, std::numeric_limits<double>::infinity());
+        if (!pts.empty() && pts.back().first > last_r) {
+            if (open.r_last > last_r) {
+                out.knots.push_back(node_at(open, open.r_last));
+                last_r = open.r_last;
+            }
+            const auto [re, we] = pts.back();
+            const auto [rp, wp] = pts.size() > 1 ? pts[pts.size() - 2] : std::pair{open.r_last, open.w_last};
+            const double root_e = xf.scale * re + xf.shift, root_p = xf.scale * rp + xf.shift;
+            const Node end{we, root_e, re, (root_e - root_p) / (we - wp)};
+            raw_nodes(open.r_last, re, end);
+            out.knots.push_back(end);
+            last_r = re;
+        }
     }
     return out;
 }
@@ -763,12 +814,12 @@ bool SeriesPublisher::advance(Series& s, uint32_t chip, Fresh fresh) {
     return s.cover_H > cover_before;
 }
 
-bool SeriesPublisher::publish(uint32_t dev, uint32_t chip, const LocalClockModel& fit, const RootXf& xf) {
+bool SeriesPublisher::publish(uint32_t dev, uint32_t chip, const LocalClockModel& fit, const RootXf& xf, bool final) {
     Series& s = series_[dev];
-    return advance(s, chip, fresh_nodes(s, fit, xf));
+    return advance(s, chip, fresh_nodes(s, fit, xf, final));
 }
 
-bool SyncEngine::publish_dev(uint32_t dev) {
+bool SyncEngine::publish_dev(uint32_t dev, bool final) {
     const auto st = local_.find(dev);
     if (st == local_.end() || st->second.runs.empty() || dev >= ctx_.devices.size()) {
         return false;
@@ -787,12 +838,12 @@ bool SyncEngine::publish_dev(uint32_t dev) {
     if (xf == to_root_.end() || !xf->second.ok) {
         return false;
     }
-    return series_.publish(dev, ctx_.devices[dev].chip_id, st->second, xf->second);
+    return series_.publish(dev, ctx_.devices[dev].chip_id, st->second, xf->second, final);
 }
 
 void SyncEngine::publish_all() {
     for (const auto& kv : local_) {
-        publish_dev(kv.first);
+        publish_dev(kv.first, /*final=*/true);
     }
     for (const CaptureContext::Device& d : ctx_.devices) {
         map_.finish(d.chip_id);

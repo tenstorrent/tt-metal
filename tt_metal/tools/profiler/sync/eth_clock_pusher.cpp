@@ -130,6 +130,12 @@ constexpr uint32_t kWinSpreadTicks = 8;    // one line's samples spread less tha
 constexpr uint32_t kAcqTestEvery = 8;      // samples between lock tests
 constexpr uint32_t kFirstPointN = 16;      // samples behind a segment's first point: a quarter of a tick
 constexpr uint32_t kLastDoublingN = 4096;  // points at every doubling of the count up to here, then every kPointTicks
+// While no line holds (a step's acquisition, which a PLL glide of tens of ms keeps failing), the bracketed samples
+// go out as points, k8 0, as few as keep the host's chord through them within kRawEpsTicks of every sample: the map
+// then bends through the glide instead of bridging it with one chord (whose error is the frequency change times the
+// seam length over eight -- hundreds of us for a 7% ramp over 30 ms). A slow ramp costs a point every ~80 us, a
+// fast one a point a sample while it lasts.
+constexpr int64_t kRawEpsTicks = 3;        // 2.2 ns
 constexpr uint32_t kCountMax = 1u << 22;   // the residue sum stops here, and it stays in 32 bits
 // A point lies this far behind the newest sample (164 us): a departure is confirmed within ~25 us of samples, and
 // a sweep can hold sampling for ~100 us, so no point ever lands on a step the model has not yet seen.
@@ -158,6 +164,11 @@ struct Model {
     uint64_t r_lock = 0;  // where the segment's line begins: the oldest sample of the window that locked it
     uint64_t r_last_point = 0;
     uint32_t ring_n = 0;  // ring entries written; the newest is ring()[(ring_n - 1) & (kRingSamples - 1)]
+    // Acquisition's raw points: the anchor (the last point sent), the previous sample, and the cone of chord slopes
+    // from the anchor that keep every sample since within kRawEpsTicks, as fractions n/d with d > 0.
+    uint64_t raw_r0 = 0, raw_w0 = 0, raw_rp = 0, raw_wp = 0;
+    int64_t lo_n = 0, lo_d = 1, hi_n = 0, hi_d = 1;
+    bool cone = false;
 };
 
 inline __attribute__((always_inline)) void ring_push(Model& m, uint64_t r, uint64_t w) {
@@ -183,12 +194,57 @@ inline void write_point(Model& m, uint64_t r, uint32_t role) {
     sync::write(kp::kSyncKindLocal, role, m.k8 | (n << 8), r, w);
 }
 
+// A sample as a point: k8 0 tells the host it is an instant of the wall clock, on no line.
+inline void write_raw_point(Model& m, uint64_t r, uint64_t w) {
+    m.r_last_point = r;
+    sync::write(kp::kSyncKindLocal, kp::kSyncLocalPoint, 0, r, w);
+}
+// One acquisition sample: the seam's first becomes a point and the anchor; then the cone narrows with each sample,
+// and the sample that empties it makes the previous one the next point and anchor.
+__attribute__((noinline)) void raw_feed(Model& m, uint64_t r, uint64_t w) {
+    if (m.raw_r0 == 0) {
+        write_raw_point(m, r, w);
+        m.raw_r0 = m.raw_rp = r;
+        m.raw_w0 = m.raw_wp = w;
+        m.cone = false;
+        return;
+    }
+    const int64_t dr = static_cast<int64_t>(r - m.raw_r0), dw = static_cast<int64_t>(w - m.raw_w0);
+    if (!m.cone) {
+        m.lo_n = dw - kRawEpsTicks;
+        m.hi_n = dw + kRawEpsTicks;
+        m.lo_d = m.hi_d = dr;
+        m.cone = true;
+    } else {
+        if ((dw - kRawEpsTicks) * m.lo_d > m.lo_n * dr) {
+            m.lo_n = dw - kRawEpsTicks;
+            m.lo_d = dr;
+        }
+        if ((dw + kRawEpsTicks) * m.hi_d < m.hi_n * dr) {
+            m.hi_n = dw + kRawEpsTicks;
+            m.hi_d = dr;
+        }
+        if (m.lo_n * m.hi_d > m.hi_n * m.lo_d) {
+            write_raw_point(m, m.raw_rp, m.raw_wp);
+            m.raw_r0 = m.raw_rp;
+            m.raw_w0 = m.raw_wp;
+            const int64_t dr2 = static_cast<int64_t>(r - m.raw_r0), dw2 = static_cast<int64_t>(w - m.raw_w0);
+            m.lo_n = dw2 - kRawEpsTicks;
+            m.hi_n = dw2 + kRawEpsTicks;
+            m.lo_d = m.hi_d = dr2;
+        }
+    }
+    m.raw_rp = r;
+    m.raw_wp = w;
+}
 inline void begin_acquire(Model& m, uint64_t r_from) {
     m.k8 = 0;
     m.n = 0;
     m.sum = 0;
     m.r_acq0 = r_from;
     m.acq_count = 0;
+    m.raw_r0 = 0;
+    m.cone = false;
 }
 
 // Locks the slope from the newest kWinTicks of the ring when those samples lie on one line: the slope from the
@@ -251,8 +307,14 @@ inline __attribute__((always_inline)) void feed(Model& m, uint64_t r, uint64_t w
     if (m.k8 == 0) {
         if (r - m.r_acq0 >= kAcqTicks && ++m.acq_count >= kAcqTestEvery) {
             m.acq_count = 0;
-            try_lock(m, r);
+            if (try_lock(m, r)) {
+                if (m.raw_r0 != 0 && m.raw_rp != m.raw_r0) {
+                    write_raw_point(m, m.raw_rp, m.raw_wp);  // the seam's last instant, on the new line
+                }
+                return;
+            }
         }
+        raw_feed(m, r, w);
         return;
     }
     const int64_t e = 8 * static_cast<int64_t>(w - m.wa) - static_cast<int64_t>(m.k8) * static_cast<int64_t>(r - m.ra);
