@@ -4,8 +4,11 @@
 
 #pragma once
 
-#define TTI_INSN(ENCODING)    __asm__ __volatile__(".ttinsn %0" : : "n"((ENCODING)))
-#define TT_INSN(ENCODING)     (::ckernel::instrn_buffer[0] = (ENCODING))
+#if defined(COMPILE_FOR_TRISC)
+#define TTI_INSN(ENCODING) __builtin_rvtt_ttinsn(nullptr, (ENCODING))
+#define TT_INSN(ENCODING)  __builtin_rvtt_ttinsn(&::ckernel::instrn_buffer[0], (ENCODING))
+#endif
+
 #define TT_OP(opcode, params) ((opcode << 24) + params)
 
 #define TT_OP_ADDDMAREG(OpBisConst, ResultRegIndex, OpBRegIndex, OpARegIndex) \
