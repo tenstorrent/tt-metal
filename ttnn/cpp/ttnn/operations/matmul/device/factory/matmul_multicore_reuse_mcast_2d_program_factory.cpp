@@ -2055,8 +2055,9 @@ create_program_mcast_in0_in1(
 
     in1_sender_writer_compile_time_args.push_back((std::uint32_t)(fuse_op && fused_op_signaler->is_all_gather()));
     // The per-batch barrier+signal of the REDUCE_SCATTER path is reused as-is by the SP reduce-scatter fusion.
-    in1_sender_writer_compile_time_args.push_back((std::uint32_t)(
-        fuse_op && (fused_op_signaler->is_reduce_scatter() || fused_op_signaler->is_sp_reduce_scatter())));
+    in1_sender_writer_compile_time_args.push_back(
+        (std::uint32_t)(fuse_op &&
+                        (fused_op_signaler->is_reduce_scatter() || fused_op_signaler->is_sp_reduce_scatter())));
     in1_sender_writer_compile_time_args.push_back((std::uint32_t)false);  // compact_output
 
     // Append TensorAccessorArgs
@@ -2125,8 +2126,9 @@ create_program_mcast_in0_in1(
     } else {
         in1_receiver_writer_compile_time_args.push_back(0);  // Placeholder; not used
     }
-    in1_receiver_writer_compile_time_args.push_back((std::uint32_t)(
-        fuse_op && (fused_op_signaler->is_reduce_scatter() || fused_op_signaler->is_sp_reduce_scatter())));
+    in1_receiver_writer_compile_time_args.push_back(
+        (std::uint32_t)(fuse_op &&
+                        (fused_op_signaler->is_reduce_scatter() || fused_op_signaler->is_sp_reduce_scatter())));
     tt::tt_metal::TensorAccessorArgs(out_tensor).append_to(in1_receiver_writer_compile_time_args);
 
     std::map<std::string, std::string> mm_kernel_defines;

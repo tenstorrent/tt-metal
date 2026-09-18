@@ -43,6 +43,7 @@
 #include "ttnn/operations/experimental/ccl/moe_compute/moe_compute_nanobind.hpp"
 #include "ttnn/operations/experimental/ccl/moe/selective_reduce_combine/selective_reduce_combine_nanobind.hpp"
 #include "ttnn/operations/experimental/ccl/sp_matmul_fusion_common/sp_matmul_schedule_test_nanobind.hpp"
+#include "ttnn/operations/experimental/ccl/all_gather_matmul_sp_async/all_gather_matmul_sp_async_nanobind.hpp"
 
 namespace ttnn::operations::experimental::ccl {
 
@@ -88,6 +89,7 @@ void py_module(nb::module_& mod) {
     ccl::bind_moe_compute_utils(mod);
     ccl::moe::bind_selective_reduce_combine(mod);
     ccl::bind_sp_matmul_schedule_test(mod);
+    ccl::bind_all_gather_matmul_sp_async(mod);
 }
 
 }  // namespace ttnn::operations::experimental::ccl

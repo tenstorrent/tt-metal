@@ -19,6 +19,7 @@
 
 #include <tt-metalium/core_coord.hpp>
 
+#include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/matmul/device/config/matmul_program_config_types.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -35,7 +36,8 @@ struct SpSubBatch {
 };
 
 // Metadata-only reshape [B,1,S,X] -> [B*num_slices,1,S/num_slices,X] (same device buffer). TT_FATALs on any shape that
-// would need data movement (rank != 4, dim 1 != 1, S not a multiple of num_slices*tile_height, not TILE, not on device).
+// would need data movement (rank != 4, dim 1 != 1, S not a multiple of num_slices*tile_height, not TILE, not on
+// device).
 Tensor sub_batched_view(const Tensor& t, uint32_t num_slices);
 
 // Derived 2D-mcast program config for one sub-batched matmul (no tuning table): fuse_batch=false,
@@ -57,5 +59,25 @@ std::vector<uint32_t> pack_sp_schedule(const std::vector<SpSubBatch>& order);
 // RS-side companion of a schedule: ordinal[out_idx] = position of that sub-batch in the matmul schedule, for all
 // B*T sub-batches (the inverse permutation of out_idx). TT_FATALs unless out_idx is a permutation of 0..B*T-1.
 std::vector<uint32_t> sp_rs_ordinals(const std::vector<SpSubBatch>& order, uint32_t B, uint32_t T);
+
+// Matmul schedule for the fused all-gather (gather-then-multiply) on rank `ring_index` of `T`: the B local slices
+// first (read from the original sharded input: in0_idx = b, is_local), then the remote slices in the order the
+// all_gather_async default kernels deliver them, alternating the two directions. Derived from those kernels
+// (minimal_default_reader.cpp / minimal_default_writer.cpp, all_gather_async_default_program_factory.cpp):
+//   * direction 1 receives from ring_index+1, +2, ... and direction 0 from ring_index-1, -2, ... (mod T);
+//   * Linear: dir1 gets T-1-r slices, dir0 gets r; Ring (static_alternate=false): dir0 gets ceil((T-1)/2), dir1
+//     the rest;
+//   * the reader of direction d increments the matmul's direction-d semaphore once per received slice (one signal
+//     per slice: all workers of that direction across links barrier first), and the direction-1 WRITER increments
+//     the direction-1 semaphore once for the local slice before the reader's first remote signal. Hence remote
+//     slice k (1-based) of dir0 waits for count k, of dir1 for count k+1.
+// Sub-batch indices are into the [B*T,1,S/T,X] views: out_idx = b*T + chip; in0_idx = out_idx for remote slices.
+std::vector<SpSubBatch> sp_ag_schedule(ttnn::ccl::Topology topology, uint32_t T, uint32_t ring_index, uint32_t B);
+
+// Debug/decomposition variant of sp_ag_schedule that removes the overlap: the remote slices come first, every
+// remote entry waits for its direction's FINAL count (so the first two iterations only start once the whole
+// all-gather has landed), and the local slices come last. fused(serialized) - matmul(alone) = all-gather cost.
+std::vector<SpSubBatch> sp_ag_schedule_serialized(
+    ttnn::ccl::Topology topology, uint32_t T, uint32_t ring_index, uint32_t B);
 
 }  // namespace ttnn::experimental::ccl

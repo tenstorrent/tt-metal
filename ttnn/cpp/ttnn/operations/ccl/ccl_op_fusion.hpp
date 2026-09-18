@@ -127,8 +127,8 @@ enum class MatmulFusedOpSignalerType {
     LLAMA_ALL_GATHER,
     // Sequence-parallel (dim-2) fusion: the matmul processes one "sub-batch" (batch b, sequence slice t) per
     // batch-loop iteration in a caller-provided order (SP_SLICE_SCHEDULE kernel define). SP_ALL_GATHER additionally
-    // waits on the all-gather's per-direction semaphores before consuming a remote slice (SP_AG_WAIT); SP_REDUCE_SCATTER
-    // reuses the existing per-batch barrier+signal of the REDUCE_SCATTER path.
+    // waits on the all-gather's per-direction semaphores before consuming a remote slice (SP_AG_WAIT);
+    // SP_REDUCE_SCATTER reuses the existing per-batch barrier+signal of the REDUCE_SCATTER path.
     SP_ALL_GATHER,
     SP_REDUCE_SCATTER,
 };

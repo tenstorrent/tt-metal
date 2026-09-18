@@ -328,8 +328,12 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
                                           : (use_fabric_2d_neighbor_barrier ? 1u : ring_size - 1),
         mesh_device);
 
-    TT_FATAL(
-        !((topology == ccl::Topology::Linear) && fuse_op), "linear is not support when using fused for all-gather");
+    // Linear + fuse_op used to be rejected here because the K-fusion MatmulOpReceiver (all_gather_matmul_async)
+    // assumes a symmetric per-direction slice split. The sequence-parallel fusion (all_gather_matmul_sp_async)
+    // derives the per-direction counts from get_forward_backward_line_mcast_distance and handles the asymmetric
+    // Linear case (an edge device receives everything on one direction; the direction-1 writer still fires its
+    // local-slice signal even with no targets), so the fused path is allowed for both topologies. The K-fusion op
+    // keeps rejecting Linear in its own validation.
     const auto [all_core_range, all_cores] = ttnn::ccl::choose_worker_cores(
         num_links, num_cores_per_link, mesh_device, sub_device_id, core_grid_offset, sub_core_grid);
 
@@ -342,6 +346,13 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
 
     std::set<CoreRange> sender_forward_core_ranges;
     std::set<CoreRange> sender_backward_core_ranges;
+    // The same cores in ASSIGNMENT order (link-major, worker-minor). The fused-op OpSignaler indexes its worker
+    // list with `worker + link * num_workers_per_direction`, so the list handed to init_all_gather must follow this
+    // order, not the x-major order of the std::set above (they differ as soon as one direction's workers span two
+    // rows, e.g. 4 workers/link on 2 links in a 2-row region -> the slaves signalled the wrong master and the
+    // barrier deadlocked).
+    std::vector<CoreCoord> sender_workers_forward_ordered;
+    std::vector<CoreCoord> sender_workers_backward_ordered;
 
     const auto mux_connection_valid = [&backward_coord, &forward_coord](const uint32_t dir) {
         return (dir && backward_coord.has_value()) || (!dir && forward_coord.has_value());
@@ -367,8 +378,10 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
 
                     if (dir) {
                         sender_forward_core_ranges.emplace(worker_core);
+                        sender_workers_forward_ordered.push_back(worker_core);
                     } else {
                         sender_backward_core_ranges.emplace(worker_core);
+                        sender_workers_backward_ordered.push_back(worker_core);
                     }
                     sender_worker_core_ranges.emplace_back(worker_core);
                 }
@@ -384,8 +397,10 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
 
                     if (dir) {
                         sender_forward_core_ranges.emplace(worker_core);
+                        sender_workers_forward_ordered.push_back(worker_core);
                     } else {
                         sender_backward_core_ranges.emplace(worker_core);
+                        sender_workers_backward_ordered.push_back(worker_core);
                     }
                     sender_worker_core_ranges.emplace_back(worker_core);
                 }
@@ -442,14 +457,14 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
     // KERNEL CREATION
     /* All gather fusion */
     if (fuse_op) {
-        auto sender_workers_forward = corerange_to_cores(sender_forward_core_ranges, std::nullopt, true);
-        auto sender_workers_backward = corerange_to_cores(sender_backward_core_ranges, std::nullopt, true);
+        // Worker lists in assignment order (see sender_workers_*_ordered): the kernels' OpSignaler index is
+        // `worker + link * num_workers_per_direction`.
         fused_op_signaler_forward->init_all_gather(
-            program, mesh_device, sender_forward_core_ranges, sender_workers_forward);
+            program, mesh_device, sender_forward_core_ranges, sender_workers_forward_ordered);
         fused_op_signaler_backward->init_all_gather(
-            program, mesh_device, sender_backward_core_ranges, sender_workers_backward);
+            program, mesh_device, sender_backward_core_ranges, sender_workers_backward_ordered);
         fused_op_signaler_sender_workers->init_all_gather(
-            program, mesh_device, sender_forward_core_ranges, sender_workers_forward);
+            program, mesh_device, sender_forward_core_ranges, sender_workers_forward_ordered);
     }
 
     std::vector<tt::tt_metal::KernelHandle> writer_kernel_ids;

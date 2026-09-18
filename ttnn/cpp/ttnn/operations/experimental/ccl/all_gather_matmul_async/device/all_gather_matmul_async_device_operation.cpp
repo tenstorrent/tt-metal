@@ -47,6 +47,11 @@ void AllGatherMatmulAsyncDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         operation_attributes.all_gather_async_attributes.dim == 3,
         "AllGatherMatmulAsync requires dim=3 for the AllGather operations.");
+    // The K-fusion MatmulOpReceiver assumes a symmetric per-direction slice split (Ring). This check used to live in
+    // the all-gather builder; it moved here when the sequence-parallel fusion started using the fused Linear path.
+    TT_FATAL(
+        operation_attributes.all_gather_async_attributes.topology != ttnn::ccl::Topology::Linear,
+        "AllGatherMatmulAsync: linear is not supported when using fused for all-gather");
     TT_FATAL(
         input_tensor.padded_shape()[0] == 1 && input_tensor.padded_shape()[1] == 1,
         "AllGatherMatmulAsync requires input tensor to have batch size of 1.");

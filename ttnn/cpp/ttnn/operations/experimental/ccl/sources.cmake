@@ -115,6 +115,9 @@ set(TTNN_OP_EXPERIMENTAL_CCL_SRCS
     moe/selective_reduce_combine/device/selective_reduce_combine_program_factory.cpp
     sp_matmul_fusion_common/sp_matmul_fusion_common.cpp
     sp_matmul_fusion_common/sp_matmul_schedule_test.cpp
+    all_gather_matmul_sp_async/all_gather_matmul_sp_async.cpp
+    all_gather_matmul_sp_async/device/all_gather_matmul_sp_async_device_operation.cpp
+    all_gather_matmul_sp_async/device/all_gather_matmul_sp_async_program_factory.cpp
 )
 
 set(TTNN_OP_EXPERIMENTAL_CCL_API_HEADERS
@@ -139,6 +142,7 @@ set(TTNN_OP_EXPERIMENTAL_CCL_API_HEADERS
     reduce_scatter_minimal_direct/device/reduce_scatter_minimal_direct_factory.hpp
     reduce_scatter_minimal_direct/reduce_scatter_minimal_direct.hpp
     sp_matmul_fusion_common/sp_matmul_fusion_common.hpp
+    all_gather_matmul_sp_async/all_gather_matmul_sp_async.hpp
     matmul_reduce_scatter_sp_async/matmul_reduce_scatter_sp_async.hpp
 )
 
@@ -186,4 +190,5 @@ set(TTNN_OP_EXPERIMENTAL_CCL_NANOBIND_SRCS
     moe_compute/moe_compute_nanobind.cpp
     moe/selective_reduce_combine/selective_reduce_combine_nanobind.cpp
     sp_matmul_fusion_common/sp_matmul_schedule_test_nanobind.cpp
+    all_gather_matmul_sp_async/all_gather_matmul_sp_async_nanobind.cpp
 )

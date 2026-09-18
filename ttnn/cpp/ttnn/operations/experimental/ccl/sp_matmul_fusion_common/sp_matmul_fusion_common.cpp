@@ -8,6 +8,7 @@
 #include <map>
 #include <tuple>
 
+#include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/data_movement/view/view.hpp"
 #include "ttnn/operations/matmul/device/config/matmul_program_config.hpp"
 #include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
@@ -154,8 +155,8 @@ operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig sp_matmul_program
         .fused_activation = std::nullopt,
         .fuse_batch = false,
     };
-    config.allowed_worker_cores = CoreRangeSet(
-        CoreRange(tt::tt_metal::CoreCoord(0, 0), tt::tt_metal::CoreCoord(grid.x - 1, grid.y - 1)));
+    config.allowed_worker_cores =
+        CoreRangeSet(CoreRange(tt::tt_metal::CoreCoord(0, 0), tt::tt_metal::CoreCoord(grid.x - 1, grid.y - 1)));
     return config;
 }
 
@@ -172,6 +173,86 @@ std::vector<uint32_t> pack_sp_schedule(const std::vector<SpSubBatch>& order) {
             (e.wait_count << 24));
     }
     return words;
+}
+
+std::vector<SpSubBatch> sp_ag_schedule(ttnn::ccl::Topology topology, uint32_t T, uint32_t ring_index, uint32_t B) {
+    TT_FATAL(T >= 2 && ring_index < T, "sp_ag_schedule: need T >= 2 and ring_index < T, got T={} r={}", T, ring_index);
+    TT_FATAL(B >= 1, "sp_ag_schedule: need B >= 1");
+    TT_FATAL(
+        topology == ttnn::ccl::Topology::Ring || topology == ttnn::ccl::Topology::Linear,
+        "sp_ag_schedule: topology must be Ring or Linear");
+    // Same call as all_gather_async_default_program_factory.cpp (static_alternate=false).
+    auto [num_targets_forward, num_targets_backward] =
+        ttnn::ccl::get_forward_backward_line_mcast_distance(T, ring_index, topology, /*static_alternate=*/false);
+    // minimal_default_reader.cpp: Linear dir1 <- num_targets_forward, dir0 <- num_targets_backward;
+    //                             Ring   dir1 <- num_targets_backward, dir0 <- num_targets_forward.
+    const uint32_t n_dir1 = topology == ttnn::ccl::Topology::Linear ? num_targets_forward : num_targets_backward;
+    const uint32_t n_dir0 = topology == ttnn::ccl::Topology::Linear ? num_targets_backward : num_targets_forward;
+    TT_FATAL(
+        n_dir0 + n_dir1 == T - 1,
+        "sp_ag_schedule: directions deliver {} + {} slices, expected T-1 = {}",
+        n_dir0,
+        n_dir1,
+        T - 1);
+
+    std::vector<SpSubBatch> order;
+    order.reserve(static_cast<size_t>(B) * T);
+    for (uint32_t b = 0; b < B; ++b) {
+        order.push_back(
+            SpSubBatch{.in0_idx = b, .out_idx = b * T + ring_index, .wait_dir = 0, .wait_count = 0, .is_local = true});
+    }
+    for (uint32_t k = 0; k < std::max(n_dir0, n_dir1); ++k) {
+        if (k < n_dir0) {
+            const uint32_t chip = (ring_index + T - (k + 1)) % T;  // dir0: my_chip_id - (k+1)
+            for (uint32_t b = 0; b < B; ++b) {
+                order.push_back(SpSubBatch{
+                    .in0_idx = b * T + chip,
+                    .out_idx = b * T + chip,
+                    .wait_dir = 0,
+                    .wait_count = k + 1,
+                    .is_local = false});
+            }
+        }
+        if (k < n_dir1) {
+            const uint32_t chip = (ring_index + k + 1) % T;  // dir1: my_chip_id + (k+1)
+            for (uint32_t b = 0; b < B; ++b) {
+                order.push_back(SpSubBatch{
+                    .in0_idx = b * T + chip,
+                    .out_idx = b * T + chip,
+                    .wait_dir = 1,
+                    .wait_count = k + 2,
+                    .is_local = false});
+            }
+        }
+    }
+    TT_FATAL(order.size() == static_cast<size_t>(B) * T, "sp_ag_schedule: produced {} entries", order.size());
+    return order;
+}
+
+std::vector<SpSubBatch> sp_ag_schedule_serialized(
+    ttnn::ccl::Topology topology, uint32_t T, uint32_t ring_index, uint32_t B) {
+    const auto overlapped = sp_ag_schedule(topology, T, ring_index, B);
+    uint32_t final_count[2] = {0, 0};
+    for (const auto& e : overlapped) {
+        if (!e.is_local) {
+            final_count[e.wait_dir] = std::max(final_count[e.wait_dir], e.wait_count);
+        }
+    }
+    std::vector<SpSubBatch> order;
+    order.reserve(overlapped.size());
+    for (const auto& e : overlapped) {
+        if (!e.is_local) {
+            SpSubBatch s = e;
+            s.wait_count = final_count[e.wait_dir];
+            order.push_back(s);
+        }
+    }
+    for (const auto& e : overlapped) {
+        if (e.is_local) {
+            order.push_back(e);
+        }
+    }
+    return order;
 }
 
 std::vector<uint32_t> sp_rs_ordinals(const std::vector<SpSubBatch>& order, uint32_t B, uint32_t T) {
