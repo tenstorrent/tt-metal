@@ -425,6 +425,313 @@ TEST_P(CopiesAllocatedBufferWithRuntimeArgs, RoundTrip) {
     EXPECT_TRUE(CloseDevice(device));
 }
 
+class AllocatedDramBufferHostLoopback : public ::testing::TestWithParam<uint32_t> {};
+
+TEST_P(AllocatedDramBufferHostLoopback, RoundTrip) {
+    if (!emu_server_configured()) {
+        GTEST_SKIP() << "Set TT_METAL_EMU_SERVER=host:port and TT_METAL_EMU_SOC_DESC=<mimir YAML>.";
+    }
+
+    IDevice* device = CreateDevice(0);
+    ASSERT_NE(device, nullptr);
+    ASSERT_EQ(device->arch(), tt::ARCH::QUASAR);
+
+    const uint32_t dram_partition = GetParam();
+    ASSERT_LT(dram_partition, device->num_dram_channels());
+
+    const auto& hal = MetalContext::instance().hal();
+    const uint32_t page_size = hal.get_alignment(HalMemType::DRAM);
+    const uint32_t buffer_size = page_size * device->num_dram_channels();
+    auto buffer = CreateBuffer(BufferConfig{device, buffer_size, page_size, BufferType::DRAM});
+    ASSERT_NE(buffer, nullptr);
+
+    const std::size_t words_per_page = page_size / sizeof(uint32_t);
+    std::vector<uint32_t> input(buffer_size / sizeof(uint32_t));
+    for (uint32_t partition = 0; partition < device->num_dram_channels(); ++partition) {
+        for (std::size_t i = 0; i < words_per_page; ++i) {
+            input[partition * words_per_page + i] = 0xA1100000u | (partition << 8) | static_cast<uint32_t>(i);
+        }
+    }
+    detail::WriteToBuffer(*buffer, input);
+
+    std::vector<uint32_t> output;
+    detail::ReadFromBuffer(*buffer, output);
+    EXPECT_EQ(output, input);
+
+    const auto expected_begin = input.begin() + dram_partition * words_per_page;
+    const std::vector<uint32_t> expected(expected_begin, expected_begin + words_per_page);
+    std::vector<uint32_t> channel_page;
+    ASSERT_TRUE(detail::ReadFromDeviceDRAMChannel(device, dram_partition, buffer->address(), page_size, channel_page));
+    EXPECT_EQ(channel_page, expected);
+
+    buffer.reset();
+    EXPECT_TRUE(CloseDevice(device));
+}
+
+class CopiesEveryPartitionOfAllocatedBuffer : public ::testing::TestWithParam<uint32_t> {};
+
+TEST_P(CopiesEveryPartitionOfAllocatedBuffer, RoundTrip) {
+    if (!emu_server_configured()) {
+        GTEST_SKIP() << "Set TT_METAL_EMU_SERVER=host:port and TT_METAL_EMU_SOC_DESC=<mimir YAML>.";
+    }
+
+    IDevice* device = CreateDevice(0);
+    ASSERT_NE(device, nullptr);
+    ASSERT_EQ(device->arch(), tt::ARCH::QUASAR);
+
+    const uint32_t cce_index = GetParam();
+    ASSERT_LT(cce_index, device->num_dram_channels());
+    const uint32_t num_partitions = device->num_dram_channels();
+
+    const auto& hal = MetalContext::instance().hal();
+    const uint32_t page_size = hal.get_alignment(HalMemType::DRAM);
+    const uint32_t buffer_size = page_size * num_partitions;
+    auto src_buffer = CreateBuffer(BufferConfig{device, buffer_size, page_size, BufferType::DRAM});
+    auto dst_buffer = CreateBuffer(BufferConfig{device, buffer_size, page_size, BufferType::DRAM});
+    ASSERT_NE(src_buffer, nullptr);
+    ASSERT_NE(dst_buffer, nullptr);
+
+    const std::size_t words_per_page = page_size / sizeof(uint32_t);
+    std::vector<uint32_t> input(buffer_size / sizeof(uint32_t));
+    for (uint32_t partition = 0; partition < num_partitions; ++partition) {
+        for (std::size_t i = 0; i < words_per_page; ++i) {
+            input[partition * words_per_page + i] =
+                0xE1E10000u | (cce_index << 12) | (partition << 8) | static_cast<uint32_t>(i);
+        }
+    }
+    std::vector<uint32_t> cleared(input.size(), 0);
+    detail::WriteToBuffer(*src_buffer, input);
+    detail::WriteToBuffer(*dst_buffer, cleared);
+
+    const uint32_t staging_dev_addr = hal.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
+    const CoreCoord logical_dram_core{cce_index, 0};
+    Program program = CreateProgram();
+    const KernelHandle kernel = CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/misc/cce_dram_copy_all_partitions.cpp",
+        logical_dram_core,
+        DramConfig{.noc = NOC::NOC_0});
+    SetRuntimeArgs(
+        program,
+        kernel,
+        logical_dram_core,
+        {src_buffer->address(),
+         dst_buffer->address(),
+         num_partitions,
+         staging_dev_addr,
+         static_cast<uint32_t>(words_per_page)});
+
+    detail::LaunchProgram(device, program, /*wait_until_cores_done=*/true, /*force_slow_dispatch=*/true);
+
+    std::vector<uint32_t> output;
+    detail::ReadFromBuffer(*dst_buffer, output);
+    EXPECT_EQ(output, input);
+
+    src_buffer.reset();
+    dst_buffer.reset();
+    EXPECT_TRUE(CloseDevice(device));
+}
+
+class CopiesAllocatedBufferLargerThanAlignment : public ::testing::TestWithParam<std::tuple<uint32_t, uint32_t>> {};
+
+TEST_P(CopiesAllocatedBufferLargerThanAlignment, RoundTrip) {
+    if (!emu_server_configured()) {
+        GTEST_SKIP() << "Set TT_METAL_EMU_SERVER=host:port and TT_METAL_EMU_SOC_DESC=<mimir YAML>.";
+    }
+
+    IDevice* device = CreateDevice(0);
+    ASSERT_NE(device, nullptr);
+    ASSERT_EQ(device->arch(), tt::ARCH::QUASAR);
+
+    const auto [cce_index, dram_partition] = GetParam();
+    ASSERT_LT(cce_index, device->num_dram_channels());
+    ASSERT_LT(dram_partition, device->num_dram_channels());
+
+    const auto& hal = MetalContext::instance().hal();
+    const uint32_t alignment = hal.get_alignment(HalMemType::DRAM);
+    constexpr uint32_t kPagesPerBank = 16;
+    const uint32_t transfer_size = alignment * kPagesPerBank;
+    const uint32_t buffer_size = transfer_size * device->num_dram_channels();
+    auto src_buffer = CreateBuffer(BufferConfig{device, buffer_size, transfer_size, BufferType::DRAM});
+    auto dst_buffer = CreateBuffer(BufferConfig{device, buffer_size, transfer_size, BufferType::DRAM});
+    ASSERT_NE(src_buffer, nullptr);
+    ASSERT_NE(dst_buffer, nullptr);
+
+    const std::size_t words_per_page = transfer_size / sizeof(uint32_t);
+    std::vector<uint32_t> input(buffer_size / sizeof(uint32_t));
+    for (uint32_t partition = 0; partition < device->num_dram_channels(); ++partition) {
+        for (std::size_t i = 0; i < words_per_page; ++i) {
+            input[partition * words_per_page + i] =
+                0x1A6E0000u | (cce_index << 12) | (partition << 8) | static_cast<uint32_t>(i);
+        }
+    }
+    std::vector<uint32_t> cleared(input.size(), 0);
+    detail::WriteToBuffer(*src_buffer, input);
+    detail::WriteToBuffer(*dst_buffer, cleared);
+
+    const uint32_t staging_dev_addr = hal.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
+    const CoreCoord logical_dram_core{cce_index, 0};
+    Program program = CreateProgram();
+    const KernelHandle kernel = CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/misc/cce_dram_buffer_round_trip.cpp",
+        logical_dram_core,
+        DramConfig{.noc = NOC::NOC_0});
+    SetRuntimeArgs(
+        program,
+        kernel,
+        logical_dram_core,
+        {src_buffer->address(),
+         dst_buffer->address(),
+         dram_partition,
+         staging_dev_addr,
+         static_cast<uint32_t>(words_per_page)});
+
+    detail::LaunchProgram(device, program, /*wait_until_cores_done=*/true, /*force_slow_dispatch=*/true);
+
+    std::vector<uint32_t> output;
+    detail::ReadFromBuffer(*dst_buffer, output);
+    ASSERT_EQ(output.size(), cleared.size());
+    const auto expected_begin = input.begin() + dram_partition * words_per_page;
+    const std::vector<uint32_t> expected(expected_begin, expected_begin + words_per_page);
+    const std::vector<uint32_t> zero_page(words_per_page, 0);
+    for (uint32_t partition = 0; partition < device->num_dram_channels(); ++partition) {
+        const auto output_begin = output.begin() + partition * words_per_page;
+        const std::vector<uint32_t> output_page(output_begin, output_begin + words_per_page);
+        EXPECT_EQ(output_page, partition == dram_partition ? expected : zero_page);
+    }
+
+    src_buffer.reset();
+    dst_buffer.reset();
+    EXPECT_TRUE(CloseDevice(device));
+}
+
+TEST(MimirEmu, BothCcesCopyAllocatedBuffer) {
+    if (!emu_server_configured()) {
+        GTEST_SKIP() << "Set TT_METAL_EMU_SERVER=host:port and TT_METAL_EMU_SOC_DESC=<mimir YAML>.";
+    }
+
+    IDevice* device = CreateDevice(0);
+    ASSERT_NE(device, nullptr);
+    ASSERT_EQ(device->arch(), tt::ARCH::QUASAR);
+    ASSERT_GE(device->num_dram_channels(), 2);
+
+    const auto& hal = MetalContext::instance().hal();
+    const uint32_t page_size = hal.get_alignment(HalMemType::DRAM);
+    const uint32_t num_partitions = device->num_dram_channels();
+    const uint32_t buffer_size = page_size * num_partitions;
+    auto src_buffer = CreateBuffer(BufferConfig{device, buffer_size, page_size, BufferType::DRAM});
+    auto dst_buffer = CreateBuffer(BufferConfig{device, buffer_size, page_size, BufferType::DRAM});
+    ASSERT_NE(src_buffer, nullptr);
+    ASSERT_NE(dst_buffer, nullptr);
+
+    const std::size_t words_per_page = page_size / sizeof(uint32_t);
+    std::vector<uint32_t> input(buffer_size / sizeof(uint32_t));
+    for (uint32_t partition = 0; partition < num_partitions; ++partition) {
+        for (std::size_t i = 0; i < words_per_page; ++i) {
+            input[partition * words_per_page + i] = 0xB07C0000u | (partition << 8) | static_cast<uint32_t>(i);
+        }
+    }
+    std::vector<uint32_t> cleared(input.size(), 0);
+    detail::WriteToBuffer(*src_buffer, input);
+    detail::WriteToBuffer(*dst_buffer, cleared);
+
+    const uint32_t staging_dev_addr = hal.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
+    Program program = CreateProgram();
+    for (uint32_t cce_index = 0; cce_index < 2; ++cce_index) {
+        const CoreCoord logical_dram_core{cce_index, 0};
+        const KernelHandle kernel = CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/misc/cce_dram_buffer_round_trip.cpp",
+            logical_dram_core,
+            DramConfig{.noc = NOC::NOC_0});
+        SetRuntimeArgs(
+            program,
+            kernel,
+            logical_dram_core,
+            {src_buffer->address(),
+             dst_buffer->address(),
+             cce_index,
+             staging_dev_addr,
+             static_cast<uint32_t>(words_per_page)});
+    }
+
+    detail::LaunchProgram(device, program, /*wait_until_cores_done=*/true, /*force_slow_dispatch=*/true);
+
+    std::vector<uint32_t> output;
+    detail::ReadFromBuffer(*dst_buffer, output);
+    EXPECT_EQ(output, input);
+
+    src_buffer.reset();
+    dst_buffer.reset();
+    EXPECT_TRUE(CloseDevice(device));
+}
+
+class AllHartsWriteAllocatedBuffer : public ::testing::TestWithParam<std::tuple<uint32_t, uint32_t>> {};
+
+TEST_P(AllHartsWriteAllocatedBuffer, WritesMagic) {
+    if (!emu_server_configured()) {
+        GTEST_SKIP() << "Set TT_METAL_EMU_SERVER=host:port and TT_METAL_EMU_SOC_DESC=<mimir YAML>.";
+    }
+
+    IDevice* device = CreateDevice(0);
+    ASSERT_NE(device, nullptr);
+    ASSERT_EQ(device->arch(), tt::ARCH::QUASAR);
+
+    const auto [cce_index, dram_partition] = GetParam();
+    ASSERT_LT(cce_index, device->num_dram_channels());
+    ASSERT_LT(dram_partition, device->num_dram_channels());
+
+    const auto& hal = MetalContext::instance().hal();
+    const uint32_t num_harts = hal.get_num_risc_processors(HalProgrammableCoreType::DRAM);
+    ASSERT_EQ(num_harts, 8u);
+
+    const uint32_t page_size = hal.get_alignment(HalMemType::DRAM);
+    ASSERT_GE(page_size, num_harts * sizeof(uint32_t));
+    const uint32_t buffer_size = page_size * device->num_dram_channels();
+    auto dst_buffer = CreateBuffer(BufferConfig{device, buffer_size, page_size, BufferType::DRAM});
+    ASSERT_NE(dst_buffer, nullptr);
+
+    std::vector<uint32_t> cleared(buffer_size / sizeof(uint32_t), 0);
+    detail::WriteToBuffer(*dst_buffer, cleared);
+
+    const uint32_t staging_dev_base = hal.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
+    const CoreCoord logical_dram_core{cce_index, 0};
+    Program program = CreateProgram();
+    std::vector<uint32_t> expected(page_size / sizeof(uint32_t), 0);
+    for (uint32_t hart = 0; hart < num_harts; hart++) {
+        expected[hart] = 0xA11B0000u | (cce_index << 12) | (dram_partition << 8) | hart;
+        CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/misc/cce_gddr_write_one_uint32.cpp",
+            logical_dram_core,
+            DramConfig{
+                .processor = static_cast<DataMovementProcessor>(hart),
+                .noc = NOC::NOC_0,
+                .compile_args = {
+                    dst_buffer->address() + hart * static_cast<uint32_t>(sizeof(uint32_t)),
+                    dram_partition,
+                    expected[hart],
+                    staging_dev_base + hart * static_cast<uint32_t>(sizeof(uint32_t))}});
+    }
+
+    detail::LaunchProgram(device, program, /*wait_until_cores_done=*/true, /*force_slow_dispatch=*/true);
+
+    std::vector<uint32_t> output;
+    detail::ReadFromBuffer(*dst_buffer, output);
+    ASSERT_EQ(output.size(), cleared.size());
+    const std::size_t words_per_page = page_size / sizeof(uint32_t);
+    const std::vector<uint32_t> zero_page(words_per_page, 0);
+    for (uint32_t partition = 0; partition < device->num_dram_channels(); ++partition) {
+        const auto output_begin = output.begin() + partition * words_per_page;
+        const std::vector<uint32_t> output_page(output_begin, output_begin + words_per_page);
+        EXPECT_EQ(output_page, partition == dram_partition ? expected : zero_page);
+    }
+
+    dst_buffer.reset();
+    EXPECT_TRUE(CloseDevice(device));
+}
+
 INSTANTIATE_TEST_SUITE_P(
     MimirEmu,
     CceSramChannelsDoNotAliasThroughMetalCluster,
@@ -465,7 +772,35 @@ INSTANTIATE_TEST_SUITE_P(
 
 INSTANTIATE_TEST_SUITE_P(
     MimirEmu,
+    AllocatedDramBufferHostLoopback,
+    ::testing::Values(0u, 1u),
+    [](const ::testing::TestParamInfo<uint32_t>& info) { return fmt::format("Partition{}", info.param); });
+
+INSTANTIATE_TEST_SUITE_P(
+    MimirEmu,
     CopiesAllocatedBufferWithRuntimeArgs,
+    ::testing::Combine(::testing::Values(0u, 1u), ::testing::Values(0u, 1u)),
+    [](const ::testing::TestParamInfo<std::tuple<uint32_t, uint32_t>>& info) {
+        return fmt::format("Cce{}_Partition{}", std::get<0>(info.param), std::get<1>(info.param));
+    });
+
+INSTANTIATE_TEST_SUITE_P(
+    MimirEmu,
+    CopiesEveryPartitionOfAllocatedBuffer,
+    ::testing::Values(0u, 1u),
+    [](const ::testing::TestParamInfo<uint32_t>& info) { return fmt::format("Cce{}", info.param); });
+
+INSTANTIATE_TEST_SUITE_P(
+    MimirEmu,
+    CopiesAllocatedBufferLargerThanAlignment,
+    ::testing::Combine(::testing::Values(0u, 1u), ::testing::Values(0u, 1u)),
+    [](const ::testing::TestParamInfo<std::tuple<uint32_t, uint32_t>>& info) {
+        return fmt::format("Cce{}_Partition{}", std::get<0>(info.param), std::get<1>(info.param));
+    });
+
+INSTANTIATE_TEST_SUITE_P(
+    MimirEmu,
+    AllHartsWriteAllocatedBuffer,
     ::testing::Combine(::testing::Values(0u, 1u), ::testing::Values(0u, 1u)),
     [](const ::testing::TestParamInfo<std::tuple<uint32_t, uint32_t>>& info) {
         return fmt::format("Cce{}_Partition{}", std::get<0>(info.param), std::get<1>(info.param));
