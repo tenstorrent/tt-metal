@@ -14,8 +14,8 @@
 namespace ttnn::experimental::prim {
 
 struct DrainCoreMapping {
-    std::vector<ttnn::CoreCoord> logical_core_candidates;
-    std::vector<ttnn::CoreCoord> virtual_cores;
+    std::vector<tt::tt_metal::CoreCoord> logical_core_candidates;
+    std::vector<tt::tt_metal::CoreCoord> virtual_cores;
 };
 
 DrainCoreMapping gather_drain_virtual_cores(
