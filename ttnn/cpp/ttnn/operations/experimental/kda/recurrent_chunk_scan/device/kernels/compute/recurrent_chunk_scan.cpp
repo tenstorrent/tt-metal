@@ -380,25 +380,24 @@ FORCE_INLINE void compute_recurrent(uint32_t num_chunks, uint32_t reset_chunk) {
         // the state, so no per-chunk term changes -- only where the carry comes
         // from. reset_chunk 0 means never, which is exact rather than a sentinel:
         // r == 0 means no group straddles, and chunk 0 always seeds from `state`.
-        DataflowBuffer* current_state = chunk == 0 ? &state : &state_ring;
+        DataflowBuffer& current_state = chunk == 0 ? state : state_ring;
         if (reset_chunk != 0 && chunk == reset_chunk) {
             state_ring.wait_front(key_value_tiles);
             tail_entry_states.wait_front(key_value_tiles);
             copy<key_value_tiles, key_value_tiles>(tail_entry_states, state_ring);
             state_ring.pop_front(key_value_tiles);
             tail_entry_states.pop_front(key_value_tiles);
-            current_state = &state_ring;
         }
         DataflowBuffer& destination = chunk == num_chunks - 1 ? final_state : state_ring;
 
         compute_value_new<ChunkInputPolicy::CONSUME, Ct, Kt, Vt>(
-            *current_state, kd, v_beta, t_inv, scratch, output_intermediate, value_new);
+            current_state, kd, v_beta, t_inv, scratch, output_intermediate, value_new);
         compute_chunk_output<Ct, Kt, Vt>(
-            *current_state, value_new, q_decay, intra, output_intermediate, scratch, output);
+            current_state, value_new, q_decay, intra, output_intermediate, scratch, output);
 
         pack_reconfig_data_format(dfb::state_update);
         update_state<ChunkInputPolicy::CONSUME, Ct, Kt, Vt>(
-            *current_state, destination, value_new, k_decay_transposed, final_decay, state_update, state_temporary);
+            current_state, destination, value_new, k_decay_transposed, final_decay, state_update, state_temporary);
     }
 }
 

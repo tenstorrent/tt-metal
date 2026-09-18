@@ -419,15 +419,21 @@ ttnn::device_operation::MeshWorkloadArtifacts RecurrentChunkScanProgramFactory::
         run_args.tensor_args.emplace(tail_final_state_tensor_name, outputs[3].mesh_tensor());
     }
     kda_factory_detail::bind_chronology(spec, run_args, in.actual_start, reader, compute);
-    const tt::tt_metal::experimental::DFBSpecName writer_chronology{"chronology_writer"};
-    spec.dataflow_buffers.push_back({
-        .unique_id = writer_chronology,
-        .entry_size = 32,
-        .num_entries = 1,
-        .data_format_metadata = tt::DataFormat::UInt32,
-    });
-    reader.dfb_bindings.push_back(tt::tt_metal::experimental::ProducerOf(writer_chronology, "chronology_writer"));
-    writer.dfb_bindings.push_back(tt::tt_metal::experimental::ConsumerOf(writer_chronology, "chronology_writer"));
+    if (summary) {
+        // Remove the optional channel and its generated names together: discarded
+        // if-constexpr branches still resolve nondependent dfb:: identifiers.
+        reader.compiler_options.defines.emplace("KDA_SUMMARY_WRITER_CHRONOLOGY", "1");
+        writer.compiler_options.defines.emplace("KDA_SUMMARY_WRITER_CHRONOLOGY", "1");
+        const tt::tt_metal::experimental::DFBSpecName writer_chronology{"chronology_writer"};
+        spec.dataflow_buffers.push_back({
+            .unique_id = writer_chronology,
+            .entry_size = 32,
+            .num_entries = 1,
+            .data_format_metadata = tt::DataFormat::UInt32,
+        });
+        reader.dfb_bindings.push_back(tt::tt_metal::experimental::ProducerOf(writer_chronology, "chronology_writer"));
+        writer.dfb_bindings.push_back(tt::tt_metal::experimental::ConsumerOf(writer_chronology, "chronology_writer"));
+    }
     spec.kernels = {std::move(reader), std::move(writer), std::move(compute)};
     return kda_factory_detail::chronology_workload(
         ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)},

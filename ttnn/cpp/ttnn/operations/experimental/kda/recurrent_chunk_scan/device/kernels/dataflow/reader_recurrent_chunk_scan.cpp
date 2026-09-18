@@ -137,14 +137,16 @@ TT_KERNEL void reader(uint32_t head, uint32_t value_block, uint32_t num_chunks) 
         kda_chronology::store(words, topology);
         chronology.push_back(1);
     }
+    reset_chunk = topology.reset_chunk(head % groups_per_head, groups_per_head);
+#ifdef KDA_SUMMARY_WRITER_CHRONOLOGY
     {
-        reset_chunk = topology.reset_chunk(head % groups_per_head, groups_per_head);
         DataflowBuffer writer_chronology(dfb::chronology_writer);
         writer_chronology.reserve_back(1);
         auto* words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(writer_chronology.get_write_ptr());
         kda_chronology::store(words, topology);
         writer_chronology.push_back(1);
     }
+#endif
     constexpr uint32_t chunk_chunk_tiles = Ct * Ct;
     constexpr uint32_t chunk_key_tiles = Ct * Kt;
     constexpr uint32_t key_chunk_tiles = Kt * Ct;
