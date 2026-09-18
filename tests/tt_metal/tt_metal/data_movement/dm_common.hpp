@@ -23,8 +23,7 @@ struct L1AddressInfo {
 };
 
 // Function to get L1 address and size
-L1AddressInfo get_l1_address_and_size(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device, const CoreCoord& core_coord = {0, 0});
+L1AddressInfo get_l1_address_and_size(distributed::MeshDevice& mesh_device, const CoreCoord& core_coord = {0, 0});
 
 struct DramAddressInfo {
     uint64_t base_address;
@@ -35,8 +34,7 @@ struct DramAddressInfo {
 DramAddressInfo get_dram_address_and_size();
 
 // Function to compute physical constraints
-std::tuple<uint32_t, uint32_t, uint32_t> compute_physical_constraints(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device);
+std::tuple<uint32_t, uint32_t, uint32_t> compute_physical_constraints(distributed::MeshDevice& mesh_device);
 
 }  // namespace tt::tt_metal::unit_tests::dm
 

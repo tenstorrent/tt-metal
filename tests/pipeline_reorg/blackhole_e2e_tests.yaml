@@ -207,7 +207,7 @@
   budget_type: e2e
 
 - id: bh-lb-disaggregated-prefill-op-tests
-  name: Disaggregated prefill op tests
+  name: Disaggregated prefill op tests (LB)
   model-name: disaggregated_prefill
   cmd: |
     exit_code=0
@@ -256,7 +256,7 @@
   budget_type: e2e
 
 - id: bh-p150-disaggregated-prefill-op-tests
-  name: Disaggregated prefill op tests
+  name: Disaggregated prefill op tests (P150)
   model-name: disaggregated_prefill
   cmd: |
     exit_code=0
@@ -270,7 +270,7 @@
   budget_type: e2e
 
 - id: bh-qb2-disaggregated-prefill-op-tests
-  name: Disaggregated prefill op tests
+  name: Disaggregated prefill op tests (QB2)
   model-name: disaggregated_prefill
   cmd: |
     exit_code=0
