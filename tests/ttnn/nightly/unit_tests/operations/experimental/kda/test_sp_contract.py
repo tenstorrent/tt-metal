@@ -12,7 +12,7 @@ import torch
 
 import ttnn
 from models.common.utility_functions import run_for_blackhole
-from models.demos.deepseek_v3_d_p.tests.kda.utils import make_actual_start
+from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import make_actual_start
 from tests.ttnn.nightly.unit_tests.operations.experimental.kda.recurrent_chunk_scan_test_utils import (
     device_protocol,
     host_protocol,
@@ -21,14 +21,14 @@ from tests.ttnn.nightly.unit_tests.operations.experimental.kda.recurrent_chunk_s
     summary_oracle,
     to_device,
 )
-from tests.ttnn.nightly.unit_tests.operations.experimental.kda.test_affine_exclusive_scan import (
+from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
     _height_sharded_memory_config,
 )
-from tests.ttnn.nightly.unit_tests.operations.experimental.kda.test_qkv_causal_conv1d_silu import (
-    _device_inputs,
-    _reference,
+from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
+    qkv_device_inputs,
+    qkv_reference,
 )
-from tests.ttnn.nightly.unit_tests.operations.experimental.kda.test_summarize_chunk_recurrence import (
+from tests.ttnn.nightly.unit_tests.operations.experimental.kda.recurrent_chunk_scan_test_utils import (
     _segmented_summary_oracle,
 )
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_accurate, assert_bit_identical
@@ -244,7 +244,7 @@ def test_sp_convolution_rebinds_histories(mesh_device, axis):
     previous = []
     cache_entries = None
     for actual_start_value in (0, 32, 64, 96, 32):
-        (host, history, taps), (input_tt, history_tt, taps_tt) = _device_inputs(
+        (host, history, taps), (input_tt, history_tt, taps_tt) = qkv_device_inputs(
             mesh_device, widths=widths, sequence=64, history_rows=3, seed=2011 + actual_start_value
         )
         predecessor = history + 2
@@ -278,13 +278,13 @@ def test_sp_convolution_rebinds_histories(mesh_device, axis):
                 expected = tuple(
                     torch.cat(parts, dim=1)
                     for parts in zip(
-                        _reference(host[:, :32], history, taps, widths),
-                        _reference(host[:, 32:], predecessor, taps, widths),
+                        qkv_reference(host[:, :32], history, taps, widths),
+                        qkv_reference(host[:, 32:], predecessor, taps, widths),
                         strict=True,
                     )
                 )
             else:
-                expected = _reference(host, history if rank == first_rank else predecessor, taps, widths)
+                expected = qkv_reference(host, history if rank == first_rank else predecessor, taps, widths)
             for golden, actual in zip(expected, got, strict=True):
                 assert_accurate(golden, actual, name=f"SP convolution rank={rank}")
         _assert_immutable(owned, before)
@@ -322,7 +322,7 @@ def test_sp_payload_contracts(mesh_device, expect_error):
                 tail_state=to_device(initial_state(1, 32, 32), mesh_device),
                 local_rows=local_rows,
             )
-    _, (input_tt, history, taps) = _device_inputs(mesh_device, widths=(32, 32, 32), sequence=64, history_rows=3)
+    _, (input_tt, history, taps) = qkv_device_inputs(mesh_device, widths=(32, 32, 32), sequence=64, history_rows=3)
     for kwargs in ({"actual_start": actual_start}, {"predecessor_carry": history}):
         with expect_error(RuntimeError, "must be provided together"):
             ttnn.experimental.kda.qkv_causal_conv1d_silu(

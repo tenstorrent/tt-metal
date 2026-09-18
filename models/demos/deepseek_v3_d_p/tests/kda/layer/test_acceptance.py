@@ -190,7 +190,7 @@ def test_synthetic_kimi_k3_offset_acceptance(
     mesh_device: ttnn.MeshDevice, tensor_parallel_axis: int, device_params: dict
 ) -> None:
     """Reuse one production layer/reference for rotation and unequal splits on two ranks."""
-    from models.demos.deepseek_v3_d_p.tests.kda.layer.test_offset import (
+    from models.demos.deepseek_v3_d_p.tests.kda.utils import (
         _assert_matches_reference,
         _mla_row_permutation,
         _to_sp_input,

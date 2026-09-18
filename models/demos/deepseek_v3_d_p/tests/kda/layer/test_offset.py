@@ -19,20 +19,16 @@ import torch
 import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.reference.kda import kda_forward_reference
-from models.demos.deepseek_v3_d_p.reference.kda.config import KDAConfig
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
+    _assert_matches_reference,
+    _build_layer,
+    _mla_row_permutation,
+    _reference_case,
+    _to_sp_input,
     collect_mesh_accuracy_and_determinism_results,
     make_actual_start,
-    random_weights,
-    reconstruct_convolution_at_sp_rank,
-    reconstruct_sp_tp_tensor,
-    reconstruct_state_at_sp_rank,
 )
-from models.demos.deepseek_v3_d_p.tt.kda.config import KDAProgramConfig, KDARecurrenceProgramConfig
-from models.demos.deepseek_v3_d_p.tt.kda.kda import ttKDA
-from models.demos.deepseek_v3_d_p.tt.mla.utils import rotated_chip_positions
-from models.tt_transformers.tt.ccl import TT_CCL
-from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_accurate, assert_bit_identical
+from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_bit_identical
 
 pytestmark = [
     run_for_blackhole(),
@@ -56,58 +52,6 @@ PCC_THRESHOLD = 0.999
 OUTPUT_LINF_THRESHOLD = 0.25  # clean 8.5e-2
 STATE_LINF_THRESHOLD = 0.6  # clean 3.2e-1
 CONVOLUTION_LINF_THRESHOLD = 0.1  # clean 1.4e-2
-
-
-def _mla_row_permutation(actual_start: int, sp_size: int, local_rows: int) -> torch.Tensor:
-    """Natural-order index carried by each MLA row, flattened in chip-major order."""
-    positions = rotated_chip_positions(actual_start, sp_size, local_rows)
-    return torch.tensor([position - actual_start for chip in positions for position in chip])
-
-
-def _to_sp_input(hidden: torch.Tensor, mesh_device: ttnn.MeshDevice, sp_axis: int) -> ttnn.Tensor:
-    mesh_dims = [None, None]
-    mesh_dims[sp_axis] = 1
-    return ttnn.from_torch(
-        hidden,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=mesh_device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=tuple(mesh_dims), mesh_shape=tuple(mesh_device.shape)),
-    )
-
-
-def _build_layer(mesh_device, config, weights, sp_axis, tp_axis, *, summary_group_chunks: int = 8) -> ttKDA:
-    return ttKDA(
-        mesh_device,
-        config,
-        weights,
-        tt_ccl=TT_CCL(mesh_device),
-        sp_axis=sp_axis,
-        tp_axis=tp_axis,
-        program_config=KDAProgramConfig(
-            recurrence=KDARecurrenceProgramConfig(summary_group_chunks=summary_group_chunks),
-            gated_rms_output_dtype=ttnn.bfloat16,
-            output_projection_math_fidelity=ttnn.MathFidelity.HiFi2,
-        ),
-    )
-
-
-def _reference_case(sequence: int = SEQUENCE) -> tuple[KDAConfig, object, torch.Tensor, torch.Tensor, object]:
-    config = KDAConfig(
-        hidden_size=128,
-        num_heads=8,
-        head_k_dim=32,
-        head_v_dim=32,
-        conv_kernel_size=4,
-        norm_eps=1e-5,
-    )
-    weights = random_weights(config)
-    hidden = torch.randn(1, sequence, config.hidden_size, generator=torch.Generator().manual_seed(4211)).to(
-        torch.bfloat16
-    )
-    expected_output, expected_state = kda_forward_reference(hidden, weights, config)
-    return config, weights, hidden, expected_output.to(torch.bfloat16), expected_state
 
 
 @pytest.mark.parametrize(
@@ -242,60 +186,6 @@ def test_representative_sp4_multi_group_offsets_match_natural_order(mesh_device:
             ttnn.deallocate(initial_state.recurrent)
             ttnn.deallocate(initial_state.convolution)
             ttnn.deallocate(hidden_tt)
-
-
-def _assert_matches_reference(
-    *,
-    output_tt,
-    state,
-    permutation,
-    expected_output,
-    expected_state,
-    mesh_device,
-    sp_axis,
-    tp_axis,
-    config,
-    label: str,
-    state_linf_threshold: float | None = STATE_LINF_THRESHOLD,
-    pcc_threshold: float = PCC_THRESHOLD,
-) -> None:
-    """Undo MLA's row permutation, then compare output and both carries."""
-    rotated_output = reconstruct_sp_tp_tensor(output_tt, mesh_device, sp_axis, tp_axis, tp_dim=2, sp_dim=1)
-    natural_output = torch.empty_like(rotated_output)
-    natural_output[:, permutation, :] = rotated_output
-
-    assert_accurate(
-        expected_output,
-        natural_output,
-        name=f"{label} output",
-        pcc_threshold=pcc_threshold,
-        rmse_threshold=0.05,
-        linf_threshold=OUTPUT_LINF_THRESHOLD,
-    )
-
-    expected_convolution = torch.cat(
-        (expected_state.q_convolution, expected_state.k_convolution, expected_state.v_convolution), dim=-1
-    ).to(torch.bfloat16)
-    local_heads = config.num_heads // tuple(mesh_device.shape)[tp_axis]
-    local_width = local_heads * config.head_k_dim
-
-    for sp_rank in range(tuple(mesh_device.shape)[sp_axis]):
-        assert_accurate(
-            expected_state.recurrent,
-            reconstruct_state_at_sp_rank(state.recurrent, mesh_device, sp_axis, tp_axis, sp_rank),
-            name=f"{label} sp_rank={sp_rank} recurrent",
-            pcc_threshold=pcc_threshold,
-            rmse_threshold=0.05,
-            linf_threshold=state_linf_threshold,
-        )
-        assert_accurate(
-            expected_convolution,
-            reconstruct_convolution_at_sp_rank(state.convolution, mesh_device, sp_axis, tp_axis, sp_rank, local_width),
-            name=f"{label} sp_rank={sp_rank} convolution",
-            pcc_threshold=pcc_threshold,
-            rmse_threshold=0.05,
-            linf_threshold=CONVOLUTION_LINF_THRESHOLD,
-        )
 
 
 @pytest.mark.parametrize("tensor_parallel_axis", [0, 1])

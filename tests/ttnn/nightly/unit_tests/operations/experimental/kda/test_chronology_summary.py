@@ -11,7 +11,7 @@ from tests.ttnn.nightly.unit_tests.operations.experimental.kda.recurrent_chunk_s
     device_protocol,
     host_protocol,
 )
-from tests.ttnn.nightly.unit_tests.operations.experimental.kda.test_summarize_chunk_recurrence import (
+from tests.ttnn.nightly.unit_tests.operations.experimental.kda.recurrent_chunk_scan_test_utils import (
     _segmented_summary_oracle,
 )
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_accurate

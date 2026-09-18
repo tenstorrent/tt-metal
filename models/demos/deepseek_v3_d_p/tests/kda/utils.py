@@ -12,7 +12,7 @@ from pathlib import Path
 import torch
 
 import ttnn
-from models.demos.deepseek_v3_d_p.reference.kda import KDAReferenceState
+from models.demos.deepseek_v3_d_p.reference.kda import KDAReferenceState, kda_forward_reference
 from models.demos.deepseek_v3_d_p.reference.kda.config import KDAConfig
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import (
@@ -22,9 +22,14 @@ from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import (
     kda_state_dict_sha256,
     load_kda_layer_state_dict,
 )
-from models.demos.deepseek_v3_d_p.tt.kda.config import KDAProgramConfig, kimi_k3_program_config
+from models.demos.deepseek_v3_d_p.tt.kda.config import (
+    KDAProgramConfig,
+    KDARecurrenceProgramConfig,
+    kimi_k3_program_config,
+)
 from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState, ttKDA
 from models.demos.deepseek_v3_d_p.tt.kda.weights import KDAWeights
+from models.demos.deepseek_v3_d_p.tt.mla.utils import rotated_chip_positions
 from models.tt_transformers.tt.ccl import TT_CCL
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_accurate
 
@@ -417,12 +422,112 @@ def random_weights(config: KDAConfig) -> dict[str, torch.Tensor]:
     return weights
 
 
-def make_actual_start(device: ttnn.MeshDevice, actual_start: int = 0) -> ttnn.Tensor:
-    """Allocate caller-owned start metadata before any trace capture."""
+def _deallocate_state(state: KdaState) -> None:
+    ttnn.deallocate(state.recurrent)
+    ttnn.deallocate(state.convolution)
+
+
+def _mla_row_permutation(actual_start: int, sp_size: int, local_rows: int) -> torch.Tensor:
+    """Natural-order index carried by each MLA row, flattened in chip-major order."""
+    positions = rotated_chip_positions(actual_start, sp_size, local_rows)
+    return torch.tensor([position - actual_start for chip in positions for position in chip])
+
+
+def _to_sp_input(hidden: torch.Tensor, mesh_device: ttnn.MeshDevice, sp_axis: int) -> ttnn.Tensor:
+    mesh_dims = [None, None]
+    mesh_dims[sp_axis] = 1
     return ttnn.from_torch(
-        torch.tensor([actual_start], dtype=torch.int64),
-        device=device,
-        dtype=ttnn.uint32,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+        hidden,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=tuple(mesh_dims), mesh_shape=tuple(mesh_device.shape)),
     )
+
+
+def _build_layer(mesh_device, config, weights, sp_axis, tp_axis, *, summary_group_chunks: int = 8) -> ttKDA:
+    return ttKDA(
+        mesh_device,
+        config,
+        weights,
+        tt_ccl=TT_CCL(mesh_device),
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
+        program_config=KDAProgramConfig(
+            recurrence=KDARecurrenceProgramConfig(summary_group_chunks=summary_group_chunks),
+            gated_rms_output_dtype=ttnn.bfloat16,
+            output_projection_math_fidelity=ttnn.MathFidelity.HiFi2,
+        ),
+    )
+
+
+def _reference_case(sequence: int = 1280) -> tuple[KDAConfig, object, torch.Tensor, torch.Tensor, object]:
+    config = KDAConfig(
+        hidden_size=128,
+        num_heads=8,
+        head_k_dim=32,
+        head_v_dim=32,
+        conv_kernel_size=4,
+        norm_eps=1e-5,
+    )
+    weights = random_weights(config)
+    hidden = torch.randn(1, sequence, config.hidden_size, generator=torch.Generator().manual_seed(4211)).to(
+        torch.bfloat16
+    )
+    expected_output, expected_state = kda_forward_reference(hidden, weights, config)
+    return config, weights, hidden, expected_output.to(torch.bfloat16), expected_state
+
+
+def _assert_matches_reference(
+    *,
+    output_tt,
+    state,
+    permutation,
+    expected_output,
+    expected_state,
+    mesh_device,
+    sp_axis,
+    tp_axis,
+    config,
+    label: str,
+    state_linf_threshold: float | None = 0.6,
+    pcc_threshold: float = 0.999,
+) -> None:
+    """Undo MLA's row permutation, then compare output and both carries."""
+    rotated_output = reconstruct_sp_tp_tensor(output_tt, mesh_device, sp_axis, tp_axis, tp_dim=2, sp_dim=1)
+    natural_output = torch.empty_like(rotated_output)
+    natural_output[:, permutation, :] = rotated_output
+
+    assert_accurate(
+        expected_output,
+        natural_output,
+        name=f"{label} output",
+        pcc_threshold=pcc_threshold,
+        rmse_threshold=0.05,
+        linf_threshold=0.25,
+    )
+
+    expected_convolution = torch.cat(
+        (expected_state.q_convolution, expected_state.k_convolution, expected_state.v_convolution), dim=-1
+    ).to(torch.bfloat16)
+    local_heads = config.num_heads // tuple(mesh_device.shape)[tp_axis]
+    local_width = local_heads * config.head_k_dim
+
+    for sp_rank in range(tuple(mesh_device.shape)[sp_axis]):
+        assert_accurate(
+            expected_state.recurrent,
+            reconstruct_state_at_sp_rank(state.recurrent, mesh_device, sp_axis, tp_axis, sp_rank),
+            name=f"{label} sp_rank={sp_rank} recurrent",
+            pcc_threshold=pcc_threshold,
+            rmse_threshold=0.05,
+            linf_threshold=state_linf_threshold,
+        )
+        assert_accurate(
+            expected_convolution,
+            reconstruct_convolution_at_sp_rank(state.convolution, mesh_device, sp_axis, tp_axis, sp_rank, local_width),
+            name=f"{label} sp_rank={sp_rank} convolution",
+            pcc_threshold=pcc_threshold,
+            rmse_threshold=0.05,
+            linf_threshold=0.1,
+        )

@@ -21,6 +21,8 @@ from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
     assert_equal,
 )
 
+from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import _height_sharded_memory_config
+
 pytestmark = [
     run_for_blackhole(),
     pytest.mark.use_module_device({"l1_small_size": 24576, "trace_region_size": 2_000_000}),
@@ -179,19 +181,6 @@ def _to_device(
     memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
 ) -> ttnn.Tensor:
     return ttnn.from_torch(tensor, dtype=dtype, layout=layout, device=device, memory_config=memory_config)
-
-
-def _height_sharded_memory_config(
-    device: ttnn.Device, leading: int, matrix_height: int, matrix_width: int
-) -> ttnn.MemoryConfig:
-    cores = ttnn.num_cores_to_corerangeset(leading, device.compute_with_storage_grid_size(), row_wise=True)
-    return ttnn.create_sharded_memory_config(
-        (leading, matrix_height, matrix_width),
-        core_grid=cores,
-        strategy=ttnn.ShardStrategy.HEIGHT,
-        orientation=ttnn.ShardOrientation.ROW_MAJOR,
-        use_height_and_width_as_shard_shape=True,
-    )
 
 
 def _run(

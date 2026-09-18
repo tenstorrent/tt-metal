@@ -7,14 +7,14 @@ import torch
 
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.kda import kda_forward_reference
-from models.demos.deepseek_v3_d_p.tests.kda.layer.test_offset import (
+from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     _assert_matches_reference,
     _build_layer,
     _mla_row_permutation,
     _reference_case,
     _to_sp_input,
+    make_actual_start,
 )
-from models.demos.deepseek_v3_d_p.tests.kda.utils import make_actual_start
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_bit_identical
 
 

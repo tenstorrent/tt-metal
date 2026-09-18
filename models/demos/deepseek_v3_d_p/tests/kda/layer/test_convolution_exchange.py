@@ -7,15 +7,15 @@ import torch
 
 import ttnn
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric_1d_device_params
-from models.demos.deepseek_v3_d_p.tests.kda.layer.test_offset import (
+from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     _assert_matches_reference,
     _build_layer,
+    _deallocate_state,
     _mla_row_permutation,
     _reference_case,
     _to_sp_input,
+    make_actual_start,
 )
-from models.demos.deepseek_v3_d_p.tests.kda.perf.test_layer_perf import _deallocate_state
-from models.demos.deepseek_v3_d_p.tests.kda.utils import make_actual_start
 
 
 @pytest.mark.parametrize(
