@@ -239,7 +239,7 @@ public:
     uint32_t get_host_channel_size(ChipId device_id, uint32_t channel) const;
     // Returns address in host space
     void* host_dma_address(uint64_t offset, ChipId src_device_id, uint16_t channel) const;
-    uint64_t get_pcie_base_addr_from_device(ChipId chip_id) const;
+    uint64_t get_sysmem_window_noc_base(ChipId chip_id) const;
 
     // Ethernet cluster api
     // Returns set of device ids connected via ethernet

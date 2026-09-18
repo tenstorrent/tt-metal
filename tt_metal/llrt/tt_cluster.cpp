@@ -1096,8 +1096,8 @@ void* Cluster::host_dma_address(uint64_t offset, ChipId src_device_id, uint16_t 
     return this->driver_->host_dma_address(offset, src_device_id, channel & HOST_MEM_CHANNELS_MASK);
 }
 
-uint64_t Cluster::get_pcie_base_addr_from_device(ChipId chip_id) const {
-    return this->driver_->get_pcie_base_addr_from_device(chip_id);
+uint64_t Cluster::get_sysmem_window_noc_base(ChipId chip_id) const {
+    return this->driver_->get_sysmem_window_noc_base(chip_id);
 }
 
 const std::unordered_set<ChipId>& Cluster::get_devices_controlled_by_mmio_device(ChipId mmio_device_id) const {
