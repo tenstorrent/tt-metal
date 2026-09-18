@@ -624,7 +624,8 @@ def passed_test(
 
     *near_zero_atol* is the floor under that budget for the lanes where the reference
     crosses zero; see :func:`helpers.ulp.ulp_elementwise_valid`. It does nothing on its
-    own and is rejected without *max_ulp*.
+    own and is rejected without *max_ulp*, as is a negative value, which would make the
+    floor inert by a different route.
 
     *flush_subnormals* overrides the metric's per-dtype default, for a caller that knows
     the producing Dest flushed. It matters for an fp16 output and nowhere else: the fp16
@@ -634,7 +635,9 @@ def passed_test(
     for what the datapath calls a 0-step agreement. The harness has no ``dest_acc`` at
     this layer to infer from, so the default stays the answer that cannot hide error and
     an enrolling caller that knows better says so. ``within_ulp`` already forwarded this;
-    this arm was the only caller that could not express it.
+    this arm was the only caller that could not express it. Like *near_zero_atol* it is
+    read only by the ULP arm -- the tolerance arm is ``torch.isclose``, which has no
+    flush concept -- so it is rejected without *max_ulp* rather than silently ignored.
 
     *max_ulp* is the enforced maximum for every format it accepts, with nothing ORed in
     beside it. For ``Bfp8_b`` that has a price worth knowing before enrolling an op: the
@@ -651,17 +654,30 @@ def passed_test(
     if tile_shape is None:
         tile_shape = construct_tile_shape((DEFAULT_TILE_R_DIM, DEFAULT_TILE_C_DIM))
 
-    if max_ulp is None and near_zero_atol is not None:
-        raise ValueError(
-            "near_zero_atol is the floor under a ULP budget and does nothing on its own. "
-            "Pass max_ulp as well, or use custom_atol for a flat tolerance."
+    if max_ulp is None:
+        # Everything that only the ULP arm reads. `flush_subnormals` was the gap: it is
+        # forwarded at two sites, both inside the `max_ulp is not None` arm, and the
+        # tolerance arm is `torch.isclose`, which has no flush concept -- so
+        # `passed_test(..., flush_subnormals=True)` without a budget was accepted and did
+        # nothing, the same mistake the near-zero half already refused.
+        inert = sorted(
+            name
+            for name, value in {
+                "near_zero_atol": near_zero_atol,
+                "flush_subnormals": flush_subnormals,
+            }.items()
+            if value is not None
         )
+        if inert:
+            one = len(inert) == 1
+            raise ValueError(
+                f"{' and '.join(inert)} {'is' if one else 'are'} read only by the ULP "
+                f"gate and {'does' if one else 'do'} nothing on "
+                f"{'its own' if one else 'their own'}. Pass max_ulp as well, or use "
+                "custom_atol for a flat tolerance."
+            )
 
     if max_ulp is not None:
-        # Raises for every format without a per-element ULP. The MX formats and the
-        # block floats below Bfp8_b keep their lattice compares, which are already
-        # ULP-shaped and block-aware; silently applying a per-element count against
-        # their fp32 view would hand the caller a gate it does not have.
         if max_ulp < 0:
             # Bounded from below as well as above. A negative budget makes
             # `distance <= max_ulp` false on every lane, so a bit-identical pair fails
@@ -671,6 +687,22 @@ def passed_test(
             raise ValueError(
                 f"max_ulp must not be negative, got {max_ulp}; 0 is the bit-exact gate"
             )
+        if near_zero_atol is not None and near_zero_atol < 0:
+            # Bounded from below as well as from above. A negative floor makes
+            # `magnitude <= absolute_cut` false on every lane, so the floor silently does
+            # nothing -- the same inert-floor case the raise above refuses, reached by a
+            # different route. It fails closed, so nothing wrong is accepted; the cost is
+            # that the cancellation lanes then fail with a large step count and nothing
+            # distinguishes an inert floor from a real regression. 0.0 stays legal: that
+            # is a deliberate "no floor", and it matches the None default.
+            raise ValueError(
+                f"near_zero_atol must not be negative, got {near_zero_atol}; "
+                "0.0 is the no-floor value, and None is the default"
+            )
+        # Raises for every format without a per-element ULP. The MX formats and the
+        # block floats below Bfp8_b keep their lattice compares, which are already
+        # ULP-shaped and block-aware; silently applying a per-element count against
+        # their fp32 view would hand the caller a gate it does not have.
         gate_dtype = ulp_dtype(output_data_format)
         warn_if_threshold_unmeaningful(max_ulp, gate_dtype)
         # The claim that a step budget is stronger than what it replaces counts only the
@@ -876,6 +908,11 @@ def passed_test(
                 mask=ranked,
                 max_ulp=max_ulp,
                 flush_subnormals=flush_subnormals,
+                # Only with a floor configured -- see within_ulp. Reported on the pass
+                # path too, which is what lets a DEBUG export tell a budget-carried pass
+                # from a floor-carried one: the rescued lanes are exactly the ones
+                # `ranked` keeps out of the summary.
+                rescued=None if near_zero_atol is None else ulp_rescued,
             )
 
         if is_within_tolerance:
