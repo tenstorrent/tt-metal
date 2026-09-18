@@ -16,7 +16,7 @@ namespace {
 
 bool is_integer_dtype(DataType dtype) {
     return dtype == DataType::INT32 || dtype == DataType::UINT32 || dtype == DataType::UINT16 ||
-           dtype == DataType::UINT8 || dtype == DataType::INT8;
+           dtype == DataType::UINT8;
 }
 
 bool is_int32(DataType dtype) { return dtype == DataType::INT32; }
@@ -29,9 +29,9 @@ bool is_int32_uint32_uint16(DataType dtype) { return is_int32_uint32(dtype) || d
 bool is_relu_family_int(DataType dtype) { return is_int32(dtype) || is_unsigned_int(dtype); }
 
 // Integer dtypes that unary_op_utils.cpp maps to a distinct init/LLK (or a dtype-agnostic kernel).
-// Called only for integer inputs; float dtypes are not filtered here.
 bool unary_op_supports_integer_dtype(UnaryOpType op_type, DataType dtype) {
     switch (op_type) {
+        case UnaryOpType::ABS: return is_unsigned_int(dtype);
         case UnaryOpType::ABS_INT32:
         case UnaryOpType::CLAMP_TSS:
         case UnaryOpType::GEZ:
@@ -59,7 +59,6 @@ bool unary_op_supports_integer_dtype(UnaryOpType op_type, DataType dtype) {
         case UnaryOpType::WHERE_TSS: return is_int32_uint32(dtype);
 
         case UnaryOpType::BITWISE_AND:
-        case UnaryOpType::BITWISE_NOT:
         case UnaryOpType::BITWISE_OR:
         case UnaryOpType::BITWISE_XOR:
         case UnaryOpType::EQZ:
@@ -69,6 +68,8 @@ bool unary_op_supports_integer_dtype(UnaryOpType op_type, DataType dtype) {
         case UnaryOpType::NEZ:
         case UnaryOpType::RIGHT_SHIFT:
         case UnaryOpType::SQUARE: return is_int32_uint32_uint16(dtype);
+
+        case UnaryOpType::BITWISE_NOT: return is_int32_uint32(dtype);
 
         case UnaryOpType::RELU:
         case UnaryOpType::RELU6:
@@ -87,6 +88,15 @@ bool unary_op_supports_integer_dtype(UnaryOpType op_type, DataType dtype) {
 void validate_integer_input_dtype(const std::vector<EltwiseUnaryWithParam>& op_chain, DataType input_dtype) {
     if (!is_integer_dtype(input_dtype)) {
         return;
+    }
+    // A TYPECAST in a multi-op chain changes the dtype for later ops; this checker only
+    // sees the original tensor dtype, so skip rather than reject a valid post-cast float op.
+    if (op_chain.size() > 1) {
+        for (const auto& op : op_chain) {
+            if (op.type() == UnaryOpType::TYPECAST) {
+                return;
+            }
+        }
     }
     for (const auto& op : op_chain) {
         TT_FATAL(
