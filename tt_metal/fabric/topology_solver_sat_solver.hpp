@@ -12,9 +12,10 @@
 namespace tt::tt_fabric::detail {
 
 /**
- * Thin IPASIR-style facade over CaDiCaL (`cadical.hpp`). DIMACS wire protocol: positive variable ids, 0 ends a
- * clause; solve() returns kSat / kUnsat / 0 (IPASIR). CaDiCaL is incremental — add() after solve() is supported,
- * which multi-model and blocking-clause enumeration rely on for throughput versus one-shot solvers.
+ * Thin IPASIR-style facade over a pluggable incremental SAT engine (CaDiCaL or kissat_extras; selected by the
+ * TT_TOPO_SAT_ENGINE env var — see topology_solver_sat_solver.cpp). DIMACS wire protocol: positive variable ids,
+ * 0 ends a clause; solve() returns kSat / kUnsat / 0 (IPASIR). Both engines are incremental — add() after solve()
+ * is supported, which multi-model and blocking-clause enumeration rely on for throughput versus one-shot solvers.
  */
 struct TopologySatSolver {
     TopologySatSolver();
@@ -27,6 +28,16 @@ struct TopologySatSolver {
     TopologySatSolver& operator=(TopologySatSolver&&) noexcept;
 
     int declare_one_more_variable();
+
+    /**
+     * Protect a variable from bounded-variable-elimination across incremental solves. Blocking-clause
+     * enumeration adds new clauses (referencing the assignment variables) *between* solve() calls; if the engine
+     * eliminated such a variable during an earlier solve, a later blocking clause over it would be unsound. Call
+     * this for every variable that future added clauses may reference, before the first solve(). Engines that
+     * preserve reusable variables implicitly (e.g. CaDiCaL) may treat this as a no-op.
+     */
+    void protect_variable(int var);
+
     void add(int lit);
     // Assume a literal for the next solve() only (retracted afterwards). Lets callers add a symmetry-breaking hint
     // that is sound for any instance: if the assumption makes it UNSAT, re-solve() without it.
@@ -41,7 +52,7 @@ struct TopologySatSolver {
 
     /**
      * Must be called immediately after construction, before any add() / encoding.
-     * Tunes CaDiCaL for AllSAT-style enumeration: repeated solve() after permanent blocking clauses.
+     * Tunes the engine for AllSAT-style enumeration: repeated solve() after permanent blocking clauses.
      */
     void configure_for_blocking_clause_enumeration();
 

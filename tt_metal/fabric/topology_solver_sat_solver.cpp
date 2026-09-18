@@ -37,6 +37,9 @@ struct SatEngine {
     // Called once after construction, before any non-config add(): tune the engine for repeated solve()
     // after permanent blocking clauses (AllSAT-style enumeration).
     virtual void configure_for_enumeration() = 0;
+    // Protect a variable from bounded-variable-elimination so a later (post-solve) blocking clause over it
+    // stays sound. No-op for engines that preserve reusable variables implicitly.
+    virtual void protect_variable(int var) = 0;
 };
 
 // ── CaDiCaL engine (deterministic default; formerly the only engine) ─────────────────────────────────────
@@ -86,6 +89,12 @@ struct CadicalSatEngine final : SatEngine {
     void configure_for_enumeration() override {
         // ILB: incremental lazy backtracking — reuse trail across incremental clause additions (CaDiCaL 1.7.3+).
         (void)solver.set("ilb", 2);
+    }
+
+    void protect_variable(int /*var*/) override {
+        // No-op: CaDiCaL preserves variables reachable from incrementally-added clauses implicitly (its
+        // restore machinery re-introduces eliminated variables when a later clause references them), so
+        // blocking clauses added between solves stay sound without explicit protection.
     }
 };
 
@@ -145,6 +154,15 @@ struct KissatSatEngine final : SatEngine {
         // kissat has no `ilb` analog; incremental is already enabled in the ctor. (Future: KISSAT_SWAP_PLAN.md
         // §8 suggests kissat_set_configuration(solver, "sat") here for the SAT-dominated min-host solves.)
     }
+
+    void protect_variable(int var) override {
+        // Keep this variable out of bounded-variable-elimination so a blocking clause added over it after an
+        // earlier solve() remains sound and efficient (KISSAT_SWAP_PLAN.md §3.5). kissat_extras exposes this
+        // explicitly; the assignment variables enumeration blocks over are protected before the first solve.
+        if (var > 0) {
+            kissat_protect(solver, var);
+        }
+    }
 };
 #endif  // TT_METAL_FABRIC_KISSAT
 
@@ -184,6 +202,8 @@ int TopologySatSolver::declare_one_more_variable() {
     impl_->engine->reserve(next_var_);
     return next_var_;
 }
+
+void TopologySatSolver::protect_variable(int var) { impl_->engine->protect_variable(var); }
 
 void TopologySatSolver::add(int lit) { impl_->engine->add(lit); }
 
