@@ -575,16 +575,12 @@ may be ``All`` or ``IgnoreSign`` (treats bit 31 as zero).
 
 .. code-block:: c++
 
-   impl_::FloatInt round (vFloat v, RoundIntMode mode = RoundIntMode::Unbiased);
+   impl_::FloatInt round (vFloat v);
 
-Round v to nearest integer, ties round to nearest even.  This returns
-a tuple that may be implicitly converted to either ``vFloat`` or
+Round v to nearest integer, ties round to nearest even. This returns a
+tuple that may be implicitly converted to either ``vFloat`` or
 ``vInt``, if you want exactly one result object.  Or it may be used in
-a structured binding, if you want both a ``vFloat`` and a ``vInt``.
-The integral result is only valid for non-negative values less than
-2^22.  You may specify the mode as ``RoundIntMode::Biased`, if you
-only care about the correctness of the lower 21 bits of the integral
-result.
+a structured binding, if you want both:
 
 .. code-block:: c++
 
