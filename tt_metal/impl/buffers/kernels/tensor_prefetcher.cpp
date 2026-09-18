@@ -204,6 +204,18 @@ FORCE_INLINE void store_sender_state(
     sb->fifo_wr_ptr = iface.fifo_wr_ptr;
 }
 
+FORCE_INLINE void set_mpfe_weights(
+    uint32_t free_sender_port,
+    uint32_t noc1_sender_port,
+    uint32_t ordinary_operation_port,
+    uint32_t free_sender_weight,
+    uint32_t noc1_sender_weight,
+    uint32_t ordinary_operation_weight) {
+    gddr_mc_write_mpfe_weight(free_sender_port, free_sender_weight);
+    gddr_mc_write_mpfe_weight(noc1_sender_port, noc1_sender_weight);
+    gddr_mc_write_mpfe_weight(ordinary_operation_port, ordinary_operation_weight);
+}
+
 }  // namespace
 
 void kernel_main() {
@@ -220,12 +232,17 @@ void kernel_main() {
     // WaitForCqOnTensorPrefetcher writes an incrementing value here from the
     // dispatcher; a WAIT_CQ request blocks until the requested slot reaches it.
     constexpr uint32_t cq_signal_l1_base = get_compile_time_arg_val(4);
-    constexpr uint32_t sender_sync_semaphore_id = get_compile_time_arg_val(5);
-    constexpr uint32_t own_idle_mpfe_weight = get_compile_time_arg_val(6);
-    constexpr uint32_t own_active_mpfe_weight = get_compile_time_arg_val(7);
+    constexpr bool controls_mpfe = get_compile_time_arg_val(5) != 0;
+    constexpr uint32_t free_sender_idle_mpfe_weight = get_compile_time_arg_val(6);
+    constexpr uint32_t noc1_sender_idle_mpfe_weight = get_compile_time_arg_val(7);
     constexpr uint32_t ordinary_idle_mpfe_weight = get_compile_time_arg_val(8);
-    constexpr uint32_t ordinary_active_mpfe_weight = get_compile_time_arg_val(9);
-    constexpr bool synchronize_senders = get_compile_time_arg_val(10) != 0;
+    constexpr uint32_t free_sender_active_mpfe_weight = get_compile_time_arg_val(9);
+    constexpr uint32_t noc1_sender_active_mpfe_weight = get_compile_time_arg_val(10);
+    constexpr uint32_t ordinary_active_mpfe_weight = get_compile_time_arg_val(11);
+    constexpr bool dynamic_mpfe =
+        free_sender_idle_mpfe_weight != free_sender_active_mpfe_weight ||
+        noc1_sender_idle_mpfe_weight != noc1_sender_active_mpfe_weight ||
+        ordinary_idle_mpfe_weight != ordinary_active_mpfe_weight;
     constexpr uint32_t ring_half = stage_ring_size / 2;
     constexpr uint32_t stage_slot_a = stage_ring_base;
     constexpr uint32_t stage_slot_b = stage_ring_base + ring_half;
@@ -243,31 +260,29 @@ void kernel_main() {
     const uint32_t bank_id = get_arg_val<uint32_t>(rt_idx++);
     (void)bank_id;
     const uint32_t socket_config_addr = get_arg_val<uint32_t>(rt_idx++);
-    const uint32_t own_mpfe_port = get_arg_val<uint32_t>(rt_idx++);
+    const uint32_t free_sender_mpfe_port = get_arg_val<uint32_t>(rt_idx++);
+    const uint32_t noc1_sender_mpfe_port = get_arg_val<uint32_t>(rt_idx++);
     const uint32_t ordinary_operation_mpfe_port = get_arg_val<uint32_t>(rt_idx++);
-    const bool is_coordinator = get_arg_val<uint32_t>(rt_idx++) != 0;
-    const uint32_t peer_noc_x = get_arg_val<uint32_t>(rt_idx++);
-    const uint32_t peer_noc_y = get_arg_val<uint32_t>(rt_idx++);
 
     // ---- Init ----
     SocketReceiverInterface socket = create_receiver_socket_interface(socket_config_addr);
     set_receiver_socket_page_size(socket, socket_page_size);
 
     experimental::drisc_set_stream_mode();
-    // Each sender owns its MPFE slot; the ordinary-operation slot is shared by
-    // both senders in a bank. Static policies compile out request-boundary writes.
-    gddr_mc_write_mpfe_weight(ordinary_operation_mpfe_port, ordinary_idle_mpfe_weight);
-    gddr_mc_write_mpfe_weight(own_mpfe_port, own_idle_mpfe_weight);
-
-    const uint32_t sender_sync_semaphore_addr = get_semaphore<ProgrammableCoreType::DRAM>(sender_sync_semaphore_id);
-    volatile tt_l1_ptr uint32_t* sender_sync_semaphore =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sender_sync_semaphore_addr);
-    const uint64_t peer_sender_sync_semaphore = NOC_XY_ADDR(
-        DYNAMIC_NOC_X(noc_index, peer_noc_x), DYNAMIC_NOC_Y(noc_index, peer_noc_y), sender_sync_semaphore_addr);
+    // The free/low sender is the sole MPFE writer for its bank. The NOC1/middle
+    // sender never touches these shared registers and never waits on its peer.
+    if constexpr (controls_mpfe) {
+        set_mpfe_weights(
+            free_sender_mpfe_port,
+            noc1_sender_mpfe_port,
+            ordinary_operation_mpfe_port,
+            free_sender_idle_mpfe_weight,
+            noc1_sender_idle_mpfe_weight,
+            ordinary_idle_mpfe_weight);
+    }
 
     RemoteSenderCBInterface& iface = get_remote_sender_cb_interface(remote_cb_id);
     bool has_loaded_sender_state = false;
-    uint32_t handshake_target = 1;
 
     // Zero the per-CQ signal slots before parking on the socket. Safe to do here
     // (rather than from the host) because no WaitForCqOnTensorPrefetcher signal
@@ -295,19 +310,14 @@ void kernel_main() {
             socket_pop_pages(socket, 1);
             socket_notify_sender(socket);
 
-            // Restore every bank to the hardware-default 0/0/0 state only after
-            // both sender kernels have drained their final request.
-            gddr_mc_write_mpfe_weight(own_mpfe_port, GDDR_MC_MPFE_CFG_ROUNDROBIN_WEIGHT_DEFAULT);
-            if (is_coordinator) {
-                noc_semaphore_wait(sender_sync_semaphore, handshake_target);
-                gddr_mc_write_mpfe_weight(
-                    ordinary_operation_mpfe_port, GDDR_MC_MPFE_CFG_ROUNDROBIN_WEIGHT_DEFAULT);
-                noc_semaphore_inc(peer_sender_sync_semaphore, 1);
-                noc_async_atomic_barrier();
-            } else {
-                noc_semaphore_inc(peer_sender_sync_semaphore, 1);
-                noc_async_atomic_barrier();
-                noc_semaphore_wait(sender_sync_semaphore, handshake_target);
+            if constexpr (controls_mpfe) {
+                set_mpfe_weights(
+                    free_sender_mpfe_port,
+                    noc1_sender_mpfe_port,
+                    ordinary_operation_mpfe_port,
+                    GDDR_MC_MPFE_CFG_ROUNDROBIN_WEIGHT_DEFAULT,
+                    GDDR_MC_MPFE_CFG_ROUNDROBIN_WEIGHT_DEFAULT,
+                    GDDR_MC_MPFE_CFG_ROUNDROBIN_WEIGHT_DEFAULT);
             }
             break;
         }
@@ -324,11 +334,14 @@ void kernel_main() {
             continue;
         }
         // DRAM_PREFETCHER_CMD_PREFETCH
-        if constexpr (ordinary_idle_mpfe_weight != ordinary_active_mpfe_weight) {
-            gddr_mc_write_mpfe_weight(ordinary_operation_mpfe_port, ordinary_active_mpfe_weight);
-        }
-        if constexpr (own_idle_mpfe_weight != own_active_mpfe_weight) {
-            gddr_mc_write_mpfe_weight(own_mpfe_port, own_active_mpfe_weight);
+        if constexpr (controls_mpfe && dynamic_mpfe) {
+            set_mpfe_weights(
+                free_sender_mpfe_port,
+                noc1_sender_mpfe_port,
+                ordinary_operation_mpfe_port,
+                free_sender_active_mpfe_weight,
+                noc1_sender_active_mpfe_weight,
+                ordinary_active_mpfe_weight);
         }
 
         const uint32_t req_num_entries = req->prefetch.num_entries;
@@ -840,29 +853,14 @@ void kernel_main() {
         // resumes at the right ring offset.
         store_sender_state(state, iface);
 
-        if constexpr (own_idle_mpfe_weight != own_active_mpfe_weight) {
-            gddr_mc_write_mpfe_weight(own_mpfe_port, own_idle_mpfe_weight);
-        }
-        if constexpr (synchronize_senders) {
-            // Keep both sender kernels at the same request boundary before the
-            // coordinator restores their shared ordinary-operation slot.
-            if (is_coordinator) {
-                noc_semaphore_wait(sender_sync_semaphore, handshake_target);
-                if constexpr (ordinary_idle_mpfe_weight != ordinary_active_mpfe_weight) {
-                    gddr_mc_write_mpfe_weight(ordinary_operation_mpfe_port, ordinary_idle_mpfe_weight);
-                }
-                noc_semaphore_inc(peer_sender_sync_semaphore, 1);
-                noc_async_atomic_barrier();
-            } else {
-                noc_semaphore_inc(peer_sender_sync_semaphore, 1);
-                noc_async_atomic_barrier();
-                noc_semaphore_wait(sender_sync_semaphore, handshake_target);
-            }
-            ++handshake_target;
-        } else if constexpr (ordinary_idle_mpfe_weight != ordinary_active_mpfe_weight) {
-            // This intentionally exposes the unsynchronized dynamic mode for
-            // model benchmarking; the production API rejects this combination.
-            gddr_mc_write_mpfe_weight(ordinary_operation_mpfe_port, ordinary_idle_mpfe_weight);
+        if constexpr (controls_mpfe && dynamic_mpfe) {
+            set_mpfe_weights(
+                free_sender_mpfe_port,
+                noc1_sender_mpfe_port,
+                ordinary_operation_mpfe_port,
+                free_sender_idle_mpfe_weight,
+                noc1_sender_idle_mpfe_weight,
+                ordinary_idle_mpfe_weight);
         }
 
         socket_pop_pages(socket, 1);

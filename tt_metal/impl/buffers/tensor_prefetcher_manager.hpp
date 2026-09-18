@@ -145,7 +145,6 @@ private:
     struct MpfePolicy {
         MpfeWeights idle;
         MpfeWeights active;
-        bool synchronize_senders;
     };
 
     void worker_loop();

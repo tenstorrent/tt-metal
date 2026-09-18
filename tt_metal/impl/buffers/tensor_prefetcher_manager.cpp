@@ -84,20 +84,6 @@ uint32_t benchmark_mpfe_weight(std::string_view suffix, uint32_t fallback) {
     return static_cast<uint32_t>(value[0] - '0');
 }
 
-bool benchmark_mpfe_sync() {
-    const std::string name = std::string(kBenchmarkMpfeEnvPrefix) + "SYNCHRONIZE_SENDERS";
-    const char* value = std::getenv(name.c_str());
-    if (value == nullptr) {
-        return true;
-    }
-    TT_FATAL(
-        (value[0] == '0' || value[0] == '1') && value[1] == '\0',
-        "{} must be 0 or 1, got '{}'",
-        name,
-        value);
-    return value[0] == '1';
-}
-
 // Largest `page` (multiple of tile_size, <= max_page_size) such that num_tiles*tile_size
 // is divisible by page. Returns (page_size, num_pages). Identical to the existing
 // implementation; carried over verbatim from the pre-queueable manager.
@@ -534,11 +520,6 @@ void TensorPrefetcherManager::build_and_launch_programs(
     programs_.clear();
     for (uint32_t d = 0; d < devices_.size(); ++d) {
         auto program = std::make_unique<Program>();
-        const uint32_t sender_sync_semaphore_id = CreateSemaphore(
-            *program,
-            CoreRangeSet(ttsl::Span<const CoreCoord>(sender_logical_cores_)),
-            /*initial_value=*/0,
-            CoreType::DRAM);
         const auto& soc_desc =
             MetalContext::instance(mesh_device_->impl().get_context_id()).get_cluster().get_soc_desc(devices_[d]->id());
         TT_FATAL(
@@ -553,11 +534,8 @@ void TensorPrefetcherManager::build_and_launch_programs(
             const uint32_t bank_sender_base = 2 * bank_id;
             const uint32_t first_sender_port = get_mpfe_port(soc_desc, sender_logical_cores_[bank_sender_base]);
             const uint32_t second_sender_port = get_mpfe_port(soc_desc, sender_logical_cores_[bank_sender_base + 1]);
-            const bool is_coordinator = s == bank_sender_base;
-            const uint32_t own_mpfe_port = is_coordinator ? first_sender_port : second_sender_port;
+            const bool controls_mpfe = s == bank_sender_base;
             const uint32_t ordinary_operation_mpfe_port = kMpfePortSum - first_sender_port - second_sender_port;
-            const CoreCoord peer_logical = sender_logical_cores_[is_coordinator ? s + 1 : s - 1];
-            const CoreCoord peer_noc = devices_[d]->virtual_core_from_logical_core(peer_logical, CoreType::DRAM);
 
             std::vector<uint32_t> compile_args = {
                 stage_ring_base,
@@ -565,12 +543,13 @@ void TensorPrefetcherManager::build_and_launch_programs(
                 kRemoteCBId,
                 socket_page_size,
                 cq_signal_l1_addr_,
-                sender_sync_semaphore_id,
-                is_coordinator ? mpfe_policy.idle.free_sender : mpfe_policy.idle.noc1_sender,
-                is_coordinator ? mpfe_policy.active.free_sender : mpfe_policy.active.noc1_sender,
+                static_cast<uint32_t>(controls_mpfe),
+                mpfe_policy.idle.free_sender,
+                mpfe_policy.idle.noc1_sender,
                 mpfe_policy.idle.ordinary,
+                mpfe_policy.active.free_sender,
+                mpfe_policy.active.noc1_sender,
                 mpfe_policy.active.ordinary,
-                static_cast<uint32_t>(mpfe_policy.synchronize_senders),
             };
 
             KernelHandle kernel_id = CreateKernel(
@@ -580,11 +559,9 @@ void TensorPrefetcherManager::build_and_launch_programs(
             std::vector<uint32_t> rt_args = {
                 bank_id,
                 socket_addr,
-                own_mpfe_port,
+                first_sender_port,
+                second_sender_port,
                 ordinary_operation_mpfe_port,
-                static_cast<uint32_t>(is_coordinator),
-                static_cast<uint32_t>(peer_noc.x),
-                static_cast<uint32_t>(peer_noc.y),
             };
             SetRuntimeArgs(*program, kernel_id, sender_logical, rt_args);
         }
@@ -609,7 +586,6 @@ void TensorPrefetcherManager::start() {
                 .ordinary = benchmark_mpfe_weight("IDLE_ORDINARY_WEIGHT", active_mpfe_weights.ordinary),
             },
         .active = active_mpfe_weights,
-        .synchronize_senders = benchmark_mpfe_sync(),
     };
     TT_FATAL(
         mpfe_policy.idle.free_sender <= kMaxMpfeWeight && mpfe_policy.idle.noc1_sender <= kMaxMpfeWeight &&
@@ -620,14 +596,13 @@ void TensorPrefetcherManager::start() {
         kMaxMpfeWeight);
     log_info(
         tt::LogMetal,
-        "[mpfe_model_benchmark] idle={}/{}/{} active={}/{}/{} sync={}",
+        "[mpfe_model_benchmark] controller=primary idle={}/{}/{} active={}/{}/{}",
         mpfe_policy.idle.free_sender,
         mpfe_policy.idle.noc1_sender,
         mpfe_policy.idle.ordinary,
         mpfe_policy.active.free_sender,
         mpfe_policy.active.noc1_sender,
-        mpfe_policy.active.ordinary,
-        mpfe_policy.synchronize_senders);
+        mpfe_policy.active.ordinary);
 
     const auto& hal = MetalContext::instance(mesh_device_->impl().get_context_id()).hal();
     TT_FATAL(

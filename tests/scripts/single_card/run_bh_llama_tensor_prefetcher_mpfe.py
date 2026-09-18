@@ -24,15 +24,16 @@ ENV_SUFFIXES = (
     "IDLE_FREE_SENDER_WEIGHT",
     "IDLE_NOC1_SENDER_WEIGHT",
     "IDLE_ORDINARY_WEIGHT",
-    "SYNCHRONIZE_SENDERS",
 )
 METRIC_RE = re.compile(
     r"Average speed: ([0-9.]+)ms @ ([0-9.]+) tok/s/user \(([0-9.]+) tok/s throughput\)"
 )
-POLICY_RE = re.compile(r"\[mpfe_model_benchmark\] idle=(\d)/(\d)/(\d) active=(\d)/(\d)/(\d) sync=(true|false|0|1)")
+POLICY_RE = re.compile(
+    r"\[mpfe_model_benchmark\] controller=primary idle=(\d)/(\d)/(\d) active=(\d)/(\d)/(\d)"
+)
 
 DEFAULT_WEIGHTS = ((0, 0, 0), (0, 0, 5), (0, 1, 5), (0, 3, 7), (0, 7, 7))
-MODES = ("static", "static+sync", "dynamic", "dynamic+sync")
+MODES = ("static", "dynamic")
 
 
 @dataclass(frozen=True)
@@ -87,7 +88,6 @@ def case_environment(case: Case) -> dict[str, str]:
             f"{ENV_PREFIX}FREE_SENDER_WEIGHT": str(free),
             f"{ENV_PREFIX}NOC1_SENDER_WEIGHT": str(noc1),
             f"{ENV_PREFIX}ORDINARY_WEIGHT": str(ordinary),
-            f"{ENV_PREFIX}SYNCHRONIZE_SENDERS": "1" if "+sync" in case.mode else "0",
         }
     )
     if case.mode.startswith("dynamic"):
@@ -168,12 +168,10 @@ def run_case(case: Case, output_dir: Path) -> dict:
     marker = policy_markers[0]
     observed_idle = tuple(int(value) for value in marker[:3])
     observed_active = tuple(int(value) for value in marker[3:6])
-    observed_sync = marker[6] in ("true", "1")
     expected_idle = (0, 0, 0) if case.mode.startswith("dynamic") else case.weights
-    expected_sync = "+sync" in case.mode
-    if (observed_idle, observed_active, observed_sync) != (expected_idle, case.weights, expected_sync):
+    if (observed_idle, observed_active) != (expected_idle, case.weights):
         raise RuntimeError(
-            f"{case.label} applied idle={observed_idle} active={observed_active} sync={observed_sync}; see {log_path}"
+            f"{case.label} applied idle={observed_idle} active={observed_active}; see {log_path}"
         )
 
     metrics = METRIC_RE.findall(completed.stdout)
@@ -186,7 +184,6 @@ def run_case(case: Case, output_dir: Path) -> dict:
         "mode": case.mode,
         "weights": list(case.weights),
         "idle_weights": list(expected_idle),
-        "synchronize_senders": expected_sync,
         "iteration": case.iteration,
         "decode_latency_ms": latency_ms,
         "decode_tok_s_user": tok_s_user,
@@ -234,13 +231,13 @@ def main() -> None:
     if iterations < 1:
         raise ValueError("MPFE_MODEL_ITERATIONS must be positive")
 
-    output_dir = Path(os.environ.get("MPFE_MODEL_OUTPUT_DIR", ROOT / "generated/mpfe-llama-model"))
+    output_dir = Path(os.environ.get("MPFE_MODEL_OUTPUT_DIR", ROOT / "generated/mpfe-llama-model-primary-drisc"))
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "logs").mkdir(exist_ok=True)
     results_path = output_dir / "results.jsonl"
     manifest_path = output_dir / "manifest.json"
     manifest = {
-        "schema_version": 1,
+        "schema_version": 2,
         "benchmark": "llama-3.1-8b-simple-text-demo-tensor-prefetcher-mpfe",
         "hf_model": os.environ["HF_MODEL"],
         "mesh_device": os.environ.get("MESH_DEVICE"),
