@@ -364,7 +364,8 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
                     << "u * MEM_SEM_CACHED_POOL_ROW);\n";
             content << "        if ((__atomic_fetch_add(row + 1, 1u, __ATOMIC_ACQ_REL) & 0xFFFFu) == 0u) {\n";
             content << "            row[0] = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>("
-                    << "::get_semaphore(" << entry.id << "u) + MEM_L1_UNCACHED_BASE);\n";
+                    << "::get_semaphore<static_cast<ProgrammableCoreType>(PROGRAMMABLE_CORE_TYPE)>(" << entry.id
+                    << "u) + MEM_L1_UNCACHED_BASE);\n";
             content << "            __atomic_fetch_or(row + 1, 0x80000000u, __ATOMIC_RELEASE);\n";
             content << "        } else {\n";
             content << "            while ((__atomic_load_n(row + 1, __ATOMIC_ACQUIRE) & 0x80000000u) == 0u) {\n";

@@ -223,7 +223,7 @@ void zero_semaphore_regions() {
     // Discard before zeroing: a dirty line at boot could otherwise write back over the zeros.
     invalidate_l2_cache_range(MEM_SEM_REGIONS_BASE, MEM_SEM_REGIONS_SIZE);
     volatile uint32_t* sem_words = reinterpret_cast<volatile uint32_t*>(MEM_L1_UNCACHED_BASE + MEM_SEM_REGIONS_BASE);
-    for (uint32_t w = 0; w < MEM_SEM_REGIONS_SIZE / sizeof(*sem_words); w++) {
+    for (uint32_t w = 0; w < MEM_SEM_REGIONS_SIZE / sizeof(uint32_t); w++) {
         sem_words[w] = 0;
     }
 }
