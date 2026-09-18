@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <type_traits>
 
+#include "../../utils/gpr.h"
 #include "../access_types.h"
 #include "../field.h"
 
@@ -65,7 +66,7 @@ public:
  * replaces one or four complete state-CFG words and acts as an ordering barrier
  * between automatically grouped assignment runs.
  */
-template <const Field& F, Sec S, typename Source>
+template <const Field& F, Sec S, std::uint32_t GprIndex, GprTransferSize Size, WrcfgCompletion Completion>
 class GprWrite
 {
 public:
@@ -75,9 +76,9 @@ public:
 
     static constexpr RegisterScope scope = F.scope;
     static constexpr std::uint32_t addr  = F.addr32(S);
-    static constexpr std::uint32_t words = Source::size == GprTransferSize::Bits128 ? 4u : 1u;
+    static constexpr std::uint32_t words = Size == GprTransferSize::Bits128 ? 4u : 1u;
 
-    Source source;
+    hal::Gpr<GprIndex> source;
 };
 
 } // namespace hal::cfg
@@ -112,8 +113,8 @@ template <typename T>
 inline constexpr bool is_gpr_write_v = false;
 
 // Accept GPR transfers (GprWrite) returned by from_gpr().
-template <const Field& F, Sec S, typename Source>
-inline constexpr bool is_gpr_write_v<GprWrite<F, S, Source>> = true;
+template <const Field& F, Sec S, std::uint32_t GprIndex, GprTransferSize Size, WrcfgCompletion Completion>
+inline constexpr bool is_gpr_write_v<GprWrite<F, S, GprIndex, Size, Completion>> = true;
 
 // Accept FieldAssignment, ConstantFieldAssignment, or GprWrite.
 template <typename T>
