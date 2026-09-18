@@ -499,5 +499,6 @@ class BriaFiboCheckpoint:
             subfolder="transformer",
             parallel_config=parallel_config,
             mesh_shape=tuple(device.shape),
+            mesh_device=device,
         )
         return model
