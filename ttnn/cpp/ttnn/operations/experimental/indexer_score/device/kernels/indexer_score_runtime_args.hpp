@@ -21,8 +21,6 @@ enum : uint32_t {
     SlotMetadata,
     NumLayers,
     LayerIndex,
-    // DRAM address of the 1-element real-token-end tensor (0 when uncapped). Last named slot, so the
-    // shard-order / fused-ring tails that derive from Count shift with it automatically.
     ValidEnd,
     Count
 };
