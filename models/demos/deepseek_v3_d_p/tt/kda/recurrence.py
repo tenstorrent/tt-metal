@@ -88,7 +88,7 @@ class _PreparedChunks:
 
 
 @dataclass(frozen=True)
-class _ScanResult:
+class RecurrenceResult:
     output: ttnn.Tensor
     final_state: ttnn.Tensor
 
@@ -231,7 +231,7 @@ def _scan_chunks(
     *,
     compute_config: ttnn.DeviceComputeKernelConfig,
     groups_per_head: int = 1,
-) -> _ScanResult:
+) -> RecurrenceResult:
     output, final_states = ttnn.experimental.kda.recurrent_chunk_scan(
         *prepared.as_kernel_args(),
         initial_states,
@@ -239,7 +239,7 @@ def _scan_chunks(
         memory_config=KDA_OUTPUT_MEMORY_CONFIG,
         compute_kernel_config=compute_config,
     )
-    return _ScanResult(output=output, final_state=final_states)
+    return RecurrenceResult(output=output, final_state=final_states)
 
 
 def _distributed_prefix(
@@ -366,7 +366,7 @@ def _ordinary_group_scan(
     groups_per_head: int,
     prefix_memory_config: ttnn.MemoryConfig,
     compute_config: _RecurrenceComputeConfig,
-) -> _ScanResult:
+) -> RecurrenceResult:
     entries = ttnn.experimental.kda.affine_exclusive_scan(
         summary.a,
         summary.b,
@@ -385,7 +385,7 @@ def _scan_local_grouped_chunks(
     *,
     summary_group_chunks: int,
     compute_config: _RecurrenceComputeConfig,
-) -> _ScanResult:
+) -> RecurrenceResult:
     grouped, groups, memory = _prepare_grouped_chunks(prepared, geometry, summary_group_chunks=summary_group_chunks)
     summary = _summarize_chunk_groups(
         grouped, groups_per_head=groups, summary_memory_config=memory, compute_config=compute_config
@@ -401,7 +401,7 @@ def _scan_local_grouped_chunks(
     output = ttnn.reshape(
         scan.output, (geometry.batch_heads, geometry.num_chunks, geometry.chunk_size, geometry.value_dim)
     )
-    return _ScanResult(output, _last_group_state(scan.final_state, geometry, groups))
+    return RecurrenceResult(output, _last_group_state(scan.final_state, geometry, groups))
 
 
 def _partition_prefix(
@@ -444,7 +444,7 @@ def _scan_sp_grouped_chunks(
     selections: ChronologicalSelections,
     actual_start: ttnn.Tensor,
     compute_config: _RecurrenceComputeConfig,
-) -> _ScanResult:
+) -> RecurrenceResult:
     grouped, groups, memory = _prepare_grouped_chunks(prepared, geometry, summary_group_chunks=summary_group_chunks)
     parts = ttnn.experimental.kda.summarize_chunk_recurrence(
         *grouped.as_kernel_args(),
@@ -498,7 +498,7 @@ def _scan_sp_grouped_chunks(
         memory_config=KDA_OUTPUT_MEMORY_CONFIG,
     )
     final = selections.select_final_state(gathered, tail_state)
-    return _ScanResult(output, ttnn.reshape(final, (geometry.batch_heads, geometry.key_dim, geometry.value_dim)))
+    return RecurrenceResult(output, ttnn.reshape(final, (geometry.batch_heads, geometry.key_dim, geometry.value_dim)))
 
 
 class KDARecurrence:
@@ -567,12 +567,12 @@ class KDARecurrence:
         return prepared, state, geometry
 
     @staticmethod
-    def _finish(scan: _ScanResult, geometry: _RecurrenceGeometry) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+    def _finish(scan: RecurrenceResult, geometry: _RecurrenceGeometry) -> RecurrenceResult:
         output = ttnn.reshape(scan.output, (geometry.batch_heads, geometry.local_rows, geometry.value_dim))
         final_state = ttnn.reshape(
             scan.final_state, (geometry.batch, geometry.heads, geometry.key_dim, geometry.value_dim)
         )
-        return final_state, output
+        return RecurrenceResult(output, final_state)
 
     def __call__(
         self,
@@ -583,7 +583,7 @@ class KDARecurrence:
         gate: ttnn.Tensor,
         beta: ttnn.Tensor,
         initial_state: ttnn.Tensor,
-    ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+    ) -> RecurrenceResult:
         """Run local direct or grouped recurrence without SP routing metadata."""
         prepared, state, geometry = self._prepare(q=q, k=k, v=v, gate=gate, beta=beta, initial_state=initial_state)
         scan = (
@@ -610,7 +610,7 @@ class KDARecurrence:
         initial_state: ttnn.Tensor,
         selections: ChronologicalSelections,
         actual_start: ttnn.Tensor,
-    ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+    ) -> RecurrenceResult:
         """Run SP recurrence from the layer's normalized chronological topology."""
         prepared, state, geometry = self._prepare(q=q, k=k, v=v, gate=gate, beta=beta, initial_state=initial_state)
         scan = _scan_sp_grouped_chunks(

@@ -423,7 +423,7 @@ class ttKDA:
             decay_rank=projected.decay_rank,
         )
         if selections is not None:
-            new_recurrent, output = self.recurrence.sequence_parallel(
+            result = self.recurrence.sequence_parallel(
                 q=q,
                 k=k,
                 v=v,
@@ -434,7 +434,7 @@ class ttKDA:
                 actual_start=actual_start,
             )
         else:
-            new_recurrent, output = self.recurrence(
+            result = self.recurrence(
                 q=q,
                 k=k,
                 v=v,
@@ -442,6 +442,6 @@ class ttKDA:
                 beta=beta,
                 initial_state=state.recurrent,
             )
-        output = self._kda_rms_norm(output, projected.output_gate)
+        output = self._kda_rms_norm(result.output, projected.output_gate)
         output = self._project_output(output)
-        return output, KdaState(recurrent=new_recurrent, convolution=new_convolution)
+        return output, KdaState(recurrent=result.final_state, convolution=new_convolution)
