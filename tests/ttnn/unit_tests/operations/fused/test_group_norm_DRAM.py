@@ -181,6 +181,58 @@ def test_group_norm_interleaved_l1_replay_respects_occupied_l1(device, enabled_p
     assert device.num_program_cache_entries() == entries_with_replay + 1
 
 
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
+@pytest.mark.parametrize("num_out_blocks", [13, 17, 73])
+@pytest.mark.parametrize("cores_y", [1, 4])
+def test_group_norm_streaming_stats_wrap_DRAM(device, enabled_program_cache, dtype, num_out_blocks, cores_y):
+    # One core's input exceeds L1. Odd CB sizes and partial final blocks make
+    # statistics batches split at wrap boundaries, including on the second batch.
+    N, C, groups = 2, 64, 2
+    HW = 16384 * max(1, cores_y // N)
+    grid = ttnn.CoreGrid(y=cores_y, x=1)
+    torch_dtype = torch.bfloat16 if dtype == ttnn.bfloat16 else torch.float32
+    weight = torch.linspace(0.75, 1.25, C).to(torch_dtype).float()
+    bias = torch.linspace(-0.25, 0.25, C).to(torch_dtype).float()
+    [gamma, beta], mask = ttnn.dram_group_norm_params_from_torch(
+        [weight, bias], C, groups, device, core_grid=grid, return_mask=True, dtype=dtype
+    )
+    config = ttnn.init_device_compute_kernel_config(
+        device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True
+    )
+    for seed in (13, 17):
+        torch.manual_seed(seed)
+        x = torch.randn((N, C, 1, HW)).to(torch_dtype).float()
+        reference = torch.nn.functional.group_norm(x, groups, weight, bias, eps=1e-5)
+        reference = reference.permute(0, 2, 3, 1).contiguous()
+        input_tensor = ttnn.from_torch(
+            x.permute(0, 2, 3, 1).contiguous(),
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        output = ttnn.group_norm(
+            input_tensor,
+            num_groups=groups,
+            input_mask=mask,
+            weight=gamma,
+            bias=beta,
+            epsilon=1e-5,
+            core_grid=grid,
+            num_out_blocks=num_out_blocks,
+            inplace=False,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            use_welford=True,
+            compute_kernel_config=config,
+        )
+        actual = ttnn.to_torch(output).float()
+        assert torch.isfinite(actual).all()
+        assert_numeric_metrics(reference, actual, atol=0.05, frobenius_threshold=0.01)
+        output.deallocate(force=True)
+        input_tensor.deallocate(force=True)
+
+
 GROUP_NORM_DRAM_SHAPES = [
     (9, 768, 1, 512, 32, 2, 8, 8),  # test batch size 9 (uneven batch sizes)
     (1, 480, 1, 64, 8, 1, 1, 1),  # test last group ends less than max tile span

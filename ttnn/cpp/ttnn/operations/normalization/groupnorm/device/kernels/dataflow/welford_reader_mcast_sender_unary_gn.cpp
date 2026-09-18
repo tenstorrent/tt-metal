@@ -13,6 +13,7 @@
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "two_pass_read_stats.h"
 
 void kernel_main() {
     constexpr std::uint32_t reduce_receiver_semaphore_id =
@@ -239,6 +240,9 @@ void kernel_main() {
     }
 
     std::uint32_t index_b_offset = 0;
+#if defined(ARCH_BLACKHOLE) && !defined(TILIZE_IN) && !defined(GN_DISTRIBUTED_AG)
+    const std::uint32_t input_ring_end = dfb_in0.get_write_ptr() + dfb_in0.get_total_size_bytes();
+#endif
     for (std::uint32_t b = 0; b < num_batches; ++b) {
         std::uint32_t mt_offset = 0;
         constexpr std::uint32_t num_stats_passes = sfpu_two_pass_l1_replay ? 1 : 2;
@@ -253,24 +257,40 @@ void kernel_main() {
                 }
 
 #if !defined(READER_REPACK) or !defined(TILIZE_IN)
-                for (std::uint32_t mt = 0; mt < out_block_h_actual; ++mt) {
-                    for (std::uint32_t nt = 0; nt < per_core_N; ++nt) {
-                        dfb_in0.reserve_back(1);
-                        const std::uint32_t l1_write_addr = dfb_in0.get_write_ptr();
-                        noc.async_read(
-                            src_a,
-                            CoreLocalMem<std::uint32_t>(l1_write_addr),
-                            src0_tile_bytes,
-                            {.page_id = start_id + index_b_offset + mt_offset + nt},
-                            {});
-                        noc.async_read_barrier();
-                        dfb_in0.push_back(1);
-                        if constexpr (welford_fp32_alias) {
-                            dfb_in0_welford.reserve_back(1);
-                            dfb_in0_welford.push_back(1);
+#if defined(ARCH_BLACKHOLE) && !defined(TILIZE_IN) && !defined(GN_DISTRIBUTED_AG)
+                if constexpr (!sfpu_two_pass_l1_replay) {
+                    read_two_pass_stats_block<per_core_N, src0_tile_bytes, welford_fp32_alias>(
+                        noc,
+                        src_a,
+                        dfb_in0,
+                        dfb_in0_welford,
+                        input_ring_end,
+                        start_id + index_b_offset + mt_offset,
+                        num_channels_tiles,
+                        out_block_h_actual);
+                    mt_offset += out_block_h_actual * num_channels_tiles;
+                } else
+#endif
+                {
+                    for (std::uint32_t mt = 0; mt < out_block_h_actual; ++mt) {
+                        for (std::uint32_t nt = 0; nt < per_core_N; ++nt) {
+                            dfb_in0.reserve_back(1);
+                            const std::uint32_t l1_write_addr = dfb_in0.get_write_ptr();
+                            noc.async_read(
+                                src_a,
+                                CoreLocalMem<std::uint32_t>(l1_write_addr),
+                                src0_tile_bytes,
+                                {.page_id = start_id + index_b_offset + mt_offset + nt},
+                                {});
+                            noc.async_read_barrier();
+                            dfb_in0.push_back(1);
+                            if constexpr (welford_fp32_alias) {
+                                dfb_in0_welford.reserve_back(1);
+                                dfb_in0_welford.push_back(1);
+                            }
                         }
+                        mt_offset += num_channels_tiles;
                     }
-                    mt_offset += num_channels_tiles;
                 }
 #endif
             }
