@@ -7,6 +7,7 @@
 #include <bit>
 #include <cstdint>
 #include <cstring>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -41,15 +42,18 @@
 //
 // Every other in-tree caller broadcasts into dst_index 0 right after an op that also targeted
 // tile 0, so the leftover offset happens to be correct and the bug stays latent. This test is the
-// minimal sequence that breaks the coincidence: copy_tile to DST[1], then unary_bcast<ROW> into
-// DST[0], one acquire, one core, one tile pair (see the compute kernel for the full walkthrough).
+// minimal sequence that breaks the coincidence: copy_tile to DST[1], then unary_bcast into DST[0],
+// one acquire, one core, one tile pair (see the compute kernel for the full walkthrough). All
+// three broadcast dimensions (ROW / COL / SCALAR) run, since all three sequences in that branch
+// share the same Dst addressing.
 //
-//   c_0 (Float16_b): a[r][c] = r + 1                       -> copied to DST[1]
-//   c_1 (Float32)  : b[0][c] = 100 + c, b[r>0][c] = 7      -> ROW-broadcast into DST[0]
+//   c_0 (Float16_b): a[r][c] = r + 1               -> copied to DST[1]
+//   c_1 (Float32)  : b[r][c] = 100 + r + 41*c      -> broadcast into DST[0]
 //   out (Float32)  : tile 0 = DST[0], tile 1 = DST[1]
 //
-//   expected: out0[r][c] = 100 + c (broadcast of b's row 0), out1[r][c] = r + 1 (copy untouched)
-//   bug:      out0 = raw b tile (rows 1..31 stay 7), out1 = broadcast of a's row 0 (all 1.0)
+//   expected: out0 = broadcast of b (ROW: b[0][c]; COL: b[r][0]; SCALAR: b[0][0]),
+//             out1[r][c] = r + 1 (copy untouched)
+//   bug:      out0 = raw b tile (never broadcast), out1 = broadcast of the COPIED tile over itself
 //
 // All stimulus values are integers, exactly representable in Float16_b and Float32 through every
 // conversion on the path, so the comparison is bit-exact.
@@ -75,7 +79,19 @@ std::vector<uint32_t> pack_bf16_as_u32(const std::vector<float>& in) {
     return out;
 }
 
-bool run_unpack_to_dest_bcast_dst_offset(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+// Matches BCAST_DIM_VAL in the compute kernel.
+enum class BcastDim : uint32_t { ROW = 0, COL = 1, SCALAR = 2 };
+
+const char* bcast_dim_name(BcastDim dim) {
+    switch (dim) {
+        case BcastDim::ROW: return "ROW";
+        case BcastDim::COL: return "COL";
+        case BcastDim::SCALAR: return "SCALAR";
+    }
+    return "?";
+}
+
+bool run_unpack_to_dest_bcast_dst_offset(const std::shared_ptr<distributed::MeshDevice>& mesh_device, BcastDim dim) {
     auto& cq = mesh_device->mesh_command_queue();
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
@@ -134,27 +150,34 @@ bool run_unpack_to_dest_bcast_dst_offset(const std::shared_ptr<distributed::Mesh
     std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
     unpack_to_dest_mode[tt::CBIndex::c_1] = UnpackToDestMode::UnpackToDestFp32;
 
+    std::map<std::string, std::string> compute_defines = {
+        {"BCAST_DIM_VAL", std::to_string(static_cast<uint32_t>(dim))}};
     tt_metal::CreateKernel(
         program_,
         "tests/tt_metal/tt_metal/test_kernels/compute/unpack_to_dest_row_bcast_after_copy.cpp",
         core,
         tt_metal::ComputeConfig{
-            .fp32_dest_acc_en = true, .unpack_to_dest_mode = unpack_to_dest_mode, .math_approx_mode = false});
+            .fp32_dest_acc_en = true,
+            .unpack_to_dest_mode = unpack_to_dest_mode,
+            .math_approx_mode = false,
+            .defines = compute_defines});
 
-    // Stimulus: integer values, exact in every format on the path.
+    // Stimulus: integer values, exact in every format on the path; every element of b is distinct
+    // so all three broadcast dimensions produce goldens that differ from the raw tile.
     std::vector<float> a_rm(kTileHW);  // c_0, copied to DST[1]
-    std::vector<float> b_rm(kTileHW);  // c_1, row 0 broadcast into DST[0]
+    std::vector<float> b_rm(kTileHW);  // c_1, broadcast into DST[0]
     for (uint32_t r = 0; r < 32; ++r) {
         for (uint32_t c = 0; c < 32; ++c) {
             a_rm[r * 32 + c] = static_cast<float>(r + 1);
-            b_rm[r * 32 + c] = (r == 0) ? static_cast<float>(100 + c) : 7.0f;
+            b_rm[r * 32 + c] = static_cast<float>(100 + r + 41 * c);
         }
     }
-    std::vector<float> golden0_rm(kTileHW);  // broadcast of b row 0
+    std::vector<float> golden0_rm(kTileHW);  // b broadcast along `dim`
     std::vector<float> golden1_rm(kTileHW);  // the copied a tile
     for (uint32_t r = 0; r < 32; ++r) {
         for (uint32_t c = 0; c < 32; ++c) {
-            golden0_rm[r * 32 + c] = static_cast<float>(100 + c);
+            const uint32_t src = (dim == BcastDim::ROW) ? (0 * 32 + c) : (dim == BcastDim::COL) ? (r * 32 + 0) : 0;
+            golden0_rm[r * 32 + c] = b_rm[src];
             golden1_rm[r * 32 + c] = static_cast<float>(r + 1);
         }
     }
@@ -225,11 +248,19 @@ bool run_unpack_to_dest_bcast_dst_offset(const std::shared_ptr<distributed::Mesh
 }  // namespace unit_tests::compute::unpack_to_dest_bcast
 
 TEST_F(LLKMeshDeviceFixture, TensixUnpackToDestRowBcastNonzeroDstOffset) {
+    using unit_tests::compute::unpack_to_dest_bcast::BcastDim;
     if (this->arch_ != tt::ARCH::WORMHOLE_B0 && this->arch_ != tt::ARCH::BLACKHOLE) {
         GTEST_SKIP() << "32-bit unpack-to-dest broadcast path exists on Wormhole B0 and Blackhole only";
     }
     for (auto& device : this->devices_) {
-        ASSERT_TRUE(unit_tests::compute::unpack_to_dest_bcast::run_unpack_to_dest_bcast_dst_offset(device));
+        for (BcastDim dim : {BcastDim::ROW, BcastDim::COL, BcastDim::SCALAR}) {
+            log_info(
+                tt::LogTest,
+                "unpack-to-dest {} broadcast into dst 0 after copy_tile into dst 1",
+                unit_tests::compute::unpack_to_dest_bcast::bcast_dim_name(dim));
+            EXPECT_TRUE(unit_tests::compute::unpack_to_dest_bcast::run_unpack_to_dest_bcast_dst_offset(device, dim))
+                << "bcast dim " << unit_tests::compute::unpack_to_dest_bcast::bcast_dim_name(dim);
+        }
     }
 }
 

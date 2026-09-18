@@ -14,30 +14,38 @@
 // Minimal reproducer for the stale-dest-offset bug in the 32-bit unpack-to-dest broadcast
 // (_llk_math_eltwise_unary_datacopy_, unpack_to_dest && is_32bit_input branch).
 //
+// The broadcast dimension is selected by the BCAST_DIM_VAL define (0 = ROW, 1 = COL, 2 = SCALAR):
+// all three sequences in that branch address Dst the same way, so all three are exposed.
+//
 // Sequence, all inside ONE tile_regs_acquire window:
 //
 //   (1) copy_tile(c_0 [Float16_b], 0, /*idst=*/1)
 //       Any SrcRegs-path datacopy: its set_dst_write_addr<..., UnpackDestination::SrcRegs>
 //       programs DEST_TARGET_REG_CFG_MATH_Offset to dest_bank_base + 1*64 and LEAVES it there.
 //
-//   (2) unary_bcast<ROW>(c_1 [Float32, UnpackToDestFp32], 0, /*idst=*/0)
+//   (2) unary_bcast<DIM>(c_1 [Float32, UnpackToDestFp32], 0, /*idst=*/0)
 //       The 32-bit unpack-to-dest broadcast. Its MOVD2B/MOVB2D sequence addresses Dst with
 //       immediates (dst_index*64 + row), and the hardware ADDS the math dest offset to every
 //       one of them -- but this branch never reprograms that offset (its
 //       set_dst_write_addr<..., UnpackDestination::DestReg> only mailboxes the write address
 //       to the UNPACKER).
 //
-// Expected:  DST[0] = row 0 of the c_1 tile replicated down all 32 rows; DST[1] = the copied
-//            c_0 tile, untouched.
+// Expected:  DST[0] = the c_1 tile broadcast along DIM; DST[1] = the copied c_0 tile, untouched.
 // Observed:  the broadcast is displaced by the stale +64 -- it reads its source rows from
 //            DST[1] (the copied c_0 tile) and broadcasts them back over DST[1], while DST[0]
 //            is left holding the raw, unbroadcast c_1 tile the unpacker deposited.
 //
 // Both DST slots are packed out (c_16, Float32) so the host sees the displacement directly.
 
+namespace {
+constexpr BroadcastType kBcastDim = (BCAST_DIM_VAL == 0)   ? BroadcastType::ROW
+                                    : (BCAST_DIM_VAL == 1) ? BroadcastType::COL
+                                                           : BroadcastType::SCALAR;
+}  // namespace
+
 void kernel_main() {
     constexpr auto cb_copy = tt::CBIndex::c_0;   // Float16_b data tile, copied to DST slot 1
-    constexpr auto cb_bcast = tt::CBIndex::c_1;  // Float32 bcast tile (UnpackToDestFp32), row 0 meaningful
+    constexpr auto cb_bcast = tt::CBIndex::c_1;  // Float32 bcast tile (UnpackToDestFp32)
     constexpr auto cb_out = tt::CBIndex::c_16;   // Float32, two tiles: DST[0] then DST[1]
 
     CircularBuffer copy_cb(cb_copy);
@@ -56,13 +64,13 @@ void kernel_main() {
     copy_init(cb_copy);
     copy_tile(cb_copy, 0, /*idst=*/1);
 
-    // (2) 32-bit unpack-to-dest ROW broadcast into dst index 0. The srcA reconfig retargets the
+    // (2) 32-bit unpack-to-dest broadcast into dst index 0. The srcA reconfig retargets the
     // unpacker between the two CBs' formats (Float16_b -> Float32) and back, exactly as a real
     // kernel interleaving the two ops would.
     reconfig_data_format_srca(cb_copy, cb_bcast);
-    unary_bcast_init<BroadcastType::ROW>(cb_bcast);
-    unary_bcast<BroadcastType::ROW>(cb_bcast, 0, /*idst=*/0);
-    unary_bcast_uninit<BroadcastType::ROW>(cb_bcast);
+    unary_bcast_init<kBcastDim>(cb_bcast);
+    unary_bcast<kBcastDim>(cb_bcast, 0, /*idst=*/0);
+    unary_bcast_uninit<kBcastDim>(cb_bcast);
     reconfig_data_format_srca(cb_bcast, cb_copy);
 
     tile_regs_commit();
