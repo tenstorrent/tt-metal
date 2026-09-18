@@ -10,8 +10,8 @@
 #include "experimental/kernel_args.h"
 
 void kernel_main() {
-    constexpr uint32_t per_core_block_cnt = get_arg(args::per_core_block_cnt);
-    constexpr uint32_t per_core_block_tile_cnt = get_arg(args::per_core_block_tile_cnt);
+    constexpr std::uint32_t per_core_block_cnt = get_arg(args::per_core_block_cnt);
+    constexpr std::uint32_t per_core_block_tile_cnt = get_arg(args::per_core_block_tile_cnt);
 
     DataflowBuffer dfb_in(dfb::in_data);
     DataflowBuffer dfb_in_scaler(dfb::in_scaler);
@@ -23,7 +23,7 @@ void kernel_main() {
 
     dfb_in_scaler.wait_front(1);
 
-    for (uint32_t b = 0; b < per_core_block_cnt; ++b) {
+    for (std::uint32_t b = 0; b < per_core_block_cnt; ++b) {
         dfb_in.wait_front(per_core_block_tile_cnt);
         dfb_out.reserve_back(per_core_block_tile_cnt);
         unpack_tilizeA_B_block<true /*neginf_srcA*/, true /*reload_srcB*/, false, false>(
@@ -31,7 +31,7 @@ void kernel_main() {
             dfb::in_scaler,
             per_core_block_tile_cnt,
             0 /*tile idx for Src b is 0 because only 1 scaler tile is loaded*/);
-        for (uint32_t i = 0; i < per_core_block_tile_cnt; ++i) {
+        for (std::uint32_t i = 0; i < per_core_block_tile_cnt; ++i) {
             tile_regs_acquire();
             reduce_tile_math<REDUCE_OP, REDUCE_DIM>(0);
             tile_regs_commit();
