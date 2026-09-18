@@ -326,6 +326,7 @@ void kernel_main() {
             // Raw tile pack so the parent can unpack the survivor straight back into DST.
             send.reserve_back(survivor_tiles);
             pack_untilize_uninit(send_cb);
+            pack_reconfig_data_format(send_cb);
             for (uint32_t tile = 0; tile < survivor_tiles; ++tile) {
                 pack_tile(final_survivor + tile, send_cb);
             }

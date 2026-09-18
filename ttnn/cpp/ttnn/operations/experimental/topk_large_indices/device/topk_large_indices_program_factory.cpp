@@ -346,7 +346,8 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
 
     const auto create_survivor_cb = [&](uint8_t cb) {
         const auto survivor_cb_config =
-            tt::tt_metal::CircularBufferConfig(survivor_bytes, {{cb, tt::DataFormat::Float32}})
+            // Raw 32 bit words: the index tiles are integers and must not pass through the float packer.
+            tt::tt_metal::CircularBufferConfig(survivor_bytes, {{cb, tt::DataFormat::UInt32}})
                 .set_page_size(cb, survivor_tile_bytes);
         tt::tt_metal::CreateCircularBuffer(program, all_cores, survivor_cb_config);
     };
