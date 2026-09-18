@@ -21,7 +21,9 @@ test-list:
       args-gen: gen_dtype_layout_device
       args:
         data-layout: ["TILE"]
-        data-type: ["BFLOAT16", "BFLOAT8_B"]
+        # BFLOAT8_B dropped: nextafter steps one ULP of the destination format, which a block-float
+        # tile cannot represent, so it is now rejected rather than scoring low.
+        data-type: ["BFLOAT16"]
         buffer-type: ["DRAM", "L1"]
         out-buffer-type: ["DRAM", "L1"]
       output-file: nextafter_sweep.csv
