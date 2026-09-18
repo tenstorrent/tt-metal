@@ -770,7 +770,7 @@
   test_group: module
   skus:
     bh_sc1:
-      timeout: 45
+      timeout: 30
       tier: 2
       release_ready: false
   owner_id: U09LK84G4TF  # Nikola Milicevic
