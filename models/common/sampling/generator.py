@@ -486,8 +486,10 @@ class SamplingGenerator:
         penalties_on: bool,
         tt_out_tok: Optional[ttnn.Tensor],
         count_tokens: bool = True,
+        allow_unprepared_full_vocab: bool = False,
     ):
-        contract = self._full_vocab_contract()
+        contract = self._full_vocab_contract(
+            allow_unprepared=allow_unprepared_full_vocab)
         raw_logits_snapshot = None
         raw_sampled_logprob_slots = self._raw_sampled_logprob_slots()
         if raw_sampled_logprob_slots:
@@ -562,10 +564,13 @@ class SamplingGenerator:
                 owned.extend(result.owned_tensors)
             self._deallocate_tensors(owned, protect=(raw_logits_snapshot, selected_token_ids, output))
 
-    def _full_vocab_contract(self):
+    def _full_vocab_contract(self, *, allow_unprepared=False):
         if not self._full_vocab_top_p_one_enabled:
             return None
         if self._full_vocab_params is None or self._active_sampling_slots is None:
+            if (allow_unprepared and self._full_vocab_params is None
+                    and self._active_sampling_slots is None):
+                return None
             raise RuntimeError("full-vocabulary routing requires params and explicit active scheduler slots")
         params = self._full_vocab_params
         batch = self.tt_sampling.max_batch_size
@@ -903,6 +908,7 @@ class SamplingGenerator:
         tt_out_tok: Optional[ttnn.Tensor] = None,
         skip_precompile: bool = False,
         count_tokens: bool = True,
+        allow_unprepared_full_vocab: bool = False,
     ) -> ttnn.Tensor:
         """
         Convenience wrapper that either runs the sampling module directly or
@@ -915,7 +921,8 @@ class SamplingGenerator:
         penalties_on = self._penalties_active
         log_probs_on = getattr(self, "_log_probs_active", False)
         force_argmax = self.tt_sampling.force_argmax_sampling
-        full_vocab_contract = self._full_vocab_contract()
+        full_vocab_contract = self._full_vocab_contract(
+            allow_unprepared=allow_unprepared_full_vocab)
         uses_full_vocab = full_vocab_contract is not None and full_vocab_contract.needs_full_vocabulary
         # Explicit request seeds update a persistent seed tensor every token;
         # run them directly so trace replay cannot observe stale seed state.
@@ -933,6 +940,7 @@ class SamplingGenerator:
                 penalties_on=penalties_on,
                 tt_out_tok=tt_out_tok,
                 count_tokens=count_tokens,
+                allow_unprepared_full_vocab=allow_unprepared_full_vocab,
             )
         else:
             key, slot = self._trace_slot(penalties_on, log_probs_on, force_argmax)

@@ -1537,6 +1537,27 @@ def test_sampling1d_logprobs_topk(ttnn_mesh_device):
     assert max_abs_error <= 5e-2, f"logprobs max abs error {max_abs_error:.6f} exceeds bf16 tolerance"
 
 
+def test_full_vocab_unprepared_controls_are_allowed_only_for_explicit_warmup():
+    from types import SimpleNamespace
+
+    from models.common.sampling.generator import SamplingGenerator
+
+    sampler = SimpleNamespace(
+        _full_vocab_top_p_one_enabled=True,
+        _full_vocab_params=None,
+        _active_sampling_slots=None,
+    )
+    assert SamplingGenerator._full_vocab_contract(
+        sampler, allow_unprepared=True) is None
+    with pytest.raises(RuntimeError, match="requires params"):
+        SamplingGenerator._full_vocab_contract(sampler)
+
+    sampler._full_vocab_params = object()
+    with pytest.raises(RuntimeError, match="requires params"):
+        SamplingGenerator._full_vocab_contract(
+            sampler, allow_unprepared=True)
+
+
 # ==============================================================================
 # Trace capture — on-device sampling under begin/end_trace_capture (N150/N300)
 # ==============================================================================
