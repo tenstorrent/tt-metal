@@ -86,17 +86,8 @@ void kernel_main() {
     constexpr std::uint32_t dfb_out0_id = tt::CBIndex::c_16;
 #ifdef UNTILIZE_OUT
     constexpr std::uint32_t dfb_out_id = tt::CBIndex::c_30;
-#else
-    // Exactly one of gamma/beta writes through dfb_in_id; both-or-neither goes to dfb_out0_id.
-    constexpr bool only_one_of_gamma_beta = do_gamma != do_beta;
-    constexpr std::uint32_t dfb_out_id = only_one_of_gamma_beta ? dfb_in_id : dfb_out0_id;
-#endif
-
-#ifdef UNTILIZE_OUT
-    constexpr int dfb_outgamma_id = dfb_in_id;
-    constexpr int dfb_outbeta_id = do_gamma ? dfb_out_id : dfb_in_id;
-    constexpr int dfb_untilize_in_no_gamma_id = do_beta ? dfb_outbeta_id : dfb_out_id;
-    constexpr int dfb_untilize_in_id = (do_gamma and not do_beta) ? dfb_outgamma_id : dfb_untilize_in_no_gamma_id;
+    // Gamma/beta land in dfb_x; untilize always reads dfb_out_id rather than dfb_in_id.
+    constexpr int dfb_untilize_in_id = dfb_out_id;
     constexpr int dfb_untilize_out_id =
 #ifdef READER_REPACK
         dfb_repack_out_id;
@@ -104,8 +95,9 @@ void kernel_main() {
         dfb_out0_id;
 #endif
 #else
-    constexpr int dfb_outgamma_id = do_beta ? dfb_in_id : dfb_out0_id;
-    constexpr int dfb_outbeta_id = dfb_out0_id;
+    // Exactly one of gamma/beta writes through dfb_in_id; both-or-neither goes to dfb_out0_id.
+    constexpr bool only_one_of_gamma_beta = do_gamma != do_beta;
+    constexpr std::uint32_t dfb_out_id = only_one_of_gamma_beta ? dfb_in_id : dfb_out0_id;
 #endif
 
     DataflowBuffer dfb_beta(dfb_beta_id);
