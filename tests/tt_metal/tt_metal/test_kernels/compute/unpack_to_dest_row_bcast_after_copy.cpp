@@ -16,11 +16,11 @@
 //
 // BCAST_DIM_VAL selects the operation under test: 0 = ROW, 1 = COL, 2 = SCALAR broadcast (all three
 // sequences in that branch address Dst the same way), 3 = NONE, i.e. a plain 32-bit unpack-to-dest
-// copy_tile. NONE matters on Blackhole only: its budabackend/#2730 ZEROACC zero-flag-clear loop runs
-// in this branch for every mode INCLUDING plain copies, with bank-local immediates that rely on the
-// math dest offset -- a displaced clear leaves the fresh tile's rows flagged zero (packs as zeros)
-// and force-clears flags on a neighboring, possibly pack-in-flight, tile. On Wormhole the NONE case
-// issues no math-side Dst access and passes with or without the fix.
+// copy_tile. Only the broadcast modes reproduce the bug; NONE is a smoke check that the plain copy
+// still lands correctly with a dirty offset, and passes with or without the fix on both
+// architectures. Blackhole's budabackend/#2730 ZEROACC zero-flag-clear loop does run in this branch
+// for every mode including plain copies, but it takes an absolute block index, so the stale offset
+// can only reach it through the bank half-select -- out of range for any tile-granular offset.
 //
 // Sequence, repeated NUM_ITERS_VAL times (each iteration is its own acquire, so the run alternates
 // dest banks and, from the second visit of a bank onward, lands on rows the packer has already
@@ -31,11 +31,10 @@
 //       programs DEST_TARGET_REG_CFG_MATH_Offset to dest_bank_base + 1*64 and LEAVES it there.
 //
 //   (2) unary_bcast<DIM>(c_1 [Float32, UnpackToDestFp32], 0, /*idst=*/0)   [or copy_tile for NONE]
-//       The 32-bit unpack-to-dest branch. Its math-side Dst accesses (broadcast MOVD2B/MOVB2D, and
-//       on Blackhole the ZEROACC flag clears) carry bank-local immediates, and the hardware ADDS
-//       the math dest offset to every one of them -- but this branch never reprograms that offset
-//       (its set_dst_write_addr<..., UnpackDestination::DestReg> only mailboxes the write address
-//       to the UNPACKER).
+//       The 32-bit unpack-to-dest branch. Its broadcast MOVD2B/MOVB2D carry bank-local immediates
+//       and the hardware ADDS the math dest offset to every one of them -- but this branch never
+//       reprograms that offset (its set_dst_write_addr<..., UnpackDestination::DestReg> only
+//       mailboxes the write address to the UNPACKER).
 //
 // Expected:  DST[0] = the c_1 tile broadcast along DIM (or copied verbatim for NONE);
 //            DST[1] = the copied c_0 tile, untouched.

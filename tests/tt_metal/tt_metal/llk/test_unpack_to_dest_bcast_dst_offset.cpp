@@ -45,13 +45,16 @@
 // minimal sequence that breaks the coincidence: copy_tile to DST[1], then a 32-bit unpack-to-dest
 // op into DST[0], one core, one tile pair per acquire (see the compute kernel for the full
 // walkthrough). Four modes run: the ROW / COL / SCALAR broadcasts (all three sequences in that
-// branch share the same Dst addressing) and NONE, a plain 32-bit unpack-to-dest copy_tile. NONE
-// guards the Blackhole-only exposure: BH's budabackend/#2730 ZEROACC zero-flag-clear loop runs in
-// this branch for plain copies too and consumes the same offset -- a displaced clear leaves the
-// fresh tile's rows flagged zero (packs as zeros). On Wormhole NONE issues no math-side Dst access
-// and passes with or without the fix. Each mode repeats the sequence over several acquires so it
-// visits both dest banks and, from a bank's second visit on, rows the packer has already drained
-// and re-flagged -- the state the displaced BH flag-clear corrupts.
+// branch share the same Dst addressing) and NONE, a plain 32-bit unpack-to-dest copy_tile.
+//
+// Only ROW / COL / SCALAR reproduce the bug. NONE is a smoke check that the plain 32-bit copy still
+// lands correctly with a dirty offset, not a regression guard on the fix -- it passes with or
+// without it on both architectures. With the broadcast sequence compiled out, the only instruction
+// left consuming the offset is Blackhole's budabackend/#2730 ZEROACC zero-flag-clear loop, and that
+// takes an absolute block index: the offset reaches it through the bank half-select alone, which no
+// tile-granular offset writer can flip (fp32 dest tops out at 192 + 15 against a 512-row bank).
+// Each mode repeats the sequence over several acquires so it runs against both dest banks, i.e.
+// both values of get_dest_buffer_base().
 //
 //   c_0 (Float16_b): a[r][c] = r + 1               -> copied to DST[1]
 //   c_1 (Float32)  : b[r][c] = 100 + r + 41*c      -> broadcast/copied into DST[0]
@@ -69,8 +72,8 @@ namespace tt::tt_metal {
 namespace unit_tests::compute::unpack_to_dest_bcast {
 
 constexpr uint32_t kTileHW = 32 * 32;
-// Acquire/pack iterations per run: enough to visit both dest banks twice, so every mode also runs
-// against rows the packer already drained and zero-flagged (see the header note on Blackhole).
+// Acquire/pack iterations per run: enough to visit both dest banks twice, so every mode runs
+// against both values of get_dest_buffer_base() and against rows the packer has already drained.
 constexpr uint32_t kIters = 4;
 
 std::vector<uint32_t> reinterpret_fp32_as_u32(const std::vector<float>& in) {
@@ -184,13 +187,18 @@ bool run_unpack_to_dest_bcast_dst_offset(const std::shared_ptr<distributed::Mesh
     }
     std::vector<float> golden0_rm(kTileHW);  // b broadcast along `dim` (NONE: b copied verbatim)
     std::vector<float> golden1_rm(kTileHW);  // the copied a tile
+    auto bcast_src_index = [dim](uint32_t r, uint32_t c) -> uint32_t {
+        switch (dim) {
+            case BcastDim::ROW: return 0 * 32 + c;
+            case BcastDim::COL: return r * 32 + 0;
+            case BcastDim::SCALAR: return 0;
+            case BcastDim::NONE: return r * 32 + c;
+        }
+        return 0;
+    };
     for (uint32_t r = 0; r < 32; ++r) {
         for (uint32_t c = 0; c < 32; ++c) {
-            const uint32_t src = (dim == BcastDim::ROW)    ? (0 * 32 + c)
-                                 : (dim == BcastDim::COL)  ? (r * 32 + 0)
-                                 : (dim == BcastDim::NONE) ? (r * 32 + c)
-                                                           : 0;
-            golden0_rm[r * 32 + c] = b_rm[src];
+            golden0_rm[r * 32 + c] = b_rm[bcast_src_index(r, c)];
             golden1_rm[r * 32 + c] = static_cast<float>(r + 1);
         }
     }

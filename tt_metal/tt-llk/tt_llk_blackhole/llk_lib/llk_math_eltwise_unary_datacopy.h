@@ -54,6 +54,7 @@ inline void _llk_math_eltwise_unary_datacopy_(
 
         // Pin the math dest offset to the bank base: hardware adds it to the bank-local ZEROACC and
         // MOVD2B/MOVB2D immediates below, and a preceding op may have left another tile's offset here.
+        // TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::get_dest_buffer_base());
         TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::get_dest_buffer_base());
 
         // Due to bug in Blackhole Tensix (more details in budabackend/#2730) when an event with side effect of clearing DEST zero flags
