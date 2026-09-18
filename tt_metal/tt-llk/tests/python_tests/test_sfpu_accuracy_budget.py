@@ -496,6 +496,241 @@ _EXPECTED_BUDGET = {
         DataFormat.Float16_b: None,
         DataFormat.Float16: None,
     },
+    MathOperation.Fill: {
+        DataFormat.Float32: 0,
+        DataFormat.Float16_b: 0,
+        DataFormat.Float16: 0,
+    },
+    MathOperation.Threshold: {
+        DataFormat.Float32: 0,
+        DataFormat.Float16_b: 0,
+        DataFormat.Float16: 0,
+    },
+    MathOperation.Isfinite: {
+        # The is_*/predicate sweeps drive Float32 and Float16_b only, so fp16 falls back to tolerance.
+        DataFormat.Float32: 0,
+        DataFormat.Float16_b: 0,
+        DataFormat.Float16: None,
+    },
+    MathOperation.Isinf: {
+        DataFormat.Float32: 0,
+        DataFormat.Float16_b: 0,
+        DataFormat.Float16: None,
+    },
+    MathOperation.Isnan: {
+        DataFormat.Float32: 0,
+        DataFormat.Float16_b: 0,
+        DataFormat.Float16: None,
+    },
+    MathOperation.Isneginf: {
+        DataFormat.Float32: 0,
+        DataFormat.Float16_b: 0,
+        DataFormat.Float16: None,
+    },
+    MathOperation.Isposinf: {
+        DataFormat.Float32: 0,
+        DataFormat.Float16_b: 0,
+        DataFormat.Float16: None,
+    },
+    MathOperation.LogicalNot: {
+        DataFormat.Float32: 0,
+        DataFormat.Float16_b: 0,
+        DataFormat.Float16: None,
+    },
+    MathOperation.Signbit: {
+        DataFormat.Float32: 0,
+        DataFormat.Float16_b: 0,
+        DataFormat.Float16: None,
+    },
+    MathOperation.UnaryEq: {
+        DataFormat.Float32: 0,
+        DataFormat.Float16_b: 0,
+        DataFormat.Float16: None,
+    },
+    MathOperation.UnaryNe: {
+        DataFormat.Float32: 0,
+        DataFormat.Float16_b: 0,
+        DataFormat.Float16: None,
+    },
+    MathOperation.ReluMax: {
+        DataFormat.Float32: 0,
+        DataFormat.Float16_b: 1,
+        DataFormat.Float16: 1,
+    },
+    MathOperation.ReluMin: {
+        DataFormat.Float32: 0,
+        DataFormat.Float16_b: 1,
+        DataFormat.Float16: 1,
+    },
+    MathOperation.Frac: {
+        # fp16 measured 384 steps, past its 51-step usable ceiling, so tolerance.
+        DataFormat.Float32: 0,
+        DataFormat.Float16_b: 1,
+        DataFormat.Float16: None,
+    },
+    MathOperation.Sign: {
+        # -0.0 diverges by hardware design; see ONLY_EVER_TOLERANCE.
+        DataFormat.Float32: None,
+        DataFormat.Float16_b: None,
+        DataFormat.Float16: None,
+    },
+    MathOperation.Heaviside: {
+        DataFormat.Float32: None,
+        DataFormat.Float16_b: None,
+        DataFormat.Float16: None,
+    },
+    MathOperation.GeluTanh: {
+        # Past the ceiling on every column; see ONLY_EVER_TOLERANCE.
+        DataFormat.Float32: None,
+        DataFormat.Float16_b: None,
+        DataFormat.Float16: None,
+    },
+    MathOperation.Tanhshrink: {
+        DataFormat.Float32: None,
+        DataFormat.Float16_b: None,
+        DataFormat.Float16: None,
+    },
+    MathOperation.ReciprocalCompat: {
+        # Not swept on a Float16 output, which falls back to tolerance.
+        DataFormat.Float32: 81920,
+        DataFormat.Float16_b: 1,
+        DataFormat.Float16: None,
+    },
+    MathOperation.SqrtCustom: {
+        DataFormat.Float32: 81920,
+        DataFormat.Float16_b: 1,
+        DataFormat.Float16: None,
+    },
+    MathOperation.SfpuElwEq: {
+        DataFormat.Float32: 0,
+        DataFormat.Float16_b: 0,
+        DataFormat.Float16: 0,
+    },
+    MathOperation.SfpuElwNe: {
+        DataFormat.Float32: 0,
+        DataFormat.Float16_b: 0,
+        DataFormat.Float16: 0,
+    },
+    MathOperation.SfpuElwGt: {
+        DataFormat.Float32: 0,
+        DataFormat.Float16_b: 0,
+        DataFormat.Float16: 0,
+    },
+    MathOperation.SfpuElwGe: {
+        DataFormat.Float32: 0,
+        DataFormat.Float16_b: 0,
+        DataFormat.Float16: 0,
+    },
+    MathOperation.SfpuElwLt: {
+        DataFormat.Float32: 0,
+        DataFormat.Float16_b: 0,
+        DataFormat.Float16: 0,
+    },
+    MathOperation.SfpuElwLe: {
+        DataFormat.Float32: 0,
+        DataFormat.Float16_b: 0,
+        DataFormat.Float16: 0,
+    },
+    MathOperation.SfpuIsclose: {
+        # Not swept on a Float16 output, which falls back to tolerance.
+        DataFormat.Float32: 0,
+        DataFormat.Float16_b: 0,
+        DataFormat.Float16: None,
+    },
+    MathOperation.SfpuMask: {
+        DataFormat.Float32: 0,
+        DataFormat.Float16_b: 0,
+        DataFormat.Float16: None,
+    },
+    MathOperation.SfpuBinaryMax: {
+        DataFormat.Float32: 0,
+        DataFormat.Float16_b: 1,
+        DataFormat.Float16: 1,
+    },
+    MathOperation.SfpuBinaryMin: {
+        DataFormat.Float32: 0,
+        DataFormat.Float16_b: 1,
+        DataFormat.Float16: 1,
+    },
+    MathOperation.SfpuAddTopRow: {
+        # Float32 is the whole sweep for this op.
+        DataFormat.Float32: 0,
+        DataFormat.Float16_b: None,
+        DataFormat.Float16: None,
+    },
+    MathOperation.SfpuElwadd: {
+        DataFormat.Float32: 81920,
+        DataFormat.Float16_b: 1,
+        DataFormat.Float16: 1,
+    },
+    MathOperation.SfpuElwsub: {
+        # fp16 is past its 51-step ceiling, so it falls back to tolerance.
+        DataFormat.Float32: 81920,
+        DataFormat.Float16_b: 1,
+        DataFormat.Float16: None,
+    },
+    MathOperation.SfpuElwrsub: {
+        # fp16 is past its 51-step ceiling, so it falls back to tolerance.
+        DataFormat.Float32: 81920,
+        DataFormat.Float16_b: 1,
+        DataFormat.Float16: None,
+    },
+    MathOperation.SfpuElwdiv: {
+        # The dedicated div sweep is harder than the shared one; fp16 is past its ceiling.
+        DataFormat.Float32: 40960,
+        DataFormat.Float16_b: 1,
+        DataFormat.Float16: None,
+    },
+    MathOperation.SfpuElwmul: {
+        # Past the ceiling on every column; see ONLY_EVER_TOLERANCE.
+        DataFormat.Float32: None,
+        DataFormat.Float16_b: None,
+        DataFormat.Float16: None,
+    },
+    MathOperation.SfpuAtan2: {
+        # Not swept on a Float16 output, which falls back to tolerance.
+        DataFormat.Float32: 81920,
+        DataFormat.Float16_b: 1,
+        DataFormat.Float16: None,
+    },
+    MathOperation.SfpuLogsigmoid: {
+        DataFormat.Float32: 163840,
+        DataFormat.Float16_b: 2,
+        DataFormat.Float16: None,
+    },
+    MathOperation.SfpuBinaryFmod: {
+        # fp16 is past its 51-step ceiling, so it falls back to tolerance.
+        DataFormat.Float32: 40960,
+        DataFormat.Float16_b: 1,
+        DataFormat.Float16: None,
+    },
+    MathOperation.SfpuBinaryRemainder: {
+        # fp16 is past its 51-step ceiling, so it falls back to tolerance.
+        DataFormat.Float32: 40960,
+        DataFormat.Float16_b: 1,
+        DataFormat.Float16: None,
+    },
+    MathOperation.SfpuAddcmul: {
+        # Ternary sweep drives Float32 and Float16_b only.
+        DataFormat.Float32: 120,
+        DataFormat.Float16_b: 1,
+        DataFormat.Float16: None,
+    },
+    MathOperation.SfpuAddcdiv: {
+        DataFormat.Float32: 1600,
+        DataFormat.Float16_b: 1,
+        DataFormat.Float16: None,
+    },
+    MathOperation.SfpuLerp: {
+        DataFormat.Float32: 3840,
+        DataFormat.Float16_b: 1,
+        DataFormat.Float16: None,
+    },
+    MathOperation.SfpuSnakeBeta: {
+        DataFormat.Float32: 5,
+        DataFormat.Float16_b: 1,
+        DataFormat.Float16: None,
+    },
     MathOperation.SfpuElwpow: {
         DataFormat.Float32: None,
         DataFormat.Float16_b: None,
@@ -520,6 +755,14 @@ _EXPECTED_TOLERANCE = {
         DataFormat.Float16_b: (0.6, None),
         DataFormat.Float16: (0.12, None),
     },
+    # Sign/Heaviside declare the metric and no numbers: the per-format default is the
+    # right bound, and what the row records is the -0.0 divergence that keeps them here.
+    MathOperation.Sign: {fmt: (None, None) for fmt in ULP_FORMATS},
+    MathOperation.Heaviside: {fmt: (None, None) for fmt in ULP_FORMATS},
+    # Past the usable ceiling on every float column; the per-format default applies.
+    MathOperation.GeluTanh: {fmt: (None, None) for fmt in ULP_FORMATS},
+    MathOperation.Tanhshrink: {fmt: (None, None) for fmt in ULP_FORMATS},
+    MathOperation.SfpuElwmul: {fmt: (None, None) for fmt in ULP_FORMATS},
 }
 
 
@@ -975,6 +1218,15 @@ ONLY_EVER_TOLERANCE = frozenset(
         MathOperation.GeluAppx,
         MathOperation.SfpuElwpow,
         MathOperation.SfpuXlogy,
+        # Exact except on -0.0, where WH's bit-pattern compare diverges by design. A
+        # 0-ULP budget would fail a kernel that is behaving as specified.
+        MathOperation.Sign,
+        MathOperation.Heaviside,
+        # Past the usable ceiling on every float column, so the tolerance they would
+        # replace is the tighter bound. Measurements are on their YAML rows.
+        MathOperation.GeluTanh,
+        MathOperation.Tanhshrink,
+        MathOperation.SfpuElwmul,
     }
 )
 
@@ -1430,6 +1682,29 @@ def test_a_key_that_names_an_architecture_binds_on_it(arch):
         del table[pinned]
 
 
+#: Ops whose budget was measured on the hand-built sweep that drives them, rather than on
+#: the standard random sweep. Each was run under ``--ulp-report`` on that sweep's own
+#: stimulus on Wormhole, 2026-09-18; the per-format counts are in the YAML row comments.
+#: Enrolling a further op from one of these sweeps means measuring it there first.
+MEASURED_ON_SWEEP = {
+    "signbit": {MathOperation.Signbit},
+    "isinf_isnan": {
+        MathOperation.Isinf,
+        MathOperation.Isposinf,
+        MathOperation.Isneginf,
+        MathOperation.Isnan,
+        MathOperation.Isfinite,
+    },
+    "threshold": {
+        MathOperation.LogicalNot,
+        MathOperation.UnaryEq,
+        MathOperation.UnaryNe,
+        MathOperation.ReluMin,
+        MathOperation.ReluMax,
+    },
+}
+
+
 def test_no_enrolled_op_is_driven_by_a_sweep_that_was_never_measured():
     """The enrolment rule names five stimulus sources; three of them are hand-built specs
     that no recorded measurement covers.
@@ -1443,19 +1718,22 @@ def test_no_enrolled_op_is_driven_by_a_sweep_that_was_never_measured():
     """
     from test_eltwise_unary_sfpu import _THRESHOLD_OPS, ISINF_ISNAN_MATHOPS
 
-    unmeasured = {
+    hand_built = {
         # The signbit sweep is not parametrised over a list; it drives this one op.
         "signbit": {MathOperation.Signbit},
         "isinf_isnan": set(ISINF_ISNAN_MATHOPS),
         "threshold": set(_THRESHOLD_OPS),
     }
-    assert all(unmeasured.values()), "a sweep set went empty; the derivation has broken"
+    assert all(hand_built.values()), "a sweep set went empty; the derivation has broken"
 
     enrolled = set(enrolled_ops())
-    for sweep, ops in sorted(unmeasured.items()):
-        overlap = sorted(op.name for op in enrolled & ops)
-        assert not overlap, (
-            f"{', '.join(overlap)} carries a budget but is driven by the {sweep} sweep, "
-            "whose hand-built stimulus no recorded measurement covers. Measure it there "
-            "before enrolling, or key the budget away from the formats it reaches."
+    for sweep, ops in sorted(hand_built.items()):
+        unrecorded = sorted(
+            op.name for op in (enrolled & ops) - MEASURED_ON_SWEEP[sweep]
+        )
+        assert not unrecorded, (
+            f"{', '.join(unrecorded)} carries a budget but is driven by the {sweep} "
+            "sweep, whose hand-built stimulus no recorded measurement covers. Measure it "
+            "there and add it to MEASURED_ON_SWEEP, or key the budget away from the "
+            "formats it reaches."
         )
