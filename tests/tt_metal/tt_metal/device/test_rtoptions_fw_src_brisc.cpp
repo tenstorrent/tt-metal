@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// TT_METAL_FW_SRC_BRISC selects a feature variant of the in-tree BRISC firmware. Only the JIT build can use it, so a
+// TT_METAL_FW_SRC_BRISC selects a BRISC firmware extension. Only the JIT build can use it, so a
 // non-empty value also disables the precompiled firmware: the two switches cannot disagree, and a caller does not have
 // to remember a second variable.
 
@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <filesystem>
 #include <optional>
 #include <string>
 #include <vector>
@@ -42,18 +43,27 @@ private:
     std::optional<std::string> old_;
 };
 
+std::string test_header_path() {
+    return std::filesystem::absolute(
+               std::filesystem::path(__FILE__).parent_path() / "../../../../tt_metal/hw/inc/internal/runtime_reload.h")
+        .lexically_normal()
+        .string();
+}
+
 }  // namespace
 
 TEST(RunTimeOptionsFirmwareSource, CPU_BlazeVariantImpliesThePrecompiledFirmwareBypass) {
     ScopedEnv src("TT_METAL_FW_SRC_BRISC", "blaze");
+    ScopedEnv header("TT_METAL_FW_HEADER_BRISC", test_header_path());
     ScopedEnv bypass("TT_METAL_DISABLE_PRECOMPILED_FW", std::nullopt);
     tt::llrt::RunTimeOptions opts;
     EXPECT_EQ(opts.get_brisc_firmware_variant(), tt::llrt::BriscFirmwareVariant::Blaze);
     EXPECT_TRUE(opts.get_disable_precompiled_fw()) << "a source override without the bypass would run stock firmware";
 }
 
-TEST(RunTimeOptionsFirmwareSource, CPU_NoOverrideLeavesTheInTreeSourceAndPrecompiledFirmware) {
+TEST(RunTimeOptionsFirmwareSource, CPU_NoOverrideLeavesTheStockFirmwareAndPrecompiledFirmware) {
     ScopedEnv src("TT_METAL_FW_SRC_BRISC", std::nullopt);
+    ScopedEnv header("TT_METAL_FW_HEADER_BRISC", std::nullopt);
     ScopedEnv bypass("TT_METAL_DISABLE_PRECOMPILED_FW", std::nullopt);
     tt::llrt::RunTimeOptions opts;
     EXPECT_EQ(opts.get_brisc_firmware_variant(), tt::llrt::BriscFirmwareVariant::Default);
@@ -62,26 +72,49 @@ TEST(RunTimeOptionsFirmwareSource, CPU_NoOverrideLeavesTheInTreeSourceAndPrecomp
 
 TEST(RunTimeOptionsFirmwareSource, CPU_AnEmptyOverrideIsNoOverride) {
     ScopedEnv src("TT_METAL_FW_SRC_BRISC", "");
+    ScopedEnv header("TT_METAL_FW_HEADER_BRISC", std::nullopt);
     ScopedEnv bypass("TT_METAL_DISABLE_PRECOMPILED_FW", std::nullopt);
     tt::llrt::RunTimeOptions opts;
     EXPECT_EQ(opts.get_brisc_firmware_variant(), tt::llrt::BriscFirmwareVariant::Default);
     EXPECT_FALSE(opts.get_disable_precompiled_fw());
 }
 
+TEST(RunTimeOptionsFirmwareSource, CPU_BlazeVariantRequiresAHeader) {
+    ScopedEnv src("TT_METAL_FW_SRC_BRISC", "blaze");
+    ScopedEnv header("TT_METAL_FW_HEADER_BRISC", std::nullopt);
+    EXPECT_ANY_THROW(tt::llrt::RunTimeOptions{});
+}
+
+TEST(RunTimeOptionsFirmwareSource, CPU_HeaderRequiresTheBlazeVariant) {
+    ScopedEnv src("TT_METAL_FW_SRC_BRISC", std::nullopt);
+    ScopedEnv header("TT_METAL_FW_HEADER_BRISC", test_header_path());
+    EXPECT_ANY_THROW(tt::llrt::RunTimeOptions{});
+}
+
+TEST(RunTimeOptionsFirmwareSource, CPU_MissingHeaderIsRejected) {
+    ScopedEnv src("TT_METAL_FW_SRC_BRISC", "blaze");
+    ScopedEnv header("TT_METAL_FW_HEADER_BRISC", "/missing/runtime_reload.h");
+    EXPECT_ANY_THROW(tt::llrt::RunTimeOptions{});
+}
+
 TEST(RunTimeOptionsFirmwareSource, CPU_ArbitrarySourcePathIsRejected) {
     ScopedEnv src("TT_METAL_FW_SRC_BRISC", "/somewhere/else/brisc.cc");
+    ScopedEnv header("TT_METAL_FW_HEADER_BRISC", std::nullopt);
     EXPECT_ANY_THROW(tt::llrt::RunTimeOptions{});
 }
 
 TEST(RunTimeOptionsFirmwareSource, CPU_UnsupportedTtLangVariantIsRejected) {
     ScopedEnv src("TT_METAL_FW_SRC_BRISC", "ttlang");
+    ScopedEnv header("TT_METAL_FW_HEADER_BRISC", std::nullopt);
     EXPECT_ANY_THROW(tt::llrt::RunTimeOptions{});
 }
 
 TEST(RunTimeOptionsFirmwareSource, CPU_BlazeVariantHasASeparateCompileHash) {
     ScopedEnv src("TT_METAL_FW_SRC_BRISC", std::nullopt);
+    ScopedEnv header("TT_METAL_FW_HEADER_BRISC", std::nullopt);
     tt::llrt::RunTimeOptions stock;
     ScopedEnv blaze_src("TT_METAL_FW_SRC_BRISC", "blaze");
+    ScopedEnv blaze_header("TT_METAL_FW_HEADER_BRISC", test_header_path());
     tt::llrt::RunTimeOptions blaze;
     EXPECT_NE(stock.get_compile_hash_string(), blaze.get_compile_hash_string());
 }
@@ -89,8 +122,10 @@ TEST(RunTimeOptionsFirmwareSource, CPU_BlazeVariantHasASeparateCompileHash) {
 TEST(RunTimeOptionsFirmwareSource, CPU_BlazeDefineOnlyAppliesToBriscFirmware) {
     using namespace tt::tt_metal;
     ScopedEnv src("TT_METAL_FW_SRC_BRISC", std::nullopt);
+    ScopedEnv header("TT_METAL_FW_HEADER_BRISC", std::nullopt);
     tt::llrt::RunTimeOptions stock;
     ScopedEnv blaze_src("TT_METAL_FW_SRC_BRISC", "blaze");
+    ScopedEnv blaze_header("TT_METAL_FW_HEADER_BRISC", test_header_path());
     tt::llrt::RunTimeOptions blaze;
     for (const auto arch : {tt::ARCH::WORMHOLE_B0, tt::ARCH::BLACKHOLE}) {
         const Hal hal(arch, false, false, 0, false);

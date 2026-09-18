@@ -34,7 +34,11 @@
 #include "api/debug/device_print.h"
 #include "internal/debug/stack_usage.h"
 #include "api/debug/checkpoint.h"
+#if defined(BLAZE_RUNTIME_RELOAD)
+#include "runtime_reload.h"
+#else
 #include "internal/runtime_reload.h"
+#endif
 
 // clang-format on
 

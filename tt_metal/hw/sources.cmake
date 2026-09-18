@@ -226,7 +226,6 @@ set(HW_JIT_API_HEADERS
     inc/hostdev/remote_dfb_config_layout.h
     inc/hostdev/streaming_profiler_common.h
     inc/hostdev/rta_constants.h
-    inc/hostdev/runtime_reload_abi.h
     inc/hostdev/socket.h
     inc/internal/hw_thread.h
     inc/internal/atomic_rwptr.h

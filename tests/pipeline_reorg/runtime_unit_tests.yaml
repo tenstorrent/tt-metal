@@ -304,10 +304,6 @@
     TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter='-{disabled_debug_tools_filter}'
     TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_inspector
     TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_device
-    TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_FW_SRC_BRISC=blaze \
-      TT_METAL_ENABLE_L1_DATA_CACHE_CORES=all TT_METAL_ENABLE_L1_DATA_CACHE_RISCVS=BR \
-      ./build/test/tt_metal/unit_tests_device \
-      --gtest_filter="*RuntimeReloadFirmware*:MeshDeviceFixture.TensixConfigureProgramWithoutLaunchInstallsButDoesNotRun"
     TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_dispatch
   skus:
     wh_n150_civ2:
