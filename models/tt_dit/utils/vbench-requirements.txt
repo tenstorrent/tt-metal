@@ -1,6 +1,6 @@
 # Dependencies required by models/tt_dit/utils/vbench.py to run the VBench
 # quality gate on generated video. Used by the wan2.2 demo tests; without these
-# installed, assert_vbench_quality() silently skips (see vbench.py).
+# installed, assert_vbench_quality() fails the requested gate (see vbench.py).
 #
 # Install on top of the dev env, after ./create_venv.sh:
 #
