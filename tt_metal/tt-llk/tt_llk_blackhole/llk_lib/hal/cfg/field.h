@@ -128,5 +128,22 @@ private:
     }
 };
 
+/**
+ * @brief Extract the selected field from a CFG register word.
+ *
+ * Uses field F in section S to select the bits from word and return the
+ * field value shifted down to bit zero.
+ * Example: if the selected field occupies bits 11:8, 0xABCD -> 0x000B.
+ */
+template <const Field& F, Sec S>
+inline constexpr std::uint32_t extract(const std::uint32_t word)
+{
+    static_assert(F.width <= 32, "field wider than 32b cannot be extracted from a single value");
+    static_assert(F.has(S), "section index out of range for this register");
+    static_assert(!F.has(S) || F.shamt(S) + F.width <= F.word_size, "field crosses a CFG word boundary");
+
+    return (word & F.mask(S)) >> F.shamt(S);
+}
+
 } // namespace cfg
 } // namespace hal
