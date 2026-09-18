@@ -12,6 +12,113 @@
 using namespace tt::tt_metal;
 
 namespace ttnn::operations::unary {
+namespace {
+
+bool is_integer_dtype(DataType dtype) {
+    return dtype == DataType::INT32 || dtype == DataType::UINT32 || dtype == DataType::UINT16 ||
+           dtype == DataType::UINT8 || dtype == DataType::INT8;
+}
+
+// Ops with no integer init/LLK in unary_op_utils.cpp. IDENTITY/BITCAST/TYPECAST, bitwise,
+// integer LLKs, and LEAKY_RELU (unsigned identity) are not listed.
+bool floating_point_dtype_ops(UnaryOpType op_type) {
+    switch (op_type) {
+        case UnaryOpType::ABS:
+        case UnaryOpType::ACOS:
+        case UnaryOpType::ACOSH:
+        case UnaryOpType::ALT_COMPLEX_ROTATE90:
+        case UnaryOpType::ASIN:
+        case UnaryOpType::ASINH:
+        case UnaryOpType::ATAN:
+        case UnaryOpType::ATANH:
+        case UnaryOpType::CBRT:
+        case UnaryOpType::CEIL:
+        case UnaryOpType::CELU:
+        case UnaryOpType::COS:
+        case UnaryOpType::COSH:
+        case UnaryOpType::DIGAMMA:
+        case UnaryOpType::DIV_UNARY_SFPU:
+        case UnaryOpType::DROPOUT:
+        case UnaryOpType::ELU:
+        case UnaryOpType::ERF:
+        case UnaryOpType::ERFC:
+        case UnaryOpType::ERFINV:
+        case UnaryOpType::EXP:
+        case UnaryOpType::EXP2:
+        case UnaryOpType::EXPM1:
+        case UnaryOpType::FLOOR:
+        case UnaryOpType::FMOD:
+        case UnaryOpType::FRAC:
+        case UnaryOpType::GELU:
+        case UnaryOpType::GELU_TANH:
+        case UnaryOpType::HARDMISH:
+        case UnaryOpType::HARDSHRINK:
+        case UnaryOpType::HARDSIGMOID:
+        case UnaryOpType::HARDSWISH:
+        case UnaryOpType::HARDTANH:
+        case UnaryOpType::HEAVISIDE:
+        case UnaryOpType::I0:
+        case UnaryOpType::I1:
+        case UnaryOpType::ISFINITE:
+        case UnaryOpType::ISINF:
+        case UnaryOpType::ISNAN:
+        case UnaryOpType::ISNEGINF:
+        case UnaryOpType::ISPOSINF:
+        case UnaryOpType::LGAMMA:
+        case UnaryOpType::LOG:
+        case UnaryOpType::LOG10:
+        case UnaryOpType::LOG1P:
+        case UnaryOpType::LOG2:
+        case UnaryOpType::LOGIT:
+        case UnaryOpType::LOGSIGMOID:
+        case UnaryOpType::MAC_TSS:
+        case UnaryOpType::MISH:
+        case UnaryOpType::MUL_UNARY_SFPU:
+        case UnaryOpType::POLYGAMMA:
+        case UnaryOpType::POWER:
+        case UnaryOpType::POWER_ITERATIVE:
+        case UnaryOpType::PRELU_SFPU:
+        case UnaryOpType::RDIV:
+        case UnaryOpType::RECIP:
+        case UnaryOpType::ROUND:
+        case UnaryOpType::RPOW:
+        case UnaryOpType::RSQRT:
+        case UnaryOpType::SELU:
+        case UnaryOpType::SIGMOID:
+        case UnaryOpType::SIGN:
+        case UnaryOpType::SILU:
+        case UnaryOpType::SIN:
+        case UnaryOpType::SINH:
+        case UnaryOpType::SOFTCAP:
+        case UnaryOpType::SOFTPLUS:
+        case UnaryOpType::SOFTSHRINK:
+        case UnaryOpType::SOFTSIGN:
+        case UnaryOpType::SQRT:
+        case UnaryOpType::TAN:
+        case UnaryOpType::TANH:
+        case UnaryOpType::TANHSHRINK:
+        case UnaryOpType::THRESHOLD:
+        case UnaryOpType::TILED_PROD:
+        case UnaryOpType::TRUNC:
+        case UnaryOpType::XIELU: return true;
+        default: return false;
+    }
+}
+
+void validate_integer_input_dtype(const std::vector<EltwiseUnaryWithParam>& op_chain, DataType input_dtype) {
+    if (!is_integer_dtype(input_dtype)) {
+        return;
+    }
+    for (const auto& op : op_chain) {
+        TT_FATAL(
+            !floating_point_dtype_ops(op.type()),
+            "Unary: {} does not support integer input dtype {}",
+            op.type(),
+            input_dtype);
+    }
+}
+
+}  // namespace
 
 ttsl::hash::hash_t UnaryDeviceOperation::operation_attributes_t::to_hash() const {
     return ttsl::hash::hash_objects_with_default_seed(
@@ -43,6 +150,8 @@ void UnaryDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         input_tensor.buffer() != nullptr,
         "Unary: Operands need to be allocated in buffers on the device. Buffer is null.");
+
+    validate_integer_input_dtype(args.op_chain, input_tensor.dtype());
 
     for (const auto& op : args.op_chain) {
         if (op.type() == operations::unary::UnaryOpType::LGAMMA) {
