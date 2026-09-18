@@ -30,10 +30,6 @@ class GLM52Config:
     # count and activation, and this model matches 5.1 on all of them (6144x2048, 256 experts,
     # top-8, no pre-projection, SiLU). Re-measure if any of those diverge.
     ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD = 320
-    # Run that split as ONE dispatch rather than two, so the layer can be overlapped with
-    # combine. Costs ~7 us per dispatch: the union program's kernel config fits the
-    # kernel-config ring once but not twice, so each launch waits on the previous one's workers.
-    ROUTED_EXPERT_FUSE_HYBRID_DISPATCH = True
     INTERMEDIATE_SIZE = 12288  # Dense FFN hidden dimension
 
     # MoE configuration
