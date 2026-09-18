@@ -18,7 +18,6 @@ import ttnn
 from ...models.transformers.ltx.rope_ltx import prepare_audio_rope, prepare_av_cross_pe, prepare_video_rope
 from ...models.transformers.ltx.transformer_ltx import LTXTransformerModel, build_audio_masks, build_video_pad_mask
 from ...models.vae.vae_ltx import upsample_latent
-from ...utils import tensor as _tensor_utils
 from ...utils.ltx import load_conditioning_image
 from ...utils.patchifiers import AudioLatentShape, VideoPixelShape
 from ...utils.tensor import bf16_tensor
@@ -356,7 +355,6 @@ class LTXDistilledPipeline(LTXPipeline):
         sigma_values: list[float],
         seed: int,
         initial_video_latent: torch.Tensor | None = None,
-        initial_video_latent_device: "ttnn.Tensor | None" = None,
         return_device_video: bool = False,
         initial_audio_latent: torch.Tensor | None = None,
         image_cond_latent: torch.Tensor | None = None,
@@ -421,8 +419,6 @@ class LTXDistilledPipeline(LTXPipeline):
             else:
                 base_v = torch.zeros(B, video_N_real, self.in_channels)
             base_v[:, : i2v.n_cond, :] = i2v.clean_latent[:, : i2v.n_cond, :]
-        elif initial_video_latent_device is not None:  # T2V S2, device-resident: handled below
-            base_v = None
         elif initial_video_latent is not None:  # T2V S2: upsampled latent arrives at (B, video_N_real, C)
             base_v = initial_video_latent.float()
             assert (
@@ -430,21 +426,13 @@ class LTXDistilledPipeline(LTXPipeline):
             ), f"initial_video_latent seq dim {base_v.shape[1]} != video_N_real {video_N_real}"
         else:  # T2V S1: pure noise from zeros
             base_v = torch.zeros(B, video_N_real, self.in_channels)
-        video_lat_dev = None
-        if initial_video_latent_device is not None:
-            assert not image_cond, "device-resident stage input is T2V only"
-            video_lat_dev = self._noise_video_latent_device(
-                initial_video_latent_device, video_N_real, video_N, float(sigmas[0]), seed, sp_axis
-            )
-            video_lat = None
-        else:
-            video_lat_real = self._noise_video_latent(base_v, i2v.denoise_mask, sigmas[0], seed)
+        video_lat_real = self._noise_video_latent(base_v, i2v.denoise_mask, sigmas[0], seed)
 
-            if video_N > video_N_real:
-                video_lat = torch.zeros(B, video_N, self.in_channels)
-                video_lat[:, :video_N_real, :] = video_lat_real
-            else:
-                video_lat = video_lat_real
+        if video_N > video_N_real:
+            video_lat = torch.zeros(B, video_N, self.in_channels)
+            video_lat[:, :video_N_real, :] = video_lat_real
+        else:
+            video_lat = video_lat_real
 
         # ----- Audio latent init (unchanged: already padded to audio_N) -----
         if initial_audio_latent is not None:
@@ -466,12 +454,9 @@ class LTXDistilledPipeline(LTXPipeline):
 
         # Device-resident loop: inner_step returns SP-sharded velocity, stepped in place by an
         # on-device Euler. update() copies into the address-baked buffer when traced, else rebinds.
-        if video_lat_dev is not None:
-            state._tt_video_lat.update(video_lat_dev, traced)
-        else:
-            state._tt_video_lat.update(
-                video_lat.unsqueeze(0), traced, mesh_axes=[None, None, sp_axis, None], device=self.mesh_device
-            )
+        state._tt_video_lat.update(
+            video_lat.unsqueeze(0), traced, mesh_axes=[None, None, sp_axis, None], device=self.mesh_device
+        )
         state._tt_audio_lat.update(
             audio_lat.unsqueeze(0), traced, mesh_axes=[None, None, sp_axis, None], device=self.mesh_device
         )
@@ -614,12 +599,13 @@ class LTXDistilledPipeline(LTXPipeline):
 
     def _upsample_latent_on_device(
         self, tt_tokens: ttnn.Tensor, latent_frames: int, s1_h: int, s1_w: int, sp_axis: int
-    ) -> ttnn.Tensor:
+    ) -> torch.Tensor:
         """Stage-1 tokens (``(1, 1, video_N, C)``, sequence-sharded on ``sp_axis``, normalized) -> the 2x
-        upsampled, re-normalized tokens ``(1, 1, video_N2_real, C)`` replicated on every device. Mirrors
+        upsampled, re-normalized tokens, on host. Mirrors
         ``upsample_latent`` (un-normalize -> replicate-pad H/W to the upsampler's mesh factors -> upsampler ->
-        crop -> re-normalize) with on-device gathers/partitions instead of the host gather + scatter. The
-        result is fp32, like the host path's, so the stage-2 noise mix sees the same values."""
+        crop) with on-device gathers/partitions instead of the host gather + scatter; the re-normalize is torch
+        fp32 on the read-back result (see the note at the end). Returns ``(1, video_N2_real, C)`` torch fp32,
+        the shape ``initial_video_latent`` takes."""
         ccl = self.ccl_manager
         ups = self.upsampler
         upc = ups.parallel_config
@@ -657,36 +643,15 @@ class LTXDistilledPipeline(LTXPipeline):
         x = ccl.all_gather(x, dim=1, mesh_axis=upc.height_parallel.mesh_axis, use_hyperparams=False)
         x = ccl.all_gather(x, dim=2, mesh_axis=upc.width_parallel.mesh_axis, use_hyperparams=False)
         x = ttnn.slice(x, [0, 0, 0, 0], [latent_frames, 2 * s1_h, 2 * s1_w, C])
-        x = ttnn.reshape(x, (1, 1, latent_frames * 2 * s1_h * 2 * s1_w, C))
-        x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
-        x = ttnn.typecast(x, ttnn.float32)
-        # Re-normalize with a true division. Multiplying by the reciprocal is off by up to one fp32 ulp from the
-        # host path's (x - mean) / std on a quarter of the elements; enough of those flip a bf16 rounding in the
-        # stage-2 noise mix that the 3-step distilled denoise produced a visibly different (though equally valid)
-        # sample, 36 dB PSNR_Y against the host path. With the division the ring run is bit-identical to it.
-        return ttnn.divide(ttnn.subtract(x, mean_t), std_t)
-
-    def _noise_video_latent_device(
-        self, tokens_replicated: ttnn.Tensor, video_N_real: int, video_N: int, sigma: float, seed: int, sp_axis: int
-    ) -> ttnn.Tensor:
-        """Device twin of ``_noise_video_latent`` for the T2V stage-2 input: the same seeded host noise draw
-        (uploaded), the mix done in fp32 on device, the result sharded like the trace state buffer."""
-        B, C = 1, self.in_channels
-        torch.manual_seed(seed)
-        noise = torch.randn((B, video_N_real, C), dtype=torch.bfloat16)  # identical draws to the host path
-        noise_p = torch.zeros(1, B, video_N, C, dtype=torch.float32)
-        noise_p[0, :, :video_N_real, :] = noise.float()
-        noise_dev = _tensor_utils.from_torch(
-            noise_p, device=self.mesh_device, mesh_axes=[None, None, sp_axis, None], dtype=ttnn.bfloat16
-        )
-        base = tokens_replicated
-        if video_N > video_N_real:
-            base = ttnn.pad(base, [(0, 0), (0, 0), (0, video_N - video_N_real), (0, 0)], 0.0)
-        base = ttnn.mesh_partition(base, dim=2, cluster_axis=sp_axis)
-        base32 = base if base.dtype == ttnn.float32 else ttnn.typecast(base, ttnn.float32)
-        noise32 = ttnn.typecast(noise_dev, ttnn.float32)
-        lat = ttnn.add(ttnn.multiply(noise32, sigma), ttnn.multiply(base32, 1.0 - sigma))
-        return ttnn.typecast(lat, ttnn.bfloat16)
+        # Re-normalize on the host, in torch fp32, exactly as ``upsample_latent`` does. The device's fp32 division
+        # (and reciprocal) is not correctly rounded: ~7 % of elements land one fp32 ulp off torch's, and the stage-2
+        # noise mix then rounds a few of them to a different bf16 value -- enough for the 3-step distilled denoise to
+        # produce a visibly different (though equally valid) sample (41 dB PSNR_Y / 0.94 audio correlation measured
+        # against the host path). Multiply/add are exact, so the un-normalize above stays on device. The upsampler
+        # output is bf16 and replicated: one 10 MB read from one device, then the host path's own mix + sharded upload.
+        n2 = latent_frames * 2 * s1_h * 2 * s1_w
+        xh = ttnn.to_torch(ttnn.get_device_tensors(x)[0]).float().reshape(1, n2, C)
+        return (xh - mean.reshape(1, 1, C).float()) / std.reshape(1, 1, C).float()
 
     def generate(
         self,
@@ -786,11 +751,11 @@ class LTXDistilledPipeline(LTXPipeline):
 
         latent_frames = (num_frames - 1) // TEMPORAL_COMPRESSION + 1
         s1_h, s1_w = s1_height // SPATIAL_COMPRESSION, s1_width // SPATIAL_COMPRESSION
-        upsampled_flat = upsampled_dev = None
+        upsampled_flat = None
         t0 = time.time()
         self._prepare_upsampler()
         if device_resident:
-            upsampled_dev = self._upsample_latent_on_device(
+            upsampled_flat = self._upsample_latent_on_device(
                 s1_video, latent_frames, s1_h, s1_w, self.parallel_config.sequence_parallel.mesh_axis
             )
         else:
@@ -799,8 +764,6 @@ class LTXDistilledPipeline(LTXPipeline):
             upsampled_flat = upsampled.permute(0, 2, 3, 4, 1).reshape(
                 1, latent_frames * (height // SPATIAL_COMPRESSION) * (width // SPATIAL_COMPRESSION), 128
             )
-        if device_resident and os.environ.get("LTX_TIME_STAGES") in ("1", "true", "True"):
-            ttnn.synchronize_device(self.mesh_device)  # the eager transition is async; charge it here, not to stage 2
         t_upsample = time.time() - t0
         timings.append(("Latent upsample", t_upsample))
         logger.info(f"Latent upsample: {t_upsample:.1f}s")
@@ -816,7 +779,6 @@ class LTXDistilledPipeline(LTXPipeline):
             sigma_values=STAGE_2_DISTILLED_SIGMA_VALUES,
             seed=seed,
             initial_video_latent=upsampled_flat,
-            initial_video_latent_device=upsampled_dev,
             initial_audio_latent=s1_audio.unsqueeze(0) if s1_audio.dim() == 2 else s1_audio,
             image_cond_latent=full_cond_latent,
             image_cond_strength=cond_strength,
