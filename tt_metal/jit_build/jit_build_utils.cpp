@@ -95,7 +95,8 @@ std::string compiler_version(const std::string& gpp) {
 
     // A private, automatically removed file captures stdout without a pipe buffer limit.
     // Stderr remains separate so diagnostics cannot become the compiler identity.
-    const std::unique_ptr<FILE, decltype(&fclose)> output(std::tmpfile(), &fclose);
+    const auto close_file = [](FILE* file) { std::fclose(file); };
+    const std::unique_ptr<FILE, decltype(close_file)> output(std::tmpfile(), close_file);
     if (!output || fcntl(fileno(output.get()), F_SETFD, FD_CLOEXEC) == -1) {
         throw std::runtime_error(fmt::format("Cannot capture compiler version for {}: {}", gpp, std::strerror(errno)));
     }
