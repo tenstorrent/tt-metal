@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import math
+
 import pytest
 
 import torch
@@ -900,10 +902,6 @@ def _flat_height(shape):
     return h
 
 
-def _div_up(a, b):
-    return -(-a // b)
-
-
 def _height_concat_mem_config(shard_shape, grid, strategy, orientation):
     # With use_height_and_width_as_shard_shape, create_sharded_memory_config swaps the shard
     # shape for COL_MAJOR, so pass it pre-swapped to land on the shard spec we actually want.
@@ -936,8 +934,8 @@ def _run_height_concat(
     if strategy == ttnn.ShardStrategy.WIDTH:
         # Width sharding splits only the last dim; every core keeps the whole flattened height.
         num_cores = grid_cols * grid_rows
-        in_shards = [(fh, _div_up(width, num_cores)) for fh in flat_heights]
-        out_shard = (out_flat_height, _div_up(width, num_cores))
+        in_shards = [(fh, math.ceil(width / num_cores)) for fh in flat_heights]
+        out_shard = (out_flat_height, math.ceil(width / num_cores))
     else:
         # Block sharding splits height across the grid rows and width across the grid cols --
         # the other way round for COL_MAJOR, which is the axis swap this exercises.
@@ -949,8 +947,8 @@ def _run_height_concat(
         col_major = orientation == ttnn.ShardOrientation.COL_MAJOR
         shard_grid_h = grid_cols if col_major else grid_rows
         shard_grid_w = grid_rows if col_major else grid_cols
-        in_shards = [(_div_up(fh, shard_grid_h), _div_up(width, shard_grid_w)) for fh in flat_heights]
-        out_shard = (_div_up(out_flat_height, shard_grid_h), _div_up(width, shard_grid_w))
+        in_shards = [(math.ceil(fh / shard_grid_h), math.ceil(width / shard_grid_w)) for fh in flat_heights]
+        out_shard = (math.ceil(out_flat_height / shard_grid_h), math.ceil(width / shard_grid_w))
 
     torch_inputs = [random_torch_tensor(dtype, s) for s in shapes]
     torch_out = torch.concat(torch_inputs, dim=-2)
