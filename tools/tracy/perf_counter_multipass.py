@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Multi-pass perf counter capture: group tables, pass scheduling (one L1 bank per pass, the BRISC firmware
-fits three groups), per-pass workload replay and the device log merge. tracy/__main__.py only calls in here."""
+fits every group), per-pass workload replay and the device log merge. tracy/__main__.py only calls in here."""
 
 import math
 import os
@@ -11,7 +11,6 @@ from pathlib import Path
 from shutil import copyfile
 
 from loguru import logger
-
 from tracy.common import PROFILER_DEVICE_SIDE_LOG, generate_logs_folder
 
 # Bit positions match PROFILE_PERF_COUNTERS_* in tt_metal/tools/profiler/perf_counters.hpp.
@@ -30,8 +29,11 @@ PERF_COUNTER_GROUP_BITS = {
 }
 PERF_COUNTER_L1_GROUPS = {"l1_0", "l1_1", "l1_2", "l1_3", "l1_4", "l1_5"}
 PERF_COUNTER_BH_ONLY_GROUPS = {"l1_2", "l1_3", "l1_4", "l1_5"}
-# Measured on Blackhole BRISC firmware: 3 groups of readout code fit, 4 overflow .text.
-PERF_COUNTER_MAX_GROUPS_PER_PASS = 3
+# The table driven readout costs a few bytes per group, so every group fits one pass next to one L1 bank.
+# Measured BRISC .text with the five group mask (fpu, pack, unpack, instrn and one L1 bank): Blackhole 8664 of
+# 8704 bytes, Wormhole 7584 of 7712. The cap is the number of groups such a mask holds; the one L1 bank per
+# pass rule below is the hardware limit that still forces several passes.
+PERF_COUNTER_MAX_GROUPS_PER_PASS = 5
 # PERF_COUNTER_PROFILER_ID in perf_counters.hpp: the timer_id the firmware tags counter rows with.
 PERF_COUNTER_MARKER_ID = "9090"
 # Environment variables that name the device architecture without opening the device.
@@ -150,8 +152,8 @@ def plan_perf_counter_capture(requested_groups, multipass, can_replay):
     if not multipass:
         raise ValueError(
             f"Requested counter groups {resolved} need {len(passes)} capture passes "
-            f"(L1 banks share one mux; BRISC firmware fits <= {PERF_COUNTER_MAX_GROUPS_PER_PASS} "
-            f"groups/pass):\n{plan}\n"
+            f"(L1 banks share one mux, so each bank needs its own pass; at most "
+            f"{PERF_COUNTER_MAX_GROUPS_PER_PASS} groups per pass):\n{plan}\n"
             "Re-run with --perf-counter-multipass to replay the workload once per pass and merge "
             "the results, or request fewer groups."
         )
