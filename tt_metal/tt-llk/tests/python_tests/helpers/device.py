@@ -457,14 +457,16 @@ def pull_coverage_stream_from_tensix(
         f.write(data)
 
 
-def _send_arc_message(message_type: str, device_id: int):
-    """Helper to send ARC messages with better abstraction."""
-    ARC_COMMON_PREFIX = 0xAA00
+def send_arc_message(message_type: str, device_id: int):
+    """Send an architecture-correct AICLK state command to ARC firmware."""
     message_codes = {"GO_BUSY": 0x52, "GO_IDLE": 0x54}
+    message_code = message_codes[message_type]
+    if get_chip_architecture() == ChipArchitecture.WORMHOLE:
+        message_code |= 0xAA00
 
     arc_msg(
         device_id=device_id,
-        msg_code=ARC_COMMON_PREFIX | message_codes[message_type],
+        msg_code=message_code,
         wait_for_done=True,
         args=[0, 0],
         timeout=datetime.timedelta(seconds=10),

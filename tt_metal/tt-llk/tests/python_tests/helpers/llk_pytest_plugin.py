@@ -66,7 +66,7 @@ import helpers.utils as utils_module
 import pytest
 import torch
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
-from helpers.device import LLKAssertException
+from helpers.device import LLKAssertException, send_arc_message
 from helpers.exalens_server import ExalensServer
 from helpers.format_config import InputOutputFormat
 from helpers.logger import configure_logger, logger
@@ -506,6 +506,10 @@ def pytest_configure(config):
                 )
         else:
             tt_exalens_init.init_ttexalens()
+            # AICLK is chip-wide. Every xdist process reasserts BUSY after its
+            # own device discovery; collection finishes before tests are
+            # scheduled, so the final command settles before measurement.
+            send_arc_message("GO_BUSY", device_id=0)
             TestConfig.resolve_worker_tensix_location()
 
         is_ttsim = _SIMULATOR_PATH and _SIMULATOR_PATH.endswith(".so")

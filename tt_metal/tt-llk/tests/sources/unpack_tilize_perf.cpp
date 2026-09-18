@@ -263,7 +263,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     remaining_tiles -= num_tiles;
                 }
             }
-            _llk_pack_isolate_stallwait_pack_wrapper_();
             PROFILER_SYNC();
             return;
         }

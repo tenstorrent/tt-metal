@@ -19,6 +19,7 @@ if [[ $# -lt 1 ]]; then
   exit 2
 fi
 SPEED_OF_LIGHT="${SPEED_OF_LIGHT:-true}"
+DEVICE_JOBS="${LLK_DEVICE_JOBS:-15}"
 export TT_LLK_DISABLE_ASSERTS="${TT_LLK_DISABLE_ASSERTS:-1}"
 
 case "$SPEED_OF_LIGHT" in
@@ -43,6 +44,6 @@ PYTEST_RUN_EXTRA="-q --override-ini=log_cli=false"
 
 pytest $PYTEST_COMPILE_EXTRA "${SPEED_OF_LIGHT_ARGS[@]}" --compile-producer -n 10 -m "perf and not accuracy" --timeout=60 \
   --junitxml="pytest-report-blackhole-${GROUP}-compile.xml" "$@"
-pytest $PYTEST_RUN_EXTRA "${SPEED_OF_LIGHT_ARGS[@]}" --compile-consumer -n 8 -x -m "perf and not accuracy" --timeout=60 \
+pytest $PYTEST_RUN_EXTRA "${SPEED_OF_LIGHT_ARGS[@]}" --compile-consumer -n "$DEVICE_JOBS" -x -m "perf and not accuracy" --timeout=60 \
   --junitxml="pytest-report-blackhole-${GROUP}-run.xml" "$@"
 junitparser merge pytest-report-blackhole-${GROUP}-compile.xml pytest-report-blackhole-${GROUP}-run.xml pytest-report-blackhole-${GROUP}.xml
