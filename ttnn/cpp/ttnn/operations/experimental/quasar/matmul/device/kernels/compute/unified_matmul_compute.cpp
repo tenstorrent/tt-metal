@@ -15,7 +15,7 @@
 // Between K chunks the running sums have to leave DST. Default: they are packed into the C_partials
 // ring and copied back into DST at the start of the next K chunk (spill / reload). With PACKER_L1_ACC the
 // packer adds DST onto the partials already in L1 instead, so only the last K chunk reloads. The last K
-// iteration packs the finished subblocks into the MN_chunk ring for the writer.
+// chunk packs the finished subblocks into the MN_chunk ring for the writer.
 //
 // Loop order matches the reader and the writer: batch, MN chunk, K chunk, subblocks (m_tile, n_tile)
 // row-major over the chunk, k_tile within the K chunk. Runtime args: num_MN_chunks. Compile-time args:
