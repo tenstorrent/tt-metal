@@ -86,9 +86,12 @@ MEASURED_ARCH = ChipArchitecture.WORMHOLE
 class Metric(Enum):
     """Which gate a contract is written against.
 
-    An enum rather than a ``str``, so an unknown metric is unrepresentable instead of
-    being caught by a hand-rolled check in ``__post_init__`` -- every dimension of
-    :class:`BudgetKey` is already a real enum.
+    A closed two-member set, so there is no third gate to fall through to and no string
+    spelling of one: a contract either replaces the tolerance check with a step count or
+    it does not. It does *not* make a wrong value unrepresentable on its own -- Python
+    does not enforce the annotation, so ``metric="ulp"`` still constructs -- which is
+    what :meth:`AccuracyContract.__post_init__` is for. Every dimension of
+    :class:`BudgetKey` is a real enum for the same reason, and guarded the same way.
     """
 
     ULP = "ulp"
@@ -167,6 +170,18 @@ class AccuracyContract:
 TOLERANCE_CONTRACT = AccuracyContract(metric=Metric.TOLERANCE)
 
 
+#: The enum each :class:`BudgetKey` dimension must be a member of. Kept beside the
+#: dataclass rather than read off ``__annotations__``, which would hand back
+#: ``Optional[...]`` and need unwrapping; :func:`test_every_budget_key_field_is_guarded`
+#: asserts the two stay in step.
+_BUDGET_KEY_TYPES: Dict[str, type] = {
+    "approx_mode": ApproximationMode,
+    "output_format": DataFormat,
+    "dest_acc": DestAccumulation,
+    "arch": ChipArchitecture,
+}
+
+
 @dataclass(frozen=True)
 class BudgetKey:
     """Which variants of an op a contract applies to. Unset field == any value.
@@ -181,6 +196,27 @@ class BudgetKey:
     output_format: Optional[DataFormat] = None
     dest_acc: Optional[DestAccumulation] = None
     arch: Optional[ChipArchitecture] = None
+
+    def __post_init__(self) -> None:
+        # The annotation is not a check, exactly as for `AccuracyContract.metric`. All
+        # four of these are bare `Enum`s, so `DestAccumulation.No.value is False` and
+        # `ChipArchitecture.WORMHOLE.value == "wormhole"` never compare equal to their
+        # members -- which makes `BudgetKey(dest_acc=True)` or `BudgetKey(arch="wormhole")`
+        # *inert*: counted as set by `specificity`, matched by nothing in `matches()`.
+        # The budget it declares then gates nothing, `budget_table()` sees no duplicate,
+        # `validate_registry()` sees no tie, and `describe()` renders it identically to
+        # the correct key, because `ChipArchitecture.__str__` returns `.value`. It fails
+        # looser than declared, which is the drift this registry exists to stop.
+        for f in fields(self):
+            value = getattr(self, f.name)
+            if value is None:
+                continue
+            expected = _BUDGET_KEY_TYPES[f.name]
+            if not isinstance(value, expected):
+                raise ValueError(
+                    f"BudgetKey.{f.name} must be a {expected.__name__} member or None, "
+                    f"got {value!r}; a non-member is counted as set and matches nothing"
+                )
 
     @property
     def specificity(self) -> int:
@@ -289,8 +325,8 @@ def budget_table(
     ``BudgetKey`` is frozen, so two identical keys in a dict literal are equal and
     hash-equal and Python silently keeps the later contract -- which means
     :func:`validate_registry` received an already-deduplicated table and the tie-raise in
-    :func:`resolve_contract` could never fire for the duplicate :class:`BudgetKey`'s
-    docstring promises to reject. It saw one entry, not two. A copy-pasted
+    :func:`resolve_contract` could never fire for the duplicate that the
+    :class:`BudgetKey` docstring promises to reject. It saw one entry, not two. A copy-pasted
     ``BudgetKey(output_format=Float16_b)`` replacing a measured budget with a broader one
     would have failed nothing.
     """
@@ -305,6 +341,29 @@ def budget_table(
     return table
 
 
+def registry(
+    *entries: Tuple[MathOperation, Dict[BudgetKey, AccuracyContract]]
+) -> Dict[MathOperation, Dict[BudgetKey, AccuracyContract]]:
+    """The whole table, built from pairs so a repeated op is an error.
+
+    The same hazard as :func:`budget_table`, one level up and harder to see: the ops sit
+    10-20 lines apart across three comment-delimited sections, so a re-added
+    ``MathOperation.Square:`` drops the earlier entry silently. Nothing downstream can
+    catch it -- :func:`validate_registry` iterates the already-deduplicated dict, the
+    ``len(set(ops)) == len(ops)`` check in the host tests is tautological over dict keys,
+    and pylint's ``duplicate-key`` is off (pre-commit runs it with ``--disable=all``).
+    """
+    table: Dict[MathOperation, Dict[BudgetKey, AccuracyContract]] = {}
+    for op, contracts in entries:
+        if op in table:
+            raise ValueError(
+                f"duplicate registry entry for {op.name}: a dict literal would have kept "
+                "only the later table, and no guard downstream can see the first one"
+            )
+        table[op] = contracts
+    return table
+
+
 def _exact_everywhere() -> Dict[BudgetKey, AccuracyContract]:
     """A fresh 0-step table, for the ops measured exact on every output format.
 
@@ -314,102 +373,140 @@ def _exact_everywhere() -> Dict[BudgetKey, AccuracyContract]:
     return budget_table((DEFAULT, AccuracyContract(max_ulp=0)))
 
 
-_SFPU_ACCURACY_BUDGET: Dict[MathOperation, Dict[BudgetKey, AccuracyContract]] = {
-    # ── Exact everywhere, including Bfp8_b ───────────────────────────────────
-    # Floor/Ceil/Trunc land on a representable integer below the format's integer limit
-    # and are the identity above it.
-    #
-    # They are also the only ops enrolled on Bfp8_b, and the reason is narrower than
-    # "integers are exact in a block float". A shared exponent does not represent
-    # integers exactly in general: the in-block step scales with the block maximum, so an
-    # integer is exact only while every block maximum stays below 2**7 = 128. That holds
-    # here because _OP_DOMAIN_REGISTRY bounds these three to uniform(-10, 10) --
-    # BFP8_B_EXACT_INTEGER_DOMAIN below pins it -- and not because of anything about the
-    # format. An integer-valued op with a wider domain would fail, the same mechanism
-    # that takes Abs and Neg to 15616 steps in the note above.
-    #   wh: 0 ULP, 156 variants each, all four output formats x both dest_acc, 2026-09-16
-    MathOperation.Floor: _exact_everywhere(),
-    MathOperation.Ceil: _exact_everywhere(),
-    MathOperation.Trunc: _exact_everywhere(),
-    # ── Sign-bit and select: exact in fp32, one step in the 16-bit formats ───
-    # Abs clears the sign bit, Neg flips it, Identity copies; there is no arithmetic to
-    # round. fp32 out is bit-exact. The 16-bit outputs are one step off on part of the
-    # sweep, and it is the *pack* path rather than the op: the same single step shows up
-    # for all three of these ops, and mostly at dest_acc=Yes, where the value is rounded
-    # fp32 -> 16-bit once at pack instead of being truncated in a 16-bit Dest first.
-    # A step budget is what makes that visible at all; atol=0.05 is ~6 bf16 steps.
-    #
-    # The budget is the measured maximum with no headroom added, deliberately. These
-    # results are exact by construction, so any movement is a real signal and should
-    # fail rather than be absorbed. They are the flakiness canaries for the metric: if
-    # one of these starts failing, the golden or the datapath moved, not the kernel.
-    # Each recorded number is a maximum over the *input* pipelines too: BudgetKey has no
-    # input_format axis, and input_output_formats() is a full cross product, so the "80
-    # variants" below is 2 outputs x 5 inputs x 2 approx x 2 dest_acc x 2 dimensions. The
-    # 1-step pack allowance therefore also binds Float16_b->Float16_b and Bfp8_b->Float16_b,
-    # which are bit-exact by construction for a sign-bit op -- so "zero headroom" holds for
-    # the pipeline that set the maximum and is slack for the others. The axis is excluded
-    # here because no enrolled cell has a *tighter* per-input number worth keying on yet;
-    # P3 adds input_format to BudgetKey for the transcendentals, where the input pipeline
-    # does move the measurement.
-    #   wh: Abs/Neg max 0 ULP on Float32 (32 variants), 1 ULP on Float16/Float16_b
-    #       (80 variants); Identity max 0 on Float32, 1 on Float16_b (4), 2026-09-16
-    MathOperation.Abs: budget_table(
-        (DEFAULT, AccuracyContract(max_ulp=1)),
-        (BudgetKey(output_format=DataFormat.Float32), AccuracyContract(max_ulp=0)),
-        (BudgetKey(output_format=DataFormat.Bfp8_b), _BFP8_B_QUANTIZATION_DOMINATES),
-    ),
-    MathOperation.Neg: budget_table(
-        (DEFAULT, AccuracyContract(max_ulp=1)),
-        (BudgetKey(output_format=DataFormat.Float32), AccuracyContract(max_ulp=0)),
-        (BudgetKey(output_format=DataFormat.Bfp8_b), _BFP8_B_QUANTIZATION_DOMINATES),
-    ),
-    # Identity is keyed per format rather than through a DEFAULT, because unlike Abs/Neg
-    # it was never in BROAD_SWEEP_OPS: only BROAD_FORMATS/FORMATS_BFP4_B reach a Float16
-    # output, so fp16 was never measured for it at all. Square measured 1 step on
-    # Float16_b and 4 on Float16, so fp16 is not safely interpolated from bf16 here -- an
-    # unmeasured format falls back to the tolerance metric instead.
-    MathOperation.Identity: budget_table(
-        (BudgetKey(output_format=DataFormat.Float32), AccuracyContract(max_ulp=0)),
-        (BudgetKey(output_format=DataFormat.Float16_b), AccuracyContract(max_ulp=1)),
-    ),
-    # ── One multiply, and one open question ─────────────────────────────────
-    # x*x has rounding slack the sign-bit ops do not: the golden evaluates in float64 and
-    # applies the Dest and output roundings, the hardware rounds in the datapath, and the
-    # two can differ where the exact product falls on a tie. 1 step in bf16 and 4 in fp16
-    # are consistent with that.
-    #
-    # Float32 is NOT enrolled, and the measurement is why: 65536 steps at dest_acc=No,
-    # 32768 at dest_acc=Yes, on almost every element rather than a few. 65536 is exactly
-    # 2**16 -- one step of a 16-bit Dest lattice expressed in fp32 units -- so the
-    # dest_acc=No number is a single step of the *real* output lattice and says the golden
-    # and the hardware round that step differently. 32768 = 2**15 at dest_acc=Yes has no
-    # such explanation: with an fp32 Dest the product agrees to only ~8 mantissa bits.
-    # Neither is something a budget should paper over, and attributing them (kernel, or
-    # the golden's rounding model) is its own change. Parked on the tolerance metric so
-    # the number is recorded rather than blessed.
-    #   wh: Float16_b max 1 ULP (40 variants), Float16 max 4 (40),
-    #       Float32 max 65536 @ dest_acc=No / 32768 @ dest_acc=Yes (32), 2026-09-16
-    MathOperation.Square: budget_table(
-        (DEFAULT, AccuracyContract(max_ulp=4)),
-        (BudgetKey(output_format=DataFormat.Float16_b), AccuracyContract(max_ulp=1)),
+_SFPU_ACCURACY_BUDGET: Dict[MathOperation, Dict[BudgetKey, AccuracyContract]] = (
+    registry(
+        # ── Exact everywhere, including Bfp8_b ───────────────────────────────────
+        # Floor/Ceil/Trunc land on a representable integer below the format's integer limit
+        # and are the identity above it.
+        #
+        # They are also the only ops enrolled on Bfp8_b, and the reason is narrower than
+        # "integers are exact in a block float". A shared exponent does not represent
+        # integers exactly in general: the in-block step scales with the block maximum, so an
+        # integer is exact only while every block maximum stays below 2**7 = 128. That holds
+        # here because _OP_DOMAIN_REGISTRY bounds these three to uniform(-10, 10) --
+        # BFP8_B_EXACT_INTEGER_DOMAIN below pins it -- and not because of anything about the
+        # format. An integer-valued op with a wider domain would fail, the same mechanism
+        # that takes Abs and Neg to 15616 steps in the note above.
+        #   wh: 0 ULP, 156 variants each, all four output formats x both dest_acc, 2026-09-16
+        (MathOperation.Floor, _exact_everywhere()),
+        (MathOperation.Ceil, _exact_everywhere()),
+        (MathOperation.Trunc, _exact_everywhere()),
+        # ── Sign-bit and select: exact in fp32, one step in the 16-bit formats ───
+        # Abs clears the sign bit, Neg flips it, Identity copies; there is no arithmetic to
+        # round. fp32 out is bit-exact. The 16-bit outputs are one step off on part of the
+        # sweep, and it is the *pack* path rather than the op: the same single step shows up
+        # for all three of these ops, and mostly at dest_acc=Yes, where the value is rounded
+        # fp32 -> 16-bit once at pack instead of being truncated in a 16-bit Dest first.
+        # A step budget is what makes that visible at all; atol=0.05 is ~6 bf16 steps.
+        #
+        # The budget is the measured maximum with no headroom added, deliberately. These
+        # results are exact by construction, so any movement is a real signal and should
+        # fail rather than be absorbed. They are the flakiness canaries for the metric: if
+        # one of these starts failing, the golden or the datapath moved, not the kernel.
+        # Each recorded number is a maximum over the *input* pipelines too: BudgetKey has no
+        # input_format axis, and input_output_formats() is a full cross product, so the "80
+        # variants" below is 2 outputs x 5 inputs x 2 approx x 2 dest_acc x 2 dimensions. The
+        # 1-step pack allowance therefore also binds Float16_b->Float16_b and Bfp8_b->Float16_b,
+        # which are bit-exact by construction for a sign-bit op -- so "zero headroom" holds for
+        # the pipeline that set the maximum and is slack for the others. The axis is excluded
+        # here because no enrolled cell has a *tighter* per-input number worth keying on yet;
+        # P3 adds input_format to BudgetKey for the transcendentals, where the input pipeline
+        # does move the measurement.
+        #   wh: Abs/Neg max 0 ULP on Float32 (32 variants), 1 ULP on Float16/Float16_b
+        #       (80 variants); Identity max 0 on Float32, 1 on Float16_b (4), 2026-09-16
         (
-            BudgetKey(output_format=DataFormat.Float32),
-            AccuracyContract(metric=Metric.TOLERANCE),
+            MathOperation.Abs,
+            budget_table(
+                (DEFAULT, AccuracyContract(max_ulp=1)),
+                (
+                    BudgetKey(output_format=DataFormat.Float32),
+                    AccuracyContract(max_ulp=0),
+                ),
+                (
+                    BudgetKey(output_format=DataFormat.Bfp8_b),
+                    _BFP8_B_QUANTIZATION_DOMINATES,
+                ),
+            ),
         ),
-        (BudgetKey(output_format=DataFormat.Bfp8_b), _BFP8_B_QUANTIZATION_DOMINATES),
-    ),
-    # ── Still on the tolerance metric, moved here from the test body ─────────
-    # These were CUSTOM_TOLERANCES in test_eltwise_unary_sfpu: a coarse 3-segment LUT
-    # whose absolute error peaks near the knees, carrying atol=0.13 so the sweep passes.
-    # They are the clearest argument for this whole mechanism -- that number makes the
-    # test blind to a 10x regression anywhere else in the domain, and equally blind to the
-    # improvement a LUT retune produces. They keep the tolerance metric until there is a
-    # measured step budget to replace it with, but the number now sits next to the op
-    # instead of in a dict in a test file.
-    MathOperation.SigmoidAppx: budget_table((DEFAULT, _COARSE_LUT_TOLERANCE)),
-    MathOperation.GeluAppx: budget_table((DEFAULT, _COARSE_LUT_TOLERANCE)),
-}
+        (
+            MathOperation.Neg,
+            budget_table(
+                (DEFAULT, AccuracyContract(max_ulp=1)),
+                (
+                    BudgetKey(output_format=DataFormat.Float32),
+                    AccuracyContract(max_ulp=0),
+                ),
+                (
+                    BudgetKey(output_format=DataFormat.Bfp8_b),
+                    _BFP8_B_QUANTIZATION_DOMINATES,
+                ),
+            ),
+        ),
+        # Identity is keyed per format rather than through a DEFAULT, because unlike Abs/Neg
+        # it was never in BROAD_SWEEP_OPS: only BROAD_FORMATS/FORMATS_BFP4_B reach a Float16
+        # output, so fp16 was never measured for it at all. Square measured 1 step on
+        # Float16_b and 4 on Float16, so fp16 is not safely interpolated from bf16 here -- an
+        # unmeasured format falls back to the tolerance metric instead.
+        (
+            MathOperation.Identity,
+            budget_table(
+                (
+                    BudgetKey(output_format=DataFormat.Float32),
+                    AccuracyContract(max_ulp=0),
+                ),
+                (
+                    BudgetKey(output_format=DataFormat.Float16_b),
+                    AccuracyContract(max_ulp=1),
+                ),
+            ),
+        ),
+        # ── One multiply, and one open question ─────────────────────────────────
+        # x*x has rounding slack the sign-bit ops do not: the golden evaluates in float64 and
+        # applies the Dest and output roundings, the hardware rounds in the datapath, and the
+        # two can differ where the exact product falls on a tie. 1 step in bf16 and 4 in fp16
+        # are consistent with that.
+        #
+        # Float32 is NOT enrolled, and the measurement is why: 65536 steps at dest_acc=No,
+        # 32768 at dest_acc=Yes, on almost every element rather than a few. 65536 is exactly
+        # 2**16 -- one step of a 16-bit Dest lattice expressed in fp32 units -- so the
+        # dest_acc=No number is a single step of the *real* output lattice and says the golden
+        # and the hardware round that step differently. 32768 = 2**15 at dest_acc=Yes has no
+        # such explanation: with an fp32 Dest the product agrees to only ~8 mantissa bits.
+        # Neither is something a budget should paper over, and attributing them (kernel, or
+        # the golden's rounding model) is its own change. Parked on the tolerance metric so
+        # the number is recorded rather than blessed.
+        #   wh: Float16_b max 1 ULP (40 variants), Float16 max 4 (40),
+        #       Float32 max 65536 @ dest_acc=No / 32768 @ dest_acc=Yes (32), 2026-09-16
+        (
+            MathOperation.Square,
+            budget_table(
+                (DEFAULT, AccuracyContract(max_ulp=4)),
+                (
+                    BudgetKey(output_format=DataFormat.Float16_b),
+                    AccuracyContract(max_ulp=1),
+                ),
+                (
+                    BudgetKey(output_format=DataFormat.Float32),
+                    AccuracyContract(metric=Metric.TOLERANCE),
+                ),
+                (
+                    BudgetKey(output_format=DataFormat.Bfp8_b),
+                    _BFP8_B_QUANTIZATION_DOMINATES,
+                ),
+            ),
+        ),
+        # ── Still on the tolerance metric, moved here from the test body ─────────
+        # These were CUSTOM_TOLERANCES in test_eltwise_unary_sfpu: a coarse 3-segment LUT
+        # whose absolute error peaks near the knees, carrying atol=0.13 so the sweep passes.
+        # They are the clearest argument for this whole mechanism -- that number makes the
+        # test blind to a 10x regression anywhere else in the domain, and equally blind to the
+        # improvement a LUT retune produces. They keep the tolerance metric until there is a
+        # measured step budget to replace it with, but the number now sits next to the op
+        # instead of in a dict in a test file.
+        (MathOperation.SigmoidAppx, budget_table((DEFAULT, _COARSE_LUT_TOLERANCE))),
+        (MathOperation.GeluAppx, budget_table((DEFAULT, _COARSE_LUT_TOLERANCE))),
+    )
+)
 
 
 def accuracy_contract(
