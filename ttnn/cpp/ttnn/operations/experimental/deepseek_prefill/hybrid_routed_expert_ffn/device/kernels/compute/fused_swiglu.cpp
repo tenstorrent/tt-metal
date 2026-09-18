@@ -893,6 +893,17 @@ FORCE_INLINE void multiply_phase(
 
 }  // namespace
 
+#ifdef HYB_NS
+// See moe_fused_swiglu_compute.cpp's copy: the union kernel runs exactly one of these, for the
+// half it calls first.
+inline void hyb_hw_startup() {
+    constexpr uint32_t hw_in0 = get_named_compile_time_arg_val("cb_in0_x");
+    constexpr uint32_t hw_in1 = get_named_compile_time_arg_val("cb_in1_gate");
+    constexpr uint32_t hw_out = get_named_compile_time_arg_val("cb_mm_partials_gu");
+    compute_kernel_hw_startup<SrcOrder::Reverse>(hw_in0, hw_in1, hw_out);
+}
+#endif
+
 void kernel_main() {
     // Per-core valid N-subblock counts. per_core_N is the GRID-ceil'd width, so the
     // highest-gx cores own phantom output columns whose weights were never fetched;
@@ -995,15 +1006,11 @@ void kernel_main() {
 #endif
 
 #ifdef HYB_NS
-    // Second half of a union kernel: the once-per-kernel hardware startup already ran for pass A,
-    // and compute_kernel_hw_startup.h is explicit that calling it again mid-kernel is unsafe --
-    // it does MMIO config of UNPACK/MATH/PACK and needs those units idle, which they are not
-    // while the other TRISCs are still draining the previous pass.
-    //
-    // Re-running it is also unnecessary. The two halves' startups differ ONLY in their operand
-    // CBs: both pass SrcOrder::Reverse, and the dst-accumulator mode is one op-level choice the
-    // program factory refuses to let the halves disagree on. Changing operand formats mid-kernel
-    // is exactly what the reconfig pair is for, and the header names it as the supported way.
+    // A half of the union kernel never starts the hardware itself; the union ran startup once,
+    // before either body. The two halves' startups differ ONLY in their operand CBs -- both pass
+    // SrcOrder::Reverse, and the program factory refuses to let them disagree on the
+    // dst-accumulator mode -- so pointing the configured units at this half's operands is all
+    // that is left, and the header names the reconfig pair as the supported way to do it.
     reconfig_data_format(cb_in0_x, cb_in1_gate);
     pack_reconfig_data_format(cb_partials_gu);
 #else
