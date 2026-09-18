@@ -97,24 +97,23 @@ FORCE_INLINE void write_recurrent(uint32_t head, uint32_t value_block, uint32_t 
 
 template <uint32_t Ct, uint32_t Kt, uint32_t Vt, uint32_t Vt_full, uint32_t summary>
 TT_KERNEL void writer(uint32_t head, uint32_t value_block, uint32_t num_chunks, uint32_t group) {
-#ifdef KDA_SUMMARY_WRITER_CHRONOLOGY
-    uint32_t split_group = 0;
-    uint32_t split_in_group = 0;
-    bool local_split = false;
-    {
-        DataflowBuffer chronology(dfb::chronology_writer);
-        chronology.wait_front(1);
-        auto topology = kda_chronology::load(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(chronology.get_read_ptr()));
-        chronology.pop_front(1);
-        uint32_t groups = topology.local_rows / 32 / num_chunks;
-        split_group = topology.split_group(groups);
-        split_in_group = topology.split_in_group(groups);
-        local_split = topology.local_split;
+    if constexpr (summary) {
+        uint32_t split_group = 0;
+        uint32_t split_in_group = 0;
+        bool local_split = false;
+        {
+            DataflowBuffer chronology(*dfb::get_token_if_present<"chronology_writer">());
+            chronology.wait_front(1);
+            auto topology =
+                kda_chronology::load(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(chronology.get_read_ptr()));
+            chronology.pop_front(1);
+            uint32_t groups = topology.local_rows / 32 / num_chunks;
+            split_group = topology.split_group(groups);
+            split_in_group = topology.split_in_group(groups);
+            local_split = topology.local_split;
+        }
+        write_summary<Kt, Vt, Vt_full>(head, value_block, group, split_group, split_in_group, local_split);
+    } else {
+        write_recurrent<Ct, Kt, Vt, Vt_full>(head, value_block, num_chunks);
     }
-    static_assert(summary);
-    write_summary<Kt, Vt, Vt_full>(head, value_block, group, split_group, split_in_group, local_split);
-#else
-    static_assert(!summary);
-    write_recurrent<Ct, Kt, Vt, Vt_full>(head, value_block, num_chunks);
-#endif
 }

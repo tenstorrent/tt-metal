@@ -420,10 +420,6 @@ ttnn::device_operation::MeshWorkloadArtifacts RecurrentChunkScanProgramFactory::
     }
     kda_factory_detail::bind_chronology(spec, run_args, in.actual_start, reader, compute);
     if (summary) {
-        // Remove the optional channel and its generated names together: discarded
-        // if-constexpr branches still resolve nondependent dfb:: identifiers.
-        reader.compiler_options.defines.emplace("KDA_SUMMARY_WRITER_CHRONOLOGY", "1");
-        writer.compiler_options.defines.emplace("KDA_SUMMARY_WRITER_CHRONOLOGY", "1");
         const tt::tt_metal::experimental::DFBSpecName writer_chronology{"chronology_writer"};
         spec.dataflow_buffers.push_back({
             .unique_id = writer_chronology,
