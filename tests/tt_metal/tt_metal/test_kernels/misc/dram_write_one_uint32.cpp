@@ -9,4 +9,5 @@ void kernel_main() {
     constexpr uint32_t value = get_compile_time_arg_val(1);
     volatile tt_l1_ptr uint32_t* result = reinterpret_cast<tt_l1_ptr uint32_t*>(l1_address);
     result[0] = value;
+    DPRINT("Writing to {}\n", (uintptr_t)l1_address)
 }

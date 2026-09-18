@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdio>
 #include <string>
 #include <vector>
 
@@ -16,8 +17,8 @@
 #include "impl/context/metal_context.hpp"
 
 ////////////////////////////////////////////////////////////////////////////////
-// DEVICE_PRINT tests for DRAM programmable cores (DRISC, Blackhole only).
-// Mirrors select tests from test_print_output.cpp but targets DRAM core 0,0.
+// DEVICE_PRINT tests for DRAM programmable cores (DRISC/CCE).
+// Mirrors select tests from test_print_output.cpp.
 ////////////////////////////////////////////////////////////////////////////////
 using namespace tt;
 using namespace tt::tt_metal;
@@ -119,6 +120,71 @@ TEST_F(DevicePrintDramFixture, DramPrintFactorial) {
         "factorial(5) = 120",
     };
     TestDramOutput("tests/tt_metal/tt_metal/test_kernels/device_print/print_factorial.cpp", messages, runtime_args);
+}
+
+// Concurrent DEVICE_PRINT from every CCE hart. Mirrors PrintConcurrentRocketRiscs: the same
+// per-iteration kernel on all processors, then count "Test iteration: N" lines.
+TEST_F(DevicePrintDramFixture, PrintConcurrentDriscCores) {
+    DRAM_SKIP_GUARDS();
+    const auto& hal = MetalContext::instance().hal();
+    const uint32_t num_harts = hal.get_num_risc_processors(HalProgrammableCoreType::DRAM);
+    if (num_harts < 2) {
+        GTEST_SKIP() << "PrintConcurrentDriscCores requires more than one DRAM processor";
+    }
+
+    constexpr uint32_t iterations_count = 5;
+    constexpr const char* kernel_path = "tests/tt_metal/tt_metal/test_kernels/device_print/print_iterations.cpp";
+
+    size_t device_counter = 0;
+    for (auto& mesh_device : this->devices_) {
+        if (mesh_device->arch() != tt::ARCH::QUASAR) {
+            continue;
+        }
+        device_counter++;
+
+        distributed::MeshWorkload workload;
+        auto zero_coord = distributed::MeshCoordinate(0, 0);
+        auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+        Program program = Program();
+        constexpr CoreCoord core = {0, 0};
+        std::vector<uint32_t> runtime_args = {iterations_count};
+
+        for (uint32_t hart = 0; hart < num_harts; hart++) {
+            KernelHandle kernel_handle = CreateKernel(
+                program,
+                kernel_path,
+                core,
+                DramConfig{.processor = static_cast<DataMovementProcessor>(hart), .noc = tt_metal::NOC::NOC_0});
+            SetRuntimeArgs(program, kernel_handle, core, runtime_args);
+        }
+
+        workload.add_program(device_range, std::move(program));
+        DebugToolsMeshFixture::RunProgram(mesh_device, workload);
+        MetalContext::instance().dprint_server()->await();
+
+        std::fstream log_file;
+        ASSERT_TRUE(OpenFile(dprint_file_name, log_file, std::fstream::in));
+        std::vector<int> counts(iterations_count, 0);
+        std::string line;
+        for (;;) {
+            if (!getline(log_file, line)) {
+                break;
+            }
+            int iter = -1;
+            if (sscanf(line.c_str(), "Test iteration: %d", &iter) == 1 && iter >= 0 &&
+                iter < static_cast<int>(counts.size())) {
+                counts[iter]++;
+            }
+        }
+        const int expected_count = static_cast<int>(num_harts) * static_cast<int>(device_counter);
+        for (int i = 0; i < static_cast<int>(counts.size()); i++) {
+            EXPECT_EQ(counts[i], expected_count)
+                << "Iteration " << i << " appeared " << counts[i] << " times (expected " << expected_count << " times)";
+        }
+    }
+    if (device_counter == 0) {
+        GTEST_SKIP() << "PrintConcurrentDriscCores is Quasar CCE-only";
+    }
 }
 
 #undef DRAM_SKIP_GUARDS
