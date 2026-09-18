@@ -14,7 +14,8 @@ operands:
   - name: "KT"
     dims: [64, 64]
     format: "Float16_b"
-    const_value: 0.01
+    range:
+      include: [0.01]
   # V: value matrix
   - name: "V"
     dims: [64, 64]
@@ -23,7 +24,8 @@ operands:
   - name: "identity_scale"
     dims: [64, 64]
     format: "Float16_b"
-    const_value: 1.0
+    range:
+      include: [1.0]
   # intermediates and outputs
   - name: "qkt"
     dims: [32, 64]

@@ -55,7 +55,7 @@ class Operand:
     sfpu: bool = True
     _raw_data: Optional[torch.Tensor] = None
     _master_golden: Optional[torch.Tensor] = None
-    const_value: Optional[float] = None
+    intervals: Optional[List[Tuple[float, float]]] = None
     l1_golden: Optional[torch.Tensor] = None
     tile_count: Optional[int] = None
     tile_count_x: Optional[int] = None
@@ -94,8 +94,14 @@ class Operand:
         faces_needed = self.tile_count * self.tile_shape.total_num_faces()
         faces_data = []
 
-        if self.const_value is not None:
-            spec = StimuliSpec.constant(self.const_value)
+        if self.intervals is not None:
+            if (
+                len(self.intervals) == 1
+                and self.intervals[0][0] == self.intervals[0][1]
+            ):
+                spec = StimuliSpec.constant(self.intervals[0][0])
+            else:
+                spec = StimuliSpec.uniform(intervals=self.intervals)
         else:
             spec = default_spec_for_format(self.data_format)
 
@@ -254,7 +260,7 @@ class OperandRegistry:
         name: str,
         dimensions: Tuple[int, int],
         data_format: DataFormat,
-        const_value: Optional[float] = None,
+        intervals: Optional[List[Tuple[float, float]]] = None,
         tile_dims: Optional[Tuple[int, int]] = None,
     ) -> Operand:
         if name in self.operands:
@@ -281,7 +287,7 @@ class OperandRegistry:
             dimensions=dimensions,
             data_format=data_format,
             is_output=False,
-            const_value=const_value,
+            intervals=intervals,
             tile_shape=tile_shape,
         )
         self.operands[name] = operand

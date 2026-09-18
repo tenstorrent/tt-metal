@@ -11,7 +11,8 @@ operands:
   - name: "input_B"
     dims: [32, 32]
     format: "Float16_b"
-    const_value: 1.0
+    range:
+      include: [1.0]
   - name: "output1"
     dims: [32, 32]
     format: "Float16_b"

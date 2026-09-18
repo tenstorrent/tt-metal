@@ -6,6 +6,15 @@ operands:
   - name: "input_A"
     dims: [32, 32]
     format: [Float16_b, Float32]
+    range:
+      include:
+        - 0.005
+        - [0.01, 1.0]
+        - 1.5
+        - [2.0, 10.0]
+      exclude:
+        - [0.1, 0.2]
+        - [3.0, 4.0]
   - name: "sfpu_out"
     dims: [32, 32]
     format: [Float16_b, Float32]

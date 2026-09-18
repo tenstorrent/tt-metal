@@ -16,22 +16,26 @@ operands:
   - name: "input_mask"
     dims: [64, 64]
     format: "Float16_b"
-    const_value: 1.0
+    range:
+      include: [1.0]
 
   - name: "scaler"
     dims: [64, 64]
     format: "Float16_b"
-    const_value: 1.0
+    range:
+      include: [1.0]
 
   - name: "inv_num_datums"
     dims: [64, 64]
     format: "Float16_b"
-    const_value: 0.000244140625
+    range:
+      include: [0.000244140625]
 
   - name: "eps"
     dims: [64, 64]
     format: "Float16_b"
-    const_value: 0.001
+    range:
+      include: [0.001]
 
   - name: "gamma"
     dims: [64, 64]
