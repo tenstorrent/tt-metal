@@ -14,16 +14,12 @@
 
 namespace tt::tt_metal::distributed::host_transport {
 
-// Two-sided point-to-point transport, for deployments without RDMA. Goes through
-// DistributedContext, so it needs no MPI headers and works over whatever MPI is
-// configured -- including the in-tree ULFM build, which cannot do one-sided RDMA
-// at all.
-//
-// Much slower than the RDMA backend, by however much the MPI build's own
-// transport is slower: the in-tree ULFM OpenMPI carries only the self/sm/tcp
-// BTLs, so cross-host pages go through the kernel TCP stack and plateau near
-// 2.2 GB/s against RDMA's 11.8. That is the MPI build's ceiling, not this
-// code's -- adding sender cores does not move it.
+// Two-sided point-to-point transport. Goes through DistributedContext, so it
+// needs no MPI headers and runs over whatever the MPI build has underneath --
+// UCX or libfabric over RDMA where available, plain TCP where not. Bandwidth is
+// therefore the MPI build's, not this code's: the in-tree ULFM OpenMPI carries
+// only the self/sm/tcp BTLs and plateaus near 2.2 GB/s, while an MPI with
+// pml_ucx reaches the link.
 //
 // Deliberately point-to-point rather than MPI one-sided RMA: Rput completes on
 // origin-buffer reuse rather than remote visibility, separate Rputs are

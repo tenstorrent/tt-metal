@@ -4,8 +4,6 @@
 
 #pragma once
 
-#include <tt-metalium/experimental/sockets/host_transport_kind.hpp>
-
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -72,7 +70,6 @@ public:
 inline constexpr int kTagsPerConnection = 2;
 
 struct TransportParams {
-    TransportKind kind = TransportKind::Rdma;
     RingGeometry geometry;
     bool is_sender = false;
     // The local pinned ring the transport reads from or writes into.
@@ -83,16 +80,12 @@ struct TransportParams {
     // Separates concurrent connections between the same rank pair. Both ends must
     // pick the same base, which the caller does by construction order.
     int tag_base = 0;
-    // Rdma only; ignored otherwise.
-    std::string rdma_device;
-    int gid_index = -1;
     uint32_t max_batch_pages = 8;
 };
 
-// Whether this build has the backend and the host can run it (for Rdma, a usable
-// RoCEv2 device). Safe to call before the handshake, so both ends can agree on a
-// backend instead of one blocking.
-bool host_transport_available(TransportKind kind);
+// Whether this build can move pages between hosts at all. Safe to call before the
+// handshake, so both ends can agree instead of one blocking.
+bool host_transport_available();
 
 // Builds and connects a transport. Collective with the peer: both ends must call
 // it, in the same order, before either returns.

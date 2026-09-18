@@ -22,7 +22,7 @@ namespace {
 // Bounds the bookkeeping deque; peer ring credit is the real limit.
 constexpr size_t kMaxOutstandingBatches = 64;
 
-// Two payload runs plus the doorbell.
+// Two payload runs plus the arrival signal.
 constexpr uint32_t kSlotsPerBatch = 3;
 
 constexpr uint32_t kSpinsBeforeSleep = 1000;

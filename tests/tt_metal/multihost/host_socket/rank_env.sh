@@ -23,8 +23,6 @@ pick() {  # var_name, colon_list
     pick TT_VISIBLE_DEVICES "$TT_VISIBLE_DEVICES_PER_RANK"
     export TT_METAL_VISIBLE_DEVICES="$TT_VISIBLE_DEVICES"
 }
-[[ -n "${TT_HOST_SOCKET_RDMA_DEV_PER_RANK:-}" ]] && \
-    pick TT_HOST_SOCKET_RDMA_DEV "$TT_HOST_SOCKET_RDMA_DEV_PER_RANK"
 
-echo "rank $RANK on $(hostname): mesh=$TT_MESH_ID chip=${TT_VISIBLE_DEVICES:-unset} rdma=${TT_HOST_SOCKET_RDMA_DEV:-auto}" >&2
+echo "rank $RANK on $(hostname): mesh=$TT_MESH_ID chip=${TT_VISIBLE_DEVICES:-unset}" >&2
 exec "$@"

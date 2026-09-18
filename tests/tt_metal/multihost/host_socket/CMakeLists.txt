@@ -1,5 +1,5 @@
-# HostMeshSocket carries a D2D stream over host RDMA, so the tests only exist when
-# that transport was built.
+# HostMeshSocket carries a D2D stream over the host network, so the tests only
+# exist when that transport was built.
 if(NOT TT_METAL_ENABLE_HOST_TRANSPORT)
     return()
 endif()
@@ -15,7 +15,6 @@ target_sources(
         host_socket_test_utils.cpp
         test_host_socket.cpp
         test_host_transport.cpp
-        test_host_transport_backends.cpp
         test_socket_hotswap.cpp
         test_host_socket_latency.cpp
 )

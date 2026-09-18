@@ -31,15 +31,21 @@ sender tensix           relay poll loop             relay poll loop        recv 
 ```
 
 Legs 1 and 3 are `D2HSocket` and `H2DSocket` (in `DEVICE_PULL` mode) unchanged. Only the
-host-to-host leg is new, and it sits behind the `HostTransport` interface
-(`host_transport/host_transport.hpp`) with two implementations: `RdmaTransport` (one-sided
-verbs, the default) and `MpiTransport` (two-sided point-to-point). `TransportConfig::kind`
-picks one; everything above the interface is identical either way.
+host-to-host leg is new. It sits behind the `HostTransport` interface
+(`host_transport/host_transport.hpp`), implemented by `MpiTransport`: two-sided
+point-to-point through `DistributedContext`.
 
-The seam is *how many pages are valid in the ring*, not *post a write*, because that is the
-one thing the two differ on. With RDMA the peer's NIC lands the bytes and the receiver only
-reads a counter; with MPI the receiver has to complete a receive before the bytes exist. Both
-answer the same question, so the relay does not know which it is talking to.
+**Bandwidth is the MPI build's, not this code's.** `MPI_Isend`/`Irecv` run over whatever the
+local MPI has underneath — `pml_ucx` or `mtl_ofi` over RDMA where those exist, plain TCP where
+they do not. That is the whole reason this leg is MPI rather than raw verbs: ~990 lines of
+queue-pair, memory-region and completion-queue management disappear, and the deployment's own
+MPI decides how the bytes cross. The cost is that a misconfigured MPI degrades silently to
+TCP, which §4 quantifies.
+
+The seam is *how many pages are valid in the ring*, not *post a write*, so a one-sided
+transport can be added later without touching the relay: one-sided would land bytes with the
+NIC and have the receiver read a counter, two-sided has the receiver complete a receive, and
+both answer the former.
 
 ### The device side needs no new primitives
 
@@ -56,62 +62,33 @@ while this receiver issues chunked NOC reads from host memory. The test kernels
 (`host_socket_{sender,receiver}.cpp`) select between the two on a `SOCKET_MODE` compile-time
 argument, which is what makes swapping transports a one-argument change.
 
-### No copy on the host
+### No copy on our side of the host
 
-Both FIFOs are page-aligned `NamedShm` mappings, so each is registered once with `ibv_reg_mr`
-and the NIC reads the D2H ring and writes the peer's H2D ring directly. The pinned ring *is*
-the CPU-DRAM staging buffer; there is no second copy and no per-transfer registration.
+Both FIFOs are page-aligned `NamedShm` mappings handed straight to `MPI_Isend`/`Irecv` as
+spans, so the pinned ring *is* the staging buffer and this code never copies a payload byte.
 
-### Ordering and pipelining (RDMA)
+Whether a copy happens *below* that is the MPI implementation's choice: a rendezvous protocol
+over UCX registers the ring and lets the NIC read it directly, while an eager protocol copies
+into MPI's own buffers first. That is part of why the TCP figure in §4 is what it is, and it is
+not something this layer can control.
 
-One RC queue pair per connection. RC delivery is in-order, which buys both properties at once:
-
-- Payload work requests are posted back to back and left unsignaled (one signaled per 64) so
-  the send queue can be reaped. `ibv_post_send` is a doorbell write, not a syscall, so nothing
-  per-message enters the kernel.
-- The batch's trailing doorbell is a 4-byte RDMA write of the sender's **absolute** running
-  page total into a small registered slot on the receiver. Because it sits behind the payload
-  on the same queue pair, the peer cannot observe it before those bytes have landed, so the
-  fast path needs no read fence. The receiver reads the slot with an ordinary load.
-- Payload is never striped across queue pairs; that would break ordering, and one queue pair
-  already reaches the NIC's ceiling at these sizes.
-
-**Immediate data is deliberately not used.** `RDMA_WRITE_WITH_IMM` looks like the natural fit
-for a doorbell, but whether a completion reports `IBV_WC_RECV_RDMA_WITH_IMM` and sets
-`IBV_WC_WITH_IMM` varies by provider — on the RoCE NICs in these hosts it does neither, so
-`imm_data` is not meaningful. A dropped or bogus immediate is also very hard to diagnose,
-because it presents as a device-side hang or as a page count that drifts. Writing an absolute
-counter into memory instead matches how every other counter in the socket protocol works, and
-it removes the receive queue entirely: no recv work requests to keep posted, no RNR risk.
-
-Both signals are absolute counters for the same reason: a duplicated, coalesced or stale
-update is then a no-op rather than silent corruption. The receiver additionally rejects a
-doorbell implying more than a ring's worth outstanding, which is the signature of a misread
-slot rather than real progress.
-
-Both rings hold the same number of pages, so a page's source and destination indices are the
-same value: the wrap is a single modulo and a batch is at most two contiguous runs, which lets
-`max_batch_pages` pages coalesce into one work request.
-
-### Ordering and pipelining (MPI)
+### Ordering and pipelining
 
 One message per page, so there is no framing and no message ever spans the ring wrap. MPI
 point-to-point between a rank pair on one tag is ordered, so the receiver's queued receives
 fill in send order and each lands on the page the sender took it from — which is what lets
-both sides agree on the page index without putting it on the wire. The sender keeps a deque of
-`Isend` requests and retires only from the front, because completion order is not guaranteed
-and a count that retires out of order would claim a page is free early. The receiver keeps a
-receive posted for every page the ring can hold, topped up as the device consumes, so a
-receive is always already waiting when payload arrives.
+both sides agree on the page index without putting it on the wire.
 
-Deliberately point-to-point rather than MPI RMA, which looks like the closer analogue to
-one-sided verbs but is not usable here: `MPI_Rput` completes on origin-buffer reuse rather
-than remote visibility, separate `Rput`s to the same window are unordered, and `MPI_Cancel` is
+The sender keeps a deque of `Isend` requests and retires only from the front, because
+completion order is not guaranteed and a count that retired out of order would claim a page is
+free early. The receiver keeps a receive posted for every page the ring can hold, topped up as
+the device consumes, so a receive is always already waiting when payload arrives. A single
+stream is never striped across links; parallelism comes from more streams (§ Multiple planes).
+
+**Deliberately point-to-point rather than MPI one-sided RMA**, which looks like the closer
+analogue to verbs but is not usable here: `MPI_Rput` completes on origin-buffer reuse rather
+than remote visibility, separate `Rput`s to one window are unordered, and `MPI_Cancel` is
 illegal on an RMA request, so a half-finished stream cannot be torn down.
-
-This backend exists for deployments with no RoCE device — including the in-tree ULFM build,
-which cannot do one-sided RDMA at all. It is **much** slower, and how much is set by the MPI
-build rather than by this code; see §4.
 
 ### Flow control
 
@@ -142,10 +119,10 @@ owning a socket imposes no polling duty. It drains fully before parking, then sp
 and backs off to a 50 µs sleep. Set `TransportConfig::own_relay_thread = false` and call
 `poll()` to drive it inline instead, which makes a failure deterministic under a debugger.
 
-An endpoint is **single-consumer**: it owns a queue pair whose completion queue must be
-drained by exactly one thread. `poll()` therefore refuses to run on a socket the relay thread
-already owns, and `barrier()` does not poll in that case — two threads in the same completion
-queue double-consume completions and corrupt the doorbell and credit accounting. An exception
+An endpoint is **single-consumer**: it owns the MPI requests for its stream, which exactly one
+thread may test. `poll()` therefore refuses to run on a socket the relay thread
+already owns, and `barrier()` does not poll in that case — two threads testing the same requests
+double-consume completions and corrupt the arrival and credit accounting. An exception
 from `poll()` is recorded against the endpoint and surfaced by `barrier()` rather than
 escaping the relay thread, where it would terminate the process instead of failing the test.
 
@@ -179,8 +156,14 @@ into a landing buffer the caller allocates.
 
 ## 4. Measured throughput
 
-Between two Blackhole Galaxies (`bh-glx-120-c06u02` and `c06u08`), 14336 B pages, PCIe x8
-chip, 64-page ring, 56 MB per core per iteration over 16 iterations:
+Read this section in two halves: what the *datapath* can carry, and what the *MPI build*
+delivers over it. They are different numbers, and the gap is the main thing to know before
+deploying this.
+
+### What the datapath can carry
+
+Between two Blackhole Galaxies, 14336 B pages, PCIe x8 chip, 64-page ring, 56 MB per core per
+iteration over 16 iterations:
 
 | Sender cores | GB/s |
 |---|---|
@@ -189,45 +172,35 @@ chip, 64-page ring, 56 MB per core per iteration over 16 iterations:
 | 4 | 11.48 |
 | 8 | 11.84 |
 
-**Core count is the lever that matters at 14 KB.** A single Tensix core issuing chunked PCIe
-writes tops out near 6.2 GB/s at this page size and cannot saturate the path; two cores
-already clear the link, and eight reach about 97% of the ~12.24 GB/s ceiling measured
-independently for host-to-host RDMA on these NICs.
+**Measured with a one-sided verbs transport that this branch no longer contains**, so treat it
+as a characterisation of legs 1 and 3 plus the NIC rather than a number you can reproduce from
+this tree. It establishes the useful fact: the device side and the 100 GbE link are not the
+bottleneck. Core count is the lever at 14 KB — one Tensix core issuing chunked PCIe writes tops
+out near 6.2 GB/s, two already clear the link, and eight reach ~97% of the ~12.24 GB/s
+host-to-host ceiling measured independently on these NICs.
 
-### The MPI backend
+### What the MPI build delivers
 
-Same page size and ring, node pair `c10u08`/`c10u20`, `TT_HOST_SOCKET_TRANSPORT=mpi`:
-
-| Sender cores | GB/s (MPI) | GB/s (RDMA) |
+| MPI configuration | Host-to-host | Status |
 |---|---|---|
-| 1 | 1.53 | 6.06 – 6.21 |
-| 2 | 2.17 | 10.93 |
-| 4 | 2.09 | 11.48 |
-| 8 | 2.17 | 11.84 |
+| `pml_ucx` / `mtl_ofi` over RDMA | reaches the link | measured outside this branch; **not reproduced here** |
+| in-tree ULFM OpenMPI 5.0.7 (`self`/`sm`/`tcp` only) | ~2.2 GB/s, flat from 2 cores | measured here |
 
-It plateaus at about **2.2 GB/s from two cores** — 5.4x below RDMA — and the flat top is the
-point: adding cores does nothing, so the limit is the host-to-host hop, not the device side.
-The in-tree ULFM OpenMPI is configured with only the `self`, `sm` and `tcp` BTLs (no UCX, no
-`openib`, no `ofi`), so every cross-host page goes through the kernel TCP stack, and ~2.2 GB/s
-is about what that does with 14 KB messages. **This is the MPI build's ceiling, not the
-backend's.** An MPI over UCX or libfabric would land well above it; that configuration has not
-been measured here, so no number is claimed for it.
+**The in-tree ULFM build cannot hit the 7-11 GB/s target.** It is configured with only the
+`self`, `sm` and `tcp` BTLs — no UCX, no `openib`, no `ofi` — so every cross-host page goes
+through the kernel TCP stack. A runtime probe confirms it lands on `ens5f0np0`, which is the
+*same* 100 GbE port an RDMA path would use: same wire, ~18% of it. Adding sender cores does not
+move the plateau, which is how you tell the limit is the host hop and not the device.
 
-The single-core point also measured 0.47 GB/s in an earlier job on the same pair, so treat it
-as the least trustworthy row — the plateau reproduces, the ramp does not.
+So this socket's throughput is a deployment property. Check it before blaming the socket:
 
-Use this backend where RDMA is unavailable and correctness matters more than rate. Where both
-are available, `TransportKind::Rdma` is the default for good reason.
+```bash
+ompi_info | grep -E 'MCA (pml|mtl): (ucx|ofi)'   # non-empty => RDMA-capable path available
+```
 
-Throughput is repeatable only to about +/-15%: the same 14336/64-page/1-core point
-measured 5.25, 6.27 and 6.71 GB/s within one job and 3.15 GB/s on a different node pair. Treat
-single points accordingly, and prefer comparing shapes (core scaling, ring depth) over
-absolute values.
-
-The `sweep` mode also varies page size, holding total volume fixed so the points are
-comparable. Even so, a kernel launch costs tens of milliseconds on these systems, so a
-small-page point still carries proportionally more launch overhead than a large-page one;
-read the curve as a lower bound at the small end.
+The system OpenMPI 4.1.2 on these hosts *does* carry `pml: ucx`, `btl: openib` and `mtl: ofi`,
+while the ULFM build tt-metal prefers does not — so reaching the target is a matter of which
+MPI tt-metal links against, not of this code.
 
 ### Ring depth and the bandwidth-delay product
 
@@ -286,12 +259,12 @@ meaningless 34 ms average in an earlier run.
 
 - **vIOMMU enabled.** Gated on `GetMemoryPinningParameters(mesh).can_map_to_noc`; the tests
   skip rather than fail when it is off.
-- **A host-to-host transport.** At least one backend must be available or the socket is not
-  built at all (`TT_METAL_ENABLE_HOST_TRANSPORT`, auto-detected): `RdmaTransport` needs
-  libibverbs at build time and a RoCE device reachable from both hosts at run time,
-  `MpiTransport` needs only `ENABLE_DISTRIBUTED`. `host_transport_available(kind)` reports
-  whether a given one can actually run here, so both ends can agree before the handshake
-  rather than half of them blocking on it.
+- **An MPI build** (`ENABLE_DISTRIBUTED`). The socket is not built without one
+  (`TT_METAL_ENABLE_HOST_TRANSPORT`, auto-detected), and `host_transport_available()` reports
+  whether it can run here so both ends agree before the handshake rather than one blocking.
+  There is no longer any libibverbs dependency.
+- **For target throughput, an MPI with an RDMA-capable path** (`pml_ucx` or `mtl_ofi`). The
+  socket is correct over plain TCP but ~5x slower; see §4.
 - **PCIe x8 endpoints.** Only 4 of a Galaxy's 32 chips have an x8 link (one per tray, ASIC
   location 6); the other 28 are x1 and cannot carry this traffic.
 - `fifo_size % page_size == 0`. A partial tail page would have to be charged to the
@@ -306,7 +279,6 @@ Always through SLURM; the launcher needs two nodes because the two endpoints are
 ```bash
 cd tests/tt_metal/multihost/host_socket
 sbatch -p <galaxy-partition> --nodes=2 run_host_socket_tests.sh smoke   # correctness
-sbatch -p <galaxy-partition> --nodes=2 run_host_socket_tests.sh mpi     # same, over MPI
 sbatch -p <galaxy-partition> --nodes=2 run_host_socket_tests.sh perf    # 14 KiB throughput
 sbatch -p <galaxy-partition> --nodes=2 run_host_socket_tests.sh sweep   # page size + core count
 sbatch -p <galaxy-partition> --nodes=2 --time=2:00:00 \
@@ -318,13 +290,9 @@ turns the throughput test into a gate; without it throughput is reported but not
 
 Tests fall into two suites.
 
-Two suites need **no Tenstorrent device**, run in well under a second, and are the right place
-to reproduce a protocol bug. `HostTransportTest` cross-connects two queue pairs on one NIC port
-(the HCA loops back internally) and checks the verbs layer on its own: payload/doorbell
-ordering, 500 ring laps, absolute credits, counter widening across a 32-bit wrap, and
-send-queue back-pressure. `HostTransportBackendTest` runs one body — stream N pages, verify
-every byte, hold under credit back-pressure — over each backend in turn, so the contract the
-relay depends on is checked identically for both:
+`HostTransportTest` needs **no Tenstorrent device** and runs in well under a second, so it is
+the right place to reproduce a protocol bug: it streams pages between the two ranks and
+verifies every byte, across ring laps, one page at a time, and under credit back-pressure.
 
 ```bash
 sbatch -p <any-partition> --nodes=1 run_host_socket_tests.sh transport   # both, no device

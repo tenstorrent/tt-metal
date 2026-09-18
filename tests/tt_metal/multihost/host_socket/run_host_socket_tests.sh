@@ -8,7 +8,7 @@
 # HostMeshSocket test launcher. Runs strictly under SLURM: submit with sbatch, or
 # run inside an existing salloc. Never reserve a machine by hand.
 #
-#   sbatch --nodes=2 run_host_socket_tests.sh [transport|smoke|mpi|hotswap|perf|latency|sweep|soak|all]
+#   sbatch --nodes=2 run_host_socket_tests.sh [transport|smoke|hotswap|perf|latency|sweep|soak|all]
 #   sbatch --nodes=1 run_host_socket_tests.sh smoke    # both ranks on one host
 #   salloc -N2 -t 2:00:00 ./run_host_socket_tests.sh perf
 #
@@ -18,17 +18,16 @@
 #
 # Environment knobs (all optional):
 # Modes:
-#   transport  host-only verbs loopback plus backend parity (rdma, mpi);
+#   transport  host-only page streaming between the two ranks;
 #              needs no Tenstorrent device
 #   smoke      transport, then the four correctness tests
-#   mpi        the same correctness tests and throughput over the MPI backend
 #   hotswap    the same body and kernels over a D2D MeshSocket and over this one
 #   perf       throughput at 14 KiB pages
 #   latency    idle device-to-device round trip, then ack latency under load
 #   sweep      page-size sweep at fixed volume, then core-count scaling, then
 #              ring-depth scaling (locates the bandwidth-delay product)
 #   soak       long-running verified soak (see HOST_SOCKET_SOAK_SECONDS)
-#   all        transport, smoke, mpi, hotswap, perf, latency
+#   all        transport, smoke, hotswap, perf, latency
 #
 # Environment knobs (all optional):
 #   TT_METAL_HOME              repo root; also resolved from SLURM_SUBMIT_DIR
@@ -41,7 +40,6 @@
 #   HOST_SOCKET_TIMEOUT        per-run timeout, seconds (600; 120 for smoke). A
 #                              soak must raise it above HOST_SOCKET_SOAK_SECONDS.
 #   HOST_SOCKET_DEVICE_ID      index within the visible set (default 0)
-#   HOST_SOCKET_NICS           per-rank RDMA device names, "a:b"
 #   HOST_SOCKET_NIC_IF         interface for MPI out-of-band; else docker/flannel
 #                              are excluded
 #   HOST_SOCKET_MGD            mesh graph descriptor (default: config/two_bh_single_chip_mgd.textproto)
@@ -112,14 +110,14 @@ fi
 MPIRUN=/opt/openmpi-v5.0.7-ulfm/bin/mpirun
 [[ -x "$MPIRUN" ]] || MPIRUN=$(command -v mpirun) || { echo "error: no mpirun" >&2; exit 2; }
 
-# MPI carries only the control path; data goes to the NIC through verbs. These
-# hosts have docker and flannel interfaces, and OpenMPI will otherwise try to
-# reach a peer on 172.17.0.1 and abort.
+# MPI now carries the data path too. These hosts have docker, flannel and Calico
+# interfaces, and OpenMPI will otherwise try to reach a peer on 172.17.0.1 and
+# abort. Exclude them so it picks the 100 GbE port.
 if [[ -n "${HOST_SOCKET_NIC_IF:-}" ]]; then
     export OMPI_MCA_btl_tcp_if_include="$HOST_SOCKET_NIC_IF"
     export OMPI_MCA_oob_tcp_if_include="$HOST_SOCKET_NIC_IF"
 else
-    EXCLUDE="${HOST_SOCKET_NIC_EXCLUDE:-lo,docker0,flannel.1,virbr0}"
+    EXCLUDE="${HOST_SOCKET_NIC_EXCLUDE:-lo,docker0,flannel.1,virbr0,cali+,br-+}"
     export OMPI_MCA_btl_tcp_if_exclude="$EXCLUDE"
     export OMPI_MCA_oob_tcp_if_exclude="$EXCLUDE"
 fi
@@ -140,15 +138,9 @@ case "$MODE" in
 esac
 if (( LOOPBACK )); then
     CHIP_CANDIDATES="${HOST_SOCKET_VISIBLE_DEVICES:-$DEFAULT_CHIPS_LB}"
-    # Both ranks on the same port: only f0 carries an IP on these hosts, so f1 has no
-    # RoCEv2 GID to select. Two RC queue pairs on one port loop back inside the HCA,
-    # so this needs no switch hairpin.
-    export TT_HOST_SOCKET_RDMA_DEV_PER_RANK="${HOST_SOCKET_NICS:-rocep201s0f0:rocep201s0f0}"
 else
     CHIP_CANDIDATES="${HOST_SOCKET_VISIBLE_DEVICES:-$DEFAULT_CHIPS_2N}"
-    [[ -n "${HOST_SOCKET_NICS:-}" ]] && export TT_HOST_SOCKET_RDMA_DEV_PER_RANK="$HOST_SOCKET_NICS"
 fi
-: "${TT_HOST_SOCKET_RDMA_DEV_PER_RANK:=}"
 export TT_HOST_SOCKET_DEVICE_ID="${HOST_SOCKET_DEVICE_ID:-0}"
 RUN_TIMEOUT="${HOST_SOCKET_TIMEOUT:-600}"
 # Many chip pairs to get past contended devices, so keep each attempt short.
@@ -160,13 +152,12 @@ MAP_ARGS="--bind-to none"
 (( LOOPBACK )) && MAP_ARGS="$MAP_ARGS --oversubscribe"
 
 # World size > 1 makes the control plane require a per-rank mesh binding. The
-# descriptor wires nothing between the two meshes: this runs over RDMA.
+# descriptor wires nothing between the two meshes: this runs over the host network.
 export TT_MESH_GRAPH_DESC_PATH="${HOST_SOCKET_MGD:-$HERE/config/two_bh_single_chip_mgd.textproto}"
 [[ -f "$TT_MESH_GRAPH_DESC_PATH" ]] || { echo "error: mesh graph descriptor not found: $TT_MESH_GRAPH_DESC_PATH" >&2; exit 2; }
 # Benchmark rows land here so a sweep is machine-readable.
 export TT_HOST_SOCKET_CSV="${HOST_SOCKET_CSV:-$HERE/results/host_socket_${SLURM_JOB_ID:-local}.csv}"
 mkdir -p "$(dirname "$TT_HOST_SOCKET_CSV")"
-[[ -n "${HOST_SOCKET_RDMA_DEV:-}" ]] && export TT_HOST_SOCKET_RDMA_DEV="$HOST_SOCKET_RDMA_DEV"
 [[ -n "${HOST_SOCKET_MIN_GBPS:-}" ]] && export TT_HOST_SOCKET_MIN_GBPS="$HOST_SOCKET_MIN_GBPS"
 
 # Relative kernel paths resolve against the runtime root, so launch from there.
@@ -185,7 +176,7 @@ run_gtest() {  # label, gtest_filter, then VAR=VAL overrides
     for chip in ${CHIP_CANDIDATES//,/ }; do
         export TT_VISIBLE_DEVICES_PER_RANK="$chip"
         echo; echo "########## $label (chips $chip) ##########"
-        # A stalled socket is a device-side spin with no timeout (a lost doorbell
+        # A stalled socket is a device-side spin with no timeout (a lost arrival signal
         # hangs the kernel, exactly as it would on a D2D socket), and mpirun does
         # not always die on SIGTERM when its children are wedged in the driver, so
         # follow up with a kill.
@@ -194,12 +185,11 @@ run_gtest() {  # label, gtest_filter, then VAR=VAL overrides
             --allow-run-as-root --tag-output $MAP_ARGS \
             -x TT_METAL_HOME -x TT_METAL_RUNTIME_ROOT -x TT_MESH_GRAPH_DESC_PATH \
             -x TT_HOST_SOCKET_DEVICE_ID -x TT_VISIBLE_DEVICES_PER_RANK \
-            -x TT_HOST_SOCKET_RDMA_DEV_PER_RANK -x TT_HOST_SOCKET_TRANSPORT \
             -x TT_HOST_SOCKET_PAGE_SIZE -x TT_HOST_SOCKET_FIFO_PAGES \
             -x TT_HOST_SOCKET_NUM_CORES -x TT_HOST_SOCKET_BYTES \
             -x TT_HOST_SOCKET_ITERS -x TT_HOST_SOCKET_SOAK_SECONDS \
             -x TT_HOST_SOCKET_BATCH_PAGES -x TT_HOST_SOCKET_MIN_GBPS \
-                -x TT_HOST_SOCKET_RDMA_DEV -x TT_HOST_SOCKET_GID_INDEX -x TT_HOST_SOCKET_CSV \
+                -x TT_HOST_SOCKET_CSV \
             -x TT_HOST_SOCKET_CSV_LATENCY -x TT_HOST_SOCKET_LAT_ITERS -x TT_HOST_SOCKET_IDLE_RTT_US \
             -x OMPI_MCA_btl_tcp_if_include -x OMPI_MCA_oob_tcp_if_include \
             -x OMPI_MCA_btl_tcp_if_exclude -x OMPI_MCA_oob_tcp_if_exclude \
@@ -222,16 +212,13 @@ run_gtest() {  # label, gtest_filter, then VAR=VAL overrides
 rc=0
 case "$MODE" in
     transport)
-        # Host-only: the verbs tests cross-connect two queue pairs on one NIC
-        # port; the parity tests stream between the two ranks over each backend
-        # in turn. Neither opens a TT device, but both still go through the
-        # scheduler rather than being run by hand.
-        run_gtest "rdma link" 'HostTransportTest.*' || rc=$?
-        run_gtest "backend parity" 'Backends/HostTransportBackendTest.*' || rc=$?
+        # Host-only: streams pages between the two ranks and verifies every byte.
+        # Opens no TT device, but still goes through the scheduler rather than
+        # being run by hand.
+        run_gtest "host transport" 'HostTransportTest.*' || rc=$?
         ;;
     smoke)
-        run_gtest "rdma link" 'HostTransportTest.*' || rc=$?
-        run_gtest "backend parity" 'Backends/HostTransportBackendTest.*' || rc=$?
+        run_gtest "host transport" 'HostTransportTest.*' || rc=$?
         run_gtest "correctness" 'HostSocketTest.*Correctness*' || rc=$?
         ;;
     latency)
@@ -247,24 +234,10 @@ case "$MODE" in
         run_gtest "streaming ack latency" 'HostSocketLatencyTest.StreamingAckLatency' \
             TT_HOST_SOCKET_IDLE_RTT_US="${idle_rtt:-0}" || rc=$?
         ;;
-    mpi)
-        # The portable backend end to end: same correctness body, then throughput
-        # across core counts. The sweep is the point -- it separates per-message
-        # cost from a link-bound path, which a single core cannot tell apart.
-        run_gtest "mpi correctness" 'HostSocketTest.*Correctness*' TT_HOST_SOCKET_TRANSPORT=mpi || rc=$?
-        for nc in ${HOST_SOCKET_CORES:-1 2 4 8}; do
-            run_gtest "mpi throughput ${nc}c" 'HostSocketTest.Throughput' \
-                TT_HOST_SOCKET_TRANSPORT=mpi TT_HOST_SOCKET_NUM_CORES="$nc" || rc=$?
-        done
-        ;;
     hotswap)
         # Same body and same kernels over a D2D MeshSocket and over a
-        # HostMeshSocket; only the socket type and SOCKET_MODE differ. Run for
-        # each backend, since the drop-in claim is about the socket, not the
-        # transport under it.
+        # HostMeshSocket; only the socket type and SOCKET_MODE differ.
         run_gtest "hot swap d2d vs host" 'SocketHotSwapTest.*' || rc=$?
-        run_gtest "hot swap over mpi" 'SocketHotSwapTest.HostMeshSocketDropIn' \
-            TT_HOST_SOCKET_TRANSPORT=mpi || rc=$?
         ;;
     perf)
         run_gtest "throughput @14K" 'HostSocketTest.Throughput' || rc=$?
@@ -306,13 +279,12 @@ case "$MODE" in
         # throughput. 'sweep' is deliberately separate; it is long.
         "$0" transport || rc=$?
         "$0" smoke || rc=$?
-        "$0" mpi || rc=$?
         "$0" hotswap || rc=$?
         "$0" perf || rc=$?
         "$0" latency || rc=$?
         ;;
     *)
-        echo "unknown mode: $MODE (want transport|smoke|mpi|hotswap|perf|latency|sweep|soak|all)" >&2
+        echo "unknown mode: $MODE (want transport|smoke|hotswap|perf|latency|sweep|soak|all)" >&2
         exit 2
         ;;
 esac

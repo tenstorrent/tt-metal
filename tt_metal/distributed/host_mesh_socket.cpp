@@ -47,7 +47,7 @@ multihost::Tag reserve_exchange_tags(size_t connections) {
 
 struct HostMeshSocket::Impl {
     // Declaration order sets teardown order and is load-bearing: stop polling,
-    // destroy the queue pair, deregister the regions, then free their memory.
+    // tear the transport down, then free the rings it was reading from.
     struct Connection {
         std::unique_ptr<D2HSocket> d2h;  // sender endpoints only; owns its ring
         std::unique_ptr<H2DSocket> h2d;  // receiver endpoints only; owns its ring
@@ -155,14 +155,11 @@ HostMeshSocket::HostMeshSocket(
         auto& connection = impl_->connections[i];
 
         host_transport::TransportParams tp;
-        tp.kind = transport.kind;
         tp.geometry = impl_->geometry;
         tp.is_sender = is_sender;
         tp.peer_rank = is_sender ? *config.receiver_rank : *config.sender_rank;
         tp.context = context;
         tp.tag_base = *exchange_tag + static_cast<int>(i) * host_transport::kTagsPerConnection;
-        tp.rdma_device = transport.rdma_device;
-        tp.gid_index = transport.gid_index;
         tp.max_batch_pages = transport.max_batch_pages;
 
         if (is_sender) {
@@ -251,7 +248,7 @@ bool HostMeshSocket::poll() {
     }
     // An endpoint's completion queue must be drained by one consumer. Polling
     // here while the relay thread polls it double-consumes completions and
-    // corrupts the doorbell and credit accounting.
+    // corrupts the arrival and credit accounting.
     TT_FATAL(
         !impl_->transport.own_relay_thread,
         "HostMeshSocket::poll() is only for a socket built with own_relay_thread = false; the relay thread is "

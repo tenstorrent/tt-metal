@@ -2,260 +2,157 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Device-free transport tests: two queue pairs cross-connected on one port, which
-// the HCA loops back internally. Needs no Tenstorrent device and no second host.
+// The HostTransport contract the relay depends on, checked without a device:
+// streams pages between two ranks and verifies every byte. Needs two ranks.
 
 #include <gtest/gtest.h>
 
-#include "tt_metal/distributed/host_transport/rdma_link.hpp"
-#include "tt_metal/distributed/host_transport/socket_relay.hpp"
+#include "tt_metal/distributed/host_transport/host_transport.hpp"
+
+#include <tt-metalium/distributed_context.hpp>
 
 #include <chrono>
 #include <cstring>
-#include <numeric>
-#include <thread>
 #include <vector>
 
 namespace tt::tt_metal::distributed::host_transport {
 namespace {
 
-constexpr uint32_t kPageSize = 14336;  // the target packet size, deliberately not a power of two
-constexpr uint32_t kNumPages = 16;
-constexpr uint32_t kRingBytes = kPageSize * kNumPages;
+constexpr uint32_t kParityPageSize = 14336;  // the target packet size, deliberately not a power of two
+constexpr uint32_t kParityNumPages = 16;
 
-bool rdma_available() {
-    try {
-        RdmaContext probe;
-        return true;
-    } catch (const std::exception&) {
-        return false;
-    }
+// Distinct per test, so a cancelled receive or an in-flight credit from an
+// earlier test can never match a later one's.
+int next_tag_base() {
+    static int next = 4096;
+    next += kTagsPerConnection;
+    return next;
 }
 
-std::vector<std::byte> make_ring() { return std::vector<std::byte>(kRingBytes); }
-
-std::vector<std::byte> pattern(uint64_t seed, size_t bytes) {
-    std::vector<std::byte> out(bytes);
-    uint32_t word = static_cast<uint32_t>(seed * 2654435761u + 1u);
-    for (size_t i = 0; i + 4 <= bytes; i += 4) {
-        std::memcpy(out.data() + i, &word, 4);
+void fill_page(std::byte* page, uint64_t index) {
+    uint32_t word = static_cast<uint32_t>(index * 2654435761u + 1u);
+    for (uint32_t i = 0; i + 4 <= kParityPageSize; i += 4) {
+        std::memcpy(page + i, &word, 4);
         word = word * 1664525u + 1013904223u;
     }
-    return out;
 }
 
-// Bounded, so a lost signal fails instead of hanging.
-template <typename F>
-bool spin_until(F predicate, std::chrono::milliseconds limit = std::chrono::seconds(5)) {
-    const auto deadline = std::chrono::steady_clock::now() + limit;
-    while (std::chrono::steady_clock::now() < deadline) {
-        if (predicate()) {
-            return true;
+// Both ranks must agree, or one skips while the other waits on a handshake.
+bool all_ranks_usable(const multihost::DistributedContext& ctx) {
+    uint8_t mine = host_transport_available() ? 1 : 0;
+    std::vector<uint8_t> all(static_cast<size_t>(*ctx.size()), 0);
+    ctx.all_gather(
+        std::span<std::byte>(reinterpret_cast<std::byte*>(&mine), 1),
+        std::span<std::byte>(reinterpret_cast<std::byte*>(all.data()), all.size()));
+    for (uint8_t v : all) {
+        if (v == 0) {
+            return false;
         }
-        std::this_thread::yield();
     }
-    return predicate();
+    return true;
 }
 
-struct Loopback {
-    RdmaContext ctx;
-    RdmaChannel a{ctx};
-    RdmaChannel b{ctx};
-
-    std::vector<std::byte> a_ring = make_ring();
-    std::vector<std::byte> b_ring = make_ring();
-    uint32_t a_credit = 0;
-    uint32_t b_doorbell = 0;
-
-    RdmaRegion a_ring_mr{ctx, a_ring.data(), a_ring.size()};
-    RdmaRegion b_ring_mr{ctx, b_ring.data(), b_ring.size()};
-    RdmaRegion a_credit_mr{ctx, &a_credit, sizeof(a_credit)};
-    RdmaRegion b_doorbell_mr{ctx, &b_doorbell, sizeof(b_doorbell)};
-
-    Loopback() {
-        // a sends: advertises where b writes credit.
-        RdmaEndpoint a_local = a.local_endpoint();
-        a_local.credit = a_credit_mr.descriptor();
-        // b receives: advertises its ring and doorbell slot.
-        RdmaEndpoint b_local = b.local_endpoint();
-        b_local.fifo = b_ring_mr.descriptor();
-        b_local.doorbell = b_doorbell_mr.descriptor();
-
-        a.connect(b_local);
-        b.connect(a_local);
+class HostTransportTest : public ::testing::Test {
+protected:
+    void SetUp() override {
+        ctx_ = multihost::DistributedContext::get_current_world();
+        if (*ctx_->size() < 2) {
+            GTEST_SKIP() << "needs two ranks";
+        }
+        if (!all_ranks_usable(*ctx_)) {
+            GTEST_SKIP() << "host transport unavailable on at least one rank";
+        }
     }
+
+    std::unique_ptr<HostTransport> make(bool is_sender, int tag_base) {
+        return make_host_transport(TransportParams{
+            .geometry = {.page_size = kParityPageSize, .num_pages = kParityNumPages},
+            .is_sender = is_sender,
+            .ring = ring_.data(),
+            .peer_rank = *ctx_->rank() == 0 ? 1 : 0,
+            .context = ctx_,
+            .tag_base = tag_base,
+        });
+    }
+
+    bool sender() const { return *ctx_->rank() == 0; }
+
+    // Streams `total` pages in batches of `batch` and verifies every byte. The
+    // sender stands in for a device producing pages, the receiver for one
+    // consuming them; `consume_every` pages the receiver holds before crediting,
+    // which is how back-pressure gets exercised.
+    void stream(uint32_t total, uint32_t batch, uint32_t consume_every = 1) {
+        auto transport = make(sender(), next_tag_base());
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+
+        if (sender()) {
+            uint64_t produced = 0;
+            while (transport->pages_released() < total) {
+                ASSERT_LT(std::chrono::steady_clock::now(), deadline) << transport->describe();
+                transport->poll();
+                const uint32_t want = std::min(batch, total - static_cast<uint32_t>(produced));
+                if (want == 0 || !transport->can_send(want)) {
+                    continue;
+                }
+                // Never overwrite a page the transport still owns, nor one the
+                // peer's consumer has not finished with.
+                if (produced + want - transport->pages_released() > kParityNumPages ||
+                    produced + want - transport->peer_consumed_pages() > kParityNumPages) {
+                    continue;
+                }
+                for (uint32_t i = 0; i < want; i++) {
+                    fill_page(ring_.data() + (produced + i) % kParityNumPages * kParityPageSize, produced + i);
+                }
+                ASSERT_TRUE(transport->send(static_cast<uint32_t>(produced), want)) << transport->describe();
+                produced += want;
+            }
+            EXPECT_EQ(produced, total);
+        } else {
+            std::vector<std::byte> expected(kParityPageSize);
+            uint64_t consumed = 0;
+            while (consumed < total) {
+                ASSERT_LT(std::chrono::steady_clock::now(), deadline) << transport->describe();
+                transport->poll();
+                const uint64_t delivered = transport->pages_delivered();
+                ASSERT_LE(delivered - consumed, kParityNumPages) << "peer ran past a ring: " << transport->describe();
+                while (consumed < delivered) {
+                    fill_page(expected.data(), consumed);
+                    ASSERT_EQ(
+                        std::memcmp(
+                            ring_.data() + consumed % kParityNumPages * kParityPageSize,
+                            expected.data(),
+                            kParityPageSize),
+                        0)
+                        << "page " << consumed << " mismatched";
+                    consumed++;
+                    if (consumed % consume_every == 0 || consumed == total) {
+                        transport->set_consumed(consumed);
+                        transport->post_credit(consumed);
+                    }
+                }
+            }
+            // The sender waits on credit for its last batch.
+            while (std::chrono::steady_clock::now() < deadline && !transport->post_credit(consumed)) {
+                transport->poll();
+            }
+            transport->poll();
+        }
+        ctx_->barrier();
+    }
+
+    std::shared_ptr<multihost::DistributedContext> ctx_;
+    std::vector<std::byte> ring_ = std::vector<std::byte>(static_cast<size_t>(kParityPageSize) * kParityNumPages);
 };
 
-TEST(HostTransportTest, ConnectsLoopback) {
-    if (!rdma_available()) {
-        GTEST_SKIP() << "no usable RoCEv2 RDMA device on this host";
-    }
-    Loopback lb;
-    EXPECT_TRUE(lb.a.connected());
-    EXPECT_TRUE(lb.b.connected());
-}
+// 200 pages over a 16-page ring in batches of 3: the batch size does not divide
+// the ring, so batches straddle the wrap at a shifting offset.
+TEST_F(HostTransportTest, StreamsAcrossRingLaps) { stream(/*total=*/200, /*batch=*/3); }
 
-// A doorbell written after a payload must never be visible before it.
-TEST(HostTransportTest, DoorbellOrderedAfterPayload) {
-    if (!rdma_available()) {
-        GTEST_SKIP() << "no usable RoCEv2 RDMA device on this host";
-    }
-    Loopback lb;
+TEST_F(HostTransportTest, StreamsOnePageAtATime) { stream(/*total=*/64, /*batch=*/1); }
 
-    uint64_t forwarded = 0;
-    for (uint32_t batch = 0; batch < 8; batch++) {
-        const uint32_t pages = (batch % 3) + 1;
-        const uint32_t index = static_cast<uint32_t>(forwarded % kNumPages);
-        const uint32_t head = std::min(pages, kNumPages - index);
-        const uint64_t offset = static_cast<uint64_t>(index) * kPageSize;
-
-        auto payload = pattern(batch + 1, static_cast<size_t>(pages) * kPageSize);
-        std::memcpy(lb.a_ring.data() + offset, payload.data(), static_cast<size_t>(head) * kPageSize);
-        if (pages > head) {
-            std::memcpy(
-                lb.a_ring.data(),
-                payload.data() + static_cast<size_t>(head) * kPageSize,
-                static_cast<size_t>(pages - head) * kPageSize);
-        }
-
-        ASSERT_TRUE(lb.a.post_write(lb.a_ring_mr, offset, offset, head * kPageSize));
-        if (pages > head) {
-            ASSERT_TRUE(lb.a.post_write(lb.a_ring_mr, 0, 0, (pages - head) * kPageSize));
-        }
-        forwarded += pages;
-        ASSERT_TRUE(lb.a.post_doorbell(static_cast<uint32_t>(forwarded)));
-
-        // Only the doorbell is polled; the payload must already be there.
-        ASSERT_TRUE(spin_until([&] {
-            lb.b.poll_send();
-            return *static_cast<volatile uint32_t*>(lb.b_doorbell_mr.addr()) == forwarded;
-        })) << "doorbell for total "
-            << forwarded << " never arrived (batch " << batch << ")";
-
-        EXPECT_EQ(std::memcmp(lb.b_ring.data() + offset, payload.data(), static_cast<size_t>(head) * kPageSize), 0)
-            << "payload mismatch at batch " << batch;
-        if (pages > head) {
-            EXPECT_EQ(
-                std::memcmp(
-                    lb.b_ring.data(),
-                    payload.data() + static_cast<size_t>(head) * kPageSize,
-                    static_cast<size_t>(pages - head) * kPageSize),
-                0)
-                << "wrapped payload mismatch at batch " << batch;
-        }
-        lb.a.poll_send();
-    }
-    // pages cycles 1,2,3 over 8 batches
-    EXPECT_EQ(forwarded, 15u);
-}
-
-// Many laps: where pointer arithmetic and 32-bit counter wrap go wrong.
-TEST(HostTransportTest, SurvivesManyRingLaps) {
-    if (!rdma_available()) {
-        GTEST_SKIP() << "no usable RoCEv2 RDMA device on this host";
-    }
-    Loopback lb;
-
-    uint64_t forwarded = 0;
-    uint64_t observed = 0;
-    for (uint32_t batch = 0; batch < 500; batch++) {
-        const uint32_t pages = 4;
-        const uint32_t index = static_cast<uint32_t>(forwarded % kNumPages);
-        const uint32_t head = std::min(pages, kNumPages - index);
-        const uint64_t offset = static_cast<uint64_t>(index) * kPageSize;
-
-        ASSERT_TRUE(lb.a.post_write(lb.a_ring_mr, offset, offset, head * kPageSize));
-        if (pages > head) {
-            ASSERT_TRUE(lb.a.post_write(lb.a_ring_mr, 0, 0, (pages - head) * kPageSize));
-        }
-        forwarded += pages;
-        ASSERT_TRUE(lb.a.post_doorbell(static_cast<uint32_t>(forwarded)));
-        lb.a.poll_send();
-
-        ASSERT_TRUE(spin_until([&] {
-            lb.b.poll_send();
-            const uint32_t wire = *static_cast<volatile uint32_t*>(lb.b_doorbell_mr.addr());
-            observed += static_cast<uint32_t>(wire - static_cast<uint32_t>(observed));
-            return observed == forwarded;
-        })) << "stalled at batch "
-            << batch << ": observed " << observed << " want " << forwarded;
-
-        // Delta must stay within a ring, as the relay asserts.
-        ASSERT_LE(forwarded - (forwarded - pages), kNumPages);
-    }
-    EXPECT_EQ(forwarded, 2000u);
-}
-
-// Credit flows the other way on the same pair.
-TEST(HostTransportTest, CreditReturnsAbsoluteCount) {
-    if (!rdma_available()) {
-        GTEST_SKIP() << "no usable RoCEv2 RDMA device on this host";
-    }
-    Loopback lb;
-
-    uint64_t seen = 0;
-    for (uint32_t consumed : {1u, 5u, 5u, 64u, 1000u, 70000u}) {
-        ASSERT_TRUE(lb.b.post_credit(consumed));
-        ASSERT_TRUE(spin_until([&] {
-            lb.b.poll_send();
-            return *static_cast<volatile uint32_t*>(lb.a_credit_mr.addr()) == consumed;
-        })) << "credit "
-            << consumed << " never arrived";
-        const uint32_t wire = *static_cast<volatile uint32_t*>(lb.a_credit_mr.addr());
-        seen += static_cast<uint32_t>(wire - static_cast<uint32_t>(seen));
-        EXPECT_EQ(seen, consumed);
-    }
-}
-
-// Batches retire on the doorbell's completion, so it must signal even when the
-// periodic cadence has not come due, or the last batch of a stream strands.
-TEST(HostTransportTest, DoorbellCompletionRetiresBatch) {
-    if (!rdma_available()) {
-        GTEST_SKIP() << "no usable RoCEv2 RDMA device on this host";
-    }
-    Loopback lb;
-
-    uint64_t forwarded = 0;
-    for (uint32_t batch = 0; batch < 5; batch++) {
-        ASSERT_TRUE(lb.a.post_write(lb.a_ring_mr, 0, 0, kPageSize));
-        forwarded += 1;
-        ASSERT_TRUE(lb.a.post_doorbell(static_cast<uint32_t>(forwarded)));
-        const uint64_t doorbell_id = lb.a.last_posted_id();
-
-        // Nothing follows, so only a signaled doorbell moves reaped() past it.
-        ASSERT_TRUE(spin_until([&] {
-            lb.a.poll_send();
-            return lb.a.reaped() > doorbell_id;
-        })) << "batch "
-            << batch << " never retired: reaped " << lb.a.reaped() << " want > " << doorbell_id;
-    }
-}
-
-// Must report back-pressure, not silently drop work.
-TEST(HostTransportTest, SendQueueReportsBackPressure) {
-    if (!rdma_available()) {
-        GTEST_SKIP() << "no usable RoCEv2 RDMA device on this host";
-    }
-    Loopback lb;
-    const uint32_t slots = lb.a.send_slots_available();
-    ASSERT_GT(slots, 0u);
-
-    uint32_t posted = 0;
-    while (lb.a.send_slots_available() > 0) {
-        if (!lb.a.post_write(lb.a_ring_mr, 0, 0, kPageSize)) {
-            break;
-        }
-        posted++;
-        ASSERT_LE(posted, slots) << "posted past the reported capacity";
-    }
-    EXPECT_EQ(lb.a.send_slots_available(), 0u);
-    EXPECT_FALSE(lb.a.post_write(lb.a_ring_mr, 0, 0, kPageSize)) << "a full send queue must refuse work";
-
-    ASSERT_TRUE(spin_until([&] {
-        lb.a.poll_send();
-        return lb.a.send_slots_available() > 0;
-    }));
-}
+// The receiver credits only every 8th page, so the sender spends most of the run
+// blocked on credit rather than on the transport.
+TEST_F(HostTransportTest, HoldsUnderCreditBackPressure) { stream(/*total=*/96, /*batch=*/4, /*consume_every=*/8); }
 
 }  // namespace
 }  // namespace tt::tt_metal::distributed::host_transport
