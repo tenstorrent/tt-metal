@@ -8,6 +8,7 @@
 #include "internal/tt-2xx/risc_common.h"
 #include "api/debug/waypoint.h"
 #include "api/debug/ring_buffer.h"
+#include "api/debug/device_print.h"
 #include "hostdev/dev_msgs.h"
 
 #include <cstddef>
@@ -93,6 +94,7 @@ extern "C" uint32_t _start1() {
         do_crt1(__ldm_data_start);
         // Must precede the ready flag below, which releases the other harts.
         WATCHER_RING_BUFFER_INIT();
+        DEVICE_PRINT_INITIALIZE_LOCK();
         (*GET_MAILBOX_ADDRESS_DEV(fw_shared_globals_ready))[hartid] = SHARED_GLOBALS_READY_GO;
     }
     extern uint32_t __ldm_tdata_init[];
@@ -127,6 +129,7 @@ extern "C" uint32_t _start1() {
             invalidate_l1_icache();
             reinterpret_cast<uint32_t (*)()>(kernel_lma)();
             WAYPOINT("D1");
+            DEVICE_PRINT_KERNEL_FINISHED();
             *subordinate_sync_slot(hartid) = RUN_SYNC_MSG_DONE;
         }
     }
@@ -164,6 +167,7 @@ extern "C" uint32_t _start1() {
             reinterpret_cast<uint32_t (*)()>(kernel_lma)();
         }
         WAYPOINT("D");
+        DEVICE_PRINT_KERNEL_FINISHED();
 
         wait_subordinates();
         mailboxes->go_messages[0].signal = RUN_MSG_DONE;

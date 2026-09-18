@@ -41,7 +41,9 @@ namespace dram_realtime_profiler_msgs {
 HalCoreInfoType create_dram_mem_map() {
     static_assert(decltype(DevicePrintMemoryLayout::buffer)::processor_count == PROCESSOR_COUNT);
     static_assert(sizeof(mailboxes_t) <= MEM_CCE_MAILBOX_SIZE);
+    static_assert(MEM_CCE_DEVICE_PRINT_LOCK % 64 == 0);
     static_assert(MEM_CCE_WATCHER_RING_BUFFER_LOCK % 64 == 0);
+    static_assert(MEM_CCE_DEVICE_PRINT_LOCK + 64 <= MEM_CCE_WATCHER_RING_BUFFER_LOCK);
     static_assert(MEM_CCE_WATCHER_RING_BUFFER_LOCK + 64 <= MEM_CCE_MAILBOX_BASE);
     static_assert(MEM_CCE_FIRMWARE_BASE % TT_ARCH_MAX_NOC_WRITE_ALIGNMENT == 0);
     static_assert((MEM_CCE_MAILBOX_BASE + offsetof(mailboxes_t, launch)) % TT_ARCH_MAX_NOC_WRITE_ALIGNMENT == 0);
