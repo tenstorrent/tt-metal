@@ -10,7 +10,7 @@ Uses HF-style ttnn.experimental.rotary_embedding (no transformation matrices).
 import os
 
 import ttnn
-from models.demos.gemma4.tt.compute_config import sdpa_fp32_dest_acc_en, sdpa_math_fidelity
+from models.demos.gemma4.tt.compute_config import decode_sdpa_compute_kernel_config
 
 from .operations import (
     apply_allreduce,
@@ -36,6 +36,34 @@ from .weights import AttentionWeights
 _Q_SHARDED_MEM_CACHE: dict = {}
 
 
+def _qkv_norm_island_memcfg(batch, use_embedding_rope):
+    """Memory config for the per-head q/k/v norm + RoPE island at decode.
+
+    ``nlp_create_qkv_heads_decode`` hands back Q/K/V height-sharded in L1, and
+    both consumers of the normed+rotated tensors (``paged_update_cache``,
+    ``sdpa_decode``) want L1 too — yet the norms and RoPE in between were staged
+    through **DRAM interleaved**. Those ops run on one core over a
+    ``[1, 1, heads_local, head_dim]`` tensor (a few tiles), so they are
+    latency-bound and a DRAM round-trip is pure latency.
+
+    Keeping the island in L1 interleaved feeds the *same* kernels the *same*
+    bits — only the buffer type moves — so it is bit-exact by construction.
+    ``GEMMA4_DECODE_QKV_L1=0`` restores the DRAM staging.
+
+    RESTRICTED to ``batch == 1`` on the embedding-RoPE path, because those are
+    the only rotations that accept a ``memory_config``. ``apply_rope_decode_peruser``
+    (batch > 1) and the legacy 4D-cache ``apply_rope`` both return a tensor
+    following their INPUT's buffer type, so an L1 input would hand
+    ``sdpa_decode`` an L1 Q and trip its ``Q_memcfg.buffer_type() == DRAM``
+    assert. Those paths keep the DRAM staging, byte-for-byte as before.
+    """
+    if os.environ.get("GEMMA4_DECODE_QKV_L1", "1").lower() in ("0", "false", "no"):
+        return ttnn.DRAM_MEMORY_CONFIG
+    if batch != 1 or not use_embedding_rope:
+        return ttnn.DRAM_MEMORY_CONFIG
+    return ttnn.L1_MEMORY_CONFIG
+
+
 def _q_sharded_mem_key(B, qkv_dim, config, weights, tp):
     """Hashable key for the q_sharded_mem cache. Captures every input that
     affects ``nlp_create_qkv_heads_decode``'s output shard spec."""
@@ -49,6 +77,162 @@ def _q_sharded_mem_key(B, qkv_dim, config, weights, tp):
         bool(weights.kv_replicated),
         int(tp),
     )
+
+
+def _rope_expand_gather_enabled() -> bool:
+    """Fold the per-user RoPE heads-broadcast into the position-embedding gather
+    instead of ``ttnn.repeat``-ing the already-gathered TILE cos/sin tensor.
+
+    ``apply_rope_decode_peruser`` broadcasts ``cos_b``/``sin_b`` from
+    ``[1, batch, 1, head_dim]`` to ``[1, batch, heads, head_dim]`` via
+    ``ttnn.repeat``. That call's target axis (heads) starts at size 1, which
+    fails ``repeat_codegen``'s TILE alignment gate
+    (``single_dim_ok``: for TILE, a repeated H/W axis must already be a
+    multiple of ``TILE_HEIGHT``/``TILE_WIDTH`` — 1 is not a multiple of 32).
+    So it falls back to the generic native path, which is an
+    untilize -> repeat -> tilize composite on the (batch-sized, bf16) cos/sin
+    tensor — measured at ~71us/device per call on real hardware (Tracy,
+    gemma-4-31B sliding layer, batch=16, TP=8), most of it the tilize step.
+
+    The fix moves the broadcast upstream of the gather instead: expand
+    ``position_idx`` (a tiny uint32 ROW_MAJOR tensor) via ``ttnn.repeat``
+    first, then do ONE ``ttnn.embedding`` gather at the expanded width. A
+    ROW_MAJOR non-bf16 tensor has no TILE alignment restriction, so this
+    repeat lands on ``RepeatCodegenDeviceOperation`` (the fast path) instead
+    of the untilize/repeat/tilize composite — measured at ~1.9us for the
+    repeat itself, ~44us/device total for the whole construction (embedding
+    gather included), vs ~71us/device for ONE of the two calls it replaces
+    (Q's cos+sin construction; K's becomes a free slice of Q's result instead
+    of a second full construction — see ``_rope_expanded_broadcast``).
+    Verified bit-exact against the current repeat-based path (max abs diff
+    0.0, both cos_b and sin_b) before being wired in here.
+
+    Applies to BOTH ``rope_presliced`` values. ``rope_presliced=True`` is the
+    actual production/DFlash decode path (model.py gathers cos/sin once per
+    layer_type, shared across all layers of that type, to avoid a per-layer
+    ttnn.embedding) — this function has no access to the original 2D table
+    once presliced (``cos_cache`` IS the presliced result by then), so for
+    this flag to have any effect on that path, the CALLER must build the
+    presliced tensor at the expanded (Q head count) width in the first place
+    — see model.py's ``decode_rope_presliced`` construction, gated on this
+    same flag. Getting this wrong (e.g. only handling ``rope_presliced=False``
+    here) makes the flag a silent no-op on real decode traffic — it was
+    initially shipped that way and confirmed via Tracy on real hardware to
+    change nothing, since ``rope_presliced=True`` is unconditionally what
+    model.py's decode loop uses whenever ``decode_rope_presliced`` is
+    populated.
+
+    Default ON. Verified bit-exact (max abs diff 0.0) at both ends of the real
+    call chain: the isolated cos_b/sin_b construction, and the full
+    ``Gemma4Model.__call__`` -> ``decode_rope_presliced`` -> ``decode_forward``
+    path with ``rope_presliced=True`` (DFlash's actual verify traffic) — not
+    just the ``rope_presliced=False`` case, which is the path an earlier,
+    incomplete version of this check covered before the ``rope_presliced=True``
+    gap above was found and fixed. Measured 6.1% total device-time reduction
+    for one layer's ``decode_forward`` call on real T3K hardware (Tracy).
+    ``GEMMA4_ROPE_EXPAND_GATHER=0`` restores the previous repeat-based path,
+    as an escape hatch if a shape/config combination outside what's been
+    measured here turns up a regression.
+    """
+    return os.environ.get("GEMMA4_ROPE_EXPAND_GATHER", "1").lower() not in ("0", "false", "no")
+
+
+_PACKED_KV_MEM_CACHE: dict = {}
+
+
+def _packed_kv_user_mem(q_sharded_mem):
+    """HEIGHT_SHARDED, batch=1, K-on-one-core/V-on-the-neighbor-core memory
+    layouts for a fused K+V cache write (``ttnn.experimental.paged_fused_update_cache``),
+    keyed/cached by ``q_sharded_mem``'s shard shape (the spec only depends on shape, not
+    on which call site is asking).
+
+    Ported from ``ign/gemma4_dflash_wh_changes``'s ``attention/decode.py`` (same file,
+    other branch) rather than reimplemented -- this branch's ``_kv_fused_write_enabled``
+    (below) was written assuming this helper already existed here, but it never was
+    ported over; only this one small, self-contained function is pulled in, not that
+    branch's surrounding ``packed_decode_forward`` changes (a P-as-batch SDPA fast path
+    and MTP call-site compatibility plumbing), which are unrelated, larger, and
+    unverified on this branch.
+    """
+    shard_shape = tuple(q_sharded_mem.shard_spec.shape)
+    cached = _PACKED_KV_MEM_CACHE.get(shard_shape)
+    if cached is not None:
+        return cached
+    k_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))])
+    v_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))])
+    k_mem = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(k_grid, list(shard_shape), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    v_mem = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(v_grid, list(shard_shape), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    _PACKED_KV_MEM_CACHE[shard_shape] = (k_mem, v_mem)
+    return k_mem, v_mem
+
+
+def _kv_fused_write_enabled() -> bool:
+    """Use ``ttnn.experimental.paged_fused_update_cache`` (one launch covering
+    both K and V) instead of two separate ``paged_update_cache`` calls in the
+    per-position batch-alias write loop below (``sequential_kv_write and
+    batch > 1`` — DFlash's speculative verify: B candidates aliased to one
+    page-table row, written one at a time to avoid a same-tile read-modify-write
+    race across candidates).
+
+    Uses the same fused kernel and the same K/V-on-separate-single-cores memory
+    layout (``_packed_kv_user_mem``, above) as ``ign/gemma4_dflash_wh_changes``'s
+    unrelated packed-verify KV write -- this branch doesn't carry that other write
+    path, only the shared memory-layout helper.
+
+    Only valid when the cache's own allocation view already matches this
+    layer's view (``eff_bs == cache.padded_shape[2]`` and ``num_local_kv_heads
+    == cache.padded_shape[1]``) — verified true for gemma4-31B's real per-layer
+    caches (both sliding and full layer types, TP=8) via direct on-device
+    allocation + effective_block_size check, not assumed — and only when no
+    bounded-sliding-window modulo is in play (``paged_modulo_kwargs`` empty),
+    since the fused op's signature has no modulo-equivalent argument to verify
+    against. The call site checks both conditions and falls back to the
+    unfused path when either fails, regardless of this flag.
+
+    Default ON. Verified bit-exact on real hardware — both the attention
+    output AND the raw K/V cache content after the write (max abs diff 0.0 on
+    all three) — against the unfused two-call path, at DFlash's real batch=16
+    batch-alias shape. Measured 10.2% total device-time reduction for one
+    layer's decode_forward call (Tracy): PagedUpdateCacheDeviceOperation
+    (256 calls, 2,061,531ns) -> PagedFusedUpdateCacheDeviceOperation (128
+    calls, 1,056,578ns) — call count exactly halved and the fused kernel is
+    also faster per call, with no offsetting new cost (unlike
+    GEMMA4_DFLASH_PAD_NOISE_CONCAT's ttnn.pad, this introduces nothing
+    expensive). ``GEMMA4_KV_FUSED_WRITE=0`` restores the previous unfused
+    path, as an escape hatch.
+    """
+    return os.environ.get("GEMMA4_KV_FUSED_WRITE", "1").lower() not in ("0", "false", "no")
+
+
+def _rope_expanded_broadcast(position_idx, cos_cache, sin_cache, batch, heads):
+    """``(cos_b, sin_b)`` at ``[1, batch, heads, head_dim]``, gathered directly at
+    the broadcast width instead of gathered-then-``ttnn.repeat``'d. See
+    ``_rope_expand_gather_enabled`` for why this avoids the untilize/repeat/tilize
+    composite. Callers needing a NARROWER head count (e.g. K's ``num_local_kv``
+    when Q's ``num_local_heads`` is larger under GQA) should slice the result
+    (``result[:, :, :narrower_heads, :]``) rather than calling this again — the
+    broadcast is position-only, so every head's copy is identical and a slice is
+    exact and free.
+    """
+    idx_2d = ttnn.reshape(position_idx, (batch, 1))
+    idx_expanded = ttnn.reshape(ttnn.repeat(idx_2d, ttnn.Shape([1, heads])), (batch * heads,))
+    cos_b = ttnn.reshape(
+        ttnn.unsqueeze_to_4D(ttnn.embedding(idx_expanded, cos_cache, layout=ttnn.TILE_LAYOUT)),
+        (1, batch, heads, cos_cache.shape[-1]),
+    )
+    sin_b = ttnn.reshape(
+        ttnn.unsqueeze_to_4D(ttnn.embedding(idx_expanded, sin_cache, layout=ttnn.TILE_LAYOUT)),
+        (1, batch, heads, sin_cache.shape[-1]),
+    )
+    return cos_b, sin_b
 
 
 def decode_forward(
@@ -94,29 +278,45 @@ def decode_forward(
     """
     tp = mesh_config.tp if mesh_config else 1
 
-    # 1. Fused QKV projection
-    xqkv = apply_qkv_projection(hidden_states, weights)
+    # 1. Fused QKV projection. Land the output straight in L1: the only consumer
+    # is ``nlp_create_qkv_heads_decode``, which needs an L1 input anyway (see
+    # split_qkv_heads_decode). Writing DRAM and copying back cost one extra
+    # CopyDeviceOperation per layer plus a full DRAM round-trip of the fused
+    # QKV. At decode M=32 the tensor is
+    # tiny (2048-3072 cols bf16 = 128-192 KB across the grid).
+    xqkv = apply_qkv_projection(hidden_states, weights, memory_config=ttnn.L1_MEMORY_CONFIG, decode=True)
 
     # 2. Split into Q, K, V heads
     tt_q, tt_k, tt_v = split_qkv_heads_decode(
         xqkv, config, weights.is_global, tp=tp, kv_replicated=weights.kv_replicated
     )
 
-    # 3. Per-head norms (move to DRAM for rms_norm, restore sharded for RoPE)
+    # 3. Per-head norms (un-shard for rms_norm, restore sharded for the KV write).
+    # The staging buffer is L1 at batch=1 — see _qkv_norm_island_memcfg. Both
+    # inputs to that decision are known here: the split puts batch in dim 1, and
+    # the RoPE flavour follows from the cos-cache rank (step 4 re-derives it).
     q_sharded_mem = tt_q.memory_config()
-    tt_q = ttnn.to_memory_config(tt_q, ttnn.DRAM_MEMORY_CONFIG)
-    tt_q = apply_per_head_norm(tt_q, weights.q_norm_weight, config.rms_norm_eps, with_scale=True)
+    island_mem = _qkv_norm_island_memcfg(
+        batch=int(tt_q.shape[1]),
+        use_embedding_rope=bool(rope_presliced or len(cos_cache.shape) == 2),
+    )
+    island_is_l1 = island_mem.buffer_type == ttnn.BufferType.L1
+    tt_q = ttnn.to_memory_config(tt_q, island_mem)
+    tt_q = apply_per_head_norm(
+        tt_q, weights.q_norm_weight, config.rms_norm_eps, with_scale=True, memory_config=island_mem
+    )
 
     if is_kv_shared:
         # KV-shared layer: discard own K/V, use source layer's KV cache directly
         tt_k.deallocate(True)
         tt_v.deallocate(True)
     else:
-        tt_k = ttnn.to_memory_config(tt_k, ttnn.DRAM_MEMORY_CONFIG)
-        tt_v = ttnn.to_memory_config(tt_v, ttnn.DRAM_MEMORY_CONFIG)
-        # Do not K→V clone (resync): that produced unicode garbage on LB 12B.
-        tt_k = apply_per_head_norm(tt_k, weights.k_norm_weight, config.rms_norm_eps, with_scale=True)
-        tt_v = apply_per_head_norm(tt_v, None, config.rms_norm_eps, with_scale=False)
+        tt_k = ttnn.to_memory_config(tt_k, island_mem)
+        tt_v = ttnn.to_memory_config(tt_v, island_mem)
+        tt_k = apply_per_head_norm(
+            tt_k, weights.k_norm_weight, config.rms_norm_eps, with_scale=True, memory_config=island_mem
+        )
+        tt_v = apply_per_head_norm(tt_v, None, config.rms_norm_eps, with_scale=False, memory_config=island_mem)
 
     # 4. RoPE — use on-device embedding lookup for trace compatibility
     # use_embedding_rope: cos/sin are per-position [1,1,batch_pad,head_dim] tensors.
@@ -126,26 +326,76 @@ def decode_forward(
     #     per-layer path, kept for the it-assistant drafter / direct callers).
     use_embedding_rope = rope_presliced or len(cos_cache.shape) == 2
     if use_embedding_rope:
+        batch = tt_q.shape[1]
+        # See _rope_expand_gather_enabled: folds apply_rope_decode_peruser's
+        # heads-broadcast into the position-embedding gather instead of a
+        # post-gather ttnn.repeat, avoiding a hardware-verified ~71us/device
+        # untilize/repeat/tilize composite. Applies under BOTH rope_presliced
+        # values:
+        #   - rope_presliced=False: this function does its own gather below,
+        #     directly at the broadcast width (cos_cache/sin_cache are the
+        #     original 2D tables here).
+        #   - rope_presliced=True (the actual DFlash/production decode path —
+        #     model.py gathers once per layer_type and shares across layers):
+        #     the caller (model.py's decode_rope_presliced) must ALREADY have
+        #     produced cos_cache/sin_cache at Q's broadcast width when this
+        #     flag is on, not the plain [1,1,batch,head_dim] shape. This
+        #     function has no access to the original 2D table once presliced
+        #     (cos_cache IS the presliced result), so it cannot redo the
+        #     gather itself here — model.py must do it once per layer_type.
+        #
+        # The ``position_idx_cache is not None`` half of this condition MUST
+        # mirror model.py's own gate on its expand_gather local exactly: this
+        # function has no way to tell, just from cos_cache/sin_cache's shape,
+        # whether model.py built them via the expanded-gather (Q-head-count
+        # width) or the plain path (batch width) — the two shapes can even
+        # coincide by accident (heads == batch_pad) for some model configs.
+        # Deriving both sides from the identical fact (position_idx_cache
+        # given or not) is what keeps producer and consumer in sync; changing
+        # this condition here without changing model.py's matching one (or
+        # vice versa) silently mismatches cos_b's shape against tt_q's.
+        use_expand_gather = (
+            _rope_expand_gather_enabled() and batch > 1 and (not rope_presliced or position_idx_cache is not None)
+        )
         if rope_presliced:
-            cos_pos, sin_pos = cos_cache, sin_cache  # [1, 1, batch_pad, head_dim], shared
-        else:
+            cos_pos, sin_pos = cos_cache, sin_cache  # shared across all layers of this type
+        elif not use_expand_gather:
             # Gather position-specific cos/sin via ttnn.embedding (fully on-device, trace-safe)
             # position_idx: [1, 32] uint32 padded tensor for embedding lookup
             cos_pos = ttnn.unsqueeze_to_4D(ttnn.embedding(position_idx, cos_cache, layout=ttnn.TILE_LAYOUT))
             sin_pos = ttnn.unsqueeze_to_4D(ttnn.embedding(position_idx, sin_cache, layout=ttnn.TILE_LAYOUT))
+        # else: use_expand_gather (non-presliced) does its own gather (at the
+        # broadcast width) below instead of via cos_pos/sin_pos.
+
         # RoPE. batch=1 uses the fused single-position rotary_embedding (one core
         # but cheap, no slice/tilize churn). batch>1 needs per-user positions,
         # which that op can't express, so fall back to the manual elementwise
         # q*cos + rotate_half(q)*sin (numerically equivalent — isolation PCC
         # ~0.99999 vs the fused op and the HF reference — but a few ops costlier).
-        batch = tt_q.shape[1]
         if batch > 1:
-            cos_b = ttnn.transpose(cos_pos, 1, 2)[:, :batch, :, :]  # [1, batch, 1, head_dim]
-            sin_b = ttnn.transpose(sin_pos, 1, 2)[:, :batch, :, :]
+            if use_expand_gather:
+                # Gather once at Q's (wider) head count; K's narrower count is a
+                # free slice of the same result — every head's copy is
+                # identical (position-only), so slicing is exact.
+                num_local_heads = config.num_attention_heads // tp
+                num_local_kv = 1 if weights.kv_replicated else config.num_key_value_heads // tp
+                if rope_presliced:
+                    cos_b_q, sin_b_q = cos_pos, sin_pos  # already expanded by model.py, see above
+                else:
+                    cos_b_q, sin_b_q = _rope_expanded_broadcast(
+                        position_idx, cos_cache, sin_cache, batch, num_local_heads
+                    )
+                cos_b_k, sin_b_k = cos_b_q[:, :, :num_local_kv, :], sin_b_q[:, :, :num_local_kv, :]
+            else:
+                cos_b = ttnn.transpose(cos_pos, 1, 2)[:, :batch, :, :]  # [1, batch, 1, head_dim]
+                sin_b = ttnn.transpose(sin_pos, 1, 2)[:, :batch, :, :]
 
-        def _rope(t):
+        def _rope(t, memory_config=None):
             if batch == 1:
-                return apply_rope(t, cos_pos, sin_pos, token_index=0)
+                return apply_rope(t, cos_pos, sin_pos, token_index=0, memory_config=memory_config)
+            if use_expand_gather:
+                cb, sb = (cos_b_q, sin_b_q) if t.shape[2] == num_local_heads else (cos_b_k, sin_b_k)
+                return apply_rope_decode_peruser(t, cb, sb)
             return apply_rope_decode_peruser(t, cos_b, sin_b)
 
         # Rotate Q (and K, unless this is a KV-shared layer) with the shared
@@ -154,9 +404,16 @@ def decode_forward(
         # trace replay it regressed throughput (~3%): host dispatch is already
         # free under replay, so it only added concat+split device kernels while
         # removing one tiny rope kernel. Keep separate rotations.
-        tt_q = _rope(tt_q)
+        # Q's rotated result goes straight to sdpa_decode, which hard-asserts
+        # "Q tensor buffer type must be DRAM when not sharded"
+        # (sdpa_decode_device_operation.cpp) — so when the island is on L1, Q's
+        # rotation must still write DRAM; only its norm stays on L1. K feeds
+        # paged_update_cache via a reshard to the height-sharded spec, which is
+        # happy in L1. When the island is DRAM these are None, i.e. the exact
+        # pre-optimization calls.
+        tt_q = _rope(tt_q, memory_config=ttnn.DRAM_MEMORY_CONFIG if island_is_l1 else None)
         if not is_kv_shared:
-            tt_k = _rope(tt_k)
+            tt_k = _rope(tt_k, memory_config=island_mem if island_is_l1 else None)
     else:
         # Legacy path: full 4D cache with Python int token_index
         tt_q = apply_rope(tt_q, cos_cache, sin_cache, token_index=token_index)
@@ -215,34 +472,61 @@ def decode_forward(
                         ttnn.BufferType.L1,
                         ttnn.ShardSpec(_one_core, _shard_shape, ttnn.ShardOrientation.ROW_MAJOR),
                     )
+                    # One paged_fused_update_cache launch instead of two separate
+                    # paged_update_cache calls per position -- see
+                    # _kv_fused_write_enabled. Reuses _packed_kv_user_mem (already
+                    # used for this exact fused op elsewhere in this file, for the
+                    # unrelated packed-verify KV write) for the K/V-on-separate-cores
+                    # layout the fused kernel needs; the plain path keeps K and V on
+                    # the same single core, as it always has.
+                    use_fused_kv = (
+                        _kv_fused_write_enabled()
+                        and not paged_modulo_kwargs
+                        and eff_bs == int(k_cache.padded_shape[2])
+                        and num_local_kv_heads == int(k_cache.padded_shape[1])
+                    )
+                    if use_fused_kv:
+                        k_mem, v_mem = _packed_kv_user_mem(q_sharded_mem)
+                    else:
+                        k_mem = v_mem = single_user_mem
                     k_seq = ttnn.to_memory_config(tt_k, ttnn.DRAM_MEMORY_CONFIG)
                     v_seq = ttnn.to_memory_config(tt_v, ttnn.DRAM_MEMORY_CONFIG)
                     nkv, hd = k_seq.shape[2], k_seq.shape[3]
                     for b in range(batch):
                         kb = ttnn.slice(k_seq, [0, b, 0, 0], [1, b + 1, nkv, hd])
                         vb = ttnn.slice(v_seq, [0, b, 0, 0], [1, b + 1, nkv, hd])
-                        kb = ttnn.to_memory_config(kb, single_user_mem)
-                        vb = ttnn.to_memory_config(vb, single_user_mem)
+                        kb = ttnn.to_memory_config(kb, k_mem)
+                        vb = ttnn.to_memory_config(vb, v_mem)
                         pos_b = ttnn.slice(cache_pos, [b], [b + 1])
                         pt_b = ttnn.slice(page_table, [b, 0], [b + 1, page_table.shape[1]])
-                        ttnn.experimental.paged_update_cache(
-                            k_cache,
-                            kb,
-                            update_idxs_tensor=pos_b,
-                            page_table=pt_b,
-                            block_size=eff_bs,
-                            num_kv_heads=num_local_kv_heads,
-                            **paged_modulo_kwargs,
-                        )
-                        ttnn.experimental.paged_update_cache(
-                            v_cache,
-                            vb,
-                            update_idxs_tensor=pos_b,
-                            page_table=pt_b,
-                            block_size=eff_bs,
-                            num_kv_heads=num_local_kv_heads,
-                            **paged_modulo_kwargs,
-                        )
+                        if use_fused_kv:
+                            ttnn.experimental.paged_fused_update_cache(
+                                k_cache,
+                                kb,
+                                v_cache,
+                                vb,
+                                update_idxs_tensor=pos_b,
+                                page_table=pt_b,
+                            )
+                        else:
+                            ttnn.experimental.paged_update_cache(
+                                k_cache,
+                                kb,
+                                update_idxs_tensor=pos_b,
+                                page_table=pt_b,
+                                block_size=eff_bs,
+                                num_kv_heads=num_local_kv_heads,
+                                **paged_modulo_kwargs,
+                            )
+                            ttnn.experimental.paged_update_cache(
+                                v_cache,
+                                vb,
+                                update_idxs_tensor=pos_b,
+                                page_table=pt_b,
+                                block_size=eff_bs,
+                                num_kv_heads=num_local_kv_heads,
+                                **paged_modulo_kwargs,
+                            )
                         for t in (kb, vb, pos_b, pt_b):
                             t.deallocate(True)
                     k_seq.deallocate(True)
@@ -299,6 +583,7 @@ def decode_forward(
         k_chunk_size=64,
         exp_approx_mode=False,
     )
+    sdpa_compute_kernel_config = decode_sdpa_compute_kernel_config(mesh_device)
 
     if page_table is not None:
         sdpa_num_local_kv_heads = 1 if weights.kv_replicated else config.num_key_value_heads // tp
@@ -312,6 +597,7 @@ def decode_forward(
             sliding_window_size=sliding_window,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             program_config=sdpa_program_config,
+            compute_kernel_config=sdpa_compute_kernel_config,
             # Tell SDPA the layer's view of the cache when the buffer was allocated
             # for a different layer type under HMA cross-group sharing — same
             # rationale as the num_kv_heads override on paged_update_cache.
@@ -331,6 +617,7 @@ def decode_forward(
             sliding_window_size=sliding_window,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             program_config=sdpa_program_config,
+            compute_kernel_config=sdpa_compute_kernel_config,
         )
     tt_q.deallocate(True)
 
@@ -446,6 +733,11 @@ def _packed_verify_sdpa(
     # there so the packed path stays identical to upstream.
     _dev = k.device()
     _num_dev = getattr(_dev, "get_num_devices", lambda: 1)()
+    # Single-device ONLY, as originally shipped. Forcing fp32_dest_acc on a
+    # MESH was tried against the long-S_k greedy drift (128k packed verify
+    # diverges at ~tok 41 with op defaults) and made it far worse -- 0.06/5
+    # accepted, divergent from token 0 -- so the mesh keeps the op default and
+    # the drift is handled by gating packed verify per ISL tier instead.
     compute_kernel_config = (
         ttnn.init_device_compute_kernel_config(
             _dev.arch(),
@@ -629,8 +921,12 @@ def packed_decode_forward(
     H_local = config.num_attention_heads // tp
     head_dim = config.head_dim
     nkv_local = 1 if weights.kv_replicated else config.num_key_value_heads // tp
-    if config.cache_position_modulo is not None:
-        raise NotImplementedError("packed verify does not support bounded sliding KV caches")
+    # Bounded sliding is supported: the caller provides ring-aware inputs (the
+    # sliding mask spans RING slots, hot_pt names pages in the ring pool with a
+    # wrapped spill block, and page_table is this layer's own pool). The SDPA
+    # here is position-free -- causality/window live entirely in the explicit
+    # additive mask -- and the staging fill writes physical pages, so neither
+    # needs cache_position_modulo.
     if kv_cache is None:
         raise ValueError("packed_decode_forward requires a KV cache (it attends through the paged cache)")
     l1 = ttnn.L1_MEMORY_CONFIG
@@ -743,6 +1039,13 @@ def packed_decode_forward(
             k_p = ttnn.to_memory_config(k_p, q_sharded_mem)
             v_p = ttnn.to_memory_config(v_p, q_sharded_mem)
             if page_table is not None:
+                # Bounded ring: wrap absolute write positions into the ring
+                # (same contract as decode_forward's paged_modulo_kwargs).
+                _mod = (
+                    {"cache_position_modulo": config.cache_position_modulo}
+                    if config.cache_position_modulo is not None
+                    else {}
+                )
                 ttnn.experimental.paged_update_cache(
                     k_cache_w,
                     k_p,
@@ -750,6 +1053,7 @@ def packed_decode_forward(
                     page_table=page_table,
                     block_size=eff_bs,
                     num_kv_heads=nkv_local,
+                    **_mod,
                 )
                 ttnn.experimental.paged_update_cache(
                     v_cache_w,
@@ -758,6 +1062,7 @@ def packed_decode_forward(
                     page_table=page_table,
                     block_size=eff_bs,
                     num_kv_heads=nkv_local,
+                    **_mod,
                 )
             else:
                 ttnn.experimental.paged_update_cache(k_cache_w, k_p, update_idxs_tensor=kv_write_idxs[p])
@@ -790,12 +1095,25 @@ def packed_decode_forward(
     q_packed = ttnn.to_layout(tt_q, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     ttnn.deallocate(tt_q)
 
+    # GEMMA4_PV_K_CHUNK: experiment knob only; keep the default 64. The
+    # rescale-count theory of the packed long-S_k greedy drift was TESTED and
+    # FALSIFIED: k_chunk=128 diverges at exactly the same token as 64 (char 165
+    # at 128k) with the same acceptance, and k_chunk=256 TT_THROWs at program
+    # build. The drift is inherent packed-vs-decode path numerics; it is handled
+    # by the ISL tier gate in spec_decode._fused_packed_enabled, not here.
+    _k_chunk = int(os.environ.get("GEMMA4_PV_K_CHUNK", "64"))
+    # The flash cross-core reduction CBs scale with PNHt * cores_per_head_batch.
+    # At PNHt<=2 (<=64 packed query rows) 16 cores fit L1; at PNHt=4 (the B>1
+    # dFlash fold, 128 rows) 16 cores overflow (~2.06 MB > 1.5 MB) and head
+    # splits can't help when nkv_local > 1 (31B sliding: 16 kv heads / tp8 = 2),
+    # so trade reduction parallelism for L1: 8 cores fits (~1.29 MB).
+    _pnht = (H_local * P + 31) // 32
     sdpa_program_config = ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=_packed_sdpa_grid(config, mesh_device),
         q_chunk_size=32,
-        k_chunk_size=64,
+        k_chunk_size=_k_chunk,
         exp_approx_mode=False,
-        max_cores_per_head_batch=16,
+        max_cores_per_head_batch=16 if _pnht <= 2 else 8,
     )
     _grid = sdpa_program_config.compute_with_storage_grid_size
     n_sdpa_splits = _verify_head_splits(B, H_local, nkv_local, P, head_dim, grid=_grid.x * _grid.y)

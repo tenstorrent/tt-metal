@@ -94,11 +94,27 @@ def create_tt_model(
     num_devices = mesh_device.get_num_devices() if is_mesh else 1
     if is_mesh and num_devices > 1:
         # num_links=None -> arch default (2 on Blackhole) so the per-layer TP
-        # all-reduces (the dominant ~31% of prefill device time) use full
-        # inter-device bandwidth.
-        ccl_manager = CCLManager(mesh_device)
+        # all-reduces (the dominant share of prefill device time) use full
+        # inter-device bandwidth. is_moe selects the topology default: Ring is
+        # faster on a 1x8 WH mesh but tanks MoE PCC — see
+        # ccl.default_ccl_topology.
+        ccl_manager = CCLManager(mesh_device, is_moe=bool(getattr(model_args, "enable_moe_block", False)))
     else:
         ccl_manager = None
+
+    tp = mesh_config.tp if mesh_config is not None else 1
+    nq = int(getattr(model_args, "num_attention_heads", 0) or 0)
+    nkv = int(getattr(model_args, "num_key_value_heads", 0) or 0)
+    logger.info(
+        f"Gemma4 parallel: mesh={tuple(mesh_device.shape) if is_mesh else (1, 1)} "
+        f"devices={num_devices} decode TP={tp} DP={mesh_config.dp if mesh_config else 1} "
+        f"EP={mesh_config.ep if mesh_config else 1}"
+        + (
+            f" local_heads Q={nq // tp} KV={nkv // tp} (global Q={nq} KV={nkv})"
+            if tp > 0 and nq and nkv and nq % tp == 0 and nkv % tp == 0
+            else ""
+        )
+    )
 
     # Warm ttnn cache => skip the full HF weight load and build from .tensorbin. Hybrid: the few
     # host-consumed weights (token embedding, per-layer scalars/PLI) are served real from the
@@ -116,7 +132,13 @@ def create_tt_model(
     # precision_overrides.json changes which files a build needs. Without the precision in the
     # variant, a marker seeded under the old overrides would certify a warm build whose files do
     # not exist -- and as_tensor would persist placeholders for them. (#45400 review, finding B2)
-    _precision_for_variant = Gemma4Precision.load(model_path, _worker_mesh)
+    # NOTE: use the SERVED max_seq_len argument, not model_args.max_seq_len --
+    # model_args still carries its construction default here (the served value is
+    # applied further below), so reading it silently skipped the bfp8 context
+    # ceiling at long context.
+    _precision_for_variant = Gemma4Precision.load(
+        model_path, _worker_mesh, hf_config=model_args, max_seq_len=max_seq_len
+    )
     # The variant must also pin every knob that decides WHICH tensorbin FILENAMES a build needs, not
     # only their dtype: a warm marker seeded before a filename change certifies a build whose files
     # do not exist yet, and as_tensor then persists the dataless placeholders under the new names
@@ -194,6 +216,9 @@ def create_assistant_model(
     assistant_path=None,
     state_dict=None,
     max_local_batch_size=1,
+    bounded_sliding_kv_cache=None,
+    max_seq_len=None,
+    precision=None,
 ):
     """Create the Gemma4 it-assistant drafter, sharing the target's mesh/CCL.
 
@@ -220,18 +245,61 @@ def create_assistant_model(
             f"Assistant backbone_hidden_size ({assistant_args.backbone_hidden_size}) != target hidden_size "
             f"({target_model.hidden_size}). The assistant must match its target model."
         )
+    # Bounded target KV is supported now: the drafter's attention configs take
+    # the same cache_position_modulo as the target's sliding layers (see the
+    # bounded_sliding_kv_cache plumbing below and assistant/model.py), so its
+    # cross-attention wraps absolute positions into the same ring. This is what
+    # makes >=128k spec decode reachable on 31B, where unbounded KV does not fit.
+    # It requires the ring sizes to agree; the assistant's own sliding_window
+    # matches its target's (1024 on both 12B and 31B), so verify that here
+    # rather than assuming it.
+    # GATE LIFTED. The clobbering described here was real -- verify writes all K+1
+    # candidates up front, and in a ring of EXACTLY the window, slot (p+j)%W still
+    # holds live position p+j-W. It is fixed by ring HEADROOM (the spec path runs
+    # ring = 2*window, so speculative slots fall outside the window; see
+    # attention.bounded_ring_modulo), plus the last-chunk expansion threshold fix
+    # in Gemma4Generator._expand_bounded_last_chunk.
+    # Measured 31B @ 32k, greedy/traced: bounded 2.40/5 @ 42.26 tok/s/u vs
+    # unbounded 2.40/5 @ 42.42 -- parity, matching text. 128k 2.78/5 @ 36.08
+    # (baseline 24.44); 256k 1.70/5 @ 16.35 (baseline 16.97 -- coherent but spec
+    # is NOT a win at 256k: verify cost scales with context, acceptance falls).
     if getattr(target_model, "bounded_sliding_kv_cache", False):
-        raise NotImplementedError(
-            "Speculative decoding requires the target to use unbounded sliding KV caches "
-            "(bounded_sliding_kv_cache=False); the drafter cross-attention reads absolute cache positions."
+        _tgt_win = getattr(target_model, "sliding_window", None) or getattr(
+            getattr(target_model, "hf_config", None), "sliding_window", None
         )
+        _asst_win = getattr(assistant_args.text_args, "sliding_window", None)
+        if _tgt_win is not None and _asst_win is not None and int(_tgt_win) != int(_asst_win):
+            raise NotImplementedError(
+                f"Bounded spec decode needs matching sliding windows: target {_tgt_win} vs "
+                f"assistant {_asst_win}. The drafter cross-attends the target's bounded ring, "
+                "so a different window would wrap positions to the wrong slots."
+            )
 
     if state_dict is None:
         state_dict = Gemma4AssistantArgs.load_state_dict(assistant_path, dummy_weights=False)
 
     mesh_shape = tuple(mesh_device.shape) if hasattr(mesh_device, "shape") else (1, 1)
     assistant_args.cluster_shape = mesh_shape
+    # Serve length: Gemma4AssistantArgs.max_seq_len DEFAULTS to 131072, and the
+    # drafter's layers are built from it (assistant/model.py max_seq_len=...). Left
+    # unset, a 256k run builds the drafter for HALF the context while positions run
+    # to 262143 -- the drafter then produces noise and acceptance collapses to
+    # ~0.00/5 (measured), while <=128k looked fine because the default covered it.
+    if max_seq_len is not None:
+        assistant_args.max_seq_len = int(max_seq_len)
+        if hasattr(assistant_args, "text_args"):
+            assistant_args.text_args.max_seq_len = int(max_seq_len)
     tensor_cache_path = str(assistant_args.weight_cache_path(dtype, mesh_shape=mesh_shape))
+
+    # The assistant is its own checkpoint (e.g. "gemma-4-31B-it-assistant"), so
+    # its precision overrides are looked up under its own table key -- it does
+    # NOT inherit the target's resolved precision. The *-assistant entries in
+    # precision_overrides.json (bfp8 shared_mlp/attention/lm_head) come from
+    # ign/gemma4_31B_MTP_Dflash; without them the drafter runs bf16.
+    # A caller-supplied ``precision`` wins, so an explicit override is not
+    # silently replaced by the table lookup.
+    if precision is None:
+        precision = Gemma4Precision.load(assistant_path, mesh_shape, hf_config=hf_config, max_seq_len=max_seq_len)
 
     model = Gemma4AssistantModel(
         mesh_device=mesh_device,
@@ -243,5 +311,47 @@ def create_assistant_model(
         tensor_cache_path=tensor_cache_path,
         mesh_config=mesh_config,
         max_local_batch_size=max_local_batch_size,
+        # Match the TARGET's KV mode: with bounded sliding caches the drafter's
+        # cross-attention must wrap positions into the same ring. Inferred from
+        # the target when not stated explicitly.
+        # Whether the DRAFTER wraps positions must match the caches it actually
+        # reads, not the target's global mode. The drafter cross-attends only the
+        # LAST layer of each type; full-attention layers are always unbounded, and
+        # the last sliding layer is EXEMPTED from bounding for exactly this reason
+        # (Gemma4Model._spec_unbounded_layer). So when that exemption is active,
+        # both caches the drafter touches hold absolute positions and it must NOT
+        # apply the ring modulo -- otherwise it looks up p % window in a
+        # full-length cache and drafts noise (measured: acceptance 0.12/5 at 128k
+        # bounded vs 2.78/5 unbounded, 0.00/5 at 256k).
+        bounded_sliding_kv_cache=(
+            bounded_sliding_kv_cache
+            if bounded_sliding_kv_cache is not None
+            else (
+                bool(getattr(target_model, "bounded_sliding_kv_cache", False))
+                and getattr(target_model, "_spec_unbounded_layer", None) is None
+            )
+        ),
+        precision=precision,
     )
     return assistant_args, model
+
+
+def get_gemma4_padded_prefill_len(seq_len: int) -> int:
+    """Pad prefill ISL to the next kernel bucket (default: tt_transformers policy).
+
+    By default this matches ``get_padded_prefill_len`` so prefill Metal Trace
+    buckets warmed at startup (128, 512, …) replay at runtime. Opt into shorter
+    buckets with ``GEMMA4_SHORT_PREFILL_BUCKETS=96,128`` only when the same
+    lengths are listed in ``GEMMA4_TRACE_PREFILL_SEQ_LENS`` — otherwise prefill
+    pays a cold eager compile on the first request (TTFT seconds, not ms).
+    """
+    seq_len = int(seq_len)
+    override = os.environ.get("GEMMA4_SHORT_PREFILL_BUCKETS")
+    if override:
+        buckets = tuple(int(x.strip()) for x in override.split(",") if x.strip())
+        for bucket in buckets:
+            if seq_len <= bucket:
+                return bucket
+    from models.tt_transformers.tt.common import get_padded_prefill_len
+
+    return get_padded_prefill_len(seq_len)

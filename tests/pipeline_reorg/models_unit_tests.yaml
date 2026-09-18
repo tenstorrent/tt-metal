@@ -477,7 +477,8 @@
     # heavy full-model-build + device-trace tests added *after* that PR by #45355
     # (prefill device trace + batched prefill) time out the larger variants on
     # constrained runners (e.g. 26B/31B on wh_llmbox), so the whole
-    # test_prefill_trace_* and test_batched_prefill_perf files are ignored here.
+    # test_prefill_trace_* and test_batched_prefill_perf files are ignored
+    # here.
     # test_full_model_parity_* (vLLM full-model parity decode loops, from #44265)
     # is likewise deselected. The tier-1 promotion of 26B/31B/12B is intentionally
     # kept — only the heavy test cases are removed, not the tiers.
@@ -586,6 +587,7 @@
     export HF_MODEL=models/demos/gemma4/configs/gemma-4-31B-it
     pytest --timeout 900 \
       --ignore=models/demos/gemma4/tests/unit/test_lm_head.py \
+      --ignore=models/demos/gemma4/tests/unit/test_prefill.py \
       --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_parity.py \
       --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_perf.py \
       --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_tracy_csv.py \
@@ -594,6 +596,14 @@
       --deselect models/demos/gemma4/tests/unit/test_model.py::test_full_model \
       -k "not test_bridge_ and not test_full_model_parity and not test_attention_decode_paged_batched and not test_sampling_" \
       models/demos/gemma4/tests/unit/
+    # DFlash drafter context-KV PCC (tt/dflash_drafter.py's real DFlashDrafter, not the
+    # dead models/demos/gemma4/tt/dflash/ package) vs a torch reference computed from the
+    # checkpoint's own weights -- see the test's own docstring. Needs the REAL hub
+    # checkpoint (tied lm_head + real drafter weights), unlike the config-only HF_MODEL
+    # the rest of this entry uses above -- overridden inline for just this one call so it
+    # doesn't leak into anything else in this script.
+    HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=google/gemma-4-31B-it \
+      pytest -s --timeout 300 models/demos/gemma4/tests/dflash/test_dflash_drafter_pcc.py -k 1x8
   model: gemma-4-31b
   model_family: Gemma
   skus:
@@ -620,6 +630,7 @@
     export HF_MODEL=models/demos/gemma4/configs/gemma-4-12B-it
     pytest --timeout 900 \
       --ignore=models/demos/gemma4/tests/unit/test_lm_head.py \
+      --ignore=models/demos/gemma4/tests/unit/test_prefill.py \
       --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_parity.py \
       --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_perf.py \
       --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_tracy_csv.py \
@@ -634,6 +645,9 @@
     bh_quietbox_2:
       timeout: 15
       tier: 1
+    wh_llmbox:
+      timeout: 27
+      tier: 2
   owner_id: U088413NP0Q # Ashai Reddy
   team: models
   budget_type: unit

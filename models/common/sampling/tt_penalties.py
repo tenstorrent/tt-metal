@@ -151,6 +151,9 @@ class TTPenalties(LightweightModule):
         self.frequency_penalties = self._alloc_bf16_buffer(shard_dims=shard_dims_bf16)
         self.repetition_penalties = self._alloc_bf16_buffer(shard_dims=shard_dims_bf16)
         self.inverse_repetition_penalties = self._alloc_bf16_buffer(shard_dims=shard_dims_bf16)
+        # Params last written to the four buffers above. None = "unknown", so the
+        # first reset_params always writes.
+        self._applied_param_snapshot = None
 
         vocab_per_dev = self.vocab_size // self.num_devices
         d = torch.arange(self.num_devices, dtype=torch.int32)
@@ -223,6 +226,18 @@ class TTPenalties(LightweightModule):
         return counts
 
     def reset_params(self, presence: List[float], frequency: List[float], repetition: List[float]):
+        # Decode calls this once per token, and the penalty settings hold for the
+        # whole generation in every non-vLLM caller. These four are persistent
+        # device buffers written only here, so re-padding and re-uploading them
+        # every step is pure churn — write only on an actual change.
+        param_snapshot = (
+            self._param_snapshot(presence),
+            self._param_snapshot(frequency),
+            self._param_snapshot(repetition),
+        )
+        if param_snapshot == self._applied_param_snapshot:
+            return
+
         presence_tensor = self._pad_params(presence)
         frequency_tensor = self._pad_params(frequency)
         repetition_tensor = self._pad_params(repetition)
@@ -232,6 +247,16 @@ class TTPenalties(LightweightModule):
         self._copy_host_to_device(self.frequency_penalties, frequency_tensor)
         self._copy_host_to_device(self.repetition_penalties, repetition_tensor)
         self._copy_host_to_device(self.inverse_repetition_penalties, inverse_repetition_tensor)
+        self._applied_param_snapshot = param_snapshot
+
+    @staticmethod
+    def _param_snapshot(value):
+        """Hashable snapshot of one penalty parameter, for change detection."""
+        if isinstance(value, torch.Tensor):
+            return tuple(value.reshape(-1).tolist())
+        if isinstance(value, (list, tuple)):
+            return tuple(value)
+        return value
 
     def _pad_params(self, values: List[float]) -> torch.Tensor:
         tensor = torch.tensor(values, dtype=torch.float32)

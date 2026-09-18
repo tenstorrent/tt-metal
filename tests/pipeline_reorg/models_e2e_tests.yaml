@@ -714,15 +714,16 @@
       models/demos/gemma4/tests/unit/test_packed_verify.py \
       models/demos/gemma4/tests/unit/test_model.py::test_full_model \
       --deselect models/demos/gemma4/tests/unit/test_packed_verify.py::test_packed_verify_batch_perf
+    pytest -s --timeout 3600 models/demos/gemma4/tests/e2e/test_teacher_forcing_e2e.py
   model: gemma-4-31b
   model_family: Gemma
   skus:
     wh_llmbox_perf:
-      timeout: 12
+      timeout: 35
       tier: 2
       release_ready: false
     bh_quietbox_2:
-      timeout: 25
+      timeout: 40
       tier: 1
       release_ready: true
     # bh_galaxy_perf: temporarily disabled — same Blackhole Galaxy fabric / ethernet
@@ -734,6 +735,33 @@
   team: models
   budget_type: e2e
 
+- name: Gemma-4-31B DFlash tests
+  cmd: |
+    uv pip install -r models/demos/gemma4/requirements.txt
+    export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=google/gemma-4-31B-it TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google--gemma-4-31B-it
+    export GEMMA4_DFLASH_SHARD_ARGMAX=1
+    # dflash_fused_decoder_demo.py auto-discovers the drafter snapshot / target weights
+    # dir under a HARDCODED ~/.cache/huggingface, not $HF_HOME -- resolve them explicitly
+    # against the MLPerf-mounted cache instead of relying on that mismatched default.
+    export GEMMA4_DFLASH_DRAFTER=$(ls -d "$HF_HOME"/hub/models--z-lab--gemma-4-31B-it-DFlash/snapshots/*/ | head -1)
+    export MODEL_WEIGHTS_DIR=$(ls -d "$HF_HOME"/hub/models--google--gemma-4-31B-it/snapshots/*/ | head -1)
+    # Real end-to-end generation: prefill + drafter + fused-trace steady-state decode
+    # loop, checked for coherent, non-crashing output on the default (code-generation)
+    # prompt. Same coherence-only bar as the plain text_demo.py entries above. Numerical
+    # correctness for the drafter's context-KV build is covered separately, in
+    # models_unit_tests.yaml's "Gemma-4-31B unit tests" entry
+    # (test_dflash_drafter_pcc.py) -- not duplicated here.
+    pytest -s --timeout 900 models/demos/gemma4/demo/dflash_fused_decoder_demo.py -k 1x8
+  model: gemma-4-31b
+  model_family: Gemma
+  skus:
+    wh_llmbox_perf:
+      timeout: 20
+      tier: 2
+      release_ready: false
+  owner_id: U088413NP0Q # Ashai Reddy
+  team: models
+
 - name: Gemma-4-12B e2e tests
   cmd: |
     uv pip install -r models/demos/gemma4/requirements.txt
@@ -744,9 +772,19 @@
       models/demos/gemma4/tests/unit/test_packed_verify.py \
       models/demos/gemma4/tests/unit/test_model.py::test_full_model \
       --deselect models/demos/gemma4/tests/unit/test_packed_verify.py::test_packed_verify_batch_perf
+    pytest -s --timeout 3600 models/demos/gemma4/tests/e2e/test_teacher_forcing_e2e.py
   model: gemma-4-12b
   model_family: Gemma
   skus:
+    # T3K: same command as Gemma-4-31B e2e on this SKU (demo + lm_head +
+    # packed_verify matches_sequential + full_model; batch_perf deselected).
+    # 12B is smaller; 10m matches the 31B WH leg. models.e2e_tier2
+    # wh_llmbox_perf was 259/266 before this job — budget bumped +10.
+    # CI=true selects 1x8. release_ready false until the WH leg is green.
+    wh_llmbox_perf:
+      timeout: 25
+      tier: 2
+      release_ready: false
     # Single Blackhole P150: short demo + unit PCC. Cap at 6m so models
     # e2e_tier2 bh_p150 stays within the 26m team budget (GPT-OSS 15 + UNet 5
     # + this 6). f562aa60493's timeout:20 made requested=40 and failed
@@ -755,7 +793,7 @@
       timeout: 6
       tier: 2
     bh_quietbox_2:
-      timeout: 22
+      timeout: 37
       tier: 1
       release_ready: true
   owner_id: U088413NP0Q # Ashai Reddy
