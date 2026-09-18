@@ -19,17 +19,12 @@
 // together they are exactly what one sequential walk over all tokens would write, so the phases that
 // consume the index need not know it was built in slices.
 //
-// Under fan-out the per-token entries are slice-contiguous rather than packed: a token yields at most
-// one entry per direction, so lane w owns the entry positions of its own tokens and the consumer
-// walks the four runs in order (mc_run). Packing them would need a second exchange, because whether a
-// token has any surviving remote pick is only known once its pages are.
-//
 // Why here and not upstream. The index is a pure function of (indices, dispatch table, offsets,
-// capacity), the inputs the routing-setup ops already hold, and an op there could emit it once per
-// chip for the stream cores to DMA. That costs a launch under unicast, a per-chip DRAM output, and
-// a second op that has to agree byte for byte with production's allocator. Replaying it here costs
-// nothing outside this op and stays inside the same trace; the four-lane split brings it under the
-// untilize pool, which is the point at which it stops being the exposed part of the launch.
+// capacity), the inputs the routing-setup ops already hold, so an op there could emit it once per
+// chip for the stream cores to DMA. That costs a launch, a per-chip DRAM output, and a second op that
+// has to agree byte for byte with production's allocator. Replaying it here costs nothing outside
+// this op and stays inside the same trace; the four-lane split brings it under the untilize pool,
+// which is the point at which it stops being the exposed part of the launch.
 
 #include <cstdint>
 #include "api/debug/assert.h"
@@ -57,21 +52,16 @@ struct Control {
     volatile tt_l1_ptr uint32_t* counts;        // num_routed_experts, summed over source chips
     volatile tt_l1_ptr uint32_t* region;        // num_routed_experts
     volatile tt_l1_ptr int32_t* table;          // num_routed_experts (+1 sentinel), expert -> chip in group
-    volatile tt_l1_ptr uint32_t* expert_slot;   // the same domain, packed as ES_* for the routing pass
+    volatile tt_l1_ptr uint32_t* expert_slot;   // the same domain, as a bucket slot or ES_NOT_HERE
     volatile tt_l1_ptr uint32_t* first_page;    // extent x experts_per_chip: each bucket's first output page
     volatile tt_l1_ptr uint32_t* chip_experts;  // extent x experts_per_chip, ascending global expert id
     volatile tt_l1_ptr uint32_t* row_fill;      // extent, while the chip -> experts inverse is built
     volatile tt_l1_ptr uint32_t* bucket_start;  // extent x experts_per_chip + 1, exclusive prefix sums with a total
     volatile tt_l1_ptr uint32_t* entries;       // 3 words per surviving (token, top-k slot)
-    volatile tt_l1_ptr uint32_t* mc_entries;    // fanout: one entry per (token, direction), slice-contiguous
-    volatile tt_l1_ptr uint32_t* mc_count;      // fanout: entries per direction over all lanes
-    // fanout: one reach row per (origin, direction), each padded to 64 bytes. An address rather than a
-    // pointer because the pad makes the stride wider than the row.
-    uint32_t reach;
-    volatile tt_l1_ptr uint32_t* padding;    // [real_token_count, pad_side], when one was supplied
-    volatile tt_l1_ptr uint32_t* in_start;   // page offset of each chunk this stream reads
-    volatile tt_l1_ptr uint32_t* out_start;  // page offset of each chunk it writes downstream
-    volatile tt_l1_ptr uint32_t* lane;       // PROLOGUE_LANES x prologue_lane_words
+    volatile tt_l1_ptr uint32_t* padding;       // [real_token_count, pad_side], when one was supplied
+    volatile tt_l1_ptr uint32_t* in_start;      // page offset of each chunk this stream reads
+    volatile tt_l1_ptr uint32_t* out_start;     // page offset of each chunk it writes downstream
+    volatile tt_l1_ptr uint32_t* lane;          // PROLOGUE_LANES x prologue_lane_words
     uint32_t end;
 };
 
@@ -87,7 +77,6 @@ inline dspf2d::ControlGeometry control_geometry() {
     g.experts_per_chip = ct.experts_per_chip;
     g.topk = ct.topk;
     g.num_relay = ct.num_relay;
-    g.fanout = ct.fanout;
     return g;
 }
 
@@ -107,14 +96,11 @@ inline Control carve_control() {
     c.region = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(take(dspf2d::kCbRegion));
     c.table = reinterpret_cast<volatile tt_l1_ptr int32_t*>(take(dspf2d::kCbTable));
     c.expert_slot = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(take(dspf2d::kCbExpertSlot));
-    c.first_page = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(take(dspf2d::kCbAlloc));
+    c.first_page = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(take(dspf2d::kCbFirstPage));
     c.chip_experts = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(take(dspf2d::kCbChipExperts));
     c.row_fill = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(take(dspf2d::kCbRowFill));
     c.bucket_start = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(take(dspf2d::kCbBucketStart));
     c.entries = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(take(dspf2d::kCbEntries));
-    c.mc_entries = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(take(dspf2d::kCbMcEntries));
-    c.mc_count = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(take(dspf2d::kCbMcCount));
-    c.reach = take(dspf2d::kCbReach);
     c.padding = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(take(dspf2d::kCbPadding));
     c.in_start = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(take(dspf2d::kCbInStart));
     c.out_start = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(take(dspf2d::kCbOutStart));
@@ -175,21 +161,13 @@ struct Lane {
     volatile tt_l1_ptr uint32_t* cnt;         // routed picks per bucket in my slice, survivors or not
     volatile tt_l1_ptr uint32_t* next_page;   // running page counter for the fill pass
     volatile tt_l1_ptr uint32_t* next_entry;  // entry cursor per bucket for the fill pass
-    volatile tt_l1_ptr uint32_t* mc_n;        // fanout: entries I wrote, per direction
 };
-static_assert(dspf2d::prologue_lane_words(1u) == 3u + 2u, "Lane has three per-bucket arrays and two direction words");
+static_assert(dspf2d::prologue_lane_words(1u) == 3u, "Lane has three per-bucket arrays");
 
 inline Lane lane_view(const Control& c, uint32_t lane) {
     const uint32_t n = bucket_slots();
     volatile tt_l1_ptr uint32_t* base = c.lane + lane * dspf2d::prologue_lane_words(n);
-    return Lane{base, base + n, base + 2u * n, base + 3u * n};
-}
-
-// The fan-out entry run one lane wrote for one direction: where it starts and how many it holds. The
-// consumer walks lanes 0..LANES-1 in order, which is the single token-ordered list.
-inline void mc_run(const Control& c, uint32_t dir, uint32_t lane, uint32_t tokens, uint32_t* base, uint32_t* n) {
-    *base = dir * ct.seq_len + slice_lo(tokens, lane);
-    *n = lane_view(c, lane).mc_n[dir];
+    return Lane{base, base + n, base + 2u * n};
 }
 
 // Program semaphores: the runtime writes their initial value on every launch, so no lane can take a
@@ -244,8 +222,7 @@ inline void wait_all_lanes(uint32_t value) {
 }
 
 // Pass 1: how many picks my slice routes to each bucket, counting the ones capacity will drop as well,
-// because the allocator counter they advance is what positions everything after them. Under fan-out
-// only the local picks reach a bucket, but the counter is per expert regardless of who consumes it.
+// because the allocator counter they advance is what positions everything after them.
 inline void count_pass(const Control& c, const Lane& me, uint32_t t0, uint32_t t1) {
     const uint32_t n = bucket_slots();
     for (uint32_t b = 0; b < n; b++) {
@@ -258,15 +235,11 @@ inline void count_pass(const Control& c, const Lane& me, uint32_t t0, uint32_t t
         static_assert(ct.topk <= 8, "the unroll count is the top-k bound");
 #pragma GCC unroll 8
         for (uint32_t k = 0; k < ct.topk; k++) {
-            const uint32_t w = es[idx[k]];
-            if (w == dspf2d::ES_NOT_HERE) {
-                continue;
-            }
-            const uint32_t slot = w & dspf2d::ES_SLOT_MASK;
+            const uint32_t slot = es[idx[k]];
             // A word past the table (an index the host never validated) could name any slot; a
             // counter outside this lane's block is somebody else's state.
             if (slot >= n) {
-                continue;
+                continue;  // ES_NOT_HERE, or an expert id the table does not resolve
             }
             me.cnt[slot] = me.cnt[slot] + 1u;
         }
@@ -286,51 +259,27 @@ inline void place_slice(const Control& c, const Lane& me, uint32_t lane) {
         me.next_page[b] = first_page + before;
         me.next_entry[b] = c.bucket_start[b] + survivors_of(first_page, before);
     }
-    me.mc_n[0] = 0u;
-    me.mc_n[1] = 0u;
 }
 
 // Pass 2: the walk over my slice, from the positions place_slice gave me. The same per-pick rule as
 // production, with the cursors per lane.
 inline void fill_pass(const Control& c, const Lane& me, uint32_t t0, uint32_t t1) {
     const uint32_t cap = ct.max_dispatch_buf_tokens;
-    [[maybe_unused]] const uint32_t mc_stride = dspf2d::fo_entry_words(ct.topk);
+    const uint32_t n = bucket_slots();
     const uint32_t* es = frozen(c.expert_slot);
     uint32_t idx_addr = reinterpret_cast<uint32_t>(c.indices) + t0 * ct.indices_pad_stride;
     for (uint32_t t = t0; t < t1; t++, idx_addr += ct.indices_pad_stride) {
         const uint16_t* idx = reinterpret_cast<const uint16_t*>(idx_addr);
-        [[maybe_unused]] uint32_t n_dir[2] = {0, 0};
-        [[maybe_unused]] uint32_t far_dir[2] = {0, 0};
-        [[maybe_unused]] uint32_t packed[2][dspf2d::FO_MAX_DESTS];
 #pragma GCC unroll 8
         for (uint32_t k = 0; k < ct.topk; k++) {
-            const uint32_t w = es[idx[k]];
-            if (w == dspf2d::ES_NOT_HERE) {
-                continue;  // the expert is not in this dispatch group
-            }
-            const uint32_t slot = w & dspf2d::ES_SLOT_MASK;
-            if (slot >= bucket_slots()) {
+            const uint32_t slot = es[idx[k]];
+            if (slot >= n) {
                 continue;  // as in count_pass: never index another lane's block
             }
             const uint32_t page = me.next_page[slot];
             me.next_page[slot] = page + 1u;
             if (page >= cap) {
                 continue;  // dropped for want of capacity, with the counter already advanced
-            }
-            if constexpr (ct.fanout) {
-                if ((w & dspf2d::ES_LOCAL_BIT) == 0u) {
-                    const uint32_t d = (w >> dspf2d::ES_DIR_SHIFT) & 1u;
-                    if (n_dir[d] < dspf2d::FO_MAX_DESTS) {
-                        const uint32_t hop_field = w & dspf2d::ES_HOP_FIELD;
-                        packed[d][n_dir[d]++] =
-                            (page & dspf2d::FO_PAGE_MASK) | hop_field | (k << dspf2d::FO_SLOT_SHIFT);
-                        const uint32_t hop = hop_field >> dspf2d::FO_HOP_SHIFT;
-                        if (hop > far_dir[d]) {
-                            far_dir[d] = hop;
-                        }
-                    }
-                    continue;  // the cable carries these; only this chip's own go in a bucket
-                }
             }
             const uint32_t at = me.next_entry[slot];
             // The bucket was sized from the offsets table, which the same routing produced. A table
@@ -344,23 +293,6 @@ inline void fill_pass(const Control& c, const Lane& me, uint32_t t0, uint32_t t1
             ent[0] = t;
             ent[1] = page;
             ent[2] = k;
-        }
-        if constexpr (ct.fanout) {
-            for (uint32_t d = 0; d < 2u; d++) {
-                if (n_dir[d] == 0) {
-                    continue;
-                }
-                // Slice-contiguous: token t's entry can only sit at or after position t0 of its
-                // direction's run, and the run is walked by the count this lane reports.
-                volatile tt_l1_ptr uint32_t* ent = c.mc_entries + (d * ct.seq_len + t0 + me.mc_n[d]) * mc_stride;
-                me.mc_n[d] = me.mc_n[d] + 1u;
-                ent[0] = t;
-                ent[1] = n_dir[d];
-                ent[2] = far_dir[d];
-                for (uint32_t i = 0; i < n_dir[d]; i++) {
-                    ent[3 + i] = packed[d][i];
-                }
-            }
         }
     }
 }

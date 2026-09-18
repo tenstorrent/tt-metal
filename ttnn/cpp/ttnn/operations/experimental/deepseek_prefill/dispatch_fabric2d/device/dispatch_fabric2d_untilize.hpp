@@ -42,9 +42,9 @@ std::optional<UntilizePlan> plan_untilize(
     uint32_t sem_addr,
     tt::tt_metal::Buffer* staging);
 
-// Untilizers per link, a link being its two streams. Five keeps ten of them on 20 stripes at the
-// production shape (seq 640, emb 7168) with the stream readers' `dspf2d_wait_untilize` zone at zero;
-// that zone rising off zero is the signal this is too low, and it is the only one.
+// Untilizers per link, a link being its two streams. Five per link covers the production shape (20
+// stripes at seq 640). The stream readers' `dspf2d_wait_untilize` zone rising off zero is the signal
+// this is too low, and it is the only one.
 constexpr uint32_t UNTILIZERS_PER_LINK = 5;
 
 // Where the pool ended up relative to where it is designed to be.

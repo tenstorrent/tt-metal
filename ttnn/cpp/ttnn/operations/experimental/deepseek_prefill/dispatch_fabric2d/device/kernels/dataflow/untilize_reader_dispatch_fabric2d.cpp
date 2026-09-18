@@ -34,8 +34,8 @@ void kernel_main() {
     const auto in_acc = TensorAccessor(in_args, get_arg_val<uint32_t>(dspf2d::UntilizeRtArg::kBufferAddr), tile_bytes);
 
     // A TILE tensor is paged one tile per page, tile-row-major, so a stripe is tiles_per_row
-    // consecutive pages. The whole stripe is read: a stripe is exactly TILE_HEIGHT tokens and the op
-    // refuses a sequence that is not a whole number of them.
+    // consecutive pages. A ragged sequence's last stripe is read whole as well: its tile-padding rows
+    // land in staging pages past the sequence, which the routing pass never reaches.
     for (uint32_t s = first_stripe; s < num_stripes; s += pool_size) {
         const uint32_t base_page = s * tiles_per_row;
         for (uint32_t blk = 0; blk < num_blocks; blk++) {

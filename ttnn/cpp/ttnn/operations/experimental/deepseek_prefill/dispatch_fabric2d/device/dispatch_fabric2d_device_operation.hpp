@@ -39,7 +39,6 @@ std::array<ttnn::Tensor, 2> dispatch_fabric2d(
     const ttnn::Tensor& expert_dispatch_table_tensor,
     const ttnn::Tensor& expert_token_counts,
     const ttnn::Tensor& expert_region_offsets,
-    const std::optional<ttnn::Tensor>& fanout_reach,
     const std::optional<ttnn::Tensor>& padding_config,
     uint32_t experts_per_chip,
     uint32_t num_routed_experts,
@@ -49,7 +48,6 @@ std::array<ttnn::Tensor, 2> dispatch_fabric2d(
     uint32_t seq_len_per_chip,
     uint32_t axis,
     uint32_t num_links,
-    bool fanout,
     tt::tt_fabric::Topology topology,
     const tt::tt_metal::MemoryConfig& memory_config,
     const CoreRangeSet& worker_core_range_set);

@@ -31,9 +31,6 @@ struct SenderCtArgs {
         kFwdSemNocX,
         kFwdSemNocY,
         kFwdSemAddr,
-        kMcDeliveryAddr,
-        kMcMetaAddr,
-        kFanout,
         kCount,
     };
 
@@ -52,11 +49,6 @@ struct SenderCtArgs {
     uint32_t fwd_sem_noc_x;
     uint32_t fwd_sem_noc_y;
     uint32_t fwd_sem_addr;
-    // fanout: the reader's staged deliveries for each slot, which this RISC writes out -- the first
-    // `local_count` as NoC writes here, the `remote_count` after them as fabric packets next door.
-    uint32_t mc_delivery_addr;
-    uint32_t mc_meta_addr;
-    uint32_t fanout;
 
 #ifndef KERNEL_BUILD
     // `downstream` is the worker serving this stream on the next chip: the sender bumps its
@@ -67,8 +59,7 @@ struct SenderCtArgs {
         const op::StreamPlacement& self,
         const op::StreamPlacement& downstream,
         const op::L1Layout& l1,
-        const op::KernelPlan& plan,
-        bool fanout_mode) :
+        const op::KernelPlan& plan) :
         num_l1_slots(NUM_L1_SLOTS),
         token_size_bytes(token_bytes),
         forwarding_metadata_size(FORWARDING_METADATA_SIZE),
@@ -83,10 +74,7 @@ struct SenderCtArgs {
         freed_addr(plan.ring_freed_addr),
         fwd_sem_noc_x(static_cast<uint32_t>(downstream.worker_virtual.x)),
         fwd_sem_noc_y(static_cast<uint32_t>(downstream.worker_virtual.y)),
-        fwd_sem_addr(plan.fwd_arrived_addr),
-        mc_delivery_addr(l1.mc_delivery),
-        mc_meta_addr(l1.mc_meta),
-        fanout(fanout_mode ? 1u : 0u) {}
+        fwd_sem_addr(plan.fwd_arrived_addr) {}
 
     std::vector<uint32_t> to_ct_word_arr() const {
         constexpr uint32_t kUnset = 0xDEADBEEFu;
@@ -106,9 +94,6 @@ struct SenderCtArgs {
         w[kFwdSemNocX] = fwd_sem_noc_x;
         w[kFwdSemNocY] = fwd_sem_noc_y;
         w[kFwdSemAddr] = fwd_sem_addr;
-        w[kMcDeliveryAddr] = mc_delivery_addr;
-        w[kMcMetaAddr] = mc_meta_addr;
-        w[kFanout] = fanout;
         for (uint32_t i = 0; i < kCount; i++) {
             TT_FATAL(w[i] != kUnset, "dispatch_fabric2d: sender compile-time arg {} was never assigned", i);
         }
@@ -130,10 +115,7 @@ struct SenderCtArgs {
         freed_addr(get_compile_time_arg_val(kFreedAddr)),
         fwd_sem_noc_x(get_compile_time_arg_val(kFwdSemNocX)),
         fwd_sem_noc_y(get_compile_time_arg_val(kFwdSemNocY)),
-        fwd_sem_addr(get_compile_time_arg_val(kFwdSemAddr)),
-        mc_delivery_addr(get_compile_time_arg_val(kMcDeliveryAddr)),
-        mc_meta_addr(get_compile_time_arg_val(kMcMetaAddr)),
-        fanout(get_compile_time_arg_val(kFanout)) {}
+        fwd_sem_addr(get_compile_time_arg_val(kFwdSemAddr)) {}
 #endif
 
     constexpr uint32_t slot_stride() const { return token_size_bytes + forwarding_metadata_size; }

@@ -26,12 +26,6 @@ struct DispatchFabric2dParams {
     uint32_t seq_len_per_chip = 640;
     uint32_t axis = 0;
     uint32_t num_links = 2;
-    // One copy per (token, DIRECTION) crosses a cable instead of one per (token, expert): it travels
-    // to the farthest destination that way carrying its own page list, and every chip en route keeps
-    // the pages addressed to it. The chip one hop short of the farthest destination writes those last
-    // pages itself rather than forwarding. See the nanobind docstring. Both modes are kept so they
-    // can be measured against each other in one build.
-    bool fanout = false;
     // Whether a padding_config was supplied. The kernel reads it under a compile-time branch, so two
     // callers differing only in this need different programs.
     bool has_padding_config = false;
@@ -55,10 +49,6 @@ struct DispatchFabric2dInputs {
     // not first in its chip group.
     ttnn::Tensor expert_token_counts;
     ttnn::Tensor expert_region_offsets;
-    // fanout only: reach[origin][direction][hop] -- tokens from `origin` whose farthest destination
-    // that way is at least `hop` hops off. Per-expert counts are marginals and cannot express it, so
-    // without this a relay could not size a multicast chunk it neither wrote nor receives.
-    std::optional<ttnn::Tensor> fanout_reach;
     // [real_token_count, pad_side] -- the same two words production `dispatch` takes. Right padding
     // (pad_side 0) bounds the routing pass at real_token_count; any other side is ignored, matching
     // production, because only right padding keeps the real tokens at the low indices the allocator

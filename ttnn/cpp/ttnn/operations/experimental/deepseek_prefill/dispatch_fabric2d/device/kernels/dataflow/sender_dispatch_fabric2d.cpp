@@ -10,16 +10,13 @@
 //
 // Where this differs from the combine sender: dispatch lands a token in TWO tensors at one page index, so
 // the last hop is a two-chunk scatter write out of one slot -- the token to its page and the metadata
-// bytes behind it to the metadata page, one packet. A relay hop is a plain write. Under fan-out a slot
-// is the last holder of several pages at once, so it issues one such packet per destination and may
-// still forward.
+// bytes behind it to the metadata page, one packet. A relay hop is a plain write.
 //
 // Slots are claimed and released in batches, amortising the two counter bumps and the source flush. The
 // flush matters because the ring is reused: a payload send reads L1 asynchronously, so a slot cannot go
 // back to the reader until that read has drained.
 
 #include <cstdint>
-#include <type_traits>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
@@ -34,51 +31,17 @@
 constexpr uint32_t FWD_BUMP_EVERY = 32;
 constexpr dspf2d::SenderCtArgs ct{};
 
-// Prebuilt headers per ring slot. Every send is a single hop, so the route is constant for the whole run
-// and only the write address varies per token. One per packet in flight rather than one per slot because
-// setting the next write's address would otherwise mutate the header a previous non-blocking send may
-// still be reading, and that payload would land wherever the torn header pointed. The index map and the
-// pool size are headers_per_slot in the kernel interface, which the host reserves the pool from as well.
-volatile PACKET_HEADER_TYPE* slot_hdr(uint32_t slot, uint32_t which) {
-    return reinterpret_cast<volatile PACKET_HEADER_TYPE*>(
-        ct.pkt_hdr_ring_addr + (slot * dspf2d::headers_per_slot(ct.fanout) + which) * sizeof(PACKET_HEADER_TYPE));
+// One prebuilt header per ring slot. Every send is a single hop, so the route is constant for the whole
+// run and only the write address varies per token. Per slot rather than one shared header because
+// setting the next write's address would otherwise mutate a header a previous non-blocking send may
+// still be reading, and that payload would land wherever the torn header pointed.
+volatile PACKET_HEADER_TYPE* slot_hdr(uint32_t slot) {
+    return reinterpret_cast<volatile PACKET_HEADER_TYPE*>(ct.pkt_hdr_ring_addr + slot * sizeof(PACKET_HEADER_TYPE));
 }
 
 volatile tt_l1_ptr dspf2d::FwdMetadata* slot_metadata(uint32_t slot) {
     return reinterpret_cast<volatile tt_l1_ptr dspf2d::FwdMetadata*>(
         ct.ring_addr + slot * ct.slot_stride() + ct.token_size_bytes);
-}
-
-// fanout: the same tail viewed as FanoutMetadata (the two layouts pin cmd/this_addr to the same
-// offsets), and the deliveries the reader staged for this slot.
-volatile tt_l1_ptr dspf2d::FanoutMetadata* slot_mc_metadata(uint32_t slot) {
-    return reinterpret_cast<volatile tt_l1_ptr dspf2d::FanoutMetadata*>(
-        ct.ring_addr + slot * ct.slot_stride() + ct.token_size_bytes);
-}
-
-volatile tt_l1_ptr dspf2d::FanoutDelivery* slot_delivery(uint32_t slot) {
-    return reinterpret_cast<volatile tt_l1_ptr dspf2d::FanoutDelivery*>(
-        ct.mc_delivery_addr + slot * dspf2d::FO_MAX_DESTS * sizeof(dspf2d::FanoutDelivery));
-}
-
-// A staged count as the sender is willing to act on it. The reader stages at most FO_MAX_DESTS records
-// per slot and the header pool is sized for exactly that, so a larger value is a reader bug -- one that
-// would run packet headers over the very delivery records these sends read their addresses from, and
-// then send from whatever that wrote. ASSERT is compiled out on this hardware, so the bound is enforced
-// here rather than checked.
-uint32_t staged_count(uint32_t n, uint32_t budget) { return n < budget ? n : budget; }
-
-// Write this slot's local deliveries out of it: the token to each destination page on THIS chip and
-// its metadata words alongside. Plain NoC writes on this RISC's NoC, not fabric sends -- the point is
-// to take them off the reader's port, which was the saturated one, onto this one, which was not.
-// The batch flush that frees these slots is on this NoC too, so it already covers these.
-void deliver_locally(uint32_t slot, uint32_t slot_base) {
-    const uint32_t n = staged_count(slot_mc_metadata(slot)->local_count, dspf2d::FO_MAX_DESTS);
-    volatile tt_l1_ptr dspf2d::FanoutDelivery* dl = slot_delivery(slot);
-    for (uint32_t i = 0; i < n; i++) {
-        noc_async_write(slot_base, dl[i].payload_addr, ct.token_size_bytes);
-        noc_async_write(dl[i].meta_src, dl[i].meta_addr, dspf2d::METADATA_WIRE_BYTES);
-    }
 }
 
 // The bytes a terminal delivery carries: the token and, right behind it, the metadata words for the
@@ -106,10 +69,10 @@ void build_token_meta_header(volatile PACKET_HEADER_TYPE* hdr, uint64_t payload_
         TOKEN_PLUS_META_BYTES);
 }
 
-// The unicast last hop. `src` is a ring slot, whose tail begins with the metadata words (FwdMetadata
-// pins them at offset 0), so the whole payload is already laid out in L1 and goes out as it is. The
-// order is load-bearing -- the header is built BEFORE waiting for an EDM slot, because reversing the
-// two costs about 8% of the bandwidth.
+// The last hop. `src` is a ring slot, whose tail begins with the metadata words (FwdMetadata pins them
+// at offset 0), so the whole payload is already laid out in L1 and goes out as it is. The order is
+// load-bearing -- the header is built BEFORE waiting for an EDM slot, because reversing the two costs
+// about 8% of the bandwidth.
 template <typename FabricSender>
 void send_token_with_inline_meta(
     FabricSender& fabric, uint64_t payload_addr, uint64_t meta_addr, uint32_t src, volatile PACKET_HEADER_TYPE* hdr) {
@@ -119,90 +82,10 @@ void send_token_with_inline_meta(
     fabric.send_payload_flush_non_blocking_from_address((uint32_t)hdr, sizeof(PACKET_HEADER_TYPE));
 }
 
-// Where the payload of the channel slot the adapter is filling begins, as a NoC address on the eth
-// core. The adapter has no send at an offset, so a payload assembled from two sources has to address
-// that slot directly: `edm_buffer_addr` is its base and the payload region begins one packet header
-// in. Valid only between the adapter's payload send and its header send -- the header send is what
-// advances the slot cursor -- so callers read it exactly there.
-template <typename FabricSender>
-uint64_t edm_current_payload_addr(const FabricSender& fabric) {
-    // `edm_buffer_addr` tracks the live slot only for the adapter whose slot count is a runtime value;
-    // the compile-time-slotted variant keeps its cursor elsewhere and leaves this field at the base.
-    static_assert(
-        !std::remove_reference_t<FabricSender>::USER_DEFINED_NUM_BUFFER_SLOTS,
-        "edm_buffer_addr is not the live slot when the channel has user-defined slots");
-    // Anything written behind the token has to keep the 16-byte alignment its source has
-    // (MC_META_SLOT_BYTES), so the payload base plus the token must be a multiple of 16.
-    static_assert(
-        (sizeof(PACKET_HEADER_TYPE) + ct.token_size_bytes) % 16u == 0u,
-        "bytes staged behind the token would land misaligned in the channel buffer");
-    return get_noc_addr(
-               fabric.edm_noc_x, fabric.edm_noc_y, fabric.edm_buffer_addr, tt::tt_fabric::get_fabric_worker_noc()) +
-           sizeof(PACKET_HEADER_TYPE);
-}
-
-// A fan-out delivery. Its metadata is NOT behind the token in the slot -- a slot delivers to several
-// destinations at once and each needs its own top-k word, so the reader staged them elsewhere -- and
-// the payload is assembled in the fabric channel buffer instead: the adapter writes the token, this
-// kernel writes the staged 16 bytes behind it, then the header goes out. Room for those 16 bytes is
-// the program factory's business: it refuses a token the fabric payload cap does not admit with its
-// tail, which is wider than the metadata.
-//
-// The write goes on the NoC the adapter sends on, which is what keeps it in issue order between the
-// token and the header at the eth core; on any other NoC the header could arrive first, and the router
-// would forward a slot still holding the previous delivery's metadata.
-template <typename FabricSender>
-void send_token_with_staged_meta(
-    FabricSender& fabric,
-    uint64_t payload_addr,
-    uint64_t meta_addr,
-    uint32_t token_src,
-    uint32_t meta_src,
-    volatile PACKET_HEADER_TYPE* hdr) {
-    build_token_meta_header(hdr, payload_addr, meta_addr);
-    fabric.wait_for_empty_write_slot();
-    fabric.send_payload_without_header_non_blocking_from_address(token_src, ct.token_size_bytes);
-    noc_async_write(
-        meta_src,
-        edm_current_payload_addr(fabric) + ct.token_size_bytes,
-        dspf2d::METADATA_WIRE_BYTES,
-        tt::tt_fabric::get_fabric_worker_noc());
-    fabric.send_payload_flush_non_blocking_from_address((uint32_t)hdr, sizeof(PACKET_HEADER_TYPE));
-}
-
-// The same records, for the destinations that live on the chip across this cable: the pages this slot
-// is the last holder of. The addresses are usable here because every output buffer is interleaved DRAM
-// with a mesh-uniform base, which is how the unicast tail's final addresses have always travelled.
-//
-// This is what one read feeding many sends buys: the page is never landed in the neighbour's region
-// for it to read straight back out, and each delivery is one packet on the cable, like a forward.
-template <typename FabricSender>
-void deliver_remotely(FabricSender& fabric, uint32_t slot, uint32_t slot_base) {
-    volatile tt_l1_ptr dspf2d::FanoutMetadata* metadata = slot_mc_metadata(slot);
-    // The two lists share one FO_MAX_DESTS-record budget, so the remote share is what the local one
-    // leaves: clamping each to FO_MAX_DESTS alone would still let `first + i` run off the end.
-    const uint32_t first = staged_count(metadata->local_count, dspf2d::FO_MAX_DESTS);
-    const uint32_t n = staged_count(metadata->remote_count, dspf2d::FO_MAX_DESTS - first);
-    volatile tt_l1_ptr dspf2d::FanoutDelivery* dl = slot_delivery(slot);
-    for (uint32_t i = 0; i < n; i++) {
-        send_token_with_staged_meta(
-            fabric,
-            dl[first + i].payload_addr,
-            dl[first + i].meta_addr,
-            slot_base,
-            dl[first + i].meta_src,
-            slot_hdr(slot, dspf2d::FO_FIRST_DELIVERY_HDR + i));
-    }
-}
-
 void prebuild_routes() {
     for (uint32_t slot = 0; slot < ct.num_l1_slots; slot++) {
-        for (uint32_t which = 0; which < dspf2d::headers_per_slot(ct.fanout); which++) {
-            fabric_set_unicast_route(
-                (volatile tt::tt_fabric::HybridMeshPacketHeader*)slot_hdr(slot, which),
-                ct.peer_chip_id,
-                ct.peer_mesh_id);
-        }
+        fabric_set_unicast_route(
+            (volatile tt::tt_fabric::HybridMeshPacketHeader*)slot_hdr(slot), ct.peer_chip_id, ct.peer_mesh_id);
     }
     // Shares the drain's scratch header: the drain only runs once the send loop is done with it.
     fabric_set_unicast_route(
@@ -244,27 +127,12 @@ uint64_t send_slot(FabricSender& fabric, uint32_t slot, uint32_t& fwd_since_bump
     if (cmd == dspf2d::CMD_END) {
         return cmd;
     }
-    const bool forwarding = (cmd == dspf2d::CMD_FORWARD) || (cmd == dspf2d::CMD_FORWARD_END);
     const uint32_t slot_base = ct.ring_addr + slot * ct.slot_stride();
-    // Listed positively rather than excluding the unicast commands: these three are what the fan-out
-    // reader emits, and they are the ones whose tail is a FanoutMetadata with both counts written. A
-    // FwdMetadata tail leaves those two words uninitialised (see the static_assert on their offset),
-    // and they bound these loops, so anything else must not reach them. Either count may be zero --
-    // what a slot delivers does not decide whether it also forwards.
-    if (ct.fanout && (forwarding || cmd == dspf2d::CMD_NO_FORWARD)) {
-        deliver_locally(slot, slot_base);
-        deliver_remotely(fabric, slot, slot_base);
-    }
-    if (cmd == dspf2d::CMD_NO_FORWARD) {
-        return cmd;  // its deliveries went out above; no PAGE follows them
-    }
-
-    volatile PACKET_HEADER_TYPE* hdr = slot_hdr(slot, 0);
-    if (forwarding) {
+    volatile PACKET_HEADER_TYPE* hdr = slot_hdr(slot);
+    if (cmd == dspf2d::CMD_FORWARD || cmd == dspf2d::CMD_FORWARD_END) {
         // One write: token plus the prefix of the tail the next hop needs, landing in its forwarding page.
         const uint32_t payload_bytes = ct.token_size_bytes + dspf2d::FWD_EXTRA_BYTES;
-        // Header first, THEN wait for the slot: building it while the EDM may still be busy is free
-        // overlap, and reversing the two costs ~8% of the bandwidth.
+        // Header first, THEN wait for the slot -- see send_token_with_inline_meta.
         hdr->to_noc_unicast_write(tt::tt_fabric::NocUnicastCommandHeader{metadata->this_addr}, payload_bytes);
         fabric.wait_for_empty_write_slot();
         fabric.send_payload_without_header_non_blocking_from_address(slot_base, payload_bytes);
@@ -275,15 +143,12 @@ uint64_t send_slot(FabricSender& fabric, uint32_t slot, uint32_t& fwd_since_bump
             bump_downstream(fabric, fwd_since_bump);
             fwd_since_bump = 0;
         }
-    } else if constexpr (!ct.fanout) {
+    } else {
         // Last hop: the token to its page and the three metadata words to the same page index of the
         // metadata tensor, in one packet. Both addresses were computed on the chip the token started
         // from and travelled with it, so this hop needs no address generator of its own. The metadata
         // words sit at the very start of the slot's tail, right behind the token, which is what lets the
         // packet be sent straight out of the slot.
-        //
-        // Compiled out under fan-out, which has no last hop of its own: there the same 64 bytes are a
-        // FanoutMetadata, and `final_payload_addr` would be two packed destinations read as an address.
         send_token_with_inline_meta(fabric, metadata->final_payload_addr, metadata->final_meta_addr, slot_base, hdr);
     }
     return cmd;
@@ -296,7 +161,7 @@ uint32_t pump_stream(FabricSender& fabric) {
     uint32_t sent = 0;
     // The stream's length is not known here: it is this chip's own tokens plus everything the reader
     // re-forwards for other chips, which depends on chunk sizes decided upstream. The reader terminates
-    // the stream with a CMD_END slot instead, and we batch over whatever it has already published.
+    // the stream with a CMD_END slot instead, and this loop batches over whatever it has published.
     bool end_of_stream = false;
     uint32_t fwd_since_bump = 0;
     while (!end_of_stream) {

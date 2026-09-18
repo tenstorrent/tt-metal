@@ -28,10 +28,8 @@ struct ReaderRtArg {
         kOutPayloadAddr,
         kOutMetaAddr,
         kFwdAddr,
-        // Bound unconditionally so host and kernel never disagree about the arg layout; in non-fanout
-        // mode it points at a stand-in the kernel does not read.
-        kFanoutReachAddr,
-        // Bound unconditionally for the same reason.
+        // Bound unconditionally so host and kernel never disagree about the arg layout; with no config
+        // supplied it points at a stand-in the kernel does not read.
         kPaddingConfigAddr,
         kCount,
     };
@@ -49,7 +47,6 @@ struct ReaderCtArgs {
         kExpertsPerChip,
         kExtent,
         kMyRow,
-        kMyChipId,
         kNbrChipId,
         kLinearizedCoord,
         kNumLinks,
@@ -64,9 +61,6 @@ struct ReaderCtArgs {
         kFwdPagesPerStream,
         kNumOwn,
         kNumRelay,
-        kFanout,
-        kMcDeliveryAddr,
-        kMcMetaAddr,
         kUntilizeSemAddr,
         kUntilizeStripes,
         kHasPaddingConfig,
@@ -93,7 +87,6 @@ struct ReaderCtArgs {
     uint32_t experts_per_chip;
     uint32_t extent;
     uint32_t my_row;
-    uint32_t my_chip_id;
     uint32_t nbr_chip_id;
     // Metadata field 0 is the source chip as the production op names it, so this op has to agree.
     uint32_t linearized_coord;
@@ -111,10 +104,6 @@ struct ReaderCtArgs {
     uint32_t fwd_pages_per_stream;
     uint32_t num_own;
     uint32_t num_relay;
-    uint32_t fanout;
-    // fanout: where this reader stages deliveries for its sender to write out.
-    uint32_t mc_delivery_addr;
-    uint32_t mc_meta_addr;
     // A TILE input reaches this reader through a staging buffer the untilizer pool fills. Zero
     // stripes is the row-major path: the input accessor already points at the tokens.
     uint32_t untilize_sem_addr;
@@ -132,7 +121,6 @@ struct ReaderCtArgs {
         uint32_t token_bytes,
         uint32_t linearized,
         uint32_t row,
-        uint32_t chip_id,
         uint32_t neighbour_chip_id,
         const op::L1Layout& l1,
         const op::KernelPlan& plan,
@@ -148,7 +136,6 @@ struct ReaderCtArgs {
         experts_per_chip(args.experts_per_chip),
         extent(plan.extent),
         my_row(row),
-        my_chip_id(chip_id),
         nbr_chip_id(neighbour_chip_id),
         linearized_coord(linearized),
         num_links(args.num_links),
@@ -163,9 +150,6 @@ struct ReaderCtArgs {
         fwd_pages_per_stream(plan.fwd_pages_per_stream),
         num_own(own_count),
         num_relay(relay_count),
-        fanout(args.fanout ? 1u : 0u),
-        mc_delivery_addr(l1.mc_delivery),
-        mc_meta_addr(l1.mc_meta),
         untilize_sem_addr(plan.untilize_sem_addr),
         untilize_stripes(plan.untilize_stripes),
         has_padding_config(args.has_padding_config ? 1u : 0u),
@@ -194,7 +178,6 @@ struct ReaderCtArgs {
         w[kExpertsPerChip] = experts_per_chip;
         w[kExtent] = extent;
         w[kMyRow] = my_row;
-        w[kMyChipId] = my_chip_id;
         w[kNbrChipId] = nbr_chip_id;
         w[kLinearizedCoord] = linearized_coord;
         w[kNumLinks] = num_links;
@@ -209,9 +192,6 @@ struct ReaderCtArgs {
         w[kFwdPagesPerStream] = fwd_pages_per_stream;
         w[kNumOwn] = num_own;
         w[kNumRelay] = num_relay;
-        w[kFanout] = fanout;
-        w[kMcDeliveryAddr] = mc_delivery_addr;
-        w[kMcMetaAddr] = mc_meta_addr;
         w[kUntilizeSemAddr] = untilize_sem_addr;
         w[kUntilizeStripes] = untilize_stripes;
         w[kHasPaddingConfig] = has_padding_config;
@@ -253,7 +233,6 @@ struct ReaderCtArgs {
         experts_per_chip(get_compile_time_arg_val(kExpertsPerChip)),
         extent(get_compile_time_arg_val(kExtent)),
         my_row(get_compile_time_arg_val(kMyRow)),
-        my_chip_id(get_compile_time_arg_val(kMyChipId)),
         nbr_chip_id(get_compile_time_arg_val(kNbrChipId)),
         linearized_coord(get_compile_time_arg_val(kLinearizedCoord)),
         num_links(get_compile_time_arg_val(kNumLinks)),
@@ -268,9 +247,6 @@ struct ReaderCtArgs {
         fwd_pages_per_stream(get_compile_time_arg_val(kFwdPagesPerStream)),
         num_own(get_compile_time_arg_val(kNumOwn)),
         num_relay(get_compile_time_arg_val(kNumRelay)),
-        fanout(get_compile_time_arg_val(kFanout)),
-        mc_delivery_addr(get_compile_time_arg_val(kMcDeliveryAddr)),
-        mc_meta_addr(get_compile_time_arg_val(kMcMetaAddr)),
         untilize_sem_addr(get_compile_time_arg_val(kUntilizeSemAddr)),
         untilize_stripes(get_compile_time_arg_val(kUntilizeStripes)),
         has_padding_config(get_compile_time_arg_val(kHasPaddingConfig)),
@@ -297,8 +273,7 @@ struct ReaderCtArgs {
     static constexpr auto out_payload_args = TensorAccessorArgs<region_args.next_compile_time_args_offset()>();
     static constexpr auto out_meta_args = TensorAccessorArgs<out_payload_args.next_compile_time_args_offset()>();
     static constexpr auto fwd_args = TensorAccessorArgs<out_meta_args.next_compile_time_args_offset()>();
-    static constexpr auto reach_args = TensorAccessorArgs<fwd_args.next_compile_time_args_offset()>();
-    static constexpr auto padding_args = TensorAccessorArgs<reach_args.next_compile_time_args_offset()>();
+    static constexpr auto padding_args = TensorAccessorArgs<fwd_args.next_compile_time_args_offset()>();
 #endif
 };
 
