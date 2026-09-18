@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 """Prepared terms and direct scan match physically trimmed native execution."""
 
-import pytest
 import torch
 
 import ttnn
@@ -11,8 +10,7 @@ from models.common.utility_functions import run_for_blackhole
 pytestmark = run_for_blackhole()
 
 
-@pytest.mark.parametrize("device_params", [{"trace_region_size": 4_000_000}], indirect=True)
-def test_padding_preparation_and_scan(device, device_params):
+def test_padding_preparation_and_scan(device):
     generator = torch.Generator().manual_seed(183)
     sequence, heads, width = 256, 2, 32
     q, k, v = [torch.randn(1, sequence, heads * width, generator=generator).bfloat16() for _ in range(3)]

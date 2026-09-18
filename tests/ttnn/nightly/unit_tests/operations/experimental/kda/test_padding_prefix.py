@@ -13,9 +13,8 @@ pytestmark = run_for_blackhole()
 
 
 @pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
-@pytest.mark.parametrize("device_params", [{"trace_region_size": 2_000_000}], indirect=True)
 @pytest.mark.parametrize("width", [32, 128])
-def test_padding_prefix_empty_and_partial_groups(mesh_device, device_params, width):
+def test_padding_prefix_empty_and_partial_groups(mesh_device, width):
     # Two heads, four 64-row groups each. Every active summary is (I, (g+1)I).
     eye = torch.eye(width)
     a = eye.repeat(8, 1, 1).bfloat16()

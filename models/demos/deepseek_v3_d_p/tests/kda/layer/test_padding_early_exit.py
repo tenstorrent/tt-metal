@@ -29,7 +29,7 @@ pytestmark = run_for_blackhole()
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 16 * 1024 * 1024}],
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
     indirect=True,
 )
 def test_padding_changing_interval_single_capture(mesh_device, sp_axis, tp_axis, device_params):
