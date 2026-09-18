@@ -12,7 +12,7 @@
         }
       }
     },
-    "bfp8_max_context": "Context ceiling(s) for bfp8 modules: an int (all bfp8 modules) or a {module: max_seq_len} dict. Above the limit the loader downgrades that module bfp8 -> bf16, because bfp8 error accumulates with sequence length. MEASURED on 31B/tp=8 at a true 262k prompt: shared_mlp in bfp8 degenerates, attention in bfp8 stays coherent, both bfp8 degenerates; 128k is fine with both. Override with GEMMA4_BFP8_MAX_CONTEXT (0 disables)."
+    "bfp8_max_context": "Context ceiling(s) for bfp8 modules: an int (all bfp8 modules) or a {module: max_seq_len} dict. Above the limit the loader downgrades that module bfp8 -> bf16, because bfp8 error accumulates with sequence length. MEASURED on 31B/tp=8 at a true 262k prompt: shared_mlp in bfp8 degenerates, attention in bfp8 stays coherent, both bfp8 degenerates; 128k is fine with both. Override with GEMMA4_BFP8_MAX_CONTEXT (0 disables). May also be MESH-SCOPED as {\"RxC\": {...}, \"default\": {...}}: the downgrade doubles those weights, so it is only declared on meshes where bf16 fits (measured on tp=8; 31B bf16 shared_mlp at 262k does not fit on 1x4)."
   },
   "gemma-4-31B-it": {
     "default": {
@@ -20,7 +20,9 @@
       "attention": "bfp8"
     },
     "bfp8_max_context": {
-      "shared_mlp": 131072
+      "1x8": {
+        "shared_mlp": 131072
+      }
     }
   },
   "gemma-4-12B-it": {
