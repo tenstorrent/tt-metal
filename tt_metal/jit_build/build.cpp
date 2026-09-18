@@ -557,6 +557,9 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
             fmt::format_to(it, "-D{} ", define);
         }
         fmt::format_to(it, "-DDISPATCH_MESSAGE_ADDR={} ", build_config.dispatch_message_addr);
+        if (build_config.fds_signalling) {
+            fmt::format_to(it, "-DFDS_SIGNALLING=1 ");
+        }
     }
     if (this->is_fw_) {
         this->defines_ += "-DFW_BUILD ";

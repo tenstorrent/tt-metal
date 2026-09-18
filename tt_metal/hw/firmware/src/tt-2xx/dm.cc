@@ -17,6 +17,11 @@
 #include "tools/profiler/kernel_profiler.hpp"
 #include "api/kernel_thread_globals.h"
 
+#ifdef FDS_SIGNALLING
+#include "overlay/fds_signalling.hpp"
+#include "quasar/plic.hpp"
+#endif
+
 #if defined(PROFILE_KERNEL)
 namespace kernel_profiler {
 thread_local uint32_t wIndex __attribute__((used));
@@ -73,7 +78,42 @@ int32_t bank_to_l1_offset[NUM_L1_BANKS] __attribute__((used));
 tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(UNCACHED_MEM_MAILBOX_BASE);
 tt_l1_ptr subordinate_map_t* const subordinate_sync = (subordinate_map_t*)mailboxes->subordinate_sync.map;
 
-inline void invalidate_kernel_binary_l2_cache(uintptr_t kernel_lma, launch_msg_t* launch_msg, uint32_t processor_index) {
+#ifdef FDS_SIGNALLING
+constexpr uint32_t fds_num_go_groups = go_message_num_entries - 1;
+constexpr uint32_t fds_go_interrupt_mask = overlay::fds_signalling::go_interrupt_mask(fds_num_go_groups);
+static_assert(fds_go_interrupt_mask == 0x1FE, "FDS interrupt mask must cover exactly groups 1..8");
+
+__attribute__((interrupt)) void fds_go_interrupt_handler() {
+    const uint32_t claimed_source = overlay::quasar::plic_claim();
+    if (claimed_source == 0) {
+        return;
+    }
+
+    const uint32_t group_id = overlay::quasar::go_group_from_plic_source(claimed_source);
+    if (overlay::fds_signalling::sub_device_from_go_group(group_id) >= fds_num_go_groups) {
+        overlay::quasar::plic_complete(claimed_source);
+        return;
+    }
+    uint32_t dispatch_lanes = overlay::fds_signalling::worker_read_group_status(group_id);
+    while (dispatch_lanes != 0) {
+        const uint32_t dispatch_lane = __builtin_ctz(dispatch_lanes);
+        overlay::fds_signalling::worker_clear_dispatch_status(dispatch_lane);
+        dispatch_lanes &= ~(uint32_t{1} << dispatch_lane);
+    }
+
+    // Clear the FDS lanes and read them back before completing the claim so the live level cannot re-pend it.
+    (void)overlay::fds_signalling::worker_read_group_status(group_id);
+    overlay::quasar::plic_complete(claimed_source);
+
+    // The host rewrites go_message_index only after quiesce with no go in flight, so no locking is needed.
+    if (group_id == overlay::fds_signalling::go_group_for_sub_device(mailboxes->go_message_index)) {
+        mailboxes->go_messages[overlay::fds_signalling::sub_device_from_go_group(group_id)].signal = RUN_MSG_GO;
+    }
+}
+#endif
+
+inline void invalidate_kernel_binary_l2_cache(
+    uintptr_t kernel_lma, launch_msg_t* launch_msg, uint32_t processor_index) {
     uint32_t kernel_size = launch_msg->kernel_config.kernel_text_size[processor_index];
     if (kernel_size == 0) {
         return;
@@ -210,9 +250,7 @@ inline void start_subordinate_kernel_run_early(uint32_t enables) {
 // Wake DM1 to run setup_dfb_remapper in parallel with DM0's ISR setup.
 // DM1 has a dedicated DFB-init-only loop and never runs user kernels.
 // Called before DM0's setup_dfb_implicit_sync so both run concurrently.
-inline void start_dm1_dfb_init() {
-    *((volatile uint8_t*)&(subordinate_sync->dm1)) = RUN_SYNC_MSG_GO;
-}
+inline void start_dm1_dfb_init() { *((volatile uint8_t*)&(subordinate_sync->dm1)) = RUN_SYNC_MSG_GO; }
 
 inline void wait_subordinates() {
     WAYPOINT("NTW");
@@ -227,6 +265,43 @@ inline void wait_subordinates() {
 }
 
 inline void trigger_sync_register_init() { subordinate_sync->neo0_trisc0 = RUN_SYNC_MSG_INIT_SYNC_REGISTERS; }
+
+#ifdef FDS_SIGNALLING
+inline uint32_t begin_worker_completion_round(launch_msg_t* launch_message, bool wait_for_go) {
+    if (launch_message->kernel_config.mode != DISPATCH_MODE_DEV) {
+        return 0;
+    }
+
+    const uint32_t go_message_index = mailboxes->go_message_index;
+    if (wait_for_go) {
+        WAYPOINT("FGW");
+        while (mailboxes->go_messages[go_message_index].signal != RUN_MSG_GO) {
+        }
+        WAYPOINT("FGD");
+    }
+
+    overlay::fds_signalling::worker_clear_done();
+    return go_message_index + 1;
+}
+#endif
+
+// Publishes RUN_MSG_DONE and tells the dispatcher. worker_completion_group is the FDS group for this
+// round, or 0 when the round is on the NOC.
+inline void signal_dispatch_core_done(uint32_t go_message_index, uint32_t worker_completion_group) {
+    if (worker_completion_group != 0) {
+#ifdef FDS_SIGNALLING
+        DPRINT("DM0-FW: completion FDS\n");
+        mailboxes->go_messages[go_message_index].signal = RUN_MSG_DONE;
+        overlay::fds_signalling::worker_signal_done(worker_completion_group);
+#endif
+    } else {
+        DPRINT("DM0-FW: completion NOC\n");
+        mailboxes->go_messages[go_message_index].signal = RUN_MSG_DONE;
+        const uint64_t dispatch_addr = calculate_dispatch_addr(&mailboxes->go_messages[go_message_index]);
+        DEBUG_SANITIZE_NOC_ADDR(noc_index, dispatch_addr, 4);
+        notify_dispatch_core_done(dispatch_addr, noc_index);
+    }
+}
 
 extern "C" uint32_t _start1() {
     configure_csr();
@@ -285,9 +360,42 @@ extern "C" uint32_t _start1() {
         deassert_trisc();
         DPRINT("DM0-FW: deasserted TRISC\n");
         wait_subordinates();
+#ifndef FDS_SIGNALLING
         mailboxes->go_messages[0].signal = RUN_MSG_DONE;
+#endif
 
         noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
+#ifdef FDS_SIGNALLING
+        register_handler_for_interrupt(MACHINE_EXTERNAL_INTERRUPT_OFFSET, fds_go_interrupt_handler);
+        invalidate_l1_icache();
+        overlay::fds_signalling::worker_disable_auto_dispatch();
+        overlay::fds_signalling::worker_config_filter_length(overlay::fds_signalling::filter_length);
+        overlay::fds_signalling::worker_config_interrupt_enable(overlay::fds_signalling::interrupts_disabled);
+        overlay::fds_signalling::worker_clear_done();
+        for (uint32_t dispatch_lane = 0; dispatch_lane < overlay::fds_signalling::num_dispatch_lanes; ++dispatch_lane) {
+            overlay::fds_signalling::worker_clear_dispatch_status(dispatch_lane);
+        }
+        for (uint32_t go_group_id = overlay::fds_signalling::idle_group_id + 1; go_group_id <= fds_num_go_groups;
+             ++go_group_id) {
+            overlay::fds_signalling::worker_config_group(
+                go_group_id, overlay::fds_signalling::dispatch_lane_mask, overlay::fds_signalling::worker_go_threshold);
+        }
+        overlay::quasar::plic_set_threshold(overlay::quasar::plic_threshold_allow_all);
+        for (uint32_t go_group_id = overlay::fds_signalling::idle_group_id + 1; go_group_id <= fds_num_go_groups;
+             ++go_group_id) {
+            const uint32_t plic_source = overlay::quasar::plic_source_for_go_group(go_group_id);
+            overlay::quasar::plic_set_priority(plic_source, overlay::quasar::plic_fds_priority);
+            overlay::quasar::plic_enable_source(plic_source, true);
+        }
+        overlay::quasar::plic_drain_pendings();
+        // Thresholds and PLIC enables must be set before arming the FDS interrupt level at reset.
+        overlay::fds_signalling::worker_config_interrupt_enable(fds_go_interrupt_mask);
+        asm volatile("csrrs zero, mie, %0" : : "r"(uint32_t{1} << MACHINE_EXTERNAL_INTERRUPT_OFFSET));
+        asm volatile("csrrs zero, mstatus, %0" : : "r"(uint32_t{1} << 3));
+        // Publish DONE only after FDS can take a go interrupt: the host's wait on DONE is the only
+        // barrier before the dispatch cores launch.
+        mailboxes->go_messages[0].signal = RUN_MSG_DONE;
+#endif
         trigger_sync_register_init();
 
         DeviceProfilerInit();
@@ -315,16 +423,11 @@ extern "C" uint32_t _start1() {
                             DeviceIncrementTraceCount();
                             DeviceTraceOnlyProfilerInit();
                         }
-                        uint32_t go_message_index = mailboxes->go_message_index;
                         // Querying the noc_index is safe here, since the RUN_MSG_RESET_READ_PTR go signal is currently
                         // guaranteed to only be seen after a RUN_MSG_GO signal, which will set the noc_index to a valid
                         // value. For future proofing, the noc_index value is initialized to 0, to ensure an invalid NOC
-                        // txn is not issued.
-                        uint64_t dispatch_addr = calculate_dispatch_addr(&mailboxes->go_messages[go_message_index]);
-                        mailboxes->go_messages[go_message_index].signal = RUN_MSG_DONE;
-                        // Notify dispatcher that this has been done
-                        DEBUG_SANITIZE_NOC_ADDR(noc_index, dispatch_addr, 4);
-                        notify_dispatch_core_done(dispatch_addr, noc_index);
+                        // txn is not issued. dispatch_s only puts RUN_MSG_GO on the FDS wire, so this always uses NOC.
+                        signal_dispatch_core_done(mailboxes->go_message_index, /*worker_completion_group=*/0);
                     }
                 }
             }
@@ -333,6 +436,14 @@ extern "C" uint32_t _start1() {
 
             uint32_t launch_msg_rd_ptr = mailboxes->launch_msg_rd_ptr;
             launch_msg_t* launch_msg_address = &(mailboxes->launch[launch_msg_rd_ptr]);
+#ifdef FDS_SIGNALLING
+            uint32_t worker_completion_group = 0;
+            if (go_message_signal == RUN_MSG_GO) {
+                worker_completion_group = begin_worker_completion_round(launch_msg_address, false);
+            }
+#else
+            constexpr uint32_t worker_completion_group = 0;
+#endif
             {
                 // Only include this iteration in the device profile if the launch message is valid. This is because all
                 // workers get a go signal regardless of whether they're running a kernel or not. We don't want to
@@ -378,11 +489,11 @@ extern "C" uint32_t _start1() {
                 // prev_noc_mode = noc_mode;
 
                 uint32_t tt_l1_ptr* dfb_l1_base =
-                    (uint32_t tt_l1_ptr*)(kernel_config_base +
-                                          launch_msg_address->kernel_config.local_cb_offset);
+                    (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg_address->kernel_config.local_cb_offset);
                 start_subordinate_kernel_run_early(enables);
 
-                // DM0 needs to setup DFBs to program implicit synchronization regardless of whether it runs a kernel or not.
+                // DM0 needs to setup DFBs to program implicit synchronization regardless of whether it runs a kernel or
+                // not.
                 uint32_t num_local_dfbs = launch_msg_address->kernel_config.local_cb_mask;
                 // Kick DM1 to run remapper config in parallel with DM0's ISR setup.
                 start_dm1_dfb_init();
@@ -390,12 +501,18 @@ extern "C" uint32_t _start1() {
                 setup_dfb_implicit_sync(dfb_l1_base, num_local_dfbs);
                 WAYPOINT("D");
 
+#ifdef FDS_SIGNALLING
+                if (worker_completion_group == 0 && go_message_signal != RUN_MSG_GO) {
+                    worker_completion_group = begin_worker_completion_round(launch_msg_address, true);
+                }
+#endif
                 wait_subordinates();
 
                 trigger_sync_register_init();
 
                 // Need to ensure that Remapper state is cleared for next kernel launch
-                // Remapper initialization by DM1 tracks which pairs were configured. This will clear valid bits for all configured remappings.
+                // Remapper initialization by DM1 tracks which pairs were configured. This will clear valid bits for all
+                // configured remappings.
                 g_remapper_configurator.clear_clientL_valid_up_to_high_watermark_hw();
                 g_remapper_configurator.reset_pair_high_watermark();
             }
@@ -403,7 +520,9 @@ extern "C" uint32_t _start1() {
             // Signal host/dispatcher completion after the DM0-FW zone above has finalized, so DM0's markers
             // are readable when the host wakes on RUN_MSG_DONE.
             uint32_t go_message_index = mailboxes->go_message_index;
-            mailboxes->go_messages[go_message_index].signal = RUN_MSG_DONE;
+            if (worker_completion_group != 0) {
+                go_message_index = worker_completion_group - 1;
+            }
 
             // Notify dispatcher core that tensix has completed running kernels, if the launch_msg was populated
             if (launch_msg_address->kernel_config.mode == DISPATCH_MODE_DEV) {
@@ -411,14 +530,14 @@ extern "C" uint32_t _start1() {
                 // run if a valid launch message is sent.
                 launch_msg_address->kernel_config.enables = 0;
                 launch_msg_address->kernel_config.preload = 0;
-                uint64_t dispatch_addr = calculate_dispatch_addr(&mailboxes->go_messages[go_message_index]);
-                DEBUG_SANITIZE_NOC_ADDR(noc_index, dispatch_addr, 4);
                 // Only executed if watcher is enabled. Ensures that we don't report stale data due to invalid
-                // launch messages in the ring buffer. Must be executed before the atomic increment, as after that
+                // launch messages in the ring buffer. Must be executed before signalling completion, as after that
                 // the launch message is no longer owned by us.
                 CLEAR_PREVIOUS_LAUNCH_MESSAGE_ENTRY_FOR_WATCHER();
-                notify_dispatch_core_done(dispatch_addr, noc_index);
+                signal_dispatch_core_done(go_message_index, worker_completion_group);
                 mailboxes->launch_msg_rd_ptr = (launch_msg_rd_ptr + 1) & (launch_msg_buffer_num_entries - 1);
+            } else {
+                mailboxes->go_messages[go_message_index].signal = RUN_MSG_DONE;
             }
         }
     }
@@ -442,8 +561,8 @@ extern "C" uint32_t _start1() {
         uintptr_t kernel_lma =
             static_cast<uint32_t>(kernel_config_base) + launch_msg->kernel_config.kernel_text_offset[index];
 
-        uint32_t tt_l1_ptr* dfb_l1_base = (uint32_t tt_l1_ptr*)(kernel_config_base +
-                                                                launch_msg->kernel_config.local_cb_offset);
+        uint32_t tt_l1_ptr* dfb_l1_base =
+            (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg->kernel_config.local_cb_offset);
         uint32_t num_local_dfbs = launch_msg->kernel_config.local_cb_mask;
 
         if (hartid == 1) {
