@@ -110,9 +110,24 @@ class Gemma4Precision:
         # Model-wide (not per-mesh): read off the model entry, not the mesh
         # sub-dict, because a mesh entry REPLACES "default" rather than merging.
         dest_acc = model_entry.get("single_tile_dest_acc", True)
+        if isinstance(dest_acc, dict):
+            # Per-arch form, for a flag that is a workaround rather than a
+            # preference: an arch the object does not name keeps the default.
+            # 31B needs it because its reason (Wormhole #38306, HiFi3 with fp32
+            # dest-accumulation) is a Wormhole hardware bug, and applying the
+            # workaround model-wide changed Blackhole too, where main runs and
+            # validates the default.
+            unknown = sorted(set(dest_acc) - set(_ARCH_KEYS))
+            if unknown:
+                raise ValueError(
+                    f"precision_overrides.json[{model_key}][single_tile_dest_acc] has unknown arch "
+                    f"key(s) {unknown} — expected one of {sorted(_ARCH_KEYS)}"
+                )
+            dest_acc = dest_acc.get(_current_arch_key(), True)
         if not isinstance(dest_acc, bool):
             raise ValueError(
-                f"precision_overrides.json[{model_key}][single_tile_dest_acc]={dest_acc!r} — expected true/false"
+                f"precision_overrides.json[{model_key}][single_tile_dest_acc]={dest_acc!r} — "
+                f"expected true/false, or an object keyed by {sorted(_ARCH_KEYS)}"
             )
 
         topology = model_entry.get("ccl_topology")
@@ -134,6 +149,16 @@ class Gemma4Precision:
                 )
             resolved[k] = _DTYPE_BY_NAME[v]
         return cls(resolved, single_tile_dest_acc=dest_acc, ccl_topology=topology)
+
+
+_ARCH_KEYS = ("wormhole_b0", "blackhole")
+
+
+def _current_arch_key():
+    """Arch key for per-arch override objects."""
+    from models.common.utility_functions import is_blackhole
+
+    return "blackhole" if is_blackhole() else "wormhole_b0"
 
 
 _DEST_ACC_BY_MODEL = {}

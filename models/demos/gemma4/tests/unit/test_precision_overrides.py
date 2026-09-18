@@ -73,3 +73,44 @@ def test_ccl_topology_rejects_unknown_value(tmp_path, monkeypatch):
         assert "ccl_topology" in str(e)
     else:
         raise AssertionError("expected ValueError for an unknown ccl_topology")
+
+
+def test_dest_acc_override_is_wormhole_only_for_31b(monkeypatch):
+    """31B's dest-acc false is a Wormhole #38306 workaround, so Blackhole keeps
+    the default. Written model-wide it changed Blackhole too, where main runs
+    the default and passes."""
+    from models.demos.gemma4.tt import precision as precision_mod
+
+    monkeypatch.setattr(precision_mod, "_current_arch_key", lambda: "wormhole_b0")
+    assert Gemma4Precision.load("google/gemma-4-31B-it", (1, 8)).single_tile_dest_acc is False
+
+    monkeypatch.setattr(precision_mod, "_current_arch_key", lambda: "blackhole")
+    assert Gemma4Precision.load("google/gemma-4-31B-it", (1, 8)).single_tile_dest_acc is True
+
+
+def test_plain_bool_dest_acc_applies_to_every_arch(monkeypatch):
+    """E2B's false is a model preference, not an arch workaround: it must hold
+    on both arches (main ships it that way and Blackhole passes)."""
+    from models.demos.gemma4.tt import precision as precision_mod
+
+    for arch in ("wormhole_b0", "blackhole"):
+        monkeypatch.setattr(precision_mod, "_current_arch_key", lambda arch=arch: arch)
+        assert Gemma4Precision.load("google/gemma-4-E2B-it", (1, 1)).single_tile_dest_acc is False
+        assert Gemma4Precision.load("google/gemma-4-12B-it", (1, 8)).single_tile_dest_acc is True
+
+
+def test_dest_acc_rejects_unknown_arch_key(tmp_path, monkeypatch):
+    """A typo'd arch key must fail loudly rather than silently taking the default."""
+    import json
+
+    from models.demos.gemma4.tt import precision as precision_mod
+
+    bad = tmp_path / "precision_overrides.json"
+    bad.write_text(json.dumps({"my-model": {"single_tile_dest_acc": {"wormhol": False}, "default": {}}}))
+    monkeypatch.setattr(precision_mod, "_PATH", str(bad))
+    try:
+        Gemma4Precision.load("my-model", (1, 8))
+    except ValueError as e:
+        assert "unknown arch" in str(e)
+    else:
+        raise AssertionError("expected ValueError for an unknown arch key")
