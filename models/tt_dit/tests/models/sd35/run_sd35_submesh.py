@@ -1,9 +1,16 @@
-"""Run the SD3.5-Large 4-chip (2x2, cfg1 sp2 tp2) pipeline on a 2x2 submesh of a Galaxy.
+"""Run the SD3.5-Large pipeline on four chips of whatever system this is.
 
-Opening a bare 2x2 mesh on a Galaxy fails fabric router sync (neighbours outside the mesh never
-come up), so open the full system mesh with fabric and slice a 2x2 submesh out of it. Mirrors
-test_sd35_pipeline[2x2cfg0sp0tp1-yes_traced] otherwise. Env: SD35_STEPS (28), SD35_QUANT (model
-code reads it), SD35_TRACED (1).
+Opens the full system mesh (its shape is read from the SystemMesh descriptor, never hardcoded) and
+slices a 4-chip submesh out of it; opening a bare sub-mesh on a Galaxy fails fabric router sync.
+With SD35_LAYOUT unset the layout follows the system shape: a mesh axis of exactly 4 (a full
+column / row of a Galaxy torus, a closed ring) gives tensor parallel x4 along it with Ring fabric;
+a 2x2 system (QuietBox) is relabeled to a 1x4 ring; a longer axis (e.g. an auto-discovered 32x1
+chain) gives a 4-chip line with Linear fabric, since four consecutive chips of a longer line are
+not a ring. SD35_TOPOLOGY / SD35_FABRIC override the fabric choice.
+
+Env: SD35_STEPS (28), SD35_ITERS (2), SD35_LAYOUT (auto), SD35_TOPOLOGY / SD35_FABRIC (auto),
+SD35_LINKS (2), SD35_QUANT (model code reads it), SD35_TRACED (1), SD35_TAG, plus the A/B switches
+documented in models/tt_dit/models/StableDiffusion35.md. Run from the repo root.
 """
 
 import os
@@ -31,25 +38,41 @@ cfg_enabled = os.environ.get("SD35_CFG", "1") == "1"
 # which the reshape does in ring order (device ids 0,1,5,4).
 #   "2x2"  = sp2 (axis 0) x tp2 (axis 1)          "1x4c" = tp4 (axis 1) on the reshaped corner
 #   "4x1c" = sp4 (axis 0) on the reshaped corner  "1x4"/"4x1" = native row/column (hang on Galaxy)
-layout = os.environ.get("SD35_LAYOUT", "4x1tp")
+system_shape = tuple(ttnn._ttnn.multi_device.SystemMeshDescriptor().shape())
+layout = os.environ.get("SD35_LAYOUT", "auto")
+closed_ring = True  # does the chosen 4-chip submesh form a physical ring (full torus axis / 2x2)?
+if layout == "auto":
+    if system_shape[0] == 4:
+        layout = "4x1tp"
+    elif system_shape[1] == 4:
+        layout = "1x4tp"
+    elif system_shape == (2, 2):
+        layout = "1x4c"
+    elif system_shape[0] >= 4:
+        layout, closed_ring = "4x1tp", False
+    elif system_shape[1] >= 4:
+        layout, closed_ring = "1x4tp", False
+    else:
+        raise SystemExit(f"need four chips in a line; the system mesh is {system_shape}")
 _layouts = {
     "2x2": (ttnn.MeshShape(2, 2), None, (2, 0), (2, 1)),
     "1x4c": (ttnn.MeshShape(2, 2), ttnn.MeshShape(1, 4), (1, 0), (4, 1)),
     "4x1c": (ttnn.MeshShape(2, 2), ttnn.MeshShape(4, 1), (4, 0), (1, 1)),
     "1x4": (ttnn.MeshShape(1, 4), None, (1, 0), (4, 1)),
     "4x1": (ttnn.MeshShape(4, 1), None, (4, 0), (1, 1)),
-    # Native column of the Galaxy (a complete system-mesh axis): tp4 along axis 0, no sequence parallelism.
+    # Native column / row of the system mesh: tp4 along that axis, no sequence parallelism.
     "4x1tp": (ttnn.MeshShape(4, 1), None, (1, 1), (4, 0)),
+    "1x4tp": (ttnn.MeshShape(1, 4), None, (1, 0), (4, 1)),
 }
 mesh_shape, reshape_to, sp_cfg, tp_cfg = _layouts[layout]
-topology = {"linear": ttnn.Topology.Linear, "ring": ttnn.Topology.Ring}[os.environ.get("SD35_TOPOLOGY", "ring")]
+default_topology = "ring" if closed_ring else "linear"
+topology_name = os.environ.get("SD35_TOPOLOGY", default_topology)
+topology = {"linear": ttnn.Topology.Linear, "ring": ttnn.Topology.Ring}[topology_name]
 fabric = {"linear": ttnn.FabricConfig.FABRIC_1D, "ring": ttnn.FabricConfig.FABRIC_1D_RING}[
-    os.environ.get("SD35_FABRIC", os.environ.get("SD35_TOPOLOGY", "ring"))
+    os.environ.get("SD35_FABRIC", topology_name)
 ]
 num_links = int(os.environ.get("SD35_LINKS", "2"))
-tag = os.environ.get(
-    "SD35_TAG", f"{layout}_{os.environ.get('SD35_TOPOLOGY', 'ring')}_{os.environ.get('SD35_QUANT', 'bf16')}_s{steps}"
-)
+tag = os.environ.get("SD35_TAG", f"{layout}_{topology_name}_{os.environ.get('SD35_QUANT', 'bf16')}_s{steps}")
 
 _mmrs_cfg = os.environ.get("SD35_MMRS_CFG")  # override the ff2 MMRS blocking / handoff for A/B runs
 if _mmrs_cfg:
@@ -69,11 +92,11 @@ if _mmrs_cfg:
     )
     logger.info(f"MMRS config override: {_mmrs_cfg}")
 set_fabric(fabric)
-full = ttnn.open_mesh_device(
-    mesh_shape=ttnn.MeshShape(4, 8),
+full = ttnn.open_mesh_device(  # no mesh_shape: the whole system mesh, whatever its shape
     l1_small_size=int(os.environ.get("SD35_L1_SMALL", "65536")),
     trace_region_size=50_000_000,
 )
+assert tuple(full.shape) == system_shape, f"opened {tuple(full.shape)}, expected system mesh {system_shape}"
 try:
     sub = full.create_submeshes(mesh_shape)[0]
     if reshape_to is not None:
@@ -120,7 +143,7 @@ try:
         images[0].save(f"sd35_2x2_{tag}_it{it}.png")
         d = lambda k: prof.get_duration(k, it)
         logger.info(
-            f"RESULT tag={tag} layout={layout} topo={os.environ.get('SD35_TOPOLOGY', 'ring')} iter={it} steps={steps} traced={traced} cfg={cfg_enabled} "
+            f"RESULT tag={tag} layout={layout} topo={topology_name} iter={it} steps={steps} traced={traced} cfg={cfg_enabled} "
             f"encoder={d('encoder'):.2f}s vae={d('vae'):.2f}s denoising={d('denoising'):.2f}s "
             f"step={d('denoising') / steps:.3f}s total={d('total'):.2f}s run={d('run'):.2f}s"
         )
