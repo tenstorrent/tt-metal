@@ -74,6 +74,7 @@
 #include "api/compute/reduce.h"
 #include "api/compute/tile_move_copy.h"
 #include "tt-train/sources/ttml/metal/common/compute_utils.hpp"
+#include "tt-train/sources/ttml/metal/common/first_column_compute_utils.hpp"
 
 constexpr uint32_t num_rows_per_core = get_compile_time_arg_val(0);
 constexpr uint32_t block_size = get_compile_time_arg_val(1);
@@ -192,10 +193,22 @@ void reduce_sum_to_inv_rms(const uint32_t cb_sum, const uint32_t cb_inv_rms) {
     binop_with_scalar_tile_init();
     add_unary_tile(reg_acc, get_eps_fp32_bits());
 
+    // REDUCE_ROW output: only column 0 carries data. sqrt uses the first-column variant
+    // (8 iterations instead of 32). recip stays on recip_tile<false>, restricted to
+    // VectorMode::C (16 instead of 32): PolyNorm compiles with fp32_dest_acc_en = true, so
+    // recip_tile<false> resolves to _calculate_reciprocal_fast_24b_5c_ on Blackhole, while
+    // the only first-column recip body in tree (calculate_recip_first_column) uses
+    // sfpu_reciprocal_iter<2> - a different algorithm there. (On Wormhole recip_tile<false>
+    // already resolves to sfpu_reciprocal_iter<2>, so the swap would be numerically neutral.)
+    // The extra 2x is worth ~0.04% end-to-end (PR #56288), below what
+    // polynorm_fusion_benchmark resolves, and PolyNormOpTest's 2e-2 tolerance cannot show
+    // the swap is bit-safe on Blackhole.
+    // TODO(#42980): revisit in a separate change with lane-level accuracy tests, ideally by
+    // fusing sqrt+recip into a first-column rsqrt (_calculate_sqrt_body_ has a RECIPROCAL flag).
     sqrt_tile_init();
-    sqrt_tile(reg_acc);
+    sqrt_tile_first_column(reg_acc);
     recip_tile_init<false>();
-    recip_tile<false>(reg_acc);
+    recip_tile<false>(reg_acc, VectorMode::C);
 
     tile_regs_commit();
     pack_and_push(reg_acc, cb_inv_rms);
