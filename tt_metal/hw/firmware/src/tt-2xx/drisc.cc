@@ -48,6 +48,15 @@ tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(MEM_DRISC_MAIL
 tt_l1_ptr subordinate_map_t* const subordinate_sync =
     (subordinate_map_t*)(MEM_DRISC_MAILBOX_BASE + offsetof(mailboxes_t, subordinate_sync));
 
+inline void invalidate_kernel_binary_l2_cache(
+    uintptr_t kernel_lma, launch_msg_t* launch_msg, uint32_t processor_index) {
+    uint32_t kernel_size = launch_msg->kernel_config.kernel_text_size[processor_index];
+    if (kernel_size == 0) {
+        return;
+    }
+    invalidate_l2_cache_range(kernel_lma, kernel_size);
+}
+
 inline __attribute__((always_inline)) volatile uint8_t* subordinate_sync_slot(uint32_t hartid) {
     return (volatile uint8_t*)&(subordinate_sync->dm1) + hartid - 1;
 }
@@ -95,6 +104,7 @@ extern "C" uint32_t _start1() {
 
     my_logical_x_ = mailboxes->core_info.absolute_logical_x;
     my_logical_y_ = mailboxes->core_info.absolute_logical_y;
+    noc_index = 0;
 
     if (hartid > 0) {
         signal_subordinate_completion();
@@ -115,6 +125,13 @@ extern "C" uint32_t _start1() {
         }
     }
 
+    risc_init();
+    noc_bank_table_init(MEM_CCE_BANK_TO_NOC_SCRATCH);
+    noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
+    for (uint32_t n = 0; n < NUM_NOCS; n++) {
+        noc_local_state_init(n);
+    }
+
     mailboxes->launch_msg_rd_ptr = 0;
     wait_subordinates();
     mailboxes->go_messages[0].signal = RUN_MSG_DONE;
@@ -130,10 +147,13 @@ extern "C" uint32_t _start1() {
         uint32_t enables = launch_msg->kernel_config.enables;
         firmware_config_init(mailboxes, ProgrammableCoreType::DRAM, hartid);
         start_subordinate_kernel_run_early(enables);
+        overlay_cmd_buff_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
 
         WAYPOINT("R");
         if (enables & 1u) {
             uintptr_t kernel_lma = launch_msg->kernel_config.kernel_text_offset[0];
+            // Invalidate the i$ now the kernels have loaded and before running
+            invalidate_kernel_binary_l2_cache(kernel_lma, launch_msg, 0);
             invalidate_l1_icache();
             reinterpret_cast<uint32_t (*)()>(kernel_lma)();
         }
