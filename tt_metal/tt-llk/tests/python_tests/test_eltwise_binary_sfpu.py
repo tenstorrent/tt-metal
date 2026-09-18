@@ -211,6 +211,8 @@ _REGISTRY_DOMAIN_OPS = frozenset(
         MathOperation.SfpuElwdiv,
         MathOperation.SfpuElwpow,
         MathOperation.SfpuXlogy,
+        MathOperation.SfpuLogaddexp,
+        MathOperation.SfpuLogaddexp2,
     }
 )
 
@@ -661,6 +663,8 @@ def sfpu_binary(
         MathOperation.SfpuElwrsub,
         MathOperation.SfpuElwpow,
         MathOperation.SfpuXlogy,
+        MathOperation.SfpuLogaddexp,
+        MathOperation.SfpuLogaddexp2,
         # Eq/Ne and Lt/Gt/Le/Ge are excluded from this *random* sweep: independent draws
         # are never equal (the Eq/Ne golden collapses to a constant) and near-ties that
         # the kernel and the total-order golden round differently read as failures. They
@@ -679,9 +683,17 @@ def test_eltwise_binary_sfpu_float(
     _skip_bh_float16_no_dest_acc(formats, dest_acc)
 
     # Bfp8_b quantization can map small positive operands to zero, making xlogy's
-    # logarithm -inf.
-    if formats.input_format == DataFormat.Bfp8_b and mathop == MathOperation.SfpuXlogy:
-        pytest.skip("Bfp8_b input is not supported for XLOGY coverage")
+    # logarithm -inf. LOGADDEXP and LOGADDEXP2 are skipped here too: their +/-200
+    # domain under Bfp8_b's shared-exponent quantization collapses most of the
+    # |a - b| < 20 correction band this sweep exists to exercise.
+    if formats.input_format == DataFormat.Bfp8_b and mathop in (
+        MathOperation.SfpuXlogy,
+        MathOperation.SfpuLogaddexp,
+        MathOperation.SfpuLogaddexp2,
+    ):
+        pytest.skip(
+            "Bfp8_b input is not supported for XLOGY/LOGADDEXP/LOGADDEXP2 coverage"
+        )
 
     if bcast_dim == LlkBroadcastType.Row and (
         dest_acc == DestAccumulation.Yes
