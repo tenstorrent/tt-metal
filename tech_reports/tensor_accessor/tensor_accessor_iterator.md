@@ -82,7 +82,7 @@ while (page != pages.end()) {
 }
 ```
 
-This is a bit uglier than using a range-based for loop, but you still get better performance in the case of sharded tensors.
+This is a bit uglier than using a range-based for loop. With a step > 1, make sure the step divides `end_page_id - start_page_id`, or the iterator steps past `end_page_id` and the loop never terminates. Iterating to `tensor_volume()` is always safe.
 
 
 ## Shard Pages Iterator 🧩
@@ -166,6 +166,8 @@ The regular (non-shard) pages iterator is a generic abstraction for iterating ov
 It works for all kinds of tensors (interleaved/sharded, L1/DRAM, etc.). It's good for improving the readability of generic code that is intended to be used with any kind of input, and it should speed up address calculation when called with sharded tensors.
 
 The shard pages iterator should be used only in specific cases when a developer intends to optimize a kernel for the sharded tensor case.
+
+If you want to move many pages in a single transfer, neither iterator is the right tool: see [Contiguous pages](./tensor_accessor.md#contiguous-pages) for how to ask the accessor how many pages from a given page ID are contiguous in memory, so that one large transfer can replace a run of per-page ones.
 
 ### Reshard Op Example 📋
 The reshard op takes input and output tensors that have different `TensorSpec`s. They can differ in anything: `BufferType` (DRAM/L1), `MemoryLayout` (Interleaved/Sharded), or they can have different sharding specifications (e.g., WIDTH_SHARDED->HEIGHT_SHARDED, change of shard shape, etc.).
