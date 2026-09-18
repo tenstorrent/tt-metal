@@ -560,7 +560,10 @@ USE_CASE_CONFIGS = {
 # match peak compute throughput — and among those, 2x2 is strictly preferred
 # over 4x1 / 1x4 (better tile reuse in the math LLK). So when fp32 dest is on
 # the subblock sweep is skipped entirely and 2x2 is picked (when divisible).
-FP32_DEST_ACC_EN = True
+# MM_SWEEP_FP32_DEST_ACC=0 switches the accumulator to bf16 dest (DEST holds 8 tiles, so subblocks
+# up to h*w == 8 become legal and the fp32 intermediate CB halves). Timing-only: the sweep does not
+# check PCC, so validate any bf16-dest winner separately before landing it.
+FP32_DEST_ACC_EN = os.environ.get("MM_SWEEP_FP32_DEST_ACC", "1") != "0"
 
 # Block-size candidate methodology:
 # - M/N block:  even sizes in [MN_BLOCK_MIN, MN_BLOCK_MAX]  union  divisors of
@@ -942,7 +945,7 @@ def _build_op_runner(cfg, mesh_device, M, K, N, dtype, is_agmm, uc_cfg, core_gri
         mesh_device.arch(),
         math_fidelity=ttnn.MathFidelity.HiFi2,
         math_approx_mode=uc_cfg.get("math_approx_mode", False),
-        fp32_dest_acc_en=True,
+        fp32_dest_acc_en=FP32_DEST_ACC_EN,
         packer_l1_acc=True,
     )
 
