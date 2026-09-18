@@ -88,6 +88,7 @@ std::string format_define(tt::DataFormat format) {
     switch (format) {
         case tt::DataFormat::Float32: return "DataFormat::Float32";
         case tt::DataFormat::Float16_b: return "DataFormat::Float16_b";
+        case tt::DataFormat::Float16: return "DataFormat::Float16";
         case tt::DataFormat::Int32: return "DataFormat::Int32";
         default: TT_THROW("unsupported sfpu_reduce format");
     }
@@ -123,15 +124,38 @@ bool needs_fp32_dest_acc(tt::DataFormat format) {
     return format == tt::DataFormat::Float32 || format == tt::DataFormat::Int32;
 }
 
-std::uint32_t datum_bytes(tt::DataFormat format) { return format == tt::DataFormat::Float16_b ? 2 : 4; }
+bool is_16_bit_format(tt::DataFormat format) {
+    return format == tt::DataFormat::Float16_b || format == tt::DataFormat::Float16;
+}
+
+std::uint32_t datum_bytes(tt::DataFormat format) { return is_16_bit_format(format) ? 2 : 4; }
+
+// Round to a 16-bit float type (bfloat16 or _Float16) and pack two per 32-bit word.
+template <typename Half>
+std::vector<std::uint32_t> encode_16bit(const std::vector<double>& values) {
+    std::vector<Half> elements(values.size());
+    for (size_t i = 0; i < values.size(); ++i) {
+        elements[i] = static_cast<Half>(static_cast<float>(values[i]));
+    }
+    return pack_vector<std::uint32_t, Half>(elements);
+}
+
+template <typename Half>
+std::vector<double> decode_16bit(const std::vector<std::uint32_t>& packed) {
+    const auto elements = unpack_vector<Half, std::uint32_t>(packed);
+    std::vector<double> values(elements.size());
+    for (size_t i = 0; i < elements.size(); ++i) {
+        values[i] = static_cast<float>(elements[i]);
+    }
+    return values;
+}
 
 std::vector<std::uint32_t> encode_elements(const std::vector<double>& values, tt::DataFormat format) {
     if (format == tt::DataFormat::Float16_b) {
-        std::vector<bfloat16> elements(values.size());
-        for (size_t i = 0; i < values.size(); ++i) {
-            elements[i] = bfloat16(static_cast<float>(values[i]));
-        }
-        return pack_vector<std::uint32_t, bfloat16>(elements);
+        return encode_16bit<bfloat16>(values);
+    }
+    if (format == tt::DataFormat::Float16) {
+        return encode_16bit<_Float16>(values);
     }
 
     std::vector<std::uint32_t> packed(values.size());
@@ -147,12 +171,10 @@ std::vector<std::uint32_t> encode_elements(const std::vector<double>& values, tt
 
 std::vector<double> decode_elements(const std::vector<std::uint32_t>& packed, tt::DataFormat format) {
     if (format == tt::DataFormat::Float16_b) {
-        const auto elements = unpack_vector<bfloat16, std::uint32_t>(packed);
-        std::vector<double> values(elements.size());
-        for (size_t i = 0; i < elements.size(); ++i) {
-            values[i] = static_cast<float>(elements[i]);
-        }
-        return values;
+        return decode_16bit<bfloat16>(packed);
+    }
+    if (format == tt::DataFormat::Float16) {
+        return decode_16bit<_Float16>(packed);
     }
 
     std::vector<double> values(packed.size());
@@ -166,9 +188,8 @@ std::vector<double> decode_elements(const std::vector<std::uint32_t>& packed, tt
     return values;
 }
 
-// The input as the kernel actually sees it. Float16_b is already rounded by encode_elements and Int32
-// is exact. Float32 is unpacked through SrcA, which carries TF32 (10 mantissa bits), so its low 13
-// mantissa bits are truncated before the value reaches Dest.
+// The input as the kernel sees it. Float32 enters SrcA as TF32 (the host's unpack format for fp32
+// with a 32-bit Dest), truncating the low 13 mantissa bits; measured on the emulator.
 std::vector<double> as_seen_by_device(const std::vector<std::uint32_t>& encoded, tt::DataFormat format) {
     auto values = decode_elements(encoded, format);
     if (format == tt::DataFormat::Float32) {
@@ -297,8 +318,12 @@ double reduce_atol(const SfpuReduceConfig& config, std::uint32_t cols) {
         return 0.0;
     }
 
-    const double eps = (config.format == tt::DataFormat::Float16_b) ? 0.0078125      // bf16: 2^-7
-                                                                    : 1.1920929e-7;  // fp32: 2^-23
+    double eps = 1.1920929e-7;  // fp32: 2^-23
+    if (config.format == tt::DataFormat::Float16_b) {
+        eps = 0.0078125;  // bf16: 2^-7
+    } else if (config.format == tt::DataFormat::Float16) {
+        eps = 0.0009765625;  // fp16: 2^-10
+    }
     const double max_term = kFloatStimulusBound;
     const double num_terms = (config.axis == ReduceAxis::Row) ? cols : kTileHeight;
 
@@ -513,7 +538,7 @@ using namespace unit_tests::compute::sfpu_reduce;
 // Dest and reducing each tile in place is a separate path that does not work from here yet (see
 // TensixComputeSfpuReduceRow).
 TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixComputeSfpuReduceColumn) {
-    for (auto format : {tt::DataFormat::Float16_b, tt::DataFormat::Float32}) {
+    for (auto format : {tt::DataFormat::Float16_b, tt::DataFormat::Float16, tt::DataFormat::Float32}) {
         for (auto pool : {ReducePool::Sum, ReducePool::Avg, ReducePool::Max, ReducePool::Min}) {
             for (std::uint32_t num_blocks : {1u, 4u}) {
                 run_single_core_sfpu_reduce(
@@ -553,7 +578,7 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixComputeSfpuReduceRow) {
         std::uint32_t ct;
         std::uint32_t rt;
     };
-    for (auto format : {tt::DataFormat::Float16_b, tt::DataFormat::Float32}) {
+    for (auto format : {tt::DataFormat::Float16_b, tt::DataFormat::Float16, tt::DataFormat::Float32}) {
         for (auto pool : {ReducePool::Sum, ReducePool::Max, ReducePool::Min}) {
             for (const auto shape : {BlockShape{1, 1}, BlockShape{2, 1}, BlockShape{1, 2}, BlockShape{2, 2}}) {
                 run_single_core_sfpu_reduce(

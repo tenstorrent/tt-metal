@@ -20,16 +20,10 @@ namespace sfpu {
 // ============================================================================
 // Dest geometry
 // ============================================================================
-// A 32x32 tile is not a flat square in Dest but four 16x16 faces: faces 0/1 side by side over
-// rows 0-15, faces 2/3 the same over rows 16-31. One address holds one face row (16 datums), so
-// face f starts at 16f - the four faces sit at 0, 16, 32 and 48.
-//
-// One SFPLOAD reads four consecutive face rows, and address bit 1 picks the even or odd 8
-// columns of each - 4 rows x 8 columns = 32 datums, exactly the SFPU's 4 rows x 8 columns.
-//
-// Both axes load four at a time, but group them differently:
-//   column group - one face, one column parity: 8 columns, that face's 16 rows.
-//   row quad     - four whole tile rows: both parities of two side-by-side faces.
+// Dest addresses one 16-datum face row per unit, so a 32x32 tile's four faces sit at 0, 16, 32
+// and 48. One SFPLOAD covers four face rows x 8 columns, with address bit 1 selecting the even or
+// odd columns. A column reduce loads one face and one column parity at a time; a row reduce loads
+// four whole tile rows, both parities of two side-by-side faces.
 
 constexpr std::uint32_t REDUCE_FACE_STRIDE = FACE_R_DIM;                   // 16 addr units per face
 constexpr std::uint32_t REDUCE_FACE_PAIR_STRIDE = 2 * REDUCE_FACE_STRIDE;  // faces 0/1 then faces 2/3
@@ -77,15 +71,10 @@ constexpr std::uint32_t REDUCE_SWAP_IMM12_FP32 = 0x1;
 constexpr std::uint32_t REDUCE_SFPSHFT2_ROTATE = 3;
 
 /**
- * @brief SFPLOAD/SFPSTORE format-select code for a reduce operand format.
+ * @brief SFPLOAD/SFPSTORE format-select code for @p FORMAT.
  *
- * Floats take DEFAULT, letting the hardware resolve the Dest word format at runtime from
- * ALU_ACC_CTRL_SFPU_Fp32 and the SrcB format register - both already programmed from formats.math.
- * One kernel body therefore covers Float32, Float16_b and Float16 in either Dest width.
- *
- * Int32 names its mode outright: implied formats are unreliable under unpack-to-dest (TEN-4674).
- *
- * @tparam FORMAT: Math-side data format of the reduce operand
+ * Floats use DEFAULT, so one body serves every float format in either Dest width. Int32 is named
+ * explicitly because implied formats are unreliable under unpack-to-dest (TEN-4674).
  */
 template <DataFormat FORMAT>
 inline constexpr std::uint32_t reduce_sfpmem_mode() {
@@ -115,22 +104,14 @@ constexpr bool is_supported_reduce_format(DataFormat format) {
 // ============================================================================
 
 /**
- * @brief Fold @p SRC into @p DST with the reduction's operator, leaving the result in @p DST.
- *
- * The single step every reduce is built from. SUM and AVG both just add; AVG differs only in the
- * scaling its caller applies at the end.
- *
- * MAX and MIN are the same instruction: SFPSWAP puts the smaller operand in its lreg_dest and the
- * larger in its lreg_c, so the operand order alone decides which @p DST keeps. The compare domain
- * comes from @ref REDUCE_SWAP_IMM12_INT32 / @ref REDUCE_SWAP_IMM12_FP32.
+ * @brief Fold @p SRC into @p DST with the reduction's operator (AVG adds; its caller scales).
  *
  * @tparam POOL_TYPE: Reduction operator, values = <SUM/AVG/MAX/MIN>
- * @tparam IS_INT: Whether the operands are integers (selects the adder and the compare domain)
- * @tparam DST: LREG holding the running result; overwritten with the folded value
+ * @tparam IS_INT: Integer operands: selects the adder and the SFPSWAP compare domain
+ * @tparam DST: LREG holding the running result; overwritten
  * @tparam SRC: LREG holding the incoming value; clobbered
- * @note Every MAX/MIN fold ends in an SFPNOP: SFPSWAP takes 2 cycles and its result must not be
- *       read by the next instruction (the SFPSWAP -> SFPSTORE auto-stall bug). That trailing NOP
- *       is what makes this safe back-to-back and directly before a store.
+ * @note MAX/MIN end in an SFPNOP: SFPSWAP takes 2 cycles and the next instruction must not read
+ *       its result (SFPSWAP -> SFPSTORE auto-stall bug).
  */
 template <PoolType POOL_TYPE, bool IS_INT, std::uint32_t DST, std::uint32_t SRC>
 inline void reduce_combine() {
@@ -193,24 +174,16 @@ inline void reduce_int_average_col() {
 // ============================================================================
 
 /**
- * @brief Reduce one column group of a tile - 8 of its 32 columns, over all 32 rows.
- *
- * A column of 32 values spans two faces vertically, so a group pairs a top face with the one below
- * it at a single column parity. Eight SFPLOADs cover all 32 rows: LREG0-3 top, LREG4-7 bottom.
- *
- * Folding takes two passes, because the SFPU can only combine matching lanes of two registers -
- * never two lanes of the same register. Pass 1 folds each bank to LREG0/LREG4 then folds those
- * together, leaving every LREG0 lane holding a quarter of its column: lane (r, c) covers rows r,
- * r+4, r+8, r+12 at column c. Those quarters are stacked in LREG0's rows, out of reach - which is
- * what SFPTRANSP is for. It spreads them into row 0 of LREG0-3, where the ordinary fold finishes.
+ * @brief Reduce one column group - a top/bottom face pair at one column parity, 8 columns over
+ *        all 32 rows.
  *
  * @tparam POOL_TYPE: Reduction operator, values = <SUM/AVG/MAX/MIN>
  * @tparam MODE: SFPLOAD/SFPSTORE format-select code, @ref reduce_sfpmem_mode
  * @tparam IS_INT: Whether operands are integers
- * @tparam TOP_FACE_ADDR: Dest address of the top face of the pair, values = <0/REDUCE_FACE_STRIDE>
+ * @tparam TOP_FACE_ADDR: Dest address of the pair's top face, values = <0/REDUCE_FACE_STRIDE>
  * @tparam COLUMN_OFFSET: Column parity selector, values = <EVEN_COL/ODD_COL>
- * @note Writes the totals to row 0 of the top face; rows 1-3 keep the transpose's leftovers, which
- *       is fine - row 0 is all a column reduce's consumers read.
+ * @note Totals land in row 0 of the top face; rows 1-3 keep fold leftovers, which consumers of a
+ *       column reduce never read.
  */
 template <PoolType POOL_TYPE, std::uint32_t MODE, bool IS_INT, std::uint32_t TOP_FACE_ADDR, std::uint32_t COLUMN_OFFSET>
 inline void reduce_col_group() {

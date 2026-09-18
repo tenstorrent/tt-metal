@@ -67,7 +67,25 @@ _FLOAT_FORMAT_EPS = {
     DataFormat.Float32: 2.0**-24,
 }
 
-IMPLIED_MATH_FORMATS = [ImpliedMathFormat.No, ImpliedMathFormat.Yes]
+
+def get_implied_math_formats(
+    formats: InputOutputFormat,
+    dimension_combinations: list[int],
+    input_bounds: tuple[int, int],
+    reduced_extent: int,
+) -> list[ImpliedMathFormat]:
+    """Implied math format only changes the unpack-to-dest configuration, never the SFPU
+    instruction stream. Both values run on one representative variant per pool/format/axis - the
+    single full tile over the mixed range; everything else pins Yes, the perf setting.
+    """
+    representative = (
+        dimension_combinations == [TILE_DIM, TILE_DIM]
+        and reduced_extent == TILE_DIM
+        and input_bounds[0] < 0 < input_bounds[1]
+    )
+    if representative:
+        return [ImpliedMathFormat.No, ImpliedMathFormat.Yes]
+    return [ImpliedMathFormat.Yes]
 
 
 def get_max_tiles(formats: InputOutputFormat) -> int:
@@ -277,7 +295,7 @@ def _reduce_test_config_kwargs(
     input_bounds=get_format_input_bounds,
     dimension_combinations=get_dimension_combinations,
     reduced_extent=get_reduce_extents,
-    implied_math_format=IMPLIED_MATH_FORMATS,
+    implied_math_format=get_implied_math_formats,
 )
 def test_sfpu_reduce_quasar(
     formats,
