@@ -7,6 +7,8 @@
 #include <tt-metalium/distributed.hpp>
 #include <utility>
 
+#include "jit_build/build.hpp"
+#include "compile_only.hpp"
 #include "device.hpp"
 #include "mesh_device.hpp"
 #include "mesh_device_impl.hpp"
@@ -20,6 +22,15 @@
 #include "llrt/tt_cluster.hpp"
 
 namespace tt::tt_metal::distributed {
+
+void WaitForPendingCompiles(ContextId context_id) {
+    // Join the kernel builds deferred by compile-only mode.
+    tt::tt_metal::wait_for_pending_kernel_builds(context_id);
+}
+
+void WaitForPendingCompiles(const MeshDevice& mesh_device) {
+    WaitForPendingCompiles(mesh_device.impl().get_context_id());
+}
 
 void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload, bool blocking) {
     // Short-circuit for inactive MeshDevices (no-op)
@@ -112,7 +123,14 @@ void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload,
         }
     }
 
-    auto& ctx = tt::tt_metal::MetalContext::instance();
+    auto& ctx = tt::tt_metal::MetalContext::instance(mesh_cq.device()->impl().get_context_id());
+    if (ctx.rtoptions().get_compile_only()) {
+        // Compile this workload's kernels but don't dispatch.
+        // Synchronous call, concurrency comes from inside compile(), which defers the builds.
+        mesh_workload.impl().compile(mesh_cq.device(), /*defer_kernel_builds=*/true);
+        return;
+    }
+
     if (ctx.rtoptions().get_fast_dispatch()) {
         mesh_workload.impl().compile(mesh_cq.device());
         mesh_workload.impl().load_binaries(mesh_cq);

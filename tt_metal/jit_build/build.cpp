@@ -1254,4 +1254,56 @@ void jit_build_cache_clear() {
     jit_build::clear_file_hash_cache();
 }
 
+namespace {
+struct PendingKernelBuilds {
+    std::mutex mutex;
+    std::vector<std::shared_future<void>> futures;
+};
+std::array<PendingKernelBuilds, MAX_CONTEXT_COUNT> g_pending_kernel_builds;
+
+PendingKernelBuilds& pending_kernel_builds_for(ContextId context_id) {
+    const int slot = context_id.get();
+    TT_FATAL(
+        slot >= 0 && static_cast<size_t>(slot) < MAX_CONTEXT_COUNT,
+        "Pending kernel builds: context_id {} out of range [0, {})",
+        slot,
+        MAX_CONTEXT_COUNT);
+    return g_pending_kernel_builds[slot];
+}
+}  // namespace
+
+void add_pending_kernel_build(ContextId context_id, std::shared_future<void> build_future) {
+    auto& pending = pending_kernel_builds_for(context_id);
+    std::lock_guard<std::mutex> lock(pending.mutex);
+    pending.futures.push_back(std::move(build_future));
+}
+
+void launch_pending_build_step(ContextId context_id, const std::function<void()>& build_func) {
+    add_pending_kernel_build(context_id, detail::async(build_func));
+}
+
+void wait_for_pending_kernel_builds(ContextId context_id) {
+    // Swap this context's set out under its lock, then join outside it.
+    std::vector<std::shared_future<void>> pending;
+    {
+        auto& slot = pending_kernel_builds_for(context_id);
+        std::lock_guard<std::mutex> lock(slot.mutex);
+        pending.swap(slot.futures);
+    }
+    // Join all before returning even if one throws; rethrow the first error.
+    std::exception_ptr first_error;
+    for (auto& build_future : pending) {
+        try {
+            build_future.get();
+        } catch (...) {
+            if (!first_error) {
+                first_error = std::current_exception();
+            }
+        }
+    }
+    if (first_error) {
+        std::rethrow_exception(first_error);
+    }
+}
+
 }  // namespace tt::tt_metal

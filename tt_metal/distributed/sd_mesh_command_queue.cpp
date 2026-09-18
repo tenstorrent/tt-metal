@@ -150,6 +150,9 @@ void SDMeshCommandQueue::read_shard_from_device(
     if (!mesh_device_->impl().is_local(device_coord)) {
         return;
     }
+    TT_FATAL(
+        !MetalContext::instance(mesh_device_->impl().get_context_id()).rtoptions().get_compile_only(),
+        "Compile-only mode does not support reading device tensor data because dispatched results are unavailable.");
     if (this->get_target_device_type() == tt::TargetDevice::Mock) {
         return;  // Skip hardware read for mock devices
     }

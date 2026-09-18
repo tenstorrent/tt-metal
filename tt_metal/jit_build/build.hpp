@@ -15,6 +15,7 @@
 #include <vector>
 
 #include <tt-metalium/hal_types.hpp>
+#include "impl/context/context_types.hpp"
 #include "jit_build/types.hpp"
 #include "jit_build_options.hpp"
 #include <umd/device/types/arch.hpp>
@@ -228,5 +229,12 @@ void jit_build_once(size_t hash, const std::function<void()>& build_fn);
 
 // Clear the JIT build cache so that subsequent jit_build_once() calls re-execute.
 void jit_build_cache_clear();
+
+// Deferred kernel builds (compile-only mode): register into a per-context set with no per-caller
+// barrier (unlike launch_build_step + sync_build_steps), so builds from many programs in one
+// context run concurrently and are joined once via wait_for_pending_kernel_builds().
+void launch_pending_build_step(ContextId context_id, const std::function<void()>& build_func);
+void add_pending_kernel_build(ContextId context_id, std::shared_future<void> build_future);
+void wait_for_pending_kernel_builds(ContextId context_id);  // join; rethrows the first build error
 
 }  // namespace tt::tt_metal

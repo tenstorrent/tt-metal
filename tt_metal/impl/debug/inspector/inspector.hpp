@@ -44,7 +44,7 @@ public:
     static void program_compile_already_exists(
         const detail::ProgramImpl* program, const IDevice* device, uint64_t build_key) noexcept;
     static void program_kernel_compile_finished(
-        const detail::ProgramImpl* program,
+        ProgramId program_id,
         const IDevice* device,
         const std::shared_ptr<Kernel>& kernel,
         const tt::tt_metal::JitBuildOptions& build_options,

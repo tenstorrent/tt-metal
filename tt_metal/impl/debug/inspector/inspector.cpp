@@ -162,7 +162,7 @@ void Inspector::program_compile_already_exists(
 }
 
 void Inspector::program_kernel_compile_finished(
-    const detail::ProgramImpl* program,
+    ProgramId program_id,
     const IDevice* device,
     const std::shared_ptr<Kernel>& kernel,
     const tt::tt_metal::JitBuildOptions& build_options,
@@ -181,7 +181,7 @@ void Inspector::program_kernel_compile_finished(
             processor_elf_paths = kernel->elf_paths_by_processor_index(*device, binary_root);
         }
         std::lock_guard<std::mutex> lock(data->programs_mutex);
-        auto& program_data = data->programs_data[program->get_id()];
+        auto& program_data = data->programs_data[program_id];
         auto& kernel_data = program_data.kernels[kernel->get_watcher_kernel_id()];
         kernel_data.kernel = kernel;
         kernel_data.watcher_kernel_id = kernel->get_watcher_kernel_id();
@@ -195,7 +195,7 @@ void Inspector::program_kernel_compile_finished(
             kernel_data.processor_elf_paths = std::move(processor_elf_paths);
         }
         kernel_data.source = kernel->kernel_source().source_;
-        data->kernel_id_to_program_id[kernel->get_watcher_kernel_id()] = program->get_id();
+        data->kernel_id_to_program_id[kernel->get_watcher_kernel_id()] = program_id;
         data->logger.log_program_kernel_compile_finished(program_data, kernel_data);
     } catch (const std::exception& e) {
         TT_INSPECTOR_LOG("Failed to log program kernel compile finished: {}", e.what());

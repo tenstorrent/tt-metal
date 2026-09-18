@@ -56,7 +56,8 @@ private:
     ProgramConfig& get_program_config(uint32_t index);
     ProgramCommandSequence& get_dispatch_cmds_for_program(Program& program, uint64_t command_hash);
     const std::vector<uint64_t>& get_cross_node_program_ids();
-    void compile_program(const MeshCoordinateRange& device_range, MeshDevice* mesh_device);
+    void compile_program(
+        const MeshCoordinateRange& device_range, MeshDevice* mesh_device, bool defer_kernel_builds = false);
     void finalize_offsets(MeshDevice* mesh_device);
 
     struct FinalizedMetadata {
@@ -112,7 +113,7 @@ public:
     void add_program(const MeshCoordinateRange& device_range, Program&& program);
     std::unordered_map<MeshCoordinateRange, Program>& get_programs() { return programs_; }
     const std::unordered_map<MeshCoordinateRange, Program>& get_programs() const { return programs_; }
-    void compile(MeshDevice* mesh_device);
+    void compile(MeshDevice* mesh_device, bool defer_kernel_builds = false);
 
     // For testing purposes only
     void set_last_used_command_queue_for_testing(MeshCommandQueue* mesh_cq);

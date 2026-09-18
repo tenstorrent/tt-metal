@@ -865,6 +865,10 @@ void FDMeshCommandQueue::read_shard_from_device(
         return;
     }
 
+    TT_FATAL(
+        !MetalContext::instance(mesh_device_->impl().get_context_id()).rtoptions().get_compile_only(),
+        "Compile-only mode does not support reading device tensor data because dispatched results are unavailable.");
+
     if (tt::tt_metal::GraphTracker::instance().hook_read_from_device(&buffer)) {
         return;
     }

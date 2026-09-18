@@ -9,6 +9,7 @@
 #include <mesh_coord.hpp>
 #include <mesh_device.hpp>
 #include <mesh_device_view.hpp>
+#include "distributed/compile_only.hpp"
 #include "distributed/mesh_device_impl.hpp"
 #include <tt_stl/small_vector.hpp>
 #include <sub_device.hpp>
@@ -1011,6 +1012,12 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
 
     log_trace(tt::LogMetal, "Closing mesh device {}", this->id());
 
+    try {
+        tt::tt_metal::distributed::WaitForPendingCompiles(this->get_context_id());
+    } catch (const std::exception& e) {
+        log_warning(tt::LogMetal, "Compile-only: a pending kernel compile failed during device close: {}", e.what());
+    }
+
     // Shut down the CQ first so dispatch_s sends TERMINATE to the profiler core with the
     // final buffer; the push kernel, receiver thread, and callbacks must still be alive.
     if (is_initialized()) {
@@ -1192,11 +1199,15 @@ void MeshDeviceImpl::enable_program_cache() {
 
 void MeshDeviceImpl::clear_program_cache() {
     log_info(tt::LogMetal, "Clearing program cache on MeshDevice {}", this->id());
+    // Compile-only async compiles hold raw pointers to the MeshWorkloads,
+    // join them before the entries are freed.
+    tt::tt_metal::distributed::WaitForPendingCompiles(this->get_context_id());
     program_cache_->clear();
 }
 
 void MeshDeviceImpl::disable_and_clear_program_cache() {
     log_info(tt::LogMetal, "Disabling and clearing program cache on MeshDevice {}", this->id());
+    tt::tt_metal::distributed::WaitForPendingCompiles(this->get_context_id());
     if (program_cache_->is_enabled()) {
         program_cache_->disable();
     }
@@ -1560,8 +1571,7 @@ void MeshDeviceImpl::end_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id) 
 
     // Register the trace on any exit, including thrown exceptions, so subsequent allocations are treated
     // conservatively until the trace is released.
-    auto register_trace_on_exit =
-        ttsl::make_cleanup([this, trace_id]() { this->register_active_trace(trace_id); });
+    auto register_trace_on_exit = ttsl::make_cleanup([this, trace_id]() { this->register_active_trace(trace_id); });
 
     TT_FATAL(
         this->mesh_command_queues_[cq_id]->trace_id() == trace_id,

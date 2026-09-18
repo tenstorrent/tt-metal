@@ -2804,7 +2804,7 @@ void ProgramImpl::generate_trace_dispatch_commands(distributed::MeshDevice* mesh
     }
 }
 
-void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
+void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch, bool defer_kernel_builds) {
     TTZoneScopedD(PROGRAM);
 
     const ContextId device_context_id = extract_context_id(device);
@@ -2829,6 +2829,23 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
 
     if (compiled_.contains(build_env.build_key())) {
         Inspector::program_compile_already_exists(this, device, build_env.build_key());
+        return;
+    }
+    // Compile-only built the ELFs but skipped read_binaries(); load them now instead of rebuilding.
+    if (disk_built_.contains(build_env.build_key())) {
+        if (defer_kernel_builds) {
+            return;  // still compile-only: nothing will consume the in-memory binaries
+        }
+        wait_for_pending_kernel_builds(device_context_id);  // the deferred builds may still be writing these ELFs
+        const std::string binary_root = build_env.build_env.get_out_kernel_root_path();
+        for (auto& kernels : kernels_) {
+            for (auto& [id, kernel] : kernels) {
+                kernel->read_binaries(device, binary_root);
+                kernel->register_kernel_elf_paths_with_watcher(*device, binary_root);
+            }
+        }
+        disk_built_.erase(build_env.build_key());
+        compiled_.insert(build_env.build_key());
         return;
     }
     // Clear the determined sub_device_ids when we compile the program for the first time
@@ -2959,7 +2976,33 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
         for (const auto& [kernel, build_options] : submitted_kernels) {
             kernel->read_binaries(device, binary_root);
             kernel->register_kernel_elf_paths_with_watcher(*device, binary_root);
-            Inspector::program_kernel_compile_finished(this, device, kernel, build_options, binary_root);
+            Inspector::program_kernel_compile_finished(get_id(), device, kernel, build_options, binary_root);
+        }
+    } else if (defer_kernel_builds) {
+        // Compile-only: run the workload-mutating prep on the caller thread, then defer only the
+        // pure const kernel build to the executor with no per-program barrier, so builds from all
+        // programs run concurrently.
+        const ContextId ctx_id = device_context_id;
+        for (auto& kernels : kernels_) {
+            for (auto& [id, kernel] : kernels) {
+                validate_kernel_placement(force_slow_dispatch, kernel, device->build_id());
+                auto [build_options, kernel_hash] = prep_kernel(kernel);
+                launch_pending_build_step(
+                    ctx_id,
+                    [program_id = get_id(),
+                     kernel,
+                     device,
+                     ctx_id,
+                     build_options = std::move(build_options),
+                     kernel_hash]() mutable {
+                        const auto& deferred_build_env =
+                            BuildEnvManager::get_instance(ctx_id).get_device_build_env(device->build_id());
+                        const std::string binary_root =
+                            ensure_kernel_binaries(kernel, device, build_options, deferred_build_env, kernel_hash);
+                        Inspector::program_kernel_compile_finished(
+                            program_id, device, kernel, build_options, binary_root);
+                    });
+            }
         }
     } else {
         // Local path: parallel build via thread pool.
@@ -2973,7 +3016,8 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
                             ensure_kernel_binaries(kernel, device, build_options, build_env, kernel_hash);
                         kernel->read_binaries(device, binary_root);
                         kernel->register_kernel_elf_paths_with_watcher(*device, binary_root);
-                        Inspector::program_kernel_compile_finished(this, device, kernel, build_options, binary_root);
+                        Inspector::program_kernel_compile_finished(
+                            get_id(), device, kernel, build_options, binary_root);
                     },
                     events);
             }
@@ -2984,12 +3028,17 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
         detail::MemoryReporter::inst().flush_program_memory_usage(get_id(), device);
     }
 
-    compiled_.insert(build_env.build_key());
+    if (defer_kernel_builds) {
+        // Not dispatchable until read_binaries() runs, so keep it out of compiled_.
+        disk_built_.insert(build_env.build_key());
+    } else {
+        compiled_.insert(build_env.build_key());
+    }
 
     Inspector::program_compile_finished(this, device, build_env.build_key());
 }
 
-void detail::ProgramImpl::compile_and_allocate(IDevice* device, bool force_slow_dispatch) {
+void detail::ProgramImpl::compile_and_allocate(IDevice* device, bool force_slow_dispatch, bool defer_kernel_builds) {
     // The compile and allocation steps below are individually guarded and would early-return:
     // nothing has changed since this program was compiled and laid out for this device. Skip them
     // outright, since this is called on every enqueue and the guards alone cost microseconds per
@@ -3002,7 +3051,11 @@ void detail::ProgramImpl::compile_and_allocate(IDevice* device, bool force_slow_
         this->validate_dataflow_buffer_region(device);
         return;
     }
-    this->compile(device, force_slow_dispatch);
+    this->compile(device, force_slow_dispatch, defer_kernel_builds);
+    // Compile-only defers the builds and never finalizes/dispatches, so the steps below are invalid.
+    if (defer_kernel_builds) {
+        return;
+    }
     this->allocate_circular_buffers(device);
     this->validate_circular_buffer_core_ranges(device);
     this->validate_circular_buffer_region(device);

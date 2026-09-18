@@ -12,9 +12,9 @@
 #include "tt-metalium/circular_buffer_config.hpp"
 #include <tt_stl/assert.hpp>
 #include "tt-metalium/core_coord.hpp"
-#include "tt-metalium/hal_types.hpp"       // HalProgrammableCoreType
-#include "tt-metalium/kernel_types.hpp"    // KernelHandle
-#include "tt-metalium/program.hpp"         // KernelGroup
+#include "tt-metalium/hal_types.hpp"     // HalProgrammableCoreType
+#include "tt-metalium/kernel_types.hpp"  // KernelHandle
+#include "tt-metalium/program.hpp"       // KernelGroup
 #include "tt-metalium/mesh_workload.hpp"
 #include "hostdev/remote_dfb_constants.h"  // REMOTE_DFB_OFFSET_NONE
 #include "program_device_map.hpp"          // ProgramTransferInfo
@@ -246,8 +246,10 @@ public:
     void init_semaphores(
         const IDevice& device, const CoreCoord& logical_core, uint32_t programmable_core_type_index) const;
     std::vector<std::vector<CoreCoord>> logical_cores() const;
-    void compile(IDevice* device, bool force_slow_dispatch = false);
-    void compile_and_allocate(IDevice* device, bool force_slow_dispatch);
+    // defer_kernel_builds: compile-only pre-pass -- defer each kernel's build to the executor and skip
+    // read_binaries. Only for programs not finalized/dispatched this pass.
+    void compile(IDevice* device, bool force_slow_dispatch = false, bool defer_kernel_builds = false);
+    void compile_and_allocate(IDevice* device, bool force_slow_dispatch, bool defer_kernel_builds = false);
     void invalidate_circular_buffer_allocation();
     void invalidate_dataflow_buffer_allocation();
     // Always used in conjunction with validate_circular_buffer_region and compile
@@ -667,6 +669,9 @@ private:
     std::vector<Semaphore> semaphores_;
 
     std::unordered_set<uint64_t> compiled_;
+    // Build keys whose ELFs are on disk but not yet loaded into Kernel::binaries_ (compile-only
+    // skips read_binaries()). Kept out of compiled_ so a later real enqueue runs the load pass.
+    std::unordered_set<uint64_t> disk_built_;
     bool local_circular_buffer_allocation_needed_{false};
     bool local_dataflow_buffer_allocation_needed_{false};
 

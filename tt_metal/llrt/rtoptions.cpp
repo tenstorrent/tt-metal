@@ -116,6 +116,7 @@ enum class EnvVarID {
     TT_METAL_DISABLE_MULTI_AERISC,                      // Disable multi-erisc mode (inverted logic, enabled by default)
     TT_METAL_USE_MGD_2_0,                               // Use mesh graph descriptor 2.0
     TT_METAL_FORCE_JIT_COMPILE,                         // Force JIT compilation
+    TT_METAL_COMPILE_ONLY,                              // Compile kernels but skip device dispatch
     TT_METAL_DISABLE_SFPLOADMACRO,                      // Disable use of SFPLOADMACRO instructions
     TT_METAL_DRAM_BACKED_CQ,                            // Store command queues in device DRAM
     TT_METAL_SIMULATOR_DIRECT_TENSOR_WRITES,            // Simulator tensor preload bypasses FD CQ copies
@@ -836,6 +837,13 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Usage: export TT_METAL_FORCE_JIT_COMPILE=1
         case EnvVarID::TT_METAL_FORCE_JIT_COMPILE: this->force_jit_compile = true; break;
 
+        // TT_METAL_COMPILE_ONLY
+        // Compile all kernels but skip device dispatch.
+        // Any op that reads device tensor data asserts.
+        // Default: false
+        // Usage: export TT_METAL_COMPILE_ONLY=1
+        case EnvVarID::TT_METAL_COMPILE_ONLY: this->compile_only = is_env_enabled(value); break;
+
         // TT_METAL_FORCE_REINIT
         // Force context reinitialization on each run.
         // Default: false (normal initialization)
@@ -980,7 +988,8 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // TT_METAL_STREAMING_PROFILER
         // Boots the streaming profiler at MeshDevice bring-up. Records go to registered callbacks
         // (RegisterCallback and the TT_METAL_STREAMING_PROFILER_*_CSV writers); add
-        // TT_METAL_STREAMING_PROFILER_TRACY=1 for the Tracy sink. Needs a Tracy-enabled build and TT_METAL_DEVICE_PROFILER off.
+        // TT_METAL_STREAMING_PROFILER_TRACY=1 for the Tracy sink. Needs a Tracy-enabled build and
+        // TT_METAL_DEVICE_PROFILER off.
 
         // Default: false
         // Usage: export TT_METAL_STREAMING_PROFILER=1
