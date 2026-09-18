@@ -355,17 +355,29 @@ def key_str(key):
     return f"{name} | shard={shard}" if shard else name
 
 
-def index_entries(entries, path):
-    """Map composite key -> entry, rejecting collisions rather than guessing."""
+def index_entries(entries, path, strict=True):
+    """Map composite key -> entry, rejecting collisions rather than guessing.
+
+    The base revision is indexed with strict=False. It predates this guard, so it can
+    still hold the duplicates a PR is removing -- erroring there would fail the very PR
+    that fixes them. A duplicated key is dropped from the base index instead, which
+    reads the head entry as added and runs its legs: the same answer the gate already
+    gives when it cannot match an entry to a previous one.
+    """
     index = {}
+    ambiguous = set()
     for entry in entries:
         key = entry_key(entry)
-        if key in index:
-            raise GateError(
-                f"{path}: two entries share the key '{key_str(key)}'. "
-                "The gate cannot tell which one an edit touched -- names must be unique "
-                "within one yaml, with gtest_shard_index counting as part of the name."
-            )
+        if key in index or key in ambiguous:
+            if strict:
+                raise GateError(
+                    f"{path}: two entries share the key '{key_str(key)}'. "
+                    "The gate cannot tell which one an edit touched -- names must be unique "
+                    "within one yaml, with gtest_shard_index counting as part of the name."
+                )
+            index.pop(key, None)
+            ambiguous.add(key)
+            continue
         index[key] = entry
     return index
 
@@ -449,7 +461,7 @@ def scope_file(path, base, review_only, tracy_files, non_matrix_files, unsupport
                 ".github/workflows/verify-changed-tests.yaml; otherwise fix the file."
             )
 
-    old_index = index_entries(old_entries, f"{old_path}@{base}")
+    old_index = index_entries(old_entries, f"{old_path}@{base}", strict=False)
     new_index = index_entries(new_entries, path)
 
     touched, metadata_only = [], []

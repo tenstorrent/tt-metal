@@ -443,6 +443,36 @@ def test_duplicate_name_fails_closed(repo: Repo):
     assert "share the key" in stderr
 
 
+def test_duplicates_already_on_the_base_do_not_fail_the_pr_that_fixes_them(repo: Repo):
+    """The guard applies to the head, not to the history it is cleaning up.
+
+    Erroring on the base would make the rule unlandable: the PR that renames the
+    duplicates is itself diffed against a base that still has them. Both renamed
+    entries read as added, so their legs run.
+    """
+    entry = textwrap.dedent(
+        """\
+        - name: shared name
+          cmd: ./build/test/shared
+          skus:
+            wh_n150_civ2:
+              timeout: 5
+          team: llk
+          owner_id: U006
+        """
+    )
+    repo.write("tests/pipeline_reorg/sample_unit_tests.yaml", entry + entry)
+    repo.commit_base()
+    repo.write(
+        "tests/pipeline_reorg/sample_unit_tests.yaml",
+        entry + entry.replace("shared name", "shared name (two)"),
+    )
+    code, payload, stderr = repo.scope()
+    assert code == 0, stderr
+    assert {leg["name"] for leg in payload["run_legs"]} == {"shared name", "shared name (two)"}
+    assert {leg["reason"] for leg in payload["run_legs"]} == {"added"}
+
+
 def test_entry_without_skus_fails_closed(repo: Repo):
     no_skus = BASE_TESTS_YAML + textwrap.dedent(
         """
