@@ -19,6 +19,7 @@
 #include "ttnn/operations/eltwise/unary/unary_composite.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/creation/creation.hpp"
+#include "ttnn/operations/data_movement/copy/copy.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/operations/core/to_memory_config/to_memory_config_op.hpp"
 #include "ttnn/operations/core/to_layout/to_layout_op.hpp"
@@ -1054,6 +1055,14 @@ Tensor pow(
     float exponent,
     const std::optional<MemoryConfig>& output_mem_config,
     const std::optional<Tensor>& output_tensor) {
+    if (!tt::tt_metal::is_floating_point(input_a.dtype())) {
+        // torch promotes an integer tensor raised to a float scalar to float, whether or not the
+        // scalar is integral: pow(int_tensor, 3.0) is float, pow(int_tensor, 3) is int. The SFPU
+        // power kernels are float-only in any case, so compute in FLOAT32 rather than let integer
+        // bits be read as floats. The recursion below then takes the float-tensor path.
+        Tensor input_f32 = ttnn::typecast(input_a, DataType::FLOAT32, output_mem_config);
+        return pow(input_f32, exponent, output_mem_config, output_tensor);
+    }
     float exponent_floor = std::floor(exponent);
     if (static_cast<std::int32_t>(exponent_floor) == exponent) {
         std::int32_t exp = exponent;
@@ -1062,12 +1071,67 @@ Tensor pow(
     return ttnn::power(input_a, exponent, output_mem_config, output_tensor);
 }
 
+namespace {
+
+// Integer x^k by exponentiation-by-squaring on the integer SFPU multiply, so the result is the
+// exact (two's-complement wrapping) integer torch.pow produces, not a float approximation.
+// Requires k >= 2. Uses floor(log2 k) squarings (one per bit below the highest set bit) plus
+// popcount(k) - 1 accumulator multiplies: k=2 -> 1 kernel, k=3 -> 2, k=4 -> 2, k=5 -> 3.
+// Whichever multiply produces the final value is the one that writes output_tensor.
+Tensor integer_pow_by_squaring(
+    const Tensor& input,
+    std::uint32_t k,
+    const std::optional<MemoryConfig>& output_mem_config,
+    const std::optional<Tensor>& output_tensor) {
+    std::optional<Tensor> acc;  // product of the powers selected by the bits of k seen so far
+    Tensor base = input;        // input^(2^i) for the bit currently being examined
+    for (;;) {
+        const bool is_highest_bit = (k >> 1) == 0;
+        if (k & 1) {
+            if (!acc.has_value()) {
+                acc = base;
+            } else {
+                acc = ttnn::multiply(
+                    *acc, base, std::nullopt, output_mem_config, is_highest_bit ? output_tensor : std::nullopt);
+            }
+            if (is_highest_bit) {
+                return *acc;
+            }
+        }
+        k >>= 1;
+        // When k is a power of two, this squaring is the final value and nothing multiplies it later.
+        const bool final_square = (k == 1) && !acc.has_value();
+        base = ttnn::multiply(base, base, std::nullopt, output_mem_config, final_square ? output_tensor : std::nullopt);
+    }
+}
+
+}  // namespace
+
 // power - integer exponent
 Tensor pow(
     const Tensor& input,
     std::int32_t exponent,
     const std::optional<MemoryConfig>& output_mem_config,
     const std::optional<Tensor>& output_tensor) {
+    if (!tt::tt_metal::is_floating_point(input.dtype())) {
+        // Integer tensors: the unary POWER / POWER_ITERATIVE kernels compute in float and would read
+        // the integer bits as float32 (#56853). Compute exactly with the integer multiply instead,
+        // following torch.pow semantics for integer tensors.
+        TT_FATAL(
+            exponent >= 0,
+            "ttnn.pow: integers to negative integer powers are not allowed (input dtype {}, exponent {})",
+            input.dtype(),
+            exponent);
+        auto output_memory_config = output_mem_config.value_or(input.memory_config());
+        if (exponent == 0) {
+            return ttnn::full_like(
+                input, 1, std::nullopt, std::nullopt, std::nullopt, output_memory_config, output_tensor);
+        }
+        if (exponent == 1) {
+            return ttnn::assign(input, output_memory_config, std::nullopt, output_tensor);
+        }
+        return integer_pow_by_squaring(input, static_cast<std::uint32_t>(exponent), output_mem_config, output_tensor);
+    }
     // For exponents 0, 1, 2, 3: use iterative approach
     if (exponent == 0 || exponent == 1 || exponent == 2 || exponent == 3) {
         std::uint32_t exp = exponent;

@@ -1996,8 +1996,16 @@ void bind_power(nb::module_& mod, const std::string& note = "") {
                  - Layouts
                * - BFLOAT16, BFLOAT8_B, BFLOAT4_B, FLOAT32
                  - TILE, ROW_MAJOR
+               * - INT32, UINT32 (scalar :attr:`exponent` only)
+                 - TILE, ROW_MAJOR
 
             If the input tensor is ROW_MAJOR layout, it will be internally converted to TILE layout.
+
+            Integer input tensors follow ``torch.pow`` semantics for a scalar :attr:`exponent`:
+            an ``int`` exponent >= 0 is computed exactly with integer multiplication (two's-complement
+            wraparound on overflow) and returns the input dtype; a negative ``int`` exponent raises;
+            a ``float`` exponent promotes the input to FLOAT32 and returns FLOAT32. A tensor
+            :attr:`exponent` requires a floating point input.
 
             {2}
         )doc",
