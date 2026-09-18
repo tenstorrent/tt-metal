@@ -76,6 +76,9 @@ class Gemma4Attention:
         self.mesh_config = mesh_config
         self.layer_idx = layer_idx
 
+        grid = mesh_device.compute_with_storage_grid_size()
+        self.core_grid = ttnn.CoreGrid(y=grid.y, x=grid.x)
+
         if ring_kv_cache is not None:
             cache = ring_kv_cache.k if config.is_sliding else ring_kv_cache.kv
             if cache.shape[-2] * mesh_config.cp_degree < max_seq_len:
@@ -131,11 +134,14 @@ class Gemma4Attention:
         tp = self.mesh_config.tp_degree
         chunk_offset = int(chunk_start_idx)
         kv_tied = self.config.is_kv_tied
-        xqkv = apply_qkv_projection(hidden_states, self.weights, kv_tied=kv_tied)
 
         # Short-lived prefill activations in L1 when GEMMA4_PREFILL_L1_ACT=1 (Qwen36
         # #48861). o_proj / allreduce stay DRAM (CB clash with CCL).
         act_mc = prefill_short_lived_memcfg()
+        # xqkv is read only by split_qkv_heads_prefill, which already writes L1.
+        xqkv = apply_qkv_projection(
+            hidden_states, self.weights, kv_tied=kv_tied, memory_config=act_mc, core_grid=self.core_grid
+        )
         tt_q, tt_k, tt_v = split_qkv_heads_prefill(
             xqkv,
             self.config,
@@ -296,7 +302,7 @@ class Gemma4Attention:
 
         # Concat heads + apply out proj + all_reduce
         tt_out = ttnn.experimental.nlp_concat_heads(tt_sdpa, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        projected = ttnn.linear(tt_out, self.weights.o_proj)
+        projected = ttnn.linear(tt_out, self.weights.o_proj, core_grid=self.core_grid)
         tt_out.deallocate(True)
         tt_out = ccl_allreduce(projected, self.mesh_config, self.ccl_manager)
 

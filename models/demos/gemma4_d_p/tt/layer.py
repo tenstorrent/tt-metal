@@ -100,7 +100,8 @@ class Gemma4DecoderLayer:
         """Prefill one CP-sharded chunk."""
         # 1. Attention block: norm -> attn -> post_attn_norm -> residual add
         residual = hidden_states
-        normed = self.input_layernorm.forward(hidden_states)
+        act_mc = prefill_short_lived_memcfg()
+        normed = self.input_layernorm.forward(hidden_states, memory_config=act_mc)
         attn_output = self.self_attn(
             normed,
             rope_mats=rope_mats,
@@ -110,7 +111,6 @@ class Gemma4DecoderLayer:
             packed_sliding_rope=packed_sliding_rope,
         )
 
-        act_mc = prefill_short_lived_memcfg()
         attn_output = self.post_attention_layernorm.forward(attn_output, memory_config=act_mc)
         hidden_states = ttnn.add(residual, attn_output, memory_config=act_mc)
         residual.deallocate(True)
@@ -118,11 +118,7 @@ class Gemma4DecoderLayer:
 
         # 2. Dense MLP block
         residual = hidden_states
-        # This norm reads the L1 residual but must write DRAM: its output is the in0 of
-        # the gate and up projections, and a matmul handed an L1-interleaved in0 runs
-        # 4.3x slower. Binary and norm ops default their output to the first input's
-        # memory config, so DRAM has to be said explicitly here and on the final add.
-        normed = self.pre_feedforward_layernorm.forward(hidden_states, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        normed = self.pre_feedforward_layernorm.forward(hidden_states, memory_config=act_mc)
         mlp_output = self.mlp(normed)
         normed.deallocate(True)
 

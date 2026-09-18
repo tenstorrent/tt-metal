@@ -29,10 +29,15 @@ def prefill_short_lived_memcfg() -> ttnn.MemoryConfig:
     return ttnn.L1_MEMORY_CONFIG
 
 
-def apply_qkv_projection(hidden_states, weights: AttentionWeights, memory_config=None, kv_tied: bool = False):
-    """Project to QKV, or QK when kv_tied selects the narrow tied weight."""
+def apply_qkv_projection(
+    hidden_states, weights: AttentionWeights, memory_config=None, kv_tied: bool = False, core_grid=None
+):
+    """Project to QKV, or QK when kv_tied selects the narrow tied weight.
+    core_grid is what lets this matmul take an L1 operand or write one.
+    Issue: https://github.com/tenstorrent/tt-metal/issues/56976
+    """
     w_tensor = weights.wqk if kv_tied else weights.wqkv
-    return ttnn.linear(hidden_states, w_tensor, memory_config=memory_config)
+    return ttnn.linear(hidden_states, w_tensor, memory_config=memory_config, core_grid=core_grid)
 
 
 def split_qkv_heads_prefill(
