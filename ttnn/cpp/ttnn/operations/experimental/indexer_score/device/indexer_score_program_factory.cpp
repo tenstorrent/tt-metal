@@ -309,8 +309,6 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
     reader_ct.push_back(0u);
     reader_ct.insert(reader_ct.end(), 3, 0u);
     tt::tt_metal::TensorAccessorArgs(*q.buffer()).append_to(reader_ct);
-    // Real-token-end block, same fixed-width discipline: flag, rt base, placeholder accessor. Rejected on
-    // this path by validate_valid_end_metadata, but the WIDTH must match the reader either way.
     reader_ct.push_back(0u);
     reader_ct.push_back(0u);
     tt::tt_metal::TensorAccessorArgs(*q.buffer()).append_to(reader_ct);

@@ -446,9 +446,6 @@ ttsl::hash::hash_t IndexerScoreDeviceOperation::compute_program_hash(
         attrs.has_runtime_kv_len(),
         // Metadata presence selects kernels with additional CBs and accessor arguments. Its value remains dynamic.
         tensor_args.has_chunk_start_metadata(),
-        // Same trade: supplying the real-token end adds an accessor + a compile-time guard to the reader, so
-        // PRESENCE is hashed while the value stays dynamic -- one captured program serves every chunk,
-        // partial or full.
         tensor_args.has_valid_end_metadata(),
         // Reading the slot on-device changes the reader binary, so the PRESENCE is hashed. The layer terms
         // are NOT: cache_batch_idx is hash-excluded so one program serves every slot and layer, and hashing

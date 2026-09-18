@@ -1194,26 +1194,6 @@ def test_kimi_prefill_transformer_chunked_padded(
     )
 
 
-# GLM-5.2 counterpart of the padded/rotated chunked row above: the same variable-ISL splits, but on the
-# SPARSE (DSA) path. What that adds over the Kimi row, all derived by the driver from the config:
-#   * a deduped (SP*TP-striped) bf16 ROW_MAJOR KVPE cache instead of the dense bfloat8_b/TILE one;
-#   * a caller-owned indexer KEY cache, which gets its own PCC check;
-#   * full-depth KV gating -- GLM's deep-layer KV is the product under test, and GATED_LAYER_DEPTH
-#     would leave everything past layer 10 unasserted;
-#   * GLM's calibrated 0.85 floor, not Kimi's 0.88: applying Kimi's bar to GLM fails good runs.
-#
-# WHY THIS ROW EXISTS. The existing GLM chunked rows only ever run FULL CHUNK-wide chunks, so the
-# indexer's scored window and its real-token window coincide and a whole class of partial-chunk
-# behaviour goes untested. Two things are specific to the sparse path here:
-#   * indexer.py's metadata path derives kv_len on-device as chunk_start + sp*chunk_local (i.e. the END
-#     of the padded window), while the scalar path passes valid_pos (the real prefix). Those are equal
-#     only on a full chunk -- exactly what these splits break. The in-file argument for why that is
-#     benign (the write is clamped to actual_end, so trailing rows hold prior cache content, and only
-#     PAD query rows can rank them because real rows are causally shielded) is REASONING, not a
-#     measurement. This row measures it.
-#   * the KV write rotates at sp*tp stripes while indexer_score's causal geometry rotates at sp, and
-#     the two coincide only for a slab-aligned start -- which _PADDED_MID_15K deliberately breaks for
-#     5 of its 6 chunks.
 @pytest.mark.parametrize("mode", _PADDED_MODES, ids=_PADDED_MODES)
 @pytest.mark.parametrize("splits", [_PADDED_MID_15K, _PADDED_FULL_55K], ids=["mid15k", "full55k"])
 @pytest.mark.parametrize("num_layers", [1, 10, 78], ids=["L1", "L10", "L78"])
@@ -1250,9 +1230,7 @@ def test_glm_prefill_transformer_chunked_padded(
     num_links,
     mode,
 ):
-    """Padded/rotated chunked prefill for GLM-5.2, traced vs untraced (see _PADDED_MODES). Both modes
-    run the same splits and assert per-layer KVPE + indexer-K PCC against the golden, so a
-    traced-vs-notrace difference isolates the trace/metadata path rather than a harness difference."""
+    """Padded/rotated chunked prefill for GLM-5.2, traced vs untraced (see _PADDED_MODES)."""
     topology = per_axis_topology(device_params["fabric_config"])
     run_chunked_transformer_padded_trace(
         variant,
@@ -2825,14 +2803,6 @@ def run_chunked_transformer_padded_trace(
     for v in splits:
         assert 0 < v <= CHUNK and v % tile == 0, f"split {v} must be tile-aligned and <= {CHUNK}"
 
-    # Sparse (DSA: glm_5_1 / glm_5_2) vs dense (Kimi / Mistral), DERIVED from the config exactly as
-    # run_chunked_transformer_updated does -- never from the variant name. Three consequences:
-    #   * the KVPE cache must be UNCOMPRESSED bf16 ROW_MAJOR (sparse_sdpa reads it natively and
-    #     mla.forward asserts), not the bfloat8_b/TILE dense default;
-    #   * the caches are striped across SP*TP -- the sparse path has no TP-replicated layout -- so the
-    #     readback un-rotates over sp*tp stripes, not sp;
-    #   * the layers read a caller-owned block-cyclic indexer KEY cache, handed to forward beside the
-    #     KVPE cache, which gets its own PCC check.
     has_indexer = resolve_has_indexer(config)
     cache_format = MlaKvCacheFormat.BF16_RM if has_indexer else MlaKvCacheFormat.BFP8_TILE
 
@@ -2875,12 +2845,6 @@ def run_chunked_transformer_padded_trace(
         weight_cache_path=effective_cache_path,
         is_chunked=True,
         slot_num=1,
-        # kv_only_last_layer: the last layer only fills its KV cache (dead work trimmed; the KV cache is
-        # the output). The forward is device-only either way, so ttnn trace can capture it.
-        # NOTE on L1 coverage: at num_layers=1 the only layer IS the last one, so it writes the KVPE and
-        # indexer-K caches but runs no attention -- no indexer score, no top-k. The L1 rows therefore
-        # validate the padded cache WRITES only; the valid_end bound the partial chunk exists to test is
-        # exercised at L10/L78. Do not read a green L1 as covering the indexer.
         kv_only_last_layer=True,
         overlap_shared_expert_with_dispatch=True,
         routing_use_l1_small_for_semaphores=routing_use_l1_small_for_semaphores,
