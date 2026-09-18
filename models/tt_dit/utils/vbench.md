@@ -12,7 +12,8 @@ The evaluation policy splits metrics by their input needs:
 | Subject consistency, background consistency, imaging quality | Original clips, with VBench's normal preprocessing |
 | Motion smoothness, dynamic degree | 960×544 copies, all 145 frames, original frame rate |
 
-The temporal copies use area downsampling and lossless RGB encoding. This reduces
+The temporal copies use PyAV in-process, with area downsampling and lossless RGB
+encoding; source frame timestamps are preserved and no OS command is launched. This reduces
 sensitivity to small spatial motion artifacts; it is **not equivalent to evaluating
 temporal quality at full resolution**. It preserves every seed, frame, metric and
 the existing mean thresholds. Resize fails if the frame count or frame rate changes.
@@ -25,7 +26,7 @@ the binary result. Unlike the spatial reduction, this early exit preserves the
 reference result exactly; exhaustive small cases test both passing and failing bounds.
 
 On 2026-09-18, the five actual CI clips from run 35334111844 passed this complete
-gate on g15blx02 in 340 seconds using the CI entry point:
+gate on g15blx02 in 343 seconds using the CI entry point and the in-process resize:
 
 | Metric | Mean | Required |
 | --- | ---: | ---: |

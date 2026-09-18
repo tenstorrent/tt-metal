@@ -8,7 +8,6 @@ copy; this is a distinct temporal evaluation policy, not full-resolution VBench.
 The copy is losslessly encoded so compression does not introduce a second change.
 """
 
-import subprocess
 import tempfile
 from contextlib import contextmanager
 from pathlib import Path
@@ -81,42 +80,39 @@ def video_info(path):
 
 @contextmanager
 def temporal_video(path, max_width):
-    import imageio_ffmpeg
+    import av
 
+    if type(max_width) is not int or max_width <= 0 or max_width % 2:
+        raise ValueError("Temporal width must be a positive even integer")
+    path = Path(path).resolve(strict=True)
     width, height, count, fps = video_info(path)
-    if max_width <= 0:
-        raise ValueError("Temporal width must be positive")
     if width <= max_width:
         yield path
         return
     target_height = 2 * round(height * max_width / width / 2)
     with tempfile.TemporaryDirectory(prefix="vbench-temporal-") as directory:
         reduced = Path(directory) / "temporal.mp4"
-        subprocess.run(
-            [
-                imageio_ffmpeg.get_ffmpeg_exe(),
-                "-hide_banner",
-                "-loglevel",
-                "error",
-                "-threads",
-                "1",
-                "-i",
-                str(path),
-                "-vf",
-                f"scale={max_width}:{target_height}:flags=area",
-                "-c:v",
-                "libx264rgb",
-                "-crf",
-                "0",
-                "-preset",
-                "ultrafast",
-                "-threads",
-                "1",
-                "-an",
-                str(reduced),
-            ],
-            check=True,
-        )
+        # Open a local file handle, not a libav URL, and transcode in-process.
+        # No filename, filter or executable is passed to an OS command.
+        with path.open("rb") as input_file, av.open(input_file) as source:
+            source_stream = source.streams.video[0]
+            source_stream.thread_count = 1
+            with av.open(str(reduced), mode="w") as output:
+                stream = output.add_stream("libx264rgb", rate=source_stream.average_rate)
+                stream.width, stream.height, stream.pix_fmt = max_width, target_height, "rgb24"
+                stream.options = {"crf": "0", "preset": "ultrafast"}
+                stream.thread_count = 1
+                for frame in source.decode(source_stream):
+                    resized = frame.reformat(
+                        width=max_width,
+                        height=target_height,
+                        format="rgb24",
+                        interpolation=av.video.reformatter.Interpolation.AREA,
+                    )
+                    for packet in stream.encode(resized):
+                        output.mux(packet)
+                for packet in stream.encode():
+                    output.mux(packet)
         if video_info(reduced) != (max_width, target_height, count, fps):
             raise ValueError("Temporal resize changed the frame count or frame rate")
         print(f"VBench temporal input: {max_width}x{target_height}, {int(count)} frames at {fps} fps", flush=True)

@@ -3,7 +3,7 @@
 
 import itertools
 from contextlib import contextmanager
-from types import SimpleNamespace
+from fractions import Fraction
 
 import pytest
 
@@ -57,14 +57,63 @@ def test_appearance_uses_original_and_only_temporal_metrics_use_resized_copy(mon
     assert len(result) == 5 and result["dynamic_degree"] == 1.0
 
 
-@pytest.mark.parametrize("after", [(960, 544, 144, 24), (960, 544, 145, 12)])
-def test_temporal_resize_cannot_drop_frames_or_change_fps(monkeypatch, after, expect_error):
-    import sys
+@pytest.fixture
+def temporal_source(tmp_path):
+    import av
+    import numpy as np
 
-    monkeypatch.setitem(sys.modules, "imageio_ffmpeg", SimpleNamespace(get_ffmpeg_exe=lambda: "ffmpeg"))
-    metadata = iter([(1920, 1088, 145, 24), after])
+    # Shell metacharacters are literal filename characters. No command may run.
+    path = tmp_path / "-clip ; $(touch marker) `id`.mp4"
+    expected = np.random.default_rng(0).integers(0, 256, size=(4, 24, 32, 3), dtype=np.uint8)
+    with av.open(str(path), mode="w") as output:
+        stream = output.add_stream("libx264rgb", rate=Fraction(24000, 1001))
+        stream.width, stream.height, stream.pix_fmt = 64, 48, "rgb24"
+        stream.options = {"crf": "0", "preset": "ultrafast"}
+        for pixels in expected:
+            frame = av.VideoFrame.from_ndarray(pixels.repeat(2, axis=0).repeat(2, axis=1), format="rgb24")
+            for packet in stream.encode(frame):
+                output.mux(packet)
+        for packet in stream.encode():
+            output.mux(packet)
+    return path, expected
+
+
+def test_temporal_resize_is_lossless_and_runs_without_subprocesses(temporal_source, monkeypatch):
+    import subprocess
+
+    import av
+    import numpy as np
+
+    def forbid_process(*args, **kwargs):
+        raise AssertionError("Temporal resize must not launch OS commands")
+
+    monkeypatch.setattr(subprocess, "Popen", forbid_process)
+    path, expected = temporal_source
+    original = vbench_cpu.video_info(path)
+    with av.open(str(path)) as source:
+        timestamps = [frame.pts * frame.time_base for frame in source.decode(video=0)]
+    with vbench_cpu.temporal_video(path, 32) as reduced:
+        assert vbench_cpu.video_info(reduced) == (32, 24, *original[2:])
+        with av.open(str(reduced)) as result:
+            frames = list(result.decode(video=0))
+        assert [frame.pts * frame.time_base for frame in frames] == timestamps
+        assert np.array_equal(np.stack([frame.to_ndarray(format="rgb24") for frame in frames]), expected)
+    assert not reduced.exists()
+    assert path.exists()
+
+
+@pytest.mark.parametrize("after", [(32, 24, 3, 24), (32, 24, 4, 12)])
+def test_temporal_resize_cannot_drop_frames_or_change_fps(temporal_source, monkeypatch, after, expect_error):
+    path, _ = temporal_source
+    metadata = iter([(64, 48, 4, 24), after])
     monkeypatch.setattr(vbench_cpu, "video_info", lambda path: next(metadata))
-    monkeypatch.setattr(vbench_cpu.subprocess, "run", lambda *args, **kwargs: None)
     with expect_error(ValueError, "frame count or frame rate"):
-        with vbench_cpu.temporal_video("original.mp4", 960):
+        with vbench_cpu.temporal_video(path, 32):
+            pass
+
+
+@pytest.mark.parametrize("width", ["32; touch marker", 32.0, True, 0, -2, 31])
+def test_temporal_width_rejects_non_integer_and_invalid_values(width, expect_error):
+    with expect_error(ValueError, "positive even integer"):
+        with vbench_cpu.temporal_video("unused.mp4", width):
             pass
