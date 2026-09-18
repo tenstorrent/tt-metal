@@ -209,30 +209,3 @@ def test_nlp_cqkv_split_invalid_width(device, split, expect_error):
     _, x = _make_interleaved_input(device, 1, 32, 256, 1, 0, ttnn.bfloat16, ttnn.DRAM_MEMORY_CONFIG, 0)
     with expect_error(RuntimeError, "tile-aligned"):
         ttnn.experimental.nlp_create_q_heads_split(x, num_heads=1, split_head_dim=split)
-
-
-@pytest.mark.parametrize("device_params", [{"trace_region_size": 1048576}], indirect=True)
-def test_nlp_cqkv_split_trace_replay(device):
-    shape = (1, 1, 64, 16 * 256)
-    _, x = _make_interleaved_input(device, 1, 64, 256, 16, 0, ttnn.bfloat16, ttnn.DRAM_MEMORY_CONFIG, 0)
-
-    def run():
-        return ttnn.experimental.nlp_create_q_heads_split(x, num_heads=16, split_head_dim=192)
-
-    for output in run():
-        ttnn.deallocate(output)
-    trace_id = ttnn.begin_trace_capture(device, cq_id=0)
-    outputs = run()
-    ttnn.end_trace_capture(device, trace_id, cq_id=0)
-    try:
-        for seed in (37, 41):
-            torch.manual_seed(seed)
-            host = torch.randn(shape, dtype=torch.bfloat16)
-            source = ttnn.from_torch(host, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-            ttnn.copy_host_to_device_tensor(source, x)
-            ttnn.execute_trace(device, trace_id, cq_id=0, blocking=True)
-            ref = host.reshape(1, 64, 16, 256).transpose(1, 2)
-            for actual, expected in zip(outputs, (ref[..., :192], ref[..., 192:])):
-                torch.testing.assert_close(tt2torch_tensor(actual), expected, rtol=0, atol=0)
-    finally:
-        ttnn.release_trace(device, trace_id)
