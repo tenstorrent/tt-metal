@@ -255,7 +255,13 @@ def test_pipeline_distilled(
             if export_dir:
                 from models.tt_dit.utils.vbench_bundle import export_bundle
 
-                export_bundle(vbench_dir, export_dir, prompt=prompt, thresholds=thresholds)
+                export_bundle(
+                    vbench_dir,
+                    export_dir,
+                    prompt=prompt,
+                    thresholds=thresholds,
+                    temporal_width=int(os.environ.get("VBENCH_TEMPORAL_WIDTH", "0")),
+                )
             else:
                 assert_vbench_quality(vbench_dir, prompt=prompt, thresholds=thresholds)
 

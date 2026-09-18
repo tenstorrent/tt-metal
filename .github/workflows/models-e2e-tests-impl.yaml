@@ -286,14 +286,3 @@ jobs:
       matrix: ${{ needs.load-test-matrix.outputs.matrix_multihost }}
       prefer-wheel-libs: ${{ inputs.prefer-wheel-libs }}
       summary-scope: ${{ inputs.summary-scope }}
-
-  # Optional CPU checks consume the existing multihost artifacts after device release.
-  # Commands and shard counts belong to the test row's postprocess configuration.
-  models-e2e-postprocess:
-    needs: [load-test-matrix, models-e2e-tests-multihost]
-    if: ${{ !cancelled() && needs.load-test-matrix.outputs.matrix_multihost != '[]' && needs.load-test-matrix.outputs.matrix_multihost != '' }}
-    uses: ./.github/workflows/models-e2e-postprocess.yaml
-    with:
-      docker-image: ${{ inputs.docker-image }}
-      matrix: ${{ needs.load-test-matrix.outputs.matrix_multihost }}
-      result-prefix: models-e2e-postprocess-${{ inputs.build-artifact-name }}

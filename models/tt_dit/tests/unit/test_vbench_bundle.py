@@ -62,54 +62,48 @@ def test_invalid_scores_fail(score, expect_error):
         assert_scores({"quality": score}, {"quality": 0.8})
 
 
-@pytest.fixture
-def model_cache(tmp_path, monkeypatch):
-    from models.tt_dit.utils.vbench_bundle import DINO_REPO, WEIGHTS
+def test_parallel_worker_failure_cannot_reach_aggregate(gate, monkeypatch, expect_error):
+    from types import SimpleNamespace
 
-    cache = tmp_path / "cache"
-    for relative in (*WEIGHTS, f"{DINO_REPO}/hubconf.py"):
-        path = cache / relative
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(relative.encode())
-    (cache / "unrelated-model").write_bytes(b"do not export")
-    monkeypatch.setenv("VBENCH_CACHE_DIR", str(cache))
-    monkeypatch.setenv("TORCH_HOME", str(tmp_path / "torch"))
-    monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    return cache
+    from models.tt_dit.utils import vbench_bundle
 
+    submitted = []
 
-def test_stage_only_required_weights_and_verify_checksums(model_cache, tmp_path, expect_error):
-    from models.tt_dit.utils.vbench_bundle import WEIGHTS, stage_models, verify_models
+    def fail():
+        raise RuntimeError("scoring worker failed")
 
-    bundle = tmp_path / "bundle"
-    assets = stage_models(bundle / "models")
-    assert len(assets) == 6
-    assert "unrelated-model" not in assets
-    assert verify_models(bundle, assets) == (bundle / "models").resolve()
-    (bundle / "models" / WEIGHTS[0]).write_bytes(b"corrupted")
-    with expect_error(ValueError, "checksum mismatch"):
-        verify_models(bundle, assets)
+    class Pool:
+        def __init__(self, **kwargs):
+            pass
 
+        def __enter__(self):
+            return self
 
-def test_missing_weight_fails_export(model_cache, tmp_path, expect_error):
-    from models.tt_dit.utils.vbench_bundle import WEIGHTS, stage_models
+        def __exit__(self, *args):
+            pass
 
-    (model_cache / WEIGHTS[1]).unlink()
-    with expect_error(FileNotFoundError, "Missing staged VBench asset"):
-        stage_models(tmp_path / "bundle/models")
+        def submit(self, fn, bundle, index, output):
+            submitted.append(index)
+            return SimpleNamespace(result=fail)
+
+    def aggregate(*args):
+        raise AssertionError("must not aggregate after a worker failure")
+
+    monkeypatch.setattr(vbench_bundle, "ProcessPoolExecutor", Pool)
+    monkeypatch.setattr(vbench_bundle, "aggregate", aggregate)
+    with expect_error(RuntimeError, "scoring worker failed"):
+        vbench_bundle.evaluate(gate[0])
+    assert submitted == list(range(5))
 
 
-def test_existing_clip_and_torch_caches_are_supported(model_cache, tmp_path):
-    from models.tt_dit.utils.vbench_bundle import DINO_REPO, WEIGHTS, stage_models, verify_models
+@pytest.mark.parametrize("width", [-1, 959, 1922, "960"])
+def test_invalid_temporal_policy_cannot_pass(gate, width, expect_error):
+    from models.tt_dit.utils.vbench_bundle import read_manifest
 
-    alternatives = {
-        WEIGHTS[0]: tmp_path / "home/.cache/clip/ViT-B-32.pt",
-        WEIGHTS[4]: tmp_path / "torch/hub/checkpoints/dino_vitbase16_pretrain.pth",
-        DINO_REPO: tmp_path / "torch/hub/facebookresearch_dino_main",
-    }
-    for relative, path in alternatives.items():
-        path.parent.mkdir(parents=True, exist_ok=True)
-        (model_cache / relative).rename(path)
-    bundle = tmp_path / "bundle"
-    assets = stage_models(bundle / "models")
-    verify_models(bundle, assets)
+    bundle, _ = gate
+    path = bundle / "manifest.json"
+    manifest = json.loads(path.read_text())
+    manifest["temporal_width"] = width
+    path.write_text(json.dumps(manifest))
+    with expect_error(ValueError, "Invalid VBench temporal width"):
+        read_manifest(bundle)

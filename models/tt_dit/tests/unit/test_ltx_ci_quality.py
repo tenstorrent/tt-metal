@@ -3,14 +3,11 @@
 
 """Protect the required gate and the boundary between model policy and CI plumbing."""
 
-import runpy
 from pathlib import Path
 
-import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[4]
-PREPARE = runpy.run_path(str(ROOT / ".github/scripts/utils/prepare_postprocess_matrix.py"))["prepare"]
 
 
 def ltx_leg():
@@ -18,56 +15,28 @@ def ltx_leg():
     return next(entry for entry in entries if entry.get("model") == "ltx-2.3-fast-t2v")
 
 
-def test_fast_ltx_ci_keeps_full_quality_gate():
+def test_fast_ltx_ci_keeps_all_seeds_and_required_quality_gate():
     leg = ltx_leg()
     assert "RUN_VBENCH=1" in leg["cmd"]
     assert "VBENCH_SEEDS=5" in leg["cmd"]
     assert "RUN_VBENCH=0" not in leg["cmd"]
-    assert leg["postprocess"]["shards"] == 5
-    assert "vbench_bundle score" in leg["postprocess"]["cmd"]
-    assert "vbench_bundle aggregate" in leg["postprocess"]["aggregate_cmd"]
-    parent = yaml.safe_load((ROOT / ".github/workflows/models-e2e-tests-impl.yaml").read_text())["jobs"]
-    hook = parent["models-e2e-postprocess"]
-    assert "models-e2e-tests-multihost" in hook["needs"]
-    assert hook["uses"] == "./.github/workflows/models-e2e-postprocess.yaml"
-    assert "!cancelled()" in hook["if"]
-    assert not hook.get("continue-on-error", False)
-    jobs = yaml.safe_load((ROOT / ".github/workflows/models-e2e-postprocess.yaml").read_text())["jobs"]
-    assert "check" in jobs["aggregate"]["needs"]
-    assert "!cancelled()" in jobs["aggregate"]["if"]
-    for name in ("check", "aggregate"):
-        assert not jobs[name].get("continue-on-error", False)
-        assert all(not step.get("continue-on-error", False) for step in jobs[name]["steps"])
-    assert "aggregate_cmd" in jobs["aggregate"]["steps"][-1]["run"]
+    assert "VBENCH_TEMPORAL_WIDTH=960" in leg["cmd"]
+    assert "postprocess" not in leg
+    assert leg["skus"]["bh_sc1"]["timeout"] == 35
+    cmd = leg["cmd"]
+    assert cmd.index("python3 -m pytest") < cmd.index("vbench_bundle evaluate")
+    assert "|| exit $?" in cmd[cmd.index("python3 -m pytest") : cmd.index("vbench_bundle evaluate")]
+    assert "mpirun" in cmd[cmd.index("|| exit $?") :]
 
 
 def test_shared_workflows_have_no_ltx_policy():
     for filename in (
         "models-e2e-tests-multihost-impl.yaml",
         "models-e2e-tests-impl.yaml",
-        "models-e2e-postprocess.yaml",
     ):
         text = (ROOT / ".github/workflows" / filename).read_text().lower()
         assert "ltx" not in text
         assert "vbench" not in text
-
-
-def test_postprocess_keeps_producer_indices_and_ignores_unconfigured_models():
-    leg = ltx_leg()
-    assert PREPARE([{"name": "unrelated"}]) == ([], [])
-    legs, shards = PREPARE([{"name": "unrelated"}, leg, {"name": "another"}, leg])
-    assert [entry["index"] for entry in legs] == [1, 3]
-    assert [(entry["index"], entry["shard"]) for entry in shards] == [(i, s) for i in (1, 3) for s in range(5)]
-
-
-@pytest.mark.parametrize(
-    "key,value", [("shards", 0), ("shards", 257), ("shards", True), ("timeout", 0), ("cmd", ""), ("aggregate_cmd", "")]
-)
-def test_invalid_postprocess_cannot_silently_skip_gate(key, value, expect_error):
-    leg = ltx_leg()
-    leg["postprocess"][key] = value
-    with expect_error(ValueError, "postprocess"):
-        PREPARE([leg])
 
 
 def test_lora_staging_runs_on_a_worker_before_offline_pytest():
