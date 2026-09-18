@@ -43,19 +43,35 @@ ShardSpec synthesize_output_shard_spec(
     const CoreRangeSet all_cores(CoreRange({0, 0}, {compute_grid_size.x - 1, compute_grid_size.y - 1}));
     const uint32_t num_cores = all_cores.num_cores();
     TT_FATAL(num_cores > 0, "{}: empty compute grid.", opts.caller_tag);
-    // Guards `div_up(_, shard_shape[i])` below; repeat's soft-reject path never reaches here (see
-    // repeat_utils.cpp:202).
-    TT_FATAL(
-        tensor_height > 0 && tensor_width > 0,
-        "{}: tensor dims must be > 0; got ({}, {}).",
-        opts.caller_tag,
-        tensor_height,
-        tensor_width);
 
     const ShardOrientation orientation = resolve_orientation(opts);
     const bool row_wise = (orientation == ShardOrientation::ROW_MAJOR);
     const uint32_t h_align = opts.is_tile ? tt::constants::TILE_HEIGHT : 1u;
     const uint32_t w_align = opts.is_tile ? tt::constants::TILE_WIDTH : 1u;
+
+    // Zero-volume: TensorSpec (tensor_spec.cpp:41-99) requires shard extent == physical extent along the
+    // sharded axis. The mirror cases (HEIGHT+zero-h, WIDTH+zero-w) are representable; the crossover and
+    // BLOCK-with-any-zero-dim have no positive shard extent that matches — FATAL with caller_tag.
+    if (tensor_height == 0 || tensor_width == 0) {
+        const bool representable = (memory_layout == TensorMemoryLayout::HEIGHT_SHARDED && tensor_width > 0) ||
+                                   (memory_layout == TensorMemoryLayout::WIDTH_SHARDED && tensor_height > 0);
+        TT_FATAL(
+            representable,
+            "{}: zero-volume specless-sharded is only representable for HEIGHT_SHARDED + non-zero width or "
+            "WIDTH_SHARDED + non-zero height; got layout={}, h={}, w={}.",
+            opts.caller_tag,
+            static_cast<int>(memory_layout),
+            tensor_height,
+            tensor_width);
+        uint32_t sh = h_align;
+        uint32_t sw = w_align;
+        if (memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
+            sw = static_cast<uint32_t>(tt::round_up(tensor_width, w_align));
+        } else {
+            sh = static_cast<uint32_t>(tt::round_up(tensor_height, h_align));
+        }
+        return ShardSpec(CoreRangeSet(CoreRange({0, 0}, {0, 0})), {sh, sw}, orientation);
+    }
 
     std::array<uint32_t, 2> shard_shape = {0, 0};
     if (memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
