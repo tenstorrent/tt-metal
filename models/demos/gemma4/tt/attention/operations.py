@@ -29,6 +29,7 @@ from models.demos.gemma4.tt.dram_sharded import (
     prefill_in0_fits_l1,
     prefill_linear_above_cutoff,
     should_prefill_long_2d,
+    single_tile_matmul_ckc,
 )
 
 from .weights import AttentionWeights
@@ -128,9 +129,12 @@ def apply_qkv_projection(hidden_states, weights: AttentionWeights, memory_config
     if not weights.tuned_prefill:
         return ttnn.linear(hidden_states, weights.wqkv, memory_config=memory_config)
 
+    rows = matmul_rows(hidden_states)
     program_config, compute_kernel_config = interleaved_prefill_config(
-        matmul_rows(hidden_states), int(hidden_states.shape[-1]), int(weights.wqkv.shape[-1])
+        rows, int(hidden_states.shape[-1]), int(weights.wqkv.shape[-1])
     )
+    if compute_kernel_config is None:
+        compute_kernel_config = single_tile_matmul_ckc(rows, weights.single_tile_dest_acc)
     activation, owned_activation = hoist_prefill_matmul_in0_if_needed(hidden_states, program_config)
     output = linear_l1_safe(
         activation,
@@ -686,12 +690,15 @@ def apply_output_projection(tensor, weights: AttentionWeights):
         tensor.deallocate(True)
         return out
 
-    if should_prefill_long_2d(matmul_rows(tensor)):
+    rows = matmul_rows(tensor)
+    if should_prefill_long_2d(rows):
         out = prefill_linear_above_cutoff(tensor, weights.o_proj)
         tensor.deallocate(True)
         return out
     activation, owned_activation = hoist_prefill_matmul_in0_if_needed(tensor)
-    out = ttnn.linear(activation, weights.o_proj)
+    out = ttnn.linear(
+        activation, weights.o_proj, compute_kernel_config=single_tile_matmul_ckc(rows, weights.single_tile_dest_acc)
+    )
     if owned_activation is not None:
         owned_activation.deallocate(True)
     tensor.deallocate(True)

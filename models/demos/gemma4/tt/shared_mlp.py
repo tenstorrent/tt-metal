@@ -33,7 +33,9 @@ from models.demos.gemma4.tt.dram_sharded import (
     prefill_in0_fits_l1,
     prefill_linear_above_cutoff,
     should_prefill_long_2d,
+    single_tile_matmul_ckc,
 )
+from models.demos.gemma4.tt.precision import default_single_tile_dest_acc
 from models.demos.gemma4.utils.general_utils import get_cache_file_name
 
 # DRAM-width-sharded decode matmuls for the shared MLP. On by default for
@@ -158,6 +160,7 @@ class SharedMLP:
         is_moe = bool(getattr(hf_config, "enable_moe_block", False))
         dram_shard = _DRAM_SHARD_MLP and tp > 1 and not is_moe
         self._tuned_prefill = is_t3k_dense_target(mesh_device, hf_config)
+        self._single_tile_dest_acc = default_single_tile_dest_acc()
 
         if dram_shard and can_dram_shard(self.hidden_size, gu_n, dtype=dtype):
             self.gate_up_proj = DramShardedLinear(
@@ -232,6 +235,8 @@ class SharedMLP:
         program_config, out_memcfg, compute_kernel_config = interleaved_mlp_prefill_config(
             rows, int(x.shape[-1]), int(weight.shape[-1])
         )
+        if compute_kernel_config is None:
+            compute_kernel_config = single_tile_matmul_ckc(rows, self._single_tile_dest_acc)
         # Unlike attention, only hoist when a tuned config will actually read the
         # L1 copy: the shapes this builder declines keep the auto config, and an
         # extra DRAM->L1 copy in front of it buys nothing.
