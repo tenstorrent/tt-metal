@@ -7,9 +7,11 @@ import torch
 
 from .format_config import DataFormat
 from .llk_params import format_dict
+from .ulp import ULP_FORMATS
 
-# Formats with a defined torch floating dtype usable for true local ULP.
-_ULP_FORMATS = (DataFormat.Float16_b, DataFormat.Float16, DataFormat.Float32)
+# Formats with a defined torch floating dtype usable for true local ULP. Owned by
+# helpers.ulp, which gates the integer ULP metric on the same set.
+_ULP_FORMATS = ULP_FORMATS
 
 
 def local_ulp(golden: np.ndarray, out_fmt: DataFormat) -> np.ndarray:
