@@ -683,6 +683,11 @@ private:
     // cap, sets minimize_same_rank_groups_used (SOFT), and restarts the session (see next()). The solver does
     // not fall back internally.
     bool host_cap_relaxed_ = false;
+    // RELAXED zero-link fallback (issue #56762): engaged only after the ordinary hard-edge solve
+    // is exhausted with zero solutions -- inter-mesh edges then become soft (zero physical links
+    // tolerated, realized edges maximized) and the session restarts. Keeps the fast fully-pruned
+    // hard path for the common fully-cabled case.
+    bool zero_link_fallback_engaged_ = false;
     // Intra-mesh forbid/retry state
     std::vector<std::pair<MeshId, MeshId>> intra_failed_mesh_pairs_;
 };

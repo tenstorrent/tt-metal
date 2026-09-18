@@ -2906,12 +2906,28 @@ void ControlPlane::generate_intermesh_connectivity() {
     // bidirectionally.
     auto num_assigned_intermesh_connections = intermesh_connections.size() / 2;
 
-    TT_FATAL(
-        num_assigned_intermesh_connections >= get_num_requested_intermesh_connections(),
-        "Unable to bind the intermesh connections requested in the Mesh Graph Descriptor to physical links."
-        " Found {} intermesh connections, but {} were requested",
-        num_assigned_intermesh_connections,
-        get_num_requested_intermesh_connections());
+    // RELAXED zero-link tolerance (issue #56762): under a relaxed inter-mesh policy a requested
+    // connection may bind to zero physical links (logical-only, host interconnect), so fewer
+    // connections can resolve than were requested -- even zero. Only STRICT requires the full
+    // count. Warn (don't fatal) in relaxed mode; per-pair details are logged in
+    // validate_requested_intermesh_connections.
+    const bool inter_mesh_relaxed = this->mesh_graph_->is_inter_mesh_policy_relaxed();
+    if (num_assigned_intermesh_connections < get_num_requested_intermesh_connections()) {
+        if (inter_mesh_relaxed) {
+            log_warning(
+                tt::LogFabric,
+                "Inter-mesh routing (relaxed): bound {} of {} requested inter-mesh connection(s) to physical "
+                "links; the remainder are logical-only (host interconnect). See issue #56762.",
+                num_assigned_intermesh_connections,
+                get_num_requested_intermesh_connections());
+        } else {
+            TT_THROW(
+                "Unable to bind the intermesh connections requested in the Mesh Graph Descriptor to physical links."
+                " Found {} intermesh connections, but {} were requested",
+                num_assigned_intermesh_connections,
+                get_num_requested_intermesh_connections());
+        }
+    }
 
     // Validate (placement invariants + per-mesh-pair counts, both derived directly from intermesh_connections) first,
     // so an invalid pairing fails fast before we rebuild the query maps or mutate any downstream routing state.
@@ -3174,14 +3190,18 @@ void ControlPlane::validate_requested_intermesh_connections(
             for (const auto& [dst_mesh, requested_channels] : dst_to_channels) {
                 const std::size_t resolved = num_resolved_between(src_mesh, dst_mesh);
                 if (resolved == 0) {
-                    TT_THROW(
-                        "Inter-mesh routing validation failed (relaxed): the Mesh Graph Descriptor requests a "
-                        "connection ({} channel(s)) between mesh {} and mesh {}, but ZERO connections were resolved "
-                        "during control plane initialization (all candidate channels were dropped, e.g. by a Z/non-Z "
-                        "direction mismatch). Every requested inter-mesh connection must resolve at least one router.",
+                    // RELAXED zero-link tolerance (issue #56762): a requested inter-mesh connection
+                    // may resolve zero routers -- the connection is logical-only and traffic rides
+                    // the host interconnect. Warn loudly instead of failing initialization.
+                    log_warning(
+                        tt::LogFabric,
+                        "Inter-mesh routing (relaxed): the Mesh Graph Descriptor requests a connection "
+                        "({} channel(s)) between mesh {} and mesh {}, but ZERO connections were resolved during "
+                        "control plane initialization; the connection is logical-only (host interconnect)",
                         requested_channels,
                         src_mesh,
                         dst_mesh);
+                    continue;
                 }
                 if (requested_channels > resolved) {
                     const std::string msg = fmt::format(
