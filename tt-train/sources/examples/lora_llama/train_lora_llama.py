@@ -64,31 +64,36 @@ def llama_config_from_yaml(yaml_config: dict, vocab_size: int, use_tp: bool = Fa
             original_context_length=rs.get("original_context_length", rope_scaling.original_context_length),
         )
 
-    runner_type = RunnerType.Default
-    if "runner_type" in tc:
-        runner_type = RunnerType.from_string(tc["runner_type"])
-
     weight_tying = WeightTyingType.Disabled
     if "weight_tying" in tc:
         weight_tying = WeightTyingType.from_string(tc["weight_tying"])
 
     return LlamaConfig(
         hidden_size=tc.get("embedding_dim", 384),
-        # Read the MLP intermediate size from the yaml.
         intermediate_size=tc.get("intermediate_dim", None),
         num_hidden_layers=tc.get("num_blocks", 6),
         num_attention_heads=tc.get("num_heads", 6),
         num_key_value_heads=tc.get("num_groups", 3),
         vocab_size=vocab_size,
-        max_position_embeddings=tc.get("max_sequence_length", 256),
         rope_theta=tc.get("theta", 10000.0),
-        attention_dropout=tc.get("dropout_prob", 0.0),
-        mlp_dropout=tc.get("dropout_prob", 0.0),
-        runner_type=runner_type,
         weight_tying=weight_tying,
         rope_scaling=rope_scaling,
         use_tp=use_tp,
+        **runtime_from_yaml(yaml_config),
     )
+
+
+def runtime_from_yaml(yaml_config: dict) -> dict:
+    """The training-time knobs of a model YAML: what a pretrained checkpoint does not decide."""
+    tc = yaml_config.get("transformer_config", {})
+    runtime = {
+        "max_position_embeddings": tc.get("max_sequence_length", 256),
+        "attention_dropout": tc.get("dropout_prob", 0.0),
+        "mlp_dropout": tc.get("dropout_prob", 0.0),
+    }
+    if "runner_type" in tc:
+        runtime["runner_type"] = RunnerType.from_string(tc["runner_type"])
+    return runtime
 
 
 def save_lora_checkpoint(model: LoraModel, path: str, step: int) -> None:
@@ -231,17 +236,17 @@ def main():
             from huggingface_hub import snapshot_download
 
             print(f"Downloading weights from HuggingFace: {src}")
-            pretrained_path = snapshot_download(src, allow_patterns=["*.safetensors"])
+            pretrained_path = snapshot_download(src, allow_patterns=["*.safetensors", "config.json"])
             print(f"Weights downloaded to: {pretrained_path}")
 
         hf_tokenizer = AutoTokenizer.from_pretrained(src)
-        vocab_size = (hf_tokenizer.vocab_size + 31) // 32 * 32
         ids = np.array(hf_tokenizer.encode(text), dtype=np.uint32)
-        print(f"Using HF BPE tokenizer, vocab_size={hf_tokenizer.vocab_size} (padded to {vocab_size})")
+        num_tokens = len(hf_tokenizer)
+        print(f"Using HF BPE tokenizer with {num_tokens} tokens")
     else:
         tokenizer = CharTokenizer(text)
-        vocab_size = (tokenizer.vocab_size + 31) // 32 * 32
         ids = np.array(tokenizer.encode(text), dtype=np.uint32)
+        num_tokens = tokenizer.vocab_size
 
     n_train = int(len(ids) * 0.9)
     train_ids = ids[:n_train]
@@ -278,22 +283,32 @@ def main():
         print(f"{mode} enabled: mesh={dict(zip(mesh.axis_names, mesh.shape))}")
 
     # ── Model ─────────────────────────────────────────────────────────────────
+    yaml_config = None
     if args.model_config is not None:
         tt_train_root = f"{get_tt_metal_runtime_root()}/tt-train"
         print(f"Loading model config from: {args.model_config}")
         yaml_config = load_config(args.model_config, tt_train_root)
-        llama_cfg = llama_config_from_yaml(yaml_config, vocab_size, use_tp=use_tp)
+
+    if pretrained_path is not None:
+        # The checkpoint decides the architecture; the YAML only contributes training-time knobs.
+        llama_cfg = LlamaConfig.from_hf(pretrained_path, use_tp=use_tp, **runtime_from_yaml(yaml_config or {}))
+        if num_tokens > llama_cfg.vocab_size:
+            raise ValueError(f"the tokenizer has {num_tokens} tokens but the checkpoint embeds {llama_cfg.vocab_size}")
     else:
-        llama_cfg = LlamaConfig(
-            hidden_size=384,
-            num_hidden_layers=6,
-            num_attention_heads=6,
-            num_key_value_heads=3,
-            vocab_size=vocab_size,
-            max_position_embeddings=256,
-            rope_theta=500000.0,
-            use_tp=use_tp,
-        )
+        vocab_size = (num_tokens + 31) // 32 * 32  # pad the character vocab to a tile
+        if yaml_config is not None:
+            llama_cfg = llama_config_from_yaml(yaml_config, vocab_size, use_tp=use_tp)
+        else:
+            llama_cfg = LlamaConfig(
+                hidden_size=384,
+                num_hidden_layers=6,
+                num_attention_heads=6,
+                num_key_value_heads=3,
+                vocab_size=vocab_size,
+                max_position_embeddings=256,
+                rope_theta=500000.0,
+                use_tp=use_tp,
+            )
 
     seq_len = llama_cfg.max_position_embeddings
     print(

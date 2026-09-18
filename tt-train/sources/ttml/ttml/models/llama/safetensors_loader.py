@@ -2,24 +2,93 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Load HuggingFace Llama safetensors weights into a Python Llama model.
-
-Port of the C++ loader in tt-train/sources/ttml/models/llama.cpp.
-"""
+"""Load HuggingFace Llama safetensors weights into a Python Llama model."""
 
 from __future__ import annotations
 
 import os
+from contextlib import ExitStack
+from collections import Counter
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict
+from typing import Callable, Iterator, Sequence
 
 import ml_dtypes
 import numpy as np
+from safetensors import safe_open
 
 import ttnn
 import ttml
+from ttml.common.utils import resolve_padded_load_shape
 
+from .. import WeightTyingType
 from . import LlamaConfig
+
+# TTML stores a weight as 4-D (1, 1, out_features, in_features).
+ROW_DIM, COL_DIM = 2, 3
+
+# Noise rather than zeros avoids dead neurons; the fixed seed keeps two loads identical.
+_PAD_SEED = 0
+_PAD_STDDEV = 0.02
+
+# Collapsed on read so the rules name each tensor once.
+_NAME_ALIASES = {
+    "wte.weight": "embed_tokens.weight",
+    "transformer.wte.weight": "embed_tokens.weight",
+}
+
+# Shipped by some checkpoints; TTML derives these at runtime.
+_NOT_WEIGHTS = ("rotary_emb.inv_freq",)
+
+# Tying makes these one parameter, so the model keeps whichever name it walks first.
+_TIED_NAMES = ("Llama/fc/weight", "Llama/tok_emb/weight")
+
+
+def _canonical(name: str) -> str:
+    name = name.removeprefix("model.")
+    return _NAME_ALIASES.get(name, name)
+
+
+class _Checkpoint:
+    """The tensors of a safetensors directory, indexed from the headers and read one at a time.
+
+    Keyed by canonical name; a read comes back 2-D as ``[out, in]``."""
+
+    def __init__(self, directory: str | os.PathLike) -> None:
+        files = sorted(Path(directory).glob("*.safetensors"))
+        if not files:
+            raise FileNotFoundError(f"No .safetensors files found in {Path(directory)}")
+
+        self._files = ExitStack()
+        self._where: dict[str, tuple[safe_open, str]] = {}
+        try:
+            for path in files:
+                print(f"Reading safetensors file: {path}")
+                file = self._files.enter_context(safe_open(str(path), framework="np"))
+                for name in file.keys():
+                    canonical = _canonical(name)
+                    if canonical in self._where:
+                        raise RuntimeError(f"{name}: collides with another tensor already read as {canonical}")
+                    self._where[canonical] = (file, name)
+        except BaseException:
+            self._files.close()
+            raise
+        self.names: frozenset[str] = frozenset(self._where)
+
+    def __enter__(self) -> _Checkpoint:
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self._files.close()
+
+    def __getitem__(self, name: str) -> np.ndarray:
+        file, raw = self._where[name]
+        array = file.get_tensor(raw)
+        if array.ndim == 1:  # norm gammas; a 1-row weight downstream
+            return array.reshape(1, -1)
+        if array.ndim != 2:
+            raise RuntimeError(f"{raw}: expected a 1-D or 2-D tensor, got shape {array.shape}")
+        return array
 
 
 def _unpermute_proj_rows(w: np.ndarray, n_heads: int) -> np.ndarray:
@@ -28,97 +97,213 @@ def _unpermute_proj_rows(w: np.ndarray, n_heads: int) -> np.ndarray:
     HF stores rows as [first_half, second_half] per head.
     TTML's RoPE expects interleaved: [0, half, 1, half+1, ...].
     """
-    rows, cols = w.shape
-    assert rows % n_heads == 0, f"rows {rows} not divisible by n_heads {n_heads}"
-    D = rows // n_heads
-    assert D % 2 == 0, f"rows per head {D} must be even"
+    rows, _ = w.shape
+    if rows % n_heads != 0:
+        raise RuntimeError(f"rows {rows} not divisible by n_heads {n_heads}")
+    per_head = rows // n_heads
+    if per_head % 2 != 0:
+        raise RuntimeError(f"rows per head {per_head} must be even")
 
-    out = np.empty_like(w)
-    half = D // 2
-    for h in range(n_heads):
-        base = h * D
-        for i in range(half):
-            out[base + 2 * i] = w[base + i]
-            out[base + 2 * i + 1] = w[base + half + i]
-    return out
+    half = per_head // 2
+    return w.reshape(n_heads, 2, half, -1).transpose(0, 2, 1, 3).reshape(rows, -1)
 
 
-def _pad_and_resize(arr: np.ndarray, tgt_rows: int, tgt_cols: int) -> np.ndarray:
-    """Pad or crop a 2D array to (tgt_rows, tgt_cols).
+def _assemble(blocks: Sequence[np.ndarray], shard_dim: int | None, mesh_size: int, subject: str) -> np.ndarray:
+    """Lay out a parameter's source blocks as one array of rows."""
+    if len(blocks) == 1:
+        return blocks[0]
 
-    Extra rows/cols are filled with small random values (N(0, 0.02))
-    to avoid dead neurons, matching C++ behavior.
-    """
-    src_rows, src_cols = arr.shape
-    if src_rows == tgt_rows and src_cols == tgt_cols:
-        return arr
+    # Stacking on rows needs one width, whatever the placement.
+    hidden = blocks[0].shape[1]
+    for i, block in enumerate(blocks):
+        if block.shape[1] != hidden:
+            raise RuntimeError(f"{subject}: block {i} has {block.shape[1]} columns, expected {hidden}")
 
-    out = np.zeros((tgt_rows, tgt_cols), dtype=arr.dtype)
-    cr = min(src_rows, tgt_rows)
-    cc = min(src_cols, tgt_cols)
-    out[:cr, :cc] = arr[:cr, :cc]
+    if shard_dim != ROW_DIM:
+        return np.concatenate(blocks, axis=0)
 
-    need_random = tgt_rows > src_rows or tgt_cols > src_cols
-    if need_random:
-        rng = np.random.default_rng()
-        if tgt_rows > src_rows:
-            out[cr:, :] = rng.normal(0.0, 0.02, (tgt_rows - cr, tgt_cols)).astype(arr.dtype)
-        if tgt_cols > src_cols:
-            out[:cr, cc:] = rng.normal(0.0, 0.02, (cr, tgt_cols - cc)).astype(arr.dtype)
-    return out
+    # Only a row-shard needs the rows to divide: replicated blocks never get split.
+    slices_by_block = []
+    for i, block in enumerate(blocks):
+        if block.shape[0] % mesh_size != 0:
+            raise RuntimeError(
+                f"{subject}: block {i} has {block.shape[0]} rows, not divisible over {mesh_size} devices"
+            )
+        slices_by_block.append(np.split(block, mesh_size))
+    return np.concatenate([slices_by_block[i][rank] for rank in range(mesh_size) for i in range(len(blocks))], axis=0)
+
+
+def _pad_to(arr: np.ndarray, shape: tuple[int, int]) -> np.ndarray:
+    rows, cols = arr.shape
+    rng = np.random.default_rng(_PAD_SEED)
+    if shape[1] > cols:
+        right = rng.normal(0.0, _PAD_STDDEV, (rows, shape[1] - cols)).astype(arr.dtype)
+        arr = np.concatenate([arr, right], axis=1)
+    if shape[0] > rows:
+        bottom = rng.normal(0.0, _PAD_STDDEV, (shape[0] - rows, shape[1])).astype(arr.dtype)
+        arr = np.concatenate([arr, bottom], axis=0)
+    return arr
+
+
+def _fit(
+    arr: np.ndarray, param_shape: tuple[int, int], source_shape: tuple[int, int] | None, subject: str
+) -> np.ndarray:
+    return _pad_to(arr, resolve_padded_load_shape(arr.shape, param_shape, source_shape or param_shape, name=subject))
 
 
 def _to_bf16_4d(arr: np.ndarray) -> np.ndarray:
-    """Convert to bfloat16 and reshape to 4D [1, 1, *, *]."""
-    if arr.ndim == 1:
-        arr = arr.reshape(1, 1, 1, -1)
-    elif arr.ndim == 2:
-        arr = arr.reshape(1, 1, arr.shape[0], arr.shape[1])
-    return arr.astype(ml_dtypes.bfloat16)
+    return arr.reshape(1, 1, *arr.shape).astype(ml_dtypes.bfloat16, order="C", copy=False)
 
 
-def _assign_tensor(param, arr_4d: np.ndarray, mapper=None) -> None:
-    """Overwrite *param* with a TTML tensor built from *arr_4d*, optionally sharded via *mapper*."""
-    restored = ttml.autograd.Tensor.from_numpy(arr_4d, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, mapper=mapper)
-    param.assign(restored)
+@dataclass(frozen=True)
+class _TpAxis:
+    mesh: ttml.Mesh
+    index: int
+    size: int
 
 
-def _make_tp_mapper(shard_type):
-    """Create a shard-to-mesh mapper for the given shard type, or ``None`` if replicated.
-
-    In TTML's 4-D weight layout ``(1, 1, out_features, in_features)``:
-      - ``"col_w"`` shards dim 2 (rows = output features) for ColumnParallelLinear.
-      - ``"row_w"`` shards dim 3 (cols = input features) for RowParallelLinear.
-    """
-    if shard_type is None:
+def _tp_axis() -> _TpAxis | None:
+    """None without a mesh or a 'tp' axis: the single-device case, where nothing is sharded."""
+    mesh = ttml.maybe_mesh()
+    if mesh is None or not mesh.has_axis("tp"):
         return None
-    dim = 2 if shard_type == "col_w" else 3
-    return ttml.mesh().axis_mapper("tp", tdim=dim)
+    return _TpAxis(mesh, mesh.axis_index("tp"), mesh.axis_size("tp"))
 
 
-def _param_tp_shard_type(param):
-    """Shard type of *param* along the 'tp' mesh axis, read from its live layout.
-
-    Mirrors ``checkpointing._load_params``: instead of hard-coding which module
-    produced the weight, ask the destination parameter how it is sharded.
-      - sharded on dim 2 (rows / output features) -> ``"col_w"``
-      - sharded on dim 3 (cols / hidden features)  -> ``"row_w"``
-      - replicated, or no 'tp' axis                -> ``None``
-    """
+def _sharded_dim(param, tp: _TpAxis | None, subject: str) -> int | None:
+    """Which tensor dim *param* shards over 'tp', or ``None`` if replicated."""
+    if tp is None:
+        return None
     placements = ttml.Sharding.from_tensor(param).placements
-    if placements is None:  # unit mesh / no topology
+    for axis, placement in enumerate(placements):
+        if isinstance(placement, ttnn.PlacementShard) and axis != tp.index:
+            raise RuntimeError(f"{subject}: sharded over mesh axis {axis}; this loader places weights over 'tp' only.")
+    if tp.index >= len(placements):  # a fully replicated tensor flattens to a single Replicate
         return None
-    tp_axis = ttml.mesh().axis_index("tp")
-    if tp_axis >= len(placements):
+    placement = placements[tp.index]
+    if not isinstance(placement, ttnn.PlacementShard):
         return None
-    p = placements[tp_axis]
-    if not isinstance(p, ttnn.PlacementShard):  # replicated on the tp axis
-        return None
-    if p.dim == 2:
-        return "col_w"
-    if p.dim == 3:
-        return "row_w"
-    raise ValueError(f"weight is sharded on dim {p.dim} over the 'tp' axis; expected dim 2 (rows) or dim 3 (hidden).")
+    if placement.dim not in (ROW_DIM, COL_DIM):
+        raise RuntimeError(
+            f"{subject}: sharded on dim {placement.dim} over 'tp'; expected {ROW_DIM} (rows) or {COL_DIM} (cols)."
+        )
+    return placement.dim
+
+
+def _global_shape(param, shard_dim: int | None, mesh_size: int) -> tuple[int, int]:
+    """The parameter's shape before sharding, i.e. the shape the checkpoint should supply."""
+    rows, cols = param.shape()[-2:]
+    return (
+        rows * mesh_size if shard_dim == ROW_DIM else rows,
+        cols * mesh_size if shard_dim == COL_DIM else cols,
+    )
+
+
+@dataclass(frozen=True)
+class _Rule:
+    """One parameter and the checkpoint tensors that feed it, in fused-block order."""
+
+    param: str
+    sources: tuple[str, ...]
+    # (arrays) -> blocks, when the checkpoint layout is not what the parameter wants.
+    transform: Callable[..., list[np.ndarray]] | None = None
+    # What the assembled sources must measure when the parameter is tile-padded above them (the
+    # vocab); None means they must match the parameter exactly.
+    source_shape: tuple[int, int] | None = None
+
+
+def _rules(config: LlamaConfig, parameter_names: set[str]) -> Iterator[_Rule]:
+    """The whole HF -> TTML mapping for a Llama built from *config*."""
+    embedding_shape = (config.vocab_size, config.hidden_size)
+    if config.weight_tying == WeightTyingType.Enabled:
+        tied = next((name for name in _TIED_NAMES if name in parameter_names), _TIED_NAMES[0])
+        yield _Rule(tied, ("embed_tokens.weight",), source_shape=embedding_shape)
+    else:
+        yield _Rule("Llama/tok_emb/weight", ("embed_tokens.weight",), source_shape=embedding_shape)
+        yield _Rule("Llama/fc/weight", ("lm_head.weight",), source_shape=embedding_shape)
+    yield _Rule("Llama/ln_fc/gamma", ("norm.weight",))
+
+    def rope_unpermute(q: np.ndarray, k: np.ndarray, v: np.ndarray) -> list[np.ndarray]:
+        return [
+            _unpermute_proj_rows(q, config.num_attention_heads),
+            _unpermute_proj_rows(k, config.num_key_value_heads),
+            v,  # V is not rotated
+        ]
+
+    for layer in range(config.num_hidden_layers):
+        param, hf = f"Llama/blocks/{layer}", f"layers.{layer}"
+        yield _Rule(f"{param}/attention_norm/gamma", (f"{hf}.input_layernorm.weight",))
+        yield _Rule(f"{param}/mlp_norm/gamma", (f"{hf}.post_attention_layernorm.weight",))
+        # Block order is the contract with heads_creation, which reads [Q | K | V].
+        yield _Rule(
+            f"{param}/attention/qkv_linear/weight",
+            tuple(f"{hf}.self_attn.{p}_proj.weight" for p in ("q", "k", "v")),
+            transform=rope_unpermute,
+        )
+        yield _Rule(f"{param}/attention/out_linear/weight", (f"{hf}.self_attn.o_proj.weight",))
+        # Block order is the contract with swiglu_packed, which reads [gate | up].
+        yield _Rule(
+            f"{param}/mlp/w_gate_up/weight",
+            tuple(f"{hf}.mlp.{p}_proj.weight" for p in ("gate", "up")),
+        )
+        yield _Rule(f"{param}/mlp/w2/weight", (f"{hf}.mlp.down_proj.weight",))
+
+
+def _biases(parameter_names: set[str]) -> set[str]:
+    """The one exemption from coverage: HF Llama ships no biases, so a model configured with them
+    keeps its init values. Read off the model, so a newly biased layer needs no change here;
+    ``_check_coverage`` withdraws the exemption for a checkpoint that does ship them."""
+    return {name for name in parameter_names if name.endswith("/bias")}
+
+
+def _check_coverage(parameter_names: set[str], rules: Sequence[_Rule], checkpoint_names: frozenset[str]) -> None:
+    """Every parameter must be fed by exactly one rule or be a bias the checkpoint does not carry,
+    and every rule must land. A renamed or newly fused module shows up here instead of as a quietly
+    untrained weight; so does a checkpoint that ships the biases the model was built with, and a
+    rule table that would assign one parameter twice.
+    """
+    feeders = Counter(rule.param for rule in rules)
+    targets = set(feeders)
+    checkpoint_has_biases = any(name.endswith(".bias") for name in checkpoint_names)
+    exempt = set() if checkpoint_has_biases else _biases(parameter_names)
+    uncovered = sorted(parameter_names - targets - exempt)
+    unknown = sorted(targets - parameter_names)
+    contested = sorted(name for name, count in feeders.items() if count > 1)
+    if not uncovered and not unknown and not contested:
+        return
+
+    def line(label: str, name: str) -> str:
+        return f"\n  {label:<20}{name}"
+
+    detail = "".join(line("no rule feeds", name) for name in uncovered)
+    detail += "".join(line("no such parameter", name) for name in unknown)
+    detail += "".join(line(f"fed by {feeders[name]} rules", name) for name in contested)
+    raise RuntimeError(
+        f"the loader and this Llama disagree about its parameters:{detail}\n"
+        f"Update _rules() in {Path(__file__).name} to match the model; a weight_tying or attention_bias "
+        f"mismatch between the LlamaConfig and the model also lands here."
+    )
+
+
+def _check_sources(rules: Sequence[_Rule], checkpoint_names: frozenset[str]) -> None:
+    """Every source must exist before anything is read or assigned, so a bad checkpoint fails whole."""
+    missing = {rule.param: [s for s in rule.sources if s not in checkpoint_names] for rule in rules}
+    missing = {param: sources for param, sources in missing.items() if sources}
+    if missing:
+        detail = "".join(
+            f"\n  {param}: the checkpoint has no {', '.join(sources)}" for param, sources in missing.items()
+        )
+        hint = ""
+        if "embed_tokens.weight" in checkpoint_names and all(s == ["lm_head.weight"] for s in missing.values()):
+            hint = "\nA tied checkpoint ships no lm_head.weight; load it with weight_tying=Enabled."
+        raise RuntimeError(f"the checkpoint lacks tensors the model needs:{detail}{hint}")
+
+    consumed = {source for rule in rules for source in rule.sources}
+    if "lm_head.weight" in checkpoint_names and "lm_head.weight" not in consumed:
+        raise RuntimeError(
+            "the checkpoint ships lm_head.weight, which a weight-tied model has no parameter for; "
+            "load it with weight_tying=Disabled."
+        )
 
 
 def load_from_safetensors(
@@ -128,328 +313,48 @@ def load_from_safetensors(
 ) -> None:
     """Load HuggingFace Llama .safetensors weights into a Python Llama model.
 
-    Handles:
-    - Q/K weight unpermutation for TTML's interleaved RoPE
-    - K/V concatenation into kv_linear
-    - Embedding padding when model vocab_size differs from HF
-    - Shape conversion from HF 2D to TTML 4D
+    *safetensors_path* is a directory of ``.safetensors`` files holding one whole model in HF's
+    canonical form. Every check that needs only names runs before the first tensor is read.
 
-    Args:
-        model: A Python Llama model instance.
-        safetensors_path: Path to directory containing .safetensors file(s).
-        config: The LlamaConfig used to build the model.
+    Raises:
+        RuntimeError: for any of
+            - a parameter no rule feeds
+            - a rule naming a parameter the model does not have
+            - a missing source tensor
+            - a shape that disagrees with the config
+            - a parameter sharded over a mesh axis other than 'tp'
     """
-    from safetensors.numpy import load_file
-
-    safetensors_dir = Path(safetensors_path)
-    st_files = sorted(safetensors_dir.glob("*.safetensors"))
-    if not st_files:
-        raise FileNotFoundError(f"No .safetensors files found in {safetensors_dir}")
-
-    all_tensors: Dict[str, np.ndarray] = {}
-    for f in st_files:
-        print(f"Loading safetensors file: {f}")
-        all_tensors.update(load_file(str(f)))
-
     parameters = model.parameters()
-    used_params: set[str] = set()
-    ignored_hf: set[str] = set()
+    parameter_names = set(parameters)
+    rules = list(_rules(config, parameter_names))
+    tp = _tp_axis()
+    mesh_size = tp.size if tp else 1
 
-    use_tp = config.use_tp
-    tp_size = ttml.mesh().axis_size("tp") if use_tp else 1
+    with _Checkpoint(safetensors_path) as checkpoint:
+        _check_coverage(parameter_names, rules, checkpoint.names)
+        _check_sources(rules, checkpoint.names)
 
-    num_heads = config.num_attention_heads
-    num_kv_heads = config.num_key_value_heads
+        for rule in rules:
+            param = parameters[rule.param]
+            blocks = [checkpoint[name] for name in rule.sources]
+            if rule.transform:
+                blocks = rule.transform(*blocks)
+            shard_dim = _sharded_dim(param, tp, rule.param)
+            host = _assemble(blocks, shard_dim, mesh_size, rule.param)
+            host = _fit(host, _global_shape(param, shard_dim, mesh_size), rule.source_shape, rule.param)
 
-    # HF stores k_proj and v_proj as separate tensors; TTML combines them into
-    # a single kv_linear weight.  We stage K and V as they arrive and combine
-    # once both are available for a given layer.
-    k_staged: Dict[int, np.ndarray] = {}
-    v_staged: Dict[int, np.ndarray] = {}
-
-    def get_param(name: str):
-        if name not in parameters:
-            raise RuntimeError(f"Parameter {name} not found in model")
-        used_params.add(name)
-        return parameters[name]
-
-    def try_combine_kv(layer_idx: int) -> None:
-        if layer_idx not in k_staged or layer_idx not in v_staged:
-            return
-
-        param_name = f"Llama/blocks/{layer_idx}/attention/kv_linear/weight"
-        param = get_param(param_name)
-        tgt_shape = param.shape()
-        tgt_rows, tgt_cols = tgt_shape[-2], tgt_shape[-1]
-
-        shard_type = "col_w" if use_tp else None
-        full_rows = tgt_rows * tp_size if shard_type == "col_w" else tgt_rows
-        full_cols = tgt_cols
-
-        k = k_staged.pop(layer_idx)
-        v = v_staged.pop(layer_idx)
-
-        # Ensure K/V have shape [kv_out, hidden] (rows = output features) so the shard axis
-        # (rows / dim 2) matches ColumnParallelLinear. full_rows is the fused
-        # kv_linear row count (2*kv_out), so full_rows // 2 == kv_out.
-        if k.shape[0] != full_rows // 2 or k.shape[1] != full_cols:
-            raise RuntimeError(
-                f"Unexpected k_proj shape {tuple(k.shape)} at layer {layer_idx}: expected "
-                f"[kv_out, hidden] = [{full_rows // 2}, {full_cols}]. Check that the "
-                f"LlamaConfig matches the checkpoint."
+            mapper = tp.mesh.axis_mapper("tp", tdim=shard_dim) if tp and shard_dim is not None else None
+            param.assign(
+                ttml.autograd.Tensor.from_numpy(
+                    _to_bf16_4d(host), ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, mapper=mapper
+                )
             )
+        leftover = checkpoint.names - {source for rule in rules for source in rule.sources}
 
-        # Fused KV layout under ColumnParallel TP: the kv_linear output rows are
-        # sharded CONTIGUOUSLY across tp devices, and per device grouped_heads_creation
-        # splits the LOCAL kv width at its midpoint into [K_local | V_local]. A naive
-        # [all-K ; all-V] concat puts the K/V boundary at the GLOBAL midpoint, which
-        # does not line up with the per-device local midpoints for tp>1 (device 0 gets
-        # all K, device 1 all V, etc.). So group the rows PER SHARD as
-        # [K_s0, V_s0, K_s1, V_s1, ...]: then contiguous shard s = [K_shard_s | V_shard_s]
-        # lands on device s as exactly [K_local | V_local]. At tp_size=1 this reduces to
-        # the plain [K ; V] concat.
-        kv_out = k.shape[0]
-        if kv_out % tp_size != 0:
-            raise RuntimeError(f"kv_out {kv_out} not divisible by tp_size {tp_size} at layer {layer_idx}")
-        per = kv_out // tp_size
-        hidden = k.shape[1]
-        k_blk = k.reshape(tp_size, per, hidden)
-        v_blk = v.reshape(tp_size, per, hidden)
-        # stack -> [tp, 2, per, hidden]; row-major flatten -> K_s0, V_s0, K_s1, V_s1, ...
-        combined = np.stack([k_blk, v_blk], axis=1).reshape(2 * kv_out, hidden)
-
-        cr, cc = combined.shape
-        if cr != full_rows or cc != full_cols:
-            raise RuntimeError(
-                f"KV combine shape mismatch at layer {layer_idx}: "
-                f"combined=({cr}x{cc}), target=({full_rows}x{full_cols})"
-            )
-
-        mapper = _make_tp_mapper(shard_type)
-        _assign_tensor(param, _to_bf16_4d(combined), mapper=mapper)
-        print(f"  Combined k_proj + v_proj -> kv_linear (per-shard interleave, tp={tp_size}) for layer {layer_idx}")
-
-    weight_tying = config.weight_tying
-
-    for hf_name, hf_arr in all_tensors.items():
-        print(f"Loading tensor: {hf_name}, shape={hf_arr.shape}, dtype={hf_arr.dtype}")
-
-        # ── Embedding ──
-        if hf_name in (
-            "model.embed_tokens.weight",
-            "embed_tokens.weight",
-            "transformer.wte.weight",
-            "wte.weight",
-            "model.wte.weight",
-        ):
-            from ttml.models import WeightTyingType
-
-            tied = weight_tying == WeightTyingType.Enabled
-            emb_param_name = "Llama/fc/weight" if tied else "Llama/tok_emb/weight"
-            param = get_param(emb_param_name)
-            tgt = param.shape()
-            shard_type = _param_tp_shard_type(param) if use_tp else None
-            full_rows = tgt[-2] * tp_size if shard_type == "col_w" else tgt[-2]
-            full_cols = tgt[-1] * tp_size if shard_type == "row_w" else tgt[-1]
-            resized = _pad_and_resize(hf_arr, full_rows, full_cols)
-            mapper = _make_tp_mapper(shard_type)
-            _assign_tensor(param, _to_bf16_4d(resized), mapper=mapper)
-            continue
-
-        # ── LM head ──
-        if hf_name == "lm_head.weight":
-            from ttml.models import WeightTyingType
-
-            if weight_tying == WeightTyingType.Disabled:
-                shard_type = "col_w" if use_tp else None
-                param = get_param("Llama/fc/weight")
-                tgt = param.shape()
-                full_rows = tgt[-2] * tp_size if shard_type == "col_w" else tgt[-2]
-                resized = _pad_and_resize(hf_arr, full_rows, tgt[-1])
-                mapper = _make_tp_mapper(shard_type)
-                _assign_tensor(param, _to_bf16_4d(resized), mapper=mapper)
-            continue
-
-        # ── Final RMSNorm ──
-        if hf_name in ("model.norm.weight", "norm.weight"):
-            param = get_param("Llama/ln_fc/gamma")
-            _assign_tensor(param, _to_bf16_4d(hf_arr))
-            continue
-
-        # ── Per-layer weights ──
-        matched = False
-        for i in range(config.num_hidden_layers):
-            pfx = f"model.layers.{i}"
-            pfx2 = f"layers.{i}"
-
-            # input_layernorm
-            if hf_name in (
-                f"{pfx}.input_layernorm.weight",
-                f"{pfx2}.input_layernorm.weight",
-            ):
-                param = get_param(f"Llama/blocks/{i}/attention_norm/gamma")
-                _assign_tensor(param, _to_bf16_4d(hf_arr))
-                matched = True
-                break
-
-            # post_attention_layernorm
-            if hf_name in (
-                f"{pfx}.post_attention_layernorm.weight",
-                f"{pfx2}.post_attention_layernorm.weight",
-            ):
-                param = get_param(f"Llama/blocks/{i}/mlp_norm/gamma")
-                _assign_tensor(param, _to_bf16_4d(hf_arr))
-                matched = True
-                break
-
-            # q_proj — column-parallel (output features sharded)
-            if hf_name in (
-                f"{pfx}.self_attn.q_proj.weight",
-                f"{pfx2}.self_attn.q_proj.weight",
-            ):
-                w = _unpermute_proj_rows(hf_arr, num_heads)
-                shard_type = "col_w" if use_tp else None
-                param = get_param(f"Llama/blocks/{i}/attention/q_linear/weight")
-                tgt = param.shape()
-                tr = tgt[-2] * tp_size if shard_type == "col_w" else tgt[-2]
-                tc = tgt[-1]
-                r, c = w.shape
-                if r == tr and c == tc:
-                    pass
-                elif c == tr and r == tc:
-                    w = np.ascontiguousarray(w.T)
-                else:
-                    raise RuntimeError(f"q_proj shape mismatch layer {i}: ({r}x{c}) vs ({tr}x{tc})")
-                mapper = _make_tp_mapper(shard_type)
-                _assign_tensor(param, _to_bf16_4d(w), mapper=mapper)
-                matched = True
-                break
-
-            # k_proj (stage for kv concat)
-            if hf_name in (
-                f"{pfx}.self_attn.k_proj.weight",
-                f"{pfx2}.self_attn.k_proj.weight",
-            ):
-                k_staged[i] = _unpermute_proj_rows(hf_arr, num_kv_heads)
-                try_combine_kv(i)
-                matched = True
-                break
-
-            # v_proj (stage for kv concat, no unpermute)
-            if hf_name in (
-                f"{pfx}.self_attn.v_proj.weight",
-                f"{pfx2}.self_attn.v_proj.weight",
-            ):
-                v_staged[i] = hf_arr
-                try_combine_kv(i)
-                matched = True
-                break
-
-            # o_proj — row-parallel (input features sharded)
-            if hf_name in (
-                f"{pfx}.self_attn.o_proj.weight",
-                f"{pfx2}.self_attn.o_proj.weight",
-            ):
-                shard_type = "row_w" if use_tp else None
-                param = get_param(f"Llama/blocks/{i}/attention/out_linear/weight")
-                tgt = param.shape()
-                tr = tgt[-2]
-                tc = tgt[-1] * tp_size if shard_type == "row_w" else tgt[-1]
-                r, c = hf_arr.shape
-                w = hf_arr
-                if r == tr and c == tc:
-                    pass
-                elif c == tr and r == tc:
-                    w = np.ascontiguousarray(w.T)
-                else:
-                    raise RuntimeError(f"o_proj shape mismatch layer {i}: ({r}x{c}) vs ({tr}x{tc})")
-                mapper = _make_tp_mapper(shard_type)
-                _assign_tensor(param, _to_bf16_4d(w), mapper=mapper)
-                matched = True
-                break
-
-            # gate_proj -> w1 — column-parallel
-            if hf_name in (
-                f"{pfx}.mlp.gate_proj.weight",
-                f"{pfx2}.mlp.gate_proj.weight",
-            ):
-                shard_type = "col_w" if use_tp else None
-                param = get_param(f"Llama/blocks/{i}/mlp/w1/weight")
-                tgt = param.shape()
-                tr = tgt[-2] * tp_size if shard_type == "col_w" else tgt[-2]
-                tc = tgt[-1]
-                r, c = hf_arr.shape
-                w = hf_arr
-                if r == tr and c == tc:
-                    pass
-                elif c == tr and r == tc:
-                    w = np.ascontiguousarray(w.T)
-                else:
-                    raise RuntimeError(f"gate_proj shape mismatch layer {i}: ({r}x{c}) vs ({tr}x{tc})")
-                mapper = _make_tp_mapper(shard_type)
-                _assign_tensor(param, _to_bf16_4d(w), mapper=mapper)
-                matched = True
-                break
-
-            # up_proj -> w3 — column-parallel
-            if hf_name in (
-                f"{pfx}.mlp.up_proj.weight",
-                f"{pfx2}.mlp.up_proj.weight",
-            ):
-                shard_type = "col_w" if use_tp else None
-                param = get_param(f"Llama/blocks/{i}/mlp/w3/weight")
-                tgt = param.shape()
-                tr = tgt[-2] * tp_size if shard_type == "col_w" else tgt[-2]
-                tc = tgt[-1]
-                r, c = hf_arr.shape
-                w = hf_arr
-                if r == tr and c == tc:
-                    pass
-                elif c == tr and r == tc:
-                    w = np.ascontiguousarray(w.T)
-                else:
-                    raise RuntimeError(f"up_proj shape mismatch layer {i}: ({r}x{c}) vs ({tr}x{tc})")
-                mapper = _make_tp_mapper(shard_type)
-                _assign_tensor(param, _to_bf16_4d(w), mapper=mapper)
-                matched = True
-                break
-
-            # down_proj -> w2 — row-parallel
-            if hf_name in (
-                f"{pfx}.mlp.down_proj.weight",
-                f"{pfx2}.mlp.down_proj.weight",
-            ):
-                shard_type = "row_w" if use_tp else None
-                param = get_param(f"Llama/blocks/{i}/mlp/w2/weight")
-                tgt = param.shape()
-                tr = tgt[-2]
-                tc = tgt[-1] * tp_size if shard_type == "row_w" else tgt[-1]
-                r, c = hf_arr.shape
-                w = hf_arr
-                if r == tr and c == tc:
-                    pass
-                elif c == tr and r == tc:
-                    w = np.ascontiguousarray(w.T)
-                else:
-                    raise RuntimeError(f"down_proj shape mismatch layer {i}: ({r}x{c}) vs ({tr}x{tc})")
-                mapper = _make_tp_mapper(shard_type)
-                _assign_tensor(param, _to_bf16_4d(w), mapper=mapper)
-                matched = True
-                break
-
-        if not matched:
-            ignored_hf.add(hf_name)
-
-    # ── Report ──
-    unused = [n for n in parameters if n not in used_params]
-    if unused:
-        print(f"Warning: {len(unused)} model parameters were NOT loaded from safetensors:")
-        for n in unused:
-            print(f"  - {n}")
-    else:
-        print(f"All {len(parameters)} parameters successfully loaded.")
-
-    if ignored_hf:
-        print(f"Note: {len(ignored_hf)} HF tensors were ignored (no mapping):")
-        for n in sorted(ignored_hf):
-            print(f"  - {n}")
+    print(f"Loaded {len(rules)} parameters from {len(checkpoint.names) - len(leftover)} checkpoint tensors.")
+    if biases := _biases(parameter_names):
+        print(f"Left at initial values: {len(biases)} biases the checkpoint does not carry.")
+    if unused := sorted(n for n in leftover if not n.endswith(_NOT_WEIGHTS)):
+        print(f"Note: {len(unused)} checkpoint tensors were not used:")
+        for name in unused:
+            print(f"  - {name}")
