@@ -648,18 +648,33 @@ def fetch_perf_data(run_id, dest):
     dest = pathlib.Path(dest)
     shutil.rmtree(dest, ignore_errors=True)
     dest.mkdir(parents=True)
-    sh(
-        "gh",
-        "run",
-        "download",
-        str(run_id),
-        "--repo",
-        REPO,
-        "--pattern",
-        "perf-data-*",
-        "-D",
-        str(dest),
-    )
+    # Downloading tens of MB over several artifacts is the longest network call
+    # in a measurement, so it is the likeliest to blip -- and losing it discards
+    # a run that already cost an hour of cards.
+    for attempt in range(4):
+        try:
+            sh(
+                "gh",
+                "run",
+                "download",
+                str(run_id),
+                "--repo",
+                REPO,
+                "--pattern",
+                "perf-data-*",
+                "-D",
+                str(dest),
+            )
+            break
+        except RuntimeError as err:
+            if attempt == 3:
+                raise
+            print(
+                f"  (download retry {attempt + 1}/3: {str(err).splitlines()[-1][:60]})"
+            )
+            shutil.rmtree(dest, ignore_errors=True)
+            dest.mkdir(parents=True, exist_ok=True)
+            time.sleep(15)
 
     for zpath in list(dest.rglob("*.zip")):
         with zipfile.ZipFile(zpath) as z:
