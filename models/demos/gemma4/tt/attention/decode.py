@@ -689,6 +689,12 @@ def _write_packed_kv_sequential(
     tt_v_bp.deallocate(True)
 
 
+def _packed_batch_sdpa_enabled():
+    """Native decode-batch SDPA for packed verify (B==1 only). Default on;
+    ``GEMMA4_PACKED_VERIFY_BATCH_SDPA=0`` restores the packed-head + mask path."""
+    return os.environ.get("GEMMA4_PACKED_VERIFY_BATCH_SDPA", "1").lower() not in ("0", "false", "no", "off")
+
+
 def packed_decode_forward(
     hidden_states,
     cos_cache,
@@ -764,7 +770,7 @@ def packed_decode_forward(
     # ── ② L1 height-sharded MemoryConfig for the fallback paged_update_cache ─
     # ``paged_update_cache`` needs the layout ``nlp_create_qkv_heads_decode``
     # emits; the spec depends only on shape constants, so probe once and cache.
-    cache_key = _q_sharded_mem_key(1, qkv_dim, config, weights, tp)
+    cache_key = _q_sharded_mem_key(B, qkv_dim, config, weights, tp)
     q_sharded_mem = _Q_SHARDED_MEM_CACHE.get(cache_key)
     seq_kv = (
         _packed_seq_kv_enabled()
@@ -923,13 +929,7 @@ def packed_decode_forward(
 
     k_cache_use, v_cache_use = kv_cache
 
-    batch_sdpa_env = os.environ.get("GEMMA4_PACKED_VERIFY_BATCH_SDPA", "1").lower() not in (
-        "0",
-        "false",
-        "no",
-        "off",
-    )
-    if batch_sdpa_env and B == 1:
+    if _packed_batch_sdpa_enabled() and B == 1:
         if position_idx_cache is None:
             raise ValueError("batch-SDPA packed verify requires position_idx_cache")
         tt_q_decode = ttnn.transpose(tt_q, 1, 2, memory_config=ttnn.DRAM_MEMORY_CONFIG)

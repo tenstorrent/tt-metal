@@ -32,6 +32,7 @@ import time
 import torch
 
 import ttnn
+from models.demos.gemma4.tt.attention.decode import _packed_batch_sdpa_enabled, _packed_seq_kv_enabled
 from models.demos.gemma4.tt.ccl import ccl_allgather
 
 _SHARD_ARGMAX_K = 32
@@ -801,24 +802,17 @@ class SpeculativeDecoder:
             return ring // self._pv_bs
         return int(self._pv_pages_t[lt].shape[0])
     def _seq_kv_enabled(self):
-        """Serialized ``paged_update_cache`` instead of staging fill (default)."""
-        return os.environ.get("GEMMA4_PACKED_VERIFY_SEQ_KV", "1").lower() not in (
-            "0",
-            "false",
-            "no",
-            "off",
-        )
+        """Serialized ``paged_update_cache`` instead of staging fill (default).
+
+        Delegates to ``attention.decode`` so the inputs staged here and the path
+        taken there can never disagree about the same env flag.
+        """
+        return _packed_seq_kv_enabled()
 
 
     def _batch_sdpa_enabled(self):
-        """Native decode-batch SDPA for packed verify (default). Set
-        ``GEMMA4_PACKED_VERIFY_BATCH_SDPA=0`` for the packed-head + mask path."""
-        return os.environ.get("GEMMA4_PACKED_VERIFY_BATCH_SDPA", "1").lower() not in (
-            "0",
-            "false",
-            "no",
-            "off",
-        )
+        """Native decode-batch SDPA for packed verify (default); see ``_seq_kv_enabled``."""
+        return _packed_batch_sdpa_enabled()
 
     def _pv_page_table_batch(self, P):
         """Batch-SDPA and sequential KV writes both need P replicated page-table rows."""
@@ -1492,10 +1486,6 @@ class SpeculativeDecoder:
             idx = sliced
         return idx
 
-    def _use_shard_argmax(self):
-        """Skip the drafter's full-vocab all-gather; reduce per-shard then gather scalars."""
-        return self._shard_argmax_enabled
-
     def _shard_offset_tables(self, shard_w, tp, k):
         """Replicated TILE tables for gathered local-topk: per-slot vocab offsets and column ids."""
         key = (shard_w, tp, k)
@@ -1570,7 +1560,8 @@ class SpeculativeDecoder:
 
     def _greedy_draft_idx(self, tok, h, page_tables, pu, pi, rows):
         """One drafter step + greedy token id on device ([1,1,rows] uint32 RM)."""
-        gather = not self._use_shard_argmax()
+        # Shard-argmax skips the drafter's full-vocab all-gather.
+        gather = not self._shard_argmax_enabled
         logits, h_next = self.assistant.step(tok, h, self._shared_kv, page_tables, pu, pi, gather_logits=gather)
         idx = self._argmax_last(logits, rows) if gather else self._shard_argmax(logits, rows)
         logits.deallocate(True)
