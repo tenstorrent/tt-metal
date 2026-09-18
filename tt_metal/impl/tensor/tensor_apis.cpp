@@ -398,6 +398,10 @@ namespace CMAKE_UNIQUE_NAMESPACE {
 struct bfloat4_tag {};
 struct bfloat8_tag {};
 
+// BFLOAT8_B and BFLOAT4_B are unpacked to float by preprocess_buffers, so they arrive as float.
+template <typename SrcType>
+constexpr bool is_float_source_v = std::is_same_v<SrcType, float> || std::is_same_v<SrcType, bfloat16>;
+
 // Preprocess the storage to unpack the bfloat8/4 tiles into float32.
 tt::tt_metal::DistributedHostBuffer preprocess_buffers(
     const tt::tt_metal::DistributedHostBuffer& input_storage,
@@ -481,7 +485,11 @@ tt::tt_metal::DistributedHostBuffer transform_buffers(
             auto data = buffer.view_as<const SrcType>();
             std::vector<DstType> output_vector(data.size());
             std::transform(data.begin(), data.end(), output_vector.begin(), [](SrcType value) {
-                return static_cast<DstType>(value);
+                if constexpr (is_float_source_v<SrcType> && std::is_integral_v<DstType>) {
+                    return tt::saturating_cast<DstType>(static_cast<float>(value));
+                } else {
+                    return static_cast<DstType>(value);
+                }
             });
             return tt::tt_metal::HostBuffer(std::move(output_vector));
         };

@@ -2,6 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <bit>
+
+#include <tt-metalium/math.hpp>
 #include "pad_rm_reader_writer_multi_core_default_program_factory.hpp"
 
 #include <algorithm>
@@ -105,8 +108,10 @@ ttnn::device_operation::ProgramArtifacts PadRmReaderWriterMultiCoreDefaultProgra
     TT_ASSERT(output.buffer() != nullptr, "Output buffer should be allocated on device!");
 
     uint32_t packed_pad_value;
-    if (a.dtype() == DataType::INT32 || a.dtype() == DataType::UINT32) {
-        packed_pad_value = pad_value;
+    if (a.dtype() == DataType::INT32) {
+        packed_pad_value = std::bit_cast<uint32_t>(tt::saturating_cast<int32_t>(pad_value));
+    } else if (a.dtype() == DataType::UINT32) {
+        packed_pad_value = tt::saturating_cast<uint32_t>(pad_value);
     } else if (a.dtype() == DataType::UINT16) {
         packed_pad_value = pack_two_uint16_into_uint32({float_to_uint16(pad_value), float_to_uint16(pad_value)});
     } else {

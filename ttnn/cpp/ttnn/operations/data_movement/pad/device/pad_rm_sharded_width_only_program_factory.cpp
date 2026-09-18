@@ -7,6 +7,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/hal.hpp>
+#include <tt-metalium/math.hpp>
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
@@ -114,10 +115,10 @@ ttnn::device_operation::ProgramArtifacts PadRmShardedWidthOnlyProgramFactory::cr
         padding_value_as_u32 = *reinterpret_cast<const uint32_t*>(&pad_value);
     } else if (input_tensor.dtype() == tt::tt_metal::DataType::UINT16) {
         padding_value_as_u32 = pack_two_uint16_into_uint32({0, float_to_uint16(pad_value)});
-    } else if (
-        input_tensor.dtype() == tt::tt_metal::DataType::INT32 ||
-        input_tensor.dtype() == tt::tt_metal::DataType::UINT32) {
-        padding_value_as_u32 = static_cast<uint32_t>(pad_value);  // for INT32 and UINT32
+    } else if (input_tensor.dtype() == tt::tt_metal::DataType::INT32) {
+        padding_value_as_u32 = std::bit_cast<uint32_t>(tt::saturating_cast<int32_t>(pad_value));
+    } else if (input_tensor.dtype() == tt::tt_metal::DataType::UINT32) {
+        padding_value_as_u32 = tt::saturating_cast<uint32_t>(pad_value);
     } else {
         TT_THROW("ttnn.pad: unsupported data type for pad_rm_sharded_stickwise");
     }

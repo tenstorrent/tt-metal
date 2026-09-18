@@ -8,6 +8,7 @@
 
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/float8.hpp>
+#include <tt-metalium/math.hpp>
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 using namespace tt::tt_metal;
@@ -24,7 +25,7 @@ uint32_t get_packed_value(const Tensor& tensor, const PadValue& pad_value) {
                     return pack_two_bfloat16_into_uint32({bfloat_pad_value, bfloat_pad_value});
                 }
                 if (tensor.dtype() == DataType::UINT16) {
-                    uint16_t uint16_pad_value = static_cast<uint16_t>(pad_value);
+                    uint16_t uint16_pad_value = tt::saturating_cast<uint16_t>(pad_value);
                     return ttnn::operations::data_movement::pack_two_uint16_into_uint32(
                         {uint16_pad_value, uint16_pad_value});
                 }
@@ -32,7 +33,7 @@ uint32_t get_packed_value(const Tensor& tensor, const PadValue& pad_value) {
                     return std::bit_cast<uint32_t>(static_cast<float>(pad_value));
                 }
                 if (tensor.dtype() == DataType::INT32) {
-                    return std::bit_cast<uint32_t>(static_cast<int32_t>(pad_value));
+                    return std::bit_cast<uint32_t>(tt::saturating_cast<int32_t>(pad_value));
                 }
                 if (tensor.dtype() == DataType::FP8_E4M3) {  // 4 fp8 bytes per word
                     const float8_e4m3 v(static_cast<float>(pad_value));
@@ -40,7 +41,7 @@ uint32_t get_packed_value(const Tensor& tensor, const PadValue& pad_value) {
                 }
                 TT_FATAL(
                     tensor.dtype() == DataType::UINT32, "only supporting bfloat16, float32, and uint32/int32/uint16");
-                return static_cast<uint32_t>(pad_value);
+                return tt::saturating_cast<uint32_t>(pad_value);
             }
             if constexpr (std::is_same_v<T, uint32_t>) {
                 if (tensor.dtype() == DataType::BFLOAT16) {
