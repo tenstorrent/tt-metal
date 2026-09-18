@@ -2,7 +2,7 @@
 description: |
   `/test` — an on-demand CI pipeline selector for tt-metal pull requests.
 
-  tt-metal has ~34 optional pipelines that are NOT part of pr-gate. Today a developer
+  tt-metal has optional pipelines that are NOT part of pr-gate. Today a developer
   who wants one has to know it exists, find it in the Actions tab, click "Run workflow",
   and remember to point it at their own branch instead of the default `main`. Most
   people either skip that entirely (and find out at merge-gate) or run far more than
@@ -76,7 +76,7 @@ tools:
   # `workflow_dispatch` input schema of each candidate pipeline before dispatching it.
   # Unrestricted, as in `silencer.md`, because it does not widen what this workflow can
   # actually do: the agent job is read-only and network-firewalled, and every effect it
-  # can have is bounded by the `safe-outputs` allowlists below (34 named workflows,
+  # can have is bounded by the `safe-outputs` allowlists below (named workflows,
   # branch refs only, at most 8 dispatches and one comment). A prompt-injected agent
   # gains nothing from a shell that it could not already reach through those.
   bash: true
@@ -357,7 +357,7 @@ safe-outputs:
     # legitimate fan-out — a `tt_metal/api` change plausibly wants all four `runtime-*`
     # pipelines plus `sanity-tests`; a broad `models/` change wants the six
     # `models-t{1,2,3}-{e2e,unit}` pipelines — while still capping a
-    # misreasoned "run everything" at 8 rather than all 34.
+    # misreasoned "run everything" at 8 dispatches.
     max: 8
 ---
 
@@ -457,7 +457,6 @@ match that reality: never describe a pipeline as dispatched on a fork PR.
 | `blackhole-e2e-tests` | Blackhole (P150/P300/BH QuietBox) | Anything under a `blackhole/` path or BH-specific HAL/SoC descriptor |
 | `galaxy-sanity`, `galaxy-health` | Galaxy (WH/BH) | Quick Galaxy-reachability check before committing to the heavier Galaxy suites |
 | `galaxy-unit-tests`, `galaxy-integration-tests`, `galaxy-e2e-tests` | Galaxy | Fabric, CCL, multi-device, or large-mesh code paths |
-| `galaxy-profiler-tests` | Galaxy | Galaxy profiler instrumentation changes |
 | `galaxy-stress-tests`, `galaxy-multi-user-isolation-tests` | Galaxy | Stability, long-run, or multi-tenant isolation behaviour |
 | `t3000-unit-tests`, `t3000-integration-tests`, `t3000-e2e-tests` | T3000 (8×WH) | Multi-chip work that does not need a full Galaxy |
 | `profiler-tests` | T3K, Galaxy and single card, filtered by SKU | `tt_metal/tools/profiler/**`, tracy, or profiling instrumentation |
@@ -486,12 +485,12 @@ before the dispatch is attempted. Work from the schema in front of you; do not i
 names from the pipeline's YAML on disk, because the two can disagree (see the maintenance
 note below) and the schema is what validation enforces.
 
-**Eleven pipelines have required inputs — a no-input dispatch of these will fail
+**The following pipelines have required inputs — a no-input dispatch of these will fail
 validation.** You must supply at least:
 
 | Pipeline | Must supply |
 |---|---|
-| `profiler-tests` | `skus` (a SKU name, `all single-card`, or `all`) |
+| `galaxy-sanity` | `arch` |
 | `models-t1-e2e-tests`, `models-t1-unit-tests` | `model` |
 | `models-t2-e2e-tests`, `models-t2-unit-tests` | `model` |
 | `models-t3-e2e-tests`, `models-t3-unit-tests` | `model` |
@@ -500,10 +499,22 @@ validation.** You must supply at least:
 | `ttnn-run-sweeps` | `arch`, `log-level`, `runner-label`, `sweep_name` |
 
 Each of these still has a sensible default in the schema — passing the default explicitly
-is fine when you have no reason to narrow further. The other 23 pipelines take no required
+is fine when you have no reason to narrow further. The remaining pipelines take no required
 inputs and can be dispatched bare.
 
 The defaults are usually *maximal*, and that is where the waste is. Recurring shapes:
+
+- **`profiler-tests` defaults to every profiler SKU.** Its filtering inputs are optional,
+  so select the scope explicitly when a full run is unnecessary:
+
+  | Scope | Inputs |
+  |---|---|
+  | Galaxy | `skus: wh_galaxy` |
+  | Single-card | `skus: all single-card` |
+  | N300 and T3K | `skus: all`, `skus-override: wh_n300_civ2,wh_llmbox` |
+
+  Leave `skus` at `all` when using `skus-override`. Combining an override with a
+  specific `skus` choice is rejected.
 
 - **`all` defaults to `true` on the `runtime-*` pipelines.** Setting `blackhole: true`
   alone does **not** narrow anything — `all` is still true and everything runs. You must
@@ -515,18 +526,17 @@ The defaults are usually *maximal*, and that is where the waste is. Recurring sh
   pipelines, both defaulting to `all`. If the change touches one model, name it. SKU
   values carry a human-readable suffix — use the option string exactly as written
   (e.g. `wh_n150 (N150)`, `bh_p150 (P150)`).
-- **Suite and board toggles: `run-<something>` booleans that default to `true`.** Three
-  pipelines bundle independent suites this way, and taking the defaults runs all of them:
+- **Suite toggles: `run-<something>` booleans that default to `true`.** `sanity-tests`
+  bundles independent suites this way, and taking the defaults runs all of them:
 
   | Pipeline | Toggles (all default `true`) |
   |---|---|
   | `sanity-tests` | `run-ttnn-sanity-tests`, `run-ops-sanity-tests`, `run-fabric-sanity-tests`, `run-t3000-sanity-tests`, `run-umd-sanity-tests`, `run-ttsim-sanity-tests`, `run-blackhole-multi-card-sanity-tests`, `run-models-sanity-tests` |
-  | `single-card-profiler-tests` | `run-n150-profiler`, `run-n300-profiler`, `run-blackhole-profiler` |
 
   The names say what each covers, so map them the same way you mapped paths to pipelines:
   a single-device `ttnn` op change reaches `run-ttnn-sanity-tests` and `run-ops-sanity-tests`
   and does **not** reach fabric, T3000, UMD, or multi-card. Set the ones it cannot reach to
-  `false`. Leaving all seven on is the same mistake as dispatching seven pipelines when one
+  `false`. Leaving every toggle on is the same mistake as dispatching unrelated pipelines when one
   would do — it is just hidden inside a single dispatch.
 
 - **Do not touch inputs that change behaviour rather than scope.** `mlperf-read-only`,
@@ -552,7 +562,7 @@ reason, or widen the reason to admit why you kept the suite on.
 > cannot use the new shape until this workflow is recompiled — `additionalProperties:
 > false` and the compiled `enum` lists will reject it. The failure mode is narrow and
 > visible (that one dispatch is refused with a validation error, nothing else breaks), but
-> it does mean **changing a dispatch input on any of the 34 pipelines requires re-running
+> it does mean **changing a dispatch input on any allowlisted pipeline requires re-running
 > `gh aw compile test-command` and committing the lock file.**
 
 ## The ref rule

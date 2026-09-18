@@ -1420,7 +1420,7 @@ jobs:
                       },
                       "skus-override": {
                         "default": "",
-                        "description": "Comma-separated SKU list. When set, it replaces the choice above (e.g. wh_n300_civ2,wh_llmbox).",
+                        "description": "Comma-separated SKU list (e.g. wh_n300_civ2,wh_llmbox). Leave skus set to all when using this input.",
                         "type": "string"
                       }
                     },
