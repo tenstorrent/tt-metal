@@ -151,38 +151,37 @@ class Gemma4AssistantModel:
         # all-gathered, mirroring the target.
         col_mapper = mesh_config.column_parallel(mesh_device) if tp > 1 else None
 
-        def _linear(key, mapper, transpose=True, dtype_override=None, cache_suffix=""):
+        from models.demos.gemma4.tt.precision import dtype_to_str
+
+        def _linear(key, mapper, transpose=True, dtype_override=None):
             w = state_dict.get(key)
             if w is None:
                 return None
             wt = w.transpose(-2, -1) if transpose else w
             wt = wt.unsqueeze(0).unsqueeze(0)
+            wdtype = dtype if dtype_override is None else dtype_override
+            # Same contract as the target's weights: a dtype that differs from
+            # the module default gets its dtype in the cache filename, so a
+            # tensor cached at one precision is never reused at another.
+            suffix = "" if wdtype == dtype else f"_{dtype_to_str(wdtype)}"
             return ttnn.as_tensor(
                 wt,
                 device=mesh_device,
-                dtype=dtype_override if dtype_override is not None else dtype,
+                dtype=wdtype,
                 layout=ttnn.TILE_LAYOUT,
                 mesh_mapper=mapper if mapper is not None else (replicate if is_mesh else None),
-                cache_file_name=get_cache_file_name(tensor_cache_path, key.replace(".", "_") + cache_suffix),
+                cache_file_name=get_cache_file_name(tensor_cache_path, key.replace(".", "_") + suffix),
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
         # The projections are read on every draft step; bfp8 halves their DRAM
-        # traffic. The cache suffix keeps a bf16-cached tensor from being reused
-        # under the narrower dtype.
-        proj_dtype = ttnn.bfloat8_b
-        proj_suffix = "_bfp8" if proj_dtype != dtype else ""
-        self.pre_projection = _linear(
-            "pre_projection.weight", None, dtype_override=proj_dtype, cache_suffix=proj_suffix
-        )
-        self.post_projection = _linear(
-            "post_projection.weight", None, dtype_override=proj_dtype, cache_suffix=proj_suffix
-        )
+        # traffic and is the drafter's shipped precision.
+        self.pre_projection = _linear("pre_projection.weight", None, dtype_override=ttnn.bfloat8_b)
+        self.post_projection = _linear("post_projection.weight", None, dtype_override=ttnn.bfloat8_b)
         # lm_head tied to the assistant's own embed_tokens when a separate
         # lm_head.weight isn't stored.
         lm_key = "lm_head.weight" if "lm_head.weight" in state_dict else "model.embed_tokens.weight"
-        lm_head_suffix = "_bfp8" if lm_head_dtype != dtype else ""
-        self.lm_head = _linear(lm_key, col_mapper, dtype_override=lm_head_dtype, cache_suffix=lm_head_suffix)
+        self.lm_head = _linear(lm_key, col_mapper, dtype_override=lm_head_dtype)
         if self.pre_projection is None or self.post_projection is None or self.lm_head is None:
             raise ValueError("Assistant checkpoint missing pre_projection / post_projection / lm_head weights")
 

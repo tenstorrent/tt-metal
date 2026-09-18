@@ -36,6 +36,9 @@ from models.demos.gemma4.tt.ccl import ccl_allgather
 
 _SHARD_ARGMAX_K = 32
 
+# Packed-verify input tensors this module allocates and must free itself.
+_PV_OWNED_KEYS = ("pos", "pos_cache", "mask_full", "mask_slide", "hot", "pt")
+
 
 def _to_probs(logits_row, temperature, top_p, top_k):
     """torch logits [vocab] -> probability vector [vocab] under temp/top-p/top-k.
@@ -464,7 +467,7 @@ class SpeculativeDecoder:
         ttnn.copy_host_to_device_tensor(d_hpi, tr["d_pi"])
         d_hpu.deallocate(True)
         d_hpi.deallocate(True)
-        self._copy_pv_into_tr(tr, h)
+        self._copy_pv_into_tr(tr, h, pos_key="v_pos", pos_cache_key="v_pos_cache")
         tr["c"] = c
         tr["P"] = P
 
@@ -598,27 +601,50 @@ class SpeculativeDecoder:
             mesh_mapper=self._mapper,
         )
 
-    def _pv_device_inputs(self, tokens, h):
-        """Device tensors for one packed verify from host dict ``h``."""
+    def _pv_mask_to_device(self, mask, *, device=True):
+        """Device (or host) copy of one additive packed-verify mask, or None."""
+        if mask is None:
+            return None
+        return self._pv_from_torch(mask, ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    def _pv_device_tensors(self, h):
+        """Device tensors common to every packed verify, from host dict ``h``.
+
+        ``mask_*`` and ``hot`` are None on the batch-SDPA / sequential-KV paths,
+        which build no mask and write the cache directly. ``pos_cache`` (int32
+        positions for paged_update_cache / cur_pos_tensor) is present only when
+        one of those paths needs it -- ``position_idx`` itself is uint32 and
+        RoPE-only.
+        """
         dev = {
-            "x": self._tokens_tensor(tokens),
             "pos": self._pv_from_torch(h["pos"], ttnn.uint32),
-            "mask_full": (
-                self._pv_from_torch(h["mask_full"], ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-                if h["mask_full"] is not None
-                else None
-            ),
-            "mask_slide": (
-                self._pv_from_torch(h["mask_slide"], ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-                if h["mask_slide"] is not None
-                else None
-            ),
+            "mask_full": self._pv_mask_to_device(h["mask_full"]),
+            "mask_slide": self._pv_mask_to_device(h["mask_slide"]),
             "embed": {lt: self._pv_from_torch(e, ttnn.uint32) for lt, e in h["embed"].items()},
             "hot": self._pv_from_torch(h["hot"], ttnn.int32) if h["hot"] is not None else None,
         }
         if self._batch_sdpa_enabled() or self._seq_kv_enabled():
             dev["pos_cache"] = self._pv_from_torch(h["pos"].reshape(-1), ttnn.int32)
         return dev
+
+    def _pv_device_inputs(self, tokens, h):
+        """Device tensors for one packed verify from host dict ``h``."""
+        return {"x": self._tokens_tensor(tokens), **self._pv_device_tensors(h)}
+
+    def _pv_dealloc(self, dev, *, include_x):
+        """Free the owned tensors of an eager packed-verify input dict.
+
+        ``x`` is ours only on the paths that built it from host tokens; the
+        fused path hands in a tensor produced inside the graph. Absent keys
+        (masks / ``hot`` under batch-SDPA, ``pt`` where unused) are skipped.
+        """
+        keys = ("x", *_PV_OWNED_KEYS) if include_x else _PV_OWNED_KEYS
+        for k in keys:
+            t = dev.get(k)
+            if t is not None:
+                t.deallocate(True)
+        for e in dev["embed"].values():
+            e.deallocate(True)
 
     def _pv_call(self, dev, P):
         return self.target.ttnn_packed_verify_forward(
@@ -639,115 +665,77 @@ class SpeculativeDecoder:
         """Return packed-verify (c, P) for one fused greedy iteration."""
         return anchor_pos, self.draft_len + 1
 
-    def _fused_pv_prepare(self, anchor_pos):
-        """Host packed-verify tensors for the fused greedy graph at ``anchor_pos``."""
-        c, P = self._fused_verify_c_p(anchor_pos)
+    def _pv_prepare(self, c, P):
+        """Set up the packed-verify staging for anchor ``c`` and build host inputs.
+
+        The staging seed is only needed by the embed-merge KV write; the
+        sequential write goes straight at the cache and leaves ``_pv_a_prev``
+        to the caller.
+        """
         self._pv_setup()
         if self._pv_a_prev < 0 and not self._seq_kv_enabled():
             self._pv_seed_staging(c)
-        return c, P, self._pv_host_inputs(c, P)
+        return self._pv_host_inputs(c, P)
 
-    def _copy_pv_into_tr(self, tr, h):
-        """Refresh persistent fused-trace packed inputs from host dict ``h``."""
-        pairs = [
-            (self._pv_from_torch(h["pos"], ttnn.uint32, device=False), tr["v_pos"]),
-        ]
+    def _fused_pv_prepare(self, anchor_pos):
+        """Host packed-verify tensors for the fused greedy graph at ``anchor_pos``."""
+        c, P = self._fused_verify_c_p(anchor_pos)
+        return c, P, self._pv_prepare(c, P)
+
+    def _copy_pv_into_tr(self, tr, h, *, pos_key="pos", pos_cache_key="pos_cache"):
+        """Refresh a packed-verify trace's persistent inputs from host dict ``h``.
+
+        The eager trace dicts key their positions ``pos`` / ``pos_cache`` while
+        the fused graph carries ``v_pos`` / ``v_pos_cache``; everything else is
+        named the same, hence the two overrides. Inputs a given path does not
+        use (masks and ``hot`` under batch-SDPA / sequential KV) are absent from
+        both dicts and skipped.
+        """
+        pairs = [(self._pv_from_torch(h["pos"], ttnn.uint32, device=False), tr[pos_key])]
+        if tr.get(pos_cache_key) is not None:
+            pairs.append((self._pv_from_torch(h["pos"].reshape(-1), ttnn.int32, device=False), tr[pos_cache_key]))
         if tr.get("hot") is not None and h["hot"] is not None:
             pairs.append((self._pv_from_torch(h["hot"], ttnn.int32, device=False), tr["hot"]))
         if tr.get("mask_full") is not None and h["mask_full"] is not None:
-            pairs.append(
-                (
-                    self._pv_from_torch(h["mask_full"], ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=False),
-                    tr["mask_full"],
-                )
-            )
-            pairs.append(
-                (
-                    self._pv_from_torch(h["mask_slide"], ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=False),
-                    tr["mask_slide"],
-                )
-            )
+            pairs.append((self._pv_mask_to_device(h["mask_full"], device=False), tr["mask_full"]))
+            pairs.append((self._pv_mask_to_device(h["mask_slide"], device=False), tr["mask_slide"]))
+        for lt, e in h["embed"].items():
+            pairs.append((self._pv_from_torch(e, ttnn.uint32, device=False), tr["embed"][lt]))
         for src, dst in pairs:
             ttnn.copy_host_to_device_tensor(src, dst)
-            src.deallocate(True)
-        if "v_pos_cache" in tr:
-            src = self._pv_from_torch(h["pos"].reshape(-1), ttnn.int32, device=False)
-            ttnn.copy_host_to_device_tensor(src, tr["v_pos_cache"])
-            src.deallocate(True)
-        for lt, e in h["embed"].items():
-            src = self._pv_from_torch(e, ttnn.uint32, device=False)
-            ttnn.copy_host_to_device_tensor(src, tr["embed"][lt])
             src.deallocate(True)
 
     def _fused_packed_verify(self, verify_x, c, P):
         """Eager packed verify of in-graph ``verify_x`` [1, P] at anchor ``c``."""
-        self._pv_setup()
-        if self._pv_a_prev < 0 and not self._seq_kv_enabled():
-            self._pv_seed_staging(c)
-        h = self._pv_host_inputs(c, P)
-        dev = {
-            "x": verify_x,
-            "pos": self._pv_from_torch(h["pos"], ttnn.uint32),
-            "mask_full": (
-                self._pv_from_torch(h["mask_full"], ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-                if h["mask_full"] is not None
-                else None
-            ),
-            "mask_slide": (
-                self._pv_from_torch(h["mask_slide"], ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-                if h["mask_slide"] is not None
-                else None
-            ),
-            "embed": {lt: self._pv_from_torch(e, ttnn.uint32) for lt, e in h["embed"].items()},
-            "hot": self._pv_from_torch(h["hot"], ttnn.int32) if h["hot"] is not None else None,
-            "pt": self._page_table(self._pv_page_table_batch(P)),
-        }
-        if self._batch_sdpa_enabled() or self._seq_kv_enabled():
-            dev["pos_cache"] = self._pv_from_torch(h["pos"].reshape(-1), ttnn.int32)
+        h = self._pv_prepare(c, P)
+        # ``verify_x`` is produced in-graph by the caller, so it is not ours to free.
+        dev = {"x": verify_x, **self._pv_device_tensors(h), "pt": self._page_table(self._pv_page_table_batch(P))}
         logits, hidden = self._pv_call(dev, P)
         self._pv_a_prev = c // self._pv_bs
-        for t in (dev["pos"], dev["mask_full"], dev["mask_slide"], dev["hot"], dev["pt"]):
-            if t is not None:
-                t.deallocate(True)
-        if "pos_cache" in dev:
-            dev["pos_cache"].deallocate(True)
-        for e in dev["embed"].values():
-            e.deallocate(True)
+        self._pv_dealloc(dev, include_x=False)
         return logits, hidden
 
     def _verify_packed(self, tokens, positions):
         """Packed verify (eager). Same contract as ``_verify``."""
-        self._pv_setup()
         P = len(tokens)
         c = positions[0]
-        if self._pv_a_prev < 0 and not self._seq_kv_enabled():
-            self._pv_seed_staging(c)
-        h = self._pv_host_inputs(c, P)
+        h = self._pv_prepare(c, P)
         dev = self._pv_device_inputs(tokens, h)
         dev["pt"] = self._page_table(self._pv_page_table_batch(P))
         logits, hidden = self._pv_call(dev, P)
         self._pv_a_prev = c // self._pv_bs
         lh = self._logits_to_host(logits).reshape(P, -1)
         logits.deallocate(True)
-        for t in (dev["x"], dev["pos"], dev["mask_full"], dev["mask_slide"], dev["hot"], dev["pt"]):
-            if t is not None:
-                t.deallocate(True)
-        if "pos_cache" in dev:
-            dev["pos_cache"].deallocate(True)
-        for e in dev["embed"].values():
-            e.deallocate(True)
+        self._pv_dealloc(dev, include_x=True)
         return lh, hidden
 
     def _verify_packed_traced(self, tokens, positions):
         """Packed verify via trace, keyed by (P, S_k bucket). Persistent device
         inputs are refreshed per step via copy_host_to_device_tensor; a new
         trace is captured lazily when P or the S_k bucket changes."""
-        self._pv_setup()
         P = len(tokens)
         c = positions[0]
-        if self._pv_a_prev < 0 and not self._seq_kv_enabled():
-            self._pv_seed_staging(c)
-        h = self._pv_host_inputs(c, P)
+        h = self._pv_prepare(c, P)
         key = (P, h["S_k"])
         tr = self._pv_traces.get(key)
         if tr is None:
@@ -765,31 +753,10 @@ class SpeculativeDecoder:
             dev.update({"id": tid, "logits": logits, "hidden": hidden})
             self._pv_traces[key] = dev
         else:
-            ttnn.copy_host_to_device_tensor(self._host_tokens(tokens), tr["x"])
-            pairs = [
-                (self._pv_from_torch(h["pos"], ttnn.uint32, device=False), tr["pos"]),
-            ]
-            if tr.get("hot") is not None and h["hot"] is not None:
-                pairs.append((self._pv_from_torch(h["hot"], ttnn.int32, device=False), tr["hot"]))
-            if tr.get("pos_cache") is not None:
-                pairs.append((self._pv_from_torch(h["pos"].reshape(-1), ttnn.int32, device=False), tr["pos_cache"]))
-            if tr.get("mask_full") is not None and h["mask_full"] is not None:
-                pairs.extend(
-                    (
-                        (
-                            self._pv_from_torch(h["mask_full"], ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=False),
-                            tr["mask_full"],
-                        ),
-                        (
-                            self._pv_from_torch(h["mask_slide"], ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=False),
-                            tr["mask_slide"],
-                        ),
-                    )
-                )
-            for src, dst in pairs:
-                ttnn.copy_host_to_device_tensor(src, dst)
-            for lt, e in h["embed"].items():
-                ttnn.copy_host_to_device_tensor(self._pv_from_torch(e, ttnn.uint32, device=False), tr["embed"][lt])
+            h_tok = self._host_tokens(tokens)
+            ttnn.copy_host_to_device_tensor(h_tok, tr["x"])
+            h_tok.deallocate(True)
+            self._copy_pv_into_tr(tr, h)
             ttnn.execute_trace(self.mesh_device, tr["id"], cq_id=0, blocking=False)
         tr = self._pv_traces[key]
         self._pv_a_prev = c // self._pv_bs
@@ -1377,32 +1344,26 @@ class SpeculativeDecoder:
         else:
             c, P, h = self._fused_pv_prepare(anchor_pos)
             d_pu, d_pi = self._pos_tensors([anchor_pos])
+            pv = self._pv_device_tensors(h)
             tr = {
                 "anchor_tok": self._tokens_tensor([anchor_token]),
                 "h": ttnn.clone(anchor_hidden),
                 "d_pu": d_pu,
                 "d_pi": d_pi,
                 "d_pt": self._page_table(1),
-                "v_pos": self._pv_from_torch(h["pos"], ttnn.uint32),
-                "mask_full": (
-                    self._pv_from_torch(h["mask_full"], ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-                    if h["mask_full"] is not None
-                    else None
-                ),
-                "mask_slide": (
-                    self._pv_from_torch(h["mask_slide"], ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-                    if h["mask_slide"] is not None
-                    else None
-                ),
-                "embed": {lt: self._pv_from_torch(e, ttnn.uint32) for lt, e in h["embed"].items()},
-                "hot": self._pv_from_torch(h["hot"], ttnn.int32) if h["hot"] is not None else None,
+                # The fused graph names the verify positions v_pos / v_pos_cache
+                # to keep them distinct from the drafter's d_pu / d_pi.
+                "v_pos": pv["pos"],
+                "v_pos_cache": pv.get("pos_cache"),
+                "mask_full": pv["mask_full"],
+                "mask_slide": pv["mask_slide"],
+                "embed": pv["embed"],
+                "hot": pv["hot"],
                 "v_pt": self._page_table(self._pv_page_table_batch(P)),
                 "S_k": h["S_k"],
                 "P": P,
                 "c": c,
             }
-            if self._batch_sdpa_enabled() or self._seq_kv_enabled():
-                tr["v_pos_cache"] = self._pv_from_torch(h["pos"].reshape(-1), ttnn.int32)
         _lg.info("[spec-trace] capture fused: compile run")
         vx, vidx, vh, h_rows, accept = self._fused_body(tr)
         ttnn.synchronize_device(self.mesh_device)
