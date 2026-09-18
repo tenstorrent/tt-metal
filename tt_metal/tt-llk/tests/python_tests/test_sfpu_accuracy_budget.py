@@ -14,6 +14,7 @@ that are *about* enrolment touch the real table.
 """
 
 import math
+import textwrap
 
 import pytest
 import torch
@@ -36,10 +37,9 @@ from helpers.sfpu_accuracy_budget import (
     AccuracyContract,
     BudgetKey,
     Metric,
+    _load_table,
     accuracy_contract,
-    budget_table,
     enrolled_ops,
-    registry,
     resolve_contract,
     validate_registry,
 )
@@ -103,38 +103,28 @@ BLOCK_FORMATS_WITHOUT_ULP = sorted(
 )
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# The contract's own coherence
-# ─────────────────────────────────────────────────────────────────────────────
+# ── The contract's own coherence ──────────────────────────────────────────────
 
 
 def test_a_ulp_contract_needs_a_budget():
-    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
-        ValueError, match="needs max_ulp"
-    ):
+    with _refuses("needs max_ulp"):
         AccuracyContract(metric=Metric.ULP)
 
 
 def test_a_ulp_contract_rejects_a_tolerance():
     """Both cannot apply, and an entry carrying both is a half-finished conversion that
     would read as deliberate."""
-    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
-        ValueError, match="silently ignored"
-    ):
+    with _refuses("silently ignored"):
         AccuracyContract(max_ulp=1, atol=0.13)
 
 
 def test_a_tolerance_contract_rejects_a_budget():
-    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
-        ValueError, match="belong to the ulp metric"
-    ):
+    with _refuses("belong to the ulp metric"):
         AccuracyContract(metric=Metric.TOLERANCE, max_ulp=1)
 
 
 def test_a_negative_budget_is_rejected():
-    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
-        ValueError, match="must not be negative"
-    ):
+    with _refuses("must not be negative"):
         AccuracyContract(max_ulp=-1)
 
 
@@ -197,9 +187,7 @@ def torch_ones():
     return torch.ones(TILE_SIZE, dtype=torch.bfloat16)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Key resolution
-# ─────────────────────────────────────────────────────────────────────────────
+# ── Key resolution ────────────────────────────────────────────────────────────
 
 
 def test_the_default_key_matches_every_variant():
@@ -296,9 +284,7 @@ def test_equally_specific_keys_are_an_error_not_a_tie_break():
         BudgetKey(approx_mode=ApproximationMode.No): AccuracyContract(max_ulp=4),
         BudgetKey(output_format=DataFormat.Float32): AccuracyContract(max_ulp=64),
     }
-    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
-        ValueError, match="equally specific"
-    ):
+    with _refuses("equally specific"):
         resolve_contract(
             table,
             label="Ambiguous",
@@ -322,9 +308,7 @@ def test_a_key_describes_itself_for_an_error_message():
     assert "output_format" in described and "dest_acc" in described
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# The live registry
-# ─────────────────────────────────────────────────────────────────────────────
+# ── The live registry ─────────────────────────────────────────────────────────
 
 
 def test_the_registry_resolves_unambiguously_for_every_variant():
@@ -415,9 +399,7 @@ def test_arch_must_be_passed_explicitly():
     """``arch`` is the one dimension where the numbers do not transfer, so unlike the
     other three it cannot be left unset and quietly resolved against the Wormhole table.
     A second enroller that forgets the keyword fails at the call."""
-    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
-        TypeError, match="arch"
-    ):
+    with _refuses("arch", TypeError):
         accuracy_contract(MathOperation.Abs, output_format=DataFormat.Float32)
 
 
@@ -1005,6 +987,11 @@ EXACT_BY_CONSTRUCTION = (
 )
 
 
+def _refuses(match, kind=ValueError):
+    """The suite's ``expect_error`` fixture needs a device; these are host-only tests."""
+    return pytest.raises(kind, match=match)  # allow-pytest.raises: host-only test
+
+
 def _every_variant(op):
     """Every contract an op can resolve to, across the whole keyed variant space.
 
@@ -1138,9 +1125,7 @@ def test_the_bfp8_b_enrolment_depends_on_the_swept_domain_not_on_the_format():
         )
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Integers never reach the ULP metric through the registry
-# ─────────────────────────────────────────────────────────────────────────────
+# ── Integers never reach the ULP metric through the registry ──────────────────
 
 
 @pytest.mark.parametrize("fmt", INTEGER_FORMATS, ids=lambda f: f.name)
@@ -1216,9 +1201,7 @@ def test_the_integer_ops_are_not_enrolled():
     )
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# The contract refuses what its annotations cannot
-# ─────────────────────────────────────────────────────────────────────────────
+# ── The contract refuses what its annotations cannot ──────────────────────────
 
 
 @pytest.mark.parametrize("bogus", ["ulp", "tolerance", "pcc", 0, None], ids=repr)
@@ -1227,9 +1210,7 @@ def test_a_metric_that_is_not_a_metric_member_is_refused(bogus):
     enum is bare, so the string compares unequal -- and it used to fall through to the
     *tolerance* arm of ``__post_init__``, silently switching off the gate the entry meant
     to declare. Exactly the typo a registry edit makes."""
-    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
-        ValueError, match="must be a Metric member"
-    ):
+    with _refuses("must be a Metric member"):
         AccuracyContract(metric=bogus, max_ulp=1)
 
 
@@ -1254,9 +1235,7 @@ def test_a_budget_key_dimension_that_is_not_an_enum_member_is_refused(field, bog
     identically to the correct key by ``describe()``, since ``ChipArchitecture.__str__``
     returns ``.value``. The budget it declares would gate nothing at all.
     """
-    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
-        ValueError, match=f"BudgetKey.{field} must be a"
-    ):
+    with _refuses(f"BudgetKey.{field} must be a"):
         BudgetKey(**{field: bogus})
 
 
@@ -1276,30 +1255,79 @@ def test_every_budget_key_field_is_guarded():
     ).specificity == len(_BUDGET_KEY_TYPES)
 
 
-def test_a_repeated_op_in_the_registry_is_refused():
-    """The same hazard ``budget_table`` closes, one level up and harder to see: the ops
-    sit 10-20 lines apart across three comment-delimited sections, and a dict literal
-    keeps only the later table. Nothing downstream can catch it -- ``validate_registry``
-    iterates the already-deduplicated dict, the ``len(set(ops)) == len(ops)`` check below
-    is tautological over dict keys, and pylint runs with ``--disable=all`` in pre-commit
-    so ``duplicate-key`` is off.
-    """
-    exact = budget_table((DEFAULT, AccuracyContract(max_ulp=0)))
-    loose = budget_table((DEFAULT, AccuracyContract(max_ulp=99)))
-    assert (
-        registry((MathOperation.Abs, exact), (MathOperation.Neg, loose))[
-            MathOperation.Abs
-        ]
-        is exact
-    )
-    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
-        ValueError, match="duplicate registry entry for Square"
-    ):
-        registry(
-            (MathOperation.Square, exact),
-            (MathOperation.Abs, exact),
-            (MathOperation.Square, loose),
+def _table(tmp_path, text):
+    """*text* as a budget table on disk, loaded the way the real one is."""
+    path = tmp_path / "budget.yaml"
+    path.write_text(textwrap.dedent(text), encoding="utf-8")
+    return _load_table(path)
+
+
+def test_a_repeated_op_in_the_table_is_refused(tmp_path):
+    """YAML keeps only the last of two identical mapping keys, so the earlier op's whole
+    budget would vanish with nothing downstream able to see it."""
+    with _refuses("duplicate entry for 'Abs'"):
+        _table(
+            tmp_path,
+            """\
+            Abs:
+              - {max_ulp: 0}
+            Neg:
+              - {max_ulp: 1}
+            Abs:
+              - {max_ulp: 99}
+            """,
         )
+
+
+def test_a_duplicate_row_is_refused_rather_than_deduplicated(tmp_path):
+    """Two rows with the same key are two list items, not one -- so nothing collapses
+    them, and a copy-pasted row replacing a measured budget would otherwise take effect
+    silently as the later of the two."""
+    with _refuses("repeats BudgetKey"):
+        _table(
+            tmp_path,
+            """\
+            Abs:
+              - {out: Float16_b, max_ulp: 1}
+              - {out: Float16_b, max_ulp: 4}
+            """,
+        )
+    both = _table(
+        tmp_path,
+        """\
+        Abs:
+          - {max_ulp: 4}
+          - {out: Float16_b, max_ulp: 1}
+        """,
+    )
+    assert len(both[MathOperation.Abs]) == 2
+
+
+def test_the_loader_refuses_what_it_cannot_turn_into_a_contract(tmp_path):
+    """Every failure here is the author's, so each one names the op it came from."""
+    with _refuses("'Nope' is not a MathOperation"):
+        _table(tmp_path, "Nope:\n  - {max_ulp: 1}\n")
+    with _refuses("unknown field"):
+        _table(tmp_path, "Abs:\n  - {max_ulp: 1, budget: 2}\n")
+    with _refuses("not a DataFormat"):
+        _table(tmp_path, "Abs:\n  - {out: Float17, max_ulp: 1}\n")
+    with _refuses("has no rows"):
+        _table(tmp_path, "Abs:\n")
+    # ...and the contract invariants still come from AccuracyContract itself.
+    with _refuses("a ulp contract replaces the tolerance gate"):
+        _table(tmp_path, "Abs:\n  - {max_ulp: 1, atol: 0.5}\n")
+
+
+def test_a_quoted_and_an_unquoted_no_mean_the_same_thing(tmp_path):
+    """YAML 1.1 reads a bare ``No`` as ``False``, and ``ApproximationMode.No`` is spelled
+    ``False`` too, so the two spellings must not disagree. The table quotes them; the
+    loader takes either."""
+    quoted = _table(tmp_path, 'Abs:\n  - {approx: "No", dest: "Yes", max_ulp: 1}\n')
+    bare = _table(tmp_path, "Abs:\n  - {approx: No, dest: Yes, max_ulp: 1}\n")
+    assert quoted == bare
+    key = next(iter(quoted[MathOperation.Abs]))
+    assert key.approx_mode is ApproximationMode.No
+    assert key.dest_acc is DestAccumulation.Yes
 
 
 @pytest.mark.parametrize("field", ["atol", "rtol", "near_zero_atol"], ids=str)
@@ -1313,33 +1341,8 @@ def test_a_negative_tolerance_field_is_refused(field):
     kwargs = {"metric": metric, field: -0.001}
     if metric is Metric.ULP:
         kwargs["max_ulp"] = 1
-    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
-        ValueError, match="must not be negative"
-    ):
+    with _refuses("must not be negative"):
         AccuracyContract(**kwargs)
-
-
-def test_a_duplicate_budget_key_is_refused_rather_than_deduplicated():
-    """``BudgetKey`` is frozen, so two identical keys in a dict literal are equal and
-    hash-equal and Python keeps only the later contract -- which means
-    ``validate_registry()`` saw an already-deduplicated table and the tie-raise in
-    ``resolve_contract`` could never fire for the duplicate ``BudgetKey``'s own docstring
-    promises to reject. A copy-pasted key replacing a measured budget with a broader one
-    failed nothing."""
-    key = BudgetKey(output_format=DataFormat.Float16_b)
-    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
-        ValueError, match="duplicate budget key"
-    ):
-        budget_table(
-            (key, AccuracyContract(max_ulp=1)),
-            (key, AccuracyContract(max_ulp=4)),
-        )
-    # The non-duplicate case still builds, and every live table goes through it.
-    table = budget_table(
-        (DEFAULT, AccuracyContract(max_ulp=4)),
-        (key, AccuracyContract(max_ulp=1)),
-    )
-    assert len(table) == 2
 
 
 @pytest.mark.parametrize(

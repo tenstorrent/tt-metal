@@ -960,27 +960,28 @@ class EmittedKey:
     near_zero_atol: Optional[float]
     cells: Tuple[CellMeasurement, ...]
 
-    def key_source(self) -> str:
+    def row_source(self) -> str:
+        """The key and contract as one YAML row of ``sfpu_accuracy_budget.yaml``.
+
+        ``approx`` and ``dest`` are quoted because YAML 1.1 reads a bare ``No`` as a
+        boolean; the loader accepts either, but the file should say what it means.
+        """
         parts = []
         if self.input_format is not None:
-            parts.append(f"input_format=DataFormat.{self.input_format.name}")
+            parts.append(f"in: {self.input_format.name}")
         if self.output_format is not None:
-            parts.append(f"output_format=DataFormat.{self.output_format.name}")
+            parts.append(f"out: {self.output_format.name}")
         if self.approx_mode is not None:
-            parts.append(f"approx_mode=ApproximationMode.{self.approx_mode.name}")
+            parts.append(f'approx: "{self.approx_mode.name}"')
         if self.dest_acc is not None:
-            parts.append(f"dest_acc=DestAccumulation.{self.dest_acc.name}")
-        return f"BudgetKey({', '.join(parts)})" if parts else "DEFAULT"
-
-    def contract_source(self) -> str:
+            parts.append(f'dest: "{self.dest_acc.name}"')
         if self.budget is None:
-            return "AccuracyContract(metric=Metric.TOLERANCE)"
-        if self.near_zero_atol is None:
-            return f"AccuracyContract(max_ulp={self.budget})"
-        return (
-            f"AccuracyContract(max_ulp={self.budget}, "
-            f"near_zero_atol={self.near_zero_atol!r})"
-        )
+            parts.append("metric: tolerance")
+        else:
+            parts.append(f"max_ulp: {self.budget}")
+            if self.near_zero_atol is not None:
+                parts.append(f"near_zero_atol: {self.near_zero_atol!r}")
+        return "{" + ", ".join(parts) + "}"
 
     def comment(
         self,
@@ -1118,7 +1119,7 @@ class EmittedKey:
                 )
         note = "".join(f"; {text}" for text in notes)
         return (
-            f"#   {arch}: max {worst} ULP, p{percentile:g} {pct:.1f}, {exact_text} "
+            f"{arch}: max {worst} ULP, p{percentile:g} {pct:.1f}, {exact_text} "
             f"exact, ~{agreement_bits(worst, widest):.0f} mantissa bits, "
             f"{points} pts, {stamp}{note}"
         )
@@ -1241,21 +1242,15 @@ def render(
 
     lines: List[str] = []
     for op in sorted(by_op, key=lambda o: o.name):
-        # budget_table(), not a dict literal: BudgetKey is frozen, so two identical keys
-        # in a literal are equal and Python silently keeps the later contract -- which
-        # left validate_registry() looking at an already-deduplicated table and the
-        # tie-raise in resolve_contract unable to fire. The emitter cannot currently
-        # produce a duplicate, since _collapse groups by key, but a hand-edit of generated
-        # text can, and that is the edit this whole file exists to make safe.
-        lines.append(f"    MathOperation.{op.name}: budget_table(")
+        lines.append(f"{op.name}:")
         per_input = by_op[op]
         for input_format in FORMAT_ORDER:
             if input_format not in per_input:
                 continue
             for key in _collapse(per_input[input_format], headroom, input_format):
-                lines.append(f"    {key.comment(arch, stamp, percentile, headroom)}")
-                lines.append(f"        ({key.key_source()}, {key.contract_source()}),")
-        lines.append("    ),")
+                note = key.comment(arch, stamp, percentile, headroom)
+                lines.append(f"  - {key.row_source()}  # {note}")
+        lines.append("")
     return "\n".join(lines)
 
 
@@ -1386,7 +1381,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             f"{args.near_zero_fraction:g}. Every max_ulp below omits lanes the gate will "
             "still charge against it. Re-run at the default before pasting."
         )
-    print("# Paste into _SFPU_ACCURACY_BUDGET; every number below is measured.")
+    print("# Paste into helpers/sfpu_accuracy_budget.yaml; every number is measured.")
     for note in notes:
         print(f"# note: {note}")
     skipped = render_skipped(measurements)

@@ -41,13 +41,7 @@ from helpers.llk_params import (
     FastMode,
     MathOperation,
 )
-from helpers.sfpu_accuracy_budget import (
-    DEFAULT,
-    AccuracyContract,
-    BudgetKey,
-    Metric,
-    budget_table,
-)
+from helpers.sfpu_accuracy_budget import _load_table
 from helpers.ulp import MAX_MEANINGFUL_ULP, NEAR_ZERO_FRACTION, ulp_dtype
 
 
@@ -366,7 +360,7 @@ def test_dest_acc_collapses_when_both_settings_agree():
     keys = _collapse(cells, DEFAULT_HEADROOM, DataFormat.Float32)
     assert len(keys) == 1
     assert keys[0].dest_acc is None
-    assert "dest_acc" not in keys[0].key_source()
+    assert "dest" not in keys[0].row_source()
 
 
 def test_dest_acc_stays_in_the_key_when_the_settings_disagree():
@@ -414,14 +408,13 @@ def test_neither_format_dimension_collapses_even_when_every_cell_agrees():
     keys = _collapse(cells, DEFAULT_HEADROOM, DataFormat.Float32)
     # One key per output format, not one key overall.
     assert len(keys) == 2
-    sources = [k.key_source() for k in keys]
-    assert sources == [
-        "BudgetKey(input_format=DataFormat.Float32, output_format=DataFormat.Float32)",
-        "BudgetKey(input_format=DataFormat.Float32, "
-        "output_format=DataFormat.Float16_b)",
+    sources = [k.row_source() for k in keys]
+    assert [s.split(", max_ulp")[0] + "}" for s in sources] == [
+        "{in: Float32, out: Float32}",
+        "{in: Float32, out: Float16_b}",
     ]
     for source in sources:
-        for collapsed in ("approx_mode", "dest_acc"):
+        for collapsed in ("approx:", "dest:"):
             assert collapsed not in source
     # And each key reports its own format's bits, not an arbitrary one.
     for key in keys:
@@ -441,7 +434,7 @@ def test_a_budget_past_the_ceiling_is_emitted_as_a_tolerance_contract():
     ]
     keys = _collapse(cells, DEFAULT_HEADROOM, DataFormat.Float32)
     assert all(k.budget is None for k in keys)
-    assert all("Metric.TOLERANCE" in k.contract_source() for k in keys)
+    assert all("metric: tolerance" in k.row_source() for k in keys)
 
 
 def test_an_ungateable_cell_gets_no_budget():
@@ -467,8 +460,8 @@ def test_an_emitted_contract_carries_the_floor_when_there_is_one():
     ]
     keys = _collapse(cells, DEFAULT_HEADROOM, DataFormat.Float32)
     assert len(keys) == 1
-    source = keys[0].contract_source()
-    assert "max_ulp=" in source and "near_zero_atol=" in source
+    source = keys[0].row_source()
+    assert "max_ulp:" in source and "near_zero_atol:" in source
 
 
 def test_a_cell_with_a_floor_does_not_collapse_into_one_without():
@@ -678,9 +671,9 @@ def test_render_emits_a_key_that_pins_the_input_format():
     cells, notes = measure_all(df, None, DEFAULT_PERCENTILE, NEAR_ZERO_FRACTION)
     assert notes == []
     text = render(cells, "wh", DEFAULT_HEADROOM, "2026-01-01")
-    assert "MathOperation.Tanh" in text
-    assert "input_format=DataFormat.Float32" in text
-    assert text.count("MathOperation.") == 1
+    assert text.startswith("Tanh:")
+    assert "in: Float32" in text
+    assert text.count("Tanh:") == 1
 
 
 def test_render_does_not_collapse_a_single_dest_acc_group():
@@ -690,7 +683,7 @@ def test_render_does_not_collapse_a_single_dest_acc_group():
     df = _sweep_frame(_one_cell(dest="1"))
     cells, _ = measure_all(df, None, DEFAULT_PERCENTILE, NEAR_ZERO_FRACTION)
     text = render(cells, "wh", DEFAULT_HEADROOM, "2026-01-01")
-    assert "dest_acc=DestAccumulation.Yes" in text
+    assert 'dest: "Yes"' in text
 
 
 def test_render_keeps_an_approx_pin_when_collapsing_the_output_format():
@@ -702,7 +695,7 @@ def test_render_keeps_an_approx_pin_when_collapsing_the_output_format():
         _sweep_frame(rows), None, DEFAULT_PERCENTILE, NEAR_ZERO_FRACTION
     )
     text = render(cells, "wh", DEFAULT_HEADROOM, "2026-01-01")
-    assert "approx_mode=ApproximationMode.No" in text
+    assert 'approx: "No"' in text
 
 
 def test_render_refuses_a_budget_looser_than_the_tolerance_it_replaces():
@@ -714,7 +707,7 @@ def test_render_refuses_a_budget_looser_than_the_tolerance_it_replaces():
     df = _sweep_frame(_one_cell(out_fmt="fp32", pairs=loose))
     cells, _ = measure_all(df, None, DEFAULT_PERCENTILE, NEAR_ZERO_FRACTION)
     text = render(cells, "wh", DEFAULT_HEADROOM, "2026-01-01")
-    assert "Metric.TOLERANCE" in text
+    assert "metric: tolerance" in text
     assert "stops being tighter than the tolerance it replaces" in text
 
 
@@ -722,7 +715,7 @@ def test_render_says_when_a_measured_zero_was_floored():
     df = _sweep_frame(_one_cell())
     cells, _ = measure_all(df, None, DEFAULT_PERCENTILE, NEAR_ZERO_FRACTION)
     text = render(cells, "wh", DEFAULT_HEADROOM, "2026-01-01")
-    assert "max_ulp=1" in text
+    assert "max_ulp: 1" in text
     assert "measured 0, floored to 1" in text
 
 
@@ -746,35 +739,24 @@ def test_measure_all_reports_an_unknown_op_instead_of_dropping_it():
     assert any("no MathOperation" in n for n in notes)
 
 
-def test_render_output_parses_as_python_and_rebuilds_the_contracts():
-    """The strongest cheap check on the generated text: it is pasted into a module, so it
-    has to be valid Python that evaluates back to the contracts it describes."""
+def test_the_rendered_rows_load_back_through_the_real_loader(tmp_path):
+    """The strongest cheap check on the generated text: it is pasted into the table, so
+    the loader that reads the table has to accept it and rebuild the same contracts --
+    including the duplicate-row refusal, which the emitter must never trip."""
     rows = _one_cell(out_fmt="bf16") + _one_cell(out_fmt="fp32")
     cells, _ = measure_all(
         _sweep_frame(rows), None, DEFAULT_PERCENTILE, NEAR_ZERO_FRACTION
     )
     text = render(cells, "wh", DEFAULT_HEADROOM, "2026-01-01")
-    namespace = {
-        "MathOperation": MathOperation,
-        "DataFormat": DataFormat,
-        "ApproximationMode": ApproximationMode,
-        "DestAccumulation": DestAccumulation,
-        "BudgetKey": BudgetKey,
-        "AccuracyContract": AccuracyContract,
-        "DEFAULT": DEFAULT,
-        "Metric": Metric,
-        # The emitter calls budget_table() rather than writing a dict literal, so the
-        # generated entries get the duplicate-key refusal too. Evaluating the real one
-        # here means this test would fail if the emitter ever produced a repeat.
-        "budget_table": budget_table,
-    }
-    table = eval("{" + text + "}", namespace)  # noqa: S307 - generated, not user input
+
+    path = tmp_path / "budget.yaml"
+    path.write_text(text, encoding="utf-8")
+    table = _load_table(path)
+
     assert MathOperation.Tanh in table
-    assert "budget_table(" in text, "generated tables must go through the guard"
     for key, contract in table[MathOperation.Tanh].items():
-        assert isinstance(key, BudgetKey)
-        assert isinstance(contract, AccuracyContract)
         assert key.input_format is DataFormat.Float32
+        assert contract.max_ulp is not None or contract.atol is None
 
 
 def test_a_budget_looser_than_its_formats_tolerance_is_refused_outright():
@@ -1073,9 +1055,9 @@ def test_two_input_formats_stay_split_end_to_end():
     text = render(cells, "wh", DEFAULT_HEADROOM, "2026-01-01")
     # Two keys, one per input path, even though both measure identically -- which is the
     # point: a shared key would cover input paths the sweep never measured.
-    assert text.count("input_format=DataFormat.Float32") == 1
-    assert text.count("input_format=DataFormat.Float16_b") == 1
-    assert text.count("BudgetKey(") == 2
+    assert text.count("in: Float32") == 1
+    assert text.count("in: Float16_b") == 1
+    assert text.count("  - {") == 2
 
 
 def test_a_ceiling_refusal_reports_the_lane_set_the_ceiling_compared():
