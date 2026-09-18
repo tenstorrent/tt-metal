@@ -1277,7 +1277,7 @@ TEST_F(DispatchContextFixture, WriteOnlySessionLeavesPrefetchRingbufferBandIntac
     }
 }
 
-// WHAT: open a single chip as a "unit mesh" (what ttnn.CreateDevice does) and start a session from it,
+// WHAT: open a single chip as a "unit mesh" (what the Python CreateDevice path does) and start a session from it,
 //       with nothing planted.
 // WHY:  regression. An earlier version of the guard threw "SubDeviceManagerTracker is not initialized"
 //       here and broke three upstream ServiceCore tests. The parent mesh that create_unit_meshes builds
