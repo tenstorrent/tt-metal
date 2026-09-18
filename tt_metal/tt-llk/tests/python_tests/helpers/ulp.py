@@ -3,7 +3,9 @@
 
 """Integer ULP distance: the metric an SFPU accuracy assertion can be written against.
 
-Host-only — no device, no kernel, no ``ttnn``.
+Host-only — no device, no kernel, no ``ttnn``. ``passed_test(max_ulp=...)`` in
+``utils.py`` is the gate built on this, and the per-op budget registry sits on that; each
+layer stays separable so each is pinned by its own host tests.
 
 Integer rather than the fractional ``|err| / ulp(golden)`` ``accuracy_metrics`` reports:
 ``ulp(golden)`` differs either side of a power of two, so a fractional "1 ULP" budget
@@ -38,14 +40,50 @@ from .format_config import DataFormat
 from .llk_params import format_dict
 from .logger import logger
 
-# The block floats are absent on purpose: their spacing comes from an exponent shared
-# across 16 elements, so a per-element count is not a property of the element. They keep
-# the block-aware lattice compares in utils.py; integers want bit equality.
+#: The formats with a *native* per-element ULP. Ask :func:`has_ulp_gate` rather than
+#: testing membership here -- this is only the native half, and misses the proxy table
+#: below. The coarser block floats and the MX formats share a block exponent across 16
+#: elements, so a per-element count is not a property of the element and they keep the
+#: block-aware lattice compares in utils.py; integers want bit equality.
 ULP_FORMATS: Tuple[DataFormat, ...] = (
     DataFormat.Float16_b,
     DataFormat.Float16,
     DataFormat.Float32,
 )
+
+# Formats with no float dtype of their own that are still gated in a *proxy* format's ULP
+# space -- ttnn's choice, and free here because `passed_test` has already cast a Bfp8_b
+# tensor to bfloat16 before comparing. Three things to know before enrolling a budget on
+# one:
+#
+# * **A Bfp8_b budget is denominated in bf16 steps, and one Bfp8_b step is two of them.**
+#   Bfp8_b's 7 magnitude bits include an explicit leading 1, so it has 6 fractional bits
+#   against bfloat16's 7. `max_ulp=N` therefore buys N/2 Bfp8_b steps, and an odd budget
+#   buys the same as the even one below it.
+# * **It does not forgive block quantization.** A small element in a wide block is
+#   quantized by the shared exponent far more coarsely than bf16 would quantize it --
+#   measured, a lane at 0.06 in a block with amax 2.77 is 69 bf16 steps -- and the budget
+#   charges all of it. `near_zero_atol` cannot absorb that either: its band is a fraction
+#   of the *tensor* maximum, and such a lane is only small relative to its own block. So a
+#   Bfp8_b budget is usable only where the block quantization is exact; elsewhere the op
+#   belongs on the tolerance arm. Charging for it is deliberate -- ORing the lattice
+#   verdict in would mean `max_ulp` was not the enforced maximum for this format.
+# * **The flush models disagree, latent until an op carries a Bfp8_b budget.** bf16 proxy
+#   space collapses below 2**-126 while a Bfp8_b golden is flushed at
+#   `golden_generators._FTZ_THRESHOLD`'s 1e-37 and the unpack model does not flush at all,
+#   so a lane in [1.18e-38, 1e-37) would be charged steps against a golden the harness
+#   calls zero. No current stimulus domain reaches it.
+#
+# Bfp4_b (2 fractional bits) and Bfp2_b (0) are deliberately absent: a bf16 step count
+# would read every legal quantization as a 32- or 128-step error.
+_ULP_PROXY_DTYPES: Dict[DataFormat, torch.dtype] = {
+    DataFormat.Bfp8_b: torch.bfloat16,
+}
+
+#: Lanes whose golden is below this fraction of the tensor's dynamic range are the ones a
+#: ``near_zero_atol`` floor may rescue. ttnn's ``measure_ulp_with_near_zero_atol`` uses the
+#: same 1%: scale-relative and deliberately not tuned per op.
+NEAR_ZERO_FRACTION = 1e-2
 
 #: Returned for any lane where either side is NaN. Never compare it against a budget
 #: directly -- ``-1 <= max_ulp`` holds for every budget. Use :func:`within_ulp`.
@@ -104,6 +142,12 @@ MAX_MEANINGFUL_ULP: Dict[torch.dtype, int] = {
     dtype: 1 << spec.mantissa_bits for dtype, spec in _ULP_DTYPES.items()
 }
 
+#: Mantissa width per measurement dtype, published so a caller can convert between a step
+#: count and a relative error without re-deriving the table.
+MANTISSA_BITS_FOR_ULP: Dict[torch.dtype, int] = {
+    dtype: spec.mantissa_bits for dtype, spec in _ULP_DTYPES.items()
+}
+
 # Below these counts a quantile is not a percentile, so p95/p99 fall back to the max.
 _MIN_LANES_FOR_P95 = 20
 _MIN_LANES_FOR_P99 = 100
@@ -124,12 +168,29 @@ def ulp_dtype(fmt: DataFormat) -> torch.dtype:
     no per-element ULP, so a caller asking for a gate it cannot have finds out here."""
     if fmt in ULP_FORMATS:
         return format_dict[fmt]
+    if fmt in _ULP_PROXY_DTYPES:
+        return _ULP_PROXY_DTYPES[fmt]
     raise ValueError(
         f"{fmt.name} has no per-element ULP. ULP is defined for "
-        f"{', '.join(f.name for f in ULP_FORMATS)}; the block floats (Bfp*, Mx*) share a "
-        "block exponent and keep their lattice compare in utils.py, and the integer "
-        "formats want bit equality."
+        f"{', '.join(f.name for f in ULP_FORMATS)}, and for "
+        f"{', '.join(f.name for f in _ULP_PROXY_DTYPES)} in a proxy format's space; the "
+        "coarser block floats and the MX formats share a block exponent and keep their "
+        "lattice compare in utils.py, and the integer formats want bit equality."
     )
+
+
+def has_ulp_gate(fmt: DataFormat) -> bool:
+    """Whether *fmt* can be gated on a per-element step count at all.
+
+    What :func:`ulp_dtype` answers by raising, for callers that fall back rather than
+    fail -- and the question to ask instead of testing :data:`ULP_FORMATS` membership,
+    which misses the proxy formats.
+    """
+    try:
+        ulp_dtype(fmt)
+    except ValueError:
+        return False
+    return True
 
 
 def flushes_subnormals(dtype: torch.dtype) -> bool:
@@ -219,6 +280,80 @@ def nonfinite_mismatches(golden: torch.Tensor, result: torch.Tensor) -> torch.Te
         | (golden_inf ^ result_inf)
         | (golden_inf & result_inf & sign_differs)
     )
+
+
+def ulp_elementwise_valid(
+    golden: torch.Tensor,
+    result: torch.Tensor,
+    max_ulp: int,
+    *,
+    near_zero_atol: Optional[float] = None,
+    near_zero_fraction: float = NEAR_ZERO_FRACTION,
+    flush_subnormals: Optional[bool] = None,
+    selected: Optional[torch.Tensor] = None,
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Per-element ULP verdict, shaped like the mask ``passed_test`` already prints.
+
+    A lane is valid when the two sides agree about being non-finite **and** either they
+    are within *max_ulp* steps of each other, or the lane is near zero and its absolute
+    error is within *near_zero_atol*. Both-NaN lanes are valid.
+
+    "Near zero" is bounded two ways, and a lane has to satisfy both:
+
+    * ``|golden| < near_zero_fraction * max|finite golden|``, so the band follows the
+      stimulus;
+    * ``|golden| <= near_zero_atol / near_zero_fraction``, so one large golden cannot
+      widen the band across the tile. The relative bound alone is unbounded in absolute
+      terms -- over a golden spanning [0, 1000] the cut lands at 10.0, and a lane at 1.0
+      is rescued 7 steps over a 1-step budget. Tightening the atol does not close it: the
+      step count it admits grows as ``1/|golden|``. The absolute cut is the magnitude at
+      which the forgiven error is exactly ``near_zero_fraction`` of the reference.
+
+    The floor is deliberately not applied at every magnitude -- an absolute tolerance at
+    large magnitude is the format- and magnitude-blind gate a step count replaces. It is
+    for the lanes where the reference crosses zero (``log`` near 1, ``sin`` near pi),
+    where ``ulp(golden)`` collapses and any absolute error explodes into a step count
+    that says nothing about the kernel.
+
+    Returns ``(is_valid, distance, rescued)``. A reporting caller has to exclude
+    *rescued*: those lanes hold the largest step counts by construction, so ranking every
+    lane names one that passed and never mentions the one that failed.
+    """
+    distance = ulp_distance(golden, result, flush_subnormals=flush_subnormals)
+    both_nan = torch.isnan(golden) & torch.isnan(result)
+    in_budget = (distance >= 0) & (distance <= max_ulp)
+    valid = in_budget | both_nan
+    rescued = torch.zeros_like(valid)
+
+    if near_zero_atol is not None:
+        absolute_cut = near_zero_atol / near_zero_fraction
+        # In float32, like the error compare below: both cuts are Python floats, so a
+        # 16-bit `golden.abs()` would promote them onto the tensor's own lattice and round
+        # each edge -- narrowing the relative `<` one and widening the absolute `<=` one.
+        magnitude = golden.abs().to(torch.float32)
+        # Scoped to the lanes under judgement: `dynamic_range` is the only verdict input
+        # that is not elementwise, so an unscoped max let a large golden in a lane the
+        # caller masked *out* widen the band applied to the lanes it masked *in*.
+        in_scope = torch.isfinite(golden)
+        if selected is not None:
+            in_scope = in_scope & selected
+        finite_golden = magnitude[in_scope]
+        if finite_golden.numel() == 0:
+            near_zero = torch.zeros_like(valid)
+        else:
+            dynamic_range = float(finite_golden.max())
+            near_zero = (
+                torch.ones_like(valid)
+                if dynamic_range == 0.0
+                else magnitude < near_zero_fraction * dynamic_range
+            )
+            near_zero = near_zero & (magnitude <= absolute_cut)
+        absolute_error = (result.to(torch.float32) - golden.to(torch.float32)).abs()
+        rescued = near_zero & (absolute_error <= near_zero_atol) & ~in_budget
+        valid = valid | rescued
+
+    ok = valid & ~nonfinite_mismatches(golden, result)
+    return ok, distance, rescued & ok
 
 
 def ulp_stats(
@@ -338,6 +473,66 @@ def local_step(
     return float((upward - scalar).to(torch.float32))
 
 
+def nonfinite_disagreement_summary(
+    golden: torch.Tensor,
+    result: torch.Tensor,
+    fmt: Optional[DataFormat] = None,
+    *,
+    mask: Optional[torch.Tensor] = None,
+) -> Optional[str]:
+    """The first lane where the two sides disagree about being non-finite, or ``None``.
+
+    The step count cannot describe this failure: a NaN lane is :data:`UNMEASURABLE` and
+    drops out of the statistics, so a verdict that failed only on a missing NaN reports
+    "max 0 ULP (budget 0)" -- true, and useless.
+    """
+    mismatched = nonfinite_mismatches(golden, result)
+    if mask is not None:
+        mismatched = mismatched & mask
+    if not bool(mismatched.any()):
+        return None
+    index = int(torch.nonzero(mismatched.reshape(-1), as_tuple=False)[0])
+    label = fmt.name if fmt is not None else str(golden.dtype)
+    return (
+        f"non-finite disagreement @ [{index}]: result "
+        f"{float(result.reshape(-1)[index])!r} vs golden "
+        f"{float(golden.reshape(-1)[index])!r} ({label}); "
+        f"{int(mismatched.sum())} such lane(s)"
+    )
+
+
+def ulp_verdict_message(
+    golden: torch.Tensor,
+    result: torch.Tensor,
+    distance: torch.Tensor,
+    fmt: Optional[DataFormat] = None,
+    *,
+    mask: Optional[torch.Tensor] = None,
+    max_ulp: Optional[int] = None,
+    stats: Optional[Dict[str, Any]] = None,
+    flush_subnormals: Optional[bool] = None,
+    rescued: Optional[torch.Tensor] = None,
+) -> str:
+    """What a gate logs: the non-finite disagreement first, then the steps.
+
+    One builder for both callers, so the gate and :func:`within_ulp` cannot describe the
+    same verdict differently.
+    """
+    steps = ulp_failure_message(
+        golden,
+        result,
+        distance,
+        fmt,
+        mask=mask,
+        max_ulp=max_ulp,
+        stats=stats,
+        flush_subnormals=flush_subnormals,
+        rescued=rescued,
+    )
+    disagreement = nonfinite_disagreement_summary(golden, result, fmt, mask=mask)
+    return steps if disagreement is None else f"{disagreement}\n  {steps}"
+
+
 def ulp_failure_message(
     golden: torch.Tensor,
     result: torch.Tensor,
@@ -348,18 +543,32 @@ def ulp_failure_message(
     max_ulp: Optional[int] = None,
     stats: Optional[Dict[str, Any]] = None,
     flush_subnormals: Optional[bool] = None,
+    rescued: Optional[torch.Tensor] = None,
 ) -> str:
     """One actionable line for the worst lane, plus the distribution behind it.
 
     *stats* lets a caller that already has them skip a second pass, and supplying it
     *asserts they came from the same* ``mask``. *flush_subnormals* carries the same
     obligation against *distance*, which fixed the count printed beside the step size.
+    *rescued* is the lane mask the near-zero floor accepted, which a ranking caller has
+    already excluded from *mask*; reporting it is what lets a DEBUG export tell a
+    budget-carried pass from a floor-carried one.
     """
     if stats is None:
         stats = ulp_stats(distance, mask)
     label = fmt.name if fmt is not None else str(golden.dtype)
+    floor = "" if rescued is None else f", {int(rescued.sum())} held by the floor"
     if stats["worst_index"] is None:
-        return f"no measurable lane ({stats['unmeasurable']} unmeasurable, {label})"
+        if stats["unmeasurable"] == 0:
+            # Not "nothing was comparable": every lane was measurable and the mask took
+            # them all out, which is what a floor that rescued the whole tile looks like.
+            return (
+                f"no lane under judgement (the mask selected none of "
+                f"{distance.numel()} lanes{floor}, {label})"
+            )
+        return (
+            f"no measurable lane ({stats['unmeasurable']} unmeasurable{floor}, {label})"
+        )
 
     index = stats["worst_index"]
     golden_value = float(golden.reshape(-1)[index])
@@ -376,7 +585,7 @@ def ulp_failure_message(
         f"{golden_value!r} (1 ULP = {step:.6e}, {label})\n"
         f"  over {stats['lanes']} lanes: mean {stats['mean']:.3f}, p95 {stats['p95']:.1f}, "
         f"p99 {stats['p99']:.1f}, {100.0 * stats['exact_frac']:.1f}% exact, "
-        f"{stats['unmeasurable']} unmeasurable"
+        f"{stats['unmeasurable']} unmeasurable{floor}"
     )
 
 
@@ -403,12 +612,18 @@ def within_ulp(
     fmt: Optional[DataFormat] = None,
     flush_subnormals: Optional[bool] = None,
     mask: Optional[torch.Tensor] = None,
+    near_zero_atol: Optional[float] = None,
+    near_zero_fraction: float = NEAR_ZERO_FRACTION,
 ) -> Tuple[bool, str]:
     """The whole verdict: non-finite positions agree, and every finite lane is in budget.
 
-    What a ``passed_test(max_ulp=...)`` gate calls, so the :data:`UNMEASURABLE` sentinel is
-    never compared against a budget by hand. *max_ulp* is keyword-only because it is the
-    one real magic number in the signature; *mask* selects the lanes under judgement.
+    The scalar form of the gate's verdict, for callers outside ``passed_test``. It routes
+    through the same :func:`ulp_elementwise_valid` and forwards every knob that changes
+    that verdict, so the two cannot drift into disagreeing about one tensor -- a
+    passthrough rather than a shorter signature on purpose, since without
+    *near_zero_atol* there are gate verdicts this could not reproduce at any argument.
+    *max_ulp* is keyword-only because it is the one real magic number in the signature;
+    *mask* selects the lanes under judgement.
 
     **Omitting** *fmt* skips the format allowlist as well as the label, and asserts the
     caller has already put the tensors on the lattice they mean: ``format_dict`` collapses
@@ -440,29 +655,29 @@ def within_ulp(
             f"{tuple(golden.shape)}"
         )
     selected = torch.ones_like(golden, dtype=torch.bool) if mask is None else mask
-    # Positional agreement first, and no budget buys past it: finite against `Inf` is one
-    # step apart in the value order, but it is an overflow, not an inexact answer. The only
-    # `Inf` lane reaching the distance is same-sign, which is 0.
-    mismatched = nonfinite_mismatches(golden, result) & selected
-    if bool(mismatched.any()):
-        index = int(torch.nonzero(mismatched.reshape(-1), as_tuple=False)[0])
-        label = fmt.name if fmt is not None else str(golden.dtype)
-        return False, (
-            f"non-finite disagreement @ [{index}]: result "
-            f"{float(result.reshape(-1)[index])!r} vs golden "
-            f"{float(golden.reshape(-1)[index])!r} ({label})"
-        )
-
-    distance = ulp_distance(golden, result, flush_subnormals=flush_subnormals)
-    stats = ulp_stats(distance, selected)
-    ok = stats["worst_index"] is None or stats["max"] <= max_ulp
-    return ok, ulp_failure_message(
+    is_valid, distance, rescued = ulp_elementwise_valid(
+        golden,
+        result,
+        max_ulp,
+        near_zero_atol=near_zero_atol,
+        near_zero_fraction=near_zero_fraction,
+        flush_subnormals=flush_subnormals,
+        selected=selected,
+    )
+    # Rank only the lanes under judgement, less any the floor accepted -- those hold the
+    # biggest step counts by construction.
+    ranked = selected & ~rescued
+    message = ulp_verdict_message(
         golden,
         result,
         distance,
         fmt,
-        mask=selected,
+        mask=ranked,
         max_ulp=max_ulp,
-        stats=stats,
+        stats=ulp_stats(distance, ranked),
         flush_subnormals=flush_subnormals,
+        # Only with a floor configured: otherwise every verdict in the suite would grow a
+        # "0 held by the floor" that says nothing.
+        rescued=None if near_zero_atol is None else rescued & selected,
     )
+    return bool(torch.all(is_valid | ~selected)), message

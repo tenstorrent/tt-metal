@@ -6,24 +6,36 @@ import numpy as np
 import torch
 
 from .format_config import DataFormat
-from .llk_params import format_dict
-from .ulp import ULP_FORMATS
-
-# Formats with a defined torch floating dtype usable for true local ULP. Owned by
-# helpers.ulp, which gates the integer ULP metric on the same set.
-_ULP_FORMATS = ULP_FORMATS
+from .ulp import has_ulp_gate, ulp_dtype
 
 
 def local_ulp(golden: np.ndarray, out_fmt: DataFormat) -> np.ndarray:
     """Gap from each golden value to the next representable number in *out_fmt*."""
     golden = np.asarray(golden, dtype=np.float64)
-    if out_fmt not in _ULP_FORMATS:
+    # Asked through helpers.ulp, so the proxy formats it gates are measured here too; a
+    # private copy of the native set left the sweep writing NaN for exactly the format
+    # the gate can judge. For Bfp8_b the step returned is a *bfloat16* one -- at least
+    # twice the Bfp8_b step, and far more where a shared block exponent coarsens a small
+    # element -- so the `signed_ulp_error` column reads in bf16 steps for that format.
+    if not has_ulp_gate(out_fmt):
         return np.full(golden.shape, np.nan, dtype=np.float64)
 
-    torch_dtype = format_dict[out_fmt]
+    torch_dtype = ulp_dtype(out_fmt)
     abs_g = torch.tensor(np.abs(golden), dtype=torch_dtype)
     nxt = torch.nextafter(abs_g, torch.tensor(float("inf"), dtype=torch_dtype))
-    return (nxt - abs_g).to(torch.float32).numpy().astype(np.float64)
+    step = (nxt - abs_g).to(torch.float32).numpy().astype(np.float64)
+    # The same finfo.max fixup local_step carries: nextafter from the largest finite goes
+    # to Inf, and the binade downward is the same size. Taken from the converted tensor
+    # rather than the float64 input, because a golden that *rounds* to the format maximum
+    # is at the top of the range too -- an fp16 65503 rounds to 65504, which a float64
+    # compare misses, leaving the gap at infinity.
+    largest = float(torch.finfo(torch_dtype).max)
+    at_max = (abs_g == largest).numpy()
+    if at_max.any():
+        top = torch.tensor(largest, dtype=torch_dtype)
+        below = torch.nextafter(top, torch.tensor(0.0, dtype=torch_dtype))
+        step = np.where(at_max, float((top - below).to(torch.float32)), step)
+    return step
 
 
 def compute_pointwise_metrics(
