@@ -144,6 +144,7 @@ void kernel_main() {
     uint32_t is_sink = 0;
     uint32_t chain_batch = 0;
     uint32_t chain_head = 0;
+    uint32_t chain_heads_per_group = 1;
     uint32_t prev_physical_x = 0;
     uint32_t prev_physical_y = 0;
     uint32_t next_physical_x = 0;
@@ -175,6 +176,7 @@ void kernel_main() {
         prev_seg_global_start = get_arg_val<uint32_t>(argidx++);
         prev_seg_count = get_arg_val<uint32_t>(argidx++);
         next_seg_global_start = get_arg_val<uint32_t>(argidx++);
+        chain_heads_per_group = get_arg_val<uint32_t>(argidx++);
 
         if (is_chain_participant) {
             Semaphore<>(valid_semaphore_id).set(VALID);
@@ -344,6 +346,7 @@ void kernel_main() {
         uint32_t prev_nb = static_cast<uint32_t>(-1);
         uint32_t prev_nq = static_cast<uint32_t>(-1);
         uint32_t per_head_q_iter = 0;
+        uint32_t segment_index = 0;
         uint32_t mask_batch_offset = 0;
         for (uint32_t global_q_iter = 0; global_q_iter < global_q_count; ++global_q_iter) {
             const auto decoded =
@@ -368,6 +371,9 @@ void kernel_main() {
             }
             if (decoded.nb != prev_nb || decoded.nq != prev_nq) {
                 per_head_q_iter = 0;
+                if (prev_nq != static_cast<uint32_t>(-1)) {
+                    ++segment_index;
+                }
                 prev_nb = decoded.nb;
                 prev_nq = decoded.nq;
             }
@@ -479,7 +485,11 @@ void kernel_main() {
             // previous one. Non causal chains carry every chunk.
             uint32_t fwd_chunks = 0;
             uint32_t recv_chunks = 0;
-            const bool in_chain_head = is_chain_participant && (nb == chain_batch && nq == chain_head);
+            // Causal chains are built from each core's first segment only; a later segment of the same KV
+            // group has no partner and must not take part.
+            const bool in_chain_head = is_chain_participant && (nb == chain_batch) &&
+                                       (nq / chain_heads_per_group == chain_head) &&
+                                       (!causal_chain || segment_index == 0);
             if constexpr (!is_causal) {
                 if (in_chain_head && !is_sink && q_iter < next_core_q_chunks) {
                     fwd_chunks = k_num_chunks;
