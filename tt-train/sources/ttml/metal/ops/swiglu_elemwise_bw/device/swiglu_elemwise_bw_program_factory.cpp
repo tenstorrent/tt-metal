@@ -47,52 +47,6 @@ struct SwigluElemwiseBwKernels {
     tt::tt_metal::KernelHandle compute_group_2{};
 };
 
-void assign_per_core_runtime_args(
-    tt::tt_metal::Program& program,
-    const SwigluElemwiseBwKernels& kernels,
-    const tt::tt_metal::Buffer* linear1_buffer,
-    const tt::tt_metal::Buffer* gate_buffer,
-    const tt::tt_metal::Buffer* dL_dprod_buffer,
-    const tt::tt_metal::Buffer* dL_dlinear1_buffer,
-    const tt::tt_metal::Buffer* dL_dgate_buffer,
-    uint32_t num_cores,
-    uint32_t num_cores_y,
-    uint32_t num_rows_per_core_group_1,
-    uint32_t num_rows_per_core_group_2,
-    const tt::tt_metal::CoreRangeSet& core_group_1,
-    const tt::tt_metal::CoreRangeSet& core_group_2) {
-    for (uint32_t i = 0, num_rows_written = 0; i < num_cores; i++) {
-        const tt::tt_metal::CoreCoord core = {i / num_cores_y, i % num_cores_y};
-
-        uint32_t num_rows_per_core = 0;
-        if (core_group_1.contains(core)) {
-            num_rows_per_core = num_rows_per_core_group_1;
-        } else if (core_group_2.contains(core)) {
-            num_rows_per_core = num_rows_per_core_group_2;
-        } else {
-            TT_FATAL(false, "Core not in specified core ranges");
-        }
-
-        SetRuntimeArgs(
-            program,
-            kernels.reader,
-            core,
-            {linear1_buffer->address(),
-             gate_buffer->address(),
-             dL_dprod_buffer->address(),
-             num_rows_per_core,
-             num_rows_written});
-
-        SetRuntimeArgs(
-            program,
-            kernels.writer,
-            core,
-            {dL_dlinear1_buffer->address(), dL_dgate_buffer->address(), num_rows_per_core, num_rows_written});
-
-        num_rows_written += num_rows_per_core;
-    }
-}
-
 SwigluElemwiseBwProgramFactory::cached_program_t SwigluElemwiseBwProgramFactory::create(
     const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output) {
     const auto& linear1 = tensor_args.linear1;
@@ -158,20 +112,20 @@ SwigluElemwiseBwProgramFactory::cached_program_t SwigluElemwiseBwProgramFactory:
             create_compute_kernel(program, core_group_2, compute_g2_args, {}, kComputeKernelPath, true);
     }
 
-    assign_per_core_runtime_args(
-        program,
-        kernels,
-        linear1_buf,
-        gate_buf,
-        dL_dprod_buf,
-        dL_dlinear1_buf,
-        dL_dgate_buf,
-        num_cores,
-        num_cores_y,
-        num_rows_g1,
-        num_rows_g2,
-        core_group_1,
-        core_group_2);
+    for_each_core_with_work(
+        num_cores, num_cores_y, core_group_1, core_group_2, num_rows_g1, num_rows_g2, [&](const CoreWork& work) {
+            const auto& [core, core_index, num_rows, start_row, in_group_1] = work;
+            SetRuntimeArgs(
+                program,
+                kernels.reader,
+                core,
+                {linear1_buf->address(), gate_buf->address(), dL_dprod_buf->address(), num_rows, start_row});
+            SetRuntimeArgs(
+                program,
+                kernels.writer,
+                core,
+                {dL_dlinear1_buf->address(), dL_dgate_buf->address(), num_rows, start_row});
+        });
 
     return cached_program_t{
         std::move(program),
@@ -196,9 +150,7 @@ void SwigluElemwiseBwProgramFactory::override_runtime_arguments(
     auto& reader_rt = GetRuntimeArgs(program, sv.reader_kernel_id);
     auto& writer_rt = GetRuntimeArgs(program, sv.writer_kernel_id);
 
-    for (uint32_t i = 0; i < sv.num_cores; i++) {
-        const tt::tt_metal::CoreCoord core = {i / sv.num_cores_y, i % sv.num_cores_y};
-
+    for_each_core(sv.num_cores, sv.num_cores_y, [&](const tt::tt_metal::CoreCoord& core) {
         {
             auto& args = reader_rt[core.x][core.y];
             args[kLinear1BufferIdx] = tensor_args.linear1.buffer()->address();
@@ -210,7 +162,7 @@ void SwigluElemwiseBwProgramFactory::override_runtime_arguments(
             args[kDLLinear1BufferIdx] = output.dL_dlinear1.buffer()->address();
             args[kDLGateBufferIdx] = output.dL_dgate.buffer()->address();
         }
-    }
+    });
 }
 
 }  // namespace ttml::metal::ops::swiglu_elemwise_bw::device
