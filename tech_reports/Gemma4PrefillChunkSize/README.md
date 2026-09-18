@@ -28,8 +28,20 @@ with how much context precedes each chunk:
 | 2048 | 128 | 131.3 ms | 16.81 s (**2.16x**) | 11.85 s (**1.99x**) | **28.66 s (2.09x)** |
 | 4096 | 64 | 174.2 ms | 11.15 s (1.44x) | 6.04 s (**1.02x**) | 17.19 s (1.25x) |
 | 8192 | 32 | 242.7 ms | 7.77 s | 5.95 s | 13.71 s |
-| 16384 | 16 | 443.7 ms | 7.10 s | 4.45 s | 11.55 s |
-| 32768 | 8 | 928.2 ms | 7.43 s | 3.53 s | 10.96 s |
+| 16384 | 16 | 436.2 ms | 6.98 s | 4.84 s | 11.82 s * |
+| 32768 | 8 | 917.9 ms | 7.34 s | 3.94 s | 11.28 s * |
+
+> **\* The 16384 and 32768 rows were re-measured on 2026-09-18** and this table now carries
+> the new values. The originally published slopes were **low by ~9–10%**: 37.10 → **40.33** at
+> 16384 and 126.2 → **140.69** at 32768. That is a bad original fit, **not a regression** —
+> refitting the surviving 2026-09-09 logs from the pre-halo branch `d3064a5fd6b` gives 40.91
+> and 139.7, so two independent builds agree to 1.4% and 0.7% with the new numbers while the
+> published ones are the outliers. The large-chunk slopes had been fitted from too few points
+> (at chunk 32768 a `ctx_32k` run has N=1, from which no slope can be fitted at all). Both
+> fresh runs are 8–16 points at ctx 256k with R² ≥ 0.9996. The chunk **2048 / 4096 / 8192**
+> rows reproduce to **0.03%** and the 2.09x / 2.16x / 1.99x conclusions are unaffected; the
+> best-throughput ranking is also unchanged (32768 fastest, then 16384). Found when the
+> `prefill-perf-debug` skill refused to validate the 32768 row against any surviving log.
 
 ### Effect 1 — a fixed ~94 ms cost per chunk, paid 4x more often (2.16x)
 
@@ -44,9 +56,12 @@ the per-op shares measured in [`PER_OP_TABLES.md`](PER_OP_TABLES.md):
 | sliding-window SDPA halo | ~13 ms | the halo is a constant 1024 tokens regardless of chunk size |
 | heads / rope / tilize / TP collectives | ~16 ms | TP collectives are only **4%** of the floor — they scale properly |
 
-**~84% of the floor is the 50 sliding layers** — not because each is expensive, but because there
-are 50 of them. Their cost is chassis (weight reads, norms), not attention. (Confirmed per-op
-independently at **83%** — see [`PER_OP_TABLES.md`](PER_OP_TABLES.md).)
+**83–85% of the floor is the 50 sliding layers** — not because each is expensive, but because
+there are 50 of them. Their cost is chassis (weight reads, norms), not attention. Three
+independent estimators give **82.8% / 84.8% / 85.0%**, and that agreement is the evidence —
+see [`PER_OP_TABLES.md`](PER_OP_TABLES.md). (The **absolute** floor is far less
+estimator-stable than its split: the same three give 79–113 ms, which is why the whole-model
+affine fit below is the figure to quote.)
 
 > **On the number itself.** An earlier revision quoted this floor as **70.4 ms**. That is the
 > *excess over ideal token scaling* at chunk 2048, which is algebraically three quarters of the
@@ -74,8 +89,11 @@ shipping `q_chunk_size=64`:
 | 32768 | 512 | 5 | 93% |
 
 Chunk 2048 leaves **71% of the grid idle** *and* pays 4x as many prefix steps. A zero-parameter
-model (`cost ∝ rounds/C`, where rounds is integer division) predicts all five measured prefix
-terms within 5%.
+model (`cost ∝ rounds/C`, where rounds is integer division) predicts the prefix term within
+**3%** across chunk 2048 / 4096 / 8192 — the range this investigation is about. It degrades
+outside that range: **−10.8%** at 16384 and **−14.8%** at 32768 (see the re-measurement note
+below). So the mechanism is established where it was tested, and the model should not be
+extrapolated to large chunks.
 
 ### The one number worth acting on
 

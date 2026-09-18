@@ -123,9 +123,25 @@ TOTAL                                           2430.3     3241.9     4362.3    
 
 Fitting `cost = F + k*tokens` per op over the three chunk sizes gives a fixed part of
 **1.94 ms** per global layer and **1.87 ms** per local layer; 10x + 50x = **112.9 ms**, of
-which the **50 local layers are 83%**. Removing the staging ops that only the isolated-layer
-harness pays (`Slice`, `Embeddings`, part of `GatherCodegen`) gives ~105 ms, against
-**94 ms** from the whole-model fit -- agreement to ~11% across two unrelated methods.
+which the **50 local layers are 82.8%**.
+
+> **Correction (2026-09-18): that 1.94 ms carries a clamp, and the absolute total is
+> estimator-dependent.** The fit clamps each op's intercept at zero (`max(0.0, F)` in
+> `cmp_ops.py`). It fires on exactly **one** op -- the global layer's `RingJointSDPA`, whose
+> least-squares intercept is **-290.4 us** -- and inflates the global per-layer fixed cost
+> from 1651 to 1942 us (**+17.6%**). The negative intercept is not noise: at chunk index 0
+> that op's cost is roughly **quadratic** in the chunk (causal self-attention over the chunk
+> itself, ~C^2/CP), so an affine-in-C model is misspecified for it and the clamp hides that
+> rather than fixing it. Unclamped, the global layer's fixed cost is 1.65 ms and the local
+> share rises to **85.0%**.
+>
+> Three defensible estimators of the **floor share** give **82.8% / 84.8% / 85.0%** -- the
+> share is robust, and its robustness is the actual evidence. The same three estimators give
+> **112.9 / 79.0 / 110 ms** for the **absolute** floor, a 43% spread, so they do *not* agree
+> there and should not be quoted as if they do. **Prefer the whole-model affine fit (94.2 ms)
+> for the absolute figure**: it is anchored on end-to-end per-chunk device times, whereas
+> every per-op sum inherits the isolated-layer harness's missing inter-layer overlap and its
+> staging ops. Found by the `prefill-perf-debug` skill's validation pass.
 
 ## 2. Prior context 49152 tokens -- the prefix cost, active
 

@@ -76,8 +76,10 @@ coefficients, and `T(ISL,C) = N·a + slope·N(N−1)/2` (validated against indep
 | 2048 | 4 | 128 | 131.3 ms | 1.458 | 16.81 s | 11.85 s | 28.66 s |
 | 4096 | 2 | 64 | 174.2 ms | 2.995 | 11.15 s | 6.04 s | 17.19 s |
 | 8192 | 1 | 32 | 242.7 ms | 11.990 | 7.77 s | 5.95 s | 13.71 s |
-| 16384 | 1 | 16 | 443.7 ms | 37.100 | 7.10 s | 4.45 s | 11.55 s |
-| 32768 | 1 | 8 | 928.2 ms | 126.2 | 7.43 s | 3.53 s | 10.96 s |
+| 16384 | 1 | 16 | 436.2 ms | 40.33 | 6.98 s | 4.84 s | 11.82 s * |
+| 32768 | 1 | 8 | 917.9 ms | 140.69 | 7.34 s | 3.94 s | 11.28 s * |
+
+\* Re-measured 2026-09-18; the originally published slopes (37.100 / 126.2) were low by ~9-10%. Bad original fits, not a regression -- two builds agree on the new values. See the README footnote and the addendum below.
 
 Ratios to chunk 8192:
 
@@ -741,3 +743,63 @@ tokens. Three things there supersede or sharpen this document:
 3. **The occupancy model passed a pre-registered discriminating test.** At matched prior
    context, chunk 2048 does 0.25x the prefix work and takes 0.443x the time, against 0.50x
    predicted from work-unit depth and 0.25x for an efficiency-neutral op.
+
+---
+
+## Addendum (2026-09-18) — two corrections found by validating the skill
+
+Both were found by the `prefill-perf-debug` skill's validation pass, which re-derives this
+document's numbers from the raw captures rather than from its tables. Neither touches the
+2048-vs-8192 answer.
+
+### 1. The 16384 and 32768 slopes were low by ~9–10%
+
+| chunk | published | refit from 2026-09-09 logs (`d3064a5fd6b`, pre-halo) | measured 2026-09-18 (current build) |
+|---:|---:|---:|---:|
+| 16384 | 37.100 | 40.91 | **40.33** |
+| 32768 | 126.2 | 139.7 | **140.69** |
+
+The two builds agree to **1.4%** and **0.7%**; the published values are the outliers, so this
+is a **bad original fit, not a regression**. Consistent with the per-op regression check at
+chunk 8192, which found every op within 2% across the same two branches.
+
+Root cause: the large-chunk slopes had been fitted from too few points. At chunk 32768 a
+`ctx_32k` run has **N=1**, from which no slope can be fitted at all, and `ctx_64k` gives N=2.
+The fresh runs are N=8 and N=16 at ctx 256k, R² ≥ 0.9996, max residual 11.7 ms.
+
+Consequences: totals at 256k become **11.82 s** (16384) and **11.28 s** (32768). The
+throughput ranking is unchanged. The chunk 2048 / 4096 / 8192 rows reproduce to **0.03%**, so
+2.09x = 2.16x × 1.99x stands.
+
+**The occupancy model's range is now honest.** `cost ∝ rounds/C`, calibrated at chunk 8192,
+predicts the prefix term to **+2.8% / +0.1% / 0.0%** at 2048 / 4096 / 8192 but **−10.8%** at
+16384 and **−14.8%** at 32768. The earlier "all five within 5%" was an artifact of the two
+bad slopes. The mechanism is established in the range it was tested; do not extrapolate it.
+
+**Method lesson:** a fit is only as good as its point count, and the original table mixed
+slopes fitted from 128 points with slopes fitted from 2–4. Record N alongside every fitted
+parameter, and refuse to report a slope from N < 3.
+
+### 2. The per-op floor fit clamps one op's intercept, and the absolute floor is estimator-dependent
+
+`cmp_ops.py` fitted `cost = F + k·tokens` per op with `F` clamped at zero. The clamp fires on
+exactly **one** op — the global layer's `RingJointSDPA`, least-squares intercept **−290.4 µs**
+— inflating the global per-layer fixed cost from 1651 to 1942 µs (**+17.6%**).
+
+The negative intercept is not noise. At chunk index 0 that op attends the chunk against
+itself, so its cost is roughly **quadratic** in the chunk (~C²/CP); an affine-in-C model is
+misspecified for it, and clamping hides that rather than fixing it. The right treatment is to
+exclude it from a floor fit — it is chunk-dependent attention work, not floor.
+
+| quantity | per-op (clamped) | per-op (unclamped) | excess-in-range | whole-model affine |
+|---|---:|---:|---:|---:|
+| local share of the floor | 82.8% | 85.0% | 84.8% | — |
+| absolute floor | 112.9 ms | 110 ms | 79.0 ms | **94.2 ms** |
+
+**The share is robust (82.8–85.0%) and that agreement is the evidence. The absolute floor is
+not** — a 79–113 ms spread. Quote the **whole-model affine fit (94.2 ms)**: it is anchored on
+end-to-end per-chunk device times, whereas every per-op sum inherits the isolated-layer
+harness's missing inter-layer overlap and its staging ops.
+
+`scripts/cmp_ops.py` no longer clamps silently; it reports the raw intercept and flags any op
+whose fit is misspecified.
