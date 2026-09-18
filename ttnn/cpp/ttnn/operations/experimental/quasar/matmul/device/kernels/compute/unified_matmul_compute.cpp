@@ -78,8 +78,6 @@ void kernel_main() {
     constexpr uint32_t B_slice_tiles = K_chunk_tiles * MN_chunk_N_tiles;
     constexpr uint32_t MN_chunk_tiles = MN_chunk_M_tiles * MN_chunk_N_tiles;
     constexpr uint32_t subblock_tiles = subblock_M_tiles * subblock_N_tiles;  // what DST holds
-    // Partial sums exist only when K is split into more than one K chunk.
-    constexpr bool accumulate_across_K_chunks = num_K_chunks > 1;
 
     DataflowBuffer A_slice(dfb::A_slice);
     DataflowBuffer B_slice(dfb::B_slice);
@@ -98,11 +96,12 @@ void kernel_main() {
             }
             for (uint32_t K_chunk = 0; K_chunk < num_K_chunks; ++K_chunk) {
                 const bool last_K_chunk = K_chunk == num_K_chunks - 1;
+                // Partials exist once a previous K chunk has packed them. Without packer L1 accumulation every
+                // later chunk reloads them; with it the packer has been accumulating in L1 and only the last
+                // chunk reloads the sum.
 #ifdef PACKER_L1_ACC
-                // The packer accumulates in L1 between K chunks, so only the last one reloads the sum into DST.
-                const bool reload_partials = accumulate_across_K_chunks && last_K_chunk;
+                const bool reload_partials = K_chunk > 0 && last_K_chunk;
 #else
-                // Every K chunk after the first reloads what the previous one packed.
                 const bool reload_partials = K_chunk > 0;
 #endif
                 A_slice.wait_front(A_slice_tiles);
