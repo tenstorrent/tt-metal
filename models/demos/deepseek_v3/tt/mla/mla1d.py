@@ -603,6 +603,31 @@ class MLA1D(AbstractModule):
             "mesh_device": mesh_device,
         }
 
+    @staticmethod
+    def _flash_mla_column_layout(grid_size, batch_local, num_heads_local):
+        """Q shard placement for flash MLA decode when a batch has more than a tile of heads.
+
+        The op then runs the head groups of a batch down one column of core groups and multicasts K
+        along it, which needs the Q shards on the group output cores in that order (see the column
+        major group indexing in sdpa_decode_program_factory.cpp). Returns None when the layout does
+        not apply, in which case one shard per core in row major order is used as before."""
+        if num_heads_local <= ttnn.TILE_SIZE or grid_size.x < 8 or grid_size.y < 8:
+            return None
+        num_shards = batch_local * num_heads_local // ttnn.TILE_SIZE
+        heads_parallel = num_heads_local // ttnn.TILE_SIZE
+        cores_per_group = min(64, 16 * num_shards) // num_shards
+        if cores_per_group > 8 or 8 % cores_per_group != 0 or cores_per_group * num_shards != 64:
+            return None
+        groups_per_row = 8 // cores_per_group
+        group_rows = num_shards // groups_per_row
+        if num_shards % groups_per_row != 0 or group_rows > 8 or group_rows % heads_parallel != 0:
+            return None
+        columns = [
+            ttnn.CoreRange(ttnn.CoreCoord(g * cores_per_group, 0), ttnn.CoreCoord(g * cores_per_group, group_rows - 1))
+            for g in range(groups_per_row)
+        ]
+        return ttnn.CoreCoord(8, 8), ttnn.CoreRangeSet(columns), cores_per_group, ttnn.TILE_SIZE
+
     @classmethod
     def decode_model_config(
         cls,
@@ -977,14 +1002,25 @@ class MLA1D(AbstractModule):
         q_chunk_size = 0  # Unused in decode mode
         k_chunk_size = K_CHUNK_SIZE
 
-        # Each core of a head group pays a fixed cost close to one k chunk of work, so more than four cores per
-        # group is slower at every measured position (tt-metal issue 56785); the default would take six.
+        batch_local = even_int_div(batch_size_per_row, mesh_shape[1])
+        column_layout = cls._flash_mla_column_layout(grid_size, batch_local, num_heads_local)
+        if column_layout is not None:
+            sdpa_grid, q_core_grid, cores_per_group, block_height = column_layout
+        else:
+            sdpa_grid = grid_size
+            # Each core of a head group pays a fixed cost close to one k chunk of work, so more than four cores per
+            # group is slower at every measured position (tt-metal issue 56785); the default would take six.
+            cores_per_group = 4
+            q_num_cores = min(batch_local * num_heads, num_cores)
+            block_height = nearest_y((batch_local * num_heads) // q_num_cores, ttnn.TILE_SIZE)
+            q_core_grid = ttnn.num_cores_to_corerangeset(q_num_cores, grid_size, row_wise=True)
+
         sdpa_program_config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=grid_size,
+            compute_with_storage_grid_size=sdpa_grid,
             q_chunk_size=q_chunk_size,
             k_chunk_size=k_chunk_size,
             exp_approx_mode=False,
-            max_cores_per_head_batch=4,
+            max_cores_per_head_batch=cores_per_group,
         )
 
         flash_mla_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
@@ -994,15 +1030,8 @@ class MLA1D(AbstractModule):
             packer_l1_acc=False,
         )
 
-        q_num_cores = num_cores
-        q_num_cores = min(even_int_div(batch_size_per_row, mesh_shape[1]) * num_heads, q_num_cores)
-        block_height = nearest_y(
-            (even_int_div(batch_size_per_row, mesh_shape[1]) * num_heads) // q_num_cores,
-            ttnn.TILE_SIZE,
-        )
         block_width = kv_lora_rank + qk_rope_head_dim
 
-        q_core_grid = ttnn.num_cores_to_corerangeset(q_num_cores, grid_size, row_wise=True)
         q_mem_config = ttnn.create_sharded_memory_config(
             shape=(block_height, block_width),
             core_grid=q_core_grid,
