@@ -12,7 +12,6 @@ target_sources(
 target_include_directories(
     single_host_mp
     PRIVATE
-        "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
         ${PROJECT_SOURCE_DIR}/tests
         ${PROJECT_SOURCE_DIR}/tests/tt_metal/multihost
 )

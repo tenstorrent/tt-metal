@@ -77,6 +77,7 @@ target_link_libraries(
     PUBLIC
         common
     PRIVATE
+        TT::Metalium::Private
         Metalium::Metal::Impl
         Metalium::Metal::LLRT
         TT::Metalium::HostDevCommon

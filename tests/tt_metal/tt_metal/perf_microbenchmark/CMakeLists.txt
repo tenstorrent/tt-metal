@@ -51,7 +51,6 @@ foreach(TEST_SRC ${PERF_MICROBENCH_TESTS_SRCS})
         ${TEST_TARGET}
         BEFORE
         PRIVATE
-            "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
             ${PROJECT_SOURCE_DIR}/tests
             ${PROJECT_SOURCE_DIR}/tests/tt_metal/test_utils
             ${PROJECT_SOURCE_DIR}/tests/tt_metal/tt_metal/common

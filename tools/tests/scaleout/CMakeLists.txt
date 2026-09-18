@@ -48,7 +48,6 @@ target_include_directories(
     PRIVATE
         ${PROJECT_SOURCE_DIR}
         ${PROJECT_SOURCE_DIR}/tt_metal
-        "$<TARGET_PROPERTY:TT::Metalium,INCLUDE_DIRECTORIES>"
 )
 target_include_directories(
     test_link_retraining
@@ -85,7 +84,6 @@ target_include_directories(
         ${PROJECT_SOURCE_DIR}/tt_metal
         ${Metalium_BINARY_DIR}/tools/scaleout
         $<TARGET_PROPERTY:fabric,BINARY_DIR>
-        "$<TARGET_PROPERTY:TT::Metalium,INCLUDE_DIRECTORIES>"
 )
 
 # TT::ScaleoutTools is required explicitly. generate_mgd_lib is an OBJECT library, so its own
@@ -147,12 +145,7 @@ add_dependencies(test_instance_filter scaleout_generated_protos)
 add_executable(test_generate_rank_bindings)
 target_sources(test_generate_rank_bindings PRIVATE ${TEST_GENERATE_RANK_BINDINGS_SRCS})
 
-target_include_directories(
-    test_generate_rank_bindings
-    PRIVATE
-        ${PROJECT_SOURCE_DIR}/tools/scaleout/src
-        "$<TARGET_PROPERTY:TT::Metalium,INCLUDE_DIRECTORIES>"
-)
+target_include_directories(test_generate_rank_bindings PRIVATE ${PROJECT_SOURCE_DIR}/tools/scaleout/src)
 
 target_link_libraries(
     test_generate_rank_bindings

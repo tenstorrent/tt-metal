@@ -79,6 +79,7 @@ target_include_directories(
 target_link_libraries(
     fabric
     PRIVATE
+        TT::Metalium::Private
         TT::ScaleoutTools
         Metalium::Metal::LLRT
         umd::tt-umd

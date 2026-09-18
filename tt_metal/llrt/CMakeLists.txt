@@ -18,6 +18,7 @@ target_link_libraries(
         umd::tt-umd
         TT::Metalium::HostDevCommon
     PRIVATE
+        TT::Metalium::Private
         HAL::1xx
         HAL::2xx
         Tracy::TracyClient

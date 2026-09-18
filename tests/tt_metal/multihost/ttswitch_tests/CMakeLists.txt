@@ -13,7 +13,6 @@ target_sources(
 target_include_directories(
     ttswitch_tests
     PRIVATE
-        "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
         ${PROJECT_SOURCE_DIR}/tests
         ${PROJECT_SOURCE_DIR}/tests/tt_metal/multihost
 )

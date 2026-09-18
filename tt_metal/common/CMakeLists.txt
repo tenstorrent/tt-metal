@@ -28,6 +28,7 @@ target_link_libraries(
         simde::simde
         Taskflow::Taskflow
     PRIVATE
+        TT::Metalium::Private
         BLAKE3::blake3
         Metalium::Metal::Hardware
         Tracy::TracyClient

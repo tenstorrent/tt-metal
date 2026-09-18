@@ -6,10 +6,10 @@ add_compile_options("$<$<CXX_COMPILER_ID:Clang>:-Wno-c++11-narrowing>")
 add_compile_options("$<$<CXX_COMPILER_ID:GNU>:-Wno-narrowing>")
 
 add_library(test_common_libs INTERFACE)
-target_include_directories(test_common_libs INTERFACE "$<TARGET_PROPERTY:TT::Metalium,INCLUDE_DIRECTORIES>")
 target_link_libraries(
     test_common_libs
     INTERFACE
+        TT::Metalium::Private # internal tests are coupled to Metalium's implementation
         pthread
         gmock_main
         nlohmann_json::nlohmann_json

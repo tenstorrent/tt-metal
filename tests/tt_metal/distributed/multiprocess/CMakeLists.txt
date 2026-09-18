@@ -16,7 +16,6 @@ target_link_libraries(distributed_multiprocess_tests PRIVATE test_metal_common_l
 target_include_directories(
     distributed_multiprocess_tests
     PRIVATE
-        "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
         ${PROJECT_SOURCE_DIR}/tests
         ${PROJECT_SOURCE_DIR}/tests/tt_metal/distributed/multiprocess
 )

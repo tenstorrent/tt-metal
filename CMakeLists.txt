@@ -321,6 +321,10 @@ endif()
 include(helper_functions)
 add_subdirectory(tt_stl)
 
+# Shared internal build requirements of Metalium; see the file for usage.
+# Defined here so that everything below can link TT::Metalium::Private.
+include(metalium_private)
+
 add_subdirectory(tools)
 add_subdirectory(tt_metal)
 add_subdirectory(ttnn)

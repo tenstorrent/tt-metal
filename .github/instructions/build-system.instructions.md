@@ -39,6 +39,32 @@ add_library(TTNN::Ops::Reduction ALIAS ttnn_op_reduction)
 - **Guard optional targets**: wrap references to optional or conditionally-built targets with `if(TARGET Foo::Bar)` so the build degrades gracefully in configurations that omit them.
 - **Use `PROJECT_BINARY_DIR` not `CMAKE_BINARY_DIR`** — `CMAKE_BINARY_DIR` is the top-level build directory and breaks when tt-metal is consumed via `add_subdirectory()`. Always use `PROJECT_BINARY_DIR` or generator expressions for generated file paths.
 
+## Metalium Internals: `TT::Metalium::Private`
+
+`TT::Metalium` carries Metalium's *public* API. Internal tests, tools and benchmarks that are
+deliberately coupled to the implementation get its private header roots and private third-party
+dependencies from the `TT::Metalium::Private` interface target (`cmake/metalium_private.cmake`):
+
+```cmake
+target_link_libraries(my_internal_test PRIVATE TT::Metalium TT::Metalium::Private)
+```
+
+Targets that link `test_common_libs` (or `test_metal_common_libs`) already get it transitively and
+must not repeat it.
+
+Flag any new use of `"$<TARGET_PROPERTY:TT::Metalium,INCLUDE_DIRECTORIES>"` (or the
+`Metalium::Metal` alias). Copying that property flattens a target's full include set into bare
+directories and drops the metadata attached to them — most visibly the `SYSTEM` classification of
+third-party headers such as SIMDe, which then produce third-party warnings and clang-tidy
+diagnostics in our own translation units.
+
+When internal headers acquire a new requirement, add it to `cmake/metalium_private.cmake` — as the
+dependency's own target (`simde::simde`, `Taskflow::Taskflow`, ...) rather than as a directory, so
+its usage requirements come along. This target is build-tree only: it is never installed or
+exported, and adding to it must not make a private dependency part of Metalium's public interface.
+The explicit `${PROJECT_SOURCE_DIR}` header roots it declares are the one sanctioned exception to
+the "no hardcoded paths" rule above; ordinary consumers of `TT::Metalium` must not need them.
+
 ## Source List vs. Build Infrastructure
 
 File additions/removals are separated from build architecture:
@@ -137,5 +163,6 @@ Flag any new op target that adds kernel source files without a `FILE_SET kernels
 - [ ] New targets reuse PCH where applicable (`TT::CommonPCH`)
 - [ ] New library targets call `TT_ENABLE_UNITY_BUILD(target)`
 - [ ] New op targets with kernel sources define `FILE_SET kernels` + `install()` rule
+- [ ] Internal tests/tools link `TT::Metalium::Private` instead of copying `INCLUDE_DIRECTORIES` from `TT::Metalium`
 - [ ] CPM package names match upstream `find_package()` names
 - [ ] New `option()` in `project_options.cmake` has a matching flag in `build_metal.sh`

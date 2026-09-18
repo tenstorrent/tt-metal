@@ -106,6 +106,7 @@ target_link_libraries(
         tt-logger::tt-logger
         ${EXECINFO_LIB}
     PRIVATE
+        TT::Metalium::Private
         Metalium::Metal::Impl
         metal_common_libs
         common

@@ -9,7 +9,6 @@ target_link_libraries(unit_tests_jit_build PUBLIC test_metal_common_libs)
 target_include_directories(
     unit_tests_jit_build
     PRIVATE
-        "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
         ${PROJECT_SOURCE_DIR}/tests
         ${PROJECT_SOURCE_DIR}/tests/tt_metal/test_utils
         ${PROJECT_SOURCE_DIR}/tests/tt_metal/tt_metal/common

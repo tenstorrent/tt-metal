@@ -201,8 +201,9 @@ if(TARGET benchmark::benchmark)
                 ttml
                 TTNN::TTNN
                 benchmark::benchmark
+            PRIVATE
+                TT::Metalium::Private
         )
-        target_include_directories(${BENCH_TARGET} PRIVATE "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>")
         target_precompile_headers(${BENCH_TARGET} REUSE_FROM ttml_pch)
     endforeach()
 endif()

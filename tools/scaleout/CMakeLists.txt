@@ -44,11 +44,9 @@ target_sources(
 target_include_directories(scaleout_tools PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_include_directories(scaleout_tools SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
 
-target_include_directories(run_cluster_validation PRIVATE "$<TARGET_PROPERTY:TT::Metalium,INCLUDE_DIRECTORIES>")
 target_include_directories(run_cluster_validation PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_include_directories(run_cluster_validation SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
 
-target_include_directories(run_fabric_manager PRIVATE "$<TARGET_PROPERTY:TT::Metalium,INCLUDE_DIRECTORIES>")
 target_include_directories(run_fabric_manager PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_include_directories(run_fabric_manager SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
 
@@ -111,6 +109,7 @@ target_include_directories(
 target_link_libraries(
     run_cluster_validation
     PRIVATE
+        TT::Metalium::Private
         TT::ScaleoutTools
         enchantum::enchantum
         protobuf::libprotobuf
@@ -122,6 +121,7 @@ target_link_libraries(
 target_link_libraries(
     run_fabric_manager
     PRIVATE
+        TT::Metalium::Private
         TT::ScaleoutTools
         enchantum::enchantum
         protobuf::libprotobuf
@@ -329,7 +329,6 @@ if(ENABLE_DISTRIBUTED)
     target_include_directories(
         generate_rank_bindings
         PRIVATE
-            "$<TARGET_PROPERTY:TT::Metalium,INCLUDE_DIRECTORIES>"
             ${CMAKE_CURRENT_SOURCE_DIR}
             ${CMAKE_CURRENT_SOURCE_DIR}/src
         SYSTEM
@@ -341,6 +340,7 @@ if(ENABLE_DISTRIBUTED)
     target_link_libraries(
         generate_rank_bindings
         PRIVATE
+            TT::Metalium::Private
             scaleout_tools
             tt_metal
             OpenMPI::MPI
