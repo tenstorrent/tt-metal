@@ -97,7 +97,6 @@ def build_and_serialize_kv_chunk_table(
     num_my_layers=None,
     stage_layouts=None,
     index_layer_ids=None,
-    tp_shard_kv=False,
 ) -> str:
     """Build the MLA block-cyclic KV chunk address table and serialize it to ``path`` for the
     inference server's SET_TABLE. Returns the path on success.
@@ -127,10 +126,12 @@ def build_and_serialize_kv_chunk_table(
     per-stage layout per block-cyclic cache (config order), so rank 0 builds one table spanning every
     stage while the collectives ran on all ranks. Leave it None to gather inline (single-rank / tests).
 
-    ``tp_shard_kv`` (KV dedup): the table addresses each (row, col) device individually instead of one
-    group per SP row. MUST match the layout the caches were allocated with, or every address is wrong.
-    Merged (KVPE + index) table only. ``tp_axis`` names the TP mesh axis in either case — it is the
-    dflash head-count geometry and is not itself the dedup switch."""
+    KV DEDUP is derived, not passed. A sparse/DSA model (``index_kv_cache`` given) always stripes its
+    block-cyclic caches across SP*TP, so its table addresses each (row, col) device individually instead
+    of one group per SP row; a dense model never does. Deriving it here is what keeps the table's
+    addressing and the caches' allocation from disagreeing — a mismatch makes EVERY address wrong, with
+    no error. ``tp_axis`` names the TP mesh axis in either case — it is the dflash head-count geometry
+    and is not itself the dedup switch."""
     assert chunk_size_global == PREFILL_CHUNK_TOKENS, (
         f"create_kv_chunk_address_table_block_cyclic assumes a block-cyclic period of "
         f"PREFILL_CHUNK_TOKENS={PREFILL_CHUNK_TOKENS}, but chunk_size_global={chunk_size_global}. "
@@ -160,14 +161,7 @@ def build_and_serialize_kv_chunk_table(
             path=path,
             stage_layouts=stage_layouts,
             index_layer_ids=index_layer_ids,
-            tp_shard_kv=tp_shard_kv,
         )
-
-    # Only the sparse (DSA) path TP-shards its KV, so tp_shard_kv here is a caller mismatch, not a layout.
-    assert not tp_shard_kv, (
-        "tp_shard_kv is only supported on the merged sparse/DSA table (index_kv_cache given); "
-        "got tp_shard_kv=True with a single-config dense KVPE cache."
-    )
 
     # Single config: the KVPE cache is the only one described, so its layout is the only one gathered.
     stage_layout = stage_layouts[0] if stage_layouts else None
@@ -212,7 +206,6 @@ def _build_and_serialize_merged_kv_chunk_table(
     chunk_size_global=None,
     stage_layouts=None,
     index_layer_ids=None,
-    tp_shard_kv=False,
 ) -> str:
     """Build ONE KvChunkAddressTable over every cache this rank owns and serialize it to ``path``.
     ``caches`` is a tagged list of ``(kind, payload)``: ``("kvpe", tensor)`` / ``("index", tensor)`` for
@@ -262,6 +255,7 @@ def _build_and_serialize_merged_kv_chunk_table(
             raise ValueError(f"unknown KV table cache kind: {kind!r} (expected 'kvpe', 'index', or 'dflash')")
 
     block_cyclic = [(name, cache) for name, cache, head_idx in entries if head_idx is None]
+    kv_dedup = index_config_name is not None
     if stage_layouts is None:
         stage_layouts = [
             allgather_kv_stage_layout(
@@ -350,7 +344,7 @@ def _build_and_serialize_merged_kv_chunk_table(
                 config_id=config_id,
                 stage_layout=layout_of[name],
                 layer_rows=index_layer_ids if name == index_config_name else None,
-                tp_axis=tp_axis if tp_shard_kv else None,
+                tp_axis=tp_axis if kv_dedup else None,
             )
         else:  # one global kv-head of the drafter's K or V cache
             populate_kv_chunk_address_table_dflash(

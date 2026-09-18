@@ -30,6 +30,7 @@ on:
           - gemma-2-9b
           - gemma-4-e2b
           - gemma-4-e4b
+          - hunyuan-image-3.0
           - panoptic-deeplab
           - bevformer
           - mistral-small-3.1-24b

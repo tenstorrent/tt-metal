@@ -10,6 +10,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from ttnn.tools import trace_allocation_tracker
 from models.common.llama_models import (
     ChatPrediction,
     CompletionPrediction,
@@ -73,23 +74,16 @@ def get_prefill_warmup_sequence_lengths(max_seq_len: int) -> list[int]:
     return [128] + [2**i for i in range(10, max_seq_len.bit_length()) if 2**i <= max_seq_len]
 
 
-def _mark_trace_io_corruptible(tensors):
-    """Acknowledge deliberately long-lived trace I/O to the trace-allocation tracker.
+def _acknowledge_trace_io_corruptible(tensors):
+    """Acknowledge trace inputs that may be overwritten by another live trace.
 
-    No-op unless TT_METAL_TRACE_ALLOC_TRACKING=1; ttnn.mark_corruptible only exists to tell the
-    tracker "this buffer outliving the call is intended", so failures here must never affect the
-    model. Mirrors _mark_trace_buffers_corruptible in models/common/sampling/generator.py.
+    Replay refreshes these inputs before use. This is a no-op when tracking is disabled.
     """
-    mark = getattr(ttnn, "mark_corruptible", None)
-    if mark is None or tensors is None:
+    if not trace_allocation_tracker.TRACE_ALLOC_TRACKING or tensors is None:
         return
     for tensor in tensors if isinstance(tensors, (list, tuple)) else (tensors,):
-        if tensor is None:
-            continue
-        try:
-            mark(tensor)
-        except BaseException:  # tracking disabled, host tensor, already freed -- all benign
-            pass
+        if tensor is not None:
+            trace_allocation_tracker.acknowledge_corruptible(tensor)
 
 
 def get_padded_prefill_len(seq_len: int) -> int:
@@ -1349,17 +1343,13 @@ class Generator(WarmupForwardMixin):
         )
         # Update column_mask reference to the trace-capture buffer (trace reads from this buffer on replay)
         self._set_prefill_column_mask(device_inputs[5])
-        # These are THIS trace's own inputs: staged before begin_trace_capture and read by it on
-        # every replay, so they are long-lived by design. prefill_warmup captures one trace per
-        # supported sequence length, so from the second capture onward the earlier prefill traces
-        # are already live and the allocator flags every one of these as "allocated while a trace
-        # is active" -- the trace-allocation tracker then reports them as survivors:
+        # These are this trace's persistent inputs. Earlier live traces can overwrite their
+        # contents, but _prefill_forward_trace_text refreshes all six before each replay.
+        # Without acknowledgement, the tracker reports them as survivors of earlier traces:
         #   Found N device buffer(s) still alive before trace replay
         #   Buffer ... [op: ttnn.to_device]  <- _capture_trace_prefill -> copy_host_to_device
-        # They are not corruption candidates (the trace that reads them is the one captured right
-        # here), so acknowledge them the way tt_transformers does for its decode trace I/O. This
-        # keeps the tracker's report limited to GENUINE survivors instead of burying them.
-        _mark_trace_io_corruptible(device_inputs)
+        # Acknowledge that their contents may be corrupted between replays.
+        _acknowledge_trace_io_corruptible(device_inputs)
 
         return {
             "device_inputs": device_inputs,
@@ -1403,7 +1393,7 @@ class Generator(WarmupForwardMixin):
         # Reordering warmup cannot avoid this -- capturing trace N always happens while
         # traces 1..N-1 exist -- so scope the capture window instead, which is what
         # corruptible_allocation_scope is for. No-op unless TT_METAL_TRACE_ALLOC_TRACKING=1.
-        with ttnn.corruptible_allocation_scope(self.mesh_device):
+        with trace_allocation_tracker.corruptible_allocation_scope(self.mesh_device):
             trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
             transformed_inputs = self.model.transform_prefill_inputs_device(*device_inputs)
             (
@@ -1780,7 +1770,7 @@ class Generator(WarmupForwardMixin):
             if prepared is None:
                 # Prefill and decode intentionally reuse this L1 space. These
                 # are trace inputs, not program-cache allocations.
-                with ttnn.corruptible_allocation_scope(self.mesh_device):
+                with trace_allocation_tracker.corruptible_allocation_scope(self.mesh_device):
                     prepared = self.model.prepare_inputs_decode(
                         tokens, current_pos, page_table, is_cur_pos_sharded, is_page_table_sharded
                     )
@@ -1800,7 +1790,7 @@ class Generator(WarmupForwardMixin):
         # Same reasoning as the prefill capture: everything allocated inside the capture window
         # belongs to the trace being recorded and must stay allocated for replay, so scope it
         # rather than let the trace-allocation tracker report it as a survivor.
-        with ttnn.corruptible_allocation_scope(self.mesh_device):
+        with trace_allocation_tracker.corruptible_allocation_scope(self.mesh_device):
             trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
             tt_out_tok = self.model.ttnn_decode_forward(
                 tokens_tt,

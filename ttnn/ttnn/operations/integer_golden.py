@@ -178,8 +178,8 @@ def shift(input_tensor, shift_amount, torch_function):
 
 
 def right_shift(input_tensor, shift_amount):
-    """Model unary SFPU right-shift behavior for unsigned tensors.
-    Clamps nonnegative counts to 31 and treats UInt32 lanes as signed patterns.
+    """Model bitwise SFPU right-shift behavior for unsigned tensors.
+    Clamps counts >= 32 to 31 for both scalar and tensor shift amounts.
     """
 
     import torch
@@ -187,11 +187,6 @@ def right_shift(input_tensor, shift_amount):
     dtype = input_tensor.dtype
     wide_input = _to_wide(input_tensor)
     wide_shift = _to_wide(shift_amount)
-
-    # Unary SFPU right shift clamps counts at 31 and treats UInt32 lanes as signed
-    # Int32 bit patterns. Left and binary shifts instead retain zero-on-invalid semantics.
-    if dtype == torch.uint32:
-        wide_input = torch.where(wide_input >= (1 << 31), wide_input - (1 << 32), wide_input)
 
     if torch.is_tensor(wide_shift):
         valid_shift = wide_shift >= 0

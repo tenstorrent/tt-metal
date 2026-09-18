@@ -54,14 +54,14 @@ class TtPrefillRuntimeConfig:
     # l1_small_size > 0. Enable for Kimi (single expert group, device gate). See TtMoERoutingSetup.
     routing_use_l1_small_for_semaphores: bool = False
     # Static model-dimension constants for the model being built
-    # (DeepSeekV3Config | KimiK26Config). Drives expert counts, dense-layer
+    # (DeepSeekV3Config | KimiK27Config). Drives expert counts, dense-layer
     # count, route groups, etc. in the TT layer code. Supplied by the model
     # adapter — no default, so the runtime never bakes in a specific model.
     model_cfg: Optional[type] = None
     # When True, the last transformer layer runs kv-only: it fills the KV cache
-    # (which migration needs) and skips its Q/SDPA/output projection, FFN/MoE,
-    # the final RMSNorm, and the LM head. `prefill()` then returns None. The pipeline
-    # sets this on the last rank so the final stage is headless.
+    # (which migration needs) and skips its Q/SDPA/output projection and FFN/MoE.
+    # The KV cache is the prefill output either way; this only trims the last layer.
+    # The pipeline sets it on the last rank.
     kv_only_last_layer: bool = False
     # Build the DFlash drafter context-KV cache during this prefill (opt-in). Every rank builds its owned fc
     # slices from $DFLASH_HF_MODEL; only the last rank builds the KV tail + cache.
@@ -88,7 +88,6 @@ class TtPrefillRuntimeConfig:
     # KV dedup: also shard the KV/index caches across tp_axis, so each of the sp*tp devices stores a
     # distinct 1/(sp*tp) slice instead of tp copies. Must match how the caches were allocated and how the
     # KV chunk address table was built; sparse (DSA) path only.
-    tp_shard_kv: bool = False
 
     @property
     def sp_factor(self) -> int:
@@ -107,7 +106,7 @@ class TtPrefillRuntime:
     whole model (the config defaults). For pipeline-parallel prefill, a driver builds
     one runtime per rank with first_layer_idx / is_first_rank / is_last_rank set, and
     the non-boundary ranks consume/produce hidden-state activations instead of token
-    IDs / sampled tokens.
+    IDs.
     """
 
     def __init__(
@@ -239,7 +238,6 @@ class TtPrefillRuntime:
             shared_expert_activations_dtype=self.config.shared_expert_activations_dtype,
             shared_expert_weights_dtype=self.config.shared_expert_weights_dtype,
             weight_cache_path=self.config.weight_cache_path,
-            lm_head_is_column_parallel=True,
             is_chunked=True,
             slot_num=self.config.num_users,
             kv_only_last_layer=self.config.kv_only_last_layer,
@@ -249,7 +247,6 @@ class TtPrefillRuntime:
             is_last_rank=self.config.is_last_rank,
             sparse_kv_cache_format=self.config.sparse_kv_cache_format,
             overlap_shared_expert_with_dispatch=self.config.overlap_shared_expert_with_dispatch,
-            tp_shard_kv=self.config.tp_shard_kv,
         )
         self.model_built = True
 
@@ -295,7 +292,7 @@ class TtPrefillRuntime:
             kv_only_idx = last_excl - 1
             assert kv_only_idx not in dcfg.target_layer_ids, (
                 f"drafter target layer {kv_only_idx} coincides with the kv-only last layer; its post-FFN tap "
-                f"never fires. Move the tap off the last layer or disable PREFILL_KV_ONLY_LAST_LAYER."
+                "never fires. Move the tap off the last layer."
             )
 
         logger.info(
@@ -534,7 +531,7 @@ class TtPrefillRuntime:
         """The captured/warmed metadata forward: per-chunk scalars come from the persistent metadata
         tensor on-device (actual_start/actual_end = None host-side). Writes user slot metadata[0].
         Returns the forward output — a hidden-state activation on a non-last rank (forwarded downstream
-        over D2D), or the last/single rank's ignored KV-only tuple.
+        over D2D), or None on the last/single rank (the KV cache is the output).
 
         index_kv_cache is threaded for the sparse/DSA path exactly as the eager prefill_chunk does;
         omitting it would replay the indexer against no cache. This warm pass is also what memoizes
@@ -617,9 +614,9 @@ class TtPrefillRuntime:
         Alternatively, if a host-side per-layer callback is registered (via set_layer_completion_sink),
         the model fires that once per layer instead.
 
-        Always returns None: no token is sampled. (When `kv_only_last_layer` is set on the config the
-        last layer's compute is stripped down to the KV cache fill, which migration consumes, and the
-        final RMSNorm / LM head / sample are skipped entirely.)
+        Always returns None on the last rank: the populated KV cache is the output (decode owns the
+        token sampling). When `kv_only_last_layer` is set on the config the last layer's compute is stripped
+        down to the KV cache fill, which migration consumes.
 
         Args:
             input_tensor: on the first rank, one chunk's tokens as an SP-sharded uint32 ROW_MAJOR DRAM
@@ -779,8 +776,7 @@ class TtPrefillRuntime:
             return self._pack_activation(out, self.drafter.export_partial())
 
         # Non-last rank: forward returns the hidden-state activation to forward downstream.
-        # Last/single rank: forward returns the (token, prob, intermediates) tuple, which this
-        # KV-output path ignores.
+        # Last/single rank: forward returns None (no intermediates requested); the KV cache is the output.
         return out if not self.config.is_last_rank else None
 
     def release_trace(self) -> None:
@@ -957,7 +953,6 @@ class TtPrefillRuntime:
             mesh_shape=self.config.mesh_shape,
             sp_axis=self.config.sp_axis,
             tp_axis=self.config.tp_axis,
-            tp_shard_kv=self.config.tp_shard_kv,
             num_users=self.config.num_users,
             chunk_size_global=self.config.chunk_size,  # block-cyclic period (prefill chunk size)
             path=path,
@@ -975,11 +970,14 @@ class TtPrefillRuntime:
         not un-rotated to natural token order. DRAM_MEMORY_CONFIG on the slice is REQUIRED — the cache is
         ND-sharded ROUND_ROBIN_1D, and slicing into another ND-shard miscomputes the DRAM core on host
         read-back."""
-        # The `[:, :1]` below keeps ONE TP column, which is a full replica only when TP-replicated. Under
-        # KV dedup each column holds a distinct 1/tp of its row, so it would drop (tp-1)/tp of the tokens.
-        assert not self.config.tp_shard_kv, (
+        # The `[:, :1]` below keeps ONE TP column, which is a full replica only when TP-replicated. The
+        # sparse (DSA) path always TP-dedups, so each column holds a distinct 1/tp of its row and this
+        # would drop (tp-1)/tp of the tokens. Keyed on the index cache because that is what makes a model
+        # sparse here (dense models pass kv_caches.index=None and keep TP-replicated KVPE).
+        assert kv_caches.index is None, (
             "read_slot_kv (and the pairwise dst==src migration validation built on it) has no TP-sharded "
-            "host reconstruction. Use the mock-migration producer read-back to validate a TP-sharded cache."
+            "host reconstruction, and every sparse/DSA model TP-dedups its caches. Use the mock-migration "
+            "producer read-back to validate a sparse model's cache."
         )
         mesh_device = self.mesh_device
         num_layers = self.config.num_layers

@@ -13,10 +13,10 @@
 # Logical SKUs only; merge_group prio routing is via sku_config merge_queue_sku.
 
 # Non-nightly merge gate tests
-# TODO: Split into two groups due to inconsistent durations: https://github.com/tenstorrent/tt-metal/issues/50449
+# Three shards keep each merge-gate leg within the 15-minute per-test ceiling.
 - name: tt-train cpp merge gate tests (id 0)
   cmd: |
-    export GTEST_TOTAL_SHARDS=2
+    export GTEST_TOTAL_SHARDS=3
     export GTEST_SHARD_INDEX=0
     mkdir -p generated/test_reports
     build/tt-train/tests/ttml_tests --gtest_output=xml:generated/test_reports/ctest_report.xml --gtest_filter="-*NIGHTLY*"
@@ -29,8 +29,21 @@
 
 - name: tt-train cpp merge gate tests (id 1)
   cmd: |
-    export GTEST_TOTAL_SHARDS=2
+    export GTEST_TOTAL_SHARDS=3
     export GTEST_SHARD_INDEX=1
+    mkdir -p generated/test_reports
+    build/tt-train/tests/ttml_tests --gtest_output=xml:generated/test_reports/ctest_report.xml --gtest_filter="-*NIGHTLY*"
+  skus:
+    bh_p150b_civ2:
+      timeout: 15
+  owner_id: U07K00A281X # Kevin Wu
+  team: train
+  budget_type: merge_gate
+
+- name: tt-train cpp merge gate tests (id 2)
+  cmd: |
+    export GTEST_TOTAL_SHARDS=3
+    export GTEST_SHARD_INDEX=2
     mkdir -p generated/test_reports
     build/tt-train/tests/ttml_tests --gtest_output=xml:generated/test_reports/ctest_report.xml --gtest_filter="-*NIGHTLY*"
   skus:

@@ -357,8 +357,8 @@ def run_chunked_block(
 @pytest.mark.parametrize("n_chunks", [1, 2, 5, 10, 11], ids=["chunks1", "chunks2", "chunks5", "chunks10", "chunks11"])
 @pytest.mark.parametrize(
     "layer_idx, gate_fallback_mode",
-    [(2, None), (3, GateComputeMode.DEVICE)],
-    ids=["dense", "moe-gate_device"],
+    [(2, None), (3, GateComputeMode.DEVICE_FP32)],
+    ids=["dense", "moe-gate_device_fp32"],
 )
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links",
@@ -814,8 +814,8 @@ def run_chunked_block_padded(
 @pytest.mark.parametrize("splits", [[1024, 4096], _PADDED_FULL_55K], ids=["1k+4k", "full55k"])
 @pytest.mark.parametrize(
     "layer_idx, gate_fallback_mode",
-    [(2, None), (3, GateComputeMode.DEVICE)],
-    ids=["dense", "moe-gate_device"],
+    [(2, None), (3, GateComputeMode.DEVICE_FP32)],
+    ids=["dense", "moe-gate_device_fp32"],
 )
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links",
@@ -851,7 +851,7 @@ def test_ds_prefill_block_chunked_padded(
 
 
 # ---------------------------------------------------------------------------
-# Kimi K2.6 variants
+# Kimi K2.7 variants
 # ---------------------------------------------------------------------------
 # Same chunked-prefill machinery as the DeepSeek tests, with the kimi_k2_7 variant: the host gate
 # (GateComputeMode.HOST_ALL — Kimi has a single expert group and is validated only with the host

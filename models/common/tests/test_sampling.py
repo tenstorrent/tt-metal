@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 import torch
 import torch.nn.functional as F
+from ttnn.tools import trace_allocation_tracker
 
 import ttnn
 from models.common.sampling import (
@@ -21,8 +22,8 @@ from models.common.sampling import (
 from models.common.sampling._utils import topk_would_route_to_large_indices
 from models.common.sampling.generator import (
     MAX_UINT32,
+    _acknowledge_trace_buffers_corruptible,
     _hash_request_seed_to_device_seed,
-    _mark_trace_buffers_corruptible,
 )
 from models.common.sampling.tt_log_probs import MAX_TOP_LOGPROBS, LogProbsResult
 from models.common.utility_functions import comp_pcc, is_blackhole
@@ -70,10 +71,10 @@ def test_sampling_precompile_preserves_logits_and_request_state(monkeypatch, all
 
 def test_sampling_trace_buffer_reuse_is_bucket_only(monkeypatch):
     marked = []
-    monkeypatch.setattr(ttnn, "mark_corruptible", marked.append, raising=False)
+    monkeypatch.setattr(trace_allocation_tracker, "acknowledge_corruptible", marked.append)
 
-    _mark_trace_buffers_corruptible(None, ["default"])
-    _mark_trace_buffers_corruptible(1, ["input", None, ("output",)])
+    _acknowledge_trace_buffers_corruptible(None, ["default"])
+    _acknowledge_trace_buffers_corruptible(1, ["input", None, ("output",)])
 
     assert marked == ["input", "output"]
 

@@ -10,6 +10,9 @@ This tests the decoupled workflow:
 2. Offline import to SQLite for visualization
 """
 
+import contextlib
+import gc
+import hashlib
 import json
 import sqlite3
 import sys
@@ -28,7 +31,7 @@ import graph_report
 # Now import ttnn for device tests
 import ttnn
 
-from models.common.utility_functions import is_wormhole_b0
+from models.common.utility_functions import is_wormhole_b0, skip_for_slow_dispatch
 
 
 @pytest.fixture
@@ -5725,3 +5728,250 @@ class TestPythonStackTraceImport:
         )
         assert c.fetchall() == [(1, str(source_file.resolve()))]
         conn.close()
+
+
+class _ModelTensor(torch.Tensor):
+    """A torch.Tensor subclass defined outside the torch package, as model-side wrappers are."""
+
+
+_FROM_TORCH_CONVERSION_CASES = pytest.mark.parametrize(
+    "make_tensor, dtype",
+    [
+        # BN folded into a conv weight outside no_grad: requires_grad=True, non-leaf.
+        (lambda: torch.nn.Parameter(torch.rand((8, 8), dtype=torch.float32)) * 2.0, ttnn.float32),
+        # Rotary matrices and similar: float32 and non-contiguous, converted to bfloat16.
+        (lambda: torch.zeros((8, 8), dtype=torch.float32).T.unsqueeze(0), ttnn.bfloat16),
+        # Control: needs no conversion at all, so it passed even while the tracer was on.
+        (lambda: torch.rand((8, 8), dtype=torch.bfloat16), ttnn.bfloat16),
+        # Model weights as loaded: a torch.nn.Parameter is itself a torch.Tensor subclass, so it takes the
+        # normalization branch in from_torch on every model; it must keep converting.
+        (lambda: torch.nn.Parameter(torch.rand((8, 8), dtype=torch.float32)), ttnn.bfloat16),
+        # A subclass from outside torch: nanobind cannot convert it directly (the raw ttnn.Tensor constructor
+        # fails on this input), so from_torch has to hand it over as a plain torch.Tensor.
+        (lambda: torch.zeros((8, 8), dtype=torch.float32).T.as_subclass(_ModelTensor), ttnn.bfloat16),
+    ],
+    ids=[
+        "requires_grad",
+        "noncontiguous_float32_to_bfloat16",
+        "no_conversion",
+        "parameter_float32_to_bfloat16",
+        "foreign_subclass_noncontiguous_float32_to_bfloat16",
+    ],
+)
+
+
+@pytest.fixture
+def collect_stale_devices():
+    # A closed MeshDevice from an earlier test may still await GC. Its destructor frees cached programs, which calls
+    # into the graph processor of whatever capture is active then; the tracer tests below make GC likely mid-op.
+    gc.collect()
+
+
+@pytest.mark.usefixtures("collect_stale_devices")
+class TestReportConfigDoesNotEnableLegacyTracer:
+    """
+    enable_graph_report used to switch on the legacy ttnn.tracer, which replaced every torch
+    argument with a TracedTorchTensor. nanobind selects its framework conversion fallbacks by
+    string-matching type(obj).__module__, so that subclass ("ttnn.torch_tracer") lost them and
+    any ttnn.from_torch needing a dtype/layout conversion, or carrying requires_grad, failed.
+    """
+
+    @_FROM_TORCH_CONVERSION_CASES
+    def test_from_torch_conversions_under_report_config(self, make_tensor, dtype):
+        with ttnn.manage_config("enable_fast_runtime_mode", False), ttnn.manage_config(
+            "enable_logging", True
+        ), ttnn.manage_config("enable_graph_report", True):
+            output = ttnn.from_torch(make_tensor(), dtype=dtype)
+            assert (
+                output.dtype == dtype
+            ), f"from_torch under the report config returned {output.dtype}, expected {dtype}"
+            assert not ttnn.tracer.is_tracing_enabled(), "enable_graph_report switched the legacy tracer on"
+
+    def test_explicit_tracer_still_works(self):
+        """Fixing the above must not disable ttnn.tracer for callers that ask for it directly."""
+        with ttnn.manage_config("enable_fast_runtime_mode", False):
+            with ttnn.tracer.trace():
+                assert ttnn.tracer.is_tracing_enabled(), "ttnn.tracer.trace() did not enable tracing"
+            assert not ttnn.tracer.is_tracing_enabled(), "tracing still enabled after leaving ttnn.tracer.trace()"
+
+    @_FROM_TORCH_CONVERSION_CASES
+    def test_from_torch_conversions_under_explicit_tracer(self, make_tensor, dtype):
+        """
+        Under the tracer every torch argument is still a TracedTorchTensor, so from_torch has to hand nanobind a
+        plain torch.Tensor or the same conversions fail the same way they did under enable_graph_report.
+        """
+        with ttnn.manage_config("enable_fast_runtime_mode", False):
+            with ttnn.tracer.trace():
+                output = ttnn.from_torch(make_tensor(), dtype=dtype)
+                assert output.dtype == dtype, f"from_torch under the tracer returned {output.dtype}, expected {dtype}"
+
+
+@pytest.mark.usefixtures("collect_stale_devices")
+class TestTracerStateSurvivesFailure:
+    """
+    A raising operation used to leave its graph on GRAPH_STACK, a failing torch side used to leave
+    tracing half-enabled, and an error escaping ttnn.tracer.trace() used to leave tracing on, so the
+    next trace started from corrupted state.
+    """
+
+    def test_graph_stack_is_popped_when_a_ttnn_operation_raises(self, expect_error):
+        def boom():
+            raise RuntimeError("boom")
+
+        with ttnn.manage_config("enable_fast_runtime_mode", False):
+            with ttnn.tracer.trace():
+                depth = len(ttnn.torch_tracer.GRAPH_STACK)
+                with expect_error(RuntimeError, "boom"):
+                    ttnn.tracer.trace_ttnn_operation("boom", boom)()
+                assert (
+                    len(ttnn.torch_tracer.GRAPH_STACK) == depth
+                ), f"raising operation left its graph behind: depth {len(ttnn.torch_tracer.GRAPH_STACK)}, expected {depth}"
+
+    def test_graph_stack_is_popped_when_a_torch_module_raises(self, expect_error):
+        class Boom(torch.nn.Module):
+            def forward(self, tensor):
+                raise RuntimeError("boom")
+
+        with ttnn.manage_config("enable_fast_runtime_mode", False):
+            with ttnn.tracer.trace():
+                depth = len(ttnn.torch_tracer.GRAPH_STACK)
+                with expect_error(RuntimeError, "boom"):
+                    Boom()(torch.rand((8, 8)))
+                assert (
+                    len(ttnn.torch_tracer.GRAPH_STACK) == depth
+                ), f"raising module left its graph behind: depth {len(ttnn.torch_tracer.GRAPH_STACK)}, expected {depth}"
+
+    def test_tracer_is_disabled_when_the_traced_block_raises(self, expect_error):
+        with ttnn.manage_config("enable_fast_runtime_mode", False):
+            with expect_error(RuntimeError, "boom"):
+                with ttnn.tracer.trace():
+                    raise RuntimeError("boom")
+            assert not ttnn.tracer.is_tracing_enabled(), "error escaping trace() left tracing enabled"
+            assert ttnn.torch_tracer.GRAPH_STACK is None, "error escaping trace() left the torch graph stack in place"
+
+    def test_tracing_stays_disabled_when_the_torch_side_fails(self, monkeypatch, expect_error):
+        def boom():
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr(ttnn.torch_tracer, "enable_tracing", boom)
+        with ttnn.manage_config("enable_fast_runtime_mode", False):
+            with expect_error(RuntimeError, "boom"):
+                ttnn.tracer.enable_tracing()
+            assert not ttnn.tracer.ENABLE_TRACER, "a failed torch-side enable left tracing half-enabled"
+
+
+class TestReportNameDerivedFromTestId:
+    """
+    A report asked for without report_name is named after the test. The root autouse fixture has to derive the name
+    itself: tests/ttnn/conftest.py sets one too (through the same function), but it runs after that fixture has
+    already read report_name, and tests outside tests/ttnn never see it.
+    """
+
+    _NODEID = "tests/ttnn/unit_tests/base_functionality/test_graph_report.py::TestReportNameDerivedFromTestId::test_x"
+
+    def test_derived_name_is_unique_per_case_and_fits_the_report_path(self):
+        """ttnn::Config keeps only the first 64 characters of report_name, so the unique part has to sit inside them."""
+        names = {graph_report.derive_report_name(f"{self._NODEID}[{case}]") for case in ("a", "b")}
+        assert len(names) == 2, f"parametrized cases of one test share a report_name: {names}"
+        for name in names:
+            assert len(name) <= 64, f"derived report_name is cut by ttnn::Config: {name!r} ({len(name)} chars)"
+            assert name.startswith(
+                "test_graph_report_test_x"
+            ), f"derived report_name lacks file stem and test name: {name!r}"
+
+        long_nodeid = f"{self._NODEID}[{'p' * 80}]"
+        name = graph_report.derive_report_name(long_nodeid)
+        digest = hashlib.sha1(long_nodeid.encode()).hexdigest()[:8]
+        assert len(name) <= 64 and name.endswith(digest), f"hash does not survive the 64-character cut: {name!r}"
+
+    def test_report_is_written_without_report_name(self, request, device, tmp_path):
+        if ttnn.graph.is_graph_capture_active():
+            pytest.skip("graph reporting is already on for this run, so the nested fixture would join that capture")
+        with ttnn.manage_config("enable_fast_runtime_mode", False), ttnn.manage_config(
+            "enable_logging", True
+        ), ttnn.manage_config("enable_graph_report", True), ttnn.manage_config(
+            "root_report_path", tmp_path
+        ), ttnn.manage_config(
+            "report_name", None
+        ):
+            with contextlib.contextmanager(graph_report.run_pytest_graph_report_fixture)(request):
+                report_name = str(ttnn.CONFIG.report_name)
+                expected_name = graph_report.derive_report_name(request.node.nodeid)
+                assert report_name == expected_name, f"report_name {report_name!r} not derived from the test id"
+                report_path = Path(ttnn.CONFIG.report_path)
+                assert report_path.is_relative_to(tmp_path), f"report not under root_report_path: {report_path}"
+                ttnn.relu(
+                    ttnn.from_torch(torch.rand((32, 32), dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+                )
+            assert (report_path / "db.sqlite").exists(), f"no db.sqlite written under {report_path}"
+            assert ttnn.CONFIG.report_name is None, "fixture leaked its derived report_name into the config"
+
+
+class TestConfigHelpersUsedByTheReportFixture:
+    """The derived report_name goes through manage_config, and configs written by ttnn spell an unset one as null."""
+
+    def test_manage_config_restores_when_the_block_raises(self, expect_error):
+        original = ttnn.CONFIG.report_name
+        with expect_error(RuntimeError, "boom"):
+            with ttnn.manage_config("report_name", "leaked"):
+                raise RuntimeError("boom")
+        assert (
+            ttnn.CONFIG.report_name == original
+        ), f"report_name left as {ttnn.CONFIG.report_name!r} after the block raised"
+
+    def test_null_report_name_in_a_config_dictionary_unsets_it(self):
+        """save_config_to_json_file writes "report_name": null; reloading it used to try PosixPath(None)."""
+        with ttnn.manage_config("report_name", "previous"):
+            ttnn.load_config_from_dictionary({"report_name": None})
+            assert ttnn.CONFIG.report_name is None, f"null report_name loaded as {ttnn.CONFIG.report_name!r}"
+
+
+@skip_for_slow_dispatch()
+@pytest.mark.skipif(not is_wormhole_b0(), reason="Requires Wormhole B0")
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 200000, "num_command_queues": 2}], indirect=True)
+class TestReportModesDuringTraceCapture:
+    """
+    enable_logging synchronizes the device around every op and enable_comparison_mode reads its tensors back to
+    host. Both are TT_FATAL while a metal trace is being captured, so both must stay off the device there.
+    """
+
+    @pytest.mark.parametrize("cq_id", [0, 1])
+    def test_is_trace_capture_active_tracks_capture(self, device, cq_id):
+        """The check polls every hw command queue, so a capture on either one must register."""
+        assert not ttnn.is_trace_capture_active(device), "capture reported active before begin_trace_capture"
+        trace_id = ttnn.begin_trace_capture(device, cq_id=cq_id)
+        try:
+            assert ttnn.is_trace_capture_active(device), f"capture on cq{cq_id} not reported active"
+        finally:
+            ttnn.end_trace_capture(device, trace_id, cq_id=cq_id)
+            ttnn.release_trace(device, trace_id)
+        assert not ttnn.is_trace_capture_active(device), "capture still reported active after end_trace_capture"
+
+    def test_op_inside_trace_capture_with_logging(self, device):
+        shape = (1, 1, 32, 32)
+        a = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, device)
+        with ttnn.manage_config("enable_fast_runtime_mode", False), ttnn.manage_config("enable_logging", True):
+            ttnn.add(a, a)  # compile the program binaries before capturing
+            trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+            try:
+                ttnn.add(a, a)
+            finally:
+                # A failed op must not leave capture open, or every later test on this device fails.
+                ttnn.end_trace_capture(device, trace_id, cq_id=0)
+                ttnn.release_trace(device, trace_id)
+        ttnn.synchronize_device(device)
+
+    def test_op_inside_trace_capture_with_comparison_mode(self, device):
+        shape = (1, 1, 32, 32)
+        a = ttnn.from_torch(torch.rand(shape, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+        with ttnn.manage_config("enable_fast_runtime_mode", False), ttnn.manage_config(
+            "enable_comparison_mode", True
+        ), ttnn.manage_config("comparison_mode_should_raise_exception", True):
+            ttnn.add(a, a)  # compile before capturing; outside a capture the comparison itself must still run
+            trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+            try:
+                ttnn.add(a, a)
+            finally:
+                ttnn.end_trace_capture(device, trace_id, cq_id=0)
+                ttnn.release_trace(device, trace_id)
+        ttnn.synchronize_device(device)

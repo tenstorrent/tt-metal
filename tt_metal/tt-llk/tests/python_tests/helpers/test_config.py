@@ -531,10 +531,10 @@ class TestConfig:
             in (ChipArchitecture.WORMHOLE, ChipArchitecture.BLACKHOLE)
             else ""
         )
-        # Allow disabling LLK_ASSERT via env var for shape-coverage discovery runs:
-        # with asserts off and DEVICE_PRINT_ENABLED on, LLK_VALIDATE_TENSOR_SHAPE_*
-        # emits newly-seen TensorShapes via DPRINT instead of ebreaking the kernel,
-        # so a single run can enumerate every (fn_name, shape) pair exercised.
+        # Allow disabling LLK_ASSERT via env var for shape-coverage discovery runs
+        # and for perf jobs (set TT_LLK_DISABLE_ASSERTS=1 in the runner).
+        # With asserts off and DEVICE_PRINT_ENABLED on, LLK_VALIDATE_TENSOR_SHAPE_*
+        # emits newly-seen TensorShapes via DPRINT instead of ebreaking the kernel.
         llk_assert_define = (
             ""
             if os.environ.get("TT_LLK_DISABLE_ASSERTS") == "1"
@@ -1828,8 +1828,12 @@ class TestConfig:
         # Extracting coverage stream from device, for all kernel parts, for all their compilation units
         coverage_stream = b""
         for trisc_name in TestConfig.KERNEL_COMPONENTS:
-            temp_elf = parse_elf(VARIANT_DIR / f"elf/{trisc_name}.elf")
-            coverage_start = temp_elf.symbols["__coverage_start"].value
+            # ttexalens.parse_elf takes `elf_path: str`; its native ElfFile binding
+            # rejects a PosixPath outright, so stringify rather than relying on
+            # pathlib duck-typing.
+            temp_elf = parse_elf(str(VARIANT_DIR / f"elf/{trisc_name}.elf"))
+            coverage_symbol = temp_elf.find_symbol_by_name("__coverage_start")
+            coverage_start = coverage_symbol.value if coverage_symbol else None
             if not coverage_start:
                 raise TTException(
                     f"__coverage_start not found in variant's {trisc_name}.elf"

@@ -10,13 +10,14 @@
 // Shared metadata read invalidates the reused L1 address before loading the next value.
 #include "ttnn/operations/transformer/sdpa/device/kernels/dataflow/metadata_scalar_read.hpp"
 #include "topk_large_indices_metadata.hpp"
+#include "topk_large_indices_runtime_args.hpp"
 
 void kernel_main() {
-    const uint32_t src_addr = get_arg_val<uint32_t>(0);
-    const uint32_t start_row = get_arg_val<uint32_t>(1);
-    const uint32_t num_rows = get_arg_val<uint32_t>(2);
-    uint32_t search_len = get_arg_val<uint32_t>(3);
-    const uint32_t input_page_bytes = get_arg_val<uint32_t>(4);
+    const uint32_t src_addr = get_common_arg_val<uint32_t>(topk_common_args::input_address);
+    const uint32_t start_row = get_arg_val<uint32_t>(0);
+    const uint32_t num_rows = get_arg_val<uint32_t>(1);
+    uint32_t search_len = get_common_arg_val<uint32_t>(topk_common_args::search_length);
+    const uint32_t input_page_bytes = get_common_arg_val<uint32_t>(topk_common_args::input_row_bytes);
 
     constexpr uint32_t cb_in = get_compile_time_arg_val(0);
     constexpr uint32_t chunk_bytes = get_compile_time_arg_val(1);
@@ -41,8 +42,8 @@ void kernel_main() {
         CircularBuffer meta_cb_obj(meta_cb);
         meta_cb_obj.reserve_back(1);
         const uint32_t scratch = meta_cb_obj.get_write_ptr();
-        const uint32_t metadata_length =
-            trace_metadata::read_metadata_scalar_u32(noc, meta_args, get_arg_val<uint32_t>(5), scratch);
+        const uint32_t metadata_length = trace_metadata::read_metadata_scalar_u32(
+            noc, meta_args, get_common_arg_val<uint32_t>(topk_common_args::metadata_address), scratch);
         // Validate before addition so the offset cannot wrap and no malformed metadata can produce a NoC read
         // outside the input row. ASSERT is watcher-gated, so it compiles to nothing in a normal build; pair it
         // with a clamp, as bounded_kv_actual_isl / bounded_cache_batch_idx do, or the bound would hold only

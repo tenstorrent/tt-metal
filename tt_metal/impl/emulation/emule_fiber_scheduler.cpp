@@ -244,6 +244,31 @@ struct FiberSchedulerImpl {
         return false;
     }
     bool any_waiting_on_host() const { return any_fresh_socket_poll_waiter() || any_parked_is_socket_wait(); }
+    // Called under mu_. A release puts internal producers back on another worker's
+    // ready queue; global spin churn does not prove that worker has serviced them.
+    // Only fresh wait tags justify treating runnable fibers as blocked dependencies.
+    bool any_runnable_internal_work() const {
+        for (const auto& up : all_) {
+            const Fiber* f = up.get();
+            if (f->state == FiberState::QuiescenceDeferred) {
+                return true;
+            }
+            if (f->state != FiberState::Ready && f->state != FiberState::Running) {
+                continue;
+            }
+            const uint64_t resumes = f->own_resumes.load(std::memory_order_relaxed);
+            const bool socket_wait =
+                f->socket_poll_waiting.load(std::memory_order_relaxed) &&
+                poll_tag_is_fresh(resumes, f->poll_wait_stamp.load(std::memory_order_relaxed), poll_wait_staleness_);
+            const bool cb_wait =
+                f->cb_poll_waiting.load(std::memory_order_relaxed) &&
+                poll_tag_is_fresh(resumes, f->cb_poll_stamp.load(std::memory_order_relaxed), poll_wait_staleness_);
+            if (!socket_wait && !cb_wait) {
+                return true;
+            }
+        }
+        return false;
+    }
     // The peer-fed twin of any_fresh_socket_poll_waiter: a d2d socket poll whose publisher is another
     // RANK. Such a fiber is Ready and spinning, never parked, so quiescence is never reached and the
     // tier-2 watchdog would report a livelock for a run that is merely waiting on another process.
@@ -450,8 +475,13 @@ void FiberSchedulerImpl::inner_loop(unsigned w) {
                 // quiescence-deferred fibers are runnable internal work and must get at least one
                 // release first. Otherwise a next-page H2D poll can suspend the run while the
                 // current page's deferred producer is still waiting to publish to a d2d consumer.
+                // Runnable internal work defers HostWait for the same reason a deferred producer
+                // does, so it joins that term rather than vetoing the gate: a fiber that can never
+                // progress on its own (a raw-L1 yield-spinner) would otherwise keep the run from
+                // ever asking the host for bytes, and the wall backstop would abort a run that had
+                // a resumable HostWait available. The barren-release bound still applies.
                 const bool internal_work_needs_repoll =
-                    !quiescence_deferred_.empty() || any_parked_non_socket();
+                    !quiescence_deferred_.empty() || any_parked_non_socket() || any_runnable_internal_work();
                 if (persistent_ && any_waiting_on_host() &&
                     (!internal_work_needs_repoll || barren_releases_ >= barren_release_limit)) {
                     host_wait_ = true;
@@ -990,6 +1020,25 @@ void FiberSchedulerImpl::watchdog() {
     const auto host_backstop = std::chrono::seconds(env_size("TT_EMULE_HOST_WAIT_WATCHDOG_SEC", 900));
     uint64_t last_progress = progress_.load();
     uint64_t last_resump = resumptions_.load();
+    std::unordered_map<const Fiber*, uint64_t> sampled_resumes;
+    // Global churn is not a fair execution budget for a fiber still computing
+    // in its first quantum. Sample each live fiber's own scheduling turns.
+    const auto sample_scheduling_turns = [&] {
+        bool fair_window = true;
+        std::lock_guard<std::mutex> lk(mu_);
+        for (const auto& up : all_) {
+            const Fiber* f = up.get();
+            const uint64_t resumes = f->own_resumes.load(std::memory_order_relaxed);
+            const uint64_t previous = sampled_resumes[f];
+            if ((f->state == FiberState::Running && resumes - previous <= 1) ||
+                (f->state == FiberState::Ready && resumes == previous)) {
+                fair_window = false;
+            }
+            sampled_resumes[f] = resumes;
+        }
+        return fair_window;
+    };
+    sample_scheduling_turns();
     auto last_advance = std::chrono::steady_clock::now();
     bool was_parked = host_wait_parked_.load(std::memory_order_acquire);
     while (run_active_.load(std::memory_order_acquire)) {
@@ -1010,6 +1059,7 @@ void FiberSchedulerImpl::watchdog() {
         }
         uint64_t p = progress_.load();
         uint64_t r = resumptions_.load();
+        const bool fair_window = sample_scheduling_turns();
         if (p != last_progress) {
             last_progress = p;
             last_resump = r;
@@ -1020,7 +1070,10 @@ void FiberSchedulerImpl::watchdog() {
         // A rank resuming a peer-fed spin-poll racks up resumptions with no local progress, which is
         // indistinguishable from a livelock by counting alone. It is not one while a peer can still
         // act — ranks reach a wave at different times. Read-only probe: the watchdog runs off-thread.
-        bool livelock = !parked && (r - last_resump) > window && !peer_liveness_probe();
+        // A finite non-yielding compute quantum can coexist with arbitrarily
+        // many consumer resumes. Its wall-clock backstop still applies, but
+        // other workers must not spend its fast scheduling budget for it.
+        bool livelock = !parked && fair_window && (r - last_resump) > window && !peer_liveness_probe();
         bool wall = (std::chrono::steady_clock::now() - last_advance) > (parked ? host_backstop : backstop);
         if (livelock || wall) {
             std::fprintf(
@@ -1147,6 +1200,14 @@ void FiberScheduler::launch_and_wait(bool initial) {
             }
         } else {
             W = p_->W_;   // pump: reuse homing; ready_ already refilled by pump()'s re-poll
+        }
+        // A host delivery may have satisfied a poll since the previous HostWait.
+        // Each runnable fiber must re-observe its dependency in this quantum before
+        // another worker can use its poll tag to suspend the run again.
+        for (const auto& up : p_->all_) {
+            if (up->state == FiberState::Ready) {
+                p_->retire_poll_tags(up.get());
+            }
         }
         // Reset run counters (a fresh run and each pump re-poll both start from zero, matching the
         // per-run watermarks above).

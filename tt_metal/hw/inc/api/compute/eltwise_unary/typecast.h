@@ -22,6 +22,12 @@ inline constexpr bool _typecast_is_mx_format_(DataFormat fmt) {
            fmt == DataFormat::MxFp6P || fmt == DataFormat::MxFp4 || fmt == DataFormat::MxInt8 ||
            fmt == DataFormat::MxInt4 || fmt == DataFormat::MxInt2;
 }
+
+// Float16_b -> Float32 does not need an SFPU op. By setting the Dest register mode to 32-bit, the datum
+// is already stored as a Float32 value in the Dest register, and the packer packs out Float32.
+inline constexpr bool _typecast_is_sfpu_no_op_(DataFormat src, DataFormat dst) {
+    return src == DataFormat::Float16_b && dst == DataFormat::Float32;
+}
 }  // namespace detail
 #endif
 
@@ -74,13 +80,15 @@ ALWI void typecast_tile(uint32_t idst) {
 #ifdef ARCH_QUASAR
     // An MX endpoint is unpacked to / packed from Float16_b by the format, so at the SFPU level an MX
     // format behaves as Float16_b. Route through that effective format: MX <-> Float16_b (and MX <-> MX)
-    // collapse to a pure format no-op, while MX <-> {Float32, Int32, ...} run the Float16_b <-> X SFPU
-    // conversion on top of the format (X -> MX runs X -> Float16_b, then the packer emits MX).
+    // collapse to a pure format no-op, and so does MX -> Float32, which reaches the Float16_b -> Float32
+    // no-op arm. The rest (MX <-> {Int32, ...}) run the Float16_b <-> X SFPU conversion on top of the
+    // format (X -> MX runs X -> Float16_b, then the packer emits MX).
     constexpr DataFormat effective_input_format =
         detail::_typecast_is_mx_format_(in_format) ? DataFormat::Float16_b : in_format;
     constexpr DataFormat effective_output_format =
         detail::_typecast_is_mx_format_(out_format) ? DataFormat::Float16_b : out_format;
-    if constexpr (effective_input_format != effective_output_format) {
+    constexpr bool is_sfpu_no_op = detail::_typecast_is_sfpu_no_op_(effective_input_format, effective_output_format);
+    if constexpr (effective_input_format != effective_output_format && !is_sfpu_no_op) {
         // Single unified Quasar typecast kernel, templated on the effective source/destination formats.
         MATH(SFPU_UNARY_CALL(
             DST_SYNC_MODE,
@@ -409,13 +417,15 @@ ALWI void typecast_tile_init() {
     constexpr DataFormat out_format = static_cast<DataFormat>(OUT_DTYPE);
 
 #ifdef ARCH_QUASAR
-    // Mirror typecast_tile: an MX endpoint behaves as Float16_b at the SFPU level, so only a
-    // non-trivial effective conversion needs the SFPU init (MX <-> Float16_b is a format no-op).
+    // Mirror typecast_tile: an MX endpoint behaves as Float16_b at the SFPU level, so only a pair that
+    // dispatches an SFPU op needs the init. The no-op pairs (MX <-> Float16_b, MX <-> MX, and
+    // Float16_b/MX -> Float32) are gated out here too, so init and execute stay in lockstep.
     constexpr DataFormat effective_input_format =
         detail::_typecast_is_mx_format_(in_format) ? DataFormat::Float16_b : in_format;
     constexpr DataFormat effective_output_format =
         detail::_typecast_is_mx_format_(out_format) ? DataFormat::Float16_b : out_format;
-    if constexpr (effective_input_format != effective_output_format) {
+    constexpr bool is_sfpu_no_op = detail::_typecast_is_sfpu_no_op_(effective_input_format, effective_output_format);
+    if constexpr (effective_input_format != effective_output_format && !is_sfpu_no_op) {
         MATH(SFPU_UNARY_INIT(typecast, sfpu::init_typecast));
     }
 #else

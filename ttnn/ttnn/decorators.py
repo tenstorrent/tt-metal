@@ -18,7 +18,7 @@ from loguru import logger
 
 import ttnn
 import ttnn.operation_tracer
-from ttnn.trace_allocation_config import TRACE_ALLOC_DIAGNOSTICS, TRACE_ALLOC_TRACKING
+from ttnn.tools.trace_allocation_tracker import TRACE_ALLOC_DIAGNOSTICS, TRACE_ALLOC_TRACKING
 
 
 @dataclasses.dataclass(frozen=True)
@@ -289,8 +289,10 @@ def register_pre_operation_hook(hook):
 
     global PRE_OPERATION_HOOKS
     PRE_OPERATION_HOOKS.append(hook)
-    yield
-    PRE_OPERATION_HOOKS.pop()
+    try:
+        yield
+    finally:
+        PRE_OPERATION_HOOKS.pop()
 
 
 @contextmanager
@@ -345,8 +347,10 @@ def register_post_operation_hook(hook):
 
     global POST_OPERATION_HOOKS
     POST_OPERATION_HOOKS.append(hook)
-    yield
-    POST_OPERATION_HOOKS.pop()
+    try:
+        yield
+    finally:
+        POST_OPERATION_HOOKS.pop()
 
 
 def get_devices(object_value):
@@ -363,6 +367,19 @@ def get_devices(object_value):
         for value in object_value.values():
             devices |= get_devices(value)
     return devices
+
+
+_warned_comparison_skipped_during_trace_capture = False
+
+
+def _warn_once_comparison_skipped_during_trace_capture(operation_name):
+    global _warned_comparison_skipped_during_trace_capture
+    if not _warned_comparison_skipped_during_trace_capture:
+        _warned_comparison_skipped_during_trace_capture = True
+        logger.warning(
+            f"{operation_name}: comparison mode is skipped for operations inside a metal trace capture, since their "
+            "inputs and outputs cannot be read back until the trace runs"
+        )
 
 
 def get_tensors(object_value, tensor_type):
@@ -951,31 +968,30 @@ if TRACE_ALLOC_DIAGNOSTICS:
 
     def _drain_traceback_ids(source="op_end", op_name=None):
         """Drain allocation IDs and capture their Python call stacks."""
-        from ttnn._ttnn.operations.trace import drain_pending_traceback_ids, drain_retired_traceback_ids
-        from ttnn.unsafe_allocation_tracker import UnsafeAllocationTracker
+        from ttnn._ttnn.operations.trace import drain_pending_traceback_ids
+        from ttnn.tools.trace_allocation_tracker import TraceAllocationTracker
 
         pending = drain_pending_traceback_ids()
-        retired = set(drain_retired_traceback_ids())
-        for buf_id in retired:
-            UnsafeAllocationTracker._tracebacks.pop(buf_id, None)
-        pending = [buf_id for buf_id in pending if buf_id not in retired]
-        if not pending:
-            return
-        import traceback as _tb
+        if pending:
+            import traceback as _tb
 
-        # Drop the tracker wrapper frames so the traceback ends at the model call site.
-        stack = "".join(_tb.format_stack()[:-2])
-        if source == "op_start":
-            marker = (
-                "[trace alloc tracker] pending traceback IDs were flushed at op entry; "
-                "allocation likely happened outside a wrapped op"
-            )
-            if op_name:
-                marker += f" before '{op_name}'"
-            marker += ".\n"
-            stack = marker + stack
-        for buf_id in pending:
-            UnsafeAllocationTracker._tracebacks[buf_id] = stack
+            # Drop the tracker wrapper frames so the traceback ends at the model call site.
+            stack = "".join(_tb.format_stack()[:-2])
+            if source == "op_start":
+                marker = (
+                    "[trace alloc tracker] pending traceback IDs were flushed at op entry; "
+                    "allocation likely happened outside a wrapped op"
+                )
+                if op_name:
+                    marker += f" before '{op_name}'"
+                marker += ".\n"
+                stack = marker + stack
+            for buf_id in pending:
+                TraceAllocationTracker._tracebacks[buf_id] = stack
+
+        # C++ deallocation accounting is authoritative. Reconcile after adding
+        # pending tracebacks so IDs retired before or during this drain are pruned.
+        TraceAllocationTracker.reconcile_tracebacks()
 
 
 # Keyword argument names through which an operation writes into a caller-supplied tensor in
@@ -1071,7 +1087,7 @@ class FastOperation:
             self._slow_operation.__post_init__()
         return self._slow_operation
 
-    def __gt__(self, other):
+    def __lt__(self, other):
         return self.python_fully_qualified_name < other.python_fully_qualified_name
 
     def __hash__(self):
@@ -1230,11 +1246,12 @@ if TRACE_ALLOC_TRACKING:
             _drain_traceback_ids(source="op_start", op_name=self.python_fully_qualified_name)
             push_allocation_context(self.python_fully_qualified_name)
             try:
-                result = _untracked_fast_operation_call(self, *function_args, **function_kwargs)
-                _drain_traceback_ids(source="op_end", op_name=self.python_fully_qualified_name)
-                return result
+                return _untracked_fast_operation_call(self, *function_args, **function_kwargs)
             finally:
-                pop_allocation_context()
+                try:
+                    _drain_traceback_ids(source="op_end", op_name=self.python_fully_qualified_name)
+                finally:
+                    pop_allocation_context()
 
     else:
 
@@ -1265,7 +1282,7 @@ class Operation:
     def __name__(self):
         return self.python_fully_qualified_name
 
-    def __gt__(self, other):
+    def __lt__(self, other):
         return self.python_fully_qualified_name < other.python_fully_qualified_name
 
     def __hash__(self):
@@ -1486,10 +1503,6 @@ class Operation:
                             f"Pre-operation hook {hook} returned {hook_return_value} but must return None"
                         )
 
-                if ttnn.CONFIG.enable_logging and ttnn.CONFIG.enable_graph_report:
-                    if not ttnn.tracer.is_tracing_enabled():
-                        ttnn.tracer.enable_tracing()
-
                 if ttnn.tracer.ENABLE_TRACER:
                     decorated_function = ttnn.tracer.trace_ttnn_operation(
                         self.python_fully_qualified_name, decorated_function
@@ -1511,20 +1524,28 @@ class Operation:
                         )
                         raise
 
+                host_sync_allowed = True
                 if ttnn.CONFIG.enable_logging or ttnn.CONFIG.enable_comparison_mode:
                     input_tensors = get_all_tensors((function_args, function_kwargs))
                     set_tensor_id(input_tensors)
                     decorated_function = set_output_tensor_id_decorator(decorated_function)
+                    devices = get_devices((function_args, function_kwargs))
+                    # Synchronizing with or reading from a device is illegal while a metal trace is being captured
+                    # on it, so logging and comparison mode both have to stay off the device there.
+                    host_sync_allowed = not any(ttnn.is_trace_capture_active(device) for device in devices)
 
                 if ttnn.CONFIG.enable_logging:
-                    devices = get_devices((function_args, function_kwargs))
-                    for device in devices:
-                        ttnn.synchronize_device(device)
+                    if host_sync_allowed:
+                        for device in devices:
+                            ttnn.synchronize_device(device)
 
                     logger.debug(f"Started {self.python_fully_qualified_name:50}")
 
-                if ttnn.CONFIG.enable_comparison_mode:
+                compare_against_golden = ttnn.CONFIG.enable_comparison_mode and host_sync_allowed
+                if compare_against_golden:
                     decorated_function = comparison_decorator(decorated_function)
+                elif ttnn.CONFIG.enable_comparison_mode:
+                    _warn_once_comparison_skipped_during_trace_capture(self.python_fully_qualified_name)
 
                 # Initialize variables for comparison mode
                 local_tensor_comparison_records = []
@@ -1543,7 +1564,7 @@ class Operation:
                             output = decorated_function(*function_args, **function_kwargs)
 
                     # Success path - only runs if no exception
-                    if ttnn.CONFIG.enable_comparison_mode:
+                    if compare_against_golden:
                         (
                             output,
                             (
@@ -1555,13 +1576,14 @@ class Operation:
                         ) = output
 
                     if ttnn.CONFIG.enable_logging:
-                        for device in devices:
-                            ttnn.synchronize_device(device)
+                        if host_sync_allowed:
+                            for device in devices:
+                                ttnn.synchronize_device(device)
                         logger.debug(f"Finished {self.python_fully_qualified_name:50}")
 
                     # Comparison mode: record Python-specific golden comparison data
                     # for offline graph_report import.
-                    if ttnn.CONFIG.enable_comparison_mode:
+                    if compare_against_golden:
                         golden_tensors = get_all_tensors((local_golden_function_output, global_golden_function_output))
                         ttnn.graph.record_tensor_comparison_data(
                             local_tensor_comparison_records=local_tensor_comparison_records,
@@ -1634,11 +1656,12 @@ if TRACE_ALLOC_TRACKING:
             _drain_traceback_ids(source="op_start", op_name=self.python_fully_qualified_name)
             push_allocation_context(self.python_fully_qualified_name)
             try:
-                result = _untracked_operation_call(self, *function_args, **function_kwargs)
-                _drain_traceback_ids(source="op_end", op_name=self.python_fully_qualified_name)
-                return result
+                return _untracked_operation_call(self, *function_args, **function_kwargs)
             finally:
-                pop_allocation_context()
+                try:
+                    _drain_traceback_ids(source="op_end", op_name=self.python_fully_qualified_name)
+                finally:
+                    pop_allocation_context()
 
     else:
 

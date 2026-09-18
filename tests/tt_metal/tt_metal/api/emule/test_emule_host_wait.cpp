@@ -9,6 +9,7 @@
 #include <unistd.h>
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <cstdlib>
 #include <memory>
@@ -181,6 +182,87 @@ TEST_F(EmuleHostWait, DeferredProducerRunsBeforeDownstreamHostWait) {
     // Complete the future host dependency so the process-global scheduler registry is clean.
     next_host_page_ready.store(true, std::memory_order_release);
     ASSERT_EQ(sched.pump(), RunOutcome::Completed);
+}
+
+// Consumer churn is not evidence that an independently executing compute
+// quantum is stuck. Keep the wall backstop; only the resumption budget is unfair.
+TEST_F(EmuleHostWait, FiniteComputeOutlivesConsumerResumptionWindow) {
+    arm_fast_watchdog();
+    std::atomic<bool> ready{false};
+    std::atomic<uint64_t> consumer_resumes{0};
+    spawn_fiber(
+        [&] {
+            while (!ready.load(std::memory_order_acquire)) {
+                consumer_resumes.fetch_add(1, std::memory_order_relaxed);
+                FiberScheduler::instance().yield();
+            }
+        },
+        4,
+        "consumer_waiting_for_finite_compute");
+    spawn_fiber(
+        [&] {
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(750);
+            // No scheduler calls until the finite computation produces its result.
+            while (std::chrono::steady_clock::now() < deadline) {
+            }
+            ready.store(true, std::memory_order_release);
+            FiberScheduler::instance().note_publish(1);
+        },
+        5,
+        "finite_non_yielding_compute");
+    FiberScheduler::instance().run_until_idle();
+    EXPECT_TRUE(ready.load());
+    // Without this the run never reached the unfair budget, so a pass proves nothing:
+    // 2000 is arm_fast_watchdog's TT_EMULE_FIBER_PROGRESS_WINDOW.
+    EXPECT_GT(consumer_resumes.load(), 2000u);
+    disarm_fast_watchdog();
+}
+
+// A raw-L1 busy-waiter is Ready and carries no poll tag, so it is runnable internal work — but
+// it cannot progress on its own. HostWait must stay reachable beside it, or the run dies on the
+// wall backstop instead of asking the host for the bytes that would free everyone. A regression
+// here aborts on that backstop rather than failing softly, which is why the watchdog is armed.
+TEST_F(EmuleHostWait, HostFedPollReachesHostWaitBesideAnUntaggedYieldSpinner) {
+    arm_fast_watchdog();
+    std::atomic<bool> done{false};
+    std::atomic<bool> stop_spin{false};
+    spawn_fiber(polling_body(&done, /*host_fed=*/true, nullptr), 1, "h2d_receiver_poll");
+    spawn_fiber(
+        [&] {
+            while (!stop_spin.load(std::memory_order_acquire)) {
+                FiberScheduler::instance().yield();
+            }
+        },
+        2,
+        "raw_l1_yield_spin");
+
+    auto& sched = FiberScheduler::instance();
+    ASSERT_EQ(sched.run_persistent(), RunOutcome::HostWait);
+
+    done.store(true, std::memory_order_release);
+    stop_spin.store(true, std::memory_order_release);
+    ASSERT_EQ(sched.pump(), RunOutcome::Completed);
+    disarm_fast_watchdog();
+}
+
+TEST_F(EmuleHostWait, AllYieldingLivelockStillTripsResumptionWindow) {
+    arm_fast_watchdog();
+    EXPECT_DEATH(
+        {
+            for (uint8_t core = 0; core < 2; ++core) {
+                spawn_fiber(
+                    [] {
+                        for (;;) {
+                            FiberScheduler::instance().yield();
+                        }
+                    },
+                    core,
+                    "yielding_livelock");
+            }
+            FiberScheduler::instance().run_until_idle();
+        },
+        "resumption window");
+    disarm_fast_watchdog();
 }
 
 // The existential host root must not become a sticky exemption. Once it clears, an unrelated

@@ -207,9 +207,20 @@ inline void calculate_typecast_fp32_to_int32() {
         // result = -result (two's complement)
         TTI_SFPIADD(
             0, p_sfpu::LCONST_0, p_sfpu::LREG1, sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
+        // A positive input cannot legitimately produce a negative int32, so the only lanes this
+        // matches are the positive overflows that the INT_MIN constant above saturated the wrong
+        // way: the same constant serves both signs and the negate only fires for in < 0.
+        // Decrementing wraps INT_MIN to INT_MAX.
+        // LaneEnabled = in >= 0, the complement of the negate's in < 0. SFPSETCC compares the
+        // register as a signed int32, so LT0 and GTE0 partition every bit pattern and one
+        // SFPCOMPC is exactly equivalent to re-enabling all lanes and re-testing the sign.
+        TTI_SFPCOMPC(0, 0, 0, 0);
+        // LaneEnabled &= result < 0
+        TTI_SFPSETCC(0, p_sfpu::LREG1, 0, sfpi::SFPSETCC_MOD1_LREG_LT0);
+        // result -= 1
+        TTI_SFPIADD(-1 & 0xfff, p_sfpu::LREG1, p_sfpu::LREG1, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
         // LaneEnabled = true
         TTI_SFPENCC(0, 0, 0, 0);
-
         TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::INT32, ADDR_MOD_6, 0);
     }
 }

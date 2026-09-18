@@ -63,10 +63,10 @@ jobs:
           RUN_URL: ${{ github.event.workflow_run.html_url }}
         run: |
           set -euo pipefail
-          # Only real releases reach the RELEASE board. Package and release also
-          # runs on main (cron dev release) and on feature branches via dispatch;
-          # those failures are CI noise. Release refs are `stable` and the
-          # version tags, matching release-build-test-publish.yaml.
+          # Only release refs reach the RELEASE board: `main` (the nightly cron
+          # dev release), `stable`, and the version tags. Package and release
+          # also runs on feature branches via dispatch; those failures are CI
+          # noise and stay off the board.
           #
           # Resolved from the run itself rather than the trigger, because
           # `on.workflow_run.branches` cannot express tags and does not apply to
@@ -75,7 +75,7 @@ jobs:
           read -r BRANCH HEAD_SHA < <(gh api "repos/$REPO/actions/runs/$RUN_ID" \
             --jq '"\(.head_branch) \(.head_sha)"')
           case "$BRANCH" in
-            stable|v[0-9]*) ;;
+            main|stable|v[0-9]*) ;;
             *)
               echo "::notice::run $RUN_ID is on '$BRANCH', not a release ref; nothing to file."
               echo "file=false" >> "$GITHUB_OUTPUT"
@@ -112,6 +112,19 @@ jobs:
               dropped=$((dropped + 1))
               continue
             fi
+            # `release-precheck` exits 1 to mean "nothing to release": on the
+            # main nightly, get_should_create_release.sh returns false when HEAD
+            # is already tagged (no new commits since the last dev release).
+            # That reds the whole run, but every downstream job is then skipped,
+            # so nothing was built or tested -- like the infra failure above, it
+            # is not a test result to report. Only on main: workflow_dispatch
+            # skips the check outright, so on stable and the version tags a
+            # precheck failure is a real release blocker and still files.
+            if [ "$BRANCH" = "main" ] && [ "$jname" = "release-precheck" ]; then
+              echo "::notice::skipping $jname -- nothing-to-release exit, no test ran"
+              dropped=$((dropped + 1))
+              continue
+            fi
             if [ -n "${WATCH_JOBS}" ]; then
               keep=0
               IFS=',' read -ra pats <<< "$WATCH_JOBS"
@@ -125,7 +138,7 @@ jobs:
 
           if [ "${#failed[@]}" -eq 0 ]; then
             if [ "$dropped" -gt 0 ]; then
-              echo "::notice::all $dropped failed job(s) were infra failures; nothing to file."
+              echo "::notice::all $dropped failed job(s) had no test result; nothing to file."
             else
               echo "No watched jobs failed; nothing to file."
             fi
@@ -155,7 +168,7 @@ jobs:
             echo "description<<EOF"
             echo "### Impact"
             echo "The Package and release workflow failed on $BRANCH: ${#failed[@]} job(s) failed."
-            [ "$dropped" -gt 0 ] && echo "($dropped more job(s) omitted: the runner never started, so no test ran.)"
+            [ "$dropped" -gt 0 ] && echo "($dropped more job(s) omitted: no test ran in them.)"
             echo "### Failed jobs"
             # The leaf name, not the whole "a / b / c / leaf" path -- the prefix
             # is the same for every row and the link carries the full context.
@@ -260,7 +273,7 @@ jobs:
           # ever filed a ticket, so only they have anything to close.
           BRANCH=$(gh api "repos/$REPO/actions/runs/$RUN_ID" --jq .head_branch)
           case "$BRANCH" in
-            stable|v[0-9]*) ;;
+            main|stable|v[0-9]*) ;;
             *)
               echo "::notice::run $RUN_ID is on '$BRANCH', not a release ref; nothing to close."
               exit 0 ;;
