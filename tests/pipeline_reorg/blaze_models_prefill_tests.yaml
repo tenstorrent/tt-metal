@@ -625,9 +625,6 @@
     # FULL-indexer layer (6; GLM-5.2 layers 3-5 reuse a prior layer's indexer top-k, which an isolated block
     # cannot supply) where the non-degenerate random gate agrees with the reference. -k glm52 runs both the
     # dense and MoE parametrizations.
-    # NOTE: reverted from test_glm_prefill_block_indexer_teacher_forced (chunked) -- that test has an
-    # unresolved indexer-K PCC gap tracked in #56993; single-shot stays here until the chunked path is
-    # fixed.
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_glm_prefill_block -k "seq5120 and torus-xy-8x4 and glm52" -vvv --tb=short --timeout=600
