@@ -60,14 +60,21 @@ void kernel_main() {
 #ifdef LAST_DIM_STRIDED
         // read output rows in batches if striding on last dim
         cb_out.reserve_back(num_read_per_barrier);
+        uint32_t read_offset = 0;
+        // Read-back must not consume the write loop's id_per_dim.
+        uint32_t src_id_per_dim[8];
+        for (uint32_t j = 0; j < num_dims; j++) {
+            src_id_per_dim[j] = id_per_dim[j];
+        }
         for (uint32_t i = 0; i < num_read_per_barrier and sticks_read < num_sticks_per_core; ++i) {
             sticks_read++;
-            noc.async_read(s0, cb_out, output_stick_size, {.page_id = src_stick_id}, {});
+            noc.async_read(s0, cb_out, output_stick_size, {.page_id = src_stick_id}, {.offset_bytes = read_offset});
+            read_offset += output_stick_size;
             src_stick_id += rev_stride[1];
             for (uint32_t j = 0; j < num_dims; j++) {
-                id_per_dim[j]++;
-                if (id_per_dim[j] == num_unpadded_sticks[j]) {
-                    id_per_dim[j] = 0;
+                src_id_per_dim[j]++;
+                if (src_id_per_dim[j] == num_unpadded_sticks[j]) {
+                    src_id_per_dim[j] = 0;
                     src_stick_id += num_padded_sticks[j];
                 } else {
                     break;
