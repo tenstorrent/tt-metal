@@ -53,6 +53,8 @@ struct InputArgs {
     bool sweep_traffic_configs = false;
     bool validate_connectivity = true;
     std::optional<uint32_t> min_connections = std::nullopt;  // Relaxed validation mode
+    bool skip_retrain = false;                               // Report missing links without reset_ethernet_links
+    bool cross_host_port_down = false;
 
     // link_reset subcommand args
     std::optional<std::string> reset_host = std::nullopt;
@@ -110,7 +112,13 @@ cxxopts::Options create_validation_options() {
         cxxopts::value<bool>()->default_value("false"))(
         "min-connections",
         "Minimum connections per ASIC pair required for relaxed validation mode",
-        cxxopts::value<uint32_t>())("h,help", "Print usage information");
+        cxxopts::value<uint32_t>())(
+        "skip-retrain",
+        "Do not retrain or reset missing Ethernet links; report them and continue",
+        cxxopts::value<bool>()->default_value("false"))(
+        "cross-host-port-down",
+        "Bring down all detected cross-host Ethernet ports and exit",
+        cxxopts::value<bool>()->default_value("false"))("h,help", "Print usage information");
 
     return options;
 }
@@ -230,8 +238,14 @@ void parse_validation_args(int argc, char* argv[], InputArgs& input_args) {
         input_args.print_connectivity = result["print-connectivity"].as<bool>();
         input_args.send_traffic = result["send-traffic"].as<bool>();
         input_args.sweep_traffic_configs = result["sweep-traffic-configs"].as<bool>();
+        input_args.skip_retrain = result["skip-retrain"].as<bool>();
+        input_args.cross_host_port_down = result["cross-host-port-down"].as<bool>();
         input_args.validate_connectivity =
             input_args.cabling_descriptor_path.has_value() || input_args.fsd_path.has_value();
+        if (input_args.skip_retrain) {
+            log_output_rank0(
+                "Link retrain disabled (--skip-retrain). Missing connections will be reported and left as-is.");
+        }
 
         // Parse min-connections
         if (result.contains("min-connections")) {
@@ -360,6 +374,11 @@ int main(int argc, char* argv[]) {
     // Create physical system descriptor and discover the system
     auto physical_system_descriptor = generate_physical_system_descriptor(input_args);
 
+    if (input_args.cross_host_port_down) {
+        bring_down_cross_host_ethernet_ports(physical_system_descriptor);
+        return 0;
+    }
+
     // Handle link_reset subcommand
     if (input_args.mode == CommandMode::LINK_RETRAIN) {
         perform_link_reset(
@@ -380,7 +399,11 @@ int main(int argc, char* argv[]) {
         5;  // If links don't come up after 5 retrains, the system is in an unrecoverable state.
     uint32_t num_retrains = 0;
     std::unordered_map<EthChannelIdentifier, uint32_t> link_retrain_counts;
-    while (!missing_asic_topology.empty() && link_retrain_supported && num_retrains < MAX_RETRAINS_BEFORE_FAILURE) {
+    if (input_args.skip_retrain && !missing_asic_topology.empty()) {
+        log_output_rank0("Skipping link retrain (--skip-retrain); leaving post-reset missing links in place.");
+    }
+    while (!missing_asic_topology.empty() && link_retrain_supported && !input_args.skip_retrain &&
+           num_retrains < MAX_RETRAINS_BEFORE_FAILURE) {
         auto retrained_links = collect_retrained_link_identifiers(missing_asic_topology, physical_system_descriptor);
         for (const auto& link_id : retrained_links) {
             link_retrain_counts[link_id]++;

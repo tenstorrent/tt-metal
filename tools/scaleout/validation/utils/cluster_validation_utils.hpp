@@ -78,6 +78,8 @@ bool generate_link_metrics(
 void reset_ethernet_links(
     const PhysicalSystemDescriptor& physical_system_descriptor, const tt_metal::AsicTopology& asic_topology);
 
+void bring_down_cross_host_ethernet_ports(const PhysicalSystemDescriptor& physical_system_descriptor);
+
 std::vector<EthChannelIdentifier> collect_retrained_link_identifiers(
     const tt_metal::AsicTopology& missing_topology, const PhysicalSystemDescriptor& physical_system_descriptor);
 

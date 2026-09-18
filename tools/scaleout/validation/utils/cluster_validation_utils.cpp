@@ -717,7 +717,12 @@ void dump_link_stats(
             for (const auto& eth_connection : eth_connections) {
                 auto src_chan = eth_connection.src_chan;
                 auto logical_coord = soc_desc.get_eth_core_for_channel(src_chan, CoordSystem::LOGICAL);
-                auto ethernet_core = ctx.devices.at(chip_id)->ethernet_core_from_logical_core(logical_coord);
+                // --log-ethernet-metrics without --send-traffic builds an empty device map; ethernet
+                // cores are only needed to read payload words when traffic was sent.
+                CoreCoord ethernet_core{};
+                if (data_size > 0) {
+                    ethernet_core = ctx.devices.at(chip_id)->ethernet_core_from_logical_core(logical_coord);
+                }
                 const auto& port_info = port_info_map.at(asic_id).at(src_chan);
                 links.push_back(
                     {chip_id,
@@ -1587,9 +1592,9 @@ void get_cross_node_ethernet_links_to_reset(
     forward_link_reset_metadata_from_controller(ordered_exit_nodes, cross_node_links_to_reset);
 }
 
-void reset_cross_node_ethernet_links(
+std::vector<ResetLink> build_cross_node_reset_links(
     const PhysicalSystemDescriptor& physical_system_descriptor,
-    const std::vector<EthChannelIdentifier>& cross_node_links_to_reset) {
+    const std::vector<EthChannelIdentifier>& cross_node_links) {
     auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     std::unordered_map<uint64_t, ChipId> asic_id_to_chip_id;
 
@@ -1597,11 +1602,10 @@ void reset_cross_node_ethernet_links(
         asic_id_to_chip_id[asic_id] = chip_id;
     }
 
-    std::vector<ResetLink> links_to_reset;
-
-    // Collect all cross-node links to reset
-    for (const auto& link : cross_node_links_to_reset) {
-        auto chip_id = asic_id_to_chip_id[*link.asic_id];
+    std::vector<ResetLink> reset_links;
+    reset_links.reserve(cross_node_links.size());
+    for (const auto& link : cross_node_links) {
+        const auto chip_id = asic_id_to_chip_id.at(*link.asic_id);
         const auto& asic_descriptor = physical_system_descriptor.get_asic_descriptors().at(link.asic_id);
 
         std::string log_message = "Cross-Node Link on Host: " + asic_descriptor.host_name +
@@ -1609,15 +1613,43 @@ void reset_cross_node_ethernet_links(
                                   " Tray: " + std::to_string(*asic_descriptor.tray_id) +
                                   " Location: " + std::to_string(*asic_descriptor.asic_location);
 
-        links_to_reset.push_back({chip_id, link.channel, log_message});
+        reset_links.push_back({chip_id, link.channel, std::move(log_message)});
     }
+    return reset_links;
+}
 
-    // Perform resets on all links in vector
-    send_reset_msg_to_links(links_to_reset);
+void reset_cross_node_ethernet_links(
+    const PhysicalSystemDescriptor& physical_system_descriptor,
+    const std::vector<EthChannelIdentifier>& cross_node_links_to_reset) {
+    send_reset_msg_to_links(build_cross_node_reset_links(physical_system_descriptor, cross_node_links_to_reset));
 
     // Final barrier ensures all hosts have completed their cross-node ethernet link resets before proceeding
     const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
     distributed_context.barrier();
+}
+
+void bring_down_cross_host_ethernet_ports(const PhysicalSystemDescriptor& physical_system_descriptor) {
+    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    TT_FATAL(cluster.arch() == tt::ARCH::BLACKHOLE, "Cross-host port down is only supported on Blackhole");
+
+    tt::tt_metal::AsicTopology full_topology;
+    for (const auto& hostname : physical_system_descriptor.get_all_hostnames()) {
+        const auto& host_topology = physical_system_descriptor.get_asic_topology(hostname);
+        for (const auto& [asic_id, connections] : host_topology) {
+            full_topology.emplace(asic_id, connections);
+        }
+    }
+
+    std::vector<EthChannelIdentifier> local_cross_host_endpoints;
+    get_cross_node_ethernet_links_to_reset(physical_system_descriptor, full_topology, local_cross_host_endpoints);
+
+    log_warning(
+        tt::LogDistributed, "Bringing down {} local cross-host Ethernet endpoints", local_cross_host_endpoints.size());
+    send_port_down_msg_to_links(build_cross_node_reset_links(physical_system_descriptor, local_cross_host_endpoints));
+
+    const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
+    distributed_context.barrier();
+    log_output_rank0("Cross-host Ethernet port down complete on all hosts");
 }
 
 void reset_ethernet_links(

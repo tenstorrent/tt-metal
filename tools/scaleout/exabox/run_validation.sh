@@ -53,6 +53,8 @@ Optional:
                                             $DOCKER_IMAGE_DEFAULT
     --skip-version-check                     Skip the tt-smi/KMD/firmware version checks run on all hosts
                                             before validation (see minimum versions in utils/host_utils.sh)
+    --skip-cross-host-port-down               Skip quiescing cross-host Ethernet ports before each reset
+                                            (required for non-Blackhole systems)
     --cabling-descriptor-path <path>        Path to cabling descriptor file
                                             (default: /data/scaleout_configs/bh_glx_exabox/cabling_descriptor.textproto)
     --deployment-descriptor-path <path>     Path to deployment descriptor file
@@ -99,6 +101,7 @@ DOCKER_IMAGE=""
 # last-known-good tag as needed (see tools/scaleout/exabox/README.md).
 DOCKER_IMAGE_DEFAULT="ghcr.io/tenstorrent/tt-metal/upstream-tests-bh-glx:v0.66.0-dev20260115-28-g6eccf7061a"
 SKIP_VERSION_CHECK=false
+SKIP_CROSS_HOST_PORT_DOWN=false
 CABLING_DESCRIPTOR_PATH="/data/scaleout_configs/bh_glx_exabox/cabling_descriptor.textproto"
 DEPLOYMENT_DESCRIPTOR_PATH="/data/scaleout_configs/bh_glx_exabox/deployment_descriptor.textproto"
 ITERATIONS=50
@@ -139,6 +142,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --skip-version-check)
             SKIP_VERSION_CHECK=true
+            shift
+            ;;
+        --skip-cross-host-port-down)
+            SKIP_CROSS_HOST_PORT_DOWN=true
             shift
             ;;
         --cabling-descriptor-path)
@@ -277,6 +284,41 @@ if [[ -z "$OUTPUT_DIR" ]]; then
     OUTPUT_DIR="${HOSTS}-$(date +%Y%m%d_%H%M%S)"
 fi
 
+run_cross_host_port_down() {
+    if [[ -n "$FACTORY_DESCRIPTOR_PATH" ]]; then
+        local descriptor_args=(--factory-descriptor-path "$FACTORY_DESCRIPTOR_PATH")
+    else
+        local descriptor_args=(--cabling-descriptor-path "$CABLING_DESCRIPTOR_PATH" --deployment-descriptor-path "$DEPLOYMENT_DESCRIPTOR_PATH")
+    fi
+
+    local volume_args=()
+    for vol in "${EXTRA_VOLUMES[@]}"; do
+        volume_args+=(--volume "$vol")
+    done
+
+    if [[ $DOCKER_IMAGE == "none" ]]; then
+        local bin_cmd
+        bin_cmd=$(printf '%q ' ./build/tools/scaleout/run_cluster_validation \
+            "${descriptor_args[@]}" \
+            --cross-host-port-down)
+        mpirun --host "$HOSTS" \
+            --mca btl_tcp_if_include "$MPI_IF" \
+            "${MPI_EXTRA_ARGS[@]}" \
+            bash -c "set -o pipefail; h=\$(hostname); $bin_cmd 2>&1 | while IFS= read -r l; do printf '[%s] %s\n' \"\$h\" \"\$l\"; done"
+    else
+        ./tools/scaleout/exabox/mpi-docker --image "$DOCKER_IMAGE" \
+            --empty-entrypoint \
+            --tag-host \
+            --mpi-interface "$MPI_IF" \
+            "${volume_args[@]}" \
+            "${MPI_EXTRA_ARGS[@]}" \
+            --host "$HOSTS" \
+            ./build/tools/scaleout/run_cluster_validation \
+            "${descriptor_args[@]}" \
+            --cross-host-port-down
+    fi
+}
+
 run_cluster_validation() {
     local validation_output_path="$1"
 
@@ -408,6 +450,7 @@ if [[ "${#MPI_EXTRA_ARGS[@]}" -gt 0 ]]; then
 fi
 echo "Number of iterations: $ITERATIONS"
 echo "Skip version check: $SKIP_VERSION_CHECK"
+echo "Skip cross-host port down: $SKIP_CROSS_HOST_PORT_DOWN"
 echo "Output directory: $OUTPUT_DIR"
 if [[ ${#VALIDATION_EXTRA_ARGS[@]} -gt 0 ]]; then
     echo "Extra validation args: ${VALIDATION_EXTRA_ARGS[*]}"
@@ -444,6 +487,20 @@ for ((i=1; i<=ITERATIONS; i++)); do
         echo "Timestamp: $(date)"
         echo "=========================================="
         echo ""
+
+        if [[ "$SKIP_CROSS_HOST_PORT_DOWN" == false ]]; then
+            echo "Bringing down cross-host Ethernet ports before reset..."
+            run_cross_host_port_down
+            PORT_DOWN_EXIT_CODE=$?
+            if [[ $PORT_DOWN_EXIT_CODE -ne 0 ]]; then
+                echo "WARNING: cross-host port down FAILED (exit code $PORT_DOWN_EXIT_CODE); continuing with Galaxy reset."
+            else
+                echo "Cross-host Ethernet ports are down on all hosts."
+            fi
+            echo ""
+        else
+            echo "Skipping cross-host Ethernet port down."
+        fi
 
         echo "Running tt-smi -glx_reset (this may take a few minutes)..."
 
