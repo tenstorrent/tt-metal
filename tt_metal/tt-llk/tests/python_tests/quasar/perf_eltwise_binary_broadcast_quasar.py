@@ -11,9 +11,12 @@ from helpers.llk_params import (
     PERF_RUN_TYPES_QUASAR,
 )
 from helpers.param_config import generate_perf_input_dimensions, parametrize
+from helpers.tile_shape import construct_tile_shape
 from quasar.test_eltwise_binary_broadcast_quasar import (
     BINARY_BROADCAST_FORMATS,
+    BINARY_BROADCAST_TILE_DIMENSIONS,
     BROADCAST_TYPES,
+    binary_broadcast_acc_to_dest_modes,
     binary_broadcast_dest_sync_modes,
     binary_broadcast_implied_math_formats,
     binary_broadcast_math_fidelities,
@@ -28,18 +31,24 @@ from quasar.test_eltwise_binary_broadcast_quasar import (
 @parametrize(
     formats=BINARY_BROADCAST_FORMATS,
     dest_acc=get_valid_dest_accumulation_modes,
-    mathop=get_perf_math_operations,
+    math_op=get_perf_math_operations,
     broadcast_type=BROADCAST_TYPES,
-    math_fidelity=lambda formats, mathop: binary_broadcast_math_fidelities(
-        formats, mathop
+    math_fidelity=lambda formats, math_op: binary_broadcast_math_fidelities(
+        formats, math_op
     ),
     implied_math_format=lambda formats: binary_broadcast_implied_math_formats(
         formats, is_perf=True
     ),
-    dest_sync_mode=lambda: binary_broadcast_dest_sync_modes(is_perf=True),
-    input_dimensions=lambda dest_acc, dest_sync_mode: generate_perf_input_dimensions(
-        dest_acc, dest_sync_mode, use_largest_fallback=True
+    dest_sync=lambda: binary_broadcast_dest_sync_modes(is_perf=True),
+    unpack_to_dest=[False],
+    tile_dimensions=BINARY_BROADCAST_TILE_DIMENSIONS,
+    input_dimensions=lambda dest_acc, dest_sync, tile_dimensions: generate_perf_input_dimensions(
+        dest_acc,
+        dest_sync,
+        construct_tile_shape(tile_dimensions),
+        use_largest_fallback=True,
     ),
+    acc_to_dest=binary_broadcast_acc_to_dest_modes,
     run_types=PERF_RUN_TYPES_QUASAR,
     loop_factor=[PERF_LOOP_FACTOR_QUASAR],
     is_perf=[True],
@@ -48,12 +57,15 @@ def test_perf_eltwise_binary_broadcast_quasar(
     perf_report,
     formats,
     dest_acc,
-    mathop,
+    math_op,
     broadcast_type,
     math_fidelity,
     implied_math_format,
-    dest_sync_mode,
+    dest_sync,
+    unpack_to_dest,
+    tile_dimensions,
     input_dimensions,
+    acc_to_dest,
     run_types,
     loop_factor,
     is_perf,
@@ -61,12 +73,15 @@ def test_perf_eltwise_binary_broadcast_quasar(
     run_eltwise_binary_broadcast(
         formats,
         dest_acc,
-        mathop,
+        math_op,
         broadcast_type,
         math_fidelity,
         implied_math_format,
-        dest_sync_mode,
+        dest_sync,
+        unpack_to_dest,
+        tile_dimensions,
         input_dimensions,
+        acc_to_dest,
         run_types=run_types,
         loop_factor=loop_factor,
         is_perf=is_perf,
