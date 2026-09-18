@@ -40,15 +40,15 @@ void bind_qkv_causal_conv1d_silu(nb::module_& mod) {
             v_width (int): Output V width.
 
         Keyword Args:
-            actual_start (ttnn.Tensor, optional): Replicated UINT32 row-major scalar
-                containing the absolute position of the chunk's first token. Its
+            actual_start (ttnn.Tensor): Replicated UINT32 row-major scalar
+                containing the absolute position of the chunk's first token; pass [0]
+                for zero-offset execution. Its
                 value must be nonnegative and 32-aligned. Keep its address stable
                 and update its contents before replay of a captured trace.
             sequence_parallel_axis (int, optional): Mesh axis partitioning the
                 sequence. Native mesh coordinates supply each device's rank.
-            predecessor_carry (ttnn.Tensor, optional): Three-row history from the
-                preceding rank, matching history. Required exactly when actual_start
-                is supplied; rejected without it.
+            predecessor_carry (ttnn.Tensor): Three-row history from the
+                preceding rank, matching history. For local execution, alias history.
             program_config (QkvCausalConv1dSiluProgramConfig): Required program tuning;
                 ``channel_chunk_size`` is expressed in logical channels.
             memory_config (ttnn.MemoryConfig, optional): Interleaved output memory
@@ -77,11 +77,11 @@ void bind_qkv_causal_conv1d_silu(nb::module_& mod) {
         nb::arg("v_width"),
         nb::kw_only(),
         nb::arg("program_config").noconvert(),
+        nb::arg("actual_start").noconvert(),
+        nb::arg("predecessor_carry").noconvert(),
 
         nb::arg("memory_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
-        nb::arg("actual_start") = nb::none(),
-        nb::arg("sequence_parallel_axis") = 0,
-        nb::arg("predecessor_carry") = nb::none());
+        nb::arg("sequence_parallel_axis") = 0);
 }
 }  // namespace ttnn::operations::experimental::kda::qkv_causal_conv1d_silu::detail

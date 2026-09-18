@@ -153,7 +153,7 @@ class ttKDA:
         self.recurrence = KDARecurrence(
             mesh_device,
             program_config.recurrence,
-            sequence_parallel_axis=(self.sequence_parallel_axis if self.sequence_parallel_size > 1 else None),
+            sequence_parallel_axis=self.sequence_parallel_axis,
         )
         self.output_projection_compute_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
@@ -196,7 +196,7 @@ class ttKDA:
         """Validate shape/type plus the documented SP state-distribution contract."""
         if not isinstance(actual_start, ttnn.Tensor):
             raise TypeError("actual_start must be a device UINT32 scalar")
-        if isinstance(actual_start, ttnn.Tensor) and (
+        if (
             actual_start.dtype != ttnn.uint32
             or actual_start.layout != ttnn.ROW_MAJOR_LAYOUT
             or any(dimension != 1 for dimension in actual_start.shape)
@@ -236,7 +236,7 @@ class ttKDA:
         if selections is None:
             batch, rows, width = qkv.shape
             new_state = ttnn.slice(qkv, (0, rows - (config.conv_kernel_size - 1), 0), (batch, rows, width))
-            predecessor = None
+            predecessor = incoming_layer_carry
         else:
             predecessor, new_state = exchange_convolution_carry(
                 qkv, sequence_parallel_axis=self.sequence_parallel_axis, selections=selections
@@ -249,7 +249,7 @@ class ttKDA:
             config.k_dim,
             config.v_dim,
             program_config=self.qkv_convolution_program_config,
-            actual_start=actual_start if selections is not None else None,
+            actual_start=actual_start,
             sequence_parallel_axis=self.sequence_parallel_axis,
             predecessor_carry=predecessor,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -435,6 +435,7 @@ class ttKDA:
             )
         else:
             result = self.recurrence(
+                actual_start=actual_start,
                 q=q,
                 k=k,
                 v=v,

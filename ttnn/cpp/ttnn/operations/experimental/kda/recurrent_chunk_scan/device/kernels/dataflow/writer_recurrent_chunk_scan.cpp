@@ -95,12 +95,12 @@ FORCE_INLINE void write_recurrent(uint32_t head, uint32_t value_block, uint32_t 
     write_value_slice<Kt, Vt, VtFull, Kt>(final_state_accessor, final_state, noc, state_row_base, value_block);
 }
 
-template <uint32_t Ct, uint32_t Kt, uint32_t Vt, uint32_t Vt_full, uint32_t summary, uint32_t dynamic_chronology>
+template <uint32_t Ct, uint32_t Kt, uint32_t Vt, uint32_t Vt_full, uint32_t summary>
 TT_KERNEL void writer(uint32_t head, uint32_t value_block, uint32_t num_chunks, uint32_t group) {
     uint32_t split_group = 0;
     uint32_t split_in_group = 0;
     bool local_split = false;
-    if constexpr (dynamic_chronology) {
+    {
         DataflowBuffer chronology(dfb::chronology_writer);
         chronology.wait_front(1);
         auto topology = kda_chronology::load(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(chronology.get_read_ptr()));

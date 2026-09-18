@@ -39,20 +39,17 @@ inline ttnn::device_operation::MeshWorkloadArtifacts chronology_workload(
 inline void bind_chronology(
     tt::tt_metal::experimental::ProgramSpec& spec,
     tt::tt_metal::experimental::ProgramRunArgs& run,
-    const std::optional<Tensor>& actual_start,
-    const Tensor& fallback,
+    const Tensor& actual_start,
     tt::tt_metal::experimental::KernelSpec& reader,
     tt::tt_metal::experimental::KernelSpec& compute) {
     using namespace tt::tt_metal::experimental;
     const TensorParamName name{"actual_start"};
-    const auto& tensor = (actual_start ? *actual_start : fallback).mesh_tensor();
+    const auto& tensor = actual_start.mesh_tensor();
     spec.tensor_parameters.push_back({.unique_id = name, .spec = tensor.tensor_spec()});
     run.tensor_args.emplace(name, tensor);
     const DFBSpecName channel{"chronology_compute"};
     spec.dataflow_buffers.push_back(
         {.unique_id = channel, .entry_size = 32, .num_entries = 1, .data_format_metadata = tt::DataFormat::UInt32});
-    reader.compile_time_args.insert({"dynamic_chronology", uint32_t(actual_start.has_value())});
-    compute.compile_time_args.insert({"dynamic_chronology", uint32_t(actual_start.has_value())});
     reader.tensor_bindings.push_back({name, "actual_start"});
     reader.dfb_bindings.push_back(ProducerOf(channel, "chronology_compute"));
     compute.dfb_bindings.push_back(ConsumerOf(channel, "chronology_compute"));

@@ -42,14 +42,14 @@ void bind_reduce_affine_transforms(nb::module_& mod) {
                 dimension.
 
         Keyword Args:
-            actual_start (ttnn.Tensor, optional): Replicated UINT32 row-major scalar
-                containing the absolute position of the chunk's first token. Its
+            actual_start (ttnn.Tensor): Replicated UINT32 row-major scalar
+                containing the absolute position of the chunk's first token; pass [0]
+                for zero-offset execution. Its
                 value must be nonnegative and 32-aligned. Keep its address stable
                 and update its contents before replay of a captured trace.
             sequence_parallel_axis (int, optional): Mesh axis partitioning the
                 sequence. Native mesh coordinates supply each device's rank.
-            local_rows (int, optional): Token rows per SP device; required and
-                positive/32-aligned when actual_start is supplied. Summary tensor
+            local_rows (int): Positive, 32-aligned token rows per SP device. Summary tensor
                 shapes do not encode this sequence length.
             memory_config (ttnn.MemoryConfig, optional): Interleaved output memory
                 configuration. Defaults to DRAM.
@@ -73,11 +73,11 @@ void bind_reduce_affine_transforms(nb::module_& mod) {
         nb::arg("b").noconvert(),
         nb::arg("groups_per_head"),
         nb::kw_only(),
+        nb::arg("actual_start").noconvert(),
+        nb::arg("local_rows"),
         nb::arg("memory_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
-        nb::arg("actual_start") = nb::none(),
-        nb::arg("sequence_parallel_axis") = 0,
-        nb::arg("local_rows") = 0);
+        nb::arg("sequence_parallel_axis") = 0);
 }
 
 }  // namespace ttnn::operations::experimental::kda::reduce_affine_transforms::detail

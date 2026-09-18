@@ -37,15 +37,16 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
                 Tail state is unfolded: one ``[K,V]`` matrix per ``B*H``.
 
         Keyword Args:
-            actual_start (ttnn.Tensor, optional): Replicated UINT32 row-major scalar
-                containing the absolute position of the chunk's first token. Its
+            actual_start (ttnn.Tensor): Replicated UINT32 row-major scalar
+                containing the absolute position of the chunk's first token; pass [0]
+                for zero-offset execution. Its
                 value must be nonnegative and 32-aligned. Keep its address stable
                 and update its contents before replay of a captured trace.
             sequence_parallel_axis (int, optional): Mesh axis partitioning the
                 sequence. Native mesh coordinates supply each device's rank.
-            tail_state (ttnn.Tensor, optional): FLOAT32 carry ``[B*H,K,V]``
-                to reload at the locally derived split. Required with actual_start;
-                rejected without it. No input tensor is modified.
+            tail_state (ttnn.Tensor): FLOAT32 carry ``[B*H,K,V]``
+                to reload at the locally derived split. Ignored when unsplit.
+                No input tensor is modified.
             groups_per_head (int, optional): Groups folded into the leading
                 dimension. Defaults to 1.
             memory_config (ttnn.MemoryConfig, optional): Interleaved output memory
@@ -74,13 +75,13 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
         nb::arg("t_inv").noconvert(),
         nb::arg("initial_state").noconvert(),
         nb::kw_only(),
-        nb::arg("tail_state") = nb::none(),
+        nb::arg("actual_start").noconvert(),
+        nb::arg("tail_state").noconvert(),
 
         nb::arg("groups_per_head") = 1,
 
         nb::arg("memory_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
-        nb::arg("actual_start") = nb::none(),
         nb::arg("sequence_parallel_axis") = 0);
 
     ttnn::bind_function<"summarize_chunk_recurrence", "ttnn.experimental.kda.">(
@@ -116,8 +117,9 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
                 ``[B*H*G, N, 32, 32]`` in FLOAT32.
 
         Keyword Args:
-            actual_start (ttnn.Tensor, optional): Replicated UINT32 row-major scalar
-                containing the absolute position of the chunk's first token. Its
+            actual_start (ttnn.Tensor): Replicated UINT32 row-major scalar
+                containing the absolute position of the chunk's first token; pass [0]
+                for zero-offset execution. Its
                 value must be nonnegative and 32-aligned. Keep its address stable
                 and update its contents before replay of a captured trace.
             sequence_parallel_axis (int, optional): Mesh axis partitioning the
@@ -137,7 +139,6 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
             Summaries accumulate in FLOAT32 and pack directly to BFLOAT16 for transport.
             Unsplit execution defines only the head pair. Inactive head/tail slots
             are unspecified; consumers must use the same chronology and geometry.
-            Without actual_start, all summaries remain FLOAT32.
 
             The current summary path requires ``K=V``. ``q_decay`` and ``intra`` are
             accepted as part of the shared prepared-chunk protocol but do not contribute
@@ -153,12 +154,12 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
         nb::arg("final_decay").noconvert(),
         nb::arg("t_inv").noconvert(),
         nb::kw_only(),
+        nb::arg("actual_start").noconvert(),
 
         nb::arg("groups_per_head") = 1,
 
         nb::arg("memory_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
-        nb::arg("actual_start") = nb::none(),
         nb::arg("sequence_parallel_axis") = 0);
 }
 

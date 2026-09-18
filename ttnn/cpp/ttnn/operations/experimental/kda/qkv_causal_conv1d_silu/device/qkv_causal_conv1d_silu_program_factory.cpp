@@ -116,19 +116,15 @@ ttnn::device_operation::MeshWorkloadArtifacts QkvCausalConv1dSiluProgramFactory:
                 tt::tt_metal::experimental::TensorBinding{tap2_tensor_name, "tap2"},
                 tt::tt_metal::experimental::TensorBinding{tap3_tensor_name, "tap3"},
             },
-        .compile_time_args =
-            {{"block_ct", block_ct},
-             {"num_blocks", num_blocks},
-             {"dynamic_chronology", static_cast<uint32_t>(in.actual_start.has_value())}},
+        .compile_time_args = {{"block_ct", block_ct}, {"num_blocks", num_blocks}},
         .runtime_arg_schema = {.runtime_arg_names = {"wi_start", "wi_count"}},
         .hw_config = ttnn::create_reader_datamovement_config(arch),
     };
 
     const tt::tt_metal::experimental::TensorParamName actual_start_name{"actual_start"};
     const tt::tt_metal::experimental::TensorParamName predecessor_name{"predecessor_carry"};
-    reader.tensor_bindings.push_back({in.actual_start ? actual_start_name : input_tensor_name, "actual_start"});
-    reader.tensor_bindings.push_back(
-        {in.predecessor_carry ? predecessor_name : history_tensor_name, "predecessor_carry"});
+    reader.tensor_bindings.push_back({actual_start_name, "actual_start"});
+    reader.tensor_bindings.push_back({predecessor_name, "predecessor_carry"});
 
     tt::tt_metal::experimental::KernelSpec writer{
         .unique_id = writer_kernel_name,
@@ -201,14 +197,9 @@ ttnn::device_operation::MeshWorkloadArtifacts QkvCausalConv1dSiluProgramFactory:
         tt::tt_metal::experimental::TensorParameter{.unique_id = v_tensor_name, .spec = v.tensor_spec()},
     };
 
-    if (in.actual_start) {
-        tensor_parameters.push_back(
-            {.unique_id = actual_start_name, .spec = in.actual_start->mesh_tensor().tensor_spec()});
-    }
-    if (in.predecessor_carry) {
-        tensor_parameters.push_back(
-            {.unique_id = predecessor_name, .spec = in.predecessor_carry->mesh_tensor().tensor_spec()});
-    }
+    tensor_parameters.push_back({.unique_id = actual_start_name, .spec = in.actual_start.mesh_tensor().tensor_spec()});
+    tensor_parameters.push_back(
+        {.unique_id = predecessor_name, .spec = in.predecessor_carry.mesh_tensor().tensor_spec()});
 
     tt::tt_metal::experimental::ProgramSpec spec{
         .name = "qkv_causal_conv1d_silu",
@@ -242,12 +233,8 @@ ttnn::device_operation::MeshWorkloadArtifacts QkvCausalConv1dSiluProgramFactory:
         {v_tensor_name, v},
     };
 
-    if (in.actual_start) {
-        run_args.tensor_args.emplace(actual_start_name, in.actual_start->mesh_tensor());
-    }
-    if (in.predecessor_carry) {
-        run_args.tensor_args.emplace(predecessor_name, in.predecessor_carry->mesh_tensor());
-    }
+    run_args.tensor_args.emplace(actual_start_name, in.actual_start.mesh_tensor());
+    run_args.tensor_args.emplace(predecessor_name, in.predecessor_carry.mesh_tensor());
 
     return kda_factory_detail::chronology_workload(
         ttnn::device_operation::ProgramArtifacts{

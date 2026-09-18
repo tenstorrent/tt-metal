@@ -22,6 +22,7 @@ from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import mak
     "mesh_device,tp_axis,device_params",
     [
         pytest.param((1, 8), 1, fabric_1d_device_params(trace_region_size=8 * 1024 * 1024), id="SP1xTP8"),
+        pytest.param((8, 1), 0, fabric_1d_device_params(trace_region_size=8 * 1024 * 1024), id="SP1xTP8-transposed"),
         pytest.param((2, 4), 1, fabric_1d_device_params(trace_region_size=8 * 1024 * 1024), id="SP2xTP4"),
         pytest.param((4, 2), 1, fabric_1d_device_params(trace_region_size=8 * 1024 * 1024), id="SP4xTP2"),
     ],

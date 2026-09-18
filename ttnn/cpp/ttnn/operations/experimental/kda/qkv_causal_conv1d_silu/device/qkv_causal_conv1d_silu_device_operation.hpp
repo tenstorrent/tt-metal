@@ -39,8 +39,8 @@ std::vector<Tensor> qkv_causal_conv1d_silu(
     uint32_t,
     const tt::tt_metal::MemoryConfig&,
     const DeviceComputeKernelConfig&,
-    const std::optional<Tensor>&,
+    const Tensor&,
     uint32_t sequence_parallel_axis,
-    const std::optional<Tensor>&);
+    const Tensor&);
 
 }  // namespace ttnn::experimental::prim

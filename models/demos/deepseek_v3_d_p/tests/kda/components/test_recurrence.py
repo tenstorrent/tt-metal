@@ -57,9 +57,11 @@ def _run_recurrence(
             summary_group_chunks=summary_group_chunks,
             local_scan_strategy=local_scan_strategy,
         ),
-        sequence_parallel_axis=None,
+        sequence_parallel_axis=0,
     )
-    result = executor(q=q, k=k, v=v, gate=gate, beta=beta, initial_state=state)
+    actual_start = make_actual_start(device, 0)
+    result = executor(q=q, k=k, v=v, gate=gate, beta=beta, initial_state=state, actual_start=actual_start)
+    ttnn.deallocate(actual_start)
     return result.final_state, result.output
 
 

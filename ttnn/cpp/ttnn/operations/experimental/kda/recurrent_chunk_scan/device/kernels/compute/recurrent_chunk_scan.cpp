@@ -259,7 +259,7 @@ FORCE_INLINE void update_state(
     state_update.pop_front(key_value_tiles);
 }
 
-template <uint32_t Ct, uint32_t Kt, uint32_t Vt, uint32_t dynamic_chronology>
+template <uint32_t Ct, uint32_t Kt, uint32_t Vt>
 FORCE_INLINE void compute_summary(uint32_t num_chunks, uint32_t split_chunk) {
     DataflowBuffer state(dfb::state);
     DataflowBuffer t_inv(dfb::t_inv);
@@ -317,7 +317,7 @@ FORCE_INLINE void compute_summary(uint32_t num_chunks, uint32_t split_chunk) {
             final_decay,
             state_update,
             state_temporary);
-        if constexpr (dynamic_chronology) {
+        {
             const uint32_t snapshot_chunk = split_chunk;
             if (snapshot_chunk != 0 && chunk + 1 == snapshot_chunk) {
                 state_ring.wait_front(key_value_tiles);
@@ -402,20 +402,20 @@ FORCE_INLINE void compute_recurrent(uint32_t num_chunks, uint32_t reset_chunk) {
     }
 }
 
-template <uint32_t Ct, uint32_t Kt, uint32_t Vt, uint32_t summary, uint32_t dynamic_chronology>
+template <uint32_t Ct, uint32_t Kt, uint32_t Vt, uint32_t summary>
 TT_KERNEL void compute(uint32_t num_chunks, uint32_t group) {
     uint32_t reset_chunk = 0;
     kda_chronology::Topology topology{};
-    if constexpr (dynamic_chronology) {
+    {
         DataflowBuffer chronology(dfb::chronology_compute);
         topology = kda_chronology::receive(chronology);
     }
-    if constexpr (dynamic_chronology) {
+    {
         reset_chunk = topology.reset_chunk(group, topology.local_rows / 32 / num_chunks);
     }
     compute_kernel_hw_startup<SrcOrder::Reverse>(dfb::kd, dfb::v_beta, dfb::output);
     if constexpr (summary) {
-        compute_summary<Ct, Kt, Vt, dynamic_chronology>(num_chunks, reset_chunk);
+        compute_summary<Ct, Kt, Vt>(num_chunks, reset_chunk);
     } else {
         compute_recurrent<Ct, Kt, Vt>(num_chunks, reset_chunk);
     }
