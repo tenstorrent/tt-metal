@@ -6,14 +6,23 @@
 #include <cstdint>
 
 #include "barrier.h"
+#include "ckernel.h"
 #include "perf.h" // the PERF_COUNTERS_* L1 region constants
 // START_PERF_MEASURE below expands to ZONE_SCOPED, so the zone layer has to be in scope even when a
 // translation unit reaches this header before trisc.cpp includes it. Self-guarded on LLK_PROFILER.
 #include "profiler.h"
 
+// One code path for both builds. The counters off build (no PERF_COUNTERS_COMPILED) runs the same startup,
+// zone entry, exit and readout as the counters on build and writes STOP wherever the counters on build writes
+// START: same register writes and reads, same L1 traffic, same instant of release. Both binaries are identical up to
+// a few constants, so a counters on minus counters off delta measures what the counters do and not what the
+// code around them does to the allocator or to the phase at which the threads leave a rendezvous (a bare
+// delay before release moved the Quasar INIT windows by tens of cycles per variant, with no counters at all).
 #ifdef PERF_COUNTERS_COMPILED
-
-#include "ckernel.h"
+constexpr bool COUNTERS_ON = true;
+#else
+constexpr bool COUNTERS_ON = false;
+#endif
 
 // BRISC builds the config only; the per-zone measurement layer below also needs LLK_PROFILER.
 // Quasar has no BRISC in this harness: the unpack TRISC does the one-time setup before it releases the others.
@@ -183,6 +192,32 @@ constexpr std::uint32_t BUILTIN_COUNTER_COUNT = BUILTIN_COUNTER_CONFIG.size();
 
 static_assert(BUILTIN_COUNTER_COUNT <= COUNTER_SLOT_COUNT, "Counter inventory overflows the shared config region into zone 0 data");
 
+// Every place the counters on build starts a bank, the counters off build writes STOP instead, so both builds
+// keep the same code and the same register traffic.
+// Kept in memory, not as an immediate: as an immediate the compiler folded the START value into an unrelated
+// store of the same constant on the action thread, so the two builds compiled different instructions there.
+// A load from .rodata compiles identically in both and only the word differs.
+namespace detail
+{
+inline const volatile std::uint32_t arm_cmd = COUNTERS_ON ? llk::perf::START : llk::perf::STOP;
+#if defined(ARCH_QUASAR)
+// The l1_client control word: routes the selection, with the enable bit only in the counters on build.
+inline const volatile std::uint32_t l1_client_cmd =
+    COUNTERS_ON ? llk::perf::l1_client_ctrl_word(static_cast<std::uint32_t>(L1_CLIENT_SEL))
+                : (llk::perf::l1_client_ctrl_word(static_cast<std::uint32_t>(L1_CLIENT_SEL)) & ~llk::perf::L1_CLIENT_ENABLE);
+#endif
+} // namespace detail
+
+#if defined(ARCH_QUASAR)
+// Route the l1_client selection and clear the counter (the read clears it): the same store and read in both
+// builds, the counters off build with the enable bit clear.
+inline __attribute__((always_inline)) void route_l1_client()
+{
+    llk::perf::write(llk::perf::l1_client_regs().ctrl, detail::l1_client_cmd);
+    (void)llk::perf::l1_client_read(llk::perf::l1_client_regs());
+}
+#endif
+
 inline std::uint32_t get_active_bank_mask()
 {
     return *reinterpret_cast<volatile std::uint32_t*>(PERF_COUNTERS_BANK_MASK_ADDR);
@@ -213,7 +248,7 @@ inline void configure_hardware()
             // The l1_client CSR: route the selection and clear it; there is no bank to configure.
             if constexpr (L1_CLIENT_ENABLED)
             {
-                llk::perf::l1_client_start(llk::perf::l1_client_regs(), static_cast<std::uint32_t>(L1_CLIENT_SEL));
+                route_l1_client();
             }
             configured_mask |= bank_bit;
             continue;
@@ -232,6 +267,7 @@ inline void configure_hardware()
 
 inline void arm_hardware()
 {
+    const std::uint32_t arm_cmd = detail::arm_cmd;
     for (std::uint32_t b = 0; b < COUNTER_BANK_COUNT; ++b)
     {
         if (!(get_active_bank_mask() & (1u << b)))
@@ -245,10 +281,10 @@ inline void arm_hardware()
             continue; // slot 3: the l1_client CSR has no start/stop register
         }
 #endif
-        llk::perf::write(regs.control, llk::perf::START);
+        llk::perf::write(regs.control, arm_cmd);
         llk::perf::write(regs.control, 0);
     }
-    llk::perf::start_all();
+    llk::perf::write(llk::perf::PERF_CNT_ALL, arm_cmd);
     llk::perf::write(llk::perf::PERF_CNT_ALL, 0);
 }
 
@@ -281,6 +317,8 @@ inline void configure_all_zones()
 
     if (found_valid)
     {
+        // Both builds: the scrub writes the reset value, configure only sets periods and modes, and the arm
+        // writes STOP in the counters off build. Skipping any of it moved the release of the other threads.
         llk::perf::clear_debug_feature_disable();
         configure_hardware();
         arm_hardware();
@@ -390,17 +428,18 @@ static_assert(PERF_COUNTERS_LAYOUT_END <= llk_profiler::EPOCH_ADDR, "Perf counte
 inline __attribute__((always_inline)) void arm_all_counters()
 {
     ckernel::fence_compiler();
-    llk::perf::start_all();
-    llk::perf::write(llk::perf::bank_regs(Bank::TDMA_UNPACK).control, llk::perf::START);
+    const std::uint32_t arm_cmd = detail::arm_cmd;
+    llk::perf::write(llk::perf::PERF_CNT_ALL, arm_cmd);
+    llk::perf::write(llk::perf::bank_regs(Bank::TDMA_UNPACK).control, arm_cmd);
 #if defined(ARCH_QUASAR)
     if constexpr (L1_CLIENT_ENABLED)
     {
-        llk::perf::l1_client_start(llk::perf::l1_client_regs(), static_cast<std::uint32_t>(L1_CLIENT_SEL));
+        route_l1_client();
     }
 #else
-    llk::perf::write(llk::perf::bank_regs(Bank::L1).control, llk::perf::START);
+    llk::perf::write(llk::perf::bank_regs(Bank::L1).control, arm_cmd);
 #endif
-    llk::perf::write(llk::perf::bank_regs(Bank::TDMA_PACK).control, llk::perf::START);
+    llk::perf::write(llk::perf::bank_regs(Bank::TDMA_PACK).control, arm_cmd);
     ckernel::fence_compiler();
 }
 
@@ -556,7 +595,7 @@ constexpr bool is_reader_thread(PerfRunType run_type)
 }
 
 // One L1 word read every few thousand cycles is nothing next to the traffic of the measured loop, and a bound
-// keeps a kernel without a frozen zone from waiting forever (about 50 ms at 1.35 GHz).
+// keeps a kernel without a frozen zone from waiting forever (a few hundred million cycles).
 constexpr std::uint32_t READER_POLL_LIMIT   = 1u << 15;
 constexpr std::uint32_t READER_POLL_BACKOFF = 2048;
 
@@ -657,32 +696,6 @@ inline void read_last_zone()
 #else
 #define MEASURE_PERF_COUNTERS(zone_name)
 #endif
-
-#else // !PERF_COUNTERS_COMPILED
-
-// The NC build keeps the zone rendezvous so both builds measure the same window.
-#if defined(LLK_PROFILER)
-#define MEASURE_PERF_COUNTERS(zone_name) llk_barrier::rendezvous(llk_barrier::is_action_thread());
-#else
-#define MEASURE_PERF_COUNTERS(zone_name)
-#endif
-
-namespace llk_perf
-{
-inline void configure_and_arm()
-{
-}
-
-inline void configure_and_arm_from_brisc()
-{
-}
-
-inline void read_last_zone()
-{
-}
-} // namespace llk_perf
-
-#endif // PERF_COUNTERS_COMPILED
 
 // One measured scope: NC activates timing only, WC both. Without the profiler there is no zone to open.
 #if defined(LLK_PROFILER)
