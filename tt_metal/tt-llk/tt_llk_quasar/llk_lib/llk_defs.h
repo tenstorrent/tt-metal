@@ -121,6 +121,92 @@ enum class SfpuType : std::uint32_t
     less_than_equal_zero,
     greater_than_equal_zero,
     cumsum,
+    cbrt,
+    cast_fp32_to_fp16a,
+    logical_not_unary,
+    bitwise_not,
+    left_shift,
+    right_shift,
+    softcap,
+    digamma,
+    erfinv,
+    i1,
+    lgamma,
+    polygamma,
+    rdiv,
+    sigmoid_appx,
+    exp2,
+    expm1,
+    tanhshrink,
+    xielu,
+    rpow,
+    power,
+    fmod,
+    remainder,
+    elu,
+    celu,
+    selu,
+    add1,
+    hardmish,
+    hardshrink,
+    hardtanh,
+    heaviside,
+    identity,
+    prelu,
+    softshrink,
+    sign,
+    softsign,
+    i0,
+    erf,
+    erfc,
+    unary_gt,
+    unary_lt,
+    unary_ge,
+    unary_le,
+    unary_ne,
+    unary_eq,
+    threshold,
+    hardsigmoid,
+    isinf,
+    isposinf,
+    isneginf,
+    isnan,
+    isfinite,
+    sigmoid_appx_parity,
+    scalar_bitwise_and,
+    scalar_bitwise_or,
+    scalar_bitwise_xor,
+    parity_addcdiv,
+    parity_addcmul,
+    parity_lerp,
+    parity_snake_beta,
+    parity_mac,
+    parity_div_int32_float,
+    parity_alt_complex_rotate90,
+    parity_int_sum_col,
+    parity_int_sum_row,
+    parity_tiled_prod,
+};
+
+enum class RoundingMode : std::uint8_t
+{
+    None  = 0,
+    Trunc = 1,
+    Floor = 2
+};
+
+enum class ActivationType : std::uint8_t
+{
+    Hardsigmoid,
+};
+
+// Semantic load/store selectors; SFPI DataLayout supplies the target encoding.
+enum class InstrModLoadStore : std::uint8_t
+{
+    DEFAULT,
+    LO16,
+    INT32,
+    INT32_2S_COMP,
 };
 
 enum class DstSync : std::uint8_t

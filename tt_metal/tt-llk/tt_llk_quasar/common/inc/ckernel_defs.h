@@ -77,6 +77,21 @@ enum class BinaryOp : std::uint8_t
     REQUANT,
     DEQUANT,
     ATAN2,
+    FMOD,
+    REMAINDER,
+    BITWISE_AND,
+    BITWISE_OR,
+    BITWISE_XOR,
+    DIV_INT32,
+    DIV_INT32_FLOOR,
+    RSUB_INT32,
+    ISCLOSE,
+    LOGSIGMOID,
+    REMAINDER_INT32,
+    FMOD_INT32,
+    POW,
+    MASK,
+    SITU_GLU,
 };
 
 // For instructions that address lower/upper 16 bits of a register

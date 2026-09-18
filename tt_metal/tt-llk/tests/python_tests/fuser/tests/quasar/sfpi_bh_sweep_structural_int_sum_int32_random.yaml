@@ -1,0 +1,36 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
+# Each listed operation expands into an independent single-stage test.
+# Only the final SFPU operation is swept; preparation and pack checks are fixed.
+
+# ParityIntSumCol: sfpi_bh_structural_int_sum_col_int32_random
+# Blackhole SFPI parity: ParityIntSumCol; random signed Int32 input.
+# Partial whole-tile reduction; untouched vectors must remain unchanged.
+# Single-stage direct-to-Dest preserves Int32 sign-magnitude representation.
+# Dispatch uses VectorMode::None exactly once at the tile base.
+
+# ParityIntSumRow: sfpi_bh_structural_int_sum_row_int32_random
+# Blackhole SFPI parity: ParityIntSumRow; random signed Int32 input.
+# Partial whole-tile reduction; untouched vectors must remain unchanged.
+# Single-stage direct-to-Dest preserves Int32 sign-magnitude representation.
+# Dispatch uses VectorMode::None exactly once at the tile base.
+
+dest_acc: true
+supported_archs: [quasar]
+
+operands:
+  - {dims: [32, 32], format: Int32, name: input}
+  - {dims: [32, 32], format: Int32, name: output}
+
+operations:
+  - math:
+      - {in0: input, operation: Datacopy, type: Fpu, unpack_to_dest: true, unpacker: UnpackerA}
+      - type: UnarySfpu
+        operation:
+          - ParityIntSumCol
+          - ParityIntSumRow
+        dst_dest_tile_index: 0
+        iterations: 32
+    pack:
+      - {output: output, packer: Packer}

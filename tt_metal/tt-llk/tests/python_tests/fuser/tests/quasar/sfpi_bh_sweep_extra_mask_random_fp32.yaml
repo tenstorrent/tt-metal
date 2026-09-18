@@ -1,0 +1,33 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
+# Each listed operation expands into an independent single-stage test.
+# Only the final SFPU operation is swept; preparation and pack checks are fixed.
+
+# SfpuMask: sfpi_bh_extra_mask_random_fp32
+# Derive a zero/one mask in tile 1, mask tile 0 in place, preserve tile 1.
+
+dest_acc: true
+supported_archs: [quasar]
+
+operands:
+  - {dims: [32, 64], format: Float32, name: input}
+  - {dims: [32, 64], format: Float32, name: output}
+
+operations:
+  - block_size: [32, 64]
+    math:
+      - {in0: input, operation: Datacopy, type: Fpu, unpack_to_dest: true, unpacker: UnpackerA}
+      - type: UnarySfpu
+        operation: UnaryGt
+        dst_dest_tile_index: 1
+        iterations: 32
+      - type: BinarySfpu
+        operation:
+          - SfpuMask
+        dst_dest_tile_index: 0
+        iterations: 32
+        src1_dest_tile_index: 0
+        src2_dest_tile_index: 1
+    pack:
+      - {output: output, packer: Packer}

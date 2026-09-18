@@ -1,0 +1,63 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
+# Blackhole SFPI parity: SfpuIsclose; tile 0 and tile 1 inputs, tile 2 output.
+# Pack all three tiles to check that input tiles are preserved.
+supported_archs: [quasar]
+dest_acc: false
+
+operands:
+  - {name: random_input, dims: [32, 96], format: Float16_b}
+  - {name: random_output, dims: [32, 96], format: Float16_b}
+  - {name: equal_input, dims: [32, 96], format: Float16_b, const_value: 2}
+  - {name: equal_output, dims: [32, 96], format: Float16_b}
+  - {name: unequal_input, dims: [32, 96], format: Float16_b, const_value: 2}
+  - {name: unequal_output, dims: [32, 96], format: Float16_b}
+
+operations:
+  - block_size: [32, 96]
+    math:
+      - type: Fpu
+        operation: Datacopy
+        in0: random_input
+        unpacker: UnpackerA
+        unpack_to_dest: false
+      - type: BinarySfpu
+        operation: SfpuIsclose
+        src1_dest_tile_index: 0
+        src2_dest_tile_index: 1
+        dst_dest_tile_index: 2
+        iterations: 32
+    pack:
+      - {output: random_output, packer: Packer}
+  - block_size: [32, 96]
+    math:
+      - type: Fpu
+        operation: Datacopy
+        in0: equal_input
+        unpacker: UnpackerA
+        unpack_to_dest: false
+      - type: BinarySfpu
+        operation: SfpuIsclose
+        src1_dest_tile_index: 0
+        src2_dest_tile_index: 1
+        dst_dest_tile_index: 2
+        iterations: 32
+    pack:
+      - {output: equal_output, packer: Packer}
+  - block_size: [32, 96]
+    math:
+      - type: Fpu
+        operation: Datacopy
+        in0: unequal_input
+        unpacker: UnpackerA
+        unpack_to_dest: false
+      - {type: UnarySfpu, operation: Add1, dst_dest_tile_index: 1, iterations: 32}
+      - type: BinarySfpu
+        operation: SfpuIsclose
+        src1_dest_tile_index: 0
+        src2_dest_tile_index: 1
+        dst_dest_tile_index: 2
+        iterations: 32
+    pack:
+      - {output: unequal_output, packer: Packer}

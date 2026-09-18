@@ -1,0 +1,66 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
+# Blackhole SFPI parity: Polygamma. Each case covers all four faces of one tile.
+# Dispatch parameters: 0x3f800000u, 0x3f800000u.
+supported_archs: [quasar]
+dest_acc: true
+
+operands:
+  - {name: case_0_input, dims: [32, 32], format: Float32, const_value: 0.5}
+  - {name: case_0_output, dims: [32, 32], format: Float32}
+  - {name: case_1_input, dims: [32, 32], format: Float32, const_value: 1}
+  - {name: case_1_output, dims: [32, 32], format: Float32}
+  - {name: case_2_input, dims: [32, 32], format: Float32, const_value: 2}
+  - {name: case_2_output, dims: [32, 32], format: Float32}
+  - {name: case_3_input, dims: [32, 32], format: Float32, const_value: 4}
+  - {name: case_3_output, dims: [32, 32], format: Float32}
+  - {name: case_4_input, dims: [32, 32], format: Float32, const_value: 8}
+  - {name: case_4_output, dims: [32, 32], format: Float32}
+
+operations:
+  - math:
+      - type: Fpu
+        operation: Datacopy
+        in0: case_0_input
+        unpacker: UnpackerA
+        unpack_to_dest: false
+      - {type: UnarySfpu, operation: Polygamma, iterations: 32}
+    pack:
+      - {output: case_0_output, packer: Packer}
+  - math:
+      - type: Fpu
+        operation: Datacopy
+        in0: case_1_input
+        unpacker: UnpackerA
+        unpack_to_dest: false
+      - {type: UnarySfpu, operation: Polygamma, iterations: 32}
+    pack:
+      - {output: case_1_output, packer: Packer}
+  - math:
+      - type: Fpu
+        operation: Datacopy
+        in0: case_2_input
+        unpacker: UnpackerA
+        unpack_to_dest: false
+      - {type: UnarySfpu, operation: Polygamma, iterations: 32}
+    pack:
+      - {output: case_2_output, packer: Packer}
+  - math:
+      - type: Fpu
+        operation: Datacopy
+        in0: case_3_input
+        unpacker: UnpackerA
+        unpack_to_dest: false
+      - {type: UnarySfpu, operation: Polygamma, iterations: 32}
+    pack:
+      - {output: case_3_output, packer: Packer}
+  - math:
+      - type: Fpu
+        operation: Datacopy
+        in0: case_4_input
+        unpacker: UnpackerA
+        unpack_to_dest: false
+      - {type: UnarySfpu, operation: Polygamma, iterations: 32}
+    pack:
+      - {output: case_4_output, packer: Packer}

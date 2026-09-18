@@ -5,14 +5,18 @@
 #pragma once
 
 /**
- * Rational P(x)/Q(x) evaluator for SFPU activations. Carries over the parity evaluator from the
- * Blackhole header of the same name; the other variants there have no Quasar users yet.
+ * Rational P(x)/Q(x) evaluator for SFPU activations, with interleaved Horner chains,
+ * optional odd/even parity, and one reciprocal after selecting the active segment.
  *
  * For an odd numerator and even denominator (erf, atanh, erfinv) both polynomials are evaluated in
  * the x^2 basis, halving the multiply-add count. The two Horner chains are independent, so their
  * SFPMADs interleave and hide pipeline latency.
  */
 
+#include <array>
+#include <cstdint>
+
+#include "ckernel_sfpu_recip.h"
 #include "sfpi.h"
 
 namespace ckernel::sfpu {
@@ -62,6 +66,109 @@ sfpi_inline void piecewise_rational_eval_parity_numer_denom(
 
     out_numer = numer * x;  // odd parity: P(x) = x * Horner_result
     out_denom = denom;
+}
+
+template <uint32_t NUM_DEGREE, uint32_t DEN_DEGREE>
+sfpi_inline void piecewise_rational_eval_numer_denom(
+    const float* num_coeffs,
+    const float* den_coeffs,
+    sfpi::vFloat x,
+    sfpi::vFloat& out_numer,
+    sfpi::vFloat& out_denom) {
+    constexpr int MIN_DEG = (NUM_DEGREE < DEN_DEGREE) ? NUM_DEGREE : DEN_DEGREE;
+    sfpi::vFloat numer = num_coeffs[NUM_DEGREE];
+    sfpi::vFloat denom = den_coeffs[DEN_DEGREE];
+
+    if constexpr (NUM_DEGREE > DEN_DEGREE) {
+#pragma GCC unroll 64
+        for (int i = NUM_DEGREE - 1; i >= static_cast<int>(DEN_DEGREE); i--) {
+            numer = numer * x + num_coeffs[i];
+        }
+    } else if constexpr (DEN_DEGREE > NUM_DEGREE) {
+#pragma GCC unroll 64
+        for (int i = DEN_DEGREE - 1; i >= static_cast<int>(NUM_DEGREE); i--) {
+            denom = denom * x + den_coeffs[i];
+        }
+    }
+#pragma GCC unroll 64
+    for (int i = MIN_DEG - 1; i >= 0; i--) {
+        numer = numer * x + num_coeffs[i];
+        denom = denom * x + den_coeffs[i];
+    }
+    out_numer = numer;
+    out_denom = denom;
+}
+
+template <uint32_t NUM_DEGREE, uint32_t DEN_DEGREE, bool USE_PARITY = false>
+sfpi_inline void piecewise_rational_dispatch_numer_denom(
+    const float* num_coeffs,
+    const float* den_coeffs,
+    sfpi::vFloat x,
+    sfpi::vFloat& out_numer,
+    sfpi::vFloat& out_denom,
+    sfpi::vFloat x2 = 0.0f) {
+    if constexpr (USE_PARITY) {
+        piecewise_rational_eval_parity_numer_denom<NUM_DEGREE, DEN_DEGREE>(
+            num_coeffs, den_coeffs, x, x2, out_numer, out_denom);
+    } else {
+        piecewise_rational_eval_numer_denom<NUM_DEGREE, DEN_DEGREE>(num_coeffs, den_coeffs, x, out_numer, out_denom);
+    }
+}
+
+template <
+    uint32_t SEG,
+    uint32_t NUM_DEGREE,
+    uint32_t DEN_DEGREE,
+    uint32_t NUM_SEGMENTS,
+    uint32_t LUT_SIZE,
+    bool USE_PARITY = false>
+sfpi_inline void piecewise_rational_unroll_segment(
+    const std::array<float, LUT_SIZE>& lut,
+    sfpi::vFloat x,
+    sfpi::vFloat& numer,
+    sfpi::vFloat& denom,
+    sfpi::vFloat x2 = 0.0f) {
+    if constexpr (SEG < NUM_SEGMENTS) {
+        constexpr uint32_t NUM_COEFFS = NUM_DEGREE + 1;
+        constexpr uint32_t CPS = NUM_COEFFS + DEN_DEGREE + 1;
+        constexpr uint32_t CO = NUM_SEGMENTS + 1;
+        v_if(x >= lut[SEG]) {
+            piecewise_rational_dispatch_numer_denom<NUM_DEGREE, DEN_DEGREE, USE_PARITY>(
+                &lut[CO + SEG * CPS], &lut[CO + SEG * CPS + NUM_COEFFS], x, numer, denom, x2);
+        }
+        v_endif;
+        piecewise_rational_unroll_segment<SEG + 1, NUM_DEGREE, DEN_DEGREE, NUM_SEGMENTS, LUT_SIZE, USE_PARITY>(
+            lut, x, numer, denom, x2);
+    }
+}
+
+// LUT layout: NUM_SEGMENTS+1 breakpoints, then ascending numerator/denominator
+// coefficients for each segment. The caller owns range clamping and reciprocal init.
+template <
+    uint32_t NUM_DEGREE,
+    uint32_t DEN_DEGREE,
+    uint32_t NUM_SEGMENTS,
+    uint32_t LUT_SIZE,
+    bool USE_PARITY = false,
+    bool APPROX_RECIP = false>
+sfpi_inline sfpi::vFloat piecewise_rational_eval(const std::array<float, LUT_SIZE>& lut, sfpi::vFloat x) {
+    static_assert(NUM_SEGMENTS > 0);
+    static_assert(LUT_SIZE == NUM_SEGMENTS + 1 + NUM_SEGMENTS * (NUM_DEGREE + DEN_DEGREE + 2));
+    constexpr uint32_t NUM_COEFFS = NUM_DEGREE + 1;
+    constexpr uint32_t COEFF_OFFSET = NUM_SEGMENTS + 1;
+    sfpi::vFloat x2 = 0.0f;
+    if constexpr (USE_PARITY) {
+        x2 = x * x;
+    }
+    sfpi::vFloat numer = 0.0f;
+    sfpi::vFloat denom = 0.0f;
+    piecewise_rational_dispatch_numer_denom<NUM_DEGREE, DEN_DEGREE, USE_PARITY>(
+        &lut[COEFF_OFFSET], &lut[COEFF_OFFSET + NUM_COEFFS], x, numer, denom, x2);
+    if constexpr (NUM_SEGMENTS > 1) {
+        piecewise_rational_unroll_segment<1, NUM_DEGREE, DEN_DEGREE, NUM_SEGMENTS, LUT_SIZE, USE_PARITY>(
+            lut, x, numer, denom, x2);
+    }
+    return numer * _sfpu_reciprocal_<APPROX_RECIP ? 0 : 2>(denom);
 }
 
 }  // namespace ckernel::sfpu

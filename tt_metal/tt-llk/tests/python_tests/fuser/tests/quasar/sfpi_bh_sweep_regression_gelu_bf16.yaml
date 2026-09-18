@@ -1,0 +1,25 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
+# Each listed operation expands into an independent single-stage test.
+# Only the final SFPU operation is swept; preparation and pack checks are fixed.
+
+# Gelu: sfpi_bh_regression_gelu_bf16
+# Regression: existing GELU uses the extended shared rational evaluator.
+
+dest_acc: false
+supported_archs: [quasar]
+
+operands:
+  - {dims: [32, 32], format: Float16_b, name: input}
+  - {dims: [32, 32], format: Float16_b, name: output}
+
+operations:
+  - math:
+      - {in0: input, operation: Datacopy, type: Fpu, unpacker: UnpackerA}
+      - type: UnarySfpu
+        operation:
+          - Gelu
+        iterations: 32
+    pack:
+      - {output: output, packer: Packer}

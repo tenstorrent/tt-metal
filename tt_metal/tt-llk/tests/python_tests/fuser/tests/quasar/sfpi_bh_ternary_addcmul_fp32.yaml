@@ -1,0 +1,86 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
+# Blackhole SFPI parity: ParityAddcmul, fixed input tiles 0/1/2 -> output tile 0.
+# Pack all three tiles: tiles 1 and 2 must remain unchanged.
+# Constant cases start at a; Add1 stages make b=a+1 and c=a+2.
+# Values: negative=(-3,-2,-1), zero=(0,1,2), fraction=(0.5,1.5,2.5), positive=(2,3,4).
+# Dispatch scalar value: 0.5 (FP32 bits 0x3f000000).
+supported_archs: [quasar]
+dest_acc: true
+
+operands:
+  - {name: random_input, dims: [32, 96], format: Float32}
+  - {name: random_output, dims: [32, 96], format: Float32}
+  - {name: negative_input, dims: [32, 96], format: Float32, const_value: -3}
+  - {name: negative_output, dims: [32, 96], format: Float32}
+  - {name: zero_input, dims: [32, 96], format: Float32, const_value: 0}
+  - {name: zero_output, dims: [32, 96], format: Float32}
+  - {name: fraction_input, dims: [32, 96], format: Float32, const_value: 0.5}
+  - {name: fraction_output, dims: [32, 96], format: Float32}
+  - {name: positive_input, dims: [32, 96], format: Float32, const_value: 2}
+  - {name: positive_output, dims: [32, 96], format: Float32}
+
+operations:
+  - block_size: [32, 96]
+    math:
+      - type: Fpu
+        operation: Datacopy
+        in0: random_input
+        unpacker: UnpackerA
+        unpack_to_dest: false
+      - {type: UnarySfpu, operation: ParityAddcmul, dst_dest_tile_index: 0, iterations: 32}
+    pack:
+      - {output: random_output, packer: Packer}
+  - block_size: [32, 96]
+    math:
+      - type: Fpu
+        operation: Datacopy
+        in0: negative_input
+        unpacker: UnpackerA
+        unpack_to_dest: false
+      - {type: UnarySfpu, operation: Add1, dst_dest_tile_index: 1, iterations: 32}
+      - {type: UnarySfpu, operation: Add1, dst_dest_tile_index: 2, iterations: 32}
+      - {type: UnarySfpu, operation: Add1, dst_dest_tile_index: 2, iterations: 32}
+      - {type: UnarySfpu, operation: ParityAddcmul, dst_dest_tile_index: 0, iterations: 32}
+    pack:
+      - {output: negative_output, packer: Packer}
+  - block_size: [32, 96]
+    math:
+      - type: Fpu
+        operation: Datacopy
+        in0: zero_input
+        unpacker: UnpackerA
+        unpack_to_dest: false
+      - {type: UnarySfpu, operation: Add1, dst_dest_tile_index: 1, iterations: 32}
+      - {type: UnarySfpu, operation: Add1, dst_dest_tile_index: 2, iterations: 32}
+      - {type: UnarySfpu, operation: Add1, dst_dest_tile_index: 2, iterations: 32}
+      - {type: UnarySfpu, operation: ParityAddcmul, dst_dest_tile_index: 0, iterations: 32}
+    pack:
+      - {output: zero_output, packer: Packer}
+  - block_size: [32, 96]
+    math:
+      - type: Fpu
+        operation: Datacopy
+        in0: fraction_input
+        unpacker: UnpackerA
+        unpack_to_dest: false
+      - {type: UnarySfpu, operation: Add1, dst_dest_tile_index: 1, iterations: 32}
+      - {type: UnarySfpu, operation: Add1, dst_dest_tile_index: 2, iterations: 32}
+      - {type: UnarySfpu, operation: Add1, dst_dest_tile_index: 2, iterations: 32}
+      - {type: UnarySfpu, operation: ParityAddcmul, dst_dest_tile_index: 0, iterations: 32}
+    pack:
+      - {output: fraction_output, packer: Packer}
+  - block_size: [32, 96]
+    math:
+      - type: Fpu
+        operation: Datacopy
+        in0: positive_input
+        unpacker: UnpackerA
+        unpack_to_dest: false
+      - {type: UnarySfpu, operation: Add1, dst_dest_tile_index: 1, iterations: 32}
+      - {type: UnarySfpu, operation: Add1, dst_dest_tile_index: 2, iterations: 32}
+      - {type: UnarySfpu, operation: Add1, dst_dest_tile_index: 2, iterations: 32}
+      - {type: UnarySfpu, operation: ParityAddcmul, dst_dest_tile_index: 0, iterations: 32}
+    pack:
+      - {output: positive_output, packer: Packer}

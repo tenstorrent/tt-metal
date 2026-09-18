@@ -1,0 +1,28 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
+# Each listed operation expands into an independent single-stage test.
+# Only the final SFPU operation is swept; preparation and pack checks are fixed.
+
+# ParityDivInt32Float: sfpi_bh_div_int32_float_near_half_fp32
+# Near-half regression: 16*0.40635255 = 6.5016408 must round to 7, not 6.
+# The adapter constructs numerator=-1, denominator=8, quotient=-0.125.
+# Original Float32 input tiles0/1 must remain unchanged.
+
+dest_acc: true
+supported_archs: [quasar]
+
+operands:
+  - {const_value: 0.40635255, dims: [32, 96], format: Float32, name: input}
+  - {dims: [32, 96], format: Float32, name: output}
+
+operations:
+  - block_size: [32, 96]
+    math:
+      - {in0: input, operation: Datacopy, type: Fpu, unpack_to_dest: true, unpacker: UnpackerA}
+      - type: UnarySfpu
+        operation:
+          - ParityDivInt32Float
+        iterations: 32
+    pack:
+      - {output: output, packer: Packer}
