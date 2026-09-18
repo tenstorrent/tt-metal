@@ -38,9 +38,14 @@ def main():
         generator = build_generator(Path("models/autoports/qwen_qwen3_8_27b"), mesh)
         adapter = Qwen38ForCausalLM(generator, args.batch, context)
         pages = (context + 31) // 32
-        physical_pages = (pool_tokens + 31) // 32
+        # Match the vLLM worker's one-extra-block-per-user allocation. Dividing
+        # a token budget among users before rounding pages can otherwise leave
+        # the final decode positions mapped to an unused zero page-table entry.
+        physical_pages = (pool_tokens + 31) // 32 + args.batch
         cache = adapter.allocate_kv_cache((physical_pages, 1, 32, 256), None, 64)
         per_user = min(pages, physical_pages // args.batch)
+        if per_user * 32 < max(lengths) + args.steps:
+            raise ValueError("The disjoint per-request page allocation must cover every decode position")
         table = torch.zeros(args.batch, pages, dtype=torch.int32)
         table[:, :per_user] = torch.arange(args.batch * per_user, dtype=torch.int32).reshape(args.batch, per_user)
         params = SimpleNamespace(
