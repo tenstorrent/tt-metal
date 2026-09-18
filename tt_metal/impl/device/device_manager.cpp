@@ -526,6 +526,17 @@ void DeviceManager::initialize_dispatch_firmware(bool force_recreate_topology) {
     init_done_.insert(DispatchKernelInitializer::key);
 }
 
+void DeviceManager::teardown_dispatch_firmware() {
+    // This function is used by DispatchContext when terminating manual FD setup.
+    // DispatchContext already terminates command queues manually, so we just need to
+    // mark the dispatch firmware as torn down without re-running teardown logic.
+    if (init_done_.contains(DispatchKernelInitializer::key)) {
+        auto* dispatch_initializer =
+            dynamic_cast<DispatchKernelInitializer*>(initializers_[DispatchKernelInitializer::key].get());
+        dispatch_initializer->mark_as_torn_down(init_done_);
+    }
+}
+
 const std::unordered_set<CoreCoord>& DeviceManager::get_virtual_dispatch_cores(ChipId dev_id) const {
     if (!initializers_.contains(DispatchKernelInitializer::key)) {
         // Dispatch firmware is not initialized in minimal mode
