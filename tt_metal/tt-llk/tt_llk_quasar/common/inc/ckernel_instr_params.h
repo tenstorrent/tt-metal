@@ -597,6 +597,26 @@ struct p_sfpgt
     constexpr static std::uint32_t MOD1_SET_CC = 0x1;
 };
 
+struct p_sfploadi
+{
+    constexpr static std::uint32_t MOD0_INT16 = 0x4;
+};
+
+struct p_sfpexexp
+{
+    constexpr static std::uint32_t MOD1_SET_CC_GE0 = 0xA;
+};
+
+struct p_sfpiadd
+{
+    constexpr static std::uint32_t MOD1_SUB_CC_GTE0 = 0xA;
+};
+
+struct p_sfpshft2
+{
+    constexpr static std::uint32_t MOD1_SHFT_LREG = 0x5;
+};
+
 // SFPSWAP instruction modes (mode-to-int mapping matches the Blackhole reference).
 struct p_sfpswap
 {
