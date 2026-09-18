@@ -3570,53 +3570,18 @@ matmul_multi_core_reuse_mcast_2d_optimized_(
 }
 
 // Cache-hit address refresh for a Program built by matmul_multi_core_reuse_mcast_2d_optimized_helper.
-// The CCL fused ops that build through that helper call this directly. It used to be
-// MatmulMultiCoreReuseMcast2DProgramFactory::override_runtime_arguments; that method now carries the
-// Metal 2.0 signature the spec-factory concept requires (a single overload whose return type selects
-// the concept), so the legacy Program-patching form lives here instead.
-void matmul_multi_core_reuse_mcast_2d_override_runtime_arguments_helper(
+// The CCL fused ops that build through that helper call this directly, supplying the
+// shared_variables_t that create_program_artifacts does not produce. Void-returning, so it does not
+// satisfy HasSpecRuntimeArgsOverride and the factory stays on ProgramSpecFactoryConcept, where the
+// framework refreshes the tensor bindings itself -- see the declaration for why that is sufficient.
+void MatmulMultiCoreReuseMcast2DProgramFactory::override_runtime_arguments(
     tt::tt_metal::Program& program,
-    const MatmulMultiCoreReuseMcast2DProgramFactory::shared_variables_t& shared_variables,
+    const shared_variables_t& shared_variables,
+    const ttnn::prim::MatmulParams& /*operation_attributes*/,
     const ttnn::prim::MatmulInputs& tensor_args,
     std::vector<ttnn::Tensor>& tensor_return_value) {
     reuse_mcast_optimized_helpers::override_runtime_arguments_impl(
         shared_variables, program, tensor_args, tensor_return_value);
-}
-
-tt::tt_metal::experimental::ProgramRunArgs MatmulMultiCoreReuseMcast2DProgramFactory::override_runtime_arguments(
-    const ttnn::prim::MatmulParams& /*operation_attributes*/,
-    const ttnn::prim::MatmulInputs& tensor_args,
-    std::vector<ttnn::Tensor>& tensor_return_value,
-    const std::optional<ttnn::MeshCoordinate>& /*coord*/) {
-    const auto& input_tensors = tensor_args.input_tensors;
-    const auto& optional_input_tensors = tensor_args.optional_input_tensors;
-
-    TT_FATAL(
-        input_tensors.size() + optional_input_tensors.size() == 3,
-        "Total number of input tensors (required + optional) must be 3, but got {} + {} = {}",
-        input_tensors.size(),
-        optional_input_tensors.size(),
-        input_tensors.size() + optional_input_tensors.size());
-    TT_FATAL(
-        tensor_return_value.size() == 1, "Number of output tensors must be 1, but got {}", tensor_return_value.size());
-
-    // On this concept the framework refreshes nothing on our behalf, so every io tensor the ported-from
-    // override touched has to be supplied here. That override wrote nothing but addresses: the in0
-    // sender's address slot (or, when in0 is sharded, the backing address of its borrowed buffer), the
-    // in1 sender's in1 / output / bias slots, and both receiver groups' output slots. All of them are
-    // bindings now, and a borrowed buffer draws its backing address from the same tensor argument, so
-    // the sharded and interleaved branches collapse into one set. No runtime argument was refreshed,
-    // so kernel_run_args stays empty.
-    tt::tt_metal::experimental::ProgramRunArgs run_args;
-    run_args.tensor_args = {
-        {TensorParamName{"in0"}, input_tensors.at(0).mesh_tensor()},
-        {TensorParamName{"in1"}, input_tensors.at(1).mesh_tensor()},
-        {TensorParamName{"output"}, tensor_return_value.at(0).mesh_tensor()},
-    };
-    if (optional_input_tensors.at(0).has_value()) {
-        run_args.tensor_args.insert({TensorParamName{"bias"}, optional_input_tensors.at(0).value().mesh_tensor()});
-    }
-    return run_args;
 }
 
 ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseMcast2DProgramFactory::create_program_artifacts(
