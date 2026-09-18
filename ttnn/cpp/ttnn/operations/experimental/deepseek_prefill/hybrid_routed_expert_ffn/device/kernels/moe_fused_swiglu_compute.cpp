@@ -439,11 +439,25 @@ struct PackedWdOffset {
     }
 };
 
+#ifdef HYB_NS
+// The union kernel owns the once-per-kernel hardware startup and runs it for whichever half it
+// calls first; see hybrid_compute.cpp. It lives here because the operand CBs are this half's.
+inline void hyb_hw_startup() { compute_kernel_hw_startup<SrcOrder::Reverse>(cb_x_tiles, cb_w_gate, cb_gate_acc); }
+#endif
+
 void kernel_main() {
+#ifdef HYB_NS
+    // A half of the union kernel never starts the hardware itself -- startup is MMIO against units
+    // that must be idle, so it runs exactly once, before either body. Whether this half is first or
+    // second, pointing the already-configured units at its own operands is the supported path.
+    reconfig_data_format(cb_x_tiles, cb_w_gate);
+    pack_reconfig_data_format(cb_gate_acc);
+#else
     // Ahead of the runtime args, not because it needs them -- the operand CBs are compile-time --
     // but because it programs the UNPACK/MATH/PACK config and must precede every compute API call,
     // including the activation init below. Nothing may be inserted above it.
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_x_tiles, cb_w_gate, cb_gate_acc);
+#endif
 
     (void)get_arg_val<uint32_t>(0);  // retained runtime slot for cache-compatible argument layout
     const uint32_t kr_rows = get_arg_val<uint32_t>(1);

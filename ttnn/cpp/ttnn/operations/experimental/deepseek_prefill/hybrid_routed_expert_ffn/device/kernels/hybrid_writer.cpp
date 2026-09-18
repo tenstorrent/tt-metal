@@ -8,16 +8,14 @@
 // the same work on the same full core grid, but as one program so the layer can be overlapped
 // with combine.
 //
-// The pass order is the REVERSE of the two-op forward, which dispatches unified first, and it is
-// NOT interchangeable. Results do not depend on it -- every expert is claimed by exactly one
-// half, so the passes write disjoint output rows -- but the machine does: put the unified half
-// first and it deadlocks at the first wrap of its gate/up credit pipeline, with the rotating in1
-// senders stuck in up_go_sem.wait_min and every reader behind them in cb_reserve_back. It does so
-// even with the fused pass deleted outright, and the circular-buffer credit state and the shared
-// semaphore block are identical at the unified half's entry either way -- so the fused half
-// leaves something else behind that the unified half needs. Until that is known, fused runs
-// first, and a reordering here has to be re-validated on the x_tile path above the threshold,
-// where this bites.
+// The pass order is the REVERSE of the two-op forward, which dispatches unified first. Nothing
+// depends on it: every expert is claimed by exactly one half, so the passes write disjoint output
+// rows, and swapping them measures as a wash across the whole ISL sweep.
+//
+// What a swap DOES have to carry with it is the once-per-kernel hardware startup, which belongs
+// to whichever half runs first -- hybrid_compute.cpp owns it for that reason. Bound to a half
+// instead of to a position, a reorder leaves UNPACK/MATH/PACK unconfigured and wedges the grid
+// with no diagnostic.
 //
 // The fused half is included first and keeps index 0 of both argument lists, so it needs no
 // rebasing and its body is exactly the standalone kernel. The unified half follows at the bases
