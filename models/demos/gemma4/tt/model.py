@@ -999,7 +999,7 @@ class Gemma4Model:
                     "position_idx": packed["position_idx"],
                     "position_idx_cache": packed.get("position_idx_cache"),
                     "kv_write_idxs": packed.get("kv_write_idxs"),
-                    "attn_mask": packed.get("attn_mask_sliding") if sliding else packed.get("attn_mask_full"),
+                    "attn_mask": packed["attn_mask_sliding"] if sliding else packed["attn_mask_full"],
                     "rope_packed": rope_packed.get(lt),
                     "embed_idx": packed.get("embed_idx_sliding") if sliding else packed.get("embed_idx_full"),
                     "hot_pt": packed.get("hot_pt"),

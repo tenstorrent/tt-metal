@@ -37,6 +37,7 @@ import ttnn
 from models.demos.gemma4.tt.attention import Gemma4AttentionConfig
 from models.demos.gemma4.tt.ccl import ccl_allgather
 from models.demos.gemma4.tt.layer import Gemma4DecoderLayer
+from models.demos.gemma4.tt.precision import Gemma4Precision, dtype_to_str
 from models.demos.gemma4.tt.rms_norm import RMSNorm
 from models.demos.gemma4.utils.general_utils import get_cache_file_name
 from models.demos.gemma4.utils.substate import substate
@@ -108,8 +109,6 @@ class Gemma4AssistantModel:
 
         state_dict = _inject_zero_kv_weights(dict(state_dict), self.text_args)
 
-        from models.demos.gemma4.tt.precision import Gemma4Precision
-
         if precision is None:
             precision = Gemma4Precision()
         shared_mlp_dtype = precision.get("shared_mlp", dtype)
@@ -151,8 +150,6 @@ class Gemma4AssistantModel:
         # all-gathered, mirroring the target.
         col_mapper = mesh_config.column_parallel(mesh_device) if tp > 1 else None
 
-        from models.demos.gemma4.tt.precision import dtype_to_str
-
         def _linear(key, mapper, transpose=True, dtype_override=None):
             w = state_dict.get(key)
             if w is None:
@@ -188,9 +185,10 @@ class Gemma4AssistantModel:
     def _raw_token_embed(self, token_tt):
         """Target token embedding of a single token id -> [1,1,1,backbone] TILE.
 
-        Uses the *scaled* embedding (``embed_tokens``; device table has
-        ``sqrt(hidden)`` baked in at load). HF's ``embed_tokens`` is a
-        ``Gemma4TextScaledWordEmbedding`` that applies the ``sqrt(hidden)``
+        Uses the *scaled* embedding: ``Gemma4Model.embed_tokens()`` multiplies
+        the raw table by ``sqrt(hidden)`` at lookup (the stored table is
+        unscaled -- ``raw_embed()`` returns it as-is). HF's ``embed_tokens`` is
+        a ``Gemma4TextScaledWordEmbedding`` that applies the same ``sqrt(hidden)``
         normalizer inside its forward, so the drafter input
         ``cat(get_input_embeddings()(token), hidden)`` carries the *scaled*
         embedding. Feeding the unscaled table (~62x too small) starves the

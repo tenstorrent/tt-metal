@@ -235,9 +235,9 @@ def skip_if_config_only_checkpoint():
         pytest.skip(_CONFIG_ONLY_SKIP_REASON)
 
 
-def _assistant_repo_id(model_path=None):
+def _assistant_repo_id():
     """Hub repo id for the it-assistant drafter matching the target ``HF_MODEL``."""
-    model_path = model_path or _get_model_path()
+    model_path = _get_model_path()
     if model_path.endswith("-assistant"):
         return model_path if "/" in model_path else f"google/{model_path}"
     basename = os.path.basename(model_path.rstrip("/"))
@@ -318,9 +318,8 @@ def configure_spec_decode_smoke_env():
             os.environ["HF_MODEL"] = "google/gemma-4-31B-it"
         os.environ.setdefault("TT_CACHE_PATH", "/mnt/MLPerf/huggingface/tt_cache/google--gemma-4-31B-it")
         os.environ.setdefault("GEMMA4_NUM_LAYERS", "4")
-        os.environ.setdefault("GEMMA4_TOKENIZER", "google/gemma-4-12B-it")
 
-    path = resolve_assistant_model_path(allow_download=(os.environ.get("CI") == "true"))
+    path = resolve_assistant_model_path()
     if path:
         os.environ["GEMMA4_SPEC_DECODE_ENV_READY"] = "1"
     return path
