@@ -575,17 +575,13 @@ def concat_heads(
         grid_y = compute_grid.y if compute_grid is not None else 8
         grid_x = min(batch, physical_grid_x)
         if batch >= grid_x and batch % grid_x != 0:
-            # num_to_corerange needs a rectangle of EXACTLY ``batch`` cores, so
-            # batch must factor as gx*gy with gx <= physical_grid_x and
-            # gy <= grid_y. Some batches admit no such factorisation -- any
-            # ``batch`` with no divisor in [ceil(batch/grid_y), physical_grid_x],
-            # e.g. a prime > 8 on an 8x8 grid. Plain decode never hits it (batch
-            # is 1/8/32), but the packed verify runs at batch = B*(K+1), so
-            # draft lengths like K=10/12/16 (P=11/13/17) land there and this used
-            # to die with "max() arg is an empty sequence". Fall back to the
-            # transpose + nlp_concat_heads path, which has no rectangle
-            # constraint: slower (single core), but these K are all well past the
-            # measured throughput optimum, so correctness wins over speed here.
+            # num_to_corerange needs a rectangle of EXACTLY ``batch`` cores, and
+            # some batches do not factor that way (a prime > 8 on an 8x8 grid).
+            # Plain decode never hits it; packed verify runs at batch = B*(K+1),
+            # so K=10/12/16 used to die with "max() arg is an empty sequence".
+            # Fall back to transpose + nlp_concat_heads, which has no rectangle
+            # constraint -- single-core and slower, but those K are past the
+            # measured throughput optimum anyway.
             candidates = [x for x in range(grid_x, 0, -1) if batch % x == 0 and batch // x <= grid_y]
             if not candidates:
                 transposed = ttnn.transpose(tensor, 1, 2)  # [1, heads, batch, head_dim]
