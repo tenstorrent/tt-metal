@@ -180,6 +180,7 @@ run_gtest() {  # label, gtest_filter, then VAR=VAL overrides
         # hangs the kernel, exactly as it would on a D2D socket), and mpirun does
         # not always die on SIGTERM when its children are wedged in the driver, so
         # follow up with a kill.
+        local log="${TMPDIR:-/tmp}/host_socket_${SLURM_JOB_ID:-local}_$$.log"
         timeout --kill-after=30s "$RUN_TIMEOUT" \
         env "$@" "$MPIRUN" -n 2 --host "$HOSTSPEC" \
             --allow-run-as-root --tag-output $MAP_ARGS \
@@ -193,12 +194,20 @@ run_gtest() {  # label, gtest_filter, then VAR=VAL overrides
             -x TT_HOST_SOCKET_CSV_LATENCY -x TT_HOST_SOCKET_LAT_ITERS -x TT_HOST_SOCKET_IDLE_RTT_US \
             -x OMPI_MCA_btl_tcp_if_include -x OMPI_MCA_oob_tcp_if_include \
             -x OMPI_MCA_btl_tcp_if_exclude -x OMPI_MCA_oob_tcp_if_exclude \
-            "$HERE/rank_env.sh" "$BIN" --gtest_filter="$filter"
-        rc=$?
+            "$HERE/rank_env.sh" "$BIN" --gtest_filter="$filter" 2>&1 | tee "$log"
+        rc=${PIPESTATUS[0]}
         if (( rc == 124 )); then
             echo "----- chip $chip: timed out after ${RUN_TIMEOUT}s (device lock held?); trying next -----"
-            continue
+            rm -f "$log"; continue
         fi
+        # A board that will not launch firmware is an environment problem, not a
+        # test result, and the next candidate is usually healthy. Retry it rather
+        # than reporting a failure the socket had no part in.
+        if grep -qE 'failed to initialize FW|waiting for physical cores to finish' "$log"; then
+            echo "----- chip $chip: board did not initialize firmware; trying next -----"
+            rm -f "$log"; continue
+        fi
+        rm -f "$log"
         echo "----- rc=$rc ($label, chip $chip) -----"
         date
         return $rc
