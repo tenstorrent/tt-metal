@@ -5,6 +5,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from runner_support import require, sha256
+from timeout_config import validate_transfer_timeout
 
 CONFIGS = tuple(f"{kind}_h{i}" for kind in ("k", "v") for i in range(8))
 
@@ -94,17 +95,14 @@ def validate_plan(plan):
         host.get("reviewed") is True
         and host.get("actual_exit") == host.get("verified_exit") == 0
         and host.get("bridge_manifest_sha256") == plan["bridge_manifest_sha256"]
-        and host.get("cpp_cases_passed") == 48
+        and host.get("cpp_cases_passed") == 54
         and host.get("no_metal_umd_linkage") is True,
         "Range C++ validation is still pending",
     )
     for role in ("source", "passive"):
         binary = plan[role + "_client"]
         require(host["binaries"].get(binary) == plan["pins"][binary], "Unvalidated range executable")
-    require(
-        type(plan.get("transfer_phase_timeout_seconds")) is int and 0 < plan["transfer_phase_timeout_seconds"] <= 590,
-        "Python transfer wait must remain within the unchanged native600s deadline",
-    )
+    validate_transfer_timeout(plan)
     require(
         plan.get("warmup_policy") == "both_prompt_geometries_before_native_clients",
         "Full geometry warmup before native deadlines is mandatory",

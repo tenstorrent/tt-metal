@@ -63,7 +63,7 @@
   "passive_client": "/configure/passive_client",
   "pending": [
     "Closed reproduction example is4K; user approved resuming8\u201364K validation, pending separately reviewed runs;128K excluded",
-    "Configure source-matched model/environment and exact48-case/no-Metal/binary-bound bridge receipt; relocated device qualification remains pending",
+    "Configure source-matched model/environment and exact54-case/no-Metal/binary-bound bridge receipt; relocated device qualification remains pending",
     "Root selects one requested capacity and a fresh run directory/nonce",
     "Bind current exact source/passive assignment, lease and accepted health/handback proofs",
     "Choose setup/warmup/native-phase/supervisor budgets from actual smaller capacity runs and current lease",
@@ -108,5 +108,7 @@
   "warmup_policy": "both_prompt_geometries_before_native_clients",
   "warmup_timeout_seconds": null,
   "allocation_owner": "CONFIGURE_USER",
-  "environment_script": "/configure/prefill_env.sh"
+  "environment_script": "/configure/prefill_env.sh",
+  "inbound_timeout_ms": 600000,
+  "bridge_timeout_ms": 1500000
 }

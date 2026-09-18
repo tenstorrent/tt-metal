@@ -6,6 +6,7 @@ import socket
 from urllib.parse import urlparse
 
 from runner_support import require
+from timeout_config import bridge_timeouts
 
 
 def _port(value):
@@ -82,6 +83,7 @@ def prepare_bridge_config(plan, role):
         peer_port=peer["control_port"],
         manager_endpoint=f"tcp://127.0.0.1:{local['manager_port']}",
         control_port=local["control_port"],
+        **bridge_timeouts(plan),
     )
     receipt = dict(
         run_nonce=plan["run_nonce"],
@@ -139,6 +141,7 @@ def validate_bridge_network(plan, role, config, receipt):
         peer_port=peer["control_port"],
         manager_endpoint=f"tcp://127.0.0.1:{local['manager_port']}",
         control_port=local["control_port"],
+        **bridge_timeouts(plan),
     )
     require(
         receipt["config"] == expected

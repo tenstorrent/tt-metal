@@ -8,20 +8,22 @@
         "import ipaddress",
         "import socket",
         "from urllib.parse import urlparse",
-        "from runner_support import require"
+        "from runner_support import require",
+        "from timeout_config import bridge_timeouts"
       ],
       "imports_before": [
         "import datetime",
         "import ipaddress",
         "import socket",
         "from urllib.parse import urlparse",
-        "from runner_support import require"
+        "from runner_support import require",
+        "from timeout_config import bridge_timeouts"
       ],
       "original_bytes_equal": false,
-      "original_sha256": "6976dbdca3ddde809ec59bd2865e6afc749f4273a2a7adccc083edc86648e966",
-      "publication_sha256": "bed14d2290b0efcf522cebc41b5d2a69fbdd036079078f0dca852c61019d0f20",
+      "original_sha256": "78cad4a9fcdf22b5a45721b71a4dcb5d391b731b694e508ded0e761b569768c1",
+      "publication_sha256": "a2a06e88b0b2ac77feb2121a2374cdcbcb8f7d41db07aa1c483301fc80a46815",
       "source_file": "bridge_network.py",
-      "source_packet": "migration-prefill-capacity-owner-preparation-001"
+      "source_packet": "migration-prefill-capacity-owner-preparation-002"
     },
     "capacity_contract.py": {
       "ast_equal_to_frozen": false,
@@ -828,6 +830,21 @@
       "source_file": "supervision.py",
       "source_packet": "migration-prefill-capacity-owner-preparation-001"
     },
+    "timeout_config.py": {
+      "ast_equal_to_frozen": true,
+      "body_without_imports_equal_to_frozen": true,
+      "imports_after": [
+        "from runner_support import require"
+      ],
+      "imports_before": [
+        "from runner_support import require"
+      ],
+      "original_bytes_equal": false,
+      "original_sha256": "39c5d74658ac20d67e36735bfc2dba68c3013b9e5a3ff00193b493f4e6b669fc",
+      "publication_sha256": "c218e7f5e93b79a6eeaf172719c568a4f09a17057314bb91c589564f15bd68eb",
+      "source_file": "timeout_config.py",
+      "source_packet": "migration-prefill-capacity-owner-preparation-002"
+    },
     "transfer_bootstrap.py": {
       "ast_equal_to_frozen": false,
       "body_without_imports_equal_to_frozen": true,
@@ -869,6 +886,7 @@
         "from pathlib import Path",
         "from urllib.parse import urlparse",
         "from runner_support import require, sha256",
+        "from timeout_config import validate_transfer_timeout",
         "from capacity_execution import capacity",
         "import json"
       ],
@@ -877,14 +895,15 @@
         "import re",
         "from urllib.parse import urlparse",
         "from runner_support import require, sha256",
+        "from timeout_config import validate_transfer_timeout",
         "from capacity_execution import capacity",
         "import json"
       ],
       "original_bytes_equal": false,
-      "original_sha256": "6cdf164f38188ff8e819b6553d5c50eed292fa937cc0f5697af4391098cede3d",
-      "publication_sha256": "3e88eb6f1c1819f03779b5efad480c82a46764c906de80cf727cac374fb2304c",
+      "original_sha256": "d696268f6a68cb32262c396d653c628b408e08d4465366eb9617e47c94e69d48",
+      "publication_sha256": "57c2eb09291e3a500769ef3e9762ffcfda7bed110b7bb8d374be65ba09296452",
       "source_file": "transfer_contract.py",
-      "source_packet": "migration-prefill-capacity-owner-preparation-001"
+      "source_packet": "migration-prefill-capacity-owner-preparation-002"
     },
     "transfer_lifetime.py": {
       "ast_equal_to_frozen": false,
@@ -969,5 +988,87 @@
     }
   },
   "post_hook_note": "Original source hashes remain frozen provenance. Current publication hashes include required Black/isort formatting, removal of unused imports, and explicit preservation of the verifier re-export and native bootstrap import order. See the integration formatter/import review for each change.",
-  "scope": "Original tested source provenance is separate from current relocated publication hashes; device qualification pending"
+  "prior_revision_files": {
+    "bridge_network.py": {
+      "ast_equal_to_frozen": true,
+      "body_without_imports_equal_to_frozen": true,
+      "imports_after": [
+        "import datetime",
+        "import ipaddress",
+        "import socket",
+        "from urllib.parse import urlparse",
+        "from runner_support import require"
+      ],
+      "imports_before": [
+        "import datetime",
+        "import ipaddress",
+        "import socket",
+        "from urllib.parse import urlparse",
+        "from runner_support import require"
+      ],
+      "original_bytes_equal": false,
+      "original_sha256": "6976dbdca3ddde809ec59bd2865e6afc749f4273a2a7adccc083edc86648e966",
+      "publication_sha256": "bed14d2290b0efcf522cebc41b5d2a69fbdd036079078f0dca852c61019d0f20",
+      "source_file": "bridge_network.py",
+      "source_packet": "migration-prefill-capacity-owner-preparation-001"
+    },
+    "transfer_contract.py": {
+      "ast_equal_to_frozen": false,
+      "body_without_imports_equal_to_frozen": false,
+      "imports_after": [
+        "import re",
+        "from pathlib import Path",
+        "from urllib.parse import urlparse",
+        "from runner_support import require, sha256",
+        "from capacity_execution import capacity",
+        "import json"
+      ],
+      "imports_before": [
+        "from pathlib import Path",
+        "import re",
+        "from urllib.parse import urlparse",
+        "from runner_support import require, sha256",
+        "from capacity_execution import capacity",
+        "import json"
+      ],
+      "original_bytes_equal": false,
+      "original_sha256": "6cdf164f38188ff8e819b6553d5c50eed292fa937cc0f5697af4391098cede3d",
+      "publication_sha256": "3e88eb6f1c1819f03779b5efad480c82a46764c906de80cf727cac374fb2304c",
+      "source_file": "transfer_contract.py",
+      "source_packet": "migration-prefill-capacity-owner-preparation-001"
+    }
+  },
+  "scope": "Original tested source provenance and prior local publication hashes are retained separately from current portable hashes. Timeout support has source/host validation; no 64K device pass is claimed.",
+  "timeout_increment": {
+    "cpp_changed_files": {
+      "engine/tests/test_native_prefill_source_bridge.cpp": "209ee91f8b97b5427a13d0efce913117377db890f6e7047b1fe9341719644d16",
+      "engine/tools/native_prefill_source_bridge/bridge_config.hpp": "4d1792a769dfc248f7f769af7c10ae15cbf4445c5147b5eba13e012ba969137f",
+      "engine/tools/native_prefill_source_bridge/main.cpp": "0421d3485db0fb54225391b18c92fae04ef3f41cdbf45339f592984e1ea1e7f8"
+    },
+    "cpp_commit": "4f8847c03c888fd16a0ca1088d2ebbf7d24fcac5",
+    "cpp_host_cases": 54,
+    "cpp_host_receipt_sha256": "e11f2085f8f006d10d9f0123204141d7c1132e365c3db922d85977f3ced493f6",
+    "current_changed_publication_files": {
+      "README.md": "c6e88a5b9b2d2ef38aedb25315fe13f925ac7f91753fe3925fafaa36eda6d5bd",
+      "bridge_network.py": "a2a06e88b0b2ac77feb2121a2374cdcbcb8f7d41db07aa1c483301fc80a46815",
+      "checks_portable_contract.py": "cb1f0f5b7c6b21b9e62201e46b7e277eead39c4ec05a2401fad6b5120a936004",
+      "checks_timeout_config.py": "e2066177bd49f08ed46ab6a54d0a6a772fb09ce988976b7a4a3cfce5491a2d93",
+      "plan.example.json": "5930b03da6f39d2fed2a9dfa06d42b0982e8f992a2aec7f9a968d62e8a673e38",
+      "timeout_config.py": "c218e7f5e93b79a6eeaf172719c568a4f09a17057314bb91c589564f15bd68eb",
+      "transfer_contract.py": "57c2eb09291e3a500769ef3e9762ffcfda7bed110b7bb8d374be65ba09296452"
+    },
+    "device_acceptance": false,
+    "launcher002_manifest_sha256": "5e50225fac4524a6bad1bc90fc83170b7cd88ae0a0ceb10e5fcbfdda11cab104",
+    "owner002_manifest_sha256": "cb3e5ecdbbd0744c724cc48618e0183c5966e51dcebd2c45e293480e2770cdcb",
+    "portable_delta": "Manifest and executable paths remain configured; helper closure excludes checks_ modules. Only strict timeouts, 54-case receipt binding, examples, tests and provenance change.",
+    "relocated_host_checks": {
+      "actual_exit": 0,
+      "native_capacity_cases": 41,
+      "new_timeout_cases": 7,
+      "outer_cases": 1
+    },
+    "scope": "Portable timeout support; source/host acceptance only, no 64K device pass",
+    "source_review_sha256": "78e5e19a94d6801efd9f00da63dc4275c7c83c33aaebe4b46747bcdcf9e2babd",
+    "tests": "checks_timeout_config.py"
+  }
 }

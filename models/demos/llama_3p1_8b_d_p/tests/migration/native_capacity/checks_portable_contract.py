@@ -105,7 +105,7 @@ def make_plan(root):
         actual_exit=0,
         verified_exit=0,
         bridge_manifest_sha256=plan["bridge_manifest_sha256"],
-        cpp_cases_passed=48,
+        cpp_cases_passed=54,
         no_metal_umd_linkage=True,
         binaries={plan[k]: pins[plan[k]] for k in ("source_client", "passive_client")},
     )
@@ -114,7 +114,7 @@ def make_plan(root):
 
 
 class PortableContractTests(unittest.TestCase):
-    # Configured manifest paths work only with the same hash-bound48-case/binary receipt.
+    # Configured manifest paths work only with the same hash-bound54-case/binary receipt.
     def test_configured_manifest_and_binaries(self):
         with tempfile.TemporaryDirectory() as tmp:
             plan = make_plan(Path(tmp))
@@ -131,6 +131,7 @@ class PortableContractTests(unittest.TestCase):
             original = json.loads(path.read_text())
             changes = [
                 dict(cpp_cases_passed=34),
+                dict(cpp_cases_passed=48),
                 dict(no_metal_umd_linkage=False),
                 dict(bridge_manifest_sha256="0" * 64),
                 dict(
