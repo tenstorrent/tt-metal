@@ -51,9 +51,6 @@ class IndexerSelectionState:
     requires_tp_redistribution: bool
     valid_length_tensor: ttnn.Tensor | None = None
     valid_length_offset: int = 0
-    # Real-token end, carried alongside valid_length_tensor so the deferred top-k applies the SAME cap the
-    # score op already applied. Both bounds must match or a partial chunk drifts: a looser score with a
-    # tighter top-k drops real keys, the reverse ranks a stale tail.
     valid_end_tensor: ttnn.Tensor | None = None
 
 

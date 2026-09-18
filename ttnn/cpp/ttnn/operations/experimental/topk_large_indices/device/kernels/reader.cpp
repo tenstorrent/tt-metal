@@ -57,11 +57,6 @@ void kernel_main() {
                                     (metadata_length != 0 || meta_offset != 0);
         ASSERT(metadata_valid);
         search_len = metadata_valid ? metadata_length + meta_offset : input_width;
-        // Cap at the REAL token end when supplied. Uncapped, search_len is the end of the PADDED window,
-        // so a partial chunk ranks columns the request never wrote -- which is what makes a traced run
-        // differ from an untraced one on its pad rows. ceil to the 32-column write grid, the same bound
-        // the score kernel applies; the two MUST agree or a looser score with a tighter top-k drops real
-        // keys and the reverse ranks a stale tail.
         if constexpr (valid_end_from_metadata) {
             // Same scratch page as the read above: the helper invalidates the L1 line before loading, which
             // is exactly what it documents for a reused address.
