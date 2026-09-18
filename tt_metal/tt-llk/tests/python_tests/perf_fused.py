@@ -8,7 +8,7 @@ from fuser.config_parser import FUSER_CONFIG_DIR, FuserConfigSchema
 from fuser.sweep import collect_fuser_cases
 
 yaml_files = sorted(FUSER_CONFIG_DIR.glob("*.yaml"))
-test_cases = collect_fuser_cases(yaml_files)
+case_configs = collect_fuser_cases(yaml_files)
 
 
 # https://github.com/tenstorrent/tt-llk/issues/1584
@@ -16,13 +16,12 @@ test_cases = collect_fuser_cases(yaml_files)
 @skip_for_wormhole
 @skip_for_quasar
 @pytest.mark.perf
-@pytest.mark.parametrize("test_name, config_dict", test_cases)
+@pytest.mark.parametrize("case_name", case_configs)
 def test_fuser(
-    test_name,
-    config_dict,
+    case_name,
     regenerate_cpp,
     worker_id,
 ):
-    config = FuserConfigSchema.load(test_name, config_dict)
+    config = FuserConfigSchema.load(case_name, case_configs[case_name])
     config.global_config.regenerate_cpp = regenerate_cpp
     config.run_perf_test(worker_id=worker_id)
