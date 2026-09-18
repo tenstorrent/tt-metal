@@ -152,6 +152,17 @@ FORCE_INLINE void copy_via_memmove(const uint32_t dst_l1_addr, const uint32_t sr
     // int-to-pointer cast that -Werror=int-to-pointer-cast rejects on Quasar (64-bit pointers). uintptr_t
     // is the correct width on every arch, so this is a no-op change for WH/BH.
     memmove((void*)(uintptr_t)(dst_write_addr), (void*)(uintptr_t)(src_read_addr), (size_t)(bytes));
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+    // Order the uncached destination stores above before ANY NoC command the caller issues next. The
+    // memmove wrote the dest through the uncached alias (so it targets TL1), but bypassing the caches does
+    // NOT order those stores against a later NoC read of the destination: the copy_async=true callers
+    // (e.g. the reshape writers) issue exactly such a NoC read from the just-written buffer with no other
+    // barrier (async_write_barrier only orders NoC ops, not CPU stores), so without this fence the NoC can
+    // read TL1 before the stores commit -> stale / zero output. craq-sim (flat memory) masks this; it bites
+    // on RTL/silicon. Mirrors the uncached-store barrier in internal/tt-2xx/noc_zero_l1.inl
+    // (write_zeros_l1_barrier). Placed before the drain so it covers BOTH the async and sync paths.
+    __asm__ __volatile__("fence" ::: "memory");
+#endif
     if constexpr (!copy_async) {
         if (bytes != 0) {
             // Drain the 4B-aligned word holding the last written byte: in-bounds and aligned for any
