@@ -36,7 +36,7 @@
 
 void kernel_main() {
     // Runtime arg: total number of NC slices this core must process.
-    uint32_t NC_per_core = get_arg(args::NC_per_core);
+    const uint32_t NC_per_core = get_arg(args::NC_per_core);
 
     // Compile-time args:
     constexpr auto Ht = get_arg(args::Ht);
@@ -76,7 +76,7 @@ void kernel_main() {
     compute_kernel_hw_startup(dfb::in, dfb::partial);
     pack_reconfig_data_format(dfb::partial);
 
-    uint32_t num_outputs = NC_per_core / reduce_batch_size;
+    const uint32_t num_outputs = NC_per_core / reduce_batch_size;
 
     for (uint32_t out = 0; out < num_outputs; ++out) {
         // --- Phase 1: H-reduce all columns for reduce_batch_size NC slices ---

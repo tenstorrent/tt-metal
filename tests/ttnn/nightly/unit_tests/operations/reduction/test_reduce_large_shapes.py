@@ -18,6 +18,7 @@ from tests.ttnn.unit_tests.operations.reduce.test_cumprod import test_cumprod_ba
 from tests.ttnn.unit_tests.operations.reduce.test_cumprod import test_cumprod_preallocated as _cumprod_preallocated
 from tests.ttnn.unit_tests.operations.reduce.test_fast_reduce_nc import test_fast_reduce_nc as _fast_reduce_nc
 from tests.ttnn.unit_tests.operations.reduce.test_intimg import test_cumsum_channel_last as _cumsum_channel_last
+from tests.ttnn.unit_tests.operations.reduce.test_reduction import test_2d_topk as _2d_topk
 from tests.ttnn.unit_tests.operations.reduce.test_sum import test_sum_subcores as _sum_subcores
 
 
@@ -109,3 +110,14 @@ def test_sum_subcores_large(device, sub_core_grids, dtype, shape):
 @pytest.mark.parametrize("dataformat", [ttnn.bfloat16, ttnn.bfloat8_b], ids=["bfloat16", "bfloat8_b"])
 def test_fast_reduce_nc_large(input_shape, dims, compute_kernel_options, dataformat, device):
     _fast_reduce_nc(input_shape, dims, compute_kernel_options, dataformat, device)
+
+
+# 128256 is the Llama-3 vocab.
+@pytest.mark.parametrize("dim1", [1])
+@pytest.mark.parametrize("dim2", [128256])
+@pytest.mark.parametrize("dim", [1])
+@pytest.mark.parametrize("k", [50])
+@pytest.mark.parametrize("largest", [True])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+def test_large_2d_topk(device, dim1, dim2, dim, k, largest, dtype):
+    _2d_topk(device, dim1, dim2, dim, k, largest, dtype)

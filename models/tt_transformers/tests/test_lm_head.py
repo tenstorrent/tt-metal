@@ -30,6 +30,7 @@ from models.tt_transformers.tt.prefetcher import Prefetcher
     "batch_size",
     (1,),
 )
+@pytest.mark.parametrize("output_memory_config", [None, ttnn.DRAM_MEMORY_CONFIG], ids=["default", "dram-output"])
 @pytest.mark.parametrize(
     "mesh_device",
     [
@@ -40,7 +41,7 @@ from models.tt_transformers.tt.prefetcher import Prefetcher
     indirect=True,
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
-def test_lm_head_inference(seq_len, batch_size, mesh_device, use_prefetcher, reset_seeds):
+def test_lm_head_inference(seq_len, batch_size, mesh_device, use_prefetcher, output_memory_config, reset_seeds):
     dtype = ttnn.bfloat8_b
 
     prefetcher = Prefetcher(mesh_device, num_tensors=0, num_layers=1) if use_prefetcher else None
@@ -52,6 +53,8 @@ def test_lm_head_inference(seq_len, batch_size, mesh_device, use_prefetcher, res
         mesh_device, max_batch_size=batch_size, max_seq_len=seq_len, cache_hf=True, prefetcher=prefetcher
     )
     model_args.n_layers = 1
+    if output_memory_config is not None:
+        model_args.model_config["LM_HEAD_OUTPUT_MEMCFG"] = output_memory_config
 
     state_dict = model_args.load_state_dict()
 
@@ -89,6 +92,10 @@ def test_lm_head_inference(seq_len, batch_size, mesh_device, use_prefetcher, res
         layout=ttnn.TILE_LAYOUT,
     )
     tt_output = tt_model(tt_input)
+    expected_memory_config = (
+        ttnn.DRAM_MEMORY_CONFIG if use_prefetcher else output_memory_config or ttnn.L1_MEMORY_CONFIG
+    )
+    assert tt_output.memory_config() == expected_memory_config
     tt_output_torch = ttnn.to_torch(
         tt_output,
         mesh_composer=ttnn.ConcatMesh2dToTensor(

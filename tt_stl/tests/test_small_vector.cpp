@@ -183,6 +183,7 @@ TEST_F(SmallVectorTrackedTest, CPU_MoveConstructorSmallAndLarge) {
         small.emplace_back(10);
         small.emplace_back(20);
         auto moved = std::move(small);
+        EXPECT_EQ(Tracked::moveCtorCount, 2);
         EXPECT_EQ(moved.size(), 2u);
         EXPECT_EQ(moved[0].value, 10);
         EXPECT_EQ(moved[1].value, 20);

@@ -32,8 +32,8 @@ void kernel_main() {
     // Size of all dims combined, excluding the last two dims.
     constexpr auto outer_dim_size = get_arg(args::outer_dim_size);
 
-    constexpr bool reduce_all = (bool)get_arg(args::reduce_all);
-    constexpr bool keepdim = (bool)get_arg(args::keepdim);
+    constexpr bool reduce_all = static_cast<bool>(get_arg(args::reduce_all));
+    constexpr bool keepdim = static_cast<bool>(get_arg(args::keepdim));
 
     // Tensor Accessors
     // ----------------
@@ -42,9 +42,9 @@ void kernel_main() {
 
     using dst_accessor_type = decltype(s_dst);
 
-    Noc noc;
-    DataflowBuffer src_dfb(dfb::src);
-    DataflowBuffer dst_dfb(dfb::dst);
+    const Noc noc;
+    const DataflowBuffer src_dfb(dfb::src);
+    const DataflowBuffer dst_dfb(dfb::dst);
 
     // DFB for input data.
     const uint32_t src_dfb_addr = src_dfb.get_write_ptr();
@@ -96,7 +96,8 @@ void kernel_main() {
         src_data_format,
         src_dfb_addr);
 
-    OutputContext output_ctx((uint32_t*)accumulated_arg_max, tile_height, dst_dfb_addr, output_page_elements);
+    OutputContext output_ctx(
+        reinterpret_cast<uint32_t*>(accumulated_arg_max), tile_height, dst_dfb_addr, output_page_elements);
 
     // Iterate over the initial dimensions combined together
     for (uint32_t outer_index = 0; outer_index < outer_dim_size; outer_index++) {
@@ -118,7 +119,7 @@ void kernel_main() {
             for (uint32_t j = 0; j < input_width; j++) {
                 // Number of input tiles in the last two dimensions.
                 constexpr uint32_t inner_size = input_height * input_width;
-                const uint32_t src_tile_id = outer_index * inner_size + i * input_width + j;
+                const uint32_t src_tile_id = (outer_index * inner_size) + (i * input_width) + j;
 
                 // Fetch the next tile
                 noc.async_read(s_src, src_dfb, src_page_size, {.page_id = src_tile_id}, {.offset_bytes = 0});

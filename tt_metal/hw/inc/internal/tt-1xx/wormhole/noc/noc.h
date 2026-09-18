@@ -6,7 +6,9 @@
 #define _NOC_H_
 
 #include <stdint.h>
+#ifndef __cplusplus
 #include <stdbool.h>
+#endif
 
 //////
 

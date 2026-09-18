@@ -23,6 +23,7 @@
 #include "api/compute/lcm.h"
 #include "api/compute/xlogy.h"
 #include "api/compute/atan2.h"
+#include "api/compute/nextafter.h"
 #include "api/compute/binary_comp.h"
 #include "api/compute/isclose.h"
 #include "eltwise_utils_common.hpp"
@@ -81,7 +82,7 @@ ALWI void process_tile(
 #if HAS_ACTIVATIONS(POST)
             BINARY_SFPU_INIT
 #endif
-#if ISCLOSE_OP
+#ifdef ISCLOSE_OP
             BINARY_SFPU_OP(i * 2, i * 2 + 1, i * 2, rtol_bits, atol_bits);
 #else
             BINARY_SFPU_OP(i * 2, i * 2 + 1, i * 2);

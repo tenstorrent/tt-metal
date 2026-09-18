@@ -35,7 +35,10 @@ constexpr bool reduce_trigger_supported = true;
 // Template-driven profiling: MaybeDeviceZoneScopedN(ENABLED, name)
 // When ENABLED=true: RAII profileScope writes timestamps (same as DeviceZoneScopedN)
 // When ENABLED=false: empty struct, zero overhead (compiler eliminates entirely)
-#if defined(PROFILE_KERNEL)
+#if defined(PROFILE_STREAMING)
+// Not supported by the streaming profiler: these template-gated zones use the DRAM profiler's hash ids.
+#define MaybeDeviceZoneScopedN(ENABLED, name)
+#elif defined(PROFILE_KERNEL)
 template <bool Enabled, uint32_t timer_id>
 struct MaybeProfileScope {
     inline __attribute__((always_inline)) MaybeProfileScope() {}
@@ -112,17 +115,17 @@ struct RingAccumulatorState {
 };
 
 // Ring-streaming lightweight-mask context. Field NAMES match LightweightMaskContext so sdpa_ring_v2's
-// generic `lw_mask.<field>` reads work for either type, BUT the 10 compile-time-constant fields are
-// template params (static constexpr → zero per-instance storage), leaving only the 3 per-ring-iter
-// runtime fields on the stack. Shrinks the live lw_mask object ~56 B → ~12 B on kernel_main's frame.
+// generic `lw_mask.<field>` reads work for either type, BUT the compile-time-constant fields are
+// template params (static constexpr → zero per-instance storage), leaving only the per-ring-iter
+// runtime fields on the stack. Shrinks the live lw_mask object ~56 B → ~20 B on kernel_main's frame.
+// The two partial columns are runtime fields because they may come from a device tensor per dispatch;
+// their CB tile INDICES stay compile-time.
 // Only the ring_joint_sdpa producer uses it; exp_ring keeps the plain LightweightMaskContext —
 // sdpa_ring_v2's MaskCtx template param is deduced per caller.
 template <
     uint32_t NeginfTileIdx,
     uint32_t CausalDiagTileIdx,
     uint32_t LocalNPaddedTiles,
-    uint32_t GlobalNPartialCol,
-    uint32_t JointLPartialCol,
     uint32_t GlobalNPartialTileIdx,
     uint32_t JointLPartialTileIdx,
     uint32_t StraddleMaskChunkId>
@@ -132,13 +135,13 @@ struct RingStreamingMaskCtx {
     uint32_t global_n_padded_tiles = 0;
     uint32_t joint_n_padded_tiles = 0;
     uint32_t straddle_num_padded_tiles = 0;
+    uint32_t global_n_partial_col = 0;
+    uint32_t joint_l_partial_col = 0;
     // Compile-time-constant fields (no per-instance storage):
     static constexpr uint32_t neginf_tile_idx = NeginfTileIdx;
     static constexpr uint32_t causal_diag_tile_idx = CausalDiagTileIdx;
     static constexpr uint32_t primary_diag_tile_idx = CausalDiagTileIdx;
     static constexpr uint32_t local_n_padded_tiles = LocalNPaddedTiles;
-    static constexpr uint32_t global_n_partial_col = GlobalNPartialCol;
-    static constexpr uint32_t joint_l_partial_col = JointLPartialCol;
     static constexpr uint32_t global_n_partial_tile_idx = GlobalNPartialTileIdx;
     static constexpr uint32_t joint_l_partial_tile_idx = JointLPartialTileIdx;
     static constexpr uint32_t straddle_mask_chunk_id = StraddleMaskChunkId;
@@ -704,17 +707,18 @@ template <
     uint32_t normalized_out_cb,
     uint32_t scale_fp32 = 0,
     bool use_attention_sink = false,
-    uint32_t cb_attention_sink = INVALID_CB>
+    uint32_t cb_attention_sink = INVALID_CB,
+    bool sink_per_row = false>
 static __attribute__((noinline, noclone)) void normalize_row_streaming(
     uint32_t cur_sum_cb,
     uint32_t cur_out_cb,
     uint32_t sbh,
     [[maybe_unused]] uint32_t cur_max_cb_rt = 0,
     [[maybe_unused]] uint32_t sink_row_offset = 0) {
-    // Attention sink: cb_attention_sink holds one raw per-head scalar tile. Broadcast it for each
-    // row, compute exp((sink - max)*scale), and fold it into the col-reduced denominator (DST[0]).
+    // Dense SDPA supplies one scalar tile; sparse SDPA supplies a first-column vector of head
+    // scalars per tile row. Fold exp((sink - max)*scale) into the col-reduced denominator (DST[0]).
     if constexpr (use_attention_sink) {
-        CircularBuffer(cb_attention_sink).wait_front(1);
+        CircularBuffer(cb_attention_sink).wait_front(sink_per_row ? sink_row_offset + sbh : 1);
         CircularBuffer(cur_max_cb_rt).wait_front(sink_row_offset + sbh);
     }
     configure_single_tile_pack(scratch_cb);
@@ -739,8 +743,14 @@ static __attribute__((noinline, noclone)) void normalize_row_streaming(
                 // DST[1] = exp((sink[s] - max[row_offset+s]) * scale); DST[0] += DST[1].
                 // max - sink with a negated scale is equivalent and avoids expanding the sink
                 // scalar to a first-column vector for every Q tile.
-                sub_bcast_scalar_init(cur_max_cb_rt, cb_attention_sink);
-                sub_tiles_bcast_scalar(cur_max_cb_rt, cb_attention_sink, sink_row_offset + s, 0, 1);
+                if constexpr (sink_per_row) {
+                    // Sparse SDPA packs different heads in each row; both inputs hold a first-column vector.
+                    sub_init(cur_max_cb_rt, cb_attention_sink);
+                    sub_tiles(cur_max_cb_rt, cb_attention_sink, sink_row_offset + s, sink_row_offset + s, 1);
+                } else {
+                    sub_bcast_scalar_init(cur_max_cb_rt, cb_attention_sink);
+                    sub_tiles_bcast_scalar(cur_max_cb_rt, cb_attention_sink, sink_row_offset + s, 0, 1);
+                }
                 // The custom first-column exp needs generic unary SFPU addrmod state, but not the
                 // Blackhole approximate exp_init macro/replay setup used by exp_tile<true>.
                 MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::exponential, DST_ACCUM_MODE>()));
@@ -967,7 +977,8 @@ template <
     uint32_t kv_pad_q_local_padded_Nt = 0,
     uint32_t kv_pad_chunk_size_t = 0,
     uint32_t kv_pad_kv_local_padded_Nt = 0,
-    uint32_t sliding_window_size = 0>
+    uint32_t sliding_window_size = 0,
+    bool circular_kv_cache = false>
 static void apply_lightweight_mask_streaming(
     uint32_t mask_cb,
     uint32_t out_cb,
@@ -1039,9 +1050,14 @@ static void apply_lightweight_mask_streaming(
                             l1_acc_single_tile(mask_cb, neginf_idx, out_cb, row_offset + col);
                             continue;
                         }
+                        // Circular cache: this chunk's absolute K origin (sliding chunks never
+                        // straddle a slab). Inverting local rows is ambiguous once several chunk groups
+                        // alias one local slab; unbounded caches keep the inversion.
                         const uint32_t k_pos_u32 =
-                            chunked_kv_global_tile_for_local<kv_pad_chunk_size_t, kv_pad_q_local_padded_Nt>(
-                                kv_pad_rotation.ring_id, local_k_tile);
+                            circular_kv_cache
+                                ? k_start_tile + col
+                                : chunked_kv_global_tile_for_local<kv_pad_chunk_size_t, kv_pad_q_local_padded_Nt>(
+                                      kv_pad_rotation.ring_id, local_k_tile);
                         if (k_pos_u32 >= kv_pad_rotation.logical_tile_count) {
                             l1_acc_single_tile(mask_cb, neginf_idx, out_cb, row_offset + col);
                             continue;
@@ -1253,7 +1269,10 @@ template <
     bool use_provided_mask = false,
     // Compile-time gate for q_base_tiles: only the head-serial ring passes read Q at an offset,
     // and every other caller keeps the original constant-zero index math (and codegen).
-    bool has_q_base_tiles = false>
+    bool has_q_base_tiles = false,
+    // Circular sliding KV cache: mask K origins come from the work plan, not from
+    // inverting local cache rows (ambiguous once chunk groups alias one local slab).
+    bool circular_kv_cache = false>
 static void sdpa_inner_loop_step(
     AccumulatorHalf& prev,
     AccumulatorHalf& cur,
@@ -1441,7 +1460,8 @@ static void sdpa_inner_loop_step(
                     kv_pad_q_local_padded_Nt,
                     kv_pad_chunk_size_t,
                     kv_pad_kv_local_padded_Nt,
-                    sliding_window_size>(
+                    sliding_window_size,
+                    circular_kv_cache>(
                     cb_mask_in,
                     cb_qkt_im,
                     q_subblock,
@@ -2299,6 +2319,9 @@ template <
     bool v_shares_k_buffer = false,
     bool kt_inplace_v = false,
     uint32_t sliding_window_size = 0,
+    // Circular sliding KV cache slab count (0/1 = unbounded); wraps the sliding work
+    // plan's local slab addressing. See sliding_window_work_plan.hpp.
+    uint32_t circular_kv_slab_count = 0,
     uint32_t ring_size = 1,
     bool use_attention_sink = false,
     uint32_t cb_attention_sink = INVALID_CB,
@@ -2500,6 +2523,7 @@ void sdpa_ring_v2(
         }
 
         ttnn::operations::transformer::sdpa::ring_joint::SlidingQWorkPlan sliding_q_plan;
+        constexpr bool circular_kv_cache = circular_kv_slab_count > 1;
         if constexpr (has_sliding_window) {
             sliding_q_plan = ttnn::operations::transformer::sdpa::ring_joint::build_sliding_q_work_plan(
                 q_chunk * Sq_chunk_t,
@@ -2511,7 +2535,8 @@ void sdpa_ring_v2(
                 TILE_HEIGHT,
                 local_padded_Nt,
                 Sk_chunk_t,
-                logical_nt);
+                logical_nt,
+                circular_kv_slab_count);
             ASSERT(sliding_q_plan.is_valid);
             ASSERT(sliding_q_plan.total_k_chunk_count > 0);
         }
@@ -2557,6 +2582,14 @@ void sdpa_ring_v2(
         const uint32_t q_k_loop_count = has_sliding_window ? per_q_valid_kv : num_kv_chunks;
         for (uint32_t k_chunk = 0; k_chunk < q_k_loop_count; ++k_chunk) {
             const auto sliding_k_chunk = sliding_q_plan.k_chunk_at(k_chunk);
+            // Circular cache: the mask's K origin is the plan's absolute K-chunk index (inverting local
+            // cache rows is ambiguous once several chunk groups alias one local slab); unbounded caches
+            // keep the inversion. Resolved once here, outside the [&] lambdas below: anything new they
+            // capture changes the unbounded kernels' register allocation.
+            uint32_t circular_k_origin_tile = 0;
+            if constexpr (circular_kv_cache) {
+                circular_k_origin_tile = sliding_q_plan.global_k_chunk_at(k_chunk) * Sk_chunk_t;
+            }
             const uint32_t source_ring_id = has_sliding_window ? sliding_k_chunk.source_ring_id : ring_id;
             const uint32_t source_k_chunk = has_sliding_window ? sliding_k_chunk.source_k_chunk : k_chunk;
             const bool kv_chunk_is_joint = !has_sliding_window && k_chunk >= num_local_k_chunks;
@@ -2624,15 +2657,18 @@ void sdpa_ring_v2(
             if constexpr (lightweight_mask_enabled) {
                 if (apply_mask) {
                     bool partial_tile_selected = false;
+                    // Live column 0 = tile-aligned boundary this dispatch: no partial stamp.
                     if constexpr (global_n_mask_enabled) {
                         if (is_global_n_mask_chunk) {
-                            lw_partial_tile_idx = lw_mask.global_n_partial_tile_idx;
+                            lw_partial_tile_idx =
+                                lw_mask.global_n_partial_col > 0 ? lw_mask.global_n_partial_tile_idx : 0u;
                             partial_tile_selected = true;
                         }
                     }
                     if constexpr (joint_n_mask_enabled) {
                         if (!partial_tile_selected && is_joint_n_mask_chunk) {
-                            lw_partial_tile_idx = lw_mask.joint_l_partial_tile_idx;
+                            lw_partial_tile_idx =
+                                lw_mask.joint_l_partial_col > 0 ? lw_mask.joint_l_partial_tile_idx : 0u;
                         }
                     }
                 }
@@ -2678,8 +2714,10 @@ void sdpa_ring_v2(
             if constexpr (is_causal_sdpa && !kv_pad_rotation_enabled) {
                 if constexpr (has_sliding_window) {
                     const uint32_t k_global_start =
-                        kv_global_tile_for_local<true, local_padded_Nt, chunk_size_t, q_local_padded_Nt>(
-                            source_ring_id, source_k_chunk * Sk_chunk_t);
+                        circular_kv_cache
+                            ? circular_k_origin_tile
+                            : kv_global_tile_for_local<true, local_padded_Nt, chunk_size_t, q_local_padded_Nt>(
+                                  source_ring_id, source_k_chunk * Sk_chunk_t);
                     const uint32_t q_global_end = q_start_tile + Sq_chunk_t;
                     if (k_global_start < q_global_end && q_global_end - k_global_start < active_Sk_param) {
                         active_Sk_param = q_global_end - k_global_start;
@@ -2711,7 +2749,7 @@ void sdpa_ring_v2(
             }
 
             // K start tile fed to diag stamp must share Q's coord frame (local for is_causal, global for chunked).
-            const uint32_t step_k_start_tile = [&]() {
+            const uint32_t step_k_start_tile_local = [&]() {
                 if constexpr (has_sliding_window) {
                     return kv_global_tile_for_local<true, local_padded_Nt, chunk_size_t, q_local_padded_Nt>(
                         source_ring_id, source_k_chunk * Sk_chunk_t);
@@ -2722,6 +2760,8 @@ void sdpa_ring_v2(
                     return k_chunk * Sk_chunk_t;
                 }
             }();
+            // Circular cache: the plan's absolute origin replaces the inversion above.
+            const uint32_t step_k_start_tile = circular_kv_cache ? circular_k_origin_tile : step_k_start_tile_local;
             const bool step_apply_causal = [&]() {
                 if constexpr (has_sliding_window) {
                     return q_start_tile < step_k_start_tile + Sk_chunk_t &&
@@ -2796,8 +2836,9 @@ void sdpa_ring_v2(
                 sliding_window_size,
                 use_attention_sink,
                 cb_attention_sink,
-                false,               // use_provided_mask
-                use_l1_state_fifo>(  // has_q_base_tiles: head-serial passes read Q at q_base_tiles
+                false,              // use_provided_mask
+                use_l1_state_fifo,  // has_q_base_tiles: head-serial passes read Q at q_base_tiles
+                circular_kv_cache>(
                 q_prev,
                 q_cur,
                 is_last_k_of_last_ring_iter,

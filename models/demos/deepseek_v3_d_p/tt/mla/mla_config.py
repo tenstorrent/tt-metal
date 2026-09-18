@@ -585,8 +585,27 @@ MLA_MATMUL_CONFIG = {
             "out_dtype": ttnn.bfloat16,
         },
     },
-    # GLM DSA indexer projections and normalized H128 transforms at local sequence length 640.
+    # GLM DSA indexer: Q is TP-sequence-sharded before projection (160 rows at SP8/TP4, chunk5120).
+    # The 640-row entries remain useful for larger chunks / smaller TP and the unchanged K/gate stems.
     "indexer.wq_b": {
+        160: {
+            **_GLM_INDEXER_TAGS,
+            # M=5 tiles, N=128 tiles: multicast the whole M slab across 64 N-parallel cores.
+            # QB traced sweep: ~31 us vs ~60 us auto and ~48 us for the best tested 2D config.
+            "program_config": ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                compute_with_storage_grid_size=COMPUTE_GRID,
+                in0_block_w=16,
+                out_subblock_h=1,
+                out_subblock_w=2,
+                per_core_M=5,
+                per_core_N=2,
+                fuse_batch=True,
+                mcast_in0=True,
+            ),
+            "act_mem_config": ttnn.DRAM_MEMORY_CONFIG,
+            "out_mem_config": ttnn.L1_MEMORY_CONFIG,
+            "out_dtype": ttnn.bfloat16,
+        },
         640: {
             **_GLM_INDEXER_TAGS,
             "program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
@@ -661,6 +680,21 @@ MLA_MATMUL_CONFIG = {
         },
     },
     "indexer.q_hadamard": {
+        160: {
+            **_GLM_INDEXER_TAGS,
+            # Fuse 32 heads × 5 query tiles over 80 cores; broadcast the common H128 transform.
+            # QB traced sweep: ~9 us vs ~94 us auto for BF16 input / BFP8 output.
+            "program_config": ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                compute_with_storage_grid_size=COMPUTE_GRID,
+                in0_block_w=2,
+                out_subblock_h=2,
+                out_subblock_w=4,
+                per_core_M=2,
+                per_core_N=4,
+                fuse_batch=True,
+                mcast_in0=False,
+            ),
+        },
         640: {
             **_GLM_INDEXER_TAGS,
             "program_config": ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
@@ -766,7 +800,7 @@ def get_matmul_config(weight_name: str, seq_len_local: int) -> dict | list | Non
     """Raw matmul entry for a given weight and local sequence length (per-device).
 
     Returns None if there is no entry. **A slot may hold a LIST of candidates** (one per model
-    flavour sharing this seq_len — e.g. Kimi-K2.6 and Kimi-K3 both at 640), and this accessor does
+    flavour sharing this seq_len — e.g. Kimi-K2.7 and Kimi-K3 both at 640), and this accessor does
     NOT apply the gating tags. ``ttMLA`` deliberately reads the dicts directly and resolves through
     ``_select_cfg`` / ``_cfg_matches``, which is the only place that knows the live model's head
     count, q_lora_rank and chunked mode. Any new caller should do the same rather than assume the

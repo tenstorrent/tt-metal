@@ -26,24 +26,25 @@ FORCE_INLINE void reload_from_cb_to_dst(
     uint32_t out_subblock_w,
     uint32_t out_subblock_h,
     uint32_t in0_block_w) {
-    DataflowBuffer mm_partials_dfb(mm_partials_dfb_id);
+    DataflowBuffer mm_partials_dfb(static_cast<uint16_t>(mm_partials_dfb_id));
     // Reconfigure input
     reconfig_data_format_srca(in1_dfb_id, mm_partials_dfb_id);
     copy_init(mm_partials_dfb_id);
-    mm_partials_dfb.wait_front(out_subblock_num_tiles);
+    mm_partials_dfb.wait_front(static_cast<uint16_t>(out_subblock_num_tiles));
 
-    uint32_t start_dst_index = 0;
-    uint32_t start_tile_index = 0;
+    const uint32_t start_dst_index = 0;
+    const uint32_t start_tile_index = 0;
     copy_block(mm_partials_dfb_id, start_tile_index, start_dst_index, out_subblock_num_tiles);
 
-    mm_partials_dfb.pop_front(out_subblock_num_tiles);
+    mm_partials_dfb.pop_front(static_cast<uint16_t>(out_subblock_num_tiles));
     // Reconfigure srcA back
     reconfig_data_format_srca(mm_partials_dfb_id, in1_dfb_id);
-    matmul_block_init(in0_dfb_id, in1_dfb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
+    matmul_block_init(
+        in0_dfb_id, in1_dfb_id, static_cast<uint32_t>(in1_transpose_tile), out_subblock_w, out_subblock_h, in0_block_w);
 }
 
 FORCE_INLINE uint32_t get_local_cb_rd_ptr(uint32_t dfb_id) {
-    LocalCBInterface& local_dfb = get_local_cb_interface(dfb_id);
+    const LocalCBInterface& local_dfb = get_local_cb_interface(dfb_id);
     return local_dfb.fifo_rd_ptr;
 }
 
@@ -53,18 +54,18 @@ FORCE_INLINE void update_local_cb_rd_ptr(uint32_t dfb_id, uint32_t val) {
 }
 
 FORCE_INLINE uint32_t get_local_cb_start_addr(uint32_t dfb_id) {
-    LocalCBInterface& local_dfb = get_local_cb_interface(dfb_id);
-    uint32_t fifo_size = local_dfb.fifo_size;
-    uint32_t fifo_limit = local_dfb.fifo_limit;
-    uint32_t fifo_start_addr = fifo_limit - fifo_size;
+    const LocalCBInterface& local_dfb = get_local_cb_interface(dfb_id);
+    const uint32_t fifo_size = local_dfb.fifo_size;
+    const uint32_t fifo_limit = local_dfb.fifo_limit;
+    const uint32_t fifo_start_addr = fifo_limit - fifo_size;
     return fifo_start_addr;
 }
 
 FORCE_INLINE bool is_tensor_split(uint32_t dfb_id, uint32_t tensor_size_bytes) {
-    LocalCBInterface& local_dfb = get_local_cb_interface(dfb_id);
-    uint32_t fifo_rd_ptr = local_dfb.fifo_rd_ptr;
-    uint32_t fifo_limit = local_dfb.fifo_limit;
-    bool split = (fifo_limit - fifo_rd_ptr) < tensor_size_bytes / L1_ALIGNMENT;
+    const LocalCBInterface& local_dfb = get_local_cb_interface(dfb_id);
+    const uint32_t fifo_rd_ptr = local_dfb.fifo_rd_ptr;
+    const uint32_t fifo_limit = local_dfb.fifo_limit;
+    const bool split = (fifo_limit - fifo_rd_ptr) < tensor_size_bytes / L1_ALIGNMENT;
     return split;
 }
 
@@ -81,9 +82,9 @@ FORCE_INLINE void calculate_next_block_index_and_update_rd_ptr(
     LocalCBInterface& local_dfb = get_local_cb_interface(dfb_id);
     uint32_t next_block_index = curr_block_index + 1;
     uint32_t next_fifo_rd_ptr = local_dfb.fifo_rd_ptr;
-    uint32_t block_size_bytes_aligned = block_size_bytes / L1_ALIGNMENT;
-    bool reach_limit = local_dfb.fifo_rd_ptr == local_dfb.fifo_limit;
-    bool last_block = curr_block_index == (num_blocks - 1);
+    const uint32_t block_size_bytes_aligned = block_size_bytes / L1_ALIGNMENT;
+    const bool reach_limit = local_dfb.fifo_rd_ptr == local_dfb.fifo_limit;
+    const bool last_block = curr_block_index == (num_blocks - 1);
     if (tensor_split) {
         if (reach_limit) {
             local_dfb.fifo_rd_ptr = dfb_start_addr;
@@ -119,10 +120,10 @@ FORCE_INLINE void update_rd_ptr_to_ring_index(
 
     if (tensor_split) {
         if ((local_dfb.fifo_rd_ptr + ring_index * block_size_bytes / L1_ALIGNMENT) >= local_dfb.fifo_limit) {
-            uint32_t fifo_size = local_dfb.fifo_size;
-            uint32_t fifo_limit = local_dfb.fifo_limit;
-            uint32_t fifo_start_addr = fifo_limit - fifo_size;
-            uint32_t fifo_size_skip_bytes = local_dfb.fifo_rd_ptr - fifo_start_addr;
+            const uint32_t fifo_size = local_dfb.fifo_size;
+            const uint32_t fifo_limit = local_dfb.fifo_limit;
+            const uint32_t fifo_start_addr = fifo_limit - fifo_size;
+            const uint32_t fifo_size_skip_bytes = local_dfb.fifo_rd_ptr - fifo_start_addr;
             local_dfb.fifo_rd_ptr =
                 fifo_start_addr +
                 (fifo_size_skip_bytes + ring_index * block_size_bytes / L1_ALIGNMENT) % local_dfb.fifo_size;
@@ -255,12 +256,14 @@ void kernel_main() {
 
     // Runtime args
     uint32_t rt_args_idx = 0;
-    uint32_t core_type = get_arg_val<uint32_t>(rt_args_idx++);
-    if (core_type == (uint32_t)CORE_TYPE::IDLE_CORE || core_type == (uint32_t)CORE_TYPE::HOP_CORE) {
+    const uint32_t core_type = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
+    if (core_type == static_cast<uint32_t>(CORE_TYPE::IDLE_CORE) ||
+        core_type == static_cast<uint32_t>(CORE_TYPE::HOP_CORE)) {
         return;
     }
-    uint32_t ring_idx = get_arg_val<uint32_t>(rt_args_idx++);
-    const uint32_t* unpadded_in0_shard_widths_in_tiles = (uint32_t*)get_arg_addr(rt_args_idx);
+    const uint32_t ring_idx = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
+    const uint32_t* unpadded_in0_shard_widths_in_tiles =
+        reinterpret_cast<uint32_t*>(get_arg_addr(static_cast<int>(rt_args_idx)));
     rt_args_idx += ring_size;
 
     constexpr uint32_t out_block_w = out_subblock_w * in1_num_subblocks;
@@ -270,23 +273,24 @@ void kernel_main() {
 #endif
 
 #ifdef IN1_TRANSPOSE_TILE
-    constexpr uint32_t in1_transpose_tile = true;
+    constexpr bool in1_transpose_tile = true;
 #else
-    constexpr uint32_t in1_transpose_tile = false;
+    constexpr bool in1_transpose_tile = false;
 #endif
 
     constexpr bool spill = num_blocks > 1 && (out_block_num_tiles / out_subblock_num_tiles) > 1;
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(in0_dfb_id, in1_dfb_id, mm_partials_dfb_ids[0]);
-    matmul_block_init(in0_dfb_id, in1_dfb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
+    matmul_block_init(
+        in0_dfb_id, in1_dfb_id, static_cast<uint32_t>(in1_transpose_tile), out_subblock_w, out_subblock_h, in0_block_w);
     for (uint32_t b = 0; b < batch; b++) {
 #if defined(ENABLE_GLOBAL_CB) && !defined(STREAMING_IN1)
         uint32_t in1_dfb_start_addr = 0;
         uint32_t in1_rd_ptr_start_addr = 0;
         [[maybe_unused]] uint32_t curr_in1_block_index = 0;
-        bool in1_tensor_split = 0;
-        uint32_t next_in1_block_index;
-        uint32_t next_in1_rd_ptr_addr;
+        bool in1_tensor_split = false;
+        uint32_t next_in1_block_index = 0;
+        uint32_t next_in1_rd_ptr_addr = 0;
 
         UNPACK((in1_dfb_start_addr = get_local_cb_start_addr(in1_dfb_id)));
         UNPACK((in1_rd_ptr_start_addr = get_local_cb_rd_ptr(in1_dfb_id)));
@@ -296,11 +300,11 @@ void kernel_main() {
 #endif
         const uint32_t mm_out_dfb_id = mm_out_dfb_ids[b];
         const uint32_t mm_partials_dfb_id = mm_partials_dfb_ids[b];
-        DataflowBuffer mm_out_dfb(mm_out_dfb_id);
-        DataflowBuffer mm_partials_dfb(mm_partials_dfb_id);
+        DataflowBuffer mm_out_dfb(static_cast<uint16_t>(mm_out_dfb_id));
+        DataflowBuffer mm_partials_dfb(static_cast<uint16_t>(mm_partials_dfb_id));
 
         bool enable_reload = false;
-        uint32_t out_num_tiles_to_wait = out_subblock_num_tiles;
+        const uint32_t out_num_tiles_to_wait = out_subblock_num_tiles;
 
 #ifdef PACK_RELU
         // for each batch we start we relu disabled so that intermediate results are not relu'd
@@ -321,7 +325,7 @@ void kernel_main() {
 
         for (uint32_t block = 0; block < num_blocks; block++) {
             const uint32_t curr_ring_idx = (ring_idx + block) % ring_size;
-            uint32_t unpadded_in0_block_w = unpadded_in0_shard_widths_in_tiles[curr_ring_idx];
+            const uint32_t unpadded_in0_block_w = unpadded_in0_shard_widths_in_tiles[curr_ring_idx];
 
             // Wait for in1 block (DRAM and streaming both drive the standard CB cycle; see
             // consume_in1_cb). in1_index_subblock_offset is 0 for both, so no manual rd_ptr here.
@@ -330,8 +334,8 @@ void kernel_main() {
             }
 
             const uint32_t input0_dfb_id = block == 0 ? in0_dfb_id : in2_dfb_id;
-            DataflowBuffer input0_dfb(input0_dfb_id);
-            bool last_out = block == (num_blocks - 1);
+            DataflowBuffer input0_dfb(static_cast<uint16_t>(input0_dfb_id));
+            const bool last_out = block == (num_blocks - 1);
 // Configure packer once for pack out without Bias
 #if not defined FUSE_BIAS and defined PACK_RELU
             if (last_out) {
@@ -360,13 +364,13 @@ void kernel_main() {
                 &next_in1_rd_ptr_addr)));
 #endif
 
-            int in0_index_subblock_offset = 0;
+            uint32_t in0_index_subblock_offset = 0;
             for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
 #ifdef ENABLE_GLOBAL_CB
-                int in1_index_subblock_offset = 0;
+                uint32_t in1_index_subblock_offset = 0;
 #else
                 // This should always be 0 when reading in1 from DRAM
-                int in1_index_subblock_offset = in1_is_dram ? 0 : in1_block_num_tiles * (curr_ring_idx);
+                uint32_t in1_index_subblock_offset = in1_is_dram ? 0 : in1_block_num_tiles * (curr_ring_idx);
 #endif
                 for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; in1_subblock++) {
                     tile_regs_acquire();
@@ -384,7 +388,8 @@ void kernel_main() {
 
 #ifndef SKIP_COMPUTE
                     // Compute output sub-block
-                    uint32_t dst_index = 0;  // start at 0, each call to matmul_block internally increments dst_index
+                    const uint32_t dst_index =
+                        0;  // start at 0, each call to matmul_block internally increments dst_index
                     uint32_t in0_index = in0_index_subblock_offset;  // offset into in0 block
                     uint32_t in1_index = in1_index_subblock_offset;  // offset into in1 block
                     // inner dim that we accumulate is the inner dim of in0/in1, which is in0_block_w
@@ -436,7 +441,7 @@ void kernel_main() {
                         PACK((llk_pack_reconfig_l1_acc(0)));
 #endif
 
-                        uint32_t start_dst_index = 0;
+                        const uint32_t start_dst_index = 0;
                         if constexpr (untilize_out) {
                             pack_untilize_dest<out_subblock_num_tiles>(mm_out_dfb_id);
                         } else {
@@ -463,7 +468,7 @@ void kernel_main() {
                         }
 #endif
 
-                        uint32_t start_dst_index = 0;
+                        const uint32_t start_dst_index = 0;
                         pack_block(start_dst_index, mm_partials_dfb_id, out_subblock_num_tiles);
 
                         tile_regs_release();

@@ -149,7 +149,7 @@ class TtPrefillBlock(LightweightModule):
             cache_path: Cache directory
             mesh_device: Mesh device reference
             config: Model config
-            model_cfg: Variant static-constants class (DeepSeekV3Config | KimiK26Config)
+            model_cfg: Variant static-constants class (DeepSeekV3Config | KimiK27Config)
             ... other args for sub-components
         """
         is_moe = layer_idx >= model_cfg.NUM_DENSE_LAYERS
@@ -267,7 +267,7 @@ class TtPrefillBlock(LightweightModule):
         sparse_kv_cache_format: MlaKvCacheFormat = MlaKvCacheFormat.BF16_RM,
         overlap_shared_expert_with_dispatch: bool = True,
         first_layer_idx: Optional[int] = None,
-        tp_shard_kv: bool = False,
+        llama4_scale_cache: Optional[dict] = None,
     ):
         super().__init__()
         self.routing_use_l1_small_for_semaphores = routing_use_l1_small_for_semaphores
@@ -348,7 +348,7 @@ class TtPrefillBlock(LightweightModule):
             kv_only=kv_only,
             sparse_kv_cache_format=sparse_kv_cache_format,
             first_layer_idx=first_layer_idx,
-            tp_shard_kv=tp_shard_kv,
+            llama4_scale_cache=llama4_scale_cache,
         )
 
         if kv_only:
@@ -413,6 +413,7 @@ class TtPrefillBlock(LightweightModule):
                 activation=getattr(model_cfg, "DENSE_FFN_ACTIVATION", ACTIVATION_SILU),
                 situ_beta=getattr(model_cfg, "ACTIVATION_SITU_BETA", None),
                 situ_linear_beta=getattr(model_cfg, "ACTIVATION_SITU_LINEAR_BETA", None),
+                clamped_silu_glu_limit=getattr(model_cfg, "SWIGLU_LIMIT", None),
                 **_dense_ffn_kwargs,
             )
 
@@ -472,6 +473,9 @@ class TtPrefillBlock(LightweightModule):
             hidden_dim=model_cfg.MOE_INTERMEDIATE_SIZE,
             # getattr because every other model config lacks these; None makes TtMoe fall back.
             routed_emb_dim=getattr(model_cfg, "ROUTED_EXPERT_HIDDEN_SIZE", None),
+            # Absent on the models whose routed-expert shape never favours the composite, so
+            # they keep the single-op path rather than paying a second dispatch for nothing.
+            routed_expert_hybrid_token_threshold=getattr(model_cfg, "ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD", None),
             shared_hidden_dim=getattr(model_cfg, "SHARED_EXPERT_INTERMEDIATE_SIZE", None),
             latent_weights=state_dict.get("latent_weights"),  # None if cache exists
             latent_use_norm=getattr(model_cfg, "LATENT_MOE_USE_NORM", True),
@@ -495,6 +499,9 @@ class TtPrefillBlock(LightweightModule):
             shared_expert_activation=getattr(model_cfg, "SHARED_EXPERT_ACTIVATION", ACTIVATION_SILU),
             shared_expert_situ_beta=getattr(model_cfg, "ACTIVATION_SITU_BETA", None),
             shared_expert_situ_linear_beta=getattr(model_cfg, "ACTIVATION_SITU_LINEAR_BETA", None),
+            shared_expert_clamped_silu_glu_limit=getattr(model_cfg, "SWIGLU_LIMIT", None),
+            # Only DeepSeek-V4 names one; None keeps the gate config's sigmoid default.
+            gate_score_func=getattr(model_cfg, "SCORE_FUNC", None),
             gate_weights=state_dict.get("gate_weights"),  # None if cache exists
             gate_fallback_mode=gate_fallback_mode,
             n_expert_groups=model_cfg.NUM_EXPERT_GROUPS,
@@ -512,18 +519,8 @@ class TtPrefillBlock(LightweightModule):
         its MLA (per-layer migration-ack segmentation; only acts when the controller carries an ack
         callback). No-op for dense / kv-only FFNs, whose FFN has no sub-device overlap to trace around.
 
-        DENSE-MLA ONLY — see TtPrefillTransformer.set_trace_controller for why. Re-asserted here so a
-        caller that drives a single block (the block-level tests) is caught too, not just whole-model
-        callers."""
-        mla = getattr(self, "mla", None)
-        if controller is not None and mla is not None and getattr(mla, "_has_indexer", False):
-            raise AssertionError(
-                f"trace capture is not supported for sparse/DSA (indexer) attention (layer "
-                f"{getattr(self.mla, 'layer_idx', '?')} resolved has_indexer=True). Supported today: "
-                "the dense-MLA models (deepseek_v3, kimi_k2_6, kimi_k2_7). GLM (glm_5_1 / glm_5_2) and "
-                "other sparse variants need their indexer ops ported to the per-element-tensor metadata "
-                "form first — run them untraced until then."
-            )
+        Both dense-MLA and sparse/DSA (indexer) blocks are traceable — see
+        TtPrefillTransformer.set_trace_controller."""
         # Stored so the block's migration-ack site (below, in forward) can route through the controller
         # (trace path) instead of calling on_layer_complete directly — see the ack comment in forward.
         self._trace_controller = controller
@@ -535,10 +532,13 @@ class TtPrefillBlock(LightweightModule):
             mla.set_trace_controller(controller)
 
     def release_sub_device_managers(self):
-        """Remove this block's MoE overlap sub-device manager before mesh close (no-op otherwise)."""
+        """Remove this block's registered overlap managers before mesh close (no-op otherwise)."""
         ffn = getattr(self, "ffn", None)
         if ffn is not None and hasattr(ffn, "release_sub_device_manager"):
             ffn.release_sub_device_manager()
+        mla = getattr(self, "mla", None)
+        if mla is not None and hasattr(mla, "release_sparse_mla_overlap_manager"):
+            mla.release_sparse_mla_overlap_manager()
 
     def forward(
         self,

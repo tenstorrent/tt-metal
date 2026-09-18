@@ -25,6 +25,7 @@
 #include "fd_mesh_command_queue.hpp"
 #include "sd_mesh_command_queue.hpp"
 #include "impl/context/metal_context.hpp"
+#include "impl/context/metal_env_impl.hpp"
 #include "impl/allocator/allocator.hpp"
 #include "impl/debug/dprint_server.hpp"
 #include "impl/device/device_manager.hpp"
@@ -78,7 +79,8 @@ bool l1_buffer_touches_core(const Buffer& buffer, const CoreCoord& core) {
         return buffer.shard_spec().grid().contains(core);
     }
     if (const auto& distribution = buffer.buffer_distribution_spec(); distribution.has_value()) {
-        const auto& cores = distribution->cores();
+        // cores() is every core the spec was configured with; only cores_with_data() received a shard.
+        const auto& cores = distribution->cores_with_data();
         return std::find(cores.begin(), cores.end(), core) != cores.end();
     }
     return true;  // Interleaved: one page on every bank, including this core.
@@ -197,12 +199,13 @@ namespace {
 // Preflight helpers. Free functions rather than members: they read no DispatchContext state, and
 // keeping them file-local keeps FdL1Conflict out of the public header.
 std::vector<FdL1Conflict> find_fd_l1_conflicts(
-    MetalContext& context,
+    MetalContext& metal_context,
+    const Cluster& cluster,
     distributed::MeshDevice* mesh_device,
     const std::vector<::tt::tt_metal::Device*>& devices,
     bool write_only) {
-    const DispatchMemMap& mem_map = context.dispatch_mem_map();
-    auto& dispatch_core_manager = context.get_dispatch_core_manager();
+    const DispatchMemMap& mem_map = metal_context.dispatch_mem_map();
+    auto& dispatch_core_manager = metal_context.get_dispatch_core_manager();
 
     // Lockstep allocations live in the allocator of the MeshDevice view that
     // created them. Walk the live tree rooted at the system mesh so this check
@@ -228,7 +231,7 @@ std::vector<FdL1Conflict> find_fd_l1_conflicts(
     // Walk through the IDevice interface: everything this preflight needs (id, num_hw_cqs,
     // allocator_impl) is public there, while Device keeps allocator_impl private.
     for (IDevice* device : devices) {
-        const uint16_t channel = context.get_cluster().get_assigned_channel_for_device(device->id());
+        const uint16_t channel = cluster.get_assigned_channel_for_device(device->id());
 
         std::vector<distributed::MeshDevice*> views_over_device;
         for (distributed::MeshDevice* view : mesh_views) {
@@ -250,12 +253,19 @@ std::vector<FdL1Conflict> find_fd_l1_conflicts(
 
         auto check_core = [&](const tt_cxy_pair& core_with_chip, const char* role, DeviceAddr window_end) {
             if (core_with_chip.chip != device->id()) {
-                TT_THROW(
-                    "Fast-dispatch L1 preflight does not support a {} interface core on chip {} while checking device "
-                    "{}. Refusing instead of silently skipping a potentially destructive remote-chip topology.",
+                // Split dispatch: a chip without its own host link is served from its MMIO neighbour, so
+                // its firmware is spread over two chips (prefetch_h/dispatch_h there, prefetch_d/dispatch_d/
+                // dispatch_s here) with L1 layouts this preflight does not model. Skipping the check for
+                // this chip leaves such clusters exactly as they were before the guard existed, rather
+                // than refusing every session on them.
+                log_warning(
+                    tt::LogAlways,
+                    "Fast-dispatch L1 preflight skipped for chip {}: its {} interface core is on chip {} (split "
+                    "dispatch topology is not checked; resident L1 on this chip's dispatch cores is not verified).",
+                    device->id(),
                     role,
-                    core_with_chip.chip,
-                    device->id());
+                    core_with_chip.chip);
+                return;
             }
 
             const CoreCoord core(core_with_chip.x, core_with_chip.y);
@@ -279,8 +289,8 @@ std::vector<FdL1Conflict> find_fd_l1_conflicts(
 
             // dispatch_s performs DEVICE_PRINT aggregation only on CQ0 and only
             // when this device has at least one configured print core.
-            const auto& dprint_server = context.dprint_server();
-            const bool dprint_on = cq_id == 0 && context.get_dispatch_query_manager().dispatch_s_enabled() &&
+            const auto& dprint_server = metal_context.dprint_server();
+            const bool dprint_on = cq_id == 0 && metal_context.get_dispatch_query_manager().dispatch_s_enabled() &&
                                    dprint_server && !dprint_server->get_print_cores(device->id()).empty();
             const DeviceAddr dispatch_end = mem_map.dispatch_s_buffer_end(cq_id) +
                                             (dprint_on ? mem_map.dispatch_s_device_print_l1_cache_size() : 0);
@@ -330,8 +340,10 @@ void DispatchContext::initialize_fast_dispatch(
         return;
     }
 
-    auto& context = MetalContext::instance(extract_context_id(mesh_device));
-    const auto& cluster = context.get_cluster();
+    auto& mesh_device_impl = mesh_device->impl();
+    auto& metal_context = mesh_device_impl.metal_context();
+    auto& metal_env = mesh_device_impl.metal_env();
+    const auto& cluster = metal_env.get_cluster();
 
     // Mock/emulated devices skip firmware/dispatch entirely, so there is no real hardware to
     // toggle between Slow and Fast Dispatch. Treat the transition as a no-op to avoid touching
@@ -342,7 +354,7 @@ void DispatchContext::initialize_fast_dispatch(
         return;
     }
 
-    fast_dispatch_enabled_ = context.rtoptions().get_fast_dispatch();
+    fast_dispatch_enabled_ = metal_env.get_rtoptions().get_fast_dispatch();
     TT_FATAL(
         !fast_dispatch_enabled_,
         "Fast Dispatch can only be manually enabled when running the workload with Slow Dispatch mode.");
@@ -354,13 +366,13 @@ void DispatchContext::initialize_fast_dispatch(
         cluster.is_ubb_galaxy() || cluster.arch() == tt::ARCH::BLACKHOLE,
         "Manually setting up and tearing down Fast Dispatch is only supported on Galaxy and Blackhole clusters.");
 
-    const auto& device_manager = context.device_manager();
+    const auto& device_manager = metal_context.device_manager();
     const auto& active_devices = device_manager->get_all_active_devices_impl();
 
     uint8_t num_hw_cqs = active_devices[0]->num_hw_cqs();
 
     // Enable Fast Dispatch and reinitialize dispatch managers to pick up FD core descriptor before allocating cores
-    context.set_fast_dispatch_mode(true);
+    metal_context.set_fast_dispatch_mode(true);
 
     try {
         for (const auto& dev : active_devices) {
@@ -370,7 +382,8 @@ void DispatchContext::initialize_fast_dispatch(
 
         // Dispatch cores are assigned, but no fast-dispatch firmware has been
         // written yet. Refuse before bring-up can overwrite resident L1.
-        const auto conflicts = find_fd_l1_conflicts(context, mesh_device, active_devices, options.write_only);
+        const auto conflicts =
+            find_fd_l1_conflicts(metal_context, cluster, mesh_device, active_devices, options.write_only);
         if (!conflicts.empty()) {
             const std::string report = format_fd_l1_conflicts(conflicts);
             if (!options.allow_destructive) {
@@ -386,14 +399,12 @@ void DispatchContext::initialize_fast_dispatch(
                 report);
         }
     } catch (...) {
-        unwind_failed_fd_setup(context, active_devices);
+        unwind_failed_fd_setup(metal_context, active_devices);
         throw;
     }
 
     // Query the number of command queues requested
     device_manager->initialize_dispatch_firmware(/*force_recreate_topology=*/true);
-
-    auto& mesh_device_impl = mesh_device->impl();
 
     // Drain pending SD work and stash the SD queues for restoration on terminate
     for (auto& cq : mesh_device_impl.mesh_command_queues_) {
@@ -432,8 +443,9 @@ void DispatchContext::terminate_fast_dispatch(distributed::MeshDevice* mesh_devi
         return;
     }
 
-    auto& context = MetalContext::instance(extract_context_id(mesh_device));
-    const auto& cluster = context.get_cluster();
+    auto& mesh_device_impl = mesh_device->impl();
+    auto& metal_context = mesh_device_impl.metal_context();
+    const auto& cluster = mesh_device_impl.metal_env().get_cluster();
 
     // Mirror initialize_fast_dispatch: the FD/SD toggle is a no-op on mock/emulated targets, so
     // there is nothing to tear down. See https://github.com/tenstorrent/tt-metal/issues/50634.
@@ -444,10 +456,9 @@ void DispatchContext::terminate_fast_dispatch(distributed::MeshDevice* mesh_devi
     TT_FATAL(fast_dispatch_enabled_, "Can only manually terminate fast dispatch after initializing it.");
     TT_FATAL(num_fd_inits_ == 1, "Fast Dispatch termination requires exactly one active manual Fast Dispatch session.");
 
-    const auto& device_manager = context.device_manager();
+    const auto& device_manager = metal_context.device_manager();
     const auto& active_devices = device_manager->get_all_active_devices_impl();
 
-    auto& mesh_device_impl = mesh_device->impl();
     mesh_device_impl.mesh_command_queues_.clear();
 
     // Restore stashed SD queues to preserve pre-FD state (e.g. asynchronous_slow_dispatch_enabled_)
@@ -470,7 +481,7 @@ void DispatchContext::terminate_fast_dispatch(distributed::MeshDevice* mesh_devi
 
     for (const auto& dev : active_devices) {
         auto dispatch_cores = device_manager->get_virtual_dispatch_cores(dev->id());
-        tt::llrt::internal_::wait_until_cores_done(context, dev->id(), dev_msgs::RUN_MSG_GO, dispatch_cores, 0);
+        tt::llrt::internal_::wait_until_cores_done(metal_context, dev->id(), dev_msgs::RUN_MSG_GO, dispatch_cores, 0);
     }
 
     // HWCommandQueue holds a reference to sysmem_manager_. Clear now so any future
@@ -483,13 +494,22 @@ void DispatchContext::terminate_fast_dispatch(distributed::MeshDevice* mesh_devi
     fast_dispatch_enabled_ = false;
 
     // Disable Fast Dispatch and reinitialize dispatch managers to pick up SD core descriptor
-    context.set_fast_dispatch_mode(false);
+    metal_context.set_fast_dispatch_mode(false);
     num_fd_inits_--;
+}
+
+void DispatchContext::set_configure_only(distributed::MeshDevice* mesh_device, bool enable) {
+    TT_FATAL(
+        !mesh_device->impl().metal_env().get_rtoptions().get_fast_dispatch(),
+        "{} can only be called when Fast Dispatch is disabled.",
+        __func__);
+    auto& sd_mesh_cq = dynamic_cast<distributed::SDMeshCommandQueue&>(mesh_device->mesh_command_queue());
+    sd_mesh_cq.set_configure_only(enable);
 }
 
 void DispatchContext::enable_asynchronous_slow_dispatch(distributed::MeshDevice* mesh_device) {
     TT_FATAL(
-        !MetalContext::instance().rtoptions().get_fast_dispatch(),
+        !mesh_device->impl().metal_env().get_rtoptions().get_fast_dispatch(),
         "{} can only be called when Fast Dispatch is disabled.",
         __func__);
     auto& sd_mesh_cq = dynamic_cast<distributed::SDMeshCommandQueue&>(mesh_device->mesh_command_queue());
@@ -498,7 +518,7 @@ void DispatchContext::enable_asynchronous_slow_dispatch(distributed::MeshDevice*
 
 void DispatchContext::disable_asynchronous_slow_dispatch(distributed::MeshDevice* mesh_device) {
     TT_FATAL(
-        !MetalContext::instance().rtoptions().get_fast_dispatch(),
+        !mesh_device->impl().metal_env().get_rtoptions().get_fast_dispatch(),
         "{} can only be called when Fast Dispatch is disabled.",
         __func__);
     auto& sd_mesh_cq = dynamic_cast<distributed::SDMeshCommandQueue&>(mesh_device->mesh_command_queue());

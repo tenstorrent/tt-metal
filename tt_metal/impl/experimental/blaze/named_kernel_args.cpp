@@ -159,28 +159,37 @@ void process_named_args(Program& program, const KernelDescriptor& kernel_descrip
         kernel->set_named_runtime_arg_namespaces(rt_ns_map);
     }
 
-    // CT namespace map: ct::ns::field (plain constexpr values)
-    if (!kernel_descriptor.named_compile_time_args.empty()) {
-        NamedCTArgNamespaces ct_ns_map;
+    // CT namespace map: blaze_ct_args::ns::field (plain constexpr values)
+    NamedCTArgNamespaces ct_ns_map;
+    std::set<std::string> emitted_ct_args;
+    // New names are unique; legacy entries may repeat with the same value. Names cannot span both fields.
+    for (const auto* args : {&named_args.named_compile_time_args, &kernel_descriptor.named_compile_time_args}) {
         std::unordered_map<std::string, uint32_t> seen_ct_args;
-        for (const auto& [name, value] : kernel_descriptor.named_compile_time_args) {
-            auto it = seen_ct_args.find(name);
-            if (it != seen_ct_args.end()) {
-                TT_FATAL(
-                    it->second == value,
-                    "named_compile_time_arg '{}' is defined twice with conflicting values ({} vs {}). "
-                    "Each CT arg name must be unique across all sub-lists.",
-                    name,
-                    it->second,
-                    value);
-                continue;  // same value -- silently skip the duplicate
+        for (const auto& [name, value] : *args) {
+            const auto [it, inserted] = seen_ct_args.emplace(name, value);
+            TT_FATAL(
+                args != &named_args.named_compile_time_args || inserted,
+                "blaze_named_compile_time_args contains duplicate name '{}'.",
+                name);
+            TT_FATAL(
+                inserted || it->second == value,
+                "named_compile_time_arg '{}' is defined twice with conflicting values ({} vs {}).",
+                name,
+                it->second,
+                value);
+            if (!inserted) {
+                continue;
             }
-            seen_ct_args.emplace(name, value);
+            TT_FATAL(
+                emitted_ct_args.insert(name).second,
+                "named_compile_time_arg '{}' is present in both named_compile_time_args and "
+                "blaze_named_compile_time_args.",
+                name);
             auto [ns, field] = split_name(name);
             ct_ns_map[ns].emplace_back(field, value);
         }
-        kernel->set_named_ct_arg_namespaces(ct_ns_map);
     }
+    kernel->set_named_ct_arg_namespaces(ct_ns_map);
 }
 
 void apply_named_runtime_args(Program& program, const KernelDescriptor& kernel_descriptor, uint32_t kernel_index) {
@@ -211,15 +220,15 @@ void apply_named_runtime_args(Program& program, const KernelDescriptor& kernel_d
 }
 
 ttsl::hash::hash_t hash_named_args_schema(const NamedKernelArgs& named_args) {
-    // Hash only the SCHEMA baked into named_args_generated.h — names, array lengths, dispatch
-    // kind (implied by section), and order. Runtime VALUES are intentionally excluded: they are
+    // Hash compile-time names/values and the runtime SCHEMA baked into named_args_generated.h —
+    // names, array lengths, dispatch kind (implied by section), and order. Runtime VALUES are excluded: they are
     // written per enqueue and never affect the generated header, so hashing them would cause
     // needless program-cache misses. Per-section sizes are hashed first so that (a) ["a","b"]
     // cannot collide with ["ab"] and (b) the section a name lands in — which encodes its
     // common-vs-per-core dispatch and scalar-vs-array kind — is unambiguous.
     // (std::size_t accumulator matches hash_combine's `std::size_t&` parameter; the return
     // value widens/reinterprets to hash_t == std::uint64_t, identical on 64-bit targets.)
-    std::size_t hash = 0;
+    std::size_t hash = ttsl::hash::hash_objects_with_default_seed(named_args.named_compile_time_args);
     ttsl::hash::hash_combine(hash, named_args.named_common_runtime_args.size());
     for (const auto& arg : named_args.named_common_runtime_args) {
         ttsl::hash::hash_combine(hash, arg.name);
