@@ -148,6 +148,9 @@ std::vector<Tensor> threshold_bw(
 }
 
 // Softplus
+// d/dx of (1/beta) * log1p(exp(beta * x)) is exp(beta * x) / (1 + exp(beta * x)), which is
+// sigmoid(beta * x). Evaluating it as sigmoid keeps the tail finite, where the explicit
+// exp form overflows for beta * x above about 88 and loses the gradient entirely.
 std::vector<Tensor> softplus_bw(
     const Tensor& grad,
     const Tensor& input,
@@ -155,20 +158,19 @@ std::vector<Tensor> softplus_bw(
     float threshold,
     const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
+    grad_tensor.reserve(1);
     Tensor mul_input_beta = ttnn::multiply(input, beta, std::nullopt, output_mem_config);
-    Tensor exp_beta_self = ttnn::exp(mul_input_beta, false, output_mem_config);
-    Tensor sub_result = ttnn::add(mul_input_beta, -threshold, std::nullopt, output_mem_config);
-    Tensor temp = ttnn::multiply(
-        ttnn::multiply(grad, exp_beta_self, std::nullopt, output_mem_config),
-        ttnn::reciprocal(ttnn::add(exp_beta_self, 1.0f, std::nullopt, output_mem_config), output_mem_config),
-        std::nullopt,
+    Tensor sigmoid_beta_self = ttnn::sigmoid(
+        mul_input_beta,
+        (int)ttnn::operations::unary::VecMode::RC,
+        ttnn::operations::unary::SigmoidMode::ACCURATE,
         output_mem_config);
-    Tensor grad_result = ttnn::where(ttnn::gtz(sub_result, output_mem_config), grad, temp, output_mem_config);
+    Tensor temp = ttnn::multiply(grad, sigmoid_beta_self, std::nullopt, output_mem_config);
+    sigmoid_beta_self.deallocate();
+    grad_tensor.emplace_back(ttnn::where(
+        ttnn::gt(mul_input_beta, threshold, std::nullopt, output_mem_config), grad, temp, output_mem_config));
     mul_input_beta.deallocate();
-    exp_beta_self.deallocate();
-    sub_result.deallocate();
     temp.deallocate();
-    grad_tensor.emplace_back(grad_result);
     return grad_tensor;
 }
 
