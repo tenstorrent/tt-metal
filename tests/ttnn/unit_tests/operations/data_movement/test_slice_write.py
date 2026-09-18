@@ -126,3 +126,35 @@ def test_slice_write_nd(rank, layout, device):
 
     assert_equal(torch_src, written_region)
     assert_equal(torch_out_ref, out_host)
+
+
+def _run_rm_interleaved_slice_write(device, out_shape, begins, ends, strides):
+    slices = tuple(slice(b, e, s) for b, e, s in zip(begins, ends, strides))
+    torch.manual_seed(2005)
+    torch_dest = torch.randn(out_shape, dtype=torch.bfloat16)
+    torch_src = torch.randn(torch_dest[slices].shape, dtype=torch.bfloat16)
+    torch_out_ref = torch_dest.clone()
+    torch_out_ref[slices] = torch_src
+
+    tt_out = ttnn.from_torch(torch_dest, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16)
+    tt_out = ttnn.to_memory_config(tt_out, ttnn.DRAM_MEMORY_CONFIG)
+    tt_in = ttnn.from_torch(torch_src, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16)
+    tt_in = ttnn.to_memory_config(tt_in, ttnn.L1_MEMORY_CONFIG)
+
+    ttnn.experimental.slice_write(tt_in, tt_out, begins, ends, strides)
+    assert_equal(torch_out_ref, ttnn.to_torch(tt_out))
+
+
+# Last-dim stride, enough sticks that a core wraps H (read-back offset + separate coords).
+def test_slice_write_last_dim_strided(device):
+    _run_rm_interleaved_slice_write(device, [1, 512, 16, 16], [0, 0, 0, 0], [1, 512, 9, 16], [1, 1, 3, 4])
+
+
+# Strided H, last-dim stride 1: wrap residual must skip to the next output page.
+def test_slice_write_strided_height_wrap(device):
+    _run_rm_interleaved_slice_write(device, [1, 512, 16, 16], [0, 0, 0, 0], [1, 512, 9, 16], [1, 1, 3, 1])
+
+
+# Unaligned last-dim start; multiple sticks per core so the shifted tail cannot overlap the next stick.
+def test_slice_write_unaligned_last_dim(device):
+    _run_rm_interleaved_slice_write(device, [1, 1, 512, 64], [0, 0, 0, 1], [1, 1, 512, 17], [1, 1, 1, 1])
