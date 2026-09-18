@@ -630,14 +630,25 @@ def test_mistral4_prefill_block(
     )
 
 
-# --- GLM-5.2 single-shot block ---
-# Fused GLM-5.2 decoder block (sparse-SDPA MLA + norm/residual + dense/MoE FFN) vs a CPU-composed reference
-# (reference.glm_5_1.glm_decoder_layer_reference: x + MLA_cpu(attn_norm(x)) then + FFN(ffn_norm(x+mla_out))).
-# The composed CPU ref is 3-4 orders of magnitude cheaper than the only full HF module GLM has
-# (GlmMoeDsaModel, non-absorbed 256-expert dense attention, ~15-25h/block), so we do not fold this into the
-# shared run_model path — a pluggable "reference callable" seam is a fair future cleanup, out of scope here.
-# Weights: LOAD real weights from the prebuilt ttnn cache when present & complete (device) + matching host
-# weights from the checkpoint (reference); else RANDOM for both. Never (re)builds the cache.
+# GLM-5.1 block test
+# ---------------------------------------------------------------------------
+# Every GLM layer runs sparse DSA (lightning-indexer top-2048 + sparse SDPA); "dense"/"moe" here refers
+# only to the FFN — layers 0-2 have a dense FFN, layers 3-77 a 256-expert MoE. Both block types exercise
+# sparse SDPA (via ttMLA's DSA path); they differ only in the FFN.
+#
+# GLM has no runnable HF reference model wired (adapter reference_model_cls is None), so it can't use
+# run_model()/create_hf_model() like the DeepSeek/Kimi block tests. Instead it COMPOSES the CPU
+# references GLM already owns (reference.glm_5_1.glm_decoder_layer_reference): x + MLA_cpu(attn_norm(x))
+# then + FFN(ffn_norm(x+mla_out)) — exactly TtPrefillBlock.forward.
+# Why not generalize run_model to take this composed ref? run_model's PCC path is built around
+# create_hf_model() + a single HF module; GLM's only full HF module (GlmMoeDsaModel) is non-absorbed
+# (256-expert, dense attention) and too slow to run per-block (~15-25h) — the absorbed CPU composition
+# runs in ~7s/layer. Folding this in would mean adding a pluggable "reference callable" seam to the
+# shared runner; a fair future cleanup, but out of scope here (keeps the fast path off the shared path).
+#
+# Weights (like the transformer tests): LOAD real weights from the prebuilt ttnn cache when present &
+# complete (device) + matching host weights from the checkpoint (reference); else RANDOM for both. Never
+# (re)builds the cache (slow: 256-expert conversion / FP8 dequant — a separate staging step).
 GLM_BLOCK_OUTPUT_PCC = 0.98
 
 
@@ -744,6 +755,8 @@ def _glm_pretrained_weights(config, model_dir, layer_idx, is_moe):
 )
 @pytest.mark.parametrize("seq_len", [5120], ids=["seq5120"])
 @pytest.mark.parametrize("layer_type", ["dense", "moe"], ids=["dense", "moe"])
+# KV dedup through TtPrefillBlock -> ttMLA (the whole norm/attn/FFN stack, not just the MLA-level tests
+# in tests/sparse_mla/).
 @pytest.mark.parametrize("variant", ["glm_5_1", "glm_5_2"], indirect=True, ids=["glm51", "glm52"])
 @pytest.mark.skipif(not is_blackhole(), reason="DSA ops (indexer / sparse SDPA) are Blackhole-only")
 @pytest.mark.timeout(0)
@@ -780,7 +793,7 @@ def test_glm_prefill_block(
     # The isolated MoE block is only meaningful on RANDOM weights, so it never consults the ttnn cache:
     # a random block input drives GLM's trained near-degenerate top-8 gate to pick different experts on
     # device vs the CPU reference (block PCC collapses to ~0.1), though the same layer scores ~0.995
-    # in-context in test_glm_prefill_transformer -- a real-weight-gate x random-input artifact, not an
+    # in-context in test_glm_prefill_transformer — a real-weight-gate x random-input artifact, not an
     # op/weight bug. On random weights the gate is non-degenerate and the block matches (~0.99). Forcing
     # random here keeps the MoE path exercised regardless of what the cache holds; real-weight MoE-gate
     # coverage lives in test_glm_prefill_transformer and test_ttnn_moe. The dense case still loads real
@@ -861,7 +874,7 @@ def test_glm_prefill_block(
     # Sparse (DSA) MLA single-shot is folded onto the block-cyclic path (one full-seq chunk at offset 0):
     # it uses the indexed rope tables and a caller-owned indexer key cache, exactly like the chunked path.
     # GLM attention is always sparse, so this is unconditional here. The cache is strided by the compacted
-    # full-indexer count (num_full_indexer_layers) -- >1 for glm_5_2 cross-layer reuse -- matching the
+    # full-indexer count (num_full_indexer_layers) — >1 for glm_5_2 cross-layer reuse — matching the
     # indexer's cache_batch stride; falls back to 1 when there is no indexer_types map (glm_5_1).
     rope_tensors = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=False).get_rope_tensors_indexed(
         cache_seq_len_global=seq_len, chunk_size_global=seq_len
