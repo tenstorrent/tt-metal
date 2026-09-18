@@ -634,6 +634,7 @@
       release_ready: false
   owner_id: U09LK84G4TF  # Nikola Milicevic
   team: models
+  budget_type: demo
   sp_config: sc1
 
 
