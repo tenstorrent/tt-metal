@@ -99,7 +99,9 @@ def test_transformer(
 
     spatial = torch.randn([batch_size, spatial_seq_len, in_channels])
     prompt = torch.randn([batch_size, prompt_seq_len, joint_attention_dim])
-    text_encoder_layers = [torch.randn([batch_size, prompt_seq_len, text_encoder_dim]) for _ in range(total_num_blocks)]
+    # SmolLM3-3B emits 37 hidden states (36 layers plus the embedding), fewer than the transformer
+    # has blocks; the remaining blocks reuse the last one.
+    text_encoder_layers = [torch.randn([batch_size, prompt_seq_len, text_encoder_dim]) for _ in range(37)]
     timestep = torch.full([batch_size], fill_value=500.0)
 
     ids = _build_ids(prompt_seq_len=prompt_seq_len, latents_height=latents_height, latents_width=latents_width)
@@ -134,8 +136,11 @@ def test_transformer(
     logger.info("running torch reference...")
     with torch.no_grad():
         # FIBO's diffusers transformer takes img_ids/txt_ids separately and computes RoPE
-        # internally; pad/trim of text_encoder_layers is the pipeline's responsibility, so the
-        # transformer receives exactly ``num_layers + num_single_layers`` entries here.
+        # internally, and expects exactly one text encoder layer per block; the diffusers pipeline
+        # pads with copies of the last one, which the TT transformer does itself.
+        padded_text_encoder_layers = text_encoder_layers + [text_encoder_layers[-1]] * (
+            total_num_blocks - len(text_encoder_layers)
+        )
         h = latents_height // _PATCH_SIZE
         w = latents_width // _PATCH_SIZE
         img_ids = torch.zeros(h, w, 3)
@@ -147,7 +152,7 @@ def test_transformer(
         torch_output = torch_model.forward(
             hidden_states=spatial,
             encoder_hidden_states=prompt,
-            text_encoder_layers=text_encoder_layers,
+            text_encoder_layers=padded_text_encoder_layers,
             pooled_projections=None,
             timestep=timestep,
             img_ids=img_ids,

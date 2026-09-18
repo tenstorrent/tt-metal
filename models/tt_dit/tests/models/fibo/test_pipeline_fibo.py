@@ -21,7 +21,7 @@ PROMPTS = [
 
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768, "trace_region_size": 34000000}],
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32_768, "trace_region_size": 64_000_000}],
     indirect=True,
 )
 @pytest.mark.parametrize(

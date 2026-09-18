@@ -19,13 +19,13 @@ from models.tt_dit.models.transformers.transformer_fibo import FiboCheckpoint
 from models.tt_dit.models.vae.vae_fibo import FiboVAEDecoderAdapter
 from models.tt_dit.parallel.config import DiTParallelConfig, EncoderParallelConfig, Flux2VaeParallelConfig
 from models.tt_dit.parallel.manager import CCLManager
-from models.tt_dit.pipelines.cfg import CFGCombiner, create_submeshes, distribute_cfg, submesh_shape
+from models.tt_dit.pipelines.cfg import CFGCombiner, create_submeshes, submesh_shape
 from models.tt_dit.pipelines.events import PipelineEventCallback, SectionEnd, SectionStart, null_callback
 from models.tt_dit.pipelines.fibo.text_encoder import TextEncoder
 from models.tt_dit.pipelines.pipeline_api import PipelineAPIMixin
 from models.tt_dit.solvers import EulerSolver
 from models.tt_dit.utils.mesh import reshape_device
-from models.tt_dit.utils.tensor import from_torch_to_devices
+from models.tt_dit.utils.tensor import from_torch, from_torch_to_devices
 from models.tt_dit.utils.tracing import Tracer
 
 if TYPE_CHECKING:
@@ -34,14 +34,8 @@ if TYPE_CHECKING:
 
     from PIL import Image
 
-# Wan 2.2 VAE compresses 16x in each spatial dimension. FIBO's diffusers pipeline defaults to
-# ``do_patching=False``, so the VAE's z-dim channels go straight to the transformer without any
-# pipeline-level 2x2 packing; the transformer's own ``patch_size=1`` just flattens H×W into a
-# sequence dimension.
 _VAE_SCALE_FACTOR = 16
 _DEFAULT_CHECKPOINT = "briaai/FIBO"
-# Prompt lengths the text encoder is traced at; must be divisible by sp * 128
-_DEFAULT_SEQUENCE_LENGTHS = (1024, 1536, 3072)
 
 # Rules of thumb for the encoder parallelism below, from sweeping the text encoder over every
 # mesh shape from one to eight devices on a T3K:
@@ -66,6 +60,9 @@ _DEFAULT_SEQUENCE_LENGTHS = (1024, 1536, 3072)
 # - Height or width makes little difference. Pick whichever the mesh shape makes convenient.
 # - Unlike the encoder, the decoder keeps gaining out to eight devices, where it was fastest.
 #   The gains are sublinear but had not flattened out.
+#
+# ``sequence_lengths`` are the prompt lengths the encoder and the transformer are traced at; each
+# must be divisible by sp * 128.
 _PRESETS_WH: dict[tuple[int, ...], dict] = {
     (2, 4): {
         "cfg": (2, 1),
@@ -77,6 +74,7 @@ _PRESETS_WH: dict[tuple[int, ...], dict] = {
         "vae_h_axis": 0,
         "vae_w_axis": 1,
         "num_links": 1,
+        "sequence_lengths": (1024, 2048),
     },
 }
 
@@ -91,8 +89,20 @@ _PRESETS_BH: dict[tuple[int, ...], dict] = {
         "vae_h_axis": 0,
         "vae_w_axis": None,
         "num_links": 2,
+        "sequence_lengths": (1024, 1536, 3072),
     },
 }
+
+
+@dataclass(frozen=True, kw_only=True)
+class PromptInputs:
+    """The transformer inputs derived from the prompt of one CFG pass."""
+
+    prompt: ttnn.Tensor
+    text_encoder_layers: list[ttnn.Tensor]
+    spatial_rope: tuple[ttnn.Tensor, ttnn.Tensor]
+    prompt_rope: tuple[ttnn.Tensor, ttnn.Tensor]
+    prompt_sequence_length: int
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -129,7 +139,7 @@ class FiboPipelineConfig:
         height: int = 1024,
         width: int = 1024,
         cfg_enabled: bool = True,
-        sequence_lengths: tuple[int, ...] = _DEFAULT_SEQUENCE_LENGTHS,
+        sequence_lengths: Sequence[int] | None = None,
         checkpoint_name: str = _DEFAULT_CHECKPOINT,
     ) -> FiboPipelineConfig:
         """Build a fully populated config, picking parallelism defaults from ``mesh_shape``."""
@@ -158,7 +168,7 @@ class FiboPipelineConfig:
             height=height,
             width=width,
             cfg_enabled=cfg_enabled,
-            sequence_lengths=sequence_lengths,
+            sequence_lengths=tuple(sequence_lengths) if sequence_lengths is not None else preset["sequence_lengths"],
             checkpoint_name=checkpoint_name,
         )
 
@@ -191,13 +201,19 @@ class FiboPipeline(PipelineAPIMixin):
         self._height = config.height
         self._width = config.width
         self._cfg_enabled = config.cfg_enabled
+        self._sequence_lengths = config.sequence_lengths
 
         logger.info(f"Parallel config: {config.dit_parallel_config}")
         logger.info(f"Original mesh shape: {device.shape}")
         self._devices = create_submeshes(device, config.dit_parallel_config)
         logger.info(f"Created submeshes with shape {self._devices[0].shape}")
 
-        self._tracers = [Tracer(self._traced_step, device=d, prep_run=False) for d in self._devices]
+        # One tracer per submesh and prompt sequence length.
+        self._tracers = {
+            (idx, length): Tracer(self._traced_step, device=submesh, prep_run=False)
+            for idx, submesh in enumerate(self._devices)
+            for length in config.sequence_lengths
+        }
 
         self._ccl_managers = [
             CCLManager(d, num_links=config.num_links, topology=config.topology) for d in self._devices
@@ -206,8 +222,6 @@ class FiboPipeline(PipelineAPIMixin):
         self._combiner = CFGCombiner(self._devices)
         self._scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(config.checkpoint_name, subfolder="scheduler")
         self._solvers = (EulerSolver(), EulerSolver()) if self._cfg_parallel else (EulerSolver(),)
-        # The ``* 2`` rounds image dims to a multiple of 32 to keep the optional ``do_patching=True``
-        # path (a 2x2 pre-pack) usable, even though we never take it.
         self._image_processor = VaeImageProcessor(vae_scale_factor=_VAE_SCALE_FACTOR * 2)
 
         logger.info("creating transformer...")
@@ -240,9 +254,22 @@ class FiboPipeline(PipelineAPIMixin):
         self._synchronize_devices()
 
         logger.info("pipeline allocation run...")
-        with self._reshape_encoder():
-            self._text_encoder.warmup()
-        self(prompts=[""], num_inference_steps=2, traced=False, cfg_scale=2 if config.cfg_enabled else 1)
+        # compile OPs and allocate persistent buffers
+        self._generate_each_length(traced=False)
+
+        logger.info("pipeline capture run...")
+        self._generate_each_length(traced=True)
+
+    def _generate_each_length(self, *, traced: bool) -> None:
+        for length in sorted(self._sequence_lengths, reverse=True):
+            prompt = "a " * (length - 8)  # "a " is a single token
+            self(
+                prompts=[prompt],
+                negative_prompts=[prompt],
+                num_inference_steps=2,
+                traced=traced,
+                cfg_scale=2 if self._cfg_enabled else 1,
+            )
 
     def _reshape_encoder(self) -> AbstractContextManager[None]:
         device = self._devices[0]
@@ -265,7 +292,7 @@ class FiboPipeline(PipelineAPIMixin):
         cfg_scale: float = 5.0,
         traced: bool = True,
         vae_traced: bool | None = None,
-        encoder_traced: bool | None = False,
+        encoder_traced: bool | None = None,
         on_event: PipelineEventCallback | None = None,
     ) -> list[Image.Image]:
         prompt_count = len(prompts)
@@ -291,25 +318,19 @@ class FiboPipeline(PipelineAPIMixin):
         logger.info("encoding prompts...")
         on_event(SectionStart("encoder"))
         with self._reshape_encoder():
-            torch_context, torch_layers, _ = self._text_encoder.encode_cfg(
+            context = self._text_encoder.encode_cfg(
                 prompts,
                 negative_prompts,
                 num_images_per_prompt=num_images_per_prompt,
                 cfg_enabled=self._cfg_enabled,
+                batch_passes=self._cfg_enabled and not self._cfg_parallel,
                 traced=encoder_traced,
                 on_event=on_event,
             )
+        # The transformer takes no attention mask; padded positions are zeroed in the hidden states.
+        context = [(context, layers) for context, layers, _ in context]
         self._synchronize_devices()  # for time profiling
         on_event(SectionEnd("encoder"))
-
-        # Pad/trim SmolLM3's per-layer hidden states to the transformer's block count. Diffusers'
-        # FIBO pipeline does the same: when there are MORE encoder layers than DiT blocks, drop the
-        # earliest ones (keep the latest); when there are FEWER, duplicate the last layer to fill.
-        target_layers = self._checkpoint.num_blocks
-        if len(torch_layers) >= target_layers:
-            torch_layers = torch_layers[len(torch_layers) - target_layers :]
-        else:
-            torch_layers = torch_layers + [torch_layers[-1]] * (target_layers - len(torch_layers))
 
         logger.info("preparing timesteps...")
         sigmas = np.linspace(1.0, 1 / num_inference_steps, num_inference_steps)
@@ -322,15 +343,22 @@ class FiboPipeline(PipelineAPIMixin):
 
         logger.info("preparing inputs...")
         latents = self._random_latents(batch_size=prompt_count * num_images_per_prompt, seed=seed)
-        context = distribute_cfg(torch_context, devices=self._devices, on_host=traced)
-        layers = [distribute_cfg(layer, devices=self._devices, on_host=traced) for layer in torch_layers]
 
-        prompt_sequence_length = torch_context.shape[1]
-        spatial_rope_cos, spatial_rope_sin, prompt_rope_cos, prompt_rope_sin = self._prepare_rope(
-            latents_height=latents_height,
-            latents_width=latents_width,
-            prompt_sequence_length=prompt_sequence_length,
-        )
+        # The inputs of the CFG pass each submesh runs: one per submesh under cfg parallelism,
+        # otherwise the single batched pass on the only submesh.
+        prompt_inputs = [
+            self._prepare_prompt_inputs(
+                torch_context,
+                torch_layers,
+                latents_height=latents_height,
+                latents_width=latents_width,
+                device=device,
+                on_host=traced,
+            )
+            for (torch_context, torch_layers), device in zip(context, self._devices, strict=True)
+        ]
+
+        tracers = [self._tracers[idx, inputs.prompt_sequence_length] for idx, inputs in enumerate(prompt_inputs)]
 
         logger.info("denoising...")
         on_event(SectionStart("denoising"))
@@ -339,7 +367,7 @@ class FiboPipeline(PipelineAPIMixin):
             on_event(SectionStart(f"denoising_step_{step}"))
 
             velocity_preds = []
-            for idx, tracer in enumerate(self._tracers):
+            for idx, tracer in enumerate(tracers):
                 timestep = ttnn.full(
                     [1, 1],
                     fill_value=t,
@@ -352,19 +380,15 @@ class FiboPipeline(PipelineAPIMixin):
                     tracer(
                         submesh_idx=idx,
                         latents=latents[idx],
-                        prompt=context[idx] if step == 0 else tracer.inputs["prompt"],
-                        text_encoder_layers=[layer[idx] for layer in layers]
+                        prompt=prompt_inputs[idx].prompt if step == 0 else tracer.inputs["prompt"],
+                        text_encoder_layers=prompt_inputs[idx].text_encoder_layers
                         if step == 0
                         else tracer.inputs["text_encoder_layers"],
                         timestep=timestep,
-                        spatial_rope=(spatial_rope_cos[idx], spatial_rope_sin[idx])
-                        if step == 0
-                        else tracer.inputs["spatial_rope"],
-                        prompt_rope=(prompt_rope_cos[idx], prompt_rope_sin[idx])
-                        if step == 0
-                        else tracer.inputs["prompt_rope"],
+                        spatial_rope=prompt_inputs[idx].spatial_rope if step == 0 else tracer.inputs["spatial_rope"],
+                        prompt_rope=prompt_inputs[idx].prompt_rope if step == 0 else tracer.inputs["prompt_rope"],
                         spatial_sequence_length=latents_sequence_length,
-                        prompt_sequence_length=prompt_sequence_length,
+                        prompt_sequence_length=prompt_inputs[idx].prompt_sequence_length,
                         traced=traced,
                         tracer_blocking_execution=False,
                     )
@@ -387,6 +411,11 @@ class FiboPipeline(PipelineAPIMixin):
 
         on_event(SectionEnd("denoising"))
 
+        if not traced:
+            del prompt_inputs
+            for tracer in self._tracers.values():
+                tracer.release_inputs()
+
         logger.info("decoding image...")
         on_event(SectionStart("vae"))
         images = self._decode_latents(latents[0], traced=vae_traced)
@@ -401,10 +430,37 @@ class FiboPipeline(PipelineAPIMixin):
 
         return self._transformers[submesh_idx].forward(spatial=latents, **kwargs)
 
+    def _prepare_prompt_inputs(
+        self,
+        torch_context: torch.Tensor,
+        torch_layers: list[torch.Tensor],
+        *,
+        latents_height: int,
+        latents_width: int,
+        device: ttnn.MeshDevice,
+        on_host: bool,
+    ) -> PromptInputs:
+        prompt_sequence_length = torch_context.shape[1]
+
+        spatial_rope_cos, spatial_rope_sin, prompt_rope_cos, prompt_rope_sin = self._prepare_rope(
+            latents_height=latents_height,
+            latents_width=latents_width,
+            prompt_sequence_length=prompt_sequence_length,
+            device=device,
+        )
+
+        return PromptInputs(
+            prompt=from_torch(torch_context, device=device, on_host=on_host),
+            text_encoder_layers=[from_torch(layer, device=device, on_host=on_host) for layer in torch_layers],
+            spatial_rope=(spatial_rope_cos, spatial_rope_sin),
+            prompt_rope=(prompt_rope_cos, prompt_rope_sin),
+            prompt_sequence_length=prompt_sequence_length,
+        )
+
     def _prepare_rope(
-        self, *, latents_height: int, latents_width: int, prompt_sequence_length: int
-    ) -> tuple[list[ttnn.Tensor], list[ttnn.Tensor], list[ttnn.Tensor], list[ttnn.Tensor]]:
-        """Build FIBO's 3-axis RoPE on CPU and distribute spatial/prompt cos/sin to each submesh.
+        self, *, latents_height: int, latents_width: int, prompt_sequence_length: int, device: ttnn.MeshDevice
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
+        """Build FIBO's 3-axis RoPE on CPU and move spatial/prompt cos/sin to a submesh.
 
         Mirrors the diffusers FIBO transformer: ``ids = cat([text_ids (zeros), img_ids], dim=0)``
         is fed through ``checkpoint.pos_embed`` to get ``(freqs_cos, freqs_sin)`` of shape
@@ -428,14 +484,10 @@ class FiboPipeline(PipelineAPIMixin):
         torch_spatial_rope_cos = torch_rope_cos[prompt_sequence_length:]
         torch_spatial_rope_sin = torch_rope_sin[prompt_sequence_length:]
 
-        spatial_rope_cos = from_torch_to_devices(
-            torch_spatial_rope_cos, devices=self._devices, mesh_axes=[self._sp_axis, None]
-        )
-        spatial_rope_sin = from_torch_to_devices(
-            torch_spatial_rope_sin, devices=self._devices, mesh_axes=[self._sp_axis, None]
-        )
-        prompt_rope_cos = from_torch_to_devices(torch_prompt_rope_cos, devices=self._devices)
-        prompt_rope_sin = from_torch_to_devices(torch_prompt_rope_sin, devices=self._devices)
+        spatial_rope_cos = from_torch(torch_spatial_rope_cos, device=device, mesh_axes=[self._sp_axis, None])
+        spatial_rope_sin = from_torch(torch_spatial_rope_sin, device=device, mesh_axes=[self._sp_axis, None])
+        prompt_rope_cos = from_torch(torch_prompt_rope_cos, device=device)
+        prompt_rope_sin = from_torch(torch_prompt_rope_sin, device=device)
         return spatial_rope_cos, spatial_rope_sin, prompt_rope_cos, prompt_rope_sin
 
     def _random_latents(self, batch_size: int, seed: int) -> list[ttnn.Tensor]:

@@ -251,17 +251,16 @@ class FiboTransformer(Module):
             spatial: Tensor with shape [batch, spatial_sequence_length / sp_factor, in_channels].
             prompt: Tensor with shape [batch, prompt_sequence_length, joint_attention_dim]. FIBO
                 builds this in the pipeline as ``concat(last_hidden_state, second_to_last)``.
-            text_encoder_layers: Per-block SmolLM3 hidden states, padded/trimmed to exactly
-                ``num_layers + num_single_layers`` entries. Each has shape
+            text_encoder_layers: SmolLM3 hidden states, one per block in order, each of shape
                 [batch, prompt_sequence_length, text_encoder_dim].
             timestep: Tensor with shape [batch, 1].
             spatial_rope, prompt_rope: Cos/sin tuples for 3-axis RoPE.
         """
         tp_axis = self.parallel_config.tensor_parallel.mesh_axis
-        expected_layers = len(self.transformer_blocks) + len(self.single_transformer_blocks)
-        assert (
-            len(text_encoder_layers) == expected_layers
-        ), f"text_encoder_layers must have {expected_layers} entries, got {len(text_encoder_layers)}"
+        num_blocks = len(self.transformer_blocks) + len(self.single_transformer_blocks)
+        if not 0 < len(text_encoder_layers) <= num_blocks:
+            msg = f"text_encoder_layers must have 1 to {num_blocks} entries, got {len(text_encoder_layers)}"
+            raise ValueError(msg)
 
         time_embed = self.time_embed(timestep=timestep)
         ttnn.silu(time_embed, output_tensor=time_embed)
@@ -270,8 +269,12 @@ class FiboTransformer(Module):
         spatial = self.x_embedder(spatial)
         prompt = self.context_embedder(prompt)
 
-        # Mirrors the diffusers reference's ``new_text_encoder_layers`` pre-pass.
-        projected_layers = [self.caption_projection[i](layer) for i, layer in enumerate(text_encoder_layers)]
+        # Mirrors the diffusers reference's ``new_text_encoder_layers`` pre-pass, which first pads
+        # the hidden states with copies of the last one up to the block count.
+        projected_layers = [
+            self.caption_projection[i](text_encoder_layers[min(i, len(text_encoder_layers) - 1)])
+            for i in range(num_blocks)
+        ]
 
         block_id = 0
         for block in self.transformer_blocks:
