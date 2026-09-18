@@ -265,6 +265,28 @@ Streaming's worst case is tighter on both (7.5 against 9.8, and 6.0 against 9.1)
 spread is narrower, which is what less wandering looks like. Neither regime is uniformly
 faster per word, and whether the speech is *better* is not something frame counts settle.
 
+## Languages
+
+Ten, and both Chinese dialects. The language reaches the model as a single
+codec-vocabulary id in the think block and changes nothing else about the prompt, which is
+why one mechanism covers all of them; `eric` and `dylan` override it to their dialect, as
+upstream does.
+
+All ten were generated and then transcribed by Whisper-small, character error rate against
+the input text:
+
+| language | CER | what the difference was |
+|---|---|---|
+| English, Korean, German, French, Spanish, Italian, Portuguese, Russian | **0.000** | punctuation only |
+| Japanese | 0.050 | `湧いて` for `沸いて`: homophones, so the speech was right and the transcriber chose the other spelling |
+| Chinese | 0.385 | transcribed in Traditional characters against a Simplified input, same words and same sounds |
+
+So neither nonzero score is this model mispronouncing anything. `test_every_language_decodes_and_stops`
+holds the nine non-English cases to what a test can judge without a second model in the
+leg: each stops on its own, every code lands inside the codebook, and the length is speech
+rather than a spent budget. The transcription is a measurement, not a gate, because putting
+Whisper in CI would cost a 970 MB download and add its own failure modes.
+
 ## Speed
 
 **2.35x faster than real time, warm, on one P300 chip**, against 1.19x when this directory

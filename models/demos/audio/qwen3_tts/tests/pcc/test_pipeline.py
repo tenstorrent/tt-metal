@@ -321,6 +321,55 @@ def test_an_instruction_changes_what_a_named_speaker_does(device):
     assert counts["plain"] != counts["angry"], "the instruction did not reach the decode loop"
 
 
+# One sentence per language the checkpoint claims, with a speaker whose own language
+# matches where the nine offer one. Both dialect speakers are covered by the prompt tests.
+LANGUAGE_CASES = (
+    ("Chinese", "水壶已经烧开了，雨一直没有停。", "vivian"),
+    ("Japanese", "やかんが沸いていて、雨はまだ止んでいません。", "ono_anna"),
+    ("Korean", "주전자가 끓고 있고 비는 아직 그치지 않았습니다.", "sohee"),
+    ("German", "Der Kessel kocht, und der Regen hat nicht aufgehört.", "ryan"),
+    ("French", "La bouilloire est en marche et la pluie n'a pas cessé.", "ryan"),
+    ("Spanish", "La tetera está puesta y la lluvia no ha parado.", "ryan"),
+    ("Italian", "Il bollitore è acceso e la pioggia non è cessata.", "ryan"),
+    ("Portuguese", "A chaleira está ligada e a chuva não parou.", "ryan"),
+    ("Russian", "Чайник поставлен, и дождь всё ещё не прекратился.", "ryan"),
+)
+
+
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
+def test_every_language_decodes_and_stops(device):
+    """Nine languages besides English, through the frame loop.
+
+    The language reaches the model as one codec-vocabulary id in the think block and
+    nothing else about the prompt changes, which the prompt tests already pin. What this
+    adds is that each one decodes: the run stops on its own, every code lands inside the
+    codec's codebook, and the length is in the range speech occupies rather than a budget
+    spent on silence.
+
+    **Whether the speech is right is not something this can judge**, so it was measured
+    separately: Whisper-small transcribed all ten, character error rate 0.000 for eight of
+    them, 0.050 for Japanese (a homophone spelling) and 0.385 for Chinese (Whisper answered
+    in Traditional characters). The README carries that table. A second model in this leg
+    would cost a 970 MB download and bring its own failure modes for no more certainty
+    about this one.
+
+    Codes only, no codec: ten frame counts would compile ten sets of convolution programs.
+    """
+    pipeline = Qwen3TTSPipeline(device, max_frames=200, seed=1)
+    codebook = weights.codec_decoder_config()["codebook_size"]
+    rows = []
+    for language, text, speaker in LANGUAGE_CASES:
+        pipeline.reseed(1)
+        codes = pipeline.codes(text, speaker=speaker, language=language)
+        frames = codes.shape[0]
+        rows.append(f"{language} {frames}")
+        assert frames >= MIN_FRAMES, f"{language}: {frames} frames is not an utterance"
+        assert frames < 200, f"{language}: ran to the frame budget instead of stopping"
+        assert int(codes.min()) >= 0 and int(codes.max()) < codebook, f"{language}: a control id reached the codec"
+        assert codes.shape[1] == 16
+    print("frames: " + ", ".join(rows))
+
+
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
 def test_no_utterance_is_shorter_than_two_frames(device):
     """`min_new_tokens=2` upstream: end-of-speech is suppressed until two frames exist.
