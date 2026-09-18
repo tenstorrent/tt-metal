@@ -5,9 +5,9 @@ Feature set: Jira epic AIIPSW-10 (Sept-15 Release) and its six child tickets.
 Built with tools/gen_release_notes.py from the v0.77.0 and v0.78.0 GitHub
 release bodies, then edited down to the Quasar scope.
   release tags: v0.77.0 (2026-08-18), v0.78.0 (2026-09-05, commit a3a9fb4229a)
-  scope:        the 69 Quasar-related PRs of the 1,103 in the combined
+  scope:        the 67 Quasar-related PRs of the 1,103 in the combined
                 v0.77.0 + v0.78.0 changelog -- 14 against named Sep-15 features,
-                55 supporting. The remaining 1,034 are not reproduced here; they
+                53 supporting. The remaining 1,036 are not reproduced here; they
                 are in the GitHub release bodies for the two tags.
 
 Two of the six AIIPSW-10 features are not covered: AIIPSW-26 (Trinity port of
@@ -21,8 +21,9 @@ Engineering review (Filip Vranic, LLK), 2026-09-18, in #ai-ip-release:
     or touches the LLK codebase. Removed.
   - PR 52769 fits Runtime, not LLK. Moved to "Fast dispatch & dispatch engine
     on Quasar".
-  - PRs 53942 and 53944 are confirmed LLK, but WH/BH-scoped rather than
-    Quasar-specific. Split into their own group.
+  - PRs 53942 and 53944 are confirmed LLK, but WH/BH-scoped, not Quasar. This
+    document is scoped to Quasar; Wormhole and Blackhole are separate chips.
+    Removed rather than kept in a labelled group.
 
 PR titles are reproduced as authored, with three formatting-only passes so they
 render outside GitHub and cannot be read as Markdown:
