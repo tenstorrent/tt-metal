@@ -241,7 +241,7 @@ void kernel_main() {
     //-------------------------------------------------------------------------
     // Retain this copy for final scores (raw scores)
     copy_dest_values_init();
-    copy_dest_values(0, 1);
+    copy_dest_values<DataFormat::Float16_b>(0, 1);
 
     //-------------------------------------------------------------------------
     // Add bias
