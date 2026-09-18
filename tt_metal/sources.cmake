@@ -98,6 +98,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/program_descriptor_patching.hpp
     api/tt-metalium/experimental/sockets/d2h_socket.hpp
     api/tt-metalium/experimental/sockets/h2d_socket.hpp
+    api/tt-metalium/experimental/sockets/host_mesh_socket.hpp
     api/tt-metalium/experimental/sockets/mesh_socket.hpp
     api/tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp
     api/tt-metalium/experimental/distributed_tensor/topology/distributed_tensor_configs.hpp

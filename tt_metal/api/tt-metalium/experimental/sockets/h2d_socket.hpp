@@ -8,6 +8,7 @@
 #include <tt-metalium/experimental/pinned_memory.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <memory>
+#include <span>
 #include <optional>
 #include <utility>
 
@@ -94,12 +95,32 @@ public:
      * @param fifo_size Size of the circular FIFO buffer in bytes. Must be PCIe-aligned.
      * @param h2d_mode Transfer mode: HOST_PUSH or DEVICE_PULL.
      */
+    /**
+     * @brief Identifies an L1 region on the receiver core that the caller has already
+     *        reserved for the socket's configuration buffer.
+     *
+     * Mirrors D2HSocket::ExternalConfigBuffer. Lets a caller that owns the receiver
+     * core's L1 layout place the config itself, so a group of per-core sockets can
+     * share one height-sharded config buffer and therefore present a single
+     * config-buffer address to a multi-core kernel. The region must be at least
+     * required_config_buffer_size() bytes, L1-aligned, and outlive the socket.
+     */
+    struct ExternalConfigBuffer {
+        uint32_t address;
+    };
+
+    /**
+     * @brief Minimum size in bytes that an ExternalConfigBuffer region must have.
+     */
+    static uint32_t required_config_buffer_size();
+
     H2DSocket(
         const std::shared_ptr<MeshDevice>& mesh_device,
         const MeshCoreCoord& recv_core,
         BufferType buffer_type,
         uint32_t fifo_size,
-        H2DMode h2d_mode);
+        H2DMode h2d_mode,
+        std::optional<ExternalConfigBuffer> external_config = std::nullopt);
 
     /**
      * @brief Constructs an H2DSocket targeting an L2CPU receiver.
@@ -205,6 +226,17 @@ public:
     void set_page_size(uint32_t page_size);
 
     void write(void* data, uint32_t num_pages);
+
+    // Zero-copy production, for a producer that writes the FIFO directly (for
+    // example a NIC landing RDMA payload into the pinned ring). host_fifo()
+    // exposes the ring; commit_pages() then publishes pages already resident in
+    // it, skipping write()'s memcpy. The caller owns the reserve/backpressure
+    // decision via has_space(). DEVICE_PULL only.
+    std::span<std::byte> host_fifo() const;
+    void commit_pages(uint32_t num_pages);
+
+    // Cumulative bytes the device has consumed, refreshed from pinned memory.
+    uint32_t bytes_acked_snapshot();
 
     void barrier(std::optional<uint32_t> timeout_ms = std::nullopt);
 

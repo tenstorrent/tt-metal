@@ -1,3 +1,26 @@
+# The host-interconnect socket (device -> host -> RDMA -> host -> device) needs
+# libibverbs. Auto-detect so its absence is not a build break; set
+# TT_METAL_ENABLE_HOST_TRANSPORT explicitly to force it on or off. Detected
+# before sources.cmake, which keys its source list off the result.
+find_library(IBVERBS_LIBRARY NAMES ibverbs)
+find_path(IBVERBS_INCLUDE_DIR NAMES infiniband/verbs.h)
+if(NOT DEFINED TT_METAL_ENABLE_HOST_TRANSPORT)
+    if(IBVERBS_LIBRARY AND IBVERBS_INCLUDE_DIR)
+        set(TT_METAL_ENABLE_HOST_TRANSPORT TRUE CACHE INTERNAL "Build the host-interconnect socket transport")
+    else()
+        set(TT_METAL_ENABLE_HOST_TRANSPORT FALSE CACHE INTERNAL "Build the host-interconnect socket transport")
+    endif()
+endif()
+if(TT_METAL_ENABLE_HOST_TRANSPORT)
+    if(NOT (IBVERBS_LIBRARY AND IBVERBS_INCLUDE_DIR))
+        message(
+            FATAL_ERROR
+            "TT_METAL_ENABLE_HOST_TRANSPORT is ON but libibverbs was not found; install rdma-core (libibverbs-dev)"
+        )
+    endif()
+    message(STATUS "Host-interconnect sockets enabled (${IBVERBS_LIBRARY})")
+endif()
+
 include(sources.cmake)
 
 # Include helper functions and generate headers from flatbuffer schemas
@@ -87,6 +110,12 @@ add_dependencies(distributed metalium_GeneratedHeaders)
 if(USE_MPI)
     target_link_libraries(distributed PRIVATE OpenMPI::MPI)
     target_compile_definitions(distributed PRIVATE OPEN_MPI="1")
+endif()
+
+if(TT_METAL_ENABLE_HOST_TRANSPORT)
+    target_link_libraries(distributed PRIVATE ${IBVERBS_LIBRARY})
+    target_include_directories(distributed SYSTEM PRIVATE ${IBVERBS_INCLUDE_DIR})
+    target_compile_definitions(distributed PUBLIC TT_METAL_HOST_TRANSPORT=1)
 endif()
 
 if(TT_UMD_BUILD_SIMULATION)
