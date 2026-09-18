@@ -54,12 +54,20 @@ on:
         default: false
         description: "Enable Link Time Optimization (LTO)"
 
-run-name: "Profiler Tests"
+run-name: >-
+  Profiler Tests
+  SKUs[${{ github.event_name == 'schedule' && 'All'
+  || (inputs.skus-override != '' && inputs.skus-override)
+  || (inputs.skus == 'all' && 'All')
+  || inputs.skus }}]
 
 jobs:
   # Resolves the SKU filter into one list, and into a flag per impl so an impl
   # whose SKUs nobody asked for is never started. The SKU sets below must match
   # the skus maps in the three tests YAMLs under tests/pipeline_reorg/.
+  # Resolves the SKU filter, and sets a flag per impl so an impl whose SKUs nobody
+  # asked for never starts. The valid SKUs come from the 3 tests YAMLs themselves,
+  # thus a SKU added to a YAML needs no change here.
   select-skus:
     runs-on: ubuntu-slim
     outputs:
@@ -68,66 +76,86 @@ jobs:
       run-galaxy: ${{ steps.logic.outputs.run-galaxy }}
       run-single-card: ${{ steps.logic.outputs.run-single-card }}
     steps:
+      - name: Checkout the tests YAMLs
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          sparse-checkout: tests/pipeline_reorg
+          sparse-checkout-cone-mode: true
+      - name: Install dependencies
+        run: pip3 install PyYAML
       - name: Resolve the SKU filter
         id: logic
         env:
+          EVENT_NAME: ${{ github.event_name }}
           CHOICE: ${{ inputs.skus }}
           OVERRIDE: ${{ inputs.skus-override }}
         run: |
           set -e
-          T3K_SKUS="wh_llmbox"
-          GALAXY_SKUS="wh_galaxy"
-          SINGLE_CARD_SKUS="wh_n150_civ2 wh_n300_civ2 bh_p100a_civ2_viommu bh_p150b_civ2_viommu"
-          ALL_SKUS="$T3K_SKUS $GALAXY_SKUS $SINGLE_CARD_SKUS"
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import os, sys, yaml
 
-          # A scheduled run carries no inputs, thus it covers every SKU.
-          if [[ "${{ github.event_name }}" == "schedule" ]]; then
-            selection="all"
-          elif [[ -n "$OVERRIDE" ]]; then
-            selection="$OVERRIDE"
-          else
-            selection="${CHOICE:-all}"
-          fi
-
-          case "$selection" in
-            "all")             requested="$ALL_SKUS" ;;
-            "all single-card") requested="$SINGLE_CARD_SKUS" ;;
-            *)                 requested="${selection//,/ }" ;;
-          esac
-
-          # Reject a SKU that no profiler tests YAML covers, so a typo fails here
-          # rather than producing an empty run that looks like a pass.
-          unknown=()
-          for sku in $requested; do
-            [[ " $ALL_SKUS " == *" $sku "* ]] || unknown+=("$sku")
-          done
-          if [[ ${#unknown[@]} -gt 0 ]]; then
-            echo "::error::Unknown SKU: ${unknown[*]}. Valid SKUs: $ALL_SKUS"
-            exit 1
-          fi
-          if [[ -z "${requested// /}" ]]; then
-            echo "::error::No SKU selected. Pick a SKU in the skus input, or list them in skus-override."
-            exit 1
-          fi
-
-          any_in() {
-            for sku in $1; do
-              [[ " $requested " == *" $sku "* ]] && return 0
-            done
-            return 1
+          # The impl that reads each tests YAML, and the output flag that gates it.
+          FAMILIES = {
+              "t3k": "tests/pipeline_reorg/t3k_profiler_tests.yaml",
+              "galaxy": "tests/pipeline_reorg/galaxy_profiler_tests.yaml",
+              "single-card": "tests/pipeline_reorg/single_card_profiler_tests.yaml",
           }
-          any_in "$T3K_SKUS"         && t3k=true         || t3k=false
-          any_in "$GALAXY_SKUS"      && galaxy=true      || galaxy=false
-          any_in "$SINGLE_CARD_SKUS" && single_card=true || single_card=false
 
-          enabled=$(echo "$requested" | tr ' ' ',')
-          echo "Requested SKUs: $enabled"
-          echo "enabled-skus=$enabled"       >> "$GITHUB_OUTPUT"
-          echo "run-t3k=$t3k"                >> "$GITHUB_OUTPUT"
-          echo "run-galaxy=$galaxy"          >> "$GITHUB_OUTPUT"
-          echo "run-single-card=$single_card" >> "$GITHUB_OUTPUT"
+          def fail(msg):
+              print(f"::error::{msg}", file=sys.stderr)
+              sys.exit(1)
 
+          coverage = {}
+          for family, path in FAMILIES.items():
+              tests = yaml.safe_load(open(path)) or []
+              coverage[family] = {sku for test in tests for sku in (test.get("skus") or {})}
+              if not coverage[family]:
+                  fail(f"{path} declares no SKU, thus the {family} profiler tests can never run.")
+          known = set().union(*coverage.values())
+
+          event = os.environ["EVENT_NAME"]
+          choice = (os.environ.get("CHOICE") or "").strip()
+          override = (os.environ.get("OVERRIDE") or "").strip()
+
+          # Both inputs set is ambiguous: refuse it rather than pick a winner.
+          if override and choice and choice != "all":
+              fail(f"skus is {choice!r} and skus-override is {override!r}. Set one of them, not both.")
+
+          if event == "schedule":
+              selection = "all"
+          else:
+              selection = override or choice or "all"
+
+          if selection == "all":
+              requested = set(known)
+          elif selection == "all single-card":
+              requested = set(coverage["single-card"])
+          else:
+              requested = {s.strip() for s in selection.split(",") if s.strip()}
+
+          unknown = sorted(requested - known)
+          if unknown:
+              fail(f"Unknown SKU: {', '.join(unknown)}. "
+                   f"The profiler tests YAMLs cover: {', '.join(sorted(known))}.")
+          if not requested:
+              fail("No SKU selected. Pick a SKU in the skus input, or list them in skus-override.")
+
+          # ALL_SKUS_IN_TESTS lets each impl resolve its own YAML, so a full run needs
+          # no list from here and cannot drift from the YAMLs.
+          enabled = "ALL_SKUS_IN_TESTS" if requested == known else ",".join(sorted(requested))
+
+          print(f"Requested SKUs: {', '.join(sorted(requested))}", file=sys.stderr)
+          print(f"enabled-skus={enabled}")
+          for family, skus in coverage.items():
+              flag = "true" if requested & skus else "false"
+              print(f"run-{family}={flag}")
+              print(f"  run-{family}={flag}", file=sys.stderr)
+          PY
+
+  # Gated on select-skus so a rejected filter starts nothing else at all.
   check-harbor:
+    needs: select-skus
     uses: ./.github/workflows/check-harbor.yaml
 
   build-artifact:
