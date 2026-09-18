@@ -183,7 +183,7 @@ def tt_all_reduce(
             intermediate_memory_config=rs_memory_config,
             topology=topology,
             chunks_per_sync=chunks_per_sync,
-            num_workers_per_link=num_workers_per_link,
+            num_workers_per_link=4,
             num_buffers_per_channel=2,
             subdevice_id=subdevice_id,
         )
