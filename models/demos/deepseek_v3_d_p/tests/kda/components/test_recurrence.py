@@ -59,7 +59,8 @@ def _run_recurrence(
         ),
         sequence_parallel_axis=None,
     )
-    return executor(q=q, k=k, v=v, gate=gate, beta=beta, initial_state=state)
+    result = executor(q=q, k=k, v=v, gate=gate, beta=beta, initial_state=state)
+    return result.final_state, result.output
 
 
 @pytest.mark.parametrize(
@@ -308,7 +309,7 @@ def _run_distributed_recurrence(
 ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
     q, k, v, gate, beta, initial_state = inputs
     with ttnn.manage_config("throw_exception_on_fallback", True):
-        new_state, output = executor.sequence_parallel(
+        result = executor.sequence_parallel(
             q=q,
             k=k,
             v=v,
@@ -318,7 +319,7 @@ def _run_distributed_recurrence(
             selections=selections,
             actual_start=actual_start,
         )
-    return output, new_state
+    return result.output, result.final_state
 
 
 @pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
