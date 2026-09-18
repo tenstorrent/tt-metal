@@ -236,18 +236,23 @@ uint32_t kv_chain_mode_for(
 
 // Causal chain of a head: the consecutive segments whose cores are still free, in ascending pair order, so the
 // lowest pairs (longest heavy prefixes) stream from DRAM and each core forwards the prefix its successor needs.
+// Chain partners exchange chunk i of their segments at the same time, so a segment a core reaches only after
+// finishing another head would hold its partner idle for that long; only a core's first segment qualifies.
 void build_causal_chain(
     const std::vector<HeadSegmentRef>& segments,
     const std::vector<CoreWork>& core_work,
     std::vector<CoreChainInfo>& core_chain_info,
     uint32_t& chains_built,
     uint32_t& chains_skipped) {
+    auto eligible = [&](const HeadSegmentRef& seg) {
+        return !core_chain_info[seg.core_idx].participates && seg.head_work_index == 0;
+    };
     std::size_t idx = 0;
-    while (idx < segments.size() && core_chain_info[segments[idx].core_idx].participates) {
+    while (idx < segments.size() && !eligible(segments[idx])) {
         ++idx;
     }
     std::vector<std::size_t> order;
-    for (; idx < segments.size() && !core_chain_info[segments[idx].core_idx].participates; ++idx) {
+    for (; idx < segments.size() && eligible(segments[idx]); ++idx) {
         order.push_back(idx);
     }
     if (order.size() < 2) {
