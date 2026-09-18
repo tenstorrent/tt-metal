@@ -8,6 +8,7 @@
 #include <enchantum/enchantum.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
+#include "core/compute_kernel_config.hpp"
 #include "metal/common/program_utils.hpp"
 
 namespace {
@@ -290,7 +291,7 @@ PolyNorm3BackwardProgramFactory::cached_program_t PolyNorm3BackwardProgramFactor
         kComputeKernelPath,
         core_group_1,
         tt::tt_metal::ComputeConfig{
-            .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
+            .math_fidelity = ttml::core::max_fidelity_with_fp32_acc(),
             .fp32_dest_acc_en = true,
             .math_approx_mode = false,
             .compile_args = compute_group_1_args,
@@ -302,7 +303,7 @@ PolyNorm3BackwardProgramFactory::cached_program_t PolyNorm3BackwardProgramFactor
             kComputeKernelPath,
             core_group_2,
             tt::tt_metal::ComputeConfig{
-                .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
+                .math_fidelity = ttml::core::max_fidelity_with_fp32_acc(),
                 .fp32_dest_acc_en = true,
                 .math_approx_mode = false,
                 .compile_args = compute_group_2_args,

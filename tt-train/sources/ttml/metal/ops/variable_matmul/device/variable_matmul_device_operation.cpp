@@ -9,6 +9,7 @@
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/tt_metal.hpp>
 
+#include "core/compute_kernel_config.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "variable_matmul_program_factory.hpp"
 
@@ -311,7 +312,7 @@ ttnn::Tensor ttml_variable_matmul(
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor.device()->arch(),
         compute_kernel_config,
-        tt::tt_metal::MathFidelity::HiFi4,
+        ttml::core::max_fidelity_with_fp32_acc(),
         false /*approx_mode*/,
         true /*fp32_acc*/,
         true /*packer_acc*/);
