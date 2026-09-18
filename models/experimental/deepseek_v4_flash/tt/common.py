@@ -37,15 +37,8 @@ except Exception:  # pragma: no cover - tracy missing on non-profiling builds
 
 # Master switch for the per-module signposts. Defaults on (they are a no-op unless
 # the run is captured under the Tracy profiler), but can be disabled to drop even
-# the host-side call overhead: set ``DEEPSEEK_V4_SIGNPOSTS=0`` or call
-# :func:`set_signposts_enabled(False)` at runtime.
+# the host-side call overhead: set ``DEEPSEEK_V4_SIGNPOSTS=0``.
 _SIGNPOSTS_ENABLED = os.environ.get("DEEPSEEK_V4_SIGNPOSTS", "1") not in ("0", "", "false", "False")
-
-
-def set_signposts_enabled(enabled: bool) -> None:
-    """Enable/disable the per-module Tracy signposts at runtime."""
-    global _SIGNPOSTS_ENABLED
-    _SIGNPOSTS_ENABLED = bool(enabled)
 
 
 def _signpost(header: str) -> None:
@@ -123,53 +116,6 @@ def rectangular_core_grid(num_cores: int, device) -> ttnn.CoreGrid:
     return ttnn.CoreGrid(y=y, x=x)
 
 
-def print_l1_tensors(device):
-    """Print allocated L1 buffers and the unallocated holes (voids) between them.
-
-    A void is a gap in the per-bank address space that sits between occupied
-    ranges: addresses below and above it are allocated, but the gap itself is not.
-    Overlapping allocations are merged before voids are measured, so a hole is
-    reported only when no buffer covers that address.
-    """
-    device_info = ttnn._ttnn.reports.get_buffers(device)
-    l1_buffers = [b for b in device_info if b.buffer_type == ttnn.BufferType.L1]
-    if not l1_buffers:
-        print("No L1 buffers found.")
-        return
-
-    l1_buffers = sorted(l1_buffers, key=lambda b: (b.address, b.max_size_per_bank))
-
-    headers = ("#", "Address", "Size (bytes)", "Layout")
-    rows = []
-    occupied_end = None
-    total_void_size = 0
-    for i, b in enumerate(l1_buffers):
-        if occupied_end is not None and b.address > occupied_end:
-            void_size = b.address - occupied_end
-            total_void_size += void_size
-            rows.append(("", f"{occupied_end}", f"{void_size:,}", "VOID"))
-        rows.append((str(i), f"{b.address}", f"{b.max_size_per_bank:,}", str(b.buffer_layout)))
-        buf_end = b.address + b.max_size_per_bank
-        occupied_end = buf_end if occupied_end is None else max(occupied_end, buf_end)
-
-    total_l1_size = sum(b.max_size_per_bank for b in l1_buffers)
-    rows.append(("", "Total", f"{total_l1_size:,}", ""))
-    rows.append(("", "Voids", f"{total_void_size:,}", ""))
-
-    widths = [max(len(headers[i]), *(len(r[i]) for r in rows)) for i in range(len(headers))]
-
-    def _row(cells):
-        return " | ".join(
-            cells[i].rjust(widths[i]) if i == 2 else cells[i].ljust(widths[i]) for i in range(len(headers))
-        )
-
-    print(_row(headers))
-    print("-+-".join("-" * w for w in widths))
-    for row in rows:
-        print(_row(row))
-    print("\n\n")
-
-
 def rectangular_core_range_set(num_cores: int, device) -> ttnn.CoreRangeSet:
     """``CoreRangeSet`` for :func:`rectangular_core_grid`."""
     core_grid = rectangular_core_grid(num_cores, device)
@@ -204,9 +150,9 @@ def width_sharded_l1_config(
 ) -> ttnn.MemoryConfig:
     """Width-sharded L1 config: one tile-width (32 cols) per core over ``width // TILE_SIZE`` cores.
 
-    Mirror of :func:`_rope_height_sharded_config` along the width axis: for a
-    ``[..., height, width]`` tensor each core holds a ``[height_padded, TILE_SIZE]`` shard
-    (``height_padded`` is ``height`` rounded up to a tile boundary), ROW_MAJOR orientation.
+    For a ``[..., height, width]`` tensor each core holds a
+    ``[height_padded, TILE_SIZE]`` shard (``height_padded`` is ``height`` rounded up to a
+    tile boundary), ROW_MAJOR orientation.
     """
     assert width % ttnn.TILE_SIZE == 0, f"width {width} must be tile-aligned"
     if num_cores is None:

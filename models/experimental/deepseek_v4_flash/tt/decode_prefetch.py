@@ -169,28 +169,11 @@ def decode_gcb_group_specs() -> list:
 # ``DECODE_GCB_GROUP``: different receiver counts, independent FIFOs.
 Q_A_GCB = "q_a_full"
 KV_GCB = "kv_full"
-SEQUENTIAL_OA_GCB = "o_a_sequential"
-TP_GATE_UP_GCB = "shared_gate_up_tp"
 ROUTER_GATE_GCB = "router_gate"
 # Those private rings cannot use the shared 16/24-page depth: each has a single
-# spec, so the page is the whole slab (72 KB for sequential o_a, 144 KB for TP
-# gate/up). 24 such pages is 1.7–3.5 MB per receiver, which does not fit in a
-# Blackhole L1 bank after the shared GCB. Two pages is the streaming floor and
-# covers the two weights on each FIFO.
+# spec, so the page is the whole slab. 24 such pages does not fit in a Blackhole
+# L1 bank after the shared GCB. Two pages is the streaming floor.
 TP_PRIVATE_GCB_PAGES = 2
-
-
-def sequential_oa_layout(K: int, N: int) -> dict:
-    """One sequential o_a slot: ``[K, o_lora_rank]`` on 32 cores.
-
-    The batched ``o_a_proj`` layout is the same ``K``/``N`` folded over ``o_groups``;
-    a sequential slot is that per-group matrix, which no longer spans 64 receivers.
-    """
-    oa = DECODE_LAYOUTS["o_a_proj"]
-    n_blocks = oa["N"] // ttnn.TILE_SIZE
-    if (oa["K"], oa["N"]) != (K, N):
-        raise ValueError(f"sequential o_a is fixed at K={oa['K']}, N={oa['N']} but this config wants K={K}, N={N}")
-    return {"K": K, "N": N, "n_blocks": n_blocks}
 
 
 def balanced_qkv_layout(name: str, tp_size: int) -> dict:

@@ -58,7 +58,6 @@ class DeepSeekV4DecoderLayer(DeepSeekV4Module):
         weight_dtype: ttnn.DataType = ttnn.bfloat16,
         use_prefetcher: bool = False,
         prefetch_buffers: Optional[dict] = None,
-        packed_weights=None,
         tp_size: int = 1,
     ):
         self.config = config
@@ -66,10 +65,6 @@ class DeepSeekV4DecoderLayer(DeepSeekV4Module):
         self.device = device
         eps = config.rms_norm_eps
         cache = _as_cache(cache)
-        packed_bundle = None
-        if packed_weights is not None:
-            (packed_tensor, packed_layout), packed_slot = packed_weights
-            packed_bundle = (packed_tensor, packed_layout, packed_slot)
 
         self.self_attn = DeepSeekV4Attention(
             config,
@@ -80,7 +75,6 @@ class DeepSeekV4DecoderLayer(DeepSeekV4Module):
             weight_dtype=weight_dtype,
             use_prefetcher=use_prefetcher,
             prefetch_buffers=prefetch_buffers,
-            packed_weights=packed_bundle,
             tp_size=tp_size,
         )
         self.mlp = DeepSeekV4SparseMoeBlock(
@@ -93,7 +87,6 @@ class DeepSeekV4DecoderLayer(DeepSeekV4Module):
             weight_dtype=weight_dtype,
             use_prefetcher=use_prefetcher,
             prefetch_buffers=prefetch_buffers,
-            packed_weights=packed_bundle,
             tp_size=tp_size,
         )
         self.input_layernorm = DeepSeekV4RMSNorm(
@@ -111,8 +104,6 @@ class DeepSeekV4DecoderLayer(DeepSeekV4Module):
             _strip_prefix(weights, "attn_hc"),
             device,
             cache=cache.sub("attn_hc"),
-            packed_weights=packed_bundle,
-            packed_name="attn_hc.fn",
             use_prefetcher=use_prefetcher,
             prefetch_buffers=prefetch_buffers,
             weight_dtype=weight_dtype,
@@ -122,8 +113,6 @@ class DeepSeekV4DecoderLayer(DeepSeekV4Module):
             _strip_prefix(weights, "ffn_hc"),
             device,
             cache=cache.sub("ffn_hc"),
-            packed_weights=packed_bundle,
-            packed_name="ffn_hc.fn",
             use_prefetcher=use_prefetcher,
             prefetch_buffers=prefetch_buffers,
             weight_dtype=weight_dtype,

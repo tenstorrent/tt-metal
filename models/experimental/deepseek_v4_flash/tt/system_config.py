@@ -111,7 +111,6 @@ class PipelineSettings:
     # section, so the demo, the CLI and the server agree on a machine by profile.
     # env: DEEPSEEK_V4_TP_SIZE
     tp_size: int = 1
-    depth: int = 0
     max_devices: int = 0
     socket_l1_bytes: int = 16384
     pcie_alignment: int = 64
@@ -142,16 +141,8 @@ class PipelineSettings:
 class PrefetcherSettings:
     """DRISC weight prefetcher and its shared global circular buffer."""
 
-    # ``None`` = enable wherever the device supports it.
-    enabled: Optional[bool] = None
     num_prefetch_pages: int = 16
     num_prefetch_slabs: int = 2
-
-    def resolve_enabled(self, device) -> bool:
-        """Whether to prefetch on ``device``, honouring an explicit on/off."""
-        if self.enabled is not None:
-            return self.enabled
-        return ttnn.experimental.is_tensor_prefetcher_supported(device)
 
 
 @dataclass(frozen=True)
@@ -174,10 +165,6 @@ class AttentionSettings:
     sdpa_k_chunk_size: int = 32
     sdpa_max_cores_per_head_batch: int = 2
     sdpa_exp_approx_mode: bool = False
-    keep_qa_kv_weights_in_l1: bool = True
-    # How q_a and kv are partitioned when ``tp_size > 1``. Ignored at TP1 (the
-    # projections are replicated). See ``DeepSeekV4Attention.qkv_tp_strategy``.
-    qkv_tp_strategy: str = "replicated"
 
     def sdpa_program_config(self, device) -> Any:
         """The ``SDPAProgramConfig`` for ``device``, at this profile's settings.
@@ -200,11 +187,6 @@ class DecodeSettings:
     """Precision, paging and how many users a step serves."""
 
     weight_dtype: str = "bfloat4_b"
-    # Pack every non-expert decoder-layer matmul weight into one BF4 L1 tensor
-    # per chip. Enabled only by the Galaxy32 profile.
-    packed_l1_weights: bool = False
-    block_size: int = 32
-    batch: int = 1
     num_users: int = 2
     max_context: int = 131072
     # 0 = one ``max_context`` (the users share a single context's worth).
@@ -222,19 +204,6 @@ class DecodeSettings:
             valid = [n for n in ("bfloat4_b", "bfloat8_b", "bfloat16", "float32") if hasattr(ttnn, n)]
             raise ValueError(f"unknown weight_dtype {self.weight_dtype!r}; expected one of {valid}")
         return dtype
-
-    def resolve_total_context(self) -> int:
-        """The shared block-pool budget, with 0 meaning one full context."""
-        return self.total_context or self.max_context
-
-    def resolve_num_layers(self, num_hidden_layers: int) -> int:
-        """The layer cap, with 0 meaning the whole checkpoint stack."""
-        return min(self.num_layers or num_hidden_layers, num_hidden_layers)
-
-    def resolve_packed_l1_weights(self, use_prefetcher: bool) -> bool:
-        if self.packed_l1_weights and use_prefetcher:
-            raise ValueError("decode.packed_l1_weights is incompatible with the weight prefetcher")
-        return self.packed_l1_weights
 
 
 @dataclass(frozen=True)
@@ -254,21 +223,15 @@ class SystemConfig:
     decode: DecodeSettings = field(default_factory=DecodeSettings)
 
     # -- introspection ------------------------------------------------------ #
-    def to_dict(self) -> dict:
-        """Plain-data round-trip of this profile (for logging or re-serializing)."""
-        return dataclasses.asdict(self)
-
     def summary(self) -> str:
         """One line naming the profile and the fields most likely to explain a
         performance or out-of-memory surprise."""
         return (
             f"system profile '{self.name}' ({self.num_devices or 'any'} devices): "
-            f"PGS={self.pipeline.group_size} depth={self.pipeline.depth} "
-            f"prefetch={self.prefetcher.enabled if self.prefetcher.enabled is not None else 'auto'}"
-            f"/{self.prefetcher.num_prefetch_pages}p "
+            f"PGS={self.pipeline.group_size} "
+            f"prefetch={self.prefetcher.num_prefetch_pages}p "
             f"experts_block={self.moe.experts_block_size} "
-            f"qkv_tp={self.attention.qkv_tp_strategy} "
-            f"dtype={self.decode.weight_dtype} batch={self.decode.batch} "
+            f"dtype={self.decode.weight_dtype} "
             f"users={self.decode.num_users} ctx={self.decode.max_context}"
         )
 
@@ -452,12 +415,6 @@ def _env_bool(raw: str) -> bool:
     return raw not in _FALSEY
 
 
-def _env_tristate(raw: str) -> Optional[bool]:
-    """For the fields whose ``None`` means "decide from the device/config", so that
-    state is reachable from a shell too: ``auto`` (or ``none``) restores it."""
-    return None if raw.lower() in ("auto", "none", "null") else _env_bool(raw)
-
-
 def _env_mesh_shape(raw: str) -> list[int]:
     parts = raw.replace(",", "x").split("x")
     if len(parts) != 2:
@@ -473,13 +430,11 @@ _ENV_OVERRIDES: tuple[tuple[str, str, str, Callable[[str], Any]], ...] = (
     ("device", "worker_l1_size", "DEEPSEEK_V4_WORKER_L1_SIZE", int),
     ("pipeline", "group_size", "DEEPSEEK_V4_PIPELINE_GROUP_SIZE", int),
     ("pipeline", "tp_size", "DEEPSEEK_V4_TP_SIZE", int),
-    ("pipeline", "depth", "DEEPSEEK_V4_PIPELINE_DEPTH", int),
     ("pipeline", "max_devices", "DEEPSEEK_V4_PIPELINE_MAX_DEVICES", int),
     ("pipeline", "socket_l1_bytes", "DEEPSEEK_V4_SOCKET_L1_BYTES", int),
     ("pipeline", "pcie_alignment", "DEEPSEEK_V4_PCIE_ALIGNMENT", int),
     ("pipeline", "h2d_fifo_pages", "DEEPSEEK_V4_H2D_FIFO_PAGES", int),
     ("pipeline", "d2h_fifo_bytes", "DEEPSEEK_V4_D2H_FIFO_BYTES", int),
-    ("prefetcher", "enabled", "DEEPSEEK_V4_PREFETCHER", _env_tristate),
     ("prefetcher", "num_prefetch_pages", "DEEPSEEK_V4_PREFETCH_PAGES", int),
     ("prefetcher", "num_prefetch_slabs", "DEEPSEEK_V4_PREFETCH_SLABS", int),
     ("moe", "experts_block_size", "DEEPSEEK_V4_EXPERTS_BLOCK_SIZE", int),
@@ -487,12 +442,7 @@ _ENV_OVERRIDES: tuple[tuple[str, str, str, Callable[[str], Any]], ...] = (
     ("attention", "sdpa_q_chunk_size", "DEEPSEEK_V4_SDPA_Q_CHUNK", int),
     ("attention", "sdpa_k_chunk_size", "DEEPSEEK_V4_SDPA_K_CHUNK", int),
     ("attention", "sdpa_max_cores_per_head_batch", "DEEPSEEK_V4_SDPA_MAX_CORES_PER_HEAD", int),
-    ("attention", "keep_qa_kv_weights_in_l1", "DEEPSEEK_V4_KEEP_WEIGHTS_IN_L1", _env_bool),
-    ("attention", "qkv_tp_strategy", "DEEPSEEK_V4_QKV_TP_STRATEGY", str),
-    ("decode", "packed_l1_weights", "DEEPSEEK_V4_PACKED_L1_WEIGHTS", _env_bool),
     ("decode", "weight_dtype", "DEEPSEEK_V4_WEIGHT_DTYPE", str),
-    ("decode", "block_size", "DEEPSEEK_V4_BLOCK_SIZE", int),
-    ("decode", "batch", "DEEPSEEK_V4_DECODE_BATCH", int),
     ("decode", "num_users", "DEEPSEEK_V4_NUM_USERS", int),
     ("decode", "max_context", "DEEPSEEK_V4_MAX_CONTEXT", int),
     ("decode", "total_context", "DEEPSEEK_V4_TOTAL_CONTEXT", int),
@@ -529,12 +479,6 @@ def _apply_env(cfg: SystemConfig, env: Optional[dict] = None) -> SystemConfig:
 # --------------------------------------------------------------------------- #
 # Loading
 # --------------------------------------------------------------------------- #
-def available_profiles(path: Optional[Path | str] = None) -> dict[str, str]:
-    """``{name: description}`` for every profile in the config file."""
-    doc = _load_raw(Path(path or os.environ.get(CONFIG_PATH_ENV_VAR) or DEFAULT_CONFIG_PATH))
-    return {name: (body or {}).get("description", "") for name, body in doc["profiles"].items()}
-
-
 def load_system_config(
     profile: Optional[str] = None,
     *,
@@ -641,8 +585,3 @@ def active_system_config() -> SystemConfig:
     if _active is None:
         _active = load_system_config()
     return _active
-
-
-def reset_active_system_config() -> None:
-    """Forget the published profile (so the next read re-loads it)."""
-    set_active_system_config(None)

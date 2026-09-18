@@ -345,7 +345,6 @@ class ChatEngine:
             weight_dtype=_WEIGHT_DTYPE,
             max_layers=max_layers,
             use_submeshes=True,
-            use_prefetcher=args.prefetcher,
             system_config=system_config,
             tp_size=tp_size,
         )
@@ -365,7 +364,7 @@ class ChatEngine:
         # One prefetcher session for the whole process rather than one per turn: starting the
         # DRISC senders is not free and each GCB's ring state carries from one step to the
         # next. The caller owns the stack, so the session also covers the trace capture, the
-        # warmup and every turn of the REPL. A no-op when the prefetcher is off.
+        # warmup and every turn of the REPL.
         prefetcher.enter_context(self.model.prefetcher_session())
         # Registered after the session so it unwinds first (LIFO): stopping the traced-decode
         # replay thread releases the model before the DRISC senders stop. Without it the
@@ -926,15 +925,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_false",
         default=decode.traced,
         help="eager decode instead of traced decode",
-    )
-    p.add_argument(
-        "--no-prefetcher",
-        dest="prefetcher",
-        action="store_const",
-        const=False,
-        default=sys_cfg.prefetcher.enabled,
-        help="feed the attention projections with a DRAM->L1 copy per call instead of the "
-        "DRISC tensor prefetcher (default: use it wherever the device supports it)",
     )
     p.add_argument("--quiet", action="store_true", help="only warnings and above from the model logs")
     args = p.parse_args(argv)
