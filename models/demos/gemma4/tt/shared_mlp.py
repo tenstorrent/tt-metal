@@ -21,7 +21,19 @@ import torch
 import ttnn
 from models.demos.gemma4.tt.ccl import ccl_allreduce
 from models.demos.gemma4.tt.compute_config import gelu_variant
-from models.demos.gemma4.tt.dram_sharded import TILE_SIZE, DramShardedLinear, can_dram_shard
+from models.demos.gemma4.tt.dram_sharded import (
+    TILE_SIZE,
+    DramShardedLinear,
+    can_dram_shard,
+    hoist_prefill_in0,
+    interleaved_mlp_prefill_config,
+    is_t3k_dense_target,
+    linear_l1_safe,
+    matmul_rows,
+    prefill_in0_fits_l1,
+    prefill_linear_above_cutoff,
+    should_prefill_long_2d,
+)
 from models.demos.gemma4.utils.general_utils import get_cache_file_name
 
 # DRAM-width-sharded decode matmuls for the shared MLP. On by default for
@@ -145,6 +157,7 @@ class SharedMLP:
         # for MoE; dense 12B/31B retain the sharded opt.
         is_moe = bool(getattr(hf_config, "enable_moe_block", False))
         dram_shard = _DRAM_SHARD_MLP and tp > 1 and not is_moe
+        self._tuned_prefill = is_t3k_dense_target(mesh_device, hf_config)
 
         if dram_shard and can_dram_shard(self.hidden_size, gu_n, dtype=dtype):
             self.gate_up_proj = DramShardedLinear(
@@ -159,7 +172,7 @@ class SharedMLP:
                 ),
             )
         else:
-            gate_up_proj = ttnn.as_tensor(
+            self.gate_up_proj = ttnn.as_tensor(
                 gate_up_weight,
                 device=mesh_device,
                 dtype=dtype,
@@ -170,8 +183,6 @@ class SharedMLP:
                 ),
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
-
-            self.gate_up_proj = lambda x: ttnn.linear(x, gate_up_proj)
 
         if dram_shard and can_dram_shard(down_k, self.hidden_size, dtype=dtype):
             self.down_proj = DramShardedLinear(
@@ -186,7 +197,7 @@ class SharedMLP:
                 ),
             )
         else:
-            down_proj = ttnn.as_tensor(
+            self.down_proj = ttnn.as_tensor(
                 down_proj_weight,
                 device=mesh_device,
                 dtype=dtype,
@@ -198,7 +209,45 @@ class SharedMLP:
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
-            self.down_proj = lambda x: ttnn.linear(x, down_proj)
+    def _linear(self, x, weight, long_2d_min_rows=0):
+        """gate_up / down_proj matmul, tuned for prefill on the T3K dense target.
+
+        ``should_prefill_long_2d`` catches a prefill chunk too tall for one shot;
+        below that ``interleaved_mlp_prefill_config`` covers the short-prefill
+        band and declines everywhere else, including decode, where this reduces
+        to the bare matmul every other SKU runs.
+
+        ``long_2d_min_rows`` raises that first bound. gate_up passes 4096 so the
+        2048-row chunk keeps the auto config it was measured on upstream; only
+        down_proj takes the reshape from 2048.
+        """
+        if isinstance(weight, DramShardedLinear):
+            return weight(x)
+        if not self._tuned_prefill:
+            return ttnn.linear(x, weight)
+
+        rows = matmul_rows(x)
+        if should_prefill_long_2d(rows) and rows >= long_2d_min_rows:
+            return prefill_linear_above_cutoff(x, weight)
+        program_config, out_memcfg, compute_kernel_config = interleaved_mlp_prefill_config(
+            rows, int(x.shape[-1]), int(weight.shape[-1])
+        )
+        # Unlike attention, only hoist when a tuned config will actually read the
+        # L1 copy: the shapes this builder declines keep the auto config, and an
+        # extra DRAM->L1 copy in front of it buys nothing.
+        activation, owned = hoist_prefill_in0(
+            x, program_config is not None and prefill_in0_fits_l1(rows, int(x.shape[-1]))
+        )
+        output = linear_l1_safe(
+            activation,
+            weight,
+            program_config=program_config,
+            memory_config=out_memcfg,
+            compute_kernel_config=compute_kernel_config,
+        )
+        if owned is not None:
+            owned.deallocate(True)
+        return output
 
     def __call__(self, hidden_states):
         """
@@ -209,22 +258,26 @@ class SharedMLP:
         # Fused gate/up projection: one matmul produces [.., 2*inter_pad/device]
         # laid out as [up_i | gate_i]. Split with the padded half-width so TILE
         # slice bounds stay aligned (264 would round to 288 and break down_proj).
-        gate_up = self.gate_up_proj(hidden_states)
+        gate_up = self._linear(hidden_states, self.gate_up_proj, long_2d_min_rows=4096)
         shard = self._inter_per_device
         s = gate_up.shape[-2]
-        up = ttnn.slice(gate_up, [0, 0, 0, 0], [1, 1, s, shard])
-        gate = ttnn.slice(gate_up, [0, 0, 0, shard], [1, 1, s, 2 * shard])
+        # Carry the projection's own placement through the GeGLU so a tuned
+        # config that left gate_up in L1 is not immediately spilled to DRAM.
+        # None off the tuned target, which is each op's existing default.
+        geglu_memcfg = gate_up.memory_config() if self._tuned_prefill and not gate_up.is_sharded() else None
+        up = ttnn.slice(gate_up, [0, 0, 0, 0], [1, 1, s, shard], memory_config=geglu_memcfg)
+        gate = ttnn.slice(gate_up, [0, 0, 0, shard], [1, 1, s, 2 * shard], memory_config=geglu_memcfg)
         gate_up.deallocate(True)
 
         # Prefer Accurate over FastLut/Tanh for device PCC (see compute_config): the Tanh variant
         # dropped the E4B full-model PCC from 0.9846 to 0.9578 (gate 0.96) on bh_quietbox_2.
-        gate = ttnn.gelu(gate, variant=gelu_variant())
-        hidden = ttnn.mul(gate, up)
+        gate = ttnn.gelu(gate, variant=gelu_variant(), memory_config=geglu_memcfg)
+        hidden = ttnn.mul(gate, up, memory_config=geglu_memcfg)
         gate.deallocate(True)
         up.deallocate(True)
 
         # output = hidden @ down_proj
-        output = self.down_proj(hidden)
+        output = self._linear(hidden, self.down_proj)
         hidden.deallocate(True)
 
         # Allreduce after row-parallel down_proj

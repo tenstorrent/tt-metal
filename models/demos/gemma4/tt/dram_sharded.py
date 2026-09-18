@@ -16,6 +16,8 @@ helpers are adapted from the Qwen3.6 Blackhole TP path (tp_common.py).
 import math
 import os
 
+from loguru import logger
+
 import ttnn
 from models.common.utility_functions import is_blackhole
 
@@ -305,6 +307,273 @@ def prefill_progcfg(m, k, n, grid_size=None, max_cols=None, fused_activation=Non
         fused_activation=fused_activation,
         fuse_batch=False,
     )
+
+
+# ── Tuned prefill matmul path: dense Gemma4 12B / 31B on a Wormhole T3K ──────
+#
+# Ported from ign/gemma4_support_loudbox_exps via ign/gemma-4_12B_31B_optim_exps
+# (stages 4 and 5). Everything below is reached only through
+# ``is_t3k_dense_target``; every other (SKU, variant) keeps the bare
+# ``ttnn.linear`` it runs today.
+
+# L1 budget for a prefill activation or matmul in0. What keeps short ISL
+# resident in L1 without OOMing a long prefill.
+_PREFILL_L1_TENSOR_MAX_BYTES = 4 * 1024 * 1024
+
+
+def prefill_in0_fits_l1(rows, k) -> bool:
+    """Whether a ``[rows, k]`` bf16 activation fits the prefill L1 budget."""
+    return int(rows) * int(k) * 2 <= _PREFILL_L1_TENSOR_MAX_BYTES
+
+
+def hoist_prefill_in0(tensor, hoist: bool):
+    """Move a matmul's in0 to L1 interleaved so a tuned config reads it from L1.
+
+    Returns ``(activation, owned)``, where ``owned`` is the copy the caller must
+    deallocate, or None when the input was handed back untouched -- already in
+    L1, sharded, or not worth moving.
+    """
+    if not hoist or tensor.is_sharded() or tensor.memory_config().buffer_type == ttnn.BufferType.L1:
+        return tensor, None
+    activation = ttnn.to_memory_config(tensor, ttnn.L1_MEMORY_CONFIG)
+    return activation, activation
+
+
+def is_t3k_dense_target(mesh_device, config) -> bool:
+    """True for dense Gemma4 12B / 31B on a full Wormhole T3K (1x8, 8x8 grid).
+
+    The tuned prefill program configs below were measured on that one system and
+    on those two variants only. Every other CI leg -- all Blackhole SKUs, N150,
+    N300, an x2-harvested T3K (8x7 grid), the MoE 26B-A4B and the
+    per-layer-input E2B / E4B -- fails this gate and takes the untuned path
+    byte-identically to today.
+
+    The two config predicates are what separate 12B / 31B from their siblings:
+    26B-A4B is the only MoE variant, and E2B / E4B are the only ones carrying
+    per-layer input embeddings (``hidden_size_per_layer_input`` 256 vs 0).
+    """
+    if bool(getattr(config, "enable_moe_block", False)):
+        return False
+    if int(getattr(config, "hidden_size_per_layer_input", 0) or 0):
+        return False
+    if is_blackhole():
+        return False
+    try:
+        if mesh_device.get_num_devices() != 8:
+            return False
+        grid = mesh_device.compute_with_storage_grid_size()
+    except (AttributeError, RuntimeError):
+        return False
+    return (grid.x, grid.y) == (8, 8)
+
+
+def matmul_rows(x):
+    """Row count a matmul sees: the product of every leading dim, not shape[-2].
+
+    Prefill with batch>1 reshapes activations to [B, 1, S, K] (see DecoderLayer),
+    so shape[-2] alone would disagree with the tensor's volume.
+    """
+    rows = 1
+    for i in range(len(x.shape) - 1):
+        rows *= int(x.shape[i])
+    return rows
+
+
+def in_prefill_l1_matmul_band(m: int) -> bool:
+    """Rows for which a tuned single-shot 2D prefill config exists.
+
+    Opens *above* one tile: at m <= 32 (a short prompt's whole prefill, a
+    last-token slice, or a decode step) every builder below declines and the
+    call site falls back to the bare ttnn.linear it uses today.
+    """
+    return TILE_SIZE < int(m) <= _PREFILL_CUTOFF
+
+
+def should_prefill_long_2d(m: int) -> bool:
+    """Rows tall enough to need the batched-reshape matmul instead of one shot."""
+    return int(m) > _PREFILL_CUTOFF and int(m) % _PREFILL_CUTOFF == 0
+
+
+def _prefill_hifi2_ckc():
+    return ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=True,
+    )
+
+
+def _prefill_hifi4_ckc():
+    """Short-prefill tuned paths must not silently inherit LoFi."""
+    return ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=True,
+    )
+
+
+_L1_FALLBACK_SHAPES: set[tuple[int, int, int]] = set()
+
+
+def linear_l1_safe(x, weight, *, program_config=None, memory_config=None, compute_kernel_config=None):
+    """Use a tuned config when it fits, caching the auto fallback on L1 overflow.
+
+    A program config's circular buffers depend on the compute grid as well as
+    the shape, so a config that fits every shape we measured can still overflow
+    on one we did not. Falling back per shape keeps the tuned path everywhere
+    else instead of killing the run.
+    """
+    if program_config is None:
+        return ttnn.linear(x, weight, memory_config=memory_config, compute_kernel_config=compute_kernel_config)
+
+    key = (matmul_rows(x), int(x.shape[-1]), int(weight.shape[-1]))
+    if key not in _L1_FALLBACK_SHAPES:
+        try:
+            return ttnn.linear(
+                x,
+                weight,
+                program_config=program_config,
+                memory_config=memory_config,
+                compute_kernel_config=compute_kernel_config,
+            )
+        except RuntimeError as error:
+            if "circular buffer" not in str(error).lower():
+                raise
+            _L1_FALLBACK_SHAPES.add(key)
+            logger.warning(f"Gemma4 tuned matmul {key} exceeded L1; using ttnn auto for this shape")
+    return ttnn.linear(x, weight, memory_config=memory_config, compute_kernel_config=compute_kernel_config)
+
+
+def prefill_linear_above_cutoff(x, weight, *, out_memory_config=None):
+    """Reshape tall matmuls so their program's circular buffers stay cutoff-sized.
+
+    A single-shot 2D matmul's CBs scale with per_core_M, so at long context
+    (M = chunk size, 2048 and up) they overflow L1. Reshape
+    [1, 1, M, K] -> [1, M/cutoff, cutoff, K] and run ONE batched matmul sized to
+    the cutoff: the kernel iterates the extra batch dim reusing its CBs, which a
+    chunk-and-concat could not do without holding source and destination at once.
+    """
+    out_mc = out_memory_config if out_memory_config is not None else ttnn.DRAM_MEMORY_CONFIG
+    x_shape = [int(x.shape[i]) for i in range(len(x.shape))]
+    orig_leading = x_shape[:-1]
+    n_in = x_shape[-1]
+    m = matmul_rows(x)
+    n_out = int(weight.shape[-1])
+    flat = [1, 1, m, n_in]
+    x_work = x if x_shape == flat else ttnn.reshape(x, flat)
+
+    def restore(out):
+        wanted = (*orig_leading, int(out.shape[-1]))
+        actual = tuple(int(out.shape[i]) for i in range(len(out.shape)))
+        return out if actual == wanted else ttnn.reshape(out, wanted)
+
+    if not should_prefill_long_2d(m):
+        return restore(ttnn.linear(x_work, weight, memory_config=out_mc))
+
+    batch = m // _PREFILL_CUTOFF
+    reshaped = ttnn.reshape(x_work, (1, batch, _PREFILL_CUTOFF, n_in))
+    program_config = prefill_progcfg(_PREFILL_CUTOFF, n_in, n_out)
+    output = linear_l1_safe(
+        reshaped,
+        weight,
+        program_config=program_config,
+        memory_config=out_mc,
+        compute_kernel_config=_prefill_hifi2_ckc(),
+    )
+    return restore(ttnn.reshape(output, (1, 1, m, int(output.shape[-1]))))
+
+
+def interleaved_prefill_config(m, k, n):
+    """Shape-gated QKV prefill config for an interleaved weight."""
+    if not in_prefill_l1_matmul_band(m):
+        return None, None
+    return prefill_progcfg(m, k, n), _prefill_hifi4_ckc()
+
+
+def _out_subblock_hw(per_core_n, per_core_m):
+    best = (1, 1)
+    for height in range(1, min(per_core_m, 4) + 1):
+        if per_core_m % height:
+            continue
+        for width in range(1, min(per_core_n, 4 // height) + 1):
+            if per_core_n % width == 0 and height * width > best[0] * best[1]:
+                best = (height, width)
+    return best
+
+
+def _factor_1d_grid(cores, grid_x, grid_y):
+    cols = min(grid_x, cores)
+    while cols > 1 and cores % cols:
+        cols -= 1
+    rows = cores // cols
+    return (cols, rows) if 1 <= rows <= grid_y else None
+
+
+def _pick_1d_cores(n_tiles, grid_x, grid_y, prefer=42):
+    candidates = [
+        cores
+        for cores in range(8, grid_x * grid_y + 1)
+        if n_tiles % cores == 0 and _factor_1d_grid(cores, grid_x, grid_y) is not None
+    ]
+    if not candidates:
+        return None
+    if prefer in candidates:
+        return prefer
+    return max(candidates, key=lambda cores: (-abs(cores - prefer), cores))
+
+
+def prefill_progcfg_1d(m, k, n, cores=None, in0_block_w=None, grid_size=None, fuse_batch=False):
+    """1D-mcast prefill config, or None when no legal core factorization exists."""
+    if grid_size is None:
+        grid_size = prefill_grid_default()
+    grid_x, grid_y = grid_size
+    m_tiles, k_tiles, n_tiles = math.ceil(m / TILE_SIZE), math.ceil(k / TILE_SIZE), math.ceil(n / TILE_SIZE)
+    cores = cores or _pick_1d_cores(n_tiles, grid_x, grid_y)
+    if cores is None or n_tiles % cores:
+        return None
+    factored = _factor_1d_grid(cores, grid_x, grid_y)
+    if factored is None:
+        return None
+    cols, rows = factored
+    in0_block_w = in0_block_w or _find_largest_divisor(k_tiles, max_div=4)
+    if k_tiles % in0_block_w:
+        return None
+    per_core_n = n_tiles // cores
+    out_h, out_w = _out_subblock_hw(per_core_n, m_tiles)
+    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(cols, rows),
+        in0_block_w=in0_block_w,
+        out_subblock_h=out_h,
+        out_subblock_w=out_w,
+        per_core_M=m_tiles,
+        per_core_N=per_core_n,
+        fuse_batch=fuse_batch,
+        fused_activation=None,
+        mcast_in0=True,
+        gather_in0=False,
+        hop_cores=ttnn.CoreRangeSet(set()),
+        num_global_cb_receivers=0,
+        untilize_out=False,
+    )
+
+
+def interleaved_mlp_prefill_config(m, k, n):
+    """Short-prefill 1D config for the SharedMLP gate_up / down projections."""
+    if not in_prefill_l1_matmul_band(m):
+        return None, None, None
+    # M<=128 and K<5376 (12B short prefill). 1D at K>=5376 hung decode.
+    if int(m) > 128 or int(k) >= 5376:
+        return None, None, None
+    # For TP-sharded widths (31B TP=8 -> n=5376). Full-width TP=1 fused
+    # gate+up (n~43k) overflows Wormhole L1 CBs and falls back dirty.
+    if int(n) > 8192:
+        return None, None, None
+    program_config = prefill_progcfg_1d(m, k, n)
+    if program_config is None:
+        return None, None, None
+    out_memcfg = ttnn.L1_MEMORY_CONFIG if prefill_in0_fits_l1(m, n) else ttnn.DRAM_MEMORY_CONFIG
+    return program_config, out_memcfg, _prefill_hifi4_ckc()
 
 
 class DramShardedLinear:
