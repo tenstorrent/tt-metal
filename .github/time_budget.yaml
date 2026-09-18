@@ -161,7 +161,7 @@ train:
     bh_p100: 180
     bh_p150b_civ2: 400
   e2e_tier3:
-    bh_sc1_high_power: 140
+    bh_sc1_high_power: 300
 
 ttsim:
   merge_gate:
