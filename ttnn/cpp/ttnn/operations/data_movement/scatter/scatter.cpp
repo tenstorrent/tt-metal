@@ -143,16 +143,9 @@ void check_support(
         source_shape[dim]);
 }
 
-// The reader kernel walks the input tensor's leading axes one coordinate at a time and maps each
-// coordinate straight onto the index tensor's own leading axes (reader_scatter.cpp: in_bounds()
-// against index_dims, then to_id() with index_strides), so every leading axis of the input must
-// line up with the same axis of the index. Padding a rank < 4 tensor up to 4D only prepends 1s, so
-// the axes still line up; collapsing a rank > 4 tensor down to 4D does not - it fuses dims
-// [0 .. rank-4] into a single linear id, and scatter deliberately allows index_shape[d] <
-// input_shape[d] for every d != dim, so the two tensors generally fuse with different extents and
-// the same fused id then names a different element in each. Leave rank >= 4 alone and let the
-// kernel address the leading axes individually (both program factories already emit one shape
-// vararg per leading dim of each tensor). See issue #56876.
+// The reader maps each leading axis of the input onto the same axis of the index, so the two must
+// line up per axis. Prepending 1s keeps that; folding rank > 4 down to 4D does not, because each
+// tensor fuses its leading dims with its own extents. See #56876.
 Tensor pad_rank_up_to_4d(const Tensor& input_tensor) {
     return (input_tensor.logical_shape().rank() < 4) ? ttnn::operations::core::unsqueeze_to_4D(input_tensor)
                                                      : input_tensor;
@@ -163,15 +156,9 @@ Tensor pre_scatter_transform_tensor(
     const int8_t dim,
     const bool is_dim_last_idx,
     const std::optional<Shape>& index_shape = std::nullopt) {
-    // Deliberately does NOT short-circuit Shape{1}: this function runs once per operand, so
-    // returning a rank-1 tensor early left it at rank 1 while its siblings were padded to rank 4.
-    // The reader takes its stride count from the input rank alone and reads index_dims at that
-    // width, so a rank-4 input against a rank-1 index read three shape varargs the factory never
-    // wrote and skipped the scatter for every stick. Shape{1} is an ordinary rank-1 tensor and the
-    // transform below handles it: dim == 0 == rank-1 makes the transpose a no-op and the padding
-    // takes it to (1,1,1,1), matching its siblings.
-    // The Shape{0} arm is kept as-is but is inert: it only skips the transform, and the factory
-    // still divides by the zero last dim, so a zero extent SIGFPEs either way - see #56881.
+    // Shape{1} is deliberately not short-circuited: this runs once per operand, and every operand
+    // has to reach the kernel at the same rank (#56876). The Shape{0} arm is inert - a zero last
+    // dim divides by zero in the factory whether or not this returns early (#56881).
     if (input_tensor.logical_shape() == ttnn::Shape{0}) {
         return input_tensor;
     }
@@ -202,9 +189,7 @@ Tensor post_scatter_transform_tensor(
     const Layout& original_layout) {
     const auto orig_rank = original_logical_shape.rank();
 
-    // Only the padding applied on the way in has to be undone. Rank >= 4 was passed through
-    // untouched, so the device output already carries the post-transpose shape and there is
-    // nothing to restore before the transpose below.
+    // Only the padding applied on the way in needs undoing; rank >= 4 went through untouched.
     if (orig_rank == 1) {
         output_tensor = ttnn::reshape(output_tensor, original_logical_shape);
     } else if (orig_rank < 4) {
