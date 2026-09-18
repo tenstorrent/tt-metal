@@ -49,7 +49,7 @@ class Gemma4PrefillAdapter(PrefillModelAdapter):
 
     @property
     def hf_model_id(self):
-        return os.environ.get("PREFILL_HF_MODEL") or os.environ.get("HF_MODEL") or self.hf_model_default
+        return self.hf_model_default
 
     def load_hf_config(self):
         from models.demos.gemma4_d_p.tt.model_config import Gemma4ModelArgs, validate_31b_config
