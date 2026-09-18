@@ -38,6 +38,15 @@ _LATENT_CHANNELS = 16
 _DEFAULT_CHECKPOINT = "Motif-Technologies/Motif-Image-6B-Preview"
 
 _PRESETS: dict[tuple[int, ...], dict] = {
+    # 4-chip BH QuietBox 2 (p300x2): the 2x4 preset with tensor-parallel halved.
+    (2, 2): {
+        "cfg": (2, 0),
+        "sp": (1, 0),
+        "tp": (2, 1),
+        "encoder_tp": (2, 1),
+        "vae_tp": (2, 1),
+        "num_links": 1,
+    },
     (2, 4): {
         "cfg": (2, 0),
         "sp": (1, 0),
