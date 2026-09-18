@@ -1,0 +1,176 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+from types import SimpleNamespace
+
+import numpy as np
+import pytest
+import torch
+from safetensors.torch import save_file
+
+import ttnn
+from models.demos.common.prefill.runners import migration_driver, prefill_producer
+from models.demos.gemma4_d_p.tt.attention.ring_prefill import GlobalRingKVCache, SlidingRingKVCache
+from models.demos.gemma4_d_p.tt.runners.adapter import Gemma4PrefillAdapter, Gemma4ServiceConfig
+from models.demos.gemma4_d_p.tt.runners.kv_caches import Gemma4KvCaches
+from models.demos.gemma4_d_p.tt.runners.kv_chunk_table import build_kv_chunk_address_table
+from models.demos.gemma4_d_p.tt.runners.kv_validation import cache_pcc, read_slot_kv_and_check_pcc
+from models.demos.gemma4_d_p.tt.runners.runtime import Gemma4PrefillRuntime
+
+
+@pytest.fixture
+def caches_and_mesh():
+    address = 0
+
+    def tensor():
+        nonlocal address
+        address += 0x100000
+        base = address
+        return SimpleNamespace(dtype=ttnn.bfloat8_b, buffer_address=lambda: base)
+
+    caches = Gemma4KvCaches(
+        layers=[SlidingRingKVCache(tensor(), tensor()) for _ in range(5)] + [GlobalRingKVCache(tensor())],
+        layer_types=("sliding_attention",) * 5 + ("full_attention",),
+        num_users=6,
+        max_seq_len=256,
+        cp=8,
+        tp=4,
+    )
+    mesh = SimpleNamespace(
+        shape=(8, 4),
+        dram_grid_size=lambda: SimpleNamespace(x=8),
+        get_fabric_node_id=lambda coordinates: ttnn.FabricNodeId(ttnn.MeshId(0), coordinates[0] * 4 + coordinates[1]),
+    )
+    return caches, mesh
+
+
+def test_migration_stages_preserve_each_tensor_and_semantic_layer(caches_and_mesh, monkeypatch, expect_error):
+    caches, mesh = caches_and_mesh
+    runtime = Gemma4PrefillRuntime.__new__(Gemma4PrefillRuntime)
+    runtime.config = SimpleNamespace(num_layers=6, chunk_size=256)
+    runtime.mesh_device = mesh
+    monkeypatch.setattr(runtime, "_check_cache", lambda supplied: None)
+    stages = runtime.kv_migration_stages(caches, 0, 6)
+    assert [(stage.first_layer, stage.count) for stage in stages] == [
+        (layer, 1) for layer in range(5) for _ in range(2)
+    ] + [(5, 1)]
+    assert len({stage.base_addr for stage in stages}) == 11
+    with expect_error(ValueError, "all layers on one rank"):
+        runtime.kv_migration_stages(caches, 1, 5)
+    with expect_error(ValueError, "one stage per cache tensor"):
+        runtime.build_kv_chunk_table(caches, "unused.pb", stage_layouts=[])
+    layouts = [[dict(rank=0, base_addr=stage.base_addr, first_layer=stage.first_layer, count=1)] for stage in stages]
+    layouts[0][0]["base_addr"] += 32
+    with expect_error(ValueError, "does not match"):
+        runtime.build_kv_chunk_table(caches, "unused.pb", stage_layouts=layouts)
+
+
+def test_loopback_byte_check_covers_all_configs_and_detects_corruption(caches_and_mesh, monkeypatch, tmp_path):
+    caches, mesh = caches_and_mesh
+    table = build_kv_chunk_address_table(mesh_device=mesh, kv_caches=caches, chunk_size=256)
+    table_path = str(tmp_path / "table.pb")
+    ttnn.experimental.disaggregation.export_to_protobuf_file(table, table_path)
+    table = ttnn.experimental.disaggregation.import_from_protobuf_file(table_path)
+    monkeypatch.setattr(prefill_producer, "ADAPTER", Gemma4PrefillAdapter())
+    monkeypatch.setattr(prefill_producer, "NUM_LAYERS", 6)
+    monkeypatch.setattr(prefill_producer, "_resolve_unique_id", lambda nodes, mapping: int(nodes[0].chip_id))
+    memory = {}
+    pairs = [(0, 5, 256), (1, 3, 256), (2, 4, 256)]
+    adapter = Gemma4PrefillAdapter()
+    plan = migration_driver._cache_plan(table, None)
+    assert len(plan) == 36
+    assert [len(entry["rows"]) for entry in plan] == [1] * 4 + [5] * 32
+    for source, destination, length in pairs:
+        for config in range(36):
+            for layer in adapter.cache_layer_rows(config, 6):
+                for position in range(0, length, 32):
+                    for slot in (source, destination):
+                        location = table.lookup(layer, position, slot, config)
+                        node = table.get_device_group(location.device_group_index).fabric_node_ids[0]
+                        memory[int(node.chip_id), location.noc_addr] = bytes(
+                            [source + 1, layer, config, position // 32]
+                        )
+    monkeypatch.setattr(
+        ttnn.experimental.disaggregation, "read_dram_umd", lambda uid, address, size: memory[uid, address]
+    )
+    assert migration_driver._verify_dst_vs_src_bytes(table, {}, pairs, None)
+    location = table.lookup(4, 224, 4, 35)
+    node = table.get_device_group(location.device_group_index).fabric_node_ids[0]
+    memory[int(node.chip_id), location.noc_addr] = b"corrupted"
+    assert not migration_driver._verify_dst_vs_src_bytes(table, {}, pairs, None)
+
+
+def encode_integer_bfp8(rows):
+    tiles = rows.numpy().reshape(32, -1, 32).transpose(1, 0, 2)
+    faces = tiles.reshape(-1, 2, 16, 2, 16).transpose(0, 1, 3, 2, 4).reshape(-1, 1024)
+    raw = np.empty((len(tiles), 1088), dtype=np.uint8)
+    raw[:, :64] = 133
+    raw[:, 64:] = np.abs(faces).astype(np.uint8) | ((faces < 0).astype(np.uint8) << 7)
+    return raw.tobytes()
+
+
+def test_shared_producer_checks_packed_global_and_sliding_kv(caches_and_mesh, monkeypatch, tmp_path):
+    caches, mesh = caches_and_mesh
+    table = build_kv_chunk_address_table(mesh_device=mesh, kv_caches=caches, chunk_size=256)
+    monkeypatch.setattr(Gemma4ServiceConfig, "NUM_LAYERS", 6)
+    monkeypatch.setattr(prefill_producer, "ADAPTER", Gemma4PrefillAdapter())
+    monkeypatch.setattr(prefill_producer, "_resolve_unique_id", lambda nodes, mapping: int(nodes[0].chip_id))
+    monkeypatch.delenv("PREFILL_PCC_GOLDEN_LEN", raising=False)
+    (tmp_path / "kv_cache").mkdir()
+    memory = {}
+    for layer in range(6):
+        heads, width = (4, 512) if layer == 5 else (16, 256)
+        key = (torch.arange(heads * 32 * width).reshape(1, heads, 32, width) % 113 - 56).float()
+        value = (key * 3 + 7).remainder(107) - 53
+        save_file(
+            {f"key_cache_layer_{layer}": key, f"value_cache_layer_{layer}": value},
+            str(tmp_path / "kv_cache" / f"layer_{layer}.safetensors"),
+        )
+        if layer == 5:
+            rotary = torch.stack((torch.arange(64), torch.arange(256, 320)), dim=1).flatten()
+            values = torch.cat(
+                (torch.arange(64, 256), torch.arange(320, 512), torch.arange(64), torch.arange(256, 320))
+            )
+            expected = torch.cat((key[0, ..., rotary], value[0, ..., values]), dim=-1)
+            entries = {head: expected[head] for head in range(4)}
+        else:
+            order = torch.stack((torch.arange(128), torch.arange(128, 256)), dim=1).flatten()
+            entries = {
+                **{4 + head: key[0, head, :, order] for head in range(16)},
+                **{20 + head: value[0, head] for head in range(16)},
+            }
+        for config, rows in entries.items():
+            location = table.lookup(layer, 0, 0, config)
+            node = table.get_device_group(location.device_group_index).fabric_node_ids[0]
+            memory[int(node.chip_id), location.noc_addr] = encode_integer_bfp8(rows)
+    monkeypatch.setattr(
+        ttnn.experimental.disaggregation, "read_dram_umd", lambda uid, address, size: memory[uid, address]
+    )
+    scores = prefill_producer._read_slot_kv_and_check_pcc(table, {}, 0, 32, tmp_path)
+    assert scores == {"global_k_rotary": 1.0, "global_v": 1.0, "sliding_k": 1.0, "sliding_v": 1.0}
+    location = table.lookup(5, 0, 0, 3)
+    node = table.get_device_group(location.device_group_index).fabric_node_ids[0]
+    memory[int(node.chip_id), location.noc_addr] = bytes(location.size_bytes)
+    assert read_slot_kv_and_check_pcc(table, {}, 0, 32, tmp_path)["global_v"] == 0.0
+
+
+def test_pcc_rejects_nonfinite_values(expect_error):
+    with expect_error(ValueError, "finite"):
+        cache_pcc(torch.ones(32), torch.full((32,), float("nan")))
+
+
+def test_golden_capture_saves_tokens_before_sliding_eviction(tmp_path):
+    from safetensors.torch import load_file
+
+    from models.demos.gemma4_d_p.scripts.generate_golden_kv_cache import RecordingCache
+
+    config = SimpleNamespace(layer_types=["sliding_attention"], sliding_window=4)
+    cache = RecordingCache(config, tmp_path)
+    first = torch.arange(12).reshape(1, 1, 6, 2).float()
+    cache.update(first, first + 1, 0)
+    cache.part = 1
+    second = torch.arange(6).reshape(1, 1, 3, 2).float() + 20
+    cache.update(second, second + 1, 0)
+    assert cache.layers[0].keys.shape[2] == 3
+    torch.testing.assert_close(load_file(str(tmp_path / "layer_0_part_0.safetensors"))["key"], first)
+    torch.testing.assert_close(load_file(str(tmp_path / "layer_0_part_1.safetensors"))["key"], second)
