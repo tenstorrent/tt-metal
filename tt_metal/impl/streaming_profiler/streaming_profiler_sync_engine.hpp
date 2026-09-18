@@ -285,7 +285,7 @@ public:
 
     // Starts over on a capture's links; `ctx` must outlive the solver's use of it.
     void reset(const CaptureContext& ctx);
-    // A link stamp: paired into its round, and once the round is complete the link is re-solved if its window is due.
+    // A link stamp: paired into its round, and once the round is complete the link is re-solved over its window.
     void on_stamp(const ClockSample& s);
     // Every link solved over whatever its window holds.
     void solve_final();
@@ -347,12 +347,10 @@ private:
     uint64_t dropped_ = 0;
     // Refclk ticks per stamp unit: the kernels report a round's stamp averages in kLinkSyncStampUnitsPerNs per ns.
     static constexpr double kRefclkPerStampUnit = 1.0 / (kernel_profiler::kLinkSyncStampUnitsPerNs * kNsPerRefclk);
-    // The link solve's window in the sender chip's refclk, re-solved every half window. Two chips' crystals hold a
-    // line to ~0.4 ns over 250 ms and their rate moves a few ppb from one such window to the next (measured on the
-    // 8-chip runs), so a fit extrapolated half a window past its end stays within ~0.4 ns rms and doubles that at
-    // 500 ms. The rounds inside the window only average the fit's own noise, ~0.1 ns at 100 Hz.
+    // The link solve's window in the sender chip's refclk, re-solved as each round completes so the live solution
+    // ends at the newest round. Two chips' crystals hold a line to ~0.4 ns over this long (measured on the 8-chip
+    // runs); the ~25 rounds inside average the stamps' 0.3 ns to under 0.1 ns, and a longer window measured no better.
     static constexpr double kLinkWindowTicks = 12'500'000.0;  // 250 ms
-    static constexpr double kFirstSolveTicks = 10'000'000.0;  // 200 ms of rounds before the first live solution
     static constexpr size_t kMinSolveRounds = 8;
     static constexpr size_t kPendingMax = 4096;
 };

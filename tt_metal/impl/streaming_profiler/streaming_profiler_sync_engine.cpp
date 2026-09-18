@@ -429,10 +429,7 @@ void LinkSolver::try_solve_links(bool final) {
         }
         const auto pos = [](const Round& r) { return mid_a_refclk(r); };
         const double newest = pos(rounds[n - 1]);
-        // Live: the first solution once kFirstSolveTicks of rounds are in, so held records are released, then one
-        // every half window. Final: whatever the window holds, if it is enough for a fit at all.
-        if (!final && (out.ok ? newest < out.solved_at_refclk + kLinkWindowTicks / 2
-                              : newest - pos(rounds[0]) < kFirstSolveTicks)) {
+        if (!final && newest <= out.solved_at_refclk) {
             continue;
         }
         size_t begin = n;
@@ -460,6 +457,9 @@ void LinkSolver::try_solve_links(bool final) {
         if (solve_link(L, std::move(pts), out)) {
             out.rounds = w;
             gen_++;
+            if (!final) {
+                continue;
+            }
             log_info(
                 tt::LogMetal,
                 "[streaming profiler] d2d sync link chip {} -> chip {}: solved at round {} over {} ({} kept): offset "
