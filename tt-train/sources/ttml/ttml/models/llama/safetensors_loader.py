@@ -289,14 +289,21 @@ def _check_sources(rules: Sequence[_Rule], checkpoint_names: frozenset[str]) -> 
     """Every source must exist before anything is read or assigned, so a bad checkpoint fails whole."""
     missing = {rule.param: [s for s in rule.sources if s not in checkpoint_names] for rule in rules}
     missing = {param: sources for param, sources in missing.items() if sources}
-    if not missing:
-        return
+    if missing:
+        detail = "".join(
+            f"\n  {param}: the checkpoint has no {', '.join(sources)}" for param, sources in missing.items()
+        )
+        hint = ""
+        if "embed_tokens.weight" in checkpoint_names and all(s == ["lm_head.weight"] for s in missing.values()):
+            hint = "\nA tied checkpoint ships no lm_head.weight; load it with weight_tying=Enabled."
+        raise RuntimeError(f"the checkpoint lacks tensors the model needs:{detail}{hint}")
 
-    detail = "".join(f"\n  {param}: the checkpoint has no {', '.join(sources)}" for param, sources in missing.items())
-    hint = ""
-    if "embed_tokens.weight" in checkpoint_names and all(s == ["lm_head.weight"] for s in missing.values()):
-        hint = "\nA tied checkpoint ships no lm_head.weight; load it with weight_tying=Enabled."
-    raise RuntimeError(f"the checkpoint lacks tensors the model needs:{detail}{hint}")
+    consumed = {source for rule in rules for source in rule.sources}
+    if "lm_head.weight" in checkpoint_names and "lm_head.weight" not in consumed:
+        raise RuntimeError(
+            "the checkpoint ships lm_head.weight, which a weight-tied model has no parameter for; "
+            "load it with weight_tying=Disabled."
+        )
 
 
 def load_from_safetensors(

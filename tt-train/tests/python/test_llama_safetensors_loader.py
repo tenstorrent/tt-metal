@@ -24,6 +24,7 @@ from ttml.models.llama.safetensors_loader import (
     _assemble,
     _canonical,
     _check_coverage,
+    _check_sources,
     _fit,
     _pad_to,
     _rules,
@@ -365,6 +366,33 @@ class TestCoverage:
         config, names = coverage_config(weight_tying=WeightTyingType.Enabled), param_names(_PER_LAYER_FUSED)
         with expect_error(RuntimeError, "no rule feeds       Llama/tok_emb/weight"):
             _check_coverage(names, list(_rules(config, names)), frozenset())
+
+
+class TestSources:
+    """Device-free: ``_check_sources`` sees only names."""
+
+    @staticmethod
+    def sources_of(rules):
+        return frozenset(source for rule in rules for source in rule.sources)
+
+    def test_a_missing_source_names_its_parameter(self, expect_error):
+        config, names = coverage_config(), param_names(_PER_LAYER_FUSED)
+        rules = list(_rules(config, names))
+        with expect_error(RuntimeError, r"blocks/0/mlp/w_gate_up/weight: the checkpoint has no .*up_proj.weight"):
+            _check_sources(rules, self.sources_of(rules) - {"layers.0.mlp.up_proj.weight"})
+
+    def test_tied_checkpoint_on_an_untied_model_says_to_tie(self, expect_error):
+        config, names = coverage_config(weight_tying=WeightTyingType.Disabled), param_names(_PER_LAYER_FUSED)
+        rules = list(_rules(config, names))
+        with expect_error(RuntimeError, "load it with weight_tying=Enabled"):
+            _check_sources(rules, self.sources_of(rules) - {"lm_head.weight"})
+
+    def test_untied_checkpoint_on_a_tied_model_says_to_untie(self, expect_error):
+        config = coverage_config(weight_tying=WeightTyingType.Enabled)
+        names = param_names(_PER_LAYER_FUSED) - {"Llama/fc/weight"}
+        rules = list(_rules(config, names))
+        with expect_error(RuntimeError, "load it with weight_tying=Disabled"):
+            _check_sources(rules, self.sources_of(rules) | {"lm_head.weight"})
 
 
 # ── End-to-end: a synthetic HF checkpoint through the real loader ──
