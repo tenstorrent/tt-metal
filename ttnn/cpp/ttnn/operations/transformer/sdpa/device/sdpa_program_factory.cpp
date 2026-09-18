@@ -73,9 +73,8 @@ tt::DataFormat select_mask_dataformat(const std::optional<Tensor>& attn_mask, bo
     return use_streaming_compute ? tt::DataFormat::Float16_b : tt::DataFormat::Bfp4_b;
 }
 
-// Streaming compute (v2) handles every SDPA variant; only fp32 dest-accumulate falls back to the
-// legacy compute kernel.
-bool can_use_streaming_compute(bool fp32_dest_acc_en) { return !fp32_dest_acc_en; }
+// Streaming compute (v2) handles every SDPA variant, with fp32 DEST accumulation when the flag is on.
+bool can_use_streaming_compute(bool /*fp32_dest_acc_en*/) { return true; }
 
 uint32_t lightweight_mask_tile_count(bool is_causal, bool has_sliding_window, bool has_k_partial_mask) {
     uint32_t tiles = 1;  // neginf
@@ -780,8 +779,10 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     tt::DataFormat im_df =
         tt::DataFormat::Float16_b;  // Keep most intermediates in bf16 to save L1; opt-in fp32 per-CB below.
     tt::DataFormat stats_df = im_df;
+    // With the flag on the QK scores stay fp32 between the matmul and the softmax on both kernels; the
+    // streaming kernel keeps its row sums in im_df because the fused rescale packs sum and out together.
     tt::DataFormat qk_im_df = fp32_dest_intermediate_dataformat(fp32_dest_acc_en);
-    tt::DataFormat sum_df = fp32_dest_intermediate_dataformat(fp32_dest_acc_en);
+    tt::DataFormat sum_df = fp32_dest_intermediate_dataformat(fp32_dest_acc_en && !use_streaming_compute);
     // salad_correct_fused inits mul_bcast_cols with out CB and applies it to sum CB too —
     // both must share the same data format for the unpack config to be correct.
     TT_ASSERT(
