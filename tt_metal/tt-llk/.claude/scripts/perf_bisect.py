@@ -285,9 +285,12 @@ def patch_runner(
     import re
 
     if stable_groups is not None:
+        # Set on the consumer invocation alone. Exported for the whole script it
+        # would also group the producer, which builds ELFs on the CPU and never
+        # touches a Tensix -- pure cost, no benefit.
         body = body.replace(
-            "mkdir -p perf_data",
-            f"export PERF_STABLE_GROUPS={stable_groups}\nmkdir -p perf_data",
+            "pytest $PYTEST_RUN_EXTRA",
+            f"PERF_STABLE_GROUPS={stable_groups} pytest $PYTEST_RUN_EXTRA",
             1,
         )
     if dist is not None:
@@ -295,8 +298,9 @@ def patch_runner(
         # moves with worker timing. A scope-based mode assigns whole files, and
         # with 12 modules over 15 workers each module starts on its own worker --
         # so a test's predecessors are the same in every run.
+        # Consumer only, for the same reason.
         body = body.replace(
-            '-m "perf and not accuracy"', f'--dist {dist} -m "perf and not accuracy"'
+            "--compile-consumer", f"--compile-consumer --dist {dist}", 1
         )
     if run_count is not None:
         body = body.replace(
@@ -468,6 +472,9 @@ def variant_key(sha, args):
         key += f"+{short(git('rev-parse', args.apply))}"
     if getattr(args, "maxschedchunk", None) is not None:
         key += f"+chunk{args.maxschedchunk}"
+    tag = getattr(args, "tag", None)
+    if tag:
+        key += f"+{tag}"
     arch = getattr(args, "arch", None)
     if arch and arch != "blackhole":
         key += f"+{arch[:2]}"
@@ -488,7 +495,13 @@ def variant_key(sha, args):
 
 
 def push_branch(
-    sha, index, maxschedchunk=None, apply_ref=None, runner_opts=None, arch=None
+    sha,
+    index,
+    maxschedchunk=None,
+    apply_ref=None,
+    runner_opts=None,
+    arch=None,
+    tag=None,
 ):
     """One branch per run, because the workflow cancels its own concurrency group.
 
@@ -500,6 +513,8 @@ def push_branch(
     suffix = "" if maxschedchunk is None else f"-c{maxschedchunk}"
     if arch and arch != "blackhole":
         suffix = f"-{arch[:2]}{suffix}"
+    if tag:
+        suffix += f"-{tag}"
     if apply_ref:
         suffix = f"-{short(git('rev-parse', apply_ref))[:7]}{suffix}"
     if runner_opts:
@@ -552,6 +567,7 @@ def start_runs(sha, count, args_ns=None):
             getattr(args_ns, "apply", None),
             runner_opts_of(args_ns) if args_ns else None,
             getattr(args_ns, "arch", None) if args_ns else None,
+            getattr(args_ns, "tag", None) if args_ns else None,
         )
         before = {r["databaseId"] for r in runs_on(branch)}
         args = ["gh", "workflow", "run", WORKFLOW, "--repo", REPO, "--ref", branch]
@@ -921,6 +937,12 @@ def main(argv=None):
         type=int,
         help="replace the shard split; group 1 runs that slice and every other "
         "group exits, so one card runs one sequence",
+    )
+    ap.add_argument(
+        "--tag",
+        help="label this measurement, so the same configuration can be run "
+        "more than once. It joins the cache key and the branch name, which is "
+        "how repeats get their own result instead of a cache hit",
     )
     ap.add_argument(
         "--stable-groups",
