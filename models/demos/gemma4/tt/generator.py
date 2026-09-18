@@ -13,6 +13,7 @@ import ttnn
 from models.common.sampling import SamplingParams, slice_sampling_params
 from models.demos.gemma4.tt.async_decode import merge_async_ahead_decode_tokens
 from models.demos.gemma4.tt.common import create_tt_model
+from models.demos.gemma4.tt.dram_sharded import is_t3k_dense_target
 from models.demos.gemma4.tt.generator_trace import (
     GEMMA4_MAX_TRACE_PREFILL_SEQ_LEN,
     apply_gemma4_prefill_trace_policy,
@@ -232,6 +233,38 @@ def _patch_model_args(
         return tokenizer.encode(prompt, add_special_tokens=True)
 
     model_args.encode_prompt = _encode_prompt
+
+
+def _gemma4_stop_tokens(tokenizer, model_path, mesh_device, model_args):
+    """Every id in the checkpoint's ``generation_config.eos_token_id``.
+
+    Gemma-4 declares three (``[1, 106, 50]`` on both 12B-it and 31B-it): ``<eos>``
+    plus the turn terminators an instruct checkpoint actually emits.
+    ``tokenizer.eos_token_id`` is only the first, so the stop test never fires on
+    106 or 50: generation runs to max_generated_tokens and the tail fills with
+    ``<end_of_turn>`` and the opening of a fresh turn, appended to an answer that
+    was already complete and correct.
+
+    Gated to the same dense 12B/31B Wormhole T3K target as the tuned prefill
+    path. Reading the extra ids is right everywhere, but which ids terminate a
+    generation is visible in every demo's output, so no other variant or device
+    changes here.
+    """
+    fallback = [tokenizer.eos_token_id]
+    if not is_t3k_dense_target(mesh_device, model_args):
+        return fallback
+    try:
+        from transformers import GenerationConfig
+
+        eos = GenerationConfig.from_pretrained(model_path).eos_token_id
+    except Exception as e:  # offline / no generation_config.json / unreadable
+        logger.warning("Gemma4 could not read generation_config eos_token_id ({}); using tokenizer eos", e)
+        return fallback
+    stop = [eos] if isinstance(eos, int) else list(eos or [])
+    if tokenizer.eos_token_id is not None and tokenizer.eos_token_id not in stop:
+        stop.append(tokenizer.eos_token_id)
+    logger.info("Gemma4 stop tokens: {}", stop)
+    return stop
 
 
 class ChunkedPrefillPageTableGuardMixin:
@@ -1892,8 +1925,6 @@ class Gemma4Generator(ChunkedPrefillPageTableGuardMixin, Generator):
         bounded_sliding_kv_cache=False,
     ):
         tokenizer = _load_text_tokenizer(model_path)
-        if not hasattr(tokenizer, "stop_tokens"):
-            tokenizer.stop_tokens = [tokenizer.eos_token_id]
 
         model_args, model, tt_kv_cache, _ = create_tt_model(
             mesh_device=mesh_device,
@@ -1905,6 +1936,8 @@ class Gemma4Generator(ChunkedPrefillPageTableGuardMixin, Generator):
             paged_attention_config=paged_attention_config,
             bounded_sliding_kv_cache=bounded_sliding_kv_cache,
         )
+        if not hasattr(tokenizer, "stop_tokens"):
+            tokenizer.stop_tokens = _gemma4_stop_tokens(tokenizer, model_path, mesh_device, model_args)
         _patch_model_args(
             model_args,
             mesh_device=mesh_device,
