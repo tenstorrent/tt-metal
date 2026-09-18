@@ -15,9 +15,9 @@ are added there rather than in code.
 
 import json
 import os
-import re
 
 import ttnn
+from models.common.weight_cache import checkpoint_name
 
 _PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "precision_overrides.json")
 
@@ -71,17 +71,15 @@ class Gemma4Precision:
         model_path: full path to the HF checkpoint; we key on the basename.
         mesh_shape: (rows, cols) tuple, formatted as "RxC" for the JSON key.
         """
-        path = str(model_path).rstrip("/")
-        model_key = os.path.basename(path)
         # Under HF_HUB_OFFLINE vLLM replaces the repo id with the resolved
-        # snapshot directory (.../models--{org}--{name}/snapshots/{hash}), so
-        # the basename is the snapshot hash and the variant lookup silently
-        # misses every override (31B then loads all-bf16: +~7.9 GB/chip at
-        # tp=4, which OOM'd the QB2 vLLM CI cell at 256k context). Recover the
-        # repo basename from the hub layout.
-        hub_match = re.search(r"models--[^/]+--([^/]+)/snapshots/[^/]+$", path)
-        if hub_match:
-            model_key = hub_match.group(1)
+        # snapshot directory (.../models--{org}--{name}/snapshots/{hash}); a
+        # plain basename would be the snapshot hash and the variant lookup
+        # would silently miss every override (31B then loads all-bf16:
+        # +~7.9 GB/chip at tp=4, which OOM'd the QB2 vLLM CI cell at 256k
+        # context). checkpoint_name() recovers the repo basename from the hub
+        # layout; the warm weight-cache identity in common.py uses the same
+        # helper so both key on one name.
+        model_key = checkpoint_name(model_path)
         mesh_key = f"{mesh_shape[0]}x{mesh_shape[1]}"
 
         try:
