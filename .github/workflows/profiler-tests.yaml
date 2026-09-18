@@ -1,0 +1,181 @@
+name: "Profiler Tests"
+
+on:
+  schedule:
+    - cron: "0 2 * * *" # Run daily at 2am UTC
+  workflow_dispatch:
+    inputs:
+      skus:
+        description: "Which SKUs to profile. A scheduled run always covers every SKU."
+        required: false
+        type: choice
+        default: all
+        options:
+          - all
+          - all single-card
+          - wh_n150_civ2
+          - wh_n300_civ2
+          - bh_p100a_civ2_viommu
+          - bh_p150b_civ2_viommu
+          - wh_llmbox
+          - wh_galaxy
+      skus-override:
+        description: "Comma-separated SKU list. When set, it replaces the choice above (e.g. wh_n300_civ2,wh_llmbox)."
+        required: false
+        type: string
+        default: ""
+      post-commit-only:
+        description: "Single-card only: run the post-commit subset instead of the full suite"
+        required: false
+        type: boolean
+        default: false
+      platform:
+        required: false
+        type: choice
+        default: "Ubuntu 22.04"
+        options:
+          - "Ubuntu 22.04"
+          - "Ubuntu 24.04"
+        description: "Platform to build and test"
+      build-type:
+        required: false
+        type: choice
+        default: Release
+        options:
+          - Release
+          - Debug
+          - RelWithDebInfo
+          - ASan
+          - TSan
+        description: "Build type configuration"
+      enable-lto:
+        required: false
+        type: boolean
+        default: false
+        description: "Enable Link Time Optimization (LTO)"
+
+run-name: "Profiler Tests"
+
+jobs:
+  # Resolves the SKU filter into one list, and into a flag per impl so an impl
+  # whose SKUs nobody asked for is never started. The SKU sets below must match
+  # the skus maps in the three tests YAMLs under tests/pipeline_reorg/.
+  select-skus:
+    runs-on: ubuntu-slim
+    outputs:
+      enabled-skus: ${{ steps.logic.outputs.enabled-skus }}
+      run-t3k: ${{ steps.logic.outputs.run-t3k }}
+      run-galaxy: ${{ steps.logic.outputs.run-galaxy }}
+      run-single-card: ${{ steps.logic.outputs.run-single-card }}
+    steps:
+      - name: Resolve the SKU filter
+        id: logic
+        env:
+          CHOICE: ${{ inputs.skus }}
+          OVERRIDE: ${{ inputs.skus-override }}
+        run: |
+          set -e
+          T3K_SKUS="wh_llmbox"
+          GALAXY_SKUS="wh_galaxy"
+          SINGLE_CARD_SKUS="wh_n150_civ2 wh_n300_civ2 bh_p100a_civ2_viommu bh_p150b_civ2_viommu"
+          ALL_SKUS="$T3K_SKUS $GALAXY_SKUS $SINGLE_CARD_SKUS"
+
+          # A scheduled run carries no inputs, thus it covers every SKU.
+          if [[ "${{ github.event_name }}" == "schedule" ]]; then
+            selection="all"
+          elif [[ -n "$OVERRIDE" ]]; then
+            selection="$OVERRIDE"
+          else
+            selection="${CHOICE:-all}"
+          fi
+
+          case "$selection" in
+            "all")             requested="$ALL_SKUS" ;;
+            "all single-card") requested="$SINGLE_CARD_SKUS" ;;
+            *)                 requested="${selection//,/ }" ;;
+          esac
+
+          # Reject a SKU that no profiler tests YAML covers, so a typo fails here
+          # rather than producing an empty run that looks like a pass.
+          unknown=()
+          for sku in $requested; do
+            [[ " $ALL_SKUS " == *" $sku "* ]] || unknown+=("$sku")
+          done
+          if [[ ${#unknown[@]} -gt 0 ]]; then
+            echo "::error::Unknown SKU: ${unknown[*]}. Valid SKUs: $ALL_SKUS"
+            exit 1
+          fi
+          if [[ -z "${requested// /}" ]]; then
+            echo "::error::No SKU selected. Pick a SKU in the skus input, or list them in skus-override."
+            exit 1
+          fi
+
+          any_in() {
+            for sku in $1; do
+              [[ " $requested " == *" $sku "* ]] && return 0
+            done
+            return 1
+          }
+          any_in "$T3K_SKUS"         && t3k=true         || t3k=false
+          any_in "$GALAXY_SKUS"      && galaxy=true      || galaxy=false
+          any_in "$SINGLE_CARD_SKUS" && single_card=true || single_card=false
+
+          enabled=$(echo "$requested" | tr ' ' ',')
+          echo "Requested SKUs: $enabled"
+          echo "enabled-skus=$enabled"       >> "$GITHUB_OUTPUT"
+          echo "run-t3k=$t3k"                >> "$GITHUB_OUTPUT"
+          echo "run-galaxy=$galaxy"          >> "$GITHUB_OUTPUT"
+          echo "run-single-card=$single_card" >> "$GITHUB_OUTPUT"
+
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
+
+  build-artifact:
+    needs: [check-harbor, select-skus]
+    if: ${{ !cancelled() && needs.select-skus.result == 'success' }}
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      contents: read
+      packages: write
+    secrets: inherit
+    with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
+      tracy: true
+      build-inplace-wheel: true
+      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
+      build-type: ${{ inputs.build-type || 'Release' }}
+      enable-lto: ${{ inputs.enable-lto || false }}
+
+  t3000-profiler-tests:
+    needs: [select-skus, build-artifact]
+    if: ${{ !cancelled() && needs.select-skus.outputs.run-t3k == 'true' && needs.build-artifact.result == 'success' }}
+    secrets: inherit
+    uses: ./.github/workflows/t3000-profiler-tests-impl.yaml
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enabled-skus: ${{ needs.select-skus.outputs.enabled-skus }}
+
+  galaxy-profiler-tests:
+    needs: [select-skus, build-artifact]
+    if: ${{ !cancelled() && needs.select-skus.outputs.run-galaxy == 'true' && needs.build-artifact.result == 'success' }}
+    secrets: inherit
+    uses: ./.github/workflows/galaxy-profiler-tests-impl.yaml
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enabled-skus: ${{ needs.select-skus.outputs.enabled-skus }}
+
+  single-card-profiler-tests:
+    needs: [select-skus, build-artifact]
+    if: ${{ !cancelled() && needs.select-skus.outputs.run-single-card == 'true' && needs.build-artifact.result == 'success' }}
+    secrets: inherit
+    uses: ./.github/workflows/single-card-profiler-tests-impl.yaml
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enabled-skus: ${{ needs.select-skus.outputs.enabled-skus }}
+      test-selection: ${{ inputs.post-commit-only && 'post-commit' || 'all' }}

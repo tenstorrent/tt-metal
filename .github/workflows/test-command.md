@@ -294,7 +294,6 @@ safe-outputs:
       - sanity-tests
       - blackhole-e2e-tests
 
-      - galaxy-profiler-tests
       - galaxy-multi-user-isolation-tests
       - galaxy-unit-tests
       - galaxy-integration-tests
@@ -305,11 +304,9 @@ safe-outputs:
 
       - t3000-e2e-tests
       - t3000-integration-tests
-      - t3000-profiler-tests
       - t3000-unit-tests
 
-      - single-card-profiler-tests
-      - pipeline-select-profiler
+      - profiler-tests
 
       - models-t1-e2e-tests
       - models-t1-unit-tests
@@ -463,7 +460,7 @@ match that reality: never describe a pipeline as dispatched on a fork PR.
 | `galaxy-profiler-tests` | Galaxy | Galaxy profiler instrumentation changes |
 | `galaxy-stress-tests`, `galaxy-multi-user-isolation-tests` | Galaxy | Stability, long-run, or multi-tenant isolation behaviour |
 | `t3000-unit-tests`, `t3000-integration-tests`, `t3000-e2e-tests` | T3000 (8×WH) | Multi-chip work that does not need a full Galaxy |
-| `t3000-profiler-tests`, `single-card-profiler-tests`, `pipeline-select-profiler` | T3K / single card / selectable | `tt_metal/tools/profiler/**`, tracy, or profiling instrumentation |
+| `profiler-tests` | T3K, Galaxy and single card, filtered by SKU | `tt_metal/tools/profiler/**`, tracy, or profiling instrumentation |
 | `models-t1-*` | Selectable SKU | Tier-1 (highest-priority) model changes under `models/` |
 | `models-t2-*`, `models-t3-*` | Selectable SKU | Tier-2/3 model changes |
 | `perf-device-models` | Single card | Device-perf regressions from op or kernel changes |
@@ -494,7 +491,7 @@ validation.** You must supply at least:
 
 | Pipeline | Must supply |
 |---|---|
-| `galaxy-sanity` | `arch` |
+| `profiler-tests` | `skus` (a SKU name, `all single-card`, or `all`) |
 | `models-t1-e2e-tests`, `models-t1-unit-tests` | `model` |
 | `models-t2-e2e-tests`, `models-t2-unit-tests` | `model` |
 | `models-t3-e2e-tests`, `models-t3-unit-tests` | `model` |
@@ -525,7 +522,6 @@ The defaults are usually *maximal*, and that is where the waste is. Recurring sh
   |---|---|
   | `sanity-tests` | `run-ttnn-sanity-tests`, `run-ops-sanity-tests`, `run-fabric-sanity-tests`, `run-t3000-sanity-tests`, `run-umd-sanity-tests`, `run-ttsim-sanity-tests`, `run-blackhole-multi-card-sanity-tests`, `run-models-sanity-tests` |
   | `single-card-profiler-tests` | `run-n150-profiler`, `run-n300-profiler`, `run-blackhole-profiler` |
-  | `pipeline-select-profiler` | `run-n150-profiler`, `run-n300-profiler`, `run-blackhole-profiler`, `run-t3k-profiler` |
 
   The names say what each covers, so map them the same way you mapped paths to pipelines:
   a single-device `ttnn` op change reaches `run-ttnn-sanity-tests` and `run-ops-sanity-tests`

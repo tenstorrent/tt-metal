@@ -128,7 +128,6 @@ safe-outputs:
     workflows:
       - sanity-tests
       - blackhole-e2e-tests
-      - galaxy-profiler-tests
       - galaxy-multi-user-isolation-tests
       - galaxy-unit-tests
       - models-t1-device-perf-tests
@@ -139,9 +138,7 @@ safe-outputs:
       - galaxy-health
       - t3000-e2e-tests
       - t3000-integration-tests
-      - t3000-profiler-tests
-      - single-card-profiler-tests
-      - pipeline-select-profiler
+      - profiler-tests
       - t3000-unit-tests
 
       - models-t1-e2e-tests

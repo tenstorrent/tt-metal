@@ -12,6 +12,11 @@ on:
       wheel-artifact-name:
         required: true
         type: string
+      enabled-skus:
+        required: false
+        type: string
+        default: "wh_galaxy"
+        description: "Comma-separated SKUs (see .github/sku_config.yaml). Filtered against each test's own skus map."
       ref:
         required: false
         type: string
@@ -62,11 +67,12 @@ jobs:
         run: |
           python3 .github/scripts/utils/prepare_test_matrix.py \
             ${{ env.TESTS_YAML_PATH }} \
-            "wh_galaxy" \
+            "${{ inputs.enabled-skus }}" \
             ./.github/sku_config.yaml
 
   galaxy-profiler-tests:
     needs: load-test-matrix
+    if: ${{ needs.load-test-matrix.outputs.matrix != '[]' }}
     strategy:
       fail-fast: false
       matrix:

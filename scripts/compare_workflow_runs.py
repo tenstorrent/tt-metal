@@ -450,7 +450,7 @@ def main():
         "t3000-e2e-tests.yaml",
         "t3000-fast-tests.yaml",
         "t3000-integration-tests.yaml",
-        "t3000-profiler-tests.yaml",
+        "profiler-tests.yaml",
         "t3000-unit-tests.yaml",
         # Galaxy
         "blaze-models-prefill-tests.yaml",
@@ -458,7 +458,6 @@ def main():
         "galaxy-health.yaml",
         "galaxy-integration-tests.yaml",
         "galaxy-multi-user-isolation-tests.yaml",
-        "galaxy-profiler-tests.yaml",
         "galaxy-sanity.yaml",
         "galaxy-stress-tests.yaml",
         "galaxy-unit-tests.yaml",
