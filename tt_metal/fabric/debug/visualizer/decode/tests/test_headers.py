@@ -8,6 +8,8 @@ import unittest
 from pathlib import Path
 
 from tt_metal.fabric.debug.visualizer.decode.headers import (
+    decode_1d_hops,
+    decode_2d_path,
     decode_packet_header,
     noc_address,
     packet_header_shape,
@@ -57,13 +59,20 @@ class HeaderDecoderTest(unittest.TestCase):
         raw_address = 0x12345 | (5 << 36) | (6 << 42)
         struct.pack_into("<Q", payload, 0, raw_address)
         payload[48:84] = bytes(range(36))
-        decoded = decode_packet_header(payload, run={}, context=context_2d(), mesh_ids={0})
+        decoded = decode_packet_header(
+            payload,
+            run={},
+            context=context_2d(),
+            mesh_ids={0},
+            mesh_shape={"y": 2, "x": 4},
+            mesh_coord={"y": 0, "x": 0},
+        )
 
         self.assertTrue(decoded["plausible"])
         self.assertEqual(decoded["command"]["noc_address"], noc_address(raw_address))
         self.assertEqual(decoded["routing"]["destination"], {"mesh_id": 0, "chip_id": 3})
-        self.assertEqual(decoded["routing"]["mcast_params"], [1, 2, 3, 4])
-        self.assertEqual(decoded["routing"]["route_buffer"], bytes(range(36)).hex())
+        self.assertEqual(decoded["routing"]["mcast"], {"E": 1, "W": 2, "N": 3, "S": 4})
+        self.assertEqual(decoded["routing"]["path"], {"hops": ["W"], "complete": False})
 
     def test_each_command_union_shape(self):
         cases = {}
@@ -122,9 +131,82 @@ class HeaderDecoderTest(unittest.TestCase):
             self.assertTrue(ring["slots"][0]["header"]["plausible"])
             self.assertFalse(ring["slots"][1]["header"]["plausible"])
             self.assertEqual(ring["slots"][0]["slot_state"], "unknown")
+            # Shared fixture uses stride == header size, so no payload range.
+            self.assertEqual(ring["slots"][0]["raw_ref"]["size"], 96)
+            self.assertIsNone(ring["slots"][0]["payload_ref"])
 
             compact = build_decoded(inputs, slots="none")["routers"][0]["rings"][0]
             self.assertNotIn("slots", compact)
+
+    def test_slot_payload_ref_points_past_header(self):
+        from tt_metal.fabric.debug.visualizer.decode.rings import decode_rings
+
+        blob = bytes(header(0)) + bytes(32)
+        assert len(blob) == 128
+
+        class StubDecoder:
+            def raw_slice(self, _index, _ref):
+                return blob
+
+        router = {
+            "capture": {"snapshot_index": 0},
+            "regions": [
+                {
+                    "id": "sender.0.ring",
+                    "schema": "packet_ring",
+                    "status": "ok",
+                    "error": None,
+                    "count": 1,
+                    "stride": 128,
+                    "raw_ref": {"file": "snapshot_0.bin", "offset": 1000, "size": 128},
+                },
+                {
+                    "id": "hal.routing_table",
+                    "value": {"mesh_shape": {"y": 2, "x": 4}, "my_mesh_coord": {"y": 0, "x": 0}},
+                },
+            ],
+        }
+        (ring,) = decode_rings(
+            router,
+            StubDecoder(),
+            run={},
+            context={**context_2d(), "topology": "Mesh"},
+            mesh_ids={0},
+            slots="headers",
+        )
+        (slot,) = ring["slots"]
+        self.assertEqual(
+            slot["raw_ref"], {"file": "snapshot_0.bin", "offset": 1000, "size": 96}
+        )
+        self.assertEqual(
+            slot["payload_ref"], {"file": "snapshot_0.bin", "offset": 1096, "size": 32}
+        )
+
+    def test_1d_hop_tape_unicast(self):
+        decoded = decode_1d_hops(0x1AAA)
+        self.assertEqual(
+            decoded["hops"],
+            ["forward", "forward", "forward", "forward", "forward", "forward", "write"],
+        )
+        self.assertEqual(decoded["kind"], "unicast")
+        self.assertEqual(decoded["hops_remaining"], 7)
+
+    def test_2d_path_walks_from_this_router(self):
+        buffer = bytes([0b001000, 0, 0b000001, 0b100000])  # y0: S, y1 empty, x0: E, x1: local
+        path = decode_2d_path(buffer, mesh_shape={"y": 2, "x": 2}, coord={"y": 0, "x": 0})
+        self.assertEqual(path, {"hops": ["S", "E", "local"], "complete": True})
+
+    def test_2d_path_stops_at_split(self):
+        buffer = bytes([0b000101, 0, 0, 0])  # y0: E+N
+        path = decode_2d_path(buffer, mesh_shape={"y": 2, "x": 2}, coord={"y": 0, "x": 0})
+        self.assertEqual(path, {"hops": ["E+N"], "complete": False})
+
+    def test_2d_path_empty_map_is_none(self):
+        path = decode_2d_path(bytes(4), mesh_shape={"y": 2, "x": 2}, coord={"y": 0, "x": 0})
+        self.assertEqual(path, {"hops": [], "complete": False})
+
+    def test_2d_path_needs_coord(self):
+        self.assertIsNone(decode_2d_path(bytes(4), mesh_shape={"y": 2, "x": 2}, coord=None))
 
 
 if __name__ == "__main__":

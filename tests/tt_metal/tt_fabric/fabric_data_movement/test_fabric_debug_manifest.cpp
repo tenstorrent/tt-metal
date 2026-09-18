@@ -319,6 +319,32 @@ void check_manifest_matches_live_fabric(FabricConfig expected_config) {
                     }
                 }
 
+                const auto expected_edges_json =
+                    [](const std::vector<FabricRouterDebugInstance::DownstreamEdgeInfo>& edges) {
+                        nlohmann::json entries = nlohmann::json::array();
+                        for (const auto& edge : edges) {
+                            entries.push_back(
+                                {{"edge", edge.edge},
+                                 {"direction", edge.direction},
+                                 {"sender_channel", edge.sender_channel}});
+                        }
+                        return entries;
+                    };
+                EXPECT_EQ(instance.at("downstream_edges_vc0"), expected_edges_json(published->downstream_edges_vc0));
+                EXPECT_EQ(instance.at("downstream_edges_vc1"), expected_edges_json(published->downstream_edges_vc1));
+                for (const auto& key : {"downstream_edges_vc0", "downstream_edges_vc1"}) {
+                    for (const auto& edge : instance.at(key)) {
+                        EXPECT_GE(edge.at("edge"), 1);
+                        const auto& direction = edge.at("direction");
+                        ASSERT_TRUE(direction.is_string());
+                        EXPECT_TRUE(
+                            direction == "E" || direction == "W" || direction == "N" || direction == "S" ||
+                            direction == "Z")
+                            << direction;
+                        EXPECT_GE(edge.at("sender_channel"), 0);
+                    }
+                }
+
                 const auto& assignment = manifest.at("stream_assignment").at(std::to_string(*mesh_id));
                 size_t enabled_sender_rings = 0;
                 for (const auto& region : layout.at("regions")) {

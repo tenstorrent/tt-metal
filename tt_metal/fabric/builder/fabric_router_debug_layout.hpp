@@ -72,6 +72,13 @@ struct FabricRouterDebugInstance {
     bool first_level_ack_vc0 = false;
     uint32_t downstream_edm_mask_vc0 = 0;
     uint32_t downstream_edm_mask_vc1 = 0;
+    struct DownstreamEdgeInfo {
+        uint32_t edge = 0;
+        std::string direction;
+        uint32_t sender_channel = 0;
+    };
+    std::vector<DownstreamEdgeInfo> downstream_edges_vc0;
+    std::vector<DownstreamEdgeInfo> downstream_edges_vc1;
     bool has_tensix_extension = false;
     bool udm_mode = false;
     FabricRouterDebugLayout layout;

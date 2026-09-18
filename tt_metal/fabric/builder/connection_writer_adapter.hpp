@@ -23,6 +23,14 @@ struct LocalTensixRelayConnectionInfo {
     bool is_connected = false;
 };
 
+// Information about a downstream sender channel that a receiver channel would send data to.
+struct DownstreamSlotManifestInfo {
+    // The cardinal direction of the router that the downstream sender channel is on.
+    eth_chan_directions direction = eth_chan_directions::EAST;
+    // The absolute sender channel index of the downstream sender channel.
+    uint32_t sender_channel = 0;
+};
+
 struct SenderWorkerAdapterSpec {
     size_t edm_noc_x = 0;
     size_t edm_noc_y = 0;
@@ -129,6 +137,9 @@ public:
 
     uint32_t get_packed_downstream_sender_channel_ids(uint32_t vc_idx) const override;
 
+    // Returns information about the downstream sender channel that a VC's receiver buffer forwards to.
+    DownstreamSlotManifestInfo get_downstream_slot_manifest_info(uint32_t vc_idx, size_t compact_idx) const;
+
     // Get buffer index semaphore address for a specific VC and compact index
     std::optional<size_t> get_buffer_index_semaphore_address(uint32_t vc_idx, size_t compact_idx) const {
         return downstream_edm_buffer_index_semaphore_addresses.at(vc_idx).at(compact_idx);
@@ -173,6 +184,14 @@ private:
         std::array<std::optional<size_t>, builder_config::max_downstream_edms>,
         builder_config::num_max_receiver_channels>
         downstream_sender_channel_ids = {};
+
+    // Stores the cardinal direction of the router that the receiver buffer forwards to,
+    // for (VC, compact slot) pairs. Each entry names the on-chip router the receiver buffer
+    // forwards to through that slot.
+    std::array<
+        std::array<std::optional<eth_chan_directions>, builder_config::max_downstream_edms>,
+        builder_config::num_max_receiver_channels>
+        downstream_edm_direction_by_vc_slot = {};
 
     std::array<
         std::array<std::optional<size_t>, builder_config::max_downstream_edms>,

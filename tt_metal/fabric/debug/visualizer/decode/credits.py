@@ -75,6 +75,13 @@ def decode_channels(router: dict[str, Any]) -> dict[str, Any]:
     senders: dict[int, dict[str, Any]] = {}
     receivers: dict[int, dict[str, Any]] = {}
     downstream: list[dict[str, Any]] = []
+    # Manifest-recorded downstream edges keyed by (vc, edge): the sibling direction
+    # each edge forwards to and the landing sender channel on that sibling.
+    edge_info: dict[tuple[int, int], dict[str, Any]] = {}
+    for vc_key in ("downstream_edges_vc0", "downstream_edges_vc1"):
+        vc = int(vc_key[-1])
+        for entry in instance.get(vc_key) or []:
+            edge_info[(vc, int(entry["edge"]))] = entry
     to_sender_ack = (regions.get(_TO_SENDER_ACK) or {}).get("value") or {}
     to_sender_completed = (regions.get(_TO_SENDER_COMPLETED) or {}).get("value") or {}
     ack_counters = to_sender_ack.get("counters")
@@ -163,10 +170,15 @@ def decode_channels(router: dict[str, Any]) -> dict[str, Any]:
         match = _DOWNSTREAM.match(region["id"])
         if match:
             value, status = _stream_post(region)
+            vc = int(match.group(1))
+            edge = int(match.group(2))
+            recorded = edge_info.get((vc, edge), {})
             downstream.append(
                 {
-                    "vc": int(match.group(1)),
-                    "edge": int(match.group(2)),
+                    "vc": vc,
+                    "edge": edge,
+                    "direction": recorded.get("direction"),
+                    "dest_sender_channel": recorded.get("sender_channel"),
                     "free_slots": value,
                     "depth": None,
                     "torn": status == "torn",

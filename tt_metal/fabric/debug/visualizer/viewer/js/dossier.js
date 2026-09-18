@@ -1,8 +1,7 @@
 import { renderRing, ringOccupancy } from "./chip.js";
 import {
-  edgeDirection,
   emptyNotice,
-  renderChannels,
+  renderDownstreamEdges,
   renderRegions,
   renderSummary,
   senderCredits,
@@ -29,19 +28,14 @@ function regionWord(region) {
   return typeof word === "number" ? String(word) : "—";
 }
 
-function senderStateLine(sender, cursorRegion, flowRegion, termRegion) {
-  const cursor = cursorRegion?.value || {};
-  const writeIndex = typeof cursor.write_index === "number" ? cursor.write_index : "—";
-  const writeCounter = typeof cursor.write_counter === "number" ? cursor.write_counter : "—";
+function senderStateLine(sender, flowRegion) {
   return [
     ["connection", sender.connection?.name ?? "—"],
-    ["write_idx", `${writeIndex} (ctr ${writeCounter})`],
     ["flow semaphore", regionWord(flowRegion)],
-    ["termination status", regionWord(termRegion)],
   ];
 }
 
-function renderBuffers(router, packetHeaderType) {
+function renderBuffers(model, router, packetHeaderType, raw = null) {
   const wrap = el("div", "dossier-buffers");
   const heading = el("div", "buffers-title");
   heading.append(
@@ -69,35 +63,39 @@ function renderBuffers(router, packetHeaderType) {
         const sender = senders.get(flat);
         subtitle = senderRoleLabel(sender);
         meta = [ringOccupancy(ring), senderCredits(sender), slot].filter(Boolean).join(" · ");
-        stateLine = senderStateLine(sender, regions.get(`sender.${flat}.control.buffer_index_sem`), regions.get(`sender.${flat}.control.flow_semaphore`), regions.get(`sender.${flat}.control.termination_status`));
+        stateLine = senderStateLine(sender, regions.get(`sender.${flat}.control.flow_semaphore`));
       } else if (receiverMatch && receivers.has(Number(receiverMatch[1]))) {
         const receiver = receivers.get(Number(receiverMatch[1]));
         const hops = edges
           .filter((edge) => edge.vc === receiver.vc)
           .map((edge) => {
-            const direction = edgeDirection(router.direction, edge.edge);
             const free = edge.free_slots === null || edge.free_slots === undefined ? "—" : edge.free_slots;
-            return `${direction ?? `e${edge.edge}`} ${free}`;
+            return `${edge.direction ?? `e${edge.edge}`} ${free}`;
           });
         meta = [ringOccupancy(ring, "pending"), hops.length ? `next ${hops.join(" · ")}` : null, slot]
           .filter(Boolean)
           .join(" · ");
       }
-      wrap.append(renderRing(ring, packetHeaderType, subtitle, meta, stateLine));
+      wrap.append(renderRing(ring, packetHeaderType, subtitle, meta, stateLine, raw));
+      if (receiverMatch && receivers.has(Number(receiverMatch[1]))) {
+        const edgesCard = renderDownstreamEdges(model, router, receivers.get(Number(receiverMatch[1])).vc);
+        if (edgesCard) {
+          wrap.append(edgesCard);
+        }
+      }
     }
   }
   return wrap;
 }
 
-export function renderDossier(root, model, router, { expert = false } = {}) {
+export function renderDossier(root, model, router, { expert = false, raw = null } = {}) {
   if (!router) {
     root.replaceChildren(emptyNotice("Select a router on the map, on the chip, or in the list."));
     return;
   }
   root.replaceChildren(
-    renderBuffers(router, model.decoded.fabric_context.packet_header_type),
     renderSummary(router),
-    renderChannels(router),
+    renderBuffers(model, router, model.decoded.fabric_context.packet_header_type, raw),
     renderRegions(router, expert),
   );
 }

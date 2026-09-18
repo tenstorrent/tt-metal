@@ -1,4 +1,4 @@
-import { fetchDecoded, loadDecodedFile } from "./load.js";
+import { fetchDecoded, loadDecodedFile, loadDecodedFromFileList } from "./load.js";
 import { FabricMap } from "./map.js";
 import {
   buildModel,
@@ -11,6 +11,7 @@ import { renderDossier } from "./dossier.js";
 
 const elements = {
   fileInput: document.querySelector("#file-input"),
+  folderInput: document.querySelector("#folder-input"),
   fixtureSelect: document.querySelector("#fixture-select"),
   fixtureLabel: document.querySelector(".fixture-select"),
   dropZone: document.querySelector("#drop-zone"),
@@ -43,6 +44,9 @@ const state = {
   model: null,
   selectedKey: null,
   chipKey: null,
+  rawFiles: new Map(),
+  rawBaseUrl: null,
+  rawManifest: new Map(),
 };
 
 const wideLayout = window.matchMedia("(min-width: 781px)");
@@ -123,7 +127,10 @@ function selectedRouter() {
 }
 
 function renderSelection() {
-  renderDossier(elements.dossier, state.model, selectedRouter(), { expert: elements.expertRaw.checked });
+  renderDossier(elements.dossier, state.model, selectedRouter(), {
+    expert: elements.expertRaw.checked,
+    raw: { rawFiles: state.rawFiles, rawBaseUrl: state.rawBaseUrl, rawManifest: state.rawManifest },
+  });
 }
 
 function selectRouter(key) {
@@ -187,10 +194,13 @@ function renderRouterList() {
   elements.routerList.replaceChildren(...routers.map(routerRow));
 }
 
-function renderSession(decoded, sourceName) {
+function renderSession(decoded, sourceName, raw = {}) {
   const model = buildModel(decoded);
   state.model = model;
   state.selectedKey = null;
+  state.rawFiles = raw.rawFiles || new Map();
+  state.rawBaseUrl = raw.rawBaseUrl || null;
+  state.rawManifest = raw.rawManifest || new Map();
 
   elements.sourceName.textContent = sourceName;
   elements.runTitle.textContent = `${decoded.run.arch} · ${decoded.run.fabric_config}`;
@@ -234,7 +244,7 @@ async function openDecoded(promise, fallbackName) {
   elements.errorBanner.hidden = true;
   try {
     const loaded = await promise;
-    renderSession(loaded.decoded, loaded.sourceName || fallbackName);
+    renderSession(loaded.decoded, loaded.sourceName || fallbackName, loaded);
   } catch (error) {
     showError(error);
   }
@@ -244,6 +254,24 @@ async function openFile(file) {
   try {
     await openDecoded(loadDecodedFile(file));
   } finally {
+    elements.fileInput.value = "";
+  }
+}
+
+async function openFiles(fileList) {
+  // A folder drop/pick arrives as many Files; a single JSON drop arrives as
+  // one. Route on that so back-compat single-file loads keep working.
+  const files = [...(fileList || [])];
+  if (files.length === 1 && files[0].name.endsWith(".json")) {
+    await openFile(files[0]);
+    return;
+  }
+  try {
+    await openDecoded(loadDecodedFromFileList(files));
+  } finally {
+    if (elements.folderInput) {
+      elements.folderInput.value = "";
+    }
     elements.fileInput.value = "";
   }
 }
@@ -287,6 +315,12 @@ elements.fileInput.addEventListener("change", () => {
   }
 });
 
+elements.folderInput?.addEventListener("change", () => {
+  if (elements.folderInput.files?.length) {
+    openFiles(elements.folderInput.files);
+  }
+});
+
 for (const eventName of ["dragenter", "dragover"]) {
   elements.dropZone.addEventListener(eventName, (event) => {
     event.preventDefault();
@@ -302,11 +336,11 @@ for (const eventName of ["dragleave", "drop"]) {
 }
 
 elements.dropZone.addEventListener("drop", (event) => {
-  const [file] = event.dataTransfer.files;
-  if (file) {
-    openFile(file);
+  const files = [...(event.dataTransfer?.files || [])];
+  if (files.length) {
+    openFiles(files);
   } else {
-    showError(new Error("Drop one decoded JSON file"));
+    showError(new Error("Drop a decode output folder or a decoded JSON file"));
   }
 });
 
@@ -334,6 +368,12 @@ elements.dismissError.addEventListener("click", () => {
 });
 
 loadFixtureIndex();
+
+const params = new URLSearchParams(location.search);
+const decodedParam = params.get("decoded");
+if (decodedParam) {
+  openDecoded(fetchDecoded(decodedParam), decodedParam);
+}
 
 window.addEventListener("keydown", (event) => {
   if (!state.model) {

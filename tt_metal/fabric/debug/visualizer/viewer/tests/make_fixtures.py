@@ -61,6 +61,8 @@ def _sanitize(decoded: dict) -> dict:
             item["snapshot"]["provenance"]["hostname"] = "fixture-host"
         if item.get("raw"):
             item["raw"]["file"] = "snapshot.bin"
+    for entry in decoded.get("raw_files", []):
+        entry["file"] = "snapshot.bin"
     return decoded
 
 

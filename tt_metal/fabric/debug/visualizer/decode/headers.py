@@ -21,6 +21,25 @@ NOC_SEND_TYPES = {
     8: "NOC_SPARSE_MCAST_WRITE",
 }
 
+# 1D LowLatencyRoutingFields: 2 bits per hop, LSB-first. Matches RoutingFieldsConstants::LowLatency.
+_HOP_ACTIONS = {
+    0b00: "noop",
+    0b01: "write",
+    0b10: "forward",
+    0b11: "write_and_forward",
+}
+_HOPS_PER_WORD = 16
+
+# 2D HybridMeshPacketHeader route_buffer action bits. Matches Routing2DCodec.
+_ACTION_BITS = (
+    (0, "E"),
+    (1, "W"),
+    (2, "N"),
+    (3, "S"),
+    (4, "Z"),
+    (5, "local"),
+)
+
 
 def noc_address(raw: int) -> dict[str, int]:
     return {
@@ -103,12 +122,98 @@ def _command(payload: bytes, send_type: int) -> dict[str, Any] | None:
     return None
 
 
+def decode_1d_hops(value: int, extra_words: list[int] | None = None) -> dict[str, Any]:
+    """Unpack the 1D hop tape. Trailing NOOPs are dropped; remaining hops are from this router."""
+
+    hops = []
+    for word in [value, *(extra_words or [])]:
+        for index in range(_HOPS_PER_WORD):
+            hops.append(_HOP_ACTIONS[(word >> (index * 2)) & 0b11])
+    last = max((index for index, hop in enumerate(hops) if hop != "noop"), default=-1)
+    remaining = hops[: last + 1]
+    if not remaining:
+        kind = "empty"
+    elif remaining[-1] == "write" and all(hop == "forward" for hop in remaining[:-1]):
+        kind = "unicast"
+    elif "write_and_forward" in remaining or remaining.count("write") > 1:
+        kind = "multicast"
+    else:
+        kind = "other"
+    return {
+        "value": value,
+        "hops": remaining,
+        "kind": kind,
+        "hops_remaining": len(remaining),
+    }
+
+
+_STEP = {"N": (-1, 0), "S": (1, 0), "E": (0, 1), "W": (0, -1)}
+
+
+def decode_2d_path(
+    buffer: bytes,
+    *,
+    mesh_shape: dict[str, Any] | None,
+    coord: dict[str, Any] | None,
+    torus: bool = False,
+) -> dict[str, Any] | None:
+    """Walk the [Y | X] action map from this router. Returns None when the walk
+    cannot start (no coord/shape or a short buffer). Otherwise a hop list where a
+    multi-direction byte is one 'N+E' split hop and the walk then stops, as do Z
+    chords, loops, and leaving a non-torus mesh."""
+
+    if not mesh_shape or coord is None:
+        return None
+    mesh_y = int(mesh_shape.get("y") or 0)
+    mesh_x = int(mesh_shape.get("x") or 0)
+    try:
+        y = int(coord.get("y"))
+        x = int(coord.get("x"))
+    except (TypeError, ValueError):
+        return None
+    if mesh_y <= 0 or mesh_x <= 0 or mesh_y + mesh_x > len(buffer):
+        return None
+    if not (0 <= y < mesh_y and 0 <= x < mesh_x):
+        return None
+    hops: list[str] = []
+    visited = set()
+    while len(hops) <= mesh_y + mesh_x:
+        if (y, x) in visited:
+            return {"hops": hops, "complete": False}
+        visited.add((y, x))
+        # The Y byte wins when nonzero, else the X byte carries it.
+        raw = buffer[y] or buffer[mesh_y + x]
+        dirs = [name for bit, name in _ACTION_BITS if raw & (1 << bit)]
+        if not dirs:
+            return {"hops": hops, "complete": False}
+        if len(dirs) > 1:
+            hops.append("+".join(dirs))
+            return {"hops": hops, "complete": False}
+        (step,) = dirs
+        hops.append(step)
+        if step == "local":
+            return {"hops": hops, "complete": True}
+        if step == "Z":
+            return {"hops": hops, "complete": False}
+        dy, dx = _STEP[step]
+        y, x = y + dy, x + dx
+        if torus:
+            y %= mesh_y
+            x %= mesh_x
+        elif not (0 <= y < mesh_y and 0 <= x < mesh_x):
+            return {"hops": hops, "complete": False}
+    return {"hops": hops, "complete": False}
+
+
 def decode_packet_header(
     payload: bytes,
     *,
     run: dict[str, Any],
     context: dict[str, Any],
     mesh_ids: set[int],
+    mesh_shape: dict[str, Any] | None = None,
+    mesh_coord: dict[str, Any] | None = None,
+    torus: bool = False,
 ) -> dict[str, Any]:
     """Decode one header; payload bytes after the header are never inspected."""
 
@@ -131,26 +236,25 @@ def decode_packet_header(
     }
     if context["is_2d_routing"]:
         route_bytes = int(context["routing_2d_route_buffer_size"])
-        routing_value = struct.unpack_from("<I", payload, 44)[0]
         route_end = 48 + route_bytes
         dst_chip, dst_mesh = struct.unpack_from("<HH", payload, route_end)
+        east, west, north, south = struct.unpack_from("<4H", payload, route_end + 4)
         result["routing"] = {
-            "value": routing_value,
-            "route_buffer": payload[48:route_end].hex(),
             "destination": {"mesh_id": dst_mesh, "chip_id": dst_chip},
-            "mcast_params": list(struct.unpack_from("<4H", payload, route_end + 4)),
+            "mcast": {"E": east, "W": west, "N": north, "S": south},
+            "path": decode_2d_path(
+                payload[48:route_end], mesh_shape=mesh_shape, coord=mesh_coord, torus=torus
+            ),
         }
         if run.get("udm_mode") == "ENABLED":
             result["udm_control_raw"] = payload[computed_size - 16 : computed_size].hex()
         destination_valid = dst_mesh in mesh_ids
     else:
         extension_words = int(context["routing_1d_extension_words"])
-        result["routing"] = {
-            "value": struct.unpack_from("<I", payload, 44)[0],
-            "route_buffer": list(struct.unpack_from(f"<{extension_words}I", payload, 48))
-            if extension_words
-            else [],
-        }
+        extra = (
+            list(struct.unpack_from(f"<{extension_words}I", payload, 48)) if extension_words else []
+        )
+        result["routing"] = decode_1d_hops(struct.unpack_from("<I", payload, 44)[0], extra)
         destination_valid = True
     result["plausible"] = (
         send_type in NOC_SEND_TYPES

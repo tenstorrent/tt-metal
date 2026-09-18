@@ -40,6 +40,7 @@ void StaticSizedChannelConnectionWriterAdapter::add_downstream_connection(
         size_t compact_index = get_receiver_channel_compact_index(my_direction, downstream_direction);
         this->downstream_edms_connected_by_vc_mask.at(inbound_vc_idx) |= (1 << compact_index);
         this->downstream_sender_channel_ids.at(inbound_vc_idx).at(compact_index) = sender_channel_idx;
+        this->downstream_edm_direction_by_vc_slot.at(inbound_vc_idx).at(compact_index) = downstream_direction;
 
         // Store addresses indexed by [vc_idx][compact_index]
         // NOTE: For single-target turns, this works fine (one connection per compact_index)
@@ -56,6 +57,7 @@ void StaticSizedChannelConnectionWriterAdapter::add_downstream_connection(
         this->downstream_edms_connected_by_vc_mask.at(inbound_vc_idx) = 1;
 
         // For 1D, store at compact index 0
+        this->downstream_edm_direction_by_vc_slot.at(inbound_vc_idx).at(0) = downstream_direction;
         this->downstream_edm_buffer_base_addresses.at(inbound_vc_idx).at(0) = adapter_spec.edm_buffer_base_addr;
         this->downstream_edm_worker_registration_addresses.at(inbound_vc_idx).at(0) =
             adapter_spec.edm_connection_handshake_addr;
@@ -90,6 +92,25 @@ uint32_t StaticSizedChannelConnectionWriterAdapter::get_packed_downstream_sender
                                      << (compact_idx * sender_channel_id_width_bits);
     }
     return packed_sender_channel_ids;
+}
+
+DownstreamSlotManifestInfo StaticSizedChannelConnectionWriterAdapter::get_downstream_slot_manifest_info(
+    uint32_t vc_idx, size_t compact_idx) const {
+    TT_FATAL(
+        vc_idx < downstream_edms_connected_by_vc_mask.size() && compact_idx < builder_config::max_downstream_edms,
+        "Downstream manifest slot out of range: vc {} compact {}",
+        vc_idx,
+        compact_idx);
+    TT_FATAL(
+        (downstream_edms_connected_by_vc_mask.at(vc_idx) & (1U << compact_idx)) != 0,
+        "Downstream manifest slot not connected: vc {} compact {}",
+        vc_idx,
+        compact_idx);
+    const auto direction = downstream_edm_direction_by_vc_slot.at(vc_idx).at(compact_idx);
+    TT_FATAL(direction.has_value(), "Downstream manifest slot has no recorded direction: vc {} compact {}", vc_idx, compact_idx);
+    // 1D topologies records no sender channel id, rather its always going to be sender channel 1.
+    const auto sender_channel = downstream_sender_channel_ids.at(vc_idx).at(compact_idx).value_or(1);
+    return DownstreamSlotManifestInfo{.direction = *direction, .sender_channel = static_cast<uint32_t>(sender_channel)};
 }
 
 void StaticSizedChannelConnectionWriterAdapter::add_local_tensix_connection(

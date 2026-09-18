@@ -340,76 +340,9 @@ main {
   margin-bottom: 0;
 }
 
-.channels-card {
-  margin-bottom: 18px;
-  padding: 16px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: rgba(12, 27, 34, 0.94);
-}
-
-.channels-card h4 {
-  margin: 14px 0 8px;
-  color: var(--muted);
-  font-size: 0.78rem;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-}
-
-.channels-card h4:first-of-type {
-  margin-top: 12px;
-}
-
-.sender-list {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.sender-row {
-  display: grid;
-  grid-template-columns: auto auto auto minmax(140px, 1fr) auto auto auto;
-  align-items: center;
-  gap: 6px 12px;
-  padding: 7px 10px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: #081319;
-  font-size: 0.72rem;
-}
-
-.sender-row .occ-bar {
-  width: 100%;
-}
-
-.role-chip {
-  padding: 1px 7px;
-  border: 1px solid var(--border);
-  border-radius: 99px;
-  color: var(--muted);
-  font-size: 0.65rem;
-}
-
-.sender-row.status-torn,
-.sender-row.status-unknown {
-  opacity: 0.6;
-}
-
-.sender-row.status-inconsistent .occ-bar {
-  border-color: var(--warning);
-}
-
-.edge-chip.edge-starved {
-  border-color: var(--danger);
-  color: var(--danger);
-}
-
-.edge-chip.edge-starved b {
-  color: var(--danger);
-}
-
-.edge-chip.edge-unknown {
-  opacity: 0.55;
+.buffer-card .buffer-meta {
+  display: block;
+  margin-top: 2px;
 }
 
 .map-crumb {
@@ -728,6 +661,63 @@ main {
   margin-bottom: 0;
 }
 
+.raw-dropdowns {
+  display: grid;
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.raw-dropdown {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 10px;
+}
+
+.raw-dropdown summary {
+  cursor: pointer;
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
+.raw-dropdown summary:hover {
+  color: var(--text);
+}
+
+.raw-body {
+  margin-top: 6px;
+}
+
+.raw-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 6px;
+}
+
+.raw-copy {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 0.68rem;
+  padding: 2px 8px;
+}
+
+.raw-copy:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.raw-dump {
+  margin: 0;
+  max-height: 260px;
+  overflow: auto;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 0.68rem;
+  line-height: 1.5;
+  white-space: pre;
+}
+
 .packet-fields {
   display: grid;
   grid-template-columns: repeat(2, minmax(200px, 1fr));
@@ -897,6 +887,25 @@ main {
   margin-bottom: 10px;
 }
 
+.lifecycle-grid {
+  grid-template-columns: 1fr;
+  gap: 2px;
+  justify-content: start;
+  justify-items: start;
+}
+
+.lifecycle-grid .kv {
+  justify-content: flex-start;
+  gap: 8px;
+  width: fit-content;
+  max-width: 100%;
+}
+
+.lifecycle-grid .kv .v {
+  margin-left: 0;
+  text-align: left;
+}
+
 .kv {
   display: flex;
   justify-content: space-between;
@@ -911,42 +920,6 @@ main {
 .kv .v,
 .mono {
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
-}
-
-.occ-bar {
-  position: relative;
-  display: flex;
-  align-items: center;
-  min-width: 72px;
-  height: 16px;
-  overflow: hidden;
-  border: 1px solid var(--border);
-  border-radius: 3px;
-  background: #09151c;
-}
-
-.occ-fill {
-  height: 100%;
-  background: var(--accent);
-  opacity: 0.55;
-}
-
-.occ-label,
-.occ-warn {
-  position: absolute;
-  inset: 0;
-  padding: 0 4px;
-  font-family: "SFMono-Regular", Consolas, monospace;
-  font-size: 0.68rem;
-  line-height: 16px;
-}
-
-.occ-bar.inconsistent {
-  border-color: var(--warning);
-}
-
-.occ-warn {
-  color: var(--warning);
 }
 
 .panel-warning {
@@ -965,8 +938,16 @@ main {
 
 .region-line {
   display: flex;
-  justify-content: space-between;
-  gap: 8px;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px 8px;
+}
+
+.region-label {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
 }
 
 .region-name {
@@ -980,12 +961,6 @@ main {
   font-family: "SFMono-Regular", Consolas, monospace;
   font-size: 0.7rem;
   word-break: break-word;
-}
-
-.region-badges {
-  display: inline-flex;
-  flex: none;
-  gap: 5px;
 }
 
 .value-chips {
