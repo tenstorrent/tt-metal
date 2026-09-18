@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <unistd.h>
 #include "pinned_memory_cache.hpp"
 
 #include <tt-metalium/experimental/pinned_memory.hpp>
@@ -180,6 +181,12 @@ std::shared_ptr<PinnedMemory> PinnedMemoryCache::try_pin(
     }
     const void* host_addr = static_cast<const void*>(buffer_bytes.data());
     const size_t buffer_size = buffer_bytes.size();
+
+    // Pinning works on whole pages; a misaligned buffer hangs the driver call instead of failing.
+    const auto page_size = static_cast<uintptr_t>(sysconf(_SC_PAGESIZE));
+    if (page_size != 0 && (reinterpret_cast<uintptr_t>(host_addr) % page_size) != 0) {
+        return nullptr;
+    }
     const size_t global_cache_limit = MetalContext::instance().rtoptions().get_pinned_memory_cache_limit_bytes();
     const size_t per_mmio_pin_limit = params.max_total_pin_size;
     std::set<ChipId> target_device_ids = compute_device_ids(mesh_device, coordinate_range_set);
