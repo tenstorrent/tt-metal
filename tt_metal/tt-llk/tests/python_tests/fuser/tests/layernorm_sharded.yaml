@@ -34,9 +34,9 @@ indexes:
 
 operands:
   - {name: x, dims: [256, 128], format: Float16_b}
-  - {name: scaler, dims: [32, 32], format: Float16_b, const_value: 0.0078125}
-  - {name: scaler_global, dims: [32, 32], format: Float16_b, const_value: 0.25}
-  - {name: eps, dims: [32, 32], format: Float16_b, const_value: 1.0e-12}
+  - {name: scaler, dims: [32, 32], format: Float16_b, range: {include: [0.0078125]}}
+  - {name: scaler_global, dims: [32, 32], format: Float16_b, range: {include: [0.25]}}
+  - {name: eps, dims: [32, 32], format: Float16_b, range: {include: [1.0e-12]}}
   - {name: ex_partial, dims: [256, 32], format: Float32}
   - {name: ex_global, dims: [64, 32], format: Float32}
   - {name: xmm, dims: [256, 128], format: Float32}

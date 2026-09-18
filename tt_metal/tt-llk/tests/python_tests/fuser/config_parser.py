@@ -13,6 +13,7 @@ from helpers.data_format_inference import is_format_combination_outlier
 from helpers.format_config import DataFormat
 from helpers.llk_params import DestAccumulation
 from helpers.logger import logger
+from helpers.stimuli_generator import resolve_intervals
 from helpers.tile_constants import validate_tile_dimensions
 from pydantic import (
     BaseModel,
@@ -100,13 +101,38 @@ def format_validation_error(error: ValidationError) -> str:
     return "\n".join(messages)
 
 
+Interval = Annotated[Tuple[float, float], Field(min_length=2, max_length=2)]
+
+
+class RangeDefinition(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    include: Annotated[List[Interval], Field(min_length=1)]
+    exclude: List[Interval] = Field(default_factory=list)
+
+    @field_validator("include", "exclude", mode="before")
+    @classmethod
+    def validate_intervals(cls, intervals):
+        intervals = [
+            (interval, interval) if isinstance(interval, (int, float)) else interval
+            for interval in intervals
+        ]
+        for low, high in intervals:
+            if low > high:
+                raise ValueError(f"range lower bound {low} exceeds upper bound {high}")
+        return intervals
+
+    def resolved(self) -> List[Tuple[float, float]]:
+        return resolve_intervals(self.include, self.exclude)
+
+
 class OperandDefinition(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str = Field(..., min_length=1)
     dims: Annotated[Tuple[int, int], Field(min_length=2, max_length=2)]
     format: DataFormat
-    const_value: Optional[float] = None
+    range: Optional[RangeDefinition] = None
     # Optional per-operand tile geometry (rows, cols). Defaults to a full 32x32 tile
     # (4 faces). Use (16, 32) for a 16x32 tiny tile (num_faces=2, one face-row).
     tile_dims: Optional[
@@ -269,7 +295,7 @@ class FuserConfigSchema(BaseModel):
                 name=op_def.name,
                 dimensions=op_def.dims,
                 data_format=op_def.format,
-                const_value=op_def.const_value,
+                intervals=op_def.range.resolved() if op_def.range is not None else None,
                 tile_dims=op_def.tile_dims,
             )
 
