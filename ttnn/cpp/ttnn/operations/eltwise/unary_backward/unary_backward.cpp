@@ -1658,13 +1658,20 @@ std::vector<Tensor> prod_bw(
     }
 
     if (all_dimensions) {
-        Tensor temp = ttnn::multiply(
-            prod_result, grad, std::nullopt, output_memory_config);  // result is stored in the first position
-        Tensor fill_tensor = ttnn::fill_first_val_into_tensor<::bfloat16>(
-            temp, temp.dtype(), temp.layout(), temp.device(), output_memory_config);
-        Tensor all_dimension_result = ttnn::multiply(
-            ttnn::reciprocal(input, output_memory_config), fill_tensor, std::nullopt, output_memory_config);
-        grad_tensor.emplace_back(all_dimension_result);
+        // Reducing over every dimension yields a scalar, so the gradient is prod(x) * grad[0] / x_i.
+        // Both prod(x) and grad[0] are single values the device already holds. Forming the full-volume
+        // product first and then broadcasting its first element sent the whole tensor to the host and
+        // back to move one number, which is what made this scale with host work rather than data.
+        const auto rank = grad.logical_shape().rank();
+        ttsl::SmallVector<uint32_t> first_start(rank, 0);
+        ttsl::SmallVector<uint32_t> first_end(rank, 1);
+        ttsl::SmallVector<uint32_t> first_step(rank, 1);
+        Tensor grad_first = ttnn::slice(grad, first_start, first_end, first_step, std::nullopt);
+        Tensor scale = ttnn::multiply(prod_result, grad_first, std::nullopt, output_memory_config);
+        grad_first.deallocate();
+        Tensor all_dimension_result =
+            ttnn::multiply(ttnn::reciprocal(input, output_memory_config), scale, std::nullopt, output_memory_config);
+        grad_tensor.emplace_back(std::move(all_dimension_result));
         return grad_tensor;
     }
 
