@@ -907,6 +907,7 @@ def test_every_budget_key_field_is_guarded():
     # ...and the declared member of each really is accepted.
     assert BudgetKey(
         approx_mode=ApproximationMode.No,
+        input_format=DataFormat.Float16_b,
         output_format=DataFormat.Float32,
         dest_acc=DestAccumulation.Yes,
         arch=ChipArchitecture.WORMHOLE,

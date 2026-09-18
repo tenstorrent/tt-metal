@@ -183,6 +183,7 @@ TOLERANCE_CONTRACT = AccuracyContract(metric=Metric.TOLERANCE)
 #: asserts the two stay in step.
 _BUDGET_KEY_TYPES: Dict[str, type] = {
     "approx_mode": ApproximationMode,
+    "input_format": DataFormat,
     "output_format": DataFormat,
     "dest_acc": DestAccumulation,
     "arch": ChipArchitecture,
@@ -383,2636 +384,2671 @@ def _exact_everywhere() -> Dict[BudgetKey, AccuracyContract]:
     return budget_table((DEFAULT, AccuracyContract(max_ulp=0)))
 
 
-_SFPU_ACCURACY_BUDGET: Dict[MathOperation, Dict[BudgetKey, AccuracyContract]] = registry(
-    # ── Exact everywhere, including Bfp8_b ───────────────────────────────────
-    # Floor/Ceil/Trunc land on a representable integer below the format's integer limit
-    # and are the identity above it.
-    #
-    # They are also the only ops enrolled on Bfp8_b, and the reason is narrower than
-    # "integers are exact in a block float". A shared exponent does not represent
-    # integers exactly in general: the in-block step scales with the block maximum, so an
-    # integer is exact only while every block maximum stays below 2**7 = 128. That holds
-    # here because _OP_DOMAIN_REGISTRY bounds these three to uniform(-10, 10) --
-    # BFP8_B_EXACT_INTEGER_DOMAIN below pins it -- and not because of anything about the
-    # format. An integer-valued op with a wider domain would fail, the same mechanism
-    # that takes Abs and Neg to 15616 steps in the note above.
-    #   wh: 0 ULP, 156 variants each, all four output formats x both dest_acc, 2026-09-16
-    (MathOperation.Floor, _exact_everywhere()),
-    (MathOperation.Ceil, _exact_everywhere()),
-    (MathOperation.Trunc, _exact_everywhere()),
-    # ── Sign-bit and select: exact in fp32, one step in the 16-bit formats ───
-    # Abs clears the sign bit, Neg flips it, Identity copies; there is no arithmetic to
-    # round. fp32 out is bit-exact. The 16-bit outputs are one step off on part of the
-    # sweep, and it is the *pack* path rather than the op: the same single step shows up
-    # for all three of these ops, and mostly at dest_acc=Yes, where the value is rounded
-    # fp32 -> 16-bit once at pack instead of being truncated in a 16-bit Dest first.
-    # A step budget is what makes that visible at all; atol=0.05 is ~6 bf16 steps.
-    #
-    # The budget is the measured maximum with no headroom added, deliberately. These
-    # results are exact by construction, so any movement is a real signal and should
-    # fail rather than be absorbed. They are the flakiness canaries for the metric: if
-    # one of these starts failing, the golden or the datapath moved, not the kernel.
-    # Each recorded number is a maximum over the *input* pipelines too: BudgetKey has no
-    # input_format axis, and input_output_formats() is a full cross product, so the "80
-    # variants" below is 2 outputs x 5 inputs x 2 approx x 2 dest_acc x 2 dimensions. The
-    # 1-step pack allowance therefore also binds Float16_b->Float16_b and Bfp8_b->Float16_b,
-    # which are bit-exact by construction for a sign-bit op -- so "zero headroom" holds for
-    # the pipeline that set the maximum and is slack for the others. The axis is excluded
-    # here because no enrolled cell has a *tighter* per-input number worth keying on yet;
-    # P3 adds input_format to BudgetKey for the transcendentals, where the input pipeline
-    # does move the measurement.
-    #   wh: Abs/Neg max 0 ULP on Float32 (32 variants), 1 ULP on Float16/Float16_b
-    #       (80 variants); Identity max 0 on Float32, 1 on Float16_b (4), 2026-09-16
-    (
-        MathOperation.Abs,
-        budget_table(
-            (DEFAULT, AccuracyContract(max_ulp=1)),
-            (BudgetKey(output_format=DataFormat.Float32), AccuracyContract(max_ulp=0)),
-            (BudgetKey(output_format=DataFormat.Bfp8_b), _BFP8_B_QUANTIZATION_DOMINATES),
-        ),
-    ),
-    (
-        MathOperation.Neg,
-        budget_table(
-            (DEFAULT, AccuracyContract(max_ulp=1)),
-            (BudgetKey(output_format=DataFormat.Float32), AccuracyContract(max_ulp=0)),
-            (BudgetKey(output_format=DataFormat.Bfp8_b), _BFP8_B_QUANTIZATION_DOMINATES),
-        ),
-    ),
-    # Identity is keyed per format rather than through a DEFAULT, because unlike Abs/Neg
-    # it was never in BROAD_SWEEP_OPS: only BROAD_FORMATS/FORMATS_BFP4_B reach a Float16
-    # output, so fp16 was never measured for it at all. Square measured 1 step on
-    # Float16_b and 4 on Float16, so fp16 is not safely interpolated from bf16 here -- an
-    # unmeasured format falls back to the tolerance metric instead.
-    (
-        MathOperation.Identity,
-        budget_table(
-            (BudgetKey(output_format=DataFormat.Float32), AccuracyContract(max_ulp=0)),
-            (BudgetKey(output_format=DataFormat.Float16_b), AccuracyContract(max_ulp=1)),
-        ),
-    ),
-    # ── One multiply, and one open question ─────────────────────────────────
-    # x*x has rounding slack the sign-bit ops do not: the golden evaluates in float64 and
-    # applies the Dest and output roundings, the hardware rounds in the datapath, and the
-    # two can differ where the exact product falls on a tie. 1 step in bf16 and 4 in fp16
-    # are consistent with that.
-    #
-    # Float32 is NOT enrolled, and the measurement is why: 65536 steps at dest_acc=No,
-    # 32768 at dest_acc=Yes, on almost every element rather than a few. 65536 is exactly
-    # 2**16 -- one step of a 16-bit Dest lattice expressed in fp32 units -- so the
-    # dest_acc=No number is a single step of the *real* output lattice and says the golden
-    # and the hardware round that step differently. 32768 = 2**15 at dest_acc=Yes has no
-    # such explanation: with an fp32 Dest the product agrees to only ~8 mantissa bits.
-    # Neither is something a budget should paper over, and attributing them (kernel, or
-    # the golden's rounding model) is its own change. Parked on the tolerance metric so
-    # the number is recorded rather than blessed.
-    #   wh: Float16_b max 1 ULP (40 variants), Float16 max 4 (40),
-    #       Float32 max 65536 @ dest_acc=No / 32768 @ dest_acc=Yes (32), 2026-09-16
-    (
-        MathOperation.Square,
-        budget_table(
-            (DEFAULT, AccuracyContract(max_ulp=4)),
-            (BudgetKey(output_format=DataFormat.Float16_b), AccuracyContract(max_ulp=1)),
-            (
-                BudgetKey(output_format=DataFormat.Float32),
-                AccuracyContract(metric=Metric.TOLERANCE),
-            ),
-            (BudgetKey(output_format=DataFormat.Bfp8_b), _BFP8_B_QUANTIZATION_DOMINATES),
-        ),
-    ),
-    # ── Still on the tolerance metric, moved here from the test body ─────────
-    # These were CUSTOM_TOLERANCES in test_eltwise_unary_sfpu: a coarse 3-segment LUT
-    # whose absolute error peaks near the knees, carrying atol=0.13 so the sweep passes.
-    # They are the clearest argument for this whole mechanism -- that number makes the
-    # test blind to a 10x regression anywhere else in the domain, and equally blind to the
-    # improvement a LUT retune produces. They keep the tolerance metric until there is a
-    # measured step budget to replace it with, but the number now sits next to the op
-    # instead of in a dict in a test file.
-    (MathOperation.SigmoidAppx, budget_table((DEFAULT, _COARSE_LUT_TOLERANCE))),
-    (MathOperation.GeluAppx, budget_table((DEFAULT, _COARSE_LUT_TOLERANCE))),
-    # ── Transcendentals, enrolled from the accuracy sweep (P3) ──────────────
-    #
-    # Emitted by accuracy/emit_budget.py from 1,142,784 sweep points on Wormhole across
-    # 19 ops x 3 input x 3 output formats x approx x fast x dest_acc, deterministic
-    # `ramp`, seed 0. Regenerate with:
-    #
-    #     ../.venv/bin/python -m accuracy.emit_budget --arch wh --formats fp32,bf16
-    #
-    # The `~N mantissa bits` figure is what makes these comparable across formats: one
-    # bfloat16 step and 65536 float32 steps are the same physical accuracy, because
-    # float32 counts finer steps. A five-figure float32 budget is a narrow result in a
-    # wide container, not a sloppy gate, and it drops by a power of two per bit gained if
-    # a kernel ever starts using the resolution it was given.
-    #
-    # Every key names **both** formats, and that is deliberate even where the paths agree.
-    # The functional suite runs Bfp8_b inputs and this sweep does not, so a key without an
-    # input format would extend a budget to a much coarser path that was never measured;
-    # and this run emits fp32 and bf16 outputs only, so a key without an output format
-    # would match the unmeasured Float16 and Bfp8_b outputs. Those variants fall back to
-    # the tolerance metric on their own, which is what makes enrolment incremental.
-    #
-    # A variant left on the tolerance metric is scoped to the variant that was measured to
-    # need it, not to the whole format pair -- see _NOT_PREDICTED_BY_SWEEP in the emitter.
-    # Gelu fp32->fp32 diverges from the sweep at dest_acc=Yes and Log fp32->fp32 at
-    # dest_acc=No, so each keeps its ULP budget on the other setting instead of merging
-    # every approximation and destination variant of the pair into one wildcard.
-    #
-    # A budget of 1 against a comment reading "max 0 ULP" is not a typo: a measured zero
-    # is floored to MIN_MEASURED_BUDGET, because "no error observed on this stimulus" is
-    # not "no error possible" and a finite sample cannot assert exactness. Each such entry
-    # now says so in its own comment too. An op that is exact by *construction* is a
-    # different claim, and those budgets are hand-written above.
-    #
-    # near_zero_atol appears where the sweep found the hardware returning exactly 0
-    # against a small non-zero reference -- gelu(-4.18), erfinv(0.0005) and approximate
-    # exp(-9.68) all do it -- a five-figure step count that describes nothing about the
-    # kernel's accuracy elsewhere. The floor holds those lanes so the budget stays tight.
-    #
-    # The floors are small, and deliberately so: the gate bounds its near-zero band
-    # absolutely as well as relatively (at near_zero_atol / NEAR_ZERO_FRACTION), so a
-    # floor only ever covers lanes whose magnitude is within 100x of the error being
-    # forgiven. The emitter models that same split when it derives these numbers -- it
-    # has to, or it would derive a floor from a lane the gate then refuses to rescue,
-    # which is what made hardsigmoid fp32->fp32 dest_acc=Yes emit max_ulp=10 and then
-    # fail the functional suite at 128 steps. It is now max_ulp=1024 with no floor,
-    # which is the honest reading of the same measurement under the bounded band.
-    (
-        MathOperation.Acosh,
-        budget_table(
-            #   wh: max 65536 ULP, p99.9 65536.0, 76% exact, ~7 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float32,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.No,
+_SFPU_ACCURACY_BUDGET: Dict[MathOperation, Dict[BudgetKey, AccuracyContract]] = (
+    registry(
+        # ── Exact everywhere, including Bfp8_b ───────────────────────────────────
+        # Floor/Ceil/Trunc land on a representable integer below the format's integer limit
+        # and are the identity above it.
+        #
+        # They are also the only ops enrolled on Bfp8_b, and the reason is narrower than
+        # "integers are exact in a block float". A shared exponent does not represent
+        # integers exactly in general: the in-block step scales with the block maximum, so an
+        # integer is exact only while every block maximum stays below 2**7 = 128. That holds
+        # here because _OP_DOMAIN_REGISTRY bounds these three to uniform(-10, 10) --
+        # BFP8_B_EXACT_INTEGER_DOMAIN below pins it -- and not because of anything about the
+        # format. An integer-valued op with a wider domain would fail, the same mechanism
+        # that takes Abs and Neg to 15616 steps in the note above.
+        #   wh: 0 ULP, 156 variants each, all four output formats x both dest_acc, 2026-09-16
+        (MathOperation.Floor, _exact_everywhere()),
+        (MathOperation.Ceil, _exact_everywhere()),
+        (MathOperation.Trunc, _exact_everywhere()),
+        # ── Sign-bit and select: exact in fp32, one step in the 16-bit formats ───
+        # Abs clears the sign bit, Neg flips it, Identity copies; there is no arithmetic to
+        # round. fp32 out is bit-exact. The 16-bit outputs are one step off on part of the
+        # sweep, and it is the *pack* path rather than the op: the same single step shows up
+        # for all three of these ops, and mostly at dest_acc=Yes, where the value is rounded
+        # fp32 -> 16-bit once at pack instead of being truncated in a 16-bit Dest first.
+        # A step budget is what makes that visible at all; atol=0.05 is ~6 bf16 steps.
+        #
+        # The budget is the measured maximum with no headroom added, deliberately. These
+        # results are exact by construction, so any movement is a real signal and should
+        # fail rather than be absorbed. They are the flakiness canaries for the metric: if
+        # one of these starts failing, the golden or the datapath moved, not the kernel.
+        # Each recorded number is a maximum over the *input* pipelines too: BudgetKey has no
+        # input_format axis, and input_output_formats() is a full cross product, so the "80
+        # variants" below is 2 outputs x 5 inputs x 2 approx x 2 dest_acc x 2 dimensions. The
+        # 1-step pack allowance therefore also binds Float16_b->Float16_b and Bfp8_b->Float16_b,
+        # which are bit-exact by construction for a sign-bit op -- so "zero headroom" holds for
+        # the pipeline that set the maximum and is slack for the others. The axis is excluded
+        # here because no enrolled cell has a *tighter* per-input number worth keying on yet;
+        # P3 adds input_format to BudgetKey for the transcendentals, where the input pipeline
+        # does move the measurement.
+        #   wh: Abs/Neg max 0 ULP on Float32 (32 variants), 1 ULP on Float16/Float16_b
+        #       (80 variants); Identity max 0 on Float32, 1 on Float16_b (4), 2026-09-16
+        (
+            MathOperation.Abs,
+            budget_table(
+                (DEFAULT, AccuracyContract(max_ulp=1)),
+                (
+                    BudgetKey(output_format=DataFormat.Float32),
+                    AccuracyContract(max_ulp=0),
                 ),
-                AccuracyContract(max_ulp=81920),
-            ),
-            #   wh: max 1 ULP, p99.9 1.0, 88% exact, ~23 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float32,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.Yes,
+                (
+                    BudgetKey(output_format=DataFormat.Bfp8_b),
+                    _BFP8_B_QUANTIZATION_DOMINATES,
                 ),
-                AccuracyContract(max_ulp=2),
-            ),
-            #   wh: max 1 ULP, p99.9 1.0, 76% exact, ~7 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float32,
-                    output_format=DataFormat.Float16_b,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.No,
-                ),
-                AccuracyContract(max_ulp=2),
-            ),
-            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 2048 pts, 2026-09-17; measured 0, floored to 1 (a finite sample cannot assert exactness)
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float32,
-                    output_format=DataFormat.Float16_b,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.Yes,
-                ),
-                AccuracyContract(max_ulp=1),
-            ),
-            #   wh: max 65536 ULP, p99.9 65536.0, 75% exact, ~7 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16_b,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.No,
-                ),
-                AccuracyContract(max_ulp=81920),
-            ),
-            #   wh: max 32598 ULP, p99.9 32526.0, 0% exact, ~8 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16_b,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.Yes,
-                ),
-                AccuracyContract(max_ulp=40658),
-            ),
-            #   wh: max 1 ULP, p99.9 1.0, 75% exact, ~7 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16_b,
-                    output_format=DataFormat.Float16_b,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.No,
-                ),
-                AccuracyContract(max_ulp=2),
-            ),
-            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 2048 pts, 2026-09-17; measured 0, floored to 1 (a finite sample cannot assert exactness)
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16_b,
-                    output_format=DataFormat.Float16_b,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.Yes,
-                ),
-                AccuracyContract(max_ulp=1),
-            ),
-            #   wh: max 40960 ULP, p99.9 40960.0, 13% exact, ~8 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.No,
-                ),
-                AccuracyContract(max_ulp=51200),
-            ),
-            #   wh: max 4094 ULP, p99.9 4093.0, 0% exact, ~11 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.Yes,
-                ),
-                AccuracyContract(max_ulp=5117),
-            ),
-            #   wh: max 1 ULP, p99.9 1.0, 94% exact, ~7 mantissa bits, 4096 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16,
-                    output_format=DataFormat.Float16_b,
-                    approx_mode=ApproximationMode.No,
-                ),
-                AccuracyContract(max_ulp=2),
             ),
         ),
-    ),
-    (
-        MathOperation.Asinh,
-        budget_table(
-            #   wh: max 65536 ULP, p99.9 65536.0, 82% exact, ~7 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float32,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.No,
+        (
+            MathOperation.Neg,
+            budget_table(
+                (DEFAULT, AccuracyContract(max_ulp=1)),
+                (
+                    BudgetKey(output_format=DataFormat.Float32),
+                    AccuracyContract(max_ulp=0),
                 ),
-                AccuracyContract(max_ulp=81920),
-            ),
-            #   wh: max 1 ULP, p99.9 1.0, 85% exact, ~23 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float32,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.Yes,
+                (
+                    BudgetKey(output_format=DataFormat.Bfp8_b),
+                    _BFP8_B_QUANTIZATION_DOMINATES,
                 ),
-                AccuracyContract(max_ulp=2),
-            ),
-            #   wh: max 1 ULP, p99.9 1.0, 82% exact, ~7 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float32,
-                    output_format=DataFormat.Float16_b,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.No,
-                ),
-                AccuracyContract(max_ulp=2),
-            ),
-            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 2048 pts, 2026-09-17; measured 0, floored to 1 (a finite sample cannot assert exactness)
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float32,
-                    output_format=DataFormat.Float16_b,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.Yes,
-                ),
-                AccuracyContract(max_ulp=1),
-            ),
-            #   wh: max 65536 ULP, p99.9 65536.0, 81% exact, ~7 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16_b,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.No,
-                ),
-                AccuracyContract(max_ulp=81920),
-            ),
-            #   wh: max 32706 ULP, p99.9 32703.0, 0% exact, ~8 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16_b,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.Yes,
-                ),
-                AccuracyContract(max_ulp=40879),
-            ),
-            #   wh: max 1 ULP, p99.9 1.0, 81% exact, ~7 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16_b,
-                    output_format=DataFormat.Float16_b,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.No,
-                ),
-                AccuracyContract(max_ulp=2),
-            ),
-            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 2048 pts, 2026-09-17; measured 0, floored to 1 (a finite sample cannot assert exactness)
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16_b,
-                    output_format=DataFormat.Float16_b,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.Yes,
-                ),
-                AccuracyContract(max_ulp=1),
-            ),
-            #   wh: max 40960 ULP, p99.9 40960.0, 13% exact, ~8 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.No,
-                ),
-                AccuracyContract(max_ulp=51200),
-            ),
-            #   wh: max 4087 ULP, p99.9 4065.0, 0% exact, ~11 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.Yes,
-                ),
-                AccuracyContract(max_ulp=5082),
-            ),
-            #   wh: max 1 ULP, p99.9 1.0, 94% exact, ~7 mantissa bits, 4096 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16,
-                    output_format=DataFormat.Float16_b,
-                    approx_mode=ApproximationMode.No,
-                ),
-                AccuracyContract(max_ulp=2),
             ),
         ),
-    ),
-    (
-        MathOperation.Atanh,
-        budget_table(
-            #   wh: max 131072 ULP, p99.9 131072.0, 71% exact, ~6 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float32,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.No,
+        # Identity is keyed per format rather than through a DEFAULT, because unlike Abs/Neg
+        # it was never in BROAD_SWEEP_OPS: only BROAD_FORMATS/FORMATS_BFP4_B reach a Float16
+        # output, so fp16 was never measured for it at all. Square measured 1 step on
+        # Float16_b and 4 on Float16, so fp16 is not safely interpolated from bf16 here -- an
+        # unmeasured format falls back to the tolerance metric instead.
+        (
+            MathOperation.Identity,
+            budget_table(
+                (
+                    BudgetKey(output_format=DataFormat.Float32),
+                    AccuracyContract(max_ulp=0),
                 ),
-                AccuracyContract(max_ulp=163840),
-            ),
-            #   wh: max 2 ULP, p99.9 2.0, 77% exact, ~22 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float32,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.Yes,
+                (
+                    BudgetKey(output_format=DataFormat.Float16_b),
+                    AccuracyContract(max_ulp=1),
                 ),
-                AccuracyContract(max_ulp=3),
-            ),
-            #   wh: max 2 ULP, p99.9 2.0, 71% exact, ~6 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float32,
-                    output_format=DataFormat.Float16_b,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.No,
-                ),
-                AccuracyContract(max_ulp=3),
-            ),
-            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 2048 pts, 2026-09-17; measured 0, floored to 1 (a finite sample cannot assert exactness)
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float32,
-                    output_format=DataFormat.Float16_b,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.Yes,
-                ),
-                AccuracyContract(max_ulp=1),
-            ),
-            #   wh: max 131072 ULP, p99.9 131072.0, 72% exact, ~6 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16_b,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.No,
-                ),
-                AccuracyContract(max_ulp=163840),
-            ),
-            #   wh: max 32673 ULP, p99.9 32673.0, 0% exact, ~8 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16_b,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.Yes,
-                ),
-                AccuracyContract(max_ulp=40842),
-            ),
-            #   wh: max 2 ULP, p99.9 2.0, 72% exact, ~6 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16_b,
-                    output_format=DataFormat.Float16_b,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.No,
-                ),
-                AccuracyContract(max_ulp=3),
-            ),
-            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 2048 pts, 2026-09-17; measured 0, floored to 1 (a finite sample cannot assert exactness)
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16_b,
-                    output_format=DataFormat.Float16_b,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.Yes,
-                ),
-                AccuracyContract(max_ulp=1),
-            ),
-            #   wh: not enrolled -- functional draw reaches 57344 steps, ramp-derived 51200 (4096 pts, 2026-09-17)
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                ),
-                AccuracyContract(metric=Metric.TOLERANCE),
-            ),
-            #   wh: max 1 ULP, p99.9 1.0, 93% exact, ~7 mantissa bits, 4096 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16,
-                    output_format=DataFormat.Float16_b,
-                    approx_mode=ApproximationMode.No,
-                ),
-                AccuracyContract(max_ulp=2),
             ),
         ),
-    ),
-    (
-        MathOperation.Celu,
-        budget_table(
-            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~23 mantissa bits, 2048 pts, 2026-09-17; measured 0, floored to 1 (a finite sample cannot assert exactness)
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float32,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.No,
+        # ── One multiply, and one open question ─────────────────────────────────
+        # x*x has rounding slack the sign-bit ops do not: the golden evaluates in float64 and
+        # applies the Dest and output roundings, the hardware rounds in the datapath, and the
+        # two can differ where the exact product falls on a tie. 1 step in bf16 and 4 in fp16
+        # are consistent with that.
+        #
+        # Float32 is NOT enrolled, and the measurement is why: 65536 steps at dest_acc=No,
+        # 32768 at dest_acc=Yes, on almost every element rather than a few. 65536 is exactly
+        # 2**16 -- one step of a 16-bit Dest lattice expressed in fp32 units -- so the
+        # dest_acc=No number is a single step of the *real* output lattice and says the golden
+        # and the hardware round that step differently. 32768 = 2**15 at dest_acc=Yes has no
+        # such explanation: with an fp32 Dest the product agrees to only ~8 mantissa bits.
+        # Neither is something a budget should paper over, and attributing them (kernel, or
+        # the golden's rounding model) is its own change. Parked on the tolerance metric so
+        # the number is recorded rather than blessed.
+        #   wh: Float16_b max 1 ULP (40 variants), Float16 max 4 (40),
+        #       Float32 max 65536 @ dest_acc=No / 32768 @ dest_acc=Yes (32), 2026-09-16
+        (
+            MathOperation.Square,
+            budget_table(
+                (DEFAULT, AccuracyContract(max_ulp=4)),
+                (
+                    BudgetKey(output_format=DataFormat.Float16_b),
+                    AccuracyContract(max_ulp=1),
                 ),
-                AccuracyContract(max_ulp=1),
-            ),
-            #   wh: max 9 ULP, p99.9 9.0, 90% exact, ~20 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float32,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.Yes,
+                (
+                    BudgetKey(output_format=DataFormat.Float32),
+                    AccuracyContract(metric=Metric.TOLERANCE),
                 ),
-                AccuracyContract(max_ulp=12),
-            ),
-            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 4096 pts, 2026-09-17; measured 0, floored to 1 (a finite sample cannot assert exactness)
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float32,
-                    output_format=DataFormat.Float16_b,
-                    approx_mode=ApproximationMode.No,
+                (
+                    BudgetKey(output_format=DataFormat.Bfp8_b),
+                    _BFP8_B_QUANTIZATION_DOMINATES,
                 ),
-                AccuracyContract(max_ulp=1),
-            ),
-            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~23 mantissa bits, 2048 pts, 2026-09-17; measured 0, floored to 1 (a finite sample cannot assert exactness)
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16_b,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.No,
-                ),
-                AccuracyContract(max_ulp=1),
-            ),
-            #   wh: max 32752 ULP, p99.9 32501.7, 50% exact, ~8 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16_b,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.Yes,
-                ),
-                AccuracyContract(max_ulp=40628),
-            ),
-            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 4096 pts, 2026-09-17; measured 0, floored to 1 (a finite sample cannot assert exactness)
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16_b,
-                    output_format=DataFormat.Float16_b,
-                    approx_mode=ApproximationMode.No,
-                ),
-                AccuracyContract(max_ulp=1),
-            ),
-            #   wh: max 32768 ULP, p99.9 32768.0, 13% exact, ~8 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.No,
-                ),
-                AccuracyContract(max_ulp=40960),
-            ),
-            #   wh: max 4085 ULP, p99.9 4069.9, 50% exact, ~11 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.Yes,
-                ),
-                AccuracyContract(max_ulp=5088),
-            ),
-            #   wh: max 1 ULP, p99.9 1.0, 94% exact, ~7 mantissa bits, 4096 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16,
-                    output_format=DataFormat.Float16_b,
-                    approx_mode=ApproximationMode.No,
-                ),
-                AccuracyContract(max_ulp=2),
             ),
         ),
-    ),
-    (
-        MathOperation.Cos,
-        budget_table(
-            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~23 mantissa bits, 2048 pts, 2026-09-17; measured 0, floored to 1 (a finite sample cannot assert exactness)
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float32,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.No,
+        # ── Still on the tolerance metric, moved here from the test body ─────────
+        # These were CUSTOM_TOLERANCES in test_eltwise_unary_sfpu: a coarse 3-segment LUT
+        # whose absolute error peaks near the knees, carrying atol=0.13 so the sweep passes.
+        # They are the clearest argument for this whole mechanism -- that number makes the
+        # test blind to a 10x regression anywhere else in the domain, and equally blind to the
+        # improvement a LUT retune produces. They keep the tolerance metric until there is a
+        # measured step budget to replace it with, but the number now sits next to the op
+        # instead of in a dict in a test file.
+        (MathOperation.SigmoidAppx, budget_table((DEFAULT, _COARSE_LUT_TOLERANCE))),
+        (MathOperation.GeluAppx, budget_table((DEFAULT, _COARSE_LUT_TOLERANCE))),
+        # ── Transcendentals, enrolled from the accuracy sweep (P3) ──────────────
+        #
+        # Emitted by accuracy/emit_budget.py from 1,142,784 sweep points on Wormhole across
+        # 19 ops x 3 input x 3 output formats x approx x fast x dest_acc, deterministic
+        # `ramp`, seed 0. Regenerate with:
+        #
+        #     ../.venv/bin/python -m accuracy.emit_budget --arch wh --formats fp32,bf16
+        #
+        # The `~N mantissa bits` figure is what makes these comparable across formats: one
+        # bfloat16 step and 65536 float32 steps are the same physical accuracy, because
+        # float32 counts finer steps. A five-figure float32 budget is a narrow result in a
+        # wide container, not a sloppy gate, and it drops by a power of two per bit gained if
+        # a kernel ever starts using the resolution it was given.
+        #
+        # Every key names **both** formats, and that is deliberate even where the paths agree.
+        # The functional suite runs Bfp8_b inputs and this sweep does not, so a key without an
+        # input format would extend a budget to a much coarser path that was never measured;
+        # and this run emits fp32 and bf16 outputs only, so a key without an output format
+        # would match the unmeasured Float16 and Bfp8_b outputs. Those variants fall back to
+        # the tolerance metric on their own, which is what makes enrolment incremental.
+        #
+        # A variant left on the tolerance metric is scoped to the variant that was measured to
+        # need it, not to the whole format pair -- see _NOT_PREDICTED_BY_SWEEP in the emitter.
+        # Gelu fp32->fp32 diverges from the sweep at dest_acc=Yes and Log fp32->fp32 at
+        # dest_acc=No, so each keeps its ULP budget on the other setting instead of merging
+        # every approximation and destination variant of the pair into one wildcard.
+        #
+        # A budget of 1 against a comment reading "max 0 ULP" is not a typo: a measured zero
+        # is floored to MIN_MEASURED_BUDGET, because "no error observed on this stimulus" is
+        # not "no error possible" and a finite sample cannot assert exactness. Each such entry
+        # now says so in its own comment too. An op that is exact by *construction* is a
+        # different claim, and those budgets are hand-written above.
+        #
+        # near_zero_atol appears where the sweep found the hardware returning exactly 0
+        # against a small non-zero reference -- gelu(-4.18), erfinv(0.0005) and approximate
+        # exp(-9.68) all do it -- a five-figure step count that describes nothing about the
+        # kernel's accuracy elsewhere. The floor holds those lanes so the budget stays tight.
+        #
+        # The floors are small, and deliberately so: the gate bounds its near-zero band
+        # absolutely as well as relatively (at near_zero_atol / NEAR_ZERO_FRACTION), so a
+        # floor only ever covers lanes whose magnitude is within 100x of the error being
+        # forgiven. The emitter models that same split when it derives these numbers -- it
+        # has to, or it would derive a floor from a lane the gate then refuses to rescue,
+        # which is what made hardsigmoid fp32->fp32 dest_acc=Yes emit max_ulp=10 and then
+        # fail the functional suite at 128 steps. It is now max_ulp=1024 with no floor,
+        # which is the honest reading of the same measurement under the bounded band.
+        (
+            MathOperation.Acosh,
+            budget_table(
+                #   wh: max 65536 ULP, p99.9 65536.0, 76% exact, ~7 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float32,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.No,
+                    ),
+                    AccuracyContract(max_ulp=81920),
                 ),
-                AccuracyContract(max_ulp=1),
-            ),
-            #   wh: max 1 ULP, p99.9 1.0, 72% exact, ~23 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float32,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.Yes,
+                #   wh: max 1 ULP, p99.9 1.0, 88% exact, ~23 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float32,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.Yes,
+                    ),
+                    AccuracyContract(max_ulp=2),
                 ),
-                AccuracyContract(max_ulp=2),
-            ),
-            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~23 mantissa bits, 2048 pts, 2026-09-17; measured 0, floored to 1 (a finite sample cannot assert exactness)
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float32,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.Yes,
-                    dest_acc=DestAccumulation.No,
+                #   wh: max 1 ULP, p99.9 1.0, 76% exact, ~7 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float32,
+                        output_format=DataFormat.Float16_b,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.No,
+                    ),
+                    AccuracyContract(max_ulp=2),
                 ),
-                AccuracyContract(max_ulp=1),
-            ),
-            #   wh: max 1 ULP, p99.9 1.0, 72% exact, ~23 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float32,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.Yes,
-                    dest_acc=DestAccumulation.Yes,
+                #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 2048 pts, 2026-09-17; measured 0, floored to 1 (a finite sample cannot assert exactness)
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float32,
+                        output_format=DataFormat.Float16_b,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.Yes,
+                    ),
+                    AccuracyContract(max_ulp=1),
                 ),
-                AccuracyContract(max_ulp=2),
-            ),
-            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 8192 pts, 2026-09-17; measured 0, floored to 1 (a finite sample cannot assert exactness)
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float32, output_format=DataFormat.Float16_b
+                #   wh: max 65536 ULP, p99.9 65536.0, 75% exact, ~7 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16_b,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.No,
+                    ),
+                    AccuracyContract(max_ulp=81920),
                 ),
-                AccuracyContract(max_ulp=1),
-            ),
-            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~23 mantissa bits, 2048 pts, 2026-09-17; measured 0, floored to 1 (a finite sample cannot assert exactness)
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16_b,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.No,
+                #   wh: max 32598 ULP, p99.9 32526.0, 0% exact, ~8 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16_b,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.Yes,
+                    ),
+                    AccuracyContract(max_ulp=40658),
                 ),
-                AccuracyContract(max_ulp=1),
-            ),
-            #   wh: max 32740 ULP, p99.9 32740.0, 0% exact, ~8 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16_b,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.Yes,
+                #   wh: max 1 ULP, p99.9 1.0, 75% exact, ~7 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16_b,
+                        output_format=DataFormat.Float16_b,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.No,
+                    ),
+                    AccuracyContract(max_ulp=2),
                 ),
-                AccuracyContract(max_ulp=40925),
-            ),
-            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~23 mantissa bits, 2048 pts, 2026-09-17; measured 0, floored to 1 (a finite sample cannot assert exactness)
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16_b,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.Yes,
-                    dest_acc=DestAccumulation.No,
+                #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 2048 pts, 2026-09-17; measured 0, floored to 1 (a finite sample cannot assert exactness)
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16_b,
+                        output_format=DataFormat.Float16_b,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.Yes,
+                    ),
+                    AccuracyContract(max_ulp=1),
                 ),
-                AccuracyContract(max_ulp=1),
-            ),
-            #   wh: max 32740 ULP, p99.9 32740.0, 0% exact, ~8 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16_b,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.Yes,
-                    dest_acc=DestAccumulation.Yes,
+                #   wh: max 40960 ULP, p99.9 40960.0, 13% exact, ~8 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.No,
+                    ),
+                    AccuracyContract(max_ulp=51200),
                 ),
-                AccuracyContract(max_ulp=40925),
-            ),
-            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 8192 pts, 2026-09-17; measured 0, floored to 1 (a finite sample cannot assert exactness)
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16_b, output_format=DataFormat.Float16_b
+                #   wh: max 4094 ULP, p99.9 4093.0, 0% exact, ~11 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.Yes,
+                    ),
+                    AccuracyContract(max_ulp=5117),
                 ),
-                AccuracyContract(max_ulp=1),
-            ),
-            #   wh: max 32768 ULP, p99.9 32768.0, 15% exact, ~8 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.No,
+                #   wh: max 1 ULP, p99.9 1.0, 94% exact, ~7 mantissa bits, 4096 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16,
+                        output_format=DataFormat.Float16_b,
+                        approx_mode=ApproximationMode.No,
+                    ),
+                    AccuracyContract(max_ulp=2),
                 ),
-                AccuracyContract(max_ulp=40960),
-            ),
-            #   wh: max 4093 ULP, p99.9 4092.0, 0% exact, ~11 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.Yes,
-                ),
-                AccuracyContract(max_ulp=5115),
-            ),
-            #   wh: max 32768 ULP, p99.9 32768.0, 15% exact, ~8 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.Yes,
-                    dest_acc=DestAccumulation.No,
-                ),
-                AccuracyContract(max_ulp=40960),
-            ),
-            #   wh: max 4093 ULP, p99.9 4092.0, 0% exact, ~11 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.Yes,
-                    dest_acc=DestAccumulation.Yes,
-                ),
-                AccuracyContract(max_ulp=5115),
-            ),
-            #   wh: max 1 ULP, p99.9 1.0, 93% exact, ~7 mantissa bits, 8192 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16, output_format=DataFormat.Float16_b
-                ),
-                AccuracyContract(max_ulp=2),
-            ),
-        ),
-    ),
-    (
-        MathOperation.Elu,
-        budget_table(
-            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~23 mantissa bits, 2048 pts, 2026-09-17; measured 0, floored to 1 (a finite sample cannot assert exactness)
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float32,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.No,
-                ),
-                AccuracyContract(max_ulp=1),
-            ),
-            #   wh: max 9 ULP, p99.9 9.0, 90% exact, ~20 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float32,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.Yes,
-                ),
-                AccuracyContract(max_ulp=12),
-            ),
-            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 4096 pts, 2026-09-17; measured 0, floored to 1 (a finite sample cannot assert exactness)
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float32,
-                    output_format=DataFormat.Float16_b,
-                    approx_mode=ApproximationMode.No,
-                ),
-                AccuracyContract(max_ulp=1),
-            ),
-            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~23 mantissa bits, 2048 pts, 2026-09-17; measured 0, floored to 1 (a finite sample cannot assert exactness)
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16_b,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.No,
-                ),
-                AccuracyContract(max_ulp=1),
-            ),
-            #   wh: max 32752 ULP, p99.9 32501.7, 50% exact, ~8 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16_b,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.Yes,
-                ),
-                AccuracyContract(max_ulp=40628),
-            ),
-            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 4096 pts, 2026-09-17; measured 0, floored to 1 (a finite sample cannot assert exactness)
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16_b,
-                    output_format=DataFormat.Float16_b,
-                    approx_mode=ApproximationMode.No,
-                ),
-                AccuracyContract(max_ulp=1),
-            ),
-            #   wh: max 32768 ULP, p99.9 32768.0, 13% exact, ~8 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.No,
-                ),
-                AccuracyContract(max_ulp=40960),
-            ),
-            #   wh: max 4085 ULP, p99.9 4069.9, 50% exact, ~11 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.Yes,
-                ),
-                AccuracyContract(max_ulp=5088),
-            ),
-            #   wh: max 1 ULP, p99.9 1.0, 94% exact, ~7 mantissa bits, 4096 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16,
-                    output_format=DataFormat.Float16_b,
-                    approx_mode=ApproximationMode.No,
-                ),
-                AccuracyContract(max_ulp=2),
             ),
         ),
-    ),
-    (
-        MathOperation.Erfinv,
-        budget_table(
-            #   wh: max 65536 ULP, p99.9 65536.0, 56% exact, ~7 mantissa bits, 2048 pts, 2026-09-17; 42 near-zero pts reach 962592769 steps and are held by the atol floor instead
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float32,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.No,
+        (
+            MathOperation.Asinh,
+            budget_table(
+                #   wh: max 65536 ULP, p99.9 65536.0, 82% exact, ~7 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float32,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.No,
+                    ),
+                    AccuracyContract(max_ulp=81920),
                 ),
-                AccuracyContract(max_ulp=81920, near_zero_atol=0.000534),
-            ),
-            #   wh: max 26321 ULP, p99.9 25227.0, 0% exact, ~8 mantissa bits, 2048 pts, 2026-09-17; 42 near-zero pts reach 962639709 steps and are held by the atol floor instead
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float32,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.Yes,
+                #   wh: max 1 ULP, p99.9 1.0, 85% exact, ~23 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float32,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.Yes,
+                    ),
+                    AccuracyContract(max_ulp=2),
                 ),
-                AccuracyContract(max_ulp=31534, near_zero_atol=0.000536),
-            ),
-            #   wh: max 1 ULP, p99.9 1.0, 56% exact, ~7 mantissa bits, 2048 pts, 2026-09-17; 42 near-zero pts reach 14689 steps and are held by the atol floor instead
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float32,
-                    output_format=DataFormat.Float16_b,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.No,
+                #   wh: max 1 ULP, p99.9 1.0, 82% exact, ~7 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float32,
+                        output_format=DataFormat.Float16_b,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.No,
+                    ),
+                    AccuracyContract(max_ulp=2),
                 ),
-                AccuracyContract(max_ulp=2, near_zero_atol=0.000534),
-            ),
-            #   wh: max 1 ULP, p99.9 1.0, 96% exact, ~7 mantissa bits, 2048 pts, 2026-09-17; 42 near-zero pts reach 14690 steps and are held by the atol floor instead
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float32,
-                    output_format=DataFormat.Float16_b,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.Yes,
+                #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 2048 pts, 2026-09-17; measured 0, floored to 1 (a finite sample cannot assert exactness)
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float32,
+                        output_format=DataFormat.Float16_b,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.Yes,
+                    ),
+                    AccuracyContract(max_ulp=1),
                 ),
-                AccuracyContract(max_ulp=2, near_zero_atol=0.000536),
-            ),
-            #   wh: max 65536 ULP, p99.9 65536.0, 56% exact, ~7 mantissa bits, 2048 pts, 2026-09-17; 42 near-zero pts reach 962658305 steps and are held by the atol floor instead
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16_b,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.No,
+                #   wh: max 65536 ULP, p99.9 65536.0, 81% exact, ~7 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16_b,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.No,
+                    ),
+                    AccuracyContract(max_ulp=81920),
                 ),
-                AccuracyContract(max_ulp=81920, near_zero_atol=0.000536),
-            ),
-            #   wh: max 50188 ULP, p99.9 50188.0, 0% exact, ~7 mantissa bits, 2048 pts, 2026-09-17; 42 near-zero pts reach 962658305 steps and are held by the atol floor instead
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16_b,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.Yes,
+                #   wh: max 32706 ULP, p99.9 32703.0, 0% exact, ~8 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16_b,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.Yes,
+                    ),
+                    AccuracyContract(max_ulp=40879),
                 ),
-                AccuracyContract(max_ulp=62735, near_zero_atol=0.000536),
-            ),
-            #   wh: max 1 ULP, p99.9 1.0, 56% exact, ~7 mantissa bits, 4096 pts, 2026-09-17; 84 near-zero pts reach 14690 steps and are held by the atol floor instead
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16_b,
-                    output_format=DataFormat.Float16_b,
-                    approx_mode=ApproximationMode.No,
+                #   wh: max 1 ULP, p99.9 1.0, 81% exact, ~7 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16_b,
+                        output_format=DataFormat.Float16_b,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.No,
+                    ),
+                    AccuracyContract(max_ulp=2),
                 ),
-                AccuracyContract(max_ulp=2, near_zero_atol=0.000536),
-            ),
-            #   wh: max 24576 ULP, p99.9 24576.0, 56% exact, ~8 mantissa bits, 2048 pts, 2026-09-17; 42 near-zero pts reach 962641921 steps and are held by the atol floor instead
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.No,
+                #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 2048 pts, 2026-09-17; measured 0, floored to 1 (a finite sample cannot assert exactness)
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16_b,
+                        output_format=DataFormat.Float16_b,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.Yes,
+                    ),
+                    AccuracyContract(max_ulp=1),
                 ),
-                AccuracyContract(max_ulp=30720, near_zero_atol=0.000536),
-            ),
-            #   wh: max 27027 ULP, p99.9 24417.0, 0% exact, ~8 mantissa bits, 2048 pts, 2026-09-17; 42 near-zero pts reach 962641921 steps and are held by the atol floor instead
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.Yes,
+                #   wh: max 40960 ULP, p99.9 40960.0, 13% exact, ~8 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.No,
+                    ),
+                    AccuracyContract(max_ulp=51200),
                 ),
-                AccuracyContract(max_ulp=30522, near_zero_atol=0.000536),
-            ),
-            #   wh: max 1 ULP, p99.9 1.0, 53% exact, ~7 mantissa bits, 4096 pts, 2026-09-17; 84 near-zero pts reach 14690 steps and are held by the atol floor instead
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16,
-                    output_format=DataFormat.Float16_b,
-                    approx_mode=ApproximationMode.No,
+                #   wh: max 4087 ULP, p99.9 4065.0, 0% exact, ~11 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.Yes,
+                    ),
+                    AccuracyContract(max_ulp=5082),
                 ),
-                AccuracyContract(max_ulp=2, near_zero_atol=0.000536),
-            ),
-        ),
-    ),
-    (
-        MathOperation.Exp,
-        budget_table(
-            #   wh: max 65536 ULP, p99.9 65536.0, 81% exact, ~7 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float32,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.No,
+                #   wh: max 1 ULP, p99.9 1.0, 94% exact, ~7 mantissa bits, 4096 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16,
+                        output_format=DataFormat.Float16_b,
+                        approx_mode=ApproximationMode.No,
+                    ),
+                    AccuracyContract(max_ulp=2),
                 ),
-                AccuracyContract(max_ulp=81920),
-            ),
-            #   wh: max 1 ULP, p99.9 1.0, 94% exact, ~23 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float32,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.Yes,
-                ),
-                AccuracyContract(max_ulp=2),
-            ),
-            #   wh: max 393216 ULP, p99.9 393216.0, 11% exact, ~4 mantissa bits, 4096 pts, 2026-09-17; budget would be 491520, past the 419430-step point where a budget stops being tighter than the tolerance it replaces, so tolerance
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float32,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.Yes,
-                ),
-                AccuracyContract(metric=Metric.TOLERANCE),
-            ),
-            #   wh: max 1 ULP, p99.9 1.0, 81% exact, ~7 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float32,
-                    output_format=DataFormat.Float16_b,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.No,
-                ),
-                AccuracyContract(max_ulp=2),
-            ),
-            #   wh: max 1 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float32,
-                    output_format=DataFormat.Float16_b,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.Yes,
-                ),
-                AccuracyContract(max_ulp=1),
-            ),
-            #   wh: max 6 ULP, p99.9 6.0, 16% exact, ~4 mantissa bits, 4096 pts, 2026-09-17; budget would be 8, past the 6-step point where a budget stops being tighter than the tolerance it replaces, so tolerance
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float32,
-                    output_format=DataFormat.Float16_b,
-                    approx_mode=ApproximationMode.Yes,
-                ),
-                AccuracyContract(metric=Metric.TOLERANCE),
-            ),
-            #   wh: max 65536 ULP, p99.9 65536.0, 82% exact, ~7 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16_b,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.No,
-                ),
-                AccuracyContract(max_ulp=81920),
-            ),
-            #   wh: max 32767 ULP, p99.9 32752.0, 7% exact, ~8 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16_b,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.Yes,
-                ),
-                AccuracyContract(max_ulp=40940),
-            ),
-            #   wh: max 393216 ULP, p99.9 393216.0, 14% exact, ~4 mantissa bits, 4096 pts, 2026-09-17; budget would be 491520, past the 419430-step point where a budget stops being tighter than the tolerance it replaces, so tolerance
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16_b,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.Yes,
-                ),
-                AccuracyContract(metric=Metric.TOLERANCE),
-            ),
-            #   wh: max 1 ULP, p99.9 1.0, 82% exact, ~7 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16_b,
-                    output_format=DataFormat.Float16_b,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.No,
-                ),
-                AccuracyContract(max_ulp=2),
-            ),
-            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 2048 pts, 2026-09-17; measured 0, floored to 1 (a finite sample cannot assert exactness)
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16_b,
-                    output_format=DataFormat.Float16_b,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.Yes,
-                ),
-                AccuracyContract(max_ulp=1),
-            ),
-            #   wh: max 6 ULP, p99.9 6.0, 16% exact, ~4 mantissa bits, 4096 pts, 2026-09-17; budget would be 8, past the 6-step point where a budget stops being tighter than the tolerance it replaces, so tolerance
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16_b,
-                    output_format=DataFormat.Float16_b,
-                    approx_mode=ApproximationMode.Yes,
-                ),
-                AccuracyContract(metric=Metric.TOLERANCE),
-            ),
-            #   wh: max 57344 ULP, p99.9 57344.0, 14% exact, ~7 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.No,
-                ),
-                AccuracyContract(max_ulp=71680),
-            ),
-            #   wh: max 8181 ULP, p99.9 7049.7, 0% exact, ~10 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.Yes,
-                ),
-                AccuracyContract(max_ulp=8813),
-            ),
-            #   wh: max 939728897 ULP, p99.9 939594744.8, 1% exact, ~-7 mantissa bits, 4096 pts, 2026-09-17; budget would be 1174493432, past the 419430-step point where a budget stops being tighter than the tolerance it replaces, so tolerance
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.Yes,
-                ),
-                AccuracyContract(metric=Metric.TOLERANCE),
-            ),
-            #   wh: max 1 ULP, p99.9 1.0, 79% exact, ~7 mantissa bits, 4096 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16,
-                    output_format=DataFormat.Float16_b,
-                    approx_mode=ApproximationMode.No,
-                ),
-                AccuracyContract(max_ulp=2),
-            ),
-            #   wh: max 14340 ULP, p99.9 14338.0, 6% exact, ~-7 mantissa bits, 4096 pts, 2026-09-17; budget would be 17923, past the 6-step point where a budget stops being tighter than the tolerance it replaces, so tolerance
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16,
-                    output_format=DataFormat.Float16_b,
-                    approx_mode=ApproximationMode.Yes,
-                ),
-                AccuracyContract(metric=Metric.TOLERANCE),
             ),
         ),
-    ),
-    (
-        MathOperation.Exp2,
-        budget_table(
-            #   wh: max 65536 ULP, p99.9 65536.0, 82% exact, ~7 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float32,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.No,
+        (
+            MathOperation.Atanh,
+            budget_table(
+                #   wh: max 131072 ULP, p99.9 131072.0, 71% exact, ~6 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float32,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.No,
+                    ),
+                    AccuracyContract(max_ulp=163840),
                 ),
-                AccuracyContract(max_ulp=81920),
-            ),
-            #   wh: max 1 ULP, p99.9 1.0, 86% exact, ~23 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float32,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.Yes,
+                #   wh: max 2 ULP, p99.9 2.0, 77% exact, ~22 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float32,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.Yes,
+                    ),
+                    AccuracyContract(max_ulp=3),
                 ),
-                AccuracyContract(max_ulp=2),
-            ),
-            #   wh: max 1 ULP, p99.9 1.0, 82% exact, ~7 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float32,
-                    output_format=DataFormat.Float16_b,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.No,
+                #   wh: max 2 ULP, p99.9 2.0, 71% exact, ~6 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float32,
+                        output_format=DataFormat.Float16_b,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.No,
+                    ),
+                    AccuracyContract(max_ulp=3),
                 ),
-                AccuracyContract(max_ulp=2),
-            ),
-            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 2048 pts, 2026-09-17; measured 0, floored to 1 (a finite sample cannot assert exactness)
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float32,
-                    output_format=DataFormat.Float16_b,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.Yes,
+                #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 2048 pts, 2026-09-17; measured 0, floored to 1 (a finite sample cannot assert exactness)
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float32,
+                        output_format=DataFormat.Float16_b,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.Yes,
+                    ),
+                    AccuracyContract(max_ulp=1),
                 ),
-                AccuracyContract(max_ulp=1),
-            ),
-            #   wh: max 65536 ULP, p99.9 65536.0, 83% exact, ~7 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16_b,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.No,
+                #   wh: max 131072 ULP, p99.9 131072.0, 72% exact, ~6 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16_b,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.No,
+                    ),
+                    AccuracyContract(max_ulp=163840),
                 ),
-                AccuracyContract(max_ulp=81920),
-            ),
-            #   wh: max 32393 ULP, p99.9 31806.9, 29% exact, ~8 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16_b,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.Yes,
+                #   wh: max 32673 ULP, p99.9 32673.0, 0% exact, ~8 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16_b,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.Yes,
+                    ),
+                    AccuracyContract(max_ulp=40842),
                 ),
-                AccuracyContract(max_ulp=39759),
-            ),
-            #   wh: max 1 ULP, p99.9 1.0, 83% exact, ~7 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16_b,
-                    output_format=DataFormat.Float16_b,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.No,
+                #   wh: max 2 ULP, p99.9 2.0, 72% exact, ~6 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16_b,
+                        output_format=DataFormat.Float16_b,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.No,
+                    ),
+                    AccuracyContract(max_ulp=3),
                 ),
-                AccuracyContract(max_ulp=2),
-            ),
-            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 2048 pts, 2026-09-17; measured 0, floored to 1 (a finite sample cannot assert exactness)
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16_b,
-                    output_format=DataFormat.Float16_b,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.Yes,
+                #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 2048 pts, 2026-09-17; measured 0, floored to 1 (a finite sample cannot assert exactness)
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16_b,
+                        output_format=DataFormat.Float16_b,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.Yes,
+                    ),
+                    AccuracyContract(max_ulp=1),
                 ),
-                AccuracyContract(max_ulp=1),
-            ),
-            #   wh: max 57344 ULP, p99.9 57344.0, 16% exact, ~7 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.No,
+                #   wh: not enrolled -- functional draw reaches 57344 steps, ramp-derived 51200 (4096 pts, 2026-09-17)
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                    ),
+                    AccuracyContract(metric=Metric.TOLERANCE),
                 ),
-                AccuracyContract(max_ulp=71680),
-            ),
-            #   wh: max 4064 ULP, p99.9 4051.0, 0% exact, ~11 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.Yes,
+                #   wh: max 1 ULP, p99.9 1.0, 93% exact, ~7 mantissa bits, 4096 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16,
+                        output_format=DataFormat.Float16_b,
+                        approx_mode=ApproximationMode.No,
+                    ),
+                    AccuracyContract(max_ulp=2),
                 ),
-                AccuracyContract(max_ulp=5064),
-            ),
-            #   wh: max 1 ULP, p99.9 1.0, 80% exact, ~7 mantissa bits, 4096 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16,
-                    output_format=DataFormat.Float16_b,
-                    approx_mode=ApproximationMode.No,
-                ),
-                AccuracyContract(max_ulp=2),
             ),
         ),
-    ),
-    (
-        MathOperation.Gelu,
-        budget_table(
-            #   wh: max 65536 ULP, p99.9 65536.0, 94% exact, ~7 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float32,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.No,
+        (
+            MathOperation.Celu,
+            budget_table(
+                #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~23 mantissa bits, 2048 pts, 2026-09-17; measured 0, floored to 1 (a finite sample cannot assert exactness)
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float32,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.No,
+                    ),
+                    AccuracyContract(max_ulp=1),
                 ),
-                AccuracyContract(max_ulp=81920),
-            ),
-            #   wh: not enrolled -- near-zero tail: functional reaches 19,474,047 steps (2048 pts, 2026-09-17)
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float32,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.Yes,
+                #   wh: max 9 ULP, p99.9 9.0, 90% exact, ~20 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float32,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.Yes,
+                    ),
+                    AccuracyContract(max_ulp=12),
                 ),
-                AccuracyContract(metric=Metric.TOLERANCE),
-            ),
-            #   wh: not enrolled -- near-zero tail: functional reaches 19,474,047 steps (4096 pts, 2026-09-17)
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float32,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.Yes,
+                #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 4096 pts, 2026-09-17; measured 0, floored to 1 (a finite sample cannot assert exactness)
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float32,
+                        output_format=DataFormat.Float16_b,
+                        approx_mode=ApproximationMode.No,
+                    ),
+                    AccuracyContract(max_ulp=1),
                 ),
-                AccuracyContract(metric=Metric.TOLERANCE),
-            ),
-            #   wh: max 1 ULP, p99.9 1.0, 94% exact, ~7 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float32,
-                    output_format=DataFormat.Float16_b,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.No,
+                #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~23 mantissa bits, 2048 pts, 2026-09-17; measured 0, floored to 1 (a finite sample cannot assert exactness)
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16_b,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.No,
+                    ),
+                    AccuracyContract(max_ulp=1),
                 ),
-                AccuracyContract(max_ulp=2),
-            ),
-            #   wh: not enrolled -- near-zero tail: functional abs error 7.49e-07 exceeds the ramp-derived 7.08e-07 floor, 148 steps against a 2-step budget (2048 pts, 2026-09-17)
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float32,
-                    output_format=DataFormat.Float16_b,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.Yes,
+                #   wh: max 32752 ULP, p99.9 32501.7, 50% exact, ~8 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16_b,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.Yes,
+                    ),
+                    AccuracyContract(max_ulp=40628),
                 ),
-                AccuracyContract(metric=Metric.TOLERANCE),
-            ),
-            #   wh: not enrolled -- near-zero tail: functional abs error 7.49e-07 exceeds the ramp-derived 7.08e-07 floor, 148 steps against a 2-step budget (4096 pts, 2026-09-17)
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float32,
-                    output_format=DataFormat.Float16_b,
-                    approx_mode=ApproximationMode.Yes,
+                #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 4096 pts, 2026-09-17; measured 0, floored to 1 (a finite sample cannot assert exactness)
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16_b,
+                        output_format=DataFormat.Float16_b,
+                        approx_mode=ApproximationMode.No,
+                    ),
+                    AccuracyContract(max_ulp=1),
                 ),
-                AccuracyContract(metric=Metric.TOLERANCE),
-            ),
-            #   wh: max 65536 ULP, p99.9 65536.0, 94% exact, ~7 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16_b,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.No,
+                #   wh: max 32768 ULP, p99.9 32768.0, 13% exact, ~8 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.No,
+                    ),
+                    AccuracyContract(max_ulp=40960),
                 ),
-                AccuracyContract(max_ulp=81920),
-            ),
-            #   wh: max 57344 ULP, p99.9 57344.0, 0% exact, ~7 mantissa bits, 2048 pts, 2026-09-17; 164 near-zero pts reach 3932160 steps and are held by the atol floor instead
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16_b,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.Yes,
+                #   wh: max 4085 ULP, p99.9 4069.9, 50% exact, ~11 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.Yes,
+                    ),
+                    AccuracyContract(max_ulp=5088),
                 ),
-                AccuracyContract(max_ulp=71680, near_zero_atol=5.59e-07),
-            ),
-            #   wh: max 1936392194 ULP, p99.9 1936392194.0, 20% exact, ~-8 mantissa bits, 4096 pts, 2026-09-17; budget would be 2420490243, past the 419430-step point where a budget stops being tighter than the tolerance it replaces, so tolerance
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16_b,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.Yes,
+                #   wh: max 1 ULP, p99.9 1.0, 94% exact, ~7 mantissa bits, 4096 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16,
+                        output_format=DataFormat.Float16_b,
+                        approx_mode=ApproximationMode.No,
+                    ),
+                    AccuracyContract(max_ulp=2),
                 ),
-                AccuracyContract(metric=Metric.TOLERANCE),
-            ),
-            #   wh: max 1 ULP, p99.9 1.0, 94% exact, ~7 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16_b,
-                    output_format=DataFormat.Float16_b,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.No,
-                ),
-                AccuracyContract(max_ulp=2),
-            ),
-            #   wh: max 1 ULP, p99.9 1.0, 99% exact, ~7 mantissa bits, 2048 pts, 2026-09-17; 164 near-zero pts reach 60 steps and are held by the atol floor instead
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16_b,
-                    output_format=DataFormat.Float16_b,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.Yes,
-                ),
-                AccuracyContract(max_ulp=2, near_zero_atol=5.59e-07),
-            ),
-            #   wh: max 29549 ULP, p99.9 29549.0, 34% exact, ~-8 mantissa bits, 4096 pts, 2026-09-17; budget would be 36937, past the 6-step point where a budget stops being tighter than the tolerance it replaces, so tolerance
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16_b,
-                    output_format=DataFormat.Float16_b,
-                    approx_mode=ApproximationMode.Yes,
-                ),
-                AccuracyContract(metric=Metric.TOLERANCE),
-            ),
-            #   wh: max 57344 ULP, p99.9 57344.0, 13% exact, ~7 mantissa bits, 2048 pts, 2026-09-17; 462 near-zero pts reach 939524097 steps and are held by the atol floor instead
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.No,
-                ),
-                AccuracyContract(max_ulp=71680, near_zero_atol=7.63e-05),
-            ),
-            #   wh: max 46656 ULP, p99.9 37126.2, 0% exact, ~7 mantissa bits, 2048 pts, 2026-09-17; 176 near-zero pts reach 3932160 steps and are held by the atol floor instead
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.Yes,
-                ),
-                AccuracyContract(max_ulp=46656, near_zero_atol=7.08e-07),
-            ),
-            #   wh: max 1956462594 ULP, p99.9 1941721278.4, 16% exact, ~-8 mantissa bits, 4096 pts, 2026-09-17; budget would be 2427151599, past the 419430-step point where a budget stops being tighter than the tolerance it replaces, so tolerance
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.Yes,
-                ),
-                AccuracyContract(metric=Metric.TOLERANCE),
-            ),
-            #   wh: max 1 ULP, p99.9 1.0, 91% exact, ~7 mantissa bits, 2048 pts, 2026-09-17; 462 near-zero pts reach 14337 steps and are held by the atol floor instead
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16,
-                    output_format=DataFormat.Float16_b,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.No,
-                ),
-                AccuracyContract(max_ulp=2, near_zero_atol=7.63e-05),
-            ),
-            #   wh: max 1 ULP, p99.9 1.0, 93% exact, ~7 mantissa bits, 2048 pts, 2026-09-17; 176 near-zero pts reach 60 steps and are held by the atol floor instead
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16,
-                    output_format=DataFormat.Float16_b,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.Yes,
-                ),
-                AccuracyContract(max_ulp=2, near_zero_atol=7.08e-07),
-            ),
-            #   wh: max 29855 ULP, p99.9 29630.2, 33% exact, ~-8 mantissa bits, 4096 pts, 2026-09-17; budget would be 37038, past the 6-step point where a budget stops being tighter than the tolerance it replaces, so tolerance
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16,
-                    output_format=DataFormat.Float16_b,
-                    approx_mode=ApproximationMode.Yes,
-                ),
-                AccuracyContract(metric=Metric.TOLERANCE),
             ),
         ),
-    ),
-    (
-        MathOperation.Hardsigmoid,
-        budget_table(
-            #   wh: max 65536 ULP, p99.9 65536.0, 69% exact, ~7 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float32,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.No,
+        (
+            MathOperation.Cos,
+            budget_table(
+                #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~23 mantissa bits, 2048 pts, 2026-09-17; measured 0, floored to 1 (a finite sample cannot assert exactness)
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float32,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.No,
+                    ),
+                    AccuracyContract(max_ulp=1),
                 ),
-                AccuracyContract(max_ulp=81920),
-            ),
-            #   wh: max 1024 ULP, p99.9 62.5, 88% exact, ~13 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float32,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.Yes,
+                #   wh: max 1 ULP, p99.9 1.0, 72% exact, ~23 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float32,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.Yes,
+                    ),
+                    AccuracyContract(max_ulp=2),
                 ),
-                AccuracyContract(max_ulp=1024),
-            ),
-            #   wh: max 1 ULP, p99.9 1.0, 69% exact, ~7 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float32,
-                    output_format=DataFormat.Float16_b,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.No,
+                #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~23 mantissa bits, 2048 pts, 2026-09-17; measured 0, floored to 1 (a finite sample cannot assert exactness)
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float32,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.Yes,
+                        dest_acc=DestAccumulation.No,
+                    ),
+                    AccuracyContract(max_ulp=1),
                 ),
-                AccuracyContract(max_ulp=2),
-            ),
-            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 2048 pts, 2026-09-17; measured 0, floored to 1 (a finite sample cannot assert exactness)
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float32,
-                    output_format=DataFormat.Float16_b,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.Yes,
+                #   wh: max 1 ULP, p99.9 1.0, 72% exact, ~23 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float32,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.Yes,
+                        dest_acc=DestAccumulation.Yes,
+                    ),
+                    AccuracyContract(max_ulp=2),
                 ),
-                AccuracyContract(max_ulp=1),
-            ),
-            #   wh: max 65536 ULP, p99.9 65536.0, 69% exact, ~7 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16_b,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.No,
+                #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 8192 pts, 2026-09-17; measured 0, floored to 1 (a finite sample cannot assert exactness)
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float32,
+                        output_format=DataFormat.Float16_b,
+                    ),
+                    AccuracyContract(max_ulp=1),
                 ),
-                AccuracyContract(max_ulp=81920),
-            ),
-            #   wh: max 32768 ULP, p99.9 32768.0, 42% exact, ~8 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16_b,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.Yes,
+                #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~23 mantissa bits, 2048 pts, 2026-09-17; measured 0, floored to 1 (a finite sample cannot assert exactness)
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16_b,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.No,
+                    ),
+                    AccuracyContract(max_ulp=1),
                 ),
-                AccuracyContract(max_ulp=40960),
-            ),
-            #   wh: max 1 ULP, p99.9 1.0, 69% exact, ~7 mantissa bits, 4096 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16_b,
-                    output_format=DataFormat.Float16_b,
-                    approx_mode=ApproximationMode.No,
+                #   wh: max 32740 ULP, p99.9 32740.0, 0% exact, ~8 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16_b,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.Yes,
+                    ),
+                    AccuracyContract(max_ulp=40925),
                 ),
-                AccuracyContract(max_ulp=2),
-            ),
-            #   wh: max 8192 ULP, p99.9 8192.0, 69% exact, ~10 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.No,
+                #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~23 mantissa bits, 2048 pts, 2026-09-17; measured 0, floored to 1 (a finite sample cannot assert exactness)
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16_b,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.Yes,
+                        dest_acc=DestAccumulation.No,
+                    ),
+                    AccuracyContract(max_ulp=1),
                 ),
-                AccuracyContract(max_ulp=10240),
-            ),
-            #   wh: max 4096 ULP, p99.9 4096.0, 41% exact, ~11 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.Yes,
+                #   wh: max 32740 ULP, p99.9 32740.0, 0% exact, ~8 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16_b,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.Yes,
+                        dest_acc=DestAccumulation.Yes,
+                    ),
+                    AccuracyContract(max_ulp=40925),
                 ),
-                AccuracyContract(max_ulp=5120),
-            ),
-            #   wh: max 1 ULP, p99.9 1.0, 61% exact, ~7 mantissa bits, 4096 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16,
-                    output_format=DataFormat.Float16_b,
-                    approx_mode=ApproximationMode.No,
+                #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 8192 pts, 2026-09-17; measured 0, floored to 1 (a finite sample cannot assert exactness)
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16_b,
+                        output_format=DataFormat.Float16_b,
+                    ),
+                    AccuracyContract(max_ulp=1),
                 ),
-                AccuracyContract(max_ulp=2),
-            ),
-        ),
-    ),
-    (
-        MathOperation.Log,
-        budget_table(
-            #   wh: not enrolled -- functional draw reaches 65536 steps where the ramp sees 1 (2048 pts, 2026-09-17)
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float32,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.No,
+                #   wh: max 32768 ULP, p99.9 32768.0, 15% exact, ~8 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.No,
+                    ),
+                    AccuracyContract(max_ulp=40960),
                 ),
-                AccuracyContract(metric=Metric.TOLERANCE),
-            ),
-            #   wh: max 1 ULP, p99.9 1.0, 96% exact, ~23 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float32,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.Yes,
+                #   wh: max 4093 ULP, p99.9 4092.0, 0% exact, ~11 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.Yes,
+                    ),
+                    AccuracyContract(max_ulp=5115),
                 ),
-                AccuracyContract(max_ulp=2),
-            ),
-            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 4096 pts, 2026-09-17; measured 0, floored to 1 (a finite sample cannot assert exactness)
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float32,
-                    output_format=DataFormat.Float16_b,
-                    approx_mode=ApproximationMode.No,
+                #   wh: max 32768 ULP, p99.9 32768.0, 15% exact, ~8 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.Yes,
+                        dest_acc=DestAccumulation.No,
+                    ),
+                    AccuracyContract(max_ulp=40960),
                 ),
-                AccuracyContract(max_ulp=1),
-            ),
-            #   wh: not enrolled -- functional draw reaches 65536 steps where the ramp sees 1 (2048 pts, 2026-09-17)
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16_b,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.No,
+                #   wh: max 4093 ULP, p99.9 4092.0, 0% exact, ~11 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.Yes,
+                        dest_acc=DestAccumulation.Yes,
+                    ),
+                    AccuracyContract(max_ulp=5115),
                 ),
-                AccuracyContract(metric=Metric.TOLERANCE),
-            ),
-            #   wh: max 32693 ULP, p99.9 32693.0, 0% exact, ~8 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16_b,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.Yes,
+                #   wh: max 1 ULP, p99.9 1.0, 93% exact, ~7 mantissa bits, 8192 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16,
+                        output_format=DataFormat.Float16_b,
+                    ),
+                    AccuracyContract(max_ulp=2),
                 ),
-                AccuracyContract(max_ulp=40867),
-            ),
-            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 4096 pts, 2026-09-17; measured 0, floored to 1 (a finite sample cannot assert exactness)
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16_b,
-                    output_format=DataFormat.Float16_b,
-                    approx_mode=ApproximationMode.No,
-                ),
-                AccuracyContract(max_ulp=1),
-            ),
-            #   wh: not enrolled -- functional draw reaches 57344 steps, ramp-derived 40960 (4096 pts, 2026-09-17)
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                ),
-                AccuracyContract(metric=Metric.TOLERANCE),
-            ),
-            #   wh: max 1 ULP, p99.9 1.0, 94% exact, ~7 mantissa bits, 4096 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16,
-                    output_format=DataFormat.Float16_b,
-                    approx_mode=ApproximationMode.No,
-                ),
-                AccuracyContract(max_ulp=2),
             ),
         ),
-    ),
-    (
-        MathOperation.Log1p,
-        budget_table(
-            #   wh: max 65536 ULP, p99.9 65536.0, 97% exact, ~7 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float32,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.No,
+        (
+            MathOperation.Elu,
+            budget_table(
+                #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~23 mantissa bits, 2048 pts, 2026-09-17; measured 0, floored to 1 (a finite sample cannot assert exactness)
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float32,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.No,
+                    ),
+                    AccuracyContract(max_ulp=1),
                 ),
-                AccuracyContract(max_ulp=81920),
-            ),
-            #   wh: max 1 ULP, p99.9 1.0, 93% exact, ~23 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float32,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.Yes,
+                #   wh: max 9 ULP, p99.9 9.0, 90% exact, ~20 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float32,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.Yes,
+                    ),
+                    AccuracyContract(max_ulp=12),
                 ),
-                AccuracyContract(max_ulp=2),
-            ),
-            #   wh: max 1 ULP, p99.9 1.0, 97% exact, ~7 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float32,
-                    output_format=DataFormat.Float16_b,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.No,
+                #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 4096 pts, 2026-09-17; measured 0, floored to 1 (a finite sample cannot assert exactness)
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float32,
+                        output_format=DataFormat.Float16_b,
+                        approx_mode=ApproximationMode.No,
+                    ),
+                    AccuracyContract(max_ulp=1),
                 ),
-                AccuracyContract(max_ulp=2),
-            ),
-            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 2048 pts, 2026-09-17; measured 0, floored to 1 (a finite sample cannot assert exactness)
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float32,
-                    output_format=DataFormat.Float16_b,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.Yes,
+                #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~23 mantissa bits, 2048 pts, 2026-09-17; measured 0, floored to 1 (a finite sample cannot assert exactness)
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16_b,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.No,
+                    ),
+                    AccuracyContract(max_ulp=1),
                 ),
-                AccuracyContract(max_ulp=1),
-            ),
-            #   wh: max 65536 ULP, p99.9 65536.0, 97% exact, ~7 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16_b,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.No,
+                #   wh: max 32752 ULP, p99.9 32501.7, 50% exact, ~8 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16_b,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.Yes,
+                    ),
+                    AccuracyContract(max_ulp=40628),
                 ),
-                AccuracyContract(max_ulp=81920),
-            ),
-            #   wh: max 32743 ULP, p99.9 32714.4, 0% exact, ~8 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16_b,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.Yes,
+                #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 4096 pts, 2026-09-17; measured 0, floored to 1 (a finite sample cannot assert exactness)
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16_b,
+                        output_format=DataFormat.Float16_b,
+                        approx_mode=ApproximationMode.No,
+                    ),
+                    AccuracyContract(max_ulp=1),
                 ),
-                AccuracyContract(max_ulp=40893),
-            ),
-            #   wh: max 1 ULP, p99.9 1.0, 97% exact, ~7 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16_b,
-                    output_format=DataFormat.Float16_b,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.No,
+                #   wh: max 32768 ULP, p99.9 32768.0, 13% exact, ~8 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.No,
+                    ),
+                    AccuracyContract(max_ulp=40960),
                 ),
-                AccuracyContract(max_ulp=2),
-            ),
-            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 2048 pts, 2026-09-17; measured 0, floored to 1 (a finite sample cannot assert exactness)
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16_b,
-                    output_format=DataFormat.Float16_b,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.Yes,
+                #   wh: max 4085 ULP, p99.9 4069.9, 50% exact, ~11 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.Yes,
+                    ),
+                    AccuracyContract(max_ulp=5088),
                 ),
-                AccuracyContract(max_ulp=1),
-            ),
-            #   wh: max 49152 ULP, p99.9 48767.0, 12% exact, ~7 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.No,
+                #   wh: max 1 ULP, p99.9 1.0, 94% exact, ~7 mantissa bits, 4096 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16,
+                        output_format=DataFormat.Float16_b,
+                        approx_mode=ApproximationMode.No,
+                    ),
+                    AccuracyContract(max_ulp=2),
                 ),
-                AccuracyContract(max_ulp=60959),
-            ),
-            #   wh: not enrolled -- near-zero tail: functional reaches 938,672,129 steps (2048 pts, 2026-09-17)
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.Yes,
-                ),
-                AccuracyContract(metric=Metric.TOLERANCE),
-            ),
-            #   wh: not enrolled -- near-zero tail: functional reaches 14324 steps (4096 pts, 2026-09-17)
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16,
-                    output_format=DataFormat.Float16_b,
-                    approx_mode=ApproximationMode.No,
-                ),
-                AccuracyContract(metric=Metric.TOLERANCE),
             ),
         ),
-    ),
-    (
-        MathOperation.Reciprocal,
-        budget_table(
-            #   wh: max 65536 ULP, p99.9 65536.0, 99% exact, ~7 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float32,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.No,
+        (
+            MathOperation.Erfinv,
+            budget_table(
+                #   wh: max 65536 ULP, p99.9 65536.0, 56% exact, ~7 mantissa bits, 2048 pts, 2026-09-17; 42 near-zero pts reach 962592769 steps and are held by the atol floor instead
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float32,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.No,
+                    ),
+                    AccuracyContract(max_ulp=81920, near_zero_atol=0.000534),
                 ),
-                AccuracyContract(max_ulp=81920),
-            ),
-            #   wh: max 1 ULP, p99.9 1.0, 90% exact, ~23 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float32,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.Yes,
+                #   wh: max 26321 ULP, p99.9 25227.0, 0% exact, ~8 mantissa bits, 2048 pts, 2026-09-17; 42 near-zero pts reach 962639709 steps and are held by the atol floor instead
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float32,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.Yes,
+                    ),
+                    AccuracyContract(max_ulp=31534, near_zero_atol=0.000536),
                 ),
-                AccuracyContract(max_ulp=2),
-            ),
-            #   wh: max 65536 ULP, p99.9 65536.0, 59% exact, ~7 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float32,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.Yes,
-                    dest_acc=DestAccumulation.No,
+                #   wh: max 1 ULP, p99.9 1.0, 56% exact, ~7 mantissa bits, 2048 pts, 2026-09-17; 42 near-zero pts reach 14689 steps and are held by the atol floor instead
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float32,
+                        output_format=DataFormat.Float16_b,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.No,
+                    ),
+                    AccuracyContract(max_ulp=2, near_zero_atol=0.000534),
                 ),
-                AccuracyContract(max_ulp=81920),
-            ),
-            #   wh: max 1650 ULP, p99.9 1648.0, 1% exact, ~12 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float32,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.Yes,
-                    dest_acc=DestAccumulation.Yes,
+                #   wh: max 1 ULP, p99.9 1.0, 96% exact, ~7 mantissa bits, 2048 pts, 2026-09-17; 42 near-zero pts reach 14690 steps and are held by the atol floor instead
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float32,
+                        output_format=DataFormat.Float16_b,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.Yes,
+                    ),
+                    AccuracyContract(max_ulp=2, near_zero_atol=0.000536),
                 ),
-                AccuracyContract(max_ulp=2060),
-            ),
-            #   wh: max 1 ULP, p99.9 1.0, 99% exact, ~7 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float32,
-                    output_format=DataFormat.Float16_b,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.No,
+                #   wh: max 65536 ULP, p99.9 65536.0, 56% exact, ~7 mantissa bits, 2048 pts, 2026-09-17; 42 near-zero pts reach 962658305 steps and are held by the atol floor instead
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16_b,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.No,
+                    ),
+                    AccuracyContract(max_ulp=81920, near_zero_atol=0.000536),
                 ),
-                AccuracyContract(max_ulp=2),
-            ),
-            #   wh: max 1 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float32,
-                    output_format=DataFormat.Float16_b,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.Yes,
+                #   wh: max 50188 ULP, p99.9 50188.0, 0% exact, ~7 mantissa bits, 2048 pts, 2026-09-17; 42 near-zero pts reach 962658305 steps and are held by the atol floor instead
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16_b,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.Yes,
+                    ),
+                    AccuracyContract(max_ulp=62735, near_zero_atol=0.000536),
                 ),
-                AccuracyContract(max_ulp=1),
-            ),
-            #   wh: max 1 ULP, p99.9 1.0, 59% exact, ~7 mantissa bits, 4096 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float32,
-                    output_format=DataFormat.Float16_b,
-                    approx_mode=ApproximationMode.Yes,
+                #   wh: max 1 ULP, p99.9 1.0, 56% exact, ~7 mantissa bits, 4096 pts, 2026-09-17; 84 near-zero pts reach 14690 steps and are held by the atol floor instead
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16_b,
+                        output_format=DataFormat.Float16_b,
+                        approx_mode=ApproximationMode.No,
+                    ),
+                    AccuracyContract(max_ulp=2, near_zero_atol=0.000536),
                 ),
-                AccuracyContract(max_ulp=2),
-            ),
-            #   wh: max 65536 ULP, p99.9 65536.0, 98% exact, ~7 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16_b,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.No,
+                #   wh: max 24576 ULP, p99.9 24576.0, 56% exact, ~8 mantissa bits, 2048 pts, 2026-09-17; 42 near-zero pts reach 962641921 steps and are held by the atol floor instead
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.No,
+                    ),
+                    AccuracyContract(max_ulp=30720, near_zero_atol=0.000536),
                 ),
-                AccuracyContract(max_ulp=81920),
-            ),
-            #   wh: max 32639 ULP, p99.9 32639.0, 1% exact, ~8 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16_b,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.Yes,
+                #   wh: max 27027 ULP, p99.9 24417.0, 0% exact, ~8 mantissa bits, 2048 pts, 2026-09-17; 42 near-zero pts reach 962641921 steps and are held by the atol floor instead
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.Yes,
+                    ),
+                    AccuracyContract(max_ulp=30522, near_zero_atol=0.000536),
                 ),
-                AccuracyContract(max_ulp=40799),
-            ),
-            #   wh: max 65536 ULP, p99.9 65536.0, 57% exact, ~7 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16_b,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.Yes,
-                    dest_acc=DestAccumulation.No,
+                #   wh: max 1 ULP, p99.9 1.0, 53% exact, ~7 mantissa bits, 4096 pts, 2026-09-17; 84 near-zero pts reach 14690 steps and are held by the atol floor instead
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16,
+                        output_format=DataFormat.Float16_b,
+                        approx_mode=ApproximationMode.No,
+                    ),
+                    AccuracyContract(max_ulp=2, near_zero_atol=0.000536),
                 ),
-                AccuracyContract(max_ulp=81920),
-            ),
-            #   wh: max 33278 ULP, p99.9 33278.0, 0% exact, ~8 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16_b,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.Yes,
-                    dest_acc=DestAccumulation.Yes,
-                ),
-                AccuracyContract(max_ulp=41598),
-            ),
-            #   wh: max 1 ULP, p99.9 1.0, 98% exact, ~7 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16_b,
-                    output_format=DataFormat.Float16_b,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.No,
-                ),
-                AccuracyContract(max_ulp=2),
-            ),
-            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 2048 pts, 2026-09-17; measured 0, floored to 1 (a finite sample cannot assert exactness)
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16_b,
-                    output_format=DataFormat.Float16_b,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.Yes,
-                ),
-                AccuracyContract(max_ulp=1),
-            ),
-            #   wh: max 1 ULP, p99.9 1.0, 57% exact, ~7 mantissa bits, 4096 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16_b,
-                    output_format=DataFormat.Float16_b,
-                    approx_mode=ApproximationMode.Yes,
-                ),
-                AccuracyContract(max_ulp=2),
-            ),
-            #   wh: max 32768 ULP, p99.9 32768.0, 13% exact, ~8 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.No,
-                ),
-                AccuracyContract(max_ulp=40960),
-            ),
-            #   wh: max 4094 ULP, p99.9 4091.0, 0% exact, ~11 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.Yes,
-                ),
-                AccuracyContract(max_ulp=5114),
-            ),
-            #   wh: max 8192 ULP, p99.9 8192.0, 45% exact, ~10 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.Yes,
-                    dest_acc=DestAccumulation.No,
-                ),
-                AccuracyContract(max_ulp=10240),
-            ),
-            #   wh: max 5319 ULP, p99.9 5319.0, 0% exact, ~11 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.Yes,
-                    dest_acc=DestAccumulation.Yes,
-                ),
-                AccuracyContract(max_ulp=6649),
-            ),
-            #   wh: max 1 ULP, p99.9 1.0, 48% exact, ~7 mantissa bits, 8192 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16, output_format=DataFormat.Float16_b
-                ),
-                AccuracyContract(max_ulp=2),
             ),
         ),
-    ),
-    (
-        MathOperation.Rsqrt,
-        budget_table(
-            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~23 mantissa bits, 4096 pts, 2026-09-17; measured 0, floored to 1 (a finite sample cannot assert exactness)
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float32,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.No,
+        (
+            MathOperation.Exp,
+            budget_table(
+                #   wh: max 65536 ULP, p99.9 65536.0, 81% exact, ~7 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float32,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.No,
+                    ),
+                    AccuracyContract(max_ulp=81920),
                 ),
-                AccuracyContract(max_ulp=1),
-            ),
-            #   wh: max 2 ULP, p99.9 2.0, 67% exact, ~22 mantissa bits, 4096 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float32,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.Yes,
+                #   wh: max 1 ULP, p99.9 1.0, 94% exact, ~23 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float32,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.Yes,
+                    ),
+                    AccuracyContract(max_ulp=2),
                 ),
-                AccuracyContract(max_ulp=3),
-            ),
-            #   wh: max 65536 ULP, p99.9 65536.0, 91% exact, ~7 mantissa bits, 4096 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float32,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.Yes,
-                    dest_acc=DestAccumulation.No,
+                #   wh: max 393216 ULP, p99.9 393216.0, 11% exact, ~4 mantissa bits, 4096 pts, 2026-09-17; budget would be 491520, past the 419430-step point where a budget stops being tighter than the tolerance it replaces, so tolerance
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float32,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.Yes,
+                    ),
+                    AccuracyContract(metric=Metric.TOLERANCE),
                 ),
-                AccuracyContract(max_ulp=81920),
-            ),
-            #   wh: max 14745 ULP, p99.9 14726.6, 0% exact, ~9 mantissa bits, 4096 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float32,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.Yes,
-                    dest_acc=DestAccumulation.Yes,
+                #   wh: max 1 ULP, p99.9 1.0, 81% exact, ~7 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float32,
+                        output_format=DataFormat.Float16_b,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.No,
+                    ),
+                    AccuracyContract(max_ulp=2),
                 ),
-                AccuracyContract(max_ulp=18409),
-            ),
-            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 8192 pts, 2026-09-17; measured 0, floored to 1 (a finite sample cannot assert exactness)
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float32,
-                    output_format=DataFormat.Float16_b,
-                    approx_mode=ApproximationMode.No,
+                #   wh: max 1 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float32,
+                        output_format=DataFormat.Float16_b,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.Yes,
+                    ),
+                    AccuracyContract(max_ulp=1),
                 ),
-                AccuracyContract(max_ulp=1),
-            ),
-            #   wh: max 1 ULP, p99.9 1.0, 88% exact, ~7 mantissa bits, 8192 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float32,
-                    output_format=DataFormat.Float16_b,
-                    approx_mode=ApproximationMode.Yes,
+                #   wh: max 6 ULP, p99.9 6.0, 16% exact, ~4 mantissa bits, 4096 pts, 2026-09-17; budget would be 8, past the 6-step point where a budget stops being tighter than the tolerance it replaces, so tolerance
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float32,
+                        output_format=DataFormat.Float16_b,
+                        approx_mode=ApproximationMode.Yes,
+                    ),
+                    AccuracyContract(metric=Metric.TOLERANCE),
                 ),
-                AccuracyContract(max_ulp=2),
-            ),
-            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~23 mantissa bits, 4096 pts, 2026-09-17; measured 0, floored to 1 (a finite sample cannot assert exactness)
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16_b,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.No,
+                #   wh: max 65536 ULP, p99.9 65536.0, 82% exact, ~7 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16_b,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.No,
+                    ),
+                    AccuracyContract(max_ulp=81920),
                 ),
-                AccuracyContract(max_ulp=1),
-            ),
-            #   wh: max 32723 ULP, p99.9 32723.0, 1% exact, ~8 mantissa bits, 4096 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16_b,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.Yes,
+                #   wh: max 32767 ULP, p99.9 32752.0, 7% exact, ~8 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16_b,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.Yes,
+                    ),
+                    AccuracyContract(max_ulp=40940),
                 ),
-                AccuracyContract(max_ulp=40904),
-            ),
-            #   wh: max 65536 ULP, p99.9 65536.0, 92% exact, ~7 mantissa bits, 4096 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16_b,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.Yes,
-                    dest_acc=DestAccumulation.No,
+                #   wh: max 393216 ULP, p99.9 393216.0, 14% exact, ~4 mantissa bits, 4096 pts, 2026-09-17; budget would be 491520, past the 419430-step point where a budget stops being tighter than the tolerance it replaces, so tolerance
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16_b,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.Yes,
+                    ),
+                    AccuracyContract(metric=Metric.TOLERANCE),
                 ),
-                AccuracyContract(max_ulp=81920),
-            ),
-            #   wh: max 43254 ULP, p99.9 43254.0, 0% exact, ~8 mantissa bits, 4096 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16_b,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.Yes,
-                    dest_acc=DestAccumulation.Yes,
+                #   wh: max 1 ULP, p99.9 1.0, 82% exact, ~7 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16_b,
+                        output_format=DataFormat.Float16_b,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.No,
+                    ),
+                    AccuracyContract(max_ulp=2),
                 ),
-                AccuracyContract(max_ulp=54068),
-            ),
-            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 8192 pts, 2026-09-17; measured 0, floored to 1 (a finite sample cannot assert exactness)
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16_b,
-                    output_format=DataFormat.Float16_b,
-                    approx_mode=ApproximationMode.No,
+                #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 2048 pts, 2026-09-17; measured 0, floored to 1 (a finite sample cannot assert exactness)
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16_b,
+                        output_format=DataFormat.Float16_b,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.Yes,
+                    ),
+                    AccuracyContract(max_ulp=1),
                 ),
-                AccuracyContract(max_ulp=1),
-            ),
-            #   wh: max 1 ULP, p99.9 1.0, 92% exact, ~7 mantissa bits, 8192 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16_b,
-                    output_format=DataFormat.Float16_b,
-                    approx_mode=ApproximationMode.Yes,
+                #   wh: max 6 ULP, p99.9 6.0, 16% exact, ~4 mantissa bits, 4096 pts, 2026-09-17; budget would be 8, past the 6-step point where a budget stops being tighter than the tolerance it replaces, so tolerance
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16_b,
+                        output_format=DataFormat.Float16_b,
+                        approx_mode=ApproximationMode.Yes,
+                    ),
+                    AccuracyContract(metric=Metric.TOLERANCE),
                 ),
-                AccuracyContract(max_ulp=2),
-            ),
-            #   wh: max 32768 ULP, p99.9 32768.0, 12% exact, ~8 mantissa bits, 4096 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.No,
+                #   wh: max 57344 ULP, p99.9 57344.0, 14% exact, ~7 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.No,
+                    ),
+                    AccuracyContract(max_ulp=71680),
                 ),
-                AccuracyContract(max_ulp=40960),
-            ),
-            #   wh: max 4093 ULP, p99.9 4087.9, 0% exact, ~11 mantissa bits, 4096 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.Yes,
+                #   wh: max 8181 ULP, p99.9 7049.7, 0% exact, ~10 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.Yes,
+                    ),
+                    AccuracyContract(max_ulp=8813),
                 ),
-                AccuracyContract(max_ulp=5110),
-            ),
-            #   wh: max 49152 ULP, p99.9 40960.0, 12% exact, ~7 mantissa bits, 4096 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.Yes,
-                    dest_acc=DestAccumulation.No,
+                #   wh: max 939728897 ULP, p99.9 939594744.8, 1% exact, ~-7 mantissa bits, 4096 pts, 2026-09-17; budget would be 1174493432, past the 419430-step point where a budget stops being tighter than the tolerance it replaces, so tolerance
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.Yes,
+                    ),
+                    AccuracyContract(metric=Metric.TOLERANCE),
                 ),
-                AccuracyContract(max_ulp=51200),
-            ),
-            #   wh: max 18072 ULP, p99.9 17563.0, 0% exact, ~9 mantissa bits, 4096 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.Yes,
-                    dest_acc=DestAccumulation.Yes,
+                #   wh: max 1 ULP, p99.9 1.0, 79% exact, ~7 mantissa bits, 4096 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16,
+                        output_format=DataFormat.Float16_b,
+                        approx_mode=ApproximationMode.No,
+                    ),
+                    AccuracyContract(max_ulp=2),
                 ),
-                AccuracyContract(max_ulp=21954),
-            ),
-            #   wh: max 1 ULP, p99.9 1.0, 88% exact, ~7 mantissa bits, 16384 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16, output_format=DataFormat.Float16_b
+                #   wh: max 14340 ULP, p99.9 14338.0, 6% exact, ~-7 mantissa bits, 4096 pts, 2026-09-17; budget would be 17923, past the 6-step point where a budget stops being tighter than the tolerance it replaces, so tolerance
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16,
+                        output_format=DataFormat.Float16_b,
+                        approx_mode=ApproximationMode.Yes,
+                    ),
+                    AccuracyContract(metric=Metric.TOLERANCE),
                 ),
-                AccuracyContract(max_ulp=2),
-            ),
-        ),
-    ),
-    (
-        MathOperation.Silu,
-        budget_table(
-            #   wh: max 65536 ULP, p99.9 65536.0, 90% exact, ~7 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float32,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.No,
-                ),
-                AccuracyContract(max_ulp=81920),
-            ),
-            #   wh: max 2 ULP, p99.9 2.0, 76% exact, ~22 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float32,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.Yes,
-                ),
-                AccuracyContract(max_ulp=3),
-            ),
-            #   wh: max 1 ULP, p99.9 1.0, 90% exact, ~7 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float32,
-                    output_format=DataFormat.Float16_b,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.No,
-                ),
-                AccuracyContract(max_ulp=2),
-            ),
-            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 2048 pts, 2026-09-17; measured 0, floored to 1 (a finite sample cannot assert exactness)
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float32,
-                    output_format=DataFormat.Float16_b,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.Yes,
-                ),
-                AccuracyContract(max_ulp=1),
-            ),
-            #   wh: max 65536 ULP, p99.9 65536.0, 91% exact, ~7 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16_b,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.No,
-                ),
-                AccuracyContract(max_ulp=81920),
-            ),
-            #   wh: max 32764 ULP, p99.9 32763.7, 0% exact, ~8 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16_b,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.Yes,
-                ),
-                AccuracyContract(max_ulp=40955),
-            ),
-            #   wh: max 1 ULP, p99.9 1.0, 91% exact, ~7 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16_b,
-                    output_format=DataFormat.Float16_b,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.No,
-                ),
-                AccuracyContract(max_ulp=2),
-            ),
-            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 2048 pts, 2026-09-17; measured 0, floored to 1 (a finite sample cannot assert exactness)
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16_b,
-                    output_format=DataFormat.Float16_b,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.Yes,
-                ),
-                AccuracyContract(max_ulp=1),
-            ),
-            #   wh: max 57344 ULP, p99.9 57344.0, 11% exact, ~7 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.No,
-                ),
-                AccuracyContract(max_ulp=71680),
-            ),
-            #   wh: max 4095 ULP, p99.9 4087.8, 0% exact, ~11 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.Yes,
-                ),
-                AccuracyContract(max_ulp=5110),
-            ),
-            #   wh: max 1 ULP, p99.9 1.0, 88% exact, ~7 mantissa bits, 4096 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16,
-                    output_format=DataFormat.Float16_b,
-                    approx_mode=ApproximationMode.No,
-                ),
-                AccuracyContract(max_ulp=2),
             ),
         ),
-    ),
-    (
-        MathOperation.Sin,
-        budget_table(
-            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~23 mantissa bits, 2048 pts, 2026-09-17; measured 0, floored to 1 (a finite sample cannot assert exactness)
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float32,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.No,
+        (
+            MathOperation.Exp2,
+            budget_table(
+                #   wh: max 65536 ULP, p99.9 65536.0, 82% exact, ~7 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float32,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.No,
+                    ),
+                    AccuracyContract(max_ulp=81920),
                 ),
-                AccuracyContract(max_ulp=1),
-            ),
-            #   wh: max 1 ULP, p99.9 1.0, 81% exact, ~23 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float32,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.Yes,
+                #   wh: max 1 ULP, p99.9 1.0, 86% exact, ~23 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float32,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.Yes,
+                    ),
+                    AccuracyContract(max_ulp=2),
                 ),
-                AccuracyContract(max_ulp=2),
-            ),
-            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~23 mantissa bits, 2048 pts, 2026-09-17; measured 0, floored to 1 (a finite sample cannot assert exactness)
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float32,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.Yes,
-                    dest_acc=DestAccumulation.No,
+                #   wh: max 1 ULP, p99.9 1.0, 82% exact, ~7 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float32,
+                        output_format=DataFormat.Float16_b,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.No,
+                    ),
+                    AccuracyContract(max_ulp=2),
                 ),
-                AccuracyContract(max_ulp=1),
-            ),
-            #   wh: max 1 ULP, p99.9 1.0, 81% exact, ~23 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float32,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.Yes,
-                    dest_acc=DestAccumulation.Yes,
+                #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 2048 pts, 2026-09-17; measured 0, floored to 1 (a finite sample cannot assert exactness)
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float32,
+                        output_format=DataFormat.Float16_b,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.Yes,
+                    ),
+                    AccuracyContract(max_ulp=1),
                 ),
-                AccuracyContract(max_ulp=2),
-            ),
-            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 8192 pts, 2026-09-17; measured 0, floored to 1 (a finite sample cannot assert exactness)
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float32, output_format=DataFormat.Float16_b
+                #   wh: max 65536 ULP, p99.9 65536.0, 83% exact, ~7 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16_b,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.No,
+                    ),
+                    AccuracyContract(max_ulp=81920),
                 ),
-                AccuracyContract(max_ulp=1),
-            ),
-            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~23 mantissa bits, 2048 pts, 2026-09-17; measured 0, floored to 1 (a finite sample cannot assert exactness)
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16_b,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.No,
+                #   wh: max 32393 ULP, p99.9 31806.9, 29% exact, ~8 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16_b,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.Yes,
+                    ),
+                    AccuracyContract(max_ulp=39759),
                 ),
-                AccuracyContract(max_ulp=1),
-            ),
-            #   wh: max 32737 ULP, p99.9 32708.0, 0% exact, ~8 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16_b,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.Yes,
+                #   wh: max 1 ULP, p99.9 1.0, 83% exact, ~7 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16_b,
+                        output_format=DataFormat.Float16_b,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.No,
+                    ),
+                    AccuracyContract(max_ulp=2),
                 ),
-                AccuracyContract(max_ulp=40885),
-            ),
-            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~23 mantissa bits, 2048 pts, 2026-09-17; measured 0, floored to 1 (a finite sample cannot assert exactness)
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16_b,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.Yes,
-                    dest_acc=DestAccumulation.No,
+                #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 2048 pts, 2026-09-17; measured 0, floored to 1 (a finite sample cannot assert exactness)
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16_b,
+                        output_format=DataFormat.Float16_b,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.Yes,
+                    ),
+                    AccuracyContract(max_ulp=1),
                 ),
-                AccuracyContract(max_ulp=1),
-            ),
-            #   wh: max 32737 ULP, p99.9 32708.0, 0% exact, ~8 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16_b,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.Yes,
-                    dest_acc=DestAccumulation.Yes,
+                #   wh: max 57344 ULP, p99.9 57344.0, 16% exact, ~7 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.No,
+                    ),
+                    AccuracyContract(max_ulp=71680),
                 ),
-                AccuracyContract(max_ulp=40885),
-            ),
-            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 8192 pts, 2026-09-17; measured 0, floored to 1 (a finite sample cannot assert exactness)
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16_b, output_format=DataFormat.Float16_b
+                #   wh: max 4064 ULP, p99.9 4051.0, 0% exact, ~11 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.Yes,
+                    ),
+                    AccuracyContract(max_ulp=5064),
                 ),
-                AccuracyContract(max_ulp=1),
-            ),
-            #   wh: max 32768 ULP, p99.9 32768.0, 13% exact, ~8 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.No,
+                #   wh: max 1 ULP, p99.9 1.0, 80% exact, ~7 mantissa bits, 4096 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16,
+                        output_format=DataFormat.Float16_b,
+                        approx_mode=ApproximationMode.No,
+                    ),
+                    AccuracyContract(max_ulp=2),
                 ),
-                AccuracyContract(max_ulp=40960),
-            ),
-            #   wh: max 4093 ULP, p99.9 4092.0, 0% exact, ~11 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.Yes,
-                ),
-                AccuracyContract(max_ulp=5115),
-            ),
-            #   wh: max 32768 ULP, p99.9 32768.0, 13% exact, ~8 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.Yes,
-                    dest_acc=DestAccumulation.No,
-                ),
-                AccuracyContract(max_ulp=40960),
-            ),
-            #   wh: max 4093 ULP, p99.9 4092.0, 0% exact, ~11 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.Yes,
-                    dest_acc=DestAccumulation.Yes,
-                ),
-                AccuracyContract(max_ulp=5115),
-            ),
-            #   wh: max 1 ULP, p99.9 1.0, 95% exact, ~7 mantissa bits, 8192 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16, output_format=DataFormat.Float16_b
-                ),
-                AccuracyContract(max_ulp=2),
             ),
         ),
-    ),
-    (
-        MathOperation.Sqrt,
-        budget_table(
-            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~23 mantissa bits, 4096 pts, 2026-09-17; measured 0, floored to 1 (a finite sample cannot assert exactness)
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float32,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.No,
+        (
+            MathOperation.Gelu,
+            budget_table(
+                #   wh: max 65536 ULP, p99.9 65536.0, 94% exact, ~7 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float32,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.No,
+                    ),
+                    AccuracyContract(max_ulp=81920),
                 ),
-                AccuracyContract(max_ulp=1),
-            ),
-            #   wh: max 1 ULP, p99.9 1.0, 89% exact, ~23 mantissa bits, 4096 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float32,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.Yes,
+                #   wh: not enrolled -- near-zero tail: functional reaches 19,474,047 steps (2048 pts, 2026-09-17)
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float32,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.Yes,
+                    ),
+                    AccuracyContract(metric=Metric.TOLERANCE),
                 ),
-                AccuracyContract(max_ulp=2),
-            ),
-            #   wh: max 65536 ULP, p99.9 65536.0, 85% exact, ~7 mantissa bits, 4096 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float32,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.Yes,
-                    dest_acc=DestAccumulation.No,
+                #   wh: not enrolled -- near-zero tail: functional reaches 19,474,047 steps (4096 pts, 2026-09-17)
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float32,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.Yes,
+                    ),
+                    AccuracyContract(metric=Metric.TOLERANCE),
                 ),
-                AccuracyContract(max_ulp=81920),
-            ),
-            #   wh: max 14746 ULP, p99.9 14731.6, 0% exact, ~9 mantissa bits, 4096 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float32,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.Yes,
-                    dest_acc=DestAccumulation.Yes,
+                #   wh: max 1 ULP, p99.9 1.0, 94% exact, ~7 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float32,
+                        output_format=DataFormat.Float16_b,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.No,
+                    ),
+                    AccuracyContract(max_ulp=2),
                 ),
-                AccuracyContract(max_ulp=18415),
-            ),
-            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 8192 pts, 2026-09-17; measured 0, floored to 1 (a finite sample cannot assert exactness)
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float32,
-                    output_format=DataFormat.Float16_b,
-                    approx_mode=ApproximationMode.No,
+                #   wh: not enrolled -- near-zero tail: functional abs error 7.49e-07 exceeds the ramp-derived 7.08e-07 floor, 148 steps against a 2-step budget (2048 pts, 2026-09-17)
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float32,
+                        output_format=DataFormat.Float16_b,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.Yes,
+                    ),
+                    AccuracyContract(metric=Metric.TOLERANCE),
                 ),
-                AccuracyContract(max_ulp=1),
-            ),
-            #   wh: max 1 ULP, p99.9 1.0, 85% exact, ~7 mantissa bits, 8192 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float32,
-                    output_format=DataFormat.Float16_b,
-                    approx_mode=ApproximationMode.Yes,
+                #   wh: not enrolled -- near-zero tail: functional abs error 7.49e-07 exceeds the ramp-derived 7.08e-07 floor, 148 steps against a 2-step budget (4096 pts, 2026-09-17)
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float32,
+                        output_format=DataFormat.Float16_b,
+                        approx_mode=ApproximationMode.Yes,
+                    ),
+                    AccuracyContract(metric=Metric.TOLERANCE),
                 ),
-                AccuracyContract(max_ulp=2),
-            ),
-            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~23 mantissa bits, 4096 pts, 2026-09-17; measured 0, floored to 1 (a finite sample cannot assert exactness)
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16_b,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.No,
+                #   wh: max 65536 ULP, p99.9 65536.0, 94% exact, ~7 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16_b,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.No,
+                    ),
+                    AccuracyContract(max_ulp=81920),
                 ),
-                AccuracyContract(max_ulp=1),
-            ),
-            #   wh: max 32736 ULP, p99.9 32736.0, 3% exact, ~8 mantissa bits, 4096 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16_b,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.Yes,
+                #   wh: max 57344 ULP, p99.9 57344.0, 0% exact, ~7 mantissa bits, 2048 pts, 2026-09-17; 164 near-zero pts reach 3932160 steps and are held by the atol floor instead
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16_b,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.Yes,
+                    ),
+                    AccuracyContract(max_ulp=71680, near_zero_atol=5.59e-07),
                 ),
-                AccuracyContract(max_ulp=40920),
-            ),
-            #   wh: max 65536 ULP, p99.9 65536.0, 85% exact, ~7 mantissa bits, 4096 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16_b,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.Yes,
-                    dest_acc=DestAccumulation.No,
+                #   wh: max 1936392194 ULP, p99.9 1936392194.0, 20% exact, ~-8 mantissa bits, 4096 pts, 2026-09-17; budget would be 2420490243, past the 419430-step point where a budget stops being tighter than the tolerance it replaces, so tolerance
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16_b,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.Yes,
+                    ),
+                    AccuracyContract(metric=Metric.TOLERANCE),
                 ),
-                AccuracyContract(max_ulp=81920),
-            ),
-            #   wh: max 47467 ULP, p99.9 47467.0, 0% exact, ~7 mantissa bits, 4096 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16_b,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.Yes,
-                    dest_acc=DestAccumulation.Yes,
+                #   wh: max 1 ULP, p99.9 1.0, 94% exact, ~7 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16_b,
+                        output_format=DataFormat.Float16_b,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.No,
+                    ),
+                    AccuracyContract(max_ulp=2),
                 ),
-                AccuracyContract(max_ulp=59334),
-            ),
-            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 8192 pts, 2026-09-17; measured 0, floored to 1 (a finite sample cannot assert exactness)
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16_b,
-                    output_format=DataFormat.Float16_b,
-                    approx_mode=ApproximationMode.No,
+                #   wh: max 1 ULP, p99.9 1.0, 99% exact, ~7 mantissa bits, 2048 pts, 2026-09-17; 164 near-zero pts reach 60 steps and are held by the atol floor instead
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16_b,
+                        output_format=DataFormat.Float16_b,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.Yes,
+                    ),
+                    AccuracyContract(max_ulp=2, near_zero_atol=5.59e-07),
                 ),
-                AccuracyContract(max_ulp=1),
-            ),
-            #   wh: max 1 ULP, p99.9 1.0, 85% exact, ~7 mantissa bits, 8192 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16_b,
-                    output_format=DataFormat.Float16_b,
-                    approx_mode=ApproximationMode.Yes,
+                #   wh: max 29549 ULP, p99.9 29549.0, 34% exact, ~-8 mantissa bits, 4096 pts, 2026-09-17; budget would be 36937, past the 6-step point where a budget stops being tighter than the tolerance it replaces, so tolerance
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16_b,
+                        output_format=DataFormat.Float16_b,
+                        approx_mode=ApproximationMode.Yes,
+                    ),
+                    AccuracyContract(metric=Metric.TOLERANCE),
                 ),
-                AccuracyContract(max_ulp=2),
-            ),
-            #   wh: max 32768 ULP, p99.9 32768.0, 14% exact, ~8 mantissa bits, 4096 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.No,
+                #   wh: max 57344 ULP, p99.9 57344.0, 13% exact, ~7 mantissa bits, 2048 pts, 2026-09-17; 462 near-zero pts reach 939524097 steps and are held by the atol floor instead
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.No,
+                    ),
+                    AccuracyContract(max_ulp=71680, near_zero_atol=7.63e-05),
                 ),
-                AccuracyContract(max_ulp=40960),
-            ),
-            #   wh: max 4095 ULP, p99.9 4092.0, 1% exact, ~11 mantissa bits, 4096 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.Yes,
+                #   wh: max 46656 ULP, p99.9 37126.2, 0% exact, ~7 mantissa bits, 2048 pts, 2026-09-17; 176 near-zero pts reach 3932160 steps and are held by the atol floor instead
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.Yes,
+                    ),
+                    AccuracyContract(max_ulp=46656, near_zero_atol=7.08e-07),
                 ),
-                AccuracyContract(max_ulp=5115),
-            ),
-            #   wh: max 49152 ULP, p99.9 40960.0, 14% exact, ~7 mantissa bits, 4096 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.Yes,
-                    dest_acc=DestAccumulation.No,
+                #   wh: max 1956462594 ULP, p99.9 1941721278.4, 16% exact, ~-8 mantissa bits, 4096 pts, 2026-09-17; budget would be 2427151599, past the 419430-step point where a budget stops being tighter than the tolerance it replaces, so tolerance
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.Yes,
+                    ),
+                    AccuracyContract(metric=Metric.TOLERANCE),
                 ),
-                AccuracyContract(max_ulp=51200),
-            ),
-            #   wh: max 18828 ULP, p99.9 18713.0, 0% exact, ~9 mantissa bits, 4096 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.Yes,
-                    dest_acc=DestAccumulation.Yes,
+                #   wh: max 1 ULP, p99.9 1.0, 91% exact, ~7 mantissa bits, 2048 pts, 2026-09-17; 462 near-zero pts reach 14337 steps and are held by the atol floor instead
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16,
+                        output_format=DataFormat.Float16_b,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.No,
+                    ),
+                    AccuracyContract(max_ulp=2, near_zero_atol=7.63e-05),
                 ),
-                AccuracyContract(max_ulp=23392),
-            ),
-            #   wh: max 1 ULP, p99.9 1.0, 87% exact, ~7 mantissa bits, 16384 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16, output_format=DataFormat.Float16_b
+                #   wh: max 1 ULP, p99.9 1.0, 93% exact, ~7 mantissa bits, 2048 pts, 2026-09-17; 176 near-zero pts reach 60 steps and are held by the atol floor instead
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16,
+                        output_format=DataFormat.Float16_b,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.Yes,
+                    ),
+                    AccuracyContract(max_ulp=2, near_zero_atol=7.08e-07),
                 ),
-                AccuracyContract(max_ulp=2),
-            ),
-        ),
-    ),
-    (
-        MathOperation.Tanh,
-        budget_table(
-            #   wh: max 65536 ULP, p99.9 65536.0, 86% exact, ~7 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float32,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.No,
+                #   wh: max 29855 ULP, p99.9 29630.2, 33% exact, ~-8 mantissa bits, 4096 pts, 2026-09-17; budget would be 37038, past the 6-step point where a budget stops being tighter than the tolerance it replaces, so tolerance
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16,
+                        output_format=DataFormat.Float16_b,
+                        approx_mode=ApproximationMode.Yes,
+                    ),
+                    AccuracyContract(metric=Metric.TOLERANCE),
                 ),
-                AccuracyContract(max_ulp=81920),
-            ),
-            #   wh: max 2 ULP, p99.9 1.0, 83% exact, ~22 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float32,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.Yes,
-                ),
-                AccuracyContract(max_ulp=2),
-            ),
-            #   wh: max 2424832 ULP, p99.9 2405616.0, 0% exact, ~2 mantissa bits, 4096 pts, 2026-09-17; budget would be 3007020, past the 419430-step point where a budget stops being tighter than the tolerance it replaces, so tolerance
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float32,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.Yes,
-                ),
-                AccuracyContract(metric=Metric.TOLERANCE),
-            ),
-            #   wh: max 1 ULP, p99.9 1.0, 86% exact, ~7 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float32,
-                    output_format=DataFormat.Float16_b,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.No,
-                ),
-                AccuracyContract(max_ulp=2),
-            ),
-            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 2048 pts, 2026-09-17; measured 0, floored to 1 (a finite sample cannot assert exactness)
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float32,
-                    output_format=DataFormat.Float16_b,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.Yes,
-                ),
-                AccuracyContract(max_ulp=1),
-            ),
-            #   wh: max 37 ULP, p99.9 37.0, 31% exact, ~2 mantissa bits, 4096 pts, 2026-09-17; budget would be 47, past the 6-step point where a budget stops being tighter than the tolerance it replaces, so tolerance
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float32,
-                    output_format=DataFormat.Float16_b,
-                    approx_mode=ApproximationMode.Yes,
-                ),
-                AccuracyContract(metric=Metric.TOLERANCE),
-            ),
-            #   wh: max 65536 ULP, p99.9 65536.0, 86% exact, ~7 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16_b,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.No,
-                ),
-                AccuracyContract(max_ulp=81920),
-            ),
-            #   wh: max 32666 ULP, p99.9 32540.0, 0% exact, ~8 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16_b,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.Yes,
-                ),
-                AccuracyContract(max_ulp=40675),
-            ),
-            #   wh: max 2424832 ULP, p99.9 2371584.0, 31% exact, ~2 mantissa bits, 4096 pts, 2026-09-17; budget would be 2964480, past the 419430-step point where a budget stops being tighter than the tolerance it replaces, so tolerance
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16_b,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.Yes,
-                ),
-                AccuracyContract(metric=Metric.TOLERANCE),
-            ),
-            #   wh: max 1 ULP, p99.9 1.0, 86% exact, ~7 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16_b,
-                    output_format=DataFormat.Float16_b,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.No,
-                ),
-                AccuracyContract(max_ulp=2),
-            ),
-            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 2048 pts, 2026-09-17; measured 0, floored to 1 (a finite sample cannot assert exactness)
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16_b,
-                    output_format=DataFormat.Float16_b,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.Yes,
-                ),
-                AccuracyContract(max_ulp=1),
-            ),
-            #   wh: max 37 ULP, p99.9 36.0, 31% exact, ~2 mantissa bits, 4096 pts, 2026-09-17; budget would be 45, past the 6-step point where a budget stops being tighter than the tolerance it replaces, so tolerance
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16_b,
-                    output_format=DataFormat.Float16_b,
-                    approx_mode=ApproximationMode.Yes,
-                ),
-                AccuracyContract(metric=Metric.TOLERANCE),
-            ),
-            #   wh: max 49152 ULP, p99.9 49152.0, 19% exact, ~7 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.No,
-                ),
-                AccuracyContract(max_ulp=61440),
-            ),
-            #   wh: max 4093 ULP, p99.9 4088.0, 0% exact, ~11 mantissa bits, 2048 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.No,
-                    dest_acc=DestAccumulation.Yes,
-                ),
-                AccuracyContract(max_ulp=5110),
-            ),
-            #   wh: max 2418176 ULP, p99.9 2406400.0, 10% exact, ~2 mantissa bits, 4096 pts, 2026-09-17; budget would be 3008000, past the 419430-step point where a budget stops being tighter than the tolerance it replaces, so tolerance
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16,
-                    output_format=DataFormat.Float32,
-                    approx_mode=ApproximationMode.Yes,
-                ),
-                AccuracyContract(metric=Metric.TOLERANCE),
-            ),
-            #   wh: max 1 ULP, p99.9 1.0, 88% exact, ~7 mantissa bits, 4096 pts, 2026-09-17
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16,
-                    output_format=DataFormat.Float16_b,
-                    approx_mode=ApproximationMode.No,
-                ),
-                AccuracyContract(max_ulp=2),
-            ),
-            #   wh: max 37 ULP, p99.9 37.0, 32% exact, ~2 mantissa bits, 4096 pts, 2026-09-17; budget would be 47, past the 6-step point where a budget stops being tighter than the tolerance it replaces, so tolerance
-            (
-                BudgetKey(
-                    input_format=DataFormat.Float16,
-                    output_format=DataFormat.Float16_b,
-                    approx_mode=ApproximationMode.Yes,
-                ),
-                AccuracyContract(metric=Metric.TOLERANCE),
             ),
         ),
-    ),
+        (
+            MathOperation.Hardsigmoid,
+            budget_table(
+                #   wh: max 65536 ULP, p99.9 65536.0, 69% exact, ~7 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float32,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.No,
+                    ),
+                    AccuracyContract(max_ulp=81920),
+                ),
+                #   wh: max 1024 ULP, p99.9 62.5, 88% exact, ~13 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float32,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.Yes,
+                    ),
+                    AccuracyContract(max_ulp=1024),
+                ),
+                #   wh: max 1 ULP, p99.9 1.0, 69% exact, ~7 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float32,
+                        output_format=DataFormat.Float16_b,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.No,
+                    ),
+                    AccuracyContract(max_ulp=2),
+                ),
+                #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 2048 pts, 2026-09-17; measured 0, floored to 1 (a finite sample cannot assert exactness)
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float32,
+                        output_format=DataFormat.Float16_b,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.Yes,
+                    ),
+                    AccuracyContract(max_ulp=1),
+                ),
+                #   wh: max 65536 ULP, p99.9 65536.0, 69% exact, ~7 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16_b,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.No,
+                    ),
+                    AccuracyContract(max_ulp=81920),
+                ),
+                #   wh: max 32768 ULP, p99.9 32768.0, 42% exact, ~8 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16_b,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.Yes,
+                    ),
+                    AccuracyContract(max_ulp=40960),
+                ),
+                #   wh: max 1 ULP, p99.9 1.0, 69% exact, ~7 mantissa bits, 4096 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16_b,
+                        output_format=DataFormat.Float16_b,
+                        approx_mode=ApproximationMode.No,
+                    ),
+                    AccuracyContract(max_ulp=2),
+                ),
+                #   wh: max 8192 ULP, p99.9 8192.0, 69% exact, ~10 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.No,
+                    ),
+                    AccuracyContract(max_ulp=10240),
+                ),
+                #   wh: max 4096 ULP, p99.9 4096.0, 41% exact, ~11 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.Yes,
+                    ),
+                    AccuracyContract(max_ulp=5120),
+                ),
+                #   wh: max 1 ULP, p99.9 1.0, 61% exact, ~7 mantissa bits, 4096 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16,
+                        output_format=DataFormat.Float16_b,
+                        approx_mode=ApproximationMode.No,
+                    ),
+                    AccuracyContract(max_ulp=2),
+                ),
+            ),
+        ),
+        (
+            MathOperation.Log,
+            budget_table(
+                #   wh: not enrolled -- functional draw reaches 65536 steps where the ramp sees 1 (2048 pts, 2026-09-17)
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float32,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.No,
+                    ),
+                    AccuracyContract(metric=Metric.TOLERANCE),
+                ),
+                #   wh: max 1 ULP, p99.9 1.0, 96% exact, ~23 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float32,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.Yes,
+                    ),
+                    AccuracyContract(max_ulp=2),
+                ),
+                #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 4096 pts, 2026-09-17; measured 0, floored to 1 (a finite sample cannot assert exactness)
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float32,
+                        output_format=DataFormat.Float16_b,
+                        approx_mode=ApproximationMode.No,
+                    ),
+                    AccuracyContract(max_ulp=1),
+                ),
+                #   wh: not enrolled -- functional draw reaches 65536 steps where the ramp sees 1 (2048 pts, 2026-09-17)
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16_b,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.No,
+                    ),
+                    AccuracyContract(metric=Metric.TOLERANCE),
+                ),
+                #   wh: max 32693 ULP, p99.9 32693.0, 0% exact, ~8 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16_b,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.Yes,
+                    ),
+                    AccuracyContract(max_ulp=40867),
+                ),
+                #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 4096 pts, 2026-09-17; measured 0, floored to 1 (a finite sample cannot assert exactness)
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16_b,
+                        output_format=DataFormat.Float16_b,
+                        approx_mode=ApproximationMode.No,
+                    ),
+                    AccuracyContract(max_ulp=1),
+                ),
+                #   wh: not enrolled -- functional draw reaches 57344 steps, ramp-derived 40960 (4096 pts, 2026-09-17)
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                    ),
+                    AccuracyContract(metric=Metric.TOLERANCE),
+                ),
+                #   wh: max 1 ULP, p99.9 1.0, 94% exact, ~7 mantissa bits, 4096 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16,
+                        output_format=DataFormat.Float16_b,
+                        approx_mode=ApproximationMode.No,
+                    ),
+                    AccuracyContract(max_ulp=2),
+                ),
+            ),
+        ),
+        (
+            MathOperation.Log1p,
+            budget_table(
+                #   wh: max 65536 ULP, p99.9 65536.0, 97% exact, ~7 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float32,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.No,
+                    ),
+                    AccuracyContract(max_ulp=81920),
+                ),
+                #   wh: max 1 ULP, p99.9 1.0, 93% exact, ~23 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float32,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.Yes,
+                    ),
+                    AccuracyContract(max_ulp=2),
+                ),
+                #   wh: max 1 ULP, p99.9 1.0, 97% exact, ~7 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float32,
+                        output_format=DataFormat.Float16_b,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.No,
+                    ),
+                    AccuracyContract(max_ulp=2),
+                ),
+                #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 2048 pts, 2026-09-17; measured 0, floored to 1 (a finite sample cannot assert exactness)
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float32,
+                        output_format=DataFormat.Float16_b,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.Yes,
+                    ),
+                    AccuracyContract(max_ulp=1),
+                ),
+                #   wh: max 65536 ULP, p99.9 65536.0, 97% exact, ~7 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16_b,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.No,
+                    ),
+                    AccuracyContract(max_ulp=81920),
+                ),
+                #   wh: max 32743 ULP, p99.9 32714.4, 0% exact, ~8 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16_b,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.Yes,
+                    ),
+                    AccuracyContract(max_ulp=40893),
+                ),
+                #   wh: max 1 ULP, p99.9 1.0, 97% exact, ~7 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16_b,
+                        output_format=DataFormat.Float16_b,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.No,
+                    ),
+                    AccuracyContract(max_ulp=2),
+                ),
+                #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 2048 pts, 2026-09-17; measured 0, floored to 1 (a finite sample cannot assert exactness)
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16_b,
+                        output_format=DataFormat.Float16_b,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.Yes,
+                    ),
+                    AccuracyContract(max_ulp=1),
+                ),
+                #   wh: max 49152 ULP, p99.9 48767.0, 12% exact, ~7 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.No,
+                    ),
+                    AccuracyContract(max_ulp=60959),
+                ),
+                #   wh: not enrolled -- near-zero tail: functional reaches 938,672,129 steps (2048 pts, 2026-09-17)
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.Yes,
+                    ),
+                    AccuracyContract(metric=Metric.TOLERANCE),
+                ),
+                #   wh: not enrolled -- near-zero tail: functional reaches 14324 steps (4096 pts, 2026-09-17)
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16,
+                        output_format=DataFormat.Float16_b,
+                        approx_mode=ApproximationMode.No,
+                    ),
+                    AccuracyContract(metric=Metric.TOLERANCE),
+                ),
+            ),
+        ),
+        (
+            MathOperation.Reciprocal,
+            budget_table(
+                #   wh: max 65536 ULP, p99.9 65536.0, 99% exact, ~7 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float32,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.No,
+                    ),
+                    AccuracyContract(max_ulp=81920),
+                ),
+                #   wh: max 1 ULP, p99.9 1.0, 90% exact, ~23 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float32,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.Yes,
+                    ),
+                    AccuracyContract(max_ulp=2),
+                ),
+                #   wh: max 65536 ULP, p99.9 65536.0, 59% exact, ~7 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float32,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.Yes,
+                        dest_acc=DestAccumulation.No,
+                    ),
+                    AccuracyContract(max_ulp=81920),
+                ),
+                #   wh: max 1650 ULP, p99.9 1648.0, 1% exact, ~12 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float32,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.Yes,
+                        dest_acc=DestAccumulation.Yes,
+                    ),
+                    AccuracyContract(max_ulp=2060),
+                ),
+                #   wh: max 1 ULP, p99.9 1.0, 99% exact, ~7 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float32,
+                        output_format=DataFormat.Float16_b,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.No,
+                    ),
+                    AccuracyContract(max_ulp=2),
+                ),
+                #   wh: max 1 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float32,
+                        output_format=DataFormat.Float16_b,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.Yes,
+                    ),
+                    AccuracyContract(max_ulp=1),
+                ),
+                #   wh: max 1 ULP, p99.9 1.0, 59% exact, ~7 mantissa bits, 4096 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float32,
+                        output_format=DataFormat.Float16_b,
+                        approx_mode=ApproximationMode.Yes,
+                    ),
+                    AccuracyContract(max_ulp=2),
+                ),
+                #   wh: max 65536 ULP, p99.9 65536.0, 98% exact, ~7 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16_b,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.No,
+                    ),
+                    AccuracyContract(max_ulp=81920),
+                ),
+                #   wh: max 32639 ULP, p99.9 32639.0, 1% exact, ~8 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16_b,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.Yes,
+                    ),
+                    AccuracyContract(max_ulp=40799),
+                ),
+                #   wh: max 65536 ULP, p99.9 65536.0, 57% exact, ~7 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16_b,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.Yes,
+                        dest_acc=DestAccumulation.No,
+                    ),
+                    AccuracyContract(max_ulp=81920),
+                ),
+                #   wh: max 33278 ULP, p99.9 33278.0, 0% exact, ~8 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16_b,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.Yes,
+                        dest_acc=DestAccumulation.Yes,
+                    ),
+                    AccuracyContract(max_ulp=41598),
+                ),
+                #   wh: max 1 ULP, p99.9 1.0, 98% exact, ~7 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16_b,
+                        output_format=DataFormat.Float16_b,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.No,
+                    ),
+                    AccuracyContract(max_ulp=2),
+                ),
+                #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 2048 pts, 2026-09-17; measured 0, floored to 1 (a finite sample cannot assert exactness)
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16_b,
+                        output_format=DataFormat.Float16_b,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.Yes,
+                    ),
+                    AccuracyContract(max_ulp=1),
+                ),
+                #   wh: max 1 ULP, p99.9 1.0, 57% exact, ~7 mantissa bits, 4096 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16_b,
+                        output_format=DataFormat.Float16_b,
+                        approx_mode=ApproximationMode.Yes,
+                    ),
+                    AccuracyContract(max_ulp=2),
+                ),
+                #   wh: max 32768 ULP, p99.9 32768.0, 13% exact, ~8 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.No,
+                    ),
+                    AccuracyContract(max_ulp=40960),
+                ),
+                #   wh: max 4094 ULP, p99.9 4091.0, 0% exact, ~11 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.Yes,
+                    ),
+                    AccuracyContract(max_ulp=5114),
+                ),
+                #   wh: max 8192 ULP, p99.9 8192.0, 45% exact, ~10 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.Yes,
+                        dest_acc=DestAccumulation.No,
+                    ),
+                    AccuracyContract(max_ulp=10240),
+                ),
+                #   wh: max 5319 ULP, p99.9 5319.0, 0% exact, ~11 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.Yes,
+                        dest_acc=DestAccumulation.Yes,
+                    ),
+                    AccuracyContract(max_ulp=6649),
+                ),
+                #   wh: max 1 ULP, p99.9 1.0, 48% exact, ~7 mantissa bits, 8192 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16,
+                        output_format=DataFormat.Float16_b,
+                    ),
+                    AccuracyContract(max_ulp=2),
+                ),
+            ),
+        ),
+        (
+            MathOperation.Rsqrt,
+            budget_table(
+                #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~23 mantissa bits, 4096 pts, 2026-09-17; measured 0, floored to 1 (a finite sample cannot assert exactness)
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float32,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.No,
+                    ),
+                    AccuracyContract(max_ulp=1),
+                ),
+                #   wh: max 2 ULP, p99.9 2.0, 67% exact, ~22 mantissa bits, 4096 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float32,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.Yes,
+                    ),
+                    AccuracyContract(max_ulp=3),
+                ),
+                #   wh: max 65536 ULP, p99.9 65536.0, 91% exact, ~7 mantissa bits, 4096 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float32,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.Yes,
+                        dest_acc=DestAccumulation.No,
+                    ),
+                    AccuracyContract(max_ulp=81920),
+                ),
+                #   wh: max 14745 ULP, p99.9 14726.6, 0% exact, ~9 mantissa bits, 4096 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float32,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.Yes,
+                        dest_acc=DestAccumulation.Yes,
+                    ),
+                    AccuracyContract(max_ulp=18409),
+                ),
+                #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 8192 pts, 2026-09-17; measured 0, floored to 1 (a finite sample cannot assert exactness)
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float32,
+                        output_format=DataFormat.Float16_b,
+                        approx_mode=ApproximationMode.No,
+                    ),
+                    AccuracyContract(max_ulp=1),
+                ),
+                #   wh: max 1 ULP, p99.9 1.0, 88% exact, ~7 mantissa bits, 8192 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float32,
+                        output_format=DataFormat.Float16_b,
+                        approx_mode=ApproximationMode.Yes,
+                    ),
+                    AccuracyContract(max_ulp=2),
+                ),
+                #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~23 mantissa bits, 4096 pts, 2026-09-17; measured 0, floored to 1 (a finite sample cannot assert exactness)
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16_b,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.No,
+                    ),
+                    AccuracyContract(max_ulp=1),
+                ),
+                #   wh: max 32723 ULP, p99.9 32723.0, 1% exact, ~8 mantissa bits, 4096 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16_b,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.Yes,
+                    ),
+                    AccuracyContract(max_ulp=40904),
+                ),
+                #   wh: max 65536 ULP, p99.9 65536.0, 92% exact, ~7 mantissa bits, 4096 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16_b,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.Yes,
+                        dest_acc=DestAccumulation.No,
+                    ),
+                    AccuracyContract(max_ulp=81920),
+                ),
+                #   wh: max 43254 ULP, p99.9 43254.0, 0% exact, ~8 mantissa bits, 4096 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16_b,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.Yes,
+                        dest_acc=DestAccumulation.Yes,
+                    ),
+                    AccuracyContract(max_ulp=54068),
+                ),
+                #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 8192 pts, 2026-09-17; measured 0, floored to 1 (a finite sample cannot assert exactness)
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16_b,
+                        output_format=DataFormat.Float16_b,
+                        approx_mode=ApproximationMode.No,
+                    ),
+                    AccuracyContract(max_ulp=1),
+                ),
+                #   wh: max 1 ULP, p99.9 1.0, 92% exact, ~7 mantissa bits, 8192 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16_b,
+                        output_format=DataFormat.Float16_b,
+                        approx_mode=ApproximationMode.Yes,
+                    ),
+                    AccuracyContract(max_ulp=2),
+                ),
+                #   wh: max 32768 ULP, p99.9 32768.0, 12% exact, ~8 mantissa bits, 4096 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.No,
+                    ),
+                    AccuracyContract(max_ulp=40960),
+                ),
+                #   wh: max 4093 ULP, p99.9 4087.9, 0% exact, ~11 mantissa bits, 4096 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.Yes,
+                    ),
+                    AccuracyContract(max_ulp=5110),
+                ),
+                #   wh: max 49152 ULP, p99.9 40960.0, 12% exact, ~7 mantissa bits, 4096 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.Yes,
+                        dest_acc=DestAccumulation.No,
+                    ),
+                    AccuracyContract(max_ulp=51200),
+                ),
+                #   wh: max 18072 ULP, p99.9 17563.0, 0% exact, ~9 mantissa bits, 4096 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.Yes,
+                        dest_acc=DestAccumulation.Yes,
+                    ),
+                    AccuracyContract(max_ulp=21954),
+                ),
+                #   wh: max 1 ULP, p99.9 1.0, 88% exact, ~7 mantissa bits, 16384 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16,
+                        output_format=DataFormat.Float16_b,
+                    ),
+                    AccuracyContract(max_ulp=2),
+                ),
+            ),
+        ),
+        (
+            MathOperation.Silu,
+            budget_table(
+                #   wh: max 65536 ULP, p99.9 65536.0, 90% exact, ~7 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float32,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.No,
+                    ),
+                    AccuracyContract(max_ulp=81920),
+                ),
+                #   wh: max 2 ULP, p99.9 2.0, 76% exact, ~22 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float32,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.Yes,
+                    ),
+                    AccuracyContract(max_ulp=3),
+                ),
+                #   wh: max 1 ULP, p99.9 1.0, 90% exact, ~7 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float32,
+                        output_format=DataFormat.Float16_b,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.No,
+                    ),
+                    AccuracyContract(max_ulp=2),
+                ),
+                #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 2048 pts, 2026-09-17; measured 0, floored to 1 (a finite sample cannot assert exactness)
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float32,
+                        output_format=DataFormat.Float16_b,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.Yes,
+                    ),
+                    AccuracyContract(max_ulp=1),
+                ),
+                #   wh: max 65536 ULP, p99.9 65536.0, 91% exact, ~7 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16_b,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.No,
+                    ),
+                    AccuracyContract(max_ulp=81920),
+                ),
+                #   wh: max 32764 ULP, p99.9 32763.7, 0% exact, ~8 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16_b,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.Yes,
+                    ),
+                    AccuracyContract(max_ulp=40955),
+                ),
+                #   wh: max 1 ULP, p99.9 1.0, 91% exact, ~7 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16_b,
+                        output_format=DataFormat.Float16_b,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.No,
+                    ),
+                    AccuracyContract(max_ulp=2),
+                ),
+                #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 2048 pts, 2026-09-17; measured 0, floored to 1 (a finite sample cannot assert exactness)
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16_b,
+                        output_format=DataFormat.Float16_b,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.Yes,
+                    ),
+                    AccuracyContract(max_ulp=1),
+                ),
+                #   wh: max 57344 ULP, p99.9 57344.0, 11% exact, ~7 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.No,
+                    ),
+                    AccuracyContract(max_ulp=71680),
+                ),
+                #   wh: max 4095 ULP, p99.9 4087.8, 0% exact, ~11 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.Yes,
+                    ),
+                    AccuracyContract(max_ulp=5110),
+                ),
+                #   wh: max 1 ULP, p99.9 1.0, 88% exact, ~7 mantissa bits, 4096 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16,
+                        output_format=DataFormat.Float16_b,
+                        approx_mode=ApproximationMode.No,
+                    ),
+                    AccuracyContract(max_ulp=2),
+                ),
+            ),
+        ),
+        (
+            MathOperation.Sin,
+            budget_table(
+                #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~23 mantissa bits, 2048 pts, 2026-09-17; measured 0, floored to 1 (a finite sample cannot assert exactness)
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float32,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.No,
+                    ),
+                    AccuracyContract(max_ulp=1),
+                ),
+                #   wh: max 1 ULP, p99.9 1.0, 81% exact, ~23 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float32,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.Yes,
+                    ),
+                    AccuracyContract(max_ulp=2),
+                ),
+                #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~23 mantissa bits, 2048 pts, 2026-09-17; measured 0, floored to 1 (a finite sample cannot assert exactness)
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float32,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.Yes,
+                        dest_acc=DestAccumulation.No,
+                    ),
+                    AccuracyContract(max_ulp=1),
+                ),
+                #   wh: max 1 ULP, p99.9 1.0, 81% exact, ~23 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float32,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.Yes,
+                        dest_acc=DestAccumulation.Yes,
+                    ),
+                    AccuracyContract(max_ulp=2),
+                ),
+                #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 8192 pts, 2026-09-17; measured 0, floored to 1 (a finite sample cannot assert exactness)
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float32,
+                        output_format=DataFormat.Float16_b,
+                    ),
+                    AccuracyContract(max_ulp=1),
+                ),
+                #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~23 mantissa bits, 2048 pts, 2026-09-17; measured 0, floored to 1 (a finite sample cannot assert exactness)
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16_b,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.No,
+                    ),
+                    AccuracyContract(max_ulp=1),
+                ),
+                #   wh: max 32737 ULP, p99.9 32708.0, 0% exact, ~8 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16_b,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.Yes,
+                    ),
+                    AccuracyContract(max_ulp=40885),
+                ),
+                #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~23 mantissa bits, 2048 pts, 2026-09-17; measured 0, floored to 1 (a finite sample cannot assert exactness)
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16_b,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.Yes,
+                        dest_acc=DestAccumulation.No,
+                    ),
+                    AccuracyContract(max_ulp=1),
+                ),
+                #   wh: max 32737 ULP, p99.9 32708.0, 0% exact, ~8 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16_b,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.Yes,
+                        dest_acc=DestAccumulation.Yes,
+                    ),
+                    AccuracyContract(max_ulp=40885),
+                ),
+                #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 8192 pts, 2026-09-17; measured 0, floored to 1 (a finite sample cannot assert exactness)
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16_b,
+                        output_format=DataFormat.Float16_b,
+                    ),
+                    AccuracyContract(max_ulp=1),
+                ),
+                #   wh: max 32768 ULP, p99.9 32768.0, 13% exact, ~8 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.No,
+                    ),
+                    AccuracyContract(max_ulp=40960),
+                ),
+                #   wh: max 4093 ULP, p99.9 4092.0, 0% exact, ~11 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.Yes,
+                    ),
+                    AccuracyContract(max_ulp=5115),
+                ),
+                #   wh: max 32768 ULP, p99.9 32768.0, 13% exact, ~8 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.Yes,
+                        dest_acc=DestAccumulation.No,
+                    ),
+                    AccuracyContract(max_ulp=40960),
+                ),
+                #   wh: max 4093 ULP, p99.9 4092.0, 0% exact, ~11 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.Yes,
+                        dest_acc=DestAccumulation.Yes,
+                    ),
+                    AccuracyContract(max_ulp=5115),
+                ),
+                #   wh: max 1 ULP, p99.9 1.0, 95% exact, ~7 mantissa bits, 8192 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16,
+                        output_format=DataFormat.Float16_b,
+                    ),
+                    AccuracyContract(max_ulp=2),
+                ),
+            ),
+        ),
+        (
+            MathOperation.Sqrt,
+            budget_table(
+                #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~23 mantissa bits, 4096 pts, 2026-09-17; measured 0, floored to 1 (a finite sample cannot assert exactness)
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float32,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.No,
+                    ),
+                    AccuracyContract(max_ulp=1),
+                ),
+                #   wh: max 1 ULP, p99.9 1.0, 89% exact, ~23 mantissa bits, 4096 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float32,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.Yes,
+                    ),
+                    AccuracyContract(max_ulp=2),
+                ),
+                #   wh: max 65536 ULP, p99.9 65536.0, 85% exact, ~7 mantissa bits, 4096 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float32,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.Yes,
+                        dest_acc=DestAccumulation.No,
+                    ),
+                    AccuracyContract(max_ulp=81920),
+                ),
+                #   wh: max 14746 ULP, p99.9 14731.6, 0% exact, ~9 mantissa bits, 4096 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float32,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.Yes,
+                        dest_acc=DestAccumulation.Yes,
+                    ),
+                    AccuracyContract(max_ulp=18415),
+                ),
+                #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 8192 pts, 2026-09-17; measured 0, floored to 1 (a finite sample cannot assert exactness)
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float32,
+                        output_format=DataFormat.Float16_b,
+                        approx_mode=ApproximationMode.No,
+                    ),
+                    AccuracyContract(max_ulp=1),
+                ),
+                #   wh: max 1 ULP, p99.9 1.0, 85% exact, ~7 mantissa bits, 8192 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float32,
+                        output_format=DataFormat.Float16_b,
+                        approx_mode=ApproximationMode.Yes,
+                    ),
+                    AccuracyContract(max_ulp=2),
+                ),
+                #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~23 mantissa bits, 4096 pts, 2026-09-17; measured 0, floored to 1 (a finite sample cannot assert exactness)
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16_b,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.No,
+                    ),
+                    AccuracyContract(max_ulp=1),
+                ),
+                #   wh: max 32736 ULP, p99.9 32736.0, 3% exact, ~8 mantissa bits, 4096 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16_b,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.Yes,
+                    ),
+                    AccuracyContract(max_ulp=40920),
+                ),
+                #   wh: max 65536 ULP, p99.9 65536.0, 85% exact, ~7 mantissa bits, 4096 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16_b,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.Yes,
+                        dest_acc=DestAccumulation.No,
+                    ),
+                    AccuracyContract(max_ulp=81920),
+                ),
+                #   wh: max 47467 ULP, p99.9 47467.0, 0% exact, ~7 mantissa bits, 4096 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16_b,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.Yes,
+                        dest_acc=DestAccumulation.Yes,
+                    ),
+                    AccuracyContract(max_ulp=59334),
+                ),
+                #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 8192 pts, 2026-09-17; measured 0, floored to 1 (a finite sample cannot assert exactness)
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16_b,
+                        output_format=DataFormat.Float16_b,
+                        approx_mode=ApproximationMode.No,
+                    ),
+                    AccuracyContract(max_ulp=1),
+                ),
+                #   wh: max 1 ULP, p99.9 1.0, 85% exact, ~7 mantissa bits, 8192 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16_b,
+                        output_format=DataFormat.Float16_b,
+                        approx_mode=ApproximationMode.Yes,
+                    ),
+                    AccuracyContract(max_ulp=2),
+                ),
+                #   wh: max 32768 ULP, p99.9 32768.0, 14% exact, ~8 mantissa bits, 4096 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.No,
+                    ),
+                    AccuracyContract(max_ulp=40960),
+                ),
+                #   wh: max 4095 ULP, p99.9 4092.0, 1% exact, ~11 mantissa bits, 4096 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.Yes,
+                    ),
+                    AccuracyContract(max_ulp=5115),
+                ),
+                #   wh: max 49152 ULP, p99.9 40960.0, 14% exact, ~7 mantissa bits, 4096 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.Yes,
+                        dest_acc=DestAccumulation.No,
+                    ),
+                    AccuracyContract(max_ulp=51200),
+                ),
+                #   wh: max 18828 ULP, p99.9 18713.0, 0% exact, ~9 mantissa bits, 4096 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.Yes,
+                        dest_acc=DestAccumulation.Yes,
+                    ),
+                    AccuracyContract(max_ulp=23392),
+                ),
+                #   wh: max 1 ULP, p99.9 1.0, 87% exact, ~7 mantissa bits, 16384 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16,
+                        output_format=DataFormat.Float16_b,
+                    ),
+                    AccuracyContract(max_ulp=2),
+                ),
+            ),
+        ),
+        (
+            MathOperation.Tanh,
+            budget_table(
+                #   wh: max 65536 ULP, p99.9 65536.0, 86% exact, ~7 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float32,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.No,
+                    ),
+                    AccuracyContract(max_ulp=81920),
+                ),
+                #   wh: max 2 ULP, p99.9 1.0, 83% exact, ~22 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float32,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.Yes,
+                    ),
+                    AccuracyContract(max_ulp=2),
+                ),
+                #   wh: max 2424832 ULP, p99.9 2405616.0, 0% exact, ~2 mantissa bits, 4096 pts, 2026-09-17; budget would be 3007020, past the 419430-step point where a budget stops being tighter than the tolerance it replaces, so tolerance
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float32,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.Yes,
+                    ),
+                    AccuracyContract(metric=Metric.TOLERANCE),
+                ),
+                #   wh: max 1 ULP, p99.9 1.0, 86% exact, ~7 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float32,
+                        output_format=DataFormat.Float16_b,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.No,
+                    ),
+                    AccuracyContract(max_ulp=2),
+                ),
+                #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 2048 pts, 2026-09-17; measured 0, floored to 1 (a finite sample cannot assert exactness)
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float32,
+                        output_format=DataFormat.Float16_b,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.Yes,
+                    ),
+                    AccuracyContract(max_ulp=1),
+                ),
+                #   wh: max 37 ULP, p99.9 37.0, 31% exact, ~2 mantissa bits, 4096 pts, 2026-09-17; budget would be 47, past the 6-step point where a budget stops being tighter than the tolerance it replaces, so tolerance
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float32,
+                        output_format=DataFormat.Float16_b,
+                        approx_mode=ApproximationMode.Yes,
+                    ),
+                    AccuracyContract(metric=Metric.TOLERANCE),
+                ),
+                #   wh: max 65536 ULP, p99.9 65536.0, 86% exact, ~7 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16_b,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.No,
+                    ),
+                    AccuracyContract(max_ulp=81920),
+                ),
+                #   wh: max 32666 ULP, p99.9 32540.0, 0% exact, ~8 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16_b,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.Yes,
+                    ),
+                    AccuracyContract(max_ulp=40675),
+                ),
+                #   wh: max 2424832 ULP, p99.9 2371584.0, 31% exact, ~2 mantissa bits, 4096 pts, 2026-09-17; budget would be 2964480, past the 419430-step point where a budget stops being tighter than the tolerance it replaces, so tolerance
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16_b,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.Yes,
+                    ),
+                    AccuracyContract(metric=Metric.TOLERANCE),
+                ),
+                #   wh: max 1 ULP, p99.9 1.0, 86% exact, ~7 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16_b,
+                        output_format=DataFormat.Float16_b,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.No,
+                    ),
+                    AccuracyContract(max_ulp=2),
+                ),
+                #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 2048 pts, 2026-09-17; measured 0, floored to 1 (a finite sample cannot assert exactness)
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16_b,
+                        output_format=DataFormat.Float16_b,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.Yes,
+                    ),
+                    AccuracyContract(max_ulp=1),
+                ),
+                #   wh: max 37 ULP, p99.9 36.0, 31% exact, ~2 mantissa bits, 4096 pts, 2026-09-17; budget would be 45, past the 6-step point where a budget stops being tighter than the tolerance it replaces, so tolerance
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16_b,
+                        output_format=DataFormat.Float16_b,
+                        approx_mode=ApproximationMode.Yes,
+                    ),
+                    AccuracyContract(metric=Metric.TOLERANCE),
+                ),
+                #   wh: max 49152 ULP, p99.9 49152.0, 19% exact, ~7 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.No,
+                    ),
+                    AccuracyContract(max_ulp=61440),
+                ),
+                #   wh: max 4093 ULP, p99.9 4088.0, 0% exact, ~11 mantissa bits, 2048 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.No,
+                        dest_acc=DestAccumulation.Yes,
+                    ),
+                    AccuracyContract(max_ulp=5110),
+                ),
+                #   wh: max 2418176 ULP, p99.9 2406400.0, 10% exact, ~2 mantissa bits, 4096 pts, 2026-09-17; budget would be 3008000, past the 419430-step point where a budget stops being tighter than the tolerance it replaces, so tolerance
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16,
+                        output_format=DataFormat.Float32,
+                        approx_mode=ApproximationMode.Yes,
+                    ),
+                    AccuracyContract(metric=Metric.TOLERANCE),
+                ),
+                #   wh: max 1 ULP, p99.9 1.0, 88% exact, ~7 mantissa bits, 4096 pts, 2026-09-17
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16,
+                        output_format=DataFormat.Float16_b,
+                        approx_mode=ApproximationMode.No,
+                    ),
+                    AccuracyContract(max_ulp=2),
+                ),
+                #   wh: max 37 ULP, p99.9 37.0, 32% exact, ~2 mantissa bits, 4096 pts, 2026-09-17; budget would be 47, past the 6-step point where a budget stops being tighter than the tolerance it replaces, so tolerance
+                (
+                    BudgetKey(
+                        input_format=DataFormat.Float16,
+                        output_format=DataFormat.Float16_b,
+                        approx_mode=ApproximationMode.Yes,
+                    ),
+                    AccuracyContract(metric=Metric.TOLERANCE),
+                ),
+            ),
+        ),
+    )
 )
 
 
