@@ -5,6 +5,7 @@
 #include <atomic>
 #include <cstddef>
 #include <future>
+#include <mutex>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -49,6 +50,9 @@ bool balanced_physical_device_numa(ContextId context_id) {
 }
 
 uint32_t get_cpu_core_for_physical_device(ContextId context_id, uint32_t physical_device_id) {
+    // Serialize access to the shared statics below; pools may be constructed concurrently.
+    static std::mutex affinity_mutex;
+    const std::lock_guard<std::mutex> lock(affinity_mutex);
     static std::unordered_map<int, std::vector<uint32_t>> cpu_cores_per_numa_node = get_cpu_cores_per_numa_node();
     static std::unordered_map<int, int> logical_cpu_id_per_numa_node = {};
     // Initialize to an invalid value. Determine the NUMA Node based on the physical device id.

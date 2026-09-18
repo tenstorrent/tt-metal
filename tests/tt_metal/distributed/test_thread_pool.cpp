@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
+#include <atomic>
+#include <thread>
+#include <vector>
 #include "tt_metal/impl/threading/thread_pool.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/context/context_types.hpp"
@@ -50,6 +53,44 @@ TEST(ThreadPoolTest, Exception) {
     auto exception_fn = []() { TT_THROW("Failed"); };
     thread_pool->enqueue(exception_fn);
     EXPECT_THROW(thread_pool->wait(), std::exception);
+}
+
+// Regression test for the data race fixed in get_cpu_core_for_physical_device (issue #48579, item 10).
+// Constructing a device-bound pool invokes get_cpu_core_for_physical_device once per worker, which
+// reads and mutates function-local static NUMA-affinity maps and a round-robin counter. These were
+// previously accessed without synchronization, so building pools concurrently could corrupt the maps
+// or produce torn counter reads. This test builds many pools in parallel and drives a small workload
+// through each, asserting every construction completes and executes correctly. It is most sensitive
+// under ThreadSanitizer, but can also crash/hang without the fix.
+TEST(ThreadPoolTest, ConcurrentDeviceBoundConstruction) {
+    const int num_threads_per_pool = MetalContext::instance(DEFAULT_CONTEXT_ID).get_cluster().number_of_user_devices();
+    constexpr uint32_t num_concurrent_builders = 16;
+    constexpr uint32_t tasks_per_pool = 256;
+
+    std::atomic<uint64_t> counter = 0;
+    std::atomic<uint32_t> failures = 0;
+
+    std::vector<std::thread> builders;
+    builders.reserve(num_concurrent_builders);
+    for (uint32_t b = 0; b < num_concurrent_builders; b++) {
+        builders.emplace_back([&]() {
+            try {
+                auto thread_pool = create_device_bound_thread_pool(DEFAULT_CONTEXT_ID, num_threads_per_pool);
+                for (uint32_t i = 0; i < tasks_per_pool; i++) {
+                    thread_pool->enqueue([&counter]() { counter.fetch_add(1, std::memory_order_relaxed); });
+                }
+                thread_pool->wait();
+            } catch (...) {
+                failures.fetch_add(1, std::memory_order_relaxed);
+            }
+        });
+    }
+    for (auto& builder : builders) {
+        builder.join();
+    }
+
+    EXPECT_EQ(failures.load(), 0u);
+    EXPECT_EQ(counter.load(), static_cast<uint64_t>(num_concurrent_builders) * tasks_per_pool);
 }
 
 }  // namespace

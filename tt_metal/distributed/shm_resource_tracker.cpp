@@ -81,11 +81,14 @@ void invoke_previous_handler(int sig, const struct sigaction& prev) {
 }
 
 void signal_handler(int sig) {
-    // Use try_lock to avoid deadlock if the signal interrupted a thread
-    // holding mutex_. If we can't acquire the lock, the manifest file
-    // ensures the next process will clean up via stale-PID scan.
-    ShmResourceTracker::instance().cleanup_from_signal();
-
+    // Intentionally do NOT clean up shm/files here. In-handler cleanup would require
+    // async-signal-unsafe operations (locking a std::mutex, iterating and clearing a
+    // std::set<std::string> -> free()), which is undefined behavior if the signal
+    // interrupts libc/pthread/allocator internals. Resources belonging to a process that
+    // terminates abnormally are reclaimed by the on-disk manifest + the next process's
+    // stale-PID scan (see cleanup_stale_resources()), exactly as for SIGKILL/crashes.
+    // The only work done here is chaining to the previously-installed handler, which is
+    // async-signal-safe.
     const struct sigaction& prev = (sig == SIGINT) ? prev_sigint : prev_sigterm;
     invoke_previous_handler(sig, prev);
 }
@@ -198,30 +201,6 @@ void ShmResourceTracker::cleanup_all() {
     file_paths_.clear();
 
     std::remove(manifest_path_.c_str());
-}
-
-void ShmResourceTracker::cleanup_from_signal() {
-    // try_lock avoids deadlock if the signal interrupted a thread holding mutex_.
-    // If we can't lock, leave the manifest intact so the next process can
-    // discover and clean up all resources via stale-PID scan.
-    if (!mutex_.try_lock()) {
-        return;
-    }
-
-    // Lock acquired. shm_unlink and unlink are async-signal-safe.
-    // Avoid logging here (not async-signal-safe).
-    for (const auto& name : shm_names_) {
-        shm_unlink(name.c_str());
-    }
-    shm_names_.clear();
-
-    for (const auto& path : file_paths_) {
-        ::unlink(path.c_str());
-    }
-    file_paths_.clear();
-
-    ::unlink(manifest_path_.c_str());
-    mutex_.unlock();
 }
 
 void ShmResourceTracker::cleanup_stale_resources() {
