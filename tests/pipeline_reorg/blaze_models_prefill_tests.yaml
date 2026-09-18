@@ -37,8 +37,8 @@
 #              OR-ed with test_type / test_group. Two vocabularies in one list: the model a
 #              leg covers (kimi_k2_7, kimi_k3, glm_5_2, dsv4_flash, minimax_m3)
 #              and the unit under test (moe, gate, mla, hca, swa, sdpa, ccl, block, transformer,
-#              kv_cache, dflash, runner, determinism). So `moe` runs every MoE leg and `kimi_k3` every K3
-#              leg. Multiple tokens UNION, they do not intersect: `moe,kimi_k3` is every MoE
+#              kv_cache, dflash, mtp, runner, determinism). So `moe` runs every MoE leg and `kimi_k3`
+#              every K3 leg. Multiple tokens UNION, they do not intersect: `moe,kimi_k3` is every MoE
 #              leg plus every K3 leg, not the K3 MoE legs.
 #   skus: A mapping of SKU names to their configuration:
 #     timeout: Job timeout in minutes.
@@ -1282,7 +1282,7 @@
   sp_config: sc1
 
 
-# ===== Disaggregated prefill, SC4 -- one launcher shared by both entries, keep them adjacent ===========
+# ===== Disaggregated prefill, SC4 -- keep these adjacent; the first two share one launcher =============
 
 # 4-galaxy (SC4) disaggregated prefill: a 4-rank background runner opens the mesh, loads Kimi-2.7,
 # warmup-compiles, and publishes the merged KV chunk table to shared NFS; a device-less producer then
@@ -1343,6 +1343,51 @@
       release_ready: true
   owner_id: U0AC4LTJH1P # Jaksa Jovicic
   team: shield
+  budget_type: demo
+  sp_config: sc4
+
+
+# 4-galaxy (SC4) GLM-5.2 MTP4 prefill KV accuracy. A separate launcher from the two entries above rather
+# than a flag on them: those take their shape from the manifest and the MTP manifests deliberately carry
+# no PREFILL_MAX_SEQ_LEN/PREFILL_NUM_USERS (so the pytest MTP scenarios keep them unchanged), MTP is
+# gated against a DIFFERENT golden -- its own tail trace -- and the GLM-5.2 entry above is a release gate
+# whose env must not grow a branch on a new feature.
+# What only the 4-rank shape covers, none of which has ever executed on any machine: the MTP layer
+# re-split (compute_layer_split balances num_layers+K EQUIVALENTS, so the trunk is 22/20/20/16 at starts
+# 0/22/42/62, not the 18/20/20/20 the entries above run); the D2D union-embedding transport that lets the
+# last rank run its levels with no embedding table of its own (5120 -> 10496 activation rows per chunk);
+# _mtp_prepare_input's non-first-rank branch, since _mtp_unpack_activation and
+# MTPUnionEmbedding.from_embedding are unreachable on one galaxy where every rank is the first rank; and
+# the merged 82-slot KV chunk table plus the index stage's own MTP slot.
+# PCC stops at 56320 because that is the whole extent of the MTP tail golden. There is no perf number
+# here: MTP runs untraced, so this leg's wall clock is not comparable to the traced entries above.
+- name: "(GLM-5.2-744B) MTP4 prefill KV accuracy 55k@5k, SC4"
+  cmd: |
+    set -euo pipefail
+    export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
+    if [ ! -f "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" ]; then
+      cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
+    fi
+    cd "${TT_METAL_HOME}"
+    exec bash models/demos/common/prefill/runners/ci/run_multirank_mtp_pcc.sh glm52 sc4
+  test_type: prefill_runner_kv_pcc
+  test_tags: [glm_5_2, runner, kv_cache, mtp]
+  test_group: disagg_prefill
+  skus:
+    bh_sc4:
+      # Sized off the trunk-only GLM-5.2 entry above, not off a measurement of this one: that leg reaches
+      # a verdict in ~16.5 min and then spends ~7 min unwinding the mesh, inside 60. This one runs 11
+      # chunks instead of 215, so its chunk loop is minutes -- but it loads one more module from a SECOND
+      # ttnn cache dir (TT_GLM52_MTP_TTNN_CACHE) that all four ranks pull over the same NFS mount, and it
+      # runs untraced. The margin is for that load, which is the dominant unknown.
+      timeout: 45
+      tier: 1
+      # Not a release gate: multi-rank MTP has never run, so every item in the coverage list above is
+      # first-execution code, and the thresholds it is gated at are single-galaxy measurements (trunk
+      # 0.859015, MTP levels 0.882565, both 2026-09-16). Flip this once it has been green twice.
+      release_ready: false
+  owner_id: U09L76N1MAT # Nenad Babin
+  team: models
   budget_type: demo
   sp_config: sc4
 
