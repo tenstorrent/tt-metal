@@ -243,7 +243,6 @@ ttnn::device_operation::MeshWorkloadArtifacts AffineExclusiveScanProgramFactory:
 
     tt::tt_metal::experimental::ProgramSpec program_spec{
         .name = "affine_exclusive_scan",
-        .kernels = {std::move(dataflow), std::move(compute)},
         .dataflow_buffers = std::move(dataflow_buffers),
         .semaphores =
             {
@@ -288,7 +287,8 @@ ttnn::device_operation::MeshWorkloadArtifacts AffineExclusiveScanProgramFactory:
         {tail_state_tensor_name, tail_state},
     };
 
-    kda_factory_detail::bind_chronology(program_spec, program_run_args, in.actual_start, in.a, false);
+    kda_factory_detail::bind_chronology(program_spec, program_run_args, in.actual_start, in.a, dataflow, compute);
+    program_spec.kernels = {std::move(dataflow), std::move(compute)};
     return kda_factory_detail::chronology_workload(
         ttnn::device_operation::ProgramArtifacts{
             .spec = std::move(program_spec),
@@ -297,7 +297,8 @@ ttnn::device_operation::MeshWorkloadArtifacts AffineExclusiveScanProgramFactory:
         tensor_coords,
         device,
         attrs.sequence_parallel_axis,
-        attrs.local_rows);
+        attrs.local_rows,
+        dataflow_kernel_name);
 }
 
 }  // namespace ttnn::experimental::prim

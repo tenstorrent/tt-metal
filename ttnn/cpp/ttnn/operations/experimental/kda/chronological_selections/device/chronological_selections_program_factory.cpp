@@ -42,6 +42,7 @@ ttnn::device_operation::MeshWorkloadArtifacts ChronologicalSelectionsFactory::cr
         tensor_coords,
         actual_start.device(),
         a.sequence_parallel_axis,
-        a.local_rows);
+        a.local_rows,
+        kernel);
 }
 }  // namespace ttnn::experimental::prim

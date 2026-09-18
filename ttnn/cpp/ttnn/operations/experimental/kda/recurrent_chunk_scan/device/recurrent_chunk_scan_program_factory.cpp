@@ -398,7 +398,6 @@ ttnn::device_operation::MeshWorkloadArtifacts RecurrentChunkScanProgramFactory::
 
     tt::tt_metal::experimental::ProgramSpec spec{
         .name = summary ? "summarize_chunk_recurrence" : "recurrent_chunk_scan",
-        .kernels = {std::move(reader), std::move(writer), std::move(compute)},
         .dataflow_buffers = std::move(dfbs),
         .tensor_parameters = std::move(tensor_parameters),
         .work_units = {tt::tt_metal::experimental::WorkUnitSpec{
@@ -430,13 +429,25 @@ ttnn::device_operation::MeshWorkloadArtifacts RecurrentChunkScanProgramFactory::
         run_args.tensor_args.emplace(tail_output_tensor_name, outputs[2].mesh_tensor());
         run_args.tensor_args.emplace(tail_final_state_tensor_name, outputs[3].mesh_tensor());
     }
-    kda_factory_detail::bind_chronology(spec, run_args, in.actual_start, in.v_beta, true);
+    kda_factory_detail::bind_chronology(spec, run_args, in.actual_start, in.v_beta, reader, compute);
+    const tt::tt_metal::experimental::DFBSpecName writer_chronology{"chronology_writer"};
+    spec.dataflow_buffers.push_back({
+        .unique_id = writer_chronology,
+        .entry_size = 32,
+        .num_entries = 1,
+        .data_format_metadata = tt::DataFormat::UInt32,
+    });
+    reader.dfb_bindings.push_back(tt::tt_metal::experimental::ProducerOf(writer_chronology, "chronology_writer"));
+    writer.dfb_bindings.push_back(tt::tt_metal::experimental::ConsumerOf(writer_chronology, "chronology_writer"));
+    writer.compile_time_args.insert({"dynamic_chronology", uint32_t(in.actual_start.has_value())});
+    spec.kernels = {std::move(reader), std::move(writer), std::move(compute)};
     return kda_factory_detail::chronology_workload(
         ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)},
         tensor_coords,
         device,
         attrs.sequence_parallel_axis,
-        attrs.num_chunks * attrs.groups_per_head * 32);
+        attrs.num_chunks * attrs.groups_per_head * 32,
+        reader_kernel_name);
 }
 
 }  // namespace ttnn::experimental::prim

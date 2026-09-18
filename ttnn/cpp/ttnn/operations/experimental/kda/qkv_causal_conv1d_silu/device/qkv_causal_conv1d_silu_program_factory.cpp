@@ -257,7 +257,8 @@ ttnn::device_operation::MeshWorkloadArtifacts QkvCausalConv1dSiluProgramFactory:
         tensor_coords,
         device,
         attrs.sequence_parallel_axis,
-        attrs.sequence);
+        attrs.sequence,
+        reader_kernel_name);
 }
 
 }  // namespace ttnn::experimental::prim
