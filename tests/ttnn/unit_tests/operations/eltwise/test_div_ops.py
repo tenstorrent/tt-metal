@@ -185,6 +185,33 @@ def test_div_no_nan_fp32(device):
     assert_with_ulp(expected_result=torch_output, actual_result=output, ulp_threshold=1, allow_nonfinite=True)
 
 
+def test_div_no_nan_fp32_quotient_refinement(device):
+    # These pairs give a quotient 2 ULP low with reciprocal-and-multiply on
+    # Wormhole, including one that fails with both old and new reciprocal seeds.
+    a = torch.tensor([0x4F518358, 0x3FCF913C], dtype=torch.int32).view(torch.float32)
+    b = torch.tensor([0x4EDD39E7, 0x3FE28788], dtype=torch.int32).view(torch.float32)
+    a = torch.cat([a, -a, a, -a]).repeat(128).reshape(32, 32)
+    b = torch.cat([b, b, -b, -b]).repeat(128).reshape(32, 32)
+    input_a = ttnn.from_torch(a, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    input_b = ttnn.from_torch(b, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    actual = ttnn.to_torch(ttnn.div_no_nan(input_a, input_b))
+    expected = (a.to(torch.float64) / b.to(torch.float64)).to(torch.float32)
+    assert_with_ulp(expected_result=expected, actual_result=actual, ulp_threshold=1)
+
+
+@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16])
+def test_div_no_nan_zero_denominator(device, dtype):
+    # A zero divisor must yield positive zero, even for a nonfinite numerator.
+    a = torch.tensor([0.0, -0.0, 1.0, -1.0, float("inf"), -float("inf"), float("nan"), 2.0])
+    a = a.repeat(128).reshape(32, 32)
+    b = torch.tensor([0.0, -0.0]).repeat(512).reshape(32, 32)
+    input_a = ttnn.from_torch(a, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    input_b = ttnn.from_torch(b, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    actual = ttnn.to_torch(ttnn.div_no_nan(input_a, input_b))
+    assert torch.all(actual == 0)
+    assert not torch.any(torch.signbit(actual))
+
+
 @pytest.mark.parametrize("val_a, val_b", [(0.5, 0.0), (-0.5, 0.0), (0.0, 0.0)])
 @pytest.mark.parametrize("dtype", ["float32", "bfloat16"])
 @pytest.mark.parametrize("approx", [True, False])
