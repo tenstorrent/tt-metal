@@ -611,42 +611,36 @@ def passed_test(
 ):
     """Verdict for one result tensor against its golden.
 
-    With *max_ulp* set, the gate becomes "every element is within *max_ulp* representable
-    steps of the reference" and both the tolerance check and the PCC check are skipped.
-    That is not a loosening *for a budget small enough to be worth having*. ``atol=0.05``
-    is ~6 bf16 steps at 1.0 and ~0.01 at 512 (where one bf16 step is 4), so a tolerance
-    loose enough to pass the tail is blind in the middle, and PCC is a shape metric that stays above 0.99 through error
+    With *max_ulp* set the gate becomes "every element is within *max_ulp* representable
+    steps of the reference", and both the tolerance check and PCC are skipped. That is
+    not a loosening for a budget small enough to be worth having: ``atol=0.05`` is ~6
+    bf16 steps at 1.0 and ~0.01 at 512, so a tolerance loose enough to pass the tail is
+    blind in the middle, and PCC is a shape metric that stays above 0.99 through error
     levels no consumer would accept. The bound is the ``rtol`` half rather than the
-    ``atol`` one: ``rtol * |v|`` is about ``rtol * 2**mantissa_bits`` steps at large
-    magnitude, ~6 for bf16 and ~51 for fp16, and a budget past that is looser than what it
-    displaced with no PCC behind it. The gate warns when a budget crosses that line. This mirrors the MX path, which has always returned on
-    its lattice verdict without consulting PCC.
+    ``atol`` one -- ``rtol * 2**mantissa_bits`` steps at large magnitude, ~6 for bf16 and
+    ~51 for fp16 -- and the gate warns when a budget crosses it. This mirrors the MX
+    path, which has always returned on its lattice verdict without consulting PCC.
 
     *near_zero_atol* is the floor under that budget for the lanes where the reference
-    crosses zero; see :func:`helpers.ulp.ulp_elementwise_valid`. It does nothing on its
-    own and is rejected without *max_ulp*, as is a negative value, which would make the
-    floor inert by a different route.
+    crosses zero; see :func:`helpers.ulp.ulp_elementwise_valid`.
 
     *flush_subnormals* overrides the metric's per-dtype default, for a caller that knows
-    the producing Dest flushed. It matters for an fp16 output and nowhere else: the fp16
-    golden keeps its whole subnormal band (``golden_generators._FTZ_THRESHOLD`` puts the
-    fp16 threshold at the smallest *subnormal*), and at ``dest_acc=No`` the value lands in
-    a Float16 Dest that flushes, so the two number systems disagree by up to 1023 steps
-    for what the datapath calls a 0-step agreement. The harness has no ``dest_acc`` at
-    this layer to infer from, so the default stays the answer that cannot hide error and
-    an enrolling caller that knows better says so. ``within_ulp`` already forwarded this;
-    this arm was the only caller that could not express it. Like *near_zero_atol* it is
-    read only by the ULP arm -- the tolerance arm is ``torch.isclose``, which has no
-    flush concept -- so it is rejected without *max_ulp* rather than silently ignored.
+    the producing Dest flushed. It matters for an fp16 output and nowhere else: an fp16
+    golden keeps its whole subnormal band, while a ``dest_acc=No`` Dest flushes, so the
+    two number systems disagree by up to 1023 steps over what the datapath calls a 0-step
+    agreement. This layer cannot see ``dest_acc``, so the default is the answer that
+    cannot hide error.
+
+    Both are read only by the ULP arm -- the tolerance arm is ``torch.isclose``, which
+    has no flush concept -- so each is rejected without *max_ulp* rather than silently
+    ignored, as is a negative *near_zero_atol*, which would make the floor inert by a
+    different route.
 
     *max_ulp* is the enforced maximum for every format it accepts, with nothing ORed in
-    beside it. For ``Bfp8_b`` that has a price worth knowing before enrolling an op: the
-    budget is denominated in bf16 steps (two of them to one Bfp8_b step), and it charges
-    for the block quantization the format is entitled to, which *near_zero_atol* cannot
-    absorb because its band is relative to the tensor rather than to each block. A Bfp8_b
-    budget is therefore only usable where that quantization is exact; otherwise the op
-    belongs on the tolerance arm, whose lattice compare is block-aware. See the
-    ``_ULP_PROXY_DTYPES`` comment in :mod:`helpers.ulp`.
+    beside it. For ``Bfp8_b`` that has a price: the budget is denominated in bf16 steps
+    (two to one Bfp8_b step) and charges for block quantization the format is entitled
+    to, which *near_zero_atol* cannot absorb because its band is relative to the tensor
+    rather than to each block. See ``_ULP_PROXY_DTYPES`` in :mod:`helpers.ulp`.
 
     ``max_ulp=None`` is bit-for-bit the previous behaviour.
     """
@@ -655,11 +649,8 @@ def passed_test(
         tile_shape = construct_tile_shape((DEFAULT_TILE_R_DIM, DEFAULT_TILE_C_DIM))
 
     if max_ulp is None:
-        # Everything that only the ULP arm reads. `flush_subnormals` was the gap: it is
-        # forwarded at two sites, both inside the `max_ulp is not None` arm, and the
-        # tolerance arm is `torch.isclose`, which has no flush concept -- so
-        # `passed_test(..., flush_subnormals=True)` without a budget was accepted and did
-        # nothing, the same mistake the near-zero half already refused.
+        # Everything only the ULP arm reads: the tolerance arm is `torch.isclose`, which
+        # has no flush concept, so either of these without a budget did nothing at all.
         inert = sorted(
             name
             for name, value in {
@@ -679,46 +670,36 @@ def passed_test(
 
     if max_ulp is not None:
         if max_ulp < 0:
-            # Bounded from below as well as above. A negative budget makes
-            # `distance <= max_ulp` false on every lane, so a bit-identical pair fails
-            # with "max 0 ULP @ [0] (budget -1)" -- which reads as a harness bug rather
-            # than a bad argument, and -1 is exactly ulp.UNMEASURABLE. max_ulp=0 stays
-            # legal: that is the bit-exact gate.
+            # A negative budget makes `distance <= max_ulp` false on every lane, so a
+            # bit-identical pair fails reading like a harness bug -- and -1 is exactly
+            # ulp.UNMEASURABLE. 0 stays legal: that is the bit-exact gate.
             raise ValueError(
                 f"max_ulp must not be negative, got {max_ulp}; 0 is the bit-exact gate"
             )
         if near_zero_atol is not None and near_zero_atol < 0:
-            # Bounded from below as well as from above. A negative floor makes
-            # `magnitude <= absolute_cut` false on every lane, so the floor silently does
-            # nothing -- the same inert-floor case the raise above refuses, reached by a
-            # different route. It fails closed, so nothing wrong is accepted; the cost is
-            # that the cancellation lanes then fail with a large step count and nothing
-            # distinguishes an inert floor from a real regression. 0.0 stays legal: that
-            # is a deliberate "no floor", and it matches the None default.
+            # The same inert-floor case reached by a different route: a negative floor
+            # makes `magnitude <= absolute_cut` false on every lane. It fails closed, but
+            # then nothing distinguishes an inert floor from a real regression. 0.0 stays
+            # legal as a deliberate "no floor", matching the None default.
             raise ValueError(
                 f"near_zero_atol must not be negative, got {near_zero_atol}; "
                 "0.0 is the no-floor value, and None is the default"
             )
-        # Raises for every format without a per-element ULP. The MX formats and the
-        # block floats below Bfp8_b keep their lattice compares, which are already
-        # ULP-shaped and block-aware; silently applying a per-element count against
-        # their fp32 view would hand the caller a gate it does not have.
+        # Raises for every format without a per-element ULP: the MX formats and the
+        # block floats below Bfp8_b keep their block-aware lattice compares, and applying
+        # a per-element count to their fp32 view would be a gate the caller does not have.
         gate_dtype = ulp_dtype(output_data_format)
         warn_if_threshold_unmeaningful(max_ulp, gate_dtype)
-        # The claim that a step budget is stronger than what it replaces counts only the
-        # atol term. The rtol half of isclose is itself a step budget at large magnitude:
-        # `rtol * |v|` is about `rtol * 2**mantissa_bits` steps there, roughly 6 for bf16
-        # and 51 for fp16. Past that a budget is looser than the tolerance it displaced,
-        # and PCC is no longer behind it either, since this arm returns before it.
+        # The rtol half of isclose is itself a step budget at large magnitude -- about
+        # `rtol * 2**mantissa_bits` steps, ~6 for bf16 and ~51 for fp16 -- and past it a
+        # budget is looser than what it displaced, with no PCC behind it either.
         gate_tolerance = tolerances[output_data_format]
         displaced = gate_tolerance.rtol * (1 << MANTISSA_BITS_FOR_ULP[gate_dtype])
         if max_ulp > displaced:
             logger.warning(
-                # Floored, not rounded: Bfp8_b's displaced is 25.6, so "{:.0f}" printed
-                # the minimal triggering budget of 26 as looser than "~26 steps" -- a
-                # budget called looser than a figure it is shown equal to. Bfp8_b is the
-                # only gateable format whose displaced rounds up, and it is the one this
-                # arm newly enrols.
+                # One decimal, not rounded to whole steps: Bfp8_b's displaced is 25.6, and
+                # "{:.0f}" printed the minimal triggering budget of 26 as looser than
+                # "~26 steps" -- a budget called looser than a figure shown equal to it.
                 "max_ulp={} is looser than the rtol={} tolerance it replaces (~{:.1f} "
                 "steps at large magnitude) and PCC no longer backs it up. Tighten the "
                 "budget, or keep the op on the tolerance metric.",
@@ -727,16 +708,12 @@ def passed_test(
                 displaced,
             )
         if near_zero_atol is not None and near_zero_atol > gate_tolerance.atol:
-            # The symmetric bound, and the one that was missing. near_zero_atol *is* the
-            # atol half of the isclose this arm replaces, reintroduced inside the band --
-            # so a floor above it makes the gate strictly looser than what it displaced
-            # for every lane in the band, with PCC no longer behind it and the lane kept
-            # out of the log by `ranked = ~ulp_rescued`. Measured: bf16, max_ulp=1,
-            # near_zero_atol=0.2, tile max 100.0, one lane golden=0.5 result=0.7 -- 51
-            # steps, rescued by the floor, where isclose would have rejected it at
-            # 0.05 + 0.05*0.6992 = 0.085. A silent 40%-relative-error pass. The absolute
-            # cut cannot close it: that cut scales with near_zero_atol, so both intervals
-            # are anchored at zero and always overlap.
+            # The symmetric bound: near_zero_atol *is* the atol half of the isclose this
+            # arm replaces, reintroduced inside the band, so a floor above it is strictly
+            # looser than what it displaced -- measured, a bf16 lane at golden 0.5 vs
+            # result 0.7 (51 steps) rescued where isclose would have rejected it at
+            # 0.085. The absolute cut cannot close it: both intervals scale with the atol
+            # and are anchored at zero, so they always overlap.
             logger.warning(
                 "near_zero_atol={} is looser than the atol={} half of the tolerance it "
                 "replaces, so every lane in the near-zero band is judged more loosely "
@@ -753,10 +730,9 @@ def passed_test(
         }
         named = sorted(name for name, value in ignored.items() if value is not None)
         if L1_to_L1_iterations != 1:
-            # Its only effect here is target_pcc = pow(0.99, n), which this arm returns
-            # before reaching. The `is not None` comprehension cannot catch it because the
-            # default is 1, and a caller passing it positionally alongside a budget would
-            # lose the multi-pass allowance in silence while its four siblings raise.
+            # Its only effect here is `target_pcc = pow(0.99, n)`, which this arm returns
+            # before reaching. Checked separately because its default is 1, so the
+            # `is not None` comprehension above cannot see it.
             named.append("L1_to_L1_iterations")
         if named:
             raise ValueError(
@@ -802,16 +778,11 @@ def passed_test(
             near_zero_atol=near_zero_atol,
             flush_subnormals=flush_subnormals,
         )
-        # No lattice arm here on purpose, unlike the Bfp8_b tolerance branch below. ORing
-        # the block-aware compare in would mean max_ulp was not the enforced maximum for
-        # Bfp8_b: a lane many bf16 steps out would pass a max_ulp=0 budget on the lattice's
-        # say-so, and the reported worst lane would be one the verdict had already
-        # accepted. So a Bfp8_b budget charges the kernel for block quantization too --
-        # one Bfp8_b step on a lane at 0.06 inside a block with amax 2.77 is 69 bf16 steps
-        # -- which makes it usable only on domains where that quantization is exact. See
-        # the _ULP_PROXY_DTYPES comment in helpers.ulp for what a Bfp8_b budget buys and
-        # why the alternative was worse; ops whose Bfp8_b error is quantization-dominated
-        # belong on the tolerance arm below.
+        # No lattice arm here, unlike the Bfp8_b tolerance branch below: ORing the
+        # block-aware compare in would mean max_ulp was not the enforced maximum, since a
+        # lane many bf16 steps out would pass a 0-step budget on the lattice's say-so. So
+        # a Bfp8_b budget charges for block quantization too, and is usable only where
+        # that quantization is exact -- see _ULP_PROXY_DTYPES in helpers.ulp.
     elif output_data_format == DataFormat.Bfp8_b:
         # Bfp8_b shares one exponent across 16 elements, so when a block spans a wide
         # magnitude range the small elements quantize toward zero and a flat atol reads
@@ -882,21 +853,17 @@ def passed_test(
     is_within_tolerance = torch.all(is_valid)
 
     if ulp_distances is not None:
-        # Ahead of the tile dump below, so the worst lane and what a step is worth there
-        # are the first thing in the log rather than the last. Logged on a pass too, which
-        # turns every enrolled test into an accuracy datapoint -- but at debug level, and
-        # CI exports LOGURU_LEVEL=WARNING (setup-and-test.yml), so collecting those
-        # datapoints needs --logging-level=DEBUG.
+        # Ahead of the tile dump below, so the worst lane leads the log rather than
+        # trailing it. Logged on a pass too -- which turns every enrolled test into an
+        # accuracy datapoint -- but at debug level, and CI runs at WARNING, so collecting
+        # them needs --logging-level=DEBUG.
         #
-        # Built lazily, because on a normal CI run no sink accepts the pass line and the
-        # message is several full-tensor reductions: max, mean, two quantiles, an exact
-        # count and an argmax. `logger.opt(lazy=True)` calls the thunk only once a sink
-        # has accepted the record, so an enrolled test pays nothing for a summary that is
-        # about to be dropped. The error path is not lazy: it is always wanted.
+        # Lazily, because the message is several full-tensor reductions and on a normal
+        # run no sink accepts the pass line; `logger.opt(lazy=True)` calls the thunk only
+        # once one has. The error path is not lazy: it is always wanted.
         #
-        # Exclude the lanes the near-zero floor accepted: they hold the largest step
-        # counts in the tensor by construction, so ranking every lane names a lane that
-        # passed and leaves the one that failed out of the message entirely.
+        # Ranked without the lanes the floor accepted -- they hold the largest step counts
+        # by construction, so ranking every lane names one that passed.
         ranked = ~ulp_rescued
 
         def _ulp_summary():

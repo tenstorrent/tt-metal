@@ -12,18 +12,11 @@ from .ulp import has_ulp_gate, ulp_dtype
 def local_ulp(golden: np.ndarray, out_fmt: DataFormat) -> np.ndarray:
     """Gap from each golden value to the next representable number in *out_fmt*."""
     golden = np.asarray(golden, dtype=np.float64)
-    # Asked through helpers.ulp rather than against a local tuple, so the proxy formats
-    # it gates (Bfp8_b in bfloat16 space) are measured here too. Probing a private copy
-    # of the native set left the sweep writing NaN for exactly the format the gate can
-    # judge.
-    #
-    # For Bfp8_b the value returned is a *bfloat16* step, not a Bfp8_b one, so the
-    # docstring's "gap to the next representable number in out_fmt" is the proxy's gap
-    # rather than the format's: at least 2x the Bfp8_b step (its 7 magnitude bits include
-    # an explicit leading 1, leaving 6 fractional against bfloat16's 7) and far more where
-    # the shared block exponent coarsens a small element. So the signed_ulp_error column
-    # for Bfp8_b reads in bf16 steps -- worth knowing, since the CSV is where someone
-    # picks a budget. See _ULP_PROXY_DTYPES in helpers.ulp.
+    # Asked through helpers.ulp, so the proxy formats it gates are measured here too; a
+    # private copy of the native set left the sweep writing NaN for exactly the format
+    # the gate can judge. For Bfp8_b the step returned is a *bfloat16* one -- at least
+    # twice the Bfp8_b step, and far more where a shared block exponent coarsens a small
+    # element -- so the `signed_ulp_error` column reads in bf16 steps for that format.
     if not has_ulp_gate(out_fmt):
         return np.full(golden.shape, np.nan, dtype=np.float64)
 
@@ -31,15 +24,12 @@ def local_ulp(golden: np.ndarray, out_fmt: DataFormat) -> np.ndarray:
     abs_g = torch.tensor(np.abs(golden), dtype=torch_dtype)
     nxt = torch.nextafter(abs_g, torch.tensor(float("inf"), dtype=torch_dtype))
     step = (nxt - abs_g).to(torch.float32).numpy().astype(np.float64)
-    # Same finfo.max fixup local_step carries: nextafter from the largest finite goes to
-    # Inf, so the gap is infinite where the binade downward is the same size. Without it
-    # the docstring claim that the two share one nextafter definition fails at the top of
-    # the range.
+    # The same finfo.max fixup local_step carries: nextafter from the largest finite goes
+    # to Inf, and the binade downward is the same size. Taken from the converted tensor
+    # rather than the float64 input, because a golden that *rounds* to the format maximum
+    # is at the top of the range too -- an fp16 65503 rounds to 65504, which a float64
+    # compare misses, leaving the gap at infinity.
     largest = float(torch.finfo(torch_dtype).max)
-    # From the converted tensor, not the float64 input: abs_g is the value whose spacing
-    # is being measured, and a golden that *rounds* to the format maximum is at the top of
-    # the range even though the input is not equal to it. An fp16 65503 rounds to 65504,
-    # which the float64 compare misses, leaving the upward nextafter gap at infinity.
     at_max = (abs_g == largest).numpy()
     if at_max.any():
         top = torch.tensor(largest, dtype=torch_dtype)
