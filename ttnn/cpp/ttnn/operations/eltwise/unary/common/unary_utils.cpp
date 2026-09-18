@@ -18,6 +18,10 @@ bool is_uneven(const tt::tt_metal::TensorSpec& t) {
     if (!t.memory_config().is_sharded()) {
         return false;
     }
+    // is_sharded() is true for ND_SHARDED and leaves shard_spec empty
+    if (!get_shard_spec(t).has_value()) {
+        return false;
+    }
     const auto& shape = t.padded_shape();
     const auto& shard = get_shard_spec(t)->shape;
     const auto rank = shape.rank();
