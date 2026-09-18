@@ -2,7 +2,7 @@
 
 This package runs real source prefill and transfers two selected high-end ranges into a passive buffer owner. It retains the tested range-owner command, byte-oracle and shutdown machinery. The relocated package has host validation only; device qualification is pending the separate hardware evidence.
 
-**Scheduling boundary:** focused [4K](../../../docs/migration-prefill-capacity-4k.md), [8K](../../../docs/migration-prefill-capacity-8k.md) and [16K](../../../docs/migration-prefill-capacity-16k.md) selected-range gates passed. 32K is running; 64K is pending. This example stays closed at 4K. 128K is excluded. This is not an automatic capacity sweep. These fixture commits and new reports remain local by the user's choice; no public push is pending.
+**Scheduling boundary:** focused [4K](../../../docs/migration-prefill-capacity-4k.md), [8K](../../../docs/migration-prefill-capacity-8k.md), [16K](../../../docs/migration-prefill-capacity-16k.md) and [32K](../../../docs/migration-prefill-capacity-32k.md) selected-range gates passed. 64K is pending validation of its bounded deadline configuration. This example stays closed at 4K. 128K remains deferred and is excluded from this fixture. This is not an automatic capacity sweep. These fixture commits and new reports remain local by the user's choice; no public push is pending.
 
 ## What one run checks
 

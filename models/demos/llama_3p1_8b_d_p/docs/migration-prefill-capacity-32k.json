@@ -1,0 +1,225 @@
+{
+  "schema_version": 1,
+  "status": "PASS",
+  "accepted_utc": "2026-09-18T16:46:11.616419+00:00",
+  "scope": "32K actual prefill allocation and selected native KV transfer; no decoder.",
+  "geometry": {
+    "capacity_tokens": 32768,
+    "slots_per_endpoint": 2,
+    "devices_per_endpoint": 32,
+    "model_layers": 32,
+    "mesh_sp": 4,
+    "mesh_tp": 8,
+    "kv_cache_dtype": "BFP8_B",
+    "kv_configurations": 16,
+    "logical_tokens_per_page": 32,
+    "packed_bytes_per_page": 4352,
+    "table_read_entries_per_endpoint": 1048576,
+    "table_write_entries_per_endpoint": 1048576
+  },
+  "requests": [
+    {
+      "prompt_tokens": 32768,
+      "source_slot": 0,
+      "destination_slot": 1,
+      "selected_begin": 31744,
+      "selected_end": 32768,
+      "selected_tokens": 1024,
+      "full32_calls": 32,
+      "layer_acknowledgements": 1024,
+      "native_layer_commands": 32,
+      "selected_pages": 16384,
+      "selected_packed_bytes": 71303168,
+      "source_selected_sha256": "49474c372f83e4e84bb24206d1d312c5a36e02df7a41b9ee748c7c77814c9026",
+      "untouched_sample_pages": 4608,
+      "untouched_samples_unchanged": true
+    },
+    {
+      "prompt_tokens": 32736,
+      "source_slot": 1,
+      "destination_slot": 0,
+      "selected_begin": 31712,
+      "selected_end": 32736,
+      "selected_tokens": 1024,
+      "full32_calls": 32,
+      "layer_acknowledgements": 1024,
+      "native_layer_commands": 64,
+      "selected_pages": 16384,
+      "selected_packed_bytes": 71303168,
+      "source_selected_sha256": "cb536ea68336b025a93b72d5df3569aadc12960a118c96f511af0129ccbb117a",
+      "untouched_sample_pages": 5632,
+      "untouched_samples_unchanged": true
+    }
+  ],
+  "work": {
+    "scenario_full32_calls": 64,
+    "scenario_layer_acknowledgements": 2048,
+    "native_layer_commands": 96,
+    "total_native_audit_calls": 104,
+    "compile_warmup_full32_calls": 2,
+    "capacity_warmup_full32_calls": 64,
+    "warmup_total_full32_calls": 66,
+    "warmup_native_acknowledgements": 0,
+    "total_source_full32_calls": 130,
+    "warmup_barrier_before_native_clients": true
+  },
+  "exactness": {
+    "selected_pages": 32768,
+    "selected_packed_bytes": 142606336,
+    "all_16_configurations_and_32_layers": true,
+    "source_capture_before_acknowledgement": true,
+    "source_selected_bytes_preserved_after_native_shutdown": true,
+    "destination_selected_bytes_preserved_after_native_shutdown": true,
+    "untouched_samples_by_phase": [
+      4608,
+      5632
+    ],
+    "final_untouched_sample_pages": 5120,
+    "untouched_samples_unchanged": true,
+    "untouched_full_cache_scan": false,
+    "full_prompt_prefix_transferred": false
+  },
+  "resources": {
+    "manager_measurements": {
+      "source": {
+        "after_tables": {
+          "rss_bytes": 1075470336,
+          "hwm_bytes": 1075470336,
+          "limit_bytes": 17179869184
+        },
+        "after_transfer": {
+          "rss_bytes": 1076379648,
+          "hwm_bytes": 1076379648,
+          "limit_bytes": 17179869184
+        }
+      },
+      "passive": {
+        "after_tables": {
+          "rss_bytes": 1086001152,
+          "hwm_bytes": 1086001152,
+          "limit_bytes": 17179869184
+        },
+        "after_transfer": {
+          "rss_bytes": 1086648320,
+          "hwm_bytes": 1086648320,
+          "limit_bytes": 17179869184
+        }
+      }
+    },
+    "manager_observation_scope": "RSS is resident memory at each observation. HWM is this same manager process lifetime high-water mark through that observation; not index-only or whole-job peak, and not a post-shutdown sample.",
+    "reviewed_manager_limit_bytes": 17179869184,
+    "minimum_host_available_bytes": 137438953472,
+    "minimum_shared_disk_free_bytes": 34359738368,
+    "calculated_packed_cache_bytes_per_endpoint": 4563402752,
+    "calculated_packed_cache_bytes_per_chip": 142606336,
+    "calculated_cache_scope": "Geometry payload, not measured peak device allocator usage.",
+    "fresh_empty_jit_cache_per_role": true
+  },
+  "timing": {
+    "origin": "Controller dispatch-start receipt UTC",
+    "dispatch_started_utc": "2026-09-18T15:43:19.918846+00:00",
+    "controller_ended_utc": "2026-09-18T16:38:02.076041+00:00",
+    "controller_elapsed_seconds": 3282.157195,
+    "milestones_seconds_from_dispatch": {
+      "both_managers_ready": 2108.806784,
+      "both_native_stopped": 3166.886613,
+      "passive_allocation": 368.188034,
+      "passive_bootstrap": 43.202589,
+      "passive_warmup_observed": 2054.025707,
+      "phase_765536_passive_verified": 2553.636109,
+      "phase_765536_source_done": 2493.395238,
+      "phase_765537_passive_verified": 3004.617076,
+      "phase_765537_source_done": 2939.027508,
+      "source_allocation": 1070.866558,
+      "source_bootstrap": 14.722378,
+      "source_warmup_finished": 2047.05961,
+      "verified_result": 3282.143478
+    },
+    "scope": "Test-harness elapsed milestones from saved receipts; include setup, compilation, warmups, waits and validation/readback as applicable. Not prompt latency, native-copy timing, throughput or a performance benchmark."
+  },
+  "lifecycle": {
+    "native_stop_proofs_both_endpoints": true,
+    "clean32_device_closes": {
+      "passive": "2026-09-18T16:37:48.134000+00:00",
+      "source": "2026-09-18T16:37:23.121000+00:00"
+    },
+    "cleanup_errors": {
+      "source": [],
+      "passive": []
+    },
+    "steps_empty": true,
+    "physical_locks_free": true
+  },
+  "exits": {
+    "controller": 0,
+    "dispatch": {
+      "source": 0,
+      "passive": 0
+    },
+    "verifier": 0,
+    "managers": {
+      "source": 0,
+      "passive": 0
+    },
+    "bridges": {
+      "source": 0,
+      "passive": 0
+    }
+  },
+  "provenance": {
+    "evidence_id": "capacity-runs-001/32k-c03-c02-001",
+    "root_acceptance_sha256": "75b62b2804df93cafedb2845039b23c2ba09064271d7b0a1ea6603181049cd8c",
+    "handback_sha256": "49fc3f3f40a429f2b8fa5a29a1c5232dabd1d7e6588f357f310497a75f362bef",
+    "plan_sha256": "41cbe10d00e8cf98cba283ce2ecacbba077c274115f5aaddb6dda76e5d9820a3",
+    "verifier_sha256": "48a73c67f3337b7e490e4fd37e02fa8c4d504362951e832452244e9bd69266c3",
+    "source_result_sha256": "337bd218aa42a1552e6598be2e03300c38f42a3199d9c3e10326588ff2325bc3",
+    "passive_result_sha256": "e02e9a36201be0f56c997b38b596316577df67ad7fa7d8d95ed2b3594125e50b",
+    "source_pin_count": 417,
+    "source_maps_identical": true,
+    "source_map_sha256": "c45e075f41ee48d95b7194866c8815472688c59e385662099ca5af3244271fd5",
+    "model_source_map_sha256": "2045402de20e1866147e7a896c96995b7abe77576a34c8f675165011dc173c56",
+    "gate_spec_sha256": "c6334a029c84a6c44e9357972533e96e11333adc46c8a7a0238d3baaa24da428",
+    "selected_model_sources": {
+      "models/demos/llama_3p1_8b_d_p/tt/attention.py": "776a46d34b1c10ea3b9dc772ea9f7b8b3b606af7d2d907e5e249f7e8edccd45f",
+      "models/demos/llama_3p1_8b_d_p/tt/config.py": "3c6a067625d38d9bf043028fc7d33b2591a9b980f50c980f3b2f7b50da7be979",
+      "models/demos/llama_3p1_8b_d_p/tt/kv_cache.py": "5ebd451510be99ad333fc1f17835334c8fb2129df7a181274996a6aa2b790757",
+      "models/demos/llama_3p1_8b_d_p/tt/model.py": "84853c75742290abde0a284175ef883aaa189622a29929571def2c32bb8aa830",
+      "models/demos/llama_3p1_8b_d_p/tt/prefill_geometry.py": "984c4f6aa53895c0601ab9a58b2123bbc8fd20cce100200dfaa10be82734bf71",
+      "models/demos/llama_3p1_8b_d_p/tt/rope.py": "7e8402b816e28187b3cbdfea81223309f3bad79b30ec4ebdb3e922bf73022a37",
+      "models/demos/llama_3p1_8b_d_p/tt/runners/adapters/llama_3p1_8b.py": "905e6c7f0f8df29478360d4883c2f43f501afba584abbcc8a7dfdbafd8c1a9b2",
+      "models/demos/llama_3p1_8b_d_p/tt/tt_prefill_runtime.py": "3321048349887c88baf84b63e6e702abafa637f84c35aa50dfbe650d48dc3cd6"
+    },
+    "book_manifest_sha256": "69cd38111c60d5e0f1691d7eb2ffc99d2cefc7097b39b8ffbac61ef028491c43",
+    "bridge_manifest_sha256": "63fca6853554becec3db773379a02b202d2ab1f0a5c438cf44fe24cf95286881",
+    "source_client_sha256": "9df171427e8f243662dd0ac3963afb99a9e039f2f14db27f167ddfa9bccaa597",
+    "passive_client_sha256": "1fd9669b461c705734dba313f2c39522c9e09593d7c1347be42a73f4abe2ee65",
+    "manager_binary_sha256": "c4a86ba26ac642b46e67769b88a4626b159c8e173910105a0ba64c9fd462832f",
+    "native_libraries": {
+      "libtracy.so": "ee0d077aebebec0c81b79fd891b819576a7ac5c8c28c91d7b2835c57c2c35b9e",
+      "libtt-umd.so": "27b2ed0aa25e4c3d461216f45f1fd84b558e0baa0306d4e8c657d08032d741c2",
+      "libtt_metal.so": "4e9feaeb1c509545b8f0df7e0ecaece2b95f6105803eb7ae31af4cbd5304b4f5",
+      "libtt_stl.so": "e7e4e4b2de9ea98d0e97da80f2338daae253d0b6f8a4471dee764cf514ae7e6a"
+    },
+    "controller_sha256": "a30b64501f758f4fb1745cc034d459713dbecd49e5f4b1dfbacc222e3c7a29e9"
+  },
+  "limits": [
+    "Exact transport covers the two selected 1K ranges, not either entire prompt prefix.",
+    "Adjacent/outside-range and other-slot pages are samples; the untouched cache is not exhaustively scanned.",
+    "No new HF/KV golden, PCC, full-model numerical acceptance, performance benchmark or decoder execution."
+  ],
+  "execution_history": {
+    "accepted_attempt": "32k-c03-c02-001"
+  },
+  "status_at_acceptance": {
+    "recorded_utc": "2026-09-18T16:46:11.616419+00:00",
+    "scope": "Historical workflow state at acceptance, not live status.",
+    "native_4k": "accepted",
+    "native_8k": "accepted",
+    "native_16k": "accepted",
+    "native_32k": "accepted",
+    "native_64k": "pending_timeout_budget_review",
+    "context_128k": "deferred",
+    "publication": "local_only",
+    "public_push_pending": false
+  }
+}
