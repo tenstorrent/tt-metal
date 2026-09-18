@@ -4,6 +4,7 @@
 
 #include "all_to_all_async_generic_device_operation.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/distributed_host_buffer.hpp>
@@ -100,6 +101,22 @@ void AllToAllAsyncGenericDeviceOperation::validate_on_program_cache_miss(
     const auto& input_tensor = tensor_args.input_tensor;
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to all_to_all_async must be on device");
     TT_FATAL(input_tensor.buffer() != nullptr, "Operands to all_to_all_async must be allocated in buffers on device");
+
+    auto* mesh_device = input_tensor.device();
+    const uint32_t num_links =
+        operation_attributes.num_links.has_value()
+            ? *operation_attributes.num_links
+            : ttnn::operations::ccl::common::get_num_links(*mesh_device, operation_attributes.cluster_axis);
+    TT_FATAL(num_links > 0, "all_to_all_async requires at least one fabric link");
+    const auto subdevice = operation_attributes.sub_device_id.has_value() ? *operation_attributes.sub_device_id
+                                                                          : mesh_device->get_sub_device_ids().at(0);
+    const auto available_core_count =
+        mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, subdevice).num_cores();
+    TT_FATAL(
+        available_core_count >= num_links,
+        "All-to-all requires at least one worker per link: requested {} links, but subdevice has {} workers",
+        num_links,
+        available_core_count);
 
     const auto& page_size = input_tensor.buffer()->page_size();
     const auto& input_shape = input_tensor.logical_shape();
