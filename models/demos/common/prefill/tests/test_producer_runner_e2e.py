@@ -11,6 +11,7 @@ runner startup (full model load + kernel JIT) once PER scenario.
 """
 
 import contextlib
+import copy
 import glob
 import os
 import signal
@@ -29,6 +30,15 @@ NUM_LAYERS = int(os.environ.get("PREFILL_NUM_LAYERS", "2"))
 # 56320 rows (= 11 x CHUNK_SIZE). The adapter's own prefill_trace_default omits dsa/, which would leave
 # the merged table's index config with no golden to PCC against.
 GLM52_TRACE = "/mnt/models/deepseek-prefill-cache/glm-traces/vllm-glm52-indexer-kcache-55k"
+# The MTP levels' golden is a SECOND trace: it carries the layers past the trunk and nothing before
+# them, while GLM52_TRACE carries the trunk, so one trace_dir cannot serve both.
+GLM52_MTP_TRACE = os.environ.get("GLM52_MTP_TRACE", "/mnt/models/deepseek-prefill-cache/glm-traces/mtp-glm52-55k")
+# GLM-5.2 pretrained checkpoint plus the MTP weight cache tree. The MTP weights are keyed on the layer
+# past the trunk, which the trunk cache does not carry, so they live in their own tree.
+GLM52_HF_MODEL = os.environ.get("GLM52_HF_MODEL", "/mnt/models/deepseek-prefill-cache/GLM-5.2-FP8")
+GLM52_MTP_TTNN_CACHE = os.environ.get(
+    "TT_GLM52_MTP_TTNN_CACHE", "/mnt/models/deepseek-prefill-cache/glm52_mtp_ttnn_cache"
+)
 SERVICE_ID = "ci_ds_prefill"
 TABLE_PATH = "/tmp/ci_prefill_kv_table.pb"  # IPC rendezvous files; cleaned up around each scenario
 DEVMAP_PATH = "/tmp/ci_prefill_kv_devmap.json"
@@ -162,7 +172,36 @@ SCENARIOS = {
         "producer_timeout_s": 7200,
         "producer": {"PREFILL_PRODUCER_CHUNKS": "11", "PREFILL_PRODUCER_MAX_REQUESTS": "1"},
     },
+    # 5) GLM-5.2 with MTP4: scenario 4 plus four prediction levels after the trunk's last layer, each
+    #    writing its own KVPE slot. Needs the MTP weight cache; the runner will not build it in-process.
+    "glm52_mtp4": {
+        "users": 1,
+        "layers": 78,
+        "max_seq_len": 56320,
+        "env": {
+            "PREFILL_MODEL": "glm_5_2",
+            "PREFILL_TRACE_DIR": GLM52_TRACE,
+            "PREFILL_MTP_TRACE_DIR": GLM52_MTP_TRACE,
+            "PREFILL_MTP_LEVELS": "4",
+            # Read by BOTH roles: the runner sizes its sockets/caches from it and the producer builds
+            # the overlapping H2D rows from it. A mismatch is caught by the payload-size assert.
+            "TT_GLM52_MTP_TTNN_CACHE": GLM52_MTP_TTNN_CACHE,
+            "PREFILL_HF_MODEL": GLM52_HF_MODEL,
+        },
+        # Scenario 4's budgets plus the MTP tail: 4 more blocks per chunk on the last rank, and 4 more
+        # KVPE layers to read back (78 + 4 of 1760 block reads each).
+        "ready_timeout_s": 3600,
+        "producer_timeout_s": 7200,
+        "producer": {"PREFILL_PRODUCER_CHUNKS": "11", "PREFILL_PRODUCER_MAX_REQUESTS": "1"},
+    },
 }
+
+# 6. GLM-5.2 MTP7 -- the other shipping level count, derived from scenario 5 so the two cannot drift.
+#    Same transport and the same weight cache; only the number of levels the last rank runs differs.
+SCENARIOS["glm52_mtp7"] = copy.deepcopy(SCENARIOS["glm52_mtp4"])
+SCENARIOS["glm52_mtp7"]["env"]["PREFILL_MTP_LEVELS"] = "7"
+# 3 more blocks per chunk on the last rank and 3 more KVPE layers to read back than MTP4.
+SCENARIOS["glm52_mtp7"]["producer_timeout_s"] = 8400
 
 # Opt-in prompt-driven scenario: instead of a recorded golden trace, generate the reference KV from a
 # user prompt on the host (device-less pre-step) and validate device KV against it. Enabled by pointing
