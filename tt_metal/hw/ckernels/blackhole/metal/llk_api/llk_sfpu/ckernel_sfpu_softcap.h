@@ -23,7 +23,15 @@ namespace ckernel::sfpu {
 // both matching stock calculate_tanh / tanh_tile rather than torch. Leaves rounding to the
 // caller, so fused callers can round once at the end.
 sfpi_inline sfpi::vFloat _sfpu_softcap_(sfpi::vFloat x, sfpi::vFloat beta, sfpi::vFloat inv_beta) {
-    return _sfpu_tanh_polynomial_(x * inv_beta) * beta;
+    sfpi::vFloat scaled = x * inv_beta;
+    sfpi::vFloat result;
+    v_if (scaled == 0.0f) {
+        result = x;
+    } v_else {
+        result = _sfpu_tanh_polynomial_(scaled) * beta;
+    }
+    v_endif;
+    return result;
 }
 
 inline void softcap_init() { tanh_init</*APPROXIMATION_MODE=*/false, /*is_fp32_dest_acc_en=*/false>(); }
