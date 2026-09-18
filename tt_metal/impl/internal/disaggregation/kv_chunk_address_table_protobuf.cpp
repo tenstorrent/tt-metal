@@ -30,7 +30,6 @@ namespace {
 // sequence within a (slot, layer) row. Covers block-cyclic layouts up to 64 banks.
 constexpr uint32_t kMaxRunStep = 64;
 
-constexpr uint64_t kDualWriteMaxBytesCeiling = (2ull << 30) - (64ull << 20);  // 2 GiB − 64 MiB
 
 // Dual-write budget, in estimated payload bytes (entries mirror + runs). While the estimate
 // stays within the budget, STRIDED_ROWS configs ALSO mirror every chunk into `entries` so
@@ -38,6 +37,7 @@ constexpr uint64_t kDualWriteMaxBytesCeiling = (2ull << 30) - (64ull << 20);  //
 //
 // The budget is 0 by default to enable compression by default
 constexpr uint64_t kDefaultDualWriteMaxBytes = 0;  // compress by default
+constexpr uint64_t kDualWriteMaxBytesCeiling = (2ull << 30) - (64ull << 20);  // 2 GiB − 64 MiB
 constexpr uint64_t kEntryWireEstimate = 48;
 constexpr uint64_t kRunWireEstimate = 72;
 
