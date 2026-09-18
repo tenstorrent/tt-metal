@@ -1388,4 +1388,17 @@ Tensor clamped_silu_glu(
         std::nullopt);
 }
 
+Tensor logaddexp_stable(
+    const Tensor& input_a,
+    const Tensor& input_b,
+    const std::optional<MemoryConfig>& output_mem_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    // Numerically stable logaddexp: log(exp(a) + exp(b)) = max(a, b) + log1p(exp(-abs(a - b)))
+    Tensor diff = ttnn::abs(ttnn::subtract(input_a, input_b, std::nullopt, output_mem_config), output_mem_config);
+    Tensor exp_neg_diff = ttnn::exp(ttnn::neg(diff, output_mem_config), output_mem_config);
+    Tensor log1p_term = ttnn::log1p(exp_neg_diff, output_mem_config);
+    Tensor max_ab = ttnn::maximum(input_a, input_b, std::nullopt, output_mem_config);
+    return ttnn::add(max_ab, log1p_term, std::nullopt, output_mem_config, optional_output_tensor);
+}
+
 }  // namespace ttnn
