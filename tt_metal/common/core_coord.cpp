@@ -539,6 +539,13 @@ std::vector<CoreCoord> grid_to_cores(CoreCoord start, CoreCoord end, bool row_wi
     return cores;
 }
 
+CoreRangeSet grid_to_corerangeset(CoreCoord grid_size) {
+    if (grid_size.x == 0 || grid_size.y == 0) {
+        return {};
+    }
+    return CoreRangeSet(CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1}));
+}
+
 // Noop cores are appended at the end with no guarantees on ordering
 std::vector<CoreCoord> grid_to_cores_with_noop(
     const uint32_t bbox_x,
