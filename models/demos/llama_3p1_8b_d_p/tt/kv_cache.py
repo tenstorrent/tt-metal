@@ -5,8 +5,6 @@
 
 from dataclasses import dataclass
 
-import torch
-
 import ttnn
 from models.demos.common.prefill.adapter import KvCaches
 from models.demos.common.prefill.runners.migration import get_num_dram_banks
@@ -24,6 +22,17 @@ _LOCAL_CHUNK = _GLOBAL_CHUNK // _SP
 _HEAD_DIM = Llama31_8BConfig.HEAD_DIM
 _DRAM_PAGE_TOKENS = 32
 _SUPPORTED_DTYPES = (ttnn.bfloat16, ttnn.bfloat8_b)
+# bfloat8_b is block-float: a 32x32 tile carries 1024 mantissa bytes plus one shared exponent per
+# 16 datums, so 1088 bytes per tile rather than 1024.
+_BYTES_PER_ELEMENT = {ttnn.bfloat16: 2.0, ttnn.bfloat8_b: 1.0625}
+# DRAM held back from the cache so a chunk can still run in it: activations, the vocabulary logits,
+# and slack for the allocator to place two multi-GiB buffers in banks the weights have fragmented.
+# A chunk is a fixed 1024 tokens whatever the capacity, so this is a constant rather than a function
+# of max_seq_len. Measured on a 4x8 Blackhole galaxy by squeezing free DRAM with ballast until a
+# chunk stopped completing: chunks still ran with 0.45 GiB/chip free, the smallest figure probed.
+# The margin over that is for placement, which is what actually fails first -- see
+# docs/kv-slot-capacity.md.
+DEFAULT_RUN_RESERVE_BYTES = 1024**3
 
 
 @dataclass
@@ -88,6 +97,46 @@ def _cache_memory_config(mesh_device):
     )
 
 
+def slot_bytes_per_chip(max_seq_len=DEFAULT_MAX_SEQ_LEN, cache_dtype=ttnn.bfloat8_b):
+    """DRAM one slot costs on every chip, counting both caches.
+
+    The caches are replicated, not sharded, across the mesh, so every chip pays the full shape and
+    this is the per-chip cost rather than a mesh total. It reduces to 2176 bytes per token of
+    capacity at bfloat8_b: 32 layers x max_seq_len/4 local rows x 128 head_dim x 2 caches.
+    """
+    if cache_dtype not in _SUPPORTED_DTYPES:
+        raise ValueError(f"Llama KV cache dtype must be bfloat16 or bfloat8_b, got {cache_dtype}")
+    elements = _NUM_LAYERS * PrefillGeometry(max_seq_len).local_cache_sequence * _HEAD_DIM
+    return int(2 * elements * _BYTES_PER_ELEMENT[cache_dtype])
+
+
+def max_user_slots(
+    mesh_device,
+    *,
+    max_seq_len=DEFAULT_MAX_SEQ_LEN,
+    cache_dtype=ttnn.bfloat8_b,
+    reserve_bytes=DEFAULT_RUN_RESERVE_BYTES,
+):
+    """How many slots fit in the DRAM that is free *right now*, with room left to run.
+
+    Call this after the weights are resident: the answer is a measurement of the current allocator
+    state, not a property of the hardware, and weights are the largest thing competing for it.
+
+    Two corrections are applied to the naive division. Free space is capped by the largest
+    contiguous block per bank, because each cache is a single buffer that has to land in one run per
+    bank and weights leave the banks slightly fragmented; and ``reserve_bytes`` is withheld for the
+    activations a chunk allocates after the cache exists, since a cache that fits but leaves no room
+    to run is not useful.
+    """
+    view = ttnn.get_memory_view(mesh_device, ttnn.BufferType.DRAM)
+    banks = get_num_dram_banks(mesh_device)
+    usable_per_bank = min(view.total_bytes_free_per_bank, view.largest_contiguous_bytes_free_per_bank)
+    budget = usable_per_bank * banks - reserve_bytes
+    if budget <= 0:
+        return 0
+    return int(budget // slot_bytes_per_chip(max_seq_len, cache_dtype))
+
+
 def allocate_kv_cache(
     mesh_device,
     mesh_config,
@@ -96,13 +145,32 @@ def allocate_kv_cache(
     num_layers=32,
     max_seq_len=DEFAULT_MAX_SEQ_LEN,
     cache_dtype=ttnn.bfloat8_b,
+    reserve_bytes=DEFAULT_RUN_RESERVE_BYTES,
 ):
     """Allocate zeroed K/V caches in the fixed Llama migration layout.
 
     ``num_users`` is how many sequences the caches can hold at once. Each slot is an independent
     ``num_layers``-plane K/V region addressed by ``slot_idx``, so the footprint is linear in the slot
-    count: one slot of a 128K-token context is ~285 MB per chip per cache at bfloat8_b.
+    count: one slot of a 128K-token context is ~272 MiB per chip across both caches at bfloat8_b.
+
+    Pass ``num_users="max"`` to take everything DRAM allows at this capacity, which is what a serving
+    front end wants when it would rather admit more sequences than choose a number by hand. The count
+    is then derived from free DRAM at call time via :func:`max_user_slots`, so it must be called with
+    the weights already loaded, and ``reserve_bytes`` is what stays free for the chunk to run in.
     """
+    if num_users == "max":
+        num_users = max_user_slots(
+            mesh_device, max_seq_len=max_seq_len, cache_dtype=cache_dtype, reserve_bytes=reserve_bytes
+        )
+        if num_users < 1:
+            free_per_bank = ttnn.get_memory_view(mesh_device, ttnn.BufferType.DRAM).total_bytes_free_per_bank
+            free = free_per_bank * get_num_dram_banks(mesh_device)
+            raise RuntimeError(
+                f"no KV slot fits: a slot at max_seq_len={max_seq_len} costs "
+                f"{slot_bytes_per_chip(max_seq_len, cache_dtype) / 2**20:.1f} MiB per chip, and only "
+                f"{free / 2**30:.2f} GiB per chip is free before the {reserve_bytes / 2**30:.2f} GiB run "
+                f"reserve. Lower max_seq_len or free device memory."
+            )
     _validate_target(
         mesh_device,
         mesh_config,
@@ -115,13 +183,15 @@ def allocate_kv_cache(
     geometry = PrefillGeometry(max_seq_len, num_users)
 
     def allocate_one():
-        return ttnn.from_torch(
-            torch.zeros(geometry.cache_shape),
-            device=mesh_device,
+        # Zeroed on the device rather than uploaded. A host torch.zeros of this shape is fp32, so it
+        # would cost 4 B/element against 1.0625 on device -- 44 GiB of host RAM for a slot count the
+        # device holds in 21 GiB -- and the host would cap the slot count long before DRAM did.
+        return ttnn.zeros(
+            geometry.cache_shape,
             dtype=cache_dtype,
             layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
             memory_config=memory_config,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
 
     allocated = []

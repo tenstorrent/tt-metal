@@ -20,7 +20,8 @@ class PrefillGeometry:
 
     ``num_users`` is the number of concurrently cached sequences (KV slots). It sets only the packed
     cache's batch extent, so raising it costs DRAM and nothing else; the gather addresses a slot by
-    index, and every other dimension here is per-slot.
+    index, and every other dimension here is per-slot. Measured: 2 slots and 1681 slots prefill at
+    the same 151 ms per chunk (docs/kv-slot-capacity.md), so the count is a memory decision alone.
     """
 
     max_seq_len: int = DEFAULT_MAX_SEQ_LEN
