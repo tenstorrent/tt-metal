@@ -8,6 +8,7 @@ from models.common.sampling.full_vocab_device import (
     merge_unrestricted_rows,
     sample_unrestricted_top_p_one,
 )
+import models.common.sampling.full_vocab_device as full_vocab_device
 
 
 class TorchOps:
@@ -265,6 +266,39 @@ def test_mixed_merge_preserves_native_rows_and_uses_invalid_sentinel():
     # reshape views are not recorded as independent allocation owners.
     assert sum(tensor is categorical.token_ids for tensor in merged.owned_tensors) == 1
     assert sum(tensor is categorical.valid_distribution for tensor in merged.owned_tensors) == 1
+
+
+def test_mixed_merge_releases_only_new_intermediates_on_second_add_failure(monkeypatch):
+    categorical = _run(torch.zeros(1, 1, 4, 32), seeds=[7, 8, 9, 10])
+    native = torch.tensor([[[[10, 11, 12, 13]]]], dtype=torch.int64)
+    released = []
+    monkeypatch.setattr(full_vocab_device, "_release_owned", lambda tensors, *, ops: released.extend(tensors))
+
+    class FailSecondAddOps(TorchOps):
+        add_calls = 0
+
+        @classmethod
+        def add(cls, left, right, dtype=None):
+            cls.add_calls += 1
+            if cls.add_calls == 2:
+                raise RuntimeError("injected second add failure")
+            return super().add(left, right, dtype=dtype)
+
+        @staticmethod
+        def gt(tensor, value):
+            return torch.gt(tensor, value)
+
+    with pytest.raises(RuntimeError, match="injected second add failure"):
+        merge_unrestricted_rows(
+            categorical,
+            native,
+            unrestricted_selector=torch.tensor([[[[0, 1, 1, 0]]]], dtype=torch.int32),
+            invalid_token_ids=torch.full((1, 1, 1, 4), 32, dtype=torch.int64),
+            ops=FailSecondAddOps,
+        )
+
+    assert released
+    assert not any(tensor is owned for tensor in released for owned in categorical.owned_tensors)
 
 
 @pytest.mark.parametrize(

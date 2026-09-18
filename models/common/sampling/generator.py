@@ -26,6 +26,16 @@ DEVICE_SEED_MAX = 1_000_000
 _UINT64_MASK = (1 << 64) - 1
 
 
+def _make_full_vocab_selector(batch_size: int, unrestricted_slots) -> torch.Tensor:
+    """Build the rank-4 row selector expected by the persistent device buffer."""
+
+    unrestricted = set(unrestricted_slots)
+    return torch.tensor(
+        [1 if slot in unrestricted else 0 for slot in range(batch_size)],
+        dtype=torch.uint32,
+    ).reshape(1, 1, 1, batch_size)
+
+
 def _mark_trace_buffers_corruptible(bucket, value):
     """Acknowledge bucketed trace I/O that another live trace may overwrite."""
     if bucket is None or value is None:
@@ -117,6 +127,24 @@ class SamplingGenerator:
         "repetition": 1.0,
     }
 
+    @staticmethod
+    def full_vocabulary_sampling_capabilities():
+        """Describe the exact opt-in unrestricted sampling domain.
+
+        This is a parameter-domain contract, not a blanket boolean.  Serving
+        frontends must reject unsupported cross-products before scheduling.
+        """
+
+        return {
+            "abi": "tt-metal.common.sampling.full-vocabulary/v1",
+            "sampling_dp": (1,),
+            "top_p": (1.0,),
+            "sampled_logprobs": False,
+            "topk_logprobs": False,
+            "traced": False,
+            "mixed_rows": True,
+        }
+
     def __init__(
         self,
         *,
@@ -158,7 +186,7 @@ class SamplingGenerator:
                 torch.zeros(1, 1, 1, batch, dtype=torch.uint32),
                 device=self.mesh_device,
                 dtype=ttnn.uint32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
+                layout=ttnn.TILE_LAYOUT,
                 mesh_mapper=replicate,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
@@ -424,7 +452,14 @@ class SamplingGenerator:
     def _deallocate_tensors(tensors, *, protect=()):
         protected = {id(tensor) for tensor in protect}
         seen = set()
-        for tensor in reversed(tuple(tensors)):
+        pending = list(tensors)
+        while pending:
+            tensor = pending.pop()
+            if tensor is None:
+                continue
+            if isinstance(tensor, (list, tuple)):
+                pending.extend(tensor)
+                continue
             if id(tensor) in seen or id(tensor) in protected:
                 continue
             seen.add(id(tensor))
@@ -439,27 +474,22 @@ class SamplingGenerator:
         preparation_owned = ()
         categorical = None
         merged = None
-        params = self._full_vocab_params
-        unrestricted = set(contract.unrestricted_slots)
-        draws = [1 if slot in unrestricted else 0 for slot in range(self.tt_sampling.max_batch_size)]
-        seed_plan = self.seed_manager.next_managed_draw_seed_plan(draws)
-        if len(seed_plan.seeds_by_subdraw) != 1:
-            raise RuntimeError("top_p=1 categorical route requires exactly one draw")
-
-        selector_host = torch.tensor(
-            [[[1 if slot in unrestricted else 0 for slot in range(self.tt_sampling.max_batch_size)]]],
-            dtype=torch.uint32,
-        )
-        selector_update = ttnn.from_torch(
-            selector_host,
-            device=None,
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-        )
-        ttnn.copy_host_to_device_tensor(selector_update, self._full_vocab_selector)
-
         try:
+            unrestricted = set(contract.unrestricted_slots)
+            draws = [1 if slot in unrestricted else 0 for slot in range(self.tt_sampling.max_batch_size)]
+            seed_plan = self.seed_manager.next_managed_draw_seed_plan(draws)
+            if len(seed_plan.seeds_by_subdraw) != 1:
+                raise RuntimeError("top_p=1 categorical route requires exactly one draw")
+
+            selector_host = _make_full_vocab_selector(self.tt_sampling.max_batch_size, unrestricted)
+            selector_update = ttnn.from_torch(
+                selector_host,
+                device=None,
+                dtype=ttnn.uint32,
+                layout=ttnn.TILE_LAYOUT,
+            )
+            ttnn.copy_host_to_device_tensor(selector_update, self._full_vocab_selector)
+
             full_logits, preparation_owned = self.tt_sampling.gather_full_vocab_logits(logits)
             inverse_temperature = ttnn.reshape(
                 self.tt_sampling.temp_tensor, (1, 1, self.tt_sampling.max_batch_size, 1)
@@ -500,6 +530,7 @@ class SamplingGenerator:
                 scratch.extend(categorical.owned_tensors)
             scratch.extend(preparation_owned)
             scratch.append(native_tokens)
+            scratch.append(native_log_probs)
             self._deallocate_tensors(
                 scratch,
                 protect=(

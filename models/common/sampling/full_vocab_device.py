@@ -1,7 +1,8 @@
 """Staged public-op composition for unrestricted top-p=1 device sampling.
 
-This module is intentionally not wired into :class:`SamplingGenerator` and
-does not advertise a runtime capability.  It keeps logits, probability math,
+This module is wired only through an explicitly enabled staged route in
+:class:`SamplingGenerator` and does not advertise a runtime capability.  It
+keeps logits, probability math,
 random variates, and the B-row token result on device while the slower
 per-row scalar-seed uniform composition is qualified.  Full-vocabulary
 nucleus sampling (top_p < 1), traces, and distributed/sharded logits fail
@@ -51,25 +52,48 @@ def merge_unrestricted_rows(
         raise ValueError("categorical tokens must have shape [1,1,B,1]")
 
     owned = list(categorical.owned_tensors)
+    merge_owned = []
 
     def own(tensor):
         owned.append(tensor)
+        merge_owned.append(tensor)
         return tensor
 
     # reshape is a view of categorical-owned storage, not a new allocation.
     # Keep the original allocation in the ownership list and never deallocate
     # the view as a second owner.
-    full_tokens = ops.reshape(categorical.token_ids, expected)
-    valid = ops.reshape(categorical.valid_distribution, expected)
-    if full_tokens.dtype != native_tokens.dtype:
-        full_tokens = own(ops.typecast(full_tokens, dtype=native_tokens.dtype))
-    if invalid_token_ids.dtype != native_tokens.dtype:
-        invalid_token_ids = own(ops.typecast(invalid_token_ids, dtype=native_tokens.dtype))
-    selector = own(ops.gt(unrestricted_selector, 0))
-    safe_full_tokens = own(ops.where(valid, full_tokens, invalid_token_ids))
-    merged = own(ops.where(selector, safe_full_tokens, native_tokens))
-    unique_owned = tuple({id(tensor): tensor for tensor in owned}.values())
-    return DeviceCategoricalPrototypeResult(merged, valid, unique_owned)
+    try:
+        full_tokens = ops.reshape(categorical.token_ids, expected)
+        valid = ops.reshape(categorical.valid_distribution, expected)
+        if full_tokens.dtype != native_tokens.dtype:
+            full_tokens = own(ops.typecast(full_tokens, dtype=native_tokens.dtype))
+        if invalid_token_ids.dtype != native_tokens.dtype:
+            invalid_token_ids = own(ops.typecast(invalid_token_ids, dtype=native_tokens.dtype))
+        # Compose selection arithmetically from an explicit 0/1 mask.  This
+        # keeps semantics stable on runtimes where the public ternary kernel's
+        # tensor/tensor branches do not match its documented Python ordering.
+        valid_mask = own(ops.typecast(valid, dtype=native_tokens.dtype))
+        invalid_mask = own(ops.subtract(1, valid_mask))
+        safe_full_tokens = own(
+            ops.add(
+                own(ops.multiply(valid_mask, full_tokens)),
+                own(ops.multiply(invalid_mask, invalid_token_ids)),
+            )
+        )
+        selector = own(ops.gt(unrestricted_selector, 0))
+        selector_mask = own(ops.typecast(selector, dtype=native_tokens.dtype))
+        native_mask = own(ops.subtract(1, selector_mask))
+        merged = own(
+            ops.add(
+                own(ops.multiply(selector_mask, safe_full_tokens)),
+                own(ops.multiply(native_mask, native_tokens)),
+            )
+        )
+        unique_owned = tuple({id(tensor): tensor for tensor in owned}.values())
+        return DeviceCategoricalPrototypeResult(merged, valid, unique_owned)
+    except Exception:
+        _release_owned(merge_owned, ops=ops)
+        raise
 
 
 def _shape(tensor) -> tuple[int, ...]:
