@@ -133,6 +133,14 @@ tt::tt_metal::TensorSpec UnaryDeviceOperation::compute_output_specs(
         const auto output_layout = tensor_args.input.layout();
         const auto& memory_layout = args.memory_config.memory_layout();
         const auto& buffer_type = args.memory_config.buffer_type();
+
+        // ND_SHARDED does not carry a 2D shard_spec to reconstruct from. Reusing it is safe and the input's
+        // ND distribution still describes the output.
+        if (!args.memory_config.shard_spec().has_value() && args.memory_config.nd_shard_spec().has_value()) {
+            return tt::tt_metal::TensorSpec(
+                output_shape, TensorLayout(args.output_dtype, PageConfig(output_layout), args.memory_config));
+        }
+
         auto shard_spec_opt = args.memory_config.shard_spec();
 
         if (!shard_spec_opt.has_value()) {
@@ -192,25 +200,37 @@ ttsl::hash::hash_t UnaryDeviceOperation::compute_program_hash(
         dst_shard_vol = shard_specs->output_shard_spec.numel() / out_tile_hw;
     }
 
-    // TODO: For ROW_MAJOR, page size depends on width. Hashing padded_shape ensures
-    // different widths get separate cache entries. Consider hashing only the last
-    // dimension to allow cache reuse when only height differs
-    if (input_tensor.layout() == Layout::ROW_MAJOR) {
-        return operation::hash_operation<UnaryDeviceOperation>(
-            attributes,
-            input_tensor.dtype(),
-            input_tensor.layout(),
-            input_tensor.memory_config(),
-            input_tensor.padded_shape(),
-            src_shard_vol,
-            dst_shard_vol);
-    }
+    // On cache hit, the dispatched tensor_layout must equal the one built by cached program and no relaxation
+    // is applied. Anything omitted from the hash can give different config and fail validation. The output
+    // layout needs its own hash term because its spec is returned with only the layout enum compared against
+    // the input.
+    //
+    // Hashing tensor_layout does not ignore shape. Alignment is a part tensor_layout and for overpadded TILE
+    // tensors, legacyShapeToAlignment uses {padded_h, padded_w} instead oftile dims. So differently padded H/W values
+    // produce different keys.
+    //
+    // Hashing shard shape since shape and shard are squeezed together which can make the same shard spec resolve
+    // differently for different shapes (eg: [64,64] -> [4] vs [64,128] -> [2,2]) and a shared cache entry will
+    // throw after the Metal 2.0 port.
+    const auto squeezed_shard_shape = [](const tt::tt_metal::TensorSpec& spec) -> std::optional<Shape> {
+        const auto sharding_args = spec.compute_buffer_sharding_args();
+        const auto& distribution = sharding_args.buffer_distribution_spec();
+        if (!distribution.has_value()) {
+            return std::nullopt;
+        }
+        return distribution->shard_shape_in_pages();
+    };
 
     return operation::hash_operation<UnaryDeviceOperation>(
         attributes,
-        input_tensor.dtype(),
-        input_tensor.layout(),
-        input_tensor.memory_config(),
+        input_tensor.tensor_spec().tensor_layout(),
+        output_spec.tensor_layout(),
+        // TODO: For ROW_MAJOR, page size depends on width. Hashing padded_shape ensures
+        // different widths get separate cache entries. Consider hashing only the last
+        // dimension to allow cache reuse when only height differs
+        input_tensor.layout() == Layout::ROW_MAJOR ? std::optional{input_tensor.padded_shape()} : std::nullopt,
+        squeezed_shard_shape(input_tensor.tensor_spec()),
+        squeezed_shard_shape(output_spec),
         src_shard_vol,
         dst_shard_vol);
 }

@@ -18,6 +18,10 @@ bool is_uneven(const tt::tt_metal::TensorSpec& t) {
     if (!t.memory_config().is_sharded()) {
         return false;
     }
+    // is_sharded() is true for ND_SHARDED and leaves shard_spec empty
+    if (!get_shard_spec(t).has_value()) {
+        return false;
+    }
     const auto& shape = t.padded_shape();
     const auto& shard = get_shard_spec(t)->shape;
     const auto rank = shape.rank();
@@ -37,6 +41,10 @@ bool is_native_L1_sharding(
     if (!input_spec.memory_config().is_sharded()) {
         return false;
     }
+    // ND_SHARDED config carries nd_shard_spec and not shard_spec
+    if (!input_spec.memory_config().shard_spec().has_value() || !output_memory_config.shard_spec().has_value()) {
+        return false;
+    }
     if (is_uneven(input_spec)) {
         return false;
     }
@@ -44,12 +52,8 @@ bool is_native_L1_sharding(
         output_memory_config.buffer_type() == tt::tt_metal::BufferType::DRAM) {
         return false;
     }
-    if (output_memory_config.shard_spec().has_value() && input_spec.memory_config().shard_spec().has_value()) {
-        const auto& in_grid = input_spec.memory_config().shard_spec()->grid;
-        const auto& out_grid = output_memory_config.shard_spec()->grid;
-        if (in_grid != out_grid) {
-            return false;
-        }
+    if (input_spec.memory_config().shard_spec()->grid != output_memory_config.shard_spec()->grid) {
+        return false;
     }
     return true;
 }

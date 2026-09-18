@@ -12,11 +12,16 @@ The unary operation uses 3 ProgramFactory variants:
   - UnaryShardedProgramFactory (sharded input)
 
 compute_program_hash() hashes:
-  TILE layout:  args, sub_core_grids, factory_index, input_dtype, input_memory_config, volume, layout
-  ROW_MAJOR:    args, sub_core_grids, factory_index, input_dtype, input_memory_config, padded_shape, layout
+  TILE layout:  args, input tensor_layout, output tensor_layout, src/dst shard volumes
+  ROW_MAJOR:    args, input tensor_layout, output tensor_layout, padded_shape,
+                src/dst shard volumes
 
-Where args = entire UnaryParams (op_chain, output_dtype, output_memory_config,
-fp32_dest_acc_en, preserve_fp32_precision, bfp8_pack_precise, sub_core_grids).
+Where args = entire operation_attributes_t via to_hash() (op_chain, output_dtype,
+memory_config, fp32_dest_acc_en, preserve_fp32_precision, bfp8_pack_precise,
+sub_core_grids, worker_grid), and tensor_layout is (dtype, page_config -- and so the
+Tile -- memory_config, alignment). The whole tensor_layout is hashed rather than its
+parts because a Metal 2.0 TensorParameter relaxation requires it to be exactly equal
+and cannot relax any component of it.
 
 On a program-cache HIT the descriptor is NOT rebuilt; override_runtime_arguments()
 re-derives ALL per-dispatch state for the current tensors from the same shared
@@ -26,7 +31,9 @@ tensor-backed circular-buffer base address (by CBIndex: c_0=input, c_2=output).
 
 For TILE layout, volume is NOT hashed, so differently-shaped calls share one
 cache entry and override_runtime_arguments re-applies the new shape's work split
-on the hit. Because addresses are re-derived from the actual current tensors
+on the hit. The one exception is an interleaved TILE tensor overpadded past its
+tile boundary: its Alignment resolves to the padded H/W rather than the tile dims,
+so those tensors do key on padded shape and fragment per shape. Because addresses are re-derived from the actual current tensors
 (never inferred from Buffer* identity), in-place (out=x) and mixed in-place/
 out-of-place reuse of one cache entry stay correct by construction.
 """
@@ -156,6 +163,86 @@ def test_unary_cache_miss_different_memory_configs(device):
         device, ttnn.relu, shape, dtype=ttnn.float32, memory_config=ttnn.L1_MEMORY_CONFIG
     )
     assert_equal(torch_ref2, tt_out2)
+
+    assert device.cache_entries_counter.total == 2
+
+
+def test_unary_cache_miss_different_tiles(device):
+    """Same dtype, logical shape, padded shape and memory config. Different Tile dims -> different cache entries.
+
+    Note: 16x32 tile returns wrong data since buffer and CB sizes come from tile_size(DataFormat),
+    which assumes 32x32, while the work split reads the real tile."""
+    device.cache_entries_counter.reset()
+    shape = [1, 1, 64, 64]
+    padded_shapes = []
+
+    for i, tile in enumerate([[32, 32], [16, 32]]):
+        torch.manual_seed(i)
+        torch_a = torch.rand(shape, dtype=torch.bfloat16) + 0.1
+        tt_a = ttnn.from_torch(
+            torch_a,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            tile=ttnn.Tile(tile),
+        )
+        padded_shapes.append(tt_a.padded_shape)
+        with device.cache_entries_counter.measure():
+            tt_out = ttnn.relu(tt_a)
+        if tile == [32, 32]:
+            assert_equal(torch.relu(torch_a), ttnn.to_torch(tt_out))
+
+    assert padded_shapes[0] == padded_shapes[1]
+    assert device.cache_entries_counter.total == 2
+
+
+def test_unary_cache_miss_different_alignments(device):
+    """Same dtype, logical shape and memory config. Differing padded shape -> different cache entries."""
+    device.cache_entries_counter.reset()
+    logical = [1, 1, 32, 32]
+
+    for padded in ([1, 1, 64, 64], [1, 1, 96, 96]):
+        torch.manual_seed(0)
+        torch_a = torch.rand(logical, dtype=torch.bfloat16) + 0.1
+        unpadded = ttnn.from_torch(torch_a, layout=ttnn.ROW_MAJOR_LAYOUT)
+        tt_a = unpadded.pad(padded, [0] * len(logical), 0.0).to(ttnn.TILE_LAYOUT).to(device)
+        assert tt_a.padded_shape == ttnn.Shape(padded)
+        assert tt_a.shape == ttnn.Shape(logical)
+
+        with device.cache_entries_counter.measure():
+            tt_out = ttnn.relu(tt_a)
+        assert_equal(torch.relu(torch_a), ttnn.to_torch(tt_out))
+
+    assert device.cache_entries_counter.total == 2
+
+
+def test_unary_cache_miss_different_output_tiles(device):
+    """Preallocated outputs with same dtype and memory config but different Tile dims -> different cache entries."""
+    device.cache_entries_counter.reset()
+    shape = [1, 1, 64, 64]
+
+    for output_tile in [[32, 32], [16, 32]]:
+        torch.manual_seed(0)
+        torch_a = torch.rand(shape, dtype=torch.bfloat16) + 0.1
+        tt_a = ttnn.from_torch(
+            torch_a,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            tile=ttnn.Tile([32, 32]),
+        )
+        tt_out = ttnn.from_torch(
+            torch.zeros(shape, dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            tile=ttnn.Tile(output_tile),
+        )
+        with device.cache_entries_counter.measure():
+            ttnn.relu(tt_a, output_tensor=tt_out)
 
     assert device.cache_entries_counter.total == 2
 
@@ -439,4 +526,103 @@ def test_unary_inplace_cache_hit_interleaved_readdresses(device):
         assert_equal(torch.relu(a), ttnn.to_torch(tt_c))
 
     # One shared program reused across all four differently-addressed in-place hits.
+    assert device.cache_entries_counter.total == 1
+
+
+@pytest.mark.parametrize(
+    "squeezes_to_rank1, squeezes_to_rank2",
+    [([1, 1, 192, 64], [1, 1, 96, 128]), ([1, 1, 320, 64], [1, 1, 64, 320])],
+)
+def test_unary_cache_miss_nd_sharded_different_geometry(device, squeezes_to_rank1, squeezes_to_rank2):
+    """Two ND_SHARDED with NdShardSpec but shapes squeeze to different distribution
+    geometry -> different cache entries.
+
+    squeeze_shape_ranks merges a dim into the one right of it while tensor_size == shard_size holds.
+    A width of 64 (2 pages) lets the dims merge to rank 1, while a wider one stops the merge at rank 2."""
+    device.cache_entries_counter.reset()
+    memory_config = ttnn.MemoryConfig(
+        ttnn.BufferType.DRAM,
+        ttnn.NdShardSpec(
+            shard_shape=ttnn.Shape([1, 1, 64, 64]),
+            grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))}),
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            shard_distribution_strategy=ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+        ),
+    )
+
+    for seed, shape in enumerate((squeezes_to_rank1, squeezes_to_rank2)):
+        torch.manual_seed(seed)
+        a = torch.rand(shape, dtype=torch.bfloat16) + 0.1
+        tt_a = ttnn.from_torch(
+            a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config
+        )
+        assert tt_a.memory_config().shard_spec is None
+        with device.cache_entries_counter.measure():
+            tt_out = ttnn.relu(tt_a)
+        assert_equal(torch.relu(a), ttnn.to_torch(tt_out))
+
+    assert device.cache_entries_counter.total == 2
+
+
+@pytest.mark.parametrize("buffer_type", [ttnn.BufferType.L1, ttnn.BufferType.DRAM])
+def test_unary_cache_miss_width_sharded_different_geometry(device, buffer_type):
+    """Two WIDTH_SHARDED shards with different padded shapes squeeze to different distribution geometry
+    -> different cache entries."""
+    device.cache_entries_counter.reset()
+    memory_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        buffer_type,
+        ttnn.ShardSpec(
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))}),
+            (64, 64),
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+
+    for seed, shape in enumerate(([64, 64], [64, 128])):
+        torch.manual_seed(seed)
+        a = torch.rand(shape, dtype=torch.bfloat16) + 0.1
+        tt_a = ttnn.from_torch(
+            a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config
+        )
+        with device.cache_entries_counter.measure():
+            tt_out = ttnn.relu(tt_a)
+        assert_equal(torch.relu(a), ttnn.to_torch(tt_out))
+
+    assert device.cache_entries_counter.total == 2
+
+
+@pytest.mark.parametrize(
+    "shard_shape, logical_shape1, logical_shape2",
+    [
+        ((32, 64), [1, 1, 64, 64], [64, 64]),
+        ((32, 64), [64, 64], [1, 1, 64, 64]),
+        ((64, 64), [1, 1, 128, 64], [1, 1, 96, 64]),
+        ((64, 64), [1, 1, 96, 64], [1, 1, 128, 64]),
+    ],
+)
+def test_unary_sharded_input_on_interleaved_path_cache_reuse(device, shard_shape, logical_shape1, logical_shape2):
+    """Back-to-back calls whose input is sharded while the op runs its interleaved path must both be
+    correct while sharing one cache entry."""
+    device.cache_entries_counter.reset()
+    memory_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.DRAM,
+        ttnn.ShardSpec(
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))}),
+            shard_shape,
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+
+    for seed, shape in enumerate((logical_shape1, logical_shape2)):
+        torch.manual_seed(seed)
+        a = torch.rand(shape, dtype=torch.bfloat16) + 0.1
+        tt_a = ttnn.from_torch(
+            a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config
+        )
+        with device.cache_entries_counter.measure():
+            tt_out = ttnn.relu(tt_a)
+        assert_equal(torch.relu(a), ttnn.to_torch(tt_out))
+
     assert device.cache_entries_counter.total == 1
