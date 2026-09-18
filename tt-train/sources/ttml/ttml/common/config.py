@@ -38,6 +38,12 @@ class DeviceConfig:
         # Megatron sequence parallelism shares the "tp" axis (requires enable_tp), so it only
         # toggles the model's sequence-sharded residual path, not mesh construction.
         self.enable_sp = device_config.get("enable_sp", False)
+        # How the sequence-parallel linears run their collective + matmul pair: "composed" (the two as
+        # separate ttnn ops) or "fused" (the fused ttnn ops). Applied process-wide at startup by the
+        # training scripts; only meaningful with enable_sp.
+        self.sp_linear_impl = str(device_config.get("sp_linear_impl", "composed"))
+        if self.sp_linear_impl not in ("composed", "fused"):
+            raise ValueError(f"device_config.sp_linear_impl must be 'composed' or 'fused', got {self.sp_linear_impl!r}")
         # Defaults to True: build as deferred metadata -> fully_shard -> materialize already-sharded,
         # so large models (e.g. 32B) never materialize a full replicated copy on one chip.
         # Set to false to opt into the eager (full-replicated, then shard) path.

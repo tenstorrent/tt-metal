@@ -11,6 +11,7 @@
 #include <nanobind/stl/vector.h>
 
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <ttnn/distributed/distributed_tensor.hpp>
 
@@ -25,6 +26,7 @@
 #include "ops/binary_ops.hpp"
 #include "ops/distributed/comm_ops.hpp"
 #include "ops/distributed/losses.hpp"
+#include "ops/distributed/sp_linear_ops.hpp"
 #include "ops/dropout_op.hpp"
 #include "ops/embedding_op.hpp"
 #include "ops/layernorm_op.hpp"
@@ -172,6 +174,47 @@ void py_module(nb::module_& m) {
             nb::arg("targets"),
             nb::arg("cluster_axis") = nb::none(),
             nb::arg("reduce") = ReduceType::MEAN);
+
+        // The sequence-parallel linears and the switch between their composed and fused implementations.
+        using ttml::ops::distributed::SPLinearImpl;
+        nb::enum_<SPLinearImpl>(py_distributed, "SPLinearImpl")
+            .value("COMPOSED", SPLinearImpl::Composed)
+            .value("FUSED", SPLinearImpl::Fused);
+        py_distributed.def("set_sp_linear_impl", &ttml::ttnn_fixed::distributed::set_sp_linear_impl, nb::arg("impl"));
+        py_distributed.def(
+            "set_sp_linear_impl",
+            [](const std::string& impl) {
+                // The device-config spelling: sp_linear_impl: composed | fused.
+                if (impl == "composed") {
+                    ttml::ttnn_fixed::distributed::set_sp_linear_impl(SPLinearImpl::Composed);
+                } else if (impl == "fused") {
+                    ttml::ttnn_fixed::distributed::set_sp_linear_impl(SPLinearImpl::Fused);
+                } else {
+                    throw std::invalid_argument("sp_linear_impl must be 'composed' or 'fused', got '" + impl + "'");
+                }
+            },
+            nb::arg("impl"));
+        py_distributed.def("get_sp_linear_impl", &ttml::ttnn_fixed::distributed::get_sp_linear_impl);
+        py_distributed.def(
+            "sp_column_parallel_linear",
+            [](const autograd::TensorPtr& x,
+               const autograd::TensorPtr& weight,
+               std::optional<const autograd::TensorPtr> bias,
+               uint32_t cluster_axis) -> autograd::TensorPtr {
+                return ttml::ops::distributed::sp_column_parallel_linear(
+                    x, weight, bias.value_or(nullptr), cluster_axis);
+            },
+            nb::arg("x"),
+            nb::arg("weight"),
+            nb::arg("bias") = nb::none(),
+            nb::kw_only(),
+            nb::arg("cluster_axis"));
+        py_distributed.def(
+            "sp_row_parallel_linear",
+            &ttml::ops::distributed::sp_row_parallel_linear,
+            nb::arg("x"),
+            nb::arg("weight"),
+            nb::arg("cluster_axis"));
     }
 
     {

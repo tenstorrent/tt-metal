@@ -48,4 +48,28 @@ ttnn::Tensor ring_shift(
     const std::optional<uint32_t> cluster_axis = std::nullopt,
     const RingShiftDirection direction = RingShiftDirection::Forward);
 
+// Which implementation backs the sequence-parallel linears (ops/distributed/sp_linear_ops.hpp), process-wide.
+//   Composed: today's unfused sequence -- the collective, then the matmul (or the reverse) -- op for op.
+//   Fused:    the fused ttnn ops of issue #52944. Not landed yet: selecting it makes the two functions below throw.
+enum class SPLinearImpl { Composed, Fused };
+void set_sp_linear_impl(SPLinearImpl impl);
+SPLinearImpl get_sp_linear_impl();
+
+// Sequence-parallel matmul fusions on dim 2 of (B, 1, S, X) across `cluster_axis`; T = the mesh extent on it.
+// The result is the Composed sequence's result; the implementation only decides how it is computed.
+//
+// x [B,1,S/T,K] sequence-sharded -> {all_gather(x) [B,1,S,K], all_gather(x) @ (transpose_b ? W^T : W) (+ bias)}.
+// The gathered activation is returned because the caller's weight gradient needs it. A bias is only
+// supported with transpose_b (the forward linear).
+std::pair<ttnn::Tensor, ttnn::Tensor> all_gather_matmul(
+    const ttnn::Tensor& x,
+    const ttnn::Tensor& w,
+    uint32_t cluster_axis,
+    bool transpose_b,
+    const std::optional<ttnn::Tensor>& bias = std::nullopt);
+
+// x [B,1,S,K] -> reduce_scatter over T of x @ (transpose_b ? W^T : W), split on the sequence: [B,1,S/T,N].
+ttnn::Tensor matmul_reduce_scatter(
+    const ttnn::Tensor& x, const ttnn::Tensor& w, uint32_t cluster_axis, bool transpose_b);
+
 }  // namespace ttml::ttnn_fixed::distributed

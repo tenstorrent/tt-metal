@@ -888,6 +888,10 @@ def main() -> None:
         print(f"Mesh: shape={mesh.shape}, axis_names={mesh.axis_names}")
     ttml.open_device_mesh(mesh, tuple(device_cfg.device_ids) if device_cfg.device_ids else None)
     ttml.autograd.AutoContext.get_instance().get_device()
+    if device_cfg.enable_sp:
+        # Process-wide: the sequence-parallel linears run their collective + matmul pair composed or fused.
+        ttml.ops.distributed.set_sp_linear_impl(device_cfg.sp_linear_impl)
+        print(f"Sequence-parallel linears: {device_cfg.sp_linear_impl}")
     ttml.manual_seed(training_cfg.seed)
     np.random.seed(training_cfg.seed)
     random.seed(training_cfg.seed)  # Python RNG drives the per-token sampling seed in inference

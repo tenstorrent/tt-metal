@@ -98,6 +98,7 @@ Device mesh and distributed training configuration.
 | `enable_ddp` | bool | false | Enable Distributed Data Parallelism |
 | `enable_tp` | bool | false | Enable Tensor Parallelism |
 | `enable_sp` | bool | false | Megatron sequence parallelism on top of TP: the residual stream is sharded along the sequence across the TP axis. Requires `enable_tp`; Llama only |
+| `sp_linear_impl` | string | composed | How the sequence-parallel linears run their collective + matmul pair: `composed` (two separate ops) or `fused` (the fused ttnn ops; not landed yet). Only read with `enable_sp` |
 
 ### Constraints
 - DDP and TP can be combined on a 2D mesh (e.g. `mesh_shape: [4, 8]` with `enable_ddp: true` and `enable_tp: true`)

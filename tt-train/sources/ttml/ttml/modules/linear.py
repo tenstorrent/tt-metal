@@ -17,7 +17,11 @@ from .parameter import Parameter
 
 
 def column_parallel_input(x, cluster_axis: int, sequence_parallel: bool):
-    """The input of a column-parallel matmul: the full sequence, replicated on every TP rank."""
+    """The input of a column-parallel matmul: the full sequence, replicated on every TP rank.
+
+    The collective on its own, for callers that put something between it and the matmul (LoRA).
+    The parallel layers themselves issue it together with the matmul (``sp_column_parallel_linear``).
+    """
     if sequence_parallel:
         return ttml.ops.distributed.all_gather(
             x, SEQUENCE_DIM, cluster_axis, ttml.ops.distributed.GradOutputType.SHARDED
@@ -26,7 +30,11 @@ def column_parallel_input(x, cluster_axis: int, sequence_parallel: bool):
 
 
 def row_parallel_output(x, cluster_axis: int, sequence_parallel: bool, input_is_parallel: bool):
-    """The output of a row-parallel matmul: the partial products summed across TP ranks."""
+    """The output of a row-parallel matmul: the partial products summed across TP ranks.
+
+    The collective on its own, for callers that put something between the matmul and it (LoRA).
+    The parallel layers themselves issue it together with the matmul (``sp_row_parallel_linear``).
+    """
     if sequence_parallel:
         return ttml.ops.distributed.reduce_scatter(x, SEQUENCE_DIM, cluster_axis)
     return ttml.ops.distributed.all_reduce(x, input_is_parallel, cluster_axis)
@@ -113,7 +121,8 @@ class ColumnParallelLinear(AbstractModuleBase):
         sequence_parallel: If ``True`` the input arrives sharded along the sequence
             dimension across the TP axis (Megatron sequence parallelism). An
             all-gather over the sequence dim reconstructs the full sequence before
-            the matmul.
+            the matmul; the two run as one op, ``sp_column_parallel_linear``, composed
+            or fused per ``ttml.ops.distributed.set_sp_linear_impl``.
         axis_name: Mesh axis used for tensor parallelism.
     """
 
@@ -157,9 +166,15 @@ class ColumnParallelLinear(AbstractModuleBase):
             self.bias = None
 
     def forward(self, x):
-        x = column_parallel_input(x, self.cluster_axis, self.sequence_parallel)
         bias_t = self.bias.tensor if self.bias is not None else None
-        x = ttml.ops.linear.linear(x, self.weight.tensor, bias_t)
+        if self.sequence_parallel:
+            # The sequence all-gather and the matmul it feeds, as one op.
+            x = ttml.ops.distributed.sp_column_parallel_linear(
+                x, self.weight.tensor, bias_t, cluster_axis=self.cluster_axis
+            )
+        else:
+            x = column_parallel_input(x, self.cluster_axis, sequence_parallel=False)
+            x = ttml.ops.linear.linear(x, self.weight.tensor, bias_t)
         if self.gather_output:
             # Reconstitute the full output across TP devices (dim 3 = last feature dim).
             x = ttml.ops.distributed.all_gather(x, 3, self.cluster_axis, ttml.ops.distributed.GradOutputType.REPLICATED)
@@ -184,6 +199,8 @@ class RowParallelLinear(AbstractModuleBase):
             sequence reduce-scatter (Megatron sequence parallelism) instead of an
             all-reduce: this sums the partial products across TP *and* shards the
             result along the sequence, leaving the residual stream sequence-sharded.
+            The matmul and the reduce-scatter run as one op, ``sp_row_parallel_linear``,
+            composed or fused per ``ttml.ops.distributed.set_sp_linear_impl``.
         axis_name: Mesh axis used for tensor parallelism.
     """
 
@@ -238,8 +255,14 @@ class RowParallelLinear(AbstractModuleBase):
         if not self.input_is_parallel:
             # Split the input along the feature dimension across TP devices.
             x = ttml.ops.distributed.scatter(x, 3, self.cluster_axis)
-        x = ttml.ops.linear.linear(x, self.weight.tensor, None)
-        x = row_parallel_output(x, self.cluster_axis, self.sequence_parallel, self.input_is_parallel)
+        if self.sequence_parallel:
+            # The matmul and the sequence reduce-scatter that sums it across TP, as one op.
+            x = ttml.ops.distributed.sp_row_parallel_linear(x, self.weight.tensor, self.cluster_axis)
+        else:
+            x = ttml.ops.linear.linear(x, self.weight.tensor, None)
+            x = row_parallel_output(
+                x, self.cluster_axis, sequence_parallel=False, input_is_parallel=self.input_is_parallel
+            )
         if self.bias is not None:
             x = ttml.ops.binary.add(x, self.bias.tensor)
         return x

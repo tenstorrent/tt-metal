@@ -17,11 +17,15 @@
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 #include "ttnn/operations/ccl/mesh_partition/mesh_partition.hpp"
 #include "ttnn/operations/creation/creation.hpp"
+#include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/operations/experimental/ccl/all_gather_async/all_gather_async.hpp"
 #include "ttnn/operations/experimental/ccl/all_reduce_async/all_reduce_async.hpp"
 #include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/reduce_scatter_minimal_async.hpp"
+#include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/types.hpp"
+#include "ttnn_fixed/matmuls.hpp"
 
 namespace ttml::ttnn_fixed::distributed {
 
@@ -259,6 +263,115 @@ ttnn::Tensor ring_shift(
     tt::tt_metal::distributed::Synchronize(*mesh_device_ptr, std::nullopt, std::vector<tt::tt_metal::SubDeviceId>());
 
     return output_tensor;
+}
+
+// ---- Sequence-parallel linears: the implementation switch and the two fusable sequences ----
+
+namespace {
+
+SPLinearImpl g_sp_linear_impl = SPLinearImpl::Composed;
+
+// The matmul exactly as tt-train issues it today, which is what makes Composed bit-identical to the
+// unfused modules: the forward `a @ W^T (+ bias)` is linear_op's 4-D ttnn::linear on the full compute
+// grid, the dgrad `g @ W` is ttnn_linear_backward's 2-D ttnn_fixed::matmul on the row-flattened
+// activation. transpose_b tells the two apart because tt-train stores weights as [N, K]: the forward
+// always transposes and the dgrad never does.
+ttnn::Tensor unfused_matmul(
+    const ttnn::Tensor& a, const ttnn::Tensor& w, bool transpose_b, const std::optional<ttnn::Tensor>& bias) {
+    if (transpose_b) {
+        const auto grid_size = a.device()->compute_with_storage_grid_size();
+        auto core_grid = std::make_optional<ttnn::CoreGrid>(grid_size.x, grid_size.y);
+        return ttnn::linear(
+            a,
+            w,
+            bias,
+            /* transpose_a */ false,
+            /* transpose_b */ true,
+            /* memory_config */ std::nullopt,
+            /* dtype */ std::nullopt,
+            /* program_config */ std::nullopt,
+            /* activation */ std::nullopt,
+            /* compute_kernel_config */ core::ComputeKernelConfig::matmul(),
+            /* core_grid */ core_grid);
+    }
+    TT_FATAL(!bias.has_value(), "unfused_matmul: a bias is only supported with transpose_b (the forward linear)");
+    const auto& shape = a.logical_shape();
+    TT_FATAL(shape.rank() == 4, "unfused_matmul: expected a rank-4 activation, got {}", shape);
+    const auto rows = static_cast<uint32_t>(a.logical_volume() / shape[-1]);
+    auto mm = ttnn_fixed::matmul(
+        ttnn::reshape(a, ttnn::Shape({rows, shape[-1]})), w, /* transpose_a */ false, /* transpose_b */ false);
+    return ttnn::reshape(mm, ttnn::Shape({shape[0], shape[1], shape[2], mm.logical_shape()[-1]}));
+}
+
+std::pair<ttnn::Tensor, ttnn::Tensor> all_gather_matmul_composed(
+    const ttnn::Tensor& x,
+    const ttnn::Tensor& w,
+    uint32_t cluster_axis,
+    bool transpose_b,
+    const std::optional<ttnn::Tensor>& bias) {
+    auto gathered = ttml::ttnn_fixed::distributed::all_gather(x, /* dim */ 2, cluster_axis);
+    auto mm = unfused_matmul(gathered, w, transpose_b, bias);
+    return {std::move(gathered), std::move(mm)};
+}
+
+ttnn::Tensor matmul_reduce_scatter_composed(
+    const ttnn::Tensor& x, const ttnn::Tensor& w, uint32_t cluster_axis, bool transpose_b) {
+    return ttml::ttnn_fixed::distributed::reduce_scatter(
+        unfused_matmul(x, w, transpose_b, std::nullopt), /* dim */ 2, cluster_axis);
+}
+
+// Milestone 2 of issue #52944: the two bodies below become calls to ttnn::experimental::all_gather_matmul_sp_async
+// and ttnn::experimental::matmul_reduce_scatter_sp_async (semaphores from CCLResources, get_num_links,
+// get_topology(cluster_axis), core::ComputeKernelConfig::matmul()); nothing else in tt-train changes.
+[[noreturn]] void throw_fused_not_landed(const char* ttnn_op) {
+    TT_THROW(
+        "SPLinearImpl::Fused: ttnn::experimental::{} has not landed yet; select SPLinearImpl::Composed "
+        "(device_config sp_linear_impl: composed)",
+        ttnn_op);
+}
+
+std::pair<ttnn::Tensor, ttnn::Tensor> all_gather_matmul_fused(
+    const ttnn::Tensor& /* x */,
+    const ttnn::Tensor& /* w */,
+    uint32_t /* cluster_axis */,
+    bool /* transpose_b */,
+    const std::optional<ttnn::Tensor>& /* bias */) {
+    throw_fused_not_landed("all_gather_matmul_sp_async");
+}
+
+ttnn::Tensor matmul_reduce_scatter_fused(
+    const ttnn::Tensor& /* x */, const ttnn::Tensor& /* w */, uint32_t /* cluster_axis */, bool /* transpose_b */) {
+    throw_fused_not_landed("matmul_reduce_scatter_sp_async");
+}
+
+}  // namespace
+
+void set_sp_linear_impl(SPLinearImpl impl) {
+    g_sp_linear_impl = impl;
+}
+
+SPLinearImpl get_sp_linear_impl() {
+    return g_sp_linear_impl;
+}
+
+std::pair<ttnn::Tensor, ttnn::Tensor> all_gather_matmul(
+    const ttnn::Tensor& x,
+    const ttnn::Tensor& w,
+    uint32_t cluster_axis,
+    bool transpose_b,
+    const std::optional<ttnn::Tensor>& bias) {
+    if (g_sp_linear_impl == SPLinearImpl::Fused) {
+        return all_gather_matmul_fused(x, w, cluster_axis, transpose_b, bias);
+    }
+    return all_gather_matmul_composed(x, w, cluster_axis, transpose_b, bias);
+}
+
+ttnn::Tensor matmul_reduce_scatter(
+    const ttnn::Tensor& x, const ttnn::Tensor& w, uint32_t cluster_axis, bool transpose_b) {
+    if (g_sp_linear_impl == SPLinearImpl::Fused) {
+        return matmul_reduce_scatter_fused(x, w, cluster_axis, transpose_b);
+    }
+    return matmul_reduce_scatter_composed(x, w, cluster_axis, transpose_b);
 }
 
 }  // namespace ttml::ttnn_fixed::distributed
