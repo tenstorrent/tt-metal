@@ -13,9 +13,8 @@ from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     _mla_row_permutation,
     _reference_case,
     _to_sp_input,
-    make_actual_start,
 )
-from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_bit_identical
+from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_bit_identical, make_actual_start
 
 
 @pytest.mark.parametrize(

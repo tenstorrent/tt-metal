@@ -14,7 +14,6 @@ from models.demos.deepseek_v3_d_p.reference.kda.ops import kda_recurrent_referen
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     collect_mesh_accuracy_and_determinism_results,
     compare_cpu_device,
-    make_actual_start,
     reconstruct_state_at_sp_rank,
 )
 from models.demos.deepseek_v3_d_p.tt.kda import recurrence
@@ -24,6 +23,7 @@ from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
     assert_accurate,
     assert_bit_identical,
     collect_accuracy_and_determinism_results,
+    make_actual_start,
 )
 
 pytestmark = run_for_blackhole()

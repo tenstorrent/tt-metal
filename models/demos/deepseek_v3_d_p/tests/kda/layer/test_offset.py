@@ -26,9 +26,8 @@ from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     _reference_case,
     _to_sp_input,
     collect_mesh_accuracy_and_determinism_results,
-    make_actual_start,
 )
-from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_bit_identical
+from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_bit_identical, make_actual_start
 
 pytestmark = [
     run_for_blackhole(),
