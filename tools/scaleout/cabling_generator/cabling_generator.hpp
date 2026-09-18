@@ -18,7 +18,7 @@
 #include <umd/device/types/cluster_descriptor_types.hpp>
 
 namespace tt::scaleout_tools::fsd::proto {
-    class FactorySystemDescriptor;
+class FactorySystemDescriptor;
 }
 
 namespace tt::scaleout_tools::cabling_generator::proto {
@@ -89,6 +89,30 @@ using PhysicalPortConnection = std::pair<PhysicalPortEndpoint, PhysicalPortEndpo
 // Port connection types (graph-level connections between nodes)
 using PortEndpoint = std::tuple<HostId, TrayId, PortId>;  // host_id, tray_id, port_id
 using PortConnection = std::pair<PortEndpoint, PortEndpoint>;
+
+struct CableEndpoint {
+    HostId host_id{0};
+    TrayId tray_id{0};
+    PortType port_type = PortType::UNKNOWN;
+    PortId port_id{0};
+
+    auto operator<=>(const CableEndpoint& other) const = default;
+};
+
+// One physical cable of a resolved cluster. get_chip_connections() reports the channel expansion of
+// these; board-internal traces are not cables and never appear here.
+struct ResolvedCable {
+    CableEndpoint endpoint_a;
+    CableEndpoint endpoint_b;
+    // The graph instance whose internal_connections declared this cable, as a depth (0 = root) and a
+    // slash-delimited instance path. A node's own board-to-board wiring comes from its node
+    // descriptor rather than from a graph level, so it is attributed to the node itself: one level
+    // below the graph instance holding it.
+    uint32_t depth = 0;
+    std::string declared_at;
+};
+
+std::ostream& operator<<(std::ostream& os, const CableEndpoint& endpoint);
 
 struct Node {
     std::string motherboard;
@@ -174,6 +198,18 @@ public:
     // Getters for all data
     const std::vector<Host>& get_deployment_hosts() const;
     const std::vector<LogicalChannelConnection>& get_chip_connections() const;
+
+    // Port-level (cable) view of the resolved cluster. Each cable is normalized so endpoint_a <
+    // endpoint_b, and the result is sorted, so the order does not depend on the descriptor's
+    // declaration order or on hash iteration order.
+    std::vector<ResolvedCable> get_cables() const;
+
+    // Resolved node for a host_id. Throws if the host_id is not part of this cluster.
+    const Node& get_node(HostId host_id) const;
+
+    // Number of hosts (leaf nodes) in the resolved cluster. Unlike get_deployment_hosts().size(),
+    // this does not depend on a deployment having been supplied.
+    size_t get_num_hosts() const;
 
     // In-place opt-in sub-cluster filter. Each include/exclude entry is an instance path matched as a
     // suffix (relative): {"bh_galaxy_node_0"} matches under every parent, and matching an instance
@@ -278,8 +314,7 @@ private:
         const std::string& existing_sources);
 
     // Post-construction merge logic shared by both merge() entry points.
-    void merge_other(
-        CablingGenerator& other, const std::string& new_file_path, const std::string& existing_sources);
+    void merge_other(CablingGenerator& other, const std::string& new_file_path, const std::string& existing_sources);
 
     // Utility function for finding descriptor files in a directory
     static std::vector<std::string> find_descriptor_files(const std::string& directory_path);

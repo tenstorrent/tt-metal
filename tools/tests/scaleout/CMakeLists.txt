@@ -144,6 +144,24 @@ target_link_libraries(
 # Make sure protobuf files are generated before compiling instance filter tests
 add_dependencies(test_instance_filter scaleout_generated_protos)
 
+# Test for finding one cabling scheme inside another
+add_executable(test_cabling_matcher)
+target_sources(test_cabling_matcher PRIVATE ${TEST_CABLING_MATCHER_SRCS})
+
+target_include_directories(test_cabling_matcher SYSTEM PRIVATE ${Metalium_BINARY_DIR}/tools/scaleout)
+
+target_link_libraries(
+    test_cabling_matcher
+    PRIVATE
+        TT::ScaleoutTools
+        gmock_main
+        enchantum::enchantum
+        protobuf::libprotobuf
+)
+
+# Make sure protobuf files are generated before compiling cabling matcher tests
+add_dependencies(test_cabling_matcher scaleout_generated_protos)
+
 add_executable(test_generate_rank_bindings)
 target_sources(test_generate_rank_bindings PRIVATE ${TEST_GENERATE_RANK_BINDINGS_SRCS})
 
