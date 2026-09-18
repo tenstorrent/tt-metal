@@ -53,16 +53,26 @@ public:
     // ~25 us of samples and the close is its last on-line sample, so the crossing precedes the close by at most that.
     static constexpr double kKnotSlackTicks = 4000.0;
 
+    // A run's points lie on the true line (the pusher's intercept follows the samples), so once the run spans
+    // kSlopeSpanTicks its own two end points give the slope to a fraction of a ppm; before that the k8 multiple
+    // stands, within a few ppm. Evaluations anchor on the nearer end point so the slope's error has the least lever.
+    static constexpr double kSlopeSpanTicks = 100000.0;  // 2 ms
     struct Run {
         double k8 = 0.0;                     // wall ticks per refclk tick, in eighths
         double r_first = 0.0, r_last = 0.0;  // the first and the newest point's refclk
         double w_first = 0.0, w_last = 0.0;  // their walls; w_first is the segment's key in wall order
         uint32_t n = 0;                      // samples behind the line
         bool closed = false;
-        double slope() const { return k8 / 8.0; }
+        double slope() const {
+            return r_last - r_first >= kSlopeSpanTicks ? (w_last - w_first) / (r_last - r_first) : k8 / 8.0;
+        }
         bool settled() const { return n >= kSettledCount; }
-        double wall_of_refclk(double r) const { return w_last + slope() * (r - r_last); }
-        double refclk_of_wall(double w) const { return r_last + (w - w_last) / slope(); }
+        double wall_of_refclk(double r) const {
+            return r - r_first < r_last - r ? w_first + slope() * (r - r_first) : w_last + slope() * (r - r_last);
+        }
+        double refclk_of_wall(double w) const {
+            return w - w_first < w_last - w ? r_first + (w - w_first) / slope() : r_last + (w - w_last) / slope();
+        }
     };
 
     std::vector<Run> runs;  // in time order, disjoint in refclk
@@ -161,7 +171,7 @@ public:
         if (!(std::abs(ds) > 1e-9)) {
             return std::nullopt;
         }
-        const double r_x = (b.w_last - b.slope() * b.r_last - a.w_last + a.slope() * a.r_last) / ds;
+        const double r_x = (b.w_first - b.slope() * b.r_first - a.w_last + a.slope() * a.r_last) / ds;
         if (!(std::isfinite(r_x) && r_x >= a.r_last - kKnotSlackTicks && r_x <= b.r_first + kKnotSlackTicks)) {
             return std::nullopt;
         }

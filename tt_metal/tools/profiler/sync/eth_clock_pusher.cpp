@@ -126,7 +126,11 @@ inline void write(uint32_t kind, uint32_t role, uint32_t round, uint64_t value, 
 namespace model {
 constexpr uint32_t kRingSamples = 128;  // raw samples kept, ~5 us apart: ~600 us deep
 constexpr uint32_t kConfirm = 4;           // consecutive off-line samples that make a step
-constexpr int64_t kOffTicks = 16;          // off the line by this much is off: a 1/8 step gets there in 2.6 us
+constexpr int64_t kOffTicks = 4;           // off the line by this much is off: a 1/8 step gets there in 0.7 us
+// The intercept follows the samples: once this many are behind the line it moves by 1/2^kEmaShift of each residue,
+// so a frequency a few ppm off the k8 grid, which would walk the residues to kOffTicks in milliseconds and force a
+// re-lock, walks the intercept instead (12 ppm lags it by ~2 wall ticks) and the points stay on the true line.
+constexpr uint32_t kEmaShift = 6;
 constexpr uint32_t kAcqTicks = 4096;       // refclk after a departure before the first lock test (82 us)
 constexpr uint32_t kWinTicks = 4096;       // the window that must lie on one line to lock its slope (~16 samples)
 constexpr uint32_t kWinSpreadTicks = 8;    // one line's samples spread less than this; a glide inside bends more
@@ -337,11 +341,16 @@ inline __attribute__((always_inline)) void feed(Model& m, uint64_t r, uint64_t w
     m.r_last_on = r;
     const uint32_t ad = static_cast<uint32_t>(d < 0 ? -d : d);
     m.max_d8 = ad > m.max_d8 ? ad : m.max_d8;
+    if (m.n >= (1u << kEmaShift)) {
+        m.c8 += static_cast<int32_t>(d >> kEmaShift);
+    }
     if (m.n < kCountMax) {
         m.sum += static_cast<int32_t>(e);
         m.n++;
         if ((m.n & (m.n - 1)) == 0) {
-            m.c8 = m.sum / static_cast<int32_t>(m.n);
+            if (m.n <= (1u << kEmaShift)) {
+                m.c8 = m.sum / static_cast<int32_t>(m.n);
+            }
             if (m.n >= kFirstPointN && m.n <= kLastDoublingN) {
                 write_point(m, r - kPointLagTicks, kp::kSyncLocalPoint);
             }
