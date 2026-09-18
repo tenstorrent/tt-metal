@@ -202,19 +202,25 @@ def test_unary_uneven_sharding_fallback(ttnn_op, device):
         torch.Size([1, 1, 128, 64]),  # exactly expressible in 2D -> normalizes to HEIGHT_SHARDED
     ],
 )
-def test_unary_nd_sharded_fallback(ttnn_op, input_shape, device):
+@pytest.mark.parametrize(
+    "buffer_type, grid",
+    [
+        (ttnn.BufferType.DRAM, ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (1, 0))})),
+        (ttnn.BufferType.L1, ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (1, 1))})),
+    ],
+)
+def test_unary_nd_sharded_fallback(ttnn_op, input_shape, buffer_type, grid, device):
     """An ND-sharded input falls back to the interleaved path and returns correct data."""
     torch.manual_seed(42)
     torch_input = torch.empty(input_shape, dtype=torch.bfloat16).uniform_(-100, 100)
     golden_function = ttnn.get_golden_function(ttnn_op)
     golden_tensor = golden_function(torch_input, device=device)
 
-    # An ND grid over DRAM must be a single row at y == 0
     nd_shard_config = ttnn.MemoryConfig(
-        ttnn.BufferType.DRAM,
+        buffer_type,
         ttnn.NdShardSpec(
             shard_shape=ttnn.Shape([1, 1, 64, 64]),
-            grid=ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (1, 0))}),
+            grid=grid,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
             shard_distribution_strategy=ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
         ),

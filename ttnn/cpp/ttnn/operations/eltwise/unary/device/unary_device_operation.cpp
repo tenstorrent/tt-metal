@@ -201,12 +201,18 @@ ttsl::hash::hash_t UnaryDeviceOperation::compute_program_hash(
     }
 
     // On cache hit, the dispatched tensor_layout must equal the one built by cached program and no relaxation
-    // reaches it. Anything omitted here collides and fails validation. Preallocated output's spec is returned with
-    // only its Layout enum cross-checked against the input. However, an overpadded TILE tensor keys on {padded_h,
-    // padded_w} (legacyShapeToAlignment) and fragments them per padded H/W.
+    // is applied. Anything omitted from the hash can give different config and fail validation. The output
+    // layout needs its own hash term because its spec is returned with only the layout enum compared against
+    // the input.
+    //
+    // Hashing tensor_layout does not ignore shape. Alignment is a part tensor_layout and for overpadded TILE
+    // tensors, legacyShapeToAlignment uses {padded_h, padded_w} instead oftile dims. So differently padded H/W values
+    // produce different keys. Tile-aligned tensors are unaffected.
 
-    // ND_SHARDED needs shape even on the TILE path (two shapes sharing one nd_shard_spec can resolve to different
-    // geometry.
+    // ND_SHARDED requires shape even on the TILE path. Two shapes sharing one nd_shard_spec can resolve to
+    // different geometries. Without shape in the key, they can share a cache entry causing the second dispatch
+    // to use the wrong geometry and return incorrect data or throw.
+
     const bool nd_sharded = input_tensor.memory_config().memory_layout() == TensorMemoryLayout::ND_SHARDED ||
                             output_spec.memory_config().memory_layout() == TensorMemoryLayout::ND_SHARDED;
 
