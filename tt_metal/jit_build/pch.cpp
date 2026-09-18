@@ -5,7 +5,6 @@
 #include "pch.hpp"
 
 #include <algorithm>
-#include <cstdio>
 #include <filesystem>
 #include <mutex>
 #include <string>
@@ -24,37 +23,6 @@ namespace tt::jit_build {
 
 namespace fs = std::filesystem;
 
-namespace {
-
-// The compiler's identity, not just its path: an SFPI upgrade replaces the binary at the
-// same installation path, and GCC rejects a .gch built by a different executable, silently
-// falling back to parsing the headers. Folding the version into the key retires the stale
-// artifact instead of reusing it forever. First line of --version, matching the
-// discriminator the build key uses; read once per compiler per process.
-std::string compiler_version_line(const std::string& gpp) {
-    static std::mutex mutex;
-    static std::unordered_map<std::string, std::string> memo;
-    std::lock_guard lock(mutex);
-    if (auto it = memo.find(gpp); it != memo.end()) {
-        return it->second;
-    }
-    std::string& line = memo[gpp];
-    if (FILE* pipe = popen(fmt::format("exec {} --version", gpp).c_str(), "r")) {
-        char buf[256];
-        if (fgets(buf, sizeof(buf), pipe)) {
-            line = buf;
-        }
-        pclose(pipe);
-    }
-    if (line.empty()) {
-        log_warning(
-            tt::LogBuildKernels, "Cannot read the compiler version from {}; keying the PCH on its path alone.", gpp);
-    }
-    return line;
-}
-
-}  // namespace
-
 std::string ensure_pch(
     const std::string& gpp,
     const std::string& opt_level,
@@ -68,7 +36,7 @@ std::string ensure_pch(
 
     tt::StableHasher hasher;
     hasher.update(gpp);
-    hasher.update(compiler_version_line(gpp));
+    hasher.update(utils::compiler_version(gpp));
     hasher.update(opt_level);
     hasher.update(cflags);
     hasher.update(umbrella_bytes.data(), umbrella_bytes.size());

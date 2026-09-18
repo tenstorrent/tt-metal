@@ -482,19 +482,8 @@ void JitBuildEnv::init(
         // Do not hash compiler version when generating compiler logs
         // so that we may compare them between different compilers
         // without undue difficulty.
-    } else if (FILE* pipe = popen(fmt::format("exec {} --version", this->gpp_).c_str(), "r")) {
-        // Read the sfpi compiler version directly from the compiler
-        // we're using.  Compiler changes invalidate the cache.
-
-        // First line is typically about 65 chars on a branch (and
-        // less on main):
-
-        // riscv-tt-elf-g++ (tenstorrent/sfpi:7.40.0-dce-27298[490]) 15.1.0
-        char buf[100];
-        if (fgets(buf, sizeof(buf), pipe)) {
-            hasher.update(std::string_view{buf});
-        }
-        pclose(pipe);
+    } else {
+        hasher.update(tt::jit_build::utils::compiler_version(gpp_));
     }
 
     build_key_ = hasher.digest();
