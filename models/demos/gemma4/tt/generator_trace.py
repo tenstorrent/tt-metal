@@ -92,6 +92,53 @@ def _resolve_max_trace_batched_prefill_tokens() -> int:
 GEMMA4_MAX_TRACE_BATCHED_PREFILL_TOKENS = _resolve_max_trace_batched_prefill_tokens()
 
 
+def maybe_auto_enable_chunked_prefill_trace(
+    *,
+    batch_size: int,
+    max_seq_len: int,
+    prefill_chunk: int,
+    bounded_sliding: bool,
+) -> bool:
+    """Auto-enable multi-chunk trace replay for unbounded demos at the 4k ceiling.
+
+    Without this, a run whose ``max_seq_len`` equals GEMMA4_PREFILL_TRACE_MAX_SEQ
+    (4096 by default) prefills UNTRACED, because the demo gate reads
+    ``max_seq_len < prefill_trace_max`` and 4096 < 4096 is False. Short prompts
+    sit below the ceiling and are traced, so the 4k bucket was the one case
+    getting no prefill-trace benefit at all.
+
+    An explicit GEMMA4_CHUNKED_PREFILL_TRACE always wins, so this only fills in
+    a default. Still restricted to unbounded: bounded sliding caps the prefix at
+    the window, so the replayed buckets stop matching.
+
+    Capped at the trace ceiling. Above it the prompt outgrows the captured
+    buckets, so the tail still prefills eagerly while the capture's persistent
+    buffers stay resident in L1; the global (head_dim=512) prefill SDPA then
+    cannot place its static CBs, which already need ~1.25 MB of the ~1.34 MB
+    pool, and the program dies with "circular buffers ... clash with L1
+    buffers" -- deterministically, at 32k / 64k / 128k. Do not widen this bound
+    without re-checking that SDPA.
+
+    Batch is NOT restricted. Prefill here is microbatched per user and
+    ``_record_trace_prefill`` is keyed on the per-call batch, so one capture is
+    replayed across every user rather than one being taken per user. The trace
+    buffers therefore do not scale with demo batch, which is what a batch-1
+    restriction would be guarding against.
+    """
+    if "GEMMA4_CHUNKED_PREFILL_TRACE" in os.environ:
+        return chunked_prefill_trace_enabled()
+    trace_max = int(os.environ.get("GEMMA4_PREFILL_TRACE_MAX_SEQ", GEMMA4_MAX_TRACE_PREFILL_SEQ_LEN))
+    if not bounded_sliding and int(prefill_chunk) < max_seq_len <= trace_max:
+        os.environ["GEMMA4_CHUNKED_PREFILL_TRACE"] = "1"
+        logger.info(
+            "Auto-enabled GEMMA4_CHUNKED_PREFILL_TRACE "
+            f"(chunk={prefill_chunk} < max_seq_len={max_seq_len} <= ceiling={trace_max}, "
+            f"unbounded, batch={batch_size})"
+        )
+        return True
+    return False
+
+
 def chunked_prefill_trace_enabled() -> bool:
     """True when long-ISL *generator* multi-chunk should replay 4k prefill traces.
 

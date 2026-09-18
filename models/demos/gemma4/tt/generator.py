@@ -14,6 +14,7 @@ from models.common.sampling import SamplingParams, slice_sampling_params
 from models.demos.gemma4.tt.async_decode import merge_async_ahead_decode_tokens
 from models.demos.gemma4.tt.common import create_tt_model
 from models.demos.gemma4.tt.generator_trace import (
+    GEMMA4_MAX_TRACE_PREFILL_SEQ_LEN,
     apply_gemma4_prefill_trace_policy,
     chunked_prefill_trace_enabled,
     maybe_disable_pli_prefill_trace,
@@ -843,6 +844,11 @@ class ChunkedPrefillPageTableGuardMixin:
             and page_table is not None
             and kv_cache is not None
             and seq_len > max_chunk
+            # Whole-prompt length, not chunk length. Replaying a per-chunk trace
+            # is a pessimisation once a prompt needs many chunks -- eager beats
+            # it by more than 2x at 64k. Only a prompt just over one chunk is
+            # still worth tracing.
+            and seq_len <= GEMMA4_MAX_TRACE_PREFILL_SEQ_LEN
             and max_chunk in (128, 512, 1024, 2048, 4096)
             and not bool(getattr(self.model[model_id], "hidden_size_per_layer_input", 0))
             # Bounded final-chunk K/V must be stashed eagerly and committed only
