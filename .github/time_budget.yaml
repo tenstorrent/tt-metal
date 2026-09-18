@@ -94,7 +94,7 @@ ttnn:
     bh_p150b_civ2: 850
     wh_n150_civ2: 1040
     wh_n300_civ2: 1190
-    bh_p150b_civ2_viommu: 117
+    bh_p150b_civ2_viommu: 125
     bh_p300: 60
     bh_quietbox_2: 60
   package_and_release:
