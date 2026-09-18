@@ -1745,7 +1745,7 @@ static KernelHandle CreateDramKernel(
     const ContextId context_id = program.impl().get_context_id();
     auto& metal_context = MetalContext::instance(context_id);
     const ARCH arch = metal_context.get_cluster().arch();
-    TT_FATAL(arch != ARCH::WORMHOLE, "DramKernel is not supported on Wormhold.");
+    TT_FATAL(arch != ARCH::WORMHOLE_B0, "DramKernel is not supported on Wormhole.");
     TT_FATAL(
         metal_context.hal().has_programmable_core_type(HalProgrammableCoreType::DRAM),
         "DRAM programmable cores are not enabled.");
