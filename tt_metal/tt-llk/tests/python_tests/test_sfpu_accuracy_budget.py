@@ -437,10 +437,18 @@ _TRANSCENDENTALS_ENROLLED_WITH_AN_INPUT_FORMAT = frozenset(
 )
 
 
-#: The enrolled ops that can never reach the ULP branch, because their entire contract
-#: set is ``_COARSE_LUT_TOLERANCE`` -- the coarse 3-segment LUT pair, which keeps the
-#: tolerance metric until there is a measured step budget to replace it with.
-ONLY_EVER_TOLERANCE = frozenset({MathOperation.SigmoidAppx, MathOperation.GeluAppx})
+#: The enrolled ops that can never reach the ULP branch: every row they declare is a
+#: tolerance. The coarse 3-segment LUT pair, and the two binary ops whose numbers moved
+#: out of ``BINARY_CUSTOM_TOLERANCES`` -- all four keep the tolerance metric until there
+#: is a measured step budget to replace it with.
+ONLY_EVER_TOLERANCE = frozenset(
+    {
+        MathOperation.SigmoidAppx,
+        MathOperation.GeluAppx,
+        MathOperation.SfpuElwpow,
+        MathOperation.SfpuXlogy,
+    }
+)
 
 
 def test_every_enrolled_op_resolves_to_something_usable_on_a_float_format():
