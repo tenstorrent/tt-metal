@@ -780,7 +780,10 @@ def test_short_first_chunk_stashes_padded_sliding_tail(mesh_device, reset_seeds,
     same tokens. Each chunk's RoPE cache is sliced to
     ``[chunk_start, chunk_start+len)`` — the same offset the model applies
     before calling attention; without it continuation tokens restart at
-    position 0 and the unchunked compare is meaningless.
+    position 0 and the unchunked compare is meaningless (unsliced restart-at-0
+    measured 0.47). WH T3K 1x1 measures 0.98974 with the slice; the residual is
+    two SDPA graphs (hist-concat 1408 vs a single 1536), not pad-attends-zeros,
+    so this gates at 0.98 like the other cross-path attention comparisons.
     """
     from models.demos.gemma4.tt.attention.kv_cache import init_kv_cache
     from models.tt_transformers.tt.common import PagedAttentionConfig

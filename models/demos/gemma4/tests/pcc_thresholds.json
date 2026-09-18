@@ -56,7 +56,6 @@
       "test_attention_decode_bounded_vs_unbounded_parity[wormhole_b0-cache1500-1x1]": 0.97,
       "test_attention_decode_paged[blackhole-cache512-global-1x1]": 0.98,
       "_comment_batched_decode": "Same #47311 reduce-precision gap as decode_paged; batched node name previously fell through to default 0.99.",
-      "test_attention_decode_paged_batched[wormhole_b0-cache512-batch1-global-1x1]": 0.985,
       "test_attention_decode_paged_batched[blackhole-cache512-batch1-global-1x1]": 0.989,
       "test_attention_decode_bounded_vs_unbounded_parity[blackhole-cache1500-1x1]": 0.97,
       "test_attention_prefill[blackhole-seq4096-global-1x1]": 0.98,
@@ -73,7 +72,6 @@
       "test_full_model_decode[blackhole-1x8]": 0.97
     },
     "1x4": {
-      "test_attention_decode_paged_batched[wormhole_b0-cache512-batch1-global-1x4]": 0.985,
       "test_attention_prefill[blackhole-seq1024-global-1x4]": 0.98,
       "test_attention_prefill[blackhole-seq4096-global-1x4]": 0.98,
       "_comment_via_harness_full": "Same #47311 SDPA-reduce precision gap as 1x8; QuietBox 1x4 measured ~0.985.",
@@ -110,16 +108,12 @@
   },
   "gemma-4-26B-A4B-it": {
     "1x1": {
-      "_comment_decode_paged_wh": "WH 1x1 global decode_paged cache512 measured 0.988954 (#47311 SDPA-reduce precision gap, same class as 12B/E2B gates).",
-      "test_attention_decode_paged[wormhole_b0-cache512-global-1x1]": 0.988,
-      "test_attention_decode_paged_batched[wormhole_b0-cache512-batch1-global-1x1]": 0.985,
       "test_attention_prefill[blackhole-seq4096-global-1x1]": 0.97,
       "test_attention_paged_decode_via_harness[blackhole-sliding-1x1]": 0.98,
       "test_layer_forward[blackhole-prefill_1024-sliding-1x1]": 0.97,
       "test_layer_forward[blackhole-prefill_4096-sliding-1x1]": 0.97
     },
     "1x4": {
-      "test_attention_decode_paged_batched[wormhole_b0-cache512-batch1-global-1x4]": 0.985,
       "test_attention_prefill[blackhole-seq4096-global-1x4]": 0.97,
       "_comment_via_harness_sliding": "QuietBox 1x4 sliding via_harness measured ~0.977 (#47311 reduce gap).",
       "test_attention_paged_decode_via_harness[blackhole-sliding-1x4]": 0.977,
@@ -145,19 +139,14 @@
   },
   "gemma-4-31B-it": {
     "1x1": {
-      "test_attention_decode_paged[wormhole_b0-cache512-global-1x1]": 0.988,
       "test_attention_decode_paged[blackhole-cache512-global-1x1]": 0.98,
-      "test_attention_decode_paged_batched[wormhole_b0-cache512-batch1-global-1x1]": 0.985,
       "test_attention_decode_paged_batched[blackhole-cache512-batch1-global-1x1]": 0.989,
-      "test_attention_decode_bounded_vs_unbounded_parity[blackhole-cache1500-1x1]": 0.97,
-      "_comment_short_first_tail": "Chunked sliding continuation vs one unchunked 1536-token prefill. WH T3K 1x1 measured 0.98974 after RoPE is sliced to [chunk_start, chunk_start+len) (unsliced restart-at-0 was 0.47). The leftover is two SDPA graphs (hist-concat 1408 vs single 1536), not pad-attends-zeros. Gate 0.98 like other cross-path attention rows.",
-      "test_short_first_chunk_stashes_padded_sliding_tail[wormhole_b0-1x1]": 0.98
+      "test_attention_decode_bounded_vs_unbounded_parity[blackhole-cache1500-1x1]": 0.97
     },
     "1x4": {
       "test_attention_prefill[blackhole-seq1024-global-1x4]": 0.97,
       "test_attention_prefill[blackhole-seq4096-global-1x4]": 0.97,
       "test_full_model[blackhole-1x4]": 0.99,
-      "test_attention_decode_paged_batched[wormhole_b0-cache512-batch1-global-1x4]": 0.985,
       "test_attention_decode_paged_batched[blackhole-cache512-batch1-global-1x4]": 0.96,
       "test_attention_decode_paged_batched[blackhole-cache1500-batch1-global-1x4]": 0.96,
       "test_attention_decode_paged_batched[blackhole-cache1500-batch16-global-1x4]": 0.96,
