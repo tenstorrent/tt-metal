@@ -207,14 +207,19 @@ ttsl::hash::hash_t UnaryDeviceOperation::compute_program_hash(
     //
     // Hashing tensor_layout does not ignore shape. Alignment is a part tensor_layout and for overpadded TILE
     // tensors, legacyShapeToAlignment uses {padded_h, padded_w} instead oftile dims. So differently padded H/W values
-    // produce different keys. Tile-aligned tensors are unaffected.
-
-    // ND_SHARDED requires shape even on the TILE path. Two shapes sharing one nd_shard_spec can resolve to
-    // different geometries. Without shape in the key, they can share a cache entry causing the second dispatch
-    // to use the wrong geometry and return incorrect data or throw.
-
-    const bool nd_sharded = input_tensor.memory_config().memory_layout() == TensorMemoryLayout::ND_SHARDED ||
-                            output_spec.memory_config().memory_layout() == TensorMemoryLayout::ND_SHARDED;
+    // produce different keys.
+    //
+    // Hashing shard shape since shape and shard are squeezed together which can make the same shard spec resolve
+    // differently for different shapes (eg: [64,64] -> [4] vs [64,128] -> [2,2]) and a shared cache entry will
+    // throw after the Metal 2.0 port.
+    const auto squeezed_shard_shape = [](const tt::tt_metal::TensorSpec& spec) -> std::optional<Shape> {
+        const auto sharding_args = spec.compute_buffer_sharding_args();
+        const auto& distribution = sharding_args.buffer_distribution_spec();
+        if (!distribution.has_value()) {
+            return std::nullopt;
+        }
+        return distribution->shard_shape_in_pages();
+    };
 
     return operation::hash_operation<UnaryDeviceOperation>(
         attributes,
@@ -223,8 +228,9 @@ ttsl::hash::hash_t UnaryDeviceOperation::compute_program_hash(
         // TODO: For ROW_MAJOR, page size depends on width. Hashing padded_shape ensures
         // different widths get separate cache entries. Consider hashing only the last
         // dimension to allow cache reuse when only height differs
-        input_tensor.layout() == Layout::ROW_MAJOR || nd_sharded ? std::optional{input_tensor.padded_shape()}
-                                                                 : std::nullopt,
+        input_tensor.layout() == Layout::ROW_MAJOR ? std::optional{input_tensor.padded_shape()} : std::nullopt,
+        squeezed_shard_shape(input_tensor.tensor_spec()),
+        squeezed_shard_shape(output_spec),
         src_shard_vol,
         dst_shard_vol);
 }
