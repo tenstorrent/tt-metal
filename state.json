@@ -1,9 +1,9 @@
 {
   "last_run": {
-    "run_id": "35345367198",
-    "timestamp": "2026-09-18T12:39:00Z"
+    "run_id": "35380382139",
+    "timestamp": "2026-09-18T18:34:00Z"
   },
-  "run_id": "35345367198",
+  "run_id": "35380382139",
   "open_prs": {
     "52106": {
       "issue": 51660,
@@ -146,7 +146,7 @@
     },
     "56396": {
       "issue": 56383,
-      "status": "pow_bw ltz fix; maintainer mateusznowakTT requested explicit input==0 test 2026-09-15; added test_bw_pow_zero_input_finite_gradient and pushed, commented explaining addition"
+      "status": "reviewer feedback (mateusznowakTT) addressed 2026-09-18: replaced compare_pcc with assert_with_ulp(ulp_threshold=2) in test_bw_pow_zero_input_finite_gradient per /repo-assist request; pushed commit + comment; awaiting re-review"
     },
     "56532_fft_bf16_rne": {
       "issue": 56532,
@@ -199,6 +199,11 @@
       "branch": "repo-assist/fix-issue-56955-welford-groupnorm-batch-stride",
       "title": "fix(ttnn): correct Welford groupnorm sharded kernel batch stride for multi-group cores",
       "status": "opened this run; reads compile arg 18 (num_tiles_per_batch) instead of arg 9 (block_hw) for tile_id stride at both loop entries in welford_groupnorm_sharded_v2.cpp; added regression test test_group_norm_welford_multi_batch_per_core_sub_tile_groups; CI triggered via pr-gate.yaml, outcome unknown yet, check next run; docker unavailable in sandbox so unverified locally"
+    },
+    "56998_prefill_docs": {
+      "issue": 56998,
+      "branch": "repo-assist/fix-issue-56998-prefill-runner-docs-capture-trace",
+      "status": "opened this run (docs-only, [skip ci]); added capture_trace optional hook to ADDING_A_PREFILL_MODEL.md's PrefillRuntime contract, verified against prefill_runner.py:793 getattr-gated call and tt_prefill_runtime.py:433 implementation; no CI needed"
     }
   },
   "issues_labeled": [
@@ -1053,20 +1058,21 @@
       "date": "2026-09-17",
       "type": "author_checkin",
       "note": "[skip ci] C++ vector allocation perf rule; mergeable_state dirty since 2026-09-02, never previously nudged"
+    },
+    "51533": {
+      "last_ping": "2026-09-18",
+      "type": "author_checkin",
+      "note": "dirty mergeable_state, never previously nudged"
+    },
+    "51991": {
+      "last_ping": "2026-09-18",
+      "type": "author_checkin",
+      "note": "dirty mergeable_state, never previously nudged"
     }
   },
   "backlog_cursor": {
-    "task1_task2_2026_09_15": "reviewed newest issues #56583 down to #56517 (fresh since prior cursor #56298); labeled/commented 56517/56550/56526/56522 (bug); most others (Fabric epic batch #56557-56569, aw-bot noise, perf-tracking) already labeled or non-defect; #56525 quantize-ties claim deferred, needs closer verification (RND_EVEN mode already present, claim may be stale/inaccurate); next run continue newest-scan below #56517 or verify #56525, or resume older gap below #55429/#55022",
-    "task6_2026_09_15": "scanned oldest-updated-first non-draft PR list (page1, ~30 PRs seen); nudged 3 never-nudged candidates: 50852 (author, dirty+3 failing checks incl PR Gate Status), 51675 (author, approved but 1 failing check ttnn reduce group), 50905 (author, approved-comment-only but 9 failing checks across p100/ops-unit-tests); other page1 PRs already nudged in memory or not yet stale enough. Next run continue scanning further down the non-draft list (page2+).",
-    "task1_task2_2026_09_15b": "reviewed newest issues #56641 down to #56558 (fresh since prior cursor #56517); confirmed #56621 (tanh_bw dtype mismatch) already covered by open PR #56064, no dup; confirmed #56571 (verify-changed-tests duplicate-leg-name gate bug) is a genuine remaining defect (entry_key already fixed for scope stage but row_key/leg_row_key/describe_row in filter stage still key on name-only) already correctly labeled bug+ci-bug with open non-duplicate fix PR #56575; labeled+commented #56626 (ttnn.topk NaN lane mis-ordering, confirmed no NaN handling in topk_local.cpp bitonic sort comparator against current source) bug; other fresh issues (56640 model bringup, 56635/56619/56615/56600/56599 agentic-workflows bot noise, 56628/56627 ND-sharding feature asks, 56625/56623/56622 metal2.0 emulator analysis tracking, 56617/56608/56607 shield_prefill tracking, 56613 Blackhole mmap pinned-write hang - well-documented runtime/UMD-adjacent bug already labeled, needs KMD-level investigation beyond current budget, 56592 test-escalation tracking, 56583/56569 already covered, 56577 Gemma4/BH already labeled bug, 56576 LLK perf infra feature request, 56561/56560/56559/56558 Fabric/control-plane design tracking) all already correctly labeled/covered or non-defect design/tracking issues, no further action. Next run continue newest-scan below #56558.",
-    "task1_task2_2026_09_15c": "reviewed newest issues #56680 down to #56652 (fresh since prior cursor #56558); labeled bug: #56655 (mul_reduce_scalar_chunked_tile over-counting, reporter ronnie00TT independently reproduced+narrowed with new gtest PR #56677, confirmed real defect), #56673 (copy_dest_value stale-slot bug, split from #56655, also confirmed via #56677 gtest), #56644 (Fast dispatch broken on Horizon, well-bisected between #54415/#55845); labeled ci-bug: #56650 (test_unary_tanh_approx_ttnn crashes ttsim workers after #56076, clear bisect+root-cause already in issue text, main red since 2026-09-15). Other fresh issues (56680/56679 Gemma4 already bug-labeled, 56678/56652/56635/56619/56615/56600/56599 agentic-workflows bot noise, 56670/56664 shield_prefill tracking, 56663 Quasar test-infra feature, 56661/56660 gpt_oss_d_p trace-capture design/perf issues no code defect, 56657 kernel cleanup feature, 56654 model-config tuning, 56616/56621/56626/56613 already labeled/covered from prior runs) no further action. Next run continue newest-scan below #56652.",
-    "task6_2026_09_15b": "continued scanning non-draft open-PR list sorted by oldest-updated; found and nudged 2 previously-untouched stale PRs from the ~2026-09-02 batch: #50782 (author, CHANGES_REQUESTED unresolved + dirty) and #51086 (codeowners ping, CI green but zero reviewers/reviews). Rest of the oldest-updated page (38627-51844) all already nudged in prior runs. Next run continue scanning further into the 2026-09 updated range (51895+) or re-check 3-day re-ping eligibility on earliest nudges.",
-    "task1_task2_2026_09_16": "reviewed newest issues #56712 down to #56644 (fresh since prior cursor #56652/56517); confirmed #56707 (binary_ng width-over-padded operand reads own zero-padding as data, silent wrong answer on first call) as genuine high-severity bug via full verification against current binary_ng_program_factory.cpp/reader_interleaved_no_bcast.cpp - root cause exactly matched issue's own analysis (reader reuses output's cWt for input row-stride advance instead of operand's own aWt/bWt); opened fix PR scoped to no_bcast path only (issue itself notes bcast readers need separate check, left for future run); other fresh issues (56710-56712 SDPA/profiler perf-tracking, 56701/56702 Quasar DFB tracking already labeled bug, 56689/56688/56684 Quasar/tt_dit feature/cleanup asks, 56680/56679 Gemma4 already bug-labeled, 56678/56652 aw-bot noise, 56670/56664 shield_prefill tracking, 56663 Quasar test-infra feature, 56661/56660/56654 gpt_oss/model-tuning tracking no code defect, 56659 SFPI vFloat bitwise-equality toolchain regression - well-documented, out of tt-metal's own scope (sfpi repo), no repo-assist fix possible here, 56657 kernel cleanup feature, 56650 already ci-bug-labeled, 56644 already bug-labeled) no further action needed. Next run continue newest-scan below #56644.",
-    "task1_task2_2026_09_16b": "reviewed fresh issues #56644 down to #56492 (continuing below prior cursor #56644); confirmed #56518 (ttnn.pow fp32 log2 argument-reduction cancellation) already covered by open PR #56593, no dup; confirmed #56621 (tanh_bw dtype mismatch) already covered by PR #56064 (prior finding, still valid); investigated and fixed #56532 (ttnn.experimental.fft/ifft bf16 writer truncation bias) - confirmed against current batch_fft_writer.cpp/radix_pass_writer.cpp/apply_twiddles_writer.cpp (all still use >> 16 truncation exactly as described), opened fix PR implementing proposal (1) only (RNE rounding helper in batch_fft_common.h) per the issue's own scoping of proposal (2) as separate/larger; other fresh issues (56654 model-config tuning, 56628/56627 ND-sharding feature asks - no code defect, 56625/56623/56622 metal2.0 emulator analysis tracking, 56617/56608/56607 shield_prefill tracking, 56613/56616/56626 already labeled/covered from prior runs, 56601 tracking epic, 56592 test-escalation tracking, 56577/56576 already labeled/covered, 56561/56560/56559/56558/56557 Fabric/control-plane design tracking, 56556 runtime design note, 56547 already-labeled bug, 56544 silencer automation tracking, 56525/56526/56520/56521/56513/56503/56501/56500/56498/56492 already labeled/covered from prior runs, 56641 sfpi design note - no code defect yet, relies on #53164) all already correctly labeled/covered or non-defect design/tracking issues. Next run continue newest-scan below #56492.",
-    "task1_task2_2026_09_17": "reviewed newest open issue #56808 (fresh, LLK typecast test harness never samples negative Int32 stimuli) -- verified against current ckernel_sfpu_typecast.h sources across WH/BH/Quasar that Int32 typecast kernels expect sign-magnitude Dest encoding (matching pack_int32 default), confirming the issue's diagnosis; opened a test-only fix PR (test_eltwise_unary_typecast_int32_negative) rather than restating the issue's claim unverified. Did not get to a full newest-issue scan below #56808 this run (spent budget verifying kernel sources across 3 architectures for confidence before committing a fix) -- next run should scan #56797 downward (topk merge perf, sfpi coverage bug #56751 already labeled, binary_ng dtype corruption #56738 already labeled, several Quasar/profiler perf-tracking issues seen but not yet triaged: #56712/56711/56710/56702/56701/56697).",
-    "task1_task2_2026_09_17c": "reviewed newest issues 56859 down to 56823 (fresh since prior run cursor at #56808); #56853 already covered by open PR #56860 (heroxcreed pow int-scalar bit-reinterpret bug), no dup; investigated+fixed #56827 (concat block-sharded width ragged-tail, same defect class as height fix #56603), opened PR + labeled bug + commented; labeled #56824 bug (concat >16-input batching, confirmed root cause, too large for auto-fix, left for maintainer) but did not attempt a fix; other issues in range (56859 quasar dest-bank, 56856 real/imag memory_config, 56843/56840 agentic-workflow noise, 56835 prelu memory_config, 56831 JIT cache, 56828 moreh tracking, 56826/56825 quasar LLK, 56823 test-coverage tracking) already labeled or are tracking/design issues, no action needed. Next run continue newest-scan below #56823.",
-    "task6_2026_09_17": "switched from updated-asc unfiltered (all drafts, already exhausted in earlier runs) to draft:false sort:updated-asc; page 38627-51991 all previously nudged except 51533/51844/51875/51915/51991 (surfaced now that updated_at refreshed 2026-09-02); pinged 51844+51875 (reviewer-blocked, codeowners ping) and nudged 51915 (author, dirty mergeable_state) -- hit 3-action cap. Next run: check 51533 (dirty, 8 reviewers, likely author-blocked -- verify) and 51991 (dirty, 9 LLK reviewers -- verify), then continue paging draft:false sort:updated-asc beyond 51991.",
-    "task1_task2_2026_09_18": "reviewed newest issues #56993 down to #56876 (fresh since prior cursor #56823); fixed #56955 (welford groupnorm batch stride) with PR+test; labeled bug; #56880 gather rank>4 sibling defect confirmed but left unfixed per issue's own scoping (more invasive than scatter fix, multiple factories, TILE layout); #56945/#56954 already covered by external PRs #56932/#56953; #56973 Wormhole Galaxy NoC hangs is fleet/infra, flagged not fixed. Next run continue newest-scan below #56876, or attempt #56880 gather fix if budget allows (scope: pre_gather_transform_tensor / squeeze_from_ND_to_4D per-tensor folding, check SingleRowSingleCore/SingleRowMultiCore/wide-Wt factories + codegen route for hard 4D assumption)."
+    "task1_task2_latest": "reviewed newest issues #57042 down to #56998 (fresh since prior cursor #56876); labeled 57042/57023/57022 bug (build failure, DFB credit underflow, constraint-query fatal), 57018 feature-request (TeaCache telemetry); fixed #56998 (prefill runner docs missing capture_trace hook) with docs-only PR; confirmed 56945/56954 already covered by external PRs 56932/56953 per memory; 57009 (MiniMax hang) already well-labeled/documented, needs HW bisect beyond budget; 57028/57012/57011/57001/57004 are sfpi/codegen suggestions already labeled or too speculative for action. Next run continue newest-scan below #56998.",
+    "task6_latest": "switched to draft:false sort:updated-asc page1; nudged 51533 and 51991 (both dirty, never-nudged, author-blocked) -- hit natural stop after finding 2 candidates on page1; page2 starts at PR 52152 (52xxx range), continue scanning there next run"
   },
   "labeled_issues": {
     "53866": {
@@ -1394,6 +1400,11 @@
   },
   "run_history": [
     {
+      "run_id": "35380382139",
+      "date": "2026-09-18T18:34:00Z",
+      "summary": "Task5: addressed maintainer mateusznowakTT's /repo-assist review request on PR #56396 -- replaced compare_pcc with assert_with_ulp(ulp_threshold=2) in test_bw_pow_zero_input_finite_gradient (exact-value golden at input==0 warrants tight ULP bound, matching test_backward_expm1.py's pattern); fetched PR branch via git (shallow fetch worked despite no push creds), edited locally, pushed via push_to_pull_request_branch, commented explaining the change. Task1/2: reviewed newest issues #57042 down to #56998; labeled #57042/#57023/#57022 bug (quasar resnet build failure in ckernel_sfpu_reduce.h, quasar conv2d DFB credit underflow, borrowed-memory DFB constraint-query fatal -- all confirmed genuine defects from issue text), #57018 feature-request (TeaCache telemetry); confirmed #56945/#56954 already covered by external PRs per memory (no dup); #57009 MiniMax hang well-documented already, needs HW bisect beyond budget. Task4: fixed #56998 (prefill runner docs missing capture_trace optional hook) -- verified against prefill_runner.py:793's getattr-gated call and the one existing implementation (tt_prefill_runtime.py:433); opened docs-only [skip ci] PR. Task6: nudged 2 never-nudged stale PRs (#51533, #51991, both dirty mergeable_state, author-blocked). Also spot-checked ~24 tracked repo-assist PRs' CI: several recent ones show pr-gate.yaml conclusion=action_required (repo-side gating, not build failure) -- flagged as a pattern to watch. Task8: rewrote monthly summary #55015 from scratch (body had regrown to ~247KB with duplicated Suggested-Actions/footer blocks); trimmed to canonical current-state format."
+    },
+    {
       "run_id": "35315773605",
       "date": "2026-09-18T06:43:00Z",
       "summary": "Task2/3: investigated fresh issue #56949 (gpt-oss-120b fused MoE router topk_router_gpt selected on Blackhole Galaxy despite requiring 12 DRAM-aligned cores vs Blackhole's 8; model code gated the fused kernel purely on num_experts==128 with no arch check). Verified against current models/demos/gpt_oss/tt/topk.py and its models/experimental/ops/quasar/gpt_oss/tt/topk.py duplicate (byte-identical apart from import path) and confirmed the op's own unit tests already @skip_for_blackhole this exact scenario. Opened PR gating use_fused_op on not ttnn.device.is_blackhole(mesh_device) in both files, matching the existing is_blackhole(mesh_device) convention used in models/tt_transformers/tt/model_config.py. Python-only change, no build needed per copilot-cloud rules. Task7: checked contributor history for all 24h-fresh issue/PR authors (VirdhatchaniKN, vcankovicTT, awliu-TT, sagarwalTT, heroxcreed) via search_pull_requests/search_issues -- all have prior merged PRs and/or issues, none qualify as new contributors, no welcomes posted. Also discovered during review that repo-assist's prior fix PR #56864 (for #56827, concat block-sharded width ragged-tail) was auto-closed by CI/github-actions[bot] without merging despite 5/5 green checks -- flagged in monthly summary for a fresh fix attempt next run. Task8: rewrote monthly summary #55015 (body had regrown to ~252KB from repeated duplicated Suggested-Actions/Run-History blocks across many prior runs); trimmed to current suggested actions + last several run history entries."
@@ -1447,41 +1458,6 @@
       "run_id": "34263416428",
       "date": "2026-09-08T18:36:00Z",
       "summary": "Task1/2: labeled 4 fresh community bug reports (#55797 reciprocal fp32 BH Newton-refinement underflow, #55798 softplus fp32 exp-tail clamp missing, #55799 repeat_bw TT_FATAL/empty-grad/wrong-shape, #55800 unary output_tensor shape guard compares against itself) - each already has an open community fix PR (55801/55802/55803/55804), so no duplicate fix PR opened, just labeled bug after confirming root cause against current source. Task5: re-verified check-runs on tracked PRs; #55435 RTL Sim CI now green (was failing 09-07, resolved itself/reran); #54932/#54792 unchanged green; #53690 unchanged. Task8: this update."
-    },
-    {
-      "run_id": "34122745559",
-      "date": "2026-09-07T12:40:00Z",
-      "summary": "Task1: labeled #55622 bug (Quasar paged_update_cache/typecast writes 0/512 expected cells). Task2/3: confirmed #55616->PR#55613 and #55605->PR#55606 already cover those issues, no dup; reviewed #55609 (LLK/BH tilize doc issue), too specialized, no fix, left for owning team. Task5: re-verified PR check runs 55435(still RTL Sim CI failure)/55591(green)/55293/55424(unchanged, pre-checks green). Task8: updated monthly summary #55015."
-    },
-    {
-      "run_id": "34969697691",
-      "date": "2026-09-15T12:40:00Z",
-      "summary": "Task5: addressed maintainer /repo-assist request on PR #56396 (added input==0 regression test for pow_bw, pushed+commented); discovered untracked PR #56598, re-verified 14 other tracked PRs no new action needed. Task1/2: reviewed newest issues 56641-56558; labeled+commented #56626 (topk NaN ordering); confirmed 56621/56571 already covered by open PRs. Task6: nudged 3 never-nudged stale PRs (50852/51675/50905, all with failing CI checks). Task8: rewrote monthly summary."
-    },
-    {
-      "run_id": "35042176821",
-      "date": "2026-09-16T01:03:00Z",
-      "summary": "Task2/3: investigated newest issues #56712-#56644; confirmed #56707 (binary_ng width-over-padded operand silent wrong-answer bug) via full root-cause verification against current source, opened fix PR (repo-assist/fix-issue-56707-binary-ng-width-padded-stride) adding aWt/bWt reader runtime args, scoped to no_bcast path per issue's own scoping note; commented on issue linking analysis. Task5: re-verified PR #56706 (pow_bw) 9/9 checks green; other tracked PRs unchanged. No stale-PR/welcome/label actions taken this run (focused effort on the single high-value fix)."
-    },
-    {
-      "run_id": "35222002044",
-      "date": "2026-09-17T12:38:00Z",
-      "summary": "Task2/3: investigated and fixed #56827 (concat block-sharded width ragged-tail, same defect class as #56603 height fix), opened PR + labeled bug + commented on issue; labeled #56824 bug (concat >16-input batching, confirmed root cause, left for maintainer, too large for auto-fix); confirmed #56853 already covered by open PR #56860, no dup. Task5: re-verified CI on ~20 tracked PRs; confirmed #56396 test failures (Qwen2.5-VL HF download, tt-train docker digest-mismatch, SDXL profiler) are unrelated infra flakiness via job-log inspection, not caused by the pow_bw fix; #55435/#56195 RTL Sim CI failures reconfirmed pre-existing (branch behind main). Task6: pinged #51844+#51875 (/codeowners ping, reviewer-blocked) and nudged #51915 (author, dirty mergeable_state) - hit 3-action cap; next run check #51533/#51991. Task8: rewrote monthly summary #55015 (regrown to 172KB) with current suggested actions + this run entry."
-    },
-    {
-      "run_id": "35259179221",
-      "date": "2026-09-17T18:36:00Z",
-      "summary": "Task2/3: investigated and fixed #56881 (ttnn.scatter SIGFPE on zero-volume/zero-last-dim input due to 0/0 integer division in program factory work-split calc); confirmed existing Shape{0} guard does not prevent it; added logical_volume()==0 early-return in ttnn::scatter (the fix the issue proposed as primary) + regression test covering the three example shapes; opened PR #56896, commented on issue linking it, confirmed no duplicate PR existed. Task8: rewrote monthly summary #55015 (had regrown to 182KB with duplicated sections) with current suggested actions + this run entry."
-    },
-    {
-      "run_id": "35293368209",
-      "date": "2026-09-18T01:02:00Z",
-      "summary": "Task2/3: investigated newest issue #56938 (unary elementwise 28 op types return float32 bit patterns for int32 input), verified against current unary_op_utils.cpp that none of the 28 op types have an INT32 branch, confirming the reported silent bit-reinterpretation bug; opened fix PR adding TT_FATAL validation rejecting INT32 for these 28 op types + parametrized regression test; labeled #56938 bug and commented linking the fix. Task8: rewrote monthly summary #55015 (deduplicated Suggested Actions/Run History, had regrown to ~192KB) with current suggested actions + this run entry."
-    },
-    {
-      "run_id": "35345367198",
-      "date": "2026-09-18T12:39:00Z",
-      "summary": "Task2/3: investigated and fixed #56955 (groupnorm sharded Welford kernel strides batches by block_ht*block_wt instead of block_ht*per_core_Nt, causing every batch after the first on a multi-batch multi-group-per-core to normalize wrong tiles); confirmed against current groupnorm_sharded_program_factory.cpp/groupnorm_sharded_v2.cpp/welford_groupnorm_sharded_v2.cpp that legacy kernel already reads correct stride (compile arg 18, num_tiles_per_batch) while Welford kernel never did; opened fix PR + regression test reproducing issue's trigger shape (N=2,C=1,H=32,W=64,num_groups=2); labeled bug + commented linking fix. Reviewed newest issues #56993-#56876 (fresh since prior cursor #56823): #56880 (gather rank>4 folding, sibling of fixed #56876) confirmed genuine defect but issue itself scopes the fix as more invasive than scatter's, left for maintainer (flagged in monthly summary); #56945/#56954 already have open external fix PRs (#56932/#56953), no dup; #56973 (Wormhole Galaxy NoC hangs) is fleet/infra, not code-fixable by repo-assist, flagged for maintainer. Task8: rewrote monthly summary #55015 (regrown to ~247KB with heavy duplication) with current suggested actions + this run entry."
     }
   ],
   "no_action_reviewed": [
@@ -1554,7 +1530,6 @@
       "note": "has 12+ prior issues, not new, excluded from welcome"
     }
   },
-  "task8_last_update": "2026-09-18T06:43:00Z",
-  "task5_maintain_2026_09_17": "re-verified all ~19 tracked repo-assist PRs via pull_request_read/get_check_runs (55688/54932/54792/53113/54666/54862/52106/51868/55670/56195/56790/56714/56598/56529/56428/56396/55435/53690/54246) -- no CI regressions, no new maintainer activity since last check; confirmed #56375 (dispatch log fix) remains superseded by merged #56676 (issue #56348 closed), flagged in monthly summary for maintainer to close since repo-assist should not close unilaterally without confirming maintainer intent.",
-  "task5_maintain_2026_09_17b": "Investigated #56817 CI failure (test_eltwise_unary_typecast_int32_negative[Int32->Float32, dest_acc=Yes] failing on both WH and BH smoke tests, run 35170670299): confirmed a genuine kernel defect, not a test bug -- calculate_typecast_int32_to_fp32/_to_fp16b used TTI_SFPABS(...,mod1=0) (SFPABS_MOD1_INT, two's-complement abs) on Int32 data that is actually sign-magnitude in hardware (matching pack_int32's default and this same file's SFPCAST/SFPSETSGN conventions). Verified via DeepWiki against tt-isa-documentation (SFPABS.md, SFPCAST_IntFloat.md) and cross-checked against tt_llk_quasar's calculate_abs which already uses the correctly-named SFPABS_MOD1_FLOAT constant with an identical warning comment. Pushed a fix (both WH and BH, both the DISABLE_SFPLOADMACRO plain-loop and SFPLOADMACRO fast-path variants) switching to SFPABS_MOD1_FLOAT; posted explanatory comment on PR #56817. Also re-verified other tracked PRs (56714/56598/56529/56428) all green, no regressions. Re-verified rest of ~19 tracked PRs unchanged from prior run's 2026-09-17 check."
+  "task8_last_update": "2026-09-18T18:34:00Z",
+  "ci_pattern_note": "2026-09-18: multiple recently-opened repo-assist PRs (56997/56943/56956 etc) show pr-gate.yaml conclusion=action_required (not failure/success) -- appears to be a repo-side approval/gating state for these branches, not a code defect; monitor next run to see if it resolves or needs maintainer action"
 }
