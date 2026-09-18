@@ -33,6 +33,7 @@ from accuracy.emit_budget import (
     render,
     render_skipped,
 )
+from helpers.chip_architecture import ChipArchitecture
 from helpers.format_config import DataFormat
 from helpers.llk_params import (
     ApproximationMode,
@@ -47,7 +48,7 @@ from helpers.sfpu_accuracy_budget import (
     Metric,
     budget_table,
 )
-from helpers.ulp import MAX_MEANINGFUL_ULP, ulp_dtype
+from helpers.ulp import MAX_MEANINGFUL_ULP, NEAR_ZERO_FRACTION, ulp_dtype
 
 
 def _cell(**kwargs) -> CellMeasurement:
@@ -165,10 +166,33 @@ def test_headroom_of_one_pins_the_budget_to_the_measurement():
 
 
 def test_no_floor_when_the_near_zero_lanes_are_already_in_budget():
-    cell = _cell(
-        max_ulp=8, percentile_ulp=8.0, near_zero_points=10, near_zero_max_ulp=3
+    """A floor for lanes the budget already covers would be inert, so `_floor` returns
+    early on `near_zero_max_ulp <= _budget(...)`.
+
+    The cell has to be built so that rule is the *only* thing producing the ``None``.
+    With `_cell`'s defaults it was not: `near_zero_max_abs_err` stays 0.0, so deleting
+    the rule still returned ``None`` three lines later at `if floor <= 0`, and the
+    default `Float16_b` output makes `_budget(8, 8.0, 1.25) = 10` exceed
+    `usable_budget_ceiling(Float16_b) = 6.4`, so the whole resolution came back
+    `(None, None)` on the ceiling branch instead. Float32 and a positive
+    `near_zero_max_abs_err` remove both, and the mutation case below -- the same cell
+    with the near-zero lanes *out* of budget -- shows the rule is what decides.
+    """
+    common = dict(
+        output_format=DataFormat.Float32,
+        max_ulp=8,
+        percentile_ulp=8.0,
+        near_zero_points=10,
+        near_zero_max_abs_err=1e-6,
     )
-    assert cell.near_zero_atol(DEFAULT_HEADROOM) is None
+    in_budget = _cell(near_zero_max_ulp=3, **common)
+    assert in_budget.budget(DEFAULT_HEADROOM) is not None  # not a ceiling refusal
+    assert in_budget.near_zero_atol(DEFAULT_HEADROOM) is None
+
+    out_of_budget = _cell(near_zero_max_ulp=99999, **common)
+    assert out_of_budget.near_zero_atol(DEFAULT_HEADROOM) == pytest.approx(
+        1e-6 * DEFAULT_HEADROOM, rel=1e-2
+    )
 
 
 def test_a_floor_appears_when_a_few_near_zero_lanes_blow_the_budget():
@@ -225,11 +249,31 @@ def test_the_share_guard_is_a_boundary_not_a_cliff():
 
 
 def test_unmeasurable_lanes_do_not_count_toward_the_share():
-    """The denominator is the measurable lanes, so a cell full of NaN goldens cannot make
-    a genuine near-zero minority look like a majority."""
-    cell = _cell(points=1000, unmeasurable=900, near_zero_points=60)
+    """The denominator is the *measurable* lanes, so a cell full of NaN goldens cannot
+    hide a near-zero majority behind the lanes that were never compared.
+
+    That direction, not the other way round: ``measurable_points <= points`` always, so
+    swapping in ``points`` can only *shrink* the computed share -- 60/1000 = 6% against
+    60/100 = 60% here -- and would make a genuine majority look like a minority, which
+    is the reading that suppresses the floor's own guard. The share guard is what keeps
+    an absolute floor from becoming the gate, so the failure that matters is a majority
+    read as a minority.
+    """
+    cell = _cell(
+        points=1000,
+        unmeasurable=900,
+        near_zero_points=60,
+        near_zero_max_ulp=99999,
+        near_zero_max_abs_err=1e-6,
+        output_format=DataFormat.Float32,
+    )
     assert cell.measurable_points == 100
     assert cell.near_zero_points / cell.measurable_points > NEAR_ZERO_MAX_SHARE
+    # ...and the wrong denominator would read the same cell as a 6% minority.
+    assert cell.near_zero_points / cell.points < NEAR_ZERO_MAX_SHARE
+    # The guard the ratio feeds, exercised rather than re-derived: these near-zero lanes
+    # are far out of budget and would otherwise earn a floor.
+    assert cell.near_zero_atol(DEFAULT_HEADROOM) is None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -238,7 +282,11 @@ def test_unmeasurable_lanes_do_not_count_toward_the_share():
 
 
 def _measure(
-    golden, hardware, fmt=DataFormat.Float16_b, percentile=99.9, fraction=0.01
+    golden,
+    hardware,
+    fmt=DataFormat.Float16_b,
+    percentile=DEFAULT_PERCENTILE,
+    fraction=NEAR_ZERO_FRACTION,
 ):
     return measure_cell(
         _rows(golden, hardware),
@@ -627,7 +675,7 @@ def test_render_emits_a_key_that_pins_the_input_format():
     """Never collapsed away, even for a single input format, because a key without it
     would cover input paths the sweep never measured."""
     df = _sweep_frame(_one_cell())
-    cells, notes = measure_all(df, None, 99.9, 0.01)
+    cells, notes = measure_all(df, None, DEFAULT_PERCENTILE, NEAR_ZERO_FRACTION)
     assert notes == []
     text = render(cells, "wh", DEFAULT_HEADROOM, "2026-01-01")
     assert "MathOperation.Tanh" in text
@@ -640,7 +688,7 @@ def test_render_does_not_collapse_a_single_dest_acc_group():
     on it would drop a pin the sweep never justified removing — and groups really are
     single-dest, since ``main`` passes only gateable cells through."""
     df = _sweep_frame(_one_cell(dest="1"))
-    cells, _ = measure_all(df, None, 99.9, 0.01)
+    cells, _ = measure_all(df, None, DEFAULT_PERCENTILE, NEAR_ZERO_FRACTION)
     text = render(cells, "wh", DEFAULT_HEADROOM, "2026-01-01")
     assert "dest_acc=DestAccumulation.Yes" in text
 
@@ -650,7 +698,9 @@ def test_render_keeps_an_approx_pin_when_collapsing_the_output_format():
     had deliberately kept, which would then gate approx=Yes and the unswept output formats
     on a number measured for neither."""
     rows = _one_cell(out_fmt="bf16", approx="0") + _one_cell(out_fmt="fp32", approx="0")
-    cells, _ = measure_all(_sweep_frame(rows), None, 99.9, 0.01)
+    cells, _ = measure_all(
+        _sweep_frame(rows), None, DEFAULT_PERCENTILE, NEAR_ZERO_FRACTION
+    )
     text = render(cells, "wh", DEFAULT_HEADROOM, "2026-01-01")
     assert "approx_mode=ApproximationMode.No" in text
 
@@ -662,7 +712,7 @@ def test_render_refuses_a_budget_looser_than_the_tolerance_it_replaces():
     steps, ~35% relative error, on an op bounded in (-1, 1)."""
     loose = [(1.0, 1.35)] * 32
     df = _sweep_frame(_one_cell(out_fmt="fp32", pairs=loose))
-    cells, _ = measure_all(df, None, 99.9, 0.01)
+    cells, _ = measure_all(df, None, DEFAULT_PERCENTILE, NEAR_ZERO_FRACTION)
     text = render(cells, "wh", DEFAULT_HEADROOM, "2026-01-01")
     assert "Metric.TOLERANCE" in text
     assert "stops being tighter than the tolerance it replaces" in text
@@ -670,7 +720,7 @@ def test_render_refuses_a_budget_looser_than_the_tolerance_it_replaces():
 
 def test_render_says_when_a_measured_zero_was_floored():
     df = _sweep_frame(_one_cell())
-    cells, _ = measure_all(df, None, 99.9, 0.01)
+    cells, _ = measure_all(df, None, DEFAULT_PERCENTILE, NEAR_ZERO_FRACTION)
     text = render(cells, "wh", DEFAULT_HEADROOM, "2026-01-01")
     assert "max_ulp=1" in text
     assert "measured 0, floored to 1" in text
@@ -679,7 +729,9 @@ def test_render_says_when_a_measured_zero_was_floored():
 def test_render_skipped_names_the_cell_it_refused():
     """A non-finite disagreement gets no budget, and the report has to say which cell."""
     rows = _one_cell(pairs=[(1.0, float("inf"))] * 32)
-    cells, _ = measure_all(_sweep_frame(rows), None, 99.9, 0.01)
+    cells, _ = measure_all(
+        _sweep_frame(rows), None, DEFAULT_PERCENTILE, NEAR_ZERO_FRACTION
+    )
     lines = render_skipped(cells)
     assert lines and "Tanh Float32->Float16_b" in lines[0]
     assert "non-finite disagreement" in lines[0]
@@ -689,7 +741,7 @@ def test_render_skipped_names_the_cell_it_refused():
 
 def test_measure_all_reports_an_unknown_op_instead_of_dropping_it():
     df = _sweep_frame(_one_cell(op="not_a_real_op"))
-    cells, notes = measure_all(df, None, 99.9, 0.01)
+    cells, notes = measure_all(df, None, DEFAULT_PERCENTILE, NEAR_ZERO_FRACTION)
     assert cells == []
     assert any("no MathOperation" in n for n in notes)
 
@@ -698,7 +750,9 @@ def test_render_output_parses_as_python_and_rebuilds_the_contracts():
     """The strongest cheap check on the generated text: it is pasted into a module, so it
     has to be valid Python that evaluates back to the contracts it describes."""
     rows = _one_cell(out_fmt="bf16") + _one_cell(out_fmt="fp32")
-    cells, _ = measure_all(_sweep_frame(rows), None, 99.9, 0.01)
+    cells, _ = measure_all(
+        _sweep_frame(rows), None, DEFAULT_PERCENTILE, NEAR_ZERO_FRACTION
+    )
     text = render(cells, "wh", DEFAULT_HEADROOM, "2026-01-01")
     namespace = {
         "MathOperation": MathOperation,
@@ -851,7 +905,13 @@ def test_the_comment_reports_the_percentile_it_was_given():
     emitted valid Python beside a false measurement claim."""
     cell = _cell(max_ulp=3, percentile_ulp=3.0)
     key = EmittedKey(
-        DataFormat.Float32, DataFormat.Float16_b, None, None, 4, None, (cell,)
+        input_format=DataFormat.Float32,
+        output_format=DataFormat.Float16_b,
+        approx_mode=None,
+        dest_acc=None,
+        budget=4,
+        near_zero_atol=None,
+        cells=(cell,),
     )
     assert "p95 " in key.comment("wh", "2026-09-17", 95.0)
     assert "p99.9 " in key.comment("wh", "2026-09-17", 99.9)
@@ -871,7 +931,13 @@ def test_the_exact_fraction_comes_from_the_same_lanes_as_the_maximum():
         near_zero_points=0,  # so no floor is emitted and the all-lane view is used
     )
     key = EmittedKey(
-        DataFormat.Float32, DataFormat.Float16_b, None, None, 6, None, (cell,)
+        input_format=DataFormat.Float32,
+        output_format=DataFormat.Float16_b,
+        approx_mode=None,
+        dest_acc=None,
+        budget=6,
+        near_zero_atol=None,
+        cells=(cell,),
     )
     comment = key.comment("wh", "2026-09-17", DEFAULT_PERCENTILE)
     assert "max 5 ULP" in comment
@@ -922,9 +988,14 @@ def test_only_the_measured_architecture_can_be_emitted():
     """``EmittedKey`` has no arch dimension and ``accuracy_contract()`` downgrades every
     architecture but ``MEASURED_ARCH`` before it resolves a key, so text emitted from
     another arch's sweep would be plausible, measured and silently inert."""
-    from accuracy.emit_budget import EMITTABLE_ARCH, main
+    from accuracy.emit_budget import ARCH_ABBR, EMITTABLE_ARCH, main
+    from helpers.sfpu_accuracy_budget import MEASURED_ARCH
 
-    assert EMITTABLE_ARCH == "wh"
+    # Against the registry's own constant, not against a literal: `EMITTABLE_ARCH == "wh"`
+    # was asserting the value against itself, and the two were hand-maintained in
+    # different naming schemes with nothing tying them together.
+    assert EMITTABLE_ARCH == ARCH_ABBR[MEASURED_ARCH]
+    assert set(ARCH_ABBR) == set(ChipArchitecture), "every arch needs a sweep directory"
     with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
         SystemExit, match="cannot be emitted"
     ):
@@ -934,7 +1005,14 @@ def test_only_the_measured_architecture_can_be_emitted():
 def test_a_non_default_near_zero_fraction_is_rejected_or_stamped(capsys, tmp_path):
     """The gate always splits at ``NEAR_ZERO_FRACTION``, and ``AccuracyContract`` has
     nowhere to carry a different one, so a regenerated table would silently omit lanes
-    the gate still charges against its ``max_ulp``."""
+    the gate still charges against its ``max_ulp``.
+
+    Out of range is refused; in range but non-default is *stamped*, and the banner is
+    the only thing standing between a ``--near-zero-fraction 0.005`` regeneration and a
+    table of ``max_ulp`` values quietly measured against a different split. The
+    "_or_stamped" half of this name went unexercised -- along with both fixtures -- until
+    the second half below.
+    """
     from accuracy.emit_budget import main
 
     for bad in ("0", "1", "-0.5"):
@@ -942,6 +1020,149 @@ def test_a_non_default_near_zero_fraction_is_rejected_or_stamped(capsys, tmp_pat
             SystemExit, match="must be in"
         ):
             main(["--near-zero-fraction", bad])
+
+    arch_dir = tmp_path / "wh"
+    arch_dir.mkdir()
+    _sweep_frame(_one_cell()).to_parquet(arch_dir / "tanh.parquet")
+
+    assert main(["--source", str(tmp_path), "--stamp", "2026-01-01"]) == 0
+    assert "WARNING" not in capsys.readouterr().out, "the default must not warn"
+
+    non_default = NEAR_ZERO_FRACTION / 2
+    assert (
+        main(
+            [
+                "--source",
+                str(tmp_path),
+                "--stamp",
+                "2026-01-01",
+                "--near-zero-fraction",
+                str(non_default),
+            ]
+        )
+        == 0
+    )
+    printed = capsys.readouterr().out
+    assert "WARNING" in printed
+    assert f"the gate splits near-zero lanes at {NEAR_ZERO_FRACTION:g}" in printed
+    assert f"near_zero_fraction={non_default:g}" in printed, "and it is stamped"
+
+
+def test_two_input_formats_stay_split_end_to_end():
+    """The ``input_format`` dimension this PR promotes to a first-class ``BudgetKey``
+    field, driven through ``measure_all``/``render`` the way the output-format and
+    dest_acc collapse tests already drive theirs.
+
+    ``_one_cell`` takes ``in_fmt`` and no call passed it, so every end-to-end test here
+    ran at ``Float32`` and nothing proved two *different* input formats stay split:
+    ``test_render_emits_a_key_that_pins_the_input_format`` only asserts the single
+    default appears, and the no-collapse test leaves every cell at ``Float32``. A
+    collapse over the input axis would have passed both.
+    """
+    rows = _one_cell(in_fmt="fp32", pairs=[(1.0, 1.0)] * 32) + _one_cell(
+        in_fmt="bf16", pairs=[(1.0, 1.0)] * 32
+    )
+    cells, notes = measure_all(
+        _sweep_frame(rows), None, DEFAULT_PERCENTILE, NEAR_ZERO_FRACTION
+    )
+    assert notes == []
+    assert {c.input_format for c in cells} == {
+        DataFormat.Float32,
+        DataFormat.Float16_b,
+    }
+    text = render(cells, "wh", DEFAULT_HEADROOM, "2026-01-01")
+    # Two keys, one per input path, even though both measure identically -- which is the
+    # point: a shared key would cover input paths the sweep never measured.
+    assert text.count("input_format=DataFormat.Float32") == 1
+    assert text.count("input_format=DataFormat.Float16_b") == 1
+    assert text.count("BudgetKey(") == 2
+
+
+def test_a_ceiling_refusal_reports_the_lane_set_the_ceiling_compared():
+    """On the refusal path ``resolve()`` discards the floor, so the key-level
+    ``near_zero_atol is not None`` was always false there -- and the statistics printed
+    beside "budget would be N" came from all the lanes, while ``_resolve_measurement``
+    had rejected a number computed from the *bulk* ones whenever a floor existed.
+
+    The verdict was never wrong (the all-lane budget is the larger, so also past the
+    ceiling); the magnitude was. Reachable on bf16, whose ceiling is 6.4, so a bulk
+    budget of 7 is enough -- and floors do fire on bf16 outputs in the shipped table.
+    """
+    cell = _cell(
+        output_format=DataFormat.Float16_b,
+        max_ulp=9,  # bulk: _budget(9, 9.0, 1.25) = 12, past the 6.4 ceiling
+        percentile_ulp=9.0,
+        points=1000,
+        near_zero_points=10,
+        near_zero_max_ulp=99999,
+        near_zero_max_abs_err=1e-4,
+        all_max_ulp=99999,
+        all_percentile_ulp=99999.0,
+    )
+    assert cell._floor(DEFAULT_HEADROOM) is not None, "a floor has to exist to matter"
+    assert cell.resolve(DEFAULT_HEADROOM) == (None, None)
+
+    key = EmittedKey(
+        input_format=DataFormat.Float32,
+        output_format=DataFormat.Float16_b,
+        approx_mode=None,
+        dest_acc=None,
+        budget=None,
+        near_zero_atol=None,
+        cells=(cell,),
+    )
+    comment = key.comment("wh", "2026-09-17", DEFAULT_PERCENTILE, DEFAULT_HEADROOM)
+    assert "budget would be 12" in comment, "the value the ceiling actually compared"
+    # ...from the bulk lanes, which is where that 12 came from. The all-lane view says
+    # 99999, and printing it here would describe a number the ceiling never saw.
+    assert "max 9 ULP" in comment
+    assert "99999" not in comment
+
+
+def test_a_marker_and_a_ceiling_refusal_on_one_key_both_get_reported():
+    """``budget_of`` gives ``(None, None)`` for a marker cell and for a ceiling refusal
+    alike, so the collapse stage merges the two into one key -- and the comment used to
+    ``return`` on the marker reason, dropping the ceiling clause *and* the whole
+    measurement line with it.
+
+    Two shipped entries were wrong because of it: both ``approx_mode=Yes`` at 4096 pts,
+    carrying a ``dest_acc=Yes`` marker reason while the ``dest_acc=No`` half's ceiling
+    refusal and its measurement appeared nowhere in the table. They were the only
+    tolerance-demoted entries with no measurement line at all.
+    """
+    marker = _cell(
+        op=MathOperation.Gelu,
+        input_format=DataFormat.Float32,
+        output_format=DataFormat.Float32,
+        dest_acc=DestAccumulation.Yes,  # a real _NOT_PREDICTED_BY_SWEEP entry
+        max_ulp=3,
+        percentile_ulp=3.0,
+    )
+    refused = _cell(
+        op=MathOperation.Gelu,
+        input_format=DataFormat.Float32,
+        output_format=DataFormat.Float16_b,
+        dest_acc=DestAccumulation.No,  # not a marker; refused by the bf16 ceiling
+        max_ulp=9,
+        percentile_ulp=9.0,
+    )
+    assert refused.budget(DEFAULT_HEADROOM) is None, "must be a ceiling refusal"
+
+    key = EmittedKey(
+        input_format=DataFormat.Float32,
+        output_format=None,
+        approx_mode=ApproximationMode.Yes,
+        dest_acc=None,
+        budget=None,
+        near_zero_atol=None,
+        cells=(marker, refused),
+    )
+    comment = key.comment("wh", "2026-09-17", DEFAULT_PERCENTILE, DEFAULT_HEADROOM)
+    assert "not enrolled -- near-zero tail" in comment, "the marker reason survives"
+    assert (
+        "stops being tighter than the tolerance it replaces" in comment
+    ), "and so does the ceiling clause"
+    assert "max 9 ULP" in comment, "and the measurement line is not dropped"
 
 
 def test_the_marker_lookup_is_scoped_to_the_variant_it_was_measured_on():
@@ -1091,8 +1312,8 @@ def test_the_gate_accepts_the_emitted_contract_across_headrooms(fmt, headroom):
         ApproximationMode.No,
         DestAccumulation.Yes,
         FastMode.No,
-        99.9,
-        0.01,
+        DEFAULT_PERCENTILE,
+        NEAR_ZERO_FRACTION,
         headroom,
     )
     if cell.resolve(headroom)[0] is None:
@@ -1108,14 +1329,45 @@ def test_the_near_zero_split_converges_when_the_bound_shrinks_it():
     """The absolute bound depends on the floor, which is derived from the lanes the bound
     selects, so the split is solved by iteration. It terminates because the set only ever
     shrinks — dropping a lane can only lower the max error, which lowers the floor, which
-    lowers the cut. This is the case where it actually iterates."""
-    # Descending near-zero errors, so each round drops the largest remaining lane.
-    golden = [1.0] * 32 + [1e-2, 1e-3, 1e-4, 1e-5, 1e-6]
-    hardware = [1.0] * 32 + [1e-2 + 1e-4, 1e-3 + 1e-5, 1e-4 + 1e-6, 1e-5 + 1e-7, 1e-6]
+    lowers the cut. This is the case where it actually iterates, twice.
+
+    Reaching it needs care, and the previous shape did not. With every near-zero lane at
+    a relative error of exactly ``near_zero_fraction`` the first cut lands at
+    ``1.25 * max|golden_nz|`` -- above every near-zero magnitude -- so ``narrowed ==
+    near_zero`` on the first pass and the loop broke having narrowed nothing. (The lane
+    at 1e-2 was not even in the band: the relative cut is ``<``, and 0.01 < 0.01 is
+    false.) The other two tests that reach the loop collapse the set straight to empty,
+    so the converged-floor path -- where the emitted floor must equal the converged atol
+    -- was untested repo-wide, and with it the ``.3g`` rounding and the loop's own
+    termination.
+
+    Here each lane's error is chosen so the cut it produces lands *inside* the band:
+    round 1 evicts 9e-3 (cut 125 * 5e-5 = 6.25e-3), round 2 evicts 5e-3 (cut 2.5e-3),
+    round 3 finds 2.25e-3 >= 2e-3 and stops. The set therefore shrinks 4 -> 3 -> 2, and
+    the assertions below pin the shrink, the converged floor, and the gate agreeing.
+    """
+    near_zero_magnitudes = [9e-3, 5e-3, 2e-3, 1e-3]
+    absolute_errors = [5e-5, 2e-5, 1.8e-5, 1e-6]
+    golden = [1.0] * 32 + near_zero_magnitudes
+    hardware = [1.0] * 32 + [
+        m + e for m, e in zip(near_zero_magnitudes, absolute_errors)
+    ]
+    # Every one of them is inside the *relative* bound, so the narrowing is the absolute
+    # bound's doing and not the relative cut's.
+    assert all(m < NEAR_ZERO_FRACTION * 1.0 for m in near_zero_magnitudes)
 
     cell = _measure(golden, hardware, fmt=DataFormat.Float32)
+    assert cell.near_zero_points == 2, "the iteration must actually narrow the set"
+
     budget, floor = cell.resolve(DEFAULT_HEADROOM)
-    if budget is None:
-        pytest.skip("resolved to tolerance")
+    assert budget is not None
+    # The converged atol, rounded up to three significant figures: the surviving lanes'
+    # worst absolute error is the 2e-3 lane's 1.8e-5.
+    assert floor == pytest.approx(1.8e-5 * DEFAULT_HEADROOM, rel=1e-3)
+    # ...and that floor really does define the band it was measured over: a lane at the
+    # top of the surviving set is inside `floor / NEAR_ZERO_FRACTION`, the evicted one is
+    # not.
+    assert 2e-3 <= floor / NEAR_ZERO_FRACTION < 5e-3
+
     accepted, _, _, worst = _gate_accepts(cell, golden, hardware)
     assert accepted, f"gate rejected max_ulp={budget}, floor={floor}, worst {worst}"

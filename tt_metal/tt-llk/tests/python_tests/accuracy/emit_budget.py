@@ -69,11 +69,13 @@ import math
 import sys
 from dataclasses import dataclass
 from datetime import date
+from decimal import ROUND_CEILING, Decimal
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
 import pandas as pd
 import torch
+from helpers.chip_architecture import ChipArchitecture
 from helpers.format_config import DataFormat
 from helpers.llk_params import (
     ApproximationMode,
@@ -81,6 +83,7 @@ from helpers.llk_params import (
     FastMode,
     MathOperation,
 )
+from helpers.sfpu_accuracy_budget import MEASURED_ARCH
 from helpers.ulp import (
     MANTISSA_BITS_FOR_ULP,
     MAX_MEANINGFUL_ULP,
@@ -109,6 +112,16 @@ _ABBR_BY_FORMAT: Dict[DataFormat, str] = {v: k for k, v in FORMAT_BY_ABBR.items(
 
 #: The order keys are printed in, and the order dimensions are collapsed in.
 FORMAT_ORDER = (DataFormat.Float32, DataFormat.Float16_b, DataFormat.Float16)
+
+# An input format outside FORMAT_ORDER would be measured and then never indexed, so it
+# would yield no key, no note and no `render_skipped()` line while still being counted in
+# `cells=N` -- a whole input pipeline missing from a table that looks complete. `_collapse`
+# already guards its own use of FORMAT_ORDER with a second pass for unordered formats;
+# this makes the same hazard on the `per_input` side impossible rather than handled.
+assert set(FORMAT_BY_ABBR.values()) <= set(FORMAT_ORDER), (
+    "FORMAT_ORDER must cover every format the sweep can name: "
+    f"{sorted(f.name for f in set(FORMAT_BY_ABBR.values()) - set(FORMAT_ORDER))}"
+)
 
 #: Mantissa bits after the implicit leading 1, per measurement dtype. Same numbers as
 #: ``sfpu_domains._FORMAT_MANTISSA_BITS``, derived here from the ULP ceiling that
@@ -209,10 +222,22 @@ def not_predicted_reason(cell: "CellMeasurement") -> Optional[str]:
     return None
 
 
+#: The sweep directory name for each architecture. The sweep writes these, so the
+#: mapping lives here rather than on ``ChipArchitecture``.
+ARCH_ABBR: Dict[ChipArchitecture, str] = {
+    ChipArchitecture.WORMHOLE: "wh",
+    ChipArchitecture.BLACKHOLE: "bh",
+    ChipArchitecture.QUASAR: "qsr",
+}
+
 #: The only architecture whose sweep can be turned into an active contract, because
 #: ``EmittedKey`` has no arch dimension and ``accuracy_contract()`` downgrades every other
-#: architecture to the tolerance metric. Matches ``sfpu_accuracy_budget.MEASURED_ARCH``.
-EMITTABLE_ARCH = "wh"
+#: architecture to the tolerance metric. *Derived* from
+#: ``sfpu_accuracy_budget.MEASURED_ARCH`` rather than restated: the two were previously
+#: hand-maintained literals in different naming schemes with nothing tying them together,
+#: so whoever measures a second architecture had to remember both, and the test asserting
+#: ``EMITTABLE_ARCH == "wh"`` was asserting it against itself.
+EMITTABLE_ARCH = ARCH_ABBR[MEASURED_ARCH]
 
 DEFAULT_HEADROOM = 1.25
 DEFAULT_PERCENTILE = 99.9
@@ -222,6 +247,36 @@ DEFAULT_PERCENTILE = 99.9
 #: so this script can read a file produced by an older revision of the harness -- the same
 #: reason ``FORMAT_BY_ABBR`` is local.
 FAST_MODE_CAPABLE_OPS = (MathOperation.Rsqrt, MathOperation.Sqrt)
+
+
+@dataclass(frozen=True)
+class _Resolution:
+    """One cell's resolved contract, *and which lane set each number came from*.
+
+    The provenance is not decoration. Two comment lines are built from it and both were
+    wrong without it:
+
+    * ``floored`` was inferred key-level from ``near_zero_atol is not None``, but
+      :meth:`CellMeasurement.resolve` combines the fast-mode components with
+      ``max(budgets)`` and ``max(floors)`` *independently* -- so a key can carry a floor
+      from one mode while its budget came from the other mode's unfloored all-lane
+      statistics, and the comment then printed bulk statistics beside an all-lane budget.
+    * On the ceiling-refusal path ``resolve()`` returns ``(None, None)``, discarding the
+      floor, so ``floored`` was always false there and the "budget would be N" line
+      reported an all-lane number even when the value the ceiling actually rejected had
+      been computed from the bulk lanes. The verdict was never wrong -- the all-lane
+      budget is the larger of the two, so also past the ceiling -- but the magnitude was.
+    """
+
+    #: The emitted budget, or ``None`` when the ceiling refused it.
+    budget: Optional[int]
+    #: The emitted near-zero floor, or ``None``.
+    floor: Optional[float]
+    #: Whether *budget* (or *rejected*) was measured over the bulk lanes rather than all
+    #: of them -- i.e. whether a floor was holding the near-zero ones when it was chosen.
+    floored: bool
+    #: The value the ceiling rejected, when it did. ``None`` otherwise.
+    rejected: Optional[int] = None
 
 
 @dataclass(frozen=True)
@@ -248,6 +303,21 @@ class CellMeasurement:
     all_max_ulp: int
     all_percentile_ulp: float
     all_exact_fraction: float
+    #: The largest finite ``|golden|`` in this cell, which is what sets the *relative*
+    #: half of the near-zero cut. The gate recomputes this from its own tensor, so it is
+    #: the one measurement input that does not travel with the contract -- see
+    #: :meth:`dynamic_range_margin`.
+    dynamic_range: float = 0.0
+    #: ``near_zero_fraction * dynamic_range``: the relative cut this cell's band was
+    #: measured against. Stored rather than recomputed because ``--near-zero-fraction``
+    #: is an argument, and the margin has to be measured against the cut that was used.
+    near_zero_relative_cut: float = 0.0
+    #: The band's step-count frontier: ``(|golden|, distance)`` in decreasing magnitude,
+    #: keeping only the lanes that set a new maximum distance from the top down. Enough
+    #: to answer "the largest band magnitude whose distance exceeds B" for any B, which
+    #: is all :meth:`dynamic_range_margin` needs, and short -- a handful of entries --
+    #: where the band itself can be thousands of lanes.
+    near_zero_frontier: Tuple[Tuple[float, int], ...] = ()
     #: The per-fast-mode measurements this cell combines, when it combines more than one.
     #: Kept so :meth:`resolve` can combine the *resolved contracts* rather than the raw
     #: statistics -- see :func:`_combine_fast_modes`.
@@ -306,8 +376,37 @@ class CellMeasurement:
     def measurable_points(self) -> int:
         return max(self.points - self.unmeasurable, 1)
 
-    def resolve(self, headroom: float) -> Tuple[Optional[int], Optional[float]]:
-        """The ``(budget, near_zero_atol)`` pair for this cell, decided *together*.
+    def dynamic_range_margin(self, headroom: float) -> Optional[float]:
+        """How much narrower a judged tile may be before a floored contract stops holding.
+
+        The near-zero band has two bounds and only one of them travels. ``near_zero_atol``
+        is in the contract, so the gate applies the same absolute cut; the *relative*
+        bound is recomputed by the gate from its own tensor's dynamic range
+        (``helpers/ulp.py``), which the functional suite's random draw generally makes
+        narrower than this sweep cell's deterministic ramp. Where the relative bound is
+        the binding one, a narrower tile shrinks the band, and the lanes that fall out of
+        it are charged against ``max_ulp`` -- lanes excluded from ``max_ulp`` precisely
+        because they exceeded it.
+
+        Returns ``cut / m``, where ``m`` is the largest band magnitude whose step count
+        exceeds the emitted budget: the factor the tile's range may shrink by before that
+        lane is uncovered. ``None`` when no band lane exceeds the budget (nothing to
+        uncover) or when no budget was emitted. Measured against the *relative* cut,
+        which is the bound that moves -- so where the absolute bound is the binding one
+        the answer is if anything conservative.
+        """
+        budget = self._resolve(headroom).budget
+        if budget is None or not self.near_zero_frontier:
+            return None
+        for magnitude, distance in self.near_zero_frontier:
+            if distance > budget and magnitude > 0:
+                return self.near_zero_relative_cut / magnitude
+        return None
+
+    def _resolve(self, headroom: float) -> _Resolution:
+        """This cell's resolution: the budget, the floor, and where each came from.
+
+        The ``(budget, near_zero_atol)`` pair is decided *together*.
 
         The two cannot be chosen independently, and getting that wrong is subtle enough
         to be worth spelling out: the budget measured over the bulk lanes is only valid
@@ -322,7 +421,7 @@ class CellMeasurement:
         a budget that the sweep had apparently justified.
         """
         if not self.gateable:
-            return None, None
+            return _Resolution(None, None, False)
         if not self.components:
             return self._resolve_measurement(headroom)
 
@@ -337,27 +436,42 @@ class CellMeasurement:
         # `gateable`'s completeness clause would reject every one of them. Completeness
         # is a property of this cell, and it was checked above.
         resolved = [c._resolve_measurement(headroom) for c in self.components]
-        if any(budget is None for budget, _ in resolved):
-            return None, None
-        floors = [floor for _, floor in resolved if floor is not None]
-        return (
-            max(budget for budget, _ in resolved),
-            max(floors) if floors else None,
+        if any(r.budget is None for r in resolved):
+            # A ceiling refusal for one mode takes the whole key to tolerance. The
+            # provenance follows the largest rejected value, which is the one the
+            # comment reports.
+            refused = [r for r in resolved if r.budget is None]
+            worst = max(refused, key=lambda r: r.rejected or 0)
+            return _Resolution(None, None, worst.floored, worst.rejected)
+        floors = [r.floor for r in resolved if r.floor is not None]
+        # `max(floors)` independently of the budget, because the floor has to cover every
+        # mode -- but the *provenance* follows the winning budget, which is the number the
+        # comment's statistics have to match.
+        winner = max(resolved, key=lambda r: r.budget or 0)
+        return _Resolution(
+            winner.budget, max(floors) if floors else None, winner.floored
         )
 
-    def _resolve_measurement(
-        self, headroom: float
-    ) -> Tuple[Optional[int], Optional[float]]:
-        """One measurement's ``(budget, floor)``, without the gateability checks."""
+    def resolve(self, headroom: float) -> Tuple[Optional[int], Optional[float]]:
+        """The ``(budget, near_zero_atol)`` pair, for the callers that want only that."""
+        resolution = self._resolve(headroom)
+        return resolution.budget, resolution.floor
+
+    def _resolve_measurement(self, headroom: float) -> _Resolution:
+        """One measurement's resolution, without the gateability checks."""
         floor = self._floor(headroom)
-        if floor is None:
-            budget = self._budget(self.all_max_ulp, self.all_percentile_ulp, headroom)
-        else:
+        floored = floor is not None
+        if floored:
             budget = self._budget(self.max_ulp, self.percentile_ulp, headroom)
+        else:
+            budget = self._budget(self.all_max_ulp, self.all_percentile_ulp, headroom)
 
         if budget > usable_budget_ceiling(self.output_format):
-            return None, None
-        return budget, floor
+            # The floor is discarded with the budget -- a floor under no budget gates
+            # nothing -- but `floored` and `rejected` are kept, so the refusal can be
+            # reported against the value and the lane set it was actually decided on.
+            return _Resolution(None, None, floored, budget)
+        return _Resolution(budget, floor, floored)
 
     @staticmethod
     def _budget(worst: int, percentile: float, headroom: float) -> int:
@@ -406,11 +520,52 @@ class CellMeasurement:
         floor = self.near_zero_max_abs_err * headroom
         if floor <= 0:
             return None
-        # `.3g` rounds to nearest, so it can land under the value it was derived from --
-        # and the gate rescues a lane only when `absolute_error <= near_zero_atol`, so a
-        # floor rounded down rejects the very lane it was measured from. The same
-        # "never below the measurement" refusal `_budget` makes with max() and ceil().
-        return max(float(f"{floor:.3g}"), self.near_zero_max_abs_err)
+        # Rounded *up* to three significant figures, not to nearest. `.3g` is
+        # round-to-nearest, so it can land up to ~0.5% under the value it was derived
+        # from -- and the gate's own band membership cut (`near_zero_atol /
+        # near_zero_fraction`) mirrors the emitter's exactly, so a narrower floor evicts
+        # a lane the emitter deliberately kept out of `bulk` and `max_ulp` therefore never
+        # covered. `max(..., near_zero_max_abs_err)` does not prevent that: at
+        # DEFAULT_HEADROOM that term is 0.8 * floor while the rounded value is at least
+        # 0.995 * floor, so it binds only for headroom below ~1.005, and --headroom is
+        # unvalidated. Widening is always safe here, so the tidy literals are kept by
+        # rounding up rather than by rounding to nearest.
+        rounded = max(_round_up_3sig(floor), self.near_zero_max_abs_err)
+        # Bounded from above as well as from below. Nothing else bounds the floor:
+        # `_floor` gates only on lane and step counts, `AccuracyContract.__post_init__`
+        # checks only mutual exclusion, and `passed_test` warns only on `max_ulp`. A
+        # floor above the `atol` of the `isclose` the ULP arm *returns ahead of* makes
+        # the emitted contract looser than the gate it replaces, for every band lane with
+        # `|golden| < (floor - atol) / rtol` -- reachable through a mid-magnitude
+        # collapse, where a kernel that goes to ~0 at golden 0.1 emits 1.25 * 0.1 = 0.125
+        # against an atol of 0.05. The 50% share guard does not stop that shape; it
+        # suppresses the wide-range one. Refusing the floor sends the budget back to the
+        # all-lane statistics, which is normally past the ceiling and therefore a
+        # tolerance contract -- the honest answer for a cell that needs a floor looser
+        # than the tolerance.
+        gate_atol = tolerances[self.output_format].atol
+        if rounded > gate_atol:
+            return None
+        return rounded
+
+
+def _round_up_3sig(value: float) -> float:
+    """*value* rounded **up** to three significant figures.
+
+    Three figures keeps the emitted literals readable; rounding up rather than to nearest
+    keeps them from landing under the measurement they were derived from. See
+    :meth:`CellMeasurement._floor`.
+    """
+    if value <= 0:
+        return value
+    # Through Decimal and back, so the result is the *same* clean literal `.3g` would
+    # have printed. `ceil(value / scale) * scale` in binary floating point lands on
+    # 5.590000000000001e-07 instead of 5.59e-07, which would put fifteen-digit noise in
+    # a checked-in table.
+    quantized = Decimal(value).quantize(
+        Decimal(1).scaleb(math.floor(math.log10(value)) - 2), rounding=ROUND_CEILING
+    )
+    return float(quantized)
 
 
 def usable_budget_ceiling(output_format: DataFormat) -> float:
@@ -525,7 +680,10 @@ def load_sweep(source: Path, arch: str, ops: Optional[Sequence[str]] = None):
             f"{arch_dir} holds both parquet and csv sweep output ({listing}). "
             "merge_shards() leaves older per-op files in place, so these may come from "
             "different runs and there is no provenance to tell them apart. Delete the "
-            "stale set, or pass --op to name exactly the ops you mean."
+            "stale set. (--op does not help for the likeliest collision -- `to_csv.py` "
+            "writing <name>.csv beside <name>.parquet, or a format-flipped re-run -- "
+            "because both files share the stem it filters on, so the same refusal comes "
+            "straight back.)"
         )
     paths = next(iter(by_suffix.values()))
 
@@ -626,6 +784,22 @@ def measure_cell(
         near_zero_max_ulp = int(edge_values.max())
         near_zero_abs = float(absolute_error[edge].max())
 
+    # The band's step-count frontier, largest magnitude first: only the lanes that set a
+    # new maximum distance as we walk down. The first frontier entry whose distance
+    # exceeds a budget is the largest band magnitude that does, which is what
+    # `dynamic_range_margin` asks -- see there for why the emitter records it at all.
+    frontier: List[Tuple[float, int]] = []
+    if bool(edge.any()):
+        band_magnitudes = magnitude[edge].tolist()
+        band_distances = distance[edge].tolist()
+        record = -1
+        for mag, dist in sorted(
+            zip(band_magnitudes, band_distances), key=lambda pair: -pair[0]
+        ):
+            if int(dist) > record:
+                record = int(dist)
+                frontier.append((float(mag), record))
+
     return CellMeasurement(
         op=op,
         input_format=input_format,
@@ -645,6 +819,9 @@ def measure_cell(
         all_max_ulp=all_max,
         all_percentile_ulp=all_pct,
         all_exact_fraction=all_exact,
+        dynamic_range=dynamic_range,
+        near_zero_relative_cut=near_zero_fraction * dynamic_range,
+        near_zero_frontier=tuple(frontier),
     )
 
 
@@ -813,10 +990,31 @@ class EmittedKey:
         headroom: float = DEFAULT_HEADROOM,
     ) -> str:
         points = sum(c.points for c in self.cells)
-        floored = self.near_zero_atol is not None
-        worst = max((c.max_ulp if floored else c.all_max_ulp) for c in self.cells)
+        # Per cell, from the cell's own resolution, not one key-level boolean derived
+        # from `near_zero_atol is not None`. `resolve()` combines fast-mode components
+        # with `max(budgets)` and `max(floors)` independently, so a key can carry a floor
+        # from one mode while its budget came from the other mode's unfloored all-lane
+        # statistics -- and on the ceiling-refusal path the floor is discarded entirely,
+        # which made the key-level boolean always false there. Both printed statistics
+        # from a different lane set than the number beside them.
+        resolutions = [c._resolve(headroom) for c in self.cells]
+        floored_cells = [r.floored for r in resolutions]
+        worst = max(
+            (c.max_ulp if f else c.all_max_ulp)
+            for c, f in zip(self.cells, floored_cells)
+        )
         pct = max(
-            (c.percentile_ulp if floored else c.all_percentile_ulp) for c in self.cells
+            (c.percentile_ulp if f else c.all_percentile_ulp)
+            for c, f in zip(self.cells, floored_cells)
+        )
+        # The widest format the key covers, deliberately: cells[0] is whichever group
+        # came first out of a sort=False groupby, so a key spanning fp32 and bf16 printed
+        # either ~23 or ~7 bits purely by row order. Hoisted, because the ceiling clause
+        # and the mantissa-bits suffix below both need it and had grown their own copies
+        # of the same expression.
+        widest = max(
+            (c.output_format for c in self.cells),
+            key=lambda f: MAX_MEANINGFUL_ULP[ulp_dtype(f)],
         )
         # From the same lane set as max and percentile. Reporting the bulk fraction
         # beside an all-lane maximum produced contradictions like Exp2's "max N ULP,
@@ -825,8 +1023,8 @@ class EmittedKey:
             (
                 value
                 for value in (
-                    (c.exact_fraction if floored else c.all_exact_fraction)
-                    for c in self.cells
+                    (c.exact_fraction if f else c.all_exact_fraction)
+                    for c, f in zip(self.cells, floored_cells)
                 )
                 if value == value
             ),
@@ -852,36 +1050,31 @@ class EmittedKey:
                 if reason is not None and reason not in reasons:
                     reasons.append(reason)
             if reasons:
-                return (
-                    f"#   {arch}: not enrolled -- {'; '.join(reasons)} "
-                    f"({points} pts, {stamp})"
-                )
+                # Accumulated, not returned. A key can cover a marker cell *and* a
+                # ceiling-refused sibling -- `budget_of` gives both (None, None), so the
+                # two collapse together -- and returning here attributed the whole
+                # refusal to the marker, dropping the ceiling clause and the measurement
+                # line with it. Two shipped entries carried a `dest_acc=Yes` marker
+                # reason while the `dest_acc=No` half's measurement appeared nowhere.
+                notes.append("not enrolled -- " + "; ".join(reasons))
             # Report against the bound that actually rejected it: the point past which a
             # budget stops being tighter than the tolerance it replaces -- and against the
             # *value* that crossed it, which is the headroom-adjusted budget rather than
             # the measured maximum printed above. The two differ whenever the percentile
             # term wins, so attributing the refusal to `worst` produced lines that were
             # numerically false: Exp read "max 393216 ULP ... past the 419430-step point".
-            worst_format = max(
-                (c.output_format for c in self.cells),
-                key=lambda f: MAX_MEANINGFUL_ULP[ulp_dtype(f)],
-            )
-            rejected = max(
-                (
-                    c._budget(
-                        c.max_ulp if floored else c.all_max_ulp,
-                        c.percentile_ulp if floored else c.all_percentile_ulp,
-                        headroom,
-                    )
-                    for c in self.cells
-                ),
-                default=worst,
-            )
-            notes.append(
-                f"budget would be {rejected}, past the "
-                f"{usable_budget_ceiling(worst_format):.0f}-step point where a budget "
-                "stops being tighter than the tolerance it replaces, so tolerance"
-            )
+            #
+            # From the resolution, so the value and the lane set it came from are the
+            # ones the ceiling actually compared: whenever a floor existed,
+            # `_resolve_measurement` rejected a *bulk* budget, and recomputing it here
+            # from the key-level `floored` reported an all-lane number instead.
+            refused = [r.rejected for r in resolutions if r.rejected is not None]
+            if refused:
+                notes.append(
+                    f"budget would be {max(refused)}, past the "
+                    f"{usable_budget_ceiling(widest):.0f}-step point where a budget "
+                    "stops being tighter than the tolerance it replaces, so tolerance"
+                )
         if self.budget == MIN_MEASURED_BUDGET and worst == 0:
             notes.append(
                 f"measured 0, floored to {MIN_MEASURED_BUDGET} (a finite sample cannot "
@@ -894,14 +1087,36 @@ class EmittedKey:
                 f"{edge_points} near-zero pts reach {edge_worst} steps and are held by "
                 "the atol floor instead"
             )
+            # The precondition a floored contract carries into the functional suite, in
+            # the one number that says how much slack it has. The band has two bounds and
+            # only the absolute one travels: `near_zero_atol` is in the contract, while
+            # the relative bound is recomputed by the gate from *its own* tensor's
+            # dynamic range (`helpers/ulp.py`), which the functional suite's random draw
+            # makes narrower than this sweep cell's. Where the relative bound is the
+            # binding one, a narrower tile shrinks the band and the lanes that fall out
+            # are charged against `max_ulp` -- lanes excluded from it precisely because
+            # they exceeded it. `dynamic_range_margin` is how far that can go before it
+            # bites.
+            margin = min(
+                (
+                    m
+                    for m in (c.dynamic_range_margin(headroom) for c in self.cells)
+                    if m is not None
+                ),
+                default=None,
+            )
+            dr = max(c.dynamic_range for c in self.cells)
+            if margin is None:
+                notes.append(
+                    f"floor measured at dynamic range {dr:.3g}; no band lane exceeds "
+                    "the budget, so a narrower tile cannot uncover one"
+                )
+            else:
+                notes.append(
+                    f"floor measured at dynamic range {dr:.3g}; holds while the judged "
+                    f"tile's range stays above {dr / margin:.3g} ({margin:.1f}x narrower)"
+                )
         note = "".join(f"; {text}" for text in notes)
-        # The widest format the key covers, deliberately, like the ceiling note above.
-        # cells[0] is whichever group came first out of a sort=False groupby, so a key
-        # spanning fp32 and bf16 printed either ~23 or ~7 bits purely by row order.
-        widest = max(
-            (c.output_format for c in self.cells),
-            key=lambda f: MAX_MEANINGFUL_ULP[ulp_dtype(f)],
-        )
         return (
             f"#   {arch}: max {worst} ULP, p{percentile:g} {pct:.1f}, {exact_text} "
             f"exact, ~{agreement_bits(worst, widest):.0f} mantissa bits, "
@@ -914,9 +1129,12 @@ def _collapse(
 ) -> List[EmittedKey]:
     """Group one input format's cells into the fewest keys whose budgets agree.
 
-    Collapse over dest accumulation first, then approximation mode, then output format.
-    A dimension only disappears when every cell under it wants the same budget, so a key
-    that keeps a dimension is itself the statement that the dimension mattered.
+    Collapse over dest accumulation first, then approximation mode. Those are the only
+    two stages: ``by_format_approx`` partitions on the output format and ``per_format`` is
+    never merged across keys, which is the same statement the module docstring makes
+    ("Neither format dimension is ever collapsed away"). A dimension only disappears when
+    every cell under it wants the same budget, so a key that keeps a dimension is itself
+    the statement that the dimension mattered.
 
     The **input** format is never collapsed away, even where every input path agrees. A
     key without it would cover input formats this sweep never measured -- the functional

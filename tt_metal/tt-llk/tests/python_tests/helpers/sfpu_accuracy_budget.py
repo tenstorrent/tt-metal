@@ -63,15 +63,37 @@ The ULP arm returns before both the tolerance gate and PCC, so on any of these a
 zero-headroom budget has no backstop. Enrolling an op means measuring every sweep that
 reaches it.
 
-The edge sweep was run for the nine ops below and every variant it *generates* holds at
-its enrolled budget. It is parametrized over ``input_output_formats([Float16_b,
-Float32])``, so it never produces a ``Bfp8_b`` output -- and ``Floor``/``Ceil``/``Trunc``
-carry a live ``max_ulp=0`` there through an unrestricted ``DEFAULT``, unlike
-``Abs``/``Neg``/``Square``, which have a ``Bfp8_b`` carve-out. That variant has no edge
-measurement and no backstop; extending the edge sweep to ``Bfp8_b`` would close it.
+The edge sweep was run for **every** op below -- the original nine and the 19 the
+emitter enrolled -- and every variant it *generates* holds at its enrolled budget. That
+matters most for the emitted entries, several of which land at zero headroom
+(``Gelu`` fp16->fp32 ``dest_acc=Yes`` is ``max_ulp=46656`` against a measured maximum of
+46656), and none of the 19 is in ``_UNARY_OPS_NOT_SWEPT``: the edge test and the
+functional one share a driver, and it forwards the real ``formats.input_format`` into
+``accuracy_contract()``, so the ``input_format``-pinned keys bind there too.
+
+The sweep is parametrized over ``input_output_formats([Float16_b, Float32])``, so it
+never produces a ``Bfp8_b`` output -- and ``Floor``/``Ceil``/``Trunc`` carry a live
+``max_ulp=0`` there through an unrestricted ``DEFAULT``, unlike ``Abs``/``Neg``/``Square``,
+which have a ``Bfp8_b`` carve-out. That variant has no edge measurement and no backstop;
+extending the edge sweep to ``Bfp8_b`` would close it.
   wh: edges 42 passed / 6 skipped for Abs/Neg/Identity/Floor/Ceil/Trunc and
       7 passed / 17 skipped for Square/SigmoidAppx/GeluAppx, 2026-09-17
       (Float16_b and Float32 outputs only -- see above)
+  wh: edges 100 passed / 43 skipped / 9 xfailed / 0 failed over the 152 cases the
+      19 emitter-enrolled ops generate, 2026-09-18 (same format restriction)
+
+**A floored contract carries a precondition the contract itself cannot state.** The
+near-zero band has two bounds: ``near_zero_atol`` travels in the contract, but the
+*relative* bound is recomputed by the gate from each judged tensor's own dynamic range
+(``helpers/ulp.py``), which the functional suite's random draw makes narrower than the
+sweep cell's deterministic ramp. Where the relative bound is the binding one, a narrower
+tile shrinks the band and the lanes that fall out are charged against ``max_ulp`` --
+lanes excluded from it precisely because they exceeded it. Every floored entry below
+therefore records the dynamic range it was measured at and how far that may shrink
+before a lane is uncovered; the tightest margin in the table today is 2.5x, and the
+``Erfinv`` blow-up lanes sit at ``|golden|`` of 4e-4 to 7e-3 against a cut of 1.8e-2, so
+the top of the band is well inside budget. ``emit_budget.CellMeasurement.
+dynamic_range_margin`` computes it.
 """
 
 from __future__ import annotations
@@ -873,7 +895,7 @@ _SFPU_ACCURACY_BUDGET: Dict[MathOperation, Dict[BudgetKey, AccuracyContract]] = 
                     ),
                     AccuracyContract(max_ulp=1),
                 ),
-                #   wh: not enrolled -- functional draw reaches 57344 steps, ramp-derived 51200 (4096 pts, 2026-09-17)
+                #   wh: max 49152 ULP, p99.9 40960.0, 0% exact, ~7 mantissa bits, 4096 pts, 2026-09-17; not enrolled -- functional draw reaches 57344 steps, ramp-derived 51200
                 (
                     BudgetKey(
                         input_format=DataFormat.Float16,
@@ -1229,7 +1251,7 @@ _SFPU_ACCURACY_BUDGET: Dict[MathOperation, Dict[BudgetKey, AccuracyContract]] = 
         (
             MathOperation.Erfinv,
             budget_table(
-                #   wh: max 65536 ULP, p99.9 65536.0, 56% exact, ~7 mantissa bits, 2048 pts, 2026-09-17; 42 near-zero pts reach 962592769 steps and are held by the atol floor instead
+                #   wh: max 65536 ULP, p99.9 65536.0, 56% exact, ~7 mantissa bits, 2048 pts, 2026-09-17; 42 near-zero pts reach 962592769 steps and are held by the atol floor instead; floor measured at dynamic range 1.78; holds while the judged tile's range stays above 0.385 (4.6x narrower)
                 (
                     BudgetKey(
                         input_format=DataFormat.Float32,
@@ -1237,9 +1259,9 @@ _SFPU_ACCURACY_BUDGET: Dict[MathOperation, Dict[BudgetKey, AccuracyContract]] = 
                         approx_mode=ApproximationMode.No,
                         dest_acc=DestAccumulation.No,
                     ),
-                    AccuracyContract(max_ulp=81920, near_zero_atol=0.000534),
+                    AccuracyContract(max_ulp=81920, near_zero_atol=0.000535),
                 ),
-                #   wh: max 26321 ULP, p99.9 25227.0, 0% exact, ~8 mantissa bits, 2048 pts, 2026-09-17; 42 near-zero pts reach 962639709 steps and are held by the atol floor instead
+                #   wh: max 26321 ULP, p99.9 25227.0, 0% exact, ~8 mantissa bits, 2048 pts, 2026-09-17; 42 near-zero pts reach 962639709 steps and are held by the atol floor instead; floor measured at dynamic range 1.82; holds while the judged tile's range stays above 0.471 (3.9x narrower)
                 (
                     BudgetKey(
                         input_format=DataFormat.Float32,
@@ -1249,7 +1271,7 @@ _SFPU_ACCURACY_BUDGET: Dict[MathOperation, Dict[BudgetKey, AccuracyContract]] = 
                     ),
                     AccuracyContract(max_ulp=31534, near_zero_atol=0.000536),
                 ),
-                #   wh: max 1 ULP, p99.9 1.0, 56% exact, ~7 mantissa bits, 2048 pts, 2026-09-17; 42 near-zero pts reach 14689 steps and are held by the atol floor instead
+                #   wh: max 1 ULP, p99.9 1.0, 56% exact, ~7 mantissa bits, 2048 pts, 2026-09-17; 42 near-zero pts reach 14689 steps and are held by the atol floor instead; floor measured at dynamic range 1.78; holds while the judged tile's range stays above 0.385 (4.6x narrower)
                 (
                     BudgetKey(
                         input_format=DataFormat.Float32,
@@ -1257,9 +1279,9 @@ _SFPU_ACCURACY_BUDGET: Dict[MathOperation, Dict[BudgetKey, AccuracyContract]] = 
                         approx_mode=ApproximationMode.No,
                         dest_acc=DestAccumulation.No,
                     ),
-                    AccuracyContract(max_ulp=2, near_zero_atol=0.000534),
+                    AccuracyContract(max_ulp=2, near_zero_atol=0.000535),
                 ),
-                #   wh: max 1 ULP, p99.9 1.0, 96% exact, ~7 mantissa bits, 2048 pts, 2026-09-17; 42 near-zero pts reach 14690 steps and are held by the atol floor instead
+                #   wh: max 1 ULP, p99.9 1.0, 96% exact, ~7 mantissa bits, 2048 pts, 2026-09-17; 42 near-zero pts reach 14690 steps and are held by the atol floor instead; floor measured at dynamic range 1.82; holds while the judged tile's range stays above 0.301 (6.1x narrower)
                 (
                     BudgetKey(
                         input_format=DataFormat.Float32,
@@ -1267,9 +1289,9 @@ _SFPU_ACCURACY_BUDGET: Dict[MathOperation, Dict[BudgetKey, AccuracyContract]] = 
                         approx_mode=ApproximationMode.No,
                         dest_acc=DestAccumulation.Yes,
                     ),
-                    AccuracyContract(max_ulp=2, near_zero_atol=0.000536),
+                    AccuracyContract(max_ulp=2, near_zero_atol=0.000537),
                 ),
-                #   wh: max 65536 ULP, p99.9 65536.0, 56% exact, ~7 mantissa bits, 2048 pts, 2026-09-17; 42 near-zero pts reach 962658305 steps and are held by the atol floor instead
+                #   wh: max 65536 ULP, p99.9 65536.0, 56% exact, ~7 mantissa bits, 2048 pts, 2026-09-17; 42 near-zero pts reach 962658305 steps and are held by the atol floor instead; floor measured at dynamic range 1.78; holds while the judged tile's range stays above 0.386 (4.6x narrower)
                 (
                     BudgetKey(
                         input_format=DataFormat.Float16_b,
@@ -1277,9 +1299,9 @@ _SFPU_ACCURACY_BUDGET: Dict[MathOperation, Dict[BudgetKey, AccuracyContract]] = 
                         approx_mode=ApproximationMode.No,
                         dest_acc=DestAccumulation.No,
                     ),
-                    AccuracyContract(max_ulp=81920, near_zero_atol=0.000536),
+                    AccuracyContract(max_ulp=81920, near_zero_atol=0.000537),
                 ),
-                #   wh: max 50188 ULP, p99.9 50188.0, 0% exact, ~7 mantissa bits, 2048 pts, 2026-09-17; 42 near-zero pts reach 962658305 steps and are held by the atol floor instead
+                #   wh: max 50188 ULP, p99.9 50188.0, 0% exact, ~7 mantissa bits, 2048 pts, 2026-09-17; 42 near-zero pts reach 962658305 steps and are held by the atol floor instead; floor measured at dynamic range 1.78; holds while the judged tile's range stays above 0.386 (4.6x narrower)
                 (
                     BudgetKey(
                         input_format=DataFormat.Float16_b,
@@ -1287,18 +1309,18 @@ _SFPU_ACCURACY_BUDGET: Dict[MathOperation, Dict[BudgetKey, AccuracyContract]] = 
                         approx_mode=ApproximationMode.No,
                         dest_acc=DestAccumulation.Yes,
                     ),
-                    AccuracyContract(max_ulp=62735, near_zero_atol=0.000536),
+                    AccuracyContract(max_ulp=62735, near_zero_atol=0.000537),
                 ),
-                #   wh: max 1 ULP, p99.9 1.0, 56% exact, ~7 mantissa bits, 4096 pts, 2026-09-17; 84 near-zero pts reach 14690 steps and are held by the atol floor instead
+                #   wh: max 1 ULP, p99.9 1.0, 56% exact, ~7 mantissa bits, 4096 pts, 2026-09-17; 84 near-zero pts reach 14690 steps and are held by the atol floor instead; floor measured at dynamic range 1.78; holds while the judged tile's range stays above 0.214 (8.3x narrower)
                 (
                     BudgetKey(
                         input_format=DataFormat.Float16_b,
                         output_format=DataFormat.Float16_b,
                         approx_mode=ApproximationMode.No,
                     ),
-                    AccuracyContract(max_ulp=2, near_zero_atol=0.000536),
+                    AccuracyContract(max_ulp=2, near_zero_atol=0.000537),
                 ),
-                #   wh: max 24576 ULP, p99.9 24576.0, 56% exact, ~8 mantissa bits, 2048 pts, 2026-09-17; 42 near-zero pts reach 962641921 steps and are held by the atol floor instead
+                #   wh: max 24576 ULP, p99.9 24576.0, 56% exact, ~8 mantissa bits, 2048 pts, 2026-09-17; 42 near-zero pts reach 962641921 steps and are held by the atol floor instead; floor measured at dynamic range 1.83; holds while the judged tile's range stays above 0.729 (2.5x narrower)
                 (
                     BudgetKey(
                         input_format=DataFormat.Float16,
@@ -1308,7 +1330,7 @@ _SFPU_ACCURACY_BUDGET: Dict[MathOperation, Dict[BudgetKey, AccuracyContract]] = 
                     ),
                     AccuracyContract(max_ulp=30720, near_zero_atol=0.000536),
                 ),
-                #   wh: max 27027 ULP, p99.9 24417.0, 0% exact, ~8 mantissa bits, 2048 pts, 2026-09-17; 42 near-zero pts reach 962641921 steps and are held by the atol floor instead
+                #   wh: max 27027 ULP, p99.9 24417.0, 0% exact, ~8 mantissa bits, 2048 pts, 2026-09-17; 42 near-zero pts reach 962641921 steps and are held by the atol floor instead; floor measured at dynamic range 1.83; holds while the judged tile's range stays above 0.729 (2.5x narrower)
                 (
                     BudgetKey(
                         input_format=DataFormat.Float16,
@@ -1318,14 +1340,14 @@ _SFPU_ACCURACY_BUDGET: Dict[MathOperation, Dict[BudgetKey, AccuracyContract]] = 
                     ),
                     AccuracyContract(max_ulp=30522, near_zero_atol=0.000536),
                 ),
-                #   wh: max 1 ULP, p99.9 1.0, 53% exact, ~7 mantissa bits, 4096 pts, 2026-09-17; 84 near-zero pts reach 14690 steps and are held by the atol floor instead
+                #   wh: max 1 ULP, p99.9 1.0, 53% exact, ~7 mantissa bits, 4096 pts, 2026-09-17; 84 near-zero pts reach 14690 steps and are held by the atol floor instead; floor measured at dynamic range 1.83; holds while the judged tile's range stays above 0.301 (6.1x narrower)
                 (
                     BudgetKey(
                         input_format=DataFormat.Float16,
                         output_format=DataFormat.Float16_b,
                         approx_mode=ApproximationMode.No,
                     ),
-                    AccuracyContract(max_ulp=2, near_zero_atol=0.000536),
+                    AccuracyContract(max_ulp=2, near_zero_atol=0.000537),
                 ),
             ),
         ),
@@ -1624,7 +1646,7 @@ _SFPU_ACCURACY_BUDGET: Dict[MathOperation, Dict[BudgetKey, AccuracyContract]] = 
                     ),
                     AccuracyContract(max_ulp=81920),
                 ),
-                #   wh: not enrolled -- near-zero tail: functional reaches 19,474,047 steps (2048 pts, 2026-09-17)
+                #   wh: max 66633 ULP, p99.9 51674.0, 58% exact, ~7 mantissa bits, 2048 pts, 2026-09-17; not enrolled -- near-zero tail: functional reaches 19,474,047 steps
                 (
                     BudgetKey(
                         input_format=DataFormat.Float32,
@@ -1634,7 +1656,7 @@ _SFPU_ACCURACY_BUDGET: Dict[MathOperation, Dict[BudgetKey, AccuracyContract]] = 
                     ),
                     AccuracyContract(metric=Metric.TOLERANCE),
                 ),
-                #   wh: not enrolled -- near-zero tail: functional reaches 19,474,047 steps (4096 pts, 2026-09-17)
+                #   wh: max 5177344 ULP, p99.9 5046272.0, 0% exact, ~1 mantissa bits, 4096 pts, 2026-09-17; not enrolled -- near-zero tail: functional reaches 19,474,047 steps; budget would be 6307840, past the 419430-step point where a budget stops being tighter than the tolerance it replaces, so tolerance
                 (
                     BudgetKey(
                         input_format=DataFormat.Float32,
@@ -1653,7 +1675,7 @@ _SFPU_ACCURACY_BUDGET: Dict[MathOperation, Dict[BudgetKey, AccuracyContract]] = 
                     ),
                     AccuracyContract(max_ulp=2),
                 ),
-                #   wh: not enrolled -- near-zero tail: functional abs error 7.49e-07 exceeds the ramp-derived 7.08e-07 floor, 148 steps against a 2-step budget (2048 pts, 2026-09-17)
+                #   wh: max 1 ULP, p99.9 1.0, 99% exact, ~7 mantissa bits, 2048 pts, 2026-09-17; not enrolled -- near-zero tail: functional abs error 7.49e-07 exceeds the ramp-derived 7.08e-07 floor, 148 steps against a 2-step budget
                 (
                     BudgetKey(
                         input_format=DataFormat.Float32,
@@ -1663,7 +1685,7 @@ _SFPU_ACCURACY_BUDGET: Dict[MathOperation, Dict[BudgetKey, AccuracyContract]] = 
                     ),
                     AccuracyContract(metric=Metric.TOLERANCE),
                 ),
-                #   wh: not enrolled -- near-zero tail: functional abs error 7.49e-07 exceeds the ramp-derived 7.08e-07 floor, 148 steps against a 2-step budget (4096 pts, 2026-09-17)
+                #   wh: max 79 ULP, p99.9 77.0, 50% exact, ~1 mantissa bits, 4096 pts, 2026-09-17; not enrolled -- near-zero tail: functional abs error 7.49e-07 exceeds the ramp-derived 7.08e-07 floor, 148 steps against a 2-step budget; budget would be 97, past the 6-step point where a budget stops being tighter than the tolerance it replaces, so tolerance
                 (
                     BudgetKey(
                         input_format=DataFormat.Float32,
@@ -1682,7 +1704,7 @@ _SFPU_ACCURACY_BUDGET: Dict[MathOperation, Dict[BudgetKey, AccuracyContract]] = 
                     ),
                     AccuracyContract(max_ulp=81920),
                 ),
-                #   wh: max 57344 ULP, p99.9 57344.0, 0% exact, ~7 mantissa bits, 2048 pts, 2026-09-17; 164 near-zero pts reach 3932160 steps and are held by the atol floor instead
+                #   wh: max 57344 ULP, p99.9 57344.0, 0% exact, ~7 mantissa bits, 2048 pts, 2026-09-17; 164 near-zero pts reach 3932160 steps and are held by the atol floor instead; floor measured at dynamic range 5; holds while the judged tile's range stays above 0.00398 (1255.8x narrower)
                 (
                     BudgetKey(
                         input_format=DataFormat.Float16_b,
@@ -1692,7 +1714,7 @@ _SFPU_ACCURACY_BUDGET: Dict[MathOperation, Dict[BudgetKey, AccuracyContract]] = 
                     ),
                     AccuracyContract(max_ulp=71680, near_zero_atol=5.59e-07),
                 ),
-                #   wh: max 1936392194 ULP, p99.9 1936392194.0, 20% exact, ~-8 mantissa bits, 4096 pts, 2026-09-17; budget would be 2420490243, past the 419430-step point where a budget stops being tighter than the tolerance it replaces, so tolerance
+                #   wh: max 5111808 ULP, p99.9 5021302.8, 30% exact, ~1 mantissa bits, 4096 pts, 2026-09-17; budget would be 6276629, past the 419430-step point where a budget stops being tighter than the tolerance it replaces, so tolerance
                 (
                     BudgetKey(
                         input_format=DataFormat.Float16_b,
@@ -1711,7 +1733,7 @@ _SFPU_ACCURACY_BUDGET: Dict[MathOperation, Dict[BudgetKey, AccuracyContract]] = 
                     ),
                     AccuracyContract(max_ulp=2),
                 ),
-                #   wh: max 1 ULP, p99.9 1.0, 99% exact, ~7 mantissa bits, 2048 pts, 2026-09-17; 164 near-zero pts reach 60 steps and are held by the atol floor instead
+                #   wh: max 1 ULP, p99.9 1.0, 99% exact, ~7 mantissa bits, 2048 pts, 2026-09-17; 164 near-zero pts reach 60 steps and are held by the atol floor instead; floor measured at dynamic range 5; holds while the judged tile's range stays above 0.00087 (5745.6x narrower)
                 (
                     BudgetKey(
                         input_format=DataFormat.Float16_b,
@@ -1721,7 +1743,7 @@ _SFPU_ACCURACY_BUDGET: Dict[MathOperation, Dict[BudgetKey, AccuracyContract]] = 
                     ),
                     AccuracyContract(max_ulp=2, near_zero_atol=5.59e-07),
                 ),
-                #   wh: max 29549 ULP, p99.9 29549.0, 34% exact, ~-8 mantissa bits, 4096 pts, 2026-09-17; budget would be 36937, past the 6-step point where a budget stops being tighter than the tolerance it replaces, so tolerance
+                #   wh: max 78 ULP, p99.9 76.6, 50% exact, ~1 mantissa bits, 4096 pts, 2026-09-17; budget would be 96, past the 6-step point where a budget stops being tighter than the tolerance it replaces, so tolerance
                 (
                     BudgetKey(
                         input_format=DataFormat.Float16_b,
@@ -1730,7 +1752,7 @@ _SFPU_ACCURACY_BUDGET: Dict[MathOperation, Dict[BudgetKey, AccuracyContract]] = 
                     ),
                     AccuracyContract(metric=Metric.TOLERANCE),
                 ),
-                #   wh: max 57344 ULP, p99.9 57344.0, 13% exact, ~7 mantissa bits, 2048 pts, 2026-09-17; 462 near-zero pts reach 939524097 steps and are held by the atol floor instead
+                #   wh: max 57344 ULP, p99.9 57344.0, 13% exact, ~7 mantissa bits, 2048 pts, 2026-09-17; 462 near-zero pts reach 939524097 steps and are held by the atol floor instead; floor measured at dynamic range 5; holds while the judged tile's range stays above 0.283 (17.7x narrower)
                 (
                     BudgetKey(
                         input_format=DataFormat.Float16,
@@ -1740,7 +1762,7 @@ _SFPU_ACCURACY_BUDGET: Dict[MathOperation, Dict[BudgetKey, AccuracyContract]] = 
                     ),
                     AccuracyContract(max_ulp=71680, near_zero_atol=7.63e-05),
                 ),
-                #   wh: max 46656 ULP, p99.9 37126.2, 0% exact, ~7 mantissa bits, 2048 pts, 2026-09-17; 176 near-zero pts reach 3932160 steps and are held by the atol floor instead
+                #   wh: max 46656 ULP, p99.9 37126.2, 0% exact, ~7 mantissa bits, 2048 pts, 2026-09-17; 176 near-zero pts reach 3932160 steps and are held by the atol floor instead; floor measured at dynamic range 5; holds while the judged tile's range stays above 0.00641 (780.3x narrower)
                 (
                     BudgetKey(
                         input_format=DataFormat.Float16,
@@ -1750,7 +1772,7 @@ _SFPU_ACCURACY_BUDGET: Dict[MathOperation, Dict[BudgetKey, AccuracyContract]] = 
                     ),
                     AccuracyContract(max_ulp=46656, near_zero_atol=7.08e-07),
                 ),
-                #   wh: max 1956462594 ULP, p99.9 1941721278.4, 16% exact, ~-8 mantissa bits, 4096 pts, 2026-09-17; budget would be 2427151599, past the 419430-step point where a budget stops being tighter than the tolerance it replaces, so tolerance
+                #   wh: max 5111808 ULP, p99.9 5030666.2, 23% exact, ~1 mantissa bits, 4096 pts, 2026-09-17; budget would be 6288333, past the 419430-step point where a budget stops being tighter than the tolerance it replaces, so tolerance
                 (
                     BudgetKey(
                         input_format=DataFormat.Float16,
@@ -1759,7 +1781,7 @@ _SFPU_ACCURACY_BUDGET: Dict[MathOperation, Dict[BudgetKey, AccuracyContract]] = 
                     ),
                     AccuracyContract(metric=Metric.TOLERANCE),
                 ),
-                #   wh: max 1 ULP, p99.9 1.0, 91% exact, ~7 mantissa bits, 2048 pts, 2026-09-17; 462 near-zero pts reach 14337 steps and are held by the atol floor instead
+                #   wh: max 1 ULP, p99.9 1.0, 91% exact, ~7 mantissa bits, 2048 pts, 2026-09-17; 462 near-zero pts reach 14337 steps and are held by the atol floor instead; floor measured at dynamic range 5; holds while the judged tile's range stays above 0.0061 (819.2x narrower)
                 (
                     BudgetKey(
                         input_format=DataFormat.Float16,
@@ -1769,7 +1791,7 @@ _SFPU_ACCURACY_BUDGET: Dict[MathOperation, Dict[BudgetKey, AccuracyContract]] = 
                     ),
                     AccuracyContract(max_ulp=2, near_zero_atol=7.63e-05),
                 ),
-                #   wh: max 1 ULP, p99.9 1.0, 93% exact, ~7 mantissa bits, 2048 pts, 2026-09-17; 176 near-zero pts reach 60 steps and are held by the atol floor instead
+                #   wh: max 1 ULP, p99.9 1.0, 93% exact, ~7 mantissa bits, 2048 pts, 2026-09-17; 176 near-zero pts reach 60 steps and are held by the atol floor instead; floor measured at dynamic range 5; holds while the judged tile's range stays above 0.00226 (2207.5x narrower)
                 (
                     BudgetKey(
                         input_format=DataFormat.Float16,
@@ -1779,7 +1801,7 @@ _SFPU_ACCURACY_BUDGET: Dict[MathOperation, Dict[BudgetKey, AccuracyContract]] = 
                     ),
                     AccuracyContract(max_ulp=2, near_zero_atol=7.08e-07),
                 ),
-                #   wh: max 29855 ULP, p99.9 29630.2, 33% exact, ~-8 mantissa bits, 4096 pts, 2026-09-17; budget would be 37038, past the 6-step point where a budget stops being tighter than the tolerance it replaces, so tolerance
+                #   wh: max 79 ULP, p99.9 77.6, 37% exact, ~1 mantissa bits, 4096 pts, 2026-09-17; budget would be 98, past the 6-step point where a budget stops being tighter than the tolerance it replaces, so tolerance
                 (
                     BudgetKey(
                         input_format=DataFormat.Float16,
@@ -1896,7 +1918,7 @@ _SFPU_ACCURACY_BUDGET: Dict[MathOperation, Dict[BudgetKey, AccuracyContract]] = 
         (
             MathOperation.Log,
             budget_table(
-                #   wh: not enrolled -- functional draw reaches 65536 steps where the ramp sees 1 (2048 pts, 2026-09-17)
+                #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~23 mantissa bits, 2048 pts, 2026-09-17; not enrolled -- functional draw reaches 65536 steps where the ramp sees 1
                 (
                     BudgetKey(
                         input_format=DataFormat.Float32,
@@ -1925,7 +1947,7 @@ _SFPU_ACCURACY_BUDGET: Dict[MathOperation, Dict[BudgetKey, AccuracyContract]] = 
                     ),
                     AccuracyContract(max_ulp=1),
                 ),
-                #   wh: not enrolled -- functional draw reaches 65536 steps where the ramp sees 1 (2048 pts, 2026-09-17)
+                #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~23 mantissa bits, 2048 pts, 2026-09-17; not enrolled -- functional draw reaches 65536 steps where the ramp sees 1
                 (
                     BudgetKey(
                         input_format=DataFormat.Float16_b,
@@ -1954,7 +1976,7 @@ _SFPU_ACCURACY_BUDGET: Dict[MathOperation, Dict[BudgetKey, AccuracyContract]] = 
                     ),
                     AccuracyContract(max_ulp=1),
                 ),
-                #   wh: not enrolled -- functional draw reaches 57344 steps, ramp-derived 40960 (4096 pts, 2026-09-17)
+                #   wh: max 32768 ULP, p99.9 32768.0, 0% exact, ~8 mantissa bits, 4096 pts, 2026-09-17; not enrolled -- functional draw reaches 57344 steps, ramp-derived 40960
                 (
                     BudgetKey(
                         input_format=DataFormat.Float16,
@@ -2067,7 +2089,7 @@ _SFPU_ACCURACY_BUDGET: Dict[MathOperation, Dict[BudgetKey, AccuracyContract]] = 
                     ),
                     AccuracyContract(max_ulp=60959),
                 ),
-                #   wh: not enrolled -- near-zero tail: functional reaches 938,672,129 steps (2048 pts, 2026-09-17)
+                #   wh: max 4096 ULP, p99.9 4090.9, 0% exact, ~11 mantissa bits, 2048 pts, 2026-09-17; not enrolled -- near-zero tail: functional reaches 938,672,129 steps
                 (
                     BudgetKey(
                         input_format=DataFormat.Float16,
@@ -2077,7 +2099,7 @@ _SFPU_ACCURACY_BUDGET: Dict[MathOperation, Dict[BudgetKey, AccuracyContract]] = 
                     ),
                     AccuracyContract(metric=Metric.TOLERANCE),
                 ),
-                #   wh: not enrolled -- near-zero tail: functional reaches 14324 steps (4096 pts, 2026-09-17)
+                #   wh: max 1 ULP, p99.9 1.0, 92% exact, ~7 mantissa bits, 4096 pts, 2026-09-17; not enrolled -- near-zero tail: functional reaches 14324 steps
                 (
                     BudgetKey(
                         input_format=DataFormat.Float16,
@@ -3067,7 +3089,7 @@ def accuracy_contract(
     op, and an enrolled op asked about a format with no per-element ULP, both keep the
     behaviour they have today.
 
-    *arch* is required, unlike the other three dimensions. Those may be left unset and
+    *arch* is required, unlike the other four dimensions. Those may be left unset and
     then match only a wildcard key, which is the rule :meth:`BudgetKey.matches` documents:
     guessing would hand back a budget measured for the other setting. Architecture is the
     one dimension where the numbers explicitly do not transfer, so defaulting it to
@@ -3236,6 +3258,24 @@ def validate_registry() -> None:
     formats = gateable + [f for f in DataFormat if f not in gateable]
     approx_modes = list(ApproximationMode) + [None]
     dest_accs = list(DestAccumulation) + [None]
+    # The *input* axis is derived from the table rather than being the whole enum. Every
+    # format no key pins reproduces the `None` iteration exactly -- `matches()` lets an
+    # unset key match any value, so nothing discriminates between them -- and running all
+    # 23 turned an already-exhaustive nest of 3,726 `accuracy_contract()` calls into
+    # ~372,600, about 83% of them with no discriminating power. Derived, not narrowed to
+    # `ULP_CAPABLE_FORMATS`: unlike `output_format` there is no guard that a key's
+    # `input_format` is ULP-capable, and the sweep does cover `Bfp8_b` inputs, so an
+    # allow-list here would be a blind spot. This self-widens the moment a key pins a new
+    # input format.
+    input_formats = sorted(
+        {
+            key.input_format
+            for table in _SFPU_ACCURACY_BUDGET.values()
+            for key in table
+            if key.input_format is not None
+        },
+        key=lambda f: f.name,
+    ) + [None]
     for op, table in _SFPU_ACCURACY_BUDGET.items():
         if not table:
             raise ValueError(
@@ -3244,7 +3284,7 @@ def validate_registry() -> None:
             )
         for approx_mode in approx_modes:
             for output_format in formats:
-                for input_format in formats + [None]:
+                for input_format in input_formats:
                     for dest_acc in dest_accs:
                         for arch in ChipArchitecture:
                             accuracy_contract(

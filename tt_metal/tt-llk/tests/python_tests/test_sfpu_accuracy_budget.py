@@ -514,19 +514,335 @@ _EXPECTED_BUDGET = {
         DataFormat.Float16_b: None,
         DataFormat.Float16: None,
     },
-    # The 19 transcendentals P3 enrols. Every one of their keys pins `input_format`, and
-    # `matches()` rejects a pinned field against an unset query, so a query that leaves
-    # the input format out resolves them to the tolerance contract.
-    **{
-        op: {fmt: None for fmt in ULP_FORMATS}
-        for op in _TRANSCENDENTALS_ENROLLED_WITH_AN_INPUT_FORMAT
+}
+
+#: Every distinct budget each of the 19 sweep-derived transcendentals resolves to, per
+#: output format, over the whole keyed variant space (input format x approximation mode x
+#: Dest accumulation). ``None`` in a tuple means some variant resolves to the tolerance
+#: metric.
+#:
+#: These ops need their own table because they cannot appear in the one above: every one
+#: of their keys pins ``input_format``, and ``matches()`` rejects a pinned field against
+#: an unset query, so the input-unset queries there resolve all 19 to the tolerance
+#: contract -- which is the documented fallback, not a measurement, and pins none of the
+#: ~230 emitted numbers. Nothing else did either: ``test_no_budget_exceeds_its_formats_
+#: usable_ceiling`` only bounds them by the ceiling, so a regenerated table that widened
+#: Tanh fp32->fp32 from 2 to 400000 (still under fp32's 419430) passed the whole file.
+#:
+#: Distinct values rather than one row per variant: it is the same information in 3 lines
+#: per op instead of 24, and any change to any emitted number changes a tuple. Regenerate
+#: with the emitter in the same diff that changes the registry.
+_EXPECTED_TRANSCENDENTAL_BUDGETS = {
+    MathOperation.Acosh: {
+        DataFormat.Float32: (
+            2,
+            5117,
+            40658,
+            51200,
+            81920,
+            None,
+        ),
+        DataFormat.Float16_b: (
+            1,
+            2,
+            None,
+        ),
+        DataFormat.Float16: (None,),
+    },
+    MathOperation.Asinh: {
+        DataFormat.Float32: (
+            2,
+            5082,
+            40879,
+            51200,
+            81920,
+            None,
+        ),
+        DataFormat.Float16_b: (
+            1,
+            2,
+            None,
+        ),
+        DataFormat.Float16: (None,),
+    },
+    MathOperation.Atanh: {
+        DataFormat.Float32: (
+            3,
+            40842,
+            163840,
+            None,
+        ),
+        DataFormat.Float16_b: (
+            1,
+            2,
+            3,
+            None,
+        ),
+        DataFormat.Float16: (None,),
+    },
+    MathOperation.Celu: {
+        DataFormat.Float32: (
+            1,
+            12,
+            5088,
+            40628,
+            40960,
+            None,
+        ),
+        DataFormat.Float16_b: (
+            1,
+            2,
+            None,
+        ),
+        DataFormat.Float16: (None,),
+    },
+    MathOperation.Cos: {
+        DataFormat.Float32: (
+            1,
+            2,
+            5115,
+            40925,
+            40960,
+        ),
+        DataFormat.Float16_b: (
+            1,
+            2,
+        ),
+        DataFormat.Float16: (None,),
+    },
+    MathOperation.Elu: {
+        DataFormat.Float32: (
+            1,
+            12,
+            5088,
+            40628,
+            40960,
+            None,
+        ),
+        DataFormat.Float16_b: (
+            1,
+            2,
+            None,
+        ),
+        DataFormat.Float16: (None,),
+    },
+    MathOperation.Erfinv: {
+        DataFormat.Float32: (
+            30522,
+            30720,
+            31534,
+            62735,
+            81920,
+            None,
+        ),
+        DataFormat.Float16_b: (
+            2,
+            None,
+        ),
+        DataFormat.Float16: (None,),
+    },
+    MathOperation.Exp: {
+        DataFormat.Float32: (
+            2,
+            8813,
+            40940,
+            71680,
+            81920,
+            None,
+        ),
+        DataFormat.Float16_b: (
+            1,
+            2,
+            None,
+        ),
+        DataFormat.Float16: (None,),
+    },
+    MathOperation.Exp2: {
+        DataFormat.Float32: (
+            2,
+            5064,
+            39759,
+            71680,
+            81920,
+            None,
+        ),
+        DataFormat.Float16_b: (
+            1,
+            2,
+            None,
+        ),
+        DataFormat.Float16: (None,),
+    },
+    MathOperation.Gelu: {
+        DataFormat.Float32: (
+            46656,
+            71680,
+            81920,
+            None,
+        ),
+        DataFormat.Float16_b: (
+            2,
+            None,
+        ),
+        DataFormat.Float16: (None,),
+    },
+    MathOperation.Hardsigmoid: {
+        DataFormat.Float32: (
+            1024,
+            5120,
+            10240,
+            40960,
+            81920,
+            None,
+        ),
+        DataFormat.Float16_b: (
+            1,
+            2,
+            None,
+        ),
+        DataFormat.Float16: (None,),
+    },
+    MathOperation.Log: {
+        DataFormat.Float32: (
+            2,
+            40867,
+            None,
+        ),
+        DataFormat.Float16_b: (
+            1,
+            2,
+            None,
+        ),
+        DataFormat.Float16: (None,),
+    },
+    MathOperation.Log1p: {
+        DataFormat.Float32: (
+            2,
+            40893,
+            60959,
+            81920,
+            None,
+        ),
+        DataFormat.Float16_b: (
+            1,
+            2,
+            None,
+        ),
+        DataFormat.Float16: (None,),
+    },
+    MathOperation.Reciprocal: {
+        DataFormat.Float32: (
+            2,
+            2060,
+            5114,
+            6649,
+            10240,
+            40799,
+            40960,
+            41598,
+            81920,
+        ),
+        DataFormat.Float16_b: (
+            1,
+            2,
+        ),
+        DataFormat.Float16: (None,),
+    },
+    MathOperation.Rsqrt: {
+        DataFormat.Float32: (
+            1,
+            3,
+            5110,
+            18409,
+            21954,
+            40904,
+            40960,
+            51200,
+            54068,
+            81920,
+        ),
+        DataFormat.Float16_b: (
+            1,
+            2,
+        ),
+        DataFormat.Float16: (None,),
+    },
+    MathOperation.Silu: {
+        DataFormat.Float32: (
+            3,
+            5110,
+            40955,
+            71680,
+            81920,
+            None,
+        ),
+        DataFormat.Float16_b: (
+            1,
+            2,
+            None,
+        ),
+        DataFormat.Float16: (None,),
+    },
+    MathOperation.Sin: {
+        DataFormat.Float32: (
+            1,
+            2,
+            5115,
+            40885,
+            40960,
+        ),
+        DataFormat.Float16_b: (
+            1,
+            2,
+        ),
+        DataFormat.Float16: (None,),
+    },
+    MathOperation.Sqrt: {
+        DataFormat.Float32: (
+            1,
+            2,
+            5115,
+            18415,
+            23392,
+            40920,
+            40960,
+            51200,
+            59334,
+            81920,
+        ),
+        DataFormat.Float16_b: (
+            1,
+            2,
+        ),
+        DataFormat.Float16: (None,),
+    },
+    MathOperation.Tanh: {
+        DataFormat.Float32: (
+            2,
+            5110,
+            40675,
+            61440,
+            81920,
+            None,
+        ),
+        DataFormat.Float16_b: (
+            1,
+            2,
+            None,
+        ),
+        DataFormat.Float16: (None,),
     },
 }
 
-#: The Float32 column of the above. Derived, not a second hand-written copy, so the two
-#: cannot disagree about the same op.
+#: The Float32 column of ``_EXPECTED_BUDGET``, plus the transcendentals, which resolve
+#: to tolerance for an input-unset query. Derived, not a second hand-written copy, so the
+#: two cannot disagree about the same op.
 _EXPECTED_FLOAT32_BUDGET = {
-    op: per_format[DataFormat.Float32] for op, per_format in _EXPECTED_BUDGET.items()
+    **{
+        op: per_format[DataFormat.Float32]
+        for op, per_format in _EXPECTED_BUDGET.items()
+    },
+    **{op: None for op in _TRANSCENDENTALS_ENROLLED_WITH_AN_INPUT_FORMAT},
 }
 
 
@@ -539,7 +855,7 @@ def test_every_enrolled_op_resolves_to_the_budget_it_declares_on_every_format():
     it stops failing" drift the registry's docstrings warn against, on exactly the
     entries nothing else held.
     """
-    assert set(_EXPECTED_BUDGET) == set(
+    assert set(_EXPECTED_BUDGET) | set(_EXPECTED_TRANSCENDENTAL_BUDGETS) == set(
         enrolled_ops()
     ), "an op was enrolled or removed without updating the expected budgets"
     for op, per_format in sorted(_EXPECTED_BUDGET.items(), key=lambda kv: kv[0].name):
@@ -558,6 +874,44 @@ def test_every_enrolled_op_resolves_to_the_budget_it_declares_on_every_format():
             else:
                 assert contract.metric is Metric.ULP, where
                 assert contract.max_ulp == expected, where
+
+
+def test_every_sweep_derived_budget_is_the_number_that_was_measured():
+    """The value pin for the ~230 numbers the emitter produced.
+
+    Nothing else holds them. ``test_every_enrolled_op_resolves_to_something_usable_on_a_
+    float_format`` asserts properties ``AccuracyContract.__post_init__`` already
+    guarantees, and ``test_no_budget_exceeds_its_formats_usable_ceiling`` only bounds
+    them from above -- so widening Tanh fp32->fp32 from 2 to 400000 passed every test in
+    this file. It fails here.
+    """
+    assert set(_EXPECTED_TRANSCENDENTAL_BUDGETS) == set(
+        _TRANSCENDENTALS_ENROLLED_WITH_AN_INPUT_FORMAT
+    ), "a sweep-derived op was enrolled or removed without updating the expected budgets"
+    for op, per_format in sorted(
+        _EXPECTED_TRANSCENDENTAL_BUDGETS.items(), key=lambda kv: kv[0].name
+    ):
+        assert set(per_format) == set(ULP_FORMATS), op.name
+        for fmt, expected in per_format.items():
+            seen = set()
+            for input_format in ULP_FORMATS:
+                for approx_mode in ApproximationMode:
+                    for dest_acc in DestAccumulation:
+                        contract = accuracy_contract(
+                            op,
+                            output_format=fmt,
+                            input_format=input_format,
+                            approx_mode=approx_mode,
+                            dest_acc=dest_acc,
+                            arch=MEASURED_ARCH,
+                        )
+                        seen.add(
+                            contract.max_ulp if contract.metric is Metric.ULP else None
+                        )
+            ordered = tuple(sorted(v for v in seen if v is not None)) + (
+                (None,) if None in seen else ()
+            )
+            assert ordered == expected, f"{op.name} on {fmt.name}"
 
 
 def test_every_enrolled_op_resolves_to_the_budget_it_declares_on_float32():
@@ -588,6 +942,12 @@ def test_every_enrolled_op_resolves_to_the_budget_it_declares_on_float32():
             assert contract.max_ulp == expected, op.name
 
 
+#: The enrolled ops that can never reach the ULP branch, because their entire contract
+#: set is ``_COARSE_LUT_TOLERANCE`` -- the coarse 3-segment LUT pair, which keeps the
+#: tolerance metric until there is a measured step budget to replace it with.
+ONLY_EVER_TOLERANCE = frozenset({MathOperation.SigmoidAppx, MathOperation.GeluAppx})
+
+
 def test_every_enrolled_op_resolves_to_something_usable_on_a_float_format():
     """Through ``_every_variant``, not a hand-rolled loop with ``input_format`` unset.
 
@@ -603,9 +963,11 @@ def test_every_enrolled_op_resolves_to_something_usable_on_a_float_format():
             if contract.metric == Metric.ULP:
                 assert contract.max_ulp is not None and contract.max_ulp >= 0
                 saw_ulp.add(op)
-    # The regression itself: the sweep has to reach the ULP branch for most enrolled ops,
-    # not silently resolve every one of them to tolerance.
-    assert len(saw_ulp) >= len(enrolled_ops()) - 2, sorted(
+    # The regression itself: the sweep has to reach the ULP branch for every enrolled op
+    # except the two whose entire contract set is _COARSE_LUT_TOLERANCE, not silently
+    # resolve all of them to tolerance. Named rather than written as a bare "- 2", so a
+    # third op quietly slipping off the ULP branch fails instead of fitting the slack.
+    assert set(enrolled_ops()) - saw_ulp == ONLY_EVER_TOLERANCE, sorted(
         op.name for op in set(enrolled_ops()) - saw_ulp
     )
 
