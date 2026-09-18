@@ -136,20 +136,34 @@ Run the focused randomized comparison with:
 tests/scripts/single_card/run_bh_tensor_prefetcher_mpfe_mixed.py
 ```
 
-It exhaustively covers all 36 active tuples `0/M/H`, where
-`0 <= M <= H <= 7`. Every tuple runs in three modes: static without sender
-synchronization, static with synchronization, and synchronized dynamic idle
-`000` to active `0/M/H`. The default context sweep is 128, 256, 384, 512, 640,
-768, 896, and 1024, densely covering the prefetch/ordinary crossover.
-Configure it with
+The default screening run covers representative weights `000`, `001`, `002`,
+`005`, `014`, `015`, `037`, and `077` at contexts 384, 512, 640, and 768.
+Every tuple runs in three modes: static without sender synchronization, static
+with synchronization, and synchronized dynamic idle `000` to active `0/M/H`.
+Three independent processes per configuration and 100 trace replays per process
+produce 288 processes total.
+
+Configure it with `MPFE_MIXED_WEIGHTS`, `MPFE_MIXED_MODES`,
 `MPFE_MIXED_CONTEXTS`, `MPFE_MIXED_ITERATIONS`, `BENCH_TRACE_REPEATS`,
-`MPFE_RANDOM_SEED`, and `OUTPUT_DIR`. Results include raw JSONL, `summary.csv`,
+`MPFE_RANDOM_SEED`, and `OUTPUT_DIR`. Set `MPFE_MIXED_WEIGHTS=all` to restore
+the exhaustive 36-tuple spread. Results include raw JSONL, `summary.csv`,
 `paired-comparisons.csv`, `rankings.csv`, the exact manifest, and pytest logs.
 The reports separately measure active priority, sender synchronization, and
 dynamic idle restoration; the final comparison holds active weights and
 synchronization constant. Modes for one tuple run adjacently in randomized
-order, while tuple order changes on every pass. Five default iterations execute
-4,320 fresh benchmark processes, so use `MPFE_MIXED_ITERATIONS=1` for a pilot.
+order, while tuple order changes on every pass.
+
+After selecting two weights, run a higher-confidence confirmation containing
+only the comparison that matters:
+
+```bash
+MPFE_MIXED_WEIGHTS=001,002 \
+MPFE_MIXED_MODES=static-sync,dynamic-sync \
+MPFE_MIXED_ITERATIONS=10 \
+BENCH_TRACE_REPEATS=100 \
+OUTPUT_DIR=generated/mpfe-mixed-confirm \
+tests/scripts/single_card/run_bh_tensor_prefetcher_mpfe_mixed.py
+```
 
 Dynamic priority can help only when ordinary work continues after a prefetch
 request finishes. If prefetch occupies the entire SDPA interval, dynamic should

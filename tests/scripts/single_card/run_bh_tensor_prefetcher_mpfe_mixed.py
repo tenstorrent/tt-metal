@@ -48,20 +48,62 @@ class Policy:
     synchronize_senders: bool = True
 
 
-ACTIVE_WEIGHTS = tuple(
+ALL_ACTIVE_WEIGHTS = tuple(
     (0, medium, high)
     for medium in range(8)
     for high in range(medium, 8)
 )
+DEFAULT_ACTIVE_WEIGHTS = (
+    (0, 0, 0),
+    (0, 0, 1),
+    (0, 0, 2),
+    (0, 0, 5),
+    (0, 1, 4),
+    (0, 1, 5),
+    (0, 3, 7),
+    (0, 7, 7),
+)
+ALL_MODES = ("static-no-sync", "static-sync", "dynamic-sync")
 
 
 def weight_label(weights: tuple[int, int, int]) -> str:
     return "".join(str(weight) for weight in weights)
 
 
+def parse_weights() -> tuple[tuple[int, int, int], ...]:
+    value = os.environ.get("MPFE_MIXED_WEIGHTS")
+    if value is None:
+        return DEFAULT_ACTIVE_WEIGHTS
+    if value.strip().lower() == "all":
+        return ALL_ACTIVE_WEIGHTS
+    weights = []
+    for label in value.split(","):
+        label = label.strip()
+        if len(label) != 3 or any(character < "0" or character > "7" for character in label):
+            raise ValueError("MPFE_MIXED_WEIGHTS must be 'all' or comma-separated tuples such as 001,015")
+        parsed = tuple(int(character) for character in label)
+        if parsed[0] != 0 or parsed[1] > parsed[2]:
+            raise ValueError(f"MPFE_MIXED_WEIGHTS entry {label} must have the form 0/M/H with M <= H")
+        weights.append(parsed)
+    if not weights or len(set(weights)) != len(weights):
+        raise ValueError("MPFE_MIXED_WEIGHTS must contain unique tuples")
+    return tuple(weights)
+
+
+def parse_modes() -> tuple[str, ...]:
+    modes = tuple(mode.strip() for mode in os.environ.get("MPFE_MIXED_MODES", ",".join(ALL_MODES)).split(","))
+    if not modes or len(set(modes)) != len(modes) or any(mode not in ALL_MODES for mode in modes):
+        raise ValueError(f"MPFE_MIXED_MODES must contain unique values from {ALL_MODES}")
+    return modes
+
+
+ACTIVE_WEIGHTS = parse_weights()
+ACTIVE_MODES = parse_modes()
+
+
 def policies_for_weights(weights: tuple[int, int, int]) -> tuple[Policy, ...]:
     label = weight_label(weights)
-    return (
+    policies = (
         Policy(
             label=f"static-{label}-no-sync",
             active=weights,
@@ -76,6 +118,7 @@ def policies_for_weights(weights: tuple[int, int, int]) -> tuple[Policy, ...]:
             idle=(0, 0, 0),
         ),
     )
+    return tuple(policy for policy in policies if policy.mode in ACTIVE_MODES)
 
 
 POLICIES_BY_WEIGHTS = {weights: policies_for_weights(weights) for weights in ACTIVE_WEIGHTS}
@@ -92,7 +135,7 @@ def env_int(name: str, default: int, minimum: int = 1) -> int:
 def parse_contexts() -> tuple[int, ...]:
     contexts = tuple(
         int(value.strip())
-        for value in os.environ.get("MPFE_MIXED_CONTEXTS", "128,256,384,512,640,768,896,1024").split(",")
+        for value in os.environ.get("MPFE_MIXED_CONTEXTS", "384,512,640,768").split(",")
     )
     if not contexts or any(context < 128 or context % 128 != 0 for context in contexts):
         raise ValueError("MPFE_MIXED_CONTEXTS must contain comma-separated multiples of 128")
@@ -145,11 +188,11 @@ class MixedRunner:
         self.python = shlex.split(os.environ.get("PYTHON", sys.executable))
         self.pytest_args = pytest_args
         self.contexts = parse_contexts()
-        self.iterations = env_int("MPFE_MIXED_ITERATIONS", 5)
-        self.trace_repeats = env_int("BENCH_TRACE_REPEATS", 20)
+        self.iterations = env_int("MPFE_MIXED_ITERATIONS", 3)
+        self.trace_repeats = env_int("BENCH_TRACE_REPEATS", 100)
         self.seed = env_int("MPFE_RANDOM_SEED", 0x4D495845, minimum=0)
         self.manifest = {
-            "schema_version": 4,
+            "schema_version": 5,
             "git_revision": subprocess.check_output(
                 ["git", "rev-parse", "HEAD"], cwd=TT_METAL_HOME, text=True
             ).strip(),
@@ -392,6 +435,7 @@ def write_reports(output_dir: Path, records: list[dict], contexts: tuple[int, ..
             by_key = {
                 (record["suite_iteration"], record["run_label"]): record for record in context_records
             }
+            available_labels = {record["run_label"] for record in context_records}
             for weights in ACTIVE_WEIGHTS:
                 label = weight_label(weights)
                 comparisons = (
@@ -404,6 +448,8 @@ def write_reports(output_dir: Path, records: list[dict], contexts: tuple[int, ..
                     ),
                 )
                 for comparison, candidate, baseline in comparisons:
+                    if candidate not in available_labels or baseline not in available_labels:
+                        continue
                     deltas = [
                         percent_change(
                             by_key[(iteration, baseline)]["per_step_us"],
@@ -450,14 +496,13 @@ def write_reports(output_dir: Path, records: list[dict], contexts: tuple[int, ..
         )
         for context in contexts:
             context_records = [record for record in records if record["sdpa_context"] == context]
-            baseline = mean(
-                [
-                    record["per_step_us"]
-                    for record in context_records
-                    if record["run_label"] == "static-000-no-sync"
-                ]
-            )
-            for mode in ("static-no-sync", "static-sync", "dynamic-sync"):
+            baseline_values = [
+                record["per_step_us"]
+                for record in context_records
+                if record["run_label"] == "static-000-no-sync"
+            ]
+            baseline = mean(baseline_values) if baseline_values else None
+            for mode in ACTIVE_MODES:
                 ranked = []
                 for weights in ACTIVE_WEIGHTS:
                     policy = next(
@@ -481,7 +526,7 @@ def write_reports(output_dir: Path, records: list[dict], contexts: tuple[int, ..
                             weight_label(policy.active),
                             policy.label,
                             f"{step_us:.6f}",
-                            f"{percent_change(baseline, step_us):.6f}",
+                            f"{percent_change(baseline, step_us):.6f}" if baseline is not None else "",
                             sample_count,
                         ]
                     )
