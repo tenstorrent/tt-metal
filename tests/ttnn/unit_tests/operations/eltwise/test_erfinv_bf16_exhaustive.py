@@ -37,6 +37,8 @@ _ACTIONS = (
     ("below", 0xBF800000, True, "neg_inf"),
     ("above", 0x3F800000, True, "pos_inf"),
 )
+_DOMAIN_ACTIONS = ()
+_LATE_RAW_CLASSES = ()
 _EXACT_CLASS_WORD = {
     "pos_inf": np.uint16(0x7F80),
     "neg_inf": np.uint16(0xFF80),
@@ -59,7 +61,8 @@ def _ulp_spacing(values):
     words = (np.abs(values).astype(np.float32).view(np.uint32) >> 16).astype(np.uint32)
     upper = (np.minimum(words + 1, 0x7F80) << 16).view(np.float32)
     lower = (words << 16).view(np.float32)
-    return (upper - lower).astype(np.float64)
+    spacing = (upper - lower).astype(np.float64)
+    return np.where(np.isinf(upper), np.float64(2.0**120), spacing)
 
 
 def _raw_classes(words):
@@ -109,7 +112,8 @@ def _evaluated_zero_sign_matches(result_words, golden, rounded):
 
 def _reference(values):
     module = importlib.import_module(_REFERENCE_MODULE)
-    return getattr(module, _REFERENCE_FUNCTION)(values)
+    return getattr(module, _REFERENCE_FUNCTION)(values, **{})
+
 
 
 @pytest.mark.skipif(
@@ -120,7 +124,7 @@ def test_erfinv_bf16_exhaustive(device):
     input_words = torch.arange(65536, dtype=torch.int32).to(torch.uint16)
     host = input_words.view(torch.bfloat16).reshape(256, 256)
     device_input = ttnn.from_torch(host, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    result = ttnn.to_torch(ttnn.erfinv(device_input)).to(torch.bfloat16)
+    result = ttnn.to_torch(ttnn.erfinv(device_input, **{})).to(torch.bfloat16)
     result_words = _words(result)
 
     raw = input_words.cpu().numpy().astype(np.uint16)
@@ -134,7 +138,7 @@ def test_erfinv_bf16_exhaustive(device):
     assert np.all((nan_words & 0x7F80) == 0x7F80)
     assert np.all((nan_words & 0x007F) != 0)
 
-    scored = expected == "finite_other"
+    scored = (expected == "finite_other")
     x = host.to(torch.float64).numpy().reshape(-1)[scored]
     golden = _reference(torch.from_numpy(x)).numpy()
     rounded = _bf16_round_ftz(golden)

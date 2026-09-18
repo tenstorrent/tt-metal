@@ -2,6 +2,20 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import torch
+import pytest
+import ttnn
+from tests.ttnn.utils_for_testing import assert_equal, assert_with_ulp, assert_with_pcc, flush_subnormal_values_to_zero
+from tests.ttnn.unit_tests.operations.eltwise.eltwise_test_utils import (
+    generate_bfloat16_bits,
+    generate_bfloat16_bits_in_range,
+    flush_to_zero,
+    to_tt_tensor,
+    SMALLEST_NORMAL_BF16,
+)
+
+pytestmark = pytest.mark.use_module_device
+
 """
 Category 1: basic_unary_math (no extra parameters)
 Trigonometric, hyperbolic, comparison, rounding, special math, logical, and utility ops
@@ -54,25 +68,6 @@ Trigonometric, hyperbolic, comparison, rounding, special math, logical, and util
 46. ttnn.logical_not      - Logical NOT
 47. ttnn.identity         - Identity (copy)
 """
-
-import pytest
-import torch
-import ttnn
-
-from tests.ttnn.unit_tests.operations.eltwise.eltwise_test_utils import (
-    SMALLEST_NORMAL_BF16,
-    flush_to_zero,
-    generate_bfloat16_bits,
-    generate_bfloat16_bits_in_range,
-    to_tt_tensor,
-)
-from tests.ttnn.utils_for_testing import (
-    assert_equal,
-    assert_with_pcc,
-    assert_with_ulp,
-)
-
-pytestmark = pytest.mark.use_module_device
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -406,15 +401,15 @@ def test_square(device):
 # ─────────────────────────────────────────────────────────────────────────────
 # cbrt: cube root, valid for all finite inputs.
 # ─────────────────────────────────────────────────────────────────────────────
+"""
+Golden must be evaluated in float64 because bfloat16's non-representable 1/3
+exponent rounds the reference incorrectly; the non-representable 1/3 was rounding
+the reference up to 2 ULP short of the true cube root while the kernel was correct.
+Subnormal bf16 inputs are flushed to zero on device
+"""
 
 
 def test_cbrt(device):
-    """Golden is float64 because bf16 cannot represent 1/3 exactly.
-
-    Evaluating 1/3 in bfloat16 rounded the reference up to 2 ULP short of the
-    true cube root while the kernel was correct. Subnormal bf16 inputs are
-    flushed to zero on device.
-    """
     input_tensor = generate_bfloat16_bits_in_range(-1e38, 1e38)
 
     tt_in = to_tt_tensor(input_tensor, device)
