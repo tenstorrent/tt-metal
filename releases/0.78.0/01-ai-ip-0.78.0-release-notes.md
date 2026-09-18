@@ -161,11 +161,6 @@ in the release can be accounted for.
 - add support for perf testing on Quasar ([PR 53910](https://github.com/tenstorrent/tt-metal/pull/53910))
 - Add Quasar ternary SFPU where performance tests ([PR 53952](https://github.com/tenstorrent/tt-metal/pull/53952))
 
-### LLK perf harness shared by Quasar (WH/BH-scoped, not Quasar-specific)  (2)
-
-- Add WH/BH perf\_eltwise\_unary\_datacopy (Quasar-style shared kernel) ([PR 53942](https://github.com/tenstorrent/tt-metal/pull/53942))
-- Add WH/BH perf\_pack (Quasar-style shared kernel) ([PR 53944](https://github.com/tenstorrent/tt-metal/pull/53944))
-
 ### Watcher, DPRINT & runtime plumbing  (8)
 
 - Cover Quasar in runtime arch branches that gate on Blackhole ([PR 49415](https://github.com/tenstorrent/tt-metal/pull/49415))
