@@ -25,8 +25,13 @@ from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.reference.kda import KDAReferenceState, kda_forward_reference
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric_1d_device_params, torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import KIMI_K3_FIRST_KDA_LAYER
+from models.demos.deepseek_v3_d_p.tests.kda.perf.carry_experiment_resources import (
+    _device_program_label,
+    _log_device_program_times,
+)
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     KimiK3TestCase,
+    _deallocate_state,
     check_kimi_k3_accuracy,
     make_actual_start,
     make_kimi_k3_device_case,
@@ -34,7 +39,6 @@ from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     make_synthetic_kimi_k3_test_case,
 )
 from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState, ttKDA
-from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
 
 pytestmark = [
     run_for_blackhole(),
@@ -176,32 +180,6 @@ def _allocate_state(layer: ttKDA) -> KdaState:
     return layer.allocate_state(batch_size=1)
 
 
-def _deallocate_state(state: KdaState) -> None:
-    ttnn.deallocate(state.recurrent)
-    ttnn.deallocate(state.convolution)
-
-
-def _device_program_label(kernel_sources: tuple[str, ...]) -> str:
-    names = set()
-    for source in kernel_sources:
-        parts = source.replace("\\", "/").split("/")
-        if "operations" not in parts:
-            continue
-        index = parts.index("operations") + 1
-        experimental = index < len(parts) and parts[index] == "experimental"
-        if experimental:
-            index += 1
-        if index < len(parts):
-            name = f"{'experimental.' if experimental else ''}{parts[index]}"
-            if name.endswith(("kda", "ccl")) and index + 1 < len(parts):
-                name = f"{name}.{parts[index + 1]}"
-            names.add(name)
-    if names:
-        return "+".join(sorted(names))
-    basenames = {Path(source).stem for source in kernel_sources}
-    return "+".join(sorted(basenames)) if basenames else "unknown"
-
-
 def test_device_program_label_preserves_material_operation_identity() -> None:
     assert (
         _device_program_label(("src/operations/experimental/kda/recurrent_chunk_scan/kernel.cpp",))
@@ -244,119 +222,6 @@ def test_synthetic_performance_uses_two_sided_margin(layout, monkeypatch, expect
         _assert_synthetic_performance(layout, reference_ms * 0.96)
     with expect_error(AssertionError, "outside performance range"):
         _assert_synthetic_performance(layout, reference_ms * 1.04)
-
-
-def _log_device_program_times(
-    mesh_device: ttnn.MeshDevice,
-    layer: ttKDA,
-    hidden: ttnn.Tensor,
-    layout: str,
-    *,
-    actual_start: int = 0,
-) -> list[dict[str, Any]]:
-    if not ttnn.device.IsProgramRealtimeProfilerActive():
-        raise RuntimeError(f"real-time profiler is inactive for the {layout} KDA e2e device-time breakdown")
-    state = _allocate_state(layer)
-    output = None
-    next_state = None
-    profiled_results: list[tuple[ttnn.Tensor, KdaState]] = []
-
-    actual_start_tt = make_actual_start(mesh_device, actual_start)
-
-    def run_profiled_forward() -> tuple[ttnn.Tensor, KdaState]:
-        result = layer.forward(hidden, state, actual_start_tt)
-        profiled_results.append(result)
-        return result
-
-    try:
-        (output, next_state), records = profile_realtime_program(
-            mesh_device,
-            run_profiled_forward,
-            collect_all=True,
-            record_timeout_seconds=30.0,
-        )
-        per_program: dict[int, dict[str, Any]] = {}
-        for record in records:
-            runtime_id = record["runtime_id"]
-            if not runtime_id:
-                continue
-            entry = per_program.setdefault(
-                runtime_id,
-                {
-                    "duration_ns": 0.0,
-                    "kernel_sources": record["kernel_sources"],
-                    "chip_ids": set(),
-                    "record_count": 0,
-                },
-            )
-            entry["duration_ns"] = max(entry["duration_ns"], record["duration_ns"])
-            entry["chip_ids"].add(record["chip_id"])
-            entry["record_count"] += 1
-        if not per_program:
-            raise RuntimeError("real-time profiler returned no KDA program records")
-        expected_chip_count = mesh_device.get_num_devices()
-        programs: list[dict[str, Any]] = [
-            {
-                "sequence": sequence,
-                "name": _device_program_label(info["kernel_sources"]),
-                "device_time_ns": round(float(info["duration_ns"]), 3),
-                "chip_count": len(info["chip_ids"]),
-                "record_count": int(info["record_count"]),
-                "complete": len(info["chip_ids"]) == expected_chip_count,
-            }
-            for sequence, info in enumerate(per_program.values())
-        ]
-        # Summary and scan intentionally share one device-operation factory and
-        # therefore the same kernel source paths.  In a KDA layer they are the
-        # first and second occurrence, respectively; name the first explicitly
-        # so topology and timings remain attributable to the two distinct calls.
-        recurrent_programs = [
-            program for program in programs if program["name"] == "experimental.kda.recurrent_chunk_scan"
-        ]
-        if len(recurrent_programs) == 2:
-            recurrent_programs[0]["name"] = "experimental.kda.summarize_chunk_recurrence"
-        incomplete_program_sequences = [program["sequence"] for program in programs if not program["complete"]]
-        durations_by_name: dict[str, list[float]] = {}
-        for program in programs:
-            durations_by_name.setdefault(program["name"], []).append(program["device_time_ns"])
-        operation_summary = [
-            {
-                "name": name,
-                "program_count": len(durations),
-                "median_device_time_ns": round(statistics.median(durations), 3),
-                "max_device_time_ns": round(max(durations), 3),
-            }
-            for name, durations in durations_by_name.items()
-        ]
-        print(
-            "KDA_LAYER_DEVICE_TIMES="
-            + json.dumps(
-                {
-                    "layout": layout,
-                    "actual_start": actual_start,
-                    "measurement": "one warm eager forward outside gated trace samples",
-                    "duration_semantics": (
-                        "per-program max across reported chip records; programs may overlap and durations must not be summed"
-                    ),
-                    "chip_completeness": {
-                        "expected_chip_count": expected_chip_count,
-                        "incomplete_program_sequences": incomplete_program_sequences,
-                    },
-                    "operation_summary": operation_summary,
-                    "programs": programs,
-                },
-                sort_keys=True,
-            )
-        )
-        return programs
-    finally:
-        if profiled_results and output is None:
-            output, next_state = profiled_results[-1]
-        if output is not None:
-            ttnn.deallocate(output)
-        if next_state is not None:
-            _deallocate_state(next_state)
-        _deallocate_state(state)
 
 
 def _trace_wall_samples_ms(

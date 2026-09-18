@@ -19,14 +19,12 @@ import pytest
 
 import ttnn
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric_1d_device_params
-from models.demos.deepseek_v3_d_p.tests.kda.perf.test_layer_perf import (
-    _REPETITIONS,
-    _SEQUENCE,
-    _TIMING_SAMPLES,
-    _allocate_state,
-    _deallocate_state,
-    _log_device_program_times,
-)
+from models.demos.deepseek_v3_d_p.tests.kda.perf.carry_experiment_resources import _log_device_program_times
+from models.demos.deepseek_v3_d_p.tests.kda.utils import _deallocate_state
+
+_SEQUENCE = 5120
+_REPETITIONS = 10
+_TIMING_SAMPLES = 5
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     make_actual_start,
     make_kimi_k3_device_case,
@@ -90,7 +88,7 @@ def test_offset_handling_cost(
     samples: dict[str, list[float]] = {name: [] for name in sweep}
     sweep_items = list(sweep.items())
     actual_start = make_actual_start(mesh_device, 0)
-    state = _allocate_state(layer)
+    state = layer.allocate_state(batch_size=1)
     for _ in range(2):
         warm_output, warm_state = layer.forward(hidden_tt, state, actual_start)
         ttnn.synchronize_device(mesh_device)

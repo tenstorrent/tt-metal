@@ -3,6 +3,7 @@
 """Existing collective alternatives for replicated KDA final states."""
 
 import json
+import os
 import time
 
 import pytest
@@ -95,7 +96,10 @@ def _run_publication(mesh_device, tp_axis, kind):
                 check(output, source)
                 release(output)
         if source == 0:
-            from models.demos.deepseek_v3_d_p.tests.kda.perf.carry_experiment_resources import capture_resources
+            from models.demos.deepseek_v3_d_p.tests.kda.perf.carry_experiment_resources import (
+                capture_resources,
+                profile_resources,
+            )
 
             for variant in variants:
                 resource_output = capture_resources(
@@ -106,6 +110,16 @@ def _run_publication(mesh_device, tp_axis, kind):
                 if resource_output is not None:
                     check(resource_output, source)
                     release(resource_output)
+                    if os.environ.get("KDA_PROFILE_CARRY") == "1":
+                        label = f"publication-{kind}-SP{sp}TP{tp}-axis{axis}-{variant}"
+                        if sp == 1:
+                            print("KDA_PROGRAM_EXPERIMENT=" + json.dumps(dict(label=label, programs=[])))
+                        else:
+                            profiled_output = profile_resources(
+                                lambda: publish(state, axis=axis, source=source, variant=variant), mesh_device, label
+                            )
+                            check(profiled_output, source)
+                            release(profiled_output)
         samples = {v: [] for v in variants}
         for round_index in range(10):
             order = variants if round_index % 2 == 0 else list(reversed(variants))

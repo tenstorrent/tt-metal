@@ -36,6 +36,10 @@ from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
     collect_accuracy_and_determinism_results,
 )
 
+from tests.ttnn.nightly.unit_tests.operations.experimental.kda.recurrent_chunk_scan_test_utils import (
+    _segmented_summary_oracle,
+)
+
 pytestmark = [
     run_for_blackhole(),
     pytest.mark.use_module_device({"l1_small_size": 24576, "trace_region_size": 2_000_000}),
@@ -186,36 +190,6 @@ def test_summarize_chunk_recurrence_has_no_range_controls(device: ttnn.Device, k
     inputs = device_protocol(host_protocol(2, 4, 32, 32), device)
     with expect_error(TypeError, "incompatible function arguments"):
         ttnn.experimental.kda.summarize_chunk_recurrence(*inputs, **{keyword: 1})
-
-
-def _segmented_summary_oracle(
-    host_inputs: tuple[torch.Tensor, ...], groups_per_head: int, chunks_per_group: int, wrap_chunk: int
-) -> tuple[torch.Tensor, ...]:
-    folded_heads = host_inputs[0].shape[0]
-    dim = host_inputs[1].shape[-1]
-    expected_parts: list[list[torch.Tensor]] = [[], [], [], []]
-    identity_a = torch.eye(dim, dtype=torch.float32).unsqueeze(0)
-    identity_b = torch.zeros((1, dim, dim), dtype=torch.float32)
-    for folded_head in range(folded_heads):
-        group = folded_head % groups_per_head
-        group_start = group * chunks_per_group
-        group_end = group_start + chunks_per_group
-        head_count = max(min(wrap_chunk, group_end) - group_start, 0)
-        tail_start = min(max(wrap_chunk - group_start, 0), chunks_per_group)
-        for segment_start, segment_end, destination in (
-            (0, head_count, 0),
-            (tail_start, chunks_per_group, 2),
-        ):
-            if segment_start == segment_end:
-                affine_a, affine_b = identity_a, identity_b
-            else:
-                segment = tuple(
-                    tensor[folded_head : folded_head + 1, segment_start:segment_end] for tensor in host_inputs
-                )
-                affine_a, affine_b = summary_oracle(segment)
-            expected_parts[destination].append(affine_a)
-            expected_parts[destination + 1].append(affine_b)
-    return tuple(torch.cat(parts, dim=0) for parts in expected_parts)
 
 
 def _regression_protocol(

@@ -6,6 +6,7 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 
 import torch
+import torch.nn.functional as F
 import ttnn
 
 
@@ -192,3 +193,92 @@ def collect_accuracy_and_determinism_results(
         ttnn.deallocate(scratch)
     ttnn.deallocate(mismatch_marker)
     return reference_outputs, reference_outputs_host, mismatch_marker_host
+
+
+def _height_sharded_memory_config(
+    device: ttnn.Device, leading: int, matrix_height: int, matrix_width: int
+) -> ttnn.MemoryConfig:
+    cores = ttnn.num_cores_to_corerangeset(leading, device.compute_with_storage_grid_size(), row_wise=True)
+    return ttnn.create_sharded_memory_config(
+        (leading, matrix_height, matrix_width),
+        core_grid=cores,
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+
+def qkv_host_inputs(
+    *,
+    sequence: int = 64,
+    widths: tuple[int, int, int] = (512, 512, 512),
+    batch: int = 1,
+    history_rows: int = 3,
+    seed: int = 223,
+) -> tuple[torch.Tensor, torch.Tensor, tuple[torch.Tensor, ...]]:
+    generator = torch.Generator().manual_seed(seed)
+    channels = sum(widths)
+    inputs = torch.randn(batch, sequence, channels, generator=generator, dtype=torch.bfloat16)
+    history = torch.randn(batch, history_rows, channels, generator=generator, dtype=torch.bfloat16)
+    taps = tuple(torch.randn(1, 1, channels, generator=generator, dtype=torch.bfloat16) for _ in range(4))
+    return inputs, history, taps
+
+
+def qkv_to_device(
+    tensor: torch.Tensor,
+    device: ttnn.Device,
+    *,
+    dtype: ttnn.DataType = ttnn.bfloat16,
+    layout: ttnn.Layout,
+    memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
+) -> ttnn.Tensor:
+    return ttnn.from_torch(tensor, dtype=dtype, layout=layout, device=device, memory_config=memory_config)
+
+
+def qkv_device_inputs(
+    device: ttnn.Device,
+    *,
+    sequence: int = 64,
+    widths: tuple[int, int, int] = (512, 512, 512),
+    batch: int = 1,
+    history_rows: int = 3,
+    seed: int = 223,
+) -> tuple[
+    tuple[torch.Tensor, torch.Tensor, tuple[torch.Tensor, ...]],
+    tuple[ttnn.Tensor, ttnn.Tensor, tuple[ttnn.Tensor, ...]],
+]:
+    host = qkv_host_inputs(
+        sequence=sequence,
+        widths=widths,
+        batch=batch,
+        history_rows=history_rows,
+        seed=seed,
+    )
+    inputs, history, taps = host
+    return host, (
+        qkv_to_device(inputs, device, layout=ttnn.ROW_MAJOR_LAYOUT),
+        qkv_to_device(history, device, layout=ttnn.ROW_MAJOR_LAYOUT),
+        tuple(qkv_to_device(tap, device, layout=ttnn.TILE_LAYOUT) for tap in taps),
+    )
+
+
+def qkv_reference(
+    inputs: torch.Tensor,
+    history: torch.Tensor,
+    taps: tuple[torch.Tensor, ...],
+    widths: tuple[int, int, int],
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    window = torch.cat((history, inputs), dim=1)
+    convolved = sum(window[:, tap : tap + inputs.shape[1]] * taps[tap] for tap in range(4))
+    return F.silu(convolved).split(widths, dim=-1)
+
+
+def make_actual_start(device: ttnn.MeshDevice, actual_start: int = 0) -> ttnn.Tensor:
+    """Allocate caller-owned start metadata before any trace capture."""
+    return ttnn.from_torch(
+        torch.tensor([actual_start], dtype=torch.int64),
+        device=device,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+    )
