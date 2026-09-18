@@ -287,6 +287,36 @@ def test_sdpa_decode_sharded(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype
     )
 
 
+@pytest.mark.parametrize("dtype, q_dtype", [[ttnn.bfloat8_b, ttnn.bfloat16]], ids=["kv_bfp8_q_bf16"])
+@pytest.mark.parametrize("b, nh, nkv, s, d", ([32, 32, 8, 8192, 128], [8, 32, 8, 8192, 128]))
+def test_sdpa_decode_sharded_q_block_wide_grid(device, b, nh, nkv, s, d, dtype, q_dtype):
+    # The Q shard stays on the 8x4 block used by the model code while the op runs on the whole grid.
+    grid = device.compute_with_storage_grid_size()
+    if grid.x <= 8 or grid.y <= 4:
+        pytest.skip(f"needs a grid wider than 8 and taller than 4, got {grid}")
+    sub_core_grids = ttnn.CoreRangeSet(
+        [
+            ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3)),
+            ttnn.CoreRange(ttnn.CoreCoord(8, 0), ttnn.CoreCoord(grid.x - 1, 3)),
+            ttnn.CoreRange(ttnn.CoreCoord(0, 4), ttnn.CoreCoord(grid.x - 1, grid.y - 1)),
+        ]
+    )
+    run_test_sdpa_decode_single_iter(
+        device,
+        b,
+        nh,
+        nkv,
+        s,
+        d,
+        dtype,
+        (grid.x, grid.y),
+        q_dtype,
+        sharded_in=True,
+        sharded_out=False,
+        sub_core_grids=sub_core_grids,
+    )
+
+
 @pytest.mark.parametrize(
     "dtype",
     [ttnn.bfloat8_b],
