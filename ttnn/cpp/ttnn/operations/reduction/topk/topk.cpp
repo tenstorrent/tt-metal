@@ -234,18 +234,17 @@ std::vector<Tensor> post_topk_transform_tensor(
 // input width; every other stage works on [rows, k_rounded <= 2048] tensors
 // (topk_route_finish reads 64 B per selected element, not whole rows).
 
-// k <= 64 keeps the device op's fast multi-core bitonic path for pow2 widths
-// at or above multi_core_min_width (plus the grid/L1 cost check). Below that
-// floor the stock op either falls to the single-core factory — linear in
-// width (~137 ns/elem measured on p150a: 695 us at W=5000, 1.38 ms at 10000,
-// 6.87 ms at 50000, 9.49 ms at 65536) while the routed composite is tens of
-// microseconds — or, for pow2 low-tile-row cells eligible via the Ht-aware
-// gate, runs a multi-core bitonic that the composite still beats (measured
-// at W=4096: 70–166 us stock multi-core vs 47–48 us composite; numbers at
-// the wide-arm predicate below). The small-k arm therefore routes every
-// >= small_k_route_min_padded_width cell below the plain
-// multi_core_min_width floor, pow2 or not; eligible pow2 cells at or above
-// the floor keep the stock bitonic path.
+// k <= 64 is the device op's multi-core bitonic regime when that path is
+// eligible: normally for power-of-two padded widths in [8192, 65535), plus
+// the #53793 low-tile-row relaxation below that floor. The small-k router
+// covers two measured-win regions: (a) padded widths >= 4096 that fail the
+// plain structural gate (non-pow2, >= 65535, or below the 8192 floor), with
+// low-tile-row cells below the floor deliberately included, and (b) the
+// standard bitonic-eligible pow2 [8192, 65535) band. Outside bitonic
+// eligibility the stock op falls to a single-core factory linear in width
+// (~137 ns/elem on p150a); inside it, the routed composite avoids the
+// bitonic's serial final gather-merge bottleneck. See the predicate comments
+// for measurements.
 constexpr uint32_t large_k_route_min_k_exclusive = 64;
 // Small-k arm floor (on the tile-padded width): below this the single-core
 // fallback is already sub-ms and the routed composite's fixed envelope is
@@ -321,6 +320,11 @@ bool should_route_to_topk_large_indices(
         //    composite still wins it — measured on p150a (bf16 largest W=4096, 3 Tracy
         //    trials, <0.2% spread): 70.3 -> 46.8 us (k=32, 1 tile row) up to
         //    165.5 -> 48.0 us (k=64, 2 tile rows).
+        //  * the pow2 [multi_core_min_width, 65535) bitonic band: stock is
+        //    structurally eligible, but its serial final gather-merge scales
+        //    with num_cores * k. The routed chain stays column-parallel end to
+        //    end and measured 155.7 -> 67.4 us at 32x8192 k=50 and 302.2 ->
+        //    178.6 us at 32x32768 k=64 on the #53793 stock model.
         // Both collapse to evaluating the SHARED
         // ttnn::prim::topk_multicore_structurally_eligible helper with the
         // low-Ht relaxation disabled (num_tile_rows pinned above
@@ -338,7 +342,17 @@ bool should_route_to_topk_large_indices(
             padded_width, ttnn::prim::constants::multi_core_low_ht_max_tile_rows + 1, k);
         const bool wide_arm =
             multicore_ineligible_ignoring_low_ht_arm && padded_width >= small_k_route_min_padded_width;
-        if (!wide_arm) {
+        const bool is_pow2 = padded_width != 0 && (padded_width & (padded_width - 1)) == 0;
+        // Bitonic-band arm: pow2 widths in [8192, 65535) with k <= 64 ARE
+        // eligible for the stock multi-core bitonic, but the routed composite
+        // measures faster there as well (p150a, Tracy device kernel duration,
+        // 3 trials, full prep+op+finish+slice chain): 32x8192 k=50 263.5 ->
+        // 67.4 us, 32x32768 k=64 333.8 -> 178.6 us. The bitonic's serial
+        // final gather-merge stage scales with num_cores * k while the routed
+        // chain stays column-parallel end to end.
+        const bool bitonic_band_arm = is_pow2 && padded_width >= ttnn::prim::constants::multi_core_min_width &&
+                                      padded_width < std::numeric_limits<uint16_t>::max();
+        if (!wide_arm && !bitonic_band_arm) {
             return false;
         }
     }
@@ -583,15 +597,13 @@ std::vector<Tensor> topk(
     Tensor transformed_tensor = ::reduction_common::transform_to_4d_tensor(transposed_tensor, is_rank_le_4d);
 
     // Blackhole routing onto ttnn::experimental::topk_large_indices covers
-    // two regions where the composite measures faster than the device op:
-    // k in (64, 2048] (above the device op's multi-core k <= 64 gate), and
-    // k <= 64 calls whose padded width is >= small_k_route_min_padded_width
-    // but fails the plain multi_core_min_width bitonic gate (>= 65535,
-    // non-pow2, or pow2 below multi_core_min_width). The router evaluates
-    // that gate without the device op's Ht-aware low-tile-row relaxation:
-    // the composite also beats the stock multi-core bitonic on those
-    // low-tile-row cells. See the comment block on
-    // should_route_to_topk_large_indices for the full predicate and contract.
+    // three regions: k in (64, 2048] (off the multi-core k <= 64 gate, would
+    // land on the linear single-core factory), k <= 64 rows whose padded
+    // width is >= 4096 but fails the plain structural gate (non-pow2,
+    // >= 65535, or below the 8192 floor, including #53793's low-tile-row
+    // bitonic cells), and k <= 64 rows in the standard bitonic-eligible pow2
+    // [8192, 65535) band. See the predicate comments for the full routing
+    // contract.
     if (operations::reduction::topk::CMAKE_UNIQUE_NAMESPACE::should_route_to_topk_large_indices(
             transformed_tensor,
             k,
