@@ -176,13 +176,13 @@ def pin_one_thread_per_core(reason: str = "LTX pipeline") -> list[int] | None:
     if not chosen:
         return None
     if chosen == full:
-        # Already one thread per core (typically: this is the process re-execed by ``reexec_pinned_before_torch``,
-        # or a launch-time taskset). Nothing to narrow, but torch may still size its pool from the host's full
-        # CPU count -- the test conftest sets it to ``os.cpu_count()`` -- which oversubscribes the narrowed
-        # mask with exactly the sibling contention the pin removes. Cap it to the mask once.
+        # Already one thread per core (the process re-execed by ``reexec_pinned_before_torch``, or a launch-time
+        # taskset): nothing to narrow. torch's pool is deliberately left alone here even though the test conftest
+        # sizes it from ``os.cpu_count()`` (64 threads on a 32-CPU mask): capping it to the mask was measured on
+        # the galaxy ring traced replay at 6.4 s and 6.7 s vs 6.2 s with the 64-thread pool (jobs 917/918 vs
+        # 919, 2026-09-18) -- the host-side stages got slower, not faster.
         if _applied is None:
             _set_applied(chosen, full)
-            _cap_torch_threads(len(chosen))
         return None
     narrowed = 0
     for tid in _thread_ids():

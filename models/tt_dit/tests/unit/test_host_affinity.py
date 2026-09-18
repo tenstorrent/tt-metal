@@ -102,9 +102,9 @@ def test_pin_is_noop_when_mask_already_one_per_core(monkeypatch, tmp_path):
     assert calls == []
 
 
-def test_pin_caps_torch_when_mask_already_narrow(monkeypatch, tmp_path):
-    """The re-execed process already has the one-per-core mask; the pin must still cap torch to it (the
-    test conftest sizes torch from os.cpu_count(), i.e. both sibling sets), and only once."""
+def test_pin_leaves_torch_alone_when_mask_already_narrow(monkeypatch, tmp_path):
+    """The re-execed process already has the one-per-core mask: no narrowing and no torch cap (capping the pool
+    to the mask measured slower on the galaxy ring replay, 6.4-6.7 s vs 6.2 s)."""
     if not hasattr(os, "sched_getaffinity"):
         return
     monkeypatch.delenv("LTX_PIN_CORES", raising=False)
@@ -120,7 +120,7 @@ def test_pin_caps_torch_when_mask_already_narrow(monkeypatch, tmp_path):
     monkeypatch.setattr(ha, "_cap_torch_threads", lambda n: caps.append(n))
     assert ha.pin_one_thread_per_core("test") is None
     assert ha.pin_one_thread_per_core("test") is None
-    assert caps == [4]
+    assert caps == []
 
 
 def test_cap_torch_threads_narrows_only_the_pool(monkeypatch):
