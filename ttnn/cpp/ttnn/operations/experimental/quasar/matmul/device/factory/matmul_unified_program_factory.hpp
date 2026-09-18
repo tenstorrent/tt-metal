@@ -21,9 +21,9 @@ namespace ttnn::prim::qsr {
 // config is checked in that function with TT_FATAL, so calling it is the config check.
 //
 // Vocabulary (classic GEMM, all sizes in 32x32 tiles): C[M x N] = A[M x K] x B[K x N].
-//   block        the per_core_M_tiles x per_core_N_tiles tiles of C a core produces in one go; cores walk C in blocks
-//                row-major (across N, then down M), batch after batch
-//   subblock     the subblock_M_tiles x subblock_N_tiles tiles of a block accumulated in DST at once
+//   C block      the per_core_M_tiles x per_core_N_tiles tiles of C a core produces in one go, for every
+//                batch; the C blocks of one batch are walked row-major (across N, then down M)
+//   subblock     the subblock_M_tiles x subblock_N_tiles tiles of a C block accumulated in DST at once
 //   K iteration  K_iteration_tiles of the inner dimension; one A slice + one B slice per iteration
 struct UnifiedMatmulPlan {
     uint32_t M_tiles = 0;
@@ -40,17 +40,18 @@ struct UnifiedMatmulPlan {
     uint32_t subblock_M_tiles = 0;
     uint32_t subblock_N_tiles = 0;
 
-    // Block assignment. C is walked in blocks row-major (across N, then down M), batch after batch;
-    // active core i starts at (first_batch[i], first_M_tile[i], first_N_tile[i]) and produces
-    // num_blocks[i] consecutive blocks of that walk.
-    uint32_t total_blocks = 0;  // over all batches
+    // C block assignment. The C blocks of one batch are walked row-major (across N, then down M) and the
+    // walk is split into contiguous runs, one per active core; core i starts at
+    // (first_C_block_M_tile[i], first_C_block_N_tile[i]) and produces num_C_blocks[i] C blocks, each for
+    // every batch. num_C_blocks is a compile-time arg of the compute kernel, so cores with different counts
+    // get their own compute KernelSpec (at most two: floor and floor + 1).
+    uint32_t C_blocks_per_batch = 0;
     bool row_major_cores = true;
     std::vector<tt::tt_metal::CoreCoord> cores;
-    std::vector<uint32_t> first_batch;
-    std::vector<uint32_t> first_M_tile;
-    std::vector<uint32_t> first_N_tile;
-    std::vector<uint32_t> num_blocks;
-    uint32_t max_blocks_per_core = 0;
+    std::vector<uint32_t> first_C_block_M_tile;
+    std::vector<uint32_t> first_C_block_N_tile;
+    std::vector<uint32_t> num_C_blocks;
+    uint32_t max_C_blocks_per_core = 0;
 
     // Dataflow-buffer rings. A slot holds one tile; slot sizes are in bytes.
     bool packer_l1_acc_en = false;
@@ -70,7 +71,7 @@ struct UnifiedMatmulPlan {
     bool alias_C_partials_onto_C_block = false;
     uint64_t l1_bytes = 0;  // total ring footprint per core
 
-    // Only valid for a sharded output: the shard layout implied by how the blocks tile C.
+    // Only valid for a sharded output: the shard layout implied by how the C blocks tile C.
     tt::tt_metal::TensorMemoryLayout sharded_output_layout() const;
 };
 
