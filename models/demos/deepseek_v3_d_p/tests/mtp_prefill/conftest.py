@@ -137,14 +137,22 @@ def glm_layer_state_dict(config, model_dir: str, layer_idx: int, num_routed_expe
 
 
 @pytest.fixture
-def mtp_layer_state_dict(use_pretrained, mtp_cfg, config_only) -> dict:
+def mtp_layer_state_dict(use_pretrained, mtp_cfg, config_only) -> dict | None:
     """The MTP layer's own DECODER-block weights: MLA + indexer, both norms, the 256-expert MoE.
 
     The other, much larger half of ``mtp_state_dict``, which is only the four MTP-specific tensors.
-    Minutes of fp8 dequant, so only a test that needs the real layer should ask for it.
+    Measured on host for layer 78: 27.5 s and 25.7 GB peak RSS (one sample, warm page cache) -- less
+    than the seeded random equivalent, which spends 69.6 s generating the same ~7 GB of expert
+    weights. Function-scoped, so every case pays it; promote to module scope if it ever dominates a leg.
+
+    ``None`` on the random leg -- it loads nothing and skips nothing -- so a test can request this and
+    carry BOTH weight options on one axis, handing the result straight to a helper that builds seeded
+    weights when it is None (``test_mtp._glm_layer_weights``). A test that is meaningful only with real
+    weights states that by parametrizing ``use_pretrained=[True]``, which is where the skip lives: on
+    the checkpoint's absence below, not on the axis.
     """
     if not use_pretrained:
-        pytest.skip("the MTP layer's real decoder weights exist only in the checkpoint")
+        return None
     path = glm52_checkpoint_path()
     if path is None:
         pytest.skip(f"set {HF_ENV}=/path/to/GLM-5.2 (dir with config.json + MTP weights)")
