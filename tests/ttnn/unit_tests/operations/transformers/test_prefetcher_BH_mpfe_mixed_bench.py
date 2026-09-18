@@ -245,9 +245,24 @@ def test_mpfe_mixed_llama3b_ff1_sdpa(device):
             ttnn.ShardOrientation.ROW_MAJOR,
         ),
     )
-    tt_q = ttnn.as_tensor(
-        pt_q, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, memory_config=q_mem_config
+    # Llama-3B has 24 logical Q heads, while tiled shards require a physical
+    # multiple of 32. Upload the padded storage first, preserve 24 as the
+    # logical shape, then shard the resulting logical/padded tensor into L1.
+    pt_q_padded = torch.zeros((1, _BATCH, 32, _HEAD_DIM))
+    pt_q_padded[:, :, :_NUM_HEADS, :] = pt_q
+    tt_q_padded = ttnn.as_tensor(
+        pt_q_padded,
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
+    tt_q = ttnn.reshape(
+        tt_q_padded,
+        (1, _BATCH, _NUM_HEADS, _HEAD_DIM),
+        padded_shape=(1, _BATCH, 32, _HEAD_DIM),
+    )
+    tt_q = ttnn.to_memory_config(tt_q, q_mem_config)
     current_positions = ttnn.Tensor(
         torch.full((_BATCH,), context - 1, dtype=torch.int32), ttnn.int32
     ).to(device)
