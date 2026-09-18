@@ -492,6 +492,11 @@ jobs:
               "sim_bh_p150"
               "sim_bh_galaxy"
               "sim_quasar"
+              # tt-sim QSR simulator on the xl runner, as the LLK tt-sim leg in
+              # llk_ttsim_weekly.yaml uses. ttnn_sanity_tests.yaml's "ttnn quasar group"
+              # is the only sanity entry referencing it; every other yaml in this
+              # pipeline ignores it and produces no extra rows.
+              "sim_quasar_xl"
             )
             sanity_skus+=("${sim_skus[@]}")
           fi
