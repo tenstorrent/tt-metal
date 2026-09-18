@@ -1,11 +1,13 @@
 #!/bin/bash
 # run_safe_pytest.sh - Cooperative device-aware test runner
 #
-# Uses flock to serialize device access across multiple agents/terminals.
+# Uses one flock PER CARD (scripts/lib/tt_device_pool.sh) so independent jobs can
+# run on independent cards concurrently. By default a run takes the lowest free
+# card; --device N pins a card; --mesh takes every card for multi-device tests.
 # Uses TT_METAL_OPERATION_TIMEOUT_SECONDS for precise hang detection at the
 # dispatch layer (does not penalize setup/compilation time).
-# Automatically resets the device after hangs, ensuring the next runner
-# always gets a clean device.
+# Automatically resets the card(s) it held after hangs, ensuring the next runner
+# always gets a clean device — without touching the other cards.
 #
 # Simulator mode (TT_METAL_SIMULATOR set):
 #   Exports TT_METAL_SLOW_DISPATCH_MODE=1 and TT_METAL_DISABLE_SFPLOADMACRO=1.
@@ -18,20 +20,32 @@
 #   50000; pre-existing env wins). On hang the watchdog _Exit(1)'s the child;
 #   we classify that as HANG and dump the watchdog message.
 #
-# Usage: scripts/run_safe_pytest.sh [--dev] [--run-all] [--profile] [--sim-workers N] [--precompile|--no-precompile] [--farm-min-programs N] [--jit-server[=host:port]|--no-jit-server] <test_path> [extra_pytest_args...]
+# Usage: scripts/run_safe_pytest.sh [--device N|auto] [--mesh] [--dev] [--run-all] [--profile] [--sim-workers N] [--precompile|--no-precompile] [--farm-min-programs N] [--jit-server[=host:port]|--no-jit-server] <test_path> [extra_pytest_args...]
 #
 # Wrapper flags below are position-independent: they may appear before or after the test path and
 # may be interleaved with pytest args. Everything the wrapper does not recognize (the test path,
 # -k/-m filters, ::nodeids, ...) is forwarded to pytest verbatim, in the order given.
 #
 # Options:
+#   --device N|auto  Which card to run on. DEFAULT is auto: the lowest FREE card is
+#                    taken (card 0 if free, else 1, ...); if all are busy the run waits
+#                    and re-scans every second, still lowest-first. --device N waits for
+#                    that specific card. N is the UMD logical id (`tt-smi -ls`, same as
+#                    tt-smi -r / TT_VISIBLE_DEVICES), NOT /dev/tenstorrent/<n>. A single
+#                    integer already in $TT_VISIBLE_DEVICES is honoured as --device N.
+#                    The run sees its card as device 0; logs, triage report and profiler
+#                    output go under generated/dev<N>/.
+#   --mesh           Take EVERY card (multi-device / CCL tests). Waits for the cards in
+#                    ascending order, holding each as it frees up, so a mesh job steadily
+#                    drains the pool. All cards visible; logs under generated/mesh/; a hang
+#                    resets all cards. Mutually exclusive with --device.
 #   --dev            Enables polling watcher (NoC sanitizer, waypoints, CB
 #                    sanitization), lightweight ebreak asserts, and auto-triage
 #                    on hang with full triage + watcher log dump.
 #   --run-all        Run all tests instead of stopping on first failure (-x).
 #                    Useful for eval scoring where you need full pass/fail counts.
 #   --profile        Run under the Tracy device profiler (python -m tracy -r). Emits
-#                    a per-op CSV (generated/profiler/reports/<ts>/ops_perf_results*.csv)
+#                    a per-op CSV (generated/<dev|mesh>/profiler/reports/<ts>/ops_perf_results*.csv)
 #                    and prints its path as "SAFE_PYTEST: PROFILER CSV: <path>" next to
 #                    the result line. Requires a Tracy-enabled build. NOTE: the tracy
 #                    wrapper masks pytest's exit code, so a profiled run is reported
@@ -71,6 +85,10 @@
 #   2 - Hang detected (dispatch timeout fired)
 #   3 - Setup error (missing args, etc.)
 #
+# Hang triage report: generated/dev<N>/tt-triage/triage.txt (or generated/mesh/...),
+# printed as "SAFE_PYTEST: triage report: <path>". The legacy path
+# generated/tt-triage/triage.txt is kept as a symlink to the most recent hang report.
+#
 # Total runtime:
 #   Always prints SAFE_PYTEST_TOTAL_RUNTIME as the very last line (on every exit path).
 #   It is the wall-clock time from "device lock acquired" (idle lock-wait queueing is
@@ -80,115 +98,30 @@
 
 set -o pipefail
 
-REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-DISPATCH_TIMEOUT="${SAFE_PYTEST_DISPATCH_TIMEOUT:-5}"
-TRIAGE_SCRIPT="${REPO_DIR}/tools/tt-triage.py"
-WATCHER_LOG="${REPO_DIR}/generated/watcher/watcher.log"
-TRIAGE_OUT_DIR="${REPO_DIR}/generated/tt-triage"
-LOCK_FILE="/tmp/tt-device.lock"
-DIRTY_FLAG="/tmp/tt-device.dirty"
-TRIAGE_LOG="/tmp/safe-pytest-triage-$$.log"
-TRIAGE_REPORT="${TRIAGE_OUT_DIR}/triage.txt"
-PROFILE_REPORTS_DIR="${REPO_DIR}/generated/profiler/reports"
-
-# --- Device-lock contention profiling ---
-# When $TT_DEVICE_TIMING_LOG is set, on EXIT we append one JSON line:
-#   {source, pid, started_at_ms, wait_ms, run_ms, test_path, exit_code}
-# wait_ms = script entry → flock acquired (contention)
-# run_ms  = flock acquired → script exit  (device occupied)
-# On sim, flock is skipped so we seed TT_TIMING_LOCK_ACQUIRED_MS=entry below;
-# wait_ms is 0 and run_ms is the full pytest wall-clock. Skipped only when the
-# script exits before that seed runs.
-TT_TIMING_ENTRY_MS=$(date +%s%3N)
-TT_TIMING_LOCK_ACQUIRED_MS=0
-TT_TIMING_SOURCE="run_safe_pytest"
-TT_TIMING_TEST_PATH=""
-# Precompile outcome, recorded in the device-timing record so the route a session took is
-# observable downstream. Modes:
-#   inline_farm  - compile step ran on the remote JIT server
-#   inline_local - compile step ran locally (no server, or fewer programs than the farm threshold)
-#   off          - not attempted; REASON says why: disabled (--no-precompile), narrow (::nodeid /
-#                  -k selection), sim
-# The post-run attribution block below overwrites these from the plugin's log lines.
-TT_TIMING_PRECOMPILE_MODE="off"
-TT_TIMING_PRECOMPILE_REASON="disabled"
-# Seconds the session spent precompiling: collect pass + compile step (the plugin's collect_s +
-# compile_s). 0 when precompile did not run.
-TT_TIMING_PRECOMPILE_S=0
-# Distinct programs the collect pass gathered (includes ones already in the on-disk cache).
-# -1 = not attempted / no collector RESULT line.
-TT_TIMING_PRECOMPILE_PROGRAMS=-1
-# Programs the parallel compile step processed (collected minus the ones already compiled
-# in-process during collect). On-disk JIT cache hits are included -- the runtime does not report
-# hit vs miss -- so precompile_s, not this count, is the cost signal. -1 = unknown.
-TT_TIMING_PRECOMPILE_BUILT=-1
-
-_emit_device_timing() {
-    local ec=$?
-    if [[ -n "${TT_DEVICE_TIMING_LOG:-}" && "$TT_TIMING_LOCK_ACQUIRED_MS" -ne 0 ]]; then
-        local end_ms wait_ms run_ms log_dir esc_path
-        end_ms=$(date +%s%3N)
-        wait_ms=$(( TT_TIMING_LOCK_ACQUIRED_MS - TT_TIMING_ENTRY_MS ))
-        run_ms=$(( end_ms - TT_TIMING_LOCK_ACQUIRED_MS ))
-        log_dir="$(dirname "$TT_DEVICE_TIMING_LOG")"
-        [[ -n "$log_dir" ]] && mkdir -p "$log_dir" 2>/dev/null
-        # JSON-escape test_path: backslash first, then double-quote.
-        esc_path="${TT_TIMING_TEST_PATH//\\/\\\\}"
-        esc_path="${esc_path//\"/\\\"}"
-        printf '{"source":"%s","pid":%d,"started_at_ms":%s,"wait_ms":%d,"run_ms":%d,"test_path":"%s","exit_code":%d,"precompile_mode":"%s","precompile_reason":"%s","precompile_s":%d,"precompile_programs":%d,"precompile_built":%d}\n' \
-            "$TT_TIMING_SOURCE" "$$" "$TT_TIMING_ENTRY_MS" "$wait_ms" "$run_ms" "$esc_path" "$ec" \
-            "$TT_TIMING_PRECOMPILE_MODE" "$TT_TIMING_PRECOMPILE_REASON" "$TT_TIMING_PRECOMPILE_S" \
-            "$TT_TIMING_PRECOMPILE_PROGRAMS" "$TT_TIMING_PRECOMPILE_BUILT" \
-            >> "$TT_DEVICE_TIMING_LOG" 2>/dev/null || true
-    fi
-    return $ec
-}
-trap _emit_device_timing EXIT
-
-# --- Detect simulator mode ---
-SIM_MODE=false
-if [[ -n "${TT_METAL_SIMULATOR:-}" ]]; then
-    SIM_MODE=true
-    export TT_METAL_SLOW_DISPATCH_MODE=1
-    export TT_METAL_DISABLE_SFPLOADMACRO=1
-    # libttsim's own hang watchdog (clocks of no RISC-V / Tensix progress with
-    # pending work before the sim _Exit(1)'s). User-set env wins.
-    : "${TTSIM_HANG_WATCHDOG_CLOCKS:=50000}"
-    export TTSIM_HANG_WATCHDOG_CLOCKS
-    # No flock on sim, but we still want device_timings: seed the marker so the
-    # exit trap emits with wait_ms=0 and run_ms=full wall-clock.
-    TT_TIMING_LOCK_ACQUIRED_MS=$TT_TIMING_ENTRY_MS
-fi
+TTRUN_PREFIX="SAFE_PYTEST"
+# shellcheck source=scripts/lib/tt_safe_run.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/tt_safe_run.sh"
+# Sets REPO_DIR, DISPATCH_TIMEOUT, TRIAGE_*, WATCHER_LOG, SIM_MODE (+ sim env), the
+# device-timing record and the EXIT dispatcher.
+ttrun_init run_safe_pytest
 PYTEST_STDOUT_LOG="/tmp/safe-pytest-stdout-$$.log"
+# --profile: per-card profiler artifacts dir + explicit Tracy capture port (set on hardware
+# after the card is acquired; the legacy default only survives on the simulator).
+PROFILE_REPORTS_DIR="${REPO_DIR}/generated/profiler/reports"
+TRACY_PORT_ARGS=()
 
 # --- Parse flags ---
 DEV_MODE=false
 FAIL_FAST=true
 PROFILE_MODE=false
+# Card selection (DEVICE_SELECTOR / MESH_MODE): auto (default, lowest free card), a UMD id,
+# or mesh (every card). Validated by ttrun_resolve_selector after parsing.
 SIM_WORKERS=""
 SIM_WORKERS_GIVEN=false
-# Precompile runs INSIDE the real pytest session (tests/plugins/up_front_collect.py with
-# UP_FRONT_INLINE=1): collect pass -> parallel compile -> real pass, one process. There is no
-# separate warm-pass process any more: measured on a 1-program session it cost ~8s (a second
-# interpreter, torch/ttnn import, collection and device open) to save ~2s of compile, and most
-# agent sessions are that small. AUTO (default) turns it on for broad selections and off for
-# narrow ones (::nodeid / -k); the decision is made from argv below, after parsing.
-PRECOMPILE=auto
-PRECOMPILE_WORKERS="${PRECOMPILE_WORKERS:-$(nproc 2>/dev/null || echo 8)}"
-# Farm threshold: route the compile step to the JIT server only when the collect pass gathered at
-# least this many distinct programs. Below it the per-kernel round trips cost more than the
-# parallelism saves (measured: +2.5s at 1 program, -3.4s at 24). Overridable per run.
-PRECOMPILE_FARM_MIN_PROGRAMS="${PRECOMPILE_FARM_MIN_PROGRAMS:-10}"
-
-# JIT compile server is COMPILE-STEP-ONLY. The endpoint (if configured) is used only by the
-# plugin's compile step between the two passes; the real pass and every on-demand compile is
-# ALWAYS local. Passive endpoint comes from $TT_METAL_JIT_SERVER_ENDPOINT; override with
-# --jit-server[=host:port] / --no-jit-server. A configured-but-unreachable server aborts loudly.
-JIT_SERVER_ENDPOINT="${TT_METAL_JIT_SERVER_ENDPOINT:-}"
-JIT_SERVER_DISABLED=false
-# Defensive: the server-enable bit must never leak in from the ambient environment. The plugin
-# raises it only around its compile step, and only when told to (UP_FRONT_INLINE_JIT_SERVER=1).
-unset TT_METAL_JIT_SERVER_ENABLE
+# Precompile (inline, see scripts/lib/tt_safe_run.sh): defaults + the JIT endpoint from
+# $TT_METAL_JIT_SERVER_ENDPOINT. AUTO turns it on for broad selections and off for narrow ones
+# (::nodeid / -k); decided from argv below, after parsing.
+ttrun_precompile_defaults auto TT_METAL_JIT_SERVER_ENDPOINT
 
 # Wrapper flags are POSITION-INDEPENDENT: they may appear anywhere in argv, before or after the
 # test path, interleaved with pytest args. Anything the wrapper does not recognize is collected
@@ -208,6 +141,22 @@ while [[ $# -gt 0 ]]; do
             FAIL_FAST=false
             shift
             ;;
+        --device)
+            if [[ $# -lt 2 ]]; then
+                echo "SAFE_PYTEST_ERROR: --device requires an argument (UMD card id or 'auto')"
+                exit 3
+            fi
+            DEVICE_SELECTOR="$2"
+            shift 2
+            ;;
+        --device=*)
+            DEVICE_SELECTOR="${1#*=}"
+            shift
+            ;;
+        --mesh)
+            MESH_MODE=true
+            shift
+            ;;
         --profile)
             # Run the real pytest under the Tracy device profiler (see PYTEST_CMD below).
             PROFILE_MODE=true
@@ -222,52 +171,10 @@ while [[ $# -gt 0 ]]; do
             SIM_WORKERS_GIVEN=true
             shift 2
             ;;
-        --precompile)
-            # Force-on, even for a narrow selection.
-            PRECOMPILE=true
-            shift
-            ;;
-        --no-precompile)
-            # Force-off: plain pytest; kernels compile on demand, inline & serial.
-            PRECOMPILE=false
-            shift
-            ;;
-        --precompile-workers)
-            if [[ $# -lt 2 ]]; then
-                echo "SAFE_PYTEST_ERROR: --precompile-workers requires an integer argument"
-                exit 3
-            fi
-            PRECOMPILE_WORKERS="$2"
-            shift 2
-            ;;
-        --farm-min-programs)
-            if [[ $# -lt 2 ]] || ! [[ "$2" =~ ^[0-9]+$ ]]; then
-                echo "SAFE_PYTEST_ERROR: --farm-min-programs requires a non-negative integer argument"
-                exit 3
-            fi
-            PRECOMPILE_FARM_MIN_PROGRAMS="$2"
-            shift 2
-            ;;
-        --jit-server)
-            # Route the precompile compile step to a remote JIT server at host:port (the real
-            # pass stays local). Unreachable => abort loudly.
-            if [[ $# -lt 2 ]]; then
-                echo "SAFE_PYTEST_ERROR: --jit-server requires a host:port argument"
-                exit 3
-            fi
-            JIT_SERVER_ENDPOINT="$2"
-            JIT_SERVER_DISABLED=false
-            shift 2
-            ;;
-        --jit-server=*)
-            JIT_SERVER_ENDPOINT="${1#*=}"
-            JIT_SERVER_DISABLED=false
-            shift
-            ;;
-        --no-jit-server)
-            # Compile locally even if an endpoint is configured.
-            JIT_SERVER_DISABLED=true
-            shift
+        --precompile|--no-precompile|--precompile-workers|--farm-min-programs|--jit-server|--jit-server=*|--no-jit-server)
+            # Shared precompile / JIT-server flags (scripts/lib/tt_safe_run.sh).
+            ttrun_precompile_parse_flag "$@" || exit 3
+            shift "$TTRUN_CONSUMED"
             ;;
         *)
             PYTEST_ARGS+=("$1")
@@ -275,6 +182,9 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+# --- Validate card selection (auto | N | mesh, honours a single-int TT_VISIBLE_DEVICES) ---
+ttrun_resolve_selector || exit 3
 
 # --- Validate --sim-workers ---
 if [[ "$SIM_WORKERS_GIVEN" == true ]]; then
@@ -296,7 +206,7 @@ fi
 # --- Argument validation ---
 if [[ ${#PYTEST_ARGS[@]} -eq 0 ]]; then
     echo "SAFE_PYTEST_ERROR: No test path provided" >&2
-    echo "Usage: scripts/run_safe_pytest.sh [--dev] [--run-all] [--profile] [--sim-workers N] [--precompile|--no-precompile] [--farm-min-programs N] [--jit-server[=host:port]|--no-jit-server] <test_path> [extra_pytest_args...]" >&2
+    echo "Usage: scripts/run_safe_pytest.sh [--device N|auto] [--mesh] [--dev] [--run-all] [--profile] [--sim-workers N] ${TTRUN_PRECOMPILE_USAGE} <test_path> [extra_pytest_args...]" >&2
     exit 3
 fi
 
@@ -348,16 +258,6 @@ if [[ "$PRECOMPILE" == auto ]]; then
         PRECOMPILE=true
     fi
 fi
-if [[ "$PRECOMPILE" == true && "$SIM_MODE" == true ]]; then
-    # No warm benefit on the simulator (compile is not the bottleneck at kHz clocks).
-    PRECOMPILE=false
-    TT_TIMING_PRECOMPILE_REASON="sim"
-fi
-
-# Precompile uses WHATEVER cache the user already has (TT_METAL_CACHE if set, else tt-metal's
-# default): the collect pass, the compile step and the real pass are one process, so they share it
-# (incl. ccache state) by construction. We never override it.
-PRECOMPILE_PLUGIN_DIR="$REPO_DIR"
 
 
 # --- Profiler CSV reporting (--profile) ---
@@ -379,104 +279,17 @@ emit_profiler_csv() {
     fi
 }
 
-# --- Total-run timer ---
-# Reports wall-clock time from "device lock acquired" to script exit. Registered as an
-# EXIT trap so it ALWAYS prints last, on every exit path (pass, fail, hang, error). The
-# RUN_START guard means nothing is printed for exits that happen before testing begins
-# (e.g. missing args), since no run took place.
-_print_total_runtime() {
-    [[ -z "${RUN_START:-}" ]] && return 0
-    local run_end elapsed
-    run_end=$(date +%s)
-    elapsed=$((run_end - RUN_START))
-    echo "========================================" >&2
-    printf 'SAFE_PYTEST_TOTAL_RUNTIME: %dm%02ds (%ds total, device-lock-acquired -> exit)\n' \
-        $((elapsed / 60)) $((elapsed % 60)) "$elapsed" >&2
-}
-trap _print_total_runtime EXIT
+# --- Total-run timer: always the last line, on every exit path ---
+ttrun_on_exit ttrun_print_total_runtime
 
-# --- Acquire flock (hardware only) ---
+# --- Acquire a card (hardware only; no-op on sim) ---
+# auto = lowest free card; N = that card; mesh = every card. Exports the per-card env,
+# re-points the triage / watcher paths, resets the card if a previous run left it dirty.
+ttrun_acquire_card || exit 3
 if [[ "$SIM_MODE" == false ]]; then
-    exec 9>"$LOCK_FILE"
-
-    echo "SAFE_PYTEST: Waiting for device lock..."
-
-    # Find the PID holding an flock on a given path. Tries lslocks first
-    # (fast, works in the global namespace); falls back to scanning /proc/*/fd
-    # for processes with the lockfile open and an active FLOCK in fdinfo
-    # (works inside PID namespaces where lslocks reports holder pid 0).
-    _find_lock_holder() {
-        local lock_path="$1" pid
-        pid=$(lslocks --noheadings --raw --output PID,PATH 2>/dev/null \
-            | awk -v p="$lock_path" '$2==p && $1!="0" {print $1; exit}')
-        if [[ -n "$pid" ]]; then echo "$pid"; return 0; fi
-        local pid_dir fd_link fd_num target
-        for pid_dir in /proc/[0-9]*; do
-            for fd_link in "$pid_dir"/fd/*; do
-                [ -L "$fd_link" ] || continue
-                target=$(readlink "$fd_link" 2>/dev/null) || continue
-                [ "$target" = "$lock_path" ] || continue
-                fd_num=${fd_link##*/}
-                if grep -q '^lock:.*FLOCK' "$pid_dir/fdinfo/$fd_num" 2>/dev/null; then
-                    echo "${pid_dir##*/}"
-                    return 0
-                fi
-            done
-        done
-        return 1
-    }
-
-    LOCK_WAIT_INTERVAL=20
-    LOCK_WAIT_TOTAL=0
-    while ! flock -w "$LOCK_WAIT_INTERVAL" 9; do
-        LOCK_WAIT_TOTAL=$((LOCK_WAIT_TOTAL + LOCK_WAIT_INTERVAL))
-        TS="[$(date '+%Y-%m-%d %H:%M:%S')]"
-        HOLDER_PID=$(_find_lock_holder "$LOCK_FILE")
-        if [[ -n "$HOLDER_PID" && -d /proc/$HOLDER_PID ]]; then
-            HOLDER_CMD=$(tr '\0' ' ' < /proc/$HOLDER_PID/cmdline 2>/dev/null | cut -c1-200)
-            HOLDER_PPID=$(awk '{print $4}' /proc/$HOLDER_PID/stat 2>/dev/null)
-            if [[ -n "$HOLDER_PPID" && "$HOLDER_PPID" -gt 1 && -d /proc/$HOLDER_PPID ]]; then
-                HOLDER_PARENT_CMD=$(tr '\0' ' ' < /proc/$HOLDER_PPID/cmdline 2>/dev/null | cut -c1-150)
-                echo "$TS SAFE_PYTEST: waiting for device (${LOCK_WAIT_TOTAL}s) — holder pid=$HOLDER_PID cmd=\"$HOLDER_CMD\" parent pid=$HOLDER_PPID cmd=\"$HOLDER_PARENT_CMD\""
-            else
-                echo "$TS SAFE_PYTEST: waiting for device (${LOCK_WAIT_TOTAL}s) — holder pid=$HOLDER_PID cmd=\"$HOLDER_CMD\""
-            fi
-        else
-            echo "$TS SAFE_PYTEST: waiting for device (${LOCK_WAIT_TOTAL}s) — holder unknown"
-        fi
-    done
-    TT_TIMING_LOCK_ACQUIRED_MS=$(date +%s%3N)
-    echo "SAFE_PYTEST: Device lock acquired"
-
-    # Start the total-run clock the moment we own the device. The lock-wait above is
-    # idle queueing behind other runners and is deliberately excluded.
-    RUN_START=$(date +%s)
-
-    # --- Check if device needs reset from previous hang ---
-    if [[ -f "$DIRTY_FLAG" ]]; then
-        echo "SAFE_PYTEST: Device marked dirty from previous hang, resetting..."
-        if ! tt-smi -r; then
-            echo "SAFE_PYTEST_ERROR: Device reset (tt-smi -r) failed"
-            exit 3
-        fi
-        rm -f "$DIRTY_FLAG"
-        echo "SAFE_PYTEST: Device reset complete"
-    fi
-else
-    # Simulator: no device lock to acquire, so start the total-run clock here (the
-    # equivalent "start of testing" point).
-    RUN_START=$(date +%s)
+    PROFILE_REPORTS_DIR="${TTPOOL_PROFILER_DIR}/reports"
 fi
-
-# --- Setup environment ---
-cd "$REPO_DIR"
-if [[ -f python_env/bin/activate ]]; then
-    if ! source python_env/bin/activate; then
-        echo "SAFE_PYTEST: WARNING: Failed to activate python_env virtual environment"
-    fi
-else
-    echo "SAFE_PYTEST: WARNING: python_env not found; using system Python"
-fi
+ttrun_activate_venv
 
 # --- Profiling preflight ---
 # `python -m tracy` needs a Tracy-enabled build and tracy deps (e.g. websockets).
@@ -487,6 +300,21 @@ if [[ "$PROFILE_MODE" == true ]]; then
         echo "SAFE_PYTEST_ERROR: --profile requested but 'python -m tracy' is unavailable"
         echo "SAFE_PYTEST: Ensure a Tracy-enabled build and tracy deps (e.g. 'pip install websockets')"
         exit 3
+    fi
+    if [[ "$SIM_MODE" == false ]]; then
+        # Per-card artifacts dir (both tools/tracy and the C++ profiler honour it): the default
+        # generated/profiler is shared and concurrent runs corrupt each other's device CSV and
+        # .tracy capture. Explicit capture port: tracy's get_available_port() is check-then-bind,
+        # so simultaneous runs all pick 8086 and only one of them captures.
+        export TT_METAL_PROFILER_DIR="$TTPOOL_PROFILER_DIR"
+        TRACY_PORT_ARGS=(-t "$TTPOOL_TRACY_PORT")
+        # tools/tracy resolves tracy-capture under $TT_METAL_HOME/build; a TT_METAL_HOME pointing
+        # at another checkout pairs a foreign capture binary with this build's Tracy client and
+        # the capture silently produces nothing ("capture output file was not generated").
+        if [[ -n "${TT_METAL_HOME:-}" && "$(readlink -f "$TT_METAL_HOME")" != "$(readlink -f "$REPO_DIR")" ]]; then
+            echo "SAFE_PYTEST: WARNING: TT_METAL_HOME='${TT_METAL_HOME}' is not this checkout; using ${REPO_DIR} for this profiled run so tracy-capture matches the client"
+            export TT_METAL_HOME="$REPO_DIR"
+        fi
     fi
 fi
 
@@ -501,50 +329,12 @@ if [[ "$SIM_MODE" == true && "$SIM_WORKERS" -gt 1 ]]; then
 fi
 
 # --- Debug/sim mode env (asserts + watcher) ---
-# Exported before pytest starts, so the precompile compile step inside the session sees them.
-# TT_METAL_LIGHTWEIGHT_KERNEL_ASSERTS, TT_METAL_LLK_ASSERTS and TT_METAL_WATCHER_NOINLINE are
-# COMPILE-TIME flags: they change the kernel build key, so the compile step and the real pass
-# must agree on them or the precompiled (production) binaries would be useless to the --dev run.
-if [[ "$DEV_MODE" == true ]]; then
-    # Lightweight asserts: compiles ASSERT() as ebreak, halting the core at the
-    # exact instruction. The dispatch timeout then fires and runs triage, which
-    # captures callstacks from ALL cores — showing both the assert site and any
-    # cores blocked waiting on the halted one.
-    export TT_METAL_LIGHTWEIGHT_KERNEL_ASSERTS=1
-
-    # LLK asserts: enables LLK_ASSERT() in the compute API / LLK layer.
-    # Catches invalid hardware configurations, wrong unpack/pack parameters,
-    # and API misuse deep in the compute pipeline. Also compiles as ebreak.
-    export TT_METAL_LLK_ASSERTS=1
-
-    # Polling watcher: enables all device-side instrumentation (NoC sanitizer,
-    # waypoints, CB sanitization) with the host polling thread. Recent watcher
-    # server improvements (t=0 sampling, 100ms quanta) minimize overhead for
-    # short tests. Watcher log is dumped on hang for full diagnostic context.
-    #
-    # WATCHER_DISABLE_ASSERT disables the watcher's own assert mechanism (which
-    # would conflict with the lightweight ebreak asserts above). We want ebreak
-    # asserts to halt the core so triage can capture callstacks from all cores,
-    # rather than having watcher handle asserts independently.
-    export TT_METAL_WATCHER=1
-    export TT_METAL_WATCHER_NOINLINE=1
-    export TT_METAL_WATCHER_DISABLE_ASSERT=1
-    export TT_METAL_WATCHER_DISABLE_DISPATCH=1
-
-    if [[ "$SIM_MODE" == true ]]; then
-        # NoC sanitizer is intentionally disabled on sim — the sanitizer is
-        # tuned for HW behavior and hits false positives under libttsim.
-        # (Mirrors tt-probe.sh.)
-        export TT_METAL_WATCHER_DISABLE_NOC_SANITIZE=1
-        echo "SAFE_PYTEST: [sim+dev] asserts=ebreak llk_asserts=ON watcher=polling(noc_sanitize=OFF) watchdog=${TTSIM_HANG_WATCHDOG_CLOCKS} clocks workers=${SIM_WORKERS}"
-    else
-        echo "SAFE_PYTEST: [dev] asserts=ebreak llk_asserts=ON watcher=polling triage=ON timeout=${DISPATCH_TIMEOUT}s"
-    fi
-elif [[ "$SIM_MODE" == true ]]; then
-    echo "SAFE_PYTEST: [sim] watchdog=${TTSIM_HANG_WATCHDOG_CLOCKS} clocks workers=${SIM_WORKERS}"
-else
-    echo "SAFE_PYTEST: dispatch_timeout=${DISPATCH_TIMEOUT}s"
-fi
+# Exported before pytest starts, so the precompile compile step inside the session sees the
+# compile-time flags (see ttrun_export_dev_env for the full rationale).
+[[ "$DEV_MODE" == true ]] && ttrun_export_dev_env
+_banner_extra=""
+[[ "$SIM_MODE" == true ]] && _banner_extra="workers=${SIM_WORKERS}"
+ttrun_print_mode_banner "$_banner_extra"
 
 # --- XIP disassembly dump (default OFF; kept under --dev) ---
 # Must be exported before pytest starts: the dump fires on every kernel BINARY
@@ -567,36 +357,8 @@ if [[ "$DEV_MODE" != true ]]; then
 fi
 
 # --- Hang detection setup (hardware only) ---
-# On timeout, the dispatch layer runs tt-triage. Fires only on actual hang —
-# zero overhead for passing tests. On sim there is no hang detection because
-# wall-clock timeouts are meaningless at kHz clock speeds.
-rm -f "$TRIAGE_LOG"
-# Also clear any stale triage report from a previous run. Downstream consumers
-# (hooks, CI) treat the report's presence as the hang signal — leaving a stale
-# file around causes false-positive "hang detected" classification on the
-# next ordinary test failure.
-rm -f "$TRIAGE_REPORT"
-MISSING_TTEXALENS=false
-if [[ "$SIM_MODE" == false ]]; then
-    export TT_METAL_OPERATION_TIMEOUT_SECONDS="$DISPATCH_TIMEOUT"
-    # Requires tt-exalens: uv pip install -r tools/triage/requirements.txt
-    # Defer the missing-tool warning to EXIT via trap — otherwise it gets buried
-    # in pytest / triage output and users never see it.
-    if ! python3 -c "import ttexalens" 2>/dev/null; then
-        MISSING_TTEXALENS=true
-    fi
-    mkdir -p "${TRIAGE_OUT_DIR}"
-    export TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE="python3 ${TRIAGE_SCRIPT} --disable-progress --skip-version-check --llm-output --llm-output-path=${TRIAGE_REPORT} > ${TRIAGE_LOG} 2>&1"
-fi
-
-emit_missing_ttexalens_warning() {
-    if [[ "$MISSING_TTEXALENS" == true ]]; then
-        echo ""
-        echo "SAFE_PYTEST: WARNING: tt-exalens not installed — triage on hang is unavailable."
-        echo "SAFE_PYTEST: Install with: uv pip install -r tools/triage/requirements.txt"
-    fi
-}
-trap '_emit_device_timing; emit_missing_ttexalens_warning' EXIT
+# On dispatch timeout the runtime runs tt-triage scoped to our card(s); see ttrun_setup_hang_hook.
+ttrun_setup_hang_hook
 
 # --- Build the pytest command ---
 # Wrapper-injected options go FIRST and the user's args LAST, verbatim and contiguous. Both halves
@@ -611,44 +373,17 @@ trap '_emit_device_timing; emit_missing_ttexalens_warning' EXIT
 #   as a child and post-processes results into ops_perf_results*.csv on pass or
 #   fail. Its exit-code masking is handled at the result check below.
 if [[ "$PROFILE_MODE" == true ]]; then
-    PYTEST_CMD=(python -m tracy -r -m pytest)
+    PYTEST_CMD=(python -m tracy -r "${TRACY_PORT_ARGS[@]}" -m pytest)
 else
     PYTEST_CMD=(pytest)
 fi
-# --- Precompile: load the collector into the real session ---
-# The plugin runs a collect pass over the selection, compiles the distinct programs in parallel,
-# then runs the real pass. Under --profile the whole session already runs inside `python -m tracy`
-# (TT_METAL_DEVICE_PROFILER=1), so the compile step and the real pass share one build_key by
-# construction. PYTHONPATH is PREPENDED, not replaced: overwriting it broke any suite whose imports
-# live outside the repo root (the eval golden tests, for one).
-if [[ "$PRECOMPILE" == true ]]; then
-    # JIT server: endpoint/preprocess/keepalive go into the process env, but the ENABLE bit is
-    # raised by the plugin only around its compile step, and only if the collected program count
-    # reaches the farm threshold (UP_FRONT_INLINE_JIT_SERVER=1 + UP_FRONT_INLINE_FARM_MIN_PROGRAMS).
-    # The real pass's on-demand compiles always stay local.
-    PRECOMPILE_SRV_ENV=()
-    if [[ -n "$JIT_SERVER_ENDPOINT" && "$JIT_SERVER_DISABLED" == false ]]; then
-        _h="${JIT_SERVER_ENDPOINT%:*}"; _p="${JIT_SERVER_ENDPOINT##*:}"
-        if ! timeout 5 bash -c "exec 3<>/dev/tcp/${_h}/${_p}" 2>/dev/null; then
-            TT_TIMING_PRECOMPILE_REASON="jit_unreachable"
-            echo "SAFE_PYTEST_ERROR: JIT server '${JIT_SERVER_ENDPOINT}' unreachable — aborting." >&2
-            echo "SAFE_PYTEST_ERROR: start the server, fix --jit-server, or pass --no-jit-server to compile locally." >&2
-            exit 4
-        fi
-        PRECOMPILE_SRV_ENV=(UP_FRONT_INLINE_JIT_SERVER=1 UP_FRONT_INLINE_FARM_MIN_PROGRAMS="$PRECOMPILE_FARM_MIN_PROGRAMS" \
-                            TT_METAL_JIT_SERVER_ENDPOINT="$JIT_SERVER_ENDPOINT" \
-                            TT_METAL_JIT_PREPROCESS=1 TT_METAL_JIT_SERVER_KEEPALIVE=1)
-        echo "PRECOMPILE: on — compile step -> JIT server ${JIT_SERVER_ENDPOINT} when >= ${PRECOMPILE_FARM_MIN_PROGRAMS} programs, else local (real pass always local)" >&2
-    else
-        echo "PRECOMPILE: on — collect + parallel compile (x${PRECOMPILE_WORKERS}) inside the pytest session, local" >&2
-    fi
-    PYTEST_CMD=(env "${PRECOMPILE_SRV_ENV[@]}" UP_FRONT_INLINE=1 UP_FRONT_COLLECT=1 UP_FRONT_REAL_ALLOC=1 \
-                UP_FRONT_COLLECT_WORKERS="$PRECOMPILE_WORKERS" \
-                PYTHONPATH="$PRECOMPILE_PLUGIN_DIR${PYTHONPATH:+:$PYTHONPATH}" \
-                "${PYTEST_CMD[@]}" -p tests.plugins.up_front_collect)
-else
-    echo "PRECOMPILE: off (${TT_TIMING_PRECOMPILE_REASON}) — kernels compile on demand" >&2
-fi
+# --- Precompile: load the collector into this session ---
+# Shared decision (sim rule, farm/local route, plugin env); this runner's policy on an
+# unreachable JIT server is ABORT (exit 4). The collect pass, compile step and real pass are one
+# process, so they share the user's TT_METAL_CACHE (and, under --profile, one build key).
+ttrun_precompile_prepare abort || exit $?
+ttrun_precompile_cmd "${PYTEST_CMD[@]}"
+PYTEST_CMD=("${PRECOMPILE_CMD[@]}")
 # -x: stop on first failure (avoids running tests after a hang bricks the device)
 # --run-all: skip -x to get full pass/fail counts (for eval scoring)
 if [[ "$FAIL_FAST" == true ]]; then
@@ -672,9 +407,7 @@ echo "========================================"
 # Pessimistic: assume the device will get corrupted. If the script is killed at any
 # point (SIGKILL, OOM, etc.), the flag persists and the next runner will reset.
 # Cleared on clean exit or after a successful inline reset.
-if [[ "$SIM_MODE" == false ]]; then
-    touch "$DIRTY_FLAG"
-fi
+ttrun_mark_dirty
 
 # --- Run pytest ---
 
@@ -684,39 +417,8 @@ if [[ "$PROFILE_MODE" == true ]]; then
     PROFILE_CSV_BEFORE=$(ls -t "${PROFILE_REPORTS_DIR}"/*/ops_perf_results*.csv 2>/dev/null | head -1)
 fi
 
-# Signal handling: if this script is killed (e.g. parent process gets SIGTERM
-# and we get reparented to init, or a watchdog kills us), forward SIGKILL to
-# pytest and its descendants. Without this, pytest is orphaned with fd 9 ->
-# /tmp/tt-device.lock and /dev/tenstorrent/* held, blocking all future runs.
-CHILD_PID=
-_signal_cleanup() {
-    local sig=$1
-    echo ""
-    echo "SAFE_PYTEST: Caught SIG${sig} — killing pytest, marking device dirty"
-    [[ "$SIM_MODE" == false ]] && touch "$DIRTY_FLAG" 2>/dev/null
-    if [[ -n "$CHILD_PID" ]]; then
-        pkill -KILL -P "$CHILD_PID" 2>/dev/null || true
-        kill -KILL "$CHILD_PID" 2>/dev/null || true
-    fi
-    pkill -KILL -P $$ 2>/dev/null || true
-    exit 143
-}
-trap '_signal_cleanup TERM' SIGTERM
-trap '_signal_cleanup HUP'  SIGHUP
-trap '_signal_cleanup INT'  SIGINT
-
-# Run pytest in background so `wait` can be interrupted by a signal. Bash
-# blocks signal delivery while a synchronous foreground command is running.
-# Mirror stdout/stderr to PYTEST_STDOUT_LOG via process substitution so we can
-# grep for the libttsim watchdog message after a sim hang. Process substitution
-# leaves $! pointing at pytest itself (not tee), so the signal trap still kills
-# the right process tree.
-"${PYTEST_CMD[@]}" > >(tee "$PYTEST_STDOUT_LOG") 2>&1 &
-CHILD_PID=$!
-wait "$CHILD_PID"
-EXIT_CODE=$?
-wait 2>/dev/null  # let tee flush before we grep
-CHILD_PID=
+# Signal forwarding + run-under-tee live in ttrun_run_child (sets EXIT_CODE).
+ttrun_run_child "$PYTEST_STDOUT_LOG" "${PYTEST_CMD[@]}"
 
 echo "========================================"
 
@@ -724,31 +426,11 @@ echo "========================================"
 # The triage-log guard matters in profile mode: the tracy wrapper exits 0 even
 # when the underlying test failed OR hung, so without it a hang would be reported
 # PASS and skip the device reset. An empty triage log means no hang fired.
-# Precompile attribution: the plugin's RESULT line (one line of key=value fields) lives in the
-# session's stdout. Best-effort, for the device-timing record only; a missing line degrades the
-# reason, never the run.
-if [[ "$PRECOMPILE" == true ]]; then
-    _iline=$(grep -a '^UP_FRONT_COLLECT_RESULT:' "$PYTEST_STDOUT_LOG" 2>/dev/null | tail -1 || true)
-    _ireason=""; _iprogs=""; _ibuilt=""; _iroute=""; _icollect_s=""; _icompile_s=""
-    [[ "$_iline" =~ reason=([^[:space:]]+) ]] && _ireason="${BASH_REMATCH[1]}"
-    [[ "$_iline" =~ programs=([0-9]+) ]] && _iprogs="${BASH_REMATCH[1]}"
-    [[ "$_iline" =~ built=([0-9]+) ]] && _ibuilt="${BASH_REMATCH[1]}"
-    [[ "$_iline" =~ route=([^[:space:]]+) ]] && _iroute="${BASH_REMATCH[1]}"
-    [[ "$_iline" =~ collect_s=([0-9]+(\.[0-9]+)?) ]] && _icollect_s="${BASH_REMATCH[1]}"
-    [[ "$_iline" =~ compile_s=([0-9]+(\.[0-9]+)?) ]] && _icompile_s="${BASH_REMATCH[1]}"
-    TT_TIMING_PRECOMPILE_MODE="inline_${_iroute:-local}"
-    TT_TIMING_PRECOMPILE_REASON="${_ireason:-no_result_line}"
-    TT_TIMING_PRECOMPILE_PROGRAMS="${_iprogs:--1}"
-    TT_TIMING_PRECOMPILE_BUILT="${_ibuilt:--1}"
-    # Integer seconds, rounded, of collect pass + compile step.
-    TT_TIMING_PRECOMPILE_S=$(awk -v a="${_icollect_s:-0}" -v b="${_icompile_s:-0}" 'BEGIN{printf "%d", a+b+0.5}')
-    grep -a '^UP_FRONT_INLINE:\|^UP_FRONT_COLLECT:' "$PYTEST_STDOUT_LOG" 2>/dev/null | sed 's/^/PRECOMPILE: /' >&2
-fi
+ttrun_precompile_record "$PYTEST_STDOUT_LOG"   # timing-record fields only; never affects the verdict
 
 if [[ $EXIT_CODE -eq 0 && ! -s "$TRIAGE_LOG" ]]; then
-    rm -f "$DIRTY_FLAG"
-    rm -f "$TRIAGE_LOG"
-    rm -f "$PYTEST_STDOUT_LOG"
+    ttrun_clear_dirty
+    ttrun_cleanup_tmp "$PYTEST_STDOUT_LOG"
     emit_profiler_csv
     echo "SAFE_PYTEST_RESULT: PASS"
     exit 0
@@ -758,9 +440,8 @@ fi
 #   4 = usage error (bad args, nonexistent path)
 #   5 = no tests collected (typo in path, bad marker filter, etc.)
 if [[ $EXIT_CODE -eq 4 || $EXIT_CODE -eq 5 ]]; then
-    rm -f "$DIRTY_FLAG"
-    rm -f "$TRIAGE_LOG"
-    rm -f "$PYTEST_STDOUT_LOG"
+    ttrun_clear_dirty
+    ttrun_cleanup_tmp "$PYTEST_STDOUT_LOG"
     if [[ $EXIT_CODE -eq 4 ]]; then
         echo "SAFE_PYTEST_ERROR: Pytest usage error (invalid path or arguments)"
     else
@@ -769,67 +450,22 @@ if [[ $EXIT_CODE -eq 4 || $EXIT_CODE -eq 5 ]]; then
     exit 3
 fi
 
-# Kill any remaining child processes (pytest may have left orphans)
-pkill -9 -P $$ 2>/dev/null || true
-
-# Determine if this was a hang:
-#   HW:  Triage log non-empty = dispatch timeout handler ran tt-triage.
-#   Sim: pytest stdout contains "hang watchdog fired" = libttsim watchdog _Exit(1)'d.
-# In the sim case we stage the watchdog message into TRIAGE_LOG so the HANG
-# branch below dumps it identically to a HW triage report.
-IS_HANG=false
-if [[ -s "$TRIAGE_LOG" ]]; then
-    IS_HANG=true
-elif [[ "$SIM_MODE" == true ]] && grep -q "hang watchdog fired" "$PYTEST_STDOUT_LOG" 2>/dev/null; then
-    IS_HANG=true
-    grep -A4 "hang watchdog fired" "$PYTEST_STDOUT_LOG" > "$TRIAGE_LOG"
-fi
+# Hang? (HW: triage log non-empty; sim: libttsim watchdog message in the pytest output.)
+ttrun_detect_hang "$PYTEST_STDOUT_LOG"
 
 # Only reset device when the failure might have left it dirty.
 # Hangs and crashes corrupt device state. Normal test failures (PCC mismatch,
 # assertion errors) and collection errors don't touch the device.
 if [[ "$IS_HANG" == true ]]; then
-    if [[ "$SIM_MODE" == false ]]; then
-        echo "SAFE_PYTEST: Resetting device..."
-        if tt-smi -r; then
-            sleep 2
-            rm -f "$DIRTY_FLAG"
-            echo "SAFE_PYTEST: Device reset complete"
-        else
-            echo "SAFE_PYTEST: Device reset FAILED; leaving device marked dirty"
-        fi
-    fi
-
+    ttrun_reset_cards
     echo "SAFE_PYTEST_RESULT: HANG (exit code: $EXIT_CODE)"
-    echo ""
-
-    # Dump full triage log
-    echo "=== TRIAGE LOG ==="
-    cat "$TRIAGE_LOG"
-    echo "=== END TRIAGE LOG ==="
-    echo ""
-
-    # In dev mode, also dump watcher log
-    if [[ "$DEV_MODE" == true && -f "$WATCHER_LOG" ]]; then
-        echo "=== WATCHER LOG (last 50 lines) ==="
-        tail -50 "$WATCHER_LOG"
-        echo "=== END WATCHER LOG ==="
-        echo ""
-    fi
-
-    # Print the triage report path as the last line so machine-readers can find it.
-    if [[ -f "$TRIAGE_REPORT" ]]; then
-        echo "SAFE_PYTEST: triage report: ${TRIAGE_REPORT}"
-    fi
-
-    rm -f "$TRIAGE_LOG"
-    rm -f "$PYTEST_STDOUT_LOG"
+    ttrun_dump_hang_logs
+    ttrun_cleanup_tmp "$PYTEST_STDOUT_LOG"
     exit 2
 fi
 
-rm -f "$DIRTY_FLAG"
-rm -f "$TRIAGE_LOG"
-rm -f "$PYTEST_STDOUT_LOG"
+ttrun_clear_dirty
+ttrun_cleanup_tmp "$PYTEST_STDOUT_LOG"
 # Note: $EXIT_CODE here is pytest's internal exit code (e.g. 1 = test failure,
 # 2 = collection error / user interrupt). The wrapper's own exit code is
 # always 1 for this branch — exit 2 is reserved for real dispatch-timeout

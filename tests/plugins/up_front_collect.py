@@ -708,6 +708,12 @@ def pytest_runtestloop(session):
     # never see them. nextitem=None on the last item tears down EVERY fixture (incl. the device),
     # so the compile below can open device 0 itself, exactly as the two-process flow does.
     _PASS = "collect"
+    # UP_FRONT_COLLECT=1 is the env-level "this is a collect pass" signal that sibling
+    # instrumentation keys on (eval's L1 profiler and metrics plugin skip their work under
+    # it). In inline mode it must be true for pass 1 ONLY: raise it here and drop it again
+    # before the real pass, whatever the caller's environment said.
+    _had_collect_env = os.environ.get("UP_FRONT_COLLECT")
+    os.environ["UP_FRONT_COLLECT"] = "1"
     _set_collect_tbstyle(session.config, True)
     try:
         for i, item in enumerate(items):
@@ -715,6 +721,14 @@ def pytest_runtestloop(session):
             runtestprotocol(item, log=False, nextitem=nextitem)
     finally:
         _set_collect_tbstyle(session.config, False)
+        os.environ.pop("UP_FRONT_COLLECT", None)
+    # Pass-1 leftovers on the items: hooks that annotate the item itself rather than a report
+    # (user_properties -> JUnit <properties>, e.g. start/end timestamps and per-test metrics)
+    # ran once already, and their values describe a NO_DISPATCH body. Clear them so pass 2's
+    # JUnit carries exactly one, real, set per test.
+    for item in items:
+        if getattr(item, "user_properties", None):
+            item.user_properties.clear()
     t1 = _time.monotonic()
     print(f"\nUP_FRONT_INLINE: collect pass over {n} item(s) took {t1 - t0:.1f}s", flush=True)
     # ---- compile (between passes). Exit status is not known yet; report 0 for attribution.
@@ -752,6 +766,8 @@ def pytest_runtestloop(session):
         if session.shouldstop:
             raise session.Interrupted(session.shouldstop)
     print(f"UP_FRONT_INLINE: real pass took {_time.monotonic() - t2:.1f}s", flush=True)
+    if _had_collect_env is not None:
+        os.environ["UP_FRONT_COLLECT"] = _had_collect_env  # restore for any post-session reader
     return True
 
 
