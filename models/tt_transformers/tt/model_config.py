@@ -2447,8 +2447,14 @@ class ModelArgs:
             return math.ceil(max_columns_per_device / (ttnn.TILE_SIZE * prefetcher.ring_size)) * (
                 ttnn.TILE_SIZE * prefetcher.ring_size
             )
-        else:
-            return max_columns_per_device
+        # Round the split width up to a tile. A non-tile-aligned split (Llama-3 on 4
+        # Blackhole devices landed on 128256/4/8 = 4008 = 125.25 tiles) makes the
+        # LMHead.forward concat of the per-split logits illegal in TILE layout, so ttnn
+        # falls back to untilize-with-unpadding every split, concat row-major, then
+        # re-tilize. Measured on P150x4: concat of 8x4008 costs 108.2 us per token,
+        # concat of 8x4032 costs 8.4 us. The rounding only widens the last matmul's
+        # padded N, which the DRAM-sharded weight already pads to a tile anyway.
+        return math.ceil(max_columns_per_device / ttnn.TILE_SIZE) * ttnn.TILE_SIZE
 
     @lru_cache(maxsize=None)
     def get_lm_head_input_mem_config(self, mode: Mode, prefetcher: Prefetcher = None):

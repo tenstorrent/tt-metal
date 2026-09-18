@@ -302,16 +302,24 @@ class MLP(LightweightModule):
                     ),
                 )
 
+        # The SwiGLU combine is SFPU-bound, so it wants cores, not the FF1/FF3 output
+        # shard's grid. Pinning it to that grid (16 cores on P150x4) leaves most of the
+        # device idle; writing L1-interleaved lets it auto-grid, and the reshard into the
+        # FF2 input layout below is a conversion this path performs anyway. Measured on
+        # P150x4 for 32x3584 bf16 x bf16 -> bfp8, mul plus the following reshard:
+        #   mul on the 16-core FF1/FF3 grid 13.6 us | mul L1-interleaved 9.3 us
+        # (mul on 56 cores is 6.1 us but needs a 2.9 us reshard back, for 9.4 us total).
+        reshard_w2_in = mode == Mode.DECODE and not TG and self.prefetcher is None
         w2_in = ttnn.mul(
             w1_out,
             w3_out,
             input_tensor_a_activations=[self.activation_type],
             dtype=activation_dtype or ttnn.bfloat8_b,
-            memory_config=w1_out.memory_config(),
+            memory_config=ttnn.L1_MEMORY_CONFIG if reshard_w2_in else w1_out.memory_config(),
         )
 
-        if mode == Mode.DECODE and not TG and self.prefetcher is None:
-            # w2 may use a different core grid, this is a no-op if they already match
+        if reshard_w2_in:
+            # w2 uses its own core grid; this also re-shards the interleaved mul output
             w2_in = ttnn.to_memory_config(w2_in, self.args.get_mlp_binary_mult_mem_config(mode))
 
         ttnn.deallocate(w3_out)
