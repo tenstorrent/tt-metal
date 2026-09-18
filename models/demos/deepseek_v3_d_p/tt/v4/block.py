@@ -97,8 +97,6 @@ class TtV4Block(LightweightModule):
         self.mesh_device = mesh_device
         self.num_links = num_links
         # A (SP-axis, TP-axis) tuple configures each mesh axis separately; a scalar applies to both.
-        # A torus config wraps only the SP axis, so TP-axis collectives must stay Linear: Ring on an
-        # unwrapped axis waits forever on a wrap link with no fabric edge behind it.
         assert (
             not isinstance(topology, tuple) or len(topology) == 2
         ), f"per-axis topology must be a 2-tuple (sp_axis, tp_axis), got {topology!r}"
@@ -140,11 +138,11 @@ class TtV4Block(LightweightModule):
             cache_name_prefix=f"layer_{layer_idx}.ffn_norm",
         )
 
-        # V4 attention keeps ONE topology for every collective, its SP-axis gather included, so it
-        # takes the TP element. Its weights come off the torch module, not a state dict, so there is
-        # nothing for a weight cache to hold for this half of the block.
+        # The full per-axis topology: the attention's SP-axis gather needs the SP element and its
+        # other collectives the TP one. Its weights come off the torch module, not a state dict, so
+        # there is nothing for a weight cache to hold for this half of the block.
         self.attn = _ATTENTION[attn_kind].from_reference(
-            mesh_device, attn_reference, config, sp_axis=sp_axis, tp_axis=tp_axis, topology=tp_topology
+            mesh_device, attn_reference, config, sp_axis=sp_axis, tp_axis=tp_axis, topology=topology
         )
         # Allocated once: the state's shape is the same for every chunk, only its contents advance.
         self.attn_state = self.attn.alloc_state(max_seq_len or seq_len, chunk_tokens=seq_len)
