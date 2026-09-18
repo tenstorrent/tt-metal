@@ -57,6 +57,15 @@ FORCE_INLINE void read_chunk_for_forwarding(
 #endif
 }
 
+// Causal chains: hand a landed K/V slot (or the per Q chunk {entry count, 0} header) to the writer, which forwards it.
+FORCE_INLINE void post_kv_forward(CircularBuffer& cb_kv_fwd, uint32_t address, uint32_t bytes) {
+    cb_kv_fwd.reserve_back(1);
+    volatile tt_l1_ptr uint32_t* entry = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_kv_fwd.get_write_ptr());
+    entry[0] = address;
+    entry[1] = bytes;
+    cb_kv_fwd.push_back(1);
+}
+
 void kernel_main() {
     Noc noc;
 
@@ -99,12 +108,19 @@ void kernel_main() {
     // Windowed K-range narrowing: the reader computes each Q chunk's [k_lo, k_hi) from
     // cu_window_seqlens, streams only that range, and feeds it to compute over a ctrl CB.
     constexpr bool use_windowed_narrowing = get_compile_time_arg_val(34) == 1;
-    // 2 = causal prefix chains: heavy zigzag chunks of a head take a prefix of K/V from the previous core.
-    constexpr bool causal_chain = get_compile_time_arg_val(35) == 2;
+    // 2 and 3 = causal prefix chains: heavy zigzag chunks of a head take a prefix of K/V from the previous core.
+    // In mode 3 the writer RISC does the forwarding (see post_kv_forward), in mode 2 this reader does.
+    constexpr uint32_t kv_chain_mode = get_compile_time_arg_val(35);
+    constexpr bool causal_chain = kv_chain_mode >= 2;
+    constexpr bool writer_forwards = kv_chain_mode == 3;
+    constexpr bool reader_forwards = !writer_forwards;
     // Mask block map: one int32 row of block flags per Q chunk; blocks flagged 0 are not read at all.
     constexpr bool use_mask_block_map = get_compile_time_arg_val(36) == 1;
+    // K/V CB depth in chunks, and the writer's count of finished forwards that guards slot reuse.
+    constexpr uint32_t kv_slots = get_compile_time_arg_val(37);
+    constexpr uint32_t fwd_done_semaphore_id = get_compile_time_arg_val(38);
 
-    constexpr auto q_args = TensorAccessorArgs<37>();
+    constexpr auto q_args = TensorAccessorArgs<39>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     constexpr auto mask_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
@@ -236,6 +252,8 @@ void kernel_main() {
     constexpr uint32_t cb_id_windowed_cu_reader = get_compile_time_arg_val(cb_arg_offset + 8);
     constexpr uint32_t cb_id_windowed_k_range = get_compile_time_arg_val(cb_arg_offset + 9);
     constexpr uint32_t cb_id_mask_block_map = get_compile_time_arg_val(cb_arg_offset + 10);
+    // Causal chains: reader -> writer forward requests, {address, bytes} per entry.
+    constexpr uint32_t cb_id_kv_fwd_ctrl = get_compile_time_arg_val(cb_arg_offset + 11);
 
     constexpr uint32_t q_tile_bytes = get_tile_size(cb_q_in);
     constexpr uint32_t k_tile_bytes = get_tile_size(cb_k_in);
@@ -277,6 +295,15 @@ void kernel_main() {
     CircularBuffer cb_mask(cb_mask_in);
     CircularBuffer cb_attn_sink(cb_attention_sink);
     CircularBuffer cb_page_table(cb_id_page_table);
+
+    // Causal chains: the writer forwards the slots queued on cb_kv_fwd and counts finished forwards on fwd_done;
+    // a slot is reserved again only once its last queued forward is counted (per slot sequence number, 0 = none).
+    CircularBuffer cb_kv_fwd(cb_id_kv_fwd_ctrl);
+    uint32_t fwd_seq = 0;
+    uint32_t k_slot = 0;
+    uint32_t v_slot = 0;
+    uint32_t k_slot_fwd_seq[kv_slots] = {};
+    uint32_t v_slot_fwd_seq[kv_slots] = {};
 
     uint32_t chunked_q_chunk_offset = 0;
     if constexpr (is_chunked) {
@@ -569,6 +596,13 @@ void kernel_main() {
                 }
             }
 
+            if constexpr (writer_forwards) {
+                if (is_chain_participant) {
+                    // one K and one V entry follow per forwarded chunk
+                    post_kv_forward(cb_kv_fwd, 2 * fwd_chunks, 0);
+                }
+            }
+
             // loop while k_low < q_high
             for (uint32_t k_chunk = k_loop_start; (k_chunk * Sk_chunk_t) < q_high_idx; ++k_chunk) {
                 if constexpr (use_mask_block_map) {
@@ -583,6 +617,12 @@ void kernel_main() {
                 const uint32_t kv_row_tile_count = kv_row_end_tile - kv_row_start_tile;
                 const uint32_t k_start_tile_id = k_tile_shape.id_of(nb, k_head, kv_row_start_tile, 0);
                 const uint32_t v_start_tile_id = v_tile_shape.id_of(nb, v_head, kv_row_start_tile, 0);
+
+                if constexpr (writer_forwards) {
+                    if (k_slot_fwd_seq[k_slot] != 0) {
+                        Semaphore<>(fwd_done_semaphore_id).wait_min(k_slot_fwd_seq[k_slot]);
+                    }
+                }
 
                 // K: either read locally (injector or not participant) or receive from previous core
                 uint32_t cb_k_start_address = 0;
@@ -650,8 +690,20 @@ void kernel_main() {
                 // The companion must be issued immediately after the linked write —
                 // any NOC read barrier between them deadlocks (the read barrier
                 // blocks while a linked write awaits its companion).
+                if constexpr (writer_forwards) {
+                    if (should_forward) {
+                        post_kv_forward(cb_kv_fwd, cb_k_start_address, k_chunk_tiles * k_tile_bytes);
+                        k_slot_fwd_seq[k_slot] = ++fwd_seq;
+                        if (!should_receive) {
+                            cb_k.push_back(k_chunk_tiles);
+                        }
+                    } else {
+                        k_slot_fwd_seq[k_slot] = 0;
+                    }
+                    k_slot = (k_slot + 1 == kv_slots) ? 0 : k_slot + 1;
+                }
                 uint32_t fwd_dst_k = cb_k_start_address;
-                if (should_forward) {
+                if (reader_forwards && should_forward) {
                     Semaphore<> sender_sem(sender_semaphore_id);
                     if constexpr (causal_chain) {
                         // the receiver posts its slot address as the ready signal
@@ -749,7 +801,7 @@ void kernel_main() {
 
                 // Complete K forward: flush write and signal receiver(s)
                 // (mcast path already completed above — companion sent with linked write)
-                if (should_forward) {
+                if (reader_forwards && should_forward) {
                     if constexpr (!mcast_enabled) {
                         noc.async_writes_flushed();
                         if (!should_receive) {
@@ -781,6 +833,12 @@ void kernel_main() {
                                 DHt,
                                 barrier_threshold);
                         }
+                    }
+                }
+
+                if constexpr (writer_forwards) {
+                    if (v_slot_fwd_seq[v_slot] != 0) {
+                        Semaphore<>(fwd_done_semaphore_id).wait_min(v_slot_fwd_seq[v_slot]);
                     }
                 }
 
@@ -849,10 +907,23 @@ void kernel_main() {
 
                 // Forward V chunk to next core(s) before push_back — prevents compute from
                 // popping the buffer while the mcast is still reading from it.
+                if constexpr (writer_forwards) {
+                    if (should_forward) {
+                        post_kv_forward(cb_kv_fwd, cb_v_start_address, v_chunk_tiles * v_tile_bytes);
+                        v_slot_fwd_seq[v_slot] = ++fwd_seq;
+                        if (!should_receive) {
+                            cb_v.push_back(v_chunk_tiles);
+                        }
+                    } else {
+                        v_slot_fwd_seq[v_slot] = 0;
+                    }
+                    v_slot = (v_slot + 1 == kv_slots) ? 0 : v_slot + 1;
+                }
                 uint32_t fwd_dst_v = cb_v_start_address;
-                if (should_forward) {
+                if (reader_forwards && should_forward) {
                     Semaphore<> sender_sem(sender_semaphore_id);
                     if constexpr (causal_chain) {
+                        // the receiver posts its slot address as the ready signal
                         sender_sem.wait_min(1);
                         fwd_dst_v = sender_sem.value();
                     } else {

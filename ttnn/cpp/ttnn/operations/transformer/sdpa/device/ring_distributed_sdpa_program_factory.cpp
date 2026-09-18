@@ -303,6 +303,8 @@ ProgramDescriptor build_ring_distributed_sdpa_program_descriptor(
     reader_compile_time_args.push_back(0);  // arg 34: use_windowed_narrowing — ring is never windowed
     reader_compile_time_args.push_back(0);  // arg 35: kv chain mode, ring has no chains
     reader_compile_time_args.push_back(0);  // arg 36: mask block map, never on ring
+    reader_compile_time_args.push_back(2);  // arg 37: K/V CB depth in chunks (double buffer)
+    reader_compile_time_args.push_back(0);  // arg 38: fwd_done_semaphore_id, ring has no chains
 
     TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(input_tensor_k.buffer()).append_to(reader_compile_time_args);
@@ -344,6 +346,11 @@ ProgramDescriptor build_ring_distributed_sdpa_program_descriptor(
         0,      // arg 23: k_partial_col — non-streaming, no partial mask emitted
         static_cast<uint32_t>(use_zigzag_balancing),  // arg 24
         0,  // arg 25: use_windowed_mask — ring never uses windowed (block-diagonal) attention
+        0,  // arg 26: sender_semaphore_id, ring has no chains
+        0,  // arg 27: receiver_semaphore_id
+        0,  // arg 28: valid_semaphore_id
+        0,  // arg 29: fwd_done_semaphore_id
+        0,  // arg 30: kv chain mode
     };
     // out accessor, then the cu_window and Q-offset accessors chained right after it (mirrors the regular
     // factory so the writer's accessor offset chain stays intact). Ring is never windowed → placeholders.
@@ -454,6 +461,7 @@ ProgramDescriptor build_ring_distributed_sdpa_program_descriptor(
     cb_ids.windowed_q_offset = cb_ids.q_in;
     cb_ids.windowed_cu_reader = cb_ids.q_in;
     cb_ids.windowed_k_range = cb_ids.q_in;
+    cb_ids.kv_fwd_ctrl = cb_ids.q_in;
     cb_ids.k_in = allocate_tile_cb(k_tiles, k_tile_size, k_df);
     cb_ids.v_in = allocate_tile_cb(v_tiles, v_tile_size, v_df);
     cb_ids.mask_in = allocate_tile_cb(mask_tiles, mask_tile_size, mask_df);
