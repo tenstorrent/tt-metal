@@ -84,8 +84,13 @@ class TopKRouter:
 
         # Fused op support: matmul + topk + softmax in one kernel
         # The fused kernel uses 4 groups of 3 cores, one per N-tile (32 experts
-        # each), so it requires exactly 128 experts. Enable automatically when possible.
-        self.use_fused_op = self.num_experts == 128
+        # each), so it requires exactly 128 experts. It also needs 12 DRAM-aligned
+        # cores (one per DRAM bank); Wormhole has 12 banks but Blackhole only has 8,
+        # so the kernel is unusable there regardless of expert count (see
+        # tests/ttnn/nightly/unit_tests/operations/experimental/test_topk_router_gpt.py,
+        # which skips it on Blackhole for the same reason). Enable automatically only
+        # when both conditions hold.
+        self.use_fused_op = self.num_experts == 128 and not ttnn.device.is_blackhole(mesh_device)
         self._fused_bias = None
         # Keep the original unsharded bias for fused op initialization
         # (ttnn.as_tensor shards self.bias across the mesh, but the fused op
