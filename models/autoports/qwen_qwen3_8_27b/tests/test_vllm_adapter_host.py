@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Host-only adapter state tests; no model construction or device execution."""
 
+import os
 import unittest
 from collections import Counter
 from types import SimpleNamespace
@@ -12,6 +13,25 @@ import torch
 from models.autoports.qwen_qwen3_8_27b.tt import generator_vllm as adapter_module
 from models.autoports.qwen_qwen3_8_27b.tt.generator import QwenGenerator
 from models.autoports.qwen_qwen3_8_27b.tt.generator_vllm import Qwen38ForCausalLM
+
+
+class KVPoolConfigurationTests(unittest.TestCase):
+    def test_default_preserves_single_request_pool(self):
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(Qwen38ForCausalLM.get_max_tokens_all_users(262144), 262144)
+
+    def test_concurrent_pool_fits_eight_long_requests(self):
+        with patch.dict(os.environ, {"QWEN_VLLM_KV_POOL_TOKENS": "1050592"}):
+            self.assertEqual(
+                Qwen38ForCausalLM.get_max_tokens_all_users(262144, max_num_seqs=8),
+                8 * (131072 + 252),
+            )
+
+    def test_invalid_or_oversized_pool_is_rejected(self):
+        for value in ("-1", "0", "262145", "2097152", "1e6", "１２３"):
+            with self.subTest(value=value), patch.dict(os.environ, {"QWEN_VLLM_KV_POOL_TOKENS": value}):
+                with self.assertRaises(ValueError):
+                    Qwen38ForCausalLM.get_max_tokens_all_users(262144)
 
 
 class FakeGenerator:

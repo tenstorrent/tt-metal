@@ -70,7 +70,21 @@ class Qwen38ForCausalLM:
     @classmethod
     def get_max_tokens_all_users(cls, max_model_len=None, **kwargs):
         # Shared paged pool: one maximum-context request or many short requests.
-        return int(max_model_len or cls._MAX_CONTEXT)
+        context = int(max_model_len or cls._MAX_CONTEXT)
+        configured = os.environ.get("QWEN_VLLM_KV_POOL_TOKENS")
+        if configured is None:
+            return context
+        if not configured.isascii() or not configured.isdecimal():
+            raise ValueError("QWEN_VLLM_KV_POOL_TOKENS must be positive ASCII decimal tokens")
+        tokens = int(configured)
+        # Bound the allocation to the measured TP4 BFP8 KV pool, independently
+        # of the per-request context limit. Eight 128K prompts need more than
+        # the default shared 256K pool even when admission permits eight users.
+        if tokens % 32 or not cls._MAX_CONTEXT <= tokens <= 1179648:
+            raise ValueError("Explicit KV pool must be 32-token aligned within 262144..1179648")
+        if kwargs.get("num_devices", 4) != 4 or kwargs.get("tt_data_parallel", 1) != 1:
+            raise ValueError("Explicit KV pool requires TP4")
+        return tokens
 
     @classmethod
     def supports_device_sampling(cls, params, *, is_decode):

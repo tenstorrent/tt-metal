@@ -1,0 +1,101 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+"""Measure real device batches at the serving adapter, with repeated warm shapes."""
+
+import argparse
+import json
+import time
+from pathlib import Path
+from types import SimpleNamespace
+
+import torch
+
+import ttnn
+from models.autoports.qwen_qwen3_8_27b.tt.generator import build_generator, configure_fabric
+from models.autoports.qwen_qwen3_8_27b.tt.generator_vllm import Qwen38ForCausalLM
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--batch", type=int, required=True)
+    parser.add_argument("--lengths", default="128,4096,32768")
+    parser.add_argument("--steps", type=int, default=32)
+    parser.add_argument("--context", type=int)
+    parser.add_argument("--pool-tokens", type=int)
+    parser.add_argument("--output", type=Path, required=True)
+    args = parser.parse_args()
+    lengths = list(map(int, args.lengths.split(",")))
+    context = args.context or ((max(lengths) + args.steps + 31) // 32) * 32
+    pool_tokens = args.pool_tokens or args.batch * context
+    if context < max(lengths) + args.steps or pool_tokens // args.batch < max(lengths) + args.steps:
+        parser.error("Each request must fit in both context and its disjoint share of the KV pool")
+    torch.set_num_threads(8)
+    configure_fabric()
+    mesh = ttnn.open_mesh_device(ttnn.MeshShape(1, 4), trace_region_size=134217728)
+    adapter = None
+    report = dict(batch=args.batch, context=context, pool_tokens=pool_tokens, steps=args.steps, rows=[])
+    try:
+        generator = build_generator(Path("models/autoports/qwen_qwen3_8_27b"), mesh)
+        adapter = Qwen38ForCausalLM(generator, args.batch, context)
+        pages = (context + 31) // 32
+        physical_pages = (pool_tokens + 31) // 32
+        cache = adapter.allocate_kv_cache((physical_pages, 1, 32, 256), None, 64)
+        per_user = min(pages, physical_pages // args.batch)
+        table = torch.zeros(args.batch, pages, dtype=torch.int32)
+        table[:, :per_user] = torch.arange(args.batch * per_user, dtype=torch.int32).reshape(args.batch, per_user)
+        params = SimpleNamespace(
+            temperature=[0.0] * args.batch,
+            top_k=[1] * args.batch,
+            top_p=[0.0] * args.batch,
+            seed=[17] * args.batch,
+        )
+        for length in lengths:
+            tokens = (torch.arange(length).remainder(256) + 100).repeat(args.batch, 1)
+            for repeat in range(2):
+                ttnn.synchronize_device(mesh)
+                begin = time.perf_counter()
+                decoded, _ = adapter.prefill_forward(
+                    tokens,
+                    table,
+                    cache,
+                    [length] * args.batch,
+                    sampling_params=params,
+                )
+                ttnn.synchronize_device(mesh)
+                prefill = time.perf_counter() - begin
+                outputs = [decoded.reshape(-1).tolist()]
+                times = []
+                for step in range(args.steps):
+                    begin = time.perf_counter()
+                    decoded = adapter.decode_forward(
+                        decoded,
+                        torch.full((args.batch,), length + step),
+                        table,
+                        cache,
+                        sampling_params=params,
+                        reset_batch=step == 0,
+                    )
+                    ttnn.synchronize_device(mesh)
+                    times.append(time.perf_counter() - begin)
+                    outputs.append(decoded.reshape(-1).tolist())
+                row = dict(
+                    length=length,
+                    repeat=repeat,
+                    prefill_s=prefill,
+                    first_decode_s=times[0],
+                    steady_step_s=sum(times[1:]) / len(times[1:]),
+                    aggregate_decode_tps=args.batch * len(times[1:]) / sum(times[1:]),
+                    tokens=outputs,
+                    counters=dict(generator.counters),
+                )
+                report["rows"].append(row)
+                args.output.write_text(json.dumps(report, indent=2) + "\n")
+                print("BATCH_PROFILE", json.dumps({k: v for k, v in row.items() if k != "tokens"}), flush=True)
+    finally:
+        if adapter is not None:
+            adapter.close()
+        ttnn.close_mesh_device(mesh)
+
+
+if __name__ == "__main__":
+    main()
