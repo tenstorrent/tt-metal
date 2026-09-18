@@ -1,0 +1,396 @@
+{
+  "acks": 32,
+  "successful": false,
+  "generations": [
+    {
+      "uuid": 700,
+      "slot": 0,
+      "chunk_count": 1,
+      "prompt_len": 2048,
+      "from": 0,
+      "to": 2048,
+      "cancelled": true,
+      "successful": false,
+      "terminal_kind": "PREFILL_DONE",
+      "terminal_position": 1024
+    }
+  ],
+  "slots": [
+    {
+      "slot": 0,
+      "position": 1024,
+      "pins": 0,
+      "in_flight": 0,
+      "pending": 0
+    },
+    {
+      "slot": 1,
+      "position": 0,
+      "pins": 0,
+      "in_flight": 0,
+      "pending": 0
+    }
+  ],
+  "calls": [
+    {
+      "op": "register",
+      "uuid": 700,
+      "transfer": 1,
+      "from": 0,
+      "to": 0,
+      "layer": 0,
+      "status": 0,
+      "tokens": 0
+    },
+    {
+      "op": "peer_ready",
+      "uuid": 0,
+      "transfer": 1,
+      "from": 0,
+      "to": 2048,
+      "layer": 0,
+      "status": 0,
+      "tokens": 0
+    },
+    {
+      "op": "layer",
+      "uuid": 0,
+      "transfer": 1,
+      "from": 0,
+      "to": 1024,
+      "layer": 0,
+      "status": 0,
+      "tokens": 0
+    },
+    {
+      "op": "layer",
+      "uuid": 0,
+      "transfer": 1,
+      "from": 0,
+      "to": 1024,
+      "layer": 1,
+      "status": 0,
+      "tokens": 0
+    },
+    {
+      "op": "layer",
+      "uuid": 0,
+      "transfer": 1,
+      "from": 0,
+      "to": 1024,
+      "layer": 2,
+      "status": 0,
+      "tokens": 0
+    },
+    {
+      "op": "layer",
+      "uuid": 0,
+      "transfer": 1,
+      "from": 0,
+      "to": 1024,
+      "layer": 3,
+      "status": 0,
+      "tokens": 0
+    },
+    {
+      "op": "layer",
+      "uuid": 0,
+      "transfer": 1,
+      "from": 0,
+      "to": 1024,
+      "layer": 4,
+      "status": 0,
+      "tokens": 0
+    },
+    {
+      "op": "layer",
+      "uuid": 0,
+      "transfer": 1,
+      "from": 0,
+      "to": 1024,
+      "layer": 5,
+      "status": 0,
+      "tokens": 0
+    },
+    {
+      "op": "layer",
+      "uuid": 0,
+      "transfer": 1,
+      "from": 0,
+      "to": 1024,
+      "layer": 6,
+      "status": 0,
+      "tokens": 0
+    },
+    {
+      "op": "layer",
+      "uuid": 0,
+      "transfer": 1,
+      "from": 0,
+      "to": 1024,
+      "layer": 7,
+      "status": 0,
+      "tokens": 0
+    },
+    {
+      "op": "layer",
+      "uuid": 0,
+      "transfer": 1,
+      "from": 0,
+      "to": 1024,
+      "layer": 8,
+      "status": 0,
+      "tokens": 0
+    },
+    {
+      "op": "layer",
+      "uuid": 0,
+      "transfer": 1,
+      "from": 0,
+      "to": 1024,
+      "layer": 9,
+      "status": 0,
+      "tokens": 0
+    },
+    {
+      "op": "layer",
+      "uuid": 0,
+      "transfer": 1,
+      "from": 0,
+      "to": 1024,
+      "layer": 10,
+      "status": 0,
+      "tokens": 0
+    },
+    {
+      "op": "layer",
+      "uuid": 0,
+      "transfer": 1,
+      "from": 0,
+      "to": 1024,
+      "layer": 11,
+      "status": 0,
+      "tokens": 0
+    },
+    {
+      "op": "layer",
+      "uuid": 0,
+      "transfer": 1,
+      "from": 0,
+      "to": 1024,
+      "layer": 12,
+      "status": 0,
+      "tokens": 0
+    },
+    {
+      "op": "layer",
+      "uuid": 0,
+      "transfer": 1,
+      "from": 0,
+      "to": 1024,
+      "layer": 13,
+      "status": 0,
+      "tokens": 0
+    },
+    {
+      "op": "layer",
+      "uuid": 0,
+      "transfer": 1,
+      "from": 0,
+      "to": 1024,
+      "layer": 14,
+      "status": 0,
+      "tokens": 0
+    },
+    {
+      "op": "layer",
+      "uuid": 0,
+      "transfer": 1,
+      "from": 0,
+      "to": 1024,
+      "layer": 15,
+      "status": 0,
+      "tokens": 0
+    },
+    {
+      "op": "layer",
+      "uuid": 0,
+      "transfer": 1,
+      "from": 0,
+      "to": 1024,
+      "layer": 16,
+      "status": 0,
+      "tokens": 0
+    },
+    {
+      "op": "layer",
+      "uuid": 0,
+      "transfer": 1,
+      "from": 0,
+      "to": 1024,
+      "layer": 17,
+      "status": 0,
+      "tokens": 0
+    },
+    {
+      "op": "layer",
+      "uuid": 0,
+      "transfer": 1,
+      "from": 0,
+      "to": 1024,
+      "layer": 18,
+      "status": 0,
+      "tokens": 0
+    },
+    {
+      "op": "layer",
+      "uuid": 0,
+      "transfer": 1,
+      "from": 0,
+      "to": 1024,
+      "layer": 19,
+      "status": 0,
+      "tokens": 0
+    },
+    {
+      "op": "layer",
+      "uuid": 0,
+      "transfer": 1,
+      "from": 0,
+      "to": 1024,
+      "layer": 20,
+      "status": 0,
+      "tokens": 0
+    },
+    {
+      "op": "layer",
+      "uuid": 0,
+      "transfer": 1,
+      "from": 0,
+      "to": 1024,
+      "layer": 21,
+      "status": 0,
+      "tokens": 0
+    },
+    {
+      "op": "layer",
+      "uuid": 0,
+      "transfer": 1,
+      "from": 0,
+      "to": 1024,
+      "layer": 22,
+      "status": 0,
+      "tokens": 0
+    },
+    {
+      "op": "layer",
+      "uuid": 0,
+      "transfer": 1,
+      "from": 0,
+      "to": 1024,
+      "layer": 23,
+      "status": 0,
+      "tokens": 0
+    },
+    {
+      "op": "layer",
+      "uuid": 0,
+      "transfer": 1,
+      "from": 0,
+      "to": 1024,
+      "layer": 24,
+      "status": 0,
+      "tokens": 0
+    },
+    {
+      "op": "layer",
+      "uuid": 0,
+      "transfer": 1,
+      "from": 0,
+      "to": 1024,
+      "layer": 25,
+      "status": 0,
+      "tokens": 0
+    },
+    {
+      "op": "layer",
+      "uuid": 0,
+      "transfer": 1,
+      "from": 0,
+      "to": 1024,
+      "layer": 26,
+      "status": 0,
+      "tokens": 0
+    },
+    {
+      "op": "layer",
+      "uuid": 0,
+      "transfer": 1,
+      "from": 0,
+      "to": 1024,
+      "layer": 27,
+      "status": 0,
+      "tokens": 0
+    },
+    {
+      "op": "layer",
+      "uuid": 0,
+      "transfer": 1,
+      "from": 0,
+      "to": 1024,
+      "layer": 28,
+      "status": 0,
+      "tokens": 0
+    },
+    {
+      "op": "layer",
+      "uuid": 0,
+      "transfer": 1,
+      "from": 0,
+      "to": 1024,
+      "layer": 29,
+      "status": 0,
+      "tokens": 0
+    },
+    {
+      "op": "layer",
+      "uuid": 0,
+      "transfer": 1,
+      "from": 0,
+      "to": 1024,
+      "layer": 30,
+      "status": 0,
+      "tokens": 0
+    },
+    {
+      "op": "layer",
+      "uuid": 0,
+      "transfer": 1,
+      "from": 0,
+      "to": 1024,
+      "layer": 31,
+      "status": 0,
+      "tokens": 0
+    },
+    {
+      "op": "cancel",
+      "uuid": 700,
+      "transfer": 1,
+      "from": 0,
+      "to": 0,
+      "layer": 0,
+      "status": 0,
+      "tokens": 0
+    },
+    {
+      "op": "completion",
+      "uuid": 0,
+      "transfer": 1,
+      "from": 0,
+      "to": 0,
+      "layer": 0,
+      "status": 0,
+      "tokens": 0
+    }
+  ]
+}

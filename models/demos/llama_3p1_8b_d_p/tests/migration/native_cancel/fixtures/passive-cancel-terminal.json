@@ -1,0 +1,23 @@
+{
+  "inbound_generations": [
+    {
+      "uuid": 700,
+      "transfer": 1,
+      "from": 0,
+      "to": 2048,
+      "complete": true,
+      "retired": false,
+      "cancelled": true,
+      "status": 6,
+      "tokens": 0
+    }
+  ],
+  "calls": [
+    {
+      "op": "completion",
+      "transfer": 1,
+      "status": 6,
+      "tokens": 0
+    }
+  ]
+}

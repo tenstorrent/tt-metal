@@ -9,8 +9,9 @@ These are standalone prefill-side tests. The receiver is passive allocated KV me
 | `writer_boundaries/` | Production cache writer and independent tensor/table oracle; no weights, H2D runtime or manager | One test, 128 seed writes, 10 boundary writes, 65,536-page before and after snapshots, 208 touched pages, 5,104 valid and 1,552 padding rows. |
 | `runtime_edges/` | One full32 source owner, real persistent H2D, no native manager | Five calls, 160 post-sync acknowledgments, six full-cache snapshots; two slots, partial tails, [32,65) continuation and runtime-only slot reuse. |
 | `native_ranges/` | Two retained owners, real H2D source and native managers, passive destination | Six generations, seven full32 calls, 224 post-sync acknowledgments, ordinary/crossed mappings, selected prefix/continuation/reuse, exact selected and untouched packed pages. |
+| `native_cancel/` | Two retained owners, real H2D/model source and native cancellation/restart | Two scenario calls, 64 real acknowledgments, delayed destination, retained allocation restart and 512 exact packed pages. |
 
-The writer and runtime fixtures passed on silicon before this packaging change. The paired-range fixture's device status is separate from host packaging checks. Do not infer a new device pass from the host suite or from source equivalence. Existing 2K numerical validation remains the accuracy anchor; these structural/exact-byte tests do not add an HF golden. Valid token endpoints are distinct from copied whole32-token pages. Cancellation and larger-capacity fixtures are not included here.
+The writer and runtime fixtures passed on silicon before this packaging change. The paired-range fixture's device status is separate from host packaging checks. Do not infer a new device pass from the host suite or from source equivalence. Existing 2K numerical validation remains the accuracy anchor; these structural/exact-byte tests do not add an HF golden. Valid token endpoints are distinct from copied whole32-token pages. The cancellation fixture has a separately accepted frozen device result; see the [cancellation report](../../docs/migration-prefill-cancel-restart.md). Larger-capacity fixtures are not included here.
 
 ## Host checks (no Torch or device imports)
 
@@ -31,7 +32,7 @@ python3 -I -S -B models/demos/llama_3p1_8b_d_p/tests/migration/test_host_contrac
   --suite runtime_edges
 ```
 
-The three child inventories remain17 writer,37 runtime and57 paired-range cases.
+The four child inventories are 17 writer, 37 runtime, 57 paired-range and 46 cancellation cases (157 total). The wrapper also checks actual writer importlib collection.
 The real writer device test remains a normal `test_*.py` pytest entry.
 
 The additional publication cases load the actual controller/supervisor/owner imports. They reject wrong manifest hashes, binary hashes, case inventories, library-linkage receipts and assigned host/job/lock before native work. Terminal journal, stale-page and cleanup fault cases remain in the copied suites. Temporary host files use the caller's TMPDIR.
@@ -86,6 +87,10 @@ python3 -B models/demos/llama_3p1_8b_d_p/tests/migration/native_ranges/controlle
 ```
 
 The existing role interface remains `supervise_owner.py --plan PLAN --plan-sha256 SHA --role source` (or `passive`). The controller runs one node step per role; each supervisor retains its own lock and cache owner. `verify_ranges.py --plan PLAN` checks saved reports and bytes. The wrapper waits for each actual native exit and exact clean Cluster lifecycle, then both-manager stop proof, before either cache is released. On ambiguity it records a recovery hold. Do not kill the retained owner or release its lock merely because the other PID vanished.
+
+### Paired cancellation and restart
+
+See [native_cancel/README.md](native_cancel/README.md) for the exact two-epoch scenario, configured dependency closure and closed-plan command. The controller preserves the same plan/hash and role/supervisor interfaces. Native managers must stop on both endpoints in both epochs before either retained cache is released.
 
 ## Evidence and publication status
 

@@ -1,0 +1,191 @@
+{
+  "frozen_packet_manifest_sha256": "b9a765a2b74b022527c21f7bd9b03d145cfb4832d9b9cfb7e4cc478bfe5d5f5a",
+  "sources": {
+    "owner_runner.py": {
+      "tested_file": "owner_runner.py",
+      "tested_sha256": "8adf2dcd5a8207cbfd9c8f9209f03ded57169dae8f9f4dd85c7923f236197c88",
+      "publication_sha256": "03300c611a3559a6b6de1ae85949a0b7061477ac56af376e36c6b6994257f91e"
+    },
+    "epoch_contract.py": {
+      "tested_file": "epoch_contract.py",
+      "tested_sha256": "cd6151cf2b6bed2eef6d100d6f07862bf56994e2ace004da3a63d58f3b5da26c",
+      "publication_sha256": "ce2c91b64b75aa88b70017986439ecb0c6df9b64fd51329e86f8101d599bf8cf"
+    },
+    "supervision.py": {
+      "tested_file": "supervision.py",
+      "tested_sha256": "a2bc2f0adf6ae1d5dbe49b5e867451492382dee7204aece68f7b49a2abb829f7",
+      "publication_sha256": "5447cc9bade552ef099552f9d859c283900f4550e6f69f8a8aecbd1b3bd816d4"
+    },
+    "node-run.sh": {
+      "tested_file": "node-run.sh",
+      "tested_sha256": "f283fb360f06ecc068d17850a26dcbbf47d74c55e6a0244b8205f66f6b83eb31",
+      "publication_sha256": "04d1f36b66aafc83bd5e4863f86f3f9d4c1930d53cea75451793b5f1712d5bb7"
+    },
+    "edge_coverage.py": {
+      "tested_file": "edge_coverage.py",
+      "tested_sha256": "77453a7c58e4e8815cf7b07964f377f637c48bcd9b434232a70e5c1cfb2d0670",
+      "publication_sha256": "d39085089b166855e532f686042704898135871adba2bacbc1fc54a5c485016b"
+    },
+    "runtime_cancel.py": {
+      "tested_file": "runtime_cancel.py",
+      "tested_sha256": "25b2b299ee76437c2981e25b22056be9164a951255580352360b672a5864b552",
+      "publication_sha256": "feac05bc573eab8d9976125f42f253d3538adf7d5f7a87e70df3a6ba2cbf05f8"
+    },
+    "transfer_bootstrap.py": {
+      "tested_file": "transfer_bootstrap.py",
+      "tested_sha256": "a6c36b308feda857352d5ecb5b49c3ffd77b8d3820aeee27c51aaf82c1fbf7ca",
+      "publication_sha256": "6eef5f94bfcf4569d20d6cf28b2b3a3ba77813c1ca1a9426b83987dd7f899577"
+    },
+    "checks_delayed_peer.py": {
+      "tested_file": "test_delayed_peer.py",
+      "tested_sha256": "2f30e098ae9d86125bf0de8cc0d59908f642daca9d1bfec6b9574a3d7bf5cee6",
+      "publication_sha256": "72cf090f90c8d50c37f77f124d3a356b991aa39e2ccc602101bbc614e1271b18"
+    },
+    "page_io.py": {
+      "tested_file": "page_io.py",
+      "tested_sha256": "dc01b3577ae72db2e38ef54a117866088b83f34da25819888ca069375e8b14ea",
+      "publication_sha256": "d8109fa879e51a29c98b8c041ffb2e737d298c3418257aaaa69f9cc91ffe91f0"
+    },
+    "node-preflight.py": {
+      "tested_file": "node-preflight.py",
+      "tested_sha256": "bbf502957a626c56595a5c9a2b85ca10bb6db5bce950c1dd0edf6ad713b963b9",
+      "publication_sha256": "38a9faf81296337224c97b7b238c360de05b66166c1f563c87dc23175d75ccea"
+    },
+    "lifecycle.py": {
+      "tested_file": "lifecycle.py",
+      "tested_sha256": "748c8fde2b23d6dfbfafb143d7023cd921e5b177b2f297b3146633d559ce16d5",
+      "publication_sha256": "dd945ca8ac13ee3638c79f2b94d1a5d7f72e19a729abf49176addcf33ab186b8"
+    },
+    "controller.py": {
+      "tested_file": "controller.py",
+      "tested_sha256": "ff7cd26cf698f5cdf835c02371d547e4edaa85d20c3f30d4dbfa0686924749d6",
+      "publication_sha256": "ca1a17abe86201e70034fb7d93862f31df5e83ff8ff89d9a8f38fbe5ddd778be"
+    },
+    "runner_support.py": {
+      "tested_file": "runner_support.py",
+      "tested_sha256": "d3b716920eacb7d2d8b509bde7594d8d0a7583fa08d83a1c34ad3eb4c7d59cee",
+      "publication_sha256": "d81730da48e0e683efc119cd66672d7f5fe48af8a03a998dddad0f35f759a149"
+    },
+    "supervise_owner.py": {
+      "tested_file": "supervise_owner.py",
+      "tested_sha256": "001852ea7176374085f0540ab6acc8056151fb01019d838595e9df03b64fbe9d",
+      "publication_sha256": "f4c3b07faa9c272f1d1ab9742ed44b369abbabe913c60f1d1f30aa4e1b26c37c"
+    },
+    "transfer_contract.py": {
+      "tested_file": "transfer_contract.py",
+      "tested_sha256": "f0f2f0464f9a6b76cc91fd8aea4e51557030e1648559c80d552094aa419f2a02",
+      "publication_sha256": "9fdbb317e64c195e2d7447a337e8fbfa106dd0291ba8f886efac234e07b852d3"
+    },
+    "checks_scenario_runtime.py": {
+      "tested_file": "test_scenario_runtime.py",
+      "tested_sha256": "ba20ac6b0d68a5ea610e2d9ea725e20be7bc1a45355ba60a7845b84473f8e89a",
+      "publication_sha256": "1ca765452d7d3dfa1a7c489593a67b44f9f22428d2e7c124e73d6d5aa83635a7"
+    },
+    "etcd_preflight.py": {
+      "tested_file": "etcd_preflight.py",
+      "tested_sha256": "87331e2c18665600446513f9a30dea3faa4502d7cc3f471f68936662a39563a9",
+      "publication_sha256": "f20b41f2d80cac19186eaf179ecec94ac9380942211e204933199921915df443"
+    },
+    "transfer_lifetime.py": {
+      "tested_file": "transfer_lifetime.py",
+      "tested_sha256": "9b6fc54592975970f42e8e18dccbeb9dc157e41e7409e06964191e2d06701608",
+      "publication_sha256": "02582ebcef2b667a7a8f00a6b4af13d0962c85902603547571e7fa3c587c108b"
+    },
+    "checks_cancel_launch.py": {
+      "tested_file": "test_cancel_launch.py",
+      "tested_sha256": "079bec5a4dfa4fe7ab5bcb1c051805f85c943ea40ddeca6594641c5c3c3a1839",
+      "publication_sha256": "320804ac682ff69e8bbaba2d39eb3ab4abf7202a29b68d6eb69c951e1415a200"
+    },
+    "device_identity.py": {
+      "tested_file": "device_identity.py",
+      "tested_sha256": "3153e1f6ccfdc213072b82e81ca64b5a9efd50f2a693c1a47944a9c961041d9c",
+      "publication_sha256": "655c1fb44806ddbd05368122816c85974799c6fd31103e8965ed7065d8c7f141"
+    },
+    "verify_final.py": {
+      "tested_file": "verify_final.py",
+      "tested_sha256": "b6822e3f57c8764f39ab14e58db7dd72adef247635135f20600d82a37581196f",
+      "publication_sha256": "296d2045cf8f8f4864fde232c78c8753da15301d3259519505e90f020f9b9526"
+    },
+    "peer_stop.py": {
+      "tested_file": "peer_stop.py",
+      "tested_sha256": "a83c8cdde6ced7980bca192bb04ea4e0bb6a65ba29e7ec1bf6d8ae585b7a90cd",
+      "publication_sha256": "145ad1f4565b8c639059e56c57ce70bbd5f14099e98bcf7e02303709f933d510"
+    },
+    "launch-wrapper.py": {
+      "tested_file": "launch-wrapper.py",
+      "tested_sha256": "be998739941f41c52167fe630171cee2fe5a405b68447cfe06cc7c690953bc4a",
+      "publication_sha256": "ebd758b4fdb2ee6591a9b358dfe6d06b38472b0fcb33055e60c8591c896d3981"
+    },
+    "bridge_network.py": {
+      "tested_file": "bridge_network.py",
+      "tested_sha256": "e310347f842b41490e68c471288ec0cc5185da2745e593fbf0c3f09fceb3b21b",
+      "publication_sha256": "3333e04d3807e9dded0663fa5ad98be218f410ab9ccc78545d0470c816725d12"
+    },
+    "cancel_restart_contract.py": {
+      "tested_file": "cancel_restart_contract.py",
+      "tested_sha256": "c553472b98b87b5811322fa44f1f2d6a7b2cce1783fa8948cbdedc7447f5b326",
+      "publication_sha256": "d8ac07f2feea03c43512b058dd35909d5a340b669984090192b3089b0cfc9c6f"
+    },
+    "edge_checks.py": {
+      "tested_file": "edge_checks.py",
+      "tested_sha256": "d4cba0347bf354a05e89055ee9e53e4d93af96b909d0561ccd6376b6047d4192",
+      "publication_sha256": "a4410029f017f3659905f57a0e4bc2bdd03a08525379e932e2472aa5e387e445"
+    },
+    "delayed_peer.py": {
+      "tested_file": "delayed_peer.py",
+      "tested_sha256": "9a178337d1191b03894c148716c605e55ea265b6d62b4ff1f739f12304e35029",
+      "publication_sha256": "4044b0ef5636be2dd3eec495fca099afe192349ae2a177037aaf16b7fd3637ea"
+    },
+    "single_cpu_exec.py": {
+      "tested_file": "single_cpu_exec.py",
+      "tested_sha256": "836f8e9d86645c79e0dbd66668f908f88f2492bfe66d5643154d649b82f06709",
+      "publication_sha256": "9506f003b9fcadc10a29896727264e7fc5d2b161ae6a8a8fd9ef3a434225f7c1"
+    },
+    "checks_bridge_terminal.py": {
+      "tested_file": "test_bridge_terminal.py",
+      "tested_sha256": "095bbf841613794352f7b4f63f80d703ec8715be35d38e221ef1b77c2505864a",
+      "publication_sha256": "f4941efdac44be639ea71e8a97addbb6c7c96f5403da0938a0b2924a4b15be67"
+    },
+    "manager_environment.py": {
+      "tested_file": "manager_environment.py",
+      "tested_sha256": "d92e17d9f163c78057346cda44bdc476d63af515b93892773f9a5f5d5abe370c",
+      "publication_sha256": "0c3fa10c68fa4f177227cd2d2b423538dbc382a5885a202d6cc289cc872091ab"
+    },
+    "checks_serialized_cancel_terminal.py": {
+      "tested_file": "test_serialized_cancel_terminal.py",
+      "tested_sha256": "a37d5d9aad5f0fc81d2d2ea8534d4d0b2324bb197c6ca5fea83265cafdf6a832",
+      "publication_sha256": "337d220daaec0c47c380de80834762c303d2227b5819aa35d018507cdd8be67f"
+    },
+    "checks_runtime_cancel.py": {
+      "tested_file": "test_runtime_cancel.py",
+      "tested_sha256": "a89345a3290003de2f4ddd724cc440b1aab33aa7ec87fbf80ec9ba88ef2fec12",
+      "publication_sha256": "427791ebb56a250d8b987775eb1d7304720cb6a40675d3f8c95cf06936d8aa32"
+    },
+    "owned_cleanup.py": {
+      "tested_file": "owned_cleanup.py",
+      "tested_sha256": "a61a1a963af4de8cb48044c9a6858ef00635b85ff3405459a6385e88e61a9369",
+      "publication_sha256": "c6912d0005fc3b26e9841f1674f493d0e489cf470be07790d266aa5d15ab5fdf"
+    },
+    "native_observation.py": {
+      "tested_file": "native_observation.py",
+      "tested_sha256": "0db96c05e0ee0152a0f7474bd441e9f4f00f0d949244d8277c6d9bac0219df2c",
+      "publication_sha256": "f6d783ba797a413651fd98c1355df2eaa8d7a50bb523cad4c93f2d2c2d8a2896"
+    },
+    "cancel_restart_scenario.py": {
+      "tested_file": "cancel_restart_scenario.py",
+      "tested_sha256": "750c06988d530ed2180e7b6d3e3a4a0258fd98b007311240d486fdf4173a8f08",
+      "publication_sha256": "813c444a02ef326b38ee808c7d63990f0ed502435eb8245efb98f571e236d5ac"
+    }
+  },
+  "prompt_original_sha256": {
+    "input_ids": "b71e8fbdb6fd4bddda1df68e0d63051420fdcd00e7b90e53ef6bcefebe5f2060",
+    "restart_input_ids": "0b85725a01ddf9284857a8cb74ba6a1800559549038277f9a52b20e332348fd1"
+  },
+  "device_result": "No device acceptance is inferred from this source-only portability preparation.",
+  "formatting": "Required repository Black/autoflake/isort hooks; tested semantic function ASTs preserved except documented configurable binding.",
+  "accepted_frozen_device_result": {
+    "root_acceptance_sha256": "52718f795a2229bfe42c7c93fb51401b69356db2ae52dad0ed58e756df417ed6",
+    "report": "../../../docs/migration-prefill-cancel-restart.json",
+    "scope": "Frozen harness003 device result; no additional device execution from portable packaging."
+  }
+}

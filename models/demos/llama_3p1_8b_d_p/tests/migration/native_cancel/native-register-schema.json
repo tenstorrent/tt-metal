@@ -1,0 +1,18 @@
+{
+  "journal_sha256": "833df3d4a506e4a6592a826a11221aa24d6abd57c794c4c3a7aa97fd0971dd3d",
+  "observed_register": {
+    "dst": 0,
+    "from": 0,
+    "layer": 0,
+    "op": "register",
+    "src": 0,
+    "status": 0,
+    "to": 0,
+    "tokens": 0,
+    "transfer": 1,
+    "uuid": 100
+  },
+  "source_line": 72,
+  "source_path": "engine/tools/native_prefill_source_bridge/main.cpp",
+  "source_sha256": "d7c5b1ef34d7a45ed1c0b78f2874187b58b4088aeb6354c63714a09f3731d26a"
+}
