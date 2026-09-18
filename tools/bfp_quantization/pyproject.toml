@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tt-bfp-quant"
+version = "0.2.0"
+description = "Offline exponent search and GPTQ for TT bfloat4_b/bfloat8_b weights"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+dependencies = ["numpy>=1.26,<2", "torch>=2.2"]
+
+[project.optional-dependencies]
+checkpoint = ["safetensors>=0.4"]
+test = ["pytest>=8", "safetensors>=0.4", "transformers>=4.45"]
+
+[project.scripts]
+tt-bfp-quant = "tt_bfp_quant.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+tt_bfp_quant = ["csrc/*.cpp"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["ttnn: optional native TTNN host packing validation"]
+
+[tool.black]
+line-length = 120

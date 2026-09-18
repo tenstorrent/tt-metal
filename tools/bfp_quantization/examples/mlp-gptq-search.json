@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "rules": [
+    {
+      "match": ["model.layers.*.mlp.gate_proj.weight", "model.layers.*.mlp.up_proj.weight"],
+      "method": "gptq-search",
+      "bits": 4
+    }
+  ]
+}

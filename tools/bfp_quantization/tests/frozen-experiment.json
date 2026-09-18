@@ -1,0 +1,24 @@
+{
+  "source_files_sha256": {
+    "bfp_gptq.py": "f571ad592b3e563189970c10374e1814f2b2286ac559e13bb5314b3abf020908",
+    "quant_methods.py": "b96f295302a705c7335d5ec34bc078fbb81d684885900dbfea0ab8f9dba68956"
+  },
+  "source": "Completed Qwen3.6-27B experiment; frozen reference Python algorithms",
+  "method": "Generated from the original functions, not the new package. Original fast_search replaced by its original NumPy oracle. Upper factor saved to isolate GPTQ compensation from cross-platform Cholesky variation.",
+  "torch": "2.14.0",
+  "numpy": "2.5.3",
+  "block_size": 32,
+  "damping": 0.01,
+  "act_order": true,
+  "exponent_deltas": [
+    0,
+    -1,
+    -2
+  ],
+  "group_choices": {
+    "0": 228,
+    "-1": 32,
+    "-2": 0
+  },
+  "fixture_sha256": "394af88bdb9790d0a5219d4b860167eb980719d784db86a6fb6ab70a1f101d48"
+}

@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "rules": [
+    {
+      "match": ["model.layers.*.mlp.gate_proj.weight", "model.layers.*.mlp.up_proj.weight"],
+      "method": "max-minus-one",
+      "bits": 4
+    },
+    {
+      "match": "model.layers.*.mlp.down_proj.weight",
+      "method": "max-minus-one",
+      "bits": 8
+    }
+  ]
+}

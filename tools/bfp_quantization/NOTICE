@@ -1,0 +1,14 @@
+TT BFP weight quantization
+
+The B-format numerical rounding behavior is derived from Tenstorrent's tt-metal
+blockfloat_common.cpp, Copyright 2026 Tenstorrent USA, Inc., licensed under
+Apache License 2.0. This package provides adapted NumPy/C++ implementations with
+offline exponent search, GPTQ compensation, general model APIs and calibration
+helpers. It does not contain Tenstorrent model checkpoints or device kernels.
+
+GPTQ algorithm attribution: Elias Frantar, Saleh Ashkboos, Torsten Hoefler and
+Dan Alistarh, "GPTQ: Accurate Post-Training Quantization for Generative Pre-trained
+Transformers", ICLR 2023, https://arxiv.org/abs/2210.17323.
+
+The standalone Emax/Emax-1 comparison is the method proposed by Matt in the
+original experiment discussion. No affiliation or endorsement is implied.

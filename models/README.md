@@ -1,5 +1,10 @@
 # TT-Metalium / TT-NN Models
 
+For offline BFP weight experiments, see the
+[BFP quantization tool and guide](../tools/bfp_quantization/README.md).
+It supports exponent search and GPTQ + search, including export to standard
+Hugging Face checkpoints for compatible existing model loaders.
+
 ## LLMs
 
 | Model                                                         | Batch | Hardware                                                 | ttft (ms) | t/s/u | Target<br>t/s/u | t/s    | TT-Metalium Release                                            | vLLM Tenstorrent Repo Release                                                                                |
