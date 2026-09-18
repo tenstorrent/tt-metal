@@ -19,11 +19,17 @@ on:
     branches:
       - main
 
-# Only triage failures. NOTE: this raw top-level `if:` is correct while
-# workflow_run is the ONLY trigger. If a workflow_dispatch is ever added (e.g.
-# manual testing), guard it too — a bare conclusion check evaluates false for
-# non-workflow_run events and would silently skip the manual run.
-if: ${{ github.event.workflow_run.conclusion == 'failure' }}
+# Only triage a failed SCHEDULED run. NOTE: this raw top-level `if:` is correct
+# while workflow_run is the ONLY trigger. If a workflow_dispatch is ever added
+# (e.g. manual testing), guard it too — a bare conclusion check evaluates false
+# for non-workflow_run events and would silently skip the manual run.
+#
+# The event check keeps triage off a failed dispatch. The monitored set holds
+# "T3K tests", which people dispatch against main often: the suites it merges
+# took 458 dispatches in the 90 days from 20 June 2026. A failed dispatch is a
+# person trying something, thus it is not a regression on main and it must not
+# file an issue.
+if: ${{ github.event.workflow_run.conclusion == 'failure' && github.event.workflow_run.event == 'schedule' }}
 
 permissions:
   contents: read
