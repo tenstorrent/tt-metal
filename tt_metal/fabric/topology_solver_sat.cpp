@@ -1676,6 +1676,16 @@ bool SatSearchBackend::start(
         topology_sat_build_shape_blocking_clause(s.enc, shape_key, forbid_clause);
         topology_sat_add_shape_clause_or_unsat(s.solver, s.enc, forbid_clause);
     }
+
+    // Protect the assignment variables from variable elimination: every blocking clause added between solves
+    // (both the per-mapping and unique-shape paths) is built solely from these literals, so an engine that
+    // eliminated one during an earlier solve would make a later blocking clause unsound. No-op on CaDiCaL;
+    // real on kissat_extras (KISSAT_SWAP_PLAN.md §3.5). Done once here, before the first next()/solve().
+    for (const auto& target_lits : s.enc.assign_lit) {
+        for (int lit : target_lits) {
+            s.solver.protect_variable(std::abs(lit));
+        }
+    }
     return true;
 }
 
