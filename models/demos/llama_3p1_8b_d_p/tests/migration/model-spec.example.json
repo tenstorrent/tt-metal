@@ -1,0 +1,15 @@
+{
+  "prepared_source": "/configure/tt-metal",
+  "max_seq_len": 2048,
+  "num_users": 2,
+  "num_layers": 32,
+  "chunk_size": 1024,
+  "checkpoint_metadata": {
+    "config.json": "29e4c210b0d6ac178b16b2a255a568bdb23b581e50ca1ef6a6d071dd85704e6e",
+    "tokenizer_config.json": "177c7b61e616fecb84c17ce0591acb92c6c4d60e9ac5ababfb940ff23bbcd424",
+    "tokenizer.json": "79e3e522635f3171300913bb421464a87de6222182a0570b9b2ccba2a964b2b4",
+    "special_tokens_map.json": "6f38c73729248f6c127296386e3cdde96e254636cc58b4169d3fd32328d9a8ec"
+  },
+  "expected_table_entries": 65536,
+  "expected_configs": 16
+}
