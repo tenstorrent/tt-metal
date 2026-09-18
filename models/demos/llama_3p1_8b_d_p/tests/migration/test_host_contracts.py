@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-SUITES = {"writer_boundaries": 17, "runtime_edges": 37, "native_ranges": 57, "native_cancel": 46}
+SUITES = {"writer_boundaries": 17, "runtime_edges": 37, "native_ranges": 57, "native_cancel": 46, "native_capacity": 34}
 
 
 def run_checks(scenario):

@@ -10,8 +10,9 @@ These are standalone prefill-side tests. The receiver is passive allocated KV me
 | `runtime_edges/` | One full32 source owner, real persistent H2D, no native manager | Five calls, 160 post-sync acknowledgments, six full-cache snapshots; two slots, partial tails, [32,65) continuation and runtime-only slot reuse. |
 | `native_ranges/` | Two retained owners, real H2D source and native managers, passive destination | Six generations, seven full32 calls, 224 post-sync acknowledgments, ordinary/crossed mappings, selected prefix/continuation/reuse, exact selected and untouched packed pages. |
 | `native_cancel/` | Two retained owners, real H2D/model source and native cancellation/restart | Two scenario calls, 64 real acknowledgments, delayed destination, retained allocation restart and 512 exact packed pages. |
+| `native_capacity/` | Real full32 source and crossed selected native tails at a4K allocation | Two prompts4,096/4,064;8 real calls,256 acknowledgments,32,768 exact pages /136MiB; untouched samples and manager memory observations. |
 
-The writer and runtime fixtures passed on silicon before this packaging change. The paired-range fixture's device status is separate from host packaging checks. Do not infer a new device pass from the host suite or from source equivalence. Existing 2K numerical validation remains the accuracy anchor; these structural/exact-byte tests do not add an HF golden. Valid token endpoints are distinct from copied whole32-token pages. The cancellation fixture has a separately accepted frozen device result; see the [cancellation report](../../docs/migration-prefill-cancel-restart.md). Larger-capacity fixtures are not included here.
+The writer and runtime fixtures passed on silicon before this packaging change. The frozen2K native, paired-range and real cancellation/restart fixtures passed their recorded device scopes; the focused4K selected-range gate also passed. Do not infer a new device pass from the host suite or from source equivalence. Existing 2K numerical validation remains the accuracy anchor; these structural/exact-byte tests do not add an HF golden. Valid token endpoints are distinct from copied whole32-token pages. The cancellation fixture has a separately accepted frozen device result; see the [cancellation report](../../docs/migration-prefill-cancel-restart.md). See the [range report](../../docs/migration-prefill-ranges.md) and [focused4K report](../../docs/migration-prefill-capacity-4k.md). The relocated capacity package has host checks, not a new device run. The user subsequently approved larger lengths. Device validation at 8K–64K is resuming and remains pending per size; 128K remains deferred.
 
 ## Host checks (no Torch or device imports)
 
@@ -32,7 +33,7 @@ python3 -I -S -B models/demos/llama_3p1_8b_d_p/tests/migration/test_host_contrac
   --suite runtime_edges
 ```
 
-The four child inventories are 17 writer, 37 runtime, 57 paired-range and 46 cancellation cases (157 total). The wrapper also checks actual writer importlib collection.
+The five child inventories are17 writer,37 runtime,57 paired-range,46 cancellation and34 capacity cases (191 total). The wrapper also checks actual writer importlib collection.
 The real writer device test remains a normal `test_*.py` pytest entry.
 
 The additional publication cases load the actual controller/supervisor/owner imports. They reject wrong manifest hashes, binary hashes, case inventories, library-linkage receipts and assigned host/job/lock before native work. Terminal journal, stale-page and cleanup fault cases remain in the copied suites. Temporary host files use the caller's TMPDIR.
@@ -41,7 +42,7 @@ The additional publication cases load the actual controller/supervisor/owner imp
 
 All examples are unarmed. They are input schemas, not ready-to-run device permissions. Copy the relevant `plan.example.json` and `model-spec.example.json` outside the checkout. Replace every `/configure` value; the programs intentionally do not substitute shell variables inside JSON. Supply absolute paths on storage visible to both endpoints.
 
-- `model-spec.json`: set `prepared_source` to this source-matched tt-metal checkout. Retain the exact checkpoint metadata hashes and2K/two-slot/32-layer/1024-chunk geometry. Bind `checkpoint` to the matching Llama-3.1-8B-Instruct weights.
+- `model-spec.json`: set `prepared_source` to this source-matched tt-metal checkout. Retain the exact checkpoint metadata hashes and two-slot/32-layer/1024-chunk geometry. The original scenarios use2K; the closed capacity example selects4K through its own validated plan. Bind `checkpoint` to the matching Llama-3.1-8B-Instruct weights.
 - `environment_script`: configure a copy of `environment.example.sh`, including the built source-matched Python/TTNN and native loader paths. The node script verifies this file's plan-bound SHA before sourcing it. The included `verify_native_env.py` checks actual imports/libraries and does not open a mesh. Node-owned source/library observations still run later.
 - Bind a fresh run directory, nonce, Slurm owner, exact assignment, lease, per-node physical lock, ports and independently accepted recent health receipts. Lock names include rack and node, for example `prefill-device-120-c03u14.lock`. The node and job must agree with the real environment. Source and passive are distinct devices. Existing timing/resource limits and retained-owner recovery remain unchanged.
 - Bind absolute source/binary/library paths and their SHA256s in `source_pins` (runtime) or `pins` (paired). Include every local non-test Python helper, shell entry point, scenario/fixture/model spec, production model/cache/layout/export dependencies, environment script, probe, health receipt, native binaries and loaded libraries. For paired runs, `accepted_source_pins` is a separate JSON path-to-hash map of the source-matched production files; pin that map too. The controller records the entire configured map before, on-node and after execution.
@@ -91,6 +92,10 @@ The existing role interface remains `supervise_owner.py --plan PLAN --plan-sha25
 ### Paired cancellation and restart
 
 See [native_cancel/README.md](native_cancel/README.md) for the exact two-epoch scenario, configured dependency closure and closed-plan command. The controller preserves the same plan/hash and role/supervisor interfaces. Native managers must stop on both endpoints in both epochs before either retained cache is released.
+
+### Focused4K capacity reproduction
+
+See [native_capacity/README.md](native_capacity/README.md) for the hash-validated token manifest, pre-native warmup, resource bounds and existing controller/supervisor command. The example is closed at4K. The user has approved resuming 8K–64K validation. Each device run still requires a separately reviewed binding and acceptance receipt.
 
 ## Evidence and publication status
 

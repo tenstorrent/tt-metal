@@ -1,0 +1,973 @@
+{
+  "files": {
+    "bridge_network.py": {
+      "ast_equal_to_frozen": true,
+      "body_without_imports_equal_to_frozen": true,
+      "imports_after": [
+        "import datetime",
+        "import ipaddress",
+        "import socket",
+        "from urllib.parse import urlparse",
+        "from runner_support import require"
+      ],
+      "imports_before": [
+        "import datetime",
+        "import ipaddress",
+        "import socket",
+        "from urllib.parse import urlparse",
+        "from runner_support import require"
+      ],
+      "original_bytes_equal": false,
+      "original_sha256": "6976dbdca3ddde809ec59bd2865e6afc749f4273a2a7adccc083edc86648e966",
+      "publication_sha256": "bed14d2290b0efcf522cebc41b5d2a69fbdd036079078f0dca852c61019d0f20",
+      "source_file": "bridge_network.py",
+      "source_packet": "migration-prefill-capacity-owner-preparation-001"
+    },
+    "capacity_contract.py": {
+      "ast_equal_to_frozen": false,
+      "body_without_imports_equal_to_frozen": true,
+      "imports_after": [
+        "import json",
+        "from dataclasses import dataclass",
+        "from typing import ClassVar"
+      ],
+      "imports_before": [
+        "from dataclasses import dataclass",
+        "from typing import ClassVar",
+        "import json"
+      ],
+      "original_bytes_equal": false,
+      "original_sha256": "ce48930b0b184e04ace540bbe28824a89ee344ebcffa4b4722baf14541a9f390",
+      "publication_sha256": "01fd9e2b58f26b32093bd56e03884840bda4443838f9f44af9c2e0ee11a42c97",
+      "source_file": "capacity_contract.py",
+      "source_packet": "migration-prefill-capacity-owner-preparation-001"
+    },
+    "capacity_execution.py": {
+      "ast_equal_to_frozen": true,
+      "body_without_imports_equal_to_frozen": true,
+      "imports_after": [
+        "import hashlib",
+        "import json",
+        "from dataclasses import dataclass",
+        "from pathlib import Path"
+      ],
+      "imports_before": [
+        "import hashlib",
+        "import json",
+        "from dataclasses import dataclass",
+        "from pathlib import Path"
+      ],
+      "original_bytes_equal": false,
+      "original_sha256": "599edc2bdd8ef85bcb4da90e62fecce094ca90b303995c29322fe3760f43b415",
+      "publication_sha256": "5c958d90c35ebeaf58e24a526602a0a72405fb0b61847e3f9e1408574573da89",
+      "source_file": "capacity_execution.py",
+      "source_packet": "migration-prefill-capacity-owner-preparation-001"
+    },
+    "capacity_observation.py": {
+      "ast_equal_to_frozen": false,
+      "body_without_imports_equal_to_frozen": true,
+      "imports_after": [
+        "import re",
+        "from pathlib import Path",
+        "from capacity_contract import Geometry",
+        "from native_observation import process_identity"
+      ],
+      "imports_before": [
+        "from pathlib import Path",
+        "import re",
+        "from capacity_contract import Geometry",
+        "from native_observation import process_identity"
+      ],
+      "original_bytes_equal": false,
+      "original_sha256": "b7878876285b3181084d905d13b65948d6dfe80f233d98a819f62b6be8992ecf",
+      "publication_sha256": "81eb969fd60bb909fc48252763d7d4b5fc8abcd66c06cf3caf1edea35e198586",
+      "source_file": "capacity_observation.py",
+      "source_packet": "migration-prefill-capacity-owner-preparation-001"
+    },
+    "capacity_pages.py": {
+      "ast_equal_to_frozen": false,
+      "body_without_imports_equal_to_frozen": true,
+      "imports_after": [
+        "import hashlib",
+        "import os",
+        "from pathlib import Path",
+        "from capacity_execution import PAGE, require, selected_keys",
+        "from page_io import read_page",
+        "from capacity_execution import selected_keys"
+      ],
+      "imports_before": [
+        "import hashlib",
+        "import json",
+        "import os",
+        "from pathlib import Path",
+        "from capacity_execution import PAGE, selected_keys, require",
+        "from page_io import read_page",
+        "from capacity_execution import selected_keys"
+      ],
+      "original_bytes_equal": false,
+      "original_sha256": "6db254eabadca2906f56dad8266b0705099cc0c611cc7202db627cb8fc6f3e18",
+      "publication_sha256": "2935aba7062e1035547a12558ff7be0ca36bfd81974ae1367e896bc5b01db070",
+      "source_file": "capacity_pages.py",
+      "source_packet": "migration-prefill-capacity-owner-preparation-001"
+    },
+    "capacity_resources.py": {
+      "ast_equal_to_frozen": false,
+      "body_without_imports_equal_to_frozen": true,
+      "imports_after": [
+        "import shutil",
+        "from pathlib import Path",
+        "from capacity_execution import require"
+      ],
+      "imports_before": [
+        "import os",
+        "import shutil",
+        "from pathlib import Path",
+        "from capacity_execution import require"
+      ],
+      "original_bytes_equal": false,
+      "original_sha256": "2c6acc18c2bc7b1365ab3833aa2f1b9b6b94678542b39cf219574d40f6e0aace",
+      "publication_sha256": "dcfdb7ddc457941ff641b00b3986513cd11c6f69f50dba8b06f958aace485eb1",
+      "source_file": "capacity_resources.py",
+      "source_packet": "migration-prefill-capacity-owner-preparation-001"
+    },
+    "capacity_warmup.py": {
+      "ast_equal_to_frozen": true,
+      "body_without_imports_equal_to_frozen": true,
+      "imports_after": [
+        "import hashlib",
+        "import json",
+        "from capacity_execution import require"
+      ],
+      "imports_before": [
+        "import hashlib",
+        "import json",
+        "from capacity_execution import require"
+      ],
+      "original_bytes_equal": false,
+      "original_sha256": "2279a482dbf1ad2b70e6267750598b029da42b6c72c1088b781848e574b6c044",
+      "publication_sha256": "8d459054ca06b0410ad303fb36bf574c4cef053e44bd04735c81f1d7657ae7cf",
+      "source_file": "capacity_warmup.py",
+      "source_packet": "migration-prefill-capacity-owner-preparation-001"
+    },
+    "check_scenario.py": {
+      "ast_equal_to_frozen": true,
+      "body_without_imports_equal_to_frozen": true,
+      "imports_after": [
+        "import hashlib",
+        "import json",
+        "from pathlib import Path"
+      ],
+      "imports_before": [
+        "import hashlib",
+        "import json",
+        "from pathlib import Path"
+      ],
+      "original_bytes_equal": false,
+      "original_sha256": "f9633bb24ccc494b80a62d3e1d966c2f72bb6b83823ec92905f6dcdfa2bcb1cb",
+      "publication_sha256": "6d1a53f609c228a24b2f8e70f5cffd0302755c82a1080fcdb629ae9230d350ba",
+      "source_file": "check_scenario.py",
+      "source_packet": "migration-prefill-capacity-owner-preparation-001"
+    },
+    "checks_capacity_cpu.py": {
+      "ast_equal_to_frozen": false,
+      "body_without_imports_equal_to_frozen": false,
+      "imports_after": [
+        "import copy",
+        "import struct",
+        "import tempfile",
+        "import unittest",
+        "from pathlib import Path",
+        "from unittest.mock import patch",
+        "import capacity_execution as c",
+        "import capacity_pages as p",
+        "from range_contract import AckRecorder",
+        "from runner_support import CapturedCompletionSink",
+        "from checks_fixtures import token_manifest"
+      ],
+      "imports_before": [
+        "import copy",
+        "import hashlib",
+        "import json",
+        "import struct",
+        "import tempfile",
+        "import unittest",
+        "from pathlib import Path",
+        "from unittest.mock import patch",
+        "import capacity_execution as c",
+        "import capacity_pages as p",
+        "from runner_support import CapturedCompletionSink",
+        "from range_contract import AckRecorder"
+      ],
+      "original_bytes_equal": false,
+      "original_sha256": "82da47bf3d846cc20e5bf8dfa84fd84d871606f53915dfb282a6afa5388f0148",
+      "publication_sha256": "f8979eab807c3f61119b4e951fcdcb9ab8e1cd56569c1b00d654bd6224e32583",
+      "source_file": "test_capacity_cpu.py",
+      "source_packet": "migration-prefill-capacity-owner-preparation-001"
+    },
+    "checks_capacity_resources.py": {
+      "ast_equal_to_frozen": false,
+      "body_without_imports_equal_to_frozen": true,
+      "imports_after": [
+        "import tempfile",
+        "import unittest",
+        "from pathlib import Path",
+        "from types import SimpleNamespace",
+        "from unittest.mock import patch",
+        "from capacity_resources import admit, observe"
+      ],
+      "imports_before": [
+        "import copy",
+        "import tempfile",
+        "import unittest",
+        "from pathlib import Path",
+        "from unittest.mock import patch",
+        "from types import SimpleNamespace",
+        "from capacity_resources import admit, observe"
+      ],
+      "original_bytes_equal": false,
+      "original_sha256": "bf56a5b411d47e7690aa8787b6aa42c70eacdfe93fb93caf36b7ad4b4b237042",
+      "publication_sha256": "e25b5497889a761b9ebfda7cddedc5cf40967bfa4fb77c02ddd9d41ff24f060d",
+      "source_file": "test_capacity_resources.py",
+      "source_packet": "migration-prefill-capacity-owner-preparation-001"
+    },
+    "checks_capacity_runtime.py": {
+      "ast_equal_to_frozen": false,
+      "body_without_imports_equal_to_frozen": false,
+      "imports_after": [
+        "import importlib.util",
+        "import sys",
+        "import types",
+        "import unittest",
+        "from pathlib import Path",
+        "from unittest.mock import patch",
+        "from capacity_warmup import warmup_geometry",
+        "from checks_capacity_warmup import Chunk, fixture"
+      ],
+      "imports_before": [
+        "import importlib.util",
+        "import sys",
+        "import types",
+        "import unittest",
+        "from pathlib import Path",
+        "from unittest.mock import patch",
+        "from capacity_warmup import warmup_geometry",
+        "from test_capacity_warmup import fixture, Chunk"
+      ],
+      "original_bytes_equal": false,
+      "original_sha256": "80bd79f41db42230bb33d191595e2b8344f3ab8d9d3e7ddc6cca2672f2ec54e6",
+      "publication_sha256": "40b2e891459839a7f5d8b41b139738696a248b97e9e5b300f9460c9924c9e20d",
+      "source_file": "test_capacity_runtime.py",
+      "source_packet": "migration-prefill-capacity-owner-preparation-001"
+    },
+    "checks_capacity_verifier.py": {
+      "ast_equal_to_frozen": false,
+      "body_without_imports_equal_to_frozen": false,
+      "imports_after": [
+        "import unittest",
+        "from capacity_execution import make_cases, sentinel_keys",
+        "from capacity_warmup import token_digest",
+        "from checks_fixtures import token_manifest",
+        "from verify_capacity import verify_report"
+      ],
+      "imports_before": [
+        "import copy",
+        "import unittest",
+        "from capacity_execution import make_cases, sentinel_keys, resources",
+        "from capacity_warmup import token_digest",
+        "from verify_capacity import verify_report"
+      ],
+      "original_bytes_equal": false,
+      "original_sha256": "0f62a88d2b1ff4fdc2a611760b57722f3070f1d00afb88b63bec3fac2365b242",
+      "publication_sha256": "f0f81cf6e215fe772fa532f280cd6320ce63375e8de95d6e1b8816e73d1b5de8",
+      "source_file": "test_capacity_verifier.py",
+      "source_packet": "migration-prefill-capacity-owner-preparation-001"
+    },
+    "checks_capacity_warmup.py": {
+      "ast_equal_to_frozen": false,
+      "body_without_imports_equal_to_frozen": true,
+      "imports_after": [
+        "import unittest",
+        "import capacity_execution as c",
+        "import capacity_pages as p",
+        "import capacity_warmup as w"
+      ],
+      "imports_before": [
+        "import unittest",
+        "from pathlib import Path",
+        "from unittest.mock import patch",
+        "import capacity_execution as c",
+        "import capacity_warmup as w",
+        "import capacity_pages as p"
+      ],
+      "original_bytes_equal": false,
+      "original_sha256": "a22a3736b38f3436d32ac090d542304d5e405879a2a29ba2c4e940ebe8e2dd2b",
+      "publication_sha256": "03de76592d87b168dbe67bd8e62a8c5e2e832d55cd582d9207220d25d8139885",
+      "source_file": "test_capacity_warmup.py",
+      "source_packet": "migration-prefill-capacity-owner-preparation-001"
+    },
+    "checks_launch_cpu.py": {
+      "ast_equal_to_frozen": false,
+      "body_without_imports_equal_to_frozen": false,
+      "imports_after": [
+        "import importlib.util",
+        "import json",
+        "import subprocess",
+        "import sys",
+        "import unittest",
+        "from pathlib import Path",
+        "from unittest.mock import patch",
+        "import controller"
+      ],
+      "imports_before": [
+        "import importlib.util",
+        "import json",
+        "from pathlib import Path",
+        "import subprocess",
+        "import sys",
+        "import unittest",
+        "from unittest.mock import patch",
+        "import controller"
+      ],
+      "original_bytes_equal": false,
+      "original_sha256": "f7f3a31e9ea806eaa634c6bf7d40862fea5c5ef485ba012f450389ddfa4f362e",
+      "publication_sha256": "754ee917a286339ecd85bbd074f3dc069cc63300f90e7c7f014382ce72e43f8d",
+      "source_file": "test_launch_cpu.py",
+      "source_packet": "migration-prefill-capacity-launch-preparation-001"
+    },
+    "controller.py": {
+      "ast_equal_to_frozen": false,
+      "body_without_imports_equal_to_frozen": false,
+      "imports_after": [
+        "import argparse",
+        "import datetime as dt",
+        "import json",
+        "import os",
+        "import subprocess",
+        "import time",
+        "from pathlib import Path",
+        "from runner_support import require, sha256, validate_plan, write_json",
+        "from verify_final import verify"
+      ],
+      "imports_before": [
+        "import argparse",
+        "import datetime as dt",
+        "import json",
+        "import os",
+        "from pathlib import Path",
+        "import subprocess",
+        "import time",
+        "from runner_support import require, sha256, validate_plan, write_json",
+        "from verify_final import verify"
+      ],
+      "original_bytes_equal": false,
+      "original_sha256": "ff7cd26cf698f5cdf835c02371d547e4edaa85d20c3f30d4dbfa0686924749d6",
+      "publication_sha256": "ca1a17abe86201e70034fb7d93862f31df5e83ff8ff89d9a8f38fbe5ddd778be",
+      "source_file": "controller.py",
+      "source_packet": "migration-prefill-capacity-launch-preparation-001"
+    },
+    "device_identity.py": {
+      "ast_equal_to_frozen": true,
+      "body_without_imports_equal_to_frozen": true,
+      "imports_after": [
+        "from runner_support import require"
+      ],
+      "imports_before": [
+        "from runner_support import require"
+      ],
+      "original_bytes_equal": false,
+      "original_sha256": "3153e1f6ccfdc213072b82e81ca64b5a9efd50f2a693c1a47944a9c961041d9c",
+      "publication_sha256": "655c1fb44806ddbd05368122816c85974799c6fd31103e8965ed7065d8c7f141",
+      "source_file": "device_identity.py",
+      "source_packet": "migration-prefill-capacity-owner-preparation-001"
+    },
+    "edge_checks.py": {
+      "ast_equal_to_frozen": true,
+      "body_without_imports_equal_to_frozen": true,
+      "imports_after": [
+        "import math",
+        "from edge_coverage import PAGE_BYTES, RUNTIME_CALLS, pages"
+      ],
+      "imports_before": [
+        "import math",
+        "from edge_coverage import PAGE_BYTES, RUNTIME_CALLS, pages"
+      ],
+      "original_bytes_equal": false,
+      "original_sha256": "d4cba0347bf354a05e89055ee9e53e4d93af96b909d0561ccd6376b6047d4192",
+      "publication_sha256": "a4410029f017f3659905f57a0e4bc2bdd03a08525379e932e2472aa5e387e445",
+      "source_file": "edge_checks.py",
+      "source_packet": "migration-prefill-capacity-owner-preparation-001"
+    },
+    "edge_coverage.py": {
+      "ast_equal_to_frozen": true,
+      "body_without_imports_equal_to_frozen": true,
+      "imports_after": [
+        "from dataclasses import dataclass",
+        "from hashlib import sha256"
+      ],
+      "imports_before": [
+        "from dataclasses import dataclass",
+        "from hashlib import sha256"
+      ],
+      "original_bytes_equal": false,
+      "original_sha256": "77453a7c58e4e8815cf7b07964f377f637c48bcd9b434232a70e5c1cfb2d0670",
+      "publication_sha256": "d39085089b166855e532f686042704898135871adba2bacbc1fc54a5c485016b",
+      "source_file": "edge_coverage.py",
+      "source_packet": "migration-prefill-capacity-owner-preparation-001"
+    },
+    "etcd_preflight.py": {
+      "ast_equal_to_frozen": false,
+      "body_without_imports_equal_to_frozen": true,
+      "imports_after": [
+        "import base64",
+        "import json",
+        "import urllib.error",
+        "import urllib.request",
+        "from pathlib import Path"
+      ],
+      "imports_before": [
+        "import base64",
+        "import json",
+        "from pathlib import Path",
+        "import urllib.error",
+        "import urllib.request"
+      ],
+      "original_bytes_equal": false,
+      "original_sha256": "87331e2c18665600446513f9a30dea3faa4502d7cc3f471f68936662a39563a9",
+      "publication_sha256": "f20b41f2d80cac19186eaf179ecec94ac9380942211e204933199921915df443",
+      "source_file": "etcd_preflight.py",
+      "source_packet": "migration-prefill-capacity-owner-preparation-001"
+    },
+    "lifecycle.py": {
+      "ast_equal_to_frozen": true,
+      "body_without_imports_equal_to_frozen": true,
+      "imports_after": [
+        "import re"
+      ],
+      "imports_before": [
+        "import re"
+      ],
+      "original_bytes_equal": false,
+      "original_sha256": "748c8fde2b23d6dfbfafb143d7023cd921e5b177b2f297b3146633d559ce16d5",
+      "publication_sha256": "dd945ca8ac13ee3638c79f2b94d1a5d7f72e19a729abf49176addcf33ab186b8",
+      "source_file": "lifecycle.py",
+      "source_packet": "migration-prefill-capacity-owner-preparation-001"
+    },
+    "native_observation.py": {
+      "ast_equal_to_frozen": false,
+      "body_without_imports_equal_to_frozen": true,
+      "imports_after": [
+        "import hashlib",
+        "import os",
+        "import re",
+        "from pathlib import Path",
+        "from runner_support import mapped_libraries"
+      ],
+      "imports_before": [
+        "from pathlib import Path",
+        "import os",
+        "import re",
+        "import hashlib",
+        "from runner_support import mapped_libraries"
+      ],
+      "original_bytes_equal": false,
+      "original_sha256": "0db96c05e0ee0152a0f7474bd441e9f4f00f0d949244d8277c6d9bac0219df2c",
+      "publication_sha256": "f6d783ba797a413651fd98c1355df2eaa8d7a50bb523cad4c93f2d2c2d8a2896",
+      "source_file": "native_observation.py",
+      "source_packet": "migration-prefill-capacity-owner-preparation-001"
+    },
+    "node-entry.py": {
+      "ast_equal_to_frozen": false,
+      "body_without_imports_equal_to_frozen": false,
+      "imports_after": [
+        "import os",
+        "import subprocess",
+        "import sys",
+        "from pathlib import Path"
+      ],
+      "imports_before": [
+        "import os",
+        "from pathlib import Path",
+        "import subprocess",
+        "import sys"
+      ],
+      "original_bytes_equal": false,
+      "original_sha256": "4adefd33504031111ece2b8a6e397b2ccc9c9e49289c219b22d7e1448e0b723f",
+      "publication_sha256": "d36aa661123ba3ce54e79955976d3a4e1cdbda754d8ecfcd414ebeef9bbaec98",
+      "source_file": "node-entry.py",
+      "source_packet": "migration-prefill-capacity-launch-preparation-001"
+    },
+    "node-preflight.py": {
+      "ast_equal_to_frozen": false,
+      "body_without_imports_equal_to_frozen": false,
+      "imports_after": [
+        "import datetime as dt",
+        "import hashlib",
+        "import json",
+        "import os",
+        "import re",
+        "import socket",
+        "import subprocess",
+        "import sys",
+        "from pathlib import Path",
+        "from capacity_resources import admit, observe"
+      ],
+      "imports_before": [
+        "from pathlib import Path",
+        "import os, re, json, sys, hashlib, socket, subprocess, datetime as dt",
+        "from capacity_resources import observe, admit"
+      ],
+      "original_bytes_equal": false,
+      "original_sha256": "a6487c9c2dfdb60f268aec0523b44f6f413a80148f8ce5b79c22bd859b503b51",
+      "publication_sha256": "6200772f75ab7b984b94f64255da2dd5d89471ad4f4acb7d015b4f227c2b194a",
+      "source_file": "node-preflight.py",
+      "source_packet": "migration-prefill-capacity-launch-preparation-001"
+    },
+    "node-run.sh": {
+      "original_bytes_equal": false,
+      "original_sha256": "e4a125aaf601a08ac6ca2858418c399c62b6cb1a7287c9e0e6da72b6e7404e90",
+      "publication_sha256": "494124ece634254780eef348774a1261d28cf5aae23a7c71b0e9ae81457d96a0",
+      "source_file": "node-run.sh",
+      "source_packet": "migration-prefill-capacity-launch-preparation-001"
+    },
+    "owned_cleanup.py": {
+      "ast_equal_to_frozen": true,
+      "body_without_imports_equal_to_frozen": true,
+      "imports_after": [],
+      "imports_before": [],
+      "original_bytes_equal": false,
+      "original_sha256": "a61a1a963af4de8cb48044c9a6858ef00635b85ff3405459a6385e88e61a9369",
+      "publication_sha256": "c6912d0005fc3b26e9841f1674f493d0e489cf470be07790d266aa5d15ab5fdf",
+      "source_file": "owned_cleanup.py",
+      "source_packet": "migration-prefill-capacity-owner-preparation-001"
+    },
+    "owner_runner.py": {
+      "ast_equal_to_frozen": false,
+      "body_without_imports_equal_to_frozen": true,
+      "imports_after": [
+        "import argparse",
+        "import gc",
+        "import json",
+        "import os",
+        "import signal",
+        "import socket",
+        "import struct",
+        "import subprocess",
+        "import sys",
+        "import time",
+        "import traceback",
+        "import urllib.error",
+        "import urllib.request",
+        "from pathlib import Path",
+        "from bridge_network import prepare_bridge_config",
+        "from capacity_execution import Call, make_cases, resources, sentinel_keys",
+        "from capacity_observation import check_capacity_ready, observe_manager_memory",
+        "from capacity_pages import SelectedWriter, check_samples, compare_selected, live_selected_group_hashes, require_changed_groups, sample_pages, saved_selected_group_hashes, selected_config_hashes",
+        "from capacity_warmup import warmup_barrier, warmup_geometry",
+        "from device_identity import device_namespace_receipt",
+        "from native_observation import observe_manager, process_identity",
+        "from owned_cleanup import cleanup_each, cleanup_owner",
+        "from page_io import geometry",
+        "from peer_stop import PeerStopGuard, guarded",
+        "from range_contract import AckRecorder",
+        "from range_driver import run_phases",
+        "from runner_support import Bridge, CapturedCompletionSink, mapped_libraries, prepare_jit_cache, require, require_clean_manager_exit, sha256, validate_plan, wait_receipt, write_json",
+        "from runtime_call import execute_call",
+        "from transfer_bootstrap import EtcdBootstrap",
+        "from transfer_lifetime import await_pair_cleanup, check_unallocated_bootstrap_release, finish_native_pair, publish_native_stopped",
+        "import numpy as np",
+        "import torch",
+        "import ttnn",
+        "from models.demos.common.prefill.adapter import PrefillRunParams",
+        "from models.demos.common.prefill.runners.migration import export_device_map_to_file, serialize_device_map",
+        "from models.demos.common.prefill.runners.runner_utils import build_h2d_service, open_mesh_device",
+        "from models.demos.llama_3p1_8b_d_p.tt.input import pack_token_ids",
+        "from models.demos.llama_3p1_8b_d_p.tt.kv_cache import write_kv_chunk",
+        "from models.demos.llama_3p1_8b_d_p.tt.runners.adapters.llama_3p1_8b import Llama31PrefillAdapter",
+        "from models.demos.llama_3p1_8b_d_p.tt.runners.kv_chunk_table import build_kv_chunk_address_table",
+        "from ttnn._experimental.layer_completion import LayerCompletionQueue, LayerCompletionRouter",
+        "from models.demos.llama_3p1_8b_d_p.tt.tt_prefill_runtime import build_runtime"
+      ],
+      "imports_before": [
+        "import argparse",
+        "import gc",
+        "import hashlib",
+        "import struct",
+        "import json",
+        "import os",
+        "from pathlib import Path",
+        "import signal",
+        "import socket",
+        "import subprocess",
+        "import sys",
+        "import time",
+        "import traceback",
+        "import urllib.error",
+        "import urllib.request",
+        "from native_observation import observe_manager, process_identity",
+        "from device_identity import device_namespace_receipt",
+        "from transfer_bootstrap import EtcdBootstrap",
+        "from bridge_network import prepare_bridge_config",
+        "from range_contract import AckRecorder",
+        "from capacity_execution import make_cases, Call, sentinel_keys, resources",
+        "from capacity_pages import SelectedWriter, compare_selected, sample_pages, check_samples, selected_config_hashes",
+        "from capacity_observation import check_capacity_ready, observe_manager_memory",
+        "from capacity_warmup import warmup_geometry, warmup_barrier",
+        "from capacity_pages import live_selected_group_hashes, saved_selected_group_hashes, require_changed_groups",
+        "from range_driver import run_phases",
+        "from runtime_call import execute_call",
+        "from owned_cleanup import cleanup_each, cleanup_owner",
+        "from transfer_lifetime import await_pair_cleanup, finish_native_pair, publish_native_stopped, check_unallocated_bootstrap_release",
+        "from page_io import geometry",
+        "from peer_stop import PeerStopGuard, guarded",
+        "from runner_support import Bridge, CapturedCompletionSink, mapped_libraries, prepare_jit_cache, require, require_clean_manager_exit, sha256, validate_plan, verify_source_terminal, wait_receipt, write_json",
+        "import numpy as np",
+        "import torch",
+        "import ttnn",
+        "from models.demos.common.prefill.adapter import PrefillRunParams",
+        "from models.demos.common.prefill.runners.runner_utils import open_mesh_device, build_h2d_service",
+        "from models.demos.common.prefill.runners.migration import export_device_map_to_file, serialize_device_map",
+        "from models.demos.llama_3p1_8b_d_p.tt.runners.adapters.llama_3p1_8b import Llama31PrefillAdapter",
+        "from models.demos.llama_3p1_8b_d_p.tt.runners.kv_chunk_table import build_kv_chunk_address_table",
+        "from models.demos.llama_3p1_8b_d_p.tt.input import pack_token_ids",
+        "from models.demos.llama_3p1_8b_d_p.tt.kv_cache import write_kv_chunk",
+        "from models.demos.llama_3p1_8b_d_p.tt.tt_prefill_runtime import build_runtime",
+        "from ttnn._experimental.layer_completion import LayerCompletionQueue, LayerCompletionRouter"
+      ],
+      "original_bytes_equal": false,
+      "original_sha256": "cfef284ddc2d2416d3bb45a5bab8fe0945adf9f352de11e8c77992c34aab1f85",
+      "publication_sha256": "9bb3f0cd8e05fcd21e65f4cca25b786b76f17e6fdd31bbab855e4654ceac6415",
+      "source_file": "owner_runner.py",
+      "source_packet": "migration-prefill-capacity-owner-preparation-001"
+    },
+    "page_io.py": {
+      "ast_equal_to_frozen": true,
+      "body_without_imports_equal_to_frozen": true,
+      "imports_after": [
+        "import hashlib",
+        "import json",
+        "import os",
+        "from pathlib import Path"
+      ],
+      "imports_before": [
+        "import hashlib",
+        "import json",
+        "import os",
+        "from pathlib import Path"
+      ],
+      "original_bytes_equal": false,
+      "original_sha256": "dc01b3577ae72db2e38ef54a117866088b83f34da25819888ca069375e8b14ea",
+      "publication_sha256": "d8109fa879e51a29c98b8c041ffb2e737d298c3418257aaaa69f9cc91ffe91f0",
+      "source_file": "page_io.py",
+      "source_packet": "migration-prefill-capacity-owner-preparation-001"
+    },
+    "peer_stop.py": {
+      "ast_equal_to_frozen": true,
+      "body_without_imports_equal_to_frozen": true,
+      "imports_after": [
+        "import json",
+        "from pathlib import Path",
+        "from runner_support import require, sha256, write_json"
+      ],
+      "imports_before": [
+        "import json",
+        "from pathlib import Path",
+        "from runner_support import require, sha256, write_json"
+      ],
+      "original_bytes_equal": false,
+      "original_sha256": "a83c8cdde6ced7980bca192bb04ea4e0bb6a65ba29e7ec1bf6d8ae585b7a90cd",
+      "publication_sha256": "145ad1f4565b8c639059e56c57ce70bbd5f14099e98bcf7e02303709f933d510",
+      "source_file": "peer_stop.py",
+      "source_packet": "migration-prefill-capacity-owner-preparation-001"
+    },
+    "range_contract.py": {
+      "ast_equal_to_frozen": false,
+      "body_without_imports_equal_to_frozen": true,
+      "imports_after": [
+        "import json",
+        "from pathlib import Path",
+        "from check_scenario import validate",
+        "from runner_support import require, sha256"
+      ],
+      "imports_before": [
+        "import json",
+        "from pathlib import Path",
+        "from runner_support import require, sha256",
+        "from check_scenario import validate"
+      ],
+      "original_bytes_equal": false,
+      "original_sha256": "4d48aadc9ac8753c33c162263f0cf73a42941e70e490ba82f95f16f68b7aa84d",
+      "publication_sha256": "fac2308d7a88435eded6d4eccc838e66fc55574e35b77898f45c82a708ab3fca",
+      "source_file": "range_contract.py",
+      "source_packet": "migration-prefill-capacity-owner-preparation-001"
+    },
+    "range_driver.py": {
+      "ast_equal_to_frozen": false,
+      "body_without_imports_equal_to_frozen": true,
+      "imports_after": [
+        "from range_contract import generation, phase_receipt, rpc",
+        "from runner_support import require"
+      ],
+      "imports_before": [
+        "from range_contract import rpc, generation, phase_receipt",
+        "from runner_support import require"
+      ],
+      "original_bytes_equal": false,
+      "original_sha256": "c533d0e287bdc64ee81c174ef68498c45bd6be79e22091e202f75acdcb45731d",
+      "publication_sha256": "2873e273779f5e579d36fd86af38f49a8714c0e7404b8df1d88a5fc02ec3c4dc",
+      "source_file": "range_driver.py",
+      "source_packet": "migration-prefill-capacity-owner-preparation-001"
+    },
+    "runner_support.py": {
+      "ast_equal_to_frozen": false,
+      "body_without_imports_equal_to_frozen": true,
+      "imports_after": [
+        "import hashlib",
+        "import json",
+        "import os",
+        "import re",
+        "import subprocess",
+        "import time",
+        "from pathlib import Path",
+        "from transfer_contract import validate_plan as check"
+      ],
+      "imports_before": [
+        "import hashlib",
+        "import json",
+        "import os",
+        "from pathlib import Path",
+        "import re",
+        "import subprocess",
+        "import time",
+        "from transfer_contract import validate_plan as check"
+      ],
+      "original_bytes_equal": false,
+      "original_sha256": "d3b716920eacb7d2d8b509bde7594d8d0a7583fa08d83a1c34ad3eb4c7d59cee",
+      "publication_sha256": "d81730da48e0e683efc119cd66672d7f5fe48af8a03a998dddad0f35f759a149",
+      "source_file": "runner_support.py",
+      "source_packet": "migration-prefill-capacity-owner-preparation-001"
+    },
+    "runtime_call.py": {
+      "ast_equal_to_frozen": false,
+      "body_without_imports_equal_to_frozen": true,
+      "imports_after": [
+        "from edge_checks import check_metadata"
+      ],
+      "imports_before": [
+        "from edge_checks import check_metadata",
+        "from runner_support import require"
+      ],
+      "original_bytes_equal": false,
+      "original_sha256": "48eb47366431de67148614195a3d32062b0969c14f2ef45651f9429962116c2a",
+      "publication_sha256": "1be2555dc98879e47192d5311ad81363618744e1056742a78d28be55bb8e7509",
+      "source_file": "runtime_call.py",
+      "source_packet": "migration-prefill-capacity-owner-preparation-001"
+    },
+    "supervise_owner.py": {
+      "ast_equal_to_frozen": false,
+      "body_without_imports_equal_to_frozen": true,
+      "imports_after": [
+        "import argparse",
+        "import datetime as dt",
+        "import fcntl",
+        "import json",
+        "import os",
+        "import signal",
+        "import socket",
+        "import subprocess",
+        "import sys",
+        "import time",
+        "import traceback",
+        "from pathlib import Path",
+        "from native_observation import process_identity",
+        "from peer_stop import read_peer_event",
+        "from runner_support import require, sha256, validate_plan, write_json",
+        "from supervision import root_release_valid, supervise"
+      ],
+      "imports_before": [
+        "import argparse",
+        "import datetime as dt",
+        "import fcntl",
+        "import json",
+        "import os",
+        "from pathlib import Path",
+        "import signal",
+        "import socket",
+        "import subprocess",
+        "import sys",
+        "import time",
+        "import traceback",
+        "from native_observation import process_identity",
+        "from peer_stop import read_peer_event",
+        "from runner_support import require, sha256, validate_plan, write_json",
+        "from supervision import supervise, root_release_valid"
+      ],
+      "original_bytes_equal": false,
+      "original_sha256": "001852ea7176374085f0540ab6acc8056151fb01019d838595e9df03b64fbe9d",
+      "publication_sha256": "f4c3b07faa9c272f1d1ab9742ed44b369abbabe913c60f1d1f30aa4e1b26c37c",
+      "source_file": "supervise_owner.py",
+      "source_packet": "migration-prefill-capacity-owner-preparation-001"
+    },
+    "supervision.py": {
+      "ast_equal_to_frozen": false,
+      "body_without_imports_equal_to_frozen": true,
+      "imports_after": [
+        "import hashlib",
+        "import json",
+        "import time",
+        "from pathlib import Path"
+      ],
+      "imports_before": [
+        "import time",
+        "import hashlib",
+        "import json",
+        "from pathlib import Path"
+      ],
+      "original_bytes_equal": false,
+      "original_sha256": "a2bc2f0adf6ae1d5dbe49b5e867451492382dee7204aece68f7b49a2abb829f7",
+      "publication_sha256": "5447cc9bade552ef099552f9d859c283900f4550e6f69f8a8aecbd1b3bd816d4",
+      "source_file": "supervision.py",
+      "source_packet": "migration-prefill-capacity-owner-preparation-001"
+    },
+    "transfer_bootstrap.py": {
+      "ast_equal_to_frozen": false,
+      "body_without_imports_equal_to_frozen": true,
+      "imports_after": [
+        "import os",
+        "import socket",
+        "import subprocess",
+        "import time",
+        "import urllib.error",
+        "import urllib.request",
+        "from pathlib import Path",
+        "from urllib.parse import urlparse",
+        "from etcd_preflight import verify_etcd_api",
+        "from runner_support import require, wait_receipt, write_json"
+      ],
+      "imports_before": [
+        "import os",
+        "import socket",
+        "from urllib.parse import urlparse",
+        "from pathlib import Path",
+        "import subprocess",
+        "import time",
+        "import urllib.error",
+        "import urllib.request",
+        "from etcd_preflight import verify_etcd_api",
+        "from runner_support import require, wait_receipt, write_json"
+      ],
+      "original_bytes_equal": false,
+      "original_sha256": "a6c36b308feda857352d5ecb5b49c3ffd77b8d3820aeee27c51aaf82c1fbf7ca",
+      "publication_sha256": "6eef5f94bfcf4569d20d6cf28b2b3a3ba77813c1ca1a9426b83987dd7f899577",
+      "source_file": "transfer_bootstrap.py",
+      "source_packet": "migration-prefill-capacity-owner-preparation-001"
+    },
+    "transfer_contract.py": {
+      "ast_equal_to_frozen": false,
+      "body_without_imports_equal_to_frozen": false,
+      "imports_after": [
+        "import re",
+        "from pathlib import Path",
+        "from urllib.parse import urlparse",
+        "from runner_support import require, sha256",
+        "from capacity_execution import capacity",
+        "import json"
+      ],
+      "imports_before": [
+        "from pathlib import Path",
+        "import re",
+        "from urllib.parse import urlparse",
+        "from runner_support import require, sha256",
+        "from capacity_execution import capacity",
+        "import json"
+      ],
+      "original_bytes_equal": false,
+      "original_sha256": "6cdf164f38188ff8e819b6553d5c50eed292fa937cc0f5697af4391098cede3d",
+      "publication_sha256": "3e88eb6f1c1819f03779b5efad480c82a46764c906de80cf727cac374fb2304c",
+      "source_file": "transfer_contract.py",
+      "source_packet": "migration-prefill-capacity-owner-preparation-001"
+    },
+    "transfer_lifetime.py": {
+      "ast_equal_to_frozen": false,
+      "body_without_imports_equal_to_frozen": true,
+      "imports_after": [
+        "import hashlib",
+        "import json",
+        "import time",
+        "from pathlib import Path",
+        "from runner_support import require, require_clean_manager_exit, sha256, write_json",
+        "from supervision import root_cleanup_valid"
+      ],
+      "imports_before": [
+        "import hashlib",
+        "import json",
+        "from pathlib import Path",
+        "import time",
+        "from runner_support import require, require_clean_manager_exit, sha256, write_json",
+        "from supervision import root_cleanup_valid"
+      ],
+      "original_bytes_equal": false,
+      "original_sha256": "9bb6f0e689d082d6cea85b4b3b80cecf70c3ab7860c7f8772a47278d17dcc6d9",
+      "publication_sha256": "314686a653b0e814582d9000a274177e0f1998cbc3cfbd8deab1faf0da5e923e",
+      "source_file": "transfer_lifetime.py",
+      "source_packet": "migration-prefill-capacity-owner-preparation-001"
+    },
+    "verify_capacity.py": {
+      "ast_equal_to_frozen": false,
+      "body_without_imports_equal_to_frozen": true,
+      "imports_after": [
+        "import json",
+        "from pathlib import Path",
+        "from capacity_execution import make_cases, require, resources",
+        "from capacity_observation import check_capacity_ready",
+        "from lifecycle import clean_lifecycle",
+        "from range_contract import generation",
+        "from runner_support import sha256",
+        "from capacity_warmup import token_digest",
+        "from capacity_pages import require_changed_groups",
+        "from capacity_execution import sentinel_keys",
+        "from capacity_resources import admit",
+        "from capacity_execution import sentinel_keys"
+      ],
+      "imports_before": [
+        "import json",
+        "from pathlib import Path",
+        "from capacity_execution import make_cases, resources, require",
+        "from range_contract import generation",
+        "from capacity_observation import check_capacity_ready",
+        "from lifecycle import clean_lifecycle",
+        "from runner_support import sha256",
+        "from capacity_warmup import token_digest",
+        "from capacity_pages import require_changed_groups",
+        "from capacity_execution import sentinel_keys",
+        "from capacity_resources import admit",
+        "from capacity_execution import sentinel_keys"
+      ],
+      "original_bytes_equal": false,
+      "original_sha256": "87bd458f83e415a9a73806f96061b0b0a129d533a46c4e7c13e4d50ace6aeabe",
+      "publication_sha256": "f4a9e09a3f2395499b0dba612cde85036fd1ddf73e60db334cd93adfbd8a656e",
+      "source_file": "verify_capacity.py",
+      "source_packet": "migration-prefill-capacity-owner-preparation-001"
+    },
+    "verify_final.py": {
+      "ast_equal_to_frozen": false,
+      "body_without_imports_equal_to_frozen": false,
+      "imports_after": [
+        "import sys",
+        "from pathlib import Path",
+        "from verify_capacity import verify"
+      ],
+      "imports_before": [
+        "import sys",
+        "from pathlib import Path",
+        "from verify_capacity import verify"
+      ],
+      "original_bytes_equal": false,
+      "original_sha256": "290bbc7b5df3bc8c87b49d66d4285108e0ed9babe466ffcf03a7df49d4d13600",
+      "publication_sha256": "d3521c0111f95691f997965763e83e4b23dc9cae468eba136dbd632b8a9569a8",
+      "source_file": "verify_final.py",
+      "source_packet": "migration-prefill-capacity-launch-preparation-001"
+    }
+  },
+  "post_hook_note": "Original source hashes remain frozen provenance. Current publication hashes include required Black/isort formatting, removal of unused imports, and explicit preservation of the verifier re-export and native bootstrap import order. See the integration formatter/import review for each change.",
+  "scope": "Original tested source provenance is separate from current relocated publication hashes; device qualification pending"
+}

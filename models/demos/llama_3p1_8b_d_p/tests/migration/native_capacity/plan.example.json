@@ -1,0 +1,112 @@
+{
+  "accepted_gate_spec": "/configure/model-spec.json",
+  "accepted_source_pins": "/configure/accepted-source-pins.json",
+  "allocation_nodelist": "bh-glx-120-[SOURCE,PASSIVE]",
+  "allocation_nodes": [
+    "bh-glx-120-SOURCE",
+    "bh-glx-120-PASSIVE"
+  ],
+  "book_manifest": "/configure/book-manifest.json",
+  "bridge_host_validation": "/configure/bridge-host-validation.json",
+  "bridge_manifest": "/configure/bridge-source-manifest.json",
+  "bridge_manifest_sha256": "CONFIGURE_SHA256",
+  "capacity": 4096,
+  "checkpoint": "/configure/Llama-3.1-8B-Instruct",
+  "dmk_elf": "/configure/dmk_elf",
+  "etcd_binary": "/configure/etcd_binary",
+  "etcd_endpoint": "http://bh-glx-120-SOURCE:29401",
+  "etcd_peer_endpoint": "http://127.0.0.1:29402",
+  "full_cache_snapshots": false,
+  "launch_authorized": false,
+  "ld_library_path": "/configure/lib",
+  "manager_binary": "/configure/manager_binary",
+  "manager_libraries": {
+    "libtracy.so": {
+      "path": "/configure/lib/libtracy.so",
+      "sha256": "CONFIGURE_SHA256"
+    },
+    "libtt-umd.so": {
+      "path": "/configure/lib/libtt-umd.so",
+      "sha256": "CONFIGURE_SHA256"
+    },
+    "libtt_metal.so": {
+      "path": "/configure/lib/libtt_metal.so",
+      "sha256": "CONFIGURE_SHA256"
+    },
+    "libtt_stl.so": {
+      "path": "/configure/lib/libtt_stl.so",
+      "sha256": "CONFIGURE_SHA256"
+    }
+  },
+  "manager_memory_reviewed": false,
+  "manager_rss_limit_bytes": {
+    "passive": 17179869184,
+    "source": 17179869184
+  },
+  "minimum_host_available_bytes": 137438953472,
+  "minimum_shared_disk_free_bytes": 34359738368,
+  "native_probe": "/configure/tt-metal/models/demos/llama_3p1_8b_d_p/tests/migration/verify_native_env.py",
+  "owner_mode": "real_h2d_prefill",
+  "passive": {
+    "control_port": 29403,
+    "endpoint_id": 2,
+    "health_port": 29404,
+    "health_receipt": "/configure/passive-health.json",
+    "health_sha256": "CONFIGURE_SHA256",
+    "host": "bh-glx-120-PASSIVE",
+    "job_id": "REPLACE",
+    "lease_end_utc": null,
+    "manager_control_port": 29406,
+    "manager_port": 29405,
+    "node_lock": "/configure/tmp/prefill-device-120-PASSIVE.lock"
+  },
+  "passive_client": "/configure/passive_client",
+  "pending": [
+    "Closed reproduction example is4K; user approved resuming8\u201364K validation, pending separately reviewed runs;128K excluded",
+    "Configure source-matched model/environment and exact48-case/no-Metal/binary-bound bridge receipt; relocated device qualification remains pending",
+    "Root selects one requested capacity and a fresh run directory/nonce",
+    "Bind current exact source/passive assignment, lease and accepted health/handback proofs",
+    "Choose setup/warmup/native-phase/supervisor budgets from actual smaller capacity runs and current lease",
+    "Review fresh128GiB host/cgroup admission,32GiB shared-disk reserve,16GiB manager RSS/HWM observations",
+    "Review source/host packet and explicitly open the existing review/launch flags"
+  ],
+  "pins": {},
+  "requested_capacities": [
+    4096,
+    8192,
+    16384,
+    32768,
+    65536
+  ],
+  "reviewed": false,
+  "run_dir": null,
+  "run_nonce": null,
+  "schema": 3,
+  "scope": "real_prefill_capacity_selected_ranges",
+  "source": {
+    "control_port": 29403,
+    "endpoint_id": 1,
+    "health_port": 29404,
+    "health_receipt": "/configure/source-health.json",
+    "health_sha256": "CONFIGURE_SHA256",
+    "host": "bh-glx-120-SOURCE",
+    "job_id": "REPLACE",
+    "lease_end_utc": null,
+    "manager_control_port": 29406,
+    "manager_port": 29405,
+    "node_lock": "/configure/tmp/prefill-device-120-SOURCE.lock"
+  },
+  "source_client": "/configure/source_client",
+  "source_setup_timeout_seconds": null,
+  "startup_evidence": "/configure/startup_evidence",
+  "supervisor": {
+    "cancel_seconds": null,
+    "normal_seconds": null,
+    "recovery_reserve_seconds": null
+  },
+  "transfer_phase_timeout_seconds": null,
+  "warmup_policy": "both_prompt_geometries_before_native_clients",
+  "warmup_timeout_seconds": null,
+  "allocation_owner": "CONFIGURE_USER",
+  "environment_script": "/configure/prefill_env.sh"
+}

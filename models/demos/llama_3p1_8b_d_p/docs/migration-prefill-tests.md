@@ -1,13 +1,13 @@
 <!-- SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc. -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
-> Status snapshot: 17 September 2026. See the [live test page](http://127.0.0.1:8768/migration-prefill-tests.html) for updates.
+> Status snapshot: 18 September 2026. Focused 4K passed. The user subsequently approved larger lengths; 8K–64K device validation is resuming and remains pending per size. 128K is deferred.
 
 # Prefill migration: the tests that define completion
 
 This page covers **Llama-3.1-8B-Instruct prefill and native tt-d-gen migration from its cache**. It does not cover a decoder. No SC4 test is part of this plan.
 
-**Current conclusion:** the 2K model, the prefill runtime, table export and a local packed-cache copy have passed their recorded checks. **Native tt-d-gen transfer has not passed yet.** A local TTNN copy does not test the native transport.
+**Current conclusion:** the [2K native full-prefix transfer](migration-native-2k.md), [selected ranges and slot reuse](migration-prefill-ranges.md), [real cancellation/restart](migration-prefill-cancel-restart.md), and [focused4K capacity transfer](migration-prefill-capacity-4k.md) passed their recorded scopes. Writer/runtime checks also passed. The receiver remains passive memory: no decoder or128K claim is added. Relocated publication checks are host-only.
 
 The page uses short sentences and defines technical terms. “Passed” always refers to the stated test scope and saved evidence.
 
@@ -61,7 +61,7 @@ There are two completion points. Neither requires decode testing.
 
 **A. Prefill migration works at 2K.** All required rows M01–M12 below have passing evidence for their full stated scope. The real native manager transfers both distinct source slots. Independent checks verify every requested byte, all 16 configs and all 32 layers. Tests also cover partial chunks, continuation, slot reuse and failure handling. M14 publishes the tested implementation and reproducible commands.
 
-**B. Prefill migration supports all requested capacities.** A is complete, and M13 passes at **4K, 8K, 16K, 32K, 64K and 128K**. Each capacity gets a real prefill/transfer test. Host address arithmetic alone cannot establish support.
+**B. Capacity support is recorded per tested size.** Focused4K selected-range transfer passed. The user has approved resuming device validation at 8K, 16K, 32K and 64K; those sizes remain pending. 128K is deferred. Host address arithmetic alone cannot establish support at an untested capacity.
 
 The existing 2K numerical evidence is the model-correctness anchor. We will not add larger-context golden KV comparisons. At larger capacities, we check execution, valid ranges, source placement and exact transferred bytes. The separate performance effort records full-model wall time, throughput, per-chunk time and book next-token observations.
 
@@ -75,26 +75,26 @@ Each ID links to its detailed checks. Live badges show the recorded status. A pa
 
 | ID | Test | What must be true | Status |
 |---|---|---|---|
-| [M01](#m01) | Model and run contract | The selected model, precision, slots and geometry agree before allocation. | Partial |
+| [M01](#m01) | Model and run contract | The selected model, precision, slots and geometry agree before allocation. | Passed for recorded native runs |
 | [M02](#m02) | Table structure and saved-table round trip | Every logical block has the right config, owner and address after export/import. | Passed at 2K |
-| [M03](#m03) | Independent live table readback | Table reads select the intended live tensor data, not merely a self-consistent wrong address. | Partial |
-| [M04](#m04) | Real source values at 2K | The runner/table path carries the already validated Llama cache values. | Partial |
-| [M05](#m05) | Input, partial chunks and continuation | Valid tokens reach the correct absolute positions; padding cannot become resident prompt data. | Partial |
-| [M06](#m06) | Layer readiness | Exactly 32 acknowledgements follow completed writes for each valid chunk. | Partial |
-| [M07](#m07) | Native source registration and peer readiness | The real manager accepts this table and live device map, and waits for the correct peer. | Pending |
-| [M08](#m08) | Native transfer and exact destination bytes | Every requested destination block equals the saved source block. | Pending |
-| [M09](#m09) | Incremental transfer ranges | Only completed, selected ranges move; later chunks do not damage earlier data. | Pending |
-| [M10](#m10) | Two-slot isolation and reuse | Distinct prompts remain distinct during interleaving, remapping and reuse. | Partial |
-| [M11](#m11) | Failure and verifier sensitivity | Errors cannot produce a false success, duplicate readiness or an empty comparison pass. | Partial |
-| [M12](#m12) | Buffer lifetime, drain and shutdown | Source memory remains valid until transfer ends; teardown leaves no owned work active. | Partial |
-| [M13](#m13) | Capacity ladder through 128K | The same sender contract works at every requested capacity. | Pending |
-| [M14](#m14) | Reproduction and publication | Tests, commands, source versions, results and logical commits agree. | Partial |
+| [M03](#m03) | Independent live table readback | Table reads select the intended live tensor data, not merely a self-consistent wrong address. | Passed at2K |
+| [M04](#m04) | Real source values at 2K | The runner/table path carries the already validated Llama cache values. | Composed2K numerical/address/native evidence |
+| [M05](#m05) | Input, partial chunks and continuation | Valid tokens reach the correct absolute positions; padding cannot become resident prompt data. | Recorded writer/runtime/range cases passed |
+| [M06](#m06) | Layer readiness | Exactly 32 acknowledgements follow completed writes for each valid chunk. | Post-sync and delayed-peer cases passed |
+| [M07](#m07) | Native source registration and peer readiness | The real manager accepts this table and live device map, and waits for the correct peer. | Native registration/readiness passed |
+| [M08](#m08) | Native transfer and exact destination bytes | Every requested destination block equals the saved source block. |2K full-prefix and focused4K selected ranges passed |
+| [M09](#m09) | Incremental transfer ranges | Only completed, selected ranges move; later chunks do not damage earlier data. | Six-generation native range fixture passed |
+| [M10](#m10) | Two-slot isolation and reuse | Distinct prompts remain distinct during interleaving, remapping and reuse. | Recorded crossed mappings and third-request reuse passed |
+| [M11](#m11) | Failure and verifier sensitivity | Errors cannot produce a false success, duplicate readiness or an empty comparison pass. | Host faults and live delayed-peer/cancel cases passed; abrupt loss untested |
+| [M12](#m12) | Buffer lifetime, drain and shutdown | Source memory remains valid until transfer ends; teardown leaves no owned work active. | Recorded drain/restart passed; bytes-in-flight cancellation untested |
+| [M13](#m13) | Capacity-selected transfer | Real allocation, high-end placement, selected bytes and resource limits agree. | Focused 4K passed; 8K–64K resuming/pending; 128K deferred |
+| [M14](#m14) | Reproduction and publication | Tests, commands, source versions, results and logical commits agree. | Runnable fixtures and scoped reports on this branch; relocated validation is host-only |
 
 ### M01
 
 **Test: model and run contract.** Check checkpoint/config identity, Llama3 RoPE settings, all 32 layers, SP4/TP8, two slots, 1,024-token chunks and BFP8_B cache. Head width is 128. Each 32-token transfer block contains four packed tiles: **4 × 1,088 = 4,352 bytes**. Reject unsupported geometry, capacity, slot count, tracing and DFlash before device work. Bind the fixture, source revision and native binary versions in the run record.
 
-Existing adapter/runtime host tests cover configuration forwarding and early rejection. A complete native run still needs the identity checks at its process boundaries. Llama uses ordinary dense attention and SwiGLU; GPT-OSS MoE, attention sinks and sliding-window rules do not belong here.
+Existing adapter/runtime host tests cover configuration forwarding and early rejection. Recorded native runs bind identity at the owner, manager, table and bridge boundaries. Llama uses ordinary dense attention and SwiGLU; GPT-OSS MoE, attention sinks and sliding-window rules do not belong here.
 
 ### M02
 
@@ -106,13 +106,13 @@ At 2K, the full allocation has **16 × 32 × 2 × (2,048 / 32) = 65,536 entries*
 
 **Test: independent live table readback.** Write values that distinguish config, head, layer, slot and position. Read each region through the exported table. Separately read the live tensor with an independent placement calculation. Decode BFP8 blocks for exact value comparison between those two views. Check raw block sizes and count every expected comparison.
 
-This is the same logical test as GPT-OSS `test_gpt_oss_kv_chunk_table_readback`. Comparing two reads that both use the same wrong table is insufficient. The existing Llama host bank walk and packed-copy evidence are useful prerequisites; they do not close this independent live-placement gate by themselves.
+This is the same logical test as GPT-OSS `test_gpt_oss_kv_chunk_table_readback`. Comparing two reads that both use the same wrong table is insufficient. The [independent live address result](migration-prefill-address-evidence.md) covers all65,536 pages at2K; host bank arithmetic alone was not used to close this gate.
 
 ### M04
 
 **Test: real source values at 2K.** Reuse the accepted 2K model evidence and frozen inputs. Link table-visible cache data from the real runner to an independent cache view. Apply the documented 2K numerical policy when comparing with the reference. Report any raw FP32 intermediate differences under that policy; do not rewrite them as exact equality.
 
-The direct 32-layer model and all-layer KV checks passed in the accepted 2K suite. The missing link is the complete runner → exported table → independent reader path. This test checks that the right data is selected before transport. It is separate from M08, which checks whether transport changes bytes. No larger-context golden matrix is required.
+The direct 32-layer model and all-layer KV checks passed in the accepted 2K suite. The evidence is composed from direct numerical reads, independent tagged full-table mapping, and real H2D/native packed-byte checks using the corresponding source/layout identities. This test checks that the right data is selected before transport. It is separate from M08, which checks whether transport changes bytes. No larger-context golden matrix is required.
 
 ### M05
 
@@ -120,13 +120,13 @@ The direct 32-layer model and all-layer KV checks passed in the accepted 2K suit
 
 Cover valid lengths around 32, 256 and 1,024-token boundaries. Examples are 31/32/33, 255/256/257 and 1,023/1,024/1,025. Use legal tile-aligned starts such as 32, 224, 256 and 992, with end positions inside capacity. Reject unaligned starts and out-of-range metadata. Check valid rows and expected padding separately inside a partially written tile. Compare whole untouched blocks byte for byte. A 32-token block that contains new valid rows is expected to change.
 
-Continuation starts from the prior length rounded **down** to a 32-token boundary. It replays the short tail using absolute positions. At a nonzero start, SP token order must still be correct. The current live runtime pass used aligned full chunks; it does not prove all these edge cases.
+Continuation starts from the prior length rounded **down** to a 32-token boundary. It replays the short tail using absolute positions. At a nonzero start, SP token order must still be correct. The writer/runtime/range fixtures cover the recorded boundary and continuation cases; consult their exact inventories rather than assuming an exhaustive cross-product.
 
 ### M06
 
 **Test: layer readiness.** Warmup emits zero readiness messages. Each accepted chunk emits exactly one acknowledgement for each global layer 0–31. Request IDs identify the actual chunk and increase across slots. Verify acknowledgement counts and order on the real channel.
 
-The current implementation waits for the **whole compute chunk** before emitting its 32 acknowledgements. This is a functional design with less opportunity to overlap transfer and compute. Four live chunks produced 128 acknowledgements. Host tests cover duplicate IDs and forward/synchronization/sink failures. An integration check must still prove that delayed writes cannot make ranges transferable early.
+The current implementation waits for the **whole compute chunk** before emitting its 32 acknowledgements. This is a functional design with less opportunity to overlap transfer and compute. Four native2K chunks produced128 acknowledgements; the runtime-edge fixture produced160 and the focused4K fixture256. Host checks reject ack-before-sync/capture; the live cancellation fixture delays the peer and verifies no native layer command is issued before arming.
 
 ### M07
 
@@ -134,7 +134,7 @@ The current implementation waits for the **whole compute chunk** before emitting
 
 Drive the real source client through `register_source → enqueue_layer → finish_burst`. The Llama acknowledgements must identify the right request, slot and absolute range. A burst is a group of transfer commands. It completes only after the group is sealed and every required command has a final outcome. Exercise backpressure: if the command queue is full, pending layers must resume in order. A standalone EngineAdapter copy does not establish this source bridge.
 
-This gate is pending. Loading a table through TTNN is not the same as registering it with the native manager. The tested Metal build must remain unchanged while native dependencies are built. Record the manager binary, DMK binary, transport version, selected device resources and kernel-driver identity in the eventual run evidence.
+This gate has recorded native registration/readiness evidence. Loading a table through TTNN alone was not treated as native registration. The tested Metal build must remain unchanged while native dependencies are built. Record the manager binary, DMK binary, transport version, selected device resources and kernel-driver identity in the eventual run evidence.
 
 ### M08
 
@@ -142,7 +142,7 @@ This gate is pending. Loading a table through TTNN is not the same as registerin
 
 Exercise both slots, all configs and all layers. Include a crossed mapping, source 0 → receiver 1 and source 1 → receiver 0. Selected ranges have an explicit expected block count. Require zero missing or skipped blocks. Keep destination regions outside the transfer unchanged.
 
-The existing local TTNN copy matched **65,536 pages / 285,212,672 bytes** and preserved the source. It does not pass this native-transfer gate. “Command completed” is also insufficient: the independent byte check must pass.
+The accepted native2K run matched **65,536 pages /285,212,672 bytes** through actual managers and preserved the source. The earlier local TTNN copy is separate evidence. “Command completed” is also insufficient: the independent byte check must pass.
 
 ### M09
 
@@ -154,13 +154,13 @@ Transfer selection uses complete 32-token blocks and explicit valid/resident len
 
 **Test: two-slot isolation and reuse.** Use two different prompts and different recognizable test patterns. Interleave their chunks in deterministic and seeded schedules. Check ordinary mapping and crossed destination slots. After all reads and transfers for one request finish, reuse its source slot for a third distinct prompt. The other slot must stay correct.
 
-The live readiness test already interleaved two slots. The packed-copy test established distinct source slots. Native remapping and reuse remain pending. Repeating the same prompt in both slots cannot detect cross-wiring.
+The live readiness test already interleaved two slots. The packed-copy test established distinct source slots. The accepted six-generation native range fixture covers ordinary/crossed mappings and safe third-request reuse. Repeating the same prompt in both slots cannot detect cross-wiring.
 
 ### M11
 
 **Test: visible failure and a sensitive verifier.** At the appropriate host or test boundary, inject a no-op copy, a short read, one wrong block, wrong config/slot identity and source-plus-destination corruption. The saved pre-transfer snapshot must catch joint corruption. Require a nonzero result for any missing comparison, skipped required config/layer, timeout or failed device close.
 
-Also test write, synchronization and acknowledgement-sink exceptions. A partly failed runtime must reject later requests until it is restarted. Test delayed/missing native peer and completion errors with bounded waits. Do not test malformed device addresses by issuing unsafe reads; reject them before dispatch or use a host stub. Existing host failure tests and local-copy verifier tests pass, but native integration failures remain pending.
+Also test write, synchronization and acknowledgement-sink exceptions. A partly failed runtime must reject later requests until it is restarted. Test delayed/missing native peer and completion errors with bounded waits. Do not test malformed device addresses by issuing unsafe reads; reject them before dispatch or use a host stub. Host fault checks pass. The real cancellation fixture adds delayed-peer refusal, cancellation/drain and fresh-generation restart; abrupt peer loss and bytes-in-flight cancellation remain untested limits.
 
 Reuse the native client's tests for one failed outcome, a response after timeout, duplicate success, cancellation and a stale source announcement. Verify that each request has one final outcome. A cancelled request must retain its source pin until outstanding commands have drained.
 
@@ -168,23 +168,23 @@ Reuse the native client's tests for one failed outcome, a response after timeout
 
 **Test: lifetime and shutdown.** Hold a transfer in progress in a controlled test. Confirm that its source allocation cannot be freed or reused early. Finish or cancel it through the documented native path, drain accepted work, stop the manager and only then release the model-owned device resources. Record actual process exits and all 32 device closes.
 
-Check a fresh restart with run-specific service names and a newly exported table. Old acknowledgements, tables or completion files must not certify the new run. Clean close passed for the completed runtime/local-copy runs. Native in-flight drain and restart remain untested.
+Check a fresh restart with run-specific service names and a newly exported table. Old acknowledgements, tables or completion files must not certify the new run. Clean native drain and retained-cache restart passed in the recorded cancellation fixture. Cancellation was after one completed real1K chunk; it is not proof of bytes-in-flight cancellation.
 
 ### M13
 
-**Test: capacity ladder.** Run the prefill-side contract at 2K, 4K, 8K, 16K, 32K, 64K and 128K. At each size, exercise valid data near the beginning, SP/bank/chunk transitions and the end. Transfer the complete selected valid prefix for both slots. Verify all its requested blocks across all configs and layers. Include a shorter valid prefix inside a larger allocation.
+**Test: focused capacity coverage.** At4K, compute actual prompts of4,096 and4,064 tokens, then transfer crossed selected ranges `[3072,4096)` and `[3040,4064)`. Verify all16 configs and32 layers:32,768 packed pages /142,606,336 bytes. Check source preservation, adjacent/untouched samples, full-table installation and process-identity-bound manager RSS/HWM. This does not establish a full4K-prefix copy or exhaustive untouched-page preservation.
 
-Long-context comparison should stream bounded blocks or use a saved snapshot, rather than retain all source and destination tensors in host RAM. Preserve pre-transfer source evidence so a joint corruption cannot pass. Review memory, storage and lease time before each run. No full golden reference run is added. Current model execution at 4K/8K is a prerequisite result, not a migration pass.
+Stream selected pages and retain pre-transfer snapshots. Warm both prompt geometries before starting native deadline clocks. The [4K report](migration-prefill-capacity-4k.md) records actual coverage, timing scope, resources and clean shutdown. Existing2K full-prefix/numerical/address evidence composes with this test; no new HF/PCC or performance sweep is claimed.The user has approved resuming 8K–64K device validation; each size remains pending until accepted. 128K remains deferred.
 
 ### M14
 
 **Test: reproducible publication.** Each required gate records its command, fixture, source/native hashes, expected coverage, observed coverage, exact exits and cleanup result. Each test method gets a short comment explaining its purpose. Keep host, device-placement and native-transfer tests distinguishable.
 
-Push logical commits only with their relevant passing checks. Reuse accepted 2K numerical/performance evidence when execution is unchanged. Do not call a sampled layer/config check a full pass. The runtime and 25 host tests are published; the remaining native test implementation and results are not yet complete.
+Push logical commits only with their relevant passing checks. Reuse accepted 2K numerical/performance evidence when execution is unchanged. Do not call a sampled layer/config check a full pass. The branch now includes writer, runtime-edge, native-range, cancellation and focused4K-capacity reproduction files, with191 import-light child checks and the scoped device reports. Publication relocation is not itself a new device pass.
 
 ## 4. One request story, with the tests attached
 
-This is a **planned test story**, not a claim that native transfer has already passed.
+This is an illustrative test story. The recorded passing scenarios and their exact byte inventories are linked above; this story is not another executed scenario.
 
 ### Step 1 — Prepare two private work areas
 
@@ -228,7 +228,7 @@ Controlled tests delay a peer, fail a write, corrupt a block and interrupt an ac
 
 ### Step 10 — Repeat the contract at larger capacities
 
-Use the same logical tests with each requested capacity. Do not infer 128K support from a 2K address calculation. **M13** supplies the device evidence. **M14** publishes the tested revision and complete coverage report. The prefill-side task is then complete for those configurations.
+The focused4K result supplies the next capacity evidence. The user subsequently approved resuming 8K–64K device validation; 128K is deferred. **M13** records each tested scope; **M14** supplies reproducible code and reports.
 
 ## 5. How this follows other models
 
@@ -265,6 +265,12 @@ These are existing test definitions in the inspected tt-d-gen revision. Their pr
 
 ## 6. Evidence and source links
 
+- [Native2K full-prefix result](migration-native-2k.md).
+- [Native selected ranges and reuse](migration-prefill-ranges.md).
+- [Real cancellation and restart](migration-prefill-cancel-restart.md).
+- [Focused4K capacity result](migration-prefill-capacity-4k.md).
+- [Runnable fixture commands](../tests/migration/README.md).
+
 - [Published runtime and 25 host tests](https://github.com/tenstorrent/tt-metal/commit/8d05143750e8df9197203fd7b5afce31e1097e5a).
 - [Accepted 2K numerical validation](https://github.com/tenstorrent/tt-metal/blob/f3f704a266b362201771d4ecbdbb3060a025a5a2/models/demos/llama_3p1_8b_d_p/docs/validation-2k.md).
 - [Live readiness proof](http://127.0.0.1:8768/evidence/task-10-native-migration/readiness-003-verifier-correction-001/root-verification.json).
@@ -286,4 +292,4 @@ The status file records the last review time. The page refreshes its status badg
 
 ## Runnable fixture publication
 
-The [migration fixture README](../tests/migration/README.md) contains the writer-boundary singleton, five-call H2D/runtime owner and paired selected-range owner commands. These retain their tested oracles and retained-owner shutdown checks. Publication packaging checks are host-only; record actual device results and binary identities separately. Current standalone prefill scope stops at64K; decode and new128K work are outside this task.
+The [migration fixture README](../tests/migration/README.md) contains writer-boundary, runtime-edge, native-range, cancellation/restart and focused4K-capacity commands. These retain their tested oracles and retained-owner shutdown checks. Publication packaging checks are host-only; record actual device results and binary identities separately. Current standalone prefill scope stops at64K; decode and new128K work are outside this task.
