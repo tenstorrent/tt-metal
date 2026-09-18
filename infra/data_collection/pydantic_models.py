@@ -447,6 +447,7 @@ class TestStatus(Enum):
     fail_watcher = "fail_watcher"
     fail_crash_hang = "fail_crash_hang"
     fail_unsupported_device_perf = "fail_unsupported_device_perf"
+    fail_non_deterministic = "fail_non_deterministic"  # Repeated runs of one vector were not bit-identical
     skipped = "skipped"
     error = "error"
     xfail = "xfail"  # Expected failure - test failed as expected

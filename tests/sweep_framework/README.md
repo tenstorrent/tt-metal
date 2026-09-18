@@ -323,6 +323,7 @@ python tests/sweep_framework/sweeps_runner.py \
 | `--perf`               | Measure end-to-end performance                                          |
 | `--device-perf`        | Measure device-level performance (requires profiler build)              |
 | `--measure-memory`     | Capture per-core L1 memory usage via graph trace                        |
+| `--determinism-runs N` | Run each vector N times (N>=2); require bit-identical ttnn outputs      |
 | `--watcher`            | Enable watcher for memory/exception monitoring                          |
 | `--skip-on-timeout`    | Abort remaining suite tests after a timeout                             |
 | `--keep-invalid`       | Include invalid vectors as NOT_RUN (default: exclude them)              |
@@ -342,6 +343,7 @@ python tests/sweep_framework/sweeps_runner.py \
 | `FAIL_L1_OUT_OF_MEM`           | L1 memory allocation failure                                           |
 | `FAIL_WATCHER`                 | Watcher-raised exception (requires `--watcher`)                        |
 | `FAIL_UNSUPPORTED_DEVICE_PERF` | Device perf requested (`--device-perf`) but no profiler data available |
+| `FAIL_NON_DETERMINISTIC`       | Every run passed PCC but outputs differed across runs (`--determinism-runs`) |
 | `NOT_RUN`                      | Skipped due to `invalidate_vector`                                     |
 | `XFAIL`                        | Expected failure (suite name starts with `xfail`)                      |
 | `XPASS`                        | Unexpected pass in an xfail suite                                      |
@@ -353,6 +355,25 @@ python tests/sweep_framework/sweeps_runner.py \
 - On timeout, the test subprocess is killed and `tt-smi` resets the device before the next test.
 - Set `TT_SMI_RESET_COMMAND` env var for your system (e.g., `TT_SMI_RESET_COMMAND="tt-smi -tr 0"`).
 - When running a single vector (`--vector-id`), hang detection is disabled so you can attach debuggers.
+
+### Determinism Checking
+
+Use `--determinism-runs N` to execute every vector N times in-process and require the raw ttnn outputs to be bit-identical across runs. Run 1 executes with a cleared program cache and runs 2..N hit the cache, so cache-path divergence is covered too. PCC alone cannot detect this: for eltwise ops it is ~1.0 on every run.
+
+```bash
+python tests/sweep_framework/sweeps_runner.py \
+  --module-name model_traced.add_model_traced \
+  --vector-source vectors_export \
+  --result-dest results_export \
+  --determinism-runs 3
+```
+
+- Outputs are captured with a ttnn post-operation hook, so no sweep module changes are needed. Every `ttnn.Tensor` returned by a top-level ttnn op in `run()` is compared (per device shard, byte-for-byte).
+- A vector that passes its own PCC on every run but differs between runs is reported as `FAIL_NON_DETERMINISTIC`; a run that fails its own PCC is reported as that failure.
+- Host RNGs (`random`, `torch`, `numpy`) are reseeded identically before every run, so modules that draw `data_seed = random.randint(...)` inside `run()` are reproducible without edits. If the tensors produced by input-creation ops (`ttnn.from_torch`, ...) still differ between runs, the vector passes with a `determinism INCONCLUSIVE (inputs not reproducible)` message instead of a false failure.
+- Ops that are non-deterministic by definition opt out by setting `_NON_DETERMINISTIC_BY_DESIGN = True` at module level in the sweep file.
+- Exported metrics: `determinism_runs`, `determinism_mismatch_elems`, `determinism_max_abs_delta`, `determinism_divergent_run`.
+- Not combinable with `--perf-with-cache` (both re-run each vector); `--perf`, `--device-perf` and `--measure-memory` are measured on run 1 as usual. The per-module `TIMEOUT` is multiplied by N.
 
 ### Memory Profiling
 
