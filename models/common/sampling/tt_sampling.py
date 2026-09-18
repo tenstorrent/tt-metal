@@ -621,25 +621,34 @@ class TTSampling(LightweightModule):
         if masked is not logits:
             owned.append(masked)
 
-        if self.mesh_device.get_num_devices() > 1:
-            gathered = self._perform_all_gather(
-                masked,
-                dim=3,
-                cluster_axis=self._get_sampling_cluster_axis(),
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                num_links=self.num_gather_links,
-                buffer_key="SAMPLING_FULL_VOCAB",
-            )
-            owned.append(gathered)
-        else:
-            gathered = masked
+        try:
+            if self.mesh_device.get_num_devices() > 1:
+                gathered = self._perform_all_gather(
+                    masked,
+                    dim=3,
+                    cluster_axis=self._get_sampling_cluster_axis(),
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    num_links=self.num_gather_links,
+                    buffer_key="SAMPLING_FULL_VOCAB",
+                )
+                owned.append(gathered)
+            else:
+                gathered = masked
 
-        if int(gathered.shape[-1]) != int(self.padded_vocab_size):
-            raise RuntimeError(
-                "full-vocabulary gather produced width "
-                f"{int(gathered.shape[-1])}, expected padded_vocab_size={self.padded_vocab_size}"
-            )
-        return gathered, tuple({id(tensor): tensor for tensor in owned}.values())
+            if int(gathered.shape[-1]) != int(self.padded_vocab_size):
+                raise RuntimeError(
+                    "full-vocabulary gather produced width "
+                    f"{int(gathered.shape[-1])}, expected padded_vocab_size={self.padded_vocab_size}"
+                )
+            return gathered, tuple({id(tensor): tensor for tensor in owned}.values())
+        except Exception:
+            # The caller cannot own intermediates until this method returns.
+            # Release only allocations created here; never the borrowed logits.
+            unique_owned = {id(tensor): tensor for tensor in owned}
+            for tensor in reversed(tuple(unique_owned.values())):
+                if tensor.is_allocated():
+                    ttnn.deallocate(tensor)
+            raise
 
     def _get_sampling_cluster_axis(self):
         if self.mesh_device.get_num_devices() <= 1:

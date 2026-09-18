@@ -16,7 +16,12 @@ import ttnn
 
 from ._utils import clamp, is_default_value, split_list
 from .full_vocab_contract import ManagedPerSlotDrawSeeds, classify_sampling_batch
-from .full_vocab_device import merge_unrestricted_rows, sample_unrestricted_top_p_one
+from .full_vocab_device import (
+    merge_unrestricted_rows,
+    plan_exact_nucleus_candidates,
+    sample_unrestricted_nucleus,
+    sample_unrestricted_top_p_one,
+)
 from .tt_penalties import TTPenalties
 from .tt_sampling import TTSampling
 
@@ -171,10 +176,24 @@ class SamplingGenerator:
             salt_duplicate_seeds=getattr(args, "salt_duplicate_seeds", True),
         )
         self._full_vocab_top_p_one_enabled = bool(getattr(args, "enable_full_vocab_top_p_one", False))
+        # Staged only: a production frontend must derive this from the loaded
+        # runtime capability domain.  Zero keeps nucleus routing fail-closed.
+        self._full_vocab_nucleus_max_candidates = int(
+            getattr(args, "full_vocab_nucleus_max_candidates", 0)
+        )
+        self._full_vocab_stable_topk_max_local_width = int(
+            getattr(args, "full_vocab_stable_topk_max_local_width", 0)
+        )
+        if self._full_vocab_nucleus_max_candidates < 0:
+            raise ValueError("full_vocab_nucleus_max_candidates must be non-negative")
+        if self._full_vocab_stable_topk_max_local_width < 0:
+            raise ValueError("full_vocab_stable_topk_max_local_width must be non-negative")
         self._active_sampling_slots: tuple[int, ...] | None = None
         self._full_vocab_params = None
         self._full_vocab_selector = None
         self._full_vocab_invalid_tokens = None
+        self._full_vocab_top_p = None
+        self._full_vocab_inverse_temperature = None
         self._full_vocab_row_scratch = ()
         if self._full_vocab_top_p_one_enabled:
             if self.tt_sampling._sampling_dp != 1:
@@ -195,6 +214,28 @@ class SamplingGenerator:
                 device=self.mesh_device,
                 dtype=ttnn.uint32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=replicate,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            # Preserve the request's FP32 top_p semantics.  The native
+            # sampler's BF16 parameter tensor is not precise enough for an
+            # exact nucleus first-crossing boundary.
+            self._full_vocab_top_p = ttnn.from_torch(
+                torch.ones(1, 1, batch, 1, dtype=torch.float32),
+                device=self.mesh_device,
+                dtype=ttnn.float32,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=replicate,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            # Keep the original formatted request's FP32 inverse-temperature.
+            # The native sampler tensor is BF16 and may move a nucleus boundary
+            # after exponentiation, just as a rounded top_p can.
+            self._full_vocab_inverse_temperature = ttnn.from_torch(
+                torch.ones(1, 1, batch, 1, dtype=torch.float32),
+                device=self.mesh_device,
+                dtype=ttnn.float32,
+                layout=ttnn.TILE_LAYOUT,
                 mesh_mapper=replicate,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
@@ -354,6 +395,27 @@ class SamplingGenerator:
             num_logprobs=num_logprobs,
             empty_slots=empty_slots,
         )
+        if self._full_vocab_top_p_one_enabled:
+            top_p_update = ttnn.from_torch(
+                torch.tensor(sampling_params.top_p, dtype=torch.float32).reshape(
+                    1, 1, self.tt_sampling.max_batch_size, 1
+                ),
+                device=None,
+                dtype=ttnn.float32,
+                layout=ttnn.TILE_LAYOUT,
+            )
+            ttnn.copy_host_to_device_tensor(top_p_update, self._full_vocab_top_p)
+            inverse_temperature_update = ttnn.from_torch(
+                torch.tensor(sampling_params.temperature, dtype=torch.float32).reshape(
+                    1, 1, self.tt_sampling.max_batch_size, 1
+                ),
+                device=None,
+                dtype=ttnn.float32,
+                layout=ttnn.TILE_LAYOUT,
+            )
+            ttnn.copy_host_to_device_tensor(
+                inverse_temperature_update, self._full_vocab_inverse_temperature
+            )
         if self.tt_sampling.force_argmax_sampling != old_force_argmax_sampling:
             self.reset_trace()
 
@@ -439,9 +501,11 @@ class SamplingGenerator:
             vocab_size=self.tt_sampling.vocab_size,
             max_bounded_top_k=self.tt_sampling.max_top_k,
         )
-        if contract.unrestricted_nucleus_slots:
-            raise RuntimeError(
-                "full-vocabulary top_p<1 is not implemented; refusing to narrow the requested distribution"
+        for slot in contract.unrestricted_nucleus_slots:
+            plan_exact_nucleus_candidates(
+                contract.rows[slot].top_p,
+                vocab_size=self.tt_sampling.vocab_size,
+                public_topk_max_candidates=self._full_vocab_nucleus_max_candidates,
             )
         requested_logprobs = list(getattr(params, "enable_log_probs", [False] * batch))
         if any(requested_logprobs[slot] for slot in contract.unrestricted_slots):
@@ -472,61 +536,97 @@ class SamplingGenerator:
 
         native_tokens, native_log_probs = self.tt_sampling(logits, tt_out_tok=None)
         preparation_owned = ()
-        categorical = None
-        merged = None
+        categoricals = []
+        merged_results = []
         try:
             unrestricted = set(contract.unrestricted_slots)
+            nucleus = set(contract.unrestricted_nucleus_slots)
+            top_p_one = unrestricted - nucleus
             draws = [1 if slot in unrestricted else 0 for slot in range(self.tt_sampling.max_batch_size)]
             seed_plan = self.seed_manager.next_managed_draw_seed_plan(draws)
             if len(seed_plan.seeds_by_subdraw) != 1:
                 raise RuntimeError("top_p=1 categorical route requires exactly one draw")
 
-            selector_host = _make_full_vocab_selector(self.tt_sampling.max_batch_size, unrestricted)
-            selector_update = ttnn.from_torch(
-                selector_host,
-                device=None,
-                dtype=ttnn.uint32,
-                layout=ttnn.TILE_LAYOUT,
-            )
-            ttnn.copy_host_to_device_tensor(selector_update, self._full_vocab_selector)
-
             full_logits, preparation_owned = self.tt_sampling.gather_full_vocab_logits(logits)
-            inverse_temperature = ttnn.reshape(
-                self.tt_sampling.temp_tensor, (1, 1, self.tt_sampling.max_batch_size, 1)
-            )
-            categorical = sample_unrestricted_top_p_one(
-                full_logits,
-                inverse_temperature=inverse_temperature,
-                row_scratch=self._full_vocab_row_scratch,
-                seed_values=seed_plan.seeds_by_subdraw[0],
-                active_rows=[slot in unrestricted for slot in range(self.tt_sampling.max_batch_size)],
-                vocab_size=self.tt_sampling.vocab_size,
-                ops=ttnn,
-            )
-            merged = merge_unrestricted_rows(
-                categorical,
-                native_tokens,
-                unrestricted_selector=self._full_vocab_selector,
-                invalid_token_ids=self._full_vocab_invalid_tokens,
-                ops=ttnn,
+            inverse_temperature = self._full_vocab_inverse_temperature
+            current_tokens = native_tokens
+
+            def merge_group(categorical, slots):
+                selector_update = ttnn.from_torch(
+                    _make_full_vocab_selector(self.tt_sampling.max_batch_size, slots),
+                    device=None,
+                    dtype=ttnn.uint32,
+                    layout=ttnn.TILE_LAYOUT,
+                )
+                ttnn.copy_host_to_device_tensor(selector_update, self._full_vocab_selector)
+                result = merge_unrestricted_rows(
+                    categorical,
+                    current_tokens,
+                    unrestricted_selector=self._full_vocab_selector,
+                    invalid_token_ids=self._full_vocab_invalid_tokens,
+                    ops=ttnn,
+                )
+                merged_results.append(result)
+                return result.token_ids
+
+            if top_p_one:
+                categorical = sample_unrestricted_top_p_one(
+                    full_logits,
+                    inverse_temperature=inverse_temperature,
+                    row_scratch=self._full_vocab_row_scratch,
+                    seed_values=seed_plan.seeds_by_subdraw[0],
+                    active_rows=[slot in top_p_one for slot in range(self.tt_sampling.max_batch_size)],
+                    vocab_size=self.tt_sampling.vocab_size,
+                    ops=ttnn,
+                )
+                categoricals.append(categorical)
+                current_tokens = merge_group(categorical, top_p_one)
+            if nucleus:
+                plans = [
+                    plan_exact_nucleus_candidates(
+                        contract.rows[slot].top_p,
+                        vocab_size=self.tt_sampling.vocab_size,
+                        public_topk_max_candidates=self._full_vocab_nucleus_max_candidates,
+                    )
+                    for slot in nucleus
+                ]
+                categorical = sample_unrestricted_nucleus(
+                    full_logits,
+                    inverse_temperature=inverse_temperature,
+                    top_p=self._full_vocab_top_p,
+                    row_scratch=self._full_vocab_row_scratch,
+                    seed_values=seed_plan.seeds_by_subdraw[0],
+                    active_rows=[slot in nucleus for slot in range(self.tt_sampling.max_batch_size)],
+                    vocab_size=self.tt_sampling.vocab_size,
+                    candidate_count=max(plan.candidate_count for plan in plans),
+                    stable_topk_max_local_width=self._full_vocab_stable_topk_max_local_width,
+                    ops=ttnn,
+                )
+                categoricals.append(categorical)
+                current_tokens = merge_group(categorical, nucleus)
+
+            merged_owned = tuple(
+                tensor for result in merged_results for tensor in result.owned_tensors
             )
             self._deallocate_tensors(
-                (*merged.owned_tensors, *preparation_owned, native_tokens),
+                (*merged_owned, *preparation_owned, native_tokens),
                 protect=(
-                    merged.token_ids,
+                    current_tokens,
                     logits,
                     inverse_temperature,
                     self.tt_sampling.temp_tensor,
                     self._full_vocab_selector,
                     self._full_vocab_invalid_tokens,
+                    self._full_vocab_top_p,
+                    self._full_vocab_inverse_temperature,
                 ),
             )
-            return merged.token_ids, native_log_probs
+            return current_tokens, native_log_probs
         except Exception:
             scratch = []
-            if merged is not None:
-                scratch.extend(merged.owned_tensors)
-            elif categorical is not None:
+            for result in merged_results:
+                scratch.extend(result.owned_tensors)
+            for categorical in categoricals:
                 scratch.extend(categorical.owned_tensors)
             scratch.extend(preparation_owned)
             scratch.append(native_tokens)
@@ -538,6 +638,8 @@ class SamplingGenerator:
                     self.tt_sampling.temp_tensor,
                     self._full_vocab_selector,
                     self._full_vocab_invalid_tokens,
+                    self._full_vocab_top_p,
+                    self._full_vocab_inverse_temperature,
                 ),
             )
             raise

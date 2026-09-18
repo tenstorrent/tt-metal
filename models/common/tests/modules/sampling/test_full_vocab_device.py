@@ -5,7 +5,11 @@ import torch
 
 from models.common.sampling.full_vocab_device import (
     _release_owned,
+    _normalize_gather_index_layout,
+    hierarchical_stable_topk,
     merge_unrestricted_rows,
+    plan_exact_nucleus_candidates,
+    sample_unrestricted_nucleus,
     sample_unrestricted_top_p_one,
 )
 import models.common.sampling.full_vocab_device as full_vocab_device
@@ -15,6 +19,9 @@ class TorchOps:
     """Tiny operation-compatible oracle; no host-readback method exists."""
 
     float32 = torch.float32
+    bfloat16 = torch.bfloat16
+    uint16 = torch.uint16
+    uint32 = torch.uint32
 
     @staticmethod
     def transpose(tensor, first, second):
@@ -42,7 +49,10 @@ class TorchOps:
 
     @staticmethod
     def add(left, right, dtype=None):
-        result = torch.add(left, right)
+        # PyTorch's CPU backend lacks uint32 add, while the public TTNN op
+        # supports an explicitly typed uint32 result for global token IDs.
+        arithmetic_left = left.to(torch.int64) if left.dtype in (torch.uint16, torch.uint32) else left
+        result = torch.add(arithmetic_left, right)
         return result.to(dtype) if dtype is not None else result
 
     @staticmethod
@@ -67,12 +77,21 @@ class TorchOps:
         return torch.gt(left, right)
 
     @staticmethod
+    def lt(left, right):
+        arithmetic_left = left.to(torch.int64) if left.dtype in (torch.uint16, torch.uint32) else left
+        return torch.lt(arithmetic_left, right)
+
+    @staticmethod
     def isfinite(tensor):
         return torch.isfinite(tensor)
 
     @staticmethod
     def logical_and(left, right):
         return torch.logical_and(left, right)
+
+    @staticmethod
+    def logical_not(tensor):
+        return torch.logical_not(tensor)
 
     @staticmethod
     def argmax(tensor, dim, keepdim):
@@ -83,8 +102,25 @@ class TorchOps:
         return torch.reshape(tensor, shape)
 
     @staticmethod
+    def to_layout(tensor, layout):
+        assert layout == tensor.layout
+        return tensor.clone()
+
+    @staticmethod
     def where(condition, left, right):
         return torch.where(condition, left, right)
+
+    @staticmethod
+    def topk(tensor, k, dim, largest, sorted, stable):
+        assert stable
+        # torch.argsort(stable=True) pins the nucleus tie order explicitly.
+        order = torch.argsort(tensor, dim=dim, descending=largest, stable=True)
+        indices = order.narrow(dim, 0, k)
+        return torch.gather(tensor, dim, indices), indices.to(torch.uint16)
+
+    @staticmethod
+    def gather(tensor, dim, index):
+        return torch.gather(tensor, dim, index.to(torch.int64))
 
 
 def _run(logits, *, seeds, active=None, trace_enabled=False, vocab_size=None):
@@ -314,3 +350,262 @@ def test_device_categorical_fails_closed(kwargs, message):
     values.update(kwargs)
     with pytest.raises((ValueError, RuntimeError), match=message):
         _run(torch.zeros(1, 1, 1, 32), **values)
+
+
+def test_exact_nucleus_plan_uses_distribution_independent_mass_bound():
+    plan = plan_exact_nucleus_candidates(
+        0.01,
+        vocab_size=201088,
+        public_topk_max_candidates=2048,
+    )
+    assert plan.candidate_count == 2016
+    assert plan.maximum_supported_top_p == pytest.approx(2016 / 201088)
+
+
+def test_exact_nucleus_plan_rejects_domain_beyond_public_topk_envelope():
+    with pytest.raises(ValueError, match="exceeds the exact public top-k nucleus envelope"):
+        plan_exact_nucleus_candidates(
+            0.95,
+            vocab_size=201088,
+            public_topk_max_candidates=2048,
+        )
+
+
+@pytest.mark.parametrize("width,k,max_local_width", [(96, 16, 32), (224, 32, 64)])
+def test_hierarchical_stable_topk_matches_global_stable_oracle(width, k, max_local_width):
+    logits = torch.arange(width, dtype=torch.float32).remainder(7).reshape(1, 1, 1, width)
+    result = hierarchical_stable_topk(
+        logits,
+        k=k,
+        max_local_width=max_local_width,
+        ops=TorchOps,
+    )
+    expected_ids = torch.argsort(logits, dim=-1, descending=True, stable=True)[..., :k]
+    expected_values = torch.gather(logits, -1, expected_ids)
+    assert torch.equal(result.global_indices.to(torch.int64), expected_ids)
+    assert torch.equal(result.values, expected_values)
+    # Equal-value ties cross both local and recursive merge boundaries; the
+    # resulting IDs remain globally ascending within each value group.
+    for value in torch.unique(result.values):
+        ids = result.global_indices[result.values == value]
+        assert torch.equal(ids, torch.sort(ids).values)
+
+
+def test_hierarchical_stable_topk_preserves_global_ids_and_masked_tail():
+    logits = torch.zeros(1, 1, 2, 160)
+    logits[..., 129:] = -torch.inf
+    logits[0, 0, 0, 97] = 11
+    logits[0, 0, 1, 128] = 12
+    result = hierarchical_stable_topk(
+        logits,
+        k=32,
+        max_local_width=64,
+        ops=TorchOps,
+    )
+    assert result.global_indices[0, 0, 0, 0] == 97
+    assert result.global_indices[0, 0, 1, 0] == 128
+    assert (result.global_indices.to(torch.int64) < 129).all()
+
+
+def test_hierarchical_stable_topk_rejects_unqualified_chunk_envelope():
+    with pytest.raises(ValueError, match="does not fit"):
+        hierarchical_stable_topk(
+            torch.zeros(1, 1, 1, 96),
+            k=48,
+            max_local_width=32,
+            ops=TorchOps,
+        )
+
+    with pytest.raises(ValueError, match="merge exceeds"):
+        hierarchical_stable_topk(
+            torch.zeros(1, 1, 1, 256),
+            k=96,
+            max_local_width=128,
+            ops=TorchOps,
+        )
+
+
+def test_hierarchical_stable_topk_rejects_wide_local_indices():
+    class WideIndexOps(TorchOps):
+        @staticmethod
+        def topk(tensor, k, dim, largest, sorted, stable):
+            values, indices = TorchOps.topk(tensor, k, dim, largest, sorted, stable)
+            return values, indices.to(torch.uint32)
+
+    with pytest.raises(RuntimeError, match="requires uint16 local indices"):
+        hierarchical_stable_topk(
+            torch.zeros(1, 1, 1, 96),
+            k=16,
+            max_local_width=32,
+            ops=WideIndexOps,
+        )
+
+def test_exact_nucleus_plan_allows_non_tile_vocab_at_full_candidate_envelope():
+    plan = plan_exact_nucleus_candidates(
+        0.999,
+        vocab_size=65,
+        public_topk_max_candidates=65,
+    )
+    assert plan.candidate_count == 65
+
+    logits = torch.zeros(1, 1, 1, 96)
+    logits[..., 65:] = -torch.inf
+    result = _run_nucleus(
+        logits,
+        top_p=0.999,
+        seeds=[17],
+        candidate_count=plan.candidate_count,
+        vocab_size=65,
+    )
+    assert result.valid_distribution.all()
+    assert result.token_ids.item() < 65
+
+
+def _run_nucleus(
+    logits,
+    *,
+    top_p,
+    seeds,
+    candidate_count,
+    vocab_size=None,
+    stable_topk_max_local_width=0,
+):
+    logits = logits.to(torch.bfloat16)
+    batch, width = logits.shape[2:]
+    return sample_unrestricted_nucleus(
+        logits,
+        inverse_temperature=torch.ones(1, 1, batch, 1),
+        top_p=torch.full((1, 1, batch, 1), top_p, dtype=torch.float32),
+        row_scratch=[torch.zeros(1, 1, 1, 1) for _ in range(batch)],
+        seed_values=seeds,
+        active_rows=[True] * batch,
+        vocab_size=width if vocab_size is None else vocab_size,
+        candidate_count=candidate_count,
+        stable_topk_max_local_width=stable_topk_max_local_width,
+        ops=TorchOps,
+    )
+
+
+def test_exact_nucleus_matches_fp64_first_crossing_oracle_with_ties():
+    # Candidate count 32 covers p<=.5 for V=64.  Equal leading logits pin the
+    # stable index-order boundary, while the near-threshold tail exercises the
+    # first-crossing rule instead of candidate renormalization.
+    logits = torch.linspace(-8.0, -20.0, 64, dtype=torch.float64)
+    logits[:4] = 2.0
+    logits[4] = 1.999999
+    logits = logits.to(torch.bfloat16).reshape(1, 1, 1, 64)
+    p = 0.49
+    seed = 1729
+    result = _run_nucleus(logits, top_p=p, seeds=[seed], candidate_count=32)
+
+    probs = torch.softmax(logits.double().flatten(), dim=0)
+    order = torch.argsort(logits.double().flatten(), descending=True, stable=True)
+    sorted_probs = probs[order]
+    keep = (torch.cumsum(sorted_probs, 0) - sorted_probs) < p
+    nucleus = sorted_probs * keep
+    generator = torch.Generator().manual_seed(seed)
+    draw = torch.rand((1,), generator=generator, dtype=torch.float32).double().item()
+    expected_pos = int(torch.argmax((torch.cumsum(nucleus, 0) > nucleus.sum() * draw).to(torch.int32)))
+    assert result.valid_distribution.all()
+    assert result.token_ids.item() == order[expected_pos].item()
+
+
+def test_exact_nucleus_uniform_worst_case_and_padded_tail():
+    logits = torch.zeros(1, 1, 2, 96)
+    logits[..., 65:] = -torch.inf
+    # ceil(.49 * 65)=32, exactly the smallest guaranteed candidate envelope.
+    result = _run_nucleus(logits, top_p=0.49, seeds=[11, 19], candidate_count=32, vocab_size=65)
+    assert result.valid_distribution.all()
+    assert (result.token_ids.to(torch.int64) < 65).all()
+
+
+def test_exact_nucleus_hierarchical_stable_topk_matches_direct_route():
+    logits = torch.linspace(-8, 8, 224).reshape(1, 1, 1, 224)
+    logits[..., 17:24] = 3.0
+    direct = _run_nucleus(logits, top_p=0.14, seeds=[919], candidate_count=32)
+    hierarchical = _run_nucleus(
+        logits,
+        top_p=0.14,
+        seeds=[919],
+        candidate_count=32,
+        stable_topk_max_local_width=64,
+    )
+    assert direct.valid_distribution.all() and hierarchical.valid_distribution.all()
+    assert torch.equal(direct.token_ids.to(torch.int64), hierarchical.token_ids.to(torch.int64))
+
+
+def test_exact_nucleus_normalizes_mixed_predicate_dtypes_before_logical_and():
+    class StrictPredicateOps(TorchOps):
+        @staticmethod
+        def _predicate(value, dtype):
+            return value.to(dtype)
+
+        @classmethod
+        def gt(cls, left, right):
+            return cls._predicate(TorchOps.gt(left, right), left.dtype)
+
+        @classmethod
+        def lt(cls, left, right):
+            return cls._predicate(TorchOps.lt(left, right), left.dtype)
+
+        @classmethod
+        def isfinite(cls, tensor):
+            return cls._predicate(TorchOps.isfinite(tensor), tensor.dtype)
+
+        @classmethod
+        def logical_not(cls, tensor):
+            return cls._predicate(torch.logical_not(tensor), tensor.dtype)
+
+        @classmethod
+        def logical_and(cls, left, right):
+            assert left.dtype == right.dtype
+            return cls._predicate(torch.logical_and(left, right), left.dtype)
+
+    logits = torch.linspace(-2, 2, 64).reshape(1, 1, 1, 64).to(torch.bfloat16)
+    result = sample_unrestricted_nucleus(
+        logits,
+        inverse_temperature=torch.ones(1, 1, 1, 1),
+        top_p=torch.full((1, 1, 1, 1), 0.49),
+        row_scratch=[torch.zeros(1, 1, 1, 1)],
+        seed_values=[17],
+        active_rows=[True],
+        vocab_size=64,
+        candidate_count=32,
+        ops=StrictPredicateOps,
+    )
+    assert result.valid_distribution.to(torch.bool).all()
+
+
+def test_gather_index_layout_normalization_uses_values_layout():
+    index = SimpleNamespace(layout="row-major")
+    values = SimpleNamespace(layout="tile")
+    converted = SimpleNamespace(layout="tile")
+    calls = []
+    ops = SimpleNamespace(
+        to_layout=lambda tensor, layout: calls.append((tensor, layout)) or converted
+    )
+
+    assert _normalize_gather_index_layout(index, values, ops=ops) is converted
+    assert calls == [(index, "tile")]
+    assert _normalize_gather_index_layout(converted, values, ops=ops) is converted
+    assert calls == [(index, "tile")]
+
+
+def test_exact_nucleus_marks_unmasked_high_padded_tail_invalid():
+    logits = torch.zeros(1, 1, 1, 96)
+    logits[..., 65:] = 100.0
+    result = _run_nucleus(logits, top_p=0.49, seeds=[11], candidate_count=32, vocab_size=65)
+    assert not result.valid_distribution.any()
+
+
+@pytest.mark.parametrize(
+    "bad_logits",
+    [
+        torch.full((1, 1, 1, 32), -torch.inf),
+        torch.full((1, 1, 1, 32), torch.inf),
+        torch.full((1, 1, 1, 32), torch.nan),
+    ],
+)
+def test_exact_nucleus_invalid_distributions_fail_device_validity(bad_logits):
+    result = _run_nucleus(bad_logits, top_p=0.5, seeds=[17], candidate_count=32)
+    assert not result.valid_distribution.any()
