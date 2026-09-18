@@ -312,4 +312,11 @@ Tensor clamped_silu_glu(
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
 
+// Numerically stable logaddexp: log(exp(a) + exp(b)) = max(a, b) + log1p(exp(-abs(a - b)))
+Tensor logaddexp_stable(
+    const Tensor& input_a,
+    const Tensor& input_b,
+    const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+
 }  // namespace ttnn
