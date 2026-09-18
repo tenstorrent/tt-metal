@@ -333,3 +333,42 @@ def test_device_generate_smoke(device):
         out = tt_model.generate(text_ids, max_tokens=4, sampler=sampler, seed=0)
         assert len(out) <= 4
         assert all(0 <= t < tt_model.head_out_features for t in out)
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 65536}], indirect=True)
+@pytest.mark.parametrize("which_stop", [0, 1, 2])
+def test_device_generate_stops_on_any_stop_token_id(device, monkeypatch, which_stop):
+    """Real bug: upstream `Qwen2LM.inference_wrapper` (cosyvoice/llm/llm.py, fetched fresh
+    from FunAudioLLM/CosyVoice and confirmed directly, not assumed) checks
+    `top_ids in self.stop_token_ids`, where `stop_token_ids = [speech_token_size + i for i
+    in range(3)]` -- THREE distinct IDs (`eos_token`, an unnamed third id, `fill_token`) --
+    not `eos_token` alone. `generate()` previously only compared against a single `eos_id`,
+    so sampling either of the other two stop IDs would silently continue generating instead
+    of halting. This scripts `greedy` to emit two ordinary tokens then one real stop ID
+    (parametrized over all three), and checks `generate()` halts exactly there for each one,
+    not just index 0 (`eos_token`)."""
+    import models.demos.audio.cosyvoice2.tt.llm.sampling as sampling_module
+    from models.demos.audio.cosyvoice2.tt.llm.qwen2lm import TtQwen2LM
+
+    args, state_dict = _build_args_and_state_dict(device)
+    tt_model = TtQwen2LM(args, device, state_dict)
+    assert tt_model.stop_token_ids == [
+        tt_model.speech_token_size,
+        tt_model.speech_token_size + 1,
+        tt_model.speech_token_size + 2,
+    ]
+    stop_id = tt_model.stop_token_ids[which_stop]
+
+    scripted = iter([100, 200, stop_id, 300, 400])
+
+    def fake_greedy(weighted_scores):
+        return next(scripted)
+
+    # `generate()` does `from .sampling import greedy` INSIDE the method body, re-reading
+    # the name from the sampling module fresh on every call -- patch it there.
+    monkeypatch.setattr(sampling_module, "greedy", fake_greedy)
+
+    text_ids = torch.randint(0, args.vocab_size, (1, 4))
+    out = tt_model.generate(text_ids, max_tokens=5, sampler="greedy")
+
+    assert out == [100, 200], (which_stop, stop_id, out)

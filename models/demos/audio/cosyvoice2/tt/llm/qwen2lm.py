@@ -147,6 +147,15 @@ class TtQwen2LM:
         self.dtype = dtype
         self.speech_token_size = speech_token_size
         self.head_out_features = speech_token_size + 3  # eos, task_id-adjacent, fill -- see module docstring
+        # Real upstream `Qwen2LM.__init__` (cosyvoice/llm/llm.py): `self.eos_token =
+        # speech_token_size`, `self.fill_token = speech_token_size + 2`, and
+        # `self.stop_token_ids = [speech_token_size + i for i in range(3)]` -- three
+        # distinct IDs that all end generation, not just eos_token. The middle ID
+        # (`speech_token_size + 1`) has no dedicated attribute upstream either; it is
+        # only ever referenced through `stop_token_ids`.
+        self.eos_token = speech_token_size
+        self.fill_token = speech_token_size + 2
+        self.stop_token_ids = [speech_token_size + i for i in range(3)]
 
         self.tt_ccl = TT_CCL(mesh_device)
 
@@ -434,7 +443,7 @@ class TtQwen2LM:
         *,
         max_tokens: int = 200,
         min_tokens: int = 0,
-        eos_id: int | None = None,
+        stop_token_ids: list[int] | None = None,
         sampler: str = "ras",
         seed: int | None = None,
         **sampling_kwargs,
@@ -443,21 +452,26 @@ class TtQwen2LM:
 
         Matches upstream `Qwen2LM.inference`'s control flow: one prefill over
         `[sos, text_emb, task_id_emb, speech_emb]`, then one `decode_step` per new token,
-        each fed its own previously-sampled token's embedding, until `eos_id` is sampled (at
-        or past `min_tokens`) or `max_tokens` is reached. `sampler='greedy'` is the
-        deterministic path this package's tests use; `'ras'` is real Repetition-Aware
-        Sampling (`ras_sample_device`, on-device nucleus primary + host fallback).
+        each fed its own previously-sampled token's embedding, until any of
+        `stop_token_ids` is sampled (at or past `min_tokens`) or `max_tokens` is reached.
+        `sampler='greedy'` is the deterministic path this package's tests use; `'ras'` is
+        real Repetition-Aware Sampling (`ras_sample_device`, on-device nucleus primary +
+        host fallback).
 
-        No CosyVoice2 checkpoint exists yet (see module docstring), so `eos_id` has no
-        trained meaning here -- this method exercises the real control flow and cache
-        continuity, not real generation quality.
+        Upstream's `inference_wrapper` checks `top_ids in self.stop_token_ids` -- three
+        IDs (`eos_token`, an unnamed third one, and `fill_token`), not just `eos_token`
+        alone -- so this defaults to `self.stop_token_ids` rather than a single ID.
+
+        No CosyVoice2 checkpoint exists yet (see module docstring), so `stop_token_ids`
+        has no trained meaning here -- this method exercises the real control flow and
+        cache continuity, not real generation quality.
         """
         from .sampling import greedy, ras_sampling
 
         if seed is not None:
             torch.manual_seed(seed)
-        if eos_id is None:
-            eos_id = self.speech_token_size
+        if stop_token_ids is None:
+            stop_token_ids = self.stop_token_ids
 
         sequence = self.assemble_prefill_sequence(text_ids, prompt_speech_ids)
         hidden, pos = self.prefill(sequence)
@@ -473,7 +487,7 @@ class TtQwen2LM:
                 token = self.ras_sample_device(logits, out, **sampling_kwargs)
             else:
                 raise ValueError(f"unknown sampler {sampler!r}")
-            if token == eos_id and i >= min_tokens:
+            if token in stop_token_ids and i >= min_tokens:
                 break
             out.append(token)
             token_emb = self.embed_speech_tokens_host(torch.tensor([[token]]))
