@@ -4,7 +4,11 @@
 
 #include "ttnn/operations/matmul/device/matmul_device_operation.hpp"
 
+#include <mutex>
 #include <string_view>
+#include <unordered_set>
+
+#include <fmt/format.h>
 
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/operations/matmul/device/config/matmul_program_config.hpp"
@@ -232,11 +236,28 @@ void validate_matmul_optional_tensors(
         const bool is_intentional_1d_conversion = !is_single_core && (is_1d_column || is_1d_row);
         if (attributes.output_mem_config.shard_spec().has_value() &&
             output_tensor_spec.memory_config() != attributes.output_mem_config && !is_intentional_1d_conversion) {
-            log_warning(
-                tt::LogOp,
-                "Mismatch between computed {} and provided {} mem config. Using computed config.",
-                output_tensor_spec.memory_config(),
-                attributes.output_mem_config);
+            // The same (computed, provided) mem-config pair recurs identically for every op call
+            // that shares this shard-grid mismatch (e.g. once per model layer), so warn only the
+            // first time a distinct pair is seen per process rather than flooding CI logs with an
+            // identical message hundreds of times.
+            static std::unordered_set<std::string> warned_mem_config_pairs;
+            static std::mutex warned_mem_config_pairs_mutex;
+            auto computed_str = fmt::format("{}", output_tensor_spec.memory_config());
+            auto provided_str = fmt::format("{}", attributes.output_mem_config);
+            std::string pair_key = computed_str + "->" + provided_str;
+            bool should_warn = false;
+            {
+                std::lock_guard<std::mutex> lock(warned_mem_config_pairs_mutex);
+                should_warn = warned_mem_config_pairs.insert(std::move(pair_key)).second;
+            }
+            if (should_warn) {
+                log_warning(
+                    tt::LogOp,
+                    "Mismatch between computed {} and provided {} mem config. Using computed config. "
+                    "(further occurrences of this exact mismatch are suppressed)",
+                    computed_str,
+                    provided_str);
+            }
         }
     }
 }
