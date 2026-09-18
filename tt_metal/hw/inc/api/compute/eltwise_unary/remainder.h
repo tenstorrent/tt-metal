@@ -14,29 +14,37 @@ namespace ckernel {
 
 // clang-format off
 /**
- * Performs element-wise remainder computation on input x by y , where x is each element of a tile
- * in DST register at index tile_index. The input can be of float data type. The denominator is provided to
- * remainder_tile_init and loaded into the SFPU constant registers. The
- * DST register buffer must be in acquired state via *acquire_dst* call. This call is blocking and is only available on
- * the compute engine.
+ * Performs element-wise remainder computation on input x by y, where x is each element of a tile
+ * in DST register at index tile_index. The input can be of float data type. The denominator y is the
+ * float bit pattern in value. Uses the same SFPU remainder as remainder_binary_tile
+ * (a - floor(a/b)*b). remainder_tile_init must be called first to load the reciprocal polynomial.
+ * The DST register buffer must be in acquired state via *acquire_dst* call. This call is blocking
+ * and is only available on the compute engine.
  *
  * Return value: None
  *
  * | Argument       | Description                                                                 | Type     | Valid Range                                           | Required |
  * |----------------|-----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
  * | idst           | The index of the tile in DST register buffer to perform remainder operation | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | value          | Bit pattern of the float divisor                                            | uint32_t | Any float bit pattern                                 | True     |
  */
 // clang-format on
-ALWI void remainder_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_remainder, (APPROX), idst, VectorMode::RC));
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void remainder_tile(uint32_t idst, uint32_t value) {
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        is_fp32_dest_acc_en,
+        calculate_remainder,
+        (APPROX, is_fp32_dest_acc_en, 8 /* ITERATIONS */),
+        idst,
+        VectorMode::RC,
+        value));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void remainder_tile_init(uint32_t param0, uint32_t param1) {
-    MATH(SFPU_UNARY_INIT_FN_ARGS(remainder, sfpu::init_remainder, (APPROX), param0, param1));
-}
+ALWI void remainder_tile_init() { MATH(SFPU_UNARY_INIT_FN(remainder, sfpu::init_remainder, (APPROX))); }
 
 // clang-format off
 /**
