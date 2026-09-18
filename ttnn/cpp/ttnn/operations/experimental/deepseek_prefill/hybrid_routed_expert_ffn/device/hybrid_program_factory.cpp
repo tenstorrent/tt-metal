@@ -2896,15 +2896,21 @@ constexpr uint32_t kDefaultWorkerL1Size = 1'461'248;
 constexpr uint32_t kMinAllocatorBase = 111'616;
 
 uint32_t arena_bytes_for(tt::tt_metal::IDevice* device) {
-    constexpr uint32_t kL1ScratchMargin = 48 * 1024;
+    // Everything above the allocator base, and nothing held back. The fused half sizes its
+    // blocking against hal::get_max_worker_l1_unreserved_size() less L1_CB_RESERVE when it runs
+    // standalone, and at the default worker_l1_size that is the SAME number as this -- the
+    // kernel-config ring L1_CB_RESERVE stands for already sits below the base. So this arena is
+    // exactly the budget that half would have had on its own, which is the invariant worth
+    // holding: the merge must not make a shape unservable that either op serves alone. Holding
+    // anything back here did precisely that, and cost the widest shape (emb 7168, hidden 3072 in
+    // ROW_MAJOR) 6 KB it needed.
     const uint32_t reserved = device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
     TT_FATAL(
-        device->l1_size_per_core() > reserved + kL1ScratchMargin,
-        "unexpected L1 geometry: l1_size_per_core ({}) <= reserved base ({}) + margin ({})",
+        device->l1_size_per_core() > reserved,
+        "unexpected L1 geometry: l1_size_per_core ({}) <= reserved base ({})",
         device->l1_size_per_core(),
-        reserved,
-        kL1ScratchMargin);
-    const uint32_t usable = static_cast<uint32_t>(device->l1_size_per_core()) - reserved - kL1ScratchMargin;
+        reserved);
+    const uint32_t usable = static_cast<uint32_t>(device->l1_size_per_core()) - reserved;
     // Whole 64B units, so the arena tensor's shard shape is exact.
     return usable & ~static_cast<uint32_t>(63);
 }

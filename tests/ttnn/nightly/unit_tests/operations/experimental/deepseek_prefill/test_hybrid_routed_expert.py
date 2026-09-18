@@ -63,14 +63,7 @@ _THRESHOLD = 320
 
 # Cases the union op cannot serve, strict-xfailed so they turn red the day they start working.
 # A case matches when every whitespace-separated token of the key appears in the param id.
-#
-# dsv4_pro is the widest shape here (emb 7168, hidden 3072) and the only one that overflows: the
-# union overlays both halves' circular buffers on ONE arena, which at the default worker_l1_size
-# is 1,412,096 B after the op's scratch margin, and the fused half alone wants 1,418,112 B of it
-# in ROW_MAJOR. TILE fits, because that layout carries no tilize buffers.
-_XFAIL = {
-    "dsv4_pro x_rm": "fused half needs 1418112 B of CB L1, union arena is 1412096 B (issue #56752)",
-}
+_XFAIL: dict[str, str] = {}
 
 
 @pytest.fixture(autouse=True)
