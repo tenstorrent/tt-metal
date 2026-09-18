@@ -106,10 +106,11 @@ tests/ttnn/unit_tests/operations/transformers/test_prefetcher_BH_bw_bench.py::te
 
 Set `TT_METAL_BENCHMARK_RESULT_JSONL` to append machine-readable metrics.
 
-## Mixed Llama-8B FF1 and SDPA
+## Mixed Llama-3B TP1 FF1 and SDPA
 
-The mixed benchmark queues a receiver-contiguous per-device Llama-8B TP2 FF1
-weight (`4096x7168`), runs decode SDPA against DRAM-resident K/V while the
+The mixed benchmark queues a receiver-contiguous Llama-3B TP1 FF1 weight
+(`3072x8192`), then runs matching decode SDPA (`24` Q heads, `8` KV heads,
+head dimension `128`) against DRAM-resident K/V while the
 DRISCs prefetch, and then consumes FF1 from the GCB. The complete FF1 receiver
 shard fits in the GCB even on a seven-bank harvested device, allowing prefetch
 to complete and restore dynamic idle weights while SDPA is still generating
@@ -126,7 +127,7 @@ TT_METAL_BENCHMARK_TENSOR_PREFETCHER_IDLE_ORDINARY_WEIGHT=0 \
 BENCH_SDPA_CONTEXT=1024 \
 BENCH_TRACE_REPEATS=20 \
 pytest -sv \
-tests/ttnn/unit_tests/operations/transformers/test_prefetcher_BH_mpfe_mixed_bench.py::test_mpfe_mixed_llama8b_ff1_sdpa
+tests/ttnn/unit_tests/operations/transformers/test_prefetcher_BH_mpfe_mixed_bench.py::test_mpfe_mixed_llama3b_ff1_sdpa
 ```
 
 Run the focused randomized comparison with:

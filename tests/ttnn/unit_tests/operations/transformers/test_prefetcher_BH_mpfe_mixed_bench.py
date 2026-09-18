@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Mixed Llama-8B TP2 decode traffic benchmark for Tensor Prefetcher MPFE policies.
+"""Mixed Llama-3B TP1 decode traffic benchmark for Tensor Prefetcher MPFE policies.
 
 Each replay queues one receiver-contiguous per-device FF1 weight, runs decode
 SDPA against DRAM-resident K/V while the DRISCs fill a whole-layer GCB, then
@@ -36,11 +36,11 @@ from tests.ttnn.unit_tests.operations.transformers.mpfe_benchmark_utils import (
 pytestmark = run_for_blackhole("Tensor prefetcher requires Blackhole")
 
 _BATCH = 32
-_NUM_HEADS = 32
+_NUM_HEADS = 24
 _NUM_KV_HEADS = 8
 _HEAD_DIM = 128
-_FF1_K = 4096
-_FF1_N = 7168  # Llama-3.1-8B FF1 per-device N at tensor parallelism 2.
+_FF1_K = 3072
+_FF1_N = 8192
 _RECEIVERS_PER_BANK = 8
 _BF8_BYTES_PER_ELEMENT = 1088 / 1024.0
 
@@ -108,8 +108,8 @@ def _sdpa_k_chunk_size(context: int) -> int:
     [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "trace_region_size": 23887872}],
     indirect=True,
 )
-def test_mpfe_mixed_llama8b_ff1_sdpa(device):
-    """Overlap DRISC-prefetched FF1 with ordinary Llama-8B decode SDPA traffic."""
+def test_mpfe_mixed_llama3b_ff1_sdpa(device):
+    """Overlap DRISC-prefetched FF1 with ordinary Llama-3B TP1 decode SDPA traffic."""
     context = int(os.environ.get("BENCH_SDPA_CONTEXT", "1024"))
     trace_repeats = int(os.environ.get("BENCH_TRACE_REPEATS", "20"))
     assert context >= 128 and context % 128 == 0
@@ -126,7 +126,7 @@ def test_mpfe_mixed_llama8b_ff1_sdpa(device):
 
     compute_grid = device.compute_with_storage_grid_size()
     if compute_grid.x < 8 or compute_grid.y < 8:
-        pytest.skip(f"Llama-8B SDPA benchmark requires an 8x8 worker grid, got {compute_grid}")
+        pytest.skip(f"Llama-3B SDPA benchmark requires an 8x8 worker grid, got {compute_grid}")
     sdpa_cores = [(x, y) for y in range(8) for x in range(8)]
     sdpa_core_set = _singleton_core_set(sdpa_cores)
     worker_core_set = _singleton_core_set(ring_cores + sdpa_cores)
@@ -177,7 +177,7 @@ def test_mpfe_mixed_llama8b_ff1_sdpa(device):
         for bank in range(num_dram_banks)
     ]
     ff1_program_config = _ff1_program_config(ring_cols, ring_rows, n_padded, ring_size)
-    # The production TP2 slice fits one complete receiver shard under the
+    # The production TP1 weight fits one complete receiver shard under the
     # 65,535-page GCB limit even on a seven-bank harvested device. Unlike the
     # previous shallow streaming benchmark, this allows prefetch to finish
     # before SDPA and creates a real dynamic-idle interval.
@@ -355,7 +355,7 @@ def test_mpfe_mixed_llama8b_ff1_sdpa(device):
     )
     append_benchmark_jsonl(
         {
-            "benchmark": "mpfe_mixed_llama8b_ff1_sdpa",
+            "benchmark": "mpfe_mixed_llama3b_ff1_sdpa",
             **weight_result_fields(policy),
             "num_dram_banks": num_dram_banks,
             "ring_size": ring_size,

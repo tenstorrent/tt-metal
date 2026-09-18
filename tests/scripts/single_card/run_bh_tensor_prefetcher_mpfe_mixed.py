@@ -3,7 +3,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Sweep static and dynamic MPFE policies on mixed Llama-8B traffic."""
+"""Sweep static and dynamic MPFE policies on mixed Llama-3B TP1 traffic."""
 
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 TT_METAL_HOME = Path(os.environ.get("TT_METAL_HOME", SCRIPT_DIR.parents[2])).resolve()
 MIXED_TEST = (
     "tests/ttnn/unit_tests/operations/transformers/"
-    "test_prefetcher_BH_mpfe_mixed_bench.py::test_mpfe_mixed_llama8b_ff1_sdpa"
+    "test_prefetcher_BH_mpfe_mixed_bench.py::test_mpfe_mixed_llama3b_ff1_sdpa"
 )
 MPFE_ENV_PREFIX = "TT_METAL_BENCHMARK_TENSOR_PREFETCHER_"
 MPFE_ENV_NAMES = (
@@ -149,7 +149,7 @@ class MixedRunner:
         self.trace_repeats = env_int("BENCH_TRACE_REPEATS", 20)
         self.seed = env_int("MPFE_RANDOM_SEED", 0x4D495845, minimum=0)
         self.manifest = {
-            "schema_version": 3,
+            "schema_version": 4,
             "git_revision": subprocess.check_output(
                 ["git", "rev-parse", "HEAD"], cwd=TT_METAL_HOME, text=True
             ).strip(),
@@ -193,7 +193,7 @@ class MixedRunner:
         return (record["sdpa_context"], record["suite_iteration"], record["run_label"])
 
     def _validate_loaded_record(self, record: dict) -> None:
-        if record.get("benchmark") != "mpfe_mixed_llama8b_ff1_sdpa":
+        if record.get("benchmark") != "mpfe_mixed_llama3b_ff1_sdpa":
             raise RuntimeError(f"{self.results_path} contains a record for a different benchmark")
         if (
             record.get("trace_repeats") != self.trace_repeats
