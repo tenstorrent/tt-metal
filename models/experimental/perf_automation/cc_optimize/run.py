@@ -4417,6 +4417,60 @@ def watchdog_decide(ev: dict, agent=_watchdog_ask_agent) -> str:
     return "wait"
 
 
+def _last_attempt_summary(kernel_log: str) -> str:
+    """One line describing the most recent lever attempt on file: which op, which stack, which
+    lever, and the outcome -- what the watchdog heartbeat should say instead of a bare timer nobody
+    can act on. "" when there is nothing to describe yet (empty/missing log) or the row is malformed;
+    the caller falls back to the elapsed-time line rather than printing a broken sentence.
+
+    Reads the SAME kernel_log the round is writing to and the SAME baseline profile stage_of_op
+    already resolves stacks from -- no new naming, no per-model logic, so a model that renames its
+    stages or its levers is described exactly as it names itself.
+    """
+    try:
+        rows = json.loads(Path(kernel_log).read_text())
+    except Exception:  # noqa: BLE001
+        return ""
+    if not isinstance(rows, list) or not rows:
+        return ""
+    a = rows[-1]
+    if not isinstance(a, dict):
+        return ""
+    op = str(a.get("op_signature") or "").strip()
+    if not op:
+        return ""
+    rung = str(a.get("kernel_kind") or "").split(":")[-1].strip() or "?"
+    if a.get("commit_record"):
+        status = "✓ win, saved"
+    elif a.get("wedged"):
+        status = "✗ wedged"
+    elif a.get("diverged"):
+        status = "· diverged (uncounted)"
+    else:
+        status = "· no gain"
+    stage = ""
+    try:
+        _m = _perf_mcp()
+        stage = _m.stage_of_op(op, _m._read_baseline_profile()) or ""
+    except Exception:  # noqa: BLE001
+        stage = ""
+    op_disp = op if len(op) <= 44 else op[:41] + "..."
+    return f"{op_disp} [{stage or '?'}] — {rung}: {status}"
+
+
+def _fmt_elapsed(seconds: float) -> str:
+    """Round-trip-legible duration for the watchdog heartbeat: '45s', '5m', '1h12m' -- never both a
+    huge second count and a unit nobody reads at a glance on an hours-long run."""
+    s = int(seconds)
+    if s < 60:
+        return f"{s}s"
+    m, s = divmod(s, 60)
+    if m < 60:
+        return f"{m}m"
+    h, m = divmod(m, 60)
+    return f"{h}h{m}m" if m else f"{h}h"
+
+
 def _run_round_with_watchdog(
     cmd: list, repo_root: Path, devices: str, kernel_log: str, stall_sec: int, agent_env: dict | None = None
 ) -> bool:
@@ -4484,6 +4538,17 @@ def _run_round_with_watchdog(
     _reprieves = [0]  # how many times the watchdog has re-armed this round; see below
     _stuck_since = [None]  # when real progress was last seen; NOT rewound by a reprieve
     _t0 = _now0
+    _last_heartbeat_print = _now0  # THROTTLES THE LINE, NOT THE POLL: the wedge/no-progress checks
+    # below still run on the real 60s tick (that timing is load-bearing), but printing on every one
+    # of them, for a run that runs for hours, is hundreds of near-identical lines with nothing new in
+    # them -- readable in a live terminal (the eye skips repeats) but a genuine mess once it lands in
+    # a log file someone has to read back later. Nothing greps this exact console line (checked), so
+    # slowing it down costs nothing a reader depends on.
+    _HEARTBEAT_PRINT_INTERVAL_S = 300
+    # SAID ONCE, not on every tick: the transcript path never changes for this round, so repeating
+    # it hundreds of times added nothing but width. The heartbeat below now carries only what
+    # actually changes each time it prints -- how long the round has been running.
+    print(f"  · optimizing… (agent transcript → {agent_log})", flush=True)
     wedge_reason = ""
     try:
         while True:
@@ -4492,7 +4557,19 @@ def _run_round_with_watchdog(
                 return False
             except subprocess.TimeoutExpired:
                 _now = time.monotonic()
-                print(f"  · optimizing… {int(_now - _t0)}s (agent transcript → {agent_log})", flush=True)
+                if _now - _last_heartbeat_print >= _HEARTBEAT_PRINT_INTERVAL_S:
+                    _last_heartbeat_print = _now
+                    _last = _last_attempt_summary(kernel_log)
+                    if _last:
+                        print(f"  · {_fmt_elapsed(_now - _t0)}: last tried {_last}", flush=True)
+                    else:
+                        # NOTHING RECORDED YET is a real, different state from "tried and it failed" --
+                        # falling back to the plain timer here says exactly that, instead of printing
+                        # an empty/broken description of a lever that was never actually recorded.
+                        print(
+                            f"  · still optimizing… {_fmt_elapsed(_now - _t0)} elapsed, nothing recorded yet",
+                            flush=True,
+                        )
                 tok = _progress_token(repo_root, kernel_log)
                 live = _liveness()
                 if tok != last_tok:  # real progress resets BOTH clocks
