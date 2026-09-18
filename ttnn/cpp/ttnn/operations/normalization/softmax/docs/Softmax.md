@@ -132,7 +132,7 @@ ttnn.scale_mask_softmax_in_place(
     program_config: SoftmaxProgramConfig = SoftmaxDefaultProgramConfig(),
     is_causal_mask: bool = False,
     compute_kernel_config: Optional[DeviceComputeKernelConfig] = None,
-    numeric_stable: bool = False,
+    numeric_stable: bool = True,
     queue_id: int = 0
 ) -> ttnn.Tensor
 ```
@@ -155,7 +155,7 @@ ttnn.scale_causal_mask_hw_dims_softmax_in_place(
     *,
     program_config: SoftmaxProgramConfig = SoftmaxDefaultProgramConfig(),
     compute_kernel_config: Optional[DeviceComputeKernelConfig] = None,
-    numeric_stable: bool = False,
+    numeric_stable: bool = True,
     queue_id: int = 0
 ) -> ttnn.Tensor
 ```
