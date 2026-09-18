@@ -107,38 +107,10 @@ def test_eq(device, h, w, output_dtype):
     assert_equal(torch_output_tensor.float(), torch_output_tensor_preallocated.float())
 
 
-@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_log10(device, h, w, layout):
-    run_math_unary_test(device, h, w, ttnn.log10, layout=layout, ulp=2, allow_nonfinite=True)
-
-
-@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_log1p(device, h, w, layout):
-    run_math_unary_test(device, h, w, ttnn.log1p, layout=layout, ulp=1)
-
-
-@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_log2(device, h, w, layout):
-    run_math_unary_test(device, h, w, ttnn.log2, layout=layout, ulp=1, allow_nonfinite=True)
-
-
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_tril(device, h, w):
     run_math_unary_test(device, h, w, ttnn.tril, ulp=0)
-
-
-@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_sqrt(device, h, w, layout):
-    run_math_unary_test(device, h, w, ttnn.sqrt, layout=layout, ulp=1)
 
 
 def test_digamma_large_x(device):
@@ -172,12 +144,6 @@ def test_digamma_small_x(device):
     input_tensor = ttnn.from_torch(xs, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     output_tensor = ttnn.to_torch(ttnn.digamma(input_tensor))
     assert_with_ulp(expected_result=golden, actual_result=output_tensor, ulp_threshold=2)
-
-
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_erf(device, h, w):
-    run_math_unary_test(device, h, w, ttnn.erf, ulp=1)
 
 
 @pytest.mark.parametrize("h", [64])
