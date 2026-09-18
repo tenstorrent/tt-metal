@@ -178,7 +178,17 @@ void _calculate_round_(const int decimals)
     for (int d = 0; d < ITERATIONS; ++d)
     {
         sfpi::vFloat v      = sfpi::dst_reg[0];
-        sfpi::vFloat result = inverse * _round_even_(v * coeff);
+        sfpi::vInt exp      = sfpi::exexp(v);
+        sfpi::vFloat result;
+        v_if (exp >= 23)
+        {
+            result = v;
+        }
+        v_else
+        {
+            result = inverse * _round_even_(v * coeff);
+        }
+        v_endif;
         sfpi::dst_reg[0]    = result;
         sfpi::dst_reg++;
     }
