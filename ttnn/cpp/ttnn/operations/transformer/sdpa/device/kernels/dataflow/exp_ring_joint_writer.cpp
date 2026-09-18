@@ -339,8 +339,40 @@ void kernel_main() {
     const uint32_t last_active_ring_iter =
         find_last_active_ring_iter(fused_op_indexer.seq, local_padded_Nt, logical_nt, L);
 
-    for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
-        uint32_t ring_id = fused_op_indexer.get_next_ring_id_and_sync();
+    // Loop order. Default: ring-outer / pass-inner — every pass advances in lockstep per ring
+    // iteration, one L1 state-FIFO entry and one resident Q chunk per pass. EXP_SEQ_PASSES:
+    // pass-outer / ring-inner — one pass runs all ring iterations before the next starts, so a single
+    // Q chunk and a single flash state are live (the scratch path) and per-core L1 stops scaling with
+    // the pass count. EXP_Q_GROUPS splits a segment's Q chunks into groups walked as extra passes;
+    // only group 0 of a segment forwards K/V over the fabric (later groups re-read the gathered
+    // K/V the first group already landed in DRAM).
+#ifdef EXP_SEQ_PASSES
+    constexpr bool seq_passes = true;
+    constexpr uint32_t q_groups = EXP_Q_GROUPS;
+    constexpr uint32_t group_stride = EXP_GROUP_STRIDE;
+#else
+    constexpr bool seq_passes = false;
+    constexpr uint32_t q_groups = 1;
+    constexpr uint32_t group_stride = 0;
+#endif
+    const uint32_t total_passes = q_count * q_groups;
+    const uint32_t n_outer = seq_passes ? total_passes : ring_size;
+    const uint32_t n_inner = seq_passes ? ring_size : total_passes;
+    const RingSDPAOpIndexer fused_op_indexer0 = fused_op_indexer;
+    for (uint32_t outer = 0; outer < n_outer; ++outer) {
+        uint32_t ring_id = 0;
+        for (uint32_t inner = 0; inner < n_inner; ++inner) {
+            const uint32_t ring_iter = seq_passes ? inner : outer;
+            const uint32_t pass = seq_passes ? outer : inner;
+            [[maybe_unused]] const bool pass_forwards = !seq_passes || (pass % q_groups == 0);
+            if (seq_passes) {
+                if (inner == 0) {
+                    fused_op_indexer = fused_op_indexer0;
+                }
+                ring_id = fused_op_indexer.get_next_ring_id_and_sync();
+            } else if (inner == 0) {
+                ring_id = fused_op_indexer.get_next_ring_id_and_sync();
+            }
 
         const bool do_joint_kv = ring_id == ring_size - 1;
         const uint32_t num_kv_chunks = do_joint_kv ? num_local_k_chunks + num_joint_k_chunks : num_local_k_chunks;
@@ -360,8 +392,9 @@ void kernel_main() {
             // Serial passes, same order as the reader and compute: pass p handles head
             // (p * rows + my_row). Both the AG forwarding below and the output drain are already
             // parameterized per chunk, so they are correct per pass with no addressing change.
-            for (uint32_t pass = 0; pass < q_count; ++pass) {
-                const uint32_t global_q_chunk = q_base + pass * q_stride;
+                {
+                    const uint32_t global_q_chunk =
+                        q_base + (pass / q_groups) * q_stride + (pass % q_groups) * group_stride;
                 const uint32_t nb = global_q_chunk / (NH * num_q_chunks);
                 const uint32_t nq = (global_q_chunk % (NH * num_q_chunks)) / num_q_chunks;
                 const uint32_t q_chunk = global_q_chunk % num_q_chunks;
@@ -374,7 +407,8 @@ void kernel_main() {
                 constexpr uint32_t k_chunk_tiles = Sk_chunk_t * DHt;
                 constexpr uint32_t v_chunk_tiles = Sk_chunk_t * DHt;
                 if (mux_connection_valid) {
-                    const uint32_t rows_per_mux = (Sk_chunk_t + num_muxes_in_direction - 1) / num_muxes_in_direction;
+                        const uint32_t rows_per_mux =
+                            (Sk_chunk_t + num_muxes_in_direction - 1) / num_muxes_in_direction;
                     const uint32_t my_row_start = my_mux_index * rows_per_mux;
                     const uint32_t my_row_end = std::min(my_row_start + rows_per_mux, (uint32_t)Sk_chunk_t);
 
@@ -401,7 +435,7 @@ void kernel_main() {
                         // when this device's last ACTIVE iteration is earlier (trailing pad shards);
                         // gating on last-active starves downstream.
                         cb_k_w.wait_front(k_chunk_tiles);
-                        if (!dedup_skip_forward && ring_iter != ring_size - 1) {
+                        if (!dedup_skip_forward && ring_iter != ring_size - 1 && pass_forwards) {
                             if (!kv_chunk_is_joint) {
                                 const uint32_t base_k_read_ptr = cb_k_w.get_read_ptr();
                                 for (uint32_t col = 0; col < DHt; ++col) {
@@ -409,7 +443,8 @@ void kernel_main() {
                                          row += ag_packet_size_in_pages) {
                                         uint32_t tiles_in_batch = 0;
                                         uint64_t k_noc_addrs[4] = {0, 0, 0, 0};
-                                        for (uint32_t i = 0; i < ag_packet_size_in_pages && row + i < my_row_end; i++) {
+                                            for (uint32_t i = 0; i < ag_packet_size_in_pages && row + i < my_row_end;
+                                                 i++) {
                                             if (kv_slice.d2_start + row + i >= end_seq_tile) {
                                                 break;
                                             }
@@ -477,7 +512,7 @@ void kernel_main() {
 
                         // Wait for reader to fill V, forward this writer's row slice over fabric
                         cb_v_w.wait_front(v_chunk_tiles);
-                        if (!dedup_skip_forward && ring_iter != ring_size - 1) {
+                        if (!dedup_skip_forward && ring_iter != ring_size - 1 && pass_forwards) {
                             if (!kv_chunk_is_joint) {
                                 const uint32_t base_v_read_ptr = cb_v_w.get_read_ptr();
                                 for (uint32_t row = my_row_start; row < my_row_end; ++row) {
@@ -498,7 +533,8 @@ void kernel_main() {
                                         if (tiles_in_batch == 0) {
                                             break;
                                         }
-                                        const uint32_t src_l1_addr = base_v_read_ptr + (row * DHt + col) * ag_page_size;
+                                            const uint32_t src_l1_addr =
+                                                base_v_read_ptr + (row * DHt + col) * ag_page_size;
                                         if (tiles_in_batch == ag_packet_size_in_pages) {
                                             uint16_t v_cs[3] = {
                                                 static_cast<uint16_t>(ag_page_size),
@@ -552,7 +588,7 @@ void kernel_main() {
                         // Joint KV is replicated and read locally, never forwarded over fabric, so it
                         // must not bump the per-link forward semaphore the receiver counts only for
                         // non-joint chunks.
-                        if (!dedup_skip_forward && ring_iter != ring_size - 1 && !kv_chunk_is_joint) {
+                        if (!dedup_skip_forward && ring_iter != ring_size - 1 && !kv_chunk_is_joint && pass_forwards) {
                             fabric_unicast_noc_unicast_atomic_inc_with_state(&mux_conn, pkt_hdr_sem_inc);
                             noc.async_writes_flushed();
                         }
@@ -583,6 +619,7 @@ void kernel_main() {
                 }
             }
         }
+    }
     }
 
 #ifdef USE_MUX

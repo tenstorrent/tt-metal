@@ -379,15 +379,21 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
     // Every segment must fill its row exactly: fewer chunks than columns would idle the trailing
     // columns, and the last two SDPA columns are the fabric MUX clients that perform the K/V
     // all-gather — an idle MUX column means that link never forwards its shard.
+    // Sequential-pass experiment (TT_EXP_SDPA_Q_GROUPS): a segment spans q_groups row-widths of Q
+    // chunks, walked as q_groups serial passes. See exp_sdpa_q_groups() in the header.
+    const bool seq_passes = exp_sdpa_sequential_passes();
+    const uint32_t q_groups = seq_passes ? exp_sdpa_q_groups() : 1u;
+    const uint32_t chunks_per_segment = sdpa_grid.x * q_groups;
     TT_FATAL(
-        num_q_chunks % sdpa_grid.x == 0,
+        num_q_chunks % chunks_per_segment == 0,
         "Exp ring joint SDPA requires a head's Q chunks to fill a whole number of rows. Got "
-        "num_q_chunks={} with {} columns. Adjust q_chunk_size so ceil(local_padded_N / "
+        "num_q_chunks={} with {} columns x {} Q groups. Adjust q_chunk_size so ceil(local_padded_N / "
         "q_chunk_size) is a multiple of {}.",
         num_q_chunks,
         sdpa_grid.x,
-        sdpa_grid.x);
-    const uint32_t segs_per_head = num_q_chunks / sdpa_grid.x;
+        q_groups,
+        chunks_per_segment);
+    const uint32_t segs_per_head = num_q_chunks / chunks_per_segment;
     const uint32_t total_segments = B * NH * segs_per_head;
     const uint32_t num_passes = tt::div_up(total_segments, rows);
 
@@ -397,11 +403,14 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
     // 4 admits the Wormhole H3 shard at q=256 (14 heads x segs 2 over 8 rows); the CB budget check
     // below is what actually bounds the pass count.
     constexpr uint32_t kMaxPasses = 4;
+    // Sequential passes hold one Q chunk and one flash state regardless of the pass count, so the
+    // cap does not apply there (the CB budget check below is what bounds the shape).
+    const uint32_t max_passes = seq_passes ? 64u : kMaxPasses;
     TT_FATAL(
-        num_passes <= kMaxPasses,
+        num_passes <= max_passes,
         "Exp ring joint SDPA supports at most {} head-segments per core row. "
         "Got B*NH={} x segs_per_head={} with {} rows (P={}).",
-        kMaxPasses,
+        max_passes,
         B * NH,
         segs_per_head,
         rows,
@@ -439,12 +448,13 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
         }
         some_iter_processes_one_chunk = (iter_chunks == 1);
     }
-    const uint32_t state_fifo_entries = num_passes + (some_iter_processes_one_chunk ? 1 : 0);
+    // Sequential passes keep one flash state live (scratch path), so the FIFO shrinks to one entry.
+    const uint32_t state_fifo_entries = (seq_passes ? 1u : num_passes) + (some_iter_processes_one_chunk ? 1 : 0);
     log_debug(tt::LogOp, "state_fifo_entries: {}", state_fifo_entries);
 
     // These tile capacity counts for CBs need to match the number of tiles expected by the kernel (softmax.cpp)
     // Q holds one chunk per pass; all of them stay resident for the whole op (read once).
-    uint32_t q_tiles = num_passes * Sq_chunk_t * DHt;
+    uint32_t q_tiles = (seq_passes ? 1u : num_passes) * Sq_chunk_t * DHt;  // sequential: one live chunk
     uint32_t k_tiles = Sk_chunk_t * DHt * 2;  // double buffer
     uint32_t v_tiles = Sk_chunk_t * DHt * 2;  // double buffer
     uint32_t qk_tiles = Sq_chunk_t * Sk_chunk_t;
@@ -711,6 +721,11 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
     defines["DHT_GRANULARITY"] = std::to_string(dht_granularity);
     defines["REDUCE_GRANULARITY"] = std::to_string(reduce_granularity);
     defines["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
+    if (seq_passes) {
+        defines["EXP_SEQ_PASSES"] = "1";
+        defines["EXP_Q_GROUPS"] = std::to_string(q_groups);
+        defines["EXP_GROUP_STRIDE"] = std::to_string(sdpa_grid.x);
+    }
 
     // NOTE: KernelDescriptor construction is deferred until after chain construction
     // so that the mcast_enabled compile-time arg can be determined first.
@@ -1048,7 +1063,8 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
     for (const auto& cb : desc.cbs) {
         total_cb_bytes += cb.total_size;
     }
-    const bool stream_q = (num_passes > 1) && (total_cb_bytes > usable_l1);
+    // Sequential passes already hold a single Q chunk (read once per pass), so never stream Q there.
+    const bool stream_q = !seq_passes && (num_passes > 1) && (total_cb_bytes > usable_l1);
     if (stream_q) {
         total_cb_bytes -= desc.cbs[0].total_size;
         desc.cbs[0].total_size = Sq_chunk_t * DHt * q_tile_size;  // c_0 is the first CB pushed
@@ -1066,6 +1082,9 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
     log_debug(tt::LogOp, "stream_q: {}", stream_q);
     reader_compile_time_args[sem_args_offset + 4] = stream_q ? 1 : 0;
     compute_compile_time_args[20] = stream_q ? 1 : 0;
+    if (seq_passes) {
+        compute_compile_time_args[21] = 0;  // one live pass: scratch accumulators, no L1 state FIFO
+    }
 
     auto* const q_buf = input_tensor_q.buffer();
     auto* const k_buf = input_tensor_k.buffer();
@@ -1126,13 +1145,13 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
      *     row always run the same number of passes (required for K/V CB pointer lockstep under
      *     mcast).
      */
-    const uint32_t q_stride = rows * sdpa_grid.x;
+    const uint32_t q_stride = rows * chunks_per_segment;  // == rows * sdpa_grid.x when q_groups == 1
     for (uint32_t i = 0; i < num_sdpa_cores; ++i) {
         const CoreCoord core = {i % sdpa_grid.x, i / sdpa_grid.x};
         auto& work = core_work.at(i);
         work.logical_core = core;
         work.physical_core = device->worker_core_from_logical_core(core);
-        work.q_base = core.y * sdpa_grid.x + core.x;
+        work.q_base = core.y * chunks_per_segment + core.x;
         work.q_stride = q_stride;
         work.q_count = 0;
         for (uint32_t p = 0; p < num_passes; ++p) {
