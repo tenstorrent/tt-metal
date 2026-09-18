@@ -21,8 +21,9 @@ namespace ttnn::prim::qsr {
 // config is checked in that function with TT_FATAL, so calling it is the config check.
 //
 // Vocabulary (classic GEMM, all sizes in 32x32 tiles): C[M x N] = A[M x K] x B[K x N].
-//   C block      the per_core_M_tiles x per_core_N_tiles tiles of C a core produces in one go, for every
-//                batch; the C blocks of one batch are walked row-major (across N, then down M)
+//   C block        the per_core_M_tiles x per_core_N_tiles tiles of C a core produces in one go; cores walk C in C
+//   blocks
+//                row-major (across N, then down M), batch after batch
 //   subblock     the subblock_M_tiles x subblock_N_tiles tiles of a C block accumulated in DST at once
 //   K iteration  K_iteration_tiles of the inner dimension; one A slice + one B slice per iteration
 struct UnifiedMatmulPlan {
@@ -40,14 +41,13 @@ struct UnifiedMatmulPlan {
     uint32_t subblock_M_tiles = 0;
     uint32_t subblock_N_tiles = 0;
 
-    // C block assignment. The C blocks of one batch are walked row-major (across N, then down M) and the
-    // walk is split into contiguous runs, one per active core; core i starts at
-    // (first_C_block_M_tile[i], first_C_block_N_tile[i]) and produces num_C_blocks[i] C blocks, each for
-    // every batch. num_C_blocks is a compile-time arg of the compute kernel, so cores with different counts
-    // get their own compute KernelSpec (at most two: floor and floor + 1).
-    uint32_t C_blocks_per_batch = 0;
+    // Block assignment. C is walked in C blocks row-major (across N, then down M), batch after batch;
+    // active core i starts at (first_batch[i], first_C_block_M_tile[i], first_C_block_N_tile[i]) and produces
+    // num_C_blocks[i] consecutive C blocks of that walk.
+    uint32_t total_C_blocks = 0;  // over all batches
     bool row_major_cores = true;
     std::vector<tt::tt_metal::CoreCoord> cores;
+    std::vector<uint32_t> first_batch;
     std::vector<uint32_t> first_C_block_M_tile;
     std::vector<uint32_t> first_C_block_N_tile;
     std::vector<uint32_t> num_C_blocks;
