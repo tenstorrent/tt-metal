@@ -44,6 +44,9 @@ class VaeContext:
     w_mesh_axis: int | None = None
     w_factor: int = 1
     use_conv3d: bool = False
+    # Math fidelity for the conv3d-based conv path. None keeps the architecture default (HiFi4 on
+    # Blackhole, HiFi2 elsewhere); TT_VAE_CONV3D_FIDELITY=hifi2|hifi4 overrides either.
+    conv_math_fidelity: ttnn.MathFidelity | None = None
 
 
 @dataclass(frozen=True)
@@ -224,15 +227,14 @@ class _VaeConv2dConv3d(Module):
         # TT_VAE_CONV3D_FIDELITY=hifi2 overrides the Blackhole default of HiFi4 (bf16 activations do
         # not need HiFi4; Wan runs its bf16 conv3d at HiFi2).
         _fid_env = os.environ.get("TT_VAE_CONV3D_FIDELITY", "").lower()
-        _fidelity = (
-            ttnn.MathFidelity.HiFi2
-            if _fid_env == "hifi2"
-            else (
-                ttnn.MathFidelity.HiFi4
-                if _fid_env == "hifi4"
-                else (ttnn.MathFidelity.HiFi4 if is_blackhole() else ttnn.MathFidelity.HiFi2)
-            )
-        )
+        if _fid_env == "hifi2":
+            _fidelity = ttnn.MathFidelity.HiFi2
+        elif _fid_env == "hifi4":
+            _fidelity = ttnn.MathFidelity.HiFi4
+        elif ctx.conv_math_fidelity is not None:
+            _fidelity = ctx.conv_math_fidelity
+        else:
+            _fidelity = ttnn.MathFidelity.HiFi4 if is_blackhole() else ttnn.MathFidelity.HiFi2
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
             ctx.device.arch(),
             math_fidelity=_fidelity,

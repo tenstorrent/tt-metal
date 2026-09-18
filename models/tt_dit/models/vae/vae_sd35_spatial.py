@@ -88,6 +88,9 @@ class SD35VaeDecoder(Module):
             w_mesh_axis=parallel_config.w_parallel.mesh_axis if parallel_config.w_parallel is not None else None,
             w_factor=parallel_config.w_parallel.factor if parallel_config.w_parallel is not None else 1,
             use_conv3d=use_conv3d,
+            # bf16 activations: HiFi2 matches HiFi4 numerically on this decoder (PCC 0.99993 vs
+            # 0.99994 against torch) and is 6% faster.
+            conv_math_fidelity=ttnn.MathFidelity.HiFi2,
         )
         if (ctx.tp_axis is not None or ctx.h_factor > 1 or ctx.w_factor > 1) and ctx.ccl_manager is None:
             msg = "ccl_manager must be provided when the decoder is parallel"

@@ -51,7 +51,7 @@ _line_params = line_params if os.environ.get("SD35_SUBMESH") else line_params_re
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{**_line_params, "l1_small_size": 32768, "trace_region_size": 50000000}],
+    [{**_line_params, "l1_small_size": 65536, "trace_region_size": 50000000}],
     ids=["line"],
     indirect=True,
 )
@@ -182,7 +182,7 @@ def test_sd35_pipeline(
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{**_line_params, "l1_small_size": 32768, "trace_region_size": 50000000}],
+    [{**_line_params, "l1_small_size": 65536, "trace_region_size": 50000000}],
     ids=["line"],
     indirect=True,
 )
