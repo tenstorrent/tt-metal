@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import functools
 import inspect
+import os
 import weakref
 from types import NoneType
 from typing import TYPE_CHECKING, Any, overload
@@ -66,6 +67,55 @@ class StateTensor:
             self._data = value
         else:
             ttnn.copy(value, self._data)
+
+
+def _region_usage(device: ttnn.MeshDevice, buffer_type: Any) -> tuple[int, int, int]:
+    """Per-device (allocated, free, capacity) in bytes for one allocator region.
+
+    ``get_memory_view`` reports per-bank figures, so each is scaled by the bank count to get
+    the device-wide number that ``trace_region_size`` / DRAM capacity are expressed in.
+    """
+    mv = ttnn.get_memory_view(device, buffer_type)
+    n = mv.num_banks
+    return (
+        mv.total_bytes_allocated_per_bank * n,
+        mv.total_bytes_free_per_bank * n,
+        mv.total_bytes_per_bank * n,
+    )
+
+
+def _trace_region_usage(device: ttnn.MeshDevice) -> tuple[int, int, int]:
+    """Total TRACE-region (allocated, free, capacity) in bytes, summed across DRAM banks."""
+    return _region_usage(device, ttnn.BufferType.TRACE)
+
+
+def _log_trace_region(label: str, devices: Sequence[ttnn.MeshDevice], before: int | None = None) -> int | None:
+    """Log TRACE-region occupancy. Returns the allocated byte count (device 0), or ``None``.
+
+    Enabled only when ``TT_DIT_TRACE_MEM_LOG=1`` so the default path is untouched.
+    """
+    if os.environ.get("TT_DIT_TRACE_MEM_LOG") != "1" or not devices:
+        return None
+    try:
+        used, free, cap = _trace_region_usage(devices[0])
+    except Exception as e:  # never let instrumentation break a capture
+        logger.warning(f"trace-mem: could not read TRACE region: {e}")
+        return None
+    mb = 1024 * 1024
+    delta = f", delta={(used - before) / mb:+.2f}MB" if before is not None else ""
+    extra = ""
+    for name, bt in (("dram", ttnn.BufferType.DRAM), ("l1", ttnn.BufferType.L1)):
+        try:
+            u, f, c = _region_usage(devices[0], bt)
+        except Exception:  # a region may be unavailable; never break the capture
+            continue
+        extra += f" | {name}: used={u / mb:.1f}MB free={f / mb:.1f}MB cap={c / mb:.1f}MB"
+    logger.info(
+        f"trace-mem [{label}]: used={used / mb:.2f}MB free={free / mb:.2f}MB "
+        f"capacity={cap / mb:.2f}MB live_traces={Tracer._traces_live.get(devices[0].id(), 0)}{delta}"
+        f"{extra}"
+    )
+    return used
 
 
 class Tracer:
@@ -242,6 +292,8 @@ class Tracer:
         self._args = _tree_map(self._tensor_to_device, args, path_label="args")
         self._kwargs = _tree_map(self._tensor_to_device, kwargs, path_label="kwargs")
 
+        trace_mem_before = _log_trace_region("before capture", self._devices)
+
         if self._prep_run:
             if self._clone_prep_inputs:
                 prep_args = _tree_map(_clone_tensor, self._args, path_label="args")
@@ -273,6 +325,8 @@ class Tracer:
             Tracer._traces_live[d.id()] += 1
         self._trace_ids = trace_ids
         self._outputs = outputs
+
+        _log_trace_region(f"after capture of {self._function!r}", self._devices, trace_mem_before)
 
         if execute:
             # Trace capture records commands but does not execute them. Execute the trace to
@@ -333,9 +387,11 @@ class Tracer:
         self._args = ()
         self._kwargs = {}
         self._outputs = None
+        released_before = _log_trace_region("before release", self._devices)
         for d, trace_id in zip(self._devices, trace_ids, strict=True):
             Tracer._traces_live[d.id()] -= 1
             ttnn.release_trace(d, trace_id)
+        _log_trace_region("after release", self._devices, released_before)
 
     def release_function(self) -> None:
         """Drop the reference to the wrapped function.
