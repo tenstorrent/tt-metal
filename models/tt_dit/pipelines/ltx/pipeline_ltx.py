@@ -1369,12 +1369,10 @@ class LTXPipeline:
             logger.info(f"Upsampler cache miss — loading safetensors: {self._upsampler_path}")
             return load_file(self._upsampler_path)
 
-        blocking_key = conv3d_blocking_hash(self.upsampler)
-        subfolder = f"upsampler_{blocking_key}" if blocking_key else "upsampler"
         cache_module.load_model(
             self.upsampler,
             model_name=os.path.basename(self._upsampler_path).removesuffix(".safetensors"),
-            subfolder=subfolder,
+            subfolder=self.upsampler.weight_cache_subfolder(),
             parallel_config=self.parallel_config,
             mesh_shape=tuple(self.mesh_device.shape),
             mesh_device=self.mesh_device,
