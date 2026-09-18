@@ -596,13 +596,15 @@ def run_view(run_id, fields):
     card time are already in flight, so a transient failure returns None and the
     caller tries again on the next tick.
     """
-    try:
-        return json.loads(
-            sh("gh", "run", "view", str(run_id), "--repo", REPO, "--json", fields)
-        )
-    except RuntimeError as err:
-        print(f"  (transient: {str(err).splitlines()[-1][:80]})")
-        return None
+    for attempt in range(4):
+        try:
+            return json.loads(
+                sh("gh", "run", "view", str(run_id), "--repo", REPO, "--json", fields)
+            )
+        except RuntimeError as err:
+            print(f"  (transient {attempt + 1}/4: {str(err).splitlines()[-1][:70]})")
+            time.sleep(10)
+    return None
 
 
 def run_conclusion(run_id):
@@ -611,6 +613,13 @@ def run_conclusion(run_id):
 
 
 def wait_for(run_ids):
+    """Block until every run finishes. Returns {run_id: conclusion}.
+
+    The conclusions come from the same observation that saw the run complete. An
+    earlier version re-queried afterwards, and a transient failure on that second
+    query read as "did not succeed" -- discarding two runs that had both passed.
+    """
+    conclusions = {}
     deadline = time.time() + RUN_TIMEOUT_SECONDS
     pending = set(run_ids)
     while pending and time.time() < deadline:
@@ -618,11 +627,13 @@ def wait_for(run_ids):
             info = run_view(rid, "status,conclusion")
             if info and info["status"] == "completed":
                 print(f"  run {rid}: {info['conclusion']}")
+                conclusions[rid] = info["conclusion"]
                 pending.discard(rid)
         if pending:
             time.sleep(POLL_SECONDS)
     if pending:
         raise RuntimeError(f"timed out waiting for {sorted(pending)}")
+    return conclusions
 
 
 # --- artifacts --------------------------------------------------------------
@@ -771,9 +782,9 @@ def measure(sha, args, state):
         print(f"  reusing run ids: {run_ids}")
     else:
         run_ids = start_runs(sha, args.runs, args)
-    wait_for(run_ids)
+    conclusions = wait_for(run_ids)
 
-    bad = [r for r in run_ids if run_conclusion(r) != "success"]
+    bad = [r for r in run_ids if conclusions.get(r) != "success"]
     if bad:
         raise RuntimeError(
             f"run(s) {bad} did not succeed; a measurement needs two clean runs"
