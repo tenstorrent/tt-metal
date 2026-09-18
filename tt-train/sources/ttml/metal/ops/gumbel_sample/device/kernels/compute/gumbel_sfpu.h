@@ -7,16 +7,12 @@
 #include <cstdint>
 
 #include "api/compute/common_globals.h"
+#include "tt-train/sources/ttml/metal/ops/gumbel_sample/gumbel_sample_constants.hpp"  // the kGumbel* log constants, shared with the host-side invariant test
 
 #ifdef TRISC_MATH
 #include "llk_math_eltwise_unary_sfpu_macros.h"
 #include "sfpi.h"
 #include "sfpu/ckernel_sfpu_converter.h"
-#ifdef GUMBEL_SAMPLE_PRECISE_LOG
-// The precise branch is the only llk-internal dependency in this header, so the default build
-// carries none.
-#include "sfpu/ckernel_sfpu_log.h"
-#endif
 #endif
 
 /**
@@ -31,7 +27,7 @@
  *
  * Both logs feed only the Gumbel noise magnitude, so they run through a
  * cheap approximation (see gumbel_noise_neg_log) rather than tt-llk's precise
- * minimax body; define GUMBEL_SAMPLE_PRECISE_LOG to use it instead.
+ * minimax body; the host test pins the approximation against std::log.
  *
  * Register discipline: the pass reads its log constants from the three
  * programmable const registers (vConstFloatPrgm0..2), programmed by
@@ -49,22 +45,6 @@ namespace ttml::metal::sfpu {
 
 #ifdef TRISC_MATH
 
-#ifdef GUMBEL_SAMPLE_PRECISE_LOG
-// Source-level debugging toggle, deliberately NOT wired through the factory's defines map: every
-// define the factory emits is derived from an op attribute that compute_program_hash keys on, and
-// this one has no attribute -- emitted from ambient host state (an env var, say) it would change
-// the compiled binary without changing the program hash, silently serving stale cached programs.
-// Flipping it means editing this header, which the JIT source hash does see.
-// Returns -ln(v): both call sites want the negated log, so the default branch folds the
-// negation into its constants; this debug branch pays one register sign flip per call instead.
-sfpi_inline sfpi::vFloat gumbel_noise_neg_log(const sfpi::vFloat v) {
-    return -ckernel::sfpu::_calculate_log_body_no_init_(v);
-}
-
-// The precise body manages its own constants; nothing to program.
-inline void gumbel_score_constants_init() {
-}
-#else
 /**
  * Approximate -ln(v) for the noise chain: exponent split plus one quadratic
  * over the mantissa octave -- 2 MADs, three FULL-FP32 constants read for
@@ -99,10 +79,6 @@ inline void gumbel_score_constants_init() {
  *    sign. Cost: noise tops out near 13.81 instead of 16.64, compressing
  *    only the ~1e-6 upper quantile of the Gumbel tail.
  */
-constexpr float kGumbelNegLn2 = -0x1.62e43p-1F;  // -ln(2), full fp32 -- lives in a Prgm reg
-constexpr float kGumbelPolyB = 0.240234375F;     // fp16a-exact minimax under the ties (inline immediate)
-constexpr float kGumbelPolyC = -0x1.69f218p+0F;  // kGumbelNegLn2 - 3*kGumbelPolyB, fp32-exact
-constexpr float kGumbelPolyD = 0x1.2c7228p+0F;   // 2*kGumbelPolyB - kGumbelNegLn2 + 2^-20, fp32-exact
 
 // Program the log constants into the SFPU's programmable const registers, once per DST batch from
 // gumbel_score_tile_init(). Turning the per-use SFPLOADI immediates (2 call sites x 4 faces = 8
@@ -114,7 +90,8 @@ inline void gumbel_score_constants_init() {
     sfpi::vConstFloatPrgm1 = kGumbelPolyC;
     sfpi::vConstFloatPrgm2 = kGumbelPolyD;
 }
-
+// This approximation is still monotone, so logits ordering holds. However, this introduces a bias which deviates from
+// reproducing softmax from Gumbel-max exactly. We use it for speedup here.
 sfpi_inline sfpi::vFloat gumbel_noise_neg_log(const sfpi::vFloat v) {
     const sfpi::vFloat m = sfpi::setexp(v, 127);
     const sfpi::vFloat poly = m * (m * kGumbelPolyB + sfpi::vConstFloatPrgm1) + sfpi::vConstFloatPrgm2;
@@ -122,7 +99,6 @@ sfpi_inline sfpi::vFloat gumbel_noise_neg_log(const sfpi::vFloat v) {
     const sfpi::vFloat expf = sfpi::convert<sfpi::vFloat>(exp, sfpi::RoundMode::Nearest);
     return expf * sfpi::vConstFloatPrgm0 + poly;
 }
-#endif
 
 template <std::uint32_t LOGITS_DST_OFFSET>
 inline void calculate_gumbel_score(const std::uint32_t inv_temperature_bits) {

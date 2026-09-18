@@ -29,12 +29,6 @@
 
 namespace {
 
-constexpr uint32_t kTileHeight = 32U;
-constexpr uint32_t kTileWidth = 32U;
-constexpr uint32_t kFaceHeight = 16U;
-constexpr uint32_t kFaceWidth = 16U;
-constexpr uint32_t kFaceSize = kFaceHeight * kFaceWidth;
-
 // A boundary record: [valid, row_id, 32 max bit-patterns, 32 indices], padded to a NOC-friendly
 // multiple of 16 bytes. The merge reads only the maxima and indices; valid and row_id are
 // watcher/debug breadcrumbs (the split geometry already fixes which row a record belongs to).
@@ -50,6 +44,8 @@ constexpr uint32_t kOutputSlotBytes = 32U;
 }  // namespace
 
 void kernel_main() {
+    using namespace tt::constants;  // TILE_HEIGHT / TILE_WIDTH / FACE_HEIGHT / FACE_WIDTH / FACE_HW
+
     uint32_t rt_idx = 0U;
     const uint32_t output_address = get_arg_val<uint32_t>(rt_idx++);
     const uint32_t num_tiles = get_arg_val<uint32_t>(rt_idx++);
@@ -84,11 +80,8 @@ void kernel_main() {
     // Receive-slot count in the records CB (the grid-wide worst-case shard fan-in for one row);
     // the outgoing record is staged in the slot just past them.
     constexpr uint32_t max_foreign_shards = get_compile_time_arg_val(4);
-    // Unused since positions moved to local-window staging; the slot is kept so the compile-time
-    // arg indices (and the TensorAccessorArgs offset chain below) stay stable.
-    [[maybe_unused]] constexpr uint32_t num_entries = get_compile_time_arg_val(5);
 
-    constexpr auto output_args = TensorAccessorArgs<6>();
+    constexpr auto output_args = TensorAccessorArgs<5>();
     constexpr auto positions_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
     // Appended past the accessor chain so the hand-numbered offsets above never move; the host
     // appends it in this same position after its accessor appends.
@@ -110,21 +103,18 @@ void kernel_main() {
     PositionWindow positions{};
     if constexpr (do_positions) {
         const auto positions_address_generator = TensorAccessor(positions_args, positions_address);
-        const uint32_t first_entry = start_tile / Wt;
-        const uint32_t last_entry = (start_tile + num_tiles - 1U) / Wt;
-        positions = stage_position_window(
-            cb_positions_idx, positions_address_generator, first_entry, last_entry - first_entry + 1U);
+        positions = stage_position_window(cb_positions_idx, positions_address_generator, start_tile, num_tiles, Wt);
     }
 
     // Only the low 5 bits are consumed here; the reader consumes the high bits (clamped >> 5) of
     // the SAME clamped value -- see PositionWindow::clamped_position for the shared clamp and its
     // rationale.
     auto target_row_of = [&](uint32_t entry) -> uint32_t {
-        return positions.clamped_position(entry, logical_tokens) & (kTileHeight - 1U);
+        return positions.clamped_position(entry, logical_tokens) & (TILE_HEIGHT - 1U);
     };
 
-    uint32_t max_values[kTileHeight];
-    uint32_t arg_max[kTileHeight];
+    uint32_t max_values[TILE_HEIGHT];
+    uint32_t arg_max[TILE_HEIGHT];
 
     // How many of a tile row's 32 rows are real tokens. This bounds the SCAN, not just the
     // write-out: decode produces one token per step, so 31 of 32 rows are padding and scanning them
@@ -136,12 +126,12 @@ void kernel_main() {
             // padding. The host does NOT validate positions -- they live in device memory.
             return 1U;
         }
-        const uint32_t first_token = (tile_row % Ht) * kTileHeight;
+        const uint32_t first_token = (tile_row % Ht) * TILE_HEIGHT;
         if (first_token >= logical_tokens) {
             return 0U;
         }
         const uint32_t remaining = logical_tokens - first_token;
-        return (remaining < kTileHeight) ? remaining : kTileHeight;
+        return (remaining < TILE_HEIGHT) ? remaining : TILE_HEIGHT;
     };
 
     // Emit a group's token ids. Output pages run row-major over [B, 1, tokens] normally, and over
@@ -156,7 +146,7 @@ void kernel_main() {
     // ring never under-waits.
     uint32_t staging_cursor = 0U;
     auto stage_and_write = [&](uint32_t page, uint32_t value) {
-        if (staging_cursor == kTileHeight) {
+        if (staging_cursor == TILE_HEIGHT) {
             // Every slot may still have a write outbound; drain them all before recycling slot 0.
             noc_async_write_barrier();
             staging_cursor = 0U;
@@ -172,7 +162,7 @@ void kernel_main() {
             stage_and_write(tile_row, arg_max[target_row_of(tile_row)]);
             return;
         }
-        const uint32_t page_base = (tile_row / Ht) * logical_tokens + (tile_row % Ht) * kTileHeight;
+        const uint32_t page_base = (tile_row / Ht) * logical_tokens + (tile_row % Ht) * TILE_HEIGHT;
         for (uint32_t h = 0U; h < valid_rows; ++h) {
             stage_and_write(page_base + h, arg_max[h]);
         }
@@ -192,9 +182,9 @@ void kernel_main() {
         // exactly one row per owner, so no row-id matching is needed).
         rec[0] = 1U;
         rec[1] = tile_row;
-        for (uint32_t h = 0U; h < kTileHeight; ++h) {
+        for (uint32_t h = 0U; h < TILE_HEIGHT; ++h) {
             rec[2U + h] = max_values[h];
-            rec[2U + kTileHeight + h] = arg_max[h];
+            rec[2U + TILE_HEIGHT + h] = arg_max[h];
         }
         // Record first, then the increment: the write barrier orders them, so the owner's
         // semaphore never counts a record that has not landed.
@@ -225,7 +215,7 @@ void kernel_main() {
     };
 
     auto reset_accumulators = [&]() {
-        for (uint32_t h = 0U; h < kTileHeight; ++h) {
+        for (uint32_t h = 0U; h < TILE_HEIGHT; ++h) {
             max_values[h] = NEG_INF_FLOAT32;
             arg_max[h] = 0U;
         }
@@ -249,7 +239,7 @@ void kernel_main() {
 
         cb_wait_front(cb_scores_idx, onetile);
         auto* tile_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_scores_idx));
-        const uint32_t tile_col_base = (global_tile % Wt) * kTileWidth;
+        const uint32_t tile_col_base = (global_tile % Wt) * TILE_WIDTH;
 
         // Rows worth scanning in this tile. Normally that is every real token row; with positions
         // it is the single row the entry asked for, and the accumulator it lands in is indexed by
@@ -257,9 +247,14 @@ void kernel_main() {
         const uint32_t row_begin = do_positions ? target_row_of(current_row) : 0U;
         const uint32_t row_end = do_positions ? row_begin + 1U : current_valid;
 
+        // Walked face-by-face rather than via get_tilized_idx: the scan visits every element in
+        // order, so the face geometry is baked into the loop bounds once instead of re-derived
+        // (mods + branches) per element in the kernel's hottest loop -- and making the face a loop
+        // level is what allows the two `continue`s below to reject 256 elements (a whole face of
+        // vocab padding, or one outside the wanted row window) with a single comparison.
         for (uint32_t face = 0U; face < 4U; ++face) {
-            const uint32_t face_row_base = (face >= 2U) ? kFaceHeight : 0U;
-            const uint32_t face_col_base = (face & 1U) ? kFaceWidth : 0U;
+            const uint32_t face_row_base = (face >= 2U) ? FACE_HEIGHT : 0U;
+            const uint32_t face_col_base = (face & 1U) ? FACE_WIDTH : 0U;
             const uint32_t global_col_base = tile_col_base + face_col_base;
 
             // Columns past the logical vocab are tile padding; so are rows outside [begin, end).
@@ -267,20 +262,20 @@ void kernel_main() {
                 continue;
             }
             const uint32_t first_row = (row_begin > face_row_base) ? row_begin : face_row_base;
-            const uint32_t face_row_end = face_row_base + kFaceHeight;
+            const uint32_t face_row_end = face_row_base + FACE_HEIGHT;
             const uint32_t last_row = (row_end < face_row_end) ? row_end : face_row_end;
             if (first_row >= last_row) {
                 continue;
             }
             const uint32_t cols_left = logical_vocab - global_col_base;
-            const uint32_t cols_to_scan = (cols_left < kFaceWidth) ? cols_left : kFaceWidth;
+            const uint32_t cols_to_scan = (cols_left < FACE_WIDTH) ? cols_left : FACE_WIDTH;
 
-            const uint32_t face_offset = face * kFaceSize;
+            const uint32_t face_offset = face * FACE_HW;
             for (uint32_t row_in_tile = first_row; row_in_tile < last_row; ++row_in_tile) {
                 uint32_t running_max = max_values[row_in_tile];
                 uint32_t running_arg = arg_max[row_in_tile];
 
-                const uint32_t row_offset = face_offset + (row_in_tile - face_row_base) * kFaceWidth;
+                const uint32_t row_offset = face_offset + (row_in_tile - face_row_base) * FACE_WIDTH;
                 for (uint32_t cc = 0U; cc < cols_to_scan; ++cc) {
                     const uint32_t value = tile_ptr[row_offset + cc];
                     // Strict greater, scanning columns in increasing global order, so ties keep the
@@ -312,9 +307,9 @@ void kernel_main() {
         // needed.
         for (uint32_t s = 0U; s < expected_shards; ++s) {
             auto* rec = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(records_base + s * kRecordBytes);
-            for (uint32_t h = 0U; h < kTileHeight; ++h) {
+            for (uint32_t h = 0U; h < TILE_HEIGHT; ++h) {
                 const uint32_t v = rec[2U + h];
-                const uint32_t i = rec[2U + kTileHeight + h];
+                const uint32_t i = rec[2U + TILE_HEIGHT + h];
                 // Ties keep the lower index, matching the in-row scan.
                 if (float32_greater(v, max_values[h]) || (v == max_values[h] && i < arg_max[h])) {
                     max_values[h] = v;

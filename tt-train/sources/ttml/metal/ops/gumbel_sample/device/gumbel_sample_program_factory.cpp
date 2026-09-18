@@ -31,12 +31,9 @@ constexpr uint32_t kReaderLogitsBufferIdx = 0U;
 constexpr uint32_t kReaderMaskBufferIdx = 1U;
 // writer runtime arg slots
 constexpr uint32_t kWriterOutputBufferIdx = 0U;
-// compute runtime arg slots
+// compute runtime arg slots. Slots 1 and 2 (skipped below) hold the rand from/scale bits --
+// process constants set once at build and never re-patched on cache hits, so no index names them.
 constexpr uint32_t kComputeSeedIdx = 0U;
-// Slots 1 and 2 hold the rand from/scale bits -- process constants set once at build and never
-// re-patched on cache hits, so nothing reads these indices; they stay to document the layout.
-[[maybe_unused]] constexpr uint32_t kComputeRandFromIdx = 1U;
-[[maybe_unused]] constexpr uint32_t kComputeRandScaleIdx = 2U;
 constexpr uint32_t kComputeInvTemperatureIdx = 3U;
 constexpr uint32_t kComputeRandStreamIdx = 4U;
 
@@ -388,11 +385,10 @@ tt::tt_metal::Program build_program(
     // Ht is NOT here: it is a runtime arg, so that one program serves every prompt length. Keep this
     // count in step with TensorAccessorArgs<N> in reader_gumbel_sample.cpp -- the accessor offset is
     // hard-coded there and the mask accessor chains off it, so a mismatch misdecodes the accessor
-    // words (page size read as the config flags) instead of failing to compile.
-    // num_entries is NC = padded_shape[0] * padded_shape[1] -- token-INDEPENDENT, so it adds no new
-    // cache-miss source. Anything derived from the token dimension must never land in a compile-time
-    // arg here; that is what the normalized program hash depends on.
-    std::vector<uint32_t> reader_ct_args{layout.block_size, layout.Wt, layout.num_entries};
+    // words (page size read as the config flags) instead of failing to compile. Anything derived
+    // from the token dimension must never land in a compile-time arg here; that is what the
+    // normalized program hash depends on.
+    std::vector<uint32_t> reader_ct_args{layout.block_size, layout.Wt};
     tt::tt_metal::TensorAccessorArgs(logits_buffer).append_to(reader_ct_args);
     if (has_mask) {
         tt::tt_metal::TensorAccessorArgs(mask_buffer).append_to(reader_ct_args);
@@ -415,7 +411,7 @@ tt::tt_metal::Program build_program(
     // nothing never wait on it.
     const uint32_t reduction_sem_id = tt::tt_metal::CreateSemaphore(program, layout.all_cores, 0);
 
-    // Keep this count in step with TensorAccessorArgs<6> in writer_gumbel_sample.cpp -- the
+    // Keep this count in step with TensorAccessorArgs<5> in writer_gumbel_sample.cpp -- the
     // accessor offset is hard-coded there and the positions accessor chains off it, so a mismatch
     // misdecodes the accessor words (page size read as the config flags) instead of failing to
     // compile.
@@ -437,8 +433,7 @@ tt::tt_metal::Program build_program(
         // is ever refactored away.
         layout.position_aware ? 1U : layout.Ht,
         reduction_sem_id,
-        max_foreign_shards,
-        layout.num_entries};
+        max_foreign_shards};
     tt::tt_metal::TensorAccessorArgs(output_buffer).append_to(writer_ct_args);
     if (layout.position_aware) {
         tt::tt_metal::TensorAccessorArgs(tensor_args.positions->buffer()).append_to(writer_ct_args);

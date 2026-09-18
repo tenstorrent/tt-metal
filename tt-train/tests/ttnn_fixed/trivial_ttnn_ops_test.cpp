@@ -20,6 +20,7 @@
 #include "core/compute_kernel_config.hpp"
 #include "core/device.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "metal/ops/gumbel_sample/gumbel_sample_constants.hpp"
 #include "test_utils/random_data.hpp"
 #include "ttnn/operations/normalization/softmax/softmax.hpp"
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
@@ -1332,14 +1333,13 @@ TEST_F(TrivialTnnFixedTest, TestSamplingWideRowManyOwners) {
 
 namespace {
 
-// gumbel_sfpu.h's approximate log, re-derived on the host. The four constants are DUPLICATED from
-// ttml::metal::sfpu::gumbel_noise_neg_log in gumbel_sfpu.h -- keep them in sync with that header. The
-// header itself is TRISC-only, so the invariants the kernel relies on are pinned here by
-// reconstruction.
-constexpr float kApproxNegLogLn2 = -0x1.62e43p-1F;
-constexpr float kApproxLogB = 0.240234375F;
-constexpr float kApproxLogC = -0x1.69f218p+0F;
-constexpr float kApproxLogD = 0x1.2c7228p+0F;
+// gumbel_sfpu.h's approximate log, re-derived on the host. The four constants come straight from
+// gumbel_sample_constants.hpp -- the same header the TRISC pass compiles against -- so the
+// polynomial whose invariants are pinned below is, by construction, the one the kernel runs.
+constexpr float kApproxNegLogLn2 = ttml::metal::sfpu::kGumbelNegLn2;
+constexpr float kApproxLogB = ttml::metal::sfpu::kGumbelPolyB;
+constexpr float kApproxLogC = ttml::metal::sfpu::kGumbelPolyC;
+constexpr float kApproxLogD = ttml::metal::sfpu::kGumbelPolyD;
 
 // The NEGATED mantissa polynomial q(m) = m*(m*B + C) + D = -p(m) on the octave [1, 2), in double.
 // The kernel returns -ln directly (negation folded into the constants), so the mirror does too.

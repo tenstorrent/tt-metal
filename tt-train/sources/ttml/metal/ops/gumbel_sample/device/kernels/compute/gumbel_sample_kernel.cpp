@@ -19,16 +19,15 @@
 #include <cstdint>
 
 #include "api/compute/cb_api.h"
-#include "api/compute/compute_kernel_api.h"  // pack_tile, tile_regs_*
+#include "api/compute/compute_kernel_api.h"  // tile_regs_*
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/eltwise_unary/rand.h"
-#include "api/compute/pack.h"
-#include "api/compute/reconfig_data_format.h"
 #include "api/compute/reg_api.h"
 #include "api/compute/sfpu_binary_bcast.h"  // sfpu_sub_bcast_row, the mask apply
 #include "api/compute/tile_move_copy.h"
 #include "gumbel_sfpu.h"  // gumbel_score_tile, the fused noise/scale/add pass
+#include "tt-train/sources/ttml/metal/common/compute_utils.hpp"  // pack_and_push_block
 
 constexpr uint32_t num_tiles = get_compile_time_arg_val(0);
 constexpr uint32_t block_size = get_compile_time_arg_val(1);
@@ -103,9 +102,6 @@ void kernel_main() {
     compute_kernel_hw_startup(cb_logits, cb_scores);
     init_sfpu(cb_logits, cb_scores);
 
-    // The packer only ever emits cb_scores, so its format is loop-invariant.
-    pack_reconfig_data_format(cb_scores);
-
     // One init for the whole core: the LFSR then advances monotonically across every rand_tile call
     // below. Combined with the (device, core) specific stream id this makes the noise reproducible
     // for a given seed and work split, and disjoint across cores and data-parallel devices.
@@ -131,7 +127,6 @@ void kernel_main() {
             for (uint32_t k = 0U; k < current; k += dst_batch) {
                 const uint32_t batch = (current - k < dst_batch) ? (current - k) : dst_batch;
 
-                cb_reserve_back(cb_scores, batch);
                 tile_regs_acquire();
 
                 if constexpr (do_gumbel_noise) {
@@ -198,14 +193,7 @@ void kernel_main() {
                 }
 
                 tile_regs_commit();
-
-                tile_regs_wait();
-                for (uint32_t i = 0U; i < batch; ++i) {
-                    pack_tile(score_base + i, cb_scores);
-                }
-                tile_regs_release();
-
-                cb_push_back(cb_scores, batch);
+                pack_and_push_block(cb_scores, batch);
             }
 
             cb_pop_front(cb_logits, current);

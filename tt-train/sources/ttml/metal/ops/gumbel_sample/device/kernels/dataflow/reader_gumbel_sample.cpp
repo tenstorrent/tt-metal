@@ -43,11 +43,8 @@ void kernel_main() {
 
     constexpr uint32_t block_size = get_compile_time_arg_val(0);
     constexpr uint32_t Wt = get_compile_time_arg_val(1);
-    // Unused since positions moved to local-window staging; the slot is kept so the compile-time
-    // arg indices (and the TensorAccessorArgs offset chain below) stay stable.
-    [[maybe_unused]] constexpr uint32_t num_entries = get_compile_time_arg_val(2);
 
-    constexpr auto logits_args = TensorAccessorArgs<3>();
+    constexpr auto logits_args = TensorAccessorArgs<2>();
     constexpr auto mask_args = TensorAccessorArgs<logits_args.next_compile_time_args_offset()>();
     constexpr auto positions_args = TensorAccessorArgs<mask_args.next_compile_time_args_offset()>();
     // Mode flags ride at the END of the compile-time args, past the accessor chain, so the
@@ -69,10 +66,7 @@ void kernel_main() {
     PositionWindow positions{};
     if constexpr (do_positions) {
         const auto positions_address_generator = TensorAccessor(positions_args, positions_address);
-        const uint32_t first_entry = start_tile / Wt;
-        const uint32_t last_entry = (start_tile + num_tiles - 1U) / Wt;
-        positions = stage_position_window(
-            cb_positions_idx, positions_address_generator, first_entry, last_entry - first_entry + 1U);
+        positions = stage_position_window(cb_positions_idx, positions_address_generator, start_tile, num_tiles, Wt);
     }
 
     // With positions supplied, the indices this loop walks are VIRTUAL: one tile row per batch

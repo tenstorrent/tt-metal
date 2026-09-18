@@ -689,9 +689,9 @@ inline void mcast_sender_signal_receivers_loopback(
 // row within that tile) -- so the staging loop, the slot addressing and the clamp live here,
 // single-sourced: a stride or bounds change cannot silently desync the two halves.
 //
-// Only the window [first_entry, first_entry + entry_count) is staged: a core's contiguous tile
-// run touches exactly that entry range, and every consumer (the reader's page lookup, the
-// writer's scan bounds, the writer's merge of the one row it owns) dereferences entries inside
+// Only the entry window the core's contiguous tile run touches is staged (stage_position_window
+// derives it from the run itself), and every consumer (the reader's page lookup, the writer's
+// scan bounds, the writer's merge of the one row it owns) dereferences entries inside
 // it. Staging the whole list would cost num_entries tiny DRAM page reads per core per kernel and
 // num_entries aligned pages of L1 -- both scaling with the GLOBAL batch rather than the core's
 // share of it.
@@ -720,16 +720,21 @@ struct PositionWindow {
     }
 };
 
+// Derives the window from the core's contiguous tile run [start_tile, start_tile + num_tiles) in
+// the position-mode virtual tile space (Wt tiles per entry): the run touches exactly the entries
+// start_tile / Wt ..= (start_tile + num_tiles - 1) / Wt. Derived HERE, once, so the two consuming
+// kernels cannot compute different windows for the same run.
 template <typename AddressGenerator>
 inline PositionWindow stage_position_window(
-    uint32_t cb_idx, const AddressGenerator& address_generator, uint32_t first_entry, uint32_t entry_count) {
+    uint32_t cb_idx, const AddressGenerator& address_generator, uint32_t start_tile, uint32_t num_tiles, uint32_t Wt) {
     PositionWindow window;
     window.slot_bytes = address_generator.get_aligned_page_size();
     window.l1_base = get_write_ptr(cb_idx);
-    window.first_entry = first_entry;
+    window.first_entry = start_tile / Wt;
+    const uint32_t last_entry = (start_tile + num_tiles - 1U) / Wt;
     uint32_t l1_addr = window.l1_base;
-    for (uint32_t e = 0U; e < entry_count; ++e) {
-        noc_async_read_page(first_entry + e, address_generator, l1_addr);
+    for (uint32_t e = window.first_entry; e <= last_entry; ++e) {
+        noc_async_read_page(e, address_generator, l1_addr);
         l1_addr += window.slot_bytes;
     }
     noc_async_read_barrier();
