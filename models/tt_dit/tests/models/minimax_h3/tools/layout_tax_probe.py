@@ -47,6 +47,11 @@ def _time(mesh_device, fn, reps=REPS):
 
 
 def _conv3d_us(mesh_device, x_BTC, c_out, kernel, compute):
+    """Time one conv3d at this shape. The weight is a raw ``(kernel*C, c_out)`` random matrix, which
+    `conv3d` takes as already prepared and which therefore lacks the C-in-block permutation a real
+    weight gets: correct for a timing probe, since cost follows the shapes and the blocking config
+    rather than where the elements sit, but the output values are meaningless -- do not reuse this
+    helper to check numerics."""
     B, T, C = x_BTC.shape
     cfg = get_conv3d_config(
         C, c_out, (kernel, 1, 1), ttnn.float32, grid_size=mesh_device.compute_with_storage_grid_size()

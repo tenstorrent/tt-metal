@@ -7,7 +7,7 @@
 
 Single device. Nothing here loads a checkpoint or touches the weight cache.
 
-    pytest probe_bf8_sdpa.py -q -s
+    pytest models/tt_dit/tests/models/minimax_h3/tools/matmul_precision_probe.py -q -s
 """
 
 import time

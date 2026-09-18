@@ -59,6 +59,14 @@ STACK_BLOCKS = 3
 DEFAULT_MAX_C_IN_BLOCK = 128
 
 
+# Bumped whenever `prepare_conv3d_weight_state` changes the bytes it writes for an unchanged file
+# set, because `cache.load_model` will otherwise serve an old cache to new code. Revision 2: the
+# no-residual path began rounding weights to bf16 on the host, which moved the bytes of every
+# configuration that carries a conv without a residual term (off, act, resampler-split off). It is
+# applied to every variant, not just those, so the rule stays "changed the bytes, bump the token".
+_WEIGHT_PREP_REVISION = 2
+
+
 def weights_variant(
     split_mode: str,
     max_c_in_block: int = DEFAULT_MAX_C_IN_BLOCK,
@@ -66,6 +74,9 @@ def weights_variant(
     resampler_split_mode: str | None = None,
 ) -> str:
     """Cache-key suffix for the precision levers that change the prepared parameter set.
+
+    The returned suffix ends in ``_wp<N>`` (see ``_WEIGHT_PREP_REVISION``), so a cache written by an
+    older preparation is a miss rather than a silently different fidelity.
 
     ``split_mode`` decides whether the ``weight_lo`` residual parameters exist, so device-weight
     caches prepared under different settings hold different ``.tensorbin`` sets and are not
@@ -85,7 +96,7 @@ def weights_variant(
         suffix += "_pack" + "-".join(f"{b}x{k}" for b, k in sorted(pack_bands.items()))
         if resampler_split_mode is not None and resampler_split_mode != split_mode:
             suffix += f"_rs-{resampler_split_mode}"
-    return suffix
+    return f"{suffix}_wp{_WEIGHT_PREP_REVISION}"
 
 
 def _split_operand(x: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
