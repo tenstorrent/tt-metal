@@ -906,3 +906,40 @@ def test_softmax_large_kernel_mask_padded(device, shape, dim):
         ulp_threshold=15,
         check_ulp=True,
     )
+
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
+def test_softmax_special_values_inf_nan_rows(device, dtype):
+    """
+    Regression test for issue #56056:
+    ttnn.softmax should preserve NaN and not produce false uniform distributions
+    on all-inf (fully masked) rows or rows containing NaN / +inf.
+    """
+    # 1. All -inf row (e.g. fully masked attention row)
+    t_all_neginf = torch.full((1, 1, 1, 64), float("-inf"))
+    # 2. Row with one +inf amid finite values
+    t_one_posinf = torch.cat([torch.zeros(1, 1, 1, 63), torch.full((1, 1, 1, 1), float("inf"))], dim=-1)
+    # 3. Row with NaN amid finite values
+    t_one_nan = torch.zeros(1, 1, 1, 64)
+    t_one_nan[0, 0, 0, 5] = float("nan")
+
+    for name, torch_input in [
+        ("all_neginf", t_all_neginf),
+        ("one_posinf", t_one_posinf),
+        ("one_nan", t_one_nan),
+    ]:
+        torch_expected = F.softmax(torch_input, dim=-1)
+        ttnn_input = ttnn.from_torch(
+            torch_input.to(torch.float32 if dtype == ttnn.float32 else torch.bfloat16),
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            preserve_nan_values=True,
+        )
+        ttnn_out = ttnn.softmax(ttnn_input, dim=-1, numeric_stable=True)
+        out_torch = ttnn.to_torch(ttnn_out)
+
+        # Expected behavior: output should be NaN, matching torch golden
+        assert torch.isnan(out_torch).all() or torch.isnan(torch_expected).all(), (
+            f"Failed on {name} for {dtype}: output should propagate NaN matching golden"
+        )
