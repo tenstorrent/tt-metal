@@ -49,21 +49,30 @@ from .weight_cache import WeightCache, _as_cache, _load_weight, _materialize, _m
 class SparseRouting(NamedTuple):
     """A routing decision in the form ``fused_experts`` consumes it.
 
-    The op takes the selected expert ids and the score row they index and does the
-    normalize/scale itself, so the router hands over ``ttnn.topk``'s output untouched.
-    Widening this into a dense ``[1,1,T,E]`` weight row (scatter a one-hot mask, mask the
-    scores, sum, divide, scale, relayout -- nine device ops) only to have the op's first
-    kernel scan those E columns straight back down to k values is pure round-tripping.
+    Exactly one of ``ranking`` / ``indices`` says *which* experts were selected, and both
+    are handed to the op untouched -- it does the normalize/scale itself. Widening this
+    into a dense ``[1,1,T,E]`` weight row (scatter a one-hot mask, mask the scores, sum,
+    divide, scale, relayout -- nine device ops) only to have the op's first kernel scan
+    those E columns straight back down to k values is pure round-tripping.
 
-    ``scores``: ``[1,1,T,E]`` TILE bf16, the *unbiased* per-expert scores -- the values
-    that become the weights. ``indices``: ``[1,1,T,k]`` TILE, which experts won: uint16
-    from the learned router's topk (possibly ranked on a bias-corrected copy of
-    ``scores``), bf16 from the hash router's table lookup, since ``ttnn.embedding``
-    gathers only bf16. The op reads either.
+    ``scores``: ``[1,1,T,E]`` bf16, the *unbiased* per-expert scores -- the values that
+    become the weights. TILE, or (T == 1) ROW_MAJOR.
+
+    ``ranking``: ``[1,1,T,E]`` bf16, the row to rank on -- normally
+    ``scores + e_score_correction_bias``. The expert op top-k's it on device, on the
+    leader core that already reads the row for the weights, so the router needs neither a
+    ``ttnn.topk`` launch nor a DRAM round-trip of its id output. This is what the learned
+    router fills in.
+
+    ``indices``: ``[1,1,T,k]`` TILE, the already-chosen ids (bf16, since that is the only
+    dtype ``ttnn.embedding`` gathers), which the op reads instead of ranking. This is what
+    the hash router fills in, whose selection is a frozen table lookup rather than a
+    top-k.
     """
 
     scores: ttnn.Tensor
-    indices: ttnn.Tensor
+    indices: Optional[ttnn.Tensor] = None
+    ranking: Optional[ttnn.Tensor] = None
 
 
 # Guards the per-token renormalize against an all-zero score row. Configured by
@@ -350,10 +359,12 @@ def _make_router_gate(
 class DeepSeekV4TopKRouter(DeepSeekV4Module):
     """ttnn port of ``DeepseekV4TopKRouter``.
 
-    ``sqrtsoftplus`` of the gate logits gives per-expert scores, and the top-k experts are
-    selected by ``ttnn.topk`` on ``scores + e_score_correction_bias``. That pair -- the
-    unbiased scores and the winning ids -- is the whole routing decision, and it is what
-    :class:`DeepSeekV4PreloadedExperts` is handed (see :class:`SparseRouting`).
+    ``sqrtsoftplus`` of the gate logits gives per-expert scores; the bias-corrected row
+    ``scores + e_score_correction_bias`` *is* the routing decision this module emits, and
+    the top-k is taken inside ``fused_experts`` (see :class:`SparseRouting`). That removes
+    a ``ttnn.topk`` -- and the DRAM round-trip of its id output -- from every step, and the
+    op ranks on the row it has to read anyway for the weights, on the same core that
+    broadcasts the winners.
 
     The renormalize-and-scale tail the reference applies to the selected scores happens
     inside ``fused_experts``, on the k values per token it already has to read, rather
@@ -373,6 +384,9 @@ class DeepSeekV4TopKRouter(DeepSeekV4Module):
     ):
         self.device = device
         self.num_experts = config.num_local_experts
+        # The top-k itself is applied inside ``fused_experts`` now (on the ranking row this
+        # module emits); kept here because it is the router's k and the hash router exposes
+        # the same attribute.
         self.top_k = config.num_experts_per_tok
         self.routed_scaling_factor = config.routed_scaling_factor
         cache = _as_cache(cache)
@@ -393,6 +407,7 @@ class DeepSeekV4TopKRouter(DeepSeekV4Module):
             bias.reshape(1, 1, 1, self.num_experts) if bias is not None else None,
             device,
             cache_file_name=cache.file("gate.e_score_correction_bias"),
+            layout=ttnn.ROW_MAJOR_LAYOUT,
         )
 
     def prefetch_weights(self):
@@ -410,28 +425,21 @@ class DeepSeekV4TopKRouter(DeepSeekV4Module):
         return ttnn.sqrt(ttnn.softplus(self.gate(x)))
 
     def forward(self, x_flat: ttnn.Tensor) -> SparseRouting:
-        """``x_flat`` is ``[1, 1, T, H]``; returns the selected experts and their scores.
+        """``x_flat`` is ``[1, 1, T, H]``; returns the ranking row and the score row.
 
         Trace-safe as it stands, so prefill and the captured decode share this one path:
         every op here allocates its own output and nothing is host-initialised.
         """
         assert x_flat.layout == ttnn.ROW_MAJOR_LAYOUT, "x_flat must be in row-major layout"
         scores = self._scores(x_flat)  # [1, 1, T, E]
-        # A hub-mode gate emits the decode stick: ROW_MAJOR, one row per core. ``topk``
-        # takes whole tiles, and the bias it is added to is TILE, so tilize first -- via
-        # DRAM, because re-sharding a one-row shard straight to a 32-row one is invalid
-        # (see ``DeepSeekV4RMSNorm.forward``).
-        if scores.layout == ttnn.ROW_MAJOR_LAYOUT:
-            scores = ttnn.to_layout(ttnn.to_memory_config(scores, ttnn.DRAM_MEMORY_CONFIG), ttnn.TILE_LAYOUT)
+
         # Ranked on the bias-corrected scores, weighted by the uncorrected ones -- which is
-        # why both halves of the pair travel to the expert op instead of just the winners'
-        # values. topk's ids are returned exactly as produced: TILE uint16, [1,1,T,k].
+        # why both rows travel to the expert op instead of just the winners' values. The op
+        # top-k's `biased` on device and gathers `scores` at the winners, so there is no
+        # ttnn.topk here and no id tensor to round-trip through DRAM.
         biased = ttnn.add(scores, self.e_score_correction_bias)
         _profile(self.device)
-        biased = ttnn.to_memory_config(biased, ttnn.DRAM_MEMORY_CONFIG)
-        _, top_idx = ttnn.topk(biased, self.top_k, dim=-1)
-        scores = ttnn.to_memory_config(scores, ttnn.DRAM_MEMORY_CONFIG)
-        return SparseRouting(scores=scores, indices=top_idx)
+        return SparseRouting(scores=scores, ranking=biased)
 
 
 class DeepSeekV4HashRouter(DeepSeekV4Module):
@@ -442,8 +450,9 @@ class DeepSeekV4HashRouter(DeepSeekV4Module):
     token-id -> expert-id table — rather than a learned top-k argmax. The learned
     gate still produces the per-expert ``sqrtsoftplus`` scores that weight the
     selected experts; only the *which-experts* decision is static. The output is the
-    same :class:`SparseRouting` pair the learned router emits, so both feed the expert
-    compute through one contract.
+    same :class:`SparseRouting` contract the learned router emits -- it fills
+    ``indices`` from the table lookup where the learned router fills ``ranking`` -- so
+    both feed the expert compute through one contract.
 
     The selection is gathered *fully on device* by embedding the token id in the frozen
     ``tid2eid`` table, which is already the ``[vocab, k]`` list of expert ids the sparse
@@ -857,24 +866,33 @@ class DeepSeekV4PreloadedExperts(DeepSeekV4Module):
 
     def _run_fused(self, x_tok: ttnn.Tensor, routing: SparseRouting) -> ttnn.Tensor:
         """Run ``fused_experts`` for one token. ``x_tok`` is ``[1,1,1,H]`` (TILE) and
-        ``routing`` that token's slice of the router's output; returns ``[1,1,1,H]``.
+        ``routing`` that token's routing decision; returns ``[1,1,1,H]``.
 
         ``num_experts`` is always ``top_k``: one token selects at most that many distinct
         experts, so the op's program -- and any trace holding it -- is the same every step.
-        Both tensors go in exactly as the router produced them: the op reads the ids and
-        the score row out of their tiles and applies the normalize-and-scale tail itself.
+
+        Both tensors go in exactly as the router produced them. When the router hands over
+        a ``ranking`` row (the learned router) the op finds the top-k itself; when it hands
+        over ``indices`` (the hash router's table lookup) the op reads those instead. Either
+        way the op applies the normalize-and-scale tail itself.
 
         ``experts_block_size`` (``moe.experts_block_size``) is how many experts' SwiGLU
         activations are resident at once. It sizes the op's dominant per-core CB, so it is
         the knob to turn when the op's static CBs collide with the L1 buffers live at the
         call; the cost is one extra chip-wide gather/broadcast barrier per block.
         """
-        indices = ttnn.to_memory_config(routing.indices, ttnn.DRAM_MEMORY_CONFIG)
         scores = ttnn.to_memory_config(routing.scores, ttnn.DRAM_MEMORY_CONFIG)
+        indices = None
+        ranking = None
+        if routing.ranking is not None:
+            ranking = ttnn.to_memory_config(routing.ranking, ttnn.DRAM_MEMORY_CONFIG)
+        else:
+            indices = ttnn.to_memory_config(routing.indices, ttnn.DRAM_MEMORY_CONFIG)
         out = ttnn.experimental.deepseek.moe.fused_experts(
             x_tok,
-            routing_indices=indices,
             routing_scores=scores,
+            routing_indices=indices,
+            ranking_scores=ranking,
             gate_up_weights=self._gate_up_fused,
             down_weights=self._down_fused,
             num_experts=self.top_k,
@@ -889,8 +907,14 @@ class DeepSeekV4PreloadedExperts(DeepSeekV4Module):
 
     def _token_routing(self, routing: SparseRouting, i: int) -> SparseRouting:
         """Token ``i``'s slice of a ``T``-token routing decision."""
+        scores = ttnn.slice(routing.scores, [0, 0, i, 0], [1, 1, i + 1, self.num_experts])
+        if routing.ranking is not None:
+            return SparseRouting(
+                scores=scores,
+                ranking=ttnn.slice(routing.ranking, [0, 0, i, 0], [1, 1, i + 1, self.num_experts]),
+            )
         return SparseRouting(
-            scores=ttnn.slice(routing.scores, [0, 0, i, 0], [1, 1, i + 1, self.num_experts]),
+            scores=scores,
             indices=ttnn.slice(routing.indices, [0, 0, i, 0], [1, 1, i + 1, self.top_k]),
         )
 
