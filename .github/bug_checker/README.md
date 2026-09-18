@@ -154,6 +154,11 @@ python .github/bug_checker/run_bug_checker.py --branch --subcommand dry-run
 - Current rules:
   - `ccl-ring-buffer-mismatch` — blocking, paths: `tt_metal/impl/ccl/**`, `ttnn/cpp/ttnn/operations/ccl/**`, labels: `area:ccl`
   - `reshape-dim-check` — warning, paths: `ttnn/cpp/ttnn/operations/data_movement/**`, labels: `area:ops`
+  - `program-cache-hash-collision` — blocking, paths: `ttnn/cpp/ttnn/operations/**/device/*device_operation*`, `ttnn/cpp/ttnn/operations/**/device/*_op.cpp`, `ttnn/cpp/ttnn/operations/**/device/*_op.hpp`, `tt-train/sources/**/device/*device*`
+  - `smuggled-buffer-runtime-arg` — blocking, paths: `ttnn/cpp/ttnn/operations/**/device/*factory*`, `ttnn/cpp/ttnn/operations/**/device/*program*`, `ttnn/cpp/ttnn/operations/**/device/*device_operation*`, `ttnn/cpp/ttnn/operations/**/device/*_op.cpp`, `ttnn/cpp/ttnn/operations/**/device/*_op.hpp`, `ttnn/cpp/ttnn/operations/**/device/*fusion*`, `tt_metal/impl/program/**`, `tt-train/sources/**/device/*program_factory*`
+  - `override-rebuild-in-cache-hit` — blocking, paths: `ttnn/cpp/ttnn/operations/**/device/*factory*`, `ttnn/cpp/ttnn/operations/**/device/*program*`, `ttnn/cpp/ttnn/operations/**/device/*device_operation*`, `ttnn/cpp/ttnn/operations/**/device/*_op.cpp`, `ttnn/cpp/ttnn/operations/**/device/*_op.hpp`, `ttnn/cpp/ttnn/operations/**/device/*fusion*`
+  - `llk-stale-hw-config-state` — blocking, paths: `tt_metal/tt-llk/**/llk_lib/**`, `tt_metal/tt-llk/**/common/inc/**`, `tt_metal/hw/ckernels/**/llk_api/**`, labels: `area:llk`
+  - `op-shard-layout-validation` — warning, paths: `ttnn/cpp/ttnn/operations/**/device/*device_operation*`, `ttnn/cpp/ttnn/operations/**/device/*_op.cpp`, `ttnn/cpp/ttnn/operations/**/device/*_op.hpp`, labels: `area:ops`
 
 ### LLM Analysis — `llm.py` : `LLMSession.analyze_rule()`
 
