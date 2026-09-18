@@ -563,13 +563,22 @@ void IndexerScoreDeviceOperation::validate_on_program_cache_miss(
                     ttnn::operations::ccl::common::has_row_major_mesh_coordinates(w) &&
                     ttnn::operations::ccl::common::has_row_major_mesh_coordinates(kl),
                 "indexer_score fused full-mesh mode requires row-major tensor coordinates");
+            // Extents, not placements. A sharded activation can carry a shard dim naming the axis it was
+            // created on rather than the one its rows now sit on, which makes a placement-derived factor
+            // under-count; the distribution itself is the caller's contract, checked by coordinates above.
             TT_FATAL(
-                ttnn::operations::ccl::common::tensor_dim_shard_factor(q, 2) == ring_size &&
-                    ttnn::operations::ccl::common::tensor_dim_shard_factor(w, 2) == ring_size &&
-                    ttnn::operations::ccl::common::tensor_dim_shard_factor(kl, 2) == ring_size,
-                "indexer_score fused full-mesh mode requires Q, weights, and K-local sequence sharding across "
-                "all {} devices",
-                ring_size);
+                kl.logical_shape()[2] * ring_size == k.logical_shape()[2],
+                "indexer_score fused full-mesh mode expects K-local to be 1/{} of the gathered K extent; got "
+                "{} and {}",
+                ring_size,
+                kl.logical_shape()[2],
+                k.logical_shape()[2]);
+            TT_FATAL(
+                q.logical_shape()[2] == w.logical_shape()[2],
+                "indexer_score fused full-mesh mode expects Q and weights to share a per-device sequence "
+                "extent; got {} and {}",
+                q.logical_shape()[2],
+                w.logical_shape()[2]);
             TT_FATAL(
                 is_replicated_across_complete_mesh(k),
                 "indexer_score fused full-mesh mode requires complete-mesh replicated gathered K");
@@ -1239,13 +1248,21 @@ ttnn::Tensor ring_indexer_score_dsa(
                 ttnn::operations::ccl::common::has_row_major_mesh_coordinates(k_local),
             "ring_indexer_score_dsa cluster_axis=None requires row-major mesh coordinates for Q, K, weights, and "
             "K-local");
+        // Extents, not placements: see the matching check in the program factory. Row-major coordinates
+        // above pin the device ORDER the snake walks; these pin the per-device sequence EXTENT.
         TT_FATAL(
-            ttnn::operations::ccl::common::tensor_dim_shard_factor(q, 2) == mesh_size &&
-                ttnn::operations::ccl::common::tensor_dim_shard_factor(weights, 2) == mesh_size &&
-                ttnn::operations::ccl::common::tensor_dim_shard_factor(k_local, 2) == mesh_size,
-            "ring_indexer_score_dsa cluster_axis=None requires Q, weights, and K-local sequence dim 2 to be "
-            "sharded across all {} mesh devices",
-            mesh_size);
+            k_local.logical_shape()[2] * mesh_size == k.logical_shape()[2],
+            "ring_indexer_score_dsa cluster_axis=None expects K-local to be 1/{} of the gathered K extent; "
+            "got {} and {}",
+            mesh_size,
+            k_local.logical_shape()[2],
+            k.logical_shape()[2]);
+        TT_FATAL(
+            q.logical_shape()[2] == weights.logical_shape()[2],
+            "ring_indexer_score_dsa cluster_axis=None expects Q and weights to share a per-device sequence "
+            "extent; got {} and {}",
+            q.logical_shape()[2],
+            weights.logical_shape()[2]);
         TT_FATAL(
             ttnn::operations::experimental::indexer_score::is_replicated_across_complete_mesh(k),
             "ring_indexer_score_dsa cluster_axis=None requires the persistent gathered K buffer replicated "
