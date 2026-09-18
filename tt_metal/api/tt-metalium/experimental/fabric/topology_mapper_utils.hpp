@@ -723,16 +723,11 @@ private:
     ::tt::tt_fabric::MappingConstraints<MeshId, MeshId> inter_mesh_constraints_;
     ::tt::tt_fabric::ConnectionValidationMode inter_mesh_validation_mode_;
 
-    // One persistent incremental SAT session (same SAT path + shortcuts + minimal-host prime as the batch solve)
-    // plus the running exclusion bookkeeping. unique_ptr so a host-cap / DFS fallback replaces it by
-    // destroying the old session and constructing a new one (the session type is immovable).
+    // One persistent incremental SAT session plus the running exclusion bookkeeping. unique_ptr because
+    // the session type is immovable.
     std::unique_ptr<::tt::tt_fabric::TopologyMappingEnumerationSession<MeshId, MeshId>> session_;
     std::vector<std::map<MeshId, MeshId>> excluded_;  // found placements, blocked on subsequent next()
     std::size_t emitted_ = 0;
-    // One-shot relaxation of the hard minimal-host cap: when the capped session is UNSAT, next() clears the
-    // cap, sets minimize_same_rank_groups_used (SOFT), and restarts the session (see next()). The solver does
-    // not fall back internally.
-    bool host_cap_relaxed_ = false;
     // Intra-mesh forbid/retry state
     std::vector<std::pair<MeshId, MeshId>> intra_failed_mesh_pairs_;
 };

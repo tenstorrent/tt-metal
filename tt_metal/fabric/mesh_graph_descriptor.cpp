@@ -249,6 +249,18 @@ DeclaredTopology MeshGraphDescriptor::get_declared_topology(GlobalNodeId instanc
     return get_declared_topology(get_instance(instance_id));
 }
 
+std::optional<DeclaredTopology> MeshGraphDescriptor::try_get_declared_topology(const std::string& instance_name) const {
+    const auto& instance_ids = instances_by_name(instance_name);
+    if (instance_ids.empty()) {
+        return std::nullopt;
+    }
+    DeclaredTopology declared = get_declared_topology(instance_ids[0]);
+    if (declared.dims.empty()) {
+        return std::nullopt;
+    }
+    return declared;
+}
+
 DeclaredTopology MeshGraphDescriptor::get_declared_topology(const InstanceData& instance) const {
     const proto::TorusTopology* device_topology = nullptr;
     const proto::MeshTopology* host_topology = nullptr;

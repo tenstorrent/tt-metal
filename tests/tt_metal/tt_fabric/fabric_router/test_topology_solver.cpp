@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <map>
@@ -6459,6 +6460,60 @@ TEST_F(TopologySolverTest, SessionAddRequiredRestrictsBothEngines) {
         ASSERT_TRUE(result.success);
         ASSERT_EQ(result.target_to_global.at(0), 51);
     }
+}
+
+TEST_F(TopologySolverTest, ResourceConstraintOverlappingSeatsAreDisjoint) {
+    // Two targets, three seats. Seat 1 overlaps both chips, so the only disjoint seating is 0+2.
+    IntAdj target(IntAdjMap{{0, {}}, {1, {}}});
+    IntAdj global(IntAdjMap{{0, {}}, {1, {}}, {2, {}}});
+    IntConstraints constraints;
+    ASSERT_TRUE(constraints.add_required_constraint(0, std::set<int>{0, 1}));
+    ASSERT_TRUE(constraints.add_required_constraint(1, std::set<int>{1, 2}));
+    ASSERT_TRUE(constraints.add_resource_constraint<uint32_t>({
+        {0, {0u}},
+        {1, {0u, 1u}},
+        {2, {1u}},
+    }));
+    EXPECT_EQ(constraints.resource_count(), 2u);
+
+    for (auto engine : {TopologyMappingSolverEngine::Sat, TopologyMappingSolverEngine::Dfs}) {
+        TopologyMappingEnumerationSession<int, int> session(
+            target,
+            global,
+            constraints,
+            ConnectionValidationMode::RELAXED,
+            /*quiet_mode=*/true,
+            engine,
+            false);
+        ASSERT_TRUE(session.started());
+        const auto result = session.next();
+        ASSERT_TRUE(result.success) << (engine == TopologyMappingSolverEngine::Sat ? "sat" : "dfs");
+        EXPECT_EQ(result.target_to_global.at(0), 0);
+        EXPECT_EQ(result.target_to_global.at(1), 2);
+        EXPECT_FALSE(session.next().success);
+    }
+}
+
+TEST_F(TopologySolverTest, ResourceConstraintDisablesBijectionCompleteness) {
+    // One target and two unused-capable seats: bijection completeness would force both seats and go UNSAT.
+    IntAdj target(IntAdjMap{{0, {}}});
+    IntAdj global(IntAdjMap{{0, {}}, {1, {}}});
+    IntConstraints constraints;
+    ASSERT_TRUE(constraints.add_required_constraint(0, std::set<int>{0, 1}));
+    ASSERT_TRUE(constraints.add_resource_constraint<uint32_t>({{0, {0u}}, {1, {1u}}}));
+
+    TopologyMappingEnumerationSession<int, int> session(
+        target,
+        global,
+        constraints,
+        ConnectionValidationMode::RELAXED,
+        /*quiet_mode=*/true,
+        TopologyMappingSolverEngine::Sat,
+        false);
+    ASSERT_TRUE(session.started());
+    const auto result = session.next();
+    ASSERT_TRUE(result.success);
+    EXPECT_TRUE(result.target_to_global.at(0) == 0 || result.target_to_global.at(0) == 1);
 }
 
 TEST_F(TopologySolverTest, MergeIntersectsRequiredAndKeepsOneSidedTargets) {

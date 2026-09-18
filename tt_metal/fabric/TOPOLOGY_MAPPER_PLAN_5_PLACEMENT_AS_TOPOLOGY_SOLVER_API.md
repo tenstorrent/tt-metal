@@ -4,7 +4,9 @@ Moved from the earlier Cursor plan `placement_as_topology_solver_api.plan.md`. C
 [Plan 6](TOPOLOGY_MAPPER_PLAN_6_COLLAPSE_INTERMESH_SAT.md) (where retry lives) and
 [Plan 4](TOPOLOGY_MAPPER_PLAN_4_SAT_JOINT_PLACEMENT.md) (what the master SAT already does privately).
 
-**Status: session half done. Resource / master-as-session not done.**
+**Status: session half done. Resource API landed. Master-as-session uses the topology SAT
+STRICT / RELAXED path on a seat graph with actual fabric-link multiplicity. Plan 6 wrapper
+and deleting leftover private master SAT comments are still open.**
 
 > **Goal.** Same public algorithm as `topology_solver.hpp` — graphs + `MappingConstraints` +
 > enumeration session — for master seating. Layer 1 already uses that API. Layer 2 needs one new
@@ -30,9 +32,12 @@ Moved from the earlier Cursor plan `placement_as_topology_solver_api.plan.md`. C
 | `solve_topology_mapping` / `_n` / `_all` are thin ctor + `next()` wrappers | **Done** |
 | Grouping / mapper callers construct then `next()` | **Done** |
 | Public `excluded()` / `already_enumerated()` | **Not done** (do not add yet) |
-| `add_resource_constraint<Resource>` → densify to `ResourceIndex` 0..R−1 | **Not done** |
-| Disable bijection completeness when any resource constraint is set | **Not done** (required with the above) |
-| Rebuild `encode_master_problem` as `TopologyMappingEnumerationSession<MeshId, SeatId>` | **Not done** |
+| `add_resource_constraint<Resource>` → densify to `ResourceIndex` 0..R−1 | **Done** (`uint32_t` identity-maps, `R = max+1`) |
+| Disable bijection completeness when any resource constraint is set | **Done** |
+| Rebuild `encode_master_problem` as `TopologyMappingEnumerationSession<MeshId, SeatId>` | **Done** |
+| Do **not** add `ConnectionValidationMode::NONE` | **Done** — enum removed |
+| Seat graph stores **actual** fabric-link multiplicity | **Done** |
+| Session mode is `STRICT` then `RELAXED` (same graphs) | **Done** |
 | `IntermeshPlacementEnumerationSession` column-generation wrapper | **Not done** — Plan 6 |
 | Delete private master SAT once the session matches its models | **Not done** — after the rebuild |
 
@@ -56,16 +61,76 @@ disjointness**: at-most-one chosen seat per chip. Do not call this occupancy —
 host packing (`topology_sat_build_occupancy_indicators`).
 
 If every seat is a node in `AdjacencyGraph<SeatId>` and each mesh’s domain is its pool
-(`add_required_constraint(mesh, its_seats)`), adjacency support matches today’s seam clauses (edge iff
-enough fabric links). Host packing stays `set_same_rank_groups_constraint` + cap/minimize, not
-resources.
+(`add_required_constraint(mesh, its_seats)`), the topology SAT’s existing STRICT / RELAXED
+adjacency support is the seam check. Do **not** pre-filter seat edges by `need` and then skip
+channel validation.
+
+Host packing uses the existing same-rank group objective: seats that sit on one PSD host
+form a global group, then `set_minimize_same_rank_groups_used` (soft; fall through if the
+pack is infeasible). Do not add a parallel fill-used resource API. A hard
+`max_same_rank_groups_used` cap would fail the session when the floor does not fit.
 
 Column generation stays **outside** the encoder: grow pools, rebuild the seat graph, construct a new
 session. Do not append variables to a live CNF.
 
+### Demand vs supply (do not collapse these)
+
+`collect_mesh_edges` is **logical demand**: which mesh pairs the MGD seamed, and required channel
+count *N*. It walks `mesh_level_graph` (duplicate neighbors → *N*). Candidate footprints /
+`boundary_link_dense_` / `fabric_links_to` / `AdjacencyMatrix::saturated_link_count` are **physical
+supply**: how many fabric links one seating actually has into another seating’s chips. STRICT /
+RELAXED compare supply to demand. Footprints cannot replace `collect_mesh_edges`.
+
 ---
 
-## Proposed API (not done)
+## Master session: STRICT vs RELAXED (done)
+
+Do not add `ConnectionValidationMode::NONE`. Bake-threshold-into-the-graph + `NONE` duplicates
+what the engine already does on `target_conn_count` vs `global_conn_count`.
+
+**Seat graph (build once per candidate generation).** For each `(m1, m2)` from
+`collect_mesh_edges`, for each seat pair:
+
+```text
+links = adjacency.saturated_link_count(from, to)
+if (links == 0) skip
+add `links` parallel neighbor entries both ways
+```
+
+`GraphIndexData` turns those into `global_conn_count`. Required *N* stays on `mesh_level_graph`
+(`target_conn_count`). Drop the `relaxed_tier` / `need` argument from the graph builder.
+
+**Session mode (two attempts, same graphs).** SAT’s soft “prefer full channels” path is capped at
+256 literals and will not run at gemma scale, so keep an explicit STRICT-first attempt:
+
+| Policy | Attempt 1 | Attempt 2 |
+| --- | --- | --- |
+| Strict intermesh | `session(..., STRICT)` | none |
+| Relaxed intermesh | `session(..., STRICT)` | if UNSAT: new session, **same graphs**, `RELAXED` |
+
+```cpp
+TopologyMappingEnumerationSession<GlobalMeshId, uint32_t> session(
+    mesh_level_graph,
+    seat_graph,       // actual link multiplicity
+    constraints,      // domains + resource AMO + optional fill-used
+    relaxed_tier ? ConnectionValidationMode::RELAXED
+                 : ConnectionValidationMode::STRICT,
+    /*quiet=*/true,
+    TopologyMappingSolverEngine::Sat);
+```
+
+STRICT: support encoding keeps a partner only if `actual >= required`.
+RELAXED: any adjacent pair (links ≥ 1) is hard-OK.
+
+**Also in this pass:** delete `NONE` (enum, validator skip, tests). Resource overlap tests have no
+seam edges — use `RELAXED`. Then PGD SAT unit tests and the llama / gemma SAT-log before/after.
+
+**Not this pass:** one RELAXED session only (no STRICT-first); reintroduce private
+`encode_master_problem` / seam indicators / `kStrictTierConflictBudget`; Plan 6 wrapper.
+
+---
+
+## Resource API (done)
 
 ```cpp
 // Resource exists only at this call. After return, the type is gone.
@@ -105,6 +170,8 @@ forwards enabled `MappingConstraints` passthroughs, and `start`s again when colu
 - Do not keep `encode_master_problem` *and* a topology-session clone.
 - Do not make incremental DFS for placement. SAT-native `next()` / `block` only.
 - Do not name this `SatPlacementSession`.
+- Do not add `ConnectionValidationMode::NONE`. Do not pre-filter seat edges by `need`.
+- Do not replace `collect_mesh_edges` with Candidate footprints.
 
 ## Risks
 

@@ -17,6 +17,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdint>
 #include <functional>
 #include <iterator>
 #include <optional>
@@ -29,6 +30,7 @@
 #include <cctype>
 #include <cstdlib>
 #include <string>
+#include <type_traits>
 
 #include <fmt/format.h>
 #include <tt-logger/tt-logger.hpp>
@@ -137,6 +139,49 @@ void AdjacencyGraph<NodeId>::print_adjacency_map(const std::string& graph_name, 
     } else {
         log_trace(tt::LogFabric, "{}", nodes_ss.str());
     }
+}
+
+template <typename TargetNode, typename GlobalNode>
+template <typename Resource>
+bool MappingConstraints<TargetNode, GlobalNode>::add_resource_constraint(
+    const std::map<GlobalNode, std::vector<Resource>>& global_to_resources) {
+    if (global_to_resources.empty()) {
+        return true;
+    }
+    std::map<GlobalNode, std::vector<uint32_t>> densified;
+    uint32_t r_count = 0;
+    if constexpr (std::is_same_v<Resource, uint32_t>) {
+        uint32_t max_r = 0;
+        bool any = false;
+        for (const auto& [global, resources] : global_to_resources) {
+            densified[global] = resources;
+            for (uint32_t resource : resources) {
+                any = true;
+                max_r = std::max(max_r, resource);
+            }
+        }
+        r_count = any ? max_r + 1u : 0u;
+    } else {
+        std::map<Resource, uint32_t> to_idx;
+        for (const auto& [global, resources] : global_to_resources) {
+            auto& out = densified[global];
+            out.reserve(resources.size());
+            for (const Resource& resource : resources) {
+                const auto [it, inserted] = to_idx.try_emplace(resource, static_cast<uint32_t>(to_idx.size()));
+                (void)inserted;
+                out.push_back(it->second);
+            }
+        }
+        r_count = static_cast<uint32_t>(to_idx.size());
+    }
+    for (auto& [global, resources] : densified) {
+        auto& dest = global_to_resource_indices_[global];
+        dest.insert(dest.end(), resources.begin(), resources.end());
+        std::sort(dest.begin(), dest.end());
+        dest.erase(std::unique(dest.begin(), dest.end()), dest.end());
+    }
+    resource_count_ = std::max(resource_count_, r_count);
+    return true;
 }
 
 // MappingConstraints trait constraint template method implementations
@@ -431,12 +476,21 @@ bool MappingConstraints<TargetNode, GlobalNode>::merge(const MappingConstraints&
 
     merged.minimize_same_rank_groups_used_ =
         minimize_same_rank_groups_used_ || other.minimize_same_rank_groups_used_;
+    merged.fill_all_rank_groups_ = fill_all_rank_groups_ || other.fill_all_rank_groups_;
     // 0 means no cap, so the tighter of the two is the smaller of the non-zero values.
     if (max_same_rank_groups_used_ == 0) {
         merged.max_same_rank_groups_used_ = other.max_same_rank_groups_used_;
     } else if (other.max_same_rank_groups_used_ != 0) {
         merged.max_same_rank_groups_used_ = std::min(max_same_rank_groups_used_, other.max_same_rank_groups_used_);
     }
+
+    for (const auto& [global, resources] : other.global_to_resource_indices_) {
+        auto& dest = merged.global_to_resource_indices_[global];
+        dest.insert(dest.end(), resources.begin(), resources.end());
+        std::sort(dest.begin(), dest.end());
+        dest.erase(std::unique(dest.begin(), dest.end()), dest.end());
+    }
+    merged.resource_count_ = std::max(resource_count_, other.resource_count_);
 
     if (!merged.validate()) {
         return false;
@@ -1284,7 +1338,8 @@ TopologyMappingEnumerationSession<TargetNode, GlobalNode>::TopologyMappingEnumer
     quiet_ = quiet_mode;
     graph_data_.emplace(target_graph, global_graph);
     constraint_data_.emplace(snap_constraints_, *graph_data_);
-    use_sat_ = topology_mapping_should_use_sat_engine(solver_engine, graph_data_->n_target, graph_data_->n_global);
+    use_sat_ = topology_mapping_should_use_sat_engine(
+        solver_engine, graph_data_->n_target, graph_data_->n_global, snap_constraints_.resource_count());
     search_engine_ = make_topology_search_engine<TargetNode, GlobalNode>(use_sat_);
     if (!search_engine_->start(*graph_data_, *constraint_data_, mode_, unique_shapes_, {}, quiet_)) {
         start_error_ = search_engine_->get_state().error_message.empty()
@@ -1533,7 +1588,10 @@ inline bool topology_mapping_use_sat_engine() {
 }
 
 inline bool topology_mapping_should_use_sat_engine(
-    TopologyMappingSolverEngine engine, size_t n_target, size_t n_global) {
+    TopologyMappingSolverEngine engine, size_t n_target, size_t n_global, size_t resource_count) {
+    if (resource_count > 0 && engine != TopologyMappingSolverEngine::Dfs) {
+        return true;
+    }
     switch (engine) {
         case TopologyMappingSolverEngine::Sat:
             return true;
@@ -2013,6 +2071,20 @@ ConstraintIndexData<TargetNode, GlobalNode>::ConstraintIndexData(
 
     minimize_same_rank_groups_used = constraints.minimize_same_rank_groups_used();
     max_same_rank_groups_used = constraints.max_same_rank_groups_used();
+    fill_all_rank_groups = constraints.fill_all_rank_groups();
+
+    resource_count = constraints.resource_count();
+    global_to_resource_indices.assign(graph_data.n_global, {});
+    for (const auto& [global_node, resources] : constraints.get_global_to_resource_indices()) {
+        auto idx_it = graph_data.global_to_idx.find(global_node);
+        if (idx_it == graph_data.global_to_idx.end()) {
+            continue;
+        }
+        auto& dest = global_to_resource_indices[idx_it->second];
+        dest = resources;
+        std::sort(dest.begin(), dest.end());
+        dest.erase(std::unique(dest.begin(), dest.end()), dest.end());
+    }
 }
 
 template <typename TargetNode, typename GlobalNode>
@@ -2166,6 +2238,44 @@ void ConstraintIndexData<TargetNode, GlobalNode>::print_resolved_mapping_constra
 }
 
 template <typename TargetNode, typename GlobalNode>
+bool ConstraintIndexData<TargetNode, GlobalNode>::resources_conflict_with_mapping(
+    size_t global_idx, const std::vector<int>& mapping) const {
+    if (resource_count == 0 || global_idx >= global_to_resource_indices.size()) {
+        return false;
+    }
+    const auto& mine = global_to_resource_indices[global_idx];
+    if (mine.empty()) {
+        return false;
+    }
+    for (int mapped : mapping) {
+        if (mapped < 0) {
+            continue;
+        }
+        const size_t other = static_cast<size_t>(mapped);
+        if (other == global_idx || other >= global_to_resource_indices.size()) {
+            continue;
+        }
+        const auto& theirs = global_to_resource_indices[other];
+        if (theirs.empty()) {
+            continue;
+        }
+        size_t i = 0;
+        size_t j = 0;
+        while (i < mine.size() && j < theirs.size()) {
+            if (mine[i] == theirs[j]) {
+                return true;
+            }
+            if (mine[i] < theirs[j]) {
+                ++i;
+            } else {
+                ++j;
+            }
+        }
+    }
+    return false;
+}
+
+template <typename TargetNode, typename GlobalNode>
 bool ConstraintIndexData<TargetNode, GlobalNode>::check_same_rank_constraint(
     size_t target_idx, size_t global_idx, const std::vector<int>& mapping, const std::vector<bool>& /*used*/) const {
     // Constraint: don't break target-group boundaries. All targets in the same target group must
@@ -2221,6 +2331,9 @@ bool SearchHeuristic::check_hard_constraints(
     ConnectionValidationMode validation_mode) {
     // 1. Check required constraints (fast index-based lookup)
     if (!constraint_data.is_valid_mapping(target_idx, global_idx)) {
+        return false;
+    }
+    if (constraint_data.resources_conflict_with_mapping(global_idx, mapping)) {
         return false;
     }
 
