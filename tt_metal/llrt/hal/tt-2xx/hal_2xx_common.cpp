@@ -191,7 +191,7 @@ std::string HalJitBuildQueryBase::target_name(const HalJitBuildQueryInterface::P
             return fmt::format("dispatch_dm{}", params.processor_id);
         case HalProgrammableCoreType::DRAM:
             TT_ASSERT(params.processor_class == HalProcessorClassType::DM);
-            return "drisc";
+            return params.is_fw ? "drisc" : fmt::format("drisc{}", params.processor_id);
         default:
             TT_THROW(
                 "Unsupported programmable core type {} to query target name", enchantum::to_string(params.core_type));
@@ -204,6 +204,9 @@ std::string HalJitBuildQueryBase::weakened_firmware_target_name(const HalJitBuil
     }
     if (params.core_type == HalProgrammableCoreType::DISPATCH && params.processor_class == HalProcessorClassType::DM) {
         return "dispatch_dm0";
+    }
+    if (params.core_type == HalProgrammableCoreType::DRAM && params.processor_class == HalProcessorClassType::DM) {
+        return "drisc";
     }
     if (params.core_type == HalProgrammableCoreType::TENSIX &&
         params.processor_class == HalProcessorClassType::COMPUTE) {

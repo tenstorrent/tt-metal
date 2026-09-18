@@ -13,6 +13,7 @@ using namespace tt::tt_metal::quasar::dram;
 
 #include <algorithm>
 #include <cstdint>
+#include <fmt/format.h>
 
 #include "quasar/qa_hal.hpp"
 #include "dev_mem_map.h"
@@ -59,7 +60,7 @@ HalCoreInfoType create_dram_mem_map() {
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::PROFILER)] = GET_CCE_MAILBOX_ADDRESS_HOST(profiler);
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::KERNEL_CONFIG)] = MEM_CCE_KERNEL_CONFIG_BASE;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::UNRESERVED)] =
-        tt::align(MEM_CCE_KERNEL_BASE + MEM_CCE_KERNEL_SIZE, max_alignment);
+        tt::align(MEM_CCE_KERNEL_BASE + MEM_CCE_KERNEL_SIZE * MEM_CCE_LOCAL_HARTS, max_alignment);
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::CORE_INFO)] = GET_CCE_MAILBOX_ADDRESS_HOST(core_info);
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::GO_MSG)] = GET_CCE_MAILBOX_ADDRESS_HOST(go_messages);
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::GO_MSG_INDEX)] =
@@ -89,23 +90,23 @@ HalCoreInfoType create_dram_mem_map() {
 
     std::vector<uint32_t> fw_mailbox_addr(static_cast<std::size_t>(FWMailboxMsg::COUNT), 0);
 
-    std::vector<std::vector<HalJitBuildConfig>> processor_classes = {
-        // DM: one shared firmware binary. All CCE harts enter the same image; crt0/TLS are per mhartid.
-        // Host still programs only hart 0's reset vector until CCE bring-up releases the rest.
-        {
+    std::vector<HalJitBuildConfig> dram_dm_processors;
+    std::vector<std::pair<std::string, std::string>> dram_dm_names;
+    dram_dm_processors.reserve(MEM_CCE_LOCAL_HARTS);
+    dram_dm_names.reserve(MEM_CCE_LOCAL_HARTS);
+    for (uint32_t hart = 0; hart < MEM_CCE_LOCAL_HARTS; hart++) {
+        // One shared firmware binary. All CCE harts enter the same image; crt0/TLS are per mhartid.
+        dram_dm_processors.push_back(
             {.fw_base_addr = MEM_CCE_FIRMWARE_BASE,
              .local_init_addr = MEM_CCE_INIT_LOCAL_L1_BASE_SCRATCH,
              .fw_launch_addr = CCE_BOOT_HART_RESET_VECTOR,
              .fw_launch_addr_value = MEM_CCE_SRAM_LOCAL_BASE + MEM_CCE_FIRMWARE_BASE,
              .memory_load = ll_api::memory::Loading::CONTIGUOUS,
-             .l1_noc_offset = MEM_CCE_L1_NOC_OFFSET},
-        },
-    };
-    std::vector<std::vector<std::pair<std::string, std::string>>> processor_classes_names = {
-        {
-            {"CCE", "CCE"},
-        },
-    };
+             .l1_noc_offset = MEM_CCE_L1_NOC_OFFSET});
+        dram_dm_names.emplace_back(fmt::format("CCE{}", hart), fmt::format("CCE{}", hart));
+    }
+    std::vector<std::vector<HalJitBuildConfig>> processor_classes = {std::move(dram_dm_processors)};
+    std::vector<std::vector<std::pair<std::string, std::string>>> processor_classes_names = {std::move(dram_dm_names)};
     std::vector<uint8_t> processor_classes_num_fw_binaries = {/*DM*/ 1};
 
     return {

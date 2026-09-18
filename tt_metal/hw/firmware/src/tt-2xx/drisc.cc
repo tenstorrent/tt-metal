@@ -114,12 +114,18 @@ extern "C" uint32_t _start1() {
                    *subordinate_sync_slot(hartid) != RUN_SYNC_MSG_LOAD) {
                 asm("nop; nop; nop; nop; nop");
             }
+            uint32_t launch_msg_rd_ptr = mailboxes->launch_msg_rd_ptr;
+            launch_msg_t* launch_msg = &mailboxes->launch[launch_msg_rd_ptr];
+            firmware_config_init(mailboxes, ProgrammableCoreType::DRAM, hartid);
+            overlay_cmd_buff_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
+            WAYPOINT("R1");
             while (*subordinate_sync_slot(hartid) != RUN_SYNC_MSG_GO) {
                 asm("nop; nop; nop; nop; nop");
             }
-            WAYPOINT("R1");
-            // Host DRAM kernels are a single processor (hart 0). Subordinates stay in the GO/DONE
-            // handshake until per-hart CCE kernels exist.
+            uintptr_t kernel_lma = launch_msg->kernel_config.kernel_text_offset[hartid];
+            invalidate_kernel_binary_l2_cache(kernel_lma, launch_msg, hartid);
+            invalidate_l1_icache();
+            reinterpret_cast<uint32_t (*)()>(kernel_lma)();
             WAYPOINT("D1");
             *subordinate_sync_slot(hartid) = RUN_SYNC_MSG_DONE;
         }
@@ -150,10 +156,10 @@ extern "C" uint32_t _start1() {
         overlay_cmd_buff_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
 
         WAYPOINT("R");
-        if (enables & 1u) {
-            uintptr_t kernel_lma = launch_msg->kernel_config.kernel_text_offset[0];
+        if (enables & (1u << hartid)) {
+            uintptr_t kernel_lma = launch_msg->kernel_config.kernel_text_offset[hartid];
             // Invalidate the i$ now the kernels have loaded and before running
-            invalidate_kernel_binary_l2_cache(kernel_lma, launch_msg, 0);
+            invalidate_kernel_binary_l2_cache(kernel_lma, launch_msg, hartid);
             invalidate_l1_icache();
             reinterpret_cast<uint32_t (*)()>(kernel_lma)();
         }

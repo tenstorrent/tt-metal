@@ -82,6 +82,7 @@ struct DramConfig {
     // kernel that drives both NOCs regardless of this field (the streaming profiler's relay reads on
     // the one it does not write on) has to pick its core off
     // metal_SocDescriptor::get_dram_endpoint_noc_mask. See tt_metal/hw/inc/experimental/drisc_mode.h.
+    DataMovementProcessor processor = DataMovementProcessor::RISCV_0;
     NOC noc = NOC::NOC_0;
     std::vector<uint32_t> compile_args;
     std::map<std::string, std::string> defines;
