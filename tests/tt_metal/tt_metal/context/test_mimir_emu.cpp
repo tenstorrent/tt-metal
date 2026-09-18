@@ -6,9 +6,11 @@
 
 #include <fmt/format.h>
 
+#include <cstddef>
 #include <cstdint>
 #include <cstdlib>
 #include <memory>
+#include <tuple>
 #include <vector>
 
 #include "impl/context/metal_context.hpp"
@@ -31,6 +33,12 @@ constexpr uint64_t kCceL1NocOffset = 0x2000000000ULL;
 constexpr uint32_t kCceSramUncachedBase = 0x400000;
 constexpr uint64_t kCceSramTestOffset = 0x800;
 constexpr uint32_t kDramOffset = 0x800;
+// The SPA window a CCE hart issues into to reach GDDR. Its remapper translates this to the GDDR
+// physical base (0x800000000), which is where the host's AXI view sees the same memory -- issuing
+// that physical address from a hart instead matches no remap entry and quietly reads zeros.
+// One 16 GiB window covers both 8 GiB partitions (chippy tile0/tile1).
+constexpr uint64_t kGddrSpaWindowBase = 0x1000000000000ULL;
+constexpr uint64_t kGddrSpaPartitionStride = 0x200000000ULL;
 
 bool emu_server_configured() {
     return std::getenv("TT_METAL_EMU_SERVER") != nullptr && std::getenv("TT_METAL_EMU_SOC_DESC") != nullptr;
@@ -144,20 +152,88 @@ TEST_P(HartZeroRunsDramKernel, WritesMagic) {
     EXPECT_TRUE(CloseDevice(device));
 }
 
+class CopiesGddrThroughRemapper : public ::testing::TestWithParam<std::tuple<uint32_t, uint32_t>> {};
+
+TEST_P(CopiesGddrThroughRemapper, RoundTrip) {
+    if (!emu_server_configured()) {
+        GTEST_SKIP() << "Set TT_METAL_EMU_SERVER=host:port and TT_METAL_EMU_SOC_DESC=<mimir YAML>.";
+    }
+
+    IDevice* device = CreateDevice(0);
+    ASSERT_NE(device, nullptr);
+    ASSERT_EQ(device->arch(), tt::ARCH::QUASAR);
+
+    const auto [cce_index, dram_partition] = GetParam();
+    ASSERT_LT(cce_index, device->num_dram_channels());
+    ASSERT_LT(dram_partition, device->num_dram_channels());
+
+    const auto& hal = MetalContext::instance().hal();
+    const uint32_t transfer_size = hal.get_alignment(HalMemType::DRAM);
+    const uint32_t src_dram_offset = hal.get_dev_addr(HalDramMemAddrType::UNRESERVED);
+    const uint32_t dst_dram_offset = src_dram_offset + transfer_size;
+    const uint64_t partition_base = kGddrSpaWindowBase + dram_partition * kGddrSpaPartitionStride;
+    const uint64_t src_gddr_addr = partition_base + src_dram_offset;
+    const uint64_t dst_gddr_addr = partition_base + dst_dram_offset;
+    // The kernel stages through the uncached alias so the host can read the halfway point back.
+    const uint32_t staging_dev_addr =
+        kCceSramUncachedBase + hal.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
+    const uint64_t staging_noc_addr = hal.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
+
+    std::vector<uint32_t> input(transfer_size / sizeof(uint32_t));
+    for (std::size_t i = 0; i < input.size(); ++i) {
+        input[i] = 0xC0FF0000u | (cce_index << 12) | (dram_partition << 8) | static_cast<uint32_t>(i);
+    }
+    std::vector<uint32_t> cleared(input.size(), 0);
+
+    ASSERT_TRUE(detail::WriteToDeviceDRAMChannel(device, dram_partition, src_dram_offset, input));
+    ASSERT_TRUE(detail::WriteToDeviceDRAMChannel(device, dram_partition, dst_dram_offset, cleared));
+
+    const CoreCoord logical_dram_core{cce_index, 0};
+    Program program = CreateProgram();
+    CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/misc/dram_gddr_round_trip.cpp",
+        logical_dram_core,
+        DramConfig{
+            .noc = NOC::NOC_0,
+            .compile_args = {
+                static_cast<uint32_t>(src_gddr_addr),
+                static_cast<uint32_t>(src_gddr_addr >> 32),
+                static_cast<uint32_t>(dst_gddr_addr),
+                static_cast<uint32_t>(dst_gddr_addr >> 32),
+                staging_dev_addr,
+                static_cast<uint32_t>(input.size())}});
+
+    detail::LaunchProgram(device, program, /*wait_until_cores_done=*/true, /*force_slow_dispatch=*/true);
+
+    const CoreCoord virtual_dram_core = device->virtual_core_from_logical_core(logical_dram_core, CoreType::DRAM);
+    std::vector<uint32_t> staged(input.size(), 0);
+    MetalContext::instance().get_cluster().read_core(
+        staged.data(), transfer_size, {device->id(), virtual_dram_core}, staging_noc_addr);
+    EXPECT_EQ(staged, input);
+
+    std::vector<uint32_t> output;
+    ASSERT_TRUE(detail::ReadFromDeviceDRAMChannel(device, dram_partition, dst_dram_offset, transfer_size, output));
+    EXPECT_EQ(output, input);
+    EXPECT_TRUE(CloseDevice(device));
+}
+
 INSTANTIATE_TEST_SUITE_P(
     MimirEmu, HartZeroRunsDramKernel, ::testing::Values(0u, 1u), [](const ::testing::TestParamInfo<uint32_t>& info) {
         return fmt::format("Cce{}", info.param);
     });
 
-// DRAM is opt-in. test_emu_server.py runs SMC boot so GDDR has slaves; test_sival_server.py
-// does not, and an unconfigured access stalls the AXI master. Same gate as UMD's
-// EmuTTDevice DRAM test: TT_METAL_EMU_DRAM or TT_UMD_EMU_DRAM.
+INSTANTIATE_TEST_SUITE_P(
+    MimirEmu,
+    CopiesGddrThroughRemapper,
+    ::testing::Combine(::testing::Values(0u, 1u), ::testing::Values(0u, 1u)),
+    [](const ::testing::TestParamInfo<std::tuple<uint32_t, uint32_t>>& info) {
+        return fmt::format("Cce{}_Partition{}", std::get<0>(info.param), std::get<1>(info.param));
+    });
+
 TEST(MimirEmu, DramChannelsDoNotAliasThroughPublicDeviceApi) {
     if (!emu_server_configured()) {
         GTEST_SKIP() << "Set TT_METAL_EMU_SERVER=host:port and TT_METAL_EMU_SOC_DESC=<mimir YAML>.";
-    }
-    if (std::getenv("TT_METAL_EMU_DRAM") == nullptr && std::getenv("TT_UMD_EMU_DRAM") == nullptr) {
-        GTEST_SKIP() << "DRAM needs GDDR bringup; set TT_METAL_EMU_DRAM=1 on a configured model.";
     }
 
     std::unique_ptr<IDevice> device(CreateDeviceMinimal(0));
