@@ -61,17 +61,21 @@ def bfp2b_quantize(x: torch.Tensor, is_exp_a: bool = False) -> torch.Tensor:
 
 
 def binarize_with_scale(x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-    """XNOR-Net style binarization of a real tensor with a single per-tensor scale.
+    """XNOR-Net binarization of a real tensor with a single per-tensor scale.
 
-        alpha  = mean(|x|)
-        binary = sign(x - alpha)        (sign(0) mapped to +1 so values stay in {-1, +1})
+        alpha  = mean(|x|)              (the optimal L2 scale for a sign quantizer)
+        binary = sign(x)               (sign(0) mapped to +1 so values stay in {-1, +1})
         reconstructed = binary * alpha
+
+    Using ``sign(x)`` (not ``sign(x - alpha)``) is what minimizes ||x - alpha*binary||^2 and
+    keeps the binarization unbiased; subtracting alpha first would push almost every element to
+    -1 and wreck the correlation with the original tensor.
 
     Returns ``(binary, alpha)`` where ``binary`` is in {-1, +1} (fp32) and ``alpha`` is a scalar.
     """
     xf = x.to(torch.float32)
     alpha = xf.abs().mean()
-    binary = torch.sign(xf - alpha)
+    binary = torch.sign(xf)
     binary = torch.where(binary == 0, torch.ones_like(binary), binary)
     return binary, alpha
 
