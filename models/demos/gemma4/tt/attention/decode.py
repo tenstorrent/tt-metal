@@ -100,14 +100,7 @@ def decode_forward(
     # 1. Fused QKV projection
     xqkv = apply_qkv_projection(hidden_states, weights)
 
-    # 2-3. Per-head norms + head split.
-    #
-    # FUSED: one unscaled rms_norm over the fused QKV viewed one head per row,
-    # plus one scale multiply, replaces three single-core per-head norms (and
-    # their three to_memory_config un-shards). Only when this layer actually
-    # runs all three norms — a KV-shared layer throws K/V away, so it would pay
-    # the fused norm to normalise tensors it then discards. See
-    # operations.apply_fused_qkv_head_norm.
+    # 2-3. Per-head norms + head split (optional fused QKV norm).
     n_q_local = config.num_attention_heads // tp
     n_kv_local = 1 if weights.kv_replicated else config.num_key_value_heads // tp
     use_fused_norm = (
@@ -133,8 +126,6 @@ def decode_forward(
     q_sharded_mem = tt_q.memory_config()
 
     if use_fused_norm:
-        # Already normed — un-shard onto DRAM for RoPE, matching every other
-        # tensor on this path (no L1 norm/RoPE "island" staging on this branch).
         tt_q = ttnn.to_memory_config(tt_q, ttnn.DRAM_MEMORY_CONFIG)
         tt_k = ttnn.to_memory_config(tt_k, ttnn.DRAM_MEMORY_CONFIG)
     else:
@@ -660,26 +651,11 @@ def _packed_kv_user_mem(q_sharded_mem):
 def _write_packed_kv_sequential(
     tt_k, tt_v, kv_cache, page_table, pos_cache, q_sharded_mem, head_dim, nkv_local, P, kv_write_pack=None
 ):
-    """Race-safe write of P consecutive positions that share one paged block.
-
-    Same serialization as decode ``sequential_kv_write``: one cache-update per
-    position so concurrent RMWs of the same block tile cannot drop writes.
-    ``tt_k``/``tt_v`` are prefill-split ``[1, nkv, n_seq, hd]`` (n_seq may be
-    tile-padded past P).
-
-    ``kv_write_pack`` is an optional ``(pt_b, [pos_b_0..pos_b_{P-1}])`` the caller
-    built once for the whole step: the page-table row and the per-position index
-    slices are identical for every layer, so slicing them here just recomputes
-    the same values once per layer. Bit-exact -- same values, computed once.
-    Same hoist as the RoPE cos/sin gather. Ownership stays with the caller: do
-    NOT deallocate a supplied pack.
-    """
+    """Serialize P consecutive paged KV writes for one block (race-safe)."""
     k_cache_w, v_cache_w = kv_cache
     eff_bs = effective_block_size(k_cache_w, head_dim, nkv_local)
     cache_bs = int(k_cache_w.padded_shape[2])
     cache_nkv = int(k_cache_w.padded_shape[1])
-    # Fused K+V update has no block_size / num_kv_heads override; only use it
-    # when the cache view already matches this layer.
     use_fused = _packed_fused_kv_enabled() and eff_bs == cache_bs and nkv_local == cache_nkv
     tt_k_bp = ttnn.permute(tt_k, (0, 2, 1, 3), memory_config=ttnn.DRAM_MEMORY_CONFIG)
     tt_v_bp = ttnn.permute(tt_v, (0, 2, 1, 3), memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -691,7 +667,6 @@ def _write_packed_kv_sequential(
     if not use_fused:
         v_mem = k_mem
     nkv, hd = nkv_local, head_dim
-    # All P page-table rows are replicas of the same user; slice once.
     owns_pack = kv_write_pack is None
     if owns_pack:
         pt_b = ttnn.slice(page_table, [0, 0], [1, page_table.shape[1]])
@@ -808,9 +783,6 @@ def packed_decode_forward(
     l1 = ttnn.L1_MEMORY_CONFIG
 
     # ── ① QKV projection (one call on the full B*P, output kept on L1) ──────
-    # _packed_decode_qkv_enabled's tuned decode program config path needs
-    # weights.qkv_decode_config / apply_qkv_projection(decode=...), neither of
-    # which is ported to this branch -- falls back to the auto-selected config.
     xqkv = apply_qkv_projection(hidden_states, weights, memory_config=l1)
     qkv_dim = xqkv.shape[-1]
 
@@ -868,9 +840,6 @@ def packed_decode_forward(
         ttnn.deallocate(tt_k)
         ttnn.deallocate(tt_v)
 
-    # Diagnostic-only timing switch used by the MTP current-path breakdown.
-    # It deliberately leaves cache contents stale, so never enable it for a
-    # correctness/generation run.
     skip_kv_write = os.environ.get("GEMMA4_PACKED_VERIFY_SKIP_KV_WRITE", "0") == "1"
 
     # ── ⑤ KV write ─────────────────────────────────────────────────────────
@@ -879,8 +848,6 @@ def packed_decode_forward(
         ttnn.deallocate(tt_k)
         ttnn.deallocate(tt_v)
     elif not is_kv_shared and seq_kv:
-        # P serialized paged_update_cache ops (same race fix as decode verify)
-        # instead of embedding-merge + paged_fill of the whole hot block.
         tt_q = ttnn.to_memory_config(tt_q, ttnn.DRAM_MEMORY_CONFIG)
         _write_packed_kv_sequential(
             tt_k,
@@ -978,12 +945,6 @@ def packed_decode_forward(
 
     k_cache_use, v_cache_use = kv_cache
 
-    # P-as-batch SDPA: Q/K/V + staging write still run once over P rows, but
-    # SDPA uses the native decode batch axis and per-row current positions.
-    # Avoids folding P into the query-head axis, additive masks, and the
-    # ROW_MAJOR pack/unpack below. Default on for B==1 spec verify only;
-    # B>1 batched verify uses the packed-head + mask path below.
-    # GEMMA4_PACKED_VERIFY_BATCH_SDPA=0 restores the packed-head SDPA for B==1.
     batch_sdpa_env = os.environ.get("GEMMA4_PACKED_VERIFY_BATCH_SDPA", "1").lower() not in (
         "0",
         "false",
@@ -1003,9 +964,6 @@ def packed_decode_forward(
             k_chunk_size=64,
             exp_approx_mode=False,
         )
-        # decode_sdpa_compute_kernel_config isn't ported to this branch (Dflash-only
-        # tuning); None lets the op fall back to its own built-in default rather
-        # than guessing at a fidelity config here.
         sdpa_compute_kernel_config = None
         sliding_window = config.sliding_window if config.is_sliding else None
         tt_sdpa = ttnn.transformer.paged_scaled_dot_product_attention_decode(
