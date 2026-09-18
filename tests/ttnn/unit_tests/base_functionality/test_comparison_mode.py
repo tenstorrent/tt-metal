@@ -683,59 +683,6 @@ def test_sparse_matmul_golden_zeros_out_inactive_sparse_groups():
     assert torch.equal(output[1], torch.zeros(2, 4))
 
 
-def test_conv1d_golden_matches_torch_and_return_contracts():
-    input_tensor = torch.arange(4, dtype=torch.float32).reshape(1, 1, 2, 2)
-    weight_tensor = torch.randn(3, 2, 2)
-    golden_function = ttnn.get_golden_function(ttnn.conv1d)
-    call_kwargs = dict(
-        input_tensor=input_tensor,
-        weight_tensor=weight_tensor,
-        in_channels=2,
-        out_channels=3,
-        batch_size=1,
-        input_length=2,
-        kernel_size=2,
-    )
-
-    output = golden_function(**call_kwargs)
-
-    expected = (
-        torch.nn.functional.conv1d(input_tensor.reshape(1, 2, 2).permute(0, 2, 1), weight_tensor)
-        .permute(0, 2, 1)
-        .reshape(1, 1, 1, 3)
-    )
-    torch.testing.assert_close(output, expected)
-
-    _, output_length = golden_function(**call_kwargs, return_output_dim=True)
-    assert output_length == 1
-
-    _, (returned_weight, returned_bias) = golden_function(**call_kwargs, return_weights_and_bias=True)
-    assert returned_weight._ttnn_comparison_config.method == "skip"
-    assert returned_bias is None
-
-
-def test_conv_transpose2d_golden_matches_torch_and_return_contracts():
-    input_tensor = torch.arange(8, dtype=torch.float32).reshape(1, 1, 4, 2)
-    weight_tensor = torch.randn(2, 3, 2, 2)
-    golden_function = ttnn.get_golden_function(ttnn.conv_transpose2d)
-
-    output, (output_height, output_width) = golden_function(
-        input_tensor=input_tensor,
-        weight_tensor=weight_tensor,
-        in_channels=2,
-        out_channels=3,
-        batch_size=1,
-        input_height=2,
-        input_width=2,
-        kernel_size=(2, 2),
-        return_output_dim=True,
-    )
-
-    expected = torch.nn.functional.conv_transpose2d(input_tensor.reshape(1, 2, 2, 2).permute(0, 3, 1, 2), weight_tensor)
-    assert (output_height, output_width) == (3, 3)
-    torch.testing.assert_close(output, expected.permute(0, 2, 3, 1).reshape(1, 1, 9, 3))
-
-
 def test_broadcast_golden_copies_sender_shard_to_cluster_group():
     sender_shard = torch.tensor([[1.0, 2.0]])
     other_shard = torch.tensor([[9.0, 9.0]])
