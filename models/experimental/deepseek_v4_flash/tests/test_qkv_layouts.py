@@ -3,11 +3,18 @@ import ttnn
 from models.experimental.deepseek_v4_flash.tt.decode_prefetch import (
     DECODE_GCB_GROUP,
     DECODE_LAYOUTS,
+    HC_FN_GCB,
+    ROUTER_GATE_GCB,
     decode_gcb_group_specs,
     decode_prefetch_page_bytes,
+    hc_fn_ring_specs,
 )
 from models.experimental.deepseek_v4_flash.tt.l1_placement import placement_for
-from models.experimental.deepseek_v4_flash.tt.layers import LinearDecode, fused_rms_norm_gamma_memory_config
+from models.experimental.deepseek_v4_flash.tt.layers import (
+    LinearDecode,
+    decode_weight_layout,
+    fused_rms_norm_gamma_memory_config,
+)
 
 
 def test_fused_rms_norm_gamma_is_width_sharded_on_the_weight_grid():
@@ -75,6 +82,43 @@ def test_csa_compressor_uses_full_width_32_core_layout():
 def test_hca_compressor_uses_full_width_16_core_layout():
     assert DECODE_LAYOUTS["heavily_compressed_attention"] == {"K": 4096, "N": 512, "n_blocks": 16}
     assert "heavily_compressed_attention" not in DECODE_GCB_GROUP
+
+
+def test_shared_gate_up_uses_full_width_32_core_layout():
+    assert DECODE_LAYOUTS["shared_gate_proj"] == {"K": 4096, "N": 2048, "n_blocks": 32}
+    assert DECODE_LAYOUTS["shared_up_proj"] == {"K": 4096, "N": 2048, "n_blocks": 32}
+    assert "shared_gate_proj" not in DECODE_GCB_GROUP
+    assert "shared_up_proj" not in DECODE_GCB_GROUP
+
+
+def test_shared_down_stays_on_the_shared_prefetch_ring():
+    assert DECODE_LAYOUTS["shared_down_proj"] == {"K": 2048, "N": 4096}
+    assert "shared_down_proj" in DECODE_GCB_GROUP
+
+
+def test_router_gate_uses_full_width_8_core_layout():
+    """No K split: hub mode is what lets it read the decode all-gather replica in place."""
+    assert DECODE_LAYOUTS["router_gate"] == {"K": 4096, "N": 256, "n_blocks": 8}
+    assert "router_gate" not in DECODE_GCB_GROUP
+
+
+def test_router_gate_leaves_the_hc_fn_ring():
+    """An 8-receiver full-width cut cannot share a 64-receiver GCB, so it has its own ring."""
+    assert DECODE_LAYOUTS["router_gate"] not in hc_fn_ring_specs()
+    # Every spec on one GCB has to want the same number of B cores, and the gate's 8 is not
+    # the ring's 64. HC_FN's own 8-tile slab is still there to pin the page (8 tiles).
+    assert {decode_weight_layout(**spec)[0] for spec in hc_fn_ring_specs()} == {64}
+    assert decode_weight_layout(**DECODE_LAYOUTS["router_gate"])[0] == 8
+    assert DECODE_LAYOUTS[HC_FN_GCB] in hc_fn_ring_specs()
+    assert ROUTER_GATE_GCB not in DECODE_GCB_GROUP
+
+
+def test_packed_router_gate_matches_full_width_layout():
+    placement = placement_for("router_gate")
+    assert placement.zone == "Z3"
+    assert placement.k_blocks is None
+    assert placement.n_blocks == 8
+    assert placement.shard_shape == (4096, 32)
 
 
 def test_shared_decode_gcb_page_stays_32_tiles():

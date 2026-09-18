@@ -129,6 +129,7 @@ class DeepSeekV4HyperConnection(DeepSeekV4Module):
                 n_blocks=1,
                 tile_height=1,
                 **prefetch,
+                use_rm_hs=False,
             )
         else:
             tensor, layout, slot = packed_weights
@@ -145,6 +146,7 @@ class DeepSeekV4HyperConnection(DeepSeekV4Module):
                 n_blocks=spec.n_blocks,
                 packed_weight_tensor=tensor,
                 packed_weight_spec=spec,
+                use_rm_hs=False,
             )
         self.pre_b = _load_weight(
             _materialize(lambda: base()[:hc].reshape(1, 1, 1, hc), cache.file("pre_b"), ttnn.bfloat16),
