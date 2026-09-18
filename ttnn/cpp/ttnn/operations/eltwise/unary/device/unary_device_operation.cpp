@@ -19,88 +19,67 @@ bool is_integer_dtype(DataType dtype) {
            dtype == DataType::UINT8 || dtype == DataType::INT8;
 }
 
-// Ops with no integer init/LLK in unary_op_utils.cpp. IDENTITY/BITCAST/TYPECAST, bitwise,
-// integer LLKs, and LEAKY_RELU (unsigned identity) are not listed.
-bool floating_point_dtype_ops(UnaryOpType op_type) {
+bool is_int32(DataType dtype) { return dtype == DataType::INT32; }
+bool is_uint32(DataType dtype) { return dtype == DataType::UINT32; }
+bool is_unsigned_int(DataType dtype) {
+    return dtype == DataType::UINT32 || dtype == DataType::UINT16 || dtype == DataType::UINT8;
+}
+bool is_int32_uint32(DataType dtype) { return is_int32(dtype) || is_uint32(dtype); }
+bool is_int32_uint32_uint16(DataType dtype) { return is_int32_uint32(dtype) || dtype == DataType::UINT16; }
+bool is_relu_family_int(DataType dtype) { return is_int32(dtype) || is_unsigned_int(dtype); }
+
+// Integer dtypes that unary_op_utils.cpp maps to a distinct init/LLK (or a dtype-agnostic kernel).
+// Called only for integer inputs; float dtypes are not filtered here.
+bool unary_op_supports_integer_dtype(UnaryOpType op_type, DataType dtype) {
     switch (op_type) {
-        case UnaryOpType::ABS:
-        case UnaryOpType::ACOS:
-        case UnaryOpType::ACOSH:
-        case UnaryOpType::ALT_COMPLEX_ROTATE90:
-        case UnaryOpType::ASIN:
-        case UnaryOpType::ASINH:
-        case UnaryOpType::ATAN:
-        case UnaryOpType::ATANH:
-        case UnaryOpType::CBRT:
-        case UnaryOpType::CEIL:
-        case UnaryOpType::CELU:
-        case UnaryOpType::COS:
-        case UnaryOpType::COSH:
-        case UnaryOpType::DIGAMMA:
-        case UnaryOpType::DIV_UNARY_SFPU:
-        case UnaryOpType::DROPOUT:
-        case UnaryOpType::ELU:
-        case UnaryOpType::ERF:
-        case UnaryOpType::ERFC:
-        case UnaryOpType::ERFINV:
-        case UnaryOpType::EXP:
-        case UnaryOpType::EXP2:
-        case UnaryOpType::EXPM1:
-        case UnaryOpType::FLOOR:
-        case UnaryOpType::FMOD:
-        case UnaryOpType::FRAC:
-        case UnaryOpType::GELU:
-        case UnaryOpType::GELU_TANH:
-        case UnaryOpType::HARDMISH:
-        case UnaryOpType::HARDSHRINK:
-        case UnaryOpType::HARDSIGMOID:
-        case UnaryOpType::HARDSWISH:
-        case UnaryOpType::HARDTANH:
-        case UnaryOpType::HEAVISIDE:
-        case UnaryOpType::I0:
-        case UnaryOpType::I1:
-        case UnaryOpType::ISFINITE:
-        case UnaryOpType::ISINF:
-        case UnaryOpType::ISNAN:
-        case UnaryOpType::ISNEGINF:
-        case UnaryOpType::ISPOSINF:
-        case UnaryOpType::LGAMMA:
-        case UnaryOpType::LOG:
-        case UnaryOpType::LOG10:
-        case UnaryOpType::LOG1P:
-        case UnaryOpType::LOG2:
-        case UnaryOpType::LOGIT:
-        case UnaryOpType::LOGSIGMOID:
-        case UnaryOpType::MAC_TSS:
-        case UnaryOpType::MISH:
-        case UnaryOpType::MUL_UNARY_SFPU:
-        case UnaryOpType::POLYGAMMA:
-        case UnaryOpType::POWER:
-        case UnaryOpType::POWER_ITERATIVE:
-        case UnaryOpType::PRELU_SFPU:
-        case UnaryOpType::RDIV:
-        case UnaryOpType::RECIP:
-        case UnaryOpType::ROUND:
-        case UnaryOpType::RPOW:
-        case UnaryOpType::RSQRT:
-        case UnaryOpType::SELU:
-        case UnaryOpType::SIGMOID:
-        case UnaryOpType::SIGN:
-        case UnaryOpType::SILU:
-        case UnaryOpType::SIN:
-        case UnaryOpType::SINH:
-        case UnaryOpType::SOFTCAP:
-        case UnaryOpType::SOFTPLUS:
-        case UnaryOpType::SOFTSHRINK:
-        case UnaryOpType::SOFTSIGN:
-        case UnaryOpType::SQRT:
-        case UnaryOpType::TAN:
-        case UnaryOpType::TANH:
-        case UnaryOpType::TANHSHRINK:
-        case UnaryOpType::THRESHOLD:
-        case UnaryOpType::TILED_PROD:
-        case UnaryOpType::TRUNC:
-        case UnaryOpType::XIELU: return true;
+        case UnaryOpType::ABS_INT32:
+        case UnaryOpType::CLAMP_TSS:
+        case UnaryOpType::GEZ:
+        case UnaryOpType::GTZ:
+        case UnaryOpType::LEZ:
+        case UnaryOpType::LTZ:
+        case UnaryOpType::NEG:
+        case UnaryOpType::SIGNBIT: return is_int32(dtype);
+
+        case UnaryOpType::REMAINDER: return is_uint32(dtype);
+
+        case UnaryOpType::LEAKY_RELU: return is_unsigned_int(dtype);
+
+        case UnaryOpType::ADD_UNARY_SFPU:
+        case UnaryOpType::MAXIMUM:
+        case UnaryOpType::MINIMUM:
+        case UnaryOpType::RSUB:
+        case UnaryOpType::SUB_UNARY_SFPU:
+        case UnaryOpType::UNARY_EQ:
+        case UnaryOpType::UNARY_GE:
+        case UnaryOpType::UNARY_GT:
+        case UnaryOpType::UNARY_LE:
+        case UnaryOpType::UNARY_LT:
+        case UnaryOpType::UNARY_NE:
+        case UnaryOpType::WHERE_TSS: return is_int32_uint32(dtype);
+
+        case UnaryOpType::BITWISE_AND:
+        case UnaryOpType::BITWISE_NOT:
+        case UnaryOpType::BITWISE_OR:
+        case UnaryOpType::BITWISE_XOR:
+        case UnaryOpType::EQZ:
+        case UnaryOpType::FILL:
+        case UnaryOpType::LEFT_SHIFT:
+        case UnaryOpType::LOGICAL_NOT_UNARY:
+        case UnaryOpType::NEZ:
+        case UnaryOpType::RIGHT_SHIFT:
+        case UnaryOpType::SQUARE: return is_int32_uint32_uint16(dtype);
+
+        case UnaryOpType::RELU:
+        case UnaryOpType::RELU6:
+        case UnaryOpType::RELU_MAX:
+        case UnaryOpType::RELU_MIN: return is_relu_family_int(dtype);
+
+        // Copy / typecast kernels; valid on integer tiles without a separate integer LLK.
+        case UnaryOpType::BITCAST:
+        case UnaryOpType::IDENTITY:
+        case UnaryOpType::TYPECAST: return true;
+
         default: return false;
     }
 }
@@ -111,7 +90,7 @@ void validate_integer_input_dtype(const std::vector<EltwiseUnaryWithParam>& op_c
     }
     for (const auto& op : op_chain) {
         TT_FATAL(
-            !floating_point_dtype_ops(op.type()),
+            unary_op_supports_integer_dtype(op.type(), input_dtype),
             "Unary: {} does not support integer input dtype {}",
             op.type(),
             input_dtype);
