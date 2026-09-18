@@ -389,6 +389,10 @@ WindowedSetup setup_windowed_cbs(
     cb_ids.windowed_q_offset = cb_ids.q_in;
     cb_ids.windowed_cu_reader = cb_ids.q_in;
     cb_ids.windowed_k_range = cb_ids.q_in;
+    // A mask block map feeds the compute its per Q chunk K count over the same ctrl CB windowed mode uses.
+    if (tensors.attn_mask_block_map.has_value()) {
+        cb_ids.windowed_k_range = allocate_cb(16, 2, tt::DataFormat::Int32);
+    }
     if (!attrs.is_windowed) {
         return w;
     }
@@ -417,6 +421,17 @@ WindowedSetup setup_windowed_cbs(
         w.q_offset_buffer = off.buffer();
     }
     return w;
+}
+
+// Reader scratch for one row of block flags; returns the stick size, 0 without a map.
+template <typename AllocateCb>
+uint32_t allocate_mask_block_map_cb(const SDPAInputs& tensors, sdpa_cb::CBIds& cb_ids, const AllocateCb& allocate_cb) {
+    if (!tensors.attn_mask_block_map.has_value()) {
+        return 0;
+    }
+    const uint32_t stick_size = tensors.attn_mask_block_map->buffer()->aligned_page_size();
+    cb_ids.mask_block_map = allocate_cb(stick_size, 1, tt::DataFormat::Int32);
+    return stick_size;
 }
 
 }  // namespace
@@ -541,6 +556,8 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     // Windowed masks are complete dense masks synthesized from cu_window_seqlens. They already cover padding
     // positions outside the final boundary, so the generic generated-padding-mask paths must stay disabled.
     const bool generated_padding_mask = use_padded_mask && !is_windowed;
+    const bool use_mask_block_map = tensor_args.attn_mask_block_map.has_value();
+    const bool use_k_range_ctrl = is_windowed || use_mask_block_map;
 
     // log_debug all of the above
     log_debug(tt::LogOp, "B: {}", B);
@@ -789,7 +806,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     // 0: no K/V chains, 1: the non causal lock step chain, 2: causal prefix chains (see build_causal_chain).
     const uint32_t kv_chain_mode = kv_chain_mode_for(
         is_causal,
-        !is_chunked && !has_sliding_window && !is_windowed,
+        !is_chunked && !has_sliding_window && !is_windowed && !use_mask_block_map,
         global_q_pair_distribute && !use_provided_mask,
         q_num_chunks,
         Sq_chunk_t,
@@ -840,6 +857,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     reader_compile_time_args.push_back(static_cast<uint32_t>(use_zigzag_balancing));  // arg 33
     reader_compile_time_args.push_back(static_cast<uint32_t>(is_windowed));           // arg 34: K-range narrowing
     reader_compile_time_args.push_back(kv_chain_mode);  // arg 35: kv chain mode, 2 = causal prefix chains
+    reader_compile_time_args.push_back(static_cast<uint32_t>(use_mask_block_map));  // arg 36: mask block map
 
     TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(input_tensor_k.buffer()).append_to(reader_compile_time_args);
@@ -854,6 +872,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     // Q-offset tensor to compute each Q chunk's [k_lo, k_hi) — same placeholder rule as the writer's pair.
     TensorAccessorArgs(buffer_or_null(tensor_args.cu_window_seqlens)).append_to(reader_compile_time_args);
     TensorAccessorArgs(buffer_or_null(tensor_args.windowed_q_token_offset_tensor)).append_to(reader_compile_time_args);
+    TensorAccessorArgs(buffer_or_null(tensor_args.attn_mask_block_map)).append_to(reader_compile_time_args);
 
     // Set up semaphore IDs for KV chain forwarding (non-causal only).
     // In the descriptor pattern, semaphore IDs are explicit sequential integers
@@ -954,7 +973,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         valid_Skt,                                    // arg 31: unpadded K tile count for streaming padded_k_tiles
         k_partial_col,                                // arg 32: K partial-tile col (0 = no partial)
         static_cast<uint32_t>(use_zigzag_balancing),  // arg 33: unified zigzag remap
-        static_cast<uint32_t>(is_windowed),           // arg 34: K-range narrowing (bounds from the ctrl CB)
+        static_cast<uint32_t>(use_k_range_ctrl),      // arg 34: K-range narrowing (bounds from the ctrl CB)
     };
 
     std::map<std::string, std::string> defines_map;
@@ -1065,6 +1084,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     if (is_chunked) {
         cb_ids.page_table = allocate_cb(page_table_stick_size, 1, page_table_df);
     }
+    const uint32_t block_map_stick_size = allocate_mask_block_map_cb(tensor_args, cb_ids, allocate_cb);
     if (flexible_chunked) {
         constexpr uint32_t chunk_start_idx_page_size = 32;
         cb_ids.chunk_start_idx_compute = allocate_cb(chunk_start_idx_page_size, 1, tt::DataFormat::Int32);
@@ -1711,6 +1731,8 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         reader_args.push_back(cu_window_seqlens_eles);
         reader_args.push_back(windowed_q_token_offset);
         reader_args.push_back(windowed_q_offset_buffer);
+        reader_args.push_back(buffer_or_null(tensor_args.attn_mask_block_map));
+        reader_args.push_back(block_map_stick_size);
 
         reader_desc.emplace_runtime_args(core, reader_args);
 

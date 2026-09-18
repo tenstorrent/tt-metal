@@ -216,9 +216,9 @@ ProgramDescriptor build_ring_distributed_sdpa_program_descriptor(
 
     // These tile capacity counts for CBs need to match the number of tiles expected by the kernel (softmax.cpp)
     uint32_t q_tiles = Sq_chunk_t * DHt * 2;
-    uint32_t k_tiles = Sk_chunk_t * DHt * 2;            // double buffer
-    uint32_t v_tiles = Sk_chunk_t * vDHt * 2;           // double buffer
-    uint32_t mask_tiles = 2;                            // lightweight: neginf + causal diagonal
+    uint32_t k_tiles = Sk_chunk_t * DHt * 2;   // double buffer
+    uint32_t v_tiles = Sk_chunk_t * vDHt * 2;  // double buffer
+    uint32_t mask_tiles = 2;                   // lightweight: neginf + causal diagonal
     uint32_t qk_tiles = Sq_chunk_t * Sk_chunk_t;
     uint32_t out_im_tiles = Sq_chunk_t * vDHt;
     uint32_t out0_t = Sq_chunk_t * vDHt;
@@ -295,13 +295,14 @@ ProgramDescriptor build_ring_distributed_sdpa_program_descriptor(
         0                   // use_streaming_compute (ring uses legacy compute)
     };
     // Semaphore placeholders (not used in ring, but kernel expects them at indices 29-32)
-    reader_compile_time_args.push_back(0);  // sender_semaphore_id
-    reader_compile_time_args.push_back(0);  // receiver_semaphore_id
-    reader_compile_time_args.push_back(0);  // valid_semaphore_id
-    reader_compile_time_args.push_back(0);  // mcast_enabled
+    reader_compile_time_args.push_back(0);                                            // sender_semaphore_id
+    reader_compile_time_args.push_back(0);                                            // receiver_semaphore_id
+    reader_compile_time_args.push_back(0);                                            // valid_semaphore_id
+    reader_compile_time_args.push_back(0);                                            // mcast_enabled
     reader_compile_time_args.push_back(static_cast<uint32_t>(use_zigzag_balancing));  // arg 33
     reader_compile_time_args.push_back(0);  // arg 34: use_windowed_narrowing — ring is never windowed
     reader_compile_time_args.push_back(0);  // arg 35: kv chain mode, ring has no chains
+    reader_compile_time_args.push_back(0);  // arg 36: mask block map, never on ring
 
     TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(input_tensor_k.buffer()).append_to(reader_compile_time_args);
@@ -313,6 +314,7 @@ ProgramDescriptor build_ring_distributed_sdpa_program_descriptor(
     TensorAccessorArgs().append_to(reader_compile_time_args);  // chunk_start_idx_tensor (ring has no flexible chunked)
     TensorAccessorArgs().append_to(reader_compile_time_args);  // cu_window_seqlens (ring is never windowed)
     TensorAccessorArgs().append_to(reader_compile_time_args);  // windowed_q_token_offset_tensor (never windowed)
+    TensorAccessorArgs().append_to(reader_compile_time_args);  // attn_mask_block_map (never on ring)
 
     std::vector<uint32_t> writer_compile_time_args = {
         // interleaved accessor args
