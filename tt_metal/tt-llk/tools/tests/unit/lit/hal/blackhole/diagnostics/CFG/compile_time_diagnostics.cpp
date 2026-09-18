@@ -96,7 +96,7 @@ void invalid_access()
 
 namespace cfg = hal::cfg;
 
-constexpr auto invalid_gpr_destination = cfg::from_gpr<cfg::CfgStateId::StateID, cfg::Sec::S0>(cfg::gpr<4>());
+constexpr auto invalid_gpr_destination = cfg::from_gpr<cfg::CfgStateId::StateID, cfg::Sec::S0>(hal::gpr<4>());
 // INVALID_GPR_DESTINATION: error: static assertion failed: GPR-backed CFG writes require a state-CFG destination
 
 //--- misaligned-wrcfg.cpp
@@ -106,7 +106,7 @@ namespace cfg = hal::cfg;
 
 void misaligned_wrcfg()
 {
-    cfg::write<cfg::Access::TensixCfgUnit, cfg::Thcon[cfg::Reg3].Base_cntx1_address, cfg::Sec::S0>(cfg::gpr<8, cfg::GprTransferSize::Bits128>());
+    cfg::write<cfg::Access::TensixCfgUnit, cfg::Thcon[cfg::Reg3].Base_cntx1_address, cfg::Sec::S0, cfg::GprTransferSize::Bits128>(hal::gpr<8>());
     // MISALIGNED_WRCFG: error: static assertion failed: 128-bit GPR cfg::write destination must be four-word aligned
 }
 
@@ -117,7 +117,7 @@ namespace cfg = hal::cfg;
 
 void misaligned_reg2flop()
 {
-    cfg::write<cfg::Access::TensixScalarUnit, cfg::Thcon[cfg::Reg0].TileDescriptor.Raw, cfg::Sec::S0>(cfg::gpr<10, cfg::GprTransferSize::Bits128>());
+    cfg::write<cfg::Access::TensixScalarUnit, cfg::Thcon[cfg::Reg0].TileDescriptor.Raw, cfg::Sec::S0, cfg::GprTransferSize::Bits128>(hal::gpr<10>());
     // MISALIGNED_REG2FLOP: error: static assertion failed: 128-bit REG2FLOP source GPR must be four-word aligned
 }
 
