@@ -107,6 +107,7 @@ enum class SfpuType : std::uint32_t
     round,
     swiglu,
     where,
+    lerp,
     unused,
     lt,
     gt,
