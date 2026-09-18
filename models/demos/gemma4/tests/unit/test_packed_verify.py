@@ -293,11 +293,6 @@ def test_packed_verify_batch_perf(mesh_device, reset_seeds):
     _ci = os.getenv("CI") == "true"
     Bs = [int(b) for b in os.environ.get("GEMMA4_BENCH_B", "1,8" if _ci else "1,8,16,32").split(",") if b.strip()]
     ctx = int(os.environ.get("GEMMA4_BENCH_CTX", 1024 if _ci else 2048))
-    # N300 1x2: a full local sweep (B=32 × ctx=2048) OOMs after the
-    # matches_sequential weight/KV alloc — cap to the CI-light footprint.
-    if mesh_device.get_num_devices() <= 2 and "GEMMA4_BENCH_B" not in os.environ:
-        Bs = [b for b in Bs if b <= 8]
-        ctx = min(ctx, 1024)
     K = int(os.environ.get("GEMMA4_SPEC_DRAFT_LEN", 3))
     P = K + 1
     reps = int(os.environ.get("GEMMA4_BENCH_ITERS", 3 if _ci else 20))
