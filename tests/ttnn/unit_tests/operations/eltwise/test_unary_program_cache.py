@@ -534,7 +534,7 @@ def test_unary_inplace_cache_hit_interleaved_readdresses(device):
     [([1, 1, 192, 64], [1, 1, 96, 128]), ([1, 1, 320, 64], [1, 1, 64, 320])],
 )
 def test_unary_cache_miss_nd_sharded_different_geometry(device, squeezes_to_rank1, squeezes_to_rank2):
-    """Two ND_SHARDED tensors sharing one NdShardSpec but shapes squeeze to different distribution
+    """Two ND_SHARDED with NdShardSpec but shapes squeeze to different distribution
     geometry -> different cache entries.
 
     squeeze_shape_ranks merges a dim into the one right of it while tensor_size == shard_size holds.
@@ -557,6 +557,34 @@ def test_unary_cache_miss_nd_sharded_different_geometry(device, squeezes_to_rank
             a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config
         )
         assert tt_a.memory_config().shard_spec is None
+        with device.cache_entries_counter.measure():
+            tt_out = ttnn.relu(tt_a)
+        assert_equal(torch.relu(a), ttnn.to_torch(tt_out))
+
+    assert device.cache_entries_counter.total == 2
+
+
+@pytest.mark.parametrize("buffer_type", [ttnn.BufferType.L1, ttnn.BufferType.DRAM])
+def test_unary_cache_miss_width_sharded_different_geometry(device, buffer_type):
+    """Two WIDTH_SHARDED shards with different padded shapes squeeze to different distribution geometry
+    -> different cache entries."""
+    device.cache_entries_counter.reset()
+    memory_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        buffer_type,
+        ttnn.ShardSpec(
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))}),
+            (64, 64),
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+
+    for seed, shape in enumerate(([64, 64], [64, 128])):
+        torch.manual_seed(seed)
+        a = torch.rand(shape, dtype=torch.bfloat16) + 0.1
+        tt_a = ttnn.from_torch(
+            a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config
+        )
         with device.cache_entries_counter.measure():
             tt_out = ttnn.relu(tt_a)
         assert_equal(torch.relu(a), ttnn.to_torch(tt_out))
