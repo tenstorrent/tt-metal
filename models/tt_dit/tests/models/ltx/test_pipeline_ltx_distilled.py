@@ -27,6 +27,7 @@ from models.tt_dit.utils.ltx import (
     default_ltx_checkpoint,
     default_ltx_gemma,
     print_ltx_timing_table,
+    traced_default,
 )
 from models.tt_dit.utils.patchifiers import AudioLatentShape, VideoPixelShape
 from models.tt_dit.utils.test import skip_if_unsupported_num_links
@@ -77,6 +78,7 @@ def _ltx_checkpoint_cached(filename: str) -> bool:
 )
 def test_pipeline_distilled(
     mesh_device,
+    device_params,
     sp_axis,
     tp_axis,
     num_links,
@@ -107,7 +109,9 @@ def test_pipeline_distilled(
     width = int(os.environ.get("WIDTH", "1920"))
 
     run_warmup = os.environ.get("RUN_WARMUP", "0") in ("1", "true", "True")
-    traced = os.environ.get("LTX_TRACED", "0") in ("1", "true", "True")
+    # Traced by default wherever the mesh param reserves a trace region; LTX_TRACED=0/1 overrides
+    # (rule + rationale: utils.ltx.traced_default, unit-tested in tests/unit/test_ltx_traced_default.py).
+    traced = traced_default(device_params, os.environ.get("LTX_TRACED"))
 
     # Conditioning image (I2V). Its mere presence drives image_conditioning: with a path the
     # transformer builds the per-token video-timestep (I2V) modulation; without one pure T2V keeps
