@@ -8,7 +8,6 @@
 
 #include <tt_stl/reflection.hpp>
 #include <unordered_set>
-#include "tt_metal/impl/program/program_options.hpp"
 
 namespace ttnn::operations::generic {
 
@@ -49,8 +48,8 @@ tensor_return_value_t GenericOpDeviceOperation::create_output_tensors(
 ttsl::hash::hash_t compute_program_descriptor_hash(const tt::tt_metal::ProgramDescriptor& program_descriptor) {
     if (program_descriptor.custom_program_hash) {
         auto hash = *program_descriptor.custom_program_hash;
-        if (tt::tt_metal::detail::per_core_program_size_enabled()) {
-            ttsl::hash::hash_combine(hash, true);
+        if (program_descriptor.program_l1_layout == ProgramL1Layout::PER_CORE) {
+            ttsl::hash::hash_combine(hash, program_descriptor.program_l1_layout);
         }
         return hash;
     }
@@ -115,8 +114,8 @@ ttsl::hash::hash_t compute_program_descriptor_hash(const tt::tt_metal::ProgramDe
     for (const auto& semaphore : program_descriptor.semaphores) {
         ttsl::hash::hash_combine(hash, hash_semaphore(semaphore));
     }
-    if (tt::tt_metal::detail::per_core_program_size_enabled()) {
-        ttsl::hash::hash_combine(hash, true);
+    if (program_descriptor.program_l1_layout == ProgramL1Layout::PER_CORE) {
+        ttsl::hash::hash_combine(hash, program_descriptor.program_l1_layout);
     }
     return hash;
 }

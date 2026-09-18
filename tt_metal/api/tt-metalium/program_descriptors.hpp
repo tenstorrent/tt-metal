@@ -220,6 +220,11 @@ struct KernelDescriptor {
     void emplace_common_runtime_args(const RTArgList& args);
 };
 
+enum class ProgramL1Layout : uint8_t {
+    UNIFORM,
+    PER_CORE,
+};
+
 struct ProgramDescriptor {
     using KernelDescriptors = ttsl::SmallVector<KernelDescriptor, 3>;
     using SemaphoreDescriptors = ttsl::SmallVector<SemaphoreDescriptor, 3>;
@@ -228,6 +233,11 @@ struct ProgramDescriptor {
     KernelDescriptors kernels;
     SemaphoreDescriptors semaphores;
     CBDescriptors cbs;
+    // PER_CORE computes the program-image frontier independently on each
+    // worker. The resulting static layout is revalidated before every launch
+    // and never reserves allocator space. It is honored only when
+    // TT_METAL_PER_CORE_PROGRAM_SIZE is enabled.
+    ProgramL1Layout program_l1_layout = ProgramL1Layout::UNIFORM;
     std::optional<std::uint64_t> custom_program_hash;
 
     std::optional<uint32_t> find_available_semaphore_id(const CoreCoord& core, CoreType core_type) const;

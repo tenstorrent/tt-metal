@@ -20,29 +20,6 @@
 
 namespace tt::tt_metal {
 
-class AllocatorImpl;
-
-// Shared by every ProgramImpl finalized in one batch. The device reservation
-// remains live until the last owning program is destroyed or evicted.
-class PerCoreProgramL1Reservation {
-public:
-    ~PerCoreProgramL1Reservation() noexcept;
-
-    PerCoreProgramL1Reservation(const PerCoreProgramL1Reservation&) = delete;
-    PerCoreProgramL1Reservation& operator=(const PerCoreProgramL1Reservation&) = delete;
-
-private:
-    friend class AllocatorImpl;
-
-    PerCoreProgramL1Reservation(
-        std::weak_ptr<AllocatorImpl*> allocator_liveness, uint64_t reservation_id, uint64_t generation) :
-        allocator_liveness_(std::move(allocator_liveness)), reservation_id_(reservation_id), generation_(generation) {}
-
-    std::weak_ptr<AllocatorImpl*> allocator_liveness_;
-    uint64_t reservation_id_;
-    uint64_t generation_;
-};
-
 // THREAD SAFETY: Allocator is thread safe.
 class AllocatorImpl {
 public:
@@ -133,7 +110,6 @@ public:
     void dump_memory_blocks(const BufferType& buffer_type, std::ostream& out) const;
 
     std::optional<DeviceAddr> get_lowest_occupied_l1_address(std::uint32_t bank_id) const;
-    std::optional<DeviceAddr> get_lowest_occupied_l1_buffer_address(std::uint32_t bank_id) const;
 
     void shrink_allocator_size(const BufferType& buffer_type, DeviceAddr shrink_size, bool bottom_up = true);
     void reset_allocator_size(const BufferType& buffer_type);
@@ -180,9 +156,6 @@ public:
     void mirror_lockstep_allocation(DeviceAddr address, DeviceAddr size);
     void unmirror_lockstep_allocation(DeviceAddr address);
 
-    [[nodiscard]] std::shared_ptr<PerCoreProgramL1Reservation> reserve_per_core_program(
-        const std::unordered_map<CoreCoord, uint32_t>& program_end_by_core, DeviceAddr program_base);
-
     // Device-global L1 arena for allocations that outlive individual programs.
     PersistentL1Arena& persistent_l1() { return persistent_l1_; }
     const PersistentL1Arena& persistent_l1() const { return persistent_l1_; }
@@ -200,13 +173,9 @@ protected:
     void validate_bank_assignments() const;
 
 private:
-    friend class PerCoreProgramL1Reservation;
-
     void verify_safe_allocation() const;
     void record_allocation_if_unsafe(Buffer* buffer);
     bool in_corruptible_allocation_scope() const;
-    void release_per_core_program(uint64_t reservation_id, uint64_t generation);
-    void reset_per_core_program_reservations();
 
     mutable std::mutex mutex_;
 
@@ -234,14 +203,6 @@ private:
     // Set while a HYBRID allocation span is open (see try_begin_hybrid_allocation). Not a mutex:
     // a same-thread re-entry must report a bug, not deadlock or hit try_lock's UB.
     std::atomic<bool> hybrid_allocation_in_progress_{false};
-    DeviceAddr per_core_program_base_{0};
-    // Maximum program-text end over the currently live reservations on each
-    // core. Each reservation contributes one finalized program batch.
-    std::unordered_map<CoreCoord, DeviceAddr> per_core_program_end_by_core_;
-    std::unordered_map<uint64_t, std::unordered_map<CoreCoord, DeviceAddr>> per_core_program_reservations_;
-    uint64_t next_per_core_program_reservation_id_{1};
-    uint64_t per_core_program_reservation_generation_{0};
-    std::shared_ptr<AllocatorImpl*> per_core_program_reservation_liveness_;
 
     // config_ is stored in a unique_ptr because AllocatorConfig is currently an incomplete type in API directory.
     //
@@ -249,9 +210,6 @@ private:
     std::unique_ptr<AllocatorConfig> config_;
 
     PersistentL1Arena persistent_l1_;
-    // Keep one seal per core while at least one live program reservation uses
-    // that core. The arena has its own refcounts for program-local users.
-    std::unordered_map<CoreCoord, PersistentL1Arena::Seal> per_core_program_persistent_l1_seals_;
 
     // External view of the allocator, this shouldn't need to be a unique_ptr, but currently kept as so to preserve API
     // stability

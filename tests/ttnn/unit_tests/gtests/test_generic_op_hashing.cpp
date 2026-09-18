@@ -159,6 +159,15 @@ TEST(ProgramDescriptorMerge, RemapsUniformAddressGroupsPerDescriptor) {
     EXPECT_EQ(merged.cbs[3].uniform_address_group, 2);
 }
 
+TEST(ProgramDescriptorMerge, RejectsDifferentProgramL1Layouts) {
+    using namespace tt::tt_metal;
+    ProgramDescriptor uniform_descriptor;
+    ProgramDescriptor per_core_descriptor;
+    per_core_descriptor.program_l1_layout = ProgramL1Layout::PER_CORE;
+
+    EXPECT_THROW(merge_program_descriptors({uniform_descriptor, per_core_descriptor}), std::exception);
+}
+
 TEST(ProgramDescriptorValidation, UniformAddressGroupsRequireCompatibleDisjointStaticDescriptors) {
     using namespace genop_named_args_hash_test;
     auto make_cb = [](CoreCoord core, uint32_t total_size, uint32_t page_size, uint32_t group = 1) {
@@ -195,25 +204,36 @@ TEST(ProgramDescriptorValidation, UniformAddressGroupsRequireCompatibleDisjointS
         std::exception);
 }
 
-TEST(ProgramConfiguration, PerCoreProgramSizeIsControlledOnlyByEnvironment) {
+TEST(ProgramConfiguration, PerCoreProgramLayoutRequiresDescriptorContractAndEnvironment) {
+    using namespace tt::tt_metal;
     const char* previous_value = std::getenv("TT_METAL_PER_CORE_PROGRAM_SIZE");
     const std::optional<std::string> saved_value =
         previous_value == nullptr ? std::nullopt : std::make_optional(previous_value);
 
     unsetenv("TT_METAL_PER_CORE_PROGRAM_SIZE");
-    Program legacy_program;
-    EXPECT_FALSE(legacy_program.impl().uses_per_core_program_size());
-    EXPECT_FALSE(legacy_program.impl().uses_per_core_cb_placement());
-    const ProgramDescriptor descriptor;
-    const auto legacy_generic_hash = ttnn::operations::generic::compute_program_descriptor_hash(descriptor);
-    const auto legacy_descriptor_hash = std::hash<ProgramDescriptor>{}(descriptor);
+    const ProgramDescriptor uniform_descriptor;
+    Program default_program;
+    EXPECT_FALSE(default_program.impl().uses_per_core_l1_layout());
+    EXPECT_FALSE(default_program.impl().uses_per_core_cb_placement());
+    const auto uniform_generic_hash = ttnn::operations::generic::compute_program_descriptor_hash(uniform_descriptor);
+    const auto uniform_descriptor_hash = std::hash<ProgramDescriptor>{}(uniform_descriptor);
+
+    ProgramDescriptor per_core_descriptor;
+    per_core_descriptor.program_l1_layout = ProgramL1Layout::PER_CORE;
+    EXPECT_THROW((void)Program{per_core_descriptor}, std::exception);
 
     setenv("TT_METAL_PER_CORE_PROGRAM_SIZE", "1", /*overwrite=*/1);
-    Program per_core_program;
-    EXPECT_TRUE(per_core_program.impl().uses_per_core_program_size());
+    Program uniform_program(uniform_descriptor);
+    EXPECT_FALSE(uniform_program.impl().uses_per_core_l1_layout());
+    EXPECT_FALSE(uniform_program.impl().uses_per_core_cb_placement());
+    EXPECT_EQ(uniform_generic_hash, ttnn::operations::generic::compute_program_descriptor_hash(uniform_descriptor));
+    EXPECT_EQ(uniform_descriptor_hash, std::hash<ProgramDescriptor>{}(uniform_descriptor));
+
+    Program per_core_program(per_core_descriptor);
+    EXPECT_TRUE(per_core_program.impl().uses_per_core_l1_layout());
     EXPECT_TRUE(per_core_program.impl().uses_per_core_cb_placement());
-    EXPECT_NE(legacy_generic_hash, ttnn::operations::generic::compute_program_descriptor_hash(descriptor));
-    EXPECT_NE(legacy_descriptor_hash, std::hash<ProgramDescriptor>{}(descriptor));
+    EXPECT_NE(uniform_generic_hash, ttnn::operations::generic::compute_program_descriptor_hash(per_core_descriptor));
+    EXPECT_NE(uniform_descriptor_hash, std::hash<ProgramDescriptor>{}(per_core_descriptor));
 
     if (saved_value.has_value()) {
         setenv("TT_METAL_PER_CORE_PROGRAM_SIZE", saved_value->c_str(), /*overwrite=*/1);

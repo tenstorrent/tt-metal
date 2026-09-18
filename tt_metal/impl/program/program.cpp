@@ -358,10 +358,6 @@ detail::ProgramImpl::ProgramImpl(ContextId context_id) :
     programmable_core_count_(MetalContext::instance(context_id).hal().get_programmable_core_type_count()),
     max_cbs_(MetalContext::instance(context_id).hal().get_arch_num_circular_buffers()),
     id(program_counter++) {
-    // Keep this allocator experiment entirely out of ProgramDescriptor and
-    // normal cache keys. Programs retain the legacy layout unless explicitly
-    // opted in before construction.
-    per_core_program_size_enabled_ = detail::per_core_program_size_enabled();
     for (uint32_t i = 0; i < programmable_core_count_; i++) {
         kernels_.push_back({});
         grid_extent_.push_back({});
@@ -384,7 +380,6 @@ detail::ProgramImpl::ProgramImpl(ContextId context_id) :
 detail::ProgramImpl::~ProgramImpl() noexcept {
     // Deallocate circular buffers and unregister from devices
     deallocate_circular_buffers();
-    per_core_program_l1_reservations_.clear();
     persistent_l1_seals_.clear();
     Inspector::program_destroyed(this);
 }
@@ -398,8 +393,8 @@ DeviceAddr detail::ProgramImpl::reserve_program_local_l1(const IDevice* device, 
         }
         sealed_cores.emplace(core, arena.seal(CoreRangeSet(CoreRange(core))));
     }
-    if (per_core_program_size_enabled_ && !program_end_by_core_.empty()) {
-        // The legacy arena begins at the global kernel-config frontier.  Once
+    if (uses_per_core_l1_layout() && !program_end_by_core_.empty()) {
+        // The uniform-layout arena begins at the global kernel-config frontier. Once
         // this program has a finalized per-core binary layout, that frontier
         // is unnecessarily conservative on a core with no persistent arena
         // allocations. Start immediately after the real program image there.
@@ -483,6 +478,11 @@ Program::Program(std::shared_ptr<detail::ProgramImpl> impl) : internal_(std::mov
 Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shared<detail::ProgramImpl>()) {
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
     LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureProgramConstructor, *this);
+    const bool uses_per_core_l1_layout = descriptor.program_l1_layout == ProgramL1Layout::PER_CORE;
+    TT_FATAL(
+        !uses_per_core_l1_layout || detail::per_core_program_size_enabled(),
+        "ProgramL1Layout::PER_CORE requires TT_METAL_PER_CORE_PROGRAM_SIZE to be enabled");
+    internal_->set_per_core_l1_layout(uses_per_core_l1_layout);
     validate_uniform_address_groups(descriptor.cbs);
     internal_->set_has_uniform_address_groups(
         std::ranges::any_of(descriptor.cbs, [](const CBDescriptor& cb) { return cb.uniform_address_group != 0; }));
@@ -1423,8 +1423,7 @@ CBHandle detail::ProgramImpl::add_circular_buffer_(const std::shared_ptr<Circula
                 }
             }
         } else {
-            // Preserve the legacy one-allocator-per-descriptor-range layout
-            // when per-core program sizing is disabled.
+            // Preserve one allocator per descriptor range for uniform-layout programs.
             auto val = std::find_if(
                 cb_allocators_.begin(),
                 cb_allocators_.end(),
@@ -2140,8 +2139,7 @@ void detail::ProgramImpl::allocate_circular_buffers(const IDevice* device) {
 
         uint64_t computed_addr = reserve_program_local_l1(device, circular_buffer->core_ranges());
         if (!uses_per_core_cb_placement()) {
-            // Preserve legacy append-only placement exactly when the
-            // experimental per-core layout is disabled.
+            // Preserve append-only placement exactly for uniform-layout programs.
             for (const CoreRange& core_range : circular_buffer->core_ranges().ranges()) {
                 for (const CircularBufferAllocator& allocator : this->cb_allocators_) {
                     if (allocator.core_range == core_range) {
@@ -2346,7 +2344,7 @@ void detail::ProgramImpl::validate_circular_buffer_region(const IDevice* device)
             for (const auto& core : cb_allocator.core_range) {
                 for (auto* phys_alloc : physical_allocators) {
                     auto bank_id = phys_alloc->get_bank_ids_from_logical_core(BufferType::L1, core).front();
-                    auto addr = phys_alloc->get_lowest_occupied_l1_buffer_address(bank_id);
+                    auto addr = phys_alloc->get_lowest_occupied_l1_address(bank_id);
                     if (addr.has_value()) {
                         lowest_address =
                             lowest_address.has_value() ? std::make_optional(std::min(*lowest_address, *addr)) : addr;
@@ -2362,6 +2360,74 @@ void detail::ProgramImpl::validate_circular_buffer_region(const IDevice* device)
                 cb_allocator.core_range.str(),
                 lowest_address.value(),
                 cb_region_end);
+        }
+    }
+}
+
+void detail::ProgramImpl::validate_program_image_region(const IDevice* device) {
+    if (!uses_per_core_l1_layout() || program_end_by_core_.empty()) {
+        return;
+    }
+
+    const auto& hal = MetalContext::instance(context_id_).hal();
+    const DeviceAddr program_base = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::KERNEL_CONFIG);
+    const DeviceAddr l1_limit = device->l1_size_per_core();
+    const auto& allocator = device->allocator_impl();
+    TT_FATAL(
+        allocator->get_config().allocator_mode == AllocatorMode::HYBRID,
+        "ProgramL1Layout::PER_CORE requires HYBRID allocation");
+
+    // Cached program layouts do not reserve allocator space. Match the existing
+    // static CB/DFB contract by checking live allocator state before every use.
+    std::vector<AllocatorImpl*> physical_allocators;
+    if (const auto* mesh = dynamic_cast<const tt::tt_metal::distributed::MeshDevice*>(device)) {
+        for (IDevice* physical_device : mesh->get_devices()) {
+            physical_allocators.push_back(physical_device->allocator_impl().get());
+        }
+    } else {
+        physical_allocators.push_back(allocator.get());
+    }
+
+    std::unordered_set<AllocatorImpl*> allocators_with_persistent_l1(
+        physical_allocators.begin(), physical_allocators.end());
+    allocators_with_persistent_l1.insert(allocator.get());
+
+    for (const auto& [core, program_end] : program_end_by_core_) {
+        TT_FATAL(
+            program_end >= program_base && program_end <= l1_limit,
+            "Invalid per-core program image [{}, {}) on core {}; worker L1 ends at {}",
+            program_base,
+            program_end,
+            core,
+            l1_limit);
+
+        for (AllocatorImpl* physical_allocator : physical_allocators) {
+            TT_FATAL(
+                physical_allocator->has_bank(BufferType::L1, core),
+                "Per-core program image references core {} without an L1 bank",
+                core);
+            const auto bank_id = physical_allocator->get_bank_ids_from_logical_core(BufferType::L1, core).front();
+            const auto allocator_frontier = physical_allocator->get_lowest_occupied_l1_address(bank_id);
+            TT_FATAL(
+                !allocator_frontier.has_value() || allocator_frontier.value() >= program_end,
+                "Per-core program image [{}, {}) on core {} overlaps an L1 allocation beginning at {}",
+                program_base,
+                program_end,
+                core,
+                allocator_frontier.value_or(0));
+        }
+
+        for (AllocatorImpl* persistent_allocator : allocators_with_persistent_l1) {
+            for (const auto& [range_begin, range_end] : persistent_allocator->persistent_l1().occupied_ranges(core)) {
+                TT_FATAL(
+                    program_end <= range_begin || program_base >= range_end,
+                    "Per-core program image [{}, {}) on core {} overlaps persistent L1 allocation [{}, {})",
+                    program_base,
+                    program_end,
+                    core,
+                    range_begin,
+                    range_end);
+            }
         }
     }
 }
@@ -3115,6 +3181,7 @@ void detail::ProgramImpl::compile_and_allocate(IDevice* device, bool force_slow_
     // made since the last enqueue, and service-core claims - so a buffer that has come to overlap
     // this program's regions is only caught by re-checking them here.
     if (not this->compile_and_allocate_needed_ and this->compile_and_allocate_device_ == device) {
+        this->validate_program_image_region(device);
         this->validate_circular_buffer_core_ranges(device);
         this->validate_circular_buffer_region(device);
         this->validate_dataflow_buffer_region(device);
@@ -3419,7 +3486,7 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
         TT_ASSERT(state.offset == tt::align(state.offset, hal.get_alignment(HalMemType::L1)));
 
         const bool reserve_per_core_program = std::ranges::any_of(
-            programs, [](const ProgramImpl* program) { return program->uses_per_core_program_size(); });
+            programs, [](const ProgramImpl* program) { return program->uses_per_core_l1_layout(); });
         const bool use_per_core_tensix_layout =
             reserve_per_core_program && programmable_core_type == HalProgrammableCoreType::TENSIX;
         std::unordered_map<CoreCoord, uint32_t> program_end_by_core;
@@ -3453,7 +3520,7 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
         if (use_per_core_tensix_layout) {
             TT_FATAL(
                 std::ranges::all_of(
-                    programs, [](const ProgramImpl* program) { return program->uses_per_core_program_size(); }),
+                    programs, [](const ProgramImpl* program) { return program->uses_per_core_l1_layout(); }),
                 "All programs finalized together must use the same per-core program reservation setting");
             TT_FATAL(
                 !metal_ctx.rtoptions().get_fast_dispatch(),
@@ -3469,10 +3536,7 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
             // the program.
             for (ProgramImpl* program : programs) {
                 program->program_end_by_core_ = program_end_by_core;
-            }
-            auto reservation = device->allocator_impl()->reserve_per_core_program(program_end_by_core, program_base);
-            for (ProgramImpl* program : programs) {
-                program->per_core_program_l1_reservations_.push_back(reservation);
+                program->validate_program_image_region(device);
             }
         }
 

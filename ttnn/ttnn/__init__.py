@@ -327,6 +327,7 @@ from ttnn.types import (
     RuntimeArgs,
     RuntimeArgsColProxy,
     SemaphoreDescriptor,
+    ProgramL1Layout,
     ProgramDescriptor,
     MeshProgramDescriptor,
     merge_program_descriptors,

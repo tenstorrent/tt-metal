@@ -47,7 +47,6 @@ namespace tt::tt_metal {
 class CircularBufferConfig;
 class IDevice;
 class JitBuildOptions;
-class PerCoreProgramL1Reservation;
 
 class HWCommandQueue;
 class EnqueueProgramCommand;
@@ -259,8 +258,9 @@ public:
     bool is_finalized() const;
     bool is_compiled() const { return !compiled_.empty(); }
     void set_finalized();
-    bool uses_per_core_program_size() const { return per_core_program_size_enabled_; }
-    bool uses_per_core_cb_placement() const { return per_core_program_size_enabled_ || has_uniform_address_groups_; }
+    bool uses_per_core_l1_layout() const { return per_core_l1_layout_; }
+    bool uses_per_core_cb_placement() const { return per_core_l1_layout_ || has_uniform_address_groups_; }
+    void set_per_core_l1_layout(bool enabled) { per_core_l1_layout_ = enabled; }
     void set_has_uniform_address_groups(bool enabled) { has_uniform_address_groups_ = enabled; }
     void allocate_kernel_bin_buf_on_device(IDevice* device);
     bool is_cached() const { return this->cached_device_hash_.has_value(); }
@@ -402,6 +402,7 @@ public:
     void apply_dfb_size_overrides(const std::vector<DfbSizeOverride>& overrides);
 
     // Ensures that statically allocated circular buffers do not grow into L1 buffer space
+    void validate_program_image_region(const IDevice* device);
     void validate_circular_buffer_region(const IDevice* device);
     void validate_dataflow_buffer_region(const IDevice* device);
     // Ensures that circular buffer core ranges are within the device compute grid
@@ -522,7 +523,7 @@ private:
     ProgramTransferInfo program_transfer_info;
 
     bool finalized_{false};
-    bool per_core_program_size_enabled_{false};
+    bool per_core_l1_layout_{false};
     bool has_uniform_address_groups_{false};
     // Absolute end of the kernel-config/program image on each active Tensix.
     // In per-core reservation mode this is also the lower bound for local CB,
@@ -607,7 +608,6 @@ private:
     std::unordered_map<CoreCoord, uint8_t> per_core_num_dfbs_;
     std::vector<CircularBufferAllocator> dfb_allocators_;
     std::unordered_map<PersistentL1Arena*, std::unordered_map<CoreCoord, PersistentL1Arena::Seal>> persistent_l1_seals_;
-    std::vector<std::shared_ptr<PerCoreProgramL1Reservation>> per_core_program_l1_reservations_;
 
     // Initial Metal 2.0 implementation uses a name registry to map names to handles.
     // This indirection is simple and non-invasive, but less efficient than a direct mapping.

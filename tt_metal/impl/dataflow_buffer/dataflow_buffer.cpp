@@ -2596,7 +2596,7 @@ void ProgramImpl::validate_dataflow_buffer_region(const IDevice* device) {
     uint32_t max_l1_size = device->l1_size_per_core();
     const auto& allocator = device->allocator_impl();
     const bool hybrid_mode =
-        per_core_program_size_enabled_ && allocator->get_config().allocator_mode == AllocatorMode::HYBRID;
+        uses_per_core_l1_layout() && allocator->get_config().allocator_mode == AllocatorMode::HYBRID;
     std::vector<AllocatorImpl*> physical_allocators;
     if (hybrid_mode) {
         if (const auto* mesh = dynamic_cast<const tt::tt_metal::distributed::MeshDevice*>(device)) {
@@ -2628,7 +2628,7 @@ void ProgramImpl::validate_dataflow_buffer_region(const IDevice* device) {
                 for (AllocatorImpl* physical_allocator : physical_allocators) {
                     const auto bank_id =
                         physical_allocator->get_bank_ids_from_logical_core(BufferType::L1, core).front();
-                    const auto address = physical_allocator->get_lowest_occupied_l1_buffer_address(bank_id);
+                    const auto address = physical_allocator->get_lowest_occupied_l1_address(bank_id);
                     if (address.has_value()) {
                         allocator_frontier = allocator_frontier.has_value()
                                                  ? std::make_optional(std::min(*allocator_frontier, *address))

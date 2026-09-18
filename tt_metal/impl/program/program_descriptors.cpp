@@ -12,7 +12,6 @@
 #include <utility>
 
 #include "impl/buffers/semaphore.hpp"
-#include "impl/program/program_options.hpp"
 #include "tt_stl/overloaded.hpp"
 #include <tt_stl/reflection.hpp>
 
@@ -87,6 +86,15 @@ ProgramDescriptor merge_program_descriptors(const std::vector<ProgramDescriptor>
     if (descriptors.size() == 1) {
         return descriptors[0];
     }
+
+    const ProgramL1Layout program_l1_layout = descriptors.front().program_l1_layout;
+    TT_FATAL(
+        std::ranges::all_of(
+            descriptors,
+            [program_l1_layout](const ProgramDescriptor& descriptor) {
+                return descriptor.program_l1_layout == program_l1_layout;
+            }),
+        "Cannot merge ProgramDescriptors with different ProgramL1Layout contracts");
 
     // Check all pairs of descriptors for overlapping core ranges
     // (different kernels within a single descriptor can share cores, but
@@ -373,8 +381,8 @@ std::size_t std::hash<tt::tt_metal::ProgramDescriptor>::operator()(
     const tt::tt_metal::ProgramDescriptor& descriptor) const noexcept {
     if (descriptor.custom_program_hash) {
         std::size_t hash = *descriptor.custom_program_hash;
-        if (tt::tt_metal::detail::per_core_program_size_enabled()) {
-            ttsl::hash::hash_combine(hash, true);
+        if (descriptor.program_l1_layout == tt::tt_metal::ProgramL1Layout::PER_CORE) {
+            ttsl::hash::hash_combine(hash, descriptor.program_l1_layout);
         }
         return hash;
     }
@@ -389,8 +397,8 @@ std::size_t std::hash<tt::tt_metal::ProgramDescriptor>::operator()(
     for (const auto& semaphore : descriptor.semaphores) {
         ttsl::hash::hash_combine(hash, tt::tt_metal::hash_semaphore_descriptor(semaphore));
     }
-    if (tt::tt_metal::detail::per_core_program_size_enabled()) {
-        ttsl::hash::hash_combine(hash, true);
+    if (descriptor.program_l1_layout == tt::tt_metal::ProgramL1Layout::PER_CORE) {
+        ttsl::hash::hash_combine(hash, descriptor.program_l1_layout);
     }
     return hash;
 }

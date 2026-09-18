@@ -10,9 +10,9 @@
 #include <cstring>
 #include <numeric>
 #include <optional>
-#include <ranges>
 #include <string>
 #include <utility>
+#include <variant>
 #include <vector>
 #include <gtest/gtest.h>
 #include <tt-metalium/buffer.hpp>
@@ -26,8 +26,10 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/program_cache.hpp>
 #include "tests/tt_metal/tt_metal/common/device_fixture.hpp"
 #include "impl/allocator/allocator.hpp"
+#include "impl/buffers/circular_buffer.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/dataflow_buffer/prefetcher_pipe.hpp"
 #include "impl/program/program_impl.hpp"
@@ -75,39 +77,138 @@ protected:
 // (FreeListOpt internally uses DRAM alignment which may be larger than L1 alignment)
 static constexpr DeviceAddr PAGE_SIZE = 1024;
 
-TEST_F(PerCoreAllocationTest, MultipleProgramReservationsMerge) {
-    auto* device = this->devices_[0]->get_devices()[0];
-    auto* allocator = device->allocator_impl();
-    const DeviceAddr program_base =
-        MetalContext::instance().hal().get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::KERNEL_CONFIG);
-    const CoreCoord core(0, 0);
-
-    std::shared_ptr<PerCoreProgramL1Reservation> first;
-    std::shared_ptr<PerCoreProgramL1Reservation> equal;
-    std::shared_ptr<PerCoreProgramL1Reservation> smaller;
-    std::shared_ptr<PerCoreProgramL1Reservation> larger;
-    EXPECT_NO_THROW(first = allocator->reserve_per_core_program({{core, program_base + PAGE_SIZE}}, program_base));
-    EXPECT_NO_THROW(equal = allocator->reserve_per_core_program({{core, program_base + PAGE_SIZE}}, program_base));
-    EXPECT_NO_THROW(
-        smaller = allocator->reserve_per_core_program({{core, program_base + PAGE_SIZE / 2}}, program_base));
-    EXPECT_NO_THROW(larger = allocator->reserve_per_core_program({{core, program_base + 2 * PAGE_SIZE}}, program_base));
-    using AllocatorID = BankManager::AllocatorDependencies::AllocatorID;
-    const auto bank_id = allocator->get_bank_ids_from_logical_core(BufferType::L1, core).front();
-    auto has_program_extent = [&](DeviceAddr end) {
-        const auto ranges = allocator->get_l1_allocated_ranges(AllocatorID{bank_id + 1});
-        return std::ranges::find(ranges, std::pair{program_base, end}) != ranges.end();
+Program make_per_core_blank_program(CoreCoord core, bool with_static_cb = false) {
+    ProgramDescriptor descriptor{
+        .kernels = {{
+            .kernel_source = "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
+            .core_ranges = CoreRangeSet(CoreRange(core)),
+            .config = DataMovementConfigDescriptor{},
+        }},
+        .program_l1_layout = ProgramL1Layout::PER_CORE,
     };
-    EXPECT_TRUE(has_program_extent(program_base + 2 * PAGE_SIZE));
+    if (with_static_cb) {
+        descriptor.cbs.push_back(CBDescriptor{
+            .total_size = PAGE_SIZE,
+            .core_ranges = CoreRangeSet(CoreRange(core)),
+            .format_descriptors =
+                {{.buffer_index = 0, .data_format = tt::DataFormat::Float16_b, .page_size = PAGE_SIZE}},
+        });
+    }
+    return Program(descriptor);
+}
 
-    // Releasing in descending extent order recomputes and shrinks the live
-    // envelope; the final release removes the program reservation entirely.
-    EXPECT_NO_THROW(larger.reset());
-    EXPECT_TRUE(has_program_extent(program_base + PAGE_SIZE));
-    EXPECT_NO_THROW(equal.reset());
-    EXPECT_NO_THROW(first.reset());
-    EXPECT_TRUE(has_program_extent(program_base + PAGE_SIZE / 2));
-    EXPECT_NO_THROW(smaller.reset());
-    EXPECT_FALSE(has_program_extent(program_base + PAGE_SIZE / 2));
+TEST_F(PerCoreAllocationTest, CachedPerCoreProgramsDoNotChangeAllocatorState) {
+    auto* mesh_device = this->devices_[0].get();
+    auto* physical_device = mesh_device->get_devices()[0];
+    auto* physical_allocator = physical_device->allocator_impl().get();
+    auto* mesh_allocator = mesh_device->allocator_impl().get();
+    const CoreCoord core(0, 0);
+    const auto physical_bank_id = physical_allocator->get_bank_ids_from_logical_core(BufferType::L1, core).front();
+    const auto mesh_bank_id = mesh_allocator->get_bank_ids_from_logical_core(BufferType::L1, core).front();
+    using AllocatorID = BankManager::AllocatorDependencies::AllocatorID;
+
+    const auto physical_lockstep_before = physical_allocator->get_l1_allocated_ranges(AllocatorID{0});
+    const auto physical_per_core_before =
+        physical_allocator->get_l1_allocated_ranges(AllocatorID{physical_bank_id + 1});
+    const auto mesh_lockstep_before = mesh_allocator->get_l1_allocated_ranges(AllocatorID{0});
+    const auto mesh_per_core_before = mesh_allocator->get_l1_allocated_ranges(AllocatorID{mesh_bank_id + 1});
+
+    auto first = make_per_core_blank_program(core);
+    first.impl().compile_and_allocate(mesh_device, /*force_slow_dispatch=*/false);
+    first.impl().finalize_offsets(mesh_device);
+    EXPECT_NO_THROW(first.impl().validate_program_image_region(mesh_device));
+
+    auto second = make_per_core_blank_program(core);
+    second.impl().compile_and_allocate(mesh_device, /*force_slow_dispatch=*/false);
+    second.impl().finalize_offsets(mesh_device);
+    EXPECT_NO_THROW(second.impl().validate_program_image_region(mesh_device));
+
+    auto& cache = mesh_device->get_program_cache();
+    using CachedProgram = program_cache::detail::CachedProgram<std::monostate>;
+    using CachedProgramFactory = program_cache::detail::CachedProgramFactory;
+    cache.insert(
+        {.hash = 1, .canonical = "per-core-layout-1"},
+        CachedProgramFactory{CachedProgram{std::move(first), std::monostate{}}, 0});
+    cache.insert(
+        {.hash = 2, .canonical = "per-core-layout-2"},
+        CachedProgramFactory{CachedProgram{std::move(second), std::monostate{}}, 0});
+
+    EXPECT_EQ(physical_allocator->get_l1_allocated_ranges(AllocatorID{0}), physical_lockstep_before);
+    EXPECT_EQ(physical_allocator->get_l1_allocated_ranges(AllocatorID{physical_bank_id + 1}), physical_per_core_before);
+    EXPECT_EQ(mesh_allocator->get_l1_allocated_ranges(AllocatorID{0}), mesh_lockstep_before);
+    EXPECT_EQ(mesh_allocator->get_l1_allocated_ranges(AllocatorID{mesh_bank_id + 1}), mesh_per_core_before);
+
+    // Program caching must not seal the persistent arena. Existing program-local
+    // CB/DFB users still own their normal seals; these blank programs own none.
+    const auto persistent =
+        mesh_allocator->persistent_l1().allocate(CoreRangeSet(CoreRange(core)), PAGE_SIZE, PAGE_SIZE);
+    mesh_allocator->persistent_l1().deallocate(persistent.id);
+
+    cache.clear();
+    EXPECT_EQ(physical_allocator->get_l1_allocated_ranges(AllocatorID{0}), physical_lockstep_before);
+    EXPECT_EQ(physical_allocator->get_l1_allocated_ranges(AllocatorID{physical_bank_id + 1}), physical_per_core_before);
+    EXPECT_EQ(mesh_allocator->get_l1_allocated_ranges(AllocatorID{0}), mesh_lockstep_before);
+    EXPECT_EQ(mesh_allocator->get_l1_allocated_ranges(AllocatorID{mesh_bank_id + 1}), mesh_per_core_before);
+}
+
+TEST_F(PerCoreAllocationTest, CachedPerCoreLayoutRevalidatesPostCacheAllocations) {
+    auto* mesh_device = this->devices_[0].get();
+    const CoreCoord core(0, 0);
+    auto program = make_per_core_blank_program(core, /*with_static_cb=*/true);
+    program.impl().compile_and_allocate(mesh_device, /*force_slow_dispatch=*/false);
+    program.impl().finalize_offsets(mesh_device);
+
+    const ShardSpecBuffer shard_spec(
+        CoreRangeSet(CoreRange(core)), {32, 32}, ShardOrientation::ROW_MAJOR, {32, 32}, {1, 1});
+    auto shard_args = BufferShardingArgs(shard_spec, TensorMemoryLayout::HEIGHT_SHARDED);
+    experimental::per_core_allocation::set_per_core_allocation(shard_args, true);
+
+    {
+        auto overlapping_buffer = Buffer::create(
+            mesh_device->get_devices()[0],
+            PAGE_SIZE,
+            PAGE_SIZE,
+            BufferType::L1,
+            shard_args,
+            /*bottom_up=*/true);
+        EXPECT_THROW(program.impl().compile_and_allocate(mesh_device, /*force_slow_dispatch=*/false), std::exception);
+    }
+
+    EXPECT_NO_THROW(program.impl().compile_and_allocate(mesh_device, /*force_slow_dispatch=*/false));
+}
+
+TEST_F(PerCoreAllocationTest, SlowDispatchRevalidatesPostCompileAllocations) {
+    auto* device = this->devices_[0]->get_devices()[0];
+    const CoreCoord core(0, 0);
+    auto program = make_per_core_blank_program(core, /*with_static_cb=*/true);
+    program.impl().compile_and_allocate(device, /*force_slow_dispatch=*/true);
+    program.impl().finalize_offsets(device);
+
+    const ShardSpecBuffer shard_spec(
+        CoreRangeSet(CoreRange(core)), {32, 32}, ShardOrientation::ROW_MAJOR, {32, 32}, {1, 1});
+    auto shard_args = BufferShardingArgs(shard_spec, TensorMemoryLayout::HEIGHT_SHARDED);
+    experimental::per_core_allocation::set_per_core_allocation(shard_args, true);
+
+    auto overlapping_buffer =
+        Buffer::create(device, PAGE_SIZE, PAGE_SIZE, BufferType::L1, shard_args, /*bottom_up=*/true);
+    EXPECT_THROW(detail::ConfigureDeviceWithProgram(device, program, /*force_slow_dispatch=*/true), std::exception);
+}
+
+TEST_F(PerCoreAllocationTest, AllocatorOverrideRevalidatesCurrentState) {
+    auto* device = this->devices_[0]->get_devices()[0];
+    auto* allocator = device->allocator_impl().get();
+    const CoreCoord core(0, 0);
+    auto program = make_per_core_blank_program(core, /*with_static_cb=*/true);
+    program.impl().compile_and_allocate(device, /*force_slow_dispatch=*/true);
+    program.impl().finalize_offsets(device);
+    const DeviceAddr static_cb_address = program.impl().circular_buffers().front()->address();
+    const AllocatorState baseline = allocator->extract_state();
+
+    allocator->mirror_lockstep_allocation(static_cb_address, PAGE_SIZE);
+    EXPECT_THROW(program.impl().compile_and_allocate(device, /*force_slow_dispatch=*/true), std::exception);
+
+    allocator->override_state(baseline);
+    EXPECT_NO_THROW(program.impl().compile_and_allocate(device, /*force_slow_dispatch=*/true));
 }
 
 TEST_F(PerCoreAllocationTest, UniformAddressGroupUsesCommonBaseAndVariableCapacity) {
