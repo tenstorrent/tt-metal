@@ -997,11 +997,15 @@ class Attention(LightweightModule):
 
             ttnn.deallocate(attn_output_cat)
 
-            # All reduce
+            # All reduce (reduce-scatter on a 1D mesh; the output projection is
+            # row-parallel, so this is what re-fractures the residual stream)
+            decode_ccl = self.args.model_config["DECODE_CCL_TUNING"]
             dense_out_reduced = tt_all_reduce(
                 dense_out_sharded,
                 self.mesh_device,
                 self.tt_ccl,
+                chunks_per_sync=decode_ccl["chunks_per_sync"],
+                num_workers_per_link=decode_ccl["num_workers_per_link"],
                 cluster_axis=0,
                 dim=0 if (self.TG and self.hidden_size < 8192) else 3,
                 topology=self.ccl_topology,

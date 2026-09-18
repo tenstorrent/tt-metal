@@ -1225,10 +1225,25 @@ class ModelArgs:
             # model specific CCL configs
             default_ln_ag = {"num_links": 1, "chunks_per_sync": 10, "num_workers_per_link": 2}
             default_agmm = {"num_links": 1, "chunks_per_sync": 10, "num_workers_per_link": 2}
+            # Per-collective decode tuning for the repeated small payloads in the decode
+            # graph (the 4096-wide norm all-gathers and the 4096->1024 output
+            # reduce-scatters). Swept in isolation on this mesh at the real decode shapes,
+            # microseconds per call, at the fabric's 2 links (3+ links is not legal here --
+            # "Requested link index 2 is out of bounds. 2 ethernet channels available"):
+            #   all-gather      cps=10 wpl=2 14.73 | cps=1 wpl=1 12.40 | cps=10 wpl=1 12.57
+            #   reduce-scatter  cps=10 wpl=2 14.60 | cps=1 wpl=1 11.70 | cps=10 wpl=1 11.91
+            # More workers per link only split these payloads more finely. Every other SKU
+            # keeps the previous values until it has its own measurement.
+            if self.base_model_name == "Llama-3.1-8B" and self.device_name == "P150x4":
+                decode_ccl_tuning = {"chunks_per_sync": 1, "num_workers_per_link": 1}
+            else:
+                decode_ccl_tuning = {"chunks_per_sync": 10, "num_workers_per_link": 2}
+            self.model_config["DECODE_CCL_TUNING"] = decode_ccl_tuning
+
             default_mlp_rs = {
                 "num_links": self.num_reduce_scatter_links,
-                "chunks_per_sync": 10,
-                "num_workers_per_link": 2,
+                "chunks_per_sync": decode_ccl_tuning["chunks_per_sync"],
+                "num_workers_per_link": decode_ccl_tuning["num_workers_per_link"],
                 "rs_memory_config": ttnn.DRAM_MEMORY_CONFIG,
             }
             default_sampling_force_argmax = {

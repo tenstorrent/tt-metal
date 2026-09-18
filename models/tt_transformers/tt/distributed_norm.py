@@ -132,6 +132,14 @@ class DistributedNorm(LightweightModule):
 
         input_mem_cfg = sharded_output_config if mode == Mode.DECODE else ttnn.DRAM_MEMORY_CONFIG
 
+        # NOTE: the `mode == "decode"` guards below compare a `Mode` enum member against a
+        # string, so they are always False and `self.ag_config_key` never selects anything.
+        # That is a pre-existing latent bug: fixing it would newly activate the Galaxy-only
+        # ATTN_LN_AG_CONFIG / FFN_LN_AG_CONFIG entries, which cannot be measured on this
+        # host, so it is left alone. The measured decode tuning is applied through
+        # DECODE_CCL_TUNING below, which is what these calls actually read.
+        decode_ccl = self.args.model_config["DECODE_CCL_TUNING"] if mode == Mode.DECODE else None
+
         # Distributed norm already performs a gather
         if self.args.is_multichip and not self.args.is_distributed_norm(mode):
             x = ttnn.experimental.all_gather_async(
@@ -147,10 +155,10 @@ class DistributedNorm(LightweightModule):
                 barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
                 chunks_per_sync=self.args.model_config[self.ag_config_key]["chunks_per_sync"]
                 if self.ag_config_key and mode == "decode"
-                else 10,
+                else (decode_ccl["chunks_per_sync"] if decode_ccl else 10),
                 num_workers_per_link=self.args.model_config[self.ag_config_key]["num_workers_per_link"]
                 if self.ag_config_key and mode == "decode"
-                else 2,
+                else (decode_ccl["num_workers_per_link"] if decode_ccl else 2),
                 num_buffers_per_channel=2,
                 subdevice_id=self.prefetcher.worker_sub_device_id if self.prefetcher is not None else None,
             )
@@ -177,8 +185,8 @@ class DistributedNorm(LightweightModule):
                 topology=self.args.ccl_topology(),
                 memory_config=x.memory_config(),
                 barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
-                chunks_per_sync=10,
-                num_workers_per_link=2,
+                chunks_per_sync=decode_ccl["chunks_per_sync"] if decode_ccl else 10,
+                num_workers_per_link=decode_ccl["num_workers_per_link"] if decode_ccl else 2,
                 num_buffers_per_channel=2,
             )
 
