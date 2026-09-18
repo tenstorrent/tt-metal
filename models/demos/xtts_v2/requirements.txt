@@ -1,0 +1,2 @@
+coqui-tts==0.27.5
+transformers<5
