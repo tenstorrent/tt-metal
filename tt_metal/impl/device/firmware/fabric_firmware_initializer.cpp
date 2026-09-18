@@ -311,7 +311,7 @@ void FabricFirmwareInitializer::init(
         const auto local_mesh_ids = control_plane_.get_local_mesh_id_bindings();
         const size_t num_hosts = control_plane_.get_mesh_graph().get_host_ranks(local_mesh_ids.front()).size();
         TT_FATAL(
-            devices_.size() >= 2 || num_hosts > 1,
+            devices_.size() > 1 || num_hosts > 1,
             "Fabric config {} requires at least 2 participating chips, but the opened mesh has {} "
             "local device(s) on a single host. Either open a larger mesh (e.g. a MeshShape with >= 2 "
             "devices) or call SetFabricConfig(FabricConfig::DISABLED) before opening a 1-chip mesh.",
