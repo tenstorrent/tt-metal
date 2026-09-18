@@ -205,8 +205,7 @@ struct MatmulFusedOpSignaler {
     // Get the rt values
     // Write the semaphore ID
     void push_llama_rs_rt_args_for_rs(std::vector<uint32_t>& out_rt_args) const;
-    // Is_privilaged, if yes: target_value, num_cores_to_signal, array_of_cores, if no: core_xy of signaler
-    // First core to run this is the privileged core
+    // Append privileged-core coordinates, its semaphore ID, and an is-privileged flag.
     void push_llama_rs_rt_args_for_mm(
         std::vector<uint32_t>& out_rt_args,
         tt::tt_metal::CoreCoord current_core,
