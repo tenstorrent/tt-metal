@@ -82,6 +82,9 @@ class PrefillRunParams:
     # feature never breaks existing PrefillRunParams constructors (which need not pass it); the runner
     # derives it from the model capability (supports_dflash) + PREFILL_DFLASH + a drafter checkpoint.
     dflash_enabled: bool = False
+    # Number of GLM-5.2 MTP levels (K) to build KV for after the trunk's last layer; 0 = MTP off.
+    # K > 0 widens the H2D chunk by K tokens and adds K KV-cache slots per user.
+    mtp_levels: int = 0
 
     @property
     def sp_factor(self) -> int:
@@ -131,6 +134,9 @@ class PrefillModelAdapter(ABC):
     pipeline_activation_emb_tp_sharded: bool = True
     # Whether this model ships a DFlash speculative drafter the prefill runner can build during prefill
     supports_dflash: bool = False
+    # Whether this model ships MTP (multi-token-prediction) modules the prefill runner can run after
+    # the trunk to fill the extra KV-cache levels the decode side speculates from.
+    supports_mtp: bool = False
 
     # =====================================================================
     # Glue the engine calls. The adapter is a factory + descriptor only: it says
