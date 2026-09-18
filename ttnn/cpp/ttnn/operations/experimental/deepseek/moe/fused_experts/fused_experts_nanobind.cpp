@@ -16,15 +16,22 @@ void bind_fused_experts(nb::module_& mod) {
         Experimental fused routed-expert FFN for DeepSeek V4-Flash, for a batch of B <= 32 tokens.
 
         Fuses the per-expert matmul -> SwiGLU -> matmul -> weighted-accumulate loop
-        into a single device operation. Expert selection/scaling is derived on-device (no host-side
-        expert-id list) from the router's own output: ``routing_indices`` (each token's selected
-        expert ids) together with ``routing_scores`` (the unbiased score row those ids index), both
-        consumed unmodified -- indices in TILE, scores in TILE or (decode, B == 1) ROW_MAJOR.
-        The op gathers each token's k scores, normalizes them to
-        sum to 1, scales by ``routed_scaling_factor``, and derives the hit ids and per-token weights
-        from that. This is the form the op uses internally, so a caller never has to widen the
-        selection into an E-wide weight row -- a temporary built by a scatter + normalize + relayout
-        chain purely for this op to scan it straight back down to k values.
+        into a single device operation. The expert selection is derived on-device (no host-side
+        expert-id list). It comes from one of two mutually exclusive inputs:
+
+        * ``routing_indices`` -- the router's own top-k output (each token's selected expert ids),
+          passed through unmodified; and
+        * ``ranking_scores`` -- the E-wide score row the router would have ranked (typically a
+          bias-corrected copy of ``routing_scores``), with ``top_k`` given explicitly. The op then
+          finds each token's top-k largest entries itself, inside the leader kernel that already
+          reads the whole score row, so no separate ``ttnn.topk`` launch and no DRAM round-trip of
+          its id output is needed.
+
+        Either way the per-token weights are the *unbiased* ``routing_scores`` at the selected
+        experts, gathered on device, renormalized to sum to 1 and scaled by ``routed_scaling_factor``
+        -- so a caller never has to widen the selection into an E-wide weight row, a temporary built
+        by a scatter + normalize + relayout chain purely for this op to scan it straight back down
+        to k values.
 
         Returns a [1, B, H] BFLOAT16 tensor in the input's layout (TILE, or ROW_MAJOR when B == 1):
         act = silu(clamp(gate, max=limit)) * clamp(up, -limit, limit), [gate, up] = x @ gate_up_w[hit_ids[i]],
@@ -58,17 +65,10 @@ void bind_fused_experts(nb::module_& mod) {
                 the op neither reads it from DRAM nor broadcasts it, and its token count is the
                 shard height (dim -2 carries ``B * num_cores``). The output uses the input's layout
                 and, for a replicated input, defaults to DRAM interleaved.
-            routing_indices: Selected expert ids, [1, 1, B, top_k] TILE. Either uint16 (the index
-                output of ``ttnn.topk``, passed through unmodified) or bfloat16 (a ``ttnn.embedding``
-                gather from a frozen id table -- the only dtype that op gathers, and exact for
-                E <= 256).
             routing_scores: Unbiased per-expert scores, [1, 1, B, E] bfloat16 -- TILE, or ROW_MAJOR
-                when B == 1 (decode; LinearDecode stick, no tilize). The tensor
-                ``routing_indices`` indexes into. If the selection ranked by a bias-corrected copy,
-                pass the uncorrected scores here -- those are the ones that become weights.
-            top_k: Ids per token row, at most 16. 0 (the default) reads it from ``routing_indices``.
-            routed_scaling_factor: Scale applied after the per-token renormalize.
-            routing_eps: Added to each token's score sum before dividing.
+                when B == 1 (decode; LinearDecode stick, no tilize). The tensor the selection
+                indexes into. If the selection ranked by a bias-corrected copy, pass the uncorrected
+                scores here -- those are the ones that become weights.
             gate_up_weights: List of [H, 2I] weight tensors, one per expert (all experts provided),
                 with gate/up columns interleaved at tile (32-col) granularity.
             down_weights: List of [I, H] weight tensors, one per expert.
@@ -77,6 +77,12 @@ void bind_fused_experts(nb::module_& mod) {
                 fetch per unused slot.
             intermediate_size: SwiGLU intermediate size I.
             swiglu_limit: Clamp limit used by the SwiGLU activation.
+            top_k: Experts selected per token row, at most 16 with ``routing_indices`` (the ids must
+                fit one 16-wide tile face) and at most 32 with ``ranking_scores`` (the leader's
+                running top-k lives on the RISC-V stack). 0 (the default) reads it from
+                ``routing_indices``; it is required (and non-zero) with ``ranking_scores``.
+            routed_scaling_factor: Scale applied after the per-token renormalize.
+            routing_eps: Added to each token's score sum before dividing.
             experts_block_size: Experts to hold in L1 at once. 0 (the default) means all
                 ``num_experts``, reproducing the single-block pipeline exactly. Because blocking
                 double-buffers the activation block so consecutive blocks pipeline, the largest
@@ -87,11 +93,22 @@ void bind_fused_experts(nb::module_& mod) {
                 False for the original single-hub pipeline (one gather target, one multicast
                 sender). Defaults to True.
             memory_config: Optional output memory config.
+            routing_indices: Selected expert ids, [1, 1, B, top_k] TILE. Either uint16 (the index
+                output of ``ttnn.topk``, passed through unmodified) or bfloat16 (a ``ttnn.embedding``
+                gather from a frozen id table -- the only dtype that op gathers, and exact for
+                E <= 256). Mutually exclusive with ``ranking_scores``.
+            ranking_scores: Scores to rank on, [1, 1, B, E] bfloat16 -- TILE, or ROW_MAJOR when
+                B == 1 (decode). Same shape and dtype rules as ``routing_scores``. When supplied the
+                op selects each token's ``top_k`` largest entries on device and they become the hit
+                ids; the weights still come from ``routing_scores`` at those ids, so "rank on the
+                biased row, weight with the uncorrected one" is a single op. Mutually exclusive with
+                ``routing_indices``; pass the very same tensor as ``routing_scores`` when ranking and
+                weighting use one row (the op then reads it once). Ties are broken toward the lower
+                expert id.
         )doc",
         &ttnn::experimental::deepseek::moe::fused_experts,
         nb::arg("input_tensor"),
         nb::kw_only(),
-        nb::arg("routing_indices"),
         nb::arg("routing_scores"),
         nb::arg("gate_up_weights"),
         nb::arg("down_weights"),
@@ -103,7 +120,9 @@ void bind_fused_experts(nb::module_& mod) {
         nb::arg("routing_eps") = 0.0F,
         nb::arg("experts_block_size") = 0,
         nb::arg("two_hub_gather") = true,
-        nb::arg("memory_config") = std::nullopt);
+        nb::arg("memory_config") = std::nullopt,
+        nb::arg("routing_indices") = std::nullopt,
+        nb::arg("ranking_scores") = std::nullopt);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek::moe::fused_experts::detail
