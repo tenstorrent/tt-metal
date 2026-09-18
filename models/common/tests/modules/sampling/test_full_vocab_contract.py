@@ -62,7 +62,7 @@ def test_top_k_between_device_limit_and_vocab_fails_closed():
     [
         ("temperature", float("nan"), "temperature"),
         ("temperature", -0.1, "temperature"),
-        ("top_p", 0.0, "top_p"),
+        ("top_p", -0.01, "top_p"),
         ("top_p", float("inf"), "top_p"),
         ("top_k", 2.5, "top_k"),
         ("top_k", True, "top_k"),

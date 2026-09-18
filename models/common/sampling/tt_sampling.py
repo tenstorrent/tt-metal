@@ -600,6 +600,42 @@ class TTSampling(LightweightModule):
             cluster_axis=cluster_axis,
         )
 
+    def gather_full_vocab_logits(self, logits):
+        """Return full padded-vocabulary logits replicated in each TP group.
+
+        This is the common sampler's existing vocabulary ownership boundary:
+        generated/model code continues to emit the same sharded logits, while
+        an explicitly selected full-vocabulary sampling algorithm may gather
+        them through the same CCL axis used by top-k.  The returned ``owned``
+        tuple excludes the borrowed input and lets callers release only
+        allocations created by this preparation step.
+        """
+
+        owned = []
+        masked = self._mask_invalid_vocab_logits(logits)
+        if masked is not logits:
+            owned.append(masked)
+
+        if self.mesh_device.get_num_devices() > 1:
+            gathered = self._perform_all_gather(
+                masked,
+                dim=3,
+                cluster_axis=self._get_sampling_cluster_axis(),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                num_links=self.num_gather_links,
+                buffer_key="SAMPLING_FULL_VOCAB",
+            )
+            owned.append(gathered)
+        else:
+            gathered = masked
+
+        if int(gathered.shape[-1]) != int(self.padded_vocab_size):
+            raise RuntimeError(
+                "full-vocabulary gather produced width "
+                f"{int(gathered.shape[-1])}, expected padded_vocab_size={self.padded_vocab_size}"
+            )
+        return gathered, tuple({id(tensor): tensor for tensor in owned}.values())
+
     def _get_sampling_cluster_axis(self):
         if self.mesh_device.get_num_devices() <= 1:
             return None

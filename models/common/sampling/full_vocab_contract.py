@@ -288,12 +288,12 @@ def classify_sampling_batch(
             seed = normalized_seed
         if not math.isfinite(temp) or temp < 0:
             raise ValueError(f"temperature[{slot}] must be finite and non-negative")
-        if not math.isfinite(probability) or not 0 < probability <= 1:
-            raise ValueError(f"top_p[{slot}] must be finite and in (0, 1]")
+        if not math.isfinite(probability) or not 0 <= probability <= 1:
+            raise ValueError(f"top_p[{slot}] must be finite and in [0, 1]")
 
         if slot not in active:
             mode: SamplingRowMode = "inactive"
-        elif temp == 0 or (k == 1 and probability == 0):
+        elif temp == 0 or k == 1 or probability == 0:
             mode = "greedy"
         elif k <= 0 or k >= vocab_size:
             mode = "unrestricted"

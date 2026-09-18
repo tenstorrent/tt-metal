@@ -180,6 +180,63 @@ def test_seed_manager_managed_draws_are_explicitly_opt_in():
     assert seed_manager.seed_counters == [0, 0, 0, 0]
 
 
+def test_seed_manager_rejects_late_managed_enable_after_unseeded_admission():
+    seed_manager = _make_host_only_seed_manager()
+    seed_manager.reset_seed([None], [0])
+    assert seed_manager._seed_active is False
+    with pytest.raises(RuntimeError, match="before request admission"):
+        seed_manager.enable_managed_draw_seeds()
+
+
+def _host_full_vocab_generator(params, active_slots=(0,)):
+    generator = SamplingGenerator.__new__(SamplingGenerator)
+    generator._full_vocab_top_p_one_enabled = True
+    generator._full_vocab_params = params
+    generator._active_sampling_slots = tuple(active_slots)
+    generator.tt_sampling = SimpleNamespace(max_batch_size=32, vocab_size=201088, max_top_k=32)
+    return generator
+
+
+def test_format_sampling_params_preserves_unrestricted_top_k_for_algorithm_selection():
+    formatted = format_sampling_params(
+        SamplingParams(temperature=[1.0, 1.0], top_k=[0, 33], top_p=[1.0, 1.0]), 32
+    )
+    assert formatted.top_k[:2] == [0, 33]
+
+
+def test_full_vocab_contract_selects_only_explicit_active_unrestricted_rows():
+    formatted = format_sampling_params(
+        SamplingParams(
+            temperature=[1.0, 1.0, 0.0],
+            top_k=[0, 8, 0],
+            top_p=[1.0, 1.0, 1.0],
+        ),
+        32,
+    )
+    contract = _host_full_vocab_generator(formatted, active_slots=(0, 1, 2))._full_vocab_contract()
+    assert contract.unrestricted_slots == (0,)
+    assert contract.rows[1].mode == "bounded"
+    assert contract.rows[2].mode == "greedy"
+    assert all(row.mode == "inactive" for row in contract.rows[3:])
+
+
+def test_full_vocab_contract_fails_closed_for_nucleus_or_requested_logprobs():
+    nucleus = format_sampling_params(
+        SamplingParams(temperature=[1.0], top_k=[0], top_p=[0.9]), 32
+    )
+    with pytest.raises(RuntimeError, match="top_p<1"):
+        _host_full_vocab_generator(nucleus)._full_vocab_contract()
+
+    logprobs = format_sampling_params(
+        SamplingParams(
+            temperature=[1.0], top_k=[0], top_p=[1.0], enable_log_probs=[True]
+        ),
+        32,
+    )
+    with pytest.raises(RuntimeError, match="with logprobs"):
+        _host_full_vocab_generator(logprobs)._full_vocab_contract()
+
+
 def test_seed_manager_managed_draws_reuse_slot_lifecycle_and_position_alignment():
     seed_manager = _make_host_only_seed_manager()
     seed_manager.enable_managed_draw_seeds()

@@ -3,7 +3,7 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-from models.common.sampling.full_vocab_device import sample_unrestricted_top_p_one
+from models.common.sampling.full_vocab_device import merge_unrestricted_rows, sample_unrestricted_top_p_one
 
 
 class TorchOps:
@@ -72,6 +72,14 @@ class TorchOps:
     @staticmethod
     def argmax(tensor, dim, keepdim):
         return torch.argmax(tensor.to(torch.int32), dim=dim, keepdim=keepdim)
+
+    @staticmethod
+    def reshape(tensor, shape):
+        return torch.reshape(tensor, shape)
+
+    @staticmethod
+    def where(condition, left, right):
+        return torch.where(condition, left, right)
 
 
 def _run(logits, *, seeds, active=None, trace_enabled=False, vocab_size=None):
@@ -203,6 +211,25 @@ def test_active_uniform_scratch_is_borrowed_and_reusable_across_steps():
     assert all(tensor is not scratch for tensor in first.owned_tensors)
     assert all(tensor is not scratch for tensor in second.owned_tensors)
     assert first.valid_distribution.all() and second.valid_distribution.all()
+
+
+def test_mixed_merge_preserves_native_rows_and_uses_invalid_sentinel():
+    categorical = _run(torch.zeros(1, 1, 4, 32), seeds=[7, 8, 9, 10])
+    # Inject one invalid unrestricted row to exercise the device sentinel.
+    categorical = type(categorical)(
+        categorical.token_ids,
+        torch.tensor([[[[True], [False], [True], [True]]]]),
+        categorical.owned_tensors,
+    )
+    native = torch.tensor([[[[10, 11, 12, 13]]]], dtype=torch.int64)
+    merged = merge_unrestricted_rows(
+        categorical,
+        native,
+        unrestricted_selector=torch.tensor([[[[0, 1, 1, 0]]]], dtype=torch.int32),
+        invalid_token_ids=torch.full((1, 1, 1, 4), 32, dtype=torch.int64),
+        ops=TorchOps,
+    )
+    assert merged.token_ids.tolist() == [[[[10, 32, int(categorical.token_ids[0, 0, 2, 0]), 13]]]]
 
 
 @pytest.mark.parametrize(

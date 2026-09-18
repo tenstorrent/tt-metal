@@ -15,7 +15,8 @@ from loguru import logger
 import ttnn
 
 from ._utils import clamp, is_default_value, split_list
-from .full_vocab_contract import ManagedPerSlotDrawSeeds
+from .full_vocab_contract import ManagedPerSlotDrawSeeds, classify_sampling_batch
+from .full_vocab_device import merge_unrestricted_rows, sample_unrestricted_top_p_one
 from .tt_penalties import TTPenalties
 from .tt_sampling import TTSampling
 
@@ -141,6 +142,54 @@ class SamplingGenerator:
             max_batch_size=seed_batch_size,
             salt_duplicate_seeds=getattr(args, "salt_duplicate_seeds", True),
         )
+        self._full_vocab_top_p_one_enabled = bool(getattr(args, "enable_full_vocab_top_p_one", False))
+        self._active_sampling_slots: tuple[int, ...] | None = None
+        self._full_vocab_params = None
+        self._full_vocab_selector = None
+        self._full_vocab_invalid_tokens = None
+        self._full_vocab_row_scratch = ()
+        if self._full_vocab_top_p_one_enabled:
+            if self.tt_sampling._sampling_dp != 1:
+                raise ValueError("staged full-vocabulary routing currently requires sampling_dp=1")
+            self.seed_manager.enable_managed_draw_seeds()
+            batch = self.tt_sampling.max_batch_size
+            replicate = ttnn.ReplicateTensorToMesh(self.mesh_device)
+            self._full_vocab_selector = ttnn.from_torch(
+                torch.zeros(1, 1, 1, batch, dtype=torch.uint32),
+                device=self.mesh_device,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=replicate,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            self._full_vocab_invalid_tokens = ttnn.from_torch(
+                torch.full((1, 1, 1, batch), self.tt_sampling.vocab_size, dtype=torch.uint32),
+                device=self.mesh_device,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=replicate,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            self._full_vocab_row_scratch = tuple(
+                ttnn.from_torch(
+                    torch.zeros(1, 1, 1, 1),
+                    device=self.mesh_device,
+                    dtype=ttnn.float32,
+                    layout=ttnn.TILE_LAYOUT,
+                    mesh_mapper=replicate,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                for _ in range(batch)
+            )
+
+    def set_active_sampling_slots(self, slots) -> None:
+        """Bind scheduler-owned active slots for exact mixed-row routing."""
+
+        normalized = tuple(int(slot) for slot in slots)
+        batch = self.tt_sampling.max_batch_size
+        if len(set(normalized)) != len(normalized) or any(slot < 0 or slot >= batch for slot in normalized):
+            raise ValueError("active sampling slots must be distinct and in range")
+        self._active_sampling_slots = normalized
 
     def _new_trace_state(self):
         return {"id": None, "input": None, "output": None, "kwargs": {}}
@@ -266,6 +315,7 @@ class SamplingGenerator:
     # Sampling helpers
     # ---------------------------------------------------------------------
     def reset_sampling_params(self, sampling_params, empty_slots: list[int] | None = None):
+        self._full_vocab_params = sampling_params
         old_force_argmax_sampling = self.tt_sampling.force_argmax_sampling
         num_logprobs = getattr(sampling_params, "num_logprobs", None)
         self.tt_sampling.reset_params(
@@ -327,7 +377,13 @@ class SamplingGenerator:
     ):
         if penalties_on:
             logits = self.tt_penalties.apply(logits)
-        tt_tokens, tt_log_probs = self.tt_sampling(logits, tt_out_tok=tt_out_tok)
+        contract = self._full_vocab_contract()
+        if contract is None or not contract.needs_full_vocabulary:
+            tt_tokens, tt_log_probs = self.tt_sampling(logits, tt_out_tok=tt_out_tok)
+        else:
+            tt_tokens, tt_log_probs = self._run_mixed_full_vocab_sampling(
+                logits, contract=contract, tt_out_tok=tt_out_tok
+            )
         if penalties_on and count_tokens:
             # Fold the penalty bookkeeping into the sampled step rather than running it afterwards in
             # sample(). The order is unchanged -- penalties are applied to this step's logits from the
@@ -337,6 +393,101 @@ class SamplingGenerator:
             # tracing them is the only way to stop them allocating.
             self.tt_penalties.update_output_tokens(tt_out_tok if tt_out_tok is not None else tt_tokens)
         return tt_tokens, tt_log_probs
+
+    def _full_vocab_contract(self):
+        if not self._full_vocab_top_p_one_enabled:
+            return None
+        if self._full_vocab_params is None or self._active_sampling_slots is None:
+            raise RuntimeError("full-vocabulary routing requires params and explicit active scheduler slots")
+        params = self._full_vocab_params
+        batch = self.tt_sampling.max_batch_size
+        contract = classify_sampling_batch(
+            temperature=list(params.temperature),
+            top_p=list(params.top_p),
+            top_k=list(params.top_k),
+            seeds=list(params.seed),
+            active_slots=self._active_sampling_slots,
+            batch_size=batch,
+            vocab_size=self.tt_sampling.vocab_size,
+            max_bounded_top_k=self.tt_sampling.max_top_k,
+        )
+        if contract.unrestricted_nucleus_slots:
+            raise RuntimeError(
+                "full-vocabulary top_p<1 is not implemented; refusing to narrow the requested distribution"
+            )
+        requested_logprobs = list(getattr(params, "enable_log_probs", [False] * batch))
+        if any(requested_logprobs[slot] for slot in contract.unrestricted_slots):
+            raise RuntimeError("unrestricted full-vocabulary sampling with logprobs is not implemented")
+        return contract
+
+    @staticmethod
+    def _deallocate_tensors(tensors, *, protect=()):
+        protected = {id(tensor) for tensor in protect}
+        seen = set()
+        for tensor in reversed(tuple(tensors)):
+            if id(tensor) in seen or id(tensor) in protected:
+                continue
+            seen.add(id(tensor))
+            try:
+                if tensor.is_allocated():
+                    ttnn.deallocate(tensor)
+            except RuntimeError:
+                # Public views can use distinct Python wrappers for one device
+                # allocation. Identity dedup is not an allocation-level proof;
+                # tolerate an already-released alias while keeping borrowed
+                # inputs explicitly protected.
+                pass
+
+    def _run_mixed_full_vocab_sampling(self, logits, *, contract, tt_out_tok):
+        if tt_out_tok is not None:
+            raise RuntimeError("full-vocabulary mixed routing does not yet support a preallocated token output")
+
+        native_tokens, native_log_probs = self.tt_sampling(logits, tt_out_tok=None)
+        params = self._full_vocab_params
+        unrestricted = set(contract.unrestricted_slots)
+        draws = [1 if slot in unrestricted else 0 for slot in range(self.tt_sampling.max_batch_size)]
+        seed_plan = self.seed_manager.next_managed_draw_seed_plan(draws)
+        if len(seed_plan.seeds_by_subdraw) != 1:
+            raise RuntimeError("top_p=1 categorical route requires exactly one draw")
+
+        selector_host = torch.tensor(
+            [[[1 if slot in unrestricted else 0 for slot in range(self.tt_sampling.max_batch_size)]]],
+            dtype=torch.uint32,
+        )
+        selector_update = ttnn.from_torch(
+            selector_host,
+            device=None,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+        ttnn.copy_host_to_device_tensor(selector_update, self._full_vocab_selector)
+
+        full_logits, preparation_owned = self.tt_sampling.gather_full_vocab_logits(logits)
+        inverse_temperature = ttnn.reshape(
+            self.tt_sampling.temp_tensor, (1, 1, self.tt_sampling.max_batch_size, 1)
+        )
+        categorical = sample_unrestricted_top_p_one(
+            full_logits,
+            inverse_temperature=inverse_temperature,
+            row_scratch=self._full_vocab_row_scratch,
+            seed_values=seed_plan.seeds_by_subdraw[0],
+            active_rows=[slot in unrestricted for slot in range(self.tt_sampling.max_batch_size)],
+            vocab_size=self.tt_sampling.vocab_size,
+            ops=ttnn,
+        )
+        merged = merge_unrestricted_rows(
+            categorical,
+            native_tokens,
+            unrestricted_selector=self._full_vocab_selector,
+            invalid_token_ids=self._full_vocab_invalid_tokens,
+            ops=ttnn,
+        )
+        self._deallocate_tensors(
+            (*merged.owned_tensors, *preparation_owned, inverse_temperature, native_tokens),
+            protect=(merged.token_ids, logits, self._full_vocab_selector, self._full_vocab_invalid_tokens),
+        )
+        return merged.token_ids, native_log_probs
 
     def reset_penalty_counts(self):
         """Zero the output-token penalty counters, if penalties are active.
@@ -515,9 +666,16 @@ class SamplingGenerator:
         penalties_on = self._penalties_active
         log_probs_on = getattr(self, "_log_probs_active", False)
         force_argmax = self.tt_sampling.force_argmax_sampling
+        full_vocab_contract = self._full_vocab_contract()
+        uses_full_vocab = full_vocab_contract is not None and full_vocab_contract.needs_full_vocabulary
         # Explicit request seeds update a persistent seed tensor every token;
         # run them directly so trace replay cannot observe stale seed state.
-        use_internal_trace = enable_trace and not self.seed_manager.has_active_request_seed()
+        # The staged full-vocabulary composition dynamically allocates its
+        # public-op scan; it is eager-only until fixed workspace ownership is
+        # qualified.
+        use_internal_trace = (
+            enable_trace and not self.seed_manager.has_active_request_seed() and not uses_full_vocab
+        )
         if use_internal_trace and not count_tokens:
             raise ValueError("count_tokens=False cannot be honoured on a traced sample(); pass enable_trace=False.")
         if not use_internal_trace:
@@ -553,7 +711,9 @@ def format_sampling_params(sampling_params, max_batch_size):
     Format sampling parameters for on-device use.
 
     Converts scalar fields to lists, pads all lists to ``max_batch_size``, inverts
-    temperature, clamps top-p/top-k, and normalises penalties.
+    temperature, clamps top-p, preserves top-k for algorithm selection, and
+    normalises penalties. The bounded TT kernel performs its own guarded top-k
+    normalization after selection.
 
     ``temperature`` defines the ACTIVE lane count: ``active_len = len(temperature)`` after
     the scalar->list normalisation below. Three field groups, each with its own rule:
@@ -681,12 +841,11 @@ def format_sampling_params(sampling_params, max_batch_size):
         else:
             temperature[i] = 1 / temperature[i]
 
-        # top_k contract: TT sampling supports up to 32 today.
-        # k < 1 means "no restriction" → max (32); k > 32 → capped to 32.
-        if top_k[i] < 1:
-            top_k[i] = 32
-        if top_k[i] > 32:
-            top_k[i] = 32
+        # Preserve the caller's top-k domain. TTSampling.reset_params() owns
+        # normalization for its bounded native kernel; SamplingGenerator also
+        # needs the raw value to distinguish exact unrestricted sampling from
+        # a bounded k=32 request. Silently normalizing here loses that semantic
+        # distinction before algorithm selection.
 
         if repetition_penalty[i] == 0:
             repetition_penalty[i] = defaults["repetition_penalty"]
@@ -914,6 +1073,10 @@ class SeedManager:
         # random draw per token.  None preserves the legacy SeedManager path
         # exactly; callers must enable this before admitting requests.
         self._managed_draw_seeds: ManagedPerSlotDrawSeeds | None = None
+        # Lifetime marker, distinct from _seed_active: an admitted unseeded
+        # request still owns slot/RNG state and cannot be retroactively moved
+        # onto the managed-draw stream.
+        self._request_admission_started = False
         # Mesh mapper for sharding seeds across rows when sampling_dp > 1.
         sampling_dp = 1 if tt_sampling is None else tt_sampling._sampling_dp
         if sampling_dp > 1:
@@ -961,7 +1124,7 @@ class SeedManager:
 
         if self._managed_draw_seeds is not None:
             return
-        if self._seed_active:
+        if self._request_admission_started:
             raise RuntimeError("managed draw seeds must be enabled before request admission")
         self._managed_draw_seeds = ManagedPerSlotDrawSeeds(self.max_batch_size)
 
@@ -1162,6 +1325,9 @@ class SeedManager:
         """Reset decode seed state from slot-indexed sampling params."""
         if user_ids is None:
             user_ids = range(self.max_batch_size)
+        user_ids = list(user_ids)
+        if user_ids:
+            self._request_admission_started = True
         for user in user_ids:
             slot = int(user)
             seed = self._seed_from_slot_params(seeds, slot)
@@ -1300,6 +1466,8 @@ class SeedManager:
             user_ids: Batch slot indices being prefilled.
         """
         user_ids = [int(user) for user in user_ids]
+        if user_ids:
+            self._request_admission_started = True
         for i, user in enumerate(user_ids):
             slot = int(user)
             seed = self._seed_from_slot_params(seeds, i)

@@ -24,6 +24,51 @@ class DeviceCategoricalPrototypeResult:
     owned_tensors: tuple[object, ...]
 
 
+def merge_unrestricted_rows(
+    categorical: DeviceCategoricalPrototypeResult,
+    native_tokens,
+    *,
+    unrestricted_selector,
+    invalid_token_ids,
+    ops,
+) -> DeviceCategoricalPrototypeResult:
+    """Merge categorical rows into the native ``[1,1,1,B]`` token ABI.
+
+    Invalid categorical rows are replaced on device with ``vocab_size`` (the
+    caller-provided sentinel).  The existing serving output bounds check then
+    fails the request without copying logits/probabilities to the host.
+    Bounded and greedy rows remain exactly the native sampler's output.
+    """
+
+    native_shape = _shape(native_tokens)
+    if len(native_shape) != 4 or native_shape[:3] != (1, 1, 1):
+        raise ValueError("native_tokens must have shape [1,1,1,B]")
+    batch = native_shape[3]
+    expected = (1, 1, 1, batch)
+    if _shape(unrestricted_selector) != expected or _shape(invalid_token_ids) != expected:
+        raise ValueError("selector and invalid-token tensors must match [1,1,1,B]")
+    if _shape(categorical.token_ids) != (1, 1, batch, 1):
+        raise ValueError("categorical tokens must have shape [1,1,B,1]")
+
+    owned = list(categorical.owned_tensors)
+
+    def own(tensor):
+        owned.append(tensor)
+        return tensor
+
+    full_tokens = own(ops.reshape(categorical.token_ids, expected))
+    valid = own(ops.reshape(categorical.valid_distribution, expected))
+    if full_tokens.dtype != native_tokens.dtype:
+        full_tokens = own(ops.typecast(full_tokens, dtype=native_tokens.dtype))
+    if invalid_token_ids.dtype != native_tokens.dtype:
+        invalid_token_ids = own(ops.typecast(invalid_token_ids, dtype=native_tokens.dtype))
+    selector = own(ops.gt(unrestricted_selector, 0))
+    safe_full_tokens = own(ops.where(valid, full_tokens, invalid_token_ids))
+    merged = own(ops.where(selector, safe_full_tokens, native_tokens))
+    unique_owned = tuple({id(tensor): tensor for tensor in owned}.values())
+    return DeviceCategoricalPrototypeResult(merged, valid, unique_owned)
+
+
 def _shape(tensor) -> tuple[int, ...]:
     return tuple(int(dim) for dim in tensor.shape)
 
