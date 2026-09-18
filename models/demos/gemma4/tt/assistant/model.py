@@ -37,6 +37,7 @@ import ttnn
 from models.demos.gemma4.tt.attention import Gemma4AttentionConfig
 from models.demos.gemma4.tt.ccl import ccl_allgather
 from models.demos.gemma4.tt.layer import Gemma4DecoderLayer
+from models.demos.gemma4.tt.precision import Gemma4Precision, dtype_to_str
 from models.demos.gemma4.tt.rms_norm import RMSNorm
 from models.demos.gemma4.utils.general_utils import get_cache_file_name
 from models.demos.gemma4.utils.substate import substate
@@ -78,6 +79,7 @@ class Gemma4AssistantModel:
         tensor_cache_path=None,
         mesh_config=None,
         max_local_batch_size=1,
+        precision=None,
     ):
         self.mesh_device = mesh_device
         self.max_local_batch_size = max_local_batch_size
@@ -107,6 +109,12 @@ class Gemma4AssistantModel:
 
         state_dict = _inject_zero_kv_weights(dict(state_dict), self.text_args)
 
+        if precision is None:
+            precision = Gemma4Precision()
+        shared_mlp_dtype = precision.get("shared_mlp", dtype)
+        attention_dtype = precision.get("attention", dtype)
+        lm_head_dtype = precision.get("lm_head", dtype)
+
         # Decoder layers (reuse the target's layer, MoE disabled, KV-shared).
         self.layers = []
         for i in range(self.text_args.num_hidden_layers):
@@ -117,6 +125,8 @@ class Gemma4AssistantModel:
                 layer_idx=i,
                 ccl_manager=ccl_manager,
                 dtype=dtype,
+                shared_mlp_dtype=shared_mlp_dtype,
+                attention_dtype=attention_dtype,
                 tensor_cache_path=f"{tensor_cache_path}/layer_{i}" if tensor_cache_path else None,
                 mesh_config=mesh_config,
                 max_seq_len=self.text_args.max_seq_len,
@@ -140,37 +150,46 @@ class Gemma4AssistantModel:
         # all-gathered, mirroring the target.
         col_mapper = mesh_config.column_parallel(mesh_device) if tp > 1 else None
 
-        def _linear(key, mapper, transpose=True):
+        def _linear(key, mapper, transpose=True, dtype_override=None):
             w = state_dict.get(key)
             if w is None:
                 return None
             wt = w.transpose(-2, -1) if transpose else w
             wt = wt.unsqueeze(0).unsqueeze(0)
+            wdtype = dtype if dtype_override is None else dtype_override
+            # Same contract as the target's weights: a dtype that differs from
+            # the module default gets its dtype in the cache filename, so a
+            # tensor cached at one precision is never reused at another.
+            suffix = "" if wdtype == dtype else f"_{dtype_to_str(wdtype)}"
             return ttnn.as_tensor(
                 wt,
                 device=mesh_device,
-                dtype=dtype,
+                dtype=wdtype,
                 layout=ttnn.TILE_LAYOUT,
                 mesh_mapper=mapper if mapper is not None else (replicate if is_mesh else None),
-                cache_file_name=get_cache_file_name(tensor_cache_path, key.replace(".", "_")),
+                cache_file_name=get_cache_file_name(tensor_cache_path, key.replace(".", "_") + suffix),
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
-        self.pre_projection = _linear("pre_projection.weight", None)
-        self.post_projection = _linear("post_projection.weight", None)
+        # The projections are read on every draft step; bfp8 halves their DRAM
+        # traffic and is the drafter's shipped precision.
+        self.pre_projection = _linear("pre_projection.weight", None, dtype_override=ttnn.bfloat8_b)
+        self.post_projection = _linear("post_projection.weight", None, dtype_override=ttnn.bfloat8_b)
         # lm_head tied to the assistant's own embed_tokens when a separate
         # lm_head.weight isn't stored.
         lm_key = "lm_head.weight" if "lm_head.weight" in state_dict else "model.embed_tokens.weight"
-        self.lm_head = _linear(lm_key, col_mapper)
+        self.lm_head = _linear(lm_key, col_mapper, dtype_override=lm_head_dtype)
         if self.pre_projection is None or self.post_projection is None or self.lm_head is None:
             raise ValueError("Assistant checkpoint missing pre_projection / post_projection / lm_head weights")
 
     def _raw_token_embed(self, token_tt):
         """Target token embedding of a single token id -> [1,1,1,backbone] TILE.
 
-        Uses the *scaled* embedding (``embed_tokens`` = raw table * sqrt(hidden)).
-        HF's ``embed_tokens`` is a ``Gemma4TextScaledWordEmbedding`` that applies
-        the ``sqrt(hidden)`` normalizer inside its forward, so the drafter input
+        Uses the *scaled* embedding: ``Gemma4Model.embed_tokens()`` multiplies
+        the raw table by ``sqrt(hidden)`` at lookup (the stored table is
+        unscaled -- ``raw_embed()`` returns it as-is). HF's ``embed_tokens`` is
+        a ``Gemma4TextScaledWordEmbedding`` that applies the same ``sqrt(hidden)``
+        normalizer inside its forward, so the drafter input
         ``cat(get_input_embeddings()(token), hidden)`` carries the *scaled*
         embedding. Feeding the unscaled table (~62x too small) starves the
         ``pre_projection`` token branch and collapses drafter acceptance
@@ -181,7 +200,17 @@ class Gemma4AssistantModel:
             emb = ttnn.unsqueeze_to_4D(emb)
         return ttnn.to_layout(emb, ttnn.TILE_LAYOUT)
 
-    def step(self, token_tt, target_hidden, shared_kv, page_tables, pos_uint32, pos_int32, return_logits=True):
+    def step(
+        self,
+        token_tt,
+        target_hidden,
+        shared_kv,
+        page_tables,
+        pos_uint32,
+        pos_int32,
+        return_logits=True,
+        gather_logits=True,
+    ):
         """One drafter step.
 
         Args:
@@ -197,9 +226,13 @@ class Gemma4AssistantModel:
             return_logits: when False, skip the lm_head + its TP all-gather and
                 return ``(None, next_hidden)`` (used to isolate the lm_head/CCL
                 cost in timing harnesses).
+            gather_logits: when False (and ``return_logits``), skip the vocab
+                all-gather and return TP-sharded logits. Greedy fused decode
+                reduces those with a local argmax + tiny gather instead of
+                moving the full 262k row.
 
         Returns:
-            (logits [1,1,1,vocab], next_hidden [1,1,1,backbone]).
+            (logits [1,1,1,vocab or vocab/tp], next_hidden [1,1,1,backbone]).
         """
         tok_embed = self._raw_token_embed(token_tt)
         inp = ttnn.concat([tok_embed, target_hidden], dim=-1)
@@ -229,7 +262,7 @@ class Gemma4AssistantModel:
         logits = None
         if return_logits:
             logits = ttnn.linear(normed, self.lm_head)
-            if self.mesh_config is not None and self.mesh_config.tp > 1:
+            if gather_logits and self.mesh_config is not None and self.mesh_config.tp > 1:
                 logits = ccl_allgather(logits, self.mesh_config, self.ccl_manager)
 
         next_hidden = ttnn.linear(normed, self.post_projection)

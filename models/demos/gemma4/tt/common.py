@@ -233,6 +233,11 @@ def create_assistant_model(
     assistant_args.cluster_shape = mesh_shape
     tensor_cache_path = str(assistant_args.weight_cache_path(dtype, mesh_shape=mesh_shape))
 
+    # The assistant is its own checkpoint (e.g. "gemma-4-31B-it-assistant"), so
+    # its precision overrides are looked up under its own table key -- it does
+    # NOT inherit the target's resolved precision.
+    precision = Gemma4Precision.load(assistant_path, mesh_shape)
+
     model = Gemma4AssistantModel(
         mesh_device=mesh_device,
         assistant_args=assistant_args,
@@ -243,5 +248,6 @@ def create_assistant_model(
         tensor_cache_path=tensor_cache_path,
         mesh_config=mesh_config,
         max_local_batch_size=max_local_batch_size,
+        precision=precision,
     )
     return assistant_args, model

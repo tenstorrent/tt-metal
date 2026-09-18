@@ -433,14 +433,27 @@ def test_packed_verify_batch_perf(mesh_device, reset_seeds):
         # rows user-major / position-minor: row u*P+p is user u's p-th candidate.
         x_p = _from(torch.tensor([tokens_per_user] * B, dtype=torch.int64).reshape(1, B * P), ttnn.uint32)
         pos_p = _from(torch.tensor([[c + p for u in range(B) for p in range(P)]], dtype=torch.int64), ttnn.uint32)
+        # int32 positions for paged_update_cache / cur_pos_tensor (uint32
+        # position_idx is RoPE-only), RANK 1 like every production caller:
+        # ttnn_packed_verify_forward slices it with rank-1 begins.
+        pos_cache_p = _from(
+            torch.tensor([c + p for u in range(B) for p in range(P)], dtype=torch.int32),
+            ttnn.int32,
+        )
         mask_full, mask_slide = _masks(B)
         write_idxs = [_from(torch.full((B,), c + p, dtype=torch.int32), ttnn.int32) for p in range(P)]
-        pt_packed = _from(pt_b, ttnn.int32)
+        # sdpa_decode takes its batch from the PAGE TABLE's row count, not Q,
+        # and asserts cur_pos_shape[-1] == B. At B==1 the batch-SDPA path makes
+        # the P candidates the batch, so replicate user 0's row P times (the
+        # batch-alias trick) -- what _page_table(_pv_page_table_batch(P)) builds.
+        pt_rows = pt_b.repeat(P, 1) if B == 1 else pt_b
+        pt_packed = _from(pt_rows, ttnn.int32)
 
         def _packed_call():
             return target.ttnn_packed_verify_forward(
                 x=x_p,
                 position_idx=pos_p,
+                position_idx_cache=pos_cache_p,
                 attn_mask_full=mask_full,
                 attn_mask_sliding=mask_slide,
                 packed_p=P,
@@ -458,7 +471,7 @@ def test_packed_verify_batch_perf(mesh_device, reset_seeds):
             if _is_l1_cb_overflow(e):
                 pytest.skip(_L1_OVERFLOW_REASON)
             raise
-        for t in (x_p, pos_p, mask_full, mask_slide, pt_packed, *write_idxs):
+        for t in (x_p, pos_p, pos_cache_p, mask_full, mask_slide, pt_packed, *write_idxs):
             t.deallocate(True)
 
         # ── batch-alias baseline ──────────────────────────────────────────────

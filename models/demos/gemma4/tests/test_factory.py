@@ -235,6 +235,96 @@ def skip_if_config_only_checkpoint():
         pytest.skip(_CONFIG_ONLY_SKIP_REASON)
 
 
+def _assistant_repo_id():
+    """Hub repo id for the it-assistant drafter matching the target ``HF_MODEL``."""
+    model_path = _get_model_path()
+    if model_path.endswith("-assistant"):
+        return model_path if "/" in model_path else f"google/{model_path}"
+    basename = os.path.basename(model_path.rstrip("/"))
+    if basename.endswith("-it"):
+        return f"google/{basename}-assistant"
+    return f"{model_path}-assistant"
+
+
+def _assistant_hub_snapshot(repo_id):
+    hf_home = os.environ.get("HF_HOME", "/mnt/MLPerf/huggingface")
+    hub_cache = os.environ.get("HF_HUB_CACHE", os.path.join(hf_home, "hub"))
+    snapshots_root = os.path.join(hub_cache, f"models--{repo_id.replace('/', '--')}", "snapshots")
+    if not os.path.isdir(snapshots_root):
+        return None
+    for name in sorted(os.listdir(snapshots_root)):
+        snap = os.path.join(snapshots_root, name)
+        if os.path.isfile(os.path.join(snap, "config.json")):
+            return snap
+    return None
+
+
+def resolve_assistant_model_path(*, allow_download=None):
+    """Resolve ``GEMMA4_ASSISTANT_MODEL`` to a local directory with ``config.json``.
+
+    Search order: existing local dir → HF hub snapshot → ``GEMMA4_ASSISTANT_CACHE`` /
+    ``/tmp/<repo>``. When ``allow_download`` is true (default in CI only), fetch
+    the assistant snapshot from the Hub into the cache dir.
+    """
+    existing = os.environ.get("GEMMA4_ASSISTANT_MODEL")
+    if existing and os.path.isfile(os.path.join(existing, "config.json")):
+        return existing
+
+    repo_id = _assistant_repo_id()
+    if existing and ("/" in existing or existing.endswith("-assistant")):
+        repo_id = existing if "/" in existing else f"google/{existing}"
+
+    snap = _assistant_hub_snapshot(repo_id)
+    if snap:
+        os.environ["GEMMA4_ASSISTANT_MODEL"] = snap
+        return snap
+
+    repo_tail = repo_id.split("/")[-1]
+    cache_dir = os.environ.get("GEMMA4_ASSISTANT_CACHE", f"/tmp/{repo_tail}")
+    if os.path.isfile(os.path.join(cache_dir, "config.json")):
+        os.environ["GEMMA4_ASSISTANT_MODEL"] = cache_dir
+        return cache_dir
+
+    if allow_download is None:
+        allow_download = os.environ.get("CI") == "true"
+    if not allow_download:
+        return None
+
+    from huggingface_hub import snapshot_download
+
+    prev_offline = os.environ.get("HF_HUB_OFFLINE")
+    os.environ["HF_HUB_OFFLINE"] = "0"
+    try:
+        snapshot_download(repo_id, local_dir=cache_dir)
+    finally:
+        if prev_offline is None:
+            os.environ.pop("HF_HUB_OFFLINE", None)
+        else:
+            os.environ["HF_HUB_OFFLINE"] = prev_offline
+
+    os.environ["GEMMA4_ASSISTANT_MODEL"] = cache_dir
+    return cache_dir
+
+
+def configure_spec_decode_smoke_env():
+    """CI hook: real target weights + assistant drafter for spec-decode smoke tests."""
+    if os.environ.get("GEMMA4_SPEC_DECODE_ENV_READY") == "1":
+        return os.environ.get("GEMMA4_ASSISTANT_MODEL")
+
+    if os.environ.get("CI") == "true":
+        os.environ.setdefault("HF_HOME", "/mnt/MLPerf/huggingface")
+        os.environ.setdefault("HF_HUB_CACHE", os.path.join(os.environ["HF_HOME"], "hub"))
+        if uses_ci_config_only_checkpoint():
+            os.environ["HF_MODEL"] = "google/gemma-4-31B-it"
+        os.environ.setdefault("TT_CACHE_PATH", "/mnt/MLPerf/huggingface/tt_cache/google--gemma-4-31B-it")
+        os.environ.setdefault("GEMMA4_NUM_LAYERS", "4")
+
+    path = resolve_assistant_model_path()
+    if path:
+        os.environ["GEMMA4_SPEC_DECODE_ENV_READY"] = "1"
+    return path
+
+
 class TestFactory:
     """Common test setup for Gemma4 unit tests."""
 

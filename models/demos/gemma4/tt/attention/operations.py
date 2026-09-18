@@ -575,7 +575,22 @@ def concat_heads(
         grid_y = compute_grid.y if compute_grid is not None else 8
         grid_x = min(batch, physical_grid_x)
         if batch >= grid_x and batch % grid_x != 0:
-            grid_x = max(x for x in range(grid_x, 0, -1) if batch % x == 0 and batch // x <= grid_y)
+            # num_to_corerange needs a rectangle of EXACTLY ``batch`` cores, and
+            # some batches do not factor that way (a prime > 8 on an 8x8 grid).
+            # Plain decode never hits it; packed verify runs at batch = B*(K+1),
+            # so K=10/12/16 used to die with "max() arg is an empty sequence".
+            # Fall back to transpose + nlp_concat_heads, which has no rectangle
+            # constraint -- single-core and slower, but those K are past the
+            # measured throughput optimum anyway.
+            candidates = [x for x in range(grid_x, 0, -1) if batch % x == 0 and batch // x <= grid_y]
+            if not candidates:
+                transposed = ttnn.transpose(tensor, 1, 2)  # [1, heads, batch, head_dim]
+                out = ttnn.experimental.nlp_concat_heads(
+                    transposed, memory_config=memory_config or ttnn.DRAM_MEMORY_CONFIG
+                )
+                transposed.deallocate(True)
+                return out
+            grid_x = max(candidates)
         core_grid = ttnn.CoreRangeSet({num_to_corerange(batch, grid_x=grid_x, grid_y=grid_y)})
         shard_cfg = ttnn.create_sharded_memory_config(
             shape=(ttnn.TILE_SIZE, head_dim),

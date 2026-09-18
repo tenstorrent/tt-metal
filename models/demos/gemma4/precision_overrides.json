@@ -9,9 +9,17 @@
     }
   },
   "gemma-4-31B-it": {
-    "default": {"shared_mlp": "bfp8", "attention": "bfp8"}
+    "default": {"shared_mlp": "bfp8", "attention": "bfp8"},
+    "1x8": {"shared_mlp": "bfp8", "attention": "bfp8", "lm_head": "bfp8"}
   },
   "gemma-4-12B-it": {
-    "default": {"shared_mlp": "bfp8", "attention": "bfp8"}
+    "default": {"shared_mlp": "bfp8", "attention": "bfp8"},
+    "1x8": {"shared_mlp": "bfp8", "attention": "bfp8", "lm_head": "bfp8"}
+  },
+  "gemma-4-31B-it-assistant": {
+    "default": {"shared_mlp": "bfp8", "attention": "bfp8", "lm_head": "bfp8"}
+  },
+  "gemma-4-12B-it-assistant": {
+    "default": {"shared_mlp": "bfp8", "attention": "bfp8", "lm_head": "bfp8"}
   }
 }
