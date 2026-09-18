@@ -505,6 +505,121 @@ def _trace_and_time(submesh, run_ops, *, num_iters: int) -> float:
     return elapsed_us / num_iters
 
 
+@pytest.mark.parametrize(
+    "mesh_device,device_params",
+    [((4, 8), {**ring_params, "trace_region_size": 1_048_576})],
+    indirect=True,
+)
+@pytest.mark.skipif(
+    not _os.environ.get("C01_SHAPE") and not _os.environ.get("QK_ROPE_MODE"),
+    reason="opt-in C01 device benchmark",
+)
+@pytest.mark.skip_post_commit
+def test_ltx_qk_rope_bench(mesh_device):
+    """One production QK shape/route per process; synchronized trace timing.
+
+    C01_SHAPE selects tp4_v_selfattn_qk_s1, tp4_v_selfattn_qk_s2 or
+    tp4_a_selfattn_qk. QK_ROPE_MODE selects base or fused. Run separate
+    processes in AB/BA order; no performance threshold is asserted here.
+    C01_PROFILE=1 captures just one warmed trace replay, with profiler drains,
+    for external Tracy/counter analysis instead of the timing batches.
+    """
+    import hashlib
+    import json
+    from pathlib import Path
+
+    shape = _os.environ["C01_SHAPE"]
+    mode = _os.environ["QK_ROPE_MODE"]
+    allowed = {"tp4_v_selfattn_qk_s1", "tp4_v_selfattn_qk_s2", "tp4_a_selfattn_qk"}
+    assert shape in allowed, f"unsupported C01_SHAPE={shape!r}"
+    assert mode in {"base", "fused"}, f"unsupported QK_ROPE_MODE={mode!r}"
+    cfg = next(c for c in _make_cfgs(LTX, 4) if c.cid == shape)
+    inp = _build(mesh_device, cfg, 0)
+    ref = _torch_ref(cfg)
+    ccl = CCLManager(mesh_device=mesh_device, num_links=2, topology=ttnn.Topology.Ring)
+    norm = DistributedRMSNorm(
+        embedding_dim=cfg.dim,
+        norm_eps=NORM_EPS,
+        norm_elementwise_affine=False,
+        mesh_axis=0,
+        mesh_device=mesh_device,
+        ccl_manager=ccl,
+    )
+    rope_config = ttnn.init_device_compute_kernel_config(
+        mesh_device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+
+    def run():
+        args = dict(num_heads_per_device=cfg.heads, dynamic_weight=inp["weight"])
+        if mode == "fused":
+            return norm(inp["x"], **args, rope_cos=inp["cos"], rope_sin=inp["sin"], trans_mat=inp["trans"])
+        normalized = norm(inp["x"], **args)
+        return ttnn.experimental.rotary_embedding_llama(
+            normalized, inp["cos"], inp["sin"], inp["trans"], compute_kernel_config=rope_config
+        )
+
+    # Two forwards bind both ping-pong semaphore/stats-buffer sets. Keep both
+    # captured outputs alive for every replay and for the final correctness read.
+    warm_outputs = [run(), run()]
+    ttnn.synchronize_device(mesh_device)
+    eager = [_gather(out, 0) for out in warm_outputs]
+    trace = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    outputs = [run(), run()]
+    ttnn.end_trace_capture(mesh_device, trace, cq_id=0)
+    ttnn.synchronize_device(mesh_device)
+    samples_us = []
+    try:
+        if _os.environ.get("C01_PROFILE", "0") == "1":
+            from tracy import signpost
+
+            ttnn.ReadDeviceProfiler(mesh_device)
+            signpost("start", f"C01 {shape} {mode}: two QK norm/rotation forwards")
+            ttnn.execute_trace(mesh_device, trace, cq_id=0, blocking=False)
+            ttnn.synchronize_device(mesh_device)
+            ttnn.ReadDeviceProfiler(mesh_device)
+            signpost("stop")
+        else:
+            for _ in range(5):
+                ttnn.synchronize_device(mesh_device)
+                start = time.perf_counter()
+                for _ in range(20):
+                    ttnn.execute_trace(mesh_device, trace, cq_id=0, blocking=False)
+                ttnn.synchronize_device(mesh_device)
+                samples_us.append((time.perf_counter() - start) * 1e6 / 40)
+        actual = [_gather(out, 0) for out in outputs]
+    finally:
+        ttnn.release_trace(mesh_device, trace)
+
+    assert all(torch.isfinite(out).all() for out in actual), "nonfinite QK norm/RoPE output"
+    assert all(torch.equal(out, before) for out, before in zip(actual, eager)), "trace changed eager output"
+    pcc = min(_pcc(out, ref) for out in actual)
+    delta = actual[0] - ref
+    output_dir = Path(_os.environ.get("C01_OUTPUT_DIR", "tmp/ltx-opt/c01"))
+    output_dir.mkdir(parents=True, exist_ok=True)
+    stem = f"{shape}-{mode}"
+    record = {
+        "shape": shape,
+        "mode": mode,
+        "mesh": list(mesh_device.shape),
+        "pcc": pcc,
+        "max_abs_error": delta.abs().max().item(),
+        "rmse": delta.square().mean().sqrt().item(),
+        "synchronized_us_per_norm_rotation": samples_us,
+        "mean_us_per_norm_rotation": sum(samples_us) / len(samples_us) if samples_us else None,
+        "trace_forwards": 2,
+        "replays_per_batch": 20 if samples_us else 1,
+        "test_source_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+    }
+    torch.save({"outputs": actual, "reference": ref}, output_dir / f"{stem}.pt")
+    (output_dir / f"{stem}.json").write_text(json.dumps(record, indent=2) + "\n")
+    print("C01_RESULT " + json.dumps(record), flush=True)
+    assert pcc >= 0.999, f"QK norm/RoPE differs from fp32 reference: {pcc}"
+
+
 # mesh, device_params, model, tp, topology, op_override(=galaxy links; None on BH), tp_axis, full_mesh
 # full_mesh=True keeps the whole 2D mesh with TP on axis 1 (the 8-wide closed ring) and
 # axis 0 replicated — used for the FLUX TP=8 ring config (tp_axis=1 would otherwise carve

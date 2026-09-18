@@ -127,6 +127,10 @@ class LTXAttention(Module):
         self.qk_norm = qk_norm
         self.eps = eps
         self.is_self = is_self
+        # Fuse the self-attention rotation into Q/K RMSNorm's head-split writer.
+        # Cross-attention may gather K across SP before rotating it, so it keeps
+        # the separate rotation until that layout is validated independently.
+        self.fuse_qk_rope = os.environ.get("LTX_FUSE_QK_ROPE", "0") in ("1", "true", "True")
         self.query_input_dim = query_input_dim or dim
         self.output_dim = output_dim or dim
 
@@ -741,8 +745,20 @@ class LTXAttention(Module):
             )
 
         # RMSNorm on Q/K fused with the head split (emits BHNE via num_heads_per_device).
-        q_BHNE = self.norm_q(q_1BNF, num_heads_per_device=self.n_local_heads)
-        k_BHNE = self.norm_k(k_1BNF, num_heads_per_device=self.n_local_heads)
+        # The optional fused RoPE avoids writing and rereading the unrotated Q/K.
+        fuse_qk_rope = self.fuse_qk_rope and self.is_self and prompt_1BLP is None and rope_cos is not None
+        q_rope_args = dict(rope_cos=rope_cos, rope_sin=rope_sin, trans_mat=trans_mat) if fuse_qk_rope else {}
+        k_rope_args = (
+            dict(
+                rope_cos=k_rope_cos if k_rope_cos is not None else rope_cos,
+                rope_sin=k_rope_sin if k_rope_sin is not None else rope_sin,
+                trans_mat=trans_mat,
+            )
+            if fuse_qk_rope
+            else {}
+        )
+        q_BHNE = self.norm_q(q_1BNF, num_heads_per_device=self.n_local_heads, **q_rope_args)
+        k_BHNE = self.norm_k(k_1BNF, num_heads_per_device=self.n_local_heads, **k_rope_args)
 
         def create_heads(inp):
             out, _, _ = ttnn.experimental.nlp_create_qkv_heads(
@@ -773,7 +789,7 @@ class LTXAttention(Module):
                 k_BHNE = self.ccl_manager.all_gather_persistent_buffer(k_BHNE, dim=2, mesh_axis=sp_axis)
                 v_BHNE = self.ccl_manager.all_gather_persistent_buffer(v_BHNE, dim=2, mesh_axis=sp_axis)
 
-        if rope_cos is not None:
+        if rope_cos is not None and not fuse_qk_rope:
             _k_cos = _k_cos_pe
             _k_sin = k_rope_sin if k_rope_sin is not None else rope_sin
             q_BHNE = ttnn.experimental.rotary_embedding_llama(
