@@ -34,7 +34,8 @@
 // `HasValid` is a template param so the no-clamp program keeps the original loop.
 template <bool HasMeta, bool HasValid>
 static void run_writer() {
-    // Per-core runtime args (buffers arrive as Buffer* bindings -> addresses).
+    // Index 11 follows the eleven common args in update_padded_kv_cache_device_operation.cpp,
+    // where writer_kernel.emplace_common_runtime_args({dst_buffer}) appends the destination binding.
     const uint32_t dst_addr = get_common_arg_val<uint32_t>(11);
     const uint32_t num_pages = get_arg_val<uint32_t>(0);
     const uint32_t core_blocks_written = get_arg_val<uint32_t>(1);
