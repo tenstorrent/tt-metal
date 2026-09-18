@@ -22,12 +22,7 @@ from models.demos.gemma4.config import MeshConfig, Mode
 from .weights import AttentionWeights, load_attention_weights
 from .kv_cache import init_kv_cache
 from .decode import decode_forward, packed_decode_forward
-from .prefill import (
-    flush_deferred_bounded_fills,
-    pack_sliding_tail,
-    prefill_forward,
-    unpack_sliding_tail,
-)
+from .prefill import flush_deferred_bounded_fills, prefill_forward
 
 # Named sentinel for optional per-request arguments (clearer than a bare `...`).
 _UNSET = object()
@@ -403,9 +398,10 @@ class Gemma4Attention:
         slot = pool_map.get(req_key) if req_key else None
         if slot is not None and self._tail_pool is not None:
             kb, vb = self._tail_pool[slot]
-            k = ttnn.clone(kb, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            v = ttnn.clone(vb, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            return pack_sliding_tail(k, v, int(kb.shape[-2]))
+            return (
+                ttnn.clone(kb, memory_config=ttnn.DRAM_MEMORY_CONFIG),
+                ttnn.clone(vb, memory_config=ttnn.DRAM_MEMORY_CONFIG),
+            )
         tails = getattr(self, "_sliding_tails_by_key", None)
         if tails is None:
             return None
@@ -417,20 +413,17 @@ class Gemma4Attention:
     def _put_sliding_tail(self, req_key, tail):
         if tail is None:
             return
-        k, v, valid = unpack_sliding_tail(tail)
-        if k is None or v is None:
-            return
         pool = self._tail_pool
         # Pool only for real runtime requests (truthy key): warmup/traced paths
         # must keep the legacy stash — a ttnn.copy during capture TT_FATALs
         # ("Cannot load new binaries during trace capture").
         if pool is not None and req_key:
+            k, v = tail
             hist = int(self.config.sliding_window)
             if int(k.shape[-2]) != hist:
                 from .prefill import _left_pad_kv_to_hist
 
                 k, v = _left_pad_kv_to_hist(k, v, hist, self.config.head_dim, deallocate_inputs=True)
-                valid = hist
             kb_shape = list(pool[0][0].shape)
             if list(k.shape) == kb_shape and list(v.shape) == kb_shape:
                 pool_map = self._tail_pool_map
@@ -450,10 +443,9 @@ class Gemma4Attention:
                         oldest_key = next(iter(pool_map))
                         slot = pool_map.pop(oldest_key)
                         okb, ovb = pool[slot]
-                        spill = pack_sliding_tail(
+                        spill = (
                             ttnn.clone(okb, memory_config=ttnn.DRAM_MEMORY_CONFIG),
                             ttnn.clone(ovb, memory_config=ttnn.DRAM_MEMORY_CONFIG),
-                            int(okb.shape[-2]),
                         )
                         tails = getattr(self, "_sliding_tails_by_key", None)
                         if tails is None:
@@ -471,7 +463,7 @@ class Gemma4Attention:
                     except Exception:
                         pass
                 return
-            tail = pack_sliding_tail(k, v, valid)  # shape mismatch — fall back to the clone stash
+            tail = (k, v)  # shape mismatch — fall back to the clone stash
         tails = getattr(self, "_sliding_tails_by_key", None)
         if tails is None:
             tails = {}
@@ -486,13 +478,10 @@ class Gemma4Attention:
     def _dealloc_tail(self, tail):
         if not tail:
             return
-        k, v, _ = unpack_sliding_tail(tail)
         persistent = getattr(self.config, "sliding_prefill_tail_persistent", None)
-        if persistent is not None and k is persistent[0]:
+        if persistent is not None and len(tail) == 2 and len(persistent) == 2 and tail[0] is persistent[0]:
             return  # persistent ring buffers are owned by the traced path
-        for t in (k, v):
-            if t is None:
-                continue
+        for t in tail:
             try:
                 t.deallocate(True)
             except Exception:
@@ -527,8 +516,6 @@ class Gemma4Attention:
                 if group is None:
                     continue
                 for t in group:
-                    if not hasattr(t, "deallocate"):
-                        continue
                     tid = id(t)
                     if tid in seen:
                         continue

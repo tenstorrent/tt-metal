@@ -96,15 +96,10 @@ def default_ccl_topology(mesh_device=None):
     Policy (when env unset):
       * **Ring** only on **Blackhole** meshes with **≥8 devices** (P150x8 TTFT
         sweep: Ring+sync ~28.8s vs Linear+sync ~31.0s @ 31B/128k).
-      * **Ring** on **Wormhole** meshes with **≥8 devices** for **dense 31B**
-        (decode all-reduce; selected by ``HF_MODEL`` containing "31b").
-        ``num_links=2`` is still unusable on WH (event-order hang); Ring on 1
-        link is the remaining TP=8 CCL lever. Every other WH model — notably
-        the 26B-A4B MoE — stays Linear: Ring on WH drops its
-        ``test_full_model`` PCC below the TEMP 0.76 gate (~0.7505 vs
-        ~0.77/0.94 with Linear / main).
-      * **Linear** everywhere else. Ring on 4-device BH also drops 12B
-        full-model PCC (~0.97 → ~0.90).
+      * **Linear** everywhere else — including Wormhole T3K 1x8. Ring on WH
+        drops 26B-A4B ``test_full_model`` PCC below the TEMP 0.76 gate
+        (~0.7505 vs ~0.77/0.94 with Linear / main). Ring on 4-device BH also
+        drops 12B full-model PCC (~0.97 → ~0.90).
 
     Async RS+AG is correct but slower than sync on P150x8 — keep
     ``GEMMA4_CCL_ASYNC=0`` unless re-swept.
@@ -120,8 +115,6 @@ def default_ccl_topology(mesh_device=None):
     # stay Linear for MoE PCC (matches main's hardcoded Linear all-reduce).
     if n:
         if n >= 8 and is_blackhole():
-            return ttnn.Topology.Ring
-        if n >= 8 and "31b" in os.environ.get("HF_MODEL", "").lower():
             return ttnn.Topology.Ring
         return ttnn.Topology.Linear
 

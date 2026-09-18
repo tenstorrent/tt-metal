@@ -192,90 +192,6 @@ def _host_sample(logits, temperature, top_p):
     return torch.gather(sorted_idx, -1, choice)
 
 
-def _prepare_demo_prefill_warmup(
-    *,
-    generator,
-    tt_kv_cache,
-    sampling_params,
-    enable_trace,
-    max_seq_len,
-    decode_page_table=None,
-):
-    """Shared prefill-trace gating + on-device sampling warmup for demo paths.
-
-    Prefill tracing buys ~nothing for single full-ISL runs (trace buffers scale
-    with chunk×batch). Gate off above GEMMA4_PREFILL_TRACE_MAX_SEQ unless traced
-    multi-chunk is on (GEMMA4_CHUNKED_PREFILL_TRACE=1): then we still capture the
-    4k sp0/sp1 buckets used by long-ISL chunk replay.
-    """
-    from models.demos.gemma4.tt.generator_trace import chunked_prefill_trace_enabled
-
-    prefill_trace_max = int(os.environ.get("GEMMA4_PREFILL_TRACE_MAX_SEQ", 4096))
-    prefill_enable_trace = enable_trace and (max_seq_len < prefill_trace_max or chunked_prefill_trace_enabled())
-    if enable_trace and not prefill_enable_trace:
-        logger.info(
-            f"Prefill trace disabled (max_seq_len={max_seq_len} >= {prefill_trace_max}); "
-            f"decode stays traced. Set GEMMA4_PREFILL_TRACE_MAX_SEQ or "
-            f"GEMMA4_CHUNKED_PREFILL_TRACE=1 to override."
-        )
-    # Default on-device sample (product decode_only parity). Opt into host with
-    # GEMMA4_HOST_SAMPLE=1 if device-sample + decode-trace misbehaves.
-    force_host = os.environ.get("GEMMA4_HOST_SAMPLE", "0").lower() in ("1", "true", "yes")
-    can_sample = (not force_host) and model_can_sample_on_device(generator.model[0])
-    device_sampling_params = build_device_sampling_params(sampling_params, can_sample=can_sample)
-    temperature = sampling_params.get("temperature", 0)
-    greedy_only = temperature <= 0
-    log_sampling_mode(can_sample, sampling_params)
-
-    logger.info("Warming up prefill...")
-    generator.warmup_model_prefill(
-        kv_cache=tt_kv_cache,
-        enable_trace=prefill_enable_trace,
-        can_sample_on_device=can_sample,
-        greedy_only=greedy_only,
-        decode_page_table=decode_page_table,
-    )
-    logger.info("Warmup complete")
-
-    return prefill_enable_trace, device_sampling_params
-
-
-def _run_demo_prefill(
-    *,
-    generator,
-    input_tokens_prefill_pt,
-    page_table,
-    tt_kv_cache,
-    decoding_pos,
-    prefill_enable_trace,
-    device_sampling_params,
-    temperature,
-    top_p,
-):
-    """Timed prefill + first-token sample (device sampling, else host top-p)."""
-    import time
-
-    logger.info("Starting prefill...")
-    prefill_t0 = time.perf_counter()
-    prefill_out = generator.prefill_forward_text(
-        input_tokens_prefill_pt,
-        page_table=page_table,
-        kv_cache=tt_kv_cache,
-        prompt_lens=decoding_pos,
-        warmup_prefill=False,
-        enable_trace=prefill_enable_trace,
-        sampling_params=device_sampling_params,
-    )
-    if device_sampling_params is not None:
-        prefill_tokens, _ = prefill_out
-        prefilled_token = prefill_tokens.long()
-    else:
-        prefilled_token = _host_sample(prefill_out, temperature, top_p)
-    prefill_elapsed = time.perf_counter() - prefill_t0
-    logger.info("Prefill finished")
-    return prefilled_token, prefill_out, prefill_elapsed
-
-
 def _default_ccl_packet_bytes():
     """Leave Fabric's default packet size.
 
@@ -698,16 +614,37 @@ def test_demo_text(
         logger.info(f"Bounded sliding: installed {len(per_layer_pts)} per-layer page tables")
 
     # ── Warmup (prefill compile + optional trace) ──────────────────────────
-    profiler.start("warmup_prefill")
-    prefill_enable_trace, device_sampling_params = _prepare_demo_prefill_warmup(
-        generator=generator,
-        tt_kv_cache=tt_kv_cache,
-        sampling_params=sampling_params,
-        enable_trace=enable_trace,
-        max_seq_len=max_seq_len,
+    # Prefill tracing buys ~nothing for single full-ISL runs (trace buffers
+    # scale with chunk×batch). Gate off above GEMMA4_PREFILL_TRACE_MAX_SEQ
+    # unless traced multi-chunk is on (GEMMA4_CHUNKED_PREFILL_TRACE=1): then
+    # we still capture the 4k sp0/sp1 buckets used by long-ISL chunk replay.
+    from models.demos.gemma4.tt.generator_trace import chunked_prefill_trace_enabled
+
+    prefill_trace_max = int(os.environ.get("GEMMA4_PREFILL_TRACE_MAX_SEQ", 4096))
+    prefill_enable_trace = enable_trace and (max_seq_len < prefill_trace_max or chunked_prefill_trace_enabled())
+    if enable_trace and not prefill_enable_trace:
+        logger.info(
+            f"Prefill trace disabled (max_seq_len={max_seq_len} >= {prefill_trace_max}); "
+            f"decode stays traced. Set GEMMA4_PREFILL_TRACE_MAX_SEQ or "
+            f"GEMMA4_CHUNKED_PREFILL_TRACE=1 to override."
+        )
+    # Default on-device sample (product decode_only parity). Opt into host with
+    # GEMMA4_HOST_SAMPLE=1 if device-sample + decode-trace misbehaves.
+    force_host = os.environ.get("GEMMA4_HOST_SAMPLE", "0").lower() in ("1", "true", "yes")
+    can_sample = (not force_host) and model_can_sample_on_device(generator.model[0])
+    device_sampling_params = build_device_sampling_params(sampling_params, can_sample=can_sample)
+    greedy_only = temperature <= 0
+    log_sampling_mode(can_sample, sampling_params)
+
+    logger.info("Warming up prefill...")
+    generator.warmup_model_prefill(
+        kv_cache=tt_kv_cache,
+        enable_trace=prefill_enable_trace,
+        can_sample_on_device=can_sample,
+        greedy_only=greedy_only,
         decode_page_table=page_table,
     )
-    profiler.end("warmup_prefill")
+    logger.info("Warmup complete")
 
     # ── Prefill ────────────────────────────────────────────────────────────
     input_tokens_prefill_pt, encoded_prompts, decoding_pos, prefill_lens = preprocess_inputs_prefill(
@@ -740,7 +677,7 @@ def test_demo_text(
     logger.info("Prefill finished")
 
     prefilled_flat = prefilled_token.view(batch_size, -1).squeeze(-1)
-    all_outputs = [encoded_prompts[b][: decoding_pos[b]] for b in range(batch_size)]
+    all_outputs = [encoded_prompts[b][: prefill_lens[b]] for b in range(batch_size)]
     for user in range(batch_size):
         all_outputs[user].append(int(prefilled_flat[user].item()))
 
@@ -781,7 +718,7 @@ def test_demo_text(
 
         if not is_ci_env:
             for user in range(batch_size):
-                text = tokenizer.decode(all_outputs[user][decoding_pos[user] :])
+                text = "".join(tokenizer.decode(all_outputs[user]))
                 text = ("..." + text[-97:]) if len(text) > 100 else text
                 logger.info(f"[User {user}] {text.replace(chr(10), ' ')}")
 
@@ -798,7 +735,7 @@ def test_demo_text(
     # echoing the prompt). Slice off the prompt to judge generation quality.
     logger.info("Finished decoding. Final outputs:")
     for i, (output, prompt) in enumerate(zip(all_outputs, prompts)):
-        gen_text = tokenizer.decode(output[decoding_pos[i] :])
+        gen_text = tokenizer.decode(output[prefill_lens[i] :])
         short_prompt = (prompt[:100] + "\n<...>\n" + prompt[-100:]) if len(prompt) > 200 else prompt
         logger.info(f"\n==USER {i} - PROMPT\n{short_prompt}\n==USER {i} - GENERATION ONLY\n{gen_text.strip()}\n")
 
@@ -814,7 +751,7 @@ def test_demo_text(
 
     logger.info("")
     logger.info("=== Performance metrics ===")
-    logger.info(f"Prompt tokens: {decoding_pos[0]}, generated tokens: {iteration}")
+    logger.info(f"Prompt tokens: {prefill_lens[0]}, generated tokens: {iteration}")
     logger.info(f"Time to First Token (TTFT): {ttft_ms:.1f} ms")
     if batch_size > 1:
         logger.info(f"Amortized prefill/user: {amortized_prefill_ms:.1f} ms")
@@ -851,7 +788,7 @@ def test_demo_text(
             num_layers=num_layers or model_args.num_hidden_layers,
             batch_size=batch_size,
             config_params={},
-            input_sequence_length=decoding_pos[0],
+            input_sequence_length=prefill_lens[0],
             output_sequence_length=iteration,
         )
 
@@ -1022,20 +959,9 @@ def _run_spec_decode(
 
     prefill_trace_max = int(os.environ.get("GEMMA4_PREFILL_TRACE_MAX_SEQ", 4096))
     prefill_enable_trace = enable_trace and (max_seq_len < prefill_trace_max or chunked_prefill_trace_enabled())
-    if enable_trace and not prefill_enable_trace:
-        logger.info(
-            f"Prefill trace disabled (max_seq_len={max_seq_len} >= {prefill_trace_max}); "
-            f"decode stays traced. Set GEMMA4_PREFILL_TRACE_MAX_SEQ or "
-            f"GEMMA4_CHUNKED_PREFILL_TRACE=1 to override."
-        )
-    logger.info("Warming up prefill...")
     generator.warmup_model_prefill(
-        kv_cache=tt_kv_cache,
-        enable_trace=prefill_enable_trace,
-        can_sample_on_device=False,
-        greedy_only=True,
+        kv_cache=tt_kv_cache, enable_trace=prefill_enable_trace, can_sample_on_device=False, greedy_only=True
     )
-    logger.info("Warmup complete")
 
     input_tokens_prefill_pt, encoded_prompts, decoding_pos, prefill_lens = preprocess_inputs_prefill(
         [prompt], tokenizer, model_args, instruct, max_generated_tokens, max_prefill_len=max_seq_len
@@ -1066,6 +992,12 @@ def _run_spec_decode(
     anchor_pos = prompt_len - 1
     anchor_token = int(encoded_prompts[0][anchor_pos])
 
+    # Spec-decode drafts `draft_len` positions AHEAD of the committed position, so
+    # the furthest position touched is (prompt_len-1) + generated + draft_len. The
+    # RoPE / paged-attention structures are sized to max_seq_len, so overshooting
+    # that bound indexes out of range and hangs the device (deterministically at
+    # cur_pos == max_seq_len - draft_len). Reserve the speculative lookahead margin
+    # by clamping generation to stay strictly within max_seq_len.
     _safe_gen = max_seq_len - prompt_len - (draft_len + 1)
     if max_generated_tokens > _safe_gen:
         logger.warning(
@@ -1148,6 +1080,10 @@ def _run_spec_decode(
     mean_accept = (sum(accepts) / n_iters) if n_iters else 0.0
     setup_elapsed = getattr(spec, "_last_fused_setup_s", 0.0) if use_fused else 0.0
     steady_elapsed = getattr(spec, "_last_fused_replay_s", elapsed) if use_fused else elapsed
+    # batch=1 single-user: per-user rate == aggregate throughput (kept explicit
+    # so the line is coherent with the plain-decode demo's metric format). Match
+    # the plain demo's steady-state decode convention by excluding one-time spec
+    # setup/trace capture from the main Decode line; report wall throughput too.
     tok_s_u = n_tokens / steady_elapsed if steady_elapsed > 0 else 0.0
     tok_s = tok_s_u * batch_size
     ms_per_token = (steady_elapsed * 1000.0 / n_tokens) if n_tokens else 0.0
@@ -1168,21 +1104,6 @@ def _run_spec_decode(
         )
     logger.info(f"Verify iterations: {n_iters} ({ms_per_iter:.2f} ms/iter)")
     logger.info(f"Decode: {ms_per_token:.2f} ms/token @ {tok_s_u:.2f} tok/s/user " f"({tok_s:.2f} tok/s throughput)")
-    if spec._verify_time_s > 0 or spec._draft_time_s > 0:
-        logger.info(
-            f"Target verify: {spec._verify_time_s * 1000.0:.1f} ms total "
-            f"({spec._verify_time_s * 1000.0 / n_iters:.2f} ms/iter)"
-        )
-        logger.info(
-            f"MTP (drafter) parallel-token generation: {spec._draft_time_s * 1000.0:.1f} ms total "
-            f"({spec._draft_time_s * 1000.0 / n_iters:.2f} ms/iter, {draft_len} tokens/iter)"
-        )
-    else:
-        logger.info(
-            "Target-verify/MTP time split not available: draft+verify ran as ONE fused Metal "
-            "trace replay per iteration (GEMMA4_SPEC_TRACE=1/enable_trace), so the two phases "
-            "aren't separately observable on the host. Set GEMMA4_SPEC_TRACE=0 for the breakdown."
-        )
     assert n_tokens > 0, "speculative decode produced no tokens"
     return generated, accepts
 
@@ -1257,7 +1178,6 @@ def _run_spec_decode_batched(
     )
     target = generator.model[0]
     model_args = generator.model_args
-    top_p = sampling_params.get("top_p", 1.0)
 
     page_table = create_tt_page_table(B, paged_attention_config)  # [B, blocks_per_user]
     if _spec_bounded:
@@ -1270,40 +1190,41 @@ def _run_spec_decode_batched(
             generator, model_args, num_layers, B, block_size, max_seq_len, page_table
         )
 
-    prefill_enable_trace, device_sampling_params = _prepare_demo_prefill_warmup(
-        generator=generator,
-        tt_kv_cache=tt_kv_cache,
-        sampling_params=sampling_params,
-        enable_trace=enable_trace,
-        max_seq_len=max_seq_len,
+    # Prefill tracing has ~no perf gain and OOMs the trace region at long context
+    # (≥4K); gate it off above a threshold (the batched decode trace stays on),
+    # unless traced multi-chunk is measuring (GEMMA4_CHUNKED_PREFILL_TRACE=1).
+    from models.demos.gemma4.tt.generator_trace import chunked_prefill_trace_enabled
+
+    prefill_trace_max = int(os.environ.get("GEMMA4_PREFILL_TRACE_MAX_SEQ", 4096))
+    prefill_enable_trace = enable_trace and (max_seq_len < prefill_trace_max or chunked_prefill_trace_enabled())
+    generator.warmup_model_prefill(
+        kv_cache=tt_kv_cache, enable_trace=prefill_enable_trace, can_sample_on_device=False, greedy_only=True
     )
 
     # Per-user prefill into each user's own KV blocks (prompts have distinct lengths).
     logger.info(f"Spec-decode batched prefill for B={B} users...")
     anchor_tokens, anchor_positions, prompt_lens = [], [], []
-    prefill_elapsed = 0.0
+    prefill_t0 = time.perf_counter()
     for b in range(B):
         in_pt, encoded, decoding_pos, p_lens = preprocess_inputs_prefill(
             [prompts[b]], tokenizer, model_args, instruct, max_generated_tokens, max_prefill_len=max_seq_len
         )
         in_pt = torch.stack(in_pt).view(1, -1)
-        _, prefill_out, user_prefill_elapsed = _run_demo_prefill(
-            generator=generator,
-            input_tokens_prefill_pt=in_pt,
+        prefill_logits = generator.prefill_forward_text(
+            in_pt,
             page_table=page_table[b : b + 1],
-            tt_kv_cache=tt_kv_cache,
-            decoding_pos=decoding_pos,
-            prefill_enable_trace=prefill_enable_trace,
-            device_sampling_params=device_sampling_params,
-            temperature=temperature,
-            top_p=top_p,
+            kv_cache=tt_kv_cache,
+            prompt_lens=decoding_pos,
+            warmup_prefill=False,
+            enable_trace=prefill_enable_trace,
         )
-        prefill_elapsed += user_prefill_elapsed
-        if device_sampling_params is None and hasattr(prefill_out, "deallocate"):
-            prefill_out.deallocate(True)
+        if hasattr(prefill_logits, "deallocate"):
+            prefill_logits.deallocate(True)
         prompt_lens.append(int(decoding_pos[0]))
         anchor_positions.append(int(decoding_pos[0]) - 1)
         anchor_tokens.append(int(encoded[0][int(decoding_pos[0]) - 1]))
+    ttnn.synchronize_device(mesh_device)
+    prefill_elapsed = time.perf_counter() - prefill_t0
 
     # Clamp generation so the furthest spec position (pos + draft_len) stays in range.
     max_prompt = max(prompt_lens)
@@ -1393,22 +1314,6 @@ def _run_spec_decode_batched(
         f"Decode: {steady_s:.2f}s steady @ {tok_s:.2f} tok/s aggregate, {tok_s / B:.2f} tok/s/user "
         f"({'traced' if spec._use_trace else 'untraced'})"
     )
-    n_batched_iters = max(max((len(a) for a in accepts), default=0), 1)
-    if spec._verify_time_s > 0 or spec._draft_time_s > 0:
-        logger.info(
-            f"Target verify: {spec._verify_time_s * 1000.0:.1f} ms total "
-            f"({spec._verify_time_s * 1000.0 / n_batched_iters:.2f} ms/iter)"
-        )
-        logger.info(
-            f"MTP (drafter) parallel-token generation: {spec._draft_time_s * 1000.0:.1f} ms total "
-            f"({spec._draft_time_s * 1000.0 / n_batched_iters:.2f} ms/iter, {draft_len} tokens/iter/user)"
-        )
-    else:
-        logger.info(
-            "Target-verify/MTP time split not available: draft+verify ran as ONE fused Metal "
-            "trace replay per iteration (GEMMA4_SPEC_TRACE=1/enable_trace), so the two phases "
-            "aren't separately observable on the host. Set GEMMA4_SPEC_TRACE=0 for the breakdown."
-        )
     assert total_tokens > 0, "batched speculative decode produced no tokens"
     return outs, accepts
 
