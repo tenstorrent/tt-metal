@@ -297,7 +297,8 @@
   # (the full code_debug trace), 10 iterations. No-PCC: it drives the real chunked-prefill path end to
   # end (build once, forward 10x) and checks per-chunk timing bands. Golden accuracy is tested separately.
   #
-  # Stage the prebuilt cache on worker-local disk before serial tensor loading.
+  # Requires a provisioned worker-local cache volume (KIMI_PREFILL_CACHE_DIR in CI,
+  # default /scratch); setup checks measured cache size plus 10 GiB headroom.
   # Paths:
   #   KIMI_K2_7_HF_MODEL         -> HF checkpoint (config + safetensors index; needed by weight_cache_path fixture)
   #   TT_KIMI_PREFILL_TTNN_CACHE -> prebuilt .tensorbin cache (…/kimi_k2_7_bh_32dev/8x4); required —
@@ -310,10 +311,11 @@
     export KIMI_K2_7_HF_MODEL=/mnt/models/moonshotai/Kimi-K2_7-Code-dequantized
     export TT_KIMI_PREFILL_TTNN_CACHE=/mnt/models/moonshotai/Kimi-K2_7-Code-Cache/Kimi-K2_7-Code-Cache-prefill
     export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/golden/structured_traces/vllm-kimi-k27-codedebug-56320
-    mpirun --bind-to none --pernode --tag-output bash -lc '
+    export TT_KIMI_PREFILL_CACHE_DIR="${TT_KIMI_PREFILL_CACHE_DIR:-/scratch}"
+    mpirun --bind-to none --pernode --tag-output -x TT_KIMI_PREFILL_CACHE_DIR bash -lc '
       set -e
       export OMP_NUM_THREADS=$(nproc)
-      python3 models/demos/deepseek_v3_d_p/scripts/run_kimi_prefill_ci.py -- models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_kimi_prefill_transformer_chunked_perf -k "kimi_k2_7 and torus-xy-8x4 and L61 and preload0 and chunks_eleven and ten_iters and notrace" -xvs
+      python3 models/demos/deepseek_v3_d_p/scripts/run_kimi_prefill_ci.py --cache-dir "${TT_KIMI_PREFILL_CACHE_DIR:-/scratch}" -- models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_kimi_prefill_transformer_chunked_perf -k "kimi_k2_7 and torus-xy-8x4 and L61 and preload0 and chunks_eleven and ten_iters and notrace" -xvs
     '
   test_type: kimi_chunked
   test_tags: [kimi_k2_7, transformer, kimi_chunked_untraced_perf]
@@ -340,7 +342,8 @@
   # (the full code_debug trace), 10 iterations. No-PCC: it drives the real chunked-prefill path end to
   # end (build once, forward 10x) and checks per-chunk timing bands. Golden accuracy is tested separately.
   #
-  # Stage the prebuilt cache on worker-local disk before serial tensor loading.
+  # Requires a provisioned worker-local cache volume (KIMI_PREFILL_CACHE_DIR in CI,
+  # default /scratch); setup checks measured cache size plus 10 GiB headroom.
   # Paths:
   #   KIMI_K2_7_HF_MODEL         -> HF checkpoint (config + safetensors index; needed by weight_cache_path fixture)
   #   TT_KIMI_PREFILL_TTNN_CACHE -> prebuilt .tensorbin cache (…/kimi_k2_7_bh_32dev/8x4); required —
@@ -352,10 +355,11 @@
     export KIMI_K2_7_HF_MODEL=/mnt/models/moonshotai/Kimi-K2_7-Code-dequantized
     export TT_KIMI_PREFILL_TTNN_CACHE=/mnt/models/moonshotai/Kimi-K2_7-Code-Cache/Kimi-K2_7-Code-Cache-prefill
     export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/golden/structured_traces/vllm-kimi-k27-codedebug-56320
-    mpirun --bind-to none --pernode --tag-output bash -lc '
+    export TT_KIMI_PREFILL_CACHE_DIR="${TT_KIMI_PREFILL_CACHE_DIR:-/scratch}"
+    mpirun --bind-to none --pernode --tag-output -x TT_KIMI_PREFILL_CACHE_DIR bash -lc '
       set -e
       export OMP_NUM_THREADS=$(nproc)
-      python3 models/demos/deepseek_v3_d_p/scripts/run_kimi_prefill_ci.py -- models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_kimi_prefill_transformer_chunked_perf -k "kimi_k2_7 and torus-xy-8x4 and L61 and preload0 and chunks_eleven and ten_iters and traced" -xvs
+      python3 models/demos/deepseek_v3_d_p/scripts/run_kimi_prefill_ci.py --cache-dir "${TT_KIMI_PREFILL_CACHE_DIR:-/scratch}" -- models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_kimi_prefill_transformer_chunked_perf -k "kimi_k2_7 and torus-xy-8x4 and L61 and preload0 and chunks_eleven and ten_iters and traced" -xvs
     '
   test_type: kimi_chunked
   test_tags: [kimi_k2_7, transformer]
