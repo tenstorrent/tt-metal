@@ -75,10 +75,10 @@ inline void wait_subordinates() {
 }
 
 extern "C" uint32_t _start1() {
-    configure_csr();
     // Raw read: hw_thread_idx has not been filled yet, and do_thread_crt1() below zeroes the .tbss
     // it lives in, so caching it any earlier would just be discarded.
     uint32_t hartid = internal_::read_hw_thread_idx();
+    configure_csr();
     if (hartid == 0) {
         extern uint32_t __ldm_data_start[];
         do_crt1(__ldm_data_start);

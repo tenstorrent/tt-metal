@@ -432,12 +432,19 @@ public:
               params.processor_class == HalProcessorClassType::COMPUTE)) {
             cflags += "-fno-tree-loop-distribute-patterns ";  // don't use memcpy for cpy loops
         }
+        if (params.core_type == HalProgrammableCoreType::DRAM) {
+            // A hart addresses its own SRAM from 0, so low addresses are real memory here and a
+            // store through one must not be folded away as a null dereference.
+            cflags += "-fno-delete-null-pointer-checks ";
+        }
         return cflags;
     }
 
-    bool firmware_is_kernel_object(const Params& params) const override {
-        return params.core_type != HalProgrammableCoreType::DRAM;
-    }
+    // kernel_*.ld places the firmware's .tdata/.tbss and .data/.bss via *_object.o input specs, so
+    // the weakened firmware must be a relocatable object. --just-symbols cannot bind the kernel's TLS
+    // references (hw_thread_idx, rta_l1_base, ...) to the firmware's TLS block.
+    bool firmware_is_kernel_object(const Params&) const override { return true; }
+
     std::string linker_script(const Params& params) const override {
         switch (params.core_type) {
             case HalProgrammableCoreType::TENSIX:
@@ -574,11 +581,8 @@ void Hal::initialize_qa(
             // Move addresses in the local memory range to l1 (copied by kernel)
             return (addr & ~MEM_LOCAL_BASE) + local_init_addr;
         }
-        // CCE firmware is linked at the hart-visible SRAM window (0x40000000). Host writes go
-        // through the DRAM-core L1 NOC tag, so strip the local base before adding l1_noc_offset.
-        if (addr >= MEM_CCE_SRAM_LOCAL_BASE && addr < MEM_CCE_SRAM_LOCAL_BASE + MEM_CCE_L1_SIZE) {
-            return addr - MEM_CCE_SRAM_LOCAL_BASE;
-        }
+        // CCE firmware is linked against the hart's own view of its SRAM, which is 0-based, so a
+        // CCE address is already the offset the L1 NOC tag expects and needs no relocation.
 
         // Note: Quasar does not have IRAM
 

@@ -612,15 +612,17 @@ void Cluster::generate_virtual_to_umd_coord_mapping() {
         this->virtual_pcie_cores_[chip_id] = {};
         this->virtual_dram_cores_[chip_id] = {};
         this->virtual_dram_hw_cores_[chip_id] = {};
+        if (this->arch_ == ARCH::BLACKHOLE ||
+            this->hal_->has_programmable_core_type(tt_metal::HalProgrammableCoreType::DRAM)) {
+            for (const tt::umd::CoreCoord& core :
+                 get_soc_desc(chip_id).get_cores(CoreType::DRAM, CoordSystem::TRANSLATED)) {
+                this->virtual_dram_hw_cores_[chip_id].insert({core.x, core.y});
+            }
+        }
         if (this->arch_ == ARCH::BLACKHOLE) {
             for (const tt::umd::CoreCoord& core :
                  get_soc_desc(chip_id).get_cores(CoreType::PCIE, CoordSystem::TRANSLATED)) {
                 this->virtual_pcie_cores_[chip_id].insert({core.x, core.y});
-            }
-
-            for (const tt::umd::CoreCoord& core :
-                 get_soc_desc(chip_id).get_cores(CoreType::DRAM, CoordSystem::TRANSLATED)) {
-                this->virtual_dram_hw_cores_[chip_id].insert({core.x, core.y});
             }
 
             for (uint32_t noc = 0; noc < this->num_nocs_; noc++) {

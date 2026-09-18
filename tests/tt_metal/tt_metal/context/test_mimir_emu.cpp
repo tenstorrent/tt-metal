@@ -4,12 +4,16 @@
 
 #include <gtest/gtest.h>
 
+#include <fmt/format.h>
+
 #include <cstdint>
 #include <cstdlib>
 #include <memory>
 #include <vector>
 
 #include "impl/context/metal_context.hpp"
+#include "impl/kernels/kernel.hpp"
+#include "llrt/hal.hpp"
 #include "llrt/rtoptions.hpp"
 #include "llrt/tt_cluster.hpp"
 #include <tt-metalium/host_api.hpp>
@@ -21,6 +25,10 @@ namespace tt::tt_metal {
 namespace {
 
 constexpr uint64_t kCceL1NocOffset = 0x2000000000ULL;
+// The hart caches its SRAM but the NOC does not snoop that cache, so a kernel store only becomes
+// host-visible through the uncached alias one SRAM size above the cached window
+// (MEM_CCE_L1_BASE + MEM_CCE_L1_SIZE). Host/NOC access stays 0-based.
+constexpr uint32_t kCceSramUncachedBase = 0x400000;
 constexpr uint64_t kCceSramTestOffset = 0x800;
 constexpr uint32_t kDramOffset = 0x800;
 
@@ -94,6 +102,52 @@ TEST(MimirEmu, RuntimeFirmwareInitializesThroughPublicDeviceApi) {
     EXPECT_EQ(device->arch(), tt::ARCH::QUASAR);
     EXPECT_TRUE(CloseDevice(device));
 }
+
+class HartZeroRunsDramKernel : public ::testing::TestWithParam<uint32_t> {};
+
+TEST_P(HartZeroRunsDramKernel, WritesMagic) {
+    if (!emu_server_configured()) {
+        GTEST_SKIP() << "Set TT_METAL_EMU_SERVER=host:port and TT_METAL_EMU_SOC_DESC=<mimir YAML>.";
+    }
+
+    IDevice* device = CreateDevice(0);
+    ASSERT_NE(device, nullptr);
+    ASSERT_EQ(device->arch(), tt::ARCH::QUASAR);
+
+    const uint32_t cce_index = GetParam();
+    ASSERT_LT(cce_index, device->num_dram_channels());
+
+    const CoreCoord logical_dram_core{cce_index, 0};
+    const uint32_t magic = 0xC0FFEE04 + cce_index;
+    const auto& hal = MetalContext::instance().hal();
+    // Same word, two addresses: the kernel stores through the uncached alias so the NOC can see it,
+    // while the host reaches it 0-based through the DRAM core plus the L1 NOC tag. Both CCEs share
+    // this hart-local map; the host coordinate selects which SRAM the NOC tag lands in.
+    const uint32_t result_dev_addr =
+        kCceSramUncachedBase + hal.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
+    const uint64_t result_noc_addr = hal.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
+
+    Program program = CreateProgram();
+    CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/misc/dram_write_one_uint32.cpp",
+        logical_dram_core,
+        DramConfig{.noc = NOC::NOC_0, .compile_args = {result_dev_addr, magic}});
+
+    detail::LaunchProgram(device, program, /*wait_until_cores_done=*/true, /*force_slow_dispatch=*/true);
+
+    uint32_t result = 0;
+    const CoreCoord virtual_dram_core = device->virtual_core_from_logical_core(logical_dram_core, CoreType::DRAM);
+    MetalContext::instance().get_cluster().read_core(
+        &result, sizeof(result), {device->id(), virtual_dram_core}, result_noc_addr);
+    EXPECT_EQ(result, magic);
+    EXPECT_TRUE(CloseDevice(device));
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    MimirEmu, HartZeroRunsDramKernel, ::testing::Values(0u, 1u), [](const ::testing::TestParamInfo<uint32_t>& info) {
+        return fmt::format("Cce{}", info.param);
+    });
 
 // DRAM is opt-in. test_emu_server.py runs SMC boot so GDDR has slaves; test_sival_server.py
 // does not, and an unconfigured access stalls the AXI master. Same gate as UMD's
