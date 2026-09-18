@@ -119,10 +119,15 @@ struct KissatSatEngine final : SatEngine {
         }
     }
 
-    void reserve(int max_var) override {
-        if (max_var > 0) {
-            kissat_reserve(solver, max_var);
-        }
+    void reserve(int /*max_var*/) override {
+        // Intentionally a no-op. The facade calls reserve() once per declared variable (reserve(1),
+        // reserve(2), ... reserve(N)), but kissat_reserve() → kissat_increase_size() grows to *exactly* the
+        // requested size with NO geometric slack, reallocating ~10 internal arrays each call — so forwarding
+        // every incremental call is O(N^2) and dominates on large, easy-to-solve instances (e.g. the
+        // QuadGalaxy torus mapping: ~26s → seconds). kissat_add() already enlarges variables geometrically
+        // (kissat_enlarge_variables doubles to a power of two), which is O(N) amortized, so letting add() drive
+        // growth is both correct and optimal. (kissat's own DIMACS parser reserves once with the final count,
+        // never incrementally.)
     }
 
     void add(int lit) override { kissat_add(solver, lit); }
