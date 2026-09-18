@@ -424,6 +424,16 @@ _WH_GLX_ONLY = pytest.mark.skipif(is_blackhole(), reason="Wormhole Galaxy shape"
         pytest.param((4, 8), 4, 56, 27392, 1, 8, 0, 4, 512, 128, None, id="4x8_wh_h3_sim32_nl4", marks=_WH_GLX_ONLY),
         # Same shard at 14 columns of q=256 -> segs=2, 4 passes (needs kMaxPasses >= 4), k=256 streamed Q.
         pytest.param((4, 8), 2, 56, 27392, 1, 8, 0, 4, 256, 256, None, id="4x8_wh_h3_sim32_p4", marks=_WH_GLX_ONLY),
+        # Sequential passes (run with TT_EXP_SDPA_Q_GROUPS=2): the same shard as pass-outer / ring-inner,
+        # 14 chunks of q=256 = 7 columns x 2 groups -> one segment per head, 2 passes of 2 groups. PCC-checked.
+        pytest.param((4, 8), 2, 56, 27392, 1, 8, 0, 4, 256, 256, None, id="4x8_wh_h3_sim32_seq", marks=_WH_GLX_ONLY),
+        # The 15 s shard padded to 14336 rows/device (56 chunks of q=256 = 7 columns x 4 groups x 2
+        # segments), run with TT_EXP_SDPA_Q_GROUPS=4. Timing only: the torch reference at 114688 tokens
+        # is infeasible, so the check is skipped (see _torch_reference_feasible).
+        pytest.param((4, 8), 2, 56, 114688, 1, 8, 0, 4, 256, 512, None, id="4x8_wh_h3_15s_seq", marks=_WH_GLX_ONLY),
+        # Same shard on 4 links (run with TT_EXP_SDPA_Q_GROUPS=2 for segs=4: 7 balanced passes per row,
+        # no pair dedup so every row forwards; or Q_GROUPS=4 for the segs=2 layout above on 4 links).
+        pytest.param((4, 8), 4, 56, 114688, 1, 8, 0, 4, 256, 512, None, id="4x8_wh_h3_15s_seq_nl4", marks=_WH_GLX_ONLY),
     ],
     indirect=["mesh_device"],
 )
@@ -450,7 +460,11 @@ def test_exp_ring_joint_sdpa_dit_bh_glx_custom(
     b, joint_seq_len, d = 1, 0, 128
     n_iters = 5
     trace_enabled = False
-    skip_check = False
+    # torch's fp32 reference materializes the full score matrix; past ~40k tokens it does not fit
+    # host memory, so such cases are timing-only.
+    skip_check = base_seq_len > 40000
+    if skip_check:
+        logger.warning(f"base_seq_len={base_seq_len}: torch reference infeasible, running without the PCC check")
     # Calibrated at d=128 with unit-scale bf16-rounded inputs (padshard measured 0.99943 / mse
     # 7.0e-5). At d=64 healthy numerics drift past these gates (measured 0.99925 / 1.5e-4), so
     # recalibrate if d changes.

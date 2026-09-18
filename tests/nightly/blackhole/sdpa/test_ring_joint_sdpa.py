@@ -412,6 +412,9 @@ def generate_ring_joint_perf_model_configs(
         # it can hold in L1 on a Wormhole galaxy (q=512/k=128 at 2 passes; q=256/k=256 at 4), so it
         # is the normal-op baseline for the exp-vs-normal A/B. The list brackets both exp points.
         ("minimax_h3_15s_768p_sim32", 3424, [160, 256, 512], [128, 256, 512]),
+        # 15 s padded to a multiple of 7 x 4 x 256 rows/device: the shape the exp op's sequential-pass
+        # mode runs on Wormhole (see MiniMaxH3_wormhole_perf.md). Normal-op baseline for that A/B.
+        ("minimax_h3_15s_768p_pad14336", 14336, [256], [512]),
     ):
         perf_configs[_name] = ModelConfig(
             name=_name,

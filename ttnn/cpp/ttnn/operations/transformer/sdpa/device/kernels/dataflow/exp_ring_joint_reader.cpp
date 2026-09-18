@@ -81,8 +81,7 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* per_link_sem_ptrs[kMaxLinks] = {nullptr, nullptr, nullptr, nullptr};
     ASSERT(num_links <= kMaxLinks);
     for (uint32_t lnk = 0; lnk < num_links; ++lnk) {
-        per_link_sem_ptrs[lnk] =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_val<uint32_t>(argidx++));
+        per_link_sem_ptrs[lnk] = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_val<uint32_t>(argidx++));
     }
 
     RingSDPAOpIndexer fused_op_indexer = RingSDPAOpIndexer(argidx);
@@ -215,9 +214,42 @@ void kernel_main() {
      * On the first iteration, read from local K, V.
      * On subsequent iterations, read from gathered K, V. Sync with AllGather fused signaler.
      */
-    for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
-        // find out which is the latest ring_id that synchronized
-        uint32_t ring_id = fused_op_indexer.get_next_ring_id_and_sync();
+    // Loop order. Default: ring-outer / pass-inner — every pass advances in lockstep per ring
+    // iteration, one L1 state-FIFO entry and one resident Q chunk per pass. EXP_SEQ_PASSES:
+    // pass-outer / ring-inner — one pass runs all ring iterations before the next starts, so a single
+    // Q chunk and a single flash state are live (the scratch path) and per-core L1 stops scaling with
+    // the pass count. EXP_Q_GROUPS splits a segment's Q chunks into groups walked as extra passes;
+    // only group 0 of a segment forwards K/V over the fabric (later groups re-read the gathered
+    // K/V the first group already landed in DRAM).
+#ifdef EXP_SEQ_PASSES
+    constexpr bool seq_passes = true;
+    constexpr uint32_t q_groups = EXP_Q_GROUPS;
+    constexpr uint32_t group_stride = EXP_GROUP_STRIDE;
+#else
+    constexpr bool seq_passes = false;
+    constexpr uint32_t q_groups = 1;
+    constexpr uint32_t group_stride = 0;
+#endif
+    const uint32_t total_passes = q_count * q_groups;
+    const uint32_t n_outer = seq_passes ? total_passes : ring_size;
+    const uint32_t n_inner = seq_passes ? ring_size : total_passes;
+    const RingSDPAOpIndexer fused_op_indexer0 = fused_op_indexer;
+    for (uint32_t outer = 0; outer < n_outer; ++outer) {
+        uint32_t ring_id = 0;
+        // Sequential passes: this pass's Q chunk is read once, on its first active ring iteration.
+        bool q_pending = true;
+        for (uint32_t inner = 0; inner < n_inner; ++inner) {
+            const uint32_t ring_iter = seq_passes ? inner : outer;
+            const uint32_t pass = seq_passes ? outer : inner;
+            [[maybe_unused]] const bool pass_forwards = !seq_passes || (pass % q_groups == 0);
+            if (seq_passes) {
+                if (inner == 0) {
+                    fused_op_indexer = fused_op_indexer0;
+                }
+                ring_id = fused_op_indexer.get_next_ring_id_and_sync();
+            } else if (inner == 0) {
+                ring_id = fused_op_indexer.get_next_ring_id_and_sync();
+            }
         // Iterate over KV blocks gathered on ring.
         // Only the last ring ID will append joint_K, joint_V to K, V.
         const bool do_joint_kv = ring_id == ring_size - 1;
@@ -248,8 +280,9 @@ void kernel_main() {
         // Passes are serial within a ring iteration: pass p attends head (p * rows + my_row) against
         // this iteration's K/V shard. Every core of a row runs the same number of passes in the same
         // order, which is what keeps the row's K/V CB pointers in lockstep for the mcast.
-        for (uint32_t pass = 0; pass < q_count; ++pass) {
-            const uint32_t global_q_chunk = q_base + pass * q_stride;
+            {
+                const uint32_t global_q_chunk =
+                    q_base + (pass / q_groups) * q_stride + (pass % q_groups) * group_stride;
             // Counted per pass: compute drains its phase-alignment padding per pass too.
             uint32_t KV_chunks_processed_in_iter = 0;
             // global_q_chunk is index into `B * NH * num_q_chunks`. Need to get nb, nq, q_chunk from this.
@@ -319,7 +352,7 @@ void kernel_main() {
             // Resident Q: read this pass's chunk exactly once, on the first active ring iteration.
             // Streamed Q: read it every pass, every active iteration (the reserve blocks until
             // compute's pass-end pop frees the single slot — a bounded stall, never a deadlock).
-            const bool need_q_read = stream_q || (q_chunks_pushed <= pass);
+                const bool need_q_read = seq_passes ? q_pending : (stream_q || (q_chunks_pushed <= pass));
 
             for (uint32_t k_chunk = 0; k_chunk < num_kv_chunks; ++k_chunk) {
                 /**
@@ -330,7 +363,8 @@ void kernel_main() {
                 const bool kv_chunk_is_joint = k_chunk >= num_local_k_chunks;
                 // Global index into the padded KV tensor
                 const uint32_t kv_global_start_tile = local_padded_Nt * ring_id + k_chunk * Sk_chunk_t;
-                const bool kv_chunk_is_beyond_logical_n = !kv_chunk_is_joint && (kv_global_start_tile >= logical_nt);
+                    const bool kv_chunk_is_beyond_logical_n =
+                        !kv_chunk_is_joint && (kv_global_start_tile >= logical_nt);
 
                 if (kv_chunk_is_beyond_logical_n) {
                     // This is a KV chunk on spatial input beyond the logical N, and not joint KV. Skip it.
@@ -339,8 +373,8 @@ void kernel_main() {
                 KV_chunks_processed_in_iter++;
 
                 Slice kv_slice;
-                uint32_t
-                    end_seq_tile;  // further information to `read_block` to determine whether it should pad with zeros.
+                    uint32_t end_seq_tile;  // further information to `read_block` to determine whether it should pad
+                                            // with zeros.
 
                 if (kv_chunk_is_joint) {
                     const uint32_t joint_k_chunk = k_chunk - num_local_k_chunks;
@@ -351,18 +385,20 @@ void kernel_main() {
                     if (ring_iter == 0) {
                         // Local KV
                         const uint32_t local_k_row_start_tile = k_chunk * Sk_chunk_t;
-                        kv_slice = Slice(nb, nq, local_k_row_start_tile, local_k_row_start_tile + Sk_chunk_t, 0, DHt);
+                            kv_slice =
+                                Slice(nb, nq, local_k_row_start_tile, local_k_row_start_tile + Sk_chunk_t, 0, DHt);
                         end_seq_tile = std::min(logical_nt, local_padded_Nt);
                     } else {
                         // Gathered KV
                         const uint32_t gathered_kv_start_tile = ring_iter_kv_start_tile + k_chunk * Sk_chunk_t;
-                        kv_slice = Slice(nb, nq, gathered_kv_start_tile, gathered_kv_start_tile + Sk_chunk_t, 0, DHt);
+                            kv_slice =
+                                Slice(nb, nq, gathered_kv_start_tile, gathered_kv_start_tile + Sk_chunk_t, 0, DHt);
                         end_seq_tile = std::min(logical_nt, local_padded_Nt * (ring_id + 1));
                     }
                 }
 
                 // Per-chunk sync: wait for EACH link's MUX writer to finish writing this chunk
-                if (is_injector && ring_iter > 0 && !kv_chunk_is_joint) {
+                    if (is_injector && ring_iter > 0 && !kv_chunk_is_joint && pass_forwards) {
                     chunks_signaled_by_remote++;
                     if (dedup_role == 2) {
                         // Split-head dedup follower: the remote twin of this row forwards nothing.
@@ -469,7 +505,8 @@ void kernel_main() {
                     noc.async_writes_flushed();
                     if constexpr (!mcast_enabled) {
                         Semaphore<>(valid_semaphore_id)
-                            .relay_unicast(noc, Semaphore<>(receiver_semaphore_id), next_physical_x, next_physical_y);
+                                .relay_unicast(
+                                    noc, Semaphore<>(receiver_semaphore_id), next_physical_x, next_physical_y);
                     }
                 }
 
@@ -513,6 +550,7 @@ void kernel_main() {
                         );
                     }
                     q_chunks_pushed++;
+                        q_pending = false;
                 }
 
                 // V: get data into CB buffer — same ping-pong structure as K, on the second
@@ -599,7 +637,8 @@ void kernel_main() {
                     noc.async_writes_flushed();
                     if constexpr (!mcast_enabled) {
                         Semaphore<>(valid_semaphore_id)
-                            .relay_unicast(noc, Semaphore<>(receiver_semaphore_id), next_physical_x, next_physical_y);
+                                .relay_unicast(
+                                    noc, Semaphore<>(receiver_semaphore_id), next_physical_x, next_physical_y);
                     }
                 }
 
@@ -636,6 +675,7 @@ void kernel_main() {
                 }
             }
         }
+    }
     }
 
     // Reset all per-link out-ready semaphores so they are clean for the next invocation

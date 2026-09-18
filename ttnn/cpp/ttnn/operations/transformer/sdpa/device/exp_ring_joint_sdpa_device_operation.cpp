@@ -318,19 +318,20 @@ void ExpRingJointSDPADeviceOperation::validate_on_program_cache_miss(
     // Every head-segment must fill its row exactly: fewer chunks than columns would idle the
     // trailing columns, and the last num_links SDPA columns are the fabric MUX clients that drive the
     // K/V all-gather — an idle MUX column means that link never forwards its shard.
+    const uint32_t chunks_per_segment = sdpa_grid_x * (exp_sdpa_sequential_passes() ? exp_sdpa_q_groups() : 1u);
     TT_FATAL(
-        num_q_chunks % sdpa_grid_x == 0,
+        num_q_chunks % chunks_per_segment == 0,
         "Q chunks per head (num_local={} + num_joint={} = {}) must be a multiple of the SDPA grid "
-        "columns ({}) on device grid {}×{}. Adjust q_chunk_size so ceil(N_local / q_chunk_size) is "
+        "columns x Q groups ({}) on device grid {}×{}. Adjust q_chunk_size so ceil(N_local / q_chunk_size) is "
         "a multiple of {}.",
         num_local_q_chunks,
         num_joint_q_chunks,
         num_q_chunks,
-        sdpa_grid_x,
+        chunks_per_segment,
         device_grid.x,
         device_grid.y,
-        sdpa_grid_x);
-    const uint32_t segs_per_head = num_q_chunks / sdpa_grid_x;
+        chunks_per_segment);
+    const uint32_t segs_per_head = num_q_chunks / chunks_per_segment;
     const uint32_t total_segments = B * NQH * segs_per_head;
 
     // Every SDPA row must own at least one head-segment. An empty row builds no K/V chain and no
@@ -355,9 +356,10 @@ void ExpRingJointSDPADeviceOperation::validate_on_program_cache_miss(
     // 4 admits the Wormhole H3 shard at q=256 (14 heads x segs 2 over 8 rows); the CB budget check
     // below is what actually bounds the pass count.
     constexpr uint32_t kMaxPasses = 4;
+    const uint32_t max_passes = exp_sdpa_sequential_passes() ? 64u : kMaxPasses;  // see the factory
     const uint32_t num_passes = (total_segments + sdpa_grid_y - 1) / sdpa_grid_y;
     TT_FATAL(
-        num_passes <= kMaxPasses,
+        num_passes <= max_passes,
         "Number of head-segments (B={} × NQH={} × segs_per_head={} = {}) needs {} serial passes on "
         "{} SDPA grid rows (device grid {}×{}), but at most {} are supported. Reduce batch size or "
         "head count (e.g. via tensor parallelism), or use a larger q_chunk_size.",
@@ -369,19 +371,22 @@ void ExpRingJointSDPADeviceOperation::validate_on_program_cache_miss(
         sdpa_grid_y,
         device_grid.x,
         device_grid.y,
-        kMaxPasses);
+        max_passes);
 
     // Final sanity: total Q chunks must fit the cores across all passes.
+    // Each segment pass covers chunks_per_segment / sdpa_grid_x = q_groups chunks per core.
+    const uint32_t q_groups = chunks_per_segment / sdpa_grid_x;
     TT_FATAL(
-        total_q_chunks <= num_passes * num_sdpa_cores,
+        total_q_chunks <= num_passes * num_sdpa_cores * q_groups,
         "Total Q chunks (B={} × NQH={} × num_q_chunks={} = {}) exceeds SDPA cores ({}) across {} "
-        "passes. The two constraints above should have caught this.",
+        "passes x {} Q groups. The two constraints above should have caught this.",
         B,
         NQH,
         num_q_chunks,
         total_q_chunks,
         num_sdpa_cores,
-        num_passes);
+        num_passes,
+        q_groups);
 }
 
 ExpRingJointSDPAResultSpec ExpRingJointSDPADeviceOperation::compute_output_specs(

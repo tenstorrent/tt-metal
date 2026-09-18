@@ -47,6 +47,22 @@ inline bool exp_sdpa_mux_top_cluster() {
     return enabled;
 }
 
+// EXPERIMENT (TT_EXP_SDPA_Q_GROUPS=G, G >= 1): sequential passes. Passes run pass-outer /
+// ring-inner so one Q chunk and one flash state are live per core (the scratch path) instead of one
+// per pass, and each head-segment's Q chunks are split into G groups of one chunk per column, walked
+// as extra passes; only group 0 forwards K/V over the fabric, later groups re-read the gathered K/V
+// from DRAM. This is what lets a shard whose per-core Q volume does not fit L1 (MiniMax-H3 15 s on a
+// Wormhole 7x8 grid) build at all. 0 / unset = the original lockstep schedule. NOTE: not part of the
+// program-cache key — one setting per process.
+inline uint32_t exp_sdpa_q_groups() {
+    static const uint32_t groups = [] {
+        const char* v = std::getenv("TT_EXP_SDPA_Q_GROUPS");
+        return v ? static_cast<uint32_t>(std::atoi(v)) : 0u;
+    }();
+    return groups;
+}
+inline bool exp_sdpa_sequential_passes() { return exp_sdpa_q_groups() >= 1; }
+
 // Single source of truth for the DYNAMIC (hash-excluded) global-semaphore address runtime args.
 //
 // The per-link GlobalSemaphore addresses are excluded from the program-cache key
