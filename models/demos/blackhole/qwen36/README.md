@@ -142,7 +142,8 @@ pytest models/demos/blackhole/qwen36/demo/text_demo.py -v -s -k "accuracy_512"
 When a checkpoint changes, regenerate its reference on CPU (no device needed):
 
 ```bash
-HF_MODEL=Qwen/Qwen3.6-27B python models/demos/blackhole/qwen36/tests/generate_reference_outputs.py
+python models/tt_transformers/tests/generate_reference_hf.py --model Qwen/Qwen3.6-27B \
+    --output_file models/tt_transformers/tests/reference_outputs/Qwen3.6-27B.refpt
 ```
 
 ## Tests

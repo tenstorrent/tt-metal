@@ -34,7 +34,6 @@ import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.blackhole.qwen36.tt.model import Qwen36Model
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_accuracy
-from models.demos.utils.model_targets import resolve_accuracy_targets
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.generator import Generator
 from models.tt_transformers.tt.model_config import determine_device_name
@@ -195,61 +194,6 @@ def _blocks_for(seqlen, max_generated_tokens):
     # Round num_blocks up to a multiple of 8 for SDPA page-table stick alignment (<=7 extra blocks).
     blocks = ((blocks + 7) // 8) * 8
     return min(MAX_BLOCK_BUDGET, blocks)
-
-
-REFERENCE_OUTPUTS_DIR = "models/tt_transformers/tests/reference_outputs"
-
-
-class _TokenAccuracy:
-    """Teacher-forced top-1 / top-5 scoring against a committed HF reference (``.refpt``).
-
-    The reference holds a natural-text token sequence plus the HF model's top-5 prediction at
-    every position (see ``tests/generate_reference_outputs.py``). The first half is prefilled;
-    the second half is decoded with the REFERENCE token fed back at each step, so the score
-    measures per-token agreement with HF rather than how long two generations stay in sync.
-
-    top-1 = TT argmax equals the HF argmax; top-5 = TT argmax is somewhere in the HF top-5.
-    """
-
-    def __init__(self, reference_tokens, top5_tokens, metadata=None):
-        reference_tokens = reference_tokens.reshape(1, -1)
-        split = reference_tokens.shape[-1] // 2
-        self.prompt_tokens = reference_tokens[:, :split]
-        # Tokens fed back during decode, and the HF top-5 rows that predict them: row split-1
-        # predicts token split, i.e. the model's first decoded position.
-        self.reference_tokens = reference_tokens[0, split:]
-        self.top5_tokens = top5_tokens[split - 1 :, :]
-        self.metadata = metadata or {}
-        self.predicted = []
-
-    @classmethod
-    def from_refpt(cls, model_name):
-        """Load the committed reference for ``model_name``.
-
-        A missing reference is a hard failure, not a skip: this case is the accuracy gate, so a
-        skip would let the CI leg go green having measured nothing.
-        """
-        path = Path(REFERENCE_OUTPUTS_DIR) / f"{model_name}.refpt"
-        assert path.exists(), (
-            f"No reference outputs at {path}; generate with "
-            f"models/demos/blackhole/qwen36/tests/generate_reference_outputs.py"
-        )
-        data = torch.load(path, map_location="cpu", weights_only=False)
-        return cls(data["reference_tokens"], data["top5_tokens"], data.get("metadata"))
-
-    def feed(self, predicted_token):
-        """Record one prediction; return the reference token to feed back for the next step."""
-        i = len(self.predicted)
-        self.predicted.append(int(predicted_token))
-        return int(self.reference_tokens[min(i, len(self.reference_tokens) - 1)])
-
-    def compute(self):
-        """Return (top1, top5) agreement with the reference, in percent."""
-        n = min(len(self.reference_tokens), len(self.predicted))
-        assert n > 0, "no predictions collected"
-        top1 = sum(int(self.top5_tokens[i, 0]) == self.predicted[i] for i in range(n))
-        top5 = sum(self.predicted[i] in self.top5_tokens[i, :] for i in range(n))
-        return 100.0 * top1 / n, 100.0 * top5 / n
 
 
 @run_for_blackhole()
@@ -437,6 +381,11 @@ def test_demo_text_accuracy(mesh_device, max_generated_tokens, monkeypatch):
     """
     from transformers import AutoTokenizer
 
+    # The scorer and the threshold resolver are shared with tt_transformers' token-matching demo
+    # (same .refpt convention, same centralized targets); imported here so collecting this module
+    # does not pull in that demo.
+    from models.tt_transformers.demo.simple_text_demo import TokenAccuracy, get_accuracy_thresholds
+
     device = mesh_device
     device.enable_program_cache()
 
@@ -456,75 +405,57 @@ def test_demo_text_accuracy(mesh_device, max_generated_tokens, monkeypatch):
     logger.info(f"Model load: {time.time() - t0:.1f}s")
     tokenizer = AutoTokenizer.from_pretrained(model.args.CKPT_DIR, trust_remote_code=True)
 
-    token_acc = _TokenAccuracy.from_refpt(model.args.model_name)
-    token_ids = token_acc.prompt_tokens
+    # TokenAccuracy prefills the first half of the reference and scores the second half; a missing
+    # .refpt is its own assert, so the gate cannot silently skip.
+    token_acc = TokenAccuracy(model.args.model_name)
+    token_ids = token_acc.input_prompt.reshape(1, -1)
     prompt_len = token_ids.shape[1]
     max_generated_tokens = min(max_generated_tokens, len(token_acc.reference_tokens))
     assert (
         prompt_len + max_generated_tokens <= max_seq_len
     ), f"reference needs {prompt_len} + {max_generated_tokens} tokens, block budget is {max_seq_len}"
-    logger.info(
-        f"Teacher-forcing {max_generated_tokens} tokens after a {prompt_len}-token prefill "
-        f"against reference {token_acc.metadata.get('model_name', model.args.model_name)}"
-    )
+    logger.info(f"Teacher-forcing {max_generated_tokens} tokens after a {prompt_len}-token prefill")
 
     if model.num_devices > 1:
         _, perf = _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_blocks, token_acc)
-        ttft, decode_tok_s, profiler = perf["ttft_s"], perf["decode_tok_s"], perf["profiler"]
+        profiler = perf["profiler"]
     else:
         # Single device (the 9B dev checkpoint) has no phase profiler, so it reports no benchmark
         # JSON; the CI legs that feed the dashboard are all TP. No _warmup_prefill: the reference
         # prompt is always < PREFILL_CHUNK, so the masked-bucket path compiles in capture — the
         # same condition under which test_demo_text skips it.
-        _, perf = _run_traced_generation(
-            model, tokenizer, device, token_ids, max_generated_tokens, num_blocks, token_acc
-        )
-        ttft, decode_tok_s, profiler = perf["ttft"], 1.0 / perf["avg_decode_s"], None
+        _run_traced_generation(model, tokenizer, device, token_ids, max_generated_tokens, num_blocks, token_acc)
+        profiler = None
 
-    top1, top5 = token_acc.compute()
+    top1, top5 = (100 * value for value in token_acc.compute_accuracy())
     logger.info(f"Top-1 token accuracy: {top1:.2f}%  Top-5 token accuracy: {top5:.2f}%")
 
     if profiler is not None:
-        _save_accuracy_benchmark(profiler, model, top1, top5, prompt_len, max_generated_tokens, ttft, decode_tok_s)
+        _save_accuracy_benchmark(profiler, model, top1, top5, prompt_len, max_generated_tokens)
 
-    sku = determine_device_name(model.mesh_device)
-    measurements = {"top1_token_accuracy": top1, "top5_token_accuracy": top5}
-    # Warning-only against the centralized targets (CI gates on the emitted benchmark JSON via
-    # .github/scripts/utils/validate_perf_targets.py), then a hard local floor so the case fails
-    # on a real accuracy regression even outside CI.
-    verify_accuracy(measurements, model_name=model.args.base_model_name, sku=sku, batch_size=1, seq_len=prompt_len)
-    targets = resolve_accuracy_targets(model_name=model.args.base_model_name, sku=sku, batch_size=1, seq_len=prompt_len)
-    # Raise rather than warn (as tt_transformers' get_accuracy_thresholds does): the entry is
-    # matched on an exact seq_len, so a renamed checkpoint, a relabelled SKU or a reference
-    # regenerated at a different length would otherwise turn this gate into a silent no-op.
-    assert targets and targets.get("top1") is not None and targets.get("top5") is not None, (
-        f"No centralized accuracy targets for {model.args.base_model_name} on {sku} "
-        f"(batch_size=1, seq_len={prompt_len}); add an entry to models/model_targets.yaml"
+    # get_accuracy_thresholds resolves the centralized targets and raises when none match, so a
+    # renamed checkpoint or a relabelled SKU fails here instead of leaving the gate a no-op. It
+    # returns the targets minus half a point, since they are integers rounded off a measured run.
+    min_top1, min_top5 = get_accuracy_thresholds(model.args, seq_len=prompt_len)
+    verify_accuracy(
+        measurements={"top1_token_accuracy": top1, "top5_token_accuracy": top5},
+        expected_accuracy_metrics={"top1": min_top1, "top5": min_top5},
     )
-    # Half-point slack, as in tt_transformers' token-matching demo: the targets are integers
-    # rounded off a measured run, so a run that matches it must not fail on rounding alone.
-    for metric, measured in (("top1", top1), ("top5", top5)):
-        assert measured >= float(targets[metric]) - 0.5, (
-            f"{metric} token accuracy {measured:.2f}% below target {targets[metric]}% "
-            f"for {model.args.base_model_name} on {sku}"
-        )
+    # verify_accuracy only warns; gate on it here so a regression fails the case outside CI too.
+    assert top1 >= min_top1, f"top-1 token accuracy {top1:.2f}% below target {min_top1}%"
+    assert top5 >= min_top5, f"top-5 token accuracy {top5:.2f}% below target {min_top5}%"
 
 
-def _save_accuracy_benchmark(profiler, model, top1, top5, prompt_len, num_generated, ttft, decode_tok_s):
+def _save_accuracy_benchmark(profiler, model, top1, top5, prompt_len, num_generated):
     """Emit the CI benchmark JSON for an accuracy run (no-op outside CI).
 
-    Perf numbers from a teacher-forced run are artifacts (the fed token is not the model's own),
-    so they are recorded for context only. What keeps them from being checked against the perf
-    targets is the pair of top1/top5 measurements below: ``validate_perf_targets._is_accuracy_run``
-    classifies a run by those measurement names (the JSON's run_type is not read), and then skips
-    the perf block. Renaming them would silently re-enable perf checking on teacher-forced numbers.
+    ``create_benchmark_data`` requires the perf keys to be present but nothing reads them on an
+    accuracy run: ``validate_perf_targets._is_accuracy_run`` classifies a run by the top1/top5
+    measurement names below (the JSON's run_type is not read) and then skips the perf block. A
+    teacher-forced run's throughput is an artifact anyway — the fed token is not the model's own —
+    so the keys are zero rather than a number that invites comparison.
     """
-    measurements = {
-        "prefill_t/s": (prompt_len / ttft) if ttft > 0 else 0.0,
-        "prefill_time_to_token": ttft,
-        "decode_t/s": decode_tok_s,
-        "decode_t/s/u": decode_tok_s,
-    }
+    measurements = {"prefill_t/s": 0.0, "prefill_time_to_token": 0.0, "decode_t/s": 0.0, "decode_t/s/u": 0.0}
     benchmark_data = create_benchmark_data(profiler, measurements, {"inference_prefill": 0, "inference_decode": 1}, {})
     for name, value in (("top1_token_accuracy", top1), ("top5_token_accuracy", top5)):
         benchmark_data.add_measurement(profiler, 0, "inference_decode", name, value)
@@ -553,9 +484,9 @@ def _should_use_chunked_trace(model):
 def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_blocks, token_acc=None):
     """TP generation: traced chunk-outer prefill + paged decode. Returns (tokens, perf_dict).
 
-    ``token_acc`` switches the loop to teacher forcing: every step still records the model's
-    own prediction, but the REFERENCE token is fed back, so one wrong token cannot derail
-    the rest of the run (see ``_TokenAccuracy``).
+    ``token_acc`` (a ``tt_transformers`` ``TokenAccuracy``) switches the loop to teacher forcing:
+    every step still records the model's own prediction, but the REFERENCE token is fed back, so
+    one wrong token cannot derail the rest of the run.
     """
     vocab = model.args.vocab_size
     T = token_ids.shape[1]
@@ -625,7 +556,7 @@ def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_bl
     lt = ttnn.to_torch(logits_dev, mesh_composer=ttnn.ConcatMeshToTensor(model.mesh_device, dim=0))
     nxt = _pick(lt.reshape(-1, vocab)[0])
     generated.append(nxt)
-    fed = token_acc.feed(nxt) if token_acc else nxt
+    fed = int(token_acc.collect_predicted_tokens(nxt)) if token_acc else nxt
     profiler.end("inference_prefill")
     ttft = time.time() - t0
 
@@ -825,7 +756,7 @@ def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_bl
             _phase_times["readback"].append(t3 - t2)
         decode_times.append(time.time() - t_step)
         generated.append(nxt)
-        fed = token_acc.feed(nxt) if token_acc else nxt
+        fed = int(token_acc.collect_predicted_tokens(nxt)) if token_acc else nxt
         pos += 1
     if _DEBUG_TIMING:
         for k, vs in _phase_times.items():
@@ -1165,7 +1096,7 @@ def _run_traced_generation(model, tokenizer, device, token_ids, max_generated_to
     prime_decode_trace(gen, model, torch.tensor([[next_token]], dtype=torch.long), torch.tensor([T]), page_table)
 
     generated = [next_token]
-    fed = token_acc.feed(next_token) if token_acc else next_token
+    fed = int(token_acc.collect_predicted_tokens(next_token)) if token_acc else next_token
     decode_times = []
     current_pos = T
 
@@ -1187,7 +1118,7 @@ def _run_traced_generation(model, tokenizer, device, token_ids, max_generated_to
 
         assert not torch.isnan(dl).any(), f"NaN in traced decode at step {i}"
         generated.append(next_token)
-        fed = token_acc.feed(next_token) if token_acc else next_token
+        fed = int(token_acc.collect_predicted_tokens(next_token)) if token_acc else next_token
         current_pos += 1
 
         # Teacher forcing scores a fixed span of reference positions, so it never stops early.
