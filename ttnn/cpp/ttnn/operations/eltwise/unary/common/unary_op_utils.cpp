@@ -367,6 +367,13 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                 fmt::format("exp_tile_init<{}u>();", (uint32_t)param0),
                 fmt::format("exp_tile<{1}u>({0});", idst, (uint32_t)param0)};
         case UnaryOpType::SIGMOID: {
+            if (input_dtype == DataType::BFLOAT16 && params.size() == 2 && param0 == static_cast<float>(VecMode::RC) &&
+                params[1] == 0.0f) {
+                return {
+                    "sigmoid_tt_poly_bf16_tile_init<false>();",
+                    fmt::format("sigmoid_tt_poly_bf16_tile<VectorMode::RC, false>({});", idst)};
+            }
+
             uint32_t param1 = (uint32_t)params[1];
             TT_FATAL(
                 (int32_t)param0 == (int32_t)VecMode::C || (int32_t)param0 == (int32_t)VecMode::RC,
@@ -805,7 +812,11 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
         case UnaryOpType::I0: return {"i0_tile_init();", fmt::format("i0_tile({});", idst)};
         case UnaryOpType::I1: return {"i1_tile_init();", fmt::format("i1_tile({});", idst)};
         case UnaryOpType::EXP: return {"exp_tile_init();", fmt::format("exp_tile({});", idst)};
-        case UnaryOpType::SIGMOID: return {"sigmoid_tile_init();", fmt::format("sigmoid_tile({});", idst)};
+        case UnaryOpType::SIGMOID:
+            if (input_dtype == DataType::BFLOAT16) {
+                return {"sigmoid_tt_poly_bf16_tile_init();", fmt::format("sigmoid_tt_poly_bf16_tile({});", idst)};
+            }
+            return {"sigmoid_tile_init();", fmt::format("sigmoid_tile({});", idst)};
         case UnaryOpType::ERF: return {"erf_tile_init();", fmt::format("erf_tile({0});", idst)};
         case UnaryOpType::ERFC: return {"erfc_tile_init();", fmt::format("erfc_tile({});", idst)};
         case UnaryOpType::ERFINV: return {"erfinv_tile_init();", fmt::format("erfinv_tile({});", idst)};
