@@ -134,7 +134,7 @@ def _as_decode_act(x: ttnn.Tensor) -> ttnn.Tensor:
 
 
 def _matmul_a(layer: LinearDecode, x: ttnn.Tensor) -> ttnn.Tensor:
-    """TILE DRAM ``[1, 1, tokens, dim]`` for the width-sharded ``matmul_decode`` path.
+    """TILE WIDTH_SHARDED L1 ``[1, 1, tokens, dim]`` for ``use_rm_hs=False``.
 
     The replicated ROW_MAJOR HEIGHT_SHARDED path is Flash's M=1 decode layout and
     rejects M>8. DSpark's block is a full tile of tokens, so every backbone
@@ -142,8 +142,7 @@ def _matmul_a(layer: LinearDecode, x: ttnn.Tensor) -> ttnn.Tensor:
     the same kernel as the LM head (the replica path disagreed with the reference
     at the vocab projection).
     """
-    del layer
-    return _as_decode_act(x)
+    return layer.to_width_sharded_activation(_as_decode_act(x))
 
 
 def _to_torch_act(x: ttnn.Tensor, batch: int, seq: int, dim: int) -> torch.Tensor:
@@ -178,7 +177,12 @@ class DSparkAttention(DeepSeekV4Module):
         self._sdpa_pcfg = active_system_config().attention.sdpa_program_config(device)
         h, qkv = config.hidden_size, config.qkv_dim
         kw = dict(
-            dtype=dtype, n_blocks=n_blocks, use_prefetcher=True, global_cb=global_cb, global_cb_page_bytes=page_bytes
+            dtype=dtype,
+            n_blocks=n_blocks,
+            use_prefetcher=True,
+            global_cb=global_cb,
+            global_cb_page_bytes=page_bytes,
+            use_rm_hs=False,
         )
         self.q_proj = LinearDecode(weights[f"{prefix}.q_proj.weight"], device, cache.file("q_proj"), K=h, N=qkv, **kw)
         self.k_proj = LinearDecode(weights[f"{prefix}.k_proj.weight"], device, cache.file("k_proj"), K=h, N=qkv, **kw)
@@ -266,7 +270,12 @@ class DSparkMLP(DeepSeekV4Module):
     def __init__(self, config, weights, prefix, device, cache, dtype, n_blocks, global_cb, page_bytes):
         h, inter = config.hidden_size, config.intermediate_size
         kw = dict(
-            dtype=dtype, n_blocks=n_blocks, use_prefetcher=True, global_cb=global_cb, global_cb_page_bytes=page_bytes
+            dtype=dtype,
+            n_blocks=n_blocks,
+            use_prefetcher=True,
+            global_cb=global_cb,
+            global_cb_page_bytes=page_bytes,
+            use_rm_hs=False,
         )
         self.gate_proj = LinearDecode(
             weights[f"{prefix}.gate_proj.weight"], device, cache.file("gate_proj"), K=h, N=inter, **kw
@@ -330,6 +339,7 @@ class DSparkStage(DeepSeekV4Module):
                 use_prefetcher=True,
                 global_cb=global_cb,
                 global_cb_page_bytes=page_bytes,
+                use_rm_hs=False,
             )
             self.main_norm = DeepSeekV4RMSNorm(
                 weights[f"{prefix}.main_norm.weight"],
@@ -408,6 +418,7 @@ class DSparkModel(DeepSeekV4Module):
             use_prefetcher=True,
             global_cb=global_cb,
             global_cb_page_bytes=page_bytes,
+            use_rm_hs=False,
         )
         self.lm_head = LinearDecode(
             weights["lm_head.weight"], device, cache.file("lm_head"), K=config.hidden_size, N=config.vocab_size, **kw

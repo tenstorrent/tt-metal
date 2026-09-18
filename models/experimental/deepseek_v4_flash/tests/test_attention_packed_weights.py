@@ -211,7 +211,11 @@ def test_decoder_remaining_modules_use_one_packed_tensor(device):
     x = torch.randn(1, 1, 1, 4096, dtype=torch.bfloat16)
     x_tt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     gate_ref = x.float() @ checkpoint["gate.weight"].float().T
-    assert_with_pcc(gate_ref, ttnn.to_torch(router.gate(x_tt)).float(), 0.99)
+    # The packed gate is a hub-mode LinearDecode, so it reads a ROW_MAJOR HEIGHT_SHARDED
+    # replica of the token row rather than the interleaved TILE tensor (``MLP.forward``
+    # builds the same thing for the shared expert).
+    gate_in = router.gate.to_replicated_rm_hs_activation(x_tt)
+    assert_with_pcc(gate_ref, ttnn.to_torch(router.gate(gate_in)).float(), 0.99)
     gate = torch.nn.functional.silu(x.float() @ checkpoint["shared_experts.gate_proj.weight"].float().T)
     up = x.float() @ checkpoint["shared_experts.up_proj.weight"].float().T
     mlp_ref = (gate * up) @ checkpoint["shared_experts.down_proj.weight"].float().T

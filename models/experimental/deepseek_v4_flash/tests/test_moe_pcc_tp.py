@@ -48,7 +48,7 @@ def _to_tt_replicated(t: torch.Tensor, device) -> ttnn.Tensor:
 
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}],
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
     indirect=True,
 )
 @pytest.mark.parametrize("mesh_device", [PARENT_MESH], indirect=True, ids=["8x4"])
