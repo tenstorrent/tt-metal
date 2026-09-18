@@ -427,6 +427,13 @@ ProgramDescriptor build_ring_program_descriptor(
     reader_ct.push_back(has_slot_meta ? static_cast<uint32_t>(k_local.logical_shape()[0]) : 0u);
     tt::tt_metal::TensorAccessorArgs(has_slot_meta ? *tensors.cache_batch_idx_tensor->buffer() : *q.buffer())
         .append_to(reader_ct);
+    // Real-token end, appended LAST so the blocks above keep their offsets. Same fixed-width discipline:
+    // flag, rt base, accessor (a placeholder when absent, since one binary serves both forms).
+    const bool has_valid_end = tensors.has_valid_end_metadata();
+    reader_ct.push_back(has_valid_end ? 1u : 0u);
+    reader_ct.push_back(has_valid_end ? static_cast<uint32_t>(indexer_common::reader::ValidEnd) : 0u);
+    tt::tt_metal::TensorAccessorArgs(has_valid_end ? *tensors.valid_end_tensor->buffer() : *q.buffer())
+        .append_to(reader_ct);
 
     std::vector<uint32_t> writer_ct = common_ct;
     writer_ct.push_back(1u);  // fused_ring on
@@ -561,6 +568,13 @@ ProgramDescriptor build_ring_program_descriptor(
     }
     reader_common.push_back(args.index_cache_num_layers);
     reader_common.push_back(args.index_cache_layer_idx);
+    // ValidEnd: pushed unconditionally to hold the enum position, 0 when uncapped. Bound as a buffer so
+    // the descriptor refreshes its address on every dispatch -- a stale one would clamp kv_len to garbage.
+    if (has_valid_end) {
+        reader_common.push_back(tensors.valid_end_tensor->buffer());
+    } else {
+        reader_common.push_back(0u);
+    }
     reader_common.append(shard_order);
     reader_common.append(fused_rt);
     append_multicast_axes(reader_common, phys);
