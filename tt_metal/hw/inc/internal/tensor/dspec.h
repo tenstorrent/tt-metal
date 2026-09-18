@@ -38,6 +38,11 @@ namespace tensor_accessor {
  * @tparam BankCoordsWrapper_   Wrapper for the bank coordinates. Can be detail::ArrayStaticWrapperU16<...> for static
  * shapes or detail::ArrayDynamicWrapper for dynamic shapes.
  */
+// Sentinel BindingId meaning "no op-to-op binding id tracked" for this accessor. Real ids are small
+// per-binding compile-time-arg offsets, so 0xFFFFFFFF never collides. See binding_id below and the
+// op-to-op R/W inference note emit (api/dataflow/buf_rw_note.h).
+inline constexpr uint32_t NO_BINDING_ID = 0xFFFFFFFFu;
+
 template <
     uint32_t RankCT = 0,
     uint32_t NumBanksCT = 0,
@@ -46,8 +51,14 @@ template <
     typename BankCoordsWrapper = ArrayDynamicWrapper,
     bool IsInterleaved = false,
     bool IsDram = false,
-    bool IsShardContiguous = false>
+    bool IsShardContiguous = false,
+    // Op-to-op R/W inference: the accessor's tensor-binding identity (a per-binding compile-time-arg
+    // offset), threaded in by the TensorAccessor deduction guide so it survives to the NoC call site.
+    // Purely a type tag -- no runtime state, no effect on distribution behavior. NO_BINDING_ID when the
+    // accessor was not built from a Metal 2.0 binding token.
+    uint32_t BindingId = NO_BINDING_ID>
 struct DistributionSpec {
+    static constexpr uint32_t binding_id = BindingId;
     static constexpr bool has_static_rank = RankCT != 0;
     static constexpr bool has_static_num_banks = NumBanksCT != 0;
     static constexpr bool tensor_shape_static = has_static_rank && TensorShapeWrapper::is_static;
