@@ -290,11 +290,7 @@ def test_attention_decode_paged(layer_idx, cache_len, mesh_device, reset_seeds, 
     max_seq_len = max_num_blocks * block_size
     paged_attention_config = PagedAttentionConfig(block_size=block_size, max_num_blocks=max_num_blocks)
 
-    tp = mesh_device.shape[1] if hasattr(mesh_device, "shape") else 1
-    num_devices = mesh_device.get_num_devices() if hasattr(mesh_device, "get_num_devices") else 1
-    is_mesh = num_devices > 1
-    mesh_config = MeshConfig(mesh_device.shape, decode=ModeConfig(tp=tp))
-    ccl_manager = CCLManager(mesh_device, num_links=1) if tp > 1 else None
+    mesh_config = MeshConfig(mesh_device.shape, decode=ModeConfig(tp=1))
     kv_cache = init_kv_cache(
         mesh_device=mesh_device, config=config, paged_attention_config=paged_attention_config, cache_dtype=ttnn.bfloat16
     )
@@ -303,7 +299,7 @@ def test_attention_decode_paged(layer_idx, cache_len, mesh_device, reset_seeds, 
         mesh_device=mesh_device,
         config=config,
         state_dict=state_dict,
-        ccl_manager=ccl_manager,
+        ccl_manager=None,
         mesh_config=mesh_config,
         program_config=None,
         layer_idx=layer_idx,
@@ -318,30 +314,15 @@ def test_attention_decode_paged(layer_idx, cache_len, mesh_device, reset_seeds, 
     hf_cache = DynamicCache()
     hf_cache.update(k_data.clone(), v_data.clone(), layer_idx=layer_idx)
 
+    # TT paged cache fill
     page_table = torch.arange(max_num_blocks, dtype=torch.int32).reshape(1, max_num_blocks)
-    page_table_tt = ttnn.from_torch(
-        page_table,
-        device=mesh_device,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        dtype=ttnn.int32,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh else None,
-    )
+    page_table_tt = ttnn.from_torch(page_table, device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.int32)
     k_cache_tt, v_cache_tt = kv_cache
-    k_fill = _kv_fill_to_tt(
-        k_data,
-        mesh_device,
-        num_kv_heads=config.num_key_value_heads,
-        num_attention_heads=config.num_attention_heads,
-        tp=tp,
-        num_devices=num_devices,
+    k_fill = ttnn.from_torch(
+        k_data.to(torch.bfloat16), device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
     )
-    v_fill = _kv_fill_to_tt(
-        v_data,
-        mesh_device,
-        num_kv_heads=config.num_key_value_heads,
-        num_attention_heads=config.num_attention_heads,
-        tp=tp,
-        num_devices=num_devices,
+    v_fill = ttnn.from_torch(
+        v_data.to(torch.bfloat16), device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
     )
     ttnn.experimental.paged_fill_cache(k_cache_tt, k_fill, page_table_tt, batch_idx=0)
     ttnn.experimental.paged_fill_cache(v_cache_tt, v_fill, page_table_tt, batch_idx=0)
@@ -366,13 +347,14 @@ def test_attention_decode_paged(layer_idx, cache_len, mesh_device, reset_seeds, 
 
     # TT decode with paged attention
     cos_tt, sin_tt = TestFactory.create_tt_rope_cache(mesh_device, hf_text_config, max_seq_len, layer_idx)
-    x_tt = _to_device(x_torch.unsqueeze(0).to(torch.bfloat16), mesh_device)
+    x_tt = ttnn.from_torch(
+        x_torch.unsqueeze(0).to(torch.bfloat16), device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
+    )
     position_idx_tt = ttnn.from_torch(
         torch.tensor([[cache_len]], dtype=torch.int32),
         device=mesh_device,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         dtype=ttnn.int32,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh else None,
     )
     tt_output = tt_attn(
         x_tt,
@@ -382,7 +364,7 @@ def test_attention_decode_paged(layer_idx, cache_len, mesh_device, reset_seeds, 
         token_index=cache_len,
         page_table=page_table_tt,
     )
-    tt_output_torch = _from_device(tt_output, mesh_device).squeeze(0).float()
+    tt_output_torch = ttnn.to_torch(tt_output).squeeze(0).float()
 
     passing, pcc_msg = compare_tensors(tt_output_torch, ref_output, pcc_threshold=get_pcc_threshold(request))
     assert passing, (
