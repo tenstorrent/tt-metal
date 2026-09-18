@@ -161,7 +161,8 @@ class StripTileStitcher(DeviceTileStitcher):
 
         `strip` is the column at canvas height. `edge` is the last `edge_width` columns of the
         ORIGINAL tiles at the same rows -- what the W-blend of the column to the right reads in
-        place of `strip` (`stitch` blends against `row[j - 1]`, never the blended tile).
+        place of `strip` (`stitch` blends against `row[j - 1]`, never the blended tile). `None`
+        when `edge_width` is 0, i.e. a single-column grid with no W seam.
         """
         strips, edges = [], []
         last = len(tiles) - 1
@@ -171,10 +172,12 @@ class StripTileStitcher(DeviceTileStitcher):
             if keep < tile.shape[-2]:
                 blended = self._slice(blended, -2, 0, keep)
             strips.append(blended)
-            edges.append(self._corner(tile, rows=keep, cols=edge_width))
-        if last == 0:
-            return strips[0], edges[0]
-        return ttnn.concat(strips, dim=-2), ttnn.concat(edges, dim=-2)
+            if edge_width:
+                edges.append(self._corner(tile, rows=keep, cols=edge_width))
+        strip = strips[0] if last == 0 else ttnn.concat(strips, dim=-2)
+        if not edges:
+            return strip, None
+        return strip, edges[0] if last == 0 else ttnn.concat(edges, dim=-2)
 
     def row(self, strips: list[ttnn.Tensor], edges: list[ttnn.Tensor], width_overlaps: list[int]) -> ttnn.Tensor:
         """W-blend the row strips left to right and trim, as `stitch` would."""

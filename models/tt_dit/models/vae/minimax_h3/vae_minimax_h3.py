@@ -1095,10 +1095,17 @@ class MiniMaxH3Vae:
             f"{mesh_rows}x{mesh_cols} mesh with rows and columns aligned"
         )
         chunks_per_wave = mesh_cols // grid_cols
-        canvas_h = y_starts[-1] + y_lengths[-1]
+        canvas_h, canvas_w = y_starts[-1] + y_lengths[-1], x_starts[-1] + x_lengths[-1]
+        # Both `mesh_partition`s need an even split; the yuv readback asserts the 4:2:0 evenness on top.
         assert canvas_h % mesh_rows == 0, f"canvas height {canvas_h} does not split over {mesh_rows} mesh rows"
+        assert canvas_w % mesh_cols == 0, f"canvas width {canvas_w} does not split over {mesh_cols} mesh columns"
+        if output_type != "yuv420" and ttnn.using_distributed_env():
+            assert (
+                self.ccl_manager is not None
+            ), "the strip stitch's float readback needs a CCLManager on a multi-host mesh"
         # The W-blend to the right of a column reads the last `edge_width` columns of its ORIGINAL
-        # tiles; one uniform width covers every seam, the blend takes the tail it needs.
+        # tiles; one uniform width covers every seam, the blend takes the tail it needs. 0 means a
+        # single-column grid: no W seam, no edge strip.
         edge_width = max(x_overlaps) if x_overlaps else 0
 
         if self._stitcher is None or not isinstance(self._stitcher, StripTileStitcher):
@@ -1176,17 +1183,30 @@ class MiniMaxH3Vae:
             # Stage 1: the column. A one-axis gather keeps mesh order, so gathered index r is tile
             # row r of this device's column.
             column = ttnn.all_gather(pixels, 0, cluster_axis=0, topology=ttnn.Topology.Ring)
+            if self.profile:
+                ttnn.synchronize_device(self.mesh_device)
+                profile["assemble"] += time.perf_counter() - mark
+                mark = time.perf_counter()
             column_shape = list(column.shape)
             tiles = [ttnn.slice(column, [r, 0, 0, 0, 0], [r + 1, *column_shape[1:]]) for r in range(grid_rows)]
             strip, edge = stitcher.column(tiles, y_overlaps, edge_width)
             ttnn.deallocate(column)
+            for tile in tiles:
+                ttnn.deallocate(tile)
+            if self.profile:
+                ttnn.synchronize_device(self.mesh_device)
+                profile["stitch_blend"] += time.perf_counter() - mark
+                mark = time.perf_counter()
             strip = ttnn.mesh_partition(strip, dim=-2, cluster_axis=0)
-            edge = ttnn.mesh_partition(edge, dim=-2, cluster_axis=0)
-            # Stage 2: the row. Every column's strip and edge for this device's rows.
+            # Stage 2: the row. Every column's strip (and edge, when there is a W seam) for this
+            # device's rows.
             strips = ttnn.all_gather(strip, 0, cluster_axis=1, topology=ttnn.Topology.Ring)
-            edges = ttnn.all_gather(edge, 0, cluster_axis=1, topology=ttnn.Topology.Ring)
             ttnn.deallocate(strip)
-            ttnn.deallocate(edge)
+            edges = None
+            if edge is not None:
+                edge = ttnn.mesh_partition(edge, dim=-2, cluster_axis=0)
+                edges = ttnn.all_gather(edge, 0, cluster_axis=1, topology=ttnn.Topology.Ring)
+                ttnn.deallocate(edge)
             if self.profile:
                 ttnn.synchronize_device(self.mesh_device)
                 profile["assemble"] += time.perf_counter() - mark
@@ -1195,7 +1215,8 @@ class MiniMaxH3Vae:
             profile["waves"] += 1
             profile["units"] += sum(len(units) for units in units_by_chunk)
 
-            strips_shape, edges_shape = list(strips.shape), list(edges.shape)
+            strips_shape = list(strips.shape)
+            edges_shape = list(edges.shape) if edges is not None else None
 
             def strip_at(index: int) -> ttnn.Tensor:
                 return ttnn.slice(strips, [index, 0, 0, 0, 0], [index + 1, *strips_shape[1:]])
@@ -1208,7 +1229,7 @@ class MiniMaxH3Vae:
                 first = chunk_index * grid_cols
                 canvas_rows = stitcher.row(
                     [strip_at(first + j) for j in range(grid_cols)],
-                    [edge_at(first + j) for j in range(grid_cols - 1)],
+                    [edge_at(first + j) for j in range(grid_cols - 1)] if edges is not None else [],
                     x_overlaps,
                 )
                 if self.profile:
@@ -1246,7 +1267,8 @@ class MiniMaxH3Vae:
                     canvases.append(pending.pop(0).result())
                     profile["readback_join"] += time.perf_counter() - mark
             ttnn.deallocate(strips)
-            ttnn.deallocate(edges)
+            if edges is not None:
+                ttnn.deallocate(edges)
         if pending:
             mark = time.perf_counter()
             canvases.extend(future.result() for future in pending)
