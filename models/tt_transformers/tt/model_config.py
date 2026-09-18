@@ -1295,6 +1295,18 @@ class ModelArgs:
         return self.model_config["DECODERS_OPTIMIZATIONS"]
 
     @property
+    def lm_head_compute_kernel_config(self):
+        """Math fidelity for the LM-head output projection.
+
+        LoFi where it has been measured against the full-model accuracy gate, HiFi2
+        everywhere else. On P150x4 Llama-3.1-8B the LoFi head is 8x(76.8 -> 56.0) us
+        per token with no top-1/top-5 loss against the pinned baseline.
+        """
+        if self.base_model_name == "Llama-3.1-8B" and self.device_name == "P150x4":
+            return self.compute_kernel_config_lofi
+        return self.compute_kernel_config_hifi2
+
+    @property
     def use_fused_all_gather_matmul(self):
         """Get whether fused all-gather matmul should be used."""
         return getattr(self, "_use_fused_all_gather_matmul", False)
