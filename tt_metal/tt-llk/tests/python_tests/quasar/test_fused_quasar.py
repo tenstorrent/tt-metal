@@ -9,18 +9,17 @@ from fuser.sweep import collect_fuser_cases
 
 yaml_files = sorted(FUSER_CONFIG_DIR.glob("*.yaml"))
 yaml_files += sorted((FUSER_CONFIG_DIR / "quasar").glob("*.yaml"))
-test_cases = collect_fuser_cases(yaml_files)
+case_configs = collect_fuser_cases(yaml_files)
 
 
 @skip_for_blackhole
 @skip_for_wormhole
 @skip_for_coverage
-@pytest.mark.parametrize("test_name, config_dict", test_cases)
+@pytest.mark.parametrize("case_name", case_configs)
 def test_fuser(
-    test_name,
-    config_dict,
+    case_name,
     regenerate_cpp,
 ):
-    config = FuserConfigSchema.load(test_name, config_dict)
+    config = FuserConfigSchema.load(case_name, case_configs[case_name])
     config.global_config.regenerate_cpp = regenerate_cpp
     config.run_regular_test()

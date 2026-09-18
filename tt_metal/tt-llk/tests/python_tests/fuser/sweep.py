@@ -7,7 +7,6 @@ from dataclasses import dataclass
 from itertools import product
 from typing import Callable, Iterable, Iterator, Mapping
 
-import pytest
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import (
     BLACKHOLE_DATA_FORMAT_ENUM_VALUES,
@@ -172,10 +171,10 @@ def expand_fuser_configs(
 
 
 def collect_fuser_cases(yaml_files):
-    cases = []
+    cases = {}
     for yaml_path in yaml_files:
         test_name = str(yaml_path.relative_to(FUSER_CONFIG_DIR).with_suffix(""))
         definition = FuserConfigSchema.load_definition(test_name)
         for case_name, config_dict in expand_fuser_configs(test_name, definition):
-            cases.append(pytest.param(case_name, config_dict, id=case_name))
+            cases[case_name] = config_dict
     return cases
