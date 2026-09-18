@@ -1379,6 +1379,7 @@ class ChunkedPrefillPageTableGuardMixin:
         tokens = torch.chunk(tokens, self.data_parallel, 0)
         start_pos = torch.chunk(start_pos, self.data_parallel, 0)
         page_table = torch.chunk(page_table, self.data_parallel, 0) if page_table is not None else None
+        # Match _decode_forward_trace_text: (sampling, per-DP chunk batch).
         decode_trace_key = (
             on_device_sampling,
             int(tokens[0].shape[0]) if tokens else 1,
