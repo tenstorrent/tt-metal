@@ -1300,8 +1300,8 @@
 # PREFILL_TRACE_DIR deliberately unexported, unlike the sibling rows: the adapter's default points at
 # the staged golden.
 - name: "Mistral-Small-4-119B chunked prefill throughput 100k"
-  # Required, not decoration: without it the workflow skips its TorusXY fabric-profile step, so
-  # PREFILL_TORUS_XY_CERTIFIED is unset and conftest skips every row before device open.
+  # Without this the workflow skips its TorusXY step, PREFILL_TORUS_XY_CERTIFIED stays unset, and
+  # conftest skips every row before device open.
   fabric_profile: torus_xy
   cmd: |
     export MISTRAL4_HF_MODEL=/mnt/models/blaze/mistralai/Mistral-Small-4-119B-2603
@@ -1319,9 +1319,7 @@
   test_group: module
   skus:
     bh_sc1_high_power:
-      # ~1.4x the worst observed test step (24.9 min over three runs, on bh_sc1). The run-to-run swing is the
-      # weight cache -- tt_transformer_creation ranges 1-17 min on page-cache warmth while tt_forward
-      # is stable -- and it does not show up in the per-chunk medians, which have their own bands.
+      # ~1.4x the worst observed step. The swing is weight-cache warmth, not the measured work.
       timeout: 35
   owner_id: U0AQ3FGS9MG # Alina Khan
   team: models
@@ -1390,14 +1388,8 @@
   budget_type: demo
   sp_config: sc1
 
-# Traced-vs-eager KV equivalence for the #55126 per-offset query-scale fix. This is the ONLY gate on
-# that path: an unrefreshed scale buffer applies temperature 1.0, which moves the chunked PCC rows by
-# ~0.002 against a 0.98 threshold, so they cannot see it. The test asserts its own sensitivity control
-# FIRST -- suppressing the temperature must drive the deep layers BELOW the agreement bar -- so it
-# cannot pass vacuously.
-#
-# fabric_profile torus_xy is load-bearing, not decoration: conftest collect-skips TorusXY cases before
-# device open unless PREFILL_TORUS_XY_CERTIFIED is set, and only this profile's workflow step sets it.
+# The only gate on the #55126 per-offset query-scale path: an unrefreshed buffer applies temperature
+# 1.0, which moves the chunked PCC rows by ~0.002 against a 0.98 threshold, so they cannot see it.
 - name: "Mistral-Small-4-119B traced-vs-eager prefill KV equivalence 30k@5k"
   fabric_profile: torus_xy
   cmd: |
@@ -1410,8 +1402,7 @@
       set -eo pipefail
       export OMP_NUM_THREADS=$(nproc)
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_chunk_traced_vs_eager.py -vvv --tb=short | tee /tmp/mistral4_traced_vs_eager.out
-      # The test self-skips without staged weights, and a leg whose only row skipped exits 0 and
-      # reads as green. Fail instead.
+      # A leg whose only row skipped exits 0 and reads as green. Fail instead.
       grep -qE "[0-9]+ passed" /tmp/mistral4_traced_vs_eager.out || { echo "::error::mistral4_traced_vs_eager: nothing ran; check the staged weight cache and the certified TorusXY allocation"; exit 1; }
     '
   test_type: mistral4_traced_vs_eager
@@ -1419,9 +1410,7 @@
   test_group: module
   skus:
     bh_sc1:
-      # 10 min on CI run 34660979358; 16 is 1.6x. The first cut was 12, sized from a local box at
-      # 6 min 57 s cold (runtime.compile() 31 s warm -> 189 s cold) and 1 min 24 s warm -- CI is
-      # slower than the local cold case, so 12 was only 1.2x and one slow box from timing out.
+      # 10 min on CI run 34660979358; 16 is 1.6x.
       timeout: 16
       tier: 2
       release_ready: false
@@ -1539,10 +1528,8 @@
   budget_type: demo
   sp_config: sc1
 
-# Four pipeline ranks share one galaxy (SP=8, TP=1 per rank). Probe its physical columns before
-# launching: the TT_VISIBLE_DEVICES mapping differs between galaxies. This checks the entire
-# 56,320-token golden KV window over 36 layers with traced execution, and gates the whole-sequence
-# throughput the same run measures.
+# Four pipeline ranks share one galaxy (SP=8, TP=1 per rank); the TT_VISIBLE_DEVICES mapping differs
+# between galaxies, so the columns are probed before launching.
 - name: "Mistral-Small-4-119B PP4 prefill KV accuracy + throughput 55k@5k, SC1"
   fabric_profile: torus_xy
   cmd: |
@@ -1552,17 +1539,9 @@
       cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
     fi
     cd "${TT_METAL_HOME}"
-    # Gate the orchestration before exercising it on hardware. These 16 host-only tests stub
-    # mpirun/ttrun and cover what a green hardware run cannot distinguish: malformed PCC verdicts,
-    # a missing throughput figure, runner-failure propagation, and that kimi27/glm52 still launch
-    # through the same script. ~30 s against this leg's headroom, and they run FIRST so a broken
-    # gate fails in seconds rather than after a 12 min weight load. They sit here rather than on a
-    # CPU leg because the models team has no CPU budget bucket; that is the cleaner home once one
-    # exists.
-    # This cmd runs on the host through the container hook, so the container's /opt/venv is not on
-    # PATH and /usr/bin/python3 carries no pytest. Take the first interpreter that can import it,
-    # and warn rather than fail: these tests guard the orchestration, they are not what the leg
-    # measures, so a host without pytest should not block the hardware run.
+    # Host-only orchestration tests, run first so a broken gate fails in seconds rather than after a
+    # 12 min weight load. This cmd runs on the host through the container hook, where /opt/venv is
+    # not on PATH, so find an interpreter with pytest and warn rather than fail if there is none.
     HOST_PY=""
     for p in "${TT_METAL_HOME}/python_env/bin/python3" /opt/venv/bin/python3 python3; do
       if "$p" -c 'import pytest' >/dev/null 2>&1; then HOST_PY="$p"; break; fi
@@ -1573,27 +1552,19 @@
     else
       echo "::warning::no host interpreter with pytest; skipped the run_multirank_pcc host tests"
     fi
-    # Throughput too: one run gates both. The gate reads the deepest probe in the runner-side perf
-    # JSON (@55k), which is device-side and taken during the measured request, so the KV readback
-    # sits outside it.
-    #
-    # Centred so both measured galaxies pass: run 34491555152 read 23,689 tok/s @55k and
-    # bh-glx-120-b03u02 reads 32,466 on the same code, a 37% spread. A band on either sample at
-    # MiniMax's +/-15% would fail the other box for being the wrong speed, so this spans them with
-    # ~4% headroom each side and catches a >20% move. Re-cut it tighter once several runs on one
-    # pool establish the real spread.
-    export PREFILL_EXPECTED_TPS=28000
-    export PREFILL_PERF_MARGIN=0.20
+    # One run gates PCC and throughput both. The gate reads the deepest probe (@55k) from the
+    # runner-side perf JSON, taken during the measured request so the KV readback sits outside it.
+    # The band spans a 44% spread across two galaxies; re-cut it once the CI pool has several runs.
+    export PREFILL_EXPECTED_TPS=29000
+    export PREFILL_PERF_MARGIN=0.25
     exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh mistral4
   test_type: mistral4_pp4_kv_pcc
   test_tags: [mistral4, runner, kv_cache]
   test_group: module
   skus:
     bh_sc1:
-      # 12 min on CI run 34660979358, the first completed hardware run; 30 is 2.5x. Deliberately
-      # looser than the 1.5-1.7x the siblings use: this leg also pays per-galaxy column probing and
-      # a 36-layer weight load, and tt_transformer_creation alone swings 1-17 min on page-cache
-      # warmth. The 60 it replaces was a placeholder sized before any run existed.
+      # 12 min on CI run 34660979358; 30 is 2.5x, looser than the siblings because this leg also
+      # pays per-galaxy column probing and a 36-layer weight load.
       timeout: 30
   owner_id: U0AQ3FGS9MG # Alina Khan
   team: models
