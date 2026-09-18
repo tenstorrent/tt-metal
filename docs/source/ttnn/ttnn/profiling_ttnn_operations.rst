@@ -153,7 +153,7 @@ Available counter groups:
 
 Blackhole-only groups: ``l1_2``, ``l1_3``, ``l1_4``, ``l1_5`` (extended L1 client ports); on Blackhole ``all`` includes them.
 
-**Multi-pass capture**: two limits cap what one run can measure: the BRISC firmware image only fits the readout code for 3 counter groups, and the L1 banks share a hardware mux, so at most one L1 bank counts per run. ``python -m tracy`` schedules the passes automatically: a request that fits one pass runs once as before, and a larger request (such as ``all``) stops with the printed pass plan unless ``--perf-counter-multipass`` is given, in which case the workload is replayed once per pass and the per-pass results are merged.
+**Multi-pass capture**: the L1 banks share a hardware mux, so at most one L1 bank counts per run; the other groups all fit next to it. ``python -m tracy`` schedules the passes automatically: a request that fits one pass runs once as before, and a larger request (such as ``all``) stops with the printed pass plan unless ``--perf-counter-multipass`` is given, in which case the workload is replayed once per pass and the per-pass results are merged.
 
 ..  code-block:: sh
 
@@ -161,7 +161,7 @@ Blackhole-only groups: ``l1_2``, ``l1_3``, ``l1_4``, ``l1_5`` (extended L1 clien
         --profiler-capture-perf-counters=all \
         -m "pytest your_test.py -x -v"
 
-With ``--perf-counter-multipass`` a request is split into passes (at most three groups and one L1 bank per pass) and ``all`` expands to the architecture's full group set.
+With ``--perf-counter-multipass`` a request is split into passes (one L1 bank per pass, the other groups ride along) and ``all`` expands to the architecture's full group set.
 
 **Output**
 

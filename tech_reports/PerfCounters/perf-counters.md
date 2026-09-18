@@ -41,11 +41,11 @@ python -m tracy --perf-counter-multipass --profiler-capture-perf-counters=all \
     -m "pytest your_test.py -x -v"
 ```
 
-With `--perf-counter-multipass` a request is split into passes (at most three groups and one L1 bank per pass) and `all` expands to the architecture's full group set.
+With `--perf-counter-multipass` a request is split into passes (one L1 bank per pass, the non L1 groups ride along) and `all` expands to the architecture's full group set.
 
 Available counter groups for `--profiler-capture-perf-counters`: `fpu`, `pack`, `unpack`, `l1_0`, `l1_1`, `instrn`, `all`. Blackhole also supports `l1_2`, `l1_3`, `l1_4`, `l1_5`; `all` expands to the running architecture's full set.
 
-Two limits force a request like `all` into several capture passes: the BRISC firmware image only fits the readout code for 3 counter groups, and the L1 banks share one count-time mux, so at most one L1 bank can count per run. `python -m tracy` schedules the passes automatically. A request that fits one pass runs once, exactly as before; a request that does not stops with the printed pass plan unless `--perf-counter-multipass` is given, in which case the workload is replayed once per pass and the per-pass device logs are merged. See the [user guide](../../docs/source/ttnn/ttnn/profiling_ttnn_operations.rst) for details.
+One limit forces a request like `all` into several capture passes: the L1 banks share one count-time mux, so at most one L1 bank can count per run. The readout is table driven, so the four other groups fit next to any L1 bank (BRISC firmware with the five group mask: 8664 of 8704 bytes on Blackhole, 7584 of 7712 on Wormhole). `python -m tracy` schedules the passes automatically. A request that fits one pass runs once, exactly as before; a request that does not stops with the printed pass plan unless `--perf-counter-multipass` is given, in which case the workload is replayed once per pass and the per-pass device logs are merged. See the [user guide](../../docs/source/ttnn/ttnn/profiling_ttnn_operations.rst) for details.
 
 ### Environment Variable
 
@@ -64,7 +64,7 @@ Two limits force a request like `all` into several capture passes: the BRISC fir
 | `1 << 8` | 256 | L1 bank 4 (BH only: extended packers 6-7, tag search, extended unpackers 8-12) |
 | `1 << 9` | 512 | L1 bank 5 (BH only: extended unpackers 13-14; the mux wires only two slots here) |
 
-The env-var path selects one pass directly, so keep it to at most 3 groups: the BRISC firmware image only fits the readout code for 3, and a larger mask overflows its `.text` section (measured on Blackhole). Example single-pass capture:
+The env-var path selects one pass directly: any set of groups with at most one L1 bank. Example single-pass capture:
 
 ```bash
 export TT_METAL_PROFILE_PERF_COUNTERS=11   # FPU | PACK | L1 bank 0
