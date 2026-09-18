@@ -101,29 +101,19 @@ def maybe_auto_enable_chunked_prefill_trace(
 ) -> bool:
     """Auto-enable multi-chunk trace replay for unbounded demos at the 4k ceiling.
 
-    Without this, a run whose ``max_seq_len`` equals GEMMA4_PREFILL_TRACE_MAX_SEQ
-    (4096 by default) prefills UNTRACED, because the demo gate reads
-    ``max_seq_len < prefill_trace_max`` and 4096 < 4096 is False. Short prompts
-    sit below the ceiling and are traced, so the 4k bucket was the one case
-    getting no prefill-trace benefit at all.
+    The demo gate reads ``max_seq_len < prefill_trace_max``, so a run sitting
+    exactly at the ceiling (4096) prefilled UNTRACED while shorter prompts were
+    traced -- the 4k bucket was the one case getting no benefit. An explicit
+    GEMMA4_CHUNKED_PREFILL_TRACE always wins; this only fills in a default.
 
-    An explicit GEMMA4_CHUNKED_PREFILL_TRACE always wins, so this only fills in
-    a default. Still restricted to unbounded: bounded sliding caps the prefix at
-    the window, so the replayed buckets stop matching.
-
-    Capped at the trace ceiling. Above it the prompt outgrows the captured
-    buckets, so the tail still prefills eagerly while the capture's persistent
-    buffers stay resident in L1; the global (head_dim=512) prefill SDPA then
-    cannot place its static CBs, which already need ~1.25 MB of the ~1.34 MB
-    pool, and the program dies with "circular buffers ... clash with L1
-    buffers" -- deterministically, at 32k / 64k / 128k. Do not widen this bound
-    without re-checking that SDPA.
-
-    Batch is NOT restricted. Prefill here is microbatched per user and
-    ``_record_trace_prefill`` is keyed on the per-call batch, so one capture is
-    replayed across every user rather than one being taken per user. The trace
-    buffers therefore do not scale with demo batch, which is what a batch-1
-    restriction would be guarding against.
+    Restricted to unbounded (bounded sliding caps the prefix at the window, so
+    replayed buckets stop matching) and capped at the ceiling. Do NOT widen that
+    cap: above it the tail prefills eagerly while the capture's buffers stay in
+    L1, and the global head_dim=512 prefill SDPA -- needing ~1.25 MB of a
+    ~1.34 MB pool -- then cannot place its CBs, dying deterministically at
+    32k/64k/128k. Batch is deliberately unrestricted: prefill is microbatched
+    and one capture is replayed across users, so trace buffers do not scale
+    with demo batch.
     """
     if "GEMMA4_CHUNKED_PREFILL_TRACE" in os.environ:
         return chunked_prefill_trace_enabled()

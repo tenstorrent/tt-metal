@@ -215,14 +215,12 @@ class SharedMLP:
     def _linear(self, x, weight, long_2d_min_rows=0):
         """gate_up / down_proj matmul, tuned for prefill on the T3K dense target.
 
-        ``should_prefill_long_2d`` catches a prefill chunk too tall for one shot;
-        below that ``interleaved_mlp_prefill_config`` covers the short-prefill
-        band and declines everywhere else, including decode, where this reduces
-        to the bare matmul every other SKU runs.
-
-        ``long_2d_min_rows`` raises that first bound. gate_up passes 4096 so the
-        2048-row chunk keeps the auto config it was measured on upstream; only
-        down_proj takes the reshape from 2048.
+        ``should_prefill_long_2d`` catches a chunk too tall for one shot; below
+        that ``interleaved_mlp_prefill_config`` covers the short-prefill band and
+        declines elsewhere, including decode, where this is the bare matmul every
+        other SKU runs. ``long_2d_min_rows`` raises the first bound: gate_up
+        passes 4096 to keep the auto config its 2048-row chunk was measured on,
+        so only down_proj takes the reshape from 2048.
         """
         if isinstance(weight, DramShardedLinear):
             return weight(x)

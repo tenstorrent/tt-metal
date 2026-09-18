@@ -237,12 +237,10 @@ class Gemma4Model:
     _supports_on_device_sampling = False
     # Caller-gated: skip the 262k-wide vocab all-gather on the last-token PREFILL
     # slice when the generator is about to device-sample TP-sharded logits and
-    # throw most of that gather away. Set per prefill call by
-    # Gemma4Generator._set_prefill_sharded_logits -- True only when that call
-    # will device-sample, so a host-sampling call (the warmup pass) still
-    # gathers the full vocab. Kept on the model rather than threaded through the
-    # shared tt_transformers signature so the opt-in stays inside
-    # models/demos/gemma4.
+    # throw most of it away. Set per call by
+    # Gemma4Generator._set_prefill_sharded_logits, so host-sampling calls (the
+    # warmup pass) still gather. On the model rather than in the shared
+    # tt_transformers signature to keep the opt-in inside models/demos/gemma4.
     _prefill_allow_sharded_logits = False
     # On-device greedy at B=sampling_max (#48037, mirrors qwen3_vl / qwen25_vl):
     # Gemma4 only captures the sampling *trace* at sampling_max (B=32). Replaying

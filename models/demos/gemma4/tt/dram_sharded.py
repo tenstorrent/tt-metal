@@ -342,15 +342,11 @@ def hoist_prefill_in0(tensor, hoist: bool):
 def is_t3k_dense_target(mesh_device, config) -> bool:
     """True for dense Gemma4 12B / 31B on a full Wormhole T3K (1x8, 8x8 grid).
 
-    The tuned prefill program configs below were measured on that one system and
-    on those two variants only. Every other CI leg -- all Blackhole SKUs, N150,
-    N300, an x2-harvested T3K (8x7 grid), the MoE 26B-A4B and the
-    per-layer-input E2B / E4B -- fails this gate and takes the untuned path
-    byte-identically to today.
-
-    The two config predicates are what separate 12B / 31B from their siblings:
-    26B-A4B is the only MoE variant, and E2B / E4B are the only ones carrying
-    per-layer input embeddings (``hidden_size_per_layer_input`` 256 vs 0).
+    The tuned prefill configs below were measured on that system and those two
+    variants only; everything else (Blackhole, N150/N300, a harvested 8x7 T3K)
+    fails this gate and is byte-identical to today. The two config predicates
+    separate 12B/31B from their siblings: 26B-A4B is the only MoE, and E2B/E4B
+    are the only ones with ``hidden_size_per_layer_input`` (256 vs 0).
     """
     if bool(getattr(config, "enable_moe_block", False)):
         return False
@@ -370,27 +366,16 @@ def is_t3k_dense_target(mesh_device, config) -> bool:
 def single_tile_matmul_ckc(m, dest_acc):
     """Fidelity/accumulation for the m<=32 matmuls every tuned config declines.
 
-    ``in_prefill_l1_matmul_band`` opens above one tile, so at m <= 32 -- a short
-    prompt's whole prefill, a last-token slice, or any decode step -- every
-    builder above returns None and the call site would otherwise fall through to
-    ttnn.linear's own default, which here is HiFi2 with fp32_dest_acc_en off.
+    At m <= 32 (short prefill, a last-token slice, any decode step) the builders
+    above return None, and ttnn.linear's own default -- HiFi2, no fp32 dest-acc
+    -- is not a safe place to sit. Measured on a WH T3K, 31B long-context-128k:
+    HiFi3 without fp32 dest-acc is clean, while both HiFi3 WITH it and ttnn's
+    HiFi2 default degenerate into a repetition loop. Not monotonic in precision,
+    so it is specifically "HiFi3 without fp32 dest-acc". HiFi4 is not an option:
+    with fp32 dest-acc it trips Wormhole bug #38306.
 
-    That default is not a safe place to sit. Measured on a real WH T3K at
-    Gemma4-31B long-context-128k, classified on the generated text:
-
-        HiFi3 + fp32 dest-acc     repetition loop
-        HiFi3, no fp32 dest-acc   clean
-        HiFi2, no fp32 dest-acc   repetition loop  <- ttnn's default
-
-    The effect is not monotonic in precision, so this is specifically
-    "HiFi3 without fp32 dest-acc" rather than "31B wants less precision".
-    HiFi4 is not an option at all: HiFi4 together with fp32 dest-accumulation
-    trips Wormhole hardware bug #38306.
-
-    The accumulator is per model because the two variants want opposite things.
-    Along K = 3840..15360 the destination register rounds every partial sum to
-    bf16 unless fp32 dest-acc is on, which is what carries 12B; 31B is the one
-    that loops with it. Callers pass the variant's policy, resolved once at
+    The accumulator is per model -- fp32 dest-acc carries 12B and is what makes
+    31B loop -- so callers pass the variant's policy, resolved once at
     weight-load time by ``default_single_tile_dest_acc``.
     """
     if int(m) > TILE_SIZE:
