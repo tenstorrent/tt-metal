@@ -214,6 +214,14 @@ def pytest_addoption(parser):
     )
 
     parser.addoption(
+        "--ulp-report",
+        action="store_true",
+        help="Log the measured ULP distance for every comparison on a ULP-capable "
+        "format, on a pass as well as a failure, and including ops that carry no step "
+        "budget yet. Reporting only: it cannot change a verdict.",
+    )
+
+    parser.addoption(
         "--bit-exact-runs",
         action="store",
         type=int,
@@ -457,6 +465,9 @@ def pytest_configure(config):
             _UNIFIED_ORDER_FILE = _RECORD_TEST_ORDER
         _RECORD_TEST_ORDER = True
         utils_module._RECORD_TEST_ORDER = True
+
+    if config.getoption("--ulp-report"):
+        utils_module._ULP_REPORT = True
 
     log_file = "pytest_errors.log"
     if not hasattr(config, "workerinput"):  # executed only by master pytest runner
