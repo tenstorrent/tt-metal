@@ -28,7 +28,7 @@ _JSON_PROMPT_PATH = Path(__file__).parent / "fibo_vlm_prompt.json"
 _DEVICE_PARAMS = {
     "fabric_config": ttnn.FabricConfig.FABRIC_1D,
     "l1_small_size": 32_768,
-    "trace_region_size": 64_000_000,
+    "trace_region_size": 256_000_000,
 }
 
 
