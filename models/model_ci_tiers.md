@@ -128,6 +128,7 @@ it is classified differently on different systems.
 | HunyuanImage-3.0 | BH QuietBox 2 |
 | Panoptic-DeepLab | BH P150 |
 | BEVFormer | BH P150 |
+| DiffusionDrive | WH N300 |
 | Mistral-Small-3.1-24B | WH LLMBox, BH QuietBox 2 |
 | Stable Diffusion 3.5 Large | WH LLMBox |
 | Mochi-1-preview | WH LLMBox, WH Galaxy |
