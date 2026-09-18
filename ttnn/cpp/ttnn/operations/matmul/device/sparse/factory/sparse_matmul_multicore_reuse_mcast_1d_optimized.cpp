@@ -441,7 +441,6 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
     std::map<std::string, std::string> mm_kernel_in0_sender_writer_defines;
     std::map<std::string, std::string> mm_kernel_in1_sender_writer_defines;
 
-    mm_kernel_defines["FUSE_ACTIVATION"] = "0";
     if (packer_l1_acc_en) {
         mm_kernel_defines["PACKER_L1_ACC"] = "1";
     }
