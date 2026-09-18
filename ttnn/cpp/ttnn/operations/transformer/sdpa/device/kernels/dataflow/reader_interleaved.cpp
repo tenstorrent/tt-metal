@@ -99,8 +99,10 @@ void kernel_main() {
     // Windowed K-range narrowing: the reader computes each Q chunk's [k_lo, k_hi) from
     // cu_window_seqlens, streams only that range, and feeds it to compute over a ctrl CB.
     constexpr bool use_windowed_narrowing = get_compile_time_arg_val(34) == 1;
+    // 2 = causal prefix chains: heavy zigzag chunks of a head take a prefix of K/V from the previous core.
+    constexpr bool causal_chain = get_compile_time_arg_val(35) == 2;
 
-    constexpr auto q_args = TensorAccessorArgs<35>();
+    constexpr auto q_args = TensorAccessorArgs<36>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     constexpr auto mask_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
@@ -149,11 +151,14 @@ void kernel_main() {
     uint32_t next_core_q_chunks = 0;
     uint32_t mcast_num_dests = 0;
     uint32_t mcast_sender_wait = 0;
+    uint32_t prev_seg_global_start = 0;
+    uint32_t prev_seg_count = 0;
+    uint32_t next_seg_global_start = 0;
 
     // Initialize NOC/semaphore state for chain forwarding
     uint32_t sender_wait_count = 1;
 
-    if constexpr (!is_causal) {
+    if constexpr (!is_causal || causal_chain) {
         is_chain_participant = get_arg_val<uint32_t>(argidx++);
         is_injector = get_arg_val<uint32_t>(argidx++);
         is_sink = get_arg_val<uint32_t>(argidx++);
@@ -167,6 +172,9 @@ void kernel_main() {
         next_core_q_chunks = get_arg_val<uint32_t>(argidx++);
         mcast_num_dests = get_arg_val<uint32_t>(argidx++);
         mcast_sender_wait = get_arg_val<uint32_t>(argidx++);
+        prev_seg_global_start = get_arg_val<uint32_t>(argidx++);
+        prev_seg_count = get_arg_val<uint32_t>(argidx++);
+        next_seg_global_start = get_arg_val<uint32_t>(argidx++);
 
         if (is_chain_participant) {
             Semaphore<>(valid_semaphore_id).set(VALID);
@@ -467,17 +475,44 @@ void kernel_main() {
             const uint32_t k_head = nq / q_heads_per_k;
             const uint32_t v_head = nq / q_heads_per_v;
 
-            // Chain forwarding conditions are loop-invariant — compute once
-            bool should_forward = false;
-            bool should_receive = false;
+            // Chain roles for this Q chunk: how many leading K/V chunks go to the next core and come from the
+            // previous one. Non causal chains carry every chunk.
+            uint32_t fwd_chunks = 0;
+            uint32_t recv_chunks = 0;
+            const bool in_chain_head = is_chain_participant && (nb == chain_batch && nq == chain_head);
             if constexpr (!is_causal) {
-                should_forward = is_chain_participant && !is_sink && (nb == chain_batch && nq == chain_head) &&
-                                 (q_iter < next_core_q_chunks);
-                should_receive = is_chain_participant && !is_injector && (nb == chain_batch && nq == chain_head);
+                if (in_chain_head && !is_sink && q_iter < next_core_q_chunks) {
+                    fwd_chunks = k_num_chunks;
+                }
+                if (in_chain_head && !is_injector) {
+                    recv_chunks = k_num_chunks;
+                }
+            } else if constexpr (causal_chain) {
+                // Heavy zigzag chunks of one head need prefixes of the same K/V that shrink along the chain, so
+                // a core forwards what its successor needs and receives what it needs itself.
+                const auto needed = [&](uint32_t qc) {
+                    return (std::min((qc + 1) * Sq_chunk_t, Skt) + Sk_chunk_t - 1) / Sk_chunk_t;
+                };
+                if (in_chain_head && !is_sink && q_iter < next_core_q_chunks) {
+                    const uint32_t q_next = decompose_global_q_index(
+                                                next_seg_global_start + q_iter, q_num_chunks, NQH, use_zigzag_balancing)
+                                                .q_chunk;
+                    if (q_next >= q_num_chunks / 2) {
+                        fwd_chunks = std::min(needed(q_chunk), needed(q_next));
+                    }
+                }
+                if (in_chain_head && !is_injector && q_chunk >= q_num_chunks / 2 && q_iter < prev_seg_count) {
+                    const uint32_t q_prev = decompose_global_q_index(
+                                                prev_seg_global_start + q_iter, q_num_chunks, NQH, use_zigzag_balancing)
+                                                .q_chunk;
+                    recv_chunks = std::min(needed(q_chunk), needed(q_prev));
+                }
             }
 
             // loop while k_low < q_high
             for (uint32_t k_chunk = k_loop_start; (k_chunk * Sk_chunk_t) < q_high_idx; ++k_chunk) {
+                const bool should_forward = k_chunk < fwd_chunks;
+                const bool should_receive = k_chunk < recv_chunks;
                 const uint32_t kv_row_start_tile = std::min(k_chunk * Sk_chunk_t, valid_Skt_bound);
                 const uint32_t kv_row_end_tile = std::min(kv_row_start_tile + Sk_chunk_t, valid_Skt_bound);
                 const uint32_t kv_row_tile_count = kv_row_end_tile - kv_row_start_tile;
@@ -493,7 +528,8 @@ void kernel_main() {
                     cb_k_start_address = cb_k.get_write_ptr();
                     Semaphore<> receiver_sem(receiver_semaphore_id);
                     receiver_sem.set(INVALID);
-                    Semaphore<>(sender_semaphore_id).up(noc, prev_physical_x, prev_physical_y, 1);
+                    Semaphore<>(sender_semaphore_id)
+                        .up(noc, prev_physical_x, prev_physical_y, causal_chain ? cb_k_start_address : 1u);
                     receiver_sem.wait(VALID);
                     cb_k.push_back(k_chunk_tiles);
                 } else {
@@ -549,9 +585,16 @@ void kernel_main() {
                 // The companion must be issued immediately after the linked write —
                 // any NOC read barrier between them deadlocks (the read barrier
                 // blocks while a linked write awaits its companion).
+                uint32_t fwd_dst_k = cb_k_start_address;
                 if (should_forward) {
                     Semaphore<> sender_sem(sender_semaphore_id);
-                    sender_sem.wait(sender_wait_count);
+                    if constexpr (causal_chain) {
+                        // the receiver posts its slot address as the ready signal
+                        sender_sem.wait_min(1);
+                        fwd_dst_k = sender_sem.value();
+                    } else {
+                        sender_sem.wait(sender_wait_count);
+                    }
                     sender_sem.set(0);
                     if constexpr (mcast_enabled) {
                         noc.async_write_multicast(
@@ -590,7 +633,7 @@ void kernel_main() {
                             UnicastEndpoint{},
                             k_chunk_tiles * k_tile_bytes,
                             {},
-                            {.noc_x = next_physical_x, .noc_y = next_physical_y, .addr = cb_k_start_address});
+                            {.noc_x = next_physical_x, .noc_y = next_physical_y, .addr = fwd_dst_k});
                     }
                 }
 
@@ -685,7 +728,8 @@ void kernel_main() {
                     cb_v_start_address = cb_v.get_write_ptr();
                     Semaphore<> receiver_sem(receiver_semaphore_id);
                     receiver_sem.set(INVALID);
-                    Semaphore<>(sender_semaphore_id).up(noc, prev_physical_x, prev_physical_y, 1);
+                    Semaphore<>(sender_semaphore_id)
+                        .up(noc, prev_physical_x, prev_physical_y, causal_chain ? cb_v_start_address : 1u);
                     receiver_sem.wait(VALID);
                     cb_v.push_back(v_chunk_tiles);
                 } else {
@@ -740,9 +784,15 @@ void kernel_main() {
 
                 // Forward V chunk to next core(s) before push_back — prevents compute from
                 // popping the buffer while the mcast is still reading from it.
+                uint32_t fwd_dst_v = cb_v_start_address;
                 if (should_forward) {
                     Semaphore<> sender_sem(sender_semaphore_id);
-                    sender_sem.wait(sender_wait_count);
+                    if constexpr (causal_chain) {
+                        sender_sem.wait_min(1);
+                        fwd_dst_v = sender_sem.value();
+                    } else {
+                        sender_sem.wait(sender_wait_count);
+                    }
                     sender_sem.set(0);
                     if constexpr (mcast_enabled) {
                         noc.async_write_multicast(
@@ -774,7 +824,7 @@ void kernel_main() {
                             UnicastEndpoint{},
                             v_chunk_tiles * v_tile_bytes,
                             {},
-                            {.noc_x = next_physical_x, .noc_y = next_physical_y, .addr = cb_v_start_address});
+                            {.noc_x = next_physical_x, .noc_y = next_physical_y, .addr = fwd_dst_v});
                     }
                     noc.async_writes_flushed();
                     if constexpr (!mcast_enabled) {

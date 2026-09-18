@@ -32,6 +32,7 @@ struct CoreHeadWork {
     uint32_t head = 0;
     uint32_t q_chunk_start = 0;
     uint32_t q_chunk_count = 0;
+    uint32_t global_start = 0;  // flat index of the segment's first chunk
 };
 
 struct CoreWork {
@@ -58,6 +59,9 @@ struct CoreChainInfo {
     CoreCoord prev_physical = CoreCoord{0, 0};
     CoreCoord next_physical = CoreCoord{0, 0};
     uint32_t next_core_q_chunks = 0;
+    uint32_t prev_seg_global_start = 0;
+    uint32_t prev_seg_count = 0;
+    uint32_t next_seg_global_start = 0;
     bool use_mcast = false;
     uint32_t mcast_num_dests = 0;    // num_dests for mcast API (includes self if injector inside rect)
     uint32_t mcast_sender_wait = 0;  // number of actual receivers that signal back (always chain_size - 1)
@@ -199,6 +203,110 @@ struct WindowedSetup {
     // so the writer's mask generator needs the shard's origin to find the right windows.
     uint32_t q_token_offset = 0;
 };
+
+// Chains need K chunk counts that add up the same for every zigzag pair; that holds for equal chunk sizes and
+// for a q chunk that is a multiple of the k chunk.
+bool causal_pairs_uniform(uint32_t q_num_chunks, uint32_t Sq_chunk_t, uint32_t Sk_chunk_t, uint32_t Skt) {
+    auto needed = [&](uint32_t q) { return (std::min((q + 1) * Sq_chunk_t, Skt) + Sk_chunk_t - 1) / Sk_chunk_t; };
+    const uint32_t first = needed(0) + needed(q_num_chunks - 1);
+    for (uint32_t j = 1; j < q_num_chunks / 2; ++j) {
+        if (needed(j) + needed(q_num_chunks - 1 - j) != first) {
+            return false;
+        }
+    }
+    return true;
+}
+
+uint32_t kv_chain_mode_for(
+    bool is_causal,
+    bool plain_kv_stream,
+    bool causal_pairs,
+    uint32_t q_num_chunks,
+    uint32_t Sq_chunk_t,
+    uint32_t Sk_chunk_t,
+    uint32_t Skt) {
+    if (!plain_kv_stream) {
+        return 0;
+    }
+    if (!is_causal) {
+        return 1;
+    }
+    return causal_pairs && causal_pairs_uniform(q_num_chunks, Sq_chunk_t, Sk_chunk_t, Skt) ? 2 : 0;
+}
+
+// Causal chain of a head: the consecutive segments whose cores are still free, in ascending pair order, so the
+// lowest pairs (longest heavy prefixes) stream from DRAM and each core forwards the prefix its successor needs.
+void build_causal_chain(
+    const std::vector<HeadSegmentRef>& segments,
+    const std::vector<CoreWork>& core_work,
+    std::vector<CoreChainInfo>& core_chain_info,
+    uint32_t& chains_built,
+    uint32_t& chains_skipped) {
+    std::size_t idx = 0;
+    while (idx < segments.size() && core_chain_info[segments[idx].core_idx].participates) {
+        ++idx;
+    }
+    std::vector<std::size_t> order;
+    for (; idx < segments.size() && !core_chain_info[segments[idx].core_idx].participates; ++idx) {
+        order.push_back(idx);
+    }
+    if (order.size() < 2) {
+        chains_skipped++;
+        return;
+    }
+    for (std::size_t pos = 0; pos < order.size(); ++pos) {
+        const auto& seg = segments[order[pos]];
+        const auto& hw = core_work[seg.core_idx].head_work[seg.head_work_index];
+        auto& chain = core_chain_info[seg.core_idx];
+        chain.participates = true;
+        chain.is_injector = pos == 0;
+        chain.is_sink = pos + 1 == order.size();
+        chain.batch = hw.batch;
+        chain.head = hw.head;
+        chain.q_chunk_start = hw.q_chunk_start;
+        chain.q_chunk_count = hw.q_chunk_count;
+        if (pos > 0) {
+            const auto& prev = segments[order[pos - 1]];
+            const auto& prev_hw = core_work[prev.core_idx].head_work[prev.head_work_index];
+            chain.prev_physical = core_work[prev.core_idx].physical_core;
+            chain.prev_seg_global_start = prev_hw.global_start;
+            chain.prev_seg_count = prev_hw.q_chunk_count;
+        }
+        if (pos + 1 < order.size()) {
+            const auto& next = segments[order[pos + 1]];
+            const auto& next_hw = core_work[next.core_idx].head_work[next.head_work_index];
+            chain.next_physical = core_work[next.core_idx].physical_core;
+            chain.next_seg_global_start = next_hw.global_start;
+            chain.next_core_q_chunks = next_hw.q_chunk_count;
+        }
+    }
+    chains_built++;
+}
+
+// The injector of a uniform chain is the core whose physical X is furthest from the existing injectors.
+void rotate_injector_to_spread_dram(
+    std::vector<std::size_t>& chain_order,
+    const std::vector<HeadSegmentRef>& segments,
+    const std::vector<CoreWork>& core_work,
+    const std::vector<uint32_t>& injector_phys_x) {
+    std::size_t best_pos = 0;
+    uint32_t best_dist = 0;
+    for (std::size_t pos = 0; pos < chain_order.size(); ++pos) {
+        const uint32_t phys_x = core_work[segments[chain_order[pos]].core_idx].physical_core.x;
+        uint32_t min_dist = UINT32_MAX;
+        for (uint32_t ix : injector_phys_x) {
+            uint32_t d = (phys_x > ix) ? (phys_x - ix) : (ix - phys_x);
+            min_dist = std::min(min_dist, d);
+        }
+        if (min_dist > best_dist) {
+            best_dist = min_dist;
+            best_pos = pos;
+        }
+    }
+    if (best_pos != 0) {
+        std::swap(chain_order[0], chain_order[best_pos]);
+    }
+}
 
 template <typename AllocateTileCb, typename AllocateCb>
 WindowedSetup setup_windowed_cbs(
@@ -613,6 +721,17 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
 
     const bool use_zigzag_balancing = is_causal;
 
+    // 0: no K/V chains, 1: the non causal lock step chain, 2: causal prefix chains (see build_causal_chain).
+    const uint32_t kv_chain_mode = kv_chain_mode_for(
+        is_causal,
+        !is_chunked && !has_sliding_window && !is_windowed,
+        global_q_pair_distribute && !use_provided_mask,
+        q_num_chunks,
+        Sq_chunk_t,
+        Sk_chunk_t,
+        Skt);
+    const bool kv_chains_possible = kv_chain_mode != 0;
+
     std::vector<uint32_t> reader_compile_time_args = {// interleaved accessor args
                                                       B,
                                                       NQH,
@@ -653,6 +772,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     reader_compile_time_args.push_back(0);  // mcast_enabled placeholder
     reader_compile_time_args.push_back(static_cast<uint32_t>(use_zigzag_balancing));  // arg 33
     reader_compile_time_args.push_back(static_cast<uint32_t>(is_windowed));           // arg 34: K-range narrowing
+    reader_compile_time_args.push_back(kv_chain_mode);  // arg 35: kv chain mode, 2 = causal prefix chains
 
     TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(input_tensor_k.buffer()).append_to(reader_compile_time_args);
@@ -676,7 +796,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     uint32_t receiver_semaphore_id = 0;
     uint32_t valid_semaphore_id = 0;
 
-    if (!is_causal) {
+    if (kv_chains_possible) {
         sender_semaphore_id = 0;
         receiver_semaphore_id = 1;
         valid_semaphore_id = 2;
@@ -922,9 +1042,9 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         compute_compile_time_args.end(), compute_cb_compile_time_args.begin(), compute_cb_compile_time_args.end());
     TensorAccessorArgs(output_tensor.buffer()).append_to(compute_compile_time_args);
 
-    // Semaphores for KV chain forwarding (non-causal only).
+    // Semaphores for KV chain forwarding.
     // IDs match the order they were assigned above: sender=0, receiver=1, valid=2.
-    if (!is_causal) {
+    if (kv_chains_possible) {
         desc.semaphores.push_back(SemaphoreDescriptor{
             .id = sender_semaphore_id,
             .core_type = tt::CoreType::WORKER,
@@ -966,7 +1086,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     // lock-step-forward K between cores whose Q chunks now need DIFFERENT K ranges — the semaphore
     // handshake counts diverge and the cores deadlock. Narrowing saves far more K reads than
     // forwarding did.
-    if (!is_causal && !is_chunked && !has_sliding_window && !is_windowed) {
+    if (kv_chains_possible) {
         head_segments.resize(total_heads);
 
         log_debug(tt::LogOp, "=== Building KV chain forwarding topology ===");
@@ -982,22 +1102,24 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
             work.logical_core = core;
             work.physical_core = device->worker_core_from_logical_core(core);
 
-            auto push_head_work = [&](uint32_t nb, uint32_t nh, uint32_t q_start, uint32_t q_count) {
-                if (q_count == 0) {
-                    return;
-                }
-                work.head_work.push_back(CoreHeadWork{
-                    .batch = nb,
-                    .head = nh,
-                    .q_chunk_start = q_start,
-                    .q_chunk_count = q_count,
-                });
-                const uint32_t head_id = (nb * NQH) + nh;
-                if (head_id < head_segments.size()) {
-                    head_segments[head_id].push_back(HeadSegmentRef{
-                        .core_idx = i, .head_work_index = static_cast<uint32_t>(work.head_work.size() - 1)});
-                }
-            };
+            auto push_head_work =
+                [&](uint32_t nb, uint32_t nh, uint32_t q_start, uint32_t q_count, uint32_t flat_start) {
+                    if (q_count == 0) {
+                        return;
+                    }
+                    work.head_work.push_back(CoreHeadWork{
+                        .batch = nb,
+                        .head = nh,
+                        .q_chunk_start = q_start,
+                        .q_chunk_count = q_count,
+                        .global_start = flat_start,
+                    });
+                    const uint32_t head_id = (nb * NQH) + nh;
+                    if (head_id < head_segments.size()) {
+                        head_segments[head_id].push_back(HeadSegmentRef{
+                            .core_idx = i, .head_work_index = static_cast<uint32_t>(work.head_work.size() - 1)});
+                    }
+                };
 
             // Walk the core's [g_start, g_start + g_count) linear range and split into
             // contiguous (nb, nq, q_chunk_range) segments. Non-causal here (chain section is
@@ -1015,7 +1137,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
                 const uint32_t remaining_in_head = q_num_chunks - q_in_head;
                 const uint32_t remaining_in_range = g_end - cursor;
                 const uint32_t span = std::min(remaining_in_head, remaining_in_range);
-                push_head_work(nb, nq, q_in_head, span);
+                push_head_work(nb, nq, q_in_head, span, cursor);
                 cursor += span;
             }
 
@@ -1036,6 +1158,11 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
             auto& segments = head_segments[head_id];
             if (segments.size() < 2) {
                 continue;  // No chain needed for single core
+            }
+
+            if (is_causal) {
+                build_causal_chain(segments, core_work, core_chain_info, chains_built, chains_skipped);
+                continue;
             }
 
             // Find first non-conflicting single-segment core as chain start.
@@ -1115,26 +1242,8 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
             }
 
             if (uniform_q) {
-                // All cores have equal q_chunk_count — safe to pick any injector.
-                // Choose the core whose physical X is furthest from existing
-                // injectors to spread DRAM reads across channels.
-                std::size_t best_pos = 0;
-                uint32_t best_dist = 0;
-                for (std::size_t pos = 0; pos < chain_order.size(); ++pos) {
-                    const uint32_t phys_x = core_work[segments[chain_order[pos]].core_idx].physical_core.x;
-                    uint32_t min_dist = UINT32_MAX;
-                    for (uint32_t ix : injector_phys_x) {
-                        uint32_t d = (phys_x > ix) ? (phys_x - ix) : (ix - phys_x);
-                        min_dist = std::min(min_dist, d);
-                    }
-                    if (min_dist > best_dist) {
-                        best_dist = min_dist;
-                        best_pos = pos;
-                    }
-                }
-                if (best_pos != 0) {
-                    std::swap(chain_order[0], chain_order[best_pos]);
-                }
+                // All cores have equal q_chunk_count, so spread the injectors over DRAM channels by physical X.
+                rotate_injector_to_spread_dram(chain_order, segments, core_work, injector_phys_x);
             } else {
                 // Mixed q_chunk_counts — sort descending so heavier cores come first.
                 // Each sender forwards only for min(own_q_iters, next_core_q_chunks)
@@ -1232,7 +1341,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         };
         std::vector<McastCandidate> candidates;
         candidates.reserve(head_segments.size());
-        bool all_eligible = true;
+        bool all_eligible = !is_causal;  // multicast needs uniform per iteration counts, causal never has them
         uint32_t total_multi_core_chains = 0;
 
         for (uint32_t head_id = 0; head_id < head_segments.size(); ++head_id) {
@@ -1492,8 +1601,8 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         reader_args.push_back(chunked_q_chunk_offset);
         reader_args.push_back(read_offset);  // read_offset
 
-        // Add chain metadata for non-causal case
-        if (!is_causal) {
+        // Add chain metadata when chains can exist: every non causal program, or causal prefix chains
+        if (!is_causal || kv_chain_mode == 2) {
             reader_args.push_back(static_cast<uint32_t>(chain.participates));
             reader_args.push_back(static_cast<uint32_t>(chain.is_injector));
             reader_args.push_back(static_cast<uint32_t>(chain.is_sink));
@@ -1508,6 +1617,9 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
             reader_args.push_back(chain.next_core_q_chunks);
             reader_args.push_back(chain.mcast_num_dests);
             reader_args.push_back(chain.mcast_sender_wait);
+            reader_args.push_back(chain.prev_seg_global_start);
+            reader_args.push_back(chain.prev_seg_count);
+            reader_args.push_back(chain.next_seg_global_start);
         }
 
         // Global-Q tail (read by kernel after chain block when non-causal, immediately when causal).
