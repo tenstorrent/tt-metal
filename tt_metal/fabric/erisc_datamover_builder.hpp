@@ -671,6 +671,12 @@ private:
     // it is optional for other topologies and usually hurts performance in those other cases due to added CPU overheads
     bool enable_first_level_ack = false;
 
+    // Decided once at construction: whether this router compiles with deadlock avoidance / first-level
+    // ACK. An inter-mesh router never does, whichever direction (both ends of an inter-mesh link must
+    // agree on DA/FLA polarity and the far end may be a plain Mesh (FABRIC_2D) rank); an intra-mesh
+    // router follows the direction-based need_deadlock_avoidance_support policy. See #56298.
+    bool enable_deadlock_avoidance = false;
+
     // Shared helper for setting up VC connections
     // upstream_vc_idx: VC of this router's receiver channel
     // downstream_vc_idx: VC of downstream router's sender channel

@@ -709,6 +709,14 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
     // First level ack is enabled to support bubble flow control
     enable_first_level_ack(
         config.topology == tt::tt_fabric::Topology::Ring || config.topology == tt::tt_fabric::Topology::Torus) {
+    // Decide deadlock avoidance once, here at initialization, where is_inter_mesh is already known: an
+    // inter-mesh router never enables it (both ends must agree on DA/FLA polarity and the far end may be
+    // a plain Mesh (FABRIC_2D) rank); an intra-mesh router follows the direction-based policy. #56298.
+    this->enable_deadlock_avoidance =
+        !this->is_inter_mesh &&
+        tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context().need_deadlock_avoidance_support(
+            this->direction_);
+
     // NOTE: actual_sender_channels_per_vc and actual_receiver_channels_per_vc are:
     // 1. Stored as members for later use in compile-time args
     // 2. Used for connection validation
@@ -1076,7 +1084,8 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     // peer that makes the speedy receiver path safe on this link.
     const bool vc0_is_terminal_or_source_only_after_trim =
         vc0_trim_fast_path_info_.has_value() && vc0_trim_fast_path_info_->terminal_or_source_only;
-    const bool base_enable_deadlock_avoidance = fabric_context.need_deadlock_avoidance_support(this->direction_);
+    // Deadlock avoidance was decided at construction (inter-mesh routers never get it); read it back here.
+    const bool base_enable_deadlock_avoidance = this->enable_deadlock_avoidance;
     const bool final_enable_deadlock_avoidance =
         base_enable_deadlock_avoidance && !vc0_is_terminal_or_source_only_after_trim;
     const bool final_enable_first_level_ack_vc0 = final_enable_deadlock_avoidance;
