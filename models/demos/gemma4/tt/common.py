@@ -15,7 +15,12 @@ import os
 from loguru import logger
 
 import ttnn
-from models.common.weight_cache import build_cached_state_dict, mark_weight_cache_complete, weight_cache_is_complete
+from models.common.weight_cache import (
+    build_cached_state_dict,
+    checkpoint_name,
+    mark_weight_cache_complete,
+    weight_cache_is_complete,
+)
 from models.demos.gemma4.config import MeshConfig, ModeConfig
 from models.demos.gemma4.tt.assistant.model import Gemma4AssistantModel
 from models.demos.gemma4.tt.ccl import CCLManager
@@ -127,7 +132,10 @@ def create_tt_model(
         "dram_cores": os.environ.get("GEMMA4_DRAM_CORES", "8"),
     }
     cache_identity = dict(
-        model_name=os.path.basename(str(model_path).rstrip("/")) or "gemma4",
+        # vLLM hands over the resolved hub snapshot dir, not the HF id: keyed on the plain
+        # basename the marker seeded by the e2e demo never matched and every server start
+        # cold-loaded the full HF checkpoint (31B on QB2: ~12 of the 20 budgeted minutes).
+        model_name=checkpoint_name(model_path) or "gemma4",
         n_layers=model_args.num_hidden_layers,
         mesh_shape=_worker_mesh,
         build_variant={

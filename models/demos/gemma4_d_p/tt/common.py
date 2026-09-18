@@ -70,7 +70,7 @@ def create_tt_model(
     _worker_mesh = tuple(mesh_device.shape)
     model_args.cluster_shape = _worker_mesh
     cache_dir = model_args.weight_cache_path(dtype)
-    _precision_for_variant = Gemma4Precision.load(model_path, _worker_mesh)
+    _precision_for_variant = Gemma4Precision.load(model_path)
     cache_identity = dict(
         model_name=os.path.basename(str(model_path).rstrip("/")) or "gemma4",
         n_layers=model_args.num_hidden_layers,

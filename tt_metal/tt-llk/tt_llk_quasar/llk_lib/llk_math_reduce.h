@@ -357,9 +357,10 @@ inline void _llk_math_reduce_row_mop_config_(const TensorShape& tensor_shape)
  * @tparam POOL_TYPE: Type of reduce pool op, values = <MAX/SUM/AVG>
  * @tparam MATH_FIDELITY_TYPE: Only works for AVG/SUM pool types; sets how many loops to use full precision of Source register datums with multiplies, values =
  * <LoFi/HiFi2/HiFi3/HiFi4>
+ * @tparam EN_32BIT_DEST: Use the active destination addressing mode when clearing the scratch row.
  * @param tensor_shape: Contains all the information of the tile shape: num faces, face row/col dim, etc
  */
-template <PoolType POOL_TYPE, ckernel::MathFidelity MATH_FIDELITY_TYPE>
+template <PoolType POOL_TYPE, ckernel::MathFidelity MATH_FIDELITY_TYPE, bool EN_32BIT_DEST>
 inline void _llk_math_reduce_scalar_mop_config_(const TensorShape& tensor_shape)
 {
     constexpr std::uint32_t MOP_OUTER_LOOP      = 1;
@@ -414,7 +415,7 @@ inline void _llk_math_reduce_scalar_mop_config_(const TensorShape& tensor_shape)
             TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 8, ADDR_MOD_0, p_movb2a::MOV_8_ROWS, p_movb2a::SRCB_ROW32_OFFSET + 8);
 
             // zero out scratch in dest
-            TTI_ZEROACC(p_zeroacc::CLR_SPECIFIC, 0, 0, ADDR_MOD_0, scratch_dst_addr);
+            TTI_ZEROACC(p_zeroacc::CLR_SPECIFIC, EN_32BIT_DEST, 0, ADDR_MOD_0, scratch_dst_addr);
 
             if constexpr (RUN_FID_LOOPS)
             {
@@ -490,6 +491,7 @@ inline void _llk_math_reduce_addrmod_(const TensorShape& tensor_shape)
  *
  * @tparam POOL_TYPE: Type of reduce pool op, values = <MAX/SUM/AVG>
  * @tparam REDUCE_DIMENSION: Sets the reduce dimension, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>
+ * @tparam EN_32BIT_DEST: Set to true when destination registers use 32-bit addressing.
  * @tparam MATH_FIDELITY_TYPE: Only works for AVG/SUM pool types; sets how many loops to use full precision of Source register datums with multiplies, values =
  * <LoFi/HiFi2/HiFi3/HiFi4>
  * @tparam is_int_fpu_en: When true for REDUCE_ROW, skip MOP programming (runtime int FPU path).
@@ -497,7 +499,7 @@ inline void _llk_math_reduce_addrmod_(const TensorShape& tensor_shape)
  * @note On the unpack thread, pair with @ref _llk_unpack_reduce_init_ (T0); on the pack thread, pair with @ref _llk_pack_reduce_mask_config_ (T2).
  * @note @ref _llk_math_reduce_ runs the configured reduction with matching template args.
  */
-template <PoolType POOL_TYPE, ReduceDim REDUCE_DIMENSION, ckernel::MathFidelity MATH_FIDELITY_TYPE, bool is_int_fpu_en = false>
+template <PoolType POOL_TYPE, ReduceDim REDUCE_DIMENSION, bool EN_32BIT_DEST, ckernel::MathFidelity MATH_FIDELITY_TYPE, bool is_int_fpu_en = false>
 inline void _llk_math_reduce_init_(const TensorShape tensor_shape)
 {
     LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
@@ -516,7 +518,7 @@ inline void _llk_math_reduce_init_(const TensorShape tensor_shape)
     }
     else if constexpr (REDUCE_DIMENSION == ReduceDim::REDUCE_SCALAR)
     {
-        _llk_math_reduce_scalar_mop_config_<POOL_TYPE, MATH_FIDELITY_TYPE>(tensor_shape);
+        _llk_math_reduce_scalar_mop_config_<POOL_TYPE, MATH_FIDELITY_TYPE, EN_32BIT_DEST>(tensor_shape);
     }
 
     // For face_r_dim >= 8, dest is dense with tiles. For face_r_dim < 8, dest is sparse with tiles and tiles are placed every 8 rows.
