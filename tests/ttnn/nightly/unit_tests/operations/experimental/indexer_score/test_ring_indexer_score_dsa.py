@@ -1129,9 +1129,11 @@ def test_indexer_score_sptp_loudbox_ring_partial_readiness():
     and (os.getenv("MESH_DEVICE") != "TG" or os.getenv("TT_METAL_RING_INDEXER_RUN_32_RANK_ACCURACY") != "1"),
     reason="requires Galaxy/simulator opt-in for the 32-rank complete-mesh indexer test",
 )
-# Only a full 8x4 has a torus, so a plain 2D fabric is what every mesh can run; ring closure stays
-# covered by the full-mesh tests that default to FABRIC_2D_TORUS_XY.
-@pytest.mark.parametrize("fabric_config", [ttnn.FabricConfig.FABRIC_2D], ids=["fabric_2d"])
+@pytest.mark.parametrize(
+    "fabric_config",
+    [ttnn.FabricConfig.FABRIC_2D_TORUS_XY, ttnn.FabricConfig.FABRIC_2D],
+    ids=["torus_xy", "fabric_2d"],
+)
 def test_indexer_score_full_mesh_galaxy_8x4_accuracy(fabric_config):
     """Exercise the fixed 32-entry readiness tables at their supported Galaxy limit.
 

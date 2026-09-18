@@ -3717,10 +3717,11 @@ def test_ring_mla_nd_sharded_indexed_kv_cache_accuracy():
 
 @pytest.mark.parametrize("mesh_scope", ["2x2", "complete"], ids=["2x2", "complete_mesh"])
 @pytest.mark.parametrize("is_balanced", [False, True], ids=["unbalanced", "balanced"])
-# A plain 2D fabric is the only config every mesh has: a torus needs the full 8x4, so a smaller
-# scope could not run the torus arm at all. The ring case stays covered by the full-mesh tests that
-# default to FABRIC_2D_TORUS_XY.
-@pytest.mark.parametrize("fabric_config", [ttnn.FabricConfig.FABRIC_2D], ids=["fabric_2d"])
+@pytest.mark.parametrize(
+    "fabric_config",
+    [ttnn.FabricConfig.FABRIC_2D_TORUS_XY, ttnn.FabricConfig.FABRIC_2D],
+    ids=["torus_xy", "fabric_2d"],
+)
 def test_ring_mla_full_mesh_accuracy_row_major_gather_and_cache_reuse(mesh_scope, is_balanced, fabric_config):
     """Run one snake across the complete 2D mesh and verify canonical KV placement.
 
@@ -3740,6 +3741,10 @@ def test_ring_mla_full_mesh_accuracy_row_major_gather_and_cache_reuse(mesh_scope
         pytest.skip(f"full-mesh ring_mla requires a non-degenerate 2D mesh, got {mesh_config}")
     if mesh_config.tp_size % 2 and mesh_config.sp_size % 2:
         pytest.skip(f"full-mesh ring_mla requires at least one even mesh dimension, got {mesh_config}")
+    if fabric_config == ttnn.FabricConfig.FABRIC_2D_TORUS_XY and not (
+        MESH_CONFIG.is_galaxy and mesh_scope == "complete"
+    ):
+        pytest.skip(f"a torus needs the complete 8x4; {mesh_scope} has no closing edge")
 
     runtime = open_ring_joint_sdpa_runtime(mesh_config, full_mesh=True, fabric_config=fabric_config)
     try:
