@@ -8,6 +8,7 @@
 
 #include <tt-metalium/mesh_workload.hpp>
 
+// Experimental and subject to change: this header carries no API-stability guarantee.
 namespace tt::tt_metal::experimental::program_preparation {
 
 /// Program-memory use established by non-dispatch workload preparation.

@@ -34,6 +34,7 @@
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/global_semaphore.hpp"
+#include "ttnn/graph/graph_processor.hpp"
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/tensor/unit_mesh/unit_mesh_utils.hpp"
 #include <ttnn/distributed/distributed_tensor.hpp>
@@ -46,6 +47,9 @@
 #include "tests/tt_metal/tt_fabric/common/fabric_fixture.hpp"
 
 namespace ttnn::operations::generic::test {
+
+static_assert(ttnn::experimental::GenericOpPreparationResult{}.max_program_config_size_bytes == 0);
+static_assert(ttnn::experimental::GenericOpPreparationResult{}.max_kernel_binary_size_bytes == 0);
 
 TEST_F(TTNNFixtureWithDevice, TestGenericOpArgmaxSingleCore) {
     uint32_t batch = 1;
@@ -145,6 +149,21 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpArgmaxSingleCore) {
         ttnn::experimental::prepare_generic_op(
             std::vector<Tensor>{device_input_tensor, device_output_tensor}, program_descriptor),
         preparation);
+
+    const std::size_t cacheEntriesBeforeCapture = this->device_->num_program_cache_entries();
+    ProgramDescriptor uncachedProgramDescriptor = program_descriptor;
+    uncachedProgramDescriptor.custom_program_hash = 0x56820;
+    {
+        ttnn::graph::ScopedGraphCapture capture(ttnn::graph::GraphProcessor::RunMode::NO_DISPATCH);
+        EXPECT_EQ(
+            ttnn::experimental::prepare_generic_op(
+                std::vector<Tensor>{device_input_tensor, device_output_tensor}, program_descriptor),
+            preparation);
+        auto uncachedPreparation = ttnn::experimental::prepare_generic_op(
+            std::vector<Tensor>{device_input_tensor, device_output_tensor}, uncachedProgramDescriptor);
+        EXPECT_GT(uncachedPreparation.max_program_config_size_bytes, 0);
+    }
+    EXPECT_EQ(this->device_->num_program_cache_entries(), cacheEntriesBeforeCapture);
 
     const std::size_t cache_entries_before_failure = this->device_->num_program_cache_entries();
     ProgramDescriptor oversized_program_descriptor = program_descriptor;

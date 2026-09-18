@@ -21,6 +21,7 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/distributed.hpp>
 #include "tests/tt_metal/tt_metal/api/allocator/hybrid_allocator_fixture.hpp"
+#include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include <tt-metalium/experimental/per_core_allocation/mesh_buffer.hpp>
 #include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
@@ -48,7 +49,54 @@ namespace per_core = experimental::per_core_allocation;
 // existing test ids do not move.
 using PerCoreAllocationTest = HybridAllocatorTest;
 
+class PerCoreAllocationMesh1x2Test : public MeshDevice1x2Fixture {
+protected:
+    void SetUp() override {
+        setenv("TT_METAL_ALLOCATOR_MODE_HYBRID", "1", /*overwrite=*/1);
+        MeshDevice1x2Fixture::SetUp();
+    }
+
+    void TearDown() override {
+        MeshDevice1x2Fixture::TearDown();
+        unsetenv("TT_METAL_ALLOCATOR_MODE_HYBRID");
+    }
+};
+
 static constexpr DeviceAddr PAGE_SIZE = HYBRID_TEST_PAGE_SIZE;
+
+TEST_F(PerCoreAllocationMesh1x2Test, RetainedViewPreservesSingleDeviceOwnerCoordinates) {
+    constexpr DeviceAddr ownerPages = 2;
+    const distributed::MeshCoordinate ownerCoordinate(0, 0);
+    const distributed::MeshCoordinate absentCoordinate(0, 1);
+    const CoreRangeSet shardGrid(CoreCoord(0, 0));
+    auto sharding = BufferShardingArgs(
+        ShardSpecBuffer(shardGrid, {1, ownerPages}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, ownerPages}),
+        TensorMemoryLayout::WIDTH_SHARDED);
+    per_core::set_per_core_allocation(sharding, true);
+    const distributed::DeviceLocalBufferConfig ownerLocalConfig{
+        .page_size = PAGE_SIZE, .buffer_type = BufferType::L1, .sharding_args = sharding, .bottom_up = false};
+    auto owner = per_core::create_on_single_device(
+        distributed::ReplicatedBufferConfig{.size = ownerPages * PAGE_SIZE},
+        ownerLocalConfig,
+        mesh_device_.get(),
+        ownerCoordinate);
+
+    auto viewSharding = BufferShardingArgs(
+        ShardSpecBuffer(shardGrid, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1}),
+        TensorMemoryLayout::WIDTH_SHARDED);
+    per_core::set_per_core_allocation(viewSharding, true);
+    const distributed::DeviceLocalBufferConfig viewLocalConfig{
+        .page_size = PAGE_SIZE, .buffer_type = BufferType::L1, .sharding_args = viewSharding, .bottom_up = false};
+
+    auto view = experimental::retained_buffer_view::create(
+        owner,
+        distributed::ReplicatedBufferConfig{.size = PAGE_SIZE},
+        viewLocalConfig,
+        /*shard_offset=*/PAGE_SIZE);
+
+    EXPECT_NO_THROW(view->get_device_buffer(ownerCoordinate));
+    EXPECT_THROW(view->get_device_buffer(absentCoordinate), std::exception);
+}
 
 TEST_F(PerCoreAllocationTest, BasicPerCoreAllocation) {
     auto* device = this->devices_[0]->get_devices()[0];

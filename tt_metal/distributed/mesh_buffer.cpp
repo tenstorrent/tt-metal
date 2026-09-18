@@ -303,6 +303,30 @@ std::shared_ptr<MeshBuffer> MeshBuffer::create(
     return mesh_buffer;
 }
 
+struct MeshBuffer::RetainedViewState::Impl {
+    Impl(std::shared_ptr<MeshBuffer> owner, DeviceAddr shard_offset) :
+        owner(std::move(owner)), shard_offset(shard_offset) {}
+
+    std::shared_ptr<MeshBuffer> owner;
+    DeviceAddr shard_offset;
+};
+
+MeshBuffer::MeshBuffer(
+    const MeshBufferConfig& config,
+    const DeviceLocalBufferConfig& device_local_config,
+    DeviceAddr address,
+    DeviceAddr device_local_size,
+    MeshDevice* mesh_device,
+    std::shared_ptr<MeshBuffer> owner,
+    DeviceAddr shard_offset) :
+    config_(config),
+    device_local_config_(device_local_config),
+    mesh_device_(mesh_device->shared_from_this()),
+    address_(address),
+    device_local_size_(device_local_size),
+    buffers_(MeshShape(mesh_device->shape())),
+    state_(RetainedViewState{std::make_shared<RetainedViewState::Impl>(std::move(owner), shard_offset)}) {}
+
 std::shared_ptr<MeshBuffer> MeshBuffer::create_retained_sharded_view(
     std::shared_ptr<MeshBuffer> owner,
     const MeshBufferConfig& mesh_buffer_config,
@@ -374,7 +398,8 @@ std::shared_ptr<MeshBuffer> MeshBuffer::create_retained_sharded_view(
 void MeshBuffer::initialize_device_buffers() {
     auto init_device_buffer_at_address = [this](const MeshCoordinate& coord) {
         const auto* retained_view = std::get_if<RetainedViewState>(&state_);
-        Buffer* owner_buffer = retained_view == nullptr ? nullptr : retained_view->owner->get_device_buffer(coord);
+        Buffer* owner_buffer =
+            retained_view == nullptr ? nullptr : retained_view->impl->owner->get_device_buffer(coord);
 
         std::shared_ptr<Buffer> buffer;
         if (retained_view != nullptr &&
@@ -384,11 +409,11 @@ void MeshBuffer::initialize_device_buffers() {
             for (const CoreCoord& core : corerange_to_cores(view_shard_spec.grid())) {
                 const DeviceAddr owner_address = per_core_allocation::get_per_core_address(*owner_buffer, core);
                 TT_FATAL(
-                    retained_view->shard_offset <= std::numeric_limits<uint32_t>::max() - owner_address,
+                    retained_view->impl->shard_offset <= std::numeric_limits<uint32_t>::max() - owner_address,
                     "Sharded MeshBuffer view address exceeds the device address range on core ({}, {})",
                     core.x,
                     core.y);
-                view_addresses.emplace(core, owner_address + retained_view->shard_offset);
+                view_addresses.emplace(core, owner_address + retained_view->impl->shard_offset);
             }
             buffer = BufferImpl::create(
                 device()->impl().get_device(coord),
@@ -401,7 +426,7 @@ void MeshBuffer::initialize_device_buffers() {
                 device_local_config_.sub_device_id);
         } else {
             const DeviceAddr address =
-                retained_view == nullptr ? address_ : owner_buffer->address() + retained_view->shard_offset;
+                retained_view == nullptr ? address_ : owner_buffer->address() + retained_view->impl->shard_offset;
             buffer = BufferImpl::create(
                 device()->impl().get_device(coord),
                 address,
@@ -425,11 +450,11 @@ void MeshBuffer::initialize_device_buffers() {
                 buffer->address(),
                 buffer->alignment());
             TT_FATAL(
-                retained_view->shard_offset <= owner_extent &&
-                    view_extent <= owner_extent - retained_view->shard_offset,
+                retained_view->impl->shard_offset <= owner_extent &&
+                    view_extent <= owner_extent - retained_view->impl->shard_offset,
                 "Sharded MeshBuffer view interval [{}, {}) exceeds the owner shard size {}",
-                retained_view->shard_offset,
-                retained_view->shard_offset + view_extent,
+                retained_view->impl->shard_offset,
+                retained_view->impl->shard_offset + view_extent,
                 owner_extent);
         }
 
@@ -446,7 +471,10 @@ void MeshBuffer::initialize_device_buffers() {
 
     for (auto& [coord, device_buffer] : buffers_) {
         if (auto mesh_device = mesh_device_.lock(); mesh_device != nullptr) {
-            if (mesh_device->impl().is_local(coord)) {
+            const auto* retained_view = std::get_if<RetainedViewState>(&state_);
+            const bool owner_has_local_buffer =
+                retained_view == nullptr || retained_view->impl->owner->buffers_.at(coord).is_local();
+            if (mesh_device->impl().is_local(coord) && owner_has_local_buffer) {
                 device_buffer = MaybeRemote<std::shared_ptr<Buffer>>::local(init_device_buffer_at_address(coord));
             }
         }
@@ -477,7 +505,7 @@ bool MeshBuffer::is_allocated() const {
         return false;
     }
     if (const auto* retained_view = std::get_if<RetainedViewState>(&state_);
-        retained_view != nullptr && !retained_view->owner->is_allocated()) {
+        retained_view != nullptr && !retained_view->impl->owner->is_allocated()) {
         return false;
     }
     if (mesh_device_.lock() == nullptr) {
@@ -595,7 +623,7 @@ Buffer* MeshBuffer::get_backing_buffer() const {
         return owned_state->backing_buffer.get();
     }
     if (const auto* retained_view = std::get_if<RetainedViewState>(&state_)) {
-        return retained_view->owner->get_backing_buffer();
+        return retained_view->impl->owner->get_backing_buffer();
     }
     return nullptr;
 }

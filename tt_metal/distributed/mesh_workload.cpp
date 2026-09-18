@@ -514,7 +514,11 @@ ProgramCapacity prepare(distributed::MeshWorkload& workload, distributed::MeshDe
     const auto& config_sizes = workload.pimpl_->get_program_config_sizes();
     const uint32_t programmable_core_type_count =
         MetalContext::instance(extract_context_id(mesh_device)).hal().get_programmable_core_type_count();
-    TT_ASSERT(config_sizes.size() >= programmable_core_type_count);
+    TT_FATAL(
+        config_sizes.size() >= programmable_core_type_count,
+        "Prepared workload reported configuration sizes for {} programmable core types; expected at least {}",
+        config_sizes.size(),
+        programmable_core_type_count);
     for (uint32_t core_type_index = 0; core_type_index < programmable_core_type_count; ++core_type_index) {
         result.max_program_config_size_bytes =
             std::max(result.max_program_config_size_bytes, config_sizes[core_type_index]);

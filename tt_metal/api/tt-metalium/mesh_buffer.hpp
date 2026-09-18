@@ -191,14 +191,7 @@ private:
         DeviceAddr device_local_size,
         MeshDevice* mesh_device,
         std::shared_ptr<MeshBuffer> owner,
-        DeviceAddr shard_offset) :
-        config_(config),
-        device_local_config_(device_local_config),
-        mesh_device_(mesh_device->shared_from_this()),
-        address_(address),
-        device_local_size_(device_local_size),
-        buffers_(MeshShape(mesh_device->shape())),
-        state_(RetainedViewState{std::move(owner), shard_offset}) {}
+        DeviceAddr shard_offset);
 
     static std::shared_ptr<MeshBuffer> create_retained_sharded_view(
         std::shared_ptr<MeshBuffer> owner,
@@ -215,19 +208,25 @@ private:
 
     DistributedMeshContainer<std::shared_ptr<Buffer>> buffers_;
 
-    // Retained views keep their source allocation live but never deallocate it directly.
     struct OwnedBufferState {
         std::shared_ptr<Buffer> backing_buffer;
     };
-    struct RetainedViewState {
-        std::shared_ptr<MeshBuffer> owner;
-        DeviceAddr shard_offset;
-    };
-    struct PerCoreOwnedState {};
     struct ExternallyOwnedState {};
     struct DeallocatedState {};
+    struct RetainedViewState {
+        struct Impl;
+        std::shared_ptr<Impl> impl;
+    };
+    struct PerCoreOwnedState {};
+    using LegacyMeshBufferState = std::variant<OwnedBufferState, ExternallyOwnedState, DeallocatedState>;
     using MeshBufferState =
-        std::variant<OwnedBufferState, PerCoreOwnedState, RetainedViewState, ExternallyOwnedState, DeallocatedState>;
+        std::variant<OwnedBufferState, ExternallyOwnedState, DeallocatedState, PerCoreOwnedState, RetainedViewState>;
+    static_assert(
+        sizeof(MeshBufferState) == sizeof(LegacyMeshBufferState),
+        "Experimental MeshBuffer states must preserve the stable object size");
+    static_assert(
+        alignof(MeshBufferState) == alignof(LegacyMeshBufferState),
+        "Experimental MeshBuffer states must preserve the stable object alignment");
     MeshBufferState state_;
 
     friend std::shared_ptr<MeshBuffer> tt::tt_metal::experimental::per_core_allocation::create_on_single_device(
