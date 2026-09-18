@@ -11,7 +11,6 @@ target_link_libraries(
     PUBLIC
         common
     PRIVATE
-        TT::Metalium::Private
         TT::Metalium::Common
         Metalium::Metal::Impl
         Metalium::Metal::LLRT

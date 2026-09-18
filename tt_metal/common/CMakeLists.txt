@@ -15,6 +15,11 @@ target_include_directories(
         ${PROJECT_SOURCE_DIR}
         ${PROJECT_SOURCE_DIR}/tt_metal
         ${CMAKE_CURRENT_SOURCE_DIR}
+        # Metalium's internal headers spell the public API unscoped, e.g.
+        # impl/kernels/kernel.hpp includes "hal_types.hpp" rather than
+        # <tt-metalium/hal_types.hpp>, so every internal consumer needs this root.
+        # FIXME: Re-home those includes under tt-metalium/ and remove this.
+        ${PROJECT_SOURCE_DIR}/tt_metal/api/tt-metalium
 )
 
 target_link_libraries(
@@ -28,7 +33,6 @@ target_link_libraries(
         simde::simde
         Taskflow::Taskflow
     PRIVATE
-        TT::Metalium::Private
         BLAKE3::blake3
         Metalium::Metal::Hardware
         Tracy::TracyClient

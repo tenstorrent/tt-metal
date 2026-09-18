@@ -322,7 +322,9 @@ include(helper_functions)
 add_subdirectory(tt_stl)
 
 # Shared internal build requirements of Metalium; see the file for usage.
-# Defined here so that everything below can link TT::Metalium::Private.
+# Defined here so that everything below can link TT::Metalium::Private.  The
+# components it aggregates are added further down; CMake resolves the names at
+# generate time, so the ordering is fine.
 include(metalium_private)
 
 add_subdirectory(tools)

@@ -58,12 +58,19 @@ directories and drops the metadata attached to them — most visibly the `SYSTEM
 third-party headers such as SIMDe, which then produce third-party warnings and clang-tidy
 diagnostics in our own translation units.
 
-When internal headers acquire a new requirement, add it to `cmake/metalium_private.cmake` — as the
-dependency's own target (`simde::simde`, `Taskflow::Taskflow`, ...) rather than as a directory, so
-its usage requirements come along. This target is build-tree only: it is never installed or
-exported, and adding to it must not make a private dependency part of Metalium's public interface.
-The explicit `${PROJECT_SOURCE_DIR}` header roots it declares are the one sanctioned exception to
-the "no hardcoded paths" rule above; ordinary consumers of `TT::Metalium` must not need them.
+`TT::Metalium::Private` is an *aggregate*: it declares no paths of its own and only links the
+targets that own the requirements (`TT::Metalium::Common`, `Metalium::Metal::Impl`,
+`Metalium::Metal::LLRT`, ...). When an internal header acquires a new requirement, declare it on the
+component that owns the header, at `PUBLIC` scope so it propagates; only add a target to the
+aggregate when no internal component owns it. Never restate a requirement there as a directory.
+
+Because those components are in the aggregate's dependency graph, none of them may link back to it
+— that would be a cycle. They keep their existing component dependencies instead. Reaching an
+`OBJECT` library through this interface propagates its usage requirements without its object files,
+so linking the aggregate does not inject implementation objects into a test.
+
+The target is build-tree only: it is never installed or exported, and adding to it must not make a
+private dependency part of Metalium's public interface.
 
 ## Source List vs. Build Infrastructure
 
