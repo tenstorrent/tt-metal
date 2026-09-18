@@ -16,6 +16,7 @@ another device-SRAM consumer is still set.
 """
 
 import os
+import time
 
 import pytest
 import torch
@@ -164,6 +165,9 @@ def test_tracy_visual_stitch_wave(mesh_device):
     config = MiniMaxH3VaeConfig.from_pretrained(weights_dir)
     torch.manual_seed(3)
 
+    # MINIMAX_H3_VAE_STITCH picks the exchange, as the timing test does, so the same capture covers
+    # "gather" and "strips".
+    stitch_exchange = os.environ.get("MINIMAX_H3_VAE_STITCH", "gather")
     ccl_manager = CCLManager(mesh_device, num_links=2, topology=ttnn.Topology.Ring)
     vae = MiniMaxH3Vae(
         config,
@@ -171,6 +175,7 @@ def test_tracy_visual_stitch_wave(mesh_device):
         mesh_device=mesh_device,
         ccl_manager=ccl_manager,
         device_stitch=True,
+        stitch_exchange=stitch_exchange,
         pixel_denorm=(MINIMAX_H3_PIXEL_MEAN, MINIMAX_H3_PIXEL_STD),
     )
 
@@ -204,10 +209,23 @@ def test_tracy_visual_stitch_wave(mesh_device):
     vae._profile = vae._empty_profile()
     vae._decode_clips_device_stitched([chunk], "yuv420")
     ttnn.synchronize_device(mesh_device)
+    # A warm wall-clock number alongside the capture: the profiler inflates device time, and this
+    # is the per-wave cost the pipeline's stitch and readback buckets see.
+    warm = []
+    for _ in range(3):
+        vae._profile = vae._empty_profile()
+        mark = time.perf_counter()
+        vae._decode_clips_device_stitched([chunk], "yuv420")
+        ttnn.synchronize_device(mesh_device)
+        warm.append(time.perf_counter() - mark)
+    logger.info(
+        f"tracy: stitch_exchange={stitch_exchange}, warm wall per chunk (3 repeats, ms): "
+        f"{' '.join(f'{v * 1000:.1f}' for v in warm)}"
+    )
 
     logger.info(
         f"tracy: device stitch, one chunk of {num_frames}x{latent_h}x{latent_w} latents "
-        f"-> {seq_len}x{row_width} tokens/device, decoder stubbed"
+        f"-> {seq_len}x{row_width} tokens/device, decoder stubbed, stitch_exchange={stitch_exchange}"
     )
     vae._profile = vae._empty_profile()
     signpost("start")
