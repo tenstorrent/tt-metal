@@ -1,0 +1,110 @@
+name: "Publish tt-train metrics"
+description: >-
+  Publish the metrics a tt-train leg produced with run_models.py.
+
+inputs:
+  repo-root:
+    description: >-
+      Root of the tt-metal checkout, and the working directory the SFTP upload runs from.
+      Metrics are read from <repo-root>/generated/tt-train-metrics, which is where
+      run_models.py writes by default and the path tt_train_model_metrics.txt puts relative
+      to that working directory. A leg whose --output-dir points elsewhere (the multihost
+      legs write to NFS) must copy them there before calling this action.
+    required: true
+  copy-metrics-from:
+    description: >-
+      Directory to copy the metrics out of before publishing, for legs whose --output-dir
+      pointed outside the checkout. Leave empty when run_models.py already wrote into
+      <repo-root>/generated/tt-train-metrics; naming that directory here is an error.
+    required: false
+    default: ""
+  plot-artifact-name:
+    description: "Artifact name for the loss plot. Must be unique across matrix legs."
+    required: true
+  upload-to-sftp:
+    description: "Whether to upload the metrics JSON. Requires the sftp-* inputs."
+    required: false
+    default: "true"
+  sftp-ssh-private-key:
+    description: "SSH private key for the SFTP bucket."
+    required: false
+    default: ""
+  sftp-username:
+    description: "Username on the SFTP server."
+    required: false
+    default: ""
+  sftp-hostname:
+    description: "Hostname of the SFTP server."
+    required: false
+    default: ""
+
+runs:
+  using: "composite"
+  steps:
+    - name: Collect metrics
+      id: metrics
+      if: always()
+      shell: bash
+      env:
+        METRICS_DIR: ${{ inputs.repo-root }}/generated/tt-train-metrics
+        COPY_FROM: ${{ inputs.copy-metrics-from }}
+      run: |
+        if [ -n "$COPY_FROM" ] && [ -d "$COPY_FROM" ]; then
+          mkdir -p "$METRICS_DIR"
+          # -T merges into the destination rather than nesting another directory inside it.
+          cp -rT "$COPY_FROM" "$METRICS_DIR"
+        fi
+
+        has_json=false
+        has_plots=false
+
+        if compgen -G "$METRICS_DIR/*.json" > /dev/null; then
+          has_json=true
+        fi
+
+        if compgen -G "$METRICS_DIR/plots/*losses.png" > /dev/null; then
+          has_plots=true
+        fi
+
+        {
+          echo "dir=$METRICS_DIR"
+          echo "has-json=$has_json"
+          echo "has-plots=$has_plots"
+        } >> "$GITHUB_OUTPUT"
+
+    # archive: false gives a direct link to the PNG, and run_models.py prefixes
+    # each filename with the model + card so matrix legs cannot collide.
+    - name: Upload loss plot
+      id: upload-loss-plot
+      if: ${{ always() && steps.metrics.outputs.has-plots == 'true' }}
+      uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+      with:
+        name: ${{ inputs.plot-artifact-name }}
+        path: ${{ steps.metrics.outputs.dir }}/plots/*losses.png
+        if-no-files-found: warn
+        retention-days: 30
+        archive: false
+
+    - name: Add loss plot to summary
+      if: ${{ always() && steps.upload-loss-plot.outputs.artifact-url != '' }}
+      shell: bash
+      env:
+        METRICS_DIR: ${{ steps.metrics.outputs.dir }}
+        PLOT_ARTIFACT_URL: ${{ steps.upload-loss-plot.outputs.artifact-url }}
+      run: |
+        {
+          if compgen -G "$METRICS_DIR/plots/*losses.md" > /dev/null; then
+            cat "$METRICS_DIR"/plots/*losses.md
+          fi
+          echo "[Download full loss plot image]($PLOT_ARTIFACT_URL)"
+        } >> "$GITHUB_STEP_SUMMARY"
+
+    - name: Upload metrics data to AWS SFTP bucket
+      if: ${{ always() && inputs.upload-to-sftp == 'true' && steps.metrics.outputs.has-json == 'true' }}
+      uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@main
+      with:
+        ssh-private-key: ${{ inputs.sftp-ssh-private-key }}
+        sftp-batchfile: ${{ github.action_path }}/../upload-data-via-sftp/tt_train_model_metrics.txt
+        username: ${{ inputs.sftp-username }}
+        hostname: ${{ inputs.sftp-hostname }}
+        path: ${{ inputs.repo-root }}
