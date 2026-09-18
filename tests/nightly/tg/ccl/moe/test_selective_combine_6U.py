@@ -823,3 +823,102 @@ def test_deepseek_perf(
             scheme=scheme,
         )
         logger.info(f"Decode iter: {i} success")
+
+
+# Guard test for #56769. The op builds its fabric mux from raw L1 outside the allocator, so it refuses
+# to run on a device with no L1_SMALL region: GlobalSemaphores would fall back to BufferType::L1, land
+# inside the mux's map, and be silently overwritten -- a hang, not an error. The mux ceiling cannot
+# save them because at mux-build time the semaphores do not exist yet. This asserts the refusal is a
+# clean build-time fatal, which is the only reason the hang cannot come back silently.
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "l1_small_size": 0,
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+        }
+    ],
+    indirect=True,
+    ids=["l1_small_0"],
+)
+@pytest.mark.parametrize(
+    "mesh_device, mesh_shape",
+    [
+        pytest.param(
+            (1, 8),
+            (1, 8),
+            marks=pytest.mark.skipif(
+                not is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_1x8),
+                reason=f"1x8 mesh requires TT_MESH_GRAPH_DESC_PATH={MESH_GRAPH_DESC_1x8}",
+            ),
+            id="1x8",
+        ),
+        pytest.param(
+            (1, 16),
+            (1, 16),
+            marks=pytest.mark.skipif(
+                not is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_1x16),
+                reason=f"1x16 mesh requires TT_MESH_GRAPH_DESC_PATH={MESH_GRAPH_DESC_1x16}",
+            ),
+            id="1x16",
+        ),
+    ],
+    indirect=["mesh_device"],
+)
+@pytest.mark.parametrize("batch", [48])
+@pytest.mark.parametrize("select_experts_k", [1])
+@pytest.mark.parametrize("hidden_size", [7168])
+@pytest.mark.parametrize("seq", [1])
+@pytest.mark.parametrize("cluster_axis", [1])
+@pytest.mark.parametrize("experts_per_device", [2])
+@pytest.mark.parametrize("worker_core_range", [((0, 0), (3, 3))])
+@pytest.mark.parametrize("token_parallel_core_dim", [4])
+@pytest.mark.parametrize("data_parallel_core_dim", [4])
+@pytest.mark.parametrize("num_links", [4])
+@pytest.mark.parametrize("mux_core_range", [((4, 0), (5, 7))])
+def test_zero_l1_small_is_fatal(
+    expect_error,
+    mesh_device,
+    mesh_shape,
+    batch,
+    select_experts_k,
+    hidden_size,
+    seq,
+    cluster_axis,
+    experts_per_device,
+    worker_core_range,
+    token_parallel_core_dim,
+    data_parallel_core_dim,
+    num_links,
+    mux_core_range,
+):
+    experts = experts_per_device * mesh_shape[cluster_axis]
+    mesh_device.disable_and_clear_program_cache()
+
+    worker_cores = ttnn.CoreRangeSet([ttnn.CoreRange(*[ttnn.CoreCoord(c) for c in worker_core_range])])
+    mux_cores = ttnn.CoreRangeSet([ttnn.CoreRange(*[ttnn.CoreCoord(c) for c in mux_core_range])])
+
+    # expect_error is the house fixture for an intended failure: it logs EXPECTED_ERROR markers so CI log
+    # triaging does not file this deliberate device fatal as a real one (which is how #54864 was filed).
+    # The message argument is load-bearing -- an unrelated RuntimeError would otherwise let this test keep
+    # passing after the guard itself regressed.
+    with expect_error(RuntimeError, "l1_small_size = 0"):
+        _run_test(
+            batch,
+            experts,
+            select_experts_k,
+            hidden_size,
+            seq,
+            cluster_axis,
+            worker_cores,
+            data_parallel_core_dim,
+            token_parallel_core_dim,
+            num_links,
+            mux_cores,
+            mesh_device,
+            1,
+            False,
+            scheme="random",
+        )
