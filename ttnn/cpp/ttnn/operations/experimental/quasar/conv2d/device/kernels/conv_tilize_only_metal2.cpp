@@ -4,8 +4,7 @@
 
 // OPTION B — PROGRAM A (tilize-only) compute kernel for the Quasar conv2d split.
 //
-// The fused conv kernel (conv_bmm_tilize_metal2.cpp) and the Option-C single-kernel split
-// (conv_bmm_split_tilize_metal2.cpp) BOTH run the tilize AFTER a matmul-oriented
+// The fused conv kernel (conv_bmm_tilize_metal2.cpp) runs the tilize AFTER a matmul-oriented
 // compute_kernel_hw_startup<Reverse>(mm_in0, in1, out) + matmul_block_init(...). On Quasar the
 // matmul path leaves the MATH DEST data-valid bit set (the terminal MVMUL / the matmul-oriented
 // engine config), so the tilize's MOVA2D datacopy MOP is rejected at issue -> Risc IB interrupt

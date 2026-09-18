@@ -1371,35 +1371,76 @@ def test_sharded_concat_heads(
         buffer_type=ttnn.BufferType.L1,
     )
 
-    in0 = torch.randn(in0_shape).bfloat16().float()
-
-    in0_t = torch2tt_tensor(in0, device, tt_memory_config=interleaved_mem_config, tt_dtype=activations_dtype)
-
     output_mem_config = sharded_mem_config if out_sharded else interleaved_mem_config
 
-    if in0_sharded:
-        in0_t = ttnn.interleaved_to_sharded(
+    # Two iterations with freshly allocated input/output tensors: the second run is a program
+    # cache hit and must rebind the new L1 shards (regression for stale borrowed-buffer bindings).
+    for _ in range(2):
+        in0 = torch.randn(in0_shape).bfloat16().float()
+
+        in0_t = torch2tt_tensor(in0, device, tt_memory_config=interleaved_mem_config, tt_dtype=activations_dtype)
+
+        if in0_sharded:
+            in0_t = ttnn.interleaved_to_sharded(
+                in0_t,
+                grid_size,
+                [B * num_heads * seq_len // num_cores, head_dim],
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.ShardOrientation.COL_MAJOR,
+            )
+
+        output_t = ttnn.experimental.nlp_concat_heads(
             in0_t,
-            grid_size,
-            [B * num_heads * seq_len // num_cores, head_dim],
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-            ttnn.ShardOrientation.COL_MAJOR,
+            memory_config=output_mem_config,
         )
+        if out_sharded:
+            output_t = ttnn.sharded_to_interleaved(output_t, interleaved_mem_config)
 
-    output_t = ttnn.experimental.nlp_concat_heads(
-        in0_t,
-        memory_config=output_mem_config,
+        pt_out = torch.transpose(in0, -3, -2).reshape([B, 1, seq_len, num_heads * head_dim])
+
+        tt_out = tt2torch_tensor(output_t)
+
+        passing, output = comp_pcc(pt_out, tt_out)
+        logger.info(output)
+        assert passing
+
+
+@pytest.mark.parametrize("in0_shape, grid_size", [([1, 32, 32, 64], (1, 4))])
+def test_sharded_concat_heads_interleaved_output_rejected(
+    device,
+    in0_shape,
+    grid_size,
+    function_level_defaults,
+    expect_error,
+):
+    # Sharded input + interleaved output is rejected in validation: the sharded kernel writes
+    # directly into the output shard (legacy silently produced garbage in this combination).
+    compute_grid_size = device.compute_with_storage_grid_size()
+    if grid_size[0] > compute_grid_size.x or grid_size[1] > compute_grid_size.y:
+        pytest.skip(f"Need {grid_size} grid size to run this test but core grid is {compute_grid_size}")
+    num_cores = grid_size[0] * grid_size[1]
+    B, num_heads, seq_len, head_dim = in0_shape
+
+    interleaved_mem_config = ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.INTERLEAVED,
+        buffer_type=ttnn.BufferType.DRAM,
     )
-    if out_sharded:
-        output_t = ttnn.sharded_to_interleaved(output_t, interleaved_mem_config)
 
-    pt_out = torch.transpose(in0, -3, -2).reshape([B, 1, seq_len, num_heads * head_dim])
+    in0 = torch.randn(in0_shape).bfloat16().float()
+    in0_t = torch2tt_tensor(in0, device, tt_memory_config=interleaved_mem_config, tt_dtype=ttnn.bfloat8_b)
+    in0_t = ttnn.interleaved_to_sharded(
+        in0_t,
+        grid_size,
+        [B * num_heads * seq_len // num_cores, head_dim],
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.ShardOrientation.COL_MAJOR,
+    )
 
-    tt_out = tt2torch_tensor(output_t)
-
-    passing, output = comp_pcc(pt_out, tt_out)
-    logger.info(output)
-    assert passing
+    with expect_error(RuntimeError, "Sharded input requires a sharded output memory config"):
+        ttnn.experimental.nlp_concat_heads(
+            in0_t,
+            memory_config=interleaved_mem_config,
+        )
 
 
 def run_reshard_test(

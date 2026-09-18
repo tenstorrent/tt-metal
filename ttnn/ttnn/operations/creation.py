@@ -41,19 +41,29 @@ ttnn.attach_golden_function(ttnn.full_like, golden_function=_golden_function)
 ttnn.attach_golden_function(ttnn.empty_like, golden_function=None)
 
 
-def _golden_function(input_shape: ttnn.Shape, **_):
+def _golden_function(shape: ttnn.Shape, dtype=None, *_, **__):
     import torch
 
-    return torch.zeros(input_shape)
+    # TTNN accepts Shape directly, while Torch creation functions require a tuple of dimensions.
+    # Normalize it in this golden to keep shared comparison preprocessing unchanged.
+    if isinstance(shape, ttnn.Shape):
+        shape = tuple(shape)
+    torch_dtype = ttnn.ttnn_dtype_to_torch_dtype(dtype) if dtype is not None else torch.bfloat16
+    return torch.zeros(shape, dtype=torch_dtype)
 
 
 ttnn.attach_golden_function(ttnn.zeros, golden_function=_golden_function)
 
 
-def _golden_function(input_shape: ttnn.Shape, **_):
+def _golden_function(shape: ttnn.Shape, dtype=None, *_, **__):
     import torch
 
-    return torch.ones(input_shape)
+    # The TTNN API permits dtype, layout, device, and memory config as positional arguments.
+    # Torch only needs the requested dtype, so absorb the remaining allocation-only arguments.
+    if isinstance(shape, ttnn.Shape):
+        shape = tuple(shape)
+    torch_dtype = ttnn.ttnn_dtype_to_torch_dtype(dtype) if dtype is not None else torch.bfloat16
+    return torch.ones(shape, dtype=torch_dtype)
 
 
 ttnn.attach_golden_function(ttnn.ones, golden_function=_golden_function)

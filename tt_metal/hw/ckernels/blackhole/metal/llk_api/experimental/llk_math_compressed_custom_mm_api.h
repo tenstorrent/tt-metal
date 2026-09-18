@@ -5,6 +5,7 @@
 #pragma once
 #include "experimental/llk_math_compressed_custom_mm.h"
 #include "llk_math_common_api.h"
+#include "sanitizer/api.h"
 
 /*************************************************************************
  * LLK MATH CUSTOM_MM
@@ -23,6 +24,7 @@
 
 template <bool transpose = false, bool split_acc = false, bool dense_packing = false>
 inline void llk_math_compressed_custom_mm_init(const std::uint32_t operand0, const std::uint32_t operand1) {
+    SAN_HOOK(unsupported());
     // Swap operands, for matmul operand0 goes to SrcB and operand1 goes to SrcA
     const std::uint32_t operandB_id = get_operand_id(operand0);
     const std::uint32_t operandB_face_r_dim = get_operand_face_r_dim(operandB_id);
@@ -38,6 +40,7 @@ inline void llk_math_compressed_custom_mm(
     const std::uint32_t dst_index,
     const std::uint32_t kt_dim,
     const std::uint32_t ct_dim = 1) {
+    SAN_HOOK(unsupported());
     // Swap operands, for matmul operand0 goes to SrcB and operand1 goes to SrcA
     const std::uint32_t operandB_id = get_operand_id(operand0);
     const std::uint32_t operandB_face_r_dim = get_operand_face_r_dim(operandB_id);

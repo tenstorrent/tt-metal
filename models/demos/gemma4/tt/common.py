@@ -15,7 +15,12 @@ import os
 from loguru import logger
 
 import ttnn
-from models.common.weight_cache import build_cached_state_dict, mark_weight_cache_complete, weight_cache_is_complete
+from models.common.weight_cache import (
+    build_cached_state_dict,
+    checkpoint_name,
+    mark_weight_cache_complete,
+    weight_cache_is_complete,
+)
 from models.demos.gemma4.config import MeshConfig, ModeConfig
 from models.demos.gemma4.tt.assistant.model import Gemma4AssistantModel
 from models.demos.gemma4.tt.ccl import CCLManager
@@ -112,12 +117,30 @@ def create_tt_model(
     # variant, a marker seeded under the old overrides would certify a warm build whose files do
     # not exist -- and as_tensor would persist placeholders for them. (#45400 review, finding B2)
     _precision_for_variant = Gemma4Precision.load(model_path, _worker_mesh)
+    # The variant must also pin every knob that decides WHICH tensorbin FILENAMES a build needs, not
+    # only their dtype: a warm marker seeded before a filename change certifies a build whose files
+    # do not exist yet, and as_tensor then persists the dataless placeholders under the new names
+    # (weight_cache.py "Build options that change an as_tensor cache FILENAME ... must match
+    # exactly"). #50648 renamed the fused gate/up, .ws attention and .ws down-proj files without
+    # touching this identity and poisoned the Gemma-4-E4B caches on bh_p300 / bh_quietbox_2
+    # (#54831: 2085 of 2131 keys served as torch.empty and written to disk). Bump the layout tag
+    # whenever a cache filename scheme changes.
+    _cache_layout = {
+        "layout": "v2-fused-gate-up-ws",
+        "attn_dram_shard": os.environ.get("GEMMA4_ATTN_DRAM_SHARD", "1"),
+        "mlp_dram_shard": os.environ.get("GEMMA4_MLP_DRAM_SHARD", "1"),
+        "dram_cores": os.environ.get("GEMMA4_DRAM_CORES", "8"),
+    }
     cache_identity = dict(
-        model_name=os.path.basename(str(model_path).rstrip("/")) or "gemma4",
+        # vLLM hands over the resolved hub snapshot dir, not the HF id: keyed on the plain
+        # basename the marker seeded by the e2e demo never matched and every server start
+        # cold-loaded the full HF checkpoint (31B on QB2: ~12 of the 20 budgeted minutes).
+        model_name=checkpoint_name(model_path) or "gemma4",
         n_layers=model_args.num_hidden_layers,
         mesh_shape=_worker_mesh,
         build_variant={
             "precision": {k: str(v) for k, v in sorted(_precision_for_variant._overrides.items())},
+            "cache_layout": _cache_layout,
         },
     )
     loaded_real_weights = False

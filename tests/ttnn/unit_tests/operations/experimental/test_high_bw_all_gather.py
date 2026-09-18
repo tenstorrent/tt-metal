@@ -8,6 +8,7 @@ import gc
 import math
 import os
 import statistics
+import time
 from pathlib import Path
 
 import pytest
@@ -83,6 +84,12 @@ _FABRIC_2D_TORUS_XY_DEVICE_PARAMS = pytest.param(
     _device_params(ttnn.FabricConfig.FABRIC_2D_TORUS_XY),
     id="fabric_2d_torus_xy",
 )
+
+# Both fabrics must gather identically so accuracy covers both; perf stays torus-only, the path costs N-1 hops vs N/2.
+_FULL_MESH_DEVICE_PARAMS = [
+    _FABRIC_2D_TORUS_XY_DEVICE_PARAMS,
+    _FABRIC_2D_LINE_DEVICE_PARAMS,
+]
 
 _SELECTED_BATCH_PREFIX_DEVICE_PARAMS = [
     _FABRIC_2D_LINE_DEVICE_PARAMS,
@@ -209,6 +216,26 @@ def _rank_line_mesh(mesh_device):
     )
 
 
+def _disjoint_foreign_rank_line_mesh(mesh_device):
+    """Return a same-size sibling line for wrong-mesh validation when available.
+
+    Global-semaphore initialization uses its mesh command queue.  Using the
+    parent mesh as the foreign owner after dispatching on a child line leaves
+    both parent and child CQs active on the same physical devices, which the
+    mesh teardown contract correctly rejects.  A disjoint sibling exercises
+    the same object-identity validation without sharing a physical CQ.
+    """
+
+    mesh_shape = tuple(mesh_device.shape)
+    if mesh_shape == (2, 4):
+        return mesh_device.create_submesh(ttnn.MeshShape(1, 4), ttnn.MeshCoordinate(1, 0))
+    if mesh_shape[0] >= 8 and mesh_shape[1] >= 2:
+        return mesh_device.create_submesh(ttnn.MeshShape(8, 1), ttnn.MeshCoordinate(0, 1))
+    if mesh_shape[1] >= 8 and mesh_shape[0] >= 2:
+        return mesh_device.create_submesh(ttnn.MeshShape(1, 8), ttnn.MeshCoordinate(1, 0))
+    return None
+
+
 def _make_tensor(mesh_device, host_tensor, dtype, layout, mesh_mapper):
     tensor = ttnn.from_torch(
         host_tensor,
@@ -225,14 +252,23 @@ def _fp8_payloads(tensor, mesh_device):
     assert tensor.dtype == ttnn.fp8_e4m3
     device_tensors = ttnn.get_device_tensors(tensor)
     local_shape = tuple(device_tensors[0].shape)
-    host_bytes = (
-        ttnn.to_torch(tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0)).contiguous().view(torch.uint8)
+    # Some supported Torch builds still reject DLPack FP8 code 10. Decode on-device first; every finite
+    # E4M3 value used by this test maps exactly to float32, so equality still detects any payload change.
+    decoded = ttnn.typecast(tensor, ttnn.float32)
+    host_values = ttnn.to_torch(
+        decoded,
+        mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0),
     )
-    return host_bytes.reshape(len(device_tensors), *local_shape)
+    return host_values.reshape(len(device_tensors), *local_shape)
 
 
 def _profile_high_bw_all_gather(mesh_device, run):
-    _, records = profile_realtime_program(mesh_device, run, collect_all=True, record_timeout_seconds=5.0)
+    _, records = profile_realtime_program(
+        mesh_device,
+        run,
+        collect_all=True,
+        record_timeout_seconds=5.0,
+    )
     programs = {}
     for record in records:
         sources = [source.replace("\\", "/") for source in record["kernel_sources"]]
@@ -254,16 +290,24 @@ def _to_torch_with_device_padding(tensor):
     return torch.nn.functional.pad(host_tensor, padding)
 
 
-def _assert_exact_all_gather(device_input, persistent_output, mesh_device, dtype):
-    """The collective performs no arithmetic, so compare the gathered device values exactly."""
+def _assert_exact_all_gather(device_input, persistent_output, mesh_device, dtype, batch_index=None):
+    """The collective performs no arithmetic, so compare the gathered device values exactly.
+
+    `batch_index` selects one cache slot of a multi-slot input: the gather reads only that slot, so the
+    reference has to be sliced to it before the ranks are concatenated.
+    """
+
+    def _slot(tensor):
+        return tensor if batch_index is None else tensor[batch_index : batch_index + 1]
+
     if dtype == ttnn.fp8_e4m3:
-        expected = torch.cat(list(_fp8_payloads(device_input, mesh_device)), dim=2)
+        expected = torch.cat([_slot(payload) for payload in _fp8_payloads(device_input, mesh_device)], dim=2)
         actual_outputs = _fp8_payloads(persistent_output, mesh_device)
     else:
         # Compare the device representation so quantized types and padding inserted
         # independently into each local tile shard are both represented exactly.
         expected = torch.cat(
-            [_to_torch_with_device_padding(tensor) for tensor in ttnn.get_device_tensors(device_input)],
+            [_slot(_to_torch_with_device_padding(tensor)) for tensor in ttnn.get_device_tensors(device_input)],
             dim=2,
         )
         actual_outputs = [ttnn.to_torch(tensor) for tensor in ttnn.get_device_tensors(persistent_output)]
@@ -302,6 +346,80 @@ def _assert_exact_replicated_output(host_input, persistent_output, mesh_device, 
         assert torch.equal(actual, expected)
 
 
+# Traced vs untraced axis for the correctness tests. A ttnn trace REPLAY never re-runs the host
+# runtime-arg patch that the scalar `input_batch_index` / `gathered_dim_size` depend on, so the two arms
+# are not the same computation: the untraced arm exercises the host scalars, and the traced arm has to
+# hand the same values over as metadata TENSORS that the reader re-reads on-device.
+_AG_TRACED_AXIS = pytest.mark.parametrize("ag_traced", [False, True], ids=["notrace", "traced"])
+
+
+def _ag_capture_replay(mesh_device, issue):
+    """Capture ONE high_bw_all_gather invocation and replay it once.
+
+    `issue` is called twice: once before the capture, because a capture cannot compile programs (it
+    records already-built ones), and once inside it. Callers that need several dispatches capture once
+    here and then call ttnn.execute_trace per dispatch themselves.
+    """
+    issue()
+    ttnn.synchronize_device(mesh_device)
+    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    issue()
+    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+    ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=True)
+    ttnn.synchronize_device(mesh_device)
+    ttnn.release_trace(mesh_device, trace_id)
+
+
+def _meta_scalar(mesh_device, value):
+    """1-element uint32 replicated DRAM tensor, the shape every metadata argument takes."""
+    return ttnn.from_torch(
+        torch.tensor([[[[value]]]], dtype=torch.int32),
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        device=mesh_device,
+    )
+
+
+def _write_meta_scalar(device_tensor, value):
+    """Overwrite a 1-element metadata tensor IN PLACE, so a replay re-reads the new value from the
+    address the capture baked in. Reallocating the tensor instead would leave the trace reading the old
+    buffer -- which is exactly the failure the metadata path exists to prevent."""
+    ttnn.copy_host_to_device_tensor(
+        ttnn.from_torch(
+            torch.tensor([[[[value]]]], dtype=torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT
+        ),
+        device_tensor,
+    )
+
+
+# The metadata slot argument holds a USER id that the reader recomposes as
+# user * batch_slot_num_layers + batch_slot_layer_idx. Exercise the recomposition rather than the
+# identity by splitting any requested flat slot across a non-trivial (num_layers, layer_idx) pair.
+_META_NUM_LAYERS = 2
+# The flat slot the metadata CI matrix selects. 2 splits as user 1, layer 0, so the recomposition
+# actually multiplies (a flat slot below _META_NUM_LAYERS would leave user 0 and test only the addition)
+# while keeping the input's slot capacity -- and therefore its DRAM footprint at 512K rows -- small.
+_META_PERF_FLAT_SLOT = 2
+
+
+def _meta_slot_terms(flat_slot):
+    """Split a flat cache slot into the (user_id, num_layers, layer_idx) the metadata form takes."""
+    return flat_slot // _META_NUM_LAYERS, _META_NUM_LAYERS, flat_slot % _META_NUM_LAYERS
+
+
+def _meta_cache_slots(flat_slot):
+    """Slot capacity a metadata run must allocate for `flat_slot`.
+
+    The op reads the cache batch as user-major (batch == num_users * num_layers) and TT_FATALs unless
+    batch_slot_num_layers divides it, so the input has to COMPLETE the user holding this slot -- stopping
+    one past the slot itself (flat_slot + 1) leaves a partial user and fails validation. At the default
+    (flat slot 2, 2 layers) that is 4 slots: 2 users x 2 layers, one slot more than the scalar arm."""
+    user_id, num_layers, _ = _meta_slot_terms(flat_slot)
+    return (user_id + 1) * num_layers
+
+
 def _run_high_bw_all_gather_accuracy(
     mesh_device,
     dtype,
@@ -311,11 +429,32 @@ def _run_high_bw_all_gather_accuracy(
     cluster_axis,
     rows_per_device,
     num_links=_NUM_LINKS,
+    ag_traced=False,
+    metadata_batch_index=None,
+    *,
+    external_semaphores=False,
 ):
+    """Exact-output check for one configuration.
+
+    `metadata_batch_index` selects the METADATA invocation: the input carries that many cache slots and
+    the gather takes its slot from a 1-element device tensor (recomposed on-device from a user id) and its
+    extent from a chunk-start tensor, under a captured trace. Without it the call carries no slot or
+    extent argument at all, so it validates the plain gather -- which is why pairing a metadata-driven
+    measurement with the default arm would check a different invocation than the one measured.
+    """
     collective_size = mesh_device.get_num_devices() if cluster_axis is None else mesh_device.shape[cluster_axis]
-    global_shape = (1, 1, rows_per_device * collective_size, width)
-    torch.manual_seed(0)
-    host_input = torch.rand(global_shape, dtype=torch.bfloat16)
+    # The metadata slot argument indexes dim 0, so that arm needs a multi-slot input. The full-mesh
+    # (cluster_axis=None) shard mapper below has no slot dim to spare, hence the pairing guard.
+    assert (
+        metadata_batch_index is None or cluster_axis is not None
+    ), "metadata slot selection needs an axis-sharded input; the full-mesh mapper shards dim 2 only"
+    cache_slots = 1 if metadata_batch_index is None else _meta_cache_slots(metadata_batch_index)
+    global_shape = (cache_slots, 1, rows_per_device * collective_size, width)
+    if dtype == ttnn.uint32:
+        host_input = torch.arange(math.prod(global_shape), dtype=torch.int32).reshape(global_shape)
+    else:
+        torch.manual_seed(0)
+        host_input = torch.rand(global_shape, dtype=torch.bfloat16)
     mesh_mapper = (
         ttnn.ShardTensorToMesh(mesh_device, dim=2)
         if cluster_axis is None
@@ -332,6 +471,7 @@ def _run_high_bw_all_gather_accuracy(
     )
     local_padded_shape = ttnn.get_device_tensors(device_input)[0].padded_shape
     output_shape = list(local_padded_shape)
+    output_shape[0] = 1  # the gather reads ONE slot, whatever the input's slot capacity
     output_shape[2] *= collective_size
     persistent_output = _make_tensor(
         mesh_device,
@@ -342,16 +482,90 @@ def _run_high_bw_all_gather_accuracy(
     )
     assert ttnn.get_device_tensors(device_input)[0].buffer_aligned_page_size() == expected_page_size
 
-    ttnn.experimental.high_bw_all_gather(
-        device_input,
-        dim=2,
-        output_tensor=persistent_output,
-        cluster_axis=cluster_axis,
-        num_links=num_links,
-    )
-    ttnn.synchronize_device(mesh_device)
+    external_kwargs = {}
+    if external_semaphores:
+        grid = mesh_device.compute_with_storage_grid_size()
+        full_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))])
+        semaphore_pair = _make_l1_small_semaphore_pair(mesh_device, full_grid)
+        ttnn.synchronize_device(mesh_device)
+        external_kwargs.update(ready_semaphore=semaphore_pair[0], data_valid_semaphore=semaphore_pair[1])
 
-    _assert_exact_all_gather(device_input, persistent_output, mesh_device, dtype)
+    if metadata_batch_index is not None:
+        user_id, num_layers, layer_idx = _meta_slot_terms(metadata_batch_index)
+        slot_meta = _meta_scalar(mesh_device, user_id)
+        prefix_meta = _meta_scalar(mesh_device, 0)
+
+        def _issue():
+            ttnn.experimental.high_bw_all_gather(
+                device_input,
+                dim=2,
+                output_tensor=persistent_output,
+                cluster_axis=cluster_axis,
+                num_links=num_links,
+                **external_kwargs,
+                input_batch_index_tensor=slot_meta,
+                batch_slot_num_layers=num_layers,
+                batch_slot_layer_idx=layer_idx,
+                gathered_prefix_tensor=prefix_meta,
+                # One slab spanning the whole padded extent, chunk start 0: the reader derives
+                # min(round_up(start + slab, slab), full) = full, so the compare below can be the
+                # whole-output one rather than a prefix.
+                gathered_slab_global=output_shape[2],
+            )
+
+        # The metadata form only exists to survive a replay, so always measure it through one.
+        _ag_capture_replay(mesh_device, _issue)
+    else:
+
+        def _issue():
+            ttnn.experimental.high_bw_all_gather(
+                device_input,
+                dim=2,
+                output_tensor=persistent_output,
+                cluster_axis=cluster_axis,
+                num_links=num_links,
+                **external_kwargs,
+            )
+
+        # This call carries no per-chunk scalars, so the traced arm proves the op CAPTURES and REPLAYS at
+        # all (no host readback inside it, stable output address) and still moves byte-identical data.
+        if ag_traced:
+            _ag_capture_replay(mesh_device, _issue)
+        else:
+            _issue()
+            ttnn.synchronize_device(mesh_device)
+
+    # main's split: a partial collective replicates rather than concatenating, so it needs the
+    # replicated-output compare. Keep the metadata slot index on the full-mesh branch.
+    if collective_size == mesh_device.get_num_devices():
+        _assert_exact_all_gather(device_input, persistent_output, mesh_device, dtype, batch_index=metadata_batch_index)
+    else:
+        _assert_exact_replicated_output(host_input, persistent_output, mesh_device, dtype, layout)
+
+
+@run_for_blackhole("high_bw_all_gather external semaphores require Blackhole fabric")
+@pytest.mark.parametrize("device_params", _SELECTED_BATCH_PREFIX_DEVICE_PARAMS, indirect=True)
+@pytest.mark.parametrize("case_name,dtype,width,layout,expected_page_size", _TEST_CASES)
+def test_high_bw_all_gather_external_semaphore_equivalence_matrix(
+    mesh_device,
+    case_name,
+    dtype,
+    width,
+    layout,
+    expected_page_size,
+):
+    """Caller-owned resources preserve every qualified row/tile payload on line and ring schedules."""
+    rank_line, cluster_axis = _rank_line_mesh(mesh_device)
+    _run_high_bw_all_gather_accuracy(
+        rank_line,
+        dtype,
+        width,
+        layout,
+        expected_page_size,
+        cluster_axis,
+        rows_per_device=64,
+        external_semaphores=True,
+    )
 
 
 @run_for_blackhole("high_bw_all_gather requires Blackhole fabric")
@@ -361,7 +575,8 @@ def _run_high_bw_all_gather_accuracy(
     indirect=True,
 )
 @pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
-def test_high_bw_all_gather_single_page_bank_owned_packet(mesh_device):
+@_AG_TRACED_AXIS
+def test_high_bw_all_gather_single_page_bank_owned_packet(mesh_device, ag_traced):
     """A bank-owned GLM q-latent page must use the single-page writer when only one page fits a packet."""
     assert ttnn.get_tt_fabric_max_payload_size_bytes() == 6144
     rank_line, cluster_axis = _rank_line_mesh(mesh_device)
@@ -373,6 +588,43 @@ def test_high_bw_all_gather_single_page_bank_owned_packet(mesh_device):
         expected_page_size=4096,
         cluster_axis=cluster_axis,
         rows_per_device=640,
+        ag_traced=ag_traced,
+    )
+
+
+@run_for_blackhole("high_bw_all_gather requires Blackhole fabric")
+@pytest.mark.parametrize(
+    "device_params,mesh_device",
+    [
+        pytest.param(
+            _device_params(ttnn.FabricConfig.FABRIC_2D, 6144),
+            (2, 4),
+            id="loudbox_fabric_2d_6k_payload",
+        ),
+        pytest.param(
+            {
+                **_device_params(ttnn.FabricConfig.FABRIC_2D_TORUS_X, 6144),
+                "require_exact_physical_num_devices": True,
+            },
+            (1, 4),
+            id="quietbox_torus_x_6k_payload",
+        ),
+    ],
+    indirect=["device_params", "mesh_device"],
+)
+def test_high_bw_all_gather_glm_topk_uint32_page_larger_than_fabric_payload(mesh_device):
+    """Reproduce GLM's TP-axis top-k gather when an 8 KiB RM page exceeds the 6 KiB fabric payload."""
+    assert tuple(mesh_device.shape) in ((1, 4), (2, 4))
+    assert ttnn.get_tt_fabric_max_payload_size_bytes() == 6144
+    _run_high_bw_all_gather_accuracy(
+        mesh_device,
+        dtype=ttnn.uint32,
+        width=2048,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        expected_page_size=8192,
+        cluster_axis=1,
+        rows_per_device=160,
+        num_links=2,
     )
 
 
@@ -558,7 +810,22 @@ def _run_high_bw_all_gather_perf(
     capacity_rows_per_device=None,
     input_batch_index=None,
     gathered_dim_size=None,
+    invocation="scalar",
 ):
+    """Measure one configuration's gather bandwidth, under either invocation form.
+
+    `invocation` selects HOW the slot and the active extent reach the op, not what is measured:
+
+    - "scalar"   — host runtime arguments (`input_batch_index` / `gathered_dim_size`), re-patched by the
+                   program-cache override on every dispatch.
+    - "metadata" — 1-element device tensors the reader re-reads on-device, measured through a CAPTURED
+                   ttnn trace. A replay never re-runs the host patch, so this is the only form that can
+                   be traced, and the only one this mode can measure.
+
+    Both arms share this allocation, the realtime-profiler measurement, the bandwidth formula and the
+    output check, so the two numbers are directly comparable against the same floor.
+    """
+    assert invocation in ("scalar", "metadata"), invocation
     if not ttnn.device.IsProgramRealtimeProfilerActive():
         pytest.skip("high_bw_all_gather bandwidth test requires the realtime device profiler")
 
@@ -570,11 +837,16 @@ def _run_high_bw_all_gather_perf(
     assert rows_per_device <= capacity_rows_per_device
     if input_batch_index is not None:
         assert input_batch_index >= 0
-        cache_slots = input_batch_index + 1
+        cache_slots = _meta_cache_slots(input_batch_index) if invocation == "metadata" else input_batch_index + 1
     else:
         cache_slots = 1
     if gathered_dim_size is not None:
         assert gathered_dim_size == rows_per_device * axis_size
+    # The metadata form has no way to express "no slot selected": its slot argument IS a tensor, so a
+    # traced measurement is always of the indexed-cache path.
+    assert (
+        invocation == "scalar" or input_batch_index is not None
+    ), "invocation='metadata' measures the indexed-cache path and needs an explicit input_batch_index"
 
     global_shape = (cache_slots, 1, capacity_rows_per_device * axis_size, width)
     torch.manual_seed(0)
@@ -611,34 +883,81 @@ def _run_high_bw_all_gather_perf(
     assert page_size == expected_page_size
     assert ttnn.get_tt_fabric_max_payload_size_bytes() == 14 * 1024
 
-    def run(batch_index=input_batch_index):
-        runtime_controls = {}
-        if batch_index is not None:
-            runtime_controls["input_batch_index"] = batch_index
-        if gathered_dim_size is not None:
-            runtime_controls["gathered_dim_size"] = gathered_dim_size
-        return ttnn.experimental.high_bw_all_gather(
-            device_input,
-            dim=2,
-            output_tensor=persistent_output,
-            cluster_axis=cluster_axis,
-            num_links=_NUM_LINKS,
-            **runtime_controls,
+    if invocation == "metadata":
+        # One slab spanning the PADDED extent, chunk start 0: the reader derives the extent as
+        # min(round_up(start + slab, slab), full), so this reproduces the full-extent transfer the scalar
+        # arm measures. The slab must divide the padded extent for the page count per slab to be integral,
+        # which is why a metadata measurement takes the whole extent rather than a shorter prefix -- the
+        # growing-extent behaviour itself is covered by test_high_bw_all_gather_selected_batch_prefix.
+        assert gathered_dim_size is None or gathered_dim_size == output_shape[2], (
+            "invocation='metadata' measures the full padded extent; a shorter prefix moves less data and "
+            "would not be comparable to the scalar floor"
         )
+        slab_global = output_shape[2]
+        user_id, num_layers, layer_idx = _meta_slot_terms(input_batch_index)
+        slot_meta = _meta_scalar(mesh_device, user_id)
+        prefix_meta = _meta_scalar(mesh_device, 0)
 
-    # Prime the indexed program with slot zero, then measure the nonzero slot.
-    # input_batch_index is excluded from the cache key, so this also proves its
-    # source-page base is patched on a cache hit without adding a launch.
-    run(0 if input_batch_index is not None else None)
-    ttnn.synchronize_device(mesh_device)
-    run()
-    ttnn.synchronize_device(mesh_device)
-    _profile_high_bw_all_gather(mesh_device, run)
-    durations_ns = [_profile_high_bw_all_gather(mesh_device, run) for _ in range(profile_samples)]
+        def run():
+            return ttnn.experimental.high_bw_all_gather(
+                device_input,
+                dim=2,
+                output_tensor=persistent_output,
+                cluster_axis=cluster_axis,
+                num_links=_NUM_LINKS,
+                input_batch_index_tensor=slot_meta,
+                batch_slot_num_layers=num_layers,
+                batch_slot_layer_idx=layer_idx,
+                gathered_prefix_tensor=prefix_meta,
+                gathered_slab_global=slab_global,
+            )
+
+        run()  # warm the program cache: a capture records already-built programs, it cannot compile them
+        ttnn.synchronize_device(mesh_device)
+        trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+        run()
+        ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+
+        def measured():
+            ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+
+    else:
+
+        def run(batch_index=input_batch_index):
+            runtime_controls = {}
+            if batch_index is not None:
+                runtime_controls["input_batch_index"] = batch_index
+            if gathered_dim_size is not None:
+                runtime_controls["gathered_dim_size"] = gathered_dim_size
+            return ttnn.experimental.high_bw_all_gather(
+                device_input,
+                dim=2,
+                output_tensor=persistent_output,
+                cluster_axis=cluster_axis,
+                num_links=_NUM_LINKS,
+                **runtime_controls,
+            )
+
+        # Prime the indexed program with slot zero, then measure the nonzero slot.
+        # input_batch_index is excluded from the cache key, so this also proves its
+        # source-page base is patched on a cache hit without adding a launch.
+        run(0 if input_batch_index is not None else None)
+        ttnn.synchronize_device(mesh_device)
+        run()
+        ttnn.synchronize_device(mesh_device)
+        measured = run
+
+    _profile_high_bw_all_gather(mesh_device, measured)
+    durations_ns = [_profile_high_bw_all_gather(mesh_device, measured) for _ in range(profile_samples)]
+    if invocation == "metadata":
+        ttnn.release_trace(mesh_device, trace_id)
 
     median_ns = statistics.median(durations_ns)
     if layout == ttnn.TILE_LAYOUT:
-        pages_per_device = math.prod(local_padded_shape) // (32 * 32)
+        # ONE slot's tiles per device. math.prod(local_padded_shape) would fold the cache-slot dim into
+        # the page count and inflate the bandwidth by exactly the slot count; the two agree for a
+        # single-slot input, which is every case that predates the indexed-cache path.
+        pages_per_device = (local_padded_shape[2] // 32) * (local_padded_shape[3] // 32)
     else:
         pages_per_device = rows_per_device
     bandwidth_gbps = pages_per_device * page_size * (axis_size - 1) / median_ns
@@ -710,9 +1029,16 @@ def _run_high_bw_all_gather_test_cases(mesh_device, min_bandwidth_gbps, cluster_
 
 
 def _run_high_bw_all_gather_ci_perf(
-    mesh_device, cluster_axis, min_bandwidth_gbps, global_rows_cases=_CI_PERF_GLOBAL_ROWS
+    mesh_device, cluster_axis, min_bandwidth_gbps, global_rows_cases=_CI_PERF_GLOBAL_ROWS, invocation="scalar"
 ):
-    """Run the compact CI matrix and pair every bandwidth measurement with correctness."""
+    """Run the compact CI matrix and pair every bandwidth measurement with correctness.
+
+    `invocation` picks how the slot and the active extent reach the op for the whole matrix -- host
+    runtime arguments ("scalar") or on-device metadata tensors under a captured trace ("metadata"). Both
+    arms walk the same cases against the same floors, and each pairs its measurement with a compact
+    correctness run through the SAME invocation, so a bandwidth number never stands alone on a
+    functionally wrong gather.
+    """
     if not ttnn.device.IsProgramRealtimeProfilerActive():
         pytest.fail("high_bw_all_gather CI performance coverage requires the realtime device profiler")
 
@@ -724,14 +1050,25 @@ def _run_high_bw_all_gather_ci_perf(
             min_bandwidth_gbps[global_rows] if isinstance(min_bandwidth_gbps, dict) else min_bandwidth_gbps
         )
         for case_name, dtype, width, layout, expected_page_size in _CI_PERF_TEST_CASES:
-            print(f"HIGH_BW_ALL_GATHER_CI_PERF global_rows={global_rows} case={case_name}")
+            print(f"HIGH_BW_ALL_GATHER_CI_PERF invocation={invocation} global_rows={global_rows} case={case_name}")
             # Replace the large BF16 measurement with the serving-shaped indexed-cache path. Its
             # 512K active payload keeps the existing ring floor meaningful while the 1M allocation
             # selects the persistent-cache worker topology.
             indexed_cache_case = global_rows == 512 * 1024 and case_name == "bf16_row_major"
-            capacity_rows_per_device = (
-                _CI_INDEXED_CACHE_CAPACITY_GLOBAL_ROWS // axis_size if indexed_cache_case else None
-            )
+            if invocation == "metadata":
+                # Every metadata case is already an indexed-cache case: its slot argument IS a tensor, so
+                # there is no "no slot selected" form to measure. The extent stays the full padded one
+                # (see _run_high_bw_all_gather_perf) rather than the scalar arm's shorter active prefix
+                # out of a larger allocation, so both arms move the same bytes at the same floor.
+                capacity_rows_per_device = None
+                perf_batch_index = _META_PERF_FLAT_SLOT
+                perf_gathered_dim_size = None
+            else:
+                capacity_rows_per_device = (
+                    _CI_INDEXED_CACHE_CAPACITY_GLOBAL_ROWS // axis_size if indexed_cache_case else None
+                )
+                perf_batch_index = 1 if indexed_cache_case else None
+                perf_gathered_dim_size = global_rows if indexed_cache_case else None
             _run_high_bw_all_gather_perf(
                 mesh_device,
                 dtype,
@@ -742,8 +1079,9 @@ def _run_high_bw_all_gather_ci_perf(
                 cluster_axis,
                 rows_per_device=rows_per_device,
                 capacity_rows_per_device=capacity_rows_per_device,
-                input_batch_index=1 if indexed_cache_case else None,
-                gathered_dim_size=global_rows if indexed_cache_case else None,
+                input_batch_index=perf_batch_index,
+                gathered_dim_size=perf_gathered_dim_size,
+                invocation=invocation,
             )
             # Use a compact reference run after the full-size measurement. This
             # validates the same dtype/layout/route without doubling CI memory
@@ -756,6 +1094,7 @@ def _run_high_bw_all_gather_ci_perf(
                 expected_page_size,
                 cluster_axis,
                 rows_per_device=min(rows_per_device, _ACCURACY_ROWS_PER_DEVICE),
+                metadata_batch_index=perf_batch_index if invocation == "metadata" else None,
             )
 
 
@@ -826,10 +1165,11 @@ def test_high_bw_all_gather_galaxy_full_mesh_matched_local_perf(mesh_device):
     not os.getenv("TT_METAL_SIMULATOR") and os.getenv("TT_METAL_HIGH_BW_ALL_GATHER_RUN_32_RANK_ACCURACY") != "1",
     reason="run on the Blackhole simulator or set TT_METAL_HIGH_BW_ALL_GATHER_RUN_32_RANK_ACCURACY=1",
 )
-@pytest.mark.parametrize("device_params", [_FABRIC_2D_TORUS_XY_DEVICE_PARAMS], indirect=True)
+@pytest.mark.parametrize("device_params", _FULL_MESH_DEVICE_PARAMS, indirect=True)
 @pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
-def test_high_bw_all_gather_galaxy_8x4_whole_mesh_ring_accuracy(mesh_device):
-    """Gather exactly across a 32-rank snake ring while Galaxy remains an 8x4 mesh."""
+def test_high_bw_all_gather_galaxy_8x4_whole_mesh_accuracy(mesh_device):
+    """Gather across all 32 ranks as one snake -- a ring on a torus, an open path on a plain 2D
+    fabric -- while Galaxy remains an 8x4 mesh."""
     assert tuple(mesh_device.shape) == (8, 4)
     _run_high_bw_all_gather_accuracy(
         mesh_device,
@@ -878,6 +1218,39 @@ def test_high_bw_all_gather_quietbox_2x2_whole_mesh_ring_accuracy(mesh_device):
         cluster_axis=None,
         rows_per_device=4,
         num_links=2,
+    )
+
+
+@run_for_blackhole("full-mesh open-path coverage requires Blackhole")
+@pytest.mark.skipif(
+    os.getenv("MESH_DEVICE") != "TG",
+    reason="full-mesh open-path coverage requires MESH_DEVICE=TG",
+)
+@pytest.mark.parametrize("device_params", _FULL_MESH_DEVICE_PARAMS, indirect=True)
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+@pytest.mark.parametrize("submesh_shape", [(8, 1), (1, 4), (1, 2)], ids=["8x1", "1x4", "1x2"])
+def test_high_bw_all_gather_full_mesh_open_path_accuracy(mesh_device, submesh_shape):
+    """cluster_axis=None on a submesh that is one device wide.
+
+    A 1-wide grid has no snake cycle unless its axis wrap is wired, so on a plain 2D
+    fabric these resolve as an open Hamiltonian path -- the tier that exists so no mesh
+    is left without a full-mesh route. The gathered result must match the ring's byte for
+    byte: the transport-to-tensor mapping is the same row-major linearization either way,
+    only the closing edge differs. On a torus the same shapes close their ring instead
+    (1x2 excepted, where a two-device ring is degenerate), which is why both fabrics run.
+    """
+    assert tuple(mesh_device.shape) == (8, 4)
+    submesh = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
+    assert tuple(submesh.shape) == submesh_shape
+    _run_high_bw_all_gather_accuracy(
+        submesh,
+        ttnn.bfloat16,
+        width=576,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        expected_page_size=1152,
+        cluster_axis=None,
+        rows_per_device=4,
+        num_links=1,
     )
 
 
@@ -991,7 +1364,8 @@ def test_high_bw_all_gather_512k_fabric_2d_line(mesh_device):
 
 @pytest.mark.parametrize("device_params", _SELECTED_BATCH_PREFIX_DEVICE_PARAMS, indirect=True)
 @run_for_blackhole("high_bw_all_gather selected-cache-slot coverage requires Blackhole")
-def test_high_bw_all_gather_selected_batch_prefix(mesh_device):
+@_AG_TRACED_AXIS
+def test_high_bw_all_gather_selected_batch_prefix(mesh_device, ag_traced):
     """One maximum-size output allocation can gather either cache slot and a shorter valid prefix."""
     rank_line, cluster_axis = _rank_line_mesh(mesh_device)
     axis_size = rank_line.shape[cluster_axis]
@@ -1017,19 +1391,68 @@ def test_high_bw_all_gather_selected_batch_prefix(mesh_device):
         ttnn.ReplicateTensorToMesh(rank_line),
     )
 
-    cache_entries_after_first = None
     # Start smaller and grow the logical extent. This proves the cached program is compiled for the
     # worst-case slab rather than the first active prefix.
-    for batch_index, rows_this_call in ((0, active_local_rows // 2), (1, active_local_rows)):
-        ttnn.experimental.high_bw_all_gather(
-            device_input,
-            dim=2,
-            output_tensor=persistent_output,
-            cluster_axis=cluster_axis,
-            num_links=_NUM_LINKS,
-            input_batch_index=batch_index,
-            gathered_dim_size=rows_this_call * axis_size,
-        )
+    # Repeated controls reuse the schedule. Slot-only changes, growth and shrinkage must still patch it.
+    cases = (
+        (0, active_local_rows // 2),
+        (0, active_local_rows // 2),
+        (1, active_local_rows // 2),
+        (1, active_local_rows),
+        (1, active_local_rows),
+        (0, active_local_rows // 2),
+    )
+
+    # The traced arm cannot use the host scalars: a replay never re-runs the patch that writes them, so
+    # both the slot and the extent are handed over as metadata tensors the reader re-reads on-device.
+    # The extent is derived there as min(round_up(start + slab, slab), full), so taking the slab to be
+    # the first case's extent makes start = rows*axis - slab reproduce each case exactly.
+    slab_global = (active_local_rows // 2) * axis_size
+    slot_meta = prefix_meta = trace_id = None
+    if ag_traced:
+        slot_meta = _meta_scalar(rank_line, cases[0][0])
+        prefix_meta = _meta_scalar(rank_line, 0)
+
+        def _issue_metadata():
+            ttnn.experimental.high_bw_all_gather(
+                device_input,
+                dim=2,
+                output_tensor=persistent_output,
+                cluster_axis=cluster_axis,
+                num_links=_NUM_LINKS,
+                input_batch_index_tensor=slot_meta,
+                # Flat slot == the user id here: one layer, index 0. The recomposition itself is covered
+                # by the galaxy metadata perf case, which uses a non-trivial (num_layers, layer_idx).
+                batch_slot_num_layers=1,
+                batch_slot_layer_idx=0,
+                gathered_prefix_tensor=prefix_meta,
+                gathered_slab_global=slab_global,
+            )
+
+        _issue_metadata()  # a capture records already-built programs; it cannot compile them
+        ttnn.synchronize_device(rank_line)
+        trace_id = ttnn.begin_trace_capture(rank_line, cq_id=0)
+        _issue_metadata()
+        ttnn.end_trace_capture(rank_line, trace_id, cq_id=0)
+
+    cache_entries_after_first = None
+    for batch_index, rows_this_call in cases:
+        if ag_traced:
+            # ONE captured trace serves both cases: only the metadata contents change between replays,
+            # which is the property that a frozen host scalar would break.
+            _write_meta_scalar(slot_meta, batch_index)
+            _write_meta_scalar(prefix_meta, rows_this_call * axis_size - slab_global)
+            ttnn.execute_trace(rank_line, trace_id, cq_id=0, blocking=True)
+        else:
+            ttnn.experimental.high_bw_all_gather(
+                device_input,
+                dim=2,
+                output_tensor=persistent_output,
+                cluster_axis=cluster_axis,
+                num_links=_NUM_LINKS,
+                input_batch_index=batch_index,
+                gathered_dim_size=rows_this_call * axis_size,
+            )
         ttnn.synchronize_device(rank_line)
         if cache_entries_after_first is None:
             cache_entries_after_first = rank_line.num_program_cache_entries()
@@ -1052,10 +1475,756 @@ def test_high_bw_all_gather_selected_batch_prefix(mesh_device):
                     actual[:, :, start : start + rows_this_call, :], expected[:, :, start : start + rows_this_call, :]
                 )
 
+    if ag_traced:
+        ttnn.release_trace(rank_line, trace_id)
+
+
+def _make_external_semaphore_test_tensors(mesh_device, cluster_axis):
+    axis_size = mesh_device.shape[cluster_axis]
+    local_rows, width = 128, 576
+    torch.manual_seed(0)
+    host_input = torch.rand((1, 1, local_rows * axis_size, width), dtype=torch.bfloat16)
+    device_input = _make_tensor(
+        mesh_device,
+        host_input,
+        ttnn.bfloat16,
+        ttnn.ROW_MAJOR_LAYOUT,
+        ttnn.ShardTensor2dMesh(
+            mesh_device,
+            dims=(2, None) if cluster_axis == 0 else (None, 2),
+            mesh_shape=tuple(mesh_device.shape),
+        ),
+    )
+    persistent_output = _make_tensor(
+        mesh_device,
+        torch.zeros((1, 1, local_rows * axis_size, width), dtype=torch.bfloat16),
+        ttnn.bfloat16,
+        ttnn.ROW_MAJOR_LAYOUT,
+        ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    return device_input, persistent_output
+
+
+def _load_external_semaphore_test_subdevices(mesh_device):
+    grid = mesh_device.compute_with_storage_grid_size()
+    assert grid.x > 4, "external-semaphore coverage requires separate compute and gather strips"
+    gather_start_x = grid.x - 4
+    compute_grid = ttnn.CoreRangeSet(
+        [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(gather_start_x - 1, grid.y - 1))]
+    )
+    gather_grid = ttnn.CoreRangeSet(
+        [ttnn.CoreRange(ttnn.CoreCoord(gather_start_x, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))]
+    )
+    manager = mesh_device.create_sub_device_manager(
+        [ttnn.SubDevice([compute_grid]), ttnn.SubDevice([gather_grid])],
+        0,
+    )
+    mesh_device.load_sub_device_manager(manager)
+    return gather_grid, ttnn.SubDeviceId(1), manager
+
+
+def _make_l1_small_semaphore_pair(mesh_device, cores):
+    return (
+        ttnn.create_global_semaphore(mesh_device, cores, 0, ttnn.BufferType.L1_SMALL),
+        ttnn.create_global_semaphore(mesh_device, cores, 0, ttnn.BufferType.L1_SMALL),
+    )
+
+
+def _sparse_mla_overlap_grids(mesh_device):
+    """Return the exact per-chip sparse-MLA ownership profile for this system."""
+    grid = mesh_device.compute_with_storage_grid_size()
+    if grid.y != 10 or grid.x not in (11, 12):
+        pytest.skip(f"sparse MLA overlap requires an 11x10 QB2 or 12x10 LoudBox/Galaxy worker grid, got {grid}")
+    topk_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 9))])
+    gather_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(8, 0), ttnn.CoreCoord(grid.x - 1, 9))])
+    assert topk_grid.num_cores() == 80
+    assert gather_grid.num_cores() == (30 if grid.x == 11 else 40)
+    return topk_grid, gather_grid
+
+
+def _right_strip_subdevice_manager(mesh_device, owned_cores):
+    """Build an isolated gather strip of exactly ``owned_cores`` on each chip.
+
+    QB2 cannot own an 80-core top-k strip and a 40-core gather strip at once, but it can still measure
+    the production gather ownership in isolation. Keeping the strip at the same right edge as sparse MLA
+    preserves its logical/physical placement while the left strip absorbs the otherwise unused cores.
+    """
+    grid = mesh_device.compute_with_storage_grid_size()
+    assert grid.y > 0 and owned_cores % grid.y == 0
+    owned_columns = owned_cores // grid.y
+    assert 0 < owned_columns < grid.x
+    gather_start_x = grid.x - owned_columns
+    compute_grid = ttnn.CoreRangeSet(
+        [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(gather_start_x - 1, grid.y - 1))]
+    )
+    gather_grid = ttnn.CoreRangeSet(
+        [ttnn.CoreRange(ttnn.CoreCoord(gather_start_x, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))]
+    )
+    assert gather_grid.num_cores() == owned_cores
+    manager = mesh_device.create_sub_device_manager(
+        [ttnn.SubDevice([compute_grid]), ttnn.SubDevice([gather_grid])],
+        0,
+    )
+    return manager, ttnn.SubDeviceId(1), gather_grid
+
+
+def _profile_sparse_mla_gather_tier(
+    mesh_device,
+    device_input,
+    persistent_output,
+    *,
+    cluster_axis,
+    gathered_dim_size,
+    owned_cores,
+    samples,
+):
+    manager, gather_subdevice_id, gather_grid = _right_strip_subdevice_manager(mesh_device, owned_cores)
+    semaphore_pair = _make_l1_small_semaphore_pair(mesh_device, gather_grid)
+    ttnn.synchronize_device(mesh_device)
+    mesh_device.load_sub_device_manager(manager)
+
+    def run():
+        return ttnn.experimental.high_bw_all_gather(
+            device_input,
+            dim=2,
+            output_tensor=persistent_output,
+            cluster_axis=cluster_axis,
+            subdevice_id=gather_subdevice_id,
+            sub_core_grids=gather_grid,
+            num_links=_NUM_LINKS,
+            input_batch_index=0,
+            gathered_dim_size=gathered_dim_size,
+            ready_semaphore=semaphore_pair[0],
+            data_valid_semaphore=semaphore_pair[1],
+        )
+
+    try:
+        # Warm both the miss and hit path before collecting device timestamps.
+        run()
+        ttnn.synchronize_device(mesh_device, sub_device_ids=[gather_subdevice_id])
+        run()
+        ttnn.synchronize_device(mesh_device, sub_device_ids=[gather_subdevice_id])
+        durations_ns = [_profile_high_bw_all_gather(mesh_device, run) for _ in range(samples)]
+    finally:
+        ttnn.synchronize_device(mesh_device)
+        mesh_device.clear_loaded_sub_device_manager()
+        mesh_device.remove_sub_device_manager(manager)
+    return durations_ns
+
+
+@run_for_blackhole("sparse MLA gather-tier qualification requires Blackhole fabric")
+@pytest.mark.timeout(0)
+@pytest.mark.skipif(os.environ.get("CI") == "true", reason="local production-shape performance qualification")
+@pytest.mark.parametrize("device_params", [_FABRIC_2D_LINE_DEVICE_PARAMS], indirect=True)
+@pytest.mark.parametrize(
+    "case_name,dtype,width,expected_page_size",
+    [
+        ("kv_bf16", ttnn.bfloat16, 576, 1152),
+        ("kv_scaled_fp8", ttnn.fp8_e4m3, 656, 704),
+    ],
+    ids=["kv_bf16", "kv_scaled_fp8"],
+)
+def test_high_bw_all_gather_sparse_mla_30_vs_40_core_device_perf(
+    mesh_device, case_name, dtype, width, expected_page_size
+):
+    """Compare 30- and 40-core ownership at the exact QB2 Long sparse-KV gather shape.
+
+    This is an isolated gather comparison, not an 80/40 overlap claim: QB2 owns only 110 Tensix cores.
+    The production operation has runtime prefix controls, so both row formats currently select two
+    workers/direction even when the enclosing strip owns 40 cores. The scheduler reserves 12 cores so the
+    same program also fits an interior/ring rank with two live directions. Each endpoint in this two-rank
+    line actually instantiates 8 worker and 2 mux cores, which the profiler verifies directly. Raw device
+    program timestamps determine every reported duration; host dispatch/synchronization time is excluded.
+    """
+    rank_line, cluster_axis = _rank_line_mesh(mesh_device)
+    rank_pair_shape = ttnn.MeshShape(2, 1) if cluster_axis == 0 else ttnn.MeshShape(1, 2)
+    rank_pair = rank_line.create_submesh(rank_pair_shape)
+    grid = rank_pair.compute_with_storage_grid_size()
+    if (grid.x, grid.y) != (11, 10):
+        pytest.skip(f"30-vs-40 QB2 qualification requires an 11x10 worker grid, got {grid}")
+
+    # QB2 Long mirrors Galaxy's per-chip 512k prefix: SP=2 owns a 128k box-local cache and adds the
+    # current 1280-token chunk, so each of the two ranks contributes 64,640 rows.
+    global_rows = 128_000 + 1_280
+    assert global_rows % 2 == 0
+    global_shape = (1, 1, global_rows, width)
+    host_zeros = torch.zeros(global_shape, dtype=torch.bfloat16)
+    input_mesh_dims = (2, None) if cluster_axis == 0 else (None, 2)
+    device_input = _make_tensor(
+        rank_pair,
+        host_zeros,
+        dtype,
+        ttnn.ROW_MAJOR_LAYOUT,
+        ttnn.ShardTensor2dMesh(rank_pair, dims=input_mesh_dims, mesh_shape=tuple(rank_pair.shape)),
+    )
+    persistent_output = _make_tensor(
+        rank_pair,
+        host_zeros,
+        dtype,
+        ttnn.ROW_MAJOR_LAYOUT,
+        ttnn.ReplicateTensorToMesh(rank_pair),
+    )
+    del host_zeros
+
+    input_shard = ttnn.get_device_tensors(device_input)[0]
+    output_shard = ttnn.get_device_tensors(persistent_output)[0]
+    page_size = input_shard.buffer_aligned_page_size()
+    assert page_size == expected_page_size
+    output_bytes_per_link = output_shard.buffer_num_pages() * output_shard.buffer_aligned_page_size() // _NUM_LINKS
+    preferred_workers_per_direction = 8 if output_bytes_per_link >= 32_000_000 and page_size >= 2048 else 2
+    assert preferred_workers_per_direction == 2
+
+    tier_results = {}
+    try:
+        for owned_cores in (30, 40):
+            selected_workers_per_direction = next(
+                workers
+                for workers in (8, 4, 2, 1)
+                if workers <= preferred_workers_per_direction
+                and _NUM_LINKS * 2 * (workers + (1 if workers > 1 else 0)) <= owned_cores
+            )
+            scheduler_core_budget = (
+                _NUM_LINKS * 2 * (selected_workers_per_direction + (1 if selected_workers_per_direction > 1 else 0))
+            )
+            assert selected_workers_per_direction == 2
+            assert scheduler_core_budget == 12
+            durations_ns = _profile_sparse_mla_gather_tier(
+                rank_pair,
+                device_input,
+                persistent_output,
+                cluster_axis=cluster_axis,
+                gathered_dim_size=global_rows,
+                owned_cores=owned_cores,
+                samples=7,
+            )
+            median_ns = statistics.median(durations_ns)
+            received_bytes_per_rank = (global_rows // 2) * page_size
+            tier_results[owned_cores] = {
+                "samples_ns": durations_ns,
+                "median_ns": median_ns,
+                "effective_receive_gbps": received_bytes_per_rank / median_ns,
+                "owned_cores": owned_cores,
+                "selected_workers_per_direction": selected_workers_per_direction,
+                "scheduler_core_budget": scheduler_core_budget,
+            }
+    finally:
+        ttnn.deallocate(persistent_output)
+        ttnn.deallocate(device_input)
+        gc.collect()
+
+    relative_40_vs_30 = 1.0 - tier_results[40]["median_ns"] / tier_results[30]["median_ns"]
+    print(
+        "SPARSE_MLA_GATHER_TIER_DEVICE_TIME "
+        f"case={case_name} global_rows={global_rows} page_size={page_size}B "
+        f"output_bytes_per_link={output_bytes_per_link} preferred_workers_per_direction="
+        f"{preferred_workers_per_direction} results={tier_results} "
+        f"relative_40_vs_30={relative_40_vs_30:.2%}"
+    )
+
+
+@run_for_blackhole("high_bw_all_gather external semaphores require Blackhole fabric")
+@pytest.mark.parametrize("device_params", [_FABRIC_2D_LINE_DEVICE_PARAMS], indirect=True)
+def test_high_bw_all_gather_external_semaphore_reuse_and_cache_rebind(mesh_device):
+    """Caller-owned semaphores support restricted-subdevice reuse and cache-hit address rebinding."""
+    rank_line, cluster_axis = _rank_line_mesh(mesh_device)
+    device_input, persistent_output = _make_external_semaphore_test_tensors(rank_line, cluster_axis)
+    _, rebound_output = _make_external_semaphore_test_tensors(rank_line, cluster_axis)
+
+    legacy_output = ttnn.experimental.high_bw_all_gather(
+        device_input,
+        dim=2,
+        output_tensor=persistent_output,
+        cluster_axis=cluster_axis,
+        num_links=_NUM_LINKS,
+    )
+    ttnn.synchronize_device(rank_line)
+    _assert_exact_all_gather(device_input, legacy_output, rank_line, ttnn.bfloat16)
+
+    gather_grid, gather_subdevice_id, manager = _load_external_semaphore_test_subdevices(rank_line)
+    try:
+        first_pair = _make_l1_small_semaphore_pair(rank_line, gather_grid)
+        # The caller owns readiness for externally allocated mesh-wide resources.
+        ttnn.synchronize_device(rank_line)
+
+        def run(semaphores, output=persistent_output):
+            return ttnn.experimental.high_bw_all_gather(
+                device_input,
+                dim=2,
+                output_tensor=output,
+                cluster_axis=cluster_axis,
+                subdevice_id=gather_subdevice_id,
+                sub_core_grids=gather_grid,
+                num_links=_NUM_LINKS,
+                ready_semaphore=semaphores[0],
+                data_valid_semaphore=semaphores[1],
+            )
+
+        # The first external-path cache miss must consume no additional L1/L1_SMALL allocator space: the
+        # caller already owns both semaphore buffers and the output is persistent. This directly distinguishes
+        # it from the legacy factory path, which allocates a pair during program creation.
+        allocation_before = {
+            buffer_type: ttnn.get_memory_view(rank_line, buffer_type).total_bytes_allocated_per_bank
+            for buffer_type in (ttnn.BufferType.L1, ttnn.BufferType.L1_SMALL)
+        }
+        run(first_pair)
+        ttnn.synchronize_device(rank_line, sub_device_ids=[gather_subdevice_id])
+        allocation_after = {
+            buffer_type: ttnn.get_memory_view(rank_line, buffer_type).total_bytes_allocated_per_bank
+            for buffer_type in (ttnn.BufferType.L1, ttnn.BufferType.L1_SMALL)
+        }
+        assert allocation_after == allocation_before
+
+        # One cache miss plus 99 adjacent hits prove that successful kernels consume both semaphore counts
+        # back to zero.
+        for _ in range(99):
+            run(first_pair)
+        ttnn.synchronize_device(rank_line, sub_device_ids=[gather_subdevice_id])
+        cache_entries = rank_line.num_program_cache_entries()
+
+        second_pair = _make_l1_small_semaphore_pair(rank_line, gather_grid)
+        ttnn.synchronize_device(rank_line)
+        # Poison the old pair. A cache hit that fails to rebind current addresses cannot silently
+        # succeed using the still-live pair retained by the cached workload.
+        ttnn.reset_global_semaphore_value(first_pair[0], 17)
+        ttnn.reset_global_semaphore_value(first_pair[1], 17)
+        ttnn.synchronize_device(rank_line)
+        run(second_pair, rebound_output)
+        ttnn.synchronize_device(rank_line, sub_device_ids=[gather_subdevice_id])
+        assert rank_line.num_program_cache_entries() == cache_entries
+        _assert_exact_all_gather(device_input, rebound_output, rank_line, ttnn.bfloat16)
+
+        # Model exception recovery drains first, resets unknown residue, and then reuses the pair. Poisoning
+        # both counters gives that recovery contract a deterministic device-level test without deliberately
+        # hanging a fabric kernel.
+        ttnn.reset_global_semaphore_value(first_pair[0], 0)
+        ttnn.reset_global_semaphore_value(first_pair[1], 0)
+        ttnn.synchronize_device(rank_line)
+        recovered_output = run(first_pair)
+        ttnn.synchronize_device(rank_line, sub_device_ids=[gather_subdevice_id])
+        _assert_exact_all_gather(device_input, recovered_output, rank_line, ttnn.bfloat16)
+    finally:
+        ttnn.synchronize_device(rank_line)
+        rank_line.clear_loaded_sub_device_manager()
+        rank_line.remove_sub_device_manager(manager)
+
+
+@run_for_blackhole("high_bw_all_gather external semaphores require Blackhole fabric")
+@pytest.mark.parametrize("device_params", [_FABRIC_2D_LINE_DEVICE_PARAMS], indirect=True)
+def test_high_bw_all_gather_external_semaphore_runtime_controls_reuse(mesh_device):
+    """One external pair survives 100 selected-batch calls with growing and shrinking prefixes."""
+    rank_line, cluster_axis = _rank_line_mesh(mesh_device)
+    axis_size = rank_line.shape[cluster_axis]
+    local_rows, width = 32, 576
+    torch.manual_seed(19)
+    host_input = torch.rand((2, 1, local_rows * axis_size, width), dtype=torch.bfloat16)
+    device_input = _make_tensor(
+        rank_line,
+        host_input,
+        ttnn.bfloat16,
+        ttnn.ROW_MAJOR_LAYOUT,
+        ttnn.ShardTensor2dMesh(
+            rank_line,
+            dims=(2, None) if cluster_axis == 0 else (None, 2),
+            mesh_shape=tuple(rank_line.shape),
+        ),
+    )
+    persistent_output = _make_tensor(
+        rank_line,
+        torch.zeros((1, 1, local_rows * axis_size, width), dtype=torch.bfloat16),
+        ttnn.bfloat16,
+        ttnn.ROW_MAJOR_LAYOUT,
+        ttnn.ReplicateTensorToMesh(rank_line),
+    )
+    input_shards = [ttnn.to_torch(shard) for shard in ttnn.get_device_tensors(device_input)]
+
+    gather_grid, gather_subdevice_id, manager = _load_external_semaphore_test_subdevices(rank_line)
+    semaphore_pair = _make_l1_small_semaphore_pair(rank_line, gather_grid)
+    ttnn.synchronize_device(rank_line)
+    schedule = ((1, 32), (0, 8), (1, 24), (0, 16))
+    cache_entries = None
+    try:
+        for iteration in range(100):
+            batch_index, rows_this_call = schedule[iteration % len(schedule)]
+            output = ttnn.experimental.high_bw_all_gather(
+                device_input,
+                dim=2,
+                output_tensor=persistent_output,
+                cluster_axis=cluster_axis,
+                subdevice_id=gather_subdevice_id,
+                sub_core_grids=gather_grid,
+                num_links=_NUM_LINKS,
+                input_batch_index=batch_index,
+                gathered_dim_size=rows_this_call * axis_size,
+                ready_semaphore=semaphore_pair[0],
+                data_valid_semaphore=semaphore_pair[1],
+            )
+            ttnn.synchronize_device(rank_line, sub_device_ids=[gather_subdevice_id])
+            if cache_entries is None:
+                cache_entries = rank_line.num_program_cache_entries()
+            else:
+                assert rank_line.num_program_cache_entries() == cache_entries
+
+            for output_shard in ttnn.get_device_tensors(output):
+                actual = ttnn.to_torch(output_shard)
+                for rank, input_shard in enumerate(input_shards):
+                    output_start = rank * local_rows
+                    assert torch.equal(
+                        actual[:, :, output_start : output_start + rows_this_call, :],
+                        input_shard[batch_index : batch_index + 1, :, :rows_this_call, :],
+                    )
+    finally:
+        ttnn.synchronize_device(rank_line)
+        rank_line.clear_loaded_sub_device_manager()
+        rank_line.remove_sub_device_manager(manager)
+
+
+@run_for_blackhole("sparse MLA top-k/KV gather overlap requires Blackhole fabric")
+@pytest.mark.parametrize("device_params", [_FABRIC_2D_LINE_DEVICE_PARAMS], indirect=True)
+def test_high_bw_all_gather_external_semaphore_independent_progress_with_topk(mesh_device):
+    """The gather sub-device completes while a longer exact-grid top-k remains in flight."""
+
+    rank_line, cluster_axis = _rank_line_mesh(mesh_device)
+    topk_grid, gather_grid = _sparse_mla_overlap_grids(rank_line)
+    manager = rank_line.create_sub_device_manager(
+        [ttnn.SubDevice([topk_grid]), ttnn.SubDevice([gather_grid])],
+        0,
+    )
+    gather_pair = _make_l1_small_semaphore_pair(rank_line, gather_grid)
+    ttnn.synchronize_device(rank_line)
+
+    # A short 8K prefix completes before the next eager host dispatch reaches the device (~1 ms on
+    # QB2), so it cannot demonstrate concurrency even with correct sub-device dispatch. Use a bounded
+    # long-prefix production proxy: Galaxy qualification separately covers the full 512K case.
+    rows, logits_width, k = 160, 256 * 1024, 512
+    host_logits = torch.zeros((rows, logits_width), dtype=torch.bfloat16)
+    # Consecutive BF16 bit patterns are distinct, unlike casting integers above 256 (which introduces
+    # ties and makes exact-index validation depend on tie-breaking).
+    distinct_values = torch.arange(0x3F80, 0x3F80 + k, dtype=torch.int32).to(torch.uint16).view(torch.bfloat16)
+    host_logits[:, -k:] = distinct_values
+    logits = ttnn.from_torch(
+        host_logits,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=rank_line,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(rank_line),
+    )
+    expected_topk = torch.topk(host_logits.float(), k, dim=-1, largest=True, sorted=True).indices
+    gather_input, gather_output = _make_external_semaphore_test_tensors(rank_line, cluster_axis)
+
+    def enqueue_topk():
+        return ttnn.experimental.topk_large_indices(
+            logits,
+            k=k,
+            subdevice_id=ttnn.SubDeviceId(0),
+            sub_core_grids=topk_grid,
+        )
+
+    def enqueue_gather():
+        return ttnn.experimental.high_bw_all_gather(
+            gather_input,
+            dim=2,
+            output_tensor=gather_output,
+            cluster_axis=cluster_axis,
+            subdevice_id=ttnn.SubDeviceId(1),
+            sub_core_grids=gather_grid,
+            num_links=_NUM_LINKS,
+            ready_semaphore=gather_pair[0],
+            data_valid_semaphore=gather_pair[1],
+        )
+
+    def under_manager(*enqueue_functions):
+        rank_line.load_sub_device_manager(manager)
+        try:
+            outputs = tuple(enqueue() for enqueue in enqueue_functions)
+            ttnn.synchronize_device(rank_line)
+        finally:
+            rank_line.clear_loaded_sub_device_manager()
+        return outputs
+
+    def under_overlap_manager(run_topk, run_gather):
+        enqueues = []
+        if run_topk:
+            enqueues.append(enqueue_topk)
+        if run_gather:
+            enqueues.append(enqueue_gather)
+        outputs = iter(under_manager(*enqueues))
+        return next(outputs) if run_topk else None, next(outputs) if run_gather else None
+
+    try:
+        # Warm the exact structural hashes together. This covers the cache-miss path before the
+        # independent-progress measurement exercises cache hits with persistent semaphores.
+        warm_topk, warm_gather = under_overlap_manager(True, True)
+
+        watcher_enabled = os.environ.get("TT_METAL_WATCHER", "0") not in ("", "0")
+        if watcher_enabled:
+            # Watcher and the real-time profiler both reserve debug/runtime resources.  The
+            # gather-scoped event below is the profiler-independent progress/deadlock proof;
+            # normal (non-Watcher) coverage retains the raw device-interval assertions.
+            profiled_outputs = under_manager(enqueue_topk, enqueue_gather)
+            overlap_records = ()
+        else:
+            profiled_outputs, overlap_records = profile_realtime_program(
+                rank_line,
+                lambda: under_manager(enqueue_topk, enqueue_gather),
+                collect_all=True,
+                record_timeout_seconds=5.0,
+                record_settle_seconds=1.0,
+            )
+        profiled_topk, profiled_gather = profiled_outputs
+        profiled_ops = []
+        for record in overlap_records:
+            sources = tuple(source.replace("\\", "/") for source in record["kernel_sources"])
+            if any("/experimental/topk_large_indices/" in source for source in sources):
+                op_name = "topk_large_indices"
+            elif any("/experimental/high_bw_all_gather/" in source for source in sources):
+                op_name = "high_bw_all_gather"
+            else:
+                continue
+            profiled_ops.append(
+                (
+                    op_name,
+                    record["runtime_id"],
+                    record["chip_id"],
+                    record["duration_ns"],
+                )
+            )
+        print(f"concurrent realtime-profiler records: {profiled_ops}")
+        records_by_chip = {}
+        for op_name, runtime_id, chip_id, duration_ns in profiled_ops:
+            chip_records = records_by_chip.setdefault(chip_id, {})
+            assert op_name not in chip_records, f"duplicate {op_name} realtime record on chip {chip_id}"
+            chip_records[op_name] = {
+                "runtime_id": runtime_id,
+                "duration_ns": duration_ns,
+            }
+        if watcher_enabled:
+            assert not records_by_chip
+        else:
+            for chip_id, chip_records in records_by_chip.items():
+                if set(chip_records) == {"topk_large_indices", "high_bw_all_gather"}:
+                    assert (
+                        chip_records["topk_large_indices"]["runtime_id"]
+                        != chip_records["high_bw_all_gather"]["runtime_id"]
+                    )
+
+        topk_latencies = []
+        for _ in range(3):
+            rank_line.load_sub_device_manager(manager)
+            try:
+                start_ns = time.perf_counter_ns()
+                isolated_topk = enqueue_topk()
+                topk_done = ttnn.record_event(rank_line, 0, [ttnn.SubDeviceId(0)])
+                ttnn.event_synchronize(topk_done)
+                topk_latencies.append(time.perf_counter_ns() - start_ns)
+                ttnn.synchronize_device(rank_line)
+            finally:
+                rank_line.clear_loaded_sub_device_manager()
+
+        # Record completion for only the gather sub-device. If dispatch serialized the programs,
+        # this event could not reach the host until the earlier top-k completed. With independent
+        # sub-device dispatch it returns substantially before the isolated top-k lower bound.
+        rank_line.load_sub_device_manager(manager)
+        try:
+            start_ns = time.perf_counter_ns()
+            combined_topk = enqueue_topk()
+            combined_gather = enqueue_gather()
+            gather_done = ttnn.record_event(rank_line, 0, [ttnn.SubDeviceId(1)])
+            ttnn.event_synchronize(gather_done)
+            gather_progress_ns = time.perf_counter_ns() - start_ns
+            topk_done = ttnn.record_event(rank_line, 0, [ttnn.SubDeviceId(0)])
+            ttnn.event_synchronize(topk_done)
+            ttnn.synchronize_device(rank_line)
+        finally:
+            rank_line.clear_loaded_sub_device_manager()
+
+        topk_lower_bound_ns = min(topk_latencies)
+        assert gather_progress_ns < 0.8 * topk_lower_bound_ns, (
+            f"gather event took {gather_progress_ns / 1e6:.3f} ms after concurrent enqueue; "
+            f"isolated top-k samples were {[round(value / 1e6, 3) for value in topk_latencies]} ms"
+        )
+
+        for topk_output in (warm_topk, profiled_topk, isolated_topk, combined_topk):
+            for shard in ttnn.get_device_tensors(topk_output):
+                actual = ttnn.to_torch(shard, dtype=torch.uint32).to(torch.int64)
+                assert torch.equal(actual, expected_topk)
+        _assert_exact_all_gather(gather_input, warm_gather, rank_line, ttnn.bfloat16)
+        _assert_exact_all_gather(gather_input, profiled_gather, rank_line, ttnn.bfloat16)
+        _assert_exact_all_gather(gather_input, combined_gather, rank_line, ttnn.bfloat16)
+        print(
+            f"sparse MLA overlap profile topk={topk_grid.num_cores()} gather={gather_grid.num_cores()}: "
+            f"gather_progress={gather_progress_ns / 1e6:.3f} ms, "
+            f"isolated_topk_min={topk_lower_bound_ns / 1e6:.3f} ms"
+        )
+    finally:
+        ttnn.synchronize_device(rank_line)
+        rank_line.clear_loaded_sub_device_manager()
+        rank_line.remove_sub_device_manager(manager)
+
+
+@run_for_blackhole("high_bw_all_gather external semaphores require Blackhole fabric")
+@pytest.mark.parametrize("device_params", [_FABRIC_2D_LINE_DEVICE_PARAMS], indirect=True)
+def test_high_bw_all_gather_external_semaphore_validation(mesh_device, expect_error):
+    """The external-resource interface rejects unsafe handle and core-grid combinations before dispatch."""
+    rank_line, cluster_axis = _rank_line_mesh(mesh_device)
+    device_input, persistent_output = _make_external_semaphore_test_tensors(rank_line, cluster_axis)
+    device_grid = rank_line.compute_with_storage_grid_size()
+    full_grid = ttnn.CoreRangeSet(
+        [
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0),
+                ttnn.CoreCoord(device_grid.x - 1, device_grid.y - 1),
+            )
+        ]
+    )
+    foreign_pair = None
+    foreign_mesh = _disjoint_foreign_rank_line_mesh(mesh_device) if rank_line is not mesh_device else None
+    if foreign_mesh is not None:
+        # LoudBox/Galaxy line tests operate on a submesh.  A handle allocated on a disjoint sibling
+        # is deliberately the wrong mesh object and avoids overlapping parent/child CQ ownership.
+        foreign_pair = _make_l1_small_semaphore_pair(foreign_mesh, full_grid)
+        ttnn.synchronize_device(foreign_mesh)
+    gather_grid, gather_subdevice_id, manager = _load_external_semaphore_test_subdevices(rank_line)
+    valid_pair = _make_l1_small_semaphore_pair(rank_line, gather_grid)
+
+    def run(
+        *,
+        ready_semaphore=None,
+        data_valid_semaphore=None,
+        sub_core_grids=gather_grid,
+        subdevice_id=gather_subdevice_id,
+    ):
+        return ttnn.experimental.high_bw_all_gather(
+            device_input,
+            dim=2,
+            output_tensor=persistent_output,
+            cluster_axis=cluster_axis,
+            subdevice_id=subdevice_id,
+            sub_core_grids=sub_core_grids,
+            num_links=_NUM_LINKS,
+            ready_semaphore=ready_semaphore,
+            data_valid_semaphore=data_valid_semaphore,
+        )
+
+    try:
+        with expect_error(RuntimeError, "must be supplied together"):
+            run(ready_semaphore=valid_pair[0])
+        with expect_error(RuntimeError, "must be distinct"):
+            run(ready_semaphore=valid_pair[0], data_valid_semaphore=valid_pair[0])
+        if foreign_pair is not None:
+            with expect_error(RuntimeError, "must be created on the input tensor's mesh device"):
+                run(ready_semaphore=foreign_pair[0], data_valid_semaphore=foreign_pair[1])
+
+        wrong_type_pair = (
+            ttnn.create_global_semaphore(rank_line, gather_grid, 0, ttnn.BufferType.L1),
+            ttnn.create_global_semaphore(rank_line, gather_grid, 0, ttnn.BufferType.L1),
+        )
+        with expect_error(RuntimeError, "must use buffer type"):
+            run(ready_semaphore=wrong_type_pair[0], data_valid_semaphore=wrong_type_pair[1])
+
+        gather_box = gather_grid.bounding_box()
+        one_core = ttnn.CoreRangeSet([ttnn.CoreRange(gather_box.start, gather_box.start)])
+        undersized_pair = _make_l1_small_semaphore_pair(rank_line, one_core)
+        with expect_error(RuntimeError, "must cover all selected reader/writer cores"):
+            run(ready_semaphore=undersized_pair[0], data_valid_semaphore=undersized_pair[1])
+
+        device_grid = rank_line.compute_with_storage_grid_size()
+        escaped_grid = ttnn.CoreRangeSet(
+            [
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(gather_box.start.x - 1, 0),
+                    ttnn.CoreCoord(device_grid.x - 1, device_grid.y - 1),
+                )
+            ]
+        )
+        with expect_error(RuntimeError, "must be fully contained"):
+            run(
+                ready_semaphore=valid_pair[0],
+                data_valid_semaphore=valid_pair[1],
+                sub_core_grids=escaped_grid,
+            )
+
+        with expect_error(RuntimeError, "is not part of active subdevice manager"):
+            run(
+                ready_semaphore=valid_pair[0],
+                data_valid_semaphore=valid_pair[1],
+                subdevice_id=ttnn.SubDeviceId(2),
+            )
+
+        one_core_pair = _make_l1_small_semaphore_pair(rank_line, one_core)
+        with expect_error(RuntimeError, "needs at least"):
+            run(
+                ready_semaphore=one_core_pair[0],
+                data_valid_semaphore=one_core_pair[1],
+                sub_core_grids=one_core,
+            )
+    finally:
+        ttnn.synchronize_device(rank_line)
+        rank_line.clear_loaded_sub_device_manager()
+        rank_line.remove_sub_device_manager(manager)
+
+    full_grid_pair = _make_l1_small_semaphore_pair(rank_line, full_grid)
+    ttnn.synchronize_device(rank_line)
+    default_grid_output = ttnn.experimental.high_bw_all_gather(
+        device_input,
+        dim=2,
+        output_tensor=persistent_output,
+        cluster_axis=cluster_axis,
+        num_links=_NUM_LINKS,
+        ready_semaphore=full_grid_pair[0],
+        data_valid_semaphore=full_grid_pair[1],
+    )
+    ttnn.synchronize_device(rank_line)
+    _assert_exact_all_gather(device_input, default_grid_output, rank_line, ttnn.bfloat16)
+
+    # Omitted sub_core_grids resolve into the program hash. Reusing SubDeviceId(0)
+    # under a different active manager must compile for the new physical grid.
+    grid_size = rank_line.compute_with_storage_grid_size()
+    left_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, grid_size.y - 1))])
+    right_grid = ttnn.CoreRangeSet(
+        [ttnn.CoreRange(ttnn.CoreCoord(grid_size.x - 4, 0), ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1))]
+    )
+    left_manager = rank_line.create_sub_device_manager([ttnn.SubDevice([left_grid])], 0)
+    right_manager = rank_line.create_sub_device_manager([ttnn.SubDevice([right_grid])], 0)
+    try:
+        rank_line.load_sub_device_manager(left_manager)
+        ttnn.experimental.high_bw_all_gather(
+            device_input,
+            dim=2,
+            output_tensor=persistent_output,
+            cluster_axis=cluster_axis,
+            subdevice_id=ttnn.SubDeviceId(0),
+            num_links=_NUM_LINKS,
+            ready_semaphore=full_grid_pair[0],
+            data_valid_semaphore=full_grid_pair[1],
+        )
+        ttnn.synchronize_device(rank_line)
+        entries_after_left = rank_line.num_program_cache_entries()
+
+        rank_line.load_sub_device_manager(right_manager)
+        manager_switched_output = ttnn.experimental.high_bw_all_gather(
+            device_input,
+            dim=2,
+            output_tensor=persistent_output,
+            cluster_axis=cluster_axis,
+            subdevice_id=ttnn.SubDeviceId(0),
+            num_links=_NUM_LINKS,
+            ready_semaphore=full_grid_pair[0],
+            data_valid_semaphore=full_grid_pair[1],
+        )
+        ttnn.synchronize_device(rank_line)
+        assert rank_line.num_program_cache_entries() > entries_after_left
+        _assert_exact_all_gather(device_input, manager_switched_output, rank_line, ttnn.bfloat16)
+    finally:
+        ttnn.synchronize_device(rank_line)
+        rank_line.clear_loaded_sub_device_manager()
+        rank_line.remove_sub_device_manager(left_manager)
+        rank_line.remove_sub_device_manager(right_manager)
+
 
 @run_for_blackhole("high_bw_all_gather requires Blackhole fabric")
 @pytest.mark.parametrize("device_params", [_FABRIC_2D_TORUS_XY_DEVICE_PARAMS], indirect=True)
-def test_high_bw_all_gather_ragged_accuracy(mesh_device):
+@_AG_TRACED_AXIS
+def test_high_bw_all_gather_ragged_accuracy(mesh_device, ag_traced):
     if os.getenv("TT_METAL_HIGH_BW_ALL_GATHER_RUN_RAGGED_ACCURACY") != "1":
         pytest.skip("set TT_METAL_HIGH_BW_ALL_GATHER_RUN_RAGGED_ACCURACY=1 to run local ragged-slice accuracy")
 
@@ -1086,6 +2255,7 @@ def test_high_bw_all_gather_ragged_accuracy(mesh_device):
                 expected_page_size,
                 cluster_axis=cluster_axis,
                 rows_per_device=rows_per_device,
+                ag_traced=ag_traced,
             )
 
 
@@ -1187,3 +2357,93 @@ def test_high_bw_all_gather_token_sweep(mesh_device, axis_0_min_bandwidth_gbps, 
     rank_line, cluster_axis = _rank_line_mesh(mesh_device)
     min_bandwidth_gbps = (axis_0_min_bandwidth_gbps, axis_1_min_bandwidth_gbps)[cluster_axis]
     _run_high_bw_all_gather_token_sweep(rank_line, min_bandwidth_gbps, cluster_axis)
+
+
+# ---------------------------------------------------------------------------
+# Trace-safe (metadata) slot select + active extent.
+#
+# The scalar `input_batch_index` / `gathered_dim_size` are host runtime arguments: the program-cache path
+# re-patches the reader's page base and the whole per-worker page partition on every dispatch. A ttnn trace
+# REPLAY never runs that host patch, so a captured program would keep reading the slot -- and gathering the
+# prefix -- that happened to be live at capture time. For chunked prefill both are silent: the KV write is
+# metadata-driven and lands correctly, so only the gather is wrong.
+#
+# The metadata forms move both on-device: `input_batch_index_tensor` holds the USER id (recomposed as
+# user * batch_slot_num_layers + batch_slot_layer_idx) and `gathered_prefix_tensor` holds the chunk start
+# (from which the reader derives the extent and re-partitions its pages).
+#
+# There is no separate helper for this arm: `invocation="metadata"` threads through the same matrix loop,
+# the same allocation, the same realtime-profiler measurement, bandwidth formula and floor, and the same
+# paired correctness run as the scalar gate, so the two numbers are directly comparable. The dynamic
+# behaviour a fixed-slot measurement cannot show -- mutating both metadata tensors BETWEEN replays of one
+# capture -- is covered by test_high_bw_all_gather_selected_batch_prefix's traced arm.
+
+
+@run_for_blackhole("Blackhole Galaxy perf gate requires Blackhole")
+@pytest.mark.skipif(os.getenv("MESH_DEVICE") != "TG", reason="Blackhole Galaxy perf gate requires MESH_DEVICE=TG")
+@pytest.mark.parametrize("device_params", [_FABRIC_2D_TORUS_XY_DEVICE_PARAMS], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+def test_high_bw_all_gather_galaxy_ci_perf_traced(mesh_device):
+    """Traced twin of test_high_bw_all_gather_galaxy_ci_perf: the same matrix, under trace replay.
+
+    Every case takes its cache slot and its active extent from metadata tensors, so this is the gate that
+    the trace-safe path holds the same bandwidth as the host-patched scalar one.
+    """
+    rank_line, cluster_axis = _rank_line_mesh(mesh_device)
+    assert tuple(rank_line.shape) == (8, 1)
+    _run_high_bw_all_gather_ci_perf(
+        rank_line,
+        cluster_axis=cluster_axis,
+        min_bandwidth_gbps=_GALAXY_CI_MIN_BANDWIDTH_GBPS,
+        invocation="metadata",
+    )
+
+
+@run_for_blackhole("high_bw_all_gather requires Blackhole fabric")
+@pytest.mark.parametrize("device_params", [_FABRIC_2D_TORUS_XY_DEVICE_PARAMS], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+@pytest.mark.parametrize("num_links", [None, 1, 2])
+def test_high_bw_all_gather_cached_link_discovery(mesh_device, num_links, expect_error):
+    """Auto and explicit links retain cache-hit correctness with fresh buffers and traces."""
+    rank_line, axis = _rank_line_mesh(mesh_device)
+    rank_line.enable_program_cache()
+    cache_entries = None
+    for _ in range(2):
+        _run_high_bw_all_gather_accuracy(
+            rank_line,
+            ttnn.bfloat16,
+            width=64,
+            layout=ttnn.TILE_LAYOUT,
+            expected_page_size=2048,
+            cluster_axis=axis,
+            rows_per_device=32,
+            num_links=num_links,
+            ag_traced=True,
+        )
+        if cache_entries is None:
+            cache_entries = rank_line.num_program_cache_entries()
+        else:
+            assert rank_line.num_program_cache_entries() == cache_entries
+    _run_high_bw_all_gather_accuracy(
+        rank_line,
+        ttnn.bfloat16,
+        width=64,
+        layout=ttnn.TILE_LAYOUT,
+        expected_page_size=2048,
+        cluster_axis=axis,
+        rows_per_device=1024,
+        num_links=num_links,
+        metadata_batch_index=2,
+    )
+    for invalid_links, message in [(0, "greater than 0"), (100, "usable links")]:
+        with expect_error(RuntimeError, message):
+            _run_high_bw_all_gather_accuracy(
+                rank_line,
+                ttnn.bfloat16,
+                width=64,
+                layout=ttnn.TILE_LAYOUT,
+                expected_page_size=2048,
+                cluster_axis=axis,
+                rows_per_device=32,
+                num_links=invalid_links,
+            )

@@ -12,6 +12,8 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tilize_utils.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include "impl/program/program_impl.hpp"
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include <cmath>
 #include <cstdint>
 #include <functional>
@@ -47,10 +49,6 @@
 #include <tt-metalium/mxfp4.hpp>
 #include <tt-metalium/tile.hpp>
 #include "single_core_compute_runners.hpp"
-
-namespace tt::tt_metal {
-class IDevice;
-}  // namespace tt::tt_metal
 
 namespace tt::tt_metal {
 
@@ -297,9 +295,7 @@ static inline tt::tt_metal::TensorSpec make_flat_dram_tensor_spec(
     return tt::tt_metal::TensorSpec(tt::tt_metal::Shape{total_entries, entry_size_words}, tensor_layout);
 }
 
-void run_single_core_reduce_program(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device, const ReduceConfig& test_config) {
-    auto& cq = mesh_device->mesh_command_queue();
+void run_single_core_reduce_program(distributed::MeshDevice& mesh_device, const ReduceConfig& test_config) {
     const experimental::NodeCoord node{0, 0};
 
     const ReduceDims dims = compute_and_validate_reduce_dims(test_config);
@@ -318,9 +314,9 @@ void run_single_core_reduce_program(
     const std::uint32_t num_input_pages = dims.dram_buffer_size / dims.single_tile_bytes;
     const std::uint32_t num_output_pages = dims.output_size_bytes / dims.single_tile_bytes;
     auto in_tensor =
-        MeshTensor::allocate_on_device(*mesh_device, make_flat_dram_tensor_spec(input_tile_bytes, num_input_pages));
+        MeshTensor::allocate_on_device(mesh_device, make_flat_dram_tensor_spec(input_tile_bytes, num_input_pages));
     auto out_tensor = MeshTensor::allocate_on_device(
-        *mesh_device, make_flat_dram_tensor_spec(dims.single_tile_bytes, num_output_pages));
+        mesh_device, make_flat_dram_tensor_spec(dims.single_tile_bytes, num_output_pages));
 
     constexpr std::uint32_t num_buffer_tiles = 32;
     constexpr std::uint32_t num_output_buffer_tiles = 32;
@@ -375,7 +371,7 @@ void run_single_core_reduce_program(
     }
 
     experimental::DataMovementHardwareConfig reader_hw_config;
-    if (mesh_device->arch() == tt::ARCH::QUASAR) {
+    if (mesh_device.arch() == tt::ARCH::QUASAR) {
         reader_hw_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
     } else {
         reader_hw_config = experimental::DataMovementGen1Config{
@@ -406,7 +402,7 @@ void run_single_core_reduce_program(
     };
 
     experimental::DataMovementHardwareConfig writer_hw_config;
-    if (mesh_device->arch() == tt::ARCH::QUASAR) {
+    if (mesh_device.arch() == tt::ARCH::QUASAR) {
         writer_hw_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
     } else {
         writer_hw_config = experimental::DataMovementGen1Config{
@@ -425,7 +421,7 @@ void run_single_core_reduce_program(
     };
 
     experimental::ComputeHardwareConfig compute_hw_config;
-    if (mesh_device->arch() == tt::ARCH::QUASAR) {
+    if (mesh_device.arch() == tt::ARCH::QUASAR) {
         compute_hw_config = experimental::ComputeGen2Config{
             .fpu_math_fidelity = test_config.math_fidelity,
             .enable_32_bit_dest = test_config.fp32_dest_acc_en,
@@ -484,13 +480,7 @@ void run_single_core_reduce_program(
         .work_units = {wu},
     };
 
-    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
-
-    distributed::MeshWorkload workload;
-    auto zero_coord = distributed::MeshCoordinate(0, 0);
-    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    workload.add_program(device_range, std::move(program));
-    auto& program_run = workload.get_programs().at(device_range);
+    Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
 
     // Reader/writer RTAs depend on reduce_dim
     experimental::KernelRunArgs::RuntimeArgValues reader_named_rtas;
@@ -532,7 +522,7 @@ void run_single_core_reduce_program(
         {IN_TENSOR, experimental::ProgramRunArgs::TensorArgument{in_tensor}},
         {OUT_TENSOR, experimental::ProgramRunArgs::TensorArgument{out_tensor}},
     };
-    experimental::SetProgramRunArgs(program_run, params);
+    experimental::SetProgramRunArgs(program, params);
 
     // Shared seeded stimulus (packed bf16, TILED_NFACES). For bf16 input this is written to the
     // device as-is; for MxFp4 input it is quantized to MxFp4 for the device.
@@ -545,7 +535,7 @@ void run_single_core_reduce_program(
         // transform) - matching how the matmul stimulus feeds tile-major data.
         std::vector<std::uint32_t> mxfp4_packed =
             tt::tt_metal::pack_as_mxfp4_tiles(ttsl::make_const_span(in_floats), /*row_major_input=*/false);
-        tt_metal::detail::WriteToBuffer(*in_tensor.mesh_buffer().get_reference_buffer(), mxfp4_packed);
+        slow_dispatch::WriteToBuffer(in_tensor.mesh_buffer(), mxfp4_packed);
         // Decode the quantized values back (tile-major) and repack as bf16 for the golden source.
         std::vector<float> quantized = tt::tt_metal::unpack_mxfp4_tiles_into_float_vec(
             ttsl::make_const_span(mxfp4_packed), /*row_major_output=*/false);
@@ -554,14 +544,13 @@ void run_single_core_reduce_program(
             src_vec[i] = pack_two_bfloat16_into_uint32({bfloat16(quantized[2 * i]), bfloat16(quantized[2 * i + 1])});
         }
     } else {
-        tt_metal::detail::WriteToBuffer(*in_tensor.mesh_buffer().get_reference_buffer(), src_vec);
+        slow_dispatch::WriteToBuffer(in_tensor.mesh_buffer(), src_vec);
     }
 
-    distributed::EnqueueMeshWorkload(cq, workload, false);
-    distributed::Finish(cq);
+    LaunchProgram(mesh_device, std::move(program));
 
     std::vector<std::uint32_t> result_vec;
-    tt_metal::detail::ReadFromBuffer(*out_tensor.mesh_buffer().get_reference_buffer(), result_vec);
+    slow_dispatch::ReadFromBuffer(out_tensor.mesh_buffer(), result_vec);
 
     validate_reduce_result(result_vec, dims.num_golden_elements, test_config, src_vec, get_scaler(test_config));
 
@@ -580,7 +569,7 @@ void run_single_core_reduce_program(
 
 using namespace unit_tests::compute::reduce;
 
-TEST_F(LLKMeshDeviceFixture, TensixComputeReduceH) {
+TEST_F(LLKMeshDeviceSingleCardFixture, TensixComputeReduceH) {
     if (this->arch_ != tt::ARCH::BLACKHOLE && this->arch_ != tt::ARCH::QUASAR) {
         // (issue #10181: disabling due to sporadic failures in slow dispatch mode)
         GTEST_SKIP();
@@ -617,14 +606,14 @@ TEST_F(LLKMeshDeviceFixture, TensixComputeReduceH) {
                         .dst_full_sync_en = dst_full_sync_en,
                         .math_fidelity = MathFidelity(math_fid),
                     };
-                    run_single_core_reduce_program(this->devices_.at(0), test_config);
+                    run_single_core_reduce_program(this->device(), test_config);
                 }
             }
         }
     }
 }
 
-TEST_F(LLKMeshDeviceFixture, TensixComputeReduceW) {
+TEST_F(LLKMeshDeviceSingleCardFixture, TensixComputeReduceW) {
     std::vector<std::uint32_t> shape = {1, 3, 17 * TILE_HEIGHT, 19 * TILE_WIDTH};
     std::vector<std::uint32_t> result_shape = {shape[0], shape[1], shape[2], 32};
     for (std::uint8_t math_fid = std::uint8_t(MathFidelity::LoFi); math_fid <= std::uint8_t(MathFidelity::HiFi4);
@@ -652,14 +641,14 @@ TEST_F(LLKMeshDeviceFixture, TensixComputeReduceW) {
                         .dst_full_sync_en = dst_full_sync_en,
                         .math_fidelity = MathFidelity(math_fid),
                     };
-                    run_single_core_reduce_program(this->devices_.at(0), test_config);
+                    run_single_core_reduce_program(this->device(), test_config);
                 }
             }
         }
     }
 }
 
-TEST_F(LLKMeshDeviceFixture, TensixComputeReduceHW) {
+TEST_F(LLKMeshDeviceSingleCardFixture, TensixComputeReduceHW) {
     std::vector<std::uint32_t> shape = {1, 2, 7 * TILE_HEIGHT, 5 * TILE_WIDTH};
     std::vector<std::uint32_t> result_shape = {shape[0], shape[1], 32, 32};
     for (std::uint8_t math_fid = std::uint8_t(MathFidelity::LoFi); math_fid <= std::uint8_t(MathFidelity::HiFi4);
@@ -696,14 +685,14 @@ TEST_F(LLKMeshDeviceFixture, TensixComputeReduceHW) {
                         .fp32_dest_acc_en = fp32_dest_acc_en,
                         .dst_full_sync_en = dst_full_sync_en,
                         .math_fidelity = MathFidelity(math_fid)};
-                    run_single_core_reduce_program(this->devices_.at(0), test_config);
+                    run_single_core_reduce_program(this->device(), test_config);
                 }
             }
         }
     }
 }
 
-TEST_F(LLKMeshDeviceFixture, TensixComputeReduceHMathOnly) {
+TEST_F(LLKMeshDeviceSingleCardFixture, TensixComputeReduceHMathOnly) {
     if (this->arch_ != tt::ARCH::BLACKHOLE && this->arch_ != tt::ARCH::QUASAR) {
         // (issue #10181: disabling due to sporadic failures in slow dispatch mode)
         GTEST_SKIP();
@@ -741,14 +730,14 @@ TEST_F(LLKMeshDeviceFixture, TensixComputeReduceHMathOnly) {
                         .fp32_dest_acc_en = fp32_dest_acc_en,
                         .dst_full_sync_en = dst_full_sync_en,
                         .math_fidelity = MathFidelity(math_fid)};
-                    run_single_core_reduce_program(this->devices_.at(0), test_config);
+                    run_single_core_reduce_program(this->device(), test_config);
                 }
             }
         }
     }
 }
 
-TEST_F(LLKMeshDeviceFixture, TensixComputeReduceWMathOnly) {
+TEST_F(LLKMeshDeviceSingleCardFixture, TensixComputeReduceWMathOnly) {
     std::vector<std::uint32_t> shape = {1, 3, 17 * TILE_HEIGHT, 19 * TILE_WIDTH};
     std::vector<std::uint32_t> result_shape = {shape[0], shape[1], shape[2], 32};
     for (std::uint8_t math_fid = std::uint8_t(MathFidelity::LoFi); math_fid <= std::uint8_t(MathFidelity::HiFi4);
@@ -782,14 +771,14 @@ TEST_F(LLKMeshDeviceFixture, TensixComputeReduceWMathOnly) {
                         .fp32_dest_acc_en = fp32_dest_acc_en,
                         .dst_full_sync_en = dst_full_sync_en,
                         .math_fidelity = MathFidelity(math_fid)};
-                    run_single_core_reduce_program(this->devices_.at(0), test_config);
+                    run_single_core_reduce_program(this->device(), test_config);
                 }
             }
         }
     }
 }
 
-TEST_F(LLKMeshDeviceFixture, TensixComputeReduceHWMathOnly) {
+TEST_F(LLKMeshDeviceSingleCardFixture, TensixComputeReduceHWMathOnly) {
     std::vector<std::uint32_t> shape = {1, 2, 7 * TILE_HEIGHT, 5 * TILE_WIDTH};
     std::vector<std::uint32_t> result_shape = {shape[0], shape[1], 32, 32};
     for (std::uint8_t math_fid = std::uint8_t(MathFidelity::LoFi); math_fid <= std::uint8_t(MathFidelity::HiFi4);
@@ -827,14 +816,14 @@ TEST_F(LLKMeshDeviceFixture, TensixComputeReduceHWMathOnly) {
                         .fp32_dest_acc_en = fp32_dest_acc_en,
                         .dst_full_sync_en = dst_full_sync_en,
                         .math_fidelity = MathFidelity(math_fid)};
-                    run_single_core_reduce_program(this->devices_.at(0), test_config);
+                    run_single_core_reduce_program(this->device(), test_config);
                 }
             }
         }
     }
 }
 
-TEST_F(LLKMeshDeviceFixture, TensixComputeReduceWTinyTiles) {
+TEST_F(LLKMeshDeviceSingleCardFixture, TensixComputeReduceWTinyTiles) {
     tt_metal::Tile tile_shape = tt_metal::Tile({TILE_HEIGHT / 2, TILE_WIDTH});
     std::vector<std::uint32_t> shape = {1, 1, 1 * tile_shape.get_tile_shape()[0], 13 * tile_shape.get_tile_shape()[1]};
     std::vector<std::uint32_t> result_shape = {shape[0], shape[1], shape[2], tile_shape.get_tile_shape()[1]};
@@ -868,7 +857,7 @@ TEST_F(LLKMeshDeviceFixture, TensixComputeReduceWTinyTiles) {
                         .dst_full_sync_en = dst_full_sync_en,
                         .math_fidelity = MathFidelity(math_fid),
                     };
-                    run_single_core_reduce_program(this->devices_.at(0), test_config);
+                    run_single_core_reduce_program(this->device(), test_config);
                 }
             }
         }
@@ -899,7 +888,7 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixComputeReduceColumnMxFp4X2) {
         // MxFp4 + column (H) reduce auto-selects the 2x-packed src-register format on Quasar.
         .input_format = tt::DataFormat::MxFp4,
     };
-    run_single_core_reduce_program(this->devices_.at(0), test_config);
+    run_single_core_reduce_program(this->device(), test_config);
 }
 
 // ============================================================================
@@ -982,28 +971,28 @@ std::vector<std::uint32_t> run_reduce_idfree(
 TEST_F(LLKBlackholeSingleCardFixture, TensixReduceScalarSumIdFreeGolden) {
     auto data = create_random_vector_of_bfloat16(
         tt::tile_size(tt::DataFormat::Float16_b), /*rand_max_float=*/20, /*seed=*/42, /*offset=*/-10.0f);
-    auto result = run_reduce_idfree(*this->devices_.at(0), data, kPoolSum, kReduceScalar);
+    auto result = run_reduce_idfree(this->device(), data, kPoolSum, kReduceScalar);
     expect_reduce_matches_golden(result, data, ::unit_tests::compute::gold_reduce_hw, /*red_type=*/0);
 }
 
 TEST_F(LLKBlackholeSingleCardFixture, TensixReduceRowSumIdFreeGolden) {
     auto data = create_random_vector_of_bfloat16(
         tt::tile_size(tt::DataFormat::Float16_b), /*rand_max_float=*/20, /*seed=*/42, /*offset=*/-10.0f);
-    auto result = run_reduce_idfree(*this->devices_.at(0), data, kPoolSum, kReduceRow);
+    auto result = run_reduce_idfree(this->device(), data, kPoolSum, kReduceRow);
     expect_reduce_matches_golden(result, data, ::unit_tests::compute::gold_reduce_w, /*red_type=*/0);
 }
 
 TEST_F(LLKBlackholeSingleCardFixture, TensixReduceColSumIdFreeGolden) {
     auto data = create_random_vector_of_bfloat16(
         tt::tile_size(tt::DataFormat::Float16_b), /*rand_max_float=*/20, /*seed=*/42, /*offset=*/-10.0f);
-    auto result = run_reduce_idfree(*this->devices_.at(0), data, kPoolSum, kReduceCol);
+    auto result = run_reduce_idfree(this->device(), data, kPoolSum, kReduceCol);
     expect_reduce_matches_golden(result, data, ::unit_tests::compute::gold_reduce_h, /*red_type=*/0);
 }
 
 TEST_F(LLKBlackholeSingleCardFixture, TensixReduceScalarMaxIdFreeGolden) {
     auto data = create_random_vector_of_bfloat16(
         tt::tile_size(tt::DataFormat::Float16_b), /*rand_max_float=*/20, /*seed=*/42, /*offset=*/-10.0f);
-    auto result = run_reduce_idfree(*this->devices_.at(0), data, kPoolMax, kReduceScalar);
+    auto result = run_reduce_idfree(this->device(), data, kPoolMax, kReduceScalar);
     expect_reduce_matches_golden(result, data, ::unit_tests::compute::gold_reduce_hw, /*red_type=*/2);
 }
 
@@ -1020,7 +1009,7 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixReduceBlockIdFreeGolden) {
         scaler.insert(scaler.end(), scaler_tile.begin(), scaler_tile.end());
     }
     auto result = unit_tests::llk::single_core::run_binary(
-        *this->devices_.at(0),
+        this->device(),
         data,
         scaler,
         num_tiles,

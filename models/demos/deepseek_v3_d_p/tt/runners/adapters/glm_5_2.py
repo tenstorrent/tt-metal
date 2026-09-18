@@ -44,7 +44,6 @@ class GLM52Adapter(MLAPrefillAdapter):
     # cannot close) adds two high_bw_all_gather programs at two 16 B/bank semaphores each.
     l1_small_size = 1216
     routing_use_l1_small_for_semaphores = True
-    supports_tp_shard_kv = True  # allocate_kv_cache below honors params.tp_shard_kv
 
     def load_hf_config(self):
         """GLM's ``glm_moe_dsa`` isn't AutoConfig-loadable, so return the hand-built HF-attribute config
@@ -81,7 +80,7 @@ class GLM52Adapter(MLAPrefillAdapter):
 
         # KV dedup: seq_len/(sp*tp) rows per device instead of seq_len/sp. Both caches must use the same
         # tp_axis as the write op and the migration table.
-        kv_tp_axis = params.tp_axis if params.tp_shard_kv else None
+        kv_tp_axis = params.tp_axis
         kvpe_cache = init_mla_kv_cache(
             cache_format=MlaKvCacheFormat.BF16_RM,
             hf_config=hf_config,

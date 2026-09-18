@@ -39,10 +39,10 @@ void kernel_main() {
     auto s_dst = TensorAccessor(tensor::dst);
     using dst_accessor_type = decltype(s_dst);
 
-    DataflowBuffer src_dfb(dfb::src);
+    const DataflowBuffer src_dfb(dfb::src);
     const uint32_t src_dfb_addr = src_dfb.get_write_ptr();
     constexpr DataFormat src_data_format = get_dataformat(dfb::src);
-    DataflowBuffer dst_dfb(dfb::dst);
+    const DataflowBuffer dst_dfb(dfb::dst);
     const uint32_t dst_dfb_addr = dst_dfb.get_write_ptr();
 
     auto default_val = get_default_value<src_data_format>();
@@ -74,9 +74,9 @@ void kernel_main() {
         src_data_format,
         src_dfb_addr);
 
-    OutputContext output_ctx((uint32_t*)stack_unused, 1, dst_dfb_addr, output_page_elements);
+    OutputContext output_ctx(reinterpret_cast<uint32_t*>(stack_unused), 1, dst_dfb_addr, output_page_elements);
 
-    Noc noc;
+    const Noc noc;
 
     constexpr uint32_t inner_size = input_height * input_width;
 
@@ -90,7 +90,7 @@ void kernel_main() {
             }
 
             for (uint32_t h_tile = 0; h_tile < input_height; h_tile++) {
-                const uint32_t src_tile_id = outer_index * inner_size + h_tile * input_width + w_tile;
+                const uint32_t src_tile_id = (outer_index * inner_size) + (h_tile * input_width) + w_tile;
 
                 noc.async_read(s_src, src_dfb, src_page_size, {.page_id = src_tile_id}, {.offset_bytes = 0});
                 noc.async_read_barrier();
@@ -100,7 +100,7 @@ void kernel_main() {
             }
 
             for (uint32_t local_w = 0; local_w < tile_width; local_w++) {
-                const uint32_t global_w = w_tile * tile_width + local_w;
+                const uint32_t global_w = (w_tile * tile_width) + local_w;
                 if (global_w >= logical_width) {
                     continue;
                 }
