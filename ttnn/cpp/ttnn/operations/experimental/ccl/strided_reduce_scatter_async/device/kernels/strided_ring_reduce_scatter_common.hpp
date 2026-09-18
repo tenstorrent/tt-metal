@@ -34,18 +34,6 @@ FORCE_INLINE std::pair<uint32_t, uint32_t> get_slice_N_block_info(
     return {mm_N_full_blocks_per_slice, cols_before_actual_slice};
 }
 
-FORCE_INLINE uint32_t wrap_slice_idx(const int32_t slice_idx, const bool direction, const uint32_t ring_size) {
-    /**
-     * Wrap the slice index to the range [0, ring_size)
-     * based on the direction of the ring.
-     */
-    if (direction) {
-        return slice_idx < 0 ? slice_idx + ring_size : slice_idx;
-    } else {
-        return slice_idx >= (int)ring_size ? (uint32_t)slice_idx - ring_size : (uint32_t)slice_idx;
-    }
-}
-
 FORCE_INLINE uint32_t get_effective_chunk_width_in_tiles(
     const uint32_t chunk_idx, const uint32_t chunk_width_in_tiles, const uint32_t mm_N_full_block_wt) {
     /**

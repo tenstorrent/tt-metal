@@ -13,19 +13,18 @@
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 #include "cpp/ttnn/operations/ccl/ccl_host_types.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
-#include "tt_metal/fabric/hw/inc/tt_fabric_mux_interface.hpp"
 #include "tt_metal/tools/profiler/kernel_profiler.hpp"
 #include "tt_metal/fabric/hw/inc/linear/addrgen_api.h"
-#include "tt_metal/fabric/hw/inc/packet_header_pool.h"
-#include "tt_metal/fabric/hw/inc/linear/api.h"
-#include "cpp/ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/ccl_helpers_dataflow.hpp"
+#include "ttnn/operations/ccl/shared_with_host/ccl_helpers_schedule.hpp"
 #include <cstdint>
 #include <utility>
 #include "api/tensor/noc_traits.h"
 
 using address_t = uint32_t;
 using ttnn::ccl::Topology;
-using namespace tt::tt_fabric::linear::experimental;
+using namespace dataflow_kernel_lib::ccl;  // FabricStreamSender / MuxConn / the armed channels
+namespace sched = ttnn::ccl::schedule;     // the line schedule shared with the reader + compute kernel
 
 ///////////////////////////////////////////////////
 // COMPILE TIME ARGS
@@ -63,16 +62,6 @@ constexpr ccl_routing_utils::line_multicast_route_info_t backward_multicast_rout
     ccl_routing_utils::get_line_multicast_route_info_from_args<
         num_ct_args + 2 * ccl_routing_utils::num_line_unicast_args + ccl_routing_utils::num_line_multicast_args>();
 
-namespace detail {
-
-inline bool do_forward_sync(const bool is_forward) {
-    if constexpr (!sync_with_other_direction) {
-        return false;
-    }
-
-    return is_forward;
-}
-}  // namespace detail
 void kernel_main() {
     ///////////////////////////////////////////////////
     // ARGS
@@ -100,32 +89,29 @@ void kernel_main() {
 
     const uint32_t start_tiles_read = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t start_tiles_to_read = get_arg_val<uint32_t>(arg_idx++);
-    bool mux_connection_valid = get_arg_val<uint32_t>(arg_idx++) == 1;
-    const bool is_termination_master = get_arg_val<uint32_t>(arg_idx++);
-    const uint8_t fabric_mux_x = get_arg_val<uint32_t>(arg_idx++);
-    const uint8_t fabric_mux_y = get_arg_val<uint32_t>(arg_idx++);
-    const size_t fabric_mux_channel_base_address = get_arg_val<uint32_t>(arg_idx++);
-    const size_t fabric_mux_connection_info_address = get_arg_val<uint32_t>(arg_idx++);
-    const size_t fabric_mux_connection_handshake_address = get_arg_val<uint32_t>(arg_idx++);
-    const size_t fabric_mux_flow_control_address = get_arg_val<uint32_t>(arg_idx++);
-    const size_t fabric_mux_buffer_index_address = get_arg_val<uint32_t>(arg_idx++);
-    const uint8_t fabric_mux_channel_id = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t termination_sync_id = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t termination_sync_address = get_semaphore(termination_sync_id);
-    uint32_t local_fabric_mux_status_address = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
-    uint32_t local_flow_control_address = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
-    uint32_t local_teardown_address = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
-    uint32_t local_buffer_index_address = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
-    uint32_t termination_master_noc_x = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t termination_master_noc_y = get_arg_val<uint32_t>(arg_idx++);
 
-    Noc noc_obj;
-    CircularBuffer cb_compute_output(cb_compute_output_id);
-    CircularBuffer cb_reader_output(cb_reader_output_id);
+    // Build the worker-mux egress through the helper: MuxConn reads this exact runtime-arg block
+    // (same 17 fields, same order), then waits for the mux endpoint to be ready. A worker with no
+    // link in its direction has valid==false and never issues (every send below is gated on
+    // num_targets_in_direction).
+    MuxConn<fabric_mux_num_buffers_per_channel> mux_conn(
+        arg_cursor(arg_idx),
+        fabric_mux_channel_buffer_size_bytes,
+        fabric_mux_status_address,
+        fabric_mux_termination_signal_address,
+        num_mux_clients);
 
     const auto& unicast_route_info = (is_forward) ? forward_unicast_route_info : backward_unicast_route_info;
+    // Upstream replaced the multicast startup barrier with a neighbour unicast handshake, so no
+    // multicast route is issued from this kernel any more; the CT route info is still parsed to
+    // keep the arg layout stable.
     [[maybe_unused]] const auto& multicast_route_info =
         (is_forward) ? forward_multicast_route_info : backward_multicast_route_info;
+
+    // SPLIT OPEN: start the mux connection handshake now, overlap it with the address-generator
+    // construction below, and finish it just before the first issue.
+    FabricStreamSender<MuxConn<fabric_mux_num_buffers_per_channel>> sender(mux_conn, /*alignment=*/1);
+    sender.open_start();
 
     constexpr uint32_t ct_idx =
         num_ct_args + 2 * (ccl_routing_utils::num_line_unicast_args + ccl_routing_utils::num_line_multicast_args);
@@ -178,145 +164,80 @@ void kernel_main() {
     auto output_addrgen = TensorAccessor(output_tensor_args, output_address);
 #endif
 
-    tt::tt_fabric::WorkerToFabricMuxSender<fabric_mux_num_buffers_per_channel>* mux_connection_handle;
-    tt::tt_fabric::WorkerToFabricMuxSender<fabric_mux_num_buffers_per_channel> mux_connection;
-    if (mux_connection_valid) {
-        mux_connection = tt::tt_fabric::build_connection_to_fabric_endpoint<fabric_mux_num_buffers_per_channel>(
-            fabric_mux_x,
-            fabric_mux_y,
-            fabric_mux_channel_id,
-            fabric_mux_num_buffers_per_channel,
-            fabric_mux_channel_buffer_size_bytes,
-            fabric_mux_channel_base_address,
-            fabric_mux_connection_info_address,
-            fabric_mux_connection_handshake_address,
-            fabric_mux_flow_control_address,
-            fabric_mux_buffer_index_address,
-            local_flow_control_address,
-            local_teardown_address,
-            local_buffer_index_address);
-        mux_connection_handle = &mux_connection;
-    } else {
-        mux_connection_handle = nullptr;
-    }
+    // Complete the handshake and bind this direction's unicast route; every unicast arm below
+    // reuses it. Must precede the first issue (the barrier multicast may issue right away).
+    auto stream = sender.open_finish(unicast_route_info);
 
-    if (mux_connection_valid) {
-        // need to wait for fabric mux to be ready to accept connections
-        tt::tt_fabric::wait_for_fabric_endpoint_ready(
-            fabric_mux_x, fabric_mux_y, fabric_mux_status_address, local_fabric_mux_status_address);
-        tt::tt_fabric::fabric_client_connect_start(*mux_connection_handle);
-    }
-
-    if (mux_connection_valid) {
-        tt::tt_fabric::fabric_client_connect_finish(*mux_connection_handle);
-    }
-
-    auto pkt_scatter_hdr = PacketHeaderPool::allocate_header();
-    auto pkt_unicast_hdr = PacketHeaderPool::allocate_header();
-    auto pkt_hdr_seminc = PacketHeaderPool::allocate_header();
+    // Arm once, issue many. Each channel draws its own pooled header; arming is a local header
+    // program (no fabric I/O), so it is unconditional even though every ISSUE below is gated on
+    // num_targets_in_direction. The startup barrier now rides the UNICAST inc channel: upstream
+    // replaced the two-target multicast barrier with a single neighbour unicast handshake, which is
+    // the same header/route the counting incs use — so one armed unicast channel serves both.
+    auto scatter = stream.arm_scatter_write(page_size, contig_pages_advanced);
+    auto writer = stream.arm_unicast_write(page_size);
+    auto counter = stream.arm_inc(1);
 
     if (use_barrier_sem) {
         if (num_targets_in_direction) {
-            // Use neighbor unicast instead of multicast to support reshaped 'logical linear' mesh devices
-            ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_seminc, unicast_route_info);
-            fabric_unicast_noc_unicast_atomic_inc_set_state<
-                UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
-                pkt_hdr_seminc,
-                static_cast<uint8_t>(unicast_route_info.distance_in_hops),
-                tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
-                    0,                           // ignore
-                    static_cast<uint32_t>(1)});  // increment 1
-
-            uint64_t opposite_direction_barrier_sem_noc_addr_in_pkt =
-                safe_get_noc_addr(opposite_core_sem_noc0_x, opposite_core_sem_noc0_y, barrier_sem, 0);
-            fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
-                mux_connection_handle,
-                pkt_hdr_seminc,
-                tt::tt_fabric::NocUnicastAtomicIncCommandHeader{opposite_direction_barrier_sem_noc_addr_in_pkt, 0});
+            // Use neighbor unicast instead of multicast to support reshaped 'logical linear' mesh
+            // devices: increment only the worker going in the opposite direction.
+            counter.inc(safe_get_noc_addr(opposite_core_sem_noc0_x, opposite_core_sem_noc0_y, barrier_sem, 0));
 
             // Exactly one increment arrives: the two workers sharing a link (Dk forward and Dk+1
             // backward) handshake with each other, so the target is structurally 1 and does not
-            // depend on barrier_target_count.
+            // depend on barrier_target_count. A worker with no link in its direction neither
+            // signals nor waits, so the wait lives inside this guard.
             noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 1);
             noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 0);
         }
     }
 
-    uint64_t out_ready_sem_noc_addr_in_pkt =
+    Noc noc_obj;
+    CircularBuffer cb_compute_output(cb_compute_output_id);
+    CircularBuffer cb_reader_output(cb_reader_output_id);
+
+    const uint64_t out_ready_sem_noc_addr_in_pkt =
         safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem, 0);
-
-    // only initialize if we're actually going to send anything over fabric
-    if (num_targets_in_direction) {
-        ccl_routing_utils::fabric_set_line_unicast_route(pkt_scatter_hdr, unicast_route_info);
-        ccl_routing_utils::fabric_set_line_unicast_route(pkt_unicast_hdr, unicast_route_info);
-        ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_seminc, unicast_route_info);
-
-        fabric_unicast_noc_scatter_write_set_state<
-            UnicastScatterWriteUpdateMask::ChunkSizes | UnicastScatterWriteUpdateMask::PayloadSize>(
-            pkt_scatter_hdr,
-            static_cast<uint8_t>(unicast_route_info.distance_in_hops),
-            NocUnicastScatterCommandHeader({0, 0}, {static_cast<uint16_t>(page_size)}),
-            page_size * 2);
-
-        fabric_unicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::PayloadSize>(
-            pkt_unicast_hdr, static_cast<uint8_t>(unicast_route_info.distance_in_hops), nullptr, page_size);
-
-        fabric_unicast_noc_unicast_atomic_inc_set_state<
-            UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
-            pkt_hdr_seminc,
-            static_cast<uint8_t>(unicast_route_info.distance_in_hops),
-            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
-                0,                           // ignore
-                static_cast<uint32_t>(1)});  // increment 1
-    }
 
     const uint32_t intermediate_full_offset = is_forward ? 0 : input_num_pages;
 
-    uint32_t chunk_count = 0;
-    int slice_idx = is_forward ? ring_size - 1 : 0;
+    // The line schedule — the no-wrap slice sequence, the chunk boundaries (slice_B plays the
+    // channel role in the dim-zero family), and the chunks-per-sync signal cadence — comes from
+    // the shared header; this writer's counter.inc()s pair with the neighbouring reader's waits.
+    sched::LineSliceCursor slice_cursor(is_forward, ring_size);
+    sched::LineChannelWalk walk(slice_B, tile_granularity, start_tiles_read, start_tiles_to_read);
+    sched::SyncCadence cadence(chunks_per_sync);
+    sched::SequentialTileWalker interm_walker;
+    sched::SequentialTileWalker output_walker;
 
     for (uint32_t iter = 0; iter < num_targets_in_direction; ++iter) {
         CircularBuffer& cb_output = is_first_device_in_direction ? cb_reader_output : cb_compute_output;
-        chunk_count = 0;
+        cadence.reset();
+        interm_walker.set_base(slice_cursor.slice() * output_num_pages + intermediate_full_offset);
 
-        uint32_t intermediate_tile_id_start = slice_idx * output_num_pages + intermediate_full_offset;
-        for (uint32_t b = 0; b < slice_B; ++b) {
-            uint32_t tiles_read = start_tiles_read;
-            uint32_t tiles_to_read = start_tiles_to_read;
+        walk.reset();
+        while (walk.next_channel()) {
+            interm_walker.reset_offsets(start_tiles_read);
 
             // Write to remote intermediate buffer
-            while (tiles_read < tiles_to_read) {
-                uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
-                uint32_t num_pages_to_read = std::min(tiles_remaining_to_read, tile_granularity);
+            while (walk.next_chunk()) {
+                const uint32_t num_pages_to_read = walk.tiles_this_chunk();
 
                 cb_output.wait_front(tile_granularity);
                 size_t l1_read_addr = cb_output.get_read_ptr();
                 for (uint32_t j = 0; j < num_pages_to_read; j += contig_pages_advanced) {
-                    uint32_t num_pages_to_write = std::min(contig_pages_advanced, num_pages_to_read - j);
-
-                    uint32_t first_intermediate_tile_id = intermediate_tile_id_start + tiles_read;
-                    auto noc_address0 = tt::tt_fabric::linear::addrgen_detail::get_noc_address(
-                        intermediate_addrgen, first_intermediate_tile_id, 0);
-                    tiles_read++;
+                    const uint32_t num_pages_to_write = std::min(contig_pages_advanced, num_pages_to_read - j);
 
                     if (num_pages_to_write == 1) {
-                        fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
-                            mux_connection_handle,
-                            pkt_unicast_hdr,
-                            l1_read_addr,
-                            NocUnicastCommandHeader{noc_address0});
+                        writer.write_page(l1_read_addr, interm_walker.next(), intermediate_addrgen);
                         l1_read_addr += page_size;
                     } else if (num_pages_to_write == 2) {
-                        uint32_t second_intermediate_tile_id = intermediate_tile_id_start + tiles_read;
-                        auto noc_address1 = tt::tt_fabric::linear::addrgen_detail::get_noc_address(
-                            intermediate_addrgen, second_intermediate_tile_id, 0);
-                        tiles_read++;
-
-                        fabric_unicast_noc_scatter_write_with_state<UnicastScatterWriteUpdateMask::DstAddrs>(
-                            mux_connection_handle,
-                            pkt_scatter_hdr,
-                            l1_read_addr,
-                            NocUnicastScatterCommandHeader({noc_address0, noc_address1}));
+                        const uint64_t remote_noc_addrs[2] = {
+                            tt::tt_fabric::linear::addrgen_detail::get_noc_address(
+                                intermediate_addrgen, interm_walker.next(), 0),
+                            tt::tt_fabric::linear::addrgen_detail::get_noc_address(
+                                intermediate_addrgen, interm_walker.next(), 0)};
+                        scatter.write_scatter(remote_noc_addrs, 2, l1_read_addr);
                         l1_read_addr += page_size * 2;
                     } else {
                         ASSERT(false);
@@ -325,90 +246,64 @@ void kernel_main() {
                 }
                 cb_output.pop_front(tile_granularity);
 
-                chunk_count++;
-                if (chunk_count % chunks_per_sync == 0) {
+                cadence.advance();
+                if (cadence.signal_due()) {
                     // 2. unicast output ready semaphore
-                    fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
-                        mux_connection_handle,
-                        pkt_hdr_seminc,
-                        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{out_ready_sem_noc_addr_in_pkt, 0});
+                    counter.inc(out_ready_sem_noc_addr_in_pkt);
                 }
             }
-            intermediate_tile_id_start += batch_num_pages;
+            interm_walker.bump_base(batch_num_pages);
         }
 
-        if (chunk_count % chunks_per_sync != 0) {
+        if (cadence.tail_due()) {
             // 2. unicast output ready semaphore
-            fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
-                mux_connection_handle,
-                pkt_hdr_seminc,
-                tt::tt_fabric::NocUnicastAtomicIncCommandHeader{out_ready_sem_noc_addr_in_pkt, 0});
+            counter.inc(out_ready_sem_noc_addr_in_pkt);
         }
 
-        // Next slice idx
-        if (is_forward) {
-            slice_idx--;
-        } else {
-            slice_idx++;
-        }
+        slice_cursor.advance();
     }
 
     // Do write of final reduction and sync local FWD/BWD cores
     if (do_final_reduction) {
-        // Write output
-        uint32_t output_tile_id_start = 0;
-        for (uint32_t b = 0; b < slice_B; ++b) {
-            uint32_t tiles_read = start_tiles_read;
-            uint32_t tiles_to_read = start_tiles_to_read;
+        // If both directions land a final reduction on this core pair, the FORWARD side hands
+        // each finished chunk to the backward reader (one shared definition of the handshake).
+        const bool hands_off = sched::line_rs_forward_hands_off(sync_with_other_direction, is_forward);
 
-            while (tiles_read < tiles_to_read) {
-                uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
-                uint32_t num_pages_to_read = std::min(tiles_remaining_to_read, tile_granularity);
+        // Write output
+        output_walker.set_base(0);
+        walk.reset();
+        while (walk.next_channel()) {
+            output_walker.reset_offsets(start_tiles_read);
+            while (walk.next_chunk()) {
+                const uint32_t num_pages_to_read = walk.tiles_this_chunk();
 
                 cb_compute_output.wait_front(tile_granularity);
-                uint32_t l1_read_addr = cb_compute_output.get_read_ptr();
+                size_t l1_read_addr = cb_compute_output.get_read_ptr();
                 for (uint32_t j = 0; j < num_pages_to_read; ++j) {
-                    uint32_t output_tile_id = output_tile_id_start + tiles_read;
-                    uint64_t noc_write_addr = output_addrgen.get_noc_addr(output_tile_id);
-                    noc_async_write(l1_read_addr, noc_write_addr, page_size);
+                    const uint64_t local_noc_addr = output_addrgen.get_noc_addr(output_walker.next());
+                    noc_async_write(l1_read_addr, local_noc_addr, page_size);
                     l1_read_addr += page_size;
-                    tiles_read++;
                 }
 
-                if (detail::do_forward_sync(is_forward)) {
+                if (hands_off) {
                     noc_obj.async_write_barrier();
                 } else {
                     noc_obj.async_writes_flushed();
                 }
                 cb_compute_output.pop_front(tile_granularity);
-                if (detail::do_forward_sync(is_forward)) {
+                if (hands_off) {
                     // Tell local backwards reader that it can proceed
                     fwd_bwd_sem.up(noc_obj, opposite_core_sem_noc0_x, opposite_core_sem_noc0_y, 1);
                 }
             }
-            output_tile_id_start += batch_num_pages;
+            output_walker.bump_base(batch_num_pages);
         }
         noc_obj.async_write_barrier();
     }
 
-    noc_obj.async_write_barrier();
-    noc_obj.async_atomic_barrier();
-
-    if (mux_connection_valid) {
-        tt::tt_fabric::fabric_client_disconnect(*mux_connection_handle);
-
-        if (is_termination_master) {
-            Semaphore<> termination_sync(termination_sync_id);
-            termination_sync.wait(num_mux_clients - 1);
-            tt::tt_fabric::fabric_endpoint_terminate(fabric_mux_x, fabric_mux_y, fabric_mux_termination_signal_address);
-        } else {
-            uint64_t dest_addr =
-                safe_get_noc_addr(termination_master_noc_x, termination_master_noc_y, termination_sync_address, 0);
-            noc_semaphore_inc(dest_addr, 1);
-            noc_obj.async_atomic_barrier();
-        }
-    }
+    // close() drains (write + atomic barriers) then runs the mux teardown handshake behind the
+    // uniform helper teardown. The stream dtor would also close — idempotent.
+    stream.close();
 
     noc_obj.async_write_barrier();
-    noc_obj.async_atomic_barrier();
 }
