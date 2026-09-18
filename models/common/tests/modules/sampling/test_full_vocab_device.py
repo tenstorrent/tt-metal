@@ -24,6 +24,14 @@ class TorchOps:
         return torch.multiply(left, right)
 
     @staticmethod
+    def zeros_like(tensor):
+        return torch.zeros_like(tensor)
+
+    @staticmethod
+    def typecast(tensor, dtype):
+        return tensor.to(dtype)
+
+    @staticmethod
     def concat(tensors, dim):
         return torch.cat(tensors, dim=dim)
 
@@ -52,6 +60,14 @@ class TorchOps:
     @staticmethod
     def gt(left, right):
         return torch.gt(left, right)
+
+    @staticmethod
+    def isfinite(tensor):
+        return torch.isfinite(tensor)
+
+    @staticmethod
+    def logical_and(left, right):
+        return torch.logical_and(left, right)
 
     @staticmethod
     def argmax(tensor, dim, keepdim):
@@ -121,6 +137,72 @@ def test_padded_tail_cannot_be_selected_when_producer_masks_it():
     logits[..., 37:] = -torch.inf
     result = _run(logits, seeds=[17, 29], vocab_size=37)
     assert (result.token_ids < 37).all()
+
+
+def test_device_categorical_forces_fp32_probability_math_from_bfloat16_logits():
+    logits = torch.linspace(-30.0, 30.0, 32, dtype=torch.bfloat16).reshape(1, 1, 1, 32)
+    result = _run(logits, seeds=[17])
+    assert result.valid_distribution.all()
+    assert result.token_ids.dtype == torch.int64
+
+
+@pytest.mark.parametrize(
+    "bad_logits",
+    [
+        torch.full((1, 1, 1, 32), -torch.inf),
+        torch.full((1, 1, 1, 32), torch.inf),
+        torch.full((1, 1, 1, 32), torch.nan),
+    ],
+)
+def test_device_categorical_marks_nonfinite_distribution_invalid(bad_logits):
+    result = _run(bad_logits, seeds=[17])
+    assert not result.valid_distribution.any()
+
+
+def test_only_last_valid_token_is_selected_and_tail_stays_masked():
+    logits = torch.full((1, 1, 1, 64), -torch.inf)
+    logits[..., 36] = 0.0
+    result = _run(logits, seeds=[17], vocab_size=37)
+    assert result.valid_distribution.all()
+    assert result.token_ids.item() == 36
+
+
+def test_inactive_nan_scratch_is_zeroed_without_nan_propagation():
+    result = sample_unrestricted_top_p_one(
+        torch.zeros(1, 1, 2, 32),
+        inverse_temperature=torch.ones(1, 1, 2, 1),
+        row_scratch=[torch.zeros(1, 1, 1, 1), torch.full((1, 1, 1, 1), torch.nan)],
+        seed_values=[7, 2**32 - 1],
+        active_rows=[True, False],
+        vocab_size=32,
+        ops=TorchOps,
+    )
+    assert result.valid_distribution.all()
+
+
+def test_active_uniform_scratch_is_borrowed_and_reusable_across_steps():
+    scratch = torch.zeros(1, 1, 1, 1)
+    first = sample_unrestricted_top_p_one(
+        torch.zeros(1, 1, 1, 32),
+        inverse_temperature=torch.ones(1, 1, 1, 1),
+        row_scratch=[scratch],
+        seed_values=[7],
+        active_rows=[True],
+        vocab_size=32,
+        ops=TorchOps,
+    )
+    second = sample_unrestricted_top_p_one(
+        torch.zeros(1, 1, 1, 32),
+        inverse_temperature=torch.ones(1, 1, 1, 1),
+        row_scratch=[scratch],
+        seed_values=[8],
+        active_rows=[True],
+        vocab_size=32,
+        ops=TorchOps,
+    )
+    assert all(tensor is not scratch for tensor in first.owned_tensors)
+    assert all(tensor is not scratch for tensor in second.owned_tensors)
+    assert first.valid_distribution.all() and second.valid_distribution.all()
 
 
 @pytest.mark.parametrize(

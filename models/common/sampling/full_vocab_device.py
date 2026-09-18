@@ -15,9 +15,6 @@ from typing import Callable, Sequence
 
 
 _INACTIVE_DEVICE_SEED = (1 << 32) - 1
-_UNIFORM_SCALE = float(1 << 24)
-
-
 @dataclass(frozen=True)
 class DeviceCategoricalPrototypeResult:
     """Device result plus owned scratch that the caller must release."""
@@ -81,12 +78,21 @@ def _per_slot_uniform_rows(
         if not active:
             if int(seed) != _INACTIVE_DEVICE_SEED:
                 raise ValueError("inactive rows must carry the TTNN all-ones seed sentinel")
-            rows.append(own(ops.multiply(scratch, 0.0)))
+            # Do not derive an inactive value from scratch: NaN * 0 remains
+            # NaN.  The scratch tensor is a shape carrier, not initialized
+            # probability state.
+            rows.append(own(ops.zeros_like(scratch)))
             continue
         if isinstance(seed, bool) or not isinstance(seed, int) or not 0 < seed < _INACTIVE_DEVICE_SEED:
             raise ValueError("active uniform seeds must be uint32 values excluding zero and all-ones")
-        random_integer = own(ops.uniform(scratch, 0.0, _UNIFORM_SCALE, seed=seed))
-        rows.append(own(ops.multiply(random_integer, 1.0 / _UNIFORM_SCALE)))
+        # TTNN's public uniform wrapper converts the requested half-open
+        # interval [0, 1) to inclusive *representable* endpoints, so 1.0 is
+        # never emitted.  Calling that contract directly avoids a second
+        # rounding step through an integer-valued FP32 range.
+        # ttnn.uniform is explicitly in-place and returns ``scratch``.  That
+        # tensor is borrowed caller state reused across tokens, so it must not
+        # enter this call's owned scratch list.
+        rows.append(ops.uniform(scratch, 0.0, 1.0, seed=seed))
     return own(ops.concat(rows, dim=2))
 
 
@@ -136,9 +142,17 @@ def sample_unrestricted_top_p_one(
         owned.append(tensor)
         return tensor
 
-    maximum = own(ops.max(logits, dim=-1, keepdim=True))
-    centered = own(ops.subtract(logits, maximum))
-    scaled = own(ops.multiply(centered, inverse_temperature))
+    # The categorical accumulation is an FP32 contract.  BF16 logits are a
+    # valid producer format, but must be widened before max/sub/exp/scan.
+    logits_fp32 = logits if logits.dtype == ops.float32 else own(ops.typecast(logits, dtype=ops.float32))
+    inverse_temperature_fp32 = (
+        inverse_temperature
+        if inverse_temperature.dtype == ops.float32
+        else own(ops.typecast(inverse_temperature, dtype=ops.float32))
+    )
+    maximum = own(ops.max(logits_fp32, dim=-1, keepdim=True))
+    centered = own(ops.subtract(logits_fp32, maximum))
+    scaled = own(ops.multiply(centered, inverse_temperature_fp32))
     weights = own(ops.exp(scaled))
     cdf = _prefix_sum_fp32(weights, dim=-1, ops=ops, own=own)
     total = own(ops.slice(cdf, [0, 0, 0, width - 1], [1, 1, batch, width]))
@@ -152,5 +166,11 @@ def sample_unrestricted_top_p_one(
     threshold = own(ops.multiply(total, draws))
     above = own(ops.gt(cdf, threshold))
     token_ids = own(ops.argmax(above, dim=-1, keepdim=True))
-    valid_distribution = own(ops.gt(total, 0.0))
-    return DeviceCategoricalPrototypeResult(token_ids, valid_distribution, tuple(owned))
+    any_selected = own(ops.max(above, dim=-1, keepdim=True))
+    finite_total = own(ops.isfinite(total))
+    positive_total = own(ops.gt(total, 0.0))
+    valid_distribution = own(ops.logical_and(own(ops.logical_and(finite_total, positive_total)), any_selected))
+    # Some public ops may return aliases.  Lifetime ownership is identity
+    # based; deallocating the same allocation twice is invalid.
+    unique_owned = tuple({id(tensor): tensor for tensor in owned}.values())
+    return DeviceCategoricalPrototypeResult(token_ids, valid_distribution, unique_owned)
