@@ -241,7 +241,7 @@ def test_mpfe_mixed_llama3b_ff1_sdpa(device):
         ttnn.BufferType.L1,
         ttnn.ShardSpec(
             _singleton_core_set([(x, y) for y in range(4) for x in range(8)]),
-            (_NUM_HEADS, _HEAD_DIM),
+            (32, _HEAD_DIM),
             ttnn.ShardOrientation.ROW_MAJOR,
         ),
     )
