@@ -41,10 +41,12 @@
 #include "ttnn/operations/experimental/ccl/all_to_all_dispatch_metadata/all_to_all_dispatch_metadata_nanobind.hpp"
 #include "ttnn/operations/experimental/ccl/moe_compute/moe_compute_nanobind.hpp"
 #include "ttnn/operations/experimental/ccl/moe/selective_reduce_combine/selective_reduce_combine_nanobind.hpp"
+#include "ttnn/operations/experimental/ccl/broadcast_ring/broadcast_ring_nanobind.hpp"
 
 namespace ttnn::operations::experimental::ccl {
 
 void py_module(nb::module_& mod) {
+    ccl::bind_broadcast_ring(mod);
     ccl::bind_fused_rms_minimal(mod);
     ccl::bind_dit_fused_distributed_rmsnorm(mod);
     ccl::bind_dit_fused_distributed_groupnorm(mod);

@@ -2,6 +2,9 @@
 # Module owners should update this file when adding/removing/renaming source files.
 
 set(TTNN_OP_EXPERIMENTAL_CCL_SRCS
+    broadcast_ring/broadcast_ring.cpp
+    broadcast_ring/device/broadcast_ring_device_operation.cpp
+    broadcast_ring/device/broadcast_ring_program_factory.cpp
     llama_common.cpp
     composite_common.cpp
     reduce_scatter_common/reduce_scatter_validate_utils.cpp
@@ -142,6 +145,7 @@ set(TTNN_OP_EXPERIMENTAL_CCL_API_HEADERS
 # metalium-developers-infra as a required co-owner.
 set(TTNN_OP_EXPERIMENTAL_CCL_NANOBIND_SRCS
     ccl_experimental_nanobind.cpp
+    broadcast_ring/broadcast_ring_nanobind.cpp
     llama_all_gather_matmul_async/llama_all_gather_matmul_async_nanobind.cpp
     all_gather_async/all_gather_async_nanobind.cpp
     strided_all_gather_async/strided_all_gather_async_nanobind.cpp
