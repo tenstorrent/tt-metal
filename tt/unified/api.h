@@ -432,11 +432,14 @@ inline constexpr uint32_t kMcastSemBase = 0;
 #endif
 
 #if defined(TT_UNIFIED_MCAST_SEM_FIRST) && defined(TT_UNIFIED_MCAST_SEM_LAST)
+// sem::<name> is a SemaphoreBindingToken carrying the id as a static member; it has no
+// uint32_t conversion (a bound semaphore must go through the Semaphore class, never a raw
+// word). The id it reports is exactly what these compile-time checks want, so read ::id.
 static_assert(
-    kMcastSemBase == static_cast<uint32_t>(TT_UNIFIED_MCAST_SEM_FIRST),
+    kMcastSemBase == decltype(TT_UNIFIED_MCAST_SEM_FIRST)::id,
     "the harness's predicted multicast semaphore base does not match the id the host assigned");
 static_assert(
-    kMcastSemBase + 2 * 2 + 2 - 1 == static_cast<uint32_t>(TT_UNIFIED_MCAST_SEM_LAST),
+    kMcastSemBase + 2 * 2 + 2 - 1 == decltype(TT_UNIFIED_MCAST_SEM_LAST)::id,
     "the reserved multicast semaphores are not contiguous -- every id below is derived from "
     "kMcastSemBase by arithmetic, so a gap in the run silently retargets a handshake");
 #endif
