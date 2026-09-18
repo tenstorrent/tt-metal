@@ -229,6 +229,27 @@ def uses_ci_config_only_checkpoint():
     return True
 
 
+# Largest dense variant that fits ONE card, as hidden_size. The 4096 bound the
+# unit tests carried was calibrated on Blackhole (P150, 32 GB/card) and is wrong
+# on a Wormhole card's 12 GB: Gemma4-12B (hidden 3840) sits under it but dies in
+# the DRAM allocator (bank_manager.cpp:495) at 1x1 on a T3K -- measured on both
+# text_demo.py::test_demo and test_model.py::test_full_model. E4B (2560) is the
+# largest dense variant that does fit a Wormhole card, so that is the bound
+# there. 31B (5376) and 26B-A4B (MoE) were already excluded at 1x1 either way.
+_SINGLE_DEVICE_MAX_HIDDEN = {"blackhole": 4096, "wormhole": 2560}
+
+
+def skip_if_too_large_for_single_device(hf_config, tp):
+    """Skip a 1-device mesh whose card cannot hold this variant's weights."""
+    if tp >= 2:
+        return
+    from models.common.utility_functions import is_blackhole
+
+    max_hidden = _SINGLE_DEVICE_MAX_HIDDEN["blackhole" if is_blackhole() else "wormhole"]
+    if hf_config.hidden_size > max_hidden:
+        pytest.skip(f"Model too large for single device (hidden={hf_config.hidden_size} > {max_hidden})")
+
+
 def skip_if_config_only_checkpoint():
     """Skip tests that load HF weights or tokenizers when only config.json is available."""
     if uses_ci_config_only_checkpoint():
