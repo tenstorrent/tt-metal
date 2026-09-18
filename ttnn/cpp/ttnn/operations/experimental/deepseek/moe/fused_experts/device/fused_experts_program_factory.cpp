@@ -97,18 +97,22 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
-    // Routing arrives as the router produced it: each token's selected expert ids plus the score
-    // row they index. Only the {0,0} sender kernel reads the two, and only to populate cb_bcast;
-    // everything downstream of that consumes cb_bcast.
-    const auto& routing_tensor = tensor_args.routing_indices;
+    // Selection arrives in one of two forms (exactly one is set, see validation): the router's own
+    // selected ids, or an E-wide score row the leader kernel top-k's itself. Only the {0,0} sender
+    // kernel reads either, and only to populate cb_bcast; everything downstream consumes cb_bcast.
+    const bool rank_from_scores = tensor_args.ranking_scores.has_value();
     const auto& input_tensor = tensor_args.input_tensor;
     auto& output_tensor = tensor_return_value;
 
-    auto* routing_buffer = routing_tensor.buffer();
+    auto* routing_buffer = tensor_args.routing_indices.has_value() ? tensor_args.routing_indices->buffer() : nullptr;
     auto* score_buffer = tensor_args.routing_scores.buffer();
+    auto* ranking_buffer = tensor_args.ranking_scores.has_value() ? tensor_args.ranking_scores->buffer() : nullptr;
+    // Ranking and weighting on one and the same row is the common "no correction bias" case: the
+    // row is then read once and the top-k scan reads it straight out of the score region.
+    const bool ranking_is_scores = rank_from_scores && ranking_buffer == score_buffer;
     auto* input_buffer = input_tensor.buffer();
     auto* out_buffer = output_tensor.buffer();
-    auto* device = routing_tensor.device();
+    auto* device = input_tensor.device();
 
     const auto grid = device->compute_with_storage_grid_size();
     const uint32_t num_weights = static_cast<uint32_t>(tensor_args.gate_up_weights.size());
@@ -288,7 +292,10 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
     const tt::DataFormat down_df = datatype_to_dataformat_converter(down0.dtype());
 
     const tt::DataFormat gate_up_df = datatype_to_dataformat_converter(gate_up0.dtype());
-    const tt::DataFormat routing_df = datatype_to_dataformat_converter(routing_tensor.dtype());
+    // cb_routing is raw scratch, so its declared format only has to be the 2-byte one the selection
+    // inputs use (whatever is read into it).
+    const tt::DataFormat routing_df = datatype_to_dataformat_converter(
+        rank_from_scores ? tensor_args.routing_scores.dtype() : tensor_args.routing_indices->dtype());
     const tt::DataFormat out_df = datatype_to_dataformat_converter(output_tensor.dtype());
     const tt::DataFormat input_df = datatype_to_dataformat_converter(input_tensor.dtype());
 
@@ -297,19 +304,28 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
     // inside a single 32x32 tile), so there is exactly one page to read. It lands in cb_routing at
     // the buffer's *aligned* page stride, so the read's L1 destination shares the alignment of the
     // DRAM page it comes from.
-    const uint32_t routing_page_bytes = static_cast<uint32_t>(routing_buffer->page_size());
-    const uint32_t routing_row_stride = static_cast<uint32_t>(routing_buffer->aligned_page_size());
+    const uint32_t routing_page_bytes = routing_buffer ? static_cast<uint32_t>(routing_buffer->page_size()) : 0u;
+    const uint32_t routing_row_stride =
+        routing_buffer ? static_cast<uint32_t>(routing_buffer->aligned_page_size()) : 0u;
     // The score row lives in its own pages (TILE: E/32 tiles of the padded tile-row; ROW_MAJOR
     // decode: one stick of E bf16), read whole and then indexed in L1 (the kernel needs at most
-    // top_k scattered elements per token, but reading pages keeps every NoC transfer page-aligned).
+    // top_k scattered elements per token for the weighting, but reading pages keeps every NoC
+    // transfer page-aligned). The ranking row, when it is a separate tensor, is read the same way
+    // into its own region of cb_routing so the leader can scan all E columns of it.
     const uint32_t score_page_bytes = static_cast<uint32_t>(score_buffer->page_size());
     const uint32_t score_page_stride = static_cast<uint32_t>(score_buffer->aligned_page_size());
     const uint32_t score_pages = static_cast<uint32_t>(score_buffer->num_pages());
+    const uint32_t rank_page_bytes = ranking_buffer ? static_cast<uint32_t>(ranking_buffer->page_size()) : 0u;
+    const uint32_t rank_page_stride = ranking_buffer ? static_cast<uint32_t>(ranking_buffer->aligned_page_size()) : 0u;
+    const uint32_t rank_pages = ranking_buffer ? static_cast<uint32_t>(ranking_buffer->num_pages()) : 0u;
+    const bool ranking_is_rm =
+        rank_from_scores && tensor_args.ranking_scores->layout() == tt::tt_metal::Layout::ROW_MAJOR;
     const uint32_t top_k = operation_attributes.top_k;
     // topk emits uint16 ids; ttnn.embedding can only gather from a bfloat16 table, so a
     // table-driven router delivers the same ids as bf16 (exact below 256). Both are 2-byte
     // elements in the same tile geometry -- only the decode differs.
-    const bool index_is_bf16 = routing_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16;
+    const bool index_is_bf16 =
+        !rank_from_scores && tensor_args.routing_indices->dtype() == tt::tt_metal::DataType::BFLOAT16;
     // cb_bcast carries the compacted expert ids (num_weights uint32, ascending hit ids padded
     // with the sentinel) followed by the active experts' routing weights (num_active * batch fp32
     // bit patterns, hit-major then token row), broadcast to every core in one multicast.
@@ -376,13 +392,26 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
     const uint32_t limit_bits = std::bit_cast<uint32_t>(operation_attributes.swiglu_limit);
 
     // cb_routing is the {0,0} sender's private scratch for turning the routing input into the
-    // cb_bcast id/weight list: the single id page, then the score tile row, then the selection
-    // scratch -- a num_weights-bit "was this expert selected" bitmap, a num_weights-entry uint16
-    // table mapping an expert id to its position in the compacted hit list, and the batch's decoded
-    // ids. All three are O(E) or O(B*k) and too large for the RISC's stack, so they are carved out
-    // of this CB instead.
+    // cb_bcast id/weight list: the single id page (only when the router's ids are the selection
+    // source), then the score tile row, then -- when the ranking row is a different tensor -- the
+    // ranking tile row the top-k scan walks, then the selection scratch: a num_weights-bit "was
+    // this expert selected" bitmap, a num_weights-entry uint16 table mapping an expert id to its
+    // position in the compacted hit list, and the batch's decoded ids. All of those are O(E) or
+    // O(B*k) and too large for the RISC's stack, so they are carved out of this CB instead.
     const uint32_t score_l1_offset = align_up_32(routing_row_stride);
-    const uint32_t scratch_l1_offset = align_up_32(score_l1_offset + score_pages * score_page_stride);
+    // End of the score row's region. The ranking row, when it is a SEPARATE tensor, is placed right
+    // after it, and the selection scratch always follows BOTH regions.
+    //
+    // The scratch must not overlap the score row even when ranking and weighting are the same
+    // buffer: that row is the ranking path's input, scanned element by element while the bitmap /
+    // rank table / sel_ids are written, so putting the scratch at the score region's own offset
+    // (which is 0 whenever there is no ids tensor to push it back) would corrupt the row as it is
+    // being read and overflow the undersized CB. When the two collapse to one region, the scratch
+    // simply starts past that one region.
+    const uint32_t score_region_end = score_l1_offset + score_pages * score_page_stride;
+    const uint32_t rank_l1_offset = ranking_is_scores ? score_l1_offset : align_up_32(score_region_end);
+    const uint32_t ranking_region_bytes = (rank_from_scores && !ranking_is_scores) ? rank_pages * rank_page_stride : 0u;
+    const uint32_t scratch_l1_offset = align_up_32(score_region_end + ranking_region_bytes);
     const uint32_t bitmap_bytes = align_up_32(((num_weights + 31u) / 32u) * 4u);
     const uint32_t rank_bytes = align_up_32(num_weights * 2u);
     const uint32_t scratch_bytes = bitmap_bytes + rank_bytes + align_up_32(batch * top_k * 2u);
@@ -910,12 +939,34 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
         // Two-hub gather/broadcast geometry (see fetch_gate_up.h).
         split_col,
         num_hubs,
+        // ---- on-device top-k over the ranking row ----
+        // When set, the leader derives each token's ids by scanning the ranking score row itself
+        // instead of decoding them out of a routing-id tile. `ranking_is_scores` says the ranking
+        // row is the score row (same buffer): it is then already resident and read once, and the
+        // scan walks the score region rather than a region of its own.
+        rank_from_scores ? 1u : 0u,
+        ranking_is_scores ? 1u : 0u,
+        rank_pages,
+        rank_page_bytes,
+        rank_page_stride,
+        rank_l1_offset,
+        ranking_is_rm ? 1u : 0u,
     };
-    TensorAccessorArgs(*routing_buffer).append_to(sender_ct_args);
+    // The routing accessor is emitted from a null buffer (config None, page size 0) when the ids
+    // tensor does not exist; that accessor is compiled out of the ranking path, so it can never be
+    // dereferenced.
+    TensorAccessorArgs(routing_buffer).append_to(sender_ct_args);
     TensorAccessorArgs(*score_buffer).append_to(sender_ct_args);
+    TensorAccessorArgs(ranking_buffer).append_to(sender_ct_args);
     TensorAccessorArgs(*gate_up0_buffer).append_to(sender_ct_args);
     TensorAccessorArgs(*down0_buffer).append_to(sender_ct_args);
     append_addrs_ct(sender_ct_args);
+
+    // The framework resolves every bound Buffer to an address, so the routing / ranking slots each
+    // need a real buffer even when their accessor is compiled out. The score buffer is always
+    // present, so it backs whichever of the two is unused.
+    Buffer* routing_binding = routing_buffer ? routing_buffer : (ranking_buffer ? ranking_buffer : score_buffer);
+    Buffer* ranking_binding = ranking_buffer ? ranking_buffer : score_buffer;
 
     KernelDescriptor sender_desc;
     sender_desc.kernel_source = std::string(kKernelDir) + "/dataflow/compute_expert_ids.cpp";
@@ -933,7 +984,7 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
     // patches the addresses on program-cache hits instead of rebuilding the descriptor.
     sender_desc.emplace_runtime_args(
         sender,
-        {routing_buffer,
+        {routing_binding,
          mcast_start_x,
          mcast_start_y,
          mcast_end_x,
@@ -952,7 +1003,10 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
          group0_rect[0],
          group0_rect[1],
          group0_rect[2],
-         group0_rect[3]});
+         group0_rect[3],
+         // The ranking row (read only when the leader top-k's on it; the score buffer stands in
+         // otherwise, and the accessor is compiled out).
+         ranking_binding});
     desc.kernels.push_back(std::move(sender_desc));
 
     // ---- Input-broadcaster kernel on {1,0} (NoC 1). ----
