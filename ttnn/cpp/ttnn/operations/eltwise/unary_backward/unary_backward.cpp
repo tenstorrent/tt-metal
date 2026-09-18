@@ -464,6 +464,12 @@ std::vector<Tensor> tan_bw(
 }
 
 // grad(sigmoid) = grad*(1 - sigmoid(x))*sigmoid(x)
+// bw(sigmoid) = grad * sigmoid(input) * sigmoid(-input)
+// s * (1 - s) is the same quantity only in exact arithmetic: s rounds to exactly 1 as soon as
+// 1 - s drops below half an ULP of 1, so the subtraction cancels to 0 and the gradient is lost
+// for every input above about 6.25 (bfloat16) / 16.75 (float32). sigmoid(-x) is that same
+// 1 - s evaluated directly, with no cancellation, and sigmoid(x) * sigmoid(-x) is the identical
+// function elsewhere, so nothing inside the previously accurate range changes.
 std::vector<Tensor> sigmoid_bw(
     const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
@@ -473,8 +479,12 @@ std::vector<Tensor> sigmoid_bw(
         (int)ttnn::operations::unary::VecMode::RC,
         ttnn::operations::unary::SigmoidMode::ACCURATE,
         output_mem_config);
-    Tensor rsub_term = ttnn::rsub(sig_result, 1.0f, std::nullopt, output_mem_config);
-    Tensor prod_term_1 = ttnn::multiply(sig_result, rsub_term, std::nullopt, output_mem_config);
+    Tensor sig_neg = ttnn::sigmoid(
+        ttnn::neg(input, output_mem_config),
+        (int)ttnn::operations::unary::VecMode::RC,
+        ttnn::operations::unary::SigmoidMode::ACCURATE,
+        output_mem_config);
+    Tensor prod_term_1 = ttnn::multiply(sig_result, sig_neg, std::nullopt, output_mem_config);
     grad_tensor.emplace_back(ttnn::multiply(prod_term_1, grad, std::nullopt, output_mem_config));
     return grad_tensor;
 }
