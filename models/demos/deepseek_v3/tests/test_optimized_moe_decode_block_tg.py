@@ -521,9 +521,6 @@ def verify_output(iteration, mesh_device, mesh_shape, tt_output_tensor, output_r
 @pytest.mark.parametrize("combine_mux_core_range", [((3, 0), (4, 7))])
 @pytest.mark.parametrize("combine_token_parallel_core_dim", [4])
 @pytest.mark.parametrize("combine_data_parallel_core_dim", [4])
-# Keep a non-trace case: #56769 needs only two sequential iterations to reproduce (the mux replays a
-# stale memory map over a GlobalSemaphore allocated at the end of iteration 1), so the non-trace path
-# is a faster and more direct regression test than capture/replay.
 @pytest.mark.parametrize("enable_trace", [True, False], ids=["trace", "notrace"])
 @pytest.mark.parametrize("num_iterations", [3])
 @pytest.mark.parametrize(

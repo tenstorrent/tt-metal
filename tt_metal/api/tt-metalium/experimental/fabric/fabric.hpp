@@ -210,12 +210,9 @@ public:
         size_t buffer_size_bytes_full_size_channel,
         size_t base_l1_address,
         CoreType core_type = CoreType::WORKER,
-        // Highest L1 address the memory map may reach, exclusive. The mux carves its region out of raw
-        // L1 growing up from base_l1_address, outside the allocator, so by default it is bounded only by
-        // the physical end of L1 -- which includes the L1_SMALL slice at the top. A caller that wants the
-        // mux kept clear of L1_SMALL (where GlobalSemaphores live, and where a clobber is unrecoverable
-        // because their value is carried across invocations rather than recomputed -- see #56769) passes
-        // the L1_SMALL floor here. 0 means "use the physical end of L1", preserving old behaviour.
+        // usable_l1_end_address is highest L1 address the memory map may reach, exclusive.  A caller that wants the
+        // mux kept clear of L1_SMALL, to avoid clobbering persistent semaphores, passes
+        // the L1_SMALL floor here. 0 means "use the physical end of L1".
         size_t usable_l1_end_address = 0);
 
     // Returns the compile time args to be passed for the mux kernel
@@ -342,10 +339,9 @@ public:
         uint8_t num_buffers_per_channel,
         size_t channel_buffer_size_bytes,
         size_t base_l1_address,
-        // Highest L1 address the memory map may reach, exclusive; see the note on FabricMuxConfig's
-        // parameter of the same name. 0 means "use the physical end of L1", preserving old behaviour.
+        // Highest L1 address the memory map may reach, exclusive. 0 means "use the physical end of L1".
         // Unlike V1 there is no shrink loop here, so a ceiling that binds is a hard error rather than a
-        // smaller mux -- still far better than silently overwriting a GlobalSemaphore (#56769).
+        // smaller mux.
         size_t usable_l1_end_address = 0);
 
     void append_client_connection_rt_args(
