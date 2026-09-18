@@ -435,13 +435,25 @@ def test_packed_verify_batch_perf(mesh_device, reset_seeds):
         pos_p = _from(torch.tensor([[c + p for u in range(B) for p in range(P)]], dtype=torch.int64), ttnn.uint32)
         # batch-SDPA packed verify (default on at B==1) needs int32 positions for
         # paged_update_cache / cur_pos_tensor — uint32 position_idx is RoPE-only.
+        # RANK 1, as every production caller builds it (SpeculativeDecoder uses
+        # reshape(-1) / (P,)): ttnn_packed_verify_forward hoists the per-position
+        # KV-write slices as ``ttnn.slice(position_idx_cache, [p], [p + 1])``, and
+        # rank-2 trips "input_rank == begins.size()" inside ttnn.slice.
         pos_cache_p = _from(
-            torch.tensor([c + p for u in range(B) for p in range(P)], dtype=torch.int32).reshape(1, B * P),
+            torch.tensor([c + p for u in range(B) for p in range(P)], dtype=torch.int32),
             ttnn.int32,
         )
         mask_full, mask_slide = _masks(B)
         write_idxs = [_from(torch.full((B,), c + p, dtype=torch.int32), ttnn.int32) for p in range(P)]
-        pt_packed = _from(pt_b, ttnn.int32)
+        # sdpa_decode takes its batch from the PAGE TABLE's row count
+        # (sdpa_decode_device_operation.cpp: B = page_table.padded_shape()[0]),
+        # and asserts cur_pos_shape[-1] == B. At B==1 the batch-SDPA path treats
+        # the P candidates as a batch of P, so the page table needs P rows, not 1.
+        # Replicating user 0's row is the batch-alias trick every candidate
+        # indexes the same physical KV blocks -- exactly what
+        # SpeculativeDecoder._page_table(_pv_page_table_batch(P)) builds.
+        pt_rows = pt_b.repeat(P, 1) if B == 1 else pt_b
+        pt_packed = _from(pt_rows, ttnn.int32)
 
         def _packed_call():
             return target.ttnn_packed_verify_forward(
