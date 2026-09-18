@@ -29,6 +29,7 @@ ENV_MAX_PAYLOAD_SIZE = "CCL_BROADCAST_MAX_PAYLOAD_SIZE_BYTES"
 MAX_PAYLOAD_SIZE = get_env_int(ENV_MAX_PAYLOAD_SIZE, 15232)
 
 BCAST_CORE = ttnn.CoreCoord(10, 8)
+NUM_DEVICES = 8
 
 
 def _validate_broadcast_num_links(num_links: int) -> None:
@@ -88,6 +89,7 @@ def _build_chunk_stamped_sender_tensor(output_shape, chunk_size_bytes, iteration
     ],
     indirect=True,
 )
+@pytest.mark.requires_num_devices(NUM_DEVICES)
 def test_ccl_broadcast(
     bh_2d_mesh_device,
     mesh_rows,
@@ -105,12 +107,6 @@ def test_ccl_broadcast(
 ):
     if is_slow_dispatch():
         pytest.skip("Skipping trace mode in slow dispatch")
-
-    num_devices = mesh_rows * mesh_cols
-
-    # Validate mesh size
-    if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < num_devices:
-        pytest.skip("Test requires more devices than are available on this platform")
 
     # Create submesh
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((mesh_rows, mesh_cols)))
@@ -174,7 +170,7 @@ def test_ccl_broadcast(
 
     slice_size = output_shape[0]
     all_passed = True
-    for device_idx in range(num_devices):
+    for device_idx in range(NUM_DEVICES):
         start = device_idx * slice_size
         end = start + slice_size
         received = output_tensor_torch[start:end, :]
@@ -206,6 +202,7 @@ def test_ccl_broadcast(
     [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
     indirect=True,
 )
+@pytest.mark.requires_num_devices(NUM_DEVICES)
 def test_ccl_broadcast_loop(
     bh_2d_mesh_device,
     mesh_rows,
@@ -224,10 +221,6 @@ def test_ccl_broadcast_loop(
     Test CCL broadcast called multiple times without trace.
     Validates PacketHeaderPool::reset(), semaphore_dec, noc_semaphore_wait_min.
     """
-    num_devices = mesh_rows * mesh_cols
-    if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < num_devices:
-        pytest.skip("Test requires more devices than are available on this platform")
-
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((mesh_rows, mesh_cols)))
     test_inputs = build_broadcast_test_inputs(
         mesh_device=submesh,
@@ -263,7 +256,7 @@ def test_ccl_broadcast_loop(
 
     output_tensor_torch = ttnn.to_torch(ttnn_result, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
     slice_size = output_shape[0]
-    for device_idx in range(num_devices):
+    for device_idx in range(NUM_DEVICES):
         start = device_idx * slice_size
         end = start + slice_size
         received = output_tensor_torch[start:end, :]
@@ -291,6 +284,7 @@ def test_ccl_broadcast_loop(
     [{"fabric_config": ttnn.FabricConfig.FABRIC_2D, "fabric_router_config": create_fabric_router_config(15232)}],
     indirect=True,
 )
+@pytest.mark.requires_num_devices(NUM_DEVICES)
 def test_ccl_broadcast_host_iter_stamped_chunks(
     bh_2d_mesh_device,
     mesh_rows,
@@ -375,6 +369,7 @@ def test_ccl_broadcast_host_iter_stamped_chunks(
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("num_links", [2])
 @pytest.mark.parametrize("chunk_size_bytes", [4352])
+@pytest.mark.requires_num_devices(NUM_DEVICES)
 def test_ccl_broadcast_remainder_chunk(
     bh_2d_mesh_device,
     mesh_rows,
@@ -393,10 +388,6 @@ def test_ccl_broadcast_remainder_chunk(
     Explicit chunk-size remainder-path smoke test.
     Uses num_iterations=1 intentionally; multi-iteration behavior is already covered elsewhere.
     """
-    num_devices = mesh_rows * mesh_cols
-    if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < num_devices:
-        pytest.skip("Test requires more devices than are available on this platform")
-
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((mesh_rows, mesh_cols)))
     sender_coord = ttnn.MeshCoordinate(sender_row, sender_col)
 
@@ -431,7 +422,7 @@ def test_ccl_broadcast_remainder_chunk(
     torch_expected = DeepseekMinimalBroadcast.golden(sender_tensor)
     output_tensor_torch = ttnn.to_torch(ttnn_result, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
     slice_size = output_shape[0]
-    for device_idx in range(num_devices):
+    for device_idx in range(NUM_DEVICES):
         start = device_idx * slice_size
         end = start + slice_size
         received = output_tensor_torch[start:end, :]
@@ -454,6 +445,7 @@ def test_ccl_broadcast_remainder_chunk(
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("num_links", [1])
+@pytest.mark.requires_num_devices(NUM_DEVICES)
 def test_ccl_broadcast_auto_chunk(
     bh_2d_mesh_device,
     mesh_rows,
@@ -470,10 +462,6 @@ def test_ccl_broadcast_auto_chunk(
     """
     Auto-chunk resolver smoke test on standard 4x2 submesh with FABRIC_2D.
     """
-    num_devices = mesh_rows * mesh_cols
-    if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < num_devices:
-        pytest.skip("Test requires more devices than are available on this platform")
-
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((mesh_rows, mesh_cols)))
     sender_coord = ttnn.MeshCoordinate(sender_row, sender_col)
 
@@ -507,7 +495,7 @@ def test_ccl_broadcast_auto_chunk(
     torch_expected = DeepseekMinimalBroadcast.golden(sender_tensor)
     output_tensor_torch = ttnn.to_torch(ttnn_result, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
     slice_size = output_shape[0]
-    for device_idx in range(num_devices):
+    for device_idx in range(NUM_DEVICES):
         start = device_idx * slice_size
         end = start + slice_size
         received = output_tensor_torch[start:end, :]

@@ -1036,6 +1036,7 @@ def test_moe_fused(device, use_hardcoded_expert_index, reconfig_moe_cbs, noc_mod
     ],
 )
 @pytest.mark.requires_grid_size((13, 10))
+@pytest.mark.requires_num_devices(TestConfig.NUM_DEVICES_4x2)
 @pytest.mark.timeout(1200)
 def test_moe_fused_with_reduce(
     bh_2d_mesh_device, expert_upload_mode, reconfig_moe_cbs, noc_mode, sram_scenario, get_reference_model_state_dict
@@ -1051,13 +1052,6 @@ def test_moe_fused_with_reduce(
       - "rigged_groups1": load only 32 experts (group 0); rig routing within group 0.
       - "full_groups":    load all 256 experts; rig routing across groups 0/2/5/7.
     """
-    num_devices = TestConfig.NUM_DEVICES_4x2
-    if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < num_devices:
-        pytest.skip(
-            f"Test requires {num_devices} devices, mesh has "
-            f"{bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1]}"
-        )
-
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
     logger.info(f"Created submesh with shape: {submesh.shape}")
 
@@ -1588,6 +1582,7 @@ def test_mlp(device, reconfig_moe_cbs, noc_mode, get_reference_model_state_dict)
     ],
 )
 @pytest.mark.requires_grid_size((13, 10))
+@pytest.mark.requires_num_devices(TestConfig.NUM_DEVICES_4x2)
 @pytest.mark.timeout(1200)
 def test_mlp_with_reduce(
     bh_2d_mesh_device, use_mlp_weights, dense_placement, reconfig_moe_cbs, noc_mode, get_reference_model_state_dict

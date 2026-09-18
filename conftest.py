@@ -830,9 +830,28 @@ def bh_2d_mesh_device(request, silicon_arch_name, silicon_arch_blackhole, device
     if ttnn.get_num_devices() not in [1, 2, 4, 8, 32]:
         pytest.skip()
 
+    _check_required_num_devices(request, ttnn)
+
     request.node.pci_ids = ttnn.get_pcie_device_ids()
     with bh_2d_mesh_device_context(device_params) as mesh_device:
         yield mesh_device
+
+
+def _check_required_num_devices(request, ttnn):
+    marker = request.node.get_closest_marker("requires_num_devices")
+    if marker is None:
+        return
+
+    if len(marker.args) != 1:
+        raise pytest.UsageError("requires_num_devices expects exactly one integer argument")
+
+    required_devices = int(marker.args[0])
+    available_devices = ttnn.get_num_devices()
+
+    if available_devices < required_devices:
+        pytest.skip(
+            f"Test requires at least {required_devices} devices, " f"but only {available_devices} are available"
+        )
 
 
 def _check_requires_grid_size(device_or_mesh, marker):

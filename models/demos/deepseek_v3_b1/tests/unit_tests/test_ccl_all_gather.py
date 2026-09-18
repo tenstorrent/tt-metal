@@ -247,6 +247,7 @@ def _verify_per_slot_identity(submesh, ttnn_result, inputs, expected_slot_tensor
     ],
     indirect=True,
 )
+@pytest.mark.requires_num_devices(NUM_DEVICES)
 def test_ccl_all_gather_deterministic_fill(
     bh_2d_mesh_device,
     output_shape,
@@ -257,10 +258,6 @@ def test_ccl_all_gather_deterministic_fill(
     After all-gather, every device's output should have:
       slot 0 = all 1.0, slot 1 = all 2.0, slot 2 = all 3.0, slot 3 = all 4.0
     """
-    total_devices = bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1]
-    if total_devices < NUM_DEVICES:
-        pytest.skip(f"Test requires {NUM_DEVICES} devices, only {total_devices} available")
-
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((NUM_DEVICES, 1)))
 
     tile_h = output_shape[0]
@@ -318,6 +315,7 @@ def test_ccl_all_gather_deterministic_fill(
     ],
     indirect=True,
 )
+@pytest.mark.requires_num_devices(NUM_DEVICES)
 def test_ccl_all_gather(
     bh_2d_mesh_device,
     output_shape,
@@ -327,10 +325,6 @@ def test_ccl_all_gather(
 ):
     if is_slow_dispatch():
         pytest.skip("CCL all-gather trace test needs fast dispatch")
-
-    total_devices = bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1]
-    if total_devices < NUM_DEVICES:
-        pytest.skip(f"Test requires {NUM_DEVICES} devices, only {total_devices} available")
 
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((NUM_DEVICES, 1)))
 
@@ -384,16 +378,13 @@ def test_ccl_all_gather(
     ],
     indirect=True,
 )
+@pytest.mark.requires_num_devices(NUM_DEVICES)
 def test_ccl_all_gather_chunk_matrix(
     bh_2d_mesh_device,
     output_shape,
     num_links,
     max_chunk_size_bytes,
 ):
-    total_devices = bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1]
-    if total_devices < NUM_DEVICES:
-        pytest.skip(f"Test requires {NUM_DEVICES} devices, only {total_devices} available")
-
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((NUM_DEVICES, 1)))
 
     inputs = build_all_gather_test_inputs(mesh_device=submesh, output_shape=output_shape)
