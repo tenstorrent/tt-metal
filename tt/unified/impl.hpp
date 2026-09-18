@@ -608,8 +608,16 @@ Block<S> fill_reduce_scaler(const Storage<S>& scaler, uint32_t value_bits) {
         buffer(scaler.dfb_id).reserve_back(1);
 
         const uint32_t words = dfb_entry_bytes(scaler.dfb_id) / sizeof(uint32_t);
+#if defined(__EMULE_JIT_MODE)
+        // Host JIT: an L1 address is a 0-based firmware offset, not a dereferenceable
+        // pointer, so rebase onto this fiber's L1 window. The JIT patch pass cannot do
+        // it: these headers arrive via angle-includes, which it does not recurse into.
+        volatile tt_l1_ptr uint32_t* page = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+            __emule_local_l1_to_ptr(buffer(scaler.dfb_id).get_write_ptr()));
+#else
         volatile tt_l1_ptr uint32_t* page =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(buffer(scaler.dfb_id).get_write_ptr());
+#endif
 
         for (uint32_t w = 0; w < words; ++w) {
             page[w] = 0;
@@ -773,7 +781,8 @@ NocAsyncMcastTx<thread, S> noc_load(
     PhysicalMcast mcast,
     Semaphore<thread>& receivers_ready,
     Semaphore<thread>& data_sent,
-    Fn fn) {
+    Fn fn,
+    uint32_t num_dests_override) {
     bool is_sender = false;
 #if defined(IS_DM_THREAD) && IS_DM_THREAD
     if constexpr (thread == TT_DM_THREAD_ID) {
@@ -782,7 +791,14 @@ NocAsyncMcastTx<thread, S> noc_load(
 #endif
 
     detail::issue_load<thread>(storage, [&](L1Entries pages) {
-        const uint32_t num_dests = mcast.volume() - 1;
+        // num_dests counts RECEIVER CORES, not the physical span: on grids with
+        // router-only columns (Blackhole virtual cols 8-9) the inclusive physical
+        // rect overcounts -- an 8x8 logical rect spans 80 physical cells, so the
+        // sender would wait for 79 ready increments that 63 receivers can never
+        // send. Overloads converting from a LogicalMcast pass extent.h*extent.w - 1;
+        // a direct PhysicalMcast keeps the span, exact on contiguous grids.
+        const uint32_t num_dests =
+            (num_dests_override != 0) ? num_dests_override : mcast.volume() - 1;
 
         if (PhysicalCoord::this_core() == mcast.start) {
             fn(pages);
@@ -846,7 +862,8 @@ NocAsyncMcastTx<thread, S> noc_load(
     Semaphore<thread>& receivers_ready,
     Semaphore<thread>& data_sent,
     const Accessor& acc,
-    uint32_t block_idx) {
+    uint32_t block_idx,
+    uint32_t num_dests_override) {
 #if defined(IS_DM_THREAD) && IS_DM_THREAD
     detail::check_entry_format(storage.dfb_id, acc);
     const uint32_t first = block_idx * storage.num_entries;
@@ -868,7 +885,7 @@ NocAsyncMcastTx<thread, S> noc_load(
 #else
         (void)pages;
 #endif
-    });
+    }, num_dests_override);
 }
 
 template <int thread, typename S, typename Accessor>
@@ -879,12 +896,14 @@ NocAsyncMcastTx<thread, S> noc_load(
     Semaphore<thread>& data_sent,
     const Accessor& acc,
     uint32_t block_idx) {
-    return noc_load<thread>(storage, mcast.to_physical(), receivers_ready, data_sent, acc, block_idx);
+    return noc_load<thread>(
+        storage, mcast.to_physical(), receivers_ready, data_sent, acc, block_idx, mcast.volume() - 1);
 }
 
 template <int thread, int pair, typename S, typename Accessor>
 NocAsyncMcastTx<thread, S> noc_load(
-    const Storage<S>& storage, PhysicalMcast mcast, const Accessor& acc, uint32_t block_idx) {
+    const Storage<S>& storage, PhysicalMcast mcast, const Accessor& acc, uint32_t block_idx,
+    uint32_t num_dests_override) {
     static_assert(
         kMcastSemsReserved,
         "multicast needs its handshake semaphores reserved by the host: build the program through "
@@ -896,20 +915,21 @@ NocAsyncMcastTx<thread, S> noc_load(
         "copy flags); pair 2 would alias the noc_core_write arrival semaphore");
     Semaphore<thread> receivers_ready(kMcastReadySem<pair>);
     Semaphore<thread> data_sent(kMcastSentSem<pair>);
-    return noc_load<thread>(storage, mcast, receivers_ready, data_sent, acc, block_idx);
+    return noc_load<thread>(storage, mcast, receivers_ready, data_sent, acc, block_idx, num_dests_override);
 }
 
 template <int pair, int T, uint32_t Id, typename S, typename Accessor>
 NocAsyncMcastTx<T, S> noc_load(
     const Input<T, Id, S>& storage, PhysicalMcast mcast, const Accessor& acc, uint32_t block_idx) {
     constexpr int p = (pair == kPairOfThread) ? T : pair;
-    return noc_load<T, p>(static_cast<const Storage<S>&>(storage), mcast, acc, block_idx);
+    // 0 derives the receiver count from the physical span (exact on contiguous grids).
+    return noc_load<T, p>(static_cast<const Storage<S>&>(storage), mcast, acc, block_idx, 0);
 }
 
 template <int thread, int pair, typename S, typename Accessor>
 NocAsyncMcastTx<thread, S> noc_load(
     const Storage<S>& storage, LogicalMcast mcast, const Accessor& acc, uint32_t block_idx) {
-    return noc_load<thread, pair>(storage, mcast.to_physical(), acc, block_idx);
+    return noc_load<thread, pair>(storage, mcast.to_physical(), acc, block_idx, mcast.volume() - 1);
 }
 
 template <int pair, int T, uint32_t Id, typename S, typename Accessor>
@@ -920,7 +940,8 @@ NocAsyncMcastTx<T, S> noc_load(
 }
 
 template <int thread, int pair, typename S, typename Fn>
-NocAsyncMcastTx<thread, S> noc_load(const Storage<S>& storage, PhysicalMcast mcast, Fn fn) {
+NocAsyncMcastTx<thread, S> noc_load(
+    const Storage<S>& storage, PhysicalMcast mcast, Fn fn, uint32_t num_dests_override) {
     static_assert(
         kMcastSemsReserved,
         "multicast needs its handshake semaphores reserved by the host: build the program through "
@@ -932,18 +953,19 @@ NocAsyncMcastTx<thread, S> noc_load(const Storage<S>& storage, PhysicalMcast mca
         "copy flags); pair 2 would alias the noc_core_write arrival semaphore");
     Semaphore<thread> receivers_ready(kMcastReadySem<pair>);
     Semaphore<thread> data_sent(kMcastSentSem<pair>);
-    return noc_load<thread>(storage, mcast, receivers_ready, data_sent, fn);
+    return noc_load<thread>(storage, mcast, receivers_ready, data_sent, fn, num_dests_override);
 }
 
 template <int pair, int T, uint32_t Id, typename S, typename Fn>
 NocAsyncMcastTx<T, S> noc_load(const Input<T, Id, S>& storage, PhysicalMcast mcast, Fn fn) {
     constexpr int p = (pair == kPairOfThread) ? T : pair;
-    return noc_load<T, p>(static_cast<const Storage<S>&>(storage), mcast, fn);
+    // 0 derives the receiver count from the physical span (exact on contiguous grids).
+    return noc_load<T, p>(static_cast<const Storage<S>&>(storage), mcast, fn, 0);
 }
 
 template <int thread, int pair, typename S, typename Fn>
 NocAsyncMcastTx<thread, S> noc_load(const Storage<S>& storage, LogicalMcast mcast, Fn fn) {
-    return noc_load<thread, pair>(storage, mcast.to_physical(), fn);
+    return noc_load<thread, pair>(storage, mcast.to_physical(), fn, mcast.volume() - 1);
 }
 
 template <int pair, int T, uint32_t Id, typename S, typename Fn>

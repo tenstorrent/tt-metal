@@ -14,6 +14,7 @@ are -- the output projection at K = N = d_model, gate and up at N = ffn, and dow
 """
 
 import argparse
+import os
 import sys
 
 import torch
@@ -299,12 +300,27 @@ def main(argv=None):
         # fails loudly, which is the right outcome -- it would mean the parameter can go.
         skewed = dict(mcast=True, depth=1, in0_thread=0, in1_thread=0, skew=5000)
         good, want = run(device, 16, 64, 64, 2, 8, 8, share_pair=False, **skewed)
-        bad, _ = run(device, 16, 64, 64, 2, 8, 8, share_pair=True, **skewed)
-        good_pcc, bad_pcc = pcc(good, want), pcc(bad, want)
+        # Under emulation the shared-pair desync deadlocks (a receiver parks on a
+        # data_sent pulse the early-released sender has already cycled past) instead
+        # of completing with corrupt data as spinning RISCs do. A deadlock is the
+        # hazard breaking LOUDER, not the hazard fixed, so it counts as corrupt --
+        # deterministically (3/3), since the fiber schedule is fixed for the program.
+        # The day the shared run completes, bad_pcc judges it exactly as on silicon.
+        bad_pcc = float("-inf")
+        shared_note = "deadlocked as expected under emulation"
+        try:
+            bad, _ = run(device, 16, 64, 64, 2, 8, 8, share_pair=True, **skewed)
+        except RuntimeError as e:
+            if os.environ.get("TT_METAL_EMULE_MODE") != "1" or "quiescent deadlock" not in str(e):
+                raise
+        else:
+            bad_pcc = pcc(bad, want)
+            shared_note = "corrupted as expected" if bad_pcc < 0.99 else "NO LONGER CORRUPTS"
+        good_pcc = pcc(good, want)
         ok = good_pcc >= args.pcc and bad_pcc < 0.99
         logger.info(
             f"  shared handshake pair corrupts: distinct={good_pcc:.6f}, shared={bad_pcc:.6f} "
-            f"({'corrupted as expected' if bad_pcc < 0.99 else 'NO LONGER CORRUPTS'})  {'ok' if ok else 'FAIL'}"
+            f"({shared_note})  {'ok' if ok else 'FAIL'}"
         )
         if not ok:
             failed.append("shared-pair")

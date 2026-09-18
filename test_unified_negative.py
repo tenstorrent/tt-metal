@@ -130,7 +130,16 @@ finally:
 # lightweight halts the RISC, which the host cannot tell from a hang. A compile-time
 # refusal needs neither.
 CASES = [
-    ("dataflow buffer smaller than the block", UNDERSIZED_CB, True, "tripped an assert"),
+    # Under emulation the kernel's own ASSERT is a compiled-out no-op (the shadow
+    # api/debug/assert.h), so the refusal surfaces one step later, at the always-on
+    # reservation-overflow check when the kernel reserves 8 pages of a 7-page CB --
+    # the same misuse, refused, with emule's signature instead of the watcher's.
+    (
+        "dataflow buffer smaller than the block",
+        UNDERSIZED_CB,
+        True,
+        "CB Reservation Overflow" if os.environ.get("TT_METAL_EMULE_MODE") == "1" else "tripped an assert",
+    ),
     ("no-region barrier on a non-rectangular grid", NON_RECTANGULAR_BARRIER, False, "static assertion failed"),
     # No watcher needed any more, and no assert: this is refused on the HOST, before a kernel
     # runs at all. Worth noting what metal's check actually is, since it is weaker than the

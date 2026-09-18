@@ -10,6 +10,11 @@
 #define TT_DM_THREAD_ID 1
 #elif defined(UCK_CHLKC_UNPACK) || defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_PACK)
 #define IS_COMPUTE_THREAD 1
+#elif defined(COMPILE_FOR_TRISC)
+// Emule fuses TRISC0-2 into one compute fiber and marks it COMPILE_FOR_TRISC
+// instead of the per-RISC UCK_CHLKC_* defines, so accept that spelling here too.
+// Silicon compute builds define both, so this changes nothing there.
+#define IS_COMPUTE_THREAD 1
 #else
 #error "unified_metal.hpp: no metal thread-identity define present"
 #endif
@@ -44,12 +49,16 @@
 #include "api/dataflow/endpoints.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/noc_semaphore.h"
+#include "api/core_local_mem.h"
 #include "api/tensor/tensor_accessor.h"
 #include "api/tensor/tensor_accessor_args.h"
 #include "api/tensor/noc_traits.h"
 #endif
 
-#if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
+#if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD && !defined(__EMULE_JIT_MODE)
+// Placeholder ASSERT(false) definitions for names the compute TU shares with dataflow
+// code but must never call there. Skipped under emule, where the JIT shadows provide
+// the real definitions.
 struct TensorAccessor {
     template <typename Args>
     constexpr TensorAccessor(Args, uint32_t) {}
@@ -137,6 +146,18 @@ inline constexpr uint32_t pack_tile_geometry(uint32_t dfb) {
            (static_cast<uint32_t>(pack_tile_num_faces[dfb]) << 16) |
            (static_cast<uint32_t>(pack_partial_face[dfb]) << 8) | static_cast<uint32_t>(pack_narrow_tile[dfb]);
 }
+#endif
+
+#if defined(__EMULE_JIT_MODE) && defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD && \
+    !defined(TT_U_HAVE_PACK_TILE_GEOMETRY)
+// Fused TRISC executes all three roles in one TU, so the unpack/pack thread split does
+// not exist and both geometry sides are available. The JIT carries one geometry table
+// per CB (pack shares unpack's), which is what the pack-side word reads. Without this,
+// pack_geometry_to is a no-op and the packer keeps the init's geometry for the whole
+// body -- a 4-face configuration silently drops face 1 of every row-form store.
+#define TT_U_HAVE_PACK_TILE_GEOMETRY 1
+
+inline constexpr uint32_t pack_tile_geometry(uint32_t dfb) { return unpack_tile_geometry(dfb); }
 #endif
 
 }  // namespace unified

@@ -703,7 +703,8 @@ NocAsyncMcastTx<thread, S> noc_load(
     Semaphore<thread>& receivers_ready,
     Semaphore<thread>& data_sent,
     const Accessor& acc,
-    uint32_t block_idx);
+    uint32_t block_idx,
+    uint32_t num_dests_override);
 
 template <int thread, typename S, typename Accessor>
 NocAsyncMcastTx<thread, S> noc_load(
@@ -716,14 +717,19 @@ NocAsyncMcastTx<thread, S> noc_load(
 
 template <int thread, int pair = thread, typename S, typename Accessor>
 NocAsyncMcastTx<thread, S> noc_load(
-    const Storage<S>& storage, PhysicalMcast mcast, const Accessor& acc, uint32_t block_idx);
+    const Storage<S>& storage,
+    PhysicalMcast mcast,
+    const Accessor& acc,
+    uint32_t block_idx,
+    uint32_t num_dests_override);
 
 template <int pair = kPairOfThread, int T, uint32_t Id, typename S, typename Accessor>
 NocAsyncMcastTx<T, S> noc_load(
     const Input<T, Id, S>& storage, PhysicalMcast mcast, const Accessor& acc, uint32_t block_idx);
 
 template <int thread, int pair = thread, typename S, typename Fn>
-NocAsyncMcastTx<thread, S> noc_load(const Storage<S>& storage, PhysicalMcast mcast, Fn fn);
+NocAsyncMcastTx<thread, S> noc_load(
+    const Storage<S>& storage, PhysicalMcast mcast, Fn fn, uint32_t num_dests_override);
 
 template <int pair = kPairOfThread, int T, uint32_t Id, typename S, typename Fn>
 NocAsyncMcastTx<T, S> noc_load(const Input<T, Id, S>& storage, PhysicalMcast mcast, Fn fn);
