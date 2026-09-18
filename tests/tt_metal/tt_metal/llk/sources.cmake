@@ -30,5 +30,6 @@ set(UNIT_TESTS_LLK_SRC
     test_top32_rm_dev.cpp
     test_transpose.cpp
     test_unary_broadcast.cpp
+    test_unpack_to_dest_bcast_dst_offset.cpp
     test_untilize_tilize.cpp
 )
