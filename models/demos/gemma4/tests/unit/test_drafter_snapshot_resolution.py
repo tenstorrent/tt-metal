@@ -102,23 +102,40 @@ def test_a_writable_cache_fetches_even_with_offline_set(monkeypatch, tmp_path):
 
     HF_HUB_OFFLINE is set for the read-only case; it must not veto a fetch into
     a cache the operator deliberately made writable, and it is restored after.
+
+    Asserting the ENV VAR alone is not enough, and that is what let the real bug
+    ship: huggingface_hub reads HF_HUB_OFFLINE once at import into
+    constants.HF_HUB_OFFLINE, and every offline gate goes through
+    constants.is_offline_mode(), which returns that module global. Clearing only
+    the env var left the hub offline, so a :rw CI run still raised
+    LocalEntryNotFoundError and the drafter never downloaded. Assert the gate the
+    hub actually consults.
     """
+    from huggingface_hub import constants as hf_constants
+
     root = tmp_path / "rw"
     root.mkdir()
     monkeypatch.setattr(gv, "_hf_hub_cache_dirs", lambda: [str(root)])
     monkeypatch.setenv("HF_HUB_OFFLINE", "1")
+    monkeypatch.setattr(hf_constants, "HF_HUB_OFFLINE", True)
     seen = {}
 
     def fake_download(*a, **k):
-        seen["offline_during_call"] = os.environ.get("HF_HUB_OFFLINE")
+        seen["env_during_call"] = os.environ.get("HF_HUB_OFFLINE")
+        seen["offline_mode_during_call"] = hf_constants.is_offline_mode()
         seen.update(k)
         return str(root / "fetched")
 
     monkeypatch.setattr("huggingface_hub.snapshot_download", fake_download)
     got = gv._hf_resolve_repo("z-lab/x", "models--z-lab--x")
     assert got == str(root / "fetched")
-    assert seen["offline_during_call"] is None, "offline must be cleared for the call"
-    assert os.environ.get("HF_HUB_OFFLINE") == "1", "and restored afterwards"
+    assert seen["env_during_call"] is None, "the env var is cleared for the call"
+    assert seen["offline_mode_during_call"] is False, (
+        "the hub's own offline gate must be off for the call, or the fetch raises "
+        "LocalEntryNotFoundError however the env var is set"
+    )
+    assert os.environ.get("HF_HUB_OFFLINE") == "1", "env restored afterwards"
+    assert hf_constants.HF_HUB_OFFLINE is True, "and the hub global restored too"
 
 
 def test_a_cache_hit_never_reaches_the_hub(monkeypatch, tmp_path):

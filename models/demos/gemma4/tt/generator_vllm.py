@@ -2206,14 +2206,25 @@ def _hf_resolve_repo(repo_id, cache_dir_name):
         )
         return None
     try:
+        from huggingface_hub import constants as _hf_constants
         from huggingface_hub import snapshot_download
 
         # HF_HUB_OFFLINE is set for the read-only case, which does not apply to
-        # a writable cache; clear it for this call only so the fetch is allowed.
+        # a writable cache; disable it for this call only so the fetch is
+        # allowed. Popping the ENV VAR is not enough and was the bug: hub reads
+        # it once at import into constants.HF_HUB_OFFLINE, and every offline
+        # gate goes through constants.is_offline_mode(), which returns that
+        # module global. So a :rw run still raised LocalEntryNotFoundError
+        # ("outgoing traffic has been disabled") and the drafter never
+        # downloaded -- exactly the case the writable branch exists to serve.
+        # Patch the global too, and restore both.
         saved = {k: os.environ.pop(k, None) for k in ("HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE")}
+        saved_offline = _hf_constants.HF_HUB_OFFLINE
+        _hf_constants.HF_HUB_OFFLINE = False
         try:
             path = snapshot_download(repo_id=repo_id)
         finally:
+            _hf_constants.HF_HUB_OFFLINE = saved_offline
             for k, v in saved.items():
                 if v is not None:
                     os.environ[k] = v
