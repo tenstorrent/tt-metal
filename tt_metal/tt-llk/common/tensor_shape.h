@@ -75,17 +75,16 @@ struct __attribute__((packed)) TensorShape
 static_assert(sizeof(TensorShape) == 4, "TensorShape must be 4 bytes");
 
 /**
- * @brief Get the Quasar register-file stride between tiny faces, in hardware tile indices.
+ * @brief Get the register-file stride between tiny faces, in hardware tile indices.
  *
- * Quasar stores faces shorter than eight rows in sparse eight-row slots, independently of the math instruction width.
+ * Faces shorter than MAX_FPU_ROWS occupy sparse MAX_FPU_ROWS-row slots.
  * @param tensor_shape: Shape with a valid face row dimension (1, 2, 4, 8, or 16).
  * @return Hardware tile index increment for one face; 1 for dense faces.
  * @note Use only when one hardware tile represents one face, rather than a full four-face tile.
  */
-constexpr std::uint32_t quasar_tiny_face_stride(const TensorShape& tensor_shape)
+constexpr std::uint32_t tiny_face_stride(const TensorShape& tensor_shape)
 {
-    constexpr std::uint32_t MIN_FACE_SLOT_ROWS = MAX_FACE_R_DIM >> 1;
-    return tensor_shape.face_r_dim < MIN_FACE_SLOT_ROWS ? MIN_FACE_SLOT_ROWS / tensor_shape.face_r_dim : 1;
+    return tensor_shape.face_r_dim < MAX_FPU_ROWS ? MAX_FPU_ROWS / tensor_shape.face_r_dim : 1;
 }
 
 constexpr TensorShape DEFAULT_TENSOR_SHAPE = {MAX_FACE_R_DIM, MAX_FACE_C_DIM, MAX_NUM_FACES_R_DIM, MAX_NUM_FACES_C_DIM};

@@ -21,7 +21,7 @@ using namespace ckernel::math;
  */
 constexpr std::uint32_t _eltwise_binary_rows_per_face_(const ckernel::TensorShape& tensor_shape)
 {
-    return tensor_shape.face_r_dim * quasar_tiny_face_stride(tensor_shape);
+    return tensor_shape.face_r_dim * tiny_face_stride(tensor_shape);
 }
 
 /**
@@ -273,8 +273,10 @@ inline void _llk_math_eltwise_di_binary_addrmod_()
 {
     constexpr bool high_fidelity               = MATH_FIDELITY_TYPE != ckernel::MathFidelity::LoFi;
     constexpr std::uint32_t fidelity_increment = high_fidelity ? 1 : 0;
-    // Nonfinal replay instructions use slot 0. Do not inherit counter increments
-    // from a preceding addrmod kernel: DI already supplies each row offset.
+    // Nonfinal DI replay instructions use slot 0 and still apply its addrmods.
+    // A preceding non-DI binary init leaves ELTWISE_MATH_ROWS increments here,
+    // which shift the next DI access beyond its explicit row offset. Clear the
+    // slot so switching to DI does not skip faces or inherit fidelity updates.
     addr_mod_t {}.set(ADDR_MOD_0);
     addr_mod_t {
         .srca     = {.incr = 0, .clr = 0, .cr = 0},
