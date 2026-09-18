@@ -10,8 +10,9 @@ rows is therefore ``read_sharded_rows``' job; this module adds the manifest and 
 What a V4 trace carries:
 
   * ``decoder_io`` -- ``decoder_input_layer_0`` and ``decoder_output_layer_{i}``, each
-    ``[tokens, hc_mult * hidden]``. The hyper-connection streams come packed on the last dim, which
-    is what ``TtV4Block`` itself takes and returns, so a layer's input needs no reshaping.
+    ``[tokens, hc_mult * hidden]``. The hyper-connection streams come packed on the last dim, the
+    same width ``TtV4Block`` takes and returns, but a TP upload still permutes them
+    (``_pack_streams``) so each chip gets its hidden slice of every stream.
   * ``compressed_entries`` -- the layer's compressed KV after the whole prompt. Each layer compresses
     at its own rate, so the row count says which kind it is: over 56320 tokens, 440 rows is HCA
     (rate 128) and 14080 is CSA (rate 4).
