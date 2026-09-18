@@ -137,7 +137,7 @@ try:
                 guidance_scale=3.5 if cfg_enabled else 1.0,
                 traced=traced,
                 vae_traced=(bool(int(os.environ["SD35_VAE_TRACED"])) if "SD35_VAE_TRACED" in os.environ else None),
-                encoder_traced=False,
+                encoder_traced=(bool(int(os.environ["SD35_ENC_TRACED"])) if "SD35_ENC_TRACED" in os.environ else None),
                 on_event=profiler_event_callback(prof, it),
             )
         images[0].save(f"sd35_2x2_{tag}_it{it}.png")
