@@ -361,6 +361,11 @@ def from_torch(
         # float32 as an intermediate type is not used due to limited amount of L1 memory.
         tensor = torch.from_numpy(tensor)
 
+    if isinstance(tensor, torch.Tensor) and type(tensor) is not torch.Tensor:
+        # nanobind picks its torch importer by type(tensor).__module__ starting with "torch", so a subclass defined
+        # elsewhere (ttnn.torch_tracer.TracedTorchTensor, model-side wrappers) is not converted and fails to import.
+        tensor = tensor.as_subclass(torch.Tensor)
+
     # FP8_E4M3 host-side construction is narrowed to float32 input only. The FLOAT32 -> FP8_E4M3
     # path is wired up in transform_buffers via static_cast<float8_e4m3>; other source dtypes
     # either fail at the dlpack importer (torch.float8_e4m3fn, code 10 not yet handled) or hit
@@ -611,7 +616,9 @@ def _typecast_golden_function(
             return torch.clamp(input_tensor.to(torch.int64), min=0, max=255).to(torch.uint8)
         if "quasar" in arch_name and input_tensor.is_floating_point():
             return torch.round(torch.clamp(input_tensor.float(), min=0)).to(torch.uint8)
-        return input_tensor.to(torch.uint8)
+        converted = torch.trunc(input_tensor.float()) if input_tensor.is_floating_point() else input_tensor
+        # Same wrap as the int8 branch below
+        return (converted.to(torch.int64) % 256).to(torch.uint8)
 
     if output_dtype == ttnn.uint16:
         if input_tensor.is_floating_point():
@@ -625,8 +632,17 @@ def _typecast_golden_function(
             converted = input_tensor
         return torch.clamp(converted.to(torch.int64), min=0, max=65535).to(torch.uint16)
 
+    if output_dtype == ttnn.int8:
+        converted = torch.trunc(input_tensor.float()) if input_tensor.is_floating_point() else input_tensor
+        # Narrowing to int8 wraps modulo 256 rather than saturating
+        return ((converted.to(torch.int64) + 128) % 256 - 128).to(torch.int8)
+
     if output_dtype == ttnn.uint32:
         converted = torch.trunc(input_tensor.float()) if input_tensor.is_floating_point() else input_tensor
+        if input_dtype == ttnn.int8:
+            # int8 widens to uint32 by sign-extending and reinterpreting so negatives wrap to the
+            # top of the range instead of clamping to 0.
+            return (converted.to(torch.int64) & 0xFFFFFFFF).to(torch.uint32)
         return torch.clamp(converted.to(torch.int64), min=0, max=2**32 - 1).to(torch.uint32)
 
     if output_dtype == ttnn.fp8_e4m3:

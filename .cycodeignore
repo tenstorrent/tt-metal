@@ -11,3 +11,12 @@
 tt_metal/tt-llk/.claude/tools/llk-audit/kernel_tier/capture.py
 tt_metal/tt-llk/.claude/tools/llk-audit/llkaudit/cli.py
 tt_metal/tt-llk/.claude/tools/llk-audit/llkaudit/registry.py
+
+# streaming-profiler tests: Cycode reports "unsanitized user input in OS command" on the subprocess.run
+# calls that shell out to tracy-csvexport and to the workload binary. Each is passed a list with
+# shell=False, so no shell parses the arguments and no injection is reachable; the tool paths are module
+# constants and the capture path is created by the test itself. The rule's remediation -- hardcode every
+# input -- cannot apply to a tool under the build tree or a capture named per run.
+# NOTE: this file is honoured by the Cycode CLI only -- the PR bot scans the diff server-side and does not
+# read it, so an entry here never suppresses a review comment.
+tests/ttnn/tracy/test_streaming_profiler.py

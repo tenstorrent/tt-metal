@@ -7,16 +7,22 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "api/scratchpad.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
+#if !defined(ARCH_QUASAR)
+// ckernel::load_blocking (WH/BH store-drain). Unusable from a Quasar DM build: ckernel.h ->
+// ckernel_addrmod.h -> ckernel_trisc_id.h #errors unless COMPILE_FOR_TRISC, and Quasar's ckernel.h has
+// no load_blocking. Same guard rationale as common.hpp. The Quasar fence below uses flush_l2_cache_range.
 #include "ckernel.h"
+#endif
 #include "experimental/kernel_args.h"
 
 inline __attribute__((always_inline)) void fill_pad_dfb_with_val(
-    DataflowBuffer& dfb, const uint32_t num_bytes, const uint32_t val) {
-    volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dfb.get_write_ptr());
+    Scratchpad<uint32_t>& pad, const uint32_t num_bytes, const uint32_t val) {
+    volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pad.get_base_address());
 
     // Round up so a non-4-byte-aligned tail stick is fully filled (the loop-back read consumes all num_bytes).
     const uint32_t num_words = (num_bytes + sizeof(uint32_t) - 1) / sizeof(uint32_t);
@@ -79,31 +85,41 @@ void kernel_main() {
     }
 
     DataflowBuffer dfb_in0_exp(dfb::in0);
-    DataflowBuffer dfb_pad_exp(dfb::pad);
+    Scratchpad<uint32_t> pad(scratch::pad);
     // The realignment staging buffer is bound only when the host allocated it (front padding, or
     // an unaligned padded stick). A kernel may not name a DFB it has not bound, and `if constexpr`
     // does not suppress that name lookup, so every reference to it is gated at the preprocessor.
 #ifdef PAD_ALIGN_DFB
-    DataflowBuffer dfb_pad_align_exp(dfb::pad_align);
+    Scratchpad<uint32_t> pad_align(scratch::pad_align);
 #endif
 
     const auto s = TensorAccessor(tensor::src);
     Noc noc;
 
-    const uint32_t pad_val_addr = dfb_pad_exp.get_read_ptr();
+    const uint32_t pad_val_addr = pad.get_base_address();
 #ifdef PAD_ALIGN_DFB
-    const uint32_t pad_align_addr = dfb_pad_align_exp.get_read_ptr();
+    const uint32_t pad_align_addr = pad_align.get_base_address();
 #endif
 
-    fill_pad_dfb_with_val(dfb_pad_exp, stick_size_padded, packed_pad_value);
-    // The fill above is baby-RISCV stores; the per-stick loop below loop-back noc.async_read's the pad DFB as
-    // its source. A baby-RISCV store can retire before its write-request lands in L1, and the RISCV core
-    // and NoC are different L1 clients with no program-order guarantee between them
-    // (WormholeB0/TensixTile/BabyRISCV/MemoryOrdering.md). load_blocking the last filled word (blocking
-    // load + memory clobber) to force the fill to be processed before the first loop-back read is issued.
-    // One-time cost, outside the per-stick loop.
-    (void)ckernel::load_blocking(
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pad_val_addr) + (stick_size_padded / sizeof(uint32_t)) - 1);
+    fill_pad_dfb_with_val(pad, stick_size_padded, packed_pad_value);
+    // The fill above is baby-RISCV CPU stores; the per-stick loop below loop-back noc.async_read's the pad
+    // scratchpad as its source. The stores must be made visible to the NoC before that first read, but the
+    // mechanism differs by arch:
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+    // Quasar DM: CPU stores land in the RISC's L1D/L2, and the NoC sources TL1 directly. A local load does
+    // NOT publish to TL1 here (and ckernel::load_blocking is unavailable on Quasar), so flush the filled
+    // range so the reads see the fill. No-op on WH/BH. Matches fill_rm_interleaved.cpp / common.hpp (#51763).
+    flush_l2_cache_range(static_cast<uintptr_t>(pad_val_addr), static_cast<size_t>(stick_size_padded));
+#else
+    // WH/BH: a baby-RISCV store can retire before its write-request lands in L1, and the RISCV core and NoC
+    // are different L1 clients with no program-order guarantee (WormholeB0/TensixTile/BabyRISCV/
+    // MemoryOrdering.md). load_blocking the last filled word (blocking load + memory clobber) forces the fill
+    // to be processed before the first loop-back read. Index must match fill_pad_dfb_with_val's ceil-rounded
+    // word count: floor(size/4)-1 would fence on the word before a non-4B tail (racing its store) and
+    // underflow for a sub-4B stick. stick_size_padded > 0, so the ceil count is >= 1 and never underflows.
+    constexpr uint32_t pad_last_word = (stick_size_padded + sizeof(uint32_t) - 1) / sizeof(uint32_t) - 1;
+    (void)ckernel::load_blocking(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pad_val_addr) + pad_last_word);
+#endif
 
     uint32_t i_page = start_page_id;
     uint32_t curr_c = get_arg(args::start_dim_offset_c), curr_h = get_arg(args::start_dim_offset_h),
@@ -130,15 +146,27 @@ void kernel_main() {
             if (read_stick) {
 #ifdef PAD_ALIGN_DFB
                 if constexpr (front_padding) {
-                    uint32_t temp_addr = dfb_pad_align_exp.get_write_ptr();
+                    uint32_t temp_addr = pad_align.get_base_address();
                     read_input_stick_into_l1(noc, s, i_page, temp_addr, num_input_pages_in_row, stick_size_bytes);
                     noc.async_read_barrier();
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+                    // Quasar DM reverse hazard: the NoC just wrote pad_align to TL1, but a CPU read goes
+                    // through the private L1 D$ and L2. invalidate_l2_cache_range only reaches L2 and
+                    // invalidate_l1_cache() is a no-op here, so a stale D$ line could survive. Read the
+                    // staged stick through the uncached L1 alias (base + MEM_L1_UNCACHED_BASE), which
+                    // bypasses both caches -- what DataflowBuffer::get_read_ptr() did for this path before
+                    // the conversion, and what #55990 / common.hpp (#51763) do.
+                    const uintptr_t pad_align_src =
+                        static_cast<uintptr_t>(pad_align.get_base_address()) + MEM_L1_UNCACHED_BASE;
+#else
+                    const uintptr_t pad_align_src = static_cast<uintptr_t>(pad_align.get_base_address());
+#endif
                     memmove(
                         (void*)(l1_write_addr + stick_size_padded_front),
-                        (void*)(dfb_pad_align_exp.get_read_ptr()),
+                        (void*)(pad_align_src),
                         (size_t)(stick_size_bytes));
                 } else if constexpr (unaligned) {
-                    uint32_t temp_addr = dfb_pad_align_exp.get_write_ptr();
+                    uint32_t temp_addr = pad_align.get_base_address();
                     read_input_stick_into_l1(noc, s, i_page, temp_addr, num_input_pages_in_row, stick_size_bytes);
                     noc.async_read_barrier();
                     CoreLocalMem<uint32_t> dst(l1_write_addr);
