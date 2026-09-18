@@ -69,7 +69,7 @@ def test_fast_reduce_nc(input_shape, dims, compute_kernel_options, dataformat, d
     for dim in dims:
         output_shape[dim] = 1
 
-    (tt_input, tt_output, torch_input) = get_tensors(input_shape, output_shape, device, dataformat=dataformat)
+    tt_input, tt_output, torch_input = get_tensors(input_shape, output_shape, device, dataformat=dataformat)
 
     torch_output = torch.sum(torch_input, dims, True)
 
@@ -143,7 +143,7 @@ def test_fast_reduce_nc_with_prgm_caching(dims, device):
         for dim in dims:
             output_shape_1[dim] = 1
 
-        (tt_input, tt_output, torch_input) = get_tensors(input_shape_1, output_shape_1, device)
+        tt_input, tt_output, torch_input = get_tensors(input_shape_1, output_shape_1, device)
 
         torch_output = torch.sum(torch_input, dims, True)
 
@@ -172,7 +172,7 @@ def test_fast_reduce_nc_with_prgm_caching(dims, device):
         for dim in dims:
             output_shape_2[dim] = 1
 
-        (tt_input, tt_output, torch_input) = get_tensors(input_shape_2, output_shape_2, device)
+        tt_input, tt_output, torch_input = get_tensors(input_shape_2, output_shape_2, device)
 
         torch_output = torch.sum(torch_input, dims, True)
 
@@ -192,3 +192,68 @@ def test_fast_reduce_nc_with_prgm_caching(dims, device):
         )
 
         assert device.num_program_cache_entries() == 2 * len(dims) + 1
+
+
+@pytest.mark.parametrize("shape,dim,split", [((1, 4, 640, 576), 1, 512), ((3, 2, 96, 192), 0, 128)])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.float32])
+def test_fast_reduce_nc_split_with_prgm_caching(device, shape, dim, split, dtype):
+    device.disable_and_clear_program_cache()
+    device.enable_program_cache()
+    config = ttnn.init_device_compute_kernel_config(
+        device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, math_approx_mode=False
+    )
+    keep_alive = []
+    for seed in (13, 31):
+        torch.manual_seed(seed)
+        output_shape = list(shape)
+        output_shape[dim] = 1
+        x, output_buffer, _ = get_tensors(
+            list(shape), output_shape, device, with_padding=False, use_randint=False, dataformat=dtype
+        )
+        full = ttnn.experimental.fast_reduce_nc(x, dims=[dim], output=output_buffer, compute_kernel_config=config)
+        assert full.buffer_address() == output_buffer.buffer_address()
+        ref = ttnn.to_torch(full)
+        left, right = ttnn.experimental.fast_reduce_nc_split(
+            x, dim=dim, split_output_width=split, compute_kernel_config=config
+        )
+        torch.testing.assert_close(ttnn.to_torch(left), ref[..., :split], rtol=0, atol=0)
+        torch.testing.assert_close(ttnn.to_torch(right), ref[..., split:], rtol=0, atol=0)
+        keep_alive.append((x, full, left, right))
+    assert keep_alive[0][2].buffer_address() != keep_alive[1][2].buffer_address()
+    assert keep_alive[0][3].buffer_address() != keep_alive[1][3].buffer_address()
+    assert device.num_program_cache_entries() == 2
+
+
+@pytest.mark.parametrize("split", [0, 17, 256])
+def test_fast_reduce_nc_split_invalid_width(device, split, expect_error):
+    x, _, _ = get_tensors([1, 1, 32, 256], [1, 1, 32, 256], device, with_padding=False)
+    with expect_error(RuntimeError, "tile-aligned"):
+        ttnn.experimental.fast_reduce_nc_split(x, dim=1, split_output_width=split)
+
+
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 1048576}], indirect=True)
+def test_fast_reduce_nc_split_trace_replay(device):
+    shape = [1, 4, 64, 576]
+    x, _, _ = get_tensors(shape, [1, 1, 64, 576], device, with_padding=False)
+
+    def run():
+        return ttnn.experimental.fast_reduce_nc_split(x, dim=1, split_output_width=512)
+
+    for output in run():
+        ttnn.deallocate(output)
+    trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+    outputs = run()
+    ttnn.end_trace_capture(device, trace_id, cq_id=0)
+    try:
+        for seed in (37, 41):
+            torch.manual_seed(seed)
+            host = torch.randn(shape, dtype=torch.bfloat16)
+            source = ttnn.from_torch(host, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+            ttnn.copy_host_to_device_tensor(source, x)
+            full = ttnn.experimental.fast_reduce_nc(x, dims=[1])
+            ttnn.execute_trace(device, trace_id, cq_id=0, blocking=True)
+            ref = ttnn.to_torch(full)
+            for actual, expected in zip(outputs, (ref[..., :512], ref[..., 512:])):
+                torch.testing.assert_close(ttnn.to_torch(actual), expected, rtol=0, atol=0)
+    finally:
+        ttnn.release_trace(device, trace_id)
