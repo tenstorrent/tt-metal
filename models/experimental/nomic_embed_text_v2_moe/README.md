@@ -121,7 +121,12 @@ revisions, checkpoint contract, operator inventory and embedding pipeline.
 operator each aten call becomes, the PCC it reaches, the API and shape differences, and the
 negative controls for the ways an operator can be wrong without failing.
 
-Both are hand-written, and every number in them was measured.
+[`docs/DATASET_ACCURACY.md`](docs/DATASET_ACCURACY.md) reports retrieval accuracy against the
+reference on SciFact and XQuADRetrieval, 12 languages and 45124 encodes, where the test suite
+uses random token ids. It also records where the plan's per-row cosine bound and its
+short-sequence expectation fail to hold on real text.
+
+All three are hand-written, and every number in them was measured.
 
 ## Setup
 
