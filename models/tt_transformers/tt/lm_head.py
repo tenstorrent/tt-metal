@@ -67,6 +67,15 @@ class LMHead(LightweightModule):
         num_splits_ring_mm = math.ceil(size_per_device / max_columns_per_device_ring_mm)
         num_splits_dram_sharded = math.ceil(size_per_device / max_columns_per_device_dram_sharded)
 
+        # The DRAM-sharded LM head is DRAM-bandwidth bound with a tiny M=32
+        # activation, so every extra split is another launch that re-reads the
+        # same activation and pays fixed launch cost while the weight stream is
+        # the only real work. Halve the number of launches by doubling the
+        # per-launch column budget (still a multiple of TILE_SIZE, so the
+        # on-device slice path in _update_output_weights_dram_sharded stays
+        # tile-aligned).
+        max_columns_per_device_dram_sharded = 2 * max_columns_per_device_dram_sharded
+        num_splits_dram_sharded = math.ceil(size_per_device / max_columns_per_device_dram_sharded)
         self.split_sizes_dram_sharded = [min(size_per_device, max_columns_per_device_dram_sharded)] * (
             num_splits_dram_sharded - 1
         )
