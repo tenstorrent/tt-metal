@@ -137,6 +137,29 @@ TEST_F(DeviceStorageOwnershipTest, ShardedTensorViewOwnerDeallocationInvalidates
     EXPECT_THROW(view.device_storage().get_mesh_buffer(), std::exception);
 }
 
+TEST_F(DeviceStorageOwnershipTest, ShardedTensorViewDeallocationReleasesRetainedOwner) {
+    constexpr uint32_t viewOffset = 4096;
+    const TensorSpec ownerSpec = make_sharded_l1_tensor_spec(Shape{1, 1, 64, 32}, {64, 32});
+    const TensorSpec viewSpec = make_sharded_l1_tensor_spec(Shape{1, 1, 32, 32}, {32, 32});
+    uint32_t ownerAddress = 0;
+    Tensor view = [&] {
+        Tensor owner = ttnn::create_device_tensor(ownerSpec, mesh_device_.get());
+        ownerAddress = owner.buffer()->address();
+        return ttnn::experimental::create_sharded_tensor_view(owner, viewSpec, viewOffset);
+    }();
+    Tensor viewCopy = view;
+    ASSERT_TRUE(view.is_allocated());
+
+    view.deallocate(/*force=*/true);
+
+    EXPECT_FALSE(view.is_allocated());
+    EXPECT_FALSE(viewCopy.is_allocated());
+    EXPECT_FALSE(viewCopy.device_storage().is_root_allocated());
+    // The owner allocation is released while view objects still exist: a fresh allocation reuses its address.
+    Tensor replacement = ttnn::create_device_tensor(ownerSpec, mesh_device_.get());
+    EXPECT_EQ(replacement.buffer()->address(), ownerAddress);
+}
+
 TEST_F(DeviceStorageOwnershipTest, DeviceStorage_CopySharesOwnership) {
     Tensor tensor = ttnn::create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
     const auto& original_storage = tensor.device_storage();

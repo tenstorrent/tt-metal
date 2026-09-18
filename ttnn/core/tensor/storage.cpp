@@ -86,6 +86,9 @@ struct DeviceStorage::MeshTensorHolder {
 
     using States = std::variant<DeallocatedDefaultConstructed, Allocated, DeallocatedTombStone>;
     States state_;
+    // Set only on a retained view: the root holder of the allocation the view depends on. Every DeviceStorage
+    // copy of the view shares this holder, so deallocating any copy releases the retention for all of them.
+    std::shared_ptr<MeshTensorHolder> retained_owner_;
 
     MeshTensorHolder() : state_(DeallocatedDefaultConstructed{}) {}
     MeshTensorHolder(MeshTensor mesh_tensor) {
@@ -94,6 +97,7 @@ struct DeviceStorage::MeshTensorHolder {
     }
 
     bool is_allocated() const { return std::holds_alternative<Allocated>(state_); }
+    bool is_retained_view() const { return retained_owner_ != nullptr; }
 
     void deallocate() {
         if (auto* allocated = std::get_if<Allocated>(&state_)) {
@@ -102,6 +106,7 @@ struct DeviceStorage::MeshTensorHolder {
             state_ = DeallocatedTombStone{
                 allocated->mesh_tensor_.tensor_spec(), tt::tt_metal::get_tensor_topology(allocated->mesh_tensor_)};
         }
+        retained_owner_.reset();
     }
 };
 
@@ -110,10 +115,8 @@ DeviceStorage::DeviceStorage() : mesh_tensor_holder_(std::make_shared<MeshTensor
 DeviceStorage::DeviceStorage(DeviceStorage&& other) noexcept :
     mesh_tensor_holder_(std::move(other.mesh_tensor_holder_)),
     coords_(std::move(other.coords_)),
-    root_mesh_tensor_holder_(std::move(other.root_mesh_tensor_holder_)),
-    deallocate_root_(other.deallocate_root_) {
+    root_mesh_tensor_holder_(std::move(other.root_mesh_tensor_holder_)) {
     other.mesh_tensor_holder_ = std::make_shared<MeshTensorHolder>();
-    other.deallocate_root_ = true;
 }
 
 DeviceStorage& DeviceStorage::operator=(DeviceStorage&& other) noexcept {
@@ -121,9 +124,7 @@ DeviceStorage& DeviceStorage::operator=(DeviceStorage&& other) noexcept {
         mesh_tensor_holder_ = std::move(other.mesh_tensor_holder_);
         coords_ = std::move(other.coords_);
         root_mesh_tensor_holder_ = std::move(other.root_mesh_tensor_holder_);
-        deallocate_root_ = other.deallocate_root_;
         other.mesh_tensor_holder_ = std::make_shared<MeshTensorHolder>();
-        other.deallocate_root_ = true;
     }
     return *this;
 }
@@ -134,38 +135,33 @@ DeviceStorage::DeviceStorage(MeshTensor mesh_tensor) :
 }
 
 DeviceStorage::DeviceStorage(MeshTensor mesh_tensor_, std::vector<tt::tt_metal::distributed::MeshCoordinate> coords) :
-    DeviceStorage(std::make_shared<MeshTensorHolder>(std::move(mesh_tensor_)), std::move(coords), nullptr, true) {}
+    DeviceStorage(std::make_shared<MeshTensorHolder>(std::move(mesh_tensor_)), std::move(coords), nullptr) {}
 
 DeviceStorage::DeviceStorage(
     const DeviceStorage& other, std::vector<tt::tt_metal::distributed::MeshCoordinate> coords) :
     DeviceStorage(
-        other.mesh_tensor_holder_, std::move(coords), other.root_mesh_tensor_holder_, other.deallocate_root_) {}
+        other.mesh_tensor_holder_, std::move(coords), other.root_mesh_tensor_holder_) {}
 
 DeviceStorage::DeviceStorage(const DeviceStorage& owning_storage, MeshTensor reinterpreted_mesh_tensor) :
     DeviceStorage(
         std::make_shared<MeshTensorHolder>(std::move(reinterpreted_mesh_tensor)),
         owning_storage.coords_,
-        owning_storage.get_root_mesh_tensor(),
-        true) {}
+        owning_storage.get_root_mesh_tensor()) {}
 
 DeviceStorage DeviceStorage::create_retained_view(
     const DeviceStorage& owning_storage, MeshTensor reinterpreted_mesh_tensor) {
-    return DeviceStorage(
-        std::make_shared<MeshTensorHolder>(std::move(reinterpreted_mesh_tensor)),
-        owning_storage.coords_,
-        owning_storage.get_root_mesh_tensor(),
-        false);
+    auto view_holder = std::make_shared<MeshTensorHolder>(std::move(reinterpreted_mesh_tensor));
+    view_holder->retained_owner_ = owning_storage.get_root_mesh_tensor();
+    return DeviceStorage(std::move(view_holder), owning_storage.coords_, nullptr);
 }
 
 DeviceStorage::DeviceStorage(
     std::shared_ptr<MeshTensorHolder> mesh_tensor_holder,
     std::vector<tt::tt_metal::distributed::MeshCoordinate> coords,
-    std::shared_ptr<MeshTensorHolder> root_mesh_tensor_holder,
-    bool deallocateRoot) :
+    std::shared_ptr<MeshTensorHolder> root_mesh_tensor_holder) :
     mesh_tensor_holder_(std::move(mesh_tensor_holder)),
     coords_(std::move(coords)),
-    root_mesh_tensor_holder_(std::move(root_mesh_tensor_holder)),
-    deallocate_root_(deallocateRoot) {
+    root_mesh_tensor_holder_(std::move(root_mesh_tensor_holder)) {
     if (is_allocated()) {
         CMAKE_UNIQUE_NAMESPACE::validate_mesh_coordinates(coords_, get_mesh_tensor().device());
     }
@@ -231,6 +227,9 @@ MeshTensor& DeviceStorage::get_mesh_tensor() {
 }
 
 const std::shared_ptr<DeviceStorage::MeshTensorHolder>& DeviceStorage::get_root_mesh_tensor() const {
+    if (mesh_tensor_holder_->retained_owner_) {
+        return mesh_tensor_holder_->retained_owner_;
+    }
     return root_mesh_tensor_holder_ ? root_mesh_tensor_holder_ : mesh_tensor_holder_;
 }
 
@@ -239,7 +238,7 @@ void DeviceStorage::deallocate() {
         return;
     }
 
-    if (deallocate_root_) {
+    if (!mesh_tensor_holder_->is_retained_view()) {
         get_root_mesh_tensor()->deallocate();
     }
     mesh_tensor_holder_->deallocate();
