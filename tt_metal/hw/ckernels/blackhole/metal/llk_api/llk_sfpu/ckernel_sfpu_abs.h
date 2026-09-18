@@ -35,6 +35,10 @@ inline void calculate_abs_int32() {
         // byte-for-byte equivalent to the previous mode-12 access. abs() yields a vMag,
         // which stores through the M32 layout.
         sfpi::vInt v = sfpi::dst_reg[0].mode<sfpi::DataLayout::I32>();
+        // SFPABS on Blackhole overflows for INT32_MIN (0x80000000); clamp to INT32_MAX
+        // before calling abs so the result does not wrap to a negative value.
+        v_if(v == sfpi::vInt(0x80000000)) { v = sfpi::vInt(0x7FFFFFFF); }
+        v_endif;
         sfpi::dst_reg[0].mode<sfpi::DataLayout::M32>() = sfpi::abs(v);
         sfpi::dst_reg++;
     }
