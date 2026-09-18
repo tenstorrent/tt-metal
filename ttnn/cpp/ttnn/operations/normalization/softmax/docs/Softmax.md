@@ -433,7 +433,7 @@ attention_weights = ttnn.scale_mask_softmax(
 from ttnn import MathFidelity
 config = ttnn.DeviceComputeKernelConfig(
     math_fidelity=MathFidelity.HiFi4,
-    fp32_dest_acc_en=True  # FP32 accumulation for FLOAT32 inputs
+    fp32_dest_acc_en=True  # FP32 destination accumulation, for any input dtype
 )
 ```
 
