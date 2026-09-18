@@ -204,23 +204,23 @@ def get_reduce_extents(
     return [15, TILE_DIM]  # thin sanity slice for the float formats
 
 
-def get_reduce_atol(
+def get_reduce_tolerance(
     output_format, reduce_pool, mathop, input_dimensions, input_bounds, reduced_extent
 ):
-    """Absolute tolerance for the accumulating reductions (Sum/Average).
+    """(atol, rtol) for the assert; None keeps the harness default for that bound.
 
-    Summing N terms of magnitude M in a low-precision float accumulates error like
-    sqrt(N) * M * eps. Where terms nearly cancel, that error dwarfs the tiny true total and a fixed
-    tolerance would fail a correct reduction - so size atol to that bound, with a 2x margin.
+    Max, Min and the integer formats pick an input value and store it unchanged, so they must
+    match bit-exactly: both bounds are zero.
 
-    Returns None for Max and for the integer formats, which reduce exactly.
+    Sum and Average accumulate rounding error like sqrt(N) * M * eps for N terms of magnitude M,
+    so atol is sized to that bound with a 2x margin.
     """
     if reduce_pool not in (ReducePool.Sum, ReducePool.Average):
-        return None
+        return 0, 0
 
     eps = _FLOAT_FORMAT_EPS.get(output_format)
     if eps is None:  # integer formats reduce exactly
-        return None
+        return 0, 0
 
     max_term = max(abs(input_bounds[0]), abs(input_bounds[1]))
     # Terms folded per output element. A row spans the block's full width; a column spans only its
@@ -233,7 +233,7 @@ def get_reduce_atol(
     if reduce_pool == ReducePool.Average:
         atol /= num_terms
 
-    return max(0.05, atol)
+    return max(0.05, atol), None
 
 
 def _reduce_test_config_kwargs(
@@ -425,18 +425,20 @@ def test_sfpu_reduce_quasar(
     else:
         golden_slice, res_slice = golden_tensor[:, 0], res_tensor[:, 0]
 
+    atol, rtol = get_reduce_tolerance(
+        formats.output_format,
+        reduce_pool,
+        mathop,
+        input_dimensions,
+        input_bounds,
+        reduced_extent,
+    )
     assert passed_test(
         golden_slice,
         res_slice,
         formats.output_format,
-        custom_atol=get_reduce_atol(
-            formats.output_format,
-            reduce_pool,
-            mathop,
-            input_dimensions,
-            input_bounds,
-            reduced_extent,
-        ),
+        custom_atol=atol,
+        custom_rtol=rtol,
     ), "Assert against golden failed"
 
 

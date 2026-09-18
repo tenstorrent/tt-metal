@@ -297,44 +297,31 @@ std::vector<double> extract_written_lane(
     return lane;
 }
 
-// Absolute tolerance for the accumulating pools. Summing N terms of magnitude M in a
-// low-precision float accumulates error like sqrt(N) * M * eps, and where terms nearly cancel that
-// error dwarfs the tiny true total — so a fixed tolerance would fail a correct reduction. MAX/MIN
-// and the integer formats reduce exactly.
-double reduce_atol(const SfpuReduceConfig& config, std::uint32_t cols) {
-    if (is_int_format(config.format)) {
+constexpr double kFp32FoldAtol = 1e-4;
+constexpr double kFp32FoldRtol = 1e-5;
+
+// One ulp of `value` in the output format; none for Float32, which is stored as is.
+double output_ulp(tt::DataFormat format, double value) {
+    if (value == 0.0 || format == tt::DataFormat::Float32) {
         return 0.0;
     }
-    if (config.pool == ReducePool::Max || config.pool == ReducePool::Min) {
-        return 0.0;
-    }
-
-    double eps = 1.1920929e-7;  // fp32: 2^-23
-    if (config.format == tt::DataFormat::Float16_b) {
-        eps = 0.0078125;  // bf16: 2^-7
-    } else if (config.format == tt::DataFormat::Float16) {
-        eps = 0.0009765625;  // fp16: 2^-10
-    }
-    const double max_term = kFloatStimulusBound;
-    const double num_terms = (config.axis == ReduceAxis::Row) ? cols : kTileHeight;
-
-    double atol = 2.0 * max_term * eps * std::sqrt(num_terms);
-    if (config.pool == ReducePool::Avg) {
-        atol /= num_terms;
-    }
-    return std::max(0.05, atol);
+    const int mantissa_bits = (format == tt::DataFormat::Float16) ? 10 : 7;  // fp16 : bf16
+    return std::ldexp(1.0, std::ilogb(value) - mantissa_bits);
 }
 
-// Relative tolerance. Only the float accumulating pools get one: SUM/AVG round every partial sum
-// in the destination format, while MAX/MIN select an input unchanged and the integer pools are exact.
-double reduce_rtol(const SfpuReduceConfig& config) {
-    if (is_int_format(config.format)) {
+// Allowed |device - golden| per element. MAX/MIN and the integer pools are exact. SUM/AVG fold in
+// fp32 and round once at the final store, so they get one ulp of the result plus fp32 fold headroom
+// (~1e-6 real error; the bound stays well below a result rounded to bf16 or tf32 precision).
+double reduce_tolerance(const SfpuReduceConfig& config, std::uint32_t cols, double golden) {
+    if (is_int_format(config.format) || config.pool == ReducePool::Max || config.pool == ReducePool::Min) {
         return 0.0;
     }
-    if (config.pool == ReducePool::Max || config.pool == ReducePool::Min) {
-        return 0.0;
+    const double num_terms = (config.axis == ReduceAxis::Row) ? cols : kTileHeight;
+    double fold = kFp32FoldAtol * std::sqrt(num_terms);
+    if (config.pool == ReducePool::Avg) {
+        fold /= num_terms;
     }
-    return 0.05;
+    return fold + kFp32FoldRtol * std::abs(golden) + output_ulp(config.format, golden);
 }
 
 void run_single_core_sfpu_reduce(
@@ -508,14 +495,11 @@ void run_single_core_sfpu_reduce(
 
     ASSERT_EQ(golden.size(), device.size());
 
-    const double atol = reduce_atol(config, cols);
-    const double rtol = reduce_rtol(config);
-
     for (size_t i = 0; i < golden.size(); ++i) {
         const double diff = std::abs(golden[i] - device[i]);
-        const bool ok = diff <= atol + rtol * std::abs(golden[i]);
-        ASSERT_TRUE(ok) << fmt::format(
-            "mismatch at {}: golden={} device={} (atol={} rtol={} seed={})", i, golden[i], device[i], atol, rtol, seed);
+        const double tolerance = reduce_tolerance(config, cols, golden[i]);
+        ASSERT_LE(diff, tolerance) << fmt::format(
+            "mismatch at {}: golden={} device={} (tolerance={} seed={})", i, golden[i], device[i], tolerance, seed);
     }
 }
 
