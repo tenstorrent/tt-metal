@@ -5,8 +5,9 @@
 """One DeepSeek-V4 decoder block on CPU, composed from the reference modules, plus the same weights in
 the layout TtV4Block wants.
 
-Composed rather than driven through DeepseekV4DecoderLayer because there is no V4 checkpoint: the
-weights are random either way, so a whole-model module buys nothing and costs the MoE's runtime.
+Composed rather than driven through DeepseekV4DecoderLayer because both callers need the pieces
+separately: the device takes each one's weights on its own, and ``v4_block_forward`` interleaves the
+two hyper-connections by hand.
 """
 
 from __future__ import annotations
@@ -22,15 +23,26 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v4.modeling_deepseek_v4 imp
 )
 
 
-class _RefCache:
-    """Minimal ``past_key_values``: attention calls ``.update(k, v, layer_idx)`` on the container and
-    the compressor reaches into ``.layers[layer_idx]``."""
+def v4_block_modules(config, layer_idx: int) -> dict:
+    """The six modules a V4 block is made of, freshly initialised.
 
-    def __init__(self, layer):
-        self.layers = [layer]
-
-    def update(self, key_states, value_states, layer_idx, *args, **kwargs):
-        return self.layers[layer_idx].update(key_states, value_states)
+    Both callers fill them in afterwards -- ``build_v4_block_reference`` randomises them,
+    ``tests/v4/golden.py`` copies checkpoint weights over them -- so the dict's shape is settled
+    here rather than in each of them.
+    """
+    attn = DeepseekV4Attention(config, layer_idx=layer_idx).eval()
+    if attn.compressor is None:
+        # A sliding-only layer has no compressor and so no rope of its own; the config determines it.
+        attn.rotary_emb = DeepseekV4RotaryEmbedding(config)
+    hidden = config.hidden_size
+    return {
+        "attn": attn,
+        "mlp": DeepseekV4SparseMoeBlock(config, layer_idx=layer_idx).eval(),
+        "attn_norm": DeepseekV4RMSNorm(hidden, eps=config.rms_norm_eps).eval(),
+        "ffn_norm": DeepseekV4RMSNorm(hidden, eps=config.rms_norm_eps).eval(),
+        "attn_hc": DeepseekV4HyperConnection(config).eval(),
+        "ffn_hc": DeepseekV4HyperConnection(config).eval(),
+    }
 
 
 def build_v4_block_reference(config, layer_idx: int, seed: int = 0):
@@ -40,7 +52,10 @@ def build_v4_block_reference(config, layer_idx: int, seed: int = 0):
     from N(0,1), so a PCC pass cannot come from weights that make the block an identity map.
     """
     torch.manual_seed(seed)
-    attn = DeepseekV4Attention(config, layer_idx=layer_idx).eval()
+    ref = v4_block_modules(config, layer_idx)
+    attn, mlp = ref["attn"], ref["mlp"]
+    hidden, inter, n_exp = config.hidden_size, config.intermediate_size, config.num_local_experts
+    hs, ds = hidden**-0.5, inter**-0.5
     with torch.no_grad():
         attn.q_a_norm.weight.uniform_(0.5, 1.5)
         attn.kv_norm.weight.uniform_(0.5, 1.5)
@@ -48,14 +63,7 @@ def build_v4_block_reference(config, layer_idx: int, seed: int = 0):
         if attn.compressor is not None:
             attn.compressor.position_bias.normal_(0.0, 0.02)
             attn.compressor.kv_norm.weight.uniform_(0.5, 1.5)
-        else:
-            # A sliding-only layer carries no rotary_emb of its own; the config determines it.
-            attn.rotary_emb = DeepseekV4RotaryEmbedding(config)
 
-    mlp = DeepseekV4SparseMoeBlock(config, layer_idx=layer_idx).eval()
-    hidden, inter, n_exp = config.hidden_size, config.intermediate_size, config.num_local_experts
-    hs, ds = hidden**-0.5, inter**-0.5
-    with torch.no_grad():
         mlp.gate.weight.normal_(0.0, hs)
         mlp.experts.gate_up_proj.normal_(0.0, hs)
         mlp.experts.down_proj.normal_(0.0, ds)
@@ -69,33 +77,20 @@ def build_v4_block_reference(config, layer_idx: int, seed: int = 0):
         else:
             mlp.gate.e_score_correction_bias.normal_(0.0, 0.01)
 
-    # Two hyper-connections, one per site, with independent parameters, initialised the way the model
-    # prescribes (DeepseekV4PreTrainedModel._init_weights): fn ~ N(0, initializer_range), base zero,
-    # scale one. A non-zero base with a small scale -- which tt/mhc's own op test uses deliberately,
-    # to cover the bias add -- would make the projection ~1% of each sigmoid's argument and the rest
-    # bias, leaving this test blind to whether the projection is computed correctly at all.
-    hcs = {}
-    for site in ("attn", "ffn"):
-        hc = DeepseekV4HyperConnection(config).eval()
-        with torch.no_grad():
+        # The hyper-connections get what the model prescribes (DeepseekV4PreTrainedModel.
+        # _init_weights): fn ~ N(0, initializer_range), base zero, scale one. A non-zero base with a
+        # small scale -- which tt/mhc's own op test uses deliberately, to cover the bias add -- would
+        # make the projection ~1% of each sigmoid's argument and the rest bias, leaving this test
+        # blind to whether the projection is computed correctly at all.
+        for site in ("attn", "ffn"):
+            hc = ref[f"{site}_hc"]
             hc.fn.normal_(0.0, config.initializer_range)
             hc.base.zero_()
             hc.scale.fill_(1.0)
-        hcs[site] = hc
 
-    attn_norm = DeepseekV4RMSNorm(hidden, eps=config.rms_norm_eps).eval()
-    ffn_norm = DeepseekV4RMSNorm(hidden, eps=config.rms_norm_eps).eval()
-    with torch.no_grad():
-        attn_norm.weight.uniform_(0.5, 1.5)
-        ffn_norm.weight.uniform_(0.5, 1.5)
-    return {
-        "attn": attn,
-        "mlp": mlp,
-        "attn_norm": attn_norm,
-        "ffn_norm": ffn_norm,
-        "attn_hc": hcs["attn"],
-        "ffn_hc": hcs["ffn"],
-    }
+        ref["attn_norm"].weight.uniform_(0.5, 1.5)
+        ref["ffn_norm"].weight.uniform_(0.5, 1.5)
+    return ref
 
 
 def v4_mhc_weights(ref):

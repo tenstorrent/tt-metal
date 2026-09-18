@@ -197,8 +197,9 @@ def resolve_checkpoint(variant: GoldenVariant = V4_PRO) -> Path | None:
 def load_checkpoint_tensors(checkpoint_dir: Path, names: list[str]) -> dict[str, torch.Tensor]:
     """Read ``names`` from the shards the index puts each in, opening each shard once.
 
-    One Pro layer is ~1150 expert matrices spread over 66 shards. Grouping by shard is not tidiness:
-    opening one per tensor would read each shard from disk that many times.
+    The export is one shard per layer, so a layer's ~1150 expert matrices sit in a single file of
+    tens of GiB. Grouping by shard is therefore not tidiness: opening one per tensor would open and
+    parse that file once for every matrix in it.
     """
     with (checkpoint_dir / _INDEX).open(encoding="utf-8") as handle:
         weight_map = json.load(handle)["weight_map"]
@@ -249,32 +250,14 @@ def v4_layer_from_checkpoint(
         ffn.experts.e.w2     -> experts.down_proj[e]
         hc_{site}_fn/base/scale -> ref["{site}_hc"].fn/base/scale
     """
-    from models.demos.deepseek_v3_d_p.reference.deepseek_v4.modeling_deepseek_v4 import (
-        DeepseekV4Attention,
-        DeepseekV4HyperConnection,
-        DeepseekV4RMSNorm,
-        DeepseekV4RotaryEmbedding,
-        DeepseekV4SparseMoeBlock,
-    )
+    from models.demos.deepseek_v3_d_p.reference.deepseek_v4.block import v4_block_modules
 
-    hidden, inter = config.hidden_size, config.intermediate_size
+    inter = config.intermediate_size
     n_experts = config.num_local_experts
     prefix = f"layers.{layer_idx}."
 
-    attn = DeepseekV4Attention(config, layer_idx=layer_idx).eval()
-    mlp = DeepseekV4SparseMoeBlock(config, layer_idx=layer_idx).eval()
-    ref = {
-        "attn": attn,
-        "mlp": mlp,
-        "attn_norm": DeepseekV4RMSNorm(hidden, eps=config.rms_norm_eps).eval(),
-        "ffn_norm": DeepseekV4RMSNorm(hidden, eps=config.rms_norm_eps).eval(),
-        "attn_hc": DeepseekV4HyperConnection(config).eval(),
-        "ffn_hc": DeepseekV4HyperConnection(config).eval(),
-    }
-    if attn.compressor is None:
-        # A sliding-only layer has no compressor and so no rope of its own; give it one, as
-        # build_v4_block_reference does.
-        attn.rotary_emb = DeepseekV4RotaryEmbedding(config)
+    ref = v4_block_modules(config, layer_idx)
+    attn, mlp = ref["attn"], ref["mlp"]
 
     flat = {
         "attn_norm.weight": ref["attn_norm"].weight,
