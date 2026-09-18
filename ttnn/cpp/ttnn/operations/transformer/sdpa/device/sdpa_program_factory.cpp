@@ -232,12 +232,17 @@ uint32_t kv_chain_mode_for(
     if (!is_causal) {
         return 1;
     }
-    // Past four q tiles per chunk the lock step forwarding costs more than the DRAM reads it saves (measured
-    // at q256 k128 on Blackhole), so the causal chains stay off there.
-    if (Sq_chunk_t > 4) {
+    // No q tile gate: the reader side forward that used to cost more than the DRAM reads it saved past four
+    // q tiles per chunk (measured at q256 k128 on Blackhole) now runs on the writer RISC.
+    if (!(causal_pairs && causal_pairs_uniform(q_num_chunks, Sq_chunk_t, Sk_chunk_t, Skt))) {
         return 0;
     }
-    return causal_pairs && causal_pairs_uniform(q_num_chunks, Sq_chunk_t, Sk_chunk_t, Skt) ? 2 : 0;
+    // Measured on Blackhole: at one or two q tiles per chunk the relay latency rules and the reader's own forward
+    // is fastest; from four q tiles the writer's forward pays; past eight q tiles no chain beats the DRAM stream.
+    if (Sq_chunk_t > 8) {
+        return 0;
+    }
+    return Sq_chunk_t <= 2 ? 2 : 3;
 }
 
 // Every hop of a chain adds one chunk of latency before the pipeline flows, so long chains are cut into
@@ -711,10 +716,25 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
             ? (Sk % TILE_HEIGHT)
             : 0;
     const bool lw_partial_active = (k_partial_col > 0);
+    // 0: no K/V chains, 1: the non causal lock step chain, 2: causal prefix chains (see build_causal_chain).
+    const uint32_t kv_chain_mode = kv_chain_mode_for(
+        is_causal,
+        !is_chunked && !has_sliding_window && !is_windowed && !use_mask_block_map,
+        global_q_pair_distribute && !use_provided_mask,
+        q_num_chunks,
+        Sq_chunk_t,
+        Sk_chunk_t,
+        Skt);
+    const bool kv_chains_possible = kv_chain_mode != 0;
+    // Causal chains run along the Q heads that share one K/V head when K and V are grouped the same way.
+    const uint32_t chain_heads_per_group = (NKH == NVH && NQH % NKH == 0) ? NQH / NKH : 1;
+    // A third K/V slot lets the reader run one forwarded chunk further ahead of the writer; past k256 the
+    // extra chunk no longer fits L1 next to the score buffers, so the depth stays at two there.
+    const uint32_t kv_slots = (kv_chain_mode == 3 && Sk_chunk_t <= 8) ? 3 : 2;
     // These tile capacity counts for CBs need to match the number of tiles expected by the kernel (softmax.cpp)
     uint32_t q_tiles = Sq_chunk_t * DHt * q_buffer_factor;
-    uint32_t k_tiles = Sk_chunk_t * DHt * 2;   // double buffer
-    uint32_t v_tiles = Sk_chunk_t * vDHt * 2;  // double buffer
+    uint32_t k_tiles = Sk_chunk_t * DHt * kv_slots;
+    uint32_t v_tiles = Sk_chunk_t * vDHt * kv_slots;
     uint32_t mask_tiles = lightweight_mask
                               ? lightweight_mask_tile_count(is_causal, has_sliding_window, lw_partial_active)
                               : Sq_chunk_t * Sk_chunk_t * 2;  // double buffer
@@ -803,19 +823,6 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
 
     const bool use_zigzag_balancing = is_causal;
 
-    // 0: no K/V chains, 1: the non causal lock step chain, 2: causal prefix chains (see build_causal_chain).
-    const uint32_t kv_chain_mode = kv_chain_mode_for(
-        is_causal,
-        !is_chunked && !has_sliding_window && !is_windowed && !use_mask_block_map,
-        global_q_pair_distribute && !use_provided_mask,
-        q_num_chunks,
-        Sq_chunk_t,
-        Sk_chunk_t,
-        Skt);
-    const bool kv_chains_possible = kv_chain_mode != 0;
-    // Causal chains run along the Q heads that share one K/V head when K and V are grouped the same way.
-    const uint32_t chain_heads_per_group = (NKH == NVH && NQH % NKH == 0) ? NQH / NKH : 1;
-
     std::vector<uint32_t> reader_compile_time_args = {// interleaved accessor args
                                                       B,
                                                       NQH,
@@ -858,6 +865,8 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     reader_compile_time_args.push_back(static_cast<uint32_t>(is_windowed));           // arg 34: K-range narrowing
     reader_compile_time_args.push_back(kv_chain_mode);  // arg 35: kv chain mode, 2 = causal prefix chains
     reader_compile_time_args.push_back(static_cast<uint32_t>(use_mask_block_map));  // arg 36: mask block map
+    reader_compile_time_args.push_back(kv_slots);       // arg 37: K/V CB depth in chunks
+    reader_compile_time_args.push_back(0);              // arg 38: fwd_done_semaphore_id placeholder
 
     TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(input_tensor_k.buffer()).append_to(reader_compile_time_args);
@@ -880,6 +889,8 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     uint32_t sender_semaphore_id = 0;
     uint32_t receiver_semaphore_id = 0;
     uint32_t valid_semaphore_id = 0;
+    // Causal chains only: the writer counts finished forwards here, the reader waits on it before reusing a slot.
+    uint32_t fwd_done_semaphore_id = 0;
 
     if (kv_chains_possible) {
         sender_semaphore_id = 0;
@@ -890,6 +901,10 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         reader_compile_time_args[sem_args_offset + 0] = sender_semaphore_id;
         reader_compile_time_args[sem_args_offset + 1] = receiver_semaphore_id;
         reader_compile_time_args[sem_args_offset + 2] = valid_semaphore_id;
+        if (kv_chain_mode >= 2) {
+            fwd_done_semaphore_id = 3;
+            reader_compile_time_args[sem_args_offset + 9] = fwd_done_semaphore_id;
+        }
 
         log_debug(
             tt::LogOp,
@@ -927,6 +942,11 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         k_partial_col,                                 // arg 23: K partial-tile col (0 = no partial)
         static_cast<uint32_t>(use_zigzag_balancing),   // arg 24
         static_cast<uint32_t>(is_windowed),            // arg 25: windowed block-diagonal mask generation
+        sender_semaphore_id,                           // arg 26: causal chains, the writer forwards K/V
+        receiver_semaphore_id,                         // arg 27
+        valid_semaphore_id,                            // arg 28
+        fwd_done_semaphore_id,                         // arg 29
+        kv_chain_mode,                                 // arg 30: 2 = causal prefix chains
     };
 
     // out accessor, then the cu_window accessor chained right after it (before the CB-id block) so the
@@ -1058,6 +1078,13 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     cb_ids.q_in = allocate_tile_cb(q_tiles, q_tile_size, q_df);
     cb_ids.k_in = allocate_tile_cb(k_tiles, k_tile_size, k_df);
     cb_ids.v_in = allocate_tile_cb(v_tiles, v_tile_size, v_df);
+    // Causal chains: reader -> writer forward requests, {address, bytes} per K/V chunk plus one header per Q chunk,
+    // deep enough that the reader runs out of K/V slots before it runs out of entries. Valid fallback id otherwise.
+    cb_ids.kv_fwd_ctrl = cb_ids.q_in;
+    if (kv_chain_mode >= 2) {
+        constexpr uint32_t kv_fwd_entry_bytes = 16;
+        cb_ids.kv_fwd_ctrl = allocate_cb(kv_fwd_entry_bytes, 2 * kv_slots + 2, tt::DataFormat::Int32);
+    }
 
     const bool needs_mask_cb =
         use_provided_mask || is_causal || generated_padding_mask || sliding_window_size.value_or(0) > 0 || is_windowed;
@@ -1128,7 +1155,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     TensorAccessorArgs(output_tensor.buffer()).append_to(compute_compile_time_args);
 
     // Semaphores for KV chain forwarding.
-    // IDs match the order they were assigned above: sender=0, receiver=1, valid=2.
+    // IDs match the order they were assigned above: sender=0, receiver=1, valid=2, fwd_done=3 (causal chains).
     if (kv_chains_possible) {
         desc.semaphores.push_back(SemaphoreDescriptor{
             .id = sender_semaphore_id,
@@ -1148,6 +1175,14 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
             .core_ranges = core_grid,
             .initial_value = VALID,
         });
+        if (kv_chain_mode >= 2) {
+            desc.semaphores.push_back(SemaphoreDescriptor{
+                .id = fwd_done_semaphore_id,
+                .core_type = tt::CoreType::WORKER,
+                .core_ranges = core_grid,
+                .initial_value = 0,
+            });
+        }
     }
 
     uint32_t num_phases = 1;
@@ -1700,7 +1735,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         reader_args.push_back(read_offset);  // read_offset
 
         // Add chain metadata when chains can exist: every non causal program, or causal prefix chains
-        if (!is_causal || kv_chain_mode == 2) {
+        if (!is_causal || kv_chain_mode >= 2) {
             reader_args.push_back(static_cast<uint32_t>(chain.participates));
             reader_args.push_back(static_cast<uint32_t>(chain.is_injector));
             reader_args.push_back(static_cast<uint32_t>(chain.is_sink));
@@ -1736,22 +1771,28 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
 
         reader_desc.emplace_runtime_args(core, reader_args);
 
-        writer_desc.emplace_runtime_args(
-            core,
-            {out0_buffer,
-             i,
-             num_phases,                                       // 2
-             static_cast<uint32_t>(flexible_chunked ? 1 : 0),  // 3
-             chunked_q_chunk_offset,                           // 4: phase_1
-             write_offset,                                     // 5
-             0u,                                               // 6: phase_2 chunk_start (unused, num_phases==1)
-             0u,                                               // 7: phase_2 write_offset (unused, num_phases==1)
-             global_q_start,                                   // 8
-             global_q_count,                                   // 9
-             cu_window_buffer,                                 // 10: windowed mask src (nullptr if unused)
-             cu_window_seqlens_eles,                           // 11: window count + 1
-             windowed_q_token_offset,                          // 12: global origin of this Q shard (scalar)
-             windowed_q_offset_buffer});                       // 13: same, per-device (nullptr => use 12)
+        KernelDescriptor::RTArgList writer_args;
+        writer_args.push_back(out0_buffer);
+        writer_args.push_back(i);
+        writer_args.push_back(num_phases);                                       // 2
+        writer_args.push_back(static_cast<uint32_t>(flexible_chunked ? 1 : 0));  // 3
+        writer_args.push_back(chunked_q_chunk_offset);                           // 4: phase_1
+        writer_args.push_back(write_offset);                                     // 5
+        writer_args.push_back(0u);                        // 6: phase_2 chunk_start (unused, num_phases==1)
+        writer_args.push_back(0u);                        // 7: phase_2 write_offset (unused, num_phases==1)
+        writer_args.push_back(global_q_start);            // 8
+        writer_args.push_back(global_q_count);            // 9
+        writer_args.push_back(cu_window_buffer);          // 10: windowed mask src (nullptr if unused)
+        writer_args.push_back(cu_window_seqlens_eles);    // 11: window count + 1
+        writer_args.push_back(windowed_q_token_offset);   // 12: global origin of this Q shard (scalar)
+        writer_args.push_back(windowed_q_offset_buffer);  // 13: same, per-device (nullptr => use 12)
+        // Causal chain tail: the writer forwards K/V to the next core (parsed by the writer at 14..16).
+        if (kv_chain_mode >= 2) {
+            writer_args.push_back(static_cast<uint32_t>(chain.participates));
+            writer_args.push_back(static_cast<uint32_t>(chain.next_physical.x));
+            writer_args.push_back(static_cast<uint32_t>(chain.next_physical.y));
+        }
+        writer_desc.emplace_runtime_args(core, writer_args);
 
         compute_desc.emplace_runtime_args(
             core,
