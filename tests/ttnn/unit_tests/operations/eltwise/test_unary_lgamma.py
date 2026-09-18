@@ -46,3 +46,36 @@ def test_lgamma_bridge_boundary_is_no_worse_than_the_bridge(device, z, inside):
         f"{err_inside:.4e} ({err_boundary / err_inside:.1f}x). The boundary is being sent to "
         f"the Stirling arm instead of the bridge it belongs to."
     )
+
+
+_CRITICAL_POINTS = [
+    0.2,
+    0.3,
+    0.4,
+    0.5,
+    0.5129,
+    0.6,
+    0.7,
+    0.8,
+    1.0,
+    1.3,
+    1.5,
+    1.7,
+    2.0,
+    2.5,
+    3.0,
+]
+
+
+@pytest.mark.parametrize("x", _CRITICAL_POINTS)
+def test_lgamma_fp32_precision(device, x):
+    values = torch.tensor([x], dtype=torch.float32)
+    padded = torch.zeros((1, 1, 32, 32), dtype=torch.float32)
+    padded.view(-1)[: values.numel()] = values
+
+    tt_in = ttnn.from_torch(padded, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    got = ttnn.to_torch(ttnn.lgamma(tt_in)).view(-1)[: values.numel()].double()
+    ref = torch.lgamma(values.double())
+
+    err = abs(got[0] - ref[0]).item()
+    assert err < 1e-4, f"lgamma({x}) has excessive error {err:.4e} (got {got[0].item()}, expected {ref[0].item()})"
