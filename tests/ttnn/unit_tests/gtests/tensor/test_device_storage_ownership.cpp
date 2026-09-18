@@ -100,9 +100,9 @@ TEST_F(DeviceStorageOwnershipTest, ShardedTensorViewRetainsOwnerAndValidatesBoun
     {
         Tensor owner = ttnn::create_device_tensor(owner_spec, mesh_device_.get());
         owner_address = owner.buffer()->address();
-        view.emplace(ttnn::create_sharded_tensor_view(owner, view_spec, view_offset));
+        view.emplace(ttnn::experimental::create_sharded_tensor_view(owner, view_spec, view_offset));
         EXPECT_EQ(view->buffer()->address(), owner_address + view_offset);
-        EXPECT_THROW(ttnn::create_sharded_tensor_view(owner, view_spec, 2 * view_offset), std::exception);
+        EXPECT_THROW(ttnn::experimental::create_sharded_tensor_view(owner, view_spec, 2 * view_offset), std::exception);
     }
 
     ASSERT_TRUE(view.has_value());
@@ -115,7 +115,7 @@ TEST_F(DeviceStorageOwnershipTest, ShardedTensorViewDeallocationPreservesOwner) 
     const TensorSpec owner_spec = make_sharded_l1_tensor_spec(Shape{1, 1, 64, 32}, {64, 32});
     const TensorSpec view_spec = make_sharded_l1_tensor_spec(Shape{1, 1, 32, 32}, {32, 32});
     Tensor owner = ttnn::create_device_tensor(owner_spec, mesh_device_.get());
-    Tensor view = ttnn::create_sharded_tensor_view(owner, view_spec, view_offset);
+    Tensor view = ttnn::experimental::create_sharded_tensor_view(owner, view_spec, view_offset);
 
     view.deallocate(/*force=*/true);
 

@@ -25,6 +25,7 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/allocation_context.hpp>
 #include <tt-metalium/experimental/inspector.hpp>
+#include <tt-metalium/experimental/program_preparation.hpp>
 #include <internal/graph_function_abort.hpp>
 #include <type_traits>
 #include "ttnn/mesh_device_operation_adapter.hpp"
@@ -34,11 +35,6 @@
 #include "ttnn/device_operation_detail.hpp"
 
 namespace ttnn::device_operation {
-
-struct ProgramPreparationResult {
-    uint32_t max_program_config_size_bytes = 0;
-    uint32_t max_kernel_binary_size_bytes = 0;
-};
 
 template <typename T>
 using CachedProgram = tt::tt_metal::program_cache::detail::CachedProgram<T>;
@@ -53,6 +49,11 @@ template <typename T>
 using CachedMeshWorkload = tt::tt_metal::program_cache::detail::CachedMeshWorkload<T>;
 
 namespace detail {
+
+struct ProgramPreparationResult {
+    uint32_t max_program_config_size_bytes = 0;
+    uint32_t max_kernel_binary_size_bytes = 0;
+};
 
 using ::tt::tt_metal::program_cache::detail::CachedProgramFactory;
 using ::tt::tt_metal::program_cache::detail::ProgramCacheKey;
@@ -318,7 +319,7 @@ void handle_mesh_adapter_cache_hit(
 
 inline ProgramPreparationResult summarize_prepared_workload(
     tt::tt_metal::distributed::MeshWorkload& workload, ttnn::MeshDevice* mesh_device) {
-    auto result = workload.prepare(mesh_device);
+    auto result = tt::tt_metal::experimental::program_preparation::prepare(workload, mesh_device);
     return {
         .max_program_config_size_bytes = result.max_program_config_size_bytes,
         .max_kernel_binary_size_bytes = result.max_kernel_binary_size_bytes,

@@ -140,7 +140,7 @@ ttnn::operations::generic::tensor_return_value_t generic_op(
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
-ttnn::device_operation::ProgramPreparationResult prepare_generic_op(
+ttnn::device_operation::detail::ProgramPreparationResult prepare_generic_op(
     const std::vector<Tensor>& io_tensors,
     const ttnn::operations::generic::operation_attributes_t& operation_attributes) {
     using OperationType = ttnn::operations::generic::GenericOpDeviceOperation;

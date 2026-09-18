@@ -15,6 +15,7 @@
 #include <tt-metalium/experimental/per_core_allocation/mesh_buffer.hpp>
 #include <tt-metalium/experimental/per_core_allocation/allocator_mode.hpp>
 #include <tt-metalium/experimental/range_lockstep_allocation/buffer.hpp>
+#include <tt-metalium/experimental/retained_buffer_view.hpp>
 #include "device.hpp"
 #include "impl/allocator/allocator.hpp"
 #include "mesh_device_impl.hpp"
@@ -302,7 +303,7 @@ std::shared_ptr<MeshBuffer> MeshBuffer::create(
     return mesh_buffer;
 }
 
-std::shared_ptr<MeshBuffer> MeshBuffer::create_sharded_view(
+std::shared_ptr<MeshBuffer> MeshBuffer::create_retained_sharded_view(
     std::shared_ptr<MeshBuffer> owner,
     const MeshBufferConfig& mesh_buffer_config,
     const DeviceLocalBufferConfig& device_local_config,
@@ -704,3 +705,16 @@ std::shared_ptr<MeshBuffer> AnyBuffer::get_mesh_buffer() const {
 }
 
 }  // namespace tt::tt_metal::distributed
+
+namespace tt::tt_metal::experimental::retained_buffer_view {
+
+std::shared_ptr<distributed::MeshBuffer> create(
+    std::shared_ptr<distributed::MeshBuffer> owner,
+    const distributed::MeshBufferConfig& mesh_buffer_config,
+    const distributed::DeviceLocalBufferConfig& device_local_config,
+    DeviceAddr shard_offset) {
+    return distributed::MeshBuffer::create_retained_sharded_view(
+        std::move(owner), mesh_buffer_config, device_local_config, shard_offset);
+}
+
+}  // namespace tt::tt_metal::experimental::retained_buffer_view

@@ -42,6 +42,7 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/experimental/core_subset_write/mesh_command_queue.hpp>
+#include <tt-metalium/experimental/retained_buffer_view.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/runtime_args_data.hpp>
@@ -194,7 +195,7 @@ TEST_F(MeshBufferTestSuite, ShardedViewRetainsOwner) {
     const DeviceAddr owner_address = owner->address();
     const MeshCoordinate test_coordinate(0, 0);
     std::weak_ptr<MeshBuffer> owner_reference = owner;
-    auto view = MeshBuffer::create_sharded_view(
+    auto view = experimental::retained_buffer_view::create(
         owner, ReplicatedBufferConfig{.size = view_pages * page_size}, view_local_config, page_size);
     EXPECT_EQ(view->address(), owner_address + page_size);
 
@@ -225,7 +226,7 @@ TEST_F(MeshBufferTestSuite, ShardedViewRetainsOwner) {
         .sharding_args = nested_view_sharding,
         .bottom_up = false};
     std::weak_ptr<MeshBuffer> view_reference = view;
-    auto nested_view = MeshBuffer::create_sharded_view(
+    auto nested_view = experimental::retained_buffer_view::create(
         view, ReplicatedBufferConfig{.size = page_size}, nested_view_local_config, page_size);
     EXPECT_EQ(nested_view->address(), owner_address + 2 * page_size);
 
@@ -264,21 +265,23 @@ TEST_F(MeshBufferTestSuite, ShardedViewValidatesLifetimeAndBounds) {
         .bottom_up = false};
     const ReplicatedBufferConfig view_config{.size = view_pages * page_size};
 
-    EXPECT_ANY_THROW(MeshBuffer::create_sharded_view(owner, view_config, view_local_config, 3 * page_size));
+    EXPECT_ANY_THROW(experimental::retained_buffer_view::create(owner, view_config, view_local_config, 3 * page_size));
 
     auto non_owning_owner =
         MeshBuffer::create(owner->global_config(), owner_local_config, mesh_device_.get(), owner->address());
-    EXPECT_ANY_THROW(MeshBuffer::create_sharded_view(non_owning_owner, view_config, view_local_config, page_size));
+    EXPECT_ANY_THROW(
+        experimental::retained_buffer_view::create(non_owning_owner, view_config, view_local_config, page_size));
 
     auto other_sub_device_config = view_local_config;
     other_sub_device_config.sub_device_id = SubDeviceId(0);
-    EXPECT_ANY_THROW(MeshBuffer::create_sharded_view(owner, view_config, other_sub_device_config, page_size));
+    EXPECT_ANY_THROW(
+        experimental::retained_buffer_view::create(owner, view_config, other_sub_device_config, page_size));
 
-    auto view = MeshBuffer::create_sharded_view(owner, view_config, view_local_config, page_size);
+    auto view = experimental::retained_buffer_view::create(owner, view_config, view_local_config, page_size);
     view->deallocate();
     EXPECT_TRUE(owner->is_allocated());
 
-    auto dependent_view = MeshBuffer::create_sharded_view(owner, view_config, view_local_config, page_size);
+    auto dependent_view = experimental::retained_buffer_view::create(owner, view_config, view_local_config, page_size);
     owner->deallocate();
     EXPECT_FALSE(dependent_view->is_allocated());
 }

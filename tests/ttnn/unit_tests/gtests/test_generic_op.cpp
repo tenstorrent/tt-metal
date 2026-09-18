@@ -137,12 +137,13 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpArgmaxSingleCore) {
         .cbs = {input_cb_descriptor, output_cb_descriptor},
     };
 
-    auto preparation =
-        ttnn::prepare_generic_op(std::vector<Tensor>{device_input_tensor, device_output_tensor}, program_descriptor);
+    auto preparation = ttnn::experimental::prepare_generic_op(
+        std::vector<Tensor>{device_input_tensor, device_output_tensor}, program_descriptor);
     EXPECT_GT(preparation.max_program_config_size_bytes, 0);
     EXPECT_GT(preparation.max_kernel_binary_size_bytes, 0);
     EXPECT_EQ(
-        ttnn::prepare_generic_op(std::vector<Tensor>{device_input_tensor, device_output_tensor}, program_descriptor),
+        ttnn::experimental::prepare_generic_op(
+            std::vector<Tensor>{device_input_tensor, device_output_tensor}, program_descriptor),
         preparation);
 
     ttnn::generic_op(std::vector<Tensor>{device_input_tensor, device_output_tensor}, program_descriptor);

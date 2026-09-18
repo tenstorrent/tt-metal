@@ -15,7 +15,9 @@
 #include "ttnn/types.hpp"
 
 namespace ttnn::device_operation {
+namespace detail {
 struct ProgramPreparationResult;
+}  // namespace detail
 }
 
 namespace ttnn::operations::generic {
@@ -48,7 +50,7 @@ namespace ttnn::prim {
 ttnn::operations::generic::tensor_return_value_t generic_op(
     const std::vector<Tensor>& io_tensors,
     const ttnn::operations::generic::operation_attributes_t& operation_attributes);
-ttnn::device_operation::ProgramPreparationResult prepare_generic_op(
+ttnn::device_operation::detail::ProgramPreparationResult prepare_generic_op(
     const std::vector<Tensor>& io_tensors,
     const ttnn::operations::generic::operation_attributes_t& operation_attributes);
 }  // namespace ttnn::prim
