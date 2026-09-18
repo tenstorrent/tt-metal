@@ -94,13 +94,18 @@ class SD35TransformerBlock(Module):
         # stream (M ~ 160, memory-bound) keeps its explicit gathers on either topology.
         self.fused_tp = is_fused_tp(parallel_config, ccl_manager)
 
-        # TODO: Shuffle norm linear weights to match tensor parallelism
-        self.norm1_linear = ColParallelLinear(
+        # adaLN modulation for both streams from ONE chunked matmul (spatial: shift, scale, gate x attn, ff;
+        # prompt: the same six, or (scale, shift) for the last block). The consumers' `+1` on every scale
+        # chunk is folded into the bias at load (_prepare_torch_state), so the norms take the chunks as
+        # they come: no per-block silu, slices or adds. Same weight bytes as the two linears it replaces.
+        self._ctx_mod_chunks = 2 if context_pre_only else 6
+        self.time_mod = ColParallelLinear(
             dim,
-            6 * dim,
+            (6 + self._ctx_mod_chunks) * dim,
             bias=True,
             mesh_device=mesh_device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
+            chunks=6 + self._ctx_mod_chunks,
         )
         self.norm1_norm = DistributedLayerNorm(
             dim,
@@ -112,15 +117,6 @@ class SD35TransformerBlock(Module):
             ccl_manager=ccl_manager,
         )
 
-        # TODO: Shuffle norm linear weights to match tensor parallelism
-        context_norm_dim = 6 * dim if not context_pre_only else 2 * dim
-        self.norm1_context_linear = ColParallelLinear(
-            dim,
-            context_norm_dim,
-            bias=True,
-            mesh_device=mesh_device,
-            mesh_axis=parallel_config.tensor_parallel.mesh_axis,
-        )
         self.norm1_context_norm = DistributedLayerNorm(
             dim,
             norm_eps=1e-6,
@@ -193,8 +189,20 @@ class SD35TransformerBlock(Module):
         self.core_grid = ttnn.CoreGrid(x=device_grid.x, y=device_grid.y)
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
-        rename_substate(state, "norm1.linear", "norm1_linear")
-        rename_substate(state, "norm1_context.linear", "norm1_context_linear")
+        # Merge norm1.linear (spatial adaLN) and norm1_context.linear (prompt adaLN) into time_mod and add
+        # 1 to the bias of every scale chunk. Chunk orders follow diffusers: AdaLayerNormZero emits
+        # (shift, scale, gate) x (attn, ff); AdaLayerNormContinuous (last block's prompt) emits (scale, shift).
+        w_s, b_s = state.pop("norm1.linear.weight", None), state.pop("norm1.linear.bias", None)
+        w_c, b_c = state.pop("norm1_context.linear.weight", None), state.pop("norm1_context.linear.bias", None)
+        if w_s is not None and w_c is not None:
+            b_s = b_s.clone() if b_s is not None else torch.zeros(w_s.shape[0], dtype=w_s.dtype)
+            b_c = b_c.clone() if b_c is not None else torch.zeros(w_c.shape[0], dtype=w_c.dtype)
+            for i in (1, 4):
+                b_s[i * self.dim : (i + 1) * self.dim] += 1
+            for i in (0,) if self.context_pre_only else (1, 4):
+                b_c[i * self.dim : (i + 1) * self.dim] += 1
+            state["time_mod.weight"] = torch.cat([w_s, w_c], dim=0)
+            state["time_mod.bias"] = torch.cat([b_s, b_c], dim=0)
         rename_substate(state, "ff.net.0.proj", "ff.ff1")
         rename_substate(state, "ff.net.2", "ff.ff2")
         rename_substate(state, "ff_context.net.0.proj", "ff_context.ff1")
@@ -202,15 +210,9 @@ class SD35TransformerBlock(Module):
 
         prepare_chunked_linear_output(
             state,
-            prefix="norm1_linear",
+            prefix="time_mod",
             device_count=self.parallel_config.tensor_parallel.factor,
-            chunks=6,
-        )
-        prepare_chunked_linear_output(
-            state,
-            prefix="norm1_context_linear",
-            device_count=self.parallel_config.tensor_parallel.factor,
-            chunks=2 if self.context_pre_only else 6,
+            chunks=6 + self._ctx_mod_chunks,
         )
 
     def _ag_tp(self, x):
@@ -236,17 +238,15 @@ class SD35TransformerBlock(Module):
             **self.ccl_manager.get_ag_hyperparams(x.shape),
         )
 
-    def forward(self, spatial_1BND, prompt_1BLD, time_embed_11BE, N):
+    def forward(self, spatial_1BND, prompt_1BLD, time_embed_silu_11BE, N):
         """
         spatial_1BND: fractured N on SP, fractured D on TP
         prompt_1BLD: replicated on SP, fractured D on TP
-        time_embed_11BE: replicated
+        time_embed_silu_11BE: silu(time embedding), replicated; computed once per step by the model
         """
 
-        time_embed_11BE = ttnn.silu(time_embed_11BE, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        spatial_time_11BF = self.norm1_linear(time_embed_11BE)
-        prompt_time_11BE = self.norm1_context_linear(time_embed_11BE)
-
+        # One chunked matmul: bf16 chunks with the `+1` already in every scale (bias), see __init__.
+        mods = self.time_mod(time_embed_silu_11BE, dtype=ttnn.bfloat16)
         (
             spatial_shift_attn,
             spatial_scale_attn,
@@ -254,14 +254,14 @@ class SD35TransformerBlock(Module):
             spatial_shift_ff,
             spatial_scale_ff,
             spatial_gate_ff,
-        ) = chunk_time(spatial_time_11BF, 6)
+        ) = mods[:6]
 
         spatial_normed_1BND = self.norm1_norm(
-            spatial_1BND, dynamic_weight=(1 + spatial_scale_attn), dynamic_bias=spatial_shift_attn
+            spatial_1BND, dynamic_weight=spatial_scale_attn, dynamic_bias=spatial_shift_attn
         )
 
         if self.context_pre_only:
-            prompt_scale_attn, prompt_shift_attn = chunk_time(prompt_time_11BE, 2)
+            prompt_scale_attn, prompt_shift_attn = mods[6:8]
             prompt_gate_attn = None
             prompt_shift_ff = None
             prompt_scale_ff = None
@@ -274,10 +274,10 @@ class SD35TransformerBlock(Module):
                 prompt_shift_ff,
                 prompt_scale_ff,
                 prompt_gate_ff,
-            ) = chunk_time(prompt_time_11BE, 6)
+            ) = mods[6:12]
 
         prompt_normed_1BLD = self.norm1_context_norm(
-            prompt_1BLD, dynamic_weight=(1 + prompt_scale_attn), dynamic_bias=prompt_shift_attn
+            prompt_1BLD, dynamic_weight=prompt_scale_attn, dynamic_bias=prompt_shift_attn
         )
 
         if self.fused_tp:
@@ -305,9 +305,7 @@ class SD35TransformerBlock(Module):
 
         prompt_attn_1BLD = prompt_attn_1BLD * prompt_gate_attn if prompt_gate_attn is not None else None
 
-        spatial_normed_1BND = self.norm2(
-            spatial_1BND, dynamic_weight=(1 + spatial_scale_ff), dynamic_bias=spatial_shift_ff
-        )
+        spatial_normed_1BND = self.norm2(spatial_1BND, dynamic_weight=spatial_scale_ff, dynamic_bias=spatial_shift_ff)
 
         if self.fused_tp:
             # ff1: all_gather_minimal_matmul_async is SLOWER here than an explicit gather followed by
@@ -356,7 +354,7 @@ class SD35TransformerBlock(Module):
         prompt_1BLD += prompt_attn_1BLD
 
         prompt_normed_1BLD = self.norm2_context(
-            prompt_1BLD, dynamic_weight=(1 + prompt_scale_ff), dynamic_bias=prompt_shift_ff
+            prompt_1BLD, dynamic_weight=prompt_scale_ff, dynamic_bias=prompt_shift_ff
         )
 
         if self.parallel_config.tensor_parallel.factor > 1:
@@ -579,13 +577,15 @@ class SD35Transformer2DModel(Module):
         spatial = self.pos_embed(spatial, already_unfolded=True)
 
         time_embed = self.time_text_embed(timestep, pooled_projections)
+        # silu(temb) once per step; every block's adaLN and norm_out project it.
+        time_embed_silu = ttnn.silu(time_embed, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         prompt_embed = self.context_embedder(prompt_embed)
 
         # Pass through transformer blocks
         for block in self.transformer_blocks:
-            spatial, prompt_embed = block(spatial, prompt_embed, time_embed, N)
+            spatial, prompt_embed = block(spatial, prompt_embed, time_embed_silu, N)
         # Final normalization and projection
-        spatial_time = self.norm_out_linear(ttnn.silu(time_embed, memory_config=ttnn.DRAM_MEMORY_CONFIG))
+        spatial_time = self.norm_out_linear(time_embed_silu)
         scale, shift = chunk_time(spatial_time, 2)
 
         if self.fused_tp:

@@ -13,7 +13,7 @@ from models.common.utility_functions import is_blackhole
 
 from ...layers.linear import ColParallelLinear
 from ...layers.module import Module
-from ...layers.normalization import RMSNorm
+from ...layers.normalization import DistributedRMSNorm, RMSNorm
 from ...utils.padding import pad_weight_tensor
 from ...utils.substate import pop_substate, rename_substate
 
@@ -129,8 +129,37 @@ class SD35JointAttention(Module):
             "mesh_device": mesh_device,
         }
 
-        self.norm_q = RMSNorm(**rms_kwargs)
-        self.norm_k = RMSNorm(**rms_kwargs)
+        # Fused TP without SP: the spatial Q/K norms run as the fused distributed RMSNorm in per-head
+        # mode on the flat chunked to_qkv outputs (head split folded into the norm, as Flux.2 / Wan /
+        # Ideogram4 do). The attention then flows heads-first ([H, B, N, E]) through the joint SDPA,
+        # which is layout-agnostic over its two leading dims, and one permute replaces
+        # a leading-dim permute (66 us) brings the output back to [B, H, N, E] for concatenate_heads.
+        # Microbench on the tp4 column: split + 2 norms 348 us -> 222 us, minus the 66 us permute, so
+        # about 60 us per block (1% of the step; chain of 38 blocks 0.215 -> 0.213 s). The
+        # gain is real but small; kept on since numerics are unchanged (block PCC 0.99996).
+        self.fused_qk_norm = (
+            self.fused_tp
+            and parallel_config.sequence_parallel.factor == 1
+            and os.environ.get("SD35_FUSED_QKNORM", "1") == "1"
+        )
+        if self.fused_qk_norm:
+            self.norm_q = DistributedRMSNorm(
+                embedding_dim=self.padded_inner_dim,
+                norm_eps=eps,
+                mesh_axis=parallel_config.tensor_parallel.mesh_axis,
+                mesh_device=mesh_device,
+                ccl_manager=ccl_manager,
+            )
+            self.norm_k = DistributedRMSNorm(
+                embedding_dim=self.padded_inner_dim,
+                norm_eps=eps,
+                mesh_axis=parallel_config.tensor_parallel.mesh_axis,
+                mesh_device=mesh_device,
+                ccl_manager=ccl_manager,
+            )
+        else:
+            self.norm_q = RMSNorm(**rms_kwargs)
+            self.norm_k = RMSNorm(**rms_kwargs)
 
         # Fused QKV projection. ccl_manager lets the fused-TP path run it as an all-gather-matmul.
         self.to_qkv = ColParallelLinear(
@@ -140,6 +169,9 @@ class SD35JointAttention(Module):
             mesh_device=mesh_device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             ccl_manager=ccl_manager,
+            # Per-device output is already [Q_heads | K_heads | V_heads] (see _prepare_torch_state), so
+            # three chunks are q, k, v without a split op.
+            chunks=3 if self.fused_qk_norm else None,
             **_qkv_q,
         )
 
@@ -382,6 +414,12 @@ class SD35JointAttention(Module):
 
         rename_substate(state, "to_out.0", "to_out")
 
+        if self.fused_qk_norm:
+            # HF stores a per-head [head_dim] weight; the fused per-head norm takes [padded_inner_dim].
+            for key in ("norm_q.weight", "norm_k.weight"):
+                if key in state and state[key].shape[-1] == self.head_dim:
+                    state[key] = state[key].reshape(-1).repeat(self.padded_heads)
+
         if self.padding_config is not None:
             if "to_out.weight" in state:
                 weight = state["to_out.weight"].T
@@ -423,18 +461,38 @@ class SD35JointAttention(Module):
         i.e. the updated residual stream rather than the bare projection.
         """
 
-        if self.fused_tp:
-            qkv_flat = self.to_qkv(flatten_batch(spatial_1BND), parallel_config=self.parallel_config)
-            qkv_1BNF = unflatten_batch(qkv_flat, spatial_1BND.shape)
-        else:
-            qkv_1BNF = self.to_qkv(spatial_1BND)
         local_heads = self.n_local_heads
-        q_BHNE, k_BHNE, v_BHNE = ttnn.transformer.split_query_key_value_and_split_heads(
-            ttnn.squeeze(qkv_1BNF, 0), num_heads=local_heads, transpose_key=False
-        )
+        heads_first = False
+        if self.fused_qk_norm:
+            # Chunked strided AG-MM -> q, k, v flat [1, 1, B*N, H*E]; per-head norm fused with the head
+            # split -> [1, H, B*N, E]; a free view gives [H, B, N, E] (rows are batch-major).
+            _, b_, n_, _ = spatial_1BND.shape
+            q_flat, k_flat, v_flat = self.to_qkv(flatten_batch(spatial_1BND), parallel_config=self.parallel_config)
+            q_BHNE = ttnn.reshape(
+                self.norm_q(q_flat, num_heads_per_device=local_heads, per_head_norm=True),
+                (local_heads, b_, n_, self.head_dim),
+            )
+            k_BHNE = ttnn.reshape(
+                self.norm_k(k_flat, num_heads_per_device=local_heads, per_head_norm=True),
+                (local_heads, b_, n_, self.head_dim),
+            )
+            v_1HME, _, _ = ttnn.experimental.nlp_create_qkv_heads(
+                v_flat, num_heads=local_heads, num_kv_heads=0, transpose_k_heads=False
+            )
+            v_BHNE = ttnn.reshape(v_1HME, (local_heads, b_, n_, self.head_dim))
+            heads_first = True
+        else:
+            if self.fused_tp:
+                qkv_flat = self.to_qkv(flatten_batch(spatial_1BND), parallel_config=self.parallel_config)
+                qkv_1BNF = unflatten_batch(qkv_flat, spatial_1BND.shape)
+            else:
+                qkv_1BNF = self.to_qkv(spatial_1BND)
+            q_BHNE, k_BHNE, v_BHNE = ttnn.transformer.split_query_key_value_and_split_heads(
+                ttnn.squeeze(qkv_1BNF, 0), num_heads=local_heads, transpose_key=False
+            )
 
-        q_BHNE = self.norm_q(q_BHNE)
-        k_BHNE = self.norm_k(k_BHNE)
+            q_BHNE = self.norm_q(q_BHNE)
+            k_BHNE = self.norm_k(k_BHNE)
 
         add_qkv_1BLF = self.add_qkv_proj(prompt_1BLD)
         add_q_BHLE, add_k_BHLE, add_v_BHLE = ttnn.transformer.split_query_key_value_and_split_heads(
@@ -442,6 +500,11 @@ class SD35JointAttention(Module):
         )
         add_q_BHLE = self.norm_added_q(add_q_BHLE)
         add_k_BHLE = self.norm_added_k(add_k_BHLE)
+        if heads_first:
+            # Prompt stream to the same heads-first layout: [B, H, L, E] -> [H, B, L, E] (small tensors).
+            add_q_BHLE = ttnn.permute(add_q_BHLE, (1, 0, 2, 3))
+            add_k_BHLE = ttnn.permute(add_k_BHLE, (1, 0, 2, 3))
+            add_v_BHLE = ttnn.permute(add_v_BHLE, (1, 0, 2, 3))
 
         # Narrow SDPA inputs to bf8 when activations are quantized: shrinks the ring KV all-gather
         # payload and the attention feed. SDPA math stays HiFi2 (only the inputs narrow).
@@ -569,6 +632,11 @@ class SD35JointAttention(Module):
                 compute_kernel_config=self.sdpa_compute_kernel_config,
             )
 
+        if heads_first:
+            # Back to [B, H, N, E]: the leading-dim permute costs 66 us here, where a direct
+            # [H, B, N, E] -> [B, N, H, E] permute costs 700 us.
+            spatial_BHNE = ttnn.permute(spatial_BHNE, (1, 0, 2, 3))
+            prompt_BHLE = ttnn.permute(prompt_BHLE, (1, 0, 2, 3)) if prompt_BHLE is not None else None
         spatial_1BND = ttnn.transformer.concatenate_heads(spatial_BHNE)
         spatial_1BND = ttnn.unsqueeze(spatial_1BND, 0)
 
