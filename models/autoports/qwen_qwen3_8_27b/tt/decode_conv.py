@@ -28,6 +28,9 @@ def packed_decode_conv(row_qkv, history, taps, widths):
     for output, width in zip(outputs, widths):
         output = ttnn.reshape(ttnn.to_layout(output, ttnn.ROW_MAJOR_LAYOUT), [batch, 4, width])
         output = output[:, 3:4, :]
-        output = ttnn.pad(output, [(0, 0), (0, 31), (0, 0)], 0.0)
-        result.append(ttnn.to_layout(output, ttnn.TILE_LAYOUT))
+        # Tilization already zero-pads each user's single row to a tile. Expose
+        # those physical rows directly instead of writing a padded RM buffer
+        # to DRAM and then reading it back for a separate layout conversion.
+        output = ttnn.to_layout(output, ttnn.TILE_LAYOUT)
+        result.append(ttnn.reshape(output, [batch, 32, width], output.padded_shape))
     return result
