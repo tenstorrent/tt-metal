@@ -3,33 +3,29 @@
 
 """Reader for the DeepSeek-V4 vLLM golden traces and for the native V4 checkpoint.
 
-The traces are ``chunked_group_a_v1``, the layout ``test_prefill_block_chunked.py`` already reads for
-GLM: one directory per stream, row-sharded ``rows_<s>_<e>.safetensors`` inside it, and the tensor key
-inside each shard is the stream's own name. Row reads therefore go through ``read_sharded_rows``
-rather than a second reader; what this module adds is the manifest, the stream names and the two
-places where V4 differs from GLM.
+The traces use the same layout GLM's do: one directory per stream, split into
+``rows_<s>_<e>.safetensors`` shards, each shard keying its tensor by the stream's own name. Reading
+rows is therefore ``read_sharded_rows``' job; this module adds the manifest and the stream names.
 
 What a V4 trace carries:
 
   * ``decoder_io`` -- ``decoder_input_layer_0`` and ``decoder_output_layer_{i}``, each
-    ``[tokens, hc_mult * hidden]``. These are the PACKED hyper-connection streams, which is exactly
-    ``TtV4Block``'s own input and output contract, so a layer's input needs no expansion.
-  * ``compressed_entries`` -- the layer's compressed KV after the whole prompt,
-    ``[tokens / rate, kv_single_dim]``. The rate is the layer's own, so the row count names the kind:
-    440 rows over 56320 tokens is heavily-compressed (128), 14080 is compressed-sparse (4).
-  * ``expert_ids`` / ``expert_weights`` / ``router_logits`` -- the reference's routing per token,
-    which is what a routing disagreement has to be measured against.
-  * ``indexer_key_cache`` -- the DSA indexer keys, for the compressed-sparse layers.
+    ``[tokens, hc_mult * hidden]``. The hyper-connection streams come packed on the last dim, which
+    is what ``TtV4Block`` itself takes and returns, so a layer's input needs no reshaping.
+  * ``compressed_entries`` -- the layer's compressed KV after the whole prompt. Each layer compresses
+    at its own rate, so the row count says which kind it is: over 56320 tokens, 440 rows is HCA
+    (rate 128) and 14080 is CSA (rate 4).
+  * ``expert_ids`` / ``expert_weights`` / ``router_logits`` -- which experts the reference picked per
+    token, and the scores it picked them from.
+  * ``indexer_key_cache`` -- the keys a CSA layer selects with.
 
-A partial trace keeps ``decoder_output`` for only some layers, so the usual alias
-``decoder_input_layer_{i} := decoder_output_layer_{i-1}`` holds only where layer ``i-1`` was kept.
-``layer_input`` refuses the layers it cannot serve rather than reading a stream that is not there.
+A trace can hold ``decoder_output`` for only some layers. Teacher forcing feeds layer ``i`` the
+output of layer ``i-1``, so it works only where that layer was kept, and ``layer_input`` says so
+rather than reading a directory that is not there.
 
-The checkpoint uses DeepSeek's native key root -- ``layers.3.attn.wq_a.weight``, not HF's
-``model.layers.3.self_attn.q_a_proj.weight`` -- and keeps each expert as three separate matrices
-(``ffn.experts.{e}.w{1,2,3}``) where the reference packs them into one. ``layer_tensor_names`` spells
-the set one layer needs; turning those into the reference module's parameters is the caller's
-business, because that mapping is where the shapes have to be checked one by one.
+The checkpoint uses DeepSeek's own key names -- ``layers.3.attn.wq_a.weight`` where HF would write
+``model.layers.3.self_attn.q_a_proj.weight`` -- and stores each expert as three matrices where the
+reference packs them into one. ``v4_layer_from_checkpoint`` holds that translation.
 """
 
 from __future__ import annotations
@@ -46,38 +42,33 @@ from safetensors import safe_open
 from models.demos.deepseek_v3_d_p.utils.test_utils import read_sharded_rows
 
 GOLDEN_ROOT = Path("/mnt/models/deepseek-prefill-cache/golden")
-V4_PRO_TRACE = GOLDEN_ROOT / "structured_traces" / "v4_pro_55K_partial_trace" / "trace_v4_pro_full"
-
-# The dequantized export, which is the one a host-side loader can read; the fp8 original cannot be
-# consumed without dequantizing it first.
-V4_PRO_CHECKPOINT = Path("/mnt/models/blaze/deepseek-ai/DeepSeek-V4-Pro-0813-dequantized")
-
-TRACE_ENV = "V4_PRO_GOLDEN_TRACE"
-CKPT_ENVS = ("V4_PRO_HF_MODEL", "V4_PRO_CKPT")
+_CHECKPOINT_ROOT = Path("/mnt/models/blaze/deepseek-ai")
 _INDEX = "model.safetensors.index.json"
 
-# One layer's non-expert parameters, by their checkpoint names. The hyper-connection triples are per
-# site (attn, ffn), which is the shape TtV4Block's `mhc_weights` wants.
-_LAYER_KEYS = (
-    "attn_norm.weight",
-    "ffn_norm.weight",
-    "attn.attn_sink",
-    "attn.q_norm.weight",
-    "attn.kv_norm.weight",
-    "attn.wq_a.weight",
-    "attn.wq_b.weight",
-    "attn.wkv.weight",
-    "attn.wo_a.weight",
-    "attn.wo_b.weight",
-    "attn.compressor.ape",
-    "attn.compressor.norm.weight",
-    "attn.compressor.wgate.weight",
-    "attn.compressor.wkv.weight",
-    "ffn.gate.weight",
-    "ffn.gate.bias",
-    "ffn.shared_experts.w1.weight",
-    "ffn.shared_experts.w2.weight",
-    "ffn.shared_experts.w3.weight",
+
+@dataclass(frozen=True)
+class GoldenVariant:
+    """One model's trace, the checkpoint it was captured from, and the env vars that override them."""
+
+    trace: Path
+    checkpoint: Path
+    trace_env: str
+    ckpt_envs: tuple[str, ...]
+
+
+# The dequantized exports, which are the ones a host loader can read; the fp8 originals need
+# dequantizing first. Both traces carry the same streams, so one reader serves both.
+V4_PRO = GoldenVariant(
+    trace=GOLDEN_ROOT / "structured_traces" / "v4_pro_55K_partial_trace" / "trace_v4_pro_full",
+    checkpoint=_CHECKPOINT_ROOT / "DeepSeek-V4-Pro-0813-dequantized",
+    trace_env="V4_PRO_GOLDEN_TRACE",
+    ckpt_envs=("V4_PRO_HF_MODEL", "V4_PRO_CKPT"),
+)
+V4_FLASH = GoldenVariant(
+    trace=GOLDEN_ROOT / "structured_traces" / "v4_flash_55K_partial_trace" / "trace_v4_flash_full",
+    checkpoint=_CHECKPOINT_ROOT / "DeepSeek-V4-Flash-0731-dequantized",
+    trace_env="V4_FLASH_GOLDEN_TRACE",
+    ckpt_envs=("V4_FLASH_HF_MODEL", "V4_FLASH_CKPT"),
 )
 
 
@@ -101,10 +92,18 @@ class GoldenTrace:
     def streams(self) -> dict:
         return self.index["tensor_streams"]
 
-    @property
+    @cached_property
     def kept_layers(self) -> list[int]:
-        """The layers whose decoder output the trace kept, which is what bounds teacher forcing."""
-        return sorted(int(name.rsplit("_", 1)[1]) for name in self.streams if name.startswith("decoder_output_layer_"))
+        """The layers whose output the trace holds, which is what bounds teacher forcing.
+
+        Taken from the directories, not the manifest: v4_flash's index lists all 43 layers where the
+        trace holds 10, so the manifest would promise layers that cannot be read.
+        """
+        kept = []
+        for name in self.streams:
+            if name.startswith("decoder_output_layer_") and (self.path / "decoder_io" / name).is_dir():
+                kept.append(int(name.rsplit("_", 1)[1]))
+        return sorted(kept)
 
     def row_count(self, stream: str) -> int:
         if stream not in self.streams:
@@ -112,10 +111,10 @@ class GoldenTrace:
         return int(self.streams[stream]["row_count"])
 
     def rows(self, group: str, stream: str, start: int = 0, end: int | None = None) -> torch.Tensor:
-        """Rows ``[start:end]`` of one stream as float32, read only from the shards that overlap.
+        """Rows ``[start:end]`` of one stream as float32, reading only the shards that overlap.
 
-        ``end=None`` means the whole stream, which the manifest already knows the length of -- the
-        decoder streams are 56320 x 28672, so pass a bound whenever a chunk is what is wanted.
+        ``end=None`` reads the whole stream. The decoder streams are 56320 x 28672, so pass a bound
+        when only a chunk is wanted.
         """
         end = self.row_count(stream) if end is None else end
         return read_sharded_rows(self.path / group / stream, stream, start, end)
@@ -134,7 +133,7 @@ class GoldenTrace:
         return torch.tensor([ids], dtype=torch.int64)
 
     def decoder_input(self, start: int = 0, end: int | None = None) -> torch.Tensor:
-        """The stack's first live stream: the embedding already expanded to hc_mult streams."""
+        """The embedding, already expanded to hc_mult streams -- what layer 0 is fed."""
         return self.rows("decoder_io", "decoder_input_layer_0", start, end)
 
     def decoder_output(self, layer: int, start: int = 0, end: int | None = None) -> torch.Tensor:
@@ -171,49 +170,35 @@ class GoldenTrace:
         return self.rows("routing", f"expert_weights_layer_{layer}", start, end)
 
     def router_logits(self, layer: int, start: int = 0, end: int | None = None) -> torch.Tensor:
-        """``[tokens, n_experts]`` raw gate scores -- the margins a flipped selection turns on."""
+        """``[tokens, n_experts]`` raw gate scores, before the top-k picks from them."""
         return self.rows("routing", f"router_logits_layer_{layer}", start, end)
 
 
-def resolve_trace(default: Path = V4_PRO_TRACE) -> GoldenTrace | None:
-    """``$V4_PRO_GOLDEN_TRACE`` if set, else ``default`` -- or ``None`` when neither is on the box."""
-    override = os.getenv(TRACE_ENV)
-    path = Path(override) if override else default
+def resolve_trace(variant: GoldenVariant = V4_PRO) -> GoldenTrace | None:
+    """The variant's trace env var if set, else its default -- or ``None`` when neither is on the box."""
+    override = os.getenv(variant.trace_env)
+    path = Path(override) if override else variant.trace
     return GoldenTrace(path) if (path / "index.json").is_file() else None
 
 
-def resolve_checkpoint(default: Path = V4_PRO_CHECKPOINT) -> Path | None:
-    """``$V4_PRO_HF_MODEL`` / ``$V4_PRO_CKPT`` if either names a checkpoint, else ``default``.
+def resolve_checkpoint(variant: GoldenVariant = V4_PRO) -> Path | None:
+    """The first of the variant's checkpoint env vars that names one, else its default.
 
-    ``None`` when nothing on the box has an index, which is a skip and not a failure: a golden is a
-    reference only for the weights it was captured from, so a run without them measures nothing.
+    ``None`` when neither has an index on the box. A readable index does not mean readable shards:
+    a checkpoint whose files are owner-only resolves here and fails on the first tensor read.
     """
-    for var in CKPT_ENVS:
+    for var in variant.ckpt_envs:
         value = os.getenv(var)
         if value and (Path(value) / _INDEX).is_file():
             return Path(value)
-    return default if (default / _INDEX).is_file() else None
-
-
-def layer_tensor_names(layer: int, n_experts: int) -> list[str]:
-    """Every checkpoint key one decoder layer needs, experts included.
-
-    The hyper-connection parameters are named per site rather than nested, so they are spelled here
-    instead of in ``_LAYER_KEYS``.
-    """
-    names = [f"layers.{layer}.{key}" for key in _LAYER_KEYS]
-    names += [f"layers.{layer}.hc_{site}_{part}" for site in ("attn", "ffn") for part in ("fn", "base", "scale")]
-    names += [
-        f"layers.{layer}.ffn.experts.{expert}.w{matrix}.weight" for expert in range(n_experts) for matrix in (1, 2, 3)
-    ]
-    return names
+    return variant.checkpoint if (variant.checkpoint / _INDEX).is_file() else None
 
 
 def load_checkpoint_tensors(checkpoint_dir: Path, names: list[str]) -> dict[str, torch.Tensor]:
     """Read ``names`` from the shards the index puts each in, opening each shard once.
 
-    One Pro layer is ~1150 expert matrices spread over 66 shards, so the grouping is not tidiness:
-    reopening a shard per tensor reads it from disk that many times.
+    One Pro layer is ~1150 expert matrices spread over 66 shards. Grouping by shard is not tidiness:
+    opening one per tensor would read each shard from disk that many times.
     """
     with (checkpoint_dir / _INDEX).open(encoding="utf-8") as handle:
         weight_map = json.load(handle)["weight_map"]
@@ -241,14 +226,14 @@ def v4_layer_from_checkpoint(
 ) -> dict:
     """One decoder layer's real weights, in the dict shape ``build_v4_block_reference`` returns.
 
-    The modules are constructed here rather than through that builder because the builder's whole
-    job is to randomise them: for a Pro layer that is a 25-billion-element ``normal_`` over the
-    expert matrices, all of it overwritten on the next line.
+    The modules are built here rather than through that builder because the builder's whole job is
+    to randomise them -- for a Pro layer, 25 billion elements of ``normal_`` over the expert
+    matrices, all overwritten on the next line.
 
-    Experts are read ``expert_batch`` at a time and copied into the parameter as they arrive. Holding
-    all 1152 matrices in a dict first would keep two full copies of a 50 GB layer alive at once.
+    Experts are read ``expert_batch`` at a time and copied in as they arrive; holding all 1152
+    matrices in a dict first would keep two copies of a 50 GB layer alive at once.
 
-    Name translation, with the shapes that pin it (Pro, hidden 7168, head_dim 512, 128 heads):
+    Name translation, with Pro's shapes (hidden 7168, head_dim 512, 128 heads):
 
         attn.wq_a            -> q_a_proj                  [1536, 7168]
         attn.q_norm          -> q_a_norm                  [1536]
@@ -287,7 +272,8 @@ def v4_layer_from_checkpoint(
         "ffn_hc": DeepseekV4HyperConnection(config).eval(),
     }
     if attn.compressor is None:
-        # A sliding-only layer carries no rotary_emb of its own, the same gap build_v4_block_reference fills.
+        # A sliding-only layer has no compressor and so no rope of its own; give it one, as
+        # build_v4_block_reference does.
         attn.rotary_emb = DeepseekV4RotaryEmbedding(config)
 
     flat = {
@@ -315,8 +301,8 @@ def v4_layer_from_checkpoint(
                 "attn.compressor.norm.weight": attn.compressor.kv_norm.weight,
             }
         )
-    # The router's second tensor names which kind of layer this is: a frozen table, or the bias that
-    # biases selection only.
+    # The router's second tensor says which kind of layer this is: a hash layer has the frozen
+    # table, a top-k layer the selection bias.
     flat["ffn.gate.tid2eid" if mlp.is_hash else "ffn.gate.bias"] = (
         mlp.gate.tid2eid if mlp.is_hash else mlp.gate.e_score_correction_bias
     )

@@ -26,6 +26,7 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import comp_pcc, is_blackhole
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4.block import v4_block_state_dict, v4_mhc_weights
+from models.demos.deepseek_v3_d_p.reference.deepseek_v4_flash_config import DeepSeekV4FlashConfig
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_pro_config import DeepSeekV4ProConfig
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tests.v4 import golden
@@ -39,14 +40,20 @@ from models.demos.deepseek_v3_d_p.utils.test_utils import cache_half_pccs
 CHUNK = PREFILL_CHUNK_TOKENS  # 5120 tokens per chunk, the production configuration
 SEQ_CACHE = 55 * 1024  # 56320, the length the golden was captured at
 
-# The golden is Pro's, so the variant is fixed here and the rows carry the layer instead.
-_VARIANT = DeepSeekV4ProConfig
+# The golden each variant is graded against.
+_GOLDEN = {DeepSeekV4ProConfig: golden.V4_PRO, DeepSeekV4FlashConfig: golden.V4_FLASH}
 
 # One row per (layer, attention, MoE) the device can build.
-# TODO add a CSA row once CSA has a device implementation: layers 2, 4, 6 ... are CSA, so that kind
-# is entirely ungraded today.
-_CASES = [
+# TODO add a CSA row once CSA has a device implementation: layers 2, 4, 6 ... are CSA in both
+# models, so that kind is entirely ungraded today.
+_PRO_CASES = [
     pytest.param(1, "heavily_compressed_attention", "hash_moe", id="L1-hca-hash"),
+    pytest.param(3, "heavily_compressed_attention", "moe", id="L3-hca-topk"),
+]
+# Flash has no HCA + hash_moe layer: num_hash_layers is 3, its first two layers are sliding and its
+# third is CSA.
+_FLASH_CASES = [
+    pytest.param(1, "sliding_attention", "hash_moe", id="L1-swa-hash"),
     pytest.param(3, "heavily_compressed_attention", "moe", id="L3-hca-topk"),
 ]
 
@@ -54,13 +61,14 @@ _BLOCK_PCC = 0.99
 _CACHE_PCC = 0.999
 
 
-def run_chunked_block_v4(mesh_device, device_params, num_links, layer_idx, attn_kind, mlp_kind, n_chunks):
-    trace = golden.resolve_trace()
-    if trace is None:
-        pytest.skip(f"golden trace unavailable (set ${golden.TRACE_ENV} or stage {golden.V4_PRO_TRACE})")
-    checkpoint = golden.resolve_checkpoint()
-    if checkpoint is None:
-        pytest.skip(f"V4 checkpoint unavailable (set one of {golden.CKPT_ENVS})")
+def run_chunked_block_v4(mesh_device, device_params, num_links, variant, layer_idx, attn_kind, mlp_kind, n_chunks):
+    # Both are asserts rather than skips: this row is meant for CI, and a skipped row reads as a
+    # green one.
+    gold = _GOLDEN[variant]
+    trace = golden.resolve_trace(gold)
+    assert trace is not None, f"no golden trace at {gold.trace}; ${gold.trace_env} overrides the path"
+    checkpoint = golden.resolve_checkpoint(gold)
+    assert checkpoint is not None, f"no checkpoint at {gold.checkpoint}; ${' / $'.join(gold.ckpt_envs)} override it"
 
     topology = per_axis_topology(device_params["fabric_config"])
     tp_factor = mesh_device.shape[1]
@@ -68,7 +76,7 @@ def run_chunked_block_v4(mesh_device, device_params, num_links, layer_idx, attn_
     total_len = n_chunks * CHUNK
     assert total_len <= SEQ_CACHE, f"{n_chunks} chunks ({total_len}) exceed the golden's {SEQ_CACHE}"
 
-    config, model_cfg = _test_config(_VARIANT, layer_idx)
+    config, model_cfg = _test_config(variant, layer_idx)
     config.max_seq_len = SEQ_CACHE
     # The row names the layer and its pair; this is where the config has to agree.
     assert (config.layer_types[layer_idx], config.mlp_layer_types[layer_idx]) == (attn_kind, mlp_kind), (
@@ -76,7 +84,9 @@ def run_chunked_block_v4(mesh_device, device_params, num_links, layer_idx, attn_
         f"{config.layer_types[layer_idx]}/{config.mlp_layer_types[layer_idx]}"
     )
     gate_mode = GateComputeMode.HASH_DEVICE if mlp_kind == "hash_moe" else GateComputeMode.DEVICE_FP32
-    logger.info(f"[v4 chunked] layer {layer_idx}: {attn_kind} / {mlp_kind} / {n_chunks} x {CHUNK} tokens")
+    logger.info(
+        f"[v4 chunked] {variant.__name__} layer {layer_idx}: {attn_kind} / {mlp_kind} / " f"{n_chunks} x {CHUNK} tokens"
+    )
 
     ref = golden.v4_layer_from_checkpoint(config, layer_idx, checkpoint)
     block = TtV4Block(
@@ -134,9 +144,16 @@ def run_chunked_block_v4(mesh_device, device_params, num_links, layer_idx, attn_
     _, pcc = comp_pcc(truth.float(), out_accum)
     logger.info(f"[v4 chunked L{layer_idx} {attn_kind} / {mlp_kind}] block output PCC vs golden: {pcc}")
 
-    # What the run left in the cache, which the output PCC would not see until a later chunk read a
-    # corrupted tail. The state is replicated, so replica 0 is the whole thing in sequence order, and
-    # `capacity` carries tile padding and write headroom past the real entries.
+    assert pcc >= _BLOCK_PCC, f"chunked block output PCC {pcc:.6f} < {_BLOCK_PCC}"
+
+    # What the run left in the state, which the output PCC would not see until a later chunk read a
+    # corrupted tail. Only HCA and CSA keep a compressed cache; SWA has none, so its rows grade the
+    # output alone.
+    if attn_kind != "heavily_compressed_attention":
+        return
+
+    # The state is replicated, so replica 0 is the whole thing in sequence order, and `capacity`
+    # carries tile padding and write headroom past the real entries.
     rate = config.compress_rates[attn_kind]
     entries = -(-total_len // rate)
     device_cache = ttnn.to_torch(
@@ -153,29 +170,50 @@ def run_chunked_block_v4(mesh_device, device_params, num_links, layer_idx, attn_
     )
 
     worst_half = min(nope_pcc, pe_pcc)
-    assert pcc >= _BLOCK_PCC, f"chunked block output PCC {pcc:.6f} < {_BLOCK_PCC}"
     assert worst_half >= _CACHE_PCC, f"compressed cache PCC {worst_half:.6f} < {_CACHE_PCC}"
 
 
-@pytest.mark.parametrize(
-    "mesh_device, device_params, num_links",
-    [
+def _mesh_params(payload: int):
+    """The 8x4 torus row, with the variant's own fabric payload."""
+    return [
         pytest.param(
             (8, 4),
             torus_xy_device_params(
-                fabric_payload_size=DeepSeekV4ProConfig.FABRIC_PAYLOAD_SIZE,
+                fabric_payload_size=payload,
                 worker_l1_size=ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE,
             ),
             2,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="torus-xy-8x4",
         ),
-    ],
+    ]
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links",
+    _mesh_params(DeepSeekV4ProConfig.FABRIC_PAYLOAD_SIZE),
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("n_chunks", [11], ids=["chunks11"])
-@pytest.mark.parametrize("layer_idx, attn_kind, mlp_kind", _CASES)
+@pytest.mark.parametrize("layer_idx, attn_kind, mlp_kind", _PRO_CASES)
 @pytest.mark.skipif(not is_blackhole(), reason="V4 attention is Blackhole-only")
 @pytest.mark.timeout(0)
-def test_v4_block_chunked(mesh_device, device_params, num_links, layer_idx, attn_kind, mlp_kind, n_chunks):
-    run_chunked_block_v4(mesh_device, device_params, num_links, layer_idx, attn_kind, mlp_kind, n_chunks)
+def test_v4_pro_block_chunked(mesh_device, device_params, num_links, layer_idx, attn_kind, mlp_kind, n_chunks):
+    run_chunked_block_v4(
+        mesh_device, device_params, num_links, DeepSeekV4ProConfig, layer_idx, attn_kind, mlp_kind, n_chunks
+    )
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links",
+    _mesh_params(DeepSeekV4FlashConfig.FABRIC_PAYLOAD_SIZE),
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("n_chunks", [11], ids=["chunks11"])
+@pytest.mark.parametrize("layer_idx, attn_kind, mlp_kind", _FLASH_CASES)
+@pytest.mark.skipif(not is_blackhole(), reason="V4 attention is Blackhole-only")
+@pytest.mark.timeout(0)
+def test_v4_flash_block_chunked(mesh_device, device_params, num_links, layer_idx, attn_kind, mlp_kind, n_chunks):
+    run_chunked_block_v4(
+        mesh_device, device_params, num_links, DeepSeekV4FlashConfig, layer_idx, attn_kind, mlp_kind, n_chunks
+    )
