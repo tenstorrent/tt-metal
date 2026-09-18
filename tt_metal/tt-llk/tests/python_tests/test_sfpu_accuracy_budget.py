@@ -447,6 +447,15 @@ ONLY_EVER_TOLERANCE = frozenset(
         MathOperation.GeluAppx,
         MathOperation.SfpuElwpow,
         MathOperation.SfpuXlogy,
+        # Exact except on -0.0, where WH's bit-pattern compare diverges by design. A
+        # 0-ULP budget would fail a kernel that is behaving as specified.
+        MathOperation.Sign,
+        MathOperation.Heaviside,
+        # Past the usable ceiling on every float column, so the tolerance they would
+        # replace is the tighter bound. Measurements are on their YAML rows.
+        MathOperation.GeluTanh,
+        MathOperation.Tanhshrink,
+        MathOperation.SfpuElwmul,
     }
 )
 
@@ -880,6 +889,29 @@ def test_a_key_that_names_an_architecture_binds_on_it(arch):
         del table[pinned]
 
 
+#: Ops whose budget was measured on the hand-built sweep that drives them, rather than on
+#: the standard random sweep. Each was run under ``--ulp-report`` on that sweep's own
+#: stimulus on Wormhole, 2026-09-18; the per-format counts are in the YAML row comments.
+#: Enrolling a further op from one of these sweeps means measuring it there first.
+MEASURED_ON_SWEEP = {
+    "signbit": {MathOperation.Signbit},
+    "isinf_isnan": {
+        MathOperation.Isinf,
+        MathOperation.Isposinf,
+        MathOperation.Isneginf,
+        MathOperation.Isnan,
+        MathOperation.Isfinite,
+    },
+    "threshold": {
+        MathOperation.LogicalNot,
+        MathOperation.UnaryEq,
+        MathOperation.UnaryNe,
+        MathOperation.ReluMin,
+        MathOperation.ReluMax,
+    },
+}
+
+
 def test_no_enrolled_op_is_driven_by_a_sweep_that_was_never_measured():
     """The enrolment rule names five stimulus sources; three of them are hand-built specs
     that no recorded measurement covers.
@@ -893,21 +925,24 @@ def test_no_enrolled_op_is_driven_by_a_sweep_that_was_never_measured():
     """
     from test_eltwise_unary_sfpu import _THRESHOLD_OPS, ISINF_ISNAN_MATHOPS
 
-    unmeasured = {
+    hand_built = {
         # The signbit sweep is not parametrised over a list; it drives this one op.
         "signbit": {MathOperation.Signbit},
         "isinf_isnan": set(ISINF_ISNAN_MATHOPS),
         "threshold": set(_THRESHOLD_OPS),
     }
-    assert all(unmeasured.values()), "a sweep set went empty; the derivation has broken"
+    assert all(hand_built.values()), "a sweep set went empty; the derivation has broken"
 
     enrolled = set(enrolled_ops())
-    for sweep, ops in sorted(unmeasured.items()):
-        overlap = sorted(op.name for op in enrolled & ops)
-        assert not overlap, (
-            f"{', '.join(overlap)} carries a budget but is driven by the {sweep} sweep, "
-            "whose hand-built stimulus no recorded measurement covers. Measure it there "
-            "before enrolling, or key the budget away from the formats it reaches."
+    for sweep, ops in sorted(hand_built.items()):
+        unrecorded = sorted(
+            op.name for op in (enrolled & ops) - MEASURED_ON_SWEEP[sweep]
+        )
+        assert not unrecorded, (
+            f"{', '.join(unrecorded)} carries a budget but is driven by the {sweep} "
+            "sweep, whose hand-built stimulus no recorded measurement covers. Measure it "
+            "there and add it to MEASURED_ON_SWEEP, or key the budget away from the "
+            "formats it reaches."
         )
 
 
