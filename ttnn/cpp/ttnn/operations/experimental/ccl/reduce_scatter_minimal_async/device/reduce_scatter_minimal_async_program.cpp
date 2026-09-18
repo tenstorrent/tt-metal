@@ -600,9 +600,8 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
     // clients close their connections, so no explicit termination signalling is required. The mux
     // kernels themselves are created per-core in the loop below via add_fabric_mux_v2_to_program (each
     // needs the src/dst fabric node ids + link for the direction it forwards to).
-    // Base + the L1 bank size is the floor of the L1_SMALL region, which the mux stays below (#56769).
-    const size_t mux_l1_small_floor_address =
-        l1_unreserved_base_address + mesh_device->allocator()->get_bank_size(tt::tt_metal::BufferType::L1);
+    // The mux stays below the floor of the L1_SMALL region, where carried semaphores live (#56769).
+    const size_t mux_l1_small_floor_address = ttnn::ccl::l1_small_floor_address(*mesh_device);
     tt::tt_fabric::FabricMuxV2Config mux_config(
         static_cast<uint8_t>(num_workers_per_direction),
         static_cast<uint8_t>(num_buffers_full_size_channels),

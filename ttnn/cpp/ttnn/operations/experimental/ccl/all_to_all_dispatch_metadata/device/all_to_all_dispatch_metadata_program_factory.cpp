@@ -43,9 +43,8 @@ auto launch_mux_workers(
     const size_t buffer_size_bytes_full_size_channel = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
     const uint32_t l1_unreserved_base_address =
         mesh_device.allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
-    // Base + the L1 bank size is the floor of the L1_SMALL region, which the mux stays below (#56769).
-    const size_t l1_small_floor_address =
-        l1_unreserved_base_address + mesh_device.allocator()->get_bank_size(tt::tt_metal::BufferType::L1);
+    // The mux stays below the floor of the L1_SMALL region, where carried semaphores live (#56769).
+    const size_t l1_small_floor_address = ttnn::ccl::l1_small_floor_address(mesh_device);
     auto mux_kernel_config = tt::tt_fabric::FabricMuxConfig(
         num_full_size_channels,
         num_header_only_channels,
@@ -192,15 +191,17 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
         operation_attributes.cross_device_semaphore.has_value(),
         tensor_args.optional_output_tensors.has_value());
 
+    // Carried counters: prefer L1_SMALL, which sits above the fabric mux's ceiling (#56769).
+    const auto sem_buffer_type = ttnn::ccl::carried_semaphore_buffer_type(*mesh_device);
     std::optional<GlobalSemaphore> init_barrier_semaphore = std::nullopt;
-    GlobalSemaphore final_barrier_semaphore = skip_init_semaphore
-                                                  ? operation_attributes.cross_device_semaphore.value()
-                                                  : ttnn::global_semaphore::create_global_semaphore(
-                                                        mesh_device, operation_attributes.worker_core_range_set, 0);
+    GlobalSemaphore final_barrier_semaphore =
+        skip_init_semaphore ? operation_attributes.cross_device_semaphore.value()
+                            : ttnn::global_semaphore::create_global_semaphore(
+                                  mesh_device, operation_attributes.worker_core_range_set, 0, sem_buffer_type);
 
     if (!skip_init_semaphore) {
-        init_barrier_semaphore =
-            ttnn::global_semaphore::create_global_semaphore(mesh_device, operation_attributes.worker_core_range_set, 0);
+        init_barrier_semaphore = ttnn::global_semaphore::create_global_semaphore(
+            mesh_device, operation_attributes.worker_core_range_set, 0, sem_buffer_type);
     }
 
     tt::tt_metal::distributed::Synchronize(

@@ -545,9 +545,8 @@ StridedAllGatherAsyncProgramFactory::strided_all_gather_async_minimal_default_he
     const uint32_t l1_unreserved_base_address =
         mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
     const size_t mux_base_l1_address = l1_unreserved_base_address;
-    // Base + the L1 bank size is the floor of the L1_SMALL region, which the mux stays below (#56769).
-    const size_t mux_l1_small_floor_address =
-        l1_unreserved_base_address + mesh_device->allocator()->get_bank_size(tt::tt_metal::BufferType::L1);
+    // The mux stays below the floor of the L1_SMALL region, where carried semaphores live (#56769).
+    const size_t mux_l1_small_floor_address = ttnn::ccl::l1_small_floor_address(*mesh_device);
     for (uint32_t link = 0; link < num_links; link++) {
         for (uint32_t dir = 0; dir < num_directions_per_link; dir++) {
             // Fabrix mux kernel

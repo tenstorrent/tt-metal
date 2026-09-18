@@ -169,9 +169,8 @@ auto launch_mux_workers(
         "l1_small_size > 0 (16384 is sufficient) so semaphores are placed in L1_SMALL, above the mux.",
         mux_core_range_set.str());
 
-    // Base + the L1 bank size is the floor of the L1_SMALL region, which the mux stays below (#56769).
-    const size_t l1_small_floor_address = l1_unreserved_base_address +
-                                          mesh_device.allocator()->get_bank_size(tt::tt_metal::BufferType::L1);
+    // The mux stays below the floor of the L1_SMALL region, where carried semaphores live (#56769).
+    const size_t l1_small_floor_address = ttnn::ccl::l1_small_floor_address(mesh_device);
 
     auto mux_kernel_config = get_fabric_mux_config(
         num_full_size_channels,
@@ -255,11 +254,14 @@ UnifiedSelectReduce::cached_mesh_workload_t UnifiedSelectReduce::create_mesh_wor
 
     auto* mesh_device = tensor_args.dense_input_tensor.device();
     const ttnn::CoreRangeSet worker_core_range_set(operation_attributes.worker_cores);
+    // Carried counters: keep them above the mux's ceiling where an L1_SMALL region exists. This op
+    // also TT_FATALs below if there is none, so the general-L1 fallback never reaches a mux.
+    const auto sem_buffer_type = ttnn::ccl::carried_semaphore_buffer_type(*mesh_device);
     auto init_barrier_semaphore =
-        ttnn::global_semaphore::create_global_semaphore(mesh_device, worker_core_range_set, 0);
+        ttnn::global_semaphore::create_global_semaphore(mesh_device, worker_core_range_set, 0, sem_buffer_type);
 
     auto final_barrier_semaphore = operation_attributes.optional_cross_device_semaphore.value_or(
-        ttnn::global_semaphore::create_global_semaphore(mesh_device, worker_core_range_set, 0));
+        ttnn::global_semaphore::create_global_semaphore(mesh_device, worker_core_range_set, 0, sem_buffer_type));
 
     tt::tt_metal::distributed::Synchronize(
         *mesh_device, std::nullopt, {});  // interaction with subdevice needs to be investigated
