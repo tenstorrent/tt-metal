@@ -11,6 +11,7 @@ the hidden states. Follows the T5Encoder pattern in tt_dit/encoders/t5/model_t5.
 from __future__ import annotations
 
 import math
+import os
 
 import torch
 
@@ -156,6 +157,10 @@ class GemmaAttention(Module):
         tp = parallel_config.tensor_parallel.factor
         self.num_local_heads = self.num_heads // tp
         self.num_local_kv_heads = self.num_kv_heads // tp
+        # Native SDPA maps q_head -> q_head // (Q_heads / KV_heads), matching the
+        # contiguous repeat_interleave below without materializing expanded K/V.
+        # Capture the opt-in at construction so a live trace cannot change routes.
+        self._native_gqa = os.environ.get("LTX_GEMMA_NATIVE_GQA", "0") == "1"
 
         # FSDP: shard weights on the sequence-parallel axis (gathered per-op).
         sp = parallel_config.sequence_parallel
@@ -256,7 +261,7 @@ class GemmaAttention(Module):
         # GQA: expand KV heads to match Q heads. Must use repeat_interleave (each kv
         # head duplicated contiguously: [kv0,kv0,kv1,kv1,...]) to match HF repeat_kv —
         # ttnn.repeat does block-tile ([kv0..kv7,kv0..kv7]) which mispairs q/kv heads.
-        if self.num_local_kv_heads < self.num_local_heads:
+        if not self._native_gqa and self.num_local_kv_heads < self.num_local_heads:
             repeats = self.num_local_heads // self.num_local_kv_heads
             k = ttnn.repeat_interleave(k, repeats, dim=1)
             v = ttnn.repeat_interleave(v, repeats, dim=1)
