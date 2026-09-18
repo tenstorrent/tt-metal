@@ -32,7 +32,14 @@ std::pair<ttnn::Tensor, ttnn::Tensor> reduce_affine_transforms(
         /*default_fp32_acc=*/true,
         /*default_l1_acc=*/false);
     return ttnn::experimental::prim::reduce_affine_transforms(
-        a, b, groups_per_head, output_memory_config, kernel_config, actual_start, sequence_parallel_axis, local_rows,
+        a,
+        b,
+        groups_per_head,
+        output_memory_config,
+        kernel_config,
+        actual_start,
+        sequence_parallel_axis,
+        local_rows,
         actual_end);
 }
 

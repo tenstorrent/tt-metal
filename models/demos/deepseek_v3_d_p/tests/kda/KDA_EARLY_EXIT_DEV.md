@@ -1,5 +1,9 @@
 # Runtime early-exit implementation plan
 
+> Original approved design/implementation record. The current branch follows
+> the newer parent PR APIs and construction-time geometry; see
+> [rebase integration](KDA_PADDING_REBASE.md) for current names and validation.
+
 ## Goal and constraints
 
 Implement the approved [design](KDA_EARLY_EXIT_DESIGN.md) on PR #56632 head

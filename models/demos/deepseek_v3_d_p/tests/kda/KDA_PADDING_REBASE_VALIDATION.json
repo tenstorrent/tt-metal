@@ -1,0 +1,566 @@
+{
+  "parent_revision": "bbb915fa5c30023c7b9667d64a1b86d7c48ae91d",
+  "provenance": "Integration working tree, including then-uncommitted changes; recorded runner revision alone is insufficient. See KDA_PADDING_REBASE.md.",
+  "runs": [
+    {
+      "revision": "bbb915fa5c30023c7b9667d64a1b86d7c48ae91d",
+      "safe_wrapper_verdict": "PASS",
+      "test_results": [
+        {
+          "test_item_id": "tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_padding_recurrence.py::test_padding_preparation_and_scan[device_params={'trace_region_size': 4000000}]",
+          "outcome": "passed"
+        },
+        {
+          "test_item_id": "tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_padding_prefix.py::test_padding_prefix_empty_and_partial_groups[silicon_arch_name=blackhole-width=32-device_params={'trace_region_size': 2000000}-mesh_device=(2, 4)]",
+          "outcome": "passed"
+        },
+        {
+          "test_item_id": "tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_padding_prefix.py::test_padding_prefix_empty_and_partial_groups[silicon_arch_name=blackhole-width=128-device_params={'trace_region_size': 2000000}-mesh_device=(2, 4)]",
+          "outcome": "passed"
+        }
+      ],
+      "device_hang_observed": false,
+      "device_reset_observed": false,
+      "passed": true,
+      "name": "native-2",
+      "command_run": {
+        "command": {
+          "argv": [
+            "scripts/run_safe_pytest.sh",
+            "tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_padding_recurrence.py::test_padding_preparation_and_scan[device_params={'trace_region_size': 4000000}]",
+            "tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_padding_prefix.py::test_padding_prefix_empty_and_partial_groups[silicon_arch_name=blackhole-width=32-device_params={'trace_region_size': 2000000}-mesh_device=(2, 4)]",
+            "tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_padding_prefix.py::test_padding_prefix_empty_and_partial_groups[silicon_arch_name=blackhole-width=128-device_params={'trace_region_size': 2000000}-mesh_device=(2, 4)]",
+            "-vv",
+            "--capture=fd"
+          ],
+          "working_directory": "/localdev/mvasilijevic/tt-metal.worktrees/kda_pad_runtime"
+        },
+        "exit_code": 0,
+        "started_at": "2026-09-18T17:18:36.687127Z",
+        "ended_at": "2026-09-18T17:19:03.601957Z",
+        "log": "/localdev/mvasilijevic/tt-metal.worktrees/kda_pad_runtime/.ai-workspace/artifacts/test.log",
+        "duration_seconds": 26.91483
+      }
+    },
+    {
+      "revision": "bbb915fa5c30023c7b9667d64a1b86d7c48ae91d",
+      "safe_wrapper_verdict": "PASS",
+      "test_results": [
+        {
+          "test_item_id": "models/demos/deepseek_v3_d_p/tests/kda/layer/test_padding_early_exit.py::test_padding_changing_interval_single_capture[blackhole-device_params0-mesh_device0-0-1]",
+          "outcome": "passed"
+        },
+        {
+          "test_item_id": "models/demos/deepseek_v3_d_p/tests/kda/layer/test_padding_early_exit.py::test_padding_changing_interval_single_capture[blackhole-device_params0-mesh_device1-0-1]",
+          "outcome": "passed"
+        },
+        {
+          "test_item_id": "models/demos/deepseek_v3_d_p/tests/kda/layer/test_padding_early_exit.py::test_padding_changing_interval_single_capture[blackhole-device_params0-mesh_device2-1-0]",
+          "outcome": "passed"
+        }
+      ],
+      "device_hang_observed": false,
+      "device_reset_observed": false,
+      "passed": true,
+      "name": "layer-2",
+      "command_run": {
+        "command": {
+          "argv": [
+            "scripts/run_safe_pytest.sh",
+            "models/demos/deepseek_v3_d_p/tests/kda/layer/test_padding_early_exit.py::test_padding_changing_interval_single_capture[blackhole-device_params0-mesh_device0-0-1]",
+            "models/demos/deepseek_v3_d_p/tests/kda/layer/test_padding_early_exit.py::test_padding_changing_interval_single_capture[blackhole-device_params0-mesh_device1-0-1]",
+            "models/demos/deepseek_v3_d_p/tests/kda/layer/test_padding_early_exit.py::test_padding_changing_interval_single_capture[blackhole-device_params0-mesh_device2-1-0]",
+            "-vv",
+            "--capture=fd"
+          ],
+          "working_directory": "/localdev/mvasilijevic/tt-metal.worktrees/kda_pad_runtime"
+        },
+        "exit_code": 0,
+        "started_at": "2026-09-18T17:20:36.067829Z",
+        "ended_at": "2026-09-18T17:21:51.866252Z",
+        "log": "/localdev/mvasilijevic/tt-metal.worktrees/kda_pad_runtime/.ai-workspace/artifacts/test.log",
+        "duration_seconds": 75.798423
+      }
+    },
+    {
+      "revision": "b33f7988ee3bafdac7fb91fa825a5bf0be3b47d0",
+      "safe_wrapper_verdict": "PASS",
+      "test_results": [
+        {
+          "test_item_id": "models/demos/deepseek_v3_d_p/tests/kda/layer/test_dynamic_trace.py::test_changing_actual_start_single_capture[blackhole-device_params0-mesh_device0-0-1-2560]",
+          "outcome": "passed"
+        },
+        {
+          "test_item_id": "models/demos/deepseek_v3_d_p/tests/kda/layer/test_dynamic_trace.py::test_production_local_trace[blackhole-640-SP1xTP8]",
+          "outcome": "passed"
+        },
+        {
+          "test_item_id": "models/demos/deepseek_v3_d_p/tests/kda/layer/test_dynamic_trace.py::test_changing_actual_start_single_capture[blackhole-device_params0-mesh_device1-0-1-2560]",
+          "outcome": "passed"
+        },
+        {
+          "test_item_id": "models/demos/deepseek_v3_d_p/tests/kda/layer/test_dynamic_trace.py::test_production_local_trace[blackhole-640-SP1xTP8-transposed]",
+          "outcome": "passed"
+        },
+        {
+          "test_item_id": "models/demos/deepseek_v3_d_p/tests/kda/layer/test_dynamic_trace.py::test_changing_actual_start_single_capture[blackhole-device_params0-mesh_device2-1-0-2560]",
+          "outcome": "passed"
+        },
+        {
+          "test_item_id": "models/demos/deepseek_v3_d_p/tests/kda/layer/test_dynamic_trace.py::test_production_local_trace[blackhole-2560-SP1xTP8]",
+          "outcome": "passed"
+        },
+        {
+          "test_item_id": "models/demos/deepseek_v3_d_p/tests/kda/layer/test_dynamic_trace.py::test_changing_actual_start_single_capture[blackhole-device_params0-mesh_device3-0-1-640]",
+          "outcome": "passed"
+        },
+        {
+          "test_item_id": "models/demos/deepseek_v3_d_p/tests/kda/layer/test_dynamic_trace.py::test_production_local_trace[blackhole-2560-SP1xTP8-transposed]",
+          "outcome": "passed"
+        },
+        {
+          "test_item_id": "models/demos/deepseek_v3_d_p/tests/kda/layer/test_dynamic_trace.py::test_changing_actual_start_single_capture[blackhole-device_params0-mesh_device4-0-1-640]",
+          "outcome": "passed"
+        },
+        {
+          "test_item_id": "models/demos/deepseek_v3_d_p/tests/kda/layer/test_dynamic_trace.py::test_changing_actual_start_single_capture[blackhole-device_params0-mesh_device5-0-1-2560]",
+          "outcome": "passed"
+        }
+      ],
+      "device_hang_observed": false,
+      "device_reset_observed": false,
+      "passed": true,
+      "name": "offset-1",
+      "command_run": {
+        "command": {
+          "argv": [
+            "scripts/run_safe_pytest.sh",
+            "models/demos/deepseek_v3_d_p/tests/kda/layer/test_dynamic_trace.py::test_changing_actual_start_single_capture[blackhole-device_params0-mesh_device0-0-1-2560]",
+            "models/demos/deepseek_v3_d_p/tests/kda/layer/test_dynamic_trace.py::test_production_local_trace[blackhole-640-SP1xTP8]",
+            "models/demos/deepseek_v3_d_p/tests/kda/layer/test_dynamic_trace.py::test_changing_actual_start_single_capture[blackhole-device_params0-mesh_device1-0-1-2560]",
+            "models/demos/deepseek_v3_d_p/tests/kda/layer/test_dynamic_trace.py::test_production_local_trace[blackhole-640-SP1xTP8-transposed]",
+            "models/demos/deepseek_v3_d_p/tests/kda/layer/test_dynamic_trace.py::test_changing_actual_start_single_capture[blackhole-device_params0-mesh_device2-1-0-2560]",
+            "models/demos/deepseek_v3_d_p/tests/kda/layer/test_dynamic_trace.py::test_production_local_trace[blackhole-2560-SP1xTP8]",
+            "models/demos/deepseek_v3_d_p/tests/kda/layer/test_dynamic_trace.py::test_changing_actual_start_single_capture[blackhole-device_params0-mesh_device3-0-1-640]",
+            "models/demos/deepseek_v3_d_p/tests/kda/layer/test_dynamic_trace.py::test_production_local_trace[blackhole-2560-SP1xTP8-transposed]",
+            "models/demos/deepseek_v3_d_p/tests/kda/layer/test_dynamic_trace.py::test_changing_actual_start_single_capture[blackhole-device_params0-mesh_device4-0-1-640]",
+            "models/demos/deepseek_v3_d_p/tests/kda/layer/test_dynamic_trace.py::test_changing_actual_start_single_capture[blackhole-device_params0-mesh_device5-0-1-2560]",
+            "-vv",
+            "--capture=fd"
+          ],
+          "working_directory": "/localdev/mvasilijevic/tt-metal.worktrees/kda_pad_runtime"
+        },
+        "exit_code": 0,
+        "started_at": "2026-09-18T17:24:56.898419Z",
+        "ended_at": "2026-09-18T17:27:23.024616Z",
+        "log": "/localdev/mvasilijevic/tt-metal.worktrees/kda_pad_runtime/.ai-workspace/artifacts/test.log",
+        "duration_seconds": 146.126197
+      }
+    },
+    {
+      "revision": "b33f7988ee3bafdac7fb91fa825a5bf0be3b47d0",
+      "safe_wrapper_verdict": "PASS",
+      "test_results": [
+        {
+          "test_item_id": "tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_prepare_chunk_recurrence.py::test_prepare_chunk_recurrence_contract_accuracy_and_determinism[unit-h2-n4-k32-v64]",
+          "outcome": "passed"
+        },
+        {
+          "test_item_id": "tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_prepare_chunk_recurrence.py::test_prepare_chunk_recurrence_contract_accuracy_and_determinism[sp2-tp4-h24-n80-k128-v128]",
+          "outcome": "passed"
+        },
+        {
+          "test_item_id": "tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_prepare_chunk_recurrence.py::test_prepare_chunk_recurrence_cache_hit_rebinds_fresh_tensors",
+          "outcome": "passed"
+        },
+        {
+          "test_item_id": "tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_prepare_chunk_recurrence.py::test_prepare_chunk_recurrence_default_compute_config_matches_explicit_defaults",
+          "outcome": "passed"
+        },
+        {
+          "test_item_id": "tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_prepare_chunk_recurrence.py::test_prepare_chunk_recurrence_precise_math_uses_distinct_accurate_program",
+          "outcome": "passed"
+        },
+        {
+          "test_item_id": "tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_prepare_chunk_recurrence.py::test_prepare_chunk_recurrence_rejects_unsupported_compute_config",
+          "outcome": "passed"
+        },
+        {
+          "test_item_id": "tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_prepare_chunk_recurrence.py::test_prepare_chunk_recurrence_rejects_host_inputs[host_index=0]",
+          "outcome": "passed"
+        },
+        {
+          "test_item_id": "tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_prepare_chunk_recurrence.py::test_prepare_chunk_recurrence_rejects_host_inputs[host_index=1]",
+          "outcome": "passed"
+        },
+        {
+          "test_item_id": "tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_prepare_chunk_recurrence.py::test_prepare_chunk_recurrence_rejects_host_inputs[host_index=2]",
+          "outcome": "passed"
+        },
+        {
+          "test_item_id": "tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_prepare_chunk_recurrence.py::test_prepare_chunk_recurrence_rejects_host_inputs[host_index=3]",
+          "outcome": "passed"
+        },
+        {
+          "test_item_id": "tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_prepare_chunk_recurrence.py::test_prepare_chunk_recurrence_rejects_host_inputs[host_index=4]",
+          "outcome": "passed"
+        },
+        {
+          "test_item_id": "tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_prepare_chunk_recurrence.py::test_prepare_chunk_recurrence_rejects_invalid_inputs[case=g_dtype-message=g must be BFLOAT16, got DataType::FLOAT32]",
+          "outcome": "passed"
+        },
+        {
+          "test_item_id": "tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_prepare_chunk_recurrence.py::test_prepare_chunk_recurrence_rejects_invalid_inputs[case=layout-message=k must use TILE layout]",
+          "outcome": "passed"
+        },
+        {
+          "test_item_id": "tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_prepare_chunk_recurrence.py::test_prepare_chunk_recurrence_rejects_invalid_inputs[case=rank-message=rank 3 production-flat]",
+          "outcome": "passed"
+        },
+        {
+          "test_item_id": "tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_prepare_chunk_recurrence.py::test_prepare_chunk_recurrence_rejects_invalid_inputs[case=leading-message=leading dimension 1]",
+          "outcome": "passed"
+        },
+        {
+          "test_item_id": "tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_prepare_chunk_recurrence.py::test_prepare_chunk_recurrence_rejects_invalid_inputs[case=qkg_shape-message=q, k, and g must have matching shapes]",
+          "outcome": "passed"
+        },
+        {
+          "test_item_id": "tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_prepare_chunk_recurrence.py::test_prepare_chunk_recurrence_rejects_invalid_inputs[case=sequence-message=matching sequence lengths]",
+          "outcome": "passed"
+        },
+        {
+          "test_item_id": "tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_prepare_chunk_recurrence.py::test_prepare_chunk_recurrence_rejects_invalid_inputs[case=sequence_chunk-message=sequence length must be positive and divisible by 32]",
+          "outcome": "passed"
+        },
+        {
+          "test_item_id": "tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_prepare_chunk_recurrence.py::test_prepare_chunk_recurrence_rejects_invalid_inputs[case=head_divisibility-message=flat widths must be divisible by num_heads]",
+          "outcome": "passed"
+        },
+        {
+          "test_item_id": "tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_prepare_chunk_recurrence.py::test_prepare_chunk_recurrence_rejects_invalid_inputs[case=key_alignment-message=K and V must be positive and tile aligned]",
+          "outcome": "passed"
+        },
+        {
+          "test_item_id": "tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_prepare_chunk_recurrence.py::test_prepare_chunk_recurrence_rejects_invalid_inputs[case=value_alignment-message=K and V must be positive and tile aligned]",
+          "outcome": "passed"
+        },
+        {
+          "test_item_id": "tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_prepare_chunk_recurrence.py::test_prepare_chunk_recurrence_rejects_invalid_inputs[case=beta-message=beta shape must be]",
+          "outcome": "passed"
+        },
+        {
+          "test_item_id": "tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_prepare_chunk_recurrence.py::test_prepare_chunk_recurrence_rejects_invalid_inputs[case=sharded-message=q must use interleaved memory]",
+          "outcome": "passed"
+        },
+        {
+          "test_item_id": "tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_prepare_chunk_recurrence.py::test_prepare_chunk_recurrence_rejects_invalid_options",
+          "outcome": "passed"
+        },
+        {
+          "test_item_id": "tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_prepare_chunk_recurrence.py::test_prepare_chunk_recurrence_scratch_wrap[all-fp32]",
+          "outcome": "passed"
+        },
+        {
+          "test_item_id": "tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_prepare_chunk_recurrence.py::test_prepare_chunk_recurrence_scratch_wrap[decay-bf16]",
+          "outcome": "passed"
+        },
+        {
+          "test_item_id": "tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_prepare_chunk_recurrence.py::test_prepare_chunk_recurrence_scratch_wrap[production]",
+          "outcome": "passed"
+        }
+      ],
+      "device_hang_observed": false,
+      "device_reset_observed": false,
+      "passed": true,
+      "name": "prep-regression",
+      "command_run": {
+        "command": {
+          "argv": [
+            "scripts/run_safe_pytest.sh",
+            "tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_prepare_chunk_recurrence.py::test_prepare_chunk_recurrence_contract_accuracy_and_determinism[unit-h2-n4-k32-v64]",
+            "tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_prepare_chunk_recurrence.py::test_prepare_chunk_recurrence_contract_accuracy_and_determinism[sp2-tp4-h24-n80-k128-v128]",
+            "tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_prepare_chunk_recurrence.py::test_prepare_chunk_recurrence_cache_hit_rebinds_fresh_tensors",
+            "tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_prepare_chunk_recurrence.py::test_prepare_chunk_recurrence_default_compute_config_matches_explicit_defaults",
+            "tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_prepare_chunk_recurrence.py::test_prepare_chunk_recurrence_precise_math_uses_distinct_accurate_program",
+            "tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_prepare_chunk_recurrence.py::test_prepare_chunk_recurrence_rejects_unsupported_compute_config",
+            "tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_prepare_chunk_recurrence.py::test_prepare_chunk_recurrence_rejects_host_inputs[host_index=0]",
+            "tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_prepare_chunk_recurrence.py::test_prepare_chunk_recurrence_rejects_host_inputs[host_index=1]",
+            "tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_prepare_chunk_recurrence.py::test_prepare_chunk_recurrence_rejects_host_inputs[host_index=2]",
+            "tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_prepare_chunk_recurrence.py::test_prepare_chunk_recurrence_rejects_host_inputs[host_index=3]",
+            "tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_prepare_chunk_recurrence.py::test_prepare_chunk_recurrence_rejects_host_inputs[host_index=4]",
+            "tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_prepare_chunk_recurrence.py::test_prepare_chunk_recurrence_rejects_invalid_inputs[case=g_dtype-message=g must be BFLOAT16, got DataType::FLOAT32]",
+            "tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_prepare_chunk_recurrence.py::test_prepare_chunk_recurrence_rejects_invalid_inputs[case=layout-message=k must use TILE layout]",
+            "tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_prepare_chunk_recurrence.py::test_prepare_chunk_recurrence_rejects_invalid_inputs[case=rank-message=rank 3 production-flat]",
+            "tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_prepare_chunk_recurrence.py::test_prepare_chunk_recurrence_rejects_invalid_inputs[case=leading-message=leading dimension 1]",
+            "tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_prepare_chunk_recurrence.py::test_prepare_chunk_recurrence_rejects_invalid_inputs[case=qkg_shape-message=q, k, and g must have matching shapes]",
+            "tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_prepare_chunk_recurrence.py::test_prepare_chunk_recurrence_rejects_invalid_inputs[case=sequence-message=matching sequence lengths]",
+            "tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_prepare_chunk_recurrence.py::test_prepare_chunk_recurrence_rejects_invalid_inputs[case=sequence_chunk-message=sequence length must be positive and divisible by 32]",
+            "tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_prepare_chunk_recurrence.py::test_prepare_chunk_recurrence_rejects_invalid_inputs[case=head_divisibility-message=flat widths must be divisible by num_heads]",
+            "tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_prepare_chunk_recurrence.py::test_prepare_chunk_recurrence_rejects_invalid_inputs[case=key_alignment-message=K and V must be positive and tile aligned]",
+            "tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_prepare_chunk_recurrence.py::test_prepare_chunk_recurrence_rejects_invalid_inputs[case=value_alignment-message=K and V must be positive and tile aligned]",
+            "tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_prepare_chunk_recurrence.py::test_prepare_chunk_recurrence_rejects_invalid_inputs[case=beta-message=beta shape must be]",
+            "tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_prepare_chunk_recurrence.py::test_prepare_chunk_recurrence_rejects_invalid_inputs[case=sharded-message=q must use interleaved memory]",
+            "tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_prepare_chunk_recurrence.py::test_prepare_chunk_recurrence_rejects_invalid_options",
+            "tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_prepare_chunk_recurrence.py::test_prepare_chunk_recurrence_scratch_wrap[all-fp32]",
+            "tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_prepare_chunk_recurrence.py::test_prepare_chunk_recurrence_scratch_wrap[decay-bf16]",
+            "tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_prepare_chunk_recurrence.py::test_prepare_chunk_recurrence_scratch_wrap[production]",
+            "-vv",
+            "--capture=fd"
+          ],
+          "working_directory": "/localdev/mvasilijevic/tt-metal.worktrees/kda_pad_runtime"
+        },
+        "exit_code": 0,
+        "started_at": "2026-09-18T17:26:06.450491Z",
+        "ended_at": "2026-09-18T17:27:59.970926Z",
+        "log": "/localdev/mvasilijevic/tt-metal.worktrees/kda_pad_runtime/.ai-workspace/artifacts/test.log",
+        "duration_seconds": 113.520435
+      }
+    },
+    {
+      "revision": "b33f7988ee3bafdac7fb91fa825a5bf0be3b47d0",
+      "safe_wrapper_verdict": "PASS",
+      "test_results": [
+        {
+          "test_item_id": "models/demos/deepseek_v3_d_p/tests/kda/layer/test_contract.py::test_layer_matches_reference_and_is_deterministic",
+          "outcome": "passed"
+        },
+        {
+          "test_item_id": "models/demos/deepseek_v3_d_p/tests/kda/layer/test_contract.py::test_allocate_state_contract",
+          "outcome": "passed"
+        },
+        {
+          "test_item_id": "models/demos/deepseek_v3_d_p/tests/kda/layer/test_contract.py::test_forward_contract",
+          "outcome": "passed"
+        },
+        {
+          "test_item_id": "models/demos/deepseek_v3_d_p/tests/kda/layer/test_contract.py::test_layer_rejects_invalid_construction[sp-and-tp-axes-must-be-distinct]",
+          "outcome": "passed"
+        },
+        {
+          "test_item_id": "models/demos/deepseek_v3_d_p/tests/kda/layer/test_contract.py::test_layer_rejects_invalid_construction[weight-sources-are-mutually-exclusive]",
+          "outcome": "passed"
+        },
+        {
+          "test_item_id": "models/demos/deepseek_v3_d_p/tests/kda/layer/test_contract.py::test_layer_rejects_invalid_construction[grouped-scan-requires-square-state]",
+          "outcome": "passed"
+        },
+        {
+          "test_item_id": "models/demos/deepseek_v3_d_p/tests/kda/layer/test_contract.py::test_layer_rejects_invalid_construction[state-allocation-requires-batch-one]",
+          "outcome": "passed"
+        },
+        {
+          "test_item_id": "models/demos/deepseek_v3_d_p/tests/kda/layer/test_contract.py::test_layer_rejects_invalid_forward[sequence-must-be-positive-tile-multiple]",
+          "outcome": "passed"
+        },
+        {
+          "test_item_id": "models/demos/deepseek_v3_d_p/tests/kda/layer/test_contract.py::test_layer_rejects_invalid_forward[physical-length-must-match-construction]",
+          "outcome": "passed"
+        },
+        {
+          "test_item_id": "models/demos/deepseek_v3_d_p/tests/kda/layer/test_contract.py::test_layer_rejects_invalid_forward[forward-requires-batch-one]",
+          "outcome": "passed"
+        },
+        {
+          "test_item_id": "models/demos/deepseek_v3_d_p/tests/kda/layer/test_contract.py::test_layer_rejects_invalid_forward[hidden-width-must-match-config]",
+          "outcome": "passed"
+        },
+        {
+          "test_item_id": "models/demos/deepseek_v3_d_p/tests/kda/layer/test_contract.py::test_layer_rejects_invalid_forward[recurrent-state-shape]",
+          "outcome": "passed"
+        },
+        {
+          "test_item_id": "models/demos/deepseek_v3_d_p/tests/kda/layer/test_contract.py::test_layer_rejects_invalid_forward[recurrent-state-dtype]",
+          "outcome": "passed"
+        },
+        {
+          "test_item_id": "models/demos/deepseek_v3_d_p/tests/kda/layer/test_contract.py::test_layer_rejects_invalid_forward[convolution-state-shape]",
+          "outcome": "passed"
+        },
+        {
+          "test_item_id": "models/demos/deepseek_v3_d_p/tests/kda/layer/test_contract.py::test_layer_rejects_invalid_forward[convolution-state-dtype-and-layout]",
+          "outcome": "passed"
+        },
+        {
+          "test_item_id": "models/demos/deepseek_v3_d_p/tests/kda/layer/test_contract.py::test_layer_rejects_non_tensor_actual_start[0_0]",
+          "outcome": "passed"
+        },
+        {
+          "test_item_id": "models/demos/deepseek_v3_d_p/tests/kda/layer/test_contract.py::test_layer_rejects_non_tensor_actual_start[0_1]",
+          "outcome": "passed"
+        },
+        {
+          "test_item_id": "models/demos/deepseek_v3_d_p/tests/kda/layer/test_contract.py::test_layer_rejects_invalid_actual_start_tensor[shape0-DataType.UINT32-Layout.ROW_MAJOR]",
+          "outcome": "passed"
+        },
+        {
+          "test_item_id": "models/demos/deepseek_v3_d_p/tests/kda/layer/test_contract.py::test_layer_rejects_invalid_actual_start_tensor[shape1-DataType.BFLOAT16-Layout.ROW_MAJOR]",
+          "outcome": "passed"
+        },
+        {
+          "test_item_id": "models/demos/deepseek_v3_d_p/tests/kda/layer/test_contract.py::test_layer_rejects_invalid_actual_start_tensor[shape2-DataType.UINT32-Layout.TILE]",
+          "outcome": "passed"
+        },
+        {
+          "test_item_id": "models/demos/deepseek_v3_d_p/tests/kda/components/test_chronological_selections.py::test_chronological_selections[blackhole-0-mesh_device0-device_params0]",
+          "outcome": "passed"
+        },
+        {
+          "test_item_id": "models/demos/deepseek_v3_d_p/tests/kda/components/test_chronological_selections.py::test_chronological_selections[blackhole-0-mesh_device1-device_params1]",
+          "outcome": "passed"
+        },
+        {
+          "test_item_id": "models/demos/deepseek_v3_d_p/tests/kda/components/test_chronological_selections.py::test_chronological_selections[blackhole-1-mesh_device0-device_params0]",
+          "outcome": "passed"
+        },
+        {
+          "test_item_id": "models/demos/deepseek_v3_d_p/tests/kda/components/test_chronological_selections.py::test_chronological_selections[blackhole-1-mesh_device1-device_params1]",
+          "outcome": "passed"
+        }
+      ],
+      "device_hang_observed": false,
+      "device_reset_observed": false,
+      "passed": true,
+      "name": "contract-1",
+      "command_run": {
+        "command": {
+          "argv": [
+            "scripts/run_safe_pytest.sh",
+            "models/demos/deepseek_v3_d_p/tests/kda/layer/test_contract.py::test_layer_matches_reference_and_is_deterministic",
+            "models/demos/deepseek_v3_d_p/tests/kda/layer/test_contract.py::test_allocate_state_contract",
+            "models/demos/deepseek_v3_d_p/tests/kda/layer/test_contract.py::test_forward_contract",
+            "models/demos/deepseek_v3_d_p/tests/kda/layer/test_contract.py::test_layer_rejects_invalid_construction[sp-and-tp-axes-must-be-distinct]",
+            "models/demos/deepseek_v3_d_p/tests/kda/layer/test_contract.py::test_layer_rejects_invalid_construction[weight-sources-are-mutually-exclusive]",
+            "models/demos/deepseek_v3_d_p/tests/kda/layer/test_contract.py::test_layer_rejects_invalid_construction[grouped-scan-requires-square-state]",
+            "models/demos/deepseek_v3_d_p/tests/kda/layer/test_contract.py::test_layer_rejects_invalid_construction[state-allocation-requires-batch-one]",
+            "models/demos/deepseek_v3_d_p/tests/kda/layer/test_contract.py::test_layer_rejects_invalid_forward[sequence-must-be-positive-tile-multiple]",
+            "models/demos/deepseek_v3_d_p/tests/kda/layer/test_contract.py::test_layer_rejects_invalid_forward[physical-length-must-match-construction]",
+            "models/demos/deepseek_v3_d_p/tests/kda/layer/test_contract.py::test_layer_rejects_invalid_forward[forward-requires-batch-one]",
+            "models/demos/deepseek_v3_d_p/tests/kda/layer/test_contract.py::test_layer_rejects_invalid_forward[hidden-width-must-match-config]",
+            "models/demos/deepseek_v3_d_p/tests/kda/layer/test_contract.py::test_layer_rejects_invalid_forward[recurrent-state-shape]",
+            "models/demos/deepseek_v3_d_p/tests/kda/layer/test_contract.py::test_layer_rejects_invalid_forward[recurrent-state-dtype]",
+            "models/demos/deepseek_v3_d_p/tests/kda/layer/test_contract.py::test_layer_rejects_invalid_forward[convolution-state-shape]",
+            "models/demos/deepseek_v3_d_p/tests/kda/layer/test_contract.py::test_layer_rejects_invalid_forward[convolution-state-dtype-and-layout]",
+            "models/demos/deepseek_v3_d_p/tests/kda/layer/test_contract.py::test_layer_rejects_non_tensor_actual_start[0_0]",
+            "models/demos/deepseek_v3_d_p/tests/kda/layer/test_contract.py::test_layer_rejects_non_tensor_actual_start[0_1]",
+            "models/demos/deepseek_v3_d_p/tests/kda/layer/test_contract.py::test_layer_rejects_invalid_actual_start_tensor[shape0-DataType.UINT32-Layout.ROW_MAJOR]",
+            "models/demos/deepseek_v3_d_p/tests/kda/layer/test_contract.py::test_layer_rejects_invalid_actual_start_tensor[shape1-DataType.BFLOAT16-Layout.ROW_MAJOR]",
+            "models/demos/deepseek_v3_d_p/tests/kda/layer/test_contract.py::test_layer_rejects_invalid_actual_start_tensor[shape2-DataType.UINT32-Layout.TILE]",
+            "models/demos/deepseek_v3_d_p/tests/kda/components/test_chronological_selections.py::test_chronological_selections[blackhole-0-mesh_device0-device_params0]",
+            "models/demos/deepseek_v3_d_p/tests/kda/components/test_chronological_selections.py::test_chronological_selections[blackhole-0-mesh_device1-device_params1]",
+            "models/demos/deepseek_v3_d_p/tests/kda/components/test_chronological_selections.py::test_chronological_selections[blackhole-1-mesh_device0-device_params0]",
+            "models/demos/deepseek_v3_d_p/tests/kda/components/test_chronological_selections.py::test_chronological_selections[blackhole-1-mesh_device1-device_params1]",
+            "-vv",
+            "--capture=fd"
+          ],
+          "working_directory": "/localdev/mvasilijevic/tt-metal.worktrees/kda_pad_runtime"
+        },
+        "exit_code": 0,
+        "started_at": "2026-09-18T17:27:40.692357Z",
+        "ended_at": "2026-09-18T17:28:39.890850Z",
+        "log": "/localdev/mvasilijevic/tt-metal.worktrees/kda_pad_runtime/.ai-workspace/artifacts/test.log",
+        "duration_seconds": 59.198493
+      }
+    },
+    {
+      "revision": "b33f7988ee3bafdac7fb91fa825a5bf0be3b47d0",
+      "safe_wrapper_verdict": "PASS",
+      "test_results": [
+        {
+          "test_item_id": "models/demos/deepseek_v3_d_p/tests/kda/perf/test_fixed_capacity_padding.py::test_fixed_capacity_padding[blackhole-recurrence-0-device_params0-mesh_device0]",
+          "outcome": "passed"
+        },
+        {
+          "test_item_id": "models/demos/deepseek_v3_d_p/tests/kda/perf/test_padding_early_exit_perf.py::test_padding_early_exit_cost[blackhole-recurrence-4096-device_params0-mesh_device0]",
+          "outcome": "passed"
+        },
+        {
+          "test_item_id": "models/demos/deepseek_v3_d_p/tests/kda/perf/test_padding_cost_attribution.py::test_padding_cost_attribution[blackhole-recurrence-4096-device_params0-mesh_device0]",
+          "outcome": "passed"
+        },
+        {
+          "test_item_id": "models/demos/deepseek_v3_d_p/tests/kda/perf/test_fixed_capacity_padding.py::test_fixed_capacity_padding[blackhole-recurrence-1024-device_params0-mesh_device0]",
+          "outcome": "passed"
+        },
+        {
+          "test_item_id": "models/demos/deepseek_v3_d_p/tests/kda/perf/test_padding_early_exit_perf.py::test_padding_early_exit_cost[blackhole-recurrence-4896-device_params0-mesh_device0]",
+          "outcome": "passed"
+        },
+        {
+          "test_item_id": "models/demos/deepseek_v3_d_p/tests/kda/perf/test_padding_cost_attribution.py::test_padding_cost_attribution[blackhole-recurrence-4896-device_params0-mesh_device0]",
+          "outcome": "passed"
+        },
+        {
+          "test_item_id": "models/demos/deepseek_v3_d_p/tests/kda/perf/test_fixed_capacity_padding.py::test_fixed_capacity_padding[blackhole-layer-0-device_params0-mesh_device0]",
+          "outcome": "passed"
+        },
+        {
+          "test_item_id": "models/demos/deepseek_v3_d_p/tests/kda/perf/test_padding_early_exit_perf.py::test_padding_early_exit_cost[blackhole-layer-4096-device_params0-mesh_device0]",
+          "outcome": "passed"
+        },
+        {
+          "test_item_id": "models/demos/deepseek_v3_d_p/tests/kda/perf/test_padding_cost_attribution.py::test_padding_cost_attribution[blackhole-recurrence-5120-device_params0-mesh_device0]",
+          "outcome": "passed"
+        },
+        {
+          "test_item_id": "models/demos/deepseek_v3_d_p/tests/kda/perf/test_fixed_capacity_padding.py::test_fixed_capacity_padding[blackhole-layer-1024-device_params0-mesh_device0]",
+          "outcome": "passed"
+        },
+        {
+          "test_item_id": "models/demos/deepseek_v3_d_p/tests/kda/perf/test_padding_early_exit_perf.py::test_padding_early_exit_cost[blackhole-layer-4896-device_params0-mesh_device0]",
+          "outcome": "passed"
+        },
+        {
+          "test_item_id": "models/demos/deepseek_v3_d_p/tests/kda/perf/test_padding_cost_attribution.py::test_padding_cost_attribution[blackhole-layer-4096-device_params0-mesh_device0]",
+          "outcome": "passed"
+        },
+        {
+          "test_item_id": "models/demos/deepseek_v3_d_p/tests/kda/perf/test_padding_cost_attribution.py::test_padding_cost_attribution[blackhole-layer-4896-device_params0-mesh_device0]",
+          "outcome": "passed"
+        },
+        {
+          "test_item_id": "models/demos/deepseek_v3_d_p/tests/kda/perf/test_padding_cost_attribution.py::test_padding_cost_attribution[blackhole-layer-5120-device_params0-mesh_device0]",
+          "outcome": "passed"
+        }
+      ],
+      "device_hang_observed": false,
+      "device_reset_observed": false,
+      "passed": true,
+      "name": "perf-smoke",
+      "command_run": {
+        "command": {
+          "argv": [
+            "scripts/run_safe_pytest.sh",
+            "models/demos/deepseek_v3_d_p/tests/kda/perf/test_fixed_capacity_padding.py::test_fixed_capacity_padding[blackhole-recurrence-0-device_params0-mesh_device0]",
+            "models/demos/deepseek_v3_d_p/tests/kda/perf/test_padding_early_exit_perf.py::test_padding_early_exit_cost[blackhole-recurrence-4096-device_params0-mesh_device0]",
+            "models/demos/deepseek_v3_d_p/tests/kda/perf/test_padding_cost_attribution.py::test_padding_cost_attribution[blackhole-recurrence-4096-device_params0-mesh_device0]",
+            "models/demos/deepseek_v3_d_p/tests/kda/perf/test_fixed_capacity_padding.py::test_fixed_capacity_padding[blackhole-recurrence-1024-device_params0-mesh_device0]",
+            "models/demos/deepseek_v3_d_p/tests/kda/perf/test_padding_early_exit_perf.py::test_padding_early_exit_cost[blackhole-recurrence-4896-device_params0-mesh_device0]",
+            "models/demos/deepseek_v3_d_p/tests/kda/perf/test_padding_cost_attribution.py::test_padding_cost_attribution[blackhole-recurrence-4896-device_params0-mesh_device0]",
+            "models/demos/deepseek_v3_d_p/tests/kda/perf/test_fixed_capacity_padding.py::test_fixed_capacity_padding[blackhole-layer-0-device_params0-mesh_device0]",
+            "models/demos/deepseek_v3_d_p/tests/kda/perf/test_padding_early_exit_perf.py::test_padding_early_exit_cost[blackhole-layer-4096-device_params0-mesh_device0]",
+            "models/demos/deepseek_v3_d_p/tests/kda/perf/test_padding_cost_attribution.py::test_padding_cost_attribution[blackhole-recurrence-5120-device_params0-mesh_device0]",
+            "models/demos/deepseek_v3_d_p/tests/kda/perf/test_fixed_capacity_padding.py::test_fixed_capacity_padding[blackhole-layer-1024-device_params0-mesh_device0]",
+            "models/demos/deepseek_v3_d_p/tests/kda/perf/test_padding_early_exit_perf.py::test_padding_early_exit_cost[blackhole-layer-4896-device_params0-mesh_device0]",
+            "models/demos/deepseek_v3_d_p/tests/kda/perf/test_padding_cost_attribution.py::test_padding_cost_attribution[blackhole-layer-4096-device_params0-mesh_device0]",
+            "models/demos/deepseek_v3_d_p/tests/kda/perf/test_padding_cost_attribution.py::test_padding_cost_attribution[blackhole-layer-4896-device_params0-mesh_device0]",
+            "models/demos/deepseek_v3_d_p/tests/kda/perf/test_padding_cost_attribution.py::test_padding_cost_attribution[blackhole-layer-5120-device_params0-mesh_device0]",
+            "-vv",
+            "--capture=fd"
+          ],
+          "working_directory": "/localdev/mvasilijevic/tt-metal.worktrees/kda_pad_runtime"
+        },
+        "exit_code": 0,
+        "started_at": "2026-09-18T17:30:38.920361Z",
+        "ended_at": "2026-09-18T17:34:10.916835Z",
+        "log": "/localdev/mvasilijevic/tt-metal.worktrees/kda_pad_runtime/.ai-workspace/artifacts/test.log",
+        "duration_seconds": 211.996474
+      },
+      "environment": {
+        "KDA_FIXED_VARIANT": "early",
+        "KDA_FIXED_PADDING": "0,1024",
+        "KDA_COST_VARIANT": "control"
+      }
+    }
+  ]
+}

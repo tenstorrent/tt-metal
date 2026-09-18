@@ -82,7 +82,14 @@ FORCE_INLINE void synchronize_head_stage(
     release.wait_min(completed_stages);
 }
 
-template <uint32_t Kt, uint32_t Vt, uint32_t G, uint32_t has_actual_end, uint32_t sp_rank, uint32_t sp_size, uint32_t local_rows>
+template <
+    uint32_t Kt,
+    uint32_t Vt,
+    uint32_t G,
+    uint32_t has_actual_end,
+    uint32_t sp_rank,
+    uint32_t sp_size,
+    uint32_t local_rows>
 TT_KERNEL void dataflow(uint32_t worker_index, uint32_t group) {
     constexpr uint32_t a_tiles = Kt * Kt;
     constexpr uint32_t b_tiles = Kt * Vt;

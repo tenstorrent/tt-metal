@@ -413,7 +413,9 @@ TT_KERNEL void compute(uint32_t num_chunks, uint32_t group) {
         const uint32_t groups = topology.local_rows / 32 / num_chunks;
         reset_chunk = topology.reset_chunk(group, groups);
         num_chunks = topology.valid_chunks(group, groups);
-        if (num_chunks == 0) { return; }
+        if (num_chunks == 0) {
+            return;
+        }
     }
     compute_kernel_hw_startup<SrcOrder::Reverse>(dfb::kd, dfb::v_beta, dfb::output);
     if constexpr (summary) {

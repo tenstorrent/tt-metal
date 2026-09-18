@@ -193,7 +193,9 @@ TT_KERNEL void compute(uint32_t group) {
         topology = kda_chronology::receive(chronology);
     }
     const uint32_t active = topology.active_groups(G);
-    if (group >= active) { return; }
+    if (group >= active) {
+        return;
+    }
     const uint32_t reset_group = topology.reset_group(G);
     compute_kernel_hw_startup<SrcOrder::Reverse>(dfb::initial_a, dfb::initial_b, dfb::to_remote_a);
     initial_a.wait_front(affine_a_tiles);

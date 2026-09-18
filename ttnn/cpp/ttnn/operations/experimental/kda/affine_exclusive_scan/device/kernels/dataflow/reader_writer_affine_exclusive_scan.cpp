@@ -138,7 +138,15 @@ FORCE_INLINE void synchronize_head_stage(
     release.wait_min(completed_stages);
 }
 
-template <uint32_t Kt, uint32_t Vt, uint32_t BH, uint32_t G, uint32_t has_actual_end, uint32_t sp_rank, uint32_t sp_size, uint32_t local_rows>
+template <
+    uint32_t Kt,
+    uint32_t Vt,
+    uint32_t BH,
+    uint32_t G,
+    uint32_t has_actual_end,
+    uint32_t sp_rank,
+    uint32_t sp_size,
+    uint32_t local_rows>
 TT_KERNEL void dataflow(uint32_t worker_index, uint32_t group) {
     constexpr uint32_t affine_a_tiles = Kt * Kt;
     constexpr uint32_t affine_b_tiles = Kt * Vt;
@@ -189,7 +197,9 @@ TT_KERNEL void dataflow(uint32_t worker_index, uint32_t group) {
         chronology.push_back(1);
     }
     const uint32_t active = topology.active_groups(G);
-    if (group >= active) { return; }
+    if (group >= active) {
+        return;
+    }
     const uint32_t reset_group = topology.reset_group(G);
     const bool aligned_reset = topology.local_split && topology.split_in_group(G) == 0;
 

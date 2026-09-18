@@ -80,7 +80,8 @@ FORCE_INLINE void write_summary(
 }
 
 template <uint32_t Ct, uint32_t Kt, uint32_t Vt, uint32_t VtFull>
-FORCE_INLINE void write_recurrent(uint32_t head, uint32_t value_block, uint32_t num_chunks, uint32_t valid_chunks, uint32_t final_head) {
+FORCE_INLINE void write_recurrent(
+    uint32_t head, uint32_t value_block, uint32_t num_chunks, uint32_t valid_chunks, uint32_t final_head) {
     const auto output_accessor = TensorAccessor(tensor::output);
     const auto final_state_accessor = TensorAccessor(tensor::final_state);
     DataflowBuffer output(dfb::output);

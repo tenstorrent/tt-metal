@@ -1,5 +1,12 @@
 # KDA runtime early-exit prototype: validation
 
+> Historical measurements from 2026-09-17, before the rebase onto PR head
+> `bbb915fa5c3`. They do not establish performance of the rebased implementation.
+> For reproduction, use the original revisions recorded below and the harness
+> at pre-rebase tip `924c1b79ecb`, preserved on
+> `backup/kda_pad_before_pr56632_rebase_20260918`.
+> Current integration evidence is in [the rebase report](KDA_PADDING_REBASE.md).
+
 Implemented on `kda_pad_early_exit_runtime`, based on published PR #56632 head
 `84ae832f1787fc1b8495e9a1b40f8090601a658d`, in
 `/localdev/mvasilijevic/tt-metal.worktrees/kda_pad_runtime`.

@@ -192,7 +192,8 @@ Tensor affine_exclusive_scan(
             .tail_a = tail_a,
             .tail_b = tail_b,
             .tail_entry_states = tail_entry_states,
-            .actual_start = actual_start, .actual_end = actual_end});
+            .actual_start = actual_start,
+            .actual_end = actual_end});
     return outputs[0];
 }
 }  // namespace ttnn::experimental::prim

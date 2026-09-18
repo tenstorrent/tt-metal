@@ -15,11 +15,8 @@ import pytest
 
 import ttnn
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric_1d_device_params
-from models.demos.deepseek_v3_d_p.tests.kda.utils import (
-    make_actual_start,
-    make_kimi_k3_device_case,
-    make_synthetic_kimi_k3_test_case,
-)
+from models.demos.deepseek_v3_d_p.tests.kda.utils import make_kimi_k3_device_case, make_synthetic_kimi_k3_test_case
+from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import make_actual_start
 
 
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
@@ -55,11 +52,13 @@ def test_fixed_capacity_padding(mesh_device, device_params, padding: int, stage:
         gate, beta = layer._compute_gates(beta=projected.beta, decay_rank=projected.decay_rank)
         inputs = dict(q=q, k=k, v=v, gate=gate, beta=beta)
         inputs["initial_state"] = initial.recurrent
+        inputs["actual_start"] = start
         if variant == "early":
-            inputs.update(actual_start=start, actual_end=end)
+            inputs["actual_end"] = end
 
         def run():
-            return layer.recurrence(**inputs)
+            result = layer.recurrence(**inputs)
+            return result.output, result.final_state
 
     for _ in range(2):
         outputs = run()

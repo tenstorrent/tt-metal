@@ -6,16 +6,15 @@ import json
 import os
 import statistics
 import time
+from dataclasses import replace
 
 import pytest
 
 import ttnn
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric_1d_device_params
-from models.demos.deepseek_v3_d_p.tests.kda.utils import (
-    make_actual_start,
-    make_kimi_k3_device_case,
-    make_synthetic_kimi_k3_test_case,
-)
+from models.demos.deepseek_v3_d_p.tests.kda.utils import make_kimi_k3_device_case, make_synthetic_kimi_k3_test_case
+from models.demos.deepseek_v3_d_p.tt.kda.config import kimi_k3_program_config
+from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import make_actual_start
 
 
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
@@ -28,6 +27,21 @@ def test_padding_cost_attribution(mesh_device, device_params, length, stage):
     profile = os.environ.get("KDA_COST_PROFILE") == "1"
     case = make_synthetic_kimi_k3_test_case(sequence=5120)
     layer, hidden = make_kimi_k3_device_case(mesh_device, case, tensor_parallel_axis=1, cache_weights=False)
+    execution_layer = layer
+    if variant != "early":
+        full_config = kimi_k3_program_config(active_seq_len_local=5120, tp_ccl_topology=ttnn.Topology.Ring)
+        trimmed_config = replace(
+            full_config,
+            recurrence=replace(full_config.recurrence, summary_group_chunks={4096: 16, 4896: 17, 5120: 20}[length]),
+        )
+        execution_layer, _ = make_kimi_k3_device_case(
+            mesh_device,
+            replace(case, hidden=case.hidden[:, :length]),
+            tensor_parallel_axis=1,
+            cache_weights=False,
+            weights=layer.weights,
+            program_config=trimmed_config,
+        )
     initial = layer.allocate_state()
     start, end = make_actual_start(mesh_device, 0), make_actual_start(mesh_device, length)
 
@@ -41,7 +55,7 @@ def test_padding_cost_attribution(mesh_device, device_params, length, stage):
             output, state = (
                 layer.forward(selected, initial, start, end)
                 if variant == "early"
-                else layer.forward(selected, initial, start)
+                else execution_layer.forward(selected, initial, start)
             )
             return output, state.recurrent, state.convolution
 
@@ -54,11 +68,13 @@ def test_padding_cost_attribution(mesh_device, device_params, length, stage):
         if variant != "early":
             inputs = {name: crop(tensor) for name, tensor in inputs.items()}
         inputs["initial_state"] = initial.recurrent
+        inputs["actual_start"] = start
         if variant == "early":
-            inputs.update(actual_start=start, actual_end=end)
+            inputs["actual_end"] = end
 
         def run():
-            return layer.recurrence(**inputs)
+            result = execution_layer.recurrence(**inputs)
+            return result.output, result.final_state
 
     for _ in range(2):
         outputs = run()

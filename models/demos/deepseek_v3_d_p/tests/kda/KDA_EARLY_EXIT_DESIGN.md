@@ -1,5 +1,9 @@
 # Runtime aligned-tail early exit for KDA
 
+> Original approved design/implementation record. The current branch follows
+> the newer parent PR APIs and construction-time geometry; see
+> [rebase integration](KDA_PADDING_REBASE.md) for current names and validation.
+
 ## Problem and base
 
 Build the fourth padding prototype on PR #56632, published head

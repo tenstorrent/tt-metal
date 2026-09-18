@@ -132,7 +132,7 @@ TT_KERNEL void reader(uint32_t work_item_start, uint32_t work_item_count, uint32
     Noc noc;
 
     uint32_t valid_chunks = num_chunks;
-     {
+    {
         DataflowBuffer control(dfb::chronology_compute);
         control.reserve_back(1);
         const auto start_tensor = TensorAccessor(tensor::actual_start);

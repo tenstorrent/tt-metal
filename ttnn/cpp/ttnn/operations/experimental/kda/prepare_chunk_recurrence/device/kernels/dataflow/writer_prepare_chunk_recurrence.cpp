@@ -14,7 +14,7 @@
 template <uint32_t Ct, uint32_t Kt, uint32_t Vt>
 TT_KERNEL void writer(uint32_t work_item_start, uint32_t work_item_count, uint32_t num_chunks) {
     uint32_t valid_chunks = num_chunks;
-     {
+    {
         DataflowBuffer control(dfb::chronology_writer);
         control.wait_front(1);
         valid_chunks =

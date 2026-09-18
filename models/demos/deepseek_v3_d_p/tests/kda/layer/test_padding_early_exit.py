@@ -9,18 +9,16 @@ import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.reference.kda import kda_forward_reference
 from models.demos.deepseek_v3_d_p.reference.kda.layer import KDAReferenceState
-from models.demos.deepseek_v3_d_p.tests.kda.utils import (
-    assert_matches_reference as _assert_matches_reference,
-    build_layer as _build_layer,
-    mla_row_permutation as _mla_row_permutation,
-    reference_case as _reference_case,
-    to_sp_input as _to_sp_input,
-)
+from models.demos.deepseek_v3_d_p.tests.kda.utils import assert_matches_reference as _assert_matches_reference
+from models.demos.deepseek_v3_d_p.tests.kda.utils import build_layer as _build_layer
+from models.demos.deepseek_v3_d_p.tests.kda.utils import mla_row_permutation as _mla_row_permutation
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     reconstruct_convolution_at_sp_rank,
     reconstruct_sp_tp_tensor,
     reconstruct_state_at_sp_rank,
 )
+from models.demos.deepseek_v3_d_p.tests.kda.utils import reference_case as _reference_case
+from models.demos.deepseek_v3_d_p.tests.kda.utils import to_sp_input as _to_sp_input
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_bit_identical, make_actual_start
 
 pytestmark = run_for_blackhole()

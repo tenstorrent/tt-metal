@@ -3,20 +3,17 @@
 """Rotating paired trace timing against physical and trimmed SP1 production work."""
 
 import json
-from dataclasses import replace
 import statistics
 import time
+from dataclasses import replace
 
 import pytest
 
 import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric_1d_device_params
-from models.demos.deepseek_v3_d_p.tests.kda.utils import (
-    make_kimi_k3_device_case,
-    make_synthetic_kimi_k3_test_case,
-)
-
+from models.demos.deepseek_v3_d_p.tests.kda.utils import make_kimi_k3_device_case, make_synthetic_kimi_k3_test_case
+from models.demos.deepseek_v3_d_p.tt.kda.config import kimi_k3_program_config
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import make_actual_start
 
 pytestmark = [run_for_blackhole(), pytest.mark.perf, pytest.mark.timeout(1800)]
@@ -30,12 +27,18 @@ def test_padding_early_exit_cost(mesh_device, device_params, length, stage):
     sequence = 5120
     case = make_synthetic_kimi_k3_test_case(sequence=sequence)
     layer, hidden = make_kimi_k3_device_case(mesh_device, case, tensor_parallel_axis=1, cache_weights=False)
+    full_config = kimi_k3_program_config(active_seq_len_local=5120, tp_ccl_topology=ttnn.Topology.Ring)
+    trimmed_config = replace(
+        full_config,
+        recurrence=replace(full_config.recurrence, summary_group_chunks={4096: 16, 4896: 17, 5120: 20}[length]),
+    )
     trimmed_layer, trimmed = make_kimi_k3_device_case(
         mesh_device,
         replace(case, hidden=case.hidden[:, :length]),
         tensor_parallel_axis=1,
         cache_weights=False,
         weights=layer.weights,
+        program_config=trimmed_config,
     )
     initial = layer.allocate_state()
     start = make_actual_start(mesh_device, 0)
