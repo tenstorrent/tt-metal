@@ -30,6 +30,7 @@ size_t rm_element_size_bytes(DataType dtype) {
         case DataType::INT8: return sizeof(int8_t);
         case DataType::BFLOAT8_B:
         case DataType::BFLOAT4_B:
+        case DataType::BFLOAT2_B:
             // To store block floats in RowMajor layout, we use a fallback and store full floats instead
             return sizeof(float);
 

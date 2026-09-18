@@ -372,6 +372,7 @@ def ttnn_dtype_to_torch_dtype(dtype):
         ttnn.bfloat16: torch.bfloat16,
         ttnn.bfloat8_b: torch.float32,
         ttnn.bfloat4_b: torch.float32,
+        ttnn.bfloat2_b: torch.float32,
     }[dtype]
 
 

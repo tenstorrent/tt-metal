@@ -96,18 +96,20 @@ void validate_matmul_bfloat4_tile_dims(
     const Tensor& input_tensor_b,
     const tt::tt_metal::Tile& in0_tile,
     const tt::tt_metal::Tile& in1_tile) {
+    // BFLOAT4_B and BFLOAT2_B share the same narrow-tile constraint (both pack multiple elements
+    // per shared-exponent block within a face).
     constexpr uint32_t bfloat4_min_tile_height = 4;
-    if (input_tensor_a.dtype() == DataType::BFLOAT4_B) {
+    if (input_tensor_a.dtype() == DataType::BFLOAT4_B || input_tensor_a.dtype() == DataType::BFLOAT2_B) {
         TT_FATAL(
             in0_tile.get_height() >= bfloat4_min_tile_height,
-            "BFLOAT4_B matmul requires in0 tile height >= {} (got {})",
+            "BFLOAT4_B/BFLOAT2_B matmul requires in0 tile height >= {} (got {})",
             bfloat4_min_tile_height,
             in0_tile.get_height());
     }
-    if (input_tensor_b.dtype() == DataType::BFLOAT4_B) {
+    if (input_tensor_b.dtype() == DataType::BFLOAT4_B || input_tensor_b.dtype() == DataType::BFLOAT2_B) {
         TT_FATAL(
             in1_tile.get_width() >= bfloat4_min_tile_height,
-            "BFLOAT4_B matmul requires in1 tile width >= {} (got {})",
+            "BFLOAT4_B/BFLOAT2_B matmul requires in1 tile width >= {} (got {})",
             bfloat4_min_tile_height,
             in1_tile.get_width());
     }
@@ -144,8 +146,9 @@ void validate_matmul_tiny_tile_constraints(
     // support smaller tile_h with Bfp dtypes, so this check is scoped to the mcast configs.
     // See #42927. This is a "not currently supported" throw, not a permanent fatal — it
     // should be removed when the underlying kernel limitation is resolved.
-    const bool in1_is_bfp =
-        (input_tensor_b.dtype() == DataType::BFLOAT8_B) || (input_tensor_b.dtype() == DataType::BFLOAT4_B);
+    const bool in1_is_bfp = (input_tensor_b.dtype() == DataType::BFLOAT8_B) ||
+                            (input_tensor_b.dtype() == DataType::BFLOAT4_B) ||
+                            (input_tensor_b.dtype() == DataType::BFLOAT2_B);
     const bool is_mcast_config =
         std::holds_alternative<operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig>(chosen_program_config) ||
         std::holds_alternative<operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>(chosen_program_config);
@@ -2820,9 +2823,11 @@ MatmulParams create_matmul_attributes(
     auto arch = device->arch();
     const bool has_user_grid = parameters.user_core_coord.has_value();
     const bool has_program_config = parameters.program_config.has_value();
+    auto is_low_precision_df = [](DataType dt) {
+        return dt == DataType::BFLOAT8_B || dt == DataType::BFLOAT4_B || dt == DataType::BFLOAT2_B;
+    };
     bool are_inputs_low_precision_df =
-        ((input_tensor_a.dtype() == DataType::BFLOAT8_B || input_tensor_a.dtype() == DataType::BFLOAT4_B) &&
-         (input_tensor_b.dtype() == DataType::BFLOAT8_B || input_tensor_b.dtype() == DataType::BFLOAT4_B));
+        is_low_precision_df(input_tensor_a.dtype()) && is_low_precision_df(input_tensor_b.dtype());
     const auto increase_fidelity = !has_program_config && !has_user_grid && !are_inputs_low_precision_df;
     auto math_fidelity = increase_fidelity ? MathFidelity::HiFi2 : MathFidelity::LoFi;
     bool are_inputs_32F = (input_tensor_a.dtype() == DataType::FLOAT32 && input_tensor_b.dtype() == DataType::FLOAT32);

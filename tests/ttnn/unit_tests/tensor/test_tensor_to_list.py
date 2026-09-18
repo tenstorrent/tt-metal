@@ -38,8 +38,12 @@ TEST_SHAPES = [(5, 5), (32, 32), (50, 50), (16, 16, 16), (16, 16, 16, 16), (16, 
 @pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("is_device", [False, True])
 def test_to_list_all_types(device, is_device, shape, dtype, layout):
-    if dtype == ttnn.bfloat4_b or dtype == ttnn.bfloat8_b and layout != ttnn.TILE_LAYOUT:
-        pytest.skip("types `bfloat4_b` and `bfloat8_b` can only be used with tile layout")
+    # bfloat4_b and bfloat2_b are too low precision (<=3 / 1 mantissa bits) to exactly
+    # round-trip the integer test values, so they are skipped entirely here.
+    if dtype == ttnn.bfloat4_b or dtype == ttnn.bfloat2_b:
+        pytest.skip("types `bfloat4_b` and `bfloat2_b` cannot exactly round-trip integer test values")
+    if dtype == ttnn.bfloat8_b and layout != ttnn.TILE_LAYOUT:
+        pytest.skip("type `bfloat8_b` can only be used with tile layout")
 
     torch.manual_seed(0)
     torch_tensor = torch.randint(0, 100, shape, dtype=tt_dtype_to_torch_dtype[dtype])

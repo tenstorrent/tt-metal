@@ -8,6 +8,7 @@
 
 #include <tt-metalium/experimental/tensor_host_pad_apis.hpp>
 
+#include <tt-metalium/bfloat2.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
@@ -209,6 +210,90 @@ HostTensor unpad_bfloat4_b(
     return result;
 }
 
+HostTensor pad_bfloat2_b(
+    const HostTensor& tensor,
+    const tt::tt_metal::Shape& output_padded_shape,
+    const tt::tt_metal::Shape& input_tensor_start,
+    float pad_value) {
+    auto tile = tensor.tensor_spec().tile();
+    // Convert to FLOAT32 tensor and pad
+    auto input_packed_data = host_buffer::get_as<uint32_t>(tensor);
+    auto input_float_data =
+        ::unpack_bfp2_tiles_into_float_vec(input_packed_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile);
+    auto input_float_buffer = HostBuffer(std::move(input_float_data));
+    auto intermediate = HostTensor::from_buffer(
+        std::move(input_float_buffer),
+        TensorSpec(
+            tensor.logical_shape(),
+            TensorLayout::fromPaddedShape(
+                DataType::FLOAT32,
+                PageConfig(tensor.layout(), tile),
+                MemoryConfig{},
+                tensor.logical_shape(),
+                tensor.logical_shape())));
+    update_tensor_topology(intermediate, get_tensor_topology(tensor));
+    auto float_tensor = pad(intermediate, output_padded_shape, input_tensor_start, pad_value);
+
+    // Convert back to BFLOAT2_B
+    auto output_float_data = host_buffer::get_as<const float>(float_tensor);
+    auto output_packed_data =
+        ::pack_as_bfp2_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false, tile);
+    auto output_uint32_buffer = HostBuffer(std::move(output_packed_data));
+    TensorSpec output_spec(
+        float_tensor.logical_shape(),
+        TensorLayout::fromPaddedShape(
+            DataType::BFLOAT2_B,
+            tensor.tensor_spec().page_config(),
+            MemoryConfig{},
+            float_tensor.logical_shape(),
+            float_tensor.padded_shape()));
+    auto result = HostTensor::from_buffer(std::move(output_uint32_buffer), output_spec);
+    update_tensor_topology(result, get_tensor_topology(tensor));
+    return result;
+}
+
+HostTensor unpad_bfloat2_b(
+    const HostTensor& tensor,
+    const tt::tt_metal::Shape& output_tensor_start,
+    const tt::tt_metal::Shape& output_tensor_end) {
+    auto tile = tensor.tensor_spec().tile();
+    // Convert to FLOAT32 tensor and unpad
+    auto input_packed_data = host_buffer::get_as<uint32_t>(tensor);
+    auto input_float_data =
+        ::unpack_bfp2_tiles_into_float_vec(input_packed_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile);
+    auto input_float_buffer = HostBuffer(std::move(input_float_data));
+    auto intermediate = HostTensor::from_buffer(
+        std::move(input_float_buffer),
+        TensorSpec(
+            tensor.logical_shape(),
+            TensorLayout::fromPaddedShape(
+                DataType::FLOAT32,
+                PageConfig(tensor.layout(), tile),
+                MemoryConfig{},
+                tensor.logical_shape(),
+                tensor.padded_shape())));
+    update_tensor_topology(intermediate, get_tensor_topology(tensor));
+    auto float_tensor = unpad(intermediate, output_tensor_start, output_tensor_end);
+
+    // Convert back to BFLOAT2_B
+    auto output_float_data = host_buffer::get_as<const float>(float_tensor);
+    auto output_packed_data =
+        ::pack_as_bfp2_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false, tile);
+    auto output_uint32_buffer = HostBuffer(std::move(output_packed_data));
+    auto result = HostTensor::from_buffer(
+        std::move(output_uint32_buffer),
+        TensorSpec(
+            float_tensor.logical_shape(),
+            TensorLayout::fromPaddedShape(
+                DataType::BFLOAT2_B,
+                PageConfig(tensor.layout(), tile),
+                MemoryConfig{},
+                float_tensor.logical_shape(),
+                float_tensor.padded_shape())));
+    update_tensor_topology(result, get_tensor_topology(tensor));
+    return result;
+}
+
 template <typename T>
 HostTensor pad_impl(
     const HostTensor& tensor,
@@ -327,6 +412,15 @@ HostTensor pad_impl<tensor_impl::bfloat4_b>(
 }
 
 template <>
+HostTensor pad_impl<tensor_impl::bfloat2_b>(
+    const HostTensor& tensor,
+    const tt::tt_metal::Shape& output_padded_shape,
+    const tt::tt_metal::Shape& input_tensor_start,
+    float pad_value) {
+    return pad_bfloat2_b(tensor, output_padded_shape, input_tensor_start, pad_value);
+}
+
+template <>
 HostTensor pad_impl<float8_e4m3>(const HostTensor&, const tt::tt_metal::Shape&, const tt::tt_metal::Shape&, float) {
     // FP8_E4M3 host-side pad is not wired up; no current op needs it. The generic body
     // would actually compile (float8_e4m3 is a 1-byte trivially-copyable type with a float
@@ -406,6 +500,14 @@ HostTensor unpad_impl<tensor_impl::bfloat4_b>(
     const tt::tt_metal::Shape& output_tensor_start,
     const tt::tt_metal::Shape& output_tensor_end) {
     return unpad_bfloat4_b(tensor, output_tensor_start, output_tensor_end);
+}
+
+template <>
+HostTensor unpad_impl<tensor_impl::bfloat2_b>(
+    const HostTensor& tensor,
+    const tt::tt_metal::Shape& output_tensor_start,
+    const tt::tt_metal::Shape& output_tensor_end) {
+    return unpad_bfloat2_b(tensor, output_tensor_start, output_tensor_end);
 }
 
 template <>

@@ -20,6 +20,7 @@
 namespace ttnn::tensor_impl {
 
 // Empty structs to facilitate Tensor template logic.
+struct bfloat2_b {};
 struct bfloat4_b {};
 struct bfloat8_b {};
 
@@ -45,6 +46,8 @@ auto dispatch(tt::tt_metal::DataType dtype, Func&& func, Args&&... args) {
             return (std::forward<Func>(func)).template operator()<bfloat8_b>(std::forward<Args>(args)...);
         case tt::tt_metal::DataType::BFLOAT4_B:
             return (std::forward<Func>(func)).template operator()<bfloat4_b>(std::forward<Args>(args)...);
+        case tt::tt_metal::DataType::BFLOAT2_B:
+            return (std::forward<Func>(func)).template operator()<bfloat2_b>(std::forward<Args>(args)...);
         case tt::tt_metal::DataType::FP8_E4M3:
             return (std::forward<Func>(func)).template operator()<float8_e4m3>(std::forward<Args>(args)...);
         default: TT_THROW("Unsupported data type");

@@ -61,6 +61,9 @@ flatbuffer::DataType to_flatbuffer(tt::tt_metal::DataType type) {
         case tt::tt_metal::DataType::INT32: return flatbuffer::DataType::Int32;
         case tt::tt_metal::DataType::INT8: return flatbuffer::DataType::Int8;
         case tt::tt_metal::DataType::FP8_E4M3: TT_THROW("FP8_E4M3 cannot be serialized to flatbuffer");
+        // TODO: add BFloat2B to the flatbuffer schema (.fbs) to enable serialization. For now
+        // bfp2 tensors are usable in-process (from_torch/matmul) but cannot be serialized.
+        case tt::tt_metal::DataType::BFLOAT2_B: TT_THROW("BFLOAT2_B cannot be serialized to flatbuffer");
         case tt::tt_metal::DataType::INVALID: return flatbuffer::DataType::Invalid;
     }
     TT_THROW("Unsupported DataType to flatbuffer.");

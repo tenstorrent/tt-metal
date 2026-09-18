@@ -234,6 +234,7 @@ from ttnn.types import (
     uint32,
     bfloat8_b,
     bfloat4_b,
+    bfloat2_b,
     bfloat16,
     fp8_e4m3,
     float32,

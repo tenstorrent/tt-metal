@@ -105,9 +105,9 @@ void validate_dtype_and_layout(DataType dtype, Layout layout) {
             (dtype == DataType::UINT32 || dtype == DataType::INT32 || dtype == DataType::FLOAT32 ||
              dtype == DataType::UINT8 || dtype == DataType::INT8 || dtype == DataType::UINT16 ||
              dtype == DataType::BFLOAT16 || dtype == DataType::BFLOAT8_B || dtype == DataType::BFLOAT4_B ||
-             dtype == DataType::FP8_E4M3),
-            "Only UINT32, INT32, FLOAT32, UINT16, UINT8, INT8, BFLOAT16, BFLOAT8_B, BFLOAT4_B, or FP8_E4M3 dtypes are "
-            "supported on device!");
+             dtype == DataType::BFLOAT2_B || dtype == DataType::FP8_E4M3),
+            "Only UINT32, INT32, FLOAT32, UINT16, UINT8, INT8, BFLOAT16, BFLOAT8_B, BFLOAT4_B, BFLOAT2_B, or FP8_E4M3 "
+            "dtypes are supported on device!");
     };
     auto supported_layout = [&dtype, &layout]() {
         switch (dtype) {
@@ -120,7 +120,8 @@ void validate_dtype_and_layout(DataType dtype, Layout layout) {
             case DataType::BFLOAT16: break;
             case DataType::BFLOAT8_B:
             case DataType::BFLOAT4_B:
-                TT_FATAL(layout == Layout::TILE, "Only TILE layout is supported for BFLOAT8_B dtype!");
+            case DataType::BFLOAT2_B:
+                TT_FATAL(layout == Layout::TILE, "Only TILE layout is supported for block-float (BFLOATx_B) dtypes!");
                 break;
             case DataType::FP8_E4M3:
                 // Arch validation is each producer op's responsibility (e.g., the combine op

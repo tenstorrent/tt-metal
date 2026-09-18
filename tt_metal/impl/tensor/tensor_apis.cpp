@@ -15,6 +15,7 @@
 #include "mesh_tensor_impl.hpp"
 #include "tensor_impl.hpp"
 
+#include <tt-metalium/bfloat2.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
 #include <tt-metalium/mesh_command_queue.hpp>
@@ -344,9 +345,9 @@ HostTensor to_tile_layout_impl(const HostTensor& tensor, Tile tile) {
 HostTensor to_row_major_layout(const HostTensor& tensor) {
     return tensor_impl::dispatch(tensor.dtype(), [&]<typename T>() {
         if constexpr (
-            std::is_same_v<T, tensor_impl::bfloat4_b> || std::is_same_v<T, tensor_impl::bfloat8_b> ||
-            std::is_same_v<T, float8_e4m3>) {
-            // bfloat4_b / bfloat8_b: TODO(#43763):
+            std::is_same_v<T, tensor_impl::bfloat2_b> || std::is_same_v<T, tensor_impl::bfloat4_b> ||
+            std::is_same_v<T, tensor_impl::bfloat8_b> || std::is_same_v<T, float8_e4m3>) {
+            // bfloat2_b / bfloat4_b / bfloat8_b: TODO(#43763):
             // Flipping this assert to TT_FATAL triggers multiple failures in **sanity** test suite.
             // This silent fail has a high impact area and should be studied and addressed asap.
             //
@@ -371,7 +372,9 @@ HostTensor to_tile_layout(const HostTensor& tensor, const Tile& tile) {
             tensor.tensor_spec().tile());
     }
     return tensor_impl::dispatch(tensor.dtype(), [&]<typename T>() {
-        if constexpr (std::is_same_v<T, tensor_impl::bfloat4_b> || std::is_same_v<T, tensor_impl::bfloat8_b>) {
+        if constexpr (
+            std::is_same_v<T, tensor_impl::bfloat2_b> || std::is_same_v<T, tensor_impl::bfloat4_b> ||
+            std::is_same_v<T, tensor_impl::bfloat8_b>) {
             // Block-float formats are natively TILE — no conversion needed.
             return tensor;
         } else {
@@ -395,6 +398,7 @@ HostTensor to_layout(const HostTensor& tensor, Layout target_layout) {
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 
+struct bfloat2_tag {};
 struct bfloat4_tag {};
 struct bfloat8_tag {};
 
@@ -417,6 +421,14 @@ tt::tt_metal::DistributedHostBuffer preprocess_buffers(
         return input_storage.transform([&](const tt::tt_metal::HostBuffer& buffer) {
             ttsl::Span<const uint32_t> uint32_data = buffer.view_as<const uint32_t>();
             auto float_unpacked_data = unpack_bfp4_tiles_into_float_vec(uint32_data, row_major_output, is_exp_a, tile);
+            return tt::tt_metal::HostBuffer(std::move(float_unpacked_data));
+        });
+    }
+    if (input_dtype == DataType::BFLOAT2_B) {
+        return input_storage.transform([&](const tt::tt_metal::HostBuffer& buffer) {
+            ttsl::Span<const uint32_t> uint32_data = buffer.view_as<const uint32_t>();
+            auto float_unpacked_data =
+                ::unpack_bfp2_tiles_into_float_vec(uint32_data, row_major_output, is_exp_a, tile);
             return tt::tt_metal::HostBuffer(std::move(float_unpacked_data));
         });
     }
@@ -451,7 +463,9 @@ tt::tt_metal::DistributedHostBuffer transform_buffers(
             TT_THROW("to_dtype: FP8_E4M3 cross-type conversion is only supported to/from FLOAT32");
             return input_buffer;  // unreachable, satisfies return type
         }
-    } else if constexpr (std::is_same_v<DstType, bfloat4_tag> || std::is_same_v<DstType, bfloat8_tag>) {
+    } else if constexpr (
+        std::is_same_v<DstType, bfloat2_tag> || std::is_same_v<DstType, bfloat4_tag> ||
+        std::is_same_v<DstType, bfloat8_tag>) {
         auto transform_fn = [&](const tt::tt_metal::HostBuffer& buffer) {
             ttsl::Span<const SrcType> data = buffer.view_as<const SrcType>();
             std::vector<SrcType> tilized_data;  // empty if `data` is already in tile layout.
@@ -468,6 +482,8 @@ tt::tt_metal::DistributedHostBuffer transform_buffers(
                     return pack_as_bfp8_tiles(data, row_major_input, is_exp_a, output_spec.tile());
                 } else if constexpr (std::is_same_v<DstType, bfloat4_tag>) {
                     return pack_as_bfp4_tiles(data, row_major_input, is_exp_a, output_spec.tile());
+                } else if constexpr (std::is_same_v<DstType, bfloat2_tag>) {
+                    return ::pack_as_bfp2_tiles(data, row_major_input, is_exp_a, output_spec.tile());
                 } else {
                     static_assert(ttsl::concepts::always_false_v<DstType>, "Unsupported data type");
                 }
@@ -514,8 +530,9 @@ HostTensor to_dtype(const HostTensor& input_tensor, DataType dtype) {
     auto input_buffer =
         CMAKE_UNIQUE_NAMESPACE::preprocess_buffers(input_tensor.buffer(), src_type, input_tensor.tensor_spec().tile());
 
-    const auto layout =
-        (dtype == DataType::BFLOAT4_B || dtype == DataType::BFLOAT8_B) ? Layout::TILE : input_tensor.layout();
+    const auto layout = (dtype == DataType::BFLOAT2_B || dtype == DataType::BFLOAT4_B || dtype == DataType::BFLOAT8_B)
+                            ? Layout::TILE
+                            : input_tensor.layout();
 
     tt::tt_metal::PageConfig page_config(layout, input_tensor.tensor_spec().tile());
 
@@ -543,6 +560,8 @@ HostTensor to_dtype(const HostTensor& input_tensor, DataType dtype) {
 
         auto with_src = [dst_type, &with_src_and_dst]<typename SrcType>() {
             switch (dst_type) {
+                case DataType::BFLOAT2_B:
+                    return with_src_and_dst.operator()<SrcType, CMAKE_UNIQUE_NAMESPACE::bfloat2_tag>();
                 case DataType::BFLOAT4_B:
                     return with_src_and_dst.operator()<SrcType, CMAKE_UNIQUE_NAMESPACE::bfloat4_tag>();
                 case DataType::BFLOAT8_B:
@@ -561,6 +580,7 @@ HostTensor to_dtype(const HostTensor& input_tensor, DataType dtype) {
         };
 
         switch (src_type) {
+            case DataType::BFLOAT2_B:
             case DataType::BFLOAT4_B:
             case DataType::BFLOAT8_B:
             case DataType::FLOAT32: return with_src.operator()<float>();

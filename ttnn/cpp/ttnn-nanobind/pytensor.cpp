@@ -52,6 +52,7 @@
 #include <tt_stl/span.hpp>
 #include <ttnn/tensor/to_string.hpp>
 
+#include <tt-metalium/bfloat2.hpp>
 #include <tt-metalium/bfloat4.hpp>
 #include <tt-metalium/bfloat8.hpp>
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
@@ -199,10 +200,17 @@ HostBuffer unpack_block_float_tiles_to_float(const HostBuffer& buffer, const Ten
 
     const auto& tile = tensor_spec.tile();
     ttsl::Span<const std::uint32_t> uint32_data = host_buffer::get_as<std::uint32_t>(buffer);
-    auto float_unpacked_data =
-        tt_dtype == DataType::BFLOAT8_B
-            ? unpack_bfp8_tiles_into_float_vec(uint32_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile)
-            : unpack_bfp4_tiles_into_float_vec(uint32_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile);
+    std::vector<float> float_unpacked_data;
+    if (tt_dtype == DataType::BFLOAT8_B) {
+        float_unpacked_data =
+            unpack_bfp8_tiles_into_float_vec(uint32_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile);
+    } else if (tt_dtype == DataType::BFLOAT4_B) {
+        float_unpacked_data =
+            unpack_bfp4_tiles_into_float_vec(uint32_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile);
+    } else {
+        float_unpacked_data =
+            ::unpack_bfp2_tiles_into_float_vec(uint32_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile);
+    }
     return HostBuffer(std::move(float_unpacked_data));
 }
 
@@ -277,7 +285,8 @@ RowMajorHostBuffer convert_to_row_major_host_buffer(const Tensor& tt_tensor, con
             case DataType::FLOAT32: return dispatch_to_concrete.template operator()<float>(buffer);
             case DataType::BFLOAT16: return dispatch_to_concrete.template operator()<bfloat16>(buffer);
             case DataType::BFLOAT8_B:
-            case DataType::BFLOAT4_B: {
+            case DataType::BFLOAT4_B:
+            case DataType::BFLOAT2_B: {
                 if (!padded_output) {
                     return convert_block_float_to_logical_row_major(buffer, tensor_spec);
                 }
@@ -328,6 +337,7 @@ RowMajorHostBuffer convert_to_row_major_host_buffer(
         case DataType::BFLOAT16: return dispatch_to_concrete.template operator()<bfloat16>(tt_tensor);
         case DataType::BFLOAT8_B:
         case DataType::BFLOAT4_B:
+        case DataType::BFLOAT2_B:
         case DataType::FLOAT32: return dispatch_to_concrete.template operator()<float>(tt_tensor);
         case DataType::INVALID: TT_THROW("Unsupported DataType: {}", tt_tensor.dtype());
     }
@@ -708,7 +718,8 @@ void pytensor_module(nb::module_& mod) {
                 auto dst_dtype = optional_data_type.value_or(get_ttnn_datatype_from_dtype(py_tensor_dtype));
 
                 const bool tile_layout_by_default =
-                    (dst_dtype == DataType::BFLOAT4_B || dst_dtype == DataType::BFLOAT8_B);
+                    (dst_dtype == DataType::BFLOAT2_B || dst_dtype == DataType::BFLOAT4_B ||
+                     dst_dtype == DataType::BFLOAT8_B);
                 auto layout_ = layout.value_or(tile_layout_by_default ? Layout::TILE : Layout::ROW_MAJOR);
 
                 new (t) Tensor(ttnn::convert_python_tensor_to_tt_tensor(
@@ -900,7 +911,8 @@ void pytensor_module(nb::module_& mod) {
                         case DataType::FLOAT32: return self.to_vector<float>()[0];
                         case DataType::BFLOAT16: return static_cast<float>(self.to_vector<bfloat16>()[0]);
                         case DataType::BFLOAT8_B:
-                        case DataType::BFLOAT4_B: return self.to_vector<float>()[0];
+                        case DataType::BFLOAT4_B:
+                        case DataType::BFLOAT2_B: return self.to_vector<float>()[0];
                         case DataType::INT32: return self.to_vector<int32_t>()[0];
                         case DataType::INT8: return self.to_vector<int8_t>()[0];
                         case DataType::UINT32: return self.to_vector<uint32_t>()[0];
@@ -1675,7 +1687,7 @@ void pytensor_module(nb::module_& mod) {
                     auto data_vec = [&self]() {
                         if constexpr (
                             std::is_same_v<T, bfloat8_b> || std::is_same_v<T, bfloat4_b> ||
-                            std::is_same_v<T, bfloat16>) {
+                            std::is_same_v<T, bfloat2_b> || std::is_same_v<T, bfloat16>) {
                             return self.to_vector<float>();
                         } else if constexpr (std::is_same_v<T, float8_e4m3>) {
                             // to_vector<float>() doesn't yet handle FP8 source (see

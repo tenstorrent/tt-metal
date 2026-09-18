@@ -17,6 +17,7 @@ float32 = DataType.FLOAT32
 bfloat16 = DataType.BFLOAT16
 bfloat8_b = DataType.BFLOAT8_B
 bfloat4_b = DataType.BFLOAT4_B
+bfloat2_b = DataType.BFLOAT2_B
 fp8_e4m3 = DataType.FP8_E4M3
 DumpTensorMode = ttnn._ttnn.tensor.DumpTensorMode
 

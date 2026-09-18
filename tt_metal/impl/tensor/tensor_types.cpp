@@ -13,6 +13,7 @@ std::ostream& operator<<(std::ostream& os, const tt::tt_metal::DataType& data_ty
         case DataType::UINT32: return os << "DataType::UINT32";
         case DataType::BFLOAT8_B: return os << "DataType::BFLOAT8_B";
         case DataType::BFLOAT4_B: return os << "DataType::BFLOAT4_B";
+        case DataType::BFLOAT2_B: return os << "DataType::BFLOAT2_B";
         case DataType::UINT8: return os << "DataType::UINT8";
         case DataType::UINT16: return os << "DataType::UINT16";
         case DataType::INT32: return os << "DataType::INT32";
@@ -75,6 +76,7 @@ bool is_floating_point(DataType dtype) {
         case DataType::FLOAT32:
         case DataType::BFLOAT8_B:
         case DataType::BFLOAT4_B:
+        case DataType::BFLOAT2_B:
         case DataType::FP8_E4M3: return true;
         default: return false;
     }
@@ -83,7 +85,8 @@ bool is_floating_point(DataType dtype) {
 bool is_block_float(DataType dtype) {
     switch (dtype) {
         case DataType::BFLOAT8_B:
-        case DataType::BFLOAT4_B: return true;
+        case DataType::BFLOAT4_B:
+        case DataType::BFLOAT2_B: return true;
         default: return false;
     }
 }
@@ -93,6 +96,7 @@ tt::DataFormat datatype_to_dataformat_converter(tt::tt_metal::DataType datatype)
         case tt::tt_metal::DataType::BFLOAT16: return tt::DataFormat::Float16_b;
         case tt::tt_metal::DataType::BFLOAT8_B: return tt::DataFormat::Bfp8_b;
         case tt::tt_metal::DataType::BFLOAT4_B: return tt::DataFormat::Bfp4_b;
+        case tt::tt_metal::DataType::BFLOAT2_B: return tt::DataFormat::Bfp2_b;
         case tt::tt_metal::DataType::FLOAT32: return tt::DataFormat::Float32;
         case tt::tt_metal::DataType::INT32: return tt::DataFormat::Int32;
         case tt::tt_metal::DataType::INT8: return tt::DataFormat::Int8;
@@ -109,6 +113,7 @@ tt::tt_metal::DataType dataformat_to_datatype_converter(tt::DataFormat dataforma
         case tt::DataFormat::Float16_b: return tt::tt_metal::DataType::BFLOAT16;
         case tt::DataFormat::Bfp8_b: return tt::tt_metal::DataType::BFLOAT8_B;
         case tt::DataFormat::Bfp4_b: return tt::tt_metal::DataType::BFLOAT4_B;
+        case tt::DataFormat::Bfp2_b: return tt::tt_metal::DataType::BFLOAT2_B;
         case tt::DataFormat::Float32: return tt::tt_metal::DataType::FLOAT32;
         case tt::DataFormat::Int32: return tt::tt_metal::DataType::INT32;
         case tt::DataFormat::Int8: return tt::tt_metal::DataType::INT8;
@@ -136,6 +141,7 @@ auto fmt::formatter<tt::tt_metal::DataType>::format(tt::tt_metal::DataType dt, f
         case tt::tt_metal::DataType::UINT32: name = "DataType::UINT32"; break;
         case tt::tt_metal::DataType::BFLOAT8_B: name = "DataType::BFLOAT8_B"; break;
         case tt::tt_metal::DataType::BFLOAT4_B: name = "DataType::BFLOAT4_B"; break;
+        case tt::tt_metal::DataType::BFLOAT2_B: name = "DataType::BFLOAT2_B"; break;
         case tt::tt_metal::DataType::UINT8: name = "DataType::UINT8"; break;
         case tt::tt_metal::DataType::UINT16: name = "DataType::UINT16"; break;
         case tt::tt_metal::DataType::INT32: name = "DataType::INT32"; break;

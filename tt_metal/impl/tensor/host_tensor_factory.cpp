@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/bfloat2.hpp>
 #include <tt-metalium/bfloat4.hpp>
 #include <tt-metalium/bfloat8.hpp>
 #include <tt-metalium/distributed_host_buffer.hpp>
@@ -161,13 +162,21 @@ std::vector<float> to_vector_float(const HostTensor& tensor) {
             return tensor_impl::decode_tensor_data(buffer, tensor.tensor_spec());
         }
         case DataType::BFLOAT8_B:
-        case DataType::BFLOAT4_B: {
+        case DataType::BFLOAT4_B:
+        case DataType::BFLOAT2_B: {
             const auto& tile = tensor.tensor_spec().tile();
             auto buffer = host_buffer::get_as<uint32_t>(tensor);
-            std::vector<float> unpacked_data =
-                tensor.dtype() == DataType::BFLOAT8_B
-                    ? unpack_bfp8_tiles_into_float_vec(buffer, /*row_major_output=*/false, /*is_exp_a=*/false, tile)
-                    : unpack_bfp4_tiles_into_float_vec(buffer, /*row_major_output=*/false, /*is_exp_a=*/false, tile);
+            std::vector<float> unpacked_data;
+            if (tensor.dtype() == DataType::BFLOAT8_B) {
+                unpacked_data =
+                    unpack_bfp8_tiles_into_float_vec(buffer, /*row_major_output=*/false, /*is_exp_a=*/false, tile);
+            } else if (tensor.dtype() == DataType::BFLOAT4_B) {
+                unpacked_data =
+                    unpack_bfp4_tiles_into_float_vec(buffer, /*row_major_output=*/false, /*is_exp_a=*/false, tile);
+            } else {
+                unpacked_data =
+                    ::unpack_bfp2_tiles_into_float_vec(buffer, /*row_major_output=*/false, /*is_exp_a=*/false, tile);
+            }
             return tensor_impl::decode_tensor_data(ttsl::make_const_span(unpacked_data), tensor.tensor_spec());
         }
         default: {

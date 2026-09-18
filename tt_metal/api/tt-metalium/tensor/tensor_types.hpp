@@ -37,6 +37,9 @@ enum class DataType {
     FP8_E4M3 = 8,
     INT8 = 9,
     INVALID = 10,
+    // 2-bit block float (shared 8-bit exponent per face + 1 sign + 1 mantissa bit). Maps to
+    // tt::DataFormat::Bfp2_b. Appended after INVALID to keep existing serialized values stable.
+    BFLOAT2_B = 11,
 };
 
 std::ostream& operator<<(std::ostream& os, const tt::tt_metal::DataType& data_type);

@@ -27,6 +27,7 @@ tt_dtype_to_torch_dtype = {
     ttnn.bfloat16: torch.bfloat16,
     ttnn.bfloat8_b: torch.float,
     ttnn.bfloat4_b: torch.float,
+    ttnn.bfloat2_b: torch.float,
     # FP8_E4M3 maps to torch.float because the ttnn dlpack importer does not yet
     # recognise FP8 dlpack codes (torch.float8_e4m3fn round-trips via from_torch
     # fail today). The C++ side converts the float32 input to FP8 on the way in

@@ -245,7 +245,9 @@ Tensor create_tt_tensor_from_host_data(
     // https://github.com/tenstorrent/tt-metal/issues/35048
     // user can choose to use enable_bfloat_opt=True to get the best performance, but the precision will be lost.
     const bool enable_device_typecast =
-        (dst_dtype == DataType::BFLOAT4_B or dst_dtype == DataType::BFLOAT8_B) ? enable_bfloat_opt : true;
+        (dst_dtype == DataType::BFLOAT4_B or dst_dtype == DataType::BFLOAT8_B or dst_dtype == DataType::BFLOAT2_B)
+            ? enable_bfloat_opt
+            : true;
 
     using namespace tt::tt_metal;
     auto create_tensor_from_host_buffer = [&]<typename T>() -> Tensor {
@@ -327,7 +329,8 @@ Tensor create_tt_tensor_from_host_data(
 
     switch (src_dtype) {
         case DataType::BFLOAT8_B:
-        case DataType::BFLOAT4_B: return create_tensor_from_host_buffer.operator()<float>();
+        case DataType::BFLOAT4_B:
+        case DataType::BFLOAT2_B: return create_tensor_from_host_buffer.operator()<float>();
         case DataType::UINT32: return create_tensor_from_host_buffer.operator()<uint32_t>();
         case DataType::INT32: return create_tensor_from_host_buffer.operator()<int32_t>();
         case DataType::UINT8: return create_tensor_from_host_buffer.operator()<uint8_t>();
@@ -361,7 +364,9 @@ DataType compute_host_dtype(ttnn::PyDType src_dtype, const DataType& dst_dtype, 
     };
 
     const DataType mapped_dst_type =
-        (dst_dtype == DataType::BFLOAT4_B or dst_dtype == DataType::BFLOAT8_B) ? DataType::BFLOAT16 : dst_dtype;
+        (dst_dtype == DataType::BFLOAT4_B or dst_dtype == DataType::BFLOAT8_B or dst_dtype == DataType::BFLOAT2_B)
+            ? DataType::BFLOAT16
+            : dst_dtype;
 
     if (to_ttnn_dtype(src_dtype) == DataType::INVALID) {
         return mapped_dst_type;
@@ -395,8 +400,8 @@ Tensor convert_python_tensor_to_tt_tensor(
     bool col_tilize,
     bool enable_bfloat_opt) {
     ZoneScoped;
-    if (dst_dtype == DataType::BFLOAT8_B || dst_dtype == DataType::BFLOAT4_B) {
-        TT_FATAL(layout == Layout::TILE, "Layout must be Layout::TILE for bfloat8_b or bfloat4_b!");
+    if (dst_dtype == DataType::BFLOAT8_B || dst_dtype == DataType::BFLOAT4_B || dst_dtype == DataType::BFLOAT2_B) {
+        TT_FATAL(layout == Layout::TILE, "Layout must be Layout::TILE for block-float (bfloatx_b) dtypes!");
     }
     GraphTracker::instance().track_function_start(
         "ttnn::convert_python_tensor_to_tt_tensor",

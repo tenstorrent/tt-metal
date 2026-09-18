@@ -48,6 +48,7 @@ std::ostream& operator<<(std::ostream& os, const tt::tt_metal::DataType& dtype) 
     switch (dtype) {
         case tt::tt_metal::DataType::BFLOAT8_B: os << "bfloat8_b"; break;
         case tt::tt_metal::DataType::BFLOAT4_B: os << "bfloat4_b"; break;
+        case tt::tt_metal::DataType::BFLOAT2_B: os << "bfloat2_b"; break;
         case tt::tt_metal::DataType::BFLOAT16: os << "bfloat16"; break;
         case tt::tt_metal::DataType::FLOAT32: os << "float32"; break;
         case tt::tt_metal::DataType::UINT8: os << "uint8"; break;
@@ -277,7 +278,8 @@ std::string to_string_impl(const ttnn::Tensor& tensor) {
             return tensor;
         }
         if (tensor.dtype() == tt::tt_metal::DataType::BFLOAT8_B ||
-            tensor.dtype() == tt::tt_metal::DataType::BFLOAT4_B) {
+            tensor.dtype() == tt::tt_metal::DataType::BFLOAT4_B ||
+            tensor.dtype() == tt::tt_metal::DataType::BFLOAT2_B) {
             return tt::tt_metal::to_layout(
                 ttnn::to_dtype(tensor, tt::tt_metal::DataType::FLOAT32), tt::tt_metal::Layout::ROW_MAJOR);
         }
@@ -346,6 +348,11 @@ std::string to_string_impl<bfloat8_b>(const ttnn::Tensor& tensor) {
 
 template <>
 std::string to_string_impl<bfloat4_b>(const ttnn::Tensor& tensor) {
+    return to_string_impl<float>(tensor);
+}
+
+template <>
+std::string to_string_impl<bfloat2_b>(const ttnn::Tensor& tensor) {
     return to_string_impl<float>(tensor);
 }
 
@@ -473,6 +480,11 @@ ttnn::Tensor extract_shard_impl<bfloat8_b>(const ttnn::Tensor& tensor, const uin
 
 template <>
 ttnn::Tensor extract_shard_impl<bfloat4_b>(const ttnn::Tensor& tensor, const uint32_t& core_id) {
+    return extract_shard_impl<uint32_t>(tensor, core_id);
+}
+
+template <>
+ttnn::Tensor extract_shard_impl<bfloat2_b>(const ttnn::Tensor& tensor, const uint32_t& core_id) {
     return extract_shard_impl<uint32_t>(tensor, core_id);
 }
 
