@@ -7,6 +7,7 @@
 #include <nanobind/nanobind.h>
 
 #include "ttnn/operations/generic/generic_op_nanobind.hpp"
+#include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
 #include "ttnn/operations/experimental/adaptive_pool/adaptive_pools_nanobind.hpp"

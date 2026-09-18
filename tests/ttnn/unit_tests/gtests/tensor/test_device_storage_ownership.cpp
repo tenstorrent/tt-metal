@@ -123,6 +123,20 @@ TEST_F(DeviceStorageOwnershipTest, ShardedTensorViewDeallocationPreservesOwner) 
     EXPECT_TRUE(owner.is_allocated());
 }
 
+TEST_F(DeviceStorageOwnershipTest, ShardedTensorViewOwnerDeallocationInvalidatesView) {
+    constexpr uint32_t viewOffset = 4096;
+    const TensorSpec ownerSpec = make_sharded_l1_tensor_spec(Shape{1, 1, 64, 32}, {64, 32});
+    const TensorSpec viewSpec = make_sharded_l1_tensor_spec(Shape{1, 1, 32, 32}, {32, 32});
+    Tensor owner = ttnn::create_device_tensor(ownerSpec, mesh_device_.get());
+    Tensor view = ttnn::experimental::create_sharded_tensor_view(owner, viewSpec, viewOffset);
+
+    owner.deallocate(/*force=*/true);
+
+    EXPECT_FALSE(owner.is_allocated());
+    EXPECT_FALSE(view.is_allocated());
+    EXPECT_THROW(view.device_storage().get_mesh_buffer(), std::exception);
+}
+
 TEST_F(DeviceStorageOwnershipTest, DeviceStorage_CopySharesOwnership) {
     Tensor tensor = ttnn::create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
     const auto& original_storage = tensor.device_storage();
@@ -216,6 +230,20 @@ TEST_F(DeviceStorageMultiDeviceTest, DeviceStorage_ViewSharesOwnership) {
     EXPECT_FALSE(storage.is_sole_owner_of_device_memory());
     EXPECT_FALSE(view_storage.is_sole_owner_of_device_memory());
     ASSERT_THAT(view_storage.get_coords(), SizeIs(1));
+}
+
+TEST_F(DeviceStorageMultiDeviceTest, ShardedTensorViewPreservesOwnerCoordinates) {
+    constexpr uint32_t viewOffset = 4096;
+    const TensorSpec ownerSpec = make_sharded_l1_tensor_spec(Shape{1, 1, 64, 32}, {64, 32});
+    const TensorSpec viewSpec = make_sharded_l1_tensor_spec(Shape{1, 1, 32, 32}, {32, 32});
+    Tensor owner = ttnn::create_device_tensor(ownerSpec, mesh_device_.get());
+    auto ownerShards = get_device_tensors(owner);
+    ASSERT_THAT(ownerShards, SizeIs(2));
+
+    Tensor view = ttnn::experimental::create_sharded_tensor_view(ownerShards.front(), viewSpec, viewOffset);
+
+    ASSERT_THAT(view.device_storage().get_coords(), SizeIs(1));
+    EXPECT_EQ(view.device_storage().get_coords().front(), ownerShards.front().device_storage().get_coords().front());
 }
 
 TEST_F(DeviceStorageMultiDeviceTest, DeviceStorage_ViewDeallocateAffectsOwner) {

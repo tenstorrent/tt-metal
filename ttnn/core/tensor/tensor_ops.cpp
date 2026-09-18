@@ -143,7 +143,7 @@ Tensor experimental::create_sharded_tensor_view(
         shard_offset);
     MeshTensor view_tensor =
         mesh_tensor_from_buffer_with_topology(std::move(*view_buffer), tensor_spec, owner.tensor_topology());
-    return Tensor(std::move(view_tensor));
+    return Tensor(DeviceStorage::create_retained_view(owner_storage, std::move(view_tensor)));
 }
 
 }  // namespace ttnn

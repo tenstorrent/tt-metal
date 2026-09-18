@@ -27,8 +27,8 @@ Tensor generic_op(const std::vector<Tensor>& io_tensors, const tt::tt_metal::Pro
 namespace experimental {
 
 struct GenericOpPreparationResult {
-    uint32_t max_program_config_size_bytes;
-    uint32_t max_kernel_binary_size_bytes;
+    uint32_t max_program_config_size_bytes = 0;
+    uint32_t max_kernel_binary_size_bytes = 0;
 
     bool operator==(const GenericOpPreparationResult&) const = default;
 };

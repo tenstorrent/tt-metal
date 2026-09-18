@@ -43,6 +43,7 @@
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/experimental/program_preparation.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/runtime_args_data.hpp>
 #include "impl/buffers/semaphore.hpp"
@@ -216,6 +217,12 @@ void validate_sems(
 using MeshWorkloadTest2x4 = MeshDevice2x4Fixture;
 using MeshWorkloadTest4x8 = MeshDevice4x8Fixture;
 using MeshWorkloadTestSuite = GenericMeshDeviceFixture;
+
+TEST_F(MeshWorkloadTestSuite, ProgramPreparationRejectsEmptyWorkload) {
+    MeshWorkload workload;
+
+    EXPECT_THROW(experimental::program_preparation::prepare(workload, mesh_device_.get()), std::exception);
+}
 
 // A worker still reading its kernel config must not have that config overwritten, including on devices left out of the
 // workloads that follow. The host holds one device's worker while other devices run enough workloads to wrap the

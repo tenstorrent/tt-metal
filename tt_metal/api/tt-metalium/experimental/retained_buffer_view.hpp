@@ -8,6 +8,7 @@
 
 #include <tt-metalium/mesh_buffer.hpp>
 
+// Experimental and subject to change: this header carries no API-stability guarantee.
 namespace tt::tt_metal::experimental::retained_buffer_view {
 
 /// Creates an SRAM buffer view whose local addresses are `shard_offset` bytes into each owner shard.

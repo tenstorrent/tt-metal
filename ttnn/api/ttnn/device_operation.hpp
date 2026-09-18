@@ -368,17 +368,18 @@ ProgramPreparationResult prepare_operation_with_adapter(
                     using cached_mesh_workload_t = typename WorkloadFactory::cached_mesh_workload_t;
                     auto& cached_workload =
                         cached_program_factory.cached_program.template get<cached_mesh_workload_t>();
-                    apply_cached_workload_arguments<WorkloadFactory, mesh_device_operation_t>(
-                        cached_workload, operation_attributes, tensor_args, tensor_return_value);
+                    if (!graph_capture_blocks_dispatch()) {
+                        apply_cached_workload_arguments<WorkloadFactory, mesh_device_operation_t>(
+                            cached_workload, operation_attributes, tensor_args, tensor_return_value);
+                    }
                     result = summarize_prepared_workload(cached_workload.workload, mesh_device);
                 });
             return result;
         }
-        if (!program_cache.cache_misses_allowed()) {
-            auto operation_name = get_operation_name<mesh_device_operation_t>(operation_attributes);
-            TT_THROW(
-                "Device operation \"{}\": program cache miss occurred, but cache misses are forbidden", operation_name);
-        }
+        TT_FATAL(
+            program_cache.cache_misses_allowed(),
+            "Device operation \"{}\": program cache miss occurred, but cache misses are forbidden",
+            get_operation_name<mesh_device_operation_t>(operation_attributes));
     }
 
     mesh_device_operation_t::validate_on_program_cache_miss(operation_attributes, tensor_args);
@@ -398,7 +399,7 @@ ProgramPreparationResult prepare_operation_with_adapter(
         auto cached_workload = create_mesh_workload_from_workload_factory<WorkloadFactory, mesh_device_operation_t>(
             operation_attributes, tensor_coords, tensor_args, tensor_return_value);
         result = summarize_prepared_workload(cached_workload.workload, mesh_device);
-        if (cache_enabled) {
+        if (cache_enabled && !graph_capture_blocks_dispatch()) {
             program_cache.insert(program_key, CachedProgramFactory{std::move(cached_workload), program_factory_index});
         }
     });
