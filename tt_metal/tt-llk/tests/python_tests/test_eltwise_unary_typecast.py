@@ -146,6 +146,15 @@ def _production_dest_acc(formats: InputOutputFormat) -> list[DestAccumulation]:
     return [DestAccumulation.Yes if fp32_dest_acc_en else DestAccumulation.No]
 
 
+def _is_int32_input(formats: InputOutputFormat) -> bool:
+    return formats.input_format == DataFormat.Int32
+
+
+# Typecast pairs with Int32 as the *input* -- the stimuli encoding the issue is about only
+# matters for the source operand the kernel reads out of Dest, not an Int32 result.
+_INT32_INPUT_TYPECAST_PAIRS = [pair for pair in TYPECAST_PAIRS if _is_int32_input(pair)]
+
+
 @parametrize(
     formats=TYPECAST_PAIRS,
     dest_acc=_production_dest_acc,
@@ -168,6 +177,10 @@ def test_eltwise_unary_typecast(
     #  * float / block-float input: whole numbers so int conversions are exact and
     #    bf16 is lossless; small range when a block-float is involved so the
     #    shared-exponent quantization is (near-)exact per 16-elem block.
+    #
+    # This positive-only sweep never produces a negative Int32 input, so it cannot
+    # exercise the sign-magnitude encoding Int32 typecast kernels expect in Dest (see
+    # test_eltwise_unary_typecast_int32_negative below, which covers that case directly).
     bfp_involved = _is_block_float(formats.input_format) or _is_block_float(
         formats.output_format
     )
@@ -178,6 +191,16 @@ def test_eltwise_unary_typecast(
     else:
         spec_A = _whole_number_float_spec(16 if bfp_involved else 201)
 
+    _run_typecast(formats, dest_acc, approx_mode, input_dimensions, spec_A)
+
+
+def _run_typecast(
+    formats: InputOutputFormat,
+    dest_acc: DestAccumulation,
+    approx_mode: ApproximationMode,
+    input_dimensions: list[int],
+    spec_A: StimuliSpec,
+):
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
@@ -281,3 +304,35 @@ def test_eltwise_unary_typecast(
     assert passed_test(
         golden_tensor, res_tensor, formats.output_format
     ), "Assert against golden failed"
+
+
+@parametrize(
+    formats=_INT32_INPUT_TYPECAST_PAIRS,
+    dest_acc=_production_dest_acc,
+    approx_mode=[ApproximationMode.No],
+    input_dimensions=[[32, 32]],
+)
+def test_eltwise_unary_typecast_int32_negative(
+    formats: InputOutputFormat,
+    dest_acc: DestAccumulation,
+    approx_mode: ApproximationMode,
+    input_dimensions: list[int],
+):
+    """Int32 typecast input stimuli including negative values, packed as sign-magnitude.
+
+    test_eltwise_unary_typecast above only ever samples non-negative integers, so it never
+    exercises the negative half of Int32's range. The Int32 typecast kernels (see
+    calculate_typecast_int32_to_fp32 / calculate_typecast_int32_to_fp16b, and Quasar's
+    _calculate_typecast_int32_to_fp32_rows) load Dest with a plain bit-preserving INT32 load
+    and then SFPCAST/SFPABS+SFPSETSGN it directly, with no INT32_2S_COMP conversion step --
+    i.e. they expect Dest to hold sign-magnitude, not two's-complement, matching pack_int32's
+    default (twos_complement=False). Packing a negative stimulus as two's-complement here
+    would silently feed the kernel the wrong bit pattern.
+    """
+    bfp_involved = _is_block_float(formats.output_format)
+    # Sign-magnitude Int32 cannot represent INT32_MIN (see pack_int32), so stay a step inside
+    # iinfo(int32).min on the negative end.
+    spec_A = StimuliSpec.uniform(-15 if bfp_involved else -255, 255)
+
+    _run_typecast(formats, dest_acc, approx_mode, input_dimensions, spec_A)
+

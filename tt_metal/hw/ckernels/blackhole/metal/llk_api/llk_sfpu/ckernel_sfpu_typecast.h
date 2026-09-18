@@ -133,7 +133,12 @@ inline void calculate_typecast_int32_to_fp16b() {
 #pragma GCC unroll 0
     for (int d = 0; d < ITERATIONS; d++) {
         TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
-        TTI_SFPABS(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);                   // lreg[1] = iabs(lreg[0])
+        // Int32 is sign-magnitude in hardware (see pack_int32 in the test helpers), so getting
+        // |v| is just clearing the sign bit -- SFPABS_MOD1_FLOAT does exactly that. The plain
+        // SFPABS_MOD1_INT (mod1=0) mode instead computes a two's-complement abs, which corrupts
+        // the magnitude for any negative sign-magnitude input (e.g. -45 -> 0x8000002d read as
+        // two's complement is -2147483603, whose abs is 2147483603, not 45).
+        TTI_SFPABS(0, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPABS_MOD1_FLOAT);  // lreg[1] = |lreg[0]|
         TTI_SFPCAST(p_sfpu::LREG1, p_sfpu::LREG2, 0);                     // lreg[2] = cast(lreg[1])
         TTI_SFPSETSGN(0, p_sfpu::LREG2, p_sfpu::LREG0, 0);                // lreg[0] = sign(lreg[0]) | exp_man(lreg[2])
         TTI_SFPSETCC(0, p_sfpu::LREG1, 0, sfpi::SFPSETCC_MOD1_LREG_LT0);  // cc = lreg[1] < 0
@@ -174,7 +179,9 @@ inline void calculate_typecast_int32_to_fp16b() {
     for (int d = 0; d < ITERATIONS; d++) {
         int v = 2 + (d & 1);  // alternate between p_sfpu::LREG2 and p_sfpu::LREG3
         TT_SFPLOADMACRO((0 << 2) | (v & 3), InstrModLoadStore::INT32, ADDR_MOD_6, v >> 2);
-        TT_SFPABS(0, v, t, 0);
+        // Int32 is sign-magnitude (see comment on the DISABLE_SFPLOADMACRO branch above); clear
+        // the sign bit rather than taking the two's-complement abs of the raw bit pattern.
+        TT_SFPABS(0, v, t, sfpi::SFPABS_MOD1_FLOAT);
         TTI_SFPSHFT2(t, p_sfpu::LREG12, p_sfpu::LREG7, sfpi::SFPSHFT2_MOD1_SHFT_LREG);
         TTI_SFPCAST(t, t, 0);
     }
@@ -331,7 +338,12 @@ inline void calculate_typecast_int32_to_fp32() {
 #pragma GCC unroll 0
     for (int d = 0; d < ITERATIONS; d++) {
         TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
-        TTI_SFPABS(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);                   // lreg[1] = iabs(lreg[0])
+        // Int32 is sign-magnitude in hardware (see pack_int32 in the test helpers), so getting
+        // |v| is just clearing the sign bit -- SFPABS_MOD1_FLOAT does exactly that. The plain
+        // SFPABS_MOD1_INT (mod1=0) mode instead computes a two's-complement abs, which corrupts
+        // the magnitude for any negative sign-magnitude input (e.g. -45 -> 0x8000002d read as
+        // two's complement is -2147483603, whose abs is 2147483603, not 45).
+        TTI_SFPABS(0, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPABS_MOD1_FLOAT);  // lreg[1] = |lreg[0]|
         TTI_SFPCAST(p_sfpu::LREG1, p_sfpu::LREG2, 0);                     // lreg[2] = cast(lreg[1])
         TTI_SFPSETSGN(0, p_sfpu::LREG2, p_sfpu::LREG0, 0);                // lreg[0] = sign(lreg[0]) | exp_man(lreg[2])
         TTI_SFPSETCC(0, p_sfpu::LREG1, 0, sfpi::SFPSETCC_MOD1_LREG_LT0);  // cc = lreg[1] < 0
@@ -370,7 +382,9 @@ inline void calculate_typecast_int32_to_fp32() {
     for (int d = 0; d < ITERATIONS; d++) {
         int v = 2 + (d & 1);  // alternate between p_sfpu::LREG2 and p_sfpu::LREG3
         TT_SFPLOADMACRO((0 << 2) | (v & 3), InstrModLoadStore::INT32, ADDR_MOD_6, v >> 2);
-        TT_SFPABS(0, v, t, 0);
+        // Int32 is sign-magnitude (see comment on the DISABLE_SFPLOADMACRO branch above); clear
+        // the sign bit rather than taking the two's-complement abs of the raw bit pattern.
+        TT_SFPABS(0, v, t, sfpi::SFPABS_MOD1_FLOAT);
         TTI_SFPSHFT2(t, p_sfpu::LREG12, p_sfpu::LREG7, sfpi::SFPSHFT2_MOD1_SHFT_LREG);
         TTI_SFPCAST(t, t, 0);
     }
