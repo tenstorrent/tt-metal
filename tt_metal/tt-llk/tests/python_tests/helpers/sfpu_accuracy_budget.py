@@ -22,17 +22,14 @@ match any value, and the most specific key wins.
 -- which is how the coarse block floats and the MX formats keep their block-aware lattice
 compares while an enrolled op is gated where a step count means something.
 
-**Numbers here are measured, not guessed**, and each carries the architecture and date it
-came from. Measured against the right thing, too: the ULP arm returns before both the
-tolerance gate and PCC, so a zero-headroom budget has no backstop and enrolling an op
+**Numbers here are measured, not guessed**, and each carries the architecture it came
+from. Measured against the right thing, too: the ULP arm returns before both the
+tolerance gate and PCC, so a zero-headroom budget has no backstop, and enrolling an op
 means measuring *every* sweep that reaches the driver -- the ramp sweep, its ``_edges``
 variant with the inf/NaN/signed-zero probes, and the hand-built ``_signbit``,
-``_isinf_isnan`` and ``_threshold`` specs.
-  wh: ramp 967 variants, 2026-09-16
-  wh: edges 42 passed / 6 skipped for Abs/Neg/Identity/Floor/Ceil/Trunc, 7 passed / 17
-      skipped for Square/SigmoidAppx/GeluAppx, 2026-09-17. Float16_b and Float32 outputs
-      only, so the ``Bfp8_b`` variant Floor/Ceil/Trunc carry through an unrestricted
-      DEFAULT has no edge measurement.
+``_isinf_isnan`` and ``_threshold`` specs. One gap is open: the edge sweep produces only
+``Float16_b`` and ``Float32`` outputs, so the ``Bfp8_b`` variant that Floor/Ceil/Trunc
+carry through an unrestricted ``DEFAULT`` has no edge measurement behind it.
 """
 
 from __future__ import annotations
