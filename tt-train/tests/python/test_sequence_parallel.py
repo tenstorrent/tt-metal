@@ -257,13 +257,13 @@ IN_FEATURES, OUT_FEATURES = 128, 192  # tile-aligned after sharding across tp
 
 
 @pytest.fixture
-def composed_afterwards():
+def default_impl_afterwards():
     yield
-    ttml.ops.distributed.set_sp_linear_impl(SPLinearImpl.COMPOSED)
+    ttml.ops.distributed.set_sp_linear_impl(SPLinearImpl.FUSED)  # the default
 
 
 @pytest.mark.requires_device
-@pytest.mark.usefixtures("tp_mesh", "composed_afterwards")
+@pytest.mark.usefixtures("tp_mesh", "default_impl_afterwards")
 class TestSPLinearOps:
     """Composed issues exactly the ttnn ops of the sequence it replaces, so it must agree bit for bit; Fused is
     the same math with the collective overlapping the matmul (its own matmul blocking), so it is held to the
@@ -306,11 +306,11 @@ class TestSPLinearOps:
         assert_within_ulp(fused, composed, f"{label} fused", MAX_ULP)
 
 
-@pytest.mark.usefixtures("composed_afterwards")
+@pytest.mark.usefixtures("default_impl_afterwards")
 class TestSPLinearImpl:
     def test_switch_round_trips(self):
         set_impl, get_impl = ttml.ops.distributed.set_sp_linear_impl, ttml.ops.distributed.get_sp_linear_impl
-        assert get_impl() == SPLinearImpl.COMPOSED, "composed is the default until the fused ops are the default"
+        assert get_impl() == SPLinearImpl.FUSED, "fused is the default"
         set_impl("fused")
         assert get_impl() == SPLinearImpl.FUSED
         set_impl(SPLinearImpl.COMPOSED)
@@ -322,14 +322,14 @@ class TestSPLinearImpl:
     def test_rejects_unknown_name(self, expect_error):
         with expect_error(ValueError, "'composed' or 'fused'"):
             ttml.ops.distributed.set_sp_linear_impl("eager")
-        assert ttml.ops.distributed.get_sp_linear_impl() == SPLinearImpl.COMPOSED
+        assert ttml.ops.distributed.get_sp_linear_impl() == SPLinearImpl.FUSED  # unchanged: the default
 
     def test_device_config_knob(self, expect_error):
         """`device_config.sp_linear_impl` is what train.py feeds to the setter at startup."""
         from ttml.common.config import DeviceConfig
 
-        assert DeviceConfig({"device_config": {"enable_tp": True, "enable_sp": True}}).sp_linear_impl == "composed"
-        assert DeviceConfig({"device_config": {"sp_linear_impl": "fused"}}).sp_linear_impl == "fused"
+        assert DeviceConfig({"device_config": {"enable_tp": True, "enable_sp": True}}).sp_linear_impl == "fused"
+        assert DeviceConfig({"device_config": {"sp_linear_impl": "composed"}}).sp_linear_impl == "composed"
         with expect_error(ValueError, "'composed' or 'fused'"):
             DeviceConfig({"device_config": {"sp_linear_impl": "eager"}})
 

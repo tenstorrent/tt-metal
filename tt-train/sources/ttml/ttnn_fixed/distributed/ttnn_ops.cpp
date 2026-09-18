@@ -271,7 +271,7 @@ ttnn::Tensor ring_shift(
 
 namespace {
 
-SPLinearImpl g_sp_linear_impl = SPLinearImpl::Composed;
+SPLinearImpl g_sp_linear_impl = SPLinearImpl::Fused;
 
 // The matmul exactly as tt-train issues it today, which is what makes Composed bit-identical to the
 // unfused modules: the forward `a @ W^T (+ bias)` is linear_op's 4-D ttnn::linear on the full compute

@@ -21,6 +21,8 @@ import pytest
 
 import ttnn
 import ttml
+
+SPLinearImpl = ttml.ops.distributed.SPLinearImpl
 from sp_linear_testlib import (
     assert_bitwise_equal,
     assert_within_ulp,
@@ -91,10 +93,10 @@ def _restore(previous: str | None) -> None:
 
 
 @pytest.fixture(autouse=True)
-def composed_afterwards():
+def default_impl_afterwards():
     yield
     ttml.autograd.AutoContext.get_instance().reset_graph()
-    ttml.ops.distributed.set_sp_linear_impl("composed")
+    ttml.ops.distributed.set_sp_linear_impl(SPLinearImpl.FUSED)  # the default
 
 
 @pytest.mark.requires_device
