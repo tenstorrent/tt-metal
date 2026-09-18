@@ -238,17 +238,13 @@ def _patch_model_args(
 def _gemma4_stop_tokens(tokenizer, model_path, mesh_device, model_args):
     """Every id in the checkpoint's ``generation_config.eos_token_id``.
 
-    Gemma-4 declares three (``[1, 106, 50]`` on both 12B-it and 31B-it): ``<eos>``
+    Gemma-4 declares three (``[1, 106, 50]`` on both 12B-it and 31B-it): <eos>
     plus the turn terminators an instruct checkpoint actually emits.
-    ``tokenizer.eos_token_id`` is only the first, so the stop test never fires on
-    106 or 50: generation runs to max_generated_tokens and the tail fills with
-    ``<end_of_turn>`` and the opening of a fresh turn, appended to an answer that
-    was already complete and correct.
-
-    Gated to the same dense 12B/31B Wormhole T3K target as the tuned prefill
-    path. Reading the extra ids is right everywhere, but which ids terminate a
-    generation is visible in every demo's output, so no other variant or device
-    changes here.
+    ``tokenizer.eos_token_id`` is only the first, so generation ran to
+    max_generated_tokens and the tail filled with <end_of_turn> and a fresh
+    turn. Gated to the same dense 12B/31B T3K target as the tuned prefill path:
+    reading the extra ids is right everywhere, but stop behaviour shows up in
+    every demo's output, so nothing else changes here.
     """
     fallback = [tokenizer.eos_token_id]
     if not is_t3k_dense_target(mesh_device, model_args):
@@ -1681,12 +1677,10 @@ class Gemma4Generator(ChunkedPrefillPageTableGuardMixin, Generator):
         """Scope the sharded last-token-logits opt-in to one prefill call.
 
         The last-token PREFILL slice may stay TP-sharded only when this call
-        will device-sample; a host-sampling call (``sampling_params is None``,
-        e.g. the warmup pass) must gather the full vocab or it reads garbage.
-        That is a per-call fact, so it is published on the model for the
-        duration of the call rather than threaded through the shared
-        tt_transformers signature. An unset flag falls back to gathering, which
-        is the safe direction.
+        will device-sample; a host-sampling call (the warmup pass) must gather
+        the full vocab or it reads garbage. Published on the model for the call
+        rather than threaded through the shared tt_transformers signature; an
+        unset flag falls back to gathering, the safe direction.
         """
         for model in self.model:
             model._prefill_allow_sharded_logits = bool(
