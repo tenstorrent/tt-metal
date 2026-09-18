@@ -9,6 +9,31 @@
 #include "ttnn/device_operation.hpp"
 
 namespace ttnn::operations::experimental::transformer {
+namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
+void validate_q_head_split(
+    const NlpCreateHeadsDeviceOperation::operation_attributes_t& operation_attributes,
+    const NlpCreateHeadsDeviceOperation::tensor_args_t& tensor_args) {
+    using namespace tt::constants;
+    const auto& input_tensor = tensor_args.input_tensor_q;
+    if (operation_attributes.q_head_split.has_value()) {
+        const auto split = operation_attributes.q_head_split.value();
+        TT_FATAL(!input_tensor.is_sharded(), "Q head split requires interleaved input");
+        const auto tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
+        TT_FATAL(tile_shape[0] == TILE_HEIGHT && tile_shape[1] == TILE_WIDTH, "Q head split requires standard tiles");
+        TT_FATAL(
+            operation_attributes.num_kv_heads == 0 && !tensor_args.input_tensor_kv.has_value() &&
+                !operation_attributes.transpose_k_heads && !operation_attributes.kv_tied,
+            "Q head split supports Q-only head creation");
+        TT_FATAL(
+            split > 0 && split < operation_attributes.head_dim && split % TILE_WIDTH == 0 &&
+                operation_attributes.head_dim % TILE_WIDTH == 0,
+            "Q head split requires two nonempty tile-aligned channel regions");
+        TT_FATAL(tensor_args.optional_output_tensors.empty(), "Q head split does not accept preallocated outputs");
+    }
+}
+}  // namespace CMAKE_UNIQUE_NAMESPACE
+}  // namespace
 
 // Generic NLP CreateHeads op
 void NlpCreateHeadsDeviceOperation::validate_on_program_cache_miss(
@@ -34,21 +59,7 @@ void NlpCreateHeadsDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(input_shape[2] % TILE_HEIGHT == 0, "Unsupported input height {} is not tile aligned", input_shape[2]);
     TT_FATAL(input_shape[1] == 1, "Unsupported input sequence length {} is not equal to 1", input_shape[1]);
 
-    if (operation_attributes.q_head_split.has_value()) {
-        const auto split = operation_attributes.q_head_split.value();
-        TT_FATAL(!input_tensor.is_sharded(), "Q head split requires interleaved input");
-        const auto tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
-        TT_FATAL(tile_shape[0] == TILE_HEIGHT && tile_shape[1] == TILE_WIDTH, "Q head split requires standard tiles");
-        TT_FATAL(
-            operation_attributes.num_kv_heads == 0 && !tensor_args.input_tensor_kv.has_value() &&
-                !operation_attributes.transpose_k_heads && !operation_attributes.kv_tied,
-            "Q head split supports Q-only head creation");
-        TT_FATAL(
-            split > 0 && split < operation_attributes.head_dim && split % TILE_WIDTH == 0 &&
-                operation_attributes.head_dim % TILE_WIDTH == 0,
-            "Q head split requires two nonempty tile-aligned channel regions");
-        TT_FATAL(tensor_args.optional_output_tensors.empty(), "Q head split does not accept preallocated outputs");
-    }
+    CMAKE_UNIQUE_NAMESPACE::validate_q_head_split(operation_attributes, tensor_args);
     if (operation_attributes.kv_tied) {
         // Every path reaches V from K's own columns rather than the section after them: the
         // interleaved reader rewinds its running tile id, and the sharded path points the writer's
@@ -212,6 +223,7 @@ void NlpCreateHeadsDeviceOperation::validate_on_program_cache_hit(
 
 NlpCreateHeadsDeviceOperation::spec_return_value_t NlpCreateHeadsDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    CMAKE_UNIQUE_NAMESPACE::validate_q_head_split(operation_attributes, tensor_args);
     using namespace tt::constants;
     if (tensor_args.optional_output_tensors.size() == 3) {
         const auto& output_tensors = tensor_args.optional_output_tensors;

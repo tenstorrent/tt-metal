@@ -13,6 +13,38 @@
 #include "ttnn/tensor/tensor_ops.hpp"
 
 namespace ttnn::experimental::prim {
+namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
+void validate_split_output(
+    const FastReduceNCDeviceOperation::operation_attributes_t& args,
+    const FastReduceNCDeviceOperation::tensor_args_t& tensor_args) {
+    const auto& input = tensor_args.input;
+    const auto& preallocated_output = tensor_args.preallocated_output;
+    if (args.split_output_width.has_value()) {
+        const auto split = args.split_output_width.value();
+        TT_FATAL(
+            input.logical_shape().rank() == 4 && args.dim >= 0 && args.dim < 2,
+            "Split reduction supports rank-4 input reduced along dim 0 or 1");
+        const auto width = input.logical_shape()[-1];
+        const auto tile_shape = input.tensor_spec().tile().get_tile_shape();
+        TT_FATAL(
+            input.layout() == Layout::TILE && tile_shape[0] == tt::constants::TILE_HEIGHT &&
+                tile_shape[1] == tt::constants::TILE_WIDTH,
+            "Split reduction requires standard TILE layout");
+        TT_FATAL(
+            input.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED &&
+                args.output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
+            "Split reduction requires interleaved tensors");
+        TT_FATAL(!preallocated_output.has_value(), "Split reduction does not accept a preallocated output");
+        TT_FATAL(
+            width == input.padded_shape()[-1] && split > 0 && split < width && split % tt::constants::TILE_WIDTH == 0 &&
+                width % tt::constants::TILE_WIDTH == 0,
+            "Split reduction requires two nonempty tile-aligned channel regions");
+    }
+}
+}  // namespace CMAKE_UNIQUE_NAMESPACE
+}  // namespace
+
 void FastReduceNCDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input;
@@ -34,27 +66,7 @@ void FastReduceNCDeviceOperation::validate_on_program_cache_miss(
             input.logical_shape().rank());
     }
 
-    if (args.split_output_width.has_value()) {
-        const auto width = input.logical_shape()[-1];
-        const auto split = args.split_output_width.value();
-        TT_FATAL(
-            input.logical_shape().rank() == 4 && args.dim >= 0 && args.dim < 2,
-            "Split reduction supports rank-4 input reduced along dim 0 or 1");
-        const auto tile_shape = input.tensor_spec().tile().get_tile_shape();
-        TT_FATAL(
-            input.layout() == Layout::TILE && tile_shape[0] == tt::constants::TILE_HEIGHT &&
-                tile_shape[1] == tt::constants::TILE_WIDTH,
-            "Split reduction requires standard TILE layout");
-        TT_FATAL(
-            input.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED &&
-                args.output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
-            "Split reduction requires interleaved tensors");
-        TT_FATAL(!preallocated_output.has_value(), "Split reduction does not accept a preallocated output");
-        TT_FATAL(
-            width == input.padded_shape()[-1] && split > 0 && split < width && split % tt::constants::TILE_WIDTH == 0 &&
-                width % tt::constants::TILE_WIDTH == 0,
-            "Split reduction requires two nonempty tile-aligned channel regions");
-    }
+    CMAKE_UNIQUE_NAMESPACE::validate_split_output(args, tensor_args);
 
     // validate input dim
     const auto input_rank = input.logical_shape().rank();
@@ -99,6 +111,7 @@ void FastReduceNCDeviceOperation::validate_on_program_cache_miss(
 
 FastReduceNCDeviceOperation::spec_return_value_t FastReduceNCDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    CMAKE_UNIQUE_NAMESPACE::validate_split_output(args, tensor_args);
     if (tensor_args.preallocated_output.has_value()) {
         return {tensor_args.preallocated_output->tensor_spec()};
     }

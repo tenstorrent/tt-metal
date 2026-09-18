@@ -31,6 +31,15 @@ void kernel_main() {
 
     auto tensor_accessor = TensorAccessor(tensor_args, output_addr);
 
+    const auto right_accessor = [&] {
+        if constexpr (left_width > 0) {
+            constexpr auto right_args = TensorAccessorArgs<tensor_args.next_compile_time_args_offset()>();
+            return TensorAccessor(right_args, get_arg_val<uint32_t>(3));
+        } else {
+            return tensor_accessor;
+        }
+    }();
+
     // For each shard, start at the index of the first shard to be reduced (same
     // index as output), then increment by the appropriate increment (based on
     // the grid size), until the range length is reached. See reader and program
@@ -41,8 +50,6 @@ void kernel_main() {
             uint32_t write_tile_id = i;
             cb_out_obj.wait_front(onetile);
             if constexpr (left_width > 0) {
-                constexpr auto right_args = TensorAccessorArgs<tensor_args.next_compile_time_args_offset()>();
-                const auto right_accessor = TensorAccessor(right_args, get_arg_val<uint32_t>(3));
                 constexpr uint32_t right_width = full_width - left_width;
                 const uint32_t row = i / full_width;
                 const uint32_t col = i % full_width;
