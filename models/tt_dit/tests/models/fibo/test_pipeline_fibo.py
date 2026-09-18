@@ -41,6 +41,7 @@ PROMPTS = [
     [
         pytest.param((2, 2), id="2x2", marks=run_for_blackhole()),
         pytest.param((2, 4), id="2x4", marks=run_for_wormhole_b0()),
+        pytest.param((4, 8), id="4x8", marks=run_for_blackhole()),
     ],
     indirect=True,
 )
