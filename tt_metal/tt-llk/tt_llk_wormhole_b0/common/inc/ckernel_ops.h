@@ -1,12 +1,16 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
 #if __riscv_xtttensixwh || (__clang__ && defined(ARCH_WORMHOLE) && defined(COMPILE_FOR_TRISC))
-#define TTI_INSN(ENCODING) ({ __asm__ __volatile__(".ttinsn %0" ::"n"(unsigned(ENCODING))); })
-#define TT_INSN(ENCODING)  void(::ckernel::instrn_buffer[0] = unsigned(ENCODING))
+#if __clang__
+// User is likely using static analysis tool.  Provide a declaration.
+extern "C" void __builtin_rvtt_ttinsn(unsigned long volatile *, unsigned) __attribute__((nothrow));
+#endif
+#define TT_INSN(ENCODING)  __builtin_rvtt_ttinsn(::ckernel::instrn_buffer, (ENCODING))
+#define TTI_INSN(ENCODING) __builtin_rvtt_ttinsn(nullptr, (ENCODING))
 #elif defined(ARCH_WORMHOLE) && defined(LLK_BOOT_BRISC)
 // The llk test infra uses TTI macros on brisc and somehow executes
 // it. So icky. See #58141
