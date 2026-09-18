@@ -139,31 +139,31 @@ struct DataflowBufferSpec {
 // CrossNodeDataflowBufferSpec
 //------------------------------------------------
 
-// NOTE: Cross-Node DataflowBuffer is not yet supported!
-//       A sketch is included in the experimental Metal 2.0 APIs for visibility.
-//       See also Global DataflowBuffer (which has a user-managed lifetime).
-//
 // CrossNodeDataflowBufferSpec is the descriptor for a "cross-node" DFB:
 // A DFB whose producer and consumer kernels run on different nodes, with data
-// flowing over the NoC. Its semantics should be as close as possible to that of
-// a local DFB.
+// flowing over the NoC.
 //
-// A CrossNodeDataflowBufferSpec has all of the properties of a DataflowBufferSpec,
-// but must specify additional cross-node DFB specific properties, such as the
-// producer-consumer node mapping.
-//
-// TBD: Much about cross-node DFBs is still TBD! Everything below this line is expected
-//   to change with the implementation.
-//
-// Invariant: Every cross-node DFB instance has exactly one producer kernel instance and
-//   one consumer kernel instance. The instances must not be on the same node.
+// A cross-node DFB differs from a local DFB in that:
+//   - Its producer and consumer kernel instances run on different nodes.
+//   - You must specify the producer-consumer kernel instance node mapping.
+//     (For local DFB, this is inferred, as the producer and consumer kernel
+//     instances must be on the same node.)
+//   - A cross-node DFB instance may have MULTIPLE consumer kernel instances.
+//     Producer data is multicast to all consumers.
 //
 // Instancing: At runtime, one cross-node DFB instance is allocated per entry in the
 //   producer_consumer_map. The runtime infrastructure allocates SRAM ("L1") at both
 //   endpoints.
 //
-// Placement: Specified directly via producer_consumer_map (rather than derived as
+// Placement: Specified directly via producer_consumer_map (rather than derived, as
 //   for local DFBs).
+//
+// Legality:
+//   - For any kernel bound to a cross-node DFB, that cross-node DFB must have a
+//     a corresponding endpoint instance on every node where that kernel runs.
+//   - If a compute kernel is bound to a cross-node DFB, you must provide a DFB "relay"
+//     binding on one of the DM kernels within the same WorkUnitSpec. (A compute kernel
+//     cannot directly access the NoC; the "relay" provides the necessary mediation.)
 //
 struct CrossNodeDataflowBufferSpec {
     // A cross-node DFB has all of the same properties as a local DFB
@@ -172,12 +172,12 @@ struct CrossNodeDataflowBufferSpec {
     // Plus, some cross-node DFB-specific properties.
     // (These are TBD...)
 
-    // Producer-consumer node mapping: each entry pairs a producer node with the
-    // consumer node it feeds.
-    // (What about multi-casting? TBD.)
+    // Producer-consumer node mapping:
+    // Each entry pairs a producer node with one or more consumer nodes that it
+    // feeds via multicast.
     using ProducerNode = NodeCoord;
     using ConsumerNode = NodeCoord;
-    using ProducerConsumerMap = Table<ProducerNode, ConsumerNode>;
+    using ProducerConsumerMap = Table<ProducerNode, Group<ConsumerNode>>;
     ProducerConsumerMap producer_consumer_map;
 };
 
