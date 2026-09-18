@@ -15,7 +15,6 @@ documented in models/tt_dit/models/StableDiffusion35.md. Run from the repo root.
 
 import os
 import sys
-import time
 
 sys.path.insert(0, os.getcwd())
 from loguru import logger
@@ -153,7 +152,7 @@ try:
         logger.info(
             f"RESULT tag={tag} layout={layout} topo={topology_name} iter={it} steps={steps} traced={traced} cfg={cfg_enabled} "
             f"encoder={d('encoder'):.2f}s vae={d('vae'):.2f}s denoising={d('denoising'):.2f}s "
-            f"step={d('denoising') / steps:.3f}s total={d('total'):.2f}s run={d('run'):.2f}s"
+            f"step={d('denoising') / steps if steps else 0:.3f}s total={d('total'):.2f}s run={d('run'):.2f}s"
         )
 finally:
     for s in full.get_submeshes():

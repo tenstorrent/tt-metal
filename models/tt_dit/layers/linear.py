@@ -465,6 +465,7 @@ class ColParallelLinear(Module):
                 fuse_swiglu=self.fuse_swiglu,
                 use_addcmul=addcmul_a is not None,
                 force_transpose=force_transpose,
+                topology=self.ccl_manager.topology,
             )
 
             ag_persistent_buffer = self.ccl_manager.get_ag_ping_pong_buffer(

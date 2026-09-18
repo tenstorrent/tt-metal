@@ -645,6 +645,45 @@ def get_matmul_config(M, K, N, core_grid, default_block_size=None, use_heuristic
 
 
 _logged_agmm_v3_signatures = set()
+_warned_k_block_clamps = set()
+
+
+def _ring_safe_matmul_config(config, M, N, K, cluster_size, topology):
+    """Clamp a blindly-chosen ``K_block_size`` to one the AGMM device op will accept.
+
+    The op caps ``K_block_size`` at the per-device K-tile count on every topology, and Ring
+    additionally requires it to divide that count exactly: its bidirectional half-block scheme
+    has no tail block, whereas Linear zero-pads one. Swept table entries and the v3 rules
+    already respect this, but the heuristic and the generic 8x8x8 fallback pick a block size
+    without knowing ``cluster_size``, so a shape whose per-device K-tile count is prime (SD3.5's
+    K = 2432 over tp4 gives 19) hands the op a config it asserts on. Clamping to the largest
+    valid block size keeps the shape running -- slower than a swept blocking, but the fallback
+    is already the untuned path.
+    """
+    k_tiles_per_device = max(1, math.ceil(K / cluster_size / 32))
+    k_blk = min(config.K_block_size, k_tiles_per_device)
+    if topology != ttnn.Topology.Linear:
+        while k_blk > 1 and k_tiles_per_device % k_blk != 0:
+            k_blk -= 1
+    if k_blk == config.K_block_size:
+        return config
+
+    signature = (M, K, N, cluster_size, config.K_block_size)
+    if signature not in _warned_k_block_clamps:
+        logger.warning(
+            f"AGMM K_block_size {config.K_block_size} is not usable for (M, K, N) = ({M}, {K}, {N}) "
+            f"with {k_tiles_per_device} K tiles per device (cluster_size {cluster_size}); "
+            f"clamping to {k_blk}. Sweep this shape and add a table entry for real performance."
+        )
+        _warned_k_block_clamps.add(signature)
+    return ttnn.MinimalMatmulConfig(
+        M_block_size=config.M_block_size,
+        K_block_size=k_blk,
+        N_block_size=config.N_block_size,
+        subblock_h=config.subblock_h,
+        subblock_w=config.subblock_w,
+        compute_with_storage_grid_size=config.compute_with_storage_grid_size,
+    )
 
 
 def get_agmm_config(
@@ -660,6 +699,7 @@ def get_agmm_config(
     fuse_swiglu=False,
     use_addcmul=False,
     force_transpose=True,
+    topology=None,
 ):
     """Resolve (core_grid, MinimalMatmulConfig, num_workers_per_link) for
     `all_gather_minimal_matmul_async`.
@@ -674,6 +714,12 @@ def get_agmm_config(
          `force_transpose` overrides the op's own `M > N` orientation, since the rules derive
          layout and blocking from that same test and have no fit for the forced orientation.
       4. The legacy warned generic fallback.
+
+    Blockings that were not measured or explicitly requested (the heuristic and the generic
+    fallback) are passed through `_ring_safe_matmul_config`, which clamps `K_block_size` to a
+    value the device op accepts for `topology` (default: the stricter Ring rule). A swept entry
+    or a caller-supplied `default_block_size` is used as-is, so a bad measured entry still
+    asserts loudly instead of being silently rewritten.
 
     `force_transpose` mirrors the op parameter (whose default is likewise `True`) and must be the
     value the caller actually passes to the op, since the worker grid has to reserve the mux axis
@@ -694,6 +740,10 @@ def get_agmm_config(
     table_hit = _grid_config_lookup.get((legacy_grid.x, legacy_grid.y), {}).get((M, K, N)) is not None
     if core_grid is not None or default_block_size is not None or use_heuristic or table_hit:
         config = get_matmul_config(M, K, N, legacy_grid, default_block_size, use_heuristic)
+        if default_block_size is None and not table_hit:
+            # Heuristic blocking, or the generic default behind an explicit core_grid: neither
+            # knows cluster_size, so neither can honour the op's per-device K-block constraint.
+            config = _ring_safe_matmul_config(config, M, N, K, cluster_size, topology)
         return legacy_grid, config, legacy_workers
 
     v3 = None
@@ -711,6 +761,7 @@ def get_agmm_config(
         )
     if v3 is None:
         config = get_matmul_config(M, K, N, legacy_grid)  # legacy warned generic fallback
+        config = _ring_safe_matmul_config(config, M, N, K, cluster_size, topology)
         return legacy_grid, config, legacy_workers
 
     grid_x, grid_y = v3["core_grid"]
@@ -978,6 +1029,21 @@ def get_fused_mmrs_config(M, K, N, device_core_grid, num_links):
             "fusing at all"
         )
         config = default_fused_mmrs_config
+        # The default's matmul grid is a fixed guess (12x8 on Blackhole) and the op rejects a grid
+        # wider or taller than the device's, so a more harvested part than the one it was written
+        # for asserts instead of falling back. Shrink it to fit, keeping a row free for the
+        # reduce-scatter zone that get_params sites above the matmul.
+        mm_grid = config.compute_with_storage_grid_size
+        fitted = ttnn.CoreCoord(min(mm_grid.x, device_core_grid.x), min(mm_grid.y, device_core_grid.y - 1))
+        if (fitted.x, fitted.y) != (mm_grid.x, mm_grid.y):
+            if fitted.x < 2 or fitted.y < 2:
+                msg = (
+                    f"device core grid {device_core_grid} is too small for a fused MM/RS matmul grid; "
+                    "disable the fusion for this layer"
+                )
+                raise ValueError(msg)
+            logger.warning(f"fitting the default fused MM/RS matmul grid {mm_grid} to the device: {fitted}")
+            config = config._replace(compute_with_storage_grid_size=fitted)
     return config.get_params(device_core_grid, num_links, M=M)
 
 
