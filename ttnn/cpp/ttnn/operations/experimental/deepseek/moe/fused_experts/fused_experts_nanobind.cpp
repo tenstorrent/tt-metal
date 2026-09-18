@@ -50,9 +50,14 @@ void bind_fused_experts(nb::module_& mod) {
         once — at the cost of one gather/broadcast synchronization per block.
 
         Args:
-            input_tensor: Activations, [1, 1, B, H] with B <= 32 token rows. TILE, or ROW_MAJOR
-                when B == 1 (decode; loaded as 1x32 compute tiles, no tilize). The output uses the
-                same layout.
+            input_tensor: Activations, [1, 1, B, H] with B <= 32 token rows. TILE, ROW_MAJOR
+                (B == 1 decode; loaded as 1x32 compute tiles, no tilize), or ROW_MAJOR
+                HEIGHT_SHARDED L1 replicated over the compute grid -- the shard is the full
+                ``[B, H]`` row, i.e. the tensor ``all_gather_for_matmul`` produces and
+                ``matmul_decode`` consumes in place. A replicated row is already on every core, so
+                the op neither reads it from DRAM nor broadcasts it, and its token count is the
+                shard height (dim -2 carries ``B * num_cores``). The output uses the input's layout
+                and, for a replicated input, defaults to DRAM interleaved.
             routing_indices: Selected expert ids, [1, 1, B, top_k] TILE. Either uint16 (the index
                 output of ``ttnn.topk``, passed through unmodified) or bfloat16 (a ``ttnn.embedding``
                 gather from a frozen id table -- the only dtype that op gathers, and exact for
