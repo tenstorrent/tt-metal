@@ -24,6 +24,7 @@ by name from the runner.
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
@@ -31,6 +32,21 @@ from loguru import logger
 
 from models.demos.common.prefill.adapter import KvCaches, PrefillModelAdapter, PrefillRunParams
 from models.demos.llama_3p1_8b_d_p.reference.llama_3p1_8b_config import Llama31_8BConfig
+
+
+@dataclass
+class Llama31KvCaches(KvCaches):
+    """The engine's opaque handle to this model's KV cache.
+
+    Llama-3.1-8B is full-causal in all 32 layers, so unlike GPT-OSS there is no second,
+    sliding-window cache: the list holds exactly one ``Llama31KVCache`` (a ``.k`` / ``.v`` pair) and
+    the engine only ever reaches it through ``[0]``.
+    """
+
+    caches: list
+
+    def __getitem__(self, idx):
+        return self.caches[idx]
 
 
 class Llama31PrefillAdapter(PrefillModelAdapter):
@@ -44,7 +60,11 @@ class Llama31PrefillAdapter(PrefillModelAdapter):
     # PREFILL_HF_MODEL overrides, and when it does it supplies both config and weights.
     hf_model_default = "models/tt_transformers/model_params/Llama-3.1-8B-Instruct"
     ttnn_cache_default = ""  # TTNN weight-cache root; PREFILL_TTNN_CACHE overrides (empty => no cache)
-    prefill_trace_default = ""  # golden trace dir (token_ids + KV); PREFILL_TRACE_DIR overrides
+    # Golden trace (metadata.json + kv_cache/layer_*.safetensors) for the #4150 per-layer KV check,
+    # staged beside the other models' traces; PREFILL_TRACE_DIR overrides. 2048 tokens x 32 layers,
+    # K in the **meta** frame (what blaze decode reads) and stored bf16 -- a consumer must round-trip
+    # it through bfloat8_b before PCC, which tt_prefill_runtime.kv_cache_pcc_check does.
+    prefill_trace_default = "/mnt/models/llama-3.1-8b-prefill-cache/golden/llama31_8b_kv_2048_32L"
     default_gate_mode = "DEVICE_FP32"  # dense model — no gate; the engine reads this unconditionally
 
     # --- test metadata ---
@@ -114,8 +134,47 @@ class Llama31PrefillAdapter(PrefillModelAdapter):
 
         Llama needs only the single packed cache — no bounded sliding-window split, because all 32
         layers are full-causal.
+
+        Sized by ``params.num_layers``, this **rank's** share, not the 32-layer global count: the
+        model addresses its cache rank-locally (``tt/decoder.py``'s ``cache_layer_idx``), so a rank
+        holding 8 layers allocates 8 slots per user rather than 32 slots to fill 8 of.
         """
-        raise NotImplementedError("Llama-3.1-8B prefill KV cache lands with tt-blaze#4141 (prefill: KV cache).")
+        from models.demos.llama_3p1_8b_d_p.tt.kv_cache import allocate_kv_cache
+
+        num_kv_heads_per_chip = self._num_kv_heads_per_chip(params)
+        logger.info(
+            f"Allocating Llama-3.1-8B KV cache: users={params.num_users} layers={params.num_layers} "
+            f"(global {params.first_layer_idx}..{params.first_layer_idx + params.num_layers - 1}) "
+            f"max_seq_len={params.max_seq_len} sp={params.sp_factor} chunk={params.chunk_size} "
+            f"kv_heads/chip={num_kv_heads_per_chip}"
+        )
+        cache = allocate_kv_cache(
+            mesh_device,
+            num_layers=params.num_layers,
+            max_seq_len=params.max_seq_len,
+            sp_axis=params.sp_axis,
+            num_users=params.num_users,
+            chunk_size=params.chunk_size,
+            num_kv_heads_per_chip=num_kv_heads_per_chip,
+        )
+        return Llama31KvCaches(caches=[cache])
+
+    @staticmethod
+    def _num_kv_heads_per_chip(params: PrefillRunParams) -> int:
+        """KV heads each chip holds: ``8 / tp``, which is 1 at the production TP=8.
+
+        Llama-3.1-8B has 8 KV heads, so at TP=8 every chip owns exactly one and the head dim needs
+        no padding. A narrower TP (bring-up on an eight-chip box at TP=2) gives each chip several,
+        which the cache supports; a TP wider than 8 would have to replicate heads and is refused
+        rather than silently mis-sharded.
+        """
+        num_kv_heads = Llama31_8BConfig.NUM_KEY_VALUE_HEADS
+        if num_kv_heads % params.tp_factor:
+            raise ValueError(
+                f"tp={params.tp_factor} does not divide the {num_kv_heads} KV heads; Llama-3.1-8B "
+                f"supports tp in {sorted(d for d in range(1, num_kv_heads + 1) if num_kv_heads % d == 0)}"
+            )
+        return num_kv_heads // params.tp_factor
 
     def build_runtime(self, *, mesh_device, hf_config, params: PrefillRunParams):
         """Build the model + runtime for this rank.
@@ -123,10 +182,41 @@ class Llama31PrefillAdapter(PrefillModelAdapter):
         The runtime is stateless w.r.t. the KV cache (``owns_kv_cache=False``): the engine allocated
         it via ``allocate_kv_cache`` and passes it into every call that touches it.
         """
-        raise NotImplementedError(
-            "Llama-3.1-8B prefill runtime lands with tt-blaze#4148 (prefill: Prefill model) and "
-            "#4149 (prefill: Runner integration)."
+        import ttnn
+        from models.demos.llama_3p1_8b_d_p.tt.model_config import load_llama_state_dict
+        from models.demos.llama_3p1_8b_d_p.tt.tt_prefill_runtime import TtPrefillRuntime, TtPrefillRuntimeConfig
+
+        runtime_config = TtPrefillRuntimeConfig(
+            max_seq_len=params.max_seq_len,
+            chunk_size=params.chunk_size,
+            mesh_shape=params.mesh_shape,
+            num_layers=params.num_layers,
+            num_users=params.num_users,
+            tp_axis=params.tp_axis,
+            num_links=params.num_links,
+            # PREFILL_TOPOLOGY=linear runs pods without torus wraparound (same knob as the harness).
+            topology=(
+                ttnn.Topology.Linear if os.getenv("PREFILL_TOPOLOGY", "ring") == "linear" else ttnn.Topology.Ring
+            ),
+            weight_cache_path=params.weight_cache_path,
+            owns_kv_cache=False,  # the engine owns it (from allocate_kv_cache) and passes it in
+            is_first_rank=params.is_first_rank,
+            is_last_rank=params.is_last_rank,
+            first_layer_idx=params.first_layer_idx,
+            vocab_size=int(getattr(hf_config, "vocab_size", Llama31_8BConfig.VOCAB_SIZE)),
         )
+
+        # With a populated TTNN weight cache the safetensors read is pure cost — the cached device
+        # tensors are read back by name and the torch weights are never touched.
+        if os.getenv("LLAMA31_8B_WEIGHTS_FROM_CACHE") == "1":
+            if params.weight_cache_path is None:
+                raise ValueError("LLAMA31_8B_WEIGHTS_FROM_CACHE=1 needs a weight cache; set PREFILL_TTNN_CACHE.")
+            state_dict = {}
+        else:
+            logger.info("Loading real bf16 Llama-3.1-8B weights (slow: safetensors read)...")
+            state_dict = load_llama_state_dict(num_layers=params.num_layers, first_layer_idx=params.first_layer_idx)
+
+        return TtPrefillRuntime(mesh_device=mesh_device, config=runtime_config, state_dict=state_dict)
 
     # ------------------------------------------------------------------
     # Test-only reference handles (lazy by contract)

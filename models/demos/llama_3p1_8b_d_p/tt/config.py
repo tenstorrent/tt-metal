@@ -16,7 +16,7 @@ cleanly: 4096/8 = 512 (16 tiles) and 14336/8 = 1792 (56 tiles), so none of the t
 other models in this fleet carry is needed here.
 
 Adapted from ``gpt_oss_d_p/tt/config.py``, minus the expert-parallel axis (Llama is dense). The
-collective helpers are deliberately left out for now — they land with the op that first needs them.
+collective helpers landed with attention (tt-blaze#4144), the first op that needed them.
 
 **There is no sequence-parallel mesh mapper here, on purpose.** SP distribution is not a
 ``ShardTensor2dMesh`` placement: the host reshuffles each chunk into device-major order before it
@@ -107,6 +107,66 @@ class MeshConfig:
     def shard_size(self, total_size):
         """Size per device for tensor parallel sharding."""
         return total_size // self.tp
+
+    def allgather(self, tensor, ccl_manager, dim=3, axis=None, memory_config=None):
+        """All-gather ``tensor`` along tensor dim ``dim`` over mesh ``axis`` (default: the TP axis).
+
+        Callers check whether the collective is needed; this does not short-circuit an axis of
+        size 1, because an all-gather over one device is still a copy the caller may not want.
+        """
+        return ttnn.experimental.all_gather_async(
+            tensor,
+            dim=dim,
+            cluster_axis=self.tp_axis if axis is None else axis,
+            mesh_device=ccl_manager.mesh_device,
+            topology=ccl_manager.topology,
+            multi_device_global_semaphore=ccl_manager.get_ag_ping_pong_semaphore(),
+            num_links=ccl_manager.num_links,
+            memory_config=memory_config or ttnn.DRAM_MEMORY_CONFIG,
+            barrier_semaphore=ccl_manager.get_barrier_semaphore(),
+        )
+
+    def allreduce(self, tensor, ccl_manager, dim=3, axis=None, memory_config=None):
+        """Reduce-scatter + all-gather over mesh ``axis`` (default: the TP axis).
+
+        For a row-parallel projection whose consumer wants full width. When the consumer is happy
+        with a TP-sharded result — which is true of the residual stream in this model — use a bare
+        ``reduce_scatter`` instead and skip the gather entirely.
+
+        The input is freed between the two halves: at long context the full-width tensor and the
+        all-gather's full-width output must not be live simultaneously. **Callers must not touch
+        ``tensor`` after this returns.**
+        """
+        axis = self.tp_axis if axis is None else axis
+        memory_config = memory_config or ttnn.DRAM_MEMORY_CONFIG
+
+        scattered = ttnn.experimental.reduce_scatter_minimal_async(
+            tensor,
+            dim=dim,
+            multi_device_global_semaphore=ccl_manager.get_rs_ping_pong_semaphore(),
+            num_links=ccl_manager.num_links,
+            memory_config=memory_config,
+            topology=ccl_manager.topology,
+            cluster_axis=axis,
+            barrier_semaphore=ccl_manager.get_barrier_semaphore(),
+        )
+        tensor.deallocate(True)
+        gathered = self.allgather(scattered, ccl_manager, dim=dim, axis=axis, memory_config=memory_config)
+        scattered.deallocate(True)
+        return gathered
+
+    def reduce_scatter(self, tensor, ccl_manager, dim=3, axis=None, memory_config=None):
+        """Reduce-scatter over mesh ``axis`` (default: the TP axis), leaving the result sharded."""
+        return ttnn.experimental.reduce_scatter_minimal_async(
+            tensor,
+            dim=dim,
+            multi_device_global_semaphore=ccl_manager.get_rs_ping_pong_semaphore(),
+            num_links=ccl_manager.num_links,
+            memory_config=memory_config or ttnn.DRAM_MEMORY_CONFIG,
+            topology=ccl_manager.topology,
+            cluster_axis=self.tp_axis if axis is None else axis,
+            barrier_semaphore=ccl_manager.get_barrier_semaphore(),
+        )
 
     def __repr__(self):
         return f"MeshConfig({self.mesh_shape}, tp={self.tp}, sp={self.sp}, tp_axis={self.tp_axis})"

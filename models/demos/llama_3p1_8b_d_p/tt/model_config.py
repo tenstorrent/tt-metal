@@ -12,16 +12,18 @@ Loads the bf16 safetensors and converts the q/k projections to Meta format for t
 the **Meta-interleaved** frame (``blaze/ops/rope/kernels/op.hpp``, and ``make_cos_sin`` builds the
 table as ``stack((cos,cos),-1).flatten(-2)`` -- each frequency duplicated *adjacently*). If prefill
 writes the HF frame instead, KV migration copies bytes faithfully and decode reads a permutation:
-the byte-compare gate passes and the output is fluent garbage. ``convert_hf_qkv_to_meta_format``
-is the shared helper that does this, and is what gpt_oss_d_p uses for the same reason.
+the byte-compare gate passes and the output is fluent garbage.
+
+The conversion happens in exactly ONE place: ``tt/attention.py``'s ``hf_to_meta_head_frame``, at
+weight-load time. This module's loader deliberately returns raw HF-frame tensors. Converting here
+as well would apply the permutation twice, which is not a no-op and not the HF frame either — it is
+a third frame that no RoPE convention matches, and the symptom would be a q/k-only PCC failure with
+v and o intact. ``test_attention_vs_ref`` pins the single conversion.
 
 Note the split of responsibilities: the **config** comes from the repo-bundled ``config.json`` named
 by the adapter's ``hf_model_default`` (no mount, no network), while the **weights** come from the
 checkpoint named here. Keeping them separate is what lets ``load_hf_config`` run in the H2D producer
 and in device-free tests.
-
-Scaffold status: the weight-loading body lands with #4149 (runner integration); the path resolution
-and the dim cross-check are live now so later ops can import this module.
 """
 
 import os
@@ -73,12 +75,80 @@ def cross_check_hf_config(hf_config) -> None:
         )
 
 
-class ModelArgs:
-    """Llama-3.1-8B ModelArgs.
+def _wanted_keys(num_layers: int, first_layer_idx: int) -> set:
+    """HF checkpoint keys this rank needs: its own layers, plus the embedding and the final norm.
 
-    Scaffold: carries the resolved weights path. Weight loading (``load_state_dict``) lands with
-    #4149.
+    A rank loads only its slice so the host copy scales with the slice and not with the whole 16 GB
+    checkpoint. ``embed_tokens`` and ``model.norm`` are pulled unconditionally rather than gated on
+    the rank's role: the loader does not know whether this rank is first or last, and two unused
+    4096-wide tensors are not worth the coupling.
     """
+    keys = {"model.embed_tokens.weight", "model.norm.weight"}
+    per_layer = (
+        "self_attn.q_proj",
+        "self_attn.k_proj",
+        "self_attn.v_proj",
+        "self_attn.o_proj",
+        "mlp.gate_proj",
+        "mlp.up_proj",
+        "mlp.down_proj",
+    )
+    for layer_idx in range(first_layer_idx, first_layer_idx + num_layers):
+        for name in per_layer:
+            keys.add(f"model.layers.{layer_idx}.{name}.weight")
+        keys.add(f"model.layers.{layer_idx}.input_layernorm.weight")
+        keys.add(f"model.layers.{layer_idx}.post_attention_layernorm.weight")
+    return keys
+
+
+def load_llama_state_dict(
+    weights_path=None,
+    *,
+    num_layers: int = Llama31_8BConfig.NUM_LAYERS,
+    first_layer_idx: int = 0,
+) -> dict:
+    """Read the sharded bf16 safetensors into a state dict, keeping only this rank's layers.
+
+    Returns tensors under their **HuggingFace names in the HuggingFace frame**, unconverted. The
+    q/k Meta-frame conversion the module docstring describes happens exactly once, in
+    ``tt/attention.py`` at weight-load time (``hf_to_meta_head_frame``) — doing it here as well
+    would apply the permutation twice and land back in a third frame that is neither.
+
+    Reads shard-by-shard with a key filter instead of ``load_file`` per shard, so a rank owning 4 of
+    32 layers never materialises the other 28.
+    """
+    from safetensors import safe_open
+
+    weights_path = Path(weights_path or resolve_weights_path())
+    shards = sorted(weights_path.glob("*.safetensors"))
+    if not shards:
+        raise FileNotFoundError(
+            f"no .safetensors under {weights_path}; point PREFILL_HF_MODEL or LLAMA31_8B_HF_MODEL "
+            f"at a Llama-3.1-8B checkpoint"
+        )
+
+    wanted = _wanted_keys(num_layers, first_layer_idx)
+    state_dict = {}
+    for shard in shards:
+        with safe_open(str(shard), framework="pt") as f:
+            for key in f.keys():
+                if key in wanted:
+                    state_dict[key] = f.get_tensor(key)
+
+    missing = wanted - state_dict.keys()
+    if missing:
+        raise KeyError(
+            f"checkpoint at {weights_path} is missing {len(missing)} expected tensor(s), " f"e.g. {sorted(missing)[:3]}"
+        )
+    logger.info(
+        f"Loaded {len(state_dict)} tensors for layers "
+        f"{first_layer_idx}..{first_layer_idx + num_layers - 1} from {len(shards)} shard(s)"
+    )
+    return state_dict
+
+
+class ModelArgs:
+    """Llama-3.1-8B ModelArgs: carries the resolved weights path."""
 
     def __init__(self, mesh_device=None, max_seq_len: int = 2048):
         self.mesh_device = mesh_device
@@ -87,14 +157,6 @@ class ModelArgs:
         logger.info(f"Llama-3.1-8B ModelArgs: weights_path={self.weights_path}")
 
     @staticmethod
-    def load_state_dict(weights_path, convert_to_meta_format: bool = True):
-        """Load the bf16 safetensors and convert q/k to Meta format.
-
-        Lands with #4149. See the module docstring for why ``convert_to_meta_format`` must stay on:
-        the frame has to match what blaze decode writes, or migration silently permutes K.
-        """
-        raise NotImplementedError(
-            "Llama-3.1-8B prefill weight loading lands with tt-blaze#4149 (runner integration). "
-            "Use models.tt_transformers.tt.load_checkpoints.convert_hf_qkv_to_meta_format for the "
-            "q/k frame conversion, as gpt_oss_d_p does."
-        )
+    def load_state_dict(weights_path, **kwargs):
+        """Thin alias for ``load_llama_state_dict``, for parity with the other models' ModelArgs."""
+        return load_llama_state_dict(weights_path, **kwargs)
