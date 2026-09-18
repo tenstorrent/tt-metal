@@ -619,25 +619,33 @@ void kernel_main() {
 #endif
                         tile_regs_commit();
                         {
-                            DataflowBuffer curr_out_cb =
-                                curr_matmul_out_cb == matmul_partials_cb ? cb_matmul_partials : cb_mm_out;
-                            curr_out_cb.reserve_back(out_subblock_num_tiles);
-                            tile_regs_wait();
+                            // cb_matmul_partials and cb_mm_out may be different DataflowBuffer specializations
+                            // (Quasar), so the pack target is selected around the use rather than through a
+                            // common-typed alias.
+                            auto pack_subblock_to = [&](auto& curr_out_cb) {
+                                curr_out_cb.reserve_back(out_subblock_num_tiles);
+                                tile_regs_wait();
 
-                            if constexpr (packer_l1_acc) {
-                                if (in0_block_w_i == 0) {
-                                    pack_reconfig_l1_acc(0);
-                                } else if (last_inner_dim_block) {
-                                    pack_reconfig_l1_acc(fuse_bias ? 1 : 0);
-                                } else {
-                                    pack_reconfig_l1_acc(1);
+                                if constexpr (packer_l1_acc) {
+                                    if (in0_block_w_i == 0) {
+                                        pack_reconfig_l1_acc(0);
+                                    } else if (last_inner_dim_block) {
+                                        pack_reconfig_l1_acc(fuse_bias ? 1 : 0);
+                                    } else {
+                                        pack_reconfig_l1_acc(1);
+                                    }
                                 }
-                            }
 
-                            uint32_t start_dst_index = 0;
-                            pack_block(start_dst_index, curr_matmul_out_cb, out_subblock_num_tiles);
-                            tile_regs_release();
-                            curr_out_cb.push_back(out_subblock_num_tiles);
+                                uint32_t start_dst_index = 0;
+                                pack_block(start_dst_index, curr_matmul_out_cb, out_subblock_num_tiles);
+                                tile_regs_release();
+                                curr_out_cb.push_back(out_subblock_num_tiles);
+                            };
+                            if (curr_matmul_out_cb == matmul_partials_cb) {
+                                pack_subblock_to(cb_matmul_partials);
+                            } else {
+                                pack_subblock_to(cb_mm_out);
+                            }
                         }
 
                         in1_index_subblock_offset += out_subblock_w;

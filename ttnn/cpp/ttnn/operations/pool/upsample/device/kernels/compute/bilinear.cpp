@@ -25,8 +25,8 @@ inline void llk_push_pages_bilinear(const std::int32_t operand, const std::int32
     }
 }
 
-template <uint32_t tiles_per_reduction>
-inline void reduce_h_fused(DataflowBuffer in_dfb, DataflowBuffer scalar_dfb, DataflowBuffer out_dfb) {
+template <uint32_t tiles_per_reduction, typename InDFB, typename ScalarDFB, typename OutDFB>
+inline void reduce_h_fused(InDFB in_dfb, ScalarDFB scalar_dfb, OutDFB out_dfb) {
     const uint32_t in_cb_id = in_dfb.get_id();
     const uint32_t in_scalar_cb_id = scalar_dfb.get_id();
     const uint32_t out_cb_id = out_dfb.get_id();
@@ -98,8 +98,8 @@ void kernel_main() {
     tilizeA_B_reduce_init<use_neginf_srcA, zero_srcA_reduce>(tilize_reduce_cb_0, in_scalar_cb_id1, max_tiles_per_iter);
     pack_untilize_dest_init<max_tiles_per_iter>(out_cb_id); /* face geometry comes from out_cb metadata */
     for (uint32_t i = 0; i < nsticks_per_core_by_nblocks; i++) {
-        DataflowBuffer cur_in_dfb = (i % 2 == 0) ? tilize_reduce_dfb0 : tilize_reduce_dfb1;
-        DataflowBuffer cur_scalar_dfb = (i % 2 == 0) ? scalar_dfb_1 : scalar_dfb_2;
+        auto cur_in_dfb = (i % 2 == 0) ? tilize_reduce_dfb0 : tilize_reduce_dfb1;
+        auto cur_scalar_dfb = (i % 2 == 0) ? scalar_dfb_1 : scalar_dfb_2;
 
         for (uint32_t j = 0; j < blocks - 1; j++) {
             reduce_h_fused<max_tiles_per_iter>(cur_in_dfb, cur_scalar_dfb, out_dfb);

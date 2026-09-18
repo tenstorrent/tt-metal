@@ -24,9 +24,8 @@
 /*
  * Read 1 row-major block from dfb_in_rm, tilize it and write to dfb_in
  */
-template <typename Block>
-ALWI void tilize_row_major_block(
-    DataflowBuffer& dfb_in_rm, DataflowBuffer& dfb_in, const uint32_t block_size, const Block& block) {
+template <typename Block, typename DFBInRm, typename DFBIn>
+ALWI void tilize_row_major_block(DFBInRm& dfb_in_rm, DFBIn& dfb_in, const uint32_t block_size, const Block& block) {
     reconfig_data_format(dfb_in_rm.get_id(), dfb_in_rm.get_id());
     pack_reconfig_data_format(dfb_in.get_id());
 
@@ -47,8 +46,8 @@ ALWI void tilize_row_major_block(
  * Caller must reinitialize binary op hardware with binary_op_init_common after this returns,
  * since tilize_uninit reconfigures the hardware state.
  */
-template <uint32_t block_size>
-ALWI void tilize_all_blocks_to_dfb(DataflowBuffer& dfb_in_rm, DataflowBuffer& dfb_in, const uint32_t Wt) {
+template <uint32_t block_size, typename DFBInRm, typename DFBIn>
+ALWI void tilize_all_blocks_to_dfb(DFBInRm& dfb_in_rm, DFBIn& dfb_in, const uint32_t Wt) {
     reconfig_data_format(dfb_in_rm.get_id(), dfb_in_rm.get_id());
     pack_reconfig_data_format(dfb_in.get_id());
     tilize_init(dfb_in_rm.get_id(), block_size, dfb_in.get_id());
@@ -68,8 +67,8 @@ ALWI void tilize_all_blocks_to_dfb(DataflowBuffer& dfb_in_rm, DataflowBuffer& df
 /*
  * Read 1 tiled block from dfb_out, pack it and write to dfb_out_rm as row-major block
  */
-template <typename Block, uint32_t block_size>
-ALWI void untilize_row_major_block(DataflowBuffer& dfb_out, DataflowBuffer& dfb_out_rm, const Block& block) {
+template <typename Block, uint32_t block_size, typename DFBOut, typename DFBOutRm>
+ALWI void untilize_row_major_block(DFBOut& dfb_out, DFBOutRm& dfb_out_rm, const Block& block) {
     reconfig_data_format(dfb_out.get_id(), dfb_out.get_id());  // Handle fp32_dest_acc_en=True cases
 
     pack_untilize_init<block_size, block_size>(dfb_out.get_id(), dfb_out_rm.get_id());
@@ -84,8 +83,8 @@ ALWI void untilize_row_major_block(DataflowBuffer& dfb_out, DataflowBuffer& dfb_
 /*
  * Pack-untilize all blocks from dfb_out into dfb_out_rm as row-major.
  */
-template <uint32_t block_size>
-ALWI void untilize_all_blocks_from_dfb(DataflowBuffer& dfb_out, DataflowBuffer& dfb_out_rm, const uint32_t Wt) {
+template <uint32_t block_size, typename DFBOut, typename DFBOutRm>
+ALWI void untilize_all_blocks_from_dfb(DFBOut& dfb_out, DFBOutRm& dfb_out_rm, const uint32_t Wt) {
     // If fp32_dest_acc_en=True and dtype == bfloat16, then intermediate buffers were set to float32 while output is set
     // to bfloat16. To prevent data corruption, we reconfig data format
     reconfig_data_format(dfb_out.get_id(), dfb_out.get_id());

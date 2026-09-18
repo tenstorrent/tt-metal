@@ -21,7 +21,8 @@
 #define IN0_HAS_SECOND_SOURCE 1
 #endif
 
-inline void fill_zeros_async(const Noc& noc, const DataflowBuffer& dfb, uint32_t bytes, uint32_t offset_bytes = 0) {
+template <typename DFB>
+inline void fill_zeros_async(const Noc& noc, const DFB& dfb, uint32_t bytes, uint32_t offset_bytes = 0) {
     noc.async_write_zeros(dfb, bytes, {.offset_bytes = offset_bytes});
 }
 
@@ -53,11 +54,12 @@ template <
     ,
     typename LocalTensorAccessorType
 #endif
-    >
+    ,
+    typename DFB>
 void read_in0_block_sync(
     const TensorAccessorType& tensor_accessor,
     const TensorShape2D& shape,
-    const DataflowBuffer& dfb_in0,
+    const DFB& dfb_in0,
     uint32_t tile_size_bytes,
 #ifdef IN0_HAS_SECOND_SOURCE
     const LocalTensorAccessorType& in3_accessor,
@@ -124,11 +126,11 @@ void read_in0_block_sync(
  * Since this is for matmul, no need to read when N >= logical_N
  * Otherwise, if K >= logical_K, fill with zeros.
  */
-template <uint32_t K_block_tiles, uint32_t N_block_tiles, typename TensorAccessorType>
+template <uint32_t K_block_tiles, uint32_t N_block_tiles, typename TensorAccessorType, typename DFB>
 void read_in1_block_sync(
     const TensorAccessorType& tensor_accessor,
     const TensorShape2D& shape,
-    const DataflowBuffer& dfb_in1,
+    const DFB& dfb_in1,
     uint32_t tile_size_bytes,
     uint32_t d0_start,
     uint32_t d0_end,
@@ -211,13 +213,13 @@ void write_block_sync(
  * as soon as the first row is ready, rather than waiting for the entire block. This overlapping
  * of data movement and compute improves overall throughput.
  */
-template <uint32_t M_block_tiles, uint32_t N_block_tiles, typename TensorAccessorType>
+template <uint32_t M_block_tiles, uint32_t N_block_tiles, typename TensorAccessorType, typename DFBA, typename DFBB>
 void read_ternary_blocks_sync(
     const TensorAccessorType& ternary_a_accessor,
     const TensorAccessorType& ternary_b_accessor,
     const TensorShape2D& shape,
-    DataflowBuffer& dfb_ternary_a,
-    DataflowBuffer& dfb_ternary_b,
+    DFBA& dfb_ternary_a,
+    DFBB& dfb_ternary_b,
     uint32_t a_tile_size_bytes,
     uint32_t b_tile_size_bytes,
     uint32_t broadcast_ternary_b,
@@ -318,11 +320,11 @@ void read_ternary_blocks_sync(
  * This write method is more granular, waiting on a row of output tiles
  * in the output DFB before writing those out, rather than waiting on the entire block.
  */
-template <uint32_t M_block_tiles, uint32_t N_block_tiles, typename TensorAccessorType>
+template <uint32_t M_block_tiles, uint32_t N_block_tiles, typename TensorAccessorType, typename DFB>
 void write_block_sync_granular(
     const TensorAccessorType& tensor_accessor,
     const TensorShape2D& shape,
-    DataflowBuffer& dfb_out,
+    DFB& dfb_out,
     uint32_t tile_size_bytes,
     uint32_t d0_start,
     uint32_t d0_end,
@@ -453,11 +455,11 @@ template <
     uint32_t N_block_tiles,
     uint32_t N_chunks,
     uint32_t N_tiles_per_chunk,
-    typename... Accessors>
+    typename... Accessors, typename DFB>
 void write_block_sync_granular_split(
     const std::tuple<Accessors...>& accessors,
     const TensorShape2D& chunk_shape,
-    DataflowBuffer& dfb_out,
+    DFB& dfb_out,
     uint32_t tile_size_bytes,
     uint32_t d0_start,
     uint32_t d0_end,

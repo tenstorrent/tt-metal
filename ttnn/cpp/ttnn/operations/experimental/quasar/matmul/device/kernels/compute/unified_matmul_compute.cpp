@@ -51,7 +51,7 @@ TT_KERNEL void compute(uint32_t num_C_slices) {  // num_C_slices: this core's C 
                 // the last one does.
                 const bool reload_partials = K_chunk > 0 && (last_K_chunk || !packer_l1_acc);
                 // Pack target: C_slice on the last K chunk, C_partials before that.
-                DataflowBuffer& pack_target = last_K_chunk ? C_slice : C_partials;
+                auto& pack_target = last_K_chunk ? C_slice : C_partials;
                 const uint32_t pack_target_id = last_K_chunk ? uint32_t(dfb::C_slice) : uint32_t(dfb::C_partials);
                 A_slice.wait_front(A_slice_tiles);
                 B_slice.wait_front(B_slice_tiles);

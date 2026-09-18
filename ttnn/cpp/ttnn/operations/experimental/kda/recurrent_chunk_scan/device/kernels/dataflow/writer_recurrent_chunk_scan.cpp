@@ -14,9 +14,16 @@
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
 
-template <uint32_t Rows, uint32_t Vt, uint32_t VtFull, uint32_t PacketRows, bool Consume = true, typename Accessor>
+template <
+    uint32_t Rows,
+    uint32_t Vt,
+    uint32_t VtFull,
+    uint32_t PacketRows,
+    bool Consume = true,
+    typename Accessor,
+    typename DFB>
 FORCE_INLINE void write_value_slice(
-    const Accessor& accessor, DataflowBuffer& buffer, Noc& noc, uint32_t row_base, uint32_t value_block) {
+    const Accessor& accessor, DFB& buffer, Noc& noc, uint32_t row_base, uint32_t value_block) {
     static_assert(PacketRows > 0 && Rows % PacketRows == 0);
     static_assert(Consume || PacketRows == Rows, "Retained writes require one complete buffer packet");
     constexpr uint32_t packet_tiles = PacketRows * Vt;
@@ -65,16 +72,16 @@ FORCE_INLINE void write_summary(
     const uint32_t row_base = head * Kt * VtFull;
 
     if (head_active) {
-        auto& head_a = straddles ? split_head_a : full_a;
-        auto& head_b = straddles ? split_head_b : full_b;
+        // The split-head and full buffers may be distinct DataflowBuffer specializations, so select the
+        // buffer per branch rather than through a common reference.
         if (straddles) {
             // Split-head buffers hold one tile-row each. Drain the same packets
             // compute publishes instead of waiting for a full matrix to fit.
-            write_value_slice<Kt, Vt, VtFull, 1>(head_a_accessor, head_a, noc, row_base, value_block);
-            write_value_slice<Kt, Vt, VtFull, 1>(head_b_accessor, head_b, noc, row_base, value_block);
+            write_value_slice<Kt, Vt, VtFull, 1>(head_a_accessor, split_head_a, noc, row_base, value_block);
+            write_value_slice<Kt, Vt, VtFull, 1>(head_b_accessor, split_head_b, noc, row_base, value_block);
         } else {
-            write_value_slice<Kt, Vt, VtFull, Kt>(head_a_accessor, head_a, noc, row_base, value_block);
-            write_value_slice<Kt, Vt, VtFull, Kt>(head_b_accessor, head_b, noc, row_base, value_block);
+            write_value_slice<Kt, Vt, VtFull, Kt>(head_a_accessor, full_a, noc, row_base, value_block);
+            write_value_slice<Kt, Vt, VtFull, Kt>(head_b_accessor, full_b, noc, row_base, value_block);
         }
     }
 

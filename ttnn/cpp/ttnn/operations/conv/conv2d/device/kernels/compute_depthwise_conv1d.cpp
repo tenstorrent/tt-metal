@@ -36,11 +36,12 @@
 // srcB (cfg92) tile descriptor: must match in1 for the mul, and is repopulated from DST for the
 // dest-reuse add. We force srcB back to in1's format every iteration so block-float weights are
 // decoded correctly.
+template <typename DFB_IN0, typename DFB_IN1, typename DFB_SCRATCH, typename DFB_OUT>
 inline void mul_and_accumulate_block(
-    DataflowBuffer in0_dfb,
-    DataflowBuffer in1_dfb,
-    DataflowBuffer scratch_dfb,
-    DataflowBuffer out_dfb,
+    DFB_IN0 in0_dfb,
+    DFB_IN1 in1_dfb,
+    DFB_SCRATCH scratch_dfb,
+    DFB_OUT out_dfb,
     uint32_t block_num_tiles,
     uint32_t idx,
     uint32_t num_taps) {
@@ -48,9 +49,17 @@ inline void mul_and_accumulate_block(
     const uint32_t in1_cb_id = in1_dfb.get_id();
     const uint32_t scratch_cb_id = scratch_dfb.get_id();
     // The last tap writes the finished output to out_dfb; earlier taps write the partial to scratch_dfb.
+    // scratch_dfb and out_dfb may be different DataflowBuffer specializations (Quasar), so the pack target
+    // is selected around the use rather than through a common-typed alias.
     const bool is_last_tap = (idx + 1 == num_taps);
-    DataflowBuffer dst_dfb = is_last_tap ? out_dfb : scratch_dfb;
-    const uint32_t dst_cb_id = dst_dfb.get_id();
+    auto pack_dst_tile = [&](auto& dst_dfb) {
+        const uint32_t dst_cb_id = dst_dfb.get_id();
+        dst_dfb.reserve_back(1);
+        tile_regs_wait();
+        pack_tile(0, dst_cb_id);
+        dst_dfb.push_back(1);
+        tile_regs_release();
+    };
 
     for (uint32_t i = 0; i < block_num_tiles; i++) {
         in1_dfb.wait_front(1);
@@ -80,11 +89,11 @@ inline void mul_and_accumulate_block(
 
         // scratch_dfb and out_dfb share the output data format, so packing to either target needs no
         // pack reconfig.
-        dst_dfb.reserve_back(1);
-        tile_regs_wait();
-        pack_tile(0, dst_cb_id);
-        dst_dfb.push_back(1);
-        tile_regs_release();
+        if (is_last_tap) {
+            pack_dst_tile(out_dfb);
+        } else {
+            pack_dst_tile(scratch_dfb);
+        }
 
         in0_dfb.pop_front(1);
         in1_dfb.pop_front(1);
@@ -99,11 +108,12 @@ inline void mul_and_accumulate_block(
 // and the partial reload. Needs `unpack_to_dest_mode = UnpackToDestFp32` on ACT/ACT_TILIZED/WEIGHTS/
 // scratch (set in build_program_descriptor_sharded) or the tiles are already truncated before this
 // runs. DST usage: 2 tiles (running value + staged operand).
+template <typename DFB_IN0, typename DFB_IN1, typename DFB_SCRATCH, typename DFB_OUT>
 inline void mul_and_accumulate_block_sfpu(
-    DataflowBuffer in0_dfb,
-    DataflowBuffer in1_dfb,
-    DataflowBuffer scratch_dfb,
-    DataflowBuffer out_dfb,
+    DFB_IN0 in0_dfb,
+    DFB_IN1 in1_dfb,
+    DFB_SCRATCH scratch_dfb,
+    DFB_OUT out_dfb,
     uint32_t block_num_tiles,
     uint32_t idx,
     uint32_t num_taps) {
@@ -111,12 +121,21 @@ inline void mul_and_accumulate_block_sfpu(
     const uint32_t in1_cb_id = in1_dfb.get_id();
     const uint32_t scratch_cb_id = scratch_dfb.get_id();
     const bool is_last_tap = (idx + 1 == num_taps);
-    DataflowBuffer dst_dfb = is_last_tap ? out_dfb : scratch_dfb;
-    const uint32_t dst_cb_id = dst_dfb.get_id();
 
     // DST slots: 0 holds the running value, 1 stages the incoming operand.
     constexpr uint32_t DST_ACC = 0;
     constexpr uint32_t DST_OPERAND = 1;
+
+    // See mul_and_accumulate_block: the pack target is selected around the use so scratch_dfb and out_dfb
+    // may be different DataflowBuffer specializations.
+    auto pack_dst_tile = [&](auto& dst_dfb) {
+        const uint32_t dst_cb_id = dst_dfb.get_id();
+        dst_dfb.reserve_back(1);
+        tile_regs_wait();
+        pack_tile(DST_ACC, dst_cb_id);
+        dst_dfb.push_back(1);
+        tile_regs_release();
+    };
 
     for (uint32_t i = 0; i < block_num_tiles; i++) {
         in1_dfb.wait_front(1);
@@ -140,11 +159,11 @@ inline void mul_and_accumulate_block_sfpu(
         }
         tile_regs_commit();
 
-        dst_dfb.reserve_back(1);
-        tile_regs_wait();
-        pack_tile(DST_ACC, dst_cb_id);
-        dst_dfb.push_back(1);
-        tile_regs_release();
+        if (is_last_tap) {
+            pack_dst_tile(out_dfb);
+        } else {
+            pack_dst_tile(scratch_dfb);
+        }
 
         in0_dfb.pop_front(1);
         in1_dfb.pop_front(1);
@@ -153,9 +172,14 @@ inline void mul_and_accumulate_block_sfpu(
 
 // SFPU form of `mul_and_accumulate_coalesced_block`, for genuinely fp32 operands. See
 // `mul_and_accumulate_block_sfpu` for why: same multiply-truncation defect, same fix.
-template <uint32_t in0_block_w, uint32_t kernel_width, uint32_t block_num_tiles>
-inline void mul_and_accumulate_coalesced_block_sfpu(
-    DataflowBuffer in0_dfb, DataflowBuffer in1_dfb, DataflowBuffer out_dfb) {
+template <
+    uint32_t in0_block_w,
+    uint32_t kernel_width,
+    uint32_t block_num_tiles,
+    typename DFB_IN0,
+    typename DFB_IN1,
+    typename DFB_OUT>
+inline void mul_and_accumulate_coalesced_block_sfpu(DFB_IN0 in0_dfb, DFB_IN1 in1_dfb, DFB_OUT out_dfb) {
     static_assert(kernel_width > 1);
     static_assert(in0_block_w % kernel_width == 0);
     static_assert(block_num_tiles % in0_block_w == 0);
@@ -212,8 +236,14 @@ inline void mul_and_accumulate_coalesced_block_sfpu(
     in1_dfb.pop_front(block_num_tiles);
 }
 
-template <uint32_t in0_block_w, uint32_t kernel_width, uint32_t block_num_tiles>
-inline void mul_and_accumulate_coalesced_block(DataflowBuffer in0_dfb, DataflowBuffer in1_dfb, DataflowBuffer out_dfb) {
+template <
+    uint32_t in0_block_w,
+    uint32_t kernel_width,
+    uint32_t block_num_tiles,
+    typename DFB_IN0,
+    typename DFB_IN1,
+    typename DFB_OUT>
+inline void mul_and_accumulate_coalesced_block(DFB_IN0 in0_dfb, DFB_IN1 in1_dfb, DFB_OUT out_dfb) {
     static_assert(kernel_width > 1);
     static_assert(in0_block_w % kernel_width == 0);
     static_assert(block_num_tiles % in0_block_w == 0);

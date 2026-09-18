@@ -26,8 +26,10 @@
 
 namespace {
 
-template <uint32_t bw, uint32_t cb_in, uint32_t cb_out>
-ALWI void clamp_untilize_block(DataflowBuffer& dfb_in, DataflowBuffer& dfb_out) {
+// DFBIn / DFBOut are the callers' DataflowBuffer specializations (on Quasar DataflowBuffer is a
+// template over the producer/consumer access patterns; here both are raw-id buffers).
+template <uint32_t bw, uint32_t cb_in, uint32_t cb_out, typename DFBIn, typename DFBOut>
+ALWI void clamp_untilize_block(DFBIn& dfb_in, DFBOut& dfb_out) {
     dfb_out.reserve_back(1);  // one output page holds the whole untilized block
 
     tile_regs_acquire();

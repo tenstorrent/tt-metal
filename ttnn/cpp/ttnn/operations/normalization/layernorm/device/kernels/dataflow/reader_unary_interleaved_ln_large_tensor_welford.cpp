@@ -63,9 +63,9 @@ void kernel_main() {
 #endif
 #else
     constexpr bool fp32_sfpu_finalizer = false;
-    DataflowBuffer& dfb_in0_fp32 = dfb_in0;
+    auto& dfb_in0_fp32 = dfb_in0;
 #ifdef FUSE_PRE_ADD
-    DataflowBuffer& dfb_in1_fp32 = dfb_in1;
+    auto& dfb_in1_fp32 = dfb_in1;
 #endif
 #endif
 #ifdef FUSE_GAMMA
