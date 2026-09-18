@@ -12,6 +12,7 @@
 #include "hostdev/dev_msgs.h"
 #include "noc_overlay_parameters.h"
 #include "internal/risc_attribs.h"
+#include "internal/tt-1xx/cache.h"
 #include "api/debug/assert.h"
 
 #if defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC)
