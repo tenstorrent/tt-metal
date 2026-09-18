@@ -33,10 +33,7 @@
 // This is a FORMAT reference, not necessarily the buffer supplying the next tile:
 // binary_ng_program_factory gives the LHS broadcast temporary (c_5) the same
 // format as the original LHS (c_0). With LHS activation, use its intermediate
-// (c_3), whose format can differ from c_0 (e.g. LOGADDEXP). No runtime tracking.
-// LLK broadcast kernels may temporarily select either input's format. The factory
-// only enables that route for matching input dtypes and excludes op_has_exp,
-// which can change intermediate formats. Revisit this contract if that gate changes.
+// (c_3), whose format can differ from c_0 (e.g. LOGADDEXP).
 #define BINARY_PHYSICAL_LHS_FORMAT_CB (HAS_ACTIVATIONS(LHS) ? tt::CBIndex::c_3 : tt::CBIndex::c_0)
 
 // FPU scalar-first kernels start SrcA from physical RHS (the scalar), and keep
@@ -51,12 +48,10 @@
 #endif
 
 #if defined(TRISC_UNPACK) && !HAS_ACTIVATIONS(LHS) && HAS_ACTIVATIONS(RHS)
-// An absent c_5 has Invalid (0xff) format. Otherwise it must be interchangeable
-// with c_0 for reconfiguration, including the geometry programmed on restoration.
-// This checks descriptor equivalence, not the current hardware SrcA state.
-// Only RHS preprocessing without LHS activation restores through the c_0 alias:
-// LHS activation selects c_3 instead, and without either activation no helper runs.
-// SFPU loop restoration uses the actual post-LHS buffer, not this alias.
+// With only RHS activation, preprocessing restores SrcA using c_0's settings,
+// even when LHS broadcast tiles are in c_5. If c_5 exists, its formats and tile
+// geometry must match c_0 so that restoration is safe. The 0xff value means
+// c_5 is unused, so there is nothing to check.
 static_assert(
     unpack_src_format[5] == 0xff ||
         (unpack_src_format[0] == unpack_src_format[5] && unpack_dst_format[0] == unpack_dst_format[5] &&

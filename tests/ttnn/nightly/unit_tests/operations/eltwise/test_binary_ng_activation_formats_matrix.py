@@ -15,7 +15,6 @@ from tests.ttnn.unit_tests.operations.eltwise.test_binary_ng_activation_mixed_dt
 pytestmark = pytest.mark.use_module_device
 
 
-# TTNN CI selects nightly tests by directory, not by a pytest marker.
 @pytest.mark.parametrize("op", [ttnn.add, ttnn.multiply], ids=["add", "multiply"])
 @pytest.mark.parametrize("a_dtype,b_dtype", _DTYPE_PAIRS)
 @pytest.mark.parametrize("a_shape,b_shape", _SHAPES)

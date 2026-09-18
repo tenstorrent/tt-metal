@@ -36,8 +36,6 @@ def _one_core():
 
 
 def _input(device, shape, dtype, offset):
-    # Dyadic values make ABS exact; compare values, not correlation (which can
-    # accept a wrong scale or offset). Both signs and nonconstant magnitudes matter.
     host = ((torch.arange(math.prod(shape)) * 17 + offset) % 101 - 50).float().reshape(shape) / 8
     return ttnn.from_torch(host, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
 
@@ -131,10 +129,6 @@ def test_fused_abs_sharded_multiply(device, a_dtype, b_dtype, side):
 @pytest.mark.parametrize("both", [False, True])
 @pytest.mark.parametrize("a_shape,b_shape", _SHAPES[:5])
 def test_activation_intermediate_changes_format(device, dtype, both, a_shape, b_shape):
-    # LOGADDEXP's EXP intermediates use BF16, not the block-float input format.
-    # Matching input types are required by this operation's dtype policy.
-    # Broadcasting must retain the software fallback when intermediates change
-    # format; the LLK broadcast route assumes interchangeable input formats.
     a = _input(device, a_shape, dtype, 3)
     b = _input(device, b_shape, dtype, 13)
     reference_a, reference_b = ttnn.to_torch(a).float(), ttnn.to_torch(b).float()
@@ -151,5 +145,4 @@ def test_activation_intermediate_changes_format(device, dtype, both, a_shape, b_
             sub_core_grids=_one_core(),
         )
     ).float()
-    # Account for approximate EXP/LOG and BF16 intermediate/output rounding.
     torch.testing.assert_close(actual, torch.logaddexp(reference_a, reference_b), rtol=0.03, atol=0.03)

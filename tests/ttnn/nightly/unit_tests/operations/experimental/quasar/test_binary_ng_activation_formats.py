@@ -19,14 +19,13 @@ import torch
 
 import ttnn
 
-# This module is selected by TTNN's nightly directory-based CI jobs.
 _WH_BH_ONLY = pytest.mark.skipif(
     ttnn.get_arch_name() not in ("wormhole_b0", "blackhole"),
     reason="WH/BH-only descriptor-kernel coverage; Quasar uses the separate DFB implementation",
 )
 
 _GRID = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
-_FULL = (1, 1, 96, 96)  # nine tiles: repeated iterations; sharded cases also have a remainder
+_FULL = (1, 1, 96, 96)
 _SHAPES = [
     (_FULL, _FULL),
     ((1, 1, 1, 96), _FULL),
@@ -39,8 +38,6 @@ _SHAPES = [
     ((1, 1, 96, 1), (1, 1, 1, 96)),
 ]
 
-# Keep architecture coverage explicit in the parameter sets, rather than
-# skipping unsupported dtype/shape combinations inside the numerical checks.
 _SHARED_DFB_CASES = [(ttnn.bfloat16, ttnn.bfloat16, shapes) for shapes in _SHAPES] + [
     (dtype, dtype, (_FULL, _FULL)) for dtype in (ttnn.float32, ttnn.bfloat8_b)
 ]
@@ -52,8 +49,6 @@ _WH_BH_DESCRIPTOR_CASES = [
 
 
 def _input(device, shape, dtype, offset, memory_config=ttnn.DRAM_MEMORY_CONFIG):
-    # Small dyadic values make add/multiply exact in BF16, avoiding a PCC oracle
-    # that could hide a handful of corrupt tiles. Always use quantized inputs.
     host = ((torch.arange(math.prod(shape)) * 7 + offset) % 17 - 8).float().reshape(shape) / 2
     tensor = ttnn.from_torch(host, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config)
     return tensor, ttnn.to_torch(tensor).float()
@@ -102,7 +97,6 @@ def test_fused_activation_formats(device, op_name, a_dtype, b_dtype, shapes, sid
 )
 @pytest.mark.parametrize("side", ["none", "lhs", "rhs", "both"])
 def test_fused_scalar_activation_formats(device, op_name, dtype, side):
-    # Quasar's experimental API currently exposes tensor-first scalar operations.
     a, ah = _input(device, _FULL, dtype, 3)
     scalar = 2.5  # Keep RHS-RELU cases nonzero so a corrupt tensor cannot hide behind multiply-by-zero.
     if side in ("lhs", "both"):

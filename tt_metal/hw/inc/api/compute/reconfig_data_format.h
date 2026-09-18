@@ -136,7 +136,7 @@ ALWI void reconfig_ts_srcb(const uint32_t srcb_old_operand, const uint32_t srcb_
 // Conditional (old, new) overloads compare operand descriptors, not hardware state. The old operand is the caller's
 // claim about the current source configuration; a different buffer is valid only if its relevant descriptor fields
 // are equivalent. A stale claim can skip a required reconfiguration. For compile-time-known operands/descriptors,
-// the comparison can fold away. On Wormhole, the format guard compares both unpack source and destination formats.
+// the comparison can fold away. The format guard compares both unpack source and destination formats.
 // The new-only overloads do not require knowledge of the old configuration, but still require the correct target
 // operand -- including when restoring configuration after a temporary operation.
 //
