@@ -8,6 +8,8 @@ then `tt-perf-report <csv> --start-signpost start --end-signpost stop`. Profile 
 
 from __future__ import annotations
 
+import os
+
 import pytest
 import torch
 from diffusers.models.transformers.transformer_minimax_h3 import MINIMAX_H3_MODALITY_NUM, MiniMaxH3RotaryPosEmbed
@@ -16,7 +18,6 @@ from loguru import logger
 from tracy import signpost
 
 import ttnn
-from models.common.utility_functions import is_blackhole
 
 from ....models.transformers.minimax_h3.attention_minimax_h3 import prepare_rope_tables
 from ....models.transformers.minimax_h3.transformer_block_minimax_h3 import MiniMaxH3TransformerBlock
@@ -115,12 +116,9 @@ def test_minimax_h3_transformer_block_perf(
     reset_seeds,
 ) -> None:
     skip_if_unsupported_num_links(mesh_device, num_links)
-    # SP simulation exists to emulate the 4x32 quad's per-device shard, and the quad is a Blackhole
-    # configuration. At `sp_factor * SIM == 32` the body below asserts the exp ring SDPA is live, and
-    # that path is `is_blackhole()`-gated -- so on Wormhole this would fail the assert rather than
-    # measure anything. Skip instead; the WH rows are only meaningful at sp_sim1.
-    if sp_simulate > 1 and not is_blackhole():
-        pytest.skip("SP simulation targets the Blackhole 4x32 quad; there is no Wormhole equivalent")
+    # SP simulation emulates the 4x32 quad's per-device shard on a 4x8 mesh. On Blackhole that is the
+    # production exp-ring shape; on Wormhole it is the one shard the exp op can hold in L1 (see
+    # MiniMaxH3_wormhole_perf.md), so the sp_sim4 rows are the exp-vs-normal A/B on both parts.
     # Simulate a larger SP mesh (e.g. 4x32) on a smaller one (4x8) by shrinking the total sequence
     # so each device carries a shard the larger mesh would produce. `sp_simulate` is that SP ratio.
     SIM = sp_simulate
@@ -180,11 +178,12 @@ def test_minimax_h3_transformer_block_perf(
     tt_block.load_torch_state_dict(torch_block.state_dict())
     del torch_block
 
-    if SIM > 1:
+    if SIM > 1 and os.environ.get("MINIMAX_H3_EXP_RING_SDPA") != "0":
         # The exp-ring gate keys on sequence_parallel.factor == 32, a proxy for "the per-device
         # shard is the 4x32 shape". SP simulation produces exactly that shard on a smaller mesh,
         # but the model only sees the real mesh's factor — force the flag so the simulated run
-        # exercises what a real 4x32 would.
+        # exercises what a real 4x32 would. MINIMAX_H3_EXP_RING_SDPA=0 keeps the normal ring op
+        # instead, which is the same-shard baseline for the exp-vs-normal A/B.
         tt_block.attn.use_exp_ring_sdpa = tt_block.attn.use_ring and sp_factor * SIM == 32
         if sp_factor * SIM == 32:
             assert tt_block.attn.use_exp_ring_sdpa, "simulated 4x32 run must exercise the exp ring SDPA path"

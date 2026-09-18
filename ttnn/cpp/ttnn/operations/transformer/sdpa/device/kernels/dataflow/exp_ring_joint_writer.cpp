@@ -178,9 +178,15 @@ void kernel_main() {
     // Rotated packet headers: reusing one header forces a NoC flush per packet (the header's L1
     // must not be rewritten while its send is in flight). Rotating a small pool amortizes that to
     // one flush per kNumFwdHdrs packets — the flush was the dominant serial cost per forwarded
-    // chunk. Pool budget: NUM_PACKET_HEADERS/2 = 12 headers per RISC; 8 + 2 + 1 = 11 used.
-    constexpr uint32_t kNumScatterHdrs = 8;
+    // chunk. The pool is per arch: NUM_PACKET_HEADERS / MaxDMProcessorsPerCoreType headers per RISC
+    // (12 on Blackhole, 8 on Wormhole). PacketHeaderPool::allocate_header spins forever when the
+    // pool is exhausted, so size the rotation from the budget: scatter + 2 unicast + 1 atomic-inc,
+    // leaving one header spare. Blackhole keeps its measured 8 scatter headers; Wormhole gets 4.
+    constexpr uint32_t kHdrBudgetPerRisc = NUM_PACKET_HEADERS / MaxDMProcessorsPerCoreType;
     constexpr uint32_t kNumUnicastHdrs = 2;
+    static_assert(kHdrBudgetPerRisc >= kNumUnicastHdrs + 1 + 1 + 1, "packet header pool too small for the AG writer");
+    constexpr uint32_t kNumScatterHdrs =
+        (kHdrBudgetPerRisc - kNumUnicastHdrs - 2) < 8 ? (kHdrBudgetPerRisc - kNumUnicastHdrs - 2) : 8;
     volatile tt_l1_ptr PACKET_HEADER_TYPE* pkt_scatter_hdrs[kNumScatterHdrs] = {nullptr};
     volatile tt_l1_ptr PACKET_HEADER_TYPE* pkt_unicast_hdrs[kNumUnicastHdrs] = {nullptr};
     volatile tt_l1_ptr PACKET_HEADER_TYPE* pkt_hdr_sem_inc = nullptr;
