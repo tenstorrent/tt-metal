@@ -1447,12 +1447,10 @@
   test_group: disagg_prefill
   skus:
     bh_sc1:
-      # One galaxy loads all 67 layers serially, so weight load sets this number and the chunk loop is a
-      # minor part of it -- 50 untraced chunks run single-rank here, so they cost more than on the quad but
-      # still minutes, not tens. The 72 min measured locally was ~60 min of cold-NFS load; the sibling SC1
-      # leg fits the same 61-layer load inside 35 min in CI, so this is sized off that rather than off the
-      # local figure, plus the 6 drafter layers and the chunk loop.
-      timeout: 75
+      # 26 min in CI, nearly all of it the serial 67-layer weight load one galaxy does on its own; the 50
+      # untraced chunks run single-rank here, so they cost more than on the quad but still minutes, not
+      # tens. The margin is for CI's cold NFS load rate, the only term that moves run to run.
+      timeout: 45
   owner_id: U09LK84G4TF # Nikola Milicevic
   team: shield
   budget_type: demo
