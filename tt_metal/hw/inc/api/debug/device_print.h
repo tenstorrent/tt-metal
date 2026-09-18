@@ -1446,7 +1446,11 @@ void release_lock();
 
 #if !defined(ARCH_WORMHOLE)
 volatile tt_l1_ptr std::atomic<uint32_t>& get_lock_atomic() {
-#if !defined(ARCH_QUASAR) || defined(ENV_LLK_INFRA)
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DRISC)
+    // Atomics require cached SRAM. Keep this lock off the uncached mailbox cache line so a
+    // writeback cannot stomp wpos/rpos/payload that the host reads through the uncached alias.
+    return *reinterpret_cast<volatile tt_l1_ptr std::atomic<uint32_t>*>(MEM_CCE_DEVICE_PRINT_LOCK);
+#elif !defined(ARCH_QUASAR) || defined(ENV_LLK_INFRA)
     return get_device_print_buffer()->aux.lock;
 #else
     // Atomics require the cached L1 alias.
