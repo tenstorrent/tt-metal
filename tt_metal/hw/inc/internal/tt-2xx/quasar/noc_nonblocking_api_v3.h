@@ -1004,7 +1004,7 @@ inline __attribute__((always_inline)) uint64_t noc_v3_cq_packed_mcast_base(uint3
 // Write the remembered destination to the hardware. Unicast: one register,
 // base | local. Multicast: resolve the descriptor through the map; the first
 // tile's address goes to DEST_ADDR and the rectangle extents to DEST_COORD.
-template <uint32_t cmd_buf, bool check_count = true>
+template <uint32_t cmd_buf, enum CQNocFlags flags, bool check_count = true>
 inline __attribute__((always_inline)) void noc_v3_cq_program_dest(uint32_t size, uint32_t ndests) {
     if (noc_v3_cq_dest_mcast[cmd_buf]) {
         const uint64_t descriptor = noc_v3_cq_dest_base[cmd_buf] | noc_v3_cq_dest_local[cmd_buf];
@@ -1018,8 +1018,10 @@ inline __attribute__((always_inline)) void noc_v3_cq_program_dest(uint32_t size,
         }
         __builtin_riscv_ttrocc_cmdbuf_wr_reg(
             cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_ADDR_REG_OFFSET / 8, target.start_address);
-        __builtin_riscv_ttrocc_cmdbuf_wr_reg(
-            cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_COORD_REG_OFFSET / 8, target.extent_xy);
+        if constexpr (flags & CQ_NOC_FLAG_NOC) {
+            __builtin_riscv_ttrocc_cmdbuf_wr_reg(
+                cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_COORD_REG_OFFSET / 8, target.extent_xy);
+        }
     } else {
         __builtin_riscv_ttrocc_cmdbuf_wr_reg(
             cmd_buf,
@@ -1163,7 +1165,7 @@ inline __attribute__((always_inline)) void noc_write_with_state(
             noc_v3_cq_dest_mcast[cmd_buf] ? (dst_addr & NOC_V3_CQ_MCAST_LOCAL_MASK) : noc_v3_cq_local_of(dst_addr);
     }
     if constexpr (flags & (CQ_NOC_FLAG_NOC | CQ_NOC_FLAG_DST)) {
-        noc_v3_cq_program_dest<cmd_buf, send == CQ_NOC_SEND>(size, ndests);
+        noc_v3_cq_program_dest<cmd_buf, flags, send == CQ_NOC_SEND>(size, ndests);
     }
     if constexpr (flags & CQ_NOC_FLAG_LEN) {
         __builtin_riscv_ttrocc_cmdbuf_wr_reg(
@@ -1216,7 +1218,7 @@ inline __attribute__((always_inline)) void noc_wwrite_with_state(
         }
     }
     if constexpr (flags & (CQ_NOC_FLAG_NOC | CQ_NOC_FLAG_DST)) {
-        noc_v3_cq_program_dest<cmd_buf, send == CQ_NOC_SEND>(size, ndests);
+        noc_v3_cq_program_dest<cmd_buf, flags, send == CQ_NOC_SEND>(size, ndests);
     }
     if constexpr (flags & CQ_NOC_FLAG_LEN) {
         __builtin_riscv_ttrocc_cmdbuf_wr_reg(
