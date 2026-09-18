@@ -11,7 +11,11 @@ import numpy as np
 import pytest
 import torch
 
-from models.experimental.chronos_forecast.tt.model_preprocessing import prepare_chronos2_inputs
+from models.experimental.chronos_forecast.tt.model_preprocessing import (
+    encode_categorical_covariate,
+    prepare_chronos2_inputs,
+    target_encode,
+)
 
 PREPROCESS_SRC = (
     Path(__file__).resolve().parents[1] / "tt" / "model_preprocessing.py"
@@ -176,3 +180,140 @@ def test_oracle_from_list_of_dicts_with_covariates():
 
     torch.testing.assert_close(packed.context, amazon_ctx, equal_nan=True)
     torch.testing.assert_close(packed.future_covariates, amazon_fut, equal_nan=True)
+
+
+def test_target_encode_unseen_future_falls_back_to_item_mean():
+    target = np.array([1.0, 2.0, 3.0, 4.0, 5.0, 6.0], dtype=np.float32)
+    _, encoded_future = target_encode(
+        id_codes=np.array([0, 0, 0, 1, 1, 1]),
+        cat_codes=np.array([0, 1, 0, 0, 1, 1]),
+        target=target,
+        n_items=2,
+        n_categories=2,
+        future_id_codes=np.array([0, 1]),
+        future_cat_codes=np.array([2, 2]),
+        smooth=1.0,
+    )
+    np.testing.assert_array_almost_equal(encoded_future, [2.0, 5.0], decimal=5)
+
+
+def test_target_encode_seen_category_uses_smoothed_mean():
+    encoded_past, _ = target_encode(
+        id_codes=np.array([0, 0, 0, 0]),
+        cat_codes=np.array([0, 0, 1, 1]),
+        target=np.array([10.0, 20.0, 30.0, 40.0], dtype=np.float32),
+        n_items=1,
+        n_categories=2,
+        smooth=1.0,
+    )
+    np.testing.assert_array_almost_equal(encoded_past, [18.3333, 18.3333, 31.6667, 31.6667], decimal=3)
+
+
+def test_target_encode_handles_nans_in_target():
+    encoded_past, _ = target_encode(
+        id_codes=np.array([0, 0, 0, 0]),
+        cat_codes=np.array([0, 0, 1, 1]),
+        target=np.array([1.0, np.nan, 3.0, 4.0], dtype=np.float32),
+        n_items=1,
+        n_categories=2,
+        smooth=1.0,
+    )
+    np.testing.assert_array_almost_equal(encoded_past, [1.8333, 1.8333, 3.2222, 3.2222], decimal=3)
+    assert np.isfinite(encoded_past).all()
+
+
+def test_encode_categorical_unseen_future_is_item_mean():
+    target = np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float32)
+    past = np.array(["a", "b", "a", "b"])
+    future = np.array(["zzz_unseen", "zzz_unseen"])
+    _, enc_future = encode_categorical_covariate(past, target=target, future=future)
+    np.testing.assert_array_almost_equal(enc_future, np.full(2, target.mean()), decimal=4)
+
+
+def test_prepare_inputs_target_encodes_string_covariate():
+    rng = np.random.default_rng(123)
+    target = rng.standard_normal(20).astype(np.float32)
+    past_cat = np.array(["a", "b", "a", "b", "a"] * 4)
+    future_cat = np.array(["zzz_unseen"] * 5)
+    packed = prepare_chronos2_inputs(
+        target,
+        prediction_length=5,
+        past_covariates=past_cat,
+        future_covariates=future_cat,
+    )
+    np.testing.assert_array_almost_equal(
+        packed.future_covariates[-1].numpy(),
+        np.full(5, float(target.mean()), dtype=np.float32),
+        decimal=4,
+    )
+
+
+def test_prepare_inputs_multivariate_falls_back_to_ordinal():
+    rng = np.random.default_rng(7)
+    packed = prepare_chronos2_inputs(
+        rng.standard_normal((2, 10)).astype(np.float32),
+        prediction_length=5,
+        past_covariates=np.array(["a", "b"] * 5),
+        future_covariates=np.array(["a", "b", "a", "b", "a"]),
+        use_target_encoding=True,
+    )
+    assert set(np.unique(packed.context[-1].numpy()).tolist()).issubset({0.0, 1.0})
+    assert set(np.unique(packed.future_covariates[-1].numpy()).tolist()).issubset({0.0, 1.0})
+
+
+def test_prepare_inputs_nan_is_its_own_target_encoded_category():
+    target = np.array([10.0, 0.0] * 6, dtype=np.float32)
+    packed = prepare_chronos2_inputs(
+        target,
+        prediction_length=4,
+        past_covariates=np.array(["x", None] * 6, dtype=object),
+        future_covariates=np.array([None] * 4, dtype=object),
+    )
+    x_enc, nan_enc = packed.context[-1].numpy()[:2]
+    future_row = packed.future_covariates[-1].numpy()
+    assert nan_enc < target.mean() < x_enc
+    np.testing.assert_array_almost_equal(future_row, np.full(4, nan_enc), decimal=5)
+
+
+def test_prepare_inputs_ordinal_unseen_future_is_nan():
+    rng = np.random.default_rng(8)
+    packed = prepare_chronos2_inputs(
+        rng.standard_normal((2, 10)).astype(np.float32),
+        prediction_length=5,
+        past_covariates=np.array(["a", "b"] * 5),
+        future_covariates=np.array(["a", "zzz_unseen", "a", "b", "a"]),
+    )
+    future_cat_row = packed.future_covariates[-1].numpy()
+    assert np.isnan(future_cat_row[1])
+    assert np.isfinite(future_cat_row[[0, 2, 3, 4]]).all()
+
+
+def test_oracle_from_list_of_dicts_categorical():
+    from models.experimental.chronos_forecast.common.chronos_src import ensure_chronos_on_path
+
+    ensure_chronos_on_path()
+    from chronos.chronos2.preprocess import from_list_of_dicts
+
+    rng = np.random.default_rng(123)
+    target = rng.standard_normal(20).astype(np.float32)
+    past_cat = np.array(["a", "b", "a", "b", "a"] * 4)
+    future_cat = np.array(["zzz_unseen"] * 5)
+    data = [
+        {
+            "target": target,
+            "past_covariates": {"cat": past_cat},
+            "future_covariates": {"cat": future_cat},
+        }
+    ]
+    amazon = from_list_of_dicts(data, prediction_length=5, use_target_encoding=True)[0]
+    packed = prepare_chronos2_inputs(
+        target,
+        prediction_length=5,
+        past_covariates=past_cat,
+        future_covariates=future_cat,
+        use_target_encoding=True,
+    )
+    torch.testing.assert_close(packed.context, amazon["context"], equal_nan=True, atol=0, rtol=0)
+    torch.testing.assert_close(
+        packed.future_covariates, amazon["future_covariates"], equal_nan=True, atol=0, rtol=0
+    )

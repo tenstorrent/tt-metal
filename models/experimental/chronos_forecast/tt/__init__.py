@@ -6,13 +6,17 @@
 from models.experimental.chronos_forecast.tt.model import TtChronos
 from models.experimental.chronos_forecast.tt.model_preprocessing import (
     Chronos2PackedInputs,
+    encode_categorical_covariate,
     prepare_chronos2_inputs,
     preprocess_model_parameters,
+    target_encode,
 )
 
 __all__ = [
     "Chronos2PackedInputs",
     "TtChronos",
+    "encode_categorical_covariate",
     "prepare_chronos2_inputs",
     "preprocess_model_parameters",
+    "target_encode",
 ]
