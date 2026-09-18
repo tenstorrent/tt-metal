@@ -1069,16 +1069,18 @@ Tensor pow(
     float exponent,
     const std::optional<MemoryConfig>& output_mem_config,
     const std::optional<Tensor>& output_tensor) {
+    if (!tt::tt_metal::is_floating_point(input_a.dtype())) {
+        // torch promotes an integer tensor raised to a float scalar to float, whether or not the
+        // scalar is integral: pow(int_tensor, 3.0) is float, pow(int_tensor, 3) is int. The SFPU
+        // power kernels are float-only in any case, so compute in FLOAT32 rather than let integer
+        // bits be read as floats. The recursion below then takes the float-tensor path.
+        Tensor input_f32 = ttnn::typecast(input_a, DataType::FLOAT32, output_mem_config);
+        return pow(input_f32, exponent, output_mem_config, output_tensor);
+    }
     float exponent_floor = std::floor(exponent);
     if (static_cast<std::int32_t>(exponent_floor) == exponent) {
         std::int32_t exp = exponent;
         return pow(input_a, exp, output_mem_config, output_tensor);
-    }
-    if (!tt::tt_metal::is_floating_point(input_a.dtype())) {
-        // torch promotes an integer tensor raised to a non-integer exponent to float. The SFPU power
-        // kernels are float-only, so compute in FLOAT32 rather than let integer bits be read as floats.
-        Tensor input_f32 = ttnn::typecast(input_a, DataType::FLOAT32, output_mem_config);
-        return ttnn::power(input_f32, exponent, output_mem_config, output_tensor);
     }
     return ttnn::power(input_a, exponent, output_mem_config, output_tensor);
 }
@@ -1087,8 +1089,9 @@ namespace {
 
 // Integer x^k by exponentiation-by-squaring on the integer SFPU multiply, so the result is the
 // exact (two's-complement wrapping) integer torch.pow produces, not a float approximation.
-// Requires k >= 2. Uses ceil(log2 k) squarings plus popcount(k) - 1 multiplies; whichever multiply
-// produces the final value is the one that writes output_tensor.
+// Requires k >= 2. Uses floor(log2 k) squarings (one per bit below the highest set bit) plus
+// popcount(k) - 1 accumulator multiplies: k=2 -> 1 kernel, k=3 -> 2, k=4 -> 2, k=5 -> 3.
+// Whichever multiply produces the final value is the one that writes output_tensor.
 Tensor integer_pow_by_squaring(
     const Tensor& input,
     std::uint32_t k,

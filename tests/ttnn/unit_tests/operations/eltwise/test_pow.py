@@ -639,7 +639,7 @@ def test_pow_arange_masking_fp32(exponent, device):
 INT_POW_VALUES = [7, -7, 8, -8, 3, -3, 1, 5, 0, 50000, -50000, 46341, -46341, 1290, 2147483647, -2147483648]
 
 
-@pytest.mark.parametrize("exponent", list(range(0, 12)) + [3.0])
+@pytest.mark.parametrize("exponent", list(range(0, 12)))
 def test_pow_int32_integer_exponent_exact(exponent, device):
     torch_input = torch.zeros(1, 1, 32, 32, dtype=torch.int32)
     torch_input.view(-1)[: len(INT_POW_VALUES)] = torch.tensor(INT_POW_VALUES, dtype=torch.int32)
@@ -647,7 +647,29 @@ def test_pow_int32_integer_exponent_exact(exponent, device):
 
     tt_output = ttnn.pow(tt_input, exponent)
     assert tt_output.dtype == ttnn.int32
-    assert torch.equal(ttnn.to_torch(tt_output), torch.pow(torch_input, int(exponent)))
+    assert torch.equal(ttnn.to_torch(tt_output), torch.pow(torch_input, exponent))
+
+
+@pytest.mark.parametrize("exponent", [0.0, 1.0, 2.0, 3.0, 2.5])
+def test_pow_int32_float_exponent_promotes_to_float32(exponent, device):
+    # torch promotes an integer tensor raised to a float scalar to float, even when the scalar is
+    # integral: pow(int_tensor, 3.0) is float32 while pow(int_tensor, 3) stays int32.
+    values = [7, -7, 8, -8, 3, -3, 1, 5, 0, 2, 100, 1290]
+    if exponent != int(exponent):
+        values = [v for v in values if v >= 0]  # negative base ** non-integer is NaN; keep the check finite
+    torch_input = torch.zeros(1, 1, 32, 32, dtype=torch.int32)
+    torch_input.view(-1)[: len(values)] = torch.tensor(values, dtype=torch.int32)
+    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    tt_output = ttnn.pow(tt_input, exponent)
+    expected = torch.pow(torch_input, exponent)
+    assert expected.dtype == torch.float32
+    assert tt_output.dtype == ttnn.float32
+    if exponent == int(exponent):
+        # integral exponents on the float path are exact
+        assert torch.equal(ttnn.to_torch(tt_output), expected)
+    else:
+        assert_allclose(expected, ttnn.to_torch(tt_output), rtol=1e-5, atol=1e-3)
 
 
 @pytest.mark.parametrize("exponent", [0, 1, 2, 3])
@@ -674,18 +696,6 @@ def test_pow_int32_output_tensor(exponent, device):
     expected = torch.pow(torch_input, exponent)
     assert torch.equal(ttnn.to_torch(preallocated), expected)
     assert torch.equal(ttnn.to_torch(returned), expected)
-
-
-def test_pow_int32_noninteger_exponent_promotes_to_float32(device):
-    # torch promotes an integer tensor raised to a non-integer exponent to float.
-    values = [7, 8, 3, 1, 5, 0, 2, 100]
-    torch_input = torch.zeros(1, 1, 32, 32, dtype=torch.int32)
-    torch_input.view(-1)[: len(values)] = torch.tensor(values, dtype=torch.int32)
-    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
-
-    tt_output = ttnn.pow(tt_input, 2.5)
-    assert tt_output.dtype == ttnn.float32
-    assert_allclose(torch.pow(torch_input.float(), 2.5), ttnn.to_torch(tt_output), rtol=1e-5, atol=1e-3)
 
 
 def test_pow_int32_negative_exponent_rejected(device, expect_error):
