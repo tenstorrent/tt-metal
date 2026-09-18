@@ -115,9 +115,12 @@ std::vector<Tensor> post_topk_transform_tensor(
     Shape final_lshape = original_lshape;
     final_lshape[dim] = std::min(original_lshape[dim], k);
 
-    // The kernels write whole tiles of adjusted_k columns, so for a 4D last-dim call the requested k is a
-    // logical width change on the same buffer; the other cases still go through slice.
+    // Slice adjustment for tile-aligned K values
+    // OP requires K to be tile-aligned (multiples of 32), but user wants exact K
+    // If we had to round up K for op, trim the result down to the requested K value
     if (adjusted_k != k) {
+        // The kernels write whole tiles of adjusted_k columns, so for a 4D last-dim call the requested k is a
+        // logical width change on the same buffer; the other cases still go through slice.
         if (orig_rank == 4 && is_dim_last_idx) {
             for (auto& tensor : result) {
                 auto logical_shape = tensor.logical_shape();
