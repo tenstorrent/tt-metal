@@ -56,9 +56,10 @@ auto reduce_w_split_work(const ReduceParams& attrs, const tt::tt_metal::MeshTens
                      a.mutable_device().compute_with_storage_grid_size(), num_rows, split_row_wise);
 }
 
-// Whether the compute_g2 kernel exists. override_runtime_arguments cannot see the built Program,
-// and naming a kernel it lacks is fatal, so it asks the shared split instead.
-bool reduce_w_has_second_core_group(
+// The height-sharded fast path, where each core reduces its resident L1 shard. It also pins the
+// workers to the shard grid, so create_program_artifacts and the cache-hit override both call
+// this: a disagreement here is a disagreement about how many core groups exist.
+bool reduce_w_use_height_sharding(
     const ReduceParams& attrs, const tt::tt_metal::MeshTensor& a, const tt::tt_metal::MeshTensor& output) {
     using namespace tt::tt_metal;
     const auto& shape = a.padded_shape();
@@ -66,17 +67,20 @@ bool reduce_w_has_second_core_group(
     const uint32_t NC = shape[1] * shape[0];
     const uint32_t Ht = tt::div_up(shape[2], tile_height);
     const uint32_t shard_Ht = a.shard_spec().has_value() ? a.shard_spec()->shape[0] / tile_height : 0;
-    // Height sharding pins the workers to the shard grid, so there is only ever one group. Mirrors
-    // the use_height_sharding override in create_program_artifacts.
-    const bool use_height_sharding =
-        !attrs.row_major_w_dense_path && a.memory_config().is_l1() && output.memory_config().is_l1() &&
-        a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED &&
-        output.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED && a.shard_spec().has_value() &&
-        output.shard_spec().has_value() && a.shard_spec()->grid == output.shard_spec()->grid &&
-        a.shard_spec()->shape[0] == output.shard_spec()->shape[0] &&
-        a.shard_spec()->orientation == output.shard_spec()->orientation &&
-        shard_Ht * a.shard_spec()->grid.num_cores() == NC * Ht;
-    if (use_height_sharding) {
+    return !attrs.row_major_w_dense_path && a.memory_config().is_l1() && output.memory_config().is_l1() &&
+           a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED &&
+           output.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED && a.shard_spec().has_value() &&
+           output.shard_spec().has_value() && a.shard_spec()->grid == output.shard_spec()->grid &&
+           a.shard_spec()->shape[0] == output.shard_spec()->shape[0] &&
+           a.shard_spec()->orientation == output.shard_spec()->orientation &&
+           shard_Ht * a.shard_spec()->grid.num_cores() == NC * Ht;
+}
+
+// Whether the compute_g2 kernel exists. override_runtime_arguments cannot see the built Program,
+// and naming a kernel it lacks is fatal, so it asks the shared split instead.
+bool reduce_w_has_second_core_group(
+    const ReduceParams& attrs, const tt::tt_metal::MeshTensor& a, const tt::tt_metal::MeshTensor& output) {
+    if (reduce_w_use_height_sharding(attrs, a, output)) {
         return false;
     }
     return !std::get<3>(reduce_w_split_work(attrs, a, reduce_w_num_rows(attrs, a, output))).ranges().empty();
@@ -108,14 +112,7 @@ ReduceDeviceOperation::ReduceMultiCoreWProgramFactory::create_program_artifacts(
     // Fast path: each core reduces its L1 shard locally. Needs matching grid/height/orientation
     // and shards that tile the tensor; otherwise the generic path.
     const uint32_t shard_Ht = a.shard_spec().has_value() ? a.shard_spec()->shape[0] / tile_height : 0;
-    const bool use_height_sharding = !rm_path && a.memory_config().is_l1() && output.memory_config().is_l1() &&
-                                     a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED &&
-                                     output.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED &&
-                                     a.shard_spec().has_value() && output.shard_spec().has_value() &&
-                                     a.shard_spec()->grid == output.shard_spec()->grid &&
-                                     a.shard_spec()->shape[0] == output.shard_spec()->shape[0] &&
-                                     a.shard_spec()->orientation == output.shard_spec()->orientation &&
-                                     shard_Ht * a.shard_spec()->grid.num_cores() == NC * Ht;
+    const bool use_height_sharding = reduce_w_use_height_sharding(operation_attributes, a, output);
 
     if (rm_path) {
         validate_rm_preconditions(

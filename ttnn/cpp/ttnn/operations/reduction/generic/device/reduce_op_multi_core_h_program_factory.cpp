@@ -21,6 +21,16 @@ namespace ttnn::prim {
 
 namespace {
 
+// The width-sharded fast path, which aliases the I/O CBs onto the tensors. It also pins the
+// workers to the shard grid, so create_program_artifacts and the cache-hit override both call
+// this: a disagreement here is a disagreement about how many core groups exist.
+bool reduce_h_use_width_sharding(const tt::tt_metal::MeshTensor& a, const tt::tt_metal::MeshTensor& output) {
+    using namespace tt::tt_metal;
+    return a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED &&
+           output.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED && a.memory_config().is_l1() &&
+           output.memory_config().is_l1();
+}
+
 // One output tile column per (nc, slice, wt) of the (N, C, num_h_slices, W) result. Mirrors the
 // num_cols line in create_program_artifacts, for the override, which has no locals to reuse.
 uint32_t reduce_h_num_cols(
@@ -32,7 +42,12 @@ uint32_t reduce_h_num_cols(
     const uint32_t NC = shape[1] * shape[0];
     const uint32_t Wt = tt::div_up(shape[3], tile_width);
     if (!attrs.row_major_h_dense_path) {
-        return NC * Wt;
+        // The TILE H-axis split slices the reduce axis too, on the same gate and clamp the factory
+        // applies; without this the override would size the split off an unsliced column count.
+        const bool tile_h_split = !reduce_h_use_width_sharding(a, output) && attrs.num_h_slices > 1;
+        const uint32_t Ht = tt::div_up(shape[2], tile_height);
+        const uint32_t num_h_slices = tile_h_split ? std::min(attrs.num_h_slices, Ht) : 1u;
+        return NC * num_h_slices * Wt;
     }
     const RmPlan plan = make_rm_plan(
         shape,
@@ -60,12 +75,7 @@ auto reduce_h_split_work(const ReduceParams& attrs, const tt::tt_metal::MeshTens
 // and naming a kernel it lacks is fatal, so it asks the shared split instead.
 bool reduce_h_has_second_core_group(
     const ReduceParams& attrs, const tt::tt_metal::MeshTensor& a, const tt::tt_metal::MeshTensor& output) {
-    using namespace tt::tt_metal;
-    // Width sharding pins the workers to the shard grid, so there is only ever one group. Mirrors
-    // the use_width_sharding override in create_program_artifacts.
-    if (a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED &&
-        output.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED && a.memory_config().is_l1() &&
-        output.memory_config().is_l1()) {
+    if (reduce_h_use_width_sharding(a, output)) {
         return false;
     }
     return !std::get<3>(reduce_h_split_work(attrs, a, reduce_h_num_cols(attrs, a, output))).ranges().empty();
@@ -114,9 +124,7 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
     tt_metal::IDevice* device = &a.mutable_device();
 
     // Fast path aliases I/O CBs onto the tensors; CBs are L1-only.
-    bool use_width_sharding = a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED &&
-                              output.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED &&
-                              a.memory_config().is_l1() && output.memory_config().is_l1();
+    const bool use_width_sharding = reduce_h_use_width_sharding(a, output);
 
     // Populate the RM-only locals (chunk sizes, page bytes, padding identity, datum sizes) into
     // a single struct so the per-site formulas don't drift between this factory and the W one.

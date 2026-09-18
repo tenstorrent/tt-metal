@@ -319,6 +319,60 @@ def test_reduce_cache_reuse_across_scalars(device, isolate_program_cache, op, di
     assert device.cache_entries_counter.total == 1
 
 
+@pytest.mark.parametrize("dim", [-2, -1], ids=["H", "W"])
+def test_reduce_cache_reuse_across_scalars_two_core_groups(device, isolate_program_cache, dim):
+    """Uneven core split -> compute_g2 exists, and its scalar must be re-stamped on a cache hit.
+
+    ttnn.max resolves to ScalerMode::PostMul, so the scalar reaches the compute kernels as a common
+    runtime arg. If override_runtime_arguments re-stamped only compute_g1, the columns/rows owned by
+    the second core group would keep the previous call's scalar.
+    """
+    torch.manual_seed(0)
+    grid = device.compute_with_storage_grid_size()
+    # One work unit past an exact 2-per-core split; that remainder is what creates core_group_2.
+    num_units = 2 * grid.x * grid.y + 1
+    # The H factory splits NC*Wt columns across cores, the W factory splits NC*Ht rows.
+    shape = [1, 1, 32, 32 * num_units] if dim == -2 else [1, 1, 32 * num_units, 32]
+
+    for scalar in [1.0, 0.5, 2.0]:
+        torch_ref, tt_out = run_reduce_op(device, ttnn.max, shape, dim=dim, scalar=scalar)
+        assert_numeric_metrics(
+            torch_ref,
+            tt_out,
+            pcc_threshold=0.9999,
+            rtol=1e-06,
+            atol=1e-06,
+            frobenius_threshold=1e-09,
+        )
+
+    assert device.cache_entries_counter.total == 1
+
+
+def test_reduce_cache_reuse_across_scalars_h_axis_split(device, isolate_program_cache):
+    """H-axis split (num_h_slices > 1): both stages must survive a scalar change on a cache hit.
+
+    Ht = 20 meets the split threshold while NC*Wt = 8 leaves grid room for >= 2 slices. The split
+    lowers to a unit-scaler stage 1 plus a stage 2 that applies the scalar, so it is the only
+    configuration where the override sizes its core split from a sliced column count.
+    """
+    torch.manual_seed(0)
+    shape = [1, 1, 640, 256]
+
+    for scalar in [1.0, 0.5, 2.0]:
+        torch_ref, tt_out = run_reduce_op(device, ttnn.sum, shape, dim=-2, scalar=scalar)
+        assert_numeric_metrics(
+            torch_ref,
+            tt_out,
+            pcc_threshold=0.9999,
+            rtol=1e-06,
+            atol=1e-06,
+            frobenius_threshold=1e-09,
+        )
+
+    # Stage 1 and stage 2 are distinct programs; neither recompiles for a new scalar.
+    assert device.cache_entries_counter.total == 2
+
+
 def test_reduce_cache_reuse_across_scalar_signs_hw(device, isolate_program_cache):
     """Mixed-sign scalars on the HW factory -> 1 cache entry.
 
