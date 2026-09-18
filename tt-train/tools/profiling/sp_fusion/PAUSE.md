@@ -39,3 +39,12 @@ source generated/spfuse/env.sh; build: build.sh [targets]; device: devrun.sh <na
 (needs the sandbox disabled); training rows: [BATCH=5 MEMEFF=1] bench_sp_train.sh <composed|fused|nocomm> <ring|line> 6.
 Do NOT use PROFILE=1 on the 32-layer model (tracy stalls); profile a 2-4 layer variant if per-op data is needed.
 Agent transcripts (resumable while the session store exists): S = two-stream scheduler, F = fused ops round 2.
+
+## Off-machine copy
+Remote backup branch (no PR): origin/imichalak/sp-fusion-campaign-wip = this branch incl. both WIP commits and this
+directory. The local PR-stack branch is imichalak/llama-sp/6-sp-fused-matmul-ccl.
+F's hand-off headline (HANDOFF_F.md): the perf2 jump (ring B=1 qkv 467 -> 307 us) = an all-gather signal-timing fix
+(~125 us of serialisation removed) + a cheaper in1 stream (sub-batched matmul 309 -> 213 us); every check case is
+still bitwise equal to the same-config unfused path; the "2 failures" are the loose PCC gate vs ttnn.linear's auto
+config on the new K=7168 shape (threshold decision pending). bfp8 payloads: qkv 307 -> 226 us (bf16acc), PCC vs fp32
+0.99992, max |d| 0.47 (see HANDOFF_F.md section 5 for the full numerics).
