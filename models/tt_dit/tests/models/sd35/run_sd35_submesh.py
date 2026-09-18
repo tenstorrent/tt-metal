@@ -17,6 +17,11 @@ import os
 import sys
 
 sys.path.insert(0, os.getcwd())
+from models.tt_dit.tests.models.sd35.hf_env import ensure_hf_home
+
+# Must run before any transformers/diffusers import caches the HF paths.
+ensure_hf_home()
+
 from loguru import logger
 
 import ttnn
