@@ -9,6 +9,7 @@ from tests.ttnn.nightly.unit_tests.operations.eltwise.backward.utility_funcs imp
     data_gen_with_range,
     compare_pcc,
 )
+from tests.ttnn.utils_for_testing import assert_with_ulp
 
 
 @pytest.mark.parametrize(
@@ -270,8 +271,9 @@ def test_bw_pow_zero_input_finite_gradient(input_shapes, exponent, device):
     golden_tensor = golden_function(grad_data, in_data, exponent)
 
     assert torch.isfinite(golden_tensor[0]).all(), "golden itself should be finite at input == 0"
-    status = compare_pcc(tt_output_tensor_on_device, golden_tensor, pcc=0.99)
-    assert status
+    # The golden gradient at input == 0 is an exact value (0 for exponent >= 2, 1 for exponent == 1),
+    # so a tight ULP check catches a regression to +inf far more precisely than a PCC threshold would.
+    assert_with_ulp(expected_result=golden_tensor[0], actual_result=tt_output_tensor_on_device[0], ulp_threshold=2)
 
 
 @pytest.mark.parametrize("input_shapes", ((torch.Size([1, 1, 32, 32])),))
