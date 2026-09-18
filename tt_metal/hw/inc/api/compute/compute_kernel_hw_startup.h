@@ -116,10 +116,12 @@ ALWI void compute_kernel_hw_startup(uint32_t icb0, uint32_t ocb) {
  * Configures both the math pipeline (ALU_ACC_CTRL Fp32_enabled and
  * SFPU_Fp32_enabled) and the packer (PCK_DEST_RD_CTRL Read_32b_data)
  * for 32-bit destination reads. UNPACK/PACK tensix_sync then notify MATH
- * and wait; MATH writes dest-acc CFG and releases them. Every thread
- * STALLWAITs on TRISC_CFG, blocking unpacker / packer / FPU / SFPU until
- * those writes are visible. Safe to call mid-kernel without re-running
- * compute_kernel_hw_startup.
+ * and wait; MATH writes dest-acc CFG, drains until those writes have retired,
+ * and only then releases them -- the release is a RISC store, so the drain is
+ * what orders it behind the writes. UNPACK/PACK then STALLWAIT as a backstop:
+ * on Blackhole on CFGEXU, which is core-wide; on Wormhole on TRISC_CFG, which
+ * is per-thread and already met here. Safe to call mid-kernel without
+ * re-running compute_kernel_hw_startup.
  *
  * All three TRISC threads must call this together. TRISC mailboxes must not
  * be in use.
@@ -148,10 +150,12 @@ ALWI void enable_fp32_dest_acc() {
  * Configures both the math pipeline (ALU_ACC_CTRL Fp32_enabled and
  * SFPU_Fp32_enabled) and the packer (PCK_DEST_RD_CTRL Read_32b_data)
  * to disable 32-bit destination reads. UNPACK/PACK tensix_sync then notify
- * MATH and wait; MATH writes dest-acc CFG and releases them. Every thread
- * STALLWAITs on TRISC_CFG, blocking unpacker / packer / FPU / SFPU until
- * those writes are visible. Safe to call mid-kernel without re-running
- * compute_kernel_hw_startup.
+ * MATH and wait; MATH writes dest-acc CFG, drains until those writes have
+ * retired, and only then releases them -- the release is a RISC store, so the
+ * drain is what orders it behind the writes. UNPACK/PACK then STALLWAIT as a
+ * backstop: on Blackhole on CFGEXU, which is core-wide; on Wormhole on
+ * TRISC_CFG, which is per-thread and already met here. Safe to call mid-kernel
+ * without re-running compute_kernel_hw_startup.
  *
  * All three TRISC threads must call this together. TRISC mailboxes must not
  * be in use.
