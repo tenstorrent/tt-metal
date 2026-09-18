@@ -189,11 +189,6 @@ static_assert(last_perf_counter.Stop.shamt(cfg::Sec::S0) == 7);
 constexpr auto common_gpr = hal::gpr<5>();
 static_assert(decltype(common_gpr)::index == 5);
 
-constexpr auto cfg_gpr = cfg::gpr<16, cfg::GprTransferSize::Bits128, cfg::WrcfgCompletion::Deferred>();
-static_assert(decltype(cfg_gpr)::index == 16);
-static_assert(decltype(cfg_gpr)::size == cfg::GprTransferSize::Bits128);
-static_assert(decltype(cfg_gpr)::completion == cfg::WrcfgCompletion::Deferred);
-
 constexpr auto constant_assignment = cfg::set<cfg::AluAccCtrl::Fp32_enabled, cfg::Sec::S0, 1>();
 static_assert(decltype(constant_assignment)::scope == cfg::RegisterScope::State);
 static_assert(decltype(constant_assignment)::addr == 1);
@@ -201,7 +196,8 @@ static_assert(decltype(constant_assignment)::shift == 29);
 static_assert(decltype(constant_assignment)::mask == 0x20000000u);
 static_assert(decltype(constant_assignment)::value == 1);
 
-constexpr auto gpr_write = cfg::from_gpr<cfg::Thcon[cfg::Reg0].TileDescriptor.Raw, cfg::Sec::S1>(cfg_gpr);
+constexpr auto gpr_write =
+    cfg::from_gpr<cfg::Thcon[cfg::Reg0].TileDescriptor.Raw, cfg::Sec::S1, cfg::GprTransferSize::Bits128, cfg::WrcfgCompletion::Deferred>(hal::gpr<16>());
 static_assert(decltype(gpr_write)::scope == cfg::RegisterScope::State);
 static_assert(decltype(gpr_write)::addr == 112);
 static_assert(decltype(gpr_write)::words == 4);
