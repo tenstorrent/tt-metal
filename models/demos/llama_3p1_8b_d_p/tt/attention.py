@@ -105,14 +105,26 @@ def _forwarding_links(mesh_device, *, axis, required_links, owner):
 
 
 class FullCausalAttention:
-    """Attend TP-local Q heads over one selected packed K/V prefix with supported FP32 SDPA.
+    """Attend TP-local Q heads over one selected packed K/V prefix with ring SDPA.
 
-    Persistent gather outputs are reused sequentially. Concurrent calls through one instance are
-    unsupported.
+    Production reads the cache through ``ring_joint_scaled_dot_product_attention``: the prefix stays
+    sequence-parallel, each SP rank streams its own K/V shard around the ring, and the device op
+    merges the partial attentions with a running log-sum-exp. Nothing assembles the whole prefix on
+    one chip, so the per-chunk cost no longer carries a gather of the prefix or an explicit
+    (local_q x prefix) mask.
+
+    The older route -- gather the prefix into ``gathered_k``/``gathered_v``, build that mask, and run
+    standard SDPA -- is retained below as a reference implementation. It is built from independent
+    coordinate math, so the tests use it as an oracle for the ring path rather than as a second
+    production path; see ``_gather_and_reorder`` and ``_build_mask``.
+
+    Persistent ring and gather buffers are reused sequentially. Concurrent calls through one instance
+    are unsupported.
     """
 
     # Q128/K512 explicit-mask standard SDPA uses 1,241,088 B/core of CBs at the BF16 worst
-    # case. Reserve one additional 32,768-byte Q buffer as a conservative scheduling margin.
+    # case. Reserve one additional 32,768-byte Q buffer as a conservative scheduling margin. The ring
+    # op tiles the same Q128/K512 but carries no mask CB, so this stays the bound for both routes.
     _SDPA_L1_BYTES = 1_273_856
 
     def __init__(
@@ -127,10 +139,9 @@ class FullCausalAttention:
         self.geometry = PrefillGeometry(max_seq_len, num_users)
         self.max_seq_len = self.geometry.max_seq_len
         self.num_users = self.geometry.num_users
-        # The current chunk's mask and query-validity column, reused across its layers (see _chunk_mask).
-        self._mask = None
+        # The current chunk's query-validity column, reused across its layers (see _chunk_query_valid).
         self._query_valid = None
-        self._mask_key = None
+        self._query_valid_key = None
         _validate_mesh(mesh_device, mesh_config, "FullCausalAttention")
         if cache_dtype not in _SUPPORTED_CACHE_DTYPES:
             raise ValueError(f"attention cache_dtype must be bfloat16 or bfloat8_b, got {cache_dtype}")
@@ -160,6 +171,51 @@ class FullCausalAttention:
             fp32_dest_acc_en=True,
             packer_l1_acc=False,
         )
+
+        # Production ring configuration. The ring op merges each rank's partial attention with a
+        # running log-sum-exp, and that streaming accumulation runs in the BF16 destination registers,
+        # so fp32_dest_acc_en must be off here -- unlike the reference route's standard SDPA above,
+        # which keeps FP32 accumulation. Both keep exp_approx_mode off.
+        # Q128/K512 measured fastest across prefixes on a 256-row local Q (1.04 ms/call at an 8192
+        # prefix against 1.22 for K128), and the chunk shape does not move the numerics; see
+        # tests/unit/test_ring_attention_perf.py and tests/unit/test_ring_attention_accuracy.py.
+        self.ring_program_config = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(grid.x - 1, grid.y),
+            q_chunk_size=128,
+            k_chunk_size=512,
+            exp_approx_mode=False,
+        )
+        self.ring_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=False,
+        )
+
+        # The ring op gathers each rank's K/V shard into these buffers as it walks the ring. They hold
+        # one KV head per TP column, matching the packed cache, and are shared by every slot and layer
+        # because one call owns the ring for its duration.
+        ring_buffers = torch.zeros(1, _NUM_KV_HEADS, self.max_seq_len, _HEAD_DIM)
+        ring_mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=_MESH_SHAPE, dims=(None, _TP_AXIS))
+        self.ring_k, self.ring_v = (
+            ttnn.from_torch(
+                ring_buffers,
+                device=mesh_device,
+                dtype=cache_dtype,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ring_mapper,
+            )
+            for _ in range(2)
+        )
+        # CCL workers live in the column the SDPA grid above gives up, and the ring op signals its
+        # own completion, so these semaphores need no reset between calls.
+        self.ring_ccl_offset = ttnn.CoreCoord(grid.x - 1, 0)
+        ring_ccl_cores = ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(grid.x - 1, 0), ttnn.CoreCoord(grid.x - 1, 1))}
+        )
+        self.ring_semaphores = [ttnn.create_global_semaphore(mesh_device, ring_ccl_cores, 0) for _ in range(3)]
 
         # The packed cache has one KV head per TP column. Select one slot/layer plane and gather its
         # capacity/256 SP blocks into these persistent output buffers before restoring natural order.
@@ -307,8 +363,8 @@ class FullCausalAttention:
 
         The buffer is already (rank, chunk, block, head_dim) once reshaped, and natural order is that
         same view with rank and chunk swapped, so a fixed five shape ops replace one slice per
-        256-token block plus a concat of the same arity. The per-block route cost 2.838 ms at an
-        8192-token extent against 0.128 ms here (22x), and it grew with the extent while this does
+        256-token block plus a concat of the same arity. The per-block route cost 2.8 ms at an
+        8192-token extent against 0.13 ms here (22x), and it grew with the prefix while this does
         not -- at 32 layers x K and V that reorder was a large share of the per-chunk time.
         tests/unit/test_prefix_reorder_probe.py grades both routes against ground truth at four
         extents.
@@ -350,7 +406,8 @@ class FullCausalAttention:
             natural = prefix
         return natural
 
-    def _build_mask(self, *, actual_start, actual_end, logical_n):
+    def _query_positions(self, actual_start):
+        """This chunk's absolute query positions, one exact FP32 column per SP rank."""
         start_index = actual_start // ttnn.TILE_SIZE
         query_positions_rm = ttnn.slice(
             self.query_position_table,
@@ -359,6 +416,31 @@ class FullCausalAttention:
         )
         query_positions = ttnn.to_layout(query_positions_rm, ttnn.TILE_LAYOUT)
         query_positions_rm.deallocate(True)
+        return query_positions
+
+    def _build_query_valid(self, *, actual_start, actual_end):
+        """Which of this rank's query rows carry a real token, as a bf16 0/1 column.
+
+        A chunk is always a full 256 rows per rank, so a short interval leaves padded rows whose
+        attention output is undefined: their query positions sit past ``actual_end``, and the keys
+        they would read are whatever the tile-rounded prefix holds. Multiplying by this column is what
+        makes those rows exact zeros.
+        """
+        query_positions = self._query_positions(actual_start)
+        query_valid = ttnn.lt(query_positions, float(actual_end))
+        query_valid_bf16 = ttnn.typecast(query_valid, ttnn.bfloat16)
+        for tensor in (query_positions, query_valid):
+            tensor.deallocate(True)
+        return query_valid_bf16
+
+    def _build_mask(self, *, actual_start, actual_end, logical_n):
+        """Reference route: the explicit (local_q x prefix) causal mask for standard SDPA.
+
+        Production does not build this -- the ring op applies causality from ``actual_start`` and
+        ``logical_n`` instead. It stays because it derives allowed positions from absolute query and
+        key coordinates, independently of the cache layout, which is what makes it an oracle.
+        """
+        query_positions = self._query_positions(actual_start)
 
         owns_key_positions = logical_n < self.max_seq_len
         key_positions = (
@@ -378,31 +460,24 @@ class FullCausalAttention:
             tensor.deallocate(True)
         return mask, query_valid_bf16
 
-    def _chunk_mask(self, *, actual_start, actual_end, logical_n):
-        """One chunk's mask, reused by every layer that attends over it.
+    def _chunk_query_valid(self, *, actual_start, actual_end):
+        """One chunk's query-validity column, reused by every layer that attends over it.
 
-        The mask is a function of the chunk's position range alone -- not of the layer or of the cache
-        contents -- so the 32 layers of a chunk all want the same (local_q x prefix) tensor. Building it
-        per layer meant 32 sets of full-extent elementwise passes per chunk to recompute the same bits.
+        Validity depends on the chunk's position range alone -- not on the layer or the cache contents
+        -- so the 32 layers of a chunk all want the same column.
         """
-        key = (actual_start, actual_end, logical_n)
-        if self._mask_key != key:
-            self._release_chunk_mask()
-            self._mask, self._query_valid = self._build_mask(
-                actual_start=actual_start,
-                actual_end=actual_end,
-                logical_n=logical_n,
-            )
-            self._mask_key = key
-        return self._mask, self._query_valid
+        key = (actual_start, actual_end)
+        if self._query_valid_key != key:
+            self._release_chunk_query_valid()
+            self._query_valid = self._build_query_valid(actual_start=actual_start, actual_end=actual_end)
+            self._query_valid_key = key
+        return self._query_valid
 
-    def _release_chunk_mask(self):
-        for tensor in (self._mask, self._query_valid):
-            if tensor is not None:
-                tensor.deallocate(True)
-        self._mask = None
+    def _release_chunk_query_valid(self):
+        if self._query_valid is not None:
+            self._query_valid.deallocate(True)
         self._query_valid = None
-        self._mask_key = None
+        self._query_valid_key = None
 
     def __call__(self, q, kv_cache, *, slot_idx, layer_idx, actual_start, actual_end):
         self._validate_call(
@@ -413,41 +488,50 @@ class FullCausalAttention:
             actual_start=actual_start,
             actual_end=actual_end,
         )
+        # The ring op reads the cache in place. `logical_n` is the total valid prefix rounded up to a
+        # tile, and `kv_actual_isl` is what was valid before this chunk, which is how the op recovers
+        # the block-cyclic rotation and applies causality. Rounding up only admits keys at positions
+        # at or past `actual_end`, and those sit strictly above every valid query position, so
+        # causality excludes them and the rounding cannot leak padding into a real row.
         logical_n = math.ceil(actual_end / ttnn.TILE_SIZE) * ttnn.TILE_SIZE
         batch_index = slot_idx * _NUM_LAYERS + layer_idx
-        natural_k = self._gather_and_reorder(
-            kv_cache.k,
-            self.gathered_k,
-            batch_index=batch_index,
-            logical_n=logical_n,
-        )
-        natural_v = self._gather_and_reorder(
-            kv_cache.v,
-            self.gathered_v,
-            batch_index=batch_index,
-            logical_n=logical_n,
-        )
-        mask, query_valid = self._chunk_mask(
-            actual_start=actual_start,
-            actual_end=actual_end,
-            logical_n=logical_n,
-        )
+        query_valid = self._chunk_query_valid(actual_start=actual_start, actual_end=actual_end)
         self._require_sdpa_l1()
-        output = ttnn.transformer.scaled_dot_product_attention(
+        output, joint_output, statistics = ttnn.transformer.ring_joint_scaled_dot_product_attention(
             q,
-            natural_k,
-            natural_v,
-            attn_mask=mask,
-            is_causal=False,
+            kv_cache.k,
+            kv_cache.v,
+            None,
+            None,
+            None,
+            persistent_output_buffer_k=self.ring_k,
+            persistent_output_buffer_v=self.ring_v,
+            joint_strategy="rear",
+            logical_n=logical_n,
+            program_config=self.ring_program_config,
+            compute_kernel_config=self.ring_compute_kernel_config,
+            dim=2,
+            multi_device_global_semaphore=self.ring_semaphores,
+            num_links=1,
+            cluster_axis=_SP_AXIS,
+            mesh_device=self.mesh_device,
+            topology=ttnn.Topology.Ring,
+            ccl_core_grid_offset=self.ring_ccl_offset,
+            use_column_major_ccl=True,
+            is_causal=True,
             scale=_HEAD_DIM**-0.5,
-            program_config=self.program_config,
-            compute_kernel_config=self.compute_kernel_config,
+            is_balanced=False,
+            kv_cache_batch_idx=batch_index,
+            kv_actual_isl=actual_start,
         )
+        # Llama attends one prefix, so there is no joint sequence, and the merged log-sum-exp is not
+        # needed once the op has folded it into the output.
+        for auxiliary in (joint_output, statistics):
+            if isinstance(auxiliary, ttnn.Tensor) and auxiliary is not output:
+                auxiliary.deallocate(True)
         masked_output = ttnn.multiply(output, query_valid)
         output.deallocate(True)
-        # mask/query_valid stay alive: they belong to the chunk, not to this call.
-        for tensor in (natural_k, natural_v):
-            tensor.deallocate(True)
+        # query_valid stays alive: it belongs to the chunk, not to this call.
         return masked_output
 
 
