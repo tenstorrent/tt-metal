@@ -2235,6 +2235,34 @@ def _hf_resolve_repo(repo_id, cache_dir_name):
         return None
 
 
+def _target_weights_dir():
+    """Local directory holding the TARGET model's safetensors.
+
+    The drafter's embedding loader reads the target's embed_tokens straight out
+    of the checkpoint, so it needs a real directory. ``MODEL_WEIGHTS_DIR`` is
+    what tt-inference-server exports, but tt-metal's own vLLM CI does not set
+    it: there ``HF_MODEL`` is a REPO ID and vLLM resolves the snapshot itself.
+    Relying on the env var alone built the path "None/model.safetensors.index.json"
+    and took the engine down during warmup after the drafter had downloaded
+    fine. Fall back through the same places the rest of gemma4 looks, ending at
+    the hub cache lookup the drafter itself uses.
+    """
+    cand = os.environ.get("MODEL_WEIGHTS_DIR")
+    if cand and os.path.isdir(cand):
+        return cand
+    for env in ("HF_MODEL", "GEMMA4_MODEL_PATH"):
+        cand = os.environ.get(env)
+        if cand and os.path.isdir(cand):
+            return cand
+        # A repo id ("google/gemma-4-31B-it") resolves through the hub cache,
+        # which is exactly how the leg already found the drafter.
+        if cand and "/" in cand and not os.path.isabs(cand):
+            hit = _hf_snapshot_glob("models--" + cand.strip("/").replace("/", "--"))
+            if hit:
+                return hit
+    return None
+
+
 def _dflash_default_snapshot():
     """Locate the z-lab drafter snapshot, cached or fetched (target parity)."""
     return _hf_resolve_repo("z-lab/gemma-4-31B-it-DFlash", "models--z-lab--gemma-4-31B-it-DFlash")
@@ -2593,7 +2621,14 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
         if not snap:
             raise RuntimeError("dFlash drafter snapshot not found; set GEMMA4_DFLASH_DRAFTER")
         model0 = self.model[0]
-        weights_dir = os.environ.get("MODEL_WEIGHTS_DIR")
+        weights_dir = _target_weights_dir()
+        if not weights_dir:
+            raise RuntimeError(
+                "dFlash drafter needs the TARGET model's weights directory to load "
+                "its embedding table, and none could be resolved. Set "
+                "MODEL_WEIGHTS_DIR (or point HF_MODEL/GEMMA4_MODEL_PATH at a local "
+                "checkpoint, or seed the hub cache for it)."
+            )
 
         def _embed_loader():
             import json as _json

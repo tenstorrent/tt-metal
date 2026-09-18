@@ -181,3 +181,50 @@ def test_a_failed_fetch_is_reported_as_a_miss_not_an_exception(monkeypatch, tmp_
 
     monkeypatch.setattr("huggingface_hub.snapshot_download", boom)
     assert gv._dflash_default_snapshot() is None
+
+
+# ── Target weights directory for the drafter's embedding loader ──────────────
+
+
+def test_model_weights_dir_is_used_when_it_exists(monkeypatch, tmp_path):
+    """tt-inference-server exports MODEL_WEIGHTS_DIR; prefer it."""
+    d = tmp_path / "weights"
+    d.mkdir()
+    monkeypatch.setenv("MODEL_WEIGHTS_DIR", str(d))
+    monkeypatch.delenv("HF_MODEL", raising=False)
+    assert gv._target_weights_dir() == str(d)
+
+
+def test_a_repo_id_in_hf_model_resolves_through_the_hub_cache(monkeypatch, tmp_path):
+    """tt-metal's vLLM CI sets HF_MODEL to a REPO ID and never sets
+    MODEL_WEIGHTS_DIR, so the only way to the checkpoint is the hub cache.
+    Relying on the env var alone built 'None/model.safetensors.index.json' and
+    killed the engine during warmup after the drafter had downloaded fine."""
+    root = tmp_path / "hub"
+    snap = root / "models--google--gemma-4-31B-it" / "snapshots" / "abc"
+    snap.mkdir(parents=True)
+    monkeypatch.setattr(gv, "_hf_hub_cache_dirs", lambda: [str(root)])
+    monkeypatch.delenv("MODEL_WEIGHTS_DIR", raising=False)
+    monkeypatch.delenv("GEMMA4_MODEL_PATH", raising=False)
+    monkeypatch.setenv("HF_MODEL", "google/gemma-4-31B-it")
+    got = gv._target_weights_dir()
+    assert got is not None, "a repo id must resolve through the hub cache"
+    assert got.rstrip("/") == str(snap)
+
+
+def test_a_local_hf_model_directory_is_used_directly(monkeypatch, tmp_path):
+    d = tmp_path / "local-ckpt"
+    d.mkdir()
+    monkeypatch.delenv("MODEL_WEIGHTS_DIR", raising=False)
+    monkeypatch.setenv("HF_MODEL", str(d))
+    assert gv._target_weights_dir() == str(d)
+
+
+def test_nothing_resolvable_reports_absence(monkeypatch, tmp_path):
+    """None must be returned so the caller can raise something readable,
+    rather than formatting it into a path."""
+    monkeypatch.setattr(gv, "_hf_hub_cache_dirs", lambda: [str(tmp_path / "empty")])
+    monkeypatch.delenv("MODEL_WEIGHTS_DIR", raising=False)
+    monkeypatch.delenv("GEMMA4_MODEL_PATH", raising=False)
+    monkeypatch.setenv("HF_MODEL", "google/gemma-4-31B-it")
+    assert gv._target_weights_dir() is None
