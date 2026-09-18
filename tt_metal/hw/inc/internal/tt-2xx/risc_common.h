@@ -12,6 +12,7 @@
 #include "eth_l1_address_map.h"
 #include "limits.h"
 #include "internal/mod_div_lib.h"
+#include "internal/tt-2xx/quasar/cache.h"
 #include "noc_overlay_parameters.h"
 #include "noc_parameters.h"
 #include "stream_io_map.h"
@@ -236,15 +237,6 @@ inline __attribute__((always_inline)) void invalidate_l1_icache() { __asm__ __vo
 // L2 is controlled via memory-mapped registers in the cache controller.
 // See overlay_addresses.h for register definitions and geometry.
 
-// Flush a single 64B cache line from L2 to TL1 (node memory).
-// Probes L1 D$ for dirty data before flushing - no need to flush L1 first.
-inline __attribute__((always_inline)) void flush_l2_cache_line(uintptr_t addr) {
-    __asm__ __volatile__("fence" ::: "memory");
-    volatile uint64_t* flush_reg = (volatile uint64_t*)L2_FLUSH_ADDR;
-    *flush_reg = (uint64_t)addr;
-    __asm__ __volatile__("fence" ::: "memory");
-}
-
 // Invalidate a single 64B cache line from L2 without writeback.
 // Discards dirty data - use only when data is known to be stale.
 inline __attribute__((always_inline)) void invalidate_l2_cache_line(uintptr_t addr) {
@@ -252,17 +244,6 @@ inline __attribute__((always_inline)) void invalidate_l2_cache_line(uintptr_t ad
     volatile uint64_t* inv_reg = (volatile uint64_t*)L2_INVALIDATE_ADDR;
     *inv_reg = (uint64_t)addr;
     __asm__ __volatile__("fence" ::: "memory");
-}
-
-// Flush a range of addresses from L2 to TL1.
-// Flushes all cache lines covering [start_addr, start_addr + size).
-inline __attribute__((always_inline)) void flush_l2_cache_range(uintptr_t start_addr, size_t size) {
-    uintptr_t aligned_start = start_addr & ~(uintptr_t)63;  // align to 64B
-    uintptr_t end_addr = start_addr + size;
-
-    for (uintptr_t addr = aligned_start; addr < end_addr; addr += 64) {
-        flush_l2_cache_line(addr);
-    }
 }
 
 // Invalidate a range of addresses from L2 to TL1.
@@ -335,8 +316,6 @@ inline __attribute__((always_inline)) void invalidate_l1_cache() {
 }
 #endif  // ARCH_QUASAR && !COMPILE_FOR_DM
 
-// Included here (rather than at the top of the file) so that assert_and_hang()
-// sees flush_l2_cache_line() in scope on ARCH_QUASAR + COMPILE_FOR_DM builds.
 #include "api/debug/assert.h"
 
 template <bool enable = true>

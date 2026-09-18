@@ -149,7 +149,7 @@ class TtPrefillBlock(LightweightModule):
             cache_path: Cache directory
             mesh_device: Mesh device reference
             config: Model config
-            model_cfg: Variant static-constants class (DeepSeekV3Config | KimiK26Config)
+            model_cfg: Variant static-constants class (DeepSeekV3Config | KimiK27Config)
             ... other args for sub-components
         """
         is_moe = layer_idx >= model_cfg.NUM_DENSE_LAYERS
@@ -267,7 +267,6 @@ class TtPrefillBlock(LightweightModule):
         sparse_kv_cache_format: MlaKvCacheFormat = MlaKvCacheFormat.BF16_RM,
         overlap_shared_expert_with_dispatch: bool = True,
         first_layer_idx: Optional[int] = None,
-        tp_shard_kv: bool = False,
         llama4_scale_cache: Optional[dict] = None,
     ):
         super().__init__()
@@ -349,7 +348,6 @@ class TtPrefillBlock(LightweightModule):
             kv_only=kv_only,
             sparse_kv_cache_format=sparse_kv_cache_format,
             first_layer_idx=first_layer_idx,
-            tp_shard_kv=tp_shard_kv,
             llama4_scale_cache=llama4_scale_cache,
         )
 
@@ -415,6 +413,7 @@ class TtPrefillBlock(LightweightModule):
                 activation=getattr(model_cfg, "DENSE_FFN_ACTIVATION", ACTIVATION_SILU),
                 situ_beta=getattr(model_cfg, "ACTIVATION_SITU_BETA", None),
                 situ_linear_beta=getattr(model_cfg, "ACTIVATION_SITU_LINEAR_BETA", None),
+                clamped_silu_glu_limit=getattr(model_cfg, "SWIGLU_LIMIT", None),
                 **_dense_ffn_kwargs,
             )
 
@@ -500,6 +499,9 @@ class TtPrefillBlock(LightweightModule):
             shared_expert_activation=getattr(model_cfg, "SHARED_EXPERT_ACTIVATION", ACTIVATION_SILU),
             shared_expert_situ_beta=getattr(model_cfg, "ACTIVATION_SITU_BETA", None),
             shared_expert_situ_linear_beta=getattr(model_cfg, "ACTIVATION_SITU_LINEAR_BETA", None),
+            shared_expert_clamped_silu_glu_limit=getattr(model_cfg, "SWIGLU_LIMIT", None),
+            # Only DeepSeek-V4 names one; None keeps the gate config's sigmoid default.
+            gate_score_func=getattr(model_cfg, "SCORE_FUNC", None),
             gate_weights=state_dict.get("gate_weights"),  # None if cache exists
             gate_fallback_mode=gate_fallback_mode,
             n_expert_groups=model_cfg.NUM_EXPERT_GROUPS,
@@ -530,10 +532,13 @@ class TtPrefillBlock(LightweightModule):
             mla.set_trace_controller(controller)
 
     def release_sub_device_managers(self):
-        """Remove this block's MoE overlap sub-device manager before mesh close (no-op otherwise)."""
+        """Remove this block's registered overlap managers before mesh close (no-op otherwise)."""
         ffn = getattr(self, "ffn", None)
         if ffn is not None and hasattr(ffn, "release_sub_device_manager"):
             ffn.release_sub_device_manager()
+        mla = getattr(self, "mla", None)
+        if mla is not None and hasattr(mla, "release_sparse_mla_overlap_manager"):
+            mla.release_sparse_mla_overlap_manager()
 
     def forward(
         self,
