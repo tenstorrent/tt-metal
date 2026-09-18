@@ -73,13 +73,15 @@ jobs:
       tracy: ${{ inputs.tracy }}
       build-wheel: true
       ref: ${{ inputs.commit || github.sha }}
-      # BRANCH-LOCAL: pinned so FIBO perf dispatches from this ref never compile. Run 28798057464
-      # is a scheduled main build of this branch's merge-base (2eb991a4100117464d67d5331bd6968470bf9daa);
+      # BRANCH-LOCAL: pinned so FIBO perf dispatches from this ref never compile. Run 34235649465
+      # is the scheduled main "(Galaxy) Sanity" build of 27f21ddc2c2869ea10b2085f2e74c1177f5d1dad,
+      # the commit merged in above. The new implementation on friedrich/fibo pins the same run, so
+      # both perf runs measure the same ttnn and the difference between them is the model code.
       # FIBO is Python-only under models/, taken from the checkout, so its own build is pure latency.
       # Hardcoded rather than exposed as a dispatch input on purpose: main's copy of this workflow
-      # has no such input, and inputs may be validated against the default branch. Expires 2026-10-04.
-      # Revert with the rest of this file once fibo-perf.yaml lands on main.
-      use-artifacts-from-run: "28798057464"
+      # has no such input, and inputs may be validated against the default branch.
+      # Artifacts expire 2026-12-07. Revert with the rest of this file once fibo-perf.yaml lands on main.
+      use-artifacts-from-run: "34235649465"
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       build-type: ${{ inputs.build-type || 'Release' }}
       enable-lto: ${{ inputs.enable-lto || false }}
