@@ -227,6 +227,8 @@
         "first_level_ack_vc0",
         "downstream_edm_mask_vc0",
         "downstream_edm_mask_vc1",
+        "downstream_edges_vc0",
+        "downstream_edges_vc1",
         "has_tensix_extension",
         "udm_mode"
       ],
@@ -263,8 +265,23 @@
         "first_level_ack_vc0": { "type": "boolean" },
         "downstream_edm_mask_vc0": { "type": "integer", "minimum": 0 },
         "downstream_edm_mask_vc1": { "type": "integer", "minimum": 0 },
+        "downstream_edges_vc0": { "$ref": "#/$defs/downstream_edges" },
+        "downstream_edges_vc1": { "$ref": "#/$defs/downstream_edges" },
         "has_tensix_extension": { "type": "boolean" },
         "udm_mode": { "type": "boolean" }
+      }
+    },
+    "downstream_edges": {
+      "description": "Downstream edges of a VC's receiver buffer: each entry names the on-chip sibling router the receiver channel forwards to (direction) and the sender channel on that sibling the traffic lands in. Recorded by the C++ connection adapter; consumers display it without re-deriving the slot order.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["edge", "direction", "sender_channel"],
+        "properties": {
+          "edge": { "type": "integer", "minimum": 1 },
+          "direction": { "type": "string" },
+          "sender_channel": { "type": "integer", "minimum": 0 }
+        }
       }
     },
     "layout": {

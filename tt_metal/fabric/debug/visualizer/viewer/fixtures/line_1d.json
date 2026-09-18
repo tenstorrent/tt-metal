@@ -6,14 +6,14 @@
     {
       "manifest": {
         "path": "fixtures/source/manifest.json",
-        "sha256": "e64abf1e33b7699514d132929a108c0a8e07a5a272b163eb41e410d36d84f622",
+        "sha256": "4d0d3ae056e1905a69eea8119204d9391ed8c365cf676e01beb99183a486706f",
         "mpi_rank": 0,
         "host_rank": 0,
         "sha_verified": true
       },
       "snapshot": {
         "path": "fixtures/source/snapshot.json",
-        "sha256": "00b756d055033eab73f4f48ca265de149eb2039de306d3698e57c2613f87114b",
+        "sha256": "81cc2c69c1d7d2275fb4e55be257aa844567693018be557be82b7f29df7b09f7",
         "captured_at": "2026-09-15T00:00:00Z",
         "provenance": {
           "ttexalens_version": "test",
@@ -32,6 +32,13 @@
         "present": true,
         "verified": true
       }
+    }
+  ],
+  "raw_files": [
+    {
+      "file": "snapshot.bin",
+      "size": 3888,
+      "sha256": "82c246949f12154cb75274624af7dae57a8bc00c85f9b50b91136968546caabd"
     }
   ],
   "run": {
@@ -245,6 +252,14 @@
         "sender_producers": [
           "worker"
         ],
+        "downstream_edges_vc0": [
+          {
+            "edge": 1,
+            "direction": "W",
+            "sender_channel": 1
+          }
+        ],
+        "downstream_edges_vc1": [],
         "credit_plan": {
           "vc0_uses_counters": false,
           "vc1_uses_counters": false,
@@ -745,6 +760,7 @@
                 "offset": 256,
                 "size": 96
               },
+              "payload_ref": null,
               "header": {
                 "type": "HybridMeshPacketHeaderT<36>",
                 "payload_size_bytes": 64,
@@ -762,18 +778,22 @@
                   }
                 },
                 "routing": {
-                  "value": 0,
-                  "route_buffer": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20212223",
                   "destination": {
                     "mesh_id": 0,
                     "chip_id": 0
                   },
-                  "mcast_params": [
-                    1,
-                    2,
-                    3,
-                    4
-                  ]
+                  "mcast": {
+                    "E": 1,
+                    "W": 2,
+                    "N": 3,
+                    "S": 4
+                  },
+                  "path": {
+                    "hops": [
+                      "E"
+                    ],
+                    "complete": false
+                  }
                 },
                 "plausible": true
               },
@@ -787,6 +807,7 @@
                 "offset": 352,
                 "size": 96
               },
+              "payload_ref": null,
               "header": {
                 "type": "HybridMeshPacketHeaderT<36>",
                 "payload_size_bytes": 5000,
@@ -797,18 +818,20 @@
                 "src_channel": 0,
                 "command": null,
                 "routing": {
-                  "value": 0,
-                  "route_buffer": "000000000000000000000000000000000000000000000000000000000000000000000000",
                   "destination": {
                     "mesh_id": 99,
                     "chip_id": 99
                   },
-                  "mcast_params": [
-                    0,
-                    0,
-                    0,
-                    0
-                  ]
+                  "mcast": {
+                    "E": 0,
+                    "W": 0,
+                    "N": 0,
+                    "S": 0
+                  },
+                  "path": {
+                    "hops": [],
+                    "complete": false
+                  }
                 },
                 "plausible": false
               },
@@ -852,6 +875,8 @@
           {
             "vc": 0,
             "edge": 1,
+            "direction": "W",
+            "dest_sender_channel": 1,
             "free_slots": 4,
             "depth": null,
             "torn": false,
@@ -891,6 +916,14 @@
         "sender_producers": [
           "worker"
         ],
+        "downstream_edges_vc0": [
+          {
+            "edge": 1,
+            "direction": "W",
+            "sender_channel": 1
+          }
+        ],
+        "downstream_edges_vc1": [],
         "credit_plan": {
           "vc0_uses_counters": false,
           "vc1_uses_counters": false,
@@ -1391,6 +1424,7 @@
                 "offset": 256,
                 "size": 96
               },
+              "payload_ref": null,
               "header": {
                 "type": "HybridMeshPacketHeaderT<36>",
                 "payload_size_bytes": 64,
@@ -1408,18 +1442,22 @@
                   }
                 },
                 "routing": {
-                  "value": 0,
-                  "route_buffer": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20212223",
                   "destination": {
                     "mesh_id": 0,
                     "chip_id": 0
                   },
-                  "mcast_params": [
-                    1,
-                    2,
-                    3,
-                    4
-                  ]
+                  "mcast": {
+                    "E": 1,
+                    "W": 2,
+                    "N": 3,
+                    "S": 4
+                  },
+                  "path": {
+                    "hops": [
+                      "E"
+                    ],
+                    "complete": false
+                  }
                 },
                 "plausible": true
               },
@@ -1433,6 +1471,7 @@
                 "offset": 352,
                 "size": 96
               },
+              "payload_ref": null,
               "header": {
                 "type": "HybridMeshPacketHeaderT<36>",
                 "payload_size_bytes": 5000,
@@ -1443,18 +1482,20 @@
                 "src_channel": 0,
                 "command": null,
                 "routing": {
-                  "value": 0,
-                  "route_buffer": "000000000000000000000000000000000000000000000000000000000000000000000000",
                   "destination": {
                     "mesh_id": 99,
                     "chip_id": 99
                   },
-                  "mcast_params": [
-                    0,
-                    0,
-                    0,
-                    0
-                  ]
+                  "mcast": {
+                    "E": 0,
+                    "W": 0,
+                    "N": 0,
+                    "S": 0
+                  },
+                  "path": {
+                    "hops": [],
+                    "complete": false
+                  }
                 },
                 "plausible": false
               },
@@ -1498,6 +1539,8 @@
           {
             "vc": 0,
             "edge": 1,
+            "direction": "W",
+            "dest_sender_channel": 1,
             "free_slots": 4,
             "depth": null,
             "torn": false,
@@ -1537,6 +1580,14 @@
         "sender_producers": [
           "worker"
         ],
+        "downstream_edges_vc0": [
+          {
+            "edge": 1,
+            "direction": "W",
+            "sender_channel": 1
+          }
+        ],
+        "downstream_edges_vc1": [],
         "credit_plan": {
           "vc0_uses_counters": false,
           "vc1_uses_counters": false,
@@ -2037,6 +2088,7 @@
                 "offset": 256,
                 "size": 96
               },
+              "payload_ref": null,
               "header": {
                 "type": "HybridMeshPacketHeaderT<36>",
                 "payload_size_bytes": 64,
@@ -2054,18 +2106,22 @@
                   }
                 },
                 "routing": {
-                  "value": 0,
-                  "route_buffer": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20212223",
                   "destination": {
                     "mesh_id": 0,
                     "chip_id": 0
                   },
-                  "mcast_params": [
-                    1,
-                    2,
-                    3,
-                    4
-                  ]
+                  "mcast": {
+                    "E": 1,
+                    "W": 2,
+                    "N": 3,
+                    "S": 4
+                  },
+                  "path": {
+                    "hops": [
+                      "E"
+                    ],
+                    "complete": false
+                  }
                 },
                 "plausible": true
               },
@@ -2079,6 +2135,7 @@
                 "offset": 352,
                 "size": 96
               },
+              "payload_ref": null,
               "header": {
                 "type": "HybridMeshPacketHeaderT<36>",
                 "payload_size_bytes": 5000,
@@ -2089,18 +2146,20 @@
                 "src_channel": 0,
                 "command": null,
                 "routing": {
-                  "value": 0,
-                  "route_buffer": "000000000000000000000000000000000000000000000000000000000000000000000000",
                   "destination": {
                     "mesh_id": 99,
                     "chip_id": 99
                   },
-                  "mcast_params": [
-                    0,
-                    0,
-                    0,
-                    0
-                  ]
+                  "mcast": {
+                    "E": 0,
+                    "W": 0,
+                    "N": 0,
+                    "S": 0
+                  },
+                  "path": {
+                    "hops": [],
+                    "complete": false
+                  }
                 },
                 "plausible": false
               },
@@ -2144,6 +2203,8 @@
           {
             "vc": 0,
             "edge": 1,
+            "direction": "W",
+            "dest_sender_channel": 1,
             "free_slots": 4,
             "depth": null,
             "torn": false,
@@ -2183,6 +2244,14 @@
         "sender_producers": [
           "worker"
         ],
+        "downstream_edges_vc0": [
+          {
+            "edge": 1,
+            "direction": "W",
+            "sender_channel": 1
+          }
+        ],
+        "downstream_edges_vc1": [],
         "credit_plan": {
           "vc0_uses_counters": false,
           "vc1_uses_counters": false,
@@ -2683,6 +2752,7 @@
                 "offset": 256,
                 "size": 96
               },
+              "payload_ref": null,
               "header": {
                 "type": "HybridMeshPacketHeaderT<36>",
                 "payload_size_bytes": 64,
@@ -2700,18 +2770,22 @@
                   }
                 },
                 "routing": {
-                  "value": 0,
-                  "route_buffer": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20212223",
                   "destination": {
                     "mesh_id": 0,
                     "chip_id": 0
                   },
-                  "mcast_params": [
-                    1,
-                    2,
-                    3,
-                    4
-                  ]
+                  "mcast": {
+                    "E": 1,
+                    "W": 2,
+                    "N": 3,
+                    "S": 4
+                  },
+                  "path": {
+                    "hops": [
+                      "E"
+                    ],
+                    "complete": false
+                  }
                 },
                 "plausible": true
               },
@@ -2725,6 +2799,7 @@
                 "offset": 352,
                 "size": 96
               },
+              "payload_ref": null,
               "header": {
                 "type": "HybridMeshPacketHeaderT<36>",
                 "payload_size_bytes": 5000,
@@ -2735,18 +2810,20 @@
                 "src_channel": 0,
                 "command": null,
                 "routing": {
-                  "value": 0,
-                  "route_buffer": "000000000000000000000000000000000000000000000000000000000000000000000000",
                   "destination": {
                     "mesh_id": 99,
                     "chip_id": 99
                   },
-                  "mcast_params": [
-                    0,
-                    0,
-                    0,
-                    0
-                  ]
+                  "mcast": {
+                    "E": 0,
+                    "W": 0,
+                    "N": 0,
+                    "S": 0
+                  },
+                  "path": {
+                    "hops": [],
+                    "complete": false
+                  }
                 },
                 "plausible": false
               },
@@ -2790,6 +2867,8 @@
           {
             "vc": 0,
             "edge": 1,
+            "direction": "W",
+            "dest_sender_channel": 1,
             "free_slots": 4,
             "depth": null,
             "torn": false,

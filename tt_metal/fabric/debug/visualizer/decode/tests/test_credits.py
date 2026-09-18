@@ -38,6 +38,8 @@ def synthetic_router(regions, *, rings=None, instance=None, status="ok"):
             "worker_sender_channel": 0,
             "sender_channels_per_vc": [1, 1, 0, 0],
             "sender_producers": ["worker", "E"],
+            "downstream_edges_vc0": [{"edge": 1, "direction": "W", "sender_channel": 1}],
+            "downstream_edges_vc1": [],
             "receiver_channels_per_vc": [1, 0],
             "credit_plan": {
                 "vc0_uses_counters": False,
@@ -174,6 +176,31 @@ class CreditsTest(unittest.TestCase):
             [(sender["index"], sender["producer"]) for sender in senders],
             [(0, "worker"), (1, "N")],
         )
+
+    def test_downstream_edge_manifest_info_passes_through(self):
+        router = synthetic_router(IDLE_REGIONS)
+        downstream = decode_channels(router)["downstream"]
+        self.assertEqual(len(downstream), 1)
+        self.assertEqual(downstream[0]["direction"], "W")
+        self.assertEqual(downstream[0]["dest_sender_channel"], 1)
+
+    def test_downstream_edge_without_manifest_entry_stamps_null(self):
+        instance = {
+            "worker_sender_channel": 0,
+            "sender_channels_per_vc": [1, 0, 0, 0],
+            "sender_producers": ["worker"],
+            "receiver_channels_per_vc": [1, 0],
+            "credit_plan": {
+                "vc0_uses_counters": False,
+                "vc1_uses_counters": False,
+                "vc2_uses_counters": False,
+            },
+        }
+        regions = [region("credits.downstream.vc0.edge1.free_slots", value=stream(4))]
+        router = synthetic_router(regions, instance=instance)
+        downstream = decode_channels(router)["downstream"]
+        self.assertIsNone(downstream[0]["direction"])
+        self.assertIsNone(downstream[0]["dest_sender_channel"])
 
     def test_links_copy_router_status(self):
         decoded = {

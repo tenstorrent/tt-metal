@@ -61,6 +61,15 @@ std::string eth_direction_name(eth_chan_directions direction) {
     }
 }
 
+std::vector<FabricRouterDebugInstance::DownstreamEdgeInfo> downstream_edge_infos(
+    const FabricEriscDatamoverBuilder& builder, uint32_t vc) {
+    std::vector<FabricRouterDebugInstance::DownstreamEdgeInfo> edges;
+    for (const auto& entry : builder.get_downstream_edge_manifest_info(vc)) {
+        edges.push_back({entry.edge, eth_direction_name(entry.direction), entry.sender_channel});
+    }
+    return edges;
+}
+
 // Per flat sender channel, the producer intent ("worker" for the local-worker slot, a direction
 // name for producer slots, nullopt where unmapped), resolved from the canonical slot rule so
 // manifest consumers never re-derive it. Iterates vc/channel in flat order.
@@ -256,6 +265,10 @@ FabricRouterDebugInstance build_router_debug_instance(
         .downstream_edm_mask_vc0 = builder.get_downstream_edm_mask_for_vc(0),
         .downstream_edm_mask_vc1 =
             config.num_used_receiver_channels_per_vc[1] > 0 ? builder.get_downstream_edm_mask_for_vc(1) : 0,
+        .downstream_edges_vc0 = downstream_edge_infos(builder, 0),
+        .downstream_edges_vc1 = config.num_used_receiver_channels_per_vc[1] > 0
+            ? downstream_edge_infos(builder, 1)
+            : std::vector<FabricRouterDebugInstance::DownstreamEdgeInfo>{},
         .has_tensix_extension = builder.has_tensix_extension_enabled(),
         .udm_mode = builder.is_udm_mode(),
     };

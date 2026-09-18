@@ -53,6 +53,36 @@ class DecodedSchemaTest(unittest.TestCase):
             self.validator.validate(decoded)
             self.assertIsNone(decoded["inputs"][1]["snapshot"])
 
+    def test_raw_files_union_two_ranks(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            write_input(root / "r0", rank=0, local_chip=0, all_chip_ids=(0, 1))
+            write_input(root / "r1", rank=1, local_chip=1, all_chip_ids=(0, 1))
+            decoded = build_decoded(discover_inputs([root / "r0", root / "r1"]))
+
+            self.validator.validate(decoded)
+            table = decoded["raw_files"]
+            self.assertEqual(len(table), 2)
+            for item, entry in zip(decoded["inputs"], table):
+                raw = item["raw"]
+                self.assertEqual(entry["file"], raw["file"])
+                self.assertEqual(entry["size"], raw["size"])
+                self.assertEqual(entry["sha256"], raw["sha256"])
+
+    def test_raw_files_skips_rank_without_snapshot(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            write_input(root / "r0", rank=0, local_chip=0, all_chip_ids=(0, 1))
+            _, snapshot, raw = write_input(
+                root / "r1", rank=1, local_chip=1, all_chip_ids=(0, 1)
+            )
+            snapshot.unlink()
+            raw.unlink()
+            decoded = build_decoded(discover_inputs([root / "r0", root / "r1"]))
+
+            self.validator.validate(decoded)
+            self.assertEqual(len(decoded["raw_files"]), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

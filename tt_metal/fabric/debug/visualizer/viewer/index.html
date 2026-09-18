@@ -14,6 +14,10 @@
     </div>
     <div class="header-actions">
       <label class="file-button">
+        Open folder
+        <input id="folder-input" type="file" webkitdirectory>
+      </label>
+      <label class="file-button">
         Open decoded JSON
         <input id="file-input" type="file" accept=".json,application/json">
       </label>
@@ -34,8 +38,8 @@
     <section id="drop-zone" class="drop-zone" aria-labelledby="empty-title">
       <div id="empty-state" class="empty-state">
         <span class="file-glyph" aria-hidden="true">{ }</span>
-        <h2 id="empty-title">Open a decoded fabric snapshot</h2>
-        <p>Choose or drop a <code>fabric_debug_decoded</code> JSON file. Served pages can also pick a committed fixture.</p>
+        <h2 id="empty-title">Open a decode output folder</h2>
+        <p>Choose or drop a folder with one decoded <code>.json</code> file plus its <code>.bin</code> sidecar — any file names. A lone JSON still opens, but raw header/payload bytes need the folder.</p>
         <p class="muted">The viewer is offline and never connects to a device.</p>
       </div>
 

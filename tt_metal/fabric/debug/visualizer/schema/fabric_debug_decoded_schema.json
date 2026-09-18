@@ -9,6 +9,7 @@
     "kind",
     "generated_at",
     "inputs",
+    "raw_files",
     "run",
     "fabric_context",
     "enums",
@@ -24,6 +25,11 @@
       "type": "array",
       "minItems": 1,
       "items": { "$ref": "#/$defs/input" }
+    },
+    "raw_files": {
+      "description": "Union of every input snapshot's expected raw sidecar bytes. The viewer verifies lazily-loaded bytes against this table so a bad multi-rank gather fails loud instead of serving the wrong rank's bytes.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/raw_file" }
     },
     "run": { "$ref": "#/$defs/run" },
     "fabric_context": {
@@ -99,6 +105,16 @@
       "additionalProperties": false
     },
     "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "raw_file": {
+      "type": "object",
+      "required": ["file", "size", "sha256"],
+      "properties": {
+        "file": { "type": "string" },
+        "size": { "type": "integer", "minimum": 0 },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      },
+      "additionalProperties": false
+    },
     "run": {
       "type": "object",
       "required": ["arch", "fabric_config", "topology", "is_2d_routing", "udm_mode", "world_size"],
@@ -416,12 +432,23 @@
           "type": "array",
           "items": {
             "type": "object",
-            "required": ["index", "slot_state", "raw_ref", "header", "error"],
+            "required": ["index", "slot_state", "raw_ref", "payload_ref", "header", "error"],
             "properties": {
               "index": { "type": "integer", "minimum": 0 },
               "slot_state": { "const": "unknown" },
               "raw_ref": {
                 "type": "object",
+                "required": ["file", "offset", "size"],
+                "properties": {
+                  "file": { "type": "string" },
+                  "offset": { "type": "integer", "minimum": 0 },
+                  "size": { "type": "integer", "minimum": 0 }
+                },
+                "additionalProperties": false
+              },
+              "payload_ref": {
+                "description": "Byte range of this slot's packet payload within the captured ring blob, resolved lazily by the viewer from the .bin sidecar (null when stride leaves no payload).",
+                "type": ["object", "null"],
                 "required": ["file", "offset", "size"],
                 "properties": {
                   "file": { "type": "string" },
@@ -518,10 +545,19 @@
     },
     "downstream_channel": {
       "type": "object",
-      "required": ["vc", "edge", "free_slots", "depth", "torn", "status"],
+      "required": ["vc", "edge", "direction", "dest_sender_channel", "free_slots", "depth", "torn", "status"],
       "properties": {
         "vc": { "type": "integer", "minimum": 0 },
         "edge": { "type": "integer", "minimum": 0 },
+        "direction": {
+          "description": "Sibling direction the receiver buffer forwards to through this edge, recorded by the C++ connection adapter (null when the manifest predates the field).",
+          "type": ["string", "null"]
+        },
+        "dest_sender_channel": {
+          "description": "Sender channel on the sibling router that this edge's traffic lands in (null when the manifest predates the field).",
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
         "free_slots": { "type": ["integer", "null"] },
         "depth": { "type": ["integer", "null"], "minimum": 0 },
         "torn": { "type": "boolean" },

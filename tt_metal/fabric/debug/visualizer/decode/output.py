@@ -71,6 +71,34 @@ def _input_description(item: DecodeInput) -> dict[str, Any]:
     }
 
 
+def _raw_files(inputs: tuple[DecodeInput, ...]) -> list[dict[str, Any]]:
+    """Union of every input's expected sidecar bytes.
+
+    Entries are the snapshot-recorded ground truth (decode already
+    size/sha-verified each present sidecar at load). Duplicates are kept as
+    separate list items: two ranks may legitimately share a stem while living
+    in different directories, and collapsing them would hide a gather-time
+    basename collision from the viewer.
+    """
+
+    table: list[dict[str, Any]] = []
+    seen: set[tuple[str, int, str]] = set()
+    for item in inputs:
+        if item.snapshot is None:
+            continue
+        reference = item.snapshot["raw"]
+        entry = {
+            "file": reference["file"],
+            "size": reference["size"],
+            "sha256": reference["sha256"],
+        }
+        key = (entry["file"], entry["size"], entry["sha256"])
+        if key not in seen:
+            seen.add(key)
+            table.append(entry)
+    return table
+
+
 def build_decoded(
     inputs: tuple[DecodeInput, ...],
     *,
@@ -143,6 +171,7 @@ def build_decoded(
         "kind": "fabric_debug_decoded",
         "generated_at": generated_at or utc_timestamp(),
         "inputs": [_input_description(item) for item in inputs],
+        "raw_files": _raw_files(inputs),
         "run": {
             "arch": run["arch"],
             "fabric_config": run["fabric_config"],

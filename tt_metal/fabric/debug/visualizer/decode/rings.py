@@ -61,7 +61,19 @@ def decode_rings(
             ring.update(status="not_captured", error="raw sidecar is unavailable")
             result.append(ring)
             continue
+        hal_value = next(
+            (
+                region_row.get("value") or {}
+                for region_row in router.get("regions", [])
+                if region_row.get("id") == "hal.routing_table"
+            ),
+            None,
+        )
+        mesh_shape = (hal_value or {}).get("mesh_shape")
+        mesh_coord = (hal_value or {}).get("my_mesh_coord")
+        torus = str(context.get("topology", "")).lower() == "torus"
         stride = ring["stride"]
+        payload_size = stride - expected_size
         for index in range(ring["depth"]):
             offset = index * stride
             header_bytes = payload[offset : offset + expected_size]
@@ -73,6 +85,18 @@ def decode_rings(
                     "offset": region["raw_ref"]["offset"] + offset,
                     "size": expected_size,
                 },
+                # Byte range of this slot's packet payload (after the header)
+                # within the same captured ring blob. Resolved lazily by the
+                # viewer from the `.bin` sidecar, never embedded in JSON.
+                "payload_ref": (
+                    {
+                        "file": region["raw_ref"]["file"],
+                        "offset": region["raw_ref"]["offset"] + offset + expected_size,
+                        "size": payload_size,
+                    }
+                    if payload_size > 0
+                    else None
+                ),
                 "header": None,
                 "error": None,
             }
@@ -82,6 +106,9 @@ def decode_rings(
                     run=run,
                     context=context,
                     mesh_ids=mesh_ids,
+                    mesh_shape=mesh_shape,
+                    mesh_coord=mesh_coord,
+                    torus=torus,
                 )
             except ValueError as error:
                 slot["error"] = str(error)

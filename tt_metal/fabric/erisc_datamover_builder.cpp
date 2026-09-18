@@ -1539,6 +1539,28 @@ uint32_t FabricEriscDatamoverBuilder::get_downstream_edm_mask_for_vc(uint32_t vc
     return receiver_channel_to_downstream_adapter->get_downstream_edm_mask_for_vc(vc);
 }
 
+std::vector<FabricEriscDatamoverBuilder::DownstreamEdgeManifestInfo>
+FabricEriscDatamoverBuilder::get_downstream_edge_manifest_info(uint32_t vc) const {
+    TT_FATAL(receiver_channel_to_downstream_adapter != nullptr, "Downstream adapter is not initialized");
+    auto* static_adapter =
+        dynamic_cast<tt::tt_fabric::StaticSizedChannelConnectionWriterAdapter*>(receiver_channel_to_downstream_adapter.get());
+    TT_FATAL(static_adapter != nullptr, "Downstream adapter must be a StaticSizedChannelConnectionWriterAdapter.");
+    std::vector<DownstreamEdgeManifestInfo> edges;
+    const uint32_t mask = static_adapter->get_downstream_edm_mask_for_vc(vc);
+    for (size_t compact = 0; compact < 4; ++compact) {
+        if ((mask & (1U << compact)) == 0) {
+            continue;
+        }
+        const auto slot = static_adapter->get_downstream_slot_manifest_info(vc, compact);
+        edges.push_back(DownstreamEdgeManifestInfo{
+            .edge = static_cast<uint32_t>(compact) + 1,
+            .direction = slot.direction,
+            .sender_channel = slot.sender_channel,
+        });
+    }
+    return edges;
+}
+
 FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
     tt::tt_metal::IDevice* device,
     tt::tt_metal::Program& program,

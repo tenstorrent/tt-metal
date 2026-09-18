@@ -480,6 +480,14 @@ public:
     bool has_tensix_extension_enabled() const { return has_tensix_extension; }
     bool is_udm_mode() const { return udm_mode; }
 
+    // Manifest view of a receiver channel's downstream edges.
+    struct DownstreamEdgeManifestInfo {
+        uint32_t edge = 0;
+        eth_chan_directions direction = eth_chan_directions::EAST;
+        uint32_t sender_channel = 0;
+    };
+    std::vector<DownstreamEdgeManifestInfo> get_downstream_edge_manifest_info(uint32_t vc) const;
+
     //    protected:
     tt::tt_metal::CoreCoord my_eth_core_logical;
     chan_id_t my_eth_channel;

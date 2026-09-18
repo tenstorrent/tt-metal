@@ -142,23 +142,6 @@ function formatScalar(value) {
   return String(value);
 }
 
-function occupancyBar(used, depth, status) {
-  const wrap = el("div", "occ-bar");
-  if (status === "inconsistent") {
-    wrap.classList.add("inconsistent");
-    wrap.append(el("span", "occ-warn", `${used}/${depth} inconsistent`));
-    return wrap;
-  }
-  if (typeof used !== "number" || typeof depth !== "number" || depth <= 0) {
-    wrap.append(el("span", "occ-label", `${dash(used)}/${dash(depth)}`));
-    return wrap;
-  }
-  const fill = el("span", "occ-fill");
-  fill.style.width = `${Math.min(100, Math.max(0, (used / depth) * 100))}%`;
-  wrap.append(fill, el("span", "occ-label", `${used}/${depth}`));
-  return wrap;
-}
-
 function kv(label, value, title) {
   const row = el("div", "kv");
   row.append(el("span", "k", label), el("span", "v", value));
@@ -172,9 +155,16 @@ function empty(text) {
   return el("p", "empty-list", text);
 }
 
+function statusBadge(status, fallback = "unknown") {
+  const name = status || fallback;
+  if (!name || name === "ok") {
+    return null;
+  }
+  return el("span", `status ${name}`, name);
+}
+
 export function renderSummary(router) {
   const section = el("section", "router-card");
-  const identity = router.identity || {};
   const lifecycle = router.lifecycle || {};
   const liveness = router.liveness || {};
 
@@ -187,24 +177,24 @@ export function renderSummary(router) {
   section.append(heading);
 
   const badges = el("div", "value-chips");
-  const status = el("span", `status ${router.capture?.status || "unknown"}`, router.capture?.status || "unknown");
-  badges.append(status);
-  const identityBadge = el(
-    "span",
-    `status ${identity.matches === true ? "ok" : identity.matches === false ? "reset" : "unknown"}`,
-    identity.matches === true ? "identity matches" : identity.matches === false ? "identity mismatch" : "identity —",
-  );
-  badges.append(identityBadge);
+  const status = statusBadge(router.capture?.status);
+  if (status) {
+    badges.append(status);
+  }
   section.append(badges);
 
-  const meta = el("div", "kv-grid");
+  const meta = el("div", "kv-grid lifecycle-grid");
+  const sampleCount = Array.isArray(liveness.samples) ? liveness.samples.length : 0;
   meta.append(
-    kv("exit", dash(lifecycle.exit_state), enumTitle(lifecycle.edm_status)),
-    kv("EDM", enumLabel(lifecycle.edm_status), enumTitle(lifecycle.edm_status)),
-    kv("term", enumLabel(lifecycle.termination_signal), enumTitle(lifecycle.termination_signal)),
-    kv("go", enumLabel(lifecycle.go_signal), enumTitle(lifecycle.go_signal)),
+    kv("EDM status:", enumLabel(lifecycle.edm_status), enumTitle(lifecycle.edm_status)),
     kv(
-      "liveness",
+      "Termination signal:",
+      enumLabel(lifecycle.termination_signal),
+      enumTitle(lifecycle.termination_signal),
+    ),
+    kv("Host run message:", enumLabel(lifecycle.go_signal), enumTitle(lifecycle.go_signal)),
+    kv(
+      `Heartbeat (sampled ${sampleCount} times):`,
       liveness.classification
         ? `${liveness.classification} (fabric ${liveness.fabric_samples}, base_fw ${liveness.base_fw_samples})`
         : "—",
@@ -224,17 +214,6 @@ export function senderCredits(sender) {
   return `ack ${dash(sender.acked_pending)} / done ${dash(sender.completed_pending)}`;
 }
 
-const ETH_ORDER = ["E", "W", "N", "S", "Z"];
-
-export function edgeDirection(facing, edge) {
-  const facingIndex = ETH_ORDER.indexOf(facing);
-  const compact = Number(edge) - 1;
-  if (facingIndex < 0 || !Number.isInteger(compact) || compact < 0) {
-    return null;
-  }
-  return ETH_ORDER[compact < facingIndex ? compact : compact + 1] ?? null;
-}
-
 export function senderRoleLabel(sender) {
   if (sender.producer === "worker") {
     return "local worker";
@@ -245,98 +224,69 @@ export function senderRoleLabel(sender) {
   return dash(sender.role);
 }
 
-function renderSenderRow(sender) {
-  const row = el("div", `sender-row${sender.status && sender.status !== "ok" ? ` status-${sender.status}` : ""}`);
-  const id = el("span", "mono");
-  id.append(el("b", null, `ch${sender.index}`));
-  row.append(id);
-  const role = el("span", "role-chip", senderRoleLabel(sender));
-  role.title = sender.producer ? `producer intent from manifest: ${sender.producer}` : `role: ${dash(sender.role)}`;
-  row.append(role);
-  row.append(el("span", "muted mono", sender.vc === null || sender.vc === undefined ? "—" : `VC${sender.vc}`));
-  const occ = el("span", "sender-occ");
-  occ.append(occupancyBar(sender.occupied, sender.depth, sender.status));
-  row.append(occ);
-  row.append(el("span", "mono", `free ${dash(sender.free_slots)}`));
-  const credits = el("span", "mono muted", senderCredits(sender));
-  credits.title =
-    sender.credit_backing === "counter"
-      ? "backed by on-device counters"
-      : "backed by credit streams";
-  row.append(credits);
-  row.append(el("span", "muted", dash(sender.connection?.name)));
-  return row;
-}
+const DIRECTION_NAMES = { E: "East", W: "West", N: "North", S: "South", Z: "Z" };
 
-function renderReceiverChip(receiver) {
-  const chip = el(
-    "span",
-    `value-chip${receiver.status && receiver.status !== "ok" ? ` status-${receiver.status}` : ""}`,
+function siblingEgress(model, router, direction) {
+  const sameChip = (model.routers || []).filter(
+    (candidate) =>
+      candidate.id?.mesh_id === router.id?.mesh_id &&
+      candidate.id?.chip_id === router.id?.chip_id &&
+      candidate.direction === direction,
   );
-  const pending =
-    typeof receiver.pkts_pending === "number" && typeof receiver.depth === "number"
-      ? `${receiver.pkts_pending}/${receiver.depth}`
-      : `${dash(receiver.pkts_pending)}/${dash(receiver.depth)}`;
-  chip.append(el("b", null, `ch${receiver.index}`), el("span", null, `VC${dash(receiver.vc)} · pending ${pending}`));
-  chip.title = `receiver ${receiver.index}, status ${receiver.status || "unknown"}`;
-  return chip;
+  if (!sameChip.length) {
+    return null;
+  }
+  return sameChip.find((candidate) => candidate.routing_plane === router.routing_plane) ?? sameChip[0];
 }
 
-function renderEdgeChip(edge) {
-  const free = edge.free_slots;
-  const state = free === 0 ? "starved" : free === null || free === undefined ? "unknown" : "open";
-  const chip = el("span", `value-chip edge-chip edge-${state}`);
-  chip.append(el("b", null, `vc${edge.vc}:e${edge.edge}`), el("span", null, `free ${dash(free)}`));
-  if (state === "starved") {
-    chip.title = "downstream edge reports zero free slots — backpressure candidate";
-  }
-  return chip;
+function destSenderStatus(model, router, edge) {
+  const sibling = edge.direction ? siblingEgress(model, router, edge.direction) : null;
+  const slot = typeof edge.dest_sender_channel === "number" ? edge.dest_sender_channel : null;
+  const dest =
+    sibling === null || slot === null
+      ? null
+      : (sibling.channels?.senders || []).find((sender) => sender.index === slot) ?? null;
+  const name = edge.direction ? `${DIRECTION_NAMES[edge.direction] || edge.direction} Edge` : `Edge ${edge.edge}`;
+  const channel = slot === null ? "—" : String(slot);
+  const status =
+    sibling === null
+      ? "egress router not captured"
+      : dest !== null && typeof dest.occupied === "number" && typeof dest.depth === "number"
+        ? `${dest.occupied}/${dest.depth} occupied slots`
+        : "not captured";
+  return `${name} (Sender Channel ${channel}) Status: ${status}`;
 }
 
-export function renderChannels(router) {
-  const section = el("section", "channels-card");
-  const heading = el("div", "buffers-title");
-  heading.append(
-    el("div", "eyebrow", "Channels"),
-    el("h3", null, "Senders · receivers · downstream"),
-    el("p", "muted", "Occupancy from streams; credit returns as ack/done pairs."),
-  );
-  section.append(heading);
-
-  const channels = router.channels || { senders: [], receivers: [], downstream: [] };
-  section.append(el("h4", null, "Senders"));
-  if (!channels.senders?.length) {
-    section.append(empty("No enabled senders."));
-  } else {
-    const list = el("div", "sender-list");
-    for (const sender of channels.senders) {
-      list.append(renderSenderRow(sender));
-    }
-    section.append(list);
+export function renderDownstreamEdges(model, router, vc = null) {
+  const edges = [...(router.channels?.downstream || [])]
+    .filter((edge) => vc === null || edge.vc === vc)
+    .sort((left, right) => (left.vc === right.vc ? left.edge - right.edge : left.vc - right.vc));
+  if (!edges.length) {
+    return null;
   }
-
-  section.append(el("h4", null, "Receivers"));
-  if (!channels.receivers?.length) {
-    section.append(empty("No enabled receivers."));
-  } else {
-    const list = el("div", "value-chips");
-    for (const receiver of channels.receivers) {
-      list.append(renderReceiverChip(receiver));
-    }
-    section.append(list);
+  const card = el("section", "buffer-card");
+  const heading = el("div", "buffer-heading");
+  const title = el("div");
+  title.append(el("h4", null, "downstream edges (sender channels) for receiver to forward to"));
+  heading.append(title);
+  card.append(heading);
+  for (const edge of edges) {
+    card.append(el("span", "buffer-meta", destSenderStatus(model, router, edge)));
   }
+  return card;
+}
 
-  section.append(el("h4", null, "Downstream edges"));
-  if (!channels.downstream?.length) {
-    section.append(empty("No enabled downstream edges."));
-  } else {
-    const list = el("div", "value-chips");
-    for (const edge of channels.downstream) {
-      list.append(renderEdgeChip(edge));
-    }
-    section.append(list);
+function regionStatusBadges(region) {
+  const badges = [];
+  const unallocated = region.status === "unallocated";
+  if (region.enabled === false && !unallocated) {
+    badges.push(el("span", "status disabled", "disabled"));
   }
-  return section;
+  const status = statusBadge(region.status, region.backing === "group" ? "group" : "unknown");
+  if (status) {
+    badges.push(status);
+  }
+  return badges;
 }
 
 function renderRegionNode(region, children, byParent, expert) {
@@ -346,13 +296,11 @@ function renderRegionNode(region, children, byParent, expert) {
     const folder = el("details", `region-group${disabled ? " muted" : ""}`);
     folder.open = region.parent === "";
     const summary = el("summary");
+    const label = el("span", "region-label");
     const name = el("span", null, relativeId(region) || "(root)");
     name.title = region.id || "";
-    summary.append(name);
-    if (disabled) {
-      summary.append(el("span", "status disabled", "disabled"));
-    }
-    summary.append(el("span", `status ${region.status || "ok"}`, region.status || "group"));
+    label.append(name, ...regionStatusBadges(region));
+    summary.append(label);
     folder.append(summary);
     const nested = el("div", "region-children");
     for (const child of children) {
@@ -364,15 +312,11 @@ function renderRegionNode(region, children, byParent, expert) {
 
   const leaf = el("div", `region-leaf${disabled ? " muted" : ""}`);
   const line = el("div", "region-line");
+  const label = el("span", "region-label");
   const name = el("span", "region-name", relativeId(region));
   name.title = region.id || "";
-  line.append(name);
-  const badges = el("span", "region-badges");
-  if (disabled && region.status !== "unallocated") {
-    badges.append(el("span", "status disabled", "disabled"));
-  }
-  badges.append(el("span", `status ${region.status || "unknown"}`, region.status || "unknown"));
-  line.append(badges);
+  label.append(name, ...regionStatusBadges(region));
+  line.append(label);
   leaf.append(line);
   if (region.status === "unallocated") {
     return leaf;

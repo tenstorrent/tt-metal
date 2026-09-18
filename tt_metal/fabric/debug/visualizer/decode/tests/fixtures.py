@@ -108,6 +108,10 @@ def write_input(
         for router_row in chip_row.get("routers", []):
             router_row["instance"]["worker_sender_channel"] = 0
             router_row["instance"]["sender_producers"] = ["worker"]
+            router_row["instance"]["downstream_edges_vc0"] = [
+                {"edge": 1, "direction": "W", "sender_channel": 1}
+            ]
+            router_row["instance"]["downstream_edges_vc1"] = []
             router_row["instance"]["credit_plan"] = {
                 "vc0_uses_counters": False,
                 "vc1_uses_counters": False,

@@ -428,6 +428,16 @@ json make_debug_instance_json(
     out["first_level_ack_vc0"] = instance.first_level_ack_vc0;
     out["downstream_edm_mask_vc0"] = instance.downstream_edm_mask_vc0;
     out["downstream_edm_mask_vc1"] = instance.downstream_edm_mask_vc1;
+    const auto downstream_edges_json = [](const std::vector<FabricRouterDebugInstance::DownstreamEdgeInfo>& edges) {
+        json entries = json::array();
+        for (const auto& edge : edges) {
+            entries.push_back(
+                {{"edge", edge.edge}, {"direction", edge.direction}, {"sender_channel", edge.sender_channel}});
+        }
+        return entries;
+    };
+    out["downstream_edges_vc0"] = downstream_edges_json(instance.downstream_edges_vc0);
+    out["downstream_edges_vc1"] = downstream_edges_json(instance.downstream_edges_vc1);
     out["has_tensix_extension"] = instance.has_tensix_extension;
     out["udm_mode"] = instance.udm_mode;
     return out;
