@@ -28,22 +28,19 @@
 #define TT_ADDRCRZW_VALID(CntSetMask, Ch1_Y, Ch1_X, Ch0_Y, Ch0_X, BitMask)                                                            \
     (ckernel::is_valid(CntSetMask, 3) && ckernel::is_valid(Ch1_Y, 6) && ckernel::is_valid(Ch1_X, 3) && ckernel::is_valid(Ch0_Y, 3) && \
      ckernel::is_valid(Ch0_X, 3) && ckernel::is_valid(BitMask, 6))
-#define TT_ADDRCRZW(CntSetMask, Ch1_Y, Ch1_X, Ch0_Y, Ch0_X, BitMask) \
-    TT_INSN(TT_OP_ADDRCRZW(CntSetMask, Ch1_Y, Ch1_X, Ch0_Y, Ch0_X, BitMask)
+#define TT_ADDRCRZW(CntSetMask, Ch1_Y, Ch1_X, Ch0_Y, Ch0_X, BitMask)  TT_INSN(TT_OP_ADDRCRZW(CntSetMask, Ch1_Y, Ch1_X, Ch0_Y, Ch0_X, BitMask))
 #define TTI_ADDRCRZW(CntSetMask, Ch1_Y, Ch1_X, Ch0_Y, Ch0_X, BitMask) TTI_INSN(TT_OP_ADDRCRZW(CntSetMask, Ch1_Y, Ch1_X, Ch0_Y, Ch0_X, BitMask))
 
 #define TT_OP_APOOL3S1(clear_dvalid, addr_mode, index_en, dst) TT_OP(0x25, (((clear_dvalid) << 22) + ((addr_mode) << 15) + ((index_en) << 14) + ((dst) << 0)))
 #define TT_APOOL3S1_VALID(clear_dvalid, addr_mode, index_en, dst) \
     (ckernel::is_valid(clear_dvalid, 2) && ckernel::is_valid(addr_mode, 7) && ckernel::is_valid(index_en, 1) && ckernel::is_valid(dst, 14))
-#define TT_APOOL3S1(clear_dvalid, addr_mode, index_en, dst) \
-    TT_INSN(TT_OP_APOOL3S1(clear_dvalid, addr_mode, index_en, dst)
+#define TT_APOOL3S1(clear_dvalid, addr_mode, index_en, dst)  TT_INSN(TT_OP_APOOL3S1(clear_dvalid, addr_mode, index_en, dst))
 #define TTI_APOOL3S1(clear_dvalid, addr_mode, index_en, dst) TTI_INSN(TT_OP_APOOL3S1(clear_dvalid, addr_mode, index_en, dst))
 
 #define TT_OP_APOOL3S2(clear_dvalid, addr_mode, index_en, dst) TT_OP(0x32, (((clear_dvalid) << 22) + ((addr_mode) << 15) + ((index_en) << 14) + ((dst) << 0)))
 #define TT_APOOL3S2_VALID(clear_dvalid, addr_mode, index_en, dst) \
     (ckernel::is_valid(clear_dvalid, 2) && ckernel::is_valid(addr_mode, 7) && ckernel::is_valid(index_en, 1) && ckernel::is_valid(dst, 14))
-#define TT_APOOL3S2(clear_dvalid, addr_mode, index_en, dst) \
-    TT_INSN(TT_OP_APOOL3S2(clear_dvalid, addr_mode, index_en, dst)
+#define TT_APOOL3S2(clear_dvalid, addr_mode, index_en, dst)  TT_INSN(TT_OP_APOOL3S2(clear_dvalid, addr_mode, index_en, dst))
 #define TTI_APOOL3S2(clear_dvalid, addr_mode, index_en, dst) TTI_INSN(TT_OP_APOOL3S2(clear_dvalid, addr_mode, index_en, dst))
 
 #define TT_OP_ATCAS(MemHierSel, SwapVal, CmpVal, Sel32b, DataRegIndex, AddrRegIndex) \
