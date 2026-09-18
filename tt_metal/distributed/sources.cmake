@@ -38,16 +38,3 @@ set(DISTRIBUTED_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/layer_completion/layer_completion_reorder_buffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/layer_completion/layer_completion_router.cpp
 )
-
-# The host-interconnect socket carries a device-to-device stream over host RDMA.
-# It needs libibverbs (rdma-core), so it is opt-in: without it the rest of
-# tt_metal builds unchanged.
-if(TT_METAL_ENABLE_HOST_TRANSPORT)
-    list(
-        APPEND
-        DISTRIBUTED_SRC
-        ${CMAKE_CURRENT_SOURCE_DIR}/host_transport/rdma_link.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/host_transport/socket_relay.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/host_mesh_socket.cpp
-    )
-endif()

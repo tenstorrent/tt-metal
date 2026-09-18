@@ -8,7 +8,7 @@
 # HostMeshSocket test launcher. Runs strictly under SLURM: submit with sbatch, or
 # run inside an existing salloc. Never reserve a machine by hand.
 #
-#   sbatch --nodes=2 run_host_socket_tests.sh [transport|smoke|hotswap|perf|latency|sweep|soak|all]
+#   sbatch --nodes=2 run_host_socket_tests.sh [transport|smoke|mpi|hotswap|perf|latency|sweep|soak|all]
 #   sbatch --nodes=1 run_host_socket_tests.sh smoke    # both ranks on one host
 #   salloc -N2 -t 2:00:00 ./run_host_socket_tests.sh perf
 #
@@ -18,15 +18,17 @@
 #
 # Environment knobs (all optional):
 # Modes:
-#   transport  host-only RDMA loopback checks; needs no Tenstorrent device
+#   transport  host-only verbs loopback plus backend parity (rdma, mpi);
+#              needs no Tenstorrent device
 #   smoke      transport, then the four correctness tests
+#   mpi        the same correctness tests and throughput over the MPI backend
 #   hotswap    the same body and kernels over a D2D MeshSocket and over this one
 #   perf       throughput at 14 KiB pages
 #   latency    idle device-to-device round trip, then ack latency under load
 #   sweep      page-size sweep at fixed volume, then core-count scaling, then
 #              ring-depth scaling (locates the bandwidth-delay product)
 #   soak       long-running verified soak (see HOST_SOCKET_SOAK_SECONDS)
-#   all        transport, smoke, hotswap, perf
+#   all        transport, smoke, mpi, hotswap, perf, latency
 #
 # Environment knobs (all optional):
 #   TT_METAL_HOME              repo root; also resolved from SLURM_SUBMIT_DIR
@@ -53,13 +55,18 @@ set -uo pipefail
 MODE="${1:-smoke}"
 
 # sbatch copies this script to its spool dir, so BASH_SOURCE is not in the repo.
+# Walk up from wherever we can see instead of assuming a submit directory.
 if [[ -z "${TT_METAL_HOME:-}" ]]; then
-    for candidate in "${SLURM_SUBMIT_DIR:-}/../../../.." "$(dirname "${BASH_SOURCE[0]}")/../../../.."; do
-        [[ -n "$candidate" ]] || continue
-        if [[ -d "$candidate/tt_metal" && -d "$candidate/tests" ]]; then
-            TT_METAL_HOME="$(cd "$candidate" && pwd)"
-            break
-        fi
+    for start in "${SLURM_SUBMIT_DIR:-}" "$(dirname "${BASH_SOURCE[0]}")"; do
+        [[ -n "$start" && -d "$start" ]] || continue
+        candidate="$(cd "$start" && pwd)"
+        while [[ "$candidate" != "/" ]]; do
+            if [[ -d "$candidate/tt_metal" && -d "$candidate/tests/tt_metal/multihost/host_socket" ]]; then
+                TT_METAL_HOME="$candidate"
+                break 2
+            fi
+            candidate="$(dirname "$candidate")"
+        done
     done
 fi
 [[ -n "${TT_METAL_HOME:-}" ]] || { echo "error: set TT_METAL_HOME to the tt-metal repo root" >&2; exit 2; }
@@ -187,7 +194,7 @@ run_gtest() {  # label, gtest_filter, then VAR=VAL overrides
             --allow-run-as-root --tag-output $MAP_ARGS \
             -x TT_METAL_HOME -x TT_METAL_RUNTIME_ROOT -x TT_MESH_GRAPH_DESC_PATH \
             -x TT_HOST_SOCKET_DEVICE_ID -x TT_VISIBLE_DEVICES_PER_RANK \
-            -x TT_HOST_SOCKET_RDMA_DEV_PER_RANK \
+            -x TT_HOST_SOCKET_RDMA_DEV_PER_RANK -x TT_HOST_SOCKET_TRANSPORT \
             -x TT_HOST_SOCKET_PAGE_SIZE -x TT_HOST_SOCKET_FIFO_PAGES \
             -x TT_HOST_SOCKET_NUM_CORES -x TT_HOST_SOCKET_BYTES \
             -x TT_HOST_SOCKET_ITERS -x TT_HOST_SOCKET_SOAK_SECONDS \
@@ -215,12 +222,16 @@ run_gtest() {  # label, gtest_filter, then VAR=VAL overrides
 rc=0
 case "$MODE" in
     transport)
-        # Host-only: cross-connects two queue pairs on one NIC port, no TT device.
-        # Still launched through the scheduler rather than run by hand.
-        run_gtest "rdma transport" 'HostTransportTest.*' || rc=$?
+        # Host-only: the verbs tests cross-connect two queue pairs on one NIC
+        # port; the parity tests stream between the two ranks over each backend
+        # in turn. Neither opens a TT device, but both still go through the
+        # scheduler rather than being run by hand.
+        run_gtest "rdma link" 'HostTransportTest.*' || rc=$?
+        run_gtest "backend parity" 'Backends/HostTransportBackendTest.*' || rc=$?
         ;;
     smoke)
-        run_gtest "rdma transport" 'HostTransportTest.*' || rc=$?
+        run_gtest "rdma link" 'HostTransportTest.*' || rc=$?
+        run_gtest "backend parity" 'Backends/HostTransportBackendTest.*' || rc=$?
         run_gtest "correctness" 'HostSocketTest.*Correctness*' || rc=$?
         ;;
     latency)
@@ -236,10 +247,24 @@ case "$MODE" in
         run_gtest "streaming ack latency" 'HostSocketLatencyTest.StreamingAckLatency' \
             TT_HOST_SOCKET_IDLE_RTT_US="${idle_rtt:-0}" || rc=$?
         ;;
+    mpi)
+        # The portable backend end to end: same correctness body, then throughput
+        # across core counts. The sweep is the point -- it separates per-message
+        # cost from a link-bound path, which a single core cannot tell apart.
+        run_gtest "mpi correctness" 'HostSocketTest.*Correctness*' TT_HOST_SOCKET_TRANSPORT=mpi || rc=$?
+        for nc in ${HOST_SOCKET_CORES:-1 2 4 8}; do
+            run_gtest "mpi throughput ${nc}c" 'HostSocketTest.Throughput' \
+                TT_HOST_SOCKET_TRANSPORT=mpi TT_HOST_SOCKET_NUM_CORES="$nc" || rc=$?
+        done
+        ;;
     hotswap)
         # Same body and same kernels over a D2D MeshSocket and over a
-        # HostMeshSocket; only the socket type and SOCKET_MODE differ.
+        # HostMeshSocket; only the socket type and SOCKET_MODE differ. Run for
+        # each backend, since the drop-in claim is about the socket, not the
+        # transport under it.
         run_gtest "hot swap d2d vs host" 'SocketHotSwapTest.*' || rc=$?
+        run_gtest "hot swap over mpi" 'SocketHotSwapTest.HostMeshSocketDropIn' \
+            TT_HOST_SOCKET_TRANSPORT=mpi || rc=$?
         ;;
     perf)
         run_gtest "throughput @14K" 'HostSocketTest.Throughput' || rc=$?
@@ -281,12 +306,13 @@ case "$MODE" in
         # throughput. 'sweep' is deliberately separate; it is long.
         "$0" transport || rc=$?
         "$0" smoke || rc=$?
+        "$0" mpi || rc=$?
         "$0" hotswap || rc=$?
         "$0" perf || rc=$?
         "$0" latency || rc=$?
         ;;
     *)
-        echo "unknown mode: $MODE (want transport|smoke|hotswap|perf|latency|sweep|soak|all)" >&2
+        echo "unknown mode: $MODE (want transport|smoke|mpi|hotswap|perf|latency|sweep|soak|all)" >&2
         exit 2
         ;;
 esac

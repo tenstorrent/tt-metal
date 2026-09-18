@@ -31,7 +31,15 @@ sender tensix           relay poll loop             relay poll loop        recv 
 ```
 
 Legs 1 and 3 are `D2HSocket` and `H2DSocket` (in `DEVICE_PULL` mode) unchanged. Only the
-host-to-host leg is new.
+host-to-host leg is new, and it sits behind the `HostTransport` interface
+(`host_transport/host_transport.hpp`) with two implementations: `RdmaTransport` (one-sided
+verbs, the default) and `MpiTransport` (two-sided point-to-point). `TransportConfig::kind`
+picks one; everything above the interface is identical either way.
+
+The seam is *how many pages are valid in the ring*, not *post a write*, because that is the
+one thing the two differ on. With RDMA the peer's NIC lands the bytes and the receiver only
+reads a counter; with MPI the receiver has to complete a receive before the bytes exist. Both
+answer the same question, so the relay does not know which it is talking to.
 
 ### The device side needs no new primitives
 
@@ -54,7 +62,7 @@ Both FIFOs are page-aligned `NamedShm` mappings, so each is registered once with
 and the NIC reads the D2H ring and writes the peer's H2D ring directly. The pinned ring *is*
 the CPU-DRAM staging buffer; there is no second copy and no per-transfer registration.
 
-### Ordering and pipelining
+### Ordering and pipelining (RDMA)
 
 One RC queue pair per connection. RC delivery is in-order, which buys both properties at once:
 
@@ -85,6 +93,26 @@ Both rings hold the same number of pages, so a page's source and destination ind
 same value: the wrap is a single modulo and a batch is at most two contiguous runs, which lets
 `max_batch_pages` pages coalesce into one work request.
 
+### Ordering and pipelining (MPI)
+
+One message per page, so there is no framing and no message ever spans the ring wrap. MPI
+point-to-point between a rank pair on one tag is ordered, so the receiver's queued receives
+fill in send order and each lands on the page the sender took it from — which is what lets
+both sides agree on the page index without putting it on the wire. The sender keeps a deque of
+`Isend` requests and retires only from the front, because completion order is not guaranteed
+and a count that retires out of order would claim a page is free early. The receiver keeps a
+receive posted for every page the ring can hold, topped up as the device consumes, so a
+receive is always already waiting when payload arrives.
+
+Deliberately point-to-point rather than MPI RMA, which looks like the closer analogue to
+one-sided verbs but is not usable here: `MPI_Rput` completes on origin-buffer reuse rather
+than remote visibility, separate `Rput`s to the same window are unordered, and `MPI_Cancel` is
+illegal on an RMA request, so a half-finished stream cannot be torn down.
+
+This backend exists for deployments with no RoCE device — including the in-tree ULFM build,
+which cannot do one-sided RDMA at all. It is **much** slower, and how much is set by the MPI
+build rather than by this code; see §4.
+
 ### Flow control
 
 The same `bytes_sent` / `bytes_acked` credit scheme as every other socket, with one extra hop:
@@ -97,6 +125,11 @@ The same `bytes_sent` / `bytes_acked` credit scheme as every other socket, with 
 | H2D `bytes_acked` | pinned host RAM on B | receiver device |
 | host doorbell | registered slot on B | relay A, by RDMA (absolute page total) |
 | host credit | registered slot on A | relay B, by RDMA (absolute page total) |
+
+The last two rows are the RDMA backend's. `MpiTransport` carries the same two signals as
+messages instead: the doorbell is implicit in a payload receive completing, and the credit is a
+single absolute `uint64_t` on its own tag, with at most one send in flight — being absolute,
+a skipped one costs latency and nothing else.
 
 The host credit is an **absolute page count**, so a duplicated or stale update costs a lap of
 latency and never corrupts. Relay A retires a batch only once the NIC has finished reading it;
@@ -161,7 +194,32 @@ writes tops out near 6.2 GB/s at this page size and cannot saturate the path; tw
 already clear the link, and eight reach about 97% of the ~12.24 GB/s ceiling measured
 independently for host-to-host RDMA on these NICs.
 
-Throughput here is repeatable only to about +/-15%: the same 14336/64-page/1-core point
+### The MPI backend
+
+Same page size and ring, node pair `c10u08`/`c10u20`, `TT_HOST_SOCKET_TRANSPORT=mpi`:
+
+| Sender cores | GB/s (MPI) | GB/s (RDMA) |
+|---|---|---|
+| 1 | 1.53 | 6.06 – 6.21 |
+| 2 | 2.17 | 10.93 |
+| 4 | 2.09 | 11.48 |
+| 8 | 2.17 | 11.84 |
+
+It plateaus at about **2.2 GB/s from two cores** — 5.4x below RDMA — and the flat top is the
+point: adding cores does nothing, so the limit is the host-to-host hop, not the device side.
+The in-tree ULFM OpenMPI is configured with only the `self`, `sm` and `tcp` BTLs (no UCX, no
+`openib`, no `ofi`), so every cross-host page goes through the kernel TCP stack, and ~2.2 GB/s
+is about what that does with 14 KB messages. **This is the MPI build's ceiling, not the
+backend's.** An MPI over UCX or libfabric would land well above it; that configuration has not
+been measured here, so no number is claimed for it.
+
+The single-core point also measured 0.47 GB/s in an earlier job on the same pair, so treat it
+as the least trustworthy row — the plateau reproduces, the ramp does not.
+
+Use this backend where RDMA is unavailable and correctness matters more than rate. Where both
+are available, `TransportKind::Rdma` is the default for good reason.
+
+Throughput is repeatable only to about +/-15%: the same 14336/64-page/1-core point
 measured 5.25, 6.27 and 6.71 GB/s within one job and 3.15 GB/s on a different node pair. Treat
 single points accordingly, and prefer comparing shapes (core scaling, ring depth) over
 absolute values.
@@ -228,8 +286,12 @@ meaningless 34 ms average in an earlier run.
 
 - **vIOMMU enabled.** Gated on `GetMemoryPinningParameters(mesh).can_map_to_noc`; the tests
   skip rather than fail when it is off.
-- **A RoCE device reachable from both hosts.** Built only when libibverbs is present
-  (`TT_METAL_ENABLE_HOST_TRANSPORT`, auto-detected).
+- **A host-to-host transport.** At least one backend must be available or the socket is not
+  built at all (`TT_METAL_ENABLE_HOST_TRANSPORT`, auto-detected): `RdmaTransport` needs
+  libibverbs at build time and a RoCE device reachable from both hosts at run time,
+  `MpiTransport` needs only `ENABLE_DISTRIBUTED`. `host_transport_available(kind)` reports
+  whether a given one can actually run here, so both ends can agree before the handshake
+  rather than half of them blocking on it.
 - **PCIe x8 endpoints.** Only 4 of a Galaxy's 32 chips have an x8 link (one per tray, ASIC
   location 6); the other 28 are x1 and cannot carry this traffic.
 - `fifo_size % page_size == 0`. A partial tail page would have to be charged to the
@@ -244,6 +306,7 @@ Always through SLURM; the launcher needs two nodes because the two endpoints are
 ```bash
 cd tests/tt_metal/multihost/host_socket
 sbatch -p <galaxy-partition> --nodes=2 run_host_socket_tests.sh smoke   # correctness
+sbatch -p <galaxy-partition> --nodes=2 run_host_socket_tests.sh mpi     # same, over MPI
 sbatch -p <galaxy-partition> --nodes=2 run_host_socket_tests.sh perf    # 14 KiB throughput
 sbatch -p <galaxy-partition> --nodes=2 run_host_socket_tests.sh sweep   # page size + core count
 sbatch -p <galaxy-partition> --nodes=2 --time=2:00:00 \
@@ -255,14 +318,16 @@ turns the throughput test into a gate; without it throughput is reported but not
 
 Tests fall into two suites.
 
-`HostTransportTest` needs **no Tenstorrent device** — it cross-connects two queue pairs on one
-NIC port (the HCA loops back internally) and checks the transport on its own: payload/doorbell
+Two suites need **no Tenstorrent device**, run in well under a second, and are the right place
+to reproduce a protocol bug. `HostTransportTest` cross-connects two queue pairs on one NIC port
+(the HCA loops back internally) and checks the verbs layer on its own: payload/doorbell
 ordering, 500 ring laps, absolute credits, counter widening across a 32-bit wrap, and
-send-queue back-pressure. It runs anywhere with a RoCE port, in well under a second, and is
-the right place to reproduce a protocol bug:
+send-queue back-pressure. `HostTransportBackendTest` runs one body — stream N pages, verify
+every byte, hold under credit back-pressure — over each backend in turn, so the contract the
+relay depends on is checked identically for both:
 
 ```bash
-./build_Release/test/tt_metal/multi_host_socket_transport_tests --gtest_filter='HostTransportTest.*'
+sbatch -p <any-partition> --nodes=1 run_host_socket_tests.sh transport   # both, no device
 ```
 
 `HostSocketLatencyTest` needs two ranks and real devices, and reports the table in S.4:

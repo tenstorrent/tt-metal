@@ -14,7 +14,7 @@
 #include <thread>
 #include <vector>
 
-#include "tt_metal/distributed/host_transport/rdma_link.hpp"
+#include "tt_metal/distributed/host_transport/host_transport.hpp"
 
 namespace tt::tt_metal::distributed {
 class D2HSocket;
@@ -22,15 +22,6 @@ class H2DSocket;
 }  // namespace tt::tt_metal::distributed
 
 namespace tt::tt_metal::distributed::host_transport {
-
-// Both FIFOs hold the same page count, so a page's source and destination index
-// are the same value. fifo_size % page_size == 0 also removes the FIFO tail gap.
-struct RingGeometry {
-    uint32_t page_size = 0;
-    uint32_t num_pages = 0;
-
-    uint64_t fifo_bytes() const { return static_cast<uint64_t>(page_size) * num_pages; }
-};
 
 // One relayed direction. poll() never blocks.
 class RelayEndpoint {
@@ -60,10 +51,8 @@ protected:
 class RelaySender final : public RelayEndpoint {
 public:
     RelaySender(
-        RdmaChannel& channel,
+        HostTransport& transport,
         tt::tt_metal::distributed::D2HSocket& socket,
-        RdmaRegion& fifo_region,
-        RdmaRegion& credit_region,
         RingGeometry geometry,
         uint32_t max_batch_pages = 8);
 
@@ -87,21 +76,10 @@ public:
     std::vector<uint64_t> take_credit_latencies_ns();
 
 private:
-    struct Batch {
-        uint64_t wr_id;
-        uint32_t pages;
-    };
-
-    // Low 32 bits of the peer's credit, straight off the wire.
-    uint32_t peer_credit_wire() const;
-
-    RdmaChannel& channel_;
+    HostTransport& transport_;
     tt::tt_metal::distributed::D2HSocket& socket_;
-    RdmaRegion& fifo_region_;
-    RdmaRegion& credit_region_;
     RingGeometry geom_;
     uint32_t max_batch_pages_;
-    std::deque<Batch> batches_;
     // Written by the polling thread, read by a barrier on another.
     std::atomic<uint64_t> forwarded_{0};
     std::atomic<uint64_t> retired_{0};
@@ -121,11 +99,7 @@ private:
 // in the ring; this only publishes it and returns credit.
 class RelayReceiver final : public RelayEndpoint {
 public:
-    RelayReceiver(
-        RdmaChannel& channel,
-        tt::tt_metal::distributed::H2DSocket& socket,
-        RdmaRegion& doorbell_region,
-        RingGeometry geometry);
+    RelayReceiver(HostTransport& transport, tt::tt_metal::distributed::H2DSocket& socket, RingGeometry geometry);
 
     bool poll() override;
     uint64_t watermark() const override { return arrived_.load(std::memory_order_acquire); }
@@ -138,10 +112,8 @@ public:
     uint64_t pages_arrived() const { return arrived_.load(std::memory_order_acquire); }
 
 private:
-
-    RdmaChannel& channel_;
+    HostTransport& transport_;
     tt::tt_metal::distributed::H2DSocket& socket_;
-    RdmaRegion& doorbell_region_;
     RingGeometry geom_;
     // Written by the polling thread, read by a barrier on another.
     std::atomic<uint64_t> arrived_{0};

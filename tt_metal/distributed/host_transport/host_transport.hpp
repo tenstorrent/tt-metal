@@ -1,0 +1,106 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include <tt-metalium/experimental/sockets/host_transport_kind.hpp>
+
+#include <cstdint>
+#include <memory>
+#include <string>
+
+namespace tt::tt_metal::distributed::multihost {
+class DistributedContext;
+}
+
+namespace tt::tt_metal::distributed::host_transport {
+
+// Ring geometry shared by both ends of a relayed connection. Both FIFOs hold the
+// same page count, so a page's source and destination index are the same value.
+// fifo_size % page_size == 0 also removes the FIFO tail gap.
+struct RingGeometry {
+    uint32_t page_size = 0;
+    uint32_t num_pages = 0;
+
+    uint64_t fifo_bytes() const { return static_cast<uint64_t>(page_size) * num_pages; }
+};
+
+// Moves whole pages between two hosts' pinned rings, at the same page index on
+// both sides.
+//
+// The seam is deliberately "how many pages are valid in the ring" rather than
+// "post a write", because that is what differs between a one-sided and a
+// two-sided transport. With RDMA the peer's NIC lands the bytes and the receiver
+// only reads a counter; with MPI the receiver has to complete a receive. Both
+// answer the same question, so the relay above does not care which it is.
+//
+// Every count is absolute, so a duplicated or stale update is a no-op. All calls
+// are non-blocking and single-consumer: one thread drives one transport.
+class HostTransport {
+public:
+    virtual ~HostTransport() = default;
+
+    // --- sender ---
+
+    // Room for a batch of `pages` right now.
+    virtual bool can_send(uint32_t pages) const = 0;
+    // Hand `pages` pages, starting at ring page `first_page`, to the peer, which
+    // places them at the same index. Wrapping is the transport's problem. False
+    // if it could not be accepted, in which case nothing was sent.
+    virtual bool send(uint32_t first_page, uint32_t pages) = 0;
+    // Pages whose source bytes the transport has finished reading, so the relay
+    // can release them back to the device. Absolute.
+    virtual uint64_t pages_released() const = 0;
+    // What the peer reports its device has consumed. Absolute.
+    virtual uint64_t peer_consumed_pages() const = 0;
+
+    // --- receiver ---
+
+    // Pages the peer has delivered into the local ring. Absolute.
+    virtual uint64_t pages_delivered() const = 0;
+    // Publish how many pages the local device has consumed. Absolute.
+    virtual bool post_credit(uint64_t consumed_pages) = 0;
+    // Tell the transport how far the device has got, so a two-sided transport
+    // knows which ring pages are safe to receive into again. Absolute.
+    virtual void set_consumed(uint64_t consumed_pages) = 0;
+
+    // --- both ---
+
+    // Drive progress, then refresh the counters above. Non-blocking.
+    virtual void poll() = 0;
+    virtual std::string describe() const = 0;
+};
+
+// Tags each connection consumes: payload and credit.
+inline constexpr int kTagsPerConnection = 2;
+
+struct TransportParams {
+    TransportKind kind = TransportKind::Rdma;
+    RingGeometry geometry;
+    bool is_sender = false;
+    // The local pinned ring the transport reads from or writes into.
+    void* ring = nullptr;
+    // Peer rank, and the context used both for the out-of-band handshake and, for
+    // the MPI transport, for the data path itself.
+    int peer_rank = 0;
+    std::shared_ptr<multihost::DistributedContext> context;
+    // Distinguishes concurrent connections between the same rank pair. Both ends
+    // must pick the same base, which the caller does by construction order.
+    int tag_base = 0;
+    // Rdma only; ignored otherwise.
+    std::string rdma_device;
+    int gid_index = -1;
+    uint32_t max_batch_pages = 8;
+};
+
+// Whether this build has the backend and the host has what it needs to run it
+// (for Rdma, a usable RoCEv2 device). Cheap, and safe to call before any
+// handshake, so callers can agree on a backend instead of half of them blocking.
+bool host_transport_available(TransportKind kind);
+
+// Builds and connects a transport. Collective with the peer: both ends must call
+// it, in the same order, before either returns.
+std::unique_ptr<HostTransport> make_host_transport(const TransportParams& params);
+
+}  // namespace tt::tt_metal::distributed::host_transport

@@ -1,26 +1,3 @@
-# The host-interconnect socket (device -> host -> RDMA -> host -> device) needs
-# libibverbs. Auto-detect so its absence is not a build break; set
-# TT_METAL_ENABLE_HOST_TRANSPORT explicitly to force it on or off. Detected
-# before sources.cmake, which keys its source list off the result.
-find_library(IBVERBS_LIBRARY NAMES ibverbs)
-find_path(IBVERBS_INCLUDE_DIR NAMES infiniband/verbs.h)
-if(NOT DEFINED TT_METAL_ENABLE_HOST_TRANSPORT)
-    if(IBVERBS_LIBRARY AND IBVERBS_INCLUDE_DIR)
-        set(TT_METAL_ENABLE_HOST_TRANSPORT TRUE CACHE INTERNAL "Build the host-interconnect socket transport")
-    else()
-        set(TT_METAL_ENABLE_HOST_TRANSPORT FALSE CACHE INTERNAL "Build the host-interconnect socket transport")
-    endif()
-endif()
-if(TT_METAL_ENABLE_HOST_TRANSPORT)
-    if(NOT (IBVERBS_LIBRARY AND IBVERBS_INCLUDE_DIR))
-        message(
-            FATAL_ERROR
-            "TT_METAL_ENABLE_HOST_TRANSPORT is ON but libibverbs was not found; install rdma-core (libibverbs-dev)"
-        )
-    endif()
-    message(STATUS "Host-interconnect sockets enabled (${IBVERBS_LIBRARY})")
-endif()
-
 include(sources.cmake)
 
 # Include helper functions and generate headers from flatbuffer schemas
@@ -84,6 +61,59 @@ else()
     list(APPEND DISTRIBUTED_SRC multihost/single_host_context.cpp)
 endif()
 
+# The host-interconnect socket (device -> host -> network -> host -> device) has
+# two interchangeable backends: one-sided verbs (libibverbs) and two-sided
+# point-to-point over MPI. Each is opt-in on its own dependency, so a missing
+# one is not a build break; set TT_METAL_ENABLE_HOST_TRANSPORT explicitly to
+# force the feature on or off.
+find_library(IBVERBS_LIBRARY NAMES ibverbs)
+find_path(IBVERBS_INCLUDE_DIR NAMES infiniband/verbs.h)
+if(IBVERBS_LIBRARY AND IBVERBS_INCLUDE_DIR)
+    set(TT_METAL_HOST_TRANSPORT_RDMA TRUE CACHE INTERNAL "Build the RDMA host-socket backend")
+else()
+    set(TT_METAL_HOST_TRANSPORT_RDMA FALSE CACHE INTERNAL "Build the RDMA host-socket backend")
+endif()
+set(TT_METAL_HOST_TRANSPORT_MPI ${USE_MPI} CACHE INTERNAL "Build the MPI host-socket backend")
+
+if(NOT DEFINED TT_METAL_ENABLE_HOST_TRANSPORT)
+    if(TT_METAL_HOST_TRANSPORT_RDMA OR TT_METAL_HOST_TRANSPORT_MPI)
+        set(TT_METAL_ENABLE_HOST_TRANSPORT TRUE CACHE INTERNAL "Build the host-interconnect socket transport")
+    else()
+        set(TT_METAL_ENABLE_HOST_TRANSPORT FALSE CACHE INTERNAL "Build the host-interconnect socket transport")
+    endif()
+endif()
+
+if(TT_METAL_ENABLE_HOST_TRANSPORT)
+    if(NOT (TT_METAL_HOST_TRANSPORT_RDMA OR TT_METAL_HOST_TRANSPORT_MPI))
+        message(
+            FATAL_ERROR
+            "TT_METAL_ENABLE_HOST_TRANSPORT is ON but no backend is available; install rdma-core (libibverbs-dev) or enable ENABLE_DISTRIBUTED"
+        )
+    endif()
+    message(
+        STATUS
+        "Host-interconnect sockets enabled (rdma=${TT_METAL_HOST_TRANSPORT_RDMA} mpi=${TT_METAL_HOST_TRANSPORT_MPI})"
+    )
+    list(
+        APPEND
+        DISTRIBUTED_SRC
+        host_mesh_socket.cpp
+        host_transport/host_transport.cpp
+        host_transport/socket_relay.cpp
+    )
+    if(TT_METAL_HOST_TRANSPORT_RDMA)
+        list(
+            APPEND
+            DISTRIBUTED_SRC
+            host_transport/rdma_link.cpp
+            host_transport/rdma_transport.cpp
+        )
+    endif()
+    if(TT_METAL_HOST_TRANSPORT_MPI)
+        list(APPEND DISTRIBUTED_SRC host_transport/mpi_transport.cpp)
+    endif()
+endif()
+
 add_library(distributed OBJECT ${DISTRIBUTED_SRC})
 
 # Enable unity builds for faster compilation
@@ -113,9 +143,15 @@ if(USE_MPI)
 endif()
 
 if(TT_METAL_ENABLE_HOST_TRANSPORT)
+    target_compile_definitions(distributed PUBLIC TT_METAL_HOST_TRANSPORT=1)
+endif()
+if(TT_METAL_HOST_TRANSPORT_RDMA)
     target_link_libraries(distributed PRIVATE ${IBVERBS_LIBRARY})
     target_include_directories(distributed SYSTEM PRIVATE ${IBVERBS_INCLUDE_DIR})
-    target_compile_definitions(distributed PUBLIC TT_METAL_HOST_TRANSPORT=1)
+    target_compile_definitions(distributed PUBLIC TT_METAL_HOST_TRANSPORT_RDMA=1)
+endif()
+if(TT_METAL_HOST_TRANSPORT_MPI)
+    target_compile_definitions(distributed PUBLIC TT_METAL_HOST_TRANSPORT_MPI=1)
 endif()
 
 if(TT_UMD_BUILD_SIMULATION)

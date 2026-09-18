@@ -9,7 +9,7 @@
 #include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/mesh_device.hpp>
 
-#include "tt_metal/distributed/host_transport/rdma_link.hpp"
+#include "tt_metal/distributed/host_transport/host_transport.hpp"
 #include "tt_metal/distributed/host_transport/socket_relay.hpp"
 #include "tt_metal/distributed/mesh_socket_utils.hpp"
 
@@ -22,10 +22,6 @@
 
 namespace tt::tt_metal::distributed {
 
-using host_transport::RdmaChannel;
-using host_transport::RdmaContext;
-using host_transport::RdmaEndpoint;
-using host_transport::RdmaRegion;
 using host_transport::RelayLoop;
 using host_transport::RelayReceiver;
 using host_transport::RelaySender;
@@ -38,26 +34,13 @@ namespace {
 // as MeshSocket's exchange-tag counter also does.
 constexpr uint32_t kEndpointExchangeTagBase = 0x7248;
 
-multihost::Tag next_exchange_tag() {
-    static std::atomic<uint32_t> counter{0};
-    return multihost::Tag{static_cast<int>(kEndpointExchangeTagBase + counter.fetch_add(1))};
-}
-
-RdmaContext& shared_context(const HostMeshSocket::TransportConfig& transport) {
-    static std::unique_ptr<RdmaContext> context;
-    static std::mutex mutex;
-    std::lock_guard<std::mutex> lock(mutex);
-    if (context == nullptr) {
-        context = std::make_unique<RdmaContext>(RdmaContext::Config{
-            .device_name = transport.rdma_device,
-            .gid_index = transport.gid_index,
-        });
-    }
-    return *context;
-}
-
-std::span<std::byte> as_bytes(RdmaEndpoint& endpoint) {
-    return {reinterpret_cast<std::byte*>(&endpoint), sizeof(RdmaEndpoint)};
+// Reserves a contiguous run, since each connection takes kTagsPerConnection of
+// them. Both ends allocate in the same construction order, so both get the same
+// base without exchanging it.
+multihost::Tag reserve_exchange_tags(size_t connections) {
+    static std::atomic<uint32_t> next{0};
+    const uint32_t width = static_cast<uint32_t>(connections) * host_transport::kTagsPerConnection;
+    return multihost::Tag{static_cast<int>(kEndpointExchangeTagBase + next.fetch_add(width))};
 }
 
 }  // namespace
@@ -66,14 +49,9 @@ struct HostMeshSocket::Impl {
     // Declaration order sets teardown order and is load-bearing: stop polling,
     // destroy the queue pair, deregister the regions, then free their memory.
     struct Connection {
-        std::unique_ptr<D2HSocket> d2h;           // sender endpoints only; owns its FIFO
-        std::unique_ptr<H2DSocket> h2d;           // receiver endpoints only; owns its FIFO
-        std::unique_ptr<uint32_t> credit_slot;    // sender: peer writes credit here
-        std::unique_ptr<uint32_t> doorbell_slot;  // receiver: peer writes its total here
-        std::unique_ptr<RdmaRegion> fifo_region;
-        std::unique_ptr<RdmaRegion> credit_region;
-        std::unique_ptr<RdmaRegion> doorbell_region;
-        std::unique_ptr<RdmaChannel> channel;
+        std::unique_ptr<D2HSocket> d2h;  // sender endpoints only; owns its ring
+        std::unique_ptr<H2DSocket> h2d;  // receiver endpoints only; owns its ring
+        std::unique_ptr<host_transport::HostTransport> transport;
         std::shared_ptr<host_transport::RelayEndpoint> relay;
     };
 
@@ -161,17 +139,24 @@ HostMeshSocket::HostMeshSocket(
     impl_->config_buffer = create_socket_config_buffer(device, config, impl_->endpoint);
     impl_->config_buffer_address = impl_->config_buffer->address();
 
-    auto& rdma = shared_context(transport);
     const bool is_sender = impl_->endpoint == SocketEndpoint::SENDER;
-    const auto exchange_tag = next_exchange_tag();
+    const auto exchange_tag = reserve_exchange_tags(config.socket_connection_config.size());
 
     impl_->connections.resize(config.socket_connection_config.size());
     for (size_t i = 0; i < config.socket_connection_config.size(); i++) {
         const auto& wire = config.socket_connection_config[i];
         auto& connection = impl_->connections[i];
 
-        connection.channel = std::make_unique<RdmaChannel>(rdma);
-        RdmaEndpoint local = connection.channel->local_endpoint();
+        host_transport::TransportParams tp;
+        tp.kind = transport.kind;
+        tp.geometry = impl_->geometry;
+        tp.is_sender = is_sender;
+        tp.peer_rank = is_sender ? *config.receiver_rank : *config.sender_rank;
+        tp.context = context;
+        tp.tag_base = *exchange_tag + static_cast<int>(i) * host_transport::kTagsPerConnection;
+        tp.rdma_device = transport.rdma_device;
+        tp.gid_index = transport.gid_index;
+        tp.max_batch_pages = transport.max_batch_pages;
 
         if (is_sender) {
             connection.d2h = std::make_unique<D2HSocket>(
@@ -183,13 +168,7 @@ HostMeshSocket::HostMeshSocket(
                 },
                 D2HSocket::ProcessScope::InProcess);
             connection.d2h->set_page_size(page_size);
-
-            auto fifo = connection.d2h->host_fifo();
-            connection.fifo_region = std::make_unique<RdmaRegion>(rdma, fifo.data(), fifo.size());
-            connection.credit_slot = std::make_unique<uint32_t>(0);
-            connection.credit_region =
-                std::make_unique<RdmaRegion>(rdma, connection.credit_slot.get(), sizeof(uint32_t));
-            local.credit = connection.credit_region->descriptor();
+            tp.ring = connection.d2h->host_fifo().data();
         } else {
             connection.h2d = std::make_unique<H2DSocket>(
                 device,
@@ -201,48 +180,16 @@ HostMeshSocket::HostMeshSocket(
                     .address = static_cast<uint32_t>(impl_->config_buffer_address),
                 });
             connection.h2d->set_page_size(page_size);
-
-            auto fifo = connection.h2d->host_fifo();
-            connection.fifo_region = std::make_unique<RdmaRegion>(rdma, fifo.data(), fifo.size());
-            local.fifo = connection.fifo_region->descriptor();
-
-            connection.doorbell_slot = std::make_unique<uint32_t>(0);
-            connection.doorbell_region =
-                std::make_unique<RdmaRegion>(rdma, connection.doorbell_slot.get(), sizeof(uint32_t));
-            local.doorbell = connection.doorbell_region->descriptor();
+            tp.ring = connection.h2d->host_fifo().data();
         }
 
-        // Opposite order on the two sides so neither blocks on an unread send.
-        RdmaEndpoint remote{};
-        if (is_sender) {
-            context->send(as_bytes(local), config.receiver_rank, exchange_tag);
-            context->recv(as_bytes(remote), config.receiver_rank, exchange_tag);
-        } else {
-            context->recv(as_bytes(remote), config.sender_rank, exchange_tag);
-            context->send(as_bytes(local), config.sender_rank, exchange_tag);
-        }
-
-        if (is_sender) {
-            TT_FATAL(
-                remote.fifo.len == fifo_size,
-                "peer FIFO is {} bytes, local is {}: both rings must hold the same number of pages",
-                remote.fifo.len,
-                fifo_size);
-            TT_FATAL(remote.doorbell.len >= sizeof(uint32_t), "peer advertised no doorbell slot");
-        }
-        connection.channel->connect(remote);
+        connection.transport = host_transport::make_host_transport(tp);
 
         if (is_sender) {
             connection.relay = std::make_shared<RelaySender>(
-                *connection.channel,
-                *connection.d2h,
-                *connection.fifo_region,
-                *connection.credit_region,
-                impl_->geometry,
-                transport.max_batch_pages);
+                *connection.transport, *connection.d2h, impl_->geometry, transport.max_batch_pages);
         } else {
-            connection.relay = std::make_shared<RelayReceiver>(
-                *connection.channel, *connection.h2d, *connection.doorbell_region, impl_->geometry);
+            connection.relay = std::make_shared<RelayReceiver>(*connection.transport, *connection.h2d, impl_->geometry);
         }
     }
 

@@ -20,6 +20,7 @@
 #include <algorithm>
 #include <numeric>
 #include <span>
+#include <string_view>
 
 namespace tt::tt_metal::distributed::host_socket_test {
 
@@ -142,6 +143,15 @@ void run_transfer(const Params& params, bool verify, double* gbps_out, std::vect
     }
     if (const char* gid = std::getenv("TT_HOST_SOCKET_GID_INDEX"); gid != nullptr && *gid != '\0') {
         transport.gid_index = static_cast<int>(std::strtol(gid, nullptr, 0));
+    }
+    if (const char* kind = std::getenv("TT_HOST_SOCKET_TRANSPORT"); kind != nullptr && *kind != '\0') {
+        if (std::string_view(kind) == "mpi") {
+            transport.kind = host_transport::TransportKind::Mpi;
+        } else if (std::string_view(kind) == "rdma") {
+            transport.kind = host_transport::TransportKind::Rdma;
+        } else {
+            TT_THROW("TT_HOST_SOCKET_TRANSPORT must be rdma or mpi, got '{}'", kind);
+        }
     }
 
     HostMeshSocket socket(mesh_device, config, transport);

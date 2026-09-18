@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <tt-metalium/experimental/sockets/host_transport_kind.hpp>
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
 
 #include <cstdint>
@@ -18,35 +19,36 @@ class D2HSocket;
 class H2DSocket;
 
 namespace host_transport {
-class RdmaContext;
-class RdmaChannel;
-class RdmaRegion;
+class HostTransport;
 class RelayEndpoint;
 }  // namespace host_transport
 
 /**
- * @brief A D2D socket that reaches its peer over host RDMA instead of TT-Fabric.
+ * @brief A D2D socket that reaches its peer over the host network instead of
+ *        TT-Fabric.
  *
  * @code
- *   sender tensix --D2H--> host RAM --RDMA--> host RAM --H2D--> receiver tensix
+ *   sender tensix --D2H--> host RAM --net--> host RAM --H2D--> receiver tensix
  * @endcode
  *
  * Needs no new device primitives: socket_api.h already branches on the is_d2h /
  * is_h2d discriminators this socket sets, so kernels drive an ordinary
  * Socket{Sender,Receiver}Interface. Only the payload-move call differs.
  *
- * Requires vIOMMU, a RoCE device reachable from both hosts, and endpoints on
- * PCIe x8 chips for any real throughput. See
+ * Requires vIOMMU and endpoints on PCIe x8 chips for any real throughput, plus
+ * whatever TransportConfig::kind needs. See
  * tech_reports/TT-Distributed/HostMeshSocket.md.
  */
 class HostMeshSocket {
 public:
     struct TransportConfig {
+        /// host_transport_available() reports whether a kind can run here.
+        host_transport::TransportKind kind = host_transport::TransportKind::Rdma;
         /// Must divide fifo_size and match the page size the kernels set.
         uint32_t page_size = 0;
-        /// Empty selects the first device.
+        /// Rdma only. Empty selects the first device.
         std::string rdma_device;
-        /// Negative auto-selects a RoCEv2 IPv4-mapped GID.
+        /// Rdma only. Negative auto-selects a RoCEv2 IPv4-mapped GID.
         int gid_index = -1;
         /// Pages per work request; peer ring depth is the real bound.
         uint32_t max_batch_pages = 8;
