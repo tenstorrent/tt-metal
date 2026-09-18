@@ -447,8 +447,8 @@ def as_bf16(array: np.ndarray) -> np.ndarray:
 
 
 def gather(tensor, shard_dim: int | None) -> np.ndarray:
-    """*tensor* as one float32 host array. ``Sharding.gather`` follows whatever placement the tensor has,
-    so the assert is what catches a weight sharded on the wrong dim."""
+    """A mapper-placed *tensor* as one float32 host array. ``Sharding.gather`` follows whatever placement
+    the tensor has, so the assert is what catches a weight sharded on the wrong dim."""
     sharding = ttml.Sharding.from_tensor(tensor)
     if shard_dim is None:
         assert sharding.is_fully_replicated, f"expected a replicated tensor, got {sharding.placements}"
@@ -458,6 +458,13 @@ def gather(tensor, shard_dim: int | None) -> np.ndarray:
             isinstance(placement, ttnn.PlacementShard) and placement.dim == shard_dim
         ), f"expected a shard on dim {shard_dim} over 'tp', got {sharding.placements}"
     return sharding.gather(tensor).astype(np.float32)
+
+
+def gather_logits(logits) -> np.ndarray:
+    """The LM head's output as one float32 host array."""
+    device = ttml.autograd.AutoContext.get_instance().get_device()
+    composer = ttml.core.distributed.concat_mesh_to_tensor_composer(device, COL_DIM)
+    return logits.to_numpy(ttnn.DataType.FLOAT32, composer=composer)
 
 
 def read_param(params, name: str, shard_dim: int | None) -> np.ndarray:
@@ -655,7 +662,7 @@ class TestLoadIntoModel:
             ttml.autograd.Tensor.from_numpy(mask, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16),
         )
 
-        values = gather(logits, COL_DIM)
+        values = gather_logits(logits)
         assert np.isfinite(values).all(), "logits contain non-finite values"
         assert values.std() > 1e-3, "logits are ~constant; the weights did not reach the matmuls"
 
