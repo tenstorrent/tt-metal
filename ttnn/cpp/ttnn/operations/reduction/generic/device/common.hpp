@@ -81,13 +81,15 @@ inline bool use_sfpu_reduce_path(
 enum class ScalerMode : uint8_t { None, ScalerTile, PostMul };
 
 // PostMul is required when the scaler CB cannot apply the scalar correctly.
+// `effective_dim` is the dim of the stage that actually applies the scalar, not the dim the user
+// asked for: a caller decomposing HW into W-then-H applies it on the H stage and must pass H.
 inline ScalerMode derive_scaler_mode(
     tt::tt_metal::ReduceOpMath math_op,
     tt::tt_metal::DataType dtype,
-    tt::tt_metal::ReduceOpDim dim,
+    tt::tt_metal::ReduceOpDim effective_dim,
     bool use_sfpu_reduce = false) {
     using tt::tt_metal::ReduceOpMath;
-    if (dim == tt::tt_metal::ReduceOpDim::HW) {
+    if (effective_dim == tt::tt_metal::ReduceOpDim::HW) {
         return ScalerMode::PostMul;
     }
     if (math_op == ReduceOpMath::MAX || math_op == ReduceOpMath::MIN) {
