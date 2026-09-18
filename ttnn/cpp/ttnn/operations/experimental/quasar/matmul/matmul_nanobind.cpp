@@ -649,13 +649,13 @@ void py_module(nb::module_& mod) {
         Placement-first program config (Quasar-native matmul, stage A).
 
         GEMM vocabulary, all sizes in 32x32 tiles: C[M x N] = A[M x K] x B[K x N]. Name the cores and
-        the block of C (per_core_M x per_core_N tiles) each core produces; the factory walks C in
+        the block of C (per_core_M_tiles x per_core_N_tiles tiles) each core produces; the factory walks C in
         blocks (across N, then down M, then the next batch) and hands that walk to the cores in
         enumeration order as contiguous runs (a core may produce several; surplus cores idle). Edge
         blocks are clipped on read and write, so any M / N works. Every
         operand is addressed through the tensor accessor, so interleaved, L1-sharded and DRAM-sharded
         inputs and outputs all take the same kernels. The 1D, 2D and DRAM-sharded strategies are
-        particular choices of (cores, per_core_M, per_core_N).
+        particular choices of (cores, per_core_M_tiles, per_core_N_tiles).
 
         Limits: no fused bias (applied as a separate add) or activation, no untilize, 32x32 tiles
         only; a sharded output needs batch 1 and exactly one block per core.
@@ -666,8 +666,8 @@ void py_module(nb::module_& mod) {
             nb::init<CoreRangeSet, std::size_t, std::size_t, std::size_t, std::size_t, std::size_t, bool>(),
             nb::kw_only(),
             nb::arg("cores"),
-            nb::arg("per_core_M").noconvert(),
-            nb::arg("per_core_N").noconvert(),
+            nb::arg("per_core_M_tiles").noconvert(),
+            nb::arg("per_core_N_tiles").noconvert(),
             nb::arg("K_iteration_tiles").noconvert() = 0,
             nb::arg("subblock_M_tiles").noconvert() = 0,
             nb::arg("subblock_N_tiles").noconvert() = 0,
@@ -675,10 +675,10 @@ void py_module(nb::module_& mod) {
         .def_rw("cores", &MatmulUnifiedProgramConfig::cores, R"doc(
             Cores (clusters) that take part, as a CoreRangeSet.
         )doc")
-        .def_rw("per_core_M", &MatmulUnifiedProgramConfig::per_core_M, R"doc(
+        .def_rw("per_core_M_tiles", &MatmulUnifiedProgramConfig::per_core_M_tiles, R"doc(
             Height of the block of C each core produces, in tiles.
         )doc")
-        .def_rw("per_core_N", &MatmulUnifiedProgramConfig::per_core_N, R"doc(
+        .def_rw("per_core_N_tiles", &MatmulUnifiedProgramConfig::per_core_N_tiles, R"doc(
             Width of the block of C each core produces, in tiles.
         )doc")
         .def_rw("K_iteration_tiles", &MatmulUnifiedProgramConfig::K_iteration_tiles, R"doc(
@@ -686,11 +686,11 @@ void py_module(nb::module_& mod) {
             divide K in tiles. 0 = auto (largest divisor <= 8 whose rings fit L1).
         )doc")
         .def_rw("subblock_M_tiles", &MatmulUnifiedProgramConfig::subblock_M_tiles, R"doc(
-            Subblock height in tiles (the block's tiles accumulated in DST at once); must divide per_core_M.
+            Subblock height in tiles (the block's tiles accumulated in DST at once); must divide per_core_M_tiles.
             0 with subblock_N_tiles = 0 means auto.
         )doc")
         .def_rw("subblock_N_tiles", &MatmulUnifiedProgramConfig::subblock_N_tiles, R"doc(
-            Subblock width in tiles; must divide per_core_N. A subblock holds at most 8 tiles (4 with fp32
+            Subblock width in tiles; must divide per_core_N_tiles. A subblock holds at most 8 tiles (4 with fp32
             accumulation), the DST capacity.
         )doc")
         .def_rw("row_major_cores", &MatmulUnifiedProgramConfig::row_major_cores, R"doc(
@@ -698,11 +698,11 @@ void py_module(nb::module_& mod) {
         )doc")
         .def("__repr__", [](const MatmulUnifiedProgramConfig& config) {
             return fmt::format(
-                "MatmulUnifiedProgramConfig(cores={}, per_core_M={}, per_core_N={}, K_iteration_tiles={}, "
+                "MatmulUnifiedProgramConfig(cores={}, per_core_M_tiles={}, per_core_N_tiles={}, K_iteration_tiles={}, "
                 "subblock_M_tiles={}, subblock_N_tiles={}, row_major_cores={})",
                 config.cores.str(),
-                config.per_core_M,
-                config.per_core_N,
+                config.per_core_M_tiles,
+                config.per_core_N_tiles,
                 config.K_iteration_tiles,
                 config.subblock_M_tiles,
                 config.subblock_N_tiles,

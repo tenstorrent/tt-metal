@@ -4,14 +4,14 @@
 
 // Unified matmul writer: stores this cluster's finished blocks of C.
 //
-// GEMM view, all sizes in 32x32 tiles: C[M x N]. A block is the per_core_M x per_core_N tiles of C at
+// GEMM view, all sizes in 32x32 tiles: C[M x N]. A block is the per_core_M_tiles x per_core_N_tiles tiles of C at
 // origin (block_M_tile, block_N_tile) in one batch. This cluster starts at (first_batch, first_M_tile,
-// first_N_tile) and writes num_blocks of them, stepping per_core_N tiles across N, then per_core_M tiles
+// first_N_tile) and writes num_blocks of them, stepping per_core_N_tiles tiles across N, then per_core_M_tiles tiles
 // down M, then into the next batch, exactly as the reader does.
 //
 // The compute kernel packs a block one subblock (subblock_M_tiles x subblock_N_tiles tiles, what DST
 // holds) at a time, subblocks in row-major order over the block and tiles in row-major order within a
-// subblock. This writer mirrors that order, maps every tile back to its (m, n) position in C and writes it
+// subblock. This writer mirrors that order, maps every tile back to its (m_tile, n_tile) position in C and writes it
 // by tile index through the tensor accessor. Tiles past M_tiles / N_tiles (edge blocks) are popped but
 // not written.
 
@@ -32,8 +32,8 @@ void kernel_main() {
 
     constexpr uint32_t M_tiles = get_arg(args::M_tiles);
     constexpr uint32_t N_tiles = get_arg(args::N_tiles);
-    constexpr uint32_t per_core_M = get_arg(args::per_core_M);
-    constexpr uint32_t per_core_N = get_arg(args::per_core_N);
+    constexpr uint32_t per_core_M_tiles = get_arg(args::per_core_M_tiles);
+    constexpr uint32_t per_core_N_tiles = get_arg(args::per_core_N_tiles);
     constexpr uint32_t subblock_M_tiles = get_arg(args::subblock_M_tiles);
     constexpr uint32_t subblock_N_tiles = get_arg(args::subblock_N_tiles);
 
@@ -51,23 +51,23 @@ void kernel_main() {
     for (uint32_t block = 0; block < num_blocks; ++block) {
         const uint32_t C_batch_first_tile = batch * C_tiles_per_batch;
 
-        // Same DST-group walk as the compute kernel: (m, n) is the group's first tile.
-        for (uint32_t m = 0; m < per_core_M; m += subblock_M_tiles) {
-            for (uint32_t n = 0; n < per_core_N; n += subblock_N_tiles) {
+        // Same DST-group walk as the compute kernel: (m_tile, n_tile) is the group's first tile.
+        for (uint32_t m_tile = 0; m_tile < per_core_M_tiles; m_tile += subblock_M_tiles) {
+            for (uint32_t n_tile = 0; n_tile < per_core_N_tiles; n_tile += subblock_N_tiles) {
                 C_block.wait_front(subblock_tiles);
                 uint32_t slot_offset = 0;
                 for (uint32_t tile_row = 0; tile_row < subblock_M_tiles; ++tile_row) {
-                    const uint32_t C_tile_m = block_M_tile + m + tile_row;  // tile position in C
+                    const uint32_t C_m_tile = block_M_tile + m_tile + tile_row;  // tile position in C
                     for (uint32_t tile_column = 0; tile_column < subblock_N_tiles;
                          ++tile_column, slot_offset += C_tile_bytes) {
-                        const uint32_t C_tile_n = block_N_tile + n + tile_column;
-                        if (C_tile_m < M_tiles && C_tile_n < N_tiles) {
+                        const uint32_t C_n_tile = block_N_tile + n_tile + tile_column;
+                        if (C_m_tile < M_tiles && C_n_tile < N_tiles) {
                             noc.async_write(
                                 C_block,
                                 C,
                                 C_tile_bytes,
                                 {.offset_bytes = slot_offset},
-                                {.page_id = C_batch_first_tile + C_tile_m * N_tiles + C_tile_n});
+                                {.page_id = C_batch_first_tile + C_m_tile * N_tiles + C_n_tile});
                         }
                     }
                 }
@@ -77,10 +77,10 @@ void kernel_main() {
         }
 
         // Next block: across N, then down M, then the next batch.
-        block_N_tile += per_core_N;
+        block_N_tile += per_core_N_tiles;
         if (block_N_tile >= N_tiles) {
             block_N_tile = 0;
-            block_M_tile += per_core_M;
+            block_M_tile += per_core_M_tiles;
             if (block_M_tile >= M_tiles) {
                 block_M_tile = 0;
                 ++batch;

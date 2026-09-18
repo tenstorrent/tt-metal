@@ -21,7 +21,7 @@ namespace ttnn::prim::qsr {
 // config is checked in that function with TT_FATAL, so calling it is the config check.
 //
 // Vocabulary (classic GEMM, all sizes in 32x32 tiles): C[M x N] = A[M x K] x B[K x N].
-//   block        the per_core_M x per_core_N tiles of C a core produces in one go; cores walk C in blocks
+//   block        the per_core_M_tiles x per_core_N_tiles tiles of C a core produces in one go; cores walk C in blocks
 //                row-major (across N, then down M), batch after batch
 //   subblock     the subblock_M_tiles x subblock_N_tiles tiles of a block accumulated in DST at once
 //   K iteration  K_iteration_tiles of the inner dimension; one A slice + one B slice per iteration
@@ -33,8 +33,8 @@ struct UnifiedMatmulPlan {
     bool broadcast_B_over_batch = true;  // one B for every batch, or a B per batch
 
     // Blocking, after the config's auto fields are resolved.
-    uint32_t per_core_M = 0;
-    uint32_t per_core_N = 0;
+    uint32_t per_core_M_tiles = 0;
+    uint32_t per_core_N_tiles = 0;
     uint32_t K_iteration_tiles = 0;
     uint32_t num_K_iterations = 0;  // K_tiles / K_iteration_tiles
     uint32_t subblock_M_tiles = 0;

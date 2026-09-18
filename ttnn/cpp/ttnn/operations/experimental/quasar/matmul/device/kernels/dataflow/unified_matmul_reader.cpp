@@ -4,13 +4,13 @@
 
 // Unified matmul reader: streams the A and B slices for this cluster's blocks of C.
 //
-// GEMM view, all sizes in 32x32 tiles: C[M x N] = A[M x K] x B[K x N]. A block is the per_core_M x
-// per_core_N tiles of C at origin (block_M_tile, block_N_tile) in one batch. This cluster starts at
-// (first_batch, first_M_tile, first_N_tile) and produces num_blocks of them, stepping per_core_N tiles
-// across N, then per_core_M tiles down M, then into the next batch. For each block and each K iteration
+// GEMM view, all sizes in 32x32 tiles: C[M x N] = A[M x K] x B[K x N]. A block is the per_core_M_tiles x
+// per_core_N_tiles tiles of C at origin (block_M_tile, block_N_tile) in one batch. This cluster starts at
+// (first_batch, first_M_tile, first_N_tile) and produces num_blocks of them, stepping per_core_N_tiles tiles
+// across N, then per_core_M_tiles tiles down M, then into the next batch. For each block and each K iteration
 // the reader pushes
-//   - one A slice: the block's rows of A, K_iteration_tiles wide    -> [per_core_M][K_iteration_tiles] tiles
-//   - one B slice: the block's columns of B, K_iteration_tiles tall -> [K_iteration_tiles][per_core_N] tiles
+//   - one A slice: the block's rows of A, K_iteration_tiles wide    -> [per_core_M_tiles][K_iteration_tiles] tiles
+//   - one B slice: the block's columns of B, K_iteration_tiles tall -> [K_iteration_tiles][per_core_N_tiles] tiles
 // both row-major, which is the layout the compute kernel indexes. Loop order (block, K iteration) matches it.
 //
 // Edge blocks: tiles past M_tiles / N_tiles are never read; their slots keep stale L1, which only reaches
@@ -41,15 +41,15 @@ void kernel_main() {
     constexpr uint32_t K_tiles = get_arg(args::K_tiles);
     constexpr uint32_t N_tiles = get_arg(args::N_tiles);
     constexpr bool broadcast_B_over_batch = get_arg(args::broadcast_B_over_batch) != 0;
-    constexpr uint32_t per_core_M = get_arg(args::per_core_M);
-    constexpr uint32_t per_core_N = get_arg(args::per_core_N);
+    constexpr uint32_t per_core_M_tiles = get_arg(args::per_core_M_tiles);
+    constexpr uint32_t per_core_N_tiles = get_arg(args::per_core_N_tiles);
     constexpr uint32_t K_iteration_tiles = get_arg(args::K_iteration_tiles);
     constexpr uint32_t num_K_iterations = get_arg(args::num_K_iterations);
     // Valid element columns in A's last K tile; 0 when K is a multiple of the tile dim.
     constexpr uint32_t A_last_K_tile_valid_columns = get_arg(args::A_last_K_tile_valid_columns);
 
-    constexpr uint32_t A_slice_tiles = per_core_M * K_iteration_tiles;
-    constexpr uint32_t B_slice_tiles = K_iteration_tiles * per_core_N;
+    constexpr uint32_t A_slice_tiles = per_core_M_tiles * K_iteration_tiles;
+    constexpr uint32_t B_slice_tiles = K_iteration_tiles * per_core_N_tiles;
     constexpr uint32_t A_tiles_per_batch = M_tiles * K_tiles;
     constexpr uint32_t B_tiles_per_batch = K_tiles * N_tiles;
 
@@ -73,8 +73,10 @@ void kernel_main() {
         const uint32_t A_batch_first_tile = batch * A_tiles_per_batch;
         const uint32_t B_batch_first_tile = broadcast_B_over_batch ? 0 : batch * B_tiles_per_batch;
         // Rows / columns of this block that lie inside the matrices (edge blocks are clipped).
-        const uint32_t valid_M_tiles = (M_tiles - block_M_tile < per_core_M) ? (M_tiles - block_M_tile) : per_core_M;
-        const uint32_t valid_N_tiles = (N_tiles - block_N_tile < per_core_N) ? (N_tiles - block_N_tile) : per_core_N;
+        const uint32_t valid_M_tiles =
+            (M_tiles - block_M_tile < per_core_M_tiles) ? (M_tiles - block_M_tile) : per_core_M_tiles;
+        const uint32_t valid_N_tiles =
+            (N_tiles - block_N_tile < per_core_N_tiles) ? (N_tiles - block_N_tile) : per_core_N_tiles;
 
         for (uint32_t K_iteration = 0; K_iteration < num_K_iterations; ++K_iteration) {
             const uint32_t first_K_tile = K_iteration * K_iteration_tiles;
@@ -84,9 +86,10 @@ void kernel_main() {
             A_slice.reserve_back(A_slice_tiles);
             {
                 uint32_t slot_offset = 0;
-                for (uint32_t m = 0; m < valid_M_tiles; ++m) {
-                    uint32_t A_tile_index = A_batch_first_tile + (block_M_tile + m) * K_tiles + first_K_tile;
-                    for (uint32_t k = 0; k < K_iteration_tiles; ++k, ++A_tile_index, slot_offset += A_slot_bytes) {
+                for (uint32_t m_tile = 0; m_tile < valid_M_tiles; ++m_tile) {
+                    uint32_t A_tile_index = A_batch_first_tile + (block_M_tile + m_tile) * K_tiles + first_K_tile;
+                    for (uint32_t k_tile = 0; k_tile < K_iteration_tiles;
+                         ++k_tile, ++A_tile_index, slot_offset += A_slot_bytes) {
                         noc.async_read(
                             A, A_slice, A_tile_bytes, {.page_id = A_tile_index}, {.offset_bytes = slot_offset});
                     }
@@ -97,10 +100,11 @@ void kernel_main() {
             B_slice.reserve_back(B_slice_tiles);
             {
                 uint32_t slot_offset = 0;
-                for (uint32_t k = 0; k < K_iteration_tiles; ++k) {
-                    uint32_t B_tile_index = B_batch_first_tile + (first_K_tile + k) * N_tiles + block_N_tile;
-                    for (uint32_t n = 0; n < per_core_N; ++n, ++B_tile_index, slot_offset += B_slot_bytes) {
-                        if (n < valid_N_tiles) {
+                for (uint32_t k_tile = 0; k_tile < K_iteration_tiles; ++k_tile) {
+                    uint32_t B_tile_index = B_batch_first_tile + (first_K_tile + k_tile) * N_tiles + block_N_tile;
+                    for (uint32_t n_tile = 0; n_tile < per_core_N_tiles;
+                         ++n_tile, ++B_tile_index, slot_offset += B_slot_bytes) {
+                        if (n_tile < valid_N_tiles) {
                             noc.async_read(
                                 B, B_slice, B_tile_bytes, {.page_id = B_tile_index}, {.offset_bytes = slot_offset});
                         }
@@ -116,9 +120,9 @@ void kernel_main() {
                     constexpr DataFormat A_format = get_dataformat(dfb::A_slice);
                     const uint32_t last_K_tile_of_row_0 =
                         A_slice.get_write_ptr() + (K_iteration_tiles - 1) * A_slot_bytes;
-                    for (uint32_t m = 0; m < valid_M_tiles; ++m) {
+                    for (uint32_t m_tile = 0; m_tile < valid_M_tiles; ++m_tile) {
                         pad_last_ktile<A_format, A_last_K_tile_valid_columns>(
-                            last_K_tile_of_row_0 + m * K_iteration_tiles * A_slot_bytes);
+                            last_K_tile_of_row_0 + m_tile * K_iteration_tiles * A_slot_bytes);
                     }
                 }
             }
@@ -128,10 +132,10 @@ void kernel_main() {
         }
 
         // Next block: across N, then down M, then the next batch.
-        block_N_tile += per_core_N;
+        block_N_tile += per_core_N_tiles;
         if (block_N_tile >= N_tiles) {
             block_N_tile = 0;
-            block_M_tile += per_core_M;
+            block_M_tile += per_core_M_tiles;
             if (block_M_tile >= M_tiles) {
                 block_M_tile = 0;
                 ++batch;
