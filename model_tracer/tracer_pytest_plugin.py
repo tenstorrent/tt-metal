@@ -91,6 +91,11 @@ def _per_test_trace_dir(request):
 
     os.environ["TTNN_OPERATION_TRACE_DIR"] = per_test_dir
 
+    # Read device_params BEFORE the yield, while the fixture is still active. After the yield this
+    # fixture resumes during teardown, by which point the other function-scoped fixtures have been
+    # finalised and getfixturevalue no longer resolves -- the sidecar then silently wrote nothing.
+    device_params_snapshot = _read_device_params(request, node_id)
+
     yield
 
     os.environ["TTNN_OPERATION_TRACE_DIR"] = base_trace_dir
@@ -119,3 +124,84 @@ def _per_test_trace_dir(request):
         status_path.write_text(json.dumps({"test_nodeid": node_id, "status": status}, indent=2))
     except OSError as exc:
         logger.debug("Could not write trace status for {}: {}", node_id, exc)
+
+    _write_device_params_sidecar(device_params_snapshot, per_test_dir, node_id)
+
+
+# Device configuration the test opened its mesh with. The trace records machine_info
+# (board/card_count/mesh shape/firmware) but NOTHING about how the device was opened, so anything
+# replaying a traced op has to guess -- and the guesses are not equivalent. conftest's mesh_device
+# fixture applies fabric_config, worker_l1_size, trace_region_size, num_command_queues and
+# dispatch_core_axis from device_params before open_mesh_device, and none of it is recoverable
+# afterwards: every one of those is absent from the live MeshDevice object (verified -- only arch,
+# shape and get_num_devices are queryable). Replaying llama3_70b_galaxy ops without its
+# worker_l1_size=1345000, or with a fabric the model never set, runs the op under a device
+# configuration the model never used.
+#
+# This sidecar only covers NEW traces. The existing corpus predates it and re-tracing every model is
+# not feasible, so device_params_resolver.py recovers the same information for already-traced
+# executions by reading the parametrization back out of the test named in their recorded `source`.
+# Both paths produce the same key set (DEVICE_PARAM_KEYS there mirrors _DEVICE_PARAM_KEYS here); the
+# sidecar is authoritative where it exists, since it records the value the test actually ran with.
+#
+# Captured from the device_params FIXTURE VALUE rather than by intercepting open_mesh_device: it is
+# already materialised by the time the test runs, needs no device access, and stays correct if the
+# open path changes. Only read when the test actually declares it, so tests without device_params
+# are untouched and no fixture is instantiated as a side effect.
+_DEVICE_PARAM_KEYS = (
+    "fabric_config",
+    "fabric_tensix_config",
+    "fabric_manager",
+    "fabric_router_config",
+    "reliability_mode",
+    "worker_l1_size",
+    "l1_small_size",
+    "trace_region_size",
+    "num_command_queues",
+    "dispatch_core_axis",
+    "dispatch_core_type",
+)
+
+
+def _read_device_params(request, node_id):
+    """The test's materialised device_params, or None. Must be called while the fixture is live."""
+    if "device_params" not in getattr(request.node, "fixturenames", ()):
+        return None
+    try:
+        params = request.getfixturevalue("device_params")
+    except Exception as exc:  # fixture errored, was overridden oddly, or is unavailable
+        logger.debug("Could not read device_params for {}: {}", node_id, exc)
+        return None
+    return params if isinstance(params, dict) else None
+
+
+def _write_device_params_sidecar(params, per_test_dir, node_id):
+    """Record the test's device_params next to its traces, for the tracer to attach.
+
+    Best-effort and never fatal: a missing or unserialisable value is dropped rather than
+    guessed at, because a wrong device parameter is worse than an absent one -- an absent one
+    leaves the replayer on its documented default, a wrong one silently changes the workload.
+    """
+    if not params:
+        return
+
+    recorded = {}
+    for key in _DEVICE_PARAM_KEYS:
+        if key not in params:
+            continue
+        value = params[key]
+        # ttnn enums (DispatchCoreAxis, FabricConfig, ...) are not JSON-serialisable; store their
+        # str() form, which is what the master JSON already does for dtypes and layouts.
+        try:
+            json.dumps(value)
+            recorded[key] = value
+        except (TypeError, ValueError):
+            recorded[key] = str(value)
+
+    if not recorded:
+        return
+    try:
+        path = Path(per_test_dir) / "_device_params.json"
+        path.write_text(json.dumps({"test_nodeid": node_id, "device_params": recorded}, indent=2, sort_keys=True))
+    except OSError as exc:
+        logger.debug("Could not write device_params for {}: {}", node_id, exc)

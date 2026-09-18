@@ -506,6 +506,26 @@ def _clean_serialized_trace_value(value, mesh_device_info_ref):
     return value_clean
 
 
+def _load_device_params_sidecar(json_file):
+    """The ``_device_params.json`` written beside a trace, or None.
+
+    Never fatal: an absent or unreadable sidecar just means the execution carries no device
+    configuration, which leaves a replay on its documented defaults (device_params_resolver can
+    still recover it from the traced test).
+    """
+    try:
+        sidecar = Path(json_file).parent / "_device_params.json"
+        if not sidecar.is_file():
+            return None
+        with open(sidecar, "r") as f:
+            data = json.load(f)
+        params = data.get("device_params") if isinstance(data, dict) else None
+        return params if isinstance(params, dict) and params else None
+    except (OSError, ValueError) as exc:
+        print(f"   ⚠️  Could not read device_params sidecar for {json_file}: {exc}")
+        return None
+
+
 def convert_json_to_master_format(json_file, test_source, machine_info):
     """Convert individual JSON file to master format"""
     try:
@@ -558,6 +578,14 @@ def convert_json_to_master_format(json_file, test_source, machine_info):
             "source": test_source,
             "machine_info": enhanced_machine_info,
         }
+
+        # The device configuration the traced test opened its mesh with, written next to this
+        # trace by tracer_pytest_plugin. Looked up from the trace's own directory rather than
+        # passed in, because collect_operation_jsons returns a flat file list and the sidecar is
+        # per-test; the flat/legacy layout simply has none and is unaffected.
+        device_params = _load_device_params_sidecar(json_file)
+        if device_params:
+            result["device_params"] = device_params
 
         sweep_source_hash = data.get("sweep_source_hash")
         if sweep_source_hash:
@@ -943,6 +971,10 @@ def update_master_file(master_file_path, operations, test_source, trace_uid=None
                         "count": operation.get("execution_count", 1),
                         "trace_uid": trace_uid or operation.get("trace_uid"),
                         "pytest_args": pytest_args,
+                        # Only present when the trace carried a sidecar. Attached per EXECUTION, not
+                        # per config: the same op arguments can be traced by two models with
+                        # different device configurations, and the config hash does not cover it.
+                        **({"device_params": operation["device_params"]} if operation.get("device_params") else {}),
                     }
                 ],
             }
