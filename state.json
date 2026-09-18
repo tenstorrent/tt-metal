@@ -1,9 +1,9 @@
 {
   "last_run": {
-    "run_id": "35315773605",
-    "timestamp": "2026-09-18T06:43:00Z"
+    "run_id": "35345367198",
+    "timestamp": "2026-09-18T12:39:00Z"
   },
-  "run_id": "35315773605",
+  "run_id": "35345367198",
   "open_prs": {
     "52106": {
       "issue": 51660,
@@ -193,6 +193,12 @@
     "56864": {
       "issue": 56827,
       "status": "CLOSED without merge by CI automation (closed_by github-actions[bot], no comments, no failing checks visible via get_check_runs -- 5/5 green). Root cause of closure unclear from API; #56827 remains open. A fresh fix PR is needed next run."
+    },
+    "56955_welford_groupnorm_stride": {
+      "issue": 56955,
+      "branch": "repo-assist/fix-issue-56955-welford-groupnorm-batch-stride",
+      "title": "fix(ttnn): correct Welford groupnorm sharded kernel batch stride for multi-group cores",
+      "status": "opened this run; reads compile arg 18 (num_tiles_per_batch) instead of arg 9 (block_hw) for tile_id stride at both loop entries in welford_groupnorm_sharded_v2.cpp; added regression test test_group_norm_welford_multi_batch_per_core_sub_tile_groups; CI triggered via pr-gate.yaml, outcome unknown yet, check next run; docker unavailable in sandbox so unverified locally"
     }
   },
   "issues_labeled": [
@@ -1059,7 +1065,8 @@
     "task1_task2_2026_09_16b": "reviewed fresh issues #56644 down to #56492 (continuing below prior cursor #56644); confirmed #56518 (ttnn.pow fp32 log2 argument-reduction cancellation) already covered by open PR #56593, no dup; confirmed #56621 (tanh_bw dtype mismatch) already covered by PR #56064 (prior finding, still valid); investigated and fixed #56532 (ttnn.experimental.fft/ifft bf16 writer truncation bias) - confirmed against current batch_fft_writer.cpp/radix_pass_writer.cpp/apply_twiddles_writer.cpp (all still use >> 16 truncation exactly as described), opened fix PR implementing proposal (1) only (RNE rounding helper in batch_fft_common.h) per the issue's own scoping of proposal (2) as separate/larger; other fresh issues (56654 model-config tuning, 56628/56627 ND-sharding feature asks - no code defect, 56625/56623/56622 metal2.0 emulator analysis tracking, 56617/56608/56607 shield_prefill tracking, 56613/56616/56626 already labeled/covered from prior runs, 56601 tracking epic, 56592 test-escalation tracking, 56577/56576 already labeled/covered, 56561/56560/56559/56558/56557 Fabric/control-plane design tracking, 56556 runtime design note, 56547 already-labeled bug, 56544 silencer automation tracking, 56525/56526/56520/56521/56513/56503/56501/56500/56498/56492 already labeled/covered from prior runs, 56641 sfpi design note - no code defect yet, relies on #53164) all already correctly labeled/covered or non-defect design/tracking issues. Next run continue newest-scan below #56492.",
     "task1_task2_2026_09_17": "reviewed newest open issue #56808 (fresh, LLK typecast test harness never samples negative Int32 stimuli) -- verified against current ckernel_sfpu_typecast.h sources across WH/BH/Quasar that Int32 typecast kernels expect sign-magnitude Dest encoding (matching pack_int32 default), confirming the issue's diagnosis; opened a test-only fix PR (test_eltwise_unary_typecast_int32_negative) rather than restating the issue's claim unverified. Did not get to a full newest-issue scan below #56808 this run (spent budget verifying kernel sources across 3 architectures for confidence before committing a fix) -- next run should scan #56797 downward (topk merge perf, sfpi coverage bug #56751 already labeled, binary_ng dtype corruption #56738 already labeled, several Quasar/profiler perf-tracking issues seen but not yet triaged: #56712/56711/56710/56702/56701/56697).",
     "task1_task2_2026_09_17c": "reviewed newest issues 56859 down to 56823 (fresh since prior run cursor at #56808); #56853 already covered by open PR #56860 (heroxcreed pow int-scalar bit-reinterpret bug), no dup; investigated+fixed #56827 (concat block-sharded width ragged-tail, same defect class as height fix #56603), opened PR + labeled bug + commented; labeled #56824 bug (concat >16-input batching, confirmed root cause, too large for auto-fix, left for maintainer) but did not attempt a fix; other issues in range (56859 quasar dest-bank, 56856 real/imag memory_config, 56843/56840 agentic-workflow noise, 56835 prelu memory_config, 56831 JIT cache, 56828 moreh tracking, 56826/56825 quasar LLK, 56823 test-coverage tracking) already labeled or are tracking/design issues, no action needed. Next run continue newest-scan below #56823.",
-    "task6_2026_09_17": "switched from updated-asc unfiltered (all drafts, already exhausted in earlier runs) to draft:false sort:updated-asc; page 38627-51991 all previously nudged except 51533/51844/51875/51915/51991 (surfaced now that updated_at refreshed 2026-09-02); pinged 51844+51875 (reviewer-blocked, codeowners ping) and nudged 51915 (author, dirty mergeable_state) -- hit 3-action cap. Next run: check 51533 (dirty, 8 reviewers, likely author-blocked -- verify) and 51991 (dirty, 9 LLK reviewers -- verify), then continue paging draft:false sort:updated-asc beyond 51991."
+    "task6_2026_09_17": "switched from updated-asc unfiltered (all drafts, already exhausted in earlier runs) to draft:false sort:updated-asc; page 38627-51991 all previously nudged except 51533/51844/51875/51915/51991 (surfaced now that updated_at refreshed 2026-09-02); pinged 51844+51875 (reviewer-blocked, codeowners ping) and nudged 51915 (author, dirty mergeable_state) -- hit 3-action cap. Next run: check 51533 (dirty, 8 reviewers, likely author-blocked -- verify) and 51991 (dirty, 9 LLK reviewers -- verify), then continue paging draft:false sort:updated-asc beyond 51991.",
+    "task1_task2_2026_09_18": "reviewed newest issues #56993 down to #56876 (fresh since prior cursor #56823); fixed #56955 (welford groupnorm batch stride) with PR+test; labeled bug; #56880 gather rank>4 sibling defect confirmed but left unfixed per issue's own scoping (more invasive than scatter fix, multiple factories, TILE layout); #56945/#56954 already covered by external PRs #56932/#56953; #56973 Wormhole Galaxy NoC hangs is fleet/infra, flagged not fixed. Next run continue newest-scan below #56876, or attempt #56880 gather fix if budget allows (scope: pre_gather_transform_tensor / squeeze_from_ND_to_4D per-tensor folding, check SingleRowSingleCore/SingleRowMultiCore/wide-Wt factories + codegen route for hard 4D assumption)."
   },
   "labeled_issues": {
     "53866": {
@@ -1470,6 +1477,11 @@
       "run_id": "35293368209",
       "date": "2026-09-18T01:02:00Z",
       "summary": "Task2/3: investigated newest issue #56938 (unary elementwise 28 op types return float32 bit patterns for int32 input), verified against current unary_op_utils.cpp that none of the 28 op types have an INT32 branch, confirming the reported silent bit-reinterpretation bug; opened fix PR adding TT_FATAL validation rejecting INT32 for these 28 op types + parametrized regression test; labeled #56938 bug and commented linking the fix. Task8: rewrote monthly summary #55015 (deduplicated Suggested Actions/Run History, had regrown to ~192KB) with current suggested actions + this run entry."
+    },
+    {
+      "run_id": "35345367198",
+      "date": "2026-09-18T12:39:00Z",
+      "summary": "Task2/3: investigated and fixed #56955 (groupnorm sharded Welford kernel strides batches by block_ht*block_wt instead of block_ht*per_core_Nt, causing every batch after the first on a multi-batch multi-group-per-core to normalize wrong tiles); confirmed against current groupnorm_sharded_program_factory.cpp/groupnorm_sharded_v2.cpp/welford_groupnorm_sharded_v2.cpp that legacy kernel already reads correct stride (compile arg 18, num_tiles_per_batch) while Welford kernel never did; opened fix PR + regression test reproducing issue's trigger shape (N=2,C=1,H=32,W=64,num_groups=2); labeled bug + commented linking fix. Reviewed newest issues #56993-#56876 (fresh since prior cursor #56823): #56880 (gather rank>4 folding, sibling of fixed #56876) confirmed genuine defect but issue itself scopes the fix as more invasive than scatter's, left for maintainer (flagged in monthly summary); #56945/#56954 already have open external fix PRs (#56932/#56953), no dup; #56973 (Wormhole Galaxy NoC hangs) is fleet/infra, not code-fixable by repo-assist, flagged for maintainer. Task8: rewrote monthly summary #55015 (regrown to ~247KB with heavy duplication) with current suggested actions + this run entry."
     }
   ],
   "no_action_reviewed": [
@@ -1503,7 +1515,9 @@
     {
       "issue": 55825,
       "note": "ttnn.from_torch integer dtype UB (static_cast x86_64 vs aarch64) - large body, not fully analyzed yet this run; carry to next run's backlog."
-    }
+    },
+    "56973: Wormhole Galaxy device hangs since 2026-09-17, fleet/infra issue (NoC/DRAM/ETH health), not a tt-metal code defect repo-assist can fix; flagged in monthly summary (2026-09-18)",
+    "56880: gather rank>4 independent-fold silent-wrong-data bug, sibling of fixed #56876/PR#56875; confirmed genuine but issue's own scoping notes gather's fix needs checking multiple program factories (SingleRowSingleCore/SingleRowMultiCore/wide-Wt) + codegen route for hard 4D assumptions, more invasive than scatter's fix; deferred, flagged in monthly summary (2026-09-18)"
   ],
   "resolved": {
     "52673": {
