@@ -63,40 +63,6 @@ void DispatchFabric2dDeviceOperation::validate_on_program_cache_miss(
         "dispatch_fabric2d: axis {} is out of range for a {} mesh",
         args.axis,
         args.device->shape());
-    if (args.fanout) {
-        TT_FATAL(
-            tensor_args.fanout_reach.has_value(),
-            "dispatch_fabric2d: fanout needs the reach table; per-expert counts are marginals and cannot "
-            "size a multicast chunk");
-        const auto& shape = tensor_args.fanout_reach->logical_shape();
-        const uint32_t extent = axis_extent(args);
-        TT_FATAL(
-            shape[-1] >= static_cast<int32_t>(extent / 2 + 2) && shape[-2] == 2 &&
-                shape[-3] == static_cast<int32_t>(extent),
-            "dispatch_fabric2d: fanout_reach must be [.., {}, 2, >= {}] (origin, direction, hop), got {}",
-            extent,
-            extent / 2 + 2,
-            shape);
-        // Everything a multicast page carries about one destination is packed into a word, so the
-        // three fields have to fit. Overflowing any of them corrupts a destination silently.
-        TT_FATAL(
-            args.num_experts_per_tok <= dspf2d::FO_MAX_DESTS,
-            "dispatch_fabric2d: fanout carries at most {} destinations per page but num_experts_per_tok "
-            "is {}; a token would lose destinations on the wire",
-            dspf2d::FO_MAX_DESTS,
-            args.num_experts_per_tok);
-        TT_FATAL(
-            args.max_dispatch_buffer_token_size <= dspf2d::FO_PAGE_MASK,
-            "dispatch_fabric2d: fanout packs a destination page index into {} bits, so capacity {} does "
-            "not fit",
-            dspf2d::FO_PAGE_BITS,
-            args.max_dispatch_buffer_token_size);
-        TT_FATAL(
-            extent / 2 <= dspf2d::FO_HOP_MASK && extent / 2 + 1 <= dspf2d::MC_MAX_HOPS,
-            "dispatch_fabric2d: fanout packs a hop into {} bits, so an axis of {} chips does not fit",
-            dspf2d::FO_HOP_BITS,
-            extent);
-    }
     // read_control_tables lands row r of the offsets table at `control + r * num_routed_experts`
     // words, and a DRAM read needs a 64-byte-aligned L1 destination on Blackhole. Every row after
     // the first is misaligned unless the row is a whole number of 64-byte lines.
@@ -118,16 +84,14 @@ void DispatchFabric2dDeviceOperation::validate_on_program_cache_miss(
         "diametrically opposite chip across both directions",
         args.axis,
         extent);
-    // The reader resolves a pick through a per-expert word that packs the bucket index into its low
-    // 16 bits alongside the hop and the direction. A wider group would overwrite the fields above it
-    // and route tokens to the wrong chip.
+    // The reader resolves a pick through a per-expert word that is either a bucket index or the
+    // ES_NOT_HERE sentinel, and it tells the two apart by magnitude alone.
     TT_FATAL(
-        extent * args.experts_per_chip <= dspf2d::ES_SLOT_MASK,
-        "dispatch_fabric2d: this dispatch group has {} x {} experts, but the reader packs a bucket "
-        "index into {} bits",
+        static_cast<uint64_t>(extent) * args.experts_per_chip < dspf2d::ES_NOT_HERE,
+        "dispatch_fabric2d: this dispatch group has {} x {} experts, but a bucket index has to stay "
+        "below the ES_NOT_HERE sentinel the routing pass tests against",
         extent,
-        args.experts_per_chip,
-        dspf2d::ES_SLOT_BITS);
+        args.experts_per_chip);
     TT_FATAL(
         ttnn::ccl::is_axis_wrap_wired(*args.device, args.axis),
         "dispatch_fabric2d: axis {} has no closing link, so it is not a ring. This op sends single hops "
@@ -299,7 +263,6 @@ std::array<ttnn::Tensor, 2> dispatch_fabric2d(
     const ttnn::Tensor& expert_dispatch_table_tensor,
     const ttnn::Tensor& expert_token_counts,
     const ttnn::Tensor& expert_region_offsets,
-    const std::optional<ttnn::Tensor>& fanout_reach,
     const std::optional<ttnn::Tensor>& padding_config,
     uint32_t experts_per_chip,
     uint32_t num_routed_experts,
@@ -309,7 +272,6 @@ std::array<ttnn::Tensor, 2> dispatch_fabric2d(
     uint32_t seq_len_per_chip,
     uint32_t axis,
     uint32_t num_links,
-    bool fanout,
     tt::tt_fabric::Topology topology,
     const tt::tt_metal::MemoryConfig& memory_config,
     const CoreRangeSet& worker_core_range_set) {
@@ -326,7 +288,6 @@ std::array<ttnn::Tensor, 2> dispatch_fabric2d(
             .seq_len_per_chip = seq_len_per_chip,
             .axis = axis,
             .num_links = num_links,
-            .fanout = fanout,
             .has_padding_config = padding_config.has_value(),
             .topology = topology,
             .output_mem_config = memory_config,
@@ -338,7 +299,6 @@ std::array<ttnn::Tensor, 2> dispatch_fabric2d(
             .expert_dispatch_table_tensor = expert_dispatch_table_tensor,
             .expert_token_counts = expert_token_counts,
             .expert_region_offsets = expert_region_offsets,
-            .fanout_reach = fanout_reach,
             .padding_config = padding_config});
 }
 

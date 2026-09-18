@@ -19,7 +19,7 @@ namespace ttnn::operations::experimental::deepseek_prefill::dispatch_fabric2d {
 
 namespace {
 
-// The sender reaches its eth core over NOC_1, so that is the NOC distances are minimised on.
+// The sender reaches its eth core over NOC_1, so that is the NOC whose hop distance is minimised.
 constexpr tt::tt_metal::NOC SENDER_NOC = tt::tt_metal::NOC::NOC_1;
 
 struct WorkerCandidate {
@@ -64,12 +64,12 @@ StreamPlacements decide_device_placement(
             // direction's channels, so an ordinal is not a link index.
             const uint32_t link_idx = links[k];
             const auto eth_core = tt::tt_fabric::get_forwarding_eth_core(self_node, nbr_node, link_idx);
-            uint32_t noc_hops = 0;
-            const tt::tt_metal::CoreCoord worker =
-                tt::tt_metal::experimental::Device::get_closest_worker_to_eth_core(dev, eth_core, SENDER_NOC, noc_hops);
+            const auto closest =
+                tt::tt_metal::experimental::Device::get_closest_worker_to_eth_core(*dev, eth_core, SENDER_NOC);
             const StreamId stream = make_stream_id(k, delta == 1);
             eth_core_of[stream] = eth_core;
-            candidates.emplace(stream, WorkerCandidate{worker, noc_hops, *nbr, nbr_node, link_idx});
+            candidates.emplace(
+                stream, WorkerCandidate{closest.logical_coord, closest.distance_in_noc_hops, *nbr, nbr_node, link_idx});
         }
     }
 

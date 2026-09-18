@@ -65,7 +65,7 @@ std::vector<tt::tt_metal::CoreCoord> decide_untilizer_cores(
         }
     }
     if (below.empty()) {
-        // Nothing under the streams: the old pool, every spare core up to one per stripe, no cap.
+        // Nothing under the streams: fall back to every spare core, up to one per stripe.
         *fallback = UntilizerPoolFallback::kNoRowBelow;
         const std::size_t n = std::min<std::size_t>(spare.size(), num_stripes);
         return std::vector<tt::tt_metal::CoreCoord>(spare.begin(), spare.begin() + n);
