@@ -39,6 +39,8 @@ from tests.ttnn.nightly.unit_tests.operations.experimental.quasar.binary_ng_quas
     _width_sharded_config,
 )
 
+pytestmark = pytest.mark.use_module_device
+
 
 # a is the full [H,W]; the other operand broadcasts. ROW_B: b has one (logical) row. ROW_A: a has one.
 # subtract (non-commutative) is included alongside add so an lhs/rhs (BCAST_INPUT) operand swap would
