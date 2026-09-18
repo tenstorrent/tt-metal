@@ -104,13 +104,13 @@ uint64_t size_rings(UnifiedMatmulPlan& plan, uint32_t K_iteration_tiles, bool fp
     // data: a single C chunk per core, or no partials at all (one K iteration).
     const bool partials_ever_written = plan.num_K_iterations > 1;
     const bool one_C_chunk_per_core = plan.max_C_chunks_per_core == 1;
-    plan.alias_C_partials_onto_C_block =
+    plan.alias_C_partials_onto_C_chunk =
         (plan.C_partials_format == plan.C_format) && (!partials_ever_written || one_C_chunk_per_core);
 
     plan.l1_bytes =
         (uint64_t)plan.A_slice_ring_slots * plan.A_slot_bytes + (uint64_t)plan.B_slice_ring_slots * plan.B_slot_bytes +
         (uint64_t)plan.C_chunk_ring_slots * plan.C_slot_bytes +
-        (plan.alias_C_partials_onto_C_block ? 0 : (uint64_t)plan.C_partials_ring_slots * plan.C_partials_slot_bytes);
+        (plan.alias_C_partials_onto_C_chunk ? 0 : (uint64_t)plan.C_partials_ring_slots * plan.C_partials_slot_bytes);
     return plan.l1_bytes;
 }
 
@@ -412,7 +412,7 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
             .data_format_metadata = plan.C_partials_format,
             .tile_format_metadata = C_tile,
         };
-        if (plan.alias_C_partials_onto_C_block) {
+        if (plan.alias_C_partials_onto_C_chunk) {
             C_chunk_dfb.advanced_options.alias_with = {C_PARTIALS_DFB};
             C_partials_dfb.advanced_options.alias_with = {C_CHUNK_DFB};
         }
