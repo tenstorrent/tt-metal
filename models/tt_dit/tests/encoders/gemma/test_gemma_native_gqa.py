@@ -137,9 +137,10 @@ def test_collect_gemma_native_gqa(mesh_device, heads, mask_mode):
         k_chunk_size=128,
         exp_approx_mode=False,
     )
+    diagnostic_hifi4 = os.environ.get("GQA_DIAGNOSTIC_HIFI4", "0") == "1"
     compute = ttnn.init_device_compute_kernel_config(
         mesh_device.arch(),
-        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_fidelity=ttnn.MathFidelity.HiFi4 if diagnostic_hifi4 else ttnn.MathFidelity.HiFi2,
         math_approx_mode=False,
         fp32_dest_acc_en=True,
         packer_l1_acc=True,
@@ -185,6 +186,7 @@ def test_collect_gemma_native_gqa(mesh_device, heads, mask_mode):
         "local_kv_shape": [1, heads // 2, SEQ, HEAD_DIM],
         "timing_boundary": "synchronized trace replay of KV-repeat+SDPA versus native GQA SDPA",
         "profiler_env": os.environ.get("TT_METAL_DEVICE_PROFILER", "0"),
+        "diagnostic_hifi4": diagnostic_hifi4,
         "replays_per_batch": replays,
         "timing_samples_us": {"expanded": [], "native": []},
         "replay_outputs": [],
@@ -273,6 +275,7 @@ def _verify(result_dir, fixture_dir, name):
         "metrics": metrics,
         "timing_samples_us": result["timing_samples_us"],
         "profiler_env": result["profiler_env"],
+        "diagnostic_hifi4": result.get("diagnostic_hifi4", False),
         "timing_boundary": result["timing_boundary"],
     }
     report_path.write_text(json.dumps(report, indent=2) + "\n")
