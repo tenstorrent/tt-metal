@@ -9,25 +9,29 @@ residual + sinc-resampled skip, clamped to [-1, 1]. fp32 throughout (every conv 
 
 from __future__ import annotations
 
+import math
+import os
+
 import torch
 
 import ttnn
 
 from ...layers.audio_resample import UpSample1d
 from ...layers.module import Module, Parameter
+from ...utils.tracing import traced_function
 from .vocoder_ltx import Vocoder
 
 
 class _STFTFn(Module):
-    """Causal STFT expressed as a host-side ``unfold`` + on-device matmul.
+    """Causal windowing followed by an on-device STFT basis matmul.
 
     We avoid ``Conv1dViaConv3d`` here: the conv3d kernel forces ``C_in_block=32``
     in fp32, so a 512-tap kernel with C_in=1 blows the static CB allocation past
     L1. Instead we unfold the (causally left-padded) waveform into
     ``(B, T_frames, win_length)`` and matmul against the basis reshaped to
-    ``(win_length, n_freqs*2)`` — fp32 end-to-end, same fidelity. The cost is a
-    device→host→device round-trip per call (no device-side unfold op exists);
-    permanent fix is a device unfold to keep the waveform resident.
+    ``(win_length, n_freqs*2)`` — fp32 end-to-end, same fidelity. By default the
+    windows use host ``unfold``. ``LTX_STFT_DEVICE_FRAMING=1`` selects a device
+    gather using immutable indices uploaded during warmup, before trace capture.
 
     Input is ``(B, T, 1)`` ROW_MAJOR; output magnitude is
     ``(B, T_frames, n_freqs)`` ROW_MAJOR. ``forward_basis`` is a Parameter loaded
@@ -51,6 +55,9 @@ class _STFTFn(Module):
         self.left_pad = max(0, win_length - hop_length)
         self.mesh_device = mesh_device
         self.dtype = dtype
+        self.device_framing = os.environ.get("LTX_STFT_DEVICE_FRAMING", "0") == "1"
+        self._window_indices: dict[tuple[int, int], ttnn.Tensor] = {}
+        self._gather_grid = None
 
         self.forward_basis = Parameter(
             total_shape=[1, win_length, self.n_freqs * 2],
@@ -75,6 +82,51 @@ class _STFTFn(Module):
             state["forward_basis"] = w.squeeze(1).t().contiguous().unsqueeze(0).float()
         state.pop("inverse_basis", None)
 
+    def prepare_device_windows(self, batch: int, length: int) -> None:
+        """Upload immutable gather indices before capture; no waveform values visit the host."""
+        # Native RM gather double-buffers an entire waveform row on every core.
+        # Bound this first experiment to the production clip and its uncropped
+        # extent; a streaming window reader is needed before extending duration.
+        if (self.win_length, self.hop_length, self.left_pad) != (512, 80, 432) or not 80 <= length <= 96640:
+            raise ValueError("device STFT framing requires win512/hop80 and 80..96640 waveform samples")
+        if self._gather_grid is None:
+            grid = self.mesh_device.compute_with_storage_grid_size()
+            if grid.x * grid.y < 64:
+                raise ValueError("device STFT framing requires at least 64 workers")
+            # The native RM factory uses unrounded CB page sizes. A 512-wide
+            # window split across 64 workers gives 32B-aligned index/output
+            # slices; splitting across all 120 BH workers need not do so.
+            self._gather_grid = ttnn.num_cores_to_corerangeset(64, grid, row_wise=True)
+        key = (batch, length)
+        if key in self._window_indices:
+            return
+        frames = (length + self.left_pad - self.win_length) // self.hop_length + 1
+        if frames <= 0:
+            raise ValueError("STFT input is shorter than one causal window")
+        indices = torch.arange(frames, dtype=torch.int64)[:, None] * self.hop_length
+        indices = indices + torch.arange(self.win_length, dtype=torch.int64)[None, :]
+        indices = indices.reshape(1, 1, 1, -1).expand(1, 1, batch, -1).contiguous()
+        self._window_indices[key] = ttnn.from_torch(
+            indices.to(torch.int32),
+            device=self.mesh_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=ttnn.uint32,
+        )
+
+    def _frame_device(self, y_BTC: ttnn.Tensor) -> ttnn.Tensor:
+        """Exact copy-only equivalent of causal pad/unfold, returning ROW_MAJOR windows."""
+        batch, length, channels = tuple(y_BTC.shape)
+        assert channels == 1 and y_BTC.layout == ttnn.ROW_MAJOR_LAYOUT
+        assert y_BTC.dtype == ttnn.float32, "device framing currently supports FP32 waveforms"
+        indices = self._window_indices[(batch, length)]
+        flat = ttnn.reshape(y_BTC, (1, 1, batch, length))
+        # Align the input CB page as well. Added trailing zeros are never indexed.
+        tail = (-(length + self.left_pad)) % 32
+        padded = ttnn.pad(flat, [(0, 0), (0, 0), (0, 0), (self.left_pad, tail)], 0.0)
+        gathered = ttnn.gather(padded, 3, indices, sub_core_grids=self._gather_grid)
+        frames = indices.shape[-1] // self.win_length
+        return ttnn.reshape(gathered, (batch, frames, self.win_length))
+
     def forward(self, y_BTC: ttnn.Tensor) -> ttnn.Tensor:
         """``y_BTC``: ``(B, T, 1)`` ROW_MAJOR waveform → ``magnitude``,
         ``(B, T_frames, n_freqs)`` ROW_MAJOR.
@@ -82,20 +134,25 @@ class _STFTFn(Module):
         assert y_BTC.layout == ttnn.ROW_MAJOR_LAYOUT, f"expected ROW_MAJOR, got {y_BTC.layout}"
         assert y_BTC.shape[2] == 1, f"STFT input must have C=1, got {y_BTC.shape[2]}"
 
-        y_host = ttnn.to_torch(ttnn.get_device_tensors(y_BTC)[0])
-        y_host = y_host.squeeze(-1).float().contiguous()
-        y_padded = torch.nn.functional.pad(y_host, (self.left_pad, 0))
-        y_windowed = y_padded.unfold(dimension=-1, size=self.win_length, step=self.hop_length)
-        y_windowed = y_windowed.contiguous().float()
-        B, T_frames, win_length = y_windowed.shape
-        assert win_length == self.win_length
-
-        y_tile = ttnn.from_torch(
-            y_windowed,
-            device=self.mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=self.dtype,
-        )
+        if self.device_framing:
+            self.prepare_device_windows(y_BTC.shape[0], y_BTC.shape[1])
+            windows = self._frame_device(y_BTC)
+            B, T_frames, _ = tuple(windows.shape)
+            y_tile = ttnn.to_layout(windows, ttnn.TILE_LAYOUT)
+        else:
+            y_host = ttnn.to_torch(ttnn.get_device_tensors(y_BTC)[0])
+            y_host = y_host.squeeze(-1).float().contiguous()
+            y_padded = torch.nn.functional.pad(y_host, (self.left_pad, 0))
+            y_windowed = y_padded.unfold(dimension=-1, size=self.win_length, step=self.hop_length)
+            y_windowed = y_windowed.contiguous().float()
+            B, T_frames, win_length = y_windowed.shape
+            assert win_length == self.win_length
+            y_tile = ttnn.from_torch(
+                y_windowed,
+                device=self.mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=self.dtype,
+            )
 
         compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
@@ -238,11 +295,82 @@ class VocoderWithBWE(Module):
         # against eager.
         self.use_trace = False
         self.use_trace_bwe = False
+        self.device_chain = os.environ.get("LTX_AUDIO_DEVICE_CHAIN", "0") == "1"
+        if self.device_chain:
+            assert self.dtype == ttnn.float32, "device audio chain requires FP32"
+            self.mel_stft.stft_fn.device_framing = True
 
     def release_trace(self) -> None:
         """Free both generators' captured traces; safe to call when none is active."""
         self.vocoder.release_trace()
         self.bwe_generator.release_trace()
+        for tracer in type(self)._forward_device_chain._tracers_keyed.get(self, {}).values():
+            tracer.release_trace()
+        self.mel_stft.stft_fn._window_indices.clear()
+
+    @traced_function(device=lambda self: self.mesh_device, prep_run=False, clone_prep_inputs=False)
+    def _forward_device_chain(self, mel_BTC: ttnn.Tensor, length_low: int, output_length: int) -> ttnn.Tensor:
+        """One trace owns all temporaries, so no output crosses an older independent trace.
+
+        The ordinary eager pipeline warmup must materialize lazy conv/CCL state first.
+        Both generators are deliberately called eagerly *inside* this combined capture.
+        """
+        batch = mel_BTC.shape[0]
+        channels = self.vocoder.out_channels
+        wave = self.vocoder._forward_device(mel_BTC)
+        wave = ttnn.slice(wave, (0, 0, 0), (batch, length_low, channels))
+        pad_right = (-length_low) % self.hop_length
+        if pad_right:
+            wave = ttnn.pad(wave, [(0, 0), (0, pad_right), (0, 0)], 0.0)
+        padded_length = length_low + pad_right
+
+        # Preserve the host path's B,C,T ordering before flattening stereo into batch.
+        mono = ttnn.permute(wave, (0, 2, 1))
+        mono = ttnn.reshape(mono, (batch * channels, padded_length, 1))
+        mel = self.mel_stft(mono)
+        frames, bins = mel.shape[1], mel.shape[2]
+        mel = ttnn.reshape(mel, (batch, channels, frames, bins))
+        mel = ttnn.permute(mel, (0, 2, 1, 3))
+        mel = ttnn.reshape(mel, (batch, frames, channels * bins))
+        if self.bwe_generator._t_pad:
+            mel = ttnn.pad(mel, [(0, 0), (0, self.bwe_generator._t_pad), (0, 0)], 0.0)
+        residual = self.bwe_generator._forward_device(mel)
+        full_length = padded_length * self.output_sampling_rate // self.input_sampling_rate
+        residual = ttnn.slice(residual, (0, 0, 0), (batch, full_length, channels))
+        skip = self.resampler(wave)
+        assert tuple(residual.shape) == tuple(skip.shape)
+        mixed = ttnn.add(residual, skip)
+        clipped = ttnn.clamp(mixed, -1.0, 1.0)
+        return ttnn.slice(clipped, (0, 0, 0), (batch, output_length, channels))
+
+    def _device_chain_from_mel(self, mel_spec: torch.Tensor) -> torch.Tensor:
+        """One upload and one final download; cache construction is outside capture."""
+        assert mel_spec.ndim == 4 and mel_spec.shape[1] == 2, "device chain currently requires stereo mel"
+        traces = type(self)._forward_device_chain._tracers_keyed.get(self, {})
+        shape_key = tuple(mel_spec.shape)
+        requested_trace = traces.get(shape_key)
+        if (requested_trace is None or not requested_trace.trace_captured) and any(
+            t.trace_captured for t in traces.values()
+        ):
+            raise RuntimeError("release audio traces and eagerly warm the new shape before capturing it")
+        length_low = mel_spec.shape[2] * math.prod(self.vocoder.upsample_rates)
+        padded_length = length_low + (-length_low) % self.hop_length
+        self.mel_stft.stft_fn.prepare_device_windows(mel_spec.shape[0] * 2, padded_length)
+        frames = padded_length // self.hop_length
+        pc = self.bwe_generator.parallel_config
+        factor = pc.factor if pc is not None else 1
+        self.bwe_generator._t_pad = max(math.ceil(frames / factor), 32) * factor - frames if factor > 1 else 0
+        output_length = length_low * self.output_sampling_rate // self.input_sampling_rate
+        mel_dev = self.vocoder._host_to_device(mel_spec.float())
+        output = self._forward_device_chain(
+            mel_dev,
+            length_low,
+            output_length,
+            traced=self.use_trace or self.use_trace_bwe,
+            tracer_trace_key=shape_key,
+        )
+        host = ttnn.to_torch(ttnn.get_device_tensors(output)[0])
+        return host.transpose(1, 2).contiguous().to(mel_spec.dtype)
 
     def _compute_mel_device(self, x_BCT_torch: torch.Tensor) -> torch.Tensor:
         """Compute log-mel from waveform on device.
@@ -320,6 +448,9 @@ class VocoderWithBWE(Module):
         clamped to ``[-1, 1]``, same dtype as input.
         """
         input_dtype = mel_spec.dtype
+
+        if self.device_chain:
+            return self._device_chain_from_mel(mel_spec)
 
         x = self.vocoder.forward_traced(mel_spec.float()) if self.use_trace else self.vocoder(mel_spec.float())
         B, C, length_low_rate = x.shape
