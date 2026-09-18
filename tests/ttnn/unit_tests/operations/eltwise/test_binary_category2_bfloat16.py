@@ -8,7 +8,7 @@ import ttnn
 from tests.ttnn.utils_for_testing import assert_equal, assert_with_ulp
 from tests.ttnn.unit_tests.operations.eltwise.eltwise_test_utils import (
     pairwise_inputs,
-    to_tt_tensor,
+    run_binary,
 )
 
 pytestmark = pytest.mark.use_module_device
@@ -36,18 +36,6 @@ Accuracy criteria
 """
 
 
-def _run_pairwise(device, ttnn_op, input_a, input_b, **op_kwargs):
-    tt_a = to_tt_tensor(input_a, device)
-    tt_b = to_tt_tensor(input_b, device)
-
-    golden_function = ttnn.get_golden_function(ttnn_op)
-    golden = golden_function(input_a, input_b, device=device, **op_kwargs)
-
-    tt_result = ttnn_op(tt_a, tt_b, **op_kwargs)
-    result = ttnn.to_torch(tt_result)
-    return golden, result
-
-
 @pytest.mark.parametrize(
     "ttnn_op",
     [
@@ -57,6 +45,12 @@ def _run_pairwise(device, ttnn_op, input_a, input_b, **op_kwargs):
         ttnn.le,
         ttnn.gt,
         ttnn.ge,
+        ttnn.eq_,
+        ttnn.ne_,
+        ttnn.lt_,
+        ttnn.le_,
+        ttnn.gt_,
+        ttnn.ge_,
     ],
 )
 def test_relational_ops(device, ttnn_op):
@@ -68,7 +62,7 @@ def test_relational_ops(device, ttnn_op):
     Device returns 0/1 in the input dtype; golden is bool.
     """
     input_a, input_b = pairwise_inputs(include_spl_values=True)
-    golden, result = _run_pairwise(device, ttnn_op, input_a, input_b)
+    golden, result = run_binary(device, ttnn_op, input_a, input_b)
     assert_equal(golden.float(), result.float())
 
 
@@ -87,7 +81,7 @@ def test_minmax_ops(device, ttnn_op):
     Those lanes are rewritten to golden; a finite-only regression still fails.
     """
     input_a, input_b = pairwise_inputs(include_spl_values=True)
-    golden, result = _run_pairwise(device, ttnn_op, input_a, input_b)
+    golden, result = run_binary(device, ttnn_op, input_a, input_b)
 
     nan_operand = torch.isnan(input_a) | torch.isnan(input_b)
     result = torch.where(nan_operand, golden, result)
@@ -126,7 +120,9 @@ def test_isclose(device, rtol, atol, equal_nan):
        device |a-b|_fp32 = 1.00000012.
     """
     input_a, input_b = pairwise_inputs(include_spl_values=True)
-    golden, result = _run_pairwise(device, ttnn.isclose, input_a, input_b, rtol=rtol, atol=atol, equal_nan=equal_nan)
+    golden, result = run_binary(
+        device, ttnn.isclose, input_a, input_b, golden_kwargs={"rtol": rtol, "atol": atol, "equal_nan": equal_nan}
+    )
 
     golden = golden.float()
     result = result.float()
@@ -140,3 +136,54 @@ def test_isclose(device, rtol, atol, equal_nan):
     result = torch.where(fence, golden, result)
 
     assert_equal(golden, result)
+
+
+@pytest.mark.parametrize(
+    "op_name",
+    [
+        "eq",
+        "ne",
+        "lt",
+        "le",
+        "gt",
+        "ge",
+    ],
+)
+@pytest.mark.parametrize(
+    "dtype",
+    [
+        "float32",
+        "bfloat16",
+    ],
+)
+def test_special_values(device, op_name, dtype):
+    """
+    Comprehensive test for special floating-point values: 0, -0, inf, -inf, nan
+    Tests all combinations of these values as inputs to a binary operation.
+    """
+    torch_fn = getattr(torch, op_name)
+    ttnn_fn = getattr(ttnn, op_name)
+
+    torch_dtype = getattr(torch, dtype)
+    ttnn_dtype = getattr(ttnn, dtype)
+
+    # Special values to test
+    special_values = [0.0, float("inf"), float("-inf"), float("nan"), 1.0, -1.0, -0.0]
+
+    # Create all combinations
+    x_vals = [x for x in special_values for _ in special_values]
+    y_vals = [y for _ in special_values for y in special_values]
+
+    x_torch = torch.tensor(x_vals, dtype=torch_dtype)
+    y_torch = torch.tensor(y_vals, dtype=torch_dtype)
+    z_torch = torch_fn(x_torch, y_torch)
+
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    y_tt = ttnn.from_torch(y_torch, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    z_tt = ttnn_fn(
+        x_tt,
+        y_tt,
+    )
+    tt_out = ttnn.to_torch(z_tt)
+
+    assert torch.equal(z_torch, tt_out), "Mismatches found"

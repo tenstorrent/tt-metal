@@ -192,6 +192,33 @@ def to_tt_tensor(
     )
 
 
+def run_binary(device, ttnn_op, input_a, input_b, *, golden_kwargs=None, **op_kwargs):
+    """Run a tensor-tensor ttnn binary op and return ``(golden, result)``.
+
+    Ops whose ``__name__`` ends in ``_`` (``ttnn.add_``, ``ttnn.multiply_``, …)
+    are inplace: they write into lhs and the result is read back from that
+    tensor rather than the return value.
+
+    ``op_kwargs`` (e.g. ``fast_and_approximate_mode``) are forwarded only to
+    the device op. Torch-valid golden arguments (e.g. isclose ``rtol``/``atol``)
+    go in ``golden_kwargs`` and are also passed to the device op.
+    """
+    tt_a = to_tt_tensor(input_a, device)
+    tt_b = to_tt_tensor(input_b, device)
+
+    golden_kwargs = golden_kwargs or {}
+    golden_function = ttnn.get_golden_function(ttnn_op)
+    golden = golden_function(input_a, input_b, **golden_kwargs)
+
+    device_kwargs = {**golden_kwargs, **op_kwargs}
+    if ttnn_op.__name__.endswith("_"):
+        ttnn_op(tt_a, tt_b, **device_kwargs)
+        result = ttnn.to_torch(tt_a)
+    else:
+        result = ttnn.to_torch(ttnn_op(tt_a, tt_b, **device_kwargs))
+    return golden, result
+
+
 def float_to_bf16_bits(f: float) -> int:
     """Convert float to BFloat16 bits by truncating the lower 16 FP32 mantissa bits."""
     f32_bits = struct.unpack(">I", struct.pack(">f", f))[0]

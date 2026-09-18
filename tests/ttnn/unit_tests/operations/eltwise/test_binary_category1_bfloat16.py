@@ -9,7 +9,7 @@ from tests.ttnn.utils_for_testing import assert_with_ulp, ulp_distance, flush_su
 from tests.ttnn.unit_tests.operations.eltwise.eltwise_test_utils import (
     pairwise_inputs,
     flush_to_zero,
-    to_tt_tensor,
+    run_binary,
 )
 
 pytestmark = pytest.mark.use_module_device
@@ -38,22 +38,7 @@ def test_addlike_ops(device, ttnn_op, fast_and_approximate_mode, ulp_threshold):
     EX: FPU overflow: 3.3895 + 6.6201 = 1.0009e+39 → torch → max; FPU → +inf
     """
     input_a, input_b = pairwise_inputs(include_zero=True)
-
-    is_inplace = True if ttnn_op in [ttnn.add_, ttnn.sub_, ttnn.rsub_] else False
-    result = None
-
-    tt_a = to_tt_tensor(input_a, device)
-    tt_b = to_tt_tensor(input_b, device)
-
-    golden_function = ttnn.get_golden_function(ttnn_op)
-    golden = golden_function(input_a, input_b, device=device, fast_and_approximate_mode=fast_and_approximate_mode)
-
-    if is_inplace:
-        ttnn_op(tt_a, tt_b, fast_and_approximate_mode=fast_and_approximate_mode)
-        result = ttnn.to_torch(tt_a)
-    else:
-        tt_result = ttnn_op(tt_a, tt_b, fast_and_approximate_mode=fast_and_approximate_mode)
-        result = ttnn.to_torch(tt_result)
+    golden, result = run_binary(device, ttnn_op, input_a, input_b, fast_and_approximate_mode=fast_and_approximate_mode)
 
     # Device flushes subnormal sums to zero.
     result = flush_subnormal_values_to_zero(result)
@@ -94,21 +79,7 @@ def test_multiply(device, ttnn_op, fast_and_approximate_mode, ulp_threshold):
     device +0 rewritten to match (2^{18} × 2^{127}).
     """
     input_a, input_b = pairwise_inputs(include_zero=True)
-    is_inplace = True if ttnn_op is ttnn.multiply_ else False
-    result = None
-
-    tt_a = to_tt_tensor(input_a, device)
-    tt_b = to_tt_tensor(input_b, device)
-
-    golden_function = ttnn.get_golden_function(ttnn_op)
-    golden = golden_function(input_a, input_b, device=device, fast_and_approximate_mode=fast_and_approximate_mode)
-
-    if is_inplace:
-        ttnn_op(tt_a, tt_b, fast_and_approximate_mode=fast_and_approximate_mode)
-        result = ttnn.to_torch(tt_a)
-    else:
-        tt_result = ttnn_op(tt_a, tt_b, fast_and_approximate_mode=fast_and_approximate_mode)
-        result = ttnn.to_torch(tt_result)
+    golden, result = run_binary(device, ttnn_op, input_a, input_b, fast_and_approximate_mode=fast_and_approximate_mode)
 
     # SFPU mul flush includes min-normal 2^{-126} to 0.
     if not fast_and_approximate_mode:
@@ -156,21 +127,7 @@ def test_divide(device, ttnn_op, fast_and_approximate_mode, ulp_threshold):
     torch ±inf when ea−eb = 128 (7.96875 / 2.342e-38).
     """
     input_a, input_b = pairwise_inputs(include_zero=False)
-    is_inplace = True if ttnn_op is ttnn.divide_ else False
-    result = None
-
-    tt_a = to_tt_tensor(input_a, device)
-    tt_b = to_tt_tensor(input_b, device)
-
-    golden_function = ttnn.get_golden_function(ttnn_op)
-    golden = golden_function(input_a, input_b, device=device, fast_and_approximate_mode=fast_and_approximate_mode)
-
-    if is_inplace:
-        ttnn_op(tt_a, tt_b, fast_and_approximate_mode=fast_and_approximate_mode)
-        result = ttnn.to_torch(tt_a)
-    else:
-        tt_result = ttnn_op(tt_a, tt_b, fast_and_approximate_mode=fast_and_approximate_mode)
-        result = ttnn.to_torch(tt_result)
+    golden, result = run_binary(device, ttnn_op, input_a, input_b, fast_and_approximate_mode=fast_and_approximate_mode)
 
     # SFPU div flush includes min-normal 2^{-126} to 0 (same as SFPU mul).
     if not fast_and_approximate_mode:
