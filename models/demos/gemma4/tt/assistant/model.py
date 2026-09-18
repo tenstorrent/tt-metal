@@ -111,11 +111,6 @@ class Gemma4AssistantModel:
 
         state_dict = _inject_zero_kv_weights(dict(state_dict), self.text_args)
 
-        # Per-module dtype overrides from precision_overrides.json (see
-        # Gemma4Model for the target-model equivalent). Without this the
-        # drafter's attention/mlp weights silently stayed at ``dtype`` (bf16)
-        # regardless of what the table says for this checkpoint, since the
-        # assistant is a separate checkpoint keyed independently of the target.
         from models.demos.gemma4.tt.precision import Gemma4Precision
 
         if precision is None:
@@ -184,31 +179,18 @@ class Gemma4AssistantModel:
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
-        # pre_projection is DRAM-bandwidth-bound at decode (M=1 padded to a
-        # single tile, K=2*backbone, N=hidden): its whole cost is reading the
-        # weight, so bfp8 halves the bytes read vs the model-wide default
-        # (bf16). Opt out with GEMMA4_PREPROJ_BFP8=0. The cache filename gets
-        # a distinct suffix whenever this differs from the model-wide dtype so
-        # flipping the flag can never load a stale wrong-dtype tensorbin.
         preproj_bfp8 = os.environ.get("GEMMA4_PREPROJ_BFP8", "1").lower() not in ("0", "false", "no")
         preproj_dtype = ttnn.bfloat8_b if preproj_bfp8 else dtype
         preproj_suffix = "_bfp8" if preproj_dtype != dtype else ""
         self.pre_projection = _linear(
             "pre_projection.weight", None, dtype_override=preproj_dtype, cache_suffix=preproj_suffix
         )
-        # post_projection (hidden -> backbone) is pre_projection's output-side
-        # mirror and is just as DRAM-bandwidth-bound at decode (M=1 padded to a
-        # tile) -- bfp8 halves its weight-read bytes too.
         postproj_bfp8 = os.environ.get("GEMMA4_POSTPROJ_BFP8", "1").lower() not in ("0", "false", "no")
         postproj_dtype = ttnn.bfloat8_b if postproj_bfp8 else dtype
         postproj_suffix = "_bfp8" if postproj_dtype != dtype else ""
         self.post_projection = _linear(
             "post_projection.weight", None, dtype_override=postproj_dtype, cache_suffix=postproj_suffix
         )
-        # lm_head tied to the assistant's own embed_tokens when a separate
-        # lm_head.weight isn't stored. Follows precision_overrides.json's
-        # "lm_head" entry (bfp8 for the shipped variants), same override the
-        # target model's own lm_head gets.
         lm_key = "lm_head.weight" if "lm_head.weight" in state_dict else "model.embed_tokens.weight"
         lm_head_suffix = "_bfp8" if lm_head_dtype != dtype else ""
         self.lm_head = _linear(lm_key, col_mapper, dtype_override=lm_head_dtype, cache_suffix=lm_head_suffix)

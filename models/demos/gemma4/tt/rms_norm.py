@@ -9,15 +9,8 @@ import ttnn
 from models.demos.gemma4.config import MeshConfig, ModeConfig
 from models.demos.gemma4.utils.general_utils import get_cache_file_name
 
-# Row cutoff for the width-shard *search*. Height alone is not enough: 26B
-# hidden=2816 on an 8-core WH grid needs 720,896 B/bank for the input *and*
-# again for the output (1,441,792 B) against a 1,393,472 B bank — CI
-# test_rms_norm / test_layer prefill_1024 OOMs. :func:`width_shard_spec`
-# rejects layouts whose per-core I/O exceeds the bank. 31B hidden=5376
-# still fits at 1024 (~197 KB/bank × 2). Longer prefill stays interleaved.
+# Width-shard search height cap; longer prefill stays interleaved.
 _SHARDED_NORM_MAX_HEIGHT = 1024
-# Observed WH worker L1 bank after firmware (run 32690156816, 26B unit).
-# BH banks are larger; override with GEMMA4_SHARDED_NORM_L1_BANK.
 _DEFAULT_L1_BANK_BYTES = 1_393_472
 _SHARDED_NORM_ELEM_BYTES = 2  # bf16 activations on this path
 _TILE = 32
@@ -195,13 +188,6 @@ class RMSNorm(nn.Module):
             fp32_dest_acc_en=True,
             packer_l1_acc=False,
         )
-        # Decode width-sharded fast path. The plain (interleaved) rms_norm runs
-        # the RMS reduction over the full hidden width on few cores — ~76 us for
-        # a single-token [1,1,32,hidden] norm on Gemma4-31B (hidden=5376). Width-
-        # sharding the activation across a core grid parallelizes the reduction
-        # (LayerNormShardedMultiCoreProgramConfig handles the cross-core gather),
-        # cutting it to <10 us. Built lazily on first decode-shaped call so we
-        # can read the activation's true (padded) hidden width, then cached.
         self._sharded_cfg = None  # (input_memcfg, program_config) or None if unavailable
         self._sharded_dim = None
 

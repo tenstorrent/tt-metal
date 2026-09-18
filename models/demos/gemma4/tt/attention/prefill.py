@@ -258,22 +258,7 @@ def _clone_sliding_prefill_tail(
     prev_kv=None,
     prev_valid=None,
 ):
-    """Clone the last up-to-``hist`` K/V rows for the next sliding prefill chunk.
-
-    vLLM APC / token-chunked prefill often delivers a first scheduler grant
-    shorter than ``sliding_window`` (e.g. ``chunk_start`` remnant 128/384 with
-    ``hist=1024``). Skipping the stash when ``kseq < hist`` leaves the next
-    continuation without ``sliding_tail_in`` (shield QB2 hang / #51186).
-
-    When ``prev_kv`` is set, the next tail is the last ``hist`` rows of
-    ``[valid prev | current chunk]`` — a later short continuation must not
-    replace the stash with only its own K/V (that drops tokens still inside
-    the window). Returns a 3-tuple ``(k, v, valid_len)``.
-
-    Eager paths may left-pad the *tensor* to ``hist`` for concat stability;
-    ``valid_len`` stays the live row count so the consumer can exclude pad.
-    Traced short buckets keep a short clone (``ttnn.zeros`` is illegal mid-capture).
-    """
+    """Clone the last up-to-``hist`` K/V rows for the next sliding prefill chunk."""
     if tt_k is None or tt_v is None or hist is None or hist <= 0:
         return None
     kseq = int(tt_k.shape[-2])
@@ -295,9 +280,6 @@ def _clone_sliding_prefill_tail(
     v_owned = ttnn.clone(v_part, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     cur_valid = take
 
-    # Current chunk already holds a full window: last-hist(current) ==
-    # last-hist([prev | current]). Skip the concat (saves a 2×hist DRAM
-    # clone on every later 1024-token sliding chunk).
     if prev_kv is not None and take < hist:
         pk, pv = prev_kv
         if pk is not None and pv is not None:
@@ -797,7 +779,6 @@ def _prefill_forward_single(
             v_cat.deallocate(True)
             tt_sdpa = ttnn.slice(sdpa_full, [0, 0, tail_len, 0], [1, nqh, tail_len + seq_len, config.head_dim])
             sdpa_full.deallocate(True)
-            # Merge/stash only the live tail rows, not left-pad zeros.
             if int(tail_valid) < tail_len:
                 k_tail, v_tail = _slice_valid_kv_suffix(
                     k_tail,
@@ -829,8 +810,6 @@ def _prefill_forward_single(
                 program_config=prefill_sdpa_program_config(config.head_dim, seq_len, sliding_window=sliding_window),
                 compute_kernel_config=sdpa_ckc,
             )
-        # Next tail = last hist of [valid prior window | current chunk], not
-        # current-only (a short continuation would otherwise drop live history).
         prev_for_merge = (k_tail, v_tail) if sliding_tail_in is not None else None
         prev_valid_for_merge = int(tail_valid) if sliding_tail_in is not None else None
         sliding_tail_stash = _clone_sliding_prefill_tail(

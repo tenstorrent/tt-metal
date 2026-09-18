@@ -290,9 +290,6 @@ def test_attention_decode_paged(layer_idx, cache_len, mesh_device, reset_seeds, 
     max_seq_len = max_num_blocks * block_size
     paged_attention_config = PagedAttentionConfig(block_size=block_size, max_num_blocks=max_num_blocks)
 
-    # Match ``init_kv_cache`` / weight sharding: local KV heads come from mesh
-    # TP, not a hard-coded tp=1. On 1x8 GQA (4 KV heads < 8 devices) the cache
-    # is 1 head/device; a full [1, 4, ...] fill then fails paged_fill_cache.
     tp = mesh_device.shape[1] if hasattr(mesh_device, "shape") else 1
     num_devices = mesh_device.get_num_devices() if hasattr(mesh_device, "get_num_devices") else 1
     is_mesh = num_devices > 1
@@ -321,7 +318,6 @@ def test_attention_decode_paged(layer_idx, cache_len, mesh_device, reset_seeds, 
     hf_cache = DynamicCache()
     hf_cache.update(k_data.clone(), v_data.clone(), layer_idx=layer_idx)
 
-    # TT paged cache fill — GQA-replicated when num_kv_heads < tp (same as batched).
     page_table = torch.arange(max_num_blocks, dtype=torch.int32).reshape(1, max_num_blocks)
     page_table_tt = ttnn.from_torch(
         page_table,
@@ -882,8 +878,6 @@ def test_short_first_chunk_stashes_padded_sliding_tail(mesh_device, reset_seeds,
     )
     out3_torch = _from_device(out3, mesh_device)
     assert out3_torch.shape[-2] == short_cont, "short continuation with seq < hist failed"
-    # Codex: short-first + consecutive-short vs one unchunked prefill of the
-    # same tokens (not just stash shapes).
     x_full = torch.cat([x1, x2, x3], dim=2)
     kv_ref = init_kv_cache(
         mesh_device=mesh_device,
@@ -913,9 +907,6 @@ def test_short_first_chunk_stashes_padded_sliding_tail(mesh_device, reset_seeds,
     )
     full_torch = _from_device(out_full, mesh_device).float()
     out_full.deallocate(True)
-    # Cross-path: hist-concat SDPA vs one unchunked prefill. Same tokens /
-    # RoPE, different program configs — measured 0.98974 on 31B WH 1x1.
-    # Unmeasured models use 0.98 (not the 0.99 same-path default).
     pcc = get_pcc_threshold(request, default=0.98)
     passing2, msg2 = compare_tensors(out2_torch.float(), full_torch[:, :, short_len:total_seq, :], pcc_threshold=pcc)
     assert passing2, f"short-first continuation vs unchunked PCC too low: {msg2}"

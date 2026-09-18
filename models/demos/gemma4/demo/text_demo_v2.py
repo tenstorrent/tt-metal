@@ -207,11 +207,6 @@ def _prepare_demo_prefill_warmup(
     """Shared prefill trace buckets + on-device sampling warmup for demo paths."""
     from models.demos.gemma4.tt.generator_trace import chunked_prefill_trace_enabled
 
-    # The dynamic per-run trace-bucket trim/reset/single-chunk-enable helpers
-    # (reset_trace_prefill_seq_lens_to_default / trim_demo_prefill_trace_buckets /
-    # enable_single_chunk_demo_prefill_trace_bucket) aren't ported to this branch
-    # yet -- GEMMA4_TRACE_PREFILL_SEQ_LENS here is a static, import-time bucket
-    # list instead. Degrade to a no-op rather than ImportError until that lands.
     try:
         from models.demos.gemma4.tt.generator_trace import (
             enable_single_chunk_demo_prefill_trace_bucket,
@@ -808,8 +803,6 @@ def test_demo_text(
 
         if not is_ci_env:
             for user in range(batch_size):
-                # Log generation-only: decoding the full prompt each step makes
-                # long-context runs look like garbage (tail of a 32k book + 1 tok).
                 text = tokenizer.decode(all_outputs[user][decoding_pos[user] :])
                 text = ("..." + text[-97:]) if len(text) > 100 else text
                 logger.info(f"[User {user}] {text.replace(chr(10), ' ')}")
@@ -1045,9 +1038,6 @@ def _run_spec_decode(
         # resolve_gemma4_prefill_chunk_size: it must apply while model_args is
         # built, not after -- setting the env here was too late to be read.)
 
-    # Spec decode never consumes the prefill argmax — anchor_token comes from the
-    # encoded prompt. Skip on-device prefill sampling (plain demo default) so TTFT
-    # matches main and avoids ~20ms of wasted device sampling on short ISLs.
     from models.demos.gemma4.tt.generator_trace import chunked_prefill_trace_enabled
 
     prefill_trace_max = int(os.environ.get("GEMMA4_PREFILL_TRACE_MAX_SEQ", 4096))
@@ -1096,12 +1086,6 @@ def _run_spec_decode(
     anchor_pos = prompt_len - 1
     anchor_token = int(encoded_prompts[0][anchor_pos])
 
-    # Spec-decode drafts `draft_len` positions AHEAD of the committed position, so
-    # the furthest position touched is (prompt_len-1) + generated + draft_len. The
-    # RoPE / paged-attention structures are sized to max_seq_len, so overshooting
-    # that bound indexes out of range and hangs the device (deterministically at
-    # cur_pos == max_seq_len - draft_len). Reserve the speculative lookahead margin
-    # by clamping generation to stay strictly within max_seq_len.
     _safe_gen = max_seq_len - prompt_len - (draft_len + 1)
     if max_generated_tokens > _safe_gen:
         logger.warning(
@@ -1111,11 +1095,6 @@ def _run_spec_decode(
         )
         max_generated_tokens = max(1, _safe_gen)
 
-    # Load the assistant only after target prefill warmup/prefill is complete.
-    # Loading it earlier makes the target prefill trace capture run with extra
-    # assistant tensors resident and has been observed to trigger runtime
-    # profiler sync timeouts in the speculative path while the plain path stays
-    # clean.
     _, assistant = create_assistant_model(
         mesh_device=mesh_device,
         target_model=target,
@@ -1160,9 +1139,6 @@ def _run_spec_decode(
         f"seed={'reseed' if spec._fused_reseed else 'shift'}, "
         f"shift_seed={getattr(spec, '_fused_shift_seed', 'n/a')})..."
     )
-    # Capture the fused graph after prefill / assistant load, before the decode
-    # timer. Decode: already excludes this; wall should too so 200-token demos
-    # are not dominated by one-time compile. Setup is still logged separately.
     if use_fused and spec._use_trace:
         spec.prepare_fused_trace(anchor_token, anchor_pos)
     t0 = time.time()
@@ -1187,10 +1163,6 @@ def _run_spec_decode(
     mean_accept = (sum(accepts) / n_iters) if n_iters else 0.0
     setup_elapsed = getattr(spec, "_last_fused_setup_s", 0.0) if use_fused else 0.0
     steady_elapsed = getattr(spec, "_last_fused_replay_s", elapsed) if use_fused else elapsed
-    # batch=1 single-user: per-user rate == aggregate throughput (kept explicit
-    # so the line is coherent with the plain-decode demo's metric format). Match
-    # the plain demo's steady-state decode convention by excluding one-time spec
-    # setup/trace capture from the main Decode line; report wall throughput too.
     tok_s_u = n_tokens / steady_elapsed if steady_elapsed > 0 else 0.0
     tok_s = tok_s_u * batch_size
     ms_per_token = (steady_elapsed * 1000.0 / n_tokens) if n_tokens else 0.0
