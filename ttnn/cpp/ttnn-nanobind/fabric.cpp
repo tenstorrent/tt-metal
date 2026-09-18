@@ -324,6 +324,34 @@ void bind_fabric_api(nb::module_& mod) {
         )");
 
     mod.def(
+        "compute_fabric_connection_rt_args_with_sem_addresses",
+        &tt::tt_metal::internal::compute_fabric_connection_rt_args_with_sem_addresses,
+        nb::arg("src_fabric_node_id"),
+        nb::arg("dst_nodes"),
+        nb::arg("connection_link_indices"),
+        nb::arg("teardown_sem_addresses"),
+        nb::arg("buffer_index_sem_addresses"),
+        R"(
+            Compute fabric connection RT args from raw L1 semaphore addresses.
+
+            Same as compute_fabric_connection_rt_args, but the two per-connection semaphores
+            are given as L1 addresses rather than program semaphore IDs — for callers that
+            keep them outside the program semaphore table. Both addresses must be 16 B
+            aligned. The kernel must build those connections with
+            WorkerSemArgKind::L1_ADDRESS.
+
+            Args:
+                src_fabric_node_id: FabricNodeId of the source chip
+                dst_nodes: List of FabricNodeIds of destination chips
+                connection_link_indices: List of link indices (empty for auto-select)
+                teardown_sem_addresses: L1 addresses (one per connection)
+                buffer_index_sem_addresses: L1 addresses (one per connection)
+
+            Returns:
+                List of runtime args for RoutingPlaneConnectionManager::build_from_args().
+        )");
+
+    mod.def(
         "get_tt_fabric_packet_header_size_bytes",
         &tt::tt_fabric::get_tt_fabric_packet_header_size_bytes,
         R"(

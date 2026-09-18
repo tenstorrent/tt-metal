@@ -55,7 +55,8 @@ public:
 
     template <
         BuildFromArgsMode build_mode = BuildFromArgsMode::BUILD_ONLY,
-        uint8_t WORKER_HANDSHAKE_NOC = get_fabric_worker_noc()>
+        uint8_t WORKER_HANDSHAKE_NOC = get_fabric_worker_noc(),
+        WorkerSemArgKind worker_sem_arg_kind = default_worker_sem_arg_kind>
     static RoutingPlaneConnectionManager build_from_args(std::size_t& arg_idx, uint32_t num_connections_to_build) {
         constexpr bool connect = build_mode == BuildFromArgsMode::BUILD_AND_OPEN_CONNECTION ||
                                  build_mode == BuildFromArgsMode::BUILD_AND_OPEN_CONNECTION_START_ONLY;
@@ -67,8 +68,8 @@ public:
         for (uint32_t i = 0; i < num_connections_to_build; ++i) {
             auto& conn = mgr.slots_[i];
             conn.tag = static_cast<uint8_t>(get_arg_val<uint32_t>(arg_idx++));
-            conn.sender =
-                tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
+            conn.sender = tt::tt_fabric::WorkerToFabricEdmSender::
+                build_from_args<ProgrammableCoreType::TENSIX, worker_sem_arg_kind>(arg_idx);
             if constexpr (connect) {
                 conn.sender.open_start<false, false, WORKER_HANDSHAKE_NOC>();
             }
