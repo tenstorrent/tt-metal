@@ -464,17 +464,17 @@
 // Mimir CCE SRAM is the Quasar analogue of Blackhole DRISC L1, but it has three different
 // addresses depending on who is looking:
 //
-//   - Local CPU (the hart itself): its own SRAM at 0, uncached alias at +MEM_CCE_L1_SIZE. Every
-//     CCE sees its own SRAM here, so one firmware image is linked once and boots on any of them.
-//   - External JTAG / local AXI: CCE n's SRAM at 0x40000000 + n * 4MB. This is the SoC/MLA view,
-//     not something firmware ever names.
+//   - Local CPU (the hart itself): its own SRAM at 0. Kernels that must be host-visible store
+//     through MEM_L1_UNCACHED_BASE, the same uncached alias worker cores use.
+//   - Host / local AXI: CCE n's SRAM at 0x40000000 + n * MEM_CCE_L1_SIZE. The host path does not
+//     go through the hart cache, so this is not the uncached alias even where a numeric field
+//     happens to match. No define for it here: host code never forms this address, and UMD owns
+//     it (emu_tt_device.cpp takes it from chippy).
 //   - Package-global SPA: 0x1280000000 + n * 4MB.
 //
 // Firmware is linked against the local CPU view, so MEM_CCE_SRAM_LOCAL_BASE is 0 and the offsets
-// below serve as both the hart's addresses and the HAL's. Host access is independent of all three:
-// it goes through the DRAM-core coordinate plus the 0x2000000000 NOC tag, so
-// get_dev_noc_addr() = offset + MEM_CCE_L1_NOC_OFFSET lands in UMD's dram_l1 range, and UMD picks
-// the right CCE from the coordinate.
+// below serve as both the hart's addresses and the HAL's. Metal cluster access uses the DRAM-core
+// coordinate plus MEM_CCE_L1_NOC_OFFSET; UMD maps that tagged window onto the host AXI view.
 //
 #define MEM_CCE_L1_NOC_OFFSET 0x2000000000ULL
 #define MEM_CCE_SRAM_LOCAL_BASE 0x0
@@ -507,9 +507,9 @@
 #define MEM_CCE_KERNEL_BASE ((MEM_CCE_KERNEL_CONFIG_BASE + MEM_CCE_KERNEL_CONFIG_SIZE + 63) & ~63)
 #define MEM_CCE_KERNEL_SIZE MEM_DM_KERNEL_SIZE
 #define MEM_CCE_STACK_MIN_SIZE MEM_DM_STACK_MIN_SIZE
-// Device-side mailbox pointer (hart view). Use the uncached SRAM alias so boot-hart .data and
+// Device-side mailbox pointer (hart view). Use MEM_L1_UNCACHED_BASE so boot-hart .data and
 // subordinate_sync are coherent across harts. Host HAL uses the 0-based MEM_CCE_MAILBOX_BASE.
-#define MEM_DRISC_MAILBOX_BASE (MEM_CCE_SRAM_LOCAL_BASE + MEM_CCE_L1_SIZE + MEM_CCE_MAILBOX_BASE)
+#define MEM_DRISC_MAILBOX_BASE (MEM_CCE_SRAM_LOCAL_BASE + MEM_L1_UNCACHED_BASE + MEM_CCE_MAILBOX_BASE)
 // CCE RESET_VECTOR[n] in the SMC/CCE config map, reached through the SMC core rather than the CCE.
 // 8-byte entries; Metal boot hart is 0. The value is a local CPU address, so it is the same on
 // every CCE. CCE_RESET_VECTOR_BASE itself names CCE0; UMD offsets it per CCE.
