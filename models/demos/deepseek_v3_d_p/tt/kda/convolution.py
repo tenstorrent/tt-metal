@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import ttnn
+from models.tt_transformers.tt.ccl import TT_CCL
 
 
 def exchange_convolution_carry(
@@ -12,6 +13,8 @@ def exchange_convolution_carry(
     initial_carry: ttnn.Tensor,
     *,
     sequence_parallel_axis: int,
+    topology: ttnn.Topology,
+    tt_ccl: TT_CCL,
 ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
     """Return partition entry carries and the replicated final stream carry.
 
@@ -40,10 +43,14 @@ def exchange_convolution_carry(
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     tiled_tail = ttnn.to_layout(padded_tail, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    gathered_tails = ttnn.all_gather(
+    gathered_tails = ttnn.experimental.all_gather_async(
         tiled_tail,
         dim=1,
+        multi_device_global_semaphore=tt_ccl.get_and_cycle_ag_semaphore_handles(sequence_parallel_axis),
+        barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(sequence_parallel_axis),
+        num_links=tt_ccl.get_num_links(sequence_parallel_axis),
         cluster_axis=sequence_parallel_axis,
+        topology=topology,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 

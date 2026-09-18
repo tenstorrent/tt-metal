@@ -7,9 +7,21 @@ from pathlib import Path
 
 import pytest
 
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import assert_requested_tp_wrap_was_realized
+
 
 def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line("markers", "perf: mark explicit KDA performance tests")
+
+
+@pytest.fixture(autouse=True)
+def guard_the_requested_wrap(request: pytest.FixtureRequest):
+    """Fail when a requested TP torus was silently realized without its wrap."""
+    if "mesh_device" not in request.fixturenames:
+        yield
+        return
+    assert_requested_tp_wrap_was_realized(request.getfixturevalue("mesh_device"))
+    yield
 
 
 @pytest.fixture

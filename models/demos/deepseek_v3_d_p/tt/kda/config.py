@@ -50,7 +50,6 @@ class KDAProgramConfig:
     recurrence: KDARecurrenceProgramConfig = field(default_factory=KDARecurrenceProgramConfig)
     # Ceiling: the effective chunk is the largest TP-local channel divisor no greater than this value.
     qkv_channel_chunk_size: int = 768
-    tp_ccl_topology: ttnn.Topology = ttnn.Topology.Linear
     gated_rms_output_dtype: ttnn.DataType = ttnn.float32
     output_projection_math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.HiFi4
 
@@ -64,15 +63,14 @@ class KDAProgramConfig:
             raise ValueError("gated_rms_output_dtype must be ttnn.float32 or ttnn.bfloat16")
 
 
-def kimi_k3_program_config(*, tp_ccl_topology: ttnn.Topology) -> KDAProgramConfig:
-    """Return the production K3 program configuration with caller-owned per-axis CCL topology."""
+def kimi_k3_program_config() -> KDAProgramConfig:
+    """Return the production K3 program configuration."""
     return KDAProgramConfig(
         # Scan policy is fixed at construction. Direct scan avoids summary overhead for shorter fixed
         # sequences; grouped scan trades P local scans of N/P chunks plus a log2(P) prefix for summary
         # overhead and requires batch_heads * P worker owners. K3 at T=5120 uses grouped scan.
         recurrence=KDARecurrenceProgramConfig(local_scan_strategy="grouped", summary_group_chunks=20),
         qkv_channel_chunk_size=512,
-        tp_ccl_topology=tp_ccl_topology,
         gated_rms_output_dtype=ttnn.bfloat16,
         output_projection_math_fidelity=ttnn.MathFidelity.HiFi2,
     )
