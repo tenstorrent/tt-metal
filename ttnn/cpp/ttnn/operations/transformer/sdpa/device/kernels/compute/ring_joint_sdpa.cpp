@@ -17,6 +17,7 @@
 #include <tt-metalium/constants.hpp>
 #include "compute_common.hpp"
 #include "compute_streaming.hpp"
+#include "cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/ring_mla_packing_plan.hpp"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/fused_op_indexer.hpp"
 #include "cpp/ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/kernels/ring_attention_rank_mapping.hpp"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/ring_joint_derived_slots.hpp"
@@ -69,6 +70,8 @@ void kernel_main() {
     constexpr bool use_zigzag_balancing = get_compile_time_arg_val(32) == 1;
     constexpr bool chunked_enabled = get_compile_time_arg_val(33) == 1;
     constexpr uint32_t chunk_size_t = get_compile_time_arg_val(34);
+    constexpr uint32_t kv_region_Nt = chunk_size_t / ring_size;
+    constexpr uint32_t kv_stripe_split = q_local_padded_Nt / kv_region_Nt;
     constexpr bool kv_pad_rotation_enabled = get_compile_time_arg_val(35) == 1;
     constexpr bool v_shares_k_buffer = get_compile_time_arg_val(36) == 1;
     constexpr bool use_attention_sink = get_compile_time_arg_val(37) == 1;
@@ -142,7 +145,7 @@ void kernel_main() {
         1 + edge_mask_tiles + (has_global_n_partial_tile ? 1 : 0) + (has_joint_l_partial_tile ? 1 : 0);
 
     constexpr uint32_t q_start_idx_t =
-        chunked_enabled && !kv_pad_rotation_enabled ? logical_nt_compile - q_local_padded_Nt * ring_size : 0;
+        chunked_enabled && !kv_pad_rotation_enabled ? logical_nt_compile - chunk_size_t : 0;
 
     uint32_t argidx = 0;
     const uint32_t global_q_start = get_arg_val<uint32_t>(argidx++);
@@ -302,7 +305,7 @@ void kernel_main() {
             fused_op_indexer.seq.ring_index, mesh_rows, mesh_cols, snake_orientation);
     const ChunkedContext chunked_context{
         q_start_idx_t,
-        ring_index,
+        ring_index / kv_stripe_split,
         KVPadRotationContext{
             kv_pad_q_pre_wrap_start_tile,
             kv_pad_q_pre_wrap_tile_count,
@@ -321,7 +324,12 @@ void kernel_main() {
                           : logical_nt;
     // The first active iter starts with fresh accumulators; restoring would read stale staging.
     bool seen_active_iter = false;
-    constexpr uint32_t sdpa_ring_iterations = has_sliding_window ? 1 : ring_size;
+    const uint32_t source_group_size = packed_kv_source_group_size(
+        GROUPED_KV_SOURCE_COUNT, ring_size, kv_local_padded_Nt, logical_nt, active_ring_iter_mask);
+    const bool packed_sources = source_group_size > 1;
+    const PackedKVGroupPlan packed_kv{
+        packed_kv_source_tiles(kv_local_padded_Nt, logical_nt, kv_region_Nt, ring_size), source_group_size, Sk_chunk_t};
+    const uint32_t sdpa_ring_iterations = has_sliding_window ? 1 : ring_size / source_group_size;
     for (uint32_t ring_iter = 0; ring_iter < sdpa_ring_iterations; ++ring_iter) {
         // Read this iteration's remainder ID and derive its count from the fixed base range.
         // Indexed by ACTIVE ordinal, not absolute ring_iter -- see rotated_active_ordinal. Compute reads
@@ -344,22 +352,33 @@ void kernel_main() {
             rotated_slots = {global_q_start, q_per_core, get_arg_val<uint32_t>(rotated_iter_base)};
             rotated_my_count = rotated_slots.count(use_zigzag_balancing ? 2 : 1);
         }
+        uint32_t packed_source_ids[GROUPED_KV_SOURCE_COUNT];
+        if (packed_sources) {
+            for (uint32_t source = 0; source < source_group_size; ++source) {
+                packed_source_ids[source] =
+                    ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
+                        fused_op_indexer.get_next_ring_id_and_sync(), mesh_rows, mesh_cols, snake_orientation);
+            }
+        }
         // Sliding folds all local/halo source ranges into one synthetic local iteration.
         // The dataflow reader has already waited for the required halo completion signals.
         const uint32_t ring_id =
-            has_sliding_window
+            packed_sources ? packed_source_ids[0]
+            : has_sliding_window
                 ? ring_index
                 : ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
                       fused_op_indexer.get_next_ring_id_and_sync(), mesh_rows, mesh_cols, snake_orientation);
         // Host precomputes which ring iterations have useful SDPA work; sync/ring-id sequencing
         // still advances above so compute stays aligned with reader, writer, and all-gather.
-        if (!has_sliding_window && ((active_ring_iter_mask >> ring_iter) & 1u) == 0) {
+        if (!packed_sources && !has_sliding_window && ((active_ring_iter_mask >> ring_iter) & 1u) == 0) {
             continue;
         }
         // Sharded joint: one L/P shard per ring iteration — process joint K/V on every iteration.
         // Replicated joint: All data already present process joint when ring_id == ring_size-1
         const bool do_joint_kv = has_gathered_joint_k ? true : (ring_id == ring_size - 1);
-        const uint32_t num_kv_chunks = do_joint_kv ? num_local_k_chunks + num_joint_k_chunks : num_local_k_chunks;
+        const uint32_t num_kv_chunks =
+            packed_sources ? packed_kv.chunk_count()
+                           : (do_joint_kv ? num_local_k_chunks + num_joint_k_chunks : num_local_k_chunks);
         ring_joint::KSplitRange ksplit_k_range = ring_joint::kKSplitAll;
         if constexpr (ksplit_enabled) {
             if (ksplit_active) {
@@ -475,7 +494,8 @@ void kernel_main() {
 
         // K-split cores normalize after the merge, not in the ring loop.
         const bool is_last_ring_iter =
-            !ksplit_active && (has_sliding_window || is_last_active_ring_iter(active_ring_iter_mask, ring_iter));
+            !ksplit_active && (has_sliding_window || (packed_sources ? ring_iter + 1 == sdpa_ring_iterations
+                                                                     : is_last_active_ring_iter(active_ring_iter_mask, ring_iter)));
 
         // Per-ring-iter K-chunk count and Q-skip flag — shared by v1 (sdpa_ring) and v2
         // (sdpa_ring_v2) paths.
@@ -549,7 +569,8 @@ void kernel_main() {
                 has_gathered_joint_k,
                 Lt_local,
                 rotated_q_split_enabled,
-                dense_causal_skip>(
+                dense_causal_skip,
+                kv_region_Nt>(
                 // Rotated: iterate [0, my_count) as POSITIONS, each mapped to its flat chunk id via
                 // the fixed base range or moving remainder ID. Static: [start, end) is already flat.
                 rotated_q_split_enabled ? 0u : global_q_start,
@@ -581,7 +602,9 @@ void kernel_main() {
                 /*q_base_tiles=*/0,
                 rotated_slots,
                 ksplit_k_range.begin,
-                ksplit_k_range.end);
+                ksplit_k_range.end,
+                packed_sources ? packed_source_ids : nullptr,
+                packed_sources ? source_group_size : 0);
         } else {
             assert_kv_pad_rotation_streaming_only<kv_pad_rotation_enabled>();
             sdpa_ring<
