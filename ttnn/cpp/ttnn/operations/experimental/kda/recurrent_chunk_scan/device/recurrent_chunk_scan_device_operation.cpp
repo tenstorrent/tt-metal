@@ -122,22 +122,21 @@ void RecurrentChunkScanOperation::validate_on_program_cache_miss(
 }
 
 RecurrentChunkScanOperation::spec_return_value_t RecurrentChunkScanOperation::compute_output_specs(
-    const operation_attributes_t& attrs, const tensor_args_t& in) {
+    const operation_attributes_t& attrs, const tensor_args_t&) {
     const bool summary = attrs.mode == RecurrentChunkScanMode::SUMMARY;
-    const bool compact_summary = summary && in.actual_start.has_value();
-    const auto output_dtype = summary && !compact_summary ? DataType::FLOAT32 : DataType::BFLOAT16;
+    const auto output_dtype = DataType::BFLOAT16;
     const auto output_layout = TensorLayout(output_dtype, PageConfig(Layout::TILE), attrs.output_mem_config);
     const auto state_layout = TensorLayout(
-        compact_summary ? DataType::BFLOAT16 : DataType::FLOAT32, PageConfig(Layout::TILE), attrs.output_mem_config);
-    // No output shape depends on the runtime wrap location. Segmented summary
-    // mode adds fixed-shape tail outputs; ordinary summary mode remains two-output.
+        summary ? DataType::BFLOAT16 : DataType::FLOAT32, PageConfig(Layout::TILE), attrs.output_mem_config);
+    // Summary precision and structure are independent of actual_start. Only live
+    // head/tail slots are defined; unsplit execution defines the head pair.
     const auto first_shape =
         summary ? Shape({attrs.batch_heads, attrs.key_dim, attrs.value_dim})
                 : Shape({attrs.batch_heads, attrs.num_chunks, tt::constants::TILE_HEIGHT, attrs.value_dim});
     spec_return_value_t specs = {
         TensorSpec(first_shape, output_layout),
         TensorSpec(Shape({attrs.batch_heads, attrs.key_dim, attrs.value_dim}), state_layout)};
-    if (summary && in.actual_start.has_value()) {
+    if (summary) {
         specs.push_back(TensorSpec(first_shape, output_layout));
         specs.push_back(TensorSpec(Shape({attrs.batch_heads, attrs.key_dim, attrs.value_dim}), state_layout));
     }
@@ -171,12 +170,15 @@ RecurrentChunkScanOperation::create_op_performance_model(
             .fpu_add_ops = instances * (2.0 * chunk * value_dim + key_dim * value_dim),
         };
     } else {
-        const double segmented_heads = in.actual_start.has_value() ? batch_heads / attrs.groups_per_head : 0.0;
+        // The runtime scalar is not read back by the host. Bound the extra
+        // head transform by one split group per head. Restart seeds are
+        // assignments; only extracting the additional A = (A + B) - B adds work.
+        const double possible_split_heads = in.actual_start.has_value() ? batch_heads / attrs.groups_per_head : 0.0;
         work = {
             .fpu_matrix_flops = instances * (8.0 * chunk * key_dim * value_dim + 4.0 * chunk * chunk * value_dim),
-            .fpu_multiply_ops = instances * 2.0 * key_dim * value_dim + segmented_heads * 2.0 * key_dim * value_dim,
+            .fpu_multiply_ops = instances * 2.0 * key_dim * value_dim,
             .fpu_add_ops = instances * (2.0 * chunk * value_dim + 2.0 * key_dim * value_dim) +
-                           batch_heads * key_dim * value_dim + segmented_heads * 4.0 * key_dim * value_dim,
+                           batch_heads * key_dim * value_dim + possible_split_heads * key_dim * value_dim,
         };
     }
     std::vector<const Tensor*> inputs = {

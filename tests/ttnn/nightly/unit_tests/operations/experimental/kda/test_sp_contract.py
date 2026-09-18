@@ -36,6 +36,27 @@ from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import ass
 pytestmark = run_for_blackhole()
 
 
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
+def test_reset_replaces_large_carry_exactly(mesh_device):
+    """A unit seed must survive replacement of a 2**26 carry without cancellation."""
+    host = list(host_protocol(1, 2, 32, 32))
+    for tensor in host:
+        tensor.zero_()
+    host[2][:] = torch.eye(32)
+    host[5].fill_(1)
+    host[6][:] = torch.eye(32)
+    inputs = device_protocol(host, mesh_device)
+    seed = to_device(torch.full((1, 32, 32), float(2**26)), mesh_device)
+    tail = to_device(torch.ones(1, 32, 32), mesh_device)
+    output, final_state = ttnn.experimental.kda.recurrent_chunk_scan(
+        *inputs, seed, tail_state=tail, actual_start=make_actual_start(mesh_device, 32), sequence_parallel_axis=0
+    )
+    for index, (y, state) in enumerate(zip(_shards(output), _shards(final_state), strict=True)):
+        expected = 1.0 if _rank(index, mesh_device, 0) == 0 else float(2**26)
+        assert torch.equal(state, torch.full_like(state, expected))
+        assert torch.equal(y[:, 1], torch.full_like(y[:, 1], expected))
+
+
 def _shards(tensor: ttnn.Tensor) -> list[torch.Tensor]:
     return [ttnn.to_torch(t).clone() for t in ttnn.get_device_tensors(tensor)]
 
@@ -281,8 +302,8 @@ def test_sp_payload_contracts(mesh_device, expect_error):
     for kwargs in ({"actual_start": actual_start}, {"tail_state": seed}):
         with expect_error(RuntimeError, "actual_start and tail_state must be provided together"):
             ttnn.experimental.kda.recurrent_chunk_scan(*inputs, seed, **kwargs)
-    a, b = ttnn.experimental.kda.summarize_chunk_recurrence(*inputs)
-    assert a.dtype == b.dtype == ttnn.float32
+    a, b, tail_a, tail_b = ttnn.experimental.kda.summarize_chunk_recurrence(*inputs)
+    assert all(t.dtype == ttnn.bfloat16 for t in (a, b, tail_a, tail_b))
     for missing in ("actual_start", "tail_a", "tail_b", "tail_state"):
         kwargs = dict(actual_start=actual_start, tail_a=a, tail_b=b, tail_state=seed)
         del kwargs[missing]

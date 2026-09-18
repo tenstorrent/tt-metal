@@ -14,61 +14,32 @@
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
 
-template <uint32_t Rows, uint32_t Vt, uint32_t VtFull, typename Accessor>
+template <uint32_t Rows, uint32_t Vt, uint32_t VtFull, uint32_t PacketRows, typename Accessor>
 FORCE_INLINE void write_value_slice(
     const Accessor& accessor, DataflowBuffer& buffer, Noc& noc, uint32_t row_base, uint32_t value_block) {
-    constexpr uint32_t tile_count = Rows * Vt;
-    buffer.wait_front(tile_count);
+    static_assert(PacketRows > 0 && Rows % PacketRows == 0);
+    constexpr uint32_t packet_tiles = PacketRows * Vt;
     const uint32_t entry_size = buffer.get_entry_size();
-    for (uint32_t row = 0; row < Rows; ++row) {
-        const uint32_t destination = row_base + row * VtFull + value_block * Vt;
-        for (uint32_t value_tile = 0; value_tile < Vt; ++value_tile) {
-            noc.async_write(
-                buffer,
-                accessor,
-                entry_size,
-                {.offset_bytes = (row * Vt + value_tile) * entry_size},
-                {.page_id = destination + value_tile});
-        }
-    }
-    noc.async_write_barrier();
-    buffer.pop_front(tile_count);
-}
-
-template <uint32_t Rows, uint32_t Vt, uint32_t VtFull, typename Accessor>
-FORCE_INLINE void write_streamed_value_slice(
-    const Accessor& accessor, DataflowBuffer& buffer, Noc& noc, uint32_t row_base, uint32_t value_block) {
-    const uint32_t entry_size = buffer.get_entry_size();
-    for (uint32_t row = 0; row < Rows; ++row) {
-        buffer.wait_front(Vt);
-        const uint32_t destination = row_base + row * VtFull + value_block * Vt;
-        for (uint32_t value_tile = 0; value_tile < Vt; ++value_tile) {
-            noc.async_write(
-                buffer,
-                accessor,
-                entry_size,
-                {.offset_bytes = value_tile * entry_size},
-                {.page_id = destination + value_tile});
+    for (uint32_t packet = 0; packet < Rows; packet += PacketRows) {
+        buffer.wait_front(packet_tiles);
+        for (uint32_t row = 0; row < PacketRows; ++row) {
+            const uint32_t destination = row_base + (packet + row) * VtFull + value_block * Vt;
+            for (uint32_t value_tile = 0; value_tile < Vt; ++value_tile) {
+                noc.async_write(
+                    buffer,
+                    accessor,
+                    entry_size,
+                    {.offset_bytes = (row * Vt + value_tile) * entry_size},
+                    {.page_id = destination + value_tile});
+            }
         }
         noc.async_write_barrier();
-        buffer.pop_front(Vt);
+        buffer.pop_front(packet_tiles);
     }
 }
 
 template <uint32_t Kt, uint32_t Vt, uint32_t VtFull>
-FORCE_INLINE void write_summary(uint32_t head, uint32_t value_block) {
-    const auto output_accessor = TensorAccessor(tensor::output);
-    const auto final_state_accessor = TensorAccessor(tensor::final_state);
-    DataflowBuffer output(dfb::output);
-    DataflowBuffer final_state(dfb::final_state);
-    Noc noc;
-    const uint32_t row_base = head * Kt * VtFull;
-    write_value_slice<Kt, Vt, VtFull>(output_accessor, output, noc, row_base, value_block);
-    write_value_slice<Kt, Vt, VtFull>(final_state_accessor, final_state, noc, row_base, value_block);
-}
-
-template <uint32_t Kt, uint32_t Vt, uint32_t VtFull>
-FORCE_INLINE void write_segmented_summary(
+FORCE_INLINE void write_summary(
     uint32_t head,
     uint32_t value_block,
     uint32_t group,
@@ -94,17 +65,17 @@ FORCE_INLINE void write_segmented_summary(
         auto& head_a = straddles ? split_head_a : full_a;
         auto& head_b = straddles ? split_head_b : full_b;
         if (straddles) {
-            write_streamed_value_slice<Kt, Vt, VtFull>(head_a_accessor, head_a, noc, row_base, value_block);
-            write_streamed_value_slice<Kt, Vt, VtFull>(head_b_accessor, head_b, noc, row_base, value_block);
+            write_value_slice<Kt, Vt, VtFull, 1>(head_a_accessor, head_a, noc, row_base, value_block);
+            write_value_slice<Kt, Vt, VtFull, 1>(head_b_accessor, head_b, noc, row_base, value_block);
         } else {
-            write_value_slice<Kt, Vt, VtFull>(head_a_accessor, head_a, noc, row_base, value_block);
-            write_value_slice<Kt, Vt, VtFull>(head_b_accessor, head_b, noc, row_base, value_block);
+            write_value_slice<Kt, Vt, VtFull, Kt>(head_a_accessor, head_a, noc, row_base, value_block);
+            write_value_slice<Kt, Vt, VtFull, Kt>(head_b_accessor, head_b, noc, row_base, value_block);
         }
     }
 
     if (tail_active) {
-        write_value_slice<Kt, Vt, VtFull>(tail_a_accessor, full_a, noc, row_base, value_block);
-        write_value_slice<Kt, Vt, VtFull>(tail_b_accessor, full_b, noc, row_base, value_block);
+        write_value_slice<Kt, Vt, VtFull, Kt>(tail_a_accessor, full_a, noc, row_base, value_block);
+        write_value_slice<Kt, Vt, VtFull, Kt>(tail_b_accessor, full_b, noc, row_base, value_block);
     }
 }
 
@@ -118,10 +89,10 @@ FORCE_INLINE void write_recurrent(uint32_t head, uint32_t value_block, uint32_t 
 
     for (uint32_t chunk = 0; chunk < num_chunks; ++chunk) {
         const uint32_t row_base = (head * num_chunks + chunk) * Ct * VtFull;
-        write_value_slice<Ct, Vt, VtFull>(output_accessor, output, noc, row_base, value_block);
+        write_value_slice<Ct, Vt, VtFull, Ct>(output_accessor, output, noc, row_base, value_block);
     }
     const uint32_t state_row_base = head * Kt * VtFull;
-    write_value_slice<Kt, Vt, VtFull>(final_state_accessor, final_state, noc, state_row_base, value_block);
+    write_value_slice<Kt, Vt, VtFull, Kt>(final_state_accessor, final_state, noc, state_row_base, value_block);
 }
 
 template <uint32_t Ct, uint32_t Kt, uint32_t Vt, uint32_t Vt_full, uint32_t summary, uint32_t dynamic_chronology>
@@ -140,12 +111,7 @@ TT_KERNEL void writer(uint32_t head, uint32_t value_block, uint32_t num_chunks, 
         local_split = topology.local_split;
     }
     if constexpr (summary) {
-        if constexpr (dynamic_chronology) {
-            write_segmented_summary<Kt, Vt, Vt_full>(
-                head, value_block, group, split_group, split_in_group, local_split);
-        } else {
-            write_summary<Kt, Vt, Vt_full>(head, value_block);
-        }
+        write_summary<Kt, Vt, Vt_full>(head, value_block, group, split_group, split_in_group, local_split);
     } else {
         write_recurrent<Ct, Kt, Vt, Vt_full>(head, value_block, num_chunks);
     }
