@@ -29,11 +29,18 @@ void kernel_main() {
 
     constexpr std::uint32_t block_h = get_compile_time_arg_val(7);
     constexpr std::uint32_t block_w = get_compile_time_arg_val(8);
-    constexpr std::uint32_t block_hw = get_compile_time_arg_val(9);
 
     constexpr std::uint32_t per_core_M = get_compile_time_arg_val(12);
     constexpr std::uint32_t per_core_N = get_compile_time_arg_val(13);
     constexpr std::uint32_t per_core_MN = get_compile_time_arg_val(14);
+
+    // Tiles between the start of consecutive batches on this core: per_core_Mt * per_core_Nt /
+    // num_batches_per_core (factory arg 18). The alternative, block_ht * block_wt (arg 9, the tile span of
+    // a single group), only equals the per-batch stride when block_wt == per_core_Nt (exactly one group
+    // per core); with more than one group per core it undercounts the stride, so batch b's tiles would
+    // start inside batch b-1's data. This is the same stride the legacy (non-Welford) kernel already uses
+    // (groupnorm_sharded_v2.cpp reads it as num_tiles_per_batch).
+    constexpr std::uint32_t num_tiles_per_batch = get_compile_time_arg_val(18);
 
     constexpr std::uint32_t num_tiles_input_mask = get_compile_time_arg_val(19);
     constexpr std::uint32_t num_channels_per_group = get_compile_time_arg_val(24);
@@ -171,7 +178,7 @@ void kernel_main() {
     }
 
     for (std::uint32_t b = 0; b < num_batches; ++b) {
-        std::uint32_t tile_id = b * block_hw;
+        std::uint32_t tile_id = b * num_tiles_per_batch;
         dfb_ex_partial.reserve_back(2);
         if constexpr (welford_fp32_alias) {
             // The alias carries UnpackToDestFp32 while c_0 / c_1 stay Default; transpose_init only
@@ -315,7 +322,7 @@ void kernel_main() {
         dfb_ex2pe.wait_front(num_groups);
 
         // Start Final Val Calc
-        tile_id = b * block_hw;
+        tile_id = b * num_tiles_per_batch;
         for (std::uint32_t i = 0; i < block_h; ++i) {
             // This indicates the smallest group that is yet to be processed for this block
             // As we iterate over nt, some of the groups will be completed, and we will update
