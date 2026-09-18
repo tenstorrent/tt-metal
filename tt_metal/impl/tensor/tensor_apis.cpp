@@ -427,7 +427,8 @@ template <typename SrcType, typename DstType>
 tt::tt_metal::DistributedHostBuffer transform_buffers(
     const tt::tt_metal::TensorSpec& input_tensor_spec,
     const tt::tt_metal::TensorSpec& output_spec,
-    const tt::tt_metal::DistributedHostBuffer& input_buffer) {
+    const tt::tt_metal::DistributedHostBuffer& input_buffer,
+    bool optimize_bfp) {
     if constexpr (std::is_same_v<SrcType, DstType>) {
         return input_buffer;
     } else if constexpr (std::is_same_v<SrcType, float8_e4m3> || std::is_same_v<DstType, float8_e4m3>) {
@@ -465,9 +466,9 @@ tt::tt_metal::DistributedHostBuffer transform_buffers(
                 constexpr bool row_major_input = false;
                 constexpr bool is_exp_a = false;
                 if constexpr (std::is_same_v<DstType, bfloat8_tag>) {
-                    return pack_as_bfp8_tiles(data, row_major_input, is_exp_a, output_spec.tile());
+                    return pack_as_bfp8_tiles(data, row_major_input, is_exp_a, output_spec.tile(), optimize_bfp);
                 } else if constexpr (std::is_same_v<DstType, bfloat4_tag>) {
-                    return pack_as_bfp4_tiles(data, row_major_input, is_exp_a, output_spec.tile());
+                    return pack_as_bfp4_tiles(data, row_major_input, is_exp_a, output_spec.tile(), optimize_bfp);
                 } else {
                     static_assert(ttsl::concepts::always_false_v<DstType>, "Unsupported data type");
                 }
@@ -493,7 +494,10 @@ tt::tt_metal::DistributedHostBuffer transform_buffers(
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
-HostTensor to_dtype(const HostTensor& input_tensor, DataType dtype) {
+HostTensor to_dtype(const HostTensor& input_tensor, DataType dtype, bool optimize_bfp) {
+    TT_FATAL(
+        !optimize_bfp || dtype == DataType::BFLOAT4_B || dtype == DataType::BFLOAT8_B,
+        "BFP exponent search requires BFLOAT4_B or BFLOAT8_B output");
     const auto src_type = input_tensor.dtype();
     if (src_type == dtype) {
         return input_tensor;
@@ -535,10 +539,10 @@ HostTensor to_dtype(const HostTensor& input_tensor, DataType dtype) {
         input_tensor.tensor_spec().physical_shape(),
         output_spec.physical_shape());
 
-    auto output_storage = [src_type, dst_type = dtype, &input_tensor, &input_buffer, &output_spec]() {
+    auto output_storage = [src_type, dst_type = dtype, &input_tensor, &input_buffer, &output_spec, optimize_bfp]() {
         auto with_src_and_dst = [&]<typename SrcType, typename DstType>() {
             return CMAKE_UNIQUE_NAMESPACE::transform_buffers<SrcType, DstType>(
-                input_tensor.tensor_spec(), output_spec, input_buffer);
+                input_tensor.tensor_spec(), output_spec, input_buffer, optimize_bfp);
         };
 
         auto with_src = [dst_type, &with_src_and_dst]<typename SrcType>() {

@@ -25,6 +25,9 @@ struct Config {
         std::filesystem::path model_cache_path = std::filesystem::path{std::getenv("HOME")} / ".cache/ttnn/models";
         std::filesystem::path tmp_dir = "/tmp/ttnn";
         bool enable_model_cache = false;
+        // Opt in cached as_tensor BFP weights. Direct from_torch calls still
+        // require an explicit optimize_bfp argument. False retains legacy caches.
+        bool enable_bfp_weight_optimization = false;
         bool enable_fast_runtime_mode = true;
         // Re-validate Metal 2.0 program args on the cache-hit fast path (Update{Tensor,ProgramRun}Args).
         // The cache-miss build path always validates. Off by default; CI turns it on.

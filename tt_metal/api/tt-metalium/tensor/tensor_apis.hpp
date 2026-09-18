@@ -23,7 +23,8 @@ HostTensor to_row_major_layout(const HostTensor& tensor);
 //                                  .to_dtype()
 // ======================================================================================
 
-HostTensor to_dtype(const HostTensor& input_tensor, DataType dtype);
+// Optional host BFP4_B/BFP8_B exponent search; the default preserves ordinary packing.
+HostTensor to_dtype(const HostTensor& input_tensor, DataType dtype, bool optimize_bfp = false);
 
 // ======================================================================================
 //                                  .to_tensor_spec()

@@ -38,4 +38,5 @@ std::vector<uint32_t> pack_as_bfp_tiles(
     ttsl::Span<const T> input_data,
     bool row_major_input,
     bool is_exp_a,
-    const std::optional<tt::tt_metal::Tile>& tile = std::nullopt);
+    const std::optional<tt::tt_metal::Tile>& tile = std::nullopt,
+    bool optimize_bfp = false);

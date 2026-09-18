@@ -92,7 +92,13 @@ def marker_path(cache_path, build_variant=None):
     marker matched exactly would make each variant's seed evict the other's on every run -- both
     then cold-load forever with nothing going red. One marker per variant lets them coexist.
     (#45400 review, finding B3)"""
-    return Path(cache_path) / f"{WEIGHT_CACHE_MARKER}.{_variant_digest(build_variant)}"
+    import ttnn
+
+    # as_tensor changes its BFP filenames in this mode. An ordinary marker must
+    # never authorize placeholders for those new files. Keep the legacy name
+    # when disabled, and share this discriminator across every marker caller.
+    suffix = ".bfp_emax_minus1_v1" if ttnn.CONFIG.enable_bfp_weight_optimization else ""
+    return Path(cache_path) / f"{WEIGHT_CACHE_MARKER}.{_variant_digest(build_variant)}{suffix}"
 
 
 def _dtype_from_str(s):

@@ -693,7 +693,8 @@ void pytensor_module(nb::module_& mod) {
                const distributed::TensorToMesh* mesh_mapper,
                bool preserve_nan_values,
                bool col_tilize,
-               bool enable_bfloat_opt) {
+               bool enable_bfloat_opt,
+               bool optimize_bfp) {
                 auto py_tensor_dtype = dlpack_tensor.dtype();
 
                 // handle bool types by changing them to uint8
@@ -727,7 +728,8 @@ void pytensor_module(nb::module_& mod) {
                     pad_value,
                     preserve_nan_values,
                     col_tilize,
-                    enable_bfloat_opt));
+                    enable_bfloat_opt,
+                    optimize_bfp));
             },
             nb::arg("tensor").noconvert(false),
             nb::arg("data_type") = nb::none(),
@@ -742,6 +744,7 @@ void pytensor_module(nb::module_& mod) {
                                                      // https://github.com/tenstorrent/tt-metal/issues/31406
             nb::arg("col_tilize") = false,
             nb::arg("enable_bfloat_opt") = false,
+            nb::arg("optimize_bfp") = false,
             nb::keep_alive<1, 4>(),  // test: matches other k_a
             nb::rv_policy::move,
             R"doc(

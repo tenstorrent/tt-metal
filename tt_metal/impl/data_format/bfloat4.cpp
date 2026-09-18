@@ -23,42 +23,56 @@
 
 template <typename T>
 std::vector<uint32_t> pack_as_bfp4_tiles(
-    ttsl::Span<const T> data, bool row_major_input, bool is_exp_a, const std::optional<tt::tt_metal::Tile>& tile) {
-    return pack_as_bfp_tiles<tt::DataFormat::Bfp4_b>(data, row_major_input, is_exp_a, tile);
+    ttsl::Span<const T> data,
+    bool row_major_input,
+    bool is_exp_a,
+    const std::optional<tt::tt_metal::Tile>& tile,
+    bool optimize_bfp) {
+    return pack_as_bfp_tiles<tt::DataFormat::Bfp4_b>(data, row_major_input, is_exp_a, tile, optimize_bfp);
 }
 
 template std::vector<uint32_t> pack_as_bfp4_tiles<bfloat16>(
     ttsl::Span<const bfloat16> data,
     bool row_major_input,
     bool is_exp_a,
-    const std::optional<tt::tt_metal::Tile>& tile);
+    const std::optional<tt::tt_metal::Tile>& tile,
+    bool optimize_bfp);
 template std::vector<uint32_t> pack_as_bfp4_tiles<float>(
     ttsl::Span<const float> data,
     bool row_major_input,
     bool is_exp_a,
-    const std::optional<tt::tt_metal::Tile>& tile);
+    const std::optional<tt::tt_metal::Tile>& tile,
+    bool optimize_bfp);
 template std::vector<uint32_t> pack_as_bfp4_tiles<int32_t>(
     ttsl::Span<const int32_t> data,
     bool row_major_input,
     bool is_exp_a,
-    const std::optional<tt::tt_metal::Tile>& tile);
+    const std::optional<tt::tt_metal::Tile>& tile,
+    bool optimize_bfp);
 template std::vector<uint32_t> pack_as_bfp4_tiles<uint32_t>(
     ttsl::Span<const uint32_t> data,
     bool row_major_input,
     bool is_exp_a,
-    const std::optional<tt::tt_metal::Tile>& tile);
+    const std::optional<tt::tt_metal::Tile>& tile,
+    bool optimize_bfp);
 template std::vector<uint32_t> pack_as_bfp4_tiles<int8_t>(
-    ttsl::Span<const int8_t> data, bool row_major_input, bool is_exp_a, const std::optional<tt::tt_metal::Tile>& tile);
+    ttsl::Span<const int8_t> data,
+    bool row_major_input,
+    bool is_exp_a,
+    const std::optional<tt::tt_metal::Tile>& tile,
+    bool optimize_bfp);
 template std::vector<uint32_t> pack_as_bfp4_tiles<uint8_t>(
     ttsl::Span<const uint8_t> data,
     bool row_major_input,
     bool is_exp_a,
-    const std::optional<tt::tt_metal::Tile>& tile);
+    const std::optional<tt::tt_metal::Tile>& tile,
+    bool optimize_bfp);
 template std::vector<uint32_t> pack_as_bfp4_tiles<uint16_t>(
     ttsl::Span<const uint16_t> data,
     bool row_major_input,
     bool is_exp_a,
-    const std::optional<tt::tt_metal::Tile>& tile);
+    const std::optional<tt::tt_metal::Tile>& tile,
+    bool optimize_bfp);
 
 std::vector<float> unpack_bfp4_tiles_into_float_vec(
     ttsl::Span<const uint32_t> bfp_tiles,

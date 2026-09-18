@@ -9,6 +9,7 @@
 #include "ttnn/operations/core/core.hpp"
 
 #include <tt-metalium/allocator.hpp>
+#include <tt-metalium/tensor/tensor_apis.hpp>
 #include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
 #include <tt_stl/unreachable.hpp>
 
@@ -393,8 +394,15 @@ Tensor convert_python_tensor_to_tt_tensor(
     std::optional<float> pad_value,
     bool preserve_nan_values,
     bool col_tilize,
-    bool enable_bfloat_opt) {
+    bool enable_bfloat_opt,
+    bool optimize_bfp) {
     ZoneScoped;
+    TT_FATAL(
+        !optimize_bfp || dst_dtype == DataType::BFLOAT4_B || dst_dtype == DataType::BFLOAT8_B,
+        "optimize_bfp requires BFLOAT4_B or BFLOAT8_B");
+    TT_FATAL(
+        !optimize_bfp || !enable_bfloat_opt,
+        "optimize_bfp is a host conversion and cannot be combined with enable_bfloat_opt");
     if (dst_dtype == DataType::BFLOAT8_B || dst_dtype == DataType::BFLOAT4_B) {
         TT_FATAL(layout == Layout::TILE, "Layout must be Layout::TILE for bfloat8_b or bfloat4_b!");
     }
@@ -410,7 +418,7 @@ Tensor convert_python_tensor_to_tt_tensor(
         pad_value);
 
     auto host_dtype = compute_host_dtype(src_data_type, dst_dtype, memory_config.is_sharded());
-    if (col_tilize) {
+    if (col_tilize || optimize_bfp) {
         host_dtype = DataType::FLOAT32;
     }
     auto host_buffer = get_host_tensor(host_dtype);
@@ -458,7 +466,7 @@ Tensor convert_python_tensor_to_tt_tensor(
     Tensor output = create_tt_tensor_from_host_data(
         host_buffer,
         host_dtype,
-        dst_dtype,
+        optimize_bfp ? host_dtype : dst_dtype,
         layout,
         effective_shape,
         memory_config,
@@ -466,9 +474,15 @@ Tensor convert_python_tensor_to_tt_tensor(
         pad_value.value_or(0.0f),
         mesh_mapper,
         cq_id,
-        device.value_or(nullptr),
+        optimize_bfp ? nullptr : device.value_or(nullptr),
         preserve_nan_values,
         enable_bfloat_opt);
+
+    if (optimize_bfp) {
+        // Construct the real per-device layout/padding in FP32 first. Packing
+        // then searches physical face rows after sharding and col_tilize.
+        output = Tensor(tt::tt_metal::to_dtype(output.host_tensor(), dst_dtype, true));
+    }
 
     auto set_layout = [&](Layout target) {
         if (output.layout() != target) {

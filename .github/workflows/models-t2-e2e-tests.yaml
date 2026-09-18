@@ -77,6 +77,11 @@ on:
         type: boolean
         default: false
         description: "Enable Link Time Optimization (LTO)"
+      optimize-bfp-weights:
+        required: false
+        type: boolean
+        default: false
+        description: "Experimental Emax/Emax-1 search for cached BFP weights (requires writable weight cache)"
       mlperf-read-only:
         required: false
         type: boolean
@@ -149,4 +154,5 @@ jobs:
       enabled-skus: ${{ needs.resolve-skus.outputs.enabled-skus }}
       model: ${{ needs.resolve-skus.outputs.model }}
       mlperf-read-only: ${{ inputs.mlperf-read-only != false }}
+      optimize-bfp-weights: ${{ inputs.optimize-bfp-weights == true }}
       tier: "2"

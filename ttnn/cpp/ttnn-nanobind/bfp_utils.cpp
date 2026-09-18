@@ -30,7 +30,7 @@ static nb::ndarray<nb::numpy, uint32_t, nb::ndim<1>> pack_impl(
     bool row_major_input,
     bool is_exp_a) {
     ttsl::Span<const float> data_span(input.data(), input.size());
-    auto packed = pack_fn(data_span, row_major_input, is_exp_a, std::nullopt);
+    auto packed = pack_fn(data_span, row_major_input, is_exp_a);
 
     auto* result = new uint32_t[packed.size()];
     std::copy(packed.begin(), packed.end(), result);
@@ -64,20 +64,34 @@ void py_module(nb::module_& mod) {
         "pack_bfp8",
         [](const nb::ndarray<nb::array_api, const float, nb::ndim<1>, nb::c_contig, nb::device::cpu>& input,
            bool row_major_input,
-           bool is_exp_a) { return pack_impl(pack_as_bfp8_tiles<float>, input, row_major_input, is_exp_a); },
+           bool is_exp_a,
+           bool optimize_bfp) {
+            auto pack = [optimize_bfp](auto data, bool row_major, bool exp_a) {
+                return pack_as_bfp8_tiles(data, row_major, exp_a, std::nullopt, optimize_bfp);
+            };
+            return pack_impl(pack, input, row_major_input, is_exp_a);
+        },
         nb::arg("input"),
         nb::arg("row_major_input") = false,
         nb::arg("is_exp_a") = false,
+        nb::arg("optimize_bfp") = false,
         R"doc(Pack float32 data into BFP8 tile format. Returns raw uint32 packed data.)doc");
 
     mod.def(
         "pack_bfp4",
         [](const nb::ndarray<nb::array_api, const float, nb::ndim<1>, nb::c_contig, nb::device::cpu>& input,
            bool row_major_input,
-           bool is_exp_a) { return pack_impl(pack_as_bfp4_tiles<float>, input, row_major_input, is_exp_a); },
+           bool is_exp_a,
+           bool optimize_bfp) {
+            auto pack = [optimize_bfp](auto data, bool row_major, bool exp_a) {
+                return pack_as_bfp4_tiles(data, row_major, exp_a, std::nullopt, optimize_bfp);
+            };
+            return pack_impl(pack, input, row_major_input, is_exp_a);
+        },
         nb::arg("input"),
         nb::arg("row_major_input") = false,
         nb::arg("is_exp_a") = false,
+        nb::arg("optimize_bfp") = false,
         R"doc(Pack float32 data into BFP4 tile format. Returns raw uint32 packed data.)doc");
 
     mod.def(
@@ -85,7 +99,10 @@ void py_module(nb::module_& mod) {
         [](const nb::ndarray<nb::array_api, const float, nb::ndim<1>, nb::c_contig, nb::device::cpu>& input,
            bool row_major_input,
            bool is_exp_a) {
-            return pack_impl(tt::tt_metal::pack_as_bfp2_tiles<float>, input, row_major_input, is_exp_a);
+            auto pack = [](auto data, bool row_major, bool exp_a) {
+                return tt::tt_metal::pack_as_bfp2_tiles(data, row_major, exp_a, std::nullopt);
+            };
+            return pack_impl(pack, input, row_major_input, is_exp_a);
         },
         nb::arg("input"),
         nb::arg("row_major_input") = false,

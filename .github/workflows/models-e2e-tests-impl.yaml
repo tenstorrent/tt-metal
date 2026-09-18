@@ -19,6 +19,11 @@ on:
         required: false
         type: string
         default: "all"
+      optimize-bfp-weights:
+        required: false
+        type: boolean
+        default: false
+        description: "Experimental cached BFP weight exponent search (single-host jobs)"
       mlperf-read-only:
         required: false
         type: boolean
@@ -163,6 +168,7 @@ jobs:
         HF_HUB_CACHE: /mnt/MLPerf/huggingface/hub
         HF_TOKEN: ${{ secrets.HUGGINGFACE_TOKEN }}
         LOGURU_LEVEL: INFO
+        TTNN_CONFIG_OVERRIDES: '${{ inputs.optimize-bfp-weights && ''{"enable_bfp_weight_optimization":true}'' || ''{}'' }}'
         GTEST_OUTPUT: xml:/work/generated/test_reports/
         MLPERF_READ_ONLY: ${{ inputs.mlperf-read-only }} # used by GPT-OSS 120B to toggle --skip-model-load
       volumes:

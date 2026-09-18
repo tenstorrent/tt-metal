@@ -234,7 +234,7 @@ ttnn.attach_golden_function(ttnn.reshape, golden_function=_golden_function)
 ttnn.register_python_operation(name="ttnn.unsqueeze_to_4D")(ttnn._ttnn.operations.core.unsqueeze_to_4D)
 
 
-def _golden_function(input_tensor, dtype=None, *, spec=None, layout=None, **_):
+def _golden_function(input_tensor, dtype=None, *, spec=None, layout=None, optimize_bfp=False, **_):
     if input_tensor is None:
         return None
 
@@ -256,7 +256,9 @@ def _golden_function(input_tensor, dtype=None, *, spec=None, layout=None, **_):
         # Round-trip block floats through host packing so the golden includes BFP quantization.
         target_layout = spec.layout if spec is not None else layout
         target_layout = target_layout or ttnn.TILE_LAYOUT
-        return ttnn.Tensor(tensor=input_tensor, data_type=target_dtype, layout=target_layout).to_torch()
+        return ttnn.Tensor(
+            tensor=input_tensor, data_type=target_dtype, layout=target_layout, optimize_bfp=optimize_bfp
+        ).to_torch()
 
     # Mirror explicit TT dtype conversion so the golden matches values stored by from_torch.
     return input_tensor.to(ttnn.ttnn_dtype_to_torch_dtype(target_dtype))
@@ -278,6 +280,7 @@ def from_torch(
     preserve_nan_values: bool = False,
     col_tilize: bool = False,
     enable_bfloat_opt: bool = False,
+    optimize_bfp: bool = False,
 ) -> Optional[ttnn.Tensor]:
     """
     Converts the `torch.Tensor` tensor into a `ttnn.Tensor`. If `tensor` is `None`, the function returns `None`.
@@ -309,6 +312,10 @@ def from_torch(
             transpose_of_faces).  Requires dtype bfloat8_b or bfloat4_b, tensor.ndim >= 2, spec=None.
             Defaults to `False`.
         enable_bfloat_opt (bool, optional): If True, use a fast bf4/8 dtype conversion on the device, but with precision loss due to hw rounding rules. Defaults to `False`.
+
+        optimize_bfp (bool, optional): Search Emax and Emax-1 per physical block during host
+            BFP4_B/BFP8_B packing, choosing the lower weight squared error. Requires a BFP dtype
+            and tile layout. Incompatible with enable_bfloat_opt. Defaults to False.
 
     Returns:
         ttnn.Tensor | None: A `ttnn.Tensor` created from the input `torch.Tensor`, or `None` if `tensor` is `None`.
@@ -391,6 +398,7 @@ def from_torch(
         preserve_nan_values=preserve_nan_values,
         col_tilize=col_tilize,
         enable_bfloat_opt=enable_bfloat_opt,
+        optimize_bfp=optimize_bfp,
     )
 
 
@@ -745,6 +753,7 @@ def as_tensor(
     cache_file_name: Optional[Union[str, pathlib.Path]] = None,
     preprocess: Optional[Callable[[ttnn.Tensor], ttnn.Tensor]] = None,
     mesh_mapper: Optional[ttnn.CppTensorToMesh | ttnn.ReplicateTensorToMeshWrapper] = None,
+    optimize_bfp: Optional[bool] = None,
 ) -> ttnn.Tensor:
     """
     Converts the `torch.Tensor` tensor into a `ttnn.Tensor`.
@@ -764,12 +773,28 @@ def as_tensor(
             - For Grayskull, the on-device tilizer will truncate mantissa bits for bfp* formats.
             - For Wormhole, the on-device tilizer will raise a runtime error (RTE) for bfp8 but will truncate for bfp4/2 formats.
 
+        optimize_bfp (bool, optional): Use Emax/Emax-1 host exponent search for BFP4_B/BFP8_B.
+            None follows CONFIG.enable_bfp_weight_optimization for cached BFP tensors only;
+            otherwise it is False. Explicit False overrides the config. Optimized tensors
+            use a separate cache filename. Set the config before model cache checks/loading.
+
     Returns:
         ttnn.Tensor: The resulting `ttnn` tensor.
     """
 
     if device is not None and memory_config is None:
         raise RuntimeError("memory_config must be specified when device is specified")
+
+    if optimize_bfp is None:
+        optimize_bfp = (
+            ttnn.CONFIG.enable_bfp_weight_optimization
+            and cache_file_name is not None
+            and dtype in (ttnn.bfloat4_b, ttnn.bfloat8_b)
+        )
+    if optimize_bfp and dtype not in (ttnn.bfloat4_b, ttnn.bfloat8_b):
+        raise RuntimeError("optimize_bfp requires bfloat4_b or bfloat8_b")
+    if optimize_bfp and layout != ttnn.TILE_LAYOUT:
+        raise RuntimeError("optimize_bfp requires TILE_LAYOUT")
 
     torch_tensor = tensor
     dtype_name = dtype.name if dtype is not None else "None"
@@ -792,6 +817,7 @@ def as_tensor(
             mesh_mapper=mesh_mapper,
             memory_config=memory_config,
             device=device,
+            optimize_bfp=optimize_bfp,
         )
 
     if cache_file_name is None:
@@ -823,7 +849,8 @@ def as_tensor(
             tensor = tensor.to(device, memory_config)
         return tensor
 
-    cache_file_name = f"{cache_file_name}_dtype_{dtype_name}_layout_{layout_name}.tensorbin"
+    optimization_suffix = "_bfp_emax_minus1_v1" if optimize_bfp else ""
+    cache_file_name = f"{cache_file_name}_dtype_{dtype_name}_layout_{layout_name}{optimization_suffix}.tensorbin"
     cache_path = pathlib.Path(cache_file_name)
 
     if not cache_path.exists() or not cache_path.is_file():
