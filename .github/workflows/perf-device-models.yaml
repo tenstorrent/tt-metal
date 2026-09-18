@@ -37,7 +37,7 @@ on:
         default: false
         description: "Enable Link Time Optimization (LTO)"
   schedule:
-    - cron: "0 2,7,10,14,17,20,23 * * *"
+    - cron: "0 2,8,14,20 * * *" # every 6 hours, 4 runs a day
   workflow_call:
     inputs:
       architecture:
