@@ -94,11 +94,11 @@ inline void _llk_unpack_reduce_col_tilizeA_strided_tiny_tiles_mop_config_(const 
         [buf_desc_id_0]
         {
             // Face 0; Src_Reg_Y_Cntr_Incr = 0 resets the counter, so each face starts at row 0 of its own SrcA bank
-            TTI_UNPACR_NOP(p_unpacr::UNP_A, 0, p_unpacr::UNP_STALL_UNP_WR, 0 /* clear curr bank */, clr_mode, p_unpacr::UNP_CLRSRC_ZERO /* UNP_CLR_SRC */);
+            TTI_UNPACR_NOP(p_unpacr::UNP_A, 0, p_unpacr::UNP_STALL_UNP_WR, 0 /* clear curr bank */, clr_mode, p_unpacr::UNP_CLRSRC);
             TT_UNPACR0_STRIDE(0 /*Src_Reg_Y_Cntr_Incr*/, 0 /*inc by 1*/, 1 /*set to inc*/, 1 /*Row_Mask_Reg_Sel*/, 0, buf_desc_id_0, 1 /*Set Dvalid*/);
 
             // Face 1
-            TTI_UNPACR_NOP(p_unpacr::UNP_A, 0, p_unpacr::UNP_STALL_UNP_WR, 0 /* clear curr bank */, clr_mode, p_unpacr::UNP_CLRSRC_ZERO /* UNP_CLR_SRC */);
+            TTI_UNPACR_NOP(p_unpacr::UNP_A, 0, p_unpacr::UNP_STALL_UNP_WR, 0 /* clear curr bank */, clr_mode, p_unpacr::UNP_CLRSRC);
             TT_UNPACR0_STRIDE(0 /*Src_Reg_Y_Cntr_Incr*/, 0 /*inc by 1*/, 1 /*set to inc*/, 1 /*Row_Mask_Reg_Sel*/, 0, buf_desc_id_0, 1 /*Set Dvalid*/);
         });
 

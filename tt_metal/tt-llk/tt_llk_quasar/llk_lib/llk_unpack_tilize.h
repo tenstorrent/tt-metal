@@ -75,8 +75,9 @@ inline void _llk_unpack_tilize_mop_config_(const std::uint32_t buf_desc_id, cons
     {
         // FP32 datacopy uses ELWADD, which requires dvalid from both SrcA and SrcB
         // Set dvalid for the opposite unpacker (if using UNP_A, set dvalid for UNP_B and vice versa)
-        constexpr std::uint32_t OPPOSITE_UNP                      = (UNP_SEL == p_unpacr::UNP_A) ? p_unpacr::UNP_B : p_unpacr::UNP_A;
-        constexpr static std::uint32_t set_opposite_dvalid_instrn = TT_OP_UNPACR_NOP(OPPOSITE_UNP, 1 /*Dvalid*/, 0, 0, 0 /*clear to 0*/, 0 /*UNP_CLR_SRC*/);
+        constexpr std::uint32_t OPPOSITE_UNP = (UNP_SEL == p_unpacr::UNP_A) ? p_unpacr::UNP_B : p_unpacr::UNP_A;
+        constexpr static std::uint32_t set_opposite_dvalid_instrn =
+            TT_OP_UNPACR_NOP(OPPOSITE_UNP, 1 /*Dvalid*/, 0, 0, p_unpacr::UNP_CLRSRC_ZERO, p_unpacr::UNP_CLRSRC);
 
         ckernel_template temp(MOP_OUTER_LOOP, MOP_INNER_LOOP, set_opposite_dvalid_instrn, unpack_tile_instrn);
         temp.set_last_outer_loop_instr(reset_src_reg_instrn);
@@ -440,8 +441,9 @@ inline void _llk_unpack_tilize_strided_mop_config_small_faces_(const std::uint32
 
     if constexpr (EN_32BIT_DEST)
     {
-        constexpr std::uint32_t OPPOSITE_UNP                      = (UNP_SEL == p_unpacr::UNP_B) ? p_unpacr::UNP_A : p_unpacr::UNP_B;
-        constexpr static std::uint32_t set_opposite_dvalid_instrn = TT_OP_UNPACR_NOP(OPPOSITE_UNP, 1 /*Dvalid*/, 0, 0, 0 /*clear to 0*/, 0 /*UNP_CLR_SRC*/);
+        constexpr std::uint32_t OPPOSITE_UNP = (UNP_SEL == p_unpacr::UNP_B) ? p_unpacr::UNP_A : p_unpacr::UNP_B;
+        constexpr static std::uint32_t set_opposite_dvalid_instrn =
+            TT_OP_UNPACR_NOP(OPPOSITE_UNP, 1 /*Dvalid*/, 0, 0, p_unpacr::UNP_CLRSRC_ZERO, p_unpacr::UNP_CLRSRC);
         ckernel_template temp(MOP_OUTER_LOOP, MOP_INNER_LOOP, TT_OP_REPLAY(0, replay_buf_len, 0, 0, 0, 0), set_opposite_dvalid_instrn);
         temp.program_bank0_sw_cntl(instrn_buffer);
     }
