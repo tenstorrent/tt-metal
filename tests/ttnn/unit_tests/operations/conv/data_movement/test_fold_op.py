@@ -111,12 +111,10 @@ def test_fold_with_permute_for_dram_tensor(device, nhw, channels, stride, paddin
             f"Skipping invalid padding combination: padded_h={padded_h}, padded_w={padded_w}, stride_h={stride_h}, stride_w={stride_w}"
         )
 
-    # FP32 has twice the per-stick byte footprint of bfloat16, so the largest configuration
-    # (channels=320 with a 32x32 stride) makes the fold dataflow buffers grow to ~2.7 MB, past the
-    # ~1.5 MB per-core L1. This is a pre-existing device capacity limit — the DFB/CB sizing is
-    # dtype-driven and identical on main — not a fold correctness issue, so skip it.
+    # fp32 + channels=320 + stride=(32,32): output stick alone is 32*32*320*4=1.25 MB, so both
+    # tile-native and RM-fallback paths overflow per-core L1 (~1.5 MB) — device capacity, not a bug.
     if input_dtype == ttnn.float32 and channels == 320 and stride == (32, 32):
-        pytest.skip("FP32 fold DFBs exceed per-core L1 for channels=320 with 32x32 stride (capacity limit)")
+        pytest.skip("FP32 fold: channels=320 + 32x32 stride overflows per-core L1 (capacity limit)")
 
     torch_input_dtype = torch.float32 if input_dtype == ttnn.float32 else torch.bfloat16
     torch_input_tensor = torch.rand((batch_size, channels, height, width), dtype=torch_input_dtype)
@@ -489,3 +487,12 @@ def run_fold_sharded_test(device, act_shape, stride_h, stride_w, padding, core_g
 )
 def test_fold_sharded(device, act_shape, stride_h, stride_w, padding, core_grid):
     run_fold_sharded_test(device, act_shape, stride_h, stride_w, padding, core_grid)
+
+
+def test_fold_tile_partial_tile_width_rejected(device, expect_error):
+    """Logical W=48 padded to 64: 64%32==0 hides the partial-tile W the tile-native writer would OOB into. validate_fold must FATAL on logical_shape now."""
+    shape = (1, 32, 48, 32)
+    x = torch.rand(shape, dtype=torch.bfloat16)
+    ttnn_in = ttnn.from_torch(x, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
+    with expect_error(RuntimeError, "stride_w|logical W"):
+        ttnn.fold(ttnn_in, 32, 32)
