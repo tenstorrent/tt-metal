@@ -56,6 +56,8 @@ void kernel_main() {
     const uint8_t peer_core_y = get_arg_val<uint32_t>(ai++);
     const uint32_t num_connections = get_arg_val<uint32_t>(ai++);  // 1 (fwd only) or 2 (fwd + bwd)
     const address_t init_sem = get_arg_val<uint32_t>(ai++);
+    const uint8_t fwd_mcast_range = static_cast<uint8_t>(get_arg_val<uint32_t>(ai++));
+    const uint8_t bwd_mcast_range = static_cast<uint8_t>(get_arg_val<uint32_t>(ai++));
     // Per-destination route, in send order (shared order with the reader's cb_send production).
     const size_t dest_conn = ai;
     ai += num_dests;
@@ -116,33 +118,47 @@ void kernel_main() {
     fabric_connection.open_finish();
 
     if constexpr (needs_init_sync) {
-        // One atomic inc per peer, once per invocation, sent on exactly the per-destination routes the
-        // payload loop below uses: same connection, same hop count, same 2D route. So the barrier can
-        // never be the one thing in this kernel that a reachable topology misroutes.
-        //
-        // The 1D path used to do this as two chip multicasts (one per direction, ranges from the host).
-        // A multicast's hop fields are consumed by each router in turn, so it needs every hop of the
-        // range to be a straight continuation of the direction it was injected in; a unicast only needs
-        // the fabric to have a route. Those come apart on a mesh with more than one device on BOTH
-        // axes, where the rings along a cluster_axis close over the mesh's wraparound links: the
-        // multicast then stalls part of the ring in the wait below while the rest walks on (#54864).
-        // The ring reduce_scatter's writer dropped multicast from its own barrier for the same reason
-        // ("use neighbor unicast instead of multicast to support reshaped 'logical linear' mesh
-        // devices"). Cost is num_dests header-only packets instead of two, once per invocation.
         auto init_pkt = PacketHeaderPool::allocate_header(1);
         const uint64_t init_noc_addr = safe_get_noc_addr(peer_core_x, peer_core_y, init_sem, 0);
-        for (uint32_t dst = 0; dst < num_dests; ++dst) {
-            auto* sender = &fabric_connection.get(get_arg_val<uint32_t>(dest_conn + dst)).sender;
-            fabric_api::fabric_unicast_noc_unicast_atomic_inc_set_state<
-                UnicastAtomicIncUpdateMask::DstAddr | UnicastAtomicIncUpdateMask::Val |
-                UnicastAtomicIncUpdateMask::Flush>(
-                init_pkt,
-                static_cast<uint8_t>(get_arg_val<uint32_t>(dest_hops + dst)),
-                tt::tt_fabric::NocUnicastAtomicIncCommandHeader{init_noc_addr, 1u});
-            set_route_2d(init_pkt, dst);
-            fabric_api::fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::None>(
-                sender, init_pkt);
-            noc.async_writes_flushed();  // on the wire before the header is re-patched for the next dst
+        if constexpr (std::is_base_of_v<tt::tt_fabric::HybridMeshPacketHeader, PACKET_HEADER_TYPE>) {
+            // 2D: a multicast would need fabric_set_mcast_route (a mcast START node plus per-direction hop
+            // counts), and on a torus it is not obvious the wrap is even expressible. The barrier is one
+            // atomic inc per peer, once per invocation, and only on the non-persistent path -- so just
+            // reuse the per-destination unicast routes the data path already programs correctly. Same
+            // set_state -> set route -> with_state idiom as the payload loop below.
+            for (uint32_t dst = 0; dst < num_dests; ++dst) {
+                auto* sender = &fabric_connection.get(get_arg_val<uint32_t>(dest_conn + dst)).sender;
+                fabric_api::fabric_unicast_noc_unicast_atomic_inc_set_state<
+                    UnicastAtomicIncUpdateMask::DstAddr | UnicastAtomicIncUpdateMask::Val |
+                    UnicastAtomicIncUpdateMask::Flush>(
+                    init_pkt,
+                    static_cast<uint8_t>(get_arg_val<uint32_t>(dest_hops + dst)),
+                    tt::tt_fabric::NocUnicastAtomicIncCommandHeader{init_noc_addr, 1u});
+                set_route_2d(init_pkt, dst);
+                fabric_api::fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::None>(
+                    sender, init_pkt);
+                noc.async_writes_flushed();  // on the wire before the header is re-patched for the next dst
+            }
+        } else {
+            // Connection 0 = forward, 1 = backward; a range is 0 only when that connection is not open.
+            if (fwd_mcast_range > 0) {
+                fabric_api::fabric_multicast_noc_unicast_atomic_inc(
+                    &fabric_connection.get(0).sender,
+                    init_pkt,
+                    tt::tt_fabric::NocUnicastAtomicIncCommandHeader{init_noc_addr, 1u},
+                    /*start_distance=*/1,
+                    fwd_mcast_range);
+                noc.async_writes_flushed();  // on the wire before the header is re-patched below
+            }
+            if (bwd_mcast_range > 0) {
+                fabric_api::fabric_multicast_noc_unicast_atomic_inc(
+                    &fabric_connection.get(1).sender,
+                    init_pkt,
+                    tt::tt_fabric::NocUnicastAtomicIncCommandHeader{init_noc_addr, 1u},
+                    /*start_distance=*/1,
+                    bwd_mcast_range);
+                noc.async_writes_flushed();
+            }
         }
         // Free function: init_sem arrives as a GlobalSemaphore address. See the reader's note.
         noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(init_sem), (invocation + 1) * num_dests);
