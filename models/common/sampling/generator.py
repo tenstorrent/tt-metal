@@ -4,6 +4,7 @@
 
 import copy
 import itertools
+import math
 import random
 import secrets
 from dataclasses import dataclass, fields, replace
@@ -17,6 +18,7 @@ import ttnn
 from ._utils import clamp, is_default_value, split_list
 from .full_vocab_contract import ManagedPerSlotDrawSeeds, classify_sampling_batch
 from .full_vocab_device import (
+    calculate_selected_raw_logprobs,
     merge_unrestricted_rows,
     plan_exact_nucleus_candidates,
     sample_unrestricted_nucleus,
@@ -133,18 +135,38 @@ class SamplingGenerator:
     }
 
     @staticmethod
-    def full_vocabulary_sampling_capabilities():
+    def full_vocabulary_sampling_capabilities(*, vocab_size: int):
         """Describe the exact opt-in unrestricted sampling domain.
 
         This is a parameter-domain contract, not a blanket boolean.  Serving
         frontends must reject unsupported cross-products before scheduling.
         """
 
+        if isinstance(vocab_size, bool) or not isinstance(vocab_size, int) or vocab_size <= 0:
+            raise ValueError("vocab_size must be a positive integer")
+        max_nucleus_candidates = 2048
+        stable_topk_max_local_width = 65504
+        tile_width = 32
+        tile_aligned_vocab_envelope = (vocab_size // tile_width) * tile_width
+        effective_nucleus_candidates = min(
+            max_nucleus_candidates, tile_aligned_vocab_envelope)
+        # Publish a conservative request-space bound.  The device planner
+        # remains authoritative and revalidates each request; stepping down
+        # avoids a binary-float boundary admitting ceil(p * V) > K.
+        max_nucleus_top_p = math.nextafter(
+            effective_nucleus_candidates / vocab_size,
+            0.0,
+        ) if effective_nucleus_candidates else 0.0
         return {
             "abi": "tt-metal.common.sampling.full-vocabulary/v1",
             "sampling_dp": (1,),
-            "top_p": (1.0,),
-            "sampled_logprobs": False,
+            "mesh_shapes": ((1, 4),),
+            "top_p_one": True,
+            "max_nucleus_top_p": max_nucleus_top_p,
+            "max_nucleus_candidates": max_nucleus_candidates,
+            "stable_topk_max_local_width": stable_topk_max_local_width,
+            "sampled_logprobs": True,
+            "max_top_logprobs": 0,
             "topk_logprobs": False,
             "traced": False,
             "mixed_rows": True,
@@ -465,24 +487,80 @@ class SamplingGenerator:
         tt_out_tok: Optional[ttnn.Tensor],
         count_tokens: bool = True,
     ):
-        if penalties_on:
-            logits = self.tt_penalties.apply(logits)
         contract = self._full_vocab_contract()
-        if contract is None or not contract.needs_full_vocabulary:
-            tt_tokens, tt_log_probs = self.tt_sampling(logits, tt_out_tok=tt_out_tok)
-        else:
-            tt_tokens, tt_log_probs = self._run_mixed_full_vocab_sampling(
-                logits, contract=contract, tt_out_tok=tt_out_tok
+        raw_logits_snapshot = None
+        raw_sampled_logprob_slots = self._raw_sampled_logprob_slots()
+        if raw_sampled_logprob_slots:
+            # Penalties mutate their logits input in place.  raw_logprobs are
+            # defined over the model-head output before processors, so retain a
+            # fresh device allocation until the final selected IDs are known.
+            raw_logits_snapshot = self._copy_warmup_logits(logits)
+        try:
+            if penalties_on:
+                logits = self.tt_penalties.apply(logits)
+            if contract is None or not contract.needs_full_vocabulary:
+                tt_tokens, tt_log_probs = self.tt_sampling(logits, tt_out_tok=tt_out_tok)
+            else:
+                tt_tokens, tt_log_probs = self._run_mixed_full_vocab_sampling(
+                    logits,
+                    contract=contract,
+                    tt_out_tok=tt_out_tok,
+                )
+            if raw_sampled_logprob_slots:
+                tt_log_probs = self._calculate_raw_sampled_logprobs(raw_logits_snapshot, tt_tokens)
+            if penalties_on and count_tokens:
+                # Fold the penalty bookkeeping into the sampled step rather than running it afterwards in
+                # sample(). The order is unchanged -- penalties are applied to this step's logits from the
+                # previous steps' counts, then the new token is counted -- but doing it here means it is part
+                # of whatever trace captures this, instead of a handful of scatter/tilize/reshape allocations
+                # on every decode step behind a live trace. Those ops take no preallocated output tensor, so
+                # tracing them is the only way to stop them allocating.
+                self.tt_penalties.update_output_tokens(tt_out_tok if tt_out_tok is not None else tt_tokens)
+            return tt_tokens, tt_log_probs
+        finally:
+            if raw_logits_snapshot is not None:
+                self._deallocate_tensors((raw_logits_snapshot,), protect=(logits,))
+
+    def _raw_sampled_logprob_slots(self):
+        if not self._full_vocab_top_p_one_enabled or self._full_vocab_params is None:
+            return ()
+        params = self._full_vocab_params
+        batch = self.tt_sampling.max_batch_size
+        requested_value = getattr(params, "enable_log_probs", None)
+        num_logprobs_value = getattr(params, "num_logprobs", None)
+        requested = [False] * batch if requested_value is None else list(requested_value)
+        num_logprobs = [0] * batch if num_logprobs_value is None else list(num_logprobs_value)
+        active = set(self._active_sampling_slots or ())
+        slots = tuple(slot for slot in range(batch) if slot in active and requested[slot])
+        if any(num_logprobs[slot] > 0 for slot in slots):
+            raise RuntimeError("full-vocabulary raw top-N logprobs are not implemented")
+        return slots
+
+    def _calculate_raw_sampled_logprobs(self, raw_logits_snapshot, selected_token_ids):
+        preparation_owned = ()
+        result = None
+        output = None
+        try:
+            full_raw_logits, preparation_owned = self.tt_sampling.gather_full_vocab_logits(
+                raw_logits_snapshot
             )
-        if penalties_on and count_tokens:
-            # Fold the penalty bookkeeping into the sampled step rather than running it afterwards in
-            # sample(). The order is unchanged -- penalties are applied to this step's logits from the
-            # previous steps' counts, then the new token is counted -- but doing it here means it is part
-            # of whatever trace captures this, instead of a handful of scatter/tilize/reshape allocations
-            # on every decode step behind a live trace. Those ops take no preallocated output tensor, so
-            # tracing them is the only way to stop them allocating.
-            self.tt_penalties.update_output_tokens(tt_out_tok if tt_out_tok is not None else tt_tokens)
-        return tt_tokens, tt_log_probs
+            result = calculate_selected_raw_logprobs(
+                full_raw_logits,
+                selected_token_ids,
+                vocab_size=self.tt_sampling.vocab_size,
+                ops=ttnn,
+            )
+            view = ttnn.reshape(
+                result.logprobs,
+                (1, 1, 1, self.tt_sampling.max_batch_size),
+            )
+            output = self._copy_warmup_logits(view)
+            return output
+        finally:
+            owned = [*preparation_owned]
+            if result is not None:
+                owned.extend(result.owned_tensors)
+            self._deallocate_tensors(owned, protect=(raw_logits_snapshot, selected_token_ids, output))
 
     def _full_vocab_contract(self):
         if not self._full_vocab_top_p_one_enabled:
@@ -507,9 +585,6 @@ class SamplingGenerator:
                 vocab_size=self.tt_sampling.vocab_size,
                 public_topk_max_candidates=self._full_vocab_nucleus_max_candidates,
             )
-        requested_logprobs = list(getattr(params, "enable_log_probs", [False] * batch))
-        if any(requested_logprobs[slot] for slot in contract.unrestricted_slots):
-            raise RuntimeError("unrestricted full-vocabulary sampling with logprobs is not implemented")
         return contract
 
     @staticmethod
@@ -530,7 +605,13 @@ class SamplingGenerator:
             if tensor.is_allocated():
                 ttnn.deallocate(tensor)
 
-    def _run_mixed_full_vocab_sampling(self, logits, *, contract, tt_out_tok):
+    def _run_mixed_full_vocab_sampling(
+        self,
+        logits,
+        *,
+        contract,
+        tt_out_tok,
+    ):
         if tt_out_tok is not None:
             raise RuntimeError("full-vocabulary mixed routing does not yet support a preallocated token output")
 
@@ -547,11 +628,17 @@ class SamplingGenerator:
             if len(seed_plan.seeds_by_subdraw) != 1:
                 raise RuntimeError("top_p=1 categorical route requires exactly one draw")
 
+            def group_seed_values(slots):
+                return tuple(
+                    seed_plan.seeds_by_subdraw[0][slot] if slot in slots else MAX_UINT32
+                    for slot in range(self.tt_sampling.max_batch_size)
+                )
+
             full_logits, preparation_owned = self.tt_sampling.gather_full_vocab_logits(logits)
             inverse_temperature = self._full_vocab_inverse_temperature
             current_tokens = native_tokens
 
-            def merge_group(categorical, slots):
+            def copy_selector(slots):
                 selector_update = ttnn.from_torch(
                     _make_full_vocab_selector(self.tt_sampling.max_batch_size, slots),
                     device=None,
@@ -559,6 +646,9 @@ class SamplingGenerator:
                     layout=ttnn.TILE_LAYOUT,
                 )
                 ttnn.copy_host_to_device_tensor(selector_update, self._full_vocab_selector)
+
+            def merge_group(categorical, slots):
+                copy_selector(slots)
                 result = merge_unrestricted_rows(
                     categorical,
                     current_tokens,
@@ -574,7 +664,7 @@ class SamplingGenerator:
                     full_logits,
                     inverse_temperature=inverse_temperature,
                     row_scratch=self._full_vocab_row_scratch,
-                    seed_values=seed_plan.seeds_by_subdraw[0],
+                    seed_values=group_seed_values(top_p_one),
                     active_rows=[slot in top_p_one for slot in range(self.tt_sampling.max_batch_size)],
                     vocab_size=self.tt_sampling.vocab_size,
                     ops=ttnn,
@@ -595,7 +685,7 @@ class SamplingGenerator:
                     inverse_temperature=inverse_temperature,
                     top_p=self._full_vocab_top_p,
                     row_scratch=self._full_vocab_row_scratch,
-                    seed_values=seed_plan.seeds_by_subdraw[0],
+                    seed_values=group_seed_values(nucleus),
                     active_rows=[slot in nucleus for slot in range(self.tt_sampling.max_batch_size)],
                     vocab_size=self.tt_sampling.vocab_size,
                     candidate_count=max(plan.candidate_count for plan in plans),
@@ -609,7 +699,11 @@ class SamplingGenerator:
                 tensor for result in merged_results for tensor in result.owned_tensors
             )
             self._deallocate_tensors(
-                (*merged_owned, *preparation_owned, native_tokens),
+                (
+                    *merged_owned,
+                    *preparation_owned,
+                    native_tokens,
+                ),
                 protect=(
                     current_tokens,
                     logits,
@@ -630,11 +724,11 @@ class SamplingGenerator:
                 scratch.extend(categorical.owned_tensors)
             scratch.extend(preparation_owned)
             scratch.append(native_tokens)
-            scratch.append(native_log_probs)
             self._deallocate_tensors(
                 scratch,
                 protect=(
                     logits,
+                    native_log_probs,
                     self.tt_sampling.temp_tensor,
                     self._full_vocab_selector,
                     self._full_vocab_invalid_tokens,

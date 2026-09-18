@@ -9,17 +9,35 @@ from models.common.sampling.tt_sampling import TTSampling
 
 
 def test_full_vocabulary_capability_is_a_narrow_parameter_domain():
-    domain = SamplingGenerator.full_vocabulary_sampling_capabilities()
+    domain = SamplingGenerator.full_vocabulary_sampling_capabilities(vocab_size=201088)
 
     assert domain == {
         "abi": "tt-metal.common.sampling.full-vocabulary/v1",
         "sampling_dp": (1,),
-        "top_p": (1.0,),
-        "sampled_logprobs": False,
+        "mesh_shapes": ((1, 4),),
+        "top_p_one": True,
+        "max_nucleus_top_p": pytest.approx(2048 / 201088),
+        "max_nucleus_candidates": 2048,
+        "stable_topk_max_local_width": 65504,
+        "sampled_logprobs": True,
+        "max_top_logprobs": 0,
         "topk_logprobs": False,
         "traced": False,
         "mixed_rows": True,
     }
+
+
+def test_full_vocabulary_capability_bound_is_conservative_and_vocab_derived():
+    domain = SamplingGenerator.full_vocabulary_sampling_capabilities(vocab_size=4096)
+
+    assert domain["max_nucleus_top_p"] < 0.5
+    assert domain["max_nucleus_top_p"] == pytest.approx(0.5)
+    with pytest.raises(ValueError, match="positive integer"):
+        SamplingGenerator.full_vocabulary_sampling_capabilities(vocab_size=0)
+
+    non_tile_vocab = SamplingGenerator.full_vocabulary_sampling_capabilities(vocab_size=1001)
+    assert non_tile_vocab["max_nucleus_top_p"] < 992 / 1001
+    assert non_tile_vocab["max_nucleus_top_p"] == pytest.approx(992 / 1001)
 
 
 @pytest.mark.parametrize("batch_size", [1, 32])
@@ -99,7 +117,66 @@ def test_selector_copy_failure_releases_native_output(monkeypatch):
             tt_out_tok=None,
         )
 
-    assert released == [native_tokens, *native_log_probs]
+    # Native logprob outputs are persistent calculator-owned buffers; an
+    # unrelated selector failure must not deallocate them.
+    assert released == [native_tokens]
+
+
+def test_bounded_penalty_sampling_uses_pre_penalty_raw_snapshot_for_sampled_logprob():
+    original_logits = SimpleNamespace(value=7)
+    selected_tokens = object()
+    native_logprob = object()
+    raw_logprob = object()
+    released = []
+    observed = []
+
+    generator = SamplingGenerator.__new__(SamplingGenerator)
+    generator._full_vocab_contract = lambda: SimpleNamespace(needs_full_vocabulary=False)
+    generator._raw_sampled_logprob_slots = lambda: (0,)
+    generator._copy_warmup_logits = lambda logits: SimpleNamespace(value=logits.value)
+    generator.tt_penalties = SimpleNamespace(
+        apply=lambda logits: (setattr(logits, "value", 99) or logits),
+        update_output_tokens=lambda tokens: None,
+    )
+    generator.tt_sampling = lambda logits, tt_out_tok=None: (selected_tokens, native_logprob)
+
+    def calculate(raw_logits, tokens):
+        observed.append((raw_logits.value, original_logits.value, tokens))
+        return raw_logprob
+
+    generator._calculate_raw_sampled_logprobs = calculate
+    generator._deallocate_tensors = lambda tensors, protect=(): released.extend(tensors)
+
+    tokens, logprob = generator._run_sampling(
+        original_logits,
+        penalties_on=True,
+        tt_out_tok=None,
+        count_tokens=False,
+    )
+
+    assert tokens is selected_tokens and logprob is raw_logprob
+    assert observed == [(7, 99, selected_tokens)]
+    assert len(released) == 1 and released[0].value == 7
+
+
+def test_penalty_failure_releases_pre_penalty_raw_snapshot():
+    original_logits = SimpleNamespace(value=7)
+    snapshot = SimpleNamespace(value=7)
+    released = []
+
+    generator = SamplingGenerator.__new__(SamplingGenerator)
+    generator._full_vocab_contract = lambda: SimpleNamespace(needs_full_vocabulary=False)
+    generator._raw_sampled_logprob_slots = lambda: (0,)
+    generator._copy_warmup_logits = lambda logits: snapshot
+    generator.tt_penalties = SimpleNamespace(
+        apply=lambda logits: (_ for _ in ()).throw(RuntimeError("injected penalty failure"))
+    )
+    generator._deallocate_tensors = lambda tensors, protect=(): released.extend(tensors)
+
+    with pytest.raises(RuntimeError, match="injected penalty failure"):
+        generator._run_sampling(original_logits, penalties_on=True, tt_out_tok=None)
+
+    assert released == [snapshot]
 
 
 def test_mixed_top_p_one_and_nucleus_rows_merge_sequentially(monkeypatch):
@@ -109,6 +186,7 @@ def test_mixed_top_p_one_and_nucleus_rows_merge_sequentially(monkeypatch):
     full_logits = object()
     selector_copies = []
     merge_inputs = []
+    group_seed_values = []
 
     class FakeSampling:
         max_batch_size = 4
@@ -139,12 +217,16 @@ def test_mixed_top_p_one_and_nucleus_rows_merge_sequentially(monkeypatch):
 
     p1_categorical = SimpleNamespace(owned_tensors=())
     nucleus_categorical = SimpleNamespace(owned_tensors=())
-    monkeypatch.setattr(
-        generator_module, "sample_unrestricted_top_p_one", lambda *args, **kwargs: p1_categorical
-    )
-    monkeypatch.setattr(
-        generator_module, "sample_unrestricted_nucleus", lambda *args, **kwargs: nucleus_categorical
-    )
+    def sample_p1(*args, **kwargs):
+        group_seed_values.append(tuple(kwargs["seed_values"]))
+        return p1_categorical
+
+    def sample_nucleus(*args, **kwargs):
+        group_seed_values.append(tuple(kwargs["seed_values"]))
+        return nucleus_categorical
+
+    monkeypatch.setattr(generator_module, "sample_unrestricted_top_p_one", sample_p1)
+    monkeypatch.setattr(generator_module, "sample_unrestricted_nucleus", sample_nucleus)
     monkeypatch.setattr(generator_module.ttnn, "from_torch", lambda tensor, **kwargs: tensor)
     monkeypatch.setattr(
         generator_module.ttnn,
@@ -178,6 +260,10 @@ def test_mixed_top_p_one_and_nucleus_rows_merge_sequentially(monkeypatch):
     assert tokens is final_tokens and logprobs is None
     assert merge_inputs == [(p1_categorical, native_tokens), (nucleus_categorical, p1_tokens)]
     assert selector_copies == [[1, 0, 0, 0], [0, 1, 0, 0]]
+    assert group_seed_values == [
+        (11, 2**32 - 1, 2**32 - 1, 2**32 - 1),
+        (2**32 - 1, 22, 2**32 - 1, 2**32 - 1),
+    ]
 
 
 def test_deallocate_tensors_flattens_optional_logprob_outputs(monkeypatch):

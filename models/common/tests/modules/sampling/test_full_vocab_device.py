@@ -6,6 +6,7 @@ import torch
 from models.common.sampling.full_vocab_device import (
     _release_owned,
     _normalize_gather_index_layout,
+    calculate_selected_raw_logprobs,
     hierarchical_stable_topk,
     merge_unrestricted_rows,
     plan_exact_nucleus_candidates,
@@ -66,6 +67,10 @@ class TorchOps:
     @staticmethod
     def exp(tensor):
         return torch.exp(tensor)
+
+    @staticmethod
+    def log(tensor):
+        return torch.log(tensor)
 
     @staticmethod
     def uniform(tensor, low, high, seed):
@@ -589,6 +594,64 @@ def test_gather_index_layout_normalization_uses_values_layout():
     assert calls == [(index, "tile")]
     assert _normalize_gather_index_layout(converted, values, ops=ops) is converted
     assert calls == [(index, "tile")]
+
+
+def test_selected_logprob_uses_full_raw_distribution_not_temperature_or_nucleus_mass():
+    raw = torch.linspace(-5, 5, 2 * 64, dtype=torch.float32).reshape(1, 1, 2, 64)
+    raw[0, 0, 0, 7] = 4.25
+    raw[0, 0, 1, 41] = 3.75
+    raw = raw.to(torch.bfloat16)
+    selected = torch.tensor([7, 41], dtype=torch.uint32).reshape(1, 1, 1, 2)
+
+    result = calculate_selected_raw_logprobs(
+        raw,
+        selected,
+        vocab_size=64,
+        ops=TorchOps,
+    )
+    expected = torch.log_softmax(raw.float(), dim=-1).gather(
+        -1, selected.reshape(1, 1, 2, 1).to(torch.int64)
+    )
+    # A non-unit temperature and row penalty would yield a different
+    # processed distribution; raw_logprobs must ignore both and top_p.
+    penalties = torch.zeros_like(raw.float())
+    penalties[..., 7] = 1.5
+    processed = torch.log_softmax((raw.float() - penalties) * 0.5, dim=-1).gather(
+        -1, selected.reshape(1, 1, 2, 1).to(torch.int64)
+    )
+    assert torch.allclose(result.logprobs, expected, atol=1e-5, rtol=1e-5)
+    assert not torch.allclose(result.logprobs, processed, atol=1e-3, rtol=1e-3)
+    assert result.valid_distribution.all()
+
+
+def test_selected_logprob_rejects_selected_padded_tail_on_device():
+    raw = torch.zeros(1, 1, 1, 64, dtype=torch.bfloat16)
+    raw[..., 37:] = -torch.inf
+    selected = torch.tensor([50], dtype=torch.uint32).reshape(1, 1, 1, 1)
+    result = calculate_selected_raw_logprobs(raw, selected, vocab_size=37, ops=TorchOps)
+    assert not result.valid_distribution.any()
+
+
+def test_selected_logprob_sanitizes_out_of_width_id_before_device_gather():
+    raw = torch.zeros(1, 1, 1, 64, dtype=torch.bfloat16)
+    selected = torch.tensor([999], dtype=torch.uint32).reshape(1, 1, 1, 1)
+    result = calculate_selected_raw_logprobs(raw, selected, vocab_size=37, ops=TorchOps)
+    assert not result.valid_distribution.any()
+    assert all(id(tensor) != id(selected) for tensor in result.owned_tensors)
+    selected_storage = selected.untyped_storage().data_ptr()
+    assert all(
+        tensor.untyped_storage().data_ptr() != selected_storage
+        for tensor in result.owned_tensors
+        if isinstance(tensor, torch.Tensor)
+    )
+
+
+def test_selected_logprob_marks_nonfinite_selected_value_invalid():
+    raw = torch.zeros(1, 1, 1, 64, dtype=torch.bfloat16)
+    raw[..., 17] = torch.nan
+    selected = torch.tensor([17], dtype=torch.uint32).reshape(1, 1, 1, 1)
+    result = calculate_selected_raw_logprobs(raw, selected, vocab_size=64, ops=TorchOps)
+    assert not result.valid_distribution.any()
 
 
 def test_exact_nucleus_marks_unmasked_high_padded_tail_invalid():

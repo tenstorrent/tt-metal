@@ -45,6 +45,15 @@ class StableTopKResult:
     owned_tensors: tuple[object, ...]
 
 
+@dataclass(frozen=True)
+class DeviceSelectedLogprobResult:
+    """Raw full-vocabulary selected-token logprobs and device validity."""
+
+    logprobs: object
+    valid_distribution: object
+    owned_tensors: tuple[object, ...]
+
+
 def plan_exact_nucleus_candidates(
     top_p: float,
     *,
@@ -356,6 +365,95 @@ def _prefix_sum_fp32(tensor, *, dim: int, ops, own: Callable[[object], object]):
         result = own(ops.add(result, shifted, dtype=ops.float32))
         offset *= 2
     return own(ops.transpose(result, dim, dim + 1)) if transpose_back else result
+
+
+def calculate_selected_raw_logprobs(
+    raw_logits,
+    selected_token_ids,
+    *,
+    vocab_size: int,
+    ops,
+) -> DeviceSelectedLogprobResult:
+    """Compute selected-token raw log-softmax on device over the full vocab.
+
+    ``raw_logits`` is the model-head output before penalties, temperature,
+    top-k, or nucleus masking.  Its padded tail must already be ``-inf``.
+    This recomputes a full FP32 normalizer and never reuses the
+    temperature-scaled categorical CDF or truncated nucleus mass.
+    """
+
+    shape = _shape(raw_logits)
+    if len(shape) != 4 or shape[:2] != (1, 1):
+        raise ValueError("raw_logits must have shape [1,1,B,W]")
+    batch, width = shape[2:]
+    if batch <= 0 or batch > 32 or width < 32 or width % 32:
+        raise ValueError("raw logprob path requires 1<=B<=32 and tile-aligned W>=32")
+    if not 0 < vocab_size <= width:
+        raise ValueError("vocab_size must be in (0, W]")
+    if _shape(selected_token_ids) != (1, 1, 1, batch):
+        raise ValueError("selected_token_ids must have shape [1,1,1,B]")
+
+    owned: list[object] = []
+
+    def own(tensor):
+        owned.append(tensor)
+        return tensor
+
+    try:
+        logits_fp32 = (
+            raw_logits
+            if raw_logits.dtype == ops.float32
+            else own(ops.typecast(raw_logits, dtype=ops.float32))
+        )
+        maximum = own(ops.max(logits_fp32, dim=-1, keepdim=True))
+        centered = own(ops.subtract(logits_fp32, maximum))
+        weights = own(ops.exp(centered))
+        cdf = _prefix_sum_fp32(weights, dim=-1, ops=ops, own=own)
+        total = own(ops.slice(cdf, [0, 0, 0, width - 1], [1, 1, batch, width]))
+
+        selected_by_row = ops.reshape(selected_token_ids, (1, 1, batch, 1))
+        selected_for_gather = _normalize_gather_index_layout(selected_by_row, logits_fp32, ops=ops)
+        if selected_for_gather is not selected_by_row:
+            own(selected_for_gather)
+        if selected_for_gather.dtype not in (ops.uint16, ops.uint32):
+            selected_for_gather = own(ops.typecast(selected_for_gather, dtype=ops.uint32))
+        token_in_vocab = own(ops.lt(selected_for_gather, vocab_size))
+        valid_index_mask = own(ops.typecast(token_in_vocab, dtype=selected_for_gather.dtype))
+        safe_selected_for_gather = own(ops.multiply(selected_for_gather, valid_index_mask))
+        selected_logits = own(ops.gather(logits_fp32, dim=-1, index=safe_selected_for_gather))
+        log_total = own(ops.log(total))
+        logprobs = own(ops.subtract(own(ops.subtract(selected_logits, maximum)), log_total))
+
+        finite_total = own(ops.isfinite(total))
+        positive_total = own(ops.gt(total, 0.0))
+        if token_in_vocab.dtype != finite_total.dtype:
+            token_in_vocab = own(ops.typecast(token_in_vocab, dtype=finite_total.dtype))
+        finite_logprob = own(ops.isfinite(logprobs))
+        if finite_logprob.dtype != finite_total.dtype:
+            finite_logprob = own(ops.typecast(finite_logprob, dtype=finite_total.dtype))
+        valid = own(
+            ops.logical_and(
+                own(ops.logical_and(finite_total, positive_total)),
+                own(ops.logical_and(token_in_vocab, finite_logprob)),
+            )
+        )
+        # The plain sampled-logprob serving ABI has no side-band validity
+        # tensor.  Keep validity for device tests, and poison an invalid row's
+        # returned value so malformed IDs/distributions fail closed when the
+        # serving adapter materializes the result.
+        zero = own(ops.multiply(total, 0.0))
+        negative_infinity = own(ops.log(zero))
+        invalid_value = own(ops.subtract(negative_infinity, negative_infinity))
+        logprobs = own(ops.where(valid, logprobs, invalid_value))
+        return DeviceSelectedLogprobResult(
+            logprobs,
+            valid,
+            tuple({id(tensor): tensor for tensor in owned}.values()),
+        )
+    except Exception:
+        if hasattr(ops, "deallocate"):
+            _release_owned(owned, ops=ops)
+        raise
 
 
 def _per_slot_uniform_rows(
