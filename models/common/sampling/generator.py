@@ -484,8 +484,15 @@ class SamplingGenerator:
             ops=ttnn,
         )
         self._deallocate_tensors(
-            (*merged.owned_tensors, *preparation_owned, inverse_temperature, native_tokens),
-            protect=(merged.token_ids, logits, self._full_vocab_selector, self._full_vocab_invalid_tokens),
+            (*merged.owned_tensors, *preparation_owned, native_tokens),
+            protect=(
+                merged.token_ids,
+                logits,
+                inverse_temperature,
+                self.tt_sampling.temp_tensor,
+                self._full_vocab_selector,
+                self._full_vocab_invalid_tokens,
+            ),
         )
         return merged.token_ids, native_log_probs
 
