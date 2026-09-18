@@ -212,31 +212,59 @@ GumbelSampleLayout compute_layout(const ttnn::Tensor& logits, bool position_awar
     return layout;
 }
 
-// Per-core work assignment, single-sourced so the cache-miss build and the cache-hit patch derive
-// identical (core, rows, start_row) triples -- and therefore identical RNG streams.
-struct CoreWork {
+// Op-local stand-ins for the shared core-walk helpers PR #56524 adds to program_utils.hpp
+// (ttml::metal::CoreWork / for_each_core_with_work): same walk order, same fields, same call
+// shape. The struct is named GumbelCoreWork so it cannot shadow the shared ttml::metal::CoreWork
+// once that PR lands; migration is then: delete this block and s/GumbelCoreWork/CoreWork/.
+struct GumbelCoreWork {
     tt::tt_metal::CoreCoord core;
-    uint32_t num_tiles{};
-    uint32_t start_tile{};
+    uint32_t index;      // position in the walk: core == {index / num_cores_y, index % num_cores_y}
+    uint32_t num_units;  // tiles this core processes
+    uint32_t start;      // tiles handed to the cores before it
+    bool in_group_1;     // which split_work_to_cores group the core is in; picks the compute kernel
 };
 
-std::vector<CoreWork> core_layout(const GumbelSampleLayout& layout) {
-    std::vector<CoreWork> work;
-    work.reserve(layout.num_cores);
-    uint32_t tiles_assigned = 0U;
-    for (uint32_t i = 0; i < layout.num_cores; ++i) {
-        const tt::tt_metal::CoreCoord core{i / layout.num_cores_y, i % layout.num_cores_y};
-        uint32_t tiles = 0U;
-        if (layout.core_group_1.contains(core)) {
-            tiles = layout.tiles_per_core_group_1;
-        } else if (layout.core_group_2.contains(core)) {
-            tiles = layout.tiles_per_core_group_2;
+template <typename Fn>
+void for_each_core_with_work(
+    uint32_t num_cores,
+    uint32_t num_cores_y,
+    const tt::tt_metal::CoreRangeSet& core_group_1,
+    const tt::tt_metal::CoreRangeSet& core_group_2,
+    uint32_t num_units_per_core_group_1,
+    uint32_t num_units_per_core_group_2,
+    Fn&& fn) {
+    uint32_t num_units_written = 0U;
+    for (uint32_t i = 0; i < num_cores; ++i) {
+        const tt::tt_metal::CoreCoord core = {i / num_cores_y, i % num_cores_y};
+        const bool in_group_1 = core_group_1.contains(core);
+        uint32_t num_units = 0U;
+        if (in_group_1) {
+            num_units = num_units_per_core_group_1;
+        } else if (core_group_2.contains(core)) {
+            num_units = num_units_per_core_group_2;
         } else {
-            TT_FATAL(false, "GumbelSample: core ({}, {}) is not in either core group", core.x, core.y);
+            TT_FATAL(false, "Core {} is in neither work group", core.str());
         }
-        work.push_back({core, tiles, tiles_assigned});
-        tiles_assigned += tiles;
+        fn(GumbelCoreWork{core, i, num_units, num_units_written, in_group_1});
+        num_units_written += num_units;
     }
+}
+
+// Per-core work assignment, MATERIALIZED (unlike most ops' walk-and-set) because the merge
+// routing below searches backward through earlier cores for a split row's owner. Single-sourced
+// from the walk so the cache-miss build and the cache-hit patch derive identical
+// (core, tiles, start) triples -- and therefore identical RNG streams.
+std::vector<GumbelCoreWork> core_layout(const GumbelSampleLayout& layout) {
+    std::vector<GumbelCoreWork> work;
+    work.reserve(layout.num_cores);
+    for_each_core_with_work(
+        layout.num_cores,
+        layout.num_cores_y,
+        layout.core_group_1,
+        layout.core_group_2,
+        layout.tiles_per_core_group_1,
+        layout.tiles_per_core_group_2,
+        [&work](const GumbelCoreWork& core_work) { work.push_back(core_work); });
     return work;
 }
 
@@ -275,12 +303,12 @@ tt::tt_metal::Program build_program(
     std::vector<uint32_t> expected_shards(layout.num_cores, 0U);
     std::vector<std::array<uint32_t, 3U>> send_routing(layout.num_cores, {0U, 0U, 0U});  // x, y, slot
     for (uint32_t sender = 1U; sender < layout.num_cores; ++sender) {
-        if (work[sender].start_tile % layout.Wt == 0U) {
+        if (work[sender].start % layout.Wt == 0U) {
             continue;  // first row starts here: nothing to send
         }
-        const uint32_t row_first_tile = (work[sender].start_tile / layout.Wt) * layout.Wt;
+        const uint32_t row_first_tile = (work[sender].start / layout.Wt) * layout.Wt;
         uint32_t owner = sender - 1U;
-        while (work[owner].start_tile > row_first_tile) {
+        while (work[owner].start > row_first_tile) {
             --owner;
         }
         const auto owner_phys = logits.device()->worker_core_from_logical_core(work[owner].core);
@@ -470,8 +498,7 @@ tt::tt_metal::Program build_program(
     const uint32_t mask_entry_stride = (has_mask && tensor_args.logits_mask->logical_shape()[0] > 1U) ? layout.Wt : 0U;
 
     shared_vars.core_info.reserve(layout.num_cores);
-    for (uint32_t core_index = 0U; core_index < layout.num_cores; ++core_index) {
-        const auto& [core, num_tiles, start_tile] = work[core_index];
+    for (const auto& [core, core_index, num_tiles, start_tile, in_group_1] : work) {
         SetRuntimeArgs(
             program,
             shared_vars.reader_kernel_id,
@@ -499,7 +526,6 @@ tt::tt_metal::Program build_program(
              expected_shards[core_index],
              layout.logical_tokens});
 
-        const bool in_group_1 = layout.core_group_1.contains(core);
         const uint32_t stream_id = rand_stream_id(layout, device_index, start_tile);
         SetRuntimeArgs(
             program,

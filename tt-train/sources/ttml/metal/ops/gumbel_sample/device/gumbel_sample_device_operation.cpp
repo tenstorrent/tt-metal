@@ -8,9 +8,11 @@
 #include <cmath>
 #include <enchantum/enchantum.hpp>
 #include <optional>
+#include <string_view>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/math.hpp>
+#include <vector>
 
 #include "gumbel_sample_program_factory.hpp"
 #include "ttnn/device_operation.hpp"
@@ -18,6 +20,58 @@
 namespace ttml::metal::ops::gumbel_sample::device {
 
 namespace {
+
+// Op-local stand-ins for the shared validation helpers PR #56523 adds in
+// metal/common/tensor_validation.hpp, with the same names and call shapes. Once that PR lands,
+// delete this block and include that header instead; no call site changes.
+struct DeviceTensorRequirements {
+    std::vector<tt::tt_metal::DataType> dtypes = {tt::tt_metal::DataType::BFLOAT16};
+    tt::tt_metal::Layout layout = tt::tt_metal::Layout::TILE;
+    std::optional<tt::tt_metal::TensorMemoryLayout> memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED;
+};
+
+void check_device_tensor(
+    const ttnn::Tensor& tensor, std::string_view op, std::string_view name, const DeviceTensorRequirements& req = {}) {
+    TT_FATAL(
+        tensor.storage_type() == ttnn::StorageType::DEVICE,
+        "{}: {} must be on Device. Storage type: {}",
+        op,
+        name,
+        enchantum::to_string(tensor.storage_type()));
+    TT_FATAL(tensor.buffer() != nullptr, "{}: {} buffer is null", op, name);
+    TT_FATAL(
+        tensor.layout() == req.layout,
+        "{}: {} requires {} layout. Got: {}",
+        op,
+        name,
+        enchantum::to_string(req.layout),
+        enchantum::to_string(tensor.layout()));
+    TT_FATAL(
+        std::find(req.dtypes.begin(), req.dtypes.end(), tensor.dtype()) != req.dtypes.end(),
+        "{}: {} has unsupported dtype {}",
+        op,
+        name,
+        enchantum::to_string(tensor.dtype()));
+    if (req.memory_layout.has_value()) {
+        TT_FATAL(
+            tensor.memory_config().memory_layout() == *req.memory_layout,
+            "{}: {} requires {} memory layout. Got: {}",
+            op,
+            name,
+            enchantum::to_string(*req.memory_layout),
+            enchantum::to_string(tensor.memory_config().memory_layout()));
+    }
+}
+
+void check_same_device(
+    const ttnn::Tensor& tensor,
+    const ttnn::Tensor& reference,
+    std::string_view op,
+    std::string_view name,
+    std::string_view reference_name) {
+    TT_FATAL(
+        tensor.device() == reference.device(), "{}: {} must be on the same device as {}", op, name, reference_name);
+}
 
 // The shape this op WILL write, derived from the logits alone. Single-sourced because the writer
 // derives its output page indices from the logits geometry (its logical_tokens runtime arg and Ht
@@ -39,17 +93,13 @@ tt::tt_metal::Shape expected_output_shape(bool position_aware, const ttnn::Tenso
 void GumbelSampleDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     auto check_tensor = [](const ttnn::Tensor& tensor, const std::string& name) {
-        TT_FATAL(
-            tensor.storage_type() == ttnn::StorageType::DEVICE,
-            "GumbelSample requires '{}' to be on DEVICE, got storage type '{}'",
+        // Storage / buffer / layout / dtype / memory layout ride the shared helper; only the
+        // op-specific checks (default tile geometry, derived padded shape) stay local.
+        check_device_tensor(
+            tensor,
+            "GumbelSample",
             name,
-            enchantum::to_string(tensor.storage_type()));
-        TT_FATAL(tensor.buffer() != nullptr, "GumbelSample: tensor '{}' has a null buffer", name);
-        TT_FATAL(
-            tensor.layout() == tt::tt_metal::Layout::TILE,
-            "GumbelSample: tensor '{}' must be TILE layout, got '{}'",
-            name,
-            enchantum::to_string(tensor.layout()));
+            {.dtypes = {tt::tt_metal::DataType::BFLOAT16, tt::tt_metal::DataType::FLOAT32}});
 
         const auto tile = tensor.tensor_spec().tile();
         TT_FATAL(
@@ -70,11 +120,6 @@ void GumbelSampleDeviceOperation::validate_on_program_cache_miss(
             name,
             tensor.padded_shape(),
             tensor.logical_shape());
-        TT_FATAL(
-            tensor.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
-            "GumbelSample: tensor '{}' must be INTERLEAVED, got '{}'",
-            name,
-            enchantum::to_string(tensor.memory_config().memory_layout()));
     };
 
     const auto& logits = tensor_args.logits;
@@ -120,11 +165,6 @@ void GumbelSampleDeviceOperation::validate_on_program_cache_miss(
             mesh_shape.mesh_size());
     }
 
-    TT_FATAL(
-        logits.dtype() == tt::tt_metal::DataType::BFLOAT16 || logits.dtype() == tt::tt_metal::DataType::FLOAT32,
-        "GumbelSample: logits must be BFLOAT16 or FLOAT32, got '{}'",
-        enchantum::to_string(logits.dtype()));
-
     TT_FATAL(logits.padded_shape().rank() == 4U, "GumbelSample: logits must be 4D");
 
     TT_FATAL(
@@ -142,10 +182,9 @@ void GumbelSampleDeviceOperation::validate_on_program_cache_miss(
     if (tensor_args.logits_mask.has_value()) {
         const auto& mask = tensor_args.logits_mask.value();
         check_tensor(mask, "logits_mask");
-        TT_FATAL(
-            mask.device() == device,
-            "GumbelSample: the mask must be on the same device as the logits (only its buffer address "
-            "reaches the kernel, and addresses are not portable across devices)");
+        // Only the mask's buffer ADDRESS reaches the kernel, and addresses are not portable across
+        // devices.
+        check_same_device(mask, logits, "GumbelSample", "logits_mask", "logits");
         TT_FATAL(
             mask.dtype() == logits.dtype(),
             "GumbelSample: mask dtype '{}' must match logits dtype '{}' (the public ttml::metal::gumbel_sample "
@@ -215,28 +254,12 @@ void GumbelSampleDeviceOperation::validate_on_program_cache_miss(
     // accessor compiled for the other encoding. Same device because only a raw ADDRESS reaches the
     // kernel, and addresses are not portable across devices.
     auto check_index_tensor = [&](const ttnn::Tensor& t, const std::string& name, bool position_aware) {
-        TT_FATAL(
-            t.storage_type() == ttnn::StorageType::DEVICE,
-            "GumbelSample requires '{}' to be on DEVICE, got storage type '{}'",
+        check_device_tensor(
+            t,
+            "GumbelSample",
             name,
-            enchantum::to_string(t.storage_type()));
-        TT_FATAL(t.buffer() != nullptr, "GumbelSample: '{}' has a null buffer", name);
-        TT_FATAL(t.device() == device, "GumbelSample: '{}' must be on the same device as the logits", name);
-        TT_FATAL(
-            t.dtype() == tt::tt_metal::DataType::UINT32,
-            "GumbelSample: '{}' must be UINT32, got '{}'",
-            name,
-            enchantum::to_string(t.dtype()));
-        TT_FATAL(
-            t.layout() == tt::tt_metal::Layout::ROW_MAJOR,
-            "GumbelSample: '{}' must be ROW_MAJOR, got '{}'",
-            name,
-            enchantum::to_string(t.layout()));
-        TT_FATAL(
-            t.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
-            "GumbelSample: '{}' must be INTERLEAVED, got '{}'",
-            name,
-            enchantum::to_string(t.memory_config().memory_layout()));
+            {.dtypes = {tt::tt_metal::DataType::UINT32}, .layout = tt::tt_metal::Layout::ROW_MAJOR});
+        check_same_device(t, logits, "GumbelSample", name, "logits");
         // The exact shape is what guarantees page e is in bounds for every entry the kernels index.
         // A device tensor's shape IS its local shard.
         const auto expected = expected_output_shape(position_aware, logits);
