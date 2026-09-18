@@ -123,13 +123,14 @@ ttnn::device_operation::ProgramArtifacts AccumulationProgramFactory::create_prog
     constexpr uint32_t acc_tiles = 1;
     constexpr uint32_t out_tiles = 4;
 
-    // Floating-point cumsum runs a compensated (Kahan) accumulation. The plain sequential fp32 sum
-    // has error growing as ~T^1.5 along the scan (#55542): 2949x torch's on a 72k-element signal,
-    // with no length at which it stops. Compensation pins it to O(1) ULP of the result. Integer
-    // accumulation is exact already, and cumprod has no additive error to compensate, so both keep
-    // the single-op path.
+    // fp32 cumsum runs a compensated (Kahan) accumulation. The plain sequential fp32 sum has error
+    // growing as ~T^1.5 along the scan (#55542): 2949x torch's on a 72k-element signal, with no
+    // length at which it stops. Compensation pins it to O(1) ULP of the result. Integer accumulation
+    // is exact already, cumprod has no additive error to compensate, and bf16 keeps the single-op
+    // path: its output rounding dominates any accumulation error and bf16 cumsum already matches
+    // torch (the compensated path costs ~2x on long thin bf16 scans for no accuracy gain).
     const bool compensated_sum =
-        operation_attributes.op == AccumulationOp::CUMSUM && !is_integer_format(dst_cb_data_format);
+        operation_attributes.op == AccumulationOp::CUMSUM && dst_cb_data_format == DataFormat::Float32;
 
     auto acc_dataformat = datatype_to_dataformat_converter(output_tensor.dtype());
     if (!is_integer_format(acc_dataformat)) {
