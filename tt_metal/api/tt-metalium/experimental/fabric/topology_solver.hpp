@@ -7,12 +7,14 @@
 #include <chrono>
 #include <climits>
 #include <cstddef>
+#include <cstdint>
 #include <algorithm>
 #include <map>
 #include <memory>
 #include <optional>
 #include <set>
 #include <string>
+#include <type_traits>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -490,6 +492,39 @@ public:
     std::size_t max_same_rank_groups_used() const { return max_same_rank_groups_used_; }
 
     /**
+     * @brief Prefer filling groups already set by set_same_rank_groups_constraint.
+     *
+     * Does not replace those groups. Target-group pairing stays as set. First solve
+     * tries to fill every used global group (host chips when resources are set;
+     * otherwise every group member). If that packing is infeasible the same session
+     * continues without the fill, so a leftover can occupy part of a host. Returns
+     * false if enabled with no global groups registered.
+     */
+    bool set_fill_all_rank_groups_constraint(bool enable = true) {
+        if (enable && same_rank_global_groups_.empty()) {
+            return false;
+        }
+        fill_all_rank_groups_ = enable;
+        return true;
+    }
+    bool fill_all_rank_groups() const { return fill_all_rank_groups_; }
+
+    /**
+     * @brief Footprint-disjointness: each Resource may be used by at most one chosen global.
+     *
+     * Densifies each distinct Resource to ResourceIndex 0..R-1 and stores only the dense bags.
+     * `uint32_t` resources identity-map (`R = max+1`). Bijection completeness is disabled when
+     * any resource constraint is set.
+     */
+    template <typename Resource>
+    bool add_resource_constraint(const std::map<GlobalNode, std::vector<Resource>>& global_to_resources);
+
+    uint32_t resource_count() const { return resource_count_; }
+    const std::map<GlobalNode, std::vector<uint32_t>>& get_global_to_resource_indices() const {
+        return global_to_resource_indices_;
+    }
+
+    /**
      * @brief Get forbidden (target, global) pairs that are invalid even when no required constraints exist
      *
      * Used when add_forbidden_constraint is called for a target with no valid_mappings_ entry.
@@ -554,6 +589,13 @@ private:
 
     // Opt-in HARD cap: at most this many distinct same-rank global groups may be occupied (0 = no cap).
     std::size_t max_same_rank_groups_used_ = 0;
+
+    // Opt-in HARD fill: a used same-rank global group must have every member used.
+    bool fill_all_rank_groups_ = false;
+
+    // Footprint resources: each chosen global claims these ResourceIndex values; AMO per index.
+    std::map<GlobalNode, std::vector<uint32_t>> global_to_resource_indices_;
+    uint32_t resource_count_ = 0;
 
     // Deprecated: many-to-many pinning no longer reserves globals exclusively for a target set.
     // Kept for compatibility with older constraint merges that extended an existing reservation.
@@ -779,7 +821,7 @@ inline std::vector<int> topology_mapping_shape_key(const std::vector<int>& mappi
 }
 
 bool topology_mapping_should_use_sat_engine(
-    TopologyMappingSolverEngine engine, size_t n_target = 0, size_t n_global = 0);
+    TopologyMappingSolverEngine engine, size_t n_target = 0, size_t n_global = 0, size_t resource_count = 0);
 
 /** @see TT_TOPOLOGY_SOLVER_ENGINE in solve_topology_mapping documentation. */
 inline bool topology_mapping_use_sat_engine();
@@ -881,6 +923,13 @@ struct ConstraintIndexData {
     // Opt-in HARD cap: at most this many distinct same-rank global groups may be occupied (0 = no cap).
     std::size_t max_same_rank_groups_used = 0;
 
+    // Opt-in HARD fill: a used same-rank global group must have every member used.
+    bool fill_all_rank_groups = false;
+
+    // Footprint resources, indexed by global_idx. Empty when no add_resource_constraint was set.
+    std::vector<std::vector<uint32_t>> global_to_resource_indices;
+    uint32_t resource_count = 0;
+
     /**
      * @brief Construct ConstraintIndexData from MappingConstraints and GraphIndexData
      *
@@ -926,6 +975,9 @@ struct ConstraintIndexData {
 
     // Helper: check if mapping is valid
     bool is_valid_mapping(size_t target_idx, size_t global_idx) const;
+
+    // True if `global_idx` shares a ResourceIndex with any already-mapped global.
+    bool resources_conflict_with_mapping(size_t global_idx, const std::vector<int>& mapping) const;
 
     /**
      * @brief Check if assigning (target_idx, global_idx) satisfies same-rank groups constraint
@@ -1010,6 +1062,9 @@ struct TopologySatConstraintView {
     const std::vector<size_t>& target_to_group;
     bool minimize_same_rank_groups_used = false;
     std::size_t max_same_rank_groups_used = 0;
+    bool fill_all_rank_groups = false;
+    const std::vector<std::vector<uint32_t>>& global_to_resource_indices;
+    uint32_t resource_count = 0;
 
     template <typename TargetNode, typename GlobalNode>
     explicit TopologySatConstraintView(const ConstraintIndexData<TargetNode, GlobalNode>& c) :
@@ -1021,7 +1076,10 @@ struct TopologySatConstraintView {
         same_rank_groups(c.same_rank_groups),
         target_to_group(c.target_to_group),
         minimize_same_rank_groups_used(c.minimize_same_rank_groups_used),
-        max_same_rank_groups_used(c.max_same_rank_groups_used) {}
+        max_same_rank_groups_used(c.max_same_rank_groups_used),
+        fill_all_rank_groups(c.fill_all_rank_groups),
+        global_to_resource_indices(c.global_to_resource_indices),
+        resource_count(c.resource_count) {}
 
     bool is_valid_mapping(size_t target_idx, size_t global_idx) const {
         if (target_idx < forbidden_global_indices.size() && !forbidden_global_indices[target_idx].empty()) {
@@ -1494,7 +1552,6 @@ struct MappingValidator {
      * and checks cardinality constraints.
      * In STRICT mode: fails if channel counts insufficient.
      * In RELAXED mode: collects warnings for insufficient channel counts but doesn't fail.
-     * In NONE mode: skips channel count validation.
      *
      * @param mapping Complete mapping (mapping[i] = global_idx)
      * @param graph_data Indexed graph data

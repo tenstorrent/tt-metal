@@ -28,6 +28,24 @@
 
 using namespace tt::tt_fabric;
 
+// Flatten a hierarchical PGD grouping, then enumerate the first embedding the same way SAT column
+// generation and the matcher PSD gate do.
+static std::vector<MappingResult<LogicalChipId, tt::tt_metal::AsicID>> enumerate_grouping_on_psd(
+    const PhysicalGroupingDescriptor& pgd,
+    const GroupingInfo& grouping,
+    const tt::tt_metal::PhysicalSystemDescriptor& psd) {
+    for (const auto& flat : pgd.build_flattened_adjacency_mesh(grouping, psd)) {
+        if (flat.adjacency_graph.get_nodes().empty()) {
+            continue;
+        }
+        auto placements = pgd.enumerate_distinct_placements_for_grouping(flat, psd);
+        if (!placements.empty()) {
+            return placements;
+        }
+    }
+    return {};
+}
+
 namespace tt::tt_fabric::fabric_router_tests {
 
 class MockClusterPhysicalGroupingDescriptorTest : public ::testing::Test {
@@ -1635,7 +1653,7 @@ TEST_F(PhysicalGroupingDescriptorSP4Tests, ValidatePreformedGroups_Sp4BhGalaxyMe
         const auto* mesh_grouping = find_mesh_by_name("4x2_Mesh");
         ASSERT_NE(mesh_grouping, nullptr) << "4x2_Mesh grouping not found";
 
-        auto placements = pgd.find_any_in_psd(*mesh_grouping, psd);
+        auto placements = enumerate_grouping_on_psd(pgd, *mesh_grouping, psd);
 
         EXPECT_FALSE(placements.empty())
             << "Expected validation to pass: 4x2_Mesh grouping should map to mock cluster PSD";
@@ -1646,7 +1664,7 @@ TEST_F(PhysicalGroupingDescriptorSP4Tests, ValidatePreformedGroups_Sp4BhGalaxyMe
         const auto* mesh_grouping = find_mesh_by_name("4x4_Mesh");
         ASSERT_NE(mesh_grouping, nullptr) << "4x4_Mesh grouping not found";
 
-        auto placements = pgd.find_any_in_psd(*mesh_grouping, psd);
+        auto placements = enumerate_grouping_on_psd(pgd, *mesh_grouping, psd);
 
         EXPECT_FALSE(placements.empty())
             << "Expected validation to pass: 4x4_Mesh grouping should map to mock cluster PSD";
@@ -1657,7 +1675,7 @@ TEST_F(PhysicalGroupingDescriptorSP4Tests, ValidatePreformedGroups_Sp4BhGalaxyMe
         const auto* mesh_grouping = find_mesh_by_name("2x8_Mesh");
         ASSERT_NE(mesh_grouping, nullptr) << "2x8_Mesh grouping not found";
 
-        auto placements = pgd.find_any_in_psd(*mesh_grouping, psd);
+        auto placements = enumerate_grouping_on_psd(pgd, *mesh_grouping, psd);
 
         EXPECT_FALSE(placements.empty())
             << "Expected validation to pass: 2x8_Mesh grouping should map to mock cluster PSD";
@@ -1668,7 +1686,7 @@ TEST_F(PhysicalGroupingDescriptorSP4Tests, ValidatePreformedGroups_Sp4BhGalaxyMe
         const auto* mesh_grouping = find_mesh_by_name("4x8_Mesh");
         ASSERT_NE(mesh_grouping, nullptr) << "4x8_Mesh grouping not found";
 
-        auto placements = pgd.find_any_in_psd(*mesh_grouping, psd);
+        auto placements = enumerate_grouping_on_psd(pgd, *mesh_grouping, psd);
 
         EXPECT_FALSE(placements.empty())
             << "Expected validation to pass: 4x8_Mesh grouping should map to mock cluster PSD";
@@ -1680,7 +1698,7 @@ TEST_F(PhysicalGroupingDescriptorSP4Tests, ValidatePreformedGroups_Sp4BhGalaxyMe
         ASSERT_FALSE(hosts_groupings.empty()) << "HOSTS grouping not found";
         const auto& hosts_grouping = hosts_groupings[0];
 
-        auto placements = pgd.find_any_in_psd(hosts_grouping, psd);
+        auto placements = enumerate_grouping_on_psd(pgd, hosts_grouping, psd);
 
         EXPECT_FALSE(placements.empty())
             << "Expected validation to pass: HOSTS grouping should map to mock cluster PSD";
@@ -1702,7 +1720,7 @@ TEST_F(PhysicalGroupingDescriptorSP4Tests, ValidatePreformedGroups_Sp4BhGalaxyQu
         ASSERT_FALSE(hosts_groupings.empty()) << "galaxy_hosts grouping not found";
         const auto& hosts_grouping = hosts_groupings[0];
 
-        auto placements = pgd.find_any_in_psd(hosts_grouping, psd);
+        auto placements = enumerate_grouping_on_psd(pgd, hosts_grouping, psd);
 
         EXPECT_FALSE(placements.empty())
             << "Expected validation to pass: galaxy_hosts grouping should map to mock cluster PSD";
@@ -1714,136 +1732,16 @@ TEST_F(PhysicalGroupingDescriptorSP4Tests, ValidatePreformedGroups_Sp4BhGalaxyQu
         ASSERT_FALSE(mesh_groupings.empty()) << "4x32_Mesh grouping not found";
         const auto& mesh_grouping = mesh_groupings[0];
 
-        auto placements = pgd.find_any_in_psd(mesh_grouping, psd);
+        auto placements = enumerate_grouping_on_psd(pgd, mesh_grouping, psd);
 
         EXPECT_FALSE(placements.empty())
             << "Expected validation to pass: 4x32_Mesh (32x4 device layout) should map to mock cluster PSD";
     }
-
-    {
-        auto mesh_groupings = pgd.get_groupings_by_name("4x32_Mesh");
-        ASSERT_FALSE(mesh_groupings.empty()) << "4x32_Mesh grouping not found";
-
-        // TODO(plan 3 §8(a)): rewrite these find_all_in_psd tests onto solve_adjacency_guided_placement.
-        auto asic_ids = pgd.find_all_in_psd(mesh_groupings, psd);
-
-        EXPECT_EQ(asic_ids.size(), 4u)
-            << "Expected validation to pass: 4x32_Mesh (32x4) should map to mock cluster PSD (4 placements on SP4)";
-    }
-
-    {
-        // Test 4x4_Mesh grouping with find_all_in_psd
-        auto mesh_groupings = pgd.get_groupings_by_name("4x4_Mesh");
-        ASSERT_EQ(mesh_groupings.size(), 1u) << "4x4_Mesh grouping not found";
-
-        auto asic_ids = pgd.find_all_in_psd(mesh_groupings, psd);
-
-        // SP4 GLX mock: 16 hosts × 32 ASICs = 512 ASICs; a 4x4_Mesh (16 ASICs) tiles disjointly → 32 placements.
-        EXPECT_EQ(asic_ids.size(), 32u)
-            << "Expected validation to pass: 4x4_Mesh grouping should map to mock cluster PSD (32 placements)";
-    }
 }
 
-TEST_F(PhysicalGroupingDescriptorDualT3kTests, ValidatePreformedGroups_WHt3kGroupings) {
-    const std::string pgd_path =
-        "tests/tt_metal/tt_fabric/physical_groupings/wh_t3k_physical_grouping_descriptor.textproto";
-
-    ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
-
-    tt::tt_metal::PhysicalSystemDescriptor psd = create_psd_from_mock_cluster();
-    PhysicalGroupingDescriptor pgd{std::filesystem::path(pgd_path)};
-
-    {
-        auto mesh_groupings = pgd.get_groupings_by_name("2x2_Mesh_t3k");
-        ASSERT_FALSE(mesh_groupings.empty()) << "2x2_Mesh_t3k grouping not found";
-
-        auto asic_ids = pgd.find_all_in_psd(mesh_groupings, psd);
-
-        // Should find 4 of them, each of them on a single host
-        EXPECT_EQ(asic_ids.size(), 4u)
-            << "Expected validation to pass: 2x2_Mesh_t3k grouping should map to mock cluster PSD";
-
-        // Each should have their own host name
-        for (const auto& placement : asic_ids) {
-            const auto& asic_id_set = placement.asics;
-            ASSERT_FALSE(asic_id_set.empty()) << "Each 2x2_Mesh_t3k mapping should contain at least one ASIC";
-            std::string host_name = psd.get_host_name_for_asic(*asic_id_set.begin());
-            for (const auto& asic_id : asic_id_set) {
-                EXPECT_EQ(psd.get_host_name_for_asic(asic_id), host_name)
-                    << "Expected validation to pass: 2x2_Mesh_t3k grouping should map to mock cluster PSD";
-            }
-        }
-    }
-
-    {
-        auto mesh_groupings = pgd.get_groupings_by_name("2x4_Mesh_t3k");
-        ASSERT_FALSE(mesh_groupings.empty()) << "2x4_Mesh_t3k grouping not found";
-
-        auto asic_ids = pgd.find_all_in_psd(mesh_groupings, psd);
-
-        ASSERT_EQ(asic_ids.size(), 2u)
-            << "Expected validation to pass: 2x4_Mesh_t3k grouping should map to mock cluster PSD";
-
-        // Each should have their own host name
-        for (const auto& placement : asic_ids) {
-            const auto& asic_id_set = placement.asics;
-            ASSERT_FALSE(asic_id_set.empty()) << "Each 2x4_Mesh_t3k mapping should contain at least one ASIC";
-            std::string host_name = psd.get_host_name_for_asic(*asic_id_set.begin());
-            for (const auto& asic_id : asic_id_set) {
-                EXPECT_EQ(psd.get_host_name_for_asic(asic_id), host_name)
-                    << "Expected validation to pass: 2x4_Mesh_t3k grouping should map to mock cluster PSD";
-            }
-        }
-    }
-}
-
-TEST_F(PhysicalGroupingDescriptorSP4Tests, ValidatePreformedGroups_Triple16x8PsdWithTriple16x8QuadUnknownGroupings) {
-    // FIXME: This test currently fails because placements for multiple groupings are currently not optimized yet, so we
-    // need to skip it for now. This will be fixed in a future commit when needed for more placement optimizations.
-    GTEST_SKIP();
-    const std::string pgd_path =
-        "tests/tt_metal/tt_fabric/physical_groupings/default_physical_grouping_descriptor.textproto";
-
-    ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
-
-    tt::tt_metal::PhysicalSystemDescriptor psd = create_psd_from_mock_cluster();
-    PhysicalGroupingDescriptor pgd{std::filesystem::path(pgd_path)};
-
-    {
-        auto mesh_groupings = pgd.get_groupings_by_name("2x2_Mesh");
-        ASSERT_FALSE(mesh_groupings.empty()) << "2x2_Mesh grouping not found";
-
-        auto asic_ids = pgd.find_all_in_psd(mesh_groupings, psd);
-
-        // Expect 96 groups
-        EXPECT_EQ(asic_ids.size(), 96u)
-            << "Expected validation to pass: 2x2_Mesh grouping should map to mock cluster PSD";
-    }
-
-    {
-        auto mesh_groupings = pgd.get_groupings_by_name("4x2_Mesh");
-        ASSERT_FALSE(mesh_groupings.empty()) << "4x2_Mesh grouping not found";
-
-        auto asic_ids = pgd.find_all_in_psd(mesh_groupings, psd);
-
-        // Expect 48 groups (same tiling count as former 2x4_Mesh: 8-ASIC two-halftray mesh)
-        EXPECT_EQ(asic_ids.size(), 48u)
-            << "Expected validation to pass: 4x2_Mesh grouping should map to mock cluster PSD";
-    }
-
-    {
-        auto mesh_groupings = pgd.get_groupings_by_name("4x4_Mesh");
-        ASSERT_FALSE(mesh_groupings.empty()) << "4x4_Mesh grouping not found";
-
-        auto asic_ids = pgd.find_all_in_psd(mesh_groupings, psd);
-
-        // Expect 24 groups
-        EXPECT_EQ(asic_ids.size(), 24u)
-            << "Expected validation to pass: 4x4_Mesh grouping should map to mock cluster PSD";
-    }
-}
-
-// Test POD and SUPERPOD level groupings - should fail (cannot be flattened as they're too high level)
+// POD groupings flatten onto the SP4 mock PSD; SUPERPOD all_to_all cannot. Same
+// PhysicalGroupingDescriptorSP4Tests name so tt-run --gtest_filter=PhysicalGroupingDescriptorSP4Tests*
+// still picks this up on the multi-process mock cluster.
 TEST_F(PhysicalGroupingDescriptorSP4Tests, ValidateGroupingWithPsd_PodAndSuperpodLevel) {
     const std::string pgd_path = "tests/tt_metal/tt_fabric/physical_groupings/test_superpod_grouping.textproto";
 
@@ -1859,11 +1757,30 @@ TEST_F(PhysicalGroupingDescriptorSP4Tests, ValidateGroupingWithPsd_PodAndSuperpo
     const auto& pod_grouping = pod_groupings[0];
 
     // POD groupings reference meshes, but should flatten properly and match the PSD structure
-    auto pod_placements = pgd.find_any_in_psd(pod_grouping, psd);
+    auto pod_placements = enumerate_grouping_on_psd(pgd, pod_grouping, psd);
 
     // Expect it to pass - POD level grouping should validate successfully
     EXPECT_FALSE(pod_placements.empty())
         << "Expected validation to pass: POD level grouping should validate against mock cluster PSD";
+
+    // SAT joint placement of a 2x4 mesh from this PGD onto the same SP4 mock PSD.
+    MeshGraphDescriptor mgd{std::string(R"delimiter(
+mesh_descriptors {
+  name: "M0"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 2, 4 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 1 policy: STRICT }
+}
+top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+)delimiter")};
+    const auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd);
+    ASSERT_TRUE(valid_groupings.contains("MESH")) << "2x4 MGD should match a MESH grouping in this PGD";
+    ASSERT_TRUE(valid_groupings.at("MESH").contains("M0"));
+    ASSERT_FALSE(valid_groupings.at("MESH").at("M0").empty());
+    const auto sat_placements = pgd.solve_adjacency_guided_placement(mgd, valid_groupings, psd);
+    ASSERT_EQ(sat_placements.size(), 1u) << "SAT joint placement should seat the 2x4 mesh on the SP4 mock";
+    EXPECT_EQ(sat_placements.front().asics.size(), 8u) << "2x4 seating covers 8 ASICs";
 
     // Test SUPERPOD level grouping - should fail during mesh building (all_to_all connection type)
     auto superpod_groupings = pgd.get_groupings_by_name("superpods");
@@ -1873,7 +1790,7 @@ TEST_F(PhysicalGroupingDescriptorSP4Tests, ValidateGroupingWithPsd_PodAndSuperpo
     // This should throw during build_flattened_adjacency_mesh because SUPERPOD uses all_to_all connection type
     // which cannot be flattened into a mesh (no row_major_mesh structure)
     EXPECT_THROW(
-        { pgd.find_any_in_psd(superpod_grouping, psd); }, std::exception)
+        { pgd.build_flattened_adjacency_mesh(superpod_grouping, psd); }, std::exception)
         << "Expected exception during mesh building: SUPERPOD with all_to_all connection cannot be flattened";
 }
 
@@ -2610,30 +2527,13 @@ TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_SinglePod4x4LineLi
     EXPECT_FALSE(committed.mgd_fallback.has_value());
     EXPECT_FALSE(pgd.get_mgd_placement_fallbacks_for_mgd(mgd, psd).at("MESH").at("M0").empty());
 
-    // TODO(plan 3 §8(a)): rewrite onto solve_adjacency_guided_placement when find_all_in_psd is deleted.
-    const auto placements = pgd.find_all_in_psd(committed.pgd_layouts, psd);
-    ASSERT_FALSE(placements.empty()) << "Should find at least one PSD placement for the 4x4 mesh";
-
-    for (const auto& placement : placements) {
-        EXPECT_EQ(placement.asics.size(), 16u) << "Each 4x4 placement should cover 16 ASICs";
-        EXPECT_EQ(count_distinct_hosts_for_asics(psd, placement.asics), 1u)
-            << "Set-packing should prefer single-host placements when host_topology is [1,1]";
-
-        // find_all_in_psd copies the matched grouping's pinning onto the placement.
-        EXPECT_EQ(placement.mesh_node_to_asic_position.size(), 16u)
-            << "Composed pinning should cover all 16 logical chips";
-        std::set<tt::tt_metal::ASICPosition> composed_positions;
-        for (const auto& [chip_id, asic_position] : placement.mesh_node_to_asic_position) {
-            composed_positions.insert(asic_position);
-        }
-        std::set<tt::tt_metal::ASICPosition> footprint_positions;
-        for (const auto& asic_id : placement.asics) {
-            footprint_positions.insert(
-                tt::tt_metal::ASICPosition{psd.get_tray_id(asic_id), psd.get_asic_location(asic_id)});
-        }
-        EXPECT_EQ(composed_positions, footprint_positions)
-            << "Composed pinning should pin exactly the footprint ASIC positions";
-    }
+    const auto placements = pgd.solve_adjacency_guided_placement(mgd, valid_groupings, psd);
+    ASSERT_EQ(placements.size(), 1u) << "SAT joint placement should seat the single 4x4 mesh";
+    EXPECT_EQ(placements.front().asics.size(), 16u) << "the 4x4 seating should cover 16 ASICs";
+    EXPECT_EQ(count_distinct_hosts_for_asics(psd, placements.front().asics), 1u)
+        << "host_topology [1,1] should land on a single host";
+    EXPECT_EQ(placements.front().mesh_node_to_asic_position.size(), 16u)
+        << "Composed pinning should cover all 16 logical chips";
 }
 
 // get_valid_groupings_for_mgd should persist logical chip_id -> ASIC position pinning on every committed MESH
@@ -3293,7 +3193,7 @@ namespace utils = tt::tt_metal::experimental::tt_fabric;
 //   build_hierarchical_from_flat_graph splits the flat ASIC graph by placed footprint and links two
 //   meshes when a real ethernet connection crosses between them. Meshes are keyed by placement
 //   index, matching the mesh id ordering placement returns, and any PGD pinning a placement carries
-//   is preserved -- so DFS placements and find_all_in_psd placements get identical treatment.
+//   is preserved.
 //
 //   map_multi_mesh_to_physical is given disable_rank_bindings because these fixtures are
 //   single-host and rank constraints are not what is under test; connectivity is left RELAXED,
@@ -3301,8 +3201,7 @@ namespace utils = tt::tt_metal::experimental::tt_fabric;
 
 // ----- reading the results ----------------------------------------------------------------------
 
-// The ASICs each placement claims, one sorted set per mesh, ordered by mesh id. Only needed for
-// find_all_in_psd, whose output never goes through the mapper.
+// The ASICs each placement claims, one sorted set per mesh, ordered by mesh id.
 std::vector<std::set<uint64_t>> footprints_of(const std::vector<PsdPlacement>& placements) {
     std::vector<std::set<uint64_t>> footprints;
     footprints.reserve(placements.size());
@@ -3445,32 +3344,6 @@ std::string grid_psd(std::size_t rows, std::size_t cols) {
            "0\n  patch: 0\n}\n";
     return out.str();
 }
-
-// Sets one environment variable for the enclosing scope and restores whatever was there before.
-// TT_METAL_PLACEMENT_SOLVER selects the placement search (sat | dfs | auto), which is how the tests
-// below pin down which path they exercise.
-class ScopedEnv {
-public:
-    ScopedEnv(const char* name, const char* value) : name_(name) {
-        if (const char* previous = std::getenv(name)) {
-            previous_ = previous;
-        }
-        setenv(name, value, /*overwrite=*/1);
-    }
-    ~ScopedEnv() {
-        if (previous_.has_value()) {
-            setenv(name_, previous_->c_str(), /*overwrite=*/1);
-        } else {
-            unsetenv(name_);
-        }
-    }
-    ScopedEnv(const ScopedEnv&) = delete;
-    ScopedEnv& operator=(const ScopedEnv&) = delete;
-
-private:
-    const char* name_;
-    std::optional<std::string> previous_;
-};
 
 tt::tt_metal::PhysicalSystemDescriptor load_psd_from_text(const std::string& text) {
     const auto path = std::filesystem::temp_directory_path() /
@@ -3811,32 +3684,12 @@ top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
 //     A0--B0 on 101==102, B0--A1 on 102==103, A1--B1 on 104==105, B1--A0 on 105==100.
 //
 // Rotating or reflecting that arrangement is equally valid, so the test asserts the property the
-// issue cares about rather than exact chips, and it asserts it for both placement paths so the two
-// are compared on identical terms.
+// issue cares about rather than exact chips.
 //
-// Both paths are judged by the same thing, and it is the production mapper rather than a hand-rolled
-// adjacency check: map_multi_mesh_to_physical has to complete. Its inter-mesh stage embeds the MGD's
-// mesh graph into the mesh-level graph derived from the placement, so a stranded seam shows up as an
-// inter-mesh failure; its intra-mesh stage then binds every fabric node to an ASIC.
-//
-// find_all_in_psd is the old, pre-DFS entry point: it takes one shape's groupings and packs that
-// shape into the PSD, with no MGD and therefore no knowledge of the mesh-level edges. Run per shape
-// on this ring it produces
-//
-//     A (1x2):  {100,101}  {102,103}  {104,105}
-//     B (1x1):  {100} {101} {102} {103} {104} {105}
-//
-// The A packing tiles the ring on even boundaries only. That is a maximal, perfectly disjoint
-// packing, and it is already fatal: the interleaved seating needs an A mesh on {103,104}, which
-// straddles two of those tiles and so is never offered.
-//
-// The test seats the meshes on that packing -- two A tiles and the two chips they leave over -- and
-// puts the result through build_hierarchical_from_flat_graph and map_multi_mesh_to_physical, the
-// same two calls the DFS placement goes through below. The old arrangement must fail to map and the
-// DFS one must succeed. The assertion on the A pool is what makes that general rather than a
-// statement about one arrangement: no seating drawn from a pool that never straddles a tile
-// boundary can satisfy the ring, however the meshes are permuted across it.
-TEST(AdjacencyGuidedPlacement, AlternatingShapeRingDfsPlacesAndMapsWhereOldPackingCannot) {
+// map_multi_mesh_to_physical has to complete. Its inter-mesh stage embeds the MGD's mesh graph into
+// the mesh-level graph derived from the placement, so a stranded seam shows up as an inter-mesh
+// failure; its intra-mesh stage then binds every fabric node to an ASIC.
+TEST(AdjacencyGuidedPlacement, AlternatingShapeRingPlacesAndMaps) {
     const std::set<uint64_t> whole_ring = {100, 101, 102, 103, 104, 105};
 
     // build pgd
@@ -3948,59 +3801,10 @@ top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
     // build logical
     const auto logical = utils::build_logical_multi_mesh_adjacency_graph(mgd);
 
-    // build the flat ASIC adjacency both paths are placed against, and the mapping config both are
-    // mapped under
     const AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(utils::build_flat_adjacency_map_from_psd(psd));
     utils::TopologyMappingConfig config;
     config.disable_rank_bindings = true;
 
-    // ----- old path: find_all_in_psd, packing each shape independently -----
-
-    // PGD shapes only. The variant list also carries the MGD grouping as a fallback, which is named
-    // after the mesh and has no PGD grouping behind it for find_all_in_psd to flatten. The packer only
-    // ever saw PGD shapes, and this half of the test is about what packing one of them produces.
-    const auto pack_shape = [&](const std::string& mesh_name) {
-        std::vector<GroupingInfo> pgd_shapes;
-        for (const auto& grouping : valid_groupings.at("MESH").at(mesh_name)) {
-            if (grouping.name != mesh_name) {
-                pgd_shapes.push_back(grouping);
-            }
-        }
-        return pgd.find_all_in_psd(pgd_shapes, psd);
-    };
-    const auto a_pool = pack_shape("A");
-    const auto b_pool = pack_shape("B");
-
-    ASSERT_THAT(
-        footprints_of(a_pool),
-        ::testing::ElementsAre(
-            std::set<uint64_t>{100, 101}, std::set<uint64_t>{102, 103}, std::set<uint64_t>{104, 105}))
-        << "the 1x2 shape packs onto even tile boundaries and never offers {101,102} or {103,104}";
-    ASSERT_EQ(b_pool.size(), 6u) << "the 1x1 shape fits on every chip";
-
-    // The two B entries the arrangement below uses, pinned so the indices mean chips and not
-    // whatever order find_all_in_psd happened to return.
-    const auto b_footprints = footprints_of(b_pool);
-    ASSERT_EQ(b_footprints[4], std::set<uint64_t>({104}));
-    ASSERT_EQ(b_footprints[5], std::set<uint64_t>({105}));
-
-    // Seat the meshes on that packing, in MGD order A0, B0, A1, B1: the two A tiles the packer
-    // offers first, and the two chips they leave over for the B meshes. Disjoint, covers the whole
-    // ring, and nothing about it considered the mesh-level edges.
-    const std::vector<PsdPlacement> old_placements = {a_pool[0], b_pool[4], a_pool[1], b_pool[5]};
-
-    // build physical
-    const auto old_physical = utils::build_hierarchical_from_flat_graph(flat_graph, old_placements);
-
-    // place and map
-    const auto old_mapping = utils::map_multi_mesh_to_physical(logical, old_physical, config);
-    EXPECT_FALSE(old_mapping.success)
-        << "the packed arrangement strands the A0--B0 and A1--B1 edges, which the inter-mesh stage "
-        << "should reject";
-
-    // ----- new path: the adjacency-guided search -----
-
-    // place
     const auto placements = pgd.solve_adjacency_guided_placement(mgd, valid_groupings, psd);
     ASSERT_EQ(placements.size(), 4u) << "all four meshes should be placed on the 6-chip ring";
 
@@ -4009,8 +3813,7 @@ top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
 
     // place and map
     const auto mapping = utils::map_multi_mesh_to_physical(logical, physical, config);
-    ASSERT_TRUE(mapping.success) << "the two-level solve should succeed on the DFS placement, but failed with: "
-                                 << mapping.error_message;
+    ASSERT_TRUE(mapping.success) << "the two-level solve should succeed, but failed with: " << mapping.error_message;
     EXPECT_EQ(mapping.fabric_node_to_asic.size(), 6u) << "every logical fabric node should be bound to an ASIC";
 
     const auto footprints = mapped_footprints(mapping);
@@ -4022,16 +3825,6 @@ top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
     EXPECT_EQ(footprints[2].size(), 2u);
     EXPECT_EQ(footprints[3].size(), 1u);
     EXPECT_EQ(chips_in(footprints), whole_ring) << "the mapping should use each chip of the ring exactly once";
-
-    // ----- the difference -----
-
-    // The DFS gets there by using an A footprint the packer never emits.
-    const auto a_footprints = footprints_of(a_pool);
-    const bool uses_footprint_outside_packing =
-        std::find(a_footprints.begin(), a_footprints.end(), footprints[0]) == a_footprints.end() ||
-        std::find(a_footprints.begin(), a_footprints.end(), footprints[2]) == a_footprints.end();
-    EXPECT_TRUE(uses_footprint_outside_packing)
-        << "satisfying the ring requires a 1x2 footprint that straddles the packer's tile boundary";
 }
 
 // The falsification for the test above: same four meshes, same six chips, but the ring's closing
@@ -5788,53 +5581,14 @@ top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
     }
 }
 
-// Strain the adjacency-guided DFS: many meshes, so next_step_pool (and the inner topology-solver
-// enumeration it loops) runs once per search node. Auto picks SAT when n_target * n_global >= 512
-// and DFS otherwise, so a 4x4 mesh on an 8x8 system starts on SAT and finishes on DFS as occupancy
-// shrinks. Stats are the thing to watch when changing the looping.
-TEST(AdjacencyGuidedPlacement, StrainManyMeshesReportsDfsStats) {
-    // The counters asserted below are the DFS's own; the SAT joint placement runs first by default.
-    ScopedEnv dfs_only("TT_METAL_PLACEMENT_SOLVER", "dfs");
-    auto run_case = [](std::size_t mesh_rows,
-                       std::size_t mesh_cols,
-                       std::size_t fabric_rows,
-                       std::size_t fabric_cols,
-                       const char* label) {
-        PhysicalGroupingDescriptor pgd{unspecified_mesh_pgd(mesh_rows, mesh_cols)};
-        MeshGraphDescriptor mgd{mesh_grid_mgd(mesh_rows, mesh_cols, fabric_rows, fabric_cols)};
-        auto psd = load_psd_from_text(grid_psd(mesh_rows * fabric_rows, mesh_cols * fabric_cols));
-
-        const auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd);
-        ASSERT_TRUE(valid_groupings.contains("MESH")) << label;
-
-        PlacementSolveStats stats;
-        const auto placements =
-            pgd.solve_adjacency_guided_placement(mgd, valid_groupings, psd, /*node_budget=*/0, &stats);
-
-        const std::size_t expected_meshes = fabric_rows * fabric_cols;
-        EXPECT_EQ(placements.size(), expected_meshes) << label << "\n" << stats.to_string();
-        EXPECT_TRUE(stats.success) << label << "\n" << stats.to_string();
-        EXPECT_EQ(stats.meshes_placed, expected_meshes) << label;
-        EXPECT_GE(stats.next_step_pool_calls, expected_meshes) << label << "\n" << stats.to_string();
-        EXPECT_GE(stats.inner_solver_calls, expected_meshes) << label << "\n" << stats.to_string();
-        EXPECT_GT(stats.total_elapsed.count(), 0) << label;
-    };
-
-    // 8 linked 2x2 meshes on a 4x8 chip grid: 4 * remaining_chips < 512, so the inner calls stay on DFS.
-    run_case(2, 2, 2, 4, "8x 2x2 meshes on 4x8");
-    // 4 linked 4x4 meshes on an 8x8 chip grid: first inner call is 16*64 >= 512 (SAT), last is 16*16 (DFS).
-    run_case(4, 4, 2, 2, "4x 4x4 meshes on 8x8");
-}
-
 // ----- two-layer SAT joint placement (Plan 4) --------------------------------------------------
 //
-// Same descriptors as the DFS tests above, forced onto the SAT path. A SAT model is a real placement,
-// so the footprints must be the ones the DFS found; the stats must say the master solve ran.
+// Same descriptors as the placement tests above. A SAT model is a real placement;
+// the stats must say the master solve ran.
 
 // The unique seating on the 4-chip line is found by the master solve, with every candidate list
 // exhausted (the 1x2 grouping has exactly three seats on a line of four).
 TEST(PhysicalGroupingDescriptorTestsSatJointPlacement, LinkedMeshesPlaceAdjacentlyOnLine) {
-    ScopedEnv sat_only("TT_METAL_PLACEMENT_SOLVER", "sat");
     PhysicalGroupingDescriptor pgd{std::string(R"delimiter(
 # Mesh shapes with every ASIC location UNSPECIFIED, so a grouping is free to land anywhere: that is
 # what gives the search more than one candidate to choose between.
@@ -5895,7 +5649,7 @@ top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
     const auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd);
 
     PlacementSolveStats stats;
-    const auto placements = pgd.solve_adjacency_guided_placement(mgd, valid_groupings, psd, /*node_budget=*/0, &stats);
+    const auto placements = pgd.solve_adjacency_guided_placement(mgd, valid_groupings, psd, &stats);
     ASSERT_EQ(placements.size(), 2u) << stats.to_string();
     EXPECT_THAT(
         footprints_of(placements),
@@ -5904,15 +5658,13 @@ top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
     EXPECT_TRUE(stats.master_solve_attempted) << stats.to_string();
     EXPECT_TRUE(stats.master_solve_success) << stats.to_string();
     EXPECT_TRUE(stats.candidate_lists_complete) << stats.to_string();
-    EXPECT_EQ(stats.adjacency_nodes_expanded, 0u) << "the DFS must not have run\n" << stats.to_string();
     EXPECT_GT(stats.master_sat_vars, 0u) << stats.to_string();
     EXPECT_GT(stats.master_sat_clauses, 0u) << stats.to_string();
 }
 
 // Two disjoint pairs cannot carry the seam. With every candidate list exhausted the UNSAT verdict is
-// trustworthy, so `auto` mode must NOT fall back to the DFS, and the stats must say why.
+// trustworthy.
 TEST(PhysicalGroupingDescriptorTestsSatJointPlacement, LinkedMeshesFailOnDisconnectedPairsWithTrustworthyUnsat) {
-    ScopedEnv auto_mode("TT_METAL_PLACEMENT_SOLVER", "auto");
     PhysicalGroupingDescriptor pgd{std::string(R"delimiter(
 # Mesh shapes with every ASIC location UNSPECIFIED, so a grouping is free to land anywhere: that is
 # what gives the search more than one candidate to choose between.
@@ -5979,20 +5731,17 @@ top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
     const auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd);
 
     PlacementSolveStats stats;
-    const auto placements = pgd.solve_adjacency_guided_placement(mgd, valid_groupings, psd, /*node_budget=*/0, &stats);
+    const auto placements = pgd.solve_adjacency_guided_placement(mgd, valid_groupings, psd, &stats);
     EXPECT_TRUE(placements.empty()) << "no link joins the two pairs, so the seam cannot be satisfied";
     EXPECT_TRUE(stats.master_solve_attempted) << stats.to_string();
     EXPECT_FALSE(stats.master_solve_success) << stats.to_string();
     EXPECT_TRUE(stats.candidate_lists_complete) << "every 1x2 seat on 4 chips must have been enumerated\n"
                                                 << stats.to_string();
-    EXPECT_EQ(stats.adjacency_nodes_expanded, 0u) << "a trustworthy UNSAT must not fall back to the DFS\n"
-                                                  << stats.to_string();
 }
 
 // Under a RELAXED policy the strict seam tier is solved first, so the full channel count wins when it
-// is available -- the same preference next_step_pool expresses per seam, here as a global one.
+// is available.
 TEST(PhysicalGroupingDescriptorTestsSatJointPlacement, RelaxedSeamPrefersTheFullChannelCount) {
-    ScopedEnv sat_only("TT_METAL_PLACEMENT_SOLVER", "sat");
     PhysicalGroupingDescriptor pgd{std::string(R"delimiter(
 # Mesh shapes with every ASIC location UNSPECIFIED, so a grouping is free to land anywhere: that is
 # what gives the search more than one candidate to choose between.
@@ -6067,7 +5816,7 @@ top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
     const auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd);
 
     PlacementSolveStats stats;
-    const auto placements = pgd.solve_adjacency_guided_placement(mgd, valid_groupings, psd, /*node_budget=*/0, &stats);
+    const auto placements = pgd.solve_adjacency_guided_placement(mgd, valid_groupings, psd, &stats);
     ASSERT_EQ(placements.size(), 2u) << stats.to_string();
     EXPECT_THAT(
         footprints_of(placements),
@@ -6082,7 +5831,6 @@ top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
 // over that sample -- growing the pool across as many column-generation rounds as the sample needs, with no
 // adjacency DFS behind it.
 TEST(PhysicalGroupingDescriptorTestsSatJointPlacement, StrainManyMeshesPlacesInOneMasterSolve) {
-    ScopedEnv sat_only("TT_METAL_PLACEMENT_SOLVER", "sat");
     auto run_case = [](std::size_t mesh_rows,
                        std::size_t mesh_cols,
                        std::size_t fabric_rows,
@@ -6096,15 +5844,13 @@ TEST(PhysicalGroupingDescriptorTestsSatJointPlacement, StrainManyMeshesPlacesInO
         ASSERT_TRUE(valid_groupings.contains("MESH")) << label;
 
         PlacementSolveStats stats;
-        const auto placements =
-            pgd.solve_adjacency_guided_placement(mgd, valid_groupings, psd, /*node_budget=*/0, &stats);
+        const auto placements = pgd.solve_adjacency_guided_placement(mgd, valid_groupings, psd, &stats);
 
         const std::size_t expected_meshes = fabric_rows * fabric_cols;
         EXPECT_EQ(placements.size(), expected_meshes) << label << "\n" << stats.to_string();
         EXPECT_TRUE(stats.success) << label << "\n" << stats.to_string();
         EXPECT_TRUE(stats.master_solve_attempted) << label << "\n" << stats.to_string();
         EXPECT_TRUE(stats.master_solve_success) << label << "\n" << stats.to_string();
-        EXPECT_EQ(stats.adjacency_nodes_expanded, 0u) << label << "\n" << stats.to_string();
         EXPECT_GE(stats.master_candidates_enumerated, expected_meshes) << label << "\n" << stats.to_string();
         // The pools are truncated: enumeration stops at its per-mesh cap long before it has listed every
         // footprint on a fabric this open. The initial sample may not contain a disjoint tiling, so the
@@ -6289,41 +6035,34 @@ top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
         asic_at_slot.emplace(std::pair{*descriptor.tray_id, *descriptor.asic_location}, asic_id);
     }
 
-    for (const char* solver : {"sat", "dfs"}) {
-        ScopedEnv pick_solver("TT_METAL_PLACEMENT_SOLVER", solver);
-
-        // Placement, on both backends. The split is encoded as constraints inside
-        // enumerate_distinct_placements_for_grouping, so SAT and DFS have to honour it equally: a
-        // grouping the matcher accepted can still come back seated across a boundary if they do not.
-        const auto placements =
-            pgd.solve_adjacency_guided_placement(mgd, without_mgd_fallback(valid_groupings, "M0"), psd);
-        ASSERT_EQ(placements.size(), 1u) << solver << ": the mesh should be placed";
-        for (std::size_t rank = 0; rank < declared_ranks.size(); ++rank) {
-            std::set<std::string> hosts;
-            for (LogicalChipId chip : declared_ranks[rank]) {
-                const auto& position = placements.front().mesh_node_to_asic_position.at(chip);
-                hosts.insert(psd.get_host_name_for_asic(asic_at_slot.at({*position.first, *position.second})));
-            }
-            EXPECT_EQ(hosts.size(), 1u) << solver << ": placement seated declared rank " << rank << " across "
-                                        << hosts.size() << " hosts";
+    // Placement. The split is encoded as constraints inside
+    // enumerate_distinct_placements_for_grouping.
+    const auto placements = pgd.solve_adjacency_guided_placement(mgd, without_mgd_fallback(valid_groupings, "M0"), psd);
+    ASSERT_EQ(placements.size(), 1u) << "the mesh should be placed";
+    for (std::size_t rank = 0; rank < declared_ranks.size(); ++rank) {
+        std::set<std::string> hosts;
+        for (LogicalChipId chip : declared_ranks[rank]) {
+            const auto& position = placements.front().mesh_node_to_asic_position.at(chip);
+            hosts.insert(psd.get_host_name_for_asic(asic_at_slot.at({*position.first, *position.second})));
         }
+        EXPECT_EQ(hosts.size(), 1u) << "placement seated declared rank " << rank << " across " << hosts.size()
+                                    << " hosts";
+    }
 
-        // The physical graph built from that seating, and the logical mesh mapped onto it. The mapper
-        // re-solves the intra-mesh assignment, so the split has to survive that too and not only the
-        // placement it was handed.
-        const auto logical = utils::build_logical_multi_mesh_adjacency_graph(mgd);
-        const AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(utils::build_flat_adjacency_map_from_psd(psd));
-        const auto physical = utils::build_hierarchical_from_flat_graph(flat_graph, placements);
-        const auto mapping = map_placement_with_declared_ranks(logical, physical, psd, declared_ranks);
-        ASSERT_TRUE(mapping.success) << solver << ": " << mapping.error_message;
-        for (std::size_t rank = 0; rank < declared_ranks.size(); ++rank) {
-            std::set<std::string> hosts;
-            for (LogicalChipId chip : declared_ranks[rank]) {
-                hosts.insert(psd.get_host_name_for_asic(mapping.fabric_node_to_asic.at(FabricNodeId(MeshId{0}, chip))));
-            }
-            EXPECT_EQ(hosts.size(), 1u) << solver << ": the mapper put declared rank " << rank << " on " << hosts.size()
-                                        << " hosts";
+    // The physical graph built from that seating, and the logical mesh mapped onto it. The mapper
+    // re-solves the intra-mesh assignment, so the split has to survive that too and not only the
+    // placement it was handed.
+    const auto logical = utils::build_logical_multi_mesh_adjacency_graph(mgd);
+    const AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(utils::build_flat_adjacency_map_from_psd(psd));
+    const auto physical = utils::build_hierarchical_from_flat_graph(flat_graph, placements);
+    const auto mapping = map_placement_with_declared_ranks(logical, physical, psd, declared_ranks);
+    ASSERT_TRUE(mapping.success) << mapping.error_message;
+    for (std::size_t rank = 0; rank < declared_ranks.size(); ++rank) {
+        std::set<std::string> hosts;
+        for (LogicalChipId chip : declared_ranks[rank]) {
+            hosts.insert(psd.get_host_name_for_asic(mapping.fabric_node_to_asic.at(FabricNodeId(MeshId{0}, chip))));
         }
+        EXPECT_EQ(hosts.size(), 1u) << "the mapper put declared rank " << rank << " on " << hosts.size() << " hosts";
     }
 
     // Phase 2, handed phase 1's own answer. generate_rank_bindings emits one rank per declared group,
@@ -6445,41 +6184,34 @@ top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
         asic_at_slot.emplace(std::pair{*descriptor.tray_id, *descriptor.asic_location}, asic_id);
     }
 
-    for (const char* solver : {"sat", "dfs"}) {
-        ScopedEnv pick_solver("TT_METAL_PLACEMENT_SOLVER", solver);
-
-        // Placement, on both backends. The split is encoded as constraints inside
-        // enumerate_distinct_placements_for_grouping, so SAT and DFS have to honour it equally: a
-        // grouping the matcher accepted can still come back seated across a boundary if they do not.
-        const auto placements =
-            pgd.solve_adjacency_guided_placement(mgd, without_mgd_fallback(valid_groupings, "M0"), psd);
-        ASSERT_EQ(placements.size(), 1u) << solver << ": the mesh should be placed";
-        for (std::size_t rank = 0; rank < declared_ranks.size(); ++rank) {
-            std::set<std::string> hosts;
-            for (LogicalChipId chip : declared_ranks[rank]) {
-                const auto& position = placements.front().mesh_node_to_asic_position.at(chip);
-                hosts.insert(psd.get_host_name_for_asic(asic_at_slot.at({*position.first, *position.second})));
-            }
-            EXPECT_EQ(hosts.size(), 1u) << solver << ": placement seated declared rank " << rank << " across "
-                                        << hosts.size() << " hosts";
+    // Placement. The split is encoded as constraints inside
+    // enumerate_distinct_placements_for_grouping.
+    const auto placements = pgd.solve_adjacency_guided_placement(mgd, without_mgd_fallback(valid_groupings, "M0"), psd);
+    ASSERT_EQ(placements.size(), 1u) << "the mesh should be placed";
+    for (std::size_t rank = 0; rank < declared_ranks.size(); ++rank) {
+        std::set<std::string> hosts;
+        for (LogicalChipId chip : declared_ranks[rank]) {
+            const auto& position = placements.front().mesh_node_to_asic_position.at(chip);
+            hosts.insert(psd.get_host_name_for_asic(asic_at_slot.at({*position.first, *position.second})));
         }
+        EXPECT_EQ(hosts.size(), 1u) << "placement seated declared rank " << rank << " across " << hosts.size()
+                                    << " hosts";
+    }
 
-        // The physical graph built from that seating, and the logical mesh mapped onto it. The mapper
-        // re-solves the intra-mesh assignment, so the split has to survive that too and not only the
-        // placement it was handed.
-        const auto logical = utils::build_logical_multi_mesh_adjacency_graph(mgd);
-        const AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(utils::build_flat_adjacency_map_from_psd(psd));
-        const auto physical = utils::build_hierarchical_from_flat_graph(flat_graph, placements);
-        const auto mapping = map_placement_with_declared_ranks(logical, physical, psd, declared_ranks);
-        ASSERT_TRUE(mapping.success) << solver << ": " << mapping.error_message;
-        for (std::size_t rank = 0; rank < declared_ranks.size(); ++rank) {
-            std::set<std::string> hosts;
-            for (LogicalChipId chip : declared_ranks[rank]) {
-                hosts.insert(psd.get_host_name_for_asic(mapping.fabric_node_to_asic.at(FabricNodeId(MeshId{0}, chip))));
-            }
-            EXPECT_EQ(hosts.size(), 1u) << solver << ": the mapper put declared rank " << rank << " on " << hosts.size()
-                                        << " hosts";
+    // The physical graph built from that seating, and the logical mesh mapped onto it. The mapper
+    // re-solves the intra-mesh assignment, so the split has to survive that too and not only the
+    // placement it was handed.
+    const auto logical = utils::build_logical_multi_mesh_adjacency_graph(mgd);
+    const AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(utils::build_flat_adjacency_map_from_psd(psd));
+    const auto physical = utils::build_hierarchical_from_flat_graph(flat_graph, placements);
+    const auto mapping = map_placement_with_declared_ranks(logical, physical, psd, declared_ranks);
+    ASSERT_TRUE(mapping.success) << mapping.error_message;
+    for (std::size_t rank = 0; rank < declared_ranks.size(); ++rank) {
+        std::set<std::string> hosts;
+        for (LogicalChipId chip : declared_ranks[rank]) {
+            hosts.insert(psd.get_host_name_for_asic(mapping.fabric_node_to_asic.at(FabricNodeId(MeshId{0}, chip))));
         }
+        EXPECT_EQ(hosts.size(), 1u) << "the mapper put declared rank " << rank << " on " << hosts.size() << " hosts";
     }
 
     // Phase 2, handed phase 1's own answer. generate_rank_bindings emits one rank per declared group,
@@ -6705,41 +6437,34 @@ top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
         asic_at_slot.emplace(std::pair{*descriptor.tray_id, *descriptor.asic_location}, asic_id);
     }
 
-    for (const char* solver : {"sat", "dfs"}) {
-        ScopedEnv pick_solver("TT_METAL_PLACEMENT_SOLVER", solver);
-
-        // Placement, on both backends. The split is encoded as constraints inside
-        // enumerate_distinct_placements_for_grouping, so SAT and DFS have to honour it equally: a
-        // grouping the matcher accepted can still come back seated across a boundary if they do not.
-        const auto placements =
-            pgd.solve_adjacency_guided_placement(mgd, without_mgd_fallback(valid_groupings, "M0"), psd);
-        ASSERT_EQ(placements.size(), 1u) << solver << ": the mesh should be placed";
-        for (std::size_t rank = 0; rank < declared_ranks.size(); ++rank) {
-            std::set<std::string> hosts;
-            for (LogicalChipId chip : declared_ranks[rank]) {
-                const auto& position = placements.front().mesh_node_to_asic_position.at(chip);
-                hosts.insert(psd.get_host_name_for_asic(asic_at_slot.at({*position.first, *position.second})));
-            }
-            EXPECT_EQ(hosts.size(), 1u) << solver << ": placement seated declared rank " << rank << " across "
-                                        << hosts.size() << " hosts";
+    // Placement. The split is encoded as constraints inside
+    // enumerate_distinct_placements_for_grouping.
+    const auto placements = pgd.solve_adjacency_guided_placement(mgd, without_mgd_fallback(valid_groupings, "M0"), psd);
+    ASSERT_EQ(placements.size(), 1u) << "the mesh should be placed";
+    for (std::size_t rank = 0; rank < declared_ranks.size(); ++rank) {
+        std::set<std::string> hosts;
+        for (LogicalChipId chip : declared_ranks[rank]) {
+            const auto& position = placements.front().mesh_node_to_asic_position.at(chip);
+            hosts.insert(psd.get_host_name_for_asic(asic_at_slot.at({*position.first, *position.second})));
         }
+        EXPECT_EQ(hosts.size(), 1u) << "placement seated declared rank " << rank << " across " << hosts.size()
+                                    << " hosts";
+    }
 
-        // The physical graph built from that seating, and the logical mesh mapped onto it. The mapper
-        // re-solves the intra-mesh assignment, so the split has to survive that too and not only the
-        // placement it was handed.
-        const auto logical = utils::build_logical_multi_mesh_adjacency_graph(mgd);
-        const AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(utils::build_flat_adjacency_map_from_psd(psd));
-        const auto physical = utils::build_hierarchical_from_flat_graph(flat_graph, placements);
-        const auto mapping = map_placement_with_declared_ranks(logical, physical, psd, declared_ranks);
-        ASSERT_TRUE(mapping.success) << solver << ": " << mapping.error_message;
-        for (std::size_t rank = 0; rank < declared_ranks.size(); ++rank) {
-            std::set<std::string> hosts;
-            for (LogicalChipId chip : declared_ranks[rank]) {
-                hosts.insert(psd.get_host_name_for_asic(mapping.fabric_node_to_asic.at(FabricNodeId(MeshId{0}, chip))));
-            }
-            EXPECT_EQ(hosts.size(), 1u) << solver << ": the mapper put declared rank " << rank << " on " << hosts.size()
-                                        << " hosts";
+    // The physical graph built from that seating, and the logical mesh mapped onto it. The mapper
+    // re-solves the intra-mesh assignment, so the split has to survive that too and not only the
+    // placement it was handed.
+    const auto logical = utils::build_logical_multi_mesh_adjacency_graph(mgd);
+    const AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(utils::build_flat_adjacency_map_from_psd(psd));
+    const auto physical = utils::build_hierarchical_from_flat_graph(flat_graph, placements);
+    const auto mapping = map_placement_with_declared_ranks(logical, physical, psd, declared_ranks);
+    ASSERT_TRUE(mapping.success) << mapping.error_message;
+    for (std::size_t rank = 0; rank < declared_ranks.size(); ++rank) {
+        std::set<std::string> hosts;
+        for (LogicalChipId chip : declared_ranks[rank]) {
+            hosts.insert(psd.get_host_name_for_asic(mapping.fabric_node_to_asic.at(FabricNodeId(MeshId{0}, chip))));
         }
+        EXPECT_EQ(hosts.size(), 1u) << "the mapper put declared rank " << rank << " on " << hosts.size() << " hosts";
     }
 
     // Phase 2, handed phase 1's own answer. generate_rank_bindings emits one rank per declared group,
@@ -6947,41 +6672,34 @@ top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
         asic_at_slot.emplace(std::pair{*descriptor.tray_id, *descriptor.asic_location}, asic_id);
     }
 
-    for (const char* solver : {"sat", "dfs"}) {
-        ScopedEnv pick_solver("TT_METAL_PLACEMENT_SOLVER", solver);
-
-        // Placement, on both backends. The split is encoded as constraints inside
-        // enumerate_distinct_placements_for_grouping, so SAT and DFS have to honour it equally: a
-        // grouping the matcher accepted can still come back seated across a boundary if they do not.
-        const auto placements =
-            pgd.solve_adjacency_guided_placement(mgd, without_mgd_fallback(valid_groupings, "M0"), psd);
-        ASSERT_EQ(placements.size(), 1u) << solver << ": the mesh should be placed";
-        for (std::size_t rank = 0; rank < declared_ranks.size(); ++rank) {
-            std::set<std::string> hosts;
-            for (LogicalChipId chip : declared_ranks[rank]) {
-                const auto& position = placements.front().mesh_node_to_asic_position.at(chip);
-                hosts.insert(psd.get_host_name_for_asic(asic_at_slot.at({*position.first, *position.second})));
-            }
-            EXPECT_EQ(hosts.size(), 1u) << solver << ": placement seated declared rank " << rank << " across "
-                                        << hosts.size() << " hosts";
+    // Placement. The split is encoded as constraints inside
+    // enumerate_distinct_placements_for_grouping.
+    const auto placements = pgd.solve_adjacency_guided_placement(mgd, without_mgd_fallback(valid_groupings, "M0"), psd);
+    ASSERT_EQ(placements.size(), 1u) << "the mesh should be placed";
+    for (std::size_t rank = 0; rank < declared_ranks.size(); ++rank) {
+        std::set<std::string> hosts;
+        for (LogicalChipId chip : declared_ranks[rank]) {
+            const auto& position = placements.front().mesh_node_to_asic_position.at(chip);
+            hosts.insert(psd.get_host_name_for_asic(asic_at_slot.at({*position.first, *position.second})));
         }
+        EXPECT_EQ(hosts.size(), 1u) << "placement seated declared rank " << rank << " across " << hosts.size()
+                                    << " hosts";
+    }
 
-        // The physical graph built from that seating, and the logical mesh mapped onto it. The mapper
-        // re-solves the intra-mesh assignment, so the split has to survive that too and not only the
-        // placement it was handed.
-        const auto logical = utils::build_logical_multi_mesh_adjacency_graph(mgd);
-        const AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(utils::build_flat_adjacency_map_from_psd(psd));
-        const auto physical = utils::build_hierarchical_from_flat_graph(flat_graph, placements);
-        const auto mapping = map_placement_with_declared_ranks(logical, physical, psd, declared_ranks);
-        ASSERT_TRUE(mapping.success) << solver << ": " << mapping.error_message;
-        for (std::size_t rank = 0; rank < declared_ranks.size(); ++rank) {
-            std::set<std::string> hosts;
-            for (LogicalChipId chip : declared_ranks[rank]) {
-                hosts.insert(psd.get_host_name_for_asic(mapping.fabric_node_to_asic.at(FabricNodeId(MeshId{0}, chip))));
-            }
-            EXPECT_EQ(hosts.size(), 1u) << solver << ": the mapper put declared rank " << rank << " on " << hosts.size()
-                                        << " hosts";
+    // The physical graph built from that seating, and the logical mesh mapped onto it. The mapper
+    // re-solves the intra-mesh assignment, so the split has to survive that too and not only the
+    // placement it was handed.
+    const auto logical = utils::build_logical_multi_mesh_adjacency_graph(mgd);
+    const AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(utils::build_flat_adjacency_map_from_psd(psd));
+    const auto physical = utils::build_hierarchical_from_flat_graph(flat_graph, placements);
+    const auto mapping = map_placement_with_declared_ranks(logical, physical, psd, declared_ranks);
+    ASSERT_TRUE(mapping.success) << mapping.error_message;
+    for (std::size_t rank = 0; rank < declared_ranks.size(); ++rank) {
+        std::set<std::string> hosts;
+        for (LogicalChipId chip : declared_ranks[rank]) {
+            hosts.insert(psd.get_host_name_for_asic(mapping.fabric_node_to_asic.at(FabricNodeId(MeshId{0}, chip))));
         }
+        EXPECT_EQ(hosts.size(), 1u) << "the mapper put declared rank " << rank << " on " << hosts.size() << " hosts";
     }
 
     // Phase 2, handed phase 1's own answer. generate_rank_bindings emits one rank per declared group,
@@ -7297,41 +7015,34 @@ top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
         asic_at_slot.emplace(std::pair{*descriptor.tray_id, *descriptor.asic_location}, asic_id);
     }
 
-    for (const char* solver : {"sat", "dfs"}) {
-        ScopedEnv pick_solver("TT_METAL_PLACEMENT_SOLVER", solver);
-
-        // Placement, on both backends. The split is encoded as constraints inside
-        // enumerate_distinct_placements_for_grouping, so SAT and DFS have to honour it equally: a
-        // grouping the matcher accepted can still come back seated across a boundary if they do not.
-        const auto placements =
-            pgd.solve_adjacency_guided_placement(mgd, without_mgd_fallback(valid_groupings, "M0"), psd);
-        ASSERT_EQ(placements.size(), 1u) << solver << ": the mesh should be placed";
-        for (std::size_t rank = 0; rank < declared_ranks.size(); ++rank) {
-            std::set<std::string> hosts;
-            for (LogicalChipId chip : declared_ranks[rank]) {
-                const auto& position = placements.front().mesh_node_to_asic_position.at(chip);
-                hosts.insert(psd.get_host_name_for_asic(asic_at_slot.at({*position.first, *position.second})));
-            }
-            EXPECT_EQ(hosts.size(), 1u) << solver << ": placement seated declared rank " << rank << " across "
-                                        << hosts.size() << " hosts";
+    // Placement. The split is encoded as constraints inside
+    // enumerate_distinct_placements_for_grouping.
+    const auto placements = pgd.solve_adjacency_guided_placement(mgd, without_mgd_fallback(valid_groupings, "M0"), psd);
+    ASSERT_EQ(placements.size(), 1u) << "the mesh should be placed";
+    for (std::size_t rank = 0; rank < declared_ranks.size(); ++rank) {
+        std::set<std::string> hosts;
+        for (LogicalChipId chip : declared_ranks[rank]) {
+            const auto& position = placements.front().mesh_node_to_asic_position.at(chip);
+            hosts.insert(psd.get_host_name_for_asic(asic_at_slot.at({*position.first, *position.second})));
         }
+        EXPECT_EQ(hosts.size(), 1u) << "placement seated declared rank " << rank << " across " << hosts.size()
+                                    << " hosts";
+    }
 
-        // The physical graph built from that seating, and the logical mesh mapped onto it. The mapper
-        // re-solves the intra-mesh assignment, so the split has to survive that too and not only the
-        // placement it was handed.
-        const auto logical = utils::build_logical_multi_mesh_adjacency_graph(mgd);
-        const AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(utils::build_flat_adjacency_map_from_psd(psd));
-        const auto physical = utils::build_hierarchical_from_flat_graph(flat_graph, placements);
-        const auto mapping = map_placement_with_declared_ranks(logical, physical, psd, declared_ranks);
-        ASSERT_TRUE(mapping.success) << solver << ": " << mapping.error_message;
-        for (std::size_t rank = 0; rank < declared_ranks.size(); ++rank) {
-            std::set<std::string> hosts;
-            for (LogicalChipId chip : declared_ranks[rank]) {
-                hosts.insert(psd.get_host_name_for_asic(mapping.fabric_node_to_asic.at(FabricNodeId(MeshId{0}, chip))));
-            }
-            EXPECT_EQ(hosts.size(), 1u) << solver << ": the mapper put declared rank " << rank << " on " << hosts.size()
-                                        << " hosts";
+    // The physical graph built from that seating, and the logical mesh mapped onto it. The mapper
+    // re-solves the intra-mesh assignment, so the split has to survive that too and not only the
+    // placement it was handed.
+    const auto logical = utils::build_logical_multi_mesh_adjacency_graph(mgd);
+    const AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(utils::build_flat_adjacency_map_from_psd(psd));
+    const auto physical = utils::build_hierarchical_from_flat_graph(flat_graph, placements);
+    const auto mapping = map_placement_with_declared_ranks(logical, physical, psd, declared_ranks);
+    ASSERT_TRUE(mapping.success) << mapping.error_message;
+    for (std::size_t rank = 0; rank < declared_ranks.size(); ++rank) {
+        std::set<std::string> hosts;
+        for (LogicalChipId chip : declared_ranks[rank]) {
+            hosts.insert(psd.get_host_name_for_asic(mapping.fabric_node_to_asic.at(FabricNodeId(MeshId{0}, chip))));
         }
+        EXPECT_EQ(hosts.size(), 1u) << "the mapper put declared rank " << rank << " on " << hosts.size() << " hosts";
     }
 
     // Phase 2, handed phase 1's own answer. generate_rank_bindings emits one rank per declared group,

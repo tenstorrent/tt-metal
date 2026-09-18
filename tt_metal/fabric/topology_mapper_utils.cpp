@@ -804,13 +804,7 @@ std::vector<PhysicalMultiMeshGraph> build_physical_from_adjacency_guided_placeme
 
     const std::size_t solution_cap = max_graphs == 0 ? kPhysicalMultiMeshGraphEnumerationCap : max_graphs;
     const auto placement_sets = physical_grouping_descriptor.solve_adjacency_guided_placement_n(
-        mesh_graph_descriptors,
-        valid_groupings,
-        physical_system_descriptor,
-        solution_cap,
-        /*node_budget=*/0,
-        nullptr,
-        per_mgd_pinnings);
+        mesh_graph_descriptors, valid_groupings, physical_system_descriptor, solution_cap, nullptr, per_mgd_pinnings);
     TT_FATAL(
         !placement_sets.empty(),
         "Topology mapper failed to find adjacency-guided placements for {} mesh graph descriptor(s) on a system with "
@@ -1214,8 +1208,8 @@ std::optional<std::string> hostname_for_asic_from_hostname_map(
     return std::nullopt;
 }
 
-// Minimal host cover for inter-mesh mapping: partition physical meshes by host and cap the number of hosts the
-// mapping may occupy, so unbound logical meshes pack onto the fewest hosts.
+// Minimal host cover for inter-mesh mapping: partition physical meshes by host and prefer filling each
+// used host completely; the SAT session falls through to a partial host if that packing is infeasible.
 // Only called when the physical graph is not already identity-bound via asic_id_to_mesh_rank (Phase 1).
 // TODO: This can be removed and replaced with cost heuristics when using a SAT solver because preferred
 // constraints aren't very effective here
@@ -1234,14 +1228,6 @@ void add_inter_mesh_minimal_host_cover_from_hostname_map(
         mesh_logical_level_graph.get_nodes().begin(), mesh_logical_level_graph.get_nodes().end());
     if (logical_target_set.size() <= 1) {
         return;
-    }
-
-    // Total LOGICAL chips the MGD occupies (fabric nodes summed across all logical meshes). Taken from the logical
-    // multi-mesh graph, NOT the physical mesh regions, which can over-provision (a small logical mesh placed inside a
-    // larger physical region) and would inflate the host count.
-    std::size_t total_chips_used = 0;
-    for (const auto& [mesh_id, logical_mesh_adj] : logical_multi_mesh_graph.mesh_adjacency_graphs_) {
-        total_chips_used += logical_mesh_adj.get_nodes().size();
     }
 
     // Build global_mesh_groups in one pass: one group per host for single-host meshes, singleton for multi-host.
@@ -1280,6 +1266,7 @@ void add_inter_mesh_minimal_host_cover_from_hostname_map(
         std::vector<std::set<MeshId>> target_groups;
         target_groups.push_back(logical_target_set);
         if (inter_mesh_constraints.set_same_rank_groups_constraint(target_groups, global_mesh_groups)) {
+            (void)inter_mesh_constraints.set_fill_all_rank_groups_constraint(true);
             return;
         }
         log_warning(
@@ -1287,36 +1274,10 @@ void add_inter_mesh_minimal_host_cover_from_hostname_map(
             "Inter-mesh host alignment: failed to set same-rank groups constraint; falling back to preferred globals");
     }
 
-    // 1. DECLARE the host-partition groups. With no target groups this imposes no hard co-location; it only exposes
-    //    per-mesh host membership so the solver can reason about how many hosts a mapping occupies. Everything below
-    //    needs this partition registered.
-    if (!inter_mesh_constraints.set_same_rank_groups_constraint(/*target_groups=*/{}, global_mesh_groups)) {
-        log_warning(
-            tt::LogFabric, "Inter-mesh host alignment: failed to register host partitions as same-rank global groups");
-    } else {
-        // 2. HARD CAP: fit the mapping within k_min = ceil(chips used / chips per host) hosts. The solver
-        //    encodes this as a hard at-most-k occupancy constraint (not an optional/guarded clause). If that
-        //    solve is infeasible, MultiMeshSolutionEnumerator::next() drops the cap, sets
-        //    set_minimize_same_rank_groups_used (SOFT occupancy packing), and restarts the session.
-        std::size_t chips_per_host = 0;
-        for (const auto& [hostname, asics] : config.hostname_to_asics) {
-            chips_per_host = std::max(chips_per_host, asics.size());
-        }
-        if (total_chips_used > 0 && chips_per_host > 0) {
-            const std::size_t k_min = (total_chips_used + chips_per_host - 1) / chips_per_host;
-            inter_mesh_constraints.set_max_same_rank_groups_used(k_min);
-
-            log_debug(
-                tt::LogFabric,
-                "Inter-mesh host alignment: capping host-group usage at k_min={} (chips_used={}, chips_per_host={})",
-                k_min,
-                total_chips_used,
-                chips_per_host);
-        }
+    if (!inter_mesh_constraints.set_same_rank_groups_constraint(/*target_groups=*/{}, global_mesh_groups) ||
+        !inter_mesh_constraints.set_fill_all_rank_groups_constraint(true)) {
+        log_warning(tt::LogFabric, "Inter-mesh host alignment: failed to register fill-all host-group constraint");
     }
-    // No per-mesh preferred host cover: the same-rank partition plus the hard at-most-k_min cap already make the
-    // solver use the fewest hosts, and the SAT solver picks which ones. Preferring one guessed cover on top of the
-    // cap only asked the solver to prove that guess infeasible before settling on a valid packing.
 }
 
 // Helper function to build ASIC positions to ASIC IDs map
@@ -2327,14 +2288,8 @@ std::optional<TopologyMappingResult> MultiMeshSolutionEnumerator::next() {
     const auto& mesh_logical_graph = adjacency_map_logical_.mesh_level_graph_;
     const auto& mesh_physical_graph = adjacency_map_physical_.mesh_level_graph_;
     while (true) {
-        // One incremental session for the first solve and every later one. A failed first solve with a hard
-        // host-group cap means the cap is infeasible for this instance -> drop the cap, enable SOFT
-        // minimize_same_rank_groups_used, and restart the session. Later exhaustion with emitted_ > 0 is
-        // genuine "no more capped solutions" and must not start emitting over-cap placements.
-        //
-        // TODO(host-cap-no-reencode): this session restart re-encodes the whole CNF. Once the HARD cap is
-        // encoded guarded-by-assumption (see TODO in topology_solver_sat.cpp), an infeasible cap can be
-        // backed out by retracting the assumption on the SAME session -- no restart, learned clauses kept.
+        // Fill-all is a soft SAT stage on this session (try full hosts, then allow a partial host).
+        // Exhaustion here is genuine UNSAT -- no host-cap restart.
         auto make_session = [&]() {
             return std::make_unique<TopologyMappingEnumerationSession<MeshId, MeshId>>(
                 mesh_logical_graph,
@@ -2350,37 +2305,15 @@ std::optional<TopologyMappingResult> MultiMeshSolutionEnumerator::next() {
         }
         MappingResult<MeshId, MeshId> placement = session_->next();
         if (!placement.success) {
-            if (!host_cap_relaxed_ && emitted_ == 0 && inter_mesh_constraints_.max_same_rank_groups_used() > 0) {
-                log_warning(
-                    tt::LogFabric,
-                    "Multi-solution enumeration: hard host-group cap (k={}) infeasible for this instance with zero "
-                    "capped solutions ({}); dropping the cap and falling back to SOFT minimize, then "
-                    "constructing a new session -- returned placements may occupy more than k host groups",
-                    inter_mesh_constraints_.max_same_rank_groups_used(),
-                    placement.error_message);
-                inter_mesh_constraints_.set_max_same_rank_groups_used(0);
-                inter_mesh_constraints_.set_minimize_same_rank_groups_used(true);  // SOFT
-                session_ = make_session();
-                if (session_ == nullptr || !session_->started()) {
-                    return std::nullopt;
-                }
-                (void)session_->exclude_mappings(excluded_);
-                host_cap_relaxed_ = true;
-                continue;
-            }
             log_info(
                 tt::LogFabric,
-                "Multi-solution enumeration exhausted after {} solution(s) (cap_relaxed={}): {}",
+                "Multi-solution enumeration exhausted after {} solution(s): {}",
                 emitted_,
-                host_cap_relaxed_,
                 placement.error_message);
             return std::nullopt;  // genuinely exhausted (real UNSAT) or a hard-encode failure
         }
 
         // Block this inter-mesh placement (by shape when unique_shapes) so the next warm solve returns a new one.
-        // The host-group cap is enforced IN the solve now (SAT at-most-k CNF clause, DFS in-search check), so every
-        // returned placement already respects it -- an infeasible cap surfaces as the session finding no placement,
-        // handled by the relax on the !placement.success path above. No post-hoc cap filter is needed here.
         excluded_.emplace_back(placement.target_to_global.begin(), placement.target_to_global.end());
         // DIAG: report every pairing whose physical footprint is too small for the logical mesh, plus the
         // footprint handed to each of the largest logical meshes (the ones most likely to be undersized).

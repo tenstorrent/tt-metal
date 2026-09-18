@@ -129,6 +129,16 @@ struct DeclaredTopology {
     std::vector<bool> ring_dims;
 };
 
+// RING on a dim of 2 or less is the same edge set as LINE. Drop those flags so
+// consumers that pick TORUS variants from ring_dims do not invent a wrap.
+inline DeclaredTopology with_effective_ring_dims(DeclaredTopology topology) {
+    for (std::size_t i = 0; i < topology.ring_dims.size(); ++i) {
+        const int32_t dim_size = i < topology.dims.size() ? topology.dims[i] : 0;
+        topology.ring_dims[i] = topology.ring_dims[i] && is_genuine_torus_axis(dim_size);
+    }
+    return topology;
+}
+
 // TODO: Try make efficient by storing stringviews?
 class MeshGraphDescriptor {
 public:
@@ -239,6 +249,19 @@ public:
     // no device_topology, come back with empty dims. Switches declare no host topology.
     DeclaredTopology get_declared_topology(GlobalNodeId instance_id) const;
     DeclaredTopology get_declared_topology(const InstanceData& instance) const;
+
+    // First instance of `instance_name`, or nullopt when the name exists but declares no device dims.
+    // Unknown names still fail like instances_by_name.
+    std::optional<DeclaredTopology> try_get_declared_topology(const std::string& instance_name) const;
+
+    // try_get_declared_topology with RING flags dropped on axes too short to wrap.
+    std::optional<DeclaredTopology> get_effective_declared_topology(const std::string& instance_name) const {
+        auto topology = try_get_declared_topology(instance_name);
+        if (!topology.has_value()) {
+            return std::nullopt;
+        }
+        return with_effective_ring_dims(std::move(*topology));
+    }
 
     // Calculate chip count from device_topology dimensions for a mesh instance
     // Returns the product of all dimensions in device_topology.dims()

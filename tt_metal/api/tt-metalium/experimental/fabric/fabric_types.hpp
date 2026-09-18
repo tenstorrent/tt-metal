@@ -78,6 +78,25 @@ bool has_flag(FabricType flags, FabricType test_flag);
 // larger. Size-one and size-two dimensions retain ordinary mesh links.
 constexpr bool is_genuine_torus_dim(uint32_t dim_size) { return dim_size > 2; }
 
+constexpr bool is_genuine_torus_axis(int32_t dim_size) {
+    return dim_size > 0 && is_genuine_torus_dim(static_cast<uint32_t>(dim_size));
+}
+
+// MESH=0, first-dim wrap=1, second-dim wrap=2, both=3. First/second follow the
+// row-major dim order used by PGD flatten variants (TORUSX wraps dims[0]).
+constexpr int torus_variant_priority(bool wrap_first_dim, bool wrap_second_dim) {
+    if (wrap_first_dim && wrap_second_dim) {
+        return 3;
+    }
+    if (wrap_second_dim) {
+        return 2;
+    }
+    if (wrap_first_dim) {
+        return 1;
+    }
+    return 0;
+}
+
 inline std::vector<int32_t> row_major_coords_from_linear_index(
     uint32_t linear_index, const std::vector<int32_t>& dims) {
     std::vector<int32_t> coords(dims.size());

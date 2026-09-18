@@ -7,6 +7,7 @@
 #include <sstream>
 #include <ostream>
 #include <filesystem>
+#include <limits>
 #include <algorithm>
 #include <unordered_set>
 #include <unordered_map>
@@ -67,6 +68,96 @@ void iterate_cartesian_product(const std::vector<size_t>& sizes, Callback callba
     }
 }
 
+AdjacencyGraph<GroupingChipId> build_row_major_mesh_graph(
+    const std::vector<GroupingChipId>& instance_ids,
+    const std::vector<int32_t>& dims,
+    const std::string& grouping_name,
+    uint32_t connections_per_edge,
+    const std::vector<bool>& ring_dims) {
+    std::map<GroupingChipId, std::vector<GroupingChipId>> adj_map;
+
+    if (instance_ids.empty() || dims.empty()) {
+        return AdjacencyGraph<GroupingChipId>(adj_map);
+    }
+
+    int64_t total_size = 1;
+    for (int32_t dim : dims) {
+        if (dim <= 0) {
+            total_size = -1;
+            break;
+        }
+        total_size *= dim;
+        if (total_size > static_cast<int64_t>(std::numeric_limits<int32_t>::max())) {
+            total_size = -1;
+            break;
+        }
+    }
+
+    if (total_size < 0 || static_cast<size_t>(total_size) != instance_ids.size()) {
+        std::string dims_str = "[";
+        for (size_t i = 0; i < dims.size(); ++i) {
+            if (i > 0) {
+                dims_str += ", ";
+            }
+            dims_str += std::to_string(dims[i]);
+        }
+        dims_str += "]";
+
+        TT_THROW(
+            "Invalid row_major_mesh configuration in grouping '{}': "
+            "dimensions {} multiply to {} (expected {} instances), but grouping has {} instance(s). "
+            "The product of row_major_mesh dimensions must equal the number of instances in the grouping. "
+            "If this is a mistake in the Physical Grouping Descriptor file, please file an error with the scaleout "
+            "team.",
+            grouping_name.empty() ? "<unknown>" : grouping_name,
+            dims_str,
+            total_size,
+            total_size,
+            instance_ids.size());
+    }
+
+    // One-sided +direction walk so each undirected edge is inserted once (STRICT matching
+    // treats multiplicity as channel count). processed_edges is a backstop if wrap and LINE
+    // ever name the same pair.
+    std::set<std::pair<GroupingChipId, GroupingChipId>> processed_edges;
+
+    for (uint32_t idx = 0; idx < instance_ids.size(); ++idx) {
+        const std::vector<int32_t> coords = row_major_coords_from_linear_index(idx, dims);
+
+        for (size_t dim_idx = 0; dim_idx < dims.size(); ++dim_idx) {
+            const int32_t dim_size = dims[dim_idx];
+            const int32_t coord_val = coords[dim_idx];
+            const bool is_ring = dim_idx < ring_dims.size() && ring_dims[dim_idx];
+
+            auto add_neighbor_at_coord = [&](int32_t neighbor_coord_val) {
+                std::vector<int32_t> neighbor_coords = coords;
+                neighbor_coords[dim_idx] = neighbor_coord_val;
+                const uint32_t neighbor_idx = row_major_linear_index_from_coords(neighbor_coords, dims);
+                if (neighbor_idx >= instance_ids.size()) {
+                    return;
+                }
+                const auto edge_pair = std::minmax(instance_ids[idx], instance_ids[neighbor_idx]);
+                if (processed_edges.insert(edge_pair).second) {
+                    for (uint32_t conn = 0; conn < connections_per_edge; ++conn) {
+                        adj_map[instance_ids[idx]].push_back(instance_ids[neighbor_idx]);
+                        adj_map[instance_ids[neighbor_idx]].push_back(instance_ids[idx]);
+                    }
+                }
+            };
+
+            if (coord_val < dim_size - 1) {
+                add_neighbor_at_coord(coord_val + 1);
+            }
+
+            if (is_ring && is_genuine_torus_axis(dim_size) && coord_val == 0) {
+                add_neighbor_at_coord(dim_size - 1);
+            }
+        }
+    }
+
+    return AdjacencyGraph<GroupingChipId>(adj_map);
+}
+
 namespace {
 
 using tt::tt_fabric::AdjacencyGraph;
@@ -82,116 +173,6 @@ AdjacencyGraph<GroupingChipId> build_all_to_all_graph(const std::vector<Grouping
             // Add bidirectional edge (each edge processed once)
             adj_map[instance_ids[i]].push_back(instance_ids[j]);
             adj_map[instance_ids[j]].push_back(instance_ids[i]);
-        }
-    }
-
-    return AdjacencyGraph<GroupingChipId>(adj_map);
-}
-
-// Helper function to build adjacency graph from row-major mesh connection.
-// LINE neighbors are always included. When `ring_dims[d]` is true, also wrap both ends of dimension d.
-// Missing `ring_dims` entries are treated as LINE (no wrap). RING wrap is skipped when dim < 3.
-AdjacencyGraph<GroupingChipId> build_row_major_mesh_graph(
-    const std::vector<GroupingChipId>& instance_ids,
-    const std::vector<int32_t>& dims,
-    const std::string& grouping_name = "",
-    uint32_t connections_per_edge = 1,
-    const std::vector<bool>& ring_dims = {}) {
-    std::map<GroupingChipId, std::vector<GroupingChipId>> adj_map;
-
-    if (instance_ids.empty() || dims.empty()) {
-        return AdjacencyGraph<GroupingChipId>(adj_map);
-    }
-
-    // Calculate total size
-    int32_t total_size = 1;
-    for (int32_t dim : dims) {
-        total_size *= dim;
-    }
-
-    if (static_cast<size_t>(total_size) != instance_ids.size()) {
-        std::string dims_str = "[";
-        for (size_t i = 0; i < dims.size(); ++i) {
-            if (i > 0) {
-                dims_str += ", ";
-            }
-            dims_str += std::to_string(dims[i]);
-        }
-        dims_str += "]";
-
-        std::string error_msg = fmt::format(
-            "Invalid row_major_mesh configuration in grouping '{}': "
-            "dimensions {} multiply to {} (expected {} instances), but grouping has {} instance(s). "
-            "The product of row_major_mesh dimensions must equal the number of instances in the grouping. "
-            "If this is a mistake in the Physical Grouping Descriptor file, please file an error with the scaleout "
-            "team.",
-            grouping_name.empty() ? "<unknown>" : grouping_name,
-            dims_str,
-            total_size,
-            total_size,
-            instance_ids.size());
-        TT_THROW("{}", error_msg);
-    }
-
-    // Build coordinate system helpers
-    auto get_coords = [&](uint32_t idx) -> std::vector<int32_t> {
-        std::vector<int32_t> coords(dims.size());
-        int32_t remaining = static_cast<int32_t>(idx);
-        for (int32_t i = static_cast<int32_t>(dims.size()) - 1; i >= 0; --i) {
-            coords[i] = remaining % dims[i];
-            remaining /= dims[i];
-        }
-        return coords;
-    };
-
-    auto coords_to_idx = [&](const std::vector<int32_t>& coords) -> int32_t {
-        int32_t idx = 0;
-        int32_t multiplier = 1;
-        for (int32_t i = static_cast<int32_t>(dims.size()) - 1; i >= 0; --i) {
-            idx += coords[i] * multiplier;
-            multiplier *= dims[i];
-        }
-        return idx;
-    };
-
-    // Build adjacency: for each dimension, connect neighbors
-    // Use a set to track processed edges to avoid double-counting
-    std::set<std::pair<GroupingChipId, GroupingChipId>> processed_edges;
-
-    for (uint32_t idx = 0; idx < instance_ids.size(); ++idx) {
-        std::vector<int32_t> coords = get_coords(idx);
-
-        // For each dimension
-        for (size_t dim_idx = 0; dim_idx < dims.size(); ++dim_idx) {
-            const int32_t dim_size = dims[dim_idx];
-            const int32_t coord_val = coords[dim_idx];
-            const bool is_ring = dim_idx < ring_dims.size() && ring_dims[dim_idx];
-
-            auto add_neighbor_at_coord = [&](int32_t neighbor_coord_val) {
-                std::vector<int32_t> neighbor_coords = coords;
-                neighbor_coords[dim_idx] = neighbor_coord_val;
-                const int32_t neighbor_idx = coords_to_idx(neighbor_coords);
-                if (neighbor_idx < 0 || neighbor_idx >= static_cast<int32_t>(instance_ids.size())) {
-                    return;
-                }
-                const auto edge_pair = std::minmax(instance_ids[idx], instance_ids[neighbor_idx]);
-                if (processed_edges.insert(edge_pair).second) {
-                    for (uint32_t conn = 0; conn < connections_per_edge; ++conn) {
-                        adj_map[instance_ids[idx]].push_back(instance_ids[neighbor_idx]);
-                        adj_map[instance_ids[neighbor_idx]].push_back(instance_ids[idx]);
-                    }
-                }
-            };
-
-            // +direction LINE neighbor
-            if (coord_val < dim_size - 1) {
-                add_neighbor_at_coord(coord_val + 1);
-            }
-
-            // RING wrap: connect coord 0 to dim-1 (skip dim < 3)
-            if (is_ring && dim_size >= 3 && coord_val == 0) {
-                add_neighbor_at_coord(dim_size - 1);
-            }
         }
     }
 
@@ -481,11 +462,6 @@ using tt::tt_fabric::GroupingChipId;
 enum class CardinalDirection { North, South, East, West };
 enum class AdjacencyDirection { A_LEFT_OF_B, A_ABOVE_B, A_RIGHT_OF_B, A_BELOW_B };
 
-// Keep PGD's signed-dimension check aligned with has_genuine_torus_axis.
-bool is_genuine_torus_dimension(int32_t dim) {
-    return dim >= 0 && tt::tt_fabric::is_genuine_torus_dim(static_cast<uint32_t>(dim));
-}
-
 // Metadata for flattened mesh nodes
 struct NodeMetadata {
     ::tt::tt_metal::TrayID tray_id{0};
@@ -628,10 +604,10 @@ tt::tt_fabric::AdjacencyGraph<GroupingChipId> add_torus_wrap_edges(
     };
 
     if (mesh.node_grid_dims.size() >= 2) {
-        if (!ring_dims.empty() && ring_dims[0] && is_genuine_torus_dimension(mesh.node_grid_dims[0])) {
+        if (!ring_dims.empty() && ring_dims[0] && is_genuine_torus_axis(mesh.node_grid_dims[0])) {
             connect_opposite_edges(CardinalDirection::North, CardinalDirection::South);
         }
-        if (ring_dims.size() > 1 && ring_dims[1] && is_genuine_torus_dimension(mesh.node_grid_dims[1])) {
+        if (ring_dims.size() > 1 && ring_dims[1] && is_genuine_torus_axis(mesh.node_grid_dims[1])) {
             connect_opposite_edges(CardinalDirection::West, CardinalDirection::East);
         }
     }
@@ -1064,9 +1040,8 @@ std::vector<tt::tt_fabric::GroupingInfo> flattened_mesh_to_topology_variants(
                                            : mesh.graph.get_nodes().size();
     const bool can_add_torus_wrap = node_grid_dims.size() >= 2 && mesh.graph.get_nodes().size() == expected_node_count;
     // Size-1 and size-2 axes are ordinary mesh links; only dims > 2 can carry a distinct torus wrap.
-    const bool wrap_x = can_add_torus_wrap && is_genuine_torus_dimension(node_grid_dims[0]);
-    const bool wrap_y =
-        can_add_torus_wrap && node_grid_dims.size() > 1 && is_genuine_torus_dimension(node_grid_dims[1]);
+    const bool wrap_x = can_add_torus_wrap && is_genuine_torus_axis(node_grid_dims[0]);
+    const bool wrap_y = can_add_torus_wrap && node_grid_dims.size() > 1 && is_genuine_torus_axis(node_grid_dims[1]);
 
     std::vector<TopologyVariantSpec> variant_specs;
     variant_specs.reserve(4);

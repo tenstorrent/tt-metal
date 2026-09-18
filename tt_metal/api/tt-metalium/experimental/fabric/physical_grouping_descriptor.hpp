@@ -109,6 +109,25 @@ struct GroupingInfo {
     GroupingInfo& operator=(GroupingInfo&&) noexcept;
 };
 
+// LINE neighbors are always included. When ring_dims[d] is true, also wrap both ends of dimension d.
+// Missing ring_dims entries are treated as LINE. RING wrap is skipped when dim < 3.
+AdjacencyGraph<GroupingChipId> build_row_major_mesh_graph(
+    const std::vector<GroupingChipId>& instance_ids,
+    const std::vector<int32_t>& dims,
+    const std::string& grouping_name = "",
+    uint32_t connections_per_edge = 1,
+    const std::vector<bool>& ring_dims = {});
+
+// TORUSX wraps flattened_node_grid_dims[0], TORUSY wraps [1] (same as flatten variants).
+// Size-1 and size-2 axes keep ordinary mesh links, so they do not raise the priority.
+inline int effective_torus_variant_priority(const GroupingInfo& grouping) {
+    const auto& dims = grouping.flattened_node_grid_dims;
+    const std::string& type = grouping.type;
+    return torus_variant_priority(
+        (type == "TORUSX" || type == "TORUSXY") && !dims.empty() && is_genuine_torus_axis(dims[0]),
+        (type == "TORUSY" || type == "TORUSXY") && dims.size() > 1 && is_genuine_torus_axis(dims[1]));
+}
+
 // One disjoint placement: the ASIC footprint it covers, plus the mesh-local
 // (row-major) chip id -> ASIC position pinning (copied from the matched grouping's mesh_node_to_asic_position;
 // empty when the grouping had no MGD pairing, where callers assume row-major identity). Only the pinning map is
@@ -118,22 +137,18 @@ struct PsdPlacement {
     std::map<LogicalChipId, tt::tt_metal::ASICPosition> mesh_node_to_asic_position;
 };
 
-// Wall-clock and search counters for one adjacency-guided placement DFS.
+// Wall-clock and search counters for one SAT joint placement.
 //
-// Each expanded search node rebuilds a candidate pool (next_step_pool), which runs a fresh
-// topology-solver enumeration against the remaining physical graph. Those inner calls dominate
-// runtime; these fields exist so that looping can be timed and improved from the placement side.
+// Inner topology-solver enumerations (layer 1, per grouping variant) still dominate candidate
+// generation; the master fields cover the MeshId→SeatId session.
 struct PlacementSolveStats {
     bool success = false;
     std::size_t meshes_total = 0;
     std::size_t meshes_placed = 0;
 
-    // Outer adjacency-guided DFS
-    std::size_t adjacency_nodes_expanded = 0;  ///< Search nodes that committed a candidate
-    std::size_t next_step_pool_calls = 0;      ///< Candidate-pool builds (one per mesh considered)
-    std::size_t candidates_generated = 0;      ///< Successful inner mappings turned into candidates
+    std::size_t candidates_generated = 0;  ///< Successful inner mappings turned into candidates
 
-    // Inner topology-solver enumerations invoked from the placement DFS
+    // Inner topology-solver enumerations invoked while growing candidate pools
     std::size_t inner_solver_calls = 0;
     std::size_t inner_solver_sat_calls = 0;  ///< Auto backend chose SAT (n_target * n_global threshold)
     std::size_t inner_solver_dfs_calls = 0;
@@ -143,7 +158,6 @@ struct PlacementSolveStats {
     std::size_t inner_dfs_memoization_hits = 0;
 
     std::chrono::microseconds total_elapsed{};
-    std::chrono::microseconds next_step_pool_elapsed{};
     std::chrono::microseconds inner_solver_elapsed{};
     std::chrono::microseconds sat_elapsed{};
     std::chrono::microseconds dfs_elapsed{};
@@ -255,79 +269,21 @@ public:
         const std::vector<std::optional<tt::tt_metal::experimental::tt_fabric::PinningsByMesh>>& per_mgd_pinnings = {})
         const;
 
-    // Find valid mappings of a grouping onto the physical system descriptor.
-    //
-    // Returns up to `max_solutions` placements, empty if the grouping does not fit. Each MappingResult
-    // maps LogicalChipId -> AsicID, so its image is the placement's chip footprint. max_solutions of
-    // 0 means "as many as exist", bounded only by the solver's own hard cap.
-    //
-    // extra_constraints, when present, is the set each solve starts from, with the grouping's own trait
-    // and host-alignment constraints layered on top. This is how a caller anchors the solve against a
-    // partial placement: forbidden constraints over already-taken chips keep the placement disjoint, and
-    // an at-least-1 cardinality constraint over the chips adjacent to an already-placed region forces
-    // the new placement to touch it. Omitting it gives an unanchored search. The caller's object is
-    // never modified: each flattened variant solves against its own copy, since the variant's trait
-    // constraints are added in place and must not leak into the next variant.
-    //
-    // Placements are distinct by ASIC footprint within each flattened variant of the grouping. They are
-    // NOT deduplicated across variants, because two variants that cover the same chips are still
-    // different placements (a mesh contained in one host versus the same chips split across two), and
-    // collapsing them is what loses the split-host alternative.
-    //
-    // `grouping` must still be hierarchical: items present, ASIC graph not yet built. Already-flat
-    // committed variants (ValidGroupingsMap entries, topology-variant `_flat` / `_torus_*` copies) are
-    // rejected. Flattening those again walks empty items and produces an empty graph. Call find_any_in_psd
-    // with the PGD grouping from get_groupings_by_name; the flatten happens here.
-    //
-    // errors_out, when non-null, receives a description of why nothing could be placed.
-    std::vector<MappingResult<LogicalChipId, tt::tt_metal::AsicID>> find_any_in_psd(
+    // Enumerate distinct embeddings of an already-flat grouping on the PSD (same helper SAT column
+    // generation and the matcher PSD gate use). Flatten a hierarchical PGD grouping with
+    // build_flattened_adjacency_mesh first. Returns up to `max_solutions` mappings; empty if none fit.
+    std::vector<MappingResult<LogicalChipId, tt::tt_metal::AsicID>> enumerate_distinct_placements_for_grouping(
         const GroupingInfo& grouping,
         const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
-        std::size_t max_solutions = 1,
-        const std::optional<MappingConstraints<LogicalChipId, tt::tt_metal::AsicID>>& extra_constraints = std::nullopt,
-        std::vector<std::string>* errors_out = nullptr) const;
+        std::size_t max_solutions = 1) const;
 
-    // Same, with a prebuilt flat ASIC adjacency graph from the PSD.
-    std::vector<MappingResult<LogicalChipId, tt::tt_metal::AsicID>> find_any_in_psd(
-        const GroupingInfo& grouping,
-        const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
-        const AdjacencyGraph<tt::tt_metal::AsicID>& physical_graph,
-        std::size_t max_solutions = 1,
-        const std::optional<MappingConstraints<LogicalChipId, tt::tt_metal::AsicID>>& extra_constraints = std::nullopt,
-        std::vector<std::string>* errors_out = nullptr) const;
-
-    // Find one maximal disjoint packing of the input `groupings` on the physical system descriptor.
-    // Returns one PsdPlacement per placement: its ASIC footprint and the mesh-local (row-major, 0..N-1)
-    // chip id -> ASIC position pinning, PsdPlacement::mesh_node_to_asic_position (copied from the matched
-    // grouping at PGD<->MGD match commit time; empty for groupings that did not originate from a PGD match,
-    // where callers assume row-major identity). No two placements share an ASIC. When multiple PGD grouping
-    // variants are provided, the variant with the highest total ASIC coverage is chosen; alternatives are not
-    // mixed in the same packing. Returns an empty vector if no valid packing exists.
-    //
-    // Coverage-maximizing packing of one grouping's embeddings. Not used by
-    // build_physical_multi_mesh_adjacency_graph (that path uses solve_adjacency_guided_placement).
-    std::vector<PsdPlacement> find_all_in_psd(
-        const std::vector<GroupingInfo>& groupings,
-        const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) const;
-
-    // Same as above, but uses a prebuilt flat ASIC adjacency graph from the PSD (from
-    // build_flat_adjacency_map_from_psd). Callers that already built the graph can pass it to avoid a
-    // duplicate O(|PSD|) scan and graph construction. When non-null, `errors_out` receives detailed
-    // messages if no valid packing is found.
-    std::vector<PsdPlacement> find_all_in_psd(
-        const std::vector<GroupingInfo>& groupings,
-        const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
-        const AdjacencyGraph<tt::tt_metal::AsicID>& physical_graph,
-        std::vector<std::string>* errors_out = nullptr) const;
-
-    // Adjacency-guided placement. Production path for build_physical_multi_mesh_adjacency_graph.
+    // SAT joint placement. Production path for build_physical_multi_mesh_adjacency_graph.
     //
     // Places one chip-disjoint physical region per mesh *instance*, so a descriptor that instantiates
     // the same mesh definition N times gets N regions rather than one. The descriptor is what supplies
     // that instance count, via build_logical_multi_mesh_adjacency_graph: its mesh-level graph has a
-    // node per mesh instance and an edge per inter-mesh connection, and the search prunes on those
-    // edges — a candidate region is only kept if it touches the regions already chosen for that mesh's
-    // neighbours. `valid_groupings` only supplies which PGD groupings each mesh definition accepts.
+    // node per mesh instance and an edge per inter-mesh connection. `valid_groupings` only supplies
+    // which PGD groupings each mesh definition accepts.
     //
     // valid_groupings must come from get_valid_groupings_for_mgd(s) over the same descriptor(s), since
     // it is looked up by mesh definition name (and by "mgd{i}_" prefix in the multi-descriptor case).
@@ -335,14 +291,11 @@ public:
     // Returns one PsdPlacement per mesh instance. An empty vector means placement failed; no error is
     // surfaced to the caller.
     //
-    // node_budget caps how many DFS search nodes the placement search expands before stopping.
-    // 0 means no limit. Non-zero values are mainly for tests and guarding against runaway search.
-    // stats_out, when non-null, is filled with timings and SAT/DFS counters for this solve.
+    // stats_out, when non-null, is filled with timings and SAT counters for this solve.
     std::vector<PsdPlacement> solve_adjacency_guided_placement(
         const MeshGraphDescriptor& mesh_graph_descriptor,
         const ValidGroupingsMap& valid_groupings,
         const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
-        std::size_t node_budget = 0,
         PlacementSolveStats* stats_out = nullptr,
         const std::optional<tt::tt_metal::experimental::tt_fabric::PinningsByMesh>& pinnings = std::nullopt) const;
 
@@ -351,7 +304,6 @@ public:
         const std::vector<const MeshGraphDescriptor*>& mesh_graph_descriptors,
         const ValidGroupingsMap& valid_groupings,
         const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
-        std::size_t node_budget = 0,
         PlacementSolveStats* stats_out = nullptr,
         const std::vector<std::optional<tt::tt_metal::experimental::tt_fabric::PinningsByMesh>>& per_mgd_pinnings = {})
         const;
@@ -364,7 +316,6 @@ public:
         const ValidGroupingsMap& valid_groupings,
         const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
         std::size_t max_solutions = 1,
-        std::size_t node_budget = 0,
         PlacementSolveStats* stats_out = nullptr,
         const std::optional<tt::tt_metal::experimental::tt_fabric::PinningsByMesh>& pinnings = std::nullopt) const;
 
@@ -373,7 +324,6 @@ public:
         const ValidGroupingsMap& valid_groupings,
         const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
         std::size_t max_solutions = 1,
-        std::size_t node_budget = 0,
         PlacementSolveStats* stats_out = nullptr,
         const std::vector<std::optional<tt::tt_metal::experimental::tt_fabric::PinningsByMesh>>& per_mgd_pinnings = {})
         const;
